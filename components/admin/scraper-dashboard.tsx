@@ -266,8 +266,8 @@ export function ScraperDashboard() {
 
   const modeLabel =
     summaryPayload?.mode === "saved_posts"
-      ? "Saved Apify posts re-output"
-      : "Full scrape + extract";
+      ? "Saved posts to draft events"
+      : "Fresh Apify scrape to draft events";
 
   const aggregateMetrics = useMemo(() => {
     if (!summaryPayload) {
@@ -337,14 +337,15 @@ export function ScraperDashboard() {
           <div>
             <h2 className="text-lg font-semibold">Run ingestion</h2>
             <p className="text-sm text-muted-foreground">
-              Control scrape window, saved-post re-output, and repair runs from one place.
+              Choose the account set, then decide whether to fetch fresh Apify posts or reuse
+              saved ones.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
             {[
-              ["Last 5 days", "5", "5"],
-              ["Last 30 days", "10", "30"],
-              ["Repair window", "5", "365"],
+              ["Quick check", "5", "5"],
+              ["Recent month", "10", "30"],
+              ["Deep repair", "5", "365"],
             ].map(([label, nextResults, nextDays]) => (
               <button
                 className="rounded-xl border border-border px-3 py-2 text-sm font-medium"
@@ -395,21 +396,10 @@ export function ScraperDashboard() {
             </div>
             <div className="rounded-2xl border border-border bg-background/70 p-3 text-sm text-muted-foreground">
               <p>Handles entered: {handles.length}</p>
-              <p>Full scrape hits Apify. Saved-post mode only reruns extraction on cached posts.</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                className="rounded-xl border border-border px-3 py-2 text-sm font-medium"
-                onClick={() => {
-                  setSummaryPayload(null);
-                  setActiveJobId(null);
-                  setActiveJobStatus(null);
-                  setError(null);
-                }}
-                type="button"
-              >
-                Clear run state
-              </button>
+              <p>
+                Fresh scrape fetches posts from Apify and saves them. Saved posts skips Apify and
+                reruns AI extraction on cached posts.
+              </p>
             </div>
           </div>
         </div>
@@ -418,73 +408,103 @@ export function ScraperDashboard() {
       <div className="grid gap-4 xl:grid-cols-2">
         <section className="space-y-4 rounded-2xl border border-border bg-background/70 p-4">
           <div>
-            <h2 className="text-lg font-semibold">Listed handles</h2>
+            <h2 className="text-lg font-semibold">Use pasted handles</h2>
             <p className="text-sm text-muted-foreground">
-              Use this for explicit handles you paste into the textarea.
+              Best for testing one or a few Instagram accounts from the textarea above.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={isLoading || handles.length === 0}
-              onClick={() => {
-                void runManualScraper("full_scrape");
-              }}
-              type="button"
-            >
-              {isLoading ? "Running..." : "Run full scrape + extract"}
-            </button>
-            <button
-              className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={isLoading || handles.length === 0}
-              onClick={() => {
-                void runManualScraper("saved_posts");
-              }}
-              type="button"
-            >
-              {isLoading ? "Running..." : "Re-output saved Apify posts"}
-            </button>
+          <div className="grid gap-3">
+            <div className="rounded-2xl border border-border bg-card/90 p-4">
+              <button
+                className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isLoading || handles.length === 0}
+                onClick={() => {
+                  void runManualScraper("full_scrape");
+                }}
+                type="button"
+              >
+                {isLoading ? "Running..." : "Fetch fresh posts and create draft events"}
+              </button>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Scrapes Apify now, runs AI on the posters and captions, and writes draft events to
+                Convex.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-border bg-card/90 p-4">
+              <button
+                className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isLoading || handles.length === 0}
+                onClick={() => {
+                  void runManualScraper("saved_posts");
+                }}
+                type="button"
+              >
+                {isLoading ? "Running..." : "Use saved posts and create draft events"}
+              </button>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Skips Apify and reruns AI extraction on posts that were already saved for these
+                handles.
+              </p>
+            </div>
           </div>
         </section>
 
         <section className="space-y-4 rounded-2xl border border-border bg-background/70 p-4">
           <div>
-            <h2 className="text-lg font-semibold">Active venue set</h2>
+            <h2 className="text-lg font-semibold">Use all active venues</h2>
             <p className="text-sm text-muted-foreground">
-              Operate on all active venues or use repair mode with a larger backfill window.
+              Uses every active venue handle from the database. Best for production-wide runs.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={isLoading}
-              onClick={() => {
-                runActiveVenueScraper("full_scrape");
-              }}
-              type="button"
-            >
-              {isLoading ? "Running..." : "Run all active venues"}
-            </button>
-            <button
-              className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={isLoading}
-              onClick={() => {
-                runActiveVenueScraper("saved_posts");
-              }}
-              type="button"
-            >
-              {isLoading ? "Running..." : "Re-output active saved posts"}
-            </button>
-            <button
-              className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={isLoading}
-              onClick={() => {
-                void runRepairScraper();
-              }}
-              type="button"
-            >
-              {isLoading ? "Running..." : "Repair existing bad events"}
-            </button>
+          <div className="grid gap-3">
+            <div className="rounded-2xl border border-border bg-card/90 p-4">
+              <button
+                className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isLoading}
+                onClick={() => {
+                  runActiveVenueScraper("full_scrape");
+                }}
+                type="button"
+              >
+                {isLoading ? "Running..." : "Fetch fresh posts for all active venues"}
+              </button>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Runs a fresh Apify scrape for every active venue and creates draft events from the
+                new posts.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-border bg-card/90 p-4">
+              <button
+                className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isLoading}
+                onClick={() => {
+                  runActiveVenueScraper("saved_posts");
+                }}
+                type="button"
+              >
+                {isLoading ? "Running..." : "Use saved posts for all active venues"}
+              </button>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Reruns AI extraction on cached posts for every active venue without fetching from
+                Apify again.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-border bg-card/90 p-4">
+              <button
+                className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isLoading}
+                onClick={() => {
+                  void runRepairScraper();
+                }}
+                type="button"
+              >
+                {isLoading ? "Running..." : "Repair older venue events"}
+              </button>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Runs a wider one-year backfill for active venues to revisit older posts and repair
+                bad event data.
+              </p>
+            </div>
           </div>
         </section>
       </div>
