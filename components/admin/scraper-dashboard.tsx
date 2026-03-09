@@ -116,17 +116,22 @@ export function ScraperDashboard() {
               <div className="rounded border border-border p-3" key={item.handle}>
                 <p className="font-medium">@{item.handle}</p>
                 <p>Fetched posts: {item.fetchedPosts}</p>
+                <p>Fetched posts (normalized): {item.fetched_posts}</p>
                 <p>Inserted events: {item.insertedEvents}</p>
                 <p>Inserted events (new): {item.inserted_events}</p>
                 <p>Skipped duplicates: {item.skippedDuplicates}</p>
+                <p>Skipped duplicates (normalized): {item.skipped_duplicates}</p>
                 <p>Skipped no image: {item.skippedNoImage}</p>
                 <p>Skipped missing date: {item.skipped_missing_date}</p>
                 <p>Skipped missing venue: {item.skipped_missing_venue}</p>
                 <p>Skipped video: {item.skipped_video}</p>
                 <p>Skipped invalid event: {item.skipped_invalid_event}</p>
                 <p>Failed downloads: {item.failedDownloads}</p>
+                <p>Failed downloads (normalized): {item.failed_downloads}</p>
                 <p>Failed conversions: {item.failedConversions}</p>
+                <p>Failed conversions (normalized): {item.failed_conversions}</p>
                 <p>Failed extractions: {item.failedExtractions}</p>
+                <p>Failed extractions (normalized): {item.failed_extractions}</p>
                 <p>Failed extraction (new): {item.failed_extraction}</p>
                 {item.errors.length > 0 ? (
                   <p className="text-destructive">

@@ -1,19 +1,26 @@
 import { z } from "zod";
 import { getRequiredEnv } from "@/lib/utils/env";
 
-const openAiVisionModel = process.env.OPENAI_VISION_MODEL ?? "gpt-4.1-mini";
+const openAiVisionModel = process.env.OPENAI_VISION_MODEL ?? "gpt-5.4";
 const OPENAI_REQUEST_TIMEOUT_MS = 40000;
 const OPENAI_MAX_ATTEMPTS = 2;
 
 const extractedEventSchema = z.object({
-  eventName: z.string(),
+  title: z.string(),
   date: z.string(),
-  time: z.string().nullable().optional(),
+  time: z.string(),
   venue: z.string(),
+  city: z.string(),
+  country: z.string(),
+  price: z.string(),
+  currency: z.string(),
   artists: z.array(z.string()).default([]),
-  ticketPrice: z.string().nullable().optional(),
-  eventType: z.enum(["club_night", "festival", "concert", "party"]),
+  category: z.string(),
   description: z.string(),
+  confidence: z.union([z.number(), z.string()]),
+  reasoning_notes: z.string(),
+  source_caption: z.string(),
+  source_url: z.string(),
 });
 
 export type ExtractedEventData = z.infer<typeof extractedEventSchema>;
@@ -24,25 +31,40 @@ type ExtractEventDataOptions = {
   instagramPostUrl: string;
   sourceImageUrl: string;
   instagramHandle: string;
+  instagramPostTimestamp?: string | null;
 };
 
 const systemPrompt = `
-Extract event information from nightlife posters and Instagram event images.
+You extract structured event data from Instagram nightlife captions and flyer/poster images.
+Prioritize exact OCR-style text extraction over paraphrase.
+Preserve artist names, venue names, and prices exactly as written when readable.
+Never hallucinate unreadable or missing text.
+Use the caption as primary context, then refine/fill from the image.
 Return strict JSON with:
 {
-  "eventName": string,
-  "date": ISO date string when possible (YYYY-MM-DD),
-  "time": "HH:MM" or "HH:MM-HH:MM" or null,
+  "title": string,
+  "date": string,
+  "time": string,
   "venue": string,
+  "city": string,
+  "country": string,
+  "price": string,
+  "currency": string,
   "artists": string[],
-  "ticketPrice": string or null,
-  "eventType": "club_night" | "festival" | "concert" | "party",
-  "description": string
+  "category": string,
+  "description": string,
+  "confidence": number,
+  "reasoning_notes": string,
+  "source_caption": string,
+  "source_url": string
 }
 Rules:
-- If there are multiple artists, return each artist as an array item.
-- If date is ambiguous, infer best guess and include that ambiguity in description.
-- If no ticket pricing is visible, return null for ticketPrice.
+- Use empty string for unknown scalar fields; use [] for unknown artists.
+- Do not invent facts.
+- If date is unclear, return empty string for date.
+- If venue is unclear, return empty string for venue.
+- If month/day is visible but year is missing, infer year from Instagram post timestamp only when confidence is high.
+- If inferred date appears implausible relative to post timestamp, return empty date.
 - Never return markdown, only valid JSON.
 `.trim();
 
@@ -50,30 +72,41 @@ const extractionJsonSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    eventName: { type: "string" },
+    title: { type: "string" },
     date: { type: "string" },
-    time: { type: ["string", "null"] },
+    time: { type: "string" },
     venue: { type: "string" },
+    city: { type: "string" },
+    country: { type: "string" },
+    price: { type: "string" },
+    currency: { type: "string" },
     artists: {
       type: "array",
       items: { type: "string" },
     },
-    ticketPrice: { type: ["string", "null"] },
-    eventType: {
-      type: "string",
-      enum: ["club_night", "festival", "concert", "party"],
-    },
+    category: { type: "string" },
     description: { type: "string" },
+    confidence: { type: ["number", "string"] },
+    reasoning_notes: { type: "string" },
+    source_caption: { type: "string" },
+    source_url: { type: "string" },
   },
   required: [
-    "eventName",
+    "title",
     "date",
     "time",
     "venue",
+    "city",
+    "country",
+    "price",
+    "currency",
     "artists",
-    "ticketPrice",
-    "eventType",
+    "category",
     "description",
+    "confidence",
+    "reasoning_notes",
+    "source_caption",
+    "source_url",
   ],
 } as const;
 
@@ -107,9 +140,10 @@ export async function extractEventDataFromPoster(
                 {
                   type: "input_text",
                   text: [
-                    "Extract event data from this Instagram post image.",
+                    "Extract event data from this Instagram post.",
                     `Instagram handle: @${options.instagramHandle}`,
                     `Instagram post URL: ${options.instagramPostUrl}`,
+                    `Instagram post timestamp: ${options.instagramPostTimestamp ?? "N/A"}`,
                     `Instagram caption: ${options.caption ?? "N/A"}`,
                     `Source image URL: ${options.sourceImageUrl}`,
                   ].join("\n"),
@@ -117,6 +151,7 @@ export async function extractEventDataFromPoster(
                 {
                   type: "input_image",
                   image_url: options.imageDataUrl,
+                  detail: "high",
                 },
               ],
             },
@@ -162,7 +197,12 @@ export async function extractEventDataFromPoster(
       }
 
       const parsedJson = JSON.parse(responseText) as unknown;
-      return extractedEventSchema.parse(parsedJson);
+      const parsed = extractedEventSchema.parse(parsedJson);
+      return {
+        ...parsed,
+        source_caption: options.caption ?? "",
+        source_url: options.instagramPostUrl,
+      };
     } catch (error) {
       lastError = error;
       if (attempt < OPENAI_MAX_ATTEMPTS) {

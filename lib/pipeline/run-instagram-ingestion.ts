@@ -26,17 +26,22 @@ type RunInstagramIngestionOptions = {
 type HandleSummary = {
   handle: string;
   fetchedPosts: number;
+  fetched_posts: number;
   insertedEvents: number;
   inserted_events: number;
   skippedDuplicates: number;
+  skipped_duplicates: number;
   skippedNoImage: number;
   skipped_missing_date: number;
   skipped_missing_venue: number;
   skipped_video: number;
   skipped_invalid_event: number;
   failedDownloads: number;
+  failed_downloads: number;
   failedConversions: number;
+  failed_conversions: number;
   failedExtractions: number;
+  failed_extractions: number;
   failed_extraction: number;
   errors: string[];
 };
@@ -75,19 +80,59 @@ type PreparedEvent = {
   instagramPostId: string;
   ticketPrice?: string;
   eventType: string;
+  sourceCaption?: string;
+  sourcePostedAt?: string;
+  rawExtractionJson?: string;
+  normalizedFieldsJson?: string;
   status: "pending";
+};
+
+type DateSource = "model" | "caption";
+type DateConfidence = "high" | "medium" | "low";
+
+type DateCandidate = {
+  isoDate: string;
+  source: DateSource;
+  confidence: DateConfidence;
+  distanceFromPostDays: number | null;
+  inferredYear: boolean;
+  year: number;
+  rawYearProvided: boolean;
+  raw: string;
+};
+
+type DateNormalization = {
+  isoDate: string | null;
+  source: DateSource | null;
+  confidence: DateConfidence | null;
+  distanceFromPostDays: number | null;
+  inferredYear: boolean;
+  rawDateText: string | null;
+  yearSelectionReason: string;
+  suspiciousYear: boolean;
+  reason?: "missing_date" | "low_confidence" | "implausible_date";
+};
+
+type VenueSource = "handle_map" | "location_name" | "model" | null;
+
+type VenueNormalization = {
+  venue: string | null;
+  source: VenueSource;
+  wasFallback: boolean;
+  rawModelVenue: string;
+  rawLocationName: string;
 };
 
 type PrepareEventResult =
   | {
       kind: "ok";
       event: PreparedEvent;
-      usedVenueFallback: boolean;
-      usedDateFallback: boolean;
+      normalizedFields: Record<string, unknown>;
     }
   | {
       kind: "skip";
       reason: "missing_date" | "missing_venue" | "invalid_event";
+      normalizedFields: Record<string, unknown>;
     };
 
 const MONTHS: Record<string, number> = {
@@ -104,6 +149,7 @@ const MONTHS: Record<string, number> = {
   nov: 11,
   dec: 12,
 };
+const MAX_DATE_DISTANCE_DAYS = 180;
 
 function logInfo(event: string, payload: Record<string, unknown>) {
   console.info(
@@ -160,70 +206,402 @@ function normalizeIsoDate(year: number, month: number, day: number): string | nu
   return parsed.toISOString().slice(0, 10);
 }
 
-function inferDateFromCaption(
-  caption: string | null,
-  postedAt: string | null,
-): string | null {
-  const text = normalizeString(caption);
-  if (!text) {
+function parsePostedAt(postedAt: string | null): Date | null {
+  if (!postedAt) {
+    return null;
+  }
+  const parsed = Date.parse(postedAt);
+  if (Number.isNaN(parsed)) {
+    return null;
+  }
+  return new Date(parsed);
+}
+
+function daysBetween(a: Date, b: Date): number {
+  return Math.abs(Math.round((a.getTime() - b.getTime()) / (24 * 60 * 60 * 1000)));
+}
+
+function getSuspiciousYearDifference(
+  parsedYear: number,
+  postDate: Date | null,
+): { isSuspicious: boolean; yearDistanceFromPost: number | null } {
+  if (!postDate) {
+    return { isSuspicious: false, yearDistanceFromPost: null };
+  }
+  const yearDistanceFromPost = Math.abs(parsedYear - postDate.getUTCFullYear());
+  return { isSuspicious: yearDistanceFromPost >= 2, yearDistanceFromPost };
+}
+
+function normalizeYear(rawYear: string): number {
+  if (rawYear.length === 2) {
+    return 2000 + Number.parseInt(rawYear, 10);
+  }
+  return Number.parseInt(rawYear, 10);
+}
+
+function buildDateWithPossibleYearInference(
+  day: number,
+  month: number,
+  rawYear: string | undefined,
+  postDate: Date | null,
+  isAmbiguousNumeric: boolean,
+  source: DateSource,
+  raw: string,
+): DateCandidate | null {
+  if (rawYear) {
+    const year = normalizeYear(rawYear);
+    const isoDate = normalizeIsoDate(year, month, day);
+    if (!isoDate) {
+      return null;
+    }
+    const parsed = new Date(`${isoDate}T00:00:00.000Z`);
+    return {
+      isoDate,
+      source,
+      confidence: isAmbiguousNumeric ? "medium" : "high",
+      distanceFromPostDays: postDate ? daysBetween(parsed, postDate) : null,
+      inferredYear: false,
+      year,
+      rawYearProvided: true,
+      raw,
+    };
+  }
+
+  if (!postDate) {
     return null;
   }
 
-  const fallbackYear = postedAt
-    ? new Date(postedAt).getUTCFullYear()
-    : new Date().getUTCFullYear();
+  const candidateYears = [postDate.getUTCFullYear() - 1, postDate.getUTCFullYear(), postDate.getUTCFullYear() + 1];
+  let bestCandidate: DateCandidate | null = null;
 
-  const yyyyMmDdMatch = text.match(/\b(20\d{2})[./-](\d{1,2})[./-](\d{1,2})\b/);
-  if (yyyyMmDdMatch) {
-    return normalizeIsoDate(
-      Number.parseInt(yyyyMmDdMatch[1], 10),
-      Number.parseInt(yyyyMmDdMatch[2], 10),
-      Number.parseInt(yyyyMmDdMatch[3], 10),
+  for (const year of candidateYears) {
+    const isoDate = normalizeIsoDate(year, month, day);
+    if (!isoDate) {
+      continue;
+    }
+    const parsed = new Date(`${isoDate}T00:00:00.000Z`);
+    const candidate: DateCandidate = {
+      isoDate,
+      source,
+      confidence: isAmbiguousNumeric ? "low" : "medium",
+      distanceFromPostDays: daysBetween(parsed, postDate),
+      inferredYear: true,
+      year,
+      rawYearProvided: false,
+      raw,
+    };
+    if (!bestCandidate) {
+      bestCandidate = candidate;
+      continue;
+    }
+    if (
+      (candidate.distanceFromPostDays ?? Number.POSITIVE_INFINITY) <
+      (bestCandidate.distanceFromPostDays ?? Number.POSITIVE_INFINITY)
+    ) {
+      bestCandidate = candidate;
+    }
+  }
+
+  return bestCandidate;
+}
+
+function collectDateCandidates(
+  text: string,
+  source: DateSource,
+  postDate: Date | null,
+): DateCandidate[] {
+  const candidates: DateCandidate[] = [];
+  const normalizedText = normalizeString(text);
+  if (!normalizedText) {
+    return candidates;
+  }
+
+  const appendCandidate = (candidate: DateCandidate | null) => {
+    if (!candidate) {
+      return;
+    }
+    candidates.push(candidate);
+  };
+
+  for (const match of normalizedText.matchAll(/\b(20\d{2})[./-](\d{1,2})[./-](\d{1,2})\b/g)) {
+    appendCandidate(
+      buildDateWithPossibleYearInference(
+        Number.parseInt(match[3], 10),
+        Number.parseInt(match[2], 10),
+        match[1],
+        postDate,
+        false,
+        source,
+        match[0],
+      ),
     );
   }
 
-  const ddMmYyyyMatch = text.match(/\b(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?\b/);
-  if (ddMmYyyyMatch) {
-    const day = Number.parseInt(ddMmYyyyMatch[1], 10);
-    const month = Number.parseInt(ddMmYyyyMatch[2], 10);
-    const rawYear = ddMmYyyyMatch[3];
-    const year = rawYear
-      ? rawYear.length === 2
-        ? 2000 + Number.parseInt(rawYear, 10)
-        : Number.parseInt(rawYear, 10)
-      : fallbackYear;
-    return normalizeIsoDate(year, month, day);
-  }
+  for (const match of normalizedText.matchAll(/\b(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?\b/g)) {
+    const first = Number.parseInt(match[1], 10);
+    const second = Number.parseInt(match[2], 10);
+    const rawYear = match[3];
+    const dayMonthCandidate = buildDateWithPossibleYearInference(
+      first,
+      second,
+      rawYear,
+      postDate,
+      first <= 12 && second <= 12,
+      source,
+      match[0],
+    );
+    appendCandidate(dayMonthCandidate);
 
-  const dayMonthNameMatch = text.match(
-    /\b(\d{1,2})(?:st|nd|rd|th)?\s+([a-zA-Z]{3,9})(?:\s*,?\s*(\d{4}))?\b/,
-  );
-  if (dayMonthNameMatch) {
-    const day = Number.parseInt(dayMonthNameMatch[1], 10);
-    const month = MONTHS[dayMonthNameMatch[2].slice(0, 3).toLowerCase()];
-    const year = dayMonthNameMatch[3]
-      ? Number.parseInt(dayMonthNameMatch[3], 10)
-      : fallbackYear;
-    if (month) {
-      return normalizeIsoDate(year, month, day);
+    if (first <= 12 && second <= 12) {
+      const monthDayCandidate = buildDateWithPossibleYearInference(
+        second,
+        first,
+        rawYear,
+        postDate,
+        true,
+        source,
+        match[0],
+      );
+      appendCandidate(monthDayCandidate);
     }
   }
 
-  const monthNameDayMatch = text.match(
-    /\b([a-zA-Z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?\b/,
-  );
-  if (monthNameDayMatch) {
-    const month = MONTHS[monthNameDayMatch[1].slice(0, 3).toLowerCase()];
-    const day = Number.parseInt(monthNameDayMatch[2], 10);
-    const year = monthNameDayMatch[3]
-      ? Number.parseInt(monthNameDayMatch[3], 10)
-      : fallbackYear;
-    if (month) {
-      return normalizeIsoDate(year, month, day);
+  for (const match of normalizedText.matchAll(
+    /\b(\d{1,2})(?:st|nd|rd|th)?\s+([a-zA-Z]{3,9})(?:\s*,?\s*(\d{4}))?\b/g,
+  )) {
+    const month = MONTHS[match[2].slice(0, 3).toLowerCase()];
+    if (!month) {
+      continue;
     }
+    appendCandidate(
+      buildDateWithPossibleYearInference(
+        Number.parseInt(match[1], 10),
+        month,
+        match[3],
+        postDate,
+        false,
+        source,
+        match[0],
+      ),
+    );
   }
 
-  return null;
+  for (const match of normalizedText.matchAll(
+    /\b([a-zA-Z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?\b/g,
+  )) {
+    const month = MONTHS[match[1].slice(0, 3).toLowerCase()];
+    if (!month) {
+      continue;
+    }
+    appendCandidate(
+      buildDateWithPossibleYearInference(
+        Number.parseInt(match[2], 10),
+        month,
+        match[3],
+        postDate,
+        false,
+        source,
+        match[0],
+      ),
+    );
+  }
+
+  return candidates;
+}
+
+function normalizeEventDate(
+  rawModelDate: string,
+  caption: string | null,
+  postedAt: string | null,
+): DateNormalization {
+  const postDate = parsePostedAt(postedAt);
+  const candidates = [
+    ...collectDateCandidates(rawModelDate, "model", postDate),
+    ...collectDateCandidates(caption ?? "", "caption", postDate),
+  ];
+
+  if (candidates.length === 0) {
+    return {
+      isoDate: null,
+      source: null,
+      confidence: null,
+      distanceFromPostDays: null,
+      inferredYear: false,
+      rawDateText: null,
+      yearSelectionReason: "no_date_candidate",
+      suspiciousYear: false,
+      reason: "missing_date",
+    };
+  }
+
+  candidates.sort((a, b) => {
+    const distanceA = a.distanceFromPostDays ?? Number.POSITIVE_INFINITY;
+    const distanceB = b.distanceFromPostDays ?? Number.POSITIVE_INFINITY;
+    if (distanceA !== distanceB) {
+      return distanceA - distanceB;
+    }
+
+    const sourceWeightA = a.source === "model" ? 0 : 1;
+    const sourceWeightB = b.source === "model" ? 0 : 1;
+    if (sourceWeightA !== sourceWeightB) {
+      return sourceWeightA - sourceWeightB;
+    }
+
+    const confidenceOrder: Record<DateConfidence, number> = {
+      high: 0,
+      medium: 1,
+      low: 2,
+    };
+    return confidenceOrder[a.confidence] - confidenceOrder[b.confidence];
+  });
+
+  const selected = candidates[0];
+  const yearSanity = getSuspiciousYearDifference(selected.year, postDate);
+  const yearDistanceFromPost = yearSanity.yearDistanceFromPost;
+  const suspiciousYear = yearSanity.isSuspicious;
+
+  const yearSelectionReason = selected.rawYearProvided
+    ? "explicit_year_from_text"
+    : "year_inferred_from_post_timestamp_nearest";
+
+  if (selected.confidence === "low") {
+    return {
+      isoDate: null,
+      source: selected.source,
+      confidence: selected.confidence,
+      distanceFromPostDays: selected.distanceFromPostDays,
+      inferredYear: selected.inferredYear,
+      rawDateText: selected.raw,
+      yearSelectionReason,
+      suspiciousYear,
+      reason: "low_confidence",
+    };
+  }
+
+  const allowLongDistanceForVeryHighConfidence =
+    selected.confidence === "high" &&
+    selected.rawYearProvided &&
+    yearDistanceFromPost !== null &&
+    yearDistanceFromPost <= 1;
+
+  if (
+    postDate &&
+    selected.distanceFromPostDays !== null &&
+    selected.distanceFromPostDays > MAX_DATE_DISTANCE_DAYS &&
+    !allowLongDistanceForVeryHighConfidence
+  ) {
+    return {
+      isoDate: null,
+      source: selected.source,
+      confidence: selected.confidence,
+      distanceFromPostDays: selected.distanceFromPostDays,
+      inferredYear: selected.inferredYear,
+      rawDateText: selected.raw,
+      yearSelectionReason,
+      suspiciousYear,
+      reason: "implausible_date",
+    };
+  }
+
+  if (suspiciousYear) {
+    return {
+      isoDate: null,
+      source: selected.source,
+      confidence: selected.confidence,
+      distanceFromPostDays: selected.distanceFromPostDays,
+      inferredYear: selected.inferredYear,
+      rawDateText: selected.raw,
+      yearSelectionReason,
+      suspiciousYear: true,
+      reason: "low_confidence",
+    };
+  }
+
+  return {
+    isoDate: selected.isoDate,
+    source: selected.source,
+    confidence: selected.confidence,
+    distanceFromPostDays: selected.distanceFromPostDays,
+    inferredYear: selected.inferredYear,
+    rawDateText: selected.raw,
+    yearSelectionReason,
+    suspiciousYear,
+  };
+}
+
+function isLowConfidenceVenue(value: string): boolean {
+  const normalized = value.toLowerCase().replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return true;
+  }
+  const exactGenericValues = new Set([
+    "belgrade",
+    "beograd",
+    "belgrade klub",
+    "belgrade club",
+    "beograd klub",
+    "beograd club",
+    "club",
+    "klub",
+    "nightclub",
+    "night club",
+    "party",
+    "event",
+  ]);
+  if (exactGenericValues.has(normalized)) {
+    return true;
+  }
+  if (/^belgrade\s+(club|klub)$/.test(normalized)) {
+    return true;
+  }
+  if (/^beograd\s+(club|klub)$/.test(normalized)) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeVenue(post: InstagramScrapedPost, rawModelVenue: string): VenueNormalization {
+  const mappedVenue = KNOWN_VENUE_BY_HANDLE[normalizeHandle(post.username)] ?? "";
+  const locationName = normalizeString(post.locationName);
+  const modelVenue = normalizeString(rawModelVenue);
+
+  if (mappedVenue) {
+    return {
+      venue: mappedVenue,
+      source: "handle_map",
+      wasFallback: true,
+      rawModelVenue: modelVenue,
+      rawLocationName: locationName,
+    };
+  }
+
+  if (locationName && !isLowConfidenceVenue(locationName)) {
+    return {
+      venue: locationName,
+      source: "location_name",
+      wasFallback: true,
+      rawModelVenue: modelVenue,
+      rawLocationName: locationName,
+    };
+  }
+
+  if (modelVenue && !isLowConfidenceVenue(modelVenue)) {
+    return {
+      venue: modelVenue,
+      source: "model",
+      wasFallback: false,
+      rawModelVenue: modelVenue,
+      rawLocationName: locationName,
+    };
+  }
+
+  return {
+    venue: null,
+    source: null,
+    wasFallback: true,
+    rawModelVenue: modelVenue,
+    rawLocationName: locationName,
+  };
 }
 
 function prepareEventForInsert(
@@ -231,38 +609,76 @@ function prepareEventForInsert(
   extracted: ExtractedEventData,
   selectedImageUrl: string,
 ): PrepareEventResult {
-  const title = normalizeString(extracted.eventName);
-  const eventType = normalizeString(extracted.eventType);
+  const title = normalizeString(extracted.title);
+  const eventType = normalizeString(extracted.category);
   const description = normalizeString(extracted.description);
   const time = normalizeString(extracted.time ?? undefined);
-  const ticketPrice = normalizeString(extracted.ticketPrice ?? undefined);
+  const price = normalizeString(extracted.price);
+  const currency = normalizeString(extracted.currency);
+  const ticketPrice = `${price}${price && currency ? " " : ""}${currency}`.trim();
+  const parsedConfidence =
+    typeof extracted.confidence === "number"
+      ? extracted.confidence
+      : Number.parseFloat(extracted.confidence);
+  const confidence = Number.isFinite(parsedConfidence) ? parsedConfidence : null;
+  const venueNormalization = normalizeVenue(post, extracted.venue);
+  const dateNormalization = normalizeEventDate(
+    normalizeString(extracted.date),
+    post.caption,
+    post.postedAt,
+  );
+  const normalizedFields: Record<string, unknown> = {
+    title,
+    rawDate: normalizeString(extracted.date),
+    rawExtractedDateText: dateNormalization.rawDateText,
+    normalizedDate: dateNormalization.isoDate,
+    dateSource: dateNormalization.source,
+    dateConfidence: dateNormalization.confidence,
+    dateDistanceFromPostDays: dateNormalization.distanceFromPostDays,
+    dateInferredYear: dateNormalization.inferredYear,
+    dateSuspiciousYear: dateNormalization.suspiciousYear,
+    dateYearSelectionReason: dateNormalization.yearSelectionReason,
+    dateReason: dateNormalization.reason ?? null,
+    rawVenue: normalizeString(extracted.venue),
+    normalizedVenue: venueNormalization.venue,
+    venueSource: venueNormalization.source,
+    locationName: venueNormalization.rawLocationName,
+    eventType,
+    time,
+    ticketPrice: ticketPrice || null,
+    city: normalizeString(extracted.city),
+    country: normalizeString(extracted.country),
+    confidence,
+    reasoningNotes: normalizeString(extracted.reasoning_notes),
+    sourceCaptionFromModel: normalizeString(extracted.source_caption),
+    sourceUrlFromModel: normalizeString(extracted.source_url),
+    artists: extracted.artists,
+    description,
+    postTimestamp: post.postedAt,
+  };
 
-  let venue = normalizeString(extracted.venue);
-  let usedVenueFallback = false;
-  if (!venue) {
-    venue = normalizeString(post.locationName);
-    usedVenueFallback = venue.length > 0;
-  }
-  if (!venue) {
-    venue = KNOWN_VENUE_BY_HANDLE[normalizeHandle(post.username)] ?? "";
-    usedVenueFallback = venue.length > 0;
-  }
-  if (!venue) {
-    return { kind: "skip", reason: "missing_venue" };
+  if (!dateNormalization.isoDate) {
+    return {
+      kind: "skip",
+      reason: dateNormalization.reason === "missing_date" ? "missing_date" : "invalid_event",
+      normalizedFields,
+    };
   }
 
-  let date = normalizeString(extracted.date);
-  let usedDateFallback = false;
-  if (!date) {
-    date = inferDateFromCaption(post.caption, post.postedAt) ?? "";
-    usedDateFallback = date.length > 0;
-  }
-  if (!date) {
-    return { kind: "skip", reason: "missing_date" };
+  if (!venueNormalization.venue) {
+    return {
+      kind: "skip",
+      reason: "missing_venue",
+      normalizedFields,
+    };
   }
 
   if (!title || !eventType) {
-    return { kind: "skip", reason: "invalid_event" };
+    return {
+      kind: "skip",
+      reason: "invalid_event",
+      normalizedFields,
+    };
   }
 
   const artists = extracted.artists
@@ -271,13 +687,12 @@ function prepareEventForInsert(
 
   return {
     kind: "ok",
-    usedVenueFallback,
-    usedDateFallback,
+    normalizedFields,
     event: {
       title,
-      date,
+      date: dateNormalization.isoDate,
       ...(time ? { time } : {}),
-      venue,
+      venue: venueNormalization.venue,
       artists,
       ...(description ? { description } : {}),
       imageUrl: selectedImageUrl,
@@ -285,6 +700,10 @@ function prepareEventForInsert(
       instagramPostId: post.postId,
       ...(ticketPrice ? { ticketPrice } : {}),
       eventType,
+      ...(post.caption ? { sourceCaption: post.caption } : {}),
+      ...(post.postedAt ? { sourcePostedAt: post.postedAt } : {}),
+      rawExtractionJson: JSON.stringify(extracted),
+      normalizedFieldsJson: JSON.stringify(normalizedFields),
       status: "pending",
     },
   };
@@ -352,17 +771,22 @@ export async function runInstagramIngestion(
     const summary: HandleSummary = {
       handle,
       fetchedPosts: 0,
+      fetched_posts: 0,
       insertedEvents: 0,
       inserted_events: 0,
       skippedDuplicates: 0,
+      skipped_duplicates: 0,
       skippedNoImage: 0,
       skipped_missing_date: 0,
       skipped_missing_venue: 0,
       skipped_video: 0,
       skipped_invalid_event: 0,
       failedDownloads: 0,
+      failed_downloads: 0,
       failedConversions: 0,
+      failed_conversions: 0,
       failedExtractions: 0,
+      failed_extractions: 0,
       failed_extraction: 0,
       errors: [],
     };
@@ -376,6 +800,7 @@ export async function runInstagramIngestion(
         daysBack: options.daysBack,
       });
       summary.fetchedPosts = posts.length;
+      summary.fetched_posts = posts.length;
     } catch (error) {
       summary.errors.push(
         error instanceof Error ? error.message : "Unknown scrape error.",
@@ -418,10 +843,12 @@ export async function runInstagramIngestion(
         const alreadyStored = await isDuplicatePost(client, post.postId);
         if (alreadyStored) {
           summary.skippedDuplicates += 1;
+          summary.skipped_duplicates += 1;
           continue;
         }
       } catch (error) {
         summary.failedExtractions += 1;
+        summary.failed_extractions += 1;
         summary.errors.push(
           error instanceof Error ? error.message : "Duplicate check error.",
         );
@@ -448,6 +875,7 @@ export async function runInstagramIngestion(
         });
       } catch (error) {
         summary.failedDownloads += 1;
+        summary.failed_downloads += 1;
         summary.errors.push(error instanceof Error ? error.message : "Image download failed.");
         logError("ingestion.image.download.failed", {
           handle,
@@ -477,6 +905,7 @@ export async function runInstagramIngestion(
         });
       } catch (error) {
         summary.failedConversions += 1;
+        summary.failed_conversions += 1;
         summary.errors.push(error instanceof Error ? error.message : "Image conversion failed.");
         logError("ingestion.image.conversion.failed", {
           handle,
@@ -495,6 +924,7 @@ export async function runInstagramIngestion(
           instagramPostUrl: post.instagramPostUrl,
           sourceImageUrl: bestImageUrl,
           instagramHandle: post.username,
+          instagramPostTimestamp: post.postedAt,
         });
         const prepared = prepareEventForInsert(post, extracted, bestImageUrl);
         if (prepared.kind === "skip") {
@@ -512,9 +942,10 @@ export async function runInstagramIngestion(
             postUrl: post.instagramPostUrl,
             selectedImageUrl: bestImageUrl,
             reason: prepared.reason,
-            extractedDate: extracted.date,
-            extractedVenue: extracted.venue,
-            locationName: post.locationName,
+            caption: post.caption,
+            postTimestamp: post.postedAt,
+            rawExtraction: extracted,
+            normalizedFields: prepared.normalizedFields,
           });
           continue;
         }
@@ -527,11 +958,14 @@ export async function runInstagramIngestion(
           postId: post.postId,
           postUrl: post.instagramPostUrl,
           selectedImageUrl: bestImageUrl,
-          usedVenueFallback: prepared.usedVenueFallback,
-          usedDateFallback: prepared.usedDateFallback,
+          caption: post.caption,
+          postTimestamp: post.postedAt,
+          rawExtraction: extracted,
+          normalizedFields: prepared.normalizedFields,
         });
       } catch (error) {
         summary.failedExtractions += 1;
+        summary.failed_extractions += 1;
         summary.failed_extraction += 1;
         summary.errors.push(
           error instanceof Error ? error.message : "Unknown extraction error.",

@@ -24,6 +24,10 @@ type EventRecord = {
   instagramPostId?: string;
   ticketPrice?: string;
   eventType: string;
+  sourceCaption?: string;
+  sourcePostedAt?: string;
+  rawExtractionJson?: string;
+  normalizedFieldsJson?: string;
   status: EventStatus;
   reviewedAt?: number;
   reviewedBy?: string;
@@ -84,6 +88,10 @@ export async function GET(request: Request) {
         instagramPostUrl: event.instagramPostUrl ?? null,
         ticketPrice: event.ticketPrice ?? null,
         eventType: event.eventType,
+        sourceCaption: event.sourceCaption ?? null,
+        sourcePostedAt: event.sourcePostedAt ?? null,
+        rawExtractionJson: event.rawExtractionJson ?? null,
+        normalizedFieldsJson: event.normalizedFieldsJson ?? null,
         moderation: {
           status: event.status,
           reviewedAt: event.reviewedAt ?? null,

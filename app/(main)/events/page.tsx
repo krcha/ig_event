@@ -2,6 +2,8 @@ import Link from "next/link";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 
+export const dynamic = "force-dynamic";
+
 type ApprovedEvent = {
   _id: string;
   title: string;
@@ -11,11 +13,95 @@ type ApprovedEvent = {
   artists: string[];
   eventType: string;
   ticketPrice?: string;
+  sourcePostedAt?: string;
+  normalizedFieldsJson?: string;
   status: "approved";
 };
 
 const listByStatusQuery =
   "events:listByStatus" as unknown as FunctionReference<"query">;
+
+function parseNormalizedEventDate(value: string): Date | null {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+  const year = Number.parseInt(match[1], 10);
+  const month = Number.parseInt(match[2], 10);
+  const day = Number.parseInt(match[3], 10);
+  const parsed = new Date(year, month - 1, day);
+  if (
+    parsed.getFullYear() !== year ||
+    parsed.getMonth() !== month - 1 ||
+    parsed.getDate() !== day
+  ) {
+    return null;
+  }
+  return parsed;
+}
+
+function getStartOfLocalToday(): Date {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+}
+
+function filterUpcomingApprovedEvents(events: ApprovedEvent[]): ApprovedEvent[] {
+  const startOfToday = getStartOfLocalToday();
+  const upcomingEvents: ApprovedEvent[] = [];
+  let filteredInvalidDate = 0;
+  let filteredPastDate = 0;
+
+  for (const event of events) {
+    const parsedDate = parseNormalizedEventDate(event.date);
+    if (!parsedDate) {
+      filteredInvalidDate += 1;
+      console.info(
+        JSON.stringify({
+          level: "info",
+          event: "public_events.filtered_out",
+          reason: "invalid_normalized_date",
+          eventId: event._id,
+          status: event.status,
+          eventDate: event.date,
+          sourcePostedAt: event.sourcePostedAt ?? null,
+        }),
+      );
+      continue;
+    }
+
+    if (parsedDate < startOfToday) {
+      filteredPastDate += 1;
+      console.info(
+        JSON.stringify({
+          level: "info",
+          event: "public_events.filtered_out",
+          reason: "past_date",
+          eventId: event._id,
+          status: event.status,
+          eventDate: event.date,
+          sourcePostedAt: event.sourcePostedAt ?? null,
+        }),
+      );
+      continue;
+    }
+
+    upcomingEvents.push(event);
+  }
+
+  console.info(
+    JSON.stringify({
+      level: "info",
+      event: "public_events.filter_summary",
+      totalApproved: events.length,
+      keptUpcoming: upcomingEvents.length,
+      filteredInvalidDate,
+      filteredPastDate,
+      localToday: startOfToday.toISOString(),
+    }),
+  );
+
+  return upcomingEvents;
+}
 
 async function loadApprovedEvents(): Promise<{
   events: ApprovedEvent[];
@@ -32,7 +118,7 @@ async function loadApprovedEvents(): Promise<{
       status: "approved",
       limit: 100,
     })) as ApprovedEvent[];
-    return { events };
+    return { events: filterUpcomingApprovedEvents(events) };
   } catch (error) {
     return {
       events: [],
@@ -49,7 +135,7 @@ export default async function EventsPage() {
       <header className="flex flex-col gap-2">
         <h1 className="text-2xl font-semibold">Events</h1>
         <p className="text-sm text-muted-foreground">
-          Showing approved events from the moderation pipeline.
+          Showing upcoming approved events from the moderation pipeline.
         </p>
       </header>
 
@@ -86,7 +172,7 @@ export default async function EventsPage() {
 
       {events.length === 0 && !error ? (
         <div className="rounded-xl border border-border bg-card p-6 text-sm text-muted-foreground">
-          No approved events yet. Events appear here after admin moderation.
+          No upcoming approved events right now.
         </div>
       ) : null}
 
