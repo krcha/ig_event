@@ -27,7 +27,7 @@ NEXT_PUBLIC_CONVEX_URL=
 CONVEX_DEPLOYMENT=
 OPENAI_API_KEY=
 APIFY_API_TOKEN=
-APIFY_INSTAGRAM_ACTOR_ID=apify/instagram-scraper
+APIFY_INSTAGRAM_ACTOR_ID=apify/instagram-post-scraper
 OPENAI_VISION_MODEL=gpt-4.1-mini
 CRON_SECRET=
 ```
@@ -51,7 +51,7 @@ If this fails with `No CONVEX_DEPLOYMENT set`, run `npx convex dev` first to con
   - Vercel cron schedule is defined in `vercel.json` (every 6 hours).
 
 Each run executes:
-1. Instagram scraping via Apify
+1. Instagram scraping via Apify (`apify/instagram-post-scraper`, default `resultsLimit=5`, `onlyPostsNewerThan=5 days`, `skipPinnedPosts=true`)
 2. Event extraction via OpenAI vision
 3. Event persistence in Convex as `pending`
 
