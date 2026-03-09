@@ -119,6 +119,8 @@ export function ScraperDashboard() {
                 <p>Inserted events: {item.insertedEvents}</p>
                 <p>Skipped duplicates: {item.skippedDuplicates}</p>
                 <p>Skipped no image: {item.skippedNoImage}</p>
+                <p>Failed downloads: {item.failedDownloads}</p>
+                <p>Failed conversions: {item.failedConversions}</p>
                 <p>Failed extractions: {item.failedExtractions}</p>
                 {item.errors.length > 0 ? (
                   <p className="text-destructive">

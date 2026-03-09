@@ -8,6 +8,7 @@ export type InstagramScrapedPost = {
   postId: string;
   caption: string | null;
   imageUrl: string | null;
+  imageUrls: string[];
   instagramPostUrl: string;
   postedAt: string | null;
   username: string;
@@ -30,6 +31,18 @@ type ApifyInstagramItem = {
   displayUrl?: string;
   displayUrlHD?: string;
   imageUrl?: string;
+  imageUrls?: string[];
+  images?: Array<
+    | string
+    | {
+        url?: string;
+        displayUrl?: string;
+        imageUrl?: string;
+      }
+  >;
+  image_versions2?: {
+    candidates?: Array<{ url?: string }>;
+  };
   timestamp?: string | number;
   takenAtTimestamp?: number;
   takenAt?: string;
@@ -79,6 +92,47 @@ function buildPostId(item: ApifyInstagramItem): string | null {
   return item.id ?? item.postId ?? item.shortCode ?? item.code ?? null;
 }
 
+function collectImageUrls(item: ApifyInstagramItem): string[] {
+  const candidates = new Set<string>();
+  const appendCandidate = (candidate: string | undefined) => {
+    if (!candidate) return;
+    const value = candidate.trim();
+    if (value.startsWith("http://") || value.startsWith("https://")) {
+      candidates.add(value);
+    }
+  };
+
+  appendCandidate(item.displayUrlHD);
+  appendCandidate(item.displayUrl);
+  appendCandidate(item.imageUrl);
+
+  if (Array.isArray(item.imageUrls)) {
+    for (const candidate of item.imageUrls) {
+      appendCandidate(candidate);
+    }
+  }
+
+  if (Array.isArray(item.images)) {
+    for (const entry of item.images) {
+      if (typeof entry === "string") {
+        appendCandidate(entry);
+      } else {
+        appendCandidate(entry.url);
+        appendCandidate(entry.displayUrl);
+        appendCandidate(entry.imageUrl);
+      }
+    }
+  }
+
+  if (Array.isArray(item.image_versions2?.candidates)) {
+    for (const candidate of item.image_versions2.candidates) {
+      appendCandidate(candidate.url);
+    }
+  }
+
+  return [...candidates];
+}
+
 export async function scrapeInstagramAccount(
   options: ScrapeInstagramAccountOptions,
 ): Promise<InstagramScrapedPost[]> {
@@ -116,22 +170,24 @@ export async function scrapeInstagramAccount(
   const rawItems = (await response.json()) as ApifyInstagramItem[];
 
   return rawItems
-    .map((item) => {
+    .map<InstagramScrapedPost | null>((item) => {
       const postId = buildPostId(item);
       const instagramPostUrl = buildPostUrl(item);
       if (!postId || !instagramPostUrl) return null;
 
       const postedAt = parsePostDate(item);
       if (postedAt && postedAt.getTime() < cutoff) return null;
+      const imageUrls = collectImageUrls(item);
 
       return {
         postId,
         caption: item.caption ?? item.captionText ?? null,
-        imageUrl: item.displayUrlHD ?? item.displayUrl ?? item.imageUrl ?? null,
+        imageUrl: imageUrls[0] ?? null,
+        imageUrls,
         instagramPostUrl,
         postedAt: postedAt ? postedAt.toISOString() : null,
         username: item.ownerUsername ?? item.owner?.username ?? handle,
-      } satisfies InstagramScrapedPost;
+      };
     })
     .filter((item): item is InstagramScrapedPost => item !== null);
 }

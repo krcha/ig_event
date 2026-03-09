@@ -2,6 +2,13 @@ import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { extractEventDataFromPoster } from "@/lib/ai/extract-event-data";
 import {
+  downloadImage,
+  isInstagramOrFbCdnUrl,
+  normalizeToJpeg,
+  resolveBestImageUrl,
+  toDataUrl,
+} from "@/lib/ai/prepare-image-for-openai";
+import {
   scrapeInstagramAccount,
   type InstagramScrapedPost,
 } from "@/lib/scraper/instagram-scraper";
@@ -19,6 +26,8 @@ type HandleSummary = {
   insertedEvents: number;
   skippedDuplicates: number;
   skippedNoImage: number;
+  failedDownloads: number;
+  failedConversions: number;
   failedExtractions: number;
   errors: string[];
 };
@@ -40,6 +49,26 @@ const createEventMutation =
   "events:createEvent" as unknown as FunctionReference<"mutation">;
 const listActiveVenuesQuery =
   "venues:listActiveVenues" as unknown as FunctionReference<"query">;
+
+function logInfo(event: string, payload: Record<string, unknown>) {
+  console.info(
+    JSON.stringify({
+      level: "info",
+      event,
+      ...payload,
+    }),
+  );
+}
+
+function logError(event: string, payload: Record<string, unknown>) {
+  console.error(
+    JSON.stringify({
+      level: "error",
+      event,
+      ...payload,
+    }),
+  );
+}
 
 function getConvexClient(): ConvexHttpClient {
   const convexUrl = getRequiredEnv("NEXT_PUBLIC_CONVEX_URL");
@@ -108,11 +137,15 @@ async function isDuplicatePost(
 async function persistExtractedEvent(
   client: ConvexHttpClient,
   post: InstagramScrapedPost,
+  sourceImageUrl: string,
+  imageDataUrl: string,
 ) {
   const extracted = await extractEventDataFromPoster({
-    imageUrl: post.imageUrl as string,
+    imageDataUrl,
     caption: post.caption,
     instagramPostUrl: post.instagramPostUrl,
+    sourceImageUrl,
+    instagramHandle: post.username,
   });
 
   await client.mutation(createEventMutation, {
@@ -145,6 +178,8 @@ export async function runInstagramIngestion(
       insertedEvents: 0,
       skippedDuplicates: 0,
       skippedNoImage: 0,
+      failedDownloads: 0,
+      failedConversions: 0,
       failedExtractions: 0,
       errors: [],
     };
@@ -166,10 +201,25 @@ export async function runInstagramIngestion(
     }
 
     for (const post of posts) {
-      if (!post.imageUrl) {
+      const bestImageUrl = resolveBestImageUrl(post);
+      if (!bestImageUrl) {
         summary.skippedNoImage += 1;
+        logInfo("ingestion.image.skipped_no_image", {
+          handle,
+          postId: post.postId,
+          postUrl: post.instagramPostUrl,
+          imageCandidates: post.imageUrls ?? [],
+        });
         continue;
       }
+
+      logInfo("ingestion.image.selected", {
+        handle,
+        postId: post.postId,
+        postUrl: post.instagramPostUrl,
+        selectedImageUrl: bestImageUrl,
+        isInstagramOrFbCdn: isInstagramOrFbCdnUrl(bestImageUrl),
+      });
 
       try {
         const alreadyStored = await isDuplicatePost(client, post.postId);
@@ -177,14 +227,95 @@ export async function runInstagramIngestion(
           summary.skippedDuplicates += 1;
           continue;
         }
+      } catch (error) {
+        summary.failedExtractions += 1;
+        summary.errors.push(
+          error instanceof Error ? error.message : "Duplicate check error.",
+        );
+        logError("ingestion.duplicate_check.failed", {
+          handle,
+          postId: post.postId,
+          postUrl: post.instagramPostUrl,
+          selectedImageUrl: bestImageUrl,
+          error: error instanceof Error ? error.message : "Unknown duplicate check error.",
+        });
+        continue;
+      }
 
-        await persistExtractedEvent(client, post);
+      let downloadedImage: Awaited<ReturnType<typeof downloadImage>>;
+      try {
+        downloadedImage = await downloadImage(bestImageUrl);
+        logInfo("ingestion.image.download.success", {
+          handle,
+          postId: post.postId,
+          postUrl: post.instagramPostUrl,
+          selectedImageUrl: bestImageUrl,
+          contentType: downloadedImage.contentType,
+          downloadedBytes: downloadedImage.imageBuffer.byteLength,
+        });
+      } catch (error) {
+        summary.failedDownloads += 1;
+        summary.errors.push(error instanceof Error ? error.message : "Image download failed.");
+        logError("ingestion.image.download.failed", {
+          handle,
+          postId: post.postId,
+          postUrl: post.instagramPostUrl,
+          selectedImageUrl: bestImageUrl,
+          error: error instanceof Error ? error.message : "Unknown download error.",
+        });
+        continue;
+      }
+
+      let imageDataUrl: string;
+      try {
+        const normalizedImage = await normalizeToJpeg(
+          downloadedImage.imageBuffer,
+          downloadedImage.contentType ?? bestImageUrl,
+        );
+        imageDataUrl = toDataUrl(normalizedImage.imageBuffer, normalizedImage.mimeType);
+        logInfo("ingestion.image.conversion.success", {
+          handle,
+          postId: post.postId,
+          postUrl: post.instagramPostUrl,
+          selectedImageUrl: bestImageUrl,
+          wasConverted: normalizedImage.wasConverted,
+          outputMimeType: normalizedImage.mimeType,
+          outputBytes: normalizedImage.imageBuffer.byteLength,
+        });
+      } catch (error) {
+        summary.failedConversions += 1;
+        summary.errors.push(error instanceof Error ? error.message : "Image conversion failed.");
+        logError("ingestion.image.conversion.failed", {
+          handle,
+          postId: post.postId,
+          postUrl: post.instagramPostUrl,
+          selectedImageUrl: bestImageUrl,
+          error: error instanceof Error ? error.message : "Unknown conversion error.",
+        });
+        continue;
+      }
+
+      try {
+        await persistExtractedEvent(client, post, bestImageUrl, imageDataUrl);
         summary.insertedEvents += 1;
+        logInfo("ingestion.openai.extraction.success", {
+          handle,
+          postId: post.postId,
+          postUrl: post.instagramPostUrl,
+          selectedImageUrl: bestImageUrl,
+        });
       } catch (error) {
         summary.failedExtractions += 1;
         summary.errors.push(
           error instanceof Error ? error.message : "Unknown extraction error.",
         );
+        logError("ingestion.openai.extraction.failed", {
+          handle,
+          postId: post.postId,
+          postUrl: post.instagramPostUrl,
+          selectedImageUrl: bestImageUrl,
+          error: error instanceof Error ? error.message : "Unknown extraction error.",
+        });
       }
     }
   }

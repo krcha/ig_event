@@ -2,6 +2,8 @@ import { z } from "zod";
 import { getRequiredEnv } from "@/lib/utils/env";
 
 const openAiVisionModel = process.env.OPENAI_VISION_MODEL ?? "gpt-4.1-mini";
+const OPENAI_REQUEST_TIMEOUT_MS = 40000;
+const OPENAI_MAX_ATTEMPTS = 2;
 
 const extractedEventSchema = z.object({
   eventName: z.string().min(1),
@@ -17,9 +19,11 @@ const extractedEventSchema = z.object({
 export type ExtractedEventData = z.infer<typeof extractedEventSchema>;
 
 type ExtractEventDataOptions = {
-  imageUrl: string;
+  imageDataUrl: string;
   caption?: string | null;
   instagramPostUrl: string;
+  sourceImageUrl: string;
+  instagramHandle: string;
 };
 
 const systemPrompt = `
@@ -77,66 +81,97 @@ export async function extractEventDataFromPoster(
   options: ExtractEventDataOptions,
 ): Promise<ExtractedEventData> {
   const openAiApiKey = getRequiredEnv("OPENAI_API_KEY");
+  let lastError: unknown;
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${openAiApiKey}`,
-    },
-    body: JSON.stringify({
-      model: openAiVisionModel,
-      temperature: 0,
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "nightlife_event_extraction",
-          strict: true,
-          schema: extractionJsonSchema,
+  for (let attempt = 1; attempt <= OPENAI_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), OPENAI_REQUEST_TIMEOUT_MS);
+
+      const response = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${openAiApiKey}`,
         },
-      },
-      messages: [
-        {
-          role: "system",
-          content: systemPrompt,
-        },
-        {
-          role: "user",
-          content: [
+        body: JSON.stringify({
+          model: openAiVisionModel,
+          input: [
             {
-              type: "text",
-              text: [
-                "Extract event data from this Instagram post image.",
-                `Instagram post URL: ${options.instagramPostUrl}`,
-                `Instagram caption: ${options.caption ?? "N/A"}`,
-              ].join("\n"),
+              role: "system",
+              content: [{ type: "input_text", text: systemPrompt }],
             },
             {
-              type: "image_url",
-              image_url: { url: options.imageUrl },
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: [
+                    "Extract event data from this Instagram post image.",
+                    `Instagram handle: @${options.instagramHandle}`,
+                    `Instagram post URL: ${options.instagramPostUrl}`,
+                    `Instagram caption: ${options.caption ?? "N/A"}`,
+                    `Source image URL: ${options.sourceImageUrl}`,
+                  ].join("\n"),
+                },
+                {
+                  type: "input_image",
+                  image_url: options.imageDataUrl,
+                },
+              ],
             },
           ],
-        },
-      ],
-    }),
-    cache: "no-store",
-  });
+          text: {
+            format: {
+              type: "json_schema",
+              name: "nightlife_event_extraction",
+              strict: true,
+              schema: extractionJsonSchema,
+            },
+          },
+        }),
+        cache: "no-store",
+        signal: controller.signal,
+      });
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(
-      `OpenAI extraction failed: ${response.status} ${response.statusText} - ${errorBody}`,
-    );
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        throw new Error(
+          `OpenAI extraction failed: ${response.status} ${response.statusText} - ${errorBody}`,
+        );
+      }
+
+      const payload = (await response.json()) as {
+        output_text?: string;
+        output?: Array<{
+          content?: Array<{ type?: string; text?: string }>;
+        }>;
+      };
+
+      const responseText =
+        payload.output_text ??
+        payload.output
+          ?.flatMap((outputItem) => outputItem.content ?? [])
+          .map((contentItem) => contentItem.text ?? "")
+          .find((text) => text.trim().length > 0);
+
+      if (!responseText) {
+        throw new Error("OpenAI extraction returned an empty response payload.");
+      }
+
+      const parsedJson = JSON.parse(responseText) as unknown;
+      return extractedEventSchema.parse(parsedJson);
+    } catch (error) {
+      lastError = error;
+      if (attempt < OPENAI_MAX_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 700));
+      }
+    }
   }
 
-  const payload = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string | null } }>;
-  };
-  const content = payload.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error("OpenAI extraction returned an empty response payload.");
-  }
-
-  const parsedJson = JSON.parse(content) as unknown;
-  return extractedEventSchema.parse(parsedJson);
+  const errorMessage =
+    lastError instanceof Error ? lastError.message : "Unknown OpenAI extraction error.";
+  throw new Error(errorMessage);
 }
