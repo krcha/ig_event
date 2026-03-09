@@ -5,6 +5,7 @@ import type { FunctionReference } from "convex/server";
 import {
   createEmptyIngestionSummary,
   createInitialIngestionBatchState,
+  type IngestionRunMode,
 } from "@/lib/pipeline/run-instagram-ingestion";
 import { getRequiredEnv, hasClerkEnv } from "@/lib/utils/env";
 
@@ -12,6 +13,7 @@ type ScrapeRequestBody = {
   handles?: string[];
   resultsLimit?: number;
   daysBack?: number;
+  mode?: IngestionRunMode;
 };
 
 const createIngestionJobMutation =
@@ -26,6 +28,10 @@ function normalizePositiveInt(value: unknown): number | undefined {
   }
   const rounded = Math.trunc(value);
   return rounded > 0 ? rounded : undefined;
+}
+
+function normalizeMode(value: unknown): IngestionRunMode {
+  return value === "saved_posts" ? "saved_posts" : "full_scrape";
 }
 
 function logInfo(event: string, payload: Record<string, unknown>) {
@@ -79,11 +85,13 @@ export async function POST(request: Request) {
     const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
     const resultsLimit = normalizePositiveInt(body.resultsLimit);
     const daysBack = normalizePositiveInt(body.daysBack);
+    const mode = normalizeMode(body.mode);
     const summary = createEmptyIngestionSummary(handles);
     const state = createInitialIngestionBatchState();
 
     const jobId = (await convex.mutation(createIngestionJobMutation, {
       source: "manual",
+      mode,
       handles,
       resultsLimit,
       daysBack,
@@ -94,6 +102,7 @@ export async function POST(request: Request) {
 
     logInfo("scrape_started", {
       source: "manual",
+      mode,
       jobId,
       handles,
       resultsLimit: resultsLimit ?? null,
@@ -106,6 +115,7 @@ export async function POST(request: Request) {
       jobId,
       status: "queued",
       source: "manual",
+      mode,
       handles,
       statusUrl: `/api/admin/scrape/jobs/${jobId}`,
     }, { status: 202 });
@@ -115,6 +125,7 @@ export async function POST(request: Request) {
     logError("scrape_failed", {
       step,
       source: "manual",
+      mode: body.mode ?? "full_scrape",
       handles,
       error: message,
     });

@@ -21,7 +21,10 @@ type RunInstagramIngestionOptions = {
   handles: string[];
   resultsLimit?: number;
   daysBack?: number;
+  mode?: IngestionRunMode;
 };
+
+export type IngestionRunMode = "full_scrape" | "saved_posts";
 
 type HandleSummary = {
   handle: string;
@@ -71,6 +74,7 @@ export type IngestionBatchStepOptions = {
   resultsLimit?: number;
   daysBack?: number;
   batchSize?: number;
+  mode?: IngestionRunMode;
 };
 
 export type IngestionBatchStepResult = {
@@ -98,10 +102,20 @@ const updateEventMutation =
   "events:updateEvent" as unknown as FunctionReference<"mutation">;
 const listActiveVenuesQuery =
   "venues:listActiveVenues" as unknown as FunctionReference<"query">;
+const listScrapedPostsByHandleQuery =
+  "scrapedPosts:listByHandle" as unknown as FunctionReference<"query">;
+const upsertScrapedPostsByHandleMutation =
+  "scrapedPosts:upsertManyByHandle" as unknown as FunctionReference<"mutation">;
 const KNOWN_VENUE_BY_HANDLE: Record<string, string> = {
   "20_44.nightclub": "Klub 20/44",
   kcgrad: "KC Grad",
 };
+const GENERIC_EVENT_TITLE_PATTERNS = [
+  /^(open\s+)?jam\s+session$/i,
+  /^[a-z&/+ -]+jam\s+session$/i,
+  /^(live\s+music|concert|party|event|session)$/i,
+  /^(techno|house|jazz|blues|rock|metal|hip hop|hip-hop|drum and bass|dnb)(\s+(night|session|party))?$/i,
+];
 
 type PreparedEvent = {
   title: string;
@@ -298,8 +312,121 @@ type ActiveVenueRecord = {
   instagramHandle: string;
 };
 
+type SavedScrapedPostRecord = {
+  handle: string;
+  postId: string;
+  caption?: string;
+  imageUrl?: string;
+  imageUrls: string[];
+  postType?: string;
+  locationName?: string;
+  instagramPostUrl: string;
+  postedAt?: string;
+  username: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
 function normalizeHandle(handle: string): string {
   return handle.replace(/^@/, "").trim().toLowerCase();
+}
+
+function toSearchableText(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function humanizeHandle(handle: string): string {
+  const normalized = normalizeHandle(handle);
+  const mappedVenue = KNOWN_VENUE_BY_HANDLE[normalized];
+  if (mappedVenue) {
+    return mappedVenue;
+  }
+
+  const tokens = normalized
+    .replace(/[._]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter((token) => token.length > 0);
+
+  if (tokens.length === 0) {
+    return normalized;
+  }
+
+  return tokens
+    .map((token) => {
+      const lower = token.toLowerCase();
+      if (lower === "i" || lower === "x" || lower === "b2b") {
+        return lower;
+      }
+      if (lower.length <= 3 && /^[a-z0-9]+$/.test(lower)) {
+        return lower.toUpperCase();
+      }
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
+}
+
+function buildFallbackTitle(post: InstagramScrapedPost, venue: VenueNormalization): string {
+  const mappedVenue = KNOWN_VENUE_BY_HANDLE[normalizeHandle(post.username)];
+  if (mappedVenue) {
+    return mappedVenue;
+  }
+
+  const locationName = normalizeString(post.locationName);
+  if (locationName) {
+    return locationName;
+  }
+
+  if (venue.source === "handle_map" && venue.venue) {
+    return venue.venue;
+  }
+
+  return humanizeHandle(post.username);
+}
+
+function isGenericEventTitle(value: string): boolean {
+  return GENERIC_EVENT_TITLE_PATTERNS.some((pattern) => pattern.test(value.trim()));
+}
+
+function normalizeEventTitle(
+  post: InstagramScrapedPost,
+  extracted: ExtractedEventData,
+  venue: VenueNormalization,
+): {
+  title: string;
+  source: "model" | "handle_fallback";
+  rawTitle: string;
+  usedFallback: boolean;
+} {
+  const rawTitle = normalizeString(extracted.title);
+  const captionText = normalizeString(post.caption);
+  const normalizedRawTitle = toSearchableText(rawTitle);
+  const normalizedCaption = toSearchableText(captionText);
+  const titleAppearsInCaption =
+    normalizedRawTitle.length > 0 && normalizedCaption.includes(normalizedRawTitle);
+
+  if (rawTitle && (!isGenericEventTitle(rawTitle) || titleAppearsInCaption)) {
+    return {
+      title: rawTitle,
+      source: "model",
+      rawTitle,
+      usedFallback: false,
+    };
+  }
+
+  return {
+    title: buildFallbackTitle(post, venue),
+    source: "handle_fallback",
+    rawTitle,
+    usedFallback: true,
+  };
 }
 
 function createEmptyHandleSummary(handle: string): HandleSummary {
@@ -358,6 +485,54 @@ export function createInitialIngestionBatchState(): IngestionBatchState {
     currentHandlePosts: [],
     seenSourceKeysByHandle: {},
   };
+}
+
+async function persistScrapedPostsForHandle(
+  client: ConvexHttpClient,
+  handle: string,
+  posts: InstagramScrapedPost[],
+): Promise<void> {
+  if (posts.length === 0) {
+    return;
+  }
+
+  await client.mutation(upsertScrapedPostsByHandleMutation, {
+    handle,
+    posts: posts.map((post) => ({
+      handle,
+      postId: post.postId,
+      ...(post.caption ? { caption: post.caption } : {}),
+      ...(post.imageUrl ? { imageUrl: post.imageUrl } : {}),
+      imageUrls: post.imageUrls,
+      ...(post.postType ? { postType: post.postType } : {}),
+      ...(post.locationName ? { locationName: post.locationName } : {}),
+      instagramPostUrl: post.instagramPostUrl,
+      ...(post.postedAt ? { postedAt: post.postedAt } : {}),
+      username: post.username,
+    })),
+  });
+}
+
+async function loadSavedScrapedPostsForHandle(
+  client: ConvexHttpClient,
+  handle: string,
+  resultsLimit: number | undefined,
+  daysBack: number | undefined,
+): Promise<InstagramScrapedPost[]> {
+  const savedPosts = (await client.query(listScrapedPostsByHandleQuery, {
+    handle,
+  })) as SavedScrapedPostRecord[];
+
+  const filtered = savedPosts
+    .map(mapSavedScrapedPostToInstagramPost)
+    .filter((post) => isPostWithinDaysBack(post.postedAt, daysBack))
+    .sort((left, right) => comparePostedAtDescending(left.postedAt, right.postedAt));
+
+  if (!resultsLimit || resultsLimit < 1) {
+    return filtered;
+  }
+
+  return filtered.slice(0, resultsLimit);
 }
 
 function normalizeBatchSize(value: number | undefined): number {
@@ -456,6 +631,41 @@ function parsePostedAt(postedAt: string | null): Date | null {
     return null;
   }
   return new Date(parsed);
+}
+
+function comparePostedAtDescending(left: string | null, right: string | null): number {
+  return (
+    (parsePostedAt(right)?.getTime() ?? Number.NEGATIVE_INFINITY) -
+    (parsePostedAt(left)?.getTime() ?? Number.NEGATIVE_INFINITY)
+  );
+}
+
+function isPostWithinDaysBack(postedAt: string | null, daysBack: number | undefined): boolean {
+  if (!daysBack || daysBack <= 0) {
+    return true;
+  }
+  const parsed = parsePostedAt(postedAt);
+  if (!parsed) {
+    return true;
+  }
+  const cutoff = Date.now() - daysBack * 24 * 60 * 60 * 1000;
+  return parsed.getTime() >= cutoff;
+}
+
+function mapSavedScrapedPostToInstagramPost(
+  record: SavedScrapedPostRecord,
+): InstagramScrapedPost {
+  return {
+    postId: record.postId,
+    caption: record.caption ?? null,
+    imageUrl: record.imageUrl ?? null,
+    imageUrls: record.imageUrls,
+    postType: record.postType ?? null,
+    locationName: record.locationName ?? null,
+    instagramPostUrl: record.instagramPostUrl,
+    postedAt: record.postedAt ?? null,
+    username: record.username,
+  };
 }
 
 function getConfiguredEventTimezone(): string {
@@ -1307,7 +1517,6 @@ function prepareEventsForInsert(
   extracted: ExtractedEventData,
   selectedImageUrl: string,
 ): PrepareEventResult[] {
-  const title = normalizeString(extracted.title);
   const eventType = normalizeString(extracted.category);
   const description = normalizeString(extracted.description);
   const time = normalizeString(extracted.time ?? undefined);
@@ -1320,6 +1529,8 @@ function prepareEventsForInsert(
       : Number.parseFloat(extracted.confidence);
   const confidence = Number.isFinite(parsedConfidence) ? parsedConfidence : null;
   const venueNormalization = normalizeVenue(post, extracted.venue);
+  const titleNormalization = normalizeEventTitle(post, extracted, venueNormalization);
+  const title = normalizeString(titleNormalization.title);
   const dateNormalization = normalizeEventDate(
     normalizeString(extracted.date),
     post.caption,
@@ -1338,6 +1549,9 @@ function prepareEventsForInsert(
   const eventDateFilter = getEventDateFilterContext();
   const normalizedFieldsBase: Record<string, unknown> = {
     title,
+    rawTitle: titleNormalization.rawTitle,
+    titleSource: titleNormalization.source,
+    titleUsedFallback: titleNormalization.usedFallback,
     rawDate: normalizeString(extracted.date),
     rawExtractedDateText: dateNormalization.rawDateText,
     normalizedDate: candidateDates[0] ?? null,
@@ -1761,6 +1975,7 @@ export async function runInstagramIngestionBatchStep(
 ): Promise<IngestionBatchStepResult> {
   const client = getConvexClient();
   const batchSize = normalizeBatchSize(options.batchSize);
+  const mode = options.mode ?? "full_scrape";
   const summary = options.summary;
   const state = options.state;
   let processedPosts = 0;
@@ -1777,11 +1992,35 @@ export async function runInstagramIngestionBatchStep(
 
     if (state.currentHandlePosts.length === 0) {
       try {
-        const posts = await scrapeInstagramAccount({
-          handle,
-          resultsLimit: options.resultsLimit,
-          daysBack: options.daysBack,
-        });
+        const posts =
+          mode === "saved_posts"
+            ? await loadSavedScrapedPostsForHandle(
+                client,
+                handle,
+                options.resultsLimit,
+                options.daysBack,
+              )
+            : await scrapeInstagramAccount({
+                handle,
+                resultsLimit: options.resultsLimit,
+                daysBack: options.daysBack,
+              });
+
+        if (mode === "full_scrape") {
+          try {
+            await persistScrapedPostsForHandle(client, handle, posts);
+          } catch (persistError) {
+            logError("ingestion.scrape.persist_failed", {
+              step: "fetch_posts" satisfies IngestionStep,
+              handle,
+              sourcePostId: null,
+              shortcode: null,
+              instagramUrl: null,
+              error: getErrorMessage(persistError),
+            });
+          }
+        }
+
         handleSummary.fetchedPosts = posts.length;
         handleSummary.fetched_posts = posts.length;
         state.currentHandlePosts = posts;
@@ -1880,6 +2119,7 @@ export async function getActiveVenueHandles(): Promise<string[]> {
 export async function runActiveVenueIngestion(options?: {
   resultsLimit?: number;
   daysBack?: number;
+  mode?: IngestionRunMode;
 }): Promise<ActiveVenueIngestionResult> {
   const venueHandles = await getActiveVenueHandles();
   if (venueHandles.length === 0) {
@@ -1897,6 +2137,7 @@ export async function runActiveVenueIngestion(options?: {
     handles: venueHandles,
     resultsLimit: options?.resultsLimit,
     daysBack: options?.daysBack,
+    mode: options?.mode,
   });
 
   return { venueHandles, summary };
@@ -1917,6 +2158,7 @@ export async function runInstagramIngestion(
       resultsLimit: options.resultsLimit,
       daysBack: options.daysBack,
       batchSize: 10,
+      mode: options.mode,
     });
     done = batchResult.done;
   }

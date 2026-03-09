@@ -1,7 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import type { IngestionSummary } from "@/lib/pipeline/run-instagram-ingestion";
+import type {
+  IngestionRunMode,
+  IngestionSummary,
+} from "@/lib/pipeline/run-instagram-ingestion";
 
 type ScrapeSummaryPayload = {
   source:
@@ -9,6 +12,7 @@ type ScrapeSummaryPayload = {
     | "active_venues"
     | "cron_active_venues"
     | "repair_active_venues";
+  mode?: IngestionRunMode;
   handles: string[];
   summary: IngestionSummary;
   error?: string;
@@ -20,7 +24,7 @@ type ScrapeStartPayload = {
   started?: boolean;
   jobId?: string;
   status?: ScrapeJobStatus;
-  mode?: "repair";
+  mode?: "repair" | IngestionRunMode;
   source?: "manual" | "repair_active_venues";
   handles?: string[];
   statusUrl?: string;
@@ -31,12 +35,51 @@ type ScrapeJobPayload = {
   jobId: string;
   status: ScrapeJobStatus;
   source: "manual" | "repair_active_venues";
+  mode?: IngestionRunMode;
   handles: string[];
   summary: IngestionSummary;
   error?: string | null;
 };
 
 const POLL_INTERVAL_MS = 2_000;
+type HandleSummary = IngestionSummary["handles"][number];
+
+const HANDLE_SUMMARY_METRICS: Array<{
+  label: string;
+  getValue: (item: HandleSummary) => number;
+}> = [
+  { label: "Fetched posts", getValue: (item) => item.fetchedPosts },
+  { label: "Fetched posts (normalized)", getValue: (item) => item.fetched_posts },
+  { label: "Inserted events", getValue: (item) => item.insertedEvents },
+  { label: "Inserted events (new)", getValue: (item) => item.inserted_events },
+  { label: "Skipped duplicates", getValue: (item) => item.skippedDuplicates },
+  { label: "Skipped duplicates (normalized)", getValue: (item) => item.skipped_duplicates },
+  { label: "Skipped clean duplicates", getValue: (item) => item.skipped_duplicates_clean },
+  { label: "Skipped no image", getValue: (item) => item.skippedNoImage },
+  { label: "Skipped missing date", getValue: (item) => item.skipped_missing_date },
+  { label: "Skipped missing venue", getValue: (item) => item.skipped_missing_venue },
+  { label: "Skipped past event", getValue: (item) => item.skipped_past_event ?? 0 },
+  { label: "Skipped video", getValue: (item) => item.skipped_video },
+  { label: "Skipped invalid event", getValue: (item) => item.skipped_invalid_event },
+  {
+    label: "Updated bad duplicates",
+    getValue: (item) => item.updated_duplicates_bad_data,
+  },
+  { label: "Duplicate update failed", getValue: (item) => item.duplicate_update_failed },
+  { label: "Failed downloads", getValue: (item) => item.failedDownloads },
+  { label: "Failed downloads (normalized)", getValue: (item) => item.failed_downloads },
+  { label: "Failed conversions", getValue: (item) => item.failedConversions },
+  {
+    label: "Failed conversions (normalized)",
+    getValue: (item) => item.failed_conversions,
+  },
+  { label: "Failed extractions", getValue: (item) => item.failedExtractions },
+  {
+    label: "Failed extractions (normalized)",
+    getValue: (item) => item.failed_extractions,
+  },
+  { label: "Failed extraction (new)", getValue: (item) => item.failed_extraction },
+];
 
 export function ScraperDashboard() {
   const [handlesText, setHandlesText] = useState("residentadvisor\nboilerroomtv");
@@ -108,6 +151,7 @@ export function ScraperDashboard() {
       setActiveJobStatus(payload.status);
       setSummaryPayload({
         source: payload.source,
+        mode: payload.mode,
         handles: payload.handles,
         summary: payload.summary,
       });
@@ -123,7 +167,7 @@ export function ScraperDashboard() {
     }
   }
 
-  async function runManualScraper() {
+  async function runManualScraper(mode: IngestionRunMode) {
     setIsLoading(true);
     setError(null);
     setSummaryPayload(null);
@@ -134,7 +178,7 @@ export function ScraperDashboard() {
       const response = await fetch("/api/admin/scrape", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ handles }),
+        body: JSON.stringify({ handles, mode }),
       });
 
       const payload = (await response.json()) as ScrapeStartPayload;
@@ -194,8 +238,8 @@ export function ScraperDashboard() {
     }
   }
 
-  function runActiveVenueScraper() {
-    void runScraper("/api/admin/scrape/venues");
+  function runActiveVenueScraper(mode: IngestionRunMode) {
+    void runScraper("/api/admin/scrape/venues", { mode });
   }
 
   return (
@@ -214,19 +258,41 @@ export function ScraperDashboard() {
         className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
         disabled={isLoading || handles.length === 0}
         onClick={() => {
-          void runManualScraper();
+          void runManualScraper("full_scrape");
         }}
         type="button"
       >
-        {isLoading ? "Running scrape job..." : "Run scrape + extraction"}
+        {isLoading ? "Running scrape job..." : "Run full scrape job"}
       </button>
       <button
         className="ml-2 rounded-md border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
         disabled={isLoading}
-        onClick={runActiveVenueScraper}
+        onClick={() => {
+          void runManualScraper("saved_posts");
+        }}
+        type="button"
+      >
+        {isLoading ? "Running..." : "Process saved scraped posts"}
+      </button>
+      <button
+        className="ml-2 rounded-md border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+        disabled={isLoading}
+        onClick={() => {
+          runActiveVenueScraper("full_scrape");
+        }}
         type="button"
       >
         {isLoading ? "Running..." : "Run active venues"}
+      </button>
+      <button
+        className="ml-2 rounded-md border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+        disabled={isLoading}
+        onClick={() => {
+          runActiveVenueScraper("saved_posts");
+        }}
+        type="button"
+      >
+        {isLoading ? "Running..." : "Process saved active venues"}
       </button>
       <button
         className="ml-2 rounded-md border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
@@ -252,6 +318,14 @@ export function ScraperDashboard() {
             Source: <span className="font-medium">{summaryPayload.source}</span>
           </p>
           <p>
+            Mode:{" "}
+            <span className="font-medium">
+              {summaryPayload.mode === "saved_posts"
+                ? "Saved posts only"
+                : "Full scrape"}
+            </span>
+          </p>
+          <p>
             Handles:{" "}
             <span className="font-medium">
               {summaryPayload.handles.length > 0
@@ -268,38 +342,31 @@ export function ScraperDashboard() {
             <span className="font-medium">{summaryPayload.summary.finishedAt}</span>
           </p>
           <div className="space-y-2">
-            {summaryPayload.summary.handles.map((item) => (
-              <div className="rounded border border-border p-3" key={item.handle}>
-                <p className="font-medium">@{item.handle}</p>
-                <p>Fetched posts: {item.fetchedPosts}</p>
-                <p>Fetched posts (normalized): {item.fetched_posts}</p>
-                <p>Inserted events: {item.insertedEvents}</p>
-                <p>Inserted events (new): {item.inserted_events}</p>
-                <p>Skipped duplicates: {item.skippedDuplicates}</p>
-                <p>Skipped duplicates (normalized): {item.skipped_duplicates}</p>
-                <p>Skipped clean duplicates: {item.skipped_duplicates_clean}</p>
-                <p>Skipped no image: {item.skippedNoImage}</p>
-                <p>Skipped missing date: {item.skipped_missing_date}</p>
-                <p>Skipped missing venue: {item.skipped_missing_venue}</p>
-                <p>Skipped past event: {item.skipped_past_event ?? 0}</p>
-                <p>Skipped video: {item.skipped_video}</p>
-                <p>Skipped invalid event: {item.skipped_invalid_event}</p>
-                <p>Updated bad duplicates: {item.updated_duplicates_bad_data}</p>
-                <p>Duplicate update failed: {item.duplicate_update_failed}</p>
-                <p>Failed downloads: {item.failedDownloads}</p>
-                <p>Failed downloads (normalized): {item.failed_downloads}</p>
-                <p>Failed conversions: {item.failedConversions}</p>
-                <p>Failed conversions (normalized): {item.failed_conversions}</p>
-                <p>Failed extractions: {item.failedExtractions}</p>
-                <p>Failed extractions (normalized): {item.failed_extractions}</p>
-                <p>Failed extraction (new): {item.failed_extraction}</p>
-                {item.errors.length > 0 ? (
-                  <p className="text-destructive">
-                    Errors: {item.errors.join(" | ")}
-                  </p>
-                ) : null}
-              </div>
-            ))}
+            {summaryPayload.summary.handles.map((item) => {
+              const visibleMetrics = HANDLE_SUMMARY_METRICS.map((metric) => ({
+                label: metric.label,
+                value: metric.getValue(item),
+              })).filter((metric) => metric.value > 0);
+
+              return (
+                <div className="rounded border border-border p-3" key={item.handle}>
+                  <p className="font-medium">@{item.handle}</p>
+                  {visibleMetrics.map((metric) => (
+                    <p key={metric.label}>
+                      {metric.label}: {metric.value}
+                    </p>
+                  ))}
+                  {visibleMetrics.length === 0 && item.errors.length === 0 ? (
+                    <p className="text-muted-foreground">No non-zero results.</p>
+                  ) : null}
+                  {item.errors.length > 0 ? (
+                    <p className="text-destructive">
+                      Errors: {item.errors.join(" | ")}
+                    </p>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
         </div>
       ) : null}

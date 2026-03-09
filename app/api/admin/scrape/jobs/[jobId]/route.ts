@@ -4,6 +4,7 @@ import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import type {
   IngestionBatchState,
+  IngestionRunMode,
   IngestionSummary,
 } from "@/lib/pipeline/run-instagram-ingestion";
 import {
@@ -18,6 +19,7 @@ type IngestionJobStatus = "queued" | "running" | "completed" | "failed";
 type IngestionJobRecord = {
   _id: string;
   source: string;
+  mode?: IngestionRunMode;
   status: IngestionJobStatus;
   handles: string[];
   resultsLimit?: number;
@@ -124,6 +126,7 @@ function buildJobResponse(job: IngestionJobRecord) {
   return {
     jobId: job._id,
     source: job.source,
+    mode: job.mode ?? "full_scrape",
     status: job.status,
     handles: job.handles,
     summary,
@@ -212,6 +215,7 @@ export async function POST(
     logInfo("batch_started", {
       jobId,
       source: job.source,
+      mode: job.mode ?? "full_scrape",
       status: job.status,
       handleIndex: state.handleIndex,
       currentHandle: state.currentHandle,
@@ -226,6 +230,7 @@ export async function POST(
         resultsLimit: job.resultsLimit,
         daysBack: job.daysBack,
         batchSize: job.batchSize,
+        mode: job.mode ?? "full_scrape",
       });
 
       const finishedAt = batchResult.done ? new Date().toISOString() : undefined;
@@ -243,6 +248,7 @@ export async function POST(
       logInfo("batch_completed", {
         jobId,
         source: job.source,
+        mode: job.mode ?? "full_scrape",
         done: batchResult.done,
         handleIndex: batchResult.state.handleIndex,
         currentHandle: batchResult.state.currentHandle,
@@ -253,6 +259,7 @@ export async function POST(
         logInfo("scrape_completed", {
           jobId,
           source: job.source,
+          mode: job.mode ?? "full_scrape",
           startedAt,
           finishedAt,
           handles: job.handles,

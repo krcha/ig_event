@@ -12,6 +12,10 @@ const ingestionJobStatus = v.union(
   v.literal("completed"),
   v.literal("failed"),
 );
+const ingestionJobMode = v.union(
+  v.literal("full_scrape"),
+  v.literal("saved_posts"),
+);
 
 export default defineSchema({
   events: defineTable({
@@ -67,8 +71,26 @@ export default defineSchema({
     .index("by_user", ["userId"])
     .index("by_event", ["eventId"])
     .index("by_user_event", ["userId", "eventId"]),
+  scrapedPosts: defineTable({
+    handle: v.string(),
+    postId: v.string(),
+    caption: v.optional(v.string()),
+    imageUrl: v.optional(v.string()),
+    imageUrls: v.array(v.string()),
+    postType: v.optional(v.string()),
+    locationName: v.optional(v.string()),
+    instagramPostUrl: v.string(),
+    postedAt: v.optional(v.string()),
+    username: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_handle", ["handle"])
+    .index("by_handle_postId", ["handle", "postId"])
+    .index("by_handle_postUrl", ["handle", "instagramPostUrl"]),
   ingestionJobs: defineTable({
     source: v.string(),
+    mode: v.optional(ingestionJobMode),
     status: ingestionJobStatus,
     handles: v.array(v.string()),
     resultsLimit: v.optional(v.number()),

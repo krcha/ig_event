@@ -7,10 +7,15 @@ const ingestionJobStatus = v.union(
   v.literal("completed"),
   v.literal("failed"),
 );
+const ingestionJobMode = v.union(
+  v.literal("full_scrape"),
+  v.literal("saved_posts"),
+);
 
 export const createJob = mutation({
   args: {
     source: v.string(),
+    mode: v.optional(ingestionJobMode),
     handles: v.array(v.string()),
     resultsLimit: v.optional(v.number()),
     daysBack: v.optional(v.number()),
@@ -22,6 +27,7 @@ export const createJob = mutation({
     const now = Date.now();
     return ctx.db.insert("ingestionJobs", {
       source: args.source,
+      mode: args.mode,
       status: "queued",
       handles: args.handles,
       resultsLimit: args.resultsLimit,

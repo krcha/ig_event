@@ -61,6 +61,9 @@ Return strict JSON with:
 Rules:
 - Use empty string for unknown scalar fields; use [] for unknown artists.
 - Do not invent facts.
+- Only return a non-empty "title" when an explicit event/program name is clearly written in the caption or flyer.
+- If the source only indicates a genre, format, or generic session type (for example jam session, techno night, live music), return an empty string for "title".
+- Do not create, paraphrase, beautify, or normalize event titles.
 - If date is unclear, return empty string for date.
 - If venue is unclear, return empty string for venue.
 - If month/day is visible but year is missing, infer year from Instagram post timestamp only when confidence is high.
