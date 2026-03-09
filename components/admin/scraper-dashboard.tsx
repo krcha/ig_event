@@ -20,7 +20,8 @@ type ScrapeStartPayload = {
   started?: boolean;
   jobId?: string;
   status?: ScrapeJobStatus;
-  source?: "manual";
+  mode?: "repair";
+  source?: "manual" | "repair_active_venues";
   handles?: string[];
   statusUrl?: string;
   error?: string;
@@ -29,7 +30,7 @@ type ScrapeStartPayload = {
 type ScrapeJobPayload = {
   jobId: string;
   status: ScrapeJobStatus;
-  source: "manual";
+  source: "manual" | "repair_active_venues";
   handles: string[];
   summary: IngestionSummary;
   error?: string | null;
@@ -156,15 +157,45 @@ export function ScraperDashboard() {
     }
   }
 
-  function runActiveVenueScraper() {
-    void runScraper("/api/admin/scrape/venues");
+  async function runRepairScraper() {
+    setIsLoading(true);
+    setError(null);
+    setSummaryPayload(null);
+    setActiveJobId(null);
+    setActiveJobStatus(null);
+
+    try {
+      const response = await fetch("/api/admin/scrape/repair", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          resultsLimit: 100,
+          daysBack: 365,
+        }),
+      });
+
+      const payload = (await response.json()) as ScrapeStartPayload;
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to start repair job.");
+      }
+      if (!payload.started || !payload.jobId || !payload.statusUrl) {
+        throw new Error("Invalid repair job response.");
+      }
+
+      setActiveJobId(payload.jobId);
+      setActiveJobStatus(payload.status ?? "queued");
+      await pollScrapeJob(payload.statusUrl);
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error ? caughtError.message : "Unknown repair error.",
+      );
+    } finally {
+      setIsLoading(false);
+    }
   }
 
-  function runRepairScraper() {
-    void runScraper("/api/admin/scrape/repair", {
-      resultsLimit: 100,
-      daysBack: 365,
-    });
+  function runActiveVenueScraper() {
+    void runScraper("/api/admin/scrape/venues");
   }
 
   return (
@@ -200,7 +231,9 @@ export function ScraperDashboard() {
       <button
         className="ml-2 rounded-md border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
         disabled={isLoading}
-        onClick={runRepairScraper}
+        onClick={() => {
+          void runRepairScraper();
+        }}
         type="button"
       >
         {isLoading ? "Running..." : "Repair existing bad events"}
