@@ -222,6 +222,21 @@ type DuplicateUpdateContext = {
   updateReasonEvent: DuplicateUpdateLogEvent;
 };
 
+type IngestionStep =
+  | "fetch_posts"
+  | "normalize_posts"
+  | "duplicate_lookup"
+  | "extract_event"
+  | "update_existing_event"
+  | "insert_new_event";
+
+type IngestionPostContext = {
+  handle: string;
+  sourcePostId: string | null;
+  shortcode: string | null;
+  instagramUrl: string;
+};
+
 const MONTHS: Record<string, number> = {
   jan: 1,
   feb: 2,
@@ -256,6 +271,30 @@ function logError(event: string, payload: Record<string, unknown>) {
       event,
       ...payload,
     }),
+  );
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Unknown error.";
+}
+
+function getPostContext(handle: string, post: InstagramScrapedPost): IngestionPostContext {
+  const sourcePostId = normalizeString(post.postId) || null;
+  const instagramUrl = normalizeString(post.instagramPostUrl) || "";
+  return {
+    handle,
+    sourcePostId,
+    shortcode: extractShortcodeFromPostUrl(instagramUrl),
+    instagramUrl,
+  };
+}
+
+function isConvexSchemaMismatchError(error: unknown): boolean {
+  const message = getErrorMessage(error).toLowerCase();
+  return (
+    message.includes("could not find public function") ||
+    message.includes("could not find index") ||
+    message.includes("index") && message.includes("does not exist")
   );
 }
 
@@ -339,6 +378,24 @@ function normalizeBatchSize(value: number | undefined): number {
 
 function normalizeString(value: string | null | undefined): string {
   return (value ?? "").trim();
+}
+
+function normalizeScrapedPost(post: InstagramScrapedPost): InstagramScrapedPost {
+  const normalizedImageUrls = (post.imageUrls ?? [])
+    .map((url) => normalizeString(url))
+    .filter((url) => url.length > 0);
+
+  return {
+    postId: normalizeString(post.postId) || post.postId,
+    caption: normalizeString(post.caption) || null,
+    imageUrl: normalizeString(post.imageUrl) || null,
+    imageUrls: normalizedImageUrls,
+    postType: normalizeString(post.postType).toLowerCase() || null,
+    locationName: normalizeString(post.locationName) || null,
+    instagramPostUrl: normalizeString(post.instagramPostUrl) || post.instagramPostUrl,
+    postedAt: normalizeString(post.postedAt) || null,
+    username: normalizeString(post.username) || post.username,
+  };
 }
 
 function parseJsonRecord(value: string | undefined): Record<string, unknown> | null {
@@ -1001,6 +1058,7 @@ async function findExistingEventBySourceIdentity(
   client: ConvexHttpClient,
   post: InstagramScrapedPost,
 ): Promise<ExistingSourceMatch | null> {
+  const postContext = getPostContext(normalizeHandle(post.username), post);
   const identityCandidates = new Set<string>();
   if (post.postId) {
     identityCandidates.add(post.postId);
@@ -1011,9 +1069,23 @@ async function findExistingEventBySourceIdentity(
   }
 
   for (const candidate of identityCandidates) {
-    const existingById = (await client.query(getByInstagramPostIdQuery, {
-      instagramPostId: candidate,
-    })) as ExistingEventRecord | null;
+    let existingById: ExistingEventRecord | null = null;
+    try {
+      existingById = (await client.query(getByInstagramPostIdQuery, {
+        instagramPostId: candidate,
+      })) as ExistingEventRecord | null;
+    } catch (error) {
+      if (isConvexSchemaMismatchError(error)) {
+        logError("ingestion.duplicate_lookup.schema_mismatch", {
+          step: "duplicate_lookup",
+          lookup: "events:getByInstagramPostId",
+          ...postContext,
+          error: getErrorMessage(error),
+        });
+        return null;
+      }
+      throw error;
+    }
     if (existingById) {
       return {
         existingEvent: existingById,
@@ -1025,9 +1097,23 @@ async function findExistingEventBySourceIdentity(
 
   const postUrl = normalizeString(post.instagramPostUrl);
   if (postUrl) {
-    const existingByUrl = (await client.query(getByInstagramPostUrlQuery, {
-      instagramPostUrl: postUrl,
-    })) as ExistingEventRecord | null;
+    let existingByUrl: ExistingEventRecord | null = null;
+    try {
+      existingByUrl = (await client.query(getByInstagramPostUrlQuery, {
+        instagramPostUrl: postUrl,
+      })) as ExistingEventRecord | null;
+    } catch (error) {
+      if (isConvexSchemaMismatchError(error)) {
+        logError("ingestion.duplicate_lookup.schema_mismatch", {
+          step: "duplicate_lookup",
+          lookup: "events:getByInstagramPostUrl",
+          ...postContext,
+          error: getErrorMessage(error),
+        });
+        return null;
+      }
+      throw error;
+    }
     if (existingByUrl) {
       return {
         existingEvent: existingByUrl,
@@ -1162,13 +1248,12 @@ type ProcessIngestionPostOptions = {
 
 async function processIngestionPost(options: ProcessIngestionPostOptions): Promise<void> {
   const { client, handle, post, summary } = options;
+  const postContext = getPostContext(handle, post);
 
   if (post.postType === "video") {
     summary.skipped_video += 1;
     logInfo("ingestion.post.skipped_video", {
-      handle,
-      postId: post.postId,
-      postUrl: post.instagramPostUrl,
+      ...postContext,
     });
     return;
   }
@@ -1177,18 +1262,14 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
   if (!bestImageUrl) {
     summary.skippedNoImage += 1;
     logInfo("ingestion.image.skipped_no_image", {
-      handle,
-      postId: post.postId,
-      postUrl: post.instagramPostUrl,
+      ...postContext,
       imageCandidates: post.imageUrls ?? [],
     });
     return;
   }
 
   logInfo("ingestion.image.selected", {
-    handle,
-    postId: post.postId,
-    postUrl: post.instagramPostUrl,
+    ...postContext,
     selectedImageUrl: bestImageUrl,
     isInstagramOrFbCdn: isInstagramOrFbCdnUrl(bestImageUrl),
   });
@@ -1203,9 +1284,7 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
         summary.skipped_duplicates += 1;
         summary.skipped_duplicates_clean += 1;
         logInfo("duplicate_clean_skip", {
-          handle,
-          postId: post.postId,
-          postUrl: post.instagramPostUrl,
+          ...postContext,
           selectedImageUrl: bestImageUrl,
           matchedBy: existingMatch.matchedBy,
           matchedValue: existingMatch.matchedValue,
@@ -1223,9 +1302,7 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
       };
       logInfo(duplicateContext.updateReasonEvent, {
         phase: "duplicate_reprocess_started",
-        handle,
-        postId: post.postId,
-        postUrl: post.instagramPostUrl,
+        ...postContext,
         selectedImageUrl: bestImageUrl,
         matchedBy: existingMatch.matchedBy,
         matchedValue: existingMatch.matchedValue,
@@ -1238,14 +1315,13 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     summary.failedExtractions += 1;
     summary.failed_extractions += 1;
     summary.errors.push(
-      error instanceof Error ? error.message : "Duplicate check error.",
+      getErrorMessage(error),
     );
     logError("ingestion.duplicate_check.failed", {
-      handle,
-      postId: post.postId,
-      postUrl: post.instagramPostUrl,
+      step: "duplicate_lookup" satisfies IngestionStep,
+      ...postContext,
       selectedImageUrl: bestImageUrl,
-      error: error instanceof Error ? error.message : "Unknown duplicate check error.",
+      error: getErrorMessage(error),
     });
     return;
   }
@@ -1254,9 +1330,7 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
   try {
     downloadedImage = await downloadImage(bestImageUrl);
     logInfo("ingestion.image.download.success", {
-      handle,
-      postId: post.postId,
-      postUrl: post.instagramPostUrl,
+      ...postContext,
       selectedImageUrl: bestImageUrl,
       contentType: downloadedImage.contentType,
       downloadedBytes: downloadedImage.imageBuffer.byteLength,
@@ -1264,13 +1338,11 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
   } catch (error) {
     summary.failedDownloads += 1;
     summary.failed_downloads += 1;
-    summary.errors.push(error instanceof Error ? error.message : "Image download failed.");
+    summary.errors.push(getErrorMessage(error));
     logError("ingestion.image.download.failed", {
-      handle,
-      postId: post.postId,
-      postUrl: post.instagramPostUrl,
+      ...postContext,
       selectedImageUrl: bestImageUrl,
-      error: error instanceof Error ? error.message : "Unknown download error.",
+      error: getErrorMessage(error),
     });
     return;
   }
@@ -1283,9 +1355,7 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     );
     imageDataUrl = toDataUrl(normalizedImage.imageBuffer, normalizedImage.mimeType);
     logInfo("ingestion.image.conversion.success", {
-      handle,
-      postId: post.postId,
-      postUrl: post.instagramPostUrl,
+      ...postContext,
       selectedImageUrl: bestImageUrl,
       wasConverted: normalizedImage.wasConverted,
       outputMimeType: normalizedImage.mimeType,
@@ -1294,19 +1364,18 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
   } catch (error) {
     summary.failedConversions += 1;
     summary.failed_conversions += 1;
-    summary.errors.push(error instanceof Error ? error.message : "Image conversion failed.");
+    summary.errors.push(getErrorMessage(error));
     logError("ingestion.image.conversion.failed", {
-      handle,
-      postId: post.postId,
-      postUrl: post.instagramPostUrl,
+      ...postContext,
       selectedImageUrl: bestImageUrl,
-      error: error instanceof Error ? error.message : "Unknown conversion error.",
+      error: getErrorMessage(error),
     });
     return;
   }
 
+  let extracted: ExtractedEventData;
   try {
-    const extracted = await extractEventDataFromPoster({
+    extracted = await extractEventDataFromPoster({
       imageDataUrl,
       caption: post.caption,
       instagramPostUrl: post.instagramPostUrl,
@@ -1314,81 +1383,103 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
       instagramHandle: post.username,
       instagramPostTimestamp: post.postedAt,
     });
-    const prepared = prepareEventForInsert(post, extracted, bestImageUrl);
-    if (prepared.kind === "skip") {
-      if (prepared.reason === "missing_date") {
-        summary.skipped_missing_date += 1;
-      } else if (prepared.reason === "missing_venue") {
-        summary.skipped_missing_venue += 1;
-      } else {
-        summary.skipped_invalid_event += 1;
-      }
+  } catch (error) {
+    summary.failedExtractions += 1;
+    summary.failed_extractions += 1;
+    summary.failed_extraction += 1;
+    summary.errors.push(getErrorMessage(error));
+    logError("ingestion.openai.extraction.failed", {
+      step: "extract_event" satisfies IngestionStep,
+      ...postContext,
+      sourceImageUrl: bestImageUrl,
+      error: getErrorMessage(error),
+    });
+    return;
+  }
 
-      logInfo("ingestion.event.skipped", {
-        handle,
-        postId: post.postId,
-        postUrl: post.instagramPostUrl,
+  let prepared: PrepareEventResult;
+  try {
+    prepared = prepareEventForInsert(post, extracted, bestImageUrl);
+  } catch (error) {
+    summary.failedExtractions += 1;
+    summary.failed_extractions += 1;
+    summary.failed_extraction += 1;
+    summary.errors.push(getErrorMessage(error));
+    logError("ingestion.normalization.failed", {
+      step: "normalize_posts" satisfies IngestionStep,
+      ...postContext,
+      selectedImageUrl: bestImageUrl,
+      error: getErrorMessage(error),
+    });
+    return;
+  }
+
+  if (prepared.kind === "skip") {
+    if (prepared.reason === "missing_date") {
+      summary.skipped_missing_date += 1;
+    } else if (prepared.reason === "missing_venue") {
+      summary.skipped_missing_venue += 1;
+    } else {
+      summary.skipped_invalid_event += 1;
+    }
+
+    logInfo("ingestion.event.skipped", {
+      ...postContext,
+      selectedImageUrl: bestImageUrl,
+      reason: prepared.reason,
+      caption: post.caption,
+      postTimestamp: post.postedAt,
+      rawExtraction: extracted,
+      normalizedFields: prepared.normalizedFields,
+    });
+    return;
+  }
+
+  if (duplicateContext) {
+    const updatePayload = buildDuplicateUpdatePatch(
+      duplicateContext.existing.existingEvent,
+      prepared.event,
+    );
+    try {
+      await client.mutation(updateEventMutation, {
+        id: duplicateContext.existing.existingEvent._id,
+        patch: updatePayload.patch,
+      });
+      summary.updated_duplicates_bad_data += 1;
+      logInfo(duplicateContext.updateReasonEvent, {
+        phase: "duplicate_updated",
+        ...postContext,
         selectedImageUrl: bestImageUrl,
-        reason: prepared.reason,
+        existingEventId: duplicateContext.existing.existingEvent._id,
+        qualityReasons: duplicateContext.quality.reasons,
+        materiallyChanged: updatePayload.materiallyChanged,
+        statusResetToPending: updatePayload.statusResetToPending,
         caption: post.caption,
         postTimestamp: post.postedAt,
         rawExtraction: extracted,
         normalizedFields: prepared.normalizedFields,
       });
-      return;
+    } catch (error) {
+      summary.duplicate_update_failed += 1;
+      summary.errors.push(getErrorMessage(error));
+      logError("duplicate_update_failed", {
+        step: "update_existing_event" satisfies IngestionStep,
+        ...postContext,
+        selectedImageUrl: bestImageUrl,
+        existingEventId: duplicateContext.existing.existingEvent._id,
+        qualityReasons: duplicateContext.quality.reasons,
+        error: getErrorMessage(error),
+      });
     }
+    return;
+  }
 
-    if (duplicateContext) {
-      const updatePayload = buildDuplicateUpdatePatch(
-        duplicateContext.existing.existingEvent,
-        prepared.event,
-      );
-      try {
-        await client.mutation(updateEventMutation, {
-          id: duplicateContext.existing.existingEvent._id,
-          patch: updatePayload.patch,
-        });
-        summary.updated_duplicates_bad_data += 1;
-        logInfo(duplicateContext.updateReasonEvent, {
-          phase: "duplicate_updated",
-          handle,
-          postId: post.postId,
-          postUrl: post.instagramPostUrl,
-          selectedImageUrl: bestImageUrl,
-          existingEventId: duplicateContext.existing.existingEvent._id,
-          qualityReasons: duplicateContext.quality.reasons,
-          materiallyChanged: updatePayload.materiallyChanged,
-          statusResetToPending: updatePayload.statusResetToPending,
-          caption: post.caption,
-          postTimestamp: post.postedAt,
-          rawExtraction: extracted,
-          normalizedFields: prepared.normalizedFields,
-        });
-      } catch (error) {
-        summary.duplicate_update_failed += 1;
-        summary.errors.push(
-          error instanceof Error ? error.message : "Duplicate update failed.",
-        );
-        logError("duplicate_update_failed", {
-          handle,
-          postId: post.postId,
-          postUrl: post.instagramPostUrl,
-          selectedImageUrl: bestImageUrl,
-          existingEventId: duplicateContext.existing.existingEvent._id,
-          qualityReasons: duplicateContext.quality.reasons,
-          error: error instanceof Error ? error.message : "Unknown duplicate update error.",
-        });
-      }
-      return;
-    }
-
+  try {
     await client.mutation(createEventMutation, prepared.event);
     summary.insertedEvents += 1;
     summary.inserted_events += 1;
     logInfo("ingestion.event.inserted", {
-      handle,
-      postId: post.postId,
-      postUrl: post.instagramPostUrl,
+      ...postContext,
       selectedImageUrl: bestImageUrl,
       caption: post.caption,
       postTimestamp: post.postedAt,
@@ -1399,15 +1490,12 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     summary.failedExtractions += 1;
     summary.failed_extractions += 1;
     summary.failed_extraction += 1;
-    summary.errors.push(
-      error instanceof Error ? error.message : "Unknown extraction error.",
-    );
-    logError("ingestion.openai.extraction.failed", {
-      handle,
-      postId: post.postId,
-      postUrl: post.instagramPostUrl,
+    summary.errors.push(getErrorMessage(error));
+    logError("ingestion.insert.failed", {
+      step: "insert_new_event" satisfies IngestionStep,
+      ...postContext,
       selectedImageUrl: bestImageUrl,
-      error: error instanceof Error ? error.message : "Unknown extraction error.",
+      error: getErrorMessage(error),
     });
   }
 }
@@ -1443,11 +1531,15 @@ export async function runInstagramIngestionBatchStep(
         state.currentHandlePosts = posts;
       } catch (error) {
         handleSummary.errors.push(
-          error instanceof Error ? error.message : "Unknown scrape error.",
+          getErrorMessage(error),
         );
         logError("ingestion.scrape.failed", {
+          step: "fetch_posts" satisfies IngestionStep,
           handle,
-          error: error instanceof Error ? error.message : "Unknown scrape error.",
+          sourcePostId: null,
+          shortcode: null,
+          instagramUrl: null,
+          error: getErrorMessage(error),
         });
         state.handleIndex += 1;
         state.currentHandle = null;
@@ -1465,8 +1557,20 @@ export async function runInstagramIngestionBatchStep(
       continue;
     }
 
-    const post = state.currentHandlePosts[state.currentPostIndex];
+    let post = state.currentHandlePosts[state.currentPostIndex];
     state.currentPostIndex += 1;
+
+    try {
+      post = normalizeScrapedPost(post);
+    } catch (error) {
+      handleSummary.errors.push(getErrorMessage(error));
+      logError("ingestion.post.normalize.failed", {
+        step: "normalize_posts" satisfies IngestionStep,
+        ...getPostContext(handle, post),
+        error: getErrorMessage(error),
+      });
+      continue;
+    }
 
     const sourceKey = getSourceIdentityKey(post);
     if (sourceKey) {

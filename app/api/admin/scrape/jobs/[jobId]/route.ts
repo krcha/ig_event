@@ -165,6 +165,7 @@ export async function GET(
   } catch (error) {
     return NextResponse.json(
       {
+        errorStep: "job_status",
         error:
           error instanceof Error
             ? error.message
@@ -294,6 +295,7 @@ export async function POST(
           status: "failed",
           handles: job.handles,
           summary,
+          errorStep: "batch_process",
           error: message,
           startedAt,
         },
@@ -303,6 +305,7 @@ export async function POST(
   } catch (error) {
     return NextResponse.json(
       {
+        errorStep: "job_request",
         error:
           error instanceof Error
             ? error.message

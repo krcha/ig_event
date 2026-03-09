@@ -38,6 +38,16 @@ function logInfo(event: string, payload: Record<string, unknown>) {
   );
 }
 
+function logError(event: string, payload: Record<string, unknown>) {
+  console.error(
+    JSON.stringify({
+      level: "error",
+      event,
+      ...payload,
+    }),
+  );
+}
+
 export async function POST(request: Request) {
   if (hasClerkEnv()) {
     const { userId } = await auth();
@@ -64,6 +74,7 @@ export async function POST(request: Request) {
     );
   }
 
+  const step = "enqueue_job";
   try {
     const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
     const resultsLimit = normalizePositiveInt(body.resultsLimit);
@@ -99,12 +110,18 @@ export async function POST(request: Request) {
       statusUrl: `/api/admin/scrape/jobs/${jobId}`,
     }, { status: 202 });
   } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to run ingestion pipeline.";
+    logError("scrape_failed", {
+      step,
+      source: "manual",
+      handles,
+      error: message,
+    });
     return NextResponse.json(
       {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to run ingestion pipeline.",
+        errorStep: step,
+        error: message,
       },
       { status: 500 },
     );
