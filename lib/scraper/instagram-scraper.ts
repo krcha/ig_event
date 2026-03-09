@@ -5,6 +5,8 @@ const DEFAULT_RESULTS_LIMIT = 5;
 const MAX_TOP_LEVEL_POSTS_PER_ACCOUNT = 5;
 const DEFAULT_DAYS_BACK = 5;
 const DEFAULT_SKIP_PINNED_POSTS = true;
+const INSTAGRAM_HOSTNAMES = new Set(["instagram.com", "www.instagram.com"]);
+const INSTAGRAM_POST_PATH_PREFIXES = new Set(["p", "reel", "reels", "tv"]);
 
 export type InstagramScrapedPost = {
   postId: string;
@@ -211,6 +213,60 @@ function buildProfileUrl(handle: string): string {
   return `https://www.instagram.com/${handle}/`;
 }
 
+function normalizeApifyActorIdForPath(actorId: string): string {
+  const trimmed = actorId.trim();
+  if (trimmed.includes("~") || !trimmed.includes("/")) {
+    return trimmed;
+  }
+
+  const [owner, name] = trimmed.split("/", 2);
+  return owner && name ? `${owner}~${name}` : trimmed;
+}
+
+function parseInstagramActorTarget(value: string): {
+  label: string;
+  actorUsernameInput: string;
+  fallbackUsername: string;
+} {
+  const trimmed = value.trim();
+
+  try {
+    const parsed = new URL(trimmed);
+    if (INSTAGRAM_HOSTNAMES.has(parsed.hostname)) {
+      const segments = parsed.pathname.split("/").filter(Boolean);
+      const firstSegment = segments[0]?.replace(/^@/, "").trim().toLowerCase() ?? "";
+      const secondSegment = segments[1]?.trim() ?? "";
+
+      if (INSTAGRAM_POST_PATH_PREFIXES.has(firstSegment) && secondSegment) {
+        const canonicalUrl = `https://www.instagram.com/${firstSegment}/${secondSegment}/`;
+        return {
+          label: canonicalUrl,
+          actorUsernameInput: canonicalUrl,
+          fallbackUsername: "",
+        };
+      }
+
+      if (firstSegment) {
+        const handle = normalizeHandle(firstSegment);
+        return {
+          label: handle,
+          actorUsernameInput: buildProfileUrl(handle),
+          fallbackUsername: handle,
+        };
+      }
+    }
+  } catch {
+    // Fall back to handle normalization for plain usernames.
+  }
+
+  const handle = normalizeHandle(trimmed);
+  return {
+    label: handle,
+    actorUsernameInput: buildProfileUrl(handle),
+    fallbackUsername: handle,
+  };
+}
+
 function readCaption(item: ApifyInstagramItem): string | null {
   if (typeof item.caption === "string") {
     return normalizeString(item.caption);
@@ -363,7 +419,8 @@ export async function scrapeInstagramAccount(
 ): Promise<InstagramScrapedPost[]> {
   const apiToken = getRequiredEnv("APIFY_API_TOKEN");
   const actorId = process.env.APIFY_INSTAGRAM_ACTOR_ID ?? DEFAULT_APIFY_ACTOR_ID;
-  const handle = normalizeHandle(options.handle);
+  const actorIdForPath = normalizeApifyActorIdForPath(actorId);
+  const target = parseInstagramActorTarget(options.handle);
   const resultsLimit = normalizeResultsLimit(options.resultsLimit);
   const daysBack = options.daysBack ?? DEFAULT_DAYS_BACK;
   const cutoff = Date.now() - daysBack * 24 * 60 * 60 * 1000;
@@ -373,8 +430,8 @@ export async function scrapeInstagramAccount(
     token: apiToken,
     clean: "true",
   });
-  const endpoint = `https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}/run-sync-get-dataset-items?${query.toString()}`;
-  const username = [buildProfileUrl(handle)];
+  const endpoint = `https://api.apify.com/v2/acts/${encodeURIComponent(actorIdForPath)}/run-sync-get-dataset-items?${query.toString()}`;
+  const username = [target.actorUsernameInput];
   const input = {
     username,
     resultsLimit,
@@ -386,7 +443,7 @@ export async function scrapeInstagramAccount(
     JSON.stringify({
       level: "info",
       event: "apify.instagram.request",
-      handles: [handle],
+      handles: [target.label],
       username: input.username,
       resultsLimit: input.resultsLimit,
       onlyPostsNewerThan: input.onlyPostsNewerThan,
@@ -406,7 +463,7 @@ export async function scrapeInstagramAccount(
   if (!response.ok) {
     const errorBody = await response.text();
     throw new Error(
-      `Apify scraper request failed for @${handle}: ${response.status} ${response.statusText} - ${errorBody}`,
+      `Apify scraper request failed for ${target.label}: ${response.status} ${response.statusText} - ${errorBody}`,
     );
   }
 
@@ -442,7 +499,7 @@ export async function scrapeInstagramAccount(
           normalizeString(item.owner_username) ??
           normalizeString(item.username) ??
           normalizeString(item.owner?.username) ??
-          handle,
+          (target.fallbackUsername || target.label),
       };
     })
     .filter((item): item is InstagramScrapedPost => item !== null);
