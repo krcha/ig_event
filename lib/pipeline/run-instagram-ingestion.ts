@@ -289,15 +289,6 @@ function getPostContext(handle: string, post: InstagramScrapedPost): IngestionPo
   };
 }
 
-function isConvexSchemaMismatchError(error: unknown): boolean {
-  const message = getErrorMessage(error).toLowerCase();
-  return (
-    message.includes("could not find public function") ||
-    message.includes("could not find index") ||
-    message.includes("index") && message.includes("does not exist")
-  );
-}
-
 function getConvexClient(): ConvexHttpClient {
   const convexUrl = getRequiredEnv("NEXT_PUBLIC_CONVEX_URL");
   return new ConvexHttpClient(convexUrl);
@@ -1155,6 +1146,106 @@ async function listExistingEventsBySourceIdentity(
 ): Promise<ExistingSourceMatch[]> {
   const postContext = getPostContext(normalizeHandle(post.username), post);
   const matchesById = new Map<string, ExistingSourceMatch>();
+
+  const loadMatchesByPostId = async (
+    candidate: string,
+    matchedBy: "post_id" | "shortcode",
+  ): Promise<ExistingSourceMatch[]> => {
+    try {
+      const records = (await client.query(listByInstagramPostIdQuery, {
+        instagramPostId: candidate,
+      })) as ExistingEventRecord[];
+      return records.map((existingEvent) => ({
+        existingEvent,
+        matchedBy,
+        matchedValue: candidate,
+      }));
+    } catch (listError) {
+      logError("ingestion.duplicate_lookup.list_failed", {
+        step: "duplicate_lookup" satisfies IngestionStep,
+        lookup: "events:listByInstagramPostId",
+        ...postContext,
+        candidate,
+        matchedBy,
+        error: getErrorMessage(listError),
+      });
+
+      try {
+        const fallback = (await client.query(getByInstagramPostIdQuery, {
+          instagramPostId: candidate,
+        })) as ExistingEventRecord | null;
+        if (!fallback) {
+          return [];
+        }
+        return [
+          {
+            existingEvent: fallback,
+            matchedBy,
+            matchedValue: candidate,
+          },
+        ];
+      } catch (fallbackError) {
+        logError("ingestion.duplicate_lookup.fallback_failed", {
+          step: "duplicate_lookup" satisfies IngestionStep,
+          lookup: "events:getByInstagramPostId",
+          ...postContext,
+          candidate,
+          matchedBy,
+          error: getErrorMessage(fallbackError),
+        });
+        return [];
+      }
+    }
+  };
+
+  const loadMatchesByPostUrl = async (postUrl: string): Promise<ExistingSourceMatch[]> => {
+    try {
+      const records = (await client.query(listByInstagramPostUrlQuery, {
+        instagramPostUrl: postUrl,
+      })) as ExistingEventRecord[];
+      return records.map((existingEvent) => ({
+        existingEvent,
+        matchedBy: "post_url" as const,
+        matchedValue: postUrl,
+      }));
+    } catch (listError) {
+      logError("ingestion.duplicate_lookup.list_failed", {
+        step: "duplicate_lookup" satisfies IngestionStep,
+        lookup: "events:listByInstagramPostUrl",
+        ...postContext,
+        postUrl,
+        matchedBy: "post_url",
+        error: getErrorMessage(listError),
+      });
+
+      try {
+        const fallback = (await client.query(getByInstagramPostUrlQuery, {
+          instagramPostUrl: postUrl,
+        })) as ExistingEventRecord | null;
+        if (!fallback) {
+          return [];
+        }
+        return [
+          {
+            existingEvent: fallback,
+            matchedBy: "post_url",
+            matchedValue: postUrl,
+          },
+        ];
+      } catch (fallbackError) {
+        logError("ingestion.duplicate_lookup.fallback_failed", {
+          step: "duplicate_lookup" satisfies IngestionStep,
+          lookup: "events:getByInstagramPostUrl",
+          ...postContext,
+          postUrl,
+          matchedBy: "post_url",
+          error: getErrorMessage(fallbackError),
+        });
+        return [];
+      }
+    }
+  };
+
   const identityCandidates = new Set<string>();
   if (post.postId) {
     identityCandidates.add(post.postId);
@@ -1165,81 +1256,18 @@ async function listExistingEventsBySourceIdentity(
   }
 
   for (const candidate of identityCandidates) {
-    try {
-      const existingById = (await client.query(listByInstagramPostIdQuery, {
-        instagramPostId: candidate,
-      })) as ExistingEventRecord[];
-      for (const existingEvent of existingById) {
-        matchesById.set(existingEvent._id, {
-          existingEvent,
-          matchedBy: candidate === post.postId ? "post_id" : "shortcode",
-          matchedValue: candidate,
-        });
-      }
-    } catch (error) {
-      if (isConvexSchemaMismatchError(error)) {
-        try {
-          const existingById = (await client.query(getByInstagramPostIdQuery, {
-            instagramPostId: candidate,
-          })) as ExistingEventRecord | null;
-          if (existingById) {
-            matchesById.set(existingById._id, {
-              existingEvent: existingById,
-              matchedBy: candidate === post.postId ? "post_id" : "shortcode",
-              matchedValue: candidate,
-            });
-          }
-        } catch (fallbackError) {
-          logError("ingestion.duplicate_lookup.schema_mismatch", {
-            step: "duplicate_lookup",
-            lookup: "events:listByInstagramPostId",
-            ...postContext,
-            error: getErrorMessage(fallbackError),
-          });
-        }
-      } else {
-        throw error;
-      }
+    const matchedBy = candidate === post.postId ? "post_id" : "shortcode";
+    const matches = await loadMatchesByPostId(candidate, matchedBy);
+    for (const match of matches) {
+      matchesById.set(match.existingEvent._id, match);
     }
   }
 
   const postUrl = normalizeString(post.instagramPostUrl);
   if (postUrl) {
-    try {
-      const existingByUrl = (await client.query(listByInstagramPostUrlQuery, {
-        instagramPostUrl: postUrl,
-      })) as ExistingEventRecord[];
-      for (const existingEvent of existingByUrl) {
-        matchesById.set(existingEvent._id, {
-          existingEvent,
-          matchedBy: "post_url",
-          matchedValue: postUrl,
-        });
-      }
-    } catch (error) {
-      if (isConvexSchemaMismatchError(error)) {
-        try {
-          const existingByUrl = (await client.query(getByInstagramPostUrlQuery, {
-            instagramPostUrl: postUrl,
-          })) as ExistingEventRecord | null;
-          if (existingByUrl) {
-            matchesById.set(existingByUrl._id, {
-              existingEvent: existingByUrl,
-              matchedBy: "post_url",
-              matchedValue: postUrl,
-            });
-          }
-        } catch (fallbackError) {
-          logError("ingestion.duplicate_lookup.schema_mismatch", {
-            step: "duplicate_lookup",
-            lookup: "events:listByInstagramPostUrl",
-            ...postContext,
-            error: getErrorMessage(fallbackError),
-          });
-        }
-      } else {
-        throw error;
-      }
+    const matches = await loadMatchesByPostUrl(postUrl);
+    for (const match of matches) {
+      matchesById.set(match.existingEvent._id, match);
     }
   }
 
