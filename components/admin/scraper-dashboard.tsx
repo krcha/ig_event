@@ -281,6 +281,7 @@ export function ScraperDashboard() {
                 <p>Skipped no image: {item.skippedNoImage}</p>
                 <p>Skipped missing date: {item.skipped_missing_date}</p>
                 <p>Skipped missing venue: {item.skipped_missing_venue}</p>
+                <p>Skipped past event: {item.skipped_past_event ?? 0}</p>
                 <p>Skipped video: {item.skipped_video}</p>
                 <p>Skipped invalid event: {item.skipped_invalid_event}</p>
                 <p>Updated bad duplicates: {item.updated_duplicates_bad_data}</p>

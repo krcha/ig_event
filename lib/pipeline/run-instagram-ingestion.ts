@@ -37,6 +37,7 @@ type HandleSummary = {
   skipped_missing_venue: number;
   skipped_video: number;
   skipped_invalid_event: number;
+  skipped_past_event: number;
   updated_duplicates_bad_data: number;
   duplicate_update_failed: number;
   failedDownloads: number;
@@ -161,7 +162,7 @@ type PrepareEventResult =
     }
   | {
       kind: "skip";
-      reason: "missing_date" | "missing_venue" | "invalid_event";
+      reason: "missing_date" | "missing_venue" | "invalid_event" | "past_event";
       normalizedFields: Record<string, unknown>;
     };
 
@@ -253,6 +254,7 @@ const MONTHS: Record<string, number> = {
 };
 const MAX_DATE_DISTANCE_DAYS = 180;
 const EXISTING_EVENT_CONFIDENCE_THRESHOLD = 0.55;
+const DEFAULT_EVENT_TIMEZONE = "Europe/Belgrade";
 
 function logInfo(event: string, payload: Record<string, unknown>) {
   console.info(
@@ -326,6 +328,7 @@ function createEmptyHandleSummary(handle: string): HandleSummary {
     skipped_missing_venue: 0,
     skipped_video: 0,
     skipped_invalid_event: 0,
+    skipped_past_event: 0,
     updated_duplicates_bad_data: 0,
     duplicate_update_failed: 0,
     failedDownloads: 0,
@@ -464,6 +467,42 @@ function parsePostedAt(postedAt: string | null): Date | null {
     return null;
   }
   return new Date(parsed);
+}
+
+function getConfiguredEventTimezone(): string {
+  const configured = normalizeString(process.env.EVENTS_TIMEZONE);
+  return configured || DEFAULT_EVENT_TIMEZONE;
+}
+
+function getIsoDateInTimeZone(timeZone: string, now = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  if (!year || !month || !day) {
+    return now.toISOString().slice(0, 10);
+  }
+  return `${year}-${month}-${day}`;
+}
+
+function getEventDateFilterContext(now = new Date()): { todayIsoDate: string; timeZone: string } {
+  const timeZone = getConfiguredEventTimezone();
+  try {
+    return {
+      todayIsoDate: getIsoDateInTimeZone(timeZone, now),
+      timeZone,
+    };
+  } catch {
+    return {
+      todayIsoDate: now.toISOString().slice(0, 10),
+      timeZone: "UTC",
+    };
+  }
 }
 
 function daysBetween(a: Date, b: Date): number {
@@ -1149,6 +1188,7 @@ function prepareEventForInsert(
     post.caption,
     post.postedAt,
   );
+  const eventDateFilter = getEventDateFilterContext();
   const normalizedFields: Record<string, unknown> = {
     title,
     rawDate: normalizeString(extracted.date),
@@ -1177,6 +1217,8 @@ function prepareEventForInsert(
     artists: extracted.artists,
     description,
     postTimestamp: post.postedAt,
+    filterDateToday: eventDateFilter.todayIsoDate,
+    filterDateTimezone: eventDateFilter.timeZone,
     normalizedIsValid: true,
     normalizedInvalidReason: null,
   };
@@ -1197,6 +1239,16 @@ function prepareEventForInsert(
     return {
       kind: "skip",
       reason: "missing_venue",
+      normalizedFields,
+    };
+  }
+
+  if (dateNormalization.isoDate < eventDateFilter.todayIsoDate) {
+    normalizedFields.normalizedIsValid = false;
+    normalizedFields.normalizedInvalidReason = "past_event";
+    return {
+      kind: "skip",
+      reason: "past_event",
       normalizedFields,
     };
   }
@@ -1419,6 +1471,8 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
       summary.skipped_missing_date += 1;
     } else if (prepared.reason === "missing_venue") {
       summary.skipped_missing_venue += 1;
+    } else if (prepared.reason === "past_event") {
+      summary.skipped_past_event += 1;
     } else {
       summary.skipped_invalid_event += 1;
     }

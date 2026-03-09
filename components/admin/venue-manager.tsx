@@ -18,10 +18,28 @@ type VenueListResponse = {
   error?: string;
 };
 
+type VenueImportResponse = {
+  ok?: boolean;
+  error?: string;
+  totalRows?: number;
+  validRows?: number;
+  created?: number;
+  updated?: number;
+  unchanged?: number;
+  skippedMissingHandle?: number;
+  skippedMissingName?: number;
+  skippedDuplicateHandle?: number;
+};
+
 export function VenueManager() {
   const [venues, setVenues] = useState<Venue[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importSummary, setImportSummary] = useState<VenueImportResponse | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importCategory, setImportCategory] = useState("venue");
   const [form, setForm] = useState({
     name: "",
     instagramHandle: "",
@@ -87,6 +105,42 @@ export function VenueManager() {
       );
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function importVenuesCsv() {
+    if (!importFile) {
+      setImportError("Choose a CSV file first.");
+      return;
+    }
+
+    setIsImporting(true);
+    setImportError(null);
+    setImportSummary(null);
+    try {
+      const formData = new FormData();
+      formData.set("file", importFile);
+      formData.set("category", importCategory.trim() || "venue");
+      formData.set("isActive", "true");
+
+      const response = await fetch("/api/admin/venues/import", {
+        method: "POST",
+        body: formData,
+      });
+      const payload = (await response.json()) as VenueImportResponse;
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to import CSV.");
+      }
+
+      setImportSummary(payload);
+      setImportFile(null);
+      await loadVenues();
+    } catch (caughtError) {
+      setImportError(
+        caughtError instanceof Error ? caughtError.message : "Unknown CSV import error.",
+      );
+    } finally {
+      setIsImporting(false);
     }
   }
 
@@ -164,6 +218,46 @@ export function VenueManager() {
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       {isLoading ? <p className="text-sm text-muted-foreground">Loading venues...</p> : null}
+
+      <div className="space-y-2 rounded-md border border-border bg-background/60 p-3">
+        <p className="text-sm font-medium">Import venues from CSV</p>
+        <p className="text-xs text-muted-foreground">
+          Uses `_ap3a` as Instagram handle and `x1lliihq` as place name.
+        </p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <input
+            accept=".csv,text/csv"
+            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+            onChange={(event) => setImportFile(event.target.files?.[0] ?? null)}
+            type="file"
+          />
+          <input
+            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+            onChange={(event) => setImportCategory(event.target.value)}
+            placeholder="Category for new rows (default: venue)"
+            value={importCategory}
+          />
+        </div>
+        <button
+          className="rounded-md border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={isImporting}
+          onClick={() => void importVenuesCsv()}
+          type="button"
+        >
+          {isImporting ? "Importing..." : "Import CSV"}
+        </button>
+        {importError ? <p className="text-sm text-destructive">{importError}</p> : null}
+        {importSummary ? (
+          <p className="text-xs text-muted-foreground">
+            rows={importSummary.totalRows ?? 0} valid={importSummary.validRows ?? 0} created=
+            {importSummary.created ?? 0} updated={importSummary.updated ?? 0} unchanged=
+            {importSummary.unchanged ?? 0} skipped_missing_handle=
+            {importSummary.skippedMissingHandle ?? 0} skipped_missing_name=
+            {importSummary.skippedMissingName ?? 0} skipped_duplicate_handle=
+            {importSummary.skippedDuplicateHandle ?? 0}
+          </p>
+        ) : null}
+      </div>
 
       <div className="space-y-2">
         {venues.map((venue) => (
