@@ -285,6 +285,38 @@ const MONTHS: Record<string, number> = {
 const MAX_DATE_DISTANCE_DAYS = 180;
 const EXISTING_EVENT_CONFIDENCE_THRESHOLD = 0.55;
 const DEFAULT_EVENT_TIMEZONE = "Europe/Belgrade";
+const SERBIAN_CYRILLIC_TO_LATIN: Record<string, string> = {
+  а: "a",
+  б: "b",
+  в: "v",
+  г: "g",
+  д: "d",
+  ђ: "dj",
+  е: "e",
+  ж: "z",
+  з: "z",
+  и: "i",
+  ј: "j",
+  к: "k",
+  л: "l",
+  љ: "lj",
+  м: "m",
+  н: "n",
+  њ: "nj",
+  о: "o",
+  п: "p",
+  р: "r",
+  с: "s",
+  т: "t",
+  ћ: "c",
+  у: "u",
+  ф: "f",
+  х: "h",
+  ц: "c",
+  ч: "c",
+  џ: "dz",
+  ш: "s",
+};
 
 function logInfo(event: string, payload: Record<string, unknown>) {
   console.info(
@@ -387,11 +419,76 @@ async function loadCanonicalVenueNamesByHandle(
 function toSearchableText(value: string): string {
   return value
     .toLowerCase()
+    .replace(/[\u0400-\u04ff]/g, (character) => {
+      return SERBIAN_CYRILLIC_TO_LATIN[character] ?? character;
+    })
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function areVenueNamesCompatible(left: string, right: string): boolean {
+  const normalizedLeft = toSearchableText(left);
+  const normalizedRight = toSearchableText(right);
+  if (!normalizedLeft || !normalizedRight) {
+    return false;
+  }
+  if (normalizedLeft === normalizedRight) {
+    return true;
+  }
+  return (
+    normalizedLeft.includes(normalizedRight) ||
+    normalizedRight.includes(normalizedLeft)
+  );
+}
+
+function pickExplicitVenueCandidate(
+  locationName: string,
+  modelVenue: string,
+): {
+  venue: string;
+  source: Exclude<VenueSource, "handle_map" | null>;
+  wasFallback: boolean;
+} | null {
+  const hasLocationName =
+    locationName.length > 0 && !isLowConfidenceVenue(locationName);
+  const hasModelVenue = modelVenue.length > 0 && !isLowConfidenceVenue(modelVenue);
+
+  if (hasLocationName && hasModelVenue) {
+    if (areVenueNamesCompatible(locationName, modelVenue)) {
+      return {
+        venue: locationName,
+        source: "location_name",
+        wasFallback: true,
+      };
+    }
+
+    return {
+      venue: modelVenue,
+      source: "model",
+      wasFallback: false,
+    };
+  }
+
+  if (hasLocationName) {
+    return {
+      venue: locationName,
+      source: "location_name",
+      wasFallback: true,
+    };
+  }
+
+  if (hasModelVenue) {
+    return {
+      venue: modelVenue,
+      source: "model",
+      wasFallback: false,
+    };
+  }
+
+  return null;
 }
 
 function humanizeHandle(
@@ -1207,31 +1304,22 @@ function normalizeVenue(
   const locationName = normalizeString(post.locationName);
   const modelVenue = normalizeString(rawModelVenue);
 
+  const explicitVenue = pickExplicitVenueCandidate(locationName, modelVenue);
+  if (explicitVenue) {
+    return {
+      venue: explicitVenue.venue,
+      source: explicitVenue.source,
+      wasFallback: explicitVenue.wasFallback,
+      rawModelVenue: modelVenue,
+      rawLocationName: locationName,
+    };
+  }
+
   if (mappedVenue) {
     return {
       venue: mappedVenue,
       source: "handle_map",
       wasFallback: true,
-      rawModelVenue: modelVenue,
-      rawLocationName: locationName,
-    };
-  }
-
-  if (locationName && !isLowConfidenceVenue(locationName)) {
-    return {
-      venue: locationName,
-      source: "location_name",
-      wasFallback: true,
-      rawModelVenue: modelVenue,
-      rawLocationName: locationName,
-    };
-  }
-
-  if (modelVenue && !isLowConfidenceVenue(modelVenue)) {
-    return {
-      venue: modelVenue,
-      source: "model",
-      wasFallback: false,
       rawModelVenue: modelVenue,
       rawLocationName: locationName,
     };

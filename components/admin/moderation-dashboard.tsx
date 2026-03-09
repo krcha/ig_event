@@ -5,15 +5,22 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 type EventStatus = "pending" | "approved" | "rejected";
-type ModerationSortMode = "newest" | "updated" | "event_date";
+type ModerationSortMode =
+  | "newest"
+  | "updated"
+  | "event_date"
+  | "confidence_desc"
+  | "confidence_asc";
 type ModerationFilterMode =
   | "all"
   | "issues"
+  | "suspected_duplicates"
   | "suspicious_year"
   | "low_confidence"
   | "fallback_title"
   | "missing_image"
   | "missing_time";
+type ConfidenceFilterMode = "all" | "high" | "medium" | "low" | "missing";
 
 type ModerationEvent = {
   id: string;
@@ -70,11 +77,76 @@ type DecoratedEvent = ModerationEvent & {
   missingImage: boolean;
   missingTime: boolean;
   hasIssues: boolean;
+  suspectedDuplicateIds: string[];
+  suspectedDuplicateCount: number;
   fieldConfirmationRows: FieldConfirmationRow[];
   searchText: string;
+  duplicateDateKey: string | null;
+  duplicateVenueText: string;
+  duplicateTitleText: string;
+  duplicateDescriptionText: string;
 };
 
 const STATUS_OPTIONS: EventStatus[] = ["pending", "approved", "rejected"];
+const SERBIAN_CYRILLIC_TO_LATIN: Record<string, string> = {
+  а: "a",
+  б: "b",
+  в: "v",
+  г: "g",
+  д: "d",
+  ђ: "dj",
+  е: "e",
+  ж: "z",
+  з: "z",
+  и: "i",
+  ј: "j",
+  к: "k",
+  л: "l",
+  љ: "lj",
+  м: "m",
+  н: "n",
+  њ: "nj",
+  о: "o",
+  п: "p",
+  р: "r",
+  с: "s",
+  т: "t",
+  ћ: "c",
+  у: "u",
+  ф: "f",
+  х: "h",
+  ц: "c",
+  ч: "c",
+  џ: "dz",
+  ш: "s",
+};
+const DUPLICATE_VENUE_STOP_WORDS = new Set([
+  "beograd",
+  "belgrade",
+  "club",
+  "klub",
+  "dom",
+  "kulture",
+  "serbia",
+  "srbija",
+]);
+const DUPLICATE_TEXT_STOP_WORDS = new Set([
+  "belgrade",
+  "beograd",
+  "serbia",
+  "srbija",
+  "event",
+  "party",
+  "concert",
+  "live",
+  "music",
+  "night",
+  "official",
+  "ulaz",
+  "slobodan",
+  "free",
+  "entry",
+]);
 
 function prettyJson(value: string | null): string {
   if (!value) {
@@ -181,6 +253,129 @@ function normalizeSearchText(value: string): string {
   return value.toLowerCase().trim();
 }
 
+function normalizeComparisonText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[\u0400-\u04ff]/g, (character) => {
+      return SERBIAN_CYRILLIC_TO_LATIN[character] ?? character;
+    })
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getSimilarityRatio(
+  left: string,
+  right: string,
+  stopWords: Set<string>,
+): number {
+  if (!left || !right) {
+    return 0;
+  }
+
+  const leftTokens = [
+    ...new Set(
+      left
+        .split(" ")
+        .filter((token) => token.length > 1 && !stopWords.has(token)),
+    ),
+  ];
+  const rightTokens = [
+    ...new Set(
+      right
+        .split(" ")
+        .filter((token) => token.length > 1 && !stopWords.has(token)),
+    ),
+  ];
+  if (leftTokens.length === 0 || rightTokens.length === 0) {
+    return 0;
+  }
+
+  const rightTokenSet = new Set(rightTokens);
+  let sharedCount = 0;
+  for (const token of leftTokens) {
+    if (rightTokenSet.has(token)) {
+      sharedCount += 1;
+    }
+  }
+
+  return sharedCount / Math.min(leftTokens.length, rightTokens.length);
+}
+
+function areSimilarVenues(left: string, right: string): boolean {
+  if (!left || !right) {
+    return false;
+  }
+  if (left === right) {
+    return true;
+  }
+  if (left.includes(right) || right.includes(left)) {
+    return true;
+  }
+  return getSimilarityRatio(left, right, DUPLICATE_VENUE_STOP_WORDS) >= 0.72;
+}
+
+function areSimilarDuplicateTexts(left: string, right: string): boolean {
+  if (!left || !right) {
+    return false;
+  }
+  if (left === right) {
+    return true;
+  }
+
+  const shorterLength = Math.min(left.length, right.length);
+  if (shorterLength >= 24 && (left.includes(right) || right.includes(left))) {
+    return true;
+  }
+
+  return getSimilarityRatio(left, right, DUPLICATE_TEXT_STOP_WORDS) >= 0.6;
+}
+
+function areSuspectedDuplicateEvents(left: DecoratedEvent, right: DecoratedEvent): boolean {
+  if (!left.duplicateDateKey || left.duplicateDateKey !== right.duplicateDateKey) {
+    return false;
+  }
+  if (!areSimilarVenues(left.duplicateVenueText, right.duplicateVenueText)) {
+    return false;
+  }
+
+  return (
+    areSimilarDuplicateTexts(left.duplicateTitleText, right.duplicateTitleText) ||
+    areSimilarDuplicateTexts(left.duplicateDescriptionText, right.duplicateDescriptionText)
+  );
+}
+
+function attachSuspectedDuplicateGroups(events: DecoratedEvent[]): DecoratedEvent[] {
+  const adjacentIds = new Map<string, Set<string>>();
+  for (const event of events) {
+    adjacentIds.set(event.id, new Set());
+  }
+
+  for (let leftIndex = 0; leftIndex < events.length; leftIndex += 1) {
+    const left = events[leftIndex];
+    for (let rightIndex = leftIndex + 1; rightIndex < events.length; rightIndex += 1) {
+      const right = events[rightIndex];
+      if (!areSuspectedDuplicateEvents(left, right)) {
+        continue;
+      }
+      adjacentIds.get(left.id)?.add(right.id);
+      adjacentIds.get(right.id)?.add(left.id);
+    }
+  }
+
+  return events.map((event) => {
+    const suspectedDuplicateIds = [...(adjacentIds.get(event.id) ?? [])];
+    return {
+      ...event,
+      suspectedDuplicateIds,
+      suspectedDuplicateCount: suspectedDuplicateIds.length,
+      hasIssues: event.hasIssues || suspectedDuplicateIds.length > 0,
+    };
+  });
+}
+
 function formatDateTime(value: number | null): string {
   if (!value) {
     return "(none)";
@@ -285,6 +480,8 @@ function decorateEvent(event: ModerationEvent): DecoratedEvent {
     missingImage,
     missingTime,
     hasIssues: hasSuspiciousYear || titleUsedFallback || lowConfidence || missingImage,
+    suspectedDuplicateIds: [],
+    suspectedDuplicateCount: 0,
     fieldConfirmationRows,
     searchText: normalizeSearchText(
       [
@@ -295,6 +492,20 @@ function decorateEvent(event: ModerationEvent): DecoratedEvent {
         event.sourceCaption ?? "",
         event.artists.join(" "),
       ].join(" "),
+    ),
+    duplicateDateKey: readStringField(normalizedFields, "normalizedDate") ?? event.date,
+    duplicateVenueText: normalizeComparisonText(
+      [
+        event.venue,
+        readStringField(normalizedFields, "normalizedVenue") ?? "",
+        readStringField(normalizedFields, "locationName") ?? "",
+      ].join(" "),
+    ),
+    duplicateTitleText: normalizeComparisonText(
+      [event.title, event.artists.join(" ")].join(" "),
+    ),
+    duplicateDescriptionText: normalizeComparisonText(
+      [event.description ?? "", event.sourceCaption ?? ""].join(" "),
     ),
   };
 }
@@ -309,6 +520,8 @@ export function ModerationDashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [sortMode, setSortMode] = useState<ModerationSortMode>("newest");
   const [filterMode, setFilterMode] = useState<ModerationFilterMode>("all");
+  const [confidenceFilter, setConfidenceFilter] =
+    useState<ConfidenceFilterMode>("all");
 
   const emptyStateLabel = useMemo(() => {
     if (status === "pending") return "No pending events for moderation.";
@@ -392,7 +605,14 @@ export function ModerationDashboard() {
     }
   }
 
-  const decoratedEvents = useMemo(() => events.map((event) => decorateEvent(event)), [events]);
+  const decoratedEvents = useMemo(
+    () => attachSuspectedDuplicateGroups(events.map((event) => decorateEvent(event))),
+    [events],
+  );
+  const decoratedEventById = useMemo(
+    () => new Map(decoratedEvents.map((event) => [event.id, event] as const)),
+    [decoratedEvents],
+  );
 
   const filteredEvents = useMemo(() => {
     const query = normalizeSearchText(searchQuery);
@@ -401,6 +621,12 @@ export function ModerationDashboard() {
         return false;
       }
       if (filterMode === "issues" && !event.hasIssues) {
+        return false;
+      }
+      if (
+        filterMode === "suspected_duplicates" &&
+        event.suspectedDuplicateCount === 0
+      ) {
         return false;
       }
       if (filterMode === "suspicious_year" && !event.hasSuspiciousYear) {
@@ -421,12 +647,47 @@ export function ModerationDashboard() {
       if (filterMode === "missing_time" && !event.missingTime) {
         return false;
       }
+      if (
+        confidenceFilter === "high" &&
+        !(event.confidenceScore !== null && event.confidenceScore >= 0.9)
+      ) {
+        return false;
+      }
+      if (
+        confidenceFilter === "medium" &&
+        !(
+          event.confidenceScore !== null &&
+          event.confidenceScore >= 0.7 &&
+          event.confidenceScore < 0.9
+        )
+      ) {
+        return false;
+      }
+      if (
+        confidenceFilter === "low" &&
+        !(event.confidenceScore !== null && event.confidenceScore < 0.7)
+      ) {
+        return false;
+      }
+      if (confidenceFilter === "missing" && event.confidenceScore !== null) {
+        return false;
+      }
       return true;
     });
 
     next.sort((left, right) => {
       if (sortMode === "event_date") {
-        return left.date.localeCompare(right.date);
+        return (left.normalizedFinalDate ?? left.date).localeCompare(
+          right.normalizedFinalDate ?? right.date,
+        );
+      }
+      if (sortMode === "confidence_desc") {
+        return (right.confidenceScore ?? Number.NEGATIVE_INFINITY) -
+          (left.confidenceScore ?? Number.NEGATIVE_INFINITY);
+      }
+      if (sortMode === "confidence_asc") {
+        return (left.confidenceScore ?? Number.POSITIVE_INFINITY) -
+          (right.confidenceScore ?? Number.POSITIVE_INFINITY);
       }
       if (sortMode === "updated") {
         return right.updatedAt - left.updatedAt;
@@ -435,13 +696,14 @@ export function ModerationDashboard() {
     });
 
     return next;
-  }, [decoratedEvents, filterMode, searchQuery, sortMode]);
+  }, [confidenceFilter, decoratedEvents, filterMode, searchQuery, sortMode]);
 
   const stats = useMemo(
     () => ({
       loaded: decoratedEvents.length,
       visible: filteredEvents.length,
       issues: decoratedEvents.filter((event) => event.hasIssues).length,
+      duplicates: decoratedEvents.filter((event) => event.suspectedDuplicateCount > 0).length,
       suspiciousYear: decoratedEvents.filter((event) => event.hasSuspiciousYear).length,
       fallbackTitle: decoratedEvents.filter((event) => event.titleUsedFallback).length,
       missingImage: decoratedEvents.filter((event) => event.missingImage).length,
@@ -450,12 +712,13 @@ export function ModerationDashboard() {
   );
 
   return (
-    <section className="space-y-6 rounded-3xl border border-border bg-card p-5">
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+    <section className="space-y-5 rounded-3xl border border-border bg-card p-5">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
         {[
           ["Loaded", stats.loaded],
           ["Visible", stats.visible],
           ["Needs attention", stats.issues],
+          ["Suspected duplicates", stats.duplicates],
           ["Suspicious year", stats.suspiciousYear],
           ["Fallback title", stats.fallbackTitle],
           ["Missing image", stats.missingImage],
@@ -472,7 +735,8 @@ export function ModerationDashboard() {
           <div>
             <h2 className="text-lg font-semibold">Review queue</h2>
             <p className="text-sm text-muted-foreground">
-              Filter the queue by confidence, title fallback, missing media, and event date issues.
+              Filter the queue by confidence, suspected duplicates, missing media,
+              and event date issues.
             </p>
           </div>
           <button
@@ -501,7 +765,7 @@ export function ModerationDashboard() {
           ))}
         </div>
 
-        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_220px_220px_160px]">
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_200px_200px_200px_160px]">
           <input
             className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
             onChange={(event) => setSearchQuery(event.target.value)}
@@ -515,11 +779,25 @@ export function ModerationDashboard() {
           >
             <option value="all">All events</option>
             <option value="issues">Needs attention</option>
+            <option value="suspected_duplicates">Suspected duplicates</option>
             <option value="suspicious_year">Suspicious year</option>
             <option value="low_confidence">Low confidence</option>
             <option value="fallback_title">Fallback title</option>
             <option value="missing_image">Missing image</option>
             <option value="missing_time">Missing time</option>
+          </select>
+          <select
+            className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
+            onChange={(event) =>
+              setConfidenceFilter(event.target.value as ConfidenceFilterMode)
+            }
+            value={confidenceFilter}
+          >
+            <option value="all">All confidence</option>
+            <option value="high">High confidence (0.90+)</option>
+            <option value="medium">Medium confidence (0.70-0.89)</option>
+            <option value="low">Low confidence (&lt; 0.70)</option>
+            <option value="missing">Missing confidence</option>
           </select>
           <select
             className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
@@ -529,6 +807,8 @@ export function ModerationDashboard() {
             <option value="newest">Newest created</option>
             <option value="updated">Recently updated</option>
             <option value="event_date">Event date ascending</option>
+            <option value="confidence_desc">Confidence high to low</option>
+            <option value="confidence_asc">Confidence low to high</option>
           </select>
           <select
             className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
@@ -558,34 +838,40 @@ export function ModerationDashboard() {
         </p>
       ) : null}
 
-      <div className="space-y-4">
-        {filteredEvents.map((event) => (
+      <div className="space-y-3">
+        {filteredEvents.map((event) => {
+          const suspectedDuplicates = event.suspectedDuplicateIds
+            .map((duplicateId) => decoratedEventById.get(duplicateId))
+            .filter((duplicate): duplicate is DecoratedEvent => Boolean(duplicate))
+            .sort((left, right) => right.updatedAt - left.updatedAt);
+
+          return (
           <article
-            className="overflow-hidden rounded-3xl border border-border bg-background/80"
+            className="overflow-hidden rounded-2xl border border-border bg-background/80"
             key={event.id}
           >
-            <div className="grid gap-0 lg:grid-cols-[220px_minmax(0,1fr)]">
+            <div className="grid gap-0 lg:grid-cols-[180px_minmax(0,1fr)]">
               <div className="border-b border-border bg-muted lg:border-b-0 lg:border-r">
                 {event.imageUrl ? (
                   <a href={event.imageUrl} rel="noreferrer" target="_blank">
                     <Image
                       alt={event.title}
-                      className="h-56 w-full object-cover lg:h-full"
+                      className="h-40 w-full object-cover lg:h-full"
                       height={720}
                       src={event.imageUrl}
                       width={720}
                     />
                   </a>
                 ) : (
-                  <div className="flex h-56 items-center justify-center px-6 text-center text-sm text-muted-foreground lg:h-full">
+                  <div className="flex h-40 items-center justify-center px-5 text-center text-sm text-muted-foreground lg:h-full">
                     No poster image available for this event.
                   </div>
                 )}
               </div>
 
-              <div className="space-y-4 p-5">
+              <div className="space-y-3 p-4">
                 <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <div className="flex flex-wrap gap-2">
                       <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                         {event.moderation.status}
@@ -603,6 +889,11 @@ export function ModerationDashboard() {
                           Low confidence
                         </span>
                       ) : null}
+                      {event.suspectedDuplicateCount > 0 ? (
+                        <span className="rounded-full bg-orange-100 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-orange-800">
+                          Suspected duplicates {event.suspectedDuplicateCount}
+                        </span>
+                      ) : null}
                       {event.titleUsedFallback ? (
                         <span className="rounded-full bg-sky-100 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-sky-800">
                           Fallback title
@@ -615,14 +906,14 @@ export function ModerationDashboard() {
                       ) : null}
                     </div>
                     <div>
-                      <h3 className="text-xl font-semibold tracking-tight">{event.title}</h3>
-                      <p className="mt-1 text-sm text-muted-foreground">
+                      <h3 className="text-lg font-semibold tracking-tight">{event.title}</h3>
+                      <p className="mt-0.5 text-sm text-muted-foreground">
                         {event.date}
                         {event.time ? ` at ${event.time}` : ""}
                         {" · "}
                         {event.venue}
                       </p>
-                      <p className="mt-1 text-sm text-muted-foreground">
+                      <p className="mt-0.5 text-xs text-muted-foreground">
                         Queued {formatDateTime(event.createdAt)}
                         {" · "}
                         Updated {formatDateTime(event.updatedAt)}
@@ -642,14 +933,46 @@ export function ModerationDashboard() {
                 </div>
 
                 {event.artists.length > 0 ? (
-                  <p className="text-sm">
+                  <p className="text-sm leading-5">
                     Artists:{" "}
                     <span className="text-muted-foreground">{event.artists.join(", ")}</span>
                   </p>
                 ) : null}
 
                 {event.description ? (
-                  <p className="text-sm leading-6 text-muted-foreground">{event.description}</p>
+                  <p className="text-sm leading-5 text-muted-foreground">{event.description}</p>
+                ) : null}
+
+                {suspectedDuplicates.length > 0 ? (
+                  <div className="rounded-2xl border border-orange-200 bg-orange-50/70 p-3">
+                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-orange-800">
+                      Suspected duplicates
+                    </p>
+                    <div className="mt-2 space-y-2">
+                      {suspectedDuplicates.map((duplicate) => (
+                        <div
+                          className="flex flex-col gap-1 text-sm text-orange-950 lg:flex-row lg:items-center lg:justify-between"
+                          key={duplicate.id}
+                        >
+                          <div>
+                            <p className="font-medium">{duplicate.title}</p>
+                            <p className="text-xs text-orange-900/80">
+                              {duplicate.date}
+                              {duplicate.time ? ` at ${duplicate.time}` : ""}
+                              {" · "}
+                              {duplicate.venue}
+                            </p>
+                          </div>
+                          <Link
+                            className="rounded-lg border border-orange-300 px-2.5 py-1 text-xs font-medium"
+                            href={`/events/${duplicate.id}`}
+                          >
+                            Open
+                          </Link>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 ) : null}
 
                 <div className="flex flex-wrap gap-2 text-sm">
@@ -687,7 +1010,7 @@ export function ModerationDashboard() {
                   </button>
                 </div>
 
-                <details className="rounded-2xl border border-border p-4 text-sm">
+                <details className="rounded-2xl border border-border p-3 text-sm">
                   <summary className="cursor-pointer font-medium">Admin details</summary>
                   <div className="mt-4 space-y-4">
                     <div className="grid gap-3 lg:grid-cols-3">
@@ -786,7 +1109,8 @@ export function ModerationDashboard() {
               </div>
             </div>
           </article>
-        ))}
+          );
+        })}
       </div>
     </section>
   );
