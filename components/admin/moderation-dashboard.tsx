@@ -74,6 +74,58 @@ function readBooleanField(record: Record<string, unknown> | null, key: string): 
   return record?.[key] === true;
 }
 
+function readObjectField(
+  record: Record<string, unknown> | null,
+  key: string,
+): Record<string, unknown> | null {
+  const value = record?.[key];
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return null;
+}
+
+function readStringArrayField(record: Record<string, unknown> | null, key: string): string[] {
+  const value = record?.[key];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+function readNumberOrStringField(
+  record: Record<string, unknown> | null,
+  key: string,
+): string | number | null {
+  const value = record?.[key];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value;
+  }
+  return null;
+}
+
+function readFieldConfirmationEntry(
+  record: Record<string, unknown> | null,
+  key: string,
+): {
+  confidence: string | number | null;
+  foundIn: string[];
+  notes: string | null;
+} | null {
+  const entry = readObjectField(record, key);
+  if (!entry) {
+    return null;
+  }
+  return {
+    confidence: readNumberOrStringField(entry, "confidence"),
+    foundIn: readStringArrayField(entry, "found_in"),
+    notes: readStringField(entry, "notes"),
+  };
+}
+
 export function ModerationDashboard() {
   const [status, setStatus] = useState<EventStatus>("pending");
   const [events, setEvents] = useState<ModerationEvent[]>([]);
@@ -203,6 +255,63 @@ export function ModerationDashboard() {
             "dateYearSelectionReason",
           );
           const hasSuspiciousYear = readBooleanField(normalizedFields, "dateSuspiciousYear");
+          const fieldConfirmation =
+            readObjectField(normalizedFields, "fieldConfirmation") ??
+            readObjectField(rawExtraction, "field_confirmation");
+          const extractedCity = readStringField(normalizedFields, "city") ?? readStringField(rawExtraction, "city");
+          const extractedCountry =
+            readStringField(normalizedFields, "country") ?? readStringField(rawExtraction, "country");
+          const locationValue = [extractedCity, extractedCountry]
+            .filter((value): value is string => Boolean(value))
+            .join(", ");
+          const rawPrice = readStringField(rawExtraction, "price");
+          const rawCurrency = readStringField(rawExtraction, "currency");
+          const priceValue = event.ticketPrice ?? [rawPrice, rawCurrency]
+            .filter((value): value is string => Boolean(value))
+            .join(" ");
+          const extractedArtists = event.artists.length > 0
+            ? event.artists
+            : readStringArrayField(rawExtraction, "artists");
+          const fieldConfirmationRows = [
+            {
+              key: "title",
+              label: "Title of event",
+              value: event.title || readStringField(rawExtraction, "title") || "(none)",
+            },
+            {
+              key: "location",
+              label: "Location",
+              value: locationValue || "(none)",
+            },
+            {
+              key: "location_name",
+              label: "Location name",
+              value: event.venue || readStringField(rawExtraction, "venue") || "(none)",
+            },
+            {
+              key: "price",
+              label: "Price",
+              value: priceValue || "(none)",
+            },
+            {
+              key: "start_time",
+              label: "Start time",
+              value: event.time || readStringField(rawExtraction, "time") || "(none)",
+            },
+            {
+              key: "short_description",
+              label: "Short description",
+              value: event.description || readStringField(rawExtraction, "description") || "(none)",
+            },
+            {
+              key: "artists",
+              label: "Artists",
+              value: extractedArtists.length > 0 ? extractedArtists.join(", ") : "(none)",
+            },
+          ].map((row) => ({
+            ...row,
+            details: readFieldConfirmationEntry(fieldConfirmation, row.key),
+          }));
 
           return (
             <article className="rounded-md border border-border bg-background p-4" key={event.id}>
@@ -267,6 +376,30 @@ export function ModerationDashboard() {
                     <p className="font-medium">Year selection reason</p>
                     <p className="text-muted-foreground">{yearSelectionReason ?? "(none)"}</p>
                   </div>
+                  {fieldConfirmationRows.some((row) => row.details) ? (
+                    <div>
+                      <p className="font-medium">Field confirmation</p>
+                      <div className="mt-1 space-y-2">
+                        {fieldConfirmationRows.map((row) =>
+                          row.details ? (
+                            <div className="rounded border border-border p-2" key={row.key}>
+                              <p className="font-medium">{row.label}</p>
+                              <p className="text-muted-foreground">{row.value}</p>
+                              <p className="text-muted-foreground">
+                                Confidence: {row.details.confidence ?? "(none)"}
+                              </p>
+                              <p className="text-muted-foreground">
+                                Evidence: {row.details.foundIn.join(", ") || "(none)"}
+                              </p>
+                              <p className="text-muted-foreground">
+                                Notes: {row.details.notes ?? "(none)"}
+                              </p>
+                            </div>
+                          ) : null,
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
                   <div>
                     <p className="font-medium">Raw extraction JSON</p>
                     <pre className="overflow-x-auto whitespace-pre-wrap rounded bg-muted p-2 text-[11px] leading-relaxed">

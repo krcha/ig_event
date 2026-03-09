@@ -4,6 +4,11 @@ import { getRequiredEnv } from "@/lib/utils/env";
 const openAiVisionModel = process.env.OPENAI_VISION_MODEL ?? "gpt-5.4";
 const OPENAI_REQUEST_TIMEOUT_MS = 40000;
 const OPENAI_MAX_ATTEMPTS = 2;
+const extractionFieldConfirmationSchema = z.object({
+  confidence: z.union([z.number(), z.string()]),
+  found_in: z.array(z.string()).default([]),
+  notes: z.string(),
+});
 
 const extractedEventSchema = z.object({
   title: z.string(),
@@ -21,6 +26,15 @@ const extractedEventSchema = z.object({
   reasoning_notes: z.string(),
   source_caption: z.string(),
   source_url: z.string(),
+  field_confirmation: z.object({
+    title: extractionFieldConfirmationSchema,
+    location: extractionFieldConfirmationSchema,
+    location_name: extractionFieldConfirmationSchema,
+    price: extractionFieldConfirmationSchema,
+    start_time: extractionFieldConfirmationSchema,
+    short_description: extractionFieldConfirmationSchema,
+    artists: extractionFieldConfirmationSchema,
+  }),
 });
 
 export type ExtractedEventData = z.infer<typeof extractedEventSchema>;
@@ -56,7 +70,16 @@ Return strict JSON with:
   "confidence": number,
   "reasoning_notes": string,
   "source_caption": string,
-  "source_url": string
+  "source_url": string,
+  "field_confirmation": {
+    "title": { "confidence": number, "found_in": string[], "notes": string },
+    "location": { "confidence": number, "found_in": string[], "notes": string },
+    "location_name": { "confidence": number, "found_in": string[], "notes": string },
+    "price": { "confidence": number, "found_in": string[], "notes": string },
+    "start_time": { "confidence": number, "found_in": string[], "notes": string },
+    "short_description": { "confidence": number, "found_in": string[], "notes": string },
+    "artists": { "confidence": number, "found_in": string[], "notes": string }
+  }
 }
 Rules:
 - Use empty string for unknown scalar fields; use [] for unknown artists.
@@ -67,10 +90,20 @@ Rules:
 - If the source only indicates a genre, format, or generic session type (for example jam session, techno night, live music), return an empty string for "title".
 - Do not use the venue name, Instagram handle, or a generic genre label as a fabricated event title unless that exact text is clearly the event/program name in the source.
 - Do not create, paraphrase, beautify, or normalize event titles.
+- Keep "description" short and factual, based only on details supported by the caption or flyer.
 - If date is unclear, return empty string for date.
 - If venue is unclear, return empty string for venue.
 - If month/day is visible but year is missing, infer year from Instagram post timestamp only when confidence is high.
 - If inferred date appears implausible relative to post timestamp, return empty date.
+- For field_confirmation:
+- "title" confirms the event title field.
+- "location" confirms city/country style location details.
+- "location_name" confirms the venue/location name field.
+- "price" confirms ticket price details.
+- "start_time" confirms the start time field.
+- "short_description" confirms the description summary.
+- "artists" confirms artist names.
+- Each field_confirmation entry must explain confidence using the caption, image, handle context, or explicit inference notes.
 - Never return markdown, only valid JSON.
 `.trim();
 
@@ -96,6 +129,91 @@ const extractionJsonSchema = {
     reasoning_notes: { type: "string" },
     source_caption: { type: "string" },
     source_url: { type: "string" },
+    field_confirmation: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        title: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            confidence: { type: ["number", "string"] },
+            found_in: { type: "array", items: { type: "string" } },
+            notes: { type: "string" },
+          },
+          required: ["confidence", "found_in", "notes"],
+        },
+        location: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            confidence: { type: ["number", "string"] },
+            found_in: { type: "array", items: { type: "string" } },
+            notes: { type: "string" },
+          },
+          required: ["confidence", "found_in", "notes"],
+        },
+        location_name: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            confidence: { type: ["number", "string"] },
+            found_in: { type: "array", items: { type: "string" } },
+            notes: { type: "string" },
+          },
+          required: ["confidence", "found_in", "notes"],
+        },
+        price: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            confidence: { type: ["number", "string"] },
+            found_in: { type: "array", items: { type: "string" } },
+            notes: { type: "string" },
+          },
+          required: ["confidence", "found_in", "notes"],
+        },
+        start_time: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            confidence: { type: ["number", "string"] },
+            found_in: { type: "array", items: { type: "string" } },
+            notes: { type: "string" },
+          },
+          required: ["confidence", "found_in", "notes"],
+        },
+        short_description: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            confidence: { type: ["number", "string"] },
+            found_in: { type: "array", items: { type: "string" } },
+            notes: { type: "string" },
+          },
+          required: ["confidence", "found_in", "notes"],
+        },
+        artists: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            confidence: { type: ["number", "string"] },
+            found_in: { type: "array", items: { type: "string" } },
+            notes: { type: "string" },
+          },
+          required: ["confidence", "found_in", "notes"],
+        },
+      },
+      required: [
+        "title",
+        "location",
+        "location_name",
+        "price",
+        "start_time",
+        "short_description",
+        "artists",
+      ],
+    },
   },
   required: [
     "title",
@@ -113,6 +231,7 @@ const extractionJsonSchema = {
     "reasoning_notes",
     "source_caption",
     "source_url",
+    "field_confirmation",
   ],
 } as const;
 

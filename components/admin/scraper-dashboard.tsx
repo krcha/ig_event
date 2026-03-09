@@ -59,6 +59,10 @@ const HANDLE_SUMMARY_METRICS: Array<{
   { label: "Skipped missing date", getValue: (item) => item.skipped_missing_date },
   { label: "Skipped missing venue", getValue: (item) => item.skipped_missing_venue },
   { label: "Skipped past event", getValue: (item) => item.skipped_past_event ?? 0 },
+  {
+    label: "Skipped far future event",
+    getValue: (item) => item.skipped_far_future_event ?? 0,
+  },
   { label: "Skipped video", getValue: (item) => item.skipped_video },
   { label: "Skipped invalid event", getValue: (item) => item.skipped_invalid_event },
   {

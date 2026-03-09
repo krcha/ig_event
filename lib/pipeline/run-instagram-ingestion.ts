@@ -25,6 +25,7 @@ type RunInstagramIngestionOptions = {
 };
 
 export type IngestionRunMode = "full_scrape" | "saved_posts";
+const MAX_EVENT_DAYS_AHEAD = 90;
 
 type HandleSummary = {
   handle: string;
@@ -41,6 +42,7 @@ type HandleSummary = {
   skipped_video: number;
   skipped_invalid_event: number;
   skipped_past_event: number;
+  skipped_far_future_event: number;
   updated_duplicates_bad_data: number;
   duplicate_update_failed: number;
   failedDownloads: number;
@@ -102,11 +104,13 @@ const updateEventMutation =
   "events:updateEvent" as unknown as FunctionReference<"mutation">;
 const listActiveVenuesQuery =
   "venues:listActiveVenues" as unknown as FunctionReference<"query">;
+const listVenuesQuery =
+  "venues:listVenues" as unknown as FunctionReference<"query">;
 const listScrapedPostsByHandleQuery =
   "scrapedPosts:listByHandle" as unknown as FunctionReference<"query">;
 const upsertScrapedPostsByHandleMutation =
   "scrapedPosts:upsertManyByHandle" as unknown as FunctionReference<"mutation">;
-const KNOWN_VENUE_BY_HANDLE: Record<string, string> = {
+const STATIC_VENUE_BY_HANDLE: Record<string, string> = {
   "20_44.nightclub": "Klub 20/44",
   kcgrad: "KC Grad",
 };
@@ -180,7 +184,12 @@ type PrepareEventResult =
     }
   | {
       kind: "skip";
-      reason: "missing_date" | "missing_venue" | "invalid_event" | "past_event";
+      reason:
+        | "missing_date"
+        | "missing_venue"
+        | "invalid_event"
+        | "past_event"
+        | "far_future";
       normalizedFields: Record<string, unknown>;
     };
 
@@ -312,6 +321,11 @@ type ActiveVenueRecord = {
   instagramHandle: string;
 };
 
+type VenueRecord = {
+  name: string;
+  instagramHandle: string;
+};
+
 type SavedScrapedPostRecord = {
   handle: string;
   postId: string;
@@ -331,6 +345,36 @@ function normalizeHandle(handle: string): string {
   return handle.replace(/^@/, "").trim().toLowerCase();
 }
 
+function getConfiguredVenueNameForHandle(
+  handle: string,
+  canonicalVenueNamesByHandle: Record<string, string>,
+): string {
+  const normalized = normalizeHandle(handle);
+  return canonicalVenueNamesByHandle[normalized] ?? STATIC_VENUE_BY_HANDLE[normalized] ?? "";
+}
+
+function buildCanonicalVenueNamesByHandle(
+  venues: VenueRecord[],
+): Record<string, string> {
+  const namesByHandle: Record<string, string> = {};
+  for (const venue of venues) {
+    const normalizedHandle = normalizeHandle(venue.instagramHandle);
+    const normalizedName = normalizeString(venue.name);
+    if (!normalizedHandle || !normalizedName) {
+      continue;
+    }
+    namesByHandle[normalizedHandle] = normalizedName;
+  }
+  return namesByHandle;
+}
+
+async function loadCanonicalVenueNamesByHandle(
+  client: ConvexHttpClient,
+): Promise<Record<string, string>> {
+  const venues = (await client.query(listVenuesQuery, {})) as VenueRecord[];
+  return buildCanonicalVenueNamesByHandle(venues);
+}
+
 function toSearchableText(value: string): string {
   return value
     .toLowerCase()
@@ -341,9 +385,12 @@ function toSearchableText(value: string): string {
     .trim();
 }
 
-function humanizeHandle(handle: string): string {
+function humanizeHandle(
+  handle: string,
+  canonicalVenueNamesByHandle: Record<string, string>,
+): string {
   const normalized = normalizeHandle(handle);
-  const mappedVenue = KNOWN_VENUE_BY_HANDLE[normalized];
+  const mappedVenue = getConfiguredVenueNameForHandle(handle, canonicalVenueNamesByHandle);
   if (mappedVenue) {
     return mappedVenue;
   }
@@ -373,8 +420,15 @@ function humanizeHandle(handle: string): string {
     .join(" ");
 }
 
-function buildFallbackTitle(post: InstagramScrapedPost, venue: VenueNormalization): string {
-  const mappedVenue = KNOWN_VENUE_BY_HANDLE[normalizeHandle(post.username)];
+function buildFallbackTitle(
+  post: InstagramScrapedPost,
+  venue: VenueNormalization,
+  canonicalVenueNamesByHandle: Record<string, string>,
+): string {
+  const mappedVenue = getConfiguredVenueNameForHandle(
+    post.username,
+    canonicalVenueNamesByHandle,
+  );
   if (mappedVenue) {
     return mappedVenue;
   }
@@ -388,7 +442,7 @@ function buildFallbackTitle(post: InstagramScrapedPost, venue: VenueNormalizatio
     return venue.venue;
   }
 
-  return humanizeHandle(post.username);
+  return humanizeHandle(post.username, canonicalVenueNamesByHandle);
 }
 
 function isGenericEventTitle(value: string): boolean {
@@ -399,6 +453,7 @@ function normalizeEventTitle(
   post: InstagramScrapedPost,
   extracted: ExtractedEventData,
   venue: VenueNormalization,
+  canonicalVenueNamesByHandle: Record<string, string>,
 ): {
   title: string;
   source: "model" | "handle_fallback";
@@ -422,7 +477,7 @@ function normalizeEventTitle(
   }
 
   return {
-    title: buildFallbackTitle(post, venue),
+    title: buildFallbackTitle(post, venue, canonicalVenueNamesByHandle),
     source: "handle_fallback",
     rawTitle,
     usedFallback: true,
@@ -445,6 +500,7 @@ function createEmptyHandleSummary(handle: string): HandleSummary {
     skipped_video: 0,
     skipped_invalid_event: 0,
     skipped_past_event: 0,
+    skipped_far_future_event: 0,
     updated_duplicates_bad_data: 0,
     duplicate_update_failed: 0,
     failedDownloads: 0,
@@ -461,6 +517,11 @@ function createEmptyHandleSummary(handle: string): HandleSummary {
 function getOrCreateHandleSummary(summary: IngestionSummary, handle: string): HandleSummary {
   const existing = summary.handles.find((entry) => entry.handle === handle);
   if (existing) {
+    Object.assign(existing, {
+      ...createEmptyHandleSummary(handle),
+      ...existing,
+      errors: Array.isArray(existing.errors) ? existing.errors : [],
+    });
     return existing;
   }
   const created = createEmptyHandleSummary(handle);
@@ -689,16 +750,28 @@ function getIsoDateInTimeZone(timeZone: string, now = new Date()): string {
   return `${year}-${month}-${day}`;
 }
 
-function getEventDateFilterContext(now = new Date()): { todayIsoDate: string; timeZone: string } {
+function getEventDateFilterContext(now = new Date()): {
+  todayIsoDate: string;
+  maxFutureIsoDate: string;
+  maxDaysAhead: number;
+  timeZone: string;
+} {
+  const maxFutureDate = new Date(
+    now.getTime() + MAX_EVENT_DAYS_AHEAD * 24 * 60 * 60 * 1000,
+  );
   const timeZone = getConfiguredEventTimezone();
   try {
     return {
       todayIsoDate: getIsoDateInTimeZone(timeZone, now),
+      maxFutureIsoDate: getIsoDateInTimeZone(timeZone, maxFutureDate),
+      maxDaysAhead: MAX_EVENT_DAYS_AHEAD,
       timeZone,
     };
   } catch {
     return {
       todayIsoDate: now.toISOString().slice(0, 10),
+      maxFutureIsoDate: maxFutureDate.toISOString().slice(0, 10),
+      maxDaysAhead: MAX_EVENT_DAYS_AHEAD,
       timeZone: "UTC",
     };
   }
@@ -1105,8 +1178,13 @@ function isLowConfidenceVenue(value: string): boolean {
   return false;
 }
 
-function normalizeVenue(post: InstagramScrapedPost, rawModelVenue: string): VenueNormalization {
-  const mappedVenue = KNOWN_VENUE_BY_HANDLE[normalizeHandle(post.username)] ?? "";
+function normalizeVenue(
+  post: InstagramScrapedPost,
+  rawModelVenue: string,
+  canonicalVenueNamesByHandle: Record<string, string>,
+): VenueNormalization {
+  const mappedVenue =
+    getConfiguredVenueNameForHandle(post.username, canonicalVenueNamesByHandle) ?? "";
   const locationName = normalizeString(post.locationName);
   const modelVenue = normalizeString(rawModelVenue);
 
@@ -1516,6 +1594,7 @@ function prepareEventsForInsert(
   post: InstagramScrapedPost,
   extracted: ExtractedEventData,
   selectedImageUrl: string,
+  canonicalVenueNamesByHandle: Record<string, string>,
 ): PrepareEventResult[] {
   const eventType = normalizeString(extracted.category);
   const description = normalizeString(extracted.description);
@@ -1528,8 +1607,17 @@ function prepareEventsForInsert(
       ? extracted.confidence
       : Number.parseFloat(extracted.confidence);
   const confidence = Number.isFinite(parsedConfidence) ? parsedConfidence : null;
-  const venueNormalization = normalizeVenue(post, extracted.venue);
-  const titleNormalization = normalizeEventTitle(post, extracted, venueNormalization);
+  const venueNormalization = normalizeVenue(
+    post,
+    extracted.venue,
+    canonicalVenueNamesByHandle,
+  );
+  const titleNormalization = normalizeEventTitle(
+    post,
+    extracted,
+    venueNormalization,
+    canonicalVenueNamesByHandle,
+  );
   const title = normalizeString(titleNormalization.title);
   const dateNormalization = normalizeEventDate(
     normalizeString(extracted.date),
@@ -1575,12 +1663,15 @@ function prepareEventsForInsert(
     reasoningNotes: normalizeString(extracted.reasoning_notes),
     sourceCaptionFromModel: normalizeString(extracted.source_caption),
     sourceUrlFromModel: normalizeString(extracted.source_url),
+    fieldConfirmation: extracted.field_confirmation,
     artists: extracted.artists,
     description,
     postTimestamp: post.postedAt,
     dateRangeExpanded: candidateDates.length > 1,
     dateRangeExpandedCount: candidateDates.length,
     filterDateToday: eventDateFilter.todayIsoDate,
+    filterDateMaxFuture: eventDateFilter.maxFutureIsoDate,
+    filterMaxDaysAhead: eventDateFilter.maxDaysAhead,
     filterDateTimezone: eventDateFilter.timeZone,
     normalizedIsValid: true,
     normalizedInvalidReason: null,
@@ -1658,6 +1749,19 @@ function prepareEventsForInsert(
       continue;
     }
 
+    if (date > eventDateFilter.maxFutureIsoDate) {
+      preparedEvents.push({
+        kind: "skip",
+        reason: "far_future",
+        normalizedFields: {
+          ...normalizedFields,
+          normalizedIsValid: false,
+          normalizedInvalidReason: "far_future_event",
+        },
+      });
+      continue;
+    }
+
     preparedEvents.push({
       kind: "ok",
       normalizedFields,
@@ -1690,10 +1794,11 @@ type ProcessIngestionPostOptions = {
   handle: string;
   post: InstagramScrapedPost;
   summary: HandleSummary;
+  canonicalVenueNamesByHandle: Record<string, string>;
 };
 
 async function processIngestionPost(options: ProcessIngestionPostOptions): Promise<void> {
-  const { client, handle, post, summary } = options;
+  const { client, handle, post, summary, canonicalVenueNamesByHandle } = options;
   const postContext = getPostContext(handle, post);
 
   if (post.postType === "video") {
@@ -1793,7 +1898,12 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
 
   let preparedResults: PrepareEventResult[];
   try {
-    preparedResults = prepareEventsForInsert(post, extracted, bestImageUrl);
+    preparedResults = prepareEventsForInsert(
+      post,
+      extracted,
+      bestImageUrl,
+      canonicalVenueNamesByHandle,
+    );
   } catch (error) {
     summary.failedExtractions += 1;
     summary.failed_extractions += 1;
@@ -1832,6 +1942,8 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
         summary.skipped_missing_venue += 1;
       } else if (prepared.reason === "past_event") {
         summary.skipped_past_event += 1;
+      } else if (prepared.reason === "far_future") {
+        summary.skipped_far_future_event += 1;
       } else {
         summary.skipped_invalid_event += 1;
       }
@@ -1974,6 +2086,15 @@ export async function runInstagramIngestionBatchStep(
   options: IngestionBatchStepOptions,
 ): Promise<IngestionBatchStepResult> {
   const client = getConvexClient();
+  let canonicalVenueNamesByHandle: Record<string, string> = {};
+  try {
+    canonicalVenueNamesByHandle = await loadCanonicalVenueNamesByHandle(client);
+  } catch (error) {
+    logError("ingestion.venues.load_failed", {
+      step: "normalize_posts" satisfies IngestionStep,
+      error: getErrorMessage(error),
+    });
+  }
   const batchSize = normalizeBatchSize(options.batchSize);
   const mode = options.mode ?? "full_scrape";
   const summary = options.summary;
@@ -2082,6 +2203,7 @@ export async function runInstagramIngestionBatchStep(
       handle,
       post,
       summary: handleSummary,
+      canonicalVenueNamesByHandle,
     });
     processedPosts += 1;
   }
