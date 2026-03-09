@@ -64,15 +64,15 @@ export function isInstagramOrFbCdnUrl(url: string): boolean {
 }
 
 export function resolveBestImageUrl(post: InstagramScrapedPost): string | null {
+  if (post.imageUrl && isHttpUrl(post.imageUrl)) {
+    return post.imageUrl;
+  }
+
   const candidates = (post.imageUrls ?? [])
     .filter((value) => typeof value === "string")
     .map((value) => value.trim())
     .filter((value) => value.length > 0)
     .filter(isHttpUrl);
-
-  if (post.imageUrl && isHttpUrl(post.imageUrl)) {
-    candidates.push(post.imageUrl);
-  }
 
   const uniqueCandidates = [...new Set(candidates)];
   if (uniqueCandidates.length === 0) return null;

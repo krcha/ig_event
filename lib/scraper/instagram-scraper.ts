@@ -9,6 +9,8 @@ export type InstagramScrapedPost = {
   caption: string | null;
   imageUrl: string | null;
   imageUrls: string[];
+  postType: string | null;
+  locationName: string | null;
   instagramPostUrl: string;
   postedAt: string | null;
   username: string;
@@ -21,6 +23,7 @@ type ScrapeInstagramAccountOptions = {
 };
 
 type ApifyInstagramItem = {
+  type?: string;
   id?: string;
   shortCode?: string;
   code?: string;
@@ -48,6 +51,7 @@ type ApifyInstagramItem = {
   takenAt?: string;
   ownerUsername?: string;
   owner?: { username?: string };
+  locationName?: string;
 };
 
 function normalizeHandle(handle: string): string {
@@ -92,12 +96,64 @@ function buildPostId(item: ApifyInstagramItem): string | null {
   return item.id ?? item.postId ?? item.shortCode ?? item.code ?? null;
 }
 
+function asHttpUrl(candidate: string | undefined): string | null {
+  if (!candidate) return null;
+  const trimmed = candidate.trim();
+  if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+    return null;
+  }
+  return trimmed;
+}
+
+function normalizeString(value: string | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function pickImageFromImagesField(item: ApifyInstagramItem): string | null {
+  if (!Array.isArray(item.images) || item.images.length === 0) {
+    return null;
+  }
+
+  const first = item.images[0];
+  if (typeof first === "string") {
+    return asHttpUrl(first);
+  }
+
+  return asHttpUrl(first.url) ?? asHttpUrl(first.displayUrl) ?? asHttpUrl(first.imageUrl);
+}
+
+function normalizePostType(type: string | undefined): string | null {
+  if (!type) return null;
+  return type.trim().toLowerCase() || null;
+}
+
+function selectPrimaryImageUrl(item: ApifyInstagramItem): string | null {
+  const postType = normalizePostType(item.type);
+  const displayUrl = asHttpUrl(item.displayUrl);
+  const firstImage = pickImageFromImagesField(item);
+
+  if (postType === "video") {
+    return null;
+  }
+
+  if (postType === "image") {
+    return displayUrl;
+  }
+
+  if (postType === "sidecar") {
+    return firstImage ?? displayUrl;
+  }
+
+  return displayUrl ?? firstImage ?? asHttpUrl(item.displayUrlHD) ?? asHttpUrl(item.imageUrl);
+}
+
 function collectImageUrls(item: ApifyInstagramItem): string[] {
   const candidates = new Set<string>();
   const appendCandidate = (candidate: string | undefined) => {
-    if (!candidate) return;
-    const value = candidate.trim();
-    if (value.startsWith("http://") || value.startsWith("https://")) {
+    const value = asHttpUrl(candidate);
+    if (value) {
       candidates.add(value);
     }
   };
@@ -177,13 +233,19 @@ export async function scrapeInstagramAccount(
 
       const postedAt = parsePostDate(item);
       if (postedAt && postedAt.getTime() < cutoff) return null;
+      const primaryImageUrl = selectPrimaryImageUrl(item);
       const imageUrls = collectImageUrls(item);
+      if (primaryImageUrl && !imageUrls.includes(primaryImageUrl)) {
+        imageUrls.unshift(primaryImageUrl);
+      }
 
       return {
         postId,
         caption: item.caption ?? item.captionText ?? null,
-        imageUrl: imageUrls[0] ?? null,
+        imageUrl: primaryImageUrl,
         imageUrls,
+        postType: normalizePostType(item.type),
+        locationName: normalizeString(item.locationName),
         instagramPostUrl,
         postedAt: postedAt ? postedAt.toISOString() : null,
         username: item.ownerUsername ?? item.owner?.username ?? handle,

@@ -117,11 +117,17 @@ export function ScraperDashboard() {
                 <p className="font-medium">@{item.handle}</p>
                 <p>Fetched posts: {item.fetchedPosts}</p>
                 <p>Inserted events: {item.insertedEvents}</p>
+                <p>Inserted events (new): {item.inserted_events}</p>
                 <p>Skipped duplicates: {item.skippedDuplicates}</p>
                 <p>Skipped no image: {item.skippedNoImage}</p>
+                <p>Skipped missing date: {item.skipped_missing_date}</p>
+                <p>Skipped missing venue: {item.skipped_missing_venue}</p>
+                <p>Skipped video: {item.skipped_video}</p>
+                <p>Skipped invalid event: {item.skipped_invalid_event}</p>
                 <p>Failed downloads: {item.failedDownloads}</p>
                 <p>Failed conversions: {item.failedConversions}</p>
                 <p>Failed extractions: {item.failedExtractions}</p>
+                <p>Failed extraction (new): {item.failed_extraction}</p>
                 {item.errors.length > 0 ? (
                   <p className="text-destructive">
                     Errors: {item.errors.join(" | ")}

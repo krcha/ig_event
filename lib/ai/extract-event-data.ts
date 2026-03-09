@@ -6,14 +6,14 @@ const OPENAI_REQUEST_TIMEOUT_MS = 40000;
 const OPENAI_MAX_ATTEMPTS = 2;
 
 const extractedEventSchema = z.object({
-  eventName: z.string().min(1),
-  date: z.string().min(1),
+  eventName: z.string(),
+  date: z.string(),
   time: z.string().nullable().optional(),
-  venue: z.string().min(1),
+  venue: z.string(),
   artists: z.array(z.string()).default([]),
   ticketPrice: z.string().nullable().optional(),
   eventType: z.enum(["club_night", "festival", "concert", "party"]),
-  description: z.string().min(1),
+  description: z.string(),
 });
 
 export type ExtractedEventData = z.infer<typeof extractedEventSchema>;

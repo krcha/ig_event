@@ -1,6 +1,9 @@
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
-import { extractEventDataFromPoster } from "@/lib/ai/extract-event-data";
+import {
+  extractEventDataFromPoster,
+  type ExtractedEventData,
+} from "@/lib/ai/extract-event-data";
 import {
   downloadImage,
   isInstagramOrFbCdnUrl,
@@ -24,11 +27,17 @@ type HandleSummary = {
   handle: string;
   fetchedPosts: number;
   insertedEvents: number;
+  inserted_events: number;
   skippedDuplicates: number;
   skippedNoImage: number;
+  skipped_missing_date: number;
+  skipped_missing_venue: number;
+  skipped_video: number;
+  skipped_invalid_event: number;
   failedDownloads: number;
   failedConversions: number;
   failedExtractions: number;
+  failed_extraction: number;
   errors: string[];
 };
 
@@ -49,6 +58,52 @@ const createEventMutation =
   "events:createEvent" as unknown as FunctionReference<"mutation">;
 const listActiveVenuesQuery =
   "venues:listActiveVenues" as unknown as FunctionReference<"query">;
+const KNOWN_VENUE_BY_HANDLE: Record<string, string> = {
+  "20_44.nightclub": "Klub 20/44",
+  kcgrad: "KC Grad",
+};
+
+type PreparedEvent = {
+  title: string;
+  date: string;
+  time?: string;
+  venue: string;
+  artists: string[];
+  description?: string;
+  imageUrl?: string;
+  instagramPostUrl: string;
+  instagramPostId: string;
+  ticketPrice?: string;
+  eventType: string;
+  status: "pending";
+};
+
+type PrepareEventResult =
+  | {
+      kind: "ok";
+      event: PreparedEvent;
+      usedVenueFallback: boolean;
+      usedDateFallback: boolean;
+    }
+  | {
+      kind: "skip";
+      reason: "missing_date" | "missing_venue" | "invalid_event";
+    };
+
+const MONTHS: Record<string, number> = {
+  jan: 1,
+  feb: 2,
+  mar: 3,
+  apr: 4,
+  may: 5,
+  jun: 6,
+  jul: 7,
+  aug: 8,
+  sep: 9,
+  oct: 10,
+  nov: 11,
+  dec: 12,
+};
 
 function logInfo(event: string, payload: Record<string, unknown>) {
   console.info(
@@ -81,6 +136,158 @@ type ActiveVenueRecord = {
 
 function normalizeHandle(handle: string): string {
   return handle.replace(/^@/, "").trim().toLowerCase();
+}
+
+function normalizeString(value: string | null | undefined): string {
+  return (value ?? "").trim();
+}
+
+function normalizeIsoDate(year: number, month: number, day: number): string | null {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+    return null;
+  }
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    return null;
+  }
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return parsed.toISOString().slice(0, 10);
+}
+
+function inferDateFromCaption(
+  caption: string | null,
+  postedAt: string | null,
+): string | null {
+  const text = normalizeString(caption);
+  if (!text) {
+    return null;
+  }
+
+  const fallbackYear = postedAt
+    ? new Date(postedAt).getUTCFullYear()
+    : new Date().getUTCFullYear();
+
+  const yyyyMmDdMatch = text.match(/\b(20\d{2})[./-](\d{1,2})[./-](\d{1,2})\b/);
+  if (yyyyMmDdMatch) {
+    return normalizeIsoDate(
+      Number.parseInt(yyyyMmDdMatch[1], 10),
+      Number.parseInt(yyyyMmDdMatch[2], 10),
+      Number.parseInt(yyyyMmDdMatch[3], 10),
+    );
+  }
+
+  const ddMmYyyyMatch = text.match(/\b(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?\b/);
+  if (ddMmYyyyMatch) {
+    const day = Number.parseInt(ddMmYyyyMatch[1], 10);
+    const month = Number.parseInt(ddMmYyyyMatch[2], 10);
+    const rawYear = ddMmYyyyMatch[3];
+    const year = rawYear
+      ? rawYear.length === 2
+        ? 2000 + Number.parseInt(rawYear, 10)
+        : Number.parseInt(rawYear, 10)
+      : fallbackYear;
+    return normalizeIsoDate(year, month, day);
+  }
+
+  const dayMonthNameMatch = text.match(
+    /\b(\d{1,2})(?:st|nd|rd|th)?\s+([a-zA-Z]{3,9})(?:\s*,?\s*(\d{4}))?\b/,
+  );
+  if (dayMonthNameMatch) {
+    const day = Number.parseInt(dayMonthNameMatch[1], 10);
+    const month = MONTHS[dayMonthNameMatch[2].slice(0, 3).toLowerCase()];
+    const year = dayMonthNameMatch[3]
+      ? Number.parseInt(dayMonthNameMatch[3], 10)
+      : fallbackYear;
+    if (month) {
+      return normalizeIsoDate(year, month, day);
+    }
+  }
+
+  const monthNameDayMatch = text.match(
+    /\b([a-zA-Z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?\b/,
+  );
+  if (monthNameDayMatch) {
+    const month = MONTHS[monthNameDayMatch[1].slice(0, 3).toLowerCase()];
+    const day = Number.parseInt(monthNameDayMatch[2], 10);
+    const year = monthNameDayMatch[3]
+      ? Number.parseInt(monthNameDayMatch[3], 10)
+      : fallbackYear;
+    if (month) {
+      return normalizeIsoDate(year, month, day);
+    }
+  }
+
+  return null;
+}
+
+function prepareEventForInsert(
+  post: InstagramScrapedPost,
+  extracted: ExtractedEventData,
+  selectedImageUrl: string,
+): PrepareEventResult {
+  const title = normalizeString(extracted.eventName);
+  const eventType = normalizeString(extracted.eventType);
+  const description = normalizeString(extracted.description);
+  const time = normalizeString(extracted.time ?? undefined);
+  const ticketPrice = normalizeString(extracted.ticketPrice ?? undefined);
+
+  let venue = normalizeString(extracted.venue);
+  let usedVenueFallback = false;
+  if (!venue) {
+    venue = normalizeString(post.locationName);
+    usedVenueFallback = venue.length > 0;
+  }
+  if (!venue) {
+    venue = KNOWN_VENUE_BY_HANDLE[normalizeHandle(post.username)] ?? "";
+    usedVenueFallback = venue.length > 0;
+  }
+  if (!venue) {
+    return { kind: "skip", reason: "missing_venue" };
+  }
+
+  let date = normalizeString(extracted.date);
+  let usedDateFallback = false;
+  if (!date) {
+    date = inferDateFromCaption(post.caption, post.postedAt) ?? "";
+    usedDateFallback = date.length > 0;
+  }
+  if (!date) {
+    return { kind: "skip", reason: "missing_date" };
+  }
+
+  if (!title || !eventType) {
+    return { kind: "skip", reason: "invalid_event" };
+  }
+
+  const artists = extracted.artists
+    .map((artist) => normalizeString(artist))
+    .filter((artist) => artist.length > 0);
+
+  return {
+    kind: "ok",
+    usedVenueFallback,
+    usedDateFallback,
+    event: {
+      title,
+      date,
+      ...(time ? { time } : {}),
+      venue,
+      artists,
+      ...(description ? { description } : {}),
+      imageUrl: selectedImageUrl,
+      instagramPostUrl: post.instagramPostUrl,
+      instagramPostId: post.postId,
+      ...(ticketPrice ? { ticketPrice } : {}),
+      eventType,
+      status: "pending",
+    },
+  };
 }
 
 export async function getActiveVenueHandles(): Promise<string[]> {
@@ -134,36 +341,6 @@ async function isDuplicatePost(
   return Boolean(existing);
 }
 
-async function persistExtractedEvent(
-  client: ConvexHttpClient,
-  post: InstagramScrapedPost,
-  sourceImageUrl: string,
-  imageDataUrl: string,
-) {
-  const extracted = await extractEventDataFromPoster({
-    imageDataUrl,
-    caption: post.caption,
-    instagramPostUrl: post.instagramPostUrl,
-    sourceImageUrl,
-    instagramHandle: post.username,
-  });
-
-  await client.mutation(createEventMutation, {
-    title: extracted.eventName,
-    date: extracted.date,
-    time: extracted.time ?? undefined,
-    venue: extracted.venue,
-    artists: extracted.artists,
-    description: extracted.description,
-    imageUrl: post.imageUrl ?? undefined,
-    instagramPostUrl: post.instagramPostUrl,
-    instagramPostId: post.postId,
-    ticketPrice: extracted.ticketPrice ?? undefined,
-    eventType: extracted.eventType,
-    status: "pending",
-  });
-}
-
 export async function runInstagramIngestion(
   options: RunInstagramIngestionOptions,
 ): Promise<IngestionSummary> {
@@ -176,11 +353,17 @@ export async function runInstagramIngestion(
       handle,
       fetchedPosts: 0,
       insertedEvents: 0,
+      inserted_events: 0,
       skippedDuplicates: 0,
       skippedNoImage: 0,
+      skipped_missing_date: 0,
+      skipped_missing_venue: 0,
+      skipped_video: 0,
+      skipped_invalid_event: 0,
       failedDownloads: 0,
       failedConversions: 0,
       failedExtractions: 0,
+      failed_extraction: 0,
       errors: [],
     };
     handleSummaries.push(summary);
@@ -201,6 +384,16 @@ export async function runInstagramIngestion(
     }
 
     for (const post of posts) {
+      if (post.postType === "video") {
+        summary.skipped_video += 1;
+        logInfo("ingestion.post.skipped_video", {
+          handle,
+          postId: post.postId,
+          postUrl: post.instagramPostUrl,
+        });
+        continue;
+      }
+
       const bestImageUrl = resolveBestImageUrl(post);
       if (!bestImageUrl) {
         summary.skippedNoImage += 1;
@@ -296,16 +489,50 @@ export async function runInstagramIngestion(
       }
 
       try {
-        await persistExtractedEvent(client, post, bestImageUrl, imageDataUrl);
+        const extracted = await extractEventDataFromPoster({
+          imageDataUrl,
+          caption: post.caption,
+          instagramPostUrl: post.instagramPostUrl,
+          sourceImageUrl: bestImageUrl,
+          instagramHandle: post.username,
+        });
+        const prepared = prepareEventForInsert(post, extracted, bestImageUrl);
+        if (prepared.kind === "skip") {
+          if (prepared.reason === "missing_date") {
+            summary.skipped_missing_date += 1;
+          } else if (prepared.reason === "missing_venue") {
+            summary.skipped_missing_venue += 1;
+          } else {
+            summary.skipped_invalid_event += 1;
+          }
+
+          logInfo("ingestion.event.skipped", {
+            handle,
+            postId: post.postId,
+            postUrl: post.instagramPostUrl,
+            selectedImageUrl: bestImageUrl,
+            reason: prepared.reason,
+            extractedDate: extracted.date,
+            extractedVenue: extracted.venue,
+            locationName: post.locationName,
+          });
+          continue;
+        }
+
+        await client.mutation(createEventMutation, prepared.event);
         summary.insertedEvents += 1;
-        logInfo("ingestion.openai.extraction.success", {
+        summary.inserted_events += 1;
+        logInfo("ingestion.event.inserted", {
           handle,
           postId: post.postId,
           postUrl: post.instagramPostUrl,
           selectedImageUrl: bestImageUrl,
+          usedVenueFallback: prepared.usedVenueFallback,
+          usedDateFallback: prepared.usedDateFallback,
         });
       } catch (error) {
         summary.failedExtractions += 1;
+        summary.failed_extraction += 1;
         summary.errors.push(
           error instanceof Error ? error.message : "Unknown extraction error.",
         );
