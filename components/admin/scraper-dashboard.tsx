@@ -6,12 +6,16 @@ import type {
   IngestionSummary,
 } from "@/lib/pipeline/run-instagram-ingestion";
 
+type ScrapeSource =
+  | "manual"
+  | "active_venues"
+  | "cron_active_venues"
+  | "repair_active_venues"
+  | "manual_apify_history"
+  | "active_venues_apify_history";
+
 type ScrapeSummaryPayload = {
-  source:
-    | "manual"
-    | "active_venues"
-    | "cron_active_venues"
-    | "repair_active_venues";
+  source: ScrapeSource;
   mode?: IngestionRunMode;
   handles: string[];
   summary: IngestionSummary;
@@ -25,7 +29,7 @@ type ScrapeStartPayload = {
   jobId?: string;
   status?: ScrapeJobStatus;
   mode?: "repair" | IngestionRunMode;
-  source?: "manual" | "repair_active_venues";
+  source?: ScrapeSource;
   handles?: string[];
   statusUrl?: string;
   error?: string;
@@ -34,7 +38,7 @@ type ScrapeStartPayload = {
 type ScrapeJobPayload = {
   jobId: string;
   status: ScrapeJobStatus;
-  source: "manual" | "repair_active_venues";
+  source: ScrapeSource;
   mode?: IngestionRunMode;
   handles: string[];
   summary: IngestionSummary;
@@ -91,6 +95,25 @@ function buildSummaryRequestBody(
     ...(resultsLimit ? { resultsLimit } : {}),
     ...(daysBack ? { daysBack } : {}),
   };
+}
+
+function getSourceLabel(source: ScrapeSource | undefined): string {
+  switch (source) {
+    case "manual":
+      return "Pasted handles";
+    case "active_venues":
+      return "All active venues";
+    case "cron_active_venues":
+      return "Scheduled active venues";
+    case "repair_active_venues":
+      return "Active venues repair";
+    case "manual_apify_history":
+      return "Recent Apify runs for pasted handles";
+    case "active_venues_apify_history":
+      return "Recent Apify runs for active venues";
+    default:
+      return "Idle";
+  }
 }
 
 export function ScraperDashboard() {
@@ -184,7 +207,7 @@ export function ScraperDashboard() {
     }
   }
 
-  async function runManualScraper(mode: IngestionRunMode) {
+  async function runQueuedScraper(endpoint: string, body: Record<string, unknown>) {
     setIsLoading(true);
     setError(null);
     setSummaryPayload(null);
@@ -192,12 +215,10 @@ export function ScraperDashboard() {
     setActiveJobStatus(null);
 
     try {
-      const response = await fetch("/api/admin/scrape", {
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(
-          buildSummaryRequestBody(mode, resultsLimit, daysBack, handles),
-        ),
+        body: JSON.stringify(body),
       });
 
       const payload = (await response.json()) as ScrapeStartPayload;
@@ -220,41 +241,28 @@ export function ScraperDashboard() {
     }
   }
 
+  function runManualScraper(mode: IngestionRunMode) {
+    void runQueuedScraper(
+      "/api/admin/scrape",
+      buildSummaryRequestBody(mode, resultsLimit, daysBack, handles),
+    );
+  }
+
   async function runRepairScraper() {
-    setIsLoading(true);
-    setError(null);
-    setSummaryPayload(null);
-    setActiveJobId(null);
-    setActiveJobStatus(null);
+    void runQueuedScraper("/api/admin/scrape/repair", {
+      ...(resultsLimit ? { resultsLimit } : {}),
+      ...(daysBack ? { daysBack } : {}),
+    });
+  }
 
-    try {
-      const response = await fetch("/api/admin/scrape/repair", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          ...(resultsLimit ? { resultsLimit } : {}),
-          ...(daysBack ? { daysBack } : {}),
-        }),
-      });
+  function runManualApifyHistoryImport() {
+    void runQueuedScraper("/api/admin/scrape/history", {
+      handles,
+    });
+  }
 
-      const payload = (await response.json()) as ScrapeStartPayload;
-      if (!response.ok) {
-        throw new Error(payload.error ?? "Failed to start repair job.");
-      }
-      if (!payload.started || !payload.jobId || !payload.statusUrl) {
-        throw new Error("Invalid repair job response.");
-      }
-
-      setActiveJobId(payload.jobId);
-      setActiveJobStatus(payload.status ?? "queued");
-      await pollScrapeJob(payload.statusUrl);
-    } catch (caughtError) {
-      setError(
-        caughtError instanceof Error ? caughtError.message : "Unknown repair error.",
-      );
-    } finally {
-      setIsLoading(false);
-    }
+  function runActiveVenueApifyHistoryImport() {
+    void runQueuedScraper("/api/admin/scrape/history/venues", {});
   }
 
   function runActiveVenueScraper(mode: IngestionRunMode) {
@@ -268,6 +276,7 @@ export function ScraperDashboard() {
     summaryPayload?.mode === "saved_posts"
       ? "Saved posts to draft events"
       : "Fresh Apify scrape to draft events";
+  const sourceLabel = getSourceLabel(summaryPayload?.source);
 
   const aggregateMetrics = useMemo(() => {
     if (!summaryPayload) {
@@ -337,8 +346,8 @@ export function ScraperDashboard() {
           <div>
             <h2 className="text-lg font-semibold">Run ingestion</h2>
             <p className="text-sm text-muted-foreground">
-              Choose the account set, then decide whether to fetch fresh Apify posts or reuse
-              saved ones.
+              Choose the account set, then decide whether to fetch fresh Apify posts, reuse saved
+              ones, or import recent Apify history into Convex first.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -400,6 +409,11 @@ export function ScraperDashboard() {
                 Fresh scrape fetches posts from Apify and saves them. Saved posts skips Apify and
                 reruns AI extraction on cached posts.
               </p>
+              <p className="mt-2">
+                Recent Apify history imports posts from the last 100 successful Apify runs into
+                Convex, then processes them as saved posts. This action ignores Results limit and
+                Days back.
+              </p>
             </div>
           </div>
         </div>
@@ -444,6 +458,23 @@ export function ScraperDashboard() {
               <p className="mt-2 text-sm text-muted-foreground">
                 Skips Apify and reruns AI extraction on posts that were already saved for these
                 handles.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-border bg-card/90 p-4">
+              <button
+                className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isLoading || handles.length === 0}
+                onClick={() => {
+                  runManualApifyHistoryImport();
+                }}
+                type="button"
+              >
+                {isLoading ? "Running..." : "Import recent Apify runs and create draft events"}
+              </button>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Pulls matching posts from the last 100 successful Apify runs into Convex first,
+                then reruns AI extraction without scraping again. Ignores Results limit and Days
+                back.
               </p>
             </div>
           </div>
@@ -494,6 +525,22 @@ export function ScraperDashboard() {
                 className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={isLoading}
                 onClick={() => {
+                  runActiveVenueApifyHistoryImport();
+                }}
+                type="button"
+              >
+                {isLoading ? "Running..." : "Import recent Apify runs for all active venues"}
+              </button>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Pulls posts from the last 100 successful Apify runs into Convex for every active
+                venue, then processes them as saved posts. Ignores Results limit and Days back.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-border bg-card/90 p-4">
+              <button
+                className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isLoading}
+                onClick={() => {
                   void runRepairScraper();
                 }}
                 type="button"
@@ -526,7 +573,7 @@ export function ScraperDashboard() {
             <div>
               <h2 className="text-lg font-semibold">Latest run</h2>
               <p className="text-sm text-muted-foreground">
-                {summaryPayload.source} · {modeLabel}
+                {sourceLabel} · {modeLabel}
               </p>
             </div>
             <input

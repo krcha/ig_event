@@ -4,7 +4,10 @@ const DEFAULT_APIFY_ACTOR_ID = "apify/instagram-post-scraper";
 const DEFAULT_RESULTS_LIMIT = 5;
 const MAX_TOP_LEVEL_POSTS_PER_ACCOUNT = 5;
 const DEFAULT_DAYS_BACK = 5;
+const DEFAULT_APIFY_HISTORY_RUNS_LIMIT = 100;
+const MAX_APIFY_HISTORY_RUNS_LIMIT = 200;
 const DEFAULT_SKIP_PINNED_POSTS = true;
+const APIFY_API_BASE_URL = "https://api.apify.com/v2";
 const INSTAGRAM_HOSTNAMES = new Set(["instagram.com", "www.instagram.com"]);
 const INSTAGRAM_POST_PATH_PREFIXES = new Set(["p", "reel", "reels", "tv"]);
 const LEGACY_APIFY_ACTOR_IDS = new Set(["apify/instagram-scraper", "apify~instagram-scraper"]);
@@ -25,6 +28,11 @@ type ScrapeInstagramAccountOptions = {
   handle: string;
   resultsLimit?: number;
   daysBack?: number;
+};
+
+type LoadRecentApifyRunPostsOptions = {
+  handles?: string[];
+  runsLimit?: number;
 };
 
 type ApifyInstagramImage =
@@ -83,6 +91,24 @@ type ApifyInstagramItem = {
   location?: { name?: string };
 };
 
+type ApifyCollectionResponse<T> = {
+  data?: {
+    items?: T[];
+  };
+};
+
+type ApifyActorRun = {
+  id?: string;
+  defaultDatasetId?: string;
+  status?: string;
+};
+
+export type RecentApifyRunPostsResult = {
+  runsScanned: number;
+  importedPosts: number;
+  importedPostsByHandle: Record<string, InstagramScrapedPost[]>;
+};
+
 function normalizeHandle(handle: string): string {
   const trimmed = handle.trim();
 
@@ -118,6 +144,17 @@ function normalizeResultsLimit(value: number | undefined): number {
     return DEFAULT_RESULTS_LIMIT;
   }
   return Math.min(rounded, MAX_TOP_LEVEL_POSTS_PER_ACCOUNT);
+}
+
+function normalizeRunsLimit(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_APIFY_HISTORY_RUNS_LIMIT;
+  }
+  const rounded = Math.trunc(value as number);
+  if (rounded < 1) {
+    return DEFAULT_APIFY_HISTORY_RUNS_LIMIT;
+  }
+  return Math.min(rounded, MAX_APIFY_HISTORY_RUNS_LIMIT);
 }
 
 function parsePostedAtTimestamp(value: string | null): number {
@@ -169,6 +206,13 @@ function parsePostDate(item: ApifyInstagramItem): Date | null {
   return null;
 }
 
+function getApifyHeaders(apiToken: string): HeadersInit {
+  return {
+    accept: "application/json",
+    authorization: `Bearer ${apiToken}`,
+  };
+}
+
 function buildPostUrl(item: ApifyInstagramItem): string | null {
   if (item.url) return item.url;
   if (item.shortcode) return `https://www.instagram.com/p/${item.shortcode}/`;
@@ -208,6 +252,16 @@ function normalizeString(value: string | undefined): string | null {
   if (!value) return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function readUsername(item: ApifyInstagramItem, fallbackUsername: string): string | null {
+  return (
+    normalizeString(item.ownerUsername) ??
+    normalizeString(item.owner_username) ??
+    normalizeString(item.username) ??
+    normalizeString(item.owner?.username) ??
+    normalizeString(fallbackUsername)
+  );
 }
 
 function buildProfileUrl(handle: string): string {
@@ -421,6 +475,181 @@ function collectImageUrls(item: ApifyInstagramItem): string[] {
   return [...candidates];
 }
 
+function mapApifyItemToInstagramPost(
+  item: ApifyInstagramItem,
+  fallbackUsername: string,
+): InstagramScrapedPost | null {
+  const postId = buildPostId(item);
+  const instagramPostUrl = buildPostUrl(item);
+  const username = readUsername(item, fallbackUsername);
+  if (!postId || !instagramPostUrl || !username) {
+    return null;
+  }
+
+  const postedAt = parsePostDate(item);
+  const primaryImageUrl = selectPrimaryImageUrl(item);
+  const imageUrls = collectImageUrls(item);
+  if (primaryImageUrl && !imageUrls.includes(primaryImageUrl)) {
+    imageUrls.unshift(primaryImageUrl);
+  }
+
+  return {
+    postId,
+    caption: readCaption(item),
+    imageUrl: primaryImageUrl,
+    imageUrls,
+    postType: resolvePostType(item),
+    locationName:
+      normalizeString(item.locationName) ??
+      normalizeString(item.location_name) ??
+      normalizeString(item.location?.name),
+    instagramPostUrl,
+    postedAt: postedAt ? postedAt.toISOString() : null,
+    username,
+  };
+}
+
+async function listRecentSucceededActorRuns(
+  actorIdForPath: string,
+  apiToken: string,
+  runsLimit: number,
+): Promise<ApifyActorRun[]> {
+  const query = new URLSearchParams({
+    desc: "1",
+    limit: String(runsLimit),
+    status: "SUCCEEDED",
+  });
+  const endpoint = `${APIFY_API_BASE_URL}/acts/${encodeURIComponent(actorIdForPath)}/runs?${query.toString()}`;
+  const response = await fetch(endpoint, {
+    headers: getApifyHeaders(apiToken),
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(
+      `Failed to load recent Apify runs: ${response.status} ${response.statusText} - ${errorBody}`,
+    );
+  }
+
+  const payload = (await response.json()) as ApifyCollectionResponse<ApifyActorRun>;
+  return Array.isArray(payload.data?.items) ? payload.data.items : [];
+}
+
+async function loadDatasetItemsForRun(
+  datasetId: string,
+  apiToken: string,
+): Promise<ApifyInstagramItem[]> {
+  const query = new URLSearchParams({
+    clean: "true",
+    format: "json",
+  });
+  const endpoint = `${APIFY_API_BASE_URL}/datasets/${encodeURIComponent(datasetId)}/items?${query.toString()}`;
+  const response = await fetch(endpoint, {
+    headers: getApifyHeaders(apiToken),
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(
+      `Failed to load Apify dataset ${datasetId}: ${response.status} ${response.statusText} - ${errorBody}`,
+    );
+  }
+
+  return (await response.json()) as ApifyInstagramItem[];
+}
+
+export async function loadRecentApifyRunPosts(
+  options: LoadRecentApifyRunPostsOptions,
+): Promise<RecentApifyRunPostsResult> {
+  const apiToken = getRequiredEnv("APIFY_API_TOKEN");
+  const actorId = normalizeConfiguredApifyActorId(
+    process.env.APIFY_INSTAGRAM_ACTOR_ID ?? DEFAULT_APIFY_ACTOR_ID,
+  );
+  const actorIdForPath = normalizeApifyActorIdForPath(actorId);
+  const runsLimit = normalizeRunsLimit(options.runsLimit);
+  const handleFilter = new Set(
+    (options.handles ?? []).map((handle) => normalizeHandle(handle)).filter(Boolean),
+  );
+  const runs = await listRecentSucceededActorRuns(actorIdForPath, apiToken, runsLimit);
+  const postsByHandle = new Map<string, Map<string, InstagramScrapedPost>>();
+
+  for (let index = 0; index < runs.length; index += 5) {
+    const runBatch = runs.slice(index, index + 5);
+    const datasetItemsBatch = await Promise.all(
+      runBatch.map(async (run) => {
+        if (!run.defaultDatasetId) {
+          return [];
+        }
+
+        try {
+          return await loadDatasetItemsForRun(run.defaultDatasetId, apiToken);
+        } catch (error) {
+          console.error(
+            JSON.stringify({
+              level: "error",
+              event: "apify.instagram.history.dataset_failed",
+              runId: run.id ?? null,
+              datasetId: run.defaultDatasetId,
+              error: error instanceof Error ? error.message : "Unknown Apify dataset error.",
+            }),
+          );
+          return [];
+        }
+      }),
+    );
+
+    for (const datasetItems of datasetItemsBatch) {
+      for (const item of datasetItems) {
+        const post = mapApifyItemToInstagramPost(item, "");
+        if (!post) {
+          continue;
+        }
+
+        const handle = normalizeHandle(post.username);
+        if (!handle) {
+          continue;
+        }
+        if (handleFilter.size > 0 && !handleFilter.has(handle)) {
+          continue;
+        }
+
+        const existingPosts = postsByHandle.get(handle) ?? new Map<string, InstagramScrapedPost>();
+        const uniqueKey = `${post.postId}::${post.instagramPostUrl}`;
+        if (!existingPosts.has(uniqueKey)) {
+          existingPosts.set(uniqueKey, {
+            ...post,
+            username: handle,
+          });
+        }
+        postsByHandle.set(handle, existingPosts);
+      }
+    }
+  }
+
+  const importedPostsByHandle: Record<string, InstagramScrapedPost[]> = {};
+  let importedPosts = 0;
+  const outputHandles =
+    handleFilter.size > 0 ? [...handleFilter] : [...postsByHandle.keys()];
+
+  for (const handle of outputHandles) {
+    const posts = [...(postsByHandle.get(handle)?.values() ?? [])];
+    posts.sort(
+      (left, right) =>
+        parsePostedAtTimestamp(right.postedAt) - parsePostedAtTimestamp(left.postedAt),
+    );
+    importedPosts += posts.length;
+    importedPostsByHandle[handle] = posts;
+  }
+
+  return {
+    runsScanned: runs.length,
+    importedPosts,
+    importedPostsByHandle,
+  };
+}
+
 export async function scrapeInstagramAccount(
   options: ScrapeInstagramAccountOptions,
 ): Promise<InstagramScrapedPost[]> {
@@ -464,6 +693,7 @@ export async function scrapeInstagramAccount(
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
+      ...getApifyHeaders(apiToken),
       "content-type": "application/json",
     },
     body: JSON.stringify(input),
@@ -479,40 +709,13 @@ export async function scrapeInstagramAccount(
 
   const rawItems = (await response.json()) as ApifyInstagramItem[];
   const scrapedPosts = rawItems
-    .map<InstagramScrapedPost | null>((item) => {
-      const postId = buildPostId(item);
-      const instagramPostUrl = buildPostUrl(item);
-      if (!postId || !instagramPostUrl) return null;
-
-      const postedAt = parsePostDate(item);
-      if (postedAt && postedAt.getTime() < cutoff) return null;
-      const primaryImageUrl = selectPrimaryImageUrl(item);
-      const imageUrls = collectImageUrls(item);
-      if (primaryImageUrl && !imageUrls.includes(primaryImageUrl)) {
-        imageUrls.unshift(primaryImageUrl);
+    .map((item) => mapApifyItemToInstagramPost(item, target.fallbackUsername || target.label))
+    .filter((item): item is InstagramScrapedPost => {
+      if (!item) {
+        return false;
       }
-
-      return {
-        postId,
-        caption: readCaption(item),
-        imageUrl: primaryImageUrl,
-        imageUrls,
-        postType: resolvePostType(item),
-        locationName:
-          normalizeString(item.locationName) ??
-          normalizeString(item.location_name) ??
-          normalizeString(item.location?.name),
-        instagramPostUrl,
-        postedAt: postedAt ? postedAt.toISOString() : null,
-        username:
-          normalizeString(item.ownerUsername) ??
-          normalizeString(item.owner_username) ??
-          normalizeString(item.username) ??
-          normalizeString(item.owner?.username) ??
-          (target.fallbackUsername || target.label),
-      };
-    })
-    .filter((item): item is InstagramScrapedPost => item !== null);
+      return !item.postedAt || parsePostedAtTimestamp(item.postedAt) >= cutoff;
+    });
 
   const uniqueTopLevelPosts = new Map<string, InstagramScrapedPost>();
   for (const post of scrapedPosts) {

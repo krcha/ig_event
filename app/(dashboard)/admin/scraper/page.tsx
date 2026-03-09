@@ -5,7 +5,7 @@ export default function AdminScraperPage() {
   return (
     <AdminPageShell
       active="scraper"
-      description="Run fresh scrapes, reprocess saved Apify posts, and inspect ingestion health."
+      description="Run fresh scrapes, import recent Apify history, reprocess saved posts, and inspect ingestion health."
       title="Scraper Operations"
     >
       <ScraperDashboard />

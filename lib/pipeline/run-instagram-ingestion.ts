@@ -12,6 +12,7 @@ import {
   toDataUrl,
 } from "@/lib/ai/prepare-image-for-openai";
 import {
+  loadRecentApifyRunPosts,
   scrapeInstagramAccount,
   type InstagramScrapedPost,
 } from "@/lib/scraper/instagram-scraper";
@@ -88,6 +89,13 @@ export type IngestionBatchStepResult = {
 export type ActiveVenueIngestionResult = {
   venueHandles: string[];
   summary: IngestionSummary;
+};
+
+export type RecentApifyImportSummary = {
+  handles: string[];
+  runsScanned: number;
+  importedPosts: number;
+  handlesWithImportedPosts: number;
 };
 
 const getByInstagramPostIdQuery =
@@ -2236,6 +2244,45 @@ export async function getActiveVenueHandles(): Promise<string[]> {
   }
 
   return [...uniqueHandles];
+}
+
+export async function importRecentApifyRunPostsToSavedPosts(options: {
+  handles: string[];
+  runsLimit?: number;
+}): Promise<RecentApifyImportSummary> {
+  const normalizedHandles = [...new Set(options.handles.map((handle) => normalizeHandle(handle)).filter(Boolean))];
+  if (normalizedHandles.length === 0) {
+    return {
+      handles: [],
+      runsScanned: 0,
+      importedPosts: 0,
+      handlesWithImportedPosts: 0,
+    };
+  }
+
+  const client = getConvexClient();
+  const importResult = await loadRecentApifyRunPosts({
+    handles: normalizedHandles,
+    runsLimit: options.runsLimit,
+  });
+
+  let handlesWithImportedPosts = 0;
+  for (const handle of normalizedHandles) {
+    const posts = importResult.importedPostsByHandle[handle] ?? [];
+    if (posts.length === 0) {
+      continue;
+    }
+
+    handlesWithImportedPosts += 1;
+    await persistScrapedPostsForHandle(client, handle, posts);
+  }
+
+  return {
+    handles: normalizedHandles,
+    runsScanned: importResult.runsScanned,
+    importedPosts: importResult.importedPosts,
+    handlesWithImportedPosts,
+  };
 }
 
 export async function runActiveVenueIngestion(options?: {
