@@ -7,6 +7,7 @@ const DEFAULT_DAYS_BACK = 5;
 const DEFAULT_SKIP_PINNED_POSTS = true;
 const INSTAGRAM_HOSTNAMES = new Set(["instagram.com", "www.instagram.com"]);
 const INSTAGRAM_POST_PATH_PREFIXES = new Set(["p", "reel", "reels", "tv"]);
+const LEGACY_APIFY_ACTOR_IDS = new Set(["apify/instagram-scraper", "apify~instagram-scraper"]);
 
 export type InstagramScrapedPost = {
   postId: string;
@@ -213,8 +214,14 @@ function buildProfileUrl(handle: string): string {
   return `https://www.instagram.com/${handle}/`;
 }
 
-function normalizeApifyActorIdForPath(actorId: string): string {
+function normalizeConfiguredApifyActorId(actorId: string): string {
   const trimmed = actorId.trim();
+  return LEGACY_APIFY_ACTOR_IDS.has(trimmed) ? DEFAULT_APIFY_ACTOR_ID : trimmed;
+}
+
+function normalizeApifyActorIdForPath(actorId: string): string {
+  const normalizedActorId = normalizeConfiguredApifyActorId(actorId);
+  const trimmed = normalizedActorId.trim();
   if (trimmed.includes("~") || !trimmed.includes("/")) {
     return trimmed;
   }
@@ -418,7 +425,9 @@ export async function scrapeInstagramAccount(
   options: ScrapeInstagramAccountOptions,
 ): Promise<InstagramScrapedPost[]> {
   const apiToken = getRequiredEnv("APIFY_API_TOKEN");
-  const actorId = process.env.APIFY_INSTAGRAM_ACTOR_ID ?? DEFAULT_APIFY_ACTOR_ID;
+  const actorId = normalizeConfiguredApifyActorId(
+    process.env.APIFY_INSTAGRAM_ACTOR_ID ?? DEFAULT_APIFY_ACTOR_ID,
+  );
   const actorIdForPath = normalizeApifyActorIdForPath(actorId);
   const target = parseInstagramActorTarget(options.handle);
   const resultsLimit = normalizeResultsLimit(options.resultsLimit);
@@ -444,6 +453,7 @@ export async function scrapeInstagramAccount(
       level: "info",
       event: "apify.instagram.request",
       handles: [target.label],
+      actorId,
       username: input.username,
       resultsLimit: input.resultsLimit,
       onlyPostsNewerThan: input.onlyPostsNewerThan,
