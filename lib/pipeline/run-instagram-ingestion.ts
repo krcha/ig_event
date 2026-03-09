@@ -88,6 +88,10 @@ const getByInstagramPostIdQuery =
   "events:getByInstagramPostId" as unknown as FunctionReference<"query">;
 const getByInstagramPostUrlQuery =
   "events:getByInstagramPostUrl" as unknown as FunctionReference<"query">;
+const listByInstagramPostIdQuery =
+  "events:listByInstagramPostId" as unknown as FunctionReference<"query">;
+const listByInstagramPostUrlQuery =
+  "events:listByInstagramPostUrl" as unknown as FunctionReference<"query">;
 const createEventMutation =
   "events:createEvent" as unknown as FunctionReference<"mutation">;
 const updateEventMutation =
@@ -216,12 +220,6 @@ type DuplicateUpdateLogEvent =
   | "duplicate_updated_bad_venue"
   | "duplicate_updated_low_confidence"
   | "duplicate_updated_bad_data";
-
-type DuplicateUpdateContext = {
-  existing: ExistingSourceMatch;
-  quality: ExistingEventQuality;
-  updateReasonEvent: DuplicateUpdateLogEvent;
-};
 
 type IngestionStep =
   | "fetch_posts"
@@ -817,6 +815,64 @@ function normalizeEventDate(
   };
 }
 
+function parseIsoDateUtc(value: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return parsed;
+}
+
+function toIsoDateUtc(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function expandNormalizedDateRange(
+  rawModelDate: string,
+  postedAt: string | null,
+): string[] | null {
+  const normalizedRawDate = normalizeString(rawModelDate);
+  if (!normalizedRawDate) {
+    return null;
+  }
+
+  const hasRangeHint =
+    /\b(to|through|thru|do)\b/i.test(normalizedRawDate) ||
+    /[–—]/.test(normalizedRawDate) ||
+    /\s-\s/.test(normalizedRawDate);
+  if (!hasRangeHint) {
+    return null;
+  }
+
+  const postDate = parsePostedAt(postedAt);
+  const candidates = collectDateCandidates(normalizedRawDate, "model", postDate);
+  const uniqueDates = [...new Set(candidates.map((candidate) => candidate.isoDate))].sort();
+  if (uniqueDates.length < 2) {
+    return null;
+  }
+
+  const start = parseIsoDateUtc(uniqueDates[0]);
+  const end = parseIsoDateUtc(uniqueDates[uniqueDates.length - 1]);
+  if (!start || !end) {
+    return null;
+  }
+
+  const distanceDays = Math.round((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000));
+  if (distanceDays < 1 || distanceDays > 14) {
+    return null;
+  }
+
+  const dates: string[] = [];
+  for (let offset = 0; offset <= distanceDays; offset += 1) {
+    dates.push(toIsoDateUtc(new Date(start.getTime() + offset * 24 * 60 * 60 * 1000)));
+  }
+
+  return dates;
+}
+
 function isLowConfidenceVenue(value: string): boolean {
   const normalized = value.toLowerCase().replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -1093,11 +1149,12 @@ function buildDuplicateUpdatePatch(
   };
 }
 
-async function findExistingEventBySourceIdentity(
+async function listExistingEventsBySourceIdentity(
   client: ConvexHttpClient,
   post: InstagramScrapedPost,
-): Promise<ExistingSourceMatch | null> {
+): Promise<ExistingSourceMatch[]> {
   const postContext = getPostContext(normalizeHandle(post.username), post);
+  const matchesById = new Map<string, ExistingSourceMatch>();
   const identityCandidates = new Set<string>();
   if (post.postId) {
     identityCandidates.add(post.postId);
@@ -1108,68 +1165,120 @@ async function findExistingEventBySourceIdentity(
   }
 
   for (const candidate of identityCandidates) {
-    let existingById: ExistingEventRecord | null = null;
     try {
-      existingById = (await client.query(getByInstagramPostIdQuery, {
+      const existingById = (await client.query(listByInstagramPostIdQuery, {
         instagramPostId: candidate,
-      })) as ExistingEventRecord | null;
+      })) as ExistingEventRecord[];
+      for (const existingEvent of existingById) {
+        matchesById.set(existingEvent._id, {
+          existingEvent,
+          matchedBy: candidate === post.postId ? "post_id" : "shortcode",
+          matchedValue: candidate,
+        });
+      }
     } catch (error) {
       if (isConvexSchemaMismatchError(error)) {
-        logError("ingestion.duplicate_lookup.schema_mismatch", {
-          step: "duplicate_lookup",
-          lookup: "events:getByInstagramPostId",
-          ...postContext,
-          error: getErrorMessage(error),
-        });
-        return null;
+        try {
+          const existingById = (await client.query(getByInstagramPostIdQuery, {
+            instagramPostId: candidate,
+          })) as ExistingEventRecord | null;
+          if (existingById) {
+            matchesById.set(existingById._id, {
+              existingEvent: existingById,
+              matchedBy: candidate === post.postId ? "post_id" : "shortcode",
+              matchedValue: candidate,
+            });
+          }
+        } catch (fallbackError) {
+          logError("ingestion.duplicate_lookup.schema_mismatch", {
+            step: "duplicate_lookup",
+            lookup: "events:listByInstagramPostId",
+            ...postContext,
+            error: getErrorMessage(fallbackError),
+          });
+        }
+      } else {
+        throw error;
       }
-      throw error;
-    }
-    if (existingById) {
-      return {
-        existingEvent: existingById,
-        matchedBy: candidate === post.postId ? "post_id" : "shortcode",
-        matchedValue: candidate,
-      };
     }
   }
 
   const postUrl = normalizeString(post.instagramPostUrl);
   if (postUrl) {
-    let existingByUrl: ExistingEventRecord | null = null;
     try {
-      existingByUrl = (await client.query(getByInstagramPostUrlQuery, {
+      const existingByUrl = (await client.query(listByInstagramPostUrlQuery, {
         instagramPostUrl: postUrl,
-      })) as ExistingEventRecord | null;
+      })) as ExistingEventRecord[];
+      for (const existingEvent of existingByUrl) {
+        matchesById.set(existingEvent._id, {
+          existingEvent,
+          matchedBy: "post_url",
+          matchedValue: postUrl,
+        });
+      }
     } catch (error) {
       if (isConvexSchemaMismatchError(error)) {
-        logError("ingestion.duplicate_lookup.schema_mismatch", {
-          step: "duplicate_lookup",
-          lookup: "events:getByInstagramPostUrl",
-          ...postContext,
-          error: getErrorMessage(error),
-        });
-        return null;
+        try {
+          const existingByUrl = (await client.query(getByInstagramPostUrlQuery, {
+            instagramPostUrl: postUrl,
+          })) as ExistingEventRecord | null;
+          if (existingByUrl) {
+            matchesById.set(existingByUrl._id, {
+              existingEvent: existingByUrl,
+              matchedBy: "post_url",
+              matchedValue: postUrl,
+            });
+          }
+        } catch (fallbackError) {
+          logError("ingestion.duplicate_lookup.schema_mismatch", {
+            step: "duplicate_lookup",
+            lookup: "events:listByInstagramPostUrl",
+            ...postContext,
+            error: getErrorMessage(fallbackError),
+          });
+        }
+      } else {
+        throw error;
       }
-      throw error;
     }
-    if (existingByUrl) {
-      return {
-        existingEvent: existingByUrl,
-        matchedBy: "post_url",
-        matchedValue: postUrl,
-      };
-    }
+  }
+
+  return [...matchesById.values()];
+}
+
+function normalizeTitleKey(value: string | undefined): string {
+  return normalizeString(value).toLowerCase().replace(/\s+/g, " ");
+}
+
+function findBestExistingMatchForPreparedEvent(
+  existingMatches: ExistingSourceMatch[],
+  nextEvent: PreparedEvent,
+): ExistingSourceMatch | null {
+  const titleKey = normalizeTitleKey(nextEvent.title);
+  const exactMatch = existingMatches.find(
+    (existing) =>
+      normalizeString(existing.existingEvent.date) === nextEvent.date &&
+      normalizeTitleKey(existing.existingEvent.title) === titleKey,
+  );
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  const sameDateMatch = existingMatches.find(
+    (existing) => normalizeString(existing.existingEvent.date) === nextEvent.date,
+  );
+  if (sameDateMatch) {
+    return sameDateMatch;
   }
 
   return null;
 }
 
-function prepareEventForInsert(
+function prepareEventsForInsert(
   post: InstagramScrapedPost,
   extracted: ExtractedEventData,
   selectedImageUrl: string,
-): PrepareEventResult {
+): PrepareEventResult[] {
   const title = normalizeString(extracted.title);
   const eventType = normalizeString(extracted.category);
   const description = normalizeString(extracted.description);
@@ -1188,12 +1297,22 @@ function prepareEventForInsert(
     post.caption,
     post.postedAt,
   );
+  const expandedRangeDates = expandNormalizedDateRange(
+    normalizeString(extracted.date),
+    post.postedAt,
+  );
+  const candidateDates =
+    expandedRangeDates && expandedRangeDates.length > 1
+      ? expandedRangeDates
+      : dateNormalization.isoDate
+        ? [dateNormalization.isoDate]
+        : [];
   const eventDateFilter = getEventDateFilterContext();
-  const normalizedFields: Record<string, unknown> = {
+  const normalizedFieldsBase: Record<string, unknown> = {
     title,
     rawDate: normalizeString(extracted.date),
     rawExtractedDateText: dateNormalization.rawDateText,
-    normalizedDate: dateNormalization.isoDate,
+    normalizedDate: candidateDates[0] ?? null,
     dateSource: dateNormalization.source,
     dateConfidence: dateNormalization.confidence,
     dateDistanceFromPostDays: dateNormalization.distanceFromPostDays,
@@ -1217,78 +1336,111 @@ function prepareEventForInsert(
     artists: extracted.artists,
     description,
     postTimestamp: post.postedAt,
+    dateRangeExpanded: candidateDates.length > 1,
+    dateRangeExpandedCount: candidateDates.length,
     filterDateToday: eventDateFilter.todayIsoDate,
     filterDateTimezone: eventDateFilter.timeZone,
     normalizedIsValid: true,
     normalizedInvalidReason: null,
   };
 
-  if (!dateNormalization.isoDate) {
-    normalizedFields.normalizedIsValid = false;
-    normalizedFields.normalizedInvalidReason = "invalid_date";
-    return {
-      kind: "skip",
-      reason: dateNormalization.reason === "missing_date" ? "missing_date" : "invalid_event",
-      normalizedFields,
+  if (candidateDates.length === 0) {
+    const normalizedFields: Record<string, unknown> = {
+      ...normalizedFieldsBase,
+      normalizedIsValid: false,
+      normalizedInvalidReason: "invalid_date",
     };
+    return [
+      {
+        kind: "skip",
+        reason: dateNormalization.reason === "missing_date" ? "missing_date" : "invalid_event",
+        normalizedFields,
+      },
+    ];
   }
 
   if (!venueNormalization.venue) {
-    normalizedFields.normalizedIsValid = false;
-    normalizedFields.normalizedInvalidReason = "invalid_venue";
-    return {
-      kind: "skip",
-      reason: "missing_venue",
-      normalizedFields,
+    const normalizedFields: Record<string, unknown> = {
+      ...normalizedFieldsBase,
+      normalizedIsValid: false,
+      normalizedInvalidReason: "invalid_venue",
     };
-  }
-
-  if (dateNormalization.isoDate < eventDateFilter.todayIsoDate) {
-    normalizedFields.normalizedIsValid = false;
-    normalizedFields.normalizedInvalidReason = "past_event";
-    return {
-      kind: "skip",
-      reason: "past_event",
-      normalizedFields,
-    };
+    return [
+      {
+        kind: "skip",
+        reason: "missing_venue",
+        normalizedFields,
+      },
+    ];
   }
 
   if (!title || !eventType) {
-    normalizedFields.normalizedIsValid = false;
-    normalizedFields.normalizedInvalidReason = "missing_required_fields";
-    return {
-      kind: "skip",
-      reason: "invalid_event",
-      normalizedFields,
+    const normalizedFields: Record<string, unknown> = {
+      ...normalizedFieldsBase,
+      normalizedIsValid: false,
+      normalizedInvalidReason: "missing_required_fields",
     };
+    return [
+      {
+        kind: "skip",
+        reason: "invalid_event",
+        normalizedFields,
+      },
+    ];
   }
 
   const artists = extracted.artists
     .map((artist) => normalizeString(artist))
     .filter((artist) => artist.length > 0);
 
-  return {
-    kind: "ok",
-    normalizedFields,
-    event: {
-      title,
-      date: dateNormalization.isoDate,
-      ...(time ? { time } : {}),
-      venue: venueNormalization.venue,
-      artists,
-      ...(description ? { description } : {}),
-      imageUrl: selectedImageUrl,
-      instagramPostUrl: post.instagramPostUrl,
-      instagramPostId: post.postId,
-      ...(ticketPrice ? { ticketPrice } : {}),
-      eventType,
-      ...(post.caption ? { sourceCaption: post.caption } : {}),
-      ...(post.postedAt ? { sourcePostedAt: post.postedAt } : {}),
-      rawExtractionJson: JSON.stringify(extracted),
-      normalizedFieldsJson: JSON.stringify(normalizedFields),
-      status: "pending",
-    },
-  };
+  const preparedEvents: PrepareEventResult[] = [];
+
+  for (const [index, date] of candidateDates.entries()) {
+    const normalizedFields: Record<string, unknown> = {
+      ...normalizedFieldsBase,
+      normalizedDate: date,
+      expandedDateIndex: index + 1,
+      expandedDateTotal: candidateDates.length,
+    };
+
+    if (date < eventDateFilter.todayIsoDate) {
+      preparedEvents.push({
+        kind: "skip",
+        reason: "past_event",
+        normalizedFields: {
+          ...normalizedFields,
+          normalizedIsValid: false,
+          normalizedInvalidReason: "past_event",
+        },
+      });
+      continue;
+    }
+
+    preparedEvents.push({
+      kind: "ok",
+      normalizedFields,
+      event: {
+        title,
+        date,
+        ...(time ? { time } : {}),
+        venue: venueNormalization.venue,
+        artists,
+        ...(description ? { description } : {}),
+        imageUrl: selectedImageUrl,
+        instagramPostUrl: post.instagramPostUrl,
+        instagramPostId: post.postId,
+        ...(ticketPrice ? { ticketPrice } : {}),
+        eventType,
+        ...(post.caption ? { sourceCaption: post.caption } : {}),
+        ...(post.postedAt ? { sourcePostedAt: post.postedAt } : {}),
+        rawExtractionJson: JSON.stringify(extracted),
+        normalizedFieldsJson: JSON.stringify(normalizedFields),
+        status: "pending",
+      },
+    });
+  }
+
+  return preparedEvents;
 }
 
 type ProcessIngestionPostOptions = {
@@ -1325,58 +1477,6 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     selectedImageUrl: bestImageUrl,
     isInstagramOrFbCdn: isInstagramOrFbCdnUrl(bestImageUrl),
   });
-
-  let duplicateContext: DuplicateUpdateContext | null = null;
-  try {
-    const existingMatch = await findExistingEventBySourceIdentity(client, post);
-    if (existingMatch) {
-      const quality = isLowQualityExistingEvent(existingMatch.existingEvent, post.postedAt);
-      if (!quality.isLowQuality) {
-        summary.skippedDuplicates += 1;
-        summary.skipped_duplicates += 1;
-        summary.skipped_duplicates_clean += 1;
-        logInfo("duplicate_clean_skip", {
-          ...postContext,
-          selectedImageUrl: bestImageUrl,
-          matchedBy: existingMatch.matchedBy,
-          matchedValue: existingMatch.matchedValue,
-          existingEventId: existingMatch.existingEvent._id,
-          existingStatus: existingMatch.existingEvent.status,
-        });
-        return;
-      }
-
-      const primaryReason = quality.primaryReason ?? "invalid_normalized_fields";
-      duplicateContext = {
-        existing: existingMatch,
-        quality,
-        updateReasonEvent: mapDuplicateReasonToLogEvent(primaryReason),
-      };
-      logInfo(duplicateContext.updateReasonEvent, {
-        phase: "duplicate_reprocess_started",
-        ...postContext,
-        selectedImageUrl: bestImageUrl,
-        matchedBy: existingMatch.matchedBy,
-        matchedValue: existingMatch.matchedValue,
-        existingEventId: existingMatch.existingEvent._id,
-        qualityReasons: quality.reasons,
-        qualityDetails: quality.details,
-      });
-    }
-  } catch (error) {
-    summary.failedExtractions += 1;
-    summary.failed_extractions += 1;
-    summary.errors.push(
-      getErrorMessage(error),
-    );
-    logError("ingestion.duplicate_check.failed", {
-      step: "duplicate_lookup" satisfies IngestionStep,
-      ...postContext,
-      selectedImageUrl: bestImageUrl,
-      error: getErrorMessage(error),
-    });
-    return;
-  }
 
   let downloadedImage: Awaited<ReturnType<typeof downloadImage>>;
   try {
@@ -1449,9 +1549,9 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     return;
   }
 
-  let prepared: PrepareEventResult;
+  let preparedResults: PrepareEventResult[];
   try {
-    prepared = prepareEventForInsert(post, extracted, bestImageUrl);
+    preparedResults = prepareEventsForInsert(post, extracted, bestImageUrl);
   } catch (error) {
     summary.failedExtractions += 1;
     summary.failed_extractions += 1;
@@ -1466,91 +1566,165 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     return;
   }
 
-  if (prepared.kind === "skip") {
-    if (prepared.reason === "missing_date") {
-      summary.skipped_missing_date += 1;
-    } else if (prepared.reason === "missing_venue") {
-      summary.skipped_missing_venue += 1;
-    } else if (prepared.reason === "past_event") {
-      summary.skipped_past_event += 1;
-    } else {
-      summary.skipped_invalid_event += 1;
-    }
-
-    logInfo("ingestion.event.skipped", {
+  let existingMatches: ExistingSourceMatch[] = [];
+  try {
+    existingMatches = await listExistingEventsBySourceIdentity(client, post);
+  } catch (error) {
+    summary.failedExtractions += 1;
+    summary.failed_extractions += 1;
+    summary.errors.push(getErrorMessage(error));
+    logError("ingestion.duplicate_check.failed", {
+      step: "duplicate_lookup" satisfies IngestionStep,
       ...postContext,
       selectedImageUrl: bestImageUrl,
-      reason: prepared.reason,
-      caption: post.caption,
-      postTimestamp: post.postedAt,
-      rawExtraction: extracted,
-      normalizedFields: prepared.normalizedFields,
+      error: getErrorMessage(error),
     });
     return;
   }
 
-  if (duplicateContext) {
-    const updatePayload = buildDuplicateUpdatePatch(
-      duplicateContext.existing.existingEvent,
-      prepared.event,
-    );
-    try {
-      await client.mutation(updateEventMutation, {
-        id: duplicateContext.existing.existingEvent._id,
-        patch: updatePayload.patch,
-      });
-      summary.updated_duplicates_bad_data += 1;
-      logInfo(duplicateContext.updateReasonEvent, {
-        phase: "duplicate_updated",
+  for (const prepared of preparedResults) {
+    if (prepared.kind === "skip") {
+      if (prepared.reason === "missing_date") {
+        summary.skipped_missing_date += 1;
+      } else if (prepared.reason === "missing_venue") {
+        summary.skipped_missing_venue += 1;
+      } else if (prepared.reason === "past_event") {
+        summary.skipped_past_event += 1;
+      } else {
+        summary.skipped_invalid_event += 1;
+      }
+
+      logInfo("ingestion.event.skipped", {
         ...postContext,
         selectedImageUrl: bestImageUrl,
-        existingEventId: duplicateContext.existing.existingEvent._id,
-        qualityReasons: duplicateContext.quality.reasons,
-        materiallyChanged: updatePayload.materiallyChanged,
-        statusResetToPending: updatePayload.statusResetToPending,
+        reason: prepared.reason,
+        caption: post.caption,
+        postTimestamp: post.postedAt,
+        rawExtraction: extracted,
+        normalizedFields: prepared.normalizedFields,
+      });
+      continue;
+    }
+
+    const existingMatch = findBestExistingMatchForPreparedEvent(
+      existingMatches,
+      prepared.event,
+    );
+
+    if (existingMatch) {
+      const quality = isLowQualityExistingEvent(existingMatch.existingEvent, post.postedAt);
+      const hasMaterialChange = hasMaterialEventChange(
+        existingMatch.existingEvent,
+        prepared.event,
+      );
+
+      if (!quality.isLowQuality && !hasMaterialChange) {
+        summary.skippedDuplicates += 1;
+        summary.skipped_duplicates += 1;
+        summary.skipped_duplicates_clean += 1;
+        logInfo("duplicate_clean_skip", {
+          ...postContext,
+          selectedImageUrl: bestImageUrl,
+          matchedBy: existingMatch.matchedBy,
+          matchedValue: existingMatch.matchedValue,
+          existingEventId: existingMatch.existingEvent._id,
+          existingStatus: existingMatch.existingEvent.status,
+          normalizedFields: prepared.normalizedFields,
+        });
+        continue;
+      }
+
+      const primaryReason = quality.primaryReason ?? "invalid_normalized_fields";
+      const updateReasonEvent = mapDuplicateReasonToLogEvent(primaryReason);
+      const updatePayload = buildDuplicateUpdatePatch(
+        existingMatch.existingEvent,
+        prepared.event,
+      );
+
+      try {
+        await client.mutation(updateEventMutation, {
+          id: existingMatch.existingEvent._id,
+          patch: updatePayload.patch,
+        });
+        summary.updated_duplicates_bad_data += 1;
+        logInfo(updateReasonEvent, {
+          phase: "duplicate_updated",
+          ...postContext,
+          selectedImageUrl: bestImageUrl,
+          matchedBy: existingMatch.matchedBy,
+          matchedValue: existingMatch.matchedValue,
+          existingEventId: existingMatch.existingEvent._id,
+          qualityReasons: quality.reasons,
+          qualityDetails: quality.details,
+          materiallyChanged: updatePayload.materiallyChanged,
+          statusResetToPending: updatePayload.statusResetToPending,
+          caption: post.caption,
+          postTimestamp: post.postedAt,
+          rawExtraction: extracted,
+          normalizedFields: prepared.normalizedFields,
+        });
+        existingMatch.existingEvent = {
+          ...existingMatch.existingEvent,
+          ...prepared.event,
+          status:
+            updatePayload.patch.status ?? existingMatch.existingEvent.status,
+          reviewedAt:
+            updatePayload.patch.reviewedAt ?? existingMatch.existingEvent.reviewedAt,
+          reviewedBy:
+            updatePayload.patch.reviewedBy ?? existingMatch.existingEvent.reviewedBy,
+          moderationNote:
+            updatePayload.patch.moderationNote ?? existingMatch.existingEvent.moderationNote,
+        };
+      } catch (error) {
+        summary.duplicate_update_failed += 1;
+        summary.errors.push(getErrorMessage(error));
+        logError("duplicate_update_failed", {
+          step: "update_existing_event" satisfies IngestionStep,
+          ...postContext,
+          selectedImageUrl: bestImageUrl,
+          existingEventId: existingMatch.existingEvent._id,
+          qualityReasons: quality.reasons,
+          error: getErrorMessage(error),
+        });
+      }
+      continue;
+    }
+
+    try {
+      const insertedId = (await client.mutation(
+        createEventMutation,
+        prepared.event,
+      )) as string;
+      summary.insertedEvents += 1;
+      summary.inserted_events += 1;
+      existingMatches.push({
+        existingEvent: {
+          _id: insertedId,
+          ...prepared.event,
+        },
+        matchedBy: "post_url",
+        matchedValue: prepared.event.instagramPostUrl,
+      });
+      logInfo("ingestion.event.inserted", {
+        ...postContext,
+        selectedImageUrl: bestImageUrl,
         caption: post.caption,
         postTimestamp: post.postedAt,
         rawExtraction: extracted,
         normalizedFields: prepared.normalizedFields,
       });
     } catch (error) {
-      summary.duplicate_update_failed += 1;
+      summary.failedExtractions += 1;
+      summary.failed_extractions += 1;
+      summary.failed_extraction += 1;
       summary.errors.push(getErrorMessage(error));
-      logError("duplicate_update_failed", {
-        step: "update_existing_event" satisfies IngestionStep,
+      logError("ingestion.insert.failed", {
+        step: "insert_new_event" satisfies IngestionStep,
         ...postContext,
         selectedImageUrl: bestImageUrl,
-        existingEventId: duplicateContext.existing.existingEvent._id,
-        qualityReasons: duplicateContext.quality.reasons,
         error: getErrorMessage(error),
       });
     }
-    return;
-  }
-
-  try {
-    await client.mutation(createEventMutation, prepared.event);
-    summary.insertedEvents += 1;
-    summary.inserted_events += 1;
-    logInfo("ingestion.event.inserted", {
-      ...postContext,
-      selectedImageUrl: bestImageUrl,
-      caption: post.caption,
-      postTimestamp: post.postedAt,
-      rawExtraction: extracted,
-      normalizedFields: prepared.normalizedFields,
-    });
-  } catch (error) {
-    summary.failedExtractions += 1;
-    summary.failed_extractions += 1;
-    summary.failed_extraction += 1;
-    summary.errors.push(getErrorMessage(error));
-    logError("ingestion.insert.failed", {
-      step: "insert_new_event" satisfies IngestionStep,
-      ...postContext,
-      selectedImageUrl: bestImageUrl,
-      error: getErrorMessage(error),
-    });
   }
 }
 

@@ -49,6 +49,30 @@ export const getByInstagramPostUrl = query({
   },
 });
 
+export const listByInstagramPostId = query({
+  args: { instagramPostId: v.string() },
+  handler: async (ctx, args) => {
+    return ctx.db
+      .query("events")
+      .withIndex("by_instagramPostId", (q) =>
+        q.eq("instagramPostId", args.instagramPostId),
+      )
+      .collect();
+  },
+});
+
+export const listByInstagramPostUrl = query({
+  args: { instagramPostUrl: v.string() },
+  handler: async (ctx, args) => {
+    return ctx.db
+      .query("events")
+      .withIndex("by_instagramPostUrl", (q) =>
+        q.eq("instagramPostUrl", args.instagramPostUrl),
+      )
+      .collect();
+  },
+});
+
 export const listByStatus = query({
   args: {
     status: eventStatus,
