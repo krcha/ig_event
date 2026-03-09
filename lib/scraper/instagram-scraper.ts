@@ -4,6 +4,28 @@ const DEFAULT_APIFY_ACTOR_ID = "apify/instagram-scraper";
 const DEFAULT_RESULTS_LIMIT = 5;
 const MAX_TOP_LEVEL_POSTS_PER_ACCOUNT = 5;
 const DEFAULT_DAYS_BACK = 60;
+const APIFY_RESPONSE_FIELDS = [
+  "id",
+  "shortCode",
+  "url",
+  "caption",
+  "displayUrl",
+  "images",
+  "type",
+  "timestamp",
+  "ownerUsername",
+  "locationName",
+];
+const APIFY_RESPONSE_OMIT_FIELDS = [
+  "latestComments",
+  "firstComment",
+  "commentsCount",
+  "likesCount",
+  "childPosts",
+  "taggedUsers",
+  "coauthorProducers",
+  "musicInfo",
+];
 
 export type InstagramScrapedPost = {
   postId: string;
@@ -68,6 +90,17 @@ function normalizeResultsLimit(value: number | undefined): number {
     return DEFAULT_RESULTS_LIMIT;
   }
   return Math.min(rounded, MAX_TOP_LEVEL_POSTS_PER_ACCOUNT);
+}
+
+function parsePostedAtTimestamp(value: string | null): number {
+  if (!value) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  return parsed;
 }
 
 function parsePostDate(item: ApifyInstagramItem): Date | null {
@@ -210,17 +243,23 @@ export async function scrapeInstagramAccount(
   const resultsLimit = normalizeResultsLimit(options.resultsLimit);
   const daysBack = options.daysBack ?? DEFAULT_DAYS_BACK;
   const cutoff = Date.now() - daysBack * 24 * 60 * 60 * 1000;
+  const onlyPostsNewerThan = `${daysBack} day${daysBack === 1 ? "" : "s"}`;
 
-  const endpoint = `https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}/run-sync-get-dataset-items?token=${apiToken}&clean=true`;
+  const query = new URLSearchParams({
+    token: apiToken,
+    clean: "true",
+    fields: APIFY_RESPONSE_FIELDS.join(","),
+    omit: APIFY_RESPONSE_OMIT_FIELDS.join(","),
+  });
+  const endpoint = `https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}/run-sync-get-dataset-items?${query.toString()}`;
   const directUrls = [`https://www.instagram.com/${handle}/`];
   const input = {
     directUrls,
     resultsType: "posts" as const,
     resultsLimit,
+    onlyPostsNewerThan,
     addParentData: false,
   };
-  const maybeOnlyPostsNewerThan = (input as { onlyPostsNewerThan?: string })
-    .onlyPostsNewerThan;
 
   console.info(
     JSON.stringify({
@@ -230,7 +269,7 @@ export async function scrapeInstagramAccount(
       directUrls: input.directUrls,
       resultsType: input.resultsType,
       resultsLimit: input.resultsLimit,
-      ...(maybeOnlyPostsNewerThan ? { onlyPostsNewerThan: maybeOnlyPostsNewerThan } : {}),
+      onlyPostsNewerThan: input.onlyPostsNewerThan,
     }),
   );
 
@@ -287,5 +326,11 @@ export async function scrapeInstagramAccount(
     }
   }
 
-  return [...uniqueTopLevelPosts.values()].slice(0, resultsLimit);
+  const normalizedTopLevelPosts = [...uniqueTopLevelPosts.values()];
+  normalizedTopLevelPosts.sort(
+    (left, right) =>
+      parsePostedAtTimestamp(right.postedAt) - parsePostedAtTimestamp(left.postedAt),
+  );
+
+  return normalizedTopLevelPosts.slice(0, resultsLimit);
 }
