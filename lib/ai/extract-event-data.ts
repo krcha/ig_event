@@ -87,7 +87,9 @@ Rules:
 - Use the flyer/poster and caption together to identify the venue. The Instagram handle is strong identity context for the account and can help resolve abbreviations or partial venue references.
 - If the handle clearly belongs to a venue or promoter, use that only as grounding context. Do not invent a venue that is unsupported by the poster, caption, location text, or obvious handle identity.
 - Only return a non-empty "title" when an explicit event/program name is clearly written in the caption or flyer.
+- Prefer the parent event/program name over poster subsection labels. If the flyer says something like "Aktivnosti", "Program", "Lineup", "Radionice", or another section heading, and the caption/flyer also names the actual event, return the actual event name as "title".
 - If the source only indicates a genre, format, or generic session type (for example jam session, techno night, live music), return an empty string for "title".
+- Do not treat poster subsections, schedule headings, or detail blocks as event titles.
 - Do not use the venue name, Instagram handle, or a generic genre label as a fabricated event title unless that exact text is clearly the event/program name in the source.
 - Do not create, paraphrase, beautify, or normalize event titles.
 - Keep "description" short and factual, based only on details supported by the caption or flyer.

@@ -28,7 +28,7 @@ type ScrapeStartPayload = {
   started?: boolean;
   jobId?: string;
   status?: ScrapeJobStatus;
-  mode?: "repair" | IngestionRunMode;
+  mode?: IngestionRunMode;
   source?: ScrapeSource;
   handles?: string[];
   statusUrl?: string;
@@ -46,6 +46,7 @@ type ScrapeJobPayload = {
 };
 
 const POLL_INTERVAL_MS = 2_000;
+const REPAIR_DAYS_BACK = 3;
 type HandleSummary = IngestionSummary["handles"][number];
 
 const HANDLE_SUMMARY_METRICS: Array<{
@@ -81,6 +82,30 @@ function formatDateTime(value: string | undefined): string {
     return "(none)";
   }
   return new Date(value).toLocaleString();
+}
+
+function normalizeApiErrorText(rawText: string, status: number): string {
+  const stripped = rawText
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return stripped || `Request failed with status ${status}.`;
+}
+
+async function readJsonPayload<T>(response: Response): Promise<T> {
+  const rawText = await response.text();
+  if (rawText.length === 0) {
+    return {} as T;
+  }
+
+  try {
+    return JSON.parse(rawText) as T;
+  } catch {
+    throw new Error(normalizeApiErrorText(rawText, response.status));
+  }
 }
 
 function buildSummaryRequestBody(
@@ -152,7 +177,7 @@ export function ScraperDashboard() {
         body: JSON.stringify(body ?? {}),
       });
 
-      const payload = (await response.json()) as ScrapeSummaryPayload;
+      const payload = await readJsonPayload<ScrapeSummaryPayload>(response);
 
       if (!response.ok) {
         throw new Error(payload.error ?? "Failed to run scraper pipeline.");
@@ -183,7 +208,7 @@ export function ScraperDashboard() {
         cache: "no-store",
       });
 
-      const payload = (await response.json()) as ScrapeJobPayload;
+      const payload = await readJsonPayload<ScrapeJobPayload>(response);
       if (!response.ok) {
         throw new Error(payload.error ?? "Failed to process scrape job.");
       }
@@ -221,7 +246,7 @@ export function ScraperDashboard() {
         body: JSON.stringify(body),
       });
 
-      const payload = (await response.json()) as ScrapeStartPayload;
+      const payload = await readJsonPayload<ScrapeStartPayload>(response);
       if (!response.ok) {
         throw new Error(payload.error ?? "Failed to start scraper job.");
       }
@@ -251,7 +276,7 @@ export function ScraperDashboard() {
   async function runRepairScraper() {
     void runQueuedScraper("/api/admin/scrape/repair", {
       ...(resultsLimit ? { resultsLimit } : {}),
-      ...(daysBack ? { daysBack } : {}),
+      daysBack: REPAIR_DAYS_BACK,
     });
   }
 
@@ -354,7 +379,7 @@ export function ScraperDashboard() {
             {[
               ["Quick check", "5", "5"],
               ["Recent month", "10", "30"],
-              ["Deep repair", "5", "365"],
+              ["Repair window", "5", String(REPAIR_DAYS_BACK)],
             ].map(([label, nextResults, nextDays]) => (
               <button
                 className="rounded-xl border border-border px-3 py-2 text-sm font-medium"
@@ -545,11 +570,11 @@ export function ScraperDashboard() {
                 }}
                 type="button"
               >
-                {isLoading ? "Running..." : "Repair older venue events"}
+                {isLoading ? "Running..." : "Repair venue events (3 days)"}
               </button>
               <p className="mt-2 text-sm text-muted-foreground">
-                Runs a wider one-year backfill for active venues to revisit older posts and repair
-                bad event data.
+                Runs a focused three-day backfill for active venues to revisit recent posts and
+                repair bad event data.
               </p>
             </div>
           </div>

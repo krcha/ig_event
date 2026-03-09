@@ -17,7 +17,7 @@ type Body = {
 type RepairErrorStep = "auth_check" | "parse_body" | "enqueue_repair_job";
 
 const DEFAULT_REPAIR_RESULTS_LIMIT = 5;
-const DEFAULT_REPAIR_DAYS_BACK = 365;
+const DEFAULT_REPAIR_DAYS_BACK = 3;
 const DEFAULT_BATCH_SIZE = 2;
 const createIngestionJobMutation =
   "ingestionJobs:createJob" as unknown as FunctionReference<"mutation">;
@@ -102,6 +102,7 @@ export async function POST(request: Request) {
 
     const jobId = (await convex.mutation(createIngestionJobMutation, {
       source: "repair_active_venues",
+      mode: "full_scrape",
       handles,
       resultsLimit,
       daysBack,
@@ -111,7 +112,7 @@ export async function POST(request: Request) {
     })) as string;
 
     logInfo("scrape_started", {
-      mode: "repair",
+      mode: "full_scrape",
       source: "repair_active_venues",
       jobId,
       handles,
@@ -122,7 +123,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       started: true,
-      mode: "repair",
+      mode: "full_scrape",
       source: "repair_active_venues",
       handles,
       jobId,
@@ -135,7 +136,7 @@ export async function POST(request: Request) {
       error instanceof Error ? error.message : "Failed to enqueue repair ingestion.";
     logError("repair_scrape_failed", {
       step,
-      mode: "repair",
+      mode: "full_scrape",
       source: "repair_active_venues",
       handles,
       error: message,

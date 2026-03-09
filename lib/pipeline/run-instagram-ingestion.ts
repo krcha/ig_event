@@ -129,6 +129,75 @@ const GENERIC_EVENT_TITLE_PATTERNS = [
   /^(live\s+music|concert|party|event|session)$/i,
   /^(techno|house|jazz|blues|rock|metal|hip hop|hip-hop|drum and bass|dnb)(\s+(night|session|party))?$/i,
 ];
+const WEAK_EVENT_TITLE_SECTION_TERMS = new Set([
+  "aktivnosti",
+  "activities",
+  "program",
+  "lineup",
+  "radionice",
+  "workshop",
+  "workshops",
+  "satnica",
+  "schedule",
+  "raspored",
+  "detalji",
+  "details",
+  "info",
+  "informacije",
+  "gosti",
+  "guests",
+  "predavanja",
+  "projekcije",
+  "screenings",
+]);
+const CONTEXT_EVENT_TITLE_KEYWORDS = new Set([
+  "festival",
+  "fest",
+  "party",
+  "session",
+  "night",
+  "showcase",
+  "weekender",
+  "concert",
+  "koncert",
+  "afterparty",
+  "after",
+  "takeover",
+  "opening",
+  "closing",
+  "premiere",
+  "premijera",
+  "birthday",
+  "anniversary",
+  "matinee",
+  "matine",
+]);
+const CONTEXT_TITLE_STOP_WORDS = new Set([
+  "the",
+  "this",
+  "that",
+  "our",
+  "your",
+  "their",
+  "a",
+  "an",
+  "one",
+  "ovaj",
+  "ova",
+  "ovo",
+  "ovde",
+  "dobrodosli",
+  "dodjite",
+  "dodite",
+  "join",
+  "us",
+  "for",
+  "na",
+  "u",
+  "uz",
+]);
+const CONTEXT_EVENT_TITLE_REGEX =
+  /([\p{L}\d][\p{L}\d'’.+/&-]*(?:\s+[\p{L}\d][\p{L}\d'’.+/&-]*){0,4}\s+(festival|fest|party|session|night|showcase|weekender|concert|koncert|afterparty|after|takeover|opening|closing|premiere|premijera|birthday|anniversary|matinee|matine))\b/iu;
 
 type PreparedEvent = {
   title: string;
@@ -183,6 +252,14 @@ type VenueNormalization = {
   wasFallback: boolean;
   rawModelVenue: string;
   rawLocationName: string;
+};
+
+type CaptionSplitEventCandidate = {
+  rawDate: string;
+  normalizedDate: DateNormalization;
+  lineTitle: string;
+  artists: string[];
+  sourceLine: string;
 };
 
 type PrepareEventResult =
@@ -429,9 +506,26 @@ function toSearchableText(value: string): string {
     .trim();
 }
 
+function normalizeVenueComparableText(value: string): string {
+  return toSearchableText(value)
+    .replace(/\bkulturni\s+centar\b/g, "kc")
+    .replace(/\bk\s+c\b/g, "kc")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function listCanonicalVenueNames(
+  canonicalVenueNamesByHandle: Record<string, string>,
+): string[] {
+  return [...new Set([
+    ...Object.values(STATIC_VENUE_BY_HANDLE),
+    ...Object.values(canonicalVenueNamesByHandle),
+  ])].filter((value) => value.length > 0);
+}
+
 function areVenueNamesCompatible(left: string, right: string): boolean {
-  const normalizedLeft = toSearchableText(left);
-  const normalizedRight = toSearchableText(right);
+  const normalizedLeft = normalizeVenueComparableText(left);
+  const normalizedRight = normalizeVenueComparableText(right);
   if (!normalizedLeft || !normalizedRight) {
     return false;
   }
@@ -441,6 +535,43 @@ function areVenueNamesCompatible(left: string, right: string): boolean {
   return (
     normalizedLeft.includes(normalizedRight) ||
     normalizedRight.includes(normalizedLeft)
+  );
+}
+
+function canonicalizeVenueName(
+  candidate: string,
+  canonicalVenueNamesByHandle: Record<string, string>,
+  preferredVenue?: string | null,
+): string | null {
+  const normalizedCandidate = normalizeVenueComparableText(candidate);
+  if (!normalizedCandidate) {
+    return null;
+  }
+
+  if (preferredVenue && areVenueNamesCompatible(candidate, preferredVenue)) {
+    return preferredVenue;
+  }
+
+  const mappedByHandle = getConfiguredVenueNameForHandle(candidate, canonicalVenueNamesByHandle);
+  if (mappedByHandle) {
+    return mappedByHandle;
+  }
+
+  const canonicalVenueNames = listCanonicalVenueNames(canonicalVenueNamesByHandle);
+  const exactMatch = canonicalVenueNames.find(
+    (name) => normalizeVenueComparableText(name) === normalizedCandidate,
+  );
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  const candidateTokenCount = normalizedCandidate.split(" ").filter(Boolean).length;
+  if (candidateTokenCount < 2) {
+    return null;
+  }
+
+  return (
+    canonicalVenueNames.find((name) => areVenueNamesCompatible(candidate, name)) ?? null
   );
 }
 
@@ -541,7 +672,10 @@ function buildFallbackTitle(
 
   const locationName = normalizeString(post.locationName);
   if (locationName) {
-    return locationName;
+    return (
+      canonicalizeVenueName(locationName, canonicalVenueNamesByHandle, mappedVenue) ??
+      locationName
+    );
   }
 
   if (venue.source === "handle_map" && venue.venue) {
@@ -555,6 +689,193 @@ function isGenericEventTitle(value: string): boolean {
   return GENERIC_EVENT_TITLE_PATTERNS.some((pattern) => pattern.test(value.trim()));
 }
 
+function trimTitleCandidate(value: string): string {
+  return value.replace(/^[\s"'“”‘’]+|[\s"'“”‘’.,:;!?]+$/gu, "").trim();
+}
+
+function getWeakEventTitleSectionParts(
+  value: string,
+): { baseTitle: string; sectionTerm: string } | null {
+  const trimmed = normalizeString(value);
+  if (!trimmed) {
+    return null;
+  }
+
+  const tokens = trimmed.split(/\s+/).filter((token) => token.length > 0);
+  if (tokens.length === 0) {
+    return null;
+  }
+
+  const lastToken = tokens[tokens.length - 1] ?? "";
+  if (WEAK_EVENT_TITLE_SECTION_TERMS.has(toSearchableText(lastToken))) {
+    return {
+      baseTitle: tokens.slice(0, -1).join(" "),
+      sectionTerm: lastToken,
+    };
+  }
+
+  if (tokens.length === 1 && WEAK_EVENT_TITLE_SECTION_TERMS.has(toSearchableText(tokens[0]))) {
+    return {
+      baseTitle: "",
+      sectionTerm: tokens[0],
+    };
+  }
+
+  return null;
+}
+
+function isWeakEventTitleSectionHeading(value: string): boolean {
+  const parts = getWeakEventTitleSectionParts(value);
+  if (!parts) {
+    return false;
+  }
+  return parts.baseTitle.length === 0 || parts.baseTitle.split(/\s+/).length <= 4;
+}
+
+function extractContextEventTitleKeyword(value: string): string | null {
+  const tokens = toSearchableText(value).split(" ").filter((token) => token.length > 0);
+  const lastToken = tokens[tokens.length - 1] ?? "";
+  return CONTEXT_EVENT_TITLE_KEYWORDS.has(lastToken) ? lastToken : null;
+}
+
+function formatContextEventTitleKeyword(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function normalizeContextDerivedTitle(value: string): string {
+  const trimmed = trimTitleCandidate(value);
+  if (!trimmed) {
+    return "";
+  }
+
+  const tokens = trimmed.split(/\s+/);
+  const keyword = extractContextEventTitleKeyword(trimmed);
+  if (!keyword || tokens.length === 0) {
+    return trimmed;
+  }
+
+  tokens[tokens.length - 1] = formatContextEventTitleKeyword(keyword);
+  return tokens.join(" ");
+}
+
+function extractContextualEventTitleCandidate(value: string): string | null {
+  const trimmed = normalizeString(value);
+  if (!trimmed) {
+    return null;
+  }
+
+  const match = trimmed.match(CONTEXT_EVENT_TITLE_REGEX);
+  if (!match) {
+    return null;
+  }
+
+  return trimTitleCandidate(match[1] ?? "");
+}
+
+function isUsableContextEventTitleCandidate(
+  candidate: string,
+  post: InstagramScrapedPost,
+  venue: VenueNormalization,
+  canonicalVenueNamesByHandle: Record<string, string>,
+): boolean {
+  const normalizedCandidate = toSearchableText(candidate);
+  if (!normalizedCandidate) {
+    return false;
+  }
+
+  const candidateTokens = normalizedCandidate.split(" ").filter((token) => token.length > 0);
+  if (candidateTokens.length < 2 || candidateTokens.length > 6) {
+    return false;
+  }
+
+  if (isGenericEventTitle(candidate) || isWeakEventTitleSectionHeading(candidate)) {
+    return false;
+  }
+
+  const keyword = extractContextEventTitleKeyword(candidate);
+  if (!keyword) {
+    return false;
+  }
+
+  const baseTokens = candidateTokens
+    .slice(0, -1)
+    .filter((token) => !CONTEXT_TITLE_STOP_WORDS.has(token));
+  if (baseTokens.length === 0) {
+    return false;
+  }
+
+  const normalizedVenue = toSearchableText(venue.venue ?? "");
+  if (normalizedVenue && normalizedCandidate === normalizedVenue) {
+    return false;
+  }
+
+  const normalizedHandleTitle = toSearchableText(
+    humanizeHandle(post.username, canonicalVenueNamesByHandle),
+  );
+  if (normalizedHandleTitle && normalizedCandidate === normalizedHandleTitle) {
+    return false;
+  }
+
+  return true;
+}
+
+function buildContextDerivedEventTitle(
+  rawTitle: string,
+  extracted: ExtractedEventData,
+  post: InstagramScrapedPost,
+  venue: VenueNormalization,
+  canonicalVenueNamesByHandle: Record<string, string>,
+): { title: string; contextCandidate: string } | null {
+  const rawTitleParts = getWeakEventTitleSectionParts(rawTitle);
+  const contextSources = [
+    normalizeString(extracted.description),
+    normalizeString(post.caption),
+  ];
+
+  for (const sourceText of contextSources) {
+    const candidate = extractContextualEventTitleCandidate(sourceText);
+    if (
+      !candidate ||
+      !isUsableContextEventTitleCandidate(
+        candidate,
+        post,
+        venue,
+        canonicalVenueNamesByHandle,
+      )
+    ) {
+      continue;
+    }
+
+    const keyword = extractContextEventTitleKeyword(candidate);
+    const normalizedRawBaseTitle = toSearchableText(rawTitleParts?.baseTitle ?? "");
+    const normalizedVenue = toSearchableText(venue.venue ?? "");
+    const normalizedHandleTitle = toSearchableText(
+      humanizeHandle(post.username, canonicalVenueNamesByHandle),
+    );
+    if (
+      rawTitleParts?.baseTitle &&
+      keyword &&
+      normalizedRawBaseTitle &&
+      normalizedRawBaseTitle !== normalizedVenue &&
+      normalizedRawBaseTitle !== normalizedHandleTitle &&
+      !isGenericEventTitle(rawTitleParts.baseTitle) &&
+      !isWeakEventTitleSectionHeading(rawTitleParts.baseTitle)
+    ) {
+      return {
+        title: `${rawTitleParts.baseTitle} ${formatContextEventTitleKeyword(keyword)}`.trim(),
+        contextCandidate: candidate,
+      };
+    }
+
+    return {
+      title: normalizeContextDerivedTitle(candidate),
+      contextCandidate: candidate,
+    };
+  }
+
+  return null;
+}
+
 function normalizeEventTitle(
   post: InstagramScrapedPost,
   extracted: ExtractedEventData,
@@ -562,9 +883,10 @@ function normalizeEventTitle(
   canonicalVenueNamesByHandle: Record<string, string>,
 ): {
   title: string;
-  source: "model" | "handle_fallback";
+  source: "model" | "context_derived" | "handle_fallback";
   rawTitle: string;
   usedFallback: boolean;
+  contextCandidate: string | null;
 } {
   const rawTitle = normalizeString(extracted.title);
   const captionText = normalizeString(post.caption);
@@ -572,13 +894,36 @@ function normalizeEventTitle(
   const normalizedCaption = toSearchableText(captionText);
   const titleAppearsInCaption =
     normalizedRawTitle.length > 0 && normalizedCaption.includes(normalizedRawTitle);
+  const weakSectionTitle = isWeakEventTitleSectionHeading(rawTitle);
 
-  if (rawTitle && (!isGenericEventTitle(rawTitle) || titleAppearsInCaption)) {
+  if (
+    rawTitle &&
+    !weakSectionTitle &&
+    (!isGenericEventTitle(rawTitle) || titleAppearsInCaption)
+  ) {
     return {
       title: rawTitle,
       source: "model",
       rawTitle,
       usedFallback: false,
+      contextCandidate: null,
+    };
+  }
+
+  const contextDerivedTitle = buildContextDerivedEventTitle(
+    rawTitle,
+    extracted,
+    post,
+    venue,
+    canonicalVenueNamesByHandle,
+  );
+  if (contextDerivedTitle) {
+    return {
+      title: contextDerivedTitle.title,
+      source: "context_derived",
+      rawTitle,
+      usedFallback: false,
+      contextCandidate: contextDerivedTitle.contextCandidate,
     };
   }
 
@@ -587,7 +932,100 @@ function normalizeEventTitle(
     source: "handle_fallback",
     rawTitle,
     usedFallback: true,
+    contextCandidate: null,
   };
+}
+
+function cleanSplitCaptionEntryText(value: string): string {
+  return trimTitleCandidate(
+    normalizeString(value)
+      .replace(/@\S+/g, "")
+      .replace(/\s*[•·|]+\s*/g, " ")
+      .replace(/\s+/g, " "),
+  );
+}
+
+function parseSplitCaptionEntryArtists(value: string): string[] {
+  return [...new Set(
+    value
+      .split(/\s*(?:,|&|\+|\bb2b\b|\band\b)\s*/iu)
+      .map((item) => trimTitleCandidate(item))
+      .filter((item) => item.length > 0),
+  )];
+}
+
+function extractCaptionSplitEventCandidates(
+  post: InstagramScrapedPost,
+  extracted: ExtractedEventData,
+): CaptionSplitEventCandidate[] {
+  const captionText = normalizeString(post.caption || extracted.source_caption);
+  if (!captionText) {
+    return [];
+  }
+
+  const entries: CaptionSplitEventCandidate[] = [];
+  const seenEntries = new Set<string>();
+
+  for (const rawLine of captionText.split(/\r?\n/)) {
+    const line = normalizeString(rawLine);
+    const match = line.match(
+      /^(\d{1,2}[./-]\d{1,2}(?:[./-](?:\d{2}|\d{4}))?)\s*[•·|:\-–—]+\s*(.+)$/u,
+    );
+    if (!match) {
+      continue;
+    }
+
+    const rawDate = normalizeString(match[1]);
+    const lineTitle = cleanSplitCaptionEntryText(match[2] ?? "");
+    if (!rawDate || !lineTitle) {
+      continue;
+    }
+
+    const normalizedDate = normalizeEventDate(rawDate, captionText, post.postedAt);
+    const dedupeKey = `${normalizedDate.isoDate ?? rawDate}:${toSearchableText(lineTitle)}`;
+    if (seenEntries.has(dedupeKey)) {
+      continue;
+    }
+    seenEntries.add(dedupeKey);
+
+    entries.push({
+      rawDate,
+      normalizedDate,
+      lineTitle,
+      artists: parseSplitCaptionEntryArtists(lineTitle),
+      sourceLine: line,
+    });
+  }
+
+  const uniqueResolvedDates = new Set(
+    entries
+      .map((entry) => entry.normalizedDate.isoDate)
+      .filter((value): value is string => Boolean(value)),
+  );
+
+  return uniqueResolvedDates.size >= 2 ? entries : [];
+}
+
+function buildSplitEventDescription(
+  eventType: string,
+  venue: string | null,
+  artists: string[],
+): string | undefined {
+  const normalizedArtists = artists.map((artist) => normalizeString(artist)).filter(Boolean);
+  if (normalizedArtists.length === 0) {
+    return undefined;
+  }
+
+  const normalizedEventType = normalizeString(eventType);
+  const humanizedEventType = normalizedEventType
+    ? `${normalizedEventType.charAt(0).toUpperCase()}${normalizedEventType.slice(1)}`
+    : "Event";
+  const eventLabel =
+    humanizedEventType === "Event" || /\bevent\b/i.test(humanizedEventType)
+      ? humanizedEventType
+      : `${humanizedEventType} event`;
+  const venueSuffix = venue ? ` at ${venue}` : "";
+  return `${eventLabel} with ${normalizedArtists.join(", ")}${venueSuffix}.`;
 }
 
 function createEmptyHandleSummary(handle: string): HandleSummary {
@@ -1264,13 +1702,17 @@ function expandNormalizedDateRange(
 }
 
 function isLowConfidenceVenue(value: string): boolean {
-  const normalized = value.toLowerCase().replace(/\s+/g, " ").trim();
-  if (!normalized) {
+  const searchable = normalizeVenueComparableText(value);
+  if (!searchable) {
     return true;
   }
   const exactGenericValues = new Set([
     "belgrade",
     "beograd",
+    "serbia",
+    "srbija",
+    "belgrade serbia",
+    "beograd srbija",
     "belgrade klub",
     "belgrade club",
     "beograd klub",
@@ -1282,13 +1724,13 @@ function isLowConfidenceVenue(value: string): boolean {
     "party",
     "event",
   ]);
-  if (exactGenericValues.has(normalized)) {
+  if (exactGenericValues.has(searchable)) {
     return true;
   }
-  if (/^belgrade\s+(club|klub)$/.test(normalized)) {
+  if (/^(belgrade|beograd)\s+(club|klub)$/.test(searchable)) {
     return true;
   }
-  if (/^beograd\s+(club|klub)$/.test(normalized)) {
+  if (/^(belgrade|beograd)\s+(serbia|srbija)$/.test(searchable)) {
     return true;
   }
   return false;
@@ -1306,8 +1748,14 @@ function normalizeVenue(
 
   const explicitVenue = pickExplicitVenueCandidate(locationName, modelVenue);
   if (explicitVenue) {
+    const canonicalExplicitVenue =
+      canonicalizeVenueName(
+        explicitVenue.venue,
+        canonicalVenueNamesByHandle,
+        mappedVenue || null,
+      ) ?? explicitVenue.venue;
     return {
-      venue: explicitVenue.venue,
+      venue: canonicalExplicitVenue,
       source: explicitVenue.source,
       wasFallback: explicitVenue.wasFallback,
       rawModelVenue: modelVenue,
@@ -1454,14 +1902,50 @@ function normalizeArtistsForComparison(artists: string[]): string[] {
   return artists.map((value) => value.trim().toLowerCase()).filter((value) => value.length > 0).sort();
 }
 
-function hasMaterialEventChange(existing: ExistingEventRecord, next: PreparedEvent): boolean {
+function choosePreferredDescription(
+  existing: string | undefined,
+  next: string | undefined,
+  nextNormalizedFieldsJson?: string,
+): string | undefined {
+  const normalizedExisting = normalizeString(existing);
+  const normalizedNext = normalizeString(next);
+  const nextNormalizedFields = parseJsonRecord(nextNormalizedFieldsJson);
+
+  if (!normalizedExisting) {
+    return normalizedNext || undefined;
+  }
+
+  if (!normalizedNext) {
+    return normalizedExisting;
+  }
+
+  if (normalizedExisting === normalizedNext) {
+    return normalizedExisting;
+  }
+
+  if (readJsonBoolean(nextNormalizedFields, "multiEventSplitDetected") && normalizedNext) {
+    return normalizedNext;
+  }
+
+  if (normalizedNext.length >= normalizedExisting.length * 1.25) {
+    return normalizedNext;
+  }
+
+  return normalizedExisting;
+}
+
+function hasMaterialEventChange(
+  existing: ExistingEventRecord,
+  next: PreparedEvent,
+  nextDescription: string | undefined = next.description,
+): boolean {
   if (normalizeString(existing.title) !== normalizeString(next.title)) return true;
   if (normalizeString(existing.date) !== normalizeString(next.date)) return true;
   if (normalizeString(existing.time) !== normalizeString(next.time)) return true;
   if (normalizeString(existing.venue) !== normalizeString(next.venue)) return true;
   if (normalizeString(existing.eventType) !== normalizeString(next.eventType)) return true;
   if (normalizeString(existing.ticketPrice) !== normalizeString(next.ticketPrice)) return true;
-  if (normalizeString(existing.description) !== normalizeString(next.description)) return true;
+  if (normalizeString(existing.description) !== normalizeString(nextDescription)) return true;
   if (normalizeString(existing.imageUrl) !== normalizeString(next.imageUrl)) return true;
   if (
     JSON.stringify(normalizeArtistsForComparison(existing.artists)) !==
@@ -1500,9 +1984,16 @@ function buildDuplicateUpdatePatch(
   materiallyChanged: boolean;
   statusResetToPending: boolean;
 } {
-  const materiallyChanged = hasMaterialEventChange(existing, next);
+  const preferredDescription = choosePreferredDescription(
+    existing.description,
+    next.description,
+    next.normalizedFieldsJson,
+  );
+  const materiallyChanged = hasMaterialEventChange(existing, next, preferredDescription);
   const statusResetToPending = materiallyChanged && existing.status !== "pending";
   const nextStatus: EventStatus = statusResetToPending ? "pending" : existing.status;
+  const descriptionChanged =
+    normalizeString(existing.description) !== normalizeString(preferredDescription);
 
   return {
     patch: {
@@ -1511,7 +2002,9 @@ function buildDuplicateUpdatePatch(
       ...(next.time ? { time: next.time } : {}),
       venue: next.venue,
       artists: next.artists,
-      ...(next.description ? { description: next.description } : {}),
+      ...(descriptionChanged && preferredDescription
+        ? { description: preferredDescription }
+        : {}),
       ...(next.imageUrl ? { imageUrl: next.imageUrl } : {}),
       instagramPostUrl: next.instagramPostUrl,
       instagramPostId: next.instagramPostId,
@@ -1741,22 +2234,14 @@ function prepareEventsForInsert(
       : dateNormalization.isoDate
         ? [dateNormalization.isoDate]
         : [];
+  const splitCaptionCandidates = extractCaptionSplitEventCandidates(post, extracted);
+  const usesSplitCaptionCandidates = splitCaptionCandidates.length > 1;
+  const extractedArtists = extracted.artists
+    .map((artist) => normalizeString(artist))
+    .filter((artist) => artist.length > 0);
   const eventDateFilter = getEventDateFilterContext();
-  const normalizedFieldsBase: Record<string, unknown> = {
-    title,
+  const normalizedFieldsCommon: Record<string, unknown> = {
     rawTitle: titleNormalization.rawTitle,
-    titleSource: titleNormalization.source,
-    titleUsedFallback: titleNormalization.usedFallback,
-    rawDate: normalizeString(extracted.date),
-    rawExtractedDateText: dateNormalization.rawDateText,
-    normalizedDate: candidateDates[0] ?? null,
-    dateSource: dateNormalization.source,
-    dateConfidence: dateNormalization.confidence,
-    dateDistanceFromPostDays: dateNormalization.distanceFromPostDays,
-    dateInferredYear: dateNormalization.inferredYear,
-    dateSuspiciousYear: dateNormalization.suspiciousYear,
-    dateYearSelectionReason: dateNormalization.yearSelectionReason,
-    dateReason: dateNormalization.reason ?? null,
     rawVenue: normalizeString(extracted.venue),
     normalizedVenue: venueNormalization.venue,
     venueSource: venueNormalization.source,
@@ -1771,29 +2256,56 @@ function prepareEventsForInsert(
     sourceCaptionFromModel: normalizeString(extracted.source_caption),
     sourceUrlFromModel: normalizeString(extracted.source_url),
     fieldConfirmation: extracted.field_confirmation,
-    artists: extracted.artists,
-    description,
     postTimestamp: post.postedAt,
-    dateRangeExpanded: candidateDates.length > 1,
-    dateRangeExpandedCount: candidateDates.length,
     filterDateToday: eventDateFilter.todayIsoDate,
     filterDateMaxFuture: eventDateFilter.maxFutureIsoDate,
     filterMaxDaysAhead: eventDateFilter.maxDaysAhead,
     filterDateTimezone: eventDateFilter.timeZone,
-    normalizedIsValid: true,
-    normalizedInvalidReason: null,
   };
 
-  if (candidateDates.length === 0) {
+  const referenceSplitCandidate = splitCaptionCandidates[0];
+  const referenceDateNormalization = referenceSplitCandidate?.normalizedDate ?? dateNormalization;
+  const referenceRawDate = referenceSplitCandidate?.rawDate ?? normalizeString(extracted.date);
+  const referenceTitle =
+    usesSplitCaptionCandidates && titleNormalization.usedFallback && referenceSplitCandidate
+      ? referenceSplitCandidate.lineTitle
+      : title;
+
+  if (!usesSplitCaptionCandidates && candidateDates.length === 0) {
     const normalizedFields: Record<string, unknown> = {
-      ...normalizedFieldsBase,
+      ...normalizedFieldsCommon,
+      title: referenceTitle,
+      titleSource: titleNormalization.source,
+      titleUsedFallback: titleNormalization.usedFallback,
+      titleDerivedFromContext: titleNormalization.source === "context_derived",
+      titleContextCandidate: titleNormalization.contextCandidate,
+      rawDate: referenceRawDate,
+      rawExtractedDateText: referenceDateNormalization.rawDateText,
+      normalizedDate: null,
+      dateSource: referenceDateNormalization.source,
+      dateConfidence: referenceDateNormalization.confidence,
+      dateDistanceFromPostDays: referenceDateNormalization.distanceFromPostDays,
+      dateInferredYear: referenceDateNormalization.inferredYear,
+      dateSuspiciousYear: referenceDateNormalization.suspiciousYear,
+      dateYearSelectionReason: referenceDateNormalization.yearSelectionReason,
+      dateReason: referenceDateNormalization.reason ?? null,
+      artists: extractedArtists,
+      description,
+      dateRangeExpanded: false,
+      dateRangeExpandedCount: 0,
+      multiEventSplitDetected: false,
+      multiEventSplitCount: 0,
+      splitEventIndex: 0,
+      splitEventTotal: 0,
+      splitSourceLine: null,
       normalizedIsValid: false,
       normalizedInvalidReason: "invalid_date",
     };
     return [
       {
         kind: "skip",
-        reason: dateNormalization.reason === "missing_date" ? "missing_date" : "invalid_event",
+        reason:
+          referenceDateNormalization.reason === "missing_date" ? "missing_date" : "invalid_event",
         normalizedFields,
       },
     ];
@@ -1801,7 +2313,31 @@ function prepareEventsForInsert(
 
   if (!venueNormalization.venue) {
     const normalizedFields: Record<string, unknown> = {
-      ...normalizedFieldsBase,
+      ...normalizedFieldsCommon,
+      title: referenceTitle,
+      titleSource: titleNormalization.source,
+      titleUsedFallback: titleNormalization.usedFallback,
+      titleDerivedFromContext: titleNormalization.source === "context_derived",
+      titleContextCandidate: titleNormalization.contextCandidate,
+      rawDate: referenceRawDate,
+      rawExtractedDateText: referenceDateNormalization.rawDateText,
+      normalizedDate: referenceDateNormalization.isoDate,
+      dateSource: referenceDateNormalization.source,
+      dateConfidence: referenceDateNormalization.confidence,
+      dateDistanceFromPostDays: referenceDateNormalization.distanceFromPostDays,
+      dateInferredYear: referenceDateNormalization.inferredYear,
+      dateSuspiciousYear: referenceDateNormalization.suspiciousYear,
+      dateYearSelectionReason: referenceDateNormalization.yearSelectionReason,
+      dateReason: referenceDateNormalization.reason ?? null,
+      artists: extractedArtists,
+      description,
+      dateRangeExpanded: !usesSplitCaptionCandidates && candidateDates.length > 1,
+      dateRangeExpandedCount: !usesSplitCaptionCandidates ? candidateDates.length : 1,
+      multiEventSplitDetected: usesSplitCaptionCandidates,
+      multiEventSplitCount: usesSplitCaptionCandidates ? splitCaptionCandidates.length : 1,
+      splitEventIndex: usesSplitCaptionCandidates ? 1 : 1,
+      splitEventTotal: usesSplitCaptionCandidates ? splitCaptionCandidates.length : 1,
+      splitSourceLine: referenceSplitCandidate?.sourceLine ?? null,
       normalizedIsValid: false,
       normalizedInvalidReason: "invalid_venue",
     };
@@ -1814,9 +2350,33 @@ function prepareEventsForInsert(
     ];
   }
 
-  if (!title || !eventType) {
+  if (!eventType) {
     const normalizedFields: Record<string, unknown> = {
-      ...normalizedFieldsBase,
+      ...normalizedFieldsCommon,
+      title: referenceTitle,
+      titleSource: titleNormalization.source,
+      titleUsedFallback: titleNormalization.usedFallback,
+      titleDerivedFromContext: titleNormalization.source === "context_derived",
+      titleContextCandidate: titleNormalization.contextCandidate,
+      rawDate: referenceRawDate,
+      rawExtractedDateText: referenceDateNormalization.rawDateText,
+      normalizedDate: referenceDateNormalization.isoDate,
+      dateSource: referenceDateNormalization.source,
+      dateConfidence: referenceDateNormalization.confidence,
+      dateDistanceFromPostDays: referenceDateNormalization.distanceFromPostDays,
+      dateInferredYear: referenceDateNormalization.inferredYear,
+      dateSuspiciousYear: referenceDateNormalization.suspiciousYear,
+      dateYearSelectionReason: referenceDateNormalization.yearSelectionReason,
+      dateReason: referenceDateNormalization.reason ?? null,
+      artists: extractedArtists,
+      description,
+      dateRangeExpanded: !usesSplitCaptionCandidates && candidateDates.length > 1,
+      dateRangeExpandedCount: !usesSplitCaptionCandidates ? candidateDates.length : 1,
+      multiEventSplitDetected: usesSplitCaptionCandidates,
+      multiEventSplitCount: usesSplitCaptionCandidates ? splitCaptionCandidates.length : 1,
+      splitEventIndex: usesSplitCaptionCandidates ? 1 : 1,
+      splitEventTotal: usesSplitCaptionCandidates ? splitCaptionCandidates.length : 1,
+      splitSourceLine: referenceSplitCandidate?.sourceLine ?? null,
       normalizedIsValid: false,
       normalizedInvalidReason: "missing_required_fields",
     };
@@ -1829,19 +2389,109 @@ function prepareEventsForInsert(
     ];
   }
 
-  const artists = extracted.artists
-    .map((artist) => normalizeString(artist))
-    .filter((artist) => artist.length > 0);
+  const eventVariants = usesSplitCaptionCandidates
+    ? splitCaptionCandidates.map((entry) => {
+        const usesCaptionScheduleTitle =
+          titleNormalization.usedFallback && entry.lineTitle.length > 0;
+        const variantArtists =
+          entry.artists.length > 0 ? entry.artists : extractedArtists;
+        return {
+          title: usesCaptionScheduleTitle ? entry.lineTitle : title,
+          titleSource: usesCaptionScheduleTitle ? "caption_schedule" : titleNormalization.source,
+          titleUsedFallback: usesCaptionScheduleTitle ? false : titleNormalization.usedFallback,
+          titleDerivedFromContext:
+            usesCaptionScheduleTitle ? false : titleNormalization.source === "context_derived",
+          titleContextCandidate:
+            usesCaptionScheduleTitle ? entry.lineTitle : titleNormalization.contextCandidate,
+          rawDate: entry.rawDate,
+          dateNormalization: entry.normalizedDate,
+          artists: variantArtists,
+          description:
+            buildSplitEventDescription(eventType, venueNormalization.venue, variantArtists) ??
+            description,
+          splitSourceLine: entry.sourceLine,
+        };
+      })
+    : candidateDates.map((date) => ({
+        title,
+        titleSource: titleNormalization.source,
+        titleUsedFallback: titleNormalization.usedFallback,
+        titleDerivedFromContext: titleNormalization.source === "context_derived",
+        titleContextCandidate: titleNormalization.contextCandidate,
+        rawDate: normalizeString(extracted.date),
+        dateNormalization: {
+          ...dateNormalization,
+          isoDate: date,
+        } satisfies DateNormalization,
+        artists: extractedArtists,
+        description,
+        splitSourceLine: null,
+      }));
 
   const preparedEvents: PrepareEventResult[] = [];
 
-  for (const [index, date] of candidateDates.entries()) {
+  for (const [index, variant] of eventVariants.entries()) {
+    const date = variant.dateNormalization.isoDate;
     const normalizedFields: Record<string, unknown> = {
-      ...normalizedFieldsBase,
+      ...normalizedFieldsCommon,
+      title: variant.title,
+      titleSource: variant.titleSource,
+      titleUsedFallback: variant.titleUsedFallback,
+      titleDerivedFromContext: variant.titleDerivedFromContext,
+      titleContextCandidate: variant.titleContextCandidate,
+      rawDate: variant.rawDate,
+      rawExtractedDateText: variant.dateNormalization.rawDateText,
       normalizedDate: date,
+      dateSource: variant.dateNormalization.source,
+      dateConfidence: variant.dateNormalization.confidence,
+      dateDistanceFromPostDays: variant.dateNormalization.distanceFromPostDays,
+      dateInferredYear: variant.dateNormalization.inferredYear,
+      dateSuspiciousYear: variant.dateNormalization.suspiciousYear,
+      dateYearSelectionReason: variant.dateNormalization.yearSelectionReason,
+      dateReason: variant.dateNormalization.reason ?? null,
+      artists: variant.artists,
+      description: variant.description,
+      dateRangeExpanded: !usesSplitCaptionCandidates && candidateDates.length > 1,
+      dateRangeExpandedCount: !usesSplitCaptionCandidates ? candidateDates.length : 1,
+      multiEventSplitDetected: usesSplitCaptionCandidates,
+      multiEventSplitCount: usesSplitCaptionCandidates ? splitCaptionCandidates.length : 1,
+      splitEventIndex: index + 1,
+      splitEventTotal: eventVariants.length,
+      splitSourceLine: variant.splitSourceLine,
       expandedDateIndex: index + 1,
-      expandedDateTotal: candidateDates.length,
+      expandedDateTotal: eventVariants.length,
+      normalizedIsValid: true,
+      normalizedInvalidReason: null,
     };
+
+    if (!date) {
+      preparedEvents.push({
+        kind: "skip",
+        reason:
+          variant.dateNormalization.reason === "missing_date"
+            ? "missing_date"
+            : "invalid_event",
+        normalizedFields: {
+          ...normalizedFields,
+          normalizedIsValid: false,
+          normalizedInvalidReason: "invalid_date",
+        },
+      });
+      continue;
+    }
+
+    if (!variant.title) {
+      preparedEvents.push({
+        kind: "skip",
+        reason: "invalid_event",
+        normalizedFields: {
+          ...normalizedFields,
+          normalizedIsValid: false,
+          normalizedInvalidReason: "missing_required_fields",
+        },
+      });
+      continue;
+    }
 
     if (date < eventDateFilter.todayIsoDate) {
       preparedEvents.push({
@@ -1873,12 +2523,12 @@ function prepareEventsForInsert(
       kind: "ok",
       normalizedFields,
       event: {
-        title,
+        title: variant.title,
         date,
         ...(time ? { time } : {}),
         venue: venueNormalization.venue,
-        artists,
-        ...(description ? { description } : {}),
+        artists: variant.artists,
+        ...(variant.description ? { description: variant.description } : {}),
         imageUrl: selectedImageUrl,
         instagramPostUrl: post.instagramPostUrl,
         instagramPostId: post.postId,
