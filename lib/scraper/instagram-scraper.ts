@@ -1,7 +1,8 @@
 import { getRequiredEnv } from "@/lib/utils/env";
 
 const DEFAULT_APIFY_ACTOR_ID = "apify/instagram-scraper";
-const DEFAULT_RESULTS_LIMIT = 20;
+const DEFAULT_RESULTS_LIMIT = 5;
+const MAX_TOP_LEVEL_POSTS_PER_ACCOUNT = 5;
 const DEFAULT_DAYS_BACK = 60;
 
 export type InstagramScrapedPost = {
@@ -56,6 +57,17 @@ type ApifyInstagramItem = {
 
 function normalizeHandle(handle: string): string {
   return handle.replace(/^@/, "").trim().toLowerCase();
+}
+
+function normalizeResultsLimit(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_RESULTS_LIMIT;
+  }
+  const rounded = Math.trunc(value as number);
+  if (rounded < 1) {
+    return DEFAULT_RESULTS_LIMIT;
+  }
+  return Math.min(rounded, MAX_TOP_LEVEL_POSTS_PER_ACCOUNT);
 }
 
 function parsePostDate(item: ApifyInstagramItem): Date | null {
@@ -195,17 +207,32 @@ export async function scrapeInstagramAccount(
   const apiToken = getRequiredEnv("APIFY_API_TOKEN");
   const actorId = process.env.APIFY_INSTAGRAM_ACTOR_ID ?? DEFAULT_APIFY_ACTOR_ID;
   const handle = normalizeHandle(options.handle);
-  const resultsLimit = options.resultsLimit ?? DEFAULT_RESULTS_LIMIT;
+  const resultsLimit = normalizeResultsLimit(options.resultsLimit);
   const daysBack = options.daysBack ?? DEFAULT_DAYS_BACK;
   const cutoff = Date.now() - daysBack * 24 * 60 * 60 * 1000;
 
   const endpoint = `https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}/run-sync-get-dataset-items?token=${apiToken}&clean=true`;
+  const directUrls = [`https://www.instagram.com/${handle}/`];
   const input = {
-    directUrls: [`https://www.instagram.com/${handle}/`],
-    resultsType: "posts",
+    directUrls,
+    resultsType: "posts" as const,
     resultsLimit,
     addParentData: false,
   };
+  const maybeOnlyPostsNewerThan = (input as { onlyPostsNewerThan?: string })
+    .onlyPostsNewerThan;
+
+  console.info(
+    JSON.stringify({
+      level: "info",
+      event: "apify.instagram.request",
+      handles: [handle],
+      directUrls: input.directUrls,
+      resultsType: input.resultsType,
+      resultsLimit: input.resultsLimit,
+      ...(maybeOnlyPostsNewerThan ? { onlyPostsNewerThan: maybeOnlyPostsNewerThan } : {}),
+    }),
+  );
 
   const response = await fetch(endpoint, {
     method: "POST",
@@ -224,8 +251,7 @@ export async function scrapeInstagramAccount(
   }
 
   const rawItems = (await response.json()) as ApifyInstagramItem[];
-
-  return rawItems
+  const scrapedPosts = rawItems
     .map<InstagramScrapedPost | null>((item) => {
       const postId = buildPostId(item);
       const instagramPostUrl = buildPostUrl(item);
@@ -252,4 +278,14 @@ export async function scrapeInstagramAccount(
       };
     })
     .filter((item): item is InstagramScrapedPost => item !== null);
+
+  const uniqueTopLevelPosts = new Map<string, InstagramScrapedPost>();
+  for (const post of scrapedPosts) {
+    const uniqueKey = `${post.instagramPostUrl}::${post.postId}`;
+    if (!uniqueTopLevelPosts.has(uniqueKey)) {
+      uniqueTopLevelPosts.set(uniqueKey, post);
+    }
+  }
+
+  return [...uniqueTopLevelPosts.values()].slice(0, resultsLimit);
 }

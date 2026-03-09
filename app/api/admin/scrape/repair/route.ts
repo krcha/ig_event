@@ -16,7 +16,7 @@ type Body = {
 
 type RepairErrorStep = "auth_check" | "parse_body" | "enqueue_repair_job";
 
-const DEFAULT_REPAIR_RESULTS_LIMIT = 100;
+const DEFAULT_REPAIR_RESULTS_LIMIT = 5;
 const DEFAULT_REPAIR_DAYS_BACK = 365;
 const DEFAULT_BATCH_SIZE = 2;
 const createIngestionJobMutation =

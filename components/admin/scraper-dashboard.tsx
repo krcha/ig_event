@@ -169,7 +169,7 @@ export function ScraperDashboard() {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          resultsLimit: 100,
+          resultsLimit: 5,
           daysBack: 365,
         }),
       });
