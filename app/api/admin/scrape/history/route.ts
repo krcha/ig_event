@@ -50,6 +50,11 @@ function logError(event: string, payload: Record<string, unknown>) {
 }
 
 export async function POST(request: Request) {
+  let errorStage:
+    | "auth"
+    | "parse_body"
+    | "import_recent_runs"
+    | "enqueue_saved_posts_job" = "auth";
   if (hasClerkEnv()) {
     const { userId } = await auth();
     if (!userId) {
@@ -59,6 +64,7 @@ export async function POST(request: Request) {
 
   let body: Body;
   try {
+    errorStage = "parse_body";
     body = (await request.json()) as Body;
   } catch {
     return NextResponse.json({ error: "Invalid JSON payload." }, { status: 400 });
@@ -78,6 +84,7 @@ export async function POST(request: Request) {
   const runsLimit = normalizePositiveInt(body.runsLimit) ?? DEFAULT_RUNS_LIMIT;
 
   try {
+    errorStage = "import_recent_runs";
     const importSummary = await importRecentApifyRunPostsToSavedPosts({
       handles,
       runsLimit,
@@ -91,6 +98,7 @@ export async function POST(request: Request) {
     }
 
     const normalizedHandles = importSummary.handles;
+    errorStage = "enqueue_saved_posts_job";
     const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
     const summary = createEmptyIngestionSummary(normalizedHandles);
     const state = createInitialIngestionBatchState();
@@ -136,8 +144,9 @@ export async function POST(request: Request) {
       mode: "saved_posts",
       handles,
       runsLimit,
+      errorStage,
       error: message,
     });
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: message, errorStage }, { status: 500 });
   }
 }

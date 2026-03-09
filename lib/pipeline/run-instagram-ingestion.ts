@@ -118,6 +118,7 @@ const listScrapedPostsByHandleQuery =
   "scrapedPosts:listByHandle" as unknown as FunctionReference<"query">;
 const upsertScrapedPostsByHandleMutation =
   "scrapedPosts:upsertManyByHandle" as unknown as FunctionReference<"mutation">;
+const SCRAPED_POST_UPSERT_BATCH_SIZE = 25;
 const STATIC_VENUE_BY_HANDLE: Record<string, string> = {
   "20_44.nightclub": "Klub 20/44",
   kcgrad: "KC Grad",
@@ -556,6 +557,14 @@ export function createInitialIngestionBatchState(): IngestionBatchState {
   };
 }
 
+function chunkItems<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
 async function persistScrapedPostsForHandle(
   client: ConvexHttpClient,
   handle: string,
@@ -565,21 +574,23 @@ async function persistScrapedPostsForHandle(
     return;
   }
 
-  await client.mutation(upsertScrapedPostsByHandleMutation, {
-    handle,
-    posts: posts.map((post) => ({
+  for (const postBatch of chunkItems(posts, SCRAPED_POST_UPSERT_BATCH_SIZE)) {
+    await client.mutation(upsertScrapedPostsByHandleMutation, {
       handle,
-      postId: post.postId,
-      ...(post.caption ? { caption: post.caption } : {}),
-      ...(post.imageUrl ? { imageUrl: post.imageUrl } : {}),
-      imageUrls: post.imageUrls,
-      ...(post.postType ? { postType: post.postType } : {}),
-      ...(post.locationName ? { locationName: post.locationName } : {}),
-      instagramPostUrl: post.instagramPostUrl,
-      ...(post.postedAt ? { postedAt: post.postedAt } : {}),
-      username: post.username,
-    })),
-  });
+      posts: postBatch.map((post) => ({
+        handle,
+        postId: post.postId,
+        ...(post.caption ? { caption: post.caption } : {}),
+        ...(post.imageUrl ? { imageUrl: post.imageUrl } : {}),
+        imageUrls: post.imageUrls,
+        ...(post.postType ? { postType: post.postType } : {}),
+        ...(post.locationName ? { locationName: post.locationName } : {}),
+        instagramPostUrl: post.instagramPostUrl,
+        ...(post.postedAt ? { postedAt: post.postedAt } : {}),
+        username: post.username,
+      })),
+    });
+  }
 }
 
 async function loadSavedScrapedPostsForHandle(
