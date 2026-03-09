@@ -1,10 +1,14 @@
 import Link from "next/link";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
+import { unstable_noStore as noStore } from "next/cache";
 
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
-type ApprovedEvent = {
+type EventStatus = "pending" | "approved" | "rejected";
+
+type PublicEvent = {
   _id: string;
   title: string;
   date: string;
@@ -15,7 +19,7 @@ type ApprovedEvent = {
   ticketPrice?: string;
   sourcePostedAt?: string;
   normalizedFieldsJson?: string;
-  status: "approved";
+  status: EventStatus;
 };
 
 const listByStatusQuery =
@@ -45,55 +49,92 @@ function getStartOfLocalToday(): Date {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate());
 }
 
-function filterUpcomingApprovedEvents(events: ApprovedEvent[]): ApprovedEvent[] {
+function parseEventTimeMinutes(value: string | undefined): number {
+  if (!value) {
+    return 0;
+  }
+  const match = value.match(/(\d{1,2}):(\d{2})/);
+  if (!match) {
+    return 0;
+  }
+  const hours = Number.parseInt(match[1], 10);
+  const minutes = Number.parseInt(match[2], 10);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+    return 0;
+  }
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    return 0;
+  }
+  return hours * 60 + minutes;
+}
+
+function logFilteredOutEvent(event: PublicEvent, reason: "not_approved" | "past_date" | "invalid_normalized_date") {
+  console.info(
+    JSON.stringify({
+      level: "info",
+      event: "public_events.filtered_out",
+      reason,
+      eventId: event._id,
+      title: event.title,
+      status: event.status,
+      eventDate: event.date,
+      eventTime: event.time ?? null,
+      sourcePostedAt: event.sourcePostedAt ?? null,
+    }),
+  );
+}
+
+function filterUpcomingApprovedEvents(events: PublicEvent[]): PublicEvent[] {
   const startOfToday = getStartOfLocalToday();
-  const upcomingEvents: ApprovedEvent[] = [];
+  const upcomingEvents: PublicEvent[] = [];
+  let filteredNotApproved = 0;
   let filteredInvalidDate = 0;
   let filteredPastDate = 0;
+  let approvedEvents = 0;
 
   for (const event of events) {
+    if (event.status !== "approved") {
+      filteredNotApproved += 1;
+      logFilteredOutEvent(event, "not_approved");
+      continue;
+    }
+
+    approvedEvents += 1;
+
     const parsedDate = parseNormalizedEventDate(event.date);
     if (!parsedDate) {
       filteredInvalidDate += 1;
-      console.info(
-        JSON.stringify({
-          level: "info",
-          event: "public_events.filtered_out",
-          reason: "invalid_normalized_date",
-          eventId: event._id,
-          status: event.status,
-          eventDate: event.date,
-          sourcePostedAt: event.sourcePostedAt ?? null,
-        }),
-      );
+      logFilteredOutEvent(event, "invalid_normalized_date");
       continue;
     }
 
     if (parsedDate < startOfToday) {
       filteredPastDate += 1;
-      console.info(
-        JSON.stringify({
-          level: "info",
-          event: "public_events.filtered_out",
-          reason: "past_date",
-          eventId: event._id,
-          status: event.status,
-          eventDate: event.date,
-          sourcePostedAt: event.sourcePostedAt ?? null,
-        }),
-      );
+      logFilteredOutEvent(event, "past_date");
       continue;
     }
 
     upcomingEvents.push(event);
   }
 
+  upcomingEvents.sort((left, right) => {
+    const leftDate = parseNormalizedEventDate(left.date);
+    const rightDate = parseNormalizedEventDate(right.date);
+    const leftTime = parseEventTimeMinutes(left.time);
+    const rightTime = parseEventTimeMinutes(right.time);
+    const leftScore = (leftDate ? leftDate.getTime() : Number.MAX_SAFE_INTEGER) + leftTime * 60 * 1000;
+    const rightScore = (rightDate ? rightDate.getTime() : Number.MAX_SAFE_INTEGER) + rightTime * 60 * 1000;
+    return leftScore - rightScore;
+  });
+
   console.info(
     JSON.stringify({
       level: "info",
       event: "public_events.filter_summary",
-      totalApproved: events.length,
-      keptUpcoming: upcomingEvents.length,
+      totalFetchedEvents: events.length,
+      approvedEvents,
+      upcomingEvents: upcomingEvents.length,
+      filteredNotApproved,
       filteredInvalidDate,
       filteredPastDate,
       localToday: startOfToday.toISOString(),
@@ -104,9 +145,10 @@ function filterUpcomingApprovedEvents(events: ApprovedEvent[]): ApprovedEvent[] 
 }
 
 async function loadApprovedEvents(): Promise<{
-  events: ApprovedEvent[];
+  events: PublicEvent[];
   error?: string;
 }> {
+  noStore();
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
   if (!convexUrl) {
     return { events: [], error: "Convex is not configured yet." };
@@ -116,8 +158,8 @@ async function loadApprovedEvents(): Promise<{
     const convex = new ConvexHttpClient(convexUrl);
     const events = (await convex.query(listByStatusQuery, {
       status: "approved",
-      limit: 100,
-    })) as ApprovedEvent[];
+      limit: 500,
+    })) as PublicEvent[];
     return { events: filterUpcomingApprovedEvents(events) };
   } catch (error) {
     return {
