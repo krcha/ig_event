@@ -34,11 +34,17 @@ type UpdateVenueBody = {
   };
 };
 
+type DeleteVenueBody = {
+  id?: string;
+};
+
 const listVenuesQuery = "venues:listVenues" as unknown as FunctionReference<"query">;
 const createVenueMutation =
   "venues:createVenue" as unknown as FunctionReference<"mutation">;
 const updateVenueMutation =
   "venues:updateVenue" as unknown as FunctionReference<"mutation">;
+const removeVenueMutation =
+  "venues:removeVenue" as unknown as FunctionReference<"mutation">;
 
 function getConvexClient() {
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
@@ -158,6 +164,38 @@ export async function PATCH(request: Request) {
     return NextResponse.json(
       {
         error: error instanceof Error ? error.message : "Failed to update venue.",
+      },
+      { status: 500 },
+    );
+  }
+}
+
+export async function DELETE(request: Request) {
+  if (!(await ensureAuthorized())) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let body: DeleteVenueBody;
+  try {
+    body = (await request.json()) as DeleteVenueBody;
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON payload." }, { status: 400 });
+  }
+
+  if (!body.id) {
+    return NextResponse.json({ error: "id is required." }, { status: 400 });
+  }
+
+  try {
+    const convex = getConvexClient();
+    await convex.mutation(removeVenueMutation, {
+      id: body.id,
+    });
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error: error instanceof Error ? error.message : "Failed to remove venue.",
       },
       { status: 500 },
     );
