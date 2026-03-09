@@ -31,11 +31,14 @@ type HandleSummary = {
   inserted_events: number;
   skippedDuplicates: number;
   skipped_duplicates: number;
+  skipped_duplicates_clean: number;
   skippedNoImage: number;
   skipped_missing_date: number;
   skipped_missing_venue: number;
   skipped_video: number;
   skipped_invalid_event: number;
+  updated_duplicates_bad_data: number;
+  duplicate_update_failed: number;
   failedDownloads: number;
   failed_downloads: number;
   failedConversions: number;
@@ -59,8 +62,12 @@ export type ActiveVenueIngestionResult = {
 
 const getByInstagramPostIdQuery =
   "events:getByInstagramPostId" as unknown as FunctionReference<"query">;
+const getByInstagramPostUrlQuery =
+  "events:getByInstagramPostUrl" as unknown as FunctionReference<"query">;
 const createEventMutation =
   "events:createEvent" as unknown as FunctionReference<"mutation">;
+const updateEventMutation =
+  "events:updateEvent" as unknown as FunctionReference<"mutation">;
 const listActiveVenuesQuery =
   "venues:listActiveVenues" as unknown as FunctionReference<"query">;
 const KNOWN_VENUE_BY_HANDLE: Record<string, string> = {
@@ -135,6 +142,63 @@ type PrepareEventResult =
       normalizedFields: Record<string, unknown>;
     };
 
+type EventStatus = "pending" | "approved" | "rejected";
+
+type ExistingEventRecord = {
+  _id: string;
+  title: string;
+  date: string;
+  time?: string;
+  venue: string;
+  artists: string[];
+  description?: string;
+  imageUrl?: string;
+  instagramPostUrl?: string;
+  instagramPostId?: string;
+  ticketPrice?: string;
+  eventType: string;
+  sourceCaption?: string;
+  sourcePostedAt?: string;
+  rawExtractionJson?: string;
+  normalizedFieldsJson?: string;
+  status: EventStatus;
+  reviewedAt?: number;
+  reviewedBy?: string;
+  moderationNote?: string;
+};
+
+type ExistingSourceMatch = {
+  existingEvent: ExistingEventRecord;
+  matchedBy: "post_id" | "shortcode" | "post_url";
+  matchedValue: string;
+};
+
+type DuplicateQualityReason =
+  | "wrong_year"
+  | "bad_venue"
+  | "low_confidence"
+  | "invalid_required_fields"
+  | "invalid_normalized_fields";
+
+type ExistingEventQuality = {
+  isLowQuality: boolean;
+  primaryReason: DuplicateQualityReason | null;
+  reasons: DuplicateQualityReason[];
+  details: Record<string, unknown>;
+};
+
+type DuplicateUpdateLogEvent =
+  | "duplicate_updated_wrong_year"
+  | "duplicate_updated_bad_venue"
+  | "duplicate_updated_low_confidence"
+  | "duplicate_updated_bad_data";
+
+type DuplicateUpdateContext = {
+  existing: ExistingSourceMatch;
+  quality: ExistingEventQuality;
+  updateReasonEvent: DuplicateUpdateLogEvent;
+};
+
 const MONTHS: Record<string, number> = {
   jan: 1,
   feb: 2,
@@ -150,6 +214,7 @@ const MONTHS: Record<string, number> = {
   dec: 12,
 };
 const MAX_DATE_DISTANCE_DAYS = 180;
+const EXISTING_EVENT_CONFIDENCE_THRESHOLD = 0.55;
 
 function logInfo(event: string, payload: Record<string, unknown>) {
   console.info(
@@ -186,6 +251,45 @@ function normalizeHandle(handle: string): string {
 
 function normalizeString(value: string | null | undefined): string {
   return (value ?? "").trim();
+}
+
+function parseJsonRecord(value: string | undefined): Record<string, unknown> | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function readJsonBoolean(record: Record<string, unknown> | null, key: string): boolean | null {
+  const value = record?.[key];
+  return typeof value === "boolean" ? value : null;
+}
+
+function readJsonString(record: Record<string, unknown> | null, key: string): string | null {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function readJsonNumber(record: Record<string, unknown> | null, key: string): number | null {
+  const value = record?.[key];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
 }
 
 function normalizeIsoDate(year: number, month: number, day: number): string | null {
@@ -604,6 +708,234 @@ function normalizeVenue(post: InstagramScrapedPost, rawModelVenue: string): Venu
   };
 }
 
+function extractShortcodeFromPostUrl(url: string): string | null {
+  const match = url.match(/instagram\.com\/p\/([^/?#]+)/i);
+  return match?.[1]?.trim() || null;
+}
+
+function parseEventYear(date: string | undefined): number | null {
+  if (!date) {
+    return null;
+  }
+  const match = date.match(/^(\d{4})-\d{2}-\d{2}$/);
+  if (!match) {
+    return null;
+  }
+  return Number.parseInt(match[1], 10);
+}
+
+function mapDuplicateReasonToLogEvent(reason: DuplicateQualityReason): DuplicateUpdateLogEvent {
+  if (reason === "wrong_year") return "duplicate_updated_wrong_year";
+  if (reason === "bad_venue") return "duplicate_updated_bad_venue";
+  if (reason === "low_confidence") return "duplicate_updated_low_confidence";
+  return "duplicate_updated_bad_data";
+}
+
+function isLowQualityExistingEvent(
+  existing: ExistingEventRecord,
+  postTimestamp: string | null,
+): ExistingEventQuality {
+  const reasons = new Set<DuplicateQualityReason>();
+  const normalizedFields = parseJsonRecord(existing.normalizedFieldsJson);
+  const postDate = parsePostedAt(postTimestamp ?? existing.sourcePostedAt ?? null);
+  const eventYear = parseEventYear(existing.date);
+  const explicitYearHighConfidence =
+    readJsonString(normalizedFields, "dateYearSelectionReason") === "explicit_year_from_text" &&
+    readJsonString(normalizedFields, "dateConfidence") === "high";
+  const confidence = readJsonNumber(normalizedFields, "confidence");
+
+  if (!normalizeString(existing.title) || !normalizeString(existing.date) || !normalizeString(existing.venue) || !normalizeString(existing.eventType)) {
+    reasons.add("invalid_required_fields");
+  }
+
+  if (readJsonBoolean(normalizedFields, "dateSuspiciousYear")) {
+    reasons.add("wrong_year");
+  }
+
+  if (postDate && eventYear !== null) {
+    const postYear = postDate.getUTCFullYear();
+    if (Math.abs(eventYear - postYear) >= 2) {
+      reasons.add("wrong_year");
+    }
+    if (eventYear < postYear && !explicitYearHighConfidence) {
+      reasons.add("wrong_year");
+    }
+  }
+
+  if (
+    readJsonString(normalizedFields, "dateReason") !== null ||
+    readJsonString(normalizedFields, "normalizedDate") === null ||
+    readJsonBoolean(normalizedFields, "normalizedIsValid") === false
+  ) {
+    reasons.add("invalid_normalized_fields");
+  }
+
+  if (isLowConfidenceVenue(existing.venue)) {
+    reasons.add("bad_venue");
+  }
+
+  const normalizedVenue = existing.venue.toLowerCase().replace(/\s+/g, " ").trim();
+  if (normalizedVenue === "unknown venue" || normalizedVenue === "20_44 nightclub") {
+    reasons.add("bad_venue");
+  }
+
+  if (confidence !== null && confidence < EXISTING_EVENT_CONFIDENCE_THRESHOLD) {
+    reasons.add("low_confidence");
+  }
+
+  const orderedReasons: DuplicateQualityReason[] = [];
+  if (reasons.has("wrong_year")) orderedReasons.push("wrong_year");
+  if (reasons.has("bad_venue")) orderedReasons.push("bad_venue");
+  if (reasons.has("low_confidence")) orderedReasons.push("low_confidence");
+  if (reasons.has("invalid_required_fields")) orderedReasons.push("invalid_required_fields");
+  if (reasons.has("invalid_normalized_fields")) orderedReasons.push("invalid_normalized_fields");
+
+  return {
+    isLowQuality: orderedReasons.length > 0,
+    primaryReason: orderedReasons[0] ?? null,
+    reasons: orderedReasons,
+    details: {
+      postTimestamp: postTimestamp ?? existing.sourcePostedAt ?? null,
+      existingDate: existing.date,
+      existingVenue: existing.venue,
+      existingStatus: existing.status,
+      confidence,
+      explicitYearHighConfidence,
+      normalizedDateReason: readJsonString(normalizedFields, "dateReason"),
+      normalizedDate: readJsonString(normalizedFields, "normalizedDate"),
+      normalizedInvalidReason: readJsonString(normalizedFields, "normalizedInvalidReason"),
+    },
+  };
+}
+
+function normalizeArtistsForComparison(artists: string[]): string[] {
+  return artists.map((value) => value.trim().toLowerCase()).filter((value) => value.length > 0).sort();
+}
+
+function hasMaterialEventChange(existing: ExistingEventRecord, next: PreparedEvent): boolean {
+  if (normalizeString(existing.title) !== normalizeString(next.title)) return true;
+  if (normalizeString(existing.date) !== normalizeString(next.date)) return true;
+  if (normalizeString(existing.time) !== normalizeString(next.time)) return true;
+  if (normalizeString(existing.venue) !== normalizeString(next.venue)) return true;
+  if (normalizeString(existing.eventType) !== normalizeString(next.eventType)) return true;
+  if (normalizeString(existing.ticketPrice) !== normalizeString(next.ticketPrice)) return true;
+  if (normalizeString(existing.description) !== normalizeString(next.description)) return true;
+  if (normalizeString(existing.imageUrl) !== normalizeString(next.imageUrl)) return true;
+  if (
+    JSON.stringify(normalizeArtistsForComparison(existing.artists)) !==
+    JSON.stringify(normalizeArtistsForComparison(next.artists))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function buildDuplicateUpdatePatch(
+  existing: ExistingEventRecord,
+  next: PreparedEvent,
+): {
+  patch: {
+    title?: string;
+    date?: string;
+    time?: string;
+    venue?: string;
+    artists?: string[];
+    description?: string;
+    imageUrl?: string;
+    instagramPostUrl?: string;
+    instagramPostId?: string;
+    ticketPrice?: string;
+    eventType?: string;
+    sourceCaption?: string;
+    sourcePostedAt?: string;
+    rawExtractionJson?: string;
+    normalizedFieldsJson?: string;
+    status?: EventStatus;
+    reviewedAt?: number;
+    reviewedBy?: string;
+    moderationNote?: string;
+  };
+  materiallyChanged: boolean;
+  statusResetToPending: boolean;
+} {
+  const materiallyChanged = hasMaterialEventChange(existing, next);
+  const statusResetToPending = materiallyChanged && existing.status !== "pending";
+  const nextStatus: EventStatus = statusResetToPending ? "pending" : existing.status;
+
+  return {
+    patch: {
+      title: next.title,
+      date: next.date,
+      ...(next.time ? { time: next.time } : {}),
+      venue: next.venue,
+      artists: next.artists,
+      ...(next.description ? { description: next.description } : {}),
+      ...(next.imageUrl ? { imageUrl: next.imageUrl } : {}),
+      instagramPostUrl: next.instagramPostUrl,
+      instagramPostId: next.instagramPostId,
+      ...(next.ticketPrice ? { ticketPrice: next.ticketPrice } : {}),
+      eventType: next.eventType,
+      ...(next.sourceCaption ? { sourceCaption: next.sourceCaption } : {}),
+      ...(next.sourcePostedAt ? { sourcePostedAt: next.sourcePostedAt } : {}),
+      ...(next.rawExtractionJson ? { rawExtractionJson: next.rawExtractionJson } : {}),
+      ...(next.normalizedFieldsJson ? { normalizedFieldsJson: next.normalizedFieldsJson } : {}),
+      ...(nextStatus !== existing.status ? { status: nextStatus } : {}),
+      ...(statusResetToPending
+        ? {
+            reviewedAt: undefined,
+            reviewedBy: undefined,
+            moderationNote: undefined,
+          }
+        : {}),
+    },
+    materiallyChanged,
+    statusResetToPending,
+  };
+}
+
+async function findExistingEventBySourceIdentity(
+  client: ConvexHttpClient,
+  post: InstagramScrapedPost,
+): Promise<ExistingSourceMatch | null> {
+  const identityCandidates = new Set<string>();
+  if (post.postId) {
+    identityCandidates.add(post.postId);
+  }
+  const shortcode = extractShortcodeFromPostUrl(post.instagramPostUrl);
+  if (shortcode) {
+    identityCandidates.add(shortcode);
+  }
+
+  for (const candidate of identityCandidates) {
+    const existingById = (await client.query(getByInstagramPostIdQuery, {
+      instagramPostId: candidate,
+    })) as ExistingEventRecord | null;
+    if (existingById) {
+      return {
+        existingEvent: existingById,
+        matchedBy: candidate === post.postId ? "post_id" : "shortcode",
+        matchedValue: candidate,
+      };
+    }
+  }
+
+  const postUrl = normalizeString(post.instagramPostUrl);
+  if (postUrl) {
+    const existingByUrl = (await client.query(getByInstagramPostUrlQuery, {
+      instagramPostUrl: postUrl,
+    })) as ExistingEventRecord | null;
+    if (existingByUrl) {
+      return {
+        existingEvent: existingByUrl,
+        matchedBy: "post_url",
+        matchedValue: postUrl,
+      };
+    }
+  }
+
+  return null;
+}
+
 function prepareEventForInsert(
   post: InstagramScrapedPost,
   extracted: ExtractedEventData,
@@ -655,9 +987,13 @@ function prepareEventForInsert(
     artists: extracted.artists,
     description,
     postTimestamp: post.postedAt,
+    normalizedIsValid: true,
+    normalizedInvalidReason: null,
   };
 
   if (!dateNormalization.isoDate) {
+    normalizedFields.normalizedIsValid = false;
+    normalizedFields.normalizedInvalidReason = "invalid_date";
     return {
       kind: "skip",
       reason: dateNormalization.reason === "missing_date" ? "missing_date" : "invalid_event",
@@ -666,6 +1002,8 @@ function prepareEventForInsert(
   }
 
   if (!venueNormalization.venue) {
+    normalizedFields.normalizedIsValid = false;
+    normalizedFields.normalizedInvalidReason = "invalid_venue";
     return {
       kind: "skip",
       reason: "missing_venue",
@@ -674,6 +1012,8 @@ function prepareEventForInsert(
   }
 
   if (!title || !eventType) {
+    normalizedFields.normalizedIsValid = false;
+    normalizedFields.normalizedInvalidReason = "missing_required_fields";
     return {
       kind: "skip",
       reason: "invalid_event",
@@ -749,17 +1089,6 @@ export async function runActiveVenueIngestion(options?: {
   return { venueHandles, summary };
 }
 
-async function isDuplicatePost(
-  client: ConvexHttpClient,
-  postId: string,
-): Promise<boolean> {
-  const existing = (await client.query(getByInstagramPostIdQuery, {
-    instagramPostId: postId,
-  })) as unknown;
-
-  return Boolean(existing);
-}
-
 export async function runInstagramIngestion(
   options: RunInstagramIngestionOptions,
 ): Promise<IngestionSummary> {
@@ -776,11 +1105,14 @@ export async function runInstagramIngestion(
       inserted_events: 0,
       skippedDuplicates: 0,
       skipped_duplicates: 0,
+      skipped_duplicates_clean: 0,
       skippedNoImage: 0,
       skipped_missing_date: 0,
       skipped_missing_venue: 0,
       skipped_video: 0,
       skipped_invalid_event: 0,
+      updated_duplicates_bad_data: 0,
+      duplicate_update_failed: 0,
       failedDownloads: 0,
       failed_downloads: 0,
       failedConversions: 0,
@@ -839,12 +1171,46 @@ export async function runInstagramIngestion(
         isInstagramOrFbCdn: isInstagramOrFbCdnUrl(bestImageUrl),
       });
 
+      let duplicateContext: DuplicateUpdateContext | null = null;
       try {
-        const alreadyStored = await isDuplicatePost(client, post.postId);
-        if (alreadyStored) {
-          summary.skippedDuplicates += 1;
-          summary.skipped_duplicates += 1;
-          continue;
+        const existingMatch = await findExistingEventBySourceIdentity(client, post);
+        if (existingMatch) {
+          const quality = isLowQualityExistingEvent(existingMatch.existingEvent, post.postedAt);
+          if (!quality.isLowQuality) {
+            summary.skippedDuplicates += 1;
+            summary.skipped_duplicates += 1;
+            summary.skipped_duplicates_clean += 1;
+            logInfo("duplicate_clean_skip", {
+              handle,
+              postId: post.postId,
+              postUrl: post.instagramPostUrl,
+              selectedImageUrl: bestImageUrl,
+              matchedBy: existingMatch.matchedBy,
+              matchedValue: existingMatch.matchedValue,
+              existingEventId: existingMatch.existingEvent._id,
+              existingStatus: existingMatch.existingEvent.status,
+            });
+            continue;
+          }
+
+          const primaryReason = quality.primaryReason ?? "invalid_normalized_fields";
+          duplicateContext = {
+            existing: existingMatch,
+            quality,
+            updateReasonEvent: mapDuplicateReasonToLogEvent(primaryReason),
+          };
+          logInfo(duplicateContext.updateReasonEvent, {
+            phase: "duplicate_reprocess_started",
+            handle,
+            postId: post.postId,
+            postUrl: post.instagramPostUrl,
+            selectedImageUrl: bestImageUrl,
+            matchedBy: existingMatch.matchedBy,
+            matchedValue: existingMatch.matchedValue,
+            existingEventId: existingMatch.existingEvent._id,
+            qualityReasons: quality.reasons,
+            qualityDetails: quality.details,
+          });
         }
       } catch (error) {
         summary.failedExtractions += 1;
@@ -947,6 +1313,50 @@ export async function runInstagramIngestion(
             rawExtraction: extracted,
             normalizedFields: prepared.normalizedFields,
           });
+          continue;
+        }
+
+        if (duplicateContext) {
+          const updatePayload = buildDuplicateUpdatePatch(
+            duplicateContext.existing.existingEvent,
+            prepared.event,
+          );
+          try {
+            await client.mutation(updateEventMutation, {
+              id: duplicateContext.existing.existingEvent._id,
+              patch: updatePayload.patch,
+            });
+            summary.updated_duplicates_bad_data += 1;
+            logInfo(duplicateContext.updateReasonEvent, {
+              phase: "duplicate_updated",
+              handle,
+              postId: post.postId,
+              postUrl: post.instagramPostUrl,
+              selectedImageUrl: bestImageUrl,
+              existingEventId: duplicateContext.existing.existingEvent._id,
+              qualityReasons: duplicateContext.quality.reasons,
+              materiallyChanged: updatePayload.materiallyChanged,
+              statusResetToPending: updatePayload.statusResetToPending,
+              caption: post.caption,
+              postTimestamp: post.postedAt,
+              rawExtraction: extracted,
+              normalizedFields: prepared.normalizedFields,
+            });
+          } catch (error) {
+            summary.duplicate_update_failed += 1;
+            summary.errors.push(
+              error instanceof Error ? error.message : "Duplicate update failed.",
+            );
+            logError("duplicate_update_failed", {
+              handle,
+              postId: post.postId,
+              postUrl: post.instagramPostUrl,
+              selectedImageUrl: bestImageUrl,
+              existingEventId: duplicateContext.existing.existingEvent._id,
+              qualityReasons: duplicateContext.quality.reasons,
+              error: error instanceof Error ? error.message : "Unknown duplicate update error.",
+            });
+          }
           continue;
         }
 

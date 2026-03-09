@@ -33,7 +33,8 @@ export default defineSchema({
   })
     .index("by_date", ["date"])
     .index("by_status", ["status"])
-    .index("by_instagramPostId", ["instagramPostId"]),
+    .index("by_instagramPostId", ["instagramPostId"])
+    .index("by_instagramPostUrl", ["instagramPostUrl"]),
   venues: defineTable({
     name: v.string(),
     instagramHandle: v.string(),

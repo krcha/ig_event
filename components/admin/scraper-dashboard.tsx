@@ -4,7 +4,11 @@ import { useState } from "react";
 import type { IngestionSummary } from "@/lib/pipeline/run-instagram-ingestion";
 
 type ScrapeApiPayload = {
-  source: "manual" | "active_venues" | "cron_active_venues";
+  source:
+    | "manual"
+    | "active_venues"
+    | "cron_active_venues"
+    | "repair_active_venues";
   handles: string[];
   summary: IngestionSummary;
   error?: string;
@@ -59,6 +63,13 @@ export function ScraperDashboard() {
     void runScraper("/api/admin/scrape/venues");
   }
 
+  function runRepairScraper() {
+    void runScraper("/api/admin/scrape/repair", {
+      resultsLimit: 100,
+      daysBack: 365,
+    });
+  }
+
   return (
     <section className="space-y-4 rounded-xl border border-border bg-card p-5">
       <label className="block space-y-2">
@@ -86,6 +97,14 @@ export function ScraperDashboard() {
         type="button"
       >
         {isLoading ? "Running..." : "Run active venues"}
+      </button>
+      <button
+        className="ml-2 rounded-md border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+        disabled={isLoading}
+        onClick={runRepairScraper}
+        type="button"
+      >
+        {isLoading ? "Running..." : "Repair existing bad events"}
       </button>
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
@@ -121,11 +140,14 @@ export function ScraperDashboard() {
                 <p>Inserted events (new): {item.inserted_events}</p>
                 <p>Skipped duplicates: {item.skippedDuplicates}</p>
                 <p>Skipped duplicates (normalized): {item.skipped_duplicates}</p>
+                <p>Skipped clean duplicates: {item.skipped_duplicates_clean}</p>
                 <p>Skipped no image: {item.skippedNoImage}</p>
                 <p>Skipped missing date: {item.skipped_missing_date}</p>
                 <p>Skipped missing venue: {item.skipped_missing_venue}</p>
                 <p>Skipped video: {item.skipped_video}</p>
                 <p>Skipped invalid event: {item.skipped_invalid_event}</p>
+                <p>Updated bad duplicates: {item.updated_duplicates_bad_data}</p>
+                <p>Duplicate update failed: {item.duplicate_update_failed}</p>
                 <p>Failed downloads: {item.failedDownloads}</p>
                 <p>Failed downloads (normalized): {item.failed_downloads}</p>
                 <p>Failed conversions: {item.failedConversions}</p>

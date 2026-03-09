@@ -26,12 +26,26 @@ export const listEvents = query({
 export const getByInstagramPostId = query({
   args: { instagramPostId: v.string() },
   handler: async (ctx, args) => {
-    return ctx.db
+    const matches = await ctx.db
       .query("events")
       .withIndex("by_instagramPostId", (q) =>
         q.eq("instagramPostId", args.instagramPostId),
       )
-      .unique();
+      .take(1);
+    return matches[0] ?? null;
+  },
+});
+
+export const getByInstagramPostUrl = query({
+  args: { instagramPostUrl: v.string() },
+  handler: async (ctx, args) => {
+    const matches = await ctx.db
+      .query("events")
+      .withIndex("by_instagramPostUrl", (q) =>
+        q.eq("instagramPostUrl", args.instagramPostUrl),
+      )
+      .take(1);
+    return matches[0] ?? null;
   },
 });
 
