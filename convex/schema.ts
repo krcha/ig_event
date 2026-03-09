@@ -6,6 +6,12 @@ const eventStatus = v.union(
   v.literal("approved"),
   v.literal("rejected"),
 );
+const ingestionJobStatus = v.union(
+  v.literal("queued"),
+  v.literal("running"),
+  v.literal("completed"),
+  v.literal("failed"),
+);
 
 export default defineSchema({
   events: defineTable({
@@ -61,4 +67,21 @@ export default defineSchema({
     .index("by_user", ["userId"])
     .index("by_event", ["eventId"])
     .index("by_user_event", ["userId", "eventId"]),
+  ingestionJobs: defineTable({
+    source: v.string(),
+    status: ingestionJobStatus,
+    handles: v.array(v.string()),
+    resultsLimit: v.optional(v.number()),
+    daysBack: v.optional(v.number()),
+    batchSize: v.number(),
+    summaryJson: v.string(),
+    stateJson: v.string(),
+    error: v.optional(v.string()),
+    startedAt: v.optional(v.string()),
+    finishedAt: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_status", ["status"])
+    .index("by_createdAt", ["createdAt"]),
 });

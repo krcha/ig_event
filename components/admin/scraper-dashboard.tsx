@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { IngestionSummary } from "@/lib/pipeline/run-instagram-ingestion";
 
-type ScrapeApiPayload = {
+type ScrapeSummaryPayload = {
   source:
     | "manual"
     | "active_venues"
@@ -14,11 +14,40 @@ type ScrapeApiPayload = {
   error?: string;
 };
 
+type ScrapeJobStatus = "queued" | "running" | "completed" | "failed";
+
+type ScrapeStartPayload = {
+  started?: boolean;
+  jobId?: string;
+  status?: ScrapeJobStatus;
+  source?: "manual";
+  handles?: string[];
+  statusUrl?: string;
+  error?: string;
+};
+
+type ScrapeJobPayload = {
+  jobId: string;
+  status: ScrapeJobStatus;
+  source: "manual";
+  handles: string[];
+  summary: IngestionSummary;
+  error?: string | null;
+};
+
+const POLL_INTERVAL_MS = 2_000;
+
 export function ScraperDashboard() {
   const [handlesText, setHandlesText] = useState("residentadvisor\nboilerroomtv");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [summaryPayload, setSummaryPayload] = useState<ScrapeApiPayload | null>(null);
+  const [summaryPayload, setSummaryPayload] = useState<ScrapeSummaryPayload | null>(
+    null,
+  );
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [activeJobStatus, setActiveJobStatus] = useState<ScrapeJobStatus | null>(
+    null,
+  );
 
   const handles = handlesText
     .split(/\s|,/)
@@ -29,6 +58,8 @@ export function ScraperDashboard() {
     setIsLoading(true);
     setError(null);
     setSummaryPayload(null);
+    setActiveJobId(null);
+    setActiveJobStatus(null);
 
     try {
       const response = await fetch(endpoint, {
@@ -37,7 +68,7 @@ export function ScraperDashboard() {
         body: JSON.stringify(body ?? {}),
       });
 
-      const payload = (await response.json()) as ScrapeApiPayload;
+      const payload = (await response.json()) as ScrapeSummaryPayload;
 
       if (!response.ok) {
         throw new Error(payload.error ?? "Failed to run scraper pipeline.");
@@ -55,8 +86,74 @@ export function ScraperDashboard() {
     }
   }
 
-  function runManualScraper() {
-    void runScraper("/api/admin/scrape", { handles });
+  async function delay(ms: number) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+  }
+
+  async function pollScrapeJob(statusUrl: string) {
+    while (true) {
+      const response = await fetch(statusUrl, {
+        method: "POST",
+        cache: "no-store",
+      });
+
+      const payload = (await response.json()) as ScrapeJobPayload;
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to process scrape job.");
+      }
+
+      setActiveJobStatus(payload.status);
+      setSummaryPayload({
+        source: payload.source,
+        handles: payload.handles,
+        summary: payload.summary,
+      });
+
+      if (payload.status === "completed") {
+        return;
+      }
+      if (payload.status === "failed") {
+        throw new Error(payload.error ?? "Scrape job failed.");
+      }
+
+      await delay(POLL_INTERVAL_MS);
+    }
+  }
+
+  async function runManualScraper() {
+    setIsLoading(true);
+    setError(null);
+    setSummaryPayload(null);
+    setActiveJobId(null);
+    setActiveJobStatus(null);
+
+    try {
+      const response = await fetch("/api/admin/scrape", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ handles }),
+      });
+
+      const payload = (await response.json()) as ScrapeStartPayload;
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to start scraper job.");
+      }
+      if (!payload.started || !payload.jobId || !payload.statusUrl) {
+        throw new Error("Invalid scraper job response.");
+      }
+
+      setActiveJobId(payload.jobId);
+      setActiveJobStatus(payload.status ?? "queued");
+      await pollScrapeJob(payload.statusUrl);
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error ? caughtError.message : "Unknown scraper error.",
+      );
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   function runActiveVenueScraper() {
@@ -85,10 +182,12 @@ export function ScraperDashboard() {
       <button
         className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
         disabled={isLoading || handles.length === 0}
-        onClick={runManualScraper}
+        onClick={() => {
+          void runManualScraper();
+        }}
         type="button"
       >
-        {isLoading ? "Running scrape..." : "Run scrape + extraction"}
+        {isLoading ? "Running scrape job..." : "Run scrape + extraction"}
       </button>
       <button
         className="ml-2 rounded-md border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
@@ -108,6 +207,11 @@ export function ScraperDashboard() {
       </button>
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {activeJobId ? (
+        <p className="text-sm text-muted-foreground">
+          Job {activeJobId} status: {activeJobStatus ?? "queued"}
+        </p>
+      ) : null}
 
       {summaryPayload ? (
         <div className="space-y-3 rounded-md border border-border bg-background p-4 text-sm">

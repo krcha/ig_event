@@ -55,6 +55,29 @@ export type IngestionSummary = {
   handles: HandleSummary[];
 };
 
+export type IngestionBatchState = {
+  handleIndex: number;
+  currentHandle: string | null;
+  currentPostIndex: number;
+  currentHandlePosts: InstagramScrapedPost[];
+  seenSourceKeysByHandle: Record<string, string[]>;
+};
+
+export type IngestionBatchStepOptions = {
+  handles: string[];
+  summary: IngestionSummary;
+  state: IngestionBatchState;
+  resultsLimit?: number;
+  daysBack?: number;
+  batchSize?: number;
+};
+
+export type IngestionBatchStepResult = {
+  summary: IngestionSummary;
+  state: IngestionBatchState;
+  done: boolean;
+};
+
 export type ActiveVenueIngestionResult = {
   venueHandles: string[];
   summary: IngestionSummary;
@@ -247,6 +270,71 @@ type ActiveVenueRecord = {
 
 function normalizeHandle(handle: string): string {
   return handle.replace(/^@/, "").trim().toLowerCase();
+}
+
+function createEmptyHandleSummary(handle: string): HandleSummary {
+  return {
+    handle,
+    fetchedPosts: 0,
+    fetched_posts: 0,
+    insertedEvents: 0,
+    inserted_events: 0,
+    skippedDuplicates: 0,
+    skipped_duplicates: 0,
+    skipped_duplicates_clean: 0,
+    skippedNoImage: 0,
+    skipped_missing_date: 0,
+    skipped_missing_venue: 0,
+    skipped_video: 0,
+    skipped_invalid_event: 0,
+    updated_duplicates_bad_data: 0,
+    duplicate_update_failed: 0,
+    failedDownloads: 0,
+    failed_downloads: 0,
+    failedConversions: 0,
+    failed_conversions: 0,
+    failedExtractions: 0,
+    failed_extractions: 0,
+    failed_extraction: 0,
+    errors: [],
+  };
+}
+
+function getOrCreateHandleSummary(summary: IngestionSummary, handle: string): HandleSummary {
+  const existing = summary.handles.find((entry) => entry.handle === handle);
+  if (existing) {
+    return existing;
+  }
+  const created = createEmptyHandleSummary(handle);
+  summary.handles.push(created);
+  return created;
+}
+
+export function createEmptyIngestionSummary(handles: string[]): IngestionSummary {
+  const now = new Date().toISOString();
+  return {
+    startedAt: now,
+    finishedAt: now,
+    handles: handles.map((handle) => createEmptyHandleSummary(handle)),
+  };
+}
+
+export function createInitialIngestionBatchState(): IngestionBatchState {
+  return {
+    handleIndex: 0,
+    currentHandle: null,
+    currentPostIndex: 0,
+    currentHandlePosts: [],
+    seenSourceKeysByHandle: {},
+  };
+}
+
+function normalizeBatchSize(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return 2;
+  }
+  const rounded = Math.trunc(value as number);
+  return Math.max(1, Math.min(10, rounded));
 }
 
 function normalizeString(value: string | null | undefined): string {
@@ -713,6 +801,22 @@ function extractShortcodeFromPostUrl(url: string): string | null {
   return match?.[1]?.trim() || null;
 }
 
+function getSourceIdentityKey(post: InstagramScrapedPost): string | null {
+  const postId = normalizeString(post.postId);
+  if (postId) {
+    return `post_id:${postId}`;
+  }
+  const shortcode = extractShortcodeFromPostUrl(post.instagramPostUrl);
+  if (shortcode) {
+    return `shortcode:${shortcode}`;
+  }
+  const postUrl = normalizeString(post.instagramPostUrl);
+  if (postUrl) {
+    return `post_url:${postUrl}`;
+  }
+  return null;
+}
+
 function parseEventYear(date: string | undefined): number | null {
   if (!date) {
     return null;
@@ -1049,6 +1153,355 @@ function prepareEventForInsert(
   };
 }
 
+type ProcessIngestionPostOptions = {
+  client: ConvexHttpClient;
+  handle: string;
+  post: InstagramScrapedPost;
+  summary: HandleSummary;
+};
+
+async function processIngestionPost(options: ProcessIngestionPostOptions): Promise<void> {
+  const { client, handle, post, summary } = options;
+
+  if (post.postType === "video") {
+    summary.skipped_video += 1;
+    logInfo("ingestion.post.skipped_video", {
+      handle,
+      postId: post.postId,
+      postUrl: post.instagramPostUrl,
+    });
+    return;
+  }
+
+  const bestImageUrl = resolveBestImageUrl(post);
+  if (!bestImageUrl) {
+    summary.skippedNoImage += 1;
+    logInfo("ingestion.image.skipped_no_image", {
+      handle,
+      postId: post.postId,
+      postUrl: post.instagramPostUrl,
+      imageCandidates: post.imageUrls ?? [],
+    });
+    return;
+  }
+
+  logInfo("ingestion.image.selected", {
+    handle,
+    postId: post.postId,
+    postUrl: post.instagramPostUrl,
+    selectedImageUrl: bestImageUrl,
+    isInstagramOrFbCdn: isInstagramOrFbCdnUrl(bestImageUrl),
+  });
+
+  let duplicateContext: DuplicateUpdateContext | null = null;
+  try {
+    const existingMatch = await findExistingEventBySourceIdentity(client, post);
+    if (existingMatch) {
+      const quality = isLowQualityExistingEvent(existingMatch.existingEvent, post.postedAt);
+      if (!quality.isLowQuality) {
+        summary.skippedDuplicates += 1;
+        summary.skipped_duplicates += 1;
+        summary.skipped_duplicates_clean += 1;
+        logInfo("duplicate_clean_skip", {
+          handle,
+          postId: post.postId,
+          postUrl: post.instagramPostUrl,
+          selectedImageUrl: bestImageUrl,
+          matchedBy: existingMatch.matchedBy,
+          matchedValue: existingMatch.matchedValue,
+          existingEventId: existingMatch.existingEvent._id,
+          existingStatus: existingMatch.existingEvent.status,
+        });
+        return;
+      }
+
+      const primaryReason = quality.primaryReason ?? "invalid_normalized_fields";
+      duplicateContext = {
+        existing: existingMatch,
+        quality,
+        updateReasonEvent: mapDuplicateReasonToLogEvent(primaryReason),
+      };
+      logInfo(duplicateContext.updateReasonEvent, {
+        phase: "duplicate_reprocess_started",
+        handle,
+        postId: post.postId,
+        postUrl: post.instagramPostUrl,
+        selectedImageUrl: bestImageUrl,
+        matchedBy: existingMatch.matchedBy,
+        matchedValue: existingMatch.matchedValue,
+        existingEventId: existingMatch.existingEvent._id,
+        qualityReasons: quality.reasons,
+        qualityDetails: quality.details,
+      });
+    }
+  } catch (error) {
+    summary.failedExtractions += 1;
+    summary.failed_extractions += 1;
+    summary.errors.push(
+      error instanceof Error ? error.message : "Duplicate check error.",
+    );
+    logError("ingestion.duplicate_check.failed", {
+      handle,
+      postId: post.postId,
+      postUrl: post.instagramPostUrl,
+      selectedImageUrl: bestImageUrl,
+      error: error instanceof Error ? error.message : "Unknown duplicate check error.",
+    });
+    return;
+  }
+
+  let downloadedImage: Awaited<ReturnType<typeof downloadImage>>;
+  try {
+    downloadedImage = await downloadImage(bestImageUrl);
+    logInfo("ingestion.image.download.success", {
+      handle,
+      postId: post.postId,
+      postUrl: post.instagramPostUrl,
+      selectedImageUrl: bestImageUrl,
+      contentType: downloadedImage.contentType,
+      downloadedBytes: downloadedImage.imageBuffer.byteLength,
+    });
+  } catch (error) {
+    summary.failedDownloads += 1;
+    summary.failed_downloads += 1;
+    summary.errors.push(error instanceof Error ? error.message : "Image download failed.");
+    logError("ingestion.image.download.failed", {
+      handle,
+      postId: post.postId,
+      postUrl: post.instagramPostUrl,
+      selectedImageUrl: bestImageUrl,
+      error: error instanceof Error ? error.message : "Unknown download error.",
+    });
+    return;
+  }
+
+  let imageDataUrl: string;
+  try {
+    const normalizedImage = await normalizeToJpeg(
+      downloadedImage.imageBuffer,
+      downloadedImage.contentType ?? bestImageUrl,
+    );
+    imageDataUrl = toDataUrl(normalizedImage.imageBuffer, normalizedImage.mimeType);
+    logInfo("ingestion.image.conversion.success", {
+      handle,
+      postId: post.postId,
+      postUrl: post.instagramPostUrl,
+      selectedImageUrl: bestImageUrl,
+      wasConverted: normalizedImage.wasConverted,
+      outputMimeType: normalizedImage.mimeType,
+      outputBytes: normalizedImage.imageBuffer.byteLength,
+    });
+  } catch (error) {
+    summary.failedConversions += 1;
+    summary.failed_conversions += 1;
+    summary.errors.push(error instanceof Error ? error.message : "Image conversion failed.");
+    logError("ingestion.image.conversion.failed", {
+      handle,
+      postId: post.postId,
+      postUrl: post.instagramPostUrl,
+      selectedImageUrl: bestImageUrl,
+      error: error instanceof Error ? error.message : "Unknown conversion error.",
+    });
+    return;
+  }
+
+  try {
+    const extracted = await extractEventDataFromPoster({
+      imageDataUrl,
+      caption: post.caption,
+      instagramPostUrl: post.instagramPostUrl,
+      sourceImageUrl: bestImageUrl,
+      instagramHandle: post.username,
+      instagramPostTimestamp: post.postedAt,
+    });
+    const prepared = prepareEventForInsert(post, extracted, bestImageUrl);
+    if (prepared.kind === "skip") {
+      if (prepared.reason === "missing_date") {
+        summary.skipped_missing_date += 1;
+      } else if (prepared.reason === "missing_venue") {
+        summary.skipped_missing_venue += 1;
+      } else {
+        summary.skipped_invalid_event += 1;
+      }
+
+      logInfo("ingestion.event.skipped", {
+        handle,
+        postId: post.postId,
+        postUrl: post.instagramPostUrl,
+        selectedImageUrl: bestImageUrl,
+        reason: prepared.reason,
+        caption: post.caption,
+        postTimestamp: post.postedAt,
+        rawExtraction: extracted,
+        normalizedFields: prepared.normalizedFields,
+      });
+      return;
+    }
+
+    if (duplicateContext) {
+      const updatePayload = buildDuplicateUpdatePatch(
+        duplicateContext.existing.existingEvent,
+        prepared.event,
+      );
+      try {
+        await client.mutation(updateEventMutation, {
+          id: duplicateContext.existing.existingEvent._id,
+          patch: updatePayload.patch,
+        });
+        summary.updated_duplicates_bad_data += 1;
+        logInfo(duplicateContext.updateReasonEvent, {
+          phase: "duplicate_updated",
+          handle,
+          postId: post.postId,
+          postUrl: post.instagramPostUrl,
+          selectedImageUrl: bestImageUrl,
+          existingEventId: duplicateContext.existing.existingEvent._id,
+          qualityReasons: duplicateContext.quality.reasons,
+          materiallyChanged: updatePayload.materiallyChanged,
+          statusResetToPending: updatePayload.statusResetToPending,
+          caption: post.caption,
+          postTimestamp: post.postedAt,
+          rawExtraction: extracted,
+          normalizedFields: prepared.normalizedFields,
+        });
+      } catch (error) {
+        summary.duplicate_update_failed += 1;
+        summary.errors.push(
+          error instanceof Error ? error.message : "Duplicate update failed.",
+        );
+        logError("duplicate_update_failed", {
+          handle,
+          postId: post.postId,
+          postUrl: post.instagramPostUrl,
+          selectedImageUrl: bestImageUrl,
+          existingEventId: duplicateContext.existing.existingEvent._id,
+          qualityReasons: duplicateContext.quality.reasons,
+          error: error instanceof Error ? error.message : "Unknown duplicate update error.",
+        });
+      }
+      return;
+    }
+
+    await client.mutation(createEventMutation, prepared.event);
+    summary.insertedEvents += 1;
+    summary.inserted_events += 1;
+    logInfo("ingestion.event.inserted", {
+      handle,
+      postId: post.postId,
+      postUrl: post.instagramPostUrl,
+      selectedImageUrl: bestImageUrl,
+      caption: post.caption,
+      postTimestamp: post.postedAt,
+      rawExtraction: extracted,
+      normalizedFields: prepared.normalizedFields,
+    });
+  } catch (error) {
+    summary.failedExtractions += 1;
+    summary.failed_extractions += 1;
+    summary.failed_extraction += 1;
+    summary.errors.push(
+      error instanceof Error ? error.message : "Unknown extraction error.",
+    );
+    logError("ingestion.openai.extraction.failed", {
+      handle,
+      postId: post.postId,
+      postUrl: post.instagramPostUrl,
+      selectedImageUrl: bestImageUrl,
+      error: error instanceof Error ? error.message : "Unknown extraction error.",
+    });
+  }
+}
+
+export async function runInstagramIngestionBatchStep(
+  options: IngestionBatchStepOptions,
+): Promise<IngestionBatchStepResult> {
+  const client = getConvexClient();
+  const batchSize = normalizeBatchSize(options.batchSize);
+  const summary = options.summary;
+  const state = options.state;
+  let processedPosts = 0;
+
+  while (processedPosts < batchSize && state.handleIndex < options.handles.length) {
+    const handle = options.handles[state.handleIndex];
+    const handleSummary = getOrCreateHandleSummary(summary, handle);
+
+    if (state.currentHandle !== handle) {
+      state.currentHandle = handle;
+      state.currentPostIndex = 0;
+      state.currentHandlePosts = [];
+    }
+
+    if (state.currentHandlePosts.length === 0) {
+      try {
+        const posts = await scrapeInstagramAccount({
+          handle,
+          resultsLimit: options.resultsLimit,
+          daysBack: options.daysBack,
+        });
+        handleSummary.fetchedPosts = posts.length;
+        handleSummary.fetched_posts = posts.length;
+        state.currentHandlePosts = posts;
+      } catch (error) {
+        handleSummary.errors.push(
+          error instanceof Error ? error.message : "Unknown scrape error.",
+        );
+        logError("ingestion.scrape.failed", {
+          handle,
+          error: error instanceof Error ? error.message : "Unknown scrape error.",
+        });
+        state.handleIndex += 1;
+        state.currentHandle = null;
+        state.currentPostIndex = 0;
+        state.currentHandlePosts = [];
+        continue;
+      }
+    }
+
+    if (state.currentPostIndex >= state.currentHandlePosts.length) {
+      state.handleIndex += 1;
+      state.currentHandle = null;
+      state.currentPostIndex = 0;
+      state.currentHandlePosts = [];
+      continue;
+    }
+
+    const post = state.currentHandlePosts[state.currentPostIndex];
+    state.currentPostIndex += 1;
+
+    const sourceKey = getSourceIdentityKey(post);
+    if (sourceKey) {
+      const seenForHandle = state.seenSourceKeysByHandle[handle] ?? [];
+      if (seenForHandle.includes(sourceKey)) {
+        continue;
+      }
+      seenForHandle.push(sourceKey);
+      state.seenSourceKeysByHandle[handle] = seenForHandle;
+    }
+
+    await processIngestionPost({
+      client,
+      handle,
+      post,
+      summary: handleSummary,
+    });
+    processedPosts += 1;
+  }
+
+  const done = state.handleIndex >= options.handles.length;
+  if (done) {
+    state.currentHandle = null;
+    state.currentPostIndex = 0;
+    state.currentHandlePosts = [];
+  }
+  summary.finishedAt = new Date().toISOString();
+
+  return {
+    summary,
+    state,
+    done,
+  };
+}
+
 export async function getActiveVenueHandles(): Promise<string[]> {
   const client = getConvexClient();
   const venues = (await client.query(listActiveVenuesQuery, {})) as ActiveVenueRecord[];
@@ -1092,308 +1545,22 @@ export async function runActiveVenueIngestion(options?: {
 export async function runInstagramIngestion(
   options: RunInstagramIngestionOptions,
 ): Promise<IngestionSummary> {
-  const startedAt = new Date().toISOString();
-  const client = getConvexClient();
-  const handleSummaries: HandleSummary[] = [];
+  const summary = createEmptyIngestionSummary(options.handles);
+  const state = createInitialIngestionBatchState();
+  let done = false;
 
-  for (const handle of options.handles) {
-    const summary: HandleSummary = {
-      handle,
-      fetchedPosts: 0,
-      fetched_posts: 0,
-      insertedEvents: 0,
-      inserted_events: 0,
-      skippedDuplicates: 0,
-      skipped_duplicates: 0,
-      skipped_duplicates_clean: 0,
-      skippedNoImage: 0,
-      skipped_missing_date: 0,
-      skipped_missing_venue: 0,
-      skipped_video: 0,
-      skipped_invalid_event: 0,
-      updated_duplicates_bad_data: 0,
-      duplicate_update_failed: 0,
-      failedDownloads: 0,
-      failed_downloads: 0,
-      failedConversions: 0,
-      failed_conversions: 0,
-      failedExtractions: 0,
-      failed_extractions: 0,
-      failed_extraction: 0,
-      errors: [],
-    };
-    handleSummaries.push(summary);
-
-    let posts: InstagramScrapedPost[] = [];
-    try {
-      posts = await scrapeInstagramAccount({
-        handle,
-        resultsLimit: options.resultsLimit,
-        daysBack: options.daysBack,
-      });
-      summary.fetchedPosts = posts.length;
-      summary.fetched_posts = posts.length;
-    } catch (error) {
-      summary.errors.push(
-        error instanceof Error ? error.message : "Unknown scrape error.",
-      );
-      continue;
-    }
-
-    for (const post of posts) {
-      if (post.postType === "video") {
-        summary.skipped_video += 1;
-        logInfo("ingestion.post.skipped_video", {
-          handle,
-          postId: post.postId,
-          postUrl: post.instagramPostUrl,
-        });
-        continue;
-      }
-
-      const bestImageUrl = resolveBestImageUrl(post);
-      if (!bestImageUrl) {
-        summary.skippedNoImage += 1;
-        logInfo("ingestion.image.skipped_no_image", {
-          handle,
-          postId: post.postId,
-          postUrl: post.instagramPostUrl,
-          imageCandidates: post.imageUrls ?? [],
-        });
-        continue;
-      }
-
-      logInfo("ingestion.image.selected", {
-        handle,
-        postId: post.postId,
-        postUrl: post.instagramPostUrl,
-        selectedImageUrl: bestImageUrl,
-        isInstagramOrFbCdn: isInstagramOrFbCdnUrl(bestImageUrl),
-      });
-
-      let duplicateContext: DuplicateUpdateContext | null = null;
-      try {
-        const existingMatch = await findExistingEventBySourceIdentity(client, post);
-        if (existingMatch) {
-          const quality = isLowQualityExistingEvent(existingMatch.existingEvent, post.postedAt);
-          if (!quality.isLowQuality) {
-            summary.skippedDuplicates += 1;
-            summary.skipped_duplicates += 1;
-            summary.skipped_duplicates_clean += 1;
-            logInfo("duplicate_clean_skip", {
-              handle,
-              postId: post.postId,
-              postUrl: post.instagramPostUrl,
-              selectedImageUrl: bestImageUrl,
-              matchedBy: existingMatch.matchedBy,
-              matchedValue: existingMatch.matchedValue,
-              existingEventId: existingMatch.existingEvent._id,
-              existingStatus: existingMatch.existingEvent.status,
-            });
-            continue;
-          }
-
-          const primaryReason = quality.primaryReason ?? "invalid_normalized_fields";
-          duplicateContext = {
-            existing: existingMatch,
-            quality,
-            updateReasonEvent: mapDuplicateReasonToLogEvent(primaryReason),
-          };
-          logInfo(duplicateContext.updateReasonEvent, {
-            phase: "duplicate_reprocess_started",
-            handle,
-            postId: post.postId,
-            postUrl: post.instagramPostUrl,
-            selectedImageUrl: bestImageUrl,
-            matchedBy: existingMatch.matchedBy,
-            matchedValue: existingMatch.matchedValue,
-            existingEventId: existingMatch.existingEvent._id,
-            qualityReasons: quality.reasons,
-            qualityDetails: quality.details,
-          });
-        }
-      } catch (error) {
-        summary.failedExtractions += 1;
-        summary.failed_extractions += 1;
-        summary.errors.push(
-          error instanceof Error ? error.message : "Duplicate check error.",
-        );
-        logError("ingestion.duplicate_check.failed", {
-          handle,
-          postId: post.postId,
-          postUrl: post.instagramPostUrl,
-          selectedImageUrl: bestImageUrl,
-          error: error instanceof Error ? error.message : "Unknown duplicate check error.",
-        });
-        continue;
-      }
-
-      let downloadedImage: Awaited<ReturnType<typeof downloadImage>>;
-      try {
-        downloadedImage = await downloadImage(bestImageUrl);
-        logInfo("ingestion.image.download.success", {
-          handle,
-          postId: post.postId,
-          postUrl: post.instagramPostUrl,
-          selectedImageUrl: bestImageUrl,
-          contentType: downloadedImage.contentType,
-          downloadedBytes: downloadedImage.imageBuffer.byteLength,
-        });
-      } catch (error) {
-        summary.failedDownloads += 1;
-        summary.failed_downloads += 1;
-        summary.errors.push(error instanceof Error ? error.message : "Image download failed.");
-        logError("ingestion.image.download.failed", {
-          handle,
-          postId: post.postId,
-          postUrl: post.instagramPostUrl,
-          selectedImageUrl: bestImageUrl,
-          error: error instanceof Error ? error.message : "Unknown download error.",
-        });
-        continue;
-      }
-
-      let imageDataUrl: string;
-      try {
-        const normalizedImage = await normalizeToJpeg(
-          downloadedImage.imageBuffer,
-          downloadedImage.contentType ?? bestImageUrl,
-        );
-        imageDataUrl = toDataUrl(normalizedImage.imageBuffer, normalizedImage.mimeType);
-        logInfo("ingestion.image.conversion.success", {
-          handle,
-          postId: post.postId,
-          postUrl: post.instagramPostUrl,
-          selectedImageUrl: bestImageUrl,
-          wasConverted: normalizedImage.wasConverted,
-          outputMimeType: normalizedImage.mimeType,
-          outputBytes: normalizedImage.imageBuffer.byteLength,
-        });
-      } catch (error) {
-        summary.failedConversions += 1;
-        summary.failed_conversions += 1;
-        summary.errors.push(error instanceof Error ? error.message : "Image conversion failed.");
-        logError("ingestion.image.conversion.failed", {
-          handle,
-          postId: post.postId,
-          postUrl: post.instagramPostUrl,
-          selectedImageUrl: bestImageUrl,
-          error: error instanceof Error ? error.message : "Unknown conversion error.",
-        });
-        continue;
-      }
-
-      try {
-        const extracted = await extractEventDataFromPoster({
-          imageDataUrl,
-          caption: post.caption,
-          instagramPostUrl: post.instagramPostUrl,
-          sourceImageUrl: bestImageUrl,
-          instagramHandle: post.username,
-          instagramPostTimestamp: post.postedAt,
-        });
-        const prepared = prepareEventForInsert(post, extracted, bestImageUrl);
-        if (prepared.kind === "skip") {
-          if (prepared.reason === "missing_date") {
-            summary.skipped_missing_date += 1;
-          } else if (prepared.reason === "missing_venue") {
-            summary.skipped_missing_venue += 1;
-          } else {
-            summary.skipped_invalid_event += 1;
-          }
-
-          logInfo("ingestion.event.skipped", {
-            handle,
-            postId: post.postId,
-            postUrl: post.instagramPostUrl,
-            selectedImageUrl: bestImageUrl,
-            reason: prepared.reason,
-            caption: post.caption,
-            postTimestamp: post.postedAt,
-            rawExtraction: extracted,
-            normalizedFields: prepared.normalizedFields,
-          });
-          continue;
-        }
-
-        if (duplicateContext) {
-          const updatePayload = buildDuplicateUpdatePatch(
-            duplicateContext.existing.existingEvent,
-            prepared.event,
-          );
-          try {
-            await client.mutation(updateEventMutation, {
-              id: duplicateContext.existing.existingEvent._id,
-              patch: updatePayload.patch,
-            });
-            summary.updated_duplicates_bad_data += 1;
-            logInfo(duplicateContext.updateReasonEvent, {
-              phase: "duplicate_updated",
-              handle,
-              postId: post.postId,
-              postUrl: post.instagramPostUrl,
-              selectedImageUrl: bestImageUrl,
-              existingEventId: duplicateContext.existing.existingEvent._id,
-              qualityReasons: duplicateContext.quality.reasons,
-              materiallyChanged: updatePayload.materiallyChanged,
-              statusResetToPending: updatePayload.statusResetToPending,
-              caption: post.caption,
-              postTimestamp: post.postedAt,
-              rawExtraction: extracted,
-              normalizedFields: prepared.normalizedFields,
-            });
-          } catch (error) {
-            summary.duplicate_update_failed += 1;
-            summary.errors.push(
-              error instanceof Error ? error.message : "Duplicate update failed.",
-            );
-            logError("duplicate_update_failed", {
-              handle,
-              postId: post.postId,
-              postUrl: post.instagramPostUrl,
-              selectedImageUrl: bestImageUrl,
-              existingEventId: duplicateContext.existing.existingEvent._id,
-              qualityReasons: duplicateContext.quality.reasons,
-              error: error instanceof Error ? error.message : "Unknown duplicate update error.",
-            });
-          }
-          continue;
-        }
-
-        await client.mutation(createEventMutation, prepared.event);
-        summary.insertedEvents += 1;
-        summary.inserted_events += 1;
-        logInfo("ingestion.event.inserted", {
-          handle,
-          postId: post.postId,
-          postUrl: post.instagramPostUrl,
-          selectedImageUrl: bestImageUrl,
-          caption: post.caption,
-          postTimestamp: post.postedAt,
-          rawExtraction: extracted,
-          normalizedFields: prepared.normalizedFields,
-        });
-      } catch (error) {
-        summary.failedExtractions += 1;
-        summary.failed_extractions += 1;
-        summary.failed_extraction += 1;
-        summary.errors.push(
-          error instanceof Error ? error.message : "Unknown extraction error.",
-        );
-        logError("ingestion.openai.extraction.failed", {
-          handle,
-          postId: post.postId,
-          postUrl: post.instagramPostUrl,
-          selectedImageUrl: bestImageUrl,
-          error: error instanceof Error ? error.message : "Unknown extraction error.",
-        });
-      }
-    }
+  while (!done) {
+    const batchResult = await runInstagramIngestionBatchStep({
+      handles: options.handles,
+      summary,
+      state,
+      resultsLimit: options.resultsLimit,
+      daysBack: options.daysBack,
+      batchSize: 10,
+    });
+    done = batchResult.done;
   }
 
-  return {
-    startedAt,
-    finishedAt: new Date().toISOString(),
-    handles: handleSummaries,
-  };
+  summary.finishedAt = new Date().toISOString();
+  return summary;
 }

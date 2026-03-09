@@ -1,13 +1,42 @@
 import { auth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
-import { runInstagramIngestion } from "@/lib/pipeline/run-instagram-ingestion";
-import { hasClerkEnv } from "@/lib/utils/env";
+import { ConvexHttpClient } from "convex/browser";
+import type { FunctionReference } from "convex/server";
+import {
+  createEmptyIngestionSummary,
+  createInitialIngestionBatchState,
+} from "@/lib/pipeline/run-instagram-ingestion";
+import { getRequiredEnv, hasClerkEnv } from "@/lib/utils/env";
 
 type ScrapeRequestBody = {
   handles?: string[];
   resultsLimit?: number;
   daysBack?: number;
 };
+
+const createIngestionJobMutation =
+  "ingestionJobs:createJob" as unknown as FunctionReference<"mutation">;
+const DEFAULT_BATCH_SIZE = 2;
+
+export const maxDuration = 300;
+
+function normalizePositiveInt(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const rounded = Math.trunc(value);
+  return rounded > 0 ? rounded : undefined;
+}
+
+function logInfo(event: string, payload: Record<string, unknown>) {
+  console.info(
+    JSON.stringify({
+      level: "info",
+      event,
+      ...payload,
+    }),
+  );
+}
 
 export async function POST(request: Request) {
   if (hasClerkEnv()) {
@@ -36,16 +65,39 @@ export async function POST(request: Request) {
   }
 
   try {
-    const summary = await runInstagramIngestion({
-      handles,
-      resultsLimit: body.resultsLimit,
-      daysBack: body.daysBack,
-    });
-    return NextResponse.json({
+    const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
+    const resultsLimit = normalizePositiveInt(body.resultsLimit);
+    const daysBack = normalizePositiveInt(body.daysBack);
+    const summary = createEmptyIngestionSummary(handles);
+    const state = createInitialIngestionBatchState();
+
+    const jobId = (await convex.mutation(createIngestionJobMutation, {
       source: "manual",
       handles,
-      summary,
+      resultsLimit,
+      daysBack,
+      batchSize: DEFAULT_BATCH_SIZE,
+      summaryJson: JSON.stringify(summary),
+      stateJson: JSON.stringify(state),
+    })) as string;
+
+    logInfo("scrape_started", {
+      source: "manual",
+      jobId,
+      handles,
+      resultsLimit: resultsLimit ?? null,
+      daysBack: daysBack ?? null,
+      batchSize: DEFAULT_BATCH_SIZE,
     });
+
+    return NextResponse.json({
+      started: true,
+      jobId,
+      status: "queued",
+      source: "manual",
+      handles,
+      statusUrl: `/api/admin/scrape/jobs/${jobId}`,
+    }, { status: 202 });
   } catch (error) {
     return NextResponse.json(
       {

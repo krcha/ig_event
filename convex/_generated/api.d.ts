@@ -9,6 +9,7 @@
  */
 
 import type * as events from "../events.js";
+import type * as ingestionJobs from "../ingestionJobs.js";
 import type * as users from "../users.js";
 import type * as venues from "../venues.js";
 
@@ -20,6 +21,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   events: typeof events;
+  ingestionJobs: typeof ingestionJobs;
   users: typeof users;
   venues: typeof venues;
 }>;
