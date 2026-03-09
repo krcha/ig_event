@@ -61,8 +61,11 @@ Return strict JSON with:
 Rules:
 - Use empty string for unknown scalar fields; use [] for unknown artists.
 - Do not invent facts.
+- Use the flyer/poster and caption together to identify the venue. The Instagram handle is strong identity context for the account and can help resolve abbreviations or partial venue references.
+- If the handle clearly belongs to a venue or promoter, use that only as grounding context. Do not invent a venue that is unsupported by the poster, caption, location text, or obvious handle identity.
 - Only return a non-empty "title" when an explicit event/program name is clearly written in the caption or flyer.
 - If the source only indicates a genre, format, or generic session type (for example jam session, techno night, live music), return an empty string for "title".
+- Do not use the venue name, Instagram handle, or a generic genre label as a fabricated event title unless that exact text is clearly the event/program name in the source.
 - Do not create, paraphrase, beautify, or normalize event titles.
 - If date is unclear, return empty string for date.
 - If venue is unclear, return empty string for venue.
@@ -149,6 +152,7 @@ export async function extractEventDataFromPoster(
                     `Instagram post timestamp: ${options.instagramPostTimestamp ?? "N/A"}`,
                     `Instagram caption: ${options.caption ?? "N/A"}`,
                     `Source image URL: ${options.sourceImageUrl}`,
+                    "Use poster text + caption together. Use the Instagram handle as account identity context when resolving venue or organizer naming, but do not invent unsupported facts.",
                   ].join("\n"),
                 },
                 {

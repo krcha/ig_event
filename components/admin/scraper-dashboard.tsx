@@ -242,6 +242,11 @@ export function ScraperDashboard() {
     void runScraper("/api/admin/scrape/venues", { mode });
   }
 
+  const modeLabel =
+    summaryPayload?.mode === "saved_posts"
+      ? "Saved Apify posts re-output"
+      : "Full scrape + extract";
+
   return (
     <section className="space-y-4 rounded-xl border border-border bg-card p-5">
       <label className="block space-y-2">
@@ -254,56 +259,79 @@ export function ScraperDashboard() {
         />
       </label>
 
-      <button
-        className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
-        disabled={isLoading || handles.length === 0}
-        onClick={() => {
-          void runManualScraper("full_scrape");
-        }}
-        type="button"
-      >
-        {isLoading ? "Running scrape job..." : "Run full scrape job"}
-      </button>
-      <button
-        className="ml-2 rounded-md border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
-        disabled={isLoading}
-        onClick={() => {
-          void runManualScraper("saved_posts");
-        }}
-        type="button"
-      >
-        {isLoading ? "Running..." : "Process saved scraped posts"}
-      </button>
-      <button
-        className="ml-2 rounded-md border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
-        disabled={isLoading}
-        onClick={() => {
-          runActiveVenueScraper("full_scrape");
-        }}
-        type="button"
-      >
-        {isLoading ? "Running..." : "Run active venues"}
-      </button>
-      <button
-        className="ml-2 rounded-md border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
-        disabled={isLoading}
-        onClick={() => {
-          runActiveVenueScraper("saved_posts");
-        }}
-        type="button"
-      >
-        {isLoading ? "Running..." : "Process saved active venues"}
-      </button>
-      <button
-        className="ml-2 rounded-md border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
-        disabled={isLoading}
-        onClick={() => {
-          void runRepairScraper();
-        }}
-        type="button"
-      >
-        {isLoading ? "Running..." : "Repair existing bad events"}
-      </button>
+      <div className="space-y-3 rounded-md border border-border bg-background p-4">
+        <div className="space-y-1">
+          <p className="text-sm font-medium">Listed handles</p>
+          <p className="text-sm text-muted-foreground">
+            Re-output reuses already saved Apify posts for these handles, reruns
+            poster + caption analysis, and updates matching events when fields change.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={isLoading || handles.length === 0}
+            onClick={() => {
+              void runManualScraper("full_scrape");
+            }}
+            type="button"
+          >
+            {isLoading ? "Running scrape job..." : "Run full scrape + extract"}
+          </button>
+          <button
+            className="rounded-md border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={isLoading || handles.length === 0}
+            onClick={() => {
+              void runManualScraper("saved_posts");
+            }}
+            type="button"
+          >
+            {isLoading ? "Running..." : "Re-output from saved Apify posts"}
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-3 rounded-md border border-border bg-background p-4">
+        <div className="space-y-1">
+          <p className="text-sm font-medium">Active venues</p>
+          <p className="text-sm text-muted-foreground">
+            Use the saved-post option when you want OpenAI to regenerate venue/title
+            fields from already scraped venue posts without calling Apify again.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            className="rounded-md border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={isLoading}
+            onClick={() => {
+              runActiveVenueScraper("full_scrape");
+            }}
+            type="button"
+          >
+            {isLoading ? "Running..." : "Run all active venues"}
+          </button>
+          <button
+            className="rounded-md border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={isLoading}
+            onClick={() => {
+              runActiveVenueScraper("saved_posts");
+            }}
+            type="button"
+          >
+            {isLoading ? "Running..." : "Re-output active venues from saved Apify posts"}
+          </button>
+          <button
+            className="rounded-md border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={isLoading}
+            onClick={() => {
+              void runRepairScraper();
+            }}
+            type="button"
+          >
+            {isLoading ? "Running..." : "Repair existing bad events"}
+          </button>
+        </div>
+      </div>
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       {activeJobId ? (
@@ -320,9 +348,7 @@ export function ScraperDashboard() {
           <p>
             Mode:{" "}
             <span className="font-medium">
-              {summaryPayload.mode === "saved_posts"
-                ? "Saved posts only"
-                : "Full scrape"}
+              {modeLabel}
             </span>
           </p>
           <p>
