@@ -14,7 +14,7 @@ type Body = {
   daysBack?: number;
 };
 
-type RepairErrorStep = "auth_check" | "validate_request" | "enqueue_repair_job";
+type RepairErrorStep = "auth_check" | "parse_body" | "enqueue_repair_job";
 
 const DEFAULT_REPAIR_RESULTS_LIMIT = 100;
 const DEFAULT_REPAIR_DAYS_BACK = 365;
@@ -67,14 +67,14 @@ export async function POST(request: Request) {
       }
     }
 
-    step = "validate_request";
+    step = "parse_body";
 
     let body: Body = {};
     try {
       body = (await request.json()) as Body;
     } catch {
       return NextResponse.json(
-        { errorStep: "validate_request", error: "Invalid JSON payload." },
+        { errorStep: "parse_body", error: "Invalid JSON payload." },
         { status: 400 },
       );
     }
@@ -82,19 +82,19 @@ export async function POST(request: Request) {
     const resultsLimit =
       normalizePositiveInt(body.resultsLimit) ?? DEFAULT_REPAIR_RESULTS_LIMIT;
     const daysBack = normalizePositiveInt(body.daysBack) ?? DEFAULT_REPAIR_DAYS_BACK;
+
+    step = "enqueue_repair_job";
     handles = await getActiveVenueHandles();
 
     if (handles.length === 0) {
       return NextResponse.json(
         {
-          errorStep: "validate_request",
+          errorStep: "enqueue_repair_job",
           error: "No active venue handles are configured for repair.",
         },
         { status: 400 },
       );
     }
-
-    step = "enqueue_repair_job";
 
     const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
     const summary = createEmptyIngestionSummary(handles);
