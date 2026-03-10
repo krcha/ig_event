@@ -166,38 +166,6 @@ export function ScraperDashboard() {
   const resultsLimit = parsePositiveInt(resultsLimitInput);
   const daysBack = parsePositiveInt(daysBackInput);
 
-  async function runScraper(endpoint: string, body?: Record<string, unknown>) {
-    setIsLoading(true);
-    setError(null);
-    setSummaryPayload(null);
-    setActiveJobId(null);
-    setActiveJobStatus(null);
-
-    try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body ?? {}),
-      });
-
-      const payload = await readJsonPayload<ScrapeSummaryPayload>(response);
-
-      if (!response.ok) {
-        throw new Error(payload.error ?? "Failed to run scraper pipeline.");
-      }
-
-      setSummaryPayload(payload);
-    } catch (caughtError) {
-      setError(
-        caughtError instanceof Error
-          ? caughtError.message
-          : "Unknown scraper error.",
-      );
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
   async function delay(ms: number) {
     await new Promise((resolve) => {
       setTimeout(resolve, ms);
@@ -298,7 +266,7 @@ export function ScraperDashboard() {
   }
 
   function runActiveVenueScraper(mode: IngestionRunMode) {
-    void runScraper(
+    void runQueuedScraper(
       "/api/admin/scrape/venues",
       buildSummaryRequestBody(mode, resultsLimit, daysBack),
     );

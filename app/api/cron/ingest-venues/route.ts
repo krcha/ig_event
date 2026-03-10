@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { runActiveVenueIngestion } from "@/lib/pipeline/run-instagram-ingestion";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 function isAuthorizedCronRequest(request: Request): boolean {
   const cronSecret = process.env.CRON_SECRET;
