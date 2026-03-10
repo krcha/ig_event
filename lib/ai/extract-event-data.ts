@@ -1,5 +1,9 @@
 import { z } from "zod";
 import { getRequiredEnv } from "@/lib/utils/env";
+import {
+  buildEventExtractionUserPrompt,
+  EVENT_EXTRACTION_SYSTEM_PROMPT,
+} from "./event-extraction-prompt";
 
 const openAiVisionModel = process.env.OPENAI_VISION_MODEL ?? "gpt-5.4";
 const OPENAI_REQUEST_TIMEOUT_MS = 40000;
@@ -8,6 +12,15 @@ const extractionFieldConfirmationSchema = z.object({
   confidence: z.union([z.number(), z.string()]),
   found_in: z.array(z.string()).default([]),
   notes: z.string(),
+});
+
+const extractedScheduleEntrySchema = z.object({
+  date: z.string(),
+  time: z.string(),
+  title: z.string(),
+  artists: z.array(z.string()).default([]),
+  description: z.string(),
+  source_text: z.string(),
 });
 
 const extractedEventSchema = z.object({
@@ -26,6 +39,7 @@ const extractedEventSchema = z.object({
   reasoning_notes: z.string(),
   source_caption: z.string(),
   source_url: z.string(),
+  schedule_entries: z.array(extractedScheduleEntrySchema).default([]),
   field_confirmation: z.object({
     title: extractionFieldConfirmationSchema,
     location: extractionFieldConfirmationSchema,
@@ -42,72 +56,14 @@ export type ExtractedEventData = z.infer<typeof extractedEventSchema>;
 type ExtractEventDataOptions = {
   imageDataUrl: string;
   caption?: string | null;
+  altText?: string | null;
   instagramPostUrl: string;
   sourceImageUrl: string;
   instagramHandle: string;
   instagramPostTimestamp?: string | null;
+  instagramLocationName?: string | null;
+  canonicalVenueName?: string | null;
 };
-
-const systemPrompt = `
-You extract structured event data from Instagram nightlife captions and flyer/poster images.
-Prioritize exact OCR-style text extraction over paraphrase.
-Preserve artist names, venue names, and prices exactly as written when readable.
-Never hallucinate unreadable or missing text.
-Use the caption as primary context, then refine/fill from the image.
-Return strict JSON with:
-{
-  "title": string,
-  "date": string,
-  "time": string,
-  "venue": string,
-  "city": string,
-  "country": string,
-  "price": string,
-  "currency": string,
-  "artists": string[],
-  "category": string,
-  "description": string,
-  "confidence": number,
-  "reasoning_notes": string,
-  "source_caption": string,
-  "source_url": string,
-  "field_confirmation": {
-    "title": { "confidence": number, "found_in": string[], "notes": string },
-    "location": { "confidence": number, "found_in": string[], "notes": string },
-    "location_name": { "confidence": number, "found_in": string[], "notes": string },
-    "price": { "confidence": number, "found_in": string[], "notes": string },
-    "start_time": { "confidence": number, "found_in": string[], "notes": string },
-    "short_description": { "confidence": number, "found_in": string[], "notes": string },
-    "artists": { "confidence": number, "found_in": string[], "notes": string }
-  }
-}
-Rules:
-- Use empty string for unknown scalar fields; use [] for unknown artists.
-- Do not invent facts.
-- Use the flyer/poster and caption together to identify the venue. The Instagram handle is strong identity context for the account and can help resolve abbreviations or partial venue references.
-- If the handle clearly belongs to a venue or promoter, use that only as grounding context. Do not invent a venue that is unsupported by the poster, caption, location text, or obvious handle identity.
-- Only return a non-empty "title" when an explicit event/program name is clearly written in the caption or flyer.
-- Prefer the parent event/program name over poster subsection labels. If the flyer says something like "Aktivnosti", "Program", "Lineup", "Radionice", or another section heading, and the caption/flyer also names the actual event, return the actual event name as "title".
-- If the source only indicates a genre, format, or generic session type (for example jam session, techno night, live music), return an empty string for "title".
-- Do not treat poster subsections, schedule headings, or detail blocks as event titles.
-- Do not use the venue name, Instagram handle, or a generic genre label as a fabricated event title unless that exact text is clearly the event/program name in the source.
-- Do not create, paraphrase, beautify, or normalize event titles.
-- Keep "description" short and factual, based only on details supported by the caption or flyer.
-- If date is unclear, return empty string for date.
-- If venue is unclear, return empty string for venue.
-- If month/day is visible but year is missing, infer year from Instagram post timestamp only when confidence is high.
-- If inferred date appears implausible relative to post timestamp, return empty date.
-- For field_confirmation:
-- "title" confirms the event title field.
-- "location" confirms city/country style location details.
-- "location_name" confirms the venue/location name field.
-- "price" confirms ticket price details.
-- "start_time" confirms the start time field.
-- "short_description" confirms the description summary.
-- "artists" confirms artist names.
-- Each field_confirmation entry must explain confidence using the caption, image, handle context, or explicit inference notes.
-- Never return markdown, only valid JSON.
-`.trim();
 
 const extractionJsonSchema = {
   type: "object",
@@ -131,6 +87,25 @@ const extractionJsonSchema = {
     reasoning_notes: { type: "string" },
     source_caption: { type: "string" },
     source_url: { type: "string" },
+    schedule_entries: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          date: { type: "string" },
+          time: { type: "string" },
+          title: { type: "string" },
+          artists: {
+            type: "array",
+            items: { type: "string" },
+          },
+          description: { type: "string" },
+          source_text: { type: "string" },
+        },
+        required: ["date", "time", "title", "artists", "description", "source_text"],
+      },
+    },
     field_confirmation: {
       type: "object",
       additionalProperties: false,
@@ -233,6 +208,7 @@ const extractionJsonSchema = {
     "reasoning_notes",
     "source_caption",
     "source_url",
+    "schedule_entries",
     "field_confirmation",
   ],
 } as const;
@@ -259,22 +235,23 @@ export async function extractEventDataFromPoster(
           input: [
             {
               role: "system",
-              content: [{ type: "input_text", text: systemPrompt }],
+              content: [{ type: "input_text", text: EVENT_EXTRACTION_SYSTEM_PROMPT }],
             },
             {
               role: "user",
               content: [
                 {
                   type: "input_text",
-                  text: [
-                    "Extract event data from this Instagram post.",
-                    `Instagram handle: @${options.instagramHandle}`,
-                    `Instagram post URL: ${options.instagramPostUrl}`,
-                    `Instagram post timestamp: ${options.instagramPostTimestamp ?? "N/A"}`,
-                    `Instagram caption: ${options.caption ?? "N/A"}`,
-                    `Source image URL: ${options.sourceImageUrl}`,
-                    "Use poster text + caption together. Use the Instagram handle as account identity context when resolving venue or organizer naming, but do not invent unsupported facts.",
-                  ].join("\n"),
+                  text: buildEventExtractionUserPrompt({
+                    instagramHandle: options.instagramHandle,
+                    instagramPostUrl: options.instagramPostUrl,
+                    instagramPostTimestamp: options.instagramPostTimestamp,
+                    instagramCaption: options.caption,
+                    instagramAltText: options.altText,
+                    instagramLocationName: options.instagramLocationName,
+                    canonicalVenueName: options.canonicalVenueName,
+                    sourceImageUrl: options.sourceImageUrl,
+                  }),
                 },
                 {
                   type: "input_image",

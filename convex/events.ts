@@ -88,6 +88,16 @@ export const listByStatus = query({
   },
 });
 
+export const listByDate = query({
+  args: { date: v.string() },
+  handler: async (ctx, args) => {
+    return ctx.db
+      .query("events")
+      .withIndex("by_date", (q) => q.eq("date", args.date))
+      .collect();
+  },
+});
+
 export const createEvent = mutation({
   args: {
     title: v.string(),
@@ -176,5 +186,60 @@ export const setEventStatus = mutation({
       moderationNote: args.moderationNote,
       updatedAt: now,
     });
+  },
+});
+
+export const setEventStatuses = mutation({
+  args: {
+    ids: v.array(v.id("events")),
+    status: moderationStatus,
+    reviewedBy: v.optional(v.string()),
+    moderationNote: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const uniqueIds = [...new Set(args.ids)];
+    let updatedCount = 0;
+    let skippedCount = 0;
+
+    for (const id of uniqueIds) {
+      const existingEvent = await ctx.db.get(id);
+      if (!existingEvent || existingEvent.status !== "pending") {
+        skippedCount += 1;
+        continue;
+      }
+
+      await ctx.db.patch(id, {
+        status: args.status,
+        reviewedAt: now,
+        reviewedBy: args.reviewedBy,
+        moderationNote: args.moderationNote,
+        updatedAt: now,
+      });
+      updatedCount += 1;
+    }
+
+    return {
+      updatedCount,
+      skippedCount,
+    };
+  },
+});
+
+export const deleteApprovedEvent = mutation({
+  args: {
+    id: v.id("events"),
+  },
+  handler: async (ctx, args) => {
+    const existingEvent = await ctx.db.get(args.id);
+    if (!existingEvent) {
+      throw new Error("Event not found.");
+    }
+
+    if (existingEvent.status !== "approved") {
+      throw new Error("Only approved events can be removed.");
+    }
+
+    await ctx.db.delete(args.id);
   },
 });

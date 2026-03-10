@@ -5,6 +5,7 @@ const scrapedPostRecord = {
   handle: v.string(),
   postId: v.string(),
   caption: v.optional(v.string()),
+  altText: v.optional(v.string()),
   imageUrl: v.optional(v.string()),
   imageUrls: v.array(v.string()),
   postType: v.optional(v.string()),

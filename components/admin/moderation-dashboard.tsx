@@ -88,6 +88,7 @@ type DecoratedEvent = ModerationEvent & {
 };
 
 const STATUS_OPTIONS: EventStatus[] = ["pending", "approved", "rejected"];
+const BULK_APPROVE_ACTION_ID = "__bulk_approve__";
 const SERBIAN_CYRILLIC_TO_LATIN: Record<string, string> = {
   а: "a",
   б: "b",
@@ -698,6 +699,91 @@ export function ModerationDashboard() {
     return next;
   }, [confidenceFilter, decoratedEvents, filterMode, searchQuery, sortMode]);
 
+  const visiblePendingEventIds = useMemo(
+    () =>
+      filteredEvents
+        .filter((event) => event.moderation.status === "pending")
+        .map((event) => event.id),
+    [filteredEvents],
+  );
+
+  const isAnyActionInFlight = actionInFlightFor !== null;
+
+  async function approveVisibleEvents() {
+    if (visiblePendingEventIds.length === 0) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Approve ${visiblePendingEventIds.length} visible pending event${
+        visiblePendingEventIds.length === 1 ? "" : "s"
+      }?`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setActionInFlightFor(BULK_APPROVE_ACTION_ID);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/admin/events/moderate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          eventIds: visiblePendingEventIds,
+          status: "approved",
+        }),
+      });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to approve visible events.");
+      }
+
+      await fetchEvents();
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unknown bulk approval error.",
+      );
+    } finally {
+      setActionInFlightFor(null);
+    }
+  }
+
+  async function removeApprovedEvent(eventId: string, title: string) {
+    const confirmed = window.confirm(`Remove approved event "${title}"?`);
+    if (!confirmed) {
+      return;
+    }
+
+    setActionInFlightFor(eventId);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/admin/events/remove", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ eventId }),
+      });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to remove approved event.");
+      }
+
+      await fetchEvents();
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unknown event removal error.",
+      );
+    } finally {
+      setActionInFlightFor(null);
+    }
+  }
+
   const stats = useMemo(
     () => ({
       loaded: decoratedEvents.length,
@@ -739,13 +825,26 @@ export function ModerationDashboard() {
               and event date issues.
             </p>
           </div>
-          <button
-            className="rounded-xl border border-border px-4 py-2 text-sm font-medium"
-            onClick={() => void fetchEvents()}
-            type="button"
-          >
-            Refresh
-          </button>
+          <div className="flex flex-wrap gap-2">
+            {status === "pending" ? (
+              <button
+                className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isAnyActionInFlight || visiblePendingEventIds.length === 0}
+                onClick={() => void approveVisibleEvents()}
+                type="button"
+              >
+                Approve visible ({visiblePendingEventIds.length})
+              </button>
+            ) : null}
+            <button
+              className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={isAnyActionInFlight}
+              onClick={() => void fetchEvents()}
+              type="button"
+            >
+              Refresh
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -1090,7 +1189,7 @@ export function ModerationDashboard() {
                   <div className="flex flex-wrap gap-2">
                     <button
                       className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
-                      disabled={actionInFlightFor === event.id}
+                      disabled={isAnyActionInFlight}
                       onClick={() => void updateStatus(event.id, "approved")}
                       type="button"
                     >
@@ -1098,11 +1197,23 @@ export function ModerationDashboard() {
                     </button>
                     <button
                       className="rounded-xl border border-destructive px-4 py-2 text-sm font-medium text-destructive disabled:cursor-not-allowed disabled:opacity-60"
-                      disabled={actionInFlightFor === event.id}
+                      disabled={isAnyActionInFlight}
                       onClick={() => void updateStatus(event.id, "rejected")}
                       type="button"
                     >
                       Reject
+                    </button>
+                  </div>
+                ) : null}
+                {status === "approved" ? (
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      className="rounded-xl border border-destructive px-4 py-2 text-sm font-medium text-destructive disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={isAnyActionInFlight}
+                      onClick={() => void removeApprovedEvent(event.id, event.title)}
+                      type="button"
+                    >
+                      Remove
                     </button>
                   </div>
                 ) : null}

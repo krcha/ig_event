@@ -15,6 +15,7 @@ const LEGACY_APIFY_ACTOR_IDS = new Set(["apify/instagram-scraper", "apify~instag
 export type InstagramScrapedPost = {
   postId: string;
   caption: string | null;
+  altText: string | null;
   imageUrl: string | null;
   imageUrls: string[];
   postType: string | null;
@@ -62,6 +63,7 @@ type ApifyInstagramItem = {
   caption?: string | { text?: string };
   captionText?: string;
   caption_text?: string;
+  alt?: string;
   displayUrl?: string;
   display_url?: string;
   displayUrlHD?: string;
@@ -496,6 +498,7 @@ function mapApifyItemToInstagramPost(
   return {
     postId,
     caption: readCaption(item),
+    altText: normalizeString(item.alt),
     imageUrl: primaryImageUrl,
     imageUrls,
     postType: resolvePostType(item),
