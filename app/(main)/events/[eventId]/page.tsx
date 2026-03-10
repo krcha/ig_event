@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ArrowLeft, CalendarDays, Clock3, ExternalLink, MapPin, Ticket } from "lucide-react";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 
@@ -44,58 +45,134 @@ async function loadEvent(eventId: string): Promise<{
   }
 }
 
+function formatEventDate(value: string): string {
+  const parsed = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  }).format(parsed);
+}
+
 export default async function EventDetailPage({ params }: EventDetailPageProps) {
   const { event, error } = await loadEvent(params.eventId);
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 px-6 py-10">
-      <header className="flex flex-col gap-2">
-        <h1 className="text-2xl font-semibold">Event Details</h1>
-        <p className="text-sm text-muted-foreground">
-          Event ID: <span className="font-medium">{params.eventId}</span>
-        </p>
-      </header>
+    <main className="app-page">
+      <div className="flex items-center justify-between gap-3">
+        <Link className="button-secondary gap-2" href="/events">
+          <ArrowLeft className="h-4 w-4" />
+          Back to events
+        </Link>
+        <span className="app-chip">Event ID {params.eventId}</span>
+      </div>
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
       {event ? (
-        <article className="space-y-3 rounded-xl border border-border bg-card p-6 text-sm">
-          <h2 className="text-xl font-semibold">{event.title}</h2>
-          <p className="text-muted-foreground">
-            {event.date}
-            {event.time ? ` at ${event.time}` : ""}
-            {" · "}
-            {event.venue}
-          </p>
-          <p className="text-muted-foreground">Status: {event.status}</p>
-          <p className="text-muted-foreground">
-            Type: {event.eventType}
-            {event.ticketPrice ? ` · ${event.ticketPrice}` : ""}
-          </p>
-          {event.artists.length > 0 ? (
-            <p className="text-muted-foreground">Artists: {event.artists.join(", ")}</p>
-          ) : null}
-          {event.description ? <p>{event.description}</p> : null}
-          {event.instagramPostUrl ? (
-            <a
-              className="inline-block text-primary underline"
-              href={event.instagramPostUrl}
-              rel="noreferrer"
-              target="_blank"
-            >
-              Open Instagram post
-            </a>
-          ) : null}
+        <article className="hero-panel">
+          <div className="grid gap-0 lg:grid-cols-[minmax(0,1.05fr)_320px]">
+            <div className="space-y-6 px-6 py-7 sm:px-8">
+              <div className="flex flex-wrap gap-2">
+                <span className="app-chip">{event.status}</span>
+                <span className="app-chip">{event.eventType}</span>
+                {event.ticketPrice ? (
+                  <span className="app-chip">
+                    <Ticket className="h-3.5 w-3.5" />
+                    {event.ticketPrice}
+                  </span>
+                ) : null}
+              </div>
+
+              <div className="space-y-3">
+                <p className="section-kicker">Event detail</p>
+                <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
+                  {event.title}
+                </h1>
+                {event.description ? (
+                  <p className="max-w-3xl text-base leading-7 text-muted-foreground">
+                    {event.description}
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="metric-card">
+                  <p className="section-kicker">Date</p>
+                  <p className="mt-3 inline-flex items-center gap-2 text-base font-semibold">
+                    <CalendarDays className="h-4 w-4 text-primary" />
+                    {formatEventDate(event.date)}
+                  </p>
+                </div>
+                <div className="metric-card">
+                  <p className="section-kicker">Time</p>
+                  <p className="mt-3 inline-flex items-center gap-2 text-base font-semibold">
+                    <Clock3 className="h-4 w-4 text-primary" />
+                    {event.time ?? "Time TBA"}
+                  </p>
+                </div>
+                <div className="metric-card">
+                  <p className="section-kicker">Venue</p>
+                  <p className="mt-3 inline-flex items-center gap-2 text-base font-semibold">
+                    <MapPin className="h-4 w-4 text-primary" />
+                    {event.venue}
+                  </p>
+                </div>
+              </div>
+
+              {event.artists.length > 0 ? (
+                <div className="glass-panel px-5 py-5">
+                  <p className="section-kicker">Artists</p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {event.artists.map((artist) => (
+                      <span className="app-chip" key={artist}>
+                        {artist}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {event.instagramPostUrl ? (
+                <a
+                  className="button-primary gap-2"
+                  href={event.instagramPostUrl}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  Open Instagram post
+                  <ExternalLink className="h-4 w-4" />
+                </a>
+              ) : null}
+            </div>
+
+            <div className="border-t border-border/70 bg-secondary/55 p-6 lg:border-l lg:border-t-0">
+              {event.imageUrl ? (
+                <div className="glass-panel overflow-hidden p-2">
+                  <img
+                    alt={event.title}
+                    className="h-full min-h-72 w-full rounded-[1.25rem] object-cover"
+                    src={event.imageUrl}
+                  />
+                </div>
+              ) : (
+                <div className="glass-panel flex min-h-72 items-center justify-center px-6 text-center text-sm text-muted-foreground">
+                  No poster image is available for this event.
+                </div>
+              )}
+            </div>
+          </div>
         </article>
       ) : (
-        <div className="rounded-xl border border-border bg-card p-6 text-sm text-muted-foreground">
+        <div className="glass-panel px-6 py-10 text-center text-sm text-muted-foreground">
           Event not found.
         </div>
       )}
-
-      <Link className="text-sm text-primary underline" href="/events">
-        Back to events
-      </Link>
     </main>
   );
 }

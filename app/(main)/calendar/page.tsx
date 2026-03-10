@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { CalendarDays, ChevronLeft, ChevronRight, Filter } from "lucide-react";
+import { ArrowUpRight, CalendarDays, ChevronLeft, ChevronRight, Filter } from "lucide-react";
 import {
   loadUpcomingApprovedEvents,
   parseNormalizedEventDate,
@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
-const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 type CalendarSearchParams = {
   month?: string | string[];
@@ -75,7 +75,8 @@ function buildQueryString(params: Record<string, string | undefined>): string {
 
 function getCalendarDays(monthStart: Date): Date[] {
   const start = new Date(monthStart);
-  start.setDate(1 - monthStart.getDay());
+  const mondayFirstDayIndex = (monthStart.getDay() + 6) % 7;
+  start.setDate(1 - mondayFirstDayIndex);
 
   return Array.from({ length: 42 }, (_, index) => {
     const day = new Date(start);
@@ -151,9 +152,20 @@ function filterEvents(
   });
 }
 
+function formatAgendaMeta(event: PublicEvent): string {
+  const parts = [event.venue, event.eventType, event.ticketPrice ?? null];
+
+  if (event.artists.length > 0) {
+    parts.push(event.artists.join(", "));
+  }
+
+  return parts.filter(Boolean).join(" · ");
+}
+
 export default async function CalendarPage({ searchParams }: CalendarPageProps) {
   const { events, error } = await loadUpcomingApprovedEvents();
   const today = new Date();
+  const todayKey = formatDateKey(today);
   const requestedMonth = getSingleValue(searchParams?.month);
   const selectedVenue = getSingleValue(searchParams?.venue);
   const selectedType = getSingleValue(searchParams?.type);
@@ -203,338 +215,349 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   };
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-6 py-10">
-      <header className="flex flex-col gap-4 rounded-[2rem] border border-border bg-card px-6 py-6 shadow-sm">
-        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-          <div className="space-y-2">
-            <div className="inline-flex items-center gap-2 rounded-full bg-secondary px-3 py-1 text-xs font-medium tracking-[0.18em] text-secondary-foreground uppercase">
-              <CalendarDays className="h-3.5 w-3.5" />
-              Live calendar
+    <main className="mx-auto flex w-full max-w-[96rem] flex-col gap-3 px-3 py-4 sm:px-5 sm:py-5 lg:px-6">
+      <header className="glass-panel overflow-hidden px-4 py-3.5 sm:px-5 sm:py-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-center gap-4">
+            <div className="flex h-11 w-11 items-center justify-center rounded-[1rem] bg-primary/[0.1] text-primary shadow-[0_18px_30px_-22px_rgba(59,130,246,0.8)]">
+              <CalendarDays className="h-4 w-4" />
             </div>
-            <div>
-              <h1 className="text-3xl font-semibold tracking-tight">Calendar</h1>
-              <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-                Browse upcoming approved events by month, then drill into a single day agenda.
+            <div className="space-y-0.5">
+              <p className="section-kicker">Calendar</p>
+              <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Month view</h1>
+              <p className="text-sm text-muted-foreground">
+                {monthEvents.length} events across {activeDayCount} active days this month.
               </p>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-3 text-sm">
-            <Link
-              className="rounded-full border border-border px-4 py-2 text-foreground transition hover:bg-secondary"
-              href="/events"
-            >
-              List view
-            </Link>
-            <Link
-              className="rounded-full border border-border px-4 py-2 text-foreground transition hover:bg-secondary"
-              href={`/calendar${buildQueryString({
-                month: formatMonthParam(today),
-                day: formatDateKey(today),
-              })}`}
-            >
-              Jump to today
-            </Link>
-          </div>
-        </div>
 
-        <div className="grid gap-3 sm:grid-cols-3">
-          <div className="rounded-2xl bg-secondary px-4 py-4">
-            <p className="text-xs font-medium tracking-[0.18em] text-muted-foreground uppercase">
-              Events this month
-            </p>
-            <p className="mt-2 text-2xl font-semibold">{monthEvents.length}</p>
-          </div>
-          <div className="rounded-2xl bg-secondary px-4 py-4">
-            <p className="text-xs font-medium tracking-[0.18em] text-muted-foreground uppercase">
-              Active days
-            </p>
-            <p className="mt-2 text-2xl font-semibold">{activeDayCount}</p>
-          </div>
-          <div className="rounded-2xl bg-secondary px-4 py-4">
-            <p className="text-xs font-medium tracking-[0.18em] text-muted-foreground uppercase">
-              Venues live
-            </p>
-            <p className="mt-2 text-2xl font-semibold">{activeVenueCount}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="app-chip">
+              {weekendEventCount} weekend event{weekendEventCount === 1 ? "" : "s"}
+            </span>
+            <Link className="button-secondary h-9 px-4 py-0 text-sm" href="/events">
+              Events
+            </Link>
           </div>
         </div>
       </header>
 
-      <section className="rounded-[2rem] border border-border bg-card shadow-sm">
-        <div className="flex flex-col gap-4 border-b border-border px-6 py-5 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center justify-between gap-3">
-            <Link
-              aria-label="Previous month"
-              className="rounded-full border border-border p-2 transition hover:bg-secondary"
-              href={`/calendar${buildQueryString({
-                ...baseFilters,
-                month: formatMonthParam(previousMonth),
-              })}`}
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </Link>
-            <div>
-              <p className="text-xs font-medium tracking-[0.18em] text-muted-foreground uppercase">
-                Browse month
-              </p>
-              <h2 className="text-2xl font-semibold">
-                {formatDisplayDate(monthStart, { month: "long", year: "numeric" })}
-              </h2>
-            </div>
-            <Link
-              aria-label="Next month"
-              className="rounded-full border border-border p-2 transition hover:bg-secondary"
-              href={`/calendar${buildQueryString({
-                ...baseFilters,
-                month: formatMonthParam(nextMonth),
-              })}`}
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Link>
-          </div>
-
-          <form className="grid gap-3 md:grid-cols-4" method="get">
-            <input name="month" type="hidden" value={monthParam} />
-            <input name="day" type="hidden" value={selectedDayKey} />
-
-            <label className="flex min-w-[11rem] flex-col gap-1 text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
-              Venue
-              <select
-                className="rounded-xl border border-border bg-background px-3 py-2 text-sm font-normal tracking-normal text-foreground"
-                defaultValue={selectedVenue ?? ""}
-                name="venue"
-              >
-                <option value="">All venues</option>
-                {venues.map((venue) => (
-                  <option key={venue} value={venue}>
-                    {venue}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="flex min-w-[11rem] flex-col gap-1 text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
-              Type
-              <select
-                className="rounded-xl border border-border bg-background px-3 py-2 text-sm font-normal tracking-normal text-foreground"
-                defaultValue={selectedType ?? ""}
-                name="type"
-              >
-                <option value="">All types</option>
-                {eventTypes.map((eventType) => (
-                  <option key={eventType} value={eventType}>
-                    {eventType}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="flex min-w-[11rem] flex-col gap-1 text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
-              Focus
-              <select
-                className="rounded-xl border border-border bg-background px-3 py-2 text-sm font-normal tracking-normal text-foreground"
-                defaultValue={weekendOnly ? "1" : ""}
-                name="weekend"
-              >
-                <option value="">All days</option>
-                <option value="1">Weekend only</option>
-              </select>
-            </label>
-
-            <div className="flex items-end gap-2">
-              <button
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-foreground px-4 text-sm font-medium text-background transition hover:opacity-90"
-                type="submit"
-              >
-                <Filter className="h-4 w-4" />
-                Apply
-              </button>
-              <Link
-                className="inline-flex h-10 items-center justify-center rounded-xl border border-border px-4 text-sm transition hover:bg-secondary"
-                href={`/calendar${buildQueryString({
-                  month: monthParam,
-                  day: selectedDayKey,
-                })}`}
-              >
-                Reset
-              </Link>
-            </div>
-          </form>
-        </div>
-
-        {(selectedVenue || selectedType || weekendOnly) && !error ? (
-          <div className="flex flex-wrap gap-2 border-b border-border px-6 py-4 text-sm">
-            {selectedVenue ? (
-              <span className="rounded-full bg-secondary px-3 py-1 text-secondary-foreground">
-                Venue: {selectedVenue}
-              </span>
-            ) : null}
-            {selectedType ? (
-              <span className="rounded-full bg-secondary px-3 py-1 text-secondary-foreground">
-                Type: {selectedType}
-              </span>
-            ) : null}
-            {weekendOnly ? (
-              <span className="rounded-full bg-secondary px-3 py-1 text-secondary-foreground">
-                Weekend only
-              </span>
-            ) : null}
-          </div>
-        ) : null}
-
-        {error ? <p className="px-6 py-5 text-sm text-destructive">{error}</p> : null}
-
-        {!error ? (
-          <>
-            <div className="overflow-x-auto">
-              <div className="min-w-[52rem]">
-                <div className="grid grid-cols-7 border-b border-border">
-                  {WEEKDAY_LABELS.map((weekday) => (
-                    <div
-                      className="border-r border-border px-3 py-3 text-center text-xs font-medium tracking-[0.16em] text-muted-foreground uppercase last:border-r-0"
-                      key={weekday}
-                    >
-                      {weekday}
-                    </div>
-                  ))}
-                </div>
-
-                <div className="grid grid-cols-7">
-                  {calendarDays.map((day, index) => {
-                    const dayKey = formatDateKey(day);
-                    const inMonth = day.getMonth() === monthStart.getMonth();
-                    const dayEvents = inMonth ? monthEventsByDay.get(dayKey) ?? [] : [];
-                    const isSelected = dayKey === selectedDayKey;
-                    const isToday = dayKey === formatDateKey(today);
-
-                    return (
-                      <Link
-                        className={cn(
-                          "min-h-32 border-r border-b border-border p-3 transition hover:bg-secondary/60",
-                          (index + 1) % 7 === 0 && "border-r-0",
-                          !inMonth && "bg-muted/30 text-muted-foreground",
-                          isSelected && "bg-secondary",
-                        )}
-                        href={`/calendar${buildQueryString({
-                          ...baseFilters,
-                          month: formatMonthParam(day),
-                          day: dayKey,
-                        })}`}
-                        key={dayKey}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span
-                            className={cn(
-                              "flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium",
-                              isToday && "bg-foreground text-background",
-                            )}
-                          >
-                            {day.getDate()}
-                          </span>
-                          {dayEvents.length > 0 ? (
-                            <span className="rounded-full bg-background/90 px-2 py-1 text-[11px] font-medium text-foreground">
-                              {dayEvents.length} event{dayEvents.length === 1 ? "" : "s"}
-                            </span>
-                          ) : null}
-                        </div>
-
-                        <div className="mt-3 space-y-2">
-                          {dayEvents.slice(0, 2).map((event) => (
-                            <div
-                              className="rounded-xl bg-background/90 px-2.5 py-2 text-left text-[11px] leading-tight text-foreground shadow-sm"
-                              key={event._id}
-                            >
-                              <p className="truncate font-medium">
-                                {event.time ?? "TBA"} · {event.title}
-                              </p>
-                              <p className="mt-1 truncate text-muted-foreground">{event.venue}</p>
-                            </div>
-                          ))}
-                          {dayEvents.length > 2 ? (
-                            <p className="text-[11px] font-medium text-muted-foreground">
-                              +{dayEvents.length - 2} more
-                            </p>
-                          ) : null}
-                        </div>
-                      </Link>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          </>
-        ) : null}
-      </section>
-
-      <section className="rounded-[2rem] border border-border bg-card px-6 py-6 shadow-sm">
-        <div className="flex flex-col gap-2 border-b border-border pb-4 md:flex-row md:items-end md:justify-between">
-          <div>
-            <p className="text-xs font-medium tracking-[0.18em] text-muted-foreground uppercase">
-              Selected day
-            </p>
-            <h2 className="text-2xl font-semibold">
-              {formatDisplayDate(selectedDate, {
-                weekday: "long",
-                month: "long",
-                day: "numeric",
-              })}
-            </h2>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            {selectedDayEvents.length} event{selectedDayEvents.length === 1 ? "" : "s"} scheduled
-            {weekendEventCount > 0 && weekendOnly ? ` · ${weekendEventCount} weekend events this month` : ""}
-          </p>
-        </div>
-
-        <div className="mt-5 space-y-4">
-          {selectedDayEvents.map((event) => (
-            <article
-              className="rounded-2xl border border-border bg-background px-5 py-5 shadow-sm"
-              key={event._id}
-            >
-              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2 text-xs font-medium tracking-[0.14em] text-muted-foreground uppercase">
-                    <span className="rounded-full bg-secondary px-3 py-1 text-secondary-foreground">
-                      {event.time ?? "Time TBA"}
-                    </span>
-                    <span>{event.eventType}</span>
-                    {event.ticketPrice ? <span>{event.ticketPrice}</span> : null}
-                  </div>
-                  <div>
-                    <h3 className="text-xl font-semibold">{event.title}</h3>
-                    <p className="mt-1 text-sm text-muted-foreground">{event.venue}</p>
-                  </div>
-                  {event.artists.length > 0 ? (
-                    <p className="text-sm text-muted-foreground">
-                      Artists: {event.artists.join(", ")}
-                    </p>
-                  ) : null}
-                </div>
-
-                <div className="flex flex-wrap items-center gap-3">
+      <section className="overflow-hidden rounded-[2rem] border border-border/80 bg-card/95 shadow-[0_34px_90px_-58px_rgba(15,23,42,0.42)]">
+        <div className="border-b border-border/80 bg-background/88 px-4 py-3.5 sm:px-5 sm:py-4">
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-center 2xl:justify-between">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+                <div className="inline-flex w-fit items-center gap-1 rounded-full border border-border/80 bg-card/88 p-1 shadow-[0_18px_45px_-35px_rgba(15,23,42,0.3)]">
                   <Link
-                    className="rounded-full border border-border px-4 py-2 text-sm transition hover:bg-secondary"
-                    href={`/events/${event._id}`}
+                    aria-label="Previous month"
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-full text-foreground hover:bg-muted"
+                    href={`/calendar${buildQueryString({
+                      ...baseFilters,
+                      month: formatMonthParam(previousMonth),
+                    })}`}
+                    scroll={false}
                   >
-                    Open details
+                    <ChevronLeft className="h-4 w-4" />
+                  </Link>
+                  <Link
+                    className="inline-flex h-9 items-center justify-center rounded-full px-4 text-sm font-semibold text-foreground hover:bg-muted"
+                    href={`/calendar${buildQueryString({
+                      month: formatMonthParam(today),
+                      day: todayKey,
+                    })}`}
+                    scroll={false}
+                  >
+                    Today
+                  </Link>
+                  <Link
+                    aria-label="Next month"
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-full text-foreground hover:bg-muted"
+                    href={`/calendar${buildQueryString({
+                      ...baseFilters,
+                      month: formatMonthParam(nextMonth),
+                    })}`}
+                    scroll={false}
+                  >
+                    <ChevronRight className="h-4 w-4" />
                   </Link>
                 </div>
-              </div>
-            </article>
-          ))}
 
-          {selectedDayEvents.length === 0 && !error ? (
-            <div className="rounded-2xl border border-dashed border-border bg-secondary/40 px-5 py-10 text-center">
-              <p className="text-sm text-muted-foreground">
-                No events match the current filters for{" "}
-                {formatDisplayDate(selectedDate, { month: "long", day: "numeric" })}.
-              </p>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Try another day, remove a filter, or switch back to the full list.
-              </p>
+                <div className="space-y-0.5">
+                  <p className="section-kicker">Browse month</p>
+                  <h2 className="text-[1.75rem] font-semibold tracking-tight sm:text-[2rem]">
+                    {formatDisplayDate(monthStart, { month: "long", year: "numeric" })}
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    {monthEvents.length} events · {activeDayCount} active days · {activeVenueCount} venues
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="app-chip">{selectedDayEvents.length} on selected day</span>
+                <Link className="button-secondary h-9 px-4 py-0 text-sm" href="/events">
+                  List view
+                </Link>
+              </div>
             </div>
-          ) : null}
+
+            <form className="grid gap-2.5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]" method="get">
+              <input name="month" type="hidden" value={monthParam} />
+              <input name="day" type="hidden" value={selectedDayKey} />
+
+              <label className="flex min-w-[10rem] flex-col gap-1 text-[11px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
+                Venue
+                <select
+                  className="h-10 rounded-2xl border border-border/80 bg-background px-3 text-sm font-medium tracking-normal text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]"
+                  defaultValue={selectedVenue ?? ""}
+                  name="venue"
+                >
+                  <option value="">All venues</option>
+                  {venues.map((venue) => (
+                    <option key={venue} value={venue}>
+                      {venue}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="flex min-w-[10rem] flex-col gap-1 text-[11px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
+                Type
+                <select
+                  className="h-10 rounded-2xl border border-border/80 bg-background px-3 text-sm font-medium tracking-normal text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]"
+                  defaultValue={selectedType ?? ""}
+                  name="type"
+                >
+                  <option value="">All types</option>
+                  {eventTypes.map((eventType) => (
+                    <option key={eventType} value={eventType}>
+                      {eventType}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="flex min-w-[10rem] flex-col gap-1 text-[11px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
+                Focus
+                <select
+                  className="h-10 rounded-2xl border border-border/80 bg-background px-3 text-sm font-medium tracking-normal text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]"
+                  defaultValue={weekendOnly ? "1" : ""}
+                  name="weekend"
+                >
+                  <option value="">All days</option>
+                  <option value="1">Weekend only</option>
+                </select>
+              </label>
+
+              <div className="flex items-end gap-2">
+                <button
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-2xl bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-[0_24px_40px_-28px_rgba(59,130,246,0.92)] hover:opacity-95"
+                  type="submit"
+                >
+                  <Filter className="h-4 w-4" />
+                  Apply
+                </button>
+                <Link
+                  className="inline-flex h-10 items-center justify-center rounded-2xl border border-border/80 bg-background px-4 text-sm font-semibold text-foreground hover:border-primary/30 hover:bg-card"
+                  href={`/calendar${buildQueryString({
+                    month: monthParam,
+                    day: selectedDayKey,
+                  })}`}
+                  scroll={false}
+                >
+                  Reset
+                </Link>
+              </div>
+            </form>
+
+            {(selectedVenue || selectedType || weekendOnly) && !error ? (
+              <div className="flex flex-wrap gap-2 text-sm">
+                {selectedVenue ? <span className="app-chip">Venue: {selectedVenue}</span> : null}
+                {selectedType ? <span className="app-chip">Type: {selectedType}</span> : null}
+                {weekendOnly ? <span className="app-chip">Weekend only</span> : null}
+              </div>
+            ) : null}
+          </div>
         </div>
+
+        {error ? <p className="px-5 py-5 text-sm text-destructive">{error}</p> : null}
+
+        {!error ? (
+          <div className="grid xl:grid-cols-[minmax(0,1fr)_19rem]">
+            <div className="min-w-0 border-b border-border/80 xl:border-b-0 xl:border-r">
+              <div className="overflow-x-auto">
+                <div className="min-w-[66rem] bg-card">
+                  <div className="grid grid-cols-7 border-b border-border/80 bg-muted/[0.42]">
+                    {WEEKDAY_LABELS.map((weekday) => (
+                      <div
+                        className="px-3 py-2.5 text-center text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground"
+                        key={weekday}
+                      >
+                        {weekday}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-7">
+                    {calendarDays.map((day, index) => {
+                      const dayKey = formatDateKey(day);
+                      const inMonth = day.getMonth() === monthStart.getMonth();
+                      const dayEvents = inMonth ? monthEventsByDay.get(dayKey) ?? [] : [];
+                      const isSelected = dayKey === selectedDayKey;
+                      const isToday = dayKey === todayKey;
+                      const isWeekendColumn = index % 7 >= 5;
+
+                      return (
+                        <Link
+                          className={cn(
+                            "group relative min-h-[6.75rem] border-r border-b border-border/75 bg-card px-2.5 pb-2.5 pt-2 transition hover:z-10 hover:bg-primary/[0.035] sm:min-h-[7.5rem]",
+                            (index + 1) % 7 === 0 && "border-r-0",
+                            !inMonth && "bg-muted/[0.2] text-muted-foreground",
+                            isWeekendColumn && inMonth && "bg-sky-50/40",
+                            isSelected &&
+                              "z-10 bg-primary/[0.055] shadow-[inset_0_0_0_1.5px_rgba(59,130,246,0.32)]",
+                          )}
+                          href={`/calendar${buildQueryString({
+                            ...baseFilters,
+                            month: formatMonthParam(day),
+                            day: dayKey,
+                          })}`}
+                          key={dayKey}
+                          scroll={false}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <span
+                                className={cn(
+                                  "inline-flex h-8 min-w-8 items-center justify-center rounded-full px-2 text-sm font-medium",
+                                  isToday
+                                    ? "bg-primary text-primary-foreground shadow-[0_14px_26px_-16px_rgba(59,130,246,0.95)]"
+                                    : isSelected
+                                      ? "bg-primary/10 text-primary"
+                                      : inMonth
+                                        ? "text-foreground"
+                                        : "text-muted-foreground",
+                                )}
+                              >
+                                {day.getDate()}
+                              </span>
+                            </div>
+
+                            {dayEvents.length > 0 ? (
+                              <span className="pt-1.5 text-[10px] font-medium text-muted-foreground">
+                                {dayEvents.length}
+                              </span>
+                            ) : null}
+                          </div>
+
+                          <div className="mt-2 space-y-1">
+                            {dayEvents.slice(0, 3).map((event) => (
+                              <div
+                                className="flex items-center gap-1.5 rounded-md bg-primary/[0.09] px-2 py-1 text-[10px] font-medium text-foreground"
+                                key={event._id}
+                              >
+                                <span className="h-1.5 w-1.5 flex-none rounded-full bg-primary/75" />
+                                <span className="truncate">
+                                  {event.time ? `${event.time} ` : ""}
+                                  {event.title}
+                                </span>
+                              </div>
+                            ))}
+                            {dayEvents.length > 3 ? (
+                              <p className="px-1 text-[10px] font-medium text-muted-foreground">
+                                +{dayEvents.length - 3} more
+                              </p>
+                            ) : null}
+                          </div>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <aside className="bg-muted/[0.18] px-3 py-3 sm:px-4 sm:py-4 xl:min-h-full">
+              <div className="xl:sticky xl:top-24">
+                <div className="rounded-[1.6rem] border border-border/80 bg-card/96 p-4 shadow-[0_28px_70px_-48px_rgba(15,23,42,0.34)]">
+                  <div className="border-b border-border/80 pb-3">
+                    <p className="section-kicker">Selected day</p>
+                    <div className="mt-2.5 flex items-start justify-between gap-3">
+                      <div className="space-y-0.5">
+                        <h3 className="text-xl font-semibold tracking-tight">
+                          {formatDisplayDate(selectedDate, {
+                            weekday: "long",
+                            month: "long",
+                            day: "numeric",
+                          })}
+                        </h3>
+                      </div>
+                      <div className="rounded-[1rem] bg-primary/[0.08] px-2.5 py-2 text-center text-primary">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.22em]">
+                          {formatDisplayDate(selectedDate, { month: "short" })}
+                        </p>
+                        <p className="text-2xl font-semibold leading-none">
+                          {selectedDate.getDate()}
+                        </p>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      {selectedDayEvents.length} event{selectedDayEvents.length === 1 ? "" : "s"}
+                      {weekendEventCount > 0 && weekendOnly
+                        ? ` · ${weekendEventCount} weekend matches this month`
+                        : ""}
+                    </p>
+                  </div>
+
+                  <div className="mt-3 space-y-2.5">
+                    {selectedDayEvents.map((event) => (
+                      <article
+                        className="relative overflow-hidden rounded-[1.2rem] border border-border/80 bg-background/90 px-3.5 py-3 shadow-[0_20px_34px_-30px_rgba(15,23,42,0.28)]"
+                        key={event._id}
+                      >
+                        <div className="absolute inset-y-3 left-0 w-1 rounded-full bg-primary/75" />
+                        <div className="flex items-start gap-2.5 pl-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="rounded-full bg-primary/[0.09] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-primary">
+                                {event.time ?? "Time TBA"}
+                              </span>
+                              <h4 className="truncate text-sm font-semibold tracking-tight">
+                                {event.title}
+                              </h4>
+                            </div>
+                            <p className="mt-1 truncate text-xs text-muted-foreground">
+                              {formatAgendaMeta(event)}
+                            </p>
+                          </div>
+                          <Link
+                            aria-label={`Open ${event.title}`}
+                            className="inline-flex h-8 w-8 flex-none items-center justify-center rounded-full border border-border/80 bg-card text-foreground hover:border-primary/30 hover:bg-background"
+                            href={`/events/${event._id}`}
+                          >
+                            <ArrowUpRight className="h-3.5 w-3.5" />
+                          </Link>
+                        </div>
+                      </article>
+                    ))}
+
+                    {selectedDayEvents.length === 0 ? (
+                      <div className="rounded-[1.2rem] border border-dashed border-border/80 bg-background/82 px-4 py-8 text-center">
+                        <p className="text-sm text-muted-foreground">
+                          No events match the current filters for{" "}
+                          {formatDisplayDate(selectedDate, { month: "long", day: "numeric" })}.
+                        </p>
+                        <p className="mt-1.5 text-sm text-muted-foreground">
+                          Try another day or reset the filters.
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            </aside>
+          </div>
+        ) : null}
       </section>
     </main>
   );

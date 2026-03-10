@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
+import { AppToolbar } from "@/components/navigation/app-toolbar";
 import { ConvexClientProvider } from "@/components/providers/convex-client-provider";
 import "./globals.css";
 
@@ -13,8 +14,13 @@ const clerkPublishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 function AppDocument({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="antialiased">
-        <ConvexClientProvider>{children}</ConvexClientProvider>
+      <body className="min-h-screen bg-background antialiased">
+        <ConvexClientProvider>
+          <div className="min-h-screen">
+            <AppToolbar />
+            {children}
+          </div>
+        </ConvexClientProvider>
       </body>
     </html>
   );
