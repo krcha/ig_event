@@ -2172,8 +2172,9 @@ function buildDuplicateUpdatePatch(
   );
   const materiallyChanged = hasMaterialEventChange(existing, next, preferredDescription);
   const statusAutoApproved = next.status === "approved" && existing.status !== "approved";
+  // Keep previously approved events out of moderation on re-scrape.
   const statusResetToPending =
-    materiallyChanged && existing.status !== "pending" && next.status !== "approved";
+    materiallyChanged && existing.status === "rejected" && next.status !== "approved";
   const nextStatus: EventStatus =
     next.status === "approved"
       ? "approved"
