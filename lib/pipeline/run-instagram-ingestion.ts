@@ -1,7 +1,7 @@
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import {
-  extractEventDataFromPoster,
+  extractEventDataFromInstagramPost,
   type ExtractedEventData,
 } from "@/lib/ai/extract-event-data";
 import {
@@ -2412,7 +2412,7 @@ function findBestExistingMatchForPreparedEvent(
 export function prepareEventsForInsert(
   post: InstagramScrapedPost,
   extracted: ExtractedEventData,
-  selectedImageUrl: string,
+  selectedImageUrl: string | null,
   canonicalVenueNamesByHandle: Record<string, string>,
 ): PrepareEventResult[] {
   const eventType = normalizeString(extracted.category);
@@ -2778,7 +2778,7 @@ export function prepareEventsForInsert(
         venue: venueNormalization.venue,
         artists: variant.artists,
         ...(variant.description ? { description: variant.description } : {}),
-        imageUrl: selectedImageUrl,
+        ...(selectedImageUrl ? { imageUrl: selectedImageUrl } : {}),
         instagramPostUrl: post.instagramPostUrl,
         instagramPostId: post.postId,
         ...(ticketPrice ? { ticketPrice } : {}),
@@ -2806,95 +2806,109 @@ type ProcessIngestionPostOptions = {
 async function processIngestionPost(options: ProcessIngestionPostOptions): Promise<void> {
   const { client, handle, post, summary, canonicalVenueNamesByHandle } = options;
   const postContext = getPostContext(handle, post);
+  const canonicalVenueName =
+    getConfiguredVenueNameForHandle(
+      post.username,
+      canonicalVenueNamesByHandle,
+      STATIC_VENUE_BY_HANDLE,
+    ) || null;
+  const canUseCaptionOnlyExtraction = buildPostTextEvidence(post).length > 0;
+  const extractionMode = post.postType === "video" ? "caption_only" : "poster";
+  let selectedImageUrl: string | null = null;
+  let imageDataUrl: string | null = null;
 
   if (post.postType === "video") {
-    summary.skipped_video += 1;
-    logInfo("ingestion.post.skipped_video", {
-      ...postContext,
-    });
-    return;
-  }
+    if (!canUseCaptionOnlyExtraction) {
+      summary.skipped_video += 1;
+      logInfo("ingestion.post.skipped_video", {
+        ...postContext,
+        reason: "missing_text_evidence",
+      });
+      return;
+    }
 
-  const bestImageUrl = resolveBestImageUrl(post);
-  if (!bestImageUrl) {
-    summary.skippedNoImage += 1;
-    logInfo("ingestion.image.skipped_no_image", {
+    logInfo("ingestion.post.video_caption_only", {
       ...postContext,
-      imageCandidates: post.imageUrls ?? [],
+      captionLength: normalizeString(post.caption).length,
+      hasAltText: extractPostAltTextEvidence(post.altText).length > 0,
     });
-    return;
-  }
+  } else {
+    selectedImageUrl = resolveBestImageUrl(post);
+    if (!selectedImageUrl) {
+      summary.skippedNoImage += 1;
+      logInfo("ingestion.image.skipped_no_image", {
+        ...postContext,
+        imageCandidates: post.imageUrls ?? [],
+      });
+      return;
+    }
 
-  logInfo("ingestion.image.selected", {
-    ...postContext,
-    selectedImageUrl: bestImageUrl,
-    isInstagramOrFbCdn: isInstagramOrFbCdnUrl(bestImageUrl),
-  });
+    logInfo("ingestion.image.selected", {
+      ...postContext,
+      selectedImageUrl,
+      isInstagramOrFbCdn: isInstagramOrFbCdnUrl(selectedImageUrl),
+    });
 
-  let downloadedImage: Awaited<ReturnType<typeof downloadImage>>;
-  try {
-    downloadedImage = await downloadImage(bestImageUrl);
-    logInfo("ingestion.image.download.success", {
-      ...postContext,
-      selectedImageUrl: bestImageUrl,
-      contentType: downloadedImage.contentType,
-      downloadedBytes: downloadedImage.imageBuffer.byteLength,
-    });
-  } catch (error) {
-    summary.failedDownloads += 1;
-    summary.failed_downloads += 1;
-    summary.errors.push(getErrorMessage(error));
-    logError("ingestion.image.download.failed", {
-      ...postContext,
-      selectedImageUrl: bestImageUrl,
-      error: getErrorMessage(error),
-    });
-    return;
-  }
+    let downloadedImage: Awaited<ReturnType<typeof downloadImage>>;
+    try {
+      downloadedImage = await downloadImage(selectedImageUrl);
+      logInfo("ingestion.image.download.success", {
+        ...postContext,
+        selectedImageUrl,
+        contentType: downloadedImage.contentType,
+        downloadedBytes: downloadedImage.imageBuffer.byteLength,
+      });
+    } catch (error) {
+      summary.failedDownloads += 1;
+      summary.failed_downloads += 1;
+      summary.errors.push(getErrorMessage(error));
+      logError("ingestion.image.download.failed", {
+        ...postContext,
+        selectedImageUrl,
+        error: getErrorMessage(error),
+      });
+      return;
+    }
 
-  let imageDataUrl: string;
-  try {
-    const normalizedImage = await normalizeToJpeg(
-      downloadedImage.imageBuffer,
-      downloadedImage.contentType ?? bestImageUrl,
-    );
-    imageDataUrl = toDataUrl(normalizedImage.imageBuffer, normalizedImage.mimeType);
-    logInfo("ingestion.image.conversion.success", {
-      ...postContext,
-      selectedImageUrl: bestImageUrl,
-      wasConverted: normalizedImage.wasConverted,
-      outputMimeType: normalizedImage.mimeType,
-      outputBytes: normalizedImage.imageBuffer.byteLength,
-    });
-  } catch (error) {
-    summary.failedConversions += 1;
-    summary.failed_conversions += 1;
-    summary.errors.push(getErrorMessage(error));
-    logError("ingestion.image.conversion.failed", {
-      ...postContext,
-      selectedImageUrl: bestImageUrl,
-      error: getErrorMessage(error),
-    });
-    return;
+    try {
+      const normalizedImage = await normalizeToJpeg(
+        downloadedImage.imageBuffer,
+        downloadedImage.contentType ?? selectedImageUrl,
+      );
+      imageDataUrl = toDataUrl(normalizedImage.imageBuffer, normalizedImage.mimeType);
+      logInfo("ingestion.image.conversion.success", {
+        ...postContext,
+        selectedImageUrl,
+        wasConverted: normalizedImage.wasConverted,
+        outputMimeType: normalizedImage.mimeType,
+        outputBytes: normalizedImage.imageBuffer.byteLength,
+      });
+    } catch (error) {
+      summary.failedConversions += 1;
+      summary.failed_conversions += 1;
+      summary.errors.push(getErrorMessage(error));
+      logError("ingestion.image.conversion.failed", {
+        ...postContext,
+        selectedImageUrl,
+        error: getErrorMessage(error),
+      });
+      return;
+    }
   }
 
   let extracted: ExtractedEventData;
   try {
-    extracted = await extractEventDataFromPoster({
+    extracted = await extractEventDataFromInstagramPost({
       imageDataUrl,
       caption: post.caption,
       altText: post.altText,
       instagramPostUrl: post.instagramPostUrl,
-      sourceImageUrl: bestImageUrl,
+      sourceImageUrl: selectedImageUrl,
       instagramHandle: post.username,
       instagramPostTimestamp: post.postedAt,
       instagramLocationName: post.locationName,
-      canonicalVenueName:
-        getConfiguredVenueNameForHandle(
-          post.username,
-          canonicalVenueNamesByHandle,
-          STATIC_VENUE_BY_HANDLE,
-        ) || null,
+      canonicalVenueName,
+      extractionMode,
     });
   } catch (error) {
     summary.failedExtractions += 1;
@@ -2904,7 +2918,8 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     logError("ingestion.openai.extraction.failed", {
       step: "extract_event" satisfies IngestionStep,
       ...postContext,
-      sourceImageUrl: bestImageUrl,
+      extractionMode,
+      sourceImageUrl: selectedImageUrl,
       error: getErrorMessage(error),
     });
     return;
@@ -2915,7 +2930,7 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     preparedResults = prepareEventsForInsert(
       post,
       extracted,
-      bestImageUrl,
+      selectedImageUrl,
       canonicalVenueNamesByHandle,
     );
   } catch (error) {
@@ -2926,7 +2941,8 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     logError("ingestion.normalization.failed", {
       step: "normalize_posts" satisfies IngestionStep,
       ...postContext,
-      selectedImageUrl: bestImageUrl,
+      extractionMode,
+      selectedImageUrl,
       error: getErrorMessage(error),
     });
     return;
@@ -2957,7 +2973,8 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     logError("ingestion.duplicate_check.failed", {
       step: "duplicate_lookup" satisfies IngestionStep,
       ...postContext,
-      selectedImageUrl: bestImageUrl,
+      extractionMode,
+      selectedImageUrl,
       error: getErrorMessage(error),
     });
     return;
@@ -2979,7 +2996,8 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
 
       logInfo("ingestion.event.skipped", {
         ...postContext,
-        selectedImageUrl: bestImageUrl,
+        extractionMode,
+        selectedImageUrl,
         reason: prepared.reason,
         caption: post.caption,
         postTimestamp: post.postedAt,
@@ -3008,7 +3026,8 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
         summary.skipped_duplicates_clean += 1;
         logInfo("duplicate_clean_skip", {
           ...postContext,
-          selectedImageUrl: bestImageUrl,
+          extractionMode,
+          selectedImageUrl,
           matchedBy: existingMatch.matchedBy,
           matchedValue: existingMatch.matchedValue,
           existingEventId: existingMatch.existingEvent._id,
@@ -3034,7 +3053,8 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
         logInfo(updateReasonEvent, {
           phase: "duplicate_updated",
           ...postContext,
-          selectedImageUrl: bestImageUrl,
+          extractionMode,
+          selectedImageUrl,
           matchedBy: existingMatch.matchedBy,
           matchedValue: existingMatch.matchedValue,
           existingEventId: existingMatch.existingEvent._id,
@@ -3065,7 +3085,8 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
         logError("duplicate_update_failed", {
           step: "update_existing_event" satisfies IngestionStep,
           ...postContext,
-          selectedImageUrl: bestImageUrl,
+          extractionMode,
+          selectedImageUrl,
           existingEventId: existingMatch.existingEvent._id,
           qualityReasons: quality.reasons,
           error: getErrorMessage(error),
@@ -3091,7 +3112,8 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
       });
       logInfo("ingestion.event.inserted", {
         ...postContext,
-        selectedImageUrl: bestImageUrl,
+        extractionMode,
+        selectedImageUrl,
         caption: post.caption,
         postTimestamp: post.postedAt,
         rawExtraction: extracted,
@@ -3105,7 +3127,8 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
       logError("ingestion.insert.failed", {
         step: "insert_new_event" satisfies IngestionStep,
         ...postContext,
-        selectedImageUrl: bestImageUrl,
+        extractionMode,
+        selectedImageUrl,
         error: getErrorMessage(error),
       });
     }

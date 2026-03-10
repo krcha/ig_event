@@ -54,15 +54,16 @@ const extractedEventSchema = z.object({
 export type ExtractedEventData = z.infer<typeof extractedEventSchema>;
 
 type ExtractEventDataOptions = {
-  imageDataUrl: string;
+  imageDataUrl?: string | null;
   caption?: string | null;
   altText?: string | null;
   instagramPostUrl: string;
-  sourceImageUrl: string;
+  sourceImageUrl?: string | null;
   instagramHandle: string;
   instagramPostTimestamp?: string | null;
   instagramLocationName?: string | null;
   canonicalVenueName?: string | null;
+  extractionMode?: "poster" | "caption_only";
 };
 
 const extractionJsonSchema = {
@@ -213,7 +214,7 @@ const extractionJsonSchema = {
   ],
 } as const;
 
-export async function extractEventDataFromPoster(
+export async function extractEventDataFromInstagramPost(
   options: ExtractEventDataOptions,
 ): Promise<ExtractedEventData> {
   const openAiApiKey = getRequiredEnv("OPENAI_API_KEY");
@@ -223,6 +224,34 @@ export async function extractEventDataFromPoster(
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), OPENAI_REQUEST_TIMEOUT_MS);
+
+      const userContent: Array<
+        | { type: "input_text"; text: string }
+        | { type: "input_image"; image_url: string; detail: "high" }
+      > = [
+        {
+          type: "input_text",
+          text: buildEventExtractionUserPrompt({
+            instagramHandle: options.instagramHandle,
+            instagramPostUrl: options.instagramPostUrl,
+            instagramPostTimestamp: options.instagramPostTimestamp,
+            instagramCaption: options.caption,
+            instagramAltText: options.altText,
+            instagramLocationName: options.instagramLocationName,
+            canonicalVenueName: options.canonicalVenueName,
+            sourceImageUrl: options.sourceImageUrl,
+            extractionMode: options.extractionMode,
+          }),
+        },
+      ];
+
+      if (options.imageDataUrl) {
+        userContent.push({
+          type: "input_image",
+          image_url: options.imageDataUrl,
+          detail: "high",
+        });
+      }
 
       const response = await fetch("https://api.openai.com/v1/responses", {
         method: "POST",
@@ -239,26 +268,7 @@ export async function extractEventDataFromPoster(
             },
             {
               role: "user",
-              content: [
-                {
-                  type: "input_text",
-                  text: buildEventExtractionUserPrompt({
-                    instagramHandle: options.instagramHandle,
-                    instagramPostUrl: options.instagramPostUrl,
-                    instagramPostTimestamp: options.instagramPostTimestamp,
-                    instagramCaption: options.caption,
-                    instagramAltText: options.altText,
-                    instagramLocationName: options.instagramLocationName,
-                    canonicalVenueName: options.canonicalVenueName,
-                    sourceImageUrl: options.sourceImageUrl,
-                  }),
-                },
-                {
-                  type: "input_image",
-                  image_url: options.imageDataUrl,
-                  detail: "high",
-                },
-              ],
+              content: userContent,
             },
           ],
           text: {
@@ -319,4 +329,13 @@ export async function extractEventDataFromPoster(
   const errorMessage =
     lastError instanceof Error ? lastError.message : "Unknown OpenAI extraction error.";
   throw new Error(errorMessage);
+}
+
+export async function extractEventDataFromPoster(
+  options: ExtractEventDataOptions & { imageDataUrl: string },
+): Promise<ExtractedEventData> {
+  return extractEventDataFromInstagramPost({
+    ...options,
+    extractionMode: options.extractionMode ?? "poster",
+  });
 }

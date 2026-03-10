@@ -4,9 +4,10 @@ export type EventExtractionPromptContext = {
   instagramPostTimestamp?: string | null;
   instagramCaption?: string | null;
   instagramAltText?: string | null;
-  sourceImageUrl: string;
+  sourceImageUrl?: string | null;
   instagramLocationName?: string | null;
   canonicalVenueName?: string | null;
+  extractionMode?: "poster" | "caption_only";
 };
 
 export const EVENT_EXTRACTION_SYSTEM_PROMPT = `
@@ -16,6 +17,7 @@ Preserve artist names and prices exactly as written when readable.
 Standardize venue names to a canonical display name when the evidence clearly points to the same place.
 Never hallucinate unreadable or missing text.
 Use the caption as primary context, then refine/fill from the image and Instagram metadata.
+If no image is provided, use only the caption, alt text, location tag, and canonical venue hint.
 Return strict JSON with:
 {
   "title": string,
@@ -70,6 +72,8 @@ Rules:
 - "artists" must contain only explicitly billed performers, DJs, live acts, hosts, or speakers who are presented as part of the lineup.
 - Exclude section headings, organizer names, venue names, sponsor names, ticket links, hashtags, and generic labels like "lineup" or "special guests" when no specific names are given.
 - Deduplicate artists and keep their readable stage names in source order when possible.
+- "category" should be a broad event type such as event, party, concert, festival, workshop, screening, exhibition, talk, or club night.
+- If the post clearly announces an event but the exact subtype is unclear, return "event" for "category".
 - Keep "description" to one short factual sentence or phrase based only on details supported by the caption or flyer.
 - Do not include date, time, price, venue, address, hashtags, emojis, calls to action, or marketing language in "description".
 - If the poster or caption is a monthly program, venue schedule, or other multi-date lineup for the same venue, populate "schedule_entries" with one object per separately dated event row.
@@ -95,8 +99,10 @@ Rules:
 export function buildEventExtractionUserPrompt(
   context: EventExtractionPromptContext,
 ): string {
+  const extractionMode = context.extractionMode ?? "poster";
   return [
     "Extract event data from this Instagram post.",
+    `Extraction mode: ${extractionMode}`,
     `Instagram handle: @${context.instagramHandle}`,
     `Instagram post URL: ${context.instagramPostUrl}`,
     `Instagram post timestamp: ${context.instagramPostTimestamp ?? "N/A"}`,
@@ -104,8 +110,10 @@ export function buildEventExtractionUserPrompt(
     `Canonical venue hint: ${context.canonicalVenueName ?? "N/A"}`,
     `Instagram caption: ${context.instagramCaption ?? "N/A"}`,
     `Instagram alt text: ${context.instagramAltText ?? "N/A"}`,
-    `Source image URL: ${context.sourceImageUrl}`,
-    "Use poster text + caption together. Instagram alt text can provide useful OCR-like support, but treat it as secondary evidence and do not invent unsupported facts.",
+    `Source image URL: ${context.sourceImageUrl ?? "N/A"}`,
+    extractionMode === "caption_only"
+      ? "No image is provided for this post. Use only the caption, alt text, location tag, and canonical venue hint."
+      : "Use poster text + caption together. Instagram alt text can provide useful OCR-like support, but treat it as secondary evidence and do not invent unsupported facts.",
     "Use the location tag and canonical venue hint as secondary grounding when they agree with the source, but do not invent unsupported facts.",
     "If one poster contains multiple dated events for the same venue, return them in schedule_entries instead of collapsing them into one event.",
   ].join("\n");
