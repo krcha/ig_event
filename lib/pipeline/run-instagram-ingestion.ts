@@ -119,6 +119,12 @@ export type RecentApifyImportSummary = {
   handlesWithImportedPosts: number;
 };
 
+type IngestionVenueContext = {
+  canonicalVenueNamesByHandle: Record<string, string>;
+  venueNameOverridesByHandle: Record<string, string>;
+  configuredVenueNamesByHandle: Record<string, string>;
+};
+
 const getByInstagramPostIdQuery =
   "events:getByInstagramPostId" as unknown as FunctionReference<"query">;
 const getByInstagramPostUrlQuery =
@@ -142,6 +148,7 @@ const listScrapedPostsByHandleQuery =
 const upsertScrapedPostsByHandleMutation =
   "scrapedPosts:upsertManyByHandle" as unknown as FunctionReference<"mutation">;
 const SCRAPED_POST_UPSERT_BATCH_SIZE = 25;
+const DIRECT_FULL_SCRAPE_CONCURRENCY = 4;
 const STATIC_VENUE_BY_HANDLE: Record<string, string> = {
   "20_44.nightclub": "Klub 20/44",
   kcgrad: "KC Grad",
@@ -1125,6 +1132,41 @@ export function createInitialIngestionBatchState(): IngestionBatchState {
     currentPostIndex: 0,
     currentHandlePosts: [],
     seenSourceKeysByHandle: {},
+  };
+}
+
+async function loadIngestionVenueContext(
+  client: ConvexHttpClient,
+): Promise<IngestionVenueContext> {
+  let canonicalVenueNamesByHandle: Record<string, string> = {};
+  let venueNameOverridesByHandle: Record<string, string> = {};
+  let configuredVenueNamesByHandle: Record<string, string> = {};
+
+  try {
+    canonicalVenueNamesByHandle = await loadCanonicalVenueNamesByHandle(client);
+    try {
+      venueNameOverridesByHandle = await loadVenueNameOverridesByHandle();
+    } catch (error) {
+      logError("ingestion.venues.override_load_failed", {
+        step: "normalize_posts" satisfies IngestionStep,
+        error: getErrorMessage(error),
+      });
+    }
+    configuredVenueNamesByHandle = buildConfiguredVenueNamesByHandle(
+      canonicalVenueNamesByHandle,
+      venueNameOverridesByHandle,
+    );
+  } catch (error) {
+    logError("ingestion.venues.load_failed", {
+      step: "normalize_posts" satisfies IngestionStep,
+      error: getErrorMessage(error),
+    });
+  }
+
+  return {
+    canonicalVenueNamesByHandle,
+    venueNameOverridesByHandle,
+    configuredVenueNamesByHandle,
   };
 }
 
@@ -3211,33 +3253,72 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
   }
 }
 
+type ProcessLoadedPostsForHandleOptions = {
+  client: ConvexHttpClient;
+  handle: string;
+  posts: InstagramScrapedPost[];
+  summary: HandleSummary;
+  seenSourceKeys: string[];
+} & IngestionVenueContext;
+
+async function processLoadedPostsForHandle(
+  options: ProcessLoadedPostsForHandleOptions,
+): Promise<void> {
+  const {
+    client,
+    handle,
+    posts,
+    summary,
+    seenSourceKeys,
+    canonicalVenueNamesByHandle,
+    venueNameOverridesByHandle,
+    configuredVenueNamesByHandle,
+  } = options;
+
+  for (const rawPost of posts) {
+    let post = rawPost;
+
+    try {
+      post = normalizeScrapedPost(post);
+    } catch (error) {
+      summary.errors.push(getErrorMessage(error));
+      logError("ingestion.post.normalize.failed", {
+        step: "normalize_posts" satisfies IngestionStep,
+        ...getPostContext(handle, post),
+        error: getErrorMessage(error),
+      });
+      continue;
+    }
+
+    const sourceKey = getSourceIdentityKey(post);
+    if (sourceKey) {
+      if (seenSourceKeys.includes(sourceKey)) {
+        continue;
+      }
+      seenSourceKeys.push(sourceKey);
+    }
+
+    await processIngestionPost({
+      client,
+      handle,
+      post,
+      summary,
+      canonicalVenueNamesByHandle,
+      venueNameOverridesByHandle,
+      configuredVenueNamesByHandle,
+    });
+  }
+}
+
 export async function runInstagramIngestionBatchStep(
   options: IngestionBatchStepOptions,
 ): Promise<IngestionBatchStepResult> {
   const client = getConvexClient();
-  let canonicalVenueNamesByHandle: Record<string, string> = {};
-  let venueNameOverridesByHandle: Record<string, string> = {};
-  let configuredVenueNamesByHandle: Record<string, string> = {};
-  try {
-    canonicalVenueNamesByHandle = await loadCanonicalVenueNamesByHandle(client);
-    try {
-      venueNameOverridesByHandle = await loadVenueNameOverridesByHandle();
-    } catch (error) {
-      logError("ingestion.venues.override_load_failed", {
-        step: "normalize_posts" satisfies IngestionStep,
-        error: getErrorMessage(error),
-      });
-    }
-    configuredVenueNamesByHandle = buildConfiguredVenueNamesByHandle(
-      canonicalVenueNamesByHandle,
-      venueNameOverridesByHandle,
-    );
-  } catch (error) {
-    logError("ingestion.venues.load_failed", {
-      step: "normalize_posts" satisfies IngestionStep,
-      error: getErrorMessage(error),
-    });
-  }
+  const {
+    canonicalVenueNamesByHandle,
+    venueNameOverridesByHandle,
+    configuredVenueNamesByHandle,
+  } = await loadIngestionVenueContext(client);
   const batchSize = normalizeBatchSize(options.batchSize);
   const mode = options.mode ?? "full_scrape";
   const summary = options.summary;
@@ -3422,6 +3503,114 @@ export async function importRecentApifyRunPostsToSavedPosts(options: {
   };
 }
 
+async function fetchFreshPostsForHandlesInParallel(
+  client: ConvexHttpClient,
+  handles: string[],
+  summary: IngestionSummary,
+  options: Pick<RunInstagramIngestionOptions, "resultsLimit" | "daysBack">,
+): Promise<Record<string, InstagramScrapedPost[]>> {
+  const postsByHandle: Record<string, InstagramScrapedPost[]> = {};
+
+  for (const handleBatch of chunkItems(handles, DIRECT_FULL_SCRAPE_CONCURRENCY)) {
+    const batchResults = await Promise.all(
+      handleBatch.map(async (handle) => {
+        try {
+          const posts = await scrapeInstagramAccount({
+            handle,
+            resultsLimit: options.resultsLimit,
+            daysBack: options.daysBack,
+          });
+
+          try {
+            await persistScrapedPostsForHandle(client, handle, posts);
+          } catch (persistError) {
+            logError("ingestion.scrape.persist_failed", {
+              step: "fetch_posts" satisfies IngestionStep,
+              handle,
+              sourcePostId: null,
+              shortcode: null,
+              instagramUrl: null,
+              error: getErrorMessage(persistError),
+            });
+          }
+
+          return {
+            handle,
+            posts,
+            error: null,
+          };
+        } catch (error) {
+          return {
+            handle,
+            posts: [] as InstagramScrapedPost[],
+            error: getErrorMessage(error),
+          };
+        }
+      }),
+    );
+
+    for (const result of batchResults) {
+      const handleSummary = getOrCreateHandleSummary(summary, result.handle);
+
+      if (result.error) {
+        handleSummary.errors.push(result.error);
+        logError("ingestion.scrape.failed", {
+          step: "fetch_posts" satisfies IngestionStep,
+          handle: result.handle,
+          sourcePostId: null,
+          shortcode: null,
+          instagramUrl: null,
+          error: result.error,
+        });
+        continue;
+      }
+
+      handleSummary.fetchedPosts = result.posts.length;
+      handleSummary.fetched_posts = result.posts.length;
+      postsByHandle[result.handle] = result.posts;
+    }
+  }
+
+  return postsByHandle;
+}
+
+async function runInstagramIngestionWithConcurrentFullScrape(
+  options: RunInstagramIngestionOptions,
+  summary: IngestionSummary,
+): Promise<IngestionSummary> {
+  const client = getConvexClient();
+  const venueContext = await loadIngestionVenueContext(client);
+  const postsByHandle = await fetchFreshPostsForHandlesInParallel(
+    client,
+    options.handles,
+    summary,
+    options,
+  );
+  const seenSourceKeysByHandle: Record<string, string[]> = {};
+
+  for (const handle of options.handles) {
+    const posts = postsByHandle[handle];
+    if (!posts) {
+      continue;
+    }
+
+    const seenSourceKeys = seenSourceKeysByHandle[handle] ?? [];
+    seenSourceKeysByHandle[handle] = seenSourceKeys;
+
+    await processLoadedPostsForHandle({
+      client,
+      handle,
+      posts,
+      summary: getOrCreateHandleSummary(summary, handle),
+      seenSourceKeys,
+      ...venueContext,
+    });
+  }
+
+  summary.finishedAt = new Date().toISOString();
+  return summary;
+}
+
 export async function runActiveVenueIngestion(options?: {
   resultsLimit?: number;
   daysBack?: number;
@@ -3453,6 +3642,11 @@ export async function runInstagramIngestion(
   options: RunInstagramIngestionOptions,
 ): Promise<IngestionSummary> {
   const summary = createEmptyIngestionSummary(options.handles);
+
+  if ((options.mode ?? "full_scrape") === "full_scrape") {
+    return runInstagramIngestionWithConcurrentFullScrape(options, summary);
+  }
+
   const state = createInitialIngestionBatchState();
   let done = false;
 
