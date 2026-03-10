@@ -60,6 +60,7 @@ type ModerationEvent = {
 type EventsResponse = {
   status: EventStatus;
   events: ModerationEvent[];
+  duplicateContextEvents?: ModerationEvent[];
   error?: string;
 };
 
@@ -89,6 +90,7 @@ type DecoratedEvent = ModerationEvent & {
   hasIssues: boolean;
   suspectedDuplicateIds: string[];
   suspectedDuplicateCount: number;
+  hasResolvedDuplicate: boolean;
   fieldConfirmationRows: FieldConfirmationRow[];
   searchText: string;
   duplicateDateKey: string | null;
@@ -368,6 +370,7 @@ function areSuspectedDuplicateEvents(left: DecoratedEvent, right: DecoratedEvent
 
 function attachSuspectedDuplicateGroups(events: DecoratedEvent[]): DecoratedEvent[] {
   const adjacentIds = new Map<string, Set<string>>();
+  const eventsById = new Map(events.map((event) => [event.id, event] as const));
   for (const event of events) {
     adjacentIds.set(event.id, new Set());
   }
@@ -386,16 +389,25 @@ function attachSuspectedDuplicateGroups(events: DecoratedEvent[]): DecoratedEven
 
   return events.map((event) => {
     const suspectedDuplicateIds = [...(adjacentIds.get(event.id) ?? [])];
-    const confidenceScore = calculateModerationConfidenceScore(event.baseConfidenceScore, {
-      hasSuspectedDuplicates: suspectedDuplicateIds.length > 0,
-      missingImage: event.missingImage,
-    });
+    const hasResolvedDuplicate =
+      event.moderation.status === "pending" &&
+      suspectedDuplicateIds.some((id) => {
+        const duplicate = eventsById.get(id);
+        return duplicate ? duplicate.moderation.status !== "pending" : false;
+      });
+    const confidenceScore = hasResolvedDuplicate
+      ? 0
+      : calculateModerationConfidenceScore(event.baseConfidenceScore, {
+          hasSuspectedDuplicates: suspectedDuplicateIds.length > 0,
+          missingImage: event.missingImage,
+        });
     const lowConfidence = confidenceScore !== null && confidenceScore < 0.7;
     return {
       ...event,
       confidenceScore,
       suspectedDuplicateIds,
       suspectedDuplicateCount: suspectedDuplicateIds.length,
+      hasResolvedDuplicate,
       hasIssues:
         event.hasSuspiciousYear ||
         event.titleUsedFallback ||
@@ -517,6 +529,7 @@ function decorateEvent(event: ModerationEvent): DecoratedEvent {
     hasIssues: hasSuspiciousYear || titleUsedFallback || lowConfidence || missingImage,
     suspectedDuplicateIds: [],
     suspectedDuplicateCount: 0,
+    hasResolvedDuplicate: false,
     fieldConfirmationRows,
     searchText: normalizeSearchText(
       [
@@ -550,6 +563,7 @@ export function ModerationDashboard() {
   const [status, setStatus] = useState<EventStatus>("pending");
   const [limit, setLimit] = useState("100");
   const [events, setEvents] = useState<ModerationEvent[]>([]);
+  const [duplicateContextEvents, setDuplicateContextEvents] = useState<ModerationEvent[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionInFlightFor, setActionInFlightFor] = useState<string | null>(null);
@@ -569,14 +583,18 @@ export function ModerationDashboard() {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch(`/api/admin/events?status=${status}&limit=${limit}`, {
-        cache: "no-store",
-      });
+      const response = await fetch(
+        `/api/admin/events?status=${status}&limit=${limit}&duplicateContext=1`,
+        {
+          cache: "no-store",
+        },
+      );
       const payload = (await response.json()) as EventsResponse;
       if (!response.ok) {
         throw new Error(payload.error ?? "Failed to load moderation events.");
       }
       setEvents(payload.events);
+      setDuplicateContextEvents(payload.duplicateContextEvents ?? payload.events);
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
@@ -584,6 +602,7 @@ export function ModerationDashboard() {
           : "Unknown moderation load error.",
       );
       setEvents([]);
+      setDuplicateContextEvents([]);
     } finally {
       setIsLoading(false);
     }
@@ -641,13 +660,34 @@ export function ModerationDashboard() {
     }
   }
 
-  const decoratedEvents = useMemo(
-    () => attachSuspectedDuplicateGroups(events.map((event) => decorateEvent(event))),
-    [events],
-  );
+  const decoratedDuplicateContextEvents = useMemo(() => {
+    const eventMap = new Map<string, ModerationEvent>();
+    for (const event of duplicateContextEvents) {
+      eventMap.set(event.id, event);
+    }
+    for (const event of events) {
+      eventMap.set(event.id, event);
+    }
+
+    return attachSuspectedDuplicateGroups(
+      [...eventMap.values()].map((event) => decorateEvent(event)),
+    );
+  }, [duplicateContextEvents, events]);
+  const decoratedEvents = useMemo(() => {
+    const decoratedById = new Map(
+      decoratedDuplicateContextEvents.map((event) => [event.id, event] as const),
+    );
+
+    return events
+      .map((event) => decoratedById.get(event.id))
+      .filter((event): event is DecoratedEvent => Boolean(event));
+  }, [decoratedDuplicateContextEvents, events]);
   const decoratedEventById = useMemo(
-    () => new Map(decoratedEvents.map((event) => [event.id, event] as const)),
-    [decoratedEvents],
+    () =>
+      new Map(
+        decoratedDuplicateContextEvents.map((event) => [event.id, event] as const),
+      ),
+    [decoratedDuplicateContextEvents],
   );
 
   const filteredEvents = useMemo(() => {
@@ -1028,6 +1068,11 @@ export function ModerationDashboard() {
                           Suspected duplicates {event.suspectedDuplicateCount}
                         </span>
                       ) : null}
+                      {event.hasResolvedDuplicate ? (
+                        <span className="rounded-full bg-rose-200 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-rose-900">
+                          Reviewed duplicate conflict
+                        </span>
+                      ) : null}
                       {event.titleUsedFallback ? (
                         <span className="rounded-full bg-sky-100 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-sky-800">
                           Fallback title
@@ -1095,6 +1140,8 @@ export function ModerationDashboard() {
                               {duplicate.time ? ` at ${duplicate.time}` : ""}
                               {" · "}
                               {duplicate.venue}
+                              {" · "}
+                              {duplicate.moderation.status}
                             </p>
                           </div>
                           <Link
@@ -1178,7 +1225,9 @@ export function ModerationDashboard() {
                         </p>
                         <p className="mt-1 text-xs text-muted-foreground">
                           Suspected duplicates{" "}
-                          {event.suspectedDuplicateCount > 0
+                          {event.hasResolvedDuplicate
+                            ? "forced to 0.00"
+                            : event.suspectedDuplicateCount > 0
                             ? `x${DUPLICATE_CONFIDENCE_MULTIPLIER.toFixed(2)}`
                             : "none"}
                         </p>

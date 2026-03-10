@@ -11,6 +11,10 @@ type EventListQuery = {
   limit?: number;
 };
 
+type EventListAllQuery = {
+  limit?: number;
+};
+
 type EventRecord = {
   _id: string;
   title: string;
@@ -38,6 +42,36 @@ type EventRecord = {
 
 const listByStatusQuery =
   "events:listByStatus" as unknown as FunctionReference<"query">;
+const listEventsQuery =
+  "events:listEvents" as unknown as FunctionReference<"query">;
+
+function mapEventRecord(event: EventRecord) {
+  return {
+    id: event._id,
+    title: event.title,
+    date: event.date,
+    time: event.time ?? null,
+    venue: event.venue,
+    artists: event.artists,
+    description: event.description ?? null,
+    imageUrl: event.imageUrl ?? null,
+    instagramPostUrl: event.instagramPostUrl ?? null,
+    ticketPrice: event.ticketPrice ?? null,
+    eventType: event.eventType,
+    sourceCaption: event.sourceCaption ?? null,
+    sourcePostedAt: event.sourcePostedAt ?? null,
+    rawExtractionJson: event.rawExtractionJson ?? null,
+    normalizedFieldsJson: event.normalizedFieldsJson ?? null,
+    moderation: {
+      status: event.status,
+      reviewedAt: event.reviewedAt ?? null,
+      reviewedBy: event.reviewedBy ?? null,
+      moderationNote: event.moderationNote ?? null,
+    },
+    createdAt: event.createdAt,
+    updatedAt: event.updatedAt,
+  };
+}
 
 function parseStatus(value: string | null): EventStatus {
   if (value === "approved" || value === "rejected" || value === "pending") {
@@ -66,6 +100,7 @@ export async function GET(request: Request) {
   const status = parseStatus(searchParams.get("status"));
   const limitParam = Number(searchParams.get("limit") ?? 50);
   const limit = Number.isFinite(limitParam) ? Math.max(1, Math.min(200, limitParam)) : 50;
+  const includeDuplicateContext = searchParams.get("duplicateContext") === "1";
 
   try {
     const convex = getConvexHttpClient();
@@ -73,34 +108,17 @@ export async function GET(request: Request) {
       status,
       limit,
     } satisfies EventListQuery)) as EventRecord[];
+    const duplicateContextLimit = Math.max(limit * 3, 300);
+    const duplicateContextEvents = includeDuplicateContext
+      ? ((await convex.query(listEventsQuery, {
+          limit: Math.min(duplicateContextLimit, 600),
+        } satisfies EventListAllQuery)) as EventRecord[])
+      : [];
 
     return NextResponse.json({
       status,
-      events: events.map((event) => ({
-        id: event._id,
-        title: event.title,
-        date: event.date,
-        time: event.time ?? null,
-        venue: event.venue,
-        artists: event.artists,
-        description: event.description ?? null,
-        imageUrl: event.imageUrl ?? null,
-        instagramPostUrl: event.instagramPostUrl ?? null,
-        ticketPrice: event.ticketPrice ?? null,
-        eventType: event.eventType,
-        sourceCaption: event.sourceCaption ?? null,
-        sourcePostedAt: event.sourcePostedAt ?? null,
-        rawExtractionJson: event.rawExtractionJson ?? null,
-        normalizedFieldsJson: event.normalizedFieldsJson ?? null,
-        moderation: {
-          status: event.status,
-          reviewedAt: event.reviewedAt ?? null,
-          reviewedBy: event.reviewedBy ?? null,
-          moderationNote: event.moderationNote ?? null,
-        },
-        createdAt: event.createdAt,
-        updatedAt: event.updatedAt,
-      })),
+      events: events.map(mapEventRecord),
+      duplicateContextEvents: duplicateContextEvents.map(mapEventRecord),
     });
   } catch (error) {
     return NextResponse.json(
