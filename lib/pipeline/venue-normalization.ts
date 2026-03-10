@@ -21,6 +21,7 @@ type NormalizeVenueInput = {
   rawModelVenue: string;
   locationName?: string | null;
   canonicalVenueNamesByHandle: CanonicalVenueMap;
+  handleVenueNamesByHandle?: CanonicalVenueMap;
   staticVenueByHandle?: StaticVenueMap;
 };
 
@@ -55,6 +56,14 @@ const SERBIAN_CYRILLIC_TO_LATIN: Record<string, string> = {
   ч: "c",
   џ: "dz",
   ш: "s",
+};
+
+const SERBIAN_LATIN_TO_ASCII: Record<string, string> = {
+  đ: "dj",
+  č: "c",
+  ć: "c",
+  ž: "z",
+  š: "s",
 };
 
 const GENERIC_ARTIST_VALUES = new Set([
@@ -112,6 +121,9 @@ export function buildCanonicalVenueNamesByHandle(
 export function toSearchableText(value: string): string {
   return value
     .toLowerCase()
+    .replace(/[đčćžš]/g, (character) => {
+      return SERBIAN_LATIN_TO_ASCII[character] ?? character;
+    })
     .replace(/[\u0400-\u04ff]/g, (character) => {
       return SERBIAN_CYRILLIC_TO_LATIN[character] ?? character;
     })
@@ -284,6 +296,9 @@ export function normalizeVenueFromEvidence(
   input: NormalizeVenueInput,
 ): VenueNormalization {
   const staticVenueByHandle = input.staticVenueByHandle ?? {};
+  const handleVenueNamesByHandle = input.handleVenueNamesByHandle ?? {};
+  const hardMappedVenue =
+    getConfiguredVenueNameForHandle(input.handle, handleVenueNamesByHandle, {}) ?? "";
   const mappedVenue =
     getConfiguredVenueNameForHandle(
       input.handle,
@@ -292,6 +307,16 @@ export function normalizeVenueFromEvidence(
     ) ?? "";
   const locationName = trimWrappedPunctuation(normalizeString(input.locationName));
   const modelVenue = trimWrappedPunctuation(normalizeString(input.rawModelVenue));
+
+  if (hardMappedVenue) {
+    return {
+      venue: hardMappedVenue,
+      source: "handle_map",
+      wasFallback: true,
+      rawModelVenue: modelVenue,
+      rawLocationName: locationName,
+    };
+  }
 
   const explicitVenue = pickExplicitVenueCandidate(locationName, modelVenue);
   if (explicitVenue) {

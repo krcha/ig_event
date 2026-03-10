@@ -4,6 +4,13 @@ import {
   buildEventExtractionUserPrompt,
 } from "../lib/ai/event-extraction-prompt.ts";
 import {
+  AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+  calculateModerationConfidenceScore,
+  normalizeConfidencePayload,
+  normalizeConfidenceScore,
+  shouldAutoApproveConfidenceScore,
+} from "../lib/utils/confidence.ts";
+import {
   buildCanonicalVenueNamesByHandle,
   normalizeExtractedArtists,
   normalizeExtractedDescription,
@@ -40,6 +47,11 @@ function runPromptQa() {
     EVENT_EXTRACTION_SYSTEM_PROMPT,
     /Do not collapse a multi-date venue schedule/i,
     "Prompt must forbid collapsing venue schedules into one event.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /0\.00 to 1\.00 inclusive/i,
+    "Prompt must require confidence values in the 0.00-1.00 range.",
   );
 
   const userPrompt = buildEventExtractionUserPrompt({
@@ -106,8 +118,59 @@ function runArtistAndDescriptionQa() {
   );
 }
 
+function runConfidenceQa() {
+  assert.equal(normalizeConfidenceScore(0.7), 0.7);
+  assert.equal(normalizeConfidenceScore("0.95"), 0.95);
+  assert.equal(normalizeConfidenceScore(95), 0.95);
+  assert.equal(normalizeConfidenceScore("100"), 1);
+  assert.equal(normalizeConfidenceScore(-1), null);
+
+  const normalized = normalizeConfidencePayload({
+    confidence: 95,
+    field_confirmation: {
+      title: { confidence: "90" },
+      location: { confidence: 0.85 },
+    },
+  });
+  assert.deepEqual(normalized, {
+    confidence: 0.95,
+    field_confirmation: {
+      title: { confidence: 0.9 },
+      location: { confidence: 0.85 },
+    },
+  });
+
+  assert.equal(
+    calculateModerationConfidenceScore(0.95, {
+      hasSuspectedDuplicates: false,
+      missingImage: false,
+    }),
+    0.95,
+  );
+  assert.equal(
+    calculateModerationConfidenceScore(0.95, {
+      hasSuspectedDuplicates: true,
+      missingImage: false,
+    }),
+    0.48,
+  );
+  assert.equal(
+    calculateModerationConfidenceScore(0.95, {
+      hasSuspectedDuplicates: false,
+      missingImage: true,
+    }),
+    0.75,
+  );
+  assert.equal(
+    shouldAutoApproveConfidenceScore(AUTO_APPROVE_CONFIDENCE_THRESHOLD),
+    false,
+  );
+  assert.equal(shouldAutoApproveConfidenceScore(0.91), true);
+}
+
 runPromptQa();
 runVenueQa();
 runArtistAndDescriptionQa();
+runConfidenceQa();
 
 console.log("QA passed: extraction prompt, venue standardization, artists, and description checks.");

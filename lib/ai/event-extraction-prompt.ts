@@ -56,6 +56,8 @@ Return strict JSON with:
 Rules:
 - Use empty string for unknown scalar fields; use [] for unknown artists.
 - Do not invent facts.
+- "confidence" and every "field_confirmation.*.confidence" value must be a decimal from 0.00 to 1.00 inclusive.
+- Never use 0-100 percentages for confidence.
 - Use the flyer/poster, caption, Instagram location tag, and canonical venue hint together to identify the venue.
 - The Instagram handle is strong identity context for the account and can help resolve abbreviations or partial venue references, but it is not sufficient on its own to invent unsupported facts.
 - "venue" must be a standardized venue display name only. Do not include the city, country, address, neighborhood, room name, or Instagram handle in the venue field.

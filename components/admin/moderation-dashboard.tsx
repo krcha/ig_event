@@ -3,6 +3,15 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+  calculateModerationConfidenceScore,
+  DUPLICATE_CONFIDENCE_MULTIPLIER,
+  formatConfidenceScore,
+  MISSING_IMAGE_CONFIDENCE_PENALTY,
+  normalizeConfidencePayload,
+  normalizeConfidenceScore,
+} from "@/lib/utils/confidence";
 
 type EventStatus = "pending" | "approved" | "rejected";
 type ModerationSortMode =
@@ -59,7 +68,7 @@ type FieldConfirmationRow = {
   label: string;
   value: string;
   details: {
-    confidence: string | number | null;
+    confidence: number | null;
     foundIn: string[];
     notes: string | null;
   } | null;
@@ -72,6 +81,7 @@ type DecoratedEvent = ModerationEvent & {
   normalizedFinalDate: string | null;
   yearSelectionReason: string | null;
   hasSuspiciousYear: boolean;
+  baseConfidenceScore: number | null;
   confidenceScore: number | null;
   titleUsedFallback: boolean;
   missingImage: boolean;
@@ -84,6 +94,7 @@ type DecoratedEvent = ModerationEvent & {
   duplicateDateKey: string | null;
   duplicateVenueText: string;
   duplicateTitleText: string;
+  duplicateArtistText: string;
   duplicateDescriptionText: string;
 };
 
@@ -121,6 +132,13 @@ const SERBIAN_CYRILLIC_TO_LATIN: Record<string, string> = {
   џ: "dz",
   ш: "s",
 };
+const SERBIAN_LATIN_TO_ASCII: Record<string, string> = {
+  đ: "dj",
+  č: "c",
+  ć: "c",
+  ž: "z",
+  š: "s",
+};
 const DUPLICATE_VENUE_STOP_WORDS = new Set([
   "beograd",
   "belgrade",
@@ -154,7 +172,7 @@ function prettyJson(value: string | null): string {
     return "(none)";
   }
   try {
-    return JSON.stringify(JSON.parse(value), null, 2);
+    return JSON.stringify(normalizeConfidencePayload(JSON.parse(value)), null, 2);
   } catch {
     return value;
   }
@@ -219,23 +237,11 @@ function readNumberOrStringField(
   return null;
 }
 
-function readNumericField(record: Record<string, unknown> | null, key: string): number | null {
-  const value = readNumberOrStringField(record, key);
-  if (typeof value === "number") {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Number.parseFloat(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
-}
-
 function readFieldConfirmationEntry(
   record: Record<string, unknown> | null,
   key: string,
 ): {
-  confidence: string | number | null;
+  confidence: number | null;
   foundIn: string[];
   notes: string | null;
 } | null {
@@ -244,7 +250,7 @@ function readFieldConfirmationEntry(
     return null;
   }
   return {
-    confidence: readNumberOrStringField(entry, "confidence"),
+    confidence: normalizeConfidenceScore(readNumberOrStringField(entry, "confidence")),
     foundIn: readStringArrayField(entry, "found_in"),
     notes: readStringField(entry, "notes"),
   };
@@ -257,6 +263,9 @@ function normalizeSearchText(value: string): string {
 function normalizeComparisonText(value: string): string {
   return value
     .toLowerCase()
+    .replace(/[đčćžš]/g, (character) => {
+      return SERBIAN_LATIN_TO_ASCII[character] ?? character;
+    })
     .replace(/[\u0400-\u04ff]/g, (character) => {
       return SERBIAN_CYRILLIC_TO_LATIN[character] ?? character;
     })
@@ -342,9 +351,18 @@ function areSuspectedDuplicateEvents(left: DecoratedEvent, right: DecoratedEvent
     return false;
   }
 
-  return (
+  if (
     areSimilarDuplicateTexts(left.duplicateTitleText, right.duplicateTitleText) ||
+    areSimilarDuplicateTexts(left.duplicateArtistText, right.duplicateArtistText) ||
     areSimilarDuplicateTexts(left.duplicateDescriptionText, right.duplicateDescriptionText)
+  ) {
+    return true;
+  }
+
+  return (
+    (left.missingTime && right.missingTime) ||
+    left.titleUsedFallback ||
+    right.titleUsedFallback
   );
 }
 
@@ -368,11 +386,22 @@ function attachSuspectedDuplicateGroups(events: DecoratedEvent[]): DecoratedEven
 
   return events.map((event) => {
     const suspectedDuplicateIds = [...(adjacentIds.get(event.id) ?? [])];
+    const confidenceScore = calculateModerationConfidenceScore(event.baseConfidenceScore, {
+      hasSuspectedDuplicates: suspectedDuplicateIds.length > 0,
+      missingImage: event.missingImage,
+    });
+    const lowConfidence = confidenceScore !== null && confidenceScore < 0.7;
     return {
       ...event,
+      confidenceScore,
       suspectedDuplicateIds,
       suspectedDuplicateCount: suspectedDuplicateIds.length,
-      hasIssues: event.hasIssues || suspectedDuplicateIds.length > 0,
+      hasIssues:
+        event.hasSuspiciousYear ||
+        event.titleUsedFallback ||
+        lowConfidence ||
+        event.missingImage ||
+        suspectedDuplicateIds.length > 0,
     };
   });
 }
@@ -452,12 +481,16 @@ function buildFieldConfirmationRows(
 function decorateEvent(event: ModerationEvent): DecoratedEvent {
   const normalizedFields = parseJsonObject(event.normalizedFieldsJson);
   const rawExtraction = parseJsonObject(event.rawExtractionJson);
-  const confidenceScore =
-    readNumericField(normalizedFields, "confidence") ??
-    readNumericField(rawExtraction, "confidence");
+  const baseConfidenceScore =
+    normalizeConfidenceScore(readNumberOrStringField(normalizedFields, "confidence")) ??
+    normalizeConfidenceScore(readNumberOrStringField(rawExtraction, "confidence"));
+  const missingImage = !event.imageUrl;
+  const confidenceScore = calculateModerationConfidenceScore(baseConfidenceScore, {
+    hasSuspectedDuplicates: false,
+    missingImage,
+  });
   const hasSuspiciousYear = readBooleanField(normalizedFields, "dateSuspiciousYear");
   const titleUsedFallback = readBooleanField(normalizedFields, "titleUsedFallback");
-  const missingImage = !event.imageUrl;
   const missingTime = !event.time;
   const lowConfidence = confidenceScore !== null && confidenceScore < 0.7;
   const fieldConfirmationRows = buildFieldConfirmationRows(
@@ -476,6 +509,7 @@ function decorateEvent(event: ModerationEvent): DecoratedEvent {
     normalizedFinalDate: readStringField(normalizedFields, "normalizedDate") ?? event.date,
     yearSelectionReason: readStringField(normalizedFields, "dateYearSelectionReason"),
     hasSuspiciousYear,
+    baseConfidenceScore,
     confidenceScore,
     titleUsedFallback,
     missingImage,
@@ -505,6 +539,7 @@ function decorateEvent(event: ModerationEvent): DecoratedEvent {
     duplicateTitleText: normalizeComparisonText(
       [event.title, event.artists.join(" ")].join(" "),
     ),
+    duplicateArtistText: normalizeComparisonText(event.artists.join(" ")),
     duplicateDescriptionText: normalizeComparisonText(
       [event.description ?? "", event.sourceCaption ?? ""].join(" "),
     ),
@@ -1024,7 +1059,7 @@ export function ModerationDashboard() {
                     <p>
                       Confidence{" "}
                       <span className="font-medium text-foreground">
-                        {event.confidenceScore ?? "(none)"}
+                        {formatConfidenceScore(event.confidenceScore) ?? "(none)"}
                       </span>
                     </p>
                     {event.ticketPrice ? <p className="mt-1">{event.ticketPrice}</p> : null}
@@ -1112,7 +1147,7 @@ export function ModerationDashboard() {
                 <details className="rounded-2xl border border-border p-3 text-sm">
                   <summary className="cursor-pointer font-medium">Admin details</summary>
                   <div className="mt-4 space-y-4">
-                    <div className="grid gap-3 lg:grid-cols-3">
+                    <div className="grid gap-3 lg:grid-cols-4">
                       <div className="rounded-xl border border-border p-3">
                         <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
                           Post timestamp
@@ -1134,6 +1169,32 @@ export function ModerationDashboard() {
                           {event.yearSelectionReason ?? "(no year rule)"}
                         </p>
                       </div>
+                      <div className="rounded-xl border border-border p-3">
+                        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                          Confidence calculation
+                        </p>
+                        <p className="mt-1 text-sm">
+                          Base {formatConfidenceScore(event.baseConfidenceScore) ?? "(none)"}
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Suspected duplicates{" "}
+                          {event.suspectedDuplicateCount > 0
+                            ? `x${DUPLICATE_CONFIDENCE_MULTIPLIER.toFixed(2)}`
+                            : "none"}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Missing image{" "}
+                          {event.missingImage
+                            ? `-${MISSING_IMAGE_CONFIDENCE_PENALTY.toFixed(2)}`
+                            : "none"}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Auto-approve {`>${AUTO_APPROVE_CONFIDENCE_THRESHOLD.toFixed(2)}`}
+                        </p>
+                        <p className="mt-2 text-sm font-medium">
+                          Final {formatConfidenceScore(event.confidenceScore) ?? "(none)"}
+                        </p>
+                      </div>
                     </div>
 
                     {event.fieldConfirmationRows.some((row) => row.details) ? (
@@ -1146,7 +1207,7 @@ export function ModerationDashboard() {
                                 <p className="font-medium">{row.label}</p>
                                 <p className="mt-1 text-sm text-muted-foreground">{row.value}</p>
                                 <p className="mt-2 text-xs text-muted-foreground">
-                                  Confidence: {row.details.confidence ?? "(none)"}
+                                  Confidence: {formatConfidenceScore(row.details.confidence) ?? "(none)"}
                                 </p>
                                 <p className="text-xs text-muted-foreground">
                                   Evidence: {row.details.foundIn.join(", ") || "(none)"}

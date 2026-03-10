@@ -12,7 +12,8 @@ type ScrapeSource =
   | "cron_active_venues"
   | "repair_active_venues"
   | "manual_apify_history"
-  | "active_venues_apify_history";
+  | "active_venues_apify_history"
+  | "csv_venue_names";
 
 type ScrapeSummaryPayload = {
   source: ScrapeSource;
@@ -136,6 +137,8 @@ function getSourceLabel(source: ScrapeSource | undefined): string {
       return "Recent Apify runs for pasted handles";
     case "active_venues_apify_history":
       return "Recent Apify runs for active venues";
+    case "csv_venue_names":
+      return "CSV venue-name reprocess";
     default:
       return "Idle";
   }
@@ -288,6 +291,10 @@ export function ScraperDashboard() {
 
   function runActiveVenueApifyHistoryImport() {
     void runQueuedScraper("/api/admin/scrape/history/venues", {});
+  }
+
+  function runCsvVenueNameReprocess() {
+    void runQueuedScraper("/api/admin/scrape/venue-names", {});
   }
 
   function runActiveVenueScraper(mode: IngestionRunMode) {
@@ -575,6 +582,22 @@ export function ScraperDashboard() {
               <p className="mt-2 text-sm text-muted-foreground">
                 Runs a focused three-day backfill for active venues to revisit recent posts and
                 repair bad event data.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-border bg-card/90 p-4">
+              <button
+                className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isLoading}
+                onClick={() => {
+                  runCsvVenueNameReprocess();
+                }}
+                type="button"
+              >
+                {isLoading ? "Running..." : "Reprocess CSV venue names"}
+              </button>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Loads handles from <code>data/venue-name-overrides.csv</code>, skips Apify, and
+                reruns saved-post processing so listed handles use the CSV venue name.
               </p>
             </div>
           </div>

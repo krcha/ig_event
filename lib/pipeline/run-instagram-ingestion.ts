@@ -29,6 +29,14 @@ import {
   scrapeInstagramAccount,
   type InstagramScrapedPost,
 } from "@/lib/scraper/instagram-scraper";
+import {
+  AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+  calculateModerationConfidenceScore,
+  normalizeConfidencePayload,
+  normalizeConfidenceScore,
+  shouldAutoApproveConfidenceScore,
+} from "@/lib/utils/confidence";
+import { loadVenueNameOverridesByHandle } from "@/lib/pipeline/venue-name-overrides";
 import { getRequiredEnv } from "@/lib/utils/env";
 
 type RunInstagramIngestionOptions = {
@@ -214,6 +222,8 @@ const CONTEXT_TITLE_STOP_WORDS = new Set([
 const CONTEXT_EVENT_TITLE_REGEX =
   /([\p{L}\d][\p{L}\d'’.+/&-]*(?:\s+[\p{L}\d][\p{L}\d'’.+/&-]*){0,4}\s+(festival|fest|party|session|night|showcase|weekender|concert|koncert|afterparty|after|takeover|opening|closing|premiere|premijera|birthday|anniversary|matinee|matine))\b/iu;
 
+type EventStatus = "pending" | "approved" | "rejected";
+
 type PreparedEvent = {
   title: string;
   date: string;
@@ -230,7 +240,7 @@ type PreparedEvent = {
   sourcePostedAt?: string;
   rawExtractionJson?: string;
   normalizedFieldsJson?: string;
-  status: "pending";
+  status: EventStatus;
 };
 
 type DateSource = "model" | "caption";
@@ -288,8 +298,6 @@ type PrepareEventResult =
         | "far_future";
       normalizedFields: Record<string, unknown>;
     };
-
-type EventStatus = "pending" | "approved" | "rejected";
 
 type ExistingEventRecord = {
   _id: string;
@@ -444,14 +452,24 @@ async function loadCanonicalVenueNamesByHandle(
   return buildCanonicalVenueNamesByHandle(venues);
 }
 
+function buildConfiguredVenueNamesByHandle(
+  canonicalVenueNamesByHandle: Record<string, string>,
+  venueNameOverridesByHandle: Record<string, string>,
+): Record<string, string> {
+  return {
+    ...canonicalVenueNamesByHandle,
+    ...venueNameOverridesByHandle,
+  };
+}
+
 function humanizeHandle(
   handle: string,
-  canonicalVenueNamesByHandle: Record<string, string>,
+  configuredVenueNamesByHandle: Record<string, string>,
 ): string {
   const normalized = normalizeHandle(handle);
   const mappedVenue = getConfiguredVenueNameForHandle(
     handle,
-    canonicalVenueNamesByHandle,
+    configuredVenueNamesByHandle,
     STATIC_VENUE_BY_HANDLE,
   );
   if (mappedVenue) {
@@ -487,10 +505,11 @@ function buildFallbackTitle(
   post: InstagramScrapedPost,
   venue: VenueNormalization,
   canonicalVenueNamesByHandle: Record<string, string>,
+  configuredVenueNamesByHandle: Record<string, string>,
 ): string {
   const mappedVenue = getConfiguredVenueNameForHandle(
     post.username,
-    canonicalVenueNamesByHandle,
+    configuredVenueNamesByHandle,
     STATIC_VENUE_BY_HANDLE,
   );
   if (mappedVenue) {
@@ -512,7 +531,7 @@ function buildFallbackTitle(
     return venue.venue;
   }
 
-  return humanizeHandle(post.username, canonicalVenueNamesByHandle);
+  return humanizeHandle(post.username, configuredVenueNamesByHandle);
 }
 
 function isGenericEventTitle(value: string): boolean {
@@ -606,7 +625,7 @@ function isUsableContextEventTitleCandidate(
   candidate: string,
   post: InstagramScrapedPost,
   venue: VenueNormalization,
-  canonicalVenueNamesByHandle: Record<string, string>,
+  configuredVenueNamesByHandle: Record<string, string>,
 ): boolean {
   const normalizedCandidate = toSearchableText(candidate);
   if (!normalizedCandidate) {
@@ -640,7 +659,7 @@ function isUsableContextEventTitleCandidate(
   }
 
   const normalizedHandleTitle = toSearchableText(
-    humanizeHandle(post.username, canonicalVenueNamesByHandle),
+    humanizeHandle(post.username, configuredVenueNamesByHandle),
   );
   if (normalizedHandleTitle && normalizedCandidate === normalizedHandleTitle) {
     return false;
@@ -654,7 +673,7 @@ function buildContextDerivedEventTitle(
   extracted: ExtractedEventData,
   post: InstagramScrapedPost,
   venue: VenueNormalization,
-  canonicalVenueNamesByHandle: Record<string, string>,
+  configuredVenueNamesByHandle: Record<string, string>,
 ): { title: string; contextCandidate: string } | null {
   const rawTitleParts = getWeakEventTitleSectionParts(rawTitle);
   const contextSources = [
@@ -670,7 +689,7 @@ function buildContextDerivedEventTitle(
         candidate,
         post,
         venue,
-        canonicalVenueNamesByHandle,
+        configuredVenueNamesByHandle,
       )
     ) {
       continue;
@@ -680,7 +699,7 @@ function buildContextDerivedEventTitle(
     const normalizedRawBaseTitle = toSearchableText(rawTitleParts?.baseTitle ?? "");
     const normalizedVenue = toSearchableText(venue.venue ?? "");
     const normalizedHandleTitle = toSearchableText(
-      humanizeHandle(post.username, canonicalVenueNamesByHandle),
+      humanizeHandle(post.username, configuredVenueNamesByHandle),
     );
     if (
       rawTitleParts?.baseTitle &&
@@ -711,6 +730,7 @@ function normalizeEventTitle(
   extracted: ExtractedEventData,
   venue: VenueNormalization,
   canonicalVenueNamesByHandle: Record<string, string>,
+  configuredVenueNamesByHandle: Record<string, string>,
 ): {
   title: string;
   source: "model" | "context_derived" | "handle_fallback";
@@ -745,7 +765,7 @@ function normalizeEventTitle(
     extracted,
     post,
     venue,
-    canonicalVenueNamesByHandle,
+    configuredVenueNamesByHandle,
   );
   if (contextDerivedTitle) {
     return {
@@ -758,7 +778,12 @@ function normalizeEventTitle(
   }
 
   return {
-    title: buildFallbackTitle(post, venue, canonicalVenueNamesByHandle),
+    title: buildFallbackTitle(
+      post,
+      venue,
+      canonicalVenueNamesByHandle,
+      configuredVenueNamesByHandle,
+    ),
     source: "handle_fallback",
     rawTitle,
     usedFallback: true,
@@ -1719,12 +1744,14 @@ function normalizeVenue(
   post: InstagramScrapedPost,
   rawModelVenue: string,
   canonicalVenueNamesByHandle: Record<string, string>,
+  venueNameOverridesByHandle: Record<string, string>,
 ): VenueNormalization {
   return normalizeVenueFromEvidence({
     handle: post.username,
     rawModelVenue,
     locationName: post.locationName,
     canonicalVenueNamesByHandle,
+    handleVenueNamesByHandle: venueNameOverridesByHandle,
     staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
   });
 }
@@ -1779,7 +1806,7 @@ function isLowQualityExistingEvent(
   const explicitYearHighConfidence =
     readJsonString(normalizedFields, "dateYearSelectionReason") === "explicit_year_from_text" &&
     readJsonString(normalizedFields, "dateConfidence") === "high";
-  const confidence = readJsonNumber(normalizedFields, "confidence");
+  const confidence = normalizeConfidenceScore(readJsonNumber(normalizedFields, "confidence"));
 
   if (!normalizeString(existing.title) || !normalizeString(existing.date) || !normalizeString(existing.venue) || !normalizeString(existing.eventType)) {
     reasons.add("invalid_required_fields");
@@ -2136,6 +2163,7 @@ function buildDuplicateUpdatePatch(
   };
   materiallyChanged: boolean;
   statusResetToPending: boolean;
+  statusAutoApproved: boolean;
 } {
   const preferredDescription = choosePreferredDescription(
     existing.description,
@@ -2143,8 +2171,15 @@ function buildDuplicateUpdatePatch(
     next.normalizedFieldsJson,
   );
   const materiallyChanged = hasMaterialEventChange(existing, next, preferredDescription);
-  const statusResetToPending = materiallyChanged && existing.status !== "pending";
-  const nextStatus: EventStatus = statusResetToPending ? "pending" : existing.status;
+  const statusAutoApproved = next.status === "approved" && existing.status !== "approved";
+  const statusResetToPending =
+    materiallyChanged && existing.status !== "pending" && next.status !== "approved";
+  const nextStatus: EventStatus =
+    next.status === "approved"
+      ? "approved"
+      : statusResetToPending
+        ? "pending"
+        : existing.status;
   const descriptionChanged =
     normalizeString(existing.description) !== normalizeString(preferredDescription);
 
@@ -2168,7 +2203,7 @@ function buildDuplicateUpdatePatch(
       ...(next.rawExtractionJson ? { rawExtractionJson: next.rawExtractionJson } : {}),
       ...(next.normalizedFieldsJson ? { normalizedFieldsJson: next.normalizedFieldsJson } : {}),
       ...(nextStatus !== existing.status ? { status: nextStatus } : {}),
-      ...(statusResetToPending
+      ...(statusResetToPending || statusAutoApproved
         ? {
             reviewedAt: undefined,
             reviewedBy: undefined,
@@ -2178,6 +2213,7 @@ function buildDuplicateUpdatePatch(
     },
     materiallyChanged,
     statusResetToPending,
+    statusAutoApproved,
   };
 }
 
@@ -2389,6 +2425,7 @@ function findBestExistingMatchForPreparedEvent(
 
   let bestSemanticMatch: ExistingSourceMatch | null = null;
   let bestSemanticScore = -1;
+  let comparableSemanticMatches = 0;
 
   for (const existing of existingMatches) {
     if (existing.matchedBy !== "same_date_semantic") {
@@ -2400,13 +2437,26 @@ function findBestExistingMatchForPreparedEvent(
       nextEvent,
       nextNormalizedFields,
     );
+    if (score >= 3) {
+      comparableSemanticMatches += 1;
+    }
     if (score > bestSemanticScore) {
       bestSemanticScore = score;
       bestSemanticMatch = existing;
     }
   }
 
-  return bestSemanticScore >= 4 ? bestSemanticMatch : null;
+  if (bestSemanticScore >= 4) {
+    return bestSemanticMatch;
+  }
+
+  // Same-date and same-venue collisions are rarely legitimate duplicates here.
+  // If there is only one strong candidate for that date/venue, allow an artist-led match.
+  if (bestSemanticScore >= 3 && comparableSemanticMatches === 1) {
+    return bestSemanticMatch;
+  }
+
+  return null;
 }
 
 export function prepareEventsForInsert(
@@ -2414,6 +2464,8 @@ export function prepareEventsForInsert(
   extracted: ExtractedEventData,
   selectedImageUrl: string | null,
   canonicalVenueNamesByHandle: Record<string, string>,
+  venueNameOverridesByHandle: Record<string, string>,
+  configuredVenueNamesByHandle: Record<string, string>,
 ): PrepareEventResult[] {
   const eventType = normalizeString(extracted.category);
   const description = normalizeExtractedDescription(extracted.description);
@@ -2421,21 +2473,19 @@ export function prepareEventsForInsert(
   const price = normalizeString(extracted.price);
   const currency = normalizeString(extracted.currency);
   const ticketPrice = `${price}${price && currency ? " " : ""}${currency}`.trim();
-  const parsedConfidence =
-    typeof extracted.confidence === "number"
-      ? extracted.confidence
-      : Number.parseFloat(extracted.confidence);
-  const confidence = Number.isFinite(parsedConfidence) ? parsedConfidence : null;
+  const confidence = normalizeConfidenceScore(extracted.confidence);
   const venueNormalization = normalizeVenue(
     post,
     extracted.venue,
     canonicalVenueNamesByHandle,
+    venueNameOverridesByHandle,
   );
   const titleNormalization = normalizeEventTitle(
     post,
     extracted,
     venueNormalization,
     canonicalVenueNamesByHandle,
+    configuredVenueNamesByHandle,
   );
   const title = normalizeString(titleNormalization.title);
   const postTextEvidence = buildPostTextEvidence(post, extracted);
@@ -2679,6 +2729,14 @@ export function prepareEventsForInsert(
 
   for (const [index, variant] of eventVariants.entries()) {
     const date = variant.dateNormalization.isoDate;
+    const moderationConfidenceScore = calculateModerationConfidenceScore(confidence, {
+      hasSuspectedDuplicates: false,
+      missingImage: !selectedImageUrl,
+    });
+    const autoApproved = shouldAutoApproveConfidenceScore(
+      moderationConfidenceScore,
+    );
+    const eventStatus: EventStatus = autoApproved ? "approved" : "pending";
     const normalizedFields: Record<string, unknown> = {
       ...normalizedFieldsCommon,
       time: variant.time || null,
@@ -2709,6 +2767,9 @@ export function prepareEventsForInsert(
       splitSourceLine: variant.splitSourceLine,
       expandedDateIndex: index + 1,
       expandedDateTotal: eventVariants.length,
+      moderationConfidenceScore,
+      moderationAutoApproveThreshold: AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+      moderationAutoApproved: autoApproved,
       normalizedIsValid: true,
       normalizedInvalidReason: null,
     };
@@ -2787,7 +2848,7 @@ export function prepareEventsForInsert(
         ...(post.postedAt ? { sourcePostedAt: post.postedAt } : {}),
         rawExtractionJson: JSON.stringify(extracted),
         normalizedFieldsJson: JSON.stringify(normalizedFields),
-        status: "pending",
+        status: eventStatus,
       },
     });
   }
@@ -2801,15 +2862,25 @@ type ProcessIngestionPostOptions = {
   post: InstagramScrapedPost;
   summary: HandleSummary;
   canonicalVenueNamesByHandle: Record<string, string>;
+  venueNameOverridesByHandle: Record<string, string>;
+  configuredVenueNamesByHandle: Record<string, string>;
 };
 
 async function processIngestionPost(options: ProcessIngestionPostOptions): Promise<void> {
-  const { client, handle, post, summary, canonicalVenueNamesByHandle } = options;
+  const {
+    client,
+    handle,
+    post,
+    summary,
+    canonicalVenueNamesByHandle,
+    venueNameOverridesByHandle,
+    configuredVenueNamesByHandle,
+  } = options;
   const postContext = getPostContext(handle, post);
   const canonicalVenueName =
     getConfiguredVenueNameForHandle(
       post.username,
-      canonicalVenueNamesByHandle,
+      configuredVenueNamesByHandle,
       STATIC_VENUE_BY_HANDLE,
     ) || null;
   const canUseCaptionOnlyExtraction = buildPostTextEvidence(post).length > 0;
@@ -2910,6 +2981,7 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
       canonicalVenueName,
       extractionMode,
     });
+    extracted = normalizeConfidencePayload(extracted);
   } catch (error) {
     summary.failedExtractions += 1;
     summary.failed_extractions += 1;
@@ -2932,6 +3004,8 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
       extracted,
       selectedImageUrl,
       canonicalVenueNamesByHandle,
+      venueNameOverridesByHandle,
+      configuredVenueNamesByHandle,
     );
   } catch (error) {
     summary.failedExtractions += 1;
@@ -3061,6 +3135,7 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
           qualityReasons: quality.reasons,
           qualityDetails: quality.details,
           materiallyChanged: updatePayload.materiallyChanged,
+          statusAutoApproved: updatePayload.statusAutoApproved,
           statusResetToPending: updatePayload.statusResetToPending,
           caption: post.caption,
           postTimestamp: post.postedAt,
@@ -3140,8 +3215,22 @@ export async function runInstagramIngestionBatchStep(
 ): Promise<IngestionBatchStepResult> {
   const client = getConvexClient();
   let canonicalVenueNamesByHandle: Record<string, string> = {};
+  let venueNameOverridesByHandle: Record<string, string> = {};
+  let configuredVenueNamesByHandle: Record<string, string> = {};
   try {
     canonicalVenueNamesByHandle = await loadCanonicalVenueNamesByHandle(client);
+    try {
+      venueNameOverridesByHandle = await loadVenueNameOverridesByHandle();
+    } catch (error) {
+      logError("ingestion.venues.override_load_failed", {
+        step: "normalize_posts" satisfies IngestionStep,
+        error: getErrorMessage(error),
+      });
+    }
+    configuredVenueNamesByHandle = buildConfiguredVenueNamesByHandle(
+      canonicalVenueNamesByHandle,
+      venueNameOverridesByHandle,
+    );
   } catch (error) {
     logError("ingestion.venues.load_failed", {
       step: "normalize_posts" satisfies IngestionStep,
@@ -3257,6 +3346,8 @@ export async function runInstagramIngestionBatchStep(
       post,
       summary: handleSummary,
       canonicalVenueNamesByHandle,
+      venueNameOverridesByHandle,
+      configuredVenueNamesByHandle,
     });
     processedPosts += 1;
   }
