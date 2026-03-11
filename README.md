@@ -1,14 +1,25 @@
 # Nightlife Event Aggregator
 
-Centralize nightlife events from Instagram into one calendar and list view.
+A Next.js app for collecting event data from Instagram, moderating it, and publishing approved events in list and calendar views.
+
+## What It Covers
+
+- Public event discovery at `/events`
+- Monthly browsing at `/calendar`
+- Admin moderation at `/admin`
+- Scrape controls at `/admin/scraper`
+- Venue management at `/admin/venues`
 
 ## Stack
-- Next.js 14 (App Router) + TypeScript
-- Tailwind CSS + shadcn/ui
+
+- Next.js 14 + TypeScript
+- Tailwind CSS
 - Convex
 - Clerk
+- OpenAI
+- Apify
 
-## Quickstart
+## Local Setup
 
 ```bash
 npm install
@@ -16,11 +27,23 @@ cp .env.example .env.local
 npm run dev
 ```
 
+If Convex is not connected yet, run:
+
+```bash
+npx convex dev
+```
+
+Then generate Convex types:
+
+```bash
+npm run convex:codegen
+```
+
 ## Environment Variables
 
-Populate `.env.local` with:
+Copy `.env.example` to `.env.local` and set:
 
-```
+```env
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
 CLERK_SECRET_KEY=
 NEXT_PUBLIC_CONVEX_URL=
@@ -30,44 +53,37 @@ APIFY_API_TOKEN=
 APIFY_INSTAGRAM_ACTOR_ID=apify/instagram-post-scraper
 OPENAI_VISION_MODEL=gpt-4.1-mini
 CRON_SECRET=
+EVENTS_TIMEZONE=Europe/Belgrade
 ```
 
-## Convex Codegen
+Notes:
 
-Run Convex code generation after deployment is configured:
+- `CRON_SECRET` protects the cron ingestion route when set.
+- `EVENTS_TIMEZONE` controls local event-day handling.
+
+## Useful Scripts
 
 ```bash
+npm run dev
+npm run lint
+npm run typecheck
 npm run convex:codegen
+npm run qa:extraction
 ```
 
-If this fails with `No CONVEX_DEPLOYMENT set`, run `npx convex dev` first to connect the project.
+## Ingestion Flow
 
-## Phase 2 Pipeline
+1. Scrape Instagram posts with Apify.
+2. Extract structured event data with OpenAI.
+3. Store results in Convex as `pending`.
+4. Review events in `/admin`.
+5. Show approved events on `/events` and `/calendar`.
 
-- Manual handles: `POST /api/admin/scrape`
-- Active venues (admin): `POST /api/admin/scrape/venues`
-- Active venues (cron): `GET /api/cron/ingest-venues`
-  - Protected via `Authorization: Bearer <CRON_SECRET>` when `CRON_SECRET` is set.
-  - Vercel cron schedule is defined in `vercel.json` (every 6 hours).
+Manual and admin-triggered scrape endpoints live under `app/api/admin/scrape/*`. The cron route is `GET /api/cron/ingest-venues` and uses `Authorization: Bearer <CRON_SECRET>` when `CRON_SECRET` is configured.
 
-Each run executes:
-1. Instagram scraping via Apify (`apify/instagram-post-scraper`, default `resultsLimit=5`, `onlyPostsNewerThan=5 days`, `skipPinnedPosts=true`)
-2. Event extraction via OpenAI vision
-3. Event persistence in Convex as `pending`
+## Project Layout
 
-Admin scrape controls are available at `/admin/scraper`.
-
-## Moderation Flow
-
-- Review queue UI: `/admin`
-- List moderation events: `GET /api/admin/events?status=pending|approved|rejected`
-- Transition status: `POST /api/admin/events/moderate`
-  - Allowed transitions from the UI are `pending -> approved` and `pending -> rejected`.
-- Public events page (`/events`) shows only `approved` events.
-
-## Project Structure
-
-```
+```text
 app/
   (auth)/
   (dashboard)/
@@ -75,4 +91,5 @@ app/
 components/
 convex/
 lib/
+scripts/
 ```

@@ -386,178 +386,177 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
 
         {!error ? (
           <>
-            <div className="grid xl:grid-cols-[minmax(0,1fr)_19rem]">
-              <div className="min-w-0 border-b border-border/80 xl:border-b-0 xl:border-r">
-                <div className="overflow-x-auto">
-                  <div className="min-w-[66rem] bg-card">
-                    <div className="grid grid-cols-7 border-b border-border/80 bg-muted/[0.42]">
-                      {WEEKDAY_LABELS.map((weekday) => (
-                        <div
-                          className="px-3 py-2.5 text-center text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground"
-                          key={weekday}
+            <div className="border-b border-border/80">
+              <div className="overflow-x-auto">
+                <div className="min-w-[66rem] bg-card">
+                  <div className="grid grid-cols-7 border-b border-border/80 bg-muted/[0.42]">
+                    {WEEKDAY_LABELS.map((weekday) => (
+                      <div
+                        className="px-3 py-2.5 text-center text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground"
+                        key={weekday}
+                      >
+                        {weekday}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-7">
+                    {calendarDays.map((day, index) => {
+                      const dayKey = formatDateKey(day);
+                      const inMonth = day.getMonth() === monthStart.getMonth();
+                      const dayEvents = inMonth ? monthEventsByDay.get(dayKey) ?? [] : [];
+                      const isSelected = dayKey === selectedDayKey;
+                      const isToday = dayKey === todayKey;
+                      const isWeekendColumn = index % 7 >= 5;
+
+                      return (
+                        <Link
+                          className={cn(
+                            "group relative min-h-[6.75rem] border-r border-b border-border/75 bg-card px-2.5 pb-2.5 pt-2 transition hover:z-10 hover:bg-primary/[0.035] sm:min-h-[7.5rem]",
+                            (index + 1) % 7 === 0 && "border-r-0",
+                            !inMonth && "bg-muted/[0.2] text-muted-foreground",
+                            isWeekendColumn && inMonth && "bg-sky-50/40",
+                            isSelected &&
+                              "z-10 bg-primary/[0.055] shadow-[inset_0_0_0_1.5px_rgba(59,130,246,0.32)]",
+                          )}
+                          href={`/calendar${buildQueryString({
+                            ...baseFilters,
+                            month: formatMonthParam(day),
+                            day: dayKey,
+                          })}`}
+                          key={dayKey}
+                          scroll={false}
                         >
-                          {weekday}
-                        </div>
-                      ))}
-                    </div>
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <span
+                                className={cn(
+                                  "inline-flex h-8 min-w-8 items-center justify-center rounded-full px-2 text-sm font-medium",
+                                  isToday
+                                    ? "bg-primary text-primary-foreground shadow-[0_14px_26px_-16px_rgba(59,130,246,0.95)]"
+                                    : isSelected
+                                      ? "bg-primary/10 text-primary"
+                                      : inMonth
+                                        ? "text-foreground"
+                                        : "text-muted-foreground",
+                                )}
+                              >
+                                {day.getDate()}
+                              </span>
+                            </div>
 
-                    <div className="grid grid-cols-7">
-                      {calendarDays.map((day, index) => {
-                        const dayKey = formatDateKey(day);
-                        const inMonth = day.getMonth() === monthStart.getMonth();
-                        const dayEvents = inMonth ? monthEventsByDay.get(dayKey) ?? [] : [];
-                        const isSelected = dayKey === selectedDayKey;
-                        const isToday = dayKey === todayKey;
-                        const isWeekendColumn = index % 7 >= 5;
+                            {dayEvents.length > 0 ? (
+                              <span className="pt-1.5 text-[10px] font-medium text-muted-foreground">
+                                {dayEvents.length}
+                              </span>
+                            ) : null}
+                          </div>
 
-                        return (
-                          <Link
-                            className={cn(
-                              "group relative min-h-[6.75rem] border-r border-b border-border/75 bg-card px-2.5 pb-2.5 pt-2 transition hover:z-10 hover:bg-primary/[0.035] sm:min-h-[7.5rem]",
-                              (index + 1) % 7 === 0 && "border-r-0",
-                              !inMonth && "bg-muted/[0.2] text-muted-foreground",
-                              isWeekendColumn && inMonth && "bg-sky-50/40",
-                              isSelected &&
-                                "z-10 bg-primary/[0.055] shadow-[inset_0_0_0_1.5px_rgba(59,130,246,0.32)]",
-                            )}
-                            href={`/calendar${buildQueryString({
-                              ...baseFilters,
-                              month: formatMonthParam(day),
-                              day: dayKey,
-                            })}`}
-                            key={dayKey}
-                            scroll={false}
-                          >
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="min-w-0">
-                                <span
-                                  className={cn(
-                                    "inline-flex h-8 min-w-8 items-center justify-center rounded-full px-2 text-sm font-medium",
-                                    isToday
-                                      ? "bg-primary text-primary-foreground shadow-[0_14px_26px_-16px_rgba(59,130,246,0.95)]"
-                                      : isSelected
-                                        ? "bg-primary/10 text-primary"
-                                        : inMonth
-                                          ? "text-foreground"
-                                          : "text-muted-foreground",
-                                  )}
-                                >
-                                  {day.getDate()}
+                          <div className="mt-2 space-y-1">
+                            {dayEvents.slice(0, 3).map((event) => (
+                              <div
+                                className="flex items-center gap-1.5 rounded-md bg-primary/[0.09] px-2 py-1 text-[10px] font-medium text-foreground"
+                                key={event._id}
+                              >
+                                <span className="h-1.5 w-1.5 flex-none rounded-full bg-primary/75" />
+                                <span className="truncate">
+                                  {event.time ? `${event.time} ` : ""}
+                                  {event.title}
                                 </span>
                               </div>
-
-                              {dayEvents.length > 0 ? (
-                                <span className="pt-1.5 text-[10px] font-medium text-muted-foreground">
-                                  {dayEvents.length}
-                                </span>
-                              ) : null}
-                            </div>
-
-                            <div className="mt-2 space-y-1">
-                              {dayEvents.slice(0, 3).map((event) => (
-                                <div
-                                  className="flex items-center gap-1.5 rounded-md bg-primary/[0.09] px-2 py-1 text-[10px] font-medium text-foreground"
-                                  key={event._id}
-                                >
-                                  <span className="h-1.5 w-1.5 flex-none rounded-full bg-primary/75" />
-                                  <span className="truncate">
-                                    {event.time ? `${event.time} ` : ""}
-                                    {event.title}
-                                  </span>
-                                </div>
-                              ))}
-                              {dayEvents.length > 3 ? (
-                                <p className="px-1 text-[10px] font-medium text-muted-foreground">
-                                  +{dayEvents.length - 3} more
-                                </p>
-                              ) : null}
-                            </div>
-                          </Link>
-                        );
-                      })}
-                    </div>
+                            ))}
+                            {dayEvents.length > 3 ? (
+                              <p className="px-1 text-[10px] font-medium text-muted-foreground">
+                                +{dayEvents.length - 3} more
+                              </p>
+                            ) : null}
+                          </div>
+                        </Link>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
-              <aside className="bg-muted/[0.18] px-3 py-3 sm:px-4 sm:py-4 xl:min-h-full">
-                <div className="xl:sticky xl:top-24">
-                  <div className="rounded-[1.6rem] border border-border/80 bg-card/96 p-4 shadow-[0_28px_70px_-48px_rgba(15,23,42,0.34)]">
-                    <div className="border-b border-border/80 pb-3">
-                      <p className="section-kicker">Selected day</p>
-                      <div className="mt-2.5 flex items-start justify-between gap-3">
-                        <div className="space-y-0.5">
-                          <h3 className="text-xl font-semibold tracking-tight">
-                            {formatDisplayDate(selectedDate, {
-                              weekday: "long",
-                              month: "long",
-                              day: "numeric",
-                            })}
-                          </h3>
-                        </div>
-                        <div className="rounded-[1rem] bg-primary/[0.08] px-2.5 py-2 text-center text-primary">
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.22em]">
-                            {formatDisplayDate(selectedDate, { month: "short" })}
-                          </p>
-                          <p className="text-2xl font-semibold leading-none">
-                            {selectedDate.getDate()}
-                          </p>
-                        </div>
+            </div>
+
+            <div className="border-b border-border/80 bg-muted/[0.18] px-3 py-3 sm:px-4 sm:py-4">
+              <div className="mx-auto w-full max-w-5xl">
+                <div className="rounded-[1.6rem] border border-border/80 bg-card/96 p-4 shadow-[0_28px_70px_-48px_rgba(15,23,42,0.34)]">
+                  <div className="border-b border-border/80 pb-3">
+                    <p className="section-kicker">Selected day</p>
+                    <div className="mt-2.5 flex items-start justify-between gap-3">
+                      <div className="space-y-0.5">
+                        <h3 className="text-xl font-semibold tracking-tight">
+                          {formatDisplayDate(selectedDate, {
+                            weekday: "long",
+                            month: "long",
+                            day: "numeric",
+                          })}
+                        </h3>
                       </div>
-                      <p className="mt-2 text-sm text-muted-foreground">
-                        {selectedDayEvents.length} event{selectedDayEvents.length === 1 ? "" : "s"}
-                        {weekendEventCount > 0 && weekendOnly
-                          ? ` · ${weekendEventCount} weekend matches this month`
-                          : ""}
-                      </p>
+                      <div className="rounded-[1rem] bg-primary/[0.08] px-2.5 py-2 text-center text-primary">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.22em]">
+                          {formatDisplayDate(selectedDate, { month: "short" })}
+                        </p>
+                        <p className="text-2xl font-semibold leading-none">
+                          {selectedDate.getDate()}
+                        </p>
+                      </div>
                     </div>
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      {selectedDayEvents.length} event{selectedDayEvents.length === 1 ? "" : "s"}
+                      {weekendEventCount > 0 && weekendOnly
+                        ? ` · ${weekendEventCount} weekend matches this month`
+                        : ""}
+                    </p>
+                  </div>
 
-                    <div className="mt-3 space-y-2.5">
-                      {selectedDayEvents.map((event) => (
-                        <article
-                          className="relative overflow-hidden rounded-[1.2rem] border border-border/80 bg-background/90 px-3.5 py-3 shadow-[0_20px_34px_-30px_rgba(15,23,42,0.28)]"
-                          key={event._id}
-                        >
-                          <div className="absolute inset-y-3 left-0 w-1 rounded-full bg-primary/75" />
-                          <div className="flex items-start gap-2.5 pl-2">
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
-                                <span className="rounded-full bg-primary/[0.09] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-primary">
-                                  {event.time ?? "Time TBA"}
-                                </span>
-                                <h4 className="truncate text-sm font-semibold tracking-tight">
-                                  {event.title}
-                                </h4>
-                              </div>
-                              <p className="mt-1 truncate text-xs text-muted-foreground">
-                                {formatAgendaMeta(event)}
-                              </p>
+                  <div className="mt-3 space-y-2.5">
+                    {selectedDayEvents.map((event) => (
+                      <article
+                        className="relative overflow-hidden rounded-[1.2rem] border border-border/80 bg-background/90 px-3.5 py-3 shadow-[0_20px_34px_-30px_rgba(15,23,42,0.28)]"
+                        key={event._id}
+                      >
+                        <div className="absolute inset-y-3 left-0 w-1 rounded-full bg-primary/75" />
+                        <div className="flex items-start gap-2.5 pl-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="rounded-full bg-primary/[0.09] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-primary">
+                                {event.time ?? "Time TBA"}
+                              </span>
+                              <h4 className="truncate text-sm font-semibold tracking-tight">
+                                {event.title}
+                              </h4>
                             </div>
-                            <Link
-                              aria-label={`Open ${event.title}`}
-                              className="inline-flex h-8 w-8 flex-none items-center justify-center rounded-full border border-border/80 bg-card text-foreground hover:border-primary/30 hover:bg-background"
-                              href={`/events/${event._id}`}
-                            >
-                              <ArrowUpRight className="h-3.5 w-3.5" />
-                            </Link>
+                            <p className="mt-1 truncate text-xs text-muted-foreground">
+                              {formatAgendaMeta(event)}
+                            </p>
                           </div>
-                        </article>
-                      ))}
-
-                      {selectedDayEvents.length === 0 ? (
-                        <div className="rounded-[1.2rem] border border-dashed border-border/80 bg-background/82 px-4 py-8 text-center">
-                          <p className="text-sm text-muted-foreground">
-                            No events match the current filters for{" "}
-                            {formatDisplayDate(selectedDate, { month: "long", day: "numeric" })}.
-                          </p>
-                          <p className="mt-1.5 text-sm text-muted-foreground">
-                            Try another day or reset the filters.
-                          </p>
+                          <Link
+                            aria-label={`Open ${event.title}`}
+                            className="inline-flex h-8 w-8 flex-none items-center justify-center rounded-full border border-border/80 bg-card text-foreground hover:border-primary/30 hover:bg-background"
+                            href={`/events/${event._id}`}
+                          >
+                            <ArrowUpRight className="h-3.5 w-3.5" />
+                          </Link>
                         </div>
-                      ) : null}
-                    </div>
+                      </article>
+                    ))}
+
+                    {selectedDayEvents.length === 0 ? (
+                      <div className="rounded-[1.2rem] border border-dashed border-border/80 bg-background/82 px-4 py-8 text-center">
+                        <p className="text-sm text-muted-foreground">
+                          No events match the current filters for{" "}
+                          {formatDisplayDate(selectedDate, { month: "long", day: "numeric" })}.
+                        </p>
+                        <p className="mt-1.5 text-sm text-muted-foreground">
+                          Try another day or reset the filters.
+                        </p>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
-              </aside>
+              </div>
             </div>
 
             <MonthEventsTable events={monthEvents} monthLabel={monthLabel} />
