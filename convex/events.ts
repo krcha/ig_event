@@ -243,3 +243,58 @@ export const deleteApprovedEvent = mutation({
     await ctx.db.delete(args.id);
   },
 });
+
+export const mergeApprovedEvents = mutation({
+  args: {
+    primaryId: v.id("events"),
+    duplicateIds: v.array(v.id("events")),
+    patch: v.object({
+      title: v.optional(v.string()),
+      date: v.optional(v.string()),
+      time: v.optional(v.string()),
+      venue: v.optional(v.string()),
+      artists: v.optional(v.array(v.string())),
+      description: v.optional(v.string()),
+      imageUrl: v.optional(v.string()),
+      ticketPrice: v.optional(v.string()),
+      eventType: v.optional(v.string()),
+    }),
+  },
+  handler: async (ctx, args) => {
+    const primaryEvent = await ctx.db.get(args.primaryId);
+    if (!primaryEvent) {
+      throw new Error("Primary event not found.");
+    }
+    if (primaryEvent.status !== "approved") {
+      throw new Error("Only approved events can be merged.");
+    }
+
+    const duplicateIds = [...new Set(args.duplicateIds)].filter((id) => id !== args.primaryId);
+    for (const duplicateId of duplicateIds) {
+      const duplicateEvent = await ctx.db.get(duplicateId);
+      if (!duplicateEvent) {
+        throw new Error("Duplicate event not found.");
+      }
+      if (duplicateEvent.status !== "approved") {
+        throw new Error("Only approved duplicate events can be removed.");
+      }
+    }
+
+    const now = Date.now();
+    if (Object.keys(args.patch).length > 0) {
+      await ctx.db.patch(args.primaryId, {
+        ...args.patch,
+        updatedAt: now,
+      });
+    }
+
+    for (const duplicateId of duplicateIds) {
+      await ctx.db.delete(duplicateId);
+    }
+
+    return {
+      primaryId: args.primaryId,
+      deletedDuplicateCount: duplicateIds.length,
+    };
+  },
+});

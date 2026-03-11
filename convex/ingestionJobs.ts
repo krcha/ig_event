@@ -48,6 +48,31 @@ export const getJob = query({
   },
 });
 
+export const listRecentFullScrapeJobs = query({
+  args: {
+    minCreatedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const jobs = await ctx.db
+      .query("ingestionJobs")
+      .withIndex("by_createdAt", (q) => q.gte("createdAt", args.minCreatedAt))
+      .collect();
+
+    return jobs
+      .filter((job) => job.mode !== "saved_posts")
+      .map((job) => ({
+        _id: job._id,
+        source: job.source,
+        status: job.status,
+        handles: job.handles,
+        stateJson: job.stateJson,
+        createdAt: job.createdAt,
+        startedAt: job.startedAt,
+        finishedAt: job.finishedAt,
+      }));
+  },
+});
+
 export const patchJob = mutation({
   args: {
     id: v.id("ingestionJobs"),

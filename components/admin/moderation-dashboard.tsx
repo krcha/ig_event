@@ -64,6 +64,51 @@ type EventsResponse = {
   error?: string;
 };
 
+type MasterReviewCandidateEvent = {
+  id: string;
+  title: string;
+  date: string;
+  time: string | null;
+  venue: string;
+  artists: string[];
+  description: string | null;
+  imageUrl: string | null;
+  ticketPrice: string | null;
+  eventType: string;
+};
+
+type MasterReviewPrimaryPatch = {
+  title: string;
+  date: string;
+  time: string;
+  venue: string;
+  artists: string[];
+  description: string;
+  ticketPrice: string;
+  eventType: string;
+  imageUrl: string;
+};
+
+type MasterReviewGroup = {
+  groupId: string;
+  confidence: number | null;
+  reasoning: string;
+  recommendedAction: "merge_delete" | "delete_only";
+  primaryEventId: string;
+  duplicateEventIds: string[];
+  primaryPatch: MasterReviewPrimaryPatch;
+  candidateEvents: MasterReviewCandidateEvent[];
+};
+
+type MasterReviewResponse = {
+  overview: string;
+  activeEventCount: number;
+  candidateGroupCount: number;
+  generatedAt: string;
+  reviewGroups: MasterReviewGroup[];
+  error?: string;
+};
+
 type FieldConfirmationRow = {
   key: string;
   label: string;
@@ -425,6 +470,46 @@ function formatDateTime(value: number | null): string {
   return new Date(value).toLocaleString();
 }
 
+function formatIsoDateTime(value: string): string {
+  return new Date(value).toLocaleString();
+}
+
+function buildMasterReviewPatchRows(group: MasterReviewGroup) {
+  const primaryEvent =
+    group.candidateEvents.find((event) => event.id === group.primaryEventId) ?? null;
+  if (!primaryEvent) {
+    return [];
+  }
+
+  const rows: Array<{ label: string; current: string; suggested: string }> = [];
+  const maybePushRow = (label: string, current: string, suggested: string) => {
+    if (!suggested || suggested === current) {
+      return;
+    }
+    rows.push({
+      label,
+      current: current || "(empty)",
+      suggested,
+    });
+  };
+
+  maybePushRow("Title", primaryEvent.title, group.primaryPatch.title);
+  maybePushRow("Date", primaryEvent.date, group.primaryPatch.date);
+  maybePushRow("Time", primaryEvent.time ?? "", group.primaryPatch.time);
+  maybePushRow("Venue", primaryEvent.venue, group.primaryPatch.venue);
+  maybePushRow(
+    "Artists",
+    primaryEvent.artists.join(", "),
+    group.primaryPatch.artists.join(", "),
+  );
+  maybePushRow("Description", primaryEvent.description ?? "", group.primaryPatch.description);
+  maybePushRow("Ticket price", primaryEvent.ticketPrice ?? "", group.primaryPatch.ticketPrice);
+  maybePushRow("Event type", primaryEvent.eventType, group.primaryPatch.eventType);
+  maybePushRow("Image URL", primaryEvent.imageUrl ?? "", group.primaryPatch.imageUrl);
+
+  return rows;
+}
+
 function buildFieldConfirmationRows(
   event: ModerationEvent,
   normalizedFields: Record<string, unknown> | null,
@@ -564,7 +649,9 @@ export function ModerationDashboard() {
   const [limit, setLimit] = useState("100");
   const [events, setEvents] = useState<ModerationEvent[]>([]);
   const [duplicateContextEvents, setDuplicateContextEvents] = useState<ModerationEvent[]>([]);
+  const [masterReview, setMasterReview] = useState<MasterReviewResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isMasterReviewLoading, setIsMasterReviewLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionInFlightFor, setActionInFlightFor] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -611,6 +698,13 @@ export function ModerationDashboard() {
   useEffect(() => {
     void fetchEvents();
   }, [fetchEvents]);
+
+  useEffect(() => {
+    if (status !== "approved") {
+      setMasterReview(null);
+      setIsMasterReviewLoading(false);
+    }
+  }, [status]);
 
   async function updateStatus(eventId: string, nextStatus: "approved" | "rejected") {
     setActionInFlightFor(eventId);
@@ -859,6 +953,85 @@ export function ModerationDashboard() {
     }
   }
 
+  async function runMasterReview() {
+    setIsMasterReviewLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/admin/events/master-review", {
+        method: "POST",
+      });
+      const payload = (await response.json()) as MasterReviewResponse;
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to run AI master review.");
+      }
+
+      setMasterReview(payload);
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unknown AI master review error.",
+      );
+    } finally {
+      setIsMasterReviewLoading(false);
+    }
+  }
+
+  async function applyMasterReviewGroup(group: MasterReviewGroup) {
+    const confirmed = window.confirm(
+      group.recommendedAction === "delete_only"
+        ? `Delete ${group.duplicateEventIds.length} approved duplicate event${
+            group.duplicateEventIds.length === 1 ? "" : "s"
+          } from this AI review group?`
+        : `Merge the suggested primary event and delete ${
+            group.duplicateEventIds.length
+          } approved duplicate event${group.duplicateEventIds.length === 1 ? "" : "s"}?`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setActionInFlightFor(`master-review:${group.groupId}`);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/admin/events/master-review/apply", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          primaryEventId: group.primaryEventId,
+          duplicateEventIds: group.duplicateEventIds,
+          primaryPatch: group.recommendedAction === "merge_delete" ? group.primaryPatch : {},
+        }),
+      });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to apply AI master review.");
+      }
+
+      setMasterReview((current) =>
+        current
+          ? {
+              ...current,
+              reviewGroups: current.reviewGroups.filter(
+                (candidate) => candidate.groupId !== group.groupId,
+              ),
+            }
+          : current,
+      );
+      await fetchEvents();
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unknown AI master review apply error.",
+      );
+    } finally {
+      setActionInFlightFor(null);
+    }
+  }
+
   const stats = useMemo(
     () => ({
       loaded: decoratedEvents.length,
@@ -996,6 +1169,183 @@ export function ModerationDashboard() {
           </select>
         </div>
       </section>
+
+      {status === "approved" ? (
+        <section className="space-y-4 rounded-2xl border border-border bg-background/70 p-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">AI master review</h2>
+              <p className="text-sm text-muted-foreground">
+                Run one final OpenAI pass on active approved events to spot duplicates,
+                suggest a primary record, and prepare merge or deletion actions.
+              </p>
+            </div>
+            <button
+              className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={isLoading || isMasterReviewLoading || isAnyActionInFlight}
+              onClick={() => void runMasterReview()}
+              type="button"
+            >
+              {isMasterReviewLoading
+                ? "Running AI review..."
+                : masterReview
+                  ? "Refresh AI review"
+                  : "Run AI master review"}
+            </button>
+          </div>
+
+          {masterReview ? (
+            <div className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-4">
+                {[
+                  ["Active approved", masterReview.activeEventCount],
+                  ["Candidate groups", masterReview.candidateGroupCount],
+                  ["AI actions", masterReview.reviewGroups.length],
+                  ["Generated", formatIsoDateTime(masterReview.generatedAt)],
+                ].map(([label, value]) => (
+                  <div
+                    className="rounded-xl border border-border bg-card/80 p-3"
+                    key={label}
+                  >
+                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                      {label}
+                    </p>
+                    <p className="mt-2 text-sm font-medium">{String(value)}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="rounded-xl border border-border bg-card/80 p-4">
+                <p className="text-sm text-muted-foreground">{masterReview.overview}</p>
+              </div>
+
+              {masterReview.reviewGroups.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No actionable duplicate merges or deletions were suggested.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {masterReview.reviewGroups.map((group) => {
+                    const primaryEvent =
+                      group.candidateEvents.find(
+                        (event) => event.id === group.primaryEventId,
+                      ) ?? null;
+                    const duplicateEvents = group.candidateEvents.filter((event) =>
+                      group.duplicateEventIds.includes(event.id),
+                    );
+                    const patchRows = buildMasterReviewPatchRows(group);
+
+                    return (
+                      <article
+                        className="space-y-4 rounded-2xl border border-border bg-card/80 p-4"
+                        key={group.groupId}
+                      >
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                          <div className="space-y-2">
+                            <div className="flex flex-wrap gap-2">
+                              <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                                {group.recommendedAction === "delete_only"
+                                  ? "Delete duplicates"
+                                  : "Merge + delete"}
+                              </span>
+                              <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                                Confidence{" "}
+                                {formatConfidenceScore(group.confidence) ?? "(none)"}
+                              </span>
+                            </div>
+                            <p className="text-sm text-muted-foreground">{group.reasoning}</p>
+                          </div>
+                          <button
+                            className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={isAnyActionInFlight}
+                            onClick={() => void applyMasterReviewGroup(group)}
+                            type="button"
+                          >
+                            {group.recommendedAction === "delete_only"
+                              ? `Delete duplicates (${group.duplicateEventIds.length})`
+                              : `Apply merge + delete (${group.duplicateEventIds.length})`}
+                          </button>
+                        </div>
+
+                        {primaryEvent ? (
+                          <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-3">
+                            <p className="text-xs font-medium uppercase tracking-[0.18em] text-emerald-800">
+                              Primary event to keep
+                            </p>
+                            <p className="mt-2 font-medium text-emerald-950">
+                              {primaryEvent.title}
+                            </p>
+                            <p className="text-sm text-emerald-900/80">
+                              {primaryEvent.date}
+                              {primaryEvent.time ? ` at ${primaryEvent.time}` : ""}
+                              {" · "}
+                              {primaryEvent.venue}
+                            </p>
+                          </div>
+                        ) : null}
+
+                        {duplicateEvents.length > 0 ? (
+                          <div className="rounded-xl border border-rose-200 bg-rose-50/70 p-3">
+                            <p className="text-xs font-medium uppercase tracking-[0.18em] text-rose-800">
+                              Approved duplicates to remove
+                            </p>
+                            <div className="mt-2 space-y-2">
+                              {duplicateEvents.map((event) => (
+                                <div
+                                  className="rounded-lg border border-rose-200 bg-white/70 p-3"
+                                  key={event.id}
+                                >
+                                  <p className="font-medium text-rose-950">{event.title}</p>
+                                  <p className="text-sm text-rose-900/80">
+                                    {event.date}
+                                    {event.time ? ` at ${event.time}` : ""}
+                                    {" · "}
+                                    {event.venue}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {patchRows.length > 0 ? (
+                          <div className="space-y-2">
+                            <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                              Suggested primary updates
+                            </p>
+                            <div className="space-y-2">
+                              {patchRows.map((row) => (
+                                <div
+                                  className="rounded-xl border border-border bg-background/80 p-3"
+                                  key={row.label}
+                                >
+                                  <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                                    {row.label}
+                                  </p>
+                                  <p className="mt-1 text-sm text-muted-foreground">
+                                    Current: {row.current}
+                                  </p>
+                                  <p className="mt-1 text-sm font-medium">
+                                    Suggested: {row.suggested}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              No AI master review has been run yet for the approved queue.
+            </p>
+          )}
+        </section>
+      ) : null}
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       {isLoading ? (

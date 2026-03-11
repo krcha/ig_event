@@ -5,7 +5,7 @@ export default function AdminScraperPage() {
   return (
     <AdminPageShell
       active="scraper"
-      description="Run fresh scrapes, import recent Apify history, reprocess saved posts, and inspect ingestion health."
+      description="Start the venue ingestion pipeline from a fresh Apify scrape, recent Apify run data, or saved posts already in Convex."
       title="Scraper Operations"
     >
       <ScraperDashboard />

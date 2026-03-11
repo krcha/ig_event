@@ -1,33 +1,24 @@
 import { auth } from "@clerk/nextjs/server";
-import { NextResponse } from "next/server";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
+import { NextResponse } from "next/server";
 import {
   createEmptyIngestionSummary,
   createInitialIngestionBatchState,
-  getActiveVenueHandles,
-  importRecentApifyRunPostsToSavedPosts,
+  importUpcomingEventsToSavedPosts,
 } from "@/lib/pipeline/run-instagram-ingestion";
 import { getRequiredEnv, hasClerkEnv } from "@/lib/utils/env";
 
-type Body = {
-  runsLimit?: number;
-};
+type ErrorStage =
+  | "auth"
+  | "import_upcoming_convex_events"
+  | "enqueue_saved_posts_job";
 
-const DEFAULT_RUNS_LIMIT = 300;
 const DEFAULT_BATCH_SIZE = 2;
 const createIngestionJobMutation =
   "ingestionJobs:createJob" as unknown as FunctionReference<"mutation">;
 
 export const maxDuration = 300;
-
-function normalizePositiveInt(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  const rounded = Math.trunc(value);
-  return rounded > 0 ? rounded : undefined;
-}
 
 function logInfo(event: string, payload: Record<string, unknown>) {
   console.info(
@@ -49,76 +40,54 @@ function logError(event: string, payload: Record<string, unknown>) {
   );
 }
 
-export async function POST(request: Request) {
-  let errorStage:
-    | "auth"
-    | "parse_body"
-    | "load_active_venues"
-    | "import_recent_runs"
-    | "enqueue_saved_posts_job" = "auth";
-  if (hasClerkEnv()) {
-    const { userId } = await auth();
-    if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-  }
-
-  let body: Body = {};
-  try {
-    errorStage = "parse_body";
-    body = (await request.json()) as Body;
-  } catch {
-    body = {};
-  }
-
-  const runsLimit = normalizePositiveInt(body.runsLimit) ?? DEFAULT_RUNS_LIMIT;
+export async function POST() {
+  let errorStage: ErrorStage = "auth";
 
   try {
-    errorStage = "load_active_venues";
-    const handles = await getActiveVenueHandles();
-    if (handles.length === 0) {
-      return NextResponse.json(
-        { error: "No active venue handles are configured." },
-        { status: 400 },
-      );
+    if (hasClerkEnv()) {
+      const { userId } = await auth();
+      if (!userId) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
     }
 
-    errorStage = "import_recent_runs";
-    const importSummary = await importRecentApifyRunPostsToSavedPosts({
-      handles,
-      runsLimit,
-    });
+    errorStage = "import_upcoming_convex_events";
+    const importSummary = await importUpcomingEventsToSavedPosts();
 
     if (importSummary.importedPosts === 0) {
       return NextResponse.json(
-        { error: "No matching posts were found in recent Apify runs for active venues." },
+        {
+          error: `No upcoming Convex events were imported. Scanned ${importSummary.scannedEvents}, skipped ${importSummary.skippedPastEvents} past, ${importSummary.skippedMissingVenue} missing venue, ${importSummary.skippedMissingSource} missing source.`,
+        },
         { status: 400 },
       );
     }
 
-    const normalizedHandles = importSummary.handles;
     errorStage = "enqueue_saved_posts_job";
     const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
-    const summary = createEmptyIngestionSummary(normalizedHandles);
+    const summary = createEmptyIngestionSummary(importSummary.handles);
     const state = createInitialIngestionBatchState();
     const jobId = (await convex.mutation(createIngestionJobMutation, {
-      source: "active_venues_apify_history",
+      source: "upcoming_convex_events",
       mode: "saved_posts",
-      handles: normalizedHandles,
+      handles: importSummary.handles,
       batchSize: DEFAULT_BATCH_SIZE,
       summaryJson: JSON.stringify(summary),
       stateJson: JSON.stringify(state),
     })) as string;
 
     logInfo("scrape_started", {
-      source: "active_venues_apify_history",
+      source: "upcoming_convex_events",
       mode: "saved_posts",
       jobId,
-      handles: normalizedHandles,
+      handles: importSummary.handles,
       batchSize: DEFAULT_BATCH_SIZE,
       importedPosts: importSummary.importedPosts,
-      runsScanned: importSummary.runsScanned,
+      scannedEvents: importSummary.scannedEvents,
       handlesWithImportedPosts: importSummary.handlesWithImportedPosts,
+      skippedPastEvents: importSummary.skippedPastEvents,
+      skippedMissingVenue: importSummary.skippedMissingVenue,
+      skippedMissingSource: importSummary.skippedMissingSource,
     });
 
     return NextResponse.json(
@@ -126,9 +95,9 @@ export async function POST(request: Request) {
         started: true,
         jobId,
         status: "queued",
-        source: "active_venues_apify_history",
+        source: "upcoming_convex_events",
         mode: "saved_posts",
-        handles: normalizedHandles,
+        handles: importSummary.handles,
         statusUrl: `/api/admin/scrape/jobs/${jobId}`,
       },
       { status: 202 },
@@ -137,11 +106,10 @@ export async function POST(request: Request) {
     const message =
       error instanceof Error
         ? error.message
-        : "Failed to import recent Apify runs for active venues.";
+        : "Failed to import upcoming Convex events.";
     logError("scrape_failed", {
-      source: "active_venues_apify_history",
+      source: "upcoming_convex_events",
       mode: "saved_posts",
-      runsLimit,
       errorStage,
       error: message,
     });

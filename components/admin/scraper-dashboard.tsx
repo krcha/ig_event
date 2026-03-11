@@ -13,6 +13,7 @@ type ScrapeSource =
   | "repair_active_venues"
   | "manual_apify_history"
   | "active_venues_apify_history"
+  | "upcoming_convex_events"
   | "csv_venue_names";
 
 type ScrapeSummaryPayload = {
@@ -47,7 +48,7 @@ type ScrapeJobPayload = {
 };
 
 const POLL_INTERVAL_MS = 2_000;
-const REPAIR_DAYS_BACK = 3;
+const SHORT_BACKFILL_DAYS = 3;
 type HandleSummary = IngestionSummary["handles"][number];
 
 const HANDLE_SUMMARY_METRICS: Array<{
@@ -137,6 +138,8 @@ function getSourceLabel(source: ScrapeSource | undefined): string {
       return "Recent Apify runs for pasted handles";
     case "active_venues_apify_history":
       return "Recent Apify runs for active venues";
+    case "upcoming_convex_events":
+      return "Upcoming Convex events";
     case "csv_venue_names":
       return "CSV venue-name reprocess";
     default:
@@ -244,13 +247,6 @@ export function ScraperDashboard() {
     );
   }
 
-  async function runRepairScraper() {
-    void runQueuedScraper("/api/admin/scrape/repair", {
-      ...(resultsLimit ? { resultsLimit } : {}),
-      daysBack: REPAIR_DAYS_BACK,
-    });
-  }
-
   function runManualApifyHistoryImport() {
     void runQueuedScraper("/api/admin/scrape/history", {
       handles,
@@ -259,10 +255,6 @@ export function ScraperDashboard() {
 
   function runActiveVenueApifyHistoryImport() {
     void runQueuedScraper("/api/admin/scrape/history/venues", {});
-  }
-
-  function runCsvVenueNameReprocess() {
-    void runQueuedScraper("/api/admin/scrape/venue-names", {});
   }
 
   function runActiveVenueScraper(mode: IngestionRunMode) {
@@ -346,15 +338,15 @@ export function ScraperDashboard() {
           <div>
             <h2 className="text-lg font-semibold">Run ingestion</h2>
             <p className="text-sm text-muted-foreground">
-              Choose the account set, then decide whether to fetch fresh Apify posts, reuse saved
-              ones, or import recent Apify history into Convex first.
+              Choose the account set, then start at the earliest pipeline step you still need.
+              Each lower action skips work that the one above it already covers.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
             {[
               ["Quick check", "5", "5"],
               ["Recent month", "10", "30"],
-              ["Repair window", "5", String(REPAIR_DAYS_BACK)],
+              ["3-day window", "5", String(SHORT_BACKFILL_DAYS)],
             ].map(([label, nextResults, nextDays]) => (
               <button
                 className="rounded-xl border border-border px-3 py-2 text-sm font-medium"
@@ -406,13 +398,12 @@ export function ScraperDashboard() {
             <div className="rounded-2xl border border-border bg-background/70 p-3 text-sm text-muted-foreground">
               <p>Handles entered: {handles.length}</p>
               <p>
-                Fresh scrape fetches posts from Apify and saves them. Saved posts skips Apify and
-                reruns AI extraction on cached posts.
+                Step 1 starts from a new Apify actor run, stores those posts, then creates draft
+                events.
               </p>
               <p className="mt-2">
-                Recent Apify history imports posts from the last 100 successful Apify runs into
-                Convex, then processes them as saved posts. This action ignores Results limit and
-                Days back.
+                Step 2 skips new actors and reuses posts from recent Apify runs. Step 3 skips
+                Apify entirely and reruns AI extraction on posts already saved in Convex.
               </p>
             </div>
           </div>
@@ -424,11 +415,15 @@ export function ScraperDashboard() {
           <div>
             <h2 className="text-lg font-semibold">Use pasted handles</h2>
             <p className="text-sm text-muted-foreground">
-              Best for testing one or a few Instagram accounts from the textarea above.
+              Best for testing one or a few Instagram accounts from the textarea above. Start later
+              only if the earlier data already exists.
             </p>
           </div>
           <div className="grid gap-3">
             <div className="rounded-2xl border border-border bg-card/90 p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                Step 1 · full pipeline
+              </p>
               <button
                 className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={isLoading || handles.length === 0}
@@ -437,30 +432,17 @@ export function ScraperDashboard() {
                 }}
                 type="button"
               >
-                {isLoading ? "Running..." : "Fetch fresh posts and create draft events"}
+                {isLoading ? "Running..." : "Run fresh Apify scrape and create draft events"}
               </button>
               <p className="mt-2 text-sm text-muted-foreground">
-                Scrapes Apify now, runs AI on the posters and captions, and writes draft events to
-                Convex.
+                Starts from a new Apify scrape, saves those posts, runs AI on the poster and
+                caption, and writes draft events to Convex.
               </p>
             </div>
             <div className="rounded-2xl border border-border bg-card/90 p-4">
-              <button
-                className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={isLoading || handles.length === 0}
-                onClick={() => {
-                  void runManualScraper("saved_posts");
-                }}
-                type="button"
-              >
-                {isLoading ? "Running..." : "Use saved posts and create draft events"}
-              </button>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Skips Apify and reruns AI extraction on posts that were already saved for these
-                handles.
+              <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                Step 2 · skip new Apify jobs
               </p>
-            </div>
-            <div className="rounded-2xl border border-border bg-card/90 p-4">
               <button
                 className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={isLoading || handles.length === 0}
@@ -469,107 +451,110 @@ export function ScraperDashboard() {
                 }}
                 type="button"
               >
-                {isLoading ? "Running..." : "Import recent Apify runs and create draft events"}
+                {isLoading ? "Running..." : "Reuse recent Apify runs and create draft events"}
               </button>
               <p className="mt-2 text-sm text-muted-foreground">
-                Pulls matching posts from the last 100 successful Apify runs into Convex first,
-                then reruns AI extraction without scraping again. Ignores Results limit and Days
+                Pulls matching posts from the last 300 successful Apify runs into Convex without
+                launching new actors, then reruns AI extraction. Ignores Results limit and Days
                 back.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-border bg-card/90 p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                Step 3 · saved posts only
+              </p>
+              <button
+                className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isLoading || handles.length === 0}
+                onClick={() => {
+                  void runManualScraper("saved_posts");
+                }}
+                type="button"
+              >
+                {isLoading ? "Running..." : "Reprocess saved posts into draft events"}
+              </button>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Starts from posts that are already saved for these handles in Convex and reruns AI
+                extraction without touching Apify.
               </p>
             </div>
           </div>
         </section>
 
-        <section className="space-y-4 rounded-2xl border border-border bg-background/70 p-4">
-          <div>
-            <h2 className="text-lg font-semibold">Use all active venues</h2>
-            <p className="text-sm text-muted-foreground">
-              Uses every active venue handle from the database. Best for production-wide runs.
-            </p>
-          </div>
-          <div className="grid gap-3">
-            <div className="rounded-2xl border border-border bg-card/90 p-4">
-              <button
-                className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={isLoading}
-                onClick={() => {
-                  runActiveVenueScraper("full_scrape");
-                }}
-                type="button"
-              >
-                {isLoading ? "Running..." : "Fetch fresh posts for all active venues"}
-              </button>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Runs a fresh Apify scrape for every active venue and creates draft events from the
-                new posts.
+        <div className="space-y-4">
+          <section className="space-y-4 rounded-2xl border border-border bg-background/70 p-4">
+            <div>
+              <h2 className="text-lg font-semibold">Use all active venues</h2>
+              <p className="text-sm text-muted-foreground">
+                Uses every active venue handle from the database. These are the only three
+                pipeline start points: fresh Apify run, existing Apify results, or saved posts.
               </p>
             </div>
-            <div className="rounded-2xl border border-border bg-card/90 p-4">
-              <button
-                className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={isLoading}
-                onClick={() => {
-                  runActiveVenueScraper("saved_posts");
-                }}
-                type="button"
-              >
-                {isLoading ? "Running..." : "Use saved posts for all active venues"}
-              </button>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Reruns AI extraction on cached posts for every active venue without fetching from
-                Apify again.
-              </p>
+            <div className="grid gap-3">
+              <div className="rounded-2xl border border-border bg-card/90 p-4">
+                <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                  Step 1 · full pipeline
+                </p>
+                <button
+                  className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isLoading}
+                  onClick={() => {
+                    runActiveVenueScraper("full_scrape");
+                  }}
+                  type="button"
+                >
+                  {isLoading
+                    ? "Running..."
+                    : "Run fresh Apify scrape for active venues not run in 24h"}
+                </button>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Runs a fresh Apify scrape for each active venue that has not had a full scrape
+                  attempt in the last 24 hours, stores those posts, then creates draft events from
+                  the new data.
+                </p>
+              </div>
+              <div className="rounded-2xl border border-border bg-card/90 p-4">
+                <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                  Step 2 · skip new Apify jobs
+                </p>
+                <button
+                  className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isLoading}
+                  onClick={() => {
+                    runActiveVenueApifyHistoryImport();
+                  }}
+                  type="button"
+                >
+                  {isLoading ? "Running..." : "Reuse recent Apify runs for all active venues"}
+                </button>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Starts one step later: pulls posts from the last 300 successful Apify runs into
+                  Convex without launching new actors, then processes them as saved posts. Ignores
+                  Results limit and Days back.
+                </p>
+              </div>
+              <div className="rounded-2xl border border-border bg-card/90 p-4">
+                <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                  Step 3 · saved posts only
+                </p>
+                <button
+                  className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isLoading}
+                  onClick={() => {
+                    runActiveVenueScraper("saved_posts");
+                  }}
+                  type="button"
+                >
+                  {isLoading ? "Running..." : "Reprocess saved posts for all active venues"}
+                </button>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Starts from cached posts that are already saved in Convex for every active venue
+                  and reruns AI extraction without touching Apify.
+                </p>
+              </div>
             </div>
-            <div className="rounded-2xl border border-border bg-card/90 p-4">
-              <button
-                className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={isLoading}
-                onClick={() => {
-                  runActiveVenueApifyHistoryImport();
-                }}
-                type="button"
-              >
-                {isLoading ? "Running..." : "Import recent Apify runs for all active venues"}
-              </button>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Pulls posts from the last 100 successful Apify runs into Convex for every active
-                venue, then processes them as saved posts. Ignores Results limit and Days back.
-              </p>
-            </div>
-            <div className="rounded-2xl border border-border bg-card/90 p-4">
-              <button
-                className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={isLoading}
-                onClick={() => {
-                  void runRepairScraper();
-                }}
-                type="button"
-              >
-                {isLoading ? "Running..." : "Repair venue events (3 days)"}
-              </button>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Runs a focused three-day backfill for active venues to revisit recent posts and
-                repair bad event data.
-              </p>
-            </div>
-            <div className="rounded-2xl border border-border bg-card/90 p-4">
-              <button
-                className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={isLoading}
-                onClick={() => {
-                  runCsvVenueNameReprocess();
-                }}
-                type="button"
-              >
-                {isLoading ? "Running..." : "Reprocess CSV venue names"}
-              </button>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Loads handles from <code>data/venue-name-overrides.csv</code>, skips Apify, and
-                reruns saved-post processing so listed handles use the CSV venue name.
-              </p>
-            </div>
-          </div>
-        </section>
+          </section>
+        </div>
       </div>
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}

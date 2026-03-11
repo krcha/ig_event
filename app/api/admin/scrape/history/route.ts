@@ -14,7 +14,7 @@ type Body = {
   runsLimit?: number;
 };
 
-const DEFAULT_RUNS_LIMIT = 100;
+const DEFAULT_RUNS_LIMIT = 300;
 const DEFAULT_BATCH_SIZE = 2;
 const createIngestionJobMutation =
   "ingestionJobs:createJob" as unknown as FunctionReference<"mutation">;

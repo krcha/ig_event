@@ -119,6 +119,16 @@ export type RecentApifyImportSummary = {
   handlesWithImportedPosts: number;
 };
 
+export type ExistingEventImportSummary = {
+  handles: string[];
+  importedPosts: number;
+  handlesWithImportedPosts: number;
+  scannedEvents: number;
+  skippedPastEvents: number;
+  skippedMissingVenue: number;
+  skippedMissingSource: number;
+};
+
 type IngestionVenueContext = {
   canonicalVenueNamesByHandle: Record<string, string>;
   venueNameOverridesByHandle: Record<string, string>;
@@ -133,6 +143,8 @@ const listByInstagramPostIdQuery =
   "events:listByInstagramPostId" as unknown as FunctionReference<"query">;
 const listByInstagramPostUrlQuery =
   "events:listByInstagramPostUrl" as unknown as FunctionReference<"query">;
+const listByStatusQuery =
+  "events:listByStatus" as unknown as FunctionReference<"query">;
 const listByDateQuery =
   "events:listByDate" as unknown as FunctionReference<"query">;
 const createEventMutation =
@@ -149,6 +161,7 @@ const upsertScrapedPostsByHandleMutation =
   "scrapedPosts:upsertManyByHandle" as unknown as FunctionReference<"mutation">;
 const SCRAPED_POST_UPSERT_BATCH_SIZE = 25;
 const DIRECT_FULL_SCRAPE_CONCURRENCY = 4;
+const EXISTING_EVENT_IMPORT_LIMIT_PER_STATUS = 1000;
 const STATIC_VENUE_BY_HANDLE: Record<string, string> = {
   "20_44.nightclub": "Klub 20/44",
   kcgrad: "KC Grad",
@@ -431,10 +444,26 @@ function getConvexClient(): ConvexHttpClient {
 }
 
 type ActiveVenueRecord = {
+  name: string;
   instagramHandle: string;
 };
 
 type VenueRecord = CanonicalVenueRecord;
+
+type EventImportRecord = {
+  _id: string;
+  title: string;
+  date: string;
+  time?: string;
+  venue: string;
+  artists: string[];
+  description?: string;
+  imageUrl?: string;
+  instagramPostUrl?: string;
+  instagramPostId?: string;
+  sourceCaption?: string;
+  sourcePostedAt?: string;
+};
 
 type SavedScrapedPostRecord = {
   handle: string;
@@ -1258,6 +1287,122 @@ function normalizeScrapedPost(post: InstagramScrapedPost): InstagramScrapedPost 
     postedAt: normalizeString(post.postedAt) || null,
     username: normalizeString(post.username) || post.username,
   };
+}
+
+function buildVenueHandleByCanonicalVenueName(
+  canonicalVenueNamesByHandle: Record<string, string>,
+): Map<string, string> {
+  const handlesByVenueName = new Map<string, string>();
+
+  for (const [handle, venueName] of Object.entries(canonicalVenueNamesByHandle)) {
+    const key = toSearchableText(venueName);
+    if (!key || handlesByVenueName.has(key)) {
+      continue;
+    }
+    handlesByVenueName.set(key, handle);
+  }
+
+  return handlesByVenueName;
+}
+
+function buildSyntheticVenueHandle(venue: string, fallbackId: string): string {
+  const normalizedVenue = toSearchableText(venue).replace(/\s+/g, "_");
+  return normalizedVenue ? `event_import_${normalizedVenue}` : `event_import_${fallbackId}`;
+}
+
+function resolveImportedEventHandle(
+  venue: string,
+  fallbackId: string,
+  canonicalVenueNamesByHandle: Record<string, string>,
+  handlesByVenueName: Map<string, string>,
+): string {
+  const canonicalVenueName = canonicalizeVenueName(venue, canonicalVenueNamesByHandle, {
+    staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+  });
+  if (canonicalVenueName) {
+    const matchedHandle = handlesByVenueName.get(toSearchableText(canonicalVenueName));
+    if (matchedHandle) {
+      return matchedHandle;
+    }
+  }
+
+  return buildSyntheticVenueHandle(venue, fallbackId);
+}
+
+function buildImportedEventFallbackText(event: EventImportRecord): string | null {
+  const lines = [
+    normalizeString(event.title),
+    normalizeExtractedArtists(event.artists).join(", "),
+    normalizeString(event.venue),
+    [normalizeString(event.date), normalizeString(event.time)].filter(Boolean).join(" "),
+    normalizeString(event.description),
+  ].filter((value) => value.length > 0);
+
+  if (lines.length > 0) {
+    return lines.join("\n");
+  }
+
+  const minimalTitle = normalizeString(event.title) || `Event ${event._id}`;
+  const minimalDate = normalizeString(event.date) || "Date TBA";
+  const minimalVenue = normalizeString(event.venue) || "Venue TBA";
+  return [minimalTitle, minimalVenue, minimalDate].join("\n");
+}
+
+function buildImportedEventInstagramPostUrl(event: EventImportRecord): string {
+  const existingUrl = normalizeString(event.instagramPostUrl);
+  if (existingUrl) {
+    return existingUrl;
+  }
+
+  const postId = normalizeString(event.instagramPostId);
+  if (postId) {
+    return `https://www.instagram.com/p/${postId}/`;
+  }
+
+  return `https://www.instagram.com/p/event-${event._id}/`;
+}
+
+function mapImportedEventToSavedScrapedPost(
+  event: EventImportRecord,
+  handle: string,
+): InstagramScrapedPost | null {
+  const fallbackText = buildImportedEventFallbackText(event);
+  const instagramPostUrl = buildImportedEventInstagramPostUrl(event);
+  const imageUrl = normalizeString(event.imageUrl);
+  const postId =
+    normalizeString(event.instagramPostId) ||
+    extractShortcodeFromPostUrl(instagramPostUrl) ||
+    `event_${event._id}`;
+  const caption = normalizeString(event.sourceCaption) || fallbackText;
+
+  return normalizeScrapedPost({
+    postId,
+    caption: caption || null,
+    altText: !imageUrl ? fallbackText : null,
+    imageUrl: imageUrl || null,
+    imageUrls: imageUrl ? [imageUrl] : [],
+    postType: imageUrl ? "image" : "video",
+    locationName: normalizeString(event.venue) || null,
+    instagramPostUrl,
+    postedAt: normalizeString(event.sourcePostedAt) || null,
+    username: handle,
+  });
+}
+
+function scoreSavedScrapedPostCandidate(post: InstagramScrapedPost): number {
+  let score = 0;
+
+  if (post.imageUrl) {
+    score += 30;
+  }
+  if (post.caption) {
+    score += 20 + Math.min(post.caption.length, 500) / 50;
+  }
+  if (post.postedAt) {
+    score += 5;
+  }
+
+  return score;
 }
 
 function parseJsonRecord(value: string | undefined): Record<string, unknown> | null {
@@ -3500,6 +3645,97 @@ export async function importRecentApifyRunPostsToSavedPosts(options: {
     runsScanned: importResult.runsScanned,
     importedPosts: importResult.importedPosts,
     handlesWithImportedPosts,
+  };
+}
+
+export async function importUpcomingEventsToSavedPosts(): Promise<ExistingEventImportSummary> {
+  const client = getConvexClient();
+  const venues = (await client.query(listVenuesQuery, {})) as VenueRecord[];
+  const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle(venues);
+  const handlesByVenueName = buildVenueHandleByCanonicalVenueName(
+    canonicalVenueNamesByHandle,
+  );
+  const todayIsoDate = getIsoDateInTimeZone(getConfiguredEventTimezone());
+
+  const [approvedEvents, pendingEvents] = await Promise.all([
+    client.query(listByStatusQuery, {
+      status: "approved",
+      limit: EXISTING_EVENT_IMPORT_LIMIT_PER_STATUS,
+    }) as Promise<EventImportRecord[]>,
+    client.query(listByStatusQuery, {
+      status: "pending",
+      limit: EXISTING_EVENT_IMPORT_LIMIT_PER_STATUS,
+    }) as Promise<EventImportRecord[]>,
+  ]);
+
+  const postsByHandle = new Map<string, Map<string, InstagramScrapedPost>>();
+  let skippedPastEvents = 0;
+  let skippedMissingVenue = 0;
+  let skippedMissingSource = 0;
+
+  for (const event of [...approvedEvents, ...pendingEvents]) {
+    if (normalizeString(event.date) < todayIsoDate) {
+      skippedPastEvents += 1;
+      continue;
+    }
+
+    const venue = normalizeString(event.venue);
+    if (!venue) {
+      skippedMissingVenue += 1;
+      continue;
+    }
+
+    const matchedHandle = resolveImportedEventHandle(
+      venue,
+      event._id,
+      canonicalVenueNamesByHandle,
+      handlesByVenueName,
+    );
+    const post = mapImportedEventToSavedScrapedPost(event, matchedHandle);
+    if (!post) {
+      skippedMissingSource += 1;
+      continue;
+    }
+
+    const sourceIdentityKey = getSourceIdentityKey(post);
+    if (!sourceIdentityKey) {
+      skippedMissingSource += 1;
+      continue;
+    }
+
+    const postsForHandle = postsByHandle.get(matchedHandle) ?? new Map<string, InstagramScrapedPost>();
+    const existingPost = postsForHandle.get(sourceIdentityKey);
+    if (
+      !existingPost ||
+      scoreSavedScrapedPostCandidate(post) > scoreSavedScrapedPostCandidate(existingPost)
+    ) {
+      postsForHandle.set(sourceIdentityKey, post);
+    }
+    postsByHandle.set(matchedHandle, postsForHandle);
+  }
+
+  let importedPosts = 0;
+  const importedHandles: string[] = [];
+
+  for (const [handle, postsForHandle] of postsByHandle.entries()) {
+    const posts = [...postsForHandle.values()];
+    if (posts.length === 0) {
+      continue;
+    }
+
+    await persistScrapedPostsForHandle(client, handle, posts);
+    importedHandles.push(handle);
+    importedPosts += posts.length;
+  }
+
+  return {
+    handles: importedHandles,
+    importedPosts,
+    handlesWithImportedPosts: importedHandles.length,
+    scannedEvents: approvedEvents.length + pendingEvents.length,
+    skippedPastEvents,
+    skippedMissingVenue,
+    skippedMissingSource,
   };
 }
 

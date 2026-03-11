@@ -8,6 +8,10 @@ import {
   getActiveVenueHandles,
   type IngestionRunMode,
 } from "@/lib/pipeline/run-instagram-ingestion";
+import {
+  FULL_SCRAPE_COOLDOWN_MS,
+  getRecentlyAttemptedFullScrapeHandles,
+} from "@/lib/pipeline/recent-full-scrape-handles";
 import { getRequiredEnv, hasClerkEnv } from "@/lib/utils/env";
 
 type Body = {
@@ -20,6 +24,7 @@ type ActiveVenueErrorStep =
   | "auth_check"
   | "parse_body"
   | "load_active_venues"
+  | "filter_recent_full_scrapes"
   | "enqueue_active_venue_job";
 
 const DEFAULT_BATCH_SIZE = 2;
@@ -89,8 +94,8 @@ export async function POST(request: Request) {
     const daysBack = normalizePositiveInt(body.daysBack);
 
     step = "load_active_venues";
-    handles = await getActiveVenueHandles();
-    if (handles.length === 0) {
+    const activeVenueHandles = await getActiveVenueHandles();
+    if (activeVenueHandles.length === 0) {
       return NextResponse.json(
         {
           errorStep: "load_active_venues",
@@ -98,6 +103,28 @@ export async function POST(request: Request) {
         },
         { status: 400 },
       );
+    }
+
+    handles = activeVenueHandles;
+
+    if (mode === "full_scrape") {
+      step = "filter_recent_full_scrapes";
+      const recentlyAttemptedHandles = await getRecentlyAttemptedFullScrapeHandles({
+        candidateHandles: activeVenueHandles,
+        minCreatedAt: Date.now() - FULL_SCRAPE_COOLDOWN_MS,
+      });
+      const recentHandleSet = new Set(recentlyAttemptedHandles);
+      handles = activeVenueHandles.filter((handle) => !recentHandleSet.has(handle));
+
+      if (handles.length === 0) {
+        return NextResponse.json(
+          {
+            errorStep: "filter_recent_full_scrapes",
+            error: "All active venues have already had a fresh scrape attempt in the last 24 hours.",
+          },
+          { status: 400 },
+        );
+      }
     }
 
     step = "enqueue_active_venue_job";
