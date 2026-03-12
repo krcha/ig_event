@@ -1,6 +1,14 @@
-import { mutation, query } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
+import {
+  formatMinutesSinceMidnight,
+  getConfiguredEventTimezone,
+  getEventExpiryCutoff,
+  isEventExpiredAtCutoff,
+} from "../lib/events/event-retention";
 
 const eventStatus = v.union(
   v.literal("pending"),
@@ -8,6 +16,32 @@ const eventStatus = v.union(
   v.literal("rejected"),
 );
 const moderationStatus = v.union(v.literal("approved"), v.literal("rejected"));
+const DEFAULT_EXPIRED_EVENT_DELETE_BATCH_SIZE = 100;
+
+function normalizeExpiredEventDeleteBatchSize(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_EXPIRED_EVENT_DELETE_BATCH_SIZE;
+  }
+
+  return Math.max(1, Math.min(500, Math.trunc(value as number)));
+}
+
+async function deleteEventWithSavedReferences(
+  ctx: MutationCtx,
+  eventId: Id<"events">,
+): Promise<number> {
+  const savedEvents = await ctx.db
+    .query("userSavedEvents")
+    .withIndex("by_event", (q) => q.eq("eventId", eventId))
+    .collect();
+
+  for (const savedEvent of savedEvents) {
+    await ctx.db.delete(savedEvent._id);
+  }
+
+  await ctx.db.delete(eventId);
+  return savedEvents.length;
+}
 
 export const getEvent = query({
   args: { id: v.id("events") },
@@ -256,7 +290,7 @@ export const deleteApprovedEvent = mutation({
       throw new Error("Only approved events can be removed.");
     }
 
-    await ctx.db.delete(args.id);
+    await deleteEventWithSavedReferences(ctx, args.id);
   },
 });
 
@@ -305,12 +339,70 @@ export const mergeApprovedEvents = mutation({
     }
 
     for (const duplicateId of duplicateIds) {
-      await ctx.db.delete(duplicateId);
+      await deleteEventWithSavedReferences(ctx, duplicateId);
     }
 
     return {
       primaryId: args.primaryId,
       deletedDuplicateCount: duplicateIds.length,
+    };
+  },
+});
+
+export const deleteExpiredEvents = internalMutation({
+  args: {
+    batchSize: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const batchSize = normalizeExpiredEventDeleteBatchSize(args.batchSize);
+    const timeZone = getConfiguredEventTimezone();
+    const cutoff = getEventExpiryCutoff(new Date(), timeZone);
+    const eventsBeforeCutoffDate = await ctx.db
+      .query("events")
+      .withIndex("by_date", (q) => q.lt("date", cutoff.isoDate))
+      .take(batchSize);
+
+    const deletedEventIds: Id<"events">[] = [];
+    let deletedSavedEventCount = 0;
+
+    for (const event of eventsBeforeCutoffDate) {
+      deletedSavedEventCount += await deleteEventWithSavedReferences(ctx, event._id);
+      deletedEventIds.push(event._id);
+    }
+
+    const remainingSlots = batchSize - deletedEventIds.length;
+    let skippedSameDayEventCount = 0;
+    let sameDayExpiredEventCount = 0;
+
+    if (remainingSlots > 0) {
+      const eventsOnCutoffDate = await ctx.db
+        .query("events")
+        .withIndex("by_date", (q) => q.eq("date", cutoff.isoDate))
+        .collect();
+      const sameDayExpiredEvents = eventsOnCutoffDate.filter((event) =>
+        isEventExpiredAtCutoff(event, cutoff),
+      );
+
+      sameDayExpiredEventCount = sameDayExpiredEvents.length;
+      skippedSameDayEventCount = Math.max(0, sameDayExpiredEvents.length - remainingSlots);
+
+      for (const event of sameDayExpiredEvents.slice(0, remainingSlots)) {
+        deletedSavedEventCount += await deleteEventWithSavedReferences(ctx, event._id);
+        deletedEventIds.push(event._id);
+      }
+    }
+
+    return {
+      deletedEventCount: deletedEventIds.length,
+      deletedEventIds,
+      deletedSavedEventCount,
+      cutoffDate: cutoff.isoDate,
+      cutoffTime: formatMinutesSinceMidnight(cutoff.minutesSinceMidnight),
+      timeZone,
+      hasMore:
+        eventsBeforeCutoffDate.length === batchSize || skippedSameDayEventCount > 0,
+      skippedSameDayEventCount,
+      sameDayExpiredEventCount,
     };
   },
 });
