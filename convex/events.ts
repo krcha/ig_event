@@ -1,4 +1,5 @@
 import { mutation, query } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 
 const eventStatus = v.union(
@@ -85,6 +86,21 @@ export const listByStatus = query({
       .withIndex("by_status", (q) => q.eq("status", args.status))
       .order("desc")
       .take(limit);
+  },
+});
+
+export const listApprovedUpcomingByDatePaginated = query({
+  args: {
+    fromDate: v.string(),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    return ctx.db
+      .query("events")
+      .withIndex("by_status_date", (q) =>
+        q.eq("status", "approved").gte("date", args.fromDate),
+      )
+      .paginate(args.paginationOpts);
   },
 });
 

@@ -3,8 +3,11 @@ import "server-only";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { unstable_noStore as noStore } from "next/cache";
+import { toSearchableText } from "@/lib/pipeline/venue-normalization";
 
 export type EventStatus = "pending" | "approved" | "rejected";
+const DEFAULT_PUBLIC_EVENTS_PAGE_SIZE = 24;
+const APPROVED_EVENTS_SCAN_BATCH_SIZE = 100;
 
 export type PublicEvent = {
   _id: string;
@@ -20,8 +23,30 @@ export type PublicEvent = {
   status: EventStatus;
 };
 
-const listByStatusQuery =
-  "events:listByStatus" as unknown as FunctionReference<"query">;
+type PaginatedEventsResponse = {
+  page: PublicEvent[];
+  continueCursor: string;
+  isDone: boolean;
+};
+
+export type PublicEventsPageResult = {
+  events: PublicEvent[];
+  page: number;
+  pageSize: number;
+  searchQuery: string;
+  hasPreviousPage: boolean;
+  hasNextPage: boolean;
+  error?: string;
+};
+
+type LoadUpcomingApprovedEventsPageOptions = {
+  page?: number;
+  pageSize?: number;
+  searchQuery?: string;
+};
+
+const listApprovedUpcomingByDatePaginatedQuery =
+  "events:listApprovedUpcomingByDatePaginated" as unknown as FunctionReference<"query">;
 
 export function parseNormalizedEventDate(value: string): Date | null {
   const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -50,6 +75,12 @@ export function getStartOfLocalToday(): Date {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate());
 }
 
+function formatLocalDate(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
+    date.getDate(),
+  ).padStart(2, "0")}`;
+}
+
 export function parseEventTimeMinutes(value: string | undefined): number {
   if (!value) {
     return 0;
@@ -73,87 +104,75 @@ export function parseEventTimeMinutes(value: string | undefined): number {
   return hours * 60 + minutes;
 }
 
-function logFilteredOutEvent(
-  event: PublicEvent,
-  reason: "not_approved" | "past_date" | "invalid_normalized_date",
-) {
-  console.info(
-    JSON.stringify({
-      level: "info",
-      event: "public_events.filtered_out",
-      reason,
-      eventId: event._id,
-      title: event.title,
-      status: event.status,
-      eventDate: event.date,
-      eventTime: event.time ?? null,
-      sourcePostedAt: event.sourcePostedAt ?? null,
-    }),
-  );
-}
-
-export function filterUpcomingApprovedEvents(events: PublicEvent[]): PublicEvent[] {
-  const startOfToday = getStartOfLocalToday();
-  const upcomingEvents: PublicEvent[] = [];
-  let filteredNotApproved = 0;
-  let filteredInvalidDate = 0;
-  let filteredPastDate = 0;
-  let approvedEvents = 0;
-
-  for (const event of events) {
-    if (event.status !== "approved") {
-      filteredNotApproved += 1;
-      logFilteredOutEvent(event, "not_approved");
-      continue;
-    }
-
-    approvedEvents += 1;
-
-    const parsedDate = parseNormalizedEventDate(event.date);
-    if (!parsedDate) {
-      filteredInvalidDate += 1;
-      logFilteredOutEvent(event, "invalid_normalized_date");
-      continue;
-    }
-
-    if (parsedDate < startOfToday) {
-      filteredPastDate += 1;
-      logFilteredOutEvent(event, "past_date");
-      continue;
-    }
-
-    upcomingEvents.push(event);
+function comparePublicEvents(left: PublicEvent, right: PublicEvent): number {
+  const dateResult = left.date.localeCompare(right.date);
+  if (dateResult !== 0) {
+    return dateResult;
   }
 
-  upcomingEvents.sort((left, right) => {
-    const leftDate = parseNormalizedEventDate(left.date);
-    const rightDate = parseNormalizedEventDate(right.date);
-    const leftTime = parseEventTimeMinutes(left.time);
-    const rightTime = parseEventTimeMinutes(right.time);
-    const leftScore =
-      (leftDate ? leftDate.getTime() : Number.MAX_SAFE_INTEGER) +
-      leftTime * 60 * 1000;
-    const rightScore =
-      (rightDate ? rightDate.getTime() : Number.MAX_SAFE_INTEGER) +
-      rightTime * 60 * 1000;
-    return leftScore - rightScore;
-  });
+  const timeResult = parseEventTimeMinutes(left.time) - parseEventTimeMinutes(right.time);
+  if (timeResult !== 0) {
+    return timeResult;
+  }
 
-  console.info(
-    JSON.stringify({
-      level: "info",
-      event: "public_events.filter_summary",
-      totalFetchedEvents: events.length,
-      approvedEvents,
-      upcomingEvents: upcomingEvents.length,
-      filteredNotApproved,
-      filteredInvalidDate,
-      filteredPastDate,
-      localToday: startOfToday.toISOString(),
-    }),
+  const titleResult = left.title.localeCompare(right.title, undefined, {
+    sensitivity: "base",
+  });
+  if (titleResult !== 0) {
+    return titleResult;
+  }
+
+  return left._id.localeCompare(right._id);
+}
+
+function normalizePublicEventsPage(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return 1;
+  }
+  return Math.max(1, Math.trunc(value as number));
+}
+
+function normalizePublicEventsPageSize(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_PUBLIC_EVENTS_PAGE_SIZE;
+  }
+  return Math.max(1, Math.min(100, Math.trunc(value as number)));
+}
+
+function normalizeSearchQuery(value: string | undefined): string {
+  return value?.trim() ?? "";
+}
+
+function matchesPublicEventSearch(event: PublicEvent, searchQuery: string): boolean {
+  if (!searchQuery) {
+    return true;
+  }
+
+  const searchableEventText = toSearchableText(
+    [
+      event.title,
+      event.venue,
+      event.eventType,
+      event.ticketPrice ?? "",
+      event.artists.join(" "),
+    ].join(" "),
   );
 
-  return upcomingEvents;
+  return searchableEventText.includes(toSearchableText(searchQuery));
+}
+
+async function loadApprovedUpcomingEventPage(
+  convex: ConvexHttpClient,
+  cursor: string | null,
+  numItems: number,
+): Promise<PaginatedEventsResponse> {
+  return (await convex.query(listApprovedUpcomingByDatePaginatedQuery, {
+    fromDate: formatLocalDate(getStartOfLocalToday()),
+    paginationOpts: {
+      cursor,
+      numItems,
+    },
+  })) as PaginatedEventsResponse;
 }
 
 export async function loadUpcomingApprovedEvents(): Promise<{
@@ -169,12 +188,25 @@ export async function loadUpcomingApprovedEvents(): Promise<{
 
   try {
     const convex = new ConvexHttpClient(convexUrl);
-    const events = (await convex.query(listByStatusQuery, {
-      status: "approved",
-      limit: 500,
-    })) as PublicEvent[];
+    const events: PublicEvent[] = [];
+    let cursor: string | null = null;
 
-    return { events: filterUpcomingApprovedEvents(events) };
+    while (true) {
+      const page = await loadApprovedUpcomingEventPage(
+        convex,
+        cursor,
+        APPROVED_EVENTS_SCAN_BATCH_SIZE,
+      );
+      events.push(...page.page);
+
+      if (page.isDone) {
+        break;
+      }
+
+      cursor = page.continueCursor;
+    }
+
+    return { events: [...events].sort(comparePublicEvents) };
   } catch (error) {
     return {
       events: [],
@@ -182,6 +214,92 @@ export async function loadUpcomingApprovedEvents(): Promise<{
         error instanceof Error
           ? error.message
           : "Failed to load approved events.",
+    };
+  }
+}
+
+export async function loadUpcomingApprovedEventsPage(
+  options: LoadUpcomingApprovedEventsPageOptions = {},
+): Promise<PublicEventsPageResult> {
+  noStore();
+
+  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
+  const page = normalizePublicEventsPage(options.page);
+  const pageSize = normalizePublicEventsPageSize(options.pageSize);
+  const searchQuery = normalizeSearchQuery(options.searchQuery);
+
+  if (!convexUrl) {
+    return {
+      events: [],
+      page,
+      pageSize,
+      searchQuery,
+      hasPreviousPage: page > 1,
+      hasNextPage: false,
+      error: "Convex is not configured yet.",
+    };
+  }
+
+  try {
+    const convex = new ConvexHttpClient(convexUrl);
+    const offset = (page - 1) * pageSize;
+    const pageEvents: PublicEvent[] = [];
+    let matchedCount = 0;
+    let cursor: string | null = null;
+    let hasNextPage = false;
+
+    while (true) {
+      const result = await loadApprovedUpcomingEventPage(
+        convex,
+        cursor,
+        APPROVED_EVENTS_SCAN_BATCH_SIZE,
+      );
+
+      for (const event of result.page) {
+        if (!matchesPublicEventSearch(event, searchQuery)) {
+          continue;
+        }
+
+        if (matchedCount < offset) {
+          matchedCount += 1;
+          continue;
+        }
+
+        if (pageEvents.length < pageSize) {
+          pageEvents.push(event);
+          matchedCount += 1;
+          continue;
+        }
+
+        hasNextPage = true;
+        break;
+      }
+
+      if (hasNextPage || result.isDone) {
+        break;
+      }
+
+      cursor = result.continueCursor;
+    }
+
+    return {
+      events: [...pageEvents].sort(comparePublicEvents),
+      page,
+      pageSize,
+      searchQuery,
+      hasPreviousPage: page > 1,
+      hasNextPage,
+    };
+  } catch (error) {
+    return {
+      events: [],
+      page,
+      pageSize,
+      searchQuery,
+      hasPreviousPage: page > 1,
+      hasNextPage: false,
+      error:
+        error instanceof Error ? error.message : "Failed to load approved events.",
     };
   }
 }

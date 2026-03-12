@@ -48,6 +48,7 @@ NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
 CLERK_SECRET_KEY=
 NEXT_PUBLIC_CONVEX_URL=
 CONVEX_DEPLOYMENT=
+ADMIN_CLERK_USER_IDS=
 OPENAI_API_KEY=
 APIFY_API_TOKEN=
 APIFY_INSTAGRAM_ACTOR_ID=apify/instagram-post-scraper
@@ -60,6 +61,7 @@ Notes:
 
 - `CRON_SECRET` protects the cron ingestion route when set.
 - `EVENTS_TIMEZONE` controls local event-day handling.
+- `ADMIN_CLERK_USER_IDS` is a comma- or space-separated allowlist for showing admin UI.
 
 ## Useful Scripts
 

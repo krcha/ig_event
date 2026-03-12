@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ArrowRight, CalendarDays, ShieldCheck, Sparkles } from "lucide-react";
+import { isViewerAdmin } from "@/lib/auth/admin";
 
 const HOME_ACTIONS = [
   {
@@ -22,7 +23,12 @@ const HOME_ACTIONS = [
   },
 ] as const;
 
-export default function HomePage() {
+export default async function HomePage() {
+  const showAdminActions = await isViewerAdmin();
+  const homeActions = showAdminActions
+    ? HOME_ACTIONS
+    : HOME_ACTIONS.filter((action) => action.href !== "/admin");
+
   return (
     <main className="app-page justify-center">
       <section className="hero-panel relative px-7 py-10 sm:px-10 sm:py-12">
@@ -79,7 +85,7 @@ export default function HomePage() {
       </section>
 
       <section className="grid gap-4 lg:grid-cols-3">
-        {HOME_ACTIONS.map((action) => {
+        {homeActions.map((action) => {
           const Icon = action.icon;
 
           return (

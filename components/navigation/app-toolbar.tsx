@@ -14,7 +14,7 @@ type ToolbarItem = {
   match: "exact" | "prefix";
 };
 
-const TOOLBAR_ITEMS: ToolbarItem[] = [
+const PUBLIC_TOOLBAR_ITEMS: ToolbarItem[] = [
   {
     href: "/",
     label: "Home",
@@ -33,6 +33,9 @@ const TOOLBAR_ITEMS: ToolbarItem[] = [
     icon: CalendarDays,
     match: "prefix",
   },
+];
+
+const ADMIN_TOOLBAR_ITEMS: ToolbarItem[] = [
   {
     href: "/admin",
     label: "Moderation",
@@ -64,9 +67,16 @@ function isAuthRoute(pathname: string): boolean {
   return pathname.startsWith("/sign-in") || pathname.startsWith("/sign-up");
 }
 
-export function AppToolbar() {
+type AppToolbarProps = {
+  showAdminNavigation?: boolean;
+};
+
+export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
   const pathname = usePathname();
   const [isHidden, setIsHidden] = useState(false);
+  const toolbarItems = showAdminNavigation
+    ? [...PUBLIC_TOOLBAR_ITEMS, ...ADMIN_TOOLBAR_ITEMS]
+    : PUBLIC_TOOLBAR_ITEMS;
 
   useEffect(() => {
     let lastScrollY = window.scrollY;
@@ -113,7 +123,7 @@ export function AppToolbar() {
               aria-label="Global"
               className="flex flex-wrap items-center gap-1.5 lg:justify-end"
             >
-              {TOOLBAR_ITEMS.map((item) => {
+              {toolbarItems.map((item) => {
                 const Icon = item.icon;
                 const active = isActivePath(pathname, item);
 

@@ -1,13 +1,50 @@
 import Link from "next/link";
 import { ArrowRight, CalendarDays } from "lucide-react";
 import { ApprovedEventsDedupeButton } from "@/components/events/approved-events-dedupe-button";
+import { isViewerAdmin } from "@/lib/auth/admin";
 import {
-  loadUpcomingApprovedEvents,
+  loadUpcomingApprovedEventsPage,
   parseNormalizedEventDate,
 } from "@/lib/events/public-events";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
+const EVENTS_PAGE_SIZE = 24;
+
+type EventsSearchParams = {
+  page?: string | string[];
+  q?: string | string[];
+};
+
+type EventsPageProps = {
+  searchParams?: EventsSearchParams;
+};
+
+function getSingleValue(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+
+  return value;
+}
+
+function parsePageParam(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? "1", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function buildQueryString(params: Record<string, string | undefined>): string {
+  const query = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(params)) {
+    if (value) {
+      query.set(key, value);
+    }
+  }
+
+  const value = query.toString();
+  return value ? `?${value}` : "";
+}
 
 function formatEventDate(value: string): string {
   const parsed = parseNormalizedEventDate(value);
@@ -26,11 +63,26 @@ function formatEventTime(value: string | undefined): string {
   return value ?? "Time TBA";
 }
 
-export default async function EventsPage() {
-  const { events, error } = await loadUpcomingApprovedEvents();
+export default async function EventsPage({ searchParams }: EventsPageProps) {
+  const page = parsePageParam(getSingleValue(searchParams?.page));
+  const searchQuery = getSingleValue(searchParams?.q)?.trim() ?? "";
+  const [showAdminActions, pageResult] = await Promise.all([
+    isViewerAdmin(),
+    loadUpcomingApprovedEventsPage({
+      page,
+      pageSize: EVENTS_PAGE_SIZE,
+      searchQuery,
+    }),
+  ]);
+  const { events, error, hasNextPage, hasPreviousPage } = pageResult;
   const venueCount = new Set(events.map((event) => event.venue)).size;
   const typeCount = new Set(events.map((event) => event.eventType)).size;
-  const nextEvent = events[0] ?? null;
+  const nextEvent = page === 1 && searchQuery.length === 0 ? (events[0] ?? null) : null;
+  const rangeStart = events.length > 0 ? (page - 1) * EVENTS_PAGE_SIZE + 1 : 0;
+  const rangeEnd = events.length > 0 ? rangeStart + events.length - 1 : 0;
+  const paginationBaseParams = {
+    ...(searchQuery ? { q: searchQuery } : {}),
+  };
 
   return (
     <main className="app-page">
@@ -40,7 +92,7 @@ export default async function EventsPage() {
             <p className="section-kicker">Approved event feed</p>
             <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Upcoming events</h1>
             <p className="max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
-              A simple event table so date, venue, type, and price are easy to scan at a glance.
+              Search, page through, and scan approved events without relying on a fixed fetch cap.
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
@@ -53,19 +105,19 @@ export default async function EventsPage() {
 
         <div className="mt-6 grid gap-3 sm:grid-cols-3">
           <div className="metric-card">
-            <p className="section-kicker">Upcoming</p>
+            <p className="section-kicker">Shown</p>
             <p className="mt-3 text-3xl font-semibold tracking-tight">{events.length}</p>
-            <p className="mt-2 text-sm text-muted-foreground">Approved events currently in the list.</p>
+            <p className="mt-2 text-sm text-muted-foreground">Matching events on this page.</p>
           </div>
           <div className="metric-card">
             <p className="section-kicker">Venues</p>
             <p className="mt-3 text-3xl font-semibold tracking-tight">{venueCount}</p>
-            <p className="mt-2 text-sm text-muted-foreground">Distinct venues in the feed.</p>
+            <p className="mt-2 text-sm text-muted-foreground">Distinct venues on this page.</p>
           </div>
           <div className="metric-card">
             <p className="section-kicker">Types</p>
             <p className="mt-3 text-3xl font-semibold tracking-tight">{typeCount}</p>
-            <p className="mt-2 text-sm text-muted-foreground">Event types across the current slate.</p>
+            <p className="mt-2 text-sm text-muted-foreground">Event types in the current view.</p>
           </div>
         </div>
 
@@ -91,136 +143,218 @@ export default async function EventsPage() {
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
-      {events.length > 0 ? (
-        <section className="glass-panel overflow-hidden">
-          <div className="flex flex-col gap-3 border-b border-border/70 px-6 py-5 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <p className="section-kicker">Event table</p>
-              <h2 className="mt-1 text-2xl font-semibold tracking-tight">All upcoming events</h2>
-              <p className="mt-2 text-sm text-muted-foreground">
-                One row per event with the most important details first.
-              </p>
+      <section className="glass-panel overflow-hidden">
+        <div className="border-b border-border/70 px-6 py-5">
+          <form
+            action="/events"
+            className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between"
+            method="get"
+          >
+            <div className="w-full max-w-xl space-y-2">
+              <label className="section-kicker" htmlFor="events-search">
+                Search
+              </label>
+              <input
+                className="w-full rounded-2xl border border-border/80 bg-background/85 px-4 py-3 text-sm text-foreground outline-none transition focus:border-primary/40 focus:ring-2 focus:ring-primary/20"
+                defaultValue={searchQuery}
+                id="events-search"
+                name="q"
+                placeholder="Search title, venue, artist, type, or ticket notes"
+                type="search"
+              />
             </div>
-            <div className="flex flex-col gap-3 sm:items-end">
-              <span className="app-chip">{events.length} listed</span>
-              <ApprovedEventsDedupeButton disabled={events.length < 2} />
+            <div className="flex flex-wrap gap-3">
+              <button className="button-primary" type="submit">
+                Search events
+              </button>
+              {searchQuery ? (
+                <Link className="button-secondary" href="/events">
+                  Clear search
+                </Link>
+              ) : null}
             </div>
-          </div>
+          </form>
+        </div>
 
-          <div className="hidden md:block overflow-x-auto">
-            <table className="min-w-full border-collapse text-sm">
-              <thead className="bg-muted/[0.4]">
-                <tr className="border-b border-border/70 text-left">
-                  <th className="px-6 py-3 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                    Date
-                  </th>
-                  <th className="px-6 py-3 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                    Event
-                  </th>
-                  <th className="px-6 py-3 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                    Venue
-                  </th>
-                  <th className="px-6 py-3 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                    Type
-                  </th>
-                  <th className="px-6 py-3 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                    Price
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                    Details
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {events.map((event) => (
-                  <tr
-                    className="border-b border-border/65 align-top transition hover:bg-primary/[0.03] last:border-b-0"
-                    key={event._id}
-                  >
-                    <td className="whitespace-nowrap px-6 py-4">
+        <div className="flex flex-col gap-3 border-b border-border/70 px-6 py-5 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="section-kicker">Event table</p>
+            <h2 className="mt-1 text-2xl font-semibold tracking-tight">All upcoming events</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {searchQuery
+                ? `Search results for "${searchQuery}" on page ${page}.`
+                : events.length > 0
+                  ? `Showing events ${rangeStart}-${rangeEnd} on page ${page}.`
+                  : `Page ${page} of the approved event feed.`}
+            </p>
+          </div>
+          <div className="flex flex-col gap-3 sm:items-end">
+            <span className="app-chip">
+              {searchQuery ? "Filtered view" : `Page ${page}`}
+            </span>
+            {showAdminActions ? (
+              <ApprovedEventsDedupeButton disabled={events.length < 2} />
+            ) : null}
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3 border-b border-border/70 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-muted-foreground">
+            {searchQuery
+              ? `${events.length} result${events.length === 1 ? "" : "s"} on this page.`
+              : `${events.length} event${events.length === 1 ? "" : "s"} on this page.`}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {hasPreviousPage ? (
+              <Link
+                className="button-secondary h-10 px-4 py-0"
+                href={`/events${buildQueryString({
+                  ...paginationBaseParams,
+                  page: String(page - 1),
+                })}`}
+              >
+                Previous
+              </Link>
+            ) : (
+              <span className="button-secondary h-10 px-4 py-0 opacity-50">Previous</span>
+            )}
+            {hasNextPage ? (
+              <Link
+                className="button-secondary h-10 px-4 py-0"
+                href={`/events${buildQueryString({
+                  ...paginationBaseParams,
+                  page: String(page + 1),
+                })}`}
+              >
+                Next
+              </Link>
+            ) : (
+              <span className="button-secondary h-10 px-4 py-0 opacity-50">Next</span>
+            )}
+          </div>
+        </div>
+
+        {events.length > 0 ? (
+          <>
+            <div className="hidden overflow-x-auto md:block">
+              <table className="min-w-full border-collapse text-sm">
+                <thead className="bg-muted/[0.4]">
+                  <tr className="border-b border-border/70 text-left">
+                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                      Date
+                    </th>
+                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                      Event
+                    </th>
+                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                      Venue
+                    </th>
+                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                      Type
+                    </th>
+                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                      Price
+                    </th>
+                    <th className="px-6 py-3 text-right text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                      Details
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {events.map((event) => (
+                    <tr
+                      className="border-b border-border/65 align-top transition hover:bg-primary/[0.03] last:border-b-0"
+                      key={event._id}
+                    >
+                      <td className="whitespace-nowrap px-6 py-4">
+                        <p className="font-medium text-foreground">{formatEventDate(event.date)}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">{formatEventTime(event.time)}</p>
+                      </td>
+                      <td className="min-w-[20rem] px-6 py-4">
+                        <Link
+                          className="text-base font-semibold tracking-tight text-foreground hover:text-primary"
+                          href={`/events/${event._id}`}
+                        >
+                          {event.title}
+                        </Link>
+                        {event.artists.length > 0 ? (
+                          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                            {event.artists.join(", ")}
+                          </p>
+                        ) : null}
+                      </td>
+                      <td className="px-6 py-4 text-muted-foreground">{event.venue}</td>
+                      <td className="px-6 py-4">
+                        <span className="app-chip">{event.eventType}</span>
+                      </td>
+                      <td className="whitespace-nowrap px-6 py-4 text-muted-foreground">
+                        {event.ticketPrice ?? "TBA"}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <Link
+                          className="inline-flex items-center gap-1 text-sm font-semibold text-primary hover:underline"
+                          href={`/events/${event._id}`}
+                        >
+                          Open
+                          <ArrowRight className="h-4 w-4" />
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="md:hidden">
+              {events.map((event) => (
+                <article className="border-b border-border/65 px-5 py-4 last:border-b-0" key={event._id}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
                       <p className="font-medium text-foreground">{formatEventDate(event.date)}</p>
                       <p className="mt-1 text-xs text-muted-foreground">{formatEventTime(event.time)}</p>
-                    </td>
-                    <td className="min-w-[20rem] px-6 py-4">
-                      <Link
-                        className="text-base font-semibold tracking-tight text-foreground hover:text-primary"
-                        href={`/events/${event._id}`}
-                      >
-                        {event.title}
-                      </Link>
-                      {event.artists.length > 0 ? (
-                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                          {event.artists.join(", ")}
-                        </p>
-                      ) : null}
-                    </td>
-                    <td className="px-6 py-4 text-muted-foreground">{event.venue}</td>
-                    <td className="px-6 py-4">
-                      <span className="app-chip">{event.eventType}</span>
-                    </td>
-                    <td className="whitespace-nowrap px-6 py-4 text-muted-foreground">
-                      {event.ticketPrice ?? "TBA"}
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <Link
-                        className="inline-flex items-center gap-1 text-sm font-semibold text-primary hover:underline"
-                        href={`/events/${event._id}`}
-                      >
-                        Open
-                        <ArrowRight className="h-4 w-4" />
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="md:hidden">
-            {events.map((event) => (
-              <article className="border-b border-border/65 px-5 py-4 last:border-b-0" key={event._id}>
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="font-medium text-foreground">{formatEventDate(event.date)}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">{formatEventTime(event.time)}</p>
+                    </div>
+                    <span className="app-chip">{event.eventType}</span>
                   </div>
-                  <span className="app-chip">{event.eventType}</span>
-                </div>
 
-                <Link
-                  className="mt-3 block text-base font-semibold tracking-tight text-foreground hover:text-primary"
-                  href={`/events/${event._id}`}
-                >
-                  {event.title}
-                </Link>
+                  <Link
+                    className="mt-3 block text-base font-semibold tracking-tight text-foreground hover:text-primary"
+                    href={`/events/${event._id}`}
+                  >
+                    {event.title}
+                  </Link>
 
-                <p className="mt-2 text-sm text-muted-foreground">
-                  {event.venue}
-                  {event.ticketPrice ? ` · ${event.ticketPrice}` : ""}
-                </p>
-
-                {event.artists.length > 0 ? (
-                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                    {event.artists.join(", ")}
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    {event.venue}
+                    {event.ticketPrice ? ` · ${event.ticketPrice}` : ""}
                   </p>
-                ) : null}
 
-                <Link
-                  className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-primary hover:underline"
-                  href={`/events/${event._id}`}
-                >
-                  Open details
-                  <ArrowRight className="h-4 w-4" />
-                </Link>
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : null}
+                  {event.artists.length > 0 ? (
+                    <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                      {event.artists.join(", ")}
+                    </p>
+                  ) : null}
+
+                  <Link
+                    className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-primary hover:underline"
+                    href={`/events/${event._id}`}
+                  >
+                    Open details
+                    <ArrowRight className="h-4 w-4" />
+                  </Link>
+                </article>
+              ))}
+            </div>
+          </>
+        ) : null}
+      </section>
 
       {events.length === 0 && !error ? (
         <div className="glass-panel px-6 py-10 text-center text-sm text-muted-foreground">
-          No upcoming approved events right now.
+          {searchQuery
+            ? `No upcoming approved events matched "${searchQuery}".`
+            : page > 1
+              ? "There are no events on this page."
+              : "No upcoming approved events right now."}
         </div>
       ) : null}
     </main>

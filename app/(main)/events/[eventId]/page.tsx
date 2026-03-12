@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { ArrowLeft, CalendarDays, Clock3, ExternalLink, MapPin, Ticket } from "lucide-react";
 import { ConvexHttpClient } from "convex/browser";
@@ -154,11 +155,15 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
             <div className="border-t border-border/70 bg-secondary/55 p-6 lg:border-l lg:border-t-0">
               {event.imageUrl ? (
                 <div className="glass-panel overflow-hidden p-2">
-                  <img
-                    alt={event.title}
-                    className="h-full min-h-72 w-full rounded-[1.25rem] object-cover"
-                    src={event.imageUrl}
-                  />
+                  <div className="relative aspect-[4/5] min-h-72 w-full overflow-hidden rounded-[1.25rem]">
+                    <Image
+                      alt={event.title}
+                      className="object-cover"
+                      fill
+                      sizes="(max-width: 1024px) 100vw, 320px"
+                      src={event.imageUrl}
+                    />
+                  </div>
                 </div>
               ) : (
                 <div className="glass-panel flex min-h-72 items-center justify-center px-6 text-center text-sm text-muted-foreground">
