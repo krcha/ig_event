@@ -164,7 +164,7 @@ function formatAgendaMeta(event: PublicEvent): string {
 }
 
 export default async function CalendarPage({ searchParams }: CalendarPageProps) {
-  const { events, error } = await loadUpcomingApprovedEvents();
+  const { events, error } = await loadUpcomingApprovedEvents({ daysInPast: 1 });
   const today = new Date();
   const todayKey = formatDateKey(today);
   const requestedMonth = getSingleValue(searchParams?.month);

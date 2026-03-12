@@ -39,6 +39,10 @@ export type PublicEventsPageResult = {
   error?: string;
 };
 
+type LoadUpcomingApprovedEventsOptions = {
+  daysInPast?: number;
+};
+
 type LoadUpcomingApprovedEventsPageOptions = {
   page?: number;
   pageSize?: number;
@@ -75,10 +79,24 @@ export function getStartOfLocalToday(): Date {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate());
 }
 
+function getStartOfLocalDay(daysInPast = 0): Date {
+  const date = getStartOfLocalToday();
+  date.setDate(date.getDate() - daysInPast);
+  return date;
+}
+
 function formatLocalDate(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
     date.getDate(),
   ).padStart(2, "0")}`;
+}
+
+function normalizeDaysInPast(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(7, Math.trunc(value as number)));
 }
 
 export function parseEventTimeMinutes(value: string | undefined): number {
@@ -165,9 +183,10 @@ async function loadApprovedUpcomingEventPage(
   convex: ConvexHttpClient,
   cursor: string | null,
   numItems: number,
+  fromDate: string,
 ): Promise<PaginatedEventsResponse> {
   return (await convex.query(listApprovedUpcomingByDatePaginatedQuery, {
-    fromDate: formatLocalDate(getStartOfLocalToday()),
+    fromDate,
     paginationOpts: {
       cursor,
       numItems,
@@ -175,13 +194,16 @@ async function loadApprovedUpcomingEventPage(
   })) as PaginatedEventsResponse;
 }
 
-export async function loadUpcomingApprovedEvents(): Promise<{
+export async function loadUpcomingApprovedEvents(
+  options: LoadUpcomingApprovedEventsOptions = {},
+): Promise<{
   events: PublicEvent[];
   error?: string;
 }> {
   noStore();
 
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
+  const fromDate = formatLocalDate(getStartOfLocalDay(normalizeDaysInPast(options.daysInPast)));
   if (!convexUrl) {
     return { events: [], error: "Convex is not configured yet." };
   }
@@ -196,6 +218,7 @@ export async function loadUpcomingApprovedEvents(): Promise<{
         convex,
         cursor,
         APPROVED_EVENTS_SCAN_BATCH_SIZE,
+        fromDate,
       );
       events.push(...page.page);
 
@@ -253,6 +276,7 @@ export async function loadUpcomingApprovedEventsPage(
         convex,
         cursor,
         APPROVED_EVENTS_SCAN_BATCH_SIZE,
+        formatLocalDate(getStartOfLocalToday()),
       );
 
       for (const event of result.page) {
