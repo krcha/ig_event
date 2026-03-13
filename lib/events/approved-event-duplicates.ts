@@ -1,3 +1,15 @@
+import {
+  areCompatibleTitleFamilySlugs,
+  buildTitleFamilySlug,
+  collectComparableTextValues,
+  collectComparableIdentityValues,
+  collectInstagramHandles,
+  countSharedValues,
+  hasContextCandidateSupport,
+  hasVenueContextSupport,
+  normalizeInstagramUrl,
+} from "./deduplication-shared.ts";
+
 const SERBIAN_CYRILLIC_TO_LATIN: Record<string, string> = {
   а: "a",
   б: "b",
@@ -68,50 +80,6 @@ const DUPLICATE_TEXT_STOP_WORDS = new Set([
   "entry",
 ]);
 
-const GENERIC_TITLE_TOKENS = new Set([
-  "party",
-  "zurka",
-  "zurke",
-  "zurci",
-  "night",
-  "club",
-  "klub",
-  "event",
-  "live",
-  "show",
-  "festival",
-  "bg",
-  "official",
-  "present",
-  "presents",
-]);
-
-const GENERIC_TITLE_SUFFIXES = [
-  "party",
-  "zurka",
-  "zurke",
-  "zurci",
-  "night",
-  "event",
-  "show",
-  "live",
-  "festival",
-  "bg",
-];
-
-const DIGIT_WORDS: Record<string, string> = {
-  "0": "zero",
-  "1": "one",
-  "2": "two",
-  "3": "three",
-  "4": "four",
-  "5": "five",
-  "6": "six",
-  "7": "seven",
-  "8": "eight",
-  "9": "nine",
-};
-
 export type ApprovedEventDuplicateRecord = {
   id: string;
   title: string;
@@ -172,12 +140,17 @@ type DecoratedDuplicateEvent = ApprovedEventDuplicateRecord & {
   normalizedFields: Record<string, unknown> | null;
   duplicateDateKey: string | null;
   duplicateVenueText: string;
+  duplicateVenueCandidates: string[];
+  duplicateContextTexts: string[];
   duplicateTitleText: string;
   duplicateArtistText: string;
   duplicateDescriptionText: string;
   duplicateTitleFamilySlug: string;
+  duplicateEntityCandidates: string[];
+  duplicateMentionHandles: string[];
   normalizedInstagramUrl: string;
   titleUsedFallback: boolean;
+  titleDerivedFromContext: boolean;
   qualityScore: number;
 };
 
@@ -220,48 +193,32 @@ function normalizeComparisonText(value: string): string {
     .trim();
 }
 
-function normalizeInstagramUrl(value: string | null): string {
-  if (!value) {
-    return "";
+function extractComparableTimeParts(value: string | null | undefined): string[] {
+  const matches = (value ?? "").match(/\d{1,2}(?::\d{2})?/g) ?? [];
+  return matches.map((match) => {
+    const [hours, minutes = "00"] = match.split(":");
+    return `${hours.padStart(2, "0")}:${minutes.padStart(2, "0")}`;
+  });
+}
+
+function areDuplicateTimesCompatible(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  if (!left || !right) {
+    return false;
+  }
+  if (left === right) {
+    return true;
   }
 
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[?#].*$/, "")
-    .replace(/\/+$/, "");
-}
-
-function replaceDigitsWithWords(value: string): string {
-  return value.replace(/\d/g, (digit) => DIGIT_WORDS[digit] ?? digit);
-}
-
-function stripGenericTitleSuffixes(value: string): string {
-  let current = value;
-
-  while (current.length > 4) {
-    const next = GENERIC_TITLE_SUFFIXES.find(
-      (suffix) => current.endsWith(suffix) && current.length - suffix.length >= 4,
-    );
-    if (!next) {
-      break;
-    }
-    current = current.slice(0, -next.length);
+  const leftParts = extractComparableTimeParts(left);
+  const rightParts = extractComparableTimeParts(right);
+  if (leftParts.length === 0 || rightParts.length === 0) {
+    return false;
   }
 
-  return current;
-}
-
-function buildTitleFamilySlug(value: string): string {
-  const normalized = normalizeComparisonText(replaceDigitsWithWords(value));
-  const meaningfulTokens = normalized
-    .split(" ")
-    .filter((token) => token.length > 1 && !GENERIC_TITLE_TOKENS.has(token));
-
-  const compact =
-    meaningfulTokens.length > 0 ? meaningfulTokens.join("") : normalized.replace(/\s+/g, "");
-
-  return stripGenericTitleSuffixes(compact);
+  return JSON.stringify(leftParts) === JSON.stringify(rightParts);
 }
 
 function getSimilarityRatio(left: string, right: string, stopWords: Set<string>): number {
@@ -324,22 +281,6 @@ function areSimilarDuplicateTexts(left: string, right: string): boolean {
   return getSimilarityRatio(left, right, DUPLICATE_TEXT_STOP_WORDS) >= 0.6;
 }
 
-function areCompatibleTitleFamilySlugs(left: string, right: string): boolean {
-  if (!left || !right) {
-    return false;
-  }
-  if (left === right) {
-    return true;
-  }
-
-  const shorterLength = Math.min(left.length, right.length);
-  if (shorterLength >= 5 && (left.includes(right) || right.includes(left))) {
-    return true;
-  }
-
-  return false;
-}
-
 function scoreApprovedEventQuality(
   event: ApprovedEventDuplicateRecord,
   normalizedFields: Record<string, unknown> | null,
@@ -372,6 +313,47 @@ function decorateEventForDuplicateCleanup(
 ): DecoratedDuplicateEvent {
   const normalizedFields = parseJsonObject(event.normalizedFieldsJson);
   const titleUsedFallback = readBooleanField(normalizedFields, "titleUsedFallback");
+  const titleDerivedFromContext = readBooleanField(normalizedFields, "titleDerivedFromContext");
+  const duplicateVenueCandidates = collectComparableTextValues([
+    event.venue,
+    readStringField(normalizedFields, "normalizedVenue"),
+    readStringField(normalizedFields, "locationName"),
+    readStringField(normalizedFields, "rawVenue"),
+  ]);
+  const duplicateMentionHandles = collectInstagramHandles([
+    event.sourceCaption,
+    event.description,
+    ...event.artists,
+    readStringField(normalizedFields, "sourceCaptionFromModel"),
+    readStringField(normalizedFields, "description"),
+    readStringField(normalizedFields, "reasoningNotes"),
+  ]);
+  const duplicateContextTexts = collectComparableTextValues([
+    event.title,
+    event.venue,
+    event.description,
+    event.sourceCaption,
+    ...event.artists,
+    readStringField(normalizedFields, "rawTitle"),
+    readStringField(normalizedFields, "titleContextCandidate"),
+    readStringField(normalizedFields, "normalizedVenue"),
+    readStringField(normalizedFields, "locationName"),
+    readStringField(normalizedFields, "rawVenue"),
+    readStringField(normalizedFields, "description"),
+    readStringField(normalizedFields, "sourceCaptionFromModel"),
+    readStringField(normalizedFields, "postAltText"),
+    readStringField(normalizedFields, "splitSourceLine"),
+    readStringField(normalizedFields, "reasoningNotes"),
+  ]);
+  const duplicateEntityCandidates = collectComparableIdentityValues(
+    [
+      event.title,
+      ...event.artists,
+      readStringField(normalizedFields, "rawTitle"),
+      readStringField(normalizedFields, "titleContextCandidate"),
+    ],
+    { ignoredValues: duplicateVenueCandidates },
+  );
 
   return {
     ...event,
@@ -384,6 +366,8 @@ function decorateEventForDuplicateCleanup(
         readStringField(normalizedFields, "locationName") ?? "",
       ].join(" "),
     ),
+    duplicateVenueCandidates,
+    duplicateContextTexts,
     duplicateTitleText: normalizeComparisonText(
       [event.title, event.artists.join(" ")].join(" "),
     ),
@@ -392,9 +376,16 @@ function decorateEventForDuplicateCleanup(
       [event.description ?? "", event.sourceCaption ?? ""].join(" "),
     ),
     duplicateTitleFamilySlug: buildTitleFamilySlug(event.title),
+    duplicateEntityCandidates,
+    duplicateMentionHandles,
     normalizedInstagramUrl: normalizeInstagramUrl(event.instagramPostUrl),
     titleUsedFallback,
-    qualityScore: scoreApprovedEventQuality(event, normalizedFields, titleUsedFallback),
+    titleDerivedFromContext,
+    qualityScore: scoreApprovedEventQuality(
+      event,
+      normalizedFields,
+      titleUsedFallback || titleDerivedFromContext,
+    ),
   };
 }
 
@@ -403,6 +394,21 @@ function buildDuplicateMatchReasons(
   right: DecoratedDuplicateEvent,
 ): string[] {
   const reasons: string[] = [];
+  const titleFamilyMatches = areCompatibleTitleFamilySlugs(
+    left.duplicateTitleFamilySlug,
+    right.duplicateTitleFamilySlug,
+  );
+  const sharedMentionHandleCount = countSharedValues(
+    left.duplicateMentionHandles,
+    right.duplicateMentionHandles,
+  );
+  const contextualVenueMatch =
+    titleFamilyMatches &&
+    (hasVenueContextSupport(left.duplicateContextTexts, right.duplicateVenueCandidates) ||
+      hasVenueContextSupport(right.duplicateContextTexts, left.duplicateVenueCandidates));
+  const contextualEntityMatch =
+    hasContextCandidateSupport(left.duplicateContextTexts, right.duplicateEntityCandidates) ||
+    hasContextCandidateSupport(right.duplicateContextTexts, left.duplicateEntityCandidates);
 
   if (
     left.instagramPostId &&
@@ -427,13 +433,17 @@ function buildDuplicateMatchReasons(
   if (areSimilarDuplicateTexts(left.duplicateDescriptionText, right.duplicateDescriptionText)) {
     reasons.push("similar description");
   }
-  if (
-    areCompatibleTitleFamilySlugs(
-      left.duplicateTitleFamilySlug,
-      right.duplicateTitleFamilySlug,
-    )
-  ) {
+  if (titleFamilyMatches) {
     reasons.push("matching title family");
+  }
+  if (sharedMentionHandleCount > 0) {
+    reasons.push("shared Instagram handles");
+  }
+  if (contextualVenueMatch) {
+    reasons.push("venue referenced in event text");
+  }
+  if (contextualEntityMatch) {
+    reasons.push("event identity referenced in event text");
   }
 
   return reasons;
@@ -446,7 +456,29 @@ function areAutoCleanupDuplicateEvents(
   if (!left.duplicateDateKey || left.duplicateDateKey !== right.duplicateDateKey) {
     return false;
   }
-  if (!areSimilarVenues(left.duplicateVenueText, right.duplicateVenueText)) {
+  const directVenueMatch = areSimilarVenues(left.duplicateVenueText, right.duplicateVenueText);
+  const contextualVenueMatch =
+    areCompatibleTitleFamilySlugs(
+      left.duplicateTitleFamilySlug,
+      right.duplicateTitleFamilySlug,
+    ) &&
+    (hasVenueContextSupport(left.duplicateContextTexts, right.duplicateVenueCandidates) ||
+      hasVenueContextSupport(right.duplicateContextTexts, left.duplicateVenueCandidates));
+  const sharedMentionHandleCount = countSharedValues(
+    left.duplicateMentionHandles,
+    right.duplicateMentionHandles,
+  );
+  const contextualEntityMatch =
+    hasContextCandidateSupport(left.duplicateContextTexts, right.duplicateEntityCandidates) ||
+    hasContextCandidateSupport(right.duplicateContextTexts, left.duplicateEntityCandidates);
+  const timeMatches = areDuplicateTimesCompatible(left.time, right.time);
+  const hasUnreliableTitle =
+    left.titleUsedFallback ||
+    right.titleUsedFallback ||
+    left.titleDerivedFromContext ||
+    right.titleDerivedFromContext;
+
+  if (!directVenueMatch && !contextualVenueMatch) {
     return false;
   }
 
@@ -455,6 +487,9 @@ function areAutoCleanupDuplicateEvents(
     return true;
   }
   if (matchReasons.includes("matching title family")) {
+    return true;
+  }
+  if (sharedMentionHandleCount >= 2) {
     return true;
   }
   if (
@@ -471,6 +506,15 @@ function areAutoCleanupDuplicateEvents(
     matchReasons.includes("similar title") &&
     matchReasons.includes("similar artists")
   ) {
+    return true;
+  }
+  if (
+    matchReasons.includes("shared Instagram handles") &&
+    (matchReasons.includes("similar description") || matchReasons.includes("similar artists"))
+  ) {
+    return true;
+  }
+  if (contextualEntityMatch && (timeMatches || hasUnreliableTitle)) {
     return true;
   }
 

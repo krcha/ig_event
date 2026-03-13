@@ -4,6 +4,10 @@ import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { unstable_noStore as noStore } from "next/cache";
 import { toSearchableText } from "@/lib/pipeline/venue-normalization";
+import {
+  buildApprovedEventAutoCleanupGroups,
+  type ApprovedEventDuplicateRecord,
+} from "@/lib/events/approved-event-duplicates";
 
 export type EventStatus = "pending" | "approved" | "rejected";
 const DEFAULT_PUBLIC_EVENTS_PAGE_SIZE = 24;
@@ -19,8 +23,15 @@ export type PublicEvent = {
   eventType: string;
   ticketPrice?: string;
   sourcePostedAt?: string;
+  sourceCaption?: string;
+  description?: string;
+  imageUrl?: string;
+  instagramPostUrl?: string;
+  instagramPostId?: string;
   normalizedFieldsJson?: string;
   status: EventStatus;
+  createdAt: number;
+  updatedAt: number;
 };
 
 type PaginatedEventsResponse = {
@@ -179,6 +190,43 @@ function matchesPublicEventSearch(event: PublicEvent, searchQuery: string): bool
   return searchableEventText.includes(toSearchableText(searchQuery));
 }
 
+function mapPublicEventToDuplicateRecord(event: PublicEvent): ApprovedEventDuplicateRecord {
+  return {
+    id: event._id,
+    title: event.title,
+    date: event.date,
+    time: event.time ?? null,
+    venue: event.venue,
+    artists: event.artists,
+    description: event.description ?? null,
+    imageUrl: event.imageUrl ?? null,
+    instagramPostUrl: event.instagramPostUrl ?? null,
+    instagramPostId: event.instagramPostId ?? null,
+    ticketPrice: event.ticketPrice ?? null,
+    eventType: event.eventType,
+    sourceCaption: event.sourceCaption ?? null,
+    sourcePostedAt: event.sourcePostedAt ?? null,
+    normalizedFieldsJson: event.normalizedFieldsJson ?? null,
+    createdAt: event.createdAt,
+    updatedAt: event.updatedAt,
+  };
+}
+
+function filterDuplicatePublicEvents(events: PublicEvent[]): PublicEvent[] {
+  const cleanupGroups = buildApprovedEventAutoCleanupGroups(
+    events.map(mapPublicEventToDuplicateRecord),
+  );
+  if (cleanupGroups.length === 0) {
+    return events;
+  }
+
+  const hiddenDuplicateIds = new Set(
+    cleanupGroups.flatMap((group) => group.duplicateEventIds),
+  );
+
+  return events.filter((event) => !hiddenDuplicateIds.has(event._id));
+}
+
 async function loadApprovedUpcomingEventPage(
   convex: ConvexHttpClient,
   cursor: string | null,
@@ -192,6 +240,32 @@ async function loadApprovedUpcomingEventPage(
       numItems,
     },
   })) as PaginatedEventsResponse;
+}
+
+async function loadAllApprovedUpcomingEvents(
+  convex: ConvexHttpClient,
+  fromDate: string,
+): Promise<PublicEvent[]> {
+  const events: PublicEvent[] = [];
+  let cursor: string | null = null;
+
+  while (true) {
+    const page = await loadApprovedUpcomingEventPage(
+      convex,
+      cursor,
+      APPROVED_EVENTS_SCAN_BATCH_SIZE,
+      fromDate,
+    );
+    events.push(...page.page);
+
+    if (page.isDone) {
+      break;
+    }
+
+    cursor = page.continueCursor;
+  }
+
+  return filterDuplicatePublicEvents(events).sort(comparePublicEvents);
 }
 
 export async function loadUpcomingApprovedEvents(
@@ -210,26 +284,8 @@ export async function loadUpcomingApprovedEvents(
 
   try {
     const convex = new ConvexHttpClient(convexUrl);
-    const events: PublicEvent[] = [];
-    let cursor: string | null = null;
-
-    while (true) {
-      const page = await loadApprovedUpcomingEventPage(
-        convex,
-        cursor,
-        APPROVED_EVENTS_SCAN_BATCH_SIZE,
-        fromDate,
-      );
-      events.push(...page.page);
-
-      if (page.isDone) {
-        break;
-      }
-
-      cursor = page.continueCursor;
-    }
-
-    return { events: [...events].sort(comparePublicEvents) };
+    const events = await loadAllApprovedUpcomingEvents(convex, fromDate);
+    return { events };
   } catch (error) {
     return {
       events: [],
@@ -265,49 +321,19 @@ export async function loadUpcomingApprovedEventsPage(
 
   try {
     const convex = new ConvexHttpClient(convexUrl);
+    const allEvents = await loadAllApprovedUpcomingEvents(
+      convex,
+      formatLocalDate(getStartOfLocalToday()),
+    );
+    const matchingEvents = allEvents.filter((event) =>
+      matchesPublicEventSearch(event, searchQuery),
+    );
     const offset = (page - 1) * pageSize;
-    const pageEvents: PublicEvent[] = [];
-    let matchedCount = 0;
-    let cursor: string | null = null;
-    let hasNextPage = false;
-
-    while (true) {
-      const result = await loadApprovedUpcomingEventPage(
-        convex,
-        cursor,
-        APPROVED_EVENTS_SCAN_BATCH_SIZE,
-        formatLocalDate(getStartOfLocalToday()),
-      );
-
-      for (const event of result.page) {
-        if (!matchesPublicEventSearch(event, searchQuery)) {
-          continue;
-        }
-
-        if (matchedCount < offset) {
-          matchedCount += 1;
-          continue;
-        }
-
-        if (pageEvents.length < pageSize) {
-          pageEvents.push(event);
-          matchedCount += 1;
-          continue;
-        }
-
-        hasNextPage = true;
-        break;
-      }
-
-      if (hasNextPage || result.isDone) {
-        break;
-      }
-
-      cursor = result.continueCursor;
-    }
+    const pageEvents = matchingEvents.slice(offset, offset + pageSize);
+    const hasNextPage = offset + pageSize < matchingEvents.length;
 
     return {
-      events: [...pageEvents].sort(comparePublicEvents),
+      events: pageEvents,
       page,
       pageSize,
       searchQuery,

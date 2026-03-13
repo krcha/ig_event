@@ -36,6 +36,16 @@ import {
   normalizeConfidenceScore,
   shouldAutoApproveConfidenceScore,
 } from "@/lib/utils/confidence";
+import {
+  areCompatibleTitleFamilySlugs,
+  buildTitleFamilySlug,
+  collectComparableTextValues,
+  collectComparableIdentityValues,
+  collectInstagramHandles,
+  countSharedValues,
+  hasContextCandidateSupport,
+  hasVenueContextSupport,
+} from "@/lib/events/deduplication-shared";
 import { loadVenueNameOverridesByHandle } from "@/lib/pipeline/venue-name-overrides";
 import { getRequiredEnv } from "@/lib/utils/env";
 
@@ -2063,23 +2073,6 @@ function normalizeArtistsForComparison(artists: string[]): string[] {
   return artists.map((value) => value.trim().toLowerCase()).filter((value) => value.length > 0).sort();
 }
 
-function collectComparableTextValues(values: Array<string | null | undefined>): string[] {
-  const seen = new Set<string>();
-  const collected: string[] = [];
-
-  for (const value of values) {
-    const normalized = normalizeString(value);
-    const searchable = toSearchableText(normalized);
-    if (!searchable || seen.has(searchable)) {
-      continue;
-    }
-    seen.add(searchable);
-    collected.push(normalized);
-  }
-
-  return collected;
-}
-
 function normalizeCompactComparisonText(value: string | null | undefined): string {
   return toSearchableText(normalizeString(value)).replace(/\s+/g, "");
 }
@@ -2216,7 +2209,109 @@ function getComparableTitleCandidates(
 function getComparableArtistCandidates(
   event: Pick<ExistingEventRecord | PreparedEvent, "artists">,
 ): string[] {
-  return collectComparableTextValues(event.artists);
+  return collectComparableIdentityValues(event.artists);
+}
+
+function getComparableEvidenceCandidates(
+  event: Pick<
+    ExistingEventRecord | PreparedEvent,
+    "title" | "description" | "sourceCaption"
+  >,
+  normalizedFields: Record<string, unknown> | null,
+): string[] {
+  return collectComparableTextValues([
+    event.title,
+    event.description,
+    event.sourceCaption,
+    readJsonString(normalizedFields, "rawTitle"),
+    readJsonString(normalizedFields, "titleContextCandidate"),
+    readJsonString(normalizedFields, "description"),
+    readJsonString(normalizedFields, "sourceCaptionFromModel"),
+    readJsonString(normalizedFields, "postAltText"),
+    readJsonString(normalizedFields, "splitSourceLine"),
+    readJsonString(normalizedFields, "reasoningNotes"),
+  ]);
+}
+
+function getComparableContextCandidates(
+  event: Pick<
+    ExistingEventRecord | PreparedEvent,
+    "title" | "description" | "sourceCaption" | "venue" | "artists"
+  >,
+  normalizedFields: Record<string, unknown> | null,
+): string[] {
+  return collectComparableTextValues([
+    event.title,
+    event.venue,
+    event.description,
+    event.sourceCaption,
+    ...event.artists,
+    readJsonString(normalizedFields, "rawTitle"),
+    readJsonString(normalizedFields, "titleContextCandidate"),
+    readJsonString(normalizedFields, "normalizedVenue"),
+    readJsonString(normalizedFields, "locationName"),
+    readJsonString(normalizedFields, "rawVenue"),
+    readJsonString(normalizedFields, "description"),
+    readJsonString(normalizedFields, "sourceCaptionFromModel"),
+    readJsonString(normalizedFields, "postAltText"),
+    readJsonString(normalizedFields, "splitSourceLine"),
+    readJsonString(normalizedFields, "reasoningNotes"),
+  ]);
+}
+
+function getComparableTitleFamilyCandidates(
+  event: Pick<ExistingEventRecord | PreparedEvent, "title">,
+  normalizedFields: Record<string, unknown> | null,
+): string[] {
+  return [
+    ...new Set(
+      [
+        event.title,
+        readJsonString(normalizedFields, "rawTitle"),
+        readJsonString(normalizedFields, "titleContextCandidate"),
+      ]
+        .map((value) => buildTitleFamilySlug(normalizeString(value)))
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function getComparableIdentityCandidates(
+  event: Pick<ExistingEventRecord | PreparedEvent, "title" | "artists" | "venue">,
+  normalizedFields: Record<string, unknown> | null,
+): string[] {
+  return collectComparableIdentityValues(
+    [
+      event.title,
+      ...event.artists,
+      readJsonString(normalizedFields, "rawTitle"),
+      readJsonString(normalizedFields, "titleContextCandidate"),
+    ],
+    {
+      ignoredValues: getComparableVenueCandidates(event, normalizedFields),
+    },
+  );
+}
+
+function getComparableMentionHandles(
+  event: Pick<ExistingEventRecord | PreparedEvent, "description" | "sourceCaption" | "artists">,
+  normalizedFields: Record<string, unknown> | null,
+): string[] {
+  return collectInstagramHandles([
+    event.description,
+    event.sourceCaption,
+    ...event.artists,
+    readJsonString(normalizedFields, "sourceCaptionFromModel"),
+    readJsonString(normalizedFields, "description"),
+    readJsonString(normalizedFields, "reasoningNotes"),
+  ]);
+}
+
+function hasUnreliableComparableTitle(normalizedFields: Record<string, unknown> | null): boolean {
+  return (
+    readJsonBoolean(normalizedFields, "titleUsedFallback") === true ||
+    readJsonBoolean(normalizedFields, "titleDerivedFromContext") === true
+  );
 }
 
 function getSemanticDuplicateMatchScore(
@@ -2234,26 +2329,84 @@ function getSemanticDuplicateMatchScore(
   const venueMatches = existingVenueCandidates.some((left) =>
     nextVenueCandidates.some((right) => areComparableVenueTexts(left, right)),
   );
-  if (!venueMatches) {
-    return -1;
-  }
-
   const existingTitleCandidates = getComparableTitleCandidates(existing, existingNormalizedFields);
   const nextTitleCandidates = getComparableTitleCandidates(next, nextNormalizedFields);
   const existingArtistCandidates = getComparableArtistCandidates(existing);
   const nextArtistCandidates = getComparableArtistCandidates(next);
+  const existingEvidenceCandidates = getComparableEvidenceCandidates(
+    existing,
+    existingNormalizedFields,
+  );
+  const nextEvidenceCandidates = getComparableEvidenceCandidates(next, nextNormalizedFields);
+  const existingTitleFamilyCandidates = getComparableTitleFamilyCandidates(
+    existing,
+    existingNormalizedFields,
+  );
+  const nextTitleFamilyCandidates = getComparableTitleFamilyCandidates(
+    next,
+    nextNormalizedFields,
+  );
+  const existingIdentityCandidates = getComparableIdentityCandidates(
+    existing,
+    existingNormalizedFields,
+  );
+  const nextIdentityCandidates = getComparableIdentityCandidates(next, nextNormalizedFields);
+  const sharedMentionHandleCount = countSharedValues(
+    getComparableMentionHandles(existing, existingNormalizedFields),
+    getComparableMentionHandles(next, nextNormalizedFields),
+  );
 
   const titleMatches = hasComparableTextOverlap(existingTitleCandidates, nextTitleCandidates);
   const artistMatches = hasComparableTextOverlap(existingArtistCandidates, nextArtistCandidates);
   const crossFieldMatches =
     hasComparableTextOverlap(existingTitleCandidates, nextArtistCandidates) ||
     hasComparableTextOverlap(existingArtistCandidates, nextTitleCandidates);
+  const evidenceMatches = hasComparableTextOverlap(
+    existingEvidenceCandidates,
+    nextEvidenceCandidates,
+  );
   const timeMatches = areTimesCompatible(existing.time, next.time);
   const hasFallbackTitle =
-    readJsonBoolean(existingNormalizedFields, "titleUsedFallback") === true ||
-    readJsonBoolean(nextNormalizedFields, "titleUsedFallback") === true;
+    hasUnreliableComparableTitle(existingNormalizedFields) ||
+    hasUnreliableComparableTitle(nextNormalizedFields);
+  const strongTitleFamilyMatches =
+    !hasFallbackTitle &&
+    existingTitleFamilyCandidates.some((left) =>
+      nextTitleFamilyCandidates.some((right) => areCompatibleTitleFamilySlugs(left, right)),
+    );
+  const contextualVenueMatches =
+    strongTitleFamilyMatches &&
+    (hasVenueContextSupport(
+      getComparableContextCandidates(existing, existingNormalizedFields),
+      nextVenueCandidates,
+    ) ||
+      hasVenueContextSupport(
+        getComparableContextCandidates(next, nextNormalizedFields),
+        existingVenueCandidates,
+      ));
+  const contextualIdentityMatches =
+    hasContextCandidateSupport(
+      getComparableContextCandidates(existing, existingNormalizedFields),
+      nextIdentityCandidates,
+    ) ||
+    hasContextCandidateSupport(
+      getComparableContextCandidates(next, nextNormalizedFields),
+      existingIdentityCandidates,
+    );
 
-  if (!titleMatches && !artistMatches && !crossFieldMatches) {
+  if (!venueMatches && !contextualVenueMatches) {
+    return -1;
+  }
+
+  if (
+    !titleMatches &&
+    !artistMatches &&
+    !crossFieldMatches &&
+    !evidenceMatches &&
+    !strongTitleFamilyMatches &&
+    sharedMentionHandleCount === 0 &&
+    !contextualIdentityMatches
+  ) {
     return -1;
   }
 
@@ -2261,8 +2414,19 @@ function getSemanticDuplicateMatchScore(
   if (titleMatches) score += 4;
   if (crossFieldMatches) score += 4;
   if (artistMatches) score += 3;
+  if (strongTitleFamilyMatches) score += 2;
+  if (sharedMentionHandleCount >= 2) score += 2;
+  else if (sharedMentionHandleCount === 1) score += 1;
+  if (evidenceMatches) score += 1;
   if (timeMatches) score += 1;
-  if (hasFallbackTitle && (crossFieldMatches || artistMatches)) {
+  if (contextualIdentityMatches) score += 1;
+  if (!venueMatches && contextualVenueMatches) {
+    score += 1;
+  }
+  if (hasFallbackTitle && (crossFieldMatches || artistMatches || evidenceMatches)) {
+    score += 1;
+  }
+  if (contextualIdentityMatches && (hasFallbackTitle || timeMatches)) {
     score += 1;
   }
 

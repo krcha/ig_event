@@ -86,24 +86,28 @@ export default async function EventsPage({ searchParams }: EventsPageProps) {
 
   return (
     <main className="app-page">
-      <header className="hero-panel px-6 py-7 sm:px-8">
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+      <header className="hero-panel relative px-5 py-6 sm:px-8 sm:py-8">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.14),_transparent_28%),radial-gradient(circle_at_bottom_right,_rgba(20,184,166,0.12),_transparent_26%)]" />
+        <div className="relative grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
           <div className="space-y-3">
             <p className="section-kicker">Approved event feed</p>
-            <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Upcoming events</h1>
-            <p className="max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
-              Search, page through, and scan approved events without relying on a fixed fetch cap.
+            <h1 className="text-[2.1rem] font-semibold tracking-tight sm:text-4xl">
+              Upcoming events
+            </h1>
+            <p className="max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base sm:leading-7">
+              Search, filter, and scan the approved event feed in a layout that starts with mobile
+              cards before it expands into a larger-screen table.
             </p>
           </div>
-          <div className="flex flex-wrap gap-3">
-            <Link className="button-secondary gap-2" href="/calendar">
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+            <Link className="button-secondary w-full gap-2 sm:w-auto" href="/calendar">
               <CalendarDays className="h-4 w-4" />
               Switch to calendar
             </Link>
           </div>
         </div>
 
-        <div className="mt-6 grid gap-3 sm:grid-cols-3">
+        <div className="relative mt-6 grid gap-3 sm:grid-cols-3">
           <div className="metric-card">
             <p className="section-kicker">Shown</p>
             <p className="mt-3 text-3xl font-semibold tracking-tight">{events.length}</p>
@@ -122,7 +126,7 @@ export default async function EventsPage({ searchParams }: EventsPageProps) {
         </div>
 
         {nextEvent ? (
-          <div className="glass-panel mt-6 flex flex-col gap-4 px-5 py-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="glass-panel mt-6 flex flex-col gap-4 px-4 py-4 sm:px-5 sm:py-5 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <p className="section-kicker">Next up</p>
               <p className="mt-2 text-xl font-semibold tracking-tight">{nextEvent.title}</p>
@@ -133,7 +137,7 @@ export default async function EventsPage({ searchParams }: EventsPageProps) {
                 {nextEvent.venue}
               </p>
             </div>
-            <Link className="button-primary gap-2" href={`/events/${nextEvent._id}`}>
+            <Link className="button-primary w-full gap-2 sm:w-auto" href={`/events/${nextEvent._id}`}>
               Open next event
               <ArrowRight className="h-4 w-4" />
             </Link>
@@ -144,7 +148,7 @@ export default async function EventsPage({ searchParams }: EventsPageProps) {
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
       <section className="glass-panel overflow-hidden">
-        <div className="border-b border-border/70 px-6 py-5">
+        <div className="border-b border-border/70 px-4 py-4 sm:px-6 sm:py-5">
           <form
             action="/events"
             className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between"
@@ -155,7 +159,7 @@ export default async function EventsPage({ searchParams }: EventsPageProps) {
                 Search
               </label>
               <input
-                className="w-full rounded-2xl border border-border/80 bg-background/85 px-4 py-3 text-sm text-foreground outline-none transition focus:border-primary/40 focus:ring-2 focus:ring-primary/20"
+                className="w-full rounded-[1.35rem] border border-border/80 bg-background/85 px-4 py-3.5 text-sm text-foreground outline-none transition focus:border-primary/40 focus:ring-2 focus:ring-primary/20"
                 defaultValue={searchQuery}
                 id="events-search"
                 name="q"
@@ -163,12 +167,12 @@ export default async function EventsPage({ searchParams }: EventsPageProps) {
                 type="search"
               />
             </div>
-            <div className="flex flex-wrap gap-3">
-              <button className="button-primary" type="submit">
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <button className="button-primary w-full sm:w-auto" type="submit">
                 Search events
               </button>
               {searchQuery ? (
-                <Link className="button-secondary" href="/events">
+                <Link className="button-secondary w-full sm:w-auto" href="/events">
                   Clear search
                 </Link>
               ) : null}
@@ -176,9 +180,9 @@ export default async function EventsPage({ searchParams }: EventsPageProps) {
           </form>
         </div>
 
-        <div className="flex flex-col gap-3 border-b border-border/70 px-6 py-5 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex flex-col gap-3 border-b border-border/70 px-4 py-4 sm:px-6 sm:py-5 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p className="section-kicker">Event table</p>
+            <p className="section-kicker">Event feed</p>
             <h2 className="mt-1 text-2xl font-semibold tracking-tight">All upcoming events</h2>
             <p className="mt-2 text-sm text-muted-foreground">
               {searchQuery
@@ -198,16 +202,16 @@ export default async function EventsPage({ searchParams }: EventsPageProps) {
           </div>
         </div>
 
-        <div className="flex flex-col gap-3 border-b border-border/70 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 border-b border-border/70 px-4 py-4 sm:px-6 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-sm text-muted-foreground">
             {searchQuery
               ? `${events.length} result${events.length === 1 ? "" : "s"} on this page.`
               : `${events.length} event${events.length === 1 ? "" : "s"} on this page.`}
           </p>
-          <div className="flex flex-wrap gap-2">
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
             {hasPreviousPage ? (
               <Link
-                className="button-secondary h-10 px-4 py-0"
+                className="button-secondary h-11 px-4 py-0"
                 href={`/events${buildQueryString({
                   ...paginationBaseParams,
                   page: String(page - 1),
@@ -216,11 +220,11 @@ export default async function EventsPage({ searchParams }: EventsPageProps) {
                 Previous
               </Link>
             ) : (
-              <span className="button-secondary h-10 px-4 py-0 opacity-50">Previous</span>
+              <span className="button-secondary h-11 px-4 py-0 opacity-50">Previous</span>
             )}
             {hasNextPage ? (
               <Link
-                className="button-secondary h-10 px-4 py-0"
+                className="button-secondary h-11 px-4 py-0"
                 href={`/events${buildQueryString({
                   ...paginationBaseParams,
                   page: String(page + 1),
@@ -229,14 +233,14 @@ export default async function EventsPage({ searchParams }: EventsPageProps) {
                 Next
               </Link>
             ) : (
-              <span className="button-secondary h-10 px-4 py-0 opacity-50">Next</span>
+              <span className="button-secondary h-11 px-4 py-0 opacity-50">Next</span>
             )}
           </div>
         </div>
 
         {events.length > 0 ? (
           <>
-            <div className="hidden overflow-x-auto md:block">
+            <div className="hidden overflow-x-auto xl:block">
               <table className="min-w-full border-collapse text-sm">
                 <thead className="bg-muted/[0.4]">
                   <tr className="border-b border-border/70 text-left">
@@ -305,28 +309,30 @@ export default async function EventsPage({ searchParams }: EventsPageProps) {
               </table>
             </div>
 
-            <div className="md:hidden">
+            <div className="space-y-3 px-4 py-4 sm:px-6 sm:py-5 xl:hidden">
               {events.map((event) => (
-                <article className="border-b border-border/65 px-5 py-4 last:border-b-0" key={event._id}>
+                <article
+                  className="rounded-[1.35rem] border border-border/75 bg-card/88 px-4 py-4 shadow-[0_18px_36px_-30px_rgba(15,23,42,0.18)]"
+                  key={event._id}
+                >
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="font-medium text-foreground">{formatEventDate(event.date)}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">{formatEventTime(event.time)}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {formatEventTime(event.time)}
+                      </p>
                     </div>
                     <span className="app-chip">{event.eventType}</span>
                   </div>
 
                   <Link
-                    className="mt-3 block text-base font-semibold tracking-tight text-foreground hover:text-primary"
+                    className="mt-4 block text-lg font-semibold tracking-tight text-foreground hover:text-primary"
                     href={`/events/${event._id}`}
                   >
                     {event.title}
                   </Link>
 
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    {event.venue}
-                    {event.ticketPrice ? ` · ${event.ticketPrice}` : ""}
-                  </p>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">{event.venue}</p>
 
                   {event.artists.length > 0 ? (
                     <p className="mt-2 text-xs leading-5 text-muted-foreground">
@@ -334,13 +340,16 @@ export default async function EventsPage({ searchParams }: EventsPageProps) {
                     </p>
                   ) : null}
 
-                  <Link
-                    className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-primary hover:underline"
-                    href={`/events/${event._id}`}
-                  >
-                    Open details
-                    <ArrowRight className="h-4 w-4" />
-                  </Link>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {event.ticketPrice ? <span className="app-chip">{event.ticketPrice}</span> : null}
+                    <Link
+                      className="button-secondary h-11 gap-2 px-4 py-0 text-sm"
+                      href={`/events/${event._id}`}
+                    >
+                      Open details
+                      <ArrowRight className="h-4 w-4" />
+                    </Link>
+                  </div>
                 </article>
               ))}
             </div>

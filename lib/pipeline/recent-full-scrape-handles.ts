@@ -23,6 +23,11 @@ type IngestionBatchStateSnapshot = {
   currentHandle: string | null;
 };
 
+export type RecentFullScrapeAttemptSummary = {
+  attemptedHandles: string[];
+  lastFreshScrapeAt: string | null;
+};
+
 const listRecentFullScrapeJobsQuery =
   "ingestionJobs:listRecentFullScrapeJobs" as unknown as FunctionReference<"query">;
 
@@ -70,16 +75,30 @@ function getAttemptedHandlesFromRecentJob(job: RecentFullScrapeJobRecord): strin
   return [...new Set(attemptedHandles)];
 }
 
-export async function getRecentlyAttemptedFullScrapeHandles(options: {
+function getAttemptTimestamp(job: RecentFullScrapeJobRecord): number {
+  if (typeof job.startedAt === "string") {
+    const parsedStartedAt = Date.parse(job.startedAt);
+    if (Number.isFinite(parsedStartedAt)) {
+      return parsedStartedAt;
+    }
+  }
+
+  return job.createdAt;
+}
+
+export async function getRecentFullScrapeAttemptSummary(options: {
   candidateHandles: string[];
   minCreatedAt?: number;
-}): Promise<string[]> {
+}): Promise<RecentFullScrapeAttemptSummary> {
   const normalizedCandidates = [
     ...new Set(options.candidateHandles.map((handle) => normalizeHandle(handle)).filter(Boolean)),
   ];
 
   if (normalizedCandidates.length === 0) {
-    return [];
+    return {
+      attemptedHandles: [],
+      lastFreshScrapeAt: null,
+    };
   }
 
   const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
@@ -89,15 +108,44 @@ export async function getRecentlyAttemptedFullScrapeHandles(options: {
 
   const candidateSet = new Set(normalizedCandidates);
   const recentHandles = new Set<string>();
+  let lastFreshScrapeAtMs: number | null = null;
 
   for (const job of recentJobs) {
-    for (const handle of getAttemptedHandlesFromRecentJob(job)) {
+    const attemptedHandles = getAttemptedHandlesFromRecentJob(job);
+    if (attemptedHandles.length === 0) {
+      continue;
+    }
+
+    const attemptTimestamp = getAttemptTimestamp(job);
+    let matchedCandidateHandle = false;
+
+    for (const handle of attemptedHandles) {
       const normalizedHandle = normalizeHandle(handle);
       if (normalizedHandle && candidateSet.has(normalizedHandle)) {
         recentHandles.add(normalizedHandle);
+        matchedCandidateHandle = true;
       }
+    }
+
+    if (
+      matchedCandidateHandle &&
+      (lastFreshScrapeAtMs === null || attemptTimestamp > lastFreshScrapeAtMs)
+    ) {
+      lastFreshScrapeAtMs = attemptTimestamp;
     }
   }
 
-  return [...recentHandles];
+  return {
+    attemptedHandles: [...recentHandles],
+    lastFreshScrapeAt:
+      lastFreshScrapeAtMs === null ? null : new Date(lastFreshScrapeAtMs).toISOString(),
+  };
+}
+
+export async function getRecentlyAttemptedFullScrapeHandles(options: {
+  candidateHandles: string[];
+  minCreatedAt?: number;
+}): Promise<string[]> {
+  const summary = await getRecentFullScrapeAttemptSummary(options);
+  return summary.attemptedHandles;
 }

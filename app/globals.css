@@ -124,15 +124,18 @@
   }
   html {
     scroll-behavior: smooth;
+    background: var(--background);
   }
   body {
     @apply bg-background text-foreground;
     background-image:
-      radial-gradient(circle at 0% 0%, rgba(56, 189, 248, 0.14), transparent 24rem),
-      radial-gradient(circle at 100% 0%, rgba(99, 102, 241, 0.14), transparent 22rem),
-      radial-gradient(circle at 50% 100%, rgba(20, 184, 166, 0.08), transparent 24rem),
-      linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(248, 250, 252, 0.94));
+      radial-gradient(circle at 0% 0%, rgba(14, 165, 233, 0.16), transparent 24rem),
+      radial-gradient(circle at 100% 0%, rgba(56, 189, 248, 0.16), transparent 22rem),
+      radial-gradient(circle at 50% 100%, rgba(20, 184, 166, 0.1), transparent 24rem),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(247, 250, 252, 0.96));
     background-attachment: fixed;
+    min-height: 100svh;
+    overflow-x: hidden;
   }
   a,
   button,
@@ -147,16 +150,21 @@
 
 @layer components {
   .app-page {
-    @apply mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-6 sm:px-6 sm:py-8 lg:px-8;
-    min-height: calc(100svh - 7rem);
+    @apply mx-auto flex w-full max-w-[90rem] flex-col gap-5 px-3 py-4 sm:gap-6 sm:px-5 sm:py-6 lg:px-8 lg:py-8;
+    min-height: calc(100svh - 5.5rem);
+    padding-bottom: calc(6rem + env(safe-area-inset-bottom));
+  }
+
+  .app-page-wide {
+    max-width: 96rem;
   }
 
   .hero-panel {
-    @apply overflow-hidden rounded-[2rem] border border-border/70 bg-card/85 shadow-[0_30px_90px_-48px_rgba(15,23,42,0.38)] backdrop-blur-sm;
+    @apply overflow-hidden rounded-[1.8rem] border border-border/70 bg-card/88 shadow-[0_30px_90px_-54px_rgba(15,23,42,0.34)] backdrop-blur-sm;
   }
 
   .glass-panel {
-    @apply rounded-[1.5rem] border border-border/70 bg-background/82 shadow-[0_24px_70px_-42px_rgba(15,23,42,0.26)] backdrop-blur-sm;
+    @apply rounded-[1.35rem] border border-border/70 bg-background/84 shadow-[0_24px_70px_-46px_rgba(15,23,42,0.24)] backdrop-blur-sm;
   }
 
   .section-kicker {
@@ -164,18 +172,36 @@
   }
 
   .app-chip {
-    @apply inline-flex items-center gap-2 rounded-full border border-border/70 bg-background/82 px-3 py-1 text-xs font-medium text-muted-foreground;
+    @apply inline-flex items-center gap-2 rounded-full border border-border/70 bg-background/82 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground;
   }
 
   .button-primary {
-    @apply inline-flex items-center justify-center rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground shadow-[0_18px_36px_-22px_rgba(79,70,229,0.7)] hover:-translate-y-0.5 hover:shadow-[0_24px_42px_-20px_rgba(79,70,229,0.68)];
+    @apply inline-flex min-h-12 items-center justify-center rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow-[0_18px_36px_-22px_rgba(14,116,144,0.52)] hover:-translate-y-0.5 hover:shadow-[0_24px_42px_-20px_rgba(14,116,144,0.5)];
   }
 
   .button-secondary {
-    @apply inline-flex items-center justify-center rounded-full border border-border/80 bg-background/82 px-5 py-2.5 text-sm font-semibold text-foreground hover:border-primary/35 hover:bg-card;
+    @apply inline-flex min-h-12 items-center justify-center rounded-full border border-border/80 bg-background/82 px-5 py-3 text-sm font-semibold text-foreground hover:border-primary/35 hover:bg-card;
   }
 
   .metric-card {
-    @apply rounded-[1.5rem] border border-border/70 bg-background/78 px-5 py-5 shadow-[0_18px_45px_-32px_rgba(15,23,42,0.26)] backdrop-blur-sm;
+    @apply rounded-[1.35rem] border border-border/70 bg-background/80 px-4 py-4 shadow-[0_18px_45px_-34px_rgba(15,23,42,0.22)] backdrop-blur-sm sm:px-5 sm:py-5;
+  }
+
+  .mobile-topbar {
+    @apply sticky top-0 z-30 px-3 pt-3 md:hidden;
+  }
+
+  .mobile-nav-shell {
+    @apply fixed inset-x-0 bottom-0 z-50 px-3 pt-2 md:hidden;
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+  }
+}
+
+@media (min-width: 768px) {
+  @layer components {
+    .app-page {
+      min-height: calc(100svh - 7.5rem);
+      padding-bottom: 2.5rem;
+    }
   }
 }

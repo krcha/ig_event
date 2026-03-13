@@ -5,6 +5,7 @@ import {
   parseNormalizedEventDate,
   type PublicEvent,
 } from "@/lib/events/public-events";
+import { MobileMonthDayStrip } from "@/components/calendar/mobile-month-day-strip";
 import { MonthEventsTable } from "@/components/calendar/month-events-table";
 import { cn } from "@/lib/utils";
 
@@ -83,6 +84,14 @@ function getCalendarDays(monthStart: Date): Date[] {
     const day = new Date(start);
     day.setDate(start.getDate() + index);
     return day;
+  });
+}
+
+function getMonthDays(monthStart: Date): Date[] {
+  const dayCount = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate();
+
+  return Array.from({ length: dayCount }, (_, index) => {
+    return new Date(monthStart.getFullYear(), monthStart.getMonth(), index + 1);
   });
 }
 
@@ -200,6 +209,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const selectedDayEvents = monthEventsByDay.get(selectedDayKey) ?? [];
   const selectedDate = parseNormalizedEventDate(selectedDayKey) ?? monthStart;
   const calendarDays = getCalendarDays(monthStart);
+  const monthDays = getMonthDays(monthStart);
   const previousMonth = new Date(monthStart.getFullYear(), monthStart.getMonth() - 1, 1);
   const nextMonth = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
   const monthLabel = formatDisplayDate(monthStart, { month: "long", year: "numeric" });
@@ -215,10 +225,31 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     type: selectedType,
     weekend: weekendOnly ? "1" : undefined,
   };
+  const isCurrentMonth =
+    monthStart.getFullYear() === today.getFullYear() && monthStart.getMonth() === today.getMonth();
+  const mobileMonthDays = monthDays.map((day) => {
+    const dayKey = formatDateKey(day);
+    const dayEvents = monthEventsByDay.get(dayKey) ?? [];
+
+    return {
+      dayKey,
+      href: `/calendar${buildQueryString({
+        ...baseFilters,
+        month: monthParam,
+        day: dayKey,
+      })}`,
+      weekdayLabel: formatDisplayDate(day, { weekday: "short" }),
+      dayNumber: day.getDate(),
+      eventCount: dayEvents.length,
+      isSelected: dayKey === selectedDayKey,
+      isToday: dayKey === todayKey,
+      isAnchor: isCurrentMonth ? dayKey === todayKey : dayKey === selectedDayKey,
+    };
+  });
 
   return (
-    <main className="mx-auto flex w-full max-w-[96rem] flex-col gap-3 px-3 py-4 sm:px-5 sm:py-5 lg:px-6">
-      <header className="glass-panel overflow-hidden px-4 py-3.5 sm:px-5 sm:py-4">
+    <main className="app-page app-page-wide gap-4">
+      <header className="glass-panel overflow-hidden px-4 py-4 sm:px-5 sm:py-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-4">
             <div className="flex h-11 w-11 items-center justify-center rounded-[1rem] bg-primary/[0.1] text-primary shadow-[0_18px_30px_-22px_rgba(59,130,246,0.8)]">
@@ -227,17 +258,17 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
             <div className="space-y-0.5">
               <p className="section-kicker">Calendar</p>
               <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Month view</h1>
-              <p className="text-sm text-muted-foreground">
+              <p className="text-sm leading-6 text-muted-foreground">
                 {monthEvents.length} events across {activeDayCount} active days this month.
               </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
             <span className="app-chip">
               {weekendEventCount} weekend event{weekendEventCount === 1 ? "" : "s"}
             </span>
-            <Link className="button-secondary h-9 px-4 py-0 text-sm" href="/events">
+            <Link className="button-secondary w-full px-4 py-0 text-sm sm:w-auto" href="/events">
               Events
             </Link>
           </div>
@@ -245,7 +276,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       </header>
 
       <section className="overflow-hidden rounded-[2rem] border border-border/80 bg-card/95 shadow-[0_34px_90px_-58px_rgba(15,23,42,0.42)]">
-        <div className="border-b border-border/80 bg-background/88 px-4 py-3.5 sm:px-5 sm:py-4">
+        <div className="border-b border-border/80 bg-background/88 px-4 py-4 sm:px-5 sm:py-5">
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-center 2xl:justify-between">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
@@ -295,9 +326,9 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                 <span className="app-chip">{selectedDayEvents.length} on selected day</span>
-                <Link className="button-secondary h-9 px-4 py-0 text-sm" href="/events">
+                <Link className="button-secondary w-full px-4 py-0 text-sm sm:w-auto" href="/events">
                   List view
                 </Link>
               </div>
@@ -351,16 +382,16 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 </select>
               </label>
 
-              <div className="flex items-end gap-2">
+              <div className="grid grid-cols-2 gap-2 sm:flex sm:items-end">
                 <button
-                  className="inline-flex h-10 items-center justify-center gap-2 rounded-2xl bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-[0_24px_40px_-28px_rgba(59,130,246,0.92)] hover:opacity-95"
+                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-[0_24px_40px_-28px_rgba(59,130,246,0.92)] hover:opacity-95"
                   type="submit"
                 >
                   <Filter className="h-4 w-4" />
                   Apply
                 </button>
                 <Link
-                  className="inline-flex h-10 items-center justify-center rounded-2xl border border-border/80 bg-background px-4 text-sm font-semibold text-foreground hover:border-primary/30 hover:bg-card"
+                  className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-border/80 bg-background px-4 text-sm font-semibold text-foreground hover:border-primary/30 hover:bg-card"
                   href={`/calendar${buildQueryString({
                     month: monthParam,
                     day: selectedDayKey,
@@ -386,7 +417,23 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
 
         {!error ? (
           <>
-            <div className="border-b border-border/80">
+            <div className="border-b border-border/80 lg:hidden">
+              <div className="px-4 py-4 sm:px-5">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="section-kicker">Tap a day</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Mobile browsing stays focused on a selected-day agenda.
+                    </p>
+                  </div>
+                  <span className="app-chip">{monthDays.length} days</span>
+                </div>
+
+                <MobileMonthDayStrip days={mobileMonthDays} />
+              </div>
+            </div>
+
+            <div className="hidden border-b border-border/80 lg:block">
               <div className="overflow-x-auto">
                 <div className="min-w-[66rem] bg-card">
                   <div className="grid grid-cols-7 border-b border-border/80 bg-muted/[0.42]">
@@ -484,7 +531,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 <div className="rounded-[1.6rem] border border-border/80 bg-card/96 p-4 shadow-[0_28px_70px_-48px_rgba(15,23,42,0.34)]">
                   <div className="border-b border-border/80 pb-3">
                     <p className="section-kicker">Selected day</p>
-                    <div className="mt-2.5 flex items-start justify-between gap-3">
+                    <div className="mt-2.5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="space-y-0.5">
                         <h3 className="text-xl font-semibold tracking-tight">
                           {formatDisplayDate(selectedDate, {
@@ -494,7 +541,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                           })}
                         </h3>
                       </div>
-                      <div className="rounded-[1rem] bg-primary/[0.08] px-2.5 py-2 text-center text-primary">
+                      <div className="w-fit rounded-[1rem] bg-primary/[0.08] px-2.5 py-2 text-center text-primary">
                         <p className="text-[10px] font-semibold uppercase tracking-[0.22em]">
                           {formatDisplayDate(selectedDate, { month: "short" })}
                         </p>
@@ -520,15 +567,15 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                         <div className="absolute inset-y-3 left-0 w-1 rounded-full bg-primary/75" />
                         <div className="flex items-start gap-2.5 pl-2">
                           <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
                               <span className="rounded-full bg-primary/[0.09] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-primary">
                                 {event.time ?? "Time TBA"}
                               </span>
-                              <h4 className="truncate text-sm font-semibold tracking-tight">
+                              <h4 className="text-sm font-semibold tracking-tight">
                                 {event.title}
                               </h4>
                             </div>
-                            <p className="mt-1 truncate text-xs text-muted-foreground">
+                            <p className="mt-1 text-xs leading-5 text-muted-foreground">
                               {formatAgendaMeta(event)}
                             </p>
                           </div>

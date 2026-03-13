@@ -65,8 +65,8 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
 
   return (
     <main className="app-page">
-      <div className="flex items-center justify-between gap-3">
-        <Link className="button-secondary gap-2" href="/events">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <Link className="button-secondary w-full gap-2 sm:w-auto" href="/events">
           <ArrowLeft className="h-4 w-4" />
           Back to events
         </Link>
@@ -78,7 +78,27 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
       {event ? (
         <article className="hero-panel">
           <div className="grid gap-0 lg:grid-cols-[minmax(0,1.05fr)_320px]">
-            <div className="space-y-6 px-6 py-7 sm:px-8">
+            <div className="order-1 border-b border-border/70 bg-secondary/55 p-4 sm:p-6 lg:order-2 lg:border-l lg:border-b-0">
+              {event.imageUrl ? (
+                <div className="glass-panel overflow-hidden p-2">
+                  <div className="relative aspect-[4/5] min-h-72 w-full overflow-hidden rounded-[1.25rem]">
+                    <Image
+                      alt={event.title}
+                      className="object-cover"
+                      fill
+                      sizes="(max-width: 1024px) 100vw, 320px"
+                      src={event.imageUrl}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="glass-panel flex min-h-72 items-center justify-center px-6 text-center text-sm text-muted-foreground">
+                  No poster image is available for this event.
+                </div>
+              )}
+            </div>
+
+            <div className="order-2 space-y-5 px-5 py-6 sm:px-8 sm:py-8 lg:order-1 lg:space-y-6">
               <div className="flex flex-wrap gap-2">
                 <span className="app-chip">{event.status}</span>
                 <span className="app-chip">{event.eventType}</span>
@@ -96,13 +116,13 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                   {event.title}
                 </h1>
                 {event.description ? (
-                  <p className="max-w-3xl text-base leading-7 text-muted-foreground">
+                  <p className="max-w-3xl text-sm leading-7 text-muted-foreground sm:text-base">
                     {event.description}
                   </p>
                 ) : null}
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-3">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 <div className="metric-card">
                   <p className="section-kicker">Date</p>
                   <p className="mt-3 inline-flex items-center gap-2 text-base font-semibold">
@@ -139,37 +159,22 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                 </div>
               ) : null}
 
-              {event.instagramPostUrl ? (
-                <a
-                  className="button-primary gap-2"
-                  href={event.instagramPostUrl}
-                  rel="noreferrer"
-                  target="_blank"
-                >
-                  Open Instagram post
-                  <ExternalLink className="h-4 w-4" />
-                </a>
-              ) : null}
-            </div>
-
-            <div className="border-t border-border/70 bg-secondary/55 p-6 lg:border-l lg:border-t-0">
-              {event.imageUrl ? (
-                <div className="glass-panel overflow-hidden p-2">
-                  <div className="relative aspect-[4/5] min-h-72 w-full overflow-hidden rounded-[1.25rem]">
-                    <Image
-                      alt={event.title}
-                      className="object-cover"
-                      fill
-                      sizes="(max-width: 1024px) 100vw, 320px"
-                      src={event.imageUrl}
-                    />
-                  </div>
-                </div>
-              ) : (
-                <div className="glass-panel flex min-h-72 items-center justify-center px-6 text-center text-sm text-muted-foreground">
-                  No poster image is available for this event.
-                </div>
-              )}
+              <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+                {event.instagramPostUrl ? (
+                  <a
+                    className="button-primary w-full gap-2 sm:w-auto"
+                    href={event.instagramPostUrl}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    Open Instagram post
+                    <ExternalLink className="h-4 w-4" />
+                  </a>
+                ) : null}
+                <Link className="button-secondary w-full sm:w-auto" href="/calendar">
+                  Open calendar
+                </Link>
+              </div>
             </div>
           </div>
         </article>

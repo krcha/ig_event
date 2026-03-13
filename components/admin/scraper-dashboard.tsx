@@ -34,7 +34,9 @@ type ScrapeStartPayload = {
   source?: ScrapeSource;
   handles?: string[];
   statusUrl?: string;
+  errorStep?: string;
   error?: string;
+  lastFreshScrapeAt?: string | null;
 };
 
 type ScrapeJobPayload = {
@@ -84,6 +86,16 @@ function formatDateTime(value: string | undefined): string {
     return "(none)";
   }
   return new Date(value).toLocaleString();
+}
+
+function buildScrapeStartErrorMessage(payload: ScrapeStartPayload, status: number): string {
+  const baseMessage = payload.error ?? `Failed to start scraper job (status ${status}).`;
+
+  if (!payload.lastFreshScrapeAt) {
+    return baseMessage;
+  }
+
+  return `${baseMessage} Last fresh scrape attempt: ${formatDateTime(payload.lastFreshScrapeAt)}.`;
 }
 
 function normalizeApiErrorText(rawText: string, status: number): string {
@@ -222,7 +234,7 @@ export function ScraperDashboard() {
 
       const payload = await readJsonPayload<ScrapeStartPayload>(response);
       if (!response.ok) {
-        throw new Error(payload.error ?? "Failed to start scraper job.");
+        throw new Error(buildScrapeStartErrorMessage(payload, response.status));
       }
       if (!payload.started || !payload.jobId || !payload.statusUrl) {
         throw new Error("Invalid scraper job response.");

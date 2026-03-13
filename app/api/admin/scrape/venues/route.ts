@@ -10,7 +10,7 @@ import {
 } from "@/lib/pipeline/run-instagram-ingestion";
 import {
   FULL_SCRAPE_COOLDOWN_MS,
-  getRecentlyAttemptedFullScrapeHandles,
+  getRecentFullScrapeAttemptSummary,
 } from "@/lib/pipeline/recent-full-scrape-handles";
 import { getRequiredEnv, hasClerkEnv } from "@/lib/utils/env";
 
@@ -109,11 +109,11 @@ export async function POST(request: Request) {
 
     if (mode === "full_scrape") {
       step = "filter_recent_full_scrapes";
-      const recentlyAttemptedHandles = await getRecentlyAttemptedFullScrapeHandles({
+      const recentFullScrapeSummary = await getRecentFullScrapeAttemptSummary({
         candidateHandles: activeVenueHandles,
         minCreatedAt: Date.now() - FULL_SCRAPE_COOLDOWN_MS,
       });
-      const recentHandleSet = new Set(recentlyAttemptedHandles);
+      const recentHandleSet = new Set(recentFullScrapeSummary.attemptedHandles);
       handles = activeVenueHandles.filter((handle) => !recentHandleSet.has(handle));
 
       if (handles.length === 0) {
@@ -121,6 +121,7 @@ export async function POST(request: Request) {
           {
             errorStep: "filter_recent_full_scrapes",
             error: "All active venues have already had a fresh scrape attempt in the last 24 hours.",
+            lastFreshScrapeAt: recentFullScrapeSummary.lastFreshScrapeAt,
           },
           { status: 400 },
         );

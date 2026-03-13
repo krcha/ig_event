@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "qa:dedupe": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-deduplication.mjs",
     "qa:extraction": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-extraction-standardization.mjs",
     "convex:codegen": "npx convex codegen --typecheck disable"
   },
