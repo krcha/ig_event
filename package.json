@@ -9,7 +9,9 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "qa:dedupe": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-deduplication.mjs",
+    "qa:automerge": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-approved-event-automerge.mjs",
     "qa:extraction": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-extraction-standardization.mjs",
+    "qa:release": "node scripts/release-check.mjs",
     "convex:codegen": "npx convex codegen --typecheck disable"
   },
   "dependencies": {

@@ -43,6 +43,46 @@ async function deleteEventWithSavedReferences(
   return savedEvents.length;
 }
 
+async function reassignSavedEventReferences(
+  ctx: MutationCtx,
+  fromEventId: Id<"events">,
+  toEventId: Id<"events">,
+): Promise<{ movedCount: number; dedupedCount: number }> {
+  if (fromEventId === toEventId) {
+    return { movedCount: 0, dedupedCount: 0 };
+  }
+
+  const savedEvents = await ctx.db
+    .query("userSavedEvents")
+    .withIndex("by_event", (q) => q.eq("eventId", fromEventId))
+    .collect();
+
+  let movedCount = 0;
+  let dedupedCount = 0;
+
+  for (const savedEvent of savedEvents) {
+    const existingPrimarySave = await ctx.db
+      .query("userSavedEvents")
+      .withIndex("by_user_event", (q) =>
+        q.eq("userId", savedEvent.userId).eq("eventId", toEventId),
+      )
+      .unique();
+
+    if (existingPrimarySave) {
+      await ctx.db.delete(savedEvent._id);
+      dedupedCount += 1;
+      continue;
+    }
+
+    await ctx.db.patch(savedEvent._id, {
+      eventId: toEventId,
+    });
+    movedCount += 1;
+  }
+
+  return { movedCount, dedupedCount };
+}
+
 export const getEvent = query({
   args: { id: v.id("events") },
   handler: async (ctx, args) => {
@@ -339,7 +379,8 @@ export const mergeApprovedEvents = mutation({
     }
 
     for (const duplicateId of duplicateIds) {
-      await deleteEventWithSavedReferences(ctx, duplicateId);
+      await reassignSavedEventReferences(ctx, duplicateId, args.primaryId);
+      await ctx.db.delete(duplicateId);
     }
 
     return {

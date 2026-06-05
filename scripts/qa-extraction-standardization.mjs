@@ -165,6 +165,8 @@ function runConfidenceQa() {
     shouldAutoApproveConfidenceScore(AUTO_APPROVE_CONFIDENCE_THRESHOLD),
     false,
   );
+  assert.equal(AUTO_APPROVE_CONFIDENCE_THRESHOLD, 0.9);
+  assert.equal(shouldAutoApproveConfidenceScore(0.89), false);
   assert.equal(shouldAutoApproveConfidenceScore(0.91), true);
 }
 

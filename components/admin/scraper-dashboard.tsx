@@ -52,6 +52,9 @@ type ScrapeJobPayload = {
 const POLL_INTERVAL_MS = 2_000;
 const SHORT_BACKFILL_DAYS = 3;
 type HandleSummary = IngestionSummary["handles"][number];
+type ApprovedDuplicateCleanupSummary = NonNullable<
+  IngestionSummary["approvedDuplicateCleanup"]
+>;
 
 const HANDLE_SUMMARY_METRICS: Array<{
   label: string;
@@ -59,6 +62,8 @@ const HANDLE_SUMMARY_METRICS: Array<{
 }> = [
   { label: "Fetched posts", getValue: (item) => item.fetchedPosts },
   { label: "Inserted events", getValue: (item) => item.insertedEvents },
+  { label: "Auto-approved events", getValue: (item) => item.insertedApprovedEvents ?? 0 },
+  { label: "Pending review", getValue: (item) => item.insertedPendingEvents ?? 0 },
   { label: "Skipped duplicates", getValue: (item) => item.skippedDuplicates },
   { label: "Updated duplicates", getValue: (item) => item.updated_duplicates_bad_data },
   { label: "Skipped missing date", getValue: (item) => item.skipped_missing_date },
@@ -145,7 +150,7 @@ function getSourceLabel(source: ScrapeSource | undefined): string {
     case "cron_active_venues":
       return "Scheduled active venues";
     case "repair_active_venues":
-      return "Active venues repair";
+      return "Get new events";
     case "manual_apify_history":
       return "Recent Apify runs for pasted handles";
     case "active_venues_apify_history":
@@ -157,6 +162,29 @@ function getSourceLabel(source: ScrapeSource | undefined): string {
     default:
       return "Idle";
   }
+}
+
+function getAutomergeStatus(
+  summary: ApprovedDuplicateCleanupSummary | null | undefined,
+): string {
+  if (!summary) {
+    return "Not run";
+  }
+
+  if (summary.failedCount > 0 && summary.mergedDuplicateCount > 0) {
+    return "Partial";
+  }
+  if (summary.failedCount > 0) {
+    return "Failed";
+  }
+  if (summary.mergedDuplicateCount > 0) {
+    return `Merged ${summary.mergedDuplicateCount}`;
+  }
+  if (summary.remainingGroupCount > 0) {
+    return "Needs review";
+  }
+
+  return "No match";
 }
 
 export function ScraperDashboard() {
@@ -276,21 +304,33 @@ export function ScraperDashboard() {
     );
   }
 
+  function runGetNewEvents() {
+    void runQueuedScraper("/api/admin/scrape/repair", {
+      ...(resultsLimit ? { resultsLimit } : {}),
+      ...(daysBack ? { daysBack } : {}),
+    });
+  }
+
   const modeLabel =
     summaryPayload?.mode === "saved_posts"
-      ? "Saved posts to draft events"
-      : "Fresh Apify scrape to draft events";
+      ? "Saved posts extraction"
+      : "Fresh Apify scrape and extraction";
   const sourceLabel = getSourceLabel(summaryPayload?.source);
+  const approvedDuplicateCleanup = summaryPayload?.summary.approvedDuplicateCleanup ?? null;
+  const automergeStatus = getAutomergeStatus(approvedDuplicateCleanup);
 
   const aggregateMetrics = useMemo(() => {
     if (!summaryPayload) {
       return {
         fetched: 0,
         inserted: 0,
+        insertedApproved: 0,
+        insertedPending: 0,
         duplicates: 0,
         updated: 0,
         failures: 0,
         handlesWithErrors: 0,
+        quotaBlocked: false,
       };
     }
 
@@ -298,6 +338,10 @@ export function ScraperDashboard() {
       (totals, handleSummary) => ({
         fetched: totals.fetched + handleSummary.fetchedPosts,
         inserted: totals.inserted + handleSummary.insertedEvents,
+        insertedApproved:
+          totals.insertedApproved + (handleSummary.insertedApprovedEvents ?? 0),
+        insertedPending:
+          totals.insertedPending + (handleSummary.insertedPendingEvents ?? 0),
         duplicates: totals.duplicates + handleSummary.skippedDuplicates,
         updated: totals.updated + handleSummary.updated_duplicates_bad_data,
         failures:
@@ -306,17 +350,102 @@ export function ScraperDashboard() {
           handleSummary.failedConversions +
           handleSummary.failedExtractions,
         handlesWithErrors: totals.handlesWithErrors + (handleSummary.errors.length > 0 ? 1 : 0),
+        quotaBlocked:
+          totals.quotaBlocked ||
+          handleSummary.errors.some((error) => /insufficient_quota|quota/i.test(error)),
       }),
       {
         fetched: 0,
         inserted: 0,
+        insertedApproved: 0,
+        insertedPending: 0,
         duplicates: 0,
         updated: 0,
         failures: 0,
         handlesWithErrors: 0,
+        quotaBlocked: false,
       },
     );
   }, [summaryPayload]);
+
+  const runOutcome = useMemo(() => {
+    if (activeJobStatus === "queued" || activeJobStatus === "running") {
+      return {
+        tone: "border-primary/30 bg-primary/5 text-foreground",
+        title: "Getting new events is in progress.",
+        description:
+          "Instagram posts are being scraped first. Then AI extracts events, high-confidence events are auto-approved, uncertain events stay pending, and approved duplicates are auto-merged.",
+      };
+    }
+
+    if (!summaryPayload) {
+      return null;
+    }
+
+    if (aggregateMetrics.quotaBlocked && aggregateMetrics.inserted === 0) {
+      return {
+        tone: "border-destructive/30 bg-destructive/5 text-destructive",
+        title: "AI quota blocked event extraction.",
+        description:
+          aggregateMetrics.fetched > 0
+            ? "Posts were fetched and saved, but OpenAI quota stopped extraction before new events could be created."
+            : "OpenAI quota stopped extraction before this run could create approved or pending events.",
+      };
+    }
+
+    if (aggregateMetrics.insertedApproved > 0) {
+      return {
+        tone: "border-emerald-500/30 bg-emerald-500/5 text-foreground",
+        title: `${aggregateMetrics.insertedApproved} new approved event${
+          aggregateMetrics.insertedApproved === 1 ? "" : "s"
+        } should be visible in the calendar.`,
+        description:
+          aggregateMetrics.insertedPending > 0
+            ? `${aggregateMetrics.insertedPending} more event${
+                aggregateMetrics.insertedPending === 1 ? "" : "s"
+              } were created as pending review.${
+                aggregateMetrics.quotaBlocked
+                  ? " OpenAI quota also blocked at least one handle."
+                  : ""
+              }`
+            : `This run created calendar-visible events.${
+                aggregateMetrics.quotaBlocked
+                  ? " OpenAI quota also blocked at least one handle."
+                  : ""
+              }`,
+      };
+    }
+
+    if (aggregateMetrics.insertedPending > 0) {
+      return {
+        tone: "border-amber-500/30 bg-amber-500/5 text-foreground",
+        title: "New events were created, but they are not in the calendar yet.",
+        description: `${aggregateMetrics.insertedPending} event${
+          aggregateMetrics.insertedPending === 1 ? "" : "s"
+        } were created as pending, and /calendar only shows approved upcoming events.${
+          aggregateMetrics.quotaBlocked
+            ? " OpenAI quota also blocked at least one handle."
+            : ""
+        }`,
+      };
+    }
+
+    if (aggregateMetrics.fetched > 0 && aggregateMetrics.inserted === 0) {
+      return {
+        tone: "border-amber-500/30 bg-amber-500/5 text-foreground",
+        title: "Instagram scraping finished, but no events were created.",
+        description:
+          "Posts were fetched, but extraction or normalization did not produce approved or pending upcoming events.",
+      };
+    }
+
+    return {
+      tone: "border-border bg-background/70 text-muted-foreground",
+      title: "The run finished, but Instagram returned no recent posts.",
+      description:
+        "Nothing new matched the current scrape window, so there was nothing to add to the calendar.",
+    };
+  }, [activeJobStatus, aggregateMetrics, summaryPayload]);
 
   const filteredHandleSummaries = useMemo(() => {
     if (!summaryPayload) {
@@ -348,10 +477,59 @@ export function ScraperDashboard() {
       <section className="space-y-4 rounded-2xl border border-border bg-background/70 p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <h2 className="text-lg font-semibold">Run ingestion</h2>
+            <h2 className="text-lg font-semibold">Get New Events</h2>
             <p className="text-sm text-muted-foreground">
-              Choose the account set, then start at the earliest pipeline step you still need.
-              Each lower action skips work that the one above it already covers.
+              One button for the normal workflow: scrape active venues, save posts, extract events,
+              auto-approve only high-confidence ones, and auto-merge approved duplicates.
+            </p>
+          </div>
+          <button
+            className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={isLoading}
+            onClick={() => {
+              runGetNewEvents();
+            }}
+            type="button"
+          >
+            {isLoading ? "Getting new events..." : "GET NEW EVENTS"}
+          </button>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          {[
+            [
+              "Posts",
+              summaryPayload && aggregateMetrics.fetched === 0
+                ? "No posts"
+                : aggregateMetrics.fetched,
+            ],
+            ["Approved", aggregateMetrics.insertedApproved],
+            ["Pending review", aggregateMetrics.insertedPending],
+            ["Quota", summaryPayload ? (aggregateMetrics.quotaBlocked ? "Blocked" : "OK") : "Idle"],
+            ["Automerge", automergeStatus],
+          ].map(([label, value]) => (
+            <div className="rounded-2xl border border-border bg-card/90 p-4" key={label}>
+              <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">{label}</p>
+              <p className="mt-2 text-2xl font-semibold">{String(value)}</p>
+            </div>
+          ))}
+        </div>
+
+        {runOutcome ? (
+          <div className={`rounded-2xl border p-4 text-sm ${runOutcome.tone}`}>
+            <p className="font-medium">{runOutcome.title}</p>
+            <p className="mt-1">{runOutcome.description}</p>
+          </div>
+        ) : null}
+      </section>
+
+      <section className="space-y-4 rounded-2xl border border-border bg-background/70 p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold">Advanced Tools</h2>
+            <p className="text-sm text-muted-foreground">
+              Use these only when you want manual control over handles, scrape source, or
+              reprocessing steps.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -410,8 +588,7 @@ export function ScraperDashboard() {
             <div className="rounded-2xl border border-border bg-background/70 p-3 text-sm text-muted-foreground">
               <p>Handles entered: {handles.length}</p>
               <p>
-                Step 1 starts from a new Apify actor run, stores those posts, then creates draft
-                events.
+                Step 1 starts from a new Apify actor run, stores those posts, then extracts events.
               </p>
               <p className="mt-2">
                 Step 2 skips new actors and reuses posts from recent Apify runs. Step 3 skips
@@ -444,11 +621,12 @@ export function ScraperDashboard() {
                 }}
                 type="button"
               >
-                {isLoading ? "Running..." : "Run fresh Apify scrape and create draft events"}
+                {isLoading ? "Running..." : "Run fresh Apify scrape and extract events"}
               </button>
               <p className="mt-2 text-sm text-muted-foreground">
                 Starts from a new Apify scrape, saves those posts, runs AI on the poster and
-                caption, and writes draft events to Convex.
+                caption, writes approved or pending events to Convex, then auto-merges approved
+                duplicates.
               </p>
             </div>
             <div className="rounded-2xl border border-border bg-card/90 p-4">
@@ -463,12 +641,12 @@ export function ScraperDashboard() {
                 }}
                 type="button"
               >
-                {isLoading ? "Running..." : "Reuse recent Apify runs and create draft events"}
+                {isLoading ? "Running..." : "Reuse recent Apify runs and extract events"}
               </button>
               <p className="mt-2 text-sm text-muted-foreground">
                 Pulls matching posts from the last 300 successful Apify runs into Convex without
-                launching new actors, then reruns AI extraction. Ignores Results limit and Days
-                back.
+                launching new actors, then reruns AI extraction into approved or pending events.
+                Ignores Results limit and Days back.
               </p>
             </div>
             <div className="rounded-2xl border border-border bg-card/90 p-4">
@@ -483,11 +661,12 @@ export function ScraperDashboard() {
                 }}
                 type="button"
               >
-                {isLoading ? "Running..." : "Reprocess saved posts into draft events"}
+                {isLoading ? "Running..." : "Reprocess saved posts into events"}
               </button>
               <p className="mt-2 text-sm text-muted-foreground">
                 Starts from posts that are already saved for these handles in Convex and reruns AI
-                extraction without touching Apify.
+                extraction without touching Apify. High-confidence events may be approved
+                automatically; uncertain events stay pending.
               </p>
             </div>
           </div>
@@ -521,8 +700,8 @@ export function ScraperDashboard() {
                 </button>
                 <p className="mt-2 text-sm text-muted-foreground">
                   Runs a fresh Apify scrape for each active venue that has not had a full scrape
-                  attempt in the last 24 hours, stores those posts, then creates draft events from
-                  the new data.
+                  attempt in the last 24 hours, stores those posts, then creates approved or
+                  pending events from the new data and finishes with approved-event automerge.
                 </p>
               </div>
               <div className="rounded-2xl border border-border bg-card/90 p-4">
@@ -601,6 +780,8 @@ export function ScraperDashboard() {
             {[
               ["Fetched", aggregateMetrics.fetched],
               ["Inserted", aggregateMetrics.inserted],
+              ["Approved", aggregateMetrics.insertedApproved],
+              ["Pending review", aggregateMetrics.insertedPending],
               ["Duplicates", aggregateMetrics.duplicates],
               ["Updated", aggregateMetrics.updated],
               ["Failures", aggregateMetrics.failures],
@@ -614,6 +795,29 @@ export function ScraperDashboard() {
               </div>
             ))}
           </div>
+
+          {approvedDuplicateCleanup ? (
+            <div className="rounded-2xl border border-border bg-card/90 p-4 text-sm">
+              <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                Approved duplicate automerge
+              </p>
+              <p className="mt-2 font-medium">
+                {approvedDuplicateCleanup.mergedDuplicateCount > 0
+                  ? `Merged ${approvedDuplicateCleanup.mergedDuplicateCount} duplicates from ${approvedDuplicateCleanup.mergedGroupCount} group${approvedDuplicateCleanup.mergedGroupCount === 1 ? "" : "s"} in ${approvedDuplicateCleanup.passes} pass${approvedDuplicateCleanup.passes === 1 ? "" : "es"}.`
+                  : approvedDuplicateCleanup.failedCount > 0
+                    ? "Approved duplicate automerge failed."
+                    : approvedDuplicateCleanup.remainingGroupCount > 0
+                      ? "No approved duplicate groups were auto-merged."
+                      : "No approved duplicate groups matched after this run."}
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                {approvedDuplicateCleanup.failedCount > 0
+                  ? approvedDuplicateCleanup.error ??
+                    `${approvedDuplicateCleanup.failedCount} merge failure${approvedDuplicateCleanup.failedCount === 1 ? "" : "s"}.`
+                  : `${approvedDuplicateCleanup.scannedEventCount} upcoming approved events scanned, ${approvedDuplicateCleanup.remainingGroupCount} duplicate group${approvedDuplicateCleanup.remainingGroupCount === 1 ? "" : "s"} left for review.`}
+              </p>
+            </div>
+          ) : null}
 
           <div className="grid gap-3 xl:grid-cols-4">
             <div className="rounded-2xl border border-border p-4">

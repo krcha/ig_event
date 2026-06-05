@@ -37,6 +37,10 @@ import {
   shouldAutoApproveConfidenceScore,
 } from "@/lib/utils/confidence";
 import {
+  runApprovedEventAutoMerge,
+  type ApprovedEventAutoMergeSummary,
+} from "@/lib/events/approved-event-automerge";
+import {
   areCompatibleTitleFamilySlugs,
   buildTitleFamilySlug,
   collectComparableTextValues,
@@ -65,6 +69,8 @@ type HandleSummary = {
   fetched_posts: number;
   insertedEvents: number;
   inserted_events: number;
+  insertedApprovedEvents: number;
+  insertedPendingEvents: number;
   skippedDuplicates: number;
   skipped_duplicates: number;
   skipped_duplicates_clean: number;
@@ -91,6 +97,7 @@ export type IngestionSummary = {
   startedAt: string;
   finishedAt: string;
   handles: HandleSummary[];
+  approvedDuplicateCleanup?: ApprovedEventAutoMergeSummary;
 };
 
 export type IngestionBatchState = {
@@ -1117,6 +1124,8 @@ function createEmptyHandleSummary(handle: string): HandleSummary {
     fetched_posts: 0,
     insertedEvents: 0,
     inserted_events: 0,
+    insertedApprovedEvents: 0,
+    insertedPendingEvents: 0,
     skippedDuplicates: 0,
     skipped_duplicates: 0,
     skipped_duplicates_clean: 0,
@@ -1172,6 +1181,54 @@ export function createInitialIngestionBatchState(): IngestionBatchState {
     currentHandlePosts: [],
     seenSourceKeysByHandle: {},
   };
+}
+
+async function runApprovedDuplicateCleanupForIngestion(
+  client: ConvexHttpClient,
+  summary: IngestionSummary,
+  options: {
+    mode: IngestionRunMode;
+    handles: string[];
+  },
+): Promise<void> {
+  try {
+    const cleanupSummary = await runApprovedEventAutoMerge(client);
+    summary.approvedDuplicateCleanup = cleanupSummary;
+
+    logInfo("ingestion.approved_duplicates.auto_merged", {
+      mode: options.mode,
+      handles: options.handles,
+      approvedCount: cleanupSummary.approvedCount,
+      scannedEventCount: cleanupSummary.scannedEventCount,
+      duplicateGroupCount: cleanupSummary.duplicateGroupCount,
+      mergedGroupCount: cleanupSummary.mergedGroupCount,
+      mergedDuplicateCount: cleanupSummary.mergedDuplicateCount,
+      remainingGroupCount: cleanupSummary.remainingGroupCount,
+      failedCount: cleanupSummary.failedCount,
+      passes: cleanupSummary.passes,
+    });
+  } catch (error) {
+    const message = getErrorMessage(error);
+    summary.approvedDuplicateCleanup = {
+      approvedCount: 0,
+      finalApprovedCount: 0,
+      scannedEventCount: 0,
+      duplicateGroupCount: 0,
+      mergedGroupCount: 0,
+      mergedDuplicateCount: 0,
+      remainingGroupCount: 0,
+      failedCount: 1,
+      failures: [],
+      passes: 0,
+      error: message,
+    };
+
+    logError("ingestion.approved_duplicates.auto_merge_failed", {
+      mode: options.mode,
+      handles: options.handles,
+      error: message,
+    });
+  }
 }
 
 async function loadIngestionVenueContext(
@@ -3529,6 +3586,11 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
       )) as string;
       summary.insertedEvents += 1;
       summary.inserted_events += 1;
+      if (prepared.event.status === "approved") {
+        summary.insertedApprovedEvents += 1;
+      } else if (prepared.event.status === "pending") {
+        summary.insertedPendingEvents += 1;
+      }
       existingMatches.push({
         existingEvent: {
           _id: insertedId,
@@ -3619,6 +3681,72 @@ async function processLoadedPostsForHandle(
   }
 }
 
+async function runInstagramIngestionFullScrapeBatchStep(
+  options: IngestionBatchStepOptions & IngestionVenueContext & {
+    client: ConvexHttpClient;
+  },
+): Promise<IngestionBatchStepResult> {
+  const summary = options.summary;
+  const state = options.state;
+  const handleBatchSize = normalizeBatchSize(options.batchSize);
+  const handleBatch = options.handles.slice(
+    state.handleIndex,
+    state.handleIndex + handleBatchSize,
+  );
+
+  if (handleBatch.length > 0) {
+    const postsByHandle = await fetchFreshPostsForHandlesInParallel(
+      options.client,
+      handleBatch,
+      summary,
+      options,
+    );
+
+    for (const handle of handleBatch) {
+      state.currentHandle = handle;
+      state.currentPostIndex = 0;
+      state.currentHandlePosts = postsByHandle[handle] ?? [];
+
+      const posts = postsByHandle[handle];
+      if (posts) {
+        const seenSourceKeys = state.seenSourceKeysByHandle[handle] ?? [];
+        state.seenSourceKeysByHandle[handle] = seenSourceKeys;
+
+        await processLoadedPostsForHandle({
+          client: options.client,
+          handle,
+          posts,
+          summary: getOrCreateHandleSummary(summary, handle),
+          seenSourceKeys,
+          canonicalVenueNamesByHandle: options.canonicalVenueNamesByHandle,
+          venueNameOverridesByHandle: options.venueNameOverridesByHandle,
+          configuredVenueNamesByHandle: options.configuredVenueNamesByHandle,
+        });
+      }
+
+      state.handleIndex += 1;
+    }
+  }
+
+  const done = state.handleIndex >= options.handles.length;
+  if (done) {
+    state.currentHandle = null;
+    state.currentPostIndex = 0;
+    state.currentHandlePosts = [];
+    await runApprovedDuplicateCleanupForIngestion(options.client, summary, {
+      mode: "full_scrape",
+      handles: options.handles,
+    });
+  }
+  summary.finishedAt = new Date().toISOString();
+
+  return {
+    summary,
+    state,
+    done,
+  };
+}
+
 export async function runInstagramIngestionBatchStep(
   options: IngestionBatchStepOptions,
 ): Promise<IngestionBatchStepResult> {
@@ -3632,6 +3760,19 @@ export async function runInstagramIngestionBatchStep(
   const mode = options.mode ?? "full_scrape";
   const summary = options.summary;
   const state = options.state;
+
+  if (mode === "full_scrape") {
+    return runInstagramIngestionFullScrapeBatchStep({
+      ...options,
+      client,
+      canonicalVenueNamesByHandle,
+      venueNameOverridesByHandle,
+      configuredVenueNamesByHandle,
+      batchSize,
+      mode,
+    });
+  }
+
   let processedPosts = 0;
 
   while (processedPosts < batchSize && state.handleIndex < options.handles.length) {
@@ -3646,34 +3787,12 @@ export async function runInstagramIngestionBatchStep(
 
     if (state.currentHandlePosts.length === 0) {
       try {
-        const posts =
-          mode === "saved_posts"
-            ? await loadSavedScrapedPostsForHandle(
-                client,
-                handle,
-                options.resultsLimit,
-                options.daysBack,
-              )
-            : await scrapeInstagramAccount({
-                handle,
-                resultsLimit: options.resultsLimit,
-                daysBack: options.daysBack,
-              });
-
-        if (mode === "full_scrape") {
-          try {
-            await persistScrapedPostsForHandle(client, handle, posts);
-          } catch (persistError) {
-            logError("ingestion.scrape.persist_failed", {
-              step: "fetch_posts" satisfies IngestionStep,
-              handle,
-              sourcePostId: null,
-              shortcode: null,
-              instagramUrl: null,
-              error: getErrorMessage(persistError),
-            });
-          }
-        }
+        const posts = await loadSavedScrapedPostsForHandle(
+          client,
+          handle,
+          options.resultsLimit,
+          options.daysBack,
+        );
 
         handleSummary.fetchedPosts = posts.length;
         handleSummary.fetched_posts = posts.length;
@@ -3748,6 +3867,10 @@ export async function runInstagramIngestionBatchStep(
     state.currentHandle = null;
     state.currentPostIndex = 0;
     state.currentHandlePosts = [];
+    await runApprovedDuplicateCleanupForIngestion(client, summary, {
+      mode,
+      handles: options.handles,
+    });
   }
   summary.finishedAt = new Date().toISOString();
 
@@ -3910,66 +4033,57 @@ async function fetchFreshPostsForHandlesInParallel(
   options: Pick<RunInstagramIngestionOptions, "resultsLimit" | "daysBack">,
 ): Promise<Record<string, InstagramScrapedPost[]>> {
   const postsByHandle: Record<string, InstagramScrapedPost[]> = {};
+  let nextHandleIndex = 0;
 
-  for (const handleBatch of chunkItems(handles, DIRECT_FULL_SCRAPE_CONCURRENCY)) {
-    const batchResults = await Promise.all(
-      handleBatch.map(async (handle) => {
+  async function runWorker(): Promise<void> {
+    while (nextHandleIndex < handles.length) {
+      const handle = handles[nextHandleIndex];
+      nextHandleIndex += 1;
+
+      try {
+        const posts = await scrapeInstagramAccount({
+          handle,
+          resultsLimit: options.resultsLimit,
+          daysBack: options.daysBack,
+        });
+
         try {
-          const posts = await scrapeInstagramAccount({
+          await persistScrapedPostsForHandle(client, handle, posts);
+        } catch (persistError) {
+          logError("ingestion.scrape.persist_failed", {
+            step: "fetch_posts" satisfies IngestionStep,
             handle,
-            resultsLimit: options.resultsLimit,
-            daysBack: options.daysBack,
+            sourcePostId: null,
+            shortcode: null,
+            instagramUrl: null,
+            error: getErrorMessage(persistError),
           });
-
-          try {
-            await persistScrapedPostsForHandle(client, handle, posts);
-          } catch (persistError) {
-            logError("ingestion.scrape.persist_failed", {
-              step: "fetch_posts" satisfies IngestionStep,
-              handle,
-              sourcePostId: null,
-              shortcode: null,
-              instagramUrl: null,
-              error: getErrorMessage(persistError),
-            });
-          }
-
-          return {
-            handle,
-            posts,
-            error: null,
-          };
-        } catch (error) {
-          return {
-            handle,
-            posts: [] as InstagramScrapedPost[],
-            error: getErrorMessage(error),
-          };
         }
-      }),
-    );
 
-    for (const result of batchResults) {
-      const handleSummary = getOrCreateHandleSummary(summary, result.handle);
-
-      if (result.error) {
-        handleSummary.errors.push(result.error);
+        const handleSummary = getOrCreateHandleSummary(summary, handle);
+        handleSummary.fetchedPosts = posts.length;
+        handleSummary.fetched_posts = posts.length;
+        postsByHandle[handle] = posts;
+      } catch (error) {
+        const message = getErrorMessage(error);
+        const handleSummary = getOrCreateHandleSummary(summary, handle);
+        handleSummary.errors.push(message);
         logError("ingestion.scrape.failed", {
           step: "fetch_posts" satisfies IngestionStep,
-          handle: result.handle,
+          handle,
           sourcePostId: null,
           shortcode: null,
           instagramUrl: null,
-          error: result.error,
+          error: message,
         });
-        continue;
       }
-
-      handleSummary.fetchedPosts = result.posts.length;
-      handleSummary.fetched_posts = result.posts.length;
-      postsByHandle[result.handle] = result.posts;
     }
   }
+
+  const workerCount = Math.min(DIRECT_FULL_SCRAPE_CONCURRENCY, handles.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, () => runWorker()),
+  );
 
   return postsByHandle;
 }
@@ -4007,6 +4121,10 @@ async function runInstagramIngestionWithConcurrentFullScrape(
     });
   }
 
+  await runApprovedDuplicateCleanupForIngestion(client, summary, {
+    mode: "full_scrape",
+    handles: options.handles,
+  });
   summary.finishedAt = new Date().toISOString();
   return summary;
 }
