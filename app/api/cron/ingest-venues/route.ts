@@ -8,9 +8,13 @@ import {
   runInstagramIngestion,
 } from "@/lib/pipeline/run-instagram-ingestion";
 import {
-  FULL_SCRAPE_COOLDOWN_MS,
   getRecentlyAttemptedFullScrapeHandles,
 } from "@/lib/pipeline/recent-full-scrape-handles";
+import {
+  getCronIngestionConfig,
+  isAuthorizedCronRequestHeader,
+  selectCronIngestionHandles,
+} from "@/lib/pipeline/cron-ingestion-config";
 import { getRequiredEnv } from "@/lib/utils/env";
 
 export const dynamic = "force-dynamic";
@@ -21,15 +25,10 @@ const createIngestionJobMutation =
 const patchIngestionJobMutation =
   "ingestionJobs:patchJob" as unknown as FunctionReference<"mutation">;
 const DEFAULT_BATCH_SIZE = 2;
+const MS_PER_HOUR = 60 * 60 * 1000;
 
 function isAuthorizedCronRequest(request: Request): boolean {
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret) {
-    return true;
-  }
-
-  const authorizationHeader = request.headers.get("authorization");
-  return authorizationHeader === `Bearer ${cronSecret}`;
+  return isAuthorizedCronRequestHeader(request.headers.get("authorization"));
 }
 
 export async function GET(request: Request) {
@@ -41,27 +40,37 @@ export async function GET(request: Request) {
   let startedAt: string | null = null;
 
   try {
+    const cronConfig = getCronIngestionConfig();
     const activeVenueHandles = await getActiveVenueHandles();
     if (activeVenueHandles.length === 0) {
       return NextResponse.json({
         source: "cron_active_venues",
         handles: [],
         summary: createEmptyIngestionSummary([]),
+        costControls: cronConfig,
       });
     }
 
     const recentlyAttemptedHandles = await getRecentlyAttemptedFullScrapeHandles({
       candidateHandles: activeVenueHandles,
-      minCreatedAt: Date.now() - FULL_SCRAPE_COOLDOWN_MS,
+      minCreatedAt: Date.now() - cronConfig.fullScrapeCooldownHours * MS_PER_HOUR,
     });
-    const recentHandleSet = new Set(recentlyAttemptedHandles);
-    const handles = activeVenueHandles.filter((handle) => !recentHandleSet.has(handle));
+    const handleSelection = selectCronIngestionHandles({
+      activeVenueHandles,
+      recentlyAttemptedHandles,
+      maxHandlesPerRun: cronConfig.maxHandlesPerRun,
+    });
+    const { handles } = handleSelection;
 
     if (handles.length === 0) {
       return NextResponse.json({
         source: "cron_active_venues",
         handles: [],
         summary: createEmptyIngestionSummary([]),
+        activeVenueCount: activeVenueHandles.length,
+        skippedRecentlyAttempted: handleSelection.skippedRecentlyAttempted,
+        skippedDueToRunLimit: handleSelection.skippedDueToRunLimit,
+        costControls: cronConfig,
       });
     }
 
@@ -72,6 +81,8 @@ export async function GET(request: Request) {
       source: "cron_active_venues",
       mode: "full_scrape",
       handles,
+      resultsLimit: cronConfig.resultsLimit,
+      daysBack: cronConfig.daysBack,
       batchSize: DEFAULT_BATCH_SIZE,
       summaryJson: JSON.stringify(initialSummary),
       stateJson: JSON.stringify(initialState),
@@ -89,6 +100,8 @@ export async function GET(request: Request) {
     const summary = await runInstagramIngestion({
       handles,
       mode: "full_scrape",
+      resultsLimit: cronConfig.resultsLimit,
+      daysBack: cronConfig.daysBack,
     });
 
     await convex.mutation(patchIngestionJobMutation, {
@@ -105,6 +118,10 @@ export async function GET(request: Request) {
       source: "cron_active_venues",
       handles,
       summary,
+      activeVenueCount: activeVenueHandles.length,
+      skippedRecentlyAttempted: handleSelection.skippedRecentlyAttempted,
+      skippedDueToRunLimit: handleSelection.skippedDueToRunLimit,
+      costControls: cronConfig,
     });
   } catch (error) {
     if (jobId) {

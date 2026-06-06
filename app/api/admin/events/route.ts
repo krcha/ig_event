@@ -3,6 +3,7 @@ import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { hasClerkEnv } from "@/lib/utils/env";
+import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 
 type EventStatus = "pending" | "approved" | "rejected";
 
@@ -57,7 +58,7 @@ function mapEventRecord(event: EventRecord) {
     imageUrl: event.imageUrl ?? null,
     instagramPostUrl: event.instagramPostUrl ?? null,
     ticketPrice: event.ticketPrice ?? null,
-    eventType: event.eventType,
+    eventType: canonicalizeEventType(event.eventType),
     sourceCaption: event.sourceCaption ?? null,
     sourcePostedAt: event.sourcePostedAt ?? null,
     rawExtractionJson: event.rawExtractionJson ?? null,

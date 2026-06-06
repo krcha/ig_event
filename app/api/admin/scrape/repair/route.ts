@@ -7,6 +7,13 @@ import {
   createInitialIngestionBatchState,
   getActiveVenueHandles,
 } from "@/lib/pipeline/run-instagram-ingestion";
+import {
+  getRecentFullScrapeAttemptSummary,
+} from "@/lib/pipeline/recent-full-scrape-handles";
+import {
+  getCronIngestionConfig,
+  selectCronIngestionHandles,
+} from "@/lib/pipeline/cron-ingestion-config";
 import { getRequiredEnv, hasClerkEnv } from "@/lib/utils/env";
 
 type Body = {
@@ -16,9 +23,8 @@ type Body = {
 
 type RepairErrorStep = "auth_check" | "parse_body" | "enqueue_repair_job";
 
-const DEFAULT_REPAIR_RESULTS_LIMIT = 5;
-const DEFAULT_REPAIR_DAYS_BACK = 3;
 const DEFAULT_BATCH_SIZE = 2;
+const MS_PER_HOUR = 60 * 60 * 1000;
 const createIngestionJobMutation =
   "ingestionJobs:createJob" as unknown as FunctionReference<"mutation">;
 
@@ -79,18 +85,49 @@ export async function POST(request: Request) {
       );
     }
 
-    const resultsLimit =
-      normalizePositiveInt(body.resultsLimit) ?? DEFAULT_REPAIR_RESULTS_LIMIT;
-    const daysBack = normalizePositiveInt(body.daysBack) ?? DEFAULT_REPAIR_DAYS_BACK;
+    const cronConfig = getCronIngestionConfig();
+    const requestedResultsLimit = normalizePositiveInt(body.resultsLimit);
+    const requestedDaysBack = normalizePositiveInt(body.daysBack);
+    const resultsLimit = Math.min(
+      requestedResultsLimit ?? cronConfig.resultsLimit,
+      cronConfig.resultsLimit,
+    );
+    const daysBack = Math.min(
+      requestedDaysBack ?? cronConfig.daysBack,
+      cronConfig.daysBack,
+    );
 
     step = "enqueue_repair_job";
-    handles = await getActiveVenueHandles();
+    const activeVenueHandles = await getActiveVenueHandles();
+
+    if (activeVenueHandles.length === 0) {
+      return NextResponse.json(
+        {
+          errorStep: "enqueue_repair_job",
+          error: "No active venue handles are configured for repair.",
+        },
+        { status: 400 },
+      );
+    }
+
+    const recentFullScrapeSummary = await getRecentFullScrapeAttemptSummary({
+      candidateHandles: activeVenueHandles,
+      minCreatedAt: Date.now() - cronConfig.fullScrapeCooldownHours * MS_PER_HOUR,
+    });
+    const handleSelection = selectCronIngestionHandles({
+      activeVenueHandles,
+      recentlyAttemptedHandles: recentFullScrapeSummary.attemptedHandles,
+      maxHandlesPerRun: cronConfig.maxHandlesPerRun,
+    });
+    handles = handleSelection.handles;
 
     if (handles.length === 0) {
       return NextResponse.json(
         {
           errorStep: "enqueue_repair_job",
-          error: "No active venue handles are configured for repair.",
+          error: `All active venues have already had a fresh scrape attempt in the last ${cronConfig.fullScrapeCooldownHours} hours.`,
+          lastFreshScrapeAt: recentFullScrapeSummary.lastFreshScrapeAt,
+          skippedRecentlyAttempted: handleSelection.skippedRecentlyAttempted,
         },
         { status: 400 },
       );
@@ -119,6 +156,11 @@ export async function POST(request: Request) {
       resultsLimit,
       daysBack,
       batchSize: DEFAULT_BATCH_SIZE,
+      selectedHandleCount: handles.length,
+      activeVenueHandleCount: activeVenueHandles.length,
+      skippedRecentlyAttempted: handleSelection.skippedRecentlyAttempted,
+      skippedDueToRunLimit: handleSelection.skippedDueToRunLimit,
+      fullScrapeCooldownHours: cronConfig.fullScrapeCooldownHours,
     });
 
     return NextResponse.json({
@@ -129,7 +171,14 @@ export async function POST(request: Request) {
       jobId,
       status: "queued",
       statusUrl: `/api/admin/scrape/jobs/${jobId}`,
-      config: { resultsLimit, daysBack },
+      config: {
+        resultsLimit,
+        daysBack,
+        maxHandlesPerRun: cronConfig.maxHandlesPerRun,
+        fullScrapeCooldownHours: cronConfig.fullScrapeCooldownHours,
+        skippedRecentlyAttempted: handleSelection.skippedRecentlyAttempted,
+        skippedDueToRunLimit: handleSelection.skippedDueToRunLimit,
+      },
     }, { status: 202 });
   } catch (error) {
     const message =

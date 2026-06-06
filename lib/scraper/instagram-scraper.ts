@@ -1,12 +1,29 @@
-import { getRequiredEnv } from "@/lib/utils/env";
+import { getRequiredEnv } from "../utils/env.ts";
 
 const DEFAULT_APIFY_ACTOR_ID = "apify/instagram-post-scraper";
-const DEFAULT_RESULTS_LIMIT = 5;
+const DEFAULT_RESULTS_LIMIT = 2;
 const MAX_TOP_LEVEL_POSTS_PER_ACCOUNT = 5;
-const DEFAULT_DAYS_BACK = 5;
+const DEFAULT_DAYS_BACK = 10;
 const DEFAULT_APIFY_HISTORY_RUNS_LIMIT = 100;
 const MAX_APIFY_HISTORY_RUNS_LIMIT = 200;
-const DEFAULT_SKIP_PINNED_POSTS = true;
+const DEFAULT_SKIP_PINNED_POSTS = false;
+const DEFAULT_APIFY_DATA_DETAIL_LEVEL = "basicData";
+const DEFAULT_APIFY_RUN_TIMEOUT_SECONDS = 120;
+const MIN_APIFY_RUN_TIMEOUT_SECONDS = 30;
+const MAX_APIFY_RUN_TIMEOUT_SECONDS = 300;
+const SUPPORTED_APIFY_MEMORY_MBYTES = [
+  128,
+  256,
+  512,
+  1024,
+  2048,
+  4096,
+  8192,
+  16384,
+  32768,
+] as const;
+const MIN_APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN = 0.01;
+const DEFAULT_APIFY_MAX_TOTAL_CHARGE_USD_PER_RESULT = 0.005;
 const APIFY_API_BASE_URL = "https://api.apify.com/v2";
 const INSTAGRAM_HOSTNAMES = new Set(["instagram.com", "www.instagram.com"]);
 const INSTAGRAM_POST_PATH_PREFIXES = new Set(["p", "reel", "reels", "tv"]);
@@ -29,6 +46,25 @@ type ScrapeInstagramAccountOptions = {
   handle: string;
   resultsLimit?: number;
   daysBack?: number;
+};
+
+type ApifyDataDetailLevel = "basicData" | "detailedData";
+
+export type ApifyInstagramScrapeRequest = {
+  input: {
+    username: string[];
+    resultsLimit: number;
+    onlyPostsNewerThan: string;
+    skipPinnedPosts: boolean;
+    dataDetailLevel: ApifyDataDetailLevel;
+  };
+  runOptions: {
+    maxItems: number;
+    maxTotalChargeUsd: number;
+    timeout: number;
+    memory?: number;
+  };
+  daysBack: number;
 };
 
 type LoadRecentApifyRunPostsOptions = {
@@ -146,6 +182,122 @@ function normalizeResultsLimit(value: number | undefined): number {
     return DEFAULT_RESULTS_LIMIT;
   }
   return Math.min(rounded, MAX_TOP_LEVEL_POSTS_PER_ACCOUNT);
+}
+
+function normalizeDaysBack(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_DAYS_BACK;
+  }
+
+  const rounded = Math.trunc(value as number);
+  if (rounded < 1) {
+    return DEFAULT_DAYS_BACK;
+  }
+
+  return Math.min(rounded, 30);
+}
+
+function normalizeApifyDataDetailLevel(
+  value: string | undefined,
+): ApifyDataDetailLevel {
+  return value === "detailedData" ? "detailedData" : DEFAULT_APIFY_DATA_DETAIL_LEVEL;
+}
+
+function normalizeApifySkipPinnedPosts(value: string | undefined): boolean {
+  if (value == null || value.trim().length === 0) {
+    return DEFAULT_SKIP_PINNED_POSTS;
+  }
+
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+function normalizeApifyRunTimeoutSeconds(value: string | undefined): number {
+  if (!value) {
+    return DEFAULT_APIFY_RUN_TIMEOUT_SECONDS;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_APIFY_RUN_TIMEOUT_SECONDS;
+  }
+
+  return Math.max(
+    MIN_APIFY_RUN_TIMEOUT_SECONDS,
+    Math.min(parsed, MAX_APIFY_RUN_TIMEOUT_SECONDS),
+  );
+}
+
+function normalizeApifyMaxTotalChargeUsdPerRun(
+  value: string | undefined,
+  resultsLimit: number,
+): number {
+  if (value) {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return Math.max(
+    MIN_APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN,
+    resultsLimit * DEFAULT_APIFY_MAX_TOTAL_CHARGE_USD_PER_RESULT,
+  );
+}
+
+function normalizeApifyMemoryMbytes(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  const parsed = Number.parseFloat(normalized);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+
+  const requestedMbytes = /g(?:b|ib)?$/.test(normalized)
+    ? parsed * 1024
+    : parsed;
+
+  for (const memory of SUPPORTED_APIFY_MEMORY_MBYTES) {
+    if (memory >= requestedMbytes) {
+      return memory;
+    }
+  }
+
+  return SUPPORTED_APIFY_MEMORY_MBYTES[SUPPORTED_APIFY_MEMORY_MBYTES.length - 1];
+}
+
+export function buildApifyInstagramScrapeRequest(options: {
+  actorUsernameInput: string;
+  resultsLimit?: number;
+  daysBack?: number;
+  env?: Record<string, string | undefined>;
+}): ApifyInstagramScrapeRequest {
+  const env = options.env ?? process.env;
+  const resultsLimit = normalizeResultsLimit(options.resultsLimit);
+  const daysBack = normalizeDaysBack(options.daysBack);
+  const onlyPostsNewerThan = `${daysBack} day${daysBack === 1 ? "" : "s"}`;
+
+  return {
+    input: {
+      username: [options.actorUsernameInput],
+      resultsLimit,
+      onlyPostsNewerThan,
+      skipPinnedPosts: normalizeApifySkipPinnedPosts(env.APIFY_SKIP_PINNED_POSTS),
+      dataDetailLevel: normalizeApifyDataDetailLevel(env.APIFY_DATA_DETAIL_LEVEL),
+    },
+    runOptions: {
+      maxItems: resultsLimit,
+      maxTotalChargeUsd: normalizeApifyMaxTotalChargeUsdPerRun(
+        env.APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN,
+        resultsLimit,
+      ),
+      timeout: normalizeApifyRunTimeoutSeconds(env.APIFY_RUN_TIMEOUT_SECONDS),
+      memory: normalizeApifyMemoryMbytes(env.APIFY_MEMORY_MBYTES),
+    },
+    daysBack,
+  };
 }
 
 function normalizeRunsLimit(value: number | undefined): number {
@@ -662,23 +814,26 @@ export async function scrapeInstagramAccount(
   );
   const actorIdForPath = normalizeApifyActorIdForPath(actorId);
   const target = parseInstagramActorTarget(options.handle);
-  const resultsLimit = normalizeResultsLimit(options.resultsLimit);
-  const daysBack = options.daysBack ?? DEFAULT_DAYS_BACK;
-  const cutoff = Date.now() - daysBack * 24 * 60 * 60 * 1000;
-  const onlyPostsNewerThan = `${daysBack} day${daysBack === 1 ? "" : "s"}`;
+  const requestSettings = buildApifyInstagramScrapeRequest({
+    actorUsernameInput: target.actorUsernameInput,
+    resultsLimit: options.resultsLimit,
+    daysBack: options.daysBack,
+  });
+  const { input, runOptions } = requestSettings;
+  const resultsLimit = input.resultsLimit;
+  const cutoff = Date.now() - requestSettings.daysBack * 24 * 60 * 60 * 1000;
 
   const query = new URLSearchParams({
     token: apiToken,
     clean: "true",
+    maxItems: String(runOptions.maxItems),
+    maxTotalChargeUsd: String(runOptions.maxTotalChargeUsd),
+    timeout: String(runOptions.timeout),
   });
+  if (runOptions.memory) {
+    query.set("memory", String(runOptions.memory));
+  }
   const endpoint = `https://api.apify.com/v2/acts/${encodeURIComponent(actorIdForPath)}/run-sync-get-dataset-items?${query.toString()}`;
-  const username = [target.actorUsernameInput];
-  const input = {
-    username,
-    resultsLimit,
-    onlyPostsNewerThan,
-    skipPinnedPosts: DEFAULT_SKIP_PINNED_POSTS,
-  };
 
   console.info(
     JSON.stringify({
@@ -690,6 +845,11 @@ export async function scrapeInstagramAccount(
       resultsLimit: input.resultsLimit,
       onlyPostsNewerThan: input.onlyPostsNewerThan,
       skipPinnedPosts: input.skipPinnedPosts,
+      dataDetailLevel: input.dataDetailLevel,
+      maxItems: runOptions.maxItems,
+      maxTotalChargeUsd: runOptions.maxTotalChargeUsd,
+      timeout: runOptions.timeout,
+      memory: runOptions.memory ?? null,
     }),
   );
 

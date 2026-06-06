@@ -9,6 +9,7 @@ import {
   getEventExpiryCutoff,
   isEventExpiredAtCutoff,
 } from "../lib/events/event-retention";
+import { canonicalizeEventType } from "../lib/taxonomy/venue-types";
 
 const eventStatus = v.union(
   v.literal("pending"),
@@ -211,6 +212,7 @@ export const createEvent = mutation({
     const now = Date.now();
     const eventId = await ctx.db.insert("events", {
       ...args,
+      eventType: canonicalizeEventType(args.eventType),
       status: args.status ?? "pending",
       createdAt: now,
       updatedAt: now,
@@ -247,7 +249,13 @@ export const updateEvent = mutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
-    await ctx.db.patch(args.id, { ...args.patch, updatedAt: now });
+    const patch = {
+      ...args.patch,
+      ...(args.patch.eventType !== undefined
+        ? { eventType: canonicalizeEventType(args.patch.eventType) }
+        : {}),
+    };
+    await ctx.db.patch(args.id, { ...patch, updatedAt: now });
   },
 });
 
@@ -372,8 +380,14 @@ export const mergeApprovedEvents = mutation({
 
     const now = Date.now();
     if (Object.keys(args.patch).length > 0) {
-      await ctx.db.patch(args.primaryId, {
+      const patch = {
         ...args.patch,
+        ...(args.patch.eventType !== undefined
+          ? { eventType: canonicalizeEventType(args.patch.eventType) }
+          : {}),
+      };
+      await ctx.db.patch(args.primaryId, {
+        ...patch,
         updatedAt: now,
       });
     }

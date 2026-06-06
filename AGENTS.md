@@ -7,5 +7,5 @@ Short version:
 - Do not replace Convex, Clerk, OpenAI, or Apify unless explicitly asked.
 - Preserve the existing ingestion and moderation behavior.
 - Run `npm run qa:release` and `git diff --check` before handoff.
-- Treat the local `next build` hang as the current release blocker.
+- `npm run qa:release` includes `npm run build`; treat build failures as release blockers.
 - Never commit secrets or revert unrelated user work.

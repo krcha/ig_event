@@ -9,6 +9,7 @@ import {
   type ApprovedEventRecordForReview,
 } from "@/lib/ai/review-approved-events";
 import { hasClerkEnv } from "@/lib/utils/env";
+import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 
 type EventRecord = {
   _id: string;
@@ -55,7 +56,7 @@ function mapApprovedEvent(event: EventRecord): ApprovedEventRecordForReview {
     imageUrl: event.imageUrl ?? null,
     instagramPostUrl: event.instagramPostUrl ?? null,
     ticketPrice: event.ticketPrice ?? null,
-    eventType: event.eventType,
+    eventType: canonicalizeEventType(event.eventType),
     sourceCaption: event.sourceCaption ?? null,
     sourcePostedAt: event.sourcePostedAt ?? null,
     normalizedFieldsJson: event.normalizedFieldsJson ?? null,

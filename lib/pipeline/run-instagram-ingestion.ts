@@ -40,6 +40,7 @@ import {
   runApprovedEventAutoMerge,
   type ApprovedEventAutoMergeSummary,
 } from "@/lib/events/approved-event-automerge";
+import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 import {
   areCompatibleTitleFamilySlugs,
   buildTitleFamilySlug,
@@ -177,7 +178,9 @@ const listScrapedPostsByHandleQuery =
 const upsertScrapedPostsByHandleMutation =
   "scrapedPosts:upsertManyByHandle" as unknown as FunctionReference<"mutation">;
 const SCRAPED_POST_UPSERT_BATCH_SIZE = 25;
-const DIRECT_FULL_SCRAPE_CONCURRENCY = 4;
+const DEFAULT_DIRECT_FULL_SCRAPE_CONCURRENCY = 4;
+const MAX_DIRECT_FULL_SCRAPE_CONCURRENCY = 16;
+const MAX_INGESTION_BATCH_SIZE = 64;
 const EXISTING_EVENT_IMPORT_LIMIT_PER_STATUS = 1000;
 const STATIC_VENUE_BY_HANDLE: Record<string, string> = {
   "20_44.nightclub": "Klub 20/44",
@@ -419,6 +422,94 @@ const EXISTING_EVENT_CONFIDENCE_THRESHOLD = 0.55;
 const DEFAULT_EVENT_TIMEZONE = "Europe/Belgrade";
 const DUPLICATE_TEXT_TOKEN_SIMILARITY_THRESHOLD = 0.72;
 const DUPLICATE_VENUE_TOKEN_SIMILARITY_THRESHOLD = 0.72;
+const CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE = 0.8;
+
+type ModerationDecision = {
+  confidenceScore: number | null;
+  autoApproved: boolean;
+  autoApproveRule: "confidence_threshold" | "caption_only_video_core_fields" | null;
+  pendingReasons: string[];
+  signals: string[];
+  allowMissingImage: boolean;
+};
+
+function isVideoPostWithoutSelectedImage(
+  post: InstagramScrapedPost,
+  selectedImageUrl: string | null,
+): boolean {
+  if (selectedImageUrl) {
+    return false;
+  }
+  const postType = normalizeString(post.postType).toLowerCase();
+  return postType.includes("video") || postType.includes("reel");
+}
+
+function buildModerationDecision(options: {
+  baseConfidenceScore: number | null;
+  missingImage: boolean;
+  allowMissingImage: boolean;
+  titleUsedFallback: boolean;
+  missingTime: boolean;
+  suspiciousYear: boolean;
+  dateConfidence: DateConfidence | null;
+  hasDate: boolean;
+  hasVenue: boolean;
+  extractionMode: "poster" | "caption_only";
+  isVideoPost: boolean;
+}): ModerationDecision {
+  const confidenceScore = calculateModerationConfidenceScore(options.baseConfidenceScore, {
+    hasSuspectedDuplicates: false,
+    missingImage: options.missingImage,
+    allowMissingImage: options.allowMissingImage,
+  });
+  const signals = [
+    ...(options.missingImage ? ["missing_image"] : []),
+    ...(options.allowMissingImage ? ["missing_image_allowed"] : []),
+    ...(options.titleUsedFallback ? ["fallback_title"] : []),
+    ...(options.missingTime ? ["missing_time"] : []),
+    ...(options.suspiciousYear ? ["suspicious_year"] : []),
+    ...(confidenceScore !== null && confidenceScore < 0.7 ? ["low_confidence"] : []),
+  ];
+
+  const qualifiesForStrictConfidence = shouldAutoApproveConfidenceScore(confidenceScore);
+  const qualifiesForCaptionOnlyVideo =
+    options.extractionMode === "caption_only" &&
+    options.isVideoPost &&
+    options.hasDate &&
+    options.hasVenue &&
+    !options.suspiciousYear &&
+    options.dateConfidence !== "low" &&
+    confidenceScore !== null &&
+    confidenceScore >= CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE;
+  const autoApproveRule = qualifiesForStrictConfidence
+    ? "confidence_threshold"
+    : qualifiesForCaptionOnlyVideo
+      ? "caption_only_video_core_fields"
+      : null;
+  const autoApproved = autoApproveRule !== null;
+  const pendingReasons = autoApproved
+    ? []
+    : [
+        ...(confidenceScore === null ? ["missing_confidence"] : []),
+        ...(confidenceScore !== null && confidenceScore <= AUTO_APPROVE_CONFIDENCE_THRESHOLD
+          ? ["below_auto_approve_threshold"]
+          : []),
+        ...(options.missingImage && !options.allowMissingImage ? ["missing_image"] : []),
+        ...(options.titleUsedFallback ? ["fallback_title"] : []),
+        ...(options.missingTime ? ["missing_time"] : []),
+        ...(options.suspiciousYear ? ["suspicious_year"] : []),
+        ...(options.dateConfidence === "low" ? ["low_date_confidence"] : []),
+      ];
+
+  return {
+    confidenceScore,
+    autoApproved,
+    autoApproveRule,
+    pendingReasons,
+    signals,
+    allowMissingImage: options.allowMissingImage,
+  };
+}
 
 function logInfo(event: string, payload: Record<string, unknown>) {
   console.info(
@@ -438,6 +529,21 @@ function logError(event: string, payload: Record<string, unknown>) {
       ...payload,
     }),
   );
+}
+
+function normalizeDirectFullScrapeConcurrency(
+  value: string | undefined = process.env.INGESTION_FULL_SCRAPE_CONCURRENCY,
+): number {
+  if (!value) {
+    return DEFAULT_DIRECT_FULL_SCRAPE_CONCURRENCY;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return DEFAULT_DIRECT_FULL_SCRAPE_CONCURRENCY;
+  }
+
+  return Math.min(parsed, MAX_DIRECT_FULL_SCRAPE_CONCURRENCY);
 }
 
 function getErrorMessage(error: unknown): string {
@@ -853,6 +959,37 @@ function cleanSplitCaptionEntryText(value: string): string {
   );
 }
 
+const SPLIT_ENTRY_WEEKDAY_PREFIX_REGEX =
+  /^(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?|ponedeljak|pon|utorak|uto|sreda|sre|cetvrtak|četvrtak|cet|čet|petak|pet|subota|sub|nedelja|nedjelja|ned)\b[\s,.:;-]*/iu;
+
+function stripSplitEntryDateText(value: string, rawDate: string): string {
+  let stripped = normalizeString(value);
+  const normalizedRawDate = normalizeString(rawDate);
+  if (normalizedRawDate) {
+    stripped = stripped.replace(normalizedRawDate, " ");
+  }
+
+  return stripped
+    .replace(SPLIT_ENTRY_WEEKDAY_PREFIX_REGEX, "")
+    .replace(/\b(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?|ponedeljak|pon|utorak|uto|sreda|sre|cetvrtak|četvrtak|cet|čet|petak|pet|subota|sub|nedelja|nedjelja|ned)\b/giu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isLikelyCaptionContextTitle(value: string): boolean {
+  const normalized = cleanSplitCaptionEntryText(value);
+  if (!normalized || normalized.length > 80) {
+    return false;
+  }
+  if (collectDateCandidates(normalized, "caption", null).length > 0) {
+    return false;
+  }
+  if (/^(?:video|photo|poster|tickets?|karte?|info|ulaz|free|gratis)$/iu.test(normalized)) {
+    return false;
+  }
+  return /[\p{L}\p{N}]/u.test(normalized);
+}
+
 function extractPostAltTextEvidence(value: string | null | undefined): string {
   const normalized = normalizeString(value);
   if (!normalized) {
@@ -910,7 +1047,21 @@ function buildSplitEventSourceLine(parts: Array<string | null | undefined>): str
     .join(" | ");
 }
 
+function formatHourAsTime(value: string): string {
+  return `${value.padStart(2, "0")}:00`;
+}
+
 function extractSplitEntryTime(value: string): string | undefined {
+  const rangeMatch = value.match(/\b(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*h\b/iu);
+  if (rangeMatch?.[1] && rangeMatch[2]) {
+    return `${formatHourAsTime(rangeMatch[1])}-${formatHourAsTime(rangeMatch[2])}`;
+  }
+
+  const hourMatch = value.match(/\b(\d{1,2})\s*h\b/iu);
+  if (hourMatch?.[1]) {
+    return formatHourAsTime(hourMatch[1]);
+  }
+
   const match = value.match(/\b(\d{1,2}[:.]\d{2})\b/u);
   if (!match?.[1]) {
     return undefined;
@@ -920,7 +1071,12 @@ function extractSplitEntryTime(value: string): string | undefined {
 }
 
 function stripSplitEntryTime(value: string): string {
-  return value.replace(/\b\d{1,2}[:.]\d{2}\b/u, " ").replace(/\s+/g, " ").trim();
+  return value
+    .replace(/\b\d{1,2}\s*[-–—]\s*\d{1,2}\s*h\b/giu, " ")
+    .replace(/\b\d{1,2}\s*h\b/giu, " ")
+    .replace(/\b\d{1,2}[:.]\d{2}\b/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function extractModelSplitEventCandidates(
@@ -984,24 +1140,50 @@ function extractCaptionSplitEventCandidates(
 
   const entries: SplitEventCandidate[] = [];
   const seenEntries = new Set<string>();
+  const postDate = parsePostedAt(post.postedAt);
+  let previousContextTitle = cleanSplitCaptionEntryText(extracted.title);
 
   for (const rawLine of captionText.split(/\r?\n/)) {
     const line = normalizeString(rawLine);
-    const match = line.match(
+    if (!line) {
+      continue;
+    }
+
+    const explicitScheduleMatch = line.match(
       /^(\d{1,2}[./-]\d{1,2}(?:[./-](?:\d{2}|\d{4}))?)\s*[•·|:\-–—]+\s*(.+)$/u,
     );
-    if (!match) {
+
+    const normalizedDate = explicitScheduleMatch
+      ? normalizeEventDate(normalizeString(explicitScheduleMatch[1]), captionText, post.postedAt)
+      : normalizeEventDate(line, line, post.postedAt);
+    const rawDate = explicitScheduleMatch
+      ? normalizeString(explicitScheduleMatch[1])
+      : normalizeString(
+          collectDateCandidates(line, "caption", postDate)[0]?.raw ??
+            normalizedDate.rawDateText,
+        );
+
+    if (!normalizedDate.isoDate || !rawDate) {
+      if (isLikelyCaptionContextTitle(line)) {
+        previousContextTitle = cleanSplitCaptionEntryText(line);
+      }
       continue;
     }
 
-    const rawDate = normalizeString(match[1]);
-    const lineTitle = cleanSplitCaptionEntryText(match[2] ?? "");
-    if (!rawDate || !lineTitle) {
+    const time = extractSplitEntryTime(line);
+    const rawTitle = explicitScheduleMatch
+      ? explicitScheduleMatch[2] ?? ""
+      : stripSplitEntryTime(stripSplitEntryDateText(line, rawDate));
+    const lineTitle =
+      cleanSplitCaptionEntryText(rawTitle) ||
+      previousContextTitle ||
+      cleanSplitCaptionEntryText(extracted.title) ||
+      cleanSplitCaptionEntryText(extracted.venue);
+    if (!lineTitle) {
       continue;
     }
 
-    const normalizedDate = normalizeEventDate(rawDate, captionText, post.postedAt);
-    const dedupeKey = `${normalizedDate.isoDate ?? rawDate}:${toSearchableText(lineTitle)}`;
+    const dedupeKey = `${normalizedDate.isoDate}:${toSearchableText(lineTitle)}`;
     if (seenEntries.has(dedupeKey)) {
       continue;
     }
@@ -1012,6 +1194,7 @@ function extractCaptionSplitEventCandidates(
       normalizedDate,
       lineTitle,
       artists: parseSplitCaptionEntryArtists(lineTitle),
+      ...(time ? { time } : {}),
       sourceLine: line,
       source: "caption_schedule",
     });
@@ -1330,7 +1513,7 @@ function normalizeBatchSize(value: number | undefined): number {
     return 2;
   }
   const rounded = Math.trunc(value as number);
-  return Math.max(1, Math.min(10, rounded));
+  return Math.max(1, Math.min(MAX_INGESTION_BATCH_SIZE, rounded));
 }
 
 function normalizeString(value: string | null | undefined): string {
@@ -1774,7 +1957,7 @@ function collectDateCandidates(
   }
 
   for (const match of normalizedText.matchAll(
-    /\b(\d{1,2})(?:st|nd|rd|th)?\s+([a-zA-Z]{3,9})(?:\s*,?\s*(\d{4}))?\b/g,
+    /\b(\d{1,2})(?:st|nd|rd|th|\.)?\s+([a-zA-Z]{3,9})(?:\s*,?\s*(\d{4}))?\b/g,
   )) {
     const month = MONTHS[match[2].slice(0, 3).toLowerCase()];
     if (!month) {
@@ -1794,7 +1977,7 @@ function collectDateCandidates(
   }
 
   for (const match of normalizedText.matchAll(
-    /\b([a-zA-Z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?\b/g,
+    /\b([a-zA-Z]{3,9})\s+(\d{1,2})(?!\s*[-–—]\s*\d{1,2}\s*h\b)(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?\b/g,
   )) {
     const month = MONTHS[match[1].slice(0, 3).toLowerCase()];
     if (!month) {
@@ -2011,7 +2194,7 @@ function normalizeVenue(
 }
 
 function extractShortcodeFromPostUrl(url: string): string | null {
-  const match = url.match(/instagram\.com\/p\/([^/?#]+)/i);
+  const match = url.match(/instagram\.com\/(?:p|reel|reels|tv)\/([^/?#]+)/i);
   return match?.[1]?.trim() || null;
 }
 
@@ -2124,6 +2307,58 @@ function isLowQualityExistingEvent(
       normalizedInvalidReason: readJsonString(normalizedFields, "normalizedInvalidReason"),
     },
   };
+}
+
+function shouldReprocessExistingSourcePosts(): boolean {
+  return normalizeString(process.env.INGESTION_REPROCESS_EXISTING_SOURCE_POSTS).toLowerCase() === "true";
+}
+
+type SourceDuplicateSkipDecision = {
+  match: ExistingSourceMatch;
+  quality: ExistingEventQuality;
+  reason: "already_processed_source" | "clean_existing_source";
+};
+
+function getPreExtractionSourceDuplicateSkipDecision(
+  matches: ExistingSourceMatch[],
+  post: InstagramScrapedPost,
+): SourceDuplicateSkipDecision | null {
+  const firstMatch = matches[0];
+  if (!firstMatch) {
+    return null;
+  }
+
+  if (!shouldReprocessExistingSourcePosts()) {
+    return {
+      match: firstMatch,
+      quality: isLowQualityExistingEvent(firstMatch.existingEvent, post.postedAt),
+      reason: "already_processed_source",
+    };
+  }
+
+  for (const match of matches) {
+    const quality = isLowQualityExistingEvent(match.existingEvent, post.postedAt);
+    if (!quality.isLowQuality) {
+      return {
+        match,
+        quality,
+        reason: "clean_existing_source",
+      };
+    }
+  }
+
+  return null;
+}
+
+function recordSourceDuplicateSkip(
+  summary: HandleSummary,
+  decision: SourceDuplicateSkipDecision,
+): void {
+  summary.skippedDuplicates += 1;
+  summary.skipped_duplicates += 1;
+  if (!decision.quality.isLowQuality) {
+    summary.skipped_duplicates_clean += 1;
+  }
 }
 
 function normalizeArtistsForComparison(artists: string[]): string[] {
@@ -2876,7 +3111,7 @@ export function prepareEventsForInsert(
   venueNameOverridesByHandle: Record<string, string>,
   configuredVenueNamesByHandle: Record<string, string>,
 ): PrepareEventResult[] {
-  const eventType = normalizeString(extracted.category);
+  const eventType = canonicalizeEventType(normalizeString(extracted.category));
   const description = normalizeExtractedDescription(extracted.description);
   const time = normalizeString(extracted.time ?? undefined);
   const price = normalizeString(extracted.price);
@@ -2917,6 +3152,10 @@ export function prepareEventsForInsert(
   const usesSplitEventCandidates = splitEventCandidates.length > 1;
   const extractedArtists = normalizeExtractedArtists(extracted.artists);
   const eventDateFilter = getEventDateFilterContext();
+  const isCaptionOnlyVideo = isVideoPostWithoutSelectedImage(post, selectedImageUrl);
+  const extractionMode = selectedImageUrl ? "poster" : "caption_only";
+  const missingImage = !selectedImageUrl;
+  const allowMissingImageForModeration = isCaptionOnlyVideo;
   const normalizedFieldsCommon: Record<string, unknown> = {
     rawTitle: titleNormalization.rawTitle,
     rawVenue: normalizeString(extracted.venue),
@@ -2929,6 +3168,15 @@ export function prepareEventsForInsert(
     city: normalizeString(extracted.city),
     country: normalizeString(extracted.country),
     confidence,
+    extractionMode,
+    postType: normalizeString(post.postType).toLowerCase() || null,
+    missingImage,
+    moderationAllowMissingImage: allowMissingImageForModeration,
+    moderationMissingImageReason: missingImage
+      ? allowMissingImageForModeration
+        ? "video_caption_only"
+        : "no_selected_image"
+      : null,
     reasoningNotes: normalizeString(extracted.reasoning_notes),
     sourceCaptionFromModel: normalizeString(extracted.source_caption),
     sourceUrlFromModel: normalizeString(extracted.source_url),
@@ -3138,14 +3386,20 @@ export function prepareEventsForInsert(
 
   for (const [index, variant] of eventVariants.entries()) {
     const date = variant.dateNormalization.isoDate;
-    const moderationConfidenceScore = calculateModerationConfidenceScore(confidence, {
-      hasSuspectedDuplicates: false,
-      missingImage: !selectedImageUrl,
+    const moderationDecision = buildModerationDecision({
+      baseConfidenceScore: confidence,
+      missingImage,
+      allowMissingImage: allowMissingImageForModeration,
+      titleUsedFallback: variant.titleUsedFallback,
+      missingTime: !variant.time,
+      suspiciousYear: variant.dateNormalization.suspiciousYear,
+      dateConfidence: variant.dateNormalization.confidence,
+      hasDate: Boolean(date),
+      hasVenue: Boolean(venueNormalization.venue),
+      extractionMode,
+      isVideoPost: isCaptionOnlyVideo,
     });
-    const autoApproved = shouldAutoApproveConfidenceScore(
-      moderationConfidenceScore,
-    );
-    const eventStatus: EventStatus = autoApproved ? "approved" : "pending";
+    const eventStatus: EventStatus = moderationDecision.autoApproved ? "approved" : "pending";
     const normalizedFields: Record<string, unknown> = {
       ...normalizedFieldsCommon,
       time: variant.time || null,
@@ -3176,9 +3430,13 @@ export function prepareEventsForInsert(
       splitSourceLine: variant.splitSourceLine,
       expandedDateIndex: index + 1,
       expandedDateTotal: eventVariants.length,
-      moderationConfidenceScore,
+      moderationConfidenceScore: moderationDecision.confidenceScore,
       moderationAutoApproveThreshold: AUTO_APPROVE_CONFIDENCE_THRESHOLD,
-      moderationAutoApproved: autoApproved,
+      moderationCaptionOnlyVideoMinConfidence: CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE,
+      moderationAutoApproved: moderationDecision.autoApproved,
+      moderationAutoApproveRule: moderationDecision.autoApproveRule,
+      moderationPendingReasons: moderationDecision.pendingReasons,
+      moderationSignals: moderationDecision.signals,
       normalizedIsValid: true,
       normalizedInvalidReason: null,
     };
@@ -3294,8 +3552,46 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     ) || null;
   const canUseCaptionOnlyExtraction = buildPostTextEvidence(post).length > 0;
   const extractionMode = post.postType === "video" ? "caption_only" : "poster";
+  let sourceIdentityMatches: ExistingSourceMatch[] = [];
   let selectedImageUrl: string | null = null;
   let imageDataUrl: string | null = null;
+
+  try {
+    sourceIdentityMatches = await listExistingEventsBySourceIdentity(client, post);
+  } catch (error) {
+    summary.failedExtractions += 1;
+    summary.failed_extractions += 1;
+    summary.errors.push(getErrorMessage(error));
+    logError("ingestion.source_duplicate_precheck.failed", {
+      step: "duplicate_lookup" satisfies IngestionStep,
+      ...postContext,
+      extractionMode,
+      error: getErrorMessage(error),
+    });
+    return;
+  }
+
+  const sourceDuplicateSkipDecision = getPreExtractionSourceDuplicateSkipDecision(
+    sourceIdentityMatches,
+    post,
+  );
+
+  if (sourceDuplicateSkipDecision) {
+    recordSourceDuplicateSkip(summary, sourceDuplicateSkipDecision);
+    logInfo("duplicate_source_precheck_skip", {
+      ...postContext,
+      extractionMode,
+      matchedBy: sourceDuplicateSkipDecision.match.matchedBy,
+      matchedValue: sourceDuplicateSkipDecision.match.matchedValue,
+      existingEventId: sourceDuplicateSkipDecision.match.existingEvent._id,
+      existingStatus: sourceDuplicateSkipDecision.match.existingEvent.status,
+      reason: sourceDuplicateSkipDecision.reason,
+      reprocessExistingSourcePosts: shouldReprocessExistingSourcePosts(),
+      qualityReasons: sourceDuplicateSkipDecision.quality.reasons,
+      qualityDetails: sourceDuplicateSkipDecision.quality.details,
+    });
+    return;
+  }
 
   if (post.postType === "video") {
     if (!canUseCaptionOnlyExtraction) {
@@ -3433,7 +3729,6 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
 
   let existingMatches: ExistingSourceMatch[] = [];
   try {
-    const sourceIdentityMatches = await listExistingEventsBySourceIdentity(client, post);
     const sameDateMatches = await listExistingEventsByPreparedDates(
       client,
       post,
@@ -4080,7 +4375,7 @@ async function fetchFreshPostsForHandlesInParallel(
     }
   }
 
-  const workerCount = Math.min(DIRECT_FULL_SCRAPE_CONCURRENCY, handles.length);
+  const workerCount = Math.min(normalizeDirectFullScrapeConcurrency(), handles.length);
   await Promise.all(
     Array.from({ length: workerCount }, () => runWorker()),
   );

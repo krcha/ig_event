@@ -69,5 +69,5 @@ OpenAI, and Apify stay managed. See `docs/vps-self-hosting.md` and
   ingestion. Keep Apify fallback until reliability is proven.
 - Database replacement: Convex is deeply integrated through schema, generated
   types, queries, mutations, and crons. Plan as a separate migration.
-- Build/deploy hardening: resolve `next build` hang before adding build to the
-  release gate.
+- Build/deploy hardening: keep `next build` in the release gate and verify
+  Docker image builds with production public env values.

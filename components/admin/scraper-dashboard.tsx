@@ -189,8 +189,8 @@ function getAutomergeStatus(
 
 export function ScraperDashboard() {
   const [handlesText, setHandlesText] = useState("residentadvisor\nboilerroomtv");
-  const [resultsLimitInput, setResultsLimitInput] = useState("5");
-  const [daysBackInput, setDaysBackInput] = useState("5");
+  const [resultsLimitInput, setResultsLimitInput] = useState("1");
+  const [daysBackInput, setDaysBackInput] = useState("10");
   const [handleSearch, setHandleSearch] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -479,8 +479,9 @@ export function ScraperDashboard() {
           <div>
             <h2 className="text-lg font-semibold">Get New Events</h2>
             <p className="text-sm text-muted-foreground">
-              One button for the normal workflow: scrape active venues, save posts, extract events,
-              auto-approve only high-confidence ones, and auto-merge approved duplicates.
+              One button for the cheap daily workflow: scrape the latest post from every
+              cooldown-eligible active venue, save posts, extract events, skip already-processed
+              source posts, and auto-merge approved duplicates.
             </p>
           </div>
           <button
@@ -534,9 +535,9 @@ export function ScraperDashboard() {
           </div>
           <div className="flex flex-wrap gap-2">
             {[
-              ["Quick check", "5", "5"],
-              ["Recent month", "10", "30"],
-              ["3-day window", "5", String(SHORT_BACKFILL_DAYS)],
+              ["Low-cost check", "1", "10"],
+              ["Focused recent", "3", "14"],
+              ["3-day window", "1", String(SHORT_BACKFILL_DAYS)],
             ].map(([label, nextResults, nextDays]) => (
               <button
                 className="rounded-xl border border-border px-3 py-2 text-sm font-medium"
@@ -588,7 +589,9 @@ export function ScraperDashboard() {
             <div className="rounded-2xl border border-border bg-background/70 p-3 text-sm text-muted-foreground">
               <p>Handles entered: {handles.length}</p>
               <p>
-                Step 1 starts from a new Apify actor run, stores those posts, then extracts events.
+                Step 1 starts from new low-detail Apify actor runs, stores those posts, then
+                extracts events. Keep pasted-handle batches small unless you intentionally want a
+                wider backfill.
               </p>
               <p className="mt-2">
                 Step 2 skips new actors and reuses posts from recent Apify runs. Step 3 skips
@@ -696,11 +699,11 @@ export function ScraperDashboard() {
                 >
                   {isLoading
                     ? "Running..."
-                    : "Run fresh Apify scrape for active venues not run in 24h"}
+                    : "Run fresh Apify scrape for cooldown-eligible active venues"}
                 </button>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  Runs a fresh Apify scrape for each active venue that has not had a full scrape
-                  attempt in the last 24 hours, stores those posts, then creates approved or
+                  Runs a fresh Apify scrape for each active venue that has passed the configured
+                  cooldown window, stores those posts, then creates approved or
                   pending events from the new data and finishes with approved-event automerge.
                 </p>
               </div>

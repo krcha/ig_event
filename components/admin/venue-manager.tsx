@@ -1,6 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import {
+  CANONICAL_VENUE_CATEGORIES,
+  DEFAULT_VENUE_CATEGORY,
+} from "@/lib/taxonomy/venue-types";
 
 type Venue = {
   id: string;
@@ -44,9 +48,31 @@ type VenueSortMode = "name" | "updated_desc" | "handle";
 const EMPTY_FORM: VenueFormState = {
   name: "",
   instagramHandle: "",
-  category: "club",
+  category: DEFAULT_VENUE_CATEGORY,
   location: "",
 };
+
+function VenueCategorySelect({
+  onChange,
+  value,
+}: {
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  return (
+    <select
+      className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
+      onChange={(event) => onChange(event.target.value)}
+      value={value || DEFAULT_VENUE_CATEGORY}
+    >
+      {CANONICAL_VENUE_CATEGORIES.map((category) => (
+        <option key={category} value={category}>
+          {category}
+        </option>
+      ))}
+    </select>
+  );
+}
 
 function normalizeHandleInput(value: string): string {
   return value.replace(/^@+/, "").trim().toLowerCase();
@@ -68,7 +94,7 @@ export function VenueManager() {
   const [importSummary, setImportSummary] = useState<VenueImportResponse | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
-  const [importCategory, setImportCategory] = useState("venue");
+  const [importCategory, setImportCategory] = useState<string>(DEFAULT_VENUE_CATEGORY);
   const [createForm, setCreateForm] = useState<VenueFormState>(EMPTY_FORM);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [editingVenueId, setEditingVenueId] = useState<string | null>(null);
@@ -145,7 +171,7 @@ export function VenueManager() {
     try {
       const formData = new FormData();
       formData.set("file", importFile);
-      formData.set("category", importCategory.trim() || "venue");
+      formData.set("category", importCategory || DEFAULT_VENUE_CATEGORY);
       formData.set("isActive", "true");
 
       const response = await fetch("/api/admin/venues/import", {
@@ -367,12 +393,8 @@ export function VenueManager() {
               placeholder="@instagram_handle"
               value={createForm.instagramHandle}
             />
-            <input
-              className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
-              onChange={(event) =>
-                setCreateForm((current) => ({ ...current, category: event.target.value }))
-              }
-              placeholder="Category"
+            <VenueCategorySelect
+              onChange={(category) => setCreateForm((current) => ({ ...current, category }))}
               value={createForm.category}
             />
             <input
@@ -417,12 +439,7 @@ export function VenueManager() {
               onChange={(event) => setImportFile(event.target.files?.[0] ?? null)}
               type="file"
             />
-            <input
-              className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
-              onChange={(event) => setImportCategory(event.target.value)}
-              placeholder="Category for new rows"
-              value={importCategory}
-            />
+            <VenueCategorySelect onChange={setImportCategory} value={importCategory} />
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -539,12 +556,8 @@ export function VenueManager() {
                         placeholder="@instagram_handle"
                         value={editForm.instagramHandle}
                       />
-                      <input
-                        className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
-                        onChange={(event) =>
-                          setEditForm((current) => ({ ...current, category: event.target.value }))
-                        }
-                        placeholder="Category"
+                      <VenueCategorySelect
+                        onChange={(category) => setEditForm((current) => ({ ...current, category }))}
                         value={editForm.category}
                       />
                       <input

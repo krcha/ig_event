@@ -98,9 +98,9 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
 
       if (currentScrollY <= 24) {
         setIsHidden(false);
-      } else if (currentScrollY > lastScrollY && currentScrollY > 96) {
+      } else if (currentScrollY > lastScrollY && currentScrollY > 120) {
         setIsHidden(true);
-      } else if (currentScrollY < lastScrollY - 8) {
+      } else if (currentScrollY < lastScrollY - 10) {
         setIsHidden(false);
       }
 
@@ -118,15 +118,14 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
   return (
     <>
       <div className="mobile-topbar">
-        <div className="hero-panel relative px-4 py-3">
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.14),_transparent_28%),radial-gradient(circle_at_top_right,_rgba(20,184,166,0.12),_transparent_26%)]" />
-          <div className="relative flex items-center justify-between gap-3">
+        <div className="glass-panel px-3 py-2">
+          <div className="flex items-center justify-between gap-3">
             <Link className="inline-flex min-w-0 items-center gap-2" href="/">
-              <span className="app-chip border-primary/20 bg-primary/10 text-primary">
-                Belgrade nightlife
+              <span className="inline-flex h-9 items-center rounded-full bg-primary px-3 text-xs font-semibold text-primary-foreground">
+                Belgrade nights
               </span>
             </Link>
-            <span className="app-chip shrink-0">{currentSectionLabel}</span>
+            <span className="app-chip shrink-0 bg-card/95">{currentSectionLabel}</span>
           </div>
         </div>
       </div>
@@ -137,20 +136,17 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
           isHidden && "-translate-y-[calc(100%+1rem)] opacity-0",
         )}
       >
-        <div className="mx-auto w-full max-w-[90rem]">
-          <div className="hero-panel relative px-5 py-4">
-            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.18),_transparent_28%),radial-gradient(circle_at_top_right,_rgba(20,184,166,0.14),_transparent_26%)]" />
-            <div className="relative flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-              <div className="flex items-center gap-3">
-                <Link className="inline-flex items-center gap-2" href="/">
-                  <span className="app-chip border-primary/20 bg-primary/10 text-primary">
-                    Belgrade nightlife
-                  </span>
-                </Link>
-                <span className="text-sm font-medium text-muted-foreground">
-                  Mobile-first event discovery and ops
+        <div className="mx-auto w-full max-w-[88rem]">
+          <div className="glass-panel px-4 py-3">
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+              <Link className="inline-flex w-fit items-center gap-2" href="/">
+                <span className="inline-flex h-9 items-center rounded-full bg-primary px-3.5 text-sm font-semibold text-primary-foreground shadow-[0_16px_34px_-22px_rgba(14,116,144,0.5)]">
+                  Belgrade nights
                 </span>
-              </div>
+                <span className="hidden text-sm font-medium text-muted-foreground lg:inline">
+                  night plans, live
+                </span>
+              </Link>
               <nav
                 aria-label="Global"
                 className="flex flex-wrap items-center gap-1.5 xl:justify-end"
@@ -165,8 +161,8 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                       className={cn(
                         "inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-sm font-semibold",
                         active
-                          ? "border-primary/30 bg-primary text-primary-foreground shadow-[0_16px_34px_-20px_rgba(14,116,144,0.5)]"
-                          : "border-border/80 bg-background/82 text-foreground hover:border-primary/30 hover:bg-card",
+                          ? "border-primary/30 bg-primary text-primary-foreground shadow-[0_16px_34px_-22px_rgba(14,116,144,0.52)]"
+                          : "border-border/75 bg-background/86 text-foreground hover:border-primary/35 hover:bg-card",
                       )}
                       href={item.href}
                       key={item.href}
@@ -183,7 +179,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
       </header>
 
       <nav className="mobile-nav-shell" aria-label="Mobile navigation">
-        <div className="hero-panel bg-card/92 px-2 py-2">
+        <div className="glass-panel bg-card/95 px-2 py-2 shadow-[0_-18px_48px_-34px_rgba(15,23,42,0.45)]">
           <div className="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {mobileToolbarItems.map((item) => {
               const Icon = item.icon;
@@ -193,10 +189,10 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                 <Link
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "inline-flex min-w-[4.9rem] flex-1 flex-col items-center gap-1 rounded-[1.15rem] px-3 py-2 text-[11px] font-semibold",
+                    "inline-flex min-w-[4.7rem] flex-1 flex-col items-center gap-1 rounded-[1rem] px-3 py-2 text-[11px] font-semibold",
                     active
                       ? "bg-primary text-primary-foreground shadow-[0_16px_34px_-22px_rgba(14,116,144,0.52)]"
-                      : "text-muted-foreground",
+                      : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
                   )}
                   href={item.href}
                   key={item.href}

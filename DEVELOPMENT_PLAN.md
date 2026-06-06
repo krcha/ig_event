@@ -55,8 +55,8 @@ Goal: Let an admin understand the app state in one pass.
 
 Goal: Make every release mechanically checkable.
 
-- Required deterministic checks: lint, typecheck, `qa:dedupe`, `qa:automerge`, `qa:extraction`.
-- Add `next build` to the required gate once the local build hang is resolved.
+- Required deterministic checks: lint, typecheck, `next build`, `qa:dedupe`, `qa:automerge`, `qa:extraction`, venue taxonomy QA, public search QA, and Apify cost-control QA.
+- Keep `next build` in the required gate and treat failures or timeouts as release blockers.
 - Bound long-running local checks so hung tooling is treated as a failure.
 - Keep environment-dependent checks documented separately from code regressions.
 - Do not ship with failing deterministic QA.
@@ -78,12 +78,12 @@ Completed in this pass:
 - Made queued full-scrape job steps respect the configured batch size.
 - Updated admin scraper and duplicate-merge copy to match current behavior.
 - Made production admin routes fail closed when Clerk is not configured.
-- Added `qa:release` and a GitHub Actions release gate.
+- Added `qa:release` and a GitHub Actions release gate, including `next build`.
 
 Known follow-up:
 
-- Local `next build` still hangs before Next emits useful output; verify the
-  build in CI or a clean shell after the deterministic release gate is green.
+- Verify Docker image builds in CI or a clean shell with production public env
+  values after the deterministic release gate is green.
 
 ## Next Product Milestones
 

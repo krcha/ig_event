@@ -47,6 +47,7 @@ Local checks:
 ```bash
 npm run lint
 npm run typecheck
+npm run build
 npm run qa:dedupe
 npm run qa:automerge
 npm run qa:extraction
@@ -54,8 +55,8 @@ npm run qa:release
 ```
 
 `npm run qa:release` runs lint, typecheck, dedupe QA, approved-event automerge
-QA, and extraction QA with timeouts. It intentionally does not run
-`npm run build` while the local Next build hang remains unresolved.
+QA, extraction QA, venue taxonomy QA, public search QA, Apify cost-control QA,
+and `npm run build` with timeouts.
 
 ## Environment Variables
 
@@ -69,6 +70,10 @@ NODE_ENV=production
 PORT=3000
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
 CLERK_SECRET_KEY=
+NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
+NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/admin
+NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/admin
 NEXT_PUBLIC_CONVEX_URL=
 CONVEX_DEPLOYMENT=
 ADMIN_CLERK_USER_IDS=
@@ -88,6 +93,9 @@ Notes:
 - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `NEXT_PUBLIC_CONVEX_URL` are public
   build-time values. Build the Docker image with the same public values used in
   production.
+- `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, and the
+  fallback redirect URLs keep Clerk redirects on the app's custom auth pages and
+  return successful admin sign-ins to `/admin`.
 - `CLERK_SECRET_KEY`, `OPENAI_API_KEY`, `APIFY_API_TOKEN`, and `CRON_SECRET`
   are secrets and must stay out of git.
 - `ADMIN_CLERK_USER_IDS` is the Clerk user allowlist for admin access.
@@ -199,7 +207,7 @@ Install host cron:
 
 ```cron
 TZ=Europe/Belgrade
-0 8 * * * . /etc/ig_event/cron.env; curl -fsS -H "Authorization: Bearer ${CRON_SECRET}" "${APP_ORIGIN}/api/cron/ingest-venues" >/dev/null
+0 7 * * * . /etc/ig_event/cron.env; curl -fsS -H "Authorization: Bearer ${CRON_SECRET}" "${APP_ORIGIN}/api/cron/ingest-venues" >/dev/null
 ```
 
 Use the same `CRON_SECRET` value in `/etc/ig_event/cron.env` and the web app
@@ -222,6 +230,7 @@ Run focused checks when touching related areas:
 ```bash
 npm run lint
 npm run typecheck
+npm run build
 npm run qa:dedupe
 npm run qa:automerge
 npm run qa:extraction
@@ -328,13 +337,10 @@ Convex. Avoid re-running full ingestion until the rollback is confirmed.
 
 ## Known Blockers and Risks
 
-- Local `npm run build` can hang before Next emits useful output. Use
-  `npm run qa:release` for deterministic local gates and verify the Next build
-  in CI or inside the Docker build until this is fixed.
-- `npm run qa:release` does not include `next build`; add it only after the
-  local build hang is resolved.
-- The Docker build still runs `npm run build`, so a production image build can
-  fail even when deterministic QA passes.
+- `npm run qa:release` includes `npm run build`; a build failure or timeout is a
+  release blocker.
+- The Docker build also runs `npm run build`, so verify image builds with the
+  same public env values used in production.
 - Vercel Cron does not run after moving the app to a VPS. Host cron or a systemd
   timer must be installed before relying on scheduled ingestion.
 - Build-time public env values must match production runtime values. Rebuild the

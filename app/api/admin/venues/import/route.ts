@@ -1,8 +1,9 @@
 import { auth } from "@clerk/nextjs/server";
-import { parse } from "csv-parse/sync";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
+import { parse } from "csv-parse/sync";
 import { NextResponse } from "next/server";
+import { canonicalizeVenueCategory } from "@/lib/taxonomy/venue-types";
 import { hasClerkEnv } from "@/lib/utils/env";
 
 type VenueRecord = {
@@ -104,7 +105,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "CSV file is required." }, { status: 400 });
   }
 
-  const category = (formData.get("category")?.toString().trim() || "venue").slice(0, 80);
+  const category = canonicalizeVenueCategory(formData.get("category")?.toString());
   const isActive = formData.get("isActive")?.toString() !== "false";
 
   let csvText: string;

@@ -5,6 +5,8 @@ import { ArrowUpDown, ArrowUpRight, Check, ChevronDown, Copy } from "lucide-reac
 import { useMemo, useState } from "react";
 
 import { cn } from "@/lib/utils";
+import { getDisplayEventTime } from "@/lib/events/event-time";
+import { comparePublicEventsByDateVenueTimeTitle } from "@/lib/events/public-event-sort";
 
 type MonthEventTableEvent = {
   _id: string;
@@ -22,7 +24,7 @@ type MonthEventsTableProps = {
   monthLabel: string;
 };
 
-type SortKey = "date" | "time" | "title" | "venue" | "eventType" | "ticketPrice" | "artists";
+type SortKey = "date" | "time" | "title" | "venue" | "eventType";
 type SortDirection = "asc" | "desc";
 
 const SORTABLE_COLUMNS: { key: SortKey; label: string }[] = [
@@ -31,8 +33,6 @@ const SORTABLE_COLUMNS: { key: SortKey; label: string }[] = [
   { key: "title", label: "Title" },
   { key: "venue", label: "Venue" },
   { key: "eventType", label: "Type" },
-  { key: "ticketPrice", label: "Ticket" },
-  { key: "artists", label: "Artists" },
 ];
 
 function parseDateValue(value: string): Date | null {
@@ -93,6 +93,12 @@ function formatEventDate(value: string): string {
   }).format(parsed);
 }
 
+function formatEventDateTime(event: Pick<MonthEventTableEvent, "date" | "time">): string {
+  const dateLabel = formatEventDate(event.date);
+  const timeLabel = getDisplayEventTime(event.time);
+  return timeLabel ? `${dateLabel} · ${timeLabel}` : dateLabel;
+}
+
 function getArtistsLabel(artists: string[]): string {
   return artists.length > 0 ? artists.join(", ") : "TBA";
 }
@@ -109,35 +115,13 @@ function getSortValue(event: MonthEventTableEvent, key: SortKey): number | strin
       return event.venue.trim().toLocaleLowerCase();
     case "eventType":
       return event.eventType.trim().toLocaleLowerCase();
-    case "ticketPrice":
-      return event.ticketPrice?.trim().toLocaleLowerCase() ?? null;
-    case "artists":
-      return getArtistsLabel(event.artists).toLocaleLowerCase();
     default:
       return null;
   }
 }
 
 function compareDefaultOrder(left: MonthEventTableEvent, right: MonthEventTableEvent): number {
-  const dateResult = left.date.localeCompare(right.date);
-  if (dateResult !== 0) {
-    return dateResult;
-  }
-
-  const timeResult = (parseTimeMinutes(left.time) ?? Number.MAX_SAFE_INTEGER) -
-    (parseTimeMinutes(right.time) ?? Number.MAX_SAFE_INTEGER);
-  if (timeResult !== 0) {
-    return timeResult;
-  }
-
-  const titleResult = left.title.localeCompare(right.title, undefined, {
-    sensitivity: "base",
-  });
-  if (titleResult !== 0) {
-    return titleResult;
-  }
-
-  return left._id.localeCompare(right._id);
+  return comparePublicEventsByDateVenueTimeTitle(left, right);
 }
 
 function compareEvents(
@@ -182,7 +166,7 @@ function formatCopyText(events: MonthEventTableEvent[]): string {
   const header = ["Date", "Time", "Title", "Venue", "Type", "Ticket", "Artists"];
   const rows = events.map((event) => [
     formatEventDate(event.date),
-    event.time ?? "Time TBA",
+    getDisplayEventTime(event.time) ?? "",
     event.title,
     event.venue,
     event.eventType,
@@ -203,16 +187,6 @@ export function MonthEventsTable({ events, monthLabel }: MonthEventsTableProps) 
     return [...events].sort((left, right) => compareEvents(left, right, sortKey, sortDirection));
   }, [events, sortDirection, sortKey]);
 
-  const handleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
-      return;
-    }
-
-    setSortKey(key);
-    setSortDirection("asc");
-  };
-
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(formatCopyText(sortedEvents));
@@ -223,49 +197,33 @@ export function MonthEventsTable({ events, monthLabel }: MonthEventsTableProps) 
   };
 
   return (
-    <div className="border-t border-border/80 bg-background/72 px-4 py-4 sm:px-5 sm:py-5">
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-0.5">
-            <p className="section-kicker">Month list</p>
-            <h3 className="text-lg font-semibold tracking-tight">{monthLabel} event list</h3>
-            <p className="text-sm text-muted-foreground">
-              {events.length} event{events.length === 1 ? "" : "s"} matching the current month and filters.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              aria-controls="month-events-table-panel"
-              aria-expanded={isExpanded}
-              className="button-secondary h-11 gap-2 px-4 py-0 text-sm"
-              onClick={() => setIsExpanded((current) => !current)}
-              type="button"
-            >
-              <span>{isExpanded ? "Hide month list" : "Show month list"}</span>
-              <ChevronDown
-                className={cn("h-4 w-4 transition", isExpanded && "rotate-180")}
-              />
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {!isExpanded ? (
-        <div className="mt-4 rounded-[1.4rem] border border-dashed border-border/80 bg-card/88 px-4 py-6 text-center">
-          <p className="text-sm text-muted-foreground">
-            Month list is collapsed by default. Expand it to browse all {sortedEvents.length} event
-            {sortedEvents.length === 1 ? "" : "s"} for {monthLabel}.
+    <section className="glass-panel overflow-hidden">
+      <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+        <div>
+          <p className="section-kicker">Full list</p>
+          <h3 className="mt-1 text-lg font-semibold tracking-tight">{monthLabel} events</h3>
+          <p className="mt-1 text-xs text-muted-foreground sm:text-sm">
+            {events.length} match this month. Expand only when you need the complete list.
           </p>
         </div>
-      ) : sortedEvents.length === 0 ? (
-        <div className="mt-4 rounded-[1.4rem] border border-dashed border-border/80 bg-card/88 px-4 py-8 text-center">
-          <p className="text-sm text-muted-foreground">No events to list for this month.</p>
-        </div>
-      ) : (
-        <div className="mt-4 space-y-4" id="month-events-table-panel">
-          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-            <div className="grid gap-2 sm:flex sm:flex-wrap sm:items-center">
-              <label className="flex min-w-[11rem] flex-col gap-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+
+        <button
+          aria-controls="month-events-table-panel"
+          aria-expanded={isExpanded}
+          className="button-secondary min-h-10 gap-2 px-4 py-0"
+          onClick={() => setIsExpanded((current) => !current)}
+          type="button"
+        >
+          <span>{isExpanded ? "Hide list" : "Show list"}</span>
+          <ChevronDown className={cn("h-4 w-4 transition", isExpanded && "rotate-180")} />
+        </button>
+      </div>
+
+      {isExpanded ? (
+        <div className="border-t border-border/75 px-3 py-3 sm:px-5 sm:py-5" id="month-events-table-panel">
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
+            <div className="grid gap-2 sm:flex sm:flex-wrap sm:items-end">
+              <label className="flex min-w-[10rem] flex-col gap-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
                 Sort by
                 <select
                   className="h-11 rounded-2xl border border-border/80 bg-card px-3 text-sm font-medium tracking-normal text-foreground"
@@ -296,11 +254,11 @@ export function MonthEventsTable({ events, monthLabel }: MonthEventsTableProps) 
               {copyState === "copied" ? (
                 <span className="app-chip text-primary">
                   <Check className="h-3.5 w-3.5" />
-                  Copied {sortedEvents.length} rows
+                  Copied
                 </span>
               ) : null}
               {copyState === "error" ? (
-                <span className="app-chip text-destructive">Clipboard access failed</span>
+                <span className="app-chip text-destructive">Clipboard failed</span>
               ) : null}
               <button
                 className="button-secondary h-11 gap-2 px-4 py-0 text-sm disabled:cursor-not-allowed disabled:opacity-50"
@@ -308,120 +266,100 @@ export function MonthEventsTable({ events, monthLabel }: MonthEventsTableProps) 
                 onClick={handleCopy}
                 type="button"
               >
-                {copyState === "copied" ? (
-                  <Check className="h-4 w-4" />
-                ) : (
-                  <Copy className="h-4 w-4" />
-                )}
+                {copyState === "copied" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                 Copy list
               </button>
             </div>
           </div>
 
-          <div className="mt-4 space-y-3 lg:hidden">
-            {sortedEvents.map((event) => (
-              <article
-                className="rounded-[1.35rem] border border-border/80 bg-card/95 px-4 py-4 shadow-[0_18px_36px_-30px_rgba(15,23,42,0.18)]"
-                key={event._id}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">{formatEventDate(event.date)}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">{event.time ?? "Time TBA"}</p>
-                  </div>
-                  <span className="app-chip">{event.eventType}</span>
-                </div>
-
-                <Link
-                  className="mt-4 inline-flex items-start gap-2 text-base font-semibold tracking-tight text-foreground hover:text-primary"
-                  href={`/events/${event._id}`}
-                >
-                  <span>{event.title}</span>
-                  <ArrowUpRight className="mt-0.5 h-3.5 w-3.5 flex-none" />
-                </Link>
-
-                <p className="mt-2 text-sm text-muted-foreground">{event.venue}</p>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Ticket: {event.ticketPrice ?? "TBA"}
-                </p>
-                <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                  Artists: {getArtistsLabel(event.artists)}
-                </p>
-              </article>
-            ))}
-          </div>
-
-          <div className="mt-4 hidden overflow-x-auto rounded-[1.4rem] border border-border/80 bg-card/95 shadow-[0_24px_65px_-45px_rgba(15,23,42,0.28)] lg:block">
-            <table className="min-w-[68rem] table-fixed border-collapse">
-              <thead className="bg-muted/[0.4]">
-                <tr>
-                  {SORTABLE_COLUMNS.map((column) => {
-                    const isActive = sortKey === column.key;
-
-                    return (
-                      <th
-                        className="border-b border-border/80 px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground"
-                        key={column.key}
-                        scope="col"
-                      >
-                        <button
-                          className={cn(
-                            "inline-flex items-center gap-1.5 hover:text-foreground",
-                            isActive && "text-foreground",
-                          )}
-                          onClick={() => handleSort(column.key)}
-                          type="button"
-                        >
-                          <span>{column.label}</span>
-                          <ArrowUpDown className="h-3.5 w-3.5" />
-                          {isActive ? (
-                            <span className="text-[10px] tracking-[0.12em]">
-                              {sortDirection === "asc" ? "ASC" : "DESC"}
-                            </span>
-                          ) : null}
-                        </button>
-                      </th>
-                    );
-                  })}
-                </tr>
-              </thead>
-              <tbody>
-                {sortedEvents.map((event, index) => (
-                  <tr
-                    className={cn(
-                      "border-b border-border/70 last:border-b-0",
-                      index % 2 === 0 ? "bg-card/95" : "bg-background/72",
-                    )}
+          {sortedEvents.length === 0 ? (
+            <div className="mt-4 rounded-[1.2rem] border border-dashed border-border/80 bg-card/88 px-4 py-8 text-center text-sm text-muted-foreground">
+              No events to list for this month.
+            </div>
+          ) : (
+            <>
+              <div className="mt-4 space-y-2.5 lg:hidden">
+                {sortedEvents.map((event) => (
+                  <article
+                    className="rounded-[1.15rem] border border-border/80 bg-card/95 px-3.5 py-3.5"
                     key={event._id}
                   >
-                    <td className="px-3 py-3 text-sm font-medium text-foreground">
-                      {formatEventDate(event.date)}
-                    </td>
-                    <td className="px-3 py-3 text-sm text-muted-foreground">{event.time ?? "Time TBA"}</td>
-                    <td className="px-3 py-3 text-sm">
-                      <Link
-                        className="inline-flex items-center gap-1.5 font-semibold text-foreground hover:text-primary"
-                        href={`/events/${event._id}`}
-                      >
-                        <span className="truncate">{event.title}</span>
-                        <ArrowUpRight className="h-3.5 w-3.5 flex-none" />
-                      </Link>
-                    </td>
-                    <td className="px-3 py-3 text-sm text-foreground">{event.venue}</td>
-                    <td className="px-3 py-3 text-sm text-muted-foreground">{event.eventType}</td>
-                    <td className="px-3 py-3 text-sm text-muted-foreground">
-                      {event.ticketPrice ?? "TBA"}
-                    </td>
-                    <td className="px-3 py-3 text-sm text-muted-foreground">
-                      {getArtistsLabel(event.artists)}
-                    </td>
-                  </tr>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-primary">
+                          {formatEventDateTime(event)}
+                        </p>
+                        <Link
+                          className="mt-2 inline-flex items-start gap-1.5 text-sm font-semibold tracking-tight text-foreground hover:text-primary"
+                          href={`/events/${event._id}`}
+                        >
+                          <span>{event.title}</span>
+                          <ArrowUpRight className="mt-0.5 h-3.5 w-3.5 flex-none" />
+                        </Link>
+                        <p className="mt-1.5 text-xs text-muted-foreground">{event.venue}</p>
+                      </div>
+                      <span className="app-chip shrink-0">{event.eventType}</span>
+                    </div>
+                  </article>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </div>
+
+              <div className="mt-4 hidden overflow-x-auto rounded-[1.25rem] border border-border/80 bg-card/95 lg:block">
+                <table className="min-w-[58rem] table-fixed border-collapse">
+                  <thead className="bg-muted/[0.4]">
+                    <tr>
+                      <th className="w-[10rem] border-b border-border/80 px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                        Date
+                      </th>
+                      <th className="w-[7rem] border-b border-border/80 px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                        Time
+                      </th>
+                      <th className="border-b border-border/80 px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                        Event
+                      </th>
+                      <th className="w-[14rem] border-b border-border/80 px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                        Venue
+                      </th>
+                      <th className="w-[9rem] border-b border-border/80 px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                        Type
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedEvents.map((event, index) => (
+                      <tr
+                        className={cn(
+                          "border-b border-border/70 last:border-b-0",
+                          index % 2 === 0 ? "bg-card/95" : "bg-background/72",
+                        )}
+                        key={event._id}
+                      >
+                        <td className="px-3 py-3 text-sm font-medium text-foreground">
+                          {formatEventDate(event.date)}
+                        </td>
+                        <td className="px-3 py-3 text-sm text-muted-foreground">
+                          {getDisplayEventTime(event.time)}
+                        </td>
+                        <td className="px-3 py-3 text-sm">
+                          <Link
+                            className="inline-flex max-w-full items-center gap-1.5 font-semibold text-foreground hover:text-primary"
+                            href={`/events/${event._id}`}
+                          >
+                            <span className="truncate">{event.title}</span>
+                            <ArrowUpRight className="h-3.5 w-3.5 flex-none" />
+                          </Link>
+                        </td>
+                        <td className="px-3 py-3 text-sm text-foreground">{event.venue}</td>
+                        <td className="px-3 py-3 text-sm text-muted-foreground">{event.eventType}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </div>
-      )}
-    </div>
+      ) : null}
+    </section>
   );
 }

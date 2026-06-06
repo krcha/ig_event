@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { canonicalizeVenueCategory } from "../lib/taxonomy/venue-types";
 
 export const listVenues = query({
   args: {},
@@ -30,6 +31,7 @@ export const createVenue = mutation({
     const now = Date.now();
     return ctx.db.insert("venues", {
       ...args,
+      category: canonicalizeVenueCategory(args.category),
       isActive: args.isActive ?? true,
       createdAt: now,
       updatedAt: now,
@@ -50,7 +52,13 @@ export const updateVenue = mutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
-    await ctx.db.patch(args.id, { ...args.patch, updatedAt: now });
+    const patch = {
+      ...args.patch,
+      ...(args.patch.category !== undefined
+        ? { category: canonicalizeVenueCategory(args.patch.category) }
+        : {}),
+    };
+    await ctx.db.patch(args.id, { ...patch, updatedAt: now });
   },
 });
 

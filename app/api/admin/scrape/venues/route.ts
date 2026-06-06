@@ -9,9 +9,12 @@ import {
   type IngestionRunMode,
 } from "@/lib/pipeline/run-instagram-ingestion";
 import {
-  FULL_SCRAPE_COOLDOWN_MS,
   getRecentFullScrapeAttemptSummary,
 } from "@/lib/pipeline/recent-full-scrape-handles";
+import {
+  getCronIngestionConfig,
+  selectCronIngestionHandles,
+} from "@/lib/pipeline/cron-ingestion-config";
 import { getRequiredEnv, hasClerkEnv } from "@/lib/utils/env";
 
 type Body = {
@@ -28,6 +31,7 @@ type ActiveVenueErrorStep =
   | "enqueue_active_venue_job";
 
 const DEFAULT_BATCH_SIZE = 2;
+const MS_PER_HOUR = 60 * 60 * 1000;
 const createIngestionJobMutation =
   "ingestionJobs:createJob" as unknown as FunctionReference<"mutation">;
 
@@ -109,19 +113,26 @@ export async function POST(request: Request) {
 
     if (mode === "full_scrape") {
       step = "filter_recent_full_scrapes";
+      const cronConfig = getCronIngestionConfig();
+      const cooldownMs = cronConfig.fullScrapeCooldownHours * MS_PER_HOUR;
       const recentFullScrapeSummary = await getRecentFullScrapeAttemptSummary({
         candidateHandles: activeVenueHandles,
-        minCreatedAt: Date.now() - FULL_SCRAPE_COOLDOWN_MS,
+        minCreatedAt: Date.now() - cooldownMs,
       });
-      const recentHandleSet = new Set(recentFullScrapeSummary.attemptedHandles);
-      handles = activeVenueHandles.filter((handle) => !recentHandleSet.has(handle));
+      const handleSelection = selectCronIngestionHandles({
+        activeVenueHandles,
+        recentlyAttemptedHandles: recentFullScrapeSummary.attemptedHandles,
+        maxHandlesPerRun: cronConfig.maxHandlesPerRun,
+      });
+      handles = handleSelection.handles;
 
       if (handles.length === 0) {
         return NextResponse.json(
           {
             errorStep: "filter_recent_full_scrapes",
-            error: "All active venues have already had a fresh scrape attempt in the last 24 hours.",
+            error: `All active venues have already had a fresh scrape attempt in the last ${cronConfig.fullScrapeCooldownHours} hours.`,
             lastFreshScrapeAt: recentFullScrapeSummary.lastFreshScrapeAt,
+            skippedRecentlyAttempted: handleSelection.skippedRecentlyAttempted,
           },
           { status: 400 },
         );

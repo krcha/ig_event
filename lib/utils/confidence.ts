@@ -40,6 +40,7 @@ export function calculateModerationConfidenceScore(
   options: {
     hasSuspectedDuplicates: boolean;
     missingImage: boolean;
+    allowMissingImage?: boolean;
   },
 ): number | null {
   if (baseConfidenceScore === null) {
@@ -50,7 +51,7 @@ export function calculateModerationConfidenceScore(
   if (options.hasSuspectedDuplicates) {
     score *= DUPLICATE_CONFIDENCE_MULTIPLIER;
   }
-  if (options.missingImage) {
+  if (options.missingImage && !options.allowMissingImage) {
     score -= MISSING_IMAGE_CONFIDENCE_PENALTY;
   }
 

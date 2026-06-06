@@ -72,10 +72,9 @@ Convex data contract:
 Release gate contract:
 
 - `npm run qa:release` must pass before handoff.
-- It currently includes lint, typecheck, dedupe QA, automerge QA, and extraction
-  QA.
-- `next build` is intentionally not in the gate yet because local builds have
-  hung. Fix that before adding it.
+- It includes lint, typecheck, `next build`, dedupe QA, automerge QA,
+  extraction QA, venue taxonomy QA, public search QA, and Apify cost-control QA.
+- Treat any `next build` failure or timeout as a normal release blocker.
 
 ## Important Paths
 
@@ -128,22 +127,18 @@ Run focused checks when relevant:
 ```bash
 npm run lint
 npm run typecheck
+npm run build
 npm run qa:dedupe
 npm run qa:automerge
 npm run qa:extraction
 docker compose --env-file .env.production.example config
 ```
 
-Attempt only when investigating the known build blocker:
-
-```bash
-npm run build
-```
 
 ## Known Risks
 
-- `next build` has hung locally before useful output; production Docker builds
-  depend on resolving or validating this in a clean environment.
+- `next build` is part of the normal release gate. If it fails or times out,
+  fix the build before handoff or production rollout.
 - Apify and OpenAI are the primary variable cost centers.
 - Replacing Convex with Postgres/SQLite is a large data-layer rewrite.
 - Replacing Apify with browser automation is possible only if it preserves the
@@ -154,9 +149,8 @@ npm run build
 
 ## Recommended Next Work
 
-1. Fix and document the `next build` hang.
-2. Verify Docker image build with real production public env values.
-3. Add production smoke tests for `/api/health`, `/events`, `/calendar`, and
+1. Verify Docker image build with real production public env values.
+2. Add production smoke tests for `/api/health`, `/events`, `/calendar`, and
    authenticated admin routes.
-4. Add spend controls and monitoring for Apify/OpenAI usage.
-5. Only then consider service replacement experiments.
+3. Add spend controls and monitoring for Apify/OpenAI usage.
+4. Only then consider service replacement experiments.

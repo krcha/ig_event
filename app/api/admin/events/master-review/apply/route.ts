@@ -3,6 +3,7 @@ import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { hasClerkEnv } from "@/lib/utils/env";
+import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 
 type RequestBody = {
   primaryEventId?: string;
@@ -61,7 +62,7 @@ function normalizePatch(body: RequestBody["primaryPatch"]) {
       ? { ticketPrice: normalizeString(body.ticketPrice) }
       : {}),
     ...(normalizeString(body.eventType)
-      ? { eventType: normalizeString(body.eventType) }
+      ? { eventType: canonicalizeEventType(body.eventType) }
       : {}),
     ...(normalizeString(body.imageUrl) ? { imageUrl: normalizeString(body.imageUrl) } : {}),
   };

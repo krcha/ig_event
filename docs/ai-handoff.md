@@ -31,10 +31,10 @@ Current priorities from `DEVELOPMENT_PLAN.md`:
 
 Known current follow-up:
 
-- `npm run qa:release` is the intended deterministic gate.
-- `next build` is intentionally not part of that gate yet because the local
-  build has been reported to hang before useful Next output appears. Verify in
-  CI or a clean shell before treating production readiness as solved.
+- `npm run qa:release` is the intended deterministic gate and includes
+  `next build`.
+- Treat any build failure or timeout as a normal release blocker before handoff
+  or production rollout.
 
 ## First 15 Minutes From A GitHub Link
 
@@ -57,6 +57,9 @@ Important env vars:
 - `CONVEX_DEPLOYMENT`: used by Convex tooling.
 - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY`: enable Clerk
   auth. Production admin routes fail closed if Clerk is not configured.
+- `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, and Clerk
+  fallback redirect URL vars should point to the in-app auth pages and `/admin`
+  fallback used by the admin workflow.
 - `ADMIN_CLERK_USER_IDS`: allowlist for admin UI visibility.
 - `OPENAI_API_KEY`: required for extraction and approved-event master review.
 - `OPENAI_VISION_MODEL`: `.env.example` pins `gpt-4.1-mini`; code has a
@@ -179,7 +182,7 @@ Clerk:
 
 Vercel or VPS:
 
-- `vercel.json` schedules `GET /api/cron/ingest-venues` at `0 8 * * *`.
+- `vercel.json` schedules `GET /api/cron/ingest-venues` at `0 7 * * *`.
 - `docs/vps-self-hosting.md` describes the self-hosted Next container path while
   keeping Convex, Clerk, OpenAI, and Apify managed.
 - `Dockerfile`, `docker-compose.yml`, and `/api/health` support containerized
@@ -307,11 +310,11 @@ calls the job POST route, the job will not keep advancing.
 
 ### Scheduled Ingestion And Retention
 
-1. Vercel Cron calls `GET /api/cron/ingest-venues` at `0 8 * * *`.
-2. The route checks `Authorization: Bearer <CRON_SECRET>` if `CRON_SECRET` is
-   set.
+1. Vercel Cron calls `GET /api/cron/ingest-venues` at `0 7 * * *`.
+2. The route checks the bearer token when `CRON_SECRET` is set.
 3. It loads active venue handles, skips handles with a fresh full-scrape attempt
-   inside the cooldown window, creates an ingestion job, runs direct full-scrape
+   inside the 23-hour cooldown window, creates an ingestion job for up to 500
+   active handles, scrapes the latest 1 post per handle, runs direct full-scrape
    ingestion, and patches job status.
 4. Convex internal cron `delete expired events` runs hourly at minute 5 UTC and
    deletes expired events plus saved-event references in batches.
@@ -326,8 +329,9 @@ Use these scripts:
 - `npm run qa:dedupe`: deterministic duplicate QA.
 - `npm run qa:automerge`: deterministic approved-event automerge QA.
 - `npm run qa:extraction`: deterministic extraction/normalization QA.
-- `npm run qa:release`: runs lint, typecheck, dedupe QA, automerge QA, and
-  extraction QA with timeouts.
+- `npm run qa:release`: runs lint, typecheck, `next build`, dedupe QA,
+  automerge QA, extraction QA, venue taxonomy QA, public search QA, and Apify
+  cost-control QA with timeouts.
 - `npm run convex:codegen`: refresh Convex generated types.
 
 GitHub Actions:
@@ -348,8 +352,8 @@ Manual checks after UI or workflow changes:
 
 Build reliability:
 
-- `next build` has a known local hang. Do not assume production readiness from
-  `qa:release` alone until the build behavior is understood.
+- `next build` is part of `qa:release`. A build failure or timeout blocks
+  handoff and production rollout.
 
 External quotas and costs:
 
@@ -428,8 +432,7 @@ Secrets:
 
 ## Recommended Next Steps
 
-1. Reproduce and diagnose the local `next build` hang. Add `next build` back to
-   the release gate only after the hang is resolved or bounded.
+1. Verify Docker image builds with real production public env values.
 2. Add or refresh fixtures around full-scrape batch behavior, especially
    `batchSize`, stalled jobs, and resume state.
 3. Make ingestion job processing less dependent on the browser poll loop, or at

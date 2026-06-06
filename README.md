@@ -90,6 +90,10 @@ Copy `.env.example` to `.env.local` for development or
 ```env
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
 CLERK_SECRET_KEY=
+NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
+NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/admin
+NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/admin
 NEXT_PUBLIC_CONVEX_URL=
 CONVEX_DEPLOYMENT=
 ADMIN_CLERK_USER_IDS=
@@ -99,6 +103,10 @@ APIFY_INSTAGRAM_ACTOR_ID=apify/instagram-post-scraper
 OPENAI_VISION_MODEL=gpt-4.1-mini
 OPENAI_REVIEW_MODEL=gpt-4.1-mini
 CRON_SECRET=
+CRON_RESULTS_LIMIT=1
+CRON_DAYS_BACK=10
+CRON_MAX_HANDLES_PER_RUN=500
+CRON_FULL_SCRAPE_COOLDOWN_HOURS=23
 EVENTS_TIMEZONE=Europe/Belgrade
 APP_BIND=127.0.0.1
 APP_PORT=3000
@@ -108,8 +116,14 @@ Notes:
 
 - `NEXT_PUBLIC_CONVEX_URL` and `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` are public
   build-time values for browser bundles. Rebuild Docker images if they change.
+- `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, and the
+  fallback redirect URLs point Clerk at the in-app `/sign-in` and `/sign-up`
+  pages and send successful admin sign-ins back to `/admin`.
 - `CRON_SECRET` protects the cron ingestion route when set. Set it in
   production.
+- Cron ingestion defaults to one latest Instagram post per active venue handle,
+  all active handles up to the 500-handle safety cap, and a 23-hour cooldown so
+  the daily 07:00 UTC schedule is not blocked by normal scheduler jitter.
 - `EVENTS_TIMEZONE` controls local event-day handling.
 - `ADMIN_CLERK_USER_IDS` is a comma- or space-separated allowlist for showing
   admin UI.
@@ -134,11 +148,11 @@ npm run convex:codegen
 ```
 
 `qa:release` runs the deterministic release gate used by CI: lint, typecheck,
-dedupe QA, automerge QA, and extraction QA.
+`next build`, dedupe QA, automerge QA, extraction QA, venue taxonomy QA, public
+search QA, and Apify cost-control QA.
 
-Known blocker: local `next build` has previously hung before useful Next output.
-Docker image builds also call `next build`, so verify this in a clean shell or
-CI before production rollout.
+`npm run build` is a normal release requirement. Treat any build failure or
+timeout as a release blocker before production rollout.
 
 ## Core Workflows
 
@@ -189,13 +203,12 @@ Completed stabilization work includes:
   behavior.
 - Production admin routes fail closed when Clerk is missing.
 - Docker/Compose health-check deployment path for the web app.
-- GitHub Actions release gate via `npm run qa:release`.
+- GitHub Actions release gate via `npm run qa:release`, including `next build`.
 
 Remaining high-priority follow-up:
 
-- Resolve the `next build` hang and add `next build` to the required release
-  gate.
-- Verify Docker image build in CI or a clean shell.
+- Verify Docker image build in CI or a clean shell with production public env
+  values.
 - Add production smoke checks after build/startup are stable.
 
 ## Handoff Prompt
@@ -207,6 +220,6 @@ You are taking over the Ig Event repo. Read README.md, INSTRUCTIONS.md,
 DEVELOPMENT_PLAN.md, docs/ai-handoff.md, docs/architecture.md,
 docs/operations-runbook.md, and docs/vps-self-hosting.md first. Do not replace
 Convex, Clerk, OpenAI, or Apify unless explicitly asked. Preserve existing
-behavior, run npm run qa:release after changes, and treat the local next build
-hang as the main release blocker.
+behavior, run npm run qa:release after changes, and treat any next build failure
+or timeout as a release blocker.
 ```

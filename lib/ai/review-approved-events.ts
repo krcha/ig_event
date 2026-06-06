@@ -7,6 +7,7 @@ import {
   getStartOfLocalToday,
   parseNormalizedEventDate,
 } from "@/lib/events/public-events";
+import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 import { getRequiredEnv } from "@/lib/utils/env";
 
 const approvedEventsReviewModel = process.env.OPENAI_REVIEW_MODEL ?? "gpt-5.4-mini";
@@ -512,7 +513,7 @@ function sanitizePatch(
     artists: [...new Set(patch.artists.map((artist) => artist.trim()).filter(Boolean))],
     description: patch.description.trim(),
     ticketPrice: patch.ticketPrice.trim(),
-    eventType: patch.eventType.trim(),
+    eventType: canonicalizeEventType(patch.eventType),
     imageUrl: patch.imageUrl.trim(),
   };
 }

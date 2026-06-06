@@ -1,3 +1,5 @@
+import { CANONICAL_EVENT_TYPE_PROMPT_LIST } from "../taxonomy/venue-types.ts";
+
 export type EventExtractionPromptContext = {
   instagramHandle: string;
   instagramPostUrl: string;
@@ -74,7 +76,7 @@ Rules:
 - "artists" must contain only explicitly billed performers, DJs, live acts, hosts, or speakers who are presented as part of the lineup.
 - Exclude section headings, organizer names, venue names, sponsor names, ticket links, hashtags, and generic labels like "lineup" or "special guests" when no specific names are given.
 - Deduplicate artists and keep their readable stage names in source order when possible.
-- "category" should be a broad event type such as event, party, concert, festival, workshop, screening, exhibition, talk, or club night.
+- "category" must use one of these broad main types exactly: ${CANONICAL_EVENT_TYPE_PROMPT_LIST}.
 - If the post clearly announces an event but the exact subtype is unclear, return "event" for "category".
 - Keep "description" to one short factual sentence or phrase based only on details supported by the caption or flyer.
 - Do not include date, time, price, venue, address, hashtags, emojis, calls to action, or marketing language in "description".

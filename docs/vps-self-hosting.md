@@ -97,6 +97,8 @@ Keep these outside the VPS:
   `NEXT_PUBLIC_CONVEX_URL` at runtime.
 - Clerk: hosted auth. Configure the production domain and redirect URLs in
   Clerk, then provide the publishable and secret keys to the VPS runtime.
+  Keep the app env redirect URLs pointed at `/sign-in`, `/sign-up`, and the
+  `/admin` fallback unless the route structure changes.
 - OpenAI: hosted model API. The app calls it during extraction/review flows.
 - Apify: hosted Instagram scraping actor. The app calls Apify from API routes.
 
@@ -148,6 +150,10 @@ NODE_ENV=production
 PORT=3000
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
 CLERK_SECRET_KEY=
+NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
+NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/admin
+NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/admin
 NEXT_PUBLIC_CONVEX_URL=
 CONVEX_DEPLOYMENT=
 ADMIN_CLERK_USER_IDS=
@@ -232,7 +238,7 @@ Install a cron entry:
 
 ```cron
 TZ=Europe/Belgrade
-0 8 * * * . /etc/ig_event/cron.env; curl -fsS -H "Authorization: Bearer ${CRON_SECRET}" "${APP_ORIGIN}/api/cron/ingest-venues" >/dev/null
+0 7 * * * . /etc/ig_event/cron.env; curl -fsS -H "Authorization: Bearer ${CRON_SECRET}" "${APP_ORIGIN}/api/cron/ingest-venues" >/dev/null
 ```
 
 If cron reliability becomes important, promote this to a systemd timer so logs

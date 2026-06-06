@@ -2,32 +2,29 @@ import type { Metadata, Viewport } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 import { AppToolbar } from "@/components/navigation/app-toolbar";
 import { ConvexClientProvider } from "@/components/providers/convex-client-provider";
-import { isViewerAdmin } from "@/lib/auth/admin";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Nightlife Event Aggregator",
-  description: "Discover nightlife events aggregated from Instagram.",
+  title: "Belgrade Events — Nightlife calendar",
+  description: "A dark, mobile-first calendar for Belgrade nightlife, concerts, club nights, and culture.",
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#eef7fb",
+  themeColor: "#050609",
 };
 
 const clerkPublishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
-async function AppDocument({ children }: { children: React.ReactNode }) {
-  const showAdminNavigation = await isViewerAdmin();
-
+function AppDocument({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html className="dark" lang="en">
       <body className="min-h-screen bg-background text-foreground antialiased">
         <ConvexClientProvider>
           <div className="min-h-screen">
-            <AppToolbar showAdminNavigation={showAdminNavigation} />
+            <AppToolbar />
             {children}
           </div>
         </ConvexClientProvider>
@@ -36,7 +33,7 @@ async function AppDocument({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;

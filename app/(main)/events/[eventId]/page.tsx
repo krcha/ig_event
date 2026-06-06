@@ -1,8 +1,18 @@
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowLeft, CalendarDays, Clock3, ExternalLink, MapPin, Ticket } from "lucide-react";
+import {
+  ArrowLeft,
+  CalendarDays,
+  ChevronDown,
+  Clock3,
+  ExternalLink,
+  MapPin,
+  Ticket,
+} from "lucide-react";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
+import { getDisplayEventTime } from "@/lib/events/event-time";
+import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 
 type EventRecord = {
   _id: string;
@@ -37,6 +47,9 @@ async function loadEvent(eventId: string): Promise<{
   try {
     const convex = new ConvexHttpClient(convexUrl);
     const event = (await convex.query(getEventQuery, { id: eventId })) as EventRecord | null;
+    if (event) {
+      event.eventType = canonicalizeEventType(event.eventType);
+    }
     return { event };
   } catch (error) {
     return {
@@ -60,127 +73,183 @@ function formatEventDate(value: string): string {
   }).format(parsed);
 }
 
+function buildCalendarHref(event: EventRecord): string {
+  const month = event.date.slice(0, 7);
+  const query = new URLSearchParams({ month, day: event.date });
+  return `/calendar?${query.toString()}`;
+}
+
+function InfoTile({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof CalendarDays;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3">
+      <p className="section-kicker">{label}</p>
+      <p className="mt-1.5 flex items-start gap-2 text-sm font-semibold leading-5 text-foreground">
+        <Icon className="mt-0.5 h-4 w-4 flex-none text-primary" />
+        <span className="min-w-0 break-words">{value}</span>
+      </p>
+    </div>
+  );
+}
+
 export default async function EventDetailPage({ params }: EventDetailPageProps) {
   const { event, error } = await loadEvent(params.eventId);
+  const eventTime = event ? getDisplayEventTime(event.time) : undefined;
 
   return (
-    <main className="app-page">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <Link className="button-secondary w-full gap-2 sm:w-auto" href="/events">
+    <main className="app-page gap-3 pb-[calc(9.5rem+env(safe-area-inset-bottom))] md:pb-9">
+      <div className="flex items-center justify-between gap-3">
+        <Link className="button-secondary min-h-10 gap-2 px-4 py-0" href="/events">
           <ArrowLeft className="h-4 w-4" />
-          Back to events
+          Back
         </Link>
-        <span className="app-chip">Event ID {params.eventId}</span>
+        {event?.status && event.status !== "approved" ? (
+          <span className="app-chip bg-card/95">{event.status}</span>
+        ) : null}
       </div>
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
       {event ? (
-        <article className="hero-panel">
-          <div className="grid gap-0 lg:grid-cols-[minmax(0,1.05fr)_320px]">
-            <div className="order-1 border-b border-border/70 bg-secondary/55 p-4 sm:p-6 lg:order-2 lg:border-l lg:border-b-0">
-              {event.imageUrl ? (
-                <div className="glass-panel overflow-hidden p-2">
-                  <div className="relative aspect-[4/5] min-h-72 w-full overflow-hidden rounded-[1.25rem]">
-                    <Image
-                      alt={event.title}
-                      className="object-cover"
-                      fill
-                      sizes="(max-width: 1024px) 100vw, 320px"
-                      src={event.imageUrl}
-                    />
-                  </div>
+        <>
+          <article className="hero-panel overflow-hidden">
+            <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,22rem)]">
+              <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-6 lg:px-7">
+                <div className="flex flex-wrap gap-2">
+                  <span className="app-chip bg-background/95">{event.eventType}</span>
+                  {event.ticketPrice ? (
+                    <span className="app-chip bg-background/95">
+                      <Ticket className="h-3.5 w-3.5" />
+                      {event.ticketPrice}
+                    </span>
+                  ) : null}
                 </div>
-              ) : (
-                <div className="glass-panel flex min-h-72 items-center justify-center px-6 text-center text-sm text-muted-foreground">
-                  No poster image is available for this event.
+
+                <div className="space-y-2">
+                  <p className="section-kicker">Event details</p>
+                  <h1 className="text-2xl font-semibold leading-tight tracking-[-0.045em] sm:text-4xl lg:text-5xl">
+                    {event.title}
+                  </h1>
                 </div>
-              )}
-            </div>
 
-            <div className="order-2 space-y-5 px-5 py-6 sm:px-8 sm:py-8 lg:order-1 lg:space-y-6">
-              <div className="flex flex-wrap gap-2">
-                <span className="app-chip">{event.status}</span>
-                <span className="app-chip">{event.eventType}</span>
-                {event.ticketPrice ? (
-                  <span className="app-chip">
-                    <Ticket className="h-3.5 w-3.5" />
-                    {event.ticketPrice}
-                  </span>
-                ) : null}
-              </div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <InfoTile icon={CalendarDays} label="Date" value={formatEventDate(event.date)} />
+                  {eventTime ? <InfoTile icon={Clock3} label="Time" value={eventTime} /> : null}
+                  <InfoTile icon={MapPin} label="Venue" value={event.venue} />
+                </div>
 
-              <div className="space-y-3">
-                <p className="section-kicker">Event detail</p>
-                <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-                  {event.title}
-                </h1>
                 {event.description ? (
-                  <p className="max-w-3xl text-sm leading-7 text-muted-foreground sm:text-base">
-                    {event.description}
-                  </p>
+                  <details className="group rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-2.5">
+                    <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-foreground [&::-webkit-details-marker]:hidden">
+                      <span>What to know</span>
+                      <ChevronDown className="h-4 w-4 text-muted-foreground transition group-open:rotate-180" />
+                    </summary>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                      {event.description}
+                    </p>
+                  </details>
                 ) : null}
-              </div>
 
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                <div className="metric-card">
-                  <p className="section-kicker">Date</p>
-                  <p className="mt-3 inline-flex items-center gap-2 text-base font-semibold">
-                    <CalendarDays className="h-4 w-4 text-primary" />
-                    {formatEventDate(event.date)}
-                  </p>
-                </div>
-                <div className="metric-card">
-                  <p className="section-kicker">Time</p>
-                  <p className="mt-3 inline-flex items-center gap-2 text-base font-semibold">
-                    <Clock3 className="h-4 w-4 text-primary" />
-                    {event.time ?? "Time TBA"}
-                  </p>
-                </div>
-                <div className="metric-card">
-                  <p className="section-kicker">Venue</p>
-                  <p className="mt-3 inline-flex items-center gap-2 text-base font-semibold">
-                    <MapPin className="h-4 w-4 text-primary" />
-                    {event.venue}
-                  </p>
-                </div>
-              </div>
-
-              {event.artists.length > 0 ? (
-                <div className="glass-panel px-5 py-5">
-                  <p className="section-kicker">Artists</p>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {event.artists.map((artist) => (
-                      <span className="app-chip" key={artist}>
-                        {artist}
+                {event.artists.length > 0 ? (
+                  <details className="group rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-2.5">
+                    <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-foreground [&::-webkit-details-marker]:hidden">
+                      <span>Artists</span>
+                      <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                        {event.artists.length}
+                        <ChevronDown className="h-4 w-4 transition group-open:rotate-180" />
                       </span>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-
-              <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-                {event.instagramPostUrl ? (
-                  <a
-                    className="button-primary w-full gap-2 sm:w-auto"
-                    href={event.instagramPostUrl}
-                    rel="noreferrer"
-                    target="_blank"
-                  >
-                    Open Instagram post
-                    <ExternalLink className="h-4 w-4" />
-                  </a>
+                    </summary>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {event.artists.map((artist) => (
+                        <span className="app-chip bg-card/95" key={artist}>
+                          {artist}
+                        </span>
+                      ))}
+                    </div>
+                  </details>
                 ) : null}
-                <Link className="button-secondary w-full sm:w-auto" href="/calendar">
-                  Open calendar
-                </Link>
+
+                <div className="hidden flex-wrap gap-2 md:flex">
+                  {event.instagramPostUrl ? (
+                    <a
+                      className="button-primary gap-2"
+                      href={event.instagramPostUrl}
+                      rel="noreferrer"
+                      target="_blank"
+                    >
+                      Instagram
+                      <ExternalLink className="h-4 w-4" />
+                    </a>
+                  ) : null}
+                  <Link className="button-secondary gap-2" href={buildCalendarHref(event)}>
+                    <CalendarDays className="h-4 w-4" />
+                    Calendar
+                  </Link>
+                </div>
               </div>
+
+              <aside className="border-t border-border/75 bg-muted/[0.22] p-3 sm:p-5 lg:border-l lg:border-t-0">
+                {event.imageUrl ? (
+                  <div className="overflow-hidden rounded-[1.1rem] border border-border/75 bg-card p-1.5 shadow-[0_24px_68px_-48px_rgba(0,0,0,0.82)]">
+                    <div className="relative aspect-[16/10] max-h-64 w-full overflow-hidden rounded-[0.9rem] lg:aspect-[4/5] lg:max-h-none">
+                      <Image
+                        alt={event.title}
+                        className="object-cover"
+                        fill
+                        priority
+                        sizes="(max-width: 1024px) 100vw, 352px"
+                        src={event.imageUrl}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex min-h-40 items-center justify-center rounded-[1.1rem] border border-dashed border-border/80 bg-card/82 px-6 text-center text-sm text-muted-foreground lg:min-h-72">
+                    No poster image available.
+                  </div>
+                )}
+              </aside>
+            </div>
+          </article>
+
+          <div className="fixed inset-x-0 bottom-[calc(4.85rem+env(safe-area-inset-bottom))] z-40 px-3 md:hidden">
+            <div className="glass-panel grid grid-cols-2 gap-2 bg-card/95 p-2 shadow-[0_-18px_48px_-34px_rgba(0,0,0,0.9)]">
+              {event.instagramPostUrl ? (
+                <a
+                  className="button-primary min-h-11 gap-2 px-3 py-0"
+                  href={event.instagramPostUrl}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  Instagram
+                  <ExternalLink className="h-4 w-4" />
+                </a>
+              ) : null}
+              <Link
+                className={event.instagramPostUrl ? "button-secondary min-h-11 gap-2 px-3 py-0" : "button-primary col-span-2 min-h-11 gap-2 px-3 py-0"}
+                href={buildCalendarHref(event)}
+              >
+                <CalendarDays className="h-4 w-4" />
+                Calendar
+              </Link>
             </div>
           </div>
-        </article>
+        </>
       ) : (
-        <div className="glass-panel px-6 py-10 text-center text-sm text-muted-foreground">
-          Event not found.
+        <div className="glass-panel px-6 py-10 text-center">
+          <p className="text-base font-semibold text-foreground">Event not found.</p>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            It may have been removed or has not been approved yet.
+          </p>
+          <Link className="button-primary mt-5" href="/events">
+            Browse events
+          </Link>
         </div>
       )}
     </main>

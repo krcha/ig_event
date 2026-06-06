@@ -43,37 +43,41 @@ export function MobileMonthDayStrip({ days }: MobileMonthDayStripProps) {
 
   return (
     <div
-      className="mt-4 flex snap-x gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      className="-mx-1 mt-2 flex snap-x gap-1.5 overflow-x-auto px-1 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       ref={containerRef}
     >
       {days.map((day) => (
         <Link
           className={cn(
-            "min-w-[5.4rem] snap-start rounded-[1.25rem] border border-border/75 bg-card px-3 py-3 shadow-[0_18px_36px_-30px_rgba(15,23,42,0.18)] transition",
-            day.isSelected &&
-              "border-primary/30 bg-primary/[0.06] shadow-[0_20px_40px_-30px_rgba(14,116,144,0.34)]",
+            "min-w-[3.45rem] snap-start rounded-[0.85rem] border border-border/75 bg-card px-1.5 py-1.5 text-center transition",
+            day.isSelected && "border-primary/35 bg-primary/[0.08] text-primary shadow-[0_20px_42px_-34px_rgba(14,116,144,0.42)]",
           )}
           href={day.href}
           key={day.dayKey}
           ref={day.isAnchor ? anchorRef : undefined}
           scroll={false}
         >
-          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
             {day.weekdayLabel}
           </p>
           <p
             className={cn(
-              "mt-2 text-2xl font-semibold tracking-tight text-foreground",
+              "mt-0.5 text-base font-semibold leading-none tracking-tight text-foreground",
               day.isToday && "text-primary",
+              day.isSelected && "text-primary",
             )}
           >
             {day.dayNumber}
           </p>
-          <p className="mt-2 text-xs leading-5 text-muted-foreground">
-            {day.eventCount === 0
-              ? "No events"
-              : `${day.eventCount} event${day.eventCount === 1 ? "" : "s"}`}
-          </p>
+          <div className="mt-1 flex items-center justify-center gap-1 text-[11px] font-semibold text-muted-foreground">
+            <span
+              className={cn(
+                "h-1.5 w-1.5 rounded-full",
+                day.eventCount > 0 ? "bg-primary" : "bg-border",
+              )}
+            />
+            <span>{day.eventCount}</span>
+          </div>
         </Link>
       ))}
     </div>

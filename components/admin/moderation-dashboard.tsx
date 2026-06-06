@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { getModerationQueuePriorityScore } from "@/lib/events/moderation-queue";
 import {
   AUTO_APPROVE_CONFIDENCE_THRESHOLD,
   calculateModerationConfidenceScore,
@@ -15,6 +16,7 @@ import {
 
 type EventStatus = "pending" | "approved" | "rejected";
 type ModerationSortMode =
+  | "queue_priority"
   | "newest"
   | "updated"
   | "event_date"
@@ -131,7 +133,11 @@ type DecoratedEvent = ModerationEvent & {
   confidenceScore: number | null;
   titleUsedFallback: boolean;
   missingImage: boolean;
+  allowMissingImage: boolean;
   missingTime: boolean;
+  moderationPendingReasons: string[];
+  moderationSignals: string[];
+  queuePriorityScore: number;
   hasIssues: boolean;
   suspectedDuplicateIds: string[];
   suspectedDuplicateCount: number;
@@ -445,11 +451,23 @@ function attachSuspectedDuplicateGroups(events: DecoratedEvent[]): DecoratedEven
       : calculateModerationConfidenceScore(event.baseConfidenceScore, {
           hasSuspectedDuplicates: suspectedDuplicateIds.length > 0,
           missingImage: event.missingImage,
+          allowMissingImage: event.allowMissingImage,
         });
     const lowConfidence = confidenceScore !== null && confidenceScore < 0.7;
+    const queuePriorityScore = getModerationQueuePriorityScore({
+      confidenceScore,
+      titleUsedFallback: event.titleUsedFallback,
+      missingImage: event.missingImage,
+      allowMissingImage: event.allowMissingImage,
+      missingTime: event.missingTime,
+      hasSuspiciousYear: event.hasSuspiciousYear,
+      suspectedDuplicateCount: suspectedDuplicateIds.length,
+      hasResolvedDuplicate,
+    });
     return {
       ...event,
       confidenceScore,
+      queuePriorityScore,
       suspectedDuplicateIds,
       suspectedDuplicateCount: suspectedDuplicateIds.length,
       hasResolvedDuplicate,
@@ -457,7 +475,7 @@ function attachSuspectedDuplicateGroups(events: DecoratedEvent[]): DecoratedEven
         event.hasSuspiciousYear ||
         event.titleUsedFallback ||
         lowConfidence ||
-        event.missingImage ||
+        (event.missingImage && !event.allowMissingImage) ||
         suspectedDuplicateIds.length > 0,
     };
   });
@@ -582,14 +600,31 @@ function decorateEvent(event: ModerationEvent): DecoratedEvent {
     normalizeConfidenceScore(readNumberOrStringField(normalizedFields, "confidence")) ??
     normalizeConfidenceScore(readNumberOrStringField(rawExtraction, "confidence"));
   const missingImage = !event.imageUrl;
+  const allowMissingImage = readBooleanField(normalizedFields, "moderationAllowMissingImage");
   const confidenceScore = calculateModerationConfidenceScore(baseConfidenceScore, {
     hasSuspectedDuplicates: false,
     missingImage,
+    allowMissingImage,
   });
   const hasSuspiciousYear = readBooleanField(normalizedFields, "dateSuspiciousYear");
   const titleUsedFallback = readBooleanField(normalizedFields, "titleUsedFallback");
   const missingTime = !event.time;
   const lowConfidence = confidenceScore !== null && confidenceScore < 0.7;
+  const moderationPendingReasons = readStringArrayField(
+    normalizedFields,
+    "moderationPendingReasons",
+  );
+  const moderationSignals = readStringArrayField(normalizedFields, "moderationSignals");
+  const queuePriorityScore = getModerationQueuePriorityScore({
+    confidenceScore,
+    titleUsedFallback,
+    missingImage,
+    allowMissingImage,
+    missingTime,
+    hasSuspiciousYear,
+    suspectedDuplicateCount: 0,
+    hasResolvedDuplicate: false,
+  });
   const fieldConfirmationRows = buildFieldConfirmationRows(
     event,
     normalizedFields,
@@ -610,8 +645,12 @@ function decorateEvent(event: ModerationEvent): DecoratedEvent {
     confidenceScore,
     titleUsedFallback,
     missingImage,
+    allowMissingImage,
     missingTime,
-    hasIssues: hasSuspiciousYear || titleUsedFallback || lowConfidence || missingImage,
+    moderationPendingReasons,
+    moderationSignals,
+    queuePriorityScore,
+    hasIssues: hasSuspiciousYear || titleUsedFallback || lowConfidence || (missingImage && !allowMissingImage),
     suspectedDuplicateIds: [],
     suspectedDuplicateCount: 0,
     hasResolvedDuplicate: false,
@@ -655,7 +694,7 @@ export function ModerationDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [actionInFlightFor, setActionInFlightFor] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [sortMode, setSortMode] = useState<ModerationSortMode>("newest");
+  const [sortMode, setSortMode] = useState<ModerationSortMode>("queue_priority");
   const [filterMode, setFilterMode] = useState<ModerationFilterMode>("all");
   const [confidenceFilter, setConfidenceFilter] =
     useState<ConfidenceFilterMode>("all");
@@ -846,6 +885,13 @@ export function ModerationDashboard() {
     });
 
     next.sort((left, right) => {
+      if (sortMode === "queue_priority") {
+        const priorityDelta = right.queuePriorityScore - left.queuePriorityScore;
+        if (priorityDelta !== 0) {
+          return priorityDelta;
+        }
+        return right.updatedAt - left.updatedAt;
+      }
       if (sortMode === "event_date") {
         return (left.normalizedFinalDate ?? left.date).localeCompare(
           right.normalizedFinalDate ?? right.date,
@@ -1151,6 +1197,7 @@ export function ModerationDashboard() {
             onChange={(event) => setSortMode(event.target.value as ModerationSortMode)}
             value={sortMode}
           >
+            <option value="queue_priority">Queue priority</option>
             <option value="newest">Newest created</option>
             <option value="updated">Recently updated</option>
             <option value="event_date">Event date ascending</option>
@@ -1433,6 +1480,16 @@ export function ModerationDashboard() {
                           Missing time
                         </span>
                       ) : null}
+                      {event.allowMissingImage ? (
+                        <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-emerald-800">
+                          Video image optional
+                        </span>
+                      ) : null}
+                      {event.queuePriorityScore > 0 ? (
+                        <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          Priority {event.queuePriorityScore}
+                        </span>
+                      ) : null}
                     </div>
                     <div>
                       <h3 className="text-lg font-semibold tracking-tight">{event.title}</h3>
@@ -1584,9 +1641,21 @@ export function ModerationDashboard() {
                         <p className="text-xs text-muted-foreground">
                           Missing image{" "}
                           {event.missingImage
-                            ? `-${MISSING_IMAGE_CONFIDENCE_PENALTY.toFixed(2)}`
+                            ? event.allowMissingImage
+                              ? "allowed for caption-only video"
+                              : `-${MISSING_IMAGE_CONFIDENCE_PENALTY.toFixed(2)}`
                             : "none"}
                         </p>
+                        {event.moderationPendingReasons.length > 0 ? (
+                          <p className="text-xs text-muted-foreground">
+                            Pending reasons {event.moderationPendingReasons.join(", ")}
+                          </p>
+                        ) : null}
+                        {event.moderationSignals.length > 0 ? (
+                          <p className="text-xs text-muted-foreground">
+                            Signals {event.moderationSignals.join(", ")}
+                          </p>
+                        ) : null}
                         <p className="text-xs text-muted-foreground">
                           Auto-approve {`>${AUTO_APPROVE_CONFIDENCE_THRESHOLD.toFixed(2)}`}
                         </p>

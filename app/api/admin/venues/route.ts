@@ -3,6 +3,7 @@ import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { hasClerkEnv } from "@/lib/utils/env";
+import { canonicalizeVenueCategory } from "@/lib/taxonomy/venue-types";
 
 type VenueRecord = {
   _id: string;
@@ -73,7 +74,7 @@ export async function GET() {
         id: venue._id,
         name: venue.name,
         instagramHandle: venue.instagramHandle,
-        category: venue.category,
+        category: canonicalizeVenueCategory(venue.category),
         location: venue.location ?? null,
         isActive: venue.isActive,
         createdAt: venue.createdAt,
@@ -104,11 +105,11 @@ export async function POST(request: Request) {
 
   const name = body.name?.trim();
   const instagramHandle = body.instagramHandle?.trim();
-  const category = body.category?.trim();
+  const category = canonicalizeVenueCategory(body.category);
 
-  if (!name || !instagramHandle || !category) {
+  if (!name || !instagramHandle) {
     return NextResponse.json(
-      { error: "name, instagramHandle, and category are required." },
+      { error: "name and instagramHandle are required." },
       { status: 400 },
     );
   }
@@ -155,9 +156,16 @@ export async function PATCH(request: Request) {
 
   try {
     const convex = getConvexClient();
+    const patch = {
+      ...body.patch,
+      ...(body.patch.category !== undefined
+        ? { category: canonicalizeVenueCategory(body.patch.category) }
+        : {}),
+    };
+
     await convex.mutation(updateVenueMutation, {
       id: body.id,
-      patch: body.patch,
+      patch,
     });
     return NextResponse.json({ ok: true });
   } catch (error) {
