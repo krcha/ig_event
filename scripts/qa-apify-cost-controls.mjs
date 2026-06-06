@@ -62,7 +62,7 @@ const cronConfig = getCronIngestionConfig({});
 assert.deepEqual(cronConfig, {
   resultsLimit: 1,
   daysBack: 10,
-  maxHandlesPerRun: 500,
+  maxHandlesPerRun: 600,
   fullScrapeCooldownHours: 23,
 });
 
@@ -109,12 +109,12 @@ assert.equal(
 
 assert.deepEqual(
   selectCronIngestionHandles({
-    activeVenueHandles: Array.from({ length: 500 }, (_, index) => `venue-${index + 1}`),
+    activeVenueHandles: Array.from({ length: 600 }, (_, index) => `venue-${index + 1}`),
     recentlyAttemptedHandles: [],
     maxHandlesPerRun: cronConfig.maxHandlesPerRun,
   }),
   {
-    handles: Array.from({ length: 500 }, (_, index) => `venue-${index + 1}`),
+    handles: Array.from({ length: 600 }, (_, index) => `venue-${index + 1}`),
     skippedRecentlyAttempted: 0,
     skippedDueToRunLimit: 0,
   },

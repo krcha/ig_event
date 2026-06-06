@@ -105,7 +105,7 @@ OPENAI_REVIEW_MODEL=gpt-4.1-mini
 CRON_SECRET=
 CRON_RESULTS_LIMIT=1
 CRON_DAYS_BACK=10
-CRON_MAX_HANDLES_PER_RUN=500
+CRON_MAX_HANDLES_PER_RUN=600
 CRON_FULL_SCRAPE_COOLDOWN_HOURS=23
 EVENTS_TIMEZONE=Europe/Belgrade
 APP_BIND=127.0.0.1
@@ -122,7 +122,7 @@ Notes:
 - `CRON_SECRET` protects the cron ingestion route when set. Set it in
   production.
 - Cron ingestion defaults to one latest Instagram post per active venue handle,
-  all active handles up to the 500-handle safety cap, and a 23-hour cooldown so
+  all active handles up to the 600-handle safety cap, and a 23-hour cooldown so
   the daily 07:00 UTC schedule is not blocked by normal scheduler jitter.
 - `EVENTS_TIMEZONE` controls local event-day handling.
 - `ADMIN_CLERK_USER_IDS` is a comma- or space-separated allowlist for showing
