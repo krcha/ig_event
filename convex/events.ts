@@ -31,17 +31,25 @@ async function deleteEventWithSavedReferences(
   ctx: MutationCtx,
   eventId: Id<"events">,
 ): Promise<number> {
-  const savedEvents = await ctx.db
+  const legacySavedEvents = await ctx.db
     .query("userSavedEvents")
     .withIndex("by_event", (q) => q.eq("eventId", eventId))
     .collect();
+  const savedEvents = await ctx.db
+    .query("savedEvents")
+    .withIndex("by_event", (q) => q.eq("eventId", eventId))
+    .collect();
+
+  for (const savedEvent of legacySavedEvents) {
+    await ctx.db.delete(savedEvent._id);
+  }
 
   for (const savedEvent of savedEvents) {
     await ctx.db.delete(savedEvent._id);
   }
 
   await ctx.db.delete(eventId);
-  return savedEvents.length;
+  return legacySavedEvents.length + savedEvents.length;
 }
 
 async function reassignSavedEventReferences(
@@ -53,17 +61,41 @@ async function reassignSavedEventReferences(
     return { movedCount: 0, dedupedCount: 0 };
   }
 
-  const savedEvents = await ctx.db
+  const legacySavedEvents = await ctx.db
     .query("userSavedEvents")
+    .withIndex("by_event", (q) => q.eq("eventId", fromEventId))
+    .collect();
+  const savedEvents = await ctx.db
+    .query("savedEvents")
     .withIndex("by_event", (q) => q.eq("eventId", fromEventId))
     .collect();
 
   let movedCount = 0;
   let dedupedCount = 0;
 
-  for (const savedEvent of savedEvents) {
+  for (const savedEvent of legacySavedEvents) {
     const existingPrimarySave = await ctx.db
       .query("userSavedEvents")
+      .withIndex("by_user_event", (q) =>
+        q.eq("userId", savedEvent.userId).eq("eventId", toEventId),
+      )
+      .unique();
+
+    if (existingPrimarySave) {
+      await ctx.db.delete(savedEvent._id);
+      dedupedCount += 1;
+      continue;
+    }
+
+    await ctx.db.patch(savedEvent._id, {
+      eventId: toEventId,
+    });
+    movedCount += 1;
+  }
+
+  for (const savedEvent of savedEvents) {
+    const existingPrimarySave = await ctx.db
+      .query("savedEvents")
       .withIndex("by_user_event", (q) =>
         q.eq("userId", savedEvent.userId).eq("eventId", toEventId),
       )

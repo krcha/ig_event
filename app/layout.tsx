@@ -1,7 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 import { AppToolbar } from "@/components/navigation/app-toolbar";
+import { AuthUserProvider } from "@/components/providers/auth-user-provider";
 import { ConvexClientProvider } from "@/components/providers/convex-client-provider";
+import { UserLibraryProvider } from "@/components/providers/user-library-provider";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -18,16 +20,51 @@ export const viewport: Viewport = {
 
 const clerkPublishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
-function AppDocument({ children }: { children: React.ReactNode }) {
+const clerkAppearance = {
+  variables: {
+    borderRadius: "1rem",
+    colorBackground: "#0B0D12",
+    colorDanger: "#fb7185",
+    colorInputBackground: "#11141B",
+    colorInputText: "#F7F8F8",
+    colorPrimary: "#8B86FB",
+    colorText: "#F7F8F8",
+    colorTextSecondary: "#939AA7",
+  },
+  elements: {
+    cardBox: "bg-[#0B0D12] text-[#F7F8F8] shadow-[0_34px_90px_-58px_rgba(0,0,0,0.9)]",
+    footerActionLink: "text-[#8B86FB] hover:text-[#A6A2FF]",
+    formButtonPrimary: "bg-[#8B86FB] text-[#080A17] hover:bg-[#A6A2FF]",
+    modalBackdrop: "bg-black/70 backdrop-blur-sm",
+  },
+};
+
+function AppDocument({
+  authEnabled = false,
+  children,
+}: {
+  authEnabled?: boolean;
+  children: React.ReactNode;
+}) {
+  const appContent = (
+    <ConvexClientProvider>
+      <div className="min-h-screen">
+        <AppToolbar />
+        {children}
+      </div>
+    </ConvexClientProvider>
+  );
+
   return (
     <html className="dark" lang="en">
       <body className="min-h-screen bg-background text-foreground antialiased">
-        <ConvexClientProvider>
-          <div className="min-h-screen">
-            <AppToolbar />
-            {children}
-          </div>
-        </ConvexClientProvider>
+        {authEnabled ? (
+          <AuthUserProvider>
+            <UserLibraryProvider>{appContent}</UserLibraryProvider>
+          </AuthUserProvider>
+        ) : (
+          appContent
+        )}
       </body>
     </html>
   );
@@ -43,8 +80,8 @@ export default function RootLayout({
   }
 
   return (
-    <ClerkProvider publishableKey={clerkPublishableKey}>
-      <AppDocument>{children}</AppDocument>
+    <ClerkProvider appearance={clerkAppearance} publishableKey={clerkPublishableKey}>
+      <AppDocument authEnabled>{children}</AppDocument>
     </ClerkProvider>
   );
 }

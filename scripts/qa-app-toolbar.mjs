@@ -1,0 +1,85 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+
+const toolbarPath = "components/navigation/app-toolbar.tsx";
+const source = readFileSync(toolbarPath, "utf8");
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const mobileTopbarStart = source.indexOf('<div className="mobile-topbar">');
+assert.notEqual(mobileTopbarStart, -1, "App toolbar should render a mobile top header.");
+
+const desktopHeaderStart = source.indexOf("<header", mobileTopbarStart);
+assert.notEqual(
+  desktopHeaderStart,
+  -1,
+  "Mobile top header source should be separable from the desktop header.",
+);
+
+const mobileTopbarSource = source.slice(mobileTopbarStart, desktopHeaderStart);
+
+assert.ok(
+  mobileTopbarSource.includes("Belgrade nights"),
+  "Mobile top header should keep the left brand label.",
+);
+
+assert.equal(
+  /\bcurrentSectionLabel\b/.test(source),
+  false,
+  "App toolbar should not derive or render a current-section label in the top header.",
+);
+
+assert.equal(
+  mobileTopbarSource.includes("app-chip"),
+  false,
+  "Mobile top header should not render the old right-side current-tab chip.",
+);
+
+for (const label of ["Events", "Map", "Saved", "You"]) {
+  assert.equal(
+    new RegExp(`>\\s*${escapeRegExp(label)}\\s*<`).test(mobileTopbarSource),
+    false,
+    `Mobile top header should not repeat the ${label} bottom-nav label.`,
+  );
+}
+
+assert.equal(
+  /\b(pathname|isActivePath|desktopToolbarItems|mobileToolbarItems)\b/.test(mobileTopbarSource),
+  false,
+  "Mobile top header markup should be path/tab-independent so it stays identical on Events, Map, Saved, and You.",
+);
+
+const publicItemsStart = source.indexOf("const PUBLIC_TOOLBAR_ITEMS");
+assert.notEqual(publicItemsStart, -1, "App toolbar should keep explicit public toolbar items.");
+
+const adminItemsStart = source.indexOf("const ADMIN_TOOLBAR_ITEMS", publicItemsStart);
+assert.notEqual(
+  adminItemsStart,
+  -1,
+  "Public toolbar item source should be separable from admin toolbar items.",
+);
+
+const publicItemsSource = source.slice(publicItemsStart, adminItemsStart);
+
+assert.deepEqual(
+  [...publicItemsSource.matchAll(/\blabel:\s*"([^"]+)"/g)].map(([, label]) => label),
+  ["Events", "Map", "Saved", "You"],
+  "Public bottom navigation tabs should remain exactly Events, Map, Saved, You.",
+);
+
+for (const { href, label } of [
+  { href: "/", label: "Events" },
+  { href: "/map", label: "Map" },
+  { href: "/saved", label: "Saved" },
+  { href: "/you", label: "You" },
+]) {
+  assert.match(
+    publicItemsSource,
+    new RegExp(`href:\\s*"${escapeRegExp(href)}"[\\s\\S]*?label:\\s*"${escapeRegExp(label)}"`),
+    `Public toolbar should keep ${label} mapped to ${href}.`,
+  );
+}
+
+console.log("QA passed: app toolbar top header is brand-only and tab-independent.");

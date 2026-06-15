@@ -11,6 +11,7 @@
 import type * as crons from "../crons.js";
 import type * as events from "../events.js";
 import type * as ingestionJobs from "../ingestionJobs.js";
+import type * as maintenance from "../maintenance.js";
 import type * as scrapedPosts from "../scrapedPosts.js";
 import type * as users from "../users.js";
 import type * as venues from "../venues.js";
@@ -25,6 +26,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   events: typeof events;
   ingestionJobs: typeof ingestionJobs;
+  maintenance: typeof maintenance;
   scrapedPosts: typeof scrapedPosts;
   users: typeof users;
   venues: typeof venues;

@@ -1,15 +1,21 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { getDisplayEventTime } from "../lib/events/event-time.ts";
+import { getDisplayEventTime, normalizeEventTime } from "../lib/events/event-time.ts";
 
-const calendarSource = readFileSync("app/(main)/calendar/page.tsx", "utf8");
+const calendarSource = readFileSync("app/(main)/events-browse-page.tsx", "utf8");
+const eventDetailSource = readFileSync("app/(main)/events/[eventId]/page.tsx", "utf8");
+const eventMetaSource = readFileSync("components/events/event-meta.tsx", "utf8");
+const monthEventsTableSource = readFileSync("components/calendar/month-events-table.tsx", "utf8");
+const saveEventButtonSource = readFileSync("components/events/save-event-button.tsx", "utf8");
+const savedLibraryPanelSource = readFileSync("components/saved/saved-library-panel.tsx", "utf8");
 const publicEventUiSources = [
-  ["calendar page", calendarSource],
-  ["events page", readFileSync("app/(main)/events/page.tsx", "utf8")],
-  ["event detail page", readFileSync("app/(main)/events/[eventId]/page.tsx", "utf8")],
+  ["events browse page", calendarSource],
+  ["calendar redirect page", readFileSync("app/(main)/calendar/page.tsx", "utf8")],
+  ["events redirect page", readFileSync("app/(main)/events/page.tsx", "utf8")],
+  ["event detail page", eventDetailSource],
   ["home page", readFileSync("app/page.tsx", "utf8")],
-  ["month events table", readFileSync("components/calendar/month-events-table.tsx", "utf8")],
+  ["month events table", monthEventsTableSource],
 ];
 
 assert.ok(
@@ -67,6 +73,24 @@ assert.equal(
   "Literal Time TBA event time should stay hidden.",
 );
 assert.equal(getDisplayEventTime("23:30"), "23:30", "Real event time should still render.");
+assert.equal(
+  getDisplayEventTime("20:00-03:00"),
+  "20:00–03:00",
+  "Short event time ranges should render as clean compact ranges.",
+);
+assert.equal(
+  getDisplayEventTime("until 17:00 Medonosni vrt open; 16:00-22:00 Market"),
+  undefined,
+  "Long descriptive schedule strings should not render inside compact time zones.",
+);
+assert.deepEqual(
+  normalizeEventTime("until 17:00 Medonosni vrt open; 16:00-22:00 Market"),
+  {
+    allDay: true,
+    description: "until 17:00 Medonosni vrt open; 16:00-22:00 Market",
+  },
+  "Long schedule strings should be carried as clamped description metadata instead of time labels.",
+);
 for (const [label, source] of publicEventUiSources) {
   assert.equal(
     /event\.time\s*\?\?\s*["'](?:Time )?TBA["']/.test(source) ||
@@ -79,6 +103,40 @@ assert.equal(
   mobileRowSource.includes("formatAgendaMeta") || mobileRowSource.includes("ArrowUpRight"),
   false,
   "Compact mobile rows should not include repeated metadata or a large circular arrow action.",
+);
+
+for (const color of ["#8B86FB", "#FB7185", "#FBBF24", "#34D399"]) {
+  assert.ok(eventMetaSource.includes(color), `Event category pills should include ${color}.`);
+}
+for (const rgba of [
+  "rgba(139, 134, 251, 0.14)",
+  "rgba(251, 113, 133, 0.14)",
+  "rgba(251, 191, 36, 0.14)",
+  "rgba(52, 211, 153, 0.14)",
+]) {
+  assert.ok(eventMetaSource.includes(rgba), `Event category pill background should include ${rgba}.`);
+}
+assert.equal(
+  /EventCategoryPill[\s\S]*?className=\{cn\([\s\S]*?border/.test(eventMetaSource),
+  false,
+  "Event category pills should be soft filled with no border class.",
+);
+for (const [label, source] of [
+  ["events browse page", calendarSource],
+  ["saved tab", savedLibraryPanelSource],
+  ["event detail page", eventDetailSource],
+  ["month events table", monthEventsTableSource],
+]) {
+  assert.ok(source.includes("EventMetaRow"), `${label} should render category/price/going metadata rows.`);
+}
+assert.ok(
+  saveEventButtonSource.includes("fill-[#8B86FB]") && saveEventButtonSource.includes("fill-transparent"),
+  "Saved bookmarks should render filled accent icons while unsaved bookmarks stay outline-only.",
+);
+assert.ok(
+  saveEventButtonSource.includes("isLibraryLoaded ? savedEventIds.has(eventId)") &&
+    saveEventButtonSource.includes("defaultSaved"),
+  "Saved bookmark state should stop relying on defaultSaved after the library hydrates.",
 );
 
 console.log("QA passed: mobile calendar uses compact event rows and chip-style filters.");

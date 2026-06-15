@@ -64,6 +64,22 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_clerkId", ["clerkId"]),
+  savedEvents: defineTable({
+    userId: v.string(),
+    eventId: v.id("events"),
+    createdAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_event", ["eventId"])
+    .index("by_user_event", ["userId", "eventId"]),
+  favoriteVenues: defineTable({
+    userId: v.string(),
+    venueId: v.id("venues"),
+    createdAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_venue", ["venueId"])
+    .index("by_user_venue", ["userId", "venueId"]),
   userSavedEvents: defineTable({
     userId: v.id("users"),
     eventId: v.id("events"),

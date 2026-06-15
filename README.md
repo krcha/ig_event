@@ -119,6 +119,12 @@ Notes:
 - `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, and the
   fallback redirect URLs point Clerk at the in-app `/sign-in` and `/sign-up`
   pages and send successful admin sign-ins back to `/admin`.
+- The in-app auth pages make Instagram the primary sign-in/sign-up action and
+  use `/sso-callback` for the redirect callback. The button only starts a
+  strategy that Clerk exposes in `authenticatableSocialStrategies`: native
+  `oauth_instagram`, or a custom Instagram strategy such as
+  `oauth_custom_instagram`. Set `NEXT_PUBLIC_CLERK_INSTAGRAM_OAUTH_STRATEGY`
+  when the Clerk custom provider slug is not exactly `instagram`.
 - `CRON_SECRET` protects the cron ingestion route when set. Set it in
   production.
 - Cron ingestion defaults to one latest Instagram post per active venue handle,
@@ -143,13 +149,15 @@ npm run typecheck
 npm run qa:dedupe
 npm run qa:automerge
 npm run qa:extraction
+npm run qa:clerk-instagram-sso
 npm run qa:release
 npm run convex:codegen
 ```
 
 `qa:release` runs the deterministic release gate used by CI: lint, typecheck,
 `next build`, dedupe QA, automerge QA, extraction QA, venue taxonomy QA, public
-search QA, and Apify cost-control QA.
+search/sort/mobile QA, Apify cost-control QA, follow-discovery QA, Convex
+retention-cron QA, and Clerk Instagram SSO QA.
 
 `npm run build` is a normal release requirement. Treat any build failure or
 timeout as a release blocker before production rollout.

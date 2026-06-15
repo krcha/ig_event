@@ -1,4 +1,4 @@
-import { SignUp } from "@clerk/nextjs";
+import { InstagramSsoAuthCard } from "@/components/auth/instagram-sso-card";
 
 export default function SignUpPage() {
   if (!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) {
@@ -11,7 +11,7 @@ export default function SignUpPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-6 py-10">
-      <SignUp />
+      <InstagramSsoAuthCard mode="sign-up" />
     </div>
   );
 }

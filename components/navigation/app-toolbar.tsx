@@ -4,10 +4,21 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ComponentType } from "react";
 import { useEffect, useState } from "react";
-import { CalendarDays, Compass, House, ShieldCheck, Telescope, Warehouse } from "lucide-react";
+import {
+  Bookmark,
+  CalendarDays,
+  CircleUserRound,
+  Map as MapIcon,
+  ShieldCheck,
+  Telescope,
+  Warehouse,
+} from "lucide-react";
+import { useUserLibrary } from "@/components/providers/user-library-provider";
 import { cn } from "@/lib/utils";
 
 type ToolbarItem = {
+  activePrefixes?: string[];
+  badge?: "upcomingSavedEvents";
   href: string;
   label: string;
   icon: ComponentType<{ className?: string }>;
@@ -17,20 +28,28 @@ type ToolbarItem = {
 const PUBLIC_TOOLBAR_ITEMS: ToolbarItem[] = [
   {
     href: "/",
-    label: "Home",
-    icon: House,
+    label: "Events",
+    icon: CalendarDays,
     match: "exact",
+    activePrefixes: ["/calendar", "/events"],
   },
   {
-    href: "/events",
-    label: "Events",
-    icon: Compass,
+    href: "/map",
+    label: "Map",
+    icon: MapIcon,
     match: "prefix",
   },
   {
-    href: "/calendar",
-    label: "Calendar",
-    icon: CalendarDays,
+    href: "/saved",
+    label: "Saved",
+    icon: Bookmark,
+    match: "prefix",
+    badge: "upcomingSavedEvents",
+  },
+  {
+    href: "/you",
+    label: "You",
+    icon: CircleUserRound,
     match: "prefix",
   },
 ];
@@ -64,6 +83,14 @@ const MOBILE_ADMIN_TOOLBAR_ITEM: ToolbarItem = {
 };
 
 function isActivePath(pathname: string, item: ToolbarItem): boolean {
+  if (
+    item.activePrefixes?.some(
+      (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+    )
+  ) {
+    return true;
+  }
+
   if (item.match === "exact") {
     return pathname === item.href;
   }
@@ -80,6 +107,7 @@ type AppToolbarProps = {
 
 export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
   const pathname = usePathname();
+  const { upcomingSavedEventCount } = useUserLibrary();
   const [isHidden, setIsHidden] = useState(false);
   const desktopToolbarItems = showAdminNavigation
     ? [...PUBLIC_TOOLBAR_ITEMS, ...ADMIN_TOOLBAR_ITEMS]
@@ -87,9 +115,6 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
   const mobileToolbarItems = showAdminNavigation
     ? [...PUBLIC_TOOLBAR_ITEMS, MOBILE_ADMIN_TOOLBAR_ITEM]
     : PUBLIC_TOOLBAR_ITEMS;
-  const currentSectionLabel =
-    desktopToolbarItems.find((item) => isActivePath(pathname ?? "", item))?.label ?? "Explore";
-
   useEffect(() => {
     let lastScrollY = window.scrollY;
 
@@ -115,17 +140,20 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
     return null;
   }
 
+  function getBadgeCount(item: ToolbarItem): number {
+    return item.badge === "upcomingSavedEvents" ? upcomingSavedEventCount : 0;
+  }
+
   return (
     <>
       <div className="mobile-topbar">
         <div className="glass-panel px-3 py-2">
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
             <Link className="inline-flex min-w-0 items-center gap-2" href="/">
               <span className="inline-flex h-9 items-center rounded-full bg-primary px-3 text-xs font-semibold text-primary-foreground">
                 Belgrade nights
               </span>
             </Link>
-            <span className="app-chip shrink-0 bg-card/95">{currentSectionLabel}</span>
           </div>
         </div>
       </div>
@@ -154,6 +182,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                 {desktopToolbarItems.map((item) => {
                   const Icon = item.icon;
                   const active = isActivePath(pathname, item);
+                  const badgeCount = getBadgeCount(item);
 
                   return (
                     <Link
@@ -167,7 +196,14 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                       href={item.href}
                       key={item.href}
                     >
-                      <Icon className="h-4 w-4" />
+                      <span className="relative inline-flex">
+                        <Icon className="h-4 w-4" />
+                        {badgeCount > 0 ? (
+                          <span className="absolute -right-2.5 -top-2 inline-flex min-w-4 items-center justify-center rounded-full bg-primary-foreground px-1 text-[9px] font-bold leading-4 text-primary shadow-[0_8px_18px_-10px_rgba(139,134,251,0.9)]">
+                            {badgeCount > 99 ? "99+" : badgeCount}
+                          </span>
+                        ) : null}
+                      </span>
                       <span>{item.label}</span>
                     </Link>
                   );
@@ -180,16 +216,17 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
 
       <nav className="mobile-nav-shell" aria-label="Mobile navigation">
         <div className="glass-panel bg-card/95 px-2 py-2 shadow-[0_-18px_48px_-34px_rgba(15,23,42,0.45)]">
-          <div className="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="flex w-full items-center gap-1 overflow-hidden">
             {mobileToolbarItems.map((item) => {
               const Icon = item.icon;
               const active = isActivePath(pathname, item);
+              const badgeCount = getBadgeCount(item);
 
               return (
                 <Link
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "inline-flex min-w-[4.7rem] flex-1 flex-col items-center gap-1 rounded-[1rem] px-3 py-2 text-[11px] font-semibold",
+                    "inline-flex min-w-0 flex-1 flex-col items-center gap-1 rounded-[1rem] px-2 py-2 text-[11px] font-semibold",
                     active
                       ? "bg-primary text-primary-foreground shadow-[0_16px_34px_-22px_rgba(14,116,144,0.52)]"
                       : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
@@ -197,8 +234,22 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                   href={item.href}
                   key={item.href}
                 >
-                  <Icon className="h-4 w-4" />
-                  <span>{item.label}</span>
+                  <span className="relative inline-flex">
+                    <Icon className="h-4 w-4" />
+                    {badgeCount > 0 ? (
+                      <span
+                        className={cn(
+                          "absolute -right-3 -top-2 inline-flex min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-bold leading-4 shadow-[0_8px_18px_-10px_rgba(139,134,251,0.9)]",
+                          active
+                            ? "bg-primary-foreground text-primary"
+                            : "bg-primary text-primary-foreground",
+                        )}
+                      >
+                        {badgeCount > 99 ? "99+" : badgeCount}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="max-w-full truncate">{item.label}</span>
                 </Link>
               );
             })}

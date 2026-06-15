@@ -1,3 +1,5 @@
+import { getEventTimeSortMinutes } from "./event-time.ts";
+
 export type PublicEventSortInput = {
   _id: string;
   date: string;
@@ -5,30 +7,6 @@ export type PublicEventSortInput = {
   venue: string;
   title: string;
 };
-
-function parseEventTimeMinutes(value: string | null | undefined): number {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return 0;
-  }
-
-  const match = trimmed.match(/(\d{1,2}):(\d{2})/);
-  if (!match) {
-    return 0;
-  }
-
-  const hours = Number.parseInt(match[1], 10);
-  const minutes = Number.parseInt(match[2], 10);
-  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
-    return 0;
-  }
-
-  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
-    return 0;
-  }
-
-  return hours * 60 + minutes;
-}
 
 function compareAlphabetical(left: string, right: string): number {
   const normalizedLeft = normalizeAlphabeticalSortKey(left);
@@ -72,7 +50,7 @@ export function comparePublicEventsByDateVenueTimeTitle(
     return venueResult;
   }
 
-  const timeResult = parseEventTimeMinutes(left.time) - parseEventTimeMinutes(right.time);
+  const timeResult = (getEventTimeSortMinutes(left.time) ?? 0) - (getEventTimeSortMinutes(right.time) ?? 0);
   if (timeResult !== 0) {
     return timeResult;
   }

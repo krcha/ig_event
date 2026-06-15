@@ -19,6 +19,13 @@ export const listActiveVenues = query({
   },
 });
 
+export const getVenue = query({
+  args: { id: v.id("venues") },
+  handler: async (ctx, args) => {
+    return ctx.db.get(args.id);
+  },
+});
+
 export const createVenue = mutation({
   args: {
     name: v.string(),
@@ -65,6 +72,15 @@ export const updateVenue = mutation({
 export const removeVenue = mutation({
   args: { id: v.id("venues") },
   handler: async (ctx, args) => {
+    const favoriteRefs = await ctx.db
+      .query("favoriteVenues")
+      .withIndex("by_venue", (q) => q.eq("venueId", args.id))
+      .collect();
+
+    for (const favoriteRef of favoriteRefs) {
+      await ctx.db.delete(favoriteRef._id);
+    }
+
     await ctx.db.delete(args.id);
   },
 });

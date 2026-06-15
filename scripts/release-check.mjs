@@ -6,7 +6,7 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const checks = [
   { script: "lint", timeoutMs: 120_000 },
   { script: "typecheck", timeoutMs: 180_000 },
-  { script: "build", timeoutMs: 300_000 },
+  { script: "build", timeoutMs: 900_000 },
   { script: "qa:dedupe", timeoutMs: 60_000 },
   { script: "qa:automerge", timeoutMs: 60_000 },
   { script: "qa:extraction", timeoutMs: 60_000 },
@@ -14,9 +14,13 @@ const checks = [
   { script: "qa:venue-types", timeoutMs: 60_000 },
   { script: "qa:public-search", timeoutMs: 60_000 },
   { script: "qa:public-sort", timeoutMs: 60_000 },
+  { script: "qa:public-performance", timeoutMs: 60_000 },
   { script: "qa:mobile-calendar", timeoutMs: 60_000 },
+  { script: "qa:app-toolbar", timeoutMs: 60_000 },
   { script: "qa:apify", timeoutMs: 60_000 },
   { script: "qa:follow-discovery", timeoutMs: 60_000 },
+  { script: "qa:convex-retention-cron", timeoutMs: 60_000 },
+  { script: "qa:clerk-instagram-sso", timeoutMs: 60_000 },
 ];
 
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";

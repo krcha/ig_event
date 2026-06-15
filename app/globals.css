@@ -57,7 +57,7 @@
   --card-foreground: #f7f8f8;
   --popover: #11141b;
   --popover-foreground: #f7f8f8;
-  --primary: #828fff;
+  --primary: #8B86FB;
   --primary-foreground: #080a17;
   --secondary: #11141b;
   --secondary-foreground: #f7f8f8;
@@ -68,20 +68,20 @@
   --destructive: oklch(0.577 0.245 27.325);
   --border: rgba(255, 255, 255, 0.08);
   --input: rgba(255, 255, 255, 0.12);
-  --ring: #828fff;
-  --chart-1: #828fff;
+  --ring: #8B86FB;
+  --chart-1: #8B86FB;
   --chart-2: #38bdf8;
   --chart-3: #f59e0b;
   --chart-4: #10b981;
   --chart-5: #f472b6;
   --sidebar: #0f1011;
   --sidebar-foreground: #f7f8f8;
-  --sidebar-primary: #7170ff;
+  --sidebar-primary: #8B86FB;
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: #191a1b;
   --sidebar-accent-foreground: #f7f8f8;
   --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-ring: #828fff;
+  --sidebar-ring: #8B86FB;
 }
 
 .dark {
@@ -91,7 +91,7 @@
   --card-foreground: #f7f8f8;
   --popover: #11141b;
   --popover-foreground: #f7f8f8;
-  --primary: #828fff;
+  --primary: #8B86FB;
   --primary-foreground: #080a17;
   --secondary: #11141b;
   --secondary-foreground: #f7f8f8;
@@ -102,20 +102,20 @@
   --destructive: oklch(0.704 0.191 22.216);
   --border: rgba(255, 255, 255, 0.08);
   --input: rgba(255, 255, 255, 0.12);
-  --ring: #828fff;
-  --chart-1: #828fff;
+  --ring: #8B86FB;
+  --chart-1: #8B86FB;
   --chart-2: #38bdf8;
   --chart-3: #f59e0b;
   --chart-4: #10b981;
   --chart-5: #f472b6;
   --sidebar: #0f1011;
   --sidebar-foreground: #f7f8f8;
-  --sidebar-primary: #7170ff;
+  --sidebar-primary: #8B86FB;
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: #191a1b;
   --sidebar-accent-foreground: #f7f8f8;
   --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-ring: #828fff;
+  --sidebar-ring: #8B86FB;
 }
 
 @layer base {
@@ -218,7 +218,7 @@
   }
 
   .button-primary {
-    @apply inline-flex min-h-11 items-center justify-center rounded-full bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground shadow-[0_18px_38px_-24px_rgba(113,112,255,0.72)] hover:-translate-y-0.5 hover:bg-[#828fff] hover:shadow-[0_22px_46px_-22px_rgba(113,112,255,0.72)];
+    @apply inline-flex min-h-11 items-center justify-center rounded-full bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground shadow-[0_18px_38px_-24px_rgba(113,112,255,0.72)] hover:-translate-y-0.5 hover:bg-[#8B86FB] hover:shadow-[0_22px_46px_-22px_rgba(113,112,255,0.72)];
   }
 
   .button-secondary {

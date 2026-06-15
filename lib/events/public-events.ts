@@ -2,7 +2,6 @@ import "server-only";
 
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
-import { unstable_noStore as noStore } from "next/cache";
 import {
   buildApprovedEventAutoCleanupGroups,
   type ApprovedEventDuplicateRecord,
@@ -11,6 +10,7 @@ import { getDisplayEventTime } from "@/lib/events/event-time";
 import { sortPublicEventsByDateVenueTimeTitle } from "@/lib/events/public-event-sort";
 import { matchesPublicEventNameArtistOrVenue } from "@/lib/events/public-event-search";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
+import { toSearchableText } from "@/lib/pipeline/venue-normalization";
 
 export type EventStatus = "pending" | "approved" | "rejected";
 const DEFAULT_PUBLIC_EVENTS_PAGE_SIZE = 24;
@@ -23,9 +23,17 @@ export type PublicEvent = {
   date: string;
   time?: string;
   venue: string;
+  venueId?: string;
   artists: string[];
   eventType: string;
   ticketPrice?: string;
+  attendance?: number | string;
+  attendanceCount?: number | string;
+  attendeeCount?: number | string;
+  attendees?: number | string;
+  attendeesCount?: number | string;
+  going?: number | string;
+  goingCount?: number | string;
   sourcePostedAt?: string;
   sourceCaption?: string;
   description?: string;
@@ -36,6 +44,11 @@ export type PublicEvent = {
   status: EventStatus;
   createdAt: number;
   updatedAt: number;
+};
+
+type VenueRecord = {
+  _id: string;
+  name: string;
 };
 
 type PublicEventsCacheEntry = {
@@ -63,6 +76,8 @@ export type PublicEventsPageResult = {
 
 type LoadUpcomingApprovedEventsOptions = {
   daysInPast?: number;
+  fromDate?: string;
+  beforeDate?: string;
 };
 
 type LoadUpcomingApprovedEventsPageOptions = {
@@ -73,6 +88,7 @@ type LoadUpcomingApprovedEventsPageOptions = {
 
 const listApprovedUpcomingByDatePaginatedQuery =
   "events:listApprovedUpcomingByDatePaginated" as unknown as FunctionReference<"query">;
+const listVenuesQuery = "venues:listVenues" as unknown as FunctionReference<"query">;
 
 export function parseNormalizedEventDate(value: string): Date | null {
   const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -113,6 +129,42 @@ function formatLocalDate(date: Date): string {
   ).padStart(2, "0")}`;
 }
 
+function normalizeVenueLookupKey(value: string): string {
+  return toSearchableText(value);
+}
+
+function buildVenueIdsByName(venues: VenueRecord[]): Map<string, string> {
+  const venueIdsByName = new Map<string, string>();
+
+  for (const venue of venues) {
+    const key = normalizeVenueLookupKey(venue.name);
+    if (key && !venueIdsByName.has(key)) {
+      venueIdsByName.set(key, venue._id);
+    }
+  }
+
+  return venueIdsByName;
+}
+
+async function loadVenueIdsByName(convex: ConvexHttpClient): Promise<Map<string, string>> {
+  const venues = (await convex.query(listVenuesQuery, {})) as VenueRecord[];
+  return buildVenueIdsByName(venues);
+}
+
+function attachVenueIdsToEvents(
+  events: PublicEvent[],
+  venueIdsByName: Map<string, string>,
+): PublicEvent[] {
+  if (venueIdsByName.size === 0) {
+    return events;
+  }
+
+  return events.map((event) => {
+    const venueId = venueIdsByName.get(normalizeVenueLookupKey(event.venue));
+    return venueId ? { ...event, venueId } : event;
+  });
+}
+
 function normalizeDaysInPast(value: number | undefined): number {
   if (!Number.isFinite(value)) {
     return 0;
@@ -137,6 +189,10 @@ function normalizePublicEventsPageSize(value: number | undefined): number {
 
 function normalizeSearchQuery(value: string | undefined): string {
   return value?.trim() ?? "";
+}
+
+function normalizeDateBoundary(value: string | undefined): string | undefined {
+  return value && parseNormalizedEventDate(value) ? value : undefined;
 }
 
 function matchesPublicEventSearch(event: PublicEvent, searchQuery: string): boolean {
@@ -166,16 +222,35 @@ function mapPublicEventToDuplicateRecord(event: PublicEvent): ApprovedEventDupli
 }
 
 function filterDuplicatePublicEvents(events: PublicEvent[]): PublicEvent[] {
-  const cleanupGroups = buildApprovedEventAutoCleanupGroups(
-    events.map(mapPublicEventToDuplicateRecord),
-  );
-  if (cleanupGroups.length === 0) {
-    return events;
+  const eventsByDate = new Map<string, PublicEvent[]>();
+
+  for (const event of events) {
+    const sameDateEvents = eventsByDate.get(event.date) ?? [];
+    sameDateEvents.push(event);
+    eventsByDate.set(event.date, sameDateEvents);
   }
 
-  const hiddenDuplicateIds = new Set(
-    cleanupGroups.flatMap((group) => group.duplicateEventIds),
-  );
+  const hiddenDuplicateIds = new Set<string>();
+
+  for (const sameDateEvents of eventsByDate.values()) {
+    if (sameDateEvents.length < 2) {
+      continue;
+    }
+
+    const cleanupGroups = buildApprovedEventAutoCleanupGroups(
+      sameDateEvents.map(mapPublicEventToDuplicateRecord),
+    );
+
+    for (const group of cleanupGroups) {
+      for (const duplicateId of group.duplicateEventIds) {
+        hiddenDuplicateIds.add(duplicateId);
+      }
+    }
+  }
+
+  if (hiddenDuplicateIds.size === 0) {
+    return events;
+  }
 
   return events.filter((event) => !hiddenDuplicateIds.has(event._id));
 }
@@ -209,6 +284,7 @@ async function loadApprovedUpcomingEventPage(
 async function loadAllApprovedUpcomingEvents(
   convex: ConvexHttpClient,
   fromDate: string,
+  beforeDate: string | undefined,
 ): Promise<PublicEvent[]> {
   const events: PublicEvent[] = [];
   let cursor: string | null = null;
@@ -220,39 +296,51 @@ async function loadAllApprovedUpcomingEvents(
       APPROVED_EVENTS_SCAN_BATCH_SIZE,
       fromDate,
     );
-    events.push(...page.page);
+    const reachedBeforeDate = beforeDate
+      ? page.page.some((event) => event.date >= beforeDate)
+      : false;
+    const pageEvents = beforeDate
+      ? page.page.filter((event) => event.date < beforeDate)
+      : page.page;
+    events.push(...pageEvents);
 
-    if (page.isDone) {
+    if (page.isDone || reachedBeforeDate) {
       break;
     }
 
     cursor = page.continueCursor;
   }
 
+  const venueIdsByName = await loadVenueIdsByName(convex);
   return sortPublicEventsByDateVenueTimeTitle(
-    filterDuplicatePublicEvents(events).map(normalizePublicEvent),
+    attachVenueIdsToEvents(
+      filterDuplicatePublicEvents(events).map(normalizePublicEvent),
+      venueIdsByName,
+    ),
   );
 }
 
 function getCachedApprovedUpcomingEvents(
   convex: ConvexHttpClient,
   fromDate: string,
+  beforeDate?: string,
 ): Promise<PublicEvent[]> {
   const now = Date.now();
-  const cached = publicEventsCache.get(fromDate);
+  const cacheKey = `${fromDate}:${beforeDate ?? ""}`;
+  const cached = publicEventsCache.get(cacheKey);
   if (cached && cached.expiresAt > now) {
     return cached.promise;
   }
 
-  const promise = loadAllApprovedUpcomingEvents(convex, fromDate).catch((error) => {
-    const current = publicEventsCache.get(fromDate);
+  const promise = loadAllApprovedUpcomingEvents(convex, fromDate, beforeDate).catch((error) => {
+    const current = publicEventsCache.get(cacheKey);
     if (current?.promise === promise) {
-      publicEventsCache.delete(fromDate);
+      publicEventsCache.delete(cacheKey);
     }
     throw error;
   });
 
-  publicEventsCache.set(fromDate, {
+  publicEventsCache.set(cacheKey, {
     expiresAt: now + PUBLIC_EVENTS_CACHE_TTL_MS,
     promise,
   });
@@ -266,17 +354,22 @@ export async function loadUpcomingApprovedEvents(
   events: PublicEvent[];
   error?: string;
 }> {
-  noStore();
-
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
-  const fromDate = formatLocalDate(getStartOfLocalDay(normalizeDaysInPast(options.daysInPast)));
+  const fromDate =
+    normalizeDateBoundary(options.fromDate) ??
+    formatLocalDate(getStartOfLocalDay(normalizeDaysInPast(options.daysInPast)));
+  const beforeDate = normalizeDateBoundary(options.beforeDate);
   if (!convexUrl) {
     return { events: [], error: "Convex is not configured yet." };
   }
 
+  if (beforeDate && fromDate >= beforeDate) {
+    return { events: [] };
+  }
+
   try {
     const convex = new ConvexHttpClient(convexUrl);
-    const events = await getCachedApprovedUpcomingEvents(convex, fromDate);
+    const events = await getCachedApprovedUpcomingEvents(convex, fromDate, beforeDate);
     return { events };
   } catch (error) {
     return {
@@ -292,8 +385,6 @@ export async function loadUpcomingApprovedEvents(
 export async function loadUpcomingApprovedEventsPage(
   options: LoadUpcomingApprovedEventsPageOptions = {},
 ): Promise<PublicEventsPageResult> {
-  noStore();
-
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
   const page = normalizePublicEventsPage(options.page);
   const pageSize = normalizePublicEventsPageSize(options.pageSize);

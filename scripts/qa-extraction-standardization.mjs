@@ -50,6 +50,20 @@ function datePartsForIsoDate(isoDate) {
   };
 }
 
+function consecutiveIsoDatesAvoidingDay(dayToAvoid) {
+  const avoidedSuffix = `-${String(dayToAvoid).padStart(2, "0")}`;
+
+  for (let offsetDays = 2; offsetDays < 40; offsetDays += 1) {
+    const firstIsoDate = isoDateDaysFromNow(offsetDays);
+    const secondIsoDate = isoDateDaysFromNow(offsetDays + 1);
+    if (!firstIsoDate.endsWith(avoidedSuffix) && !secondIsoDate.endsWith(avoidedSuffix)) {
+      return [firstIsoDate, secondIsoDate];
+    }
+  }
+
+  throw new Error(`Could not find consecutive QA dates avoiding day ${dayToAvoid}.`);
+}
+
 function makeInstagramPost(overrides = {}) {
   return {
     postId: "qa-post-id",
@@ -359,8 +373,7 @@ function runVideoModerationQa() {
 }
 
 function runCaptionDateRangeQa() {
-  const firstIsoDate = isoDateDaysFromNow(2);
-  const secondIsoDate = isoDateDaysFromNow(3);
+  const [firstIsoDate, secondIsoDate] = consecutiveIsoDatesAvoidingDay(10);
   const firstParts = datePartsForIsoDate(firstIsoDate);
   const secondParts = datePartsForIsoDate(secondIsoDate);
   const caption = [

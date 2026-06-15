@@ -4,8 +4,14 @@ import Link from "next/link";
 import { ArrowUpDown, ArrowUpRight, Check, ChevronDown, Copy } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { EventCategoryPill, EventMetaRow } from "@/components/events/event-meta";
+import { SaveEventButton } from "@/components/events/save-event-button";
 import { cn } from "@/lib/utils";
-import { getDisplayEventTime } from "@/lib/events/event-time";
+import {
+  getDisplayEventTime,
+  getEventTimeSortMinutes,
+  normalizeEventTime,
+} from "@/lib/events/event-time";
 import { comparePublicEventsByDateVenueTimeTitle } from "@/lib/events/public-event-sort";
 
 type MonthEventTableEvent = {
@@ -14,13 +20,23 @@ type MonthEventTableEvent = {
   date: string;
   time?: string;
   venue: string;
+  venueId?: string;
   artists: string[];
   eventType: string;
   ticketPrice?: string;
+  attendance?: number | string;
+  attendanceCount?: number | string;
+  attendeeCount?: number | string;
+  attendees?: number | string;
+  attendeesCount?: number | string;
+  going?: number | string;
+  goingCount?: number | string;
 };
 
 type MonthEventsTableProps = {
+  authEnabled: boolean;
   events: MonthEventTableEvent[];
+  initiallyExpanded?: boolean;
   monthLabel: string;
 };
 
@@ -58,26 +74,7 @@ function parseDateValue(value: string): Date | null {
 }
 
 function parseTimeMinutes(value: string | undefined): number | null {
-  if (!value) {
-    return null;
-  }
-
-  const match = value.match(/(\d{1,2}):(\d{2})/);
-  if (!match) {
-    return null;
-  }
-
-  const hours = Number.parseInt(match[1], 10);
-  const minutes = Number.parseInt(match[2], 10);
-  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
-    return null;
-  }
-
-  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
-    return null;
-  }
-
-  return hours * 60 + minutes;
+  return getEventTimeSortMinutes(value);
 }
 
 function formatEventDate(value: string): string {
@@ -91,12 +88,6 @@ function formatEventDate(value: string): string {
     month: "short",
     day: "numeric",
   }).format(parsed);
-}
-
-function formatEventDateTime(event: Pick<MonthEventTableEvent, "date" | "time">): string {
-  const dateLabel = formatEventDate(event.date);
-  const timeLabel = getDisplayEventTime(event.time);
-  return timeLabel ? `${dateLabel} · ${timeLabel}` : dateLabel;
 }
 
 function getArtistsLabel(artists: string[]): string {
@@ -177,15 +168,24 @@ function formatCopyText(events: MonthEventTableEvent[]): string {
   return [header, ...rows].map((row) => row.join("\t")).join("\n");
 }
 
-export function MonthEventsTable({ events, monthLabel }: MonthEventsTableProps) {
+export function MonthEventsTable({
+  authEnabled,
+  events,
+  initiallyExpanded = false,
+  monthLabel,
+}: MonthEventsTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(initiallyExpanded);
 
   const sortedEvents = useMemo(() => {
+    if (!isExpanded) {
+      return events;
+    }
+
     return [...events].sort((left, right) => compareEvents(left, right, sortKey, sortDirection));
-  }, [events, sortDirection, sortKey]);
+  }, [events, isExpanded, sortDirection, sortKey]);
 
   const handleCopy = async () => {
     try {
@@ -279,29 +279,69 @@ export function MonthEventsTable({ events, monthLabel }: MonthEventsTableProps) 
           ) : (
             <>
               <div className="mt-4 space-y-2.5 lg:hidden">
-                {sortedEvents.map((event) => (
-                  <article
-                    className="rounded-[1.15rem] border border-border/80 bg-card/95 px-3.5 py-3.5"
-                    key={event._id}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-primary">
-                          {formatEventDateTime(event)}
-                        </p>
-                        <Link
-                          className="mt-2 inline-flex items-start gap-1.5 text-sm font-semibold tracking-tight text-foreground hover:text-primary"
-                          href={`/events/${event._id}`}
-                        >
-                          <span>{event.title}</span>
-                          <ArrowUpRight className="mt-0.5 h-3.5 w-3.5 flex-none" />
-                        </Link>
-                        <p className="mt-1.5 text-xs text-muted-foreground">{event.venue}</p>
+                {sortedEvents.map((event) => {
+                  const eventTime = normalizeEventTime(event.time);
+
+                  return (
+                    <article
+                      className="box-border min-h-[4.75rem] overflow-hidden rounded-[1.15rem] border border-border/80 bg-card/95 px-3.5 py-3"
+                      key={event._id}
+                    >
+                      <div className="flex min-w-0 items-center gap-2.5 overflow-hidden">
+                        <div className="box-border flex h-12 w-16 flex-none flex-col items-center justify-center overflow-hidden rounded-[0.8rem] border border-primary/15 bg-primary/[0.07] px-1.5 text-center text-primary">
+                          {eventTime.startLabel ? (
+                            <>
+                              <span className="block max-w-full truncate text-sm font-semibold leading-4 tabular-nums">
+                                {eventTime.startLabel}
+                              </span>
+                              {eventTime.endLabel ? (
+                                <span className="mt-0.5 block max-w-full truncate text-xs font-semibold leading-4 tabular-nums text-primary/78">
+                                  {eventTime.endLabel}
+                                </span>
+                              ) : null}
+                            </>
+                          ) : (
+                            <span className="block max-w-full truncate text-xs font-semibold uppercase tracking-[0.12em] text-primary/72">
+                              —
+                            </span>
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1 overflow-hidden">
+                          <Link
+                            className="block truncate whitespace-nowrap text-sm font-semibold tracking-tight text-foreground hover:text-primary"
+                            href={`/events/${event._id}`}
+                          >
+                            {event.title}
+                          </Link>
+                          <div className="mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden text-xs text-muted-foreground">
+                            <span className="flex-none font-semibold text-primary/95">
+                              {formatEventDate(event.date)}
+                            </span>
+                            <span className="flex-none text-border">/</span>
+                            <span className="min-w-0 truncate">{event.venue}</span>
+                            {eventTime.description ? (
+                              <>
+                                <span className="flex-none text-border">/</span>
+                                <span className="min-w-0 truncate">{eventTime.description}</span>
+                              </>
+                            ) : null}
+                          </div>
+                          <EventMetaRow className="mt-1 flex-nowrap" event={event} />
+                        </div>
+                        <div className="flex flex-none items-center justify-end gap-1.5 overflow-hidden">
+                          {authEnabled ? (
+                            <SaveEventButton
+                              className="flex-none"
+                              eventId={event._id}
+                              eventTitle={event.title}
+                              variant="icon"
+                            />
+                          ) : null}
+                        </div>
                       </div>
-                      <span className="app-chip shrink-0">{event.eventType}</span>
-                    </div>
-                  </article>
-                ))}
+                    </article>
+                  );
+                })}
               </div>
 
               <div className="mt-4 hidden overflow-x-auto rounded-[1.25rem] border border-border/80 bg-card/95 lg:block">
@@ -323,6 +363,11 @@ export function MonthEventsTable({ events, monthLabel }: MonthEventsTableProps) 
                       <th className="w-[9rem] border-b border-border/80 px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
                         Type
                       </th>
+                      {authEnabled ? (
+                        <th className="w-[8rem] border-b border-border/80 px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                          Save
+                        </th>
+                      ) : null}
                     </tr>
                   </thead>
                   <tbody>
@@ -341,16 +386,32 @@ export function MonthEventsTable({ events, monthLabel }: MonthEventsTableProps) 
                           {getDisplayEventTime(event.time)}
                         </td>
                         <td className="px-3 py-3 text-sm">
-                          <Link
-                            className="inline-flex max-w-full items-center gap-1.5 font-semibold text-foreground hover:text-primary"
-                            href={`/events/${event._id}`}
-                          >
-                            <span className="truncate">{event.title}</span>
-                            <ArrowUpRight className="h-3.5 w-3.5 flex-none" />
-                          </Link>
+                          <div className="space-y-1">
+                            <Link
+                              className="inline-flex max-w-full items-center gap-1.5 font-semibold text-foreground hover:text-primary"
+                              href={`/events/${event._id}`}
+                            >
+                              <span className="truncate">{event.title}</span>
+                              <ArrowUpRight className="h-3.5 w-3.5 flex-none" />
+                            </Link>
+                            <EventMetaRow className="flex-nowrap" event={event} />
+                          </div>
                         </td>
-                        <td className="px-3 py-3 text-sm text-foreground">{event.venue}</td>
-                        <td className="px-3 py-3 text-sm text-muted-foreground">{event.eventType}</td>
+                        <td className="px-3 py-3 text-sm text-foreground">
+                          <span className="truncate">{event.venue}</span>
+                        </td>
+                        <td className="px-3 py-3 text-sm text-muted-foreground">
+                          <EventCategoryPill event={event} />
+                        </td>
+                        {authEnabled ? (
+                          <td className="px-3 py-3 text-sm text-muted-foreground">
+                            <SaveEventButton
+                              eventId={event._id}
+                              eventTitle={event.title}
+                              variant="icon"
+                            />
+                          </td>
+                        ) : null}
                       </tr>
                     ))}
                   </tbody>

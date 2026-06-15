@@ -96,6 +96,13 @@ Notes:
 - `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, and the
   fallback redirect URLs keep Clerk redirects on the app's custom auth pages and
   return successful admin sign-ins to `/admin`.
+- The custom auth pages make Instagram the primary action and mount
+  `/sso-callback` with `AuthenticateWithRedirectCallback` for OAuth completion.
+  The button only starts a strategy Clerk exposes in
+  `authenticatableSocialStrategies`: native `oauth_instagram`, or a custom
+  provider such as `oauth_custom_instagram`. Set
+  `NEXT_PUBLIC_CLERK_INSTAGRAM_OAUTH_STRATEGY` when the custom provider slug is
+  not exactly `instagram`.
 - `CLERK_SECRET_KEY`, `OPENAI_API_KEY`, `APIFY_API_TOKEN`, and `CRON_SECRET`
   are secrets and must stay out of git.
 - `ADMIN_CLERK_USER_IDS` is the Clerk user allowlist for admin access.
@@ -133,8 +140,11 @@ CONVEX_DEPLOY_KEY=<deploy-key> npx convex deploy -y --typecheck disable --codege
 After Convex deployment, confirm production `.env.production` has the matching
 `NEXT_PUBLIC_CONVEX_URL` and `CONVEX_DEPLOYMENT`.
 
-Convex also has an internal hourly cron in `convex/crons.ts` for deleting
-expired events. That is separate from the web app ingestion cron below.
+Convex also has an internal weekly cron in `convex/crons.ts` for deleting
+expired events older than the 3-day retention grace period. It runs Wednesday at
+05:00 UTC and calls a maintenance action that deletes bounded batches until the
+backlog is clear (up to the configured safety cap). That is separate from the
+web app ingestion cron below.
 
 ## Docker and VPS Deployment
 
@@ -193,29 +203,35 @@ verify HTTPS externally.
 
 ## Cron Replacement
 
-`vercel.json` configures Vercel Cron for `/api/cron/ingest-venues`. Once the
-app runs on a VPS, replace that with host cron or a systemd timer.
+`vercel.json` documents the intended schedule, but the self-hosted VPS uses real
+host cron under `/etc/cron.d/ig_event`.
 
-Create `/etc/ig_event/cron.env`:
+Installed files on the VPS:
 
-```env
-APP_ORIGIN=https://events.example.com
-CRON_SECRET=
+```text
+/etc/cron.d/ig_event                 root-readable cron schedule
+/etc/ig_event/cron.env               APP_ORIGIN + CRON_SECRET, chmod 600
+/usr/local/sbin/ig-event-cron-runner root-owned curl runner with flock locking
+/var/log/ig_event/cron.log           appended cron output
+/var/log/ig_event/cron-*-last.json   last response body per job
 ```
 
-Install host cron:
+Current host cron schedule uses UTC to match `vercel.json` and Convex:
 
 ```cron
-TZ=Europe/Belgrade
-0 7 * * * . /etc/ig_event/cron.env; curl -fsS -H "Authorization: Bearer ${CRON_SECRET}" "${APP_ORIGIN}/api/cron/ingest-venues" >/dev/null
+CRON_TZ=UTC
+0 7 * * * root /usr/local/sbin/ig-event-cron-runner ingest-venues >> /var/log/ig_event/cron.log 2>&1
+0 10 * * 1 root /usr/local/sbin/ig-event-cron-runner discover-following >> /var/log/ig_event/cron.log 2>&1
 ```
 
 Use the same `CRON_SECRET` value in `/etc/ig_event/cron.env` and the web app
-runtime env. If the cron endpoint returns `401`, check the header and secret
-first.
+runtime env. If a job returns `401`, check the header and secret first. The
+runner keeps the bearer token out of process arguments by writing a temporary
+root-only curl config file, and it uses `/run/lock/ig-event-<job>.lock` to avoid
+overlapping runs.
 
-Promote cron to a systemd timer if you need clearer failure logs, retries, or
-alerting. The command remains the same curl call.
+The Convex retention cleanup is separate: it is a native Convex cron that runs
+Wednesday 05:00 UTC and is not called by VPS cron.
 
 ## QA Commands
 
@@ -234,6 +250,8 @@ npm run build
 npm run qa:dedupe
 npm run qa:automerge
 npm run qa:extraction
+npm run qa:convex-retention-cron
+npm run qa:clerk-instagram-sso
 npm run convex:codegen
 ```
 

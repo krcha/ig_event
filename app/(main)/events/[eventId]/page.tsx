@@ -7,12 +7,15 @@ import {
   Clock3,
   ExternalLink,
   MapPin,
-  Ticket,
 } from "lucide-react";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
+import { EventCategoryPill, EventMetaRow, EventPriceChip } from "@/components/events/event-meta";
 import { getDisplayEventTime } from "@/lib/events/event-time";
+import { SaveEventButton } from "@/components/events/save-event-button";
+import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
+import { toSearchableText } from "@/lib/pipeline/venue-normalization";
 
 type EventRecord = {
   _id: string;
@@ -20,13 +23,26 @@ type EventRecord = {
   date: string;
   time?: string;
   venue: string;
+  venueId?: string;
   artists: string[];
   description?: string;
   imageUrl?: string;
   instagramPostUrl?: string;
   ticketPrice?: string;
+  attendance?: number | string;
+  attendanceCount?: number | string;
+  attendeeCount?: number | string;
+  attendees?: number | string;
+  attendeesCount?: number | string;
+  going?: number | string;
+  goingCount?: number | string;
   eventType: string;
   status: "pending" | "approved" | "rejected";
+};
+
+type VenueRecord = {
+  _id: string;
+  name: string;
 };
 
 type EventDetailPageProps = {
@@ -34,6 +50,16 @@ type EventDetailPageProps = {
 };
 
 const getEventQuery = "events:getEvent" as unknown as FunctionReference<"query">;
+const listVenuesQuery = "venues:listVenues" as unknown as FunctionReference<"query">;
+
+function findVenueId(venues: VenueRecord[], venueName: string): string | undefined {
+  const lookupKey = toSearchableText(venueName);
+  if (!lookupKey) {
+    return undefined;
+  }
+
+  return venues.find((venue) => toSearchableText(venue.name) === lookupKey)?._id;
+}
 
 async function loadEvent(eventId: string): Promise<{
   event: EventRecord | null;
@@ -48,7 +74,9 @@ async function loadEvent(eventId: string): Promise<{
     const convex = new ConvexHttpClient(convexUrl);
     const event = (await convex.query(getEventQuery, { id: eventId })) as EventRecord | null;
     if (event) {
+      const venues = (await convex.query(listVenuesQuery, {})) as VenueRecord[];
       event.eventType = canonicalizeEventType(event.eventType);
+      event.venueId = findVenueId(venues, event.venue);
     }
     return { event };
   } catch (error) {
@@ -76,7 +104,7 @@ function formatEventDate(value: string): string {
 function buildCalendarHref(event: EventRecord): string {
   const month = event.date.slice(0, 7);
   const query = new URLSearchParams({ month, day: event.date });
-  return `/calendar?${query.toString()}`;
+  return `/?${query.toString()}`;
 }
 
 function InfoTile({
@@ -102,11 +130,12 @@ function InfoTile({
 export default async function EventDetailPage({ params }: EventDetailPageProps) {
   const { event, error } = await loadEvent(params.eventId);
   const eventTime = event ? getDisplayEventTime(event.time) : undefined;
+  const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
   return (
     <main className="app-page gap-3 pb-[calc(9.5rem+env(safe-area-inset-bottom))] md:pb-9">
       <div className="flex items-center justify-between gap-3">
-        <Link className="button-secondary min-h-10 gap-2 px-4 py-0" href="/events">
+        <Link className="button-secondary min-h-10 gap-2 px-4 py-0" href="/">
           <ArrowLeft className="h-4 w-4" />
           Back
         </Link>
@@ -123,13 +152,8 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
             <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,22rem)]">
               <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-6 lg:px-7">
                 <div className="flex flex-wrap gap-2">
-                  <span className="app-chip bg-background/95">{event.eventType}</span>
-                  {event.ticketPrice ? (
-                    <span className="app-chip bg-background/95">
-                      <Ticket className="h-3.5 w-3.5" />
-                      {event.ticketPrice}
-                    </span>
-                  ) : null}
+                  <EventCategoryPill className="text-xs" event={event} />
+                  <EventPriceChip className="text-xs" value={event.ticketPrice} />
                 </div>
 
                 <div className="space-y-2">
@@ -142,7 +166,21 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                   <InfoTile icon={CalendarDays} label="Date" value={formatEventDate(event.date)} />
                   {eventTime ? <InfoTile icon={Clock3} label="Time" value={eventTime} /> : null}
-                  <InfoTile icon={MapPin} label="Venue" value={event.venue} />
+                  <div className="rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3">
+                    <p className="section-kicker">Venue</p>
+                    <p className="mt-1.5 flex items-start gap-2 text-sm font-semibold leading-5 text-foreground">
+                      <MapPin className="mt-0.5 h-4 w-4 flex-none text-primary" />
+                      <span className="min-w-0 flex-1 break-words">{event.venue}</span>
+                      {authEnabled ? (
+                        <FavoriteVenueButton
+                          className="-mt-1"
+                          venueId={event.venueId}
+                          venueName={event.venue}
+                        />
+                      ) : null}
+                    </p>
+                    <EventMetaRow className="mt-2 pl-6" event={event} />
+                  </div>
                 </div>
 
                 {event.description ? (
@@ -177,6 +215,9 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                 ) : null}
 
                 <div className="hidden flex-wrap gap-2 md:flex">
+                  {authEnabled ? (
+                    <SaveEventButton eventId={event._id} eventTitle={event.title} variant="full" />
+                  ) : null}
                   {event.instagramPostUrl ? (
                     <a
                       className="button-primary gap-2"
@@ -219,10 +260,18 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
           </article>
 
           <div className="fixed inset-x-0 bottom-[calc(4.85rem+env(safe-area-inset-bottom))] z-40 px-3 md:hidden">
-            <div className="glass-panel grid grid-cols-2 gap-2 bg-card/95 p-2 shadow-[0_-18px_48px_-34px_rgba(0,0,0,0.9)]">
+            <div className="glass-panel flex gap-2 bg-card/95 p-2 shadow-[0_-18px_48px_-34px_rgba(0,0,0,0.9)]">
+              {authEnabled ? (
+                <SaveEventButton
+                  className="min-w-0 flex-1 [&>button]:w-full [&>button]:px-3"
+                  eventId={event._id}
+                  eventTitle={event.title}
+                  variant="full"
+                />
+              ) : null}
               {event.instagramPostUrl ? (
                 <a
-                  className="button-primary min-h-11 gap-2 px-3 py-0"
+                  className="button-primary min-h-11 flex-1 gap-2 px-3 py-0"
                   href={event.instagramPostUrl}
                   rel="noreferrer"
                   target="_blank"
@@ -231,10 +280,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                   <ExternalLink className="h-4 w-4" />
                 </a>
               ) : null}
-              <Link
-                className={event.instagramPostUrl ? "button-secondary min-h-11 gap-2 px-3 py-0" : "button-primary col-span-2 min-h-11 gap-2 px-3 py-0"}
-                href={buildCalendarHref(event)}
-              >
+              <Link className="button-secondary min-h-11 flex-1 gap-2 px-3 py-0" href={buildCalendarHref(event)}>
                 <CalendarDays className="h-4 w-4" />
                 Calendar
               </Link>
@@ -247,7 +293,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             It may have been removed or has not been approved yet.
           </p>
-          <Link className="button-primary mt-5" href="/events">
+          <Link className="button-primary mt-5" href="/">
             Browse events
           </Link>
         </div>

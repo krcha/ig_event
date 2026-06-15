@@ -153,7 +153,7 @@ Convex:
 - Stores all event, venue, scraped post, user, saved-event, and ingestion-job
   state.
 - Exposes data operations through queries and mutations in `convex/*.ts`.
-- Runs an hourly internal cron to delete expired events.
+- Runs a weekly internal cron to delete expired events older than the 3-day retention grace period.
 
 Apify:
 
@@ -178,11 +178,23 @@ Clerk:
   configured.
 - `lib/auth/admin.ts` checks `ADMIN_CLERK_USER_IDS` for showing admin-only UI
   affordances.
+- `/sign-in` and `/sign-up` render `InstagramSsoAuthCard`, making Instagram the
+  primary auth action. It resolves native `oauth_instagram` or an enabled custom
+  strategy such as `oauth_custom_instagram` from Clerk's
+  `authenticatableSocialStrategies` before redirecting.
+- `/sso-callback` mounts `AuthenticateWithRedirectCallback` for Clerk OAuth
+  completion before redirecting to `/admin`.
 - In production, admin routes fail closed if Clerk env vars are absent.
 
 Vercel or VPS:
 
-- `vercel.json` schedules `GET /api/cron/ingest-venues` at `0 7 * * *`.
+- `vercel.json` documents the desired schedule, but the live self-hosted VPS
+  uses `/etc/cron.d/ig_event`.
+- VPS cron calls `GET /api/cron/ingest-venues` daily at `07:00 UTC` and
+  `GET /api/cron/discover-following` Mondays at `10:00 UTC` through
+  `/usr/local/sbin/ig-event-cron-runner`.
+- `/etc/ig_event/cron.env` stores `APP_ORIGIN` and `CRON_SECRET` with mode
+  `0600`; cron output goes to `/var/log/ig_event/cron.log`.
 - `docs/vps-self-hosting.md` describes the self-hosted Next container path while
   keeping Convex, Clerk, OpenAI, and Apify managed.
 - `Dockerfile`, `docker-compose.yml`, and `/api/health` support containerized
@@ -310,15 +322,20 @@ calls the job POST route, the job will not keep advancing.
 
 ### Scheduled Ingestion And Retention
 
-1. Vercel Cron calls `GET /api/cron/ingest-venues` at `0 7 * * *`.
-2. The route checks the bearer token when `CRON_SECRET` is set.
-3. It loads active venue handles, skips handles with a fresh full-scrape attempt
-   inside the 23-hour cooldown window, creates an ingestion job for up to 500
-   active handles, scrapes the latest 1 post per handle, runs direct full-scrape
-   ingestion, and patches job status.
-4. Convex internal cron `delete expired events` runs hourly at minute 5 UTC and
-   deletes expired events plus saved-event references in batches.
-5. Event retention uses `EVENTS_TIMEZONE` and event time when available.
+1. Live VPS cron calls `GET /api/cron/ingest-venues` daily at `07:00 UTC`
+   through `/usr/local/sbin/ig-event-cron-runner`.
+2. Live VPS cron calls `GET /api/cron/discover-following` Mondays at
+   `10:00 UTC` through the same runner.
+3. Both routes check the bearer token when `CRON_SECRET` is set.
+4. Venue ingestion loads active venue handles, skips handles with a fresh
+   full-scrape attempt inside the 23-hour cooldown window, creates an ingestion
+   job for up to 600 active handles, scrapes the latest 1 post per handle, runs
+   direct full-scrape ingestion, and patches job status.
+5. Convex internal cron `delete expired events` runs weekly Wednesday at 05:00
+   UTC and deletes expired events older than the 3-day retention grace period
+   plus saved-event references in bounded batches until clear or until the
+   safety cap is reached.
+6. Event retention uses `EVENTS_TIMEZONE` and event time when available.
 
 ## Testing And Verification
 
@@ -329,9 +346,12 @@ Use these scripts:
 - `npm run qa:dedupe`: deterministic duplicate QA.
 - `npm run qa:automerge`: deterministic approved-event automerge QA.
 - `npm run qa:extraction`: deterministic extraction/normalization QA.
+- `npm run qa:clerk-instagram-sso`: static QA for the primary Instagram OAuth
+  sign-in/sign-up flow and `/sso-callback` route.
 - `npm run qa:release`: runs lint, typecheck, `next build`, dedupe QA,
-  automerge QA, extraction QA, venue taxonomy QA, public search QA, and Apify
-  cost-control QA with timeouts.
+  automerge QA, extraction QA, venue taxonomy QA, public search QA, Apify
+  cost-control QA, follow-discovery QA, Convex retention-cron QA, and Clerk
+  Instagram SSO QA with timeouts.
 - `npm run convex:codegen`: refresh Convex generated types.
 
 GitHub Actions:
@@ -385,8 +405,9 @@ Data deletion:
 
 - Approved duplicate merge deletes duplicate event rows after moving saved-event
   references.
-- Event retention deletes expired events and saved references hourly. Check
-  timezone and cutoff behavior before changing retention logic.
+- Event retention deletes expired events and saved references weekly on Wednesday
+  at 05:00 UTC. Check timezone, cutoff behavior, and the maintenance-action
+  safety cap before changing retention logic.
 
 Date normalization:
 

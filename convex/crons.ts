@@ -3,13 +3,18 @@ import { internal } from "./_generated/api";
 
 const crons = cronJobs();
 
-crons.hourly(
+crons.weekly(
   "delete expired events",
   {
-    minuteUTC: 5,
+    dayOfWeek: "wednesday",
+    hourUTC: 5,
+    minuteUTC: 0,
   },
-  internal.events.deleteExpiredEvents,
-  {},
+  internal.maintenance.deleteExpiredEventsUntilDone,
+  {
+    batchSize: 500,
+    maxBatches: 20,
+  },
 );
 
 export default crons;
