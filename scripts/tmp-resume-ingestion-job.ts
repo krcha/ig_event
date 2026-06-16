@@ -115,7 +115,7 @@ async function main() {
     createEmptyIngestionSummary,
     createInitialIngestionBatchState,
     runInstagramIngestionBatchStep,
-  } = await import('/root/ig_event/lib/pipeline/run-instagram-ingestion.ts') as any;
+  } = await import('../lib/pipeline/run-instagram-ingestion.ts') as any;
 
   const convex = new ConvexHttpClient(convexUrl);
   const getRef = 'ingestionJobs:getJob' as unknown as FunctionReference<'query'>;

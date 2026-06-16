@@ -1,5 +1,13 @@
 /** @type {import("next").NextConfig} */
 const nextConfig = {
+  webpack(config, { dev }) {
+    if (!dev) {
+      // The local filesystem cache can hang or time out during production builds.
+      config.cache = false;
+    }
+
+    return config;
+  },
   async redirects() {
     return [
       {

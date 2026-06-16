@@ -76,8 +76,16 @@ Rules:
 - "artists" must contain only explicitly billed performers, DJs, live acts, hosts, or speakers who are presented as part of the lineup.
 - Exclude section headings, organizer names, venue names, sponsor names, ticket links, hashtags, and generic labels like "lineup" or "special guests" when no specific names are given.
 - Deduplicate artists and keep their readable stage names in source order when possible.
-- "category" must use one of these broad main types exactly: ${CANONICAL_EVENT_TYPE_PROMPT_LIST}.
-- If the post clearly announces an event but the exact subtype is unclear, return "event" for "category".
+- "category" must be exactly one of: ${CANONICAL_EVENT_TYPE_PROMPT_LIST}.
+- Choose the closest real type. Use "event" ONLY when none of the five clearly fit — never just because the subtype is uncertain.
+- Definitions + cues (captions are often Serbian/Cyrillic — map these):
+- nightlife = club nights, DJ sets, parties, raves. Cues: dj, techno, house, rave, party, žur, klub, after.
+- live music = bands, concerts, gigs, jam sessions. Cues: live, koncert, bend, svirka, nastup, jam.
+- arts & culture = theatre, plays, film/cinema, exhibitions, performances, readings, comedy. Cues: pozorište, predstava, film, bioskop, projekcija, izložba, galerija, performans, poezija.
+- learning = workshops, classes, lectures, talks, panels. Cues: radionica, kurs, predavanje, tribina, panel.
+- food & market = bazaars, markets, swaps, fairs, food pop-ups, brunches. Cues: bazar, market, vašar, pijaca, swap, razmena, brunch.
+- If the venue is clearly a theatre, cinema, gallery, or museum and the post is its program, prefer "arts & culture" even with a sparse caption.
+- Do not default Serbian-language posts to "event".
 - Keep "description" to one short factual sentence or phrase based only on details supported by the caption or flyer.
 - Do not include date, time, price, venue, address, hashtags, emojis, calls to action, or marketing language in "description".
 - If the poster or caption is a monthly program, venue schedule, or other multi-date lineup for the same venue, populate "schedule_entries" with one object per separately dated event row.

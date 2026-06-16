@@ -144,7 +144,7 @@ function runPromptQa() {
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
-    /must use one of these broad main types exactly/i,
+    /"category" must be exactly one of/i,
     "Prompt must constrain category to the canonical public event types.",
   );
   assert.match(

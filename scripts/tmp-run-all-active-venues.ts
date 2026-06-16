@@ -95,7 +95,7 @@ async function main() {
     createInitialIngestionBatchState,
     getActiveVenueHandles,
     runInstagramIngestionBatchStep,
-  } = await import('/root/ig_event/lib/pipeline/run-instagram-ingestion.ts') as any;
+  } = await import('../lib/pipeline/run-instagram-ingestion.ts') as any;
 
   const convex = new ConvexHttpClient(convexUrl);
   const handles: string[] = await getActiveVenueHandles();
