@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import type { EventDayPeriod } from "@/lib/events/event-time";
 import { cn } from "@/lib/utils";
 
 export type EventCategoryKind = "club" | "live" | "culture" | "event";
@@ -18,6 +19,7 @@ export type EventMetaInput = EventCategoryInput & {
   going?: number | string | null;
   goingCount?: number | string | null;
   ticketPrice?: string | null;
+  dayPeriod?: EventDayPeriod | null;
 };
 
 type EventCategoryTone = {
@@ -29,6 +31,12 @@ type EventCategoryTone = {
 type EventPriceDisplay = {
   isFree: boolean;
   label: string;
+};
+
+type EventDayPeriodTone = {
+  backgroundColor: string;
+  color: string;
+  label: "Day" | "Night";
 };
 
 export const EVENT_CATEGORY_TONES: Record<EventCategoryKind, EventCategoryTone> = {
@@ -51,6 +59,19 @@ export const EVENT_CATEGORY_TONES: Record<EventCategoryKind, EventCategoryTone> 
     backgroundColor: "rgba(52, 211, 153, 0.14)",
     color: "#34D399",
     label: "Event",
+  },
+};
+
+export const EVENT_DAY_PERIOD_TONES: Record<"day" | "night", EventDayPeriodTone> = {
+  day: {
+    backgroundColor: "rgba(125, 211, 252, 0.16)",
+    color: "#7DD3FC",
+    label: "Day",
+  },
+  night: {
+    backgroundColor: "rgba(167, 139, 250, 0.14)",
+    color: "#A78BFA",
+    label: "Night",
   },
 };
 
@@ -258,6 +279,32 @@ export function EventPriceChip({
   );
 }
 
+export function EventDayPeriodChip({
+  className,
+  value,
+}: {
+  className?: string;
+  value: EventDayPeriod | null | undefined;
+}) {
+  if (value !== "day" && value !== "night") {
+    return null;
+  }
+
+  const tone = EVENT_DAY_PERIOD_TONES[value];
+  return (
+    <span
+      className={cn(
+        "inline-flex max-w-full items-center rounded-full px-2 py-0.5 text-[10px] font-semibold leading-4",
+        className,
+      )}
+      data-event-day-period={value}
+      style={{ backgroundColor: tone.backgroundColor, color: tone.color }}
+    >
+      <span className="truncate">{tone.label}</span>
+    </span>
+  );
+}
+
 export function EventMetaRow({
   className,
   event,
@@ -277,6 +324,7 @@ export function EventMetaRow({
       data-event-meta-row="true"
     >
       <EventCategoryPill className="flex-none" event={event} />
+      <EventDayPeriodChip className="flex-none" value={event.dayPeriod} />
       {hasPrice ? <EventPriceChip className="flex-none" value={event.ticketPrice} /> : null}
       {goingCount ? (
         <>

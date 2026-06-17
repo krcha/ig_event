@@ -11,18 +11,35 @@ import {
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { EventCategoryPill, EventMetaRow, EventPriceChip } from "@/components/events/event-meta";
-import { getDisplayEventTime } from "@/lib/events/event-time";
+import {
+  getDisplayEventTime,
+  resolveEventTimeDisplay,
+  type EventDayPeriod,
+  type EventTimeDisplaySource,
+} from "@/lib/events/event-time";
 import { SaveEventButton } from "@/components/events/save-event-button";
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
-import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
+import {
+  DEFAULT_EVENT_TYPE,
+  canonicalizeEventType,
+  eventTypeFromVenueCategory,
+} from "@/lib/taxonomy/venue-types";
 import { toSearchableText } from "@/lib/pipeline/venue-normalization";
+import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 
 type EventRecord = {
   _id: string;
   title: string;
   date: string;
   time?: string;
+  dayPeriod?: EventDayPeriod;
+  displayTimeEnd?: string;
+  displayTimeLabel?: string;
+  displayTimeSource?: EventTimeDisplaySource;
+  displayTimeStart?: string;
   venue: string;
+  venueCategory?: string;
+  venueHours?: VenueHoursCacheFields;
   venueId?: string;
   artists: string[];
   description?: string;
@@ -43,6 +60,16 @@ type EventRecord = {
 type VenueRecord = {
   _id: string;
   name: string;
+  category?: string | null;
+  googlePlaceId?: string | null;
+  hoursError?: string | null;
+  hoursExpiresAt?: number | null;
+  hoursFetchedAt?: number | null;
+  hoursJson?: string | null;
+  hoursSource?: "osm" | "google" | "manual" | "none" | null;
+  hoursTimezone?: string | null;
+  osmElementId?: string | null;
+  osmElementType?: string | null;
 };
 
 type EventDetailPageProps = {
@@ -52,13 +79,13 @@ type EventDetailPageProps = {
 const getEventQuery = "events:getEvent" as unknown as FunctionReference<"query">;
 const listVenuesQuery = "venues:listVenues" as unknown as FunctionReference<"query">;
 
-function findVenueId(venues: VenueRecord[], venueName: string): string | undefined {
+function findVenue(venues: VenueRecord[], venueName: string): VenueRecord | undefined {
   const lookupKey = toSearchableText(venueName);
   if (!lookupKey) {
     return undefined;
   }
 
-  return venues.find((venue) => toSearchableText(venue.name) === lookupKey)?._id;
+  return venues.find((venue) => toSearchableText(venue.name) === lookupKey);
 }
 
 async function loadEvent(eventId: string): Promise<{
@@ -75,8 +102,37 @@ async function loadEvent(eventId: string): Promise<{
     const event = (await convex.query(getEventQuery, { id: eventId })) as EventRecord | null;
     if (event) {
       const venues = (await convex.query(listVenuesQuery, {})) as VenueRecord[];
-      event.eventType = canonicalizeEventType(event.eventType);
-      event.venueId = findVenueId(venues, event.venue);
+      const venue = findVenue(venues, event.venue);
+      const canonicalEventType = canonicalizeEventType(event.eventType);
+      const displayTime = resolveEventTimeDisplay({
+        date: event.date,
+        time: event.time,
+        venueHours: venue,
+      });
+      event.eventType =
+        canonicalEventType === DEFAULT_EVENT_TYPE
+          ? eventTypeFromVenueCategory(venue?.category)
+          : canonicalEventType;
+      event.dayPeriod = displayTime.dayPeriod;
+      event.displayTimeEnd = displayTime.endLabel;
+      event.displayTimeLabel = displayTime.label;
+      event.displayTimeSource = displayTime.source;
+      event.displayTimeStart = displayTime.startLabel;
+      event.venueCategory = venue?.category ?? undefined;
+      event.venueId = venue?._id;
+      event.venueHours = venue
+        ? {
+            googlePlaceId: venue.googlePlaceId ?? null,
+            hoursError: venue.hoursError ?? null,
+            hoursExpiresAt: venue.hoursExpiresAt ?? null,
+            hoursFetchedAt: venue.hoursFetchedAt ?? null,
+            hoursJson: venue.hoursJson ?? null,
+            hoursSource: venue.hoursSource ?? null,
+            hoursTimezone: venue.hoursTimezone ?? null,
+            osmElementId: venue.osmElementId ?? null,
+            osmElementType: venue.osmElementType ?? null,
+          }
+        : undefined;
     }
     return { event };
   } catch (error) {
@@ -129,7 +185,7 @@ function InfoTile({
 
 export default async function EventDetailPage({ params }: EventDetailPageProps) {
   const { event, error } = await loadEvent(params.eventId);
-  const eventTime = event ? getDisplayEventTime(event.time) : undefined;
+  const eventTime = event ? event.displayTimeLabel ?? getDisplayEventTime(event.time) : undefined;
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
   return (

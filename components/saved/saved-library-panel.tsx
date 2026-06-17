@@ -12,6 +12,7 @@ import {
   getDisplayEventTime,
   getEventTimeSortMinutes,
   normalizeEventTime,
+  type EventDayPeriod,
 } from "@/lib/events/event-time";
 import { toSearchableText } from "@/lib/pipeline/venue-normalization";
 import { cn } from "@/lib/utils";
@@ -21,6 +22,11 @@ export type SavedLibraryEvent = {
   title: string;
   date: string;
   time?: string;
+  dayPeriod?: EventDayPeriod;
+  displayTimeEnd?: string;
+  displayTimeLabel?: string;
+  displayTimeSource?: string;
+  displayTimeStart?: string;
   venue: string;
   venueId?: string;
   eventType: string;
@@ -211,8 +217,50 @@ function getNextEventMeta(event: SavedLibraryEvent | null): string {
     return "No upcoming events yet";
   }
 
-  const time = getDisplayEventTime(event.time);
+  const time = getResolvedDisplayTime(event);
   return [getRelativeDateLabel(event.date), time].filter(Boolean).join(" · ");
+}
+
+function getResolvedDisplayTime(event: SavedLibraryEvent): string | undefined {
+  return event.displayTimeLabel ?? getDisplayEventTime(event.time);
+}
+
+function getResolvedTimeParts(event: SavedLibraryEvent) {
+  if (event.displayTimeStart) {
+    return {
+      allDay: false,
+      endLabel: event.displayTimeEnd,
+      startLabel: event.displayTimeStart,
+    };
+  }
+
+  return normalizeEventTime(event.time);
+}
+
+function getSupplementalDisplayTime(event: SavedLibraryEvent): string | undefined {
+  if (!event.displayTimeLabel || event.displayTimeStart) {
+    return undefined;
+  }
+
+  return event.displayTimeLabel;
+}
+
+function mergeDisplayTimeFields(
+  event: SavedLibraryEvent,
+  reference: SavedLibraryEvent | undefined,
+): SavedLibraryEvent {
+  if (!reference?.displayTimeLabel) {
+    return event;
+  }
+
+  return {
+    ...event,
+    dayPeriod: reference.dayPeriod,
+    displayTimeEnd: reference.displayTimeEnd,
+    displayTimeLabel: reference.displayTimeLabel,
+    displayTimeSource: reference.displayTimeSource,
+    displayTimeStart: reference.displayTimeStart,
+  };
 }
 
 function EmptyState({
@@ -288,7 +336,8 @@ function LoadingCard() {
 }
 
 function EventRow({ event }: { event: SavedLibraryEvent }) {
-  const eventTime = normalizeEventTime(event.time);
+  const eventTime = getResolvedTimeParts(event);
+  const supplementalDisplayTime = getSupplementalDisplayTime(event);
 
   return (
     <article className="group box-border flex items-center gap-3 overflow-hidden rounded-[18px] border border-white/[0.07] bg-[#13151D] p-[13px] transition hover:border-primary/25 hover:bg-[#171923]">
@@ -318,6 +367,11 @@ function EventRow({ event }: { event: SavedLibraryEvent }) {
           <p className="mt-0.5 truncate text-[13px] leading-[18px] text-[#8A8E9E]">
             {event.venue}
           </p>
+          {supplementalDisplayTime ? (
+            <p className="truncate text-[13px] leading-[18px] text-[#8A8E9E]">
+              {supplementalDisplayTime}
+            </p>
+          ) : null}
           <EventMetaRow className="mt-1 flex-nowrap" event={event} />
         </div>
       </Link>
@@ -336,7 +390,7 @@ function EventRow({ event }: { event: SavedLibraryEvent }) {
 
 function PlaceRow({ item }: { item: FavoriteVenueWithNextEvent }) {
   const { nextEvent, venue } = item;
-  const nextEventTime = nextEvent ? normalizeEventTime(nextEvent.time) : null;
+  const nextEventTime = nextEvent ? getResolvedTimeParts(nextEvent) : null;
 
   return (
     <article className="box-border min-h-[4.75rem] overflow-hidden rounded-[1rem] border border-border/75 bg-card/88 px-3 py-2.5">
@@ -425,9 +479,21 @@ export function SavedLibraryPanel({
   );
   const activeSavedIds = isLibraryLoaded ? savedEventIds : initialSavedIds;
   const activeFavoriteIds = isLibraryLoaded ? favoriteVenueIds : initialFavoriteIds;
-  const hydratedSavedEvents = isLibraryLoaded
-    ? normalizeEvents(savedEvents)
-    : normalizeEvents(initialSavedEvents);
+  const baseSavedEvents = useMemo(
+    () => (isLibraryLoaded ? normalizeEvents(savedEvents) : normalizeEvents(initialSavedEvents)),
+    [initialSavedEvents, isLibraryLoaded, savedEvents],
+  );
+  const upcomingEventsById = useMemo(
+    () => new Map(upcomingEvents.map((event) => [event._id, event])),
+    [upcomingEvents],
+  );
+  const hydratedSavedEvents = useMemo(
+    () =>
+      baseSavedEvents.map((event) =>
+        mergeDisplayTimeFields(event, upcomingEventsById.get(event._id)),
+      ),
+    [baseSavedEvents, upcomingEventsById],
+  );
   const hydratedFavoriteVenues = isLibraryLoaded
     ? normalizeVenues(favoriteVenues)
     : normalizeVenues(initialFavoriteVenues);

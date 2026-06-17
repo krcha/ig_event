@@ -1,3 +1,9 @@
+import {
+  formatVenueHoursWindow,
+  getVenueHoursWindowForDate,
+  type VenueHoursCacheFields,
+} from "../venues/venue-hours-cache.ts";
+
 const MISSING_EVENT_TIME_LABELS = new Set([
   "tba",
   "time tba",
@@ -15,6 +21,17 @@ export type NormalizedEventTime = {
   allDay: boolean;
   description?: string;
   endLabel?: string;
+  startLabel?: string;
+};
+
+export type EventDayPeriod = "day" | "night" | "unknown";
+export type EventTimeDisplaySource = "closed" | "event" | "unknown" | "venue_hours";
+
+export type ResolvedEventTimeDisplay = {
+  dayPeriod: EventDayPeriod;
+  endLabel?: string;
+  label: string;
+  source: EventTimeDisplaySource;
   startLabel?: string;
 };
 
@@ -128,4 +145,57 @@ export function getEventTimeSortMinutes(value: string | null | undefined): numbe
   }
 
   return hours * 60 + minutes;
+}
+
+export function getDayPeriodForStartTime(value: string | null | undefined): EventDayPeriod {
+  const minutes = getEventTimeSortMinutes(value);
+  if (minutes === null) {
+    return "unknown";
+  }
+
+  return minutes >= 8 * 60 && minutes < 18 * 60 ? "day" : "night";
+}
+
+export function resolveEventTimeDisplay(options: {
+  date: string;
+  time?: string | null;
+  venueHours?: VenueHoursCacheFields | null;
+}): ResolvedEventTimeDisplay {
+  const eventTime = normalizeEventTime(options.time);
+  if (eventTime.startLabel) {
+    return {
+      dayPeriod: getDayPeriodForStartTime(eventTime.startLabel),
+      ...(eventTime.endLabel ? { endLabel: eventTime.endLabel } : {}),
+      label: eventTime.endLabel
+        ? `${eventTime.startLabel}–${eventTime.endLabel}`
+        : eventTime.startLabel,
+      source: "event",
+      startLabel: eventTime.startLabel,
+    };
+  }
+
+  const venueWindow = getVenueHoursWindowForDate(options.venueHours, options.date);
+  if (venueWindow.status === "open") {
+    return {
+      dayPeriod: getDayPeriodForStartTime(venueWindow.window.start),
+      endLabel: venueWindow.window.end,
+      label: `Open ${formatVenueHoursWindow(venueWindow.window)}`,
+      source: "venue_hours",
+      startLabel: venueWindow.window.start,
+    };
+  }
+
+  if (venueWindow.status === "closed") {
+    return {
+      dayPeriod: "unknown",
+      label: "Closed today — tap to check",
+      source: "closed",
+    };
+  }
+
+  return {
+    dayPeriod: "unknown",
+    label: "Hours unknown — tap to check",
+    source: "unknown",
+  };
 }

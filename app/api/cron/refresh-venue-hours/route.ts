@@ -1,0 +1,112 @@
+import { ConvexHttpClient } from "convex/browser";
+import type { FunctionReference } from "convex/server";
+import { NextResponse } from "next/server";
+import { isAuthorizedCronRequestHeader } from "@/lib/pipeline/cron-ingestion-config";
+import {
+  fetchVenueHoursPatch,
+  type VenueForHoursRefresh,
+} from "@/lib/venues/venue-hours-fetcher";
+
+const DEFAULT_REFRESH_LIMIT = 25;
+const MAX_REFRESH_LIMIT = 100;
+
+const listVenuesQuery = "venues:listVenues" as unknown as FunctionReference<"query">;
+const patchVenueHoursMutation =
+  "venues:patchVenueHours" as unknown as FunctionReference<"mutation">;
+
+function getConvexClient() {
+  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
+  if (!convexUrl) {
+    throw new Error("NEXT_PUBLIC_CONVEX_URL is not configured.");
+  }
+  return new ConvexHttpClient(convexUrl);
+}
+
+function parseRefreshLimit(value: string | undefined): number {
+  if (!value) {
+    return DEFAULT_REFRESH_LIMIT;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return DEFAULT_REFRESH_LIMIT;
+  }
+
+  return Math.min(parsed, MAX_REFRESH_LIMIT);
+}
+
+export async function GET(request: Request) {
+  if (!isAuthorizedCronRequestHeader(request.headers.get("authorization"))) {
+    return NextResponse.json({ error: "Unauthorized cron request." }, { status: 401 });
+  }
+
+  try {
+    const convex = getConvexClient();
+    const venues = (await convex.query(listVenuesQuery, {})) as VenueForHoursRefresh[];
+    const activeVenues = venues
+      .filter(
+        (venue): venue is VenueForHoursRefresh & { _id: string } =>
+          typeof venue._id === "string" && venue.isActive !== false,
+      )
+      .slice(0, parseRefreshLimit(process.env.VENUE_HOURS_REFRESH_LIMIT));
+    const summary = {
+      checked: 0,
+      refreshed: 0,
+      skippedFresh: 0,
+      failed: 0,
+      results: [] as Array<{
+        error?: string;
+        id?: string;
+        name: string;
+        source?: string;
+        status: "failed" | "refreshed" | "skipped";
+      }>,
+    };
+
+    for (const venue of activeVenues) {
+      summary.checked += 1;
+      try {
+        const patch = await fetchVenueHoursPatch(venue);
+        if (!patch) {
+          summary.skippedFresh += 1;
+          summary.results.push({
+            id: venue._id,
+            name: venue.name,
+            status: "skipped",
+          });
+          continue;
+        }
+
+        await convex.mutation(patchVenueHoursMutation, {
+          id: venue._id,
+          patch,
+        });
+        summary.refreshed += 1;
+        summary.results.push({
+          id: venue._id,
+          name: venue.name,
+          source: patch.hoursSource,
+          status: "refreshed",
+        });
+      } catch (error) {
+        summary.failed += 1;
+        summary.results.push({
+          error: error instanceof Error ? error.message : "Unknown refresh error.",
+          id: venue._id,
+          name: venue.name,
+          status: "failed",
+        });
+      }
+    }
+
+    return NextResponse.json(summary);
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error ? error.message : "Failed to refresh venue hours.",
+      },
+      { status: 500 },
+    );
+  }
+}

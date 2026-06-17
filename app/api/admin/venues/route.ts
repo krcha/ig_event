@@ -11,6 +11,15 @@ type VenueRecord = {
   instagramHandle: string;
   category: string;
   location?: string;
+  hoursSource?: "osm" | "google" | "manual" | "none";
+  hoursJson?: string;
+  hoursFetchedAt?: number;
+  hoursExpiresAt?: number;
+  hoursTimezone?: string;
+  osmElementId?: string;
+  osmElementType?: string;
+  googlePlaceId?: string;
+  hoursError?: string;
   isActive: boolean;
   createdAt: number;
   updatedAt: number;
@@ -76,6 +85,15 @@ export async function GET() {
         instagramHandle: venue.instagramHandle,
         category: canonicalizeVenueCategory(venue.category),
         location: venue.location ?? null,
+        hoursSource: venue.hoursSource ?? null,
+        hoursJson: venue.hoursJson ?? null,
+        hoursFetchedAt: venue.hoursFetchedAt ?? null,
+        hoursExpiresAt: venue.hoursExpiresAt ?? null,
+        hoursTimezone: venue.hoursTimezone ?? null,
+        osmElementId: venue.osmElementId ?? null,
+        osmElementType: venue.osmElementType ?? null,
+        googlePlaceId: venue.googlePlaceId ?? null,
+        hoursError: venue.hoursError ?? null,
         isActive: venue.isActive,
         createdAt: venue.createdAt,
         updatedAt: venue.updatedAt,

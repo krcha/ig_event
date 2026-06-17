@@ -62,6 +62,11 @@ type CalendarEventSummary = Pick<
   | "title"
   | "date"
   | "time"
+  | "dayPeriod"
+  | "displayTimeEnd"
+  | "displayTimeLabel"
+  | "displayTimeSource"
+  | "displayTimeStart"
   | "venue"
   | "venueId"
   | "artists"
@@ -175,7 +180,7 @@ function buildQueryString(params: Record<string, string | undefined>): string {
 }
 
 function getEventAriaLabel(event: CalendarEventSummary, tone: EventTone): string {
-  return ["Open " + event.title, getDisplayEventTime(event.time), event.venue, tone.name]
+  return ["Open " + event.title, event.displayTimeLabel ?? getDisplayEventTime(event.time), event.venue, tone.name]
     .filter(Boolean)
     .join(", ");
 }
@@ -282,6 +287,11 @@ function toCalendarEventSummary(event: PublicEvent): CalendarEventSummary {
     title: event.title,
     date: event.date,
     time: event.time,
+    dayPeriod: event.dayPeriod,
+    displayTimeEnd: event.displayTimeEnd,
+    displayTimeLabel: event.displayTimeLabel,
+    displayTimeSource: event.displayTimeSource,
+    displayTimeStart: event.displayTimeStart,
     venue: event.venue,
     venueId: event.venueId,
     artists: event.artists,
@@ -313,6 +323,30 @@ function getDayCategory(event: CalendarEventSummary): Exclude<DayCategory, "all"
 
 function formatArtistMeta(event: CalendarEventSummary): string | undefined {
   return event.artists.length > 0 ? event.artists.slice(0, 3).join(", ") : undefined;
+}
+
+function getResolvedDisplayTime(event: CalendarEventSummary): string | undefined {
+  return event.displayTimeLabel ?? getDisplayEventTime(event.time);
+}
+
+function getResolvedTimeParts(event: CalendarEventSummary) {
+  if (event.displayTimeStart) {
+    return {
+      allDay: false,
+      endLabel: event.displayTimeEnd,
+      startLabel: event.displayTimeStart,
+    };
+  }
+
+  return normalizeEventTime(event.time);
+}
+
+function getSupplementalDisplayTime(event: CalendarEventSummary): string | undefined {
+  if (!event.displayTimeLabel || event.displayTimeStart) {
+    return undefined;
+  }
+
+  return event.displayTimeLabel;
 }
 
 function pluralize(value: number, singular: string, plural = `${singular}s`): string {
@@ -710,8 +744,9 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
         <>
           {agendaEvents.map((event) => {
             const tone = getEventTone(event);
-            const eventTime = normalizeEventTime(event.time);
-            const displayEventTime = getDisplayEventTime(event.time);
+            const eventTime = getResolvedTimeParts(event);
+            const displayEventTime = getResolvedDisplayTime(event);
+            const supplementalDisplayTime = getSupplementalDisplayTime(event);
             const artistMeta = formatArtistMeta(event);
 
             if (isMobile) {
@@ -722,7 +757,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                     tone.panel,
                   )}
                   data-calendar-mobile-event-row="true"
-                  data-event-time={event.time}
+                  data-event-time={event.displayTimeLabel ?? event.time}
                   data-event-title={event.title}
                   data-event-tone={tone.name}
                   data-event-venue={event.venue}
@@ -758,6 +793,11 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                       <p className="mt-0.5 truncate text-[11px] font-medium leading-4 text-muted-foreground">
                         {event.venue}
                       </p>
+                      {supplementalDisplayTime ? (
+                        <p className="truncate text-[11px] font-medium leading-4 text-muted-foreground/85">
+                          {supplementalDisplayTime}
+                        </p>
+                      ) : null}
                       <EventMetaRow className="mt-1 flex-nowrap" event={event} />
                     </div>
                   </Link>
@@ -779,13 +819,13 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 <div className={cn("absolute inset-y-4 left-0 w-1 rounded-r-full", tone.rail)} />
                 <div className="flex items-start gap-2.5 pl-1.5">
                   <Link
-                    aria-label={`Open ${event.title}`}
+                    aria-label={getEventAriaLabel(event, tone)}
                     className="flex min-w-0 flex-1 items-start gap-2.5"
                     href={`/events/${event._id}`}
                   >
                     <div className="w-14 flex-none text-right">
                       {displayEventTime ? (
-                        <p className="text-sm font-semibold tabular-nums text-foreground">
+                        <p className="truncate text-sm font-semibold tabular-nums text-foreground">
                           {displayEventTime}
                         </p>
                       ) : null}
@@ -1142,7 +1182,10 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                           <div className="mt-2.5 space-y-1.5">
                             {visibleEvents.map((event) => {
                               const tone = getEventTone(event);
-                              const eventTime = getDisplayEventTime(event.time);
+                              const eventTime =
+                                event.displayTimeSource === "unknown"
+                                  ? undefined
+                                  : getResolvedDisplayTime(event);
 
                               return (
                                 <div

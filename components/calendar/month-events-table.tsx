@@ -11,6 +11,7 @@ import {
   getDisplayEventTime,
   getEventTimeSortMinutes,
   normalizeEventTime,
+  type EventDayPeriod,
 } from "@/lib/events/event-time";
 import { comparePublicEventsByDateVenueTimeTitle } from "@/lib/events/public-event-sort";
 
@@ -19,6 +20,11 @@ type MonthEventTableEvent = {
   title: string;
   date: string;
   time?: string;
+  dayPeriod?: EventDayPeriod;
+  displayTimeEnd?: string;
+  displayTimeLabel?: string;
+  displayTimeSource?: string;
+  displayTimeStart?: string;
   venue: string;
   venueId?: string;
   artists: string[];
@@ -157,7 +163,7 @@ function formatCopyText(events: MonthEventTableEvent[]): string {
   const header = ["Date", "Time", "Title", "Venue", "Type", "Ticket", "Artists"];
   const rows = events.map((event) => [
     formatEventDate(event.date),
-    getDisplayEventTime(event.time) ?? "",
+    getResolvedDisplayTime(event) ?? "",
     event.title,
     event.venue,
     event.eventType,
@@ -166,6 +172,30 @@ function formatCopyText(events: MonthEventTableEvent[]): string {
   ]);
 
   return [header, ...rows].map((row) => row.join("\t")).join("\n");
+}
+
+function getResolvedDisplayTime(event: MonthEventTableEvent): string | undefined {
+  return event.displayTimeLabel ?? getDisplayEventTime(event.time);
+}
+
+function getResolvedTimeParts(event: MonthEventTableEvent) {
+  if (event.displayTimeStart) {
+    return {
+      allDay: false,
+      endLabel: event.displayTimeEnd,
+      startLabel: event.displayTimeStart,
+    };
+  }
+
+  return normalizeEventTime(event.time);
+}
+
+function getSupplementalDisplayTime(event: MonthEventTableEvent): string | undefined {
+  if (!event.displayTimeLabel || event.displayTimeStart) {
+    return undefined;
+  }
+
+  return event.displayTimeLabel;
 }
 
 export function MonthEventsTable({
@@ -280,7 +310,8 @@ export function MonthEventsTable({
             <>
               <div className="mt-4 space-y-2.5 lg:hidden">
                 {sortedEvents.map((event) => {
-                  const eventTime = normalizeEventTime(event.time);
+                  const eventTime = getResolvedTimeParts(event);
+                  const supplementalDisplayTime = getSupplementalDisplayTime(event);
 
                   return (
                     <article
@@ -319,10 +350,12 @@ export function MonthEventsTable({
                             </span>
                             <span className="flex-none text-border">/</span>
                             <span className="min-w-0 truncate">{event.venue}</span>
-                            {eventTime.description ? (
+                            {supplementalDisplayTime ?? eventTime.description ? (
                               <>
                                 <span className="flex-none text-border">/</span>
-                                <span className="min-w-0 truncate">{eventTime.description}</span>
+                                <span className="min-w-0 truncate">
+                                  {supplementalDisplayTime ?? eventTime.description}
+                                </span>
                               </>
                             ) : null}
                           </div>
@@ -383,7 +416,7 @@ export function MonthEventsTable({
                           {formatEventDate(event.date)}
                         </td>
                         <td className="px-3 py-3 text-sm text-muted-foreground">
-                          {getDisplayEventTime(event.time)}
+                          {getResolvedDisplayTime(event)}
                         </td>
                         <td className="px-3 py-3 text-sm">
                           <div className="space-y-1">

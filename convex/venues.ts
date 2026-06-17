@@ -2,6 +2,25 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { canonicalizeVenueCategory } from "../lib/taxonomy/venue-types";
 
+const venueHoursSource = v.union(
+  v.literal("osm"),
+  v.literal("google"),
+  v.literal("manual"),
+  v.literal("none"),
+);
+
+const venueHoursPatch = {
+  hoursSource: v.optional(venueHoursSource),
+  hoursJson: v.optional(v.string()),
+  hoursFetchedAt: v.optional(v.number()),
+  hoursExpiresAt: v.optional(v.number()),
+  hoursTimezone: v.optional(v.string()),
+  osmElementId: v.optional(v.string()),
+  osmElementType: v.optional(v.string()),
+  googlePlaceId: v.optional(v.string()),
+  hoursError: v.optional(v.string()),
+};
+
 export const listVenues = query({
   args: {},
   handler: async (ctx) => {
@@ -66,6 +85,16 @@ export const updateVenue = mutation({
         : {}),
     };
     await ctx.db.patch(args.id, { ...patch, updatedAt: now });
+  },
+});
+
+export const patchVenueHours = mutation({
+  args: {
+    id: v.id("venues"),
+    patch: v.object(venueHoursPatch),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.id, args.patch);
   },
 });
 

@@ -6,7 +6,12 @@ import {
   buildApprovedEventAutoCleanupGroups,
   type ApprovedEventDuplicateRecord,
 } from "@/lib/events/approved-event-duplicates";
-import { getDisplayEventTime } from "@/lib/events/event-time";
+import {
+  getDisplayEventTime,
+  resolveEventTimeDisplay,
+  type EventDayPeriod,
+  type EventTimeDisplaySource,
+} from "@/lib/events/event-time";
 import { sortPublicEventsByDateVenueTimeTitle } from "@/lib/events/public-event-sort";
 import { matchesPublicEventNameArtistOrVenue } from "@/lib/events/public-event-search";
 import {
@@ -15,6 +20,7 @@ import {
   eventTypeFromVenueCategory,
 } from "@/lib/taxonomy/venue-types";
 import { toSearchableText } from "@/lib/pipeline/venue-normalization";
+import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 
 export type EventStatus = "pending" | "approved" | "rejected";
 const DEFAULT_PUBLIC_EVENTS_PAGE_SIZE = 24;
@@ -26,7 +32,14 @@ export type PublicEvent = {
   title: string;
   date: string;
   time?: string;
+  dayPeriod?: EventDayPeriod;
+  displayTimeEnd?: string;
+  displayTimeLabel?: string;
+  displayTimeSource?: EventTimeDisplaySource;
+  displayTimeStart?: string;
   venue: string;
+  venueCategory?: string;
+  venueHours?: VenueHoursCacheFields;
   venueId?: string;
   artists: string[];
   eventType: string;
@@ -54,11 +67,15 @@ type VenueRecord = {
   _id: string;
   name: string;
   category?: string | null;
-};
-
-type VenueLookupByName = {
-  venueIdsByName: Map<string, string>;
-  venueCategoriesByName: Map<string, string>;
+  googlePlaceId?: string | null;
+  hoursError?: string | null;
+  hoursExpiresAt?: number | null;
+  hoursFetchedAt?: number | null;
+  hoursJson?: string | null;
+  hoursSource?: "osm" | "google" | "manual" | "none" | null;
+  hoursTimezone?: string | null;
+  osmElementId?: string | null;
+  osmElementType?: string | null;
 };
 
 type PublicEventsCacheEntry = {
@@ -143,54 +160,22 @@ function normalizeVenueLookupKey(value: string): string {
   return toSearchableText(value);
 }
 
-function buildVenueIdsByName(venues: VenueRecord[]): Map<string, string> {
-  const venueIdsByName = new Map<string, string>();
+function buildVenuesByName(venues: VenueRecord[]): Map<string, VenueRecord> {
+  const venuesByName = new Map<string, VenueRecord>();
 
   for (const venue of venues) {
     const key = normalizeVenueLookupKey(venue.name);
-    if (key && !venueIdsByName.has(key)) {
-      venueIdsByName.set(key, venue._id);
+    if (key && !venuesByName.has(key)) {
+      venuesByName.set(key, venue);
     }
   }
 
-  return venueIdsByName;
+  return venuesByName;
 }
 
-function buildVenueCategoriesByName(venues: VenueRecord[]): Map<string, string> {
-  const venueCategoriesByName = new Map<string, string>();
-
-  for (const venue of venues) {
-    const key = normalizeVenueLookupKey(venue.name);
-    if (key && venue.category && !venueCategoriesByName.has(key)) {
-      venueCategoriesByName.set(key, venue.category);
-    }
-  }
-
-  return venueCategoriesByName;
-}
-
-async function loadVenueLookupByName(
-  convex: ConvexHttpClient,
-): Promise<VenueLookupByName> {
+async function loadVenueLookupByName(convex: ConvexHttpClient): Promise<Map<string, VenueRecord>> {
   const venues = (await convex.query(listVenuesQuery, {})) as VenueRecord[];
-  return {
-    venueIdsByName: buildVenueIdsByName(venues),
-    venueCategoriesByName: buildVenueCategoriesByName(venues),
-  };
-}
-
-function attachVenueIdsToEvents(
-  events: PublicEvent[],
-  venueIdsByName: Map<string, string>,
-): PublicEvent[] {
-  if (venueIdsByName.size === 0) {
-    return events;
-  }
-
-  return events.map((event) => {
-    const venueId = venueIdsByName.get(normalizeVenueLookupKey(event.venue));
-    return venueId ? { ...event, venueId } : event;
-  });
+  return buildVenuesByName(venues);
 }
 
 function normalizeDaysInPast(value: number | undefined): number {
@@ -285,20 +270,48 @@ function filterDuplicatePublicEvents(events: PublicEvent[]): PublicEvent[] {
 
 function normalizePublicEvent(
   event: PublicEvent,
-  venueCategoriesByName: Map<string, string>,
+  venuesByName: Map<string, VenueRecord>,
 ): PublicEvent {
   const canonicalEventType = canonicalizeEventType(event.eventType);
-  const venueCategory = venueCategoriesByName.get(normalizeVenueLookupKey(event.venue));
+  const venue = venuesByName.get(normalizeVenueLookupKey(event.venue));
+  const venueCategory = venue?.category ?? undefined;
   const eventType =
     canonicalEventType === DEFAULT_EVENT_TYPE
       ? eventTypeFromVenueCategory(venueCategory)
       : canonicalEventType;
   const time = getDisplayEventTime(event.time);
+  const displayTime = resolveEventTimeDisplay({
+    date: event.date,
+    time: event.time,
+    venueHours: venue,
+  });
 
   return {
     ...event,
     ...(time ? { time } : { time: undefined }),
+    dayPeriod: displayTime.dayPeriod,
+    ...(displayTime.endLabel ? { displayTimeEnd: displayTime.endLabel } : {}),
+    displayTimeLabel: displayTime.label,
+    displayTimeSource: displayTime.source,
+    ...(displayTime.startLabel ? { displayTimeStart: displayTime.startLabel } : {}),
     eventType,
+    ...(venue?.category ? { venueCategory: venue.category } : {}),
+    ...(venue
+      ? {
+          venueHours: {
+            googlePlaceId: venue.googlePlaceId ?? null,
+            hoursError: venue.hoursError ?? null,
+            hoursExpiresAt: venue.hoursExpiresAt ?? null,
+            hoursFetchedAt: venue.hoursFetchedAt ?? null,
+            hoursJson: venue.hoursJson ?? null,
+            hoursSource: venue.hoursSource ?? null,
+            hoursTimezone: venue.hoursTimezone ?? null,
+            osmElementId: venue.osmElementId ?? null,
+            osmElementType: venue.osmElementType ?? null,
+          },
+          venueId: venue._id,
+        }
+      : {}),
   };
 }
 
@@ -347,13 +360,10 @@ async function loadAllApprovedUpcomingEvents(
     cursor = page.continueCursor;
   }
 
-  const { venueIdsByName, venueCategoriesByName } = await loadVenueLookupByName(convex);
+  const venuesByName = await loadVenueLookupByName(convex);
   return sortPublicEventsByDateVenueTimeTitle(
-    attachVenueIdsToEvents(
-      filterDuplicatePublicEvents(events).map((event) =>
-        normalizePublicEvent(event, venueCategoriesByName),
-      ),
-      venueIdsByName,
+    filterDuplicatePublicEvents(events).map((event) =>
+      normalizePublicEvent(event, venuesByName),
     ),
   );
 }
