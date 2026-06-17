@@ -101,6 +101,16 @@ assert.match(
 );
 assert.match(
   browsePageSource,
+  /const fromDate = monthStartKey;/,
+  "Calendar page should load the full selected month so stored past days remain visible.",
+);
+assertDoesNotInclude(
+  browsePageSource,
+  "const fromDate = monthStartKey < yesterdayKey ? yesterdayKey : monthStartKey;",
+  "Calendar page should not clamp the selected month query to yesterday.",
+);
+assert.match(
+  browsePageSource,
   /const showFullList = getSingleValue\(searchParams\?\.list\) === "1";/,
   "Calendar page should keep the heavy full-list table behind an explicit list=1 request.",
 );

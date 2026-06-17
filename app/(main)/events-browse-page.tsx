@@ -374,11 +374,8 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const monthStart = parseMonthParam(requestedMonth, today);
   const monthParam = formatMonthParam(monthStart);
   const nextMonthStart = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
   const monthStartKey = formatDateKey(monthStart);
-  const yesterdayKey = formatDateKey(yesterday);
-  const fromDate = monthStartKey < yesterdayKey ? yesterdayKey : monthStartKey;
+  const fromDate = monthStartKey;
   const beforeDate = formatDateKey(nextMonthStart);
   const { events, error } = await loadUpcomingApprovedEvents({ beforeDate, fromDate });
   const selectedVenue = getSingleValue(searchParams?.venue);
