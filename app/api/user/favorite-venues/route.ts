@@ -1,10 +1,11 @@
-import { auth, currentUser } from "@clerk/nextjs/server";
+import { auth } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import { NextResponse } from "next/server";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 
 type FavoriteVenueRequestBody = {
+  favorite?: unknown;
   venueId?: unknown;
 };
 
@@ -21,14 +22,6 @@ function getConvexClient(): ConvexHttpClient | NextResponse {
   }
 
   return new ConvexHttpClient(convexUrl);
-}
-
-async function ensureConvexUser(convex: ConvexHttpClient, clerkUserId: string) {
-  const clerkUser = await currentUser();
-  await convex.mutation(api.users.upsertUser, {
-    clerkId: clerkUserId,
-    email: clerkUser?.primaryEmailAddress?.emailAddress,
-  });
 }
 
 export async function GET() {
@@ -74,6 +67,7 @@ export async function POST(request: Request) {
   if (!venueId) {
     return NextResponse.json({ error: "A valid venueId is required." }, { status: 400 });
   }
+  const favorite = typeof body.favorite === "boolean" ? body.favorite : undefined;
 
   const convex = getConvexClient();
   if (convex instanceof NextResponse) {
@@ -81,8 +75,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    await ensureConvexUser(convex, userId);
     const result = await convex.mutation(api.users.toggleFavoriteVenue, {
+      favorite,
       userId,
       venueId,
     });

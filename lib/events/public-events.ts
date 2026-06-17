@@ -13,7 +13,6 @@ import {
   type EventTimeDisplaySource,
 } from "@/lib/events/event-time";
 import { sortPublicEventsByDateVenueTimeTitle } from "@/lib/events/public-event-sort";
-import { matchesPublicEventNameArtistOrVenue } from "@/lib/events/public-event-search";
 import {
   DEFAULT_EVENT_TYPE,
   canonicalizeEventType,
@@ -23,8 +22,8 @@ import { toSearchableText } from "@/lib/pipeline/venue-normalization";
 import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 
 export type EventStatus = "pending" | "approved" | "rejected";
-const DEFAULT_PUBLIC_EVENTS_PAGE_SIZE = 24;
 const APPROVED_EVENTS_SCAN_BATCH_SIZE = 100;
+const PUBLIC_EVENTS_CACHE_MAX_ENTRIES = 48;
 const PUBLIC_EVENTS_CACHE_TTL_MS = 60_000;
 
 export type PublicEvent = {
@@ -91,26 +90,10 @@ type PaginatedEventsResponse = {
   isDone: boolean;
 };
 
-export type PublicEventsPageResult = {
-  events: PublicEvent[];
-  page: number;
-  pageSize: number;
-  searchQuery: string;
-  hasPreviousPage: boolean;
-  hasNextPage: boolean;
-  error?: string;
-};
-
 type LoadUpcomingApprovedEventsOptions = {
   daysInPast?: number;
   fromDate?: string;
   beforeDate?: string;
-};
-
-type LoadUpcomingApprovedEventsPageOptions = {
-  page?: number;
-  pageSize?: number;
-  searchQuery?: string;
 };
 
 const listApprovedUpcomingByDatePaginatedQuery =
@@ -186,30 +169,24 @@ function normalizeDaysInPast(value: number | undefined): number {
   return Math.max(0, Math.min(7, Math.trunc(value as number)));
 }
 
-function normalizePublicEventsPage(value: number | undefined): number {
-  if (!Number.isFinite(value)) {
-    return 1;
-  }
-  return Math.max(1, Math.trunc(value as number));
-}
-
-function normalizePublicEventsPageSize(value: number | undefined): number {
-  if (!Number.isFinite(value)) {
-    return DEFAULT_PUBLIC_EVENTS_PAGE_SIZE;
-  }
-  return Math.max(1, Math.min(100, Math.trunc(value as number)));
-}
-
-function normalizeSearchQuery(value: string | undefined): string {
-  return value?.trim() ?? "";
-}
-
 function normalizeDateBoundary(value: string | undefined): string | undefined {
   return value && parseNormalizedEventDate(value) ? value : undefined;
 }
 
-function matchesPublicEventSearch(event: PublicEvent, searchQuery: string): boolean {
-  return matchesPublicEventNameArtistOrVenue(event, searchQuery);
+function prunePublicEventsCache(now = Date.now()): void {
+  for (const [key, entry] of publicEventsCache) {
+    if (entry.expiresAt <= now) {
+      publicEventsCache.delete(key);
+    }
+  }
+
+  while (publicEventsCache.size > PUBLIC_EVENTS_CACHE_MAX_ENTRIES) {
+    const oldestKey = publicEventsCache.keys().next().value as string | undefined;
+    if (!oldestKey) {
+      return;
+    }
+    publicEventsCache.delete(oldestKey);
+  }
 }
 
 function mapPublicEventToDuplicateRecord(event: PublicEvent): ApprovedEventDuplicateRecord {
@@ -374,9 +351,12 @@ function getCachedApprovedUpcomingEvents(
   beforeDate?: string,
 ): Promise<PublicEvent[]> {
   const now = Date.now();
+  prunePublicEventsCache(now);
   const cacheKey = `${fromDate}:${beforeDate ?? ""}`;
   const cached = publicEventsCache.get(cacheKey);
   if (cached && cached.expiresAt > now) {
+    publicEventsCache.delete(cacheKey);
+    publicEventsCache.set(cacheKey, cached);
     return cached.promise;
   }
 
@@ -392,6 +372,7 @@ function getCachedApprovedUpcomingEvents(
     expiresAt: now + PUBLIC_EVENTS_CACHE_TTL_MS,
     promise,
   });
+  prunePublicEventsCache(now);
 
   return promise;
 }
@@ -426,61 +407,6 @@ export async function loadUpcomingApprovedEvents(
         error instanceof Error
           ? error.message
           : "Failed to load approved events.",
-    };
-  }
-}
-
-export async function loadUpcomingApprovedEventsPage(
-  options: LoadUpcomingApprovedEventsPageOptions = {},
-): Promise<PublicEventsPageResult> {
-  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
-  const page = normalizePublicEventsPage(options.page);
-  const pageSize = normalizePublicEventsPageSize(options.pageSize);
-  const searchQuery = normalizeSearchQuery(options.searchQuery);
-
-  if (!convexUrl) {
-    return {
-      events: [],
-      page,
-      pageSize,
-      searchQuery,
-      hasPreviousPage: page > 1,
-      hasNextPage: false,
-      error: "Convex is not configured yet.",
-    };
-  }
-
-  try {
-    const convex = new ConvexHttpClient(convexUrl);
-    const allEvents = await getCachedApprovedUpcomingEvents(
-      convex,
-      formatLocalDate(getStartOfLocalToday()),
-    );
-    const matchingEvents = allEvents.filter((event) =>
-      matchesPublicEventSearch(event, searchQuery),
-    );
-    const offset = (page - 1) * pageSize;
-    const pageEvents = matchingEvents.slice(offset, offset + pageSize);
-    const hasNextPage = offset + pageSize < matchingEvents.length;
-
-    return {
-      events: pageEvents,
-      page,
-      pageSize,
-      searchQuery,
-      hasPreviousPage: page > 1,
-      hasNextPage,
-    };
-  } catch (error) {
-    return {
-      events: [],
-      page,
-      pageSize,
-      searchQuery,
-      hasPreviousPage: page > 1,
-      hasNextPage: false,
-      error:
-        error instanceof Error ? error.message : "Failed to load approved events.",
     };
   }
 }

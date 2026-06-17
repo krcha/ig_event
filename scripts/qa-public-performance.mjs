@@ -16,6 +16,7 @@ const convexEventsSource = read("convex/events.ts");
 const monthEventsTableSource = read("components/calendar/month-events-table.tsx");
 const eventDetailSource = read("app/(main)/events/[eventId]/page.tsx");
 const savedPanelSource = read("components/saved/saved-library-panel.tsx");
+const middlewareSource = read("middleware.ts");
 const packageJson = JSON.parse(read("package.json"));
 const releaseCheckSource = read("scripts/release-check.mjs");
 
@@ -66,6 +67,21 @@ assert.match(
   publicEventsSource,
   /const cacheKey = `\$\{fromDate\}:\$\{beforeDate \?\? ""\}`;/,
   "Public event cache should include both date boundaries.",
+);
+assert.match(
+  publicEventsSource,
+  /const PUBLIC_EVENTS_CACHE_MAX_ENTRIES = 48;/,
+  "Public event cache should have a bounded maximum size for VPS memory safety.",
+);
+assert.match(
+  publicEventsSource,
+  /while \(publicEventsCache\.size > PUBLIC_EVENTS_CACHE_MAX_ENTRIES\)/,
+  "Public event cache should prune oldest entries when it exceeds the maximum size.",
+);
+assertDoesNotInclude(
+  publicEventsSource,
+  "loadUpcomingApprovedEventsPage",
+  "Public event loaders should not keep the unused load-all-then-slice page helper.",
 );
 assert.match(
   publicEventsSource,
@@ -124,6 +140,16 @@ assertDoesNotInclude(
   eventDetailSource,
   "`/calendar?${query.toString()}`",
   "Event detail calendar shortcut should link directly to the canonical root calendar route.",
+);
+assert.match(
+  middlewareSource,
+  /matcher:\s*\["\/admin\/:path\*", "\/api\/admin\/:path\*"\]/,
+  "Clerk middleware should stay scoped to admin routes so public browsing avoids auth overhead.",
+);
+assertDoesNotInclude(
+  middlewareSource,
+  '/((?!.*\\\\..*|_next).*)',
+  "Clerk middleware should not match every public page.",
 );
 
 assert.ok(

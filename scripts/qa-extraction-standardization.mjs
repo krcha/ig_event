@@ -414,11 +414,36 @@ function runCaptionDateRangeQa() {
   assert.equal(events.some((event) => event.date.endsWith("-10")), false);
 }
 
+function runTicketPriceQa() {
+  for (const { currency, expected, price } of [
+    { price: "10€", currency: "EUR", expected: "10€" },
+    { price: "1200", currency: "RSD", expected: "1200 RSD" },
+    { price: "1200 RSD", currency: "RSD", expected: "1200 RSD" },
+    { price: "Regular 2690 RSD", currency: "RSD", expected: "Regular 2690 RSD" },
+  ]) {
+    const [prepared] = prepareEventsForInsert(
+      makeInstagramPost(),
+      makeExtractedEvent({
+        price,
+        currency,
+        field_confirmation: makeFieldConfirmation(0.95),
+      }),
+      null,
+      {},
+      {},
+      {},
+    );
+    assert.equal(prepared.kind, "ok");
+    assert.equal(prepared.event.ticketPrice, expected);
+  }
+}
+
 runPromptQa();
 runVenueQa();
 runArtistAndDescriptionQa();
 runConfidenceQa();
 runVideoModerationQa();
 runCaptionDateRangeQa();
+runTicketPriceQa();
 
-console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, and caption date ranges.");
+console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, caption date ranges, and ticket prices.");

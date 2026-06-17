@@ -1520,6 +1520,34 @@ function normalizeString(value: string | null | undefined): string {
   return (value ?? "").trim();
 }
 
+function normalizeTicketPrice(price: string, currency: string): string {
+  if (!price) {
+    return currency;
+  }
+
+  if (!currency) {
+    return price;
+  }
+
+  const searchablePrice = price.toLocaleLowerCase();
+  const searchableCurrency = currency.toLocaleLowerCase();
+  if (searchablePrice.includes(searchableCurrency)) {
+    return price;
+  }
+
+  const hasCurrencyMarker =
+    (/\b(?:eur|euro|euros)\b|\u20ac/i.test(searchablePrice) &&
+      /\b(?:eur|euro|euros)\b|\u20ac/i.test(searchableCurrency)) ||
+    (/\b(?:rsd|din|dinar|dinara)\b/i.test(searchablePrice) &&
+      /\b(?:rsd|din|dinar|dinara)\b/i.test(searchableCurrency)) ||
+    (/\b(?:usd|dollar|dollars)\b|\$/i.test(searchablePrice) &&
+      /\b(?:usd|dollar|dollars)\b|\$/i.test(searchableCurrency)) ||
+    (/\b(?:gbp|pound|pounds)\b|\u00a3/i.test(searchablePrice) &&
+      /\b(?:gbp|pound|pounds)\b|\u00a3/i.test(searchableCurrency));
+
+  return hasCurrencyMarker ? price : `${price} ${currency}`.trim();
+}
+
 function normalizeScrapedPost(post: InstagramScrapedPost): InstagramScrapedPost {
   const normalizedImageUrls = (post.imageUrls ?? [])
     .map((url) => normalizeString(url))
@@ -3116,7 +3144,7 @@ export function prepareEventsForInsert(
   const time = normalizeString(extracted.time ?? undefined);
   const price = normalizeString(extracted.price);
   const currency = normalizeString(extracted.currency);
-  const ticketPrice = `${price}${price && currency ? " " : ""}${currency}`.trim();
+  const ticketPrice = normalizeTicketPrice(price, currency);
   const confidence = normalizeConfidenceScore(extracted.confidence);
   const venueNormalization = normalizeVenue(
     post,

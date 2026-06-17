@@ -14,6 +14,7 @@ export function useRequireAuth() {
   const requireAuth = useCallback(
     () => {
       if (!isLoaded) {
+        void clerk.openSignIn();
         return false;
       }
 

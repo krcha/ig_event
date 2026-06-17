@@ -266,7 +266,7 @@ export function UserLibraryProvider({ children }: { children: React.ReactNode })
 
       try {
         const response = await fetch("/api/user/saved-events", {
-          body: JSON.stringify({ eventId }),
+          body: JSON.stringify({ eventId, saved: optimisticSaved }),
           headers: { "Content-Type": "application/json" },
           method: "POST",
         });
@@ -321,7 +321,7 @@ export function UserLibraryProvider({ children }: { children: React.ReactNode })
 
       try {
         const response = await fetch("/api/user/favorite-venues", {
-          body: JSON.stringify({ venueId }),
+          body: JSON.stringify({ favorite: optimisticFavorite, venueId }),
           headers: { "Content-Type": "application/json" },
           method: "POST",
         });

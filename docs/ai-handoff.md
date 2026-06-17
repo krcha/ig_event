@@ -204,15 +204,16 @@ Vercel or VPS:
 
 ### Public Event Browsing
 
-1. `/events` calls `loadUpcomingApprovedEventsPage` in
-   `lib/events/public-events.ts`.
-2. `/calendar` calls `loadUpcomingApprovedEvents`.
-3. Those helpers query Convex for approved events from today or a small
-   configured lookback.
+1. `/` is the canonical public browsing surface and calls
+   `loadUpcomingApprovedEvents` in `lib/events/public-events.ts`.
+2. `/events` and `/calendar` are redirect-only compatibility routes that
+   preserve query params and send users back to `/`.
+3. The public loader queries Convex for approved events using a bounded
+   `fromDate`/`beforeDate` window for the selected month.
 4. Public loading filters likely duplicate approved events using
    `buildApprovedEventAutoCleanupGroups`.
 5. Events are sorted by normalized date, time, title, and id.
-6. Search on `/events` matches title, venue, type, ticket notes, and artists.
+6. Search on the browse surface matches title, venue, and artists.
 
 ### Venue Management
 

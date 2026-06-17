@@ -113,7 +113,11 @@ export const listLibrary = query({
 });
 
 export const toggleSavedEvent = mutation({
-  args: { userId: v.string(), eventId: v.id("events") },
+  args: {
+    userId: v.string(),
+    eventId: v.id("events"),
+    saved: v.optional(v.boolean()),
+  },
   handler: async (ctx, args) => {
     const event = await ctx.db.get(args.eventId);
     if (!event) {
@@ -127,8 +131,23 @@ export const toggleSavedEvent = mutation({
       )
       .unique();
 
-    if (existing) {
+    const shouldSave = args.saved ?? !existing;
+
+    if (existing && !shouldSave) {
       await ctx.db.delete(existing._id);
+      return { eventId: args.eventId, saved: false };
+    }
+
+    if (existing) {
+      return {
+        createdAt: existing.createdAt,
+        eventId: args.eventId,
+        saved: true,
+        savedEventId: existing._id,
+      };
+    }
+
+    if (!shouldSave) {
       return { eventId: args.eventId, saved: false };
     }
 
@@ -144,7 +163,11 @@ export const toggleSavedEvent = mutation({
 });
 
 export const toggleFavoriteVenue = mutation({
-  args: { userId: v.string(), venueId: v.id("venues") },
+  args: {
+    userId: v.string(),
+    venueId: v.id("venues"),
+    favorite: v.optional(v.boolean()),
+  },
   handler: async (ctx, args) => {
     const venue = await ctx.db.get(args.venueId);
     if (!venue) {
@@ -158,8 +181,23 @@ export const toggleFavoriteVenue = mutation({
       )
       .unique();
 
-    if (existing) {
+    const shouldFavorite = args.favorite ?? !existing;
+
+    if (existing && !shouldFavorite) {
       await ctx.db.delete(existing._id);
+      return { favorite: false, venueId: args.venueId };
+    }
+
+    if (existing) {
+      return {
+        createdAt: existing.createdAt,
+        favorite: true,
+        favoriteVenueId: existing._id,
+        venueId: args.venueId,
+      };
+    }
+
+    if (!shouldFavorite) {
       return { favorite: false, venueId: args.venueId };
     }
 

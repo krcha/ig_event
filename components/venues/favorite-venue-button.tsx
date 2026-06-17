@@ -1,6 +1,6 @@
 "use client";
 
-import { Heart, Loader2 } from "lucide-react";
+import { Heart } from "lucide-react";
 import { useState } from "react";
 import { useUserLibrary } from "@/components/providers/user-library-provider";
 import { useRequireAuth } from "@/lib/auth/use-require-auth";
@@ -21,32 +21,29 @@ export function FavoriteVenueButton({
   venueName,
   variant = "icon",
 }: FavoriteVenueButtonProps) {
-  const { isLoaded, isSignedIn } = useRequireAuth();
-  const { error: libraryError, favoriteVenueIds, isVenuePending, toggleFavoriteVenue } =
+  const { isSignedIn } = useRequireAuth();
+  const { error: libraryError, favoriteVenueIds, isLibraryLoaded, isVenuePending, toggleFavoriteVenue } =
     useUserLibrary();
   const [localError, setLocalError] = useState<string | null>(null);
-  const isFavorite = venueId ? favoriteVenueIds.has(venueId) || defaultFavorite : false;
+  const isFavorite = venueId
+    ? isLibraryLoaded
+      ? favoriteVenueIds.has(venueId)
+      : favoriteVenueIds.has(venueId) || defaultFavorite
+    : false;
   const isBusy = venueId ? isVenuePending(venueId) : false;
-  const label = isBusy
-    ? isFavorite
-      ? `Unfollowing ${venueName}...`
-      : `Following ${venueName}...`
-    : isSignedIn
-      ? `${isFavorite ? "Unfollow" : "Follow"} ${venueName}`
-      : `Sign in to follow ${venueName}`;
-  const displayLabel = isBusy
-    ? isFavorite
-      ? "Unfollowing..."
-      : "Following..."
-    : isFavorite
-      ? "Following"
-      : "Follow";
+  const label = isSignedIn
+    ? `${isFavorite ? "Unfollow" : "Follow"} ${venueName}`
+    : `Sign in to follow ${venueName}`;
+  const displayLabel = isFavorite ? "Following" : "Follow";
   const error = localError ?? libraryError;
 
   async function onToggleFavoriteVenue() {
     setLocalError(null);
     if (!venueId) {
       setLocalError("This venue is not linked yet.");
+      return;
+    }
+    if (isBusy) {
       return;
     }
 
@@ -72,11 +69,13 @@ export function FavoriteVenueButton({
           variant === "full" &&
             "button-secondary min-h-11 gap-2 px-4 py-0 disabled:cursor-not-allowed disabled:opacity-60",
           isFavorite && "border-primary/35 bg-primary/[0.12] text-primary hover:bg-primary/[0.16] hover:text-primary",
+          isBusy && "ring-1 ring-primary/35",
         )}
         data-auth-action="favorite-venue"
         data-favorite={isFavorite ? "true" : "false"}
+        data-pending={isBusy ? "true" : "false"}
         data-venue-id={venueId ?? undefined}
-        disabled={!isLoaded || isBusy || !venueId}
+        disabled={!venueId}
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -84,11 +83,7 @@ export function FavoriteVenueButton({
         }}
         type="button"
       >
-        {isBusy ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
-        ) : (
-          <Heart className={cn("h-4 w-4", isFavorite && "fill-current")} />
-        )}
+        <Heart className={cn("h-4 w-4", isFavorite && "fill-current")} />
         {variant === "full" ? <span>{displayLabel}</span> : null}
       </button>
       {variant === "full" && error ? (
