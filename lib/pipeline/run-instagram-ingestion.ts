@@ -425,6 +425,70 @@ const MONTHS: Record<string, number> = {
   nov: 11,
   dec: 12,
 };
+const MONTH_ALIASES: Record<string, number> = {
+  ...MONTHS,
+  january: 1,
+  february: 2,
+  march: 3,
+  april: 4,
+  june: 6,
+  july: 7,
+  august: 8,
+  september: 9,
+  october: 10,
+  november: 11,
+  december: 12,
+  januar: 1,
+  januara: 1,
+  februar: 2,
+  februara: 2,
+  mart: 3,
+  marta: 3,
+  aprila: 4,
+  maj: 5,
+  maja: 5,
+  jun: 6,
+  juna: 6,
+  jul: 7,
+  jula: 7,
+  avg: 8,
+  avgust: 8,
+  avgusta: 8,
+  septembar: 9,
+  septembra: 9,
+  okt: 10,
+  oktobar: 10,
+  oktobra: 10,
+  novembar: 11,
+  novembra: 11,
+  decembar: 12,
+  decembra: 12,
+  јануар: 1,
+  јануара: 1,
+  фебруар: 2,
+  фебруара: 2,
+  март: 3,
+  марта: 3,
+  април: 4,
+  априла: 4,
+  мај: 5,
+  маја: 5,
+  јун: 6,
+  јуна: 6,
+  јул: 7,
+  јула: 7,
+  август: 8,
+  августа: 8,
+  септембар: 9,
+  септембра: 9,
+  октобар: 10,
+  октобра: 10,
+  новембар: 11,
+  новембра: 11,
+  децембар: 12,
+  децембра: 12,
+};
+const DATE_MONTH_WORD_PATTERN = "[A-Za-zČĆŠĐŽčćšđžА-Яа-яЈј]{3,14}";
 const MAX_DATE_DISTANCE_DAYS = 180;
 const EXISTING_EVENT_CONFIDENCE_THRESHOLD = 0.55;
 const DEFAULT_EVENT_TIMEZONE = "Europe/Belgrade";
@@ -1963,6 +2027,18 @@ function buildDateWithPossibleYearInference(
   return bestCandidate;
 }
 
+function getMonthNumber(rawMonth: string): number | null {
+  const normalizedMonth = normalizeString(rawMonth).toLowerCase();
+  if (!normalizedMonth) {
+    return null;
+  }
+  return (
+    MONTH_ALIASES[normalizedMonth] ??
+    MONTH_ALIASES[normalizedMonth.slice(0, 3)] ??
+    null
+  );
+}
+
 function collectDateCandidates(
   text: string,
   source: DateSource,
@@ -2025,9 +2101,12 @@ function collectDateCandidates(
   }
 
   for (const match of normalizedText.matchAll(
-    /\b(\d{1,2})(?:st|nd|rd|th|\.)?\s+([a-zA-Z]{3,9})(?:\s*,?\s*(\d{4}))?\b/g,
+    new RegExp(
+      String.raw`\b(\d{1,2})(?:st|nd|rd|th|\.)?\s+(${DATE_MONTH_WORD_PATTERN})(?:\s*,?\s*(\d{4}))?\b`,
+      "giu",
+    ),
   )) {
-    const month = MONTHS[match[2].slice(0, 3).toLowerCase()];
+    const month = getMonthNumber(match[2]);
     if (!month) {
       continue;
     }
@@ -2045,9 +2124,12 @@ function collectDateCandidates(
   }
 
   for (const match of normalizedText.matchAll(
-    /\b([a-zA-Z]{3,9})\s+(\d{1,2})(?!\s*[-–—]\s*\d{1,2}\s*h\b)(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?\b/g,
+    new RegExp(
+      String.raw`\b(${DATE_MONTH_WORD_PATTERN})\s+(\d{1,2})(?!\s*[-–—]\s*\d{1,2}\s*h\b)(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?\b`,
+      "giu",
+    ),
   )) {
-    const month = MONTHS[match[1].slice(0, 3).toLowerCase()];
+    const month = getMonthNumber(match[1]);
     if (!month) {
       continue;
     }
@@ -2202,11 +2284,164 @@ function toIsoDateUtc(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
+function expandDateRangeFromCandidates(
+  startCandidate: DateCandidate | null,
+  endCandidate: DateCandidate | null,
+): string[] | null {
+  if (!startCandidate || !endCandidate) {
+    return null;
+  }
+
+  const start = parseIsoDateUtc(startCandidate.isoDate);
+  const end = parseIsoDateUtc(endCandidate.isoDate);
+  if (!start || !end) {
+    return null;
+  }
+
+  const distanceDays = Math.round((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000));
+  if (distanceDays < 1 || distanceDays > 14) {
+    return null;
+  }
+
+  const dates: string[] = [];
+  for (let offset = 0; offset <= distanceDays; offset += 1) {
+    dates.push(toIsoDateUtc(new Date(start.getTime() + offset * 24 * 60 * 60 * 1000)));
+  }
+
+  return dates;
+}
+
+function buildDateRangeFromParts(options: {
+  startDay: number;
+  startMonth: number;
+  endDay: number;
+  endMonth: number;
+  rawYear: string | undefined;
+  postDate: Date | null;
+  source: DateSource;
+  raw: string;
+}): string[] | null {
+  const startCandidate = buildDateWithPossibleYearInference(
+    options.startDay,
+    options.startMonth,
+    options.rawYear,
+    options.postDate,
+    false,
+    options.source,
+    options.raw,
+  );
+  const endCandidate = buildDateWithPossibleYearInference(
+    options.endDay,
+    options.endMonth,
+    options.rawYear,
+    options.postDate,
+    false,
+    options.source,
+    options.raw,
+  );
+
+  return expandDateRangeFromCandidates(startCandidate, endCandidate);
+}
+
+function collectExplicitDateRangeDates(
+  text: string,
+  postDate: Date | null,
+  source: DateSource,
+): string[] | null {
+  const normalizedText = normalizeString(text);
+  if (!normalizedText) {
+    return null;
+  }
+
+  const sharedMonthRangePattern = new RegExp(
+    String.raw`(?:^|[^\p{L}\p{N}_])(?:od\s+)?(\d{1,2})\.?\s*(?:do|to|through|thru|[-–—])\s*(\d{1,2})\.?\s+(${DATE_MONTH_WORD_PATTERN})(?:\s*,?\s*(\d{2,4}))?`,
+    "giu",
+  );
+  for (const match of normalizedText.matchAll(sharedMonthRangePattern)) {
+    const month = getMonthNumber(match[3]);
+    if (!month) {
+      continue;
+    }
+    const dates = buildDateRangeFromParts({
+      startDay: Number.parseInt(match[1], 10),
+      startMonth: month,
+      endDay: Number.parseInt(match[2], 10),
+      endMonth: month,
+      rawYear: match[4],
+      postDate,
+      source,
+      raw: match[0].trim(),
+    });
+    if (dates) {
+      return dates;
+    }
+  }
+
+  const sharedNumericMonthRangePattern =
+    /(?:^|[^\p{L}\p{N}_])(?:od\s+)?(\d{1,2})\.?\s*(?:do|to|through|thru|[-–—])\s*(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?\.?/giu;
+  for (const match of normalizedText.matchAll(sharedNumericMonthRangePattern)) {
+    const dates = buildDateRangeFromParts({
+      startDay: Number.parseInt(match[1], 10),
+      startMonth: Number.parseInt(match[3], 10),
+      endDay: Number.parseInt(match[2], 10),
+      endMonth: Number.parseInt(match[3], 10),
+      rawYear: match[4],
+      postDate,
+      source,
+      raw: match[0].trim(),
+    });
+    if (dates) {
+      return dates;
+    }
+  }
+
+  const numericRangePattern =
+    /(?:^|[^\p{L}\p{N}_])(?:od\s+)?(\d{1,2})[./](\d{1,2})\.?\s*(?:do|to|through|thru|[-–—])\s*(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?\.?/giu;
+  for (const match of normalizedText.matchAll(numericRangePattern)) {
+    const dates = buildDateRangeFromParts({
+      startDay: Number.parseInt(match[1], 10),
+      startMonth: Number.parseInt(match[2], 10),
+      endDay: Number.parseInt(match[3], 10),
+      endMonth: Number.parseInt(match[4], 10),
+      rawYear: match[5],
+      postDate,
+      source,
+      raw: match[0].trim(),
+    });
+    if (dates) {
+      return dates;
+    }
+  }
+
+  return null;
+}
+
 function expandNormalizedDateRange(
   rawModelDate: string,
   postedAt: string | null,
+  caption: string | null = null,
 ): string[] | null {
   const normalizedRawDate = normalizeString(rawModelDate);
+  const normalizedCaption = normalizeString(caption);
+  const postDate = parsePostedAt(postedAt);
+  const explicitModelRangeDates = collectExplicitDateRangeDates(
+    normalizedRawDate,
+    postDate,
+    "model",
+  );
+  if (explicitModelRangeDates) {
+    return explicitModelRangeDates;
+  }
+
+  const explicitCaptionRangeDates = collectExplicitDateRangeDates(
+    normalizedCaption,
+    postDate,
+    "caption",
+  );
+  if (explicitCaptionRangeDates) {
+    return explicitCaptionRangeDates;
+  }
+
   if (!normalizedRawDate) {
     return null;
   }
@@ -2219,7 +2454,6 @@ function expandNormalizedDateRange(
     return null;
   }
 
-  const postDate = parsePostedAt(postedAt);
   const candidates = collectDateCandidates(normalizedRawDate, "model", postDate);
   const uniqueDates = [...new Set(candidates.map((candidate) => candidate.isoDate))].sort();
   if (uniqueDates.length < 2) {
@@ -3213,6 +3447,7 @@ export function prepareEventsForInsert(
   const expandedRangeDates = expandNormalizedDateRange(
     rawExtractedDate,
     post.postedAt,
+    postTextEvidence,
   );
   const candidateDates =
     expandedRangeDates && expandedRangeDates.length > 1

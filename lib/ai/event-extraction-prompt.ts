@@ -99,6 +99,7 @@ Rules:
 
 === DATES (per row) — "DD.MM" IS A DATE, NEVER A TIME ===
 - European/Serbian dates are day.month: "19.06" / "19.06." / "19/06" = 19 June. Put this in "date".
+- Daily date ranges such as "svake večeri od 11. do 17. juna", "od 11. do 17. juna", "11.06-17.06", or "from 11 to 17 June" mean one event occurrence on every date in that range. Prefer separate "schedule_entries" rows, one per date; if you cannot enumerate them, put the full supported range in "date" rather than only the first date.
 - Include the year if shown; otherwise infer it from the post timestamp (events are at/after the post date) and write "DD.MM.YYYY" when confident, else "DD.MM".
 - If a row shows a weekday beside its date they must agree (sreda=Wed, petak=Fri, subota=Sat, nedelja=Sun, …; EN WED/FRI/SAT/SUN). If they disagree, trust the numeric date.
 

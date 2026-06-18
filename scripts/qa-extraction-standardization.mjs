@@ -41,6 +41,20 @@ const MONTH_ABBRS = [
   "nov",
   "dec",
 ];
+const SERBIAN_MONTH_GENITIVES = [
+  "januara",
+  "februara",
+  "marta",
+  "aprila",
+  "maja",
+  "juna",
+  "jula",
+  "avgusta",
+  "septembra",
+  "oktobra",
+  "novembra",
+  "decembra",
+];
 
 function isoDateDaysFromNow(offsetDays) {
   const date = new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000);
@@ -52,6 +66,7 @@ function datePartsForIsoDate(isoDate) {
   return {
     day: date.getUTCDate(),
     monthAbbr: MONTH_ABBRS[date.getUTCMonth()],
+    serbianMonthGenitive: SERBIAN_MONTH_GENITIVES[date.getUTCMonth()],
   };
 }
 
@@ -95,6 +110,18 @@ function consecutiveIsoDatesAvoidingDay(dayToAvoid, firstWeekday = null) {
   }
 
   throw new Error(`Could not find consecutive QA dates avoiding day ${dayToAvoid}.`);
+}
+
+function futureSameMonthIsoDateRange(length, minOffsetDays = 7) {
+  for (let offsetDays = minOffsetDays; offsetDays < minOffsetDays + 120; offsetDays += 1) {
+    const dates = Array.from({ length }, (_, index) => isoDateDaysFromNow(offsetDays + index));
+    const firstMonth = dates[0].slice(0, 7);
+    if (dates.every((isoDate) => isoDate.startsWith(firstMonth))) {
+      return dates;
+    }
+  }
+
+  throw new Error(`Could not find a future ${length}-day range inside one month.`);
 }
 
 function makeInstagramPost(overrides = {}) {
@@ -189,6 +216,11 @@ function runPromptQa() {
     EVENT_EXTRACTION_SYSTEM_PROMPT,
     /DD\.MM" IS A DATE, NEVER A TIME/i,
     "Prompt must keep European dates out of time fields.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /svake večeri od 11\. do 17\. juna/i,
+    "Prompt must treat Serbian od-do daily ranges as one occurrence per date.",
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
@@ -465,6 +497,46 @@ function runCaptionDateRangeQa() {
   assert.deepEqual(events.map((event) => event.date), [firstIsoDate, secondIsoDate]);
   assert.deepEqual(events.map((event) => event.time), ["12:00-00:00", "10:00-21:00"]);
   assert.equal(events.some((event) => event.date.endsWith("-10")), false);
+
+  const dailyRangeDates = futureSameMonthIsoDateRange(7, 10);
+  const dailyRangeStart = datePartsForIsoDate(dailyRangeDates[0]);
+  const dailyRangeEnd = datePartsForIsoDate(dailyRangeDates[dailyRangeDates.length - 1]);
+  const dailyRangeCaption = [
+    "Bioskop Akademije 28",
+    "BROKEN ENGLISH",
+    `Svake večeri od ${dailyRangeStart.day}. do ${dailyRangeEnd.day}. ${dailyRangeStart.serbianMonthGenitive} u 19h`,
+  ].join("\n");
+  const dailyRangePrepared = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: dailyRangeCaption,
+      postType: "video",
+      username: "akademija28",
+    }),
+    makeExtractedEvent({
+      title: "BROKEN ENGLISH",
+      date: "",
+      time: "19:00",
+      venue: "Akademija 28",
+      artists: [],
+      category: "arts & culture",
+      confidence: 0.9,
+      source_caption: dailyRangeCaption,
+      field_confirmation: makeFieldConfirmation(0.9),
+    }),
+    null,
+    {},
+    {},
+    {},
+  );
+  const dailyRangeEvents = dailyRangePrepared
+    .filter((result) => result.kind === "ok")
+    .map((result) => result.event);
+  assert.deepEqual(dailyRangeEvents.map((event) => event.date), dailyRangeDates);
+  assert.deepEqual(
+    dailyRangeEvents.map((event) => event.time),
+    dailyRangeDates.map(() => "19:00"),
+  );
+  assert.equal(new Set(dailyRangeEvents.map((event) => event.venue)).size, 1);
 }
 
 function runScheduleConsistencyQa() {
