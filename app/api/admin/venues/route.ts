@@ -4,6 +4,12 @@ import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { hasClerkEnv } from "@/lib/utils/env";
 import { canonicalizeVenueCategory } from "@/lib/taxonomy/venue-types";
+import {
+  createEmptyVenueHoursJson,
+  serializeVenueHoursJson,
+  BELGRADE_TIMEZONE,
+} from "@/lib/venues/venue-hours-cache";
+import { createManualVenueHoursPatch } from "@/lib/venues/venue-hours-fetcher";
 
 type VenueRecord = {
   _id: string;
@@ -41,6 +47,8 @@ type UpdateVenueBody = {
     category?: string;
     location?: string;
     isActive?: boolean;
+    clearVenueHours?: boolean;
+    manualOpeningHours?: string;
   };
 };
 
@@ -53,6 +61,8 @@ const createVenueMutation =
   "venues:createVenue" as unknown as FunctionReference<"mutation">;
 const updateVenueMutation =
   "venues:updateVenue" as unknown as FunctionReference<"mutation">;
+const patchVenueHoursMutation =
+  "venues:patchVenueHours" as unknown as FunctionReference<"mutation">;
 const removeVenueMutation =
   "venues:removeVenue" as unknown as FunctionReference<"mutation">;
 
@@ -62,6 +72,26 @@ function getConvexClient() {
     throw new Error("NEXT_PUBLIC_CONVEX_URL is not configured.");
   }
   return new ConvexHttpClient(convexUrl);
+}
+
+function createClearVenueHoursPatch(now = Date.now()) {
+  const generatedAt = new Date(now).toISOString();
+  return {
+    googlePlaceId: "",
+    hoursError: "",
+    hoursExpiresAt: 0,
+    hoursFetchedAt: 0,
+    hoursJson: serializeVenueHoursJson(
+      createEmptyVenueHoursJson({
+        generatedAt,
+        source: "none",
+      }),
+    ),
+    hoursSource: "none" as const,
+    hoursTimezone: BELGRADE_TIMEZONE,
+    osmElementId: "",
+    osmElementType: "",
+  };
 }
 
 async function ensureAuthorized() {
@@ -172,19 +202,58 @@ export async function PATCH(request: Request) {
     );
   }
 
+  const manualOpeningHours = body.patch.manualOpeningHours?.trim();
+  let hoursPatch:
+    | ReturnType<typeof createClearVenueHoursPatch>
+    | ReturnType<typeof createManualVenueHoursPatch>
+    | null = null;
+  if (manualOpeningHours) {
+    try {
+      hoursPatch = createManualVenueHoursPatch(manualOpeningHours);
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error
+              ? `Invalid manual opening_hours: ${error.message}`
+              : "Invalid manual opening_hours.",
+        },
+        { status: 400 },
+      );
+    }
+  } else if (body.patch.clearVenueHours === true) {
+    hoursPatch = createClearVenueHoursPatch();
+  }
+
   try {
     const convex = getConvexClient();
-    const patch = {
-      ...body.patch,
+    const venuePatch = {
+      ...(body.patch.name !== undefined ? { name: body.patch.name } : {}),
+      ...(body.patch.instagramHandle !== undefined
+        ? { instagramHandle: body.patch.instagramHandle }
+        : {}),
+      ...(body.patch.category !== undefined ? { category: body.patch.category } : {}),
+      ...(body.patch.location !== undefined ? { location: body.patch.location } : {}),
+      ...(body.patch.isActive !== undefined ? { isActive: body.patch.isActive } : {}),
       ...(body.patch.category !== undefined
         ? { category: canonicalizeVenueCategory(body.patch.category) }
         : {}),
     };
 
-    await convex.mutation(updateVenueMutation, {
-      id: body.id,
-      patch,
-    });
+    if (Object.keys(venuePatch).length > 0) {
+      await convex.mutation(updateVenueMutation, {
+        id: body.id,
+        patch: venuePatch,
+      });
+    }
+
+    if (hoursPatch) {
+      await convex.mutation(patchVenueHoursMutation, {
+        id: body.id,
+        patch: hoursPatch,
+      });
+    }
+
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json(

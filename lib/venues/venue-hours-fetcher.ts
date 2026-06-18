@@ -26,11 +26,6 @@ const BELGRADE_CENTER = {
 const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
 const OVERPASS_USER_AGENT = "ig-event venue-hours refresh";
 const OVERPASS_NAME_TAGS = ["name", "name:en", "name:sr", "alt_name"] as const;
-const GOOGLE_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText";
-const GOOGLE_PLACE_DETAILS_URL = "https://places.googleapis.com/v1/places";
-const GOOGLE_TEXT_SEARCH_FIELD_MASK = "places.id,places.name,places.displayName,places.formattedAddress";
-const GOOGLE_PLACE_DETAILS_FIELD_MASK =
-  "regularOpeningHours,currentOpeningHours,timeZone";
 
 type FetchLike = typeof fetch;
 
@@ -55,8 +50,6 @@ export type VenueHoursPatch = {
 
 export type VenueHoursRefreshOptions = {
   force?: boolean;
-  googleApiKey?: string;
-  googleFetch?: FetchLike;
   now?: number;
   overpassFetch?: FetchLike;
 };
@@ -70,37 +63,7 @@ type OverpassElement = {
   type: "node" | "way" | "relation";
 };
 
-type GooglePlaceSummary = {
-  displayName?: { text?: string };
-  formattedAddress?: string;
-  id?: string;
-  name?: string;
-};
-
-type GoogleOpeningPoint = {
-  day?: number;
-  hour?: number;
-  minute?: number;
-};
-
-type GoogleOpeningPeriod = {
-  close?: GoogleOpeningPoint;
-  open?: GoogleOpeningPoint;
-};
-
-type GoogleOpeningHours = {
-  periods?: GoogleOpeningPeriod[];
-  weekdayDescriptions?: string[];
-};
-
-type GooglePlaceDetails = {
-  currentOpeningHours?: GoogleOpeningHours;
-  regularOpeningHours?: GoogleOpeningHours;
-  timeZone?: string | { id?: string };
-};
-
 type ProviderResult = {
-  googlePlaceId?: string;
   hoursJson: VenueHoursJson;
   osmElementId?: string;
   osmElementType?: string;
@@ -114,22 +77,8 @@ function formatTimeLabel(date: Date): string {
   )}`;
 }
 
-function formatGoogleTime(point: GoogleOpeningPoint | undefined, fallback = "00:00"): string {
-  if (!point || !Number.isInteger(point.hour) || !Number.isInteger(point.minute)) {
-    return fallback;
-  }
-
-  const hour = Math.max(0, Math.min(23, point.hour ?? 0));
-  const minute = Math.max(0, Math.min(59, point.minute ?? 0));
-  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isGoogleWeekday(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 6;
 }
 
 function createWeekSkeleton(): VenueHoursDay[] {
@@ -182,6 +131,7 @@ export function normalizeOsmOpeningHours(
     generatedAt?: string;
     referenceDate?: Date;
     raw?: Record<string, unknown>;
+    source?: Extract<VenueHoursSource, "manual" | "osm">;
   } = {},
 ): VenueHoursJson {
   const referenceDate = options.referenceDate ?? new Date();
@@ -233,65 +183,7 @@ export function normalizeOsmOpeningHours(
       warnings: openingHours.getWarnings(),
       ...options.raw,
     },
-    source: "osm",
-    weekly: sortWeeklyWindows(weekly),
-  });
-}
-
-function normalizeGoogleOpeningHours(
-  details: GooglePlaceDetails,
-  options: {
-    generatedAt?: string;
-    placeSummary?: GooglePlaceSummary;
-  } = {},
-): VenueHoursJson | null {
-  const hours = details.currentOpeningHours ?? details.regularOpeningHours;
-  if (!hours || !Array.isArray(hours.periods) || hours.periods.length === 0) {
-    return null;
-  }
-
-  const periods = hours.periods;
-  const weekly = createWeekSkeleton();
-  for (const period of periods) {
-    const openDay = period.open?.day;
-    if (!isGoogleWeekday(openDay)) {
-      continue;
-    }
-
-    const start = formatGoogleTime(period.open);
-    const end = formatGoogleTime(period.close, "23:59");
-    const closeDay = period.close?.day;
-    const window: VenueHoursWindow = {
-      day: openDay,
-      end,
-      ...(Number.isInteger(closeDay) && closeDay !== openDay ? { spansNextDay: true } : {}),
-      start,
-    };
-    weekly[openDay].windows.push(window);
-    weekly[openDay].closed = false;
-  }
-
-  const hasWindows = weekly.some((day) => day.windows.length > 0);
-  if (!hasWindows) {
-    return null;
-  }
-
-  const timezone =
-    typeof details.timeZone === "string"
-      ? details.timeZone
-      : details.timeZone?.id ?? BELGRADE_TIMEZONE;
-
-  return buildVenueHoursJson({
-    generatedAt: options.generatedAt ?? new Date().toISOString(),
-    raw: {
-      currentOpeningHours: Boolean(details.currentOpeningHours),
-      formattedAddress: options.placeSummary?.formattedAddress,
-      googleName: options.placeSummary?.displayName?.text ?? options.placeSummary?.name,
-      regularOpeningHours: Boolean(details.regularOpeningHours),
-      weekdayDescriptions: hours.weekdayDescriptions?.slice(0, 7),
-    },
-    source: "google",
-    timezone,
+    source: options.source ?? "osm",
     weekly: sortWeeklyWindows(weekly),
   });
 }
@@ -449,72 +341,13 @@ async function fetchOsmHours(
   };
 }
 
-function getGooglePlaceId(place: GooglePlaceSummary): string | undefined {
-  return place.id ?? place.name?.replace(/^places\//, "");
-}
-
-async function fetchGoogleHours(
-  venue: VenueForHoursRefresh,
-  options: Required<Pick<VenueHoursRefreshOptions, "googleFetch" | "googleApiKey">> & {
-    generatedAt: string;
-  },
-): Promise<ProviderResult | null> {
-  const textSearchResponse = await options.googleFetch(GOOGLE_TEXT_SEARCH_URL, {
-    body: JSON.stringify({
-      languageCode: "en",
-      textQuery: `${venue.name} Belgrade`,
-    }),
-    headers: {
-      "content-type": "application/json",
-      "x-goog-api-key": options.googleApiKey,
-      "x-goog-fieldmask": GOOGLE_TEXT_SEARCH_FIELD_MASK,
-    },
-    method: "POST",
-  });
-  const textSearchData = await readJsonResponse(textSearchResponse, "google_text_search");
-  const places = isRecord(textSearchData) && Array.isArray(textSearchData.places)
-    ? textSearchData.places
-    : [];
-  const place = places.find((candidate): candidate is GooglePlaceSummary => isRecord(candidate));
-  const placeId = place ? getGooglePlaceId(place) : undefined;
-  if (!placeId) {
-    return null;
-  }
-
-  const detailsResponse = await options.googleFetch(
-    `${GOOGLE_PLACE_DETAILS_URL}/${encodeURIComponent(placeId)}`,
-    {
-      headers: {
-        "x-goog-api-key": options.googleApiKey,
-        "x-goog-fieldmask": GOOGLE_PLACE_DETAILS_FIELD_MASK,
-      },
-      method: "GET",
-    },
-  );
-  const detailsData = await readJsonResponse(detailsResponse, "google_place_details");
-  const details = isRecord(detailsData) ? (detailsData as GooglePlaceDetails) : {};
-  const hoursJson = normalizeGoogleOpeningHours(details, {
-    generatedAt: options.generatedAt,
-    placeSummary: place,
-  });
-  if (!hoursJson) {
-    return null;
-  }
-
-  return {
-    googlePlaceId: placeId,
-    hoursJson,
-    source: "google",
-  };
-}
-
 function createPatchFromProviderResult(
   result: ProviderResult,
   now: number,
   error = "",
 ): VenueHoursPatch {
   return {
-    googlePlaceId: result.googlePlaceId ?? "",
+    googlePlaceId: "",
     hoursError: error,
     hoursExpiresAt: now + VENUE_HOURS_CACHE_TTL_MS,
     hoursFetchedAt: now,
@@ -541,6 +374,20 @@ function createNonePatch(error: string, now: number): VenueHoursPatch {
   };
 }
 
+export function createManualVenueHoursPatch(
+  openingHoursValue: string,
+  now = Date.now(),
+): VenueHoursPatch {
+  const generatedAt = new Date(now).toISOString();
+  const hoursJson = normalizeOsmOpeningHours(openingHoursValue, {
+    generatedAt,
+    raw: { manual: true },
+    source: "manual",
+  });
+
+  return createPatchFromProviderResult({ hoursJson, source: "manual" }, now);
+}
+
 export async function fetchVenueHoursPatch(
   venue: VenueForHoursRefresh,
   options: VenueHoursRefreshOptions = {},
@@ -552,8 +399,6 @@ export async function fetchVenueHoursPatch(
 
   const generatedAt = new Date(now).toISOString();
   const overpassFetch = options.overpassFetch ?? fetch;
-  const googleFetch = options.googleFetch ?? fetch;
-  const googleApiKey = options.googleApiKey ?? process.env.GOOGLE_PLACES_API_KEY?.trim();
   const errors: string[] = [];
   let providerError = false;
 
@@ -566,29 +411,6 @@ export async function fetchVenueHoursPatch(
   } catch (error) {
     providerError = true;
     errors.push(error instanceof Error ? `osm_error:${error.message}` : "osm_error");
-  }
-
-  if (!googleApiKey) {
-    errors.push("google_api_key_missing");
-    if (providerError) {
-      throw new Error(errors.join(";"));
-    }
-    return createNonePatch(errors.join(";"), now);
-  }
-
-  try {
-    const googleResult = await fetchGoogleHours(venue, {
-      generatedAt,
-      googleApiKey,
-      googleFetch,
-    });
-    if (googleResult) {
-      return createPatchFromProviderResult(googleResult, now, errors.join(";"));
-    }
-    errors.push("google_no_match_or_no_hours");
-  } catch (error) {
-    providerError = true;
-    errors.push(error instanceof Error ? `google_error:${error.message}` : "google_error");
   }
 
   if (providerError) {

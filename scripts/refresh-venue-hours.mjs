@@ -17,7 +17,7 @@ function usage() {
   return [
     "Usage: npm run repair:venue-hours -- [--apply] [--force] [--limit N] [--delay-ms N]",
     "",
-    "Dry-run is the default. Fetches OSM-first venue hours and stores them only with --apply.",
+    "Dry-run is the default. Fetches OSM venue hours and stores them only with --apply.",
   ].join("\n");
 }
 

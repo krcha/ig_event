@@ -12,6 +12,11 @@ type Venue = {
   instagramHandle: string;
   category: string;
   location: string | null;
+  hoursSource: "google" | "manual" | "none" | "osm" | null;
+  hoursJson: string | null;
+  hoursFetchedAt: number | null;
+  hoursExpiresAt: number | null;
+  hoursError: string | null;
   isActive: boolean;
   createdAt: number;
   updatedAt: number;
@@ -40,6 +45,7 @@ type VenueFormState = {
   instagramHandle: string;
   category: string;
   location: string;
+  manualOpeningHours: string;
 };
 
 type VenueStatusFilter = "all" | "active" | "inactive";
@@ -50,6 +56,7 @@ const EMPTY_FORM: VenueFormState = {
   instagramHandle: "",
   category: DEFAULT_VENUE_CATEGORY,
   location: "",
+  manualOpeningHours: "",
 };
 
 function VenueCategorySelect({
@@ -80,6 +87,39 @@ function normalizeHandleInput(value: string): string {
 
 function formatDateTime(value: number): string {
   return new Date(value).toLocaleString();
+}
+
+function formatOptionalDateTime(value: number | null): string | null {
+  return value ? formatDateTime(value) : null;
+}
+
+function getManualOpeningHoursInput(venue: Venue): string {
+  if (venue.hoursSource !== "manual" || !venue.hoursJson) {
+    return "";
+  }
+
+  try {
+    const parsed = JSON.parse(venue.hoursJson) as { raw?: { opening_hours?: unknown } };
+    return typeof parsed.raw?.opening_hours === "string" ? parsed.raw.opening_hours : "";
+  } catch {
+    return "";
+  }
+}
+
+function getVenueHoursLabel(venue: Venue): string {
+  if (venue.hoursSource === "manual") {
+    return "Manual hours";
+  }
+  if (venue.hoursSource === "osm") {
+    return "OSM hours";
+  }
+  if (venue.hoursSource === "none") {
+    return "No OSM hours";
+  }
+  if (venue.hoursSource === "google") {
+    return "Google hours";
+  }
+  return "Hours missing";
 }
 
 function searchableText(value: string): string {
@@ -202,6 +242,7 @@ export function VenueManager() {
       instagramHandle: venue.instagramHandle,
       category: venue.category,
       location: venue.location ?? "",
+      manualOpeningHours: getManualOpeningHoursInput(venue),
     });
   }
 
@@ -224,6 +265,9 @@ export function VenueManager() {
             instagramHandle: normalizeHandleInput(editForm.instagramHandle),
             category: editForm.category.trim(),
             location: editForm.location.trim() || undefined,
+            ...(editForm.manualOpeningHours.trim()
+              ? { manualOpeningHours: editForm.manualOpeningHours.trim() }
+              : {}),
           },
         }),
       });
@@ -264,6 +308,36 @@ export function VenueManager() {
     } catch (caughtError) {
       setError(
         caughtError instanceof Error ? caughtError.message : "Unknown update venue error.",
+      );
+    } finally {
+      setBusyVenueId(null);
+    }
+  }
+
+  async function clearVenueHours(venue: Venue) {
+    setBusyVenueId(venue.id);
+    setError(null);
+    try {
+      const response = await fetch("/api/admin/venues", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          id: venue.id,
+          patch: {
+            clearVenueHours: true,
+          },
+        }),
+      });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to clear venue hours.");
+      }
+      await loadVenues();
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unknown clear venue hours error.",
       );
     } finally {
       setBusyVenueId(null);
@@ -316,7 +390,13 @@ export function VenueManager() {
         return true;
       }
       const haystack = searchableText(
-        [venue.name, venue.instagramHandle, venue.category, venue.location ?? ""].join(" "),
+        [
+          venue.name,
+          venue.instagramHandle,
+          venue.category,
+          venue.location ?? "",
+          venue.hoursSource ?? "",
+        ].join(" "),
       );
       return haystack.includes(query);
     });
@@ -568,6 +648,17 @@ export function VenueManager() {
                         placeholder="Location"
                         value={editForm.location}
                       />
+                      <input
+                        className="rounded-xl border border-input bg-background px-3 py-2 text-sm md:col-span-2"
+                        onChange={(event) =>
+                          setEditForm((current) => ({
+                            ...current,
+                            manualOpeningHours: event.target.value,
+                          }))
+                        }
+                        placeholder="Manual opening_hours, e.g. Mo-Su 18:00-02:00"
+                        value={editForm.manualOpeningHours}
+                      />
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <button
@@ -604,10 +695,17 @@ export function VenueManager() {
                         <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                           {venue.category}
                         </span>
+                        <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          {getVenueHoursLabel(venue)}
+                        </span>
                       </div>
                       <div className="space-y-1 text-sm text-muted-foreground">
                         <p>@{venue.instagramHandle}</p>
                         {venue.location ? <p>{venue.location}</p> : null}
+                        {formatOptionalDateTime(venue.hoursFetchedAt) ? (
+                          <p>Hours checked {formatOptionalDateTime(venue.hoursFetchedAt)}</p>
+                        ) : null}
+                        {venue.hoursError ? <p>{venue.hoursError}</p> : null}
                         <p>Updated {formatDateTime(venue.updatedAt)}</p>
                       </div>
                     </div>
@@ -628,6 +726,16 @@ export function VenueManager() {
                       >
                         Edit
                       </button>
+                      {venue.hoursSource && venue.hoursSource !== "none" ? (
+                        <button
+                          className="rounded-xl border border-border px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={isBusy}
+                          onClick={() => void clearVenueHours(venue)}
+                          type="button"
+                        >
+                          Clear hours
+                        </button>
+                      ) : null}
                       <button
                         className="rounded-xl border border-border px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
                         disabled={isBusy}

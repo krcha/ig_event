@@ -9,6 +9,7 @@ import {
   serializeVenueHoursJson,
 } from "../lib/venues/venue-hours-cache.ts";
 import {
+  createManualVenueHoursPatch,
   fetchVenueHoursPatch,
   normalizeOsmOpeningHours,
 } from "../lib/venues/venue-hours-fetcher.ts";
@@ -50,45 +51,6 @@ function createOverpassFetch(elements) {
     },
     overpassFetch,
     requests,
-  };
-}
-
-function createGoogleFetch() {
-  const urls = [];
-  const googleFetch = async (url) => {
-    urls.push(String(url));
-    if (String(url).includes("places:searchText")) {
-      return jsonResponse({
-        places: [
-          {
-            displayName: { text: "Drugstore" },
-            formattedAddress: "Bulevar despota Stefana, Belgrade",
-            id: "google-drugstore",
-            name: "places/google-drugstore",
-          },
-        ],
-      });
-    }
-
-    return jsonResponse({
-      regularOpeningHours: {
-        periods: [
-          {
-            close: { day: 4, hour: 2, minute: 0 },
-            open: { day: 3, hour: 18, minute: 0 },
-          },
-        ],
-      },
-      timeZone: { id: BELGRADE_TIMEZONE },
-    });
-  };
-
-  return {
-    get calls() {
-      return urls.length;
-    },
-    googleFetch,
-    urls,
   };
 }
 
@@ -214,12 +176,9 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
       type: "node",
     },
   ]);
-  const google = createGoogleFetch();
   const patch = await fetchVenueHoursPatch(
     { name: "Drugstore" },
     {
-      googleApiKey: "test-key",
-      googleFetch: google.googleFetch,
       now: NOW,
       overpassFetch: overpass.overpassFetch,
     },
@@ -231,7 +190,6 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
     "ig-event venue-hours refresh",
     "Overpass requests should include an explicit User-Agent.",
   );
-  assert.equal(google.calls, 0, "OSM hit should not call Google.");
 }
 
 {
@@ -239,7 +197,6 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
   const patch = await fetchVenueHoursPatch(
     { name: "\"Jedno Mesto\"" },
     {
-      googleApiKey: "",
       now: NOW,
       overpassFetch: overpass.overpassFetch,
     },
@@ -260,7 +217,6 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
     fetchVenueHoursPatch(
       { name: "Rate Limited Venue" },
       {
-        googleApiKey: "",
         now: NOW,
         overpassFetch,
       },
@@ -272,40 +228,29 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
 
 {
   const overpass = createOverpassFetch([]);
-  const google = createGoogleFetch();
   const patch = await fetchVenueHoursPatch(
     { name: "Drugstore" },
     {
-      googleApiKey: "test-key",
-      googleFetch: google.googleFetch,
       now: NOW,
       overpassFetch: overpass.overpassFetch,
     },
   );
-  assert.equal(patch?.hoursSource, "google", "OSM miss should fall back to Google.");
-  assert.equal(overpass.calls, 1, "OSM miss should still call Overpass once.");
-  assert.equal(google.calls, 2, "Google fallback should call Text Search and Place Details.");
-  assert.ok(
-    google.urls[0].includes("places:searchText") && google.urls[1].includes("google-drugstore"),
-    "Google fallback should fetch Place ID, then Place Details for that ID.",
-  );
+  assert.equal(patch?.hoursSource, "none", "OSM miss should store a no-match result only.");
+  assert.equal(patch?.googlePlaceId, "", "Automatic venue-hour storage must not persist Google data.");
+  assert.equal(overpass.calls, 1, "OSM miss should call Overpass once.");
 }
 
 {
   const overpass = createOverpassFetch([]);
-  const google = createGoogleFetch();
   const patch = await fetchVenueHoursPatch(
     { hoursExpiresAt: NOW + 1_000, name: "Fresh Venue" },
     {
-      googleApiKey: "test-key",
-      googleFetch: google.googleFetch,
       now: NOW,
       overpassFetch: overpass.overpassFetch,
     },
   );
   assert.equal(patch, null, "Fresh cache should skip provider calls.");
   assert.equal(overpass.calls, 0);
-  assert.equal(google.calls, 0);
 }
 
 {
@@ -319,7 +264,6 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
   const patch = await fetchVenueHoursPatch(
     { hoursExpiresAt: NOW - 1, name: "Expired Venue" },
     {
-      googleApiKey: "test-key",
       now: NOW,
       overpassFetch: overpass.overpassFetch,
     },
@@ -327,6 +271,16 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
   assert.equal(patch?.hoursSource, "osm", "Expired cache should refresh from providers.");
   assert.equal(patch?.hoursFetchedAt, NOW, "Refresh patch should carry the fetch timestamp.");
   assert.equal(patch?.osmElementId, "202");
+}
+
+{
+  const patch = createManualVenueHoursPatch("Mo-Su 18:00-02:00", NOW);
+  const hoursJson = JSON.parse(patch.hoursJson);
+  assert.equal(patch.hoursSource, "manual", "Manual hours should be stored with manual source.");
+  assert.equal(hoursJson.source, "manual", "Manual hours JSON should keep manual provenance.");
+  assert.equal(hoursJson.weekly[3].windows[0].start, "18:00");
+  assert.equal(hoursJson.weekly[3].windows[0].end, "02:00");
+  assert.equal(patch.googlePlaceId, "", "Manual hours must not persist Google place IDs.");
 }
 
 {
