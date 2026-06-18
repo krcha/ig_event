@@ -40,6 +40,11 @@ import {
   runApprovedEventAutoMerge,
   type ApprovedEventAutoMergeSummary,
 } from "@/lib/events/approved-event-automerge";
+import {
+  checkEventConsistency,
+  findNamedWeekday,
+  sanitizeTimeAgainstDate,
+} from "@/lib/events/event-validation";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 import {
   areCompatibleTitleFamilySlugs,
@@ -981,6 +986,9 @@ function isLikelyCaptionContextTitle(value: string): boolean {
   if (!normalized || normalized.length > 80) {
     return false;
   }
+  if (findNamedWeekday(normalized) !== null) {
+    return false;
+  }
   if (collectDateCandidates(normalized, "caption", null).length > 0) {
     return false;
   }
@@ -1047,6 +1055,14 @@ function buildSplitEventSourceLine(parts: Array<string | null | undefined>): str
     .join(" | ");
 }
 
+function buildWeekdayEvidence(parts: Array<string | string[] | null | undefined>): string {
+  return parts
+    .flatMap((part) => (Array.isArray(part) ? part : [part]))
+    .map((part) => normalizeString(part))
+    .filter((part) => part.length > 0)
+    .join(" ");
+}
+
 function formatHourAsTime(value: string): string {
   return `${value.padStart(2, "0")}:00`;
 }
@@ -1067,6 +1083,10 @@ function extractSplitEntryTime(value: string): string | undefined {
     return undefined;
   }
 
+  if (!sanitizeTimeAgainstDate(match[1])) {
+    return undefined;
+  }
+
   return match[1].replace(".", ":");
 }
 
@@ -1083,13 +1103,13 @@ function extractModelSplitEventCandidates(
   post: InstagramScrapedPost,
   extracted: ExtractedEventData,
 ): SplitEventCandidate[] {
-  const textEvidence = buildPostTextEvidence(post, extracted);
   if (extracted.schedule_entries.length === 0) {
     return [];
   }
 
   const entries: SplitEventCandidate[] = [];
   const seenEntries = new Set<string>();
+  const rawResolvedDates = new Set<string>();
 
   for (const scheduleEntry of extracted.schedule_entries) {
     const rawDate = normalizeString(scheduleEntry.date);
@@ -1100,18 +1120,30 @@ function extractModelSplitEventCandidates(
       continue;
     }
 
-    const normalizedDate = normalizeEventDate(rawDate, textEvidence, post.postedAt);
+    const description = normalizeExtractedDescription(scheduleEntry.description);
+    const rawTime = normalizeString(scheduleEntry.time);
+    const sourceLine =
+      normalizeString(scheduleEntry.source_text) ||
+      buildSplitEventSourceLine([rawDate, rawTitle, rawTime, description]);
+    const normalizedDate = normalizeEventDate(rawDate, sourceLine || rawDate, post.postedAt);
+    if (normalizedDate.isoDate) {
+      rawResolvedDates.add(normalizedDate.isoDate);
+    }
+    const consistency = checkEventConsistency({
+      isoDate: normalizedDate.isoDate,
+      rawDateText: rawDate,
+      time: rawTime,
+      weekdayEvidence: buildWeekdayEvidence([lineTitle, sourceLine, normalizedArtists]),
+    });
+    if (consistency.action === "reject") {
+      continue;
+    }
+    const time = consistency.sanitizedTime;
     const dedupeKey = `${normalizedDate.isoDate ?? rawDate}:${toSearchableText(lineTitle)}`;
     if (seenEntries.has(dedupeKey)) {
       continue;
     }
     seenEntries.add(dedupeKey);
-
-    const description = normalizeExtractedDescription(scheduleEntry.description);
-    const time = normalizeString(scheduleEntry.time);
-    const sourceLine =
-      normalizeString(scheduleEntry.source_text) ||
-      buildSplitEventSourceLine([rawDate, rawTitle, time, description]);
 
     entries.push({
       rawDate,
@@ -1126,7 +1158,7 @@ function extractModelSplitEventCandidates(
     });
   }
 
-  return hasMultipleResolvedSplitDates(entries) ? entries : [];
+  return hasMultipleResolvedSplitDates(entries) || rawResolvedDates.size >= 2 ? entries : [];
 }
 
 function extractCaptionSplitEventCandidates(
@@ -1141,7 +1173,7 @@ function extractCaptionSplitEventCandidates(
   const entries: SplitEventCandidate[] = [];
   const seenEntries = new Set<string>();
   const postDate = parsePostedAt(post.postedAt);
-  let previousContextTitle = cleanSplitCaptionEntryText(extracted.title);
+  let previousContextTitle = "";
 
   for (const rawLine of captionText.split(/\r?\n/)) {
     const line = normalizeString(rawLine);
@@ -1154,7 +1186,7 @@ function extractCaptionSplitEventCandidates(
     );
 
     const normalizedDate = explicitScheduleMatch
-      ? normalizeEventDate(normalizeString(explicitScheduleMatch[1]), captionText, post.postedAt)
+      ? normalizeEventDate(normalizeString(explicitScheduleMatch[1]), line, post.postedAt)
       : normalizeEventDate(line, line, post.postedAt);
     const rawDate = explicitScheduleMatch
       ? normalizeString(explicitScheduleMatch[1])
@@ -1170,16 +1202,23 @@ function extractCaptionSplitEventCandidates(
       continue;
     }
 
-    const time = extractSplitEntryTime(line);
+    const rawTime = extractSplitEntryTime(line);
+    const time = sanitizeTimeAgainstDate(rawTime, rawDate);
     const rawTitle = explicitScheduleMatch
       ? explicitScheduleMatch[2] ?? ""
       : stripSplitEntryTime(stripSplitEntryDateText(line, rawDate));
-    const lineTitle =
-      cleanSplitCaptionEntryText(rawTitle) ||
-      previousContextTitle ||
-      cleanSplitCaptionEntryText(extracted.title) ||
-      cleanSplitCaptionEntryText(extracted.venue);
+    const lineTitle = cleanSplitCaptionEntryText(rawTitle) || previousContextTitle;
     if (!lineTitle) {
+      continue;
+    }
+
+    const consistency = checkEventConsistency({
+      isoDate: normalizedDate.isoDate,
+      rawDateText: rawDate,
+      time,
+      weekdayEvidence: buildWeekdayEvidence([lineTitle, line]),
+    });
+    if (consistency.action === "reject") {
       continue;
     }
 
@@ -1194,7 +1233,7 @@ function extractCaptionSplitEventCandidates(
       normalizedDate,
       lineTitle,
       artists: parseSplitCaptionEntryArtists(lineTitle),
-      ...(time ? { time } : {}),
+      ...(consistency.sanitizedTime ? { time: consistency.sanitizedTime } : {}),
       sourceLine: line,
       source: "caption_schedule",
     });
@@ -1205,7 +1244,6 @@ function extractCaptionSplitEventCandidates(
 
 function extractAltTextSplitEventCandidates(
   post: InstagramScrapedPost,
-  extracted: ExtractedEventData,
 ): SplitEventCandidate[] {
   const altText = extractPostAltTextEvidence(post.altText);
   if (!altText) {
@@ -1222,7 +1260,6 @@ function extractAltTextSplitEventCandidates(
 
   const entries: SplitEventCandidate[] = [];
   const seenEntries = new Set<string>();
-  const textEvidence = buildPostTextEvidence(post, extracted);
 
   for (const [index, match] of dateMatches.entries()) {
     const rawDate = normalizeString(match[1]);
@@ -1233,13 +1270,24 @@ function extractAltTextSplitEventCandidates(
       .replace(/^[\s•·|:\-–—]+/u, "")
       .replace(/\b\d{6,}\b.*$/u, "")
       .trim();
-    const time = extractSplitEntryTime(rawSegment);
+    const rawTime = extractSplitEntryTime(rawSegment);
+    const time = sanitizeTimeAgainstDate(rawTime, rawDate);
     const lineTitle = cleanSplitCaptionEntryText(stripSplitEntryTime(rawSegment));
     if (!rawDate || !lineTitle) {
       continue;
     }
 
-    const normalizedDate = normalizeEventDate(rawDate, textEvidence, post.postedAt);
+    const sourceLine = buildSplitEventSourceLine([rawDate, lineTitle, time]);
+    const normalizedDate = normalizeEventDate(rawDate, sourceLine || rawSegment, post.postedAt);
+    const consistency = checkEventConsistency({
+      isoDate: normalizedDate.isoDate,
+      rawDateText: rawDate,
+      time,
+      weekdayEvidence: buildWeekdayEvidence([lineTitle, sourceLine]),
+    });
+    if (consistency.action === "reject") {
+      continue;
+    }
     const dedupeKey = `${normalizedDate.isoDate ?? rawDate}:${toSearchableText(lineTitle)}`;
     if (seenEntries.has(dedupeKey)) {
       continue;
@@ -1251,8 +1299,8 @@ function extractAltTextSplitEventCandidates(
       normalizedDate,
       lineTitle,
       artists: parseSplitCaptionEntryArtists(lineTitle),
-      ...(time ? { time } : {}),
-      sourceLine: buildSplitEventSourceLine([rawDate, lineTitle, time]),
+      ...(consistency.sanitizedTime ? { time: consistency.sanitizedTime } : {}),
+      sourceLine,
       source: "alt_text_schedule",
     });
   }
@@ -1265,7 +1313,7 @@ function extractSplitEventCandidates(
   extracted: ExtractedEventData,
 ): SplitEventCandidate[] {
   const modelCandidates = extractModelSplitEventCandidates(post, extracted);
-  if (modelCandidates.length > 1) {
+  if (modelCandidates.length > 0) {
     return modelCandidates;
   }
 
@@ -1274,7 +1322,7 @@ function extractSplitEventCandidates(
     return captionCandidates;
   }
 
-  const altTextCandidates = extractAltTextSplitEventCandidates(post, extracted);
+  const altTextCandidates = extractAltTextSplitEventCandidates(post);
   return altTextCandidates.length > 1 ? altTextCandidates : [];
 }
 
@@ -3141,7 +3189,10 @@ export function prepareEventsForInsert(
 ): PrepareEventResult[] {
   const eventType = canonicalizeEventType(normalizeString(extracted.category));
   const description = normalizeExtractedDescription(extracted.description);
-  const time = normalizeString(extracted.time ?? undefined);
+  const time = sanitizeTimeAgainstDate(
+    normalizeString(extracted.time ?? undefined),
+    normalizeString(extracted.date),
+  );
   const price = normalizeString(extracted.price);
   const currency = normalizeString(extracted.currency);
   const ticketPrice = normalizeTicketPrice(price, currency);
@@ -3177,7 +3228,7 @@ export function prepareEventsForInsert(
         ? [dateNormalization.isoDate]
         : [];
   const splitEventCandidates = extractSplitEventCandidates(post, extracted);
-  const usesSplitEventCandidates = splitEventCandidates.length > 1;
+  const usesSplitEventCandidates = splitEventCandidates.length > 0;
   const extractedArtists = normalizeExtractedArtists(extracted.artists);
   const eventDateFilter = getEventDateFilterContext();
   const isCaptionOnlyVideo = isVideoPostWithoutSelectedImage(post, selectedImageUrl);
@@ -3366,9 +3417,7 @@ export function prepareEventsForInsert(
 
   const eventVariants = usesSplitEventCandidates
     ? splitEventCandidates.map((entry) => {
-        const usesSplitScheduleTitle =
-          entry.lineTitle.length > 0 &&
-          (entry.source !== "caption_schedule" || titleNormalization.usedFallback);
+        const usesSplitScheduleTitle = entry.lineTitle.length > 0;
         const variantArtists =
           entry.artists.length > 0 ? entry.artists : extractedArtists;
         const variantDescription =
@@ -3414,12 +3463,23 @@ export function prepareEventsForInsert(
 
   for (const [index, variant] of eventVariants.entries()) {
     const date = variant.dateNormalization.isoDate;
+    const eventConsistency = checkEventConsistency({
+      isoDate: date,
+      rawDateText: variant.rawDate,
+      time: variant.time,
+      weekdayEvidence: buildWeekdayEvidence([
+        variant.title,
+        variant.splitSourceLine,
+        variant.artists,
+      ]),
+    });
+    const safeTime = eventConsistency.sanitizedTime;
     const moderationDecision = buildModerationDecision({
       baseConfidenceScore: confidence,
       missingImage,
       allowMissingImage: allowMissingImageForModeration,
       titleUsedFallback: variant.titleUsedFallback,
-      missingTime: !variant.time,
+      missingTime: !safeTime,
       suspiciousYear: variant.dateNormalization.suspiciousYear,
       dateConfidence: variant.dateNormalization.confidence,
       hasDate: Boolean(date),
@@ -3430,7 +3490,7 @@ export function prepareEventsForInsert(
     const eventStatus: EventStatus = moderationDecision.autoApproved ? "approved" : "pending";
     const normalizedFields: Record<string, unknown> = {
       ...normalizedFieldsCommon,
-      time: variant.time || null,
+      time: safeTime || null,
       title: variant.title,
       titleSource: variant.titleSource,
       titleUsedFallback: variant.titleUsedFallback,
@@ -3465,6 +3525,7 @@ export function prepareEventsForInsert(
       moderationAutoApproveRule: moderationDecision.autoApproveRule,
       moderationPendingReasons: moderationDecision.pendingReasons,
       moderationSignals: moderationDecision.signals,
+      consistencyIssues: eventConsistency.issues,
       normalizedIsValid: true,
       normalizedInvalidReason: null,
     };
@@ -3480,6 +3541,21 @@ export function prepareEventsForInsert(
           ...normalizedFields,
           normalizedIsValid: false,
           normalizedInvalidReason: "invalid_date",
+        },
+      });
+      continue;
+    }
+
+    if (eventConsistency.action === "reject") {
+      preparedEvents.push({
+        kind: "skip",
+        reason: "invalid_event",
+        normalizedFields: {
+          ...normalizedFields,
+          normalizedIsValid: false,
+          normalizedInvalidReason: eventConsistency.issues.includes("weekday_date_mismatch")
+            ? "weekday_date_mismatch"
+            : "invalid_event",
         },
       });
       continue;
@@ -3530,7 +3606,7 @@ export function prepareEventsForInsert(
       event: {
         title: variant.title,
         date,
-        ...(variant.time ? { time: variant.time } : {}),
+        ...(safeTime ? { time: safeTime } : {}),
         venue: venueNormalization.venue,
         artists: variant.artists,
         ...(variant.description ? { description: variant.description } : {}),

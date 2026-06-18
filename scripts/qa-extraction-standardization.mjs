@@ -17,6 +17,11 @@ import {
   normalizeVenueFromEvidence,
 } from "../lib/pipeline/venue-normalization.ts";
 import { prepareEventsForInsert } from "../lib/pipeline/run-instagram-ingestion.ts";
+import { normalizeEventTime } from "../lib/events/event-time.ts";
+import {
+  checkWeekdayConsistency,
+  looksLikeBareDate,
+} from "../lib/events/event-validation.ts";
 
 const STATIC_VENUE_BY_HANDLE = {
   "20_44.nightclub": "Klub 20/44",
@@ -50,13 +55,36 @@ function datePartsForIsoDate(isoDate) {
   };
 }
 
-function consecutiveIsoDatesAvoidingDay(dayToAvoid) {
+function nextIsoDateForWeekday(weekday, minOffsetDays = 2) {
+  for (let offsetDays = minOffsetDays; offsetDays < minOffsetDays + 120; offsetDays += 1) {
+    const date = new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000);
+    if (date.getUTCDay() === weekday) {
+      return date.toISOString().slice(0, 10);
+    }
+  }
+
+  throw new Error(`Could not find future weekday ${weekday}.`);
+}
+
+function addIsoDays(isoDate, days) {
+  const date = new Date(`${isoDate}T12:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function consecutiveIsoDatesAvoidingDay(dayToAvoid, firstWeekday = null) {
   const avoidedSuffix = `-${String(dayToAvoid).padStart(2, "0")}`;
 
   for (let offsetDays = 2; offsetDays < 40; offsetDays += 1) {
     const firstIsoDate = isoDateDaysFromNow(offsetDays);
     const secondIsoDate = isoDateDaysFromNow(offsetDays + 1);
-    if (!firstIsoDate.endsWith(avoidedSuffix) && !secondIsoDate.endsWith(avoidedSuffix)) {
+    const firstDate = new Date(`${firstIsoDate}T12:00:00.000Z`);
+    const matchesWeekday = firstWeekday === null || firstDate.getUTCDay() === firstWeekday;
+    if (
+      matchesWeekday &&
+      !firstIsoDate.endsWith(avoidedSuffix) &&
+      !secondIsoDate.endsWith(avoidedSuffix)
+    ) {
       return [firstIsoDate, secondIsoDate];
     }
   }
@@ -373,7 +401,7 @@ function runVideoModerationQa() {
 }
 
 function runCaptionDateRangeQa() {
-  const [firstIsoDate, secondIsoDate] = consecutiveIsoDatesAvoidingDay(10);
+  const [firstIsoDate, secondIsoDate] = consecutiveIsoDatesAvoidingDay(10, 6);
   const firstParts = datePartsForIsoDate(firstIsoDate);
   const secondParts = datePartsForIsoDate(secondIsoDate);
   const caption = [
@@ -414,6 +442,119 @@ function runCaptionDateRangeQa() {
   assert.equal(events.some((event) => event.date.endsWith("-10")), false);
 }
 
+function runScheduleConsistencyQa() {
+  assert.equal(looksLikeBareDate("19.06"), true);
+  assert.equal(looksLikeBareDate("19:30"), false);
+  assert.equal(normalizeEventTime("19.06").startLabel, undefined);
+  assert.equal(normalizeEventTime("19.30").startLabel, "19:30");
+
+  const fridayIsoDate = nextIsoDateForWeekday(5);
+  const saturdayIsoDate = addIsoDays(fridayIsoDate, 1);
+  assert.equal(checkWeekdayConsistency(fridayIsoDate, "Wednesday Night").status, "mismatch");
+  assert.equal(checkWeekdayConsistency(saturdayIsoDate, "Saturday Night").status, "ok");
+
+  const sanitizedTimeEvent = assertSingleOkPreparedEvent(
+    prepareEventsForInsert(
+      makeInstagramPost({
+        caption: "Neutral event with a date-like string in the time field.",
+        postType: "image",
+        username: "kucica_na_vodi",
+      }),
+      makeExtractedEvent({
+        title: "Neutral Night",
+        date: fridayIsoDate,
+        time: "19.06",
+        venue: "Kucica",
+        artists: ["Neutral Act"],
+        confidence: 0.95,
+      }),
+      "https://images.example.com/kucica.jpg",
+      {},
+      {},
+      {},
+    ),
+  );
+  const sanitizedFields = readPreparedNormalizedFields(sanitizedTimeEvent);
+  assert.equal(sanitizedTimeEvent.event.time, undefined);
+  assert.equal(sanitizedFields.time, null);
+
+  const mismatchedTopLevel = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: "Wednesday Night | 19.06 - MLADOST",
+      postType: "image",
+      username: "danijelcehranov",
+    }),
+    makeExtractedEvent({
+      title: "danijelcehranov Wednesday Night",
+      date: fridayIsoDate,
+      time: "19.06",
+      venue: "Kucica",
+      artists: ["Night - MLADOST by Kucica na Vodi"],
+      confidence: 0.95,
+    }),
+    "https://images.example.com/kucica.jpg",
+    {},
+    {},
+    {},
+  );
+  assert.equal(mismatchedTopLevel.length, 1);
+  assert.equal(mismatchedTopLevel[0].kind, "skip");
+  assert.equal(mismatchedTopLevel[0].reason, "invalid_event");
+  assert.equal(
+    mismatchedTopLevel[0].normalizedFields.normalizedInvalidReason,
+    "weekday_date_mismatch",
+  );
+
+  const schedulePrepared = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: [
+        "THIS WEEK AT KUCICA NA VODI",
+        `Wednesday Night | ${fridayIsoDate} - MLADOST`,
+        `Saturday Night | ${saturdayIsoDate} - LUDOST`,
+      ].join("\n"),
+      postType: "image",
+      username: "danijelcehranov",
+    }),
+    makeExtractedEvent({
+      title: "danijelcehranov Wednesday Night",
+      date: fridayIsoDate,
+      time: "19.06",
+      venue: "Kucica",
+      artists: ["Night - MLADOST by Kucica na Vodi"],
+      confidence: 0.95,
+      schedule_entries: [
+        {
+          date: fridayIsoDate,
+          time: "19.06",
+          title: "Wednesday Night",
+          artists: ["Night - MLADOST by Kucica na Vodi"],
+          description: "Nightlife event with MLADOST.",
+          source_text: `Wednesday Night | ${fridayIsoDate} - MLADOST`,
+        },
+        {
+          date: saturdayIsoDate,
+          time: "22h",
+          title: "Saturday Night",
+          artists: ["LUDOST"],
+          description: "Nightlife event with LUDOST.",
+          source_text: `Saturday Night | ${saturdayIsoDate} - LUDOST`,
+        },
+      ],
+    }),
+    "https://images.example.com/kucica.jpg",
+    {},
+    {},
+    {},
+  );
+  const scheduleEvents = schedulePrepared
+    .filter((result) => result.kind === "ok")
+    .map((result) => result.event);
+  assert.deepEqual(scheduleEvents.map((event) => event.title), ["Saturday Night"]);
+  assert.deepEqual(scheduleEvents.map((event) => event.date), [saturdayIsoDate]);
+  assert.equal(scheduleEvents.some((event) => /danijelcehranov/i.test(event.title)), false);
+  assert.equal(scheduleEvents.some((event) => event.time === "19:06"), false);
+}
+
 function runTicketPriceQa() {
   for (const { currency, expected, price } of [
     { price: "10€", currency: "EUR", expected: "10€" },
@@ -444,6 +585,7 @@ runArtistAndDescriptionQa();
 runConfidenceQa();
 runVideoModerationQa();
 runCaptionDateRangeQa();
+runScheduleConsistencyQa();
 runTicketPriceQa();
 
-console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, caption date ranges, and ticket prices.");
+console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, caption date ranges, schedule consistency, and ticket prices.");

@@ -3,6 +3,7 @@ import {
   getVenueHoursWindowForDate,
   type VenueHoursCacheFields,
 } from "../venues/venue-hours-cache.ts";
+import { looksLikeBareDate } from "./event-validation.ts";
 
 const MISSING_EVENT_TIME_LABELS = new Set([
   "tba",
@@ -105,6 +106,10 @@ export function normalizeEventTime(value: string | null | undefined): Normalized
 
   const normalizedPlaceholder = normalizeEventTimePlaceholder(trimmed);
   if (MISSING_EVENT_TIME_LABELS.has(normalizedPlaceholder)) {
+    return { allDay: true };
+  }
+
+  if (looksLikeBareDate(trimmed)) {
     return { allDay: true };
   }
 
