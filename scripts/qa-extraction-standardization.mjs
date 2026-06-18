@@ -656,6 +656,74 @@ function runScheduleConsistencyQa() {
   assert.equal(scheduleEvents[0].time, undefined);
   assert.equal(scheduleEvents[0].venue, "Kucica");
   assert.equal(scheduleEvents[1].venue, "Kucica");
+
+  const sameDayIsoDate = isoDateDaysFromNow(14);
+  const followingIsoDate = addIsoDays(sameDayIsoDate, 1);
+  const sameDayDdmm = ddmmForIsoDate(sameDayIsoDate);
+  const followingDdmm = ddmmForIsoDate(followingIsoDate);
+  const sameDaySchedulePrepared = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: [
+        "THIS WEEK AT KUCICA NA VODI:",
+        `Wednesday Afterwork | ${sameDayDdmm} - Zalazak by @danijelcehranov`,
+        `Wednesday Night | ${sameDayDdmm} - @discogirl.bg @posle.rs`,
+        `Thursday Night | ${followingDdmm} - @lostreszurke`,
+      ].join("\n"),
+      postType: "image",
+      username: "kucicanavodi",
+    }),
+    makeExtractedEvent({
+      title: "",
+      date: "",
+      time: "",
+      venue: "Kucica",
+      artists: [],
+      category: "nightlife",
+      confidence: 0.95,
+      schedule_entries: [
+        {
+          date: sameDayIsoDate,
+          time: "18:00-22:00",
+          title: "Zalazak na Kucici",
+          artists: ["danijelcehranov"],
+          description: "Wednesday Afterwork event Zalazak at Kucica.",
+          source_text: `18h - 22h ZALAZAK NA KUCICI ${sameDayDdmm}`,
+        },
+        {
+          date: sameDayIsoDate,
+          time: "22:00-05:00",
+          title: "Sreda na Kucici",
+          artists: ["discogirl.bg", "posle.rs"],
+          description: "Wednesday Night event Sreda at Kucica.",
+          source_text: `22h - 05h SREDA NA KUCICI ${sameDayDdmm}`,
+        },
+        {
+          date: followingIsoDate,
+          time: "22:00-05:00",
+          title: "Los Tres",
+          artists: ["lostreszurke"],
+          description: "Thursday Night event Los Tres at Kucica.",
+          source_text: `22h - 05h LOS TRES ${followingDdmm}`,
+        },
+      ],
+      field_confirmation: makeFieldConfirmation(0.95),
+    }),
+    "https://images.example.com/kucica.jpg",
+    {},
+    {},
+    {},
+  );
+  const sameDayScheduleEvents = sameDaySchedulePrepared
+    .filter((result) => result.kind === "ok")
+    .map((result) => result.event);
+  assert.deepEqual(
+    sameDayScheduleEvents.map((event) => `${event.date} ${event.time} ${event.title}`),
+    [
+      `${sameDayIsoDate} 18:00-22:00 Zalazak na Kucici`,
+      `${sameDayIsoDate} 22:00-05:00 Sreda na Kucici`,
+      `${followingIsoDate} 22:00-05:00 Los Tres`,
+    ],
+  );
 }
 
 function runTicketPriceQa() {

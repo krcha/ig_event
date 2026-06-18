@@ -3027,6 +3027,27 @@ function getSemanticDuplicateMatchScore(
   return score;
 }
 
+function isMultiEventNormalizedFields(
+  normalizedFields: Record<string, unknown> | null,
+): boolean {
+  return (
+    readJsonBoolean(normalizedFields, "multiEventSplitDetected") === true ||
+    (readJsonNumber(normalizedFields, "multiEventSplitCount") ?? 0) > 1
+  );
+}
+
+function allowsDateOnlySourceIdentityMatch(
+  existing: ExistingEventRecord,
+  nextNormalizedFields: Record<string, unknown>,
+): boolean {
+  if (isMultiEventNormalizedFields(nextNormalizedFields)) {
+    return false;
+  }
+
+  const existingNormalizedFields = parseJsonRecord(existing.normalizedFieldsJson);
+  return !isMultiEventNormalizedFields(existingNormalizedFields);
+}
+
 function choosePreferredDescription(
   existing: string | undefined,
   next: string | undefined,
@@ -3363,7 +3384,9 @@ function findBestExistingMatchForPreparedEvent(
   }
 
   const sameDateMatch = sourceIdentityMatches.find(
-    (existing) => normalizeString(existing.existingEvent.date) === nextEvent.date,
+    (existing) =>
+      normalizeString(existing.existingEvent.date) === nextEvent.date &&
+      allowsDateOnlySourceIdentityMatch(existing.existingEvent, nextNormalizedFields),
   );
   if (sameDateMatch) {
     return sameDateMatch;
