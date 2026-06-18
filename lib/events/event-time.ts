@@ -26,7 +26,12 @@ export type NormalizedEventTime = {
 };
 
 export type EventDayPeriod = "day" | "night" | "unknown";
-export type EventTimeDisplaySource = "closed" | "event" | "unknown" | "venue_hours";
+export type EventTimeDisplaySource =
+  | "closed"
+  | "event"
+  | "event_with_venue_hours"
+  | "unknown"
+  | "venue_hours";
 
 export type ResolvedEventTimeDisplay = {
   dayPeriod: EventDayPeriod;
@@ -161,6 +166,35 @@ export function getDayPeriodForStartTime(value: string | null | undefined): Even
   return minutes >= 8 * 60 && minutes < 18 * 60 ? "day" : "night";
 }
 
+function readDisplayMinutes(value: string | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match) {
+    return null;
+  }
+
+  const hours = Number.parseInt(match[1], 10);
+  const minutes = Number.parseInt(match[2], 10);
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    return null;
+  }
+
+  return hours * 60 + minutes;
+}
+
+function canUseVenueEndTime(startLabel: string, endLabel: string, spansNextDay?: boolean): boolean {
+  const start = readDisplayMinutes(startLabel);
+  const end = readDisplayMinutes(endLabel);
+  if (start === null || end === null) {
+    return false;
+  }
+
+  return spansNextDay || end > start;
+}
+
 export function resolveEventTimeDisplay(options: {
   date: string;
   time?: string | null;
@@ -168,6 +202,29 @@ export function resolveEventTimeDisplay(options: {
 }): ResolvedEventTimeDisplay {
   const eventTime = normalizeEventTime(options.time);
   if (eventTime.startLabel) {
+    const venueWindow = getVenueHoursWindowForDate(
+      options.venueHours,
+      options.date,
+      eventTime.startLabel,
+    );
+    if (
+      !eventTime.endLabel &&
+      venueWindow.status === "open" &&
+      canUseVenueEndTime(
+        eventTime.startLabel,
+        venueWindow.window.end,
+        venueWindow.window.spansNextDay,
+      )
+    ) {
+      return {
+        dayPeriod: getDayPeriodForStartTime(eventTime.startLabel),
+        endLabel: venueWindow.window.end,
+        label: `${eventTime.startLabel}–${venueWindow.window.end}`,
+        source: "event_with_venue_hours",
+        startLabel: eventTime.startLabel,
+      };
+    }
+
     return {
       dayPeriod: getDayPeriodForStartTime(eventTime.startLabel),
       ...(eventTime.endLabel ? { endLabel: eventTime.endLabel } : {}),

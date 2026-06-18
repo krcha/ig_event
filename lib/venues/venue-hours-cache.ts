@@ -56,6 +56,15 @@ function isTimeLabel(value: unknown): value is string {
   return typeof value === "string" && TIME_LABEL_PATTERN.test(value);
 }
 
+function readTimeMinutes(value: string): number | null {
+  if (!isTimeLabel(value)) {
+    return null;
+  }
+
+  const [hours, minutes] = value.split(":").map((part) => Number.parseInt(part, 10));
+  return hours * 60 + minutes;
+}
+
 function normalizeWeekday(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 6) {
     return null;
@@ -165,6 +174,7 @@ export function parseEventDateWeekday(value: string | null | undefined): number 
 export function getVenueHoursWindowForDate(
   venueHours: VenueHoursCacheFields | null | undefined,
   eventDate: string | null | undefined,
+  preferredStartTime?: string | null,
 ): VenueHoursWindowForDate {
   const hoursJson = parseVenueHoursJson(venueHours?.hoursJson);
   const weekday = parseEventDateWeekday(eventDate);
@@ -177,7 +187,26 @@ export function getVenueHoursWindowForDate(
     return { status: "unknown" };
   }
 
-  const window = day.windows[0];
+  const preferredStartMinutes = preferredStartTime
+    ? readTimeMinutes(preferredStartTime)
+    : null;
+  const preferredWindow =
+    preferredStartMinutes === null
+      ? undefined
+      : day.windows.find((candidate) => {
+          const start = readTimeMinutes(candidate.start);
+          const end = readTimeMinutes(candidate.end);
+          if (start === null || end === null) {
+            return false;
+          }
+
+          if (candidate.spansNextDay || end <= start) {
+            return preferredStartMinutes >= start || preferredStartMinutes < end;
+          }
+
+          return preferredStartMinutes >= start && preferredStartMinutes < end;
+        });
+  const window = preferredWindow ?? day.windows[0];
   if (!window || day.closed) {
     return { status: "closed" };
   }

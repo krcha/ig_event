@@ -24,6 +24,8 @@ const BELGRADE_CENTER = {
   lon: 20.4612,
 };
 const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
+const OVERPASS_USER_AGENT = "ig-event venue-hours refresh";
+const OVERPASS_NAME_TAGS = ["name", "name:en", "name:sr", "alt_name"] as const;
 const GOOGLE_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText";
 const GOOGLE_PLACE_DETAILS_URL = "https://places.googleapis.com/v1/places";
 const GOOGLE_TEXT_SEARCH_FIELD_MASK = "places.id,places.name,places.displayName,places.formattedAddress";
@@ -294,19 +296,54 @@ function normalizeGoogleOpeningHours(
   });
 }
 
-function escapeOverpassRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function cleanVenueNameSearchTerm(value: string): string {
+  return value
+    .replace(/^[\s"'“”‘’#@•·|,:;!?-]+|[\s"'“”‘’•·|,:;!?-]+$/gu, "")
+    .replace(/[^\p{L}\p{N}\s&'’./-]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
 }
 
-function buildOverpassQuery(venueName: string): string {
-  const escapedName = escapeOverpassRegex(venueName.trim());
+function buildVenueNameSearchTerms(venueName: string): string[] {
+  const splitTerms = venueName
+    .split(/\s+(?:\||·|•)\s+|\s+[x×]\s+/iu)
+    .map(cleanVenueNameSearchTerm);
+  const terms = [
+    cleanVenueNameSearchTerm(venueName),
+    ...splitTerms,
+    cleanVenueNameSearchTerm(toSearchableText(venueName)),
+  ].filter((term) => term.length >= 2);
+
+  return [...new Set(terms)].slice(0, 4);
+}
+
+function escapeOverpassRegex(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/[.*+?^${}()|[\]]/g, "\\$&");
+}
+
+function buildOverpassQuery(venueName: string): string | null {
+  const terms = buildVenueNameSearchTerms(venueName);
+  if (terms.length === 0) {
+    return null;
+  }
+
   const bbox = `${BELGRADE_BBOX.south},${BELGRADE_BBOX.west},${BELGRADE_BBOX.north},${BELGRADE_BBOX.east}`;
+  const selectors = terms.flatMap((term) => {
+    const escapedName = escapeOverpassRegex(term);
+    return OVERPASS_NAME_TAGS.flatMap((tag) => [
+      `  node["${tag}"~"${escapedName}",i]["opening_hours"](${bbox});`,
+      `  way["${tag}"~"${escapedName}",i]["opening_hours"](${bbox});`,
+      `  relation["${tag}"~"${escapedName}",i]["opening_hours"](${bbox});`,
+    ]);
+  });
+
   return `
 [out:json][timeout:20];
 (
-  node["name"~"${escapedName}",i]["opening_hours"](${bbox});
-  way["name"~"${escapedName}",i]["opening_hours"](${bbox});
-  relation["name"~"${escapedName}",i]["opening_hours"](${bbox});
+${selectors.join("\n")}
 );
 out center tags 20;
 `;
@@ -358,9 +395,18 @@ async function fetchOsmHours(
     return null;
   }
 
+  const query = buildOverpassQuery(venueName);
+  if (!query) {
+    return null;
+  }
+
   const response = await options.overpassFetch(OVERPASS_URL, {
-    body: new URLSearchParams({ data: buildOverpassQuery(venueName) }).toString(),
-    headers: { "content-type": "application/x-www-form-urlencoded;charset=UTF-8" },
+    body: new URLSearchParams({ data: query }).toString(),
+    headers: {
+      "accept": "application/json",
+      "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+      "user-agent": OVERPASS_USER_AGENT,
+    },
     method: "POST",
   });
   const data = await readJsonResponse(response, "overpass");
@@ -509,6 +555,7 @@ export async function fetchVenueHoursPatch(
   const googleFetch = options.googleFetch ?? fetch;
   const googleApiKey = options.googleApiKey ?? process.env.GOOGLE_PLACES_API_KEY?.trim();
   const errors: string[] = [];
+  let providerError = false;
 
   try {
     const osmResult = await fetchOsmHours(venue, { generatedAt, overpassFetch });
@@ -517,11 +564,15 @@ export async function fetchVenueHoursPatch(
     }
     errors.push("osm_no_match");
   } catch (error) {
+    providerError = true;
     errors.push(error instanceof Error ? `osm_error:${error.message}` : "osm_error");
   }
 
   if (!googleApiKey) {
     errors.push("google_api_key_missing");
+    if (providerError) {
+      throw new Error(errors.join(";"));
+    }
     return createNonePatch(errors.join(";"), now);
   }
 
@@ -536,7 +587,12 @@ export async function fetchVenueHoursPatch(
     }
     errors.push("google_no_match_or_no_hours");
   } catch (error) {
+    providerError = true;
     errors.push(error instanceof Error ? `google_error:${error.message}` : "google_error");
+  }
+
+  if (providerError) {
+    throw new Error(errors.join(";"));
   }
 
   return createNonePatch(errors.join(";"), now);

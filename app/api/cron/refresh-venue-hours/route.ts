@@ -6,8 +6,15 @@ import {
   fetchVenueHoursPatch,
   type VenueForHoursRefresh,
 } from "@/lib/venues/venue-hours-fetcher";
+import {
+  getActiveVenueHoursRefreshTargets,
+  getDueVenueHoursRefreshTargets,
+  selectVenuesForHoursRefresh,
+} from "@/lib/venues/venue-hours-refresh";
 
-const DEFAULT_REFRESH_LIMIT = 25;
+const DEFAULT_REFRESH_DELAY_MS = 1_000;
+const DEFAULT_REFRESH_LIMIT = 10;
+const MAX_REFRESH_DELAY_MS = 5_000;
 const MAX_REFRESH_LIMIT = 100;
 
 const listVenuesQuery = "venues:listVenues" as unknown as FunctionReference<"query">;
@@ -35,6 +42,25 @@ function parseRefreshLimit(value: string | undefined): number {
   return Math.min(parsed, MAX_REFRESH_LIMIT);
 }
 
+function parseRefreshDelayMs(value: string | undefined): number {
+  if (!value) {
+    return DEFAULT_REFRESH_DELAY_MS;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_REFRESH_DELAY_MS;
+  }
+
+  return Math.min(parsed, MAX_REFRESH_DELAY_MS);
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 export async function GET(request: Request) {
   if (!isAuthorizedCronRequestHeader(request.headers.get("authorization"))) {
     return NextResponse.json({ error: "Unauthorized cron request." }, { status: 401 });
@@ -43,16 +69,19 @@ export async function GET(request: Request) {
   try {
     const convex = getConvexClient();
     const venues = (await convex.query(listVenuesQuery, {})) as VenueForHoursRefresh[];
-    const activeVenues = venues
-      .filter(
-        (venue): venue is VenueForHoursRefresh & { _id: string } =>
-          typeof venue._id === "string" && venue.isActive !== false,
-      )
-      .slice(0, parseRefreshLimit(process.env.VENUE_HOURS_REFRESH_LIMIT));
+    const refreshLimit = parseRefreshLimit(process.env.VENUE_HOURS_REFRESH_LIMIT);
+    const refreshDelayMs = parseRefreshDelayMs(process.env.VENUE_HOURS_REFRESH_DELAY_MS);
+    const now = Date.now();
+    const activeVenueCount = getActiveVenueHoursRefreshTargets(venues).length;
+    const dueVenueCount = getDueVenueHoursRefreshTargets(venues, now).length;
+    const activeVenues = selectVenuesForHoursRefresh(venues, refreshLimit, now);
     const summary = {
       checked: 0,
+      deferred: Math.max(0, dueVenueCount - activeVenues.length),
+      delayMs: refreshDelayMs,
+      eligible: dueVenueCount,
       refreshed: 0,
-      skippedFresh: 0,
+      skippedFresh: Math.max(0, activeVenueCount - dueVenueCount),
       failed: 0,
       results: [] as Array<{
         error?: string;
@@ -63,10 +92,10 @@ export async function GET(request: Request) {
       }>,
     };
 
-    for (const venue of activeVenues) {
+    for (const [index, venue] of activeVenues.entries()) {
       summary.checked += 1;
       try {
-        const patch = await fetchVenueHoursPatch(venue);
+        const patch = await fetchVenueHoursPatch(venue, { now });
         if (!patch) {
           summary.skippedFresh += 1;
           summary.results.push({
@@ -96,6 +125,10 @@ export async function GET(request: Request) {
           name: venue.name,
           status: "failed",
         });
+      }
+
+      if (refreshDelayMs > 0 && index < activeVenues.length - 1) {
+        await wait(refreshDelayMs);
       }
     }
 
