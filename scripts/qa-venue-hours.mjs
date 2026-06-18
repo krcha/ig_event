@@ -55,6 +55,23 @@ function createOverpassFetch(elements) {
   };
 }
 
+function createNominatimFetch(places) {
+  let calls = 0;
+  const requests = [];
+  const nominatimFetch = async (url, init) => {
+    calls += 1;
+    requests.push({ init, url });
+    return jsonResponse(places);
+  };
+  return {
+    get calls() {
+      return calls;
+    },
+    nominatimFetch,
+    requests,
+  };
+}
+
 assert.equal(getDayPeriodForStartTime("07:59"), "night", "07:59 should be night.");
 assert.equal(getDayPeriodForStartTime("08:00"), "day", "08:00 should be day.");
 assert.equal(getDayPeriodForStartTime("17:59"), "day", "17:59 should be day.");
@@ -190,6 +207,87 @@ assert.equal(osmHours.weekly[3].windows[0].end, "02:00");
 assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
 
 {
+  const nominatim = createNominatimFetch([
+    {
+      display_name: "Академија 28, Немањина, Београд, Србија",
+      extratags: {
+        opening_hours: "Mo-Fr 08:00-24:00; Sa 09:00-24:00; Su 10:00-24:00",
+      },
+      name: "Академија 28",
+      osm_id: 6060747670,
+      osm_type: "node",
+    },
+  ]);
+  const overpass = createOverpassFetch([]);
+  const patch = await fetchVenueHoursPatch(
+    { name: "Akademija 28" },
+    {
+      nominatimFetch: nominatim.nominatimFetch,
+      now: NOW,
+      overpassFallback: true,
+      overpassFetch: overpass.overpassFetch,
+    },
+  );
+  assert.equal(patch?.hoursSource, "osm", "Nominatim opening_hours should be used first.");
+  assert.equal(patch?.osmElementId, "6060747670");
+  assert.equal(nominatim.calls, 1, "Nominatim should be queried once.");
+  assert.equal(overpass.calls, 0, "Nominatim hit should skip Overpass.");
+}
+
+{
+  const nominatim = createNominatimFetch([
+    {
+      display_name: "20/44, Карађорђева, Београд, Србија",
+      extratags: {},
+      name: "20/44",
+      osm_id: 13111157561,
+      osm_type: "node",
+    },
+  ]);
+  const overpass = createOverpassFetch([
+    {
+      id: 13111157561,
+      tags: { name: "20/44", opening_hours: "Mo-Su 22:00-04:00" },
+      type: "node",
+    },
+  ]);
+  const patch = await fetchVenueHoursPatch(
+    { name: "20/44" },
+    {
+      nominatimFetch: nominatim.nominatimFetch,
+      now: NOW,
+      overpassFallback: true,
+      overpassFetch: overpass.overpassFetch,
+    },
+  );
+  assert.equal(patch?.hoursSource, "none", "Known OSM place without hours should cache none.");
+  assert.equal(overpass.calls, 0, "Known no-hours OSM place should skip Overpass fallback.");
+}
+
+{
+  const nominatim = createNominatimFetch([]);
+  const overpass = createOverpassFetch([
+    {
+      id: 303,
+      tags: { name: "Overpass Only", opening_hours: "Mo-Su 10:00-22:00" },
+      type: "node",
+    },
+  ]);
+  const patch = await fetchVenueHoursPatch(
+    { name: "Overpass Only" },
+    {
+      nominatimFetch: nominatim.nominatimFetch,
+      now: NOW,
+      overpassFallback: false,
+      overpassFetch: overpass.overpassFetch,
+    },
+  );
+  assert.equal(patch?.hoursSource, "none", "Disabled Overpass fallback should cache no-match.");
+  assert.equal(overpass.calls, 0, "Disabled Overpass fallback should not call Overpass.");
+}
+
+{
+  const nominatim = createNominatimFetch([]);
   const overpass = createOverpassFetch([
     {
       id: 101,
@@ -200,7 +298,9 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
   const patch = await fetchVenueHoursPatch(
     { name: "Drugstore" },
     {
+      nominatimFetch: nominatim.nominatimFetch,
       now: NOW,
+      overpassFallback: true,
       overpassFetch: overpass.overpassFetch,
     },
   );
@@ -214,11 +314,14 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
 }
 
 {
+  const nominatim = createNominatimFetch([]);
   const overpass = createOverpassFetch([]);
   const patch = await fetchVenueHoursPatch(
     { name: "\"Jedno Mesto\"" },
     {
+      nominatimFetch: nominatim.nominatimFetch,
       now: NOW,
+      overpassFallback: true,
       overpassFetch: overpass.overpassFetch,
     },
   );
@@ -229,6 +332,7 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
 }
 
 {
+  const nominatimFetch = async () => jsonResponse([]);
   const overpassFetch = async () =>
     new Response("Rate limited", {
       status: 429,
@@ -238,7 +342,9 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
     fetchVenueHoursPatch(
       { name: "Rate Limited Venue" },
       {
+        nominatimFetch,
         now: NOW,
+        overpassFallback: true,
         overpassFetch,
       },
     ),
@@ -248,11 +354,14 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
 }
 
 {
+  const nominatim = createNominatimFetch([]);
   const overpass = createOverpassFetch([]);
   const patch = await fetchVenueHoursPatch(
     { name: "Drugstore" },
     {
+      nominatimFetch: nominatim.nominatimFetch,
       now: NOW,
+      overpassFallback: true,
       overpassFetch: overpass.overpassFetch,
     },
   );
@@ -262,11 +371,14 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
 }
 
 {
+  const nominatim = createNominatimFetch([]);
   const overpass = createOverpassFetch([]);
   const patch = await fetchVenueHoursPatch(
     { hoursExpiresAt: NOW + 1_000, name: "Fresh Venue" },
     {
+      nominatimFetch: nominatim.nominatimFetch,
       now: NOW,
+      overpassFallback: true,
       overpassFetch: overpass.overpassFetch,
     },
   );
@@ -275,6 +387,7 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
 }
 
 {
+  const nominatim = createNominatimFetch([]);
   const overpass = createOverpassFetch([
     {
       id: 202,
@@ -285,7 +398,9 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
   const patch = await fetchVenueHoursPatch(
     { hoursExpiresAt: NOW - 1, name: "Expired Venue" },
     {
+      nominatimFetch: nominatim.nominatimFetch,
       now: NOW,
+      overpassFallback: true,
       overpassFetch: overpass.overpassFetch,
     },
   );

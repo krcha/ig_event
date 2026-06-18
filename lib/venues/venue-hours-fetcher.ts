@@ -11,7 +11,10 @@ import {
   type VenueHoursSource,
   type VenueHoursWindow,
 } from "@/lib/venues/venue-hours-cache";
-import { toSearchableText } from "@/lib/pipeline/venue-normalization";
+import {
+  normalizeVenueComparableText,
+  toSearchableText,
+} from "@/lib/pipeline/venue-normalization";
 
 const BELGRADE_BBOX = {
   east: 20.62,
@@ -24,8 +27,24 @@ const BELGRADE_CENTER = {
   lon: 20.4612,
 };
 const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
+const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
 const OVERPASS_USER_AGENT = "ig-event venue-hours refresh";
 const OVERPASS_NAME_TAGS = ["name", "name:en", "name:sr", "alt_name"] as const;
+const OSM_VENUE_SEARCH_ALIASES: Record<string, string[]> = {
+  "20 44": ["20/44", "Klub 20/44"],
+  "akademija 28": ["Akademija 28", "Академија 28"],
+  "ben akiba beograd": ["Ben Akiba Comedy Club & Bar", "Ben Akiba"],
+  chillton: ["Chillton", "Чилтон"],
+  drugstore: ["Drugstore Beograd", "Drugstore"],
+  "kc grad": ["KC Grad", "КЦ Град", "Kulturni centar Grad"],
+  "klub 20 44": ["20/44", "Klub 20/44"],
+  "kulturni centar grad": ["KC Grad", "КЦ Град", "Kulturni centar Grad"],
+  "nula pet": ["Nula Pet", "Pab 0,5"],
+  "pab 0 5": ["Nula Pet", "Pab 0,5"],
+  "pricica coffee bar": ["Pričica Coffee Bar", "Pricica Coffee Bar"],
+  silosi: ["Silosi Beograd", "Silosi"],
+  "zappa baza": ["Zappa Baza"],
+};
 
 type FetchLike = typeof fetch;
 
@@ -50,7 +69,9 @@ export type VenueHoursPatch = {
 
 export type VenueHoursRefreshOptions = {
   force?: boolean;
+  nominatimFetch?: FetchLike;
   now?: number;
+  overpassFallback?: boolean;
   overpassFetch?: FetchLike;
 };
 
@@ -68,6 +89,22 @@ type ProviderResult = {
   osmElementId?: string;
   osmElementType?: string;
   source: VenueHoursSource;
+};
+
+type NominatimPlace = {
+  address?: Record<string, string>;
+  category?: string;
+  display_name?: string;
+  extratags?: Record<string, string>;
+  name?: string;
+  osm_id?: number | string;
+  osm_type?: string;
+  type?: string;
+};
+
+type NominatimSearchResult = {
+  matchedWithoutHours: boolean;
+  result: ProviderResult | null;
 };
 
 function formatTimeLabel(date: Date): string {
@@ -197,16 +234,18 @@ function cleanVenueNameSearchTerm(value: string): string {
 }
 
 function buildVenueNameSearchTerms(venueName: string): string[] {
+  const aliasTerms = OSM_VENUE_SEARCH_ALIASES[normalizeVenueComparableText(venueName)] ?? [];
   const splitTerms = venueName
     .split(/\s+(?:\||·|•)\s+|\s+[x×]\s+/iu)
     .map(cleanVenueNameSearchTerm);
   const terms = [
+    ...aliasTerms,
     cleanVenueNameSearchTerm(venueName),
     ...splitTerms,
     cleanVenueNameSearchTerm(toSearchableText(venueName)),
   ].filter((term) => term.length >= 2);
 
-  return [...new Set(terms)].slice(0, 4);
+  return [...new Set(terms)].slice(0, 5);
 }
 
 function escapeOverpassRegex(value: string): string {
@@ -267,6 +306,35 @@ function scoreOsmElement(element: OverpassElement, venueName: string): number {
   return 0;
 }
 
+function scoreOsmNameCandidate(candidateNames: string[], venueName: string): number {
+  const requestedNames = buildVenueNameSearchTerms(venueName)
+    .map((term) => toSearchableText(term))
+    .filter(Boolean);
+  const candidates = candidateNames.map((value) => toSearchableText(value)).filter(Boolean);
+
+  if (requestedNames.some((requested) => candidates.some((candidate) => candidate === requested))) {
+    return 100;
+  }
+
+  if (
+    requestedNames.some((requested) =>
+      candidates.some((candidate) => candidate.includes(requested)),
+    )
+  ) {
+    return 70;
+  }
+
+  if (
+    requestedNames.some((requested) =>
+      candidates.some((candidate) => requested.includes(candidate) && candidate.length >= 4),
+    )
+  ) {
+    return 60;
+  }
+
+  return 0;
+}
+
 async function readJsonResponse(response: Response, provider: string): Promise<unknown> {
   if (!response.ok) {
     const body = await response.text().catch(() => "");
@@ -276,14 +344,130 @@ async function readJsonResponse(response: Response, provider: string): Promise<u
   return response.json() as Promise<unknown>;
 }
 
+function normalizeNominatimOsmType(value: string | undefined): OverpassElement["type"] | null {
+  if (value === "node" || value === "way" || value === "relation") {
+    return value;
+  }
+  return null;
+}
+
+function buildNominatimQuery(venue: VenueForHoursRefresh): string | null {
+  const venueName = venue.name.trim();
+  if (!venueName) {
+    return null;
+  }
+
+  const searchTerm = buildVenueNameSearchTerms(venueName)[0];
+  if (!searchTerm) {
+    return null;
+  }
+
+  const location = venue.location?.trim();
+  return location ? `${searchTerm}, ${location}` : `${searchTerm}, Belgrade, Serbia`;
+}
+
+async function fetchNominatimHours(
+  venue: VenueForHoursRefresh,
+  options: Required<Pick<VenueHoursRefreshOptions, "nominatimFetch">> & {
+    generatedAt: string;
+  },
+): Promise<NominatimSearchResult> {
+  const query = buildNominatimQuery(venue);
+  if (!query) {
+    return { matchedWithoutHours: false, result: null };
+  }
+
+  const url = new URL(NOMINATIM_URL);
+  url.searchParams.set("addressdetails", "1");
+  url.searchParams.set("extratags", "1");
+  url.searchParams.set("format", "jsonv2");
+  url.searchParams.set("limit", "5");
+  url.searchParams.set("q", query);
+
+  const response = await options.nominatimFetch(url, {
+    headers: {
+      "accept": "application/json",
+      "user-agent": OVERPASS_USER_AGENT,
+    },
+    method: "GET",
+  });
+  const data = await readJsonResponse(response, "nominatim");
+  const places = Array.isArray(data) ? data : [];
+  const candidates = places
+    .filter((place): place is NominatimPlace => isRecord(place))
+    .map((place) => ({
+      place,
+      score: scoreOsmNameCandidate(
+        [
+          place.name,
+          place.display_name,
+          place.address?.amenity,
+          place.address?.tourism,
+          place.address?.shop,
+        ].filter((value): value is string => Boolean(value)),
+        venue.name,
+      ),
+    }))
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score);
+
+  const best = candidates[0]?.place;
+  const openingHoursValue = best?.extratags?.opening_hours;
+  if (!best) {
+    return { matchedWithoutHours: false, result: null };
+  }
+  if (!openingHoursValue) {
+    return { matchedWithoutHours: true, result: null };
+  }
+
+  const osmElementType = normalizeNominatimOsmType(best.osm_type);
+  const osmElementId = best.osm_id === undefined ? "" : String(best.osm_id);
+  const hoursJson = normalizeOsmOpeningHours(openingHoursValue, {
+    generatedAt: options.generatedAt,
+    raw: {
+      displayName: best.display_name,
+      elementId: osmElementId,
+      elementType: osmElementType,
+      name: best.name,
+      provider: "nominatim",
+    },
+  });
+
+  return {
+    matchedWithoutHours: false,
+    result: {
+      hoursJson,
+      osmElementId,
+      osmElementType: osmElementType ?? undefined,
+      source: "osm",
+    },
+  };
+}
+
 async function fetchOsmHours(
   venue: VenueForHoursRefresh,
-  options: Required<Pick<VenueHoursRefreshOptions, "overpassFetch">> & {
+  options: Required<
+    Pick<VenueHoursRefreshOptions, "nominatimFetch" | "overpassFallback" | "overpassFetch">
+  > & {
     generatedAt: string;
   },
 ): Promise<ProviderResult | null> {
   const venueName = venue.name.trim();
   if (!venueName) {
+    return null;
+  }
+
+  const nominatimResult = await fetchNominatimHours(venue, {
+    generatedAt: options.generatedAt,
+    nominatimFetch: options.nominatimFetch,
+  });
+  if (nominatimResult.result) {
+    return nominatimResult.result;
+  }
+  if (nominatimResult.matchedWithoutHours) {
+    return null;
+  }
+  if (!options.overpassFallback) {
     return null;
   }
 
@@ -398,12 +582,18 @@ export async function fetchVenueHoursPatch(
   }
 
   const generatedAt = new Date(now).toISOString();
+  const nominatimFetch = options.nominatimFetch ?? fetch;
   const overpassFetch = options.overpassFetch ?? fetch;
   const errors: string[] = [];
   let providerError = false;
 
   try {
-    const osmResult = await fetchOsmHours(venue, { generatedAt, overpassFetch });
+    const osmResult = await fetchOsmHours(venue, {
+      generatedAt,
+      nominatimFetch,
+      overpassFallback: options.overpassFallback ?? false,
+      overpassFetch,
+    });
     if (osmResult) {
       return createPatchFromProviderResult(osmResult, now);
     }

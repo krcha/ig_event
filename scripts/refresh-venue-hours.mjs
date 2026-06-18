@@ -10,14 +10,15 @@ import {
   sortVenueHoursRefreshTargets,
 } from "../lib/venues/venue-hours-refresh.ts";
 
-const DEFAULT_LIMIT = 25;
-const DEFAULT_DELAY_MS = 1_000;
+const DEFAULT_LIMIT = 10;
+const DEFAULT_DELAY_MS = 2_500;
 
 function usage() {
   return [
-    "Usage: npm run repair:venue-hours -- [--apply] [--force] [--limit N] [--delay-ms N]",
+    "Usage: npm run repair:venue-hours -- [--apply] [--force] [--overpass] [--limit N] [--delay-ms N]",
     "",
-    "Dry-run is the default. Fetches OSM venue hours and stores them only with --apply.",
+    "Dry-run is the default. Fetches OSM venue hours via Nominatim and stores them only with --apply.",
+    "Use --overpass for slower deep OSM fallback searches.",
   ].join("\n");
 }
 
@@ -35,6 +36,7 @@ function parseArgs(argv) {
     delayMs: DEFAULT_DELAY_MS,
     force: false,
     limit: DEFAULT_LIMIT,
+    overpass: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -49,6 +51,10 @@ function parseArgs(argv) {
     }
     if (arg === "--force") {
       options.force = true;
+      continue;
+    }
+    if (arg === "--overpass") {
+      options.overpass = true;
       continue;
     }
     if (arg === "--limit") {
@@ -113,6 +119,7 @@ async function main() {
     failed: 0,
     limit: options.limit,
     mode: options.apply ? "apply" : "dry-run",
+    overpassFallback: options.overpass,
     results: [],
     selectedVenues: selectedVenues.length,
     skippedNoPatch: 0,
@@ -124,6 +131,7 @@ async function main() {
       const patch = await fetchVenueHoursPatch(venue, {
         force: options.force,
         now,
+        overpassFallback: options.overpass,
       });
       if (!patch) {
         summary.skippedNoPatch += 1;
