@@ -3,6 +3,7 @@ import { ConvexHttpClient } from "convex/browser";
 import { NextResponse } from "next/server";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { hasClerkEnv } from "@/lib/utils/env";
 
 type SaveEventRequestBody = {
   eventId?: unknown;
@@ -25,6 +26,10 @@ function getConvexClient(): ConvexHttpClient | NextResponse {
 }
 
 export async function GET() {
+  if (!hasClerkEnv()) {
+    return NextResponse.json({ error: "Authentication is not configured." }, { status: 503 });
+  }
+
   const { userId } = await auth();
 
   if (!userId) {
@@ -50,6 +55,10 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  if (!hasClerkEnv()) {
+    return NextResponse.json({ error: "Authentication is not configured." }, { status: 503 });
+  }
+
   const { userId } = await auth();
 
   if (!userId) {

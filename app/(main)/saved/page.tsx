@@ -7,6 +7,7 @@ import {
   type SavedLibraryVenue,
 } from "@/components/saved/saved-library-panel";
 import { loadUpcomingApprovedEvents } from "@/lib/events/public-events";
+import { hasClerkEnv } from "@/lib/utils/env";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -68,7 +69,7 @@ async function loadSavedLibrary(userId: string): Promise<LibraryResult> {
 }
 
 export default async function SavedPage() {
-  if (!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) {
+  if (!hasClerkEnv()) {
     return (
       <main className="app-page gap-3 sm:gap-4">
         <section className="hero-panel px-4 py-8 text-center sm:px-6">
@@ -77,8 +78,8 @@ export default async function SavedPage() {
             Clerk is not configured.
           </h1>
           <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-muted-foreground">
-            Set NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY to enable saved events and favourite
-            places.
+            Set NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY and CLERK_SECRET_KEY to enable saved
+            events and favourite places.
           </p>
         </section>
       </main>

@@ -4,6 +4,7 @@ import { hasClerkEnv, shouldFailClosedForAdminRoutes } from "@/lib/utils/env";
 
 const isAdminRoute = createRouteMatcher(["/admin(.*)", "/api/admin(.*)"]);
 const isAdminApiRoute = createRouteMatcher(["/api/admin(.*)"]);
+const isUserApiRoute = createRouteMatcher(["/api/user(.*)"]);
 const hasClerkConfig = hasClerkEnv();
 
 function adminAuthNotConfiguredResponse(req: NextRequest): NextResponse {
@@ -34,7 +35,7 @@ function clearClerkCookies(response: NextResponse, req: NextRequest): NextRespon
 }
 
 function malformedClerkCookieResponse(req: NextRequest): NextResponse {
-  if (isAdminApiRoute(req)) {
+  if (isAdminApiRoute(req) || isUserApiRoute(req)) {
     return clearClerkCookies(
       NextResponse.json({ error: "Invalid authentication session." }, { status: 401 }),
       req,
@@ -73,5 +74,5 @@ export default async function middleware(req: NextRequest, event: NextFetchEvent
 }
 
 export const config = {
-  matcher: ["/admin/:path*", "/api/admin/:path*"],
+  matcher: ["/admin/:path*", "/api/admin/:path*", "/saved/:path*", "/api/user/:path*"],
 };

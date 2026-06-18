@@ -2,6 +2,7 @@ import { auth, currentUser } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import { NextResponse } from "next/server";
 import { api } from "@/convex/_generated/api";
+import { hasClerkEnv } from "@/lib/utils/env";
 
 async function ensureConvexUser(convex: ConvexHttpClient, clerkUserId: string) {
   const clerkUser = await currentUser();
@@ -12,6 +13,10 @@ async function ensureConvexUser(convex: ConvexHttpClient, clerkUserId: string) {
 }
 
 export async function GET() {
+  if (!hasClerkEnv()) {
+    return NextResponse.json({ error: "Authentication is not configured." }, { status: 503 });
+  }
+
   const { userId } = await auth();
 
   if (!userId) {

@@ -153,8 +153,8 @@ assertDoesNotInclude(
 );
 assert.match(
   middlewareSource,
-  /matcher:\s*\["\/admin\/:path\*", "\/api\/admin\/:path\*"\]/,
-  "Clerk middleware should stay scoped to admin routes so public browsing avoids auth overhead.",
+  /matcher:\s*\["\/admin\/:path\*", "\/api\/admin\/:path\*", "\/saved\/:path\*", "\/api\/user\/:path\*"\]/,
+  "Clerk middleware should stay scoped to auth-backed routes so public browsing avoids auth overhead.",
 );
 assertDoesNotInclude(
   middlewareSource,
