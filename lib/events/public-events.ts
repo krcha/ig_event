@@ -18,7 +18,13 @@ import {
   canonicalizeEventType,
   eventTypeFromVenueCategory,
 } from "@/lib/taxonomy/venue-types";
-import { toSearchableText } from "@/lib/pipeline/venue-normalization";
+import {
+  buildCanonicalVenueNamesByHandle,
+  canonicalizeVenueName,
+  normalizeHandle,
+  toSearchableText,
+} from "@/lib/pipeline/venue-normalization";
+import { loadVenueNameOverridesByHandle } from "@/lib/pipeline/venue-name-overrides";
 import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 
 export type EventStatus = "pending" | "approved" | "rejected";
@@ -65,6 +71,7 @@ export type PublicEvent = {
 type VenueRecord = {
   _id: string;
   name: string;
+  instagramHandle: string;
   category?: string | null;
   googlePlaceId?: string | null;
   hoursError?: string | null;
@@ -80,6 +87,12 @@ type VenueRecord = {
 type PublicEventsCacheEntry = {
   expiresAt: number;
   promise: Promise<PublicEvent[]>;
+};
+
+type VenueLookup = {
+  canonicalVenueNamesByHandle: Record<string, string>;
+  venueNameOverridesByHandle: Record<string, string>;
+  venuesByName: Map<string, VenueRecord>;
 };
 
 const publicEventsCache = new Map<string, PublicEventsCacheEntry>();
@@ -143,22 +156,41 @@ function normalizeVenueLookupKey(value: string): string {
   return toSearchableText(value);
 }
 
-function buildVenuesByName(venues: VenueRecord[]): Map<string, VenueRecord> {
+function buildVenuesByName(
+  venues: VenueRecord[],
+  venueNameOverridesByHandle: Record<string, string>,
+): Map<string, VenueRecord> {
   const venuesByName = new Map<string, VenueRecord>();
 
   for (const venue of venues) {
-    const key = normalizeVenueLookupKey(venue.name);
-    if (key && !venuesByName.has(key)) {
-      venuesByName.set(key, venue);
+    for (const name of [
+      venue.name,
+      venueNameOverridesByHandle[normalizeHandle(venue.instagramHandle)],
+    ]) {
+      const key = normalizeVenueLookupKey(name ?? "");
+      if (key && !venuesByName.has(key)) {
+        venuesByName.set(key, venue);
+      }
     }
   }
 
   return venuesByName;
 }
 
-async function loadVenueLookupByName(convex: ConvexHttpClient): Promise<Map<string, VenueRecord>> {
+async function loadVenueLookup(convex: ConvexHttpClient): Promise<VenueLookup> {
   const venues = (await convex.query(listVenuesQuery, {})) as VenueRecord[];
-  return buildVenuesByName(venues);
+  let venueNameOverridesByHandle: Record<string, string> = {};
+  try {
+    venueNameOverridesByHandle = await loadVenueNameOverridesByHandle();
+  } catch {
+    venueNameOverridesByHandle = {};
+  }
+  const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle(venues);
+  return {
+    canonicalVenueNamesByHandle,
+    venueNameOverridesByHandle,
+    venuesByName: buildVenuesByName(venues, venueNameOverridesByHandle),
+  };
 }
 
 function normalizeDaysInPast(value: number | undefined): number {
@@ -247,10 +279,21 @@ function filterDuplicatePublicEvents(events: PublicEvent[]): PublicEvent[] {
 
 function normalizePublicEvent(
   event: PublicEvent,
-  venuesByName: Map<string, VenueRecord>,
+  venueLookup: VenueLookup,
 ): PublicEvent {
   const canonicalEventType = canonicalizeEventType(event.eventType);
-  const venue = venuesByName.get(normalizeVenueLookupKey(event.venue));
+  const canonicalVenueName = canonicalizeVenueName(
+    event.venue,
+    venueLookup.canonicalVenueNamesByHandle,
+    {
+      handleVenueNamesByHandle: venueLookup.venueNameOverridesByHandle,
+    },
+  );
+  const venue =
+    venueLookup.venuesByName.get(normalizeVenueLookupKey(event.venue)) ??
+    (canonicalVenueName
+      ? venueLookup.venuesByName.get(normalizeVenueLookupKey(canonicalVenueName))
+      : undefined);
   const venueCategory = venue?.category ?? undefined;
   const eventType =
     canonicalEventType === DEFAULT_EVENT_TYPE
@@ -337,10 +380,10 @@ async function loadAllApprovedUpcomingEvents(
     cursor = page.continueCursor;
   }
 
-  const venuesByName = await loadVenueLookupByName(convex);
+  const venueLookup = await loadVenueLookup(convex);
   return sortPublicEventsByDateVenueTimeTitle(
     filterDuplicatePublicEvents(events).map((event) =>
-      normalizePublicEvent(event, venuesByName),
+      normalizePublicEvent(event, venueLookup),
     ),
   );
 }

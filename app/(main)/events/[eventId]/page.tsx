@@ -24,7 +24,13 @@ import {
   canonicalizeEventType,
   eventTypeFromVenueCategory,
 } from "@/lib/taxonomy/venue-types";
-import { toSearchableText } from "@/lib/pipeline/venue-normalization";
+import {
+  buildCanonicalVenueNamesByHandle,
+  canonicalizeVenueName,
+  normalizeHandle,
+  toSearchableText,
+} from "@/lib/pipeline/venue-normalization";
+import { loadVenueNameOverridesByHandle } from "@/lib/pipeline/venue-name-overrides";
 import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 
 type EventRecord = {
@@ -60,6 +66,7 @@ type EventRecord = {
 type VenueRecord = {
   _id: string;
   name: string;
+  instagramHandle: string;
   category?: string | null;
   googlePlaceId?: string | null;
   hoursError?: string | null;
@@ -79,13 +86,38 @@ type EventDetailPageProps = {
 const getEventQuery = "events:getEvent" as unknown as FunctionReference<"query">;
 const listVenuesQuery = "venues:listVenues" as unknown as FunctionReference<"query">;
 
-function findVenue(venues: VenueRecord[], venueName: string): VenueRecord | undefined {
+function findVenue(
+  venues: VenueRecord[],
+  venueName: string,
+  venueNameOverridesByHandle: Record<string, string>,
+): VenueRecord | undefined {
+  const venuesByName = new Map<string, VenueRecord>();
+  for (const venue of venues) {
+    for (const name of [
+      venue.name,
+      venueNameOverridesByHandle[normalizeHandle(venue.instagramHandle)],
+    ]) {
+      const key = toSearchableText(name ?? "");
+      if (key && !venuesByName.has(key)) {
+        venuesByName.set(key, venue);
+      }
+    }
+  }
+
   const lookupKey = toSearchableText(venueName);
   if (!lookupKey) {
     return undefined;
   }
 
-  return venues.find((venue) => toSearchableText(venue.name) === lookupKey);
+  const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle(venues);
+  const canonicalVenueName = canonicalizeVenueName(venueName, canonicalVenueNamesByHandle, {
+    handleVenueNamesByHandle: venueNameOverridesByHandle,
+  });
+
+  return (
+    venuesByName.get(lookupKey) ??
+    (canonicalVenueName ? venuesByName.get(toSearchableText(canonicalVenueName)) : undefined)
+  );
 }
 
 async function loadEvent(eventId: string): Promise<{
@@ -102,7 +134,13 @@ async function loadEvent(eventId: string): Promise<{
     const event = (await convex.query(getEventQuery, { id: eventId })) as EventRecord | null;
     if (event) {
       const venues = (await convex.query(listVenuesQuery, {})) as VenueRecord[];
-      const venue = findVenue(venues, event.venue);
+      let venueNameOverridesByHandle: Record<string, string> = {};
+      try {
+        venueNameOverridesByHandle = await loadVenueNameOverridesByHandle();
+      } catch {
+        venueNameOverridesByHandle = {};
+      }
+      const venue = findVenue(venues, event.venue, venueNameOverridesByHandle);
       const canonicalEventType = canonicalizeEventType(event.eventType);
       const displayTime = resolveEventTimeDisplay({
         date: event.date,

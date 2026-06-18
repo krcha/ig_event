@@ -17,6 +17,9 @@ const MISSING_EVENT_TIME_LABELS = new Set([
   "none",
   "unknown",
 ]);
+const TBD_EVENT_TIME_LABELS = new Set(["tbd", "time tbd"]);
+
+export const TBD_EVENT_TIME = "TBD";
 
 export type NormalizedEventTime = {
   allDay: boolean;
@@ -49,6 +52,11 @@ function normalizeEventTimePlaceholder(value: string): string {
     .replace(/[._-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+export function isTbdEventTime(value: string | null | undefined): boolean {
+  const trimmed = value?.trim();
+  return Boolean(trimmed && TBD_EVENT_TIME_LABELS.has(normalizeEventTimePlaceholder(trimmed)));
 }
 
 function formatTimeLabel(hours: number, minutes: number): string | undefined {
@@ -233,6 +241,14 @@ export function resolveEventTimeDisplay(options: {
         : eventTime.startLabel,
       source: "event",
       startLabel: eventTime.startLabel,
+    };
+  }
+
+  if (isTbdEventTime(options.time)) {
+    return {
+      dayPeriod: "unknown",
+      label: TBD_EVENT_TIME,
+      source: "unknown",
     };
   }
 

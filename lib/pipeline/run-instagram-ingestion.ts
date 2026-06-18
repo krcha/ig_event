@@ -46,6 +46,7 @@ import {
   sanitizeTimeAgainstDate,
   type EventConsistencyIssue,
 } from "@/lib/events/event-validation";
+import { TBD_EVENT_TIME } from "@/lib/events/event-time";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 import {
   areCompatibleTitleFamilySlugs,
@@ -499,7 +500,11 @@ const CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE = 0.8;
 type ModerationDecision = {
   confidenceScore: number | null;
   autoApproved: boolean;
-  autoApproveRule: "confidence_threshold" | "caption_only_video_core_fields" | null;
+  autoApproveRule:
+    | "confidence_threshold"
+    | "caption_only_video_core_fields"
+    | "high_confidence_date_time_tbd"
+    | null;
   pendingReasons: string[];
   signals: string[];
   allowMissingImage: boolean;
@@ -534,11 +539,14 @@ function buildModerationDecision(options: {
     missingImage: options.missingImage,
     allowMissingImage: options.allowMissingImage,
   });
+  const canUseTbdForMissingTime = options.missingTime && options.dateConfidence === "high";
+  const missingTimeNeedsReview = options.missingTime && !canUseTbdForMissingTime;
   const signals = [
     ...(options.missingImage ? ["missing_image"] : []),
     ...(options.allowMissingImage ? ["missing_image_allowed"] : []),
     ...(options.titleUsedFallback ? ["fallback_title"] : []),
-    ...(options.missingTime ? ["missing_time"] : []),
+    ...(missingTimeNeedsReview ? ["missing_time"] : []),
+    ...(canUseTbdForMissingTime ? ["time_tbd"] : []),
     ...(options.suspiciousYear ? ["suspicious_year"] : []),
     ...(confidenceScore !== null && confidenceScore < 0.7 ? ["low_confidence"] : []),
   ];
@@ -553,11 +561,22 @@ function buildModerationDecision(options: {
     options.dateConfidence !== "low" &&
     confidenceScore !== null &&
     confidenceScore >= CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE;
+  const qualifiesForHighConfidenceDateTimeTbd =
+    canUseTbdForMissingTime &&
+    options.hasDate &&
+    options.hasVenue &&
+    !options.missingImage &&
+    !options.titleUsedFallback &&
+    !options.suspiciousYear &&
+    confidenceScore !== null &&
+    confidenceScore >= AUTO_APPROVE_CONFIDENCE_THRESHOLD;
   const autoApproveRule = qualifiesForStrictConfidence
     ? "confidence_threshold"
     : qualifiesForCaptionOnlyVideo
       ? "caption_only_video_core_fields"
-      : null;
+      : qualifiesForHighConfidenceDateTimeTbd
+        ? "high_confidence_date_time_tbd"
+        : null;
   const autoApproved = autoApproveRule !== null;
   const pendingReasons = autoApproved
     ? []
@@ -568,7 +587,7 @@ function buildModerationDecision(options: {
           : []),
         ...(options.missingImage && !options.allowMissingImage ? ["missing_image"] : []),
         ...(options.titleUsedFallback ? ["fallback_title"] : []),
-        ...(options.missingTime ? ["missing_time"] : []),
+        ...(missingTimeNeedsReview ? ["missing_time"] : []),
         ...(options.suspiciousYear ? ["suspicious_year"] : []),
         ...(options.dateConfidence === "low" ? ["low_date_confidence"] : []),
       ];
@@ -3728,7 +3747,9 @@ export function prepareEventsForInsert(
       ...variant.consistencyIssues,
       ...eventConsistency.issues,
     ])];
-    const safeTime = eventConsistency.sanitizedTime;
+    const timeTbdApplied =
+      !eventConsistency.sanitizedTime && variant.dateNormalization.confidence === "high";
+    const safeTime = eventConsistency.sanitizedTime || (timeTbdApplied ? TBD_EVENT_TIME : "");
     const timeSanitized = consistencyIssues.includes("time_is_date");
     const dateRepairReason = consistencyIssues.includes("weekday_date_mismatch")
       ? "weekday_date_mismatch_numeric_date_authoritative"
@@ -3738,7 +3759,7 @@ export function prepareEventsForInsert(
       missingImage,
       allowMissingImage: allowMissingImageForModeration,
       titleUsedFallback: variant.titleUsedFallback,
-      missingTime: !safeTime,
+      missingTime: !eventConsistency.sanitizedTime,
       suspiciousYear: variant.dateNormalization.suspiciousYear,
       dateConfidence: variant.dateNormalization.confidence,
       hasDate: Boolean(date),
@@ -3787,6 +3808,7 @@ export function prepareEventsForInsert(
       moderationSignals: moderationDecision.signals,
       consistencyIssues,
       timeSanitized,
+      timeTbdApplied,
       timeSanitizedFrom: timeSanitized
         ? normalizeString(variant.rawTime || variant.time) || null
         : null,

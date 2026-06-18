@@ -12,12 +12,19 @@ import {
 } from "../lib/utils/confidence.ts";
 import {
   buildCanonicalVenueNamesByHandle,
+  canonicalizeVenueName,
+  canonicalizeVenueNameDetailed,
   normalizeExtractedArtists,
   normalizeExtractedDescription,
   normalizeVenueFromEvidence,
+  toSearchableText,
 } from "../lib/pipeline/venue-normalization.ts";
 import { prepareEventsForInsert } from "../lib/pipeline/run-instagram-ingestion.ts";
-import { normalizeEventTime } from "../lib/events/event-time.ts";
+import {
+  TBD_EVENT_TIME,
+  normalizeEventTime,
+  resolveEventTimeDisplay,
+} from "../lib/events/event-time.ts";
 import {
   checkWeekdayConsistency,
   looksLikeBareDate,
@@ -259,7 +266,25 @@ function runVenueQa() {
   const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle([
     { name: "Drugstore", instagramHandle: "drugstore_beograd" },
     { name: "Zappa Baza", instagramHandle: "zappabaza" },
+    { name: "Kulturni centar GRAD", instagramHandle: "kcgrad" },
+    { name: "Silosi Beograd ••••IIII Dom kulture", instagramHandle: "silosibeograd" },
+    { name: "Art space in Belgrade, Serbia", instagramHandle: "kvaka22_catch22" },
+    { name: "Chillton - Чилтон", instagramHandle: "chillton_chillton" },
+    { name: "Sinnerman Jazz Club", instagramHandle: "sinnermanjazzclub" },
+    { name: "Beton Club & Event Center", instagramHandle: "betonbelgrade" },
+    { name: "Nula pet _0.5", instagramHandle: "nulapet_0.5" },
+    { name: "Muzej Jugoslavije", instagramHandle: "muzej_jugoslavije" },
   ]);
+  const venueNameOverridesByHandle = {
+    kcgrad: "KC Grad",
+    silosibeograd: "Silosi",
+    kvaka22_catch22: "Kvaka 22",
+    chillton_chillton: "Chillton",
+    sinnermanjazzclub: "Sinnerman Jazz Club",
+    betonbelgrade: "Beton",
+    "nulapet_0.5": "Nula Pet",
+    muzej_jugoslavije: "Muzej Jugoslavije",
+  };
 
   const canonicalFromHandle = normalizeVenueFromEvidence({
     handle: "20_44.nightclub",
@@ -289,6 +314,44 @@ function runVenueQa() {
     staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
   });
   assert.equal(genericLocationOnly.venue, null);
+
+  const canonicalFromOverride = normalizeVenueFromEvidence({
+    handle: "kcgrad",
+    rawModelVenue: "",
+    locationName: "",
+    canonicalVenueNamesByHandle,
+    handleVenueNamesByHandle: venueNameOverridesByHandle,
+    staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+  });
+  assert.equal(canonicalFromOverride.venue, "KC Grad");
+  assert.equal(canonicalFromOverride.source, "handle_map");
+
+  const aliasCases = [
+    ["Kulturni centar GRAD", "KC Grad"],
+    ["KC Grad", "KC Grad"],
+    ["Silosi Beograd ••••IIII Dom kulture", "Silosi"],
+    ["Medonosni vrt Silosa", "Silosi"],
+    ["Kvaka 22", "Kvaka 22"],
+    ["Chillton", "Chillton"],
+    ["SinnerMan", "Sinnerman Jazz Club"],
+    ["Beton Club", "Beton"],
+    ["Pab 0,5", "Nula Pet"],
+    ["Bašta Paba Nula Pet", "Nula Pet"],
+    ["Amphitheater in front of the Museum of Yugoslav History", "Muzej Jugoslavije"],
+  ];
+  for (const [input, expected] of aliasCases) {
+    const resolved = canonicalizeVenueName(input, canonicalVenueNamesByHandle, {
+      handleVenueNamesByHandle: venueNameOverridesByHandle,
+    });
+    assert.equal(resolved, expected, `Expected venue alias '${input}' to resolve.`);
+  }
+
+  const detailedAlias = canonicalizeVenueNameDetailed("Pab 0,5", canonicalVenueNamesByHandle, {
+    handleVenueNamesByHandle: venueNameOverridesByHandle,
+  });
+  assert.equal(detailedAlias?.reason, "alias");
+  assert.equal(detailedAlias?.handle, "nulapet_0.5");
+  assert.equal(toSearchableText("ʙᴇʟɢʀᴀᴅᴇ ᴋɪᴛᴄʜᴇɴ ᴘᴀʀᴛʏ"), "belgrade kitchen party");
 }
 
 function runArtistAndDescriptionQa() {
@@ -428,7 +491,43 @@ function runVideoModerationQa() {
   assert.equal(relaxedFields.moderationAutoApproveRule, "caption_only_video_core_fields");
   assert.deepEqual(relaxedFields.moderationPendingReasons, []);
   assert.ok(relaxedFields.moderationSignals.includes("fallback_title"));
-  assert.ok(relaxedFields.moderationSignals.includes("missing_time"));
+  assert.ok(relaxedFields.moderationSignals.includes("time_tbd"));
+  assert.equal(relaxedVideo.event.time, TBD_EVENT_TIME);
+
+  const highConfidenceDateMissingTime = assertSingleOkPreparedEvent(
+    prepareEventsForInsert(
+      makeInstagramPost({
+        caption: "Saturday event at Sprat.",
+        postType: "image",
+        username: "sprat_bar",
+      }),
+      makeExtractedEvent({
+        title: "Saturday Night",
+        date: isoDateDaysFromNow(7),
+        time: "",
+        venue: "Sprat",
+        artists: ["QA DJ"],
+        confidence: AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+        field_confirmation: makeFieldConfirmation(AUTO_APPROVE_CONFIDENCE_THRESHOLD),
+      }),
+      "https://cdn.example.com/poster.jpg",
+      {},
+      {},
+      {},
+    ),
+  );
+  const highConfidenceDateMissingTimeFields = readPreparedNormalizedFields(
+    highConfidenceDateMissingTime,
+  );
+  assert.equal(highConfidenceDateMissingTime.event.status, "approved");
+  assert.equal(highConfidenceDateMissingTime.event.time, TBD_EVENT_TIME);
+  assert.equal(
+    highConfidenceDateMissingTimeFields.moderationAutoApproveRule,
+    "high_confidence_date_time_tbd",
+  );
+  assert.deepEqual(highConfidenceDateMissingTimeFields.moderationPendingReasons, []);
+  assert.ok(highConfidenceDateMissingTimeFields.moderationSignals.includes("time_tbd"));
+  assert.ok(!highConfidenceDateMissingTimeFields.moderationSignals.includes("missing_time"));
 
   const sparseVenueVideo = assertSingleOkPreparedEvent(
     prepareEventsForInsert(
@@ -544,6 +643,10 @@ function runScheduleConsistencyQa() {
   assert.equal(looksLikeBareDate("19:30"), false);
   assert.equal(normalizeEventTime("19.06").startLabel, undefined);
   assert.equal(normalizeEventTime("19.30").startLabel, "19:30");
+  assert.equal(
+    resolveEventTimeDisplay({ date: "2026-06-20", time: TBD_EVENT_TIME }).label,
+    TBD_EVENT_TIME,
+  );
 
   const fridayIsoDate = nextIsoDateForWeekday(5);
   const saturdayIsoDate = addIsoDays(fridayIsoDate, 1);
@@ -574,8 +677,8 @@ function runScheduleConsistencyQa() {
     ),
   );
   const sanitizedFields = readPreparedNormalizedFields(sanitizedTimeEvent);
-  assert.equal(sanitizedTimeEvent.event.time, undefined);
-  assert.equal(sanitizedFields.time, null);
+  assert.equal(sanitizedTimeEvent.event.time, TBD_EVENT_TIME);
+  assert.equal(sanitizedFields.time, TBD_EVENT_TIME);
 
   const mismatchedTopLevel = prepareEventsForInsert(
     makeInstagramPost({
@@ -599,7 +702,7 @@ function runScheduleConsistencyQa() {
   assert.equal(mismatchedTopLevel.length, 1);
   assert.equal(mismatchedTopLevel[0].kind, "ok");
   assert.equal(mismatchedTopLevel[0].event.date, fridayIsoDate);
-  assert.equal(mismatchedTopLevel[0].event.time, undefined);
+  assert.equal(mismatchedTopLevel[0].event.time, TBD_EVENT_TIME);
   assert.deepEqual(
     mismatchedTopLevel[0].normalizedFields.consistencyIssues,
     ["time_is_date"],

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 
 import {
+  TBD_EVENT_TIME,
   getDayPeriodForStartTime,
   resolveEventTimeDisplay,
 } from "../lib/events/event-time.ts";
@@ -120,6 +121,26 @@ assert.deepEqual(
   }).label,
   "21:00–02:00",
   "Venue fallback should choose the opening window containing the event start.",
+);
+
+assert.deepEqual(
+  resolveEventTimeDisplay({
+    date: WEDNESDAY,
+    time: TBD_EVENT_TIME,
+    venueHours: {
+      hoursJson: createHoursJson({
+        closed: false,
+        day: 3,
+        windows: [{ day: 3, end: "02:00", spansNextDay: true, start: "18:00" }],
+      }),
+    },
+  }),
+  {
+    dayPeriod: "unknown",
+    label: TBD_EVENT_TIME,
+    source: "unknown",
+  },
+  "Explicit TBD event time should not be replaced by venue hours.",
 );
 
 assert.deepEqual(

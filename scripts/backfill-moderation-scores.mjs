@@ -102,6 +102,8 @@ function buildBackfillDecision(event) {
   const titleUsedFallback = readBoolean(normalizedFields, "titleUsedFallback");
   const dateConfidence = readString(normalizedFields, "dateConfidence");
   const missingTime = !event.time;
+  const canUseTbdForMissingTime = missingTime && dateConfidence === "high";
+  const missingTimeNeedsReview = missingTime && !canUseTbdForMissingTime;
   const legacyCaptionOnlyCoreFields =
     missingImage &&
     hasCaptionCoreEvidence &&
@@ -133,20 +135,32 @@ function buildBackfillDecision(event) {
     dateConfidence !== "low" &&
     confidenceScore !== null &&
     confidenceScore >= CAPTION_ONLY_CORE_FIELDS_MIN_CONFIDENCE;
+  const highConfidenceDateTimeTbdAutoApproved =
+    canUseTbdForMissingTime &&
+    hasDate &&
+    hasVenue &&
+    !missingImage &&
+    !titleUsedFallback &&
+    !suspiciousYear &&
+    confidenceScore !== null &&
+    confidenceScore >= AUTO_APPROVE_CONFIDENCE_THRESHOLD;
   const autoApproveRule = strictConfidenceAutoApproved
     ? "confidence_threshold"
     : captionOnlyCoreAutoApproved
       ? hasVideoPostType
         ? "caption_only_video_core_fields"
         : "legacy_caption_only_core_fields"
-      : null;
+      : highConfidenceDateTimeTbdAutoApproved
+        ? "high_confidence_date_time_tbd"
+        : null;
   const autoApproved = autoApproveRule !== null;
   const moderationSignals = [
     ...(missingImage ? ["missing_image"] : []),
     ...(allowMissingImage ? ["missing_image_allowed"] : []),
     ...(legacyCaptionOnlyCoreFields ? ["legacy_caption_only_core_fields"] : []),
     ...(titleUsedFallback ? ["fallback_title"] : []),
-    ...(missingTime ? ["missing_time"] : []),
+    ...(missingTimeNeedsReview ? ["missing_time"] : []),
+    ...(canUseTbdForMissingTime ? ["time_tbd"] : []),
     ...(suspiciousYear ? ["suspicious_year"] : []),
     ...(confidenceScore !== null && confidenceScore < 0.7 ? ["low_confidence"] : []),
   ];
@@ -159,7 +173,7 @@ function buildBackfillDecision(event) {
           : []),
         ...(missingImage && !allowMissingImage ? ["missing_image"] : []),
         ...(titleUsedFallback ? ["fallback_title"] : []),
-        ...(missingTime ? ["missing_time"] : []),
+        ...(missingTimeNeedsReview ? ["missing_time"] : []),
         ...(suspiciousYear ? ["suspicious_year"] : []),
         ...(dateConfidence === "low" ? ["low_date_confidence"] : []),
       ];
