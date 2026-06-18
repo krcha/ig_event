@@ -274,6 +274,82 @@ function getRowTimeFromScheduleEntry(entry) {
   return sanitizeTimeAgainstDate(rawTime, entry?.date);
 }
 
+function getDateConvertedTime(rawDate) {
+  const value = String(rawDate ?? "").trim();
+  const isoMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (isoMatch) {
+    return `${Number(isoMatch[3])}:${isoMatch[2]}`;
+  }
+
+  const ddmmMatch = /^(\d{1,2})[./-](\d{1,2})(?:[./-]\d{2,4})?$/.exec(value);
+  if (!ddmmMatch) {
+    return "";
+  }
+
+  return `${Number(ddmmMatch[1])}:${String(Number(ddmmMatch[2])).padStart(2, "0")}`;
+}
+
+function isLikelyDateConvertedTime(time, rawDate) {
+  const value = String(time ?? "").trim();
+  if (!value) {
+    return false;
+  }
+
+  return value === getDateConvertedTime(rawDate);
+}
+
+function getRowArtistsFromScheduleEntry(entry) {
+  if (!Array.isArray(entry?.artists)) {
+    return [];
+  }
+
+  return entry.artists
+    .map((artist) => String(artist ?? "").trim())
+    .filter(Boolean);
+}
+
+function getRowDescriptionFromScheduleEntry(entry) {
+  return String(entry?.description ?? "").trim();
+}
+
+function sameStringArray(left, right) {
+  const normalizedLeft = Array.isArray(left)
+    ? left.map((item) => String(item ?? "").trim()).filter(Boolean)
+    : [];
+  const normalizedRight = Array.isArray(right)
+    ? right.map((item) => String(item ?? "").trim()).filter(Boolean)
+    : [];
+  return JSON.stringify(normalizedLeft) === JSON.stringify(normalizedRight);
+}
+
+function addRepair(patch, repairs, field, from, to, reason) {
+  patch[field] = to;
+  repairs.push({ field, from, to, reason });
+}
+
+function shouldRepairTitleFromSchedule(event, normalizedFields) {
+  const title = normalizeComparableText(event.title);
+  return (
+    normalizedFields?.titleDerivedFromContext === true ||
+    normalizedFields?.titleSource === "handle_fallback" ||
+    /(?:weekend events including|save the dates|this week|ove nedelje)/u.test(title)
+  );
+}
+
+function isWeakArtistList(artists) {
+  if (!Array.isArray(artists) || artists.length === 0) {
+    return true;
+  }
+
+  return artists.some((artist) =>
+    /^(?:night|day|event|lineup)?\s*-?\s*$/iu.test(String(artist ?? "").trim()),
+  );
+}
+
+function isGenericStoredDescription(description) {
+  return /^nightlife event with\b/iu.test(String(description ?? "").trim());
+}
+
 function buildRepair(event) {
   const normalizedFields = parseJson(event.normalizedFieldsJson) ?? {};
   const rawExtraction = parseJson(event.rawExtractionJson);
@@ -290,38 +366,80 @@ function buildRepair(event) {
     );
     const splitIndex = Number(normalizedFields?.splitEventIndex);
     if (rowDate && rowDate !== event.date && Number.isInteger(splitIndex)) {
-      patch.date = rowDate;
-      repairs.push({
-        field: "date",
-        from: event.date,
-        to: rowDate,
-        reason: "schedule_entry_date",
-      });
+      addRepair(patch, repairs, "date", event.date, rowDate, "schedule_entry_date");
+    }
+
+    if (Number.isInteger(splitIndex)) {
+      const rowTitle = getRowTitleFromScheduleEntry(scheduleEntry);
+      const shouldRepairTitle =
+        rowTitle && rowTitle !== event.title && shouldRepairTitleFromSchedule(event, normalizedFields);
+      if (shouldRepairTitle) {
+        addRepair(patch, repairs, "title", event.title, rowTitle, "schedule_entry_title");
+      }
+
+      const rowTime = getRowTimeFromScheduleEntry(scheduleEntry);
+      const shouldRepairTime =
+        rowTime &&
+        rowTime !== (event.time ?? "") &&
+        isLikelyDateConvertedTime(event.time, scheduleEntry.date);
+      if (shouldRepairTime) {
+        addRepair(patch, repairs, "time", event.time ?? "", rowTime, "schedule_entry_time");
+      }
+
+      const rowArtists = getRowArtistsFromScheduleEntry(scheduleEntry);
+      const shouldRepairArtists =
+        rowArtists.length > 0 &&
+        !sameStringArray(rowArtists, event.artists) &&
+        (shouldRepairTitle || shouldRepairTime || isWeakArtistList(event.artists));
+      if (shouldRepairArtists) {
+        addRepair(patch, repairs, "artists", event.artists ?? [], rowArtists, "schedule_entry_artists");
+      }
+
+      const rowDescription = getRowDescriptionFromScheduleEntry(scheduleEntry);
+      const shouldRepairDescription =
+        rowDescription &&
+        rowDescription !== (event.description ?? "") &&
+        (shouldRepairTitle ||
+          shouldRepairTime ||
+          shouldRepairArtists ||
+          isGenericStoredDescription(event.description));
+      if (shouldRepairDescription) {
+        addRepair(
+          patch,
+          repairs,
+          "description",
+          event.description ?? "",
+          rowDescription,
+          "schedule_entry_description",
+        );
+      }
     }
   }
 
-  if (looksLikeBareDate(event.time)) {
+  if (!patch.time && looksLikeBareDate(event.time)) {
     const rowTime = getRowTimeFromScheduleEntry(scheduleEntry);
-    patch.time = rowTime || "";
-    repairs.push({
-      field: "time",
-      from: event.time,
-      to: patch.time,
-      reason: rowTime ? "schedule_entry_time" : "date_shaped_time",
-    });
+    addRepair(
+      patch,
+      repairs,
+      "time",
+      event.time,
+      rowTime || "",
+      rowTime ? "schedule_entry_time" : "date_shaped_time",
+    );
   }
 
   const fallbackTitle = isFallbackTitle(event, normalizedFields);
-  if (isHandleDerivedTitle(event, normalizedFields)) {
+  if (!patch.title && isHandleDerivedTitle(event, normalizedFields)) {
     const replacementTitle = getRowTitleFromScheduleEntry(scheduleEntry);
     if (replacementTitle && replacementTitle !== event.title) {
-      patch.title = replacementTitle;
-      repairs.push({
-        field: "title",
-        from: event.title,
-        to: replacementTitle,
-        reason: "schedule_entry_title",
-      });
+      addRepair(
+        patch,
+        repairs,
+        "title",
+        event.title,
+        replacementTitle,
+        "schedule_entry_title",
+      );
     }
   }
 
@@ -337,14 +455,21 @@ function buildRepair(event) {
     return { patch: null, repairs, unrecoverable };
   }
 
-  patch.normalizedFieldsJson = JSON.stringify({
+  const repairedNormalizedFields = {
     ...normalizedFields,
+    ...(patch.title !== undefined ? { title: patch.title } : {}),
+    ...(patch.date !== undefined ? { normalizedDate: patch.date } : {}),
+    ...(patch.time !== undefined ? { time: patch.time || null } : {}),
+    ...(patch.artists !== undefined ? { artists: patch.artists } : {}),
+    ...(patch.description !== undefined ? { description: patch.description } : {}),
     consistencyRepair: {
       checkedAt: new Date().toISOString(),
       repairs,
       script: "scripts/repair-event-consistency.mjs",
     },
-  });
+  };
+
+  patch.normalizedFieldsJson = JSON.stringify(repairedNormalizedFields);
 
   return { patch, repairs, unrecoverable };
 }
