@@ -271,7 +271,13 @@ function getRowTimeFromScheduleEntry(entry) {
     return "";
   }
 
-  return sanitizeTimeAgainstDate(rawTime, entry?.date);
+  const sanitizedTime = sanitizeTimeAgainstDate(rawTime, entry?.date);
+  return sanitizedTime
+    .replace(/\b(\d{1,2}):(\d{2})\s*h\b/giu, "$1:$2")
+    .replace(/\b(\d{1,2})\s*h\b/giu, (_match, hour) =>
+      `${String(Number(hour)).padStart(2, "0")}:00`,
+    )
+    .trim();
 }
 
 function getDateConvertedTime(rawDate) {
@@ -296,6 +302,36 @@ function isLikelyDateConvertedTime(time, rawDate) {
   }
 
   return value === getDateConvertedTime(rawDate);
+}
+
+function collectDateLikeValues(...values) {
+  const dates = new Set();
+  for (const value of values) {
+    const text = String(value ?? "");
+    for (const match of text.matchAll(/\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b/gu)) {
+      dates.add(match[0]);
+    }
+    for (const match of text.matchAll(/\b\d{4}-\d{2}-\d{2}\b/gu)) {
+      dates.add(match[0]);
+    }
+  }
+  return [...dates];
+}
+
+function isConvertedFromAnyDateEvidence(time, event, normalizedFields, rawExtraction) {
+  const scheduleEntries = getScheduleEntries(rawExtraction);
+  const dateEvidence = collectDateLikeValues(
+    normalizedFields?.rawDate,
+    normalizedFields?.rawExtractedDateText,
+    normalizedFields?.splitSourceLine,
+    event.sourceCaption,
+    rawExtraction?.source_caption,
+    ...scheduleEntries.flatMap((entry) => [
+      entry?.date,
+      entry?.source_text,
+    ]),
+  );
+  return dateEvidence.some((value) => isLikelyDateConvertedTime(time, value));
 }
 
 function getRowArtistsFromScheduleEntry(entry) {
@@ -381,7 +417,7 @@ function buildRepair(event) {
       const shouldRepairTime =
         rowTime &&
         rowTime !== (event.time ?? "") &&
-        isLikelyDateConvertedTime(event.time, scheduleEntry.date);
+        isConvertedFromAnyDateEvidence(event.time, event, normalizedFields, rawExtraction);
       if (shouldRepairTime) {
         addRepair(patch, repairs, "time", event.time ?? "", rowTime, "schedule_entry_time");
       }
