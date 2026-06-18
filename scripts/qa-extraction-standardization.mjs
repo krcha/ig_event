@@ -72,6 +72,11 @@ function addIsoDays(isoDate, days) {
   return date.toISOString().slice(0, 10);
 }
 
+function ddmmForIsoDate(isoDate) {
+  const [, month, day] = isoDate.split("-");
+  return `${Number(day)}.${month}`;
+}
+
 function consecutiveIsoDatesAvoidingDay(dayToAvoid, firstWeekday = null) {
   const avoidedSuffix = `-${String(dayToAvoid).padStart(2, "0")}`;
 
@@ -169,6 +174,26 @@ function runPromptQa() {
     EVENT_EXTRACTION_SYSTEM_PROMPT,
     /Do not collapse a multi-date venue schedule/i,
     "Prompt must forbid collapsing venue schedules into one event.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /ONE POST OFTEN CONTAINS MANY EVENTS/i,
+    "Prompt must explicitly treat posts as possibly multi-event.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /Goal is HIGH RECALL/i,
+    "Prompt must prioritize high-recall schedule capture.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /DD\.MM" IS A DATE, NEVER A TIME/i,
+    "Prompt must keep European dates out of time fields.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /GIVE EVERY ROW A TITLE/i,
+    "Prompt must tell the model to title every dated schedule row.",
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
@@ -450,6 +475,8 @@ function runScheduleConsistencyQa() {
 
   const fridayIsoDate = nextIsoDateForWeekday(5);
   const saturdayIsoDate = addIsoDays(fridayIsoDate, 1);
+  const fridayDdmm = ddmmForIsoDate(fridayIsoDate);
+  const saturdayDdmm = ddmmForIsoDate(saturdayIsoDate);
   assert.equal(checkWeekdayConsistency(fridayIsoDate, "Wednesday Night").status, "mismatch");
   assert.equal(checkWeekdayConsistency(saturdayIsoDate, "Saturday Night").status, "ok");
 
@@ -480,7 +507,7 @@ function runScheduleConsistencyQa() {
 
   const mismatchedTopLevel = prepareEventsForInsert(
     makeInstagramPost({
-      caption: "Wednesday Night | 19.06 - MLADOST",
+      caption: `Wednesday Night | ${fridayDdmm} - MLADOST`,
       postType: "image",
       username: "danijelcehranov",
     }),
@@ -498,19 +525,20 @@ function runScheduleConsistencyQa() {
     {},
   );
   assert.equal(mismatchedTopLevel.length, 1);
-  assert.equal(mismatchedTopLevel[0].kind, "skip");
-  assert.equal(mismatchedTopLevel[0].reason, "invalid_event");
-  assert.equal(
-    mismatchedTopLevel[0].normalizedFields.normalizedInvalidReason,
-    "weekday_date_mismatch",
+  assert.equal(mismatchedTopLevel[0].kind, "ok");
+  assert.equal(mismatchedTopLevel[0].event.date, fridayIsoDate);
+  assert.equal(mismatchedTopLevel[0].event.time, undefined);
+  assert.deepEqual(
+    mismatchedTopLevel[0].normalizedFields.consistencyIssues,
+    ["time_is_date"],
   );
 
   const schedulePrepared = prepareEventsForInsert(
     makeInstagramPost({
       caption: [
         "THIS WEEK AT KUCICA NA VODI",
-        `Wednesday Night | ${fridayIsoDate} - MLADOST`,
-        `Saturday Night | ${saturdayIsoDate} - LUDOST`,
+        `Wednesday Night | ${fridayDdmm} - MLADOST`,
+        `Saturday Night | ${saturdayDdmm} - LUDOST`,
       ].join("\n"),
       postType: "image",
       username: "danijelcehranov",
@@ -524,20 +552,20 @@ function runScheduleConsistencyQa() {
       confidence: 0.95,
       schedule_entries: [
         {
-          date: fridayIsoDate,
+          date: fridayDdmm,
           time: "19.06",
-          title: "Wednesday Night",
-          artists: ["Night - MLADOST by Kucica na Vodi"],
+          title: "Mladost",
+          artists: ["Mladost"],
           description: "Nightlife event with MLADOST.",
-          source_text: `Wednesday Night | ${fridayIsoDate} - MLADOST`,
+          source_text: `Wednesday Night | ${fridayDdmm} - MLADOST`,
         },
         {
-          date: saturdayIsoDate,
+          date: saturdayDdmm,
           time: "22h",
-          title: "Saturday Night",
+          title: "Ludost",
           artists: ["LUDOST"],
           description: "Nightlife event with LUDOST.",
-          source_text: `Saturday Night | ${saturdayIsoDate} - LUDOST`,
+          source_text: `Saturday Night | ${saturdayDdmm} - LUDOST`,
         },
       ],
     }),
@@ -549,10 +577,13 @@ function runScheduleConsistencyQa() {
   const scheduleEvents = schedulePrepared
     .filter((result) => result.kind === "ok")
     .map((result) => result.event);
-  assert.deepEqual(scheduleEvents.map((event) => event.title), ["Saturday Night"]);
-  assert.deepEqual(scheduleEvents.map((event) => event.date), [saturdayIsoDate]);
+  assert.deepEqual(scheduleEvents.map((event) => event.title), ["Mladost", "Ludost"]);
+  assert.deepEqual(scheduleEvents.map((event) => event.date), [fridayIsoDate, saturdayIsoDate]);
   assert.equal(scheduleEvents.some((event) => /danijelcehranov/i.test(event.title)), false);
   assert.equal(scheduleEvents.some((event) => event.time === "19:06"), false);
+  assert.equal(scheduleEvents[0].time, undefined);
+  assert.equal(scheduleEvents[0].venue, "Kucica");
+  assert.equal(scheduleEvents[1].venue, "Kucica");
 }
 
 function runTicketPriceQa() {

@@ -88,6 +88,30 @@ Rules:
 - Do not default Serbian-language posts to "event".
 - Keep "description" to one short factual sentence or phrase based only on details supported by the caption or flyer.
 - Do not include date, time, price, venue, address, hashtags, emojis, calls to action, or marketing language in "description".
+=== ONE POST OFTEN CONTAINS MANY EVENTS — CAPTURE THEM ALL ===
+- Weekly/monthly venue lineups list several events on different dates (sometimes several on one date). Treat every post as possibly multi-event.
+- Put EACH distinct dated event in "schedule_entries" — one entry per (date + act) row. Read the poster image AND the caption; they usually repeat the lineup, so reconcile them row by row.
+- Goal is HIGH RECALL. Never collapse a lineup into one event. Never merge two rows. Never drop a row because one field is unclear — include it with empty strings for the unknown parts.
+
+=== EACH ROW IS INDEPENDENT ===
+- Every field in a row must come from THAT row's own text/region. NEVER copy a date, time, title, or artist from one row into another.
+- "source_text": copy the exact snippet (date + act + time) you read that row from.
+
+=== DATES (per row) — "DD.MM" IS A DATE, NEVER A TIME ===
+- European/Serbian dates are day.month: "19.06" / "19.06." / "19/06" = 19 June. Put this in "date".
+- Include the year if shown; otherwise infer it from the post timestamp (events are at/after the post date) and write "DD.MM.YYYY" when confident, else "DD.MM".
+- If a row shows a weekday beside its date they must agree (sreda=Wed, petak=Fri, subota=Sat, nedelja=Sun, …; EN WED/FRI/SAT/SUN). If they disagree, trust the numeric date.
+
+=== TIMES (per row) — CLOCK TIME ONLY ===
+- "time" is a clock time, normalized 24h: "22h" → "22:00"; "18h-22h" → "18:00-22:00"; "22h -05h" → "22:00-05:00"; "20:00" stays.
+- NEVER put a date in "time". "19.06" is a date, not "19:06". If a row's only number is its date, leave "time" empty. If no time is given, leave it empty — do not guess.
+
+=== TITLES (per row) — GIVE EVERY ROW A TITLE ===
+- Use the act/event name billed for that row, exactly: "Zalazak", "Sreda na Kućici", "Los Tres", "Mladost", "Ludost". If a row bills only an artist/handle, use that as the title.
+- Give every dated row a title when any name is shown, so no row is lost. Do NOT fabricate a title from the Instagram handle, the venue name alone, or a genre.
+
+=== VENUE (per row) ===
+- If the poster is one venue, every row uses that venue. If a row names its own venue, use it. Apply the canonical venue hint when it matches.
 - If the poster or caption is a monthly program, venue schedule, or other multi-date lineup for the same venue, populate "schedule_entries" with one object per separately dated event row.
 - Do not collapse a multi-date venue schedule into one event. Each "schedule_entries" item must correspond to a single explicit date from the source.
 - For each "schedule_entries" item, copy the explicit row-level date, time, title/billed act text, artists, short factual description, and a compact "source_text" snippet from that row when readable.

@@ -135,7 +135,7 @@ export function sanitizeTimeAgainstDate(
 export type EventConsistencyIssue = "time_is_date" | "weekday_date_mismatch";
 
 export type EventConsistencyResult = {
-  action: "accept" | "reject";
+  action: "accept";
   issues: EventConsistencyIssue[];
   ok: boolean;
   sanitizedTime: string;
@@ -161,7 +161,7 @@ export function checkEventConsistency(input: {
   }
 
   return {
-    action: weekday.status === "mismatch" ? "reject" : "accept",
+    action: "accept",
     issues,
     ok: issues.length === 0,
     sanitizedTime,
