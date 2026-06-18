@@ -19,6 +19,7 @@
     "qa:venue-hours": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-venue-hours.mjs",
     "qa:reclassify-dryrun": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/reclassify-event-types.mjs",
     "repair:event-consistency": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/repair-event-consistency.mjs",
+    "repair:event-schedule-entries": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/repair-event-schedule-entries.mjs",
     "qa:public-search": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-public-event-search.mjs",
     "qa:public-sort": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-public-event-sort.mjs",
     "qa:public-performance": "node scripts/qa-public-performance.mjs",

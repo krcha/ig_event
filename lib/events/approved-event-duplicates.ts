@@ -151,6 +151,9 @@ type DecoratedDuplicateEvent = ApprovedEventDuplicateRecord & {
   normalizedInstagramUrl: string;
   titleUsedFallback: boolean;
   titleDerivedFromContext: boolean;
+  multiEventSplitDetected: boolean;
+  multiEventSplitCount: number;
+  splitEventIndex: number | null;
   qualityScore: number;
 };
 
@@ -177,6 +180,11 @@ function readStringField(record: Record<string, unknown> | null, key: string): s
 
 function readBooleanField(record: Record<string, unknown> | null, key: string): boolean {
   return record?.[key] === true;
+}
+
+function readNumberField(record: Record<string, unknown> | null, key: string): number | null {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function normalizeComparisonText(value: string): string {
@@ -314,6 +322,7 @@ function decorateEventForDuplicateCleanup(
   const normalizedFields = parseJsonObject(event.normalizedFieldsJson);
   const titleUsedFallback = readBooleanField(normalizedFields, "titleUsedFallback");
   const titleDerivedFromContext = readBooleanField(normalizedFields, "titleDerivedFromContext");
+  const multiEventSplitCount = readNumberField(normalizedFields, "multiEventSplitCount") ?? 0;
   const duplicateVenueCandidates = collectComparableTextValues([
     event.venue,
     readStringField(normalizedFields, "normalizedVenue"),
@@ -381,12 +390,41 @@ function decorateEventForDuplicateCleanup(
     normalizedInstagramUrl: normalizeInstagramUrl(event.instagramPostUrl),
     titleUsedFallback,
     titleDerivedFromContext,
+    multiEventSplitDetected:
+      readBooleanField(normalizedFields, "multiEventSplitDetected") || multiEventSplitCount > 1,
+    multiEventSplitCount,
+    splitEventIndex: readNumberField(normalizedFields, "splitEventIndex"),
     qualityScore: scoreApprovedEventQuality(
       event,
       normalizedFields,
       titleUsedFallback || titleDerivedFromContext,
     ),
   };
+}
+
+function areDistinctMultiEventScheduleRows(
+  left: DecoratedDuplicateEvent,
+  right: DecoratedDuplicateEvent,
+): boolean {
+  if (!left.multiEventSplitDetected || !right.multiEventSplitDetected) {
+    return false;
+  }
+  if (left.multiEventSplitCount <= 1 || right.multiEventSplitCount <= 1) {
+    return false;
+  }
+  if (
+    left.splitEventIndex !== null &&
+    right.splitEventIndex !== null &&
+    left.splitEventIndex !== right.splitEventIndex
+  ) {
+    return true;
+  }
+
+  return (
+    !areSimilarDuplicateTexts(left.duplicateTitleText, right.duplicateTitleText) &&
+    !areSimilarDuplicateTexts(left.duplicateArtistText, right.duplicateArtistText) &&
+    !areDuplicateTimesCompatible(left.time, right.time)
+  );
 }
 
 function buildDuplicateMatchReasons(
@@ -410,16 +448,18 @@ function buildDuplicateMatchReasons(
     hasContextCandidateSupport(left.duplicateContextTexts, right.duplicateEntityCandidates) ||
     hasContextCandidateSupport(right.duplicateContextTexts, left.duplicateEntityCandidates);
 
-  if (
+  const sameInstagramPostById =
     left.instagramPostId &&
     right.instagramPostId &&
-    left.instagramPostId === right.instagramPostId
-  ) {
-    reasons.push("same Instagram post");
-  } else if (
+    left.instagramPostId === right.instagramPostId;
+  const sameInstagramPostByUrl =
     left.normalizedInstagramUrl &&
     right.normalizedInstagramUrl &&
-    left.normalizedInstagramUrl === right.normalizedInstagramUrl
+    left.normalizedInstagramUrl === right.normalizedInstagramUrl;
+
+  if (
+    (sameInstagramPostById || sameInstagramPostByUrl) &&
+    !areDistinctMultiEventScheduleRows(left, right)
   ) {
     reasons.push("same Instagram post");
   }
@@ -479,6 +519,10 @@ function areAutoCleanupDuplicateEvents(
     right.titleDerivedFromContext;
 
   if (!directVenueMatch && !contextualVenueMatch) {
+    return false;
+  }
+
+  if (areDistinctMultiEventScheduleRows(left, right)) {
     return false;
   }
 

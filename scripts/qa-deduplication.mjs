@@ -518,6 +518,58 @@ const tavanScheduleEntry = createEvent({
   }),
 });
 
+const kucicaZalazak = createEvent({
+  id: "j57cvkyyz8vkmf90mtsk607sgh88w250",
+  title: "Zalazak na Kucici",
+  date: "2026-03-18",
+  time: "18:00-22:00",
+  venue: "Kucica",
+  artists: ["danijelcehranov"],
+  description: "Wednesday Afterwork event Zalazak at Kucica.",
+  sourceCaption:
+    "Wednesday Afterwork | 18.03 - Zalazak by @danijelcehranov\nWednesday Night | 18.03 - @discogirl.bg @posle.rs",
+  instagramPostUrl: "https://www.instagram.com/p/DZXswkoIts0/",
+  instagramPostId: "3915795252931386164",
+  normalizedFieldsJson: JSON.stringify({
+    normalizedDate: "2026-03-18",
+    normalizedVenue: "Kucica",
+    rawVenue: "Kucica",
+    multiEventSplitDetected: true,
+    multiEventSplitCount: 2,
+    splitEventIndex: 1,
+    splitEventTotal: 2,
+    splitSourceLine: "18h - 22h ZALAZAK NA KUCICI 18.03 WED",
+    sourceCaptionFromModel:
+      "Wednesday Afterwork | 18.03 - Zalazak by @danijelcehranov\nWednesday Night | 18.03 - @discogirl.bg @posle.rs",
+  }),
+});
+
+const kucicaSreda = createEvent({
+  id: "j5773pksgvktdqsn8jsefm198188xfhn",
+  title: "Sreda na Kucici",
+  date: "2026-03-18",
+  time: "22:00-05:00",
+  venue: "Kucica",
+  artists: ["discogirl.bg", "posle.rs"],
+  description: "Wednesday Night event Sreda at Kucica.",
+  sourceCaption:
+    "Wednesday Afterwork | 18.03 - Zalazak by @danijelcehranov\nWednesday Night | 18.03 - @discogirl.bg @posle.rs",
+  instagramPostUrl: "https://www.instagram.com/p/DZXswkoIts0/",
+  instagramPostId: "3915795252931386164",
+  normalizedFieldsJson: JSON.stringify({
+    normalizedDate: "2026-03-18",
+    normalizedVenue: "Kucica",
+    rawVenue: "Kucica",
+    multiEventSplitDetected: true,
+    multiEventSplitCount: 2,
+    splitEventIndex: 2,
+    splitEventTotal: 2,
+    splitSourceLine: "22h - 05h SREDA NA KUCICI 18.03 WED",
+    sourceCaptionFromModel:
+      "Wednesday Afterwork | 18.03 - Zalazak by @danijelcehranov\nWednesday Night | 18.03 - @discogirl.bg @posle.rs",
+  }),
+});
+
 const groups = buildApprovedEventAutoCleanupGroups([
   ciglaPromo,
   ciglaSchedule,
@@ -539,6 +591,8 @@ const groups = buildApprovedEventAutoCleanupGroups([
   bazaScheduleEntry,
   vinylScheduleEntry,
   tavanScheduleEntry,
+  kucicaZalazak,
+  kucicaSreda,
 ]);
 
 const groupedIdSets = groups.map(
@@ -621,6 +675,11 @@ assert(
     (ids) => ids.has(vinylScheduleEntry.id) && ids.has(tavanScheduleEntry.id),
   ),
   "Expected unrelated same-night Vinyl schedule entries to remain separate when their identities do not overlap.",
+);
+
+assert(
+  !groupedIdSets.some((ids) => ids.has(kucicaZalazak.id) && ids.has(kucicaSreda.id)),
+  "Expected two distinct same-post Kucica schedule rows on the same date to remain visible.",
 );
 
 const illusionsGroup = groups.find((group) =>
