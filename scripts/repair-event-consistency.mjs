@@ -85,6 +85,81 @@ function normalizeHandleText(value) {
     .toLowerCase();
 }
 
+function normalizeComparableText(value) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9а-яё]+/giu, " ")
+    .trim();
+}
+
+function isVenueFallbackTitle(event) {
+  const title = normalizeComparableText(event.title);
+  const venue = normalizeComparableText(event.venue);
+  if (!title || !venue) {
+    return false;
+  }
+
+  return title === venue || title.includes(venue) || venue.includes(title);
+}
+
+function hasScheduleDetails(value) {
+  const text = String(value ?? "");
+  const numericDates = text.match(/\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b/gu) ?? [];
+  const monthDates =
+    text.match(
+      /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}\b/giu,
+    ) ?? [];
+  const clockTimes = text.match(/\b\d{1,2}(?::\d{2})?\s*(?:h|am|pm)\b|\b\d{1,2}:\d{2}\b/giu) ?? [];
+  const dateCount = numericDates.length + monthDates.length;
+  return dateCount >= 2 || (dateCount >= 1 && clockTimes.length >= 1);
+}
+
+function hasUsefulCapturedDetails(event, rawExtraction) {
+  const artists = Array.isArray(event.artists)
+    ? event.artists.map((artist) => String(artist ?? "").trim()).filter(Boolean)
+    : [];
+  if (artists.length > 0) {
+    return true;
+  }
+
+  const description = String(event.description ?? "").trim();
+  if (!description) {
+    return false;
+  }
+
+  if (hasScheduleDetails(description)) {
+    return true;
+  }
+
+  const normalizedDescription = normalizeComparableText(description);
+  const normalizedVenue = normalizeComparableText(event.venue);
+  const normalizedTitle = normalizeComparableText(event.title);
+  const normalizedRawVenue = normalizeComparableText(rawExtraction?.venue);
+  const detailText = normalizedDescription
+    .replaceAll(normalizedVenue, " ")
+    .replaceAll(normalizedTitle, " ")
+    .replaceAll(normalizedRawVenue, " ")
+    .replace(/\b(?:event|nightlife|live music|arts culture|food market|at|on|in|from|to|and|with|the|a|an|starting|starts|start|june|july|august|jun|jul|aug|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/giu, " ")
+    .replace(/\b\d{1,4}(?::\d{2})?\b/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (normalizedDescription.length < 24) {
+    return false;
+  }
+
+  if (
+    normalizedDescription === normalizedVenue ||
+    normalizedDescription === normalizedTitle
+  ) {
+    return false;
+  }
+
+  return detailText.split(/\s+/u).filter(Boolean).length >= 2;
+}
+
 function isHandleDerivedTitle(event, normalizedFields) {
   const title = String(event.title ?? "").trim();
   if (!title) {
@@ -98,6 +173,10 @@ function isHandleDerivedTitle(event, normalizedFields) {
   const firstWord = normalizeHandleText(title.split(/\s+/u)[0]);
   const sourceHandle = normalizeHandleText(event.sourceHandle ?? event.instagramHandle);
   return Boolean(sourceHandle && firstWord === sourceHandle);
+}
+
+function isFallbackTitle(event, normalizedFields) {
+  return isHandleDerivedTitle(event, normalizedFields) || isVenueFallbackTitle(event);
 }
 
 function normalizeDateCandidate(rawDate, fallbackIsoDate, postedAt) {
@@ -232,6 +311,7 @@ function buildRepair(event) {
     });
   }
 
+  const fallbackTitle = isFallbackTitle(event, normalizedFields);
   if (isHandleDerivedTitle(event, normalizedFields)) {
     const replacementTitle = getRowTitleFromScheduleEntry(scheduleEntry);
     if (replacementTitle && replacementTitle !== event.title) {
@@ -242,13 +322,15 @@ function buildRepair(event) {
         to: replacementTitle,
         reason: "schedule_entry_title",
       });
-    } else {
-      unrecoverable.push({
-        field: "title",
-        value: event.title,
-        reason: "handle_derived_title_without_schedule_entry",
-      });
     }
+  }
+
+  if (fallbackTitle && !hasUsefulCapturedDetails(event, rawExtraction)) {
+    unrecoverable.push({
+      field: "description",
+      value: event.description ?? "",
+      reason: "fallback_title_needs_detail_enrichment",
+    });
   }
 
   if (repairs.length === 0) {

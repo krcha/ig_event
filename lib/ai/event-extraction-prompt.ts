@@ -67,11 +67,11 @@ Rules:
 - If the source clearly names a different venue than the canonical venue hint, ignore the hint and return the source venue instead.
 - Do not return a promoter, organizer, collective, sponsor, or ticketing account as "venue" unless the source clearly shows that it is also the physical venue.
 - If the only location evidence is generic text such as Belgrade, Serbia, club, nightclub, or event space, return empty string for "venue".
-- Only return a non-empty "title" when an explicit event/program name is clearly written in the caption or flyer.
+- Prefer a non-empty "title" only when an explicit event/program/act name is clearly written in the caption or flyer.
 - Prefer the parent event/program name over poster subsection labels. If the flyer says something like "Aktivnosti", "Program", "Lineup", "Radionice", or another section heading, and the caption/flyer also names the actual event, return the actual event name as "title".
 - If the source only indicates a genre, format, or generic session type (for example jam session, techno night, live music), return an empty string for "title".
 - Do not treat poster subsections, schedule headings, or detail blocks as event titles.
-- Do not use the venue name, Instagram handle, or a generic genre label as a fabricated event title unless that exact text is clearly the event/program name in the source.
+- If no event/program/act title exists, use a concise last-resort fallback title from the venue, organizer, account, or handle so the event can still be captured. In that case, make "description" capture concrete supported details from the caption/poster instead of just repeating the fallback title.
 - Do not create, paraphrase, beautify, or normalize event titles.
 - "artists" must contain only explicitly billed performers, DJs, live acts, hosts, or speakers who are presented as part of the lineup.
 - Exclude section headings, organizer names, venue names, sponsor names, ticket links, hashtags, and generic labels like "lineup" or "special guests" when no specific names are given.
@@ -108,7 +108,7 @@ Rules:
 
 === TITLES (per row) — GIVE EVERY ROW A TITLE ===
 - Use the act/event name billed for that row, exactly: "Zalazak", "Sreda na Kućici", "Los Tres", "Mladost", "Ludost". If a row bills only an artist/handle, use that as the title.
-- Give every dated row a title when any name is shown, so no row is lost. Do NOT fabricate a title from the Instagram handle, the venue name alone, or a genre.
+- Give every dated row a title when any name is shown, so no row is lost. Use act/event names first; if no act/event name is shown, use a venue, organizer, account, or handle as a last-resort row title and preserve all readable row details in "description" and "source_text".
 
 === VENUE (per row) ===
 - If the poster is one venue, every row uses that venue. If a row names its own venue, use it. Apply the canonical venue hint when it matches.
