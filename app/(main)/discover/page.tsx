@@ -111,6 +111,7 @@ function mapPublicEvent(event: PublicEvent): DiscoverFeedEvent {
     ...(event.description ? { description: event.description } : {}),
     eventType: event.eventType,
     ...(event.imageUrl ? { imageUrl: event.imageUrl } : {}),
+    ...(event.instagramPostUrl ? { instagramPostUrl: event.instagramPostUrl } : {}),
     ...(event.ticketPrice ? { ticketPrice: event.ticketPrice } : {}),
     ...(event.time ? { time: event.time } : {}),
     title: event.title,
