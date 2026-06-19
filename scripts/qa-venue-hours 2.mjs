@@ -127,7 +127,7 @@ assert.deepEqual(
   {
     dayPeriod: "night",
     endLabel: "02:00",
-    label: "Open 18:00–02:00",
+    label: "18:00–02:00",
     source: "venue_hours",
     startLabel: "18:00",
   },
@@ -141,13 +141,13 @@ assert.equal(
       hoursJson: createHoursJson({ closed: true, day: 3, windows: [] }),
     },
   }).label,
-  "Closed today — tap to check",
+  "Closed",
   "Closed venue hours should render a closed fallback.",
 );
 
 assert.equal(
   resolveEventTimeDisplay({ date: WEDNESDAY }).label,
-  "Hours unknown — tap to check",
+  "TBD",
   "Missing event time and missing venue hours should render the unknown fallback.",
 );
 

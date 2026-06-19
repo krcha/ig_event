@@ -25,6 +25,21 @@ assert.ok(
   "Mobile top header should keep the left brand label.",
 );
 
+assert.ok(
+  mobileTopbarSource.includes('aria-label="Your profile"'),
+  "Mobile top header should include a profile avatar link.",
+);
+
+assert.ok(
+  mobileTopbarSource.includes('href="/you"'),
+  "Mobile top header profile avatar should link to /you.",
+);
+
+assert.ok(
+  mobileTopbarSource.includes("CircleUserRound"),
+  "Mobile top header profile avatar should render the profile icon.",
+);
+
 assert.equal(
   /\bcurrentSectionLabel\b/.test(source),
   false,
@@ -65,15 +80,14 @@ const publicItemsSource = source.slice(publicItemsStart, adminItemsStart);
 
 assert.deepEqual(
   [...publicItemsSource.matchAll(/\blabel:\s*"([^"]+)"/g)].map(([, label]) => label),
-  ["Events", "Map", "Saved", "You"],
-  "Public bottom navigation tabs should remain exactly Events, Map, Saved, You.",
+  ["Events", "Map", "Saved"],
+  "Public bottom navigation tabs should remain exactly Events, Map, Saved.",
 );
 
 for (const { href, label } of [
   { href: "/", label: "Events" },
   { href: "/map", label: "Map" },
   { href: "/saved", label: "Saved" },
-  { href: "/you", label: "You" },
 ]) {
   assert.match(
     publicItemsSource,

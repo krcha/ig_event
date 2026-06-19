@@ -46,12 +46,6 @@ const PUBLIC_TOOLBAR_ITEMS: ToolbarItem[] = [
     match: "prefix",
     badge: "upcomingSavedEvents",
   },
-  {
-    href: "/you",
-    label: "You",
-    icon: CircleUserRound,
-    match: "prefix",
-  },
 ];
 
 const ADMIN_TOOLBAR_ITEMS: ToolbarItem[] = [
@@ -148,11 +142,18 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
     <>
       <div className="mobile-topbar">
         <div className="glass-panel px-3 py-2">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center justify-between gap-3">
             <Link className="inline-flex min-w-0 items-center gap-2" href="/">
               <span className="inline-flex h-9 items-center rounded-full bg-primary px-3 text-xs font-semibold text-primary-foreground">
                 Belgrade nights
               </span>
+            </Link>
+            <Link
+              aria-label="Your profile"
+              className="inline-flex h-9 w-9 flex-none items-center justify-center rounded-full bg-white/[0.05] text-muted-foreground ring-1 ring-white/[0.08] transition hover:bg-primary/[0.16] hover:text-primary"
+              href="/you"
+            >
+              <CircleUserRound className="h-4 w-4" />
             </Link>
           </div>
         </div>

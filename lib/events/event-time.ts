@@ -257,7 +257,7 @@ export function resolveEventTimeDisplay(options: {
     return {
       dayPeriod: getDayPeriodForStartTime(venueWindow.window.start),
       endLabel: venueWindow.window.end,
-      label: `Open ${formatVenueHoursWindow(venueWindow.window)}`,
+      label: formatVenueHoursWindow(venueWindow.window),
       source: "venue_hours",
       startLabel: venueWindow.window.start,
     };
@@ -266,14 +266,14 @@ export function resolveEventTimeDisplay(options: {
   if (venueWindow.status === "closed") {
     return {
       dayPeriod: "unknown",
-      label: "Closed today — tap to check",
+      label: "Closed",
       source: "closed",
     };
   }
 
   return {
     dayPeriod: "unknown",
-    label: "Hours unknown — tap to check",
+    label: "TBD",
     source: "unknown",
   };
 }
