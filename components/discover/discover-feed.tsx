@@ -1,19 +1,13 @@
-import type { CSSProperties } from "react";
 import Link from "next/link";
 import { ExternalLink, Instagram, Search, Sparkles } from "lucide-react";
-import { PosterImage } from "@/components/discover/poster-image";
 import {
-  EVENT_CATEGORY_TONES,
   EventCategoryPill,
   EventDayPeriodChip,
   EventPriceChip,
-  getEventCategoryKind,
 } from "@/components/events/event-meta";
 import { SaveEventButton } from "@/components/events/save-event-button";
 import { resolveEventTimeDisplay, type EventDayPeriod } from "@/lib/events/event-time";
 import { cn } from "@/lib/utils";
-
-type PromotionTier = "featured" | "promoted";
 
 export type DiscoverFeedEvent = {
   _id: string;
@@ -21,37 +15,28 @@ export type DiscoverFeedEvent = {
   date: string;
   description?: string;
   eventType: string;
-  imageUrl?: string;
+  instagramHandle?: string;
   instagramPostUrl?: string;
-  promotionEnd?: string;
-  promotionPriority?: number;
-  promotionStart?: string;
-  promotionTier?: PromotionTier;
+  sourceCaption?: string;
+  sourcePostedAt?: string;
   ticketPrice?: string;
   time?: string;
   title: string;
   venue: string;
 };
 
-export type DiscoverFeedData = {
-  featured: DiscoverFeedEvent[];
-  free: DiscoverFeedEvent[];
-  promoted: DiscoverFeedEvent[];
-  tonight: DiscoverFeedEvent[];
-  weekend: DiscoverFeedEvent[];
+export type DiscoverDateTab = {
+  active: boolean;
+  href: string;
+  label: string;
+  sublabel: string;
 };
 
 type DiscoverFeedProps = {
+  dateTabs: DiscoverDateTab[];
   error?: string;
-  feed: DiscoverFeedData;
+  events: DiscoverFeedEvent[];
   subline: string;
-};
-
-type DiscoverFeedItem = {
-  event: DiscoverFeedEvent;
-  featured?: boolean;
-  label: string;
-  paidLabel?: "Featured" | "Promoted";
 };
 
 function getResolvedTime(event: DiscoverFeedEvent): {
@@ -91,90 +76,16 @@ function formatEventDate(value: string): string {
   }).format(date);
 }
 
-function getPosterStyle(event: DiscoverFeedEvent): CSSProperties {
-  const tone = EVENT_CATEGORY_TONES[getEventCategoryKind(event)];
-  return {
-    backgroundColor: tone.backgroundColor,
-    borderColor: `${tone.color}44`,
-    color: tone.color,
-  };
-}
-
 function getAvatarInitial(event: DiscoverFeedEvent): string {
-  return (event.venue || event.title).trim().charAt(0).toUpperCase() || "B";
+  return (event.instagramHandle || event.venue || event.title).trim().charAt(0).toUpperCase() || "B";
 }
 
-function shouldBypassImageOptimizer(value: string | undefined): boolean {
-  if (!value) {
-    return false;
+function getInstagramHandleLabel(event: DiscoverFeedEvent): string {
+  const handle = event.instagramHandle?.replace(/^@/, "").trim();
+  if (handle) {
+    return `@${handle}`;
   }
-
-  try {
-    const host = new URL(value).hostname.toLowerCase();
-    return host.endsWith("cdninstagram.com") || host.endsWith("fbcdn.net");
-  } catch {
-    return false;
-  }
-}
-
-function PosterFallback({ event, hero = false }: { event: DiscoverFeedEvent; hero?: boolean }) {
-  const tone = EVENT_CATEGORY_TONES[getEventCategoryKind(event)];
-
-  return (
-    <div
-      className={cn(
-        "flex h-full w-full items-end overflow-hidden border bg-card px-4 py-4",
-        hero ? "rounded-[1.25rem]" : "rounded-[1rem]",
-      )}
-      style={getPosterStyle(event)}
-    >
-      <div className="min-w-0">
-        <p
-          className="text-[10px] font-semibold uppercase tracking-[0.24em]"
-          style={{ color: tone.color }}
-        >
-          {tone.label}
-        </p>
-        <p
-          className={cn(
-            "mt-2 line-clamp-4 font-semibold text-foreground",
-            hero ? "text-3xl" : "text-lg",
-          )}
-        >
-          {event.title}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function PosterVisual({
-  event,
-  hero = false,
-  priority = false,
-}: {
-  event: DiscoverFeedEvent;
-  hero?: boolean;
-  priority?: boolean;
-}) {
-  const fallback = <PosterFallback event={event} hero={hero} />;
-
-  if (!event.imageUrl) {
-    return fallback;
-  }
-
-  return (
-    <PosterImage
-      alt={event.title}
-      className="object-cover"
-      fallback={fallback}
-      fill
-      priority={priority}
-      sizes="(max-width: 768px) 100vw, 38rem"
-      src={event.imageUrl}
-      unoptimized={shouldBypassImageOptimizer(event.imageUrl)}
-    />
-  );
+  return event.venue;
 }
 
 function EventMetaChips({ event }: { event: DiscoverFeedEvent }) {
@@ -189,19 +100,17 @@ function EventMetaChips({ event }: { event: DiscoverFeedEvent }) {
   );
 }
 
-function DiscoverPost({ item }: { item: DiscoverFeedItem }) {
-  const { event } = item;
+function getPostBody(event: DiscoverFeedEvent): string {
+  return event.sourceCaption?.trim() || event.description?.trim() || `${event.title} at ${event.venue}`;
+}
+
+function DiscoverPost({ event }: { event: DiscoverFeedEvent }) {
   const time = getResolvedTime(event);
-  const tone = EVENT_CATEGORY_TONES[getEventCategoryKind(event)];
-  const description = event.description?.trim();
+  const handleLabel = getInstagramHandleLabel(event);
+  const postBody = getPostBody(event);
 
   return (
-    <article
-      className={cn(
-        "overflow-hidden rounded-[1.25rem] border border-white/[0.07] bg-[#0d0f16] shadow-[0_26px_70px_-48px_rgba(0,0,0,0.92)]",
-        item.featured && "border-primary/24 shadow-[0_34px_90px_-54px_rgba(139,134,251,0.72)]",
-      )}
-    >
+    <article className="overflow-hidden rounded-[1.25rem] border border-white/[0.07] bg-[#0d0f16] shadow-[0_26px_70px_-48px_rgba(0,0,0,0.92)]">
       <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-3 py-3">
         <Link
           aria-label={`Open ${event.title}`}
@@ -209,39 +118,34 @@ function DiscoverPost({ item }: { item: DiscoverFeedItem }) {
           href={`/events/${event._id}`}
         >
           <span
-            className="inline-flex h-10 w-10 flex-none items-center justify-center rounded-full border text-sm font-bold"
-            style={{
-              backgroundColor: tone.backgroundColor,
-              borderColor: `${tone.color}55`,
-              color: tone.color,
-            }}
+            className="inline-flex h-10 w-10 flex-none items-center justify-center rounded-full border border-primary/25 bg-primary/[0.14] text-sm font-bold text-primary"
           >
             {getAvatarInitial(event)}
           </span>
           <span className="min-w-0">
             <span className="block truncate text-sm font-semibold leading-5 text-foreground">
-              {event.venue}
+              {handleLabel}
             </span>
             <span className="block truncate text-[11px] font-medium text-muted-foreground">
-              {item.label} · {formatEventDate(event.date)}
+              {event.venue} · {formatEventDate(event.date)}
             </span>
           </span>
         </Link>
-        {item.paidLabel ? (
-          <span className="inline-flex flex-none items-center rounded-full bg-primary px-2.5 py-1 text-[10px] font-semibold text-primary-foreground">
-            {item.paidLabel}
-          </span>
-        ) : null}
+        <span className="inline-flex flex-none items-center rounded-full bg-white/[0.05] px-2.5 py-1 text-[10px] font-semibold text-muted-foreground ring-1 ring-white/[0.08]">
+          {time.label}
+        </span>
       </div>
 
-      <Link
-        aria-label={`Open ${event.title}`}
-        className="group relative block aspect-[4/5] overflow-hidden bg-card"
-        href={`/events/${event._id}`}
-      >
-        <PosterVisual event={event} hero={item.featured} priority={item.featured} />
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-black/8 opacity-85 transition group-hover:opacity-100" />
-      </Link>
+      <div className="border-b border-white/[0.06] bg-black/[0.18] px-4 py-5 sm:px-5">
+        <Link aria-label={`Open ${event.title}`} className="block" href={`/events/${event._id}`}>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">
+            {event.title}
+          </p>
+          <p className="mt-3 whitespace-pre-line text-[15px] leading-7 text-foreground">
+            {postBody}
+          </p>
+        </Link>
+      </div>
 
       <div className="space-y-3 px-3 pb-4 pt-3">
         <div className="flex items-center justify-between gap-3">
@@ -273,19 +177,15 @@ function DiscoverPost({ item }: { item: DiscoverFeedItem }) {
           />
         </div>
 
-        <Link aria-label={`Open ${event.title}`} className="block" href={`/events/${event._id}`}>
-          <p className="line-clamp-3 text-sm leading-6 text-foreground">
-            <span className="font-semibold">{event.title}</span>
-            {description ? (
-              <span className="text-muted-foreground"> {description}</span>
-            ) : (
-              <span className="text-muted-foreground"> at {event.venue}</span>
-            )}
+        <div className="space-y-1">
+          <p className="text-sm leading-6 text-foreground">
+            <span className="font-semibold">{handleLabel}</span>{" "}
+            <span className="text-muted-foreground">{event.title}</span>
           </p>
           <p className="mt-1 text-xs font-medium text-muted-foreground">
             {event.venue} · {time.label}
           </p>
-        </Link>
+        </div>
 
         <div className="flex items-center justify-between gap-3">
           <EventMetaChips event={event} />
@@ -294,40 +194,6 @@ function DiscoverPost({ item }: { item: DiscoverFeedItem }) {
       </div>
     </article>
   );
-}
-
-function buildDiscoverFeedItems(feed: DiscoverFeedData): DiscoverFeedItem[] {
-  const items: DiscoverFeedItem[] = [];
-  const seenEventIds = new Set<string>();
-
-  function append(
-    events: DiscoverFeedEvent[],
-    label: string,
-    options: Pick<DiscoverFeedItem, "featured" | "paidLabel"> = {},
-  ) {
-    for (const event of events) {
-      if (seenEventIds.has(event._id)) {
-        continue;
-      }
-      seenEventIds.add(event._id);
-      items.push({
-        event,
-        label,
-        ...options,
-      });
-    }
-  }
-
-  append(feed.featured, "Featured tonight", {
-    featured: true,
-    paidLabel: "Featured",
-  });
-  append(feed.promoted, "Promoted", { paidLabel: "Promoted" });
-  append(feed.tonight, "Tonight's picks");
-  append(feed.weekend, "This weekend");
-  append(feed.free, "Free entry");
-
-  return items;
 }
 
 function EmptyDiscoverState({ error }: { error?: string }) {
@@ -346,9 +212,8 @@ function EmptyDiscoverState({ error }: { error?: string }) {
   );
 }
 
-export function DiscoverFeed({ error, feed, subline }: DiscoverFeedProps) {
-  const feedItems = buildDiscoverFeedItems(feed);
-  const hasSections = feedItems.length > 0;
+export function DiscoverFeed({ dateTabs, error, events, subline }: DiscoverFeedProps) {
+  const hasEvents = events.length > 0;
 
   return (
     <main className="app-page gap-3 sm:gap-4">
@@ -372,12 +237,35 @@ export function DiscoverFeed({ error, feed, subline }: DiscoverFeedProps) {
               </Link>
             </div>
           </div>
+          <nav
+            aria-label="Discover dates"
+            className="mt-4 grid grid-cols-3 gap-1 rounded-full border border-white/[0.07] bg-white/[0.035] p-1"
+          >
+            {dateTabs.map((tab) => (
+              <Link
+                aria-current={tab.active ? "date" : undefined}
+                className={cn(
+                  "min-w-0 rounded-full px-2.5 py-2 text-center",
+                  tab.active
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-white/[0.05] hover:text-foreground",
+                )}
+                href={tab.href}
+                key={tab.href}
+              >
+                <span className="block truncate text-xs font-semibold">{tab.label}</span>
+                <span className="mt-0.5 block truncate text-[10px] font-medium opacity-75">
+                  {tab.sublabel}
+                </span>
+              </Link>
+            ))}
+          </nav>
         </header>
 
-        {feedItems.map((item) => (
-          <DiscoverPost item={item} key={`${item.label}-${item.event._id}`} />
+        {events.map((event) => (
+          <DiscoverPost event={event} key={event._id} />
         ))}
-        {!hasSections || error ? <EmptyDiscoverState error={error} /> : null}
+        {!hasEvents || error ? <EmptyDiscoverState error={error} /> : null}
       </div>
     </main>
   );

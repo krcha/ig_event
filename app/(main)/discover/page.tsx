@@ -1,9 +1,7 @@
-import { ConvexHttpClient } from "convex/browser";
-import type { FunctionReference } from "convex/server";
 import {
+  type DiscoverDateTab,
   DiscoverFeed,
   type DiscoverFeedEvent,
-  type DiscoverFeedData,
 } from "@/components/discover/discover-feed";
 import {
   loadUpcomingApprovedEvents,
@@ -12,15 +10,10 @@ import {
 
 export const revalidate = 60;
 
-const getDiscoverFeedQuery =
-  "events:getDiscoverFeed" as unknown as FunctionReference<"query">;
-
-const EMPTY_DISCOVER_FEED: DiscoverFeedData = {
-  featured: [],
-  free: [],
-  promoted: [],
-  tonight: [],
-  weekend: [],
+type DiscoverPageProps = {
+  searchParams?: {
+    date?: string | string[];
+  };
 };
 
 function getBelgradeDateKey(now = new Date()): string {
@@ -65,44 +58,6 @@ function addDaysToDateKey(value: string, days: number): string {
   return formatDateKey(date);
 }
 
-function getWeekendDates(today: string): Set<string> {
-  const todayDate = parseDateKey(today);
-  const day = todayDate?.getUTCDay() ?? 1;
-  const startOffset = day >= 1 && day <= 4 ? 5 - day : 0;
-  const endOffset = day === 5 ? 2 : day === 6 ? 1 : day === 0 ? 0 : startOffset + 2;
-  const dates = new Set<string>();
-
-  for (let offset = startOffset; offset <= endOffset; offset += 1) {
-    const dateKey = addDaysToDateKey(today, offset);
-    const date = parseDateKey(dateKey);
-    const dateDay = date?.getUTCDay();
-    if (dateDay === 5 || dateDay === 6 || dateDay === 0) {
-      dates.add(dateKey);
-    }
-  }
-
-  return dates;
-}
-
-function hasFreeTicketPrice(value: string | undefined): boolean {
-  const normalized = value
-    ?.normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLocaleLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
-
-  return (
-    !normalized ||
-    normalized === "0" ||
-    normalized === "free" ||
-    normalized === "besplatno" ||
-    normalized === "slobodan ulaz" ||
-    normalized === "slobodne donacije" ||
-    normalized === "donacije"
-  );
-}
-
 function mapPublicEvent(event: PublicEvent): DiscoverFeedEvent {
   return {
     _id: event._id,
@@ -110,8 +65,10 @@ function mapPublicEvent(event: PublicEvent): DiscoverFeedEvent {
     date: event.date,
     ...(event.description ? { description: event.description } : {}),
     eventType: event.eventType,
-    ...(event.imageUrl ? { imageUrl: event.imageUrl } : {}),
+    ...(event.instagramHandle ? { instagramHandle: event.instagramHandle } : {}),
     ...(event.instagramPostUrl ? { instagramPostUrl: event.instagramPostUrl } : {}),
+    ...(event.sourceCaption ? { sourceCaption: event.sourceCaption } : {}),
+    ...(event.sourcePostedAt ? { sourcePostedAt: event.sourcePostedAt } : {}),
     ...(event.ticketPrice ? { ticketPrice: event.ticketPrice } : {}),
     ...(event.time ? { time: event.time } : {}),
     title: event.title,
@@ -119,27 +76,21 @@ function mapPublicEvent(event: PublicEvent): DiscoverFeedEvent {
   };
 }
 
-async function loadFallbackDiscoverFeed(today: string): Promise<{
+async function loadDiscoverEvents(date: string): Promise<{
   error?: string;
-  feed: DiscoverFeedData;
+  events: DiscoverFeedEvent[];
 }> {
-  const beforeDate = addDaysToDateKey(today, 14);
+  const beforeDate = addDaysToDateKey(date, 1);
   const result = await loadUpcomingApprovedEvents({
     beforeDate,
-    fromDate: today,
+    fromDate: date,
   });
-  const events = result.events.map(mapPublicEvent);
-  const weekendDates = getWeekendDates(today);
 
   return {
     ...(result.error ? { error: result.error } : {}),
-    feed: {
-      featured: [],
-      promoted: [],
-      tonight: events.filter((event) => event.date === today).slice(0, 12),
-      weekend: events.filter((event) => weekendDates.has(event.date)).slice(0, 12),
-      free: events.filter((event) => hasFreeTicketPrice(event.ticketPrice)).slice(0, 12),
-    },
+    events: result.events
+      .filter((event) => event.date === date)
+      .map(mapPublicEvent),
   };
 }
 
@@ -167,47 +118,61 @@ function formatDiscoverSubline(dateKey: string): string {
   return `${label} · Belgrade`;
 }
 
-function normalizeFeed(value: unknown): DiscoverFeedData {
-  const candidate = value as Partial<DiscoverFeedData>;
-  return {
-    featured: Array.isArray(candidate.featured) ? candidate.featured : [],
-    free: Array.isArray(candidate.free) ? candidate.free : [],
-    promoted: Array.isArray(candidate.promoted) ? candidate.promoted : [],
-    tonight: Array.isArray(candidate.tonight) ? candidate.tonight : [],
-    weekend: Array.isArray(candidate.weekend) ? candidate.weekend : [],
-  };
+function getDateTabDates(today: string): string[] {
+  return [addDaysToDateKey(today, -1), today, addDaysToDateKey(today, 1)];
 }
 
-async function loadDiscoverFeed(today: string): Promise<{
-  error?: string;
-  feed: DiscoverFeedData;
-}> {
-  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
-  if (!convexUrl) {
-    return {
-      error: "Convex is not configured yet.",
-      feed: EMPTY_DISCOVER_FEED,
-    };
-  }
-
-  try {
-    const convex = new ConvexHttpClient(convexUrl);
-    const feed = await convex.query(getDiscoverFeedQuery, { today });
-    return { feed: normalizeFeed(feed) };
-  } catch {
-    return loadFallbackDiscoverFeed(today);
-  }
+function normalizeRequestedDate(
+  value: string | string[] | undefined,
+  today: string,
+): string {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  const allowedDates = getDateTabDates(today);
+  return candidate && allowedDates.includes(candidate) && parseDateKey(candidate)
+    ? candidate
+    : today;
 }
 
-export default async function DiscoverPage() {
+function buildDateTabs(today: string, selectedDate: string): DiscoverDateTab[] {
+  const [yesterday, current, tomorrow] = getDateTabDates(today);
+  const tabs = [
+    { label: "Yesterday", date: yesterday },
+    { label: "Today", date: current },
+    { label: "Tomorrow", date: tomorrow },
+  ];
+
+  return tabs.map((tab) => ({
+    active: tab.date === selectedDate,
+    href: tab.date === today ? "/discover" : `/discover?date=${tab.date}`,
+    label: tab.label,
+    sublabel: formatEventDateShort(tab.date),
+  }));
+}
+
+function formatEventDateShort(dateKey: string): string {
+  const date = parseDateKey(dateKey);
+  if (!date) {
+    return dateKey;
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    day: "numeric",
+    month: "short",
+    timeZone: "Europe/Belgrade",
+  }).format(date);
+}
+
+export default async function DiscoverPage({ searchParams }: DiscoverPageProps) {
   const today = getBelgradeDateKey();
-  const { error, feed } = await loadDiscoverFeed(today);
+  const selectedDate = normalizeRequestedDate(searchParams?.date, today);
+  const { error, events } = await loadDiscoverEvents(selectedDate);
 
   return (
     <DiscoverFeed
+      dateTabs={buildDateTabs(today, selectedDate)}
       error={error}
-      feed={feed}
-      subline={formatDiscoverSubline(today)}
+      events={events}
+      subline={formatDiscoverSubline(selectedDate)}
     />
   );
 }

@@ -21,7 +21,13 @@ export default function DiscoverLoading() {
                 <div className="h-3 w-24 animate-pulse rounded-full bg-muted" />
               </div>
             </div>
-            <div className="aspect-[4/5] animate-pulse bg-muted" />
+            <div className="space-y-3 border-b border-border/70 bg-background/20 px-4 py-6">
+              <div className="h-3 w-28 animate-pulse rounded-full bg-muted" />
+              <div className="h-4 w-11/12 animate-pulse rounded-full bg-muted" />
+              <div className="h-4 w-full animate-pulse rounded-full bg-muted" />
+              <div className="h-4 w-4/5 animate-pulse rounded-full bg-muted" />
+              <div className="h-4 w-2/3 animate-pulse rounded-full bg-muted" />
+            </div>
             <div className="space-y-3 px-3 py-4">
               <div className="flex items-center justify-between">
                 <div className="h-10 w-24 animate-pulse rounded-full bg-muted" />

@@ -60,6 +60,7 @@ export type PublicEvent = {
   sourceCaption?: string;
   description?: string;
   imageUrl?: string;
+  instagramHandle?: string;
   instagramPostUrl?: string;
   instagramPostId?: string;
   normalizedFieldsJson?: string;
@@ -315,6 +316,7 @@ function normalizePublicEvent(
     displayTimeSource: displayTime.source,
     ...(displayTime.startLabel ? { displayTimeStart: displayTime.startLabel } : {}),
     eventType,
+    ...(venue?.instagramHandle ? { instagramHandle: venue.instagramHandle } : {}),
     ...(venue?.category ? { venueCategory: venue.category } : {}),
     ...(venue
       ? {
