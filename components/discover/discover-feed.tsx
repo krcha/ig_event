@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { ExternalLink, Instagram, Search, Sparkles } from "lucide-react";
 import {
@@ -15,6 +16,7 @@ export type DiscoverFeedEvent = {
   date: string;
   description?: string;
   eventType: string;
+  imageUrl?: string;
   instagramHandle?: string;
   instagramPostUrl?: string;
   sourceCaption?: string;
@@ -88,6 +90,21 @@ function getInstagramHandleLabel(event: DiscoverFeedEvent): string {
   return event.venue;
 }
 
+function getStableImageUrl(event: DiscoverFeedEvent): string | null {
+  if (!event.imageUrl) {
+    return null;
+  }
+
+  try {
+    const url = new URL(event.imageUrl);
+    return url.hostname.toLowerCase() === "images.apifyusercontent.com"
+      ? event.imageUrl
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function EventMetaChips({ event }: { event: DiscoverFeedEvent }) {
   const time = getResolvedTime(event);
 
@@ -108,6 +125,7 @@ function DiscoverPost({ event }: { event: DiscoverFeedEvent }) {
   const time = getResolvedTime(event);
   const handleLabel = getInstagramHandleLabel(event);
   const postBody = getPostBody(event);
+  const imageUrl = getStableImageUrl(event);
 
   return (
     <article className="overflow-hidden rounded-[1.25rem] border border-white/[0.07] bg-[#0d0f16] shadow-[0_26px_70px_-48px_rgba(0,0,0,0.92)]">
@@ -136,16 +154,33 @@ function DiscoverPost({ event }: { event: DiscoverFeedEvent }) {
         </span>
       </div>
 
-      <div className="border-b border-white/[0.06] bg-black/[0.18] px-4 py-5 sm:px-5">
-        <Link aria-label={`Open ${event.title}`} className="block" href={`/events/${event._id}`}>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">
-            {event.title}
-          </p>
-          <p className="mt-3 whitespace-pre-line text-[15px] leading-7 text-foreground">
-            {postBody}
-          </p>
+      {imageUrl ? (
+        <Link
+          aria-label={`Open ${event.title}`}
+          className="relative block aspect-[4/5] overflow-hidden bg-black"
+          href={`/events/${event._id}`}
+        >
+          <Image
+            alt={event.title}
+            className="object-cover"
+            fill
+            sizes="(max-width: 768px) 100vw, 38rem"
+            src={imageUrl}
+            unoptimized
+          />
         </Link>
-      </div>
+      ) : (
+        <div className="border-b border-white/[0.06] bg-black/[0.18] px-4 py-5 sm:px-5">
+          <Link aria-label={`Open ${event.title}`} className="block" href={`/events/${event._id}`}>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">
+              {event.title}
+            </p>
+            <p className="mt-3 whitespace-pre-line text-[15px] leading-7 text-foreground">
+              {postBody}
+            </p>
+          </Link>
+        </div>
+      )}
 
       <div className="space-y-3 px-3 pb-4 pt-3">
         <div className="flex items-center justify-between gap-3">
@@ -178,12 +213,12 @@ function DiscoverPost({ event }: { event: DiscoverFeedEvent }) {
         </div>
 
         <div className="space-y-1">
-          <p className="text-sm leading-6 text-foreground">
+          <p className="line-clamp-5 whitespace-pre-line text-sm leading-6 text-foreground">
             <span className="font-semibold">{handleLabel}</span>{" "}
-            <span className="text-muted-foreground">{event.title}</span>
+            <span className="text-muted-foreground">{postBody}</span>
           </p>
           <p className="mt-1 text-xs font-medium text-muted-foreground">
-            {event.venue} · {time.label}
+            {event.title} · {event.venue} · {time.label}
           </p>
         </div>
 

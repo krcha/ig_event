@@ -65,6 +65,7 @@ function mapPublicEvent(event: PublicEvent): DiscoverFeedEvent {
     date: event.date,
     ...(event.description ? { description: event.description } : {}),
     eventType: event.eventType,
+    ...(event.imageUrl ? { imageUrl: event.imageUrl } : {}),
     ...(event.instagramHandle ? { instagramHandle: event.instagramHandle } : {}),
     ...(event.instagramPostUrl ? { instagramPostUrl: event.instagramPostUrl } : {}),
     ...(event.sourceCaption ? { sourceCaption: event.sourceCaption } : {}),

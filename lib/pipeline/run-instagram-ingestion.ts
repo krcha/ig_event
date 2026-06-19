@@ -3980,10 +3980,18 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
       return;
     }
 
+    {
+      const candidateImageUrl = resolveBestImageUrl(post);
+      selectedImageUrl =
+        candidateImageUrl && !isInstagramOrFbCdnUrl(candidateImageUrl)
+          ? candidateImageUrl
+          : null;
+    }
     logInfo("ingestion.post.video_caption_only", {
       ...postContext,
       captionLength: normalizeString(post.caption).length,
       hasAltText: extractPostAltTextEvidence(post.altText).length > 0,
+      selectedImageUrl,
     });
   } else {
     selectedImageUrl = resolveBestImageUrl(post);

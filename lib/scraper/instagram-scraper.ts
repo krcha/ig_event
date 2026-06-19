@@ -525,6 +525,25 @@ function pickImageFromImagesField(item: ApifyInstagramItem): string | null {
   return pickImageCandidate(images[0]);
 }
 
+function imageSourcePriority(url: string): number {
+  const lowerUrl = url.toLowerCase();
+  if (lowerUrl.includes("images.apifyusercontent.com")) return 0;
+  if (lowerUrl.includes("cdninstagram.com")) return 1;
+  if (lowerUrl.includes("fbcdn.net")) return 2;
+  return 3;
+}
+
+function pickPreferredImageUrl(candidates: Array<string | null | undefined>): string | null {
+  const urls = candidates
+    .filter((candidate): candidate is string => typeof candidate === "string")
+    .map((candidate) => asHttpUrl(candidate))
+    .filter((candidate): candidate is string => Boolean(candidate));
+  const uniqueUrls = [...new Set(urls)];
+
+  uniqueUrls.sort((left, right) => imageSourcePriority(left) - imageSourcePriority(right));
+  return uniqueUrls[0] ?? null;
+}
+
 function normalizePostType(type: string | undefined): string | null {
   if (!type) return null;
   const normalized = type.trim().toLowerCase();
@@ -559,28 +578,30 @@ function resolvePostType(item: ApifyInstagramItem): string | null {
 
 function selectPrimaryImageUrl(item: ApifyInstagramItem): string | null {
   const postType = resolvePostType(item);
-  const displayUrl =
-    asHttpUrl(item.displayUrl) ??
-    asHttpUrl(item.display_url) ??
-    asHttpUrl(item.displayUrlHD) ??
-    asHttpUrl(item.display_url_hd) ??
-    asHttpUrl(item.thumbnailUrl) ??
-    asHttpUrl(item.thumbnail_url);
+  const displayUrl = pickPreferredImageUrl([
+    item.displayUrl,
+    item.display_url,
+    item.displayUrlHD,
+    item.display_url_hd,
+    item.thumbnailUrl,
+    item.thumbnail_url,
+  ]);
+  const directImageUrl = pickPreferredImageUrl([item.imageUrl, item.image_url]);
   const firstImage = pickImageFromImagesField(item);
 
   if (postType === "video") {
-    return null;
+    return pickPreferredImageUrl([directImageUrl, displayUrl, firstImage]);
   }
 
   if (postType === "image") {
-    return displayUrl;
+    return pickPreferredImageUrl([directImageUrl, displayUrl, firstImage]);
   }
 
   if (postType === "sidecar") {
-    return firstImage ?? displayUrl;
+    return pickPreferredImageUrl([firstImage, directImageUrl, displayUrl]);
   }
 
-  return displayUrl ?? firstImage ?? asHttpUrl(item.imageUrl) ?? asHttpUrl(item.image_url);
+  return pickPreferredImageUrl([directImageUrl, displayUrl, firstImage]);
 }
 
 function collectImageUrls(item: ApifyInstagramItem): string[] {
