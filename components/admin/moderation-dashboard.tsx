@@ -15,6 +15,8 @@ import {
 } from "@/lib/utils/confidence";
 
 type EventStatus = "pending" | "approved" | "rejected";
+type PromotionTier = "featured" | "promoted";
+type PromotionTierSelection = PromotionTier | "none";
 type ModerationSortMode =
   | "queue_priority"
   | "newest"
@@ -49,6 +51,10 @@ type ModerationEvent = {
   sourcePostedAt: string | null;
   rawExtractionJson: string | null;
   normalizedFieldsJson: string | null;
+  promotionTier: PromotionTier | null;
+  promotionStart: string | null;
+  promotionEnd: string | null;
+  promotionPriority: number | null;
   moderation: {
     status: EventStatus;
     reviewedAt: number | null;
@@ -64,6 +70,13 @@ type EventsResponse = {
   events: ModerationEvent[];
   duplicateContextEvents?: ModerationEvent[];
   error?: string;
+};
+
+type PromotionPatch = {
+  promotionEnd: string | null;
+  promotionPriority: string | null;
+  promotionStart: string | null;
+  promotionTier: PromotionTierSelection;
 };
 
 type MasterReviewCandidateEvent = {
@@ -683,6 +696,103 @@ function decorateEvent(event: ModerationEvent): DecoratedEvent {
   };
 }
 
+function PromotionControls({
+  disabled,
+  event,
+  onSave,
+}: {
+  disabled: boolean;
+  event: ModerationEvent;
+  onSave: (eventId: string, patch: PromotionPatch) => Promise<void>;
+}) {
+  const [tier, setTier] = useState<PromotionTierSelection>(event.promotionTier ?? "none");
+  const [start, setStart] = useState(event.promotionStart ?? "");
+  const [end, setEnd] = useState(event.promotionEnd ?? "");
+  const [priority, setPriority] = useState(
+    event.promotionPriority === null ? "" : String(event.promotionPriority),
+  );
+  const fieldsDisabled = disabled || tier === "none";
+
+  useEffect(() => {
+    setTier(event.promotionTier ?? "none");
+    setStart(event.promotionStart ?? "");
+    setEnd(event.promotionEnd ?? "");
+    setPriority(event.promotionPriority === null ? "" : String(event.promotionPriority));
+  }, [event.id, event.promotionEnd, event.promotionPriority, event.promotionStart, event.promotionTier]);
+
+  return (
+    <form
+      className="w-full rounded-2xl border border-border bg-card/70 p-3"
+      onSubmit={(submitEvent) => {
+        submitEvent.preventDefault();
+        void onSave(event.id, {
+          promotionEnd: tier === "none" ? null : end || null,
+          promotionPriority: tier === "none" ? null : priority || null,
+          promotionStart: tier === "none" ? null : start || null,
+          promotionTier: tier,
+        });
+      }}
+    >
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-end">
+        <label className="field-label flex-1">
+          Promotion
+          <select
+            className="input-control h-10 rounded-xl text-sm"
+            disabled={disabled}
+            onChange={(changeEvent) =>
+              setTier(changeEvent.target.value as PromotionTierSelection)
+            }
+            value={tier}
+          >
+            <option value="none">None</option>
+            <option value="featured">Featured</option>
+            <option value="promoted">Promoted</option>
+          </select>
+        </label>
+        <label className="field-label flex-1">
+          Start
+          <input
+            className="input-control h-10 rounded-xl text-sm"
+            disabled={fieldsDisabled}
+            onChange={(changeEvent) => setStart(changeEvent.target.value)}
+            type="date"
+            value={start}
+          />
+        </label>
+        <label className="field-label flex-1">
+          End
+          <input
+            className="input-control h-10 rounded-xl text-sm"
+            disabled={fieldsDisabled}
+            onChange={(changeEvent) => setEnd(changeEvent.target.value)}
+            type="date"
+            value={end}
+          />
+        </label>
+        <label className="field-label w-full lg:w-32">
+          Priority
+          <input
+            className="input-control h-10 rounded-xl text-sm"
+            disabled={fieldsDisabled}
+            inputMode="numeric"
+            onChange={(changeEvent) => setPriority(changeEvent.target.value)}
+            placeholder="0"
+            type="number"
+            value={priority}
+          />
+        </label>
+        <button
+          className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={disabled}
+          type="submit"
+        >
+          Save placement
+        </button>
+      </div>
+    </form>
+  );
+}
+
 export function ModerationDashboard() {
   const [status, setStatus] = useState<EventStatus>("pending");
   const [limit, setLimit] = useState("100");
@@ -993,6 +1103,36 @@ export function ModerationDashboard() {
         caughtError instanceof Error
           ? caughtError.message
           : "Unknown event removal error.",
+      );
+    } finally {
+      setActionInFlightFor(null);
+    }
+  }
+
+  async function updatePromotion(eventId: string, patch: PromotionPatch) {
+    setActionInFlightFor(`promotion:${eventId}`);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/admin/events", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          eventId,
+          ...patch,
+        }),
+      });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to update promotion.");
+      }
+
+      await fetchEvents();
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unknown promotion update error.",
       );
     } finally {
       setActionInFlightFor(null);
@@ -1450,6 +1590,14 @@ export function ModerationDashboard() {
                       <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                         {event.eventType}
                       </span>
+                      {event.promotionTier ? (
+                        <span className="rounded-full bg-primary/15 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-primary">
+                          {event.promotionTier}
+                          {event.promotionPriority !== null
+                            ? ` #${event.promotionPriority}`
+                            : ""}
+                        </span>
+                      ) : null}
                       {event.hasSuspiciousYear ? (
                         <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-amber-800">
                           Suspicious year
@@ -1736,6 +1884,11 @@ export function ModerationDashboard() {
                 ) : null}
                 {status === "approved" ? (
                   <div className="flex flex-wrap gap-2">
+                    <PromotionControls
+                      disabled={isAnyActionInFlight}
+                      event={event}
+                      onSave={updatePromotion}
+                    />
                     <button
                       className="rounded-xl border border-destructive px-4 py-2 text-sm font-medium text-destructive disabled:cursor-not-allowed disabled:opacity-60"
                       disabled={isAnyActionInFlight}

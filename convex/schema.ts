@@ -34,6 +34,10 @@ export default defineSchema({
     sourcePostedAt: v.optional(v.string()),
     rawExtractionJson: v.optional(v.string()),
     normalizedFieldsJson: v.optional(v.string()),
+    promotionTier: v.optional(v.union(v.literal("featured"), v.literal("promoted"))),
+    promotionStart: v.optional(v.string()),
+    promotionEnd: v.optional(v.string()),
+    promotionPriority: v.optional(v.number()),
     status: eventStatus,
     reviewedAt: v.optional(v.number()),
     reviewedBy: v.optional(v.string()),
@@ -44,6 +48,7 @@ export default defineSchema({
     .index("by_date", ["date"])
     .index("by_status", ["status"])
     .index("by_status_date", ["status", "date"])
+    .index("by_status_promotionTier", ["status", "promotionTier"])
     .index("by_instagramPostId", ["instagramPostId"])
     .index("by_instagramPostUrl", ["instagramPostUrl"]),
   venues: defineTable({

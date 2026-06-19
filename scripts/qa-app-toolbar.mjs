@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 
 const toolbarPath = "components/navigation/app-toolbar.tsx";
 const source = readFileSync(toolbarPath, "utf8");
+const profileAvatarSource = readFileSync(
+  "components/navigation/mobile-profile-avatar-link.tsx",
+  "utf8",
+);
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -26,17 +30,22 @@ assert.ok(
 );
 
 assert.ok(
-  mobileTopbarSource.includes('aria-label="Your profile"'),
+  mobileTopbarSource.includes("<MobileProfileAvatarLink />"),
+  "Mobile top header should include the shared profile avatar.",
+);
+
+assert.ok(
+  profileAvatarSource.includes('aria-label="Your profile"'),
   "Mobile top header should include a profile avatar link.",
 );
 
 assert.ok(
-  mobileTopbarSource.includes('href="/you"'),
+  profileAvatarSource.includes('href="/you"'),
   "Mobile top header profile avatar should link to /you.",
 );
 
 assert.ok(
-  mobileTopbarSource.includes("CircleUserRound"),
+  profileAvatarSource.includes("CircleUserRound"),
   "Mobile top header profile avatar should render the profile icon.",
 );
 
@@ -52,7 +61,7 @@ assert.equal(
   "Mobile top header should not render the old right-side current-tab chip.",
 );
 
-for (const label of ["Events", "Map", "Saved", "You"]) {
+for (const label of ["Events", "Discover", "Map", "Saved", "You"]) {
   assert.equal(
     new RegExp(`>\\s*${escapeRegExp(label)}\\s*<`).test(mobileTopbarSource),
     false,
@@ -80,12 +89,13 @@ const publicItemsSource = source.slice(publicItemsStart, adminItemsStart);
 
 assert.deepEqual(
   [...publicItemsSource.matchAll(/\blabel:\s*"([^"]+)"/g)].map(([, label]) => label),
-  ["Events", "Map", "Saved"],
-  "Public bottom navigation tabs should remain exactly Events, Map, Saved.",
+  ["Events", "Discover", "Map", "Saved"],
+  "Public bottom navigation tabs should remain exactly Events, Discover, Map, Saved.",
 );
 
 for (const { href, label } of [
   { href: "/", label: "Events" },
+  { href: "/discover", label: "Discover" },
   { href: "/map", label: "Map" },
   { href: "/saved", label: "Saved" },
 ]) {

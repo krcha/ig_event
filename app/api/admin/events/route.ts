@@ -6,6 +6,7 @@ import { hasClerkEnv } from "@/lib/utils/env";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 
 type EventStatus = "pending" | "approved" | "rejected";
+type PromotionTier = "featured" | "promoted";
 
 type EventListQuery = {
   status: EventStatus;
@@ -14,6 +15,14 @@ type EventListQuery = {
 
 type EventListAllQuery = {
   limit?: number;
+};
+
+type UpdatePromotionRequestBody = {
+  eventId?: string;
+  promotionEnd?: string | null;
+  promotionPriority?: number | string | null;
+  promotionStart?: string | null;
+  promotionTier?: PromotionTier | "none" | null;
 };
 
 type EventRecord = {
@@ -33,6 +42,10 @@ type EventRecord = {
   sourcePostedAt?: string;
   rawExtractionJson?: string;
   normalizedFieldsJson?: string;
+  promotionTier?: PromotionTier;
+  promotionStart?: string;
+  promotionEnd?: string;
+  promotionPriority?: number;
   status: EventStatus;
   reviewedAt?: number;
   reviewedBy?: string;
@@ -45,6 +58,8 @@ const listByStatusQuery =
   "events:listByStatus" as unknown as FunctionReference<"query">;
 const listEventsQuery =
   "events:listEvents" as unknown as FunctionReference<"query">;
+const updateEventMutation =
+  "events:updateEvent" as unknown as FunctionReference<"mutation">;
 
 function mapEventRecord(event: EventRecord) {
   return {
@@ -63,6 +78,10 @@ function mapEventRecord(event: EventRecord) {
     sourcePostedAt: event.sourcePostedAt ?? null,
     rawExtractionJson: event.rawExtractionJson ?? null,
     normalizedFieldsJson: event.normalizedFieldsJson ?? null,
+    promotionTier: event.promotionTier ?? null,
+    promotionStart: event.promotionStart ?? null,
+    promotionEnd: event.promotionEnd ?? null,
+    promotionPriority: event.promotionPriority ?? null,
     moderation: {
       status: event.status,
       reviewedAt: event.reviewedAt ?? null,
@@ -87,6 +106,37 @@ function getConvexHttpClient() {
     throw new Error("NEXT_PUBLIC_CONVEX_URL is not configured.");
   }
   return new ConvexHttpClient(convexUrl);
+}
+
+function normalizeDateValue(value: unknown): string | undefined {
+  if (value === null || value === undefined || value === "") {
+    return undefined;
+  }
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+    throw new Error("Promotion dates must use YYYY-MM-DD.");
+  }
+  return value.trim();
+}
+
+function normalizePromotionPriority(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === "") {
+    return undefined;
+  }
+  const parsed = typeof value === "number" ? value : Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed)) {
+    throw new Error("Promotion priority must be a number.");
+  }
+  return Math.trunc(parsed);
+}
+
+function normalizePromotionTier(value: unknown): PromotionTier | "none" {
+  if (value === null || value === undefined || value === "" || value === "none") {
+    return "none";
+  }
+  if (value === "featured" || value === "promoted") {
+    return value;
+  }
+  throw new Error("Promotion tier must be none, featured, or promoted.");
 }
 
 export async function GET(request: Request) {
@@ -126,6 +176,63 @@ export async function GET(request: Request) {
       {
         error:
           error instanceof Error ? error.message : "Failed to list moderation events.",
+      },
+      { status: 500 },
+    );
+  }
+}
+
+export async function PATCH(request: Request) {
+  if (hasClerkEnv()) {
+    const { userId } = await auth();
+    if (!userId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+  }
+
+  let body: UpdatePromotionRequestBody;
+  try {
+    body = (await request.json()) as UpdatePromotionRequestBody;
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON payload." }, { status: 400 });
+  }
+
+  const eventId = body.eventId?.trim() || "";
+  if (!eventId) {
+    return NextResponse.json({ error: "eventId is required." }, { status: 400 });
+  }
+
+  try {
+    const tier = normalizePromotionTier(body.promotionTier);
+    const patch =
+      tier === "none"
+        ? {
+            promotionEnd: undefined,
+            promotionPriority: undefined,
+            promotionStart: undefined,
+            promotionTier: undefined,
+          }
+        : {
+            promotionEnd: normalizeDateValue(body.promotionEnd),
+            promotionPriority: normalizePromotionPriority(body.promotionPriority),
+            promotionStart: normalizeDateValue(body.promotionStart),
+            promotionTier: tier,
+          };
+    const convex = getConvexHttpClient();
+    await convex.mutation(updateEventMutation, {
+      id: eventId,
+      patch,
+    });
+
+    return NextResponse.json({
+      eventId,
+      ok: true,
+    });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error ? error.message : "Failed to update promotion.",
       },
       { status: 500 },
     );

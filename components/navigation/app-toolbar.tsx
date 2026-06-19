@@ -7,12 +7,13 @@ import { useEffect, useState } from "react";
 import {
   Bookmark,
   CalendarDays,
-  CircleUserRound,
   Map as MapIcon,
   ShieldCheck,
+  Sparkles,
   Telescope,
   Warehouse,
 } from "lucide-react";
+import { MobileProfileAvatarLink } from "@/components/navigation/mobile-profile-avatar-link";
 import { useUserLibrary } from "@/components/providers/user-library-provider";
 import { cn } from "@/lib/utils";
 
@@ -32,6 +33,12 @@ const PUBLIC_TOOLBAR_ITEMS: ToolbarItem[] = [
     icon: CalendarDays,
     match: "exact",
     activePrefixes: ["/calendar", "/events"],
+  },
+  {
+    href: "/discover",
+    label: "Discover",
+    icon: Sparkles,
+    match: "prefix",
   },
   {
     href: "/map",
@@ -148,13 +155,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                 Belgrade nights
               </span>
             </Link>
-            <Link
-              aria-label="Your profile"
-              className="inline-flex h-9 w-9 flex-none items-center justify-center rounded-full bg-white/[0.05] text-muted-foreground ring-1 ring-white/[0.08] transition hover:bg-primary/[0.16] hover:text-primary"
-              href="/you"
-            >
-              <CircleUserRound className="h-4 w-4" />
-            </Link>
+            <MobileProfileAvatarLink />
           </div>
         </div>
       </div>

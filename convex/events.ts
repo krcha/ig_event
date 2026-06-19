@@ -16,8 +16,10 @@ const eventStatus = v.union(
   v.literal("approved"),
   v.literal("rejected"),
 );
+const promotionTier = v.union(v.literal("featured"), v.literal("promoted"));
 const moderationStatus = v.union(v.literal("approved"), v.literal("rejected"));
 const DEFAULT_EXPIRED_EVENT_DELETE_BATCH_SIZE = 100;
+const DISCOVER_ORGANIC_SCAN_LIMIT = 120;
 
 function normalizeExpiredEventDeleteBatchSize(value: number | undefined): number {
   if (!Number.isFinite(value)) {
@@ -211,6 +213,234 @@ export const listApprovedUpcomingByDatePaginated = query({
   },
 });
 
+function readDateParts(value: string): { day: number; month: number; year: number } | null {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+
+  const year = Number.parseInt(match[1], 10);
+  const month = Number.parseInt(match[2], 10);
+  const day = Number.parseInt(match[3], 10);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return null;
+  }
+
+  return { day, month, year };
+}
+
+function formatDateKey(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(
+    date.getUTCDate(),
+  ).padStart(2, "0")}`;
+}
+
+function addDaysToDateKey(value: string, days: number): string {
+  const parts = readDateParts(value);
+  if (!parts) {
+    return value;
+  }
+
+  const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+  date.setUTCDate(date.getUTCDate() + days);
+  return formatDateKey(date);
+}
+
+function getUtcDayForDateKey(value: string): number {
+  const parts = readDateParts(value);
+  if (!parts) {
+    return 1;
+  }
+
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day)).getUTCDay();
+}
+
+function getUpcomingWeekendDates(today: string): Set<string> {
+  const day = getUtcDayForDateKey(today);
+  const startOffset = day >= 1 && day <= 4 ? 5 - day : 0;
+  const endOffset = day === 5 ? 2 : day === 6 ? 1 : day === 0 ? 0 : startOffset + 2;
+  const dates = new Set<string>();
+
+  for (let offset = startOffset; offset <= endOffset; offset += 1) {
+    const date = addDaysToDateKey(today, offset);
+    const dateDay = getUtcDayForDateKey(date);
+    if (dateDay === 5 || dateDay === 6 || dateDay === 0) {
+      dates.add(date);
+    }
+  }
+
+  return dates;
+}
+
+function isPromotionActive(
+  event: { promotionEnd?: string; promotionStart?: string },
+  today: string,
+): boolean {
+  return Boolean(
+    event.promotionStart &&
+      event.promotionEnd &&
+      event.promotionStart <= today &&
+      today <= event.promotionEnd,
+  );
+}
+
+function comparePromotionEvents(
+  left: {
+    _id: Id<"events">;
+    date: string;
+    promotionPriority?: number;
+    title: string;
+  },
+  right: {
+    _id: Id<"events">;
+    date: string;
+    promotionPriority?: number;
+    title: string;
+  },
+): number {
+  const priorityDelta =
+    (left.promotionPriority ?? Number.POSITIVE_INFINITY) -
+    (right.promotionPriority ?? Number.POSITIVE_INFINITY);
+  if (priorityDelta !== 0) {
+    return priorityDelta;
+  }
+
+  const dateResult = left.date.localeCompare(right.date);
+  if (dateResult !== 0) {
+    return dateResult;
+  }
+
+  const titleResult = left.title.localeCompare(right.title, undefined, {
+    sensitivity: "base",
+  });
+  if (titleResult !== 0) {
+    return titleResult;
+  }
+
+  return left._id.localeCompare(right._id);
+}
+
+function compareOrganicEvents(
+  left: { _id: Id<"events">; date: string; time?: string; title: string },
+  right: { _id: Id<"events">; date: string; time?: string; title: string },
+): number {
+  const dateResult = left.date.localeCompare(right.date);
+  if (dateResult !== 0) {
+    return dateResult;
+  }
+
+  const timeResult = (left.time ?? "99:99").localeCompare(right.time ?? "99:99");
+  if (timeResult !== 0) {
+    return timeResult;
+  }
+
+  const titleResult = left.title.localeCompare(right.title, undefined, {
+    sensitivity: "base",
+  });
+  if (titleResult !== 0) {
+    return titleResult;
+  }
+
+  return left._id.localeCompare(right._id);
+}
+
+function hasFreeTicketPrice(value: string | undefined): boolean {
+  const normalized = value
+    ?.normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return (
+    !normalized ||
+    normalized === "0" ||
+    normalized === "free" ||
+    normalized === "besplatno" ||
+    normalized === "slobodan ulaz" ||
+    normalized === "slobodne donacije" ||
+    normalized === "donacije"
+  );
+}
+
+export const getDiscoverFeed = query({
+  args: {
+    today: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const featuredCandidates = await ctx.db
+      .query("events")
+      .withIndex("by_status_promotionTier", (q) =>
+        q.eq("status", "approved").eq("promotionTier", "featured"),
+      )
+      .collect();
+    const promotedCandidates = await ctx.db
+      .query("events")
+      .withIndex("by_status_promotionTier", (q) =>
+        q.eq("status", "approved").eq("promotionTier", "promoted"),
+      )
+      .collect();
+
+    const featured = featuredCandidates
+      .filter((event) => isPromotionActive(event, args.today))
+      .sort(comparePromotionEvents)
+      .slice(0, 1);
+    const promoted = promotedCandidates
+      .filter((event) => isPromotionActive(event, args.today))
+      .sort(comparePromotionEvents)
+      .slice(0, 10);
+    const paidIds = new Set([...featured, ...promoted].map((event) => event._id));
+
+    const tonight = (
+      await ctx.db
+        .query("events")
+        .withIndex("by_status_date", (q) =>
+          q.eq("status", "approved").eq("date", args.today),
+        )
+        .take(DISCOVER_ORGANIC_SCAN_LIMIT)
+    )
+      .filter((event) => !paidIds.has(event._id))
+      .sort(compareOrganicEvents)
+      .slice(0, 12);
+
+    const weekendDates = getUpcomingWeekendDates(args.today);
+    const weekendEnd = [...weekendDates].sort().at(-1) ?? args.today;
+    const weekend = (
+      await ctx.db
+        .query("events")
+        .withIndex("by_status_date", (q) =>
+          q.eq("status", "approved").gte("date", args.today).lte("date", weekendEnd),
+        )
+        .take(DISCOVER_ORGANIC_SCAN_LIMIT)
+    )
+      .filter((event) => weekendDates.has(event.date))
+      .filter((event) => !paidIds.has(event._id))
+      .sort(compareOrganicEvents)
+      .slice(0, 12);
+
+    const free = (
+      await ctx.db
+        .query("events")
+        .withIndex("by_status_date", (q) =>
+          q.eq("status", "approved").gte("date", args.today),
+        )
+        .take(DISCOVER_ORGANIC_SCAN_LIMIT)
+    )
+      .filter((event) => !paidIds.has(event._id))
+      .filter((event) => hasFreeTicketPrice(event.ticketPrice))
+      .sort(compareOrganicEvents)
+      .slice(0, 12);
+
+    return {
+      featured,
+      free,
+      promoted,
+      tonight,
+      weekend,
+    };
+  },
+});
+
 export const listByDate = query({
   args: { date: v.string() },
   handler: async (ctx, args) => {
@@ -238,6 +468,10 @@ export const createEvent = mutation({
     sourcePostedAt: v.optional(v.string()),
     rawExtractionJson: v.optional(v.string()),
     normalizedFieldsJson: v.optional(v.string()),
+    promotionTier: v.optional(promotionTier),
+    promotionStart: v.optional(v.string()),
+    promotionEnd: v.optional(v.string()),
+    promotionPriority: v.optional(v.number()),
     status: v.optional(eventStatus),
   },
   handler: async (ctx, args) => {
@@ -273,6 +507,10 @@ export const updateEvent = mutation({
       sourcePostedAt: v.optional(v.string()),
       rawExtractionJson: v.optional(v.string()),
       normalizedFieldsJson: v.optional(v.string()),
+      promotionTier: v.optional(promotionTier),
+      promotionStart: v.optional(v.string()),
+      promotionEnd: v.optional(v.string()),
+      promotionPriority: v.optional(v.number()),
       status: v.optional(eventStatus),
       reviewedAt: v.optional(v.number()),
       reviewedBy: v.optional(v.string()),
