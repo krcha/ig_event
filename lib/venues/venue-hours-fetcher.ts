@@ -3,6 +3,7 @@ import {
   BELGRADE_TIMEZONE,
   VENUE_HOURS_CACHE_TTL_MS,
   createEmptyVenueHoursJson,
+  parseVenueHoursJson,
   serializeVenueHoursJson,
   shouldRefreshVenueHoursCache,
   type VenueHoursCacheFields,
@@ -45,11 +46,52 @@ const OSM_VENUE_SEARCH_ALIASES: Record<string, string[]> = {
   silosi: ["Silosi Beograd", "Silosi"],
   "zappa baza": ["Zappa Baza"],
 };
+const OSM_VENUE_SEARCH_ALIASES_BY_HANDLE: Record<string, string[]> = {
+  "20_44.nightclub": ["20/44", "Klub 20/44"],
+  "_azbuka": ["Azbuka"],
+  "berlinmonroe_craftroom": ["Berlin Monroe"],
+  "betonbelgrade": ["Beton", "Beton Club", "Beton Club & Event Center"],
+  "bitefartcafe": ["Bitef Art Cafe", "BitefArtCafe"],
+  "bluzipivobar": ["Bluz i Pivo"],
+  "cincin_belgrade": ["Čin Čin", "Cin Cin"],
+  "dorcolplatz": ["Dorćol Platz", "Dorcol Platz"],
+  "eje.belgrade": ["EJE", "Esthetic Joys Embassy"],
+  "heartefact_": ["Hartefakt", "Heartefact"],
+  "kcgrad": ["KC Grad", "Kulturni centar Grad"],
+  "klubstudenatatehnike": ["KST", "Klub Studenata Tehnike"],
+  "kranbeograd": ["Klub Kran", "Kran"],
+  "kucicanavodi": ["Kućica na vodi", "Kucica na vodi", "Kućica"],
+  "kvaka22_catch22": ["Kvaka 22", "Catch 22"],
+  "muzej_jugoslavije": ["Muzej Jugoslavije"],
+  "nulapet_0.5": ["Nula Pet", "Pab 0,5"],
+  "pakaoklubbeograd": ["Pakao"],
+  "silosibeograd": ["Silosi", "Silosi Beograd"],
+  "sinnermanjazzclub": ["Sinnerman Jazz Club", "Sinnerman"],
+  "umami.bg": ["Umami"],
+  "vinyl.belgrade": ["Vinyl", "Vinyl Nightclub"],
+  "vrtoglavicaklub": ["Vrtoglavica", "Klub Vrtoglavica"],
+  "zappabarka": ["Zappa Barka", "Nova Zappa Barka"],
+};
+const GENERIC_OSM_SEARCH_TERMS = new Set([
+  "bar",
+  "beograd",
+  "belgrade",
+  "bg",
+  "cafe",
+  "club",
+  "event",
+  "events",
+  "official",
+  "pub",
+  "rs",
+  "serbia",
+]);
 
 type FetchLike = typeof fetch;
 
 export type VenueForHoursRefresh = VenueHoursCacheFields & {
   _id?: string;
+  instagramHandle?: string | null;
   isActive?: boolean;
   location?: string | null;
   name: string;
@@ -162,6 +204,18 @@ function sortWeeklyWindows(weekly: VenueHoursDay[]): VenueHoursDay[] {
   }));
 }
 
+function hasWeeklyWindows(hoursJson: VenueHoursJson): boolean {
+  return hoursJson.weekly.some((day) => day.windows.length > 0);
+}
+
+function hasStoredUsableProviderHours(venue: VenueForHoursRefresh): boolean {
+  if (venue.hoursSource !== "manual" && venue.hoursSource !== "osm") {
+    return false;
+  }
+  const hoursJson = parseVenueHoursJson(venue.hoursJson);
+  return Boolean(hoursJson && hasWeeklyWindows(hoursJson));
+}
+
 export function normalizeOsmOpeningHours(
   openingHoursValue: string,
   options: {
@@ -233,19 +287,110 @@ function cleanVenueNameSearchTerm(value: string): string {
     .trim();
 }
 
-function buildVenueNameSearchTerms(venueName: string): string[] {
+function stripSafeVenueSearchSuffixes(value: string): string {
+  return cleanVenueNameSearchTerm(value)
+    .replace(/\b(?:official|beograd|belgrade|serbia)\b/giu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function stripGenericVenueSearchDescriptors(value: string): string {
+  return cleanVenueNameSearchTerm(value)
+    .replace(/\b(?:official|beograd|belgrade|serbia)\b/giu, " ")
+    .replace(
+      /\b(?:restaurant\s*&\s*bar|cocktail\s+bar|lounge\s+bar|night\s*club|nightclub|event\s+center|coffee\s*&\s*breakfast|fine\s+bistro)\b/giu,
+      " ",
+    )
+    .replace(/\b(?:gastro\s+bar|music\s+studio|creative\s+space)\b/giu, " ")
+    .replace(/\b(?:club|klub|pub|pab|bar|cafe|coffee|bistro)\b$/iu, " ")
+    .replace(/^(?:club|klub|pub|pab|bar|cafe|coffee|gastro\s+bar)\b/iu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function normalizeInstagramHandleForSearch(instagramHandle: string | null | undefined): string {
+  return (instagramHandle ?? "").replace(/^@/, "").trim().toLowerCase();
+}
+
+function buildHandleAliasSearchTerms(instagramHandle: string | null | undefined): string[] {
+  const handle = normalizeInstagramHandleForSearch(instagramHandle);
+  return handle ? (OSM_VENUE_SEARCH_ALIASES_BY_HANDLE[handle] ?? []) : [];
+}
+
+function buildDerivedHandleSearchTerms(instagramHandle: string | null | undefined): string[] {
+  const handle = normalizeInstagramHandleForSearch(instagramHandle);
+  if (!handle) {
+    return [];
+  }
+
+  const spacedHandle = handle
+    .replace(/[._-]+/g, " ")
+    .replace(/\b(?:bg|rs|ofc|official)\b/g, " ")
+    .replace(/(?:beograd|belgrade)$/g, "")
+    .replace(/^(?:club|klub)/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return [cleanVenueNameSearchTerm(spacedHandle)];
+}
+
+function isUsefulVenueSearchTerm(value: string): boolean {
+  const comparable = normalizeVenueComparableText(value);
+  if (!comparable || comparable.length < 2) {
+    return false;
+  }
+  if (GENERIC_OSM_SEARCH_TERMS.has(comparable)) {
+    return false;
+  }
+  return /[a-z0-9]/i.test(toSearchableText(value));
+}
+
+function buildVenueNameSearchTerms(
+  venueName: string,
+  instagramHandle?: string | null,
+): string[] {
   const aliasTerms = OSM_VENUE_SEARCH_ALIASES[normalizeVenueComparableText(venueName)] ?? [];
+  const handleAliasTerms = buildHandleAliasSearchTerms(instagramHandle);
+  const derivedHandleTerms = buildDerivedHandleSearchTerms(instagramHandle);
   const splitTerms = venueName
-    .split(/\s+(?:\||·|•)\s+|\s+[x×]\s+/iu)
+    .split(/\s+(?:\||·|•|\/|—)\s+|\s+[x×]\s+/iu)
     .map(cleanVenueNameSearchTerm);
-  const terms = [
-    ...aliasTerms,
+  const descriptorTerms = [
     cleanVenueNameSearchTerm(venueName),
     ...splitTerms,
     cleanVenueNameSearchTerm(toSearchableText(venueName)),
-  ].filter((term) => term.length >= 2);
+  ]
+    .map(stripGenericVenueSearchDescriptors)
+    .filter(Boolean);
+  const safeSuffixTerms = [
+    cleanVenueNameSearchTerm(venueName),
+    ...splitTerms,
+  ]
+    .map(stripSafeVenueSearchSuffixes)
+    .filter(Boolean);
+  const terms = [
+    ...handleAliasTerms,
+    ...aliasTerms,
+    ...safeSuffixTerms,
+    ...splitTerms,
+    cleanVenueNameSearchTerm(venueName),
+    ...descriptorTerms,
+    ...derivedHandleTerms,
+    cleanVenueNameSearchTerm(toSearchableText(venueName)),
+  ].filter(isUsefulVenueSearchTerm);
 
-  return [...new Set(terms)].slice(0, 5);
+  const seen = new Set<string>();
+  const uniqueTerms: string[] = [];
+  for (const term of terms) {
+    const key = normalizeVenueComparableText(term);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    uniqueTerms.push(term);
+  }
+
+  return uniqueTerms.slice(0, 8);
 }
 
 function escapeOverpassRegex(value: string): string {
@@ -255,8 +400,8 @@ function escapeOverpassRegex(value: string): string {
     .replace(/[.*+?^${}()|[\]]/g, "\\$&");
 }
 
-function buildOverpassQuery(venueName: string): string | null {
-  const terms = buildVenueNameSearchTerms(venueName);
+function buildOverpassQuery(venue: VenueForHoursRefresh): string | null {
+  const terms = buildVenueNameSearchTerms(venue.name, venue.instagramHandle);
   if (terms.length === 0) {
     return null;
   }
@@ -280,8 +425,10 @@ out center tags 20;
 `;
 }
 
-function scoreOsmElement(element: OverpassElement, venueName: string): number {
-  const requested = toSearchableText(venueName);
+function scoreOsmElement(element: OverpassElement, venue: VenueForHoursRefresh): number {
+  const requestedNames = buildVenueNameSearchTerms(venue.name, venue.instagramHandle)
+    .map((term) => toSearchableText(term))
+    .filter(Boolean);
   const candidateNames = [
     element.tags?.name,
     element.tags?.["name:en"],
@@ -291,23 +438,31 @@ function scoreOsmElement(element: OverpassElement, venueName: string): number {
     .filter((value): value is string => Boolean(value))
     .map((value) => toSearchableText(value));
 
-  if (candidateNames.some((candidate) => candidate === requested)) {
+  if (requestedNames.some((requested) => candidateNames.some((candidate) => candidate === requested))) {
     return 100;
   }
 
-  if (candidateNames.some((candidate) => candidate.includes(requested))) {
+  if (
+    requestedNames.some((requested) =>
+      candidateNames.some((candidate) => candidate.includes(requested)),
+    )
+  ) {
     return 70;
   }
 
-  if (candidateNames.some((candidate) => requested.includes(candidate))) {
+  if (
+    requestedNames.some((requested) =>
+      candidateNames.some((candidate) => requested.includes(candidate)),
+    )
+  ) {
     return 60;
   }
 
   return 0;
 }
 
-function scoreOsmNameCandidate(candidateNames: string[], venueName: string): number {
-  const requestedNames = buildVenueNameSearchTerms(venueName)
+function scoreOsmNameCandidate(candidateNames: string[], venue: VenueForHoursRefresh): number {
+  const requestedNames = buildVenueNameSearchTerms(venue.name, venue.instagramHandle)
     .map((term) => toSearchableText(term))
     .filter(Boolean);
   const candidates = candidateNames.map((value) => toSearchableText(value)).filter(Boolean);
@@ -357,7 +512,7 @@ function buildNominatimQuery(venue: VenueForHoursRefresh): string | null {
     return null;
   }
 
-  const searchTerm = buildVenueNameSearchTerms(venueName)[0];
+  const searchTerm = buildVenueNameSearchTerms(venueName, venue.instagramHandle)[0];
   if (!searchTerm) {
     return null;
   }
@@ -405,7 +560,7 @@ async function fetchNominatimHours(
           place.address?.tourism,
           place.address?.shop,
         ].filter((value): value is string => Boolean(value)),
-        venue.name,
+        venue,
       ),
     }))
     .filter((candidate) => candidate.score > 0)
@@ -432,6 +587,9 @@ async function fetchNominatimHours(
       provider: "nominatim",
     },
   });
+  if (!hasWeeklyWindows(hoursJson)) {
+    return { matchedWithoutHours: true, result: null };
+  }
 
   return {
     matchedWithoutHours: false,
@@ -471,7 +629,7 @@ async function fetchOsmHours(
     return null;
   }
 
-  const query = buildOverpassQuery(venueName);
+  const query = buildOverpassQuery(venue);
   if (!query) {
     return null;
   }
@@ -498,7 +656,7 @@ async function fetchOsmHours(
         typeof element.tags.opening_hours === "string"
       );
     })
-    .map((element) => ({ element, score: scoreOsmElement(element, venueName) }))
+    .map((element) => ({ element, score: scoreOsmElement(element, venue) }))
     .filter((candidate) => candidate.score > 0)
     .sort((left, right) => right.score - left.score);
 
@@ -516,6 +674,9 @@ async function fetchOsmHours(
       name: best.tags?.name,
     },
   });
+  if (!hasWeeklyWindows(hoursJson)) {
+    return null;
+  }
 
   return {
     hoursJson,
@@ -577,6 +738,9 @@ export async function fetchVenueHoursPatch(
   options: VenueHoursRefreshOptions = {},
 ): Promise<VenueHoursPatch | null> {
   const now = options.now ?? Date.now();
+  if (venue.hoursSource === "manual" && venue.hoursJson) {
+    return null;
+  }
   if (!options.force && !shouldRefreshVenueHoursCache(venue, now)) {
     return null;
   }
@@ -605,6 +769,10 @@ export async function fetchVenueHoursPatch(
 
   if (providerError) {
     throw new Error(errors.join(";"));
+  }
+
+  if (hasStoredUsableProviderHours(venue)) {
+    return null;
   }
 
   return createNonePatch(errors.join(";"), now);

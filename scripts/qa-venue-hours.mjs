@@ -220,7 +220,7 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
   ]);
   const overpass = createOverpassFetch([]);
   const patch = await fetchVenueHoursPatch(
-    { name: "Akademija 28" },
+    { instagramHandle: "akademija28", name: "Akademija 28" },
     {
       nominatimFetch: nominatim.nominatimFetch,
       now: NOW,
@@ -231,7 +231,122 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
   assert.equal(patch?.hoursSource, "osm", "Nominatim opening_hours should be used first.");
   assert.equal(patch?.osmElementId, "6060747670");
   assert.equal(nominatim.calls, 1, "Nominatim should be queried once.");
+  assert.ok(
+    new URL(nominatim.requests[0].url).searchParams.get("q")?.startsWith("Akademija 28,"),
+    "Display names should outrank derived handle guesses.",
+  );
   assert.equal(overpass.calls, 0, "Nominatim hit should skip Overpass.");
+}
+
+{
+  const nominatim = createNominatimFetch([
+    {
+      display_name: "Silosi, Dunavski kej, Београд, Србија",
+      extratags: {
+        opening_hours: "Mo-Su 12:00-23:00",
+      },
+      name: "Silosi",
+      osm_id: 601,
+      osm_type: "node",
+    },
+  ]);
+  const patch = await fetchVenueHoursPatch(
+    {
+      instagramHandle: "silosibeograd",
+      name: "Silosi Beograd ••••IIII Dom kulture",
+    },
+    {
+      nominatimFetch: nominatim.nominatimFetch,
+      now: NOW,
+      overpassFetch: createOverpassFetch([]).overpassFetch,
+    },
+  );
+  const query = new URL(nominatim.requests[0].url).searchParams.get("q") ?? "";
+  assert.equal(patch?.hoursSource, "osm", "Handle aliases should repair noisy venue names.");
+  assert.ok(query.startsWith("Silosi,"), "Handle alias should be the first Nominatim term.");
+}
+
+{
+  const nominatim = createNominatimFetch([
+    {
+      display_name: "Boutique Trojka, Београд, Србија",
+      extratags: {
+        opening_hours: "Mo-Su 09:00-22:00",
+      },
+      name: "Boutique Trojka",
+      osm_id: 602,
+      osm_type: "node",
+    },
+  ]);
+  const patch = await fetchVenueHoursPatch(
+    { name: "Boutique Trojka Official" },
+    {
+      nominatimFetch: nominatim.nominatimFetch,
+      now: NOW,
+      overpassFetch: createOverpassFetch([]).overpassFetch,
+    },
+  );
+  const query = new URL(nominatim.requests[0].url).searchParams.get("q") ?? "";
+  assert.equal(patch?.hoursSource, "osm", "Generic name suffixes should not block OSM matches.");
+  assert.ok(
+    query.startsWith("Boutique Trojka,"),
+    "Descriptor-stripped venue name should be queried before the noisy full name.",
+  );
+}
+
+{
+  const nominatim = createNominatimFetch([
+    {
+      display_name: "ZAPPA BAR, Београд, Србија",
+      extratags: {
+        opening_hours: "Mo-Su 08:00-24:00",
+      },
+      name: "ZAPPA BAR",
+      osm_id: 604,
+      osm_type: "node",
+    },
+  ]);
+  const patch = await fetchVenueHoursPatch(
+    { name: "ZAPPA BAR" },
+    {
+      nominatimFetch: nominatim.nominatimFetch,
+      now: NOW,
+      overpassFetch: createOverpassFetch([]).overpassFetch,
+    },
+  );
+  const query = new URL(nominatim.requests[0].url).searchParams.get("q") ?? "";
+  assert.equal(patch?.hoursSource, "osm", "Category words can be part of the real OSM name.");
+  assert.ok(
+    query.startsWith("ZAPPA BAR,"),
+    "Full venue names with Bar/Club should be tried before category-stripped fallbacks.",
+  );
+}
+
+{
+  const nominatim = createNominatimFetch([
+    {
+      display_name: "Closed Venue, Београд, Србија",
+      extratags: {
+        opening_hours: "off",
+      },
+      name: "Closed Venue",
+      osm_id: 603,
+      osm_type: "node",
+    },
+  ]);
+  const patch = await fetchVenueHoursPatch(
+    { name: "Closed Venue" },
+    {
+      nominatimFetch: nominatim.nominatimFetch,
+      now: NOW,
+      overpassFetch: createOverpassFetch([]).overpassFetch,
+    },
+  );
+  assert.equal(
+    patch?.hoursSource,
+    "none",
+    "OSM schedules without usable weekly windows should not be stored as hours.",
+  );
 }
 
 {
@@ -368,6 +483,33 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
   assert.equal(patch?.hoursSource, "none", "OSM miss should store a no-match result only.");
   assert.equal(patch?.googlePlaceId, "", "Automatic venue-hour storage must not persist Google data.");
   assert.equal(overpass.calls, 1, "OSM miss should call Overpass once.");
+}
+
+{
+  const nominatim = createNominatimFetch([]);
+  const overpass = createOverpassFetch([]);
+  const patch = await fetchVenueHoursPatch(
+    {
+      hoursJson: serializeVenueHoursJson(
+        normalizeOsmOpeningHours("Mo-Su 18:00-02:00", {
+          generatedAt: "2026-06-16T12:00:00.000Z",
+        }),
+      ),
+      hoursSource: "osm",
+      name: "Existing OSM Venue",
+    },
+    {
+      force: true,
+      nominatimFetch: nominatim.nominatimFetch,
+      now: NOW,
+      overpassFetch: overpass.overpassFetch,
+    },
+  );
+  assert.equal(
+    patch,
+    null,
+    "Forced refresh should not overwrite existing usable OSM hours with no-match.",
+  );
 }
 
 {
