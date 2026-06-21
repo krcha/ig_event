@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
+import { Suspense } from "react";
 import { ClerkProvider } from "@clerk/nextjs";
 import { AppToolbar } from "@/components/navigation/app-toolbar";
+import { NavigationFeedback } from "@/components/navigation/navigation-feedback";
 import { AuthUserProvider } from "@/components/providers/auth-user-provider";
 import { ConvexClientProvider } from "@/components/providers/convex-client-provider";
 import { UserLibraryProvider } from "@/components/providers/user-library-provider";
@@ -49,6 +51,9 @@ function AppDocument({
   const appContent = (
     <ConvexClientProvider>
       <div className="min-h-screen">
+        <Suspense fallback={null}>
+          <NavigationFeedback />
+        </Suspense>
         <AppToolbar />
         {children}
       </div>

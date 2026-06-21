@@ -302,6 +302,8 @@ type DateCandidate = {
   year: number;
   rawYearProvided: boolean;
   raw: string;
+  relativeWeekday?: boolean;
+  relativeDayOffset?: boolean;
 };
 
 type DateNormalization = {
@@ -490,6 +492,66 @@ const MONTH_ALIASES: Record<string, number> = {
   децембра: 12,
 };
 const DATE_MONTH_WORD_PATTERN = "[A-Za-zČĆŠĐŽčćšđžА-Яа-яЈј]{3,14}";
+
+type RelativeWeekdayQualifier = "this" | "next" | "bare_list";
+
+type RelativeWeekdayMatch = {
+  raw: string;
+  weekday: number;
+  qualifier: RelativeWeekdayQualifier;
+};
+
+type RelativeDayOffsetMatch = {
+  raw: string;
+  offsetDays: number;
+};
+
+const RELATIVE_WEEKDAY_ALIASES: Array<{ aliases: string[]; weekday: number }> = [
+  {
+    aliases: ["monday", "mon", "ponedeljak", "ponedeljka", "pon", "понедељак", "понедељка", "пон"],
+    weekday: 1,
+  },
+  {
+    aliases: ["tuesday", "tue", "utorak", "utorka", "uto", "уторак", "уторка", "уто"],
+    weekday: 2,
+  },
+  {
+    aliases: ["wednesday", "wed", "sreda", "sredu", "srede", "sre", "среда", "среду", "среде", "сре"],
+    weekday: 3,
+  },
+  {
+    aliases: ["thursday", "thu", "cetvrtak", "četvrtak", "cetvrtka", "četvrtka", "cet", "čet", "четвртак", "четвртка", "чет"],
+    weekday: 4,
+  },
+  {
+    aliases: ["friday", "fri", "petak", "petka", "pet", "петак", "петка", "пет"],
+    weekday: 5,
+  },
+  {
+    aliases: ["saturday", "sat", "subota", "subotu", "subote", "sub", "субота", "суботу", "суботе", "суб"],
+    weekday: 6,
+  },
+  {
+    aliases: ["sunday", "sun", "nedelja", "nedjelja", "nedelju", "nedjelju", "ned", "недеља", "недељу", "нед"],
+    weekday: 0,
+  },
+];
+
+const RELATIVE_DAY_OFFSET_ALIASES: Array<{ aliases: string[]; offsetDays: number }> = [
+  {
+    aliases: ["today", "danas", "данас", "tonight", "veceras", "večeras", "вечерас"],
+    offsetDays: 0,
+  },
+  {
+    aliases: ["tomorrow", "sutra", "сутра"],
+    offsetDays: 1,
+  },
+  {
+    aliases: ["day after tomorrow", "prekosutra", "prekosjutra", "прекосутра"],
+    offsetDays: 2,
+  },
+];
+
 const MAX_DATE_DISTANCE_DAYS = 180;
 const EXISTING_EVENT_CONFIDENCE_THRESHOLD = 0.55;
 const DEFAULT_EVENT_TIMEZONE = "Europe/Belgrade";
@@ -2058,6 +2120,347 @@ function getMonthNumber(rawMonth: string): number | null {
   );
 }
 
+function foldRelativeDateText(value: string): string {
+  return normalizeString(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const RELATIVE_WEEKDAY_ALIAS_PATTERN = RELATIVE_WEEKDAY_ALIASES
+  .flatMap((entry) => entry.aliases)
+  .map((alias) => foldRelativeDateText(alias))
+  .sort((left, right) => right.length - left.length)
+  .map(escapeRegExp)
+  .join("|");
+
+const RELATIVE_DAY_OFFSET_ALIAS_PATTERN = RELATIVE_DAY_OFFSET_ALIASES
+  .flatMap((entry) => entry.aliases)
+  .map((alias) => foldRelativeDateText(alias))
+  .sort((left, right) => right.length - left.length)
+  .map(escapeRegExp)
+  .join("|");
+
+const RELATIVE_TEXT_LEFT_BOUNDARY = String.raw`(?<![\p{L}\p{N}_])`;
+const RELATIVE_TEXT_RIGHT_BOUNDARY = String.raw`(?![\p{L}\p{N}_])`;
+
+function resolveRelativeWeekdayAlias(rawAlias: string): number | null {
+  const foldedAlias = foldRelativeDateText(rawAlias);
+  for (const entry of RELATIVE_WEEKDAY_ALIASES) {
+    if (entry.aliases.some((alias) => foldRelativeDateText(alias) === foldedAlias)) {
+      return entry.weekday;
+    }
+  }
+  return null;
+}
+
+function resolveRelativeDayOffsetAlias(rawAlias: string): number | null {
+  const foldedAlias = foldRelativeDateText(rawAlias);
+  for (const entry of RELATIVE_DAY_OFFSET_ALIASES) {
+    if (entry.aliases.some((alias) => foldRelativeDateText(alias) === foldedAlias)) {
+      return entry.offsetDays;
+    }
+  }
+  return null;
+}
+
+function dedupeRelativeWeekdayMatches(matches: RelativeWeekdayMatch[]): RelativeWeekdayMatch[] {
+  const seen = new Set<string>();
+  const deduped: RelativeWeekdayMatch[] = [];
+  for (const match of matches) {
+    const key = `${match.qualifier}:${match.weekday}:${match.raw}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(match);
+  }
+  return deduped;
+}
+
+function dedupeRelativeDayOffsetMatches(matches: RelativeDayOffsetMatch[]): RelativeDayOffsetMatch[] {
+  const seen = new Set<string>();
+  const deduped: RelativeDayOffsetMatch[] = [];
+  for (const match of matches) {
+    const key = `${match.offsetDays}:${match.raw}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(match);
+  }
+  return deduped;
+}
+
+function collectRelativeDayOffsetMatches(text: string): RelativeDayOffsetMatch[] {
+  const foldedText = foldRelativeDateText(text);
+  if (!foldedText) {
+    return [];
+  }
+
+  const matches: RelativeDayOffsetMatch[] = [];
+  const dayOffsetPattern = new RegExp(
+    String.raw`${RELATIVE_TEXT_LEFT_BOUNDARY}(${RELATIVE_DAY_OFFSET_ALIAS_PATTERN})${RELATIVE_TEXT_RIGHT_BOUNDARY}`,
+    "giu",
+  );
+  for (const match of foldedText.matchAll(dayOffsetPattern)) {
+    const offsetDays = resolveRelativeDayOffsetAlias(match[1]);
+    if (offsetDays !== null) {
+      matches.push({ raw: match[0], offsetDays });
+    }
+  }
+
+  return dedupeRelativeDayOffsetMatches(matches);
+}
+
+function collectWeekdayAliasesFromText(
+  foldedText: string,
+  qualifier: RelativeWeekdayQualifier,
+): RelativeWeekdayMatch[] {
+  const matches: RelativeWeekdayMatch[] = [];
+  const weekdayPattern = new RegExp(
+    String.raw`${RELATIVE_TEXT_LEFT_BOUNDARY}(${RELATIVE_WEEKDAY_ALIAS_PATTERN})${RELATIVE_TEXT_RIGHT_BOUNDARY}`,
+    "giu",
+  );
+  for (const match of foldedText.matchAll(weekdayPattern)) {
+    const weekday = resolveRelativeWeekdayAlias(match[1]);
+    if (weekday === null) {
+      continue;
+    }
+    matches.push({ raw: match[0], weekday, qualifier });
+  }
+  return matches;
+}
+
+function collectRelativeWeekdayMatches(text: string): RelativeWeekdayMatch[] {
+  const foldedText = foldRelativeDateText(text);
+  if (!foldedText) {
+    return [];
+  }
+
+  const matches: RelativeWeekdayMatch[] = [];
+  const thisWeekdayPattern = new RegExp(
+    String.raw`${RELATIVE_TEXT_LEFT_BOUNDARY}(?:this|ovog|ovoga|ove|ovu|ovaj|овог|овога|ове|ову|овај)\s+(${RELATIVE_WEEKDAY_ALIAS_PATTERN})${RELATIVE_TEXT_RIGHT_BOUNDARY}`,
+    "giu",
+  );
+  for (const match of foldedText.matchAll(thisWeekdayPattern)) {
+    const weekday = resolveRelativeWeekdayAlias(match[1]);
+    if (weekday !== null) {
+      matches.push({ raw: match[0], weekday, qualifier: "this" });
+    }
+  }
+
+  const nextWeekdayPattern = new RegExp(
+    String.raw`${RELATIVE_TEXT_LEFT_BOUNDARY}(?:next|sledece|sljedece|naredne|narednog|narednu|iduce|следеће|следеце|сљедеће|сљедеце|наредне|наредног|наредну|идуће|идуце)\s+(${RELATIVE_WEEKDAY_ALIAS_PATTERN})${RELATIVE_TEXT_RIGHT_BOUNDARY}`,
+    "giu",
+  );
+  for (const match of foldedText.matchAll(nextWeekdayPattern)) {
+    const weekday = resolveRelativeWeekdayAlias(match[1]);
+    if (weekday !== null) {
+      matches.push({ raw: match[0], weekday, qualifier: "next" });
+    }
+  }
+
+  const onWeekdayPattern = new RegExp(
+    String.raw`${RELATIVE_TEXT_LEFT_BOUNDARY}(?:on|u|у)\s+(${RELATIVE_WEEKDAY_ALIAS_PATTERN})${RELATIVE_TEXT_RIGHT_BOUNDARY}`,
+    "giu",
+  );
+  for (const match of foldedText.matchAll(onWeekdayPattern)) {
+    const weekday = resolveRelativeWeekdayAlias(match[1]);
+    if (weekday !== null) {
+      matches.push({ raw: match[0], weekday, qualifier: "this" });
+    }
+  }
+
+  const currentWeekContextPattern = new RegExp(
+    String.raw`${RELATIVE_TEXT_LEFT_BOUNDARY}(?:this\s+week|ove\s+(?:nedelje|nedjelje|sedmice)|ове\s+(?:недеље|недјеље|седмице))${RELATIVE_TEXT_RIGHT_BOUNDARY}`,
+    "giu",
+  );
+  const textWithoutWeekContext = foldedText.replace(currentWeekContextPattern, " ");
+  if (textWithoutWeekContext !== foldedText) {
+    matches.push(...collectWeekdayAliasesFromText(textWithoutWeekContext, "this"));
+  }
+
+  const bareWeekdayMatches = collectWeekdayAliasesFromText(textWithoutWeekContext, "bare_list");
+  if (bareWeekdayMatches.length >= 2) {
+    const firstIndex = foldedText.indexOf(bareWeekdayMatches[0].raw);
+    const lastIndex = foldedText.lastIndexOf(bareWeekdayMatches[bareWeekdayMatches.length - 1].raw);
+    const betweenWeekdays = firstIndex >= 0 && lastIndex > firstIndex
+      ? foldedText.slice(firstIndex, lastIndex)
+      : "";
+    const hasListSeparator = /(?:\/|,|&|\+|(?<![\p{L}\p{N}_])i(?![\p{L}\p{N}_])|(?<![\p{L}\p{N}_])и(?![\p{L}\p{N}_])|(?<![\p{L}\p{N}_])and(?![\p{L}\p{N}_])|\s[-–—]\s)/u.test(betweenWeekdays);
+    if (hasListSeparator) {
+      matches.push(...bareWeekdayMatches);
+    }
+  }
+
+  const leadingBareWeekdayPattern = new RegExp(
+    String.raw`^\s*(${RELATIVE_WEEKDAY_ALIAS_PATTERN})${RELATIVE_TEXT_RIGHT_BOUNDARY}\s*(?:[:|•·,;-]|$)`,
+    "iu",
+  );
+  const leadingBareMatch = foldedText.match(leadingBareWeekdayPattern);
+  if (leadingBareMatch?.[1]) {
+    const weekday = resolveRelativeWeekdayAlias(leadingBareMatch[1]);
+    if (weekday !== null) {
+      matches.push({ raw: leadingBareMatch[0].trim(), weekday, qualifier: "bare_list" });
+    }
+  }
+
+  return dedupeRelativeWeekdayMatches(matches);
+}
+
+function parseIsoDateParts(value: string): { year: number; month: number; day: number } | null {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+  const year = Number.parseInt(match[1], 10);
+  const month = Number.parseInt(match[2], 10);
+  const day = Number.parseInt(match[3], 10);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return null;
+  }
+  return { year, month, day };
+}
+
+function getUtcMiddayForIsoDate(isoDate: string): Date | null {
+  const parts = parseIsoDateParts(isoDate);
+  if (!parts) {
+    return null;
+  }
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day, 12, 0, 0, 0));
+}
+
+function addDaysToIsoDate(isoDate: string, days: number): string | null {
+  const date = getUtcMiddayForIsoDate(isoDate);
+  if (!date) {
+    return null;
+  }
+  date.setUTCDate(date.getUTCDate() + days);
+  return toIsoDateUtc(date);
+}
+
+function getPostIsoDateForRelativeParsing(postDate: Date): string {
+  const timeZone = getConfiguredEventTimezone();
+  try {
+    return getIsoDateInTimeZone(timeZone, postDate);
+  } catch {
+    return toIsoDateUtc(postDate);
+  }
+}
+
+function buildRelativeDayOffsetCandidate(
+  match: RelativeDayOffsetMatch,
+  postDate: Date | null,
+  source: DateSource,
+): DateCandidate | null {
+  if (!postDate) {
+    return null;
+  }
+
+  const postIsoDate = getPostIsoDateForRelativeParsing(postDate);
+  const isoDate = addDaysToIsoDate(postIsoDate, match.offsetDays);
+  const parsed = isoDate ? getUtcMiddayForIsoDate(isoDate) : null;
+  if (!isoDate || !parsed) {
+    return null;
+  }
+
+  return {
+    isoDate,
+    source,
+    confidence: "high",
+    distanceFromPostDays: match.offsetDays,
+    inferredYear: true,
+    year: parsed.getUTCFullYear(),
+    rawYearProvided: false,
+    raw: match.raw,
+    relativeDayOffset: true,
+  };
+}
+
+function buildRelativeWeekdayCandidate(
+  match: RelativeWeekdayMatch,
+  postDate: Date | null,
+  source: DateSource,
+): DateCandidate | null {
+  if (!postDate) {
+    return null;
+  }
+
+  const postIsoDate = getPostIsoDateForRelativeParsing(postDate);
+  const postLocalDate = getUtcMiddayForIsoDate(postIsoDate);
+  if (!postLocalDate) {
+    return null;
+  }
+
+  let offsetDays = (match.weekday - postLocalDate.getUTCDay() + 7) % 7;
+  if (match.qualifier === "next" && offsetDays === 0) {
+    offsetDays = 7;
+  }
+  const isoDate = addDaysToIsoDate(postIsoDate, offsetDays);
+  const parsed = isoDate ? getUtcMiddayForIsoDate(isoDate) : null;
+  if (!isoDate || !parsed) {
+    return null;
+  }
+
+  return {
+    isoDate,
+    source,
+    confidence: match.qualifier === "bare_list" ? "medium" : "high",
+    distanceFromPostDays: offsetDays,
+    inferredYear: true,
+    year: parsed.getUTCFullYear(),
+    rawYearProvided: false,
+    raw: match.raw,
+    relativeWeekday: true,
+  };
+}
+
+function hasExplicitDateText(text: string): boolean {
+  const normalizedText = normalizeString(text);
+  if (!normalizedText) {
+    return false;
+  }
+  if (/\b20\d{2}[./-]\d{1,2}[./-]\d{1,2}\b/u.test(normalizedText)) {
+    return true;
+  }
+  if (/\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b/u.test(normalizedText)) {
+    return true;
+  }
+  const dayMonthPattern = new RegExp(
+    String.raw`\b\d{1,2}(?:st|nd|rd|th|\.)?\s+${DATE_MONTH_WORD_PATTERN}\b`,
+    "iu",
+  );
+  const monthDayPattern = new RegExp(
+    String.raw`\b${DATE_MONTH_WORD_PATTERN}\s+\d{1,2}(?:st|nd|rd|th)?\b`,
+    "iu",
+  );
+  return dayMonthPattern.test(normalizedText) || monthDayPattern.test(normalizedText);
+}
+
+function collectRelativeDates(
+  text: string,
+  postDate: Date | null,
+  source: DateSource,
+): string[] {
+  const candidates = [
+    ...collectRelativeDayOffsetMatches(text).map((match) =>
+      buildRelativeDayOffsetCandidate(match, postDate, source),
+    ),
+    ...collectRelativeWeekdayMatches(text).map((match) =>
+      buildRelativeWeekdayCandidate(match, postDate, source),
+    ),
+  ];
+  const dates = candidates
+    .map((candidate) => candidate?.isoDate ?? null)
+    .filter((value): value is string => Boolean(value));
+  return [...new Set(dates)].sort();
+}
+
 function collectDateCandidates(
   text: string,
   source: DateSource,
@@ -2165,6 +2568,14 @@ function collectDateCandidates(
     );
   }
 
+  for (const match of collectRelativeDayOffsetMatches(normalizedText)) {
+    appendCandidate(buildRelativeDayOffsetCandidate(match, postDate, source));
+  }
+
+  for (const match of collectRelativeWeekdayMatches(normalizedText)) {
+    appendCandidate(buildRelativeWeekdayCandidate(match, postDate, source));
+  }
+
   return candidates;
 }
 
@@ -2194,6 +2605,22 @@ function normalizeEventDate(
   }
 
   candidates.sort((a, b) => {
+    const relativeWeightA = a.relativeWeekday || a.relativeDayOffset ? 1 : 0;
+    const relativeWeightB = b.relativeWeekday || b.relativeDayOffset ? 1 : 0;
+    if (relativeWeightA !== relativeWeightB) {
+      return relativeWeightA - relativeWeightB;
+    }
+
+    const confidenceOrder: Record<DateConfidence, number> = {
+      high: 0,
+      medium: 1,
+      low: 2,
+    };
+    const confidenceWeight = confidenceOrder[a.confidence] - confidenceOrder[b.confidence];
+    if (confidenceWeight !== 0) {
+      return confidenceWeight;
+    }
+
     const distanceA = a.distanceFromPostDays ?? Number.POSITIVE_INFINITY;
     const distanceB = b.distanceFromPostDays ?? Number.POSITIVE_INFINITY;
     if (distanceA !== distanceB) {
@@ -2202,16 +2629,7 @@ function normalizeEventDate(
 
     const sourceWeightA = a.source === "model" ? 0 : 1;
     const sourceWeightB = b.source === "model" ? 0 : 1;
-    if (sourceWeightA !== sourceWeightB) {
-      return sourceWeightA - sourceWeightB;
-    }
-
-    const confidenceOrder: Record<DateConfidence, number> = {
-      high: 0,
-      medium: 1,
-      low: 2,
-    };
-    return confidenceOrder[a.confidence] - confidenceOrder[b.confidence];
+    return sourceWeightA - sourceWeightB;
   });
 
   const selected = candidates[0];
@@ -2221,7 +2639,11 @@ function normalizeEventDate(
 
   const yearSelectionReason = selected.rawYearProvided
     ? "explicit_year_from_text"
-    : "year_inferred_from_post_timestamp_nearest";
+    : selected.relativeWeekday
+      ? "relative_weekday_from_post_timestamp"
+      : selected.relativeDayOffset
+        ? "relative_day_from_post_timestamp"
+        : "year_inferred_from_post_timestamp_nearest";
 
   if (selected.confidence === "low") {
     return {
@@ -2459,6 +2881,28 @@ function expandNormalizedDateRange(
   );
   if (explicitCaptionRangeDates) {
     return explicitCaptionRangeDates;
+  }
+
+  if (normalizedRawDate && !hasExplicitDateText(normalizedRawDate)) {
+    const relativeModelDates = collectRelativeDates(
+      normalizedRawDate,
+      postDate,
+      "model",
+    );
+    if (relativeModelDates.length >= 2) {
+      return relativeModelDates;
+    }
+  }
+
+  if (normalizedCaption && !hasExplicitDateText(normalizedCaption)) {
+    const relativeCaptionDates = collectRelativeDates(
+      normalizedCaption,
+      postDate,
+      "caption",
+    );
+    if (relativeCaptionDates.length >= 2) {
+      return relativeCaptionDates;
+    }
   }
 
   if (!normalizedRawDate) {

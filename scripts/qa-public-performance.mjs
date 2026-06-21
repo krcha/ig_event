@@ -14,6 +14,7 @@ const browsePageSource = read("app/(main)/events-browse-page.tsx");
 const publicEventsSource = read("lib/events/public-events.ts");
 const convexEventsSource = read("convex/events.ts");
 const monthEventsTableSource = read("components/calendar/month-events-table.tsx");
+const mobileMonthDayStripSource = read("components/calendar/mobile-month-day-strip.tsx");
 const eventDetailSource = read("app/(main)/events/[eventId]/page.tsx");
 const savedPanelSource = read("components/saved/saved-library-panel.tsx");
 const middlewareSource = read("middleware.ts");
@@ -93,6 +94,21 @@ assert.doesNotMatch(
   /buildApprovedEventAutoCleanupGroups\(\s*events\.map\(mapPublicEventToDuplicateRecord\)/,
   "Duplicate cleanup should not run the O(n^2) grouping over the entire cross-date event set.",
 );
+assert.match(
+  publicEventsSource,
+  /const PUBLIC_DUPLICATE_CLEANUP_MAX_PAIRWISE_EVENTS = 20;/,
+  "Duplicate cleanup should cap expensive pairwise matching for high-volume public days.",
+);
+assert.match(
+  publicEventsSource,
+  /hideExactSourceDuplicates\(sameDateEvents, hiddenDuplicateIds\);/,
+  "Duplicate cleanup should still remove exact same-source duplicates even when pairwise matching is skipped.",
+);
+assert.match(
+  publicEventsSource,
+  /sameDateEvents\.length > PUBLIC_DUPLICATE_CLEANUP_MAX_PAIRWISE_EVENTS/,
+  "Large same-day batches should skip expensive pairwise duplicate heuristics on public page loads.",
+);
 
 assert.match(
   browsePageSource,
@@ -118,6 +134,30 @@ assert.match(
   browsePageSource,
   /showFullList \? \([\s\S]*<MonthEventsTable[\s\S]*initiallyExpanded[\s\S]*\) : \([\s\S]*Open the complete table only when you need it\./,
   "Default calendar load should render a lightweight full-list launcher instead of serializing every row into the client table.",
+);
+assert.match(
+  browsePageSource,
+  /const DEFAULT_SELECTED_DAY_AGENDA_LIMIT = 24;/,
+  "Default calendar load should cap selected-day agenda previews to keep high-volume days fast.",
+);
+assert.match(
+  browsePageSource,
+  /visibleSelectedDayEvents\.slice\(0, DEFAULT_SELECTED_DAY_AGENDA_LIMIT\)/,
+  "Selected-day agenda should slice the default preview instead of serializing every event card.",
+);
+assert.ok(
+  (browsePageSource.match(/prefetch=\{false\}/g) ?? []).length >= 12,
+  "High-density calendar links should disable App Router prefetch to avoid background RSC work during taps.",
+);
+assert.match(
+  mobileMonthDayStripSource,
+  /<Link prefetch=\{false\}/,
+  "Mobile month day strip should disable prefetch for its many date links.",
+);
+assert.match(
+  browsePageSource,
+  /Showing \{agendaEvents\.length\} of \{selectedDayEventCount\} matching events for this day\./,
+  "Selected-day agenda overflow should tell users when only a preview is rendered.",
 );
 
 assert.match(

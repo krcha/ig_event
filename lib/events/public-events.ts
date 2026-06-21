@@ -31,6 +31,7 @@ export type EventStatus = "pending" | "approved" | "rejected";
 const APPROVED_EVENTS_SCAN_BATCH_SIZE = 100;
 const PUBLIC_EVENTS_CACHE_MAX_ENTRIES = 48;
 const PUBLIC_EVENTS_CACHE_TTL_MS = 60_000;
+const PUBLIC_DUPLICATE_CLEANUP_MAX_PAIRWISE_EVENTS = 20;
 
 export type PublicEvent = {
   _id: string;
@@ -244,6 +245,35 @@ function mapPublicEventToDuplicateRecord(event: PublicEvent): ApprovedEventDupli
   };
 }
 
+function getExactSourceDuplicateKey(event: PublicEvent): string | null {
+  if (event.instagramPostId) {
+    return `post-id:${event.instagramPostId}`;
+  }
+  if (event.instagramPostUrl) {
+    return `post-url:${event.instagramPostUrl.trim().toLowerCase().replace(/\/+$/, "")}`;
+  }
+  return null;
+}
+
+function hideExactSourceDuplicates(
+  events: PublicEvent[],
+  hiddenDuplicateIds: Set<string>,
+): void {
+  const seenSourceKeys = new Set<string>();
+
+  for (const event of events) {
+    const sourceKey = getExactSourceDuplicateKey(event);
+    if (!sourceKey) {
+      continue;
+    }
+    if (seenSourceKeys.has(sourceKey)) {
+      hiddenDuplicateIds.add(event._id);
+      continue;
+    }
+    seenSourceKeys.add(sourceKey);
+  }
+}
+
 function filterDuplicatePublicEvents(events: PublicEvent[]): PublicEvent[] {
   const eventsByDate = new Map<string, PublicEvent[]>();
 
@@ -256,7 +286,12 @@ function filterDuplicatePublicEvents(events: PublicEvent[]): PublicEvent[] {
   const hiddenDuplicateIds = new Set<string>();
 
   for (const sameDateEvents of eventsByDate.values()) {
+    hideExactSourceDuplicates(sameDateEvents, hiddenDuplicateIds);
+
     if (sameDateEvents.length < 2) {
+      continue;
+    }
+    if (sameDateEvents.length > PUBLIC_DUPLICATE_CLEANUP_MAX_PAIRWISE_EVENTS) {
       continue;
     }
 

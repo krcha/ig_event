@@ -231,6 +231,31 @@ function runPromptQa() {
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /danas.*sutra.*prekosutra/i,
+    "Prompt must treat today/tomorrow-style Serbian relative dates as date evidence.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /u četvrtak/i,
+    "Prompt must mention Serbian on-weekday phrases.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /PETAK \/ SUBOTA \| 21h/i,
+    "Prompt must treat repeated relative weekdays as separate event dates.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /ovog petka/i,
+    "Prompt must treat Serbian relative weekdays as date evidence.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /sledeće subote/i,
+    "Prompt must mention Serbian next-weekday phrases.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
     /GIVE EVERY ROW A TITLE/i,
     "Prompt must tell the model to title every dated schedule row.",
   );
@@ -638,6 +663,223 @@ function runCaptionDateRangeQa() {
   assert.equal(new Set(dailyRangeEvents.map((event) => event.venue)).size, 1);
 }
 
+function weekdayIsoDateFrom(baseIsoDate, weekday, qualifier = "this") {
+  const baseDate = new Date(`${baseIsoDate}T12:00:00.000Z`);
+  let offsetDays = (weekday - baseDate.getUTCDay() + 7) % 7;
+  if (qualifier === "next" && offsetDays === 0) {
+    offsetDays = 7;
+  }
+  return addIsoDays(baseIsoDate, offsetDays);
+}
+
+function prepareRelativeDateEvents({ caption, postedAt, postType = "video" }) {
+  const prepared = prepareEventsForInsert(
+    makeInstagramPost({
+      caption,
+      postedAt,
+      postType,
+      username: "serbian_relative_dates",
+    }),
+    makeExtractedEvent({
+      title: "QA Relative Date",
+      date: "",
+      time: "21:00",
+      venue: "QA Venue",
+      artists: ["QA Artist"],
+      category: "nightlife",
+      confidence: 0.95,
+      source_caption: caption,
+      field_confirmation: makeFieldConfirmation(0.95),
+    }),
+    postType === "image" ? "https://images.example.com/relative-date.jpg" : null,
+    {},
+    {},
+    {},
+  );
+
+  return {
+    prepared,
+    events: prepared.filter((result) => result.kind === "ok").map((result) => result.event),
+  };
+}
+
+function assertRelativeDateCase({
+  caption,
+  expectedDates,
+  expectedReason = "relative_weekday_from_post_timestamp",
+  label,
+  postedAt,
+  postType = "video",
+}) {
+  const { events } = prepareRelativeDateEvents({ caption, postedAt, postType });
+  assert.deepEqual(events.map((event) => event.date), expectedDates, label);
+  assert.deepEqual(events.map((event) => event.time), expectedDates.map(() => "21:00"), label);
+  const firstFields = JSON.parse(events[0].normalizedFieldsJson);
+  assert.equal(firstFields.dateYearSelectionReason, expectedReason, label);
+}
+
+function runSerbianRelativeDateQa() {
+  const baseMondayIsoDate = nextIsoDateForWeekday(1);
+  const postedAt = `${baseMondayIsoDate}T10:00:00.000Z`;
+  const weekdayCases = [
+    {
+      weekday: 1,
+      english: "monday",
+      thisSerbian: "ovog ponedeljka",
+      nextSerbian: "narednog ponedeljka",
+      onSerbian: "u ponedeljak",
+      cyrillicThis: "овог понедељка",
+    },
+    {
+      weekday: 2,
+      english: "tuesday",
+      thisSerbian: "ovog utorka",
+      nextSerbian: "narednog utorka",
+      onSerbian: "u utorak",
+      cyrillicThis: "овог уторка",
+    },
+    {
+      weekday: 3,
+      english: "wednesday",
+      thisSerbian: "ove srede",
+      nextSerbian: "sledece srede",
+      onSerbian: "u sredu",
+      cyrillicThis: "ове среде",
+    },
+    {
+      weekday: 4,
+      english: "thursday",
+      thisSerbian: "ovog cetvrtka",
+      nextSerbian: "narednog četvrtka",
+      onSerbian: "u četvrtak",
+      cyrillicThis: "овог четвртка",
+    },
+    {
+      weekday: 5,
+      english: "friday",
+      thisSerbian: "ovog petka",
+      nextSerbian: "narednog petka",
+      onSerbian: "u petak",
+      cyrillicThis: "овог петка",
+    },
+    {
+      weekday: 6,
+      english: "saturday",
+      thisSerbian: "ove subote",
+      nextSerbian: "sledeće subote",
+      onSerbian: "u subotu",
+      cyrillicThis: "ове суботе",
+    },
+    {
+      weekday: 0,
+      english: "sunday",
+      thisSerbian: "ovu nedelju",
+      nextSerbian: "narednu nedelju",
+      onSerbian: "u nedelju",
+      cyrillicThis: "ову недељу",
+    },
+  ];
+
+  for (const testCase of weekdayCases) {
+    const thisWeekdayDate = weekdayIsoDateFrom(baseMondayIsoDate, testCase.weekday);
+    const nextWeekdayDate = weekdayIsoDateFrom(baseMondayIsoDate, testCase.weekday, "next");
+    for (const caption of [
+      `This ${testCase.english} QA event at 21h.`,
+      `Vidimo se ${testCase.thisSerbian} u 21h.`,
+      `Видимо се ${testCase.cyrillicThis} у 21h.`,
+      `QA event ${testCase.onSerbian} u 21h.`,
+      `QA event on ${testCase.english} at 21h.`,
+    ]) {
+      assertRelativeDateCase({
+        caption,
+        expectedDates: [thisWeekdayDate],
+        label: `this/on weekday phrase: ${caption}`,
+        postedAt,
+      });
+    }
+
+    for (const caption of [
+      `Next ${testCase.english} QA event at 21h.`,
+      `Vidimo se ${testCase.nextSerbian} u 21h.`,
+    ]) {
+      assertRelativeDateCase({
+        caption,
+        expectedDates: [nextWeekdayDate],
+        label: `next weekday phrase: ${caption}`,
+        postedAt,
+      });
+    }
+  }
+
+  for (const { caption, offsetDays, reason } of [
+    { caption: "Danas slušamo QA DJ-a od 21h.", offsetDays: 0, reason: "relative_day_from_post_timestamp" },
+    { caption: "Večeras slušamo QA DJ-a od 21h.", offsetDays: 0, reason: "relative_day_from_post_timestamp" },
+    { caption: "Veceras slušamo QA DJ-a od 21h.", offsetDays: 0, reason: "relative_day_from_post_timestamp" },
+    { caption: "Tonight we dance at 21h.", offsetDays: 0, reason: "relative_day_from_post_timestamp" },
+    { caption: "Данас слушамо QA DJ-a од 21h.", offsetDays: 0, reason: "relative_day_from_post_timestamp" },
+    { caption: "Sutra slušamo QA DJ-a od 21h.", offsetDays: 1, reason: "relative_day_from_post_timestamp" },
+    { caption: "Tomorrow we dance at 21h.", offsetDays: 1, reason: "relative_day_from_post_timestamp" },
+    { caption: "Сутра слушамо QA DJ-a од 21h.", offsetDays: 1, reason: "relative_day_from_post_timestamp" },
+    { caption: "Prekosutra slušamo QA DJ-a od 21h.", offsetDays: 2, reason: "relative_day_from_post_timestamp" },
+    { caption: "Day after tomorrow we dance at 21h.", offsetDays: 2, reason: "relative_day_from_post_timestamp" },
+    { caption: "Прекосутра слушамо QA DJ-a од 21h.", offsetDays: 2, reason: "relative_day_from_post_timestamp" },
+  ]) {
+    assertRelativeDateCase({
+      caption,
+      expectedDates: [addIsoDays(baseMondayIsoDate, offsetDays)],
+      expectedReason: reason,
+      label: `relative day offset phrase: ${caption}`,
+      postedAt,
+    });
+  }
+
+  const fridayIsoDate = weekdayIsoDateFrom(baseMondayIsoDate, 5);
+  const saturdayIsoDate = weekdayIsoDateFrom(baseMondayIsoDate, 6);
+  for (const caption of [
+    "PETAK / SUBOTA | 21h | BARAKA BAŠTA",
+    "Petak, subota | 21h | BARAKA BAŠTA",
+    "Petak i subota | 21h | BARAKA BAŠTA",
+    "Friday and Saturday | 21h | BARAKA BAŠTA",
+    "Петак и субота | 21h | BARAKA BAŠTA",
+    "Petak - subota | 21h | BARAKA BAŠTA",
+    "Ove nedelje: petak QA live, subota QA live. Start 21h.",
+    "This week: Friday QA live and Saturday QA live. Start 21h.",
+    "Ове недеље: петак QA live и субота QA live. Start 21h.",
+  ]) {
+    assertRelativeDateCase({
+      caption,
+      expectedDates: [fridayIsoDate, saturdayIsoDate],
+      label: `multi-date relative weekday list: ${caption}`,
+      postedAt,
+      postType: "image",
+    });
+  }
+
+  assertRelativeDateCase({
+    caption: "Danas i sutra slušamo QA DJ-a od 21h.",
+    expectedDates: [baseMondayIsoDate, addIsoDays(baseMondayIsoDate, 1)],
+    expectedReason: "relative_day_from_post_timestamp",
+    label: "multi-date day-offset list: danas i sutra",
+    postedAt,
+    postType: "image",
+  });
+
+  assertRelativeDateCase({
+    caption: "Ovog ponedeljka posle ponoći slušamo QA DJ-a.",
+    expectedDates: ["2026-06-29"],
+    label: "post timestamp must be interpreted in Europe/Belgrade, not UTC",
+    postedAt: "2026-06-22T22:30:00.000Z",
+  });
+
+  const ambiguousWeekOnly = prepareRelativeDateEvents({
+    caption: "Ove nedelje najavljujemo program uskoro.",
+    postedAt,
+  });
+  assert.equal(ambiguousWeekOnly.events.length, 0);
+  assert.equal(ambiguousWeekOnly.prepared[0]?.kind, "skip");
+  assert.equal(ambiguousWeekOnly.prepared[0]?.reason, "missing_date");
+}
+
 function runScheduleConsistencyQa() {
   assert.equal(looksLikeBareDate("19.06"), true);
   assert.equal(looksLikeBareDate("19:30"), false);
@@ -859,7 +1101,8 @@ runArtistAndDescriptionQa();
 runConfidenceQa();
 runVideoModerationQa();
 runCaptionDateRangeQa();
+runSerbianRelativeDateQa();
 runScheduleConsistencyQa();
 runTicketPriceQa();
 
-console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, caption date ranges, schedule consistency, and ticket prices.");
+console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, caption date ranges, Serbian relative dates, schedule consistency, and ticket prices.");

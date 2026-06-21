@@ -123,6 +123,7 @@ const DAY_CATEGORY_CHIPS = [
   { key: "culture", label: "Culture" },
   { key: "event", label: "Event" },
 ] as const;
+const DEFAULT_SELECTED_DAY_AGENDA_LIMIT = 24;
 
 type DayCategory = (typeof DAY_CATEGORY_CHIPS)[number]["key"];
 
@@ -613,7 +614,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
             {isMobileSearch ? <Search className="h-4 w-4" /> : <Filter className="h-4 w-4" />}
             {isMobileSearch ? "Search" : "Apply"}
           </button>
-          <Link
+          <Link prefetch={false}
             className={cn(
               "button-secondary py-0",
               isDesktop ? "min-h-12 px-4" : "min-h-10 px-3 text-sm",
@@ -635,7 +636,12 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     compact?: boolean;
     mobile?: boolean;
   } = {}) {
-    const agendaEvents = visibleSelectedDayEvents;
+    const selectedDayEventCount = visibleSelectedDayEvents.length;
+    const hasAgendaOverflow =
+      !showFullList && selectedDayEventCount > DEFAULT_SELECTED_DAY_AGENDA_LIMIT;
+    const agendaEvents = hasAgendaOverflow
+      ? visibleSelectedDayEvents.slice(0, DEFAULT_SELECTED_DAY_AGENDA_LIMIT)
+      : visibleSelectedDayEvents;
 
     function renderMobileAdvancedControls() {
       const iconButtonClass =
@@ -707,7 +713,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
               const tone = chip.key === "all" ? null : EVENT_CATEGORY_TONES[chip.key];
 
               return (
-                <Link
+                <Link prefetch={false}
                   className={cn(
                     "inline-flex min-h-8 flex-none items-center rounded-full px-2.5 text-[11px] font-semibold transition hover:opacity-90",
                     tone
@@ -760,7 +766,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   data-event-venue={event.venue}
                   key={event._id}
                 >
-                  <Link
+                  <Link prefetch={false}
                     aria-label={getEventAriaLabel(event, tone)}
                     className="flex min-w-0 flex-1 items-center gap-2"
                     href={`/events/${event._id}`}
@@ -815,7 +821,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
               >
                 <div className={cn("absolute inset-y-4 left-0 w-1 rounded-r-full", tone.rail)} />
                 <div className="flex items-start gap-2.5 pl-1.5">
-                  <Link
+                  <Link prefetch={false}
                     aria-label={getEventAriaLabel(event, tone)}
                     className="flex min-w-0 flex-1 items-start gap-2.5"
                     href={`/events/${event._id}`}
@@ -861,7 +867,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 Pick another date, change filters, or clear the current search.
               </p>
               {hasActiveFilters || selectedCategory !== "all" ? (
-                <Link
+                <Link prefetch={false}
                   className="button-secondary mt-4 min-h-10 px-4 py-0"
                   href={`/${buildQueryString({ month: monthParam, day: selectedDayKey })}`}
                   scroll={false}
@@ -869,6 +875,17 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   Clear filters
                 </Link>
               ) : null}
+            </div>
+          ) : null}
+
+          {hasAgendaOverflow ? (
+            <div className="rounded-[1rem] border border-primary/20 bg-primary/[0.07] px-3 py-3 text-sm text-muted-foreground">
+              <p>
+                Showing {agendaEvents.length} of {selectedDayEventCount} matching events for this day.
+              </p>
+              <Link prefetch={false} className="mt-2 inline-flex text-sm font-semibold text-primary" href={fullListHref}>
+                Open the complete table
+              </Link>
             </div>
           ) : null}
         </>
@@ -886,7 +903,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 day: "numeric",
               })}{" "}
               <span className="text-muted-foreground">·</span>{" "}
-              {pluralize(agendaEvents.length, "event")}
+              {pluralize(selectedDayEventCount, "event")}
             </h2>
             {renderCategoryChips({ withActions: true })}
           </div>
@@ -916,7 +933,9 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 })}
               </h3>
               <p className="mt-1 text-xs text-muted-foreground sm:text-sm">
-                {pluralize(agendaEvents.length, "event")} ready to browse.
+                {hasAgendaOverflow
+                  ? `Showing ${agendaEvents.length} of ${selectedDayEventCount} events.`
+                  : `${pluralize(selectedDayEventCount, "event")} ready to browse.`}
               </p>
             </div>
             <div className="rounded-[1.05rem] bg-primary px-3 py-2 text-center text-primary-foreground shadow-[0_20px_42px_-26px_rgba(113,112,255,0.85)]">
@@ -940,7 +959,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       <header className="relative z-20 rounded-[1.15rem] border border-border/75 bg-card/92 px-2.5 py-2 shadow-[0_18px_52px_-40px_rgba(0,0,0,0.9)] backdrop-blur-sm lg:hidden">
         <div className="flex items-center gap-1.5">
           <div className="inline-flex h-9 min-w-0 flex-1 items-center rounded-full border border-border/75 bg-white/[0.035]">
-            <Link
+            <Link prefetch={false}
               aria-label="Previous month"
               className="inline-flex h-9 w-9 flex-none items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
               href={`/${buildQueryString({
@@ -954,7 +973,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
             <span className="min-w-0 flex-1 truncate px-1 text-center text-sm font-semibold text-foreground">
               {monthLabel}
             </span>
-            <Link
+            <Link prefetch={false}
               aria-label="Next month"
               className="inline-flex h-9 w-9 flex-none items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
               href={`/${buildQueryString({
@@ -967,7 +986,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
             </Link>
           </div>
 
-          <Link
+          <Link prefetch={false}
             className="inline-flex h-9 flex-none items-center rounded-full border border-primary/25 bg-primary/10 px-3 text-xs font-semibold text-primary"
             href={`/${buildQueryString({
               ...baseFilters,
@@ -1004,7 +1023,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
 
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center lg:justify-end">
               <div className="inline-flex w-fit items-center gap-1 rounded-full border border-border/80 bg-white/[0.035] p-1 shadow-[0_18px_48px_-38px_rgba(0,0,0,0.8)]">
-                <Link
+                <Link prefetch={false}
                   aria-label="Previous month"
                   className="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground hover:bg-muted"
                   href={`/${buildQueryString({
@@ -1015,7 +1034,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 >
                   <ChevronLeft className="h-4 w-4" />
                 </Link>
-                <Link
+                <Link prefetch={false}
                   className="inline-flex h-10 items-center justify-center rounded-full px-4 text-sm font-semibold text-foreground hover:bg-muted"
                   href={`/${buildQueryString({
                     ...baseFilters,
@@ -1026,7 +1045,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 >
                   Today
                 </Link>
-                <Link
+                <Link prefetch={false}
                   aria-label="Next month"
                   className="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground hover:bg-muted"
                   href={`/${buildQueryString({
@@ -1038,7 +1057,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   <ChevronRight className="h-4 w-4" />
                 </Link>
               </div>
-              <Link className="button-secondary hidden min-h-11 gap-2 px-4 py-0 sm:inline-flex" href="/">
+              <Link prefetch={false} className="button-secondary hidden min-h-11 gap-2 px-4 py-0 sm:inline-flex" href="/">
                 <ListMusic className="h-4 w-4" />
                 All events
               </Link>
@@ -1136,7 +1155,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                       const visibleEvents = dayEvents.slice(0, 3);
 
                       return (
-                        <Link
+                        <Link prefetch={false}
                           className={cn(
                             "group relative min-h-[9.75rem] border-r border-b border-border/75 bg-card px-2.5 pb-2.5 pt-2.5 transition hover:z-10 hover:bg-primary/[0.035]",
                             (index + 1) % 7 === 0 && "border-r-0",
@@ -1239,7 +1258,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   </p>
                 </div>
 
-                <Link
+                <Link prefetch={false}
                   className="button-secondary min-h-10 gap-2 px-4 py-0"
                   href={fullListHref}
                   scroll={false}

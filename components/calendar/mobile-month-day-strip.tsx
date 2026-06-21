@@ -47,7 +47,7 @@ export function MobileMonthDayStrip({ days }: MobileMonthDayStripProps) {
       ref={containerRef}
     >
       {days.map((day) => (
-        <Link
+        <Link prefetch={false}
           className={cn(
             "min-w-[3.45rem] snap-start rounded-[0.85rem] border border-border/75 bg-card px-1.5 py-1.5 text-center transition",
             day.isSelected && "border-primary/35 bg-primary/[0.08] text-primary shadow-[0_20px_42px_-34px_rgba(14,116,144,0.42)]",

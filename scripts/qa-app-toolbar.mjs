@@ -3,6 +3,12 @@ import { readFileSync } from "node:fs";
 
 const toolbarPath = "components/navigation/app-toolbar.tsx";
 const source = readFileSync(toolbarPath, "utf8");
+const layoutSource = readFileSync("app/layout.tsx", "utf8");
+const navigationFeedbackSource = readFileSync(
+  "components/navigation/navigation-feedback.tsx",
+  "utf8",
+);
+const globalsSource = readFileSync("app/globals.css", "utf8");
 const profileAvatarSource = readFileSync(
   "components/navigation/mobile-profile-avatar-link.tsx",
   "utf8",
@@ -106,4 +112,35 @@ for (const { href, label } of [
   );
 }
 
-console.log("QA passed: app toolbar top header is brand-only and tab-independent.");
+assert.ok(
+  layoutSource.includes("<Suspense fallback={null}>") && layoutSource.includes("<NavigationFeedback />"),
+  "Root layout should mount global navigation feedback inside Suspense so taps acknowledge immediately without CSR bailout build errors.",
+);
+assert.ok(
+  navigationFeedbackSource.includes("window.addEventListener(\"pointerdown\""),
+  "Navigation feedback should start on pointerdown for immediate mobile tap response.",
+);
+assert.ok(
+  navigationFeedbackSource.includes('data-navigation-feedback="true"'),
+  "Navigation feedback should expose a stable DOM marker for smoke tests.",
+);
+assert.ok(
+  navigationFeedbackSource.includes("usePathname()") && navigationFeedbackSource.includes("useSearchParams()"),
+  "Navigation feedback should clear pending state when App Router URL state changes.",
+);
+assert.ok(
+  navigationFeedbackSource.includes("shouldUseDocumentNavigation") &&
+    navigationFeedbackSource.includes("window.location.assign(href)") &&
+    navigationFeedbackSource.includes("event.stopImmediatePropagation()"),
+  "Same-page calendar query links should bypass App Router soft navigation and start a document navigation immediately.",
+);
+assert.ok(
+  globalsSource.includes("touch-action: manipulation;"),
+  "Interactive controls should use touch-action: manipulation for responsive mobile taps.",
+);
+assert.ok(
+  globalsSource.includes("@keyframes navigation-feedback"),
+  "Global CSS should keep the navigation feedback progress animation.",
+);
+
+console.log("QA passed: app toolbar top header is brand-only and tab-independent, with tap feedback.");
