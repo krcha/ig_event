@@ -6,7 +6,6 @@ import { getDisplayEventTime, normalizeEventTime } from "../lib/events/event-tim
 const calendarSource = readFileSync("app/(main)/events-browse-page.tsx", "utf8");
 const eventDetailSource = readFileSync("app/(main)/events/[eventId]/page.tsx", "utf8");
 const eventMetaSource = readFileSync("components/events/event-meta.tsx", "utf8");
-const monthEventsTableSource = readFileSync("components/calendar/month-events-table.tsx", "utf8");
 const saveEventButtonSource = readFileSync("components/events/save-event-button.tsx", "utf8");
 const savedLibraryPanelSource = readFileSync("components/saved/saved-library-panel.tsx", "utf8");
 const publicEventUiSources = [
@@ -15,7 +14,6 @@ const publicEventUiSources = [
   ["events redirect page", readFileSync("app/(main)/events/page.tsx", "utf8")],
   ["event detail page", eventDetailSource],
   ["home page", readFileSync("app/page.tsx", "utf8")],
-  ["month events table", monthEventsTableSource],
 ];
 
 assert.ok(
@@ -125,7 +123,6 @@ for (const [label, source] of [
   ["events browse page", calendarSource],
   ["saved tab", savedLibraryPanelSource],
   ["event detail page", eventDetailSource],
-  ["month events table", monthEventsTableSource],
 ]) {
   assert.ok(source.includes("EventMetaRow"), `${label} should render category/price/going metadata rows.`);
 }

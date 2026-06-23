@@ -1,7 +1,6 @@
 import Link from "next/link";
 import {
   CalendarDays,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock3,
@@ -17,7 +16,6 @@ import {
   type PublicEvent,
 } from "@/lib/events/public-events";
 import { MobileMonthDayStrip } from "@/components/calendar/mobile-month-day-strip";
-import { MonthEventsTable } from "@/components/calendar/month-events-table";
 import {
   EVENT_CATEGORY_TONES,
   EventMetaRow,
@@ -38,7 +36,6 @@ type CalendarSearchParams = {
   venue?: string | string[];
   type?: string | string[];
   category?: string | string[];
-  list?: string | string[];
   weekend?: string | string[];
   q?: string | string[];
 };
@@ -383,7 +380,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const selectedType = getSingleValue(searchParams?.type);
   const selectedCategory = normalizeDayCategory(getSingleValue(searchParams?.category));
   const selectedSearchQuery = getSingleValue(searchParams?.q)?.trim() || undefined;
-  const showFullList = getSingleValue(searchParams?.list) === "1";
   const weekendOnly = getSingleValue(searchParams?.weekend) === "1";
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
@@ -443,12 +439,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     category: hiddenCategory,
     weekend: weekendOnly ? "1" : undefined,
   };
-  const fullListHref = `/${buildQueryString({
-    ...baseFilters,
-    day: selectedDayKey,
-    list: "1",
-    month: monthParam,
-  })}`;
   const mobileMonthDays = monthDays.map((day) => {
     const dayKey = formatDateKey(day);
     const dayEvents = monthEventsByDay.get(dayKey) ?? [];
@@ -638,7 +628,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   } = {}) {
     const selectedDayEventCount = visibleSelectedDayEvents.length;
     const hasAgendaOverflow =
-      !showFullList && selectedDayEventCount > DEFAULT_SELECTED_DAY_AGENDA_LIMIT;
+      selectedDayEventCount > DEFAULT_SELECTED_DAY_AGENDA_LIMIT;
     const agendaEvents = hasAgendaOverflow
       ? visibleSelectedDayEvents.slice(0, DEFAULT_SELECTED_DAY_AGENDA_LIMIT)
       : visibleSelectedDayEvents;
@@ -883,9 +873,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
               <p>
                 Showing {agendaEvents.length} of {selectedDayEventCount} matching events for this day.
               </p>
-              <Link prefetch={false} className="mt-2 inline-flex text-sm font-semibold text-primary" href={fullListHref}>
-                Open the complete table
-              </Link>
             </div>
           ) : null}
         </>
@@ -1240,35 +1227,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
 
           <div className="hidden lg:block 2xl:hidden">{renderSelectedDayAgenda({ compact: true })}</div>
 
-          {showFullList ? (
-            <MonthEventsTable
-              authEnabled={authEnabled}
-              events={monthEventSummaries}
-              initiallyExpanded
-              monthLabel={monthLabel}
-            />
-          ) : (
-            <section className="glass-panel overflow-hidden">
-              <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-                <div>
-                  <p className="section-kicker">Full list</p>
-                  <h3 className="mt-1 text-lg font-semibold tracking-tight">{monthLabel} events</h3>
-                  <p className="mt-1 text-xs text-muted-foreground sm:text-sm">
-                    {monthEvents.length} match this month. Open the complete table only when you need it.
-                  </p>
-                </div>
-
-                <Link prefetch={false}
-                  className="button-secondary min-h-10 gap-2 px-4 py-0"
-                  href={fullListHref}
-                  scroll={false}
-                >
-                  <span>Show list</span>
-                  <ChevronDown className="h-4 w-4" />
-                </Link>
-              </div>
-            </section>
-          )}
         </>
       ) : null}
     </main>

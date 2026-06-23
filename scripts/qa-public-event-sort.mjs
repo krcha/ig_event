@@ -106,11 +106,11 @@ assert.match(
   "Server-side public event loading should apply the shared venue-name sort before pagination/grouping.",
 );
 
-const monthEventsTableSource = readFileSync("components/calendar/month-events-table.tsx", "utf8");
-assert.match(
-  monthEventsTableSource,
-  /comparePublicEventsByDateVenueTimeTitle/,
-  "Expanded calendar event tables should reuse the same venue-name default ordering.",
+const browsePageSource = readFileSync("app/(main)/events-browse-page.tsx", "utf8");
+assert.equal(
+  browsePageSource.includes("month-events-table"),
+  false,
+  "Calendar browsing should not keep the removed whole-month event table.",
 );
 
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));

@@ -13,7 +13,6 @@ const appPageSource = read("app/page.tsx");
 const browsePageSource = read("app/(main)/events-browse-page.tsx");
 const publicEventsSource = read("lib/events/public-events.ts");
 const convexEventsSource = read("convex/events.ts");
-const monthEventsTableSource = read("components/calendar/month-events-table.tsx");
 const mobileMonthDayStripSource = read("components/calendar/mobile-month-day-strip.tsx");
 const eventDetailSource = read("app/(main)/events/[eventId]/page.tsx");
 const savedPanelSource = read("components/saved/saved-library-panel.tsx");
@@ -125,15 +124,25 @@ assertDoesNotInclude(
   "const fromDate = monthStartKey < yesterdayKey ? yesterdayKey : monthStartKey;",
   "Calendar page should not clamp the selected month query to yesterday.",
 );
-assert.match(
+assertDoesNotInclude(
   browsePageSource,
-  /const showFullList = getSingleValue\(searchParams\?\.list\) === "1";/,
-  "Calendar page should keep the heavy full-list table behind an explicit list=1 request.",
+  "MonthEventsTable",
+  "Calendar page should not serialize a whole-month event table into the client payload.",
 );
-assert.match(
+assertDoesNotInclude(
   browsePageSource,
-  /showFullList \? \([\s\S]*<MonthEventsTable[\s\S]*initiallyExpanded[\s\S]*\) : \([\s\S]*Open the complete table only when you need it\./,
-  "Default calendar load should render a lightweight full-list launcher instead of serializing every row into the client table.",
+  "list?: string",
+  "Calendar page should not keep a list=1 whole-month table query option.",
+);
+assertDoesNotInclude(
+  browsePageSource,
+  'list: "1"',
+  "Calendar page should not link to a list=1 whole-month table mode.",
+);
+assertDoesNotInclude(
+  browsePageSource,
+  "Open the complete table",
+  "Selected-day overflow should not offer the memory-heavy whole-month table.",
 );
 assert.match(
   browsePageSource,
@@ -158,17 +167,6 @@ assert.match(
   browsePageSource,
   /Showing \{agendaEvents\.length\} of \{selectedDayEventCount\} matching events for this day\./,
   "Selected-day agenda overflow should tell users when only a preview is rendered.",
-);
-
-assert.match(
-  monthEventsTableSource,
-  /if \(!isExpanded\) \{\s*return events;\s*\}[\s\S]*\.sort\(/,
-  "Collapsed month table should not sort the full event list on initial load.",
-);
-assert.match(
-  monthEventsTableSource,
-  /\[events, isExpanded, sortDirection, sortKey\]/,
-  "Month table sortedEvents memo should depend on isExpanded.",
 );
 
 assertDoesNotInclude(
