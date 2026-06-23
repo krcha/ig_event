@@ -52,7 +52,7 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3210/version"]
-      interval: 10s
+      interval: 2h
       timeout: 5s
       retries: 6
       start_period: 20s
