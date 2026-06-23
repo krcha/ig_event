@@ -1,6 +1,6 @@
 services:
   events-web:
-    image: node:22-bookworm-slim
+    image: node:22.22.3-bookworm-slim@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752
     container_name: ig-event-web
     working_dir: /app
     command: ["npm", "run", "start", "--", "--hostname", "0.0.0.0", "--port", "3000"]
