@@ -1,13 +1,13 @@
-import { auth } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
+import { requireAdminApiAccess } from "@/lib/auth/admin-api";
 import {
   createEmptyIngestionSummary,
   createInitialIngestionBatchState,
   importUpcomingEventsToSavedPosts,
 } from "@/lib/pipeline/run-instagram-ingestion";
-import { getRequiredEnv, hasClerkEnv } from "@/lib/utils/env";
+import { getRequiredEnv } from "@/lib/utils/env";
 
 type ErrorStage =
   | "auth"
@@ -44,11 +44,9 @@ export async function POST() {
   let errorStage: ErrorStage = "auth";
 
   try {
-    if (hasClerkEnv()) {
-      const { userId } = await auth();
-      if (!userId) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      }
+    const adminAccess = await requireAdminApiAccess();
+    if (!adminAccess.ok) {
+      return adminAccess.response;
     }
 
     errorStage = "import_upcoming_convex_events";

@@ -1,10 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type {
   IngestionRunMode,
   IngestionSummary,
 } from "@/lib/pipeline/run-instagram-ingestion";
+import {
+  buildOperationsTriageSummary,
+  type OperationsTriageSummary,
+} from "@/lib/pipeline/ingestion-run-triage";
 
 type ScrapeSource =
   | "manual"
@@ -21,6 +25,7 @@ type ScrapeSummaryPayload = {
   mode?: IngestionRunMode;
   handles: string[];
   summary: IngestionSummary;
+  triage?: OperationsTriageSummary;
   error?: string;
 };
 
@@ -46,25 +51,52 @@ type ScrapeJobPayload = {
   mode?: IngestionRunMode;
   handles: string[];
   summary: IngestionSummary;
+  triage?: OperationsTriageSummary;
   error?: string | null;
 };
 
 const POLL_INTERVAL_MS = 2_000;
+const MAX_POLL_ATTEMPTS = 180;
+const POLLING_STOPPED_MESSAGE =
+  "Polling stopped. The ingestion job is still saved and can be resumed from this panel.";
 const SHORT_BACKFILL_DAYS = 3;
 type HandleSummary = IngestionSummary["handles"][number];
 type ApprovedDuplicateCleanupSummary = NonNullable<
   IngestionSummary["approvedDuplicateCleanup"]
 >;
 
+function countMetric(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function countFirstMetric(...values: unknown[]): number {
+  for (const value of values) {
+    const normalized = countMetric(value);
+    if (normalized > 0) {
+      return normalized;
+    }
+  }
+  return 0;
+}
+
 const HANDLE_SUMMARY_METRICS: Array<{
   label: string;
   getValue: (item: HandleSummary) => number;
 }> = [
-  { label: "Fetched posts", getValue: (item) => item.fetchedPosts },
-  { label: "Inserted events", getValue: (item) => item.insertedEvents },
+  {
+    label: "Fetched posts",
+    getValue: (item) => countFirstMetric(item.fetchedPosts, item.fetched_posts),
+  },
+  {
+    label: "Inserted events",
+    getValue: (item) => countFirstMetric(item.insertedEvents, item.inserted_events),
+  },
   { label: "Auto-approved events", getValue: (item) => item.insertedApprovedEvents ?? 0 },
   { label: "Pending review", getValue: (item) => item.insertedPendingEvents ?? 0 },
-  { label: "Skipped duplicates", getValue: (item) => item.skippedDuplicates },
+  {
+    label: "Skipped duplicates",
+    getValue: (item) => countFirstMetric(item.skippedDuplicates, item.skipped_duplicates),
+  },
   { label: "Updated duplicates", getValue: (item) => item.updated_duplicates_bad_data },
   { label: "Skipped missing date", getValue: (item) => item.skipped_missing_date },
   { label: "Skipped missing venue", getValue: (item) => item.skipped_missing_venue },
@@ -75,9 +107,19 @@ const HANDLE_SUMMARY_METRICS: Array<{
   },
   { label: "Skipped video", getValue: (item) => item.skipped_video },
   { label: "Skipped invalid event", getValue: (item) => item.skipped_invalid_event },
-  { label: "Failed downloads", getValue: (item) => item.failedDownloads },
-  { label: "Failed conversions", getValue: (item) => item.failedConversions },
-  { label: "Failed extractions", getValue: (item) => item.failedExtractions },
+  {
+    label: "Failed downloads",
+    getValue: (item) => countFirstMetric(item.failedDownloads, item.failed_downloads),
+  },
+  {
+    label: "Failed conversions",
+    getValue: (item) => countFirstMetric(item.failedConversions, item.failed_conversions),
+  },
+  {
+    label: "Failed extractions",
+    getValue: (item) =>
+      countFirstMetric(item.failedExtractions, item.failed_extractions, item.failed_extraction),
+  },
   { label: "Duplicate update failed", getValue: (item) => item.duplicate_update_failed },
 ];
 
@@ -187,6 +229,22 @@ function getAutomergeStatus(
   return "No match";
 }
 
+function getTriageToneClass(tone: OperationsTriageSummary["tone"]): string {
+  switch (tone) {
+    case "danger":
+      return "border-destructive/30 bg-destructive/5 text-destructive";
+    case "running":
+      return "border-primary/30 bg-primary/5 text-foreground";
+    case "success":
+      return "border-emerald-500/30 bg-emerald-500/5 text-foreground";
+    case "warning":
+      return "border-amber-500/30 bg-amber-500/5 text-foreground";
+    case "neutral":
+    default:
+      return "border-border bg-background/70 text-muted-foreground";
+  }
+}
+
 export function ScraperDashboard() {
   const [handlesText, setHandlesText] = useState("residentadvisor\nboilerroomtv");
   const [resultsLimitInput, setResultsLimitInput] = useState("1");
@@ -201,6 +259,7 @@ export function ScraperDashboard() {
   const [activeJobStatus, setActiveJobStatus] = useState<ScrapeJobStatus | null>(
     null,
   );
+  const [activeStatusUrl, setActiveStatusUrl] = useState<string | null>(null);
 
   const handles = handlesText
     .split(/\s|,/)
@@ -209,17 +268,34 @@ export function ScraperDashboard() {
   const resultsLimit = parsePositiveInt(resultsLimitInput);
   const daysBack = parsePositiveInt(daysBackInput);
 
-  async function delay(ms: number) {
-    await new Promise((resolve) => {
-      setTimeout(resolve, ms);
+  const pollAbortControllerRef = useRef<AbortController | null>(null);
+
+  async function delay(ms: number, signal: AbortSignal) {
+    await new Promise<void>((resolve, reject) => {
+      if (signal.aborted) {
+        reject(new Error(POLLING_STOPPED_MESSAGE));
+        return;
+      }
+
+      function handleAbort() {
+        window.clearTimeout(timeout);
+        reject(new Error(POLLING_STOPPED_MESSAGE));
+      }
+
+      const timeout = window.setTimeout(() => {
+        signal.removeEventListener("abort", handleAbort);
+        resolve();
+      }, ms);
+      signal.addEventListener("abort", handleAbort, { once: true });
     });
   }
 
-  async function pollScrapeJob(statusUrl: string) {
-    while (true) {
+  async function pollScrapeJob(statusUrl: string, signal: AbortSignal) {
+    for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
       const response = await fetch(statusUrl, {
         method: "POST",
         cache: "no-store",
+        signal,
       });
 
       const payload = await readJsonPayload<ScrapeJobPayload>(response);
@@ -233,6 +309,7 @@ export function ScraperDashboard() {
         mode: payload.mode,
         handles: payload.handles,
         summary: payload.summary,
+        triage: payload.triage,
       });
 
       if (payload.status === "completed") {
@@ -242,22 +319,53 @@ export function ScraperDashboard() {
         throw new Error(payload.error ?? "Scrape job failed.");
       }
 
-      await delay(POLL_INTERVAL_MS);
+      await delay(POLL_INTERVAL_MS, signal);
+    }
+
+    throw new Error(
+      "Stopped polling because the job stayed queued or running for too long. Resume polling from the active job panel.",
+    );
+  }
+
+  async function pollQueuedJob(statusUrl: string) {
+    const controller = new AbortController();
+    pollAbortControllerRef.current = controller;
+    setIsLoading(true);
+    setError(null);
+    try {
+      await pollScrapeJob(statusUrl, controller.signal);
+    } catch (caughtError) {
+      setError(
+        controller.signal.aborted
+          ? POLLING_STOPPED_MESSAGE
+          : caughtError instanceof Error
+            ? caughtError.message
+            : "Unknown scraper error.",
+      );
+    } finally {
+      if (pollAbortControllerRef.current === controller) {
+        pollAbortControllerRef.current = null;
+      }
+      setIsLoading(false);
     }
   }
 
   async function runQueuedScraper(endpoint: string, body: Record<string, unknown>) {
+    const controller = new AbortController();
+    pollAbortControllerRef.current = controller;
     setIsLoading(true);
     setError(null);
     setSummaryPayload(null);
     setActiveJobId(null);
     setActiveJobStatus(null);
+    setActiveStatusUrl(null);
 
     try {
       const response = await fetch(endpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
 
       const payload = await readJsonPayload<ScrapeStartPayload>(response);
@@ -270,14 +378,33 @@ export function ScraperDashboard() {
 
       setActiveJobId(payload.jobId);
       setActiveJobStatus(payload.status ?? "queued");
-      await pollScrapeJob(payload.statusUrl);
+      setActiveStatusUrl(payload.statusUrl);
+      await pollScrapeJob(payload.statusUrl, controller.signal);
     } catch (caughtError) {
       setError(
-        caughtError instanceof Error ? caughtError.message : "Unknown scraper error.",
+        controller.signal.aborted
+          ? POLLING_STOPPED_MESSAGE
+          : caughtError instanceof Error
+            ? caughtError.message
+            : "Unknown scraper error.",
       );
     } finally {
+      if (pollAbortControllerRef.current === controller) {
+        pollAbortControllerRef.current = null;
+      }
       setIsLoading(false);
     }
+  }
+
+  function stopPolling() {
+    pollAbortControllerRef.current?.abort();
+  }
+
+  function resumePolling() {
+    if (!activeStatusUrl || isLoading) {
+      return;
+    }
+    void pollQueuedJob(activeStatusUrl);
   }
 
   function runManualScraper(mode: IngestionRunMode) {
@@ -336,19 +463,29 @@ export function ScraperDashboard() {
 
     return summaryPayload.summary.handles.reduce(
       (totals, handleSummary) => ({
-        fetched: totals.fetched + handleSummary.fetchedPosts,
-        inserted: totals.inserted + handleSummary.insertedEvents,
+        fetched:
+          totals.fetched +
+          countFirstMetric(handleSummary.fetchedPosts, handleSummary.fetched_posts),
+        inserted:
+          totals.inserted +
+          countFirstMetric(handleSummary.insertedEvents, handleSummary.inserted_events),
         insertedApproved:
           totals.insertedApproved + (handleSummary.insertedApprovedEvents ?? 0),
         insertedPending:
           totals.insertedPending + (handleSummary.insertedPendingEvents ?? 0),
-        duplicates: totals.duplicates + handleSummary.skippedDuplicates,
+        duplicates:
+          totals.duplicates +
+          countFirstMetric(handleSummary.skippedDuplicates, handleSummary.skipped_duplicates),
         updated: totals.updated + handleSummary.updated_duplicates_bad_data,
         failures:
           totals.failures +
-          handleSummary.failedDownloads +
-          handleSummary.failedConversions +
-          handleSummary.failedExtractions,
+          countFirstMetric(handleSummary.failedDownloads, handleSummary.failed_downloads) +
+          countFirstMetric(handleSummary.failedConversions, handleSummary.failed_conversions) +
+          countFirstMetric(
+            handleSummary.failedExtractions,
+            handleSummary.failed_extractions,
+            handleSummary.failed_extraction,
+          ),
         handlesWithErrors: totals.handlesWithErrors + (handleSummary.errors.length > 0 ? 1 : 0),
         quotaBlocked:
           totals.quotaBlocked ||
@@ -368,84 +505,28 @@ export function ScraperDashboard() {
     );
   }, [summaryPayload]);
 
-  const runOutcome = useMemo(() => {
-    if (activeJobStatus === "queued" || activeJobStatus === "running") {
-      return {
-        tone: "border-primary/30 bg-primary/5 text-foreground",
-        title: "Getting new events is in progress.",
-        description:
-          "Instagram posts are being scraped first. Then AI extracts events, high-confidence events are auto-approved, uncertain events stay pending, and approved duplicates are auto-merged.",
-      };
-    }
+  const operationsTriage = useMemo(
+    () =>
+      summaryPayload?.triage ??
+      buildOperationsTriageSummary({
+        summary: summaryPayload?.summary,
+        status: activeJobStatus,
+        handles: summaryPayload?.handles ?? handles,
+      }),
+    [activeJobStatus, handles, summaryPayload],
+  );
 
-    if (!summaryPayload) {
+  const runOutcome = useMemo(() => {
+    if (!summaryPayload && activeJobStatus !== "queued" && activeJobStatus !== "running") {
       return null;
     }
 
-    if (aggregateMetrics.quotaBlocked && aggregateMetrics.inserted === 0) {
-      return {
-        tone: "border-destructive/30 bg-destructive/5 text-destructive",
-        title: "AI quota blocked event extraction.",
-        description:
-          aggregateMetrics.fetched > 0
-            ? "Posts were fetched and saved, but OpenAI quota stopped extraction before new events could be created."
-            : "OpenAI quota stopped extraction before this run could create approved or pending events.",
-      };
-    }
-
-    if (aggregateMetrics.insertedApproved > 0) {
-      return {
-        tone: "border-emerald-500/30 bg-emerald-500/5 text-foreground",
-        title: `${aggregateMetrics.insertedApproved} new approved event${
-          aggregateMetrics.insertedApproved === 1 ? "" : "s"
-        } should be visible in the calendar.`,
-        description:
-          aggregateMetrics.insertedPending > 0
-            ? `${aggregateMetrics.insertedPending} more event${
-                aggregateMetrics.insertedPending === 1 ? "" : "s"
-              } were created as pending review.${
-                aggregateMetrics.quotaBlocked
-                  ? " OpenAI quota also blocked at least one handle."
-                  : ""
-              }`
-            : `This run created calendar-visible events.${
-                aggregateMetrics.quotaBlocked
-                  ? " OpenAI quota also blocked at least one handle."
-                  : ""
-              }`,
-      };
-    }
-
-    if (aggregateMetrics.insertedPending > 0) {
-      return {
-        tone: "border-amber-500/30 bg-amber-500/5 text-foreground",
-        title: "New events were created, but they are not in the calendar yet.",
-        description: `${aggregateMetrics.insertedPending} event${
-          aggregateMetrics.insertedPending === 1 ? "" : "s"
-        } were created as pending, and /calendar only shows approved upcoming events.${
-          aggregateMetrics.quotaBlocked
-            ? " OpenAI quota also blocked at least one handle."
-            : ""
-        }`,
-      };
-    }
-
-    if (aggregateMetrics.fetched > 0 && aggregateMetrics.inserted === 0) {
-      return {
-        tone: "border-amber-500/30 bg-amber-500/5 text-foreground",
-        title: "Instagram scraping finished, but no events were created.",
-        description:
-          "Posts were fetched, but extraction or normalization did not produce approved or pending upcoming events.",
-      };
-    }
-
     return {
-      tone: "border-border bg-background/70 text-muted-foreground",
-      title: "The run finished, but Instagram returned no recent posts.",
-      description:
-        "Nothing new matched the current scrape window, so there was nothing to add to the calendar.",
+      tone: getTriageToneClass(operationsTriage.tone),
+      title: operationsTriage.title,
+      description: operationsTriage.description,
     };
-  }, [activeJobStatus, aggregateMetrics, summaryPayload]);
+  }, [activeJobStatus, operationsTriage, summaryPayload]);
 
   const filteredHandleSummaries = useMemo(() => {
     if (!summaryPayload) {
@@ -754,11 +835,34 @@ export function ScraperDashboard() {
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
       {activeJobId ? (
-        <div className="rounded-2xl border border-border bg-background/70 p-4 text-sm">
-          <p className="font-medium">Active job</p>
-          <p className="mt-1 text-muted-foreground">
-            Job {activeJobId} is currently {activeJobStatus ?? "queued"}.
-          </p>
+        <div className="flex flex-col gap-3 rounded-2xl border border-border bg-background/70 p-4 text-sm sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="font-medium">Active job</p>
+            <p className="mt-1 text-muted-foreground">
+              Job {activeJobId} is currently {activeJobStatus ?? "queued"}.
+            </p>
+          </div>
+          {activeStatusUrl && activeJobStatus !== "completed" && activeJobStatus !== "failed" ? (
+            <div className="flex flex-wrap gap-2">
+              {isLoading ? (
+                <button
+                  className="rounded-xl border border-border px-3 py-2 text-sm font-medium"
+                  onClick={stopPolling}
+                  type="button"
+                >
+                  Stop polling
+                </button>
+              ) : (
+                <button
+                  className="rounded-xl border border-border px-3 py-2 text-sm font-medium"
+                  onClick={resumePolling}
+                  type="button"
+                >
+                  Resume polling
+                </button>
+              )}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -771,12 +875,77 @@ export function ScraperDashboard() {
                 {sourceLabel} · {modeLabel}
               </p>
             </div>
-            <input
-              className="w-full rounded-xl border border-input bg-background px-3 py-2 text-sm lg:max-w-xs"
-              onChange={(event) => setHandleSearch(event.target.value)}
-              placeholder="Filter handle results"
-              value={handleSearch}
-            />
+            <div className="w-full lg:max-w-xs">
+              <label className="sr-only" htmlFor="scraper-handle-filter">
+                Filter handle results
+              </label>
+              <input
+                className="w-full rounded-xl border border-input bg-background px-3 py-2 text-sm"
+                id="scraper-handle-filter"
+                onChange={(event) => setHandleSearch(event.target.value)}
+                placeholder="Filter handle results"
+                value={handleSearch}
+              />
+            </div>
+          </div>
+
+          <div className={`rounded-2xl border p-4 text-sm ${getTriageToneClass(operationsTriage.tone)}`}>
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <p className="font-medium">Operations triage</p>
+                <p className="mt-1">{operationsTriage.title}</p>
+                <p className="mt-1 text-muted-foreground">{operationsTriage.description}</p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="rounded-xl border border-border bg-background/70 p-3">
+                  <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                    OpenAI
+                  </p>
+                  <p className="mt-1 font-medium">{operationsTriage.providerStatus.openai}</p>
+                </div>
+                <div className="rounded-xl border border-border bg-background/70 p-3">
+                  <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                    Apify
+                  </p>
+                  <p className="mt-1 font-medium">{operationsTriage.providerStatus.apify}</p>
+                </div>
+              </div>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+              {[
+                ["Selected handles", operationsTriage.handleSelection.selectedHandleCount],
+                ["Cooldown skipped", operationsTriage.handleSelection.skippedRecentlyAttempted],
+                ["Run-limit skipped", operationsTriage.handleSelection.skippedDueToRunLimit],
+              ].map(([label, value]) => (
+                <div className="rounded-xl border border-border bg-background/70 p-3" key={label}>
+                  <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                    {label}
+                  </p>
+                  <p className="mt-1 font-medium">{String(value)}</p>
+                </div>
+              ))}
+            </div>
+            {operationsTriage.issueGroups.length > 0 ? (
+              <div className="mt-3 space-y-2">
+                <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                  Top issues
+                </p>
+                {operationsTriage.issueGroups.map((issue) => (
+                  <div
+                    className="rounded-xl border border-border bg-background/70 p-3"
+                    key={`${issue.category}-${issue.provider ?? "internal"}-${issue.handle ?? "all"}`}
+                  >
+                    <p className="font-medium">
+                      {issue.category}
+                      {issue.provider ? ` · ${issue.provider}` : ""}
+                      {issue.handle ? ` · @${issue.handle}` : ""}
+                      {` (${issue.count})`}
+                    </p>
+                    <p className="mt-1 text-muted-foreground">{issue.message}</p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">

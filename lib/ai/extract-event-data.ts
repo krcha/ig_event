@@ -8,9 +8,25 @@ import {
 const openAiVisionModel = process.env.OPENAI_VISION_MODEL ?? "gpt-5.4";
 const OPENAI_REQUEST_TIMEOUT_MS = 40000;
 const OPENAI_MAX_ATTEMPTS = 2;
+
+const extractionEvidenceSnippetSchema = z.object({
+  source: z.union([
+    z.literal("caption"),
+    z.literal("poster"),
+    z.literal("alt_text"),
+    z.literal("location_tag"),
+    z.literal("canonical_hint"),
+    z.literal("handle_context"),
+    z.literal("inference"),
+  ]),
+  text: z.string(),
+});
+
 const extractionFieldConfirmationSchema = z.object({
   confidence: z.union([z.number(), z.string()]),
   found_in: z.array(z.string()).default([]),
+  evidence: z.string(),
+  evidence_snippets: z.array(extractionEvidenceSnippetSchema).default([]),
   notes: z.string(),
 });
 
@@ -117,9 +133,33 @@ const extractionJsonSchema = {
           properties: {
             confidence: { type: ["number", "string"] },
             found_in: { type: "array", items: { type: "string" } },
+            evidence: { type: "string" },
+            evidence_snippets: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  source: {
+                    type: "string",
+                    enum: [
+                      "caption",
+                      "poster",
+                      "alt_text",
+                      "location_tag",
+                      "canonical_hint",
+                      "handle_context",
+                      "inference",
+                    ],
+                  },
+                  text: { type: "string" },
+                },
+                required: ["source", "text"],
+              },
+            },
             notes: { type: "string" },
           },
-          required: ["confidence", "found_in", "notes"],
+          required: ["confidence", "found_in", "evidence", "evidence_snippets", "notes"],
         },
         location: {
           type: "object",
@@ -127,9 +167,33 @@ const extractionJsonSchema = {
           properties: {
             confidence: { type: ["number", "string"] },
             found_in: { type: "array", items: { type: "string" } },
+            evidence: { type: "string" },
+            evidence_snippets: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  source: {
+                    type: "string",
+                    enum: [
+                      "caption",
+                      "poster",
+                      "alt_text",
+                      "location_tag",
+                      "canonical_hint",
+                      "handle_context",
+                      "inference",
+                    ],
+                  },
+                  text: { type: "string" },
+                },
+                required: ["source", "text"],
+              },
+            },
             notes: { type: "string" },
           },
-          required: ["confidence", "found_in", "notes"],
+          required: ["confidence", "found_in", "evidence", "evidence_snippets", "notes"],
         },
         location_name: {
           type: "object",
@@ -137,9 +201,33 @@ const extractionJsonSchema = {
           properties: {
             confidence: { type: ["number", "string"] },
             found_in: { type: "array", items: { type: "string" } },
+            evidence: { type: "string" },
+            evidence_snippets: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  source: {
+                    type: "string",
+                    enum: [
+                      "caption",
+                      "poster",
+                      "alt_text",
+                      "location_tag",
+                      "canonical_hint",
+                      "handle_context",
+                      "inference",
+                    ],
+                  },
+                  text: { type: "string" },
+                },
+                required: ["source", "text"],
+              },
+            },
             notes: { type: "string" },
           },
-          required: ["confidence", "found_in", "notes"],
+          required: ["confidence", "found_in", "evidence", "evidence_snippets", "notes"],
         },
         price: {
           type: "object",
@@ -147,9 +235,33 @@ const extractionJsonSchema = {
           properties: {
             confidence: { type: ["number", "string"] },
             found_in: { type: "array", items: { type: "string" } },
+            evidence: { type: "string" },
+            evidence_snippets: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  source: {
+                    type: "string",
+                    enum: [
+                      "caption",
+                      "poster",
+                      "alt_text",
+                      "location_tag",
+                      "canonical_hint",
+                      "handle_context",
+                      "inference",
+                    ],
+                  },
+                  text: { type: "string" },
+                },
+                required: ["source", "text"],
+              },
+            },
             notes: { type: "string" },
           },
-          required: ["confidence", "found_in", "notes"],
+          required: ["confidence", "found_in", "evidence", "evidence_snippets", "notes"],
         },
         start_time: {
           type: "object",
@@ -157,9 +269,33 @@ const extractionJsonSchema = {
           properties: {
             confidence: { type: ["number", "string"] },
             found_in: { type: "array", items: { type: "string" } },
+            evidence: { type: "string" },
+            evidence_snippets: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  source: {
+                    type: "string",
+                    enum: [
+                      "caption",
+                      "poster",
+                      "alt_text",
+                      "location_tag",
+                      "canonical_hint",
+                      "handle_context",
+                      "inference",
+                    ],
+                  },
+                  text: { type: "string" },
+                },
+                required: ["source", "text"],
+              },
+            },
             notes: { type: "string" },
           },
-          required: ["confidence", "found_in", "notes"],
+          required: ["confidence", "found_in", "evidence", "evidence_snippets", "notes"],
         },
         short_description: {
           type: "object",
@@ -167,9 +303,33 @@ const extractionJsonSchema = {
           properties: {
             confidence: { type: ["number", "string"] },
             found_in: { type: "array", items: { type: "string" } },
+            evidence: { type: "string" },
+            evidence_snippets: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  source: {
+                    type: "string",
+                    enum: [
+                      "caption",
+                      "poster",
+                      "alt_text",
+                      "location_tag",
+                      "canonical_hint",
+                      "handle_context",
+                      "inference",
+                    ],
+                  },
+                  text: { type: "string" },
+                },
+                required: ["source", "text"],
+              },
+            },
             notes: { type: "string" },
           },
-          required: ["confidence", "found_in", "notes"],
+          required: ["confidence", "found_in", "evidence", "evidence_snippets", "notes"],
         },
         artists: {
           type: "object",
@@ -177,9 +337,33 @@ const extractionJsonSchema = {
           properties: {
             confidence: { type: ["number", "string"] },
             found_in: { type: "array", items: { type: "string" } },
+            evidence: { type: "string" },
+            evidence_snippets: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  source: {
+                    type: "string",
+                    enum: [
+                      "caption",
+                      "poster",
+                      "alt_text",
+                      "location_tag",
+                      "canonical_hint",
+                      "handle_context",
+                      "inference",
+                    ],
+                  },
+                  text: { type: "string" },
+                },
+                required: ["source", "text"],
+              },
+            },
             notes: { type: "string" },
           },
-          required: ["confidence", "found_in", "notes"],
+          required: ["confidence", "found_in", "evidence", "evidence_snippets", "notes"],
         },
       },
       required: [

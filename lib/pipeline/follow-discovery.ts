@@ -432,7 +432,6 @@ export async function scrapeInstagramFollowingAccounts(options: {
   const apiToken = env.APIFY_API_TOKEN?.trim() || getRequiredEnv("APIFY_API_TOKEN");
   const actorIdForPath = normalizeApifyActorIdForPath(options.request.actorId);
   const query = new URLSearchParams({
-    token: apiToken,
     clean: "true",
     maxItems: String(options.request.runOptions.maxItems),
     maxTotalChargeUsd: String(options.request.runOptions.maxTotalChargeUsd),

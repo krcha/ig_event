@@ -13,8 +13,10 @@
     "typecheck": "tsc --noEmit",
     "qa:dedupe": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-deduplication.mjs",
     "qa:automerge": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-approved-event-automerge.mjs",
+    "qa:master-review": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-approved-event-master-review.mjs",
     "qa:extraction": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-extraction-standardization.mjs",
     "qa:moderation-queue": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-moderation-queue.mjs",
+    "qa:ingestion-triage": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-ingestion-run-triage.mjs",
     "qa:venue-types": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-venue-type-taxonomy.mjs",
     "qa:venue-hours": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-venue-hours.mjs",
     "qa:reclassify-dryrun": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/reclassify-event-types.mjs",
@@ -34,6 +36,7 @@
     "qa:follow-discovery": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-follow-discovery.mjs",
     "qa:convex-retention-cron": "node scripts/qa-convex-retention-cron.mjs",
     "qa:clerk-instagram-sso": "node scripts/qa-clerk-instagram-sso.mjs",
+    "qa:admin-auth": "node scripts/qa-admin-auth.mjs",
     "qa:release": "node scripts/release-check.mjs",
     "qa:self-hosted-convex-compose": "docker compose --env-file .env.production.example -f docker-compose.yml -f docker-compose.self-hosted-convex.yml config --quiet",
     "convex:codegen": "npx convex codegen --typecheck disable"

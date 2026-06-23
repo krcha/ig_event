@@ -106,6 +106,20 @@ export type IngestionSummary = {
   finishedAt: string;
   handles: HandleSummary[];
   approvedDuplicateCleanup?: ApprovedEventAutoMergeSummary;
+  runContext?: IngestionRunContext;
+};
+
+export type IngestionRunContext = {
+  activeVenueCount?: number;
+  selectedHandleCount?: number;
+  skippedRecentlyAttempted?: number;
+  skippedDueToRunLimit?: number;
+  fullScrapeCooldownHours?: number;
+  maxHandlesPerRun?: number;
+  resultsLimit?: number;
+  daysBack?: number;
+  source?: string;
+  mode?: IngestionRunMode;
 };
 
 export type IngestionBatchState = {
@@ -572,6 +586,19 @@ type ModerationDecision = {
   allowMissingImage: boolean;
 };
 
+const EXTRACTION_FIELD_LABELS: Array<{
+  key: keyof ExtractedEventData["field_confirmation"];
+  label: string;
+}> = [
+  { key: "title", label: "Title" },
+  { key: "location", label: "Location" },
+  { key: "location_name", label: "Venue" },
+  { key: "price", label: "Price" },
+  { key: "start_time", label: "Start time" },
+  { key: "short_description", label: "Description" },
+  { key: "artists", label: "Artists" },
+];
+
 function isVideoPostWithoutSelectedImage(
   post: InstagramScrapedPost,
   selectedImageUrl: string | null,
@@ -661,6 +688,88 @@ function buildModerationDecision(options: {
     pendingReasons,
     signals,
     allowMissingImage: options.allowMissingImage,
+  };
+}
+
+function buildExtractionFieldEvidence(
+  fieldConfirmation: ExtractedEventData["field_confirmation"],
+) {
+  return EXTRACTION_FIELD_LABELS.map(({ key, label }) => {
+    const entry = fieldConfirmation[key];
+    return {
+      field: key,
+      label,
+      confidence: normalizeConfidenceScore(entry.confidence),
+      foundIn: entry.found_in,
+      evidence: normalizeString(entry.evidence),
+      evidenceSnippets: entry.evidence_snippets
+        .map((snippet) => ({
+          source: snippet.source,
+          text: normalizeString(snippet.text),
+        }))
+        .filter((snippet) => snippet.text.length > 0),
+      notes: normalizeString(entry.notes),
+    };
+  });
+}
+
+function getWeakExtractionFields(
+  fieldEvidence: ReturnType<typeof buildExtractionFieldEvidence>,
+) {
+  return fieldEvidence
+    .filter((field) => {
+      const hasEvidence =
+        field.evidence.length > 0 || field.evidenceSnippets.some((snippet) => snippet.text.length > 0);
+      return field.confidence === null || field.confidence < 0.7 || !hasEvidence;
+    })
+    .map((field) => field.field);
+}
+
+function buildSkippedExtractionScorecard(options: {
+  baseConfidenceScore: number | null;
+  fieldConfirmation: ExtractedEventData["field_confirmation"];
+  normalizedInvalidReason: string;
+}) {
+  const fieldEvidence = buildExtractionFieldEvidence(options.fieldConfirmation);
+
+  return {
+    agent: "event_extraction",
+    version: 1,
+    baseConfidenceScore: options.baseConfidenceScore,
+    finalModerationConfidenceScore: null,
+    normalizedIsValid: false,
+    normalizedInvalidReason: options.normalizedInvalidReason,
+    autoApproved: false,
+    autoApproveRule: null,
+    pendingReasons: [options.normalizedInvalidReason],
+    signals: ["normalization_failed"],
+    weakFields: getWeakExtractionFields(fieldEvidence),
+    fieldEvidence,
+  };
+}
+
+function buildExtractionScorecard(options: {
+  baseConfidenceScore: number | null;
+  moderationDecision: ModerationDecision;
+  fieldConfirmation: ExtractedEventData["field_confirmation"];
+  normalizedIsValid: boolean;
+  normalizedInvalidReason: string | null;
+}) {
+  const fieldEvidence = buildExtractionFieldEvidence(options.fieldConfirmation);
+
+  return {
+    agent: "event_extraction",
+    version: 1,
+    baseConfidenceScore: options.baseConfidenceScore,
+    finalModerationConfidenceScore: options.moderationDecision.confidenceScore,
+    normalizedIsValid: options.normalizedIsValid,
+    normalizedInvalidReason: options.normalizedInvalidReason,
+    autoApproved: options.moderationDecision.autoApproved,
+    autoApproveRule: options.moderationDecision.autoApproveRule,
+    pendingReasons: options.moderationDecision.pendingReasons,
+    signals: options.moderationDecision.signals,
+    weakFields: getWeakExtractionFields(fieldEvidence),
+    fieldEvidence,
   };
 }
 
@@ -1532,12 +1641,16 @@ function getOrCreateHandleSummary(summary: IngestionSummary, handle: string): Ha
   return created;
 }
 
-export function createEmptyIngestionSummary(handles: string[]): IngestionSummary {
+export function createEmptyIngestionSummary(
+  handles: string[],
+  runContext?: IngestionRunContext,
+): IngestionSummary {
   const now = new Date().toISOString();
   return {
     startedAt: now,
     finishedAt: now,
     handles: handles.map((handle) => createEmptyHandleSummary(handle)),
+    ...(runContext ? { runContext } : {}),
   };
 }
 
@@ -3975,6 +4088,7 @@ export function prepareEventsForInsert(
     sourceUrlFromModel: normalizeString(extracted.source_url),
     postAltText: extractPostAltTextEvidence(post.altText) || null,
     fieldConfirmation: extracted.field_confirmation,
+    extractionFieldEvidence: buildExtractionFieldEvidence(extracted.field_confirmation),
     postTimestamp: post.postedAt,
     filterDateToday: eventDateFilter.todayIsoDate,
     filterDateMaxFuture: eventDateFilter.maxFutureIsoDate,
@@ -4036,6 +4150,11 @@ export function prepareEventsForInsert(
       splitSourceLine: null,
       normalizedIsValid: false,
       normalizedInvalidReason: "invalid_date",
+      extractionScorecard: buildSkippedExtractionScorecard({
+        baseConfidenceScore: confidence,
+        fieldConfirmation: extracted.field_confirmation,
+        normalizedInvalidReason: "invalid_date",
+      }),
     };
     return [
       {
@@ -4078,6 +4197,11 @@ export function prepareEventsForInsert(
       splitSourceLine: referenceSplitCandidate?.sourceLine ?? null,
       normalizedIsValid: false,
       normalizedInvalidReason: "invalid_venue",
+      extractionScorecard: buildSkippedExtractionScorecard({
+        baseConfidenceScore: confidence,
+        fieldConfirmation: extracted.field_confirmation,
+        normalizedInvalidReason: "invalid_venue",
+      }),
     };
     return [
       {
@@ -4119,6 +4243,11 @@ export function prepareEventsForInsert(
       splitSourceLine: referenceSplitCandidate?.sourceLine ?? null,
       normalizedIsValid: false,
       normalizedInvalidReason: "missing_required_fields",
+      extractionScorecard: buildSkippedExtractionScorecard({
+        baseConfidenceScore: confidence,
+        fieldConfirmation: extracted.field_confirmation,
+        normalizedInvalidReason: "missing_required_fields",
+      }),
     };
     return [
       {
@@ -4260,6 +4389,13 @@ export function prepareEventsForInsert(
       dateRepairReason,
       normalizedIsValid: true,
       normalizedInvalidReason: null,
+      extractionScorecard: buildExtractionScorecard({
+        baseConfidenceScore: confidence,
+        moderationDecision,
+        fieldConfirmation: extracted.field_confirmation,
+        normalizedIsValid: true,
+        normalizedInvalidReason: null,
+      }),
     };
 
     if (!date) {
@@ -4273,6 +4409,11 @@ export function prepareEventsForInsert(
           ...normalizedFields,
           normalizedIsValid: false,
           normalizedInvalidReason: "invalid_date",
+          extractionScorecard: buildSkippedExtractionScorecard({
+            baseConfidenceScore: confidence,
+            fieldConfirmation: extracted.field_confirmation,
+            normalizedInvalidReason: "invalid_date",
+          }),
         },
       });
       continue;
@@ -4286,6 +4427,11 @@ export function prepareEventsForInsert(
           ...normalizedFields,
           normalizedIsValid: false,
           normalizedInvalidReason: "missing_required_fields",
+          extractionScorecard: buildSkippedExtractionScorecard({
+            baseConfidenceScore: confidence,
+            fieldConfirmation: extracted.field_confirmation,
+            normalizedInvalidReason: "missing_required_fields",
+          }),
         },
       });
       continue;
@@ -4299,6 +4445,11 @@ export function prepareEventsForInsert(
           ...normalizedFields,
           normalizedIsValid: false,
           normalizedInvalidReason: "past_event",
+          extractionScorecard: buildSkippedExtractionScorecard({
+            baseConfidenceScore: confidence,
+            fieldConfirmation: extracted.field_confirmation,
+            normalizedInvalidReason: "past_event",
+          }),
         },
       });
       continue;
@@ -4312,6 +4463,11 @@ export function prepareEventsForInsert(
           ...normalizedFields,
           normalizedIsValid: false,
           normalizedInvalidReason: "far_future_event",
+          extractionScorecard: buildSkippedExtractionScorecard({
+            baseConfidenceScore: confidence,
+            fieldConfirmation: extracted.field_confirmation,
+            normalizedInvalidReason: "far_future_event",
+          }),
         },
       });
       continue;

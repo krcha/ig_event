@@ -1,18 +1,16 @@
-import { auth } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import { NextResponse } from "next/server";
+import { requireAdminApiAccess } from "@/lib/auth/admin-api";
 import { runApprovedEventAutoMerge } from "@/lib/events/approved-event-automerge";
-import { getRequiredEnv, hasClerkEnv } from "@/lib/utils/env";
+import { getRequiredEnv } from "@/lib/utils/env";
 
 export const maxDuration = 180;
 
 export async function POST() {
   try {
-    if (hasClerkEnv()) {
-      const { userId } = await auth();
-      if (!userId) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      }
+    const adminAccess = await requireAdminApiAccess();
+    if (!adminAccess.ok) {
+      return adminAccess.response;
     }
 
     const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));

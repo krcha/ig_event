@@ -1,14 +1,13 @@
-import { auth } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
+import { requireAdminApiAccess } from "@/lib/auth/admin-api";
 import {
   buildApprovedEventReviewCandidateGroups,
   filterUpcomingApprovedEventsForReview,
   reviewApprovedEventsForMasterReview,
   type ApprovedEventRecordForReview,
 } from "@/lib/ai/review-approved-events";
-import { hasClerkEnv } from "@/lib/utils/env";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 
 type EventRecord = {
@@ -66,11 +65,9 @@ function mapApprovedEvent(event: EventRecord): ApprovedEventRecordForReview {
 }
 
 export async function POST() {
-  if (hasClerkEnv()) {
-    const { userId } = await auth();
-    if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const adminAccess = await requireAdminApiAccess();
+  if (!adminAccess.ok) {
+    return adminAccess.response;
   }
 
   try {
@@ -97,6 +94,10 @@ export async function POST() {
       candidateGroupCount: review.candidateGroupCount,
       generatedAt: new Date().toISOString(),
       reviewGroups: review.reviewGroups.map((group) => ({
+        ...group,
+        candidateEvents: candidateGroupById.get(group.groupId)?.events ?? [],
+      })),
+      skippedGroups: review.skippedGroups.map((group) => ({
         ...group,
         candidateEvents: candidateGroupById.get(group.groupId)?.events ?? [],
       })),

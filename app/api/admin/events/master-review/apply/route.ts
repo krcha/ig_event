@@ -1,8 +1,7 @@
-import { auth } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
-import { hasClerkEnv } from "@/lib/utils/env";
+import { requireAdminApiAccess } from "@/lib/auth/admin-api";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 
 type RequestBody = {
@@ -69,11 +68,9 @@ function normalizePatch(body: RequestBody["primaryPatch"]) {
 }
 
 export async function POST(request: Request) {
-  if (hasClerkEnv()) {
-    const { userId } = await auth();
-    if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const adminAccess = await requireAdminApiAccess();
+  if (!adminAccess.ok) {
+    return adminAccess.response;
   }
 
   let body: RequestBody;

@@ -115,12 +115,21 @@ type MasterReviewGroup = {
   candidateEvents: MasterReviewCandidateEvent[];
 };
 
+type MasterReviewSkippedGroup = {
+  groupId: string;
+  reasonCode: string;
+  reasoning: string;
+  candidateEventIds: string[];
+  candidateEvents: MasterReviewCandidateEvent[];
+};
+
 type MasterReviewResponse = {
   overview: string;
   activeEventCount: number;
   candidateGroupCount: number;
   generatedAt: string;
   reviewGroups: MasterReviewGroup[];
+  skippedGroups: MasterReviewSkippedGroup[];
   error?: string;
 };
 
@@ -131,6 +140,11 @@ type FieldConfirmationRow = {
   details: {
     confidence: number | null;
     foundIn: string[];
+    evidence: string | null;
+    evidenceSnippets: Array<{
+      source: string;
+      text: string;
+    }>;
     notes: string | null;
   } | null;
 };
@@ -156,6 +170,7 @@ type DecoratedEvent = ModerationEvent & {
   suspectedDuplicateCount: number;
   hasResolvedDuplicate: boolean;
   fieldConfirmationRows: FieldConfirmationRow[];
+  extractionScorecard: Record<string, unknown> | null;
   searchText: string;
   duplicateDateKey: string | null;
   duplicateVenueText: string;
@@ -309,6 +324,11 @@ function readFieldConfirmationEntry(
 ): {
   confidence: number | null;
   foundIn: string[];
+  evidence: string | null;
+  evidenceSnippets: Array<{
+    source: string;
+    text: string;
+  }>;
   notes: string | null;
 } | null {
   const entry = readObjectField(record, key);
@@ -318,6 +338,22 @@ function readFieldConfirmationEntry(
   return {
     confidence: normalizeConfidenceScore(readNumberOrStringField(entry, "confidence")),
     foundIn: readStringArrayField(entry, "found_in"),
+    evidence: readStringField(entry, "evidence"),
+    evidenceSnippets: Array.isArray(entry.evidence_snippets)
+      ? entry.evidence_snippets
+          .map((snippet) =>
+            snippet && typeof snippet === "object" && !Array.isArray(snippet)
+              ? {
+                  source: readStringField(snippet as Record<string, unknown>, "source") ?? "unknown",
+                  text: readStringField(snippet as Record<string, unknown>, "text") ?? "",
+                }
+              : null,
+          )
+          .filter(
+            (snippet): snippet is { source: string; text: string } =>
+              Boolean(snippet && snippet.text.length > 0),
+          )
+      : [],
     notes: readStringField(entry, "notes"),
   };
 }
@@ -668,6 +704,7 @@ function decorateEvent(event: ModerationEvent): DecoratedEvent {
     suspectedDuplicateCount: 0,
     hasResolvedDuplicate: false,
     fieldConfirmationRows,
+    extractionScorecard: readObjectField(normalizedFields, "extractionScorecard"),
     searchText: normalizeSearchText(
       [
         event.title,
@@ -1300,12 +1337,14 @@ export function ModerationDashboard() {
 
         <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_200px_200px_200px_160px]">
           <input
+            aria-label="Search moderation events"
             className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
             onChange={(event) => setSearchQuery(event.target.value)}
             placeholder="Search title, venue, artist, caption, or description"
             value={searchQuery}
           />
           <select
+            aria-label="Moderation issue filter"
             className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
             onChange={(event) => setFilterMode(event.target.value as ModerationFilterMode)}
             value={filterMode}
@@ -1320,6 +1359,7 @@ export function ModerationDashboard() {
             <option value="missing_time">Missing time</option>
           </select>
           <select
+            aria-label="Confidence filter"
             className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
             onChange={(event) =>
               setConfidenceFilter(event.target.value as ConfidenceFilterMode)
@@ -1333,6 +1373,7 @@ export function ModerationDashboard() {
             <option value="missing">Missing confidence</option>
           </select>
           <select
+            aria-label="Sort moderation events"
             className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
             onChange={(event) => setSortMode(event.target.value as ModerationSortMode)}
             value={sortMode}
@@ -1345,6 +1386,7 @@ export function ModerationDashboard() {
             <option value="confidence_asc">Confidence low to high</option>
           </select>
           <select
+            aria-label="Moderation page size"
             className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
             onChange={(event) => setLimit(event.target.value)}
             value={limit}
@@ -1383,11 +1425,12 @@ export function ModerationDashboard() {
 
           {masterReview ? (
             <div className="space-y-4">
-              <div className="grid gap-3 md:grid-cols-4">
+              <div className="grid gap-3 md:grid-cols-5">
                 {[
                   ["Active approved", masterReview.activeEventCount],
                   ["Candidate groups", masterReview.candidateGroupCount],
                   ["AI actions", masterReview.reviewGroups.length],
+                  ["Reviewed, not merged", masterReview.skippedGroups.length],
                   ["Generated", formatIsoDateTime(masterReview.generatedAt)],
                 ].map(([label, value]) => (
                   <div
@@ -1525,6 +1568,55 @@ export function ModerationDashboard() {
                   })}
                 </div>
               )}
+
+              {masterReview.skippedGroups.length > 0 ? (
+                <div className="space-y-3">
+                  <div>
+                    <h3 className="text-sm font-semibold">Reviewed, not merged</h3>
+                    <p className="text-sm text-muted-foreground">
+                      These candidate groups were reviewed by AI and left unchanged.
+                    </p>
+                  </div>
+                  {masterReview.skippedGroups.map((group) => (
+                    <article
+                      className="space-y-3 rounded-2xl border border-border bg-card/80 p-4"
+                      key={group.groupId}
+                    >
+                      <div className="flex flex-wrap gap-2">
+                        <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          {group.reasonCode}
+                        </span>
+                        <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          {group.candidateEventIds.length} candidate event
+                          {group.candidateEventIds.length === 1 ? "" : "s"}
+                        </span>
+                      </div>
+                      <p className="text-sm text-muted-foreground">{group.reasoning}</p>
+                      <div className="grid gap-2 xl:grid-cols-2">
+                        {group.candidateEvents.map((event) => (
+                          <div
+                            className="rounded-xl border border-border bg-background/80 p-3"
+                            key={event.id}
+                          >
+                            <p className="font-medium">{event.title}</p>
+                            <p className="text-sm text-muted-foreground">
+                              {event.date}
+                              {event.time ? ` at ${event.time}` : ""}
+                              {" · "}
+                              {event.venue}
+                            </p>
+                            {event.artists.length > 0 ? (
+                              <p className="text-xs text-muted-foreground">
+                                {event.artists.join(", ")}
+                              </p>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : null}
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">
@@ -1555,6 +1647,16 @@ export function ModerationDashboard() {
             .map((duplicateId) => decoratedEventById.get(duplicateId))
             .filter((duplicate): duplicate is DecoratedEvent => Boolean(duplicate))
             .sort((left, right) => right.updatedAt - left.updatedAt);
+          const extractionScorecard = event.extractionScorecard;
+          const scorecardWeakFields = readStringArrayField(
+            extractionScorecard,
+            "weakFields",
+          );
+          const scorecardPendingReasons = readStringArrayField(
+            extractionScorecard,
+            "pendingReasons",
+          );
+          const scorecardSignals = readStringArrayField(extractionScorecard, "signals");
 
           return (
           <article
@@ -1813,6 +1915,66 @@ export function ModerationDashboard() {
                       </div>
                     </div>
 
+                    {extractionScorecard ? (
+                      <div className="rounded-xl border border-border p-3 text-sm">
+                        <p className="font-medium">Evidence scorecard</p>
+                        <div className="mt-3 grid gap-3 lg:grid-cols-4">
+                          {[
+                            [
+                              "Agent",
+                              readStringField(extractionScorecard, "agent") ?? "event_extraction",
+                            ],
+                            [
+                              "Base confidence",
+                              formatConfidenceScore(
+                                readNumberOrStringField(
+                                  extractionScorecard,
+                                  "baseConfidenceScore",
+                                ),
+                              ) ?? "(none)",
+                            ],
+                            [
+                              "Final confidence",
+                              formatConfidenceScore(
+                                readNumberOrStringField(
+                                  extractionScorecard,
+                                  "finalModerationConfidenceScore",
+                                ),
+                              ) ?? "(none)",
+                            ],
+                            [
+                              "Auto-approved",
+                              readBooleanField(extractionScorecard, "autoApproved")
+                                ? "Yes"
+                                : "No",
+                            ],
+                          ].map(([label, value]) => (
+                            <div className="rounded-lg border border-border p-2" key={label}>
+                              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                                {label}
+                              </p>
+                              <p className="mt-1">{value}</p>
+                            </div>
+                          ))}
+                        </div>
+                        {scorecardWeakFields.length > 0 ? (
+                          <p className="mt-3 text-xs text-muted-foreground">
+                            Weak fields: {scorecardWeakFields.join(", ")}
+                          </p>
+                        ) : null}
+                        {scorecardPendingReasons.length > 0 ? (
+                          <p className="text-xs text-muted-foreground">
+                            Pending reasons: {scorecardPendingReasons.join(", ")}
+                          </p>
+                        ) : null}
+                        {scorecardSignals.length > 0 ? (
+                          <p className="text-xs text-muted-foreground">
+                            Signals: {scorecardSignals.join(", ")}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+
                     {event.fieldConfirmationRows.some((row) => row.details) ? (
                       <div className="space-y-3">
                         <p className="font-medium">Field confirmation</p>
@@ -1828,6 +1990,24 @@ export function ModerationDashboard() {
                                 <p className="text-xs text-muted-foreground">
                                   Evidence: {row.details.foundIn.join(", ") || "(none)"}
                                 </p>
+                                {row.details.evidence ? (
+                                  <p className="text-xs text-muted-foreground">
+                                    Snippet: {row.details.evidence}
+                                  </p>
+                                ) : null}
+                                {row.details.evidenceSnippets.length > 0 ? (
+                                  <div className="mt-2 space-y-1">
+                                    {row.details.evidenceSnippets.map((snippet) => (
+                                      <p
+                                        className="rounded-lg border border-border bg-background/70 p-2 text-xs text-muted-foreground"
+                                        key={`${row.key}-${snippet.source}-${snippet.text}`}
+                                      >
+                                        <span className="font-medium">{snippet.source}: </span>
+                                        {snippet.text}
+                                      </p>
+                                    ))}
+                                  </div>
+                                ) : null}
                                 <p className="text-xs text-muted-foreground">
                                   Notes: {row.details.notes ?? "(none)"}
                                 </p>

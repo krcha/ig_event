@@ -1,8 +1,7 @@
-import { auth } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
-import { hasClerkEnv } from "@/lib/utils/env";
+import { requireAdminApiAccess } from "@/lib/auth/admin-api";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 
 type EventStatus = "pending" | "approved" | "rejected";
@@ -140,11 +139,9 @@ function normalizePromotionTier(value: unknown): PromotionTier | "none" {
 }
 
 export async function GET(request: Request) {
-  if (hasClerkEnv()) {
-    const { userId } = await auth();
-    if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const adminAccess = await requireAdminApiAccess();
+  if (!adminAccess.ok) {
+    return adminAccess.response;
   }
 
   const { searchParams } = new URL(request.url);
@@ -183,11 +180,9 @@ export async function GET(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  if (hasClerkEnv()) {
-    const { userId } = await auth();
-    if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const adminAccess = await requireAdminApiAccess();
+  if (!adminAccess.ok) {
+    return adminAccess.response;
   }
 
   let body: UpdatePromotionRequestBody;

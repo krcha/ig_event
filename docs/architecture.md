@@ -42,7 +42,8 @@ The source of truth is `convex/schema.ts`.
 - `/admin` moderation dashboard.
 - `/admin/scraper` ingestion controls and job status.
 - `/admin/venues` venue management.
-- `/api/admin/*` admin API routes protected by Clerk when configured.
+- `/api/admin/*` admin API routes protected by Clerk and
+  `ADMIN_CLERK_USER_IDS` when Clerk is configured.
 
 ## Ingestion Flow
 

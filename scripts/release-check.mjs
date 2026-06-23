@@ -9,8 +9,10 @@ const checks = [
   { script: "build", timeoutMs: 900_000 },
   { script: "qa:dedupe", timeoutMs: 60_000 },
   { script: "qa:automerge", timeoutMs: 60_000 },
+  { script: "qa:master-review", timeoutMs: 60_000 },
   { script: "qa:extraction", timeoutMs: 60_000 },
   { script: "qa:moderation-queue", timeoutMs: 60_000 },
+  { script: "qa:ingestion-triage", timeoutMs: 60_000 },
   { script: "qa:venue-types", timeoutMs: 60_000 },
   { script: "qa:venue-hours", timeoutMs: 60_000 },
   { script: "qa:public-search", timeoutMs: 60_000 },
@@ -22,6 +24,7 @@ const checks = [
   { script: "qa:follow-discovery", timeoutMs: 60_000 },
   { script: "qa:convex-retention-cron", timeoutMs: 60_000 },
   { script: "qa:clerk-instagram-sso", timeoutMs: 60_000 },
+  { script: "qa:admin-auth", timeoutMs: 60_000 },
 ];
 
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";

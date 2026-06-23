@@ -55,7 +55,7 @@ Goal: Let an admin understand the app state in one pass.
 
 Goal: Make every release mechanically checkable.
 
-- Required deterministic checks: lint, typecheck, `next build`, `qa:dedupe`, `qa:automerge`, `qa:extraction`, venue taxonomy QA, public search QA, and Apify cost-control QA.
+- Required deterministic checks: lint, typecheck, `next build`, `qa:dedupe`, `qa:automerge`, master-review QA, `qa:extraction`, ingestion triage QA, venue taxonomy QA, public search QA, and Apify cost-control QA.
 - Keep `next build` in the required gate and treat failures or timeouts as release blockers.
 - Bound long-running local checks so hung tooling is treated as a failure.
 - Keep environment-dependent checks documented separately from code regressions.

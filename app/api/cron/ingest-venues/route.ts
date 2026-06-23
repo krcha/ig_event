@@ -46,7 +46,18 @@ export async function GET(request: Request) {
       return NextResponse.json({
         source: "cron_active_venues",
         handles: [],
-        summary: createEmptyIngestionSummary([]),
+        summary: createEmptyIngestionSummary([], {
+          source: "cron_active_venues",
+          mode: "full_scrape",
+          activeVenueCount: 0,
+          selectedHandleCount: 0,
+          skippedRecentlyAttempted: 0,
+          skippedDueToRunLimit: 0,
+          fullScrapeCooldownHours: cronConfig.fullScrapeCooldownHours,
+          maxHandlesPerRun: cronConfig.maxHandlesPerRun,
+          resultsLimit: cronConfig.resultsLimit,
+          daysBack: cronConfig.daysBack,
+        }),
         costControls: cronConfig,
       });
     }
@@ -66,7 +77,18 @@ export async function GET(request: Request) {
       return NextResponse.json({
         source: "cron_active_venues",
         handles: [],
-        summary: createEmptyIngestionSummary([]),
+        summary: createEmptyIngestionSummary([], {
+          source: "cron_active_venues",
+          mode: "full_scrape",
+          activeVenueCount: activeVenueHandles.length,
+          selectedHandleCount: 0,
+          skippedRecentlyAttempted: handleSelection.skippedRecentlyAttempted,
+          skippedDueToRunLimit: handleSelection.skippedDueToRunLimit,
+          fullScrapeCooldownHours: cronConfig.fullScrapeCooldownHours,
+          maxHandlesPerRun: cronConfig.maxHandlesPerRun,
+          resultsLimit: cronConfig.resultsLimit,
+          daysBack: cronConfig.daysBack,
+        }),
         activeVenueCount: activeVenueHandles.length,
         skippedRecentlyAttempted: handleSelection.skippedRecentlyAttempted,
         skippedDueToRunLimit: handleSelection.skippedDueToRunLimit,
@@ -75,7 +97,18 @@ export async function GET(request: Request) {
     }
 
     const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
-    const initialSummary = createEmptyIngestionSummary(handles);
+    const initialSummary = createEmptyIngestionSummary(handles, {
+      source: "cron_active_venues",
+      mode: "full_scrape",
+      activeVenueCount: activeVenueHandles.length,
+      selectedHandleCount: handles.length,
+      skippedRecentlyAttempted: handleSelection.skippedRecentlyAttempted,
+      skippedDueToRunLimit: handleSelection.skippedDueToRunLimit,
+      fullScrapeCooldownHours: cronConfig.fullScrapeCooldownHours,
+      maxHandlesPerRun: cronConfig.maxHandlesPerRun,
+      resultsLimit: cronConfig.resultsLimit,
+      daysBack: cronConfig.daysBack,
+    });
     const initialState = createInitialIngestionBatchState();
     jobId = (await convex.mutation(createIngestionJobMutation, {
       source: "cron_active_venues",
@@ -103,6 +136,7 @@ export async function GET(request: Request) {
       resultsLimit: cronConfig.resultsLimit,
       daysBack: cronConfig.daysBack,
     });
+    summary.runContext = initialSummary.runContext;
 
     await convex.mutation(patchIngestionJobMutation, {
       id: jobId,

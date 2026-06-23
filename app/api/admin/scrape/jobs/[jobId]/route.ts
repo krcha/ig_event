@@ -1,7 +1,7 @@
-import { auth } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
+import { requireAdminApiAccess } from "@/lib/auth/admin-api";
 import type {
   IngestionBatchState,
   IngestionRunMode,
@@ -12,7 +12,8 @@ import {
   createInitialIngestionBatchState,
   runInstagramIngestionBatchStep,
 } from "@/lib/pipeline/run-instagram-ingestion";
-import { getRequiredEnv, hasClerkEnv } from "@/lib/utils/env";
+import { buildOperationsTriageSummary } from "@/lib/pipeline/ingestion-run-triage";
+import { getRequiredEnv } from "@/lib/utils/env";
 
 type IngestionJobStatus = "queued" | "running" | "completed" | "failed";
 
@@ -123,28 +124,23 @@ async function loadJob(convex: ConvexHttpClient, jobId: string): Promise<Ingesti
 
 function buildJobResponse(job: IngestionJobRecord) {
   const summary = parseSummary(job.summaryJson, job.handles);
+  const status = job.status;
   return {
     jobId: job._id,
     source: job.source,
     mode: job.mode ?? "full_scrape",
-    status: job.status,
+    status,
     handles: job.handles,
     summary,
+    triage: buildOperationsTriageSummary({
+      summary,
+      status,
+      handles: job.handles,
+    }),
     error: job.error,
     startedAt: job.startedAt,
     finishedAt: job.finishedAt,
   };
-}
-
-async function getUnauthorizedResponse(): Promise<NextResponse | null> {
-  if (!hasClerkEnv()) {
-    return null;
-  }
-  const { userId } = await auth();
-  if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  return null;
 }
 
 export async function GET(
@@ -152,9 +148,9 @@ export async function GET(
   context: { params: { jobId: string } },
 ) {
   try {
-    const unauthorizedResponse = await getUnauthorizedResponse();
-    if (unauthorizedResponse) {
-      return unauthorizedResponse;
+    const adminAccess = await requireAdminApiAccess();
+    if (!adminAccess.ok) {
+      return adminAccess.response;
     }
     const { jobId } = context.params;
     const convex = getConvexClient();
@@ -184,9 +180,9 @@ export async function POST(
   context: { params: { jobId: string } },
 ) {
   try {
-    const unauthorizedResponse = await getUnauthorizedResponse();
-    if (unauthorizedResponse) {
-      return unauthorizedResponse;
+    const adminAccess = await requireAdminApiAccess();
+    if (!adminAccess.ok) {
+      return adminAccess.response;
     }
     const { jobId } = context.params;
     const convex = getConvexClient();
@@ -272,6 +268,11 @@ export async function POST(
         status: batchResult.done ? "completed" : "running",
         handles: job.handles,
         summary: batchResult.summary,
+        triage: buildOperationsTriageSummary({
+          summary: batchResult.summary,
+          status: batchResult.done ? "completed" : "running",
+          handles: job.handles,
+        }),
         error: null,
         startedAt,
         finishedAt: finishedAt ?? null,
@@ -302,6 +303,11 @@ export async function POST(
           status: "failed",
           handles: job.handles,
           summary,
+          triage: buildOperationsTriageSummary({
+            summary,
+            status: "failed",
+            handles: job.handles,
+          }),
           errorStep: "batch_process",
           error: message,
           startedAt,

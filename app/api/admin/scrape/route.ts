@@ -1,13 +1,13 @@
-import { auth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
+import { requireAdminApiAccess } from "@/lib/auth/admin-api";
 import {
   createEmptyIngestionSummary,
   createInitialIngestionBatchState,
   type IngestionRunMode,
 } from "@/lib/pipeline/run-instagram-ingestion";
-import { getRequiredEnv, hasClerkEnv } from "@/lib/utils/env";
+import { getRequiredEnv } from "@/lib/utils/env";
 
 type ScrapeRequestBody = {
   handles?: string[];
@@ -55,11 +55,9 @@ function logError(event: string, payload: Record<string, unknown>) {
 }
 
 export async function POST(request: Request) {
-  if (hasClerkEnv()) {
-    const { userId } = await auth();
-    if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const adminAccess = await requireAdminApiAccess();
+  if (!adminAccess.ok) {
+    return adminAccess.response;
   }
 
   let body: ScrapeRequestBody;

@@ -3,10 +3,6 @@ import {
   APPROVED_EVENTS_MASTER_REVIEW_SYSTEM_PROMPT,
   buildApprovedEventsMasterReviewUserPrompt,
 } from "@/lib/ai/approved-events-master-review-prompt";
-import {
-  getStartOfLocalToday,
-  parseNormalizedEventDate,
-} from "@/lib/events/public-events";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 import { getRequiredEnv } from "@/lib/utils/env";
 
@@ -84,6 +80,33 @@ const DUPLICATE_TEXT_STOP_WORDS = new Set([
   "entry",
 ]);
 
+function parseNormalizedEventDate(value: string): Date | null {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+
+  const year = Number.parseInt(match[1], 10);
+  const month = Number.parseInt(match[2], 10);
+  const day = Number.parseInt(match[3], 10);
+  const parsed = new Date(year, month - 1, day);
+
+  if (
+    parsed.getFullYear() !== year ||
+    parsed.getMonth() !== month - 1 ||
+    parsed.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function getStartOfLocalToday(): Date {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+}
+
 const approvedEventPatchSchema = z.object({
   title: z.string(),
   date: z.string(),
@@ -110,6 +133,14 @@ const approvedEventMasterReviewSchema = z.object({
       primary_event_id: z.string(),
       duplicate_event_ids: z.array(z.string()).default([]),
       primary_patch: approvedEventPatchSchema,
+    }),
+  ),
+  skipped_groups: z.array(
+    z.object({
+      group_id: z.string(),
+      reason_code: z.string(),
+      reasoning: z.string(),
+      candidate_event_ids: z.array(z.string()).default([]),
     }),
   ),
 });
@@ -149,11 +180,19 @@ export type ApprovedEventMasterReviewGroup = {
   primaryPatch: z.infer<typeof approvedEventPatchSchema>;
 };
 
+export type ApprovedEventMasterReviewSkippedGroup = {
+  groupId: string;
+  reasonCode: string;
+  reasoning: string;
+  candidateEventIds: string[];
+};
+
 export type ApprovedEventMasterReviewResult = {
   overview: string;
   activeEventCount: number;
   candidateGroupCount: number;
   reviewGroups: ApprovedEventMasterReviewGroup[];
+  skippedGroups: ApprovedEventMasterReviewSkippedGroup[];
 };
 
 type DuplicateReviewDecoratedEvent = ApprovedEventRecordForReview & {
@@ -231,8 +270,25 @@ const approvedEventMasterReviewJsonSchema = {
         ],
       },
     },
+    skipped_groups: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          group_id: { type: "string" },
+          reason_code: { type: "string" },
+          reasoning: { type: "string" },
+          candidate_event_ids: {
+            type: "array",
+            items: { type: "string" },
+          },
+        },
+        required: ["group_id", "reason_code", "reasoning", "candidate_event_ids"],
+      },
+    },
   },
-  required: ["overview", "review_groups"],
+  required: ["overview", "review_groups", "skipped_groups"],
 } as const;
 
 function normalizeConfidenceValue(value: number | string): number | null {
@@ -502,6 +558,36 @@ export function buildApprovedEventReviewCandidateGroups(
   return buildDuplicateComponents(events.map((event) => decorateEventForDuplicateReview(event)));
 }
 
+function buildMasterReviewPromptEvent(event: ApprovedEventRecordForReview) {
+  const normalizedFields = parseJsonObject(event.normalizedFieldsJson);
+
+  return {
+    id: event.id,
+    title: event.title,
+    date: event.date,
+    time: event.time,
+    venue: event.venue,
+    artists: event.artists,
+    description: event.description,
+    ticketPrice: event.ticketPrice,
+    eventType: event.eventType,
+    instagramPostUrl: event.instagramPostUrl,
+    sourcePostedAt: event.sourcePostedAt,
+    imageUrl: event.imageUrl,
+    sourceCaption: event.sourceCaption,
+    normalizedDate: readStringField(normalizedFields, "normalizedDate"),
+    normalizedVenue: readStringField(normalizedFields, "normalizedVenue"),
+    titleSource: readStringField(normalizedFields, "titleSource"),
+    rowSourceText: readStringField(normalizedFields, "rowSourceText"),
+    splitEventIndex: normalizedFields?.splitEventIndex ?? null,
+    splitEventTotal: normalizedFields?.splitEventTotal ?? null,
+    extractionMode: readStringField(normalizedFields, "extractionMode"),
+    moderationSignals: Array.isArray(normalizedFields?.moderationSignals)
+      ? normalizedFields.moderationSignals
+      : [],
+  };
+}
+
 function sanitizePatch(
   patch: z.infer<typeof approvedEventPatchSchema>,
 ): z.infer<typeof approvedEventPatchSchema> {
@@ -518,6 +604,129 @@ function sanitizePatch(
   };
 }
 
+function buildSkippedGroup(
+  candidateGroup: ApprovedEventReviewCandidateGroup,
+  reasonCode: string,
+  reasoning: string,
+  candidateEventIds = candidateGroup.eventIds,
+): ApprovedEventMasterReviewSkippedGroup {
+  const candidateEventIdSet = new Set(candidateGroup.eventIds);
+  const filteredCandidateEventIds = [
+    ...new Set(candidateEventIds.filter((id) => candidateEventIdSet.has(id))),
+  ];
+
+  return {
+    groupId: candidateGroup.groupId,
+    reasonCode,
+    reasoning: reasoning.trim() || "No safe approved duplicate action was identified.",
+    candidateEventIds:
+      filteredCandidateEventIds.length > 0
+        ? filteredCandidateEventIds
+        : candidateGroup.eventIds,
+  };
+}
+
+export function normalizeApprovedEventMasterReviewPayload(options: {
+  payload: unknown;
+  candidateGroups: ApprovedEventReviewCandidateGroup[];
+}): {
+  overview: string;
+  reviewGroups: ApprovedEventMasterReviewGroup[];
+  skippedGroups: ApprovedEventMasterReviewSkippedGroup[];
+} {
+  const parsed = approvedEventMasterReviewSchema.parse(options.payload);
+  const candidateGroupById = new Map(
+    options.candidateGroups.map((group) => [group.groupId, group] as const),
+  );
+  const consumedGroupIds = new Set<string>();
+  const reviewGroups: ApprovedEventMasterReviewGroup[] = [];
+  const skippedGroups: ApprovedEventMasterReviewSkippedGroup[] = [];
+
+  for (const group of parsed.review_groups) {
+    const candidateGroup = candidateGroupById.get(group.group_id);
+    if (!candidateGroup || consumedGroupIds.has(candidateGroup.groupId)) {
+      continue;
+    }
+
+    const candidateEventIds = new Set(candidateGroup.eventIds);
+    const rawDuplicateIds = [
+      ...new Set(group.duplicate_event_ids.map((id) => id.trim()).filter(Boolean)),
+    ];
+    const primaryEventId = group.primary_event_id.trim();
+    const hasValidPrimary = candidateEventIds.has(primaryEventId);
+    const hasOnlyCandidateDuplicateIds = rawDuplicateIds.every((id) =>
+      candidateEventIds.has(id),
+    );
+    const finalDuplicateIds = rawDuplicateIds.filter((id) => id !== primaryEventId);
+
+    if (!hasValidPrimary || !hasOnlyCandidateDuplicateIds || finalDuplicateIds.length === 0) {
+      skippedGroups.push(
+        buildSkippedGroup(
+          candidateGroup,
+          "invalid_ai_action",
+          "The AI response did not identify a safe primary and duplicate set inside this candidate group.",
+        ),
+      );
+      consumedGroupIds.add(candidateGroup.groupId);
+      continue;
+    }
+
+    reviewGroups.push({
+      groupId: candidateGroup.groupId,
+      confidence: normalizeConfidenceValue(group.confidence),
+      reasoning: group.reasoning.trim(),
+      recommendedAction: group.recommended_action,
+      primaryEventId,
+      duplicateEventIds: finalDuplicateIds,
+      primaryPatch: sanitizePatch(group.primary_patch),
+    });
+    consumedGroupIds.add(candidateGroup.groupId);
+  }
+
+  for (const group of parsed.skipped_groups) {
+    const candidateGroup = candidateGroupById.get(group.group_id);
+    if (!candidateGroup || consumedGroupIds.has(candidateGroup.groupId)) {
+      continue;
+    }
+
+    skippedGroups.push(
+      buildSkippedGroup(
+        candidateGroup,
+        group.reason_code.trim() || "not_actionable",
+        group.reasoning,
+        group.candidate_event_ids,
+      ),
+    );
+    consumedGroupIds.add(candidateGroup.groupId);
+  }
+
+  for (const candidateGroup of options.candidateGroups) {
+    if (consumedGroupIds.has(candidateGroup.groupId)) {
+      continue;
+    }
+    skippedGroups.push(
+      buildSkippedGroup(
+        candidateGroup,
+        "not_returned_by_model",
+        "The AI review did not classify this candidate group, so it was left unchanged.",
+      ),
+    );
+  }
+
+  reviewGroups.sort(
+    (left, right) =>
+      (right.confidence ?? Number.NEGATIVE_INFINITY) -
+      (left.confidence ?? Number.NEGATIVE_INFINITY),
+  );
+  skippedGroups.sort((left, right) => left.groupId.localeCompare(right.groupId));
+
+  return {
+    overview: parsed.overview.trim(),
+    reviewGroups,
+    skippedGroups,
+  };
+}
+
 export async function reviewApprovedEventsForMasterReview(options: {
   events: ApprovedEventRecordForReview[];
   candidateGroups: ApprovedEventReviewCandidateGroup[];
@@ -528,30 +737,15 @@ export async function reviewApprovedEventsForMasterReview(options: {
       activeEventCount: options.events.length,
       candidateGroupCount: 0,
       reviewGroups: [],
+      skippedGroups: [],
     };
   }
 
   const openAiApiKey = getRequiredEnv("OPENAI_API_KEY");
-  const candidateGroupById = new Map(
-    options.candidateGroups.map((group) => [group.groupId, group] as const),
-  );
   const candidateGroupsForPrompt = options.candidateGroups.map((group) => ({
     group_id: group.groupId,
     event_ids: group.eventIds,
-    events: group.events.map((event) => ({
-      id: event.id,
-      title: event.title,
-      date: event.date,
-      time: event.time,
-      venue: event.venue,
-      artists: event.artists,
-      description: event.description,
-      ticketPrice: event.ticketPrice,
-      eventType: event.eventType,
-      instagramPostUrl: event.instagramPostUrl,
-      sourcePostedAt: event.sourcePostedAt,
-      imageUrl: event.imageUrl,
-    })),
+    events: group.events.map((event) => buildMasterReviewPromptEvent(event)),
   }));
   let lastError: unknown;
 
@@ -633,50 +827,17 @@ export async function reviewApprovedEventsForMasterReview(options: {
       }
 
       const parsedJson = JSON.parse(responseText) as unknown;
-      const parsed = approvedEventMasterReviewSchema.parse(parsedJson);
-      const reviewGroups: ApprovedEventMasterReviewGroup[] = [];
-
-      for (const group of parsed.review_groups) {
-        const candidateGroup = candidateGroupById.get(group.group_id);
-        if (!candidateGroup) {
-          continue;
-        }
-
-        const candidateEventIds = new Set(candidateGroup.eventIds);
-        const normalizedDuplicateIds = [
-          ...new Set(group.duplicate_event_ids.filter((id) => candidateEventIds.has(id))),
-        ];
-
-        const preferredPrimaryId = candidateEventIds.has(group.primary_event_id)
-          ? group.primary_event_id
-          : candidateGroup.eventIds.find((id) => !normalizedDuplicateIds.includes(id)) ??
-            candidateGroup.eventIds[0];
-
-        const finalDuplicateIds = normalizedDuplicateIds.filter((id) => id !== preferredPrimaryId);
-        if (!preferredPrimaryId || finalDuplicateIds.length === 0) {
-          continue;
-        }
-
-        reviewGroups.push({
-          groupId: candidateGroup.groupId,
-          confidence: normalizeConfidenceValue(group.confidence),
-          reasoning: group.reasoning.trim(),
-          recommendedAction: group.recommended_action,
-          primaryEventId: preferredPrimaryId,
-          duplicateEventIds: finalDuplicateIds,
-          primaryPatch: sanitizePatch(group.primary_patch),
-        });
-      }
-
-      reviewGroups.sort(
-        (left, right) => (right.confidence ?? Number.NEGATIVE_INFINITY) - (left.confidence ?? Number.NEGATIVE_INFINITY),
-      );
+      const normalized = normalizeApprovedEventMasterReviewPayload({
+        payload: parsedJson,
+        candidateGroups: options.candidateGroups,
+      });
 
       return {
-        overview: parsed.overview.trim(),
+        overview: normalized.overview,
         activeEventCount: options.events.length,
         candidateGroupCount: options.candidateGroups.length,
-        reviewGroups,
+        reviewGroups: normalized.reviewGroups,
+        skippedGroups: normalized.skippedGroups,
       };
     } catch (error) {
       lastError = error;

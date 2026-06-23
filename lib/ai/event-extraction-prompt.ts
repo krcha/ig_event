@@ -46,13 +46,13 @@ Return strict JSON with:
     "source_text": string
   }>,
   "field_confirmation": {
-    "title": { "confidence": number, "found_in": string[], "notes": string },
-    "location": { "confidence": number, "found_in": string[], "notes": string },
-    "location_name": { "confidence": number, "found_in": string[], "notes": string },
-    "price": { "confidence": number, "found_in": string[], "notes": string },
-    "start_time": { "confidence": number, "found_in": string[], "notes": string },
-    "short_description": { "confidence": number, "found_in": string[], "notes": string },
-    "artists": { "confidence": number, "found_in": string[], "notes": string }
+    "title": { "confidence": number, "found_in": string[], "evidence": string, "evidence_snippets": Array<{ "source": string, "text": string }>, "notes": string },
+    "location": { "confidence": number, "found_in": string[], "evidence": string, "evidence_snippets": Array<{ "source": string, "text": string }>, "notes": string },
+    "location_name": { "confidence": number, "found_in": string[], "evidence": string, "evidence_snippets": Array<{ "source": string, "text": string }>, "notes": string },
+    "price": { "confidence": number, "found_in": string[], "evidence": string, "evidence_snippets": Array<{ "source": string, "text": string }>, "notes": string },
+    "start_time": { "confidence": number, "found_in": string[], "evidence": string, "evidence_snippets": Array<{ "source": string, "text": string }>, "notes": string },
+    "short_description": { "confidence": number, "found_in": string[], "evidence": string, "evidence_snippets": Array<{ "source": string, "text": string }>, "notes": string },
+    "artists": { "confidence": number, "found_in": string[], "evidence": string, "evidence_snippets": Array<{ "source": string, "text": string }>, "notes": string }
   }
 }
 Rules:
@@ -130,6 +130,10 @@ Rules:
 - "start_time" confirms the start time field.
 - "short_description" confirms the description summary and which explicit facts were kept.
 - "artists" confirms artist names and should mention when generic labels or non-performers were excluded.
+- Each field_confirmation entry must set "evidence" to the shortest exact caption, poster, alt-text, location-tag, or canonical-hint snippet that supports the field. Use empty string only when there is no direct supporting snippet.
+- Each field_confirmation entry must set "evidence_snippets" to exact support snippets with source labels. Allowed source labels are: caption, poster, alt_text, location_tag, canonical_hint, handle_context, inference. Use [] for unknown fields.
+- Confidence rubric: use 0.95+ for exact caption/poster evidence, 0.80-0.90 for explicit evidence that required normalization or date inference, 0.60-0.75 for partial/contextual support, and below 0.55 for missing, contradictory, or fallback-only fields.
+- Top-level confidence reflects publishable core fields: date, venue, title or billed act, and time when available. Do not average unrelated optional fields into the top-level confidence.
 - Each field_confirmation entry must explain confidence using the caption, image, location tag, handle context, canonical hint, or explicit inference notes.
 - Never return markdown, only valid JSON.
 `.trim();

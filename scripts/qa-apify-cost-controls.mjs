@@ -79,6 +79,26 @@ const cronRouteSource = readFileSync(
   new URL("../app/api/cron/ingest-venues/route.ts", import.meta.url),
   "utf8",
 );
+const instagramScraperSource = readFileSync(
+  new URL("../lib/scraper/instagram-scraper.ts", import.meta.url),
+  "utf8",
+);
+const followDiscoverySource = readFileSync(
+  new URL("../lib/pipeline/follow-discovery.ts", import.meta.url),
+  "utf8",
+);
+
+for (const [label, source] of [
+  ["instagram scraper", instagramScraperSource],
+  ["follow discovery", followDiscoverySource],
+]) {
+  assert.doesNotMatch(
+    source,
+    /new URLSearchParams\(\{\s*token:|searchParams\.set\(["']token["']/s,
+    `${label} must not put APIFY_API_TOKEN into request URLs`,
+  );
+}
+
 assert.match(
   cronRouteSource,
   /minCreatedAt:\s*Date\.now\(\) - cronConfig\.fullScrapeCooldownHours \* MS_PER_HOUR/,

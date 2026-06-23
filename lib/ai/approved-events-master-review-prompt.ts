@@ -22,6 +22,8 @@ Rules:
 - "artists" must contain only explicit performer names and should be deduplicated.
 - Use empty strings for unknown scalar patch fields and [] for unknown artists.
 - Confidence must be a decimal from 0.00 to 1.00.
+- Every candidate group must appear exactly once: either in "review_groups" for actionable cleanup or in "skipped_groups" when it should not be changed.
+- For skipped groups, explain why records should stay separate or why evidence is not strong enough.
 - Return strict JSON only.
 `.trim();
 
@@ -32,9 +34,9 @@ export function buildApprovedEventsMasterReviewUserPrompt(
     "Review approved upcoming events for duplicate cleanup.",
     `Upcoming approved events in scope: ${context.activeEventCount}`,
     `Candidate duplicate groups to review: ${context.candidateGroupCount}`,
-    "For each candidate group, decide whether it is actionable duplicate cleanup.",
+    "For each candidate group, decide whether it is actionable duplicate cleanup or should be skipped.",
     "If actionable, choose one primary event, list duplicate event ids to remove, and provide a conservative merged field patch only when it clearly improves the kept event.",
-    "If a group is not clearly actionable, omit it from the output.",
+    "If a group is not clearly actionable, put it in skipped_groups with reason_code and reasoning. Do not omit candidate groups.",
     "Candidate groups JSON:",
     context.candidateGroupsJson,
   ].join("\n");

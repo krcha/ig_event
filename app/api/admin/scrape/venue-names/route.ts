@@ -1,13 +1,13 @@
-import { auth } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
+import { requireAdminApiAccess } from "@/lib/auth/admin-api";
 import {
   createEmptyIngestionSummary,
   createInitialIngestionBatchState,
 } from "@/lib/pipeline/run-instagram-ingestion";
 import { listVenueNameOverrideHandles } from "@/lib/pipeline/venue-name-overrides";
-import { getRequiredEnv, hasClerkEnv } from "@/lib/utils/env";
+import { getRequiredEnv } from "@/lib/utils/env";
 
 const DEFAULT_BATCH_SIZE = 2;
 const createIngestionJobMutation =
@@ -39,11 +39,9 @@ export async function POST() {
   let handles: string[] = [];
 
   try {
-    if (hasClerkEnv()) {
-      const { userId } = await auth();
-      if (!userId) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      }
+    const adminAccess = await requireAdminApiAccess();
+    if (!adminAccess.ok) {
+      return adminAccess.response;
     }
 
     handles = await listVenueNameOverrideHandles();

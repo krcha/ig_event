@@ -1,8 +1,7 @@
-import { auth } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
-import { hasClerkEnv } from "@/lib/utils/env";
+import { requireAdminApiAccess } from "@/lib/auth/admin-api";
 
 type EventStatus = "approved" | "rejected";
 
@@ -31,16 +30,11 @@ function getConvexHttpClient() {
 }
 
 export async function POST(request: Request) {
-  const clerkEnabled = hasClerkEnv();
-  let reviewedBy: string | undefined;
-
-  if (clerkEnabled) {
-    const session = await auth();
-    if (!session.userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-    reviewedBy = session.userId;
+  const adminAccess = await requireAdminApiAccess();
+  if (!adminAccess.ok) {
+    return adminAccess.response;
   }
+  const reviewedBy = adminAccess.userId ?? undefined;
 
   let body: RequestBody;
   try {

@@ -1,10 +1,9 @@
-import { auth } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { parse } from "csv-parse/sync";
 import { NextResponse } from "next/server";
+import { requireAdminApiAccess } from "@/lib/auth/admin-api";
 import { canonicalizeVenueCategory } from "@/lib/taxonomy/venue-types";
-import { hasClerkEnv } from "@/lib/utils/env";
 
 type VenueRecord = {
   _id: string;
@@ -32,12 +31,6 @@ function getConvexClient() {
     throw new Error("NEXT_PUBLIC_CONVEX_URL is not configured.");
   }
   return new ConvexHttpClient(convexUrl);
-}
-
-async function ensureAuthorized() {
-  if (!hasClerkEnv()) return true;
-  const session = await auth();
-  return Boolean(session.userId);
 }
 
 function normalizeHandle(handle: string): string {
@@ -89,8 +82,9 @@ function parseCsvToVenues(csvText: string) {
 }
 
 export async function POST(request: Request) {
-  if (!(await ensureAuthorized())) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const adminAccess = await requireAdminApiAccess();
+  if (!adminAccess.ok) {
+    return adminAccess.response;
   }
 
   let formData: FormData;

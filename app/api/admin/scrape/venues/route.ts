@@ -1,7 +1,7 @@
-import { auth } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
+import { requireAdminApiAccess } from "@/lib/auth/admin-api";
 import {
   createEmptyIngestionSummary,
   createInitialIngestionBatchState,
@@ -15,7 +15,7 @@ import {
   getCronIngestionConfig,
   selectCronIngestionHandles,
 } from "@/lib/pipeline/cron-ingestion-config";
-import { getRequiredEnv, hasClerkEnv } from "@/lib/utils/env";
+import { getRequiredEnv } from "@/lib/utils/env";
 
 type Body = {
   resultsLimit?: number;
@@ -74,14 +74,9 @@ export async function POST(request: Request) {
   let handles: string[] = [];
 
   try {
-    if (hasClerkEnv()) {
-      const { userId } = await auth();
-      if (!userId) {
-        return NextResponse.json(
-          { errorStep: "auth_check", error: "Unauthorized" },
-          { status: 401 },
-        );
-      }
+    const adminAccess = await requireAdminApiAccess();
+    if (!adminAccess.ok) {
+      return adminAccess.response;
     }
 
     step = "parse_body";
@@ -110,10 +105,12 @@ export async function POST(request: Request) {
     }
 
     handles = activeVenueHandles;
+    let skippedRecentlyAttempted = 0;
+    let skippedDueToRunLimit = 0;
+    const cronConfig = getCronIngestionConfig();
 
     if (mode === "full_scrape") {
       step = "filter_recent_full_scrapes";
-      const cronConfig = getCronIngestionConfig();
       const cooldownMs = cronConfig.fullScrapeCooldownHours * MS_PER_HOUR;
       const recentFullScrapeSummary = await getRecentFullScrapeAttemptSummary({
         candidateHandles: activeVenueHandles,
@@ -125,6 +122,8 @@ export async function POST(request: Request) {
         maxHandlesPerRun: cronConfig.maxHandlesPerRun,
       });
       handles = handleSelection.handles;
+      skippedRecentlyAttempted = handleSelection.skippedRecentlyAttempted;
+      skippedDueToRunLimit = handleSelection.skippedDueToRunLimit;
 
       if (handles.length === 0) {
         return NextResponse.json(
@@ -141,7 +140,18 @@ export async function POST(request: Request) {
 
     step = "enqueue_active_venue_job";
     const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
-    const summary = createEmptyIngestionSummary(handles);
+    const summary = createEmptyIngestionSummary(handles, {
+      source: "active_venues",
+      mode,
+      activeVenueCount: activeVenueHandles.length,
+      selectedHandleCount: handles.length,
+      skippedRecentlyAttempted,
+      skippedDueToRunLimit,
+      fullScrapeCooldownHours: cronConfig.fullScrapeCooldownHours,
+      maxHandlesPerRun: cronConfig.maxHandlesPerRun,
+      ...(resultsLimit ? { resultsLimit } : {}),
+      ...(daysBack ? { daysBack } : {}),
+    });
     const state = createInitialIngestionBatchState();
 
     const jobId = (await convex.mutation(createIngestionJobMutation, {

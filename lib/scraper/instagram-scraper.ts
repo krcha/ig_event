@@ -845,7 +845,6 @@ export async function scrapeInstagramAccount(
   const cutoff = Date.now() - requestSettings.daysBack * 24 * 60 * 60 * 1000;
 
   const query = new URLSearchParams({
-    token: apiToken,
     clean: "true",
     maxItems: String(runOptions.maxItems),
     maxTotalChargeUsd: String(runOptions.maxTotalChargeUsd),

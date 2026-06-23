@@ -1,7 +1,7 @@
 import "server-only";
 
 import { auth } from "@clerk/nextjs/server";
-import { hasClerkEnv } from "@/lib/utils/env";
+import { hasClerkEnv, shouldFailClosedForAdminRoutes } from "@/lib/utils/env";
 
 const ADMIN_USER_ID_SEPARATOR = /[\s,]+/;
 
@@ -14,12 +14,30 @@ function getConfiguredAdminClerkUserIds(): Set<string> {
   );
 }
 
+export function hasConfiguredAdminClerkUserIds(): boolean {
+  return getConfiguredAdminClerkUserIds().size > 0;
+}
+
 export function isAdminClerkUserId(userId: string | null | undefined): boolean {
   if (!userId) {
     return false;
   }
 
   return getConfiguredAdminClerkUserIds().has(userId);
+}
+
+export async function canAccessAdminSurface(): Promise<boolean> {
+  if (!hasClerkEnv()) {
+    return !shouldFailClosedForAdminRoutes();
+  }
+
+  const adminUserIds = getConfiguredAdminClerkUserIds();
+  if (adminUserIds.size === 0) {
+    return false;
+  }
+
+  const { userId } = await auth();
+  return adminUserIds.has(userId ?? "");
 }
 
 export async function isViewerAdmin(): Promise<boolean> {

@@ -134,9 +134,11 @@ Notes:
   not exactly `instagram`.
 - `CLERK_SECRET_KEY`, `OPENAI_API_KEY`, `APIFY_API_TOKEN`, and `CRON_SECRET`
   are secrets and must stay out of git.
-- `ADMIN_CLERK_USER_IDS` is the Clerk user allowlist for admin access.
+- `ADMIN_CLERK_USER_IDS` is the Clerk user allowlist for admin pages and
+  `/api/admin/*`.
 - `CRON_SECRET` must be set in production. When it is blank, the cron endpoint
-  allows unauthenticated calls for local convenience.
+  fails closed in production and allows unauthenticated calls only for local
+  convenience.
 - `EVENTS_TIMEZONE` controls local event-day handling.
 - `OPENAI_VISION_MODEL` and `OPENAI_REVIEW_MODEL` should be set explicitly for
   cost control.

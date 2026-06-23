@@ -1,8 +1,7 @@
-import { auth } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
-import { hasClerkEnv } from "@/lib/utils/env";
+import { requireAdminApiAccess } from "@/lib/auth/admin-api";
 import { canonicalizeVenueCategory } from "@/lib/taxonomy/venue-types";
 import {
   createEmptyVenueHoursJson,
@@ -94,15 +93,10 @@ function createClearVenueHoursPatch(now = Date.now()) {
   };
 }
 
-async function ensureAuthorized() {
-  if (!hasClerkEnv()) return true;
-  const session = await auth();
-  return Boolean(session.userId);
-}
-
 export async function GET() {
-  if (!(await ensureAuthorized())) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const adminAccess = await requireAdminApiAccess();
+  if (!adminAccess.ok) {
+    return adminAccess.response;
   }
 
   try {
@@ -140,8 +134,9 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  if (!(await ensureAuthorized())) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const adminAccess = await requireAdminApiAccess();
+  if (!adminAccess.ok) {
+    return adminAccess.response;
   }
 
   let body: CreateVenueBody;
@@ -184,8 +179,9 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  if (!(await ensureAuthorized())) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const adminAccess = await requireAdminApiAccess();
+  if (!adminAccess.ok) {
+    return adminAccess.response;
   }
 
   let body: UpdateVenueBody;
@@ -266,8 +262,9 @@ export async function PATCH(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  if (!(await ensureAuthorized())) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const adminAccess = await requireAdminApiAccess();
+  if (!adminAccess.ok) {
+    return adminAccess.response;
   }
 
   let body: DeleteVenueBody;

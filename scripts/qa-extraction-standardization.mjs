@@ -34,6 +34,7 @@ const STATIC_VENUE_BY_HANDLE = {
   "20_44.nightclub": "Klub 20/44",
   kcgrad: "KC Grad",
 };
+const QA_NOW_ISO = "2026-06-23T10:00:00.000Z";
 const MONTH_ABBRS = [
   "jan",
   "feb",
@@ -62,6 +63,9 @@ const SERBIAN_MONTH_GENITIVES = [
   "novembra",
   "decembra",
 ];
+
+// Release QA uses relative date fixtures; keep event-window filtering stable over time.
+Date.now = () => new Date(QA_NOW_ISO).getTime();
 
 function isoDateDaysFromNow(offsetDays) {
   const date = new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000);
@@ -148,12 +152,30 @@ function makeInstagramPost(overrides = {}) {
 }
 
 function makeFieldConfirmation(confidence = 0.95) {
-  const entry = { confidence, found_in: ["caption"], notes: "QA evidence." };
+  const entry = {
+    confidence,
+    found_in: ["caption"],
+    evidence: "QA evidence",
+    evidence_snippets: [{ source: "caption", text: "QA evidence" }],
+    notes: "QA evidence.",
+  };
   return {
     title: entry,
     location: entry,
-    location_name: entry,
-    price: { confidence: 0, found_in: [], notes: "No price." },
+    location_name: {
+      confidence,
+      found_in: ["location_tag", "canonical_hint"],
+      evidence: "QA Venue",
+      evidence_snippets: [{ source: "location_tag", text: "QA Venue" }],
+      notes: "QA venue evidence.",
+    },
+    price: {
+      confidence: 0,
+      found_in: [],
+      evidence: "",
+      evidence_snippets: [],
+      notes: "No price.",
+    },
     start_time: entry,
     short_description: entry,
     artists: entry,
@@ -268,6 +290,26 @@ function runPromptQa() {
     EVENT_EXTRACTION_SYSTEM_PROMPT,
     /0\.00 to 1\.00 inclusive/i,
     "Prompt must require confidence values in the 0.00-1.00 range.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /evidence_snippets/i,
+    "Prompt must require structured evidence snippets.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /Allowed source labels/i,
+    "Prompt must constrain evidence snippet source labels.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /Confidence rubric/i,
+    "Prompt must include a confidence calibration rubric.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /publishable core fields/i,
+    "Prompt must tie top-level confidence to publishable core fields.",
   );
 
   const userPrompt = buildEventExtractionUserPrompt({
@@ -488,6 +530,19 @@ function runVideoModerationQa() {
   assert.equal(highConfidenceFields.moderationConfidenceScore, 0.95);
   assert.equal(highConfidenceFields.extractionMode, "caption_only");
   assert.deepEqual(highConfidenceFields.moderationPendingReasons, []);
+  assert.equal(highConfidenceFields.extractionScorecard.agent, "event_extraction");
+  assert.equal(highConfidenceFields.extractionScorecard.baseConfidenceScore, 0.95);
+  assert.equal(highConfidenceFields.extractionScorecard.finalModerationConfidenceScore, 0.95);
+  assert.equal(highConfidenceFields.extractionScorecard.autoApproved, true);
+  assert.ok(Array.isArray(highConfidenceFields.extractionScorecard.fieldEvidence));
+  assert.ok(
+    highConfidenceFields.extractionScorecard.fieldEvidence.some(
+      (field) =>
+        field.field === "title" &&
+        field.evidence === "QA evidence" &&
+        field.evidenceSnippets.some((snippet) => snippet.source === "caption"),
+    ),
+  );
 
   const relaxedVideo = assertSingleOkPreparedEvent(
     prepareEventsForInsert(
@@ -878,6 +933,14 @@ function runSerbianRelativeDateQa() {
   assert.equal(ambiguousWeekOnly.events.length, 0);
   assert.equal(ambiguousWeekOnly.prepared[0]?.kind, "skip");
   assert.equal(ambiguousWeekOnly.prepared[0]?.reason, "missing_date");
+  assert.equal(
+    ambiguousWeekOnly.prepared[0]?.normalizedFields.extractionScorecard.normalizedIsValid,
+    false,
+  );
+  assert.equal(
+    ambiguousWeekOnly.prepared[0]?.normalizedFields.extractionScorecard.normalizedInvalidReason,
+    "invalid_date",
+  );
 }
 
 function runScheduleConsistencyQa() {

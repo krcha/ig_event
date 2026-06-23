@@ -146,10 +146,11 @@ Notes:
   all active handles up to the 600-handle safety cap, and a 23-hour cooldown so
   the daily 07:00 UTC schedule is not blocked by normal scheduler jitter.
 - `EVENTS_TIMEZONE` controls local event-day handling.
-- `ADMIN_CLERK_USER_IDS` is a comma- or space-separated allowlist for showing
-  admin UI.
+- `ADMIN_CLERK_USER_IDS` is a comma- or space-separated allowlist for admin
+  pages and `/api/admin/*`.
 - Local development can run without Clerk keys. In production, `/admin` and
-  `/api/admin/*` fail closed unless both Clerk keys are configured.
+  `/api/admin/*` fail closed unless both Clerk keys are configured; when Clerk
+  is configured, the admin allowlist must also be populated.
 - Do not put deploy-only secrets such as `CONVEX_DEPLOY_KEYS` into the runtime
   env unless the server is actually deploying Convex. For the self-hosted path,
   `CONVEX_SELF_HOSTED_ADMIN_KEY` is also a deploy/import secret and must stay out
@@ -167,7 +168,9 @@ npm run lint
 npm run typecheck
 npm run qa:dedupe
 npm run qa:automerge
+npm run qa:master-review
 npm run qa:extraction
+npm run qa:ingestion-triage
 npm run qa:clerk-instagram-sso
 npm run qa:release
 npm run qa:self-hosted-convex-compose

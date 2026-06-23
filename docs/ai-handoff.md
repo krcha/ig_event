@@ -180,8 +180,9 @@ Clerk:
 
 - Middleware protects `/admin(.*)` and `/api/admin(.*)` when Clerk is
   configured.
-- `lib/auth/admin.ts` checks `ADMIN_CLERK_USER_IDS` for showing admin-only UI
-  affordances.
+- `lib/auth/admin.ts` checks `ADMIN_CLERK_USER_IDS` for admin page access, and
+  `lib/auth/admin-api.ts` applies the same allowlist to every `/api/admin/*`
+  route.
 - `/sign-in` and `/sign-up` render `InstagramSsoAuthCard`, making Instagram the
   primary auth action. It resolves native `oauth_instagram` or an enabled custom
   strategy such as `oauth_custom_instagram` from Clerk's

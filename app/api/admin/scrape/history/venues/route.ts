@@ -1,14 +1,14 @@
-import { auth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
+import { requireAdminApiAccess } from "@/lib/auth/admin-api";
 import {
   createEmptyIngestionSummary,
   createInitialIngestionBatchState,
   getActiveVenueHandles,
   importRecentApifyRunPostsToSavedPosts,
 } from "@/lib/pipeline/run-instagram-ingestion";
-import { getRequiredEnv, hasClerkEnv } from "@/lib/utils/env";
+import { getRequiredEnv } from "@/lib/utils/env";
 
 type Body = {
   runsLimit?: number;
@@ -56,11 +56,9 @@ export async function POST(request: Request) {
     | "load_active_venues"
     | "import_recent_runs"
     | "enqueue_saved_posts_job" = "auth";
-  if (hasClerkEnv()) {
-    const { userId } = await auth();
-    if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const adminAccess = await requireAdminApiAccess();
+  if (!adminAccess.ok) {
+    return adminAccess.response;
   }
 
   let body: Body = {};
