@@ -8,16 +8,17 @@ import {
 } from "@/components/events/event-meta";
 import { SaveEventButton } from "@/components/events/save-event-button";
 import { resolveEventTimeDisplay, type EventDayPeriod } from "@/lib/events/event-time";
+import { isApifyImageUrl } from "@/lib/images/apify-images";
 import { cn } from "@/lib/utils";
 
 export type DiscoverFeedEvent = {
   _id: string;
   artists: string[];
   date: string;
-  description?: string;
   eventType: string;
   imageUrl?: string;
   instagramHandle?: string;
+  instagramPostId?: string;
   instagramPostUrl?: string;
   sourceCaption?: string;
   sourcePostedAt?: string;
@@ -91,18 +92,10 @@ function getInstagramHandleLabel(event: DiscoverFeedEvent): string {
 }
 
 function getStableImageUrl(event: DiscoverFeedEvent): string | null {
-  if (!event.imageUrl) {
-    return null;
+  if (event.imageUrl?.startsWith("/api/discover/images/")) {
+    return event.imageUrl;
   }
-
-  try {
-    const url = new URL(event.imageUrl);
-    return url.hostname.toLowerCase() === "images.apifyusercontent.com"
-      ? event.imageUrl
-      : null;
-  } catch {
-    return null;
-  }
+  return isApifyImageUrl(event.imageUrl) ? event.imageUrl : null;
 }
 
 function EventMetaChips({ event }: { event: DiscoverFeedEvent }) {
@@ -117,18 +110,21 @@ function EventMetaChips({ event }: { event: DiscoverFeedEvent }) {
   );
 }
 
-function getPostBody(event: DiscoverFeedEvent): string {
-  return event.sourceCaption?.trim() || event.description?.trim() || `${event.title} at ${event.venue}`;
+function getInstagramCaption(event: DiscoverFeedEvent): string | null {
+  return event.sourceCaption?.trim() || null;
 }
 
 function DiscoverPost({ event }: { event: DiscoverFeedEvent }) {
   const time = getResolvedTime(event);
   const handleLabel = getInstagramHandleLabel(event);
-  const postBody = getPostBody(event);
+  const instagramCaption = getInstagramCaption(event);
   const imageUrl = getStableImageUrl(event);
 
   return (
-    <article className="overflow-hidden rounded-[1.25rem] border border-white/[0.07] bg-[#0d0f16] shadow-[0_26px_70px_-48px_rgba(0,0,0,0.92)]">
+    <article
+      className="overflow-hidden rounded-[1.25rem] border border-white/[0.07] bg-[#0d0f16] shadow-[0_26px_70px_-48px_rgba(0,0,0,0.92)]"
+      data-discover-post="true"
+    >
       <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-3 py-3">
         <Link
           aria-label={`Open ${event.title}`}
@@ -158,6 +154,7 @@ function DiscoverPost({ event }: { event: DiscoverFeedEvent }) {
         <Link
           aria-label={`Open ${event.title}`}
           className="relative block aspect-[4/5] overflow-hidden bg-black"
+          data-discover-image-source="apify-proxy"
           href={`/events/${event._id}`}
         >
           <Image
@@ -172,11 +169,11 @@ function DiscoverPost({ event }: { event: DiscoverFeedEvent }) {
       ) : (
         <div className="border-b border-white/[0.06] bg-black/[0.18] px-4 py-5 sm:px-5">
           <Link aria-label={`Open ${event.title}`} className="block" href={`/events/${event._id}`}>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">
+            <p className="text-xs font-semibold uppercase text-primary">
               {event.title}
             </p>
-            <p className="mt-3 whitespace-pre-line text-[15px] leading-7 text-foreground">
-              {postBody}
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              Image pending for this post.
             </p>
           </Link>
         </div>
@@ -204,19 +201,34 @@ function DiscoverPost({ event }: { event: DiscoverFeedEvent }) {
               <ExternalLink className="h-4 w-4" />
             </Link>
           </div>
-          <SaveEventButton
-            className="flex-none [&>button]:rounded-full"
-            eventId={event._id}
-            eventTitle={event.title}
-            variant="icon"
-          />
+          <div data-discover-save-action="true">
+            <SaveEventButton
+              className="flex-none [&>button]:rounded-full"
+              eventId={event._id}
+              eventTitle={event.title}
+              variant="icon"
+            />
+          </div>
         </div>
 
         <div className="space-y-1">
-          <p className="line-clamp-5 whitespace-pre-line text-sm leading-6 text-foreground">
-            <span className="font-semibold">{handleLabel}</span>{" "}
-            <span className="text-muted-foreground">{postBody}</span>
-          </p>
+          {instagramCaption ? (
+            <p
+              className="whitespace-pre-line text-sm leading-6 text-foreground"
+              data-discover-caption-source="instagram"
+            >
+              <span className="font-semibold">{handleLabel}</span>{" "}
+              <span className="text-muted-foreground">{instagramCaption}</span>
+            </p>
+          ) : (
+            <p
+              className="text-sm leading-6 text-muted-foreground"
+              data-discover-caption-source="missing"
+            >
+              <span className="font-semibold text-foreground">{handleLabel}</span>{" "}
+              caption unavailable from Instagram
+            </p>
+          )}
           <p className="mt-1 text-xs font-medium text-muted-foreground">
             {event.title} · {event.venue} · {time.label}
           </p>
@@ -251,7 +263,7 @@ export function DiscoverFeed({ dateTabs, error, events, subline }: DiscoverFeedP
   const hasEvents = events.length > 0;
 
   return (
-    <main className="app-page gap-3 sm:gap-4">
+    <main className="app-page gap-3 sm:gap-4" data-discover-feed="instagram-scroll">
       <div className="mx-auto flex w-full max-w-[38rem] flex-col gap-3 sm:gap-4">
         <header className="px-1 py-1 sm:px-0">
           <div className="flex items-start justify-between gap-3">

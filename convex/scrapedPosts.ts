@@ -27,6 +27,41 @@ export const listByHandle = query({
   },
 });
 
+export const getByHandleAndPostRef = query({
+  args: {
+    handle: v.string(),
+    instagramPostUrl: v.optional(v.string()),
+    postId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const postId = args.postId;
+    if (postId) {
+      const byPostId = await ctx.db
+        .query("scrapedPosts")
+        .withIndex("by_handle_postId", (q) =>
+          q.eq("handle", args.handle).eq("postId", postId),
+        )
+        .take(1);
+      if (byPostId[0]) {
+        return byPostId[0];
+      }
+    }
+
+    const instagramPostUrl = args.instagramPostUrl;
+    if (instagramPostUrl) {
+      const byPostUrl = await ctx.db
+        .query("scrapedPosts")
+        .withIndex("by_handle_postUrl", (q) =>
+          q.eq("handle", args.handle).eq("instagramPostUrl", instagramPostUrl),
+        )
+        .take(1);
+      return byPostUrl[0] ?? null;
+    }
+
+    return null;
+  },
+});
+
 export const upsertManyByHandle = mutation({
   args: {
     handle: v.string(),

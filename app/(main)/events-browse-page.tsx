@@ -120,9 +120,15 @@ const DAY_CATEGORY_CHIPS = [
   { key: "culture", label: "Culture" },
   { key: "event", label: "Event" },
 ] as const;
+const CALENDAR_DAY_PREVIEW_LIMIT = 3;
 const DEFAULT_SELECTED_DAY_AGENDA_LIMIT = 24;
 
 type DayCategory = (typeof DAY_CATEGORY_CHIPS)[number]["key"];
+
+type CalendarDayBucket = {
+  eventCount: number;
+  previewEvents: CalendarEventSummary[];
+};
 
 function normalizeDayCategory(value: string | undefined): DayCategory {
   return DAY_CATEGORY_CHIPS.some((chip) => chip.key === value) ? (value as DayCategory) : "all";
@@ -250,33 +256,31 @@ function getSelectedDay(
   return formatDateKey(monthStart);
 }
 
-function filterEvents(
-  events: PublicEvent[],
+function eventMatchesFilters(
+  event: PublicEvent,
   venue: string | undefined,
   eventType: string | undefined,
   weekendOnly: boolean,
   query: string | undefined,
-): PublicEvent[] {
-  return events.filter((event) => {
-    if (venue && event.venue !== venue) {
-      return false;
-    }
+): boolean {
+  if (venue && event.venue !== venue) {
+    return false;
+  }
 
-    if (eventType && event.eventType !== eventType) {
-      return false;
-    }
+  if (eventType && event.eventType !== eventType) {
+    return false;
+  }
 
-    if (!eventMatchesSearch(event, query)) {
-      return false;
-    }
+  if (!eventMatchesSearch(event, query)) {
+    return false;
+  }
 
-    if (!weekendOnly) {
-      return true;
-    }
+  if (!weekendOnly) {
+    return true;
+  }
 
-    const eventDate = parseNormalizedEventDate(event.date);
-    return eventDate ? isWeekendDate(eventDate) : false;
-  });
+  const eventDate = parseNormalizedEventDate(event.date);
+  return eventDate ? isWeekendDate(eventDate) : false;
 }
 
 function toCalendarEventSummary(event: PublicEvent): CalendarEventSummary {
@@ -317,6 +321,23 @@ function getDayCategory(event: CalendarEventSummary): Exclude<DayCategory, "all"
   }
 
   return "event";
+}
+
+function getCalendarDayBucket(
+  buckets: Map<string, CalendarDayBucket>,
+  dayKey: string,
+): CalendarDayBucket {
+  const existingBucket = buckets.get(dayKey);
+  if (existingBucket) {
+    return existingBucket;
+  }
+
+  const bucket: CalendarDayBucket = {
+    eventCount: 0,
+    previewEvents: [],
+  };
+  buckets.set(dayKey, bucket);
+  return bucket;
 }
 
 function formatArtistMeta(event: CalendarEventSummary): string | undefined {
@@ -383,41 +404,84 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const weekendOnly = getSingleValue(searchParams?.weekend) === "1";
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
-  const venues = Array.from(new Set(events.map((event) => event.venue))).sort((left, right) =>
-    left.localeCompare(right),
-  );
-  const eventTypes = Array.from(new Set(events.map((event) => event.eventType))).sort(
-    (left, right) => left.localeCompare(right),
-  );
+  const venueNames = new Set<string>();
+  const eventTypeNames = new Set<string>();
+  const monthDayBuckets = new Map<string, CalendarDayBucket>();
+  const activeVenueNames = new Set<string>();
+  let totalFilteredEventCount = 0;
+  let weekendEventCount = 0;
 
-  const filteredEvents = filterEvents(
-    events,
-    selectedVenue,
-    selectedType,
-    weekendOnly,
-    selectedSearchQuery,
-  );
-  const monthEvents = filteredEvents.filter((event) => event.date.startsWith(`${monthParam}-`));
-  const monthEventSummaries = monthEvents.map(toCalendarEventSummary);
-  const monthEventsByDay = new Map<string, CalendarEventSummary[]>();
+  for (const event of events) {
+    venueNames.add(event.venue);
+    eventTypeNames.add(event.eventType);
 
-  for (const event of monthEventSummaries) {
-    const dayEvents = monthEventsByDay.get(event.date) ?? [];
-    dayEvents.push(event);
-    monthEventsByDay.set(event.date, dayEvents);
+    if (!event.date.startsWith(`${monthParam}-`)) {
+      continue;
+    }
+
+    if (
+      !eventMatchesFilters(
+        event,
+        selectedVenue,
+        selectedType,
+        weekendOnly,
+        selectedSearchQuery,
+      )
+    ) {
+      continue;
+    }
+
+    const eventDate = parseNormalizedEventDate(event.date);
+    const dayBucket = getCalendarDayBucket(monthDayBuckets, event.date);
+    dayBucket.eventCount += 1;
+    totalFilteredEventCount += 1;
+    activeVenueNames.add(event.venue);
+    if (eventDate && isWeekendDate(eventDate)) {
+      weekendEventCount += 1;
+    }
+    if (dayBucket.previewEvents.length < CALENDAR_DAY_PREVIEW_LIMIT) {
+      dayBucket.previewEvents.push(toCalendarEventSummary(event));
+    }
   }
 
-  const filteredMonthDayKeys = Array.from(monthEventsByDay.keys()).sort();
+  const venues = Array.from(venueNames).sort((left, right) => left.localeCompare(right));
+  const eventTypes = Array.from(eventTypeNames).sort((left, right) => left.localeCompare(right));
+  const filteredMonthDayKeys = Array.from(monthDayBuckets.keys()).sort();
   const selectedDayKey = getSelectedDay(
     monthStart,
     getSingleValue(searchParams?.day),
     filteredMonthDayKeys,
   );
-  const selectedDayEvents = monthEventsByDay.get(selectedDayKey) ?? [];
-  const visibleSelectedDayEvents =
-    selectedCategory === "all"
-      ? selectedDayEvents
-      : selectedDayEvents.filter((event) => getDayCategory(event) === selectedCategory);
+  const selectedDayAgendaEvents: CalendarEventSummary[] = [];
+  let selectedDayEventCount = 0;
+
+  for (const event of events) {
+    if (event.date !== selectedDayKey) {
+      continue;
+    }
+    if (
+      !eventMatchesFilters(
+        event,
+        selectedVenue,
+        selectedType,
+        weekendOnly,
+        selectedSearchQuery,
+      )
+    ) {
+      continue;
+    }
+
+    const summary = toCalendarEventSummary(event);
+    if (selectedCategory !== "all" && getDayCategory(summary) !== selectedCategory) {
+      continue;
+    }
+
+    selectedDayEventCount += 1;
+    if (selectedDayAgendaEvents.length < DEFAULT_SELECTED_DAY_AGENDA_LIMIT) {
+      selectedDayAgendaEvents.push(summary);
+    }
+  }
+
   const selectedDate = parseNormalizedEventDate(selectedDayKey) ?? monthStart;
   const calendarDays = getCalendarDays(monthStart);
   const monthDays = getMonthDays(monthStart);
@@ -425,11 +489,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const nextMonth = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
   const monthLabel = formatDisplayDate(monthStart, { month: "long", year: "numeric" });
   const activeDayCount = filteredMonthDayKeys.length;
-  const activeVenueCount = new Set(monthEvents.map((event) => event.venue)).size;
-  const weekendEventCount = monthEvents.filter((event) => {
-    const eventDate = parseNormalizedEventDate(event.date);
-    return eventDate ? isWeekendDate(eventDate) : false;
-  }).length;
+  const activeVenueCount = activeVenueNames.size;
   const hiddenCategory = selectedCategory === "all" ? undefined : selectedCategory;
 
   const baseFilters = {
@@ -441,7 +501,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   };
   const mobileMonthDays = monthDays.map((day) => {
     const dayKey = formatDateKey(day);
-    const dayEvents = monthEventsByDay.get(dayKey) ?? [];
+    const dayBucket = monthDayBuckets.get(dayKey);
 
     return {
       dayKey,
@@ -452,7 +512,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       })}`,
       weekdayLabel: formatDisplayDate(day, { weekday: "short" }),
       dayNumber: day.getDate(),
-      eventCount: dayEvents.length,
+      eventCount: dayBucket?.eventCount ?? 0,
       isSelected: dayKey === selectedDayKey,
       isToday: dayKey === todayKey,
       isAnchor: dayKey === selectedDayKey,
@@ -468,7 +528,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const statCards = [
     {
       label: "Events",
-      value: monthEvents.length,
+      value: totalFilteredEventCount,
       caption: "approved this month",
     },
     {
@@ -626,12 +686,8 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     compact?: boolean;
     mobile?: boolean;
   } = {}) {
-    const selectedDayEventCount = visibleSelectedDayEvents.length;
-    const hasAgendaOverflow =
-      selectedDayEventCount > DEFAULT_SELECTED_DAY_AGENDA_LIMIT;
-    const agendaEvents = hasAgendaOverflow
-      ? visibleSelectedDayEvents.slice(0, DEFAULT_SELECTED_DAY_AGENDA_LIMIT)
-      : visibleSelectedDayEvents;
+    const agendaEvents = selectedDayAgendaEvents;
+    const hasAgendaOverflow = selectedDayEventCount > agendaEvents.length;
 
     function renderMobileAdvancedControls() {
       const iconButtonClass =
@@ -1135,11 +1191,12 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                     {calendarDays.map((day, index) => {
                       const dayKey = formatDateKey(day);
                       const inMonth = day.getMonth() === monthStart.getMonth();
-                      const dayEvents = inMonth ? monthEventsByDay.get(dayKey) ?? [] : [];
+                      const dayBucket = inMonth ? monthDayBuckets.get(dayKey) : undefined;
+                      const dayEventCount = dayBucket?.eventCount ?? 0;
+                      const visibleEvents = dayBucket?.previewEvents ?? [];
                       const isSelected = dayKey === selectedDayKey;
                       const isToday = dayKey === todayKey;
                       const isWeekendColumn = index % 7 >= 5;
-                      const visibleEvents = dayEvents.slice(0, 3);
 
                       return (
                         <Link prefetch={false}
@@ -1175,9 +1232,9 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                               {day.getDate()}
                             </span>
 
-                            {dayEvents.length > 0 ? (
+                            {dayEventCount > 0 ? (
                               <span className="rounded-full bg-background/80 px-2 py-1 text-[10px] font-semibold text-muted-foreground ring-1 ring-border/70">
-                                {dayEvents.length}
+                                {dayEventCount}
                               </span>
                             ) : null}
                           </div>
@@ -1208,9 +1265,9 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                                 </div>
                               );
                             })}
-                            {dayEvents.length > visibleEvents.length ? (
+                            {dayEventCount > visibleEvents.length ? (
                               <p className="px-1 pt-0.5 text-[10px] font-semibold text-primary">
-                                View {dayEvents.length - visibleEvents.length} more
+                                View {dayEventCount - visibleEvents.length} more
                               </p>
                             ) : null}
                           </div>

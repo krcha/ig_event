@@ -20,6 +20,7 @@ const checks = [
   { script: "qa:public-performance", timeoutMs: 60_000 },
   { script: "qa:mobile-calendar", timeoutMs: 60_000 },
   { script: "qa:app-toolbar", timeoutMs: 60_000 },
+  { script: "qa:discover-feed", timeoutMs: 60_000 },
   { script: "qa:apify", timeoutMs: 60_000 },
   { script: "qa:follow-discovery", timeoutMs: 60_000 },
   { script: "qa:convex-retention-cron", timeoutMs: 60_000 },

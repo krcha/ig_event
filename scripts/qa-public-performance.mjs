@@ -151,8 +151,33 @@ assert.match(
 );
 assert.match(
   browsePageSource,
-  /visibleSelectedDayEvents\.slice\(0, DEFAULT_SELECTED_DAY_AGENDA_LIMIT\)/,
-  "Selected-day agenda should slice the default preview instead of serializing every event card.",
+  /const CALENDAR_DAY_PREVIEW_LIMIT = 3;/,
+  "Month grid days should keep only a tiny preview instead of storing full day lists.",
+);
+assertDoesNotInclude(
+  browsePageSource,
+  "const filteredEvents =",
+  "Calendar page should not copy the whole selected month into a filtered event array.",
+);
+assertDoesNotInclude(
+  browsePageSource,
+  "const monthEvents =",
+  "Calendar page should not keep a whole-month event list in memory.",
+);
+assertDoesNotInclude(
+  browsePageSource,
+  "const monthEventSummaries =",
+  "Calendar page should not materialize summaries for every event in the selected month.",
+);
+assert.match(
+  browsePageSource,
+  /selectedDayAgendaEvents\.length < DEFAULT_SELECTED_DAY_AGENDA_LIMIT/,
+  "Selected-day agenda should cap collected event cards instead of serializing every matching event.",
+);
+assert.match(
+  browsePageSource,
+  /dayBucket\.previewEvents\.length < CALENDAR_DAY_PREVIEW_LIMIT/,
+  "Month grid day buckets should cap preview events while retaining day counts.",
 );
 assert.ok(
   (browsePageSource.match(/prefetch=\{false\}/g) ?? []).length >= 12,

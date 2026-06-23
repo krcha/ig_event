@@ -7,6 +7,7 @@ import {
   loadUpcomingApprovedEvents,
   type PublicEvent,
 } from "@/lib/events/public-events";
+import { enrichDiscoverEventsWithApifyPosts } from "@/lib/discover/apify-posts";
 
 export const revalidate = 60;
 
@@ -63,10 +64,10 @@ function mapPublicEvent(event: PublicEvent): DiscoverFeedEvent {
     _id: event._id,
     artists: event.artists,
     date: event.date,
-    ...(event.description ? { description: event.description } : {}),
     eventType: event.eventType,
     ...(event.imageUrl ? { imageUrl: event.imageUrl } : {}),
     ...(event.instagramHandle ? { instagramHandle: event.instagramHandle } : {}),
+    ...(event.instagramPostId ? { instagramPostId: event.instagramPostId } : {}),
     ...(event.instagramPostUrl ? { instagramPostUrl: event.instagramPostUrl } : {}),
     ...(event.sourceCaption ? { sourceCaption: event.sourceCaption } : {}),
     ...(event.sourcePostedAt ? { sourcePostedAt: event.sourcePostedAt } : {}),
@@ -87,11 +88,13 @@ async function loadDiscoverEvents(date: string): Promise<{
     fromDate: date,
   });
 
+  const events = result.events
+    .filter((event) => event.date === date)
+    .map(mapPublicEvent);
+
   return {
     ...(result.error ? { error: result.error } : {}),
-    events: result.events
-      .filter((event) => event.date === date)
-      .map(mapPublicEvent),
+    events: await enrichDiscoverEventsWithApifyPosts(events),
   };
 }
 
