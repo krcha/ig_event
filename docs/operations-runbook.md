@@ -1,21 +1,40 @@
 # Operations Runbook
 
-This runbook covers local setup, Convex deployment, VPS/Docker deployment,
-cron replacement, QA, monitoring, rollback, and current operational blockers for
-the Instagram event aggregator.
+This runbook covers local setup, Convex deployment, optional self-hosted Convex,
+VPS/Docker deployment, cron replacement, QA, monitoring, rollback, and current
+operational blockers for the Instagram event aggregator.
 
 Checked against this repo on 2026-06-05.
 
 ## Service Shape
 
-Run the Next.js web app as one Docker container. Keep Convex, Clerk, OpenAI, and
-Apify managed services.
+Two Convex modes are supported:
+
+1. **Hosted Convex Cloud** - run only the Next.js web container on the VPS.
+2. **Self-hosted Convex** - run the web app plus `convex-backend` and
+   `convex-dashboard` services in the same Docker Compose project using
+   `docker-compose.self-hosted-convex.yml`.
+
+Clerk, OpenAI, and Apify remain managed services in both modes.
+
+Hosted Convex shape:
 
 ```text
 internet
   -> reverse proxy with TLS on the VPS
   -> Docker web container on 127.0.0.1:3000
   -> hosted Convex, Clerk, OpenAI, and Apify over HTTPS
+```
+
+Self-hosted Convex shape:
+
+```text
+internet
+  -> reverse proxy with TLS on the VPS
+  -> events host -> Docker web container :3000
+  -> Convex host -> convex-backend container :3210
+operator only
+  -> SSH tunnel 127.0.0.1:6791 -> convex-dashboard container :6791
 ```
 
 The app exposes:
@@ -41,6 +60,10 @@ If Convex is not connected locally yet:
 npx convex dev
 npm run convex:codegen
 ```
+
+For self-hosted Convex development against the Compose backend, see
+`docs/self-hosted-convex.md`; the browser-facing `NEXT_PUBLIC_CONVEX_URL` must be
+reachable from the browser, not just from Docker.
 
 Local checks:
 
@@ -76,6 +99,10 @@ NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/admin
 NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/admin
 NEXT_PUBLIC_CONVEX_URL=
 CONVEX_DEPLOYMENT=
+CONVEX_SELF_HOSTED_URL=
+CONVEX_SELF_HOSTED_ADMIN_KEY=
+CONVEX_CLOUD_ORIGIN=
+CONVEX_TRAEFIK_HOST=convex-events.ineedtofeedmyrabbit.com
 ADMIN_CLERK_USER_IDS=
 OPENAI_API_KEY=
 APIFY_API_TOKEN=
@@ -92,7 +119,9 @@ Notes:
 
 - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `NEXT_PUBLIC_CONVEX_URL` are public
   build-time values. Build the Docker image with the same public values used in
-  production.
+  production. For self-hosted Convex, `NEXT_PUBLIC_CONVEX_URL` must be the public
+  backend URL reachable from users' browsers, usually the Traefik HTTPS host for
+  `convex-backend`.
 - `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, and the
   fallback redirect URLs keep Clerk redirects on the app's custom auth pages and
   return successful admin sign-ins to `/admin`.
@@ -113,6 +142,8 @@ Notes:
   cost control.
 - `CONVEX_DEPLOY_KEY` is a deploy-time secret only. Do not put it in the VPS
   runtime env unless that host is also responsible for deploying Convex.
+- `CONVEX_SELF_HOSTED_ADMIN_KEY` is the equivalent deploy/import secret for the
+  self-hosted backend. Keep it in a private env file only.
 
 ## Convex Deploy and Codegen
 
@@ -140,6 +171,38 @@ CONVEX_DEPLOY_KEY=<deploy-key> npx convex deploy -y --typecheck disable --codege
 After Convex deployment, confirm production `.env.production` has the matching
 `NEXT_PUBLIC_CONVEX_URL` and `CONVEX_DEPLOYMENT`.
 
+Self-hosted Convex deploy:
+
+```bash
+# Start backend/dashboard with the web app in one Compose project.
+docker compose --env-file .env.production \
+  -f docker-compose.yml \
+  -f docker-compose.self-hosted-convex.yml \
+  up -d --build
+
+# Generate an admin key once, then add it to .env.production privately.
+docker compose --env-file .env.production \
+  -f docker-compose.yml \
+  -f docker-compose.self-hosted-convex.yml \
+  exec convex-backend ./generate_admin_key.sh
+
+# Deploy functions to the self-hosted backend.
+npm run convex:codegen
+npx convex deploy -y --typecheck disable --codegen enable --env-file .env.production
+```
+
+For cloud-to-self-hosted migration, export cloud production before switching the
+app URL, then import into the self-hosted backend:
+
+```bash
+mkdir -p backups
+npx convex export --prod --path backups/convex-cloud-prod-$(date +%Y%m%d-%H%M%S).zip
+npx convex import --replace-all --yes --env-file .env.production backups/convex-cloud-prod-YYYYmmdd-HHMMSS.zip
+```
+
+See `docs/self-hosted-convex.md` for DNS, dashboard, backup, upgrade, and
+rollback details.
+
 Convex also has an internal weekly cron in `convex/crons.ts` for deleting
 expired events older than the 3-day retention grace period. It runs Wednesday at
 05:00 UTC and calls a maintenance action that deletes bounded batches until the
@@ -148,9 +211,10 @@ web app ingestion cron below.
 
 ## Docker and VPS Deployment
 
-The repo includes `Dockerfile`, `.dockerignore`, and `docker-compose.yml`. The
-image runs `npm run build` during the Docker build and starts with
-`npm run start`.
+The repo includes `Dockerfile`, `.dockerignore`, `docker-compose.yml`,
+`docker-compose.runtime.yml`, and optional `docker-compose.self-hosted-convex.yml`.
+The image runs `npm run lint`, `npm run typecheck`, and `npm run build` during
+the Docker build, then starts with `npm run start`.
 
 Recommended host layout:
 
@@ -177,7 +241,7 @@ sudo ufw allow 443/tcp
 sudo ufw enable
 ```
 
-Deploy or update:
+Deploy or update hosted-Convex web app only:
 
 ```bash
 cd /opt/ig_event/app
@@ -185,6 +249,19 @@ git fetch origin
 git checkout main
 git pull --ff-only
 docker compose --env-file /opt/ig_event/.env.production up -d --build
+```
+
+Deploy or update web app plus self-hosted Convex:
+
+```bash
+cd /opt/ig_event/app
+git fetch origin
+git checkout main
+git pull --ff-only
+docker compose --env-file /opt/ig_event/.env.production \
+  -f docker-compose.yml \
+  -f docker-compose.self-hosted-convex.yml \
+  up -d --build
 ```
 
 The Compose default binds the container to `127.0.0.1:3000`. Put Caddy or nginx
@@ -252,6 +329,7 @@ npm run qa:automerge
 npm run qa:extraction
 npm run qa:convex-retention-cron
 npm run qa:clerk-instagram-sso
+npm run qa:self-hosted-convex-compose
 npm run convex:codegen
 ```
 
@@ -263,6 +341,14 @@ docker compose --env-file /opt/ig_event/.env.production logs --tail 100 web
 curl -fsS http://127.0.0.1:3000/api/health
 curl -fsS -I http://127.0.0.1:3000/events
 curl -fsS -I https://events.example.com/events
+
+# If using self-hosted Convex overlay:
+docker compose --env-file /opt/ig_event/.env.production \
+  -f docker-compose.yml \
+  -f docker-compose.self-hosted-convex.yml \
+  ps
+curl -fsS http://127.0.0.1:3210/version
+curl -fsS -I https://convex-events.ineedtofeedmyrabbit.com/version
 ```
 
 Behavioral smoke test:
@@ -271,7 +357,8 @@ Behavioral smoke test:
 - `/calendar` loads.
 - Clerk sign-in works on the production domain.
 - Admin pages are visible only to `ADMIN_CLERK_USER_IDS`.
-- Manual admin scrape reaches Apify and writes to Convex.
+- Manual admin scrape reaches Apify and writes to the selected Convex backend
+  (Convex Cloud or self-hosted).
 - `GET /api/cron/ingest-venues` succeeds with
   `Authorization: Bearer <CRON_SECRET>`.
 
@@ -284,7 +371,8 @@ Minimum monitoring:
 - Docker health status from `docker compose ps`.
 - Web logs from `docker compose logs --tail 200 web`.
 - Cron logs from syslog or systemd timer logs.
-- Convex dashboard for function errors, ingestion job writes, and data shape.
+- Convex dashboard for function errors, ingestion job writes, and data shape
+  (Convex Cloud dashboard or SSH-tunneled self-hosted dashboard on 127.0.0.1:6791).
 - Apify dashboard for actor failures, rate limits, and run cost.
 - OpenAI dashboard for model usage and spend.
 - Clerk dashboard for auth errors and production domain configuration.
@@ -357,8 +445,9 @@ Convex. Avoid re-running full ingestion until the rollback is confirmed.
 
 - `npm run qa:release` includes `npm run build`; a build failure or timeout is a
   release blocker.
-- The Docker build also runs `npm run build`, so verify image builds with the
-  same public env values used in production.
+- The Docker build also runs `npm run lint`, `npm run typecheck`, and
+  `npm run build`, so verify image builds with the same public env values used in
+  production.
 - Vercel Cron does not run after moving the app to a VPS. Host cron or a systemd
   timer must be installed before relying on scheduled ingestion.
 - Build-time public env values must match production runtime values. Rebuild the
@@ -366,6 +455,8 @@ Convex. Avoid re-running full ingestion until the rollback is confirmed.
   changes.
 - Production admin routes fail closed if Clerk env vars are missing. This is
   expected and safer than exposing admin APIs.
-- Do not self-host Convex, Clerk, OpenAI, or Apify in the first VPS phase unless
-  there is a separate migration plan for backups, auth, scraping, and model
-  operations.
+- Self-hosted Convex removes Convex Cloud quotas but adds VPS storage, backup,
+  upgrade, and monitoring responsibilities. Do not expose the self-hosted
+  dashboard publicly without VPN/Tailscale or reverse-proxy auth.
+- Replacing Convex with another database is still a separate migration and not
+  part of the self-hosted Convex overlay.

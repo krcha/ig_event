@@ -1,16 +1,18 @@
 # Cheapest VPS Self-Hosting Path
 
-This path self-hosts only the Next.js web app on a small VPS. Keep Convex, Clerk,
-OpenAI, and Apify hosted for the first migration. That gives the project a cheap
-fixed app-hosting bill without taking on database, auth, scraping, or model
-infrastructure operations.
+This path originally self-hosted only the Next.js web app on a small VPS. The
+repo now also includes an optional self-hosted Convex overlay for running Convex
+on the same VPS/Compose project. Clerk, OpenAI, and Apify stay hosted for this
+migration; replacing those services remains separate work.
 
 Checked against this repo on 2026-06-05:
 
-- The app is a standard Next.js 14 app with `npm run build` and `npm run start`.
-- The in-repo deployment path is intentionally one web container using
-  `next start`. A smaller image using Next standalone output is deferred because
-  it requires a `next.config.mjs` change and more production verification.
+- The app is a standard Next.js 14 app with `npm run build` and `npm run start`;
+  Docker image builds also run `npm run lint` and `npm run typecheck` before the
+  production build.
+- The in-repo deployment path has two modes: a one-container web-only path, and
+  a self-hosted Convex overlay that adds backend/dashboard containers while
+  keeping the app on Convex APIs.
 - `vercel.json` configures Vercel Cron for `/api/cron/ingest-venues`; on a VPS,
   replace that with host cron or a systemd timer.
 - Runtime configuration comes from `.env.example`. Do not bake secrets into the
@@ -24,16 +26,31 @@ Checked against this repo on 2026-06-05:
 
 ## Recommended Shape
 
-Use the existing VPS, Docker Compose for the Next app, Caddy or nginx for TLS,
-and host cron for ingestion. Do not self-host Convex, Clerk, OpenAI, or Apify in
-this phase.
+Start with the existing VPS, Docker Compose for the Next app, Caddy/nginx/Traefik
+for TLS, and host cron for ingestion. If Convex Cloud quotas/costs are the issue,
+add the self-hosted Convex overlay rather than rewriting the data layer.
+
+Hosted Convex path:
 
 ```text
 internet
-  -> Caddy/nginx on VPS :443
+  -> Caddy/nginx/Traefik on VPS :443
   -> Docker container on 127.0.0.1:3000
   -> hosted Convex, Clerk, OpenAI, and Apify over HTTPS
 ```
+
+Self-hosted Convex path:
+
+```text
+internet
+  -> Caddy/nginx/Traefik on VPS :443
+  -> events host -> web container :3000
+  -> convex host -> convex-backend container :3210
+operator SSH tunnel
+  -> 127.0.0.1:6791 -> convex-dashboard container :6791
+```
+
+Use `docs/self-hosted-convex.md` for the full migration and backup procedure.
 
 ## Financial Tradeoffs
 
@@ -60,7 +77,7 @@ At current small scale, optimize for low fixed cost and controlled usage:
 | Cost center | Cheapest practical choice | Financial note |
 | --- | --- | --- |
 | Web hosting | Existing VPS | Incremental cost is $0 if the VPS already has spare RAM/CPU. |
-| Convex | Hosted Free/Starter | Free tier covers early usage; self-hosting adds backup and database operations before it saves meaningful money. |
+| Convex | Hosted Free/Starter, or self-hosted Convex if cloud quota/cost is the actual blocker | Self-hosting removes Convex Cloud quotas but makes VPS storage, backups, upgrades, and dashboard security your responsibility. |
 | Clerk | Hobby | Free up to the current Hobby limits; keep admin-only usage tiny. |
 | OpenAI | Explicitly set `OPENAI_VISION_MODEL=gpt-4.1-mini` and `OPENAI_REVIEW_MODEL=gpt-4.1-mini` | Usage-based; cap spend in the OpenAI dashboard and avoid reprocessing old posts. |
 | Apify | Free plan first | The first real cost pressure is scraping volume. Keep cron daily or manual until you see demand. |
@@ -76,7 +93,8 @@ Current vendor pages to re-check before a production launch:
 Practical monthly target:
 
 - If you already own the VPS: $0 fixed app-hosting cost, with variable OpenAI and
-  Apify usage.
+  Apify usage. Self-hosted Convex may also be $0 incremental cash cost if the VPS
+  has spare RAM/disk, but it adds operational work.
 - If you buy a new VPS: roughly the smallest reliable VPS bill plus variable
   OpenAI and Apify usage.
 - Do not migrate Convex or Clerk off managed services until their bill is larger
@@ -89,12 +107,10 @@ Next.js inside it is more likely to fail or swap. If the only goal is the
 absolute minimum bill, build the image elsewhere and run the smaller VPS only as
 a container host.
 
-## Hosted Services to Keep
+## Hosted Services to Keep Or Move
 
-Keep these outside the VPS:
+Keep these outside the VPS in both paths:
 
-- Convex: hosted database/functions. The Next app only needs
-  `NEXT_PUBLIC_CONVEX_URL` at runtime.
 - Clerk: hosted auth. Configure the production domain and redirect URLs in
   Clerk, then provide the publishable and secret keys to the VPS runtime.
   Keep the app env redirect URLs pointed at `/sign-in`, `/sign-up`, and the
@@ -102,9 +118,17 @@ Keep these outside the VPS:
 - OpenAI: hosted model API. The app calls it during extraction/review flows.
 - Apify: hosted Instagram scraping actor. The app calls Apify from API routes.
 
+Convex has two supported modes:
+
+- Hosted Convex Cloud: set `NEXT_PUBLIC_CONVEX_URL` to the cloud deployment URL
+  and deploy functions with `CONVEX_DEPLOY_KEY`.
+- Self-hosted Convex: run `docker-compose.self-hosted-convex.yml`, set
+  `NEXT_PUBLIC_CONVEX_URL` to the public self-hosted backend URL, and deploy
+  functions with `CONVEX_SELF_HOSTED_URL` plus `CONVEX_SELF_HOSTED_ADMIN_KEY`.
+
 Do not put `CONVEX_DEPLOY_KEYS` in the VPS runtime env unless a deploy process
-on that server truly needs it. A running Next app should not need Convex deploy
-keys.
+on that server truly needs it. A running Next app should not need cloud Convex
+deploy keys. Do not commit `CONVEX_SELF_HOSTED_ADMIN_KEY`.
 
 ## VPS Bootstrap
 
@@ -156,6 +180,10 @@ NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/admin
 NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/admin
 NEXT_PUBLIC_CONVEX_URL=
 CONVEX_DEPLOYMENT=
+CONVEX_SELF_HOSTED_URL=
+CONVEX_SELF_HOSTED_ADMIN_KEY=
+CONVEX_CLOUD_ORIGIN=
+CONVEX_TRAEFIK_HOST=convex-events.ineedtofeedmyrabbit.com
 ADMIN_CLERK_USER_IDS=
 OPENAI_API_KEY=
 APIFY_API_TOKEN=
@@ -177,8 +205,9 @@ allows unauthenticated calls for local convenience.
 ## Container Deployment
 
 The repo includes a production [Dockerfile](../Dockerfile), [.dockerignore](../.dockerignore),
-[docker-compose.yml](../docker-compose.yml), and a health endpoint at
-`/api/health`.
+[docker-compose.yml](../docker-compose.yml), optional
+[docker-compose.self-hosted-convex.yml](../docker-compose.self-hosted-convex.yml),
+and a health endpoint at `/api/health`.
 
 Because Compose uses the shell environment or an explicit env file for
 interpolation, pass `.env.production` when building:
@@ -195,10 +224,21 @@ absolute path:
 docker compose --env-file /opt/ig_event/.env.production up -d --build
 ```
 
-The default compose binding is `127.0.0.1:3000`, so expose the app through a
-reverse proxy rather than directly to the internet.
+For self-hosted Convex, add the overlay:
 
-Deploy or update:
+```bash
+docker compose --env-file /opt/ig_event/.env.production \
+  -f docker-compose.yml \
+  -f docker-compose.self-hosted-convex.yml \
+  up -d --build
+```
+
+The default compose binding is `127.0.0.1:3000`, so expose the app through a
+reverse proxy rather than directly to the internet. The self-hosted Convex
+backend also binds host ports to `127.0.0.1` by default and is exposed publicly
+through its Traefik host label.
+
+Deploy or update hosted-Convex web app only:
 
 ```bash
 cd /opt/ig_event/app
@@ -208,6 +248,19 @@ git pull --ff-only
 docker compose --env-file /opt/ig_event/.env.production up -d --build
 ```
 
+Deploy or update web app plus self-hosted Convex:
+
+```bash
+cd /opt/ig_event/app
+git fetch origin
+git checkout main
+git pull --ff-only
+docker compose --env-file /opt/ig_event/.env.production \
+  -f docker-compose.yml \
+  -f docker-compose.self-hosted-convex.yml \
+  up -d --build
+```
+
 ## Reverse Proxy
 
 With Caddy, the site block can stay this small:
@@ -215,6 +268,11 @@ With Caddy, the site block can stay this small:
 ```caddyfile
 events.example.com {
   reverse_proxy 127.0.0.1:3000
+}
+
+# Only if not using the provided Traefik labels for self-hosted Convex.
+convex-events.example.com {
+  reverse_proxy 127.0.0.1:3210
 }
 ```
 
@@ -254,6 +312,14 @@ docker compose --env-file /opt/ig_event/.env.production logs --tail 100 web
 curl -fsS http://127.0.0.1:3000/api/health
 curl -fsS -I http://127.0.0.1:3000/events
 curl -fsS -I https://events.example.com/events
+
+# If using the self-hosted Convex overlay:
+docker compose --env-file /opt/ig_event/.env.production \
+  -f docker-compose.yml \
+  -f docker-compose.self-hosted-convex.yml \
+  ps
+curl -fsS http://127.0.0.1:3210/version
+curl -fsS -I https://convex-events.example.com/version
 ```
 
 Then verify the app behavior:
@@ -261,7 +327,8 @@ Then verify the app behavior:
 - Public pages load at `/events` and `/calendar`.
 - Clerk sign-in works against the production domain.
 - Admin pages are visible only to `ADMIN_CLERK_USER_IDS`.
-- Manual admin scrape still reaches Apify and writes to hosted Convex.
+- Manual admin scrape still reaches Apify and writes to the selected Convex
+  backend.
 - The cron endpoint returns success when called with
   `Authorization: Bearer <CRON_SECRET>`.
 
@@ -270,17 +337,22 @@ Then verify the app behavior:
 - Patch the VPS monthly: `sudo apt update && sudo apt upgrade`.
 - Enable provider snapshots or backups before major changes.
 - Keep `.env.production` off git and out of Docker images.
-- Rotate `CRON_SECRET`, Clerk, Apify, and OpenAI keys if the server is rebuilt
-  from an untrusted state.
+- If using self-hosted Convex, export a Convex snapshot and/or back up the
+  `convex-data` volume before upgrades or imports.
+- Rotate `CRON_SECRET`, Clerk, Apify, OpenAI, and Convex deploy/admin keys if the
+  server is rebuilt from an untrusted state.
 - Add a basic uptime check for `https://events.example.com/events`.
+- For self-hosted Convex, add an internal/backend health check for
+  `http://127.0.0.1:3210/version` and avoid exposing the dashboard without VPN or
+  reverse-proxy auth.
 - Keep one rollback path: previous git commit plus
   `docker compose --env-file /opt/ig_event/.env.production up -d --build`.
 
 ## Future Complexity to Defer
 
-Avoid these until the single-container VPS path is stable:
+Avoid these until the web + Convex Compose path is stable:
 
-- Self-hosting Convex or replacing it with another database.
+- Replacing Convex with Postgres/SQLite or another database.
 - Moving Clerk auth into the app.
 - Running Apify alternatives on the VPS.
 - Running local LLM or vision inference.

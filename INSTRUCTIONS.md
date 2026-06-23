@@ -8,8 +8,8 @@ without the original conversation.
 
 1. Run `git status --short` and read the dirty/untracked files before editing.
 2. Read `README.md`, `DEVELOPMENT_PLAN.md`, `docs/ai-handoff.md`,
-   `docs/architecture.md`, `docs/operations-runbook.md`, and
-   `docs/vps-self-hosting.md`.
+   `docs/architecture.md`, `docs/operations-runbook.md`,
+   `docs/vps-self-hosting.md`, and `docs/self-hosted-convex.md`.
 3. Inspect `package.json`, `.env.example`, `.env.production.example`, and
    `convex/schema.ts`.
 4. Run `npm run qa:release` before broad changes if dependencies are installed.
@@ -33,13 +33,17 @@ Default product stance:
 
 Do not replace these services without a separate explicit migration plan:
 
-- Convex: data, functions, generated types, ingestion jobs, scheduled cleanup.
+- Convex API/data model: data, functions, generated types, ingestion jobs, and
+  scheduled cleanup. Convex may be hosted in Convex Cloud or self-hosted through
+  `docker-compose.self-hosted-convex.yml`.
 - Clerk: authentication and admin route protection.
 - OpenAI: event extraction and approved-event review.
 - Apify: Instagram scraping.
 
-Current cheapest deployment strategy is to self-host only the Next.js web app in
-Docker and keep the services above managed.
+Current deployment strategy supports the existing managed-Convex path and an
+optional self-hosted Convex path on the same VPS/Compose project. Replacing
+Convex with another database, or replacing Clerk/OpenAI/Apify, still requires a
+separate migration plan.
 
 ## Code Guardrails
 
@@ -140,7 +144,9 @@ docker compose --env-file .env.production.example config
 - `next build` is part of the normal release gate. If it fails or times out,
   fix the build before handoff or production rollout.
 - Apify and OpenAI are the primary variable cost centers.
-- Replacing Convex with Postgres/SQLite is a large data-layer rewrite.
+- Self-hosted Convex removes Convex Cloud quotas but adds VPS storage, backup,
+  upgrade, dashboard-security, and monitoring responsibilities.
+- Replacing Convex with Postgres/SQLite is still a large data-layer rewrite.
 - Replacing Apify with browser automation is possible only if it preserves the
   scraper output contract; it may be fragile and should start behind a feature
   flag with Apify fallback.

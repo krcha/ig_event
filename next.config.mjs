@@ -1,5 +1,15 @@
 /** @type {import("next").NextConfig} */
 const nextConfig = {
+  // Release checks and Docker builds run `npm run lint` and `npm run typecheck`
+  // explicitly before `next build`. Skipping Next's duplicate internal checks
+  // prevents production builds from hanging in the post-compile validation phase
+  // while preserving the same lint/type gates in CI and image builds.
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
+  typescript: {
+    ignoreBuildErrors: true,
+  },
   webpack(config, { dev }) {
     if (!dev) {
       // The local filesystem cache can hang or time out during production builds.

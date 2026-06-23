@@ -23,9 +23,10 @@ this order:
 6. [docs/vps-self-hosting.md](docs/vps-self-hosting.md) - cheapest VPS path and
    financial tradeoffs.
 
-Current recommendation: self-host only the Next.js web app on the existing VPS
-if desired, while keeping Convex, Clerk, OpenAI, and Apify managed. Do not
-replace services unless a later plan explicitly chooses that tradeoff.
+Current deployment supports two Convex modes: hosted Convex Cloud, or
+self-hosted Convex running on the same VPS/Compose project as the Next.js app.
+Clerk, OpenAI, and Apify remain managed services unless a separate migration plan
+explicitly replaces them.
 
 ## What The App Does
 
@@ -42,7 +43,8 @@ replace services unless a later plan explicitly chooses that tradeoff.
 
 - Next.js 14 App Router + React 18 + TypeScript
 - Tailwind CSS
-- Convex for data, functions, generated types, and scheduled cleanup
+- Convex for data, functions, generated types, and scheduled cleanup (hosted
+  Convex Cloud or self-hosted Convex via Docker Compose overlay)
 - Clerk for admin authentication
 - OpenAI Responses API for extraction and approved-event review
 - Apify Instagram actor for scraping
@@ -53,14 +55,16 @@ replace services unless a later plan explicitly chooses that tradeoff.
 ```text
 Public user/admin browser
   -> Next.js app routes and API routes
-  -> Convex hosted backend for events, venues, users, scraped posts, jobs
+  -> Convex backend for events, venues, users, scraped posts, jobs
+     (Convex Cloud or self-hosted convex-backend container)
   -> Apify for Instagram post scraping
   -> OpenAI for structured event extraction and duplicate review
   -> Clerk for authentication
 ```
 
-The app has intentionally not replaced Convex, Clerk, OpenAI, or Apify. Docker
-support only moves the Next.js web process onto a VPS.
+Docker support can run only the Next.js web process, or it can run the web app
+plus self-hosted Convex using `docker-compose.self-hosted-convex.yml`. The
+self-hosted Convex path still keeps Clerk, OpenAI, and Apify managed.
 
 ## Local Setup
 
@@ -70,10 +74,14 @@ cp .env.example .env.local
 npm run dev
 ```
 
-If Convex is not connected yet, run:
+If Convex is not connected yet, run one of the following:
 
 ```bash
+# Cloud or local development deployment
 npx convex dev
+
+# Self-hosted backend in the same Docker Compose project as the app
+npx convex deploy -y --typecheck disable --codegen enable --env-file .env.production
 ```
 
 Then generate Convex types:
@@ -96,6 +104,10 @@ NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/admin
 NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/admin
 NEXT_PUBLIC_CONVEX_URL=
 CONVEX_DEPLOYMENT=
+CONVEX_SELF_HOSTED_URL=
+CONVEX_SELF_HOSTED_ADMIN_KEY=
+CONVEX_CLOUD_ORIGIN=
+CONVEX_TRAEFIK_HOST=convex-events.ineedtofeedmyrabbit.com
 ADMIN_CLERK_USER_IDS=
 OPENAI_API_KEY=
 APIFY_API_TOKEN=
@@ -116,6 +128,9 @@ Notes:
 
 - `NEXT_PUBLIC_CONVEX_URL` and `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` are public
   build-time values for browser bundles. Rebuild Docker images if they change.
+  For self-hosted Convex, `NEXT_PUBLIC_CONVEX_URL` must be the public HTTPS
+  backend URL reachable by browsers, not Docker DNS such as
+  `http://convex-backend:3210`.
 - `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, and the
   fallback redirect URLs point Clerk at the in-app `/sign-in` and `/sign-up`
   pages and send successful admin sign-ins back to `/admin`.
@@ -136,7 +151,11 @@ Notes:
 - Local development can run without Clerk keys. In production, `/admin` and
   `/api/admin/*` fail closed unless both Clerk keys are configured.
 - Do not put deploy-only secrets such as `CONVEX_DEPLOY_KEYS` into the runtime
-  env unless the server is actually deploying Convex.
+  env unless the server is actually deploying Convex. For the self-hosted path,
+  `CONVEX_SELF_HOSTED_ADMIN_KEY` is also a deploy/import secret and must stay out
+  of git.
+- Full self-hosted Convex operations live in
+  [docs/self-hosted-convex.md](docs/self-hosted-convex.md).
 
 ## Useful Scripts
 
@@ -151,6 +170,7 @@ npm run qa:automerge
 npm run qa:extraction
 npm run qa:clerk-instagram-sso
 npm run qa:release
+npm run qa:self-hosted-convex-compose
 npm run convex:codegen
 ```
 
@@ -184,7 +204,10 @@ Deployment:
 1. Hosted/Vercel deployment can use `vercel.json` cron.
 2. VPS deployment runs the Next app in Docker and replaces Vercel Cron with host
    cron or systemd timers.
-3. Convex functions still deploy separately through Convex tooling.
+3. Convex can stay on Convex Cloud, or run self-hosted in the same Compose stack
+   with `docker-compose.self-hosted-convex.yml`.
+4. Convex functions still deploy separately through Convex tooling, targeting
+   either the cloud deployment or `CONVEX_SELF_HOSTED_URL`.
 
 ## Repository Map
 
@@ -211,6 +234,8 @@ Completed stabilization work includes:
   behavior.
 - Production admin routes fail closed when Clerk is missing.
 - Docker/Compose health-check deployment path for the web app.
+- Optional self-hosted Convex Compose overlay and runbook for moving Convex off
+  Convex Cloud while keeping the Convex API/data model.
 - GitHub Actions release gate via `npm run qa:release`, including `next build`.
 
 Remaining high-priority follow-up:
@@ -226,8 +251,9 @@ For another AI, use:
 ```text
 You are taking over the Ig Event repo. Read README.md, INSTRUCTIONS.md,
 DEVELOPMENT_PLAN.md, docs/ai-handoff.md, docs/architecture.md,
-docs/operations-runbook.md, and docs/vps-self-hosting.md first. Do not replace
-Convex, Clerk, OpenAI, or Apify unless explicitly asked. Preserve existing
-behavior, run npm run qa:release after changes, and treat any next build failure
-or timeout as a release blocker.
+docs/operations-runbook.md, docs/vps-self-hosting.md, and
+docs/self-hosted-convex.md first. Convex can run hosted or self-hosted through
+the Compose overlay; do not replace Clerk, OpenAI, or Apify unless explicitly
+asked. Preserve behavior, run npm run qa:release after changes, and treat any
+next build failure or timeout as a release blocker.
 ```

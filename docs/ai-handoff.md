@@ -53,8 +53,12 @@ Known current follow-up:
 Important env vars:
 
 - `NEXT_PUBLIC_CONVEX_URL`: required for Next server routes and public pages to
-  read/write Convex.
-- `CONVEX_DEPLOYMENT`: used by Convex tooling.
+  read/write Convex. For self-hosted Convex this must be the public HTTPS backend
+  URL reachable by browsers, not Docker DNS.
+- `CONVEX_DEPLOYMENT`: used by Convex Cloud tooling. Leave blank for
+  self-hosted deploy/import env files.
+- `CONVEX_SELF_HOSTED_URL` and `CONVEX_SELF_HOSTED_ADMIN_KEY`: used by the
+  Convex CLI when targeting the self-hosted backend.
 - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY`: enable Clerk
   auth. Production admin routes fail closed if Clerk is not configured.
 - `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, and Clerk
@@ -195,10 +199,13 @@ Vercel or VPS:
   `/usr/local/sbin/ig-event-cron-runner`.
 - `/etc/ig_event/cron.env` stores `APP_ORIGIN` and `CRON_SECRET` with mode
   `0600`; cron output goes to `/var/log/ig_event/cron.log`.
-- `docs/vps-self-hosting.md` describes the self-hosted Next container path while
-  keeping Convex, Clerk, OpenAI, and Apify managed.
-- `Dockerfile`, `docker-compose.yml`, and `/api/health` support containerized
-  deployment.
+- `docs/vps-self-hosting.md` describes the VPS deployment path.
+- `docs/self-hosted-convex.md` describes running Convex in the same Compose
+  project as the app, including admin key generation, cloud export/import,
+  dashboard tunneling, backups, and rollback.
+- `Dockerfile`, `docker-compose.yml`, `docker-compose.runtime.yml`,
+  `docker-compose.self-hosted-convex.yml`, and `/api/health` support
+  containerized deployment.
 
 ## Key Workflows
 
@@ -353,6 +360,8 @@ Use these scripts:
   automerge QA, extraction QA, venue taxonomy QA, public search QA, Apify
   cost-control QA, follow-discovery QA, Convex retention-cron QA, and Clerk
   Instagram SSO QA with timeouts.
+- `npm run qa:self-hosted-convex-compose`: validates the Docker Compose overlay
+  for the web app plus self-hosted Convex backend/dashboard.
 - `npm run convex:codegen`: refresh Convex generated types.
 
 GitHub Actions:
@@ -380,6 +389,8 @@ External quotas and costs:
 
 - Apify and OpenAI are called from route handlers. Quota/rate/cost failures must
   show clearly in ingestion summaries.
+- Self-hosting Convex removes Convex Cloud quotas but makes VPS disk, backups,
+  upgrades, dashboard access, and monitoring operational responsibilities.
 - Set OpenAI model env vars explicitly; code fallbacks may not match the desired
   cost profile.
 
@@ -495,8 +506,10 @@ Secrets:
 - Public pages: `lib/events/public-events.ts`,
   `app/(main)/events/page.tsx`, `app/(main)/calendar/page.tsx`.
 - Auth and env: `middleware.ts`, `lib/auth/admin.ts`, `lib/utils/env.ts`.
-- Release: `scripts/release-check.mjs`,
-  `.github/workflows/release-gates.yml`.
+- Release/deploy: `scripts/release-check.mjs`,
+  `.github/workflows/release-gates.yml`, `docker-compose.yml`,
+  `docker-compose.runtime.yml`, `docker-compose.self-hosted-convex.yml`,
+  `docs/self-hosted-convex.md`.
 
 ## Working Rules For The Next AI
 

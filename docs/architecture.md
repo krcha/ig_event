@@ -1,7 +1,9 @@
 # Architecture Overview
 
-Ig Event is a Next.js application backed by hosted Convex. It turns Instagram
-venue posts into reviewed public event listings.
+Ig Event is a Next.js application backed by Convex. Convex can stay hosted in
+Convex Cloud or run as a self-hosted backend in the same Docker Compose project
+as the app. The product turns Instagram venue posts into reviewed public event
+listings.
 
 ## Runtime Components
 
@@ -9,6 +11,7 @@ venue posts into reviewed public event listings.
 Browser
   -> Next.js App Router pages and API routes
   -> Convex queries/mutations for persistent data
+     (Convex Cloud or self-hosted convex-backend container)
   -> Clerk for auth
   -> Apify for Instagram scraping
   -> OpenAI Responses API for extraction/review
@@ -59,15 +62,20 @@ reassigns saved-event references before deleting duplicate records.
 
 ## Deployment Shape
 
-The low-complexity VPS path runs only the Next.js app in Docker. Convex, Clerk,
-OpenAI, and Apify stay managed. See `docs/vps-self-hosting.md` and
+The low-complexity VPS path runs only the Next.js app in Docker and keeps
+Convex Cloud managed. The self-hosted Convex path adds `convex-backend` and
+`convex-dashboard` services through `docker-compose.self-hosted-convex.yml` on
+the same Compose project/network. Clerk, OpenAI, and Apify remain managed in both
+paths. See `docs/vps-self-hosting.md`, `docs/self-hosted-convex.md`, and
 `docs/operations-runbook.md`.
 
 ## Extension Points
 
 - Scraper replacement: must preserve `InstagramScrapedPost[]` before entering
   ingestion. Keep Apify fallback until reliability is proven.
-- Database replacement: Convex is deeply integrated through schema, generated
-  types, queries, mutations, and crons. Plan as a separate migration.
+- Convex hosting: can be Convex Cloud or the self-hosted Compose overlay without
+  changing the app data API.
+- Database replacement: replacing Convex itself with Postgres/SQLite is still a
+  large data-layer rewrite. Plan it separately from self-hosting Convex.
 - Build/deploy hardening: keep `next build` in the release gate and verify
   Docker image builds with production public env values.

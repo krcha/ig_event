@@ -61,6 +61,17 @@ Goal: Make every release mechanically checkable.
 - Keep environment-dependent checks documented separately from code regressions.
 - Do not ship with failing deterministic QA.
 
+### 6. Self-Hosted Convex Operations
+
+Goal: Move Convex off Convex Cloud without rewriting the data layer.
+
+- Run Convex backend/dashboard as separate services in the same Docker Compose
+  project as the web app.
+- Keep `NEXT_PUBLIC_CONVEX_URL` public and browser-reachable.
+- Preserve Convex schema/functions/generated types and existing ingestion flows.
+- Document cloud export/import, admin key handling, backups, upgrades, and
+  rollback before production cutover.
+
 ## Immediate Stabilization Sprint
 
 1. Fix `qa:automerge` so fixtures use future dates relative to the run date.
@@ -79,6 +90,8 @@ Completed in this pass:
 - Updated admin scraper and duplicate-merge copy to match current behavior.
 - Made production admin routes fail closed when Clerk is not configured.
 - Added `qa:release` and a GitHub Actions release gate, including `next build`.
+- Added a self-hosted Convex Compose overlay and runbook so Convex can move to
+  the VPS without replacing the Convex API/data model.
 
 Known follow-up:
 

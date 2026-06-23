@@ -1,0 +1,82 @@
+# Optional Compose overlay: run self-hosted Convex in the same Docker Compose
+# project/network as the Ig Event web app.
+#
+# Use with either production image compose:
+#   docker compose --env-file .env.production \
+#     -f docker-compose.yml -f docker-compose.self-hosted-convex.yml up -d --build
+#
+# Or with the runtime/bind-mounted compose used on the VPS:
+#   docker compose --env-file .env.local \
+#     -f docker-compose.runtime.yml -f docker-compose.self-hosted-convex.yml up -d
+#
+# The browser-facing Convex URL must be public/reachable by users. For the live
+# Traefik path set NEXT_PUBLIC_CONVEX_URL and CONVEX_CLOUD_ORIGIN to something
+# like https://convex-events.ineedtofeedmyrabbit.com before building the web app.
+
+services:
+  convex-backend:
+    image: ghcr.io/get-convex/convex-backend:${CONVEX_SELF_HOSTED_IMAGE_TAG:-latest}
+    stop_grace_period: 10s
+    stop_signal: SIGINT
+    ports:
+      - "${CONVEX_BACKEND_BIND:-127.0.0.1}:${CONVEX_BACKEND_PORT:-3210}:3210"
+      - "${CONVEX_SITE_BIND:-127.0.0.1}:${CONVEX_SITE_PORT:-3211}:3211"
+    volumes:
+      - convex-data:/convex/data
+    environment:
+      ACTIONS_USER_TIMEOUT_SECS: ${CONVEX_ACTIONS_USER_TIMEOUT_SECS:-}
+      APPLICATION_MAX_CONCURRENT_MUTATIONS: ${CONVEX_APPLICATION_MAX_CONCURRENT_MUTATIONS:-16}
+      APPLICATION_MAX_CONCURRENT_NODE_ACTIONS: ${CONVEX_APPLICATION_MAX_CONCURRENT_NODE_ACTIONS:-16}
+      APPLICATION_MAX_CONCURRENT_QUERIES: ${CONVEX_APPLICATION_MAX_CONCURRENT_QUERIES:-16}
+      APPLICATION_MAX_CONCURRENT_V8_ACTIONS: ${CONVEX_APPLICATION_MAX_CONCURRENT_V8_ACTIONS:-16}
+      CONVEX_CLOUD_ORIGIN: ${CONVEX_CLOUD_ORIGIN:-http://127.0.0.1:3210}
+      CONVEX_SITE_ORIGIN: ${CONVEX_SITE_ORIGIN:-http://127.0.0.1:3211}
+      DISABLE_BEACON: ${CONVEX_DISABLE_BEACON:-true}
+      DISABLE_METRICS_ENDPOINT: ${CONVEX_DISABLE_METRICS_ENDPOINT:-true}
+      DOCUMENT_RETENTION_DELAY: ${CONVEX_DOCUMENT_RETENTION_DELAY:-172800}
+      DO_NOT_REQUIRE_SSL: ${CONVEX_DO_NOT_REQUIRE_SSL:-}
+      INSTANCE_NAME: ${CONVEX_INSTANCE_NAME:-ig-event}
+      REDACT_LOGS_TO_CLIENT: ${CONVEX_REDACT_LOGS_TO_CLIENT:-true}
+      RUST_LOG: ${CONVEX_RUST_LOG:-info}
+    labels:
+      - traefik.enable=${CONVEX_TRAEFIK_ENABLE:-true}
+      - traefik.docker.network=n8n-compose_default
+      - traefik.http.routers.ig-event-convex.entrypoints=websecure
+      - traefik.http.routers.ig-event-convex.rule=Host(`${CONVEX_TRAEFIK_HOST:-convex-events.ineedtofeedmyrabbit.com}`)
+      - traefik.http.routers.ig-event-convex.tls=true
+      - traefik.http.routers.ig-event-convex.tls.certresolver=mytlschallenge
+      - traefik.http.services.ig-event-convex.loadbalancer.server.port=3210
+    networks:
+      - default
+      - traefik
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3210/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  convex-dashboard:
+    image: ghcr.io/get-convex/convex-dashboard:${CONVEX_SELF_HOSTED_IMAGE_TAG:-latest}
+    stop_grace_period: 10s
+    stop_signal: SIGINT
+    ports:
+      - "${CONVEX_DASHBOARD_BIND:-127.0.0.1}:${CONVEX_DASHBOARD_PORT:-6791}:6791"
+    environment:
+      NEXT_PUBLIC_DEPLOYMENT_URL: ${CONVEX_CLOUD_ORIGIN:-http://127.0.0.1:3210}
+      NEXT_PUBLIC_LOAD_MONACO_INTERNALLY: ${CONVEX_DASHBOARD_LOAD_MONACO_INTERNALLY:-true}
+    depends_on:
+      convex-backend:
+        condition: service_healthy
+    networks:
+      - default
+    restart: unless-stopped
+
+volumes:
+  convex-data:
+
+networks:
+  traefik:
+    external: true
+    name: n8n-compose_default

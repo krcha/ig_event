@@ -35,6 +35,7 @@
     "qa:convex-retention-cron": "node scripts/qa-convex-retention-cron.mjs",
     "qa:clerk-instagram-sso": "node scripts/qa-clerk-instagram-sso.mjs",
     "qa:release": "node scripts/release-check.mjs",
+    "qa:self-hosted-convex-compose": "docker compose --env-file .env.production.example -f docker-compose.yml -f docker-compose.self-hosted-convex.yml config --quiet",
     "convex:codegen": "npx convex codegen --typecheck disable"
   },
   "dependencies": {
