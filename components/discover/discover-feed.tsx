@@ -7,6 +7,7 @@ import {
   EventPriceChip,
 } from "@/components/events/event-meta";
 import { SaveEventButton } from "@/components/events/save-event-button";
+import { ReadMoreText } from "@/components/ui/read-more-text";
 import { resolveEventTimeDisplay, type EventDayPeriod } from "@/lib/events/event-time";
 import { isApifyImageUrl } from "@/lib/images/apify-images";
 import { cn } from "@/lib/utils";
@@ -213,13 +214,16 @@ function DiscoverPost({ event }: { event: DiscoverFeedEvent }) {
 
         <div className="space-y-1">
           {instagramCaption ? (
-            <p
-              className="whitespace-pre-line text-sm leading-6 text-foreground"
-              data-discover-caption-source="instagram"
-            >
-              <span className="font-semibold">{handleLabel}</span>{" "}
-              <span className="text-muted-foreground">{instagramCaption}</span>
-            </p>
+            <ReadMoreText
+              bodyClassName="text-muted-foreground"
+              buttonClassName="text-sm leading-6"
+              collapsedButtonClassName="bg-[#0d0f16] text-muted-foreground"
+              moreLabel="more"
+              paragraphProps={{ "data-discover-caption-source": "instagram" }}
+              prefix={<span className="font-semibold text-foreground">{handleLabel}</span>}
+              text={instagramCaption}
+              textClassName="text-sm leading-6 text-foreground"
+            />
           ) : (
             <p
               className="text-sm leading-6 text-muted-foreground"

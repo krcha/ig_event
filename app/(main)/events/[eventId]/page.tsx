@@ -11,6 +11,7 @@ import {
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { EventCategoryPill, EventMetaRow, EventPriceChip } from "@/components/events/event-meta";
+import { ReadMoreText } from "@/components/ui/read-more-text";
 import {
   getDisplayEventTime,
   resolveEventTimeDisplay,
@@ -278,15 +279,19 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                 </div>
 
                 {event.description ? (
-                  <details className="group rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-2.5">
-                    <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-foreground [&::-webkit-details-marker]:hidden">
-                      <span>What to know</span>
-                      <ChevronDown className="h-4 w-4 text-muted-foreground transition group-open:rotate-180" />
-                    </summary>
-                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                      {event.description}
-                    </p>
-                  </details>
+                  <section className="rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3">
+                    <p className="text-sm font-semibold text-foreground">What to know</p>
+                    <ReadMoreText
+                      buttonClassName="text-sm leading-6 text-primary hover:text-primary/85"
+                      className="mt-2"
+                      collapsedButtonClassName="bg-[#0d0f16]"
+                      lessLabel="show less"
+                      moreLabel="read more"
+                      paragraphProps={{ "data-event-description": "true" }}
+                      text={event.description}
+                      textClassName="text-sm leading-6 text-muted-foreground"
+                    />
+                  </section>
                 ) : null}
 
                 {event.artists.length > 0 ? (

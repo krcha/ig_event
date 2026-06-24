@@ -30,6 +30,7 @@ const discoverFeedSource = read("components/discover/discover-feed.tsx");
 const discoverImageSourceSource = read("lib/discover/discover-image-source.ts");
 const apifyPostsSource = read("lib/discover/apify-posts.ts");
 const discoverImageRouteSource = read("app/api/discover/images/[eventId]/route.ts");
+const readMoreTextSource = read("components/ui/read-more-text.tsx");
 const scrapedPostsSource = read("convex/scrapedPosts.ts");
 const nextConfigSource = read("next.config.mjs");
 const packageJson = JSON.parse(read("package.json"));
@@ -139,7 +140,7 @@ assertIncludes(
 );
 assertIncludes(
   discoverFeedSource,
-  'data-discover-caption-source="instagram"',
+  'paragraphProps={{ "data-discover-caption-source": "instagram" }}',
   "Discover captions should identify exact Instagram caption rendering.",
 );
 assertIncludes(
@@ -167,10 +168,35 @@ assertIncludes(
   "event.sourceCaption?.trim() || null",
   "Discover caption body should use the exact captured Instagram caption.",
 );
-assertDoesNotInclude(
+assertIncludes(
   discoverFeedSource,
-  "line-clamp",
-  "Discover captions should not be visually truncated.",
+  "ReadMoreText",
+  "Discover captions should use the shared two-line read-more component.",
+);
+assertIncludes(
+  discoverFeedSource,
+  'moreLabel="more"',
+  "Discover captions should expose an Instagram-style more affordance.",
+);
+assertIncludes(
+  readMoreTextSource,
+  "WebkitLineClamp: lines",
+  "Read-more text should clamp collapsed content to the requested number of rows.",
+);
+assertIncludes(
+  readMoreTextSource,
+  "aria-expanded={expanded}",
+  "Read-more button should expose expanded state to assistive tech.",
+);
+assertIncludes(
+  readMoreTextSource,
+  "absolute bottom-0 right-0",
+  "Collapsed read-more affordance should sit inline at the end of the second row.",
+);
+assertIncludes(
+  discoverFeedSource,
+  "collapsedButtonClassName=\"bg-[#0d0f16] text-muted-foreground\"",
+  "Discover captions should give the inline more button the card background like Instagram.",
 );
 assertDoesNotInclude(
   discoverFeedSource,
@@ -270,4 +296,4 @@ assert.match(
   "Release gate should include Discover feed QA.",
 );
 
-console.log("QA passed: Discover feed uses exact Instagram captions, Apify images, scroll posts, and save actions.");
+console.log("QA passed: Discover feed uses exact Instagram captions, two-line read-more text, Apify images, scroll posts, and save actions.");

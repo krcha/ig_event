@@ -7,7 +7,7 @@ export const FOLLOW_DISCOVERY_CRON_PATH = "/api/cron/discover-following";
 export const DEFAULT_FOLLOW_DISCOVERY_SOURCE_HANDLE = "going_places11";
 export const DEFAULT_FOLLOW_DISCOVERY_ACTOR_ID =
   "scraping_solutions/instagram-scraper-followers-following-no-cookies";
-export const DEFAULT_FOLLOW_DISCOVERY_RESULTS_LIMIT = 500;
+export const DEFAULT_FOLLOW_DISCOVERY_RESULTS_LIMIT = 700;
 export const MIN_FOLLOW_DISCOVERY_RESULTS_LIMIT = 50;
 export const MAX_FOLLOW_DISCOVERY_RESULTS_LIMIT = 1000;
 export const DEFAULT_FOLLOW_DISCOVERY_MAX_TOTAL_CHARGE_USD = 0.5;
