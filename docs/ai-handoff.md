@@ -186,12 +186,13 @@ Clerk:
 - `lib/auth/admin.ts` checks `ADMIN_CLERK_USER_IDS` for admin page access, and
   `lib/auth/admin-api.ts` applies the same allowlist to every `/api/admin/*`
   route.
-- `/sign-in` and `/sign-up` render `InstagramSsoAuthCard`, making Instagram the
-  primary auth action. It resolves native `oauth_instagram` or an enabled custom
-  strategy such as `oauth_custom_instagram` from Clerk's
-  `authenticatableSocialStrategies` before redirecting.
-- `/sso-callback` mounts `AuthenticateWithRedirectCallback` for Clerk OAuth
-  completion before redirecting to `/admin`.
+- `/sign-in` and `/sign-up` render `EmailAuthCard`, using custom Clerk
+  email/password forms with email-code verification.
+- The custom auth entry points intentionally avoid Clerk's generic social
+  provider picker so disabled or unconfigured OAuth providers cannot be
+  launched from the app UI.
+- `/sso-callback` still mounts `AuthenticateWithRedirectCallback` for Clerk
+  OAuth completion if a future social provider is re-enabled.
 - In production, admin routes fail closed if Clerk env vars are absent.
 
 Vercel or VPS:
@@ -358,12 +359,12 @@ Use these scripts:
 - `npm run qa:dedupe`: deterministic duplicate QA.
 - `npm run qa:automerge`: deterministic approved-event automerge QA.
 - `npm run qa:extraction`: deterministic extraction/normalization QA.
-- `npm run qa:clerk-instagram-sso`: static QA for the primary Instagram OAuth
-  sign-in/sign-up flow and `/sso-callback` route.
+- `npm run qa:clerk-email-auth`: static QA for the custom Clerk email
+  sign-in/sign-up flow and social-provider guardrails.
 - `npm run qa:release`: runs lint, typecheck, `next build`, dedupe QA,
   automerge QA, extraction QA, venue taxonomy QA, public search QA, Apify
   cost-control QA, follow-discovery QA, Convex retention-cron QA, and Clerk
-  Instagram SSO QA with timeouts.
+  email auth QA with timeouts.
 - `npm run qa:self-hosted-convex-compose`: validates the Docker Compose overlay
   for the web app plus self-hosted Convex backend/dashboard.
 - `npm run convex:codegen`: refresh Convex generated types.

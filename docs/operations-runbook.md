@@ -128,13 +128,10 @@ Notes:
   return successful admin sign-ins to `/admin`.
 - `CLERK_AUTHORIZED_PARTIES` should be set to the production app origin. Clerk
   middleware uses it to reject session tokens from other same-root subdomains.
-- The custom auth pages make Instagram the primary action and mount
-  `/sso-callback` with `AuthenticateWithRedirectCallback` for OAuth completion.
-  The button only starts a strategy Clerk exposes in
-  `authenticatableSocialStrategies`: native `oauth_instagram`, or a custom
-  provider such as `oauth_custom_instagram`. Set
-  `NEXT_PUBLIC_CLERK_INSTAGRAM_OAUTH_STRATEGY` when the custom provider slug is
-  not exactly `instagram`.
+- The custom auth pages use Clerk email/password forms with email-code
+  verification and avoid Clerk's generic social provider picker. Keep social
+  providers disabled in Clerk unless their OAuth client ID/secret is fully
+  configured.
 - `CLERK_SECRET_KEY`, `OPENAI_API_KEY`, `APIFY_API_TOKEN`, and `CRON_SECRET`
   are secrets and must stay out of git.
 - `ADMIN_CLERK_USER_IDS` is the Clerk user allowlist for admin pages and
@@ -355,7 +352,7 @@ npm run qa:dedupe
 npm run qa:automerge
 npm run qa:extraction
 npm run qa:convex-retention-cron
-npm run qa:clerk-instagram-sso
+npm run qa:clerk-email-auth
 npm run qa:self-hosted-convex-compose
 npm run convex:codegen
 ```

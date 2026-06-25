@@ -24,7 +24,7 @@ function requireExcludes(path, content, needle, description = needle) {
   }
 }
 
-const authCardPath = "components/auth/instagram-sso-card.tsx";
+const authCardPath = "components/auth/email-auth-card.tsx";
 const requireAuthHookPath = "lib/auth/use-require-auth.ts";
 const savedLibraryPath = "components/saved/saved-library-panel.tsx";
 const signInPath = "app/(auth)/sign-in/[[...sign-in]]/page.tsx";
@@ -33,23 +33,28 @@ const callbackPath = "app/(auth)/sso-callback/[[...sso-callback]]/page.tsx";
 const youProfilePath = "components/auth/you-profile-panel.tsx";
 
 const authCard = requireFile(authCardPath);
-requireIncludes(authCardPath, authCard, "oauth_instagram", "native Instagram OAuth strategy");
-requireIncludes(authCardPath, authCard, "oauth_custom_instagram", "custom Instagram OAuth strategy fallback");
-requireIncludes(authCardPath, authCard, "NEXT_PUBLIC_CLERK_INSTAGRAM_OAUTH_STRATEGY", "configurable custom Instagram OAuth strategy");
-requireIncludes(authCardPath, authCard, "authenticatableSocialStrategies", "Clerk allowed-strategy guard");
-requireIncludes(authCardPath, authCard, "isInstagramSsoSupported", "Instagram support detection helper");
-requireIncludes(authCardPath, authCard, "INSTAGRAM_SSO_NOT_ENABLED_MESSAGE", "dashboard setup error message");
-requireIncludes(authCardPath, authCard, "authenticateWithRedirect", "Clerk redirect SSO flow");
-requireIncludes(authCardPath, authCard, "redirectUrl: SSO_CALLBACK_PATH", "shared SSO callback redirect");
-requireIncludes(authCardPath, authCard, "redirectUrlComplete: authCompleteRedirectPath", "post-auth redirect");
+requireIncludes(authCardPath, authCard, "Sign in with email", "email sign-in heading");
+requireIncludes(authCardPath, authCard, "Sign up with email", "email sign-up heading");
+requireIncludes(authCardPath, authCard, "window.location.assign(authCompleteRedirectPath)", "post-auth redirect");
 requireIncludes(authCardPath, authCard, "getSafeRedirectPath", "same-origin post-auth redirect guard");
-requireIncludes(authCardPath, authCard, "Continue with Instagram", "primary Instagram CTA");
-requireIncludes(authCardPath, authCard, "signIn.create", "manual username/password sign-in call");
-requireIncludes(authCardPath, authCard, "identifier: manualUsername.trim()", "username identifier submission");
-requireIncludes(authCardPath, authCard, "setActive({ session:", "manual sign-in session activation");
-requireIncludes(authCardPath, authCard, 'name="username"', "manual username input");
+requireIncludes(authCardPath, authCard, "signIn.create", "manual email/password sign-in call");
+requireIncludes(authCardPath, authCard, "identifier: signInEmail.trim()", "email identifier submission");
+requireIncludes(authCardPath, authCard, "setSignInActive({ session:", "manual sign-in session activation");
+requireIncludes(authCardPath, authCard, 'name="email"', "manual email input");
+requireIncludes(authCardPath, authCard, 'type="email"', "email input type");
 requireIncludes(authCardPath, authCard, 'type="password"', "manual password input");
+requireIncludes(authCardPath, authCard, "signUp.create", "manual email/password sign-up call");
+requireIncludes(authCardPath, authCard, "emailAddress: manualSignUpEmail.trim()", "manual sign-up email submission");
+requireIncludes(authCardPath, authCard, "username: manualSignUpUsername.trim()", "current Clerk-required username submission");
+requireIncludes(authCardPath, authCard, "prepareEmailAddressVerification", "manual sign-up email-code preparation");
+requireIncludes(authCardPath, authCard, "attemptEmailAddressVerification", "manual sign-up email-code verification");
+requireIncludes(authCardPath, authCard, "setSignUpActive({ session:", "manual sign-up session activation");
+requireIncludes(authCardPath, authCard, 'autoComplete="one-time-code"', "manual sign-up code input");
 requireExcludes(authCardPath, authCard, "socialProviderStrategies", "non-authenticatable social provider strategy source");
+requireExcludes(authCardPath, authCard, "authenticateWithRedirect", "social redirect flow");
+requireExcludes(authCardPath, authCard, "Continue with Instagram", "Instagram CTA");
+requireExcludes(authCardPath, authCard, "oauth_google", "Google strategy usage");
+requireExcludes(authCardPath, authCard, "oauth_instagram", "Instagram strategy usage");
 requireExcludes(authCardPath, authCard, "<SignUp", "Clerk prebuilt sign-up fallback that can call unsupported social strategies");
 requireExcludes(authCardPath, authCard, "<SignIn", "Clerk prebuilt sign-in fallback that can call unsupported social strategies");
 
@@ -64,11 +69,11 @@ requireExcludes(savedLibraryPath, savedLibrary, "SignInButton", "generic Clerk s
 requireExcludes(savedLibraryPath, savedLibrary, "SignUpButton", "generic Clerk sign-up modal");
 
 const signInPage = requireFile(signInPath);
-requireIncludes(signInPath, signInPage, "InstagramSsoAuthCard", "custom Instagram auth card");
+requireIncludes(signInPath, signInPage, "EmailAuthCard", "custom email auth card");
 requireIncludes(signInPath, signInPage, 'mode="sign-in"', "sign-in mode");
 
 const signUpPage = requireFile(signUpPath);
-requireIncludes(signUpPath, signUpPage, "InstagramSsoAuthCard", "custom Instagram auth card");
+requireIncludes(signUpPath, signUpPage, "EmailAuthCard", "custom email auth card");
 requireIncludes(signUpPath, signUpPage, 'mode="sign-up"', "sign-up mode");
 
 const callbackPage = requireFile(callbackPath);
@@ -80,4 +85,4 @@ requireIncludes(youProfilePath, youProfile, 'href="/sign-up?redirect_url=%2Fyou"
 requireExcludes(youProfilePath, youProfile, "SignInButton", "generic Clerk sign-in modal");
 requireExcludes(youProfilePath, youProfile, "SignUpButton", "generic Clerk sign-up modal");
 
-console.log(`Clerk Instagram SSO QA passed (${checks.length} checks).`);
+console.log(`Clerk email auth QA passed (${checks.length} checks).`);

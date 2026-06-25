@@ -142,12 +142,10 @@ Notes:
 - `CLERK_AUTHORIZED_PARTIES` should be set in production to the public app
   origin so Clerk middleware rejects session tokens minted for another
   subdomain.
-- The in-app auth pages make Instagram the primary sign-in/sign-up action and
-  use `/sso-callback` for the redirect callback. The button only starts a
-  strategy that Clerk exposes in `authenticatableSocialStrategies`: native
-  `oauth_instagram`, or a custom Instagram strategy such as
-  `oauth_custom_instagram`. Set `NEXT_PUBLIC_CLERK_INSTAGRAM_OAUTH_STRATEGY`
-  when the Clerk custom provider slug is not exactly `instagram`.
+- The in-app auth pages use custom Clerk email/password sign-in and sign-up
+  forms with email-code verification. They intentionally avoid Clerk's generic
+  social provider picker so disabled or unconfigured OAuth providers cannot be
+  launched from the app UI.
 - `CRON_SECRET` protects the cron ingestion route when set. Set it in
   production.
 - Cron ingestion defaults to one latest Instagram post per active venue handle,
@@ -179,7 +177,7 @@ npm run qa:automerge
 npm run qa:master-review
 npm run qa:extraction
 npm run qa:ingestion-triage
-npm run qa:clerk-instagram-sso
+npm run qa:clerk-email-auth
 npm run qa:release
 npm run qa:self-hosted-convex-compose
 npm run convex:codegen

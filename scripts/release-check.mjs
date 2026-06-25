@@ -30,7 +30,7 @@ const checks = [
   { script: "qa:image-guardrails", timeoutMs: 60_000 },
   { script: "qa:runtime-config", timeoutMs: 60_000 },
   { script: "qa:convex-retention-cron", timeoutMs: 60_000 },
-  { script: "qa:clerk-instagram-sso", timeoutMs: 60_000 },
+  { script: "qa:clerk-email-auth", timeoutMs: 60_000 },
   { script: "qa:admin-auth", timeoutMs: 60_000 },
 ];
 

@@ -1,4 +1,4 @@
-import { InstagramSsoAuthCard } from "@/components/auth/instagram-sso-card";
+import { EmailAuthCard } from "@/components/auth/email-auth-card";
 
 export default function SignUpPage() {
   if (!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) {
@@ -11,7 +11,7 @@ export default function SignUpPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-6 py-10">
-      <InstagramSsoAuthCard mode="sign-up" />
+      <EmailAuthCard mode="sign-up" />
     </div>
   );
 }
