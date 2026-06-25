@@ -1,13 +1,12 @@
-import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
+import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
 import {
   createEmptyIngestionSummary,
   createInitialIngestionBatchState,
 } from "@/lib/pipeline/run-instagram-ingestion";
 import { listVenueNameOverrideHandles } from "@/lib/pipeline/venue-name-overrides";
-import { getRequiredEnv } from "@/lib/utils/env";
 
 const DEFAULT_BATCH_SIZE = 2;
 const createIngestionJobMutation =
@@ -55,7 +54,7 @@ export async function POST() {
       );
     }
 
-    const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
+    const convex = await createAuthenticatedConvexHttpClient();
     const summary = createEmptyIngestionSummary(handles);
     const state = createInitialIngestionBatchState();
 

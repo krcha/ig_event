@@ -1,7 +1,10 @@
-import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
+import {
+  createAuthenticatedConvexHttpClient,
+  requireServiceSecret,
+} from "@/lib/convex/server";
 import type {
   IngestionBatchState,
   IngestionRunMode,
@@ -13,7 +16,6 @@ import {
   runInstagramIngestionBatchStep,
 } from "@/lib/pipeline/run-instagram-ingestion";
 import { buildOperationsTriageSummary } from "@/lib/pipeline/ingestion-run-triage";
-import { getRequiredEnv } from "@/lib/utils/env";
 
 type IngestionJobStatus = "queued" | "running" | "completed" | "failed";
 
@@ -28,6 +30,9 @@ type IngestionJobRecord = {
   batchSize: number;
   summaryJson: string;
   stateJson: string;
+  stateVersion?: number;
+  leaseOwner?: string;
+  leaseExpiresAt?: number;
   error?: string;
   startedAt?: string;
   finishedAt?: string;
@@ -35,8 +40,12 @@ type IngestionJobRecord = {
 
 const getJobQuery =
   "ingestionJobs:getJob" as unknown as FunctionReference<"query">;
-const patchJobMutation =
-  "ingestionJobs:patchJob" as unknown as FunctionReference<"mutation">;
+const claimStepMutation =
+  "ingestionJobs:claimStep" as unknown as FunctionReference<"mutation">;
+const completeStepMutation =
+  "ingestionJobs:completeStep" as unknown as FunctionReference<"mutation">;
+const failStepMutation =
+  "ingestionJobs:failStep" as unknown as FunctionReference<"mutation">;
 
 export const maxDuration = 300;
 
@@ -58,10 +67,6 @@ function logError(event: string, payload: Record<string, unknown>) {
       ...payload,
     }),
   );
-}
-
-function getConvexClient(): ConvexHttpClient {
-  return new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
 }
 
 function parseSummary(summaryJson: string, handles: string[]): IngestionSummary {
@@ -100,9 +105,20 @@ function parseState(stateJson: string): IngestionBatchState {
         Number.isFinite(parsed.currentPostIndex)
           ? Math.max(0, Math.trunc(parsed.currentPostIndex))
           : 0,
-      currentHandlePosts: Array.isArray(parsed.currentHandlePosts)
-        ? parsed.currentHandlePosts
+      currentHandlePosts: [],
+      currentScrapedPostCursor:
+        typeof parsed.currentScrapedPostCursor === "string"
+          ? parsed.currentScrapedPostCursor
+          : null,
+      currentScrapedPostIds: Array.isArray(parsed.currentScrapedPostIds)
+        ? parsed.currentScrapedPostIds.filter((id): id is string => typeof id === "string")
         : [],
+      currentScrapedPostIdIndex:
+        typeof parsed.currentScrapedPostIdIndex === "number" &&
+        Number.isFinite(parsed.currentScrapedPostIdIndex)
+          ? Math.max(0, Math.trunc(parsed.currentScrapedPostIdIndex))
+          : 0,
+      currentScrapedPostPageDone: parsed.currentScrapedPostPageDone === true,
       seenSourceKeysByHandle:
         parsed.seenSourceKeysByHandle &&
         typeof parsed.seenSourceKeysByHandle === "object" &&
@@ -115,7 +131,10 @@ function parseState(stateJson: string): IngestionBatchState {
   }
 }
 
-async function loadJob(convex: ConvexHttpClient, jobId: string): Promise<IngestionJobRecord | null> {
+async function loadJob(
+  convex: Awaited<ReturnType<typeof createAuthenticatedConvexHttpClient>>,
+  jobId: string,
+): Promise<IngestionJobRecord | null> {
   const job = (await convex.query(getJobQuery, {
     id: jobId,
   })) as IngestionJobRecord | null;
@@ -153,7 +172,7 @@ export async function GET(
       return adminAccess.response;
     }
     const { jobId } = context.params;
-    const convex = getConvexClient();
+    const convex = await createAuthenticatedConvexHttpClient();
     const job = await loadJob(convex, jobId);
 
     if (!job) {
@@ -185,7 +204,7 @@ export async function POST(
       return adminAccess.response;
     }
     const { jobId } = context.params;
-    const convex = getConvexClient();
+    const convex = await createAuthenticatedConvexHttpClient();
     const job = await loadJob(convex, jobId);
 
     if (!job) {
@@ -196,23 +215,34 @@ export async function POST(
       return NextResponse.json(buildJobResponse(job));
     }
 
-    const summary = parseSummary(job.summaryJson, job.handles);
-    const state = parseState(job.stateJson);
-    const startedAt = job.startedAt ?? new Date().toISOString();
-
-    await convex.mutation(patchJobMutation, {
+    const leaseOwner = `admin:${adminAccess.userId ?? "unknown"}:${Date.now()}`;
+    const claimedJob = (await convex.mutation(claimStepMutation, {
       id: jobId,
-      patch: {
-        status: "running",
-        startedAt,
-      },
-    });
+      leaseOwner,
+    })) as IngestionJobRecord | null;
+
+    if (!claimedJob) {
+      const currentJob = await loadJob(convex, jobId);
+      return NextResponse.json(
+        {
+          error: "Ingestion job is already leased or not runnable.",
+          ...(currentJob ? buildJobResponse(currentJob) : {}),
+        },
+        { status: 409 },
+      );
+    }
+
+    const summary = parseSummary(claimedJob.summaryJson, claimedJob.handles);
+    const state = parseState(claimedJob.stateJson);
+    const startedAt = claimedJob.startedAt ?? new Date().toISOString();
+    const stateVersion = claimedJob.stateVersion ?? 0;
+    const serviceSecret = requireServiceSecret();
 
     logInfo("batch_started", {
       jobId,
-      source: job.source,
-      mode: job.mode ?? "full_scrape",
-      status: job.status,
+      source: claimedJob.source,
+      mode: claimedJob.mode ?? "full_scrape",
+      status: claimedJob.status,
       handleIndex: state.handleIndex,
       currentHandle: state.currentHandle,
       currentPostIndex: state.currentPostIndex,
@@ -220,18 +250,21 @@ export async function POST(
 
     try {
       const batchResult = await runInstagramIngestionBatchStep({
-        handles: job.handles,
+        handles: claimedJob.handles,
         summary,
         state,
-        resultsLimit: job.resultsLimit,
-        daysBack: job.daysBack,
-        batchSize: job.batchSize,
-        mode: job.mode ?? "full_scrape",
+        resultsLimit: claimedJob.resultsLimit,
+        daysBack: claimedJob.daysBack,
+        batchSize: claimedJob.batchSize,
+        mode: claimedJob.mode ?? "full_scrape",
+        serviceSecret,
       });
 
       const finishedAt = batchResult.done ? new Date().toISOString() : undefined;
-      await convex.mutation(patchJobMutation, {
+      await convex.mutation(completeStepMutation, {
         id: jobId,
+        leaseOwner,
+        stateVersion,
         patch: {
           status: batchResult.done ? "completed" : "running",
           summaryJson: JSON.stringify(batchResult.summary),
@@ -243,8 +276,8 @@ export async function POST(
 
       logInfo("batch_completed", {
         jobId,
-        source: job.source,
-        mode: job.mode ?? "full_scrape",
+        source: claimedJob.source,
+        mode: claimedJob.mode ?? "full_scrape",
         done: batchResult.done,
         handleIndex: batchResult.state.handleIndex,
         currentHandle: batchResult.state.currentHandle,
@@ -254,24 +287,24 @@ export async function POST(
       if (batchResult.done) {
         logInfo("scrape_completed", {
           jobId,
-          source: job.source,
-          mode: job.mode ?? "full_scrape",
+          source: claimedJob.source,
+          mode: claimedJob.mode ?? "full_scrape",
           startedAt,
           finishedAt,
-          handles: job.handles,
+          handles: claimedJob.handles,
         });
       }
 
       return NextResponse.json({
         jobId,
-        source: job.source,
+        source: claimedJob.source,
         status: batchResult.done ? "completed" : "running",
-        handles: job.handles,
+        handles: claimedJob.handles,
         summary: batchResult.summary,
         triage: buildOperationsTriageSummary({
           summary: batchResult.summary,
           status: batchResult.done ? "completed" : "running",
-          handles: job.handles,
+          handles: claimedJob.handles,
         }),
         error: null,
         startedAt,
@@ -280,33 +313,30 @@ export async function POST(
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Failed to run ingestion batch.";
-      await convex.mutation(patchJobMutation, {
+      await convex.mutation(failStepMutation, {
         id: jobId,
-        patch: {
-          status: "failed",
-          summaryJson: JSON.stringify(summary),
-          stateJson: JSON.stringify(state),
-          error: message,
-          startedAt,
-          finishedAt: new Date().toISOString(),
-        },
+        leaseOwner,
+        stateVersion,
+        error: message,
+        summaryJson: JSON.stringify(summary),
+        stateJson: JSON.stringify(state),
       });
       logError("scrape_failed", {
         jobId,
-        source: job.source,
+        source: claimedJob.source,
         error: message,
       });
       return NextResponse.json(
         {
           jobId,
-          source: job.source,
+          source: claimedJob.source,
           status: "failed",
-          handles: job.handles,
+          handles: claimedJob.handles,
           summary,
           triage: buildOperationsTriageSummary({
             summary,
             status: "failed",
-            handles: job.handles,
+            handles: claimedJob.handles,
           }),
           errorStep: "batch_process",
           error: message,

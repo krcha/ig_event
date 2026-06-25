@@ -6,6 +6,10 @@ import { internalAction } from "./_generated/server";
 const DEFAULT_EXPIRED_EVENT_CLEANUP_BATCH_SIZE = 500;
 const DEFAULT_EXPIRED_EVENT_CLEANUP_MAX_BATCHES = 20;
 const MAX_EXPIRED_EVENT_CLEANUP_MAX_BATCHES = 100;
+const DEFAULT_INGESTION_ARTIFACT_CLEANUP_BATCH_SIZE = 100;
+const DEFAULT_INGESTION_ARTIFACT_CLEANUP_MAX_BATCHES = 10;
+const INGESTION_JOB_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const SCRAPED_POST_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 type DeleteExpiredEventsResult = {
   deletedEventCount: number;
@@ -43,6 +47,43 @@ const deleteExpiredEventsMutation = (internal as unknown as {
     >;
   };
 }).events.deleteExpiredEvents;
+
+type DeleteByUpdatedAtResult = {
+  deletedCount: number;
+  hasMore: boolean;
+};
+
+type DeleteByUpdatedAtMutation = FunctionReference<
+  "mutation",
+  "internal",
+  { cutoffUpdatedAt: number; limit?: number },
+  DeleteByUpdatedAtResult
+>;
+
+type CleanupIngestionArtifactsUntilDoneResult = {
+  batchSize: number;
+  maxBatches: number;
+  batchesRun: number;
+  deletedIngestionJobCount: number;
+  deletedScrapedPostCount: number;
+  hasMore: boolean;
+  ingestionJobsHaveMore: boolean;
+  scrapedPostsHaveMore: boolean;
+  jobCutoffUpdatedAt: number;
+  scrapedPostCutoffUpdatedAt: number;
+};
+
+const deleteOldScrapedPostsMutation: DeleteByUpdatedAtMutation = (internal as unknown as {
+  scrapedPosts: {
+    deleteOlderThan: DeleteByUpdatedAtMutation;
+  };
+}).scrapedPosts.deleteOlderThan;
+
+const deleteOldIngestionJobsMutation: DeleteByUpdatedAtMutation = (internal as unknown as {
+  ingestionJobs: {
+    deleteTerminalOlderThan: DeleteByUpdatedAtMutation;
+  };
+}).ingestionJobs.deleteTerminalOlderThan;
 
 function normalizeBatchSize(value: number | undefined): number {
   if (value === undefined || !Number.isFinite(value)) {
@@ -110,6 +151,63 @@ export const deleteExpiredEventsUntilDone = internalAction({
       timeZone,
       skippedSameDayEventCount,
       sameDayExpiredEventCount,
+    };
+  },
+});
+
+export const cleanupIngestionArtifactsUntilDone = internalAction({
+  args: {
+    batchSize: v.optional(v.number()),
+    maxBatches: v.optional(v.number()),
+  },
+  handler: async (ctx, args): Promise<CleanupIngestionArtifactsUntilDoneResult> => {
+    const batchSize = normalizeBatchSize(args.batchSize ?? DEFAULT_INGESTION_ARTIFACT_CLEANUP_BATCH_SIZE);
+    const maxBatches = normalizeMaxBatches(
+      args.maxBatches ?? DEFAULT_INGESTION_ARTIFACT_CLEANUP_MAX_BATCHES,
+    );
+    const now = Date.now();
+    const jobCutoffUpdatedAt = now - INGESTION_JOB_RETENTION_MS;
+    const scrapedPostCutoffUpdatedAt = now - SCRAPED_POST_RETENTION_MS;
+    let deletedIngestionJobCount = 0;
+    let deletedScrapedPostCount = 0;
+    let ingestionJobsHaveMore = false;
+    let scrapedPostsHaveMore = false;
+    let batchesRun = 0;
+
+    for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
+      const [jobResult, scrapedPostResult] = await Promise.all([
+        ctx.runMutation(deleteOldIngestionJobsMutation, {
+          cutoffUpdatedAt: jobCutoffUpdatedAt,
+          limit: batchSize,
+        }),
+        ctx.runMutation(deleteOldScrapedPostsMutation, {
+          cutoffUpdatedAt: scrapedPostCutoffUpdatedAt,
+          limit: batchSize,
+        }),
+      ]);
+
+      batchesRun += 1;
+      deletedIngestionJobCount += jobResult.deletedCount;
+      deletedScrapedPostCount += scrapedPostResult.deletedCount;
+      ingestionJobsHaveMore = jobResult.hasMore;
+      scrapedPostsHaveMore = scrapedPostResult.hasMore;
+
+      if (!ingestionJobsHaveMore && !scrapedPostsHaveMore) {
+        break;
+      }
+    }
+
+    return {
+      batchSize,
+      maxBatches,
+      batchesRun,
+      deletedIngestionJobCount,
+      deletedScrapedPostCount,
+      hasMore: ingestionJobsHaveMore || scrapedPostsHaveMore,
+      ingestionJobsHaveMore,
+      scrapedPostsHaveMore,
+      jobCutoffUpdatedAt,
+      scrapedPostCutoffUpdatedAt,
     };
   },
 });

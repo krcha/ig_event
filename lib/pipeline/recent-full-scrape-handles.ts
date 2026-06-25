@@ -89,6 +89,7 @@ function getAttemptTimestamp(job: RecentFullScrapeJobRecord): number {
 export async function getRecentFullScrapeAttemptSummary(options: {
   candidateHandles: string[];
   minCreatedAt?: number;
+  serviceSecret?: string;
 }): Promise<RecentFullScrapeAttemptSummary> {
   const normalizedCandidates = [
     ...new Set(options.candidateHandles.map((handle) => normalizeHandle(handle)).filter(Boolean)),
@@ -102,8 +103,13 @@ export async function getRecentFullScrapeAttemptSummary(options: {
   }
 
   const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
+  const serviceSecret = options.serviceSecret ?? process.env.CRON_SECRET?.trim();
+  if (!serviceSecret) {
+    throw new Error("CRON_SECRET is required to read recent ingestion jobs.");
+  }
   const recentJobs = (await convex.query(listRecentFullScrapeJobsQuery, {
     minCreatedAt: options.minCreatedAt ?? Date.now() - FULL_SCRAPE_COOLDOWN_MS,
+    serviceSecret,
   })) as RecentFullScrapeJobRecord[];
 
   const candidateSet = new Set(normalizedCandidates);
@@ -145,6 +151,7 @@ export async function getRecentFullScrapeAttemptSummary(options: {
 export async function getRecentlyAttemptedFullScrapeHandles(options: {
   candidateHandles: string[];
   minCreatedAt?: number;
+  serviceSecret?: string;
 }): Promise<string[]> {
   const summary = await getRecentFullScrapeAttemptSummary(options);
   return summary.attemptedHandles;

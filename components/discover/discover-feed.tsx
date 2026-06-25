@@ -37,6 +37,7 @@ export type DiscoverDateTab = {
 };
 
 type DiscoverFeedProps = {
+  authEnabled: boolean;
   dateTabs: DiscoverDateTab[];
   error?: string;
   events: DiscoverFeedEvent[];
@@ -115,7 +116,13 @@ function getInstagramCaption(event: DiscoverFeedEvent): string | null {
   return event.sourceCaption?.trim() || null;
 }
 
-function DiscoverPost({ event }: { event: DiscoverFeedEvent }) {
+function DiscoverPost({
+  authEnabled,
+  event,
+}: {
+  authEnabled: boolean;
+  event: DiscoverFeedEvent;
+}) {
   const time = getResolvedTime(event);
   const handleLabel = getInstagramHandleLabel(event);
   const instagramCaption = getInstagramCaption(event);
@@ -202,14 +209,16 @@ function DiscoverPost({ event }: { event: DiscoverFeedEvent }) {
               <ExternalLink className="h-4 w-4" />
             </Link>
           </div>
-          <div data-discover-save-action="true">
-            <SaveEventButton
-              className="flex-none [&>button]:rounded-full"
-              eventId={event._id}
-              eventTitle={event.title}
-              variant="icon"
-            />
-          </div>
+          {authEnabled ? (
+            <div data-discover-save-action="true">
+              <SaveEventButton
+                className="flex-none [&>button]:rounded-full"
+                eventId={event._id}
+                eventTitle={event.title}
+                variant="icon"
+              />
+            </div>
+          ) : null}
         </div>
 
         <div className="space-y-1">
@@ -263,7 +272,13 @@ function EmptyDiscoverState({ error }: { error?: string }) {
   );
 }
 
-export function DiscoverFeed({ dateTabs, error, events, subline }: DiscoverFeedProps) {
+export function DiscoverFeed({
+  authEnabled,
+  dateTabs,
+  error,
+  events,
+  subline,
+}: DiscoverFeedProps) {
   const hasEvents = events.length > 0;
 
   return (
@@ -314,7 +329,7 @@ export function DiscoverFeed({ dateTabs, error, events, subline }: DiscoverFeedP
         </header>
 
         {events.map((event) => (
-          <DiscoverPost event={event} key={event._id} />
+          <DiscoverPost authEnabled={authEnabled} event={event} key={event._id} />
         ))}
         {!hasEvents || error ? <EmptyDiscoverState error={error} /> : null}
       </div>

@@ -4,9 +4,9 @@ import {
   buildApprovedEventsMasterReviewUserPrompt,
 } from "@/lib/ai/approved-events-master-review-prompt";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
-import { getRequiredEnv } from "@/lib/utils/env";
+import { getOpenAiModelEnv, getRequiredEnv } from "@/lib/utils/env";
 
-const approvedEventsReviewModel = process.env.OPENAI_REVIEW_MODEL ?? "gpt-5.4-mini";
+const approvedEventsReviewModel = getOpenAiModelEnv("OPENAI_REVIEW_MODEL");
 const APPROVED_EVENTS_REVIEW_TIMEOUT_MS = 60_000;
 const APPROVED_EVENTS_REVIEW_MAX_ATTEMPTS = 2;
 

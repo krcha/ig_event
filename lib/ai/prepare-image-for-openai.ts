@@ -1,5 +1,9 @@
 import sharp from "sharp";
 import type { InstagramScrapedPost } from "@/lib/scraper/instagram-scraper";
+import {
+  assertImageResponseHeaders,
+  readImageResponseBodyWithLimit,
+} from "@/lib/images/image-response-guardrails";
 
 const DOWNLOAD_TIMEOUT_MS = 15000;
 const DOWNLOAD_MAX_ATTEMPTS = 3;
@@ -96,32 +100,33 @@ export async function downloadImage(
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-      const response = await fetch(url, {
-        method: "GET",
-        signal: controller.signal,
-        cache: "no-store",
-        headers: {
-          accept: "image/*,*/*;q=0.8",
-        },
-      });
-      clearTimeout(timeoutId);
+      try {
+        const response = await fetch(url, {
+          method: "GET",
+          signal: controller.signal,
+          cache: "no-store",
+          headers: {
+            accept: "image/*,*/*;q=0.8",
+          },
+        });
 
-      if (!response.ok) {
-        throw new Error(
-          `Image download failed with status ${response.status} ${response.statusText}`,
-        );
+        if (!response.ok) {
+          throw new Error(
+            `Image download failed with status ${response.status} ${response.statusText}`,
+          );
+        }
+
+        const contentType = assertImageResponseHeaders(response);
+        const imageBuffer = await readImageResponseBodyWithLimit(response);
+
+        return {
+          imageBuffer,
+          contentType,
+          sourceUrl: url,
+        };
+      } finally {
+        clearTimeout(timeoutId);
       }
-
-      const arrayBuffer = await response.arrayBuffer();
-      if (arrayBuffer.byteLength === 0) {
-        throw new Error("Downloaded image is empty.");
-      }
-
-      return {
-        imageBuffer: Buffer.from(arrayBuffer),
-        contentType: response.headers.get("content-type"),
-        sourceUrl: url,
-      };
     } catch (error) {
       lastError = error;
       if (attempt < maxAttempts) {

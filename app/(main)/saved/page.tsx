@@ -1,12 +1,12 @@
 import { auth } from "@clerk/nextjs/server";
-import { ConvexHttpClient } from "convex/browser";
-import { api } from "@/convex/_generated/api";
+import type { FunctionReference } from "convex/server";
 import {
   SavedLibraryPanel,
   type SavedLibraryEvent,
   type SavedLibraryVenue,
 } from "@/components/saved/saved-library-panel";
 import { loadUpcomingApprovedEvents } from "@/lib/events/public-events";
+import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
 import { hasClerkEnv } from "@/lib/utils/env";
 
 export const dynamic = "force-dynamic";
@@ -58,14 +58,11 @@ const EMPTY_LIBRARY: LibraryResult = {
   savedEvents: [],
 };
 
-async function loadSavedLibrary(userId: string): Promise<LibraryResult> {
-  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
-  if (!convexUrl) {
-    throw new Error("Convex is not configured.");
-  }
+const getMyLibraryQuery = "users:getMyLibrary" as unknown as FunctionReference<"query">;
 
-  const convex = new ConvexHttpClient(convexUrl);
-  return toLibraryResult(await convex.query(api.users.listLibrary, { userId }));
+async function loadSavedLibrary(): Promise<LibraryResult> {
+  const convex = await createAuthenticatedConvexHttpClient();
+  return toLibraryResult(await convex.query(getMyLibraryQuery, {}));
 }
 
 export default async function SavedPage() {
@@ -93,8 +90,8 @@ export default async function SavedPage() {
 
   if (userId) {
     const [libraryResult, upcomingResult] = await Promise.allSettled([
-      loadSavedLibrary(userId),
-      loadUpcomingApprovedEvents(),
+      loadSavedLibrary(),
+      loadUpcomingApprovedEvents({ daysAhead: 90 }),
     ]);
 
     if (libraryResult.status === "fulfilled") {

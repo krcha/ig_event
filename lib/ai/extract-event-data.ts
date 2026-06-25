@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { getRequiredEnv } from "@/lib/utils/env";
+import { getOpenAiModelEnv, getRequiredEnv } from "@/lib/utils/env";
 import {
   buildEventExtractionUserPrompt,
   EVENT_EXTRACTION_SYSTEM_PROMPT,
 } from "./event-extraction-prompt";
 
-const openAiVisionModel = process.env.OPENAI_VISION_MODEL ?? "gpt-5.4";
+const openAiVisionModel = getOpenAiModelEnv("OPENAI_VISION_MODEL");
 const OPENAI_REQUEST_TIMEOUT_MS = 40000;
 const OPENAI_MAX_ATTEMPTS = 2;
 

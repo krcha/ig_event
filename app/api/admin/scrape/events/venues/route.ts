@@ -1,13 +1,15 @@
-import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
+import {
+  createAuthenticatedConvexHttpClient,
+  requireServiceSecret,
+} from "@/lib/convex/server";
 import {
   createEmptyIngestionSummary,
   createInitialIngestionBatchState,
   importUpcomingEventsToSavedPosts,
 } from "@/lib/pipeline/run-instagram-ingestion";
-import { getRequiredEnv } from "@/lib/utils/env";
 
 type ErrorStage =
   | "auth"
@@ -50,7 +52,8 @@ export async function POST() {
     }
 
     errorStage = "import_upcoming_convex_events";
-    const importSummary = await importUpcomingEventsToSavedPosts();
+    const serviceSecret = requireServiceSecret();
+    const importSummary = await importUpcomingEventsToSavedPosts({ serviceSecret });
 
     if (importSummary.importedPosts === 0) {
       return NextResponse.json(
@@ -62,7 +65,7 @@ export async function POST() {
     }
 
     errorStage = "enqueue_saved_posts_job";
-    const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
+    const convex = await createAuthenticatedConvexHttpClient();
     const summary = createEmptyIngestionSummary(importSummary.handles);
     const state = createInitialIngestionBatchState();
     const jobId = (await convex.mutation(createIngestionJobMutation, {

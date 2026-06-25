@@ -1,8 +1,8 @@
 import { auth } from "@clerk/nextjs/server";
-import { ConvexHttpClient } from "convex/browser";
 import { NextResponse } from "next/server";
-import { api } from "@/convex/_generated/api";
+import type { FunctionReference } from "convex/server";
 import type { Id } from "@/convex/_generated/dataModel";
+import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
 import { hasClerkEnv } from "@/lib/utils/env";
 
 type SaveEventRequestBody = {
@@ -10,19 +10,16 @@ type SaveEventRequestBody = {
   saved?: unknown;
 };
 
+const getMyLibraryQuery = "users:getMyLibrary" as unknown as FunctionReference<"query">;
+const toggleMySavedEventMutation =
+  "users:toggleMySavedEvent" as unknown as FunctionReference<"mutation">;
+const getPublicApprovedEventQuery =
+  "events:getPublicApprovedEvent" as unknown as FunctionReference<"query">;
+
 function getEventId(body: SaveEventRequestBody): Id<"events"> | null {
   return typeof body.eventId === "string" && body.eventId.length > 0
     ? (body.eventId as Id<"events">)
     : null;
-}
-
-function getConvexClient(): ConvexHttpClient | NextResponse {
-  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
-  if (!convexUrl) {
-    return NextResponse.json({ error: "Convex is not configured." }, { status: 503 });
-  }
-
-  return new ConvexHttpClient(convexUrl);
 }
 
 export async function GET() {
@@ -36,13 +33,9 @@ export async function GET() {
     return NextResponse.json({ error: "Sign in to view saved events." }, { status: 401 });
   }
 
-  const convex = getConvexClient();
-  if (convex instanceof NextResponse) {
-    return convex;
-  }
-
   try {
-    const result = await convex.query(api.users.listSavedEvents, { userId });
+    const convex = await createAuthenticatedConvexHttpClient();
+    const result = await convex.query(getMyLibraryQuery, {});
     return NextResponse.json({ ...result, userId });
   } catch (error) {
     return NextResponse.json(
@@ -78,18 +71,15 @@ export async function POST(request: Request) {
   }
   const saved = typeof body.saved === "boolean" ? body.saved : undefined;
 
-  const convex = getConvexClient();
-  if (convex instanceof NextResponse) {
-    return convex;
-  }
-
   try {
-    const result = await convex.mutation(api.users.toggleSavedEvent, {
+    const convex = await createAuthenticatedConvexHttpClient();
+    const result = await convex.mutation(toggleMySavedEventMutation, {
       eventId,
       saved,
-      userId,
     });
-    const event = result.saved ? await convex.query(api.events.getEvent, { id: eventId }) : null;
+    const event = result.saved
+      ? await convex.query(getPublicApprovedEventQuery, { id: eventId })
+      : null;
 
     return NextResponse.json({ ...result, event, eventId, userId });
   } catch (error) {

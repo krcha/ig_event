@@ -151,10 +151,12 @@ export function simulateApprovedEventAutoMerge(
 async function loadApprovedEvents(
   convex: ConvexHttpClient,
   limit: number,
+  serviceSecret?: string,
 ): Promise<ApprovedEventSourceRecord[]> {
   return (await convex.query(listByStatusQuery, {
     status: "approved",
     limit,
+    ...(serviceSecret ? { serviceSecret } : {}),
   })) as ApprovedEventSourceRecord[];
 }
 
@@ -163,6 +165,7 @@ export async function runApprovedEventAutoMerge(
   options?: {
     limit?: number;
     maxPasses?: number;
+    serviceSecret?: string;
   },
 ): Promise<ApprovedEventAutoMergeSummary> {
   const limit = Math.max(1, options?.limit ?? DEFAULT_AUTO_MERGE_APPROVED_LIMIT);
@@ -178,7 +181,7 @@ export async function runApprovedEventAutoMerge(
   let passes = 0;
 
   for (let pass = 1; pass <= maxPasses; pass += 1) {
-    const approvedEvents = await loadApprovedEvents(convex, limit);
+    const approvedEvents = await loadApprovedEvents(convex, limit, options?.serviceSecret);
     const { scannedEventCount: nextScannedEventCount, cleanupGroups } =
       buildCleanupGroupsForApprovedEvents(approvedEvents);
 
@@ -200,6 +203,7 @@ export async function runApprovedEventAutoMerge(
           primaryId: group.primaryEventId,
           duplicateIds: group.duplicateEventIds,
           patch: {},
+          ...(options?.serviceSecret ? { serviceSecret: options.serviceSecret } : {}),
         });
         mergedGroupCount += 1;
         mergedDuplicateCount += group.duplicateEventIds.length;
@@ -219,7 +223,11 @@ export async function runApprovedEventAutoMerge(
       break;
     }
 
-    const postMergeApprovedEvents = await loadApprovedEvents(convex, limit);
+    const postMergeApprovedEvents = await loadApprovedEvents(
+      convex,
+      limit,
+      options?.serviceSecret,
+    );
     finalApprovedCount = postMergeApprovedEvents.length;
     remainingGroupCount = buildCleanupGroupsForApprovedEvents(postMergeApprovedEvents).cleanupGroups.length;
     if (remainingGroupCount === 0) {
@@ -228,7 +236,7 @@ export async function runApprovedEventAutoMerge(
   }
 
   if (passes === 0) {
-    const approvedEvents = await loadApprovedEvents(convex, limit);
+    const approvedEvents = await loadApprovedEvents(convex, limit, options?.serviceSecret);
     approvedCount = approvedEvents.length;
     finalApprovedCount = approvedEvents.length;
     const cleanupResult = buildCleanupGroupsForApprovedEvents(approvedEvents);

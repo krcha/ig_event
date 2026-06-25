@@ -1,13 +1,15 @@
 import { NextResponse } from "next/server";
-import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
+import {
+  createAuthenticatedConvexHttpClient,
+  requireServiceSecret,
+} from "@/lib/convex/server";
 import {
   createEmptyIngestionSummary,
   createInitialIngestionBatchState,
   importRecentApifyRunPostsToSavedPosts,
 } from "@/lib/pipeline/run-instagram-ingestion";
-import { getRequiredEnv } from "@/lib/utils/env";
 
 type Body = {
   handles?: string[];
@@ -82,10 +84,12 @@ export async function POST(request: Request) {
   const runsLimit = normalizePositiveInt(body.runsLimit) ?? DEFAULT_RUNS_LIMIT;
 
   try {
+    const serviceSecret = requireServiceSecret();
     errorStage = "import_recent_runs";
     const importSummary = await importRecentApifyRunPostsToSavedPosts({
       handles,
       runsLimit,
+      serviceSecret,
     });
 
     if (importSummary.importedPosts === 0) {
@@ -97,7 +101,7 @@ export async function POST(request: Request) {
 
     const normalizedHandles = importSummary.handles;
     errorStage = "enqueue_saved_posts_job";
-    const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
+    const convex = await createAuthenticatedConvexHttpClient();
     const summary = createEmptyIngestionSummary(normalizedHandles);
     const state = createInitialIngestionBatchState();
     const jobId = (await convex.mutation(createIngestionJobMutation, {

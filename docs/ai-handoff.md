@@ -64,15 +64,16 @@ Important env vars:
 - `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, and Clerk
   fallback redirect URL vars should point to the in-app auth pages and `/admin`
   fallback used by the admin workflow.
+- `CLERK_JWT_ISSUER_DOMAIN`: required by Convex auth for the Clerk JWT template
+  named `convex` with application ID `convex`.
 - `ADMIN_CLERK_USER_IDS`: allowlist for admin UI visibility.
 - `OPENAI_API_KEY`: required for extraction and approved-event master review.
-- `OPENAI_VISION_MODEL`: `.env.example` pins `gpt-4.1-mini`; code has a
-  fallback, so set it explicitly for cost and model control.
-- `OPENAI_REVIEW_MODEL`: same recommendation for approved-event master review.
+- `OPENAI_VISION_MODEL` and `OPENAI_REVIEW_MODEL`: `.env.example` pins
+  `gpt-4.1-mini`; production readiness fails if either is missing.
 - `APIFY_API_TOKEN`: required for Instagram scraping.
 - `APIFY_INSTAGRAM_ACTOR_ID`: defaults to `apify/instagram-post-scraper`.
-- `CRON_SECRET`: protects scheduled ingestion when set. If blank, the cron route
-  allows unauthenticated calls for local convenience.
+- `CRON_SECRET`: protects scheduled ingestion and is also the Convex service
+  secret for cron/repair job advancement.
 - `EVENTS_TIMEZONE`: defaults operational expectations to `Europe/Belgrade`.
 
 ## Architecture Overview

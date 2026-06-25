@@ -170,9 +170,11 @@ export default async function DiscoverPage({ searchParams }: DiscoverPageProps) 
   const today = getBelgradeDateKey();
   const selectedDate = normalizeRequestedDate(searchParams?.date, today);
   const { error, events } = await loadDiscoverEvents(selectedDate);
+  const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
   return (
     <DiscoverFeed
+      authEnabled={authEnabled}
       dateTabs={buildDateTabs(today, selectedDate)}
       error={error}
       events={events}

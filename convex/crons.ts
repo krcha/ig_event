@@ -17,4 +17,18 @@ crons.weekly(
   },
 );
 
+crons.weekly(
+  "cleanup ingestion artifacts",
+  {
+    dayOfWeek: "thursday",
+    hourUTC: 5,
+    minuteUTC: 0,
+  },
+  internal.maintenance.cleanupIngestionArtifactsUntilDone,
+  {
+    batchSize: 100,
+    maxBatches: 10,
+  },
+);
+
 export default crons;

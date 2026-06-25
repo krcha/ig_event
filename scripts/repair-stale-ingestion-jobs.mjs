@@ -1,10 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import { ConvexHttpClient } from "convex/browser";
-import { api } from "../convex/_generated/api.js";
 
 const DEFAULT_STALE_HOURS = 6;
 const DEFAULT_LOOKBACK_DAYS = 30;
 const DEFAULT_SOURCE = "cron_active_venues";
+const DEFAULT_REPAIR_LEASE_MS = 5 * 60 * 1000;
+
+const listRecentFullScrapeJobsQuery = "ingestionJobs:listRecentFullScrapeJobs";
+const claimStepMutation = "ingestionJobs:claimStep";
+const failStepMutation = "ingestionJobs:failStep";
 
 function usage() {
   return [
@@ -114,13 +118,18 @@ async function main() {
   if (!convexUrl) {
     throw new Error("NEXT_PUBLIC_CONVEX_URL is required.");
   }
+  const serviceSecret = process.env.CRON_SECRET;
+  if (!serviceSecret) {
+    throw new Error("CRON_SECRET is required for ingestion job repair.");
+  }
 
   const now = Date.now();
   const minCreatedAt = now - options.lookbackDays * 24 * 60 * 60 * 1000;
   const staleBefore = now - options.staleHours * 60 * 60 * 1000;
   const client = new ConvexHttpClient(convexUrl);
-  const jobs = await client.query(api.ingestionJobs.listRecentFullScrapeJobs, {
+  const jobs = await client.query(listRecentFullScrapeJobsQuery, {
     minCreatedAt,
+    serviceSecret,
   });
 
   const staleJobs = jobs
@@ -156,20 +165,33 @@ async function main() {
 
   const finishedAt = new Date(now).toISOString();
   let applied = 0;
+  let skippedUnclaimable = 0;
   for (const job of staleJobs) {
     const ageHours = Number(((now - getTimestamp(job)) / (60 * 60 * 1000)).toFixed(2));
-    await client.mutation(api.ingestionJobs.patchJob, {
+    const leaseOwner = `repair-stale:${job._id}:${now}`;
+    const claimedJob = await client.mutation(claimStepMutation, {
       id: job._id,
-      patch: {
-        status: "failed",
-        error: `Marked stale by repair: job was still running after ${ageHours}h (cutoff ${options.staleHours}h).`,
-        finishedAt,
-      },
+      leaseOwner,
+      leaseDurationMs: DEFAULT_REPAIR_LEASE_MS,
+      serviceSecret,
+    });
+
+    if (!claimedJob) {
+      skippedUnclaimable += 1;
+      continue;
+    }
+
+    await client.mutation(failStepMutation, {
+      id: job._id,
+      leaseOwner,
+      stateVersion: claimedJob.stateVersion ?? 0,
+      error: `Marked stale by repair: job was still running after ${ageHours}h (cutoff ${options.staleHours}h).`,
+      serviceSecret,
     });
     applied += 1;
   }
 
-  console.log(JSON.stringify({ applied, finishedAt }, null, 2));
+  console.log(JSON.stringify({ applied, skippedUnclaimable, finishedAt }, null, 2));
 }
 
 main().catch((error) => {

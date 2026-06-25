@@ -1,5 +1,8 @@
-import { mutation, query } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import { internalMutation, mutation, query } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
+import { requireAdminOrServiceSecret } from "./authz";
 
 const scrapedPostRecord = {
   handle: v.string(),
@@ -15,15 +18,70 @@ const scrapedPostRecord = {
   username: v.string(),
 };
 
+function getSourceKey(post: {
+  handle: string;
+  instagramPostUrl: string;
+  postId: string;
+}): string {
+  const identifier = post.postId || post.instagramPostUrl;
+  return `${post.handle}:${identifier}`;
+}
+
+function parsePostedAtMs(postedAt: string | undefined): number | undefined {
+  if (!postedAt) {
+    return undefined;
+  }
+
+  const parsed = Date.parse(postedAt);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 export const listByHandle = query({
   args: {
     handle: v.string(),
+    serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     return ctx.db
       .query("scrapedPosts")
       .withIndex("by_handle", (q) => q.eq("handle", args.handle))
       .collect();
+  },
+});
+
+export const listByHandlePaginated = query({
+  args: {
+    handle: v.string(),
+    paginationOpts: paginationOptsValidator,
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    return ctx.db
+      .query("scrapedPosts")
+      .withIndex("by_handle_postedAtMs", (q) => q.eq("handle", args.handle))
+      .order("desc")
+      .paginate(args.paginationOpts);
+  },
+});
+
+export const getManyByIds = query({
+  args: {
+    ids: v.array(v.id("scrapedPosts")),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const uniqueIds = [...new Set(args.ids)];
+    const posts = [];
+    for (const id of uniqueIds) {
+      const post = await ctx.db.get(id);
+      if (post) {
+        posts.push(post);
+      }
+    }
+    return posts;
   },
 });
 
@@ -66,8 +124,10 @@ export const upsertManyByHandle = mutation({
   args: {
     handle: v.string(),
     posts: v.array(v.object(scrapedPostRecord)),
+    serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const now = Date.now();
 
     for (const post of args.posts) {
@@ -90,6 +150,8 @@ export const upsertManyByHandle = mutation({
       const nextRecord = {
         ...post,
         handle: args.handle,
+        postedAtMs: parsePostedAtMs(post.postedAt),
+        sourceKey: getSourceKey({ ...post, handle: args.handle }),
         updatedAt: now,
       };
 
@@ -102,5 +164,31 @@ export const upsertManyByHandle = mutation({
         });
       }
     }
+  },
+});
+
+export const deleteOlderThan = internalMutation({
+  args: {
+    cutoffUpdatedAt: v.number(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = Math.max(1, Math.min(500, Math.trunc(args.limit ?? 100)));
+    const posts = await ctx.db
+      .query("scrapedPosts")
+      .withIndex("by_updatedAt", (q) => q.lt("updatedAt", args.cutoffUpdatedAt))
+      .take(limit);
+    const deletedIds: Id<"scrapedPosts">[] = [];
+
+    for (const post of posts) {
+      await ctx.db.delete(post._id);
+      deletedIds.push(post._id);
+    }
+
+    return {
+      deletedCount: deletedIds.length,
+      deletedIds,
+      hasMore: posts.length === limit,
+    };
   },
 });

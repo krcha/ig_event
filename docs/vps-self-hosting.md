@@ -21,8 +21,7 @@ Checked against this repo on 2026-06-05:
   build-time values for the browser bundle. Build the image with the same public
   values you intend to run in production.
 - Set both OpenAI model env vars explicitly. The low-cost template uses
-  `gpt-4.1-mini`; leaving them blank falls back to code defaults that may cost
-  more.
+  `gpt-4.1-mini`; production readiness fails if either is blank.
 
 ## Recommended Shape
 
@@ -190,17 +189,16 @@ APIFY_API_TOKEN=
 APIFY_INSTAGRAM_ACTOR_ID=apify/instagram-post-scraper
 OPENAI_VISION_MODEL=gpt-4.1-mini
 OPENAI_REVIEW_MODEL=gpt-4.1-mini
+CLERK_JWT_ISSUER_DOMAIN=
 CRON_SECRET=
+CRON_INGESTION_MAX_STEPS=4
 EVENTS_TIMEZONE=Europe/Belgrade
 APP_BIND=127.0.0.1
 APP_PORT=3000
 ```
 
-`OPENAI_REVIEW_MODEL` is optional in code today, but set it explicitly for cost
-control.
-
-Set `CRON_SECRET` in production. If it is blank, the cron endpoint intentionally
-allows unauthenticated calls for local convenience.
+Set `CRON_SECRET` in every deployed environment. Convex cron/repair advancement
+uses it as the server-only service secret.
 
 ## Container Deployment
 

@@ -1,13 +1,12 @@
 import { NextResponse } from "next/server";
-import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
+import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
 import {
   createEmptyIngestionSummary,
   createInitialIngestionBatchState,
   type IngestionRunMode,
 } from "@/lib/pipeline/run-instagram-ingestion";
-import { getRequiredEnv } from "@/lib/utils/env";
 
 type ScrapeRequestBody = {
   handles?: string[];
@@ -80,7 +79,7 @@ export async function POST(request: Request) {
 
   const step = "enqueue_job";
   try {
-    const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
+    const convex = await createAuthenticatedConvexHttpClient();
     const resultsLimit = normalizePositiveInt(body.resultsLimit);
     const daysBack = normalizePositiveInt(body.daysBack);
     const mode = normalizeMode(body.mode);

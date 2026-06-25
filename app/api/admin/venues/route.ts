@@ -1,7 +1,7 @@
-import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
+import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
 import { canonicalizeVenueCategory } from "@/lib/taxonomy/venue-types";
 import {
   createEmptyVenueHoursJson,
@@ -16,6 +16,10 @@ type VenueRecord = {
   instagramHandle: string;
   category: string;
   location?: string;
+  latitude?: number;
+  longitude?: number;
+  neighborhood?: string;
+  lastFullScrapeAttemptAt?: number;
   hoursSource?: "osm" | "google" | "manual" | "none";
   hoursJson?: string;
   hoursFetchedAt?: number;
@@ -35,6 +39,10 @@ type CreateVenueBody = {
   instagramHandle?: string;
   category?: string;
   location?: string;
+  latitude?: number;
+  longitude?: number;
+  neighborhood?: string;
+  lastFullScrapeAttemptAt?: number;
   isActive?: boolean;
 };
 
@@ -45,6 +53,10 @@ type UpdateVenueBody = {
     instagramHandle?: string;
     category?: string;
     location?: string;
+    latitude?: number;
+    longitude?: number;
+    neighborhood?: string;
+    lastFullScrapeAttemptAt?: number;
     isActive?: boolean;
     clearVenueHours?: boolean;
     manualOpeningHours?: string;
@@ -64,14 +76,6 @@ const patchVenueHoursMutation =
   "venues:patchVenueHours" as unknown as FunctionReference<"mutation">;
 const removeVenueMutation =
   "venues:removeVenue" as unknown as FunctionReference<"mutation">;
-
-function getConvexClient() {
-  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
-  if (!convexUrl) {
-    throw new Error("NEXT_PUBLIC_CONVEX_URL is not configured.");
-  }
-  return new ConvexHttpClient(convexUrl);
-}
 
 function createClearVenueHoursPatch(now = Date.now()) {
   const generatedAt = new Date(now).toISOString();
@@ -100,7 +104,7 @@ export async function GET() {
   }
 
   try {
-    const convex = getConvexClient();
+    const convex = await createAuthenticatedConvexHttpClient();
     const venues = (await convex.query(listVenuesQuery, {})) as VenueRecord[];
     return NextResponse.json({
       venues: venues.map((venue) => ({
@@ -109,6 +113,10 @@ export async function GET() {
         instagramHandle: venue.instagramHandle,
         category: canonicalizeVenueCategory(venue.category),
         location: venue.location ?? null,
+        latitude: venue.latitude ?? null,
+        longitude: venue.longitude ?? null,
+        neighborhood: venue.neighborhood ?? null,
+        lastFullScrapeAttemptAt: venue.lastFullScrapeAttemptAt ?? null,
         hoursSource: venue.hoursSource ?? null,
         hoursJson: venue.hoursJson ?? null,
         hoursFetchedAt: venue.hoursFetchedAt ?? null,
@@ -158,12 +166,18 @@ export async function POST(request: Request) {
   }
 
   try {
-    const convex = getConvexClient();
+    const convex = await createAuthenticatedConvexHttpClient();
     const id = await convex.mutation(createVenueMutation, {
       name,
       instagramHandle,
       category,
       location: body.location?.trim() || undefined,
+      ...(typeof body.latitude === "number" ? { latitude: body.latitude } : {}),
+      ...(typeof body.longitude === "number" ? { longitude: body.longitude } : {}),
+      ...(body.neighborhood?.trim() ? { neighborhood: body.neighborhood.trim() } : {}),
+      ...(typeof body.lastFullScrapeAttemptAt === "number"
+        ? { lastFullScrapeAttemptAt: body.lastFullScrapeAttemptAt }
+        : {}),
       isActive: body.isActive ?? true,
     });
 
@@ -222,7 +236,7 @@ export async function PATCH(request: Request) {
   }
 
   try {
-    const convex = getConvexClient();
+    const convex = await createAuthenticatedConvexHttpClient();
     const venuePatch = {
       ...(body.patch.name !== undefined ? { name: body.patch.name } : {}),
       ...(body.patch.instagramHandle !== undefined
@@ -230,6 +244,14 @@ export async function PATCH(request: Request) {
         : {}),
       ...(body.patch.category !== undefined ? { category: body.patch.category } : {}),
       ...(body.patch.location !== undefined ? { location: body.patch.location } : {}),
+      ...(typeof body.patch.latitude === "number" ? { latitude: body.patch.latitude } : {}),
+      ...(typeof body.patch.longitude === "number" ? { longitude: body.patch.longitude } : {}),
+      ...(body.patch.neighborhood !== undefined
+        ? { neighborhood: body.patch.neighborhood }
+        : {}),
+      ...(typeof body.patch.lastFullScrapeAttemptAt === "number"
+        ? { lastFullScrapeAttemptAt: body.patch.lastFullScrapeAttemptAt }
+        : {}),
       ...(body.patch.isActive !== undefined ? { isActive: body.patch.isActive } : {}),
       ...(body.patch.category !== undefined
         ? { category: canonicalizeVenueCategory(body.patch.category) }
@@ -279,7 +301,7 @@ export async function DELETE(request: Request) {
   }
 
   try {
-    const convex = getConvexClient();
+    const convex = await createAuthenticatedConvexHttpClient();
     await convex.mutation(removeVenueMutation, {
       id: body.id,
     });

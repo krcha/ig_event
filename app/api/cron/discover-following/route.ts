@@ -1,6 +1,7 @@
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
+import { requireServiceSecret } from "@/lib/convex/server";
 import {
   runFollowDiscoveryWorkflow,
   scrapeInstagramFollowingAccounts,
@@ -53,16 +54,18 @@ export async function GET(request: Request) {
 
   try {
     const convex = getConvexClient();
+    const serviceSecret = requireServiceSecret();
     const result = await runFollowDiscoveryWorkflow({
       env: process.env,
       deps: {
         scrapeFollowing: (apifyRequest) =>
           scrapeInstagramFollowingAccounts({ request: apifyRequest }),
         listVenues: async () =>
-          (await convex.query(listVenuesQuery, {})) as VenueListRecord[],
+          (await convex.query(listVenuesQuery, { serviceSecret })) as VenueListRecord[],
         createVenue: async (venue: DiscoveredVenueInput) =>
-          convex.mutation(createVenueMutation, venue),
-        runVenueIngestion: async (options) => runInstagramIngestion(options),
+          convex.mutation(createVenueMutation, { ...venue, serviceSecret }),
+        runVenueIngestion: async (options) =>
+          runInstagramIngestion({ ...options, serviceSecret }),
       },
     });
 

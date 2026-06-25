@@ -1,7 +1,7 @@
-import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
+import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
 
 type EventStatus = "approved" | "rejected";
 
@@ -19,14 +19,6 @@ const setEventStatusesMutation =
 
 function isValidStatus(status: string | undefined): status is EventStatus {
   return status === "approved" || status === "rejected";
-}
-
-function getConvexHttpClient() {
-  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
-  if (!convexUrl) {
-    throw new Error("NEXT_PUBLIC_CONVEX_URL is not configured.");
-  }
-  return new ConvexHttpClient(convexUrl);
 }
 
 export async function POST(request: Request) {
@@ -67,7 +59,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const convex = getConvexHttpClient();
+    const convex = await createAuthenticatedConvexHttpClient();
     const moderationNote = body.moderationNote?.trim() || undefined;
 
     if (eventIds.length > 0) {

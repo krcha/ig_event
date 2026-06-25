@@ -1,8 +1,8 @@
 import { auth } from "@clerk/nextjs/server";
-import { ConvexHttpClient } from "convex/browser";
 import { NextResponse } from "next/server";
-import { api } from "@/convex/_generated/api";
+import type { FunctionReference } from "convex/server";
 import type { Id } from "@/convex/_generated/dataModel";
+import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
 import { hasClerkEnv } from "@/lib/utils/env";
 
 type FavoriteVenueRequestBody = {
@@ -10,19 +10,16 @@ type FavoriteVenueRequestBody = {
   venueId?: unknown;
 };
 
+const getMyLibraryQuery = "users:getMyLibrary" as unknown as FunctionReference<"query">;
+const toggleMyFavoriteVenueMutation =
+  "users:toggleMyFavoriteVenue" as unknown as FunctionReference<"mutation">;
+const listPublicVenueFieldsByIdsQuery =
+  "venues:listPublicVenueFieldsByIds" as unknown as FunctionReference<"query">;
+
 function getVenueId(body: FavoriteVenueRequestBody): Id<"venues"> | null {
   return typeof body.venueId === "string" && body.venueId.length > 0
     ? (body.venueId as Id<"venues">)
     : null;
-}
-
-function getConvexClient(): ConvexHttpClient | NextResponse {
-  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
-  if (!convexUrl) {
-    return NextResponse.json({ error: "Convex is not configured." }, { status: 503 });
-  }
-
-  return new ConvexHttpClient(convexUrl);
 }
 
 export async function GET() {
@@ -36,13 +33,9 @@ export async function GET() {
     return NextResponse.json({ error: "Sign in to view favorite venues." }, { status: 401 });
   }
 
-  const convex = getConvexClient();
-  if (convex instanceof NextResponse) {
-    return convex;
-  }
-
   try {
-    const result = await convex.query(api.users.listFavoriteVenues, { userId });
+    const convex = await createAuthenticatedConvexHttpClient();
+    const result = await convex.query(getMyLibraryQuery, {});
     return NextResponse.json({ ...result, userId });
   } catch (error) {
     return NextResponse.json(
@@ -78,18 +71,18 @@ export async function POST(request: Request) {
   }
   const favorite = typeof body.favorite === "boolean" ? body.favorite : undefined;
 
-  const convex = getConvexClient();
-  if (convex instanceof NextResponse) {
-    return convex;
-  }
-
   try {
-    const result = await convex.mutation(api.users.toggleFavoriteVenue, {
+    const convex = await createAuthenticatedConvexHttpClient();
+    const result = await convex.mutation(toggleMyFavoriteVenueMutation, {
       favorite,
-      userId,
       venueId,
     });
-    const venue = result.favorite ? await convex.query(api.venues.getVenue, { id: venueId }) : null;
+    const venues = result.favorite
+      ? ((await convex.query(listPublicVenueFieldsByIdsQuery, {
+          ids: [venueId],
+        })) as unknown[])
+      : [];
+    const venue = venues[0] ?? null;
 
     return NextResponse.json({ ...result, userId, venue, venueId });
   } catch (error) {

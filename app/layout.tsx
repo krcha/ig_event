@@ -49,7 +49,7 @@ function AppDocument({
   children: React.ReactNode;
 }) {
   const appContent = (
-    <ConvexClientProvider>
+    <ConvexClientProvider authEnabled={authEnabled}>
       <div className="min-h-screen">
         <Suspense fallback={null}>
           <NavigationFeedback />

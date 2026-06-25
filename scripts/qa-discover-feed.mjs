@@ -150,6 +150,11 @@ assertIncludes(
 );
 assertIncludes(
   discoverFeedSource,
+  "authEnabled ?",
+  "Discover save controls should be hidden when Clerk auth is disabled.",
+);
+assertIncludes(
+  discoverFeedSource,
   "SaveEventButton",
   "Discover posts should keep the save/unsave control.",
 );
@@ -257,13 +262,23 @@ assertIncludes(
 );
 assertIncludes(
   discoverImageRouteSource,
-  "event.status !== \"approved\"",
-  "Discover image route should only serve approved event images.",
+  "events:getPublicApprovedEvent",
+  "Discover image route should load only approved public event records.",
 );
 assertIncludes(
   discoverImageRouteSource,
-  "contentType.toLowerCase().startsWith(\"image/\")",
-  "Discover image route should require an image upstream response.",
+  "assertImageResponseHeaders",
+  "Discover image route should enforce shared image content-type and content-length guardrails.",
+);
+assertIncludes(
+  discoverImageRouteSource,
+  "readImageResponseBodyWithLimit",
+  "Discover image route should enforce a streamed byte cap before proxying.",
+);
+assertIncludes(
+  discoverImageRouteSource,
+  "\"x-content-type-options\": \"nosniff\"",
+  "Discover image route should disable content sniffing.",
 );
 assertIncludes(
   discoverImageRouteSource,

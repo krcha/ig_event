@@ -1,7 +1,10 @@
-import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
+import {
+  createAuthenticatedConvexHttpClient,
+  requireServiceSecret,
+} from "@/lib/convex/server";
 import {
   createEmptyIngestionSummary,
   createInitialIngestionBatchState,
@@ -14,7 +17,6 @@ import {
   getCronIngestionConfig,
   selectCronIngestionHandles,
 } from "@/lib/pipeline/cron-ingestion-config";
-import { getRequiredEnv } from "@/lib/utils/env";
 
 type Body = {
   resultsLimit?: number;
@@ -81,6 +83,7 @@ export async function POST(request: Request) {
     }
 
     const cronConfig = getCronIngestionConfig();
+    const serviceSecret = requireServiceSecret();
     const requestedResultsLimit = normalizePositiveInt(body.resultsLimit);
     const requestedDaysBack = normalizePositiveInt(body.daysBack);
     const resultsLimit = Math.min(
@@ -93,7 +96,7 @@ export async function POST(request: Request) {
     );
 
     step = "enqueue_repair_job";
-    const activeVenueHandles = await getActiveVenueHandles();
+    const activeVenueHandles = await getActiveVenueHandles({ serviceSecret });
 
     if (activeVenueHandles.length === 0) {
       return NextResponse.json(
@@ -108,6 +111,7 @@ export async function POST(request: Request) {
     const recentFullScrapeSummary = await getRecentFullScrapeAttemptSummary({
       candidateHandles: activeVenueHandles,
       minCreatedAt: Date.now() - cronConfig.fullScrapeCooldownHours * MS_PER_HOUR,
+      serviceSecret,
     });
     const handleSelection = selectCronIngestionHandles({
       activeVenueHandles,
@@ -128,7 +132,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
+    const convex = await createAuthenticatedConvexHttpClient();
     const summary = createEmptyIngestionSummary(handles, {
       source: "repair_active_venues",
       mode: "full_scrape",

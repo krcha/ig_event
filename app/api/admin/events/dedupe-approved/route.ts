@@ -1,8 +1,7 @@
-import { ConvexHttpClient } from "convex/browser";
 import { NextResponse } from "next/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
+import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
 import { runApprovedEventAutoMerge } from "@/lib/events/approved-event-automerge";
-import { getRequiredEnv } from "@/lib/utils/env";
 
 export const maxDuration = 180;
 
@@ -13,7 +12,7 @@ export async function POST() {
       return adminAccess.response;
     }
 
-    const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
+    const convex = await createAuthenticatedConvexHttpClient();
     const cleanupSummary = await runApprovedEventAutoMerge(convex);
 
     console.info(

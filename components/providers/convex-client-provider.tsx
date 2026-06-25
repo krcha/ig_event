@@ -1,6 +1,8 @@
 "use client";
 
+import { useAuth } from "@clerk/nextjs";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProviderWithClerk } from "convex/react-clerk";
 
 const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
 const convexClient = convexUrl ? new ConvexReactClient(convexUrl) : null;
@@ -8,8 +10,10 @@ const convexClient = convexUrl ? new ConvexReactClient(convexUrl) : null;
 let hasWarnedAboutConvex = false;
 
 export function ConvexClientProvider({
+  authEnabled = false,
   children,
 }: {
+  authEnabled?: boolean;
   children: React.ReactNode;
 }) {
   if (!convexClient) {
@@ -20,6 +24,14 @@ export function ConvexClientProvider({
       hasWarnedAboutConvex = true;
     }
     return <>{children}</>;
+  }
+
+  if (authEnabled) {
+    return (
+      <ConvexProviderWithClerk client={convexClient} useAuth={useAuth}>
+        {children}
+      </ConvexProviderWithClerk>
+    );
   }
 
   return <ConvexProvider client={convexClient}>{children}</ConvexProvider>;

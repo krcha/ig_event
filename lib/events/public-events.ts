@@ -32,6 +32,9 @@ const APPROVED_EVENTS_SCAN_BATCH_SIZE = 100;
 const PUBLIC_EVENTS_CACHE_MAX_ENTRIES = 48;
 const PUBLIC_EVENTS_CACHE_TTL_MS = 60_000;
 const PUBLIC_DUPLICATE_CLEANUP_MAX_PAIRWISE_EVENTS = 20;
+const DEFAULT_PUBLIC_EVENTS_WINDOW_DAYS = 90;
+const DEFAULT_PUBLIC_EVENTS_PAGE_SIZE = 50;
+const MAX_PUBLIC_EVENTS_PAGE_SIZE = 100;
 
 export type PublicEvent = {
   _id: string;
@@ -47,6 +50,10 @@ export type PublicEvent = {
   venueCategory?: string;
   venueHours?: VenueHoursCacheFields;
   venueId?: string;
+  venueInstagramHandle?: string;
+  venueLatitude?: number;
+  venueLocation?: string;
+  venueLongitude?: number;
   artists: string[];
   eventType: string;
   ticketPrice?: string;
@@ -82,6 +89,10 @@ type VenueRecord = {
   hoursJson?: string | null;
   hoursSource?: "osm" | "google" | "manual" | "none" | null;
   hoursTimezone?: string | null;
+  latitude?: number | null;
+  location?: string | null;
+  longitude?: number | null;
+  neighborhood?: string | null;
   osmElementId?: string | null;
   osmElementType?: string | null;
 };
@@ -107,13 +118,15 @@ type PaginatedEventsResponse = {
 
 type LoadUpcomingApprovedEventsOptions = {
   daysInPast?: number;
+  daysAhead?: number;
   fromDate?: string;
   beforeDate?: string;
 };
 
-const listApprovedUpcomingByDatePaginatedQuery =
-  "events:listApprovedUpcomingByDatePaginated" as unknown as FunctionReference<"query">;
-const listVenuesQuery = "venues:listVenues" as unknown as FunctionReference<"query">;
+const listPublicEventsWindowQuery =
+  "events:listPublicEventsWindow" as unknown as FunctionReference<"query">;
+const listPublicVenueFieldsByIdsQuery =
+  "venues:listPublicVenueFieldsByIds" as unknown as FunctionReference<"query">;
 
 export function parseNormalizedEventDate(value: string): Date | null {
   const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -154,6 +167,15 @@ function formatLocalDate(date: Date): string {
   ).padStart(2, "0")}`;
 }
 
+function addDaysToLocalDateKey(value: string, days: number): string {
+  const parsed = parseNormalizedEventDate(value);
+  if (!parsed) {
+    return value;
+  }
+  parsed.setDate(parsed.getDate() + days);
+  return formatLocalDate(parsed);
+}
+
 function normalizeVenueLookupKey(value: string): string {
   return toSearchableText(value);
 }
@@ -179,19 +201,51 @@ function buildVenuesByName(
   return venuesByName;
 }
 
-async function loadVenueLookup(convex: ConvexHttpClient): Promise<VenueLookup> {
-  const venues = (await convex.query(listVenuesQuery, {})) as VenueRecord[];
+function createVenueRecordFromEvent(event: PublicEvent): VenueRecord | null {
+  if (!event.venueId && !event.venueCategory && !event.venueInstagramHandle) {
+    return null;
+  }
+
+  return {
+    _id: event.venueId ?? `event:${event._id}`,
+    name: event.venue,
+    instagramHandle: event.venueInstagramHandle ?? event.instagramHandle ?? "",
+    category: event.venueCategory ?? null,
+    latitude: event.venueLatitude ?? null,
+    location: event.venueLocation ?? null,
+    longitude: event.venueLongitude ?? null,
+  };
+}
+
+async function loadVenueLookup(
+  convex: ConvexHttpClient,
+  events: PublicEvent[],
+): Promise<VenueLookup> {
+  const venueIds = [
+    ...new Set(events.map((event) => event.venueId).filter((id): id is string => Boolean(id))),
+  ];
+  const venues = venueIds.length > 0
+    ? ((await convex.query(listPublicVenueFieldsByIdsQuery, {
+        ids: venueIds,
+      })) as VenueRecord[])
+    : [];
+  const denormalizedVenues = events
+    .map(createVenueRecordFromEvent)
+    .filter((venue): venue is VenueRecord => venue !== null);
+  const lookupVenues = [...venues, ...denormalizedVenues];
   let venueNameOverridesByHandle: Record<string, string> = {};
   try {
     venueNameOverridesByHandle = await loadVenueNameOverridesByHandle();
   } catch {
     venueNameOverridesByHandle = {};
   }
-  const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle(venues);
+  const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle(
+    lookupVenues.filter((venue) => venue.instagramHandle),
+  );
   return {
     canonicalVenueNamesByHandle,
     venueNameOverridesByHandle,
-    venuesByName: buildVenuesByName(venues, venueNameOverridesByHandle),
+    venuesByName: buildVenuesByName(lookupVenues, venueNameOverridesByHandle),
   };
 }
 
@@ -201,6 +255,21 @@ function normalizeDaysInPast(value: number | undefined): number {
   }
 
   return Math.max(0, Math.min(7, Math.trunc(value as number)));
+}
+
+function normalizeDaysAhead(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_PUBLIC_EVENTS_WINDOW_DAYS;
+  }
+
+  return Math.max(1, Math.min(366, Math.trunc(value as number)));
+}
+
+function normalizePublicPageSize(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_PUBLIC_EVENTS_PAGE_SIZE;
+  }
+  return Math.max(1, Math.min(MAX_PUBLIC_EVENTS_PAGE_SIZE, Math.trunc(value as number)));
 }
 
 function normalizeDateBoundary(value: string | undefined): string | undefined {
@@ -331,9 +400,10 @@ function normalizePublicEvent(
       ? venueLookup.venuesByName.get(normalizeVenueLookupKey(canonicalVenueName))
       : undefined);
   const venueCategory = venue?.category ?? undefined;
+  const eventVenueCategory = event.venueCategory ?? undefined;
   const eventType =
     canonicalEventType === DEFAULT_EVENT_TYPE
-      ? eventTypeFromVenueCategory(venueCategory)
+      ? eventTypeFromVenueCategory(venueCategory ?? eventVenueCategory)
       : canonicalEventType;
   const time = getDisplayEventTime(event.time);
   const displayTime = resolveEventTimeDisplay({
@@ -351,8 +421,12 @@ function normalizePublicEvent(
     displayTimeSource: displayTime.source,
     ...(displayTime.startLabel ? { displayTimeStart: displayTime.startLabel } : {}),
     eventType,
-    ...(venue?.instagramHandle ? { instagramHandle: venue.instagramHandle } : {}),
-    ...(venue?.category ? { venueCategory: venue.category } : {}),
+    ...(venue?.instagramHandle || event.venueInstagramHandle
+      ? { instagramHandle: venue?.instagramHandle || event.venueInstagramHandle }
+      : {}),
+    ...(venue?.category || event.venueCategory
+      ? { venueCategory: venue?.category ?? event.venueCategory }
+      : {}),
     ...(venue
       ? {
           venueHours: {
@@ -366,23 +440,27 @@ function normalizePublicEvent(
             osmElementId: venue.osmElementId ?? null,
             osmElementType: venue.osmElementType ?? null,
           },
-          venueId: venue._id,
+          venueId: event.venueId ?? venue._id,
         }
-      : {}),
+      : event.venueId
+        ? { venueId: event.venueId }
+        : {}),
   };
 }
 
-async function loadApprovedUpcomingEventPage(
-  convex: ConvexHttpClient,
-  cursor: string | null,
-  numItems: number,
-  fromDate: string,
-): Promise<PaginatedEventsResponse> {
-  return (await convex.query(listApprovedUpcomingByDatePaginatedQuery, {
-    fromDate,
+async function queryPublicEventsWindowPage(options: {
+  convex: ConvexHttpClient;
+  cursor?: string | null;
+  pageSize?: number;
+  fromDate: string;
+  beforeDate: string;
+}): Promise<PaginatedEventsResponse> {
+  return (await options.convex.query(listPublicEventsWindowQuery, {
+    fromDate: options.fromDate,
+    beforeDate: options.beforeDate,
     paginationOpts: {
-      cursor,
-      numItems,
+      cursor: options.cursor ?? null,
+      numItems: normalizePublicPageSize(options.pageSize),
     },
   })) as PaginatedEventsResponse;
 }
@@ -394,35 +472,103 @@ async function loadAllApprovedUpcomingEvents(
 ): Promise<PublicEvent[]> {
   const events: PublicEvent[] = [];
   let cursor: string | null = null;
+  const resolvedBeforeDate =
+    beforeDate ?? addDaysToLocalDateKey(fromDate, DEFAULT_PUBLIC_EVENTS_WINDOW_DAYS);
 
   while (true) {
-    const page = await loadApprovedUpcomingEventPage(
-      convex,
+    const page = await queryPublicEventsWindowPage({
       cursor,
-      APPROVED_EVENTS_SCAN_BATCH_SIZE,
       fromDate,
-    );
-    const reachedBeforeDate = beforeDate
-      ? page.page.some((event) => event.date >= beforeDate)
-      : false;
-    const pageEvents = beforeDate
-      ? page.page.filter((event) => event.date < beforeDate)
-      : page.page;
-    events.push(...pageEvents);
+      beforeDate: resolvedBeforeDate,
+      pageSize: APPROVED_EVENTS_SCAN_BATCH_SIZE,
+      convex,
+    });
+    events.push(...page.page);
 
-    if (page.isDone || reachedBeforeDate) {
+    if (page.isDone) {
       break;
     }
 
     cursor = page.continueCursor;
   }
 
-  const venueLookup = await loadVenueLookup(convex);
+  const venueLookup = await loadVenueLookup(convex, events);
   return sortPublicEventsByDateVenueTimeTitle(
     filterDuplicatePublicEvents(events).map((event) =>
       normalizePublicEvent(event, venueLookup),
     ),
   );
+}
+
+export async function loadPublicEventsWindowPage(options: {
+  beforeDate?: string;
+  cursor?: string | null;
+  daysAhead?: number;
+  daysInPast?: number;
+  fromDate?: string;
+  pageSize?: number;
+} = {}): Promise<{
+  events: PublicEvent[];
+  continueCursor: string;
+  isDone: boolean;
+  error?: string;
+}> {
+  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
+  const fromDate =
+    normalizeDateBoundary(options.fromDate) ??
+    formatLocalDate(getStartOfLocalDay(normalizeDaysInPast(options.daysInPast)));
+  const beforeDate =
+    normalizeDateBoundary(options.beforeDate) ??
+    addDaysToLocalDateKey(fromDate, normalizeDaysAhead(options.daysAhead));
+
+  if (!convexUrl) {
+    return {
+      events: [],
+      continueCursor: options.cursor ?? "",
+      isDone: true,
+      error: "Convex is not configured yet.",
+    };
+  }
+
+  if (fromDate >= beforeDate) {
+    return {
+      events: [],
+      continueCursor: options.cursor ?? "",
+      isDone: true,
+    };
+  }
+
+  try {
+    const convex = new ConvexHttpClient(convexUrl);
+    const page = await queryPublicEventsWindowPage({
+      convex,
+      cursor: options.cursor ?? null,
+      fromDate,
+      beforeDate,
+      pageSize: options.pageSize,
+    });
+    const venueLookup = await loadVenueLookup(convex, page.page);
+    const events = sortPublicEventsByDateVenueTimeTitle(
+      filterDuplicatePublicEvents(page.page).map((event) =>
+        normalizePublicEvent(event, venueLookup),
+      ),
+    );
+    return {
+      events,
+      continueCursor: page.continueCursor,
+      isDone: page.isDone,
+    };
+  } catch (error) {
+    return {
+      events: [],
+      continueCursor: options.cursor ?? "",
+      isDone: true,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to load approved events.",
+    };
+  }
 }
 
 function getCachedApprovedUpcomingEvents(
@@ -467,7 +613,9 @@ export async function loadUpcomingApprovedEvents(
   const fromDate =
     normalizeDateBoundary(options.fromDate) ??
     formatLocalDate(getStartOfLocalDay(normalizeDaysInPast(options.daysInPast)));
-  const beforeDate = normalizeDateBoundary(options.beforeDate);
+  const beforeDate =
+    normalizeDateBoundary(options.beforeDate) ??
+    addDaysToLocalDateKey(fromDate, normalizeDaysAhead(options.daysAhead));
   if (!convexUrl) {
     return { events: [], error: "Convex is not configured yet." };
   }

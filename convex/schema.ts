@@ -23,6 +23,12 @@ export default defineSchema({
     date: v.string(),
     time: v.optional(v.string()),
     venue: v.string(),
+    venueCategory: v.optional(v.string()),
+    venueId: v.optional(v.id("venues")),
+    venueInstagramHandle: v.optional(v.string()),
+    venueLatitude: v.optional(v.number()),
+    venueLocation: v.optional(v.string()),
+    venueLongitude: v.optional(v.number()),
     artists: v.array(v.string()),
     description: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
@@ -50,12 +56,17 @@ export default defineSchema({
     .index("by_status_date", ["status", "date"])
     .index("by_status_promotionTier", ["status", "promotionTier"])
     .index("by_instagramPostId", ["instagramPostId"])
-    .index("by_instagramPostUrl", ["instagramPostUrl"]),
+    .index("by_instagramPostUrl", ["instagramPostUrl"])
+    .index("by_venueId", ["venueId"]),
   venues: defineTable({
     name: v.string(),
     instagramHandle: v.string(),
     category: v.string(),
     location: v.optional(v.string()),
+    latitude: v.optional(v.number()),
+    longitude: v.optional(v.number()),
+    neighborhood: v.optional(v.string()),
+    lastFullScrapeAttemptAt: v.optional(v.number()),
     hoursSource: v.optional(
       v.union(
         v.literal("osm"),
@@ -116,17 +127,21 @@ export default defineSchema({
     altText: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
     imageUrls: v.array(v.string()),
+    postedAtMs: v.optional(v.number()),
     postType: v.optional(v.string()),
     locationName: v.optional(v.string()),
     instagramPostUrl: v.string(),
     postedAt: v.optional(v.string()),
+    sourceKey: v.optional(v.string()),
     username: v.string(),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_handle", ["handle"])
+    .index("by_handle_postedAtMs", ["handle", "postedAtMs"])
     .index("by_handle_postId", ["handle", "postId"])
-    .index("by_handle_postUrl", ["handle", "instagramPostUrl"]),
+    .index("by_handle_postUrl", ["handle", "instagramPostUrl"])
+    .index("by_updatedAt", ["updatedAt"]),
   ingestionJobs: defineTable({
     source: v.string(),
     mode: v.optional(ingestionJobMode),
@@ -137,6 +152,9 @@ export default defineSchema({
     batchSize: v.number(),
     summaryJson: v.string(),
     stateJson: v.string(),
+    stateVersion: v.optional(v.number()),
+    leaseOwner: v.optional(v.string()),
+    leaseExpiresAt: v.optional(v.number()),
     error: v.optional(v.string()),
     startedAt: v.optional(v.string()),
     finishedAt: v.optional(v.string()),
@@ -144,5 +162,16 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_status", ["status"])
+    .index("by_createdAt", ["createdAt"])
+    .index("by_status_updatedAt", ["status", "updatedAt"]),
+  eventAuditLog: defineTable({
+    eventId: v.id("events"),
+    action: v.string(),
+    actor: v.optional(v.string()),
+    patchJson: v.optional(v.string()),
+    note: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_event", ["eventId"])
     .index("by_createdAt", ["createdAt"]),
 });

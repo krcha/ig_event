@@ -1,5 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import {
   ArrowLeft,
   CalendarDays,
@@ -25,13 +26,6 @@ import {
   canonicalizeEventType,
   eventTypeFromVenueCategory,
 } from "@/lib/taxonomy/venue-types";
-import {
-  buildCanonicalVenueNamesByHandle,
-  canonicalizeVenueName,
-  normalizeHandle,
-  toSearchableText,
-} from "@/lib/pipeline/venue-normalization";
-import { loadVenueNameOverridesByHandle } from "@/lib/pipeline/venue-name-overrides";
 import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 
 type EventRecord = {
@@ -48,6 +42,10 @@ type EventRecord = {
   venueCategory?: string;
   venueHours?: VenueHoursCacheFields;
   venueId?: string;
+  venueInstagramHandle?: string;
+  venueLatitude?: number;
+  venueLocation?: string;
+  venueLongitude?: number;
   artists: string[];
   description?: string;
   imageUrl?: string;
@@ -76,6 +74,10 @@ type VenueRecord = {
   hoursJson?: string | null;
   hoursSource?: "osm" | "google" | "manual" | "none" | null;
   hoursTimezone?: string | null;
+  latitude?: number | null;
+  location?: string | null;
+  longitude?: number | null;
+  neighborhood?: string | null;
   osmElementId?: string | null;
   osmElementType?: string | null;
 };
@@ -84,42 +86,10 @@ type EventDetailPageProps = {
   params: { eventId: string };
 };
 
-const getEventQuery = "events:getEvent" as unknown as FunctionReference<"query">;
-const listVenuesQuery = "venues:listVenues" as unknown as FunctionReference<"query">;
-
-function findVenue(
-  venues: VenueRecord[],
-  venueName: string,
-  venueNameOverridesByHandle: Record<string, string>,
-): VenueRecord | undefined {
-  const venuesByName = new Map<string, VenueRecord>();
-  for (const venue of venues) {
-    for (const name of [
-      venue.name,
-      venueNameOverridesByHandle[normalizeHandle(venue.instagramHandle)],
-    ]) {
-      const key = toSearchableText(name ?? "");
-      if (key && !venuesByName.has(key)) {
-        venuesByName.set(key, venue);
-      }
-    }
-  }
-
-  const lookupKey = toSearchableText(venueName);
-  if (!lookupKey) {
-    return undefined;
-  }
-
-  const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle(venues);
-  const canonicalVenueName = canonicalizeVenueName(venueName, canonicalVenueNamesByHandle, {
-    handleVenueNamesByHandle: venueNameOverridesByHandle,
-  });
-
-  return (
-    venuesByName.get(lookupKey) ??
-    (canonicalVenueName ? venuesByName.get(toSearchableText(canonicalVenueName)) : undefined)
-  );
-}
+const getPublicApprovedEventQuery =
+  "events:getPublicApprovedEvent" as unknown as FunctionReference<"query">;
+const listPublicVenueFieldsByIdsQuery =
+  "venues:listPublicVenueFieldsByIds" as unknown as FunctionReference<"query">;
 
 async function loadEvent(eventId: string): Promise<{
   event: EventRecord | null;
@@ -132,16 +102,14 @@ async function loadEvent(eventId: string): Promise<{
 
   try {
     const convex = new ConvexHttpClient(convexUrl);
-    const event = (await convex.query(getEventQuery, { id: eventId })) as EventRecord | null;
+    const event = (await convex.query(getPublicApprovedEventQuery, { id: eventId })) as EventRecord | null;
     if (event) {
-      const venues = (await convex.query(listVenuesQuery, {})) as VenueRecord[];
-      let venueNameOverridesByHandle: Record<string, string> = {};
-      try {
-        venueNameOverridesByHandle = await loadVenueNameOverridesByHandle();
-      } catch {
-        venueNameOverridesByHandle = {};
-      }
-      const venue = findVenue(venues, event.venue, venueNameOverridesByHandle);
+      const venues = event.venueId
+        ? ((await convex.query(listPublicVenueFieldsByIdsQuery, {
+            ids: [event.venueId],
+          })) as VenueRecord[])
+        : [];
+      const venue = venues[0];
       const canonicalEventType = canonicalizeEventType(event.eventType);
       const displayTime = resolveEventTimeDisplay({
         date: event.date,
@@ -150,15 +118,15 @@ async function loadEvent(eventId: string): Promise<{
       });
       event.eventType =
         canonicalEventType === DEFAULT_EVENT_TYPE
-          ? eventTypeFromVenueCategory(venue?.category)
+          ? eventTypeFromVenueCategory(venue?.category ?? event.venueCategory)
           : canonicalEventType;
       event.dayPeriod = displayTime.dayPeriod;
       event.displayTimeEnd = displayTime.endLabel;
       event.displayTimeLabel = displayTime.label;
       event.displayTimeSource = displayTime.source;
       event.displayTimeStart = displayTime.startLabel;
-      event.venueCategory = venue?.category ?? undefined;
-      event.venueId = venue?._id;
+      event.venueCategory = venue?.category ?? event.venueCategory ?? undefined;
+      event.venueId = event.venueId ?? venue?._id;
       event.venueHours = venue
         ? {
             googlePlaceId: venue.googlePlaceId ?? null,
@@ -224,6 +192,9 @@ function InfoTile({
 
 export default async function EventDetailPage({ params }: EventDetailPageProps) {
   const { event, error } = await loadEvent(params.eventId);
+  if (!event && !error) {
+    notFound();
+  }
   const eventTime = event ? event.displayTimeLabel ?? getDisplayEventTime(event.time) : undefined;
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 

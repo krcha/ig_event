@@ -1,7 +1,7 @@
-import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
+import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
 
 type RequestBody = {
   eventId?: string;
@@ -9,14 +9,6 @@ type RequestBody = {
 
 const deleteApprovedEventMutation =
   "events:deleteApprovedEvent" as unknown as FunctionReference<"mutation">;
-
-function getConvexHttpClient() {
-  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
-  if (!convexUrl) {
-    throw new Error("NEXT_PUBLIC_CONVEX_URL is not configured.");
-  }
-  return new ConvexHttpClient(convexUrl);
-}
 
 export async function POST(request: Request) {
   const adminAccess = await requireAdminApiAccess();
@@ -37,7 +29,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const convex = getConvexHttpClient();
+    const convex = await createAuthenticatedConvexHttpClient();
     await convex.mutation(deleteApprovedEventMutation, {
       id: eventId,
     });

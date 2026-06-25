@@ -1,5 +1,5 @@
 import type { Id } from "./_generated/dataModel";
-import type { MutationCtx } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
@@ -10,6 +10,7 @@ import {
   isEventExpiredAtCutoff,
 } from "../lib/events/event-retention";
 import { canonicalizeEventType } from "../lib/taxonomy/venue-types";
+import { requireAdminIdentity, requireAdminOrServiceSecret } from "./authz";
 
 const eventStatus = v.union(
   v.literal("pending"),
@@ -20,6 +21,64 @@ const promotionTier = v.union(v.literal("featured"), v.literal("promoted"));
 const moderationStatus = v.union(v.literal("approved"), v.literal("rejected"));
 const DEFAULT_EXPIRED_EVENT_DELETE_BATCH_SIZE = 100;
 const DISCOVER_ORGANIC_SCAN_LIMIT = 120;
+
+type VenueDenormalizedFields = {
+  venueCategory?: string;
+  venueId?: Id<"venues">;
+  venueInstagramHandle?: string;
+  venueLatitude?: number;
+  venueLocation?: string;
+  venueLongitude?: number;
+};
+
+function normalizeLookup(value: string): string {
+  return value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+}
+
+async function resolveVenueDenormalizedFields(
+  ctx: QueryCtx | MutationCtx,
+  venueName: string | undefined,
+): Promise<VenueDenormalizedFields> {
+  const lookupName = normalizeLookup(venueName ?? "");
+  if (!lookupName) {
+    return {};
+  }
+
+  const venues = await ctx.db.query("venues").collect();
+  const venue = venues.find((candidate) => normalizeLookup(candidate.name) === lookupName);
+  if (!venue) {
+    return {};
+  }
+
+  return {
+    venueCategory: venue.category,
+    venueId: venue._id,
+    venueInstagramHandle: venue.instagramHandle,
+    ...(venue.latitude !== undefined ? { venueLatitude: venue.latitude } : {}),
+    ...(venue.location ? { venueLocation: venue.location } : {}),
+    ...(venue.longitude !== undefined ? { venueLongitude: venue.longitude } : {}),
+  };
+}
+
+async function writeEventAuditLog(
+  ctx: MutationCtx,
+  eventId: Id<"events">,
+  action: string,
+  options: {
+    actor?: string;
+    note?: string;
+    patch?: unknown;
+  } = {},
+) {
+  await ctx.db.insert("eventAuditLog", {
+    eventId,
+    action,
+    ...(options.actor ? { actor: options.actor } : {}),
+    ...(options.note ? { note: options.note } : {}),
+    ...(options.patch !== undefined ? { patchJson: JSON.stringify(options.patch) } : {}),
+    createdAt: Date.now(),
+  });
+}
 
 function normalizeExpiredEventDeleteBatchSize(value: number | undefined): number {
   if (!Number.isFinite(value)) {
@@ -121,6 +180,7 @@ async function reassignSavedEventReferences(
 export const getEvent = query({
   args: { id: v.id("events") },
   handler: async (ctx, args) => {
+    await requireAdminIdentity(ctx);
     return ctx.db.get(args.id);
   },
 });
@@ -128,14 +188,31 @@ export const getEvent = query({
 export const listEvents = query({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
+    await requireAdminIdentity(ctx);
     const limit = args.limit ?? 100;
     return ctx.db.query("events").order("desc").take(limit);
   },
 });
 
-export const getByInstagramPostId = query({
-  args: { instagramPostId: v.string() },
+export const getPublicApprovedEvent = query({
+  args: { id: v.id("events") },
   handler: async (ctx, args) => {
+    const event = await ctx.db.get(args.id);
+    if (!event || event.status !== "approved") {
+      return null;
+    }
+
+    return event;
+  },
+});
+
+export const getByInstagramPostId = query({
+  args: {
+    instagramPostId: v.string(),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const matches = await ctx.db
       .query("events")
       .withIndex("by_instagramPostId", (q) =>
@@ -147,8 +224,12 @@ export const getByInstagramPostId = query({
 });
 
 export const getByInstagramPostUrl = query({
-  args: { instagramPostUrl: v.string() },
+  args: {
+    instagramPostUrl: v.string(),
+    serviceSecret: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const matches = await ctx.db
       .query("events")
       .withIndex("by_instagramPostUrl", (q) =>
@@ -160,8 +241,12 @@ export const getByInstagramPostUrl = query({
 });
 
 export const listByInstagramPostId = query({
-  args: { instagramPostId: v.string() },
+  args: {
+    instagramPostId: v.string(),
+    serviceSecret: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     return ctx.db
       .query("events")
       .withIndex("by_instagramPostId", (q) =>
@@ -172,8 +257,12 @@ export const listByInstagramPostId = query({
 });
 
 export const listByInstagramPostUrl = query({
-  args: { instagramPostUrl: v.string() },
+  args: {
+    instagramPostUrl: v.string(),
+    serviceSecret: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     return ctx.db
       .query("events")
       .withIndex("by_instagramPostUrl", (q) =>
@@ -187,14 +276,32 @@ export const listByStatus = query({
   args: {
     status: eventStatus,
     limit: v.optional(v.number()),
+    serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const limit = args.limit ?? 100;
     return ctx.db
       .query("events")
       .withIndex("by_status", (q) => q.eq("status", args.status))
       .order("desc")
       .take(limit);
+  },
+});
+
+export const listPublicEventsWindow = query({
+  args: {
+    fromDate: v.string(),
+    beforeDate: v.string(),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    return ctx.db
+      .query("events")
+      .withIndex("by_status_date", (q) =>
+        q.eq("status", "approved").gte("date", args.fromDate).lt("date", args.beforeDate),
+      )
+      .paginate(args.paginationOpts);
   },
 });
 
@@ -442,8 +549,12 @@ export const getDiscoverFeed = query({
 });
 
 export const listByDate = query({
-  args: { date: v.string() },
+  args: {
+    date: v.string(),
+    serviceSecret: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     return ctx.db
       .query("events")
       .withIndex("by_date", (q) => q.eq("date", args.date))
@@ -473,15 +584,26 @@ export const createEvent = mutation({
     promotionEnd: v.optional(v.string()),
     promotionPriority: v.optional(v.number()),
     status: v.optional(eventStatus),
+    serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const { actor } = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const { serviceSecret: _serviceSecret, ...eventArgs } = args;
+    void _serviceSecret;
     const now = Date.now();
+    const venueFields = await resolveVenueDenormalizedFields(ctx, eventArgs.venue);
     const eventId = await ctx.db.insert("events", {
-      ...args,
-      eventType: canonicalizeEventType(args.eventType),
-      status: args.status ?? "pending",
+      ...eventArgs,
+      ...venueFields,
+      eventType: canonicalizeEventType(eventArgs.eventType),
+      status: eventArgs.status ?? "pending",
       createdAt: now,
       updatedAt: now,
+    });
+
+    await writeEventAuditLog(ctx, eventId, "created", {
+      actor,
+      patch: eventArgs,
     });
 
     return eventId;
@@ -516,16 +638,27 @@ export const updateEvent = mutation({
       reviewedBy: v.optional(v.string()),
       moderationNote: v.optional(v.string()),
     }),
+    serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const { actor } = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const now = Date.now();
+    const venueFields =
+      args.patch.venue !== undefined
+        ? await resolveVenueDenormalizedFields(ctx, args.patch.venue)
+        : {};
     const patch = {
       ...args.patch,
+      ...venueFields,
       ...(args.patch.eventType !== undefined
         ? { eventType: canonicalizeEventType(args.patch.eventType) }
         : {}),
     };
     await ctx.db.patch(args.id, { ...patch, updatedAt: now });
+    await writeEventAuditLog(ctx, args.id, "updated", {
+      actor,
+      patch,
+    });
   },
 });
 
@@ -537,6 +670,7 @@ export const setEventStatus = mutation({
     moderationNote: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const identity = await requireAdminIdentity(ctx);
     const existingEvent = await ctx.db.get(args.id);
     if (!existingEvent) {
       throw new Error("Event not found.");
@@ -554,6 +688,11 @@ export const setEventStatus = mutation({
       moderationNote: args.moderationNote,
       updatedAt: now,
     });
+    await writeEventAuditLog(ctx, args.id, args.status, {
+      actor: identity.subject,
+      note: args.moderationNote,
+      patch: { status: args.status },
+    });
   },
 });
 
@@ -565,6 +704,7 @@ export const setEventStatuses = mutation({
     moderationNote: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const identity = await requireAdminIdentity(ctx);
     const now = Date.now();
     const uniqueIds = [...new Set(args.ids)];
     let updatedCount = 0;
@@ -584,6 +724,11 @@ export const setEventStatuses = mutation({
         moderationNote: args.moderationNote,
         updatedAt: now,
       });
+      await writeEventAuditLog(ctx, id, args.status, {
+        actor: identity.subject,
+        note: args.moderationNote,
+        patch: { status: args.status },
+      });
       updatedCount += 1;
     }
 
@@ -599,6 +744,7 @@ export const deleteApprovedEvent = mutation({
     id: v.id("events"),
   },
   handler: async (ctx, args) => {
+    const identity = await requireAdminIdentity(ctx);
     const existingEvent = await ctx.db.get(args.id);
     if (!existingEvent) {
       throw new Error("Event not found.");
@@ -609,6 +755,10 @@ export const deleteApprovedEvent = mutation({
     }
 
     await deleteEventWithSavedReferences(ctx, args.id);
+    await writeEventAuditLog(ctx, args.id, "deleted", {
+      actor: identity.subject,
+      patch: { status: existingEvent.status },
+    });
   },
 });
 
@@ -627,8 +777,10 @@ export const mergeApprovedEvents = mutation({
       ticketPrice: v.optional(v.string()),
       eventType: v.optional(v.string()),
     }),
+    serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const { actor } = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const primaryEvent = await ctx.db.get(args.primaryId);
     if (!primaryEvent) {
       throw new Error("Primary event not found.");
@@ -650,8 +802,13 @@ export const mergeApprovedEvents = mutation({
 
     const now = Date.now();
     if (Object.keys(args.patch).length > 0) {
+      const venueFields =
+        args.patch.venue !== undefined
+          ? await resolveVenueDenormalizedFields(ctx, args.patch.venue)
+          : {};
       const patch = {
         ...args.patch,
+        ...venueFields,
         ...(args.patch.eventType !== undefined
           ? { eventType: canonicalizeEventType(args.patch.eventType) }
           : {}),
@@ -660,12 +817,25 @@ export const mergeApprovedEvents = mutation({
         ...patch,
         updatedAt: now,
       });
+      await writeEventAuditLog(ctx, args.primaryId, "merged_primary_updated", {
+        actor,
+        patch,
+      });
     }
 
     for (const duplicateId of duplicateIds) {
       await reassignSavedEventReferences(ctx, duplicateId, args.primaryId);
       await ctx.db.delete(duplicateId);
+      await writeEventAuditLog(ctx, duplicateId, "merged_deleted_duplicate", {
+        actor,
+        patch: { primaryId: args.primaryId },
+      });
     }
+
+    await writeEventAuditLog(ctx, args.primaryId, "merged_duplicates", {
+      actor,
+      patch: { duplicateIds },
+    });
 
     return {
       primaryId: args.primaryId,

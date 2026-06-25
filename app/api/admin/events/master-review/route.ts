@@ -1,7 +1,7 @@
-import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
+import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
 import {
   buildApprovedEventReviewCandidateGroups,
   filterUpcomingApprovedEventsForReview,
@@ -35,14 +35,6 @@ const listByStatusQuery =
 
 export const maxDuration = 180;
 
-function getConvexHttpClient() {
-  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
-  if (!convexUrl) {
-    throw new Error("NEXT_PUBLIC_CONVEX_URL is not configured.");
-  }
-  return new ConvexHttpClient(convexUrl);
-}
-
 function mapApprovedEvent(event: EventRecord): ApprovedEventRecordForReview {
   return {
     id: event._id,
@@ -71,7 +63,7 @@ export async function POST() {
   }
 
   try {
-    const convex = getConvexHttpClient();
+    const convex = await createAuthenticatedConvexHttpClient();
     const approvedEvents = (await convex.query(listByStatusQuery, {
       status: "approved",
       limit: 500,

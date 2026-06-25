@@ -40,7 +40,7 @@ assertDoesNotInclude(
   "Public event loaders should not call noStore().",
 );
 
-for (const field of ["fromDate?: string", "beforeDate?: string"]) {
+for (const field of ["fromDate?: string", "beforeDate?: string", "daysAhead?: number"]) {
   assert.ok(
     publicEventsSource.includes(field),
     `loadUpcomingApprovedEvents options should expose ${field} for bounded month loads.`,
@@ -49,18 +49,28 @@ for (const field of ["fromDate?: string", "beforeDate?: string"]) {
 
 assert.match(
   publicEventsSource,
-  /const reachedBeforeDate = beforeDate[\s\S]*page\.page\.some\(\(event\) => event\.date >= beforeDate\)/,
-  "Public event loader should stop paginating once it reaches the selected month upper bound.",
+  /events:listPublicEventsWindow/,
+  "Public event loader should use the bounded Convex public window query.",
 );
 assert.match(
   publicEventsSource,
-  /const pageEvents = beforeDate[\s\S]*page\.page\.filter\(\(event\) => event\.date < beforeDate\)/,
-  "Public event loader should discard events beyond the selected month upper bound.",
+  /venues:listPublicVenueFieldsByIds/,
+  "Public event loader should fetch only public venue fields for venue IDs on the current page.",
 );
-assert.doesNotMatch(
+assert.match(
   convexEventsSource,
-  /beforeDate:\s*v\.optional/,
-  "Public date bounding should avoid requiring a Convex production function deploy for the beforeDate arg.",
+  /export const listPublicEventsWindow = query/,
+  "Convex should expose a bounded public events window query.",
+);
+assert.match(
+  convexEventsSource,
+  /beforeDate:\s*v\.string\(\)/,
+  "Convex public event windows should require an explicit upper date bound.",
+);
+assert.match(
+  convexEventsSource,
+  /\.eq\("status", "approved"\)\.gte\("date", args\.fromDate\)\.lt\("date", args\.beforeDate\)/,
+  "Convex public event windows should apply both lower and upper date bounds through the status/date index.",
 );
 
 assert.match(

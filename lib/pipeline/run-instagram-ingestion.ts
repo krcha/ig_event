@@ -66,6 +66,7 @@ type RunInstagramIngestionOptions = {
   resultsLimit?: number;
   daysBack?: number;
   mode?: IngestionRunMode;
+  serviceSecret?: string;
 };
 
 export type IngestionRunMode = "full_scrape" | "saved_posts";
@@ -123,10 +124,15 @@ export type IngestionRunContext = {
 };
 
 export type IngestionBatchState = {
+  stateVersion?: number;
   handleIndex: number;
   currentHandle: string | null;
   currentPostIndex: number;
   currentHandlePosts: InstagramScrapedPost[];
+  currentScrapedPostCursor?: string | null;
+  currentScrapedPostIds?: string[];
+  currentScrapedPostIdIndex?: number;
+  currentScrapedPostPageDone?: boolean;
   seenSourceKeysByHandle: Record<string, string[]>;
 };
 
@@ -138,6 +144,9 @@ export type IngestionBatchStepOptions = {
   daysBack?: number;
   batchSize?: number;
   mode?: IngestionRunMode;
+  postStepLimit?: number;
+  scrapedPostPageSize?: number;
+  serviceSecret?: string;
 };
 
 export type IngestionBatchStepResult = {
@@ -196,9 +205,17 @@ const listVenuesQuery =
   "venues:listVenues" as unknown as FunctionReference<"query">;
 const listScrapedPostsByHandleQuery =
   "scrapedPosts:listByHandle" as unknown as FunctionReference<"query">;
+const listScrapedPostsByHandlePaginatedQuery =
+  "scrapedPosts:listByHandlePaginated" as unknown as FunctionReference<"query">;
+const getScrapedPostsManyByIdsQuery =
+  "scrapedPosts:getManyByIds" as unknown as FunctionReference<"query">;
 const upsertScrapedPostsByHandleMutation =
   "scrapedPosts:upsertManyByHandle" as unknown as FunctionReference<"mutation">;
 const SCRAPED_POST_UPSERT_BATCH_SIZE = 25;
+const DEFAULT_SCRAPED_POST_PAGE_SIZE = 25;
+const MAX_SCRAPED_POST_PAGE_SIZE = 100;
+const DEFAULT_INGESTION_POST_STEP_LIMIT = 8;
+const MAX_INGESTION_POST_STEP_LIMIT = 50;
 const DEFAULT_DIRECT_FULL_SCRAPE_CONCURRENCY = 4;
 const MAX_DIRECT_FULL_SCRAPE_CONCURRENCY = 16;
 const MAX_INGESTION_BATCH_SIZE = 64;
@@ -808,6 +825,60 @@ function normalizeDirectFullScrapeConcurrency(
   return Math.min(parsed, MAX_DIRECT_FULL_SCRAPE_CONCURRENCY);
 }
 
+function normalizeBoundedPositiveInteger(options: {
+  value: number | string | undefined;
+  defaultValue: number;
+  maxValue: number;
+}): number {
+  if (options.value === undefined || options.value === null || options.value === "") {
+    return options.defaultValue;
+  }
+
+  const parsed =
+    typeof options.value === "number"
+      ? options.value
+      : Number.parseInt(String(options.value), 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return options.defaultValue;
+  }
+
+  return Math.min(Math.trunc(parsed), options.maxValue);
+}
+
+function normalizeIngestionPostStepLimit(value?: number): number {
+  return normalizeBoundedPositiveInteger({
+    value: value ?? process.env.INGESTION_POST_STEP_LIMIT,
+    defaultValue: DEFAULT_INGESTION_POST_STEP_LIMIT,
+    maxValue: MAX_INGESTION_POST_STEP_LIMIT,
+  });
+}
+
+function normalizeScrapedPostPageSize(value?: number): number {
+  return normalizeBoundedPositiveInteger({
+    value: value ?? process.env.SCRAPED_POST_PAGE_SIZE,
+    defaultValue: DEFAULT_SCRAPED_POST_PAGE_SIZE,
+    maxValue: MAX_SCRAPED_POST_PAGE_SIZE,
+  });
+}
+
+function getConfiguredServiceSecret(explicitSecret?: string): string {
+  const serviceSecret = explicitSecret ?? process.env.CRON_SECRET?.trim();
+  if (!serviceSecret) {
+    throw new Error("CRON_SECRET is required for ingestion Convex writes.");
+  }
+  return serviceSecret;
+}
+
+function withServiceSecret<T extends Record<string, unknown>>(
+  args: T,
+  serviceSecret: string,
+): T & { serviceSecret: string } {
+  return {
+    ...args,
+    serviceSecret,
+  };
+}
+
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error.";
 }
@@ -851,6 +922,7 @@ type EventImportRecord = {
 };
 
 type SavedScrapedPostRecord = {
+  _id: string;
   handle: string;
   postId: string;
   caption?: string;
@@ -861,15 +933,27 @@ type SavedScrapedPostRecord = {
   locationName?: string;
   instagramPostUrl: string;
   postedAt?: string;
+  postedAtMs?: number;
+  sourceKey?: string;
   username: string;
   createdAt: number;
   updatedAt: number;
 };
 
+type ScrapedPostsPage = {
+  page: SavedScrapedPostRecord[];
+  isDone: boolean;
+  continueCursor: string;
+};
+
 async function loadCanonicalVenueNamesByHandle(
   client: ConvexHttpClient,
+  serviceSecret: string,
 ): Promise<Record<string, string>> {
-  const venues = (await client.query(listVenuesQuery, {})) as VenueRecord[];
+  const venues = (await client.query(
+    listVenuesQuery,
+    withServiceSecret({}, serviceSecret),
+  )) as VenueRecord[];
   return buildCanonicalVenueNamesByHandle(venues);
 }
 
@@ -1656,10 +1740,15 @@ export function createEmptyIngestionSummary(
 
 export function createInitialIngestionBatchState(): IngestionBatchState {
   return {
+    stateVersion: 2,
     handleIndex: 0,
     currentHandle: null,
     currentPostIndex: 0,
     currentHandlePosts: [],
+    currentScrapedPostCursor: null,
+    currentScrapedPostIds: [],
+    currentScrapedPostIdIndex: 0,
+    currentScrapedPostPageDone: false,
     seenSourceKeysByHandle: {},
   };
 }
@@ -1670,10 +1759,13 @@ async function runApprovedDuplicateCleanupForIngestion(
   options: {
     mode: IngestionRunMode;
     handles: string[];
+    serviceSecret: string;
   },
 ): Promise<void> {
   try {
-    const cleanupSummary = await runApprovedEventAutoMerge(client);
+    const cleanupSummary = await runApprovedEventAutoMerge(client, {
+      serviceSecret: options.serviceSecret,
+    });
     summary.approvedDuplicateCleanup = cleanupSummary;
 
     logInfo("ingestion.approved_duplicates.auto_merged", {
@@ -1714,13 +1806,17 @@ async function runApprovedDuplicateCleanupForIngestion(
 
 async function loadIngestionVenueContext(
   client: ConvexHttpClient,
+  serviceSecret: string,
 ): Promise<IngestionVenueContext> {
   let canonicalVenueNamesByHandle: Record<string, string> = {};
   let venueNameOverridesByHandle: Record<string, string> = {};
   let configuredVenueNamesByHandle: Record<string, string> = {};
 
   try {
-    canonicalVenueNamesByHandle = await loadCanonicalVenueNamesByHandle(client);
+    canonicalVenueNamesByHandle = await loadCanonicalVenueNamesByHandle(
+      client,
+      serviceSecret,
+    );
     try {
       venueNameOverridesByHandle = await loadVenueNameOverridesByHandle();
     } catch (error) {
@@ -1759,28 +1855,35 @@ async function persistScrapedPostsForHandle(
   client: ConvexHttpClient,
   handle: string,
   posts: InstagramScrapedPost[],
+  serviceSecret: string,
 ): Promise<void> {
   if (posts.length === 0) {
     return;
   }
 
   for (const postBatch of chunkItems(posts, SCRAPED_POST_UPSERT_BATCH_SIZE)) {
-    await client.mutation(upsertScrapedPostsByHandleMutation, {
-      handle,
-      posts: postBatch.map((post) => ({
-        handle,
-        postId: post.postId,
-        ...(post.caption ? { caption: post.caption } : {}),
-        ...(post.altText ? { altText: post.altText } : {}),
-        ...(post.imageUrl ? { imageUrl: post.imageUrl } : {}),
-        imageUrls: post.imageUrls,
-        ...(post.postType ? { postType: post.postType } : {}),
-        ...(post.locationName ? { locationName: post.locationName } : {}),
-        instagramPostUrl: post.instagramPostUrl,
-        ...(post.postedAt ? { postedAt: post.postedAt } : {}),
-        username: post.username,
-      })),
-    });
+    await client.mutation(
+      upsertScrapedPostsByHandleMutation,
+      withServiceSecret(
+        {
+          handle,
+          posts: postBatch.map((post) => ({
+            handle,
+            postId: post.postId,
+            ...(post.caption ? { caption: post.caption } : {}),
+            ...(post.altText ? { altText: post.altText } : {}),
+            ...(post.imageUrl ? { imageUrl: post.imageUrl } : {}),
+            imageUrls: post.imageUrls,
+            ...(post.postType ? { postType: post.postType } : {}),
+            ...(post.locationName ? { locationName: post.locationName } : {}),
+            instagramPostUrl: post.instagramPostUrl,
+            ...(post.postedAt ? { postedAt: post.postedAt } : {}),
+            username: post.username,
+          })),
+        },
+        serviceSecret,
+      ),
+    );
   }
 }
 
@@ -1789,10 +1892,12 @@ async function loadSavedScrapedPostsForHandle(
   handle: string,
   resultsLimit: number | undefined,
   daysBack: number | undefined,
+  serviceSecret: string,
 ): Promise<InstagramScrapedPost[]> {
-  const savedPosts = (await client.query(listScrapedPostsByHandleQuery, {
-    handle,
-  })) as SavedScrapedPostRecord[];
+  const savedPosts = (await client.query(
+    listScrapedPostsByHandleQuery,
+    withServiceSecret({ handle }, serviceSecret),
+  )) as SavedScrapedPostRecord[];
 
   const filtered = savedPosts
     .map(mapSavedScrapedPostToInstagramPost)
@@ -1804,6 +1909,81 @@ async function loadSavedScrapedPostsForHandle(
   }
 
   return filtered.slice(0, resultsLimit);
+}
+
+async function loadSavedScrapedPostPageForHandle(options: {
+  client: ConvexHttpClient;
+  handle: string;
+  cursor: string | null;
+  pageSize: number;
+  daysBack: number | undefined;
+  alreadyAcceptedCount: number;
+  resultsLimit: number | undefined;
+  serviceSecret: string;
+}): Promise<{
+  candidateIds: string[];
+  continueCursor: string;
+  isDone: boolean;
+  shouldCompleteHandle: boolean;
+  acceptedCount: number;
+}> {
+  const page = (await options.client.query(
+    listScrapedPostsByHandlePaginatedQuery,
+    withServiceSecret(
+      {
+        handle: options.handle,
+        paginationOpts: {
+          cursor: options.cursor,
+          numItems: options.pageSize,
+        },
+      },
+      options.serviceSecret,
+    ),
+  )) as ScrapedPostsPage;
+  const candidateIds: string[] = [];
+  let acceptedCount = options.alreadyAcceptedCount;
+  let hitDaysBackBoundary = false;
+
+  for (const record of page.page) {
+    if (!isPostWithinDaysBack(record.postedAt ?? null, options.daysBack)) {
+      hitDaysBackBoundary = true;
+      continue;
+    }
+    if (options.resultsLimit && options.resultsLimit > 0 && acceptedCount >= options.resultsLimit) {
+      break;
+    }
+    candidateIds.push(record._id);
+    acceptedCount += 1;
+  }
+
+  const reachedResultLimit =
+    Boolean(options.resultsLimit && options.resultsLimit > 0) &&
+    acceptedCount >= (options.resultsLimit ?? 0);
+
+  return {
+    candidateIds,
+    continueCursor: page.continueCursor,
+    isDone: page.isDone,
+    shouldCompleteHandle: page.isDone || reachedResultLimit || hitDaysBackBoundary,
+    acceptedCount,
+  };
+}
+
+async function loadScrapedPostsByIds(
+  client: ConvexHttpClient,
+  ids: string[],
+  serviceSecret: string,
+): Promise<InstagramScrapedPost[]> {
+  if (ids.length === 0) {
+    return [];
+  }
+  const posts = (await client.query(
+    getScrapedPostsManyByIdsQuery,
+    withServiceSecret({ ids }, serviceSecret),
+  )) as SavedScrapedPostRecord[];
+  return posts
+    .map(mapSavedScrapedPostToInstagramPost)
+    .sort((left, right) => comparePostedAtDescending(left.postedAt, right.postedAt));
 }
 
 function normalizeBatchSize(value: number | undefined): number {
@@ -3763,6 +3943,7 @@ function buildDuplicateUpdatePatch(
 async function listExistingEventsBySourceIdentity(
   client: ConvexHttpClient,
   post: InstagramScrapedPost,
+  serviceSecret: string,
 ): Promise<ExistingSourceMatch[]> {
   const postContext = getPostContext(normalizeHandle(post.username), post);
   const matchesById = new Map<string, ExistingSourceMatch>();
@@ -3774,6 +3955,7 @@ async function listExistingEventsBySourceIdentity(
     try {
       const records = (await client.query(listByInstagramPostIdQuery, {
         instagramPostId: candidate,
+        serviceSecret,
       })) as ExistingEventRecord[];
       return records.map((existingEvent) => ({
         existingEvent,
@@ -3793,6 +3975,7 @@ async function listExistingEventsBySourceIdentity(
       try {
         const fallback = (await client.query(getByInstagramPostIdQuery, {
           instagramPostId: candidate,
+          serviceSecret,
         })) as ExistingEventRecord | null;
         if (!fallback) {
           return [];
@@ -3822,6 +4005,7 @@ async function listExistingEventsBySourceIdentity(
     try {
       const records = (await client.query(listByInstagramPostUrlQuery, {
         instagramPostUrl: postUrl,
+        serviceSecret,
       })) as ExistingEventRecord[];
       return records.map((existingEvent) => ({
         existingEvent,
@@ -3841,6 +4025,7 @@ async function listExistingEventsBySourceIdentity(
       try {
         const fallback = (await client.query(getByInstagramPostUrlQuery, {
           instagramPostUrl: postUrl,
+          serviceSecret,
         })) as ExistingEventRecord | null;
         if (!fallback) {
           return [];
@@ -3898,6 +4083,7 @@ async function listExistingEventsByPreparedDates(
   client: ConvexHttpClient,
   post: InstagramScrapedPost,
   preparedResults: PrepareEventResult[],
+  serviceSecret: string,
 ): Promise<ExistingSourceMatch[]> {
   const postContext = getPostContext(normalizeHandle(post.username), post);
   const matchesById = new Map<string, ExistingSourceMatch>();
@@ -3911,6 +4097,7 @@ async function listExistingEventsByPreparedDates(
     try {
       const records = (await client.query(listByDateQuery, {
         date,
+        serviceSecret,
       })) as ExistingEventRecord[];
       for (const existingEvent of records) {
         if (matchesById.has(existingEvent._id)) {
@@ -4508,6 +4695,7 @@ type ProcessIngestionPostOptions = {
   canonicalVenueNamesByHandle: Record<string, string>;
   venueNameOverridesByHandle: Record<string, string>;
   configuredVenueNamesByHandle: Record<string, string>;
+  serviceSecret: string;
 };
 
 async function processIngestionPost(options: ProcessIngestionPostOptions): Promise<void> {
@@ -4519,6 +4707,7 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     canonicalVenueNamesByHandle,
     venueNameOverridesByHandle,
     configuredVenueNamesByHandle,
+    serviceSecret,
   } = options;
   const postContext = getPostContext(handle, post);
   const canonicalVenueName =
@@ -4534,7 +4723,11 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
   let imageDataUrl: string | null = null;
 
   try {
-    sourceIdentityMatches = await listExistingEventsBySourceIdentity(client, post);
+    sourceIdentityMatches = await listExistingEventsBySourceIdentity(
+      client,
+      post,
+      serviceSecret,
+    );
   } catch (error) {
     summary.failedExtractions += 1;
     summary.failed_extractions += 1;
@@ -4718,6 +4911,7 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
       client,
       post,
       preparedResults,
+      serviceSecret,
     );
     const matchesById = new Map<string, ExistingSourceMatch>();
     for (const match of sourceIdentityMatches) {
@@ -4811,6 +5005,7 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
         await client.mutation(updateEventMutation, {
           id: existingMatch.existingEvent._id,
           patch: updatePayload.patch,
+          serviceSecret,
         });
         summary.updated_duplicates_bad_data += 1;
         logInfo(updateReasonEvent, {
@@ -4862,7 +5057,10 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     try {
       const insertedId = (await client.mutation(
         createEventMutation,
-        prepared.event,
+        {
+          ...prepared.event,
+          serviceSecret,
+        },
       )) as string;
       summary.insertedEvents += 1;
       summary.inserted_events += 1;
@@ -4910,6 +5108,7 @@ type ProcessLoadedPostsForHandleOptions = {
   posts: InstagramScrapedPost[];
   summary: HandleSummary;
   seenSourceKeys: string[];
+  serviceSecret: string;
 } & IngestionVenueContext;
 
 async function processLoadedPostsForHandle(
@@ -4924,6 +5123,7 @@ async function processLoadedPostsForHandle(
     canonicalVenueNamesByHandle,
     venueNameOverridesByHandle,
     configuredVenueNamesByHandle,
+    serviceSecret,
   } = options;
 
   for (const rawPost of posts) {
@@ -4957,6 +5157,7 @@ async function processLoadedPostsForHandle(
       canonicalVenueNamesByHandle,
       venueNameOverridesByHandle,
       configuredVenueNamesByHandle,
+      serviceSecret,
     });
   }
 }
@@ -4964,6 +5165,7 @@ async function processLoadedPostsForHandle(
 async function runInstagramIngestionFullScrapeBatchStep(
   options: IngestionBatchStepOptions & IngestionVenueContext & {
     client: ConvexHttpClient;
+    serviceSecret: string;
   },
 ): Promise<IngestionBatchStepResult> {
   const summary = options.summary;
@@ -4980,12 +5182,17 @@ async function runInstagramIngestionFullScrapeBatchStep(
       handleBatch,
       summary,
       options,
+      options.serviceSecret,
     );
 
     for (const handle of handleBatch) {
       state.currentHandle = handle;
       state.currentPostIndex = 0;
-      state.currentHandlePosts = postsByHandle[handle] ?? [];
+      state.currentHandlePosts = [];
+      state.currentScrapedPostCursor = null;
+      state.currentScrapedPostIds = [];
+      state.currentScrapedPostIdIndex = 0;
+      state.currentScrapedPostPageDone = false;
 
       const posts = postsByHandle[handle];
       if (posts) {
@@ -4998,6 +5205,7 @@ async function runInstagramIngestionFullScrapeBatchStep(
           posts,
           summary: getOrCreateHandleSummary(summary, handle),
           seenSourceKeys,
+          serviceSecret: options.serviceSecret,
           canonicalVenueNamesByHandle: options.canonicalVenueNamesByHandle,
           venueNameOverridesByHandle: options.venueNameOverridesByHandle,
           configuredVenueNamesByHandle: options.configuredVenueNamesByHandle,
@@ -5013,9 +5221,14 @@ async function runInstagramIngestionFullScrapeBatchStep(
     state.currentHandle = null;
     state.currentPostIndex = 0;
     state.currentHandlePosts = [];
+    state.currentScrapedPostCursor = null;
+    state.currentScrapedPostIds = [];
+    state.currentScrapedPostIdIndex = 0;
+    state.currentScrapedPostPageDone = false;
     await runApprovedDuplicateCleanupForIngestion(options.client, summary, {
       mode: "full_scrape",
       handles: options.handles,
+      serviceSecret: options.serviceSecret,
     });
   }
   summary.finishedAt = new Date().toISOString();
@@ -5031,15 +5244,18 @@ export async function runInstagramIngestionBatchStep(
   options: IngestionBatchStepOptions,
 ): Promise<IngestionBatchStepResult> {
   const client = getConvexClient();
+  const serviceSecret = getConfiguredServiceSecret(options.serviceSecret);
   const {
     canonicalVenueNamesByHandle,
     venueNameOverridesByHandle,
     configuredVenueNamesByHandle,
-  } = await loadIngestionVenueContext(client);
+  } = await loadIngestionVenueContext(client, serviceSecret);
   const batchSize = normalizeBatchSize(options.batchSize);
   const mode = options.mode ?? "full_scrape";
   const summary = options.summary;
   const state = options.state;
+  const postStepLimit = normalizeIngestionPostStepLimit(options.postStepLimit);
+  const scrapedPostPageSize = normalizeScrapedPostPageSize(options.scrapedPostPageSize);
 
   if (mode === "full_scrape") {
     return runInstagramIngestionFullScrapeBatchStep({
@@ -5050,12 +5266,13 @@ export async function runInstagramIngestionBatchStep(
       configuredVenueNamesByHandle,
       batchSize,
       mode,
+      serviceSecret,
     });
   }
 
   let processedPosts = 0;
 
-  while (processedPosts < batchSize && state.handleIndex < options.handles.length) {
+  while (processedPosts < postStepLimit && state.handleIndex < options.handles.length) {
     const handle = options.handles[state.handleIndex];
     const handleSummary = getOrCreateHandleSummary(summary, handle);
 
@@ -5063,20 +5280,61 @@ export async function runInstagramIngestionBatchStep(
       state.currentHandle = handle;
       state.currentPostIndex = 0;
       state.currentHandlePosts = [];
+      state.currentScrapedPostCursor = null;
+      state.currentScrapedPostIds = [];
+      state.currentScrapedPostIdIndex = 0;
+      state.currentScrapedPostPageDone = false;
     }
 
-    if (state.currentHandlePosts.length === 0) {
+    const currentIds = state.currentScrapedPostIds ?? [];
+    const currentIdIndex = state.currentScrapedPostIdIndex ?? 0;
+    if (currentIds.length === 0 || currentIdIndex >= currentIds.length) {
+      if (state.currentScrapedPostPageDone) {
+        state.handleIndex += 1;
+        state.currentHandle = null;
+        state.currentPostIndex = 0;
+        state.currentHandlePosts = [];
+        state.currentScrapedPostCursor = null;
+        state.currentScrapedPostIds = [];
+        state.currentScrapedPostIdIndex = 0;
+        state.currentScrapedPostPageDone = false;
+        continue;
+      }
+
       try {
-        const posts = await loadSavedScrapedPostsForHandle(
+        const page = await loadSavedScrapedPostPageForHandle({
           client,
           handle,
-          options.resultsLimit,
-          options.daysBack,
-        );
+          cursor: state.currentScrapedPostCursor ?? null,
+          pageSize: scrapedPostPageSize,
+          daysBack: options.daysBack,
+          alreadyAcceptedCount: state.currentPostIndex,
+          resultsLimit: options.resultsLimit,
+          serviceSecret,
+        });
 
-        handleSummary.fetchedPosts = posts.length;
-        handleSummary.fetched_posts = posts.length;
-        state.currentHandlePosts = posts;
+        handleSummary.fetchedPosts = page.acceptedCount;
+        handleSummary.fetched_posts = page.acceptedCount;
+        state.currentPostIndex = page.acceptedCount;
+        state.currentHandlePosts = [];
+        state.currentScrapedPostCursor = page.continueCursor;
+        state.currentScrapedPostIds = page.candidateIds;
+        state.currentScrapedPostIdIndex = 0;
+        state.currentScrapedPostPageDone = page.shouldCompleteHandle;
+
+        if (page.candidateIds.length === 0) {
+          if (page.shouldCompleteHandle) {
+            state.handleIndex += 1;
+            state.currentHandle = null;
+            state.currentPostIndex = 0;
+            state.currentHandlePosts = [];
+            state.currentScrapedPostCursor = null;
+            state.currentScrapedPostIds = [];
+            state.currentScrapedPostIdIndex = 0;
+            state.currentScrapedPostPageDone = false;
+          }
+          continue;
+        }
       } catch (error) {
         handleSummary.errors.push(
           getErrorMessage(error),
@@ -5093,53 +5351,76 @@ export async function runInstagramIngestionBatchStep(
         state.currentHandle = null;
         state.currentPostIndex = 0;
         state.currentHandlePosts = [];
+        state.currentScrapedPostCursor = null;
+        state.currentScrapedPostIds = [];
+        state.currentScrapedPostIdIndex = 0;
+        state.currentScrapedPostPageDone = false;
         continue;
       }
     }
 
-    if (state.currentPostIndex >= state.currentHandlePosts.length) {
-      state.handleIndex += 1;
-      state.currentHandle = null;
-      state.currentPostIndex = 0;
-      state.currentHandlePosts = [];
-      continue;
-    }
+    const ids = state.currentScrapedPostIds ?? [];
+    const remainingCapacity = postStepLimit - processedPosts;
+    const idsStartIndex = state.currentScrapedPostIdIndex ?? 0;
+    const idsToLoad = ids.slice(
+      idsStartIndex,
+      idsStartIndex + remainingCapacity,
+    );
+    const posts = await loadScrapedPostsByIds(client, idsToLoad, serviceSecret);
+    state.currentScrapedPostIdIndex = idsStartIndex + idsToLoad.length;
 
-    let post = state.currentHandlePosts[state.currentPostIndex];
-    state.currentPostIndex += 1;
+    for (const rawPost of posts) {
+      let post = rawPost;
+      processedPosts += 1;
 
-    try {
-      post = normalizeScrapedPost(post);
-    } catch (error) {
-      handleSummary.errors.push(getErrorMessage(error));
-      logError("ingestion.post.normalize.failed", {
-        step: "normalize_posts" satisfies IngestionStep,
-        ...getPostContext(handle, post),
-        error: getErrorMessage(error),
+      try {
+        post = normalizeScrapedPost(post);
+      } catch (error) {
+        handleSummary.errors.push(getErrorMessage(error));
+        logError("ingestion.post.normalize.failed", {
+          step: "normalize_posts" satisfies IngestionStep,
+          ...getPostContext(handle, post),
+          error: getErrorMessage(error),
+        });
+        continue;
+      }
+
+      const sourceKey = getSourceIdentityKey(post);
+      if (sourceKey) {
+        const seenForHandle = state.seenSourceKeysByHandle[handle] ?? [];
+        if (seenForHandle.includes(sourceKey)) {
+          continue;
+        }
+        seenForHandle.push(sourceKey);
+        state.seenSourceKeysByHandle[handle] = seenForHandle;
+      }
+
+      await processIngestionPost({
+        client,
+        handle,
+        post,
+        summary: handleSummary,
+        canonicalVenueNamesByHandle,
+        venueNameOverridesByHandle,
+        configuredVenueNamesByHandle,
+        serviceSecret,
       });
-      continue;
     }
 
-    const sourceKey = getSourceIdentityKey(post);
-    if (sourceKey) {
-      const seenForHandle = state.seenSourceKeysByHandle[handle] ?? [];
-      if (seenForHandle.includes(sourceKey)) {
-        continue;
+    if ((state.currentScrapedPostIdIndex ?? 0) >= ids.length) {
+      state.currentScrapedPostIds = [];
+      state.currentScrapedPostIdIndex = 0;
+      if (state.currentScrapedPostPageDone) {
+        state.handleIndex += 1;
+        state.currentHandle = null;
+        state.currentPostIndex = 0;
+        state.currentHandlePosts = [];
+        state.currentScrapedPostCursor = null;
+        state.currentScrapedPostIds = [];
+        state.currentScrapedPostIdIndex = 0;
+        state.currentScrapedPostPageDone = false;
       }
-      seenForHandle.push(sourceKey);
-      state.seenSourceKeysByHandle[handle] = seenForHandle;
     }
-
-    await processIngestionPost({
-      client,
-      handle,
-      post,
-      summary: handleSummary,
-      canonicalVenueNamesByHandle,
-      venueNameOverridesByHandle,
-      configuredVenueNamesByHandle,
-    });
-    processedPosts += 1;
   }
 
   const done = state.handleIndex >= options.handles.length;
@@ -5147,9 +5428,14 @@ export async function runInstagramIngestionBatchStep(
     state.currentHandle = null;
     state.currentPostIndex = 0;
     state.currentHandlePosts = [];
+    state.currentScrapedPostCursor = null;
+    state.currentScrapedPostIds = [];
+    state.currentScrapedPostIdIndex = 0;
+    state.currentScrapedPostPageDone = false;
     await runApprovedDuplicateCleanupForIngestion(client, summary, {
       mode,
       handles: options.handles,
+      serviceSecret,
     });
   }
   summary.finishedAt = new Date().toISOString();
@@ -5161,9 +5447,15 @@ export async function runInstagramIngestionBatchStep(
   };
 }
 
-export async function getActiveVenueHandles(): Promise<string[]> {
+export async function getActiveVenueHandles(options?: {
+  serviceSecret?: string;
+}): Promise<string[]> {
   const client = getConvexClient();
-  const venues = (await client.query(listActiveVenuesQuery, {})) as ActiveVenueRecord[];
+  const serviceSecret = getConfiguredServiceSecret(options?.serviceSecret);
+  const venues = (await client.query(
+    listActiveVenuesQuery,
+    withServiceSecret({}, serviceSecret),
+  )) as ActiveVenueRecord[];
   const uniqueHandles = new Set<string>();
 
   for (const venue of venues) {
@@ -5179,6 +5471,7 @@ export async function getActiveVenueHandles(): Promise<string[]> {
 export async function importRecentApifyRunPostsToSavedPosts(options: {
   handles: string[];
   runsLimit?: number;
+  serviceSecret?: string;
 }): Promise<RecentApifyImportSummary> {
   const normalizedHandles = [...new Set(options.handles.map((handle) => normalizeHandle(handle)).filter(Boolean))];
   if (normalizedHandles.length === 0) {
@@ -5191,6 +5484,7 @@ export async function importRecentApifyRunPostsToSavedPosts(options: {
   }
 
   const client = getConvexClient();
+  const serviceSecret = getConfiguredServiceSecret(options.serviceSecret);
   const importResult = await loadRecentApifyRunPosts({
     handles: normalizedHandles,
     runsLimit: options.runsLimit,
@@ -5204,7 +5498,7 @@ export async function importRecentApifyRunPostsToSavedPosts(options: {
     }
 
     handlesWithImportedPosts += 1;
-    await persistScrapedPostsForHandle(client, handle, posts);
+    await persistScrapedPostsForHandle(client, handle, posts, serviceSecret);
   }
 
   return {
@@ -5215,9 +5509,15 @@ export async function importRecentApifyRunPostsToSavedPosts(options: {
   };
 }
 
-export async function importUpcomingEventsToSavedPosts(): Promise<ExistingEventImportSummary> {
+export async function importUpcomingEventsToSavedPosts(options?: {
+  serviceSecret?: string;
+}): Promise<ExistingEventImportSummary> {
   const client = getConvexClient();
-  const venues = (await client.query(listVenuesQuery, {})) as VenueRecord[];
+  const serviceSecret = getConfiguredServiceSecret(options?.serviceSecret);
+  const venues = (await client.query(
+    listVenuesQuery,
+    withServiceSecret({}, serviceSecret),
+  )) as VenueRecord[];
   const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle(venues);
   const handlesByVenueName = buildVenueHandleByCanonicalVenueName(
     canonicalVenueNamesByHandle,
@@ -5228,10 +5528,12 @@ export async function importUpcomingEventsToSavedPosts(): Promise<ExistingEventI
     client.query(listByStatusQuery, {
       status: "approved",
       limit: EXISTING_EVENT_IMPORT_LIMIT_PER_STATUS,
+      serviceSecret,
     }) as Promise<EventImportRecord[]>,
     client.query(listByStatusQuery, {
       status: "pending",
       limit: EXISTING_EVENT_IMPORT_LIMIT_PER_STATUS,
+      serviceSecret,
     }) as Promise<EventImportRecord[]>,
   ]);
 
@@ -5290,7 +5592,7 @@ export async function importUpcomingEventsToSavedPosts(): Promise<ExistingEventI
       continue;
     }
 
-    await persistScrapedPostsForHandle(client, handle, posts);
+    await persistScrapedPostsForHandle(client, handle, posts, serviceSecret);
     importedHandles.push(handle);
     importedPosts += posts.length;
   }
@@ -5311,6 +5613,7 @@ async function fetchFreshPostsForHandlesInParallel(
   handles: string[],
   summary: IngestionSummary,
   options: Pick<RunInstagramIngestionOptions, "resultsLimit" | "daysBack">,
+  serviceSecret: string,
 ): Promise<Record<string, InstagramScrapedPost[]>> {
   const postsByHandle: Record<string, InstagramScrapedPost[]> = {};
   let nextHandleIndex = 0;
@@ -5328,7 +5631,7 @@ async function fetchFreshPostsForHandlesInParallel(
         });
 
         try {
-          await persistScrapedPostsForHandle(client, handle, posts);
+          await persistScrapedPostsForHandle(client, handle, posts, serviceSecret);
         } catch (persistError) {
           logError("ingestion.scrape.persist_failed", {
             step: "fetch_posts" satisfies IngestionStep,
@@ -5373,12 +5676,14 @@ async function runInstagramIngestionWithConcurrentFullScrape(
   summary: IngestionSummary,
 ): Promise<IngestionSummary> {
   const client = getConvexClient();
-  const venueContext = await loadIngestionVenueContext(client);
+  const serviceSecret = getConfiguredServiceSecret(options.serviceSecret);
+  const venueContext = await loadIngestionVenueContext(client, serviceSecret);
   const postsByHandle = await fetchFreshPostsForHandlesInParallel(
     client,
     options.handles,
     summary,
     options,
+    serviceSecret,
   );
   const seenSourceKeysByHandle: Record<string, string[]> = {};
 
@@ -5397,6 +5702,7 @@ async function runInstagramIngestionWithConcurrentFullScrape(
       posts,
       summary: getOrCreateHandleSummary(summary, handle),
       seenSourceKeys,
+      serviceSecret,
       ...venueContext,
     });
   }
@@ -5404,6 +5710,7 @@ async function runInstagramIngestionWithConcurrentFullScrape(
   await runApprovedDuplicateCleanupForIngestion(client, summary, {
     mode: "full_scrape",
     handles: options.handles,
+    serviceSecret,
   });
   summary.finishedAt = new Date().toISOString();
   return summary;
@@ -5413,8 +5720,10 @@ export async function runActiveVenueIngestion(options?: {
   resultsLimit?: number;
   daysBack?: number;
   mode?: IngestionRunMode;
+  serviceSecret?: string;
 }): Promise<ActiveVenueIngestionResult> {
-  const venueHandles = await getActiveVenueHandles();
+  const serviceSecret = getConfiguredServiceSecret(options?.serviceSecret);
+  const venueHandles = await getActiveVenueHandles({ serviceSecret });
   if (venueHandles.length === 0) {
     return {
       venueHandles: [],
@@ -5431,6 +5740,7 @@ export async function runActiveVenueIngestion(options?: {
     resultsLimit: options?.resultsLimit,
     daysBack: options?.daysBack,
     mode: options?.mode,
+    serviceSecret,
   });
 
   return { venueHandles, summary };
@@ -5440,9 +5750,13 @@ export async function runInstagramIngestion(
   options: RunInstagramIngestionOptions,
 ): Promise<IngestionSummary> {
   const summary = createEmptyIngestionSummary(options.handles);
+  const serviceSecret = getConfiguredServiceSecret(options.serviceSecret);
 
   if ((options.mode ?? "full_scrape") === "full_scrape") {
-    return runInstagramIngestionWithConcurrentFullScrape(options, summary);
+    return runInstagramIngestionWithConcurrentFullScrape(
+      { ...options, serviceSecret },
+      summary,
+    );
   }
 
   const state = createInitialIngestionBatchState();
@@ -5457,6 +5771,7 @@ export async function runInstagramIngestion(
       daysBack: options.daysBack,
       batchSize: 10,
       mode: options.mode,
+      serviceSecret,
     });
     done = batchResult.done;
   }

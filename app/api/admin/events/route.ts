@@ -1,7 +1,7 @@
-import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
+import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 
 type EventStatus = "pending" | "approved" | "rejected";
@@ -99,14 +99,6 @@ function parseStatus(value: string | null): EventStatus {
   return "pending";
 }
 
-function getConvexHttpClient() {
-  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
-  if (!convexUrl) {
-    throw new Error("NEXT_PUBLIC_CONVEX_URL is not configured.");
-  }
-  return new ConvexHttpClient(convexUrl);
-}
-
 function normalizeDateValue(value: unknown): string | undefined {
   if (value === null || value === undefined || value === "") {
     return undefined;
@@ -151,7 +143,7 @@ export async function GET(request: Request) {
   const includeDuplicateContext = searchParams.get("duplicateContext") === "1";
 
   try {
-    const convex = getConvexHttpClient();
+    const convex = await createAuthenticatedConvexHttpClient();
     const events = (await convex.query(listByStatusQuery, {
       status,
       limit,
@@ -213,7 +205,7 @@ export async function PATCH(request: Request) {
             promotionStart: normalizeDateValue(body.promotionStart),
             promotionTier: tier,
           };
-    const convex = getConvexHttpClient();
+    const convex = await createAuthenticatedConvexHttpClient();
     await convex.mutation(updateEventMutation, {
       id: eventId,
       patch,

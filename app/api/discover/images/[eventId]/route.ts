@@ -4,6 +4,10 @@ import { getDiscoverImageCandidate } from "@/lib/discover/discover-image-source"
 import {
   normalizeInstagramPostUrl,
 } from "@/lib/images/apify-images";
+import {
+  assertImageResponseHeaders,
+  readImageResponseBodyWithLimit,
+} from "@/lib/images/image-response-guardrails";
 
 export const runtime = "nodejs";
 
@@ -26,7 +30,8 @@ type ScrapedPostRecord = {
   imageUrls?: string[];
 };
 
-const getEventQuery = "events:getEvent" as unknown as FunctionReference<"query">;
+const getPublicApprovedEventQuery =
+  "events:getPublicApprovedEvent" as unknown as FunctionReference<"query">;
 const getScrapedPostByHandleAndPostRefQuery =
   "scrapedPosts:getByHandleAndPostRef" as unknown as FunctionReference<"query">;
 
@@ -61,6 +66,7 @@ function errorResponse(message: string, status: number): Response {
     status,
     headers: {
       "content-type": "text/plain; charset=utf-8",
+      "x-content-type-options": "nosniff",
     },
   });
 }
@@ -91,10 +97,10 @@ export async function GET(request: Request, context: RouteContext) {
   const handle = normalizeHandle(new URL(request.url).searchParams.get("handle"));
 
   try {
-    const event = (await convex.query(getEventQuery, {
+    const event = (await convex.query(getPublicApprovedEventQuery, {
       id: context.params.eventId,
     })) as EventRecord | null;
-    if (!event || event.status !== "approved") {
+    if (!event) {
       return errorResponse("Image not found.", 404);
     }
 
@@ -105,18 +111,18 @@ export async function GET(request: Request, context: RouteContext) {
     }
 
     const imageResponse = await fetchImage(sourceUrl);
-    const contentType = imageResponse.headers.get("content-type") ?? "";
-    if (!imageResponse.ok || !contentType.toLowerCase().startsWith("image/")) {
+    if (!imageResponse.ok) {
       return errorResponse("Image source failed.", 502);
     }
-    if (!imageResponse.body) {
-      return errorResponse("Image source was empty.", 502);
-    }
+    const contentType = assertImageResponseHeaders(imageResponse);
+    const imageBuffer = await readImageResponseBodyWithLimit(imageResponse);
 
-    return new Response(imageResponse.body, {
+    return new Response(new Uint8Array(imageBuffer), {
       headers: {
         "cache-control": "public, max-age=3600, stale-while-revalidate=86400",
         "content-type": contentType,
+        "content-length": String(imageBuffer.byteLength),
+        "x-content-type-options": "nosniff",
       },
     });
   } catch {

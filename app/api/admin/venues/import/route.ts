@@ -1,8 +1,8 @@
-import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { parse } from "csv-parse/sync";
 import { NextResponse } from "next/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
+import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
 import { canonicalizeVenueCategory } from "@/lib/taxonomy/venue-types";
 
 type VenueRecord = {
@@ -24,14 +24,6 @@ const createVenueMutation =
   "venues:createVenue" as unknown as FunctionReference<"mutation">;
 const updateVenueMutation =
   "venues:updateVenue" as unknown as FunctionReference<"mutation">;
-
-function getConvexClient() {
-  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
-  if (!convexUrl) {
-    throw new Error("NEXT_PUBLIC_CONVEX_URL is not configured.");
-  }
-  return new ConvexHttpClient(convexUrl);
-}
 
 function normalizeHandle(handle: string): string {
   return handle.trim().replace(/^@/, "").toLowerCase();
@@ -131,7 +123,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const convex = getConvexClient();
+    const convex = await createAuthenticatedConvexHttpClient();
     const existingVenues = (await convex.query(listVenuesQuery, {})) as VenueRecord[];
     const byHandle = new Map(
       existingVenues.map((venue) => [normalizeHandle(venue.instagramHandle), venue] as const),

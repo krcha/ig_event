@@ -6,7 +6,7 @@ import {
   hasConfiguredAdminClerkUserIds,
   isAdminClerkUserId,
 } from "@/lib/auth/admin";
-import { hasClerkEnv, shouldFailClosedForAdminRoutes } from "@/lib/utils/env";
+import { hasClerkEnv } from "@/lib/utils/env";
 
 export type AdminApiAccessResult =
   | {
@@ -20,19 +20,12 @@ export type AdminApiAccessResult =
 
 export async function requireAdminApiAccess(): Promise<AdminApiAccessResult> {
   if (!hasClerkEnv()) {
-    if (shouldFailClosedForAdminRoutes()) {
-      return {
-        ok: false,
-        response: NextResponse.json(
-          { error: "Admin authentication is not configured." },
-          { status: 503 },
-        ),
-      };
-    }
-
     return {
-      ok: true,
-      userId: null,
+      ok: false,
+      response: NextResponse.json(
+        { error: "Admin authentication is not configured." },
+        { status: 503 },
+      ),
     };
   }
 

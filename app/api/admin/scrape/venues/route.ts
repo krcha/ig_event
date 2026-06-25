@@ -1,7 +1,10 @@
-import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
+import {
+  createAuthenticatedConvexHttpClient,
+  requireServiceSecret,
+} from "@/lib/convex/server";
 import {
   createEmptyIngestionSummary,
   createInitialIngestionBatchState,
@@ -15,7 +18,6 @@ import {
   getCronIngestionConfig,
   selectCronIngestionHandles,
 } from "@/lib/pipeline/cron-ingestion-config";
-import { getRequiredEnv } from "@/lib/utils/env";
 
 type Body = {
   resultsLimit?: number;
@@ -91,9 +93,10 @@ export async function POST(request: Request) {
     const mode = normalizeMode(body.mode);
     const resultsLimit = normalizePositiveInt(body.resultsLimit);
     const daysBack = normalizePositiveInt(body.daysBack);
+    const serviceSecret = requireServiceSecret();
 
     step = "load_active_venues";
-    const activeVenueHandles = await getActiveVenueHandles();
+    const activeVenueHandles = await getActiveVenueHandles({ serviceSecret });
     if (activeVenueHandles.length === 0) {
       return NextResponse.json(
         {
@@ -115,6 +118,7 @@ export async function POST(request: Request) {
       const recentFullScrapeSummary = await getRecentFullScrapeAttemptSummary({
         candidateHandles: activeVenueHandles,
         minCreatedAt: Date.now() - cooldownMs,
+        serviceSecret,
       });
       const handleSelection = selectCronIngestionHandles({
         activeVenueHandles,
@@ -139,7 +143,7 @@ export async function POST(request: Request) {
     }
 
     step = "enqueue_active_venue_job";
-    const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
+    const convex = await createAuthenticatedConvexHttpClient();
     const summary = createEmptyIngestionSummary(handles, {
       source: "active_venues",
       mode,

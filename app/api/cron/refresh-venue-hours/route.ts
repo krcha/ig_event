@@ -1,6 +1,7 @@
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
+import { requireServiceSecret } from "@/lib/convex/server";
 import { isAuthorizedCronRequestHeader } from "@/lib/pipeline/cron-ingestion-config";
 import {
   fetchVenueHoursPatch,
@@ -68,7 +69,10 @@ export async function GET(request: Request) {
 
   try {
     const convex = getConvexClient();
-    const venues = (await convex.query(listVenuesQuery, {})) as VenueForHoursRefresh[];
+    const serviceSecret = requireServiceSecret();
+    const venues = (await convex.query(listVenuesQuery, {
+      serviceSecret,
+    })) as VenueForHoursRefresh[];
     const refreshLimit = parseRefreshLimit(process.env.VENUE_HOURS_REFRESH_LIMIT);
     const refreshDelayMs = parseRefreshDelayMs(process.env.VENUE_HOURS_REFRESH_DELAY_MS);
     const now = Date.now();
@@ -109,6 +113,7 @@ export async function GET(request: Request) {
         await convex.mutation(patchVenueHoursMutation, {
           id: venue._id,
           patch,
+          serviceSecret,
         });
         summary.refreshed += 1;
         summary.results.push({

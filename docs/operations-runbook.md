@@ -140,8 +140,10 @@ Notes:
   fails closed in production and allows unauthenticated calls only for local
   convenience.
 - `EVENTS_TIMEZONE` controls local event-day handling.
-- `OPENAI_VISION_MODEL` and `OPENAI_REVIEW_MODEL` should be set explicitly for
-  cost control.
+- `OPENAI_VISION_MODEL` and `OPENAI_REVIEW_MODEL` must be set in production;
+  the default cost-control value is `gpt-4.1-mini`.
+- `CLERK_JWT_ISSUER_DOMAIN` must match the Clerk JWT issuer configured for the
+  Convex `convex` JWT template.
 - `CONVEX_DEPLOY_KEY` is a deploy-time secret only. Do not put it in the VPS
   runtime env unless that host is also responsible for deploying Convex.
 - `CONVEX_SELF_HOSTED_ADMIN_KEY` is the equivalent deploy/import secret for the
