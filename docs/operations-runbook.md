@@ -96,8 +96,8 @@ CLERK_SECRET_KEY=
 CLERK_AUTHORIZED_PARTIES=https://events.ineedtofeedmyrabbit.com
 NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
 NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
-NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/admin
-NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/admin
+NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/
+NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/
 NEXT_PUBLIC_CONVEX_URL=
 CONVEX_DEPLOYMENT=
 CONVEX_SELF_HOSTED_URL=
@@ -125,7 +125,7 @@ Notes:
   `convex-backend`.
 - `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, and the
   fallback redirect URLs keep Clerk redirects on the app's custom auth pages and
-  return successful admin sign-ins to `/admin`.
+  return default successful sign-ins to `/`.
 - `CLERK_AUTHORIZED_PARTIES` should be set to the production app origin. Clerk
   middleware uses it to reject session tokens from other same-root subdomains.
 - The custom auth pages use Clerk email/password forms with email-code

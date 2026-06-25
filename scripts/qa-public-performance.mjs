@@ -17,6 +17,7 @@ const mobileMonthDayStripSource = read("components/calendar/mobile-month-day-str
 const eventDetailSource = read("app/(main)/events/[eventId]/page.tsx");
 const savedPanelSource = read("components/saved/saved-library-panel.tsx");
 const middlewareSource = read("middleware.ts");
+const nextConfigSource = read("next.config.mjs");
 const packageJson = JSON.parse(read("package.json"));
 const releaseCheckSource = read("scripts/release-check.mjs");
 
@@ -233,6 +234,26 @@ assertDoesNotInclude(
   middlewareSource,
   '/((?!.*\\\\..*|_next).*)',
   "Clerk middleware should not match every public page.",
+);
+assert.match(
+  nextConfigSource,
+  /const CANONICAL_APP_ORIGIN = "https:\/\/events\.ineedtofeedmyrabbit\.com";/,
+  "Next config should define the canonical public app origin.",
+);
+assert.match(
+  nextConfigSource,
+  /const VERCEL_PRODUCTION_HOST = "ig-event\.vercel\.app";/,
+  "Next config should define the Vercel production alias host.",
+);
+assert.match(
+  nextConfigSource,
+  /has:\s*\[\{ type: "host", value: VERCEL_PRODUCTION_HOST \}\]/,
+  "Vercel production alias should redirect by Host header.",
+);
+assert.match(
+  nextConfigSource,
+  /destination: `\$\{CANONICAL_APP_ORIGIN\}\/:path\*`/,
+  "Vercel production alias should preserve the path on the canonical origin.",
 );
 
 assert.ok(

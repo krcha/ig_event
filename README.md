@@ -102,8 +102,8 @@ CLERK_JWT_ISSUER_DOMAIN=
 CLERK_AUTHORIZED_PARTIES=https://events.ineedtofeedmyrabbit.com
 NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
 NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
-NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/admin
-NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/admin
+NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/
+NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/
 NEXT_PUBLIC_CONVEX_URL=
 CONVEX_DEPLOYMENT=
 CONVEX_SELF_HOSTED_URL=
@@ -138,7 +138,7 @@ Notes:
   `http://convex-backend:3210`.
 - `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, and the
   fallback redirect URLs point Clerk at the in-app `/sign-in` and `/sign-up`
-  pages and send successful admin sign-ins back to `/admin`.
+  pages and send successful default sign-ins back to `/`.
 - `CLERK_AUTHORIZED_PARTIES` should be set in production to the public app
   origin so Clerk middleware rejects session tokens minted for another
   subdomain.
@@ -186,7 +186,7 @@ npm run convex:codegen
 `qa:release` runs the deterministic release gate used by CI: lint, typecheck,
 `next build`, dedupe QA, automerge QA, extraction QA, venue taxonomy QA, public
 search/sort/mobile QA, Apify cost-control QA, follow-discovery QA, Convex
-retention-cron QA, and Clerk Instagram SSO QA.
+retention-cron QA, and Clerk email auth QA.
 
 `npm run build` is a normal release requirement. Treat any build failure or
 timeout as a release blocker before production rollout.

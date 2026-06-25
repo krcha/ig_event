@@ -1,4 +1,7 @@
 /** @type {import("next").NextConfig} */
+const CANONICAL_APP_ORIGIN = "https://events.ineedtofeedmyrabbit.com";
+const VERCEL_PRODUCTION_HOST = "ig-event.vercel.app";
+
 const nextConfig = {
   // Release checks and Docker builds run `npm run lint` and `npm run typecheck`
   // explicitly before `next build`. Skipping Next's duplicate internal checks
@@ -20,6 +23,12 @@ const nextConfig = {
   },
   async redirects() {
     return [
+      {
+        source: "/:path*",
+        has: [{ type: "host", value: VERCEL_PRODUCTION_HOST }],
+        destination: `${CANONICAL_APP_ORIGIN}/:path*`,
+        permanent: true,
+      },
       {
         source: "/calendar",
         destination: "/",

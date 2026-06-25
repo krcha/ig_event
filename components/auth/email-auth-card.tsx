@@ -4,7 +4,7 @@ import { useSignIn, useSignUp } from "@clerk/nextjs";
 import Link from "next/link";
 import { type FormEvent, useEffect, useState } from "react";
 
-const AUTH_COMPLETE_REDIRECT_PATH = "/admin";
+const AUTH_COMPLETE_REDIRECT_PATH = "/";
 
 type AuthMode = "sign-in" | "sign-up";
 

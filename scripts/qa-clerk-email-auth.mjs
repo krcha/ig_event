@@ -35,6 +35,7 @@ const youProfilePath = "components/auth/you-profile-panel.tsx";
 const authCard = requireFile(authCardPath);
 requireIncludes(authCardPath, authCard, "Sign in with email", "email sign-in heading");
 requireIncludes(authCardPath, authCard, "Sign up with email", "email sign-up heading");
+requireIncludes(authCardPath, authCard, 'AUTH_COMPLETE_REDIRECT_PATH = "/"', "root fallback redirect");
 requireIncludes(authCardPath, authCard, "window.location.assign(authCompleteRedirectPath)", "post-auth redirect");
 requireIncludes(authCardPath, authCard, "getSafeRedirectPath", "same-origin post-auth redirect guard");
 requireIncludes(authCardPath, authCard, "signIn.create", "manual email/password sign-in call");

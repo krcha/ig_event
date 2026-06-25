@@ -64,8 +64,9 @@ Important env vars:
 - `CLERK_AUTHORIZED_PARTIES`: production app origin allowlist for Clerk
   middleware session-token validation.
 - `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, and Clerk
-  fallback redirect URL vars should point to the in-app auth pages and `/admin`
-  fallback used by the admin workflow.
+  fallback redirect URL vars should point to the in-app auth pages and `/` as
+  the default post-auth fallback. Route-specific auth links can still pass a
+  `redirect_url` query param.
 - `CLERK_JWT_ISSUER_DOMAIN`: required by Convex auth for the Clerk JWT template
   named `convex` with application ID `convex`.
 - `ADMIN_CLERK_USER_IDS`: allowlist for admin UI visibility.
