@@ -66,10 +66,20 @@ assert.match(
   /getOpenAiModelEnv\("OPENAI_VISION_MODEL"\)/,
   "event extraction should use the shared model env helper.",
 );
+assert.doesNotMatch(
+  extractSource,
+  /^const openAiVisionModel = getOpenAiModelEnv\("OPENAI_VISION_MODEL"\);/m,
+  "event extraction should not read production model env vars at module import time.",
+);
 assert.match(
   reviewSource,
   /getOpenAiModelEnv\("OPENAI_REVIEW_MODEL"\)/,
   "approved-event review should use the shared model env helper.",
+);
+assert.doesNotMatch(
+  reviewSource,
+  /^const approvedEventsReviewModel = getOpenAiModelEnv\("OPENAI_REVIEW_MODEL"\);/m,
+  "approved-event review should not read production model env vars at module import time.",
 );
 assert.match(
   readinessSource,

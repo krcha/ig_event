@@ -5,7 +5,6 @@ import {
   EVENT_EXTRACTION_SYSTEM_PROMPT,
 } from "./event-extraction-prompt";
 
-const openAiVisionModel = getOpenAiModelEnv("OPENAI_VISION_MODEL");
 const OPENAI_REQUEST_TIMEOUT_MS = 40000;
 const OPENAI_MAX_ATTEMPTS = 2;
 
@@ -402,6 +401,7 @@ export async function extractEventDataFromInstagramPost(
   options: ExtractEventDataOptions,
 ): Promise<ExtractedEventData> {
   const openAiApiKey = getRequiredEnv("OPENAI_API_KEY");
+  const openAiVisionModel = getOpenAiModelEnv("OPENAI_VISION_MODEL");
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= OPENAI_MAX_ATTEMPTS; attempt += 1) {

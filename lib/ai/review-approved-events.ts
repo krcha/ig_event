@@ -6,7 +6,6 @@ import {
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 import { getOpenAiModelEnv, getRequiredEnv } from "@/lib/utils/env";
 
-const approvedEventsReviewModel = getOpenAiModelEnv("OPENAI_REVIEW_MODEL");
 const APPROVED_EVENTS_REVIEW_TIMEOUT_MS = 60_000;
 const APPROVED_EVENTS_REVIEW_MAX_ATTEMPTS = 2;
 
@@ -742,6 +741,7 @@ export async function reviewApprovedEventsForMasterReview(options: {
   }
 
   const openAiApiKey = getRequiredEnv("OPENAI_API_KEY");
+  const approvedEventsReviewModel = getOpenAiModelEnv("OPENAI_REVIEW_MODEL");
   const candidateGroupsForPrompt = options.candidateGroups.map((group) => ({
     group_id: group.groupId,
     event_ids: group.eventIds,
