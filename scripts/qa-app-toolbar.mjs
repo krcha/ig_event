@@ -10,7 +10,7 @@ const navigationFeedbackSource = readFileSync(
 );
 const globalsSource = readFileSync("app/globals.css", "utf8");
 const profileAvatarSource = readFileSync(
-  "components/navigation/mobile-profile-avatar-link.tsx",
+  "components/navigation/profile-avatar-link.tsx",
   "utf8",
 );
 
@@ -30,13 +30,22 @@ assert.notEqual(
 
 const mobileTopbarSource = source.slice(mobileTopbarStart, desktopHeaderStart);
 
+const mobileNavStart = source.indexOf('<nav className="mobile-nav-shell"', desktopHeaderStart);
+assert.notEqual(
+  mobileNavStart,
+  -1,
+  "Desktop header source should be separable from the mobile bottom navigation.",
+);
+
+const desktopHeaderSource = source.slice(desktopHeaderStart, mobileNavStart);
+
 assert.ok(
   mobileTopbarSource.includes("Belgrade nights"),
   "Mobile top header should keep the left brand label.",
 );
 
 assert.ok(
-  mobileTopbarSource.includes("<MobileProfileAvatarLink />"),
+  mobileTopbarSource.includes("<ProfileAvatarLink />"),
   "Mobile top header should include the shared profile avatar.",
 );
 
@@ -47,12 +56,27 @@ assert.ok(
 
 assert.ok(
   profileAvatarSource.includes('href="/you"'),
-  "Mobile top header profile avatar should link to /you.",
+  "Shared profile avatar should link to /you.",
+);
+
+assert.ok(
+  profileAvatarSource.includes('title="Your profile"'),
+  "Shared profile avatar should expose a title for desktop hover context.",
 );
 
 assert.ok(
   profileAvatarSource.includes("CircleUserRound"),
-  "Mobile top header profile avatar should render the profile icon.",
+  "Shared profile avatar should render the profile icon.",
+);
+
+assert.ok(
+  profileAvatarSource.includes('aria-current={isActive ? "page" : undefined}'),
+  "Shared profile avatar should expose active page semantics when requested.",
+);
+
+assert.ok(
+  desktopHeaderSource.includes('<ProfileAvatarLink isActive={pathname === "/you"} variant="desktop" />'),
+  "Desktop header should include a profile avatar link to the You page.",
 );
 
 assert.equal(

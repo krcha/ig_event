@@ -13,7 +13,7 @@ import {
   Telescope,
   Warehouse,
 } from "lucide-react";
-import { MobileProfileAvatarLink } from "@/components/navigation/mobile-profile-avatar-link";
+import { ProfileAvatarLink } from "@/components/navigation/profile-avatar-link";
 import { useUserLibrary } from "@/components/providers/user-library-provider";
 import { cn } from "@/lib/utils";
 
@@ -155,7 +155,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                 Belgrade nights
               </span>
             </Link>
-            <MobileProfileAvatarLink />
+            <ProfileAvatarLink />
           </div>
         </div>
       </div>
@@ -177,40 +177,43 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                   night plans, live
                 </span>
               </Link>
-              <nav
-                aria-label="Global"
-                className="flex flex-wrap items-center gap-1.5 xl:justify-end"
-              >
-                {desktopToolbarItems.map((item) => {
-                  const Icon = item.icon;
-                  const active = isActivePath(pathname, item);
-                  const badgeCount = getBadgeCount(item);
+              <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+                <nav
+                  aria-label="Global"
+                  className="flex flex-wrap items-center gap-1.5"
+                >
+                  {desktopToolbarItems.map((item) => {
+                    const Icon = item.icon;
+                    const active = isActivePath(pathname, item);
+                    const badgeCount = getBadgeCount(item);
 
-                  return (
-                    <Link
-                      aria-current={active ? "page" : undefined}
-                      className={cn(
-                        "inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-sm font-semibold",
-                        active
-                          ? "border-primary/30 bg-primary text-primary-foreground shadow-[0_16px_34px_-22px_rgba(14,116,144,0.52)]"
-                          : "border-border/75 bg-background/86 text-foreground hover:border-primary/35 hover:bg-card",
-                      )}
-                      href={item.href}
-                      key={item.href}
-                    >
-                      <span className="relative inline-flex">
-                        <Icon className="h-4 w-4" />
-                        {badgeCount > 0 ? (
-                          <span className="absolute -right-2.5 -top-2 inline-flex min-w-4 items-center justify-center rounded-full bg-primary-foreground px-1 text-[9px] font-bold leading-4 text-primary shadow-[0_8px_18px_-10px_rgba(139,134,251,0.9)]">
-                            {badgeCount > 99 ? "99+" : badgeCount}
-                          </span>
-                        ) : null}
-                      </span>
-                      <span>{item.label}</span>
-                    </Link>
-                  );
-                })}
-              </nav>
+                    return (
+                      <Link
+                        aria-current={active ? "page" : undefined}
+                        className={cn(
+                          "inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-sm font-semibold",
+                          active
+                            ? "border-primary/30 bg-primary text-primary-foreground shadow-[0_16px_34px_-22px_rgba(14,116,144,0.52)]"
+                            : "border-border/75 bg-background/86 text-foreground hover:border-primary/35 hover:bg-card",
+                        )}
+                        href={item.href}
+                        key={item.href}
+                      >
+                        <span className="relative inline-flex">
+                          <Icon className="h-4 w-4" />
+                          {badgeCount > 0 ? (
+                            <span className="absolute -right-2.5 -top-2 inline-flex min-w-4 items-center justify-center rounded-full bg-primary-foreground px-1 text-[9px] font-bold leading-4 text-primary shadow-[0_8px_18px_-10px_rgba(139,134,251,0.9)]">
+                              {badgeCount > 99 ? "99+" : badgeCount}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span>{item.label}</span>
+                      </Link>
+                    );
+                  })}
+                </nav>
+                <ProfileAvatarLink isActive={pathname === "/you"} variant="desktop" />
+              </div>
             </div>
           </div>
         </div>
