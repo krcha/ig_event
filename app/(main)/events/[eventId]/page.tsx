@@ -21,6 +21,7 @@ import {
 } from "@/lib/events/event-time";
 import { SaveEventButton } from "@/components/events/save-event-button";
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
+import { VenueWeeklyHours } from "@/components/venues/venue-weekly-hours";
 import {
   DEFAULT_EVENT_TYPE,
   canonicalizeEventType,
@@ -328,6 +329,11 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
               </aside>
             </div>
           </article>
+
+          <VenueWeeklyHours
+            hoursJson={event.venueHours?.hoursJson}
+            hoursSource={event.venueHours?.hoursSource}
+          />
 
           <div className="fixed inset-x-0 bottom-[calc(4.85rem+env(safe-area-inset-bottom))] z-40 px-3 md:hidden">
             <div className="glass-panel flex gap-2 bg-card/95 p-2 shadow-[0_-18px_48px_-34px_rgba(0,0,0,0.9)]">

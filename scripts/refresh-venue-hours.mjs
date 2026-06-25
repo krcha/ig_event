@@ -15,10 +15,13 @@ const DEFAULT_DELAY_MS = 2_500;
 
 function usage() {
   return [
-    "Usage: npm run repair:venue-hours -- [--apply] [--force] [--overpass] [--limit N] [--delay-ms N]",
+    "Usage: npm run repair:venue-hours -- [--apply] [--force] [--overpass] [--google] [--limit N] [--delay-ms N]",
     "",
     "Dry-run is the default. Fetches OSM venue hours via Nominatim and stores them only with --apply.",
     "Use --overpass for slower deep OSM fallback searches.",
+    "Use --google to fall back to Google Places for venues OSM misses (needs GOOGLE_MAPS_API_KEY + resolved googlePlaceId).",
+    "",
+    "Requires NEXT_PUBLIC_CONVEX_URL and CRON_SECRET.",
   ].join("\n");
 }
 
@@ -35,6 +38,7 @@ function parseArgs(argv) {
     apply: false,
     delayMs: DEFAULT_DELAY_MS,
     force: false,
+    google: false,
     limit: DEFAULT_LIMIT,
     overpass: false,
   };
@@ -55,6 +59,10 @@ function parseArgs(argv) {
     }
     if (arg === "--overpass") {
       options.overpass = true;
+      continue;
+    }
+    if (arg === "--google") {
+      options.google = true;
       continue;
     }
     if (arg === "--limit") {
@@ -102,9 +110,17 @@ async function main() {
   if (!convexUrl) {
     throw new Error("NEXT_PUBLIC_CONVEX_URL is required.");
   }
+  const serviceSecret = process.env.CRON_SECRET?.trim();
+  if (!serviceSecret) {
+    throw new Error("CRON_SECRET is required.");
+  }
 
   const client = new ConvexHttpClient(convexUrl);
-  const venues = await client.query(api.venues.listVenues, {});
+  const googleApiKey = process.env.GOOGLE_MAPS_API_KEY?.trim() ?? "";
+  if (options.google && !googleApiKey) {
+    throw new Error("GOOGLE_MAPS_API_KEY is required when --google is set.");
+  }
+  const venues = await client.query(api.venues.listVenues, { serviceSecret });
   const now = Date.now();
   const activeVenues = getActiveVenueHoursRefreshTargets(venues);
   const dueVenues = options.force
@@ -117,6 +133,7 @@ async function main() {
     checked: 0,
     dueVenues: dueVenues.length,
     failed: 0,
+    googleFallback: options.google,
     limit: options.limit,
     mode: options.apply ? "apply" : "dry-run",
     overpassFallback: options.overpass,
@@ -130,6 +147,7 @@ async function main() {
     try {
       const patch = await fetchVenueHoursPatch(venue, {
         force: options.force,
+        googleApiKey: options.google ? googleApiKey : undefined,
         now,
         overpassFallback: options.overpass,
       });
@@ -147,6 +165,7 @@ async function main() {
         await client.mutation(api.venues.patchVenueHours, {
           id: venue._id,
           patch,
+          serviceSecret,
         });
         summary.applied += 1;
       }

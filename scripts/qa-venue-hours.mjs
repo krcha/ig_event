@@ -72,6 +72,28 @@ function createNominatimFetch(places) {
   };
 }
 
+function createGoogleFetch(payload, options = {}) {
+  let calls = 0;
+  const requests = [];
+  const googleFetch = async (url, init) => {
+    calls += 1;
+    requests.push({ init, url });
+    if (options.status && options.status !== 200) {
+      return new Response(options.body ?? "Google provider error", {
+        status: options.status,
+      });
+    }
+    return jsonResponse(payload);
+  };
+  return {
+    get calls() {
+      return calls;
+    },
+    googleFetch,
+    requests,
+  };
+}
+
 assert.equal(getDayPeriodForStartTime("07:59"), "night", "07:59 should be night.");
 assert.equal(getDayPeriodForStartTime("08:00"), "day", "08:00 should be day.");
 assert.equal(getDayPeriodForStartTime("17:59"), "day", "17:59 should be day.");
@@ -410,9 +432,18 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
       type: "node",
     },
   ]);
+  const google = createGoogleFetch({
+    regularOpeningHours: {
+      periods: [
+        { open: { day: 5, hour: 22, minute: 0 }, close: { day: 6, hour: 4, minute: 0 } },
+      ],
+    },
+  });
   const patch = await fetchVenueHoursPatch(
-    { name: "Drugstore" },
+    { googlePlaceId: "google-place-drugstore", name: "Drugstore" },
     {
+      googleApiKey: "test-key",
+      googleFetch: google.googleFetch,
       nominatimFetch: nominatim.nominatimFetch,
       now: NOW,
       overpassFallback: true,
@@ -420,6 +451,8 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
     },
   );
   assert.equal(patch?.hoursSource, "osm", "OSM hit should be used first.");
+  assert.equal(patch?.googlePlaceId, "google-place-drugstore");
+  assert.equal(google.calls, 0, "OSM hits should skip Google fallback even when enabled.");
   assert.equal(overpass.calls, 1, "OSM hit should call Overpass once.");
   assert.equal(
     overpass.requests[0].init.headers["user-agent"],
@@ -471,9 +504,17 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
 {
   const nominatim = createNominatimFetch([]);
   const overpass = createOverpassFetch([]);
+  const google = createGoogleFetch({
+    regularOpeningHours: {
+      periods: [
+        { open: { day: 5, hour: 22, minute: 0 }, close: { day: 6, hour: 4, minute: 0 } },
+      ],
+    },
+  });
   const patch = await fetchVenueHoursPatch(
-    { name: "Drugstore" },
+    { googlePlaceId: "google-place-drugstore", name: "Drugstore" },
     {
+      googleFetch: google.googleFetch,
       nominatimFetch: nominatim.nominatimFetch,
       now: NOW,
       overpassFallback: true,
@@ -481,8 +522,70 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
     },
   );
   assert.equal(patch?.hoursSource, "none", "OSM miss should store a no-match result only.");
-  assert.equal(patch?.googlePlaceId, "", "Automatic venue-hour storage must not persist Google data.");
+  assert.equal(
+    patch?.googlePlaceId,
+    "google-place-drugstore",
+    "OSM-only refresh should preserve stored Google place IDs.",
+  );
+  assert.equal(google.calls, 0, "Google fallback should be disabled unless a key is supplied.");
   assert.equal(overpass.calls, 1, "OSM miss should call Overpass once.");
+}
+
+{
+  const nominatim = createNominatimFetch([]);
+  const overpass = createOverpassFetch([]);
+  const google = createGoogleFetch({
+    regularOpeningHours: {
+      periods: [
+        { open: { day: 5, hour: 22, minute: 0 }, close: { day: 6, hour: 4, minute: 0 } },
+      ],
+      weekdayDescriptions: ["Friday: 10:00 PM - 4:00 AM"],
+    },
+  });
+  const patch = await fetchVenueHoursPatch(
+    { googlePlaceId: "google-place-1", name: "Google Only Venue" },
+    {
+      googleApiKey: "test-key",
+      googleFetch: google.googleFetch,
+      nominatimFetch: nominatim.nominatimFetch,
+      now: NOW,
+      overpassFallback: true,
+      overpassFetch: overpass.overpassFetch,
+    },
+  );
+  const hoursJson = JSON.parse(patch?.hoursJson ?? "{}");
+  assert.equal(patch?.hoursSource, "google", "Google fallback should fill OSM misses when enabled.");
+  assert.equal(patch?.googlePlaceId, "google-place-1");
+  assert.deepEqual(hoursJson.weekly[5].windows, [
+    { day: 5, end: "04:00", spansNextDay: true, start: "22:00" },
+  ]);
+  assert.equal(google.calls, 1, "Enabled Google fallback should call Place Details once.");
+  assert.equal(
+    google.requests[0].init.headers["X-Goog-FieldMask"],
+    "id,regularOpeningHours",
+    "Google hours fetch should request only the needed fields.",
+  );
+}
+
+{
+  const nominatim = createNominatimFetch([]);
+  const overpass = createOverpassFetch([]);
+  const google = createGoogleFetch({}, { body: "Rate limited", status: 429 });
+  await assert.rejects(
+    fetchVenueHoursPatch(
+      { googlePlaceId: "google-place-error", name: "Google Error Venue" },
+      {
+        googleApiKey: "test-key",
+        googleFetch: google.googleFetch,
+        nominatimFetch: nominatim.nominatimFetch,
+        now: NOW,
+        overpassFallback: true,
+        overpassFetch: overpass.overpassFetch,
+      },
+    ),
+    /google_error:google_places_429/,
+    "Transient Google failures should not be cached as no-hours results.",
+  );
 }
 
 {
@@ -509,6 +612,34 @@ assert.equal(osmHours.weekly[3].windows[0].spansNextDay, true);
     patch,
     null,
     "Forced refresh should not overwrite existing usable OSM hours with no-match.",
+  );
+}
+
+{
+  const nominatim = createNominatimFetch([]);
+  const overpass = createOverpassFetch([]);
+  const patch = await fetchVenueHoursPatch(
+    {
+      googlePlaceId: "google-place-existing",
+      hoursJson: createHoursJson({
+        closed: false,
+        day: 3,
+        windows: [{ day: 3, end: "02:00", spansNextDay: true, start: "18:00" }],
+      }),
+      hoursSource: "google",
+      name: "Existing Google Venue",
+    },
+    {
+      force: true,
+      nominatimFetch: nominatim.nominatimFetch,
+      now: NOW,
+      overpassFetch: overpass.overpassFetch,
+    },
+  );
+  assert.equal(
+    patch,
+    null,
+    "Forced OSM-only refresh should not overwrite existing usable Google hours with no-match.",
   );
 }
 

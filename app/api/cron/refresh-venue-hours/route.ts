@@ -22,6 +22,10 @@ const listVenuesQuery = "venues:listVenues" as unknown as FunctionReference<"que
 const patchVenueHoursMutation =
   "venues:patchVenueHours" as unknown as FunctionReference<"mutation">;
 
+function isGoogleFallbackEnabled(): boolean {
+  return process.env.VENUE_HOURS_GOOGLE_FALLBACK === "true";
+}
+
 function getConvexClient() {
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
   if (!convexUrl) {
@@ -75,6 +79,11 @@ export async function GET(request: Request) {
     })) as VenueForHoursRefresh[];
     const refreshLimit = parseRefreshLimit(process.env.VENUE_HOURS_REFRESH_LIMIT);
     const refreshDelayMs = parseRefreshDelayMs(process.env.VENUE_HOURS_REFRESH_DELAY_MS);
+    const googleFallbackRequested = isGoogleFallbackEnabled();
+    const googleApiKey = googleFallbackRequested
+      ? (process.env.GOOGLE_MAPS_API_KEY ?? "").trim()
+      : "";
+    const googleFallback = Boolean(googleFallbackRequested && googleApiKey);
     const now = Date.now();
     const activeVenueCount = getActiveVenueHoursRefreshTargets(venues).length;
     const dueVenueCount = getDueVenueHoursRefreshTargets(venues, now).length;
@@ -87,6 +96,9 @@ export async function GET(request: Request) {
       refreshed: 0,
       skippedFresh: Math.max(0, activeVenueCount - dueVenueCount),
       failed: 0,
+      googleFallback,
+      googleFallbackMissingKey: googleFallbackRequested && !googleApiKey,
+      googleFallbackRequested,
       results: [] as Array<{
         error?: string;
         id?: string;
@@ -99,7 +111,10 @@ export async function GET(request: Request) {
     for (const [index, venue] of activeVenues.entries()) {
       summary.checked += 1;
       try {
-        const patch = await fetchVenueHoursPatch(venue, { now });
+        const patch = await fetchVenueHoursPatch(venue, {
+          googleApiKey: googleFallback ? googleApiKey : undefined,
+          now,
+        });
         if (!patch) {
           summary.skippedFresh += 1;
           summary.results.push({

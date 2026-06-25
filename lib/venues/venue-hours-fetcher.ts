@@ -16,6 +16,7 @@ import {
   normalizeVenueComparableText,
   toSearchableText,
 } from "@/lib/pipeline/venue-normalization";
+import { fetchGoogleVenueHours } from "@/lib/venues/google-hours";
 
 const BELGRADE_BBOX = {
   east: 20.62,
@@ -111,6 +112,8 @@ export type VenueHoursPatch = {
 
 export type VenueHoursRefreshOptions = {
   force?: boolean;
+  googleApiKey?: string;
+  googleFetch?: FetchLike;
   nominatimFetch?: FetchLike;
   now?: number;
   overpassFallback?: boolean;
@@ -127,6 +130,7 @@ type OverpassElement = {
 };
 
 type ProviderResult = {
+  googlePlaceId?: string;
   hoursJson: VenueHoursJson;
   osmElementId?: string;
   osmElementType?: string;
@@ -209,7 +213,11 @@ function hasWeeklyWindows(hoursJson: VenueHoursJson): boolean {
 }
 
 function hasStoredUsableProviderHours(venue: VenueForHoursRefresh): boolean {
-  if (venue.hoursSource !== "manual" && venue.hoursSource !== "osm") {
+  if (
+    venue.hoursSource !== "google" &&
+    venue.hoursSource !== "manual" &&
+    venue.hoursSource !== "osm"
+  ) {
     return false;
   }
   const hoursJson = parseVenueHoursJson(venue.hoursJson);
@@ -690,9 +698,10 @@ function createPatchFromProviderResult(
   result: ProviderResult,
   now: number,
   error = "",
+  existingGooglePlaceId = "",
 ): VenueHoursPatch {
   return {
-    googlePlaceId: "",
+    googlePlaceId: result.googlePlaceId ?? existingGooglePlaceId,
     hoursError: error,
     hoursExpiresAt: now + VENUE_HOURS_CACHE_TTL_MS,
     hoursFetchedAt: now,
@@ -704,10 +713,10 @@ function createPatchFromProviderResult(
   };
 }
 
-function createNonePatch(error: string, now: number): VenueHoursPatch {
+function createNonePatch(error: string, now: number, existingGooglePlaceId = ""): VenueHoursPatch {
   const generatedAt = new Date(now).toISOString();
   return {
-    googlePlaceId: "",
+    googlePlaceId: existingGooglePlaceId,
     hoursError: error,
     hoursExpiresAt: now + VENUE_HOURS_CACHE_TTL_MS,
     hoursFetchedAt: now,
@@ -746,6 +755,7 @@ export async function fetchVenueHoursPatch(
   }
 
   const generatedAt = new Date(now).toISOString();
+  const existingGooglePlaceId = venue.googlePlaceId ?? "";
   const nominatimFetch = options.nominatimFetch ?? fetch;
   const overpassFetch = options.overpassFetch ?? fetch;
   const errors: string[] = [];
@@ -759,12 +769,36 @@ export async function fetchVenueHoursPatch(
       overpassFetch,
     });
     if (osmResult) {
-      return createPatchFromProviderResult(osmResult, now);
+      return createPatchFromProviderResult(osmResult, now, "", existingGooglePlaceId);
     }
     errors.push("osm_no_match");
   } catch (error) {
     providerError = true;
     errors.push(error instanceof Error ? `osm_error:${error.message}` : "osm_error");
+  }
+
+  // Google fallback: only when OSM yielded nothing, a place_id is stored, and a
+  // key is configured. Resolve place_ids first with scripts/resolve-venue-place-ids.mjs.
+  if (!providerError && options.googleApiKey && existingGooglePlaceId) {
+    try {
+      const googleHoursJson = await fetchGoogleVenueHours(existingGooglePlaceId, {
+        apiKey: options.googleApiKey,
+        fetchImpl: options.googleFetch,
+        generatedAt,
+      });
+      if (googleHoursJson) {
+        return createPatchFromProviderResult(
+          { googlePlaceId: existingGooglePlaceId, hoursJson: googleHoursJson, source: "google" },
+          now,
+          "",
+          existingGooglePlaceId,
+        );
+      }
+      errors.push("google_no_hours");
+    } catch (error) {
+      providerError = true;
+      errors.push(error instanceof Error ? `google_error:${error.message}` : "google_error");
+    }
   }
 
   if (providerError) {
@@ -775,5 +809,5 @@ export async function fetchVenueHoursPatch(
     return null;
   }
 
-  return createNonePatch(errors.join(";"), now);
+  return createNonePatch(errors.join(";"), now, existingGooglePlaceId);
 }
