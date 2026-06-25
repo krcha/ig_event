@@ -57,10 +57,13 @@ export default defineSchema({
     .index("by_status_promotionTier", ["status", "promotionTier"])
     .index("by_instagramPostId", ["instagramPostId"])
     .index("by_instagramPostUrl", ["instagramPostUrl"])
-    .index("by_venueId", ["venueId"]),
+    .index("by_venueId", ["venueId"])
+    .index("by_venueId_status_date", ["venueId", "status", "date"]),
   venues: defineTable({
     name: v.string(),
     instagramHandle: v.string(),
+    instagramFollowerCount: v.optional(v.number()),
+    instagramFollowerCountUpdatedAt: v.optional(v.number()),
     category: v.string(),
     location: v.optional(v.string()),
     latitude: v.optional(v.number()),

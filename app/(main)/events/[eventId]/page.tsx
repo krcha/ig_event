@@ -237,7 +237,16 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                     <p className="section-kicker">Venue</p>
                     <p className="mt-1.5 flex items-start gap-2 text-sm font-semibold leading-5 text-foreground">
                       <MapPin className="mt-0.5 h-4 w-4 flex-none text-primary" />
-                      <span className="min-w-0 flex-1 break-words">{event.venue}</span>
+                      {event.venueId ? (
+                        <Link
+                          className="min-w-0 flex-1 break-words hover:text-primary"
+                          href={`/venues/${event.venueId}`}
+                        >
+                          {event.venue}
+                        </Link>
+                      ) : (
+                        <span className="min-w-0 flex-1 break-words">{event.venue}</span>
+                      )}
                       {authEnabled ? (
                         <FavoriteVenueButton
                           className="-mt-1"

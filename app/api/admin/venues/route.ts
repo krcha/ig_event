@@ -14,6 +14,8 @@ type VenueRecord = {
   _id: string;
   name: string;
   instagramHandle: string;
+  instagramFollowerCount?: number;
+  instagramFollowerCountUpdatedAt?: number;
   category: string;
   location?: string;
   latitude?: number;
@@ -37,6 +39,8 @@ type VenueRecord = {
 type CreateVenueBody = {
   name?: string;
   instagramHandle?: string;
+  instagramFollowerCount?: number;
+  instagramFollowerCountUpdatedAt?: number;
   category?: string;
   location?: string;
   latitude?: number;
@@ -51,6 +55,8 @@ type UpdateVenueBody = {
   patch?: {
     name?: string;
     instagramHandle?: string;
+    instagramFollowerCount?: number;
+    instagramFollowerCountUpdatedAt?: number;
     category?: string;
     location?: string;
     latitude?: number;
@@ -111,6 +117,8 @@ export async function GET() {
         id: venue._id,
         name: venue.name,
         instagramHandle: venue.instagramHandle,
+        instagramFollowerCount: venue.instagramFollowerCount ?? null,
+        instagramFollowerCountUpdatedAt: venue.instagramFollowerCountUpdatedAt ?? null,
         category: canonicalizeVenueCategory(venue.category),
         location: venue.location ?? null,
         latitude: venue.latitude ?? null,
@@ -170,6 +178,12 @@ export async function POST(request: Request) {
     const id = await convex.mutation(createVenueMutation, {
       name,
       instagramHandle,
+      ...(typeof body.instagramFollowerCount === "number"
+        ? { instagramFollowerCount: body.instagramFollowerCount }
+        : {}),
+      ...(typeof body.instagramFollowerCountUpdatedAt === "number"
+        ? { instagramFollowerCountUpdatedAt: body.instagramFollowerCountUpdatedAt }
+        : {}),
       category,
       location: body.location?.trim() || undefined,
       ...(typeof body.latitude === "number" ? { latitude: body.latitude } : {}),
@@ -241,6 +255,12 @@ export async function PATCH(request: Request) {
       ...(body.patch.name !== undefined ? { name: body.patch.name } : {}),
       ...(body.patch.instagramHandle !== undefined
         ? { instagramHandle: body.patch.instagramHandle }
+        : {}),
+      ...(typeof body.patch.instagramFollowerCount === "number"
+        ? { instagramFollowerCount: body.patch.instagramFollowerCount }
+        : {}),
+      ...(typeof body.patch.instagramFollowerCountUpdatedAt === "number"
+        ? { instagramFollowerCountUpdatedAt: body.patch.instagramFollowerCountUpdatedAt }
         : {}),
       ...(body.patch.category !== undefined ? { category: body.patch.category } : {}),
       ...(body.patch.location !== undefined ? { location: body.patch.location } : {}),

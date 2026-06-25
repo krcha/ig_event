@@ -4,6 +4,9 @@ import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import { requireAdminOrServiceSecret } from "./authz";
 
+const DEFAULT_PUBLIC_RECENT_POST_LIMIT = 6;
+const MAX_PUBLIC_RECENT_POST_LIMIT = 12;
+
 const scrapedPostRecord = {
   handle: v.string(),
   postId: v.string(),
@@ -36,6 +39,13 @@ function parsePostedAtMs(postedAt: string | undefined): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function normalizePublicRecentPostLimit(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_PUBLIC_RECENT_POST_LIMIT;
+  }
+  return Math.max(1, Math.min(MAX_PUBLIC_RECENT_POST_LIMIT, Math.trunc(value as number)));
+}
+
 export const listByHandle = query({
   args: {
     handle: v.string(),
@@ -47,6 +57,35 @@ export const listByHandle = query({
       .query("scrapedPosts")
       .withIndex("by_handle", (q) => q.eq("handle", args.handle))
       .collect();
+  },
+});
+
+export const listPublicRecentPostsByHandle = query({
+  args: {
+    handle: v.string(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const handle = args.handle.trim().replace(/^@+/, "").toLocaleLowerCase();
+    if (!handle) {
+      return [];
+    }
+
+    const posts = await ctx.db
+      .query("scrapedPosts")
+      .withIndex("by_handle_postedAtMs", (q) => q.eq("handle", handle))
+      .order("desc")
+      .take(normalizePublicRecentPostLimit(args.limit));
+
+    return posts.map((post) => ({
+      _id: post._id,
+      imageUrl: post.imageUrl,
+      instagramPostUrl: post.instagramPostUrl,
+      locationName: post.locationName,
+      postType: post.postType,
+      postedAt: post.postedAt,
+      postedAtMs: post.postedAtMs,
+    }));
   },
 });
 
