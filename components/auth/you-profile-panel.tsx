@@ -7,6 +7,7 @@ import { useAuthUser } from "@/components/providers/auth-user-provider";
 import { useUserLibrary } from "@/components/providers/user-library-provider";
 import { cn } from "@/lib/utils";
 
+const AUTH_LOAD_TIMEOUT_MS = 8000;
 const DEFAULT_SCENES = ["Techno", "House", "Live jazz", "Free events"];
 const SELECTED_SCENES_STORAGE_KEY = "events.you.selectedScenes.v1";
 const CUSTOM_SCENES_STORAGE_KEY = "events.you.customScenes.v1";
@@ -113,6 +114,23 @@ function SignInPromptCard() {
   );
 }
 
+function ProfileAuthUnavailableCard() {
+  return (
+    <section className="hero-panel px-4 py-5 text-center sm:px-6 sm:py-7">
+      <span className="app-chip mx-auto border-primary/25 bg-primary/[0.1] text-primary">
+        <UserRound className="h-3.5 w-3.5" />
+        Profile
+      </span>
+      <h1 className="mt-4 text-2xl font-semibold tracking-[-0.045em] sm:text-4xl">
+        Sign-in is still connecting.
+      </h1>
+      <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-muted-foreground sm:text-base">
+        Clerk did not finish loading. Check the Clerk frontend DNS and refresh this page.
+      </p>
+    </section>
+  );
+}
+
 function StatTile({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 flex-1 rounded-[18px] border border-[rgba(255,255,255,0.07)] bg-[#13151D] px-4 py-4">
@@ -137,6 +155,20 @@ export function YouProfilePanel() {
   const [customScenes, setCustomScenes] = useState<string[]>([]);
   const [remindersEnabled, setRemindersEnabled] = useState(true);
   const [hasLoadedPreferences, setHasLoadedPreferences] = useState(false);
+  const [hasAuthLoadTimedOut, setHasAuthLoadTimedOut] = useState(false);
+
+  useEffect(() => {
+    if (isLoaded) {
+      setHasAuthLoadTimedOut(false);
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setHasAuthLoadTimedOut(true);
+    }, AUTH_LOAD_TIMEOUT_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [isLoaded]);
 
   useEffect(() => {
     setSelectedScenes(uniqueScenes(parseStoredStringArray(localStorage.getItem(SELECTED_SCENES_STORAGE_KEY))));
@@ -175,6 +207,10 @@ export function YouProfilePanel() {
   }, [hasLoadedPreferences, remindersEnabled]);
 
   const scenes = useMemo(() => uniqueScenes([...DEFAULT_SCENES, ...customScenes]), [customScenes]);
+
+  if (!isLoaded && hasAuthLoadTimedOut) {
+    return <ProfileAuthUnavailableCard />;
+  }
 
   if (!isLoaded) {
     return <ProfileLoadingCard />;
