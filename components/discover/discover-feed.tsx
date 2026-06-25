@@ -27,6 +27,7 @@ export type DiscoverFeedEvent = {
   time?: string;
   title: string;
   venue: string;
+  venueId?: string;
 };
 
 export type DiscoverDateTab = {
@@ -116,6 +117,28 @@ function getInstagramCaption(event: DiscoverFeedEvent): string | null {
   return event.sourceCaption?.trim() || null;
 }
 
+function VenueNameLink({
+  className,
+  event,
+}: {
+  className?: string;
+  event: Pick<DiscoverFeedEvent, "venue" | "venueId">;
+}) {
+  if (!event.venueId) {
+    return <span className={className}>{event.venue}</span>;
+  }
+
+  return (
+    <Link
+      className={cn(className, "hover:text-primary focus-visible:text-primary focus-visible:outline-none")}
+      href={`/venues/${event.venueId}`}
+      prefetch={false}
+    >
+      {event.venue}
+    </Link>
+  );
+}
+
 function DiscoverPost({
   authEnabled,
   event,
@@ -134,25 +157,29 @@ function DiscoverPost({
       data-discover-post="true"
     >
       <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-3 py-3">
-        <Link
-          aria-label={`Open ${event.title}`}
-          className="flex min-w-0 items-center gap-3"
-          href={`/events/${event._id}`}
-        >
-          <span
+        <div className="flex min-w-0 items-center gap-3">
+          <Link
+            aria-label={`Open ${event.title}`}
             className="inline-flex h-10 w-10 flex-none items-center justify-center rounded-full border border-primary/25 bg-primary/[0.14] text-sm font-bold text-primary"
+            href={`/events/${event._id}`}
+            prefetch={false}
           >
             {getAvatarInitial(event)}
-          </span>
+          </Link>
           <span className="min-w-0">
-            <span className="block truncate text-sm font-semibold leading-5 text-foreground">
+            <Link
+              aria-label={`Open ${event.title}`}
+              className="block truncate text-sm font-semibold leading-5 text-foreground hover:text-primary"
+              href={`/events/${event._id}`}
+              prefetch={false}
+            >
               {handleLabel}
-            </span>
+            </Link>
             <span className="block truncate text-[11px] font-medium text-muted-foreground">
-              {event.venue} · {formatEventDate(event.date)}
+              <VenueNameLink event={event} /> · {formatEventDate(event.date)}
             </span>
           </span>
-        </Link>
+        </div>
         <span className="inline-flex flex-none items-center rounded-full bg-white/[0.05] px-2.5 py-1 text-[10px] font-semibold text-muted-foreground ring-1 ring-white/[0.08]">
           {time.label}
         </span>
@@ -243,7 +270,7 @@ function DiscoverPost({
             </p>
           )}
           <p className="mt-1 text-xs font-medium text-muted-foreground">
-            {event.title} · {event.venue} · {time.label}
+            {event.title} · <VenueNameLink event={event} /> · {time.label}
           </p>
         </div>
 

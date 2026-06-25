@@ -189,6 +189,33 @@ function getEventAriaLabel(event: CalendarEventSummary, tone: EventTone): string
     .join(", ");
 }
 
+function getVenueHref(event: Pick<CalendarEventSummary, "venueId">): string | null {
+  return event.venueId ? `/venues/${event.venueId}` : null;
+}
+
+function VenueNameLink({
+  className,
+  event,
+}: {
+  className?: string;
+  event: Pick<CalendarEventSummary, "venue" | "venueId">;
+}) {
+  const href = getVenueHref(event);
+  if (!href) {
+    return <span className={className}>{event.venue}</span>;
+  }
+
+  return (
+    <Link
+      className={cn(className, "hover:text-primary focus-visible:text-primary focus-visible:outline-none")}
+      href={href}
+      prefetch={false}
+    >
+      {event.venue}
+    </Link>
+  );
+}
+
 function getCalendarDays(monthStart: Date): Date[] {
   const start = new Date(monthStart);
   const mondayFirstDayIndex = (monthStart.getDay() + 6) % 7;
@@ -812,13 +839,14 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   data-event-venue={event.venue}
                   key={event._id}
                 >
-                  <Link prefetch={false}
-                    aria-label={getEventAriaLabel(event, tone)}
-                    className="flex min-w-0 flex-1 items-center gap-2"
-                    href={`/events/${event._id}`}
-                  >
+                  <div className="flex min-w-0 flex-1 items-center gap-2">
                     {eventTime.startLabel ? (
-                      <div className="box-border flex h-9 w-16 flex-none flex-col items-center justify-center overflow-hidden rounded-[0.72rem] border border-border/65 bg-background/45 px-1 text-center">
+                      <Link
+                        aria-label={getEventAriaLabel(event, tone)}
+                        className="box-border flex h-9 w-16 flex-none flex-col items-center justify-center overflow-hidden rounded-[0.72rem] border border-border/65 bg-background/45 px-1 text-center hover:border-primary/35"
+                        href={`/events/${event._id}`}
+                        prefetch={false}
+                      >
                         <span className="block max-w-full truncate text-xs font-semibold leading-4 tabular-nums text-foreground">
                           {eventTime.startLabel}
                         </span>
@@ -827,21 +855,34 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                             {eventTime.endLabel}
                           </span>
                         ) : null}
-                      </div>
+                      </Link>
                     ) : (
-                      <div className="box-border flex h-9 w-16 flex-none items-center justify-center overflow-hidden rounded-[0.72rem] border border-border/65 bg-background/45 px-1 text-center">
+                      <Link
+                        aria-label={getEventAriaLabel(event, tone)}
+                        className="box-border flex h-9 w-16 flex-none items-center justify-center overflow-hidden rounded-[0.72rem] border border-border/65 bg-background/45 px-1 text-center hover:border-primary/35"
+                        href={`/events/${event._id}`}
+                        prefetch={false}
+                      >
                         <span className="block max-w-full truncate text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                           —
                         </span>
-                      </div>
+                      </Link>
                     )}
                     <div className="min-w-0 flex-1">
-                      <h4 className="truncate text-[13px] font-semibold leading-4 tracking-tight text-foreground">
-                        {event.title}
-                      </h4>
-                      <p className="mt-0.5 truncate text-[11px] font-medium leading-4 text-muted-foreground">
-                        {event.venue}
-                      </p>
+                      <Link
+                        aria-label={getEventAriaLabel(event, tone)}
+                        className="block min-w-0 hover:text-primary"
+                        href={`/events/${event._id}`}
+                        prefetch={false}
+                      >
+                        <h4 className="truncate text-[13px] font-semibold leading-4 tracking-tight text-foreground">
+                          {event.title}
+                        </h4>
+                      </Link>
+                      <VenueNameLink
+                        className="mt-0.5 block truncate text-[11px] font-medium leading-4 text-muted-foreground"
+                        event={event}
+                      />
                       {supplementalDisplayTime ? (
                         <p className="truncate text-[11px] font-medium leading-4 text-muted-foreground/85">
                           {supplementalDisplayTime}
@@ -849,7 +890,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                       ) : null}
                       <EventMetaRow className="mt-1 flex-nowrap" event={event} />
                     </div>
-                  </Link>
+                  </div>
                   {authEnabled ? (
                     <SaveEventButton eventId={event._id} eventTitle={event.title} variant="icon" />
                   ) : null}
@@ -867,25 +908,34 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
               >
                 <div className={cn("absolute inset-y-4 left-0 w-1 rounded-r-full", tone.rail)} />
                 <div className="flex items-start gap-2.5 pl-1.5">
-                  <Link prefetch={false}
-                    aria-label={getEventAriaLabel(event, tone)}
-                    className="flex min-w-0 flex-1 items-start gap-2.5"
-                    href={`/events/${event._id}`}
-                  >
+                  <div className="flex min-w-0 flex-1 items-start gap-2.5">
                     <div className="w-14 flex-none text-right">
                       {displayEventTime ? (
-                        <p className="truncate text-sm font-semibold tabular-nums text-foreground">
+                        <Link
+                          aria-label={getEventAriaLabel(event, tone)}
+                          className="block truncate text-sm font-semibold tabular-nums text-foreground hover:text-primary"
+                          href={`/events/${event._id}`}
+                          prefetch={false}
+                        >
                           {displayEventTime}
-                        </p>
+                        </Link>
                       ) : null}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <h4 className="text-sm font-semibold leading-5 tracking-tight text-foreground sm:text-[15px]">
-                        {event.title}
-                      </h4>
-                      <p className="mt-1 truncate text-xs leading-5 text-muted-foreground">
-                        {event.venue}
-                      </p>
+                      <Link
+                        aria-label={getEventAriaLabel(event, tone)}
+                        className="block min-w-0 hover:text-primary"
+                        href={`/events/${event._id}`}
+                        prefetch={false}
+                      >
+                        <h4 className="text-sm font-semibold leading-5 tracking-tight text-foreground sm:text-[15px]">
+                          {event.title}
+                        </h4>
+                      </Link>
+                      <VenueNameLink
+                        className="mt-1 block truncate text-xs leading-5 text-muted-foreground"
+                        event={event}
+                      />
                       <EventMetaRow className="mt-1.5" event={event} />
                       {artistMeta ? (
                         <p className="mt-1 truncate text-xs leading-5 text-muted-foreground/85">
@@ -893,7 +943,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                         </p>
                       ) : null}
                     </div>
-                  </Link>
+                  </div>
                   {authEnabled ? (
                     <div className="flex flex-none items-center">
                       <SaveEventButton eventId={event._id} eventTitle={event.title} variant="icon" />

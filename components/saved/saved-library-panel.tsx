@@ -70,6 +70,28 @@ type FavoriteVenueWithNextEvent = {
   venue: SavedLibraryVenue;
 };
 
+function VenueNameLink({
+  className,
+  event,
+}: {
+  className?: string;
+  event: Pick<SavedLibraryEvent, "venue" | "venueId">;
+}) {
+  if (!event.venueId) {
+    return <span className={className}>{event.venue}</span>;
+  }
+
+  return (
+    <Link
+      className={cn(className, "hover:text-primary focus-visible:text-primary focus-visible:outline-none")}
+      href={`/venues/${event.venueId}`}
+      prefetch={false}
+    >
+      {event.venue}
+    </Link>
+  );
+}
+
 function formatLocalDateKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
     date.getDate(),
@@ -337,12 +359,13 @@ function EventRow({ event }: { event: SavedLibraryEvent }) {
 
   return (
     <article className="group box-border flex items-center gap-3 overflow-hidden rounded-[18px] border border-white/[0.07] bg-[#13151D] p-[13px] transition hover:border-primary/25 hover:bg-[#171923]">
-      <Link
-        aria-label={`Open ${event.title}`}
-        className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden"
-        href={`/events/${event._id}`}
-      >
-        <div className="box-border flex w-14 flex-none flex-col items-center justify-center overflow-hidden text-center font-mono text-[15px] font-semibold leading-[17px] text-primary tabular-nums">
+      <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
+        <Link
+          aria-label={`Open ${event.title}`}
+          className="box-border flex w-14 flex-none flex-col items-center justify-center overflow-hidden text-center font-mono text-[15px] font-semibold leading-[17px] text-primary tabular-nums hover:text-primary/85"
+          href={`/events/${event._id}`}
+          prefetch={false}
+        >
           {eventTime.startLabel ? (
             <>
               <span className="block max-w-full truncate">{eventTime.startLabel}</span>
@@ -355,14 +378,20 @@ function EventRow({ event }: { event: SavedLibraryEvent }) {
           ) : (
             <span className="block max-w-full truncate text-primary/72">—</span>
           )}
-        </div>
+        </Link>
         <div className="min-w-0 flex-1 overflow-hidden">
-          <p className="truncate whitespace-nowrap text-[15px] font-semibold leading-5 tracking-tight text-foreground group-hover:text-primary">
+          <Link
+            aria-label={`Open ${event.title}`}
+            className="block truncate whitespace-nowrap text-[15px] font-semibold leading-5 tracking-tight text-foreground hover:text-primary"
+            href={`/events/${event._id}`}
+            prefetch={false}
+          >
             {event.title}
-          </p>
-          <p className="mt-0.5 truncate text-[13px] leading-[18px] text-[#8A8E9E]">
-            {event.venue}
-          </p>
+          </Link>
+          <VenueNameLink
+            className="mt-0.5 block truncate text-[13px] leading-[18px] text-[#8A8E9E]"
+            event={event}
+          />
           {supplementalDisplayTime ? (
             <p className="truncate text-[13px] leading-[18px] text-[#8A8E9E]">
               {supplementalDisplayTime}
@@ -370,7 +399,7 @@ function EventRow({ event }: { event: SavedLibraryEvent }) {
           ) : null}
           <EventMetaRow className="mt-1 flex-nowrap" event={event} />
         </div>
-      </Link>
+      </div>
       <div className="flex flex-none items-center justify-end">
         <SaveEventButton
           className="flex-none"
@@ -412,7 +441,8 @@ function PlaceRow({ item }: { item: FavoriteVenueWithNextEvent }) {
         <div className="min-w-0 flex-1 overflow-hidden">
           <Link
             className="block truncate whitespace-nowrap text-sm font-semibold tracking-tight text-foreground hover:text-primary"
-            href={nextEvent ? `/events/${nextEvent._id}` : "/events"}
+            href={`/venues/${venue._id}`}
+            prefetch={false}
           >
             {venue.name}
           </Link>
@@ -438,9 +468,10 @@ function PlaceRow({ item }: { item: FavoriteVenueWithNextEvent }) {
             variant="icon"
           />
           <Link
-            aria-label={nextEvent ? `View next event at ${venue.name}` : `Browse events for ${venue.name}`}
+            aria-label={`Open ${venue.name}`}
             className="inline-flex h-9 w-9 flex-none items-center justify-center rounded-full border border-border/75 bg-white/[0.035] text-muted-foreground hover:border-primary/35 hover:bg-white/[0.06] hover:text-primary"
-            href={nextEvent ? `/events/${nextEvent._id}` : "/events"}
+            href={`/venues/${venue._id}`}
+            prefetch={false}
           >
             <ChevronRight className="h-4 w-4" />
           </Link>

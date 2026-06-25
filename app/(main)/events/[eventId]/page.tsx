@@ -91,6 +91,30 @@ const getPublicApprovedEventQuery =
   "events:getPublicApprovedEvent" as unknown as FunctionReference<"query">;
 const listPublicVenueFieldsByIdsQuery =
   "venues:listPublicVenueFieldsByIds" as unknown as FunctionReference<"query">;
+const listPublicActiveVenueFieldsQuery =
+  "venues:listPublicActiveVenueFields" as unknown as FunctionReference<"query">;
+
+function normalizeVenueLookupKey(value: string | null | undefined): string {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase()
+    .replace(/^@+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function findVenueForEvent(event: EventRecord, venues: VenueRecord[]): VenueRecord | undefined {
+  const venueNameKey = normalizeVenueLookupKey(event.venue);
+  const venueHandleKey = normalizeVenueLookupKey(event.venueInstagramHandle);
+
+  return venues.find((venue) => {
+    if (venueNameKey && normalizeVenueLookupKey(venue.name) === venueNameKey) {
+      return true;
+    }
+    return venueHandleKey && normalizeVenueLookupKey(venue.instagramHandle) === venueHandleKey;
+  });
+}
 
 async function loadEvent(eventId: string): Promise<{
   event: EventRecord | null;
@@ -109,8 +133,12 @@ async function loadEvent(eventId: string): Promise<{
         ? ((await convex.query(listPublicVenueFieldsByIdsQuery, {
             ids: [event.venueId],
           })) as VenueRecord[])
-        : [];
-      const venue = venues[0];
+        : ((await convex.query(listPublicActiveVenueFieldsQuery, {
+            limit: 1000,
+          })) as VenueRecord[]);
+      const venue = event.venueId
+        ? venues[0] ?? findVenueForEvent(event, venues)
+        : findVenueForEvent(event, venues);
       const canonicalEventType = canonicalizeEventType(event.eventType);
       const displayTime = resolveEventTimeDisplay({
         date: event.date,

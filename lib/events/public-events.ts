@@ -127,6 +127,8 @@ const listPublicEventsWindowQuery =
   "events:listPublicEventsWindow" as unknown as FunctionReference<"query">;
 const listPublicVenueFieldsByIdsQuery =
   "venues:listPublicVenueFieldsByIds" as unknown as FunctionReference<"query">;
+const listPublicActiveVenueFieldsQuery =
+  "venues:listPublicActiveVenueFields" as unknown as FunctionReference<"query">;
 
 export function parseNormalizedEventDate(value: string): Date | null {
   const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -224,15 +226,18 @@ async function loadVenueLookup(
   const venueIds = [
     ...new Set(events.map((event) => event.venueId).filter((id): id is string => Boolean(id))),
   ];
-  const venues = venueIds.length > 0
-    ? ((await convex.query(listPublicVenueFieldsByIdsQuery, {
-        ids: venueIds,
-      })) as VenueRecord[])
-    : [];
+  const [activeVenues, venues] = await Promise.all([
+    convex.query(listPublicActiveVenueFieldsQuery, { limit: 1000 }) as Promise<VenueRecord[]>,
+    venueIds.length > 0
+      ? (convex.query(listPublicVenueFieldsByIdsQuery, {
+          ids: venueIds,
+        }) as Promise<VenueRecord[]>)
+      : Promise.resolve([]),
+  ]);
   const denormalizedVenues = events
     .map(createVenueRecordFromEvent)
     .filter((venue): venue is VenueRecord => venue !== null);
-  const lookupVenues = [...venues, ...denormalizedVenues];
+  const lookupVenues = [...activeVenues, ...venues, ...denormalizedVenues];
   let venueNameOverridesByHandle: Record<string, string> = {};
   try {
     venueNameOverridesByHandle = await loadVenueNameOverridesByHandle();

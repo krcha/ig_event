@@ -75,6 +75,7 @@ function mapPublicEvent(event: PublicEvent): DiscoverFeedEvent {
     ...(event.time ? { time: event.time } : {}),
     title: event.title,
     venue: event.venue,
+    ...(event.venueId ? { venueId: event.venueId } : {}),
   };
 }
 

@@ -201,6 +201,28 @@ export const listPublicVenueFieldsByIds = query({
   },
 });
 
+export const listPublicActiveVenueFields = query({
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = normalizeLimit(
+      args.limit,
+      DEFAULT_PUBLIC_VENUE_DIRECTORY_LIMIT,
+      MAX_PUBLIC_VENUE_DIRECTORY_LIMIT,
+    );
+
+    const venues = await ctx.db
+      .query("venues")
+      .withIndex("by_isActive", (q) => q.eq("isActive", true))
+      .take(limit);
+
+    return venues.map(toPublicVenue).sort((left, right) =>
+      left.name.localeCompare(right.name, undefined, { sensitivity: "base" }),
+    );
+  },
+});
+
 export const getPublicVenuePage = query({
   args: {
     id: v.id("venues"),
