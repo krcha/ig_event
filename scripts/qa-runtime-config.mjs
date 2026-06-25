@@ -9,6 +9,7 @@ const envExample = read(".env.example");
 const envProductionExample = read(".env.production.example");
 const dockerComposeSource = read("docker-compose.yml");
 const envUtilsSource = read("lib/utils/env.ts");
+const middlewareSource = read("middleware.ts");
 const readinessSource = read("lib/config/readiness.ts");
 const readyRouteSource = read("app/api/ready/route.ts");
 const healthRouteSource = read("app/api/health/route.ts");
@@ -19,6 +20,7 @@ const releaseCheckSource = read("scripts/release-check.mjs");
 
 for (const envName of [
   "CLERK_JWT_ISSUER_DOMAIN",
+  "CLERK_AUTHORIZED_PARTIES",
   "ADMIN_CLERK_USER_IDS",
   "CRON_SECRET",
   "INGESTION_POST_STEP_LIMIT=8",
@@ -36,6 +38,7 @@ for (const envName of [
 
 for (const composeValue of [
   "CLERK_JWT_ISSUER_DOMAIN",
+  "CLERK_AUTHORIZED_PARTIES",
   "INGESTION_POST_STEP_LIMIT: ${INGESTION_POST_STEP_LIMIT:-8}",
   "SCRAPED_POST_PAGE_SIZE: ${SCRAPED_POST_PAGE_SIZE:-25}",
   "CRON_INGESTION_MAX_STEPS: ${CRON_INGESTION_MAX_STEPS:-4}",
@@ -50,6 +53,16 @@ assert.match(
   envUtilsSource,
   /export function getOpenAiModelEnv/,
   "env helper should centralize OpenAI model defaults.",
+);
+assert.match(
+  envUtilsSource,
+  /export function getClerkAuthorizedParties/,
+  "env helper should centralize Clerk authorized parties.",
+);
+assert.match(
+  middlewareSource,
+  /authorizedParties/,
+  "Clerk middleware should verify configured authorized parties.",
 );
 assert.match(
   envUtilsSource,
@@ -85,6 +98,11 @@ assert.match(
   readinessSource,
   /CLERK_JWT_ISSUER_DOMAIN/,
   "readiness should check Clerk JWT issuer config.",
+);
+assert.match(
+  readinessSource,
+  /CLERK_AUTHORIZED_PARTIES/,
+  "production readiness should check Clerk authorized parties config.",
 );
 assert.match(
   readinessSource,

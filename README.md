@@ -99,6 +99,7 @@ Copy `.env.example` to `.env.local` for development or
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
 CLERK_SECRET_KEY=
 CLERK_JWT_ISSUER_DOMAIN=
+CLERK_AUTHORIZED_PARTIES=https://events.ineedtofeedmyrabbit.com
 NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
 NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
 NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/admin
@@ -138,6 +139,9 @@ Notes:
 - `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, and the
   fallback redirect URLs point Clerk at the in-app `/sign-in` and `/sign-up`
   pages and send successful admin sign-ins back to `/admin`.
+- `CLERK_AUTHORIZED_PARTIES` should be set in production to the public app
+  origin so Clerk middleware rejects session tokens minted for another
+  subdomain.
 - The in-app auth pages make Instagram the primary sign-in/sign-up action and
   use `/sso-callback` for the redirect callback. The button only starts a
   strategy that Clerk exposes in `authenticatableSocialStrategies`: native

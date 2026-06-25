@@ -10,6 +10,15 @@ function hasEnvValue(name: string): boolean {
   return Boolean(process.env[name]?.trim());
 }
 
+export function getClerkAuthorizedParties(): string[] | undefined {
+  const values = (process.env.CLERK_AUTHORIZED_PARTIES ?? "")
+    .split(/[\s,]+/)
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
+  return values.length > 0 ? values : undefined;
+}
+
 export function hasClerkEnv(): boolean {
   return Boolean(
     hasEnvValue("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY") &&

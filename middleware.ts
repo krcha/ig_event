@@ -1,11 +1,16 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse, type NextFetchEvent, type NextRequest } from "next/server";
-import { hasClerkEnv, shouldFailClosedForAdminRoutes } from "@/lib/utils/env";
+import {
+  getClerkAuthorizedParties,
+  hasClerkEnv,
+  shouldFailClosedForAdminRoutes,
+} from "@/lib/utils/env";
 
 const isAdminRoute = createRouteMatcher(["/admin(.*)", "/api/admin(.*)"]);
 const isAdminApiRoute = createRouteMatcher(["/api/admin(.*)"]);
 const isUserApiRoute = createRouteMatcher(["/api/user(.*)"]);
 const hasClerkConfig = hasClerkEnv();
+const clerkAuthorizedParties = getClerkAuthorizedParties();
 
 function adminAuthNotConfiguredResponse(req: NextRequest): NextResponse {
   if (isAdminApiRoute(req)) {
@@ -47,11 +52,14 @@ function malformedClerkCookieResponse(req: NextRequest): NextResponse {
   return clearClerkCookies(NextResponse.redirect(signInUrl), req);
 }
 
-const clerkAdminMiddleware = clerkMiddleware(async (auth, req) => {
-  if (isAdminRoute(req)) {
-    await auth.protect();
-  }
-});
+const clerkAdminMiddleware = clerkMiddleware(
+  async (auth, req) => {
+    if (isAdminRoute(req)) {
+      await auth.protect();
+    }
+  },
+  clerkAuthorizedParties ? { authorizedParties: clerkAuthorizedParties } : undefined,
+);
 
 export default async function middleware(req: NextRequest, event: NextFetchEvent) {
   if (!hasClerkConfig) {

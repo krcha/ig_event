@@ -61,6 +61,8 @@ Important env vars:
   Convex CLI when targeting the self-hosted backend.
 - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY`: enable Clerk
   auth. Production admin routes fail closed if Clerk is not configured.
+- `CLERK_AUTHORIZED_PARTIES`: production app origin allowlist for Clerk
+  middleware session-token validation.
 - `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, and Clerk
   fallback redirect URL vars should point to the in-app auth pages and `/admin`
   fallback used by the admin workflow.

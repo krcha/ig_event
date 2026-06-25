@@ -93,6 +93,7 @@ NODE_ENV=production
 PORT=3000
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
 CLERK_SECRET_KEY=
+CLERK_AUTHORIZED_PARTIES=https://events.ineedtofeedmyrabbit.com
 NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
 NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
 NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/admin
@@ -125,6 +126,8 @@ Notes:
 - `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, and the
   fallback redirect URLs keep Clerk redirects on the app's custom auth pages and
   return successful admin sign-ins to `/admin`.
+- `CLERK_AUTHORIZED_PARTIES` should be set to the production app origin. Clerk
+  middleware uses it to reject session tokens from other same-root subdomains.
 - The custom auth pages make Instagram the primary action and mount
   `/sso-callback` with `AuthenticateWithRedirectCallback` for OAuth completion.
   The button only starts a strategy Clerk exposes in
@@ -270,6 +273,26 @@ docker compose --env-file /opt/ig_event/.env.production \
 
 The Compose default binds the container to `127.0.0.1:3000`. Put Caddy or nginx
 in front for public HTTPS.
+
+## Clerk Production DNS
+
+The current Clerk production instance uses `events.ineedtofeedmyrabbit.com` as
+its primary domain. Clerk auth will not work in production until these CNAME
+records exist and resolve:
+
+```text
+clerk.events.ineedtofeedmyrabbit.com        CNAME frontend-api.clerk.services
+accounts.events.ineedtofeedmyrabbit.com     CNAME accounts.clerk.services
+clkmail.events.ineedtofeedmyrabbit.com      CNAME mail.nqid57ertcr1.clerk.services
+clk._domainkey.events.ineedtofeedmyrabbit.com  CNAME dkim1.nqid57ertcr1.clerk.services
+clk2._domainkey.events.ineedtofeedmyrabbit.com CNAME dkim2.nqid57ertcr1.clerk.services
+```
+
+After DNS propagates, verify:
+
+```bash
+curl -fsS https://clerk.events.ineedtofeedmyrabbit.com/.well-known/jwks.json
+```
 
 Caddy example:
 

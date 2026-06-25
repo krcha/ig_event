@@ -26,6 +26,7 @@ export function getReadinessStatus() {
     checkEnv("NEXT_PUBLIC_CONVEX_URL", true),
     checkEnv("CRON_SECRET", true),
     checkEnv("CLERK_JWT_ISSUER_DOMAIN", true),
+    checkEnv("CLERK_AUTHORIZED_PARTIES", production),
     checkEnv("ADMIN_CLERK_USER_IDS", true),
     checkEnv("OPENAI_API_KEY", true),
     checkEnv("OPENAI_VISION_MODEL", production),
