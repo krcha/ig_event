@@ -3,7 +3,7 @@
 import { useClerk, useSignIn, useSignUp } from "@clerk/nextjs";
 import type { OAuthStrategy } from "@clerk/types";
 import Link from "next/link";
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 
 const NATIVE_INSTAGRAM_OAUTH_STRATEGY = "oauth_instagram" as const;
 const DEFAULT_CUSTOM_INSTAGRAM_OAUTH_STRATEGY = "oauth_custom_instagram" as const;
@@ -98,6 +98,18 @@ function getEnabledInstagramStrategy(clerk: ClerkWithEnvironment): OAuthStrategy
   return uniqueEnabledStrategies.find(isInstagramSsoSupported) ?? null;
 }
 
+function getSafeRedirectPath(value: string | null): string | null {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) {
+    return null;
+  }
+
+  if (value.startsWith("/sign-in") || value.startsWith("/sign-up") || value.startsWith("/sso-callback")) {
+    return null;
+  }
+
+  return value;
+}
+
 export function InstagramSsoAuthCard({ mode }: InstagramSsoAuthCardProps) {
   const clerk = useClerk() as ClerkWithEnvironment;
   const { isLoaded: isSignInLoaded, signIn, setActive } = useSignIn();
@@ -108,11 +120,20 @@ export function InstagramSsoAuthCard({ mode }: InstagramSsoAuthCardProps) {
   const [manualPassword, setManualPassword] = useState("");
   const [manualAuthError, setManualAuthError] = useState<string | null>(null);
   const [isManualAuthSubmitting, setIsManualAuthSubmitting] = useState(false);
+  const [authCompleteRedirectPath, setAuthCompleteRedirectPath] = useState(AUTH_COMPLETE_REDIRECT_PATH);
 
   const copy = copyByMode[mode];
   const isLoaded = mode === "sign-in" ? isSignInLoaded : isSignUpLoaded;
   const authResource = mode === "sign-in" ? signIn : signUp;
   const instagramStrategy = useMemo(() => getEnabledInstagramStrategy(clerk), [clerk]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const requestedRedirectPath = getSafeRedirectPath(params.get("redirect_url"));
+    if (requestedRedirectPath) {
+      setAuthCompleteRedirectPath(requestedRedirectPath);
+    }
+  }, []);
 
   async function startInstagramSso() {
     if (!isLoaded || !authResource) {
@@ -131,7 +152,7 @@ export function InstagramSsoAuthCard({ mode }: InstagramSsoAuthCardProps) {
       await authResource.authenticateWithRedirect({
         strategy: instagramStrategy,
         redirectUrl: SSO_CALLBACK_PATH,
-        redirectUrlComplete: AUTH_COMPLETE_REDIRECT_PATH,
+        redirectUrlComplete: authCompleteRedirectPath,
         ...(mode === "sign-in" ? { continueSignIn: true } : { continueSignUp: true }),
       });
     } catch (caughtError) {
@@ -162,7 +183,7 @@ export function InstagramSsoAuthCard({ mode }: InstagramSsoAuthCardProps) {
 
       if (result.status === "complete" && result.createdSessionId) {
         await setActive({ session: result.createdSessionId });
-        window.location.assign(AUTH_COMPLETE_REDIRECT_PATH);
+        window.location.assign(authCompleteRedirectPath);
         return;
       }
 

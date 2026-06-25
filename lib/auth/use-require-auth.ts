@@ -1,6 +1,6 @@
 "use client";
 
-import { useClerk, useAuth } from "@clerk/nextjs";
+import { useAuth } from "@clerk/nextjs";
 import { useCallback } from "react";
 
 type RunAuthenticatedActionOptions = {
@@ -8,13 +8,20 @@ type RunAuthenticatedActionOptions = {
 };
 
 export function useRequireAuth() {
-  const clerk = useClerk();
   const { isLoaded, isSignedIn, userId } = useAuth();
+
+  const redirectToSignIn = useCallback(() => {
+    const currentPath =
+      typeof window === "undefined"
+        ? "/"
+        : `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    window.location.assign(`/sign-in?redirect_url=${encodeURIComponent(currentPath)}`);
+  }, []);
 
   const requireAuth = useCallback(
     () => {
       if (!isLoaded) {
-        void clerk.openSignIn();
+        redirectToSignIn();
         return false;
       }
 
@@ -22,10 +29,10 @@ export function useRequireAuth() {
         return true;
       }
 
-      void clerk.openSignIn();
+      redirectToSignIn();
       return false;
     },
-    [clerk, isLoaded, isSignedIn],
+    [isLoaded, isSignedIn, redirectToSignIn],
   );
 
   const runAuthenticatedAction = useCallback(

@@ -1,7 +1,8 @@
 "use client";
 
-import { SignInButton, SignUpButton, useClerk, useUser } from "@clerk/nextjs";
+import { useClerk, useUser } from "@clerk/nextjs";
 import { LogOut, Mail, Plus, Sparkles, UserRound } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useAuthUser } from "@/components/providers/auth-user-provider";
 import { useUserLibrary } from "@/components/providers/user-library-provider";
@@ -97,16 +98,12 @@ function SignInPromptCard() {
           </div>
 
           <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
-            <SignInButton mode="modal">
-              <button className="button-primary min-h-12 w-full px-4 py-0" type="button">
-                Sign in
-              </button>
-            </SignInButton>
-            <SignUpButton mode="modal">
-              <button className="button-secondary min-h-12 w-full px-4 py-0" type="button">
-                Sign up
-              </button>
-            </SignUpButton>
+            <Link className="button-primary min-h-12 w-full px-4 py-0" href="/sign-in?redirect_url=%2Fyou">
+              Sign in
+            </Link>
+            <Link className="button-secondary min-h-12 w-full px-4 py-0" href="/sign-up?redirect_url=%2Fyou">
+              Sign up
+            </Link>
           </div>
         </div>
       </div>
