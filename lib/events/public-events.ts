@@ -105,6 +105,7 @@ type PublicEventsCacheEntry = {
 type VenueLookup = {
   canonicalVenueNamesByHandle: Record<string, string>;
   venueNameOverridesByHandle: Record<string, string>;
+  venuesByHandle: Map<string, VenueRecord>;
   venuesByName: Map<string, VenueRecord>;
 };
 
@@ -182,6 +183,23 @@ function normalizeVenueLookupKey(value: string): string {
   return toSearchableText(value);
 }
 
+function isRealVenueId(value: string | null | undefined): value is string {
+  return Boolean(value && !value.startsWith("event:"));
+}
+
+function buildVenuesByHandle(venues: VenueRecord[]): Map<string, VenueRecord> {
+  const venuesByHandle = new Map<string, VenueRecord>();
+
+  for (const venue of venues) {
+    const key = normalizeHandle(venue.instagramHandle);
+    if (key && !venuesByHandle.has(key)) {
+      venuesByHandle.set(key, venue);
+    }
+  }
+
+  return venuesByHandle;
+}
+
 function buildVenuesByName(
   venues: VenueRecord[],
   venueNameOverridesByHandle: Record<string, string>,
@@ -209,7 +227,7 @@ function createVenueRecordFromEvent(event: PublicEvent): VenueRecord | null {
   }
 
   return {
-    _id: event.venueId ?? `event:${event._id}`,
+    _id: isRealVenueId(event.venueId) ? event.venueId : `event:${event._id}`,
     name: event.venue,
     instagramHandle: event.venueInstagramHandle ?? event.instagramHandle ?? "",
     category: event.venueCategory ?? null,
@@ -224,7 +242,7 @@ async function loadVenueLookup(
   events: PublicEvent[],
 ): Promise<VenueLookup> {
   const venueIds = [
-    ...new Set(events.map((event) => event.venueId).filter((id): id is string => Boolean(id))),
+    ...new Set(events.map((event) => event.venueId).filter(isRealVenueId)),
   ];
   const [activeVenues, venues] = await Promise.all([
     convex.query(listPublicActiveVenueFieldsQuery, { limit: 1000 }) as Promise<VenueRecord[]>,
@@ -250,6 +268,7 @@ async function loadVenueLookup(
   return {
     canonicalVenueNamesByHandle,
     venueNameOverridesByHandle,
+    venuesByHandle: buildVenuesByHandle(lookupVenues),
     venuesByName: buildVenuesByName(lookupVenues, venueNameOverridesByHandle),
   };
 }
@@ -400,10 +419,16 @@ function normalizePublicEvent(
     },
   );
   const venue =
+    venueLookup.venuesByHandle.get(normalizeHandle(event.venueInstagramHandle ?? "")) ??
     venueLookup.venuesByName.get(normalizeVenueLookupKey(event.venue)) ??
     (canonicalVenueName
       ? venueLookup.venuesByName.get(normalizeVenueLookupKey(canonicalVenueName))
       : undefined);
+  const venueId = isRealVenueId(event.venueId)
+    ? event.venueId
+    : isRealVenueId(venue?._id)
+      ? venue._id
+      : undefined;
   const venueCategory = venue?.category ?? undefined;
   const eventVenueCategory = event.venueCategory ?? undefined;
   const eventType =
@@ -419,6 +444,7 @@ function normalizePublicEvent(
 
   return {
     ...event,
+    venueId,
     ...(time ? { time } : { time: undefined }),
     dayPeriod: displayTime.dayPeriod,
     ...(displayTime.endLabel ? { displayTimeEnd: displayTime.endLabel } : {}),
@@ -445,11 +471,8 @@ function normalizePublicEvent(
             osmElementId: venue.osmElementId ?? null,
             osmElementType: venue.osmElementType ?? null,
           },
-          venueId: event.venueId ?? venue._id,
         }
-      : event.venueId
-        ? { venueId: event.venueId }
-        : {}),
+      : {}),
   };
 }
 

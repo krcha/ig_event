@@ -16,6 +16,7 @@ type LibraryEvent = {
   date?: string;
   time?: string;
   venue?: string;
+  venueId?: string;
   eventType?: string;
   ticketPrice?: string;
   attendance?: number | string;

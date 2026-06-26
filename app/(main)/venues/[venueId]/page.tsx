@@ -31,6 +31,7 @@ import {
   type PublicVenueEvent,
 } from "@/lib/venues/public-venue-pages";
 import { getDisplayEventTime } from "@/lib/events/event-time";
+import { isApifyImageUrl } from "@/lib/images/apify-images";
 import { cn } from "@/lib/utils";
 
 export const revalidate = 60;
@@ -123,6 +124,40 @@ function getInstagramHref(venue: PublicVenue): string {
   );
 }
 
+function PublicImage({
+  alt,
+  className,
+  sizes,
+  src,
+}: {
+  alt: string;
+  className?: string;
+  sizes: string;
+  src: string;
+}) {
+  if (isApifyImageUrl(src)) {
+    return (
+      <Image
+        alt={alt}
+        className={className}
+        fill
+        sizes={sizes}
+        src={src}
+      />
+    );
+  }
+
+  return (
+    <img
+      alt={alt}
+      className={cn("absolute inset-0 h-full w-full", className)}
+      decoding="async"
+      loading="lazy"
+      src={src}
+    />
+  );
+}
+
 function VenueMetric({
   icon: Icon,
   label,
@@ -203,10 +238,9 @@ function VenueEventCard({
     >
       <div className="relative h-24 w-20 flex-none overflow-hidden rounded-[0.85rem] border border-border/75 bg-card sm:h-28 sm:w-24">
         {event.imageUrl ? (
-          <Image
+          <PublicImage
             alt={event.title}
             className="object-cover transition duration-300 group-hover:scale-105"
-            fill
             sizes="96px"
             src={event.imageUrl}
           />
@@ -244,10 +278,9 @@ function InstagramPostCard({ post }: { post: PublicInstagramPost }) {
     >
       <div className="relative aspect-square bg-card">
         {post.imageUrl ? (
-          <Image
+          <PublicImage
             alt="Recent Instagram post"
             className="object-cover transition duration-300 group-hover:scale-105"
-            fill
             sizes="(max-width: 640px) 33vw, 160px"
             src={post.imageUrl}
           />

@@ -27,6 +27,14 @@ import {
   canonicalizeEventType,
   eventTypeFromVenueCategory,
 } from "@/lib/taxonomy/venue-types";
+import {
+  buildCanonicalVenueNamesByHandle,
+  canonicalizeVenueName,
+  normalizeHandle,
+  toSearchableText,
+} from "@/lib/pipeline/venue-normalization";
+import { isApifyImageUrl } from "@/lib/images/apify-images";
+import { cn } from "@/lib/utils";
 import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 
 type EventRecord = {
@@ -95,25 +103,34 @@ const listPublicActiveVenueFieldsQuery =
   "venues:listPublicActiveVenueFields" as unknown as FunctionReference<"query">;
 
 function normalizeVenueLookupKey(value: string | null | undefined): string {
-  return (value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLocaleLowerCase()
-    .replace(/^@+/, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  return toSearchableText(value ?? "");
 }
 
 function findVenueForEvent(event: EventRecord, venues: VenueRecord[]): VenueRecord | undefined {
-  const venueNameKey = normalizeVenueLookupKey(event.venue);
-  const venueHandleKey = normalizeVenueLookupKey(event.venueInstagramHandle);
-
-  return venues.find((venue) => {
-    if (venueNameKey && normalizeVenueLookupKey(venue.name) === venueNameKey) {
-      return true;
+  const venuesByName = new Map<string, VenueRecord>();
+  const venuesByHandle = new Map<string, VenueRecord>();
+  for (const venue of venues) {
+    const nameKey = normalizeVenueLookupKey(venue.name);
+    const handleKey = normalizeHandle(venue.instagramHandle);
+    if (nameKey && !venuesByName.has(nameKey)) {
+      venuesByName.set(nameKey, venue);
     }
-    return venueHandleKey && normalizeVenueLookupKey(venue.instagramHandle) === venueHandleKey;
-  });
+    if (handleKey && !venuesByHandle.has(handleKey)) {
+      venuesByHandle.set(handleKey, venue);
+    }
+  }
+
+  const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle(
+    venues.filter((venue) => venue.instagramHandle),
+  );
+  const canonicalVenueName = canonicalizeVenueName(event.venue, canonicalVenueNamesByHandle);
+  return (
+    venuesByHandle.get(normalizeHandle(event.venueInstagramHandle ?? "")) ??
+    venuesByName.get(normalizeVenueLookupKey(event.venue)) ??
+    (canonicalVenueName
+      ? venuesByName.get(normalizeVenueLookupKey(canonicalVenueName))
+      : undefined)
+  );
 }
 
 async function loadEvent(eventId: string): Promise<{
@@ -219,6 +236,43 @@ function InfoTile({
   );
 }
 
+function EventImage({
+  alt,
+  className,
+  priority = false,
+  sizes,
+  src,
+}: {
+  alt: string;
+  className?: string;
+  priority?: boolean;
+  sizes: string;
+  src: string;
+}) {
+  if (isApifyImageUrl(src)) {
+    return (
+      <Image
+        alt={alt}
+        className={className}
+        fill
+        priority={priority}
+        sizes={sizes}
+        src={src}
+      />
+    );
+  }
+
+  return (
+    <img
+      alt={alt}
+      className={cn("absolute inset-0 h-full w-full", className)}
+      decoding="async"
+      loading={priority ? "eager" : "lazy"}
+      src={src}
+    />
+  );
+}
+
 export default async function EventDetailPage({ params }: EventDetailPageProps) {
   const { event, error } = await loadEvent(params.eventId);
   if (!event && !error) {
@@ -226,6 +280,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
   }
   const eventTime = event ? event.displayTimeLabel ?? getDisplayEventTime(event.time) : undefined;
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
+  const venueHref = event?.venueId ? `/venues/${event.venueId}` : null;
 
   return (
     <main className="app-page gap-3 pb-[calc(9.5rem+env(safe-area-inset-bottom))] md:pb-9">
@@ -261,29 +316,30 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                   <InfoTile icon={CalendarDays} label="Date" value={formatEventDate(event.date)} />
                   {eventTime ? <InfoTile icon={Clock3} label="Time" value={eventTime} /> : null}
-                  <div className="rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3">
-                    <p className="section-kicker">Venue</p>
-                    <p className="mt-1.5 flex items-start gap-2 text-sm font-semibold leading-5 text-foreground">
+                  <div className="relative overflow-hidden rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3 transition hover:border-primary/35 hover:bg-white/[0.045]">
+                    {venueHref ? (
+                      <Link
+                        aria-label={`Open ${event.venue}`}
+                        className="absolute inset-0 z-0 rounded-[1rem]"
+                        href={venueHref}
+                        prefetch={false}
+                      >
+                        <span className="sr-only">Open {event.venue}</span>
+                      </Link>
+                    ) : null}
+                    <p className="pointer-events-none relative z-10 section-kicker">Venue</p>
+                    <p className="pointer-events-none relative z-10 mt-1.5 flex items-start gap-2 text-sm font-semibold leading-5 text-foreground">
                       <MapPin className="mt-0.5 h-4 w-4 flex-none text-primary" />
-                      {event.venueId ? (
-                        <Link
-                          className="min-w-0 flex-1 break-words hover:text-primary"
-                          href={`/venues/${event.venueId}`}
-                        >
-                          {event.venue}
-                        </Link>
-                      ) : (
-                        <span className="min-w-0 flex-1 break-words">{event.venue}</span>
-                      )}
+                      <span className="min-w-0 flex-1 break-words">{event.venue}</span>
                       {authEnabled ? (
                         <FavoriteVenueButton
-                          className="-mt-1"
+                          className="pointer-events-auto relative z-20 -mt-1"
                           venueId={event.venueId}
                           venueName={event.venue}
                         />
                       ) : null}
                     </p>
-                    <EventMetaRow className="mt-2 pl-6" event={event} />
+                    <EventMetaRow className="pointer-events-none relative z-10 mt-2 pl-6" event={event} />
                   </div>
                 </div>
 
@@ -348,13 +404,12 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                 {event.imageUrl ? (
                   <div className="overflow-hidden rounded-[1.1rem] border border-border/75 bg-card p-1.5 shadow-[0_24px_68px_-48px_rgba(0,0,0,0.82)]">
                     <div className="relative aspect-[16/10] max-h-64 w-full overflow-hidden rounded-[0.9rem] lg:aspect-[4/5] lg:max-h-none">
-                      <Image
-                        alt={event.title}
-                        className="object-cover"
-                        fill
-                        priority
-                        sizes="(max-width: 1024px) 100vw, 352px"
-                        src={event.imageUrl}
+                    <EventImage
+                      alt={event.title}
+                      className="object-cover"
+                      priority
+                      sizes="(max-width: 1024px) 100vw, 352px"
+                      src={event.imageUrl}
                       />
                     </div>
                   </div>

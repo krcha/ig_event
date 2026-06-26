@@ -271,12 +271,25 @@ function mergeDisplayTimeFields(
   event: SavedLibraryEvent,
   reference: SavedLibraryEvent | undefined,
 ): SavedLibraryEvent {
-  if (!reference?.displayTimeLabel) {
+  if (!reference) {
     return event;
   }
 
+  const referenceVenueId =
+    typeof reference.venueId === "string" && reference.venueId.length > 0
+      ? reference.venueId
+      : undefined;
+  const eventWithVenueId =
+    referenceVenueId && referenceVenueId !== event.venueId
+      ? { ...event, venueId: referenceVenueId }
+      : event;
+
+  if (!reference.displayTimeLabel) {
+    return eventWithVenueId;
+  }
+
   return {
-    ...event,
+    ...eventWithVenueId,
     dayPeriod: reference.dayPeriod,
     displayTimeEnd: reference.displayTimeEnd,
     displayTimeLabel: reference.displayTimeLabel,
@@ -418,44 +431,47 @@ function PlaceRow({ item }: { item: FavoriteVenueWithNextEvent }) {
   const nextEventTime = nextEvent ? getResolvedTimeParts(nextEvent) : null;
 
   return (
-    <article className="box-border min-h-[4.75rem] overflow-hidden rounded-[1rem] border border-border/75 bg-card/88 px-3 py-2.5">
+    <article className="box-border min-h-[4.75rem] overflow-hidden rounded-[1rem] border border-border/75 bg-card/88 px-3 py-2.5 transition hover:border-primary/25 hover:bg-card">
       <div className="flex min-w-0 items-center gap-2.5 overflow-hidden">
-        <div className="box-border flex h-12 w-16 flex-none flex-col items-center justify-center overflow-hidden rounded-[0.8rem] border border-primary/15 bg-primary/[0.07] px-1.5 text-center text-primary">
-          {nextEventTime?.startLabel ? (
-            <>
-              <span className="block max-w-full truncate text-sm font-semibold leading-4 tabular-nums">
-                {nextEventTime.startLabel}
-              </span>
-              {nextEventTime.endLabel ? (
-                <span className="mt-0.5 block max-w-full truncate text-xs font-semibold leading-4 tabular-nums text-primary/78">
-                  {nextEventTime.endLabel}
-                </span>
-              ) : null}
-            </>
-          ) : (
-            <span className="block max-w-full truncate text-xs font-semibold uppercase tracking-[0.12em] text-primary/72">
-              —
-            </span>
-          )}
-        </div>
-        <div className="min-w-0 flex-1 overflow-hidden">
-          <Link
-            className="block truncate whitespace-nowrap text-sm font-semibold tracking-tight text-foreground hover:text-primary"
-            href={`/venues/${venue._id}`}
-            prefetch={false}
-          >
-            {venue.name}
-          </Link>
-          <div className="mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden text-xs text-muted-foreground">
-            <span className="flex-none font-semibold text-primary/95">{getNextEventMeta(nextEvent)}</span>
-            {nextEvent ? (
+        <Link
+          aria-label={`Open ${venue.name}`}
+          className="group/body flex min-w-0 flex-1 items-center gap-2.5 overflow-hidden rounded-[0.85rem] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
+          href={`/venues/${venue._id}`}
+          prefetch={false}
+        >
+          <div className="box-border flex h-12 w-16 flex-none flex-col items-center justify-center overflow-hidden rounded-[0.8rem] border border-primary/15 bg-primary/[0.07] px-1.5 text-center text-primary">
+            {nextEventTime?.startLabel ? (
               <>
-                <span className="flex-none text-border">/</span>
-                <span className="min-w-0 truncate">{nextEvent.title}</span>
+                <span className="block max-w-full truncate text-sm font-semibold leading-4 tabular-nums">
+                  {nextEventTime.startLabel}
+                </span>
+                {nextEventTime.endLabel ? (
+                  <span className="mt-0.5 block max-w-full truncate text-xs font-semibold leading-4 tabular-nums text-primary/78">
+                    {nextEventTime.endLabel}
+                  </span>
+                ) : null}
               </>
-            ) : null}
+            ) : (
+              <span className="block max-w-full truncate text-xs font-semibold uppercase tracking-[0.12em] text-primary/72">
+                —
+              </span>
+            )}
           </div>
-        </div>
+          <div className="min-w-0 flex-1 overflow-hidden">
+            <span className="block truncate whitespace-nowrap text-sm font-semibold tracking-tight text-foreground group-hover/body:text-primary">
+              {venue.name}
+            </span>
+            <div className="mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden text-xs text-muted-foreground">
+              <span className="flex-none font-semibold text-primary/95">{getNextEventMeta(nextEvent)}</span>
+              {nextEvent ? (
+                <>
+                  <span className="flex-none text-border">/</span>
+                  <span className="min-w-0 truncate">{nextEvent.title}</span>
+                </>
+              ) : null}
+            </div>
+          </div>
+        </Link>
         <div className="flex w-[8.75rem] flex-none items-center justify-end gap-1.5 overflow-hidden">
           <span className="inline-flex min-w-0 max-w-[3.75rem] flex-none items-center rounded-full bg-white/[0.045] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
             <span className="truncate">{venue.category ?? "Place"}</span>

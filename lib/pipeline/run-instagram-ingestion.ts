@@ -2270,7 +2270,7 @@ function getConfiguredEventTimezone(): string {
   return configured || DEFAULT_EVENT_TIMEZONE;
 }
 
-function getIsoDateInTimeZone(timeZone: string, now = new Date()): string {
+function getIsoDateInTimeZone(timeZone: string, now = new Date(Date.now())): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone,
     year: "numeric",
@@ -2286,7 +2286,7 @@ function getIsoDateInTimeZone(timeZone: string, now = new Date()): string {
   return `${year}-${month}-${day}`;
 }
 
-function getEventDateFilterContext(now = new Date()): {
+function getEventDateFilterContext(now = new Date(Date.now())): {
   todayIsoDate: string;
   maxFutureIsoDate: string;
   maxDaysAhead: number;
