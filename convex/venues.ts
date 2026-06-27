@@ -1,6 +1,7 @@
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { normalizeHandle, toSearchableText } from "../lib/pipeline/venue-normalization";
 import { canonicalizeVenueCategory } from "../lib/taxonomy/venue-types";
 import { requireAdminIdentity, requireAdminOrServiceSecret } from "./authz";
 
@@ -8,6 +9,7 @@ const DEFAULT_PUBLIC_VENUE_EVENT_LIMIT = 12;
 const MAX_PUBLIC_VENUE_EVENT_LIMIT = 50;
 const DEFAULT_PUBLIC_VENUE_DIRECTORY_LIMIT = 500;
 const MAX_PUBLIC_VENUE_DIRECTORY_LIMIT = 1000;
+const PUBLIC_VENUE_FALLBACK_SCAN_LIMIT = 1000;
 
 const venueHoursSource = v.union(
   v.literal("osm"),
@@ -71,6 +73,61 @@ function addDaysToDateKey(value: string, days: number): string {
   const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
   date.setUTCDate(date.getUTCDate() + days);
   return formatDateKey(date);
+}
+
+function compareVenueEvents(
+  left: Pick<Doc<"events">, "_id" | "date" | "time" | "title">,
+  right: Pick<Doc<"events">, "_id" | "date" | "time" | "title">,
+): number {
+  const dateResult = left.date.localeCompare(right.date);
+  if (dateResult !== 0) {
+    return dateResult;
+  }
+
+  const timeResult = (left.time ?? "99:99").localeCompare(right.time ?? "99:99");
+  if (timeResult !== 0) {
+    return timeResult;
+  }
+
+  const titleResult = left.title.localeCompare(right.title, undefined, {
+    sensitivity: "base",
+  });
+  if (titleResult !== 0) {
+    return titleResult;
+  }
+
+  return left._id.localeCompare(right._id);
+}
+
+function compareVenueEventsDesc(
+  left: Pick<Doc<"events">, "_id" | "date" | "time" | "title">,
+  right: Pick<Doc<"events">, "_id" | "date" | "time" | "title">,
+): number {
+  return compareVenueEvents(right, left);
+}
+
+function eventMatchesVenueIdentity(event: Doc<"events">, venue: Doc<"venues">): boolean {
+  if (event.venueId === venue._id) {
+    return true;
+  }
+
+  const eventHandle = normalizeHandle(event.venueInstagramHandle ?? "");
+  const venueHandle = normalizeHandle(venue.instagramHandle);
+  if (eventHandle && venueHandle && eventHandle === venueHandle) {
+    return true;
+  }
+
+  const eventVenue = toSearchableText(event.venue);
+  const venueName = toSearchableText(venue.name);
+  return Boolean(eventVenue && venueName && eventVenue === venueName);
+}
+
+function mergeUniqueEvents(events: Doc<"events">[]): Doc<"events">[] {
+  const eventsById = new Map<Id<"events">, Doc<"events">>();
+  for (const event of events) {
+    eventsById.set(event._id, event);
+  }
+  return [...eventsById.values()];
 }
 
 function buildInstagramProfileUrl(handle: string): string {
@@ -247,7 +304,14 @@ export const getPublicVenuePage = query({
       MAX_PUBLIC_VENUE_EVENT_LIMIT,
     );
 
-    const [favoriteRefs, approvedEvents, upcomingEvents, historyEvents] = await Promise.all([
+    const [
+      favoriteRefs,
+      approvedEventsByVenueId,
+      upcomingEventsByVenueId,
+      historyEventsByVenueId,
+      upcomingApprovedScan,
+      historyApprovedScan,
+    ] = await Promise.all([
       ctx.db
         .query("favoriteVenues")
         .withIndex("by_venue", (q) => q.eq("venueId", args.id))
@@ -272,6 +336,43 @@ export const getPublicVenuePage = query({
         )
         .order("desc")
         .take(historyLimit),
+      ctx.db
+        .query("events")
+        .withIndex("by_status_date", (q) =>
+          q.eq("status", "approved").gte("date", args.today),
+        )
+        .order("asc")
+        .take(PUBLIC_VENUE_FALLBACK_SCAN_LIMIT),
+      ctx.db
+        .query("events")
+        .withIndex("by_status_date", (q) =>
+          q.eq("status", "approved").lt("date", args.today),
+        )
+        .order("desc")
+        .take(PUBLIC_VENUE_FALLBACK_SCAN_LIMIT),
+    ]);
+    const fallbackUpcomingEvents = upcomingApprovedScan.filter(
+      (event) => !event.venueId && eventMatchesVenueIdentity(event, venue),
+    );
+    const fallbackHistoryEvents = historyApprovedScan.filter(
+      (event) => !event.venueId && eventMatchesVenueIdentity(event, venue),
+    );
+    const upcomingEvents = mergeUniqueEvents([
+      ...upcomingEventsByVenueId,
+      ...fallbackUpcomingEvents,
+    ])
+      .sort(compareVenueEvents)
+      .slice(0, upcomingLimit);
+    const historyEvents = mergeUniqueEvents([
+      ...historyEventsByVenueId,
+      ...fallbackHistoryEvents,
+    ])
+      .sort(compareVenueEventsDesc)
+      .slice(0, historyLimit);
+    const approvedEvents = mergeUniqueEvents([
+      ...approvedEventsByVenueId,
+      ...fallbackUpcomingEvents,
+      ...fallbackHistoryEvents,
     ]);
     const recentWindowStart = addDaysToDateKey(args.today, -30);
     const approvedUpcomingCount = approvedEvents.filter(
@@ -325,12 +426,15 @@ export const listPublicVenueDirectory = query({
     ]);
     const upcomingCountsByVenueId = new Map<string, number>();
     for (const event of upcomingEvents) {
-      if (!event.venueId) {
+      const venueId = event.venueId ?? venues.find((venue) =>
+        eventMatchesVenueIdentity(event, venue),
+      )?._id;
+      if (!venueId) {
         continue;
       }
       upcomingCountsByVenueId.set(
-        event.venueId,
-        (upcomingCountsByVenueId.get(event.venueId) ?? 0) + 1,
+        venueId,
+        (upcomingCountsByVenueId.get(venueId) ?? 0) + 1,
       );
     }
 

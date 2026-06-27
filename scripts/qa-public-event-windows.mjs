@@ -35,6 +35,26 @@ assert.match(
   "Convex should expose public venue fields by IDs.",
 );
 assert.match(
+  venuesSource,
+  /function eventMatchesVenueIdentity/,
+  "Venue pages should match approved events by venue identity, not only stored venueId.",
+);
+assert.match(
+  venuesSource,
+  /!event\.venueId && eventMatchesVenueIdentity\(event, venue\)/,
+  "Venue pages should include legacy approved events that match by name/handle but are missing venueId.",
+);
+assert.match(
+  venuesSource,
+  /const PUBLIC_VENUE_FALLBACK_SCAN_LIMIT = 1000;/,
+  "Venue page fallback scans should stay bounded.",
+);
+assert.match(
+  venuesSource,
+  /event\.venueId \?\? venues\.find\(\(venue\) =>\s*eventMatchesVenueIdentity\(event, venue\),\s*\)\?\._id/s,
+  "Venue directory counts should also include approved upcoming events missing venueId when their venue identity matches.",
+);
+assert.match(
   publicEventsSource,
   /DEFAULT_PUBLIC_EVENTS_WINDOW_DAYS = 90/,
   "Public event loading should default to a 90-day window.",
