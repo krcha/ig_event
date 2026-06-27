@@ -8,6 +8,7 @@ function read(path) {
 const eventsSource = read("convex/events.ts");
 const venuesSource = read("convex/venues.ts");
 const publicEventsSource = read("lib/events/public-events.ts");
+const publicVenuePagesSource = read("lib/venues/public-venue-pages.ts");
 const eventDetailSource = read("app/(main)/events/[eventId]/page.tsx");
 const savedPageSource = read("app/(main)/saved/page.tsx");
 const discoverPageSource = read("app/(main)/discover/page.tsx");
@@ -73,6 +74,21 @@ assert.match(
   publicEventsSource,
   /venues:listPublicVenueFieldsByIds/,
   "Public loader should fetch venue display fields by current page IDs.",
+);
+assert.match(
+  publicVenuePagesSource,
+  /loadFallbackUpcomingVenueEvents/,
+  "Venue pages should supplement deployed venue queries from the public calendar event window.",
+);
+assert.match(
+  publicVenuePagesSource,
+  /loadUpcomingApprovedEvents\(\{\s*daysAhead: PUBLIC_VENUE_FALLBACK_UPCOMING_DAYS,\s*fromDate: options\.today,/s,
+  "Venue page fallback should use the same public approved-event window as the calendar.",
+);
+assert.match(
+  publicVenuePagesSource,
+  /\.filter\(\(event\) => eventMatchesVenue\(event, options\.venue\)\)/,
+  "Venue page fallback should only merge calendar events that match the requested venue identity.",
 );
 assert.doesNotMatch(
   publicEventsSource,

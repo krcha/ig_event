@@ -9,6 +9,11 @@ import {
   type EventTimeDisplaySource,
 } from "@/lib/events/event-time";
 import {
+  loadUpcomingApprovedEvents,
+  type PublicEvent,
+} from "@/lib/events/public-events";
+import { toSearchableText } from "@/lib/pipeline/venue-normalization";
+import {
   DEFAULT_EVENT_TYPE,
   canonicalizeEventType,
   eventTypeFromVenueCategory,
@@ -16,6 +21,7 @@ import {
 import type { VenueHoursCacheFields, VenueHoursSource } from "@/lib/venues/venue-hours-cache";
 
 const DEFAULT_RECENT_INSTAGRAM_POST_LIMIT = 6;
+const PUBLIC_VENUE_FALLBACK_UPCOMING_DAYS = 366;
 
 const getPublicVenuePageQuery =
   "venues:getPublicVenuePage" as unknown as FunctionReference<"query">;
@@ -147,6 +153,119 @@ function normalizeHandle(handle: string): string {
   return handle.trim().replace(/^@+/, "").toLocaleLowerCase();
 }
 
+function compareVenueEvents(left: PublicVenueEvent, right: PublicVenueEvent): number {
+  const dateResult = left.date.localeCompare(right.date);
+  if (dateResult !== 0) {
+    return dateResult;
+  }
+
+  const timeResult = (left.time ?? "99:99").localeCompare(right.time ?? "99:99");
+  if (timeResult !== 0) {
+    return timeResult;
+  }
+
+  const titleResult = left.title.localeCompare(right.title, undefined, {
+    sensitivity: "base",
+  });
+  if (titleResult !== 0) {
+    return titleResult;
+  }
+
+  return left._id.localeCompare(right._id);
+}
+
+function eventMatchesVenue(event: PublicEvent, venue: PublicVenue): boolean {
+  if (event.venueId === venue._id) {
+    return true;
+  }
+
+  const eventHandle = normalizeHandle(event.venueInstagramHandle ?? event.instagramHandle ?? "");
+  const venueHandle = normalizeHandle(venue.instagramHandle);
+  if (eventHandle && venueHandle && eventHandle === venueHandle) {
+    return true;
+  }
+
+  const eventVenue = toSearchableText(event.venue);
+  const venueName = toSearchableText(venue.name);
+  return Boolean(eventVenue && venueName && eventVenue === venueName);
+}
+
+function publicEventToVenueEvent(event: PublicEvent, venue: PublicVenue): PublicVenueEvent {
+  return normalizeVenueEvent(
+    {
+      _id: event._id,
+      artists: event.artists,
+      date: event.date,
+      description: event.description,
+      displayTimeEnd: event.displayTimeEnd,
+      displayTimeLabel: event.displayTimeLabel,
+      displayTimeSource: event.displayTimeSource,
+      displayTimeStart: event.displayTimeStart,
+      eventType: event.eventType,
+      imageUrl: event.imageUrl,
+      instagramPostUrl: event.instagramPostUrl,
+      ticketPrice: event.ticketPrice,
+      time: event.time,
+      title: event.title,
+      venue: event.venue,
+      venueCategory: event.venueCategory,
+      venueId: event.venueId,
+    },
+    venue,
+  );
+}
+
+function mergeUniqueVenueEvents(events: PublicVenueEvent[]): PublicVenueEvent[] {
+  const eventsById = new Map<string, PublicVenueEvent>();
+  for (const event of events) {
+    eventsById.set(event._id, event);
+  }
+  return [...eventsById.values()];
+}
+
+async function loadFallbackUpcomingVenueEvents(options: {
+  limit: number | undefined;
+  today: string;
+  venue: PublicVenue;
+}): Promise<PublicVenueEvent[]> {
+  const result = await loadUpcomingApprovedEvents({
+    daysAhead: PUBLIC_VENUE_FALLBACK_UPCOMING_DAYS,
+    fromDate: options.today,
+  });
+  if (result.events.length === 0) {
+    return [];
+  }
+
+  return result.events
+    .filter((event) => eventMatchesVenue(event, options.venue))
+    .map((event) => publicEventToVenueEvent(event, options.venue))
+    .sort(compareVenueEvents)
+    .slice(0, options.limit);
+}
+
+function mergeVenueStats(
+  stats: PublicVenueStats,
+  pageUpcomingEvents: PublicVenueEvent[],
+  pageHistoryEvents: PublicVenueEvent[],
+  fallbackUpcomingEvents: PublicVenueEvent[],
+  today: string,
+): PublicVenueStats {
+  const mergedEvents = mergeUniqueVenueEvents([
+    ...pageUpcomingEvents,
+    ...pageHistoryEvents,
+    ...fallbackUpcomingEvents,
+  ]);
+  const approvedUpcomingCount = mergedEvents.filter((event) => event.date >= today).length;
+  const approvedHistoryCount = mergedEvents.filter((event) => event.date < today).length;
+
+  return {
+    ...stats,
+    approvedEventCount: Math.max(stats.approvedEventCount, mergedEvents.length),
+    approvedHistoryCount: Math.max(stats.approvedHistoryCount, approvedHistoryCount),
+    approvedUpcomingCount: Math.max(stats.approvedUpcomingCount, approvedUpcomingCount),
+  };
+}
+
 async function loadRecentInstagramPosts(
   convex: ConvexHttpClient,
   handle: string,
@@ -195,10 +314,11 @@ export async function loadPublicVenuePage(
 
   try {
     const convex = new ConvexHttpClient(convexUrl);
+    const today = options.today ?? getPublicVenueTodayKey();
     const page = (await convex.query(getPublicVenuePageQuery, {
       id: venueId,
       historyLimit: options.historyLimit,
-      today: options.today ?? getPublicVenueTodayKey(),
+      today,
       upcomingLimit: options.upcomingLimit,
     })) as RawPublicVenuePageResponse;
 
@@ -212,19 +332,39 @@ export async function loadPublicVenuePage(
       };
     }
 
+    const pageUpcomingEvents = page.upcomingEvents.map((event) =>
+      normalizeVenueEvent(event, page.venue),
+    );
+    const pageHistoryEvents = page.historyEvents.map((event) =>
+      normalizeVenueEvent(event, page.venue),
+    );
+    const fallbackUpcomingEvents = await loadFallbackUpcomingVenueEvents({
+      limit: options.upcomingLimit,
+      today,
+      venue: page.venue,
+    });
+    const upcomingEvents = mergeUniqueVenueEvents([
+      ...pageUpcomingEvents,
+      ...fallbackUpcomingEvents,
+    ])
+      .sort(compareVenueEvents)
+      .slice(0, options.upcomingLimit);
+
     return {
       venue: page.venue,
-      upcomingEvents: page.upcomingEvents.map((event) =>
-        normalizeVenueEvent(event, page.venue),
-      ),
-      historyEvents: page.historyEvents.map((event) =>
-        normalizeVenueEvent(event, page.venue),
-      ),
+      upcomingEvents,
+      historyEvents: pageHistoryEvents,
       recentInstagramPosts: await loadRecentInstagramPosts(
         convex,
         page.venue.instagramHandle,
       ),
-      stats: page.stats,
+      stats: mergeVenueStats(
+        page.stats,
+        pageUpcomingEvents,
+        pageHistoryEvents,
+        fallbackUpcomingEvents,
+        today,
+      ),
     };
   } catch (error) {
     return {

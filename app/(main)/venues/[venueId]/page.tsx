@@ -394,6 +394,9 @@ export default async function VenuePage({ params }: VenuePageProps) {
   const approvedPostCount = String(stats?.approvedEventCount ?? eventPosts.length);
   const upcomingCount = String(stats?.approvedUpcomingCount ?? upcomingEvents.length);
   const calendarHref = venue ? `/?venue=${encodeURIComponent(venue.name)}` : "/";
+  const priorityEventId = venue
+    ? eventPosts.find((event) => getEventPostImageSrc(event, venue))?._id
+    : null;
   const profileStats = venue
     ? getProfileStats({
         approvedPostCount,
@@ -472,11 +475,11 @@ export default async function VenuePage({ params }: VenuePageProps) {
 
               {eventPosts.length > 0 ? (
                 <div className="grid grid-cols-3 gap-px pt-1 sm:gap-1.5">
-                  {eventPosts.map((event, index) => (
+                  {eventPosts.map((event) => (
                     <EventPostTile
                       event={event}
                       key={event._id}
-                      priority={index === 0}
+                      priority={event._id === priorityEventId}
                       venue={venue}
                     />
                   ))}
