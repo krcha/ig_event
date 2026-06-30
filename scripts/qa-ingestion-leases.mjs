@@ -92,8 +92,18 @@ assert.doesNotMatch(
 );
 assert.match(
   cronIngestSource,
-  /DEFAULT_CRON_MAX_STEPS_PER_REQUEST = 4/,
-  "cron ingestion route should default to four bounded steps per request.",
+  /DEFAULT_CRON_MAX_STEPS_PER_REQUEST = 20/,
+  "cron ingestion route should default to enough bounded steps for a full active-venue run.",
+);
+assert.match(
+  cronIngestSource,
+  /DEFAULT_BATCH_SIZE = 64/,
+  "cron ingestion route should default to the maximum bounded handle batch size.",
+);
+assert.match(
+  cronIngestSource,
+  /findResumableCronJob/,
+  "cron ingestion route should resume recent cron jobs instead of creating stale running jobs.",
 );
 assert.match(
   cronIngestSource,

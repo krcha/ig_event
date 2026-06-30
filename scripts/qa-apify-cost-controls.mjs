@@ -101,8 +101,13 @@ for (const [label, source] of [
 
 assert.match(
   cronRouteSource,
-  /minCreatedAt:\s*Date\.now\(\) - cronConfig\.fullScrapeCooldownHours \* MS_PER_HOUR/,
+  /const minCreatedAt = Date\.now\(\) - cronConfig\.fullScrapeCooldownHours \* MS_PER_HOUR/,
   "cron route should honor the configured cooldown instead of forcing a longer interval",
+);
+assert.match(
+  cronRouteSource,
+  /findResumableCronJob/,
+  "cron route should resume recent cron jobs before applying cooldown skips",
 );
 assert.doesNotMatch(
   cronRouteSource,

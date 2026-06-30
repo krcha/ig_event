@@ -24,15 +24,21 @@ export const maxDuration = 300;
 
 const createIngestionJobMutation =
   "ingestionJobs:createJob" as unknown as FunctionReference<"mutation">;
+const getIngestionJobQuery =
+  "ingestionJobs:getJob" as unknown as FunctionReference<"query">;
+const listRecentFullScrapeJobsQuery =
+  "ingestionJobs:listRecentFullScrapeJobs" as unknown as FunctionReference<"query">;
 const claimStepMutation =
   "ingestionJobs:claimStep" as unknown as FunctionReference<"mutation">;
 const completeStepMutation =
   "ingestionJobs:completeStep" as unknown as FunctionReference<"mutation">;
 const failStepMutation =
   "ingestionJobs:failStep" as unknown as FunctionReference<"mutation">;
-const DEFAULT_BATCH_SIZE = 2;
-const DEFAULT_CRON_MAX_STEPS_PER_REQUEST = 4;
-const DEFAULT_INGESTION_JOB_LEASE_MS = 5 * 60 * 1000;
+const DEFAULT_BATCH_SIZE = 64;
+const MAX_CRON_BATCH_SIZE = 64;
+const DEFAULT_CRON_MAX_STEPS_PER_REQUEST = 20;
+const MAX_CRON_MAX_STEPS_PER_REQUEST = 200;
+const DEFAULT_INGESTION_JOB_LEASE_MS = 30 * 60 * 1000;
 const MS_PER_HOUR = 60 * 60 * 1000;
 
 type IngestionJobStatus = "queued" | "running" | "completed" | "failed";
@@ -53,6 +59,19 @@ type IngestionJobRecord = {
   finishedAt?: string;
 };
 
+type RecentFullScrapeJobRecord = {
+  _id: string;
+  source: string;
+  status: IngestionJobStatus;
+  handles: string[];
+  stateJson: string;
+  createdAt: number;
+  startedAt?: string;
+  finishedAt?: string;
+};
+
+type ConvexClient = ReturnType<typeof createConvexHttpClient>;
+
 function isAuthorizedCronRequest(request: Request): boolean {
   return isAuthorizedCronRequestHeader(request.headers.get("authorization"));
 }
@@ -65,7 +84,18 @@ function normalizeCronMaxSteps(value: string | undefined): number {
   if (!Number.isFinite(parsed) || parsed < 1) {
     return DEFAULT_CRON_MAX_STEPS_PER_REQUEST;
   }
-  return Math.min(Math.trunc(parsed), 20);
+  return Math.min(Math.trunc(parsed), MAX_CRON_MAX_STEPS_PER_REQUEST);
+}
+
+function normalizeCronBatchSize(value: string | undefined): number {
+  if (!value) {
+    return DEFAULT_BATCH_SIZE;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return DEFAULT_BATCH_SIZE;
+  }
+  return Math.min(Math.trunc(parsed), MAX_CRON_BATCH_SIZE);
 }
 
 function parseSummary(summaryJson: string, handles: string[]): IngestionSummary {
@@ -131,6 +161,34 @@ function parseState(stateJson: string): IngestionBatchState {
   }
 }
 
+async function findResumableCronJob(options: {
+  convex: ConvexClient;
+  serviceSecret: string;
+  minCreatedAt: number;
+}): Promise<IngestionJobRecord | null> {
+  const recentJobs = (await options.convex.query(listRecentFullScrapeJobsQuery, {
+    minCreatedAt: options.minCreatedAt,
+    serviceSecret: options.serviceSecret,
+  })) as RecentFullScrapeJobRecord[];
+
+  const resumableJob = recentJobs
+    .filter(
+      (job) =>
+        job.source === "cron_active_venues" &&
+        (job.status === "queued" || job.status === "running"),
+    )
+    .sort((left, right) => right.createdAt - left.createdAt)[0];
+
+  if (!resumableJob) {
+    return null;
+  }
+
+  return (await options.convex.query(getIngestionJobQuery, {
+    id: resumableJob._id,
+    serviceSecret: options.serviceSecret,
+  })) as IngestionJobRecord | null;
+}
+
 export async function GET(request: Request) {
   if (!isAuthorizedCronRequest(request)) {
     return NextResponse.json({ error: "Unauthorized cron request." }, { status: 401 });
@@ -141,6 +199,7 @@ export async function GET(request: Request) {
   try {
     const serviceSecret = requireServiceSecret();
     const cronConfig = getCronIngestionConfig();
+    const convex = createConvexHttpClient();
     const activeVenueHandles = await getActiveVenueHandles({ serviceSecret });
     if (activeVenueHandles.length === 0) {
       return NextResponse.json({
@@ -162,17 +221,40 @@ export async function GET(request: Request) {
       });
     }
 
-    const recentlyAttemptedHandles = await getRecentlyAttemptedFullScrapeHandles({
-      candidateHandles: activeVenueHandles,
-      minCreatedAt: Date.now() - cronConfig.fullScrapeCooldownHours * MS_PER_HOUR,
+    const minCreatedAt = Date.now() - cronConfig.fullScrapeCooldownHours * MS_PER_HOUR;
+    const resumableJob = await findResumableCronJob({
+      convex,
       serviceSecret,
+      minCreatedAt,
     });
-    const handleSelection = selectCronIngestionHandles({
-      activeVenueHandles,
-      recentlyAttemptedHandles,
-      maxHandlesPerRun: cronConfig.maxHandlesPerRun,
-    });
-    const { handles } = handleSelection;
+    const effectiveBatchSize = normalizeCronBatchSize(process.env.CRON_INGESTION_BATCH_SIZE);
+    let handles: string[];
+    let skippedRecentlyAttempted = 0;
+    let skippedDueToRunLimit = 0;
+    let resumedJob = false;
+
+    if (resumableJob) {
+      jobId = resumableJob._id;
+      handles = resumableJob.handles;
+      const resumableSummary = parseSummary(resumableJob.summaryJson, resumableJob.handles);
+      skippedRecentlyAttempted = resumableSummary.runContext?.skippedRecentlyAttempted ?? 0;
+      skippedDueToRunLimit = resumableSummary.runContext?.skippedDueToRunLimit ?? 0;
+      resumedJob = true;
+    } else {
+      const recentlyAttemptedHandles = await getRecentlyAttemptedFullScrapeHandles({
+        candidateHandles: activeVenueHandles,
+        minCreatedAt,
+        serviceSecret,
+      });
+      const handleSelection = selectCronIngestionHandles({
+        activeVenueHandles,
+        recentlyAttemptedHandles,
+        maxHandlesPerRun: cronConfig.maxHandlesPerRun,
+      });
+      handles = handleSelection.handles;
+      skippedRecentlyAttempted = handleSelection.skippedRecentlyAttempted;
+      skippedDueToRunLimit = handleSelection.skippedDueToRunLimit;
+    }
 
     if (handles.length === 0) {
       return NextResponse.json({
@@ -183,45 +265,47 @@ export async function GET(request: Request) {
           mode: "full_scrape",
           activeVenueCount: activeVenueHandles.length,
           selectedHandleCount: 0,
-          skippedRecentlyAttempted: handleSelection.skippedRecentlyAttempted,
-          skippedDueToRunLimit: handleSelection.skippedDueToRunLimit,
+          skippedRecentlyAttempted,
+          skippedDueToRunLimit,
           fullScrapeCooldownHours: cronConfig.fullScrapeCooldownHours,
           maxHandlesPerRun: cronConfig.maxHandlesPerRun,
           resultsLimit: cronConfig.resultsLimit,
           daysBack: cronConfig.daysBack,
         }),
         activeVenueCount: activeVenueHandles.length,
-        skippedRecentlyAttempted: handleSelection.skippedRecentlyAttempted,
-        skippedDueToRunLimit: handleSelection.skippedDueToRunLimit,
+        skippedRecentlyAttempted,
+        skippedDueToRunLimit,
         costControls: cronConfig,
       });
     }
 
-    const convex = createConvexHttpClient();
     const initialSummary = createEmptyIngestionSummary(handles, {
       source: "cron_active_venues",
       mode: "full_scrape",
       activeVenueCount: activeVenueHandles.length,
       selectedHandleCount: handles.length,
-      skippedRecentlyAttempted: handleSelection.skippedRecentlyAttempted,
-      skippedDueToRunLimit: handleSelection.skippedDueToRunLimit,
+      skippedRecentlyAttempted,
+      skippedDueToRunLimit,
       fullScrapeCooldownHours: cronConfig.fullScrapeCooldownHours,
       maxHandlesPerRun: cronConfig.maxHandlesPerRun,
       resultsLimit: cronConfig.resultsLimit,
       daysBack: cronConfig.daysBack,
     });
-    const initialState = createInitialIngestionBatchState();
-    jobId = (await convex.mutation(createIngestionJobMutation, {
-      source: "cron_active_venues",
-      mode: "full_scrape",
-      handles,
-      resultsLimit: cronConfig.resultsLimit,
-      daysBack: cronConfig.daysBack,
-      batchSize: DEFAULT_BATCH_SIZE,
-      summaryJson: JSON.stringify(initialSummary),
-      stateJson: JSON.stringify(initialState),
-      serviceSecret,
-    })) as string;
+
+    if (!jobId) {
+      const initialState = createInitialIngestionBatchState();
+      jobId = (await convex.mutation(createIngestionJobMutation, {
+        source: "cron_active_venues",
+        mode: "full_scrape",
+        handles,
+        resultsLimit: cronConfig.resultsLimit,
+        daysBack: cronConfig.daysBack,
+        batchSize: effectiveBatchSize,
+        summaryJson: JSON.stringify(initialSummary),
+        stateJson: JSON.stringify(initialState),
+        serviceSecret,
+      })) as string;
+    }
 
     const maxSteps = normalizeCronMaxSteps(process.env.CRON_INGESTION_MAX_STEPS);
     let stepsAdvanced = 0;
@@ -254,7 +338,7 @@ export async function GET(request: Request) {
           state,
           resultsLimit: claimedJob.resultsLimit,
           daysBack: claimedJob.daysBack,
-          batchSize: claimedJob.batchSize,
+          batchSize: Math.max(claimedJob.batchSize, effectiveBatchSize),
           mode: claimedJob.mode ?? "full_scrape",
           serviceSecret,
         });
@@ -306,10 +390,12 @@ export async function GET(request: Request) {
       done,
       stepsAdvanced,
       maxSteps,
+      effectiveBatchSize,
+      resumedJob,
       finishedAt,
       activeVenueCount: activeVenueHandles.length,
-      skippedRecentlyAttempted: handleSelection.skippedRecentlyAttempted,
-      skippedDueToRunLimit: handleSelection.skippedDueToRunLimit,
+      skippedRecentlyAttempted,
+      skippedDueToRunLimit,
       costControls: cronConfig,
     });
   } catch (error) {
