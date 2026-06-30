@@ -3,6 +3,7 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api.js";
 import {
   AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+  CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
   calculateModerationConfidenceScore,
   normalizeConfidenceScore,
   shouldAutoApproveConfidenceScore,
@@ -102,8 +103,7 @@ function buildBackfillDecision(event) {
   const titleUsedFallback = readBoolean(normalizedFields, "titleUsedFallback");
   const dateConfidence = readString(normalizedFields, "dateConfidence");
   const missingTime = !event.time;
-  const canUseTbdForMissingTime = missingTime && dateConfidence === "high";
-  const missingTimeNeedsReview = missingTime && !canUseTbdForMissingTime;
+  const timeTbdApplies = missingTime && hasDate;
   const legacyCaptionOnlyCoreFields =
     missingImage &&
     hasCaptionCoreEvidence &&
@@ -135,23 +135,21 @@ function buildBackfillDecision(event) {
     dateConfidence !== "low" &&
     confidenceScore !== null &&
     confidenceScore >= CAPTION_ONLY_CORE_FIELDS_MIN_CONFIDENCE;
-  const highConfidenceDateTimeTbdAutoApproved =
-    canUseTbdForMissingTime &&
+  const coreFieldsAutoApproved =
     hasDate &&
     hasVenue &&
-    !missingImage &&
-    !titleUsedFallback &&
     !suspiciousYear &&
+    dateConfidence !== "low" &&
     confidenceScore !== null &&
-    confidenceScore >= AUTO_APPROVE_CONFIDENCE_THRESHOLD;
+    confidenceScore >= CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
   const autoApproveRule = strictConfidenceAutoApproved
     ? "confidence_threshold"
     : captionOnlyCoreAutoApproved
       ? hasVideoPostType
         ? "caption_only_video_core_fields"
         : "legacy_caption_only_core_fields"
-      : highConfidenceDateTimeTbdAutoApproved
-        ? "high_confidence_date_time_tbd"
+      : coreFieldsAutoApproved
+        ? "core_event_fields"
         : null;
   const autoApproved = autoApproveRule !== null;
   const moderationSignals = [
@@ -159,8 +157,7 @@ function buildBackfillDecision(event) {
     ...(allowMissingImage ? ["missing_image_allowed"] : []),
     ...(legacyCaptionOnlyCoreFields ? ["legacy_caption_only_core_fields"] : []),
     ...(titleUsedFallback ? ["fallback_title"] : []),
-    ...(missingTimeNeedsReview ? ["missing_time"] : []),
-    ...(canUseTbdForMissingTime ? ["time_tbd"] : []),
+    ...(timeTbdApplies ? ["time_tbd"] : []),
     ...(suspiciousYear ? ["suspicious_year"] : []),
     ...(confidenceScore !== null && confidenceScore < 0.7 ? ["low_confidence"] : []),
   ];
@@ -168,12 +165,10 @@ function buildBackfillDecision(event) {
     ? []
     : [
         ...(confidenceScore === null ? ["missing_confidence"] : []),
-        ...(confidenceScore !== null && confidenceScore <= AUTO_APPROVE_CONFIDENCE_THRESHOLD
+        ...(confidenceScore !== null && confidenceScore < CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD
           ? ["below_auto_approve_threshold"]
           : []),
         ...(missingImage && !allowMissingImage ? ["missing_image"] : []),
-        ...(titleUsedFallback ? ["fallback_title"] : []),
-        ...(missingTimeNeedsReview ? ["missing_time"] : []),
         ...(suspiciousYear ? ["suspicious_year"] : []),
         ...(dateConfidence === "low" ? ["low_date_confidence"] : []),
       ];
@@ -192,6 +187,7 @@ function buildBackfillDecision(event) {
       : null,
     moderationConfidenceScore: confidenceScore,
     moderationAutoApproveThreshold: AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+    moderationCoreEventAutoApproveThreshold: CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
     moderationCaptionOnlyVideoMinConfidence: CAPTION_ONLY_CORE_FIELDS_MIN_CONFIDENCE,
     moderationAutoApproved: autoApproved,
     moderationAutoApproveRule: autoApproveRule,
@@ -216,11 +212,15 @@ const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
 if (!convexUrl) {
   throw new Error("NEXT_PUBLIC_CONVEX_URL is not configured.");
 }
+const serviceSecret = process.env.CRON_SECRET;
+if (!serviceSecret) {
+  throw new Error("CRON_SECRET is not configured.");
+}
 
 const apply = process.env.BACKFILL_APPLY === "1";
 const limit = Math.max(1, Math.min(1000, Number.parseInt(process.env.BACKFILL_LIMIT ?? "500", 10) || 500));
 const convex = new ConvexHttpClient(convexUrl);
-const events = await convex.query(api.events.listByStatus, { status: "pending", limit });
+const events = await convex.query(api.events.listByStatus, { status: "pending", limit, serviceSecret });
 
 let metadataUpdated = 0;
 let autoApproved = 0;
@@ -266,6 +266,7 @@ for (const event of events) {
           }
         : {}),
     },
+    serviceSecret,
   });
 }
 

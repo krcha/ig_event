@@ -5,6 +5,7 @@ import {
 } from "../lib/ai/event-extraction-prompt.ts";
 import {
   AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+  CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
   calculateModerationConfidenceScore,
   normalizeConfidencePayload,
   normalizeConfidenceScore,
@@ -488,6 +489,7 @@ function runConfidenceQa() {
     false,
   );
   assert.equal(AUTO_APPROVE_CONFIDENCE_THRESHOLD, 0.9);
+  assert.equal(CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD, 0.8);
   assert.equal(shouldAutoApproveConfidenceScore(0.89), false);
   assert.equal(shouldAutoApproveConfidenceScore(0.91), true);
 }
@@ -603,11 +605,77 @@ function runVideoModerationQa() {
   assert.equal(highConfidenceDateMissingTime.event.time, TBD_EVENT_TIME);
   assert.equal(
     highConfidenceDateMissingTimeFields.moderationAutoApproveRule,
-    "high_confidence_date_time_tbd",
+    "core_event_fields",
+  );
+  assert.equal(
+    highConfidenceDateMissingTimeFields.moderationCoreEventAutoApproveThreshold,
+    CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
   );
   assert.deepEqual(highConfidenceDateMissingTimeFields.moderationPendingReasons, []);
   assert.ok(highConfidenceDateMissingTimeFields.moderationSignals.includes("time_tbd"));
   assert.ok(!highConfidenceDateMissingTimeFields.moderationSignals.includes("missing_time"));
+
+  const fallbackTitleCoreFields = assertSingleOkPreparedEvent(
+    prepareEventsForInsert(
+      makeInstagramPost({
+        caption: "Petak u KC Gradu, program uskoro.",
+        postType: "image",
+        username: "kcgrad",
+      }),
+      makeExtractedEvent({
+        title: "",
+        date: isoDateDaysFromNow(7),
+        time: "",
+        venue: "KC Grad",
+        artists: [],
+        confidence: CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+        field_confirmation: makeFieldConfirmation(CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD),
+      }),
+      "https://cdn.example.com/poster.jpg",
+      STATIC_VENUE_BY_HANDLE,
+      {},
+      {},
+    ),
+  );
+  const fallbackTitleCoreFieldsNormalized = readPreparedNormalizedFields(fallbackTitleCoreFields);
+  assert.equal(fallbackTitleCoreFields.event.status, "approved");
+  assert.equal(fallbackTitleCoreFields.event.time, TBD_EVENT_TIME);
+  assert.equal(fallbackTitleCoreFieldsNormalized.moderationAutoApproveRule, "core_event_fields");
+  assert.deepEqual(fallbackTitleCoreFieldsNormalized.moderationPendingReasons, []);
+  assert.ok(fallbackTitleCoreFieldsNormalized.moderationSignals.includes("fallback_title"));
+  assert.ok(fallbackTitleCoreFieldsNormalized.moderationSignals.includes("time_tbd"));
+  assert.ok(!fallbackTitleCoreFieldsNormalized.moderationSignals.includes("missing_time"));
+
+  const lowCoreConfidence = assertSingleOkPreparedEvent(
+    prepareEventsForInsert(
+      makeInstagramPost({
+        caption: "Petak u Spratu.",
+        postType: "image",
+        username: "sprat_bar",
+      }),
+      makeExtractedEvent({
+        title: "Friday Event",
+        date: isoDateDaysFromNow(7),
+        time: "",
+        venue: "Sprat",
+        artists: [],
+        confidence: 0.79,
+        field_confirmation: makeFieldConfirmation(0.79),
+      }),
+      "https://cdn.example.com/poster.jpg",
+      {},
+      {},
+      {},
+    ),
+  );
+  const lowCoreConfidenceFields = readPreparedNormalizedFields(lowCoreConfidence);
+  assert.equal(lowCoreConfidence.event.status, "pending");
+  assert.equal(lowCoreConfidence.event.time, TBD_EVENT_TIME);
+  assert.deepEqual(lowCoreConfidenceFields.moderationPendingReasons, [
+    "below_auto_approve_threshold",
+  ]);
+  assert.ok(lowCoreConfidenceFields.moderationSignals.includes("time_tbd"));
+  assert.ok(!lowCoreConfidenceFields.moderationSignals.includes("missing_time"));
 
   const sparseVenueVideo = assertSingleOkPreparedEvent(
     prepareEventsForInsert(
@@ -1061,7 +1129,7 @@ function runScheduleConsistencyQa() {
   assert.deepEqual(scheduleEvents.map((event) => event.date), [fridayIsoDate, saturdayIsoDate]);
   assert.equal(scheduleEvents.some((event) => /danijelcehranov/i.test(event.title)), false);
   assert.equal(scheduleEvents.some((event) => event.time === "19:06"), false);
-  assert.equal(scheduleEvents[0].time, undefined);
+  assert.equal(scheduleEvents[0].time, TBD_EVENT_TIME);
   assert.equal(scheduleEvents[0].venue, "Kucica");
   assert.equal(scheduleEvents[1].venue, "Kucica");
 

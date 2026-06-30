@@ -1,6 +1,7 @@
 export const DUPLICATE_CONFIDENCE_MULTIPLIER = 0.5;
 export const MISSING_IMAGE_CONFIDENCE_PENALTY = 0.2;
 export const AUTO_APPROVE_CONFIDENCE_THRESHOLD = 0.9;
+export const CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD = 0.8;
 
 export function normalizeConfidenceScore(
   value: number | string | null | undefined,

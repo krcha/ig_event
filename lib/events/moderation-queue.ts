@@ -36,9 +36,6 @@ export function getModerationQueuePriorityScore(
   if (event.titleUsedFallback) {
     score += 12;
   }
-  if (event.missingTime) {
-    score += 5;
-  }
 
   return score;
 }

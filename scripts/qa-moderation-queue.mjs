@@ -37,6 +37,7 @@ const duplicateConflict = makeEvent({
 const reviewedConflict = makeEvent({ hasResolvedDuplicate: true });
 
 assert.equal(getModerationQueuePriorityScore(clean), 0);
+assert.equal(getModerationQueuePriorityScore(makeEvent({ missingTime: true })), 0);
 assert.equal(getModerationQueuePriorityScore(unresolvedMissingImage) > 0, true);
 assert.equal(
   getModerationQueuePriorityScore(allowedMissingImageVideo) <

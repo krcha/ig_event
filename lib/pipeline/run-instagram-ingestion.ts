@@ -31,6 +31,7 @@ import {
 } from "@/lib/scraper/instagram-scraper";
 import {
   AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+  CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
   calculateModerationConfidenceScore,
   normalizeConfidencePayload,
   normalizeConfidenceScore,
@@ -596,7 +597,7 @@ type ModerationDecision = {
   autoApproveRule:
     | "confidence_threshold"
     | "caption_only_video_core_fields"
-    | "high_confidence_date_time_tbd"
+    | "core_event_fields"
     | null;
   pendingReasons: string[];
   signals: string[];
@@ -645,14 +646,12 @@ function buildModerationDecision(options: {
     missingImage: options.missingImage,
     allowMissingImage: options.allowMissingImage,
   });
-  const canUseTbdForMissingTime = options.missingTime && options.dateConfidence === "high";
-  const missingTimeNeedsReview = options.missingTime && !canUseTbdForMissingTime;
+  const timeTbdApplies = options.missingTime && options.hasDate;
   const signals = [
     ...(options.missingImage ? ["missing_image"] : []),
     ...(options.allowMissingImage ? ["missing_image_allowed"] : []),
     ...(options.titleUsedFallback ? ["fallback_title"] : []),
-    ...(missingTimeNeedsReview ? ["missing_time"] : []),
-    ...(canUseTbdForMissingTime ? ["time_tbd"] : []),
+    ...(timeTbdApplies ? ["time_tbd"] : []),
     ...(options.suspiciousYear ? ["suspicious_year"] : []),
     ...(confidenceScore !== null && confidenceScore < 0.7 ? ["low_confidence"] : []),
   ];
@@ -667,33 +666,29 @@ function buildModerationDecision(options: {
     options.dateConfidence !== "low" &&
     confidenceScore !== null &&
     confidenceScore >= CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE;
-  const qualifiesForHighConfidenceDateTimeTbd =
-    canUseTbdForMissingTime &&
+  const qualifiesForCoreEventFields =
     options.hasDate &&
     options.hasVenue &&
-    !options.missingImage &&
-    !options.titleUsedFallback &&
     !options.suspiciousYear &&
+    options.dateConfidence !== "low" &&
     confidenceScore !== null &&
-    confidenceScore >= AUTO_APPROVE_CONFIDENCE_THRESHOLD;
+    confidenceScore >= CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
   const autoApproveRule = qualifiesForStrictConfidence
     ? "confidence_threshold"
     : qualifiesForCaptionOnlyVideo
       ? "caption_only_video_core_fields"
-      : qualifiesForHighConfidenceDateTimeTbd
-        ? "high_confidence_date_time_tbd"
+      : qualifiesForCoreEventFields
+        ? "core_event_fields"
         : null;
   const autoApproved = autoApproveRule !== null;
   const pendingReasons = autoApproved
     ? []
     : [
         ...(confidenceScore === null ? ["missing_confidence"] : []),
-        ...(confidenceScore !== null && confidenceScore <= AUTO_APPROVE_CONFIDENCE_THRESHOLD
+        ...(confidenceScore !== null && confidenceScore < CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD
           ? ["below_auto_approve_threshold"]
           : []),
         ...(options.missingImage && !options.allowMissingImage ? ["missing_image"] : []),
-        ...(options.titleUsedFallback ? ["fallback_title"] : []),
-        ...(missingTimeNeedsReview ? ["missing_time"] : []),
         ...(options.suspiciousYear ? ["suspicious_year"] : []),
         ...(options.dateConfidence === "low" ? ["low_date_confidence"] : []),
       ];
@@ -4507,8 +4502,7 @@ export function prepareEventsForInsert(
       ...variant.consistencyIssues,
       ...eventConsistency.issues,
     ])];
-    const timeTbdApplied =
-      !eventConsistency.sanitizedTime && variant.dateNormalization.confidence === "high";
+    const timeTbdApplied = !eventConsistency.sanitizedTime && Boolean(date);
     const safeTime = eventConsistency.sanitizedTime || (timeTbdApplied ? TBD_EVENT_TIME : "");
     const timeSanitized = consistencyIssues.includes("time_is_date");
     const dateRepairReason = consistencyIssues.includes("weekday_date_mismatch")
@@ -4561,6 +4555,7 @@ export function prepareEventsForInsert(
       expandedDateTotal: eventVariants.length,
       moderationConfidenceScore: moderationDecision.confidenceScore,
       moderationAutoApproveThreshold: AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+      moderationCoreEventAutoApproveThreshold: CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
       moderationCaptionOnlyVideoMinConfidence: CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE,
       moderationAutoApproved: moderationDecision.autoApproved,
       moderationAutoApproveRule: moderationDecision.autoApproveRule,

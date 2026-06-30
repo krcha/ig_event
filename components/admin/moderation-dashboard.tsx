@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { getModerationQueuePriorityScore } from "@/lib/events/moderation-queue";
 import {
   AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+  CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
   calculateModerationConfidenceScore,
   DUPLICATE_CONFIDENCE_MULTIPLIER,
   formatConfidenceScore,
@@ -1907,7 +1908,7 @@ export function ModerationDashboard() {
                           </p>
                         ) : null}
                         <p className="text-xs text-muted-foreground">
-                          Auto-approve {`>${AUTO_APPROVE_CONFIDENCE_THRESHOLD.toFixed(2)}`}
+                          Auto-approve strict {`>${AUTO_APPROVE_CONFIDENCE_THRESHOLD.toFixed(2)}`}; core fields {`>=${CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD.toFixed(2)}`}
                         </p>
                         <p className="mt-2 text-sm font-medium">
                           Final {formatConfidenceScore(event.confidenceScore) ?? "(none)"}

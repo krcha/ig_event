@@ -3,7 +3,7 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api.js";
 import { TBD_EVENT_TIME } from "../lib/events/event-time.ts";
 import {
-  AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+  CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
   normalizeConfidenceScore,
 } from "../lib/utils/confidence.ts";
 
@@ -133,11 +133,10 @@ function buildPatch(event) {
   const suspiciousYear = readBoolean(normalizedFields, "dateSuspiciousYear");
   const lowConfidence = confidenceScore !== null && confidenceScore < 0.7;
   const autoApproved =
-    !missingImage &&
-    !titleUsedFallback &&
     !suspiciousYear &&
+    normalizeString(normalizedFields.dateConfidence) !== "low" &&
     confidenceScore !== null &&
-    confidenceScore >= AUTO_APPROVE_CONFIDENCE_THRESHOLD;
+    confidenceScore >= CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
   const moderationSignals = [
     ...(missingImage ? ["missing_image"] : []),
     ...(allowMissingImage ? ["missing_image_allowed"] : []),
@@ -150,11 +149,10 @@ function buildPatch(event) {
     ? []
     : [
         ...(confidenceScore === null ? ["missing_confidence"] : []),
-        ...(confidenceScore !== null && confidenceScore <= AUTO_APPROVE_CONFIDENCE_THRESHOLD
+        ...(confidenceScore !== null && confidenceScore < CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD
           ? ["below_auto_approve_threshold"]
           : []),
         ...(missingImage && !allowMissingImage ? ["missing_image"] : []),
-        ...(titleUsedFallback ? ["fallback_title"] : []),
         ...(suspiciousYear ? ["suspicious_year"] : []),
       ];
 
@@ -167,19 +165,20 @@ function buildPatch(event) {
         time: TBD_EVENT_TIME,
         timeTbdApplied: true,
         moderationAutoApproved: autoApproved,
-        moderationAutoApproveRule: autoApproved ? "high_confidence_date_time_tbd" : null,
+        moderationAutoApproveRule: autoApproved ? "core_event_fields" : null,
+        moderationCoreEventAutoApproveThreshold: CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
         moderationPendingReasons,
         moderationSignals,
         tbdTimeRepair: {
           checkedAt: new Date().toISOString(),
           from: "",
           to: TBD_EVENT_TIME,
-          reason: "missing_time_high_confidence_date",
+          reason: "missing_time_with_event_date",
           script: "scripts/repair-event-tbd-times.mjs",
         },
       }),
     },
-    reason: autoApproved ? "approve_high_confidence_date_time_tbd" : "set_time_tbd",
+    reason: autoApproved ? "approve_core_event_fields_time_tbd" : "set_time_tbd",
   };
 }
 
@@ -189,6 +188,10 @@ async function main() {
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
   if (!convexUrl) {
     throw new Error("NEXT_PUBLIC_CONVEX_URL is required.");
+  }
+  const serviceSecret = process.env.CRON_SECRET;
+  if (!serviceSecret) {
+    throw new Error("CRON_SECRET is required.");
   }
 
   const client = new ConvexHttpClient(convexUrl);
@@ -204,6 +207,7 @@ async function main() {
     const events = await client.query(api.events.listByStatus, {
       status,
       limit: options.limit,
+      serviceSecret,
     });
 
     for (const event of events) {
@@ -235,6 +239,7 @@ async function main() {
         await client.mutation(api.events.updateEvent, {
           id: event._id,
           patch: result.patch,
+          serviceSecret,
         });
         summary.applied += 1;
       }
