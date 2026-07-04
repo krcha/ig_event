@@ -210,9 +210,9 @@ Moderation:
 
 Deployment:
 
-1. Hosted/Vercel deployment can use `vercel.json` cron.
-2. VPS deployment runs the Next app in Docker and replaces Vercel Cron with host
-   cron or systemd timers.
+1. Production runs on the VPS as a Dockerized Next app.
+2. Vercel Cron is intentionally disabled in `vercel.json`; the VPS host cron in
+   `/etc/cron.d/ig_event` owns ingestion and discovery scheduling.
 3. Convex can stay on Convex Cloud, or run self-hosted in the same Compose stack
    with `docker-compose.self-hosted-convex.yml`.
 4. Convex functions still deploy separately through Convex tooling, targeting

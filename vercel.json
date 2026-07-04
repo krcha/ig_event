@@ -1,17 +1,4 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "crons": [
-    {
-      "path": "/api/cron/ingest-venues",
-      "schedule": "0 7 * * *"
-    },
-    {
-      "path": "/api/cron/discover-following",
-      "schedule": "0 10 * * 1"
-    },
-    {
-      "path": "/api/cron/refresh-venue-hours",
-      "schedule": "0 6 * * 2"
-    }
-  ]
+  "crons": []
 }

@@ -8,6 +8,7 @@ import {
   isAuthorizedCronRequestHeader,
   selectCronIngestionHandles,
 } from "../lib/pipeline/cron-ingestion-config.ts";
+import { getAttemptedHandlesFromRecentJob } from "../lib/pipeline/recent-full-scrape-handles.ts";
 
 const request = buildApifyInstagramScrapeRequest({
   actorUsernameInput: "clubdrugstore",
@@ -67,12 +68,10 @@ assert.deepEqual(cronConfig, {
 });
 
 const vercelConfig = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8"));
-assert.ok(Array.isArray(vercelConfig.crons), "vercel.json should declare cron entries");
-assert.ok(
-  vercelConfig.crons.some(
-    (cron) => cron.path === "/api/cron/ingest-venues" && cron.schedule === "0 7 * * *",
-  ),
-  "daily active venue ingestion cron should remain configured",
+assert.deepEqual(
+  vercelConfig.crons,
+  [],
+  "Vercel Cron should stay disabled; the VPS host cron owns ingestion scheduling.",
 );
 
 const cronRouteSource = readFileSync(
@@ -85,6 +84,10 @@ const instagramScraperSource = readFileSync(
 );
 const followDiscoverySource = readFileSync(
   new URL("../lib/pipeline/follow-discovery.ts", import.meta.url),
+  "utf8",
+);
+const ingestionJobsSource = readFileSync(
+  new URL("../convex/ingestionJobs.ts", import.meta.url),
   "utf8",
 );
 
@@ -108,6 +111,11 @@ assert.match(
   cronRouteSource,
   /findResumableCronJob/,
   "cron route should resume recent cron jobs before applying cooldown skips",
+);
+assert.match(
+  ingestionJobsSource,
+  /summaryJson: job\.summaryJson/,
+  "recent full-scrape job records should expose summaries for cooldown decisions",
 );
 assert.doesNotMatch(
   cronRouteSource,
@@ -157,6 +165,30 @@ assert.deepEqual(
     skippedRecentlyAttempted: 2,
     skippedDueToRunLimit: 1,
   },
+);
+
+assert.deepEqual(
+  getAttemptedHandlesFromRecentJob({
+    _id: "job_ok",
+    source: "cron_active_venues",
+    status: "completed",
+    handles: ["good-zero", "good-fetched", "apify-hard-limit", "legacy-no-summary"],
+    stateJson: "{}",
+    createdAt: Date.now(),
+    summaryJson: JSON.stringify({
+      handles: [
+        { handle: "good-zero", fetchedPosts: 0, errors: [] },
+        { handle: "good-fetched", fetchedPosts: 1, errors: [] },
+        {
+          handle: "apify-hard-limit",
+          fetchedPosts: 0,
+          errors: ["Apify scraper request failed: 403 Monthly usage hard limit exceeded"],
+        },
+      ],
+    }),
+  }),
+  ["good-zero", "good-fetched", "legacy-no-summary"],
+  "completed jobs should not cool down handles that only recorded scraper/API errors",
 );
 
 console.log("Apify cost-control QA passed.");

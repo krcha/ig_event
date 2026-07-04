@@ -304,8 +304,8 @@ verify HTTPS externally.
 
 ## Cron Replacement
 
-`vercel.json` documents the intended schedule, but the self-hosted VPS uses real
-host cron under `/etc/cron.d/ig_event`.
+`vercel.json` intentionally has `crons: []`; the self-hosted VPS uses real host
+cron under `/etc/cron.d/ig_event` so Vercel cannot double-schedule ingestion.
 
 Installed files on the VPS:
 
@@ -317,7 +317,7 @@ Installed files on the VPS:
 /var/log/ig_event/cron-*-last.json   last response body per job
 ```
 
-Current host cron schedule uses UTC to match `vercel.json` and Convex:
+Current host cron schedule uses UTC to match the original Vercel/Convex schedule:
 
 ```cron
 CRON_TZ=UTC

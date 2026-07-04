@@ -8,6 +8,7 @@ function read(path) {
 const envExample = read(".env.example");
 const envProductionExample = read(".env.production.example");
 const dockerComposeSource = read("docker-compose.yml");
+const dockerComposeRuntimeSource = read("docker-compose.runtime.yml");
 const envUtilsSource = read("lib/utils/env.ts");
 const middlewareSource = read("middleware.ts");
 const readinessSource = read("lib/config/readiness.ts");
@@ -50,6 +51,13 @@ for (const composeValue of [
 ]) {
   assert.ok(dockerComposeSource.includes(composeValue), `docker-compose.yml should include ${composeValue}.`);
 }
+
+assert.ok(
+  dockerComposeRuntimeSource.includes(
+    "CLERK_AUTHORIZED_PARTIES: ${CLERK_AUTHORIZED_PARTIES:-https://events.ineedtofeedmyrabbit.com}",
+  ),
+  "docker-compose.runtime.yml should provide the production Clerk authorized party default.",
+);
 
 assert.match(
   envUtilsSource,

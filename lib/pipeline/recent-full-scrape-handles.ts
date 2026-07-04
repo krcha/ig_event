@@ -12,10 +12,44 @@ type RecentFullScrapeJobRecord = {
   source: string;
   status: RecentFullScrapeJobStatus;
   handles: string[];
+  summaryJson?: string;
   stateJson: string;
   createdAt: number;
   startedAt?: string;
   finishedAt?: string;
+};
+
+type RecentFullScrapeHandleSummary = {
+  handle?: string;
+  fetchedPosts?: number;
+  fetched_posts?: number;
+  insertedEvents?: number;
+  inserted_events?: number;
+  insertedApprovedEvents?: number;
+  insertedPendingEvents?: number;
+  skippedDuplicates?: number;
+  skipped_duplicates?: number;
+  skipped_duplicates_clean?: number;
+  skipped_missing_date?: number;
+  skipped_missing_venue?: number;
+  skipped_video?: number;
+  skipped_invalid_event?: number;
+  skipped_past_event?: number;
+  skipped_far_future_event?: number;
+  updated_duplicates_bad_data?: number;
+  duplicate_update_failed?: number;
+  failedDownloads?: number;
+  failed_downloads?: number;
+  failedConversions?: number;
+  failed_conversions?: number;
+  failedExtractions?: number;
+  failed_extractions?: number;
+  failed_extraction?: number;
+  errors?: string[];
+};
+
+type RecentFullScrapeSummary = {
+  handles?: RecentFullScrapeHandleSummary[];
 };
 
 type IngestionBatchStateSnapshot = {
@@ -49,13 +83,104 @@ function parseBatchStateSnapshot(stateJson: string): IngestionBatchStateSnapshot
   }
 }
 
-function getAttemptedHandlesFromRecentJob(job: RecentFullScrapeJobRecord): string[] {
+const COMPLETED_HANDLE_PROGRESS_KEYS = [
+  "fetchedPosts",
+  "fetched_posts",
+  "insertedEvents",
+  "inserted_events",
+  "insertedApprovedEvents",
+  "insertedPendingEvents",
+  "skippedDuplicates",
+  "skipped_duplicates",
+  "skipped_duplicates_clean",
+  "skipped_missing_date",
+  "skipped_missing_venue",
+  "skipped_video",
+  "skipped_invalid_event",
+  "skipped_past_event",
+  "skipped_far_future_event",
+  "updated_duplicates_bad_data",
+  "duplicate_update_failed",
+  "failedDownloads",
+  "failed_downloads",
+  "failedConversions",
+  "failed_conversions",
+  "failedExtractions",
+  "failed_extractions",
+  "failed_extraction",
+] as const;
+
+function parseCompletedHandleSummaries(
+  summaryJson: string | undefined,
+): Map<string, RecentFullScrapeHandleSummary> | null {
+  if (!summaryJson) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(summaryJson) as RecentFullScrapeSummary;
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.handles)) {
+      return null;
+    }
+
+    const summaries = new Map<string, RecentFullScrapeHandleSummary>();
+    for (const handleSummary of parsed.handles) {
+      if (!handleSummary || typeof handleSummary !== "object") {
+        continue;
+      }
+      const handle = normalizeHandle(handleSummary.handle ?? "");
+      if (handle) {
+        summaries.set(handle, handleSummary);
+      }
+    }
+    return summaries;
+  } catch {
+    return null;
+  }
+}
+
+function hasPositiveProgressCount(summary: RecentFullScrapeHandleSummary): boolean {
+  return COMPLETED_HANDLE_PROGRESS_KEYS.some((key) => {
+    const value = summary[key];
+    return typeof value === "number" && Number.isFinite(value) && value > 0;
+  });
+}
+
+function isFreshCompletedHandleAttempt(
+  summary: RecentFullScrapeHandleSummary | undefined,
+): boolean {
+  if (!summary) {
+    return true;
+  }
+
+  if (hasPositiveProgressCount(summary)) {
+    return true;
+  }
+
+  const errors = Array.isArray(summary.errors) ? summary.errors : [];
+  return errors.length === 0;
+}
+
+function getAttemptedHandlesFromCompletedJob(job: RecentFullScrapeJobRecord): string[] {
+  const summaries = parseCompletedHandleSummaries(job.summaryJson);
+  if (!summaries) {
+    return job.handles;
+  }
+
+  return job.handles.filter((handle) =>
+    isFreshCompletedHandleAttempt(summaries.get(normalizeHandle(handle))),
+  );
+}
+
+export function getAttemptedHandlesFromRecentJob(
+  job: RecentFullScrapeJobRecord,
+): string[] {
   if (job.status === "queued") {
     return [];
   }
 
   if (job.status === "completed") {
-    return job.handles;
+    return getAttemptedHandlesFromCompletedJob(job);
   }
 
   if (job.source === "cron_active_venues" && job.status === "running") {

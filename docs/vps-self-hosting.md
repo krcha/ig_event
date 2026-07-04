@@ -282,8 +282,8 @@ reachable.
 
 ## Cron Replacement
 
-`vercel.json` will no longer schedule ingestion once the app is off Vercel. Use
-host cron first because it is cheap and understandable.
+`vercel.json` has `crons: []` so Vercel cannot double-schedule production
+ingestion. Use host cron first because it is cheap and understandable.
 
 Create `/etc/ig_event/cron.env` with:
 

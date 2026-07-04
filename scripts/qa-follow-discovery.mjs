@@ -5,7 +5,6 @@ import {
   DEFAULT_FOLLOW_DISCOVERY_MAX_TOTAL_CHARGE_USD,
   DEFAULT_FOLLOW_DISCOVERY_RESULTS_LIMIT,
   DEFAULT_FOLLOW_DISCOVERY_SOURCE_HANDLE,
-  FOLLOW_DISCOVERY_CRON_PATH,
   MAX_FOLLOW_DISCOVERY_MAX_TOTAL_CHARGE_USD,
   MAX_FOLLOW_DISCOVERY_RESULTS_LIMIT,
   buildApifyFollowingScrapeRequest,
@@ -16,24 +15,10 @@ import {
 } from "../lib/pipeline/follow-discovery.ts";
 
 const vercelConfig = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8"));
-assert.ok(Array.isArray(vercelConfig.crons), "vercel.json should declare cron entries");
-assert.ok(
-  vercelConfig.crons.some(
-    (cron) => cron.path === "/api/cron/ingest-venues" && cron.schedule === "0 7 * * *",
-  ),
-  "daily active venue ingestion cron should remain configured",
-);
-assert.ok(
-  vercelConfig.crons.some(
-    (cron) => cron.path === FOLLOW_DISCOVERY_CRON_PATH && cron.schedule === "0 10 * * 1",
-  ),
-  "weekly follow-discovery cron should run Monday at 10:00 UTC",
-);
-assert.ok(
-  !vercelConfig.crons.some(
-    (cron) => cron.path === FOLLOW_DISCOVERY_CRON_PATH && cron.schedule === "0 7 * * *",
-  ),
-  "follow-discovery cron must not run daily",
+assert.deepEqual(
+  vercelConfig.crons,
+  [],
+  "Vercel Cron should stay disabled; the VPS host cron owns ingestion and follow-discovery scheduling.",
 );
 
 assert.equal(DEFAULT_FOLLOW_DISCOVERY_SOURCE_HANDLE, "going_places11");

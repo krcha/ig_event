@@ -77,6 +77,7 @@ export const listRecentFullScrapeJobs = query({
         source: job.source,
         status: job.status,
         handles: job.handles,
+        summaryJson: job.summaryJson,
         stateJson: job.stateJson,
         createdAt: job.createdAt,
         startedAt: job.startedAt,
