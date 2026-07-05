@@ -25,9 +25,17 @@ for (const [label, source] of [
   ["root page", appPageSource],
   ["events browse page", browsePageSource],
 ]) {
-  assert.match(source, /export const revalidate\s*=\s*60;/, `${label} should use short ISR caching.`);
-  assertDoesNotInclude(source, 'dynamic = "force-dynamic"', `${label} should not force dynamic rendering.`);
-  assertDoesNotInclude(source, 'fetchCache = "force-no-store"', `${label} should not force no-store fetch caching.`);
+  assert.match(
+    source,
+    /export const dynamic\s*=\s*"force-dynamic";/,
+    `${label} should not use persisted route caching for Convex-backed event counts.`,
+  );
+  assert.match(
+    source,
+    /export const fetchCache\s*=\s*"force-no-store";/,
+    `${label} should avoid serving stale cached event-count pages.`,
+  );
+  assertDoesNotInclude(source, "export const revalidate", `${label} should not use ISR caching.`);
 }
 
 assertDoesNotInclude(
@@ -155,10 +163,10 @@ assertDoesNotInclude(
   "Open the complete table",
   "Selected-day overflow should not offer the memory-heavy whole-month table.",
 );
-assert.match(
+assertDoesNotInclude(
   browsePageSource,
-  /const DEFAULT_SELECTED_DAY_AGENDA_LIMIT = 24;/,
-  "Default calendar load should cap selected-day agenda previews to keep high-volume days fast.",
+  "DEFAULT_SELECTED_DAY_AGENDA_LIMIT",
+  "Selected-day agenda should not hide matching events behind a preview cap.",
 );
 assert.match(
   browsePageSource,
@@ -182,8 +190,8 @@ assertDoesNotInclude(
 );
 assert.match(
   browsePageSource,
-  /selectedDayAgendaEvents\.length < DEFAULT_SELECTED_DAY_AGENDA_LIMIT/,
-  "Selected-day agenda should cap collected event cards instead of serializing every matching event.",
+  /selectedDayAgendaEvents\.push\(summary\);/,
+  "Selected-day agenda should render every matching event for the selected day.",
 );
 assert.match(
   browsePageSource,
@@ -199,10 +207,10 @@ assert.match(
   /<Link prefetch=\{false\}/,
   "Mobile month day strip should disable prefetch for its many date links.",
 );
-assert.match(
+assertDoesNotInclude(
   browsePageSource,
-  /Showing \{agendaEvents\.length\} of \{selectedDayEventCount\} matching events for this day\./,
-  "Selected-day agenda overflow should tell users when only a preview is rendered.",
+  "Showing {agendaEvents.length} of {selectedDayEventCount}",
+  "Selected-day agenda should not show a partial-results message.",
 );
 
 assertDoesNotInclude(
@@ -266,4 +274,4 @@ assert.match(
   "Release gate should include qa:public-performance.",
 );
 
-console.log("QA passed: public pages use bounded data loads, short caching, and avoid redirect hops.");
+console.log("QA passed: public pages use bounded data loads, dynamic rendering, and avoid redirect hops.");

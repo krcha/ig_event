@@ -26,7 +26,11 @@ import { cn } from "@/lib/utils";
 import { getDisplayEventTime, normalizeEventTime } from "@/lib/events/event-time";
 import { matchesPublicEventNameArtistOrVenue } from "@/lib/events/public-event-search";
 
-export const revalidate = 60;
+// Keep the public calendar out of Next.js' persisted route cache. The page data
+// comes from Convex and must reflect completed ingestion runs without manual
+// cache purges.
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -121,7 +125,6 @@ const DAY_CATEGORY_CHIPS = [
   { key: "event", label: "Event" },
 ] as const;
 const CALENDAR_DAY_PREVIEW_LIMIT = 3;
-const DEFAULT_SELECTED_DAY_AGENDA_LIMIT = 24;
 
 type DayCategory = (typeof DAY_CATEGORY_CHIPS)[number]["key"];
 
@@ -504,9 +507,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     }
 
     selectedDayEventCount += 1;
-    if (selectedDayAgendaEvents.length < DEFAULT_SELECTED_DAY_AGENDA_LIMIT) {
-      selectedDayAgendaEvents.push(summary);
-    }
+    selectedDayAgendaEvents.push(summary);
   }
 
   const selectedDate = parseNormalizedEventDate(selectedDayKey) ?? monthStart;
@@ -714,7 +715,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     mobile?: boolean;
   } = {}) {
     const agendaEvents = selectedDayAgendaEvents;
-    const hasAgendaOverflow = selectedDayEventCount > agendaEvents.length;
 
     function renderMobileAdvancedControls() {
       const iconButtonClass =
@@ -973,14 +973,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
               ) : null}
             </div>
           ) : null}
-
-          {hasAgendaOverflow ? (
-            <div className="rounded-[1rem] border border-primary/20 bg-primary/[0.07] px-3 py-3 text-sm text-muted-foreground">
-              <p>
-                Showing {agendaEvents.length} of {selectedDayEventCount} matching events for this day.
-              </p>
-            </div>
-          ) : null}
         </>
       );
     }
@@ -1026,9 +1018,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 })}
               </h3>
               <p className="mt-1 text-xs text-muted-foreground sm:text-sm">
-                {hasAgendaOverflow
-                  ? `Showing ${agendaEvents.length} of ${selectedDayEventCount} events.`
-                  : `${pluralize(selectedDayEventCount, "event")} ready to browse.`}
+                {`${pluralize(selectedDayEventCount, "event")} ready to browse.`}
               </p>
             </div>
             <div className="rounded-[1.05rem] bg-primary px-3 py-2 text-center text-primary-foreground shadow-[0_20px_42px_-26px_rgba(113,112,255,0.85)]">
