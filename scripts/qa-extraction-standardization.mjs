@@ -22,6 +22,7 @@ import {
 } from "../lib/pipeline/venue-normalization.ts";
 import { prepareEventsForInsert } from "../lib/pipeline/run-instagram-ingestion.ts";
 import {
+  extractEventTimeFromText,
   TBD_EVENT_TIME,
   normalizeEventTime,
   resolveEventTimeDisplay,
@@ -246,6 +247,11 @@ function runPromptQa() {
     EVENT_EXTRACTION_SYSTEM_PROMPT,
     /DD\.MM" IS A DATE, NEVER A TIME/i,
     "Prompt must keep European dates out of time fields.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /početak 21h.*description/i,
+    "Prompt must make start-time cue phrases populate the time field.",
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
@@ -1011,6 +1017,149 @@ function runSerbianRelativeDateQa() {
   );
 }
 
+function runDescriptionStartTimeQa() {
+  for (const [text, expected] of [
+    ["Žurka od 9", "09:00"],
+    ["početak 21h", "21:00"],
+    ["pocetak u 21", "21:00"],
+    ["Počinje u 21 čas", "21:00"],
+    ["Vidimo se u 20h", "20:00"],
+    ["u 20.30", "20:30"],
+    ["u 20,30", "20:30"],
+    ["22:30", "22:30"],
+    ["21 h", "21:00"],
+    ["21:00h", "21:00"],
+    ["nastup od 21h30", "21:30"],
+    ["od 19 do 22", "19:00-22:00"],
+    ["22h - 05h", "22:00-05:00"],
+    ["start at 10pm", "22:00"],
+    ["doors open 8:30 pm", "20:30"],
+  ]) {
+    assert.equal(extractEventTimeFromText(text), expected, `time text: ${text}`);
+  }
+
+  for (const text of [
+    "19.06",
+    "svake večeri od 11. do 17. juna",
+    "Ulaz od 18+.",
+    "Karte od 1000 RSD.",
+    "Kapacitet 20 ljudi.",
+  ]) {
+    assert.equal(extractEventTimeFromText(text), undefined, `reject non-time text: ${text}`);
+  }
+
+  assert.equal(normalizeEventTime("početak 21h").startLabel, "21:00");
+
+  const descriptionTimeEvent = assertSingleOkPreparedEvent(
+    prepareEventsForInsert(
+      makeInstagramPost({
+        caption: "Lineup and practical info in description.",
+        postType: "image",
+        username: "sprat_bar",
+      }),
+      makeExtractedEvent({
+        title: "Description Time Night",
+        date: isoDateDaysFromNow(8),
+        time: "",
+        venue: "Sprat",
+        artists: ["QA DJ"],
+        description: "Club night. Početak 21h.",
+        confidence: 0.95,
+        field_confirmation: makeFieldConfirmation(0.95),
+      }),
+      "https://cdn.example.com/poster.jpg",
+      {},
+      {},
+      {},
+    ),
+  );
+  const descriptionFields = readPreparedNormalizedFields(descriptionTimeEvent);
+  assert.equal(descriptionTimeEvent.event.time, "21:00");
+  assert.equal(descriptionFields.timeSource, "description");
+  assert.equal(descriptionFields.timeInferredFromText, true);
+  assert.ok(!descriptionFields.moderationSignals.includes("time_tbd"));
+
+  const captionTimeEvent = assertSingleOkPreparedEvent(
+    prepareEventsForInsert(
+      makeInstagramPost({
+        caption: "Vidimo se od 9 za QA žurku.",
+        postType: "image",
+        username: "kcgrad",
+      }),
+      makeExtractedEvent({
+        title: "Caption Time Night",
+        date: isoDateDaysFromNow(9),
+        time: "",
+        venue: "KC Grad",
+        artists: ["QA DJ"],
+        description: "Nightlife event.",
+        confidence: 0.95,
+        source_caption: "",
+        field_confirmation: makeFieldConfirmation(0.95),
+      }),
+      "https://cdn.example.com/poster.jpg",
+      {},
+      {},
+      {},
+    ),
+  );
+  const captionFields = readPreparedNormalizedFields(captionTimeEvent);
+  assert.equal(captionTimeEvent.event.time, "09:00");
+  assert.equal(captionFields.timeSource, "caption");
+
+  const rawTimeTextEvent = assertSingleOkPreparedEvent(
+    prepareEventsForInsert(
+      makeInstagramPost({
+        caption: "Raw time field includes start label.",
+        postType: "image",
+        username: "sprat_bar",
+      }),
+      makeExtractedEvent({
+        title: "Raw Time Text Night",
+        date: isoDateDaysFromNow(10),
+        time: "početak 22:30",
+        venue: "Sprat",
+        artists: ["QA DJ"],
+        confidence: 0.95,
+        field_confirmation: makeFieldConfirmation(0.95),
+      }),
+      "https://cdn.example.com/poster.jpg",
+      {},
+      {},
+      {},
+    ),
+  );
+  const rawTimeFields = readPreparedNormalizedFields(rawTimeTextEvent);
+  assert.equal(rawTimeTextEvent.event.time, "22:30");
+  assert.equal(rawTimeFields.timeSource, "extracted_time");
+
+  const dateRangeTextEvent = assertSingleOkPreparedEvent(
+    prepareEventsForInsert(
+      makeInstagramPost({
+        caption: "Program za više dana.",
+        postType: "image",
+        username: "kcgrad",
+      }),
+      makeExtractedEvent({
+        title: "Date Range Text Night",
+        date: isoDateDaysFromNow(11),
+        time: "",
+        venue: "KC Grad",
+        artists: ["QA DJ"],
+        description: "Svake večeri od 11. do 17. juna.",
+        confidence: 0.95,
+        source_caption: "",
+        field_confirmation: makeFieldConfirmation(0.95),
+      }),
+      "https://cdn.example.com/poster.jpg",
+      {},
+      {},
+      {},
+    ),
+  );
+  assert.equal(dateRangeTextEvent.event.time, TBD_EVENT_TIME);
+}
+
 function runScheduleConsistencyQa() {
   assert.equal(looksLikeBareDate("19.06"), true);
   assert.equal(looksLikeBareDate("19:30"), false);
@@ -1233,7 +1382,8 @@ runConfidenceQa();
 runVideoModerationQa();
 runCaptionDateRangeQa();
 runSerbianRelativeDateQa();
+runDescriptionStartTimeQa();
 runScheduleConsistencyQa();
 runTicketPriceQa();
 
-console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, caption date ranges, Serbian relative dates, schedule consistency, and ticket prices.");
+console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, caption date ranges, Serbian relative dates, description start times, schedule consistency, and ticket prices.");

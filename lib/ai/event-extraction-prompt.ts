@@ -106,6 +106,7 @@ Rules:
 
 === TIMES (per row) — CLOCK TIME ONLY ===
 - "time" is a clock time, normalized 24h: "22h" → "22:00"; "18h-22h" → "18:00-22:00"; "22h -05h" → "22:00-05:00"; "20:00" stays.
+- Start-time cue phrases count as time evidence: "od 9", "početak 21h"/"pocetak 21h", "počinje u 21", "u 20.30", "22:30", "start at 10pm", "doors open 8:30 pm". Normalize them into "time" and do not leave them only in "description".
 - NEVER put a date in "time". "19.06" is a date, not "19:06". If a row's only number is its date, leave "time" empty. If no time is given, leave it empty — do not guess.
 
 === TITLES (per row) — GIVE EVERY ROW A TITLE ===

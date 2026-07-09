@@ -1,4 +1,4 @@
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
@@ -302,6 +302,49 @@ export const listPublicEventsWindow = query({
         q.eq("status", "approved").gte("date", args.fromDate).lt("date", args.beforeDate),
       )
       .paginate(args.paginationOpts);
+  },
+});
+
+function toPublicCalendarEvent(event: Doc<"events">) {
+  return {
+    _id: event._id,
+    artists: event.artists,
+    date: event.date,
+    eventType: event.eventType,
+    status: event.status,
+    title: event.title,
+    venue: event.venue,
+    createdAt: event.createdAt,
+    updatedAt: event.updatedAt,
+    ...(event.instagramPostId ? { instagramPostId: event.instagramPostId } : {}),
+    ...(event.instagramPostUrl ? { instagramPostUrl: event.instagramPostUrl } : {}),
+    ...(event.ticketPrice ? { ticketPrice: event.ticketPrice } : {}),
+    ...(event.time ? { time: event.time } : {}),
+    ...(event.venueCategory ? { venueCategory: event.venueCategory } : {}),
+    ...(event.venueId ? { venueId: event.venueId } : {}),
+    ...(event.venueInstagramHandle
+      ? { venueInstagramHandle: event.venueInstagramHandle }
+      : {}),
+    ...(event.venueLatitude !== undefined ? { venueLatitude: event.venueLatitude } : {}),
+    ...(event.venueLocation ? { venueLocation: event.venueLocation } : {}),
+    ...(event.venueLongitude !== undefined ? { venueLongitude: event.venueLongitude } : {}),
+  };
+}
+
+export const listPublicCalendarEventsWindow = query({
+  args: {
+    fromDate: v.string(),
+    beforeDate: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const events = await ctx.db
+      .query("events")
+      .withIndex("by_status_date", (q) =>
+        q.eq("status", "approved").gte("date", args.fromDate).lt("date", args.beforeDate),
+      )
+      .collect();
+
+    return events.map(toPublicCalendarEvent);
   },
 });
 

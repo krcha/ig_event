@@ -126,6 +126,8 @@ type LoadUpcomingApprovedEventsOptions = {
 
 const listPublicEventsWindowQuery =
   "events:listPublicEventsWindow" as unknown as FunctionReference<"query">;
+const listPublicCalendarEventsWindowQuery =
+  "events:listPublicCalendarEventsWindow" as unknown as FunctionReference<"query">;
 const listPublicVenueFieldsByIdsQuery =
   "venues:listPublicVenueFieldsByIds" as unknown as FunctionReference<"query">;
 const listPublicActiveVenueFieldsQuery =
@@ -240,12 +242,18 @@ function createVenueRecordFromEvent(event: PublicEvent): VenueRecord | null {
 async function loadVenueLookup(
   convex: ConvexHttpClient,
   events: PublicEvent[],
+  options: { includeActiveVenueDirectory?: boolean } = {},
 ): Promise<VenueLookup> {
+  const includeActiveVenueDirectory = options.includeActiveVenueDirectory ?? true;
   const venueIds = [
     ...new Set(events.map((event) => event.venueId).filter(isRealVenueId)),
   ];
   const [activeVenues, venues] = await Promise.all([
-    convex.query(listPublicActiveVenueFieldsQuery, { limit: 1000 }) as Promise<VenueRecord[]>,
+    includeActiveVenueDirectory
+      ? (convex.query(listPublicActiveVenueFieldsQuery, { limit: 1000 }) as Promise<
+          VenueRecord[]
+        >)
+      : Promise.resolve([]),
     venueIds.length > 0
       ? (convex.query(listPublicVenueFieldsByIdsQuery, {
           ids: venueIds,
@@ -526,6 +534,96 @@ async function loadAllApprovedUpcomingEvents(
       normalizePublicEvent(event, venueLookup),
     ),
   );
+}
+
+async function loadAllPublicCalendarEventsWindow(
+  convex: ConvexHttpClient,
+  fromDate: string,
+  beforeDate: string,
+): Promise<PublicEvent[]> {
+  const events = (await convex.query(listPublicCalendarEventsWindowQuery, {
+    beforeDate,
+    fromDate,
+  })) as PublicEvent[];
+  const venueLookup = await loadVenueLookup(convex, events, {
+    includeActiveVenueDirectory: false,
+  });
+
+  return sortPublicEventsByDateVenueTimeTitle(
+    filterDuplicatePublicEvents(events).map((event) =>
+      normalizePublicEvent(event, venueLookup),
+    ),
+  );
+}
+
+function getCachedPublicCalendarEventsWindow(
+  convex: ConvexHttpClient,
+  fromDate: string,
+  beforeDate: string,
+): Promise<PublicEvent[]> {
+  const now = Date.now();
+  prunePublicEventsCache(now);
+  const cacheKey = `calendar:${fromDate}:${beforeDate}`;
+  const cached = publicEventsCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    publicEventsCache.delete(cacheKey);
+    publicEventsCache.set(cacheKey, cached);
+    return cached.promise;
+  }
+
+  const promise = loadAllPublicCalendarEventsWindow(convex, fromDate, beforeDate).catch((error) => {
+    const current = publicEventsCache.get(cacheKey);
+    if (current?.promise === promise) {
+      publicEventsCache.delete(cacheKey);
+    }
+    throw error;
+  });
+
+  publicEventsCache.set(cacheKey, {
+    expiresAt: now + PUBLIC_EVENTS_CACHE_TTL_MS,
+    promise,
+  });
+  prunePublicEventsCache(now);
+
+  return promise;
+}
+
+export async function loadPublicCalendarEventsWindow(options: {
+  beforeDate?: string;
+  fromDate?: string;
+}): Promise<{
+  events: PublicEvent[];
+  error?: string;
+}> {
+  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
+  const fromDate = normalizeDateBoundary(options.fromDate);
+  const beforeDate = normalizeDateBoundary(options.beforeDate);
+
+  if (!convexUrl) {
+    return { events: [], error: "Convex is not configured yet." };
+  }
+
+  if (!fromDate || !beforeDate) {
+    return { events: [], error: "Calendar event window requires valid date boundaries." };
+  }
+
+  if (fromDate >= beforeDate) {
+    return { events: [] };
+  }
+
+  try {
+    const convex = new ConvexHttpClient(convexUrl);
+    const events = await getCachedPublicCalendarEventsWindow(convex, fromDate, beforeDate);
+    return { events };
+  } catch (error) {
+    return {
+      events: [],
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to load approved events.",
+    };
+  }
 }
 
 export async function loadPublicEventsWindowPage(options: {

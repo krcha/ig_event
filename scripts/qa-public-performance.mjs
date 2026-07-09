@@ -59,7 +59,12 @@ for (const field of ["fromDate?: string", "beforeDate?: string", "daysAhead?: nu
 assert.match(
   publicEventsSource,
   /events:listPublicEventsWindow/,
-  "Public event loader should use the bounded Convex public window query.",
+  "Public event loader should keep the full bounded Convex public window query for detail/feed use.",
+);
+assert.match(
+  publicEventsSource,
+  /events:listPublicCalendarEventsWindow/,
+  "Calendar browse page should use the compact Convex public calendar window query.",
 );
 assert.match(
   publicEventsSource,
@@ -69,7 +74,12 @@ assert.match(
 assert.match(
   convexEventsSource,
   /export const listPublicEventsWindow = query/,
-  "Convex should expose a bounded public events window query.",
+  "Convex should expose a bounded full public events window query.",
+);
+assert.match(
+  convexEventsSource,
+  /export const listPublicCalendarEventsWindow = query/,
+  "Convex should expose a compact public calendar window query for fast browse loads.",
 );
 assert.match(
   convexEventsSource,
@@ -130,8 +140,8 @@ assert.match(
 
 assert.match(
   browsePageSource,
-  /const beforeDate = formatDateKey\(nextMonthStart\);[\s\S]*loadUpcomingApprovedEvents\(\{ beforeDate, fromDate \}\)/,
-  "Calendar page should request only the selected month date range from the public loader.",
+  /const beforeDate = formatDateKey\(nextMonthStart\);[\s\S]*loadPublicCalendarEventsWindow\(\{ beforeDate, fromDate \}\)/,
+  "Calendar page should request only the selected month date range from the compact public calendar loader.",
 );
 assert.match(
   browsePageSource,
@@ -168,10 +178,10 @@ assertDoesNotInclude(
   "DEFAULT_SELECTED_DAY_AGENDA_LIMIT",
   "Selected-day agenda should not hide matching events behind a preview cap.",
 );
-assert.match(
+assertDoesNotInclude(
   browsePageSource,
-  /const CALENDAR_DAY_PREVIEW_LIMIT = 3;/,
-  "Month grid days should keep only a tiny preview instead of storing full day lists.",
+  "previewEvents",
+  "Month grid should avoid serializing per-day event preview cards on the initial page.",
 );
 assertDoesNotInclude(
   browsePageSource,
@@ -195,8 +205,8 @@ assert.match(
 );
 assert.match(
   browsePageSource,
-  /dayBucket\.previewEvents\.length < CALENDAR_DAY_PREVIEW_LIMIT/,
-  "Month grid day buckets should cap preview events while retaining day counts.",
+  /Open \{pluralize\(dayEventCount, "event"\)\}/,
+  "Month grid days should render count-only links instead of per-event preview cards.",
 );
 assert.ok(
   (browsePageSource.match(/prefetch=\{false\}/g) ?? []).length >= 12,

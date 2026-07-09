@@ -11,7 +11,7 @@ import {
   Star,
 } from "lucide-react";
 import {
-  loadUpcomingApprovedEvents,
+  loadPublicCalendarEventsWindow,
   parseNormalizedEventDate,
   type PublicEvent,
 } from "@/lib/events/public-events";
@@ -124,13 +124,11 @@ const DAY_CATEGORY_CHIPS = [
   { key: "culture", label: "Culture" },
   { key: "event", label: "Event" },
 ] as const;
-const CALENDAR_DAY_PREVIEW_LIMIT = 3;
 
 type DayCategory = (typeof DAY_CATEGORY_CHIPS)[number]["key"];
 
 type CalendarDayBucket = {
   eventCount: number;
-  previewEvents: CalendarEventSummary[];
 };
 
 function normalizeDayCategory(value: string | undefined): DayCategory {
@@ -364,7 +362,6 @@ function getCalendarDayBucket(
 
   const bucket: CalendarDayBucket = {
     eventCount: 0,
-    previewEvents: [],
   };
   buckets.set(dayKey, bucket);
   return bucket;
@@ -426,7 +423,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const monthStartKey = formatDateKey(monthStart);
   const fromDate = monthStartKey;
   const beforeDate = formatDateKey(nextMonthStart);
-  const { events, error } = await loadUpcomingApprovedEvents({ beforeDate, fromDate });
+  const { events, error } = await loadPublicCalendarEventsWindow({ beforeDate, fromDate });
   const selectedVenue = getSingleValue(searchParams?.venue);
   const selectedType = getSingleValue(searchParams?.type);
   const selectedCategory = normalizeDayCategory(getSingleValue(searchParams?.category));
@@ -468,9 +465,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     activeVenueNames.add(event.venue);
     if (eventDate && isWeekendDate(eventDate)) {
       weekendEventCount += 1;
-    }
-    if (dayBucket.previewEvents.length < CALENDAR_DAY_PREVIEW_LIMIT) {
-      dayBucket.previewEvents.push(toCalendarEventSummary(event));
     }
   }
 
@@ -1190,7 +1184,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
 
       {!error ? (
         <>
-          <section className="lg:hidden">{renderSelectedDayAgenda({ mobile: true })}</section>
+          <section>{renderSelectedDayAgenda({ mobile: true })}</section>
 
           <section className="hidden gap-4 lg:grid 2xl:grid-cols-[minmax(0,1fr)_24rem]">
             <div className="overflow-hidden rounded-[1.5rem] border border-border/80 bg-card/95 shadow-[0_30px_85px_-58px_rgba(0,0,0,0.82)]">
@@ -1233,7 +1227,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                       const inMonth = day.getMonth() === monthStart.getMonth();
                       const dayBucket = inMonth ? monthDayBuckets.get(dayKey) : undefined;
                       const dayEventCount = dayBucket?.eventCount ?? 0;
-                      const visibleEvents = dayBucket?.previewEvents ?? [];
                       const isSelected = dayKey === selectedDayKey;
                       const isToday = dayKey === todayKey;
                       const isWeekendColumn = index % 7 >= 5;
@@ -1279,38 +1272,11 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                             ) : null}
                           </div>
 
-                          <div className="mt-2.5 space-y-1.5">
-                            {visibleEvents.map((event) => {
-                              const tone = getEventTone(event);
-                              const eventTime =
-                                event.displayTimeSource === "unknown"
-                                  ? undefined
-                                  : getResolvedDisplayTime(event);
-
-                              return (
-                                <div
-                                  className={cn(
-                                    "flex items-center gap-1.5 rounded-[0.75rem] border px-2 py-1.5 text-[11px] font-semibold shadow-[0_12px_28px_-26px_rgba(0,0,0,0.8)]",
-                                    tone.chip,
-                                  )}
-                                  key={event._id}
-                                >
-                                  <span className={cn("h-1.5 w-1.5 flex-none rounded-full", tone.dot)} />
-                                  {eventTime ? (
-                                    <span className="min-w-[2.35rem] flex-none text-[10px] font-semibold tabular-nums text-muted-foreground">
-                                      {eventTime}
-                                    </span>
-                                  ) : null}
-                                  <span className="truncate">{event.title}</span>
-                                </div>
-                              );
-                            })}
-                            {dayEventCount > visibleEvents.length ? (
-                              <p className="px-1 pt-0.5 text-[10px] font-semibold text-primary">
-                                View {dayEventCount - visibleEvents.length} more
-                              </p>
-                            ) : null}
-                          </div>
+                          {dayEventCount > 0 ? (
+                            <p className="mt-3 rounded-[0.75rem] border border-border/70 bg-background/45 px-2 py-2 text-[11px] font-semibold text-muted-foreground">
+                              Open {pluralize(dayEventCount, "event")}
+                            </p>
+                          ) : null}
                         </Link>
                       );
                     })}
@@ -1319,10 +1285,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
               </div>
             </div>
 
-            <div className="hidden 2xl:block">{renderSelectedDayAgenda()}</div>
           </section>
-
-          <div className="hidden lg:block 2xl:hidden">{renderSelectedDayAgenda({ compact: true })}</div>
 
         </>
       ) : null}

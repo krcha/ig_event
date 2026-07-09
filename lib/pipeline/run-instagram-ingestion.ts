@@ -47,7 +47,11 @@ import {
   sanitizeTimeAgainstDate,
   type EventConsistencyIssue,
 } from "@/lib/events/event-validation";
-import { TBD_EVENT_TIME } from "@/lib/events/event-time";
+import {
+  extractEventTimeFromText,
+  isTbdEventTime,
+  TBD_EVENT_TIME,
+} from "@/lib/events/event-time";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 import {
   areCompatibleTitleFamilySlugs,
@@ -1391,31 +1395,8 @@ function buildSplitEventSourceLine(parts: Array<string | null | undefined>): str
     .join(" | ");
 }
 
-function formatHourAsTime(value: string): string {
-  return `${value.padStart(2, "0")}:00`;
-}
-
 function extractSplitEntryTime(value: string): string | undefined {
-  const rangeMatch = value.match(/\b(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*h\b/iu);
-  if (rangeMatch?.[1] && rangeMatch[2]) {
-    return `${formatHourAsTime(rangeMatch[1])}-${formatHourAsTime(rangeMatch[2])}`;
-  }
-
-  const hourMatch = value.match(/\b(\d{1,2})\s*h\b/iu);
-  if (hourMatch?.[1]) {
-    return formatHourAsTime(hourMatch[1]);
-  }
-
-  const match = value.match(/\b(\d{1,2}[:.]\d{2})\b/u);
-  if (!match?.[1]) {
-    return undefined;
-  }
-
-  if (!sanitizeTimeAgainstDate(match[1])) {
-    return undefined;
-  }
-
-  return match[1].replace(".", ":");
+  return extractEventTimeFromText(value);
 }
 
 function stripSplitEntryTime(value: string): string {
@@ -1449,10 +1430,19 @@ function extractModelSplitEventCandidates(
     }
 
     const description = normalizeExtractedDescription(scheduleEntry.description);
-    const rawTime = normalizeString(scheduleEntry.time);
+    const rawScheduleTime = normalizeString(scheduleEntry.time);
     const sourceLine =
       normalizeString(scheduleEntry.source_text) ||
-      buildSplitEventSourceLine([rawDate, rawTitle, rawTime, description]);
+      buildSplitEventSourceLine([rawDate, rawTitle, rawScheduleTime, description]);
+    const timeResolution = resolveEventTimeFromExtractionAndEvidence({
+      rawDate,
+      rawTime: rawScheduleTime,
+      textEvidence: [
+        { source: "description", text: description },
+        { source: "source_caption", text: sourceLine },
+      ],
+    });
+    const rawTime = timeResolution.rawTime;
     const normalizedDate = normalizeEventDate(rawDate, sourceLine || rawDate, post.postedAt);
     if (normalizedDate.isoDate) {
       rawResolvedDates.add(normalizedDate.isoDate);
@@ -1460,7 +1450,7 @@ function extractModelSplitEventCandidates(
     const consistency = checkEventConsistency({
       isoDate: normalizedDate.isoDate,
       rawDateText: rawDate,
-      time: rawTime,
+      time: timeResolution.time,
       weekdayEvidence: sourceLine,
     });
     const time = consistency.sanitizedTime;
@@ -1991,6 +1981,97 @@ function normalizeBatchSize(value: number | undefined): number {
 
 function normalizeString(value: string | null | undefined): string {
   return (value ?? "").trim();
+}
+
+type EventTimeEvidenceSource =
+  | "caption"
+  | "description"
+  | "extracted_time"
+  | "post_alt_text"
+  | "source_caption";
+
+type EventTimeEvidence = {
+  source: EventTimeEvidenceSource;
+  text: string;
+  time: string;
+};
+
+function findEventTimeEvidence(
+  candidates: Array<{ source: EventTimeEvidenceSource; text: string | null | undefined }>,
+): EventTimeEvidence | null {
+  const seenText = new Set<string>();
+  for (const candidate of candidates) {
+    const text = normalizeString(candidate.text).replace(/\s+/g, " ");
+    const dedupeKey = text.toLocaleLowerCase();
+    if (!text || seenText.has(dedupeKey)) {
+      continue;
+    }
+    seenText.add(dedupeKey);
+
+    const time = extractEventTimeFromText(text);
+    if (time) {
+      return {
+        source: candidate.source,
+        text,
+        time,
+      };
+    }
+  }
+
+  return null;
+}
+
+function resolveEventTimeFromExtractionAndEvidence(options: {
+  rawDate: string;
+  rawTime: string;
+  textEvidence: Array<{ source: EventTimeEvidenceSource; text: string | null | undefined }>;
+}): {
+  issues: EventConsistencyIssue[];
+  rawTime: string;
+  time: string;
+  timeEvidence: EventTimeEvidence | null;
+  timeSource: EventTimeEvidenceSource | "extracted_time_tbd" | "extracted_time_unparsed" | null;
+} {
+  const sanitizedRawTime = sanitizeTimeAgainstDate(options.rawTime, options.rawDate);
+  const issues: EventConsistencyIssue[] =
+    options.rawTime && options.rawTime !== sanitizedRawTime ? ["time_is_date"] : [];
+  const parsedExtractedTime = extractEventTimeFromText(sanitizedRawTime);
+  if (parsedExtractedTime) {
+    return {
+      issues,
+      rawTime: options.rawTime,
+      time: parsedExtractedTime,
+      timeEvidence: {
+        source: "extracted_time",
+        text: sanitizedRawTime,
+        time: parsedExtractedTime,
+      },
+      timeSource: "extracted_time",
+    };
+  }
+
+  const inferredTime = findEventTimeEvidence(options.textEvidence);
+  if (inferredTime) {
+    return {
+      issues,
+      rawTime: options.rawTime || inferredTime.text,
+      time: inferredTime.time,
+      timeEvidence: inferredTime,
+      timeSource: inferredTime.source,
+    };
+  }
+
+  return {
+    issues,
+    rawTime: options.rawTime,
+    time: sanitizedRawTime,
+    timeEvidence: null,
+    timeSource: sanitizedRawTime
+      ? isTbdEventTime(sanitizedRawTime)
+        ? "extracted_time_tbd"
+        : "extracted_time_unparsed"
+      : null,
+  };
 }
 
 function normalizeTicketPrice(price: string, currency: string): string {
@@ -4198,9 +4279,6 @@ export function prepareEventsForInsert(
   const description = normalizeExtractedDescription(extracted.description);
   const rawExtractedTime = normalizeString(extracted.time ?? undefined);
   const rawExtractedDate = normalizeString(extracted.date);
-  const time = sanitizeTimeAgainstDate(rawExtractedTime, rawExtractedDate);
-  const extractedTimeIssues: EventConsistencyIssue[] =
-    rawExtractedTime && rawExtractedTime !== time ? ["time_is_date"] : [];
   const price = normalizeString(extracted.price);
   const currency = normalizeString(extracted.currency);
   const ticketPrice = normalizeTicketPrice(price, currency);
@@ -4220,6 +4298,18 @@ export function prepareEventsForInsert(
   );
   const title = normalizeString(titleNormalization.title);
   const postTextEvidence = buildPostTextEvidence(post, extracted);
+  const extractedTimeResolution = resolveEventTimeFromExtractionAndEvidence({
+    rawDate: rawExtractedDate,
+    rawTime: rawExtractedTime,
+    textEvidence: [
+      { source: "description", text: description },
+      { source: "source_caption", text: extracted.source_caption },
+      { source: "caption", text: post.caption },
+      { source: "post_alt_text", text: extractPostAltTextEvidence(post.altText) },
+    ],
+  });
+  const time = extractedTimeResolution.time;
+  const extractedTimeIssues = extractedTimeResolution.issues;
   const dateNormalization = normalizeEventDate(
     normalizeString(extracted.date),
     postTextEvidence,
@@ -4252,6 +4342,15 @@ export function prepareEventsForInsert(
     locationName: venueNormalization.rawLocationName,
     eventType,
     time,
+    rawExtractedTime,
+    timeSource: extractedTimeResolution.timeSource,
+    timeEvidenceText: extractedTimeResolution.timeEvidence?.text ?? null,
+    timeInferredFromText: Boolean(
+      extractedTimeResolution.timeSource &&
+        extractedTimeResolution.timeSource !== "extracted_time" &&
+        extractedTimeResolution.timeSource !== "extracted_time_tbd" &&
+        extractedTimeResolution.timeSource !== "extracted_time_unparsed",
+    ),
     ticketPrice: ticketPrice || null,
     city: normalizeString(extracted.city),
     country: normalizeString(extracted.country),
