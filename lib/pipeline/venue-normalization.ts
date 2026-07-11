@@ -231,6 +231,18 @@ const VENUE_ALIAS_RULES: Array<{
     ],
     canonicalHandle: "kafesupa",
   },
+  {
+    aliases: [
+      "Spomen muzej Ive Andrica",
+      "Spomen-muzej Ive Andrica",
+      "Spomen-muzej Ive Andrića",
+      "Спомен музеј Иве Андрића",
+      "Спомен-музеј Иве Андрића",
+      "Memorial Museum of Ivo Andric",
+      "Memorial Museum of Ivo Andrić",
+    ],
+    canonicalHandle: "muzejgradabeograda",
+  },
 ];
 
 function normalizeString(value: string | null | undefined): string {
@@ -358,7 +370,15 @@ function areVenueNamesCompatible(left: string, right: string): boolean {
   if (normalizedLeft === normalizedRight) {
     return true;
   }
-  return normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft);
+
+  const [longer, shorter] = normalizedLeft.length >= normalizedRight.length
+    ? [normalizedLeft, normalizedRight]
+    : [normalizedRight, normalizedLeft];
+  const shorterTokenCount = shorter.split(" ").filter(Boolean).length;
+  if (shorter.length < 4 && shorterTokenCount < 2) {
+    return false;
+  }
+  return ` ${longer} `.includes(` ${shorter} `);
 }
 
 function getDisplayVenueNameForEntry(

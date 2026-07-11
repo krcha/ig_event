@@ -37,6 +37,9 @@ import { isApifyImageUrl } from "@/lib/images/apify-images";
 import { cn } from "@/lib/utils";
 import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
+
 type EventRecord = {
   _id: string;
   title: string;

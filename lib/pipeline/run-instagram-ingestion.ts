@@ -608,6 +608,9 @@ type ModerationDecision = {
   allowMissingImage: boolean;
 };
 
+const UNVERIFIED_POSTER_SCHEDULE_TBD_REASON = "unverified_poster_schedule_tbd";
+const NON_EVENT_CLOSURE_NOTICE_REASON = "non_event_closure_notice";
+
 const EXTRACTION_FIELD_LABELS: Array<{
   key: keyof ExtractedEventData["field_confirmation"];
   label: string;
@@ -644,12 +647,15 @@ function buildModerationDecision(options: {
   hasVenue: boolean;
   extractionMode: "poster" | "caption_only";
   isVideoPost: boolean;
+  autoApprovalBlockers?: string[];
 }): ModerationDecision {
   const confidenceScore = calculateModerationConfidenceScore(options.baseConfidenceScore, {
     hasSuspectedDuplicates: false,
     missingImage: options.missingImage,
     allowMissingImage: options.allowMissingImage,
   });
+  const autoApprovalBlockers = [...new Set(options.autoApprovalBlockers ?? [])];
+  const hasAutoApprovalBlockers = autoApprovalBlockers.length > 0;
   const timeTbdApplies = options.missingTime && options.hasDate;
   const signals = [
     ...(options.missingImage ? ["missing_image"] : []),
@@ -658,10 +664,13 @@ function buildModerationDecision(options: {
     ...(timeTbdApplies ? ["time_tbd"] : []),
     ...(options.suspiciousYear ? ["suspicious_year"] : []),
     ...(confidenceScore !== null && confidenceScore < 0.7 ? ["low_confidence"] : []),
+    ...autoApprovalBlockers,
   ];
 
-  const qualifiesForStrictConfidence = shouldAutoApproveConfidenceScore(confidenceScore);
+  const qualifiesForStrictConfidence =
+    !hasAutoApprovalBlockers && shouldAutoApproveConfidenceScore(confidenceScore);
   const qualifiesForCaptionOnlyVideo =
+    !hasAutoApprovalBlockers &&
     options.extractionMode === "caption_only" &&
     options.isVideoPost &&
     options.hasDate &&
@@ -671,6 +680,7 @@ function buildModerationDecision(options: {
     confidenceScore !== null &&
     confidenceScore >= CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE;
   const qualifiesForCoreEventFields =
+    !hasAutoApprovalBlockers &&
     options.hasDate &&
     options.hasVenue &&
     !options.suspiciousYear &&
@@ -688,6 +698,7 @@ function buildModerationDecision(options: {
   const pendingReasons = autoApproved
     ? []
     : [
+        ...autoApprovalBlockers,
         ...(confidenceScore === null ? ["missing_confidence"] : []),
         ...(confidenceScore !== null && confidenceScore < CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD
           ? ["below_auto_approve_threshold"]
@@ -1356,17 +1367,55 @@ function extractPostAltTextEvidence(value: string | null | undefined): string {
     .trim();
 }
 
+function buildIndependentPostTextEvidence(post: InstagramScrapedPost): string {
+  return [...new Set([
+    normalizeString(post.caption),
+    extractPostAltTextEvidence(post.altText),
+  ])]
+    .filter((value) => value.length > 0)
+    .join("\n");
+}
+
 function buildPostTextEvidence(
   post: InstagramScrapedPost,
   extracted?: Pick<ExtractedEventData, "source_caption">,
 ): string {
   return [...new Set([
-    normalizeString(post.caption),
+    buildIndependentPostTextEvidence(post),
     normalizeString(extracted?.source_caption),
-    extractPostAltTextEvidence(post.altText),
   ])]
     .filter((value) => value.length > 0)
     .join("\n");
+}
+
+export function getPosterScheduleAutoApprovalBlockers(options: {
+  splitSource: string | null | undefined;
+  independentTextEvidence: string | null | undefined;
+  hasTime: boolean;
+}): string[] {
+  if (
+    options.splitSource === "poster_schedule" &&
+    !normalizeString(options.independentTextEvidence) &&
+    !options.hasTime
+  ) {
+    return [UNVERIFIED_POSTER_SCHEDULE_TBD_REASON];
+  }
+  return [];
+}
+
+export function isNonEventClosureNotice(value: string | null | undefined): boolean {
+  const text = normalizeString(value);
+  if (!text) {
+    return false;
+  }
+
+  return /\bclosed\s+for\s+vacation\b|\bcollective\s+vacation\b|\bkolektivni\s+godi[sš]nji\s+odmor\b|\bgodi[sš]nji\s+odmor\b|\bzatvoreno\s+(?:zbog|radi|od)\b/iu.test(
+    text,
+  );
+}
+
+export function getNonEventAutoApprovalBlockers(value: string | null | undefined): string[] {
+  return isNonEventClosureNotice(value) ? [NON_EVENT_CLOSURE_NOTICE_REASON] : [];
 }
 
 function parseSplitCaptionEntryArtists(value: string): string[] {
@@ -4308,6 +4357,7 @@ export function prepareEventsForInsert(
   );
   const title = normalizeString(titleNormalization.title);
   const postTextEvidence = buildPostTextEvidence(post, extracted);
+  const independentPostTextEvidence = buildIndependentPostTextEvidence(post);
   const extractedTimeResolution = resolveEventTimeFromExtractionAndEvidence({
     rawDate: rawExtractedDate,
     rawTime: rawExtractedTime,
@@ -4617,6 +4667,21 @@ export function prepareEventsForInsert(
     const dateRepairReason = consistencyIssues.includes("weekday_date_mismatch")
       ? "weekday_date_mismatch_numeric_date_authoritative"
       : null;
+    const autoApprovalBlockers = [
+      ...getPosterScheduleAutoApprovalBlockers({
+        splitSource: variant.splitSource,
+        independentTextEvidence: independentPostTextEvidence,
+        hasTime: Boolean(eventConsistency.sanitizedTime),
+      }),
+      ...getNonEventAutoApprovalBlockers(
+        [
+          postTextEvidence,
+          description,
+          variant.description,
+          variant.splitSourceLine,
+        ].join("\n"),
+      ),
+    ];
     const moderationDecision = buildModerationDecision({
       baseConfidenceScore: confidence,
       missingImage,
@@ -4629,6 +4694,7 @@ export function prepareEventsForInsert(
       hasVenue: Boolean(venueNormalization.venue),
       extractionMode,
       isVideoPost: isCaptionOnlyVideo,
+      autoApprovalBlockers,
     });
     const eventStatus: EventStatus = moderationDecision.autoApproved ? "approved" : "pending";
     const normalizedFields: Record<string, unknown> = {

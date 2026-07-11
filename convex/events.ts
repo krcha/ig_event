@@ -29,12 +29,21 @@ const DEFAULT_EXPIRED_EVENT_DELETE_BATCH_SIZE = 100;
 const DISCOVER_ORGANIC_SCAN_LIMIT = 120;
 
 type VenueDenormalizedFields = {
-  venueCategory?: string;
-  venueId?: Id<"venues">;
-  venueInstagramHandle?: string;
-  venueLatitude?: number;
-  venueLocation?: string;
-  venueLongitude?: number;
+  venueCategory?: string | undefined;
+  venueId?: Id<"venues"> | undefined;
+  venueInstagramHandle?: string | undefined;
+  venueLatitude?: number | undefined;
+  venueLocation?: string | undefined;
+  venueLongitude?: number | undefined;
+};
+
+const CLEARED_VENUE_DENORMALIZED_FIELDS: VenueDenormalizedFields = {
+  venueCategory: undefined,
+  venueId: undefined,
+  venueInstagramHandle: undefined,
+  venueLatitude: undefined,
+  venueLocation: undefined,
+  venueLongitude: undefined,
 };
 
 function normalizeLookup(value: string): string {
@@ -48,10 +57,12 @@ async function resolveVenueDenormalizedFields(
   const rawVenueName = venueName ?? "";
   const lookupName = normalizeLookup(rawVenueName);
   if (!lookupName) {
-    return {};
+    return CLEARED_VENUE_DENORMALIZED_FIELDS;
   }
 
-  const venues = await ctx.db.query("venues").collect();
+  const venues = (await ctx.db.query("venues").collect()).filter(
+    (venue) => venue.isActive !== false,
+  );
   const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle(venues);
   const canonicalization = canonicalizeVenueNameDetailed(
     rawVenueName,
@@ -68,10 +79,11 @@ async function resolveVenueDenormalizedFields(
     return normalizeLookup(candidate.name) === canonicalLookupName;
   });
   if (!venue) {
-    return {};
+    return CLEARED_VENUE_DENORMALIZED_FIELDS;
   }
 
   return {
+    ...CLEARED_VENUE_DENORMALIZED_FIELDS,
     venueCategory: venue.category,
     venueId: venue._id,
     venueInstagramHandle: venue.instagramHandle,
@@ -307,6 +319,24 @@ export const listByStatus = query({
       .withIndex("by_status", (q) => q.eq("status", args.status))
       .order("desc")
       .take(limit);
+  },
+});
+
+export const listByStatusDateWindow = query({
+  args: {
+    status: eventStatus,
+    fromDate: v.string(),
+    beforeDate: v.string(),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    return ctx.db
+      .query("events")
+      .withIndex("by_status_date", (q) =>
+        q.eq("status", args.status).gte("date", args.fromDate).lt("date", args.beforeDate),
+      )
+      .collect();
   },
 });
 

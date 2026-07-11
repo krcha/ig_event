@@ -21,6 +21,8 @@ import {
   toSearchableText,
 } from "../lib/pipeline/venue-normalization.ts";
 import {
+  getNonEventAutoApprovalBlockers,
+  getPosterScheduleAutoApprovalBlockers,
   normalizeEventDate,
   prepareEventsForInsert,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
@@ -223,6 +225,11 @@ function runPromptQa() {
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /closed for vacation/i,
+    "Prompt must reject closure/vacation notices as non-events.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
     /Do not include date, time, price, venue, address/i,
     "Prompt must keep descriptions factual and compact.",
   );
@@ -352,6 +359,8 @@ function runVenueQa() {
     { name: "Nula pet _0.5", instagramHandle: "nulapet_0.5" },
     { name: "Muzej Jugoslavije", instagramHandle: "muzej_jugoslavije" },
     { name: "Кафе Шупа", instagramHandle: "kafesupa" },
+    { name: "Muzej grada Beograda", instagramHandle: "muzejgradabeograda" },
+    { name: "ica", instagramHandle: "icketa" },
   ]);
   const venueNameOverridesByHandle = {
     kcgrad: "KC Grad",
@@ -362,6 +371,7 @@ function runVenueQa() {
     betonbelgrade: "Beton",
     "nulapet_0.5": "Nula Pet",
     muzej_jugoslavije: "Muzej Jugoslavije",
+    muzejgradabeograda: "Muzej grada Beograda",
   };
 
   const canonicalFromHandle = normalizeVenueFromEvidence({
@@ -419,6 +429,8 @@ function runVenueQa() {
     ["Šupa", "Кафе Шупа"],
     ["шупа", "Кафе Шупа"],
     ["Kafe Šupa", "Кафе Шупа"],
+    ["Спомен-музеј Иве Андрића", "Muzej grada Beograda"],
+    ["Spomen-muzej Ive Andrica", "Muzej grada Beograda"],
   ];
   for (const [input, expected] of aliasCases) {
     const resolved = canonicalizeVenueName(input, canonicalVenueNamesByHandle, {
@@ -435,6 +447,23 @@ function runVenueQa() {
   assert.equal(toSearchableText("šupa"), "supa");
   assert.equal(toSearchableText("шупа"), "supa");
   assert.equal(toSearchableText("ʙᴇʟɢʀᴀᴅᴇ ᴋɪᴛᴄʜᴇɴ ᴘᴀʀᴛʏ"), "belgrade kitchen party");
+
+  const muzejGradaPost = normalizeVenueFromEvidence({
+    handle: "muzejgradabeograda",
+    rawModelVenue: "Спомен-музеј Иве Андрића",
+    locationName: "",
+    canonicalVenueNamesByHandle,
+    handleVenueNamesByHandle: venueNameOverridesByHandle,
+    staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+  });
+  assert.equal(muzejGradaPost.venue, "Muzej grada Beograda");
+  assert.notEqual(muzejGradaPost.venue, "ica");
+
+  const andricVenue = canonicalizeVenueNameDetailed("Спомен-музеј Иве Андрића", canonicalVenueNamesByHandle, {
+    handleVenueNamesByHandle: venueNameOverridesByHandle,
+  });
+  assert.equal(andricVenue?.reason, "alias");
+  assert.equal(andricVenue?.handle, "muzejgradabeograda");
 }
 
 function runArtistAndDescriptionQa() {
@@ -717,6 +746,134 @@ function runVideoModerationQa() {
   const sparseFields = readPreparedNormalizedFields(sparseVenueVideo);
   assert.equal(sparseVenueVideo.event.status, "approved");
   assert.equal(sparseFields.moderationAutoApproveRule, "caption_only_video_core_fields");
+}
+
+function runUnverifiedPosterScheduleModerationQa() {
+  assert.deepEqual(
+    getPosterScheduleAutoApprovalBlockers({
+      splitSource: "poster_schedule",
+      independentTextEvidence: "",
+      hasTime: false,
+    }),
+    ["unverified_poster_schedule_tbd"],
+  );
+  assert.deepEqual(
+    getPosterScheduleAutoApprovalBlockers({
+      splitSource: "poster_schedule",
+      independentTextEvidence: "11/07 KAXX",
+      hasTime: false,
+    }),
+    [],
+  );
+  assert.deepEqual(
+    getPosterScheduleAutoApprovalBlockers({
+      splitSource: "poster_schedule",
+      independentTextEvidence: "",
+      hasTime: true,
+    }),
+    [],
+  );
+  assert.deepEqual(
+    getNonEventAutoApprovalBlockers(
+      "KOLEKTIVNI GODIŠNJI ODMOR OD 6.7.-20.7.2026. Closed for vacation.",
+    ),
+    ["non_event_closure_notice"],
+  );
+  assert.deepEqual(getNonEventAutoApprovalBlockers("Ayga 11.7. subota"), []);
+  assert.deepEqual(
+    getNonEventAutoApprovalBlockers("Ne radimo rezervacije zbog veličine mesta. Ulaz je besplatan."),
+    [],
+  );
+
+  const firstDate = isoDateDaysFromNow(7);
+  const secondDate = isoDateDaysFromNow(8);
+  const prepared = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: "",
+      altText: null,
+      postType: "image",
+      username: "beg.u.beg",
+    }),
+    makeExtractedEvent({
+      title: "",
+      date: "",
+      time: "",
+      venue: "Beg",
+      artists: [],
+      description: "Monthly lineup poster for Beg venue in July 2026 featuring DJ events on multiple nights.",
+      confidence: 0.95,
+      source_caption: "",
+      field_confirmation: makeFieldConfirmation(0.95),
+      schedule_entries: [
+        {
+          date: firstDate,
+          time: "",
+          title: "KAXX",
+          artists: ["KAXX"],
+          description: "DJ set at Beg venue.",
+          source_text: `${ddmmForIsoDate(firstDate)} KAXX`,
+        },
+        {
+          date: secondDate,
+          time: "",
+          title: "DJ Leu",
+          artists: ["DJ Leu"],
+          description: "DJ set at Beg venue.",
+          source_text: `${ddmmForIsoDate(secondDate)} DJ Leu`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/beg-lineup.jpg",
+    {},
+    {},
+    {},
+  );
+
+  assert.equal(prepared.length, 2);
+  for (const result of prepared) {
+    assert.equal(result.kind, "ok");
+    assert.equal(result.event.status, "pending");
+    assert.equal(result.event.time, TBD_EVENT_TIME);
+    const fields = readPreparedNormalizedFields(result);
+    assert.equal(fields.splitSource, "poster_schedule");
+    assert.equal(fields.moderationAutoApproved, false);
+    assert.equal(fields.moderationAutoApproveRule, null);
+    assert.ok(fields.moderationSignals.includes("time_tbd"));
+    assert.ok(fields.moderationSignals.includes("unverified_poster_schedule_tbd"));
+    assert.deepEqual(fields.moderationPendingReasons, ["unverified_poster_schedule_tbd"]);
+  }
+
+  const closurePrepared = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: "",
+      postType: "image",
+      username: "voxbluesclub",
+    }),
+    makeExtractedEvent({
+      title: "Vox Blues club",
+      date: firstDate,
+      time: "",
+      venue: "Vox Blues club",
+      artists: [],
+      description: "Vox Blues club is closed for collective vacation from July 6 to July 20, 2026.",
+      confidence: 0.95,
+      source_caption: "KOLEKTIVNI GODIŠNJI ODMOR OD 6.7.-20.7.2026.",
+      field_confirmation: makeFieldConfirmation(0.95),
+    }),
+    "https://cdn.example.com/vox-closed.jpg",
+    {},
+    {},
+    {},
+  );
+  assert.ok(closurePrepared.length >= 1);
+  for (const result of closurePrepared) {
+    assert.equal(result.kind, "ok");
+    const closureFields = readPreparedNormalizedFields(result);
+    assert.equal(result.event.status, "pending");
+    assert.equal(closureFields.moderationAutoApproved, false);
+    assert.ok(closureFields.moderationSignals.includes("non_event_closure_notice"));
+    assert.ok(closureFields.moderationPendingReasons.includes("non_event_closure_notice"));
+  }
 }
 
 function runCaptionDateRangeQa() {
@@ -1408,6 +1565,7 @@ runVenueQa();
 runArtistAndDescriptionQa();
 runConfidenceQa();
 runVideoModerationQa();
+runUnverifiedPosterScheduleModerationQa();
 runCaptionDateRangeQa();
 runNumericCaptionDatePrecedenceQa();
 runSerbianRelativeDateQa();
@@ -1415,4 +1573,4 @@ runDescriptionStartTimeQa();
 runScheduleConsistencyQa();
 runTicketPriceQa();
 
-console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, caption date ranges, Serbian relative dates, description start times, schedule consistency, and ticket prices.");
+console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, unverified poster schedule moderation, caption date ranges, Serbian relative dates, description start times, schedule consistency, and ticket prices.");

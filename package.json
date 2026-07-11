@@ -26,6 +26,8 @@
     "repair:event-tbd-times": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/repair-event-tbd-times.mjs",
     "repair:event-venue-names": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/repair-event-venue-names.mjs",
     "repair:event-apify-images": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/repair-event-apify-images.mjs",
+    "audit:event-quality": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/audit-event-quality.mjs",
+    "repair:event-quality": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/audit-event-quality.mjs --apply",
     "repair:stale-ingestion-jobs": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/repair-stale-ingestion-jobs.mjs",
     "repair:venue-hours": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/refresh-venue-hours.mjs",
     "resolve:venue-place-ids": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/resolve-venue-place-ids.mjs",

@@ -24,6 +24,7 @@ const releaseCheckSource = read("scripts/release-check.mjs");
 for (const [label, source] of [
   ["root page", appPageSource],
   ["events browse page", browsePageSource],
+  ["event detail page", eventDetailSource],
 ]) {
   assert.match(
     source,
