@@ -616,7 +616,9 @@ function runVideoModerationQa() {
   assert.equal(relaxedVideo.event.status, "approved");
   assert.equal(relaxedFields.moderationAutoApproveRule, "caption_only_video_core_fields");
   assert.deepEqual(relaxedFields.moderationPendingReasons, []);
-  assert.ok(relaxedFields.moderationSignals.includes("fallback_title"));
+  assert.equal(relaxedVideo.event.title, "archiebhamilton");
+  assert.equal(relaxedFields.titleSource, "artist_fallback");
+  assert.ok(!relaxedFields.moderationSignals.includes("fallback_title"));
   assert.ok(relaxedFields.moderationSignals.includes("time_tbd"));
   assert.equal(relaxedVideo.event.time, TBD_EVENT_TIME);
 

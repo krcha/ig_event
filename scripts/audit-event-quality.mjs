@@ -171,6 +171,17 @@ function normalizeArtistDisplayName(value) {
     .trim();
 }
 
+function normalizeTitleDisplayName(value) {
+  return text(value)
+    .replace(/[\p{Cf}]/gu, "")
+    .replace(/@([\p{L}\p{N}._-]+)/gu, (_match, handle) => humanizeArtistHandle(handle))
+    .replace(/^[\s]*(?:\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?|\d{1,2}\.?\s+[a-zа-яčćžšđ]+)\s*[-–—:|•·]*/iu, "")
+    .replace(/[\p{Extended_Pictographic}\uFE0F]+/gu, " ")
+    .replace(/^[\s.,:;!?&+|/-]+|[\s.,:;!?&+|/-]+$/gu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
 function formatArtistTitleList(artists) {
   const displayArtists = unique(
     artists.map(normalizeArtistDisplayName).filter((artist) => titleContainsAlphanumeric(artist)),
@@ -183,22 +194,55 @@ function formatArtistTitleList(artists) {
 
 function isMeaninglessTitle(value) {
   const normalized = normalizeText(value);
-  return !normalized || ["and", "b2b", "x"].includes(normalized);
+  if (!normalized) {
+    return true;
+  }
+  const tokens = normalized.split(/\s+/gu).filter(Boolean);
+  return tokens.length > 0 && tokens.every((token) => ["and", "b2b", "x"].includes(token));
+}
+
+function escapeRegExp(value) {
+  return text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function replaceStandaloneText(value, oldText, newText) {
+  const pattern = escapeRegExp(oldText).replace(/\s+/gu, "\\s+");
+  if (!pattern) {
+    return value;
+  }
+  return text(value)
+    .replace(new RegExp(`(?<![\\p{L}\\p{N}])${pattern}(?![\\p{L}\\p{N}])`, "giu"), newText)
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function splitArtistLikeText(value) {
+  return text(value)
+    .split(/\s*(?:,|&|\+|\bx\b|\bb2b\b|\band\b)\s*/iu)
+    .map(normalizeArtistDisplayName)
+    .filter((artist) => titleContainsAlphanumeric(artist));
 }
 
 function extractArtistsFromSourceLine(value) {
   const source = text(value)
     .replace(/[\p{Cf}]/gu, "")
-    .replace(/^\s*(?:\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?|\d{1,2}\.?\s+[a-zа-яčćžšđ]+|subota|nedelja|nedjelja|petak|sreda|utorak|ponedeljak|četvrtak|cetvrtak)\s*[-–—:|•·]*/iu, "")
+    .replace(/^\s*(?:\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?|\d{1,2}\.?\s+[a-zа-яčćžšđ]+|subota|nedelja|nedjelja|petak|sreda|utorak|ponedeljak|četvrtak|cetvrtak|uto|sre|čet|cet|pet|sub|ned|july\s+\d{1,2})\s*[-–—:|•·]*/iu, "")
     .replace(/\bsa\b/giu, " ");
-  return source
-    .split(/\s*(?:,|&|\+|\bb2b\b|\band\b)\s*/iu)
-    .map(normalizeArtistDisplayName)
-    .filter((artist) => titleContainsAlphanumeric(artist));
+  return splitArtistLikeText(source);
 }
 
 function unique(values) {
-  return [...new Set(values.filter(Boolean))];
+  const results = [];
+  const seen = new Set();
+  for (const value of values.filter(Boolean)) {
+    const key = normalizeText(value);
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    results.push(value);
+  }
+  return results;
 }
 
 function independentTextEvidence(event, normalizedFields) {
@@ -288,30 +332,195 @@ function getScheduleEntryForEvent(normalizedFields, rawExtraction) {
   return scheduleEntries.find((entry) => normalizeText(entry?.source_text) === splitSourceLine) ?? null;
 }
 
-function buildMeaninglessTitleRepairPatch(event, normalizedFields, rawExtraction) {
-  if (!isMeaninglessTitle(event.title)) {
+function parseScheduleEntryDateIso(value, fallbackYear) {
+  const raw = text(value).replace(/[\p{Cf}]/gu, "");
+  const match = raw.match(/\b(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2}|\d{4}))?\b/u);
+  if (!match) {
+    return null;
+  }
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  let year = match[3] ? Number(match[3]) : fallbackYear;
+  if (year < 100) {
+    year += 2000;
+  }
+  if (!Number.isFinite(day) || !Number.isFinite(month) || !Number.isFinite(year)) {
+    return null;
+  }
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+const WEEKDAY_PREFIX_TO_DAY = new Map([
+  ["ned", 0],
+  ["nedelja", 0],
+  ["nedjelja", 0],
+  ["sun", 0],
+  ["sunday", 0],
+  ["pon", 1],
+  ["ponedeljak", 1],
+  ["mon", 1],
+  ["monday", 1],
+  ["uto", 2],
+  ["utorak", 2],
+  ["tue", 2],
+  ["tuesday", 2],
+  ["sre", 3],
+  ["sreda", 3],
+  ["wed", 3],
+  ["wednesday", 3],
+  ["cet", 4],
+  ["čet", 4],
+  ["cetvrtak", 4],
+  ["četvrtak", 4],
+  ["thu", 4],
+  ["thursday", 4],
+  ["pet", 5],
+  ["petak", 5],
+  ["fri", 5],
+  ["friday", 5],
+  ["sub", 6],
+  ["subota", 6],
+  ["sat", 6],
+  ["saturday", 6],
+]);
+
+function weekdayForIsoDate(value) {
+  const date = new Date(`${value}T12:00:00.000Z`);
+  return Number.isNaN(date.getTime()) ? null : date.getUTCDay();
+}
+
+function readScheduleWeekday(entry) {
+  const source = normalizeText(entry?.source_text ?? entry?.title ?? "");
+  const firstToken = source.split(/\s+/u)[0] ?? "";
+  return WEEKDAY_PREFIX_TO_DAY.get(firstToken) ?? null;
+}
+
+function selectScheduleEntriesForEvent(event, rawExtraction) {
+  const scheduleEntries = Array.isArray(rawExtraction?.schedule_entries)
+    ? rawExtraction.schedule_entries
+    : [];
+  if (scheduleEntries.length === 0) {
+    return [];
+  }
+
+  const eventYear = Number(text(event.date).slice(0, 4));
+  const datedMatches = scheduleEntries.filter((entry) =>
+    parseScheduleEntryDateIso(entry?.date || entry?.source_text, eventYear) === event.date,
+  );
+  if (datedMatches.length > 0) {
+    return datedMatches;
+  }
+
+  const eventWeekday = weekdayForIsoDate(event.date);
+  if (eventWeekday !== null) {
+    const weekdayMatches = scheduleEntries.filter((entry) => readScheduleWeekday(entry) === eventWeekday);
+    if (weekdayMatches.length > 0) {
+      return weekdayMatches;
+    }
+  }
+
+  return scheduleEntries.length === 1 ? scheduleEntries : [];
+}
+
+function isWeakPublicTitle(event, normalizedFields) {
+  const title = text(event.title);
+  const normalizedTitle = normalizeText(title);
+  const normalizedVenue = normalizeVenue(event.venue);
+  if (isMeaninglessTitle(title)) {
+    return true;
+  }
+  if (normalizedTitle && normalizedVenue && normalizedTitle === normalizedVenue) {
+    return true;
+  }
+  return /^event\b|^nightlife event\b|^live music event\b/iu.test(title);
+}
+
+function titleFromCaption(event) {
+  const firstMeaningfulLine = text(event.sourceCaption)
+    .split(/\r?\n/u)
+    .map((line) => text(line).replace(/[\p{Cf}]/gu, ""))
+    .find((line) => /[\p{L}\p{N}]/u.test(line) && line.length <= 90);
+  if (!firstMeaningfulLine) {
+    return "";
+  }
+  return firstMeaningfulLine
+    .replace(/^\s*[•·|-]+\s*/u, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function buildSourceGroundedTitleRepairPatch(event, normalizedFields, rawExtraction) {
+  if (!isWeakPublicTitle(event, normalizedFields)) {
     return null;
   }
 
-  const scheduleEntry = getScheduleEntryForEvent(normalizedFields, rawExtraction);
-  const candidateArtists = [
-    ...(Array.isArray(scheduleEntry?.artists) ? scheduleEntry.artists : []),
-    ...extractArtistsFromSourceLine(scheduleEntry?.source_text),
-    ...extractArtistsFromSourceLine(normalizedFields?.splitSourceLine),
-    ...(Array.isArray(normalizedFields?.artists) ? normalizedFields.artists : []),
-    ...(Array.isArray(event.artists) ? event.artists : []),
-  ];
-  const title = formatArtistTitleList(candidateArtists);
-  if (!title) {
+  const exactScheduleEntry = getScheduleEntryForEvent(normalizedFields, rawExtraction);
+  const scheduleEntries = exactScheduleEntry
+    ? [exactScheduleEntry]
+    : selectScheduleEntriesForEvent(event, rawExtraction);
+  const scheduleArtists = unique(scheduleEntries.flatMap((entry) => [
+    ...(Array.isArray(entry?.artists) ? entry.artists : []),
+  ]).map(normalizeArtistDisplayName)).filter((artist) => titleContainsAlphanumeric(artist));
+  const scheduleTitles = unique(scheduleEntries
+    .map((entry) => normalizeTitleDisplayName(entry?.title))
+    .filter((title) =>
+      titleContainsAlphanumeric(title) &&
+      !isMeaninglessTitle(title) &&
+      normalizeText(title) !== normalizeVenue(event.venue) &&
+      !/^\d{1,2}(?::\d{2})?\s*h?$/iu.test(normalizeText(title)),
+    ));
+
+  const existingArtists = unique([
+    ...(Array.isArray(normalizedFields?.artists) ? normalizedFields.artists.map(normalizeArtistDisplayName) : []),
+    ...(Array.isArray(event.artists) ? event.artists.map(normalizeArtistDisplayName) : []),
+  ]).filter((artist) => titleContainsAlphanumeric(artist) && normalizeText(artist) !== normalizeVenue(event.venue));
+  const splitLineArtists = extractArtistsFromSourceLine(normalizedFields?.splitSourceLine);
+  const artists = unique([
+    ...scheduleArtists,
+    ...(scheduleArtists.length === 0 && scheduleTitles.length === 0 ? splitLineArtists : []),
+    ...(scheduleArtists.length === 0 && scheduleTitles.length === 0 ? existingArtists : []),
+  ]).filter((artist) => titleContainsAlphanumeric(artist) && normalizeText(artist) !== normalizeVenue(event.venue));
+
+  const title =
+    (artists.length > 0 ? formatArtistTitleList(artists) : "") ||
+    (scheduleTitles.length > 0 ? formatArtistTitleList(scheduleTitles) : "") ||
+    titleFromCaption(event);
+  if (!title || normalizeText(title) === normalizeText(event.title)) {
     return null;
   }
 
-  const artists = unique(candidateArtists.map(normalizeArtistDisplayName))
-    .filter((artist) => titleContainsAlphanumeric(artist));
   return {
     title,
     ...(artists.length > 0 ? { artists } : {}),
   };
+}
+
+function buildWeakDescriptionRepairPatch(event, normalizedFields) {
+  const description = text(event.description);
+  if (!description) {
+    return null;
+  }
+  const artistTitle = formatArtistTitleList([
+    ...(Array.isArray(event.artists) ? event.artists : []),
+    ...(Array.isArray(normalizedFields?.artists) ? normalizedFields.artists : []),
+  ].filter((artist) => titleContainsAlphanumeric(artist) && !isMeaninglessTitle(artist)));
+  if (!artistTitle) {
+    return null;
+  }
+
+  const weakTitleCandidates = unique([
+    normalizedFields?.title,
+    normalizedFields?.rawTitle,
+  ].map(text)).filter((candidate) => isMeaninglessTitle(candidate));
+
+  for (const weakTitle of weakTitleCandidates) {
+    const repaired = replaceStandaloneText(description, weakTitle, artistTitle);
+    if (repaired && repaired !== description) {
+      return { description: repaired };
+    }
+  }
+
+  return null;
 }
 
 function buildFindings(event) {
@@ -319,18 +528,28 @@ function buildFindings(event) {
   const rawExtraction = parseJson(event.rawExtractionJson);
   const sourceText = combinedSourceText(event, normalizedFields, rawExtraction);
   const findings = [];
-  const meaninglessTitleRepairPatch = buildMeaninglessTitleRepairPatch(
+  const sourceGroundedTitleRepairPatch = buildSourceGroundedTitleRepairPatch(
     event,
     normalizedFields,
     rawExtraction,
   );
 
-  if (meaninglessTitleRepairPatch) {
+  if (sourceGroundedTitleRepairPatch) {
     findings.push({
-      kind: "meaningless_symbol_title_repair",
+      kind: "weak_title_source_grounded_repair",
       severity: "repair",
-      reason: "Event title has no letters/numbers; derive a readable title from artist/source-line evidence.",
-      patch: meaninglessTitleRepairPatch,
+      reason: "Weak/fallback public title can be replaced with a source-grounded artist, lineup, or caption title.",
+      patch: sourceGroundedTitleRepairPatch,
+    });
+  }
+
+  const weakDescriptionRepairPatch = buildWeakDescriptionRepairPatch(event, normalizedFields);
+  if (weakDescriptionRepairPatch) {
+    findings.push({
+      kind: "weak_description_source_grounded_repair",
+      severity: "repair",
+      reason: "Generated description still contains a meaningless fallback title and can be repaired from event artists.",
+      patch: weakDescriptionRepairPatch,
     });
   }
 
@@ -510,6 +729,7 @@ async function main() {
         instagramPostUrl: event.instagramPostUrl,
         findings: findings.map(({ kind, severity, reason }) => ({ kind, severity, reason })),
         action: action?.action ?? null,
+        ...(action ? { patchPreview: action.patch } : {}),
       };
       allFindings.push(findingRecord);
       if (summary.examples.length < 30) {

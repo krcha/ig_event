@@ -1113,7 +1113,11 @@ function formatArtistTitleList(artists: string[]): string {
 
 function isMeaninglessEventTitle(value: string): boolean {
   const normalized = toSearchableText(value);
-  return !normalized || /^(?:and|b2b|x)$/iu.test(normalized);
+  if (!normalized) {
+    return true;
+  }
+  const tokens = normalized.split(/\s+/u).filter((token) => token.length > 0);
+  return tokens.length > 0 && tokens.every((token) => ["and", "b2b", "x"].includes(token));
 }
 
 function buildMeaningfulEventTitle(options: {
@@ -1507,7 +1511,7 @@ export function getNonEventAutoApprovalBlockers(value: string | null | undefined
 function parseSplitCaptionEntryArtists(value: string): string[] {
   return [...new Set(
     value
-      .split(/\s*(?:,|&|\+|\bb2b\b|\band\b)\s*/iu)
+      .split(/\s*(?:,|&|\+|\bx\b|\bb2b\b|\band\b)\s*/iu)
       .map((item) => normalizeArtistDisplayName(item))
       .filter((item) => titleContainsAlphanumeric(item)),
   )];
@@ -1798,6 +1802,40 @@ function buildSplitEventDescription(
       : `${humanizedEventType} event`;
   const venueSuffix = venue ? ` at ${venue}` : "";
   return `${eventLabel} with ${normalizedArtists.join(", ")}${venueSuffix}.`;
+}
+
+function repairDescriptionForArtistFallback(options: {
+  description: string;
+  previousTitle: string;
+  artists: string[];
+  eventType: string;
+  venue: string | null;
+}): string {
+  const description = normalizeString(options.description);
+  const previousTitle = normalizeString(options.previousTitle);
+  const artistTitle = formatArtistTitleList(options.artists);
+  if (!artistTitle) {
+    return description;
+  }
+
+  const fallbackDescription = buildSplitEventDescription(
+    options.eventType,
+    options.venue,
+    options.artists,
+  ) ?? description;
+  if (!description) {
+    return fallbackDescription;
+  }
+  if (!isMeaninglessEventTitle(previousTitle)) {
+    return description;
+  }
+
+  const pattern = escapeRegExp(previousTitle).replace(/\s+/gu, "\\s+");
+  const repaired = description
+    .replace(new RegExp(pattern, "giu"), artistTitle)
+    .replace(/\s+/gu, " ")
+    .trim();
+  return repaired && repaired !== description ? repaired : fallbackDescription;
 }
 
 function createEmptyHandleSummary(handle: string): HandleSummary {
@@ -4479,6 +4517,21 @@ export function prepareEventsForInsert(
   const extractedArtists = normalizeExtractedArtists(extracted.artists)
     .map((artist) => normalizeArtistDisplayName(artist))
     .filter((artist) => titleContainsAlphanumeric(artist));
+  const artistFallbackTitle = titleNormalization.usedFallback
+    ? formatArtistTitleList(extractedArtists)
+    : "";
+  const baseTitle = artistFallbackTitle || title;
+  const baseTitleSource = artistFallbackTitle ? "artist_fallback" : titleNormalization.source;
+  const baseTitleUsedFallback = titleNormalization.usedFallback && !artistFallbackTitle;
+  const baseDescription = artistFallbackTitle
+    ? repairDescriptionForArtistFallback({
+        description,
+        previousTitle: title,
+        artists: extractedArtists,
+        eventType,
+        venue: venueNormalization.venue,
+      })
+    : description;
   const eventDateFilter = getEventDateFilterContext();
   const isCaptionOnlyVideo = isVideoPostWithoutSelectedImage(post, selectedImageUrl);
   const extractionMode = selectedImageUrl ? "poster" : "caption_only";
@@ -4531,14 +4584,14 @@ export function prepareEventsForInsert(
   const referenceDateNormalization = referenceSplitCandidate?.normalizedDate ?? dateNormalization;
   const referenceRawDate = referenceSplitCandidate?.rawDate ?? normalizeString(extracted.date);
   const referenceTitle =
-    usesSplitEventCandidates && referenceSplitCandidate ? referenceSplitCandidate.lineTitle : title;
+    usesSplitEventCandidates && referenceSplitCandidate ? referenceSplitCandidate.lineTitle : baseTitle;
   const referenceTitleSource =
     usesSplitEventCandidates && referenceSplitCandidate
       ? referenceSplitCandidate.source
-      : titleNormalization.source;
+      : baseTitleSource;
   const referenceTitleUsedFallback = usesSplitEventCandidates
     ? false
-    : titleNormalization.usedFallback;
+    : baseTitleUsedFallback;
   const referenceTitleDerivedFromContext = usesSplitEventCandidates
     ? false
     : titleNormalization.source === "context_derived";
@@ -4547,7 +4600,7 @@ export function prepareEventsForInsert(
     : titleNormalization.contextCandidate;
   const referenceArtists =
     referenceSplitCandidate?.artists.length ? referenceSplitCandidate.artists : extractedArtists;
-  const referenceDescription = referenceSplitCandidate?.description ?? description;
+  const referenceDescription = referenceSplitCandidate?.description ?? baseDescription;
   const referenceTime = referenceSplitCandidate?.time ?? time;
 
   if (!usesSplitEventCandidates && candidateDates.length === 0) {
@@ -4703,11 +4756,11 @@ export function prepareEventsForInsert(
         const variantDescription =
           entry.description ??
           buildSplitEventDescription(eventType, venueNormalization.venue, variantArtists) ??
-          description;
+          baseDescription;
         return {
-          title: usesSplitScheduleTitle ? variantTitle : title,
-          titleSource: usesSplitScheduleTitle ? entry.source : titleNormalization.source,
-          titleUsedFallback: usesSplitScheduleTitle ? false : titleNormalization.usedFallback,
+          title: usesSplitScheduleTitle ? variantTitle : baseTitle,
+          titleSource: usesSplitScheduleTitle ? entry.source : baseTitleSource,
+          titleUsedFallback: usesSplitScheduleTitle ? false : baseTitleUsedFallback,
           titleDerivedFromContext:
             usesSplitScheduleTitle ? false : titleNormalization.source === "context_derived",
           titleContextCandidate:
@@ -4724,9 +4777,9 @@ export function prepareEventsForInsert(
         };
       })
     : candidateDates.map((date) => ({
-        title,
-        titleSource: titleNormalization.source,
-        titleUsedFallback: titleNormalization.usedFallback,
+        title: baseTitle,
+        titleSource: baseTitleSource,
+        titleUsedFallback: baseTitleUsedFallback,
         titleDerivedFromContext: titleNormalization.source === "context_derived",
         titleContextCandidate: titleNormalization.contextCandidate,
         rawDate: normalizeString(extracted.date),
@@ -4738,7 +4791,7 @@ export function prepareEventsForInsert(
         rawTime: rawExtractedTime,
         consistencyIssues: extractedTimeIssues,
         artists: extractedArtists,
-        description,
+        description: baseDescription,
         splitSource: null,
         splitSourceLine: null,
       }));
