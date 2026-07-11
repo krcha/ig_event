@@ -980,6 +980,63 @@ function runCaptionDateRangeQa() {
   assert.deepEqual(events.map((event) => event.time), ["12:00-00:00", "10:00-21:00"]);
   assert.equal(events.some((event) => event.date.endsWith("-10")), false);
 
+  const userReportedPiknikCaption = [
+    "U saradnji sa @apgrade i @beat.bgd vodimo vas u Topčiderski park sledećeg vikenda!",
+    "U subotu 11. jula očekuje vas program @apgrade i @beat.bgd a u nedelju 12. jula Piknik stiže u Topčiderski park.",
+    "",
+    "U nedelju 12. jula program traje od 12 do 21h i očekuju vas sve standardne Piknik zone i programi.",
+    "",
+    "Ulaz je slobodan kao i za svaki Piknik",
+  ].join("\n");
+  const userReportedPiknikPrepared = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: userReportedPiknikCaption,
+      postType: "image",
+      postedAt: "2026-07-05T09:33:11.000Z",
+      username: "piknikbg",
+    }),
+    makeExtractedEvent({
+      title: "Piknik",
+      date: "",
+      time: "",
+      venue: "Topčiderski park",
+      artists: [],
+      category: "event",
+      description: "Piknik event held in Topčiderski park with standard zones and programs, free entry.",
+      confidence: 0.85,
+      source_caption: userReportedPiknikCaption,
+      schedule_entries: [
+        {
+          date: "11.07.2026",
+          time: "",
+          title: "Program i",
+          artists: ["@apgrade", "@beat.bgd"],
+          description: "Program by @apgrade and @beat.bgd in Topčiderski park.",
+          source_text: "U subotu 11. jula očekuje vas program @apgrade i @beat.bgd",
+        },
+        {
+          date: "12.07.2026",
+          time: "12:00-21:00",
+          title: "Piknik",
+          artists: [],
+          description: "Piknik event with standard zones and programs, free entry.",
+          source_text: "U nedelju 12. jula program traje od 12 do 21h i očekuju vas sve standardne Piknik zone i programi.",
+        },
+      ],
+      field_confirmation: makeFieldConfirmation(0.85),
+    }),
+    "https://cdn.example.com/piknik.jpg",
+    {},
+    {},
+    {},
+  );
+  const userReportedPiknikEvents = userReportedPiknikPrepared
+    .filter((result) => result.kind === "ok")
+    .map((result) => result.event);
+  assert.equal(userReportedPiknikEvents[0].title, "Piknik");
+  assert.notEqual(userReportedPiknikEvents[0].title, "Program i");
+  assert.equal(JSON.parse(userReportedPiknikEvents[0].normalizedFieldsJson).titleSource, "model");
+
   const dailyRangeDates = futureSameMonthIsoDateRange(7, 10);
   const dailyRangeStart = datePartsForIsoDate(dailyRangeDates[0]);
   const dailyRangeEnd = datePartsForIsoDate(dailyRangeDates[dailyRangeDates.length - 1]);

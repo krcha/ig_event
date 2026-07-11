@@ -198,7 +198,12 @@ function isMeaninglessTitle(value) {
     return true;
   }
   const tokens = normalized.split(/\s+/gu).filter(Boolean);
-  return tokens.length > 0 && tokens.every((token) => ["and", "b2b", "x"].includes(token));
+  return tokens.length > 0 && tokens.every((token) => ["and", "i", "b2b", "x"].includes(token));
+}
+
+function isGenericProgramTitle(value) {
+  const tokens = normalizeText(value).split(/\s+/gu).filter(Boolean);
+  return tokens[0] === "program" && tokens.length <= 5;
 }
 
 function escapeRegExp(value) {
@@ -426,7 +431,7 @@ function isWeakPublicTitle(event, normalizedFields) {
   const title = text(event.title);
   const normalizedTitle = normalizeText(title);
   const normalizedVenue = normalizeVenue(event.venue);
-  if (isMeaninglessTitle(title)) {
+  if (isMeaninglessTitle(title) || isGenericProgramTitle(title)) {
     return true;
   }
   if (normalizedTitle && normalizedVenue && normalizedTitle === normalizedVenue) {
@@ -470,6 +475,16 @@ function buildSourceGroundedTitleRepairPatch(event, normalizedFields, rawExtract
       !/^\d{1,2}(?::\d{2})?\s*h?$/iu.test(normalizeText(title)),
     ));
 
+  const rawTitleCandidates = unique([
+    normalizedFields?.rawTitle,
+    rawExtraction?.title,
+  ].map(normalizeTitleDisplayName)).filter((title) =>
+    titleContainsAlphanumeric(title) &&
+    !isMeaninglessTitle(title) &&
+    !isGenericProgramTitle(title) &&
+    normalizeText(title) !== normalizeVenue(event.venue),
+  );
+
   const existingArtists = unique([
     ...(Array.isArray(normalizedFields?.artists) ? normalizedFields.artists.map(normalizeArtistDisplayName) : []),
     ...(Array.isArray(event.artists) ? event.artists.map(normalizeArtistDisplayName) : []),
@@ -482,6 +497,7 @@ function buildSourceGroundedTitleRepairPatch(event, normalizedFields, rawExtract
   ]).filter((artist) => titleContainsAlphanumeric(artist) && normalizeText(artist) !== normalizeVenue(event.venue));
 
   const title =
+    (rawTitleCandidates.length > 0 ? rawTitleCandidates[0] : "") ||
     (artists.length > 0 ? formatArtistTitleList(artists) : "") ||
     (scheduleTitles.length > 0 ? formatArtistTitleList(scheduleTitles) : "") ||
     titleFromCaption(event);

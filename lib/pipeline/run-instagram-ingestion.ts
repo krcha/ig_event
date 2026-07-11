@@ -1117,7 +1117,19 @@ function isMeaninglessEventTitle(value: string): boolean {
     return true;
   }
   const tokens = normalized.split(/\s+/u).filter((token) => token.length > 0);
-  return tokens.length > 0 && tokens.every((token) => ["and", "b2b", "x"].includes(token));
+  return tokens.length > 0 && tokens.every((token) => ["and", "i", "b2b", "x"].includes(token));
+}
+
+function isGenericProgramScheduleTitle(value: string): boolean {
+  const normalized = toSearchableText(value);
+  if (!normalized) {
+    return false;
+  }
+  const tokens = normalized.split(/\s+/u).filter((token) => token.length > 0);
+  if (tokens[0] !== "program") {
+    return false;
+  }
+  return tokens.length <= 5;
 }
 
 function buildMeaningfulEventTitle(options: {
@@ -1125,10 +1137,21 @@ function buildMeaningfulEventTitle(options: {
   artists: string[];
   eventType: string;
   venue: string | null;
+  baseTitle?: string;
 }): string {
   const cleanedTitle = cleanSplitCaptionEntryText(options.title);
-  if (!isMeaninglessEventTitle(cleanedTitle)) {
+  if (!isMeaninglessEventTitle(cleanedTitle) && !isGenericProgramScheduleTitle(cleanedTitle)) {
     return cleanedTitle;
+  }
+
+  const cleanedBaseTitle = cleanSplitCaptionEntryText(options.baseTitle ?? "");
+  if (
+    cleanedBaseTitle &&
+    !isMeaninglessEventTitle(cleanedBaseTitle) &&
+    !isGenericProgramScheduleTitle(cleanedBaseTitle) &&
+    !isGenericEventTitle(cleanedBaseTitle)
+  ) {
+    return cleanedBaseTitle;
   }
 
   const artistTitle = formatArtistTitleList(options.artists);
@@ -4751,8 +4774,11 @@ export function prepareEventsForInsert(
           artists: variantArtists,
           eventType,
           venue: venueNormalization.venue,
+          baseTitle,
         });
-        const usesSplitScheduleTitle = !isMeaninglessEventTitle(variantTitle);
+        const usesSplitScheduleTitle =
+          normalizeString(variantTitle) !== normalizeString(baseTitle) &&
+          !isMeaninglessEventTitle(variantTitle);
         const variantDescription =
           entry.description ??
           buildSplitEventDescription(eventType, venueNormalization.venue, variantArtists) ??
