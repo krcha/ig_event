@@ -123,12 +123,15 @@ function syncDateStripAndMetricCounts(categories: readonly EventCategoryKind[]) 
     const dayKey = dateLink.dataset.calendarDate;
     const shouldCountForStats = Boolean(dayKey && !countedDayKeys.has(dayKey));
     const isWeekend = dateLink.dataset.calendarDateWeekend === "true";
+    const isUpcoming = dateLink.dataset.calendarDateUpcoming === "true";
 
     if (shouldCountForStats && dayKey) {
       countedDayKeys.add(dayKey);
       totalVisibleEvents += visibleCount;
       if (visibleCount > 0) {
-        activeDayCount += 1;
+        if (isUpcoming) {
+          activeDayCount += 1;
+        }
         if (isWeekend) {
           weekendVisibleEvents += visibleCount;
         }

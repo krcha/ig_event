@@ -89,8 +89,9 @@ assert.ok(
   calendarSource.includes('data-calendar-clear-filter={control.key}') &&
     calendarSource.includes('data-calendar-active-filter-chips="true"') &&
     calendarSource.includes('data-calendar-stat-card={stat.key}') &&
-    calendarSource.includes('data-calendar-stat-value={stat.key}'),
-  "Active filters should render removable chips and stat cards should expose updateable count markers.",
+    calendarSource.includes('data-calendar-stat-value={stat.key}') &&
+    calendarSource.includes('caption: "upcoming with something on"'),
+  "Active filters should render removable chips and stat cards should expose updateable count markers; active-day copy should make the upcoming scope explicit.",
 );
 assert.ok(
   eventKindToggleSource.includes('data-calendar-kind-toggle={chip.key}') &&
@@ -99,10 +100,13 @@ assert.ok(
     mobileMonthDayStripSource.includes("router.push(nextUrl, { scroll: false })") &&
     mobileMonthDayStripSource.includes('currentUrl.searchParams.get("hide")') &&
     mobileMonthDayStripSource.includes('data-calendar-date-kind-counts={JSON.stringify(day.categoryCounts)}') &&
+    mobileMonthDayStripSource.includes('data-calendar-date-upcoming={day.isUpcoming ? "true" : undefined}') &&
     mobileMonthDayStripSource.includes('data-calendar-date-visible-event-count="true"') &&
     calendarSource.includes('data-calendar-event-kind={eventCategory}') &&
+    calendarSource.includes("isUpcomingCalendarDay(dayKey, todayKey)") &&
+    eventKindToggleSource.includes('dateLink.dataset.calendarDateUpcoming === "true"') &&
     calendarSource.includes('hidden={isHiddenByKind}'),
-  "Tapping an event-kind chip should update URL, visible rows, selected counts, date-strip counts, and server state without a full document refresh.",
+  "Tapping an event-kind chip should update URL, visible rows, selected counts, date-strip counts, upcoming active-day stats, and server state without a full document refresh.",
 );
 assert.ok(
   calendarSource.includes('data-calendar-mobile-search-panel="true"') &&

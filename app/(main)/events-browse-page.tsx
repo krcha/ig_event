@@ -466,6 +466,10 @@ function getAgendaSortLabel(sortMode: AgendaSortMode): string {
   return sortMode === "type" ? "Type" : "Time";
 }
 
+function isUpcomingCalendarDay(dayKey: string, defaultDayKey: string): boolean {
+  return dayKey >= defaultDayKey;
+}
+
 export default async function CalendarPage({ searchParams }: CalendarPageProps) {
   const todayKey = getNightlifeDefaultDateKey();
   const today = dateKeyToLocalNoonDate(todayKey);
@@ -558,7 +562,9 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const nextDayKey = formatDateKey(nextDay);
   const monthDays = getMonthDays(monthStart);
   const monthLabel = formatDisplayDate(monthStart, { month: "long", year: "numeric" });
-  const activeDayCount = filteredMonthDayKeys.length;
+  const activeDayCount = filteredMonthDayKeys.filter((dayKey) =>
+    isUpcomingCalendarDay(dayKey, todayKey),
+  ).length;
   const activeVenueCount = activeVenueNames.size;
   const hiddenCategoriesParam = formatHiddenDayCategories(hiddenDayCategories);
   const hiddenSort = selectedSortMode === "time" ? undefined : selectedSortMode;
@@ -585,6 +591,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       eventCount: dayBucket?.eventCount ?? 0,
       categoryCounts: dayBucket?.categoryCounts ?? createEmptyDayCategoryCounts(),
       isWeekend: isWeekendDate(day),
+      isUpcoming: isUpcomingCalendarDay(dayKey, todayKey),
       isSelected: dayKey === selectedDayKey,
       isToday: dayKey === todayKey,
       isAnchor: dayKey === selectedDayKey,
@@ -651,7 +658,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       key: "active-days",
       label: "Active days",
       value: activeDayCount,
-      caption: "with something on",
+      caption: "upcoming with something on",
     },
     {
       key: "venues",

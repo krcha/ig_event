@@ -13,6 +13,7 @@ type MobileMonthDay = {
   eventCount: number;
   categoryCounts: Record<"club" | "live" | "culture" | "event", number>;
   isWeekend: boolean;
+  isUpcoming: boolean;
   isSelected: boolean;
   isToday: boolean;
   isAnchor: boolean;
@@ -134,6 +135,7 @@ export function MobileMonthDayStrip({ days, surface = "mobile" }: MobileMonthDay
           data-calendar-date-kind-counts={JSON.stringify(day.categoryCounts)}
           data-calendar-date-selected={day.isSelected ? "true" : undefined}
           data-calendar-date-weekend={day.isWeekend ? "true" : undefined}
+          data-calendar-date-upcoming={day.isUpcoming ? "true" : undefined}
           data-calendar-desktop-date={surface === "desktop" ? day.dayKey : undefined}
           data-calendar-mobile-date={surface === "mobile" ? day.dayKey : undefined}
           href={day.href}
