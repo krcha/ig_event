@@ -196,7 +196,7 @@ function DiscoverPost({
             alt={event.title}
             className="object-cover"
             fill
-            sizes="(max-width: 768px) 100vw, 38rem"
+            sizes="(max-width: 768px) 100vw, (max-width: 1280px) 50vw, 33vw"
             src={imageUrl}
             unoptimized
           />
@@ -309,9 +309,9 @@ export function DiscoverFeed({
   const hasEvents = events.length > 0;
 
   return (
-    <main className="app-page gap-3 sm:gap-4" data-discover-feed="instagram-scroll">
-      <div className="mx-auto flex w-full max-w-[38rem] flex-col gap-3 sm:gap-4">
-        <header className="px-1 py-1 sm:px-0">
+    <main className="app-page app-page-wide gap-3 sm:gap-4" data-discover-feed="instagram-scroll">
+      <div className="mx-auto flex w-full max-w-[88rem] flex-col gap-3 sm:gap-4">
+        <header className="mx-auto w-full max-w-[38rem] px-1 py-1 sm:px-0 lg:max-w-none">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="section-kicker">Belgrade feed</p>
@@ -355,9 +355,14 @@ export function DiscoverFeed({
           </nav>
         </header>
 
-        {events.map((event) => (
-          <DiscoverPost authEnabled={authEnabled} event={event} key={event._id} />
-        ))}
+        <section
+          className="grid gap-3 sm:gap-4 lg:grid-cols-2 2xl:grid-cols-3"
+          data-discover-post-grid="true"
+        >
+          {events.map((event) => (
+            <DiscoverPost authEnabled={authEnabled} event={event} key={event._id} />
+          ))}
+        </section>
         {!hasEvents || error ? <EmptyDiscoverState error={error} /> : null}
       </div>
     </main>

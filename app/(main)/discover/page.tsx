@@ -4,10 +4,15 @@ import {
   type DiscoverFeedEvent,
 } from "@/components/discover/discover-feed";
 import {
-  loadUpcomingApprovedEvents,
+  loadPublicCalendarEventsWindow,
   type PublicEvent,
 } from "@/lib/events/public-events";
 import { enrichDiscoverEventsWithApifyPosts } from "@/lib/discover/apify-posts";
+import {
+  addDaysToDateKey,
+  getNightlifeDefaultDateKey,
+  parseDateKeyToUtcNoon,
+} from "@/lib/events/nightlife-date";
 
 export const revalidate = 60;
 
@@ -16,48 +21,6 @@ type DiscoverPageProps = {
     date?: string | string[];
   };
 };
-
-function getBelgradeDateKey(now = new Date()): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    day: "2-digit",
-    month: "2-digit",
-    timeZone: "Europe/Belgrade",
-    year: "numeric",
-  }).formatToParts(now);
-  const values = new Map(parts.map((part) => [part.type, part.value]));
-  return `${values.get("year")}-${values.get("month")}-${values.get("day")}`;
-}
-
-function parseDateKey(value: string): Date | null {
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) {
-    return null;
-  }
-
-  return new Date(
-    Date.UTC(
-      Number.parseInt(match[1], 10),
-      Number.parseInt(match[2], 10) - 1,
-      Number.parseInt(match[3], 10),
-      12,
-    ),
-  );
-}
-
-function formatDateKey(date: Date): string {
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(
-    date.getUTCDate(),
-  ).padStart(2, "0")}`;
-}
-
-function addDaysToDateKey(value: string, days: number): string {
-  const date = parseDateKey(value);
-  if (!date) {
-    return value;
-  }
-  date.setUTCDate(date.getUTCDate() + days);
-  return formatDateKey(date);
-}
 
 function mapPublicEvent(event: PublicEvent): DiscoverFeedEvent {
   return {
@@ -84,7 +47,7 @@ async function loadDiscoverEvents(date: string): Promise<{
   events: DiscoverFeedEvent[];
 }> {
   const beforeDate = addDaysToDateKey(date, 1);
-  const result = await loadUpcomingApprovedEvents({
+  const result = await loadPublicCalendarEventsWindow({
     beforeDate,
     fromDate: date,
   });
@@ -100,19 +63,10 @@ async function loadDiscoverEvents(date: string): Promise<{
 }
 
 function formatDiscoverSubline(dateKey: string): string {
-  const match = dateKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) {
+  const date = parseDateKeyToUtcNoon(dateKey);
+  if (!date) {
     return `${dateKey} · Belgrade`;
   }
-
-  const date = new Date(
-    Date.UTC(
-      Number.parseInt(match[1], 10),
-      Number.parseInt(match[2], 10) - 1,
-      Number.parseInt(match[3], 10),
-      12,
-    ),
-  );
 
   const label = new Intl.DateTimeFormat("en-US", {
     day: "numeric",
@@ -133,7 +87,7 @@ function normalizeRequestedDate(
 ): string {
   const candidate = Array.isArray(value) ? value[0] : value;
   const allowedDates = getDateTabDates(today);
-  return candidate && allowedDates.includes(candidate) && parseDateKey(candidate)
+  return candidate && allowedDates.includes(candidate) && parseDateKeyToUtcNoon(candidate)
     ? candidate
     : today;
 }
@@ -155,7 +109,7 @@ function buildDateTabs(today: string, selectedDate: string): DiscoverDateTab[] {
 }
 
 function formatEventDateShort(dateKey: string): string {
-  const date = parseDateKey(dateKey);
+  const date = parseDateKeyToUtcNoon(dateKey);
   if (!date) {
     return dateKey;
   }
@@ -168,7 +122,7 @@ function formatEventDateShort(dateKey: string): string {
 }
 
 export default async function DiscoverPage({ searchParams }: DiscoverPageProps) {
-  const today = getBelgradeDateKey();
+  const today = getNightlifeDefaultDateKey();
   const selectedDate = normalizeRequestedDate(searchParams?.date, today);
   const { error, events } = await loadDiscoverEvents(selectedDate);
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);

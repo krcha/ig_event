@@ -17,9 +17,10 @@ type MobileMonthDay = {
 
 type MobileMonthDayStripProps = {
   days: MobileMonthDay[];
+  surface?: "mobile" | "desktop";
 };
 
-export function MobileMonthDayStrip({ days }: MobileMonthDayStripProps) {
+export function MobileMonthDayStrip({ days, surface = "mobile" }: MobileMonthDayStripProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const anchorRef = useRef<HTMLAnchorElement | null>(null);
   const hasAlignedSelectionRef = useRef(false);
@@ -90,17 +91,25 @@ export function MobileMonthDayStrip({ days }: MobileMonthDayStripProps) {
 
   return (
     <div
-      className="-mx-1 mt-2 flex snap-x snap-mandatory gap-1.5 overflow-x-auto overscroll-x-contain scroll-smooth px-1 pb-0.5 [scroll-padding-inline:0.75rem] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-      data-calendar-mobile-date-strip="true"
+      className={cn(
+        "flex snap-x snap-mandatory gap-1.5 overflow-x-auto overscroll-x-contain scroll-smooth pb-0.5 [scroll-padding-inline:0.75rem] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+        surface === "desktop" ? "mt-1 px-0" : "-mx-1 mt-2 px-1",
+      )}
+      data-calendar-date-strip-surface={surface}
+      data-calendar-desktop-date-strip={surface === "desktop" ? "true" : undefined}
+      data-calendar-mobile-date-strip={surface === "mobile" ? "true" : undefined}
       ref={containerRef}
     >
       {days.map((day) => (
         <Link prefetch={false}
           className={cn(
-            "min-w-[3.45rem] snap-center rounded-[0.85rem] border border-border/75 bg-card px-1.5 py-1.5 text-center transition duration-200 ease-out active:scale-[0.98]",
+            "snap-center rounded-[0.85rem] border border-border/75 bg-card px-1.5 py-1.5 text-center transition duration-200 ease-out active:scale-[0.98]",
+            surface === "desktop" ? "min-w-[3.75rem] hover:border-primary/35 hover:bg-primary/[0.045]" : "min-w-[3.45rem]",
             day.isSelected && "border-primary/35 bg-primary/[0.08] text-primary shadow-[0_20px_42px_-34px_rgba(14,116,144,0.42)]",
           )}
-          data-calendar-mobile-date={day.dayKey}
+          data-calendar-date={day.dayKey}
+          data-calendar-desktop-date={surface === "desktop" ? day.dayKey : undefined}
+          data-calendar-mobile-date={surface === "mobile" ? day.dayKey : undefined}
           href={day.href}
           key={day.dayKey}
           onClick={handleDayClick}

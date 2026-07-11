@@ -6,6 +6,7 @@ import {
   getDiscoverDisplayImageUrl,
   getDiscoverImageCandidate,
 } from "../lib/discover/discover-image-source.ts";
+import { getNightlifeDefaultDateKey } from "../lib/events/nightlife-date.ts";
 import {
   isApifyImageUrl,
   normalizeInstagramPostUrl,
@@ -114,6 +115,16 @@ assertIncludes(
 );
 assertIncludes(
   discoverPageSource,
+  "loadPublicCalendarEventsWindow",
+  "Discover should use the lean public calendar window query so high-volume nights do not break the tab.",
+);
+assertIncludes(
+  discoverPageSource,
+  "getNightlifeDefaultDateKey()",
+  "Discover should use the nightlife business date so 00:00-06:59 defaults to the previous night.",
+);
+assertIncludes(
+  discoverPageSource,
   "instagramPostId",
   "Discover page should carry Instagram post IDs for scraped-post matching.",
 );
@@ -132,6 +143,16 @@ assertIncludes(
   discoverFeedSource,
   'data-discover-post="true"',
   "Discover posts should expose a post QA marker.",
+);
+assertIncludes(
+  discoverFeedSource,
+  'data-discover-post-grid="true"',
+  "Discover should render posts in a responsive grid on desktop instead of a single phone-width column.",
+);
+assertIncludes(
+  discoverFeedSource,
+  "lg:grid-cols-2 2xl:grid-cols-3",
+  "Discover desktop layout should show multiple columns while preserving the mobile single-column feed.",
 );
 assertIncludes(
   discoverFeedSource,
@@ -217,6 +238,17 @@ assertDoesNotInclude(
   discoverFeedSource,
   "fbcdn",
   "Discover feed should not allow Facebook CDN images.",
+);
+
+assert.equal(
+  getNightlifeDefaultDateKey(new Date("2026-07-11T06:59:00+02:00")),
+  "2026-07-10",
+  "Before 07:00 Belgrade time, Discover should still default to the previous nightlife date.",
+);
+assert.equal(
+  getNightlifeDefaultDateKey(new Date("2026-07-11T07:00:00+02:00")),
+  "2026-07-11",
+  "At 07:00 Belgrade time, Discover should roll over to the calendar date.",
 );
 
 assertIncludes(

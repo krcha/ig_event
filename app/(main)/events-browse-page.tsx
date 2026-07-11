@@ -3,12 +3,10 @@ import {
   CalendarDays,
   ChevronLeft,
   ChevronRight,
-  Clock3,
   Filter,
   ListMusic,
   Search,
   SlidersHorizontal,
-  Star,
 } from "lucide-react";
 import {
   loadPublicCalendarEventsWindow,
@@ -22,6 +20,7 @@ import { EventMetaRow, getEventCategoryKind } from "@/components/events/event-me
 import { SaveEventButton } from "@/components/events/save-event-button";
 import { cn } from "@/lib/utils";
 import { getDisplayEventTime, getEventTimeSortMinutes, normalizeEventTime } from "@/lib/events/event-time";
+import { dateKeyToLocalNoonDate, getNightlifeDefaultDateKey } from "@/lib/events/nightlife-date";
 import { matchesPublicEventNameArtistOrVenue } from "@/lib/events/public-event-search";
 
 // Keep the public calendar out of Next.js' persisted route cache. The page data
@@ -29,8 +28,6 @@ import { matchesPublicEventNameArtistOrVenue } from "@/lib/events/public-event-s
 // cache purges.
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
-
-const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 type CalendarSearchParams = {
   month?: string | string[];
@@ -244,18 +241,6 @@ function VenueNameLink({
   );
 }
 
-function getCalendarDays(monthStart: Date): Date[] {
-  const start = new Date(monthStart);
-  const mondayFirstDayIndex = (monthStart.getDay() + 6) % 7;
-  start.setDate(1 - mondayFirstDayIndex);
-
-  return Array.from({ length: 42 }, (_, index) => {
-    const day = new Date(start);
-    day.setDate(start.getDate() + index);
-    return day;
-  });
-}
-
 function getMonthDays(monthStart: Date): Date[] {
   const dayCount = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate();
 
@@ -288,14 +273,15 @@ function getSelectedDay(
   monthStart: Date,
   requestedDay: string | undefined,
   filteredMonthDayKeys: string[],
+  defaultDayKey: string,
 ): string {
   const monthParam = formatMonthParam(monthStart);
   if (requestedDay?.startsWith(`${monthParam}-`) && parseNormalizedEventDate(requestedDay)) {
     return requestedDay;
   }
 
-  const today = new Date();
-  const todayKey = formatDateKey(today);
+  const today = dateKeyToLocalNoonDate(defaultDayKey);
+  const todayKey = defaultDayKey;
   if (
     today.getFullYear() === monthStart.getFullYear() &&
     today.getMonth() === monthStart.getMonth() &&
@@ -465,8 +451,8 @@ function getAgendaSortLabel(sortMode: AgendaSortMode): string {
 }
 
 export default async function CalendarPage({ searchParams }: CalendarPageProps) {
-  const today = new Date();
-  const todayKey = formatDateKey(today);
+  const todayKey = getNightlifeDefaultDateKey();
+  const today = dateKeyToLocalNoonDate(todayKey);
   const requestedMonth = getSingleValue(searchParams?.month);
   const monthStart = parseMonthParam(requestedMonth, today);
   const monthParam = formatMonthParam(monthStart);
@@ -519,6 +505,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     monthStart,
     getSingleValue(searchParams?.day),
     filteredMonthDayKeys,
+    todayKey,
   );
   const selectedDayAgendaEvents: CalendarEventSummary[] = [];
   let selectedDayEventCount = 0;
@@ -541,7 +528,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   selectedDayAgendaEvents.sort((left, right) => compareAgendaEvents(left, right, selectedSortMode));
 
   const selectedDate = parseNormalizedEventDate(selectedDayKey) ?? monthStart;
-  const calendarDays = getCalendarDays(monthStart);
   const monthDays = getMonthDays(monthStart);
   const previousMonth = new Date(monthStart.getFullYear(), monthStart.getMonth() - 1, 1);
   const nextMonth = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
@@ -1208,6 +1194,13 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
             ))}
           </div>
 
+          <div
+            className="rounded-[1.2rem] border border-border/75 bg-card/70 p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
+            data-calendar-desktop-date-selector="true"
+          >
+            <MobileMonthDayStrip days={mobileMonthDays} surface="desktop" />
+          </div>
+
           <section className="hidden rounded-[1.35rem] border border-border/75 bg-white/[0.025] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] lg:block">
             <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-center 2xl:justify-between">
               <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
@@ -1218,7 +1211,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 renderActiveFilterControls()
               ) : (
                 <p className="text-xs text-muted-foreground">
-                  Search events, narrow by venue or type, and focus on weekends.
+                  Search events, narrow by venue, and sort the selected day.
                 </p>
               )}
             </div>
@@ -1232,107 +1225,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       {!error ? (
         <>
           <section>{renderSelectedDayAgenda({ mobile: true })}</section>
-
-          <section className="hidden gap-4 lg:grid 2xl:grid-cols-[minmax(0,1fr)_24rem]">
-            <div className="overflow-hidden rounded-[1.5rem] border border-border/80 bg-card/95 shadow-[0_30px_85px_-58px_rgba(0,0,0,0.82)]">
-              <div className="flex items-center justify-between gap-3 border-b border-border/80 bg-muted/[0.32] px-4 py-3">
-                <div>
-                  <p className="section-kicker">Month grid</p>
-                  <h2 className="mt-1 text-lg font-semibold tracking-tight">{monthLabel}</h2>
-                </div>
-                <div className="hidden items-center gap-2 text-xs text-muted-foreground sm:flex">
-                  <span className="inline-flex items-center gap-1.5">
-                    <Star className="h-3.5 w-3.5 text-primary" />
-                    selected day
-                  </span>
-                  <span className="inline-flex items-center gap-1.5">
-                    <Clock3 className="h-3.5 w-3.5 text-primary" />
-                    times first
-                  </span>
-                </div>
-              </div>
-
-              <div className="overflow-x-auto">
-                <div className="min-w-[56rem] bg-card">
-                  <div className="grid grid-cols-7 border-b border-border/80 bg-muted/[0.42]">
-                    {WEEKDAY_LABELS.map((weekday, index) => (
-                      <div
-                        className={cn(
-                          "px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground",
-                          index >= 5 && "bg-white/[0.025] text-sky-200",
-                        )}
-                        key={weekday}
-                      >
-                        {weekday}
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="grid grid-cols-7">
-                    {calendarDays.map((day, index) => {
-                      const dayKey = formatDateKey(day);
-                      const inMonth = day.getMonth() === monthStart.getMonth();
-                      const dayBucket = inMonth ? monthDayBuckets.get(dayKey) : undefined;
-                      const dayEventCount = dayBucket?.eventCount ?? 0;
-                      const isSelected = dayKey === selectedDayKey;
-                      const isToday = dayKey === todayKey;
-                      const isWeekendColumn = index % 7 >= 5;
-
-                      return (
-                        <Link prefetch={false}
-                          className={cn(
-                            "group relative min-h-[9.75rem] border-r border-b border-border/75 bg-card px-2.5 pb-2.5 pt-2.5 transition hover:z-10 hover:bg-primary/[0.035]",
-                            (index + 1) % 7 === 0 && "border-r-0",
-                            !inMonth && "bg-muted/[0.18] text-muted-foreground",
-                            isWeekendColumn && inMonth && "bg-white/[0.018]",
-                            isSelected &&
-                              "z-10 bg-primary/[0.085] shadow-[inset_0_0_0_2px_rgba(113,112,255,0.42)]",
-                          )}
-                          href={`/${buildQueryString({
-                            ...baseFilters,
-                            month: formatMonthParam(day),
-                            day: dayKey,
-                          })}`}
-                          key={dayKey}
-                          scroll={false}
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <span
-                              className={cn(
-                                "inline-flex h-8 min-w-8 items-center justify-center rounded-full px-2 text-sm font-semibold tabular-nums",
-                                isToday
-                                  ? "bg-primary text-primary-foreground shadow-[0_14px_26px_-16px_rgba(113,112,255,0.95)]"
-                                  : isSelected
-                                    ? "bg-primary/10 text-primary"
-                                    : inMonth
-                                      ? "text-foreground"
-                                      : "text-muted-foreground",
-                              )}
-                            >
-                              {day.getDate()}
-                            </span>
-
-                            {dayEventCount > 0 ? (
-                              <span className="rounded-full bg-background/80 px-2 py-1 text-[10px] font-semibold text-muted-foreground ring-1 ring-border/70">
-                                {dayEventCount}
-                              </span>
-                            ) : null}
-                          </div>
-
-                          {dayEventCount > 0 ? (
-                            <p className="mt-3 rounded-[0.75rem] border border-border/70 bg-background/45 px-2 py-2 text-[11px] font-semibold text-muted-foreground">
-                              Open {pluralize(dayEventCount, "event")}
-                            </p>
-                          ) : null}
-                        </Link>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-          </section>
 
         </>
       ) : null}

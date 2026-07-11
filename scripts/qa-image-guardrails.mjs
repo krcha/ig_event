@@ -58,6 +58,16 @@ assert.match(
 );
 assert.match(
   discoverImageRouteSource,
+  /placeholderImageResponse/,
+  "Discover image proxy should return a safe placeholder when an upstream image fails.",
+);
+assert.doesNotMatch(
+  discoverImageRouteSource,
+  /Image source failed[\s\S]*502/,
+  "Discover image proxy should not break the feed with a 502 for stale upstream images.",
+);
+assert.match(
+  discoverImageRouteSource,
   /"x-content-type-options": "nosniff"/,
   "Discover image proxy should set nosniff.",
 );

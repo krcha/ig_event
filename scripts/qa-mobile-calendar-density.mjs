@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import { getDisplayEventTime, normalizeEventTime } from "../lib/events/event-time.ts";
+import { getNightlifeDefaultDateKey } from "../lib/events/nightlife-date.ts";
 
 const calendarSource = readFileSync("app/(main)/events-browse-page.tsx", "utf8");
 const autoApplyFilterFormSource = readFileSync(
@@ -49,6 +50,22 @@ assert.ok(
     calendarSource.includes('name="sort"') &&
     calendarSource.includes('<option value="type">Type</option>'),
   "Calendar filters should allow sorting the selected day by time or event type.",
+);
+assert.ok(
+  calendarSource.includes("getNightlifeDefaultDateKey()") &&
+    calendarSource.includes("dateKeyToLocalNoonDate(todayKey)") &&
+    calendarSource.includes("defaultDayKey"),
+  "Default calendar day should use the nightlife business date, not raw wall-clock today.",
+);
+assert.equal(
+  getNightlifeDefaultDateKey(new Date("2026-07-11T06:59:00+02:00")),
+  "2026-07-10",
+  "Calendar home should keep showing the previous night before 07:00 Belgrade time.",
+);
+assert.equal(
+  getNightlifeDefaultDateKey(new Date("2026-07-11T07:00:00+02:00")),
+  "2026-07-11",
+  "Calendar home should roll to the calendar date at 07:00 Belgrade time.",
 );
 assert.ok(
   !calendarSource.includes('name="type"') &&
@@ -121,8 +138,21 @@ assert.equal(
   "Compact mobile event rows should not spend vertical space on repeated row numbers.",
 );
 assert.ok(
-  mobileMonthDayStripSource.includes('data-calendar-mobile-date-strip="true"'),
-  "Mobile calendar date slider should expose a stable QA marker.",
+  mobileMonthDayStripSource.includes('data-calendar-mobile-date-strip={surface === "mobile" ? "true" : undefined}') &&
+    mobileMonthDayStripSource.includes('data-calendar-desktop-date-strip={surface === "desktop" ? "true" : undefined}') &&
+    mobileMonthDayStripSource.includes("surface?: \"mobile\" | \"desktop\"") &&
+    calendarSource.includes('data-calendar-desktop-date-selector="true"') &&
+    calendarSource.includes('<MobileMonthDayStrip days={mobileMonthDays} surface="desktop" />'),
+  "Calendar date slider should be available on both mobile and desktop with stable QA markers.",
+);
+assert.ok(
+  !calendarSource.includes("Month grid") &&
+    !calendarSource.includes("getCalendarDays") &&
+    !calendarSource.includes("WEEKDAY_LABELS") &&
+    !calendarSource.includes("calendarDays.map") &&
+    !calendarSource.includes("min-w-[56rem]") &&
+    !calendarSource.includes("grid grid-cols-7"),
+  "The old full bottom month calendar grid should be removed across desktop and other breakpoints.",
 );
 assert.ok(
   mobileMonthDayStripSource.includes("inline: \"center\"") &&

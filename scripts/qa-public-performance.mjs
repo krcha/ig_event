@@ -203,10 +203,10 @@ assert.match(
   /selectedDayAgendaEvents\.push\(summary\);/,
   "Selected-day agenda should render every matching event for the selected day.",
 );
-assert.match(
+assertDoesNotInclude(
   browsePageSource,
-  /Open \{pluralize\(dayEventCount, "event"\)\}/,
-  "Month grid days should render count-only links instead of per-event preview cards.",
+  'Open {pluralize(dayEventCount, "event")}',
+  "The full bottom month calendar grid should be removed now that the horizontal date selector handles day navigation.",
 );
 assert.ok(
   (browsePageSource.match(/prefetch=\{false\}/g) ?? []).length >= 12,
