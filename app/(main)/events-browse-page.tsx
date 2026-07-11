@@ -528,9 +528,13 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   selectedDayAgendaEvents.sort((left, right) => compareAgendaEvents(left, right, selectedSortMode));
 
   const selectedDate = parseNormalizedEventDate(selectedDayKey) ?? monthStart;
+  const previousDay = new Date(selectedDate);
+  previousDay.setDate(selectedDate.getDate() - 1);
+  const nextDay = new Date(selectedDate);
+  nextDay.setDate(selectedDate.getDate() + 1);
+  const previousDayKey = formatDateKey(previousDay);
+  const nextDayKey = formatDateKey(nextDay);
   const monthDays = getMonthDays(monthStart);
-  const previousMonth = new Date(monthStart.getFullYear(), monthStart.getMonth() - 1, 1);
-  const nextMonth = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
   const monthLabel = formatDisplayDate(monthStart, { month: "long", year: "numeric" });
   const activeDayCount = filteredMonthDayKeys.length;
   const activeVenueCount = activeVenueNames.size;
@@ -1076,11 +1080,12 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
         <div className="flex items-center gap-1.5">
           <div className="inline-flex h-9 min-w-0 flex-1 items-center rounded-full border border-border/75 bg-white/[0.035]">
             <Link prefetch={false}
-              aria-label="Previous month"
+              aria-label="Previous day"
               className="inline-flex h-9 w-9 flex-none items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
               href={`/${buildQueryString({
                 ...baseFilters,
-                month: formatMonthParam(previousMonth),
+                month: formatMonthParam(previousDay),
+                day: previousDayKey,
               })}`}
               scroll={false}
             >
@@ -1090,11 +1095,12 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
               {monthLabel}
             </span>
             <Link prefetch={false}
-              aria-label="Next month"
+              aria-label="Next day"
               className="inline-flex h-9 w-9 flex-none items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
               href={`/${buildQueryString({
                 ...baseFilters,
-                month: formatMonthParam(nextMonth),
+                month: formatMonthParam(nextDay),
+                day: nextDayKey,
               })}`}
               scroll={false}
             >
@@ -1140,11 +1146,12 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center lg:justify-end">
               <div className="inline-flex w-fit items-center gap-1 rounded-full border border-border/80 bg-white/[0.035] p-1 shadow-[0_18px_48px_-38px_rgba(0,0,0,0.8)]">
                 <Link prefetch={false}
-                  aria-label="Previous month"
+                  aria-label="Previous day"
                   className="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground hover:bg-muted"
                   href={`/${buildQueryString({
                     ...baseFilters,
-                    month: formatMonthParam(previousMonth),
+                    month: formatMonthParam(previousDay),
+                    day: previousDayKey,
                   })}`}
                   scroll={false}
                 >
@@ -1162,11 +1169,12 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   Today
                 </Link>
                 <Link prefetch={false}
-                  aria-label="Next month"
+                  aria-label="Next day"
                   className="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground hover:bg-muted"
                   href={`/${buildQueryString({
                     ...baseFilters,
-                    month: formatMonthParam(nextMonth),
+                    month: formatMonthParam(nextDay),
+                    day: nextDayKey,
                   })}`}
                   scroll={false}
                 >

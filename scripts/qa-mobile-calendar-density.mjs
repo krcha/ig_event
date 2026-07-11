@@ -146,6 +146,19 @@ assert.ok(
   "Calendar date slider should be available on both mobile and desktop with stable QA markers.",
 );
 assert.ok(
+  calendarSource.includes('aria-label="Previous day"') &&
+    calendarSource.includes('aria-label="Next day"') &&
+    calendarSource.includes("const previousDayKey = formatDateKey(previousDay)") &&
+    calendarSource.includes("const nextDayKey = formatDateKey(nextDay)") &&
+    calendarSource.includes("month: formatMonthParam(previousDay)") &&
+    calendarSource.includes("day: previousDayKey") &&
+    calendarSource.includes("month: formatMonthParam(nextDay)") &&
+    calendarSource.includes("day: nextDayKey") &&
+    !calendarSource.includes('aria-label="Previous month"') &&
+    !calendarSource.includes('aria-label="Next month"'),
+  "Top calendar arrows should move one selected day backward/forward, not jump whole months.",
+);
+assert.ok(
   !calendarSource.includes("Month grid") &&
     !calendarSource.includes("getCalendarDays") &&
     !calendarSource.includes("WEEKDAY_LABELS") &&
