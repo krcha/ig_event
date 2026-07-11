@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef } from "react";
+import { type MouseEvent, useCallback, useEffect, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
 
 type MobileMonthDay = {
@@ -22,8 +22,18 @@ type MobileMonthDayStripProps = {
 export function MobileMonthDayStrip({ days }: MobileMonthDayStripProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const anchorRef = useRef<HTMLAnchorElement | null>(null);
+  const hasAlignedSelectionRef = useRef(false);
+  const selectedDayKey = useMemo(
+    () => days.find((day) => day.isAnchor)?.dayKey ?? days.find((day) => day.isSelected)?.dayKey,
+    [days],
+  );
 
-  useEffect(() => {
+  const shouldReduceMotion = useCallback(
+    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    [],
+  );
+
+  const scrollAnchorIntoView = useCallback((behavior: ScrollBehavior) => {
     const container = containerRef.current;
     const anchor = anchorRef.current;
 
@@ -31,29 +41,69 @@ export function MobileMonthDayStrip({ days }: MobileMonthDayStripProps) {
       return;
     }
 
+    const targetLeft = Math.max(
+      0,
+      anchor.offsetLeft - (container.clientWidth - anchor.clientWidth) / 2,
+    );
+
+    container.scrollTo({
+      left: targetLeft,
+      behavior,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!selectedDayKey) {
+      return;
+    }
+
     const frame = window.requestAnimationFrame(() => {
-      container.scrollTo({
-        left: Math.max(0, anchor.offsetLeft - 12),
-        behavior: "auto",
-      });
+      const behavior = hasAlignedSelectionRef.current && !shouldReduceMotion() ? "smooth" : "auto";
+      scrollAnchorIntoView(behavior);
+      hasAlignedSelectionRef.current = true;
     });
 
     return () => window.cancelAnimationFrame(frame);
-  }, [days]);
+  }, [scrollAnchorIntoView, selectedDayKey, shouldReduceMotion]);
+
+  const handleDayClick = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>) => {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return;
+      }
+
+      event.currentTarget.scrollIntoView({
+        behavior: shouldReduceMotion() ? "auto" : "smooth",
+        block: "nearest",
+        inline: "center",
+      });
+    },
+    [shouldReduceMotion],
+  );
 
   return (
     <div
-      className="-mx-1 mt-2 flex snap-x gap-1.5 overflow-x-auto px-1 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      className="-mx-1 mt-2 flex snap-x snap-mandatory gap-1.5 overflow-x-auto overscroll-x-contain scroll-smooth px-1 pb-0.5 [scroll-padding-inline:0.75rem] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      data-calendar-mobile-date-strip="true"
       ref={containerRef}
     >
       {days.map((day) => (
         <Link prefetch={false}
           className={cn(
-            "min-w-[3.45rem] snap-start rounded-[0.85rem] border border-border/75 bg-card px-1.5 py-1.5 text-center transition",
+            "min-w-[3.45rem] snap-center rounded-[0.85rem] border border-border/75 bg-card px-1.5 py-1.5 text-center transition duration-200 ease-out active:scale-[0.98]",
             day.isSelected && "border-primary/35 bg-primary/[0.08] text-primary shadow-[0_20px_42px_-34px_rgba(14,116,144,0.42)]",
           )}
+          data-calendar-mobile-date={day.dayKey}
           href={day.href}
           key={day.dayKey}
+          onClick={handleDayClick}
           ref={day.isAnchor ? anchorRef : undefined}
           scroll={false}
         >

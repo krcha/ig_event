@@ -4,6 +4,18 @@ import { readFileSync } from "node:fs";
 import { getDisplayEventTime, normalizeEventTime } from "../lib/events/event-time.ts";
 
 const calendarSource = readFileSync("app/(main)/events-browse-page.tsx", "utf8");
+const autoApplyFilterFormSource = readFileSync(
+  "components/calendar/auto-apply-filter-form.tsx",
+  "utf8",
+);
+const eventKindToggleSource = readFileSync(
+  "components/calendar/event-kind-toggle-chips.tsx",
+  "utf8",
+);
+const mobileMonthDayStripSource = readFileSync(
+  "components/calendar/mobile-month-day-strip.tsx",
+  "utf8",
+);
 const eventDetailSource = readFileSync("app/(main)/events/[eventId]/page.tsx", "utf8");
 const eventMetaSource = readFileSync("components/events/event-meta.tsx", "utf8");
 const saveEventButtonSource = readFileSync("components/events/save-event-button.tsx", "utf8");
@@ -21,7 +33,7 @@ assert.ok(
   "Mobile calendar events should render as compact tappable rows with an explicit QA marker.",
 );
 assert.ok(
-  calendarSource.includes("data-calendar-mobile-filter-chips"),
+  eventKindToggleSource.includes("data-calendar-mobile-filter-chips"),
   "Mobile calendar category filters should be compact chips directly above the event list.",
 );
 assert.ok(
@@ -31,6 +43,67 @@ assert.ok(
 assert.ok(
   calendarSource.includes("data-calendar-mobile-filter-button"),
   "Mobile calendar should expose advanced filters through a compact icon button.",
+);
+assert.ok(
+  calendarSource.includes('data-calendar-sort-select="true"') &&
+    calendarSource.includes('name="sort"') &&
+    calendarSource.includes('<option value="type">Type</option>'),
+  "Calendar filters should allow sorting the selected day by time or event type.",
+);
+assert.ok(
+  !calendarSource.includes('name="type"') &&
+    !calendarSource.includes('name="weekend"') &&
+    !calendarSource.includes("All types") &&
+    !calendarSource.includes("Weekend only") &&
+    !calendarSource.includes("Focus"),
+  "Calendar filter popover should only expose venue/sort/search controls; event Type and Focus filters are removed.",
+);
+assert.ok(
+  calendarSource.includes("compareAgendaEventsByTime") &&
+    calendarSource.includes("compareAgendaEventsByType") &&
+    calendarSource.includes("selectedDayAgendaEvents.sort"),
+  "Selected-day agenda events should be explicitly sorted by the chosen mode.",
+);
+assert.ok(
+  calendarSource.includes('data-calendar-clear-filter={control.key}') &&
+    calendarSource.includes('data-calendar-active-filter-chips="true"'),
+  "Active filters should render removable chips instead of locked text labels.",
+);
+assert.ok(
+  eventKindToggleSource.includes('data-calendar-kind-toggle={chip.key}') &&
+    eventKindToggleSource.includes("window.history.pushState") &&
+    eventKindToggleSource.includes("applyAgendaVisibility") &&
+    calendarSource.includes('data-calendar-event-kind={eventCategory}') &&
+    calendarSource.includes('hidden={isHiddenByKind}'),
+  "Tapping an event-kind chip should turn that category off on the client without a full page refresh.",
+);
+assert.ok(
+  calendarSource.includes('data-calendar-mobile-search-panel="true"') &&
+    calendarSource.includes('data-calendar-mobile-search-input={isMobileSearch ? "true" : undefined}'),
+  "Mobile calendar search popover should expose only the compact search input.",
+);
+assert.ok(
+  calendarSource.includes("border-primary/45 bg-primary/[0.14]") &&
+    calendarSource.includes("focus:bg-primary/[0.18]") &&
+    calendarSource.includes("isMobileSearch ? \"text-primary\""),
+  "Mobile calendar search box should use the app's purple primary accent.",
+);
+assert.ok(
+  calendarSource.includes("<AutoApplyFilterForm") &&
+    calendarSource.includes("closeOnApply={isMobileFilter}") &&
+    autoApplyFilterFormSource.includes('data-calendar-auto-apply-filter-form="true"') &&
+    autoApplyFilterFormSource.includes("router.replace") &&
+    autoApplyFilterFormSource.includes("target instanceof HTMLSelectElement") &&
+    autoApplyFilterFormSource.includes('closest("details")') &&
+    autoApplyFilterFormSource.includes('removeAttribute("open")') &&
+    !calendarSource.includes('{isMobileSearch ? "Search" : "Apply"}') &&
+    !calendarSource.includes(">Apply<") &&
+    !calendarSource.includes(">Reset<"),
+  "Calendar filter selects should auto-apply without visible Apply/Reset buttons.",
+);
+assert.ok(
+  calendarSource.includes('<span className={isMobileSearch ? "sr-only" : undefined}>Search</span>'),
+  "Mobile calendar search popover should hide the repeated visible Search label while keeping an accessible label.",
 );
 assert.equal(
   calendarSource.includes("Filters & search"),
@@ -46,6 +119,27 @@ assert.equal(
   calendarSource.includes("#{index + 1}"),
   false,
   "Compact mobile event rows should not spend vertical space on repeated row numbers.",
+);
+assert.ok(
+  mobileMonthDayStripSource.includes('data-calendar-mobile-date-strip="true"'),
+  "Mobile calendar date slider should expose a stable QA marker.",
+);
+assert.ok(
+  mobileMonthDayStripSource.includes("inline: \"center\"") &&
+    mobileMonthDayStripSource.includes("scrollIntoView") &&
+    mobileMonthDayStripSource.includes("scrollAnchorIntoView"),
+  "Selecting a mobile calendar date should gently center the tapped/selected day.",
+);
+assert.ok(
+  mobileMonthDayStripSource.includes('behavior: shouldReduceMotion() ? "auto" : "smooth"') &&
+    mobileMonthDayStripSource.includes('"(prefers-reduced-motion: reduce)"'),
+  "Mobile calendar date slider should use smooth motion while respecting reduced-motion users.",
+);
+assert.ok(
+  mobileMonthDayStripSource.includes("snap-center") &&
+    mobileMonthDayStripSource.includes("overscroll-x-contain") &&
+    mobileMonthDayStripSource.includes("scroll-smooth"),
+  "Mobile calendar date slider should use centered scroll snapping with contained momentum.",
 );
 
 const mobileRowStart = calendarSource.indexOf("data-calendar-mobile-event-row");

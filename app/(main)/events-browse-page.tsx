@@ -15,15 +15,13 @@ import {
   parseNormalizedEventDate,
   type PublicEvent,
 } from "@/lib/events/public-events";
+import { AutoApplyFilterForm } from "@/components/calendar/auto-apply-filter-form";
+import { EventKindToggleChips } from "@/components/calendar/event-kind-toggle-chips";
 import { MobileMonthDayStrip } from "@/components/calendar/mobile-month-day-strip";
-import {
-  EVENT_CATEGORY_TONES,
-  EventMetaRow,
-  getEventCategoryKind,
-} from "@/components/events/event-meta";
+import { EventMetaRow, getEventCategoryKind } from "@/components/events/event-meta";
 import { SaveEventButton } from "@/components/events/save-event-button";
 import { cn } from "@/lib/utils";
-import { getDisplayEventTime, normalizeEventTime } from "@/lib/events/event-time";
+import { getDisplayEventTime, getEventTimeSortMinutes, normalizeEventTime } from "@/lib/events/event-time";
 import { matchesPublicEventNameArtistOrVenue } from "@/lib/events/public-event-search";
 
 // Keep the public calendar out of Next.js' persisted route cache. The page data
@@ -38,9 +36,9 @@ type CalendarSearchParams = {
   month?: string | string[];
   day?: string | string[];
   venue?: string | string[];
-  type?: string | string[];
   category?: string | string[];
-  weekend?: string | string[];
+  hide?: string | string[];
+  sort?: string | string[];
   q?: string | string[];
 };
 
@@ -126,13 +124,42 @@ const DAY_CATEGORY_CHIPS = [
 ] as const;
 
 type DayCategory = (typeof DAY_CATEGORY_CHIPS)[number]["key"];
+type AgendaSortMode = "time" | "type";
+
+const DAY_CATEGORY_SORT_ORDER: Record<Exclude<DayCategory, "all">, number> = {
+  club: 0,
+  live: 1,
+  culture: 2,
+  event: 3,
+};
 
 type CalendarDayBucket = {
   eventCount: number;
 };
 
-function normalizeDayCategory(value: string | undefined): DayCategory {
-  return DAY_CATEGORY_CHIPS.some((chip) => chip.key === value) ? (value as DayCategory) : "all";
+function isConcreteDayCategory(value: string | undefined): value is Exclude<DayCategory, "all"> {
+  return value !== "all" && DAY_CATEGORY_CHIPS.some((chip) => chip.key === value);
+}
+
+function normalizeHiddenDayCategories(value: string | undefined): Array<Exclude<DayCategory, "all">> {
+  const requested = new Set(
+    value
+      ?.split(",")
+      .map((part) => part.trim())
+      .filter(isConcreteDayCategory),
+  );
+
+  return DAY_CATEGORY_CHIPS.map((chip) => chip.key).filter(isConcreteDayCategory).filter((key) =>
+    requested.has(key),
+  );
+}
+
+function formatHiddenDayCategories(categories: readonly Exclude<DayCategory, "all">[]): string | undefined {
+  return categories.length > 0 ? categories.join(",") : undefined;
+}
+
+function normalizeAgendaSortMode(value: string | undefined): AgendaSortMode {
+  return value === "type" ? "type" : "time";
 }
 
 function getSingleValue(value: string | string[] | undefined): string | undefined {
@@ -246,6 +273,13 @@ function formatDisplayDate(date: Date, options: Intl.DateTimeFormatOptions): str
   return new Intl.DateTimeFormat("en-US", options).format(date);
 }
 
+function compareAlphabetical(left: string, right: string): number {
+  return left.trim().localeCompare(right.trim(), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
 function eventMatchesSearch(event: PublicEvent, query: string | undefined): boolean {
   return matchesPublicEventNameArtistOrVenue(event, query);
 }
@@ -287,28 +321,13 @@ function getSelectedDay(
 function eventMatchesFilters(
   event: PublicEvent,
   venue: string | undefined,
-  eventType: string | undefined,
-  weekendOnly: boolean,
   query: string | undefined,
 ): boolean {
   if (venue && event.venue !== venue) {
     return false;
   }
 
-  if (eventType && event.eventType !== eventType) {
-    return false;
-  }
-
-  if (!eventMatchesSearch(event, query)) {
-    return false;
-  }
-
-  if (!weekendOnly) {
-    return true;
-  }
-
-  const eventDate = parseNormalizedEventDate(event.date);
-  return eventDate ? isWeekendDate(eventDate) : false;
+  return eventMatchesSearch(event, query);
 }
 
 function toCalendarEventSummary(event: PublicEvent): CalendarEventSummary {
@@ -337,11 +356,11 @@ function toCalendarEventSummary(event: PublicEvent): CalendarEventSummary {
   };
 }
 
-function getEventTone(event: CalendarEventSummary): EventTone {
+function getEventTone(event: Pick<CalendarEventSummary, "artists" | "eventType" | "title">): EventTone {
   return EVENT_TONES[getEventCategoryKind(event)];
 }
 
-function getDayCategory(event: CalendarEventSummary): Exclude<DayCategory, "all"> {
+function getDayCategory(event: Pick<CalendarEventSummary, "artists" | "eventType" | "title">): Exclude<DayCategory, "all"> {
   const toneName = getEventTone(event).name.toLowerCase();
 
   if (toneName === "club" || toneName === "live" || toneName === "culture") {
@@ -349,6 +368,48 @@ function getDayCategory(event: CalendarEventSummary): Exclude<DayCategory, "all"
   }
 
   return "event";
+}
+
+function getAgendaEventSortMinutes(event: CalendarEventSummary): number {
+  return getEventTimeSortMinutes(event.displayTimeStart ?? event.time) ?? Number.POSITIVE_INFINITY;
+}
+
+function compareAgendaEventsByTime(left: CalendarEventSummary, right: CalendarEventSummary): number {
+  const timeResult = getAgendaEventSortMinutes(left) - getAgendaEventSortMinutes(right);
+  if (timeResult !== 0) {
+    return timeResult;
+  }
+
+  const venueResult = compareAlphabetical(left.venue, right.venue);
+  if (venueResult !== 0) {
+    return venueResult;
+  }
+
+  const titleResult = compareAlphabetical(left.title, right.title);
+  if (titleResult !== 0) {
+    return titleResult;
+  }
+
+  return left._id.localeCompare(right._id);
+}
+
+function compareAgendaEventsByType(left: CalendarEventSummary, right: CalendarEventSummary): number {
+  const categoryResult = DAY_CATEGORY_SORT_ORDER[getDayCategory(left)] - DAY_CATEGORY_SORT_ORDER[getDayCategory(right)];
+  if (categoryResult !== 0) {
+    return categoryResult;
+  }
+
+  return compareAgendaEventsByTime(left, right);
+}
+
+function compareAgendaEvents(
+  left: CalendarEventSummary,
+  right: CalendarEventSummary,
+  sortMode: AgendaSortMode,
+): number {
+  return sortMode === "type"
+    ? compareAgendaEventsByType(left, right)
+    : compareAgendaEventsByTime(left, right);
 }
 
 function getCalendarDayBucket(
@@ -399,18 +460,8 @@ function pluralize(value: number, singular: string, plural = `${singular}s`): st
   return `${value} ${value === 1 ? singular : plural}`;
 }
 
-function getActiveFilterLabels(
-  query: string | undefined,
-  venue: string | undefined,
-  eventType: string | undefined,
-  weekendOnly: boolean,
-): string[] {
-  return [
-    query ? `Search: ${query}` : null,
-    venue ? `Venue: ${venue}` : null,
-    eventType ? `Type: ${eventType}` : null,
-    weekendOnly ? "Weekend only" : null,
-  ].filter(Boolean) as string[];
+function getAgendaSortLabel(sortMode: AgendaSortMode): string {
+  return sortMode === "type" ? "Type" : "Time";
 }
 
 export default async function CalendarPage({ searchParams }: CalendarPageProps) {
@@ -425,14 +476,13 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const beforeDate = formatDateKey(nextMonthStart);
   const { events, error } = await loadPublicCalendarEventsWindow({ beforeDate, fromDate });
   const selectedVenue = getSingleValue(searchParams?.venue);
-  const selectedType = getSingleValue(searchParams?.type);
-  const selectedCategory = normalizeDayCategory(getSingleValue(searchParams?.category));
+  const hiddenDayCategories = normalizeHiddenDayCategories(getSingleValue(searchParams?.hide));
+  const hiddenDayCategorySet = new Set(hiddenDayCategories);
+  const selectedSortMode = normalizeAgendaSortMode(getSingleValue(searchParams?.sort));
   const selectedSearchQuery = getSingleValue(searchParams?.q)?.trim() || undefined;
-  const weekendOnly = getSingleValue(searchParams?.weekend) === "1";
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
   const venueNames = new Set<string>();
-  const eventTypeNames = new Set<string>();
   const monthDayBuckets = new Map<string, CalendarDayBucket>();
   const activeVenueNames = new Set<string>();
   let totalFilteredEventCount = 0;
@@ -440,21 +490,16 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
 
   for (const event of events) {
     venueNames.add(event.venue);
-    eventTypeNames.add(event.eventType);
 
     if (!event.date.startsWith(`${monthParam}-`)) {
       continue;
     }
 
-    if (
-      !eventMatchesFilters(
-        event,
-        selectedVenue,
-        selectedType,
-        weekendOnly,
-        selectedSearchQuery,
-      )
-    ) {
+    if (!eventMatchesFilters(event, selectedVenue, selectedSearchQuery)) {
+      continue;
+    }
+
+    if (hiddenDayCategorySet.has(getDayCategory(event))) {
       continue;
     }
 
@@ -469,7 +514,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   }
 
   const venues = Array.from(venueNames).sort((left, right) => left.localeCompare(right));
-  const eventTypes = Array.from(eventTypeNames).sort((left, right) => left.localeCompare(right));
   const filteredMonthDayKeys = Array.from(monthDayBuckets.keys()).sort();
   const selectedDayKey = getSelectedDay(
     monthStart,
@@ -483,26 +527,18 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     if (event.date !== selectedDayKey) {
       continue;
     }
-    if (
-      !eventMatchesFilters(
-        event,
-        selectedVenue,
-        selectedType,
-        weekendOnly,
-        selectedSearchQuery,
-      )
-    ) {
+    if (!eventMatchesFilters(event, selectedVenue, selectedSearchQuery)) {
       continue;
     }
 
     const summary = toCalendarEventSummary(event);
-    if (selectedCategory !== "all" && getDayCategory(summary) !== selectedCategory) {
-      continue;
+    if (!hiddenDayCategorySet.has(getDayCategory(summary))) {
+      selectedDayEventCount += 1;
     }
-
-    selectedDayEventCount += 1;
     selectedDayAgendaEvents.push(summary);
   }
+
+  selectedDayAgendaEvents.sort((left, right) => compareAgendaEvents(left, right, selectedSortMode));
 
   const selectedDate = parseNormalizedEventDate(selectedDayKey) ?? monthStart;
   const calendarDays = getCalendarDays(monthStart);
@@ -512,14 +548,14 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const monthLabel = formatDisplayDate(monthStart, { month: "long", year: "numeric" });
   const activeDayCount = filteredMonthDayKeys.length;
   const activeVenueCount = activeVenueNames.size;
-  const hiddenCategory = selectedCategory === "all" ? undefined : selectedCategory;
+  const hiddenCategoriesParam = formatHiddenDayCategories(hiddenDayCategories);
+  const hiddenSort = selectedSortMode === "time" ? undefined : selectedSortMode;
 
   const baseFilters = {
     q: selectedSearchQuery,
     venue: selectedVenue,
-    type: selectedType,
-    category: hiddenCategory,
-    weekend: weekendOnly ? "1" : undefined,
+    hide: hiddenCategoriesParam,
+    sort: hiddenSort,
   };
   const mobileMonthDays = monthDays.map((day) => {
     const dayKey = formatDateKey(day);
@@ -540,13 +576,56 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       isAnchor: dayKey === selectedDayKey,
     };
   });
-  const activeFilterLabels = getActiveFilterLabels(
-    selectedSearchQuery,
-    selectedVenue,
-    selectedType,
-    weekendOnly,
-  );
-  const hasActiveFilters = activeFilterLabels.length > 0;
+  const activeFilterControls = [
+    selectedSearchQuery
+      ? {
+          key: "search",
+          label: `Search: ${selectedSearchQuery}`,
+          href: `/${buildQueryString({
+            ...baseFilters,
+            month: monthParam,
+            day: selectedDayKey,
+            q: undefined,
+          })}`,
+        }
+      : null,
+    selectedVenue
+      ? {
+          key: "venue",
+          label: `Venue: ${selectedVenue}`,
+          href: `/${buildQueryString({
+            ...baseFilters,
+            month: monthParam,
+            day: selectedDayKey,
+            venue: undefined,
+          })}`,
+        }
+      : null,
+    ...hiddenDayCategories.map((hiddenCategoryKey) => ({
+      key: `category-${hiddenCategoryKey}`,
+      label: `Off: ${DAY_CATEGORY_CHIPS.find((chip) => chip.key === hiddenCategoryKey)?.label ?? hiddenCategoryKey}`,
+      href: `/${buildQueryString({
+        ...baseFilters,
+        month: monthParam,
+        day: selectedDayKey,
+        hide: formatHiddenDayCategories(hiddenDayCategories.filter((category) => category !== hiddenCategoryKey)),
+      })}`,
+    })),
+    hiddenSort
+      ? {
+          key: "sort",
+          label: `Sort: ${getAgendaSortLabel(selectedSortMode)}`,
+          href: `/${buildQueryString({
+            ...baseFilters,
+            month: monthParam,
+            day: selectedDayKey,
+            sort: undefined,
+          })}`,
+        }
+      : null,
+  ].filter(Boolean) as Array<{ href: string; key: string; label: string }>;
+  const activeFilterLabels = activeFilterControls.map((control) => control.label);
+  const hasActiveFilters = activeFilterControls.length > 0;
   const statCards = [
     {
       label: "Events",
@@ -570,6 +649,33 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     },
   ];
 
+  function renderActiveFilterControls() {
+    if (!hasActiveFilters) {
+      return null;
+    }
+
+    return (
+      <div className="flex flex-wrap gap-1.5" data-calendar-active-filter-chips="true">
+        {activeFilterControls.map((control) => (
+          <Link
+            className="app-chip bg-card/95 text-primary hover:border-primary/35 hover:bg-primary/[0.08]"
+            data-calendar-clear-filter={control.key}
+            href={control.href}
+            key={control.key}
+            prefetch={false}
+            scroll={false}
+          >
+            <span>{control.label}</span>
+            <span aria-hidden="true" className="text-primary/70">
+              ×
+            </span>
+            <span className="sr-only">Clear {control.label}</span>
+          </Link>
+        ))}
+      </div>
+    );
+  }
+
   function renderFilterFields(
     mode: "mobile" | "desktop" | "mobile-search" | "mobile-filter",
   ) {
@@ -578,46 +684,48 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     const isMobileFilter = mode === "mobile-filter";
     const showSearch = !isMobileFilter;
     const showFilterFields = !isMobileSearch;
-    const resetHref = `/${buildQueryString({
-      month: monthParam,
-      day: selectedDayKey,
-      category: hiddenCategory,
-      q: isMobileFilter ? selectedSearchQuery : undefined,
-      venue: isMobileSearch ? selectedVenue : undefined,
-      type: isMobileSearch ? selectedType : undefined,
-      weekend: isMobileSearch && weekendOnly ? "1" : undefined,
-    })}`;
 
     return (
-      <form
+      <AutoApplyFilterForm
+        closeOnApply={isMobileFilter}
         className={cn(
           "grid",
           isDesktop
-            ? "mt-3 gap-2.5 lg:grid-cols-2 2xl:grid-cols-[minmax(14rem,1.6fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto]"
-            : "mt-2 gap-2",
+            ? "mt-3 gap-2.5 lg:grid-cols-3 2xl:grid-cols-[minmax(14rem,1.6fr)_minmax(0,1fr)_minmax(0,0.8fr)]"
+            : isMobileSearch
+              ? "gap-0"
+              : "mt-2 gap-2",
         )}
-        method="get"
       >
         <input name="month" type="hidden" value={monthParam} />
-        {hiddenCategory ? <input name="category" type="hidden" value={hiddenCategory} /> : null}
+        <input name="day" type="hidden" value={selectedDayKey} />
+        {hiddenCategoriesParam ? <input name="hide" type="hidden" value={hiddenCategoriesParam} /> : null}
         {!showSearch && selectedSearchQuery ? (
           <input name="q" type="hidden" value={selectedSearchQuery} />
         ) : null}
         {!showFilterFields && selectedVenue ? (
           <input name="venue" type="hidden" value={selectedVenue} />
         ) : null}
-        {!showFilterFields && selectedType ? (
-          <input name="type" type="hidden" value={selectedType} />
-        ) : null}
-        {!showFilterFields && weekendOnly ? <input name="weekend" type="hidden" value="1" /> : null}
+        {!showFilterFields && hiddenSort ? <input name="sort" type="hidden" value={hiddenSort} /> : null}
 
         {showSearch ? (
           <label className="field-label min-w-0">
-            Search
+            <span className={isMobileSearch ? "sr-only" : undefined}>Search</span>
             <span className="relative">
-              <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Search
+                className={cn(
+                  "pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2",
+                  isMobileSearch ? "text-primary" : "text-muted-foreground",
+                )}
+              />
               <input
-                className={cn("input-control pl-10", !isDesktop && "h-10 rounded-xl")}
+                className={cn(
+                  "input-control pl-10",
+                  isMobileSearch &&
+                    "border-primary/45 bg-primary/[0.14] shadow-[0_16px_42px_-30px_rgba(139,134,251,0.9)] placeholder:text-foreground/70 focus:border-primary/70 focus:bg-primary/[0.18] focus:ring-primary/25",
+                  !isDesktop && "h-10 rounded-xl",
+                )}
+                data-calendar-mobile-search-input={isMobileSearch ? "true" : undefined}
                 defaultValue={selectedSearchQuery ?? ""}
                 name="q"
                 placeholder="Event, venue, artist..."
@@ -646,58 +754,21 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
             </label>
 
             <label className="field-label min-w-0">
-              Type
+              Sort
               <select
                 className={cn("input-control", !isDesktop && "h-10 rounded-xl")}
-                defaultValue={selectedType ?? ""}
-                name="type"
+                data-calendar-sort-select="true"
+                defaultValue={hiddenSort ?? ""}
+                name="sort"
               >
-                <option value="">All types</option>
-                {eventTypes.map((eventType) => (
-                  <option key={eventType} value={eventType}>
-                    {eventType}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="field-label min-w-0">
-              Focus
-              <select
-                className={cn("input-control", !isDesktop && "h-10 rounded-xl")}
-                defaultValue={weekendOnly ? "1" : ""}
-                name="weekend"
-              >
-                <option value="">All days</option>
-                <option value="1">Weekend only</option>
+                <option value="">Time</option>
+                <option value="type">Type</option>
               </select>
             </label>
           </>
         ) : null}
 
-        <div className={cn("grid grid-cols-2 gap-2", isDesktop && "sm:flex sm:items-end")}>
-          <button
-            className={cn(
-              "button-primary gap-2 py-0",
-              isDesktop ? "min-h-12 px-4" : "min-h-10 px-3 text-sm",
-            )}
-            type="submit"
-          >
-            {isMobileSearch ? <Search className="h-4 w-4" /> : <Filter className="h-4 w-4" />}
-            {isMobileSearch ? "Search" : "Apply"}
-          </button>
-          <Link prefetch={false}
-            className={cn(
-              "button-secondary py-0",
-              isDesktop ? "min-h-12 px-4" : "min-h-10 px-3 text-sm",
-            )}
-            href={resetHref}
-            scroll={false}
-          >
-            Reset
-          </Link>
-        </div>
-      </form>
+      </AutoApplyFilterForm>
     );
   }
 
@@ -709,6 +780,9 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     mobile?: boolean;
   } = {}) {
     const agendaEvents = selectedDayAgendaEvents;
+    const initialVisibleAgendaEventCount = agendaEvents.filter(
+      (event) => !hiddenDayCategorySet.has(getDayCategory(event)),
+    ).length;
 
     function renderMobileAdvancedControls() {
       const iconButtonClass =
@@ -727,10 +801,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
               <Search className="h-3.5 w-3.5" />
               <span className="sr-only">Search</span>
             </summary>
-            <div className={panelClass}>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                Search events
-              </p>
+            <div className={panelClass} data-calendar-mobile-search-panel="true">
               {renderFilterFields("mobile-search")}
             </div>
           </details>
@@ -758,6 +829,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   </span>
                 ) : null}
               </div>
+              {renderActiveFilterControls()}
               {renderFilterFields("mobile-filter")}
             </div>
           </details>
@@ -767,45 +839,9 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
 
     function renderCategoryChips({ withActions = false }: { withActions?: boolean } = {}) {
       return (
-        <div
-          className="mt-1.5 flex items-center gap-1.5"
-          data-calendar-mobile-filter-chips="true"
-        >
-          <nav
-            aria-label="Selected day categories"
-            className="flex min-w-0 flex-1 gap-1 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-          >
-            {DAY_CATEGORY_CHIPS.map((chip) => {
-              const isActive = selectedCategory === chip.key;
-              const tone = chip.key === "all" ? null : EVENT_CATEGORY_TONES[chip.key];
-
-              return (
-                <Link prefetch={false}
-                  className={cn(
-                    "inline-flex min-h-8 flex-none items-center rounded-full px-2.5 text-[11px] font-semibold transition hover:opacity-90",
-                    tone
-                      ? isActive && "shadow-[0_16px_34px_-28px_rgba(0,0,0,0.85)]"
-                      : isActive
-                        ? "bg-primary/15 text-primary shadow-[0_16px_34px_-28px_rgba(113,112,255,0.9)]"
-                        : "bg-white/[0.045] text-muted-foreground hover:text-foreground",
-                  )}
-                  href={`/${buildQueryString({
-                    ...baseFilters,
-                    month: monthParam,
-                    day: selectedDayKey,
-                    category: chip.key === "all" ? undefined : chip.key,
-                  })}`}
-                  key={chip.key}
-                  scroll={false}
-                  style={tone ? { backgroundColor: tone.backgroundColor, color: tone.color } : undefined}
-                >
-                  {chip.label}
-                </Link>
-              );
-            })}
-          </nav>
+        <EventKindToggleChips initialHiddenCategories={hiddenDayCategories}>
           {withActions ? renderMobileAdvancedControls() : null}
-        </div>
+        </EventKindToggleChips>
       );
     }
 
@@ -814,6 +850,8 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
         <>
           {agendaEvents.map((event) => {
             const tone = getEventTone(event);
+            const eventCategory = getDayCategory(event);
+            const isHiddenByKind = hiddenDayCategorySet.has(eventCategory);
             const eventTime = getResolvedTimeParts(event);
             const displayEventTime = getResolvedDisplayTime(event);
             const supplementalDisplayTime = getSupplementalDisplayTime(event);
@@ -826,11 +864,14 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                     "group flex items-center gap-2 rounded-[0.9rem] border border-border/75 bg-gradient-to-r px-2.5 py-2 shadow-[0_14px_38px_-32px_rgba(0,0,0,0.86)] transition hover:border-primary/35 hover:bg-primary/[0.04]",
                     tone.panel,
                   )}
+                  data-calendar-event-kind={eventCategory}
+                  data-calendar-hidden-by-kind={isHiddenByKind ? "true" : "false"}
                   data-calendar-mobile-event-row="true"
                   data-event-time={event.displayTimeLabel ?? event.time}
                   data-event-title={event.title}
                   data-event-tone={tone.name}
                   data-event-venue={event.venue}
+                  hidden={isHiddenByKind}
                   key={event._id}
                 >
                   <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -898,6 +939,10 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   "relative overflow-hidden rounded-[1rem] border border-border/80 bg-gradient-to-br px-3 py-3 transition hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-[0_22px_54px_-42px_rgba(0,0,0,0.8)]",
                   tone.panel,
                 )}
+                data-calendar-desktop-event-row="true"
+                data-calendar-event-kind={eventCategory}
+                data-calendar-hidden-by-kind={isHiddenByKind ? "true" : "false"}
+                hidden={isHiddenByKind}
                 key={event._id}
               >
                 <div className={cn("absolute inset-y-4 left-0 w-1 rounded-r-full", tone.rail)} />
@@ -948,32 +993,34 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
             );
           })}
 
-          {agendaEvents.length === 0 ? (
-            <div className="rounded-[1.2rem] border border-dashed border-border/80 bg-white/[0.025] px-4 py-8 text-center">
-              <p className="text-sm font-semibold text-foreground">
-                No events match this date and filter set.
-              </p>
-              <p className="mt-1.5 text-sm text-muted-foreground">
-                Pick another date, change filters, or clear the current search.
-              </p>
-              {hasActiveFilters || selectedCategory !== "all" ? (
-                <Link prefetch={false}
-                  className="button-secondary mt-4 min-h-10 px-4 py-0"
-                  href={`/${buildQueryString({ month: monthParam, day: selectedDayKey })}`}
-                  scroll={false}
-                >
-                  Clear filters
-                </Link>
-              ) : null}
-            </div>
-          ) : null}
+          <div
+            className="rounded-[1.2rem] border border-dashed border-border/80 bg-white/[0.025] px-4 py-8 text-center"
+            data-calendar-empty-state="true"
+            hidden={initialVisibleAgendaEventCount > 0}
+          >
+            <p className="text-sm font-semibold text-foreground">
+              No events match this date and filter set.
+            </p>
+            <p className="mt-1.5 text-sm text-muted-foreground">
+              Pick another date, change filters, or clear the current search.
+            </p>
+            {hasActiveFilters ? (
+              <Link prefetch={false}
+                className="button-secondary mt-4 min-h-10 px-4 py-0"
+                href={`/${buildQueryString({ month: monthParam, day: selectedDayKey })}`}
+                scroll={false}
+              >
+                Clear filters
+              </Link>
+            ) : null}
+          </div>
         </>
       );
     }
 
     if (mobile) {
       return (
-        <section className="space-y-1.5">
+        <section className="space-y-1.5" data-calendar-agenda-scope="mobile">
           <div className="sticky top-[4.25rem] z-20 rounded-[1rem] border border-border/75 bg-background/92 px-2.5 py-1.5 shadow-[0_18px_46px_-34px_rgba(0,0,0,0.9)] backdrop-blur">
             <h2 className="min-w-0 truncate text-xs font-semibold tracking-tight text-foreground">
               {formatDisplayDate(selectedDate, {
@@ -982,7 +1029,9 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 day: "numeric",
               })}{" "}
               <span className="text-muted-foreground">·</span>{" "}
-              {pluralize(selectedDayEventCount, "event")}
+              <span data-calendar-visible-event-count="true">
+                {pluralize(selectedDayEventCount, "event")}
+              </span>
             </h2>
             {renderCategoryChips({ withActions: true })}
           </div>
@@ -998,6 +1047,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
           "overflow-hidden rounded-[1.2rem] border border-border/80 bg-card/95 shadow-[0_32px_90px_-58px_rgba(0,0,0,0.82)]",
           !compact && "xl:sticky xl:top-28 xl:max-h-[calc(100svh-8rem)] xl:overflow-auto",
         )}
+        data-calendar-agenda-scope="desktop"
       >
         <div className="relative overflow-hidden border-b border-border/75 bg-gradient-to-br from-primary/[0.14] via-card to-card px-3 py-3 sm:px-4 sm:py-4">
           <div className="absolute -right-8 -top-10 h-28 w-28 rounded-full bg-primary/[0.08] blur-2xl" />
@@ -1012,7 +1062,10 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 })}
               </h3>
               <p className="mt-1 text-xs text-muted-foreground sm:text-sm">
-                {`${pluralize(selectedDayEventCount, "event")} ready to browse.`}
+                <span data-calendar-visible-event-count="true">
+                  {pluralize(selectedDayEventCount, "event")}
+                </span>{" "}
+                ready to browse.
               </p>
             </div>
             <div className="rounded-[1.05rem] bg-primary px-3 py-2 text-center text-primary-foreground shadow-[0_20px_42px_-26px_rgba(113,112,255,0.85)]">
@@ -1162,13 +1215,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 Refine calendar
               </div>
               {hasActiveFilters ? (
-                <div className="flex flex-wrap gap-2">
-                  {activeFilterLabels.map((label) => (
-                    <span className="app-chip bg-card/95 text-primary" key={label}>
-                      {label}
-                    </span>
-                  ))}
-                </div>
+                renderActiveFilterControls()
               ) : (
                 <p className="text-xs text-muted-foreground">
                   Search events, narrow by venue or type, and focus on weekends.
