@@ -1057,6 +1057,89 @@ function trimTitleCandidate(value: string): string {
   return value.replace(/^[\s"'“”‘’]+|[\s"'“”‘’.,:;!?]+$/gu, "").trim();
 }
 
+function titleContainsAlphanumeric(value: string): boolean {
+  return /[\p{L}\p{N}]/u.test(value);
+}
+
+function humanizeArtistHandle(value: string): string {
+  const handle = normalizeString(value)
+    .replace(/^@+/u, "")
+    .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}._-]+$/gu, "")
+    .trim();
+  if (!handle) {
+    return "";
+  }
+
+  const tokens = handle
+    .replace(/[._-]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .split(" ")
+    .filter((token) => token.length > 0);
+
+  return tokens
+    .map((token) => {
+      const lower = token.toLowerCase();
+      if (lower.length <= 3 && /^[a-z0-9]+$/u.test(lower)) {
+        return lower.toUpperCase();
+      }
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
+}
+
+function normalizeArtistDisplayName(value: string): string {
+  return trimTitleCandidate(
+    normalizeString(value)
+      .replace(/[\p{Cf}]/gu, "")
+      .replace(/@([\p{L}\p{N}._-]+)/gu, (_match, handle: string) => humanizeArtistHandle(handle))
+      .replace(/^[\s]*(?:\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?|\d{1,2}\.?\s+[\p{L}]+)\s*[-–—:|•·]*/iu, "")
+      .replace(/[\p{Extended_Pictographic}\uFE0F]+$/gu, "")
+      .replace(/\s+/gu, " "),
+  );
+}
+
+function formatArtistTitleList(artists: string[]): string {
+  const displayArtists = [...new Set(
+    artists
+      .map((artist) => normalizeArtistDisplayName(artist))
+      .filter((artist) => titleContainsAlphanumeric(artist)),
+  )];
+  if (displayArtists.length <= 2) {
+    return displayArtists.join(" & ");
+  }
+  return `${displayArtists.slice(0, -1).join(", ")} & ${displayArtists.at(-1)}`;
+}
+
+function isMeaninglessEventTitle(value: string): boolean {
+  const normalized = toSearchableText(value);
+  return !normalized || /^(?:and|b2b|x)$/iu.test(normalized);
+}
+
+function buildMeaningfulEventTitle(options: {
+  title: string;
+  artists: string[];
+  eventType: string;
+  venue: string | null;
+}): string {
+  const cleanedTitle = cleanSplitCaptionEntryText(options.title);
+  if (!isMeaninglessEventTitle(cleanedTitle)) {
+    return cleanedTitle;
+  }
+
+  const artistTitle = formatArtistTitleList(options.artists);
+  if (artistTitle) {
+    return artistTitle;
+  }
+
+  const normalizedEventType = normalizeString(options.eventType);
+  const humanizedEventType = normalizedEventType
+    ? `${normalizedEventType.charAt(0).toUpperCase()}${normalizedEventType.slice(1)}`
+    : "Event";
+  const venue = normalizeString(options.venue ?? "");
+  return venue ? `${humanizedEventType} at ${venue}` : humanizedEventType;
+}
+
 function getWeakEventTitleSectionParts(
   value: string,
 ): { baseTitle: string; sectionTerm: string } | null {
@@ -1263,6 +1346,7 @@ function normalizeEventTitle(
 
   if (
     rawTitle &&
+    !isMeaninglessEventTitle(rawTitle) &&
     !weakSectionTitle &&
     (!isGenericEventTitle(rawTitle) || titleAppearsInCaption)
   ) {
@@ -1309,8 +1393,10 @@ function normalizeEventTitle(
 function cleanSplitCaptionEntryText(value: string): string {
   return trimTitleCandidate(
     normalizeString(value)
-      .replace(/@\S+/g, "")
+      .replace(/[\p{Cf}]/gu, "")
+      .replace(/@([\p{L}\p{N}._-]+)/gu, (_match, handle: string) => humanizeArtistHandle(handle))
       .replace(/\s*[•·|]+\s*/g, " ")
+      .replace(/[\p{Extended_Pictographic}\uFE0F]+$/gu, "")
       .replace(/\s+/g, " "),
   );
 }
@@ -1422,8 +1508,8 @@ function parseSplitCaptionEntryArtists(value: string): string[] {
   return [...new Set(
     value
       .split(/\s*(?:,|&|\+|\bb2b\b|\band\b)\s*/iu)
-      .map((item) => trimTitleCandidate(item))
-      .filter((item) => item.length > 0),
+      .map((item) => normalizeArtistDisplayName(item))
+      .filter((item) => titleContainsAlphanumeric(item)),
   )];
 }
 
@@ -1471,7 +1557,9 @@ function extractModelSplitEventCandidates(
 
   for (const scheduleEntry of extracted.schedule_entries) {
     const rawDate = normalizeString(scheduleEntry.date);
-    const normalizedArtists = normalizeExtractedArtists(scheduleEntry.artists);
+    const normalizedArtists = normalizeExtractedArtists(scheduleEntry.artists)
+      .map((artist) => normalizeArtistDisplayName(artist))
+      .filter((artist) => titleContainsAlphanumeric(artist));
     const rawTitle = cleanSplitCaptionEntryText(scheduleEntry.title);
     const lineTitle = rawTitle || normalizedArtists.join(", ");
     if (!rawDate || !lineTitle) {
@@ -4388,7 +4476,9 @@ export function prepareEventsForInsert(
         : [];
   const splitEventCandidates = extractSplitEventCandidates(post, extracted);
   const usesSplitEventCandidates = splitEventCandidates.length > 0;
-  const extractedArtists = normalizeExtractedArtists(extracted.artists);
+  const extractedArtists = normalizeExtractedArtists(extracted.artists)
+    .map((artist) => normalizeArtistDisplayName(artist))
+    .filter((artist) => titleContainsAlphanumeric(artist));
   const eventDateFilter = getEventDateFilterContext();
   const isCaptionOnlyVideo = isVideoPostWithoutSelectedImage(post, selectedImageUrl);
   const extractionMode = selectedImageUrl ? "poster" : "caption_only";
@@ -4601,15 +4691,21 @@ export function prepareEventsForInsert(
 
   const eventVariants = usesSplitEventCandidates
     ? splitEventCandidates.map((entry) => {
-        const usesSplitScheduleTitle = entry.lineTitle.length > 0;
         const variantArtists =
           entry.artists.length > 0 ? entry.artists : extractedArtists;
+        const variantTitle = buildMeaningfulEventTitle({
+          title: entry.lineTitle,
+          artists: variantArtists,
+          eventType,
+          venue: venueNormalization.venue,
+        });
+        const usesSplitScheduleTitle = !isMeaninglessEventTitle(variantTitle);
         const variantDescription =
           entry.description ??
           buildSplitEventDescription(eventType, venueNormalization.venue, variantArtists) ??
           description;
         return {
-          title: usesSplitScheduleTitle ? entry.lineTitle : title,
+          title: usesSplitScheduleTitle ? variantTitle : title,
           titleSource: usesSplitScheduleTitle ? entry.source : titleNormalization.source,
           titleUsedFallback: usesSplitScheduleTitle ? false : titleNormalization.usedFallback,
           titleDerivedFromContext:

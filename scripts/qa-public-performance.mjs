@@ -39,6 +39,17 @@ for (const [label, source] of [
   assertDoesNotInclude(source, "export const revalidate", `${label} should not use ISR caching.`);
 }
 
+assert.match(
+  eventDetailSource,
+  /sourceCaption\?: string;/,
+  "Event detail type should keep the scraped Instagram caption available for the What to know section.",
+);
+assert.match(
+  eventDetailSource,
+  /const whatToKnowText = event[\s\S]*event\.sourceCaption\?\.trim\(\) \|\| event\.description\?\.trim\(\)/,
+  "Event detail What to know text should prefer the exact scraped Instagram caption over generated descriptions.",
+);
+
 assertDoesNotInclude(
   publicEventsSource,
   "unstable_noStore",

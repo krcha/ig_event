@@ -134,6 +134,69 @@ function normalizeVenue(value) {
   return normalizeText(value);
 }
 
+function titleContainsAlphanumeric(value) {
+  return /[\p{L}\p{N}]/u.test(text(value));
+}
+
+function humanizeArtistHandle(value) {
+  const handle = text(value)
+    .replace(/^@+/u, "")
+    .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}._-]+$/gu, "")
+    .trim();
+  if (!handle) {
+    return "";
+  }
+  return handle
+    .replace(/[._-]+/gu, " ")
+    .split(/\s+/gu)
+    .filter(Boolean)
+    .map((token) => {
+      const lower = token.toLowerCase();
+      if (lower.length <= 3 && /^[a-z0-9]+$/u.test(lower)) {
+        return lower.toUpperCase();
+      }
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
+}
+
+function normalizeArtistDisplayName(value) {
+  return text(value)
+    .replace(/[\p{Cf}]/gu, "")
+    .replace(/@([\p{L}\p{N}._-]+)/gu, (_match, handle) => humanizeArtistHandle(handle))
+    .replace(/^[\s]*(?:\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?|\d{1,2}\.?\s+[a-zа-яčćžšđ]+)\s*[-–—:|•·]*/iu, "")
+    .replace(/[\p{Extended_Pictographic}\uFE0F]+/gu, " ")
+    .replace(/^[\s"'“”‘’.,:;!?&+|/-]+|[\s"'“”‘’.,:;!?&+|/-]+$/gu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function formatArtistTitleList(artists) {
+  const displayArtists = unique(
+    artists.map(normalizeArtistDisplayName).filter((artist) => titleContainsAlphanumeric(artist)),
+  );
+  if (displayArtists.length <= 2) {
+    return displayArtists.join(" & ");
+  }
+  return `${displayArtists.slice(0, -1).join(", ")} & ${displayArtists.at(-1)}`;
+}
+
+function isMeaninglessTitle(value) {
+  const normalized = normalizeText(value);
+  return !normalized || ["and", "b2b", "x"].includes(normalized);
+}
+
+function extractArtistsFromSourceLine(value) {
+  const source = text(value)
+    .replace(/[\p{Cf}]/gu, "")
+    .replace(/^\s*(?:\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?|\d{1,2}\.?\s+[a-zа-яčćžšđ]+|subota|nedelja|nedjelja|petak|sreda|utorak|ponedeljak|četvrtak|cetvrtak)\s*[-–—:|•·]*/iu, "")
+    .replace(/\bsa\b/giu, " ");
+  return source
+    .split(/\s*(?:,|&|\+|\bb2b\b|\band\b)\s*/iu)
+    .map(normalizeArtistDisplayName)
+    .filter((artist) => titleContainsAlphanumeric(artist));
+}
+
 function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
@@ -214,11 +277,62 @@ function buildShortIcaRepairPatch(sourceText) {
   return null;
 }
 
+function getScheduleEntryForEvent(normalizedFields, rawExtraction) {
+  const scheduleEntries = Array.isArray(rawExtraction?.schedule_entries)
+    ? rawExtraction.schedule_entries
+    : [];
+  const splitSourceLine = normalizeText(normalizedFields?.splitSourceLine);
+  if (!splitSourceLine) {
+    return null;
+  }
+  return scheduleEntries.find((entry) => normalizeText(entry?.source_text) === splitSourceLine) ?? null;
+}
+
+function buildMeaninglessTitleRepairPatch(event, normalizedFields, rawExtraction) {
+  if (!isMeaninglessTitle(event.title)) {
+    return null;
+  }
+
+  const scheduleEntry = getScheduleEntryForEvent(normalizedFields, rawExtraction);
+  const candidateArtists = [
+    ...(Array.isArray(scheduleEntry?.artists) ? scheduleEntry.artists : []),
+    ...extractArtistsFromSourceLine(scheduleEntry?.source_text),
+    ...extractArtistsFromSourceLine(normalizedFields?.splitSourceLine),
+    ...(Array.isArray(normalizedFields?.artists) ? normalizedFields.artists : []),
+    ...(Array.isArray(event.artists) ? event.artists : []),
+  ];
+  const title = formatArtistTitleList(candidateArtists);
+  if (!title) {
+    return null;
+  }
+
+  const artists = unique(candidateArtists.map(normalizeArtistDisplayName))
+    .filter((artist) => titleContainsAlphanumeric(artist));
+  return {
+    title,
+    ...(artists.length > 0 ? { artists } : {}),
+  };
+}
+
 function buildFindings(event) {
   const normalizedFields = parseJson(event.normalizedFieldsJson);
   const rawExtraction = parseJson(event.rawExtractionJson);
   const sourceText = combinedSourceText(event, normalizedFields, rawExtraction);
   const findings = [];
+  const meaninglessTitleRepairPatch = buildMeaninglessTitleRepairPatch(
+    event,
+    normalizedFields,
+    rawExtraction,
+  );
+
+  if (meaninglessTitleRepairPatch) {
+    findings.push({
+      kind: "meaningless_symbol_title_repair",
+      severity: "repair",
+      reason: "Event title has no letters/numbers; derive a readable title from artist/source-line evidence.",
+      patch: meaninglessTitleRepairPatch,
+    });
+  }
 
   if (hasUnverifiedPosterScheduleTbd(event, normalizedFields)) {
     findings.push({

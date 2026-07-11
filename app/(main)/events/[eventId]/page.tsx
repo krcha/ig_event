@@ -60,6 +60,7 @@ type EventRecord = {
   venueLongitude?: number;
   artists: string[];
   description?: string;
+  sourceCaption?: string;
   imageUrl?: string;
   instagramPostUrl?: string;
   ticketPrice?: string;
@@ -282,6 +283,9 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
     notFound();
   }
   const eventTime = event ? event.displayTimeLabel ?? getDisplayEventTime(event.time) : undefined;
+  const whatToKnowText = event
+    ? (event.sourceCaption?.trim() || event.description?.trim() || "")
+    : "";
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
   const venueHref = event?.venueId ? `/venues/${event.venueId}` : null;
 
@@ -346,7 +350,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                   </div>
                 </div>
 
-                {event.description ? (
+                {whatToKnowText ? (
                   <section className="rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3">
                     <p className="text-sm font-semibold text-foreground">What to know</p>
                     <ReadMoreText
@@ -356,7 +360,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                       lessLabel="show less"
                       moreLabel="read more"
                       paragraphProps={{ "data-event-description": "true" }}
-                      text={event.description}
+                      text={whatToKnowText}
                       textClassName="text-sm leading-6 text-muted-foreground"
                     />
                   </section>

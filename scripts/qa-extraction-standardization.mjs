@@ -785,6 +785,67 @@ function runUnverifiedPosterScheduleModerationQa() {
     [],
   );
 
+  const lavashCaption = [
+    "Vikend iza nas bio je u znaku dobre muzike i pozitivne energije uz @pozitivbend 💥",
+    "",
+    "Hvala svima koji su napravili atmosferu za pamćenje. ♥️",
+    "",
+    "Nastavljamo u istom ritmu i ove nedelje:",
+    `• ${ddmmForIsoDate(isoDateDaysFromNow(7))}: @kaya_ostojic`,
+    `• ${ddmmForIsoDate(isoDateDaysFromNow(8))}: @adisskaljo & @puls_bend`,
+    "",
+    "📞 Rezervišite svoje mesto porukom ili pozivom na broj 062/562-751",
+  ].join("\n");
+  const lavashPrepared = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: lavashCaption,
+      postType: "video",
+      username: "lavash.belgrade",
+    }),
+    makeExtractedEvent({
+      title: "",
+      date: "",
+      time: "",
+      venue: "Lavash",
+      artists: [],
+      category: "live music",
+      confidence: 0.95,
+      description: "Live music performances at Lavash with artists Kaya Ostojic, Adis Skaljo & Puls bend.",
+      source_caption: lavashCaption,
+      field_confirmation: makeFieldConfirmation(0.95),
+      schedule_entries: [
+        {
+          date: isoDateDaysFromNow(7),
+          time: "",
+          title: "@kaya_ostojic",
+          artists: ["@kaya_ostojic"],
+          description: "Live music performance by Kaya Ostojic at Lavash.",
+          source_text: `${ddmmForIsoDate(isoDateDaysFromNow(7))}: @kaya_ostojic`,
+        },
+        {
+          date: isoDateDaysFromNow(8),
+          time: "",
+          title: "@adisskaljo & @puls_bend",
+          artists: ["@adisskaljo", "@puls_bend"],
+          description: "Live music performance by Adis Skaljo and Puls bend at Lavash.",
+          source_text: `${ddmmForIsoDate(isoDateDaysFromNow(8))}: @adisskaljo & @puls_bend`,
+        },
+      ],
+    }),
+    null,
+    {},
+    {},
+    {},
+  );
+  const lavashEvents = lavashPrepared.filter((result) => result.kind === "ok").map((result) => result.event);
+  assert.equal(lavashEvents.length, 2);
+  assert.deepEqual(
+    lavashEvents.map((event) => event.title),
+    ["Kaya Ostojic", "Adisskaljo & Puls Bend"],
+  );
+  assert.deepEqual(lavashEvents[1].artists, ["Adisskaljo", "Puls Bend"]);
+  assert.equal(lavashEvents[1].sourceCaption, lavashCaption);
+
   const firstDate = isoDateDaysFromNow(7);
   const secondDate = isoDateDaysFromNow(8);
   const prepared = prepareEventsForInsert(
