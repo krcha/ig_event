@@ -17,6 +17,10 @@ const mobileMonthDayStripSource = readFileSync(
   "components/calendar/mobile-month-day-strip.tsx",
   "utf8",
 );
+const calendarScrollRestorationSource = readFileSync(
+  "components/calendar/calendar-scroll-restoration.tsx",
+  "utf8",
+);
 const eventDetailSource = readFileSync("app/(main)/events/[eventId]/page.tsx", "utf8");
 const eventMetaSource = readFileSync("components/events/event-meta.tsx", "utf8");
 const saveEventButtonSource = readFileSync("components/events/save-event-button.tsx", "utf8");
@@ -183,6 +187,24 @@ assert.ok(
     mobileMonthDayStripSource.includes("overscroll-x-contain") &&
     mobileMonthDayStripSource.includes("scroll-smooth"),
   "Mobile calendar date slider should use centered scroll snapping with contained momentum.",
+);
+assert.ok(
+  calendarSource.includes("<CalendarScrollRestoration />") &&
+    calendarSource.includes('data-calendar-event-link="true"') &&
+    calendarSource.includes('data-calendar-scroll-region="selected-day-agenda"') &&
+    eventDetailSource.includes("EventCalendarBackLink") &&
+    eventDetailSource.includes("const calendarHref = event ? buildCalendarHref(event) : \"/\""),
+  "Opening an event from the calendar should preserve enough return context for exact scroll restoration.",
+);
+assert.ok(
+  calendarScrollRestorationSource.includes("CALENDAR_RESTORE_REQUEST_STORAGE_KEY") &&
+    calendarScrollRestorationSource.includes("saveCalendarScrollPosition") &&
+    calendarScrollRestorationSource.includes("restoreCalendarScrollPosition") &&
+    calendarScrollRestorationSource.includes("window.scrollTo") &&
+    calendarScrollRestorationSource.includes("window.history.scrollRestoration = \"manual\"") &&
+    calendarScrollRestorationSource.includes("data-calendar-event-link") &&
+    calendarScrollRestorationSource.includes("data-calendar-scroll-region"),
+  "Calendar scroll restoration should save scroll before event navigation and restore it on return/back.",
 );
 
 const mobileRowStart = calendarSource.indexOf("data-calendar-mobile-event-row");

@@ -14,6 +14,7 @@ import {
   type PublicEvent,
 } from "@/lib/events/public-events";
 import { AutoApplyFilterForm } from "@/components/calendar/auto-apply-filter-form";
+import { CalendarScrollRestoration } from "@/components/calendar/calendar-scroll-restoration";
 import { EventKindToggleChips } from "@/components/calendar/event-kind-toggle-chips";
 import { MobileMonthDayStrip } from "@/components/calendar/mobile-month-day-strip";
 import { EventMetaRow, getEventCategoryKind } from "@/components/events/event-meta";
@@ -869,6 +870,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                       <Link
                         aria-label={getEventAriaLabel(event, tone)}
                         className="box-border flex h-9 w-16 flex-none flex-col items-center justify-center overflow-hidden rounded-[0.72rem] border border-border/65 bg-background/45 px-1 text-center hover:border-primary/35"
+                        data-calendar-event-link="true"
                         href={`/events/${event._id}`}
                         prefetch={false}
                       >
@@ -885,6 +887,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                       <Link
                         aria-label={getEventAriaLabel(event, tone)}
                         className="box-border flex h-9 w-16 flex-none items-center justify-center overflow-hidden rounded-[0.72rem] border border-border/65 bg-background/45 px-1 text-center hover:border-primary/35"
+                        data-calendar-event-link="true"
                         href={`/events/${event._id}`}
                         prefetch={false}
                       >
@@ -897,6 +900,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                       <Link
                         aria-label={getEventAriaLabel(event, tone)}
                         className="block min-w-0 hover:text-primary"
+                        data-calendar-event-link="true"
                         href={`/events/${event._id}`}
                         prefetch={false}
                       >
@@ -943,6 +947,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                         <Link
                           aria-label={getEventAriaLabel(event, tone)}
                           className="block truncate text-sm font-semibold tabular-nums text-foreground hover:text-primary"
+                          data-calendar-event-link="true"
                           href={`/events/${event._id}`}
                           prefetch={false}
                         >
@@ -954,6 +959,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                       <Link
                         aria-label={getEventAriaLabel(event, tone)}
                         className="block min-w-0 hover:text-primary"
+                        data-calendar-event-link="true"
                         href={`/events/${event._id}`}
                         prefetch={false}
                       >
@@ -1010,7 +1016,11 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
 
     if (mobile) {
       return (
-        <section className="space-y-1.5" data-calendar-agenda-scope="mobile">
+        <section
+          className="space-y-1.5"
+          data-calendar-agenda-scope="mobile"
+          data-calendar-scroll-region="selected-day-agenda"
+        >
           <div className="sticky top-[4.25rem] z-20 rounded-[1rem] border border-border/75 bg-background/92 px-2.5 py-1.5 shadow-[0_18px_46px_-34px_rgba(0,0,0,0.9)] backdrop-blur">
             <h2 className="min-w-0 truncate text-xs font-semibold tracking-tight text-foreground">
               {formatDisplayDate(selectedDate, {
@@ -1038,6 +1048,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
           !compact && "xl:sticky xl:top-28 xl:max-h-[calc(100svh-8rem)] xl:overflow-auto",
         )}
         data-calendar-agenda-scope="desktop"
+        data-calendar-scroll-region="selected-day-agenda"
       >
         <div className="relative overflow-hidden border-b border-border/75 bg-gradient-to-br from-primary/[0.14] via-card to-card px-3 py-3 sm:px-4 sm:py-4">
           <div className="absolute -right-8 -top-10 h-28 w-28 rounded-full bg-primary/[0.08] blur-2xl" />
@@ -1076,6 +1087,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
 
   return (
     <main className="app-page app-page-wide gap-3 sm:gap-4">
+      <CalendarScrollRestoration />
       <header className="relative z-20 rounded-[1.15rem] border border-border/75 bg-card/92 px-2.5 py-2 shadow-[0_18px_52px_-40px_rgba(0,0,0,0.9)] backdrop-blur-sm lg:hidden">
         <div className="flex items-center gap-1.5">
           <div className="inline-flex h-9 min-w-0 flex-1 items-center rounded-full border border-border/75 bg-white/[0.035]">

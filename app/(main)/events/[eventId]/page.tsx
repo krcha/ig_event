@@ -12,6 +12,7 @@ import {
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { EventCategoryPill, EventMetaRow, EventPriceChip } from "@/components/events/event-meta";
+import { EventCalendarBackLink } from "@/components/calendar/calendar-scroll-restoration";
 import { ReadMoreText } from "@/components/ui/read-more-text";
 import {
   getDisplayEventTime,
@@ -288,14 +289,15 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
     : "";
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
   const venueHref = event?.venueId ? `/venues/${event.venueId}` : null;
+  const calendarHref = event ? buildCalendarHref(event) : "/";
 
   return (
     <main className="app-page gap-3 pb-[calc(9.5rem+env(safe-area-inset-bottom))] md:pb-9">
       <div className="flex items-center justify-between gap-3">
-        <Link className="button-secondary min-h-10 gap-2 px-4 py-0" href="/">
+        <EventCalendarBackLink className="button-secondary min-h-10 gap-2 px-4 py-0" href={calendarHref}>
           <ArrowLeft className="h-4 w-4" />
           Back
-        </Link>
+        </EventCalendarBackLink>
         {event?.status && event.status !== "approved" ? (
           <span className="app-chip bg-card/95">{event.status}</span>
         ) : null}
@@ -400,10 +402,10 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                       <ExternalLink className="h-4 w-4" />
                     </a>
                   ) : null}
-                  <Link className="button-secondary gap-2" href={buildCalendarHref(event)}>
+                  <EventCalendarBackLink className="button-secondary gap-2" href={calendarHref}>
                     <CalendarDays className="h-4 w-4" />
                     Calendar
-                  </Link>
+                  </EventCalendarBackLink>
                 </div>
               </div>
 
@@ -455,10 +457,10 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                   <ExternalLink className="h-4 w-4" />
                 </a>
               ) : null}
-              <Link className="button-secondary min-h-11 flex-1 gap-2 px-3 py-0" href={buildCalendarHref(event)}>
+              <EventCalendarBackLink className="button-secondary min-h-11 flex-1 gap-2 px-3 py-0" href={calendarHref}>
                 <CalendarDays className="h-4 w-4" />
                 Calendar
-              </Link>
+              </EventCalendarBackLink>
             </div>
           </div>
         </>
