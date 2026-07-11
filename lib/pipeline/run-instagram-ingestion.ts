@@ -2875,6 +2875,13 @@ function collectDateCandidates(
       source,
       match[0],
     );
+    if (!rawYear && dayMonthCandidate && first <= 12 && second <= 12) {
+      // Serbian/European event captions use D.M. order. Keep a bare caption
+      // like "11.7." strong enough to beat a model-generated off-by-one
+      // normalized date, while still retaining the US-style M.D. alternative
+      // below as low-confidence fallback only.
+      dayMonthCandidate.confidence = "medium";
+    }
     appendCandidate(dayMonthCandidate);
 
     if (first <= 12 && second <= 12) {
@@ -2887,6 +2894,9 @@ function collectDateCandidates(
         source,
         match[0],
       );
+      if (monthDayCandidate) {
+        monthDayCandidate.confidence = "low";
+      }
       appendCandidate(monthDayCandidate);
     }
   }
@@ -2948,7 +2958,7 @@ function collectDateCandidates(
   return candidates;
 }
 
-function normalizeEventDate(
+export function normalizeEventDate(
   rawModelDate: string,
   caption: string | null,
   postedAt: string | null,

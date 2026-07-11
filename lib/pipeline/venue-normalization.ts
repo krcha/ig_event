@@ -218,6 +218,19 @@ const VENUE_ALIAS_RULES: Array<{
     ],
     canonicalHandle: "ljubicabeograd",
   },
+  {
+    aliases: [
+      "Supa",
+      "Šupa",
+      "шупа",
+      "Kafe Supa",
+      "Kafe Šupa",
+      "Кафе Шупа",
+      "Cafe Supa",
+      "Cafe Šupa",
+    ],
+    canonicalHandle: "kafesupa",
+  },
 ];
 
 function normalizeString(value: string | null | undefined): string {

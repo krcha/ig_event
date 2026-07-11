@@ -518,6 +518,8 @@ async function main() {
   }
 
   const client = new ConvexHttpClient(convexUrl);
+  const serviceSecret = process.env.CRON_SECRET?.trim();
+  const serviceArgs = serviceSecret ? { serviceSecret } : {};
   const summary = {
     scanned: 0,
     repairable: 0,
@@ -531,6 +533,7 @@ async function main() {
     const events = await client.query(api.events.listByStatus, {
       status,
       limit: options.limit,
+      ...serviceArgs,
     });
 
     for (const event of events) {
@@ -567,6 +570,7 @@ async function main() {
         await client.mutation(api.events.updateEvent, {
           id: event._id,
           patch,
+          ...serviceArgs,
         });
         summary.applied += 1;
       }

@@ -161,7 +161,9 @@ async function main() {
   }
 
   const client = new ConvexHttpClient(convexUrl);
-  const venues = await client.query(api.venues.listVenues, {});
+  const serviceSecret = process.env.CRON_SECRET?.trim();
+  const serviceArgs = serviceSecret ? { serviceSecret } : {};
+  const venues = await client.query(api.venues.listPublicActiveVenueFields, { limit: 1000 });
   const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle(venues);
   const venueNameOverridesByHandle = await loadVenueNameOverridesByHandle();
   const groupedChanges = new Map();
@@ -180,6 +182,7 @@ async function main() {
     const events = await client.query(api.events.listByStatus, {
       status,
       limit: options.limit,
+      ...serviceArgs,
     });
 
     for (const event of events) {
@@ -234,6 +237,7 @@ async function main() {
         await client.mutation(api.events.updateEvent, {
           id: event._id,
           patch,
+          ...serviceArgs,
         });
         summary.applied += 1;
       }

@@ -9,6 +9,12 @@ import {
   getEventExpiryCutoff,
   isEventExpiredAtCutoff,
 } from "../lib/events/event-retention";
+import {
+  buildCanonicalVenueNamesByHandle,
+  canonicalizeVenueNameDetailed,
+  normalizeHandle,
+  toSearchableText,
+} from "../lib/pipeline/venue-normalization";
 import { canonicalizeEventType } from "../lib/taxonomy/venue-types";
 import { requireAdminIdentity, requireAdminOrServiceSecret } from "./authz";
 
@@ -32,20 +38,35 @@ type VenueDenormalizedFields = {
 };
 
 function normalizeLookup(value: string): string {
-  return value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+  return toSearchableText(value).replace(/\s+/g, " ").trim();
 }
 
 async function resolveVenueDenormalizedFields(
   ctx: QueryCtx | MutationCtx,
   venueName: string | undefined,
 ): Promise<VenueDenormalizedFields> {
-  const lookupName = normalizeLookup(venueName ?? "");
+  const rawVenueName = venueName ?? "";
+  const lookupName = normalizeLookup(rawVenueName);
   if (!lookupName) {
     return {};
   }
 
   const venues = await ctx.db.query("venues").collect();
-  const venue = venues.find((candidate) => normalizeLookup(candidate.name) === lookupName);
+  const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle(venues);
+  const canonicalization = canonicalizeVenueNameDetailed(
+    rawVenueName,
+    canonicalVenueNamesByHandle,
+  );
+  const canonicalHandle = canonicalization?.handle
+    ? normalizeHandle(canonicalization.handle)
+    : null;
+  const canonicalLookupName = normalizeLookup(canonicalization?.venue ?? rawVenueName);
+  const venue = venues.find((candidate) => {
+    if (canonicalHandle && normalizeHandle(candidate.instagramHandle) === canonicalHandle) {
+      return true;
+    }
+    return normalizeLookup(candidate.name) === canonicalLookupName;
+  });
   if (!venue) {
     return {};
   }

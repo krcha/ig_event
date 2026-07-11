@@ -20,7 +20,10 @@ import {
   normalizeVenueFromEvidence,
   toSearchableText,
 } from "../lib/pipeline/venue-normalization.ts";
-import { prepareEventsForInsert } from "../lib/pipeline/run-instagram-ingestion.ts";
+import {
+  normalizeEventDate,
+  prepareEventsForInsert,
+} from "../lib/pipeline/run-instagram-ingestion.ts";
 import {
   extractEventTimeFromText,
   TBD_EVENT_TIME,
@@ -348,6 +351,7 @@ function runVenueQa() {
     { name: "Beton Club & Event Center", instagramHandle: "betonbelgrade" },
     { name: "Nula pet _0.5", instagramHandle: "nulapet_0.5" },
     { name: "Muzej Jugoslavije", instagramHandle: "muzej_jugoslavije" },
+    { name: "Кафе Шупа", instagramHandle: "kafesupa" },
   ]);
   const venueNameOverridesByHandle = {
     kcgrad: "KC Grad",
@@ -412,6 +416,9 @@ function runVenueQa() {
     ["Pab 0,5", "Nula Pet"],
     ["Bašta Paba Nula Pet", "Nula Pet"],
     ["Amphitheater in front of the Museum of Yugoslav History", "Muzej Jugoslavije"],
+    ["Šupa", "Кафе Шупа"],
+    ["шупа", "Кафе Шупа"],
+    ["Kafe Šupa", "Кафе Шупа"],
   ];
   for (const [input, expected] of aliasCases) {
     const resolved = canonicalizeVenueName(input, canonicalVenueNamesByHandle, {
@@ -425,6 +432,8 @@ function runVenueQa() {
   });
   assert.equal(detailedAlias?.reason, "alias");
   assert.equal(detailedAlias?.handle, "nulapet_0.5");
+  assert.equal(toSearchableText("šupa"), "supa");
+  assert.equal(toSearchableText("шупа"), "supa");
   assert.equal(toSearchableText("ʙᴇʟɢʀᴀᴅᴇ ᴋɪᴛᴄʜᴇɴ ᴘᴀʀᴛʏ"), "belgrade kitchen party");
 }
 
@@ -845,6 +854,25 @@ function assertRelativeDateCase({
   assert.deepEqual(events.map((event) => event.time), expectedDates.map(() => "21:00"), label);
   const firstFields = JSON.parse(events[0].normalizedFieldsJson);
   assert.equal(firstFields.dateYearSelectionReason, expectedReason, label);
+}
+
+function runNumericCaptionDatePrecedenceQa() {
+  const postedAt = "2026-07-07T16:37:24.000Z";
+  const caption = [
+    "ovim putem vas pozivamo na milion piva",
+    "kafe supa",
+    "11.7.",
+    "20h",
+  ].join("\n");
+
+  const normalized = normalizeEventDate("12.07.2026", caption, postedAt);
+  assert.equal(
+    normalized.isoDate,
+    "2026-07-11",
+    "A bare Serbian/European caption date like 11.7. must override a model-generated shifted date.",
+  );
+  assert.equal(normalized.source, "caption");
+  assert.equal(normalized.rawDateText, "11.7");
 }
 
 function runSerbianRelativeDateQa() {
@@ -1381,6 +1409,7 @@ runArtistAndDescriptionQa();
 runConfidenceQa();
 runVideoModerationQa();
 runCaptionDateRangeQa();
+runNumericCaptionDatePrecedenceQa();
 runSerbianRelativeDateQa();
 runDescriptionStartTimeQa();
 runScheduleConsistencyQa();
