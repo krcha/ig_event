@@ -22,8 +22,8 @@ const retentionSource = readFileSync(
 
 assert.match(
   retentionSource,
-  /EVENT_RETENTION_DAYS\s*=\s*3/,
-  "event retention should keep the 3-day grace period before deletion",
+  /EVENT_RETENTION_DAYS\s*=\s*2/,
+  "event retention should clean events older than the 2-day grace period",
 );
 
 assert.match(

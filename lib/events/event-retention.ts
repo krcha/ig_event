@@ -1,5 +1,5 @@
 const DEFAULT_EVENT_TIMEZONE = "Europe/Belgrade";
-const EVENT_RETENTION_DAYS = 3;
+const EVENT_RETENTION_DAYS = 2;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
 export type EventExpiryCutoff = {
