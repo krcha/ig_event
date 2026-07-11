@@ -31,6 +31,15 @@ function buildFilterUrl(pathname: string, form: HTMLFormElement): string {
     params.set(key, value);
   }
 
+  if (typeof window !== "undefined" && !params.has("hide")) {
+    const hiddenCategories = new URL(window.location.href).searchParams.get("hide")?.trim();
+    if (hiddenCategories) {
+      params.set("hide", hiddenCategories);
+    }
+  }
+
+  params.delete("category");
+
   const query = params.toString();
   return query ? `${pathname}?${query}` : pathname;
 }

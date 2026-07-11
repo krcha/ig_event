@@ -131,7 +131,12 @@ const DAY_CATEGORY_SORT_ORDER: Record<Exclude<DayCategory, "all">, number> = {
   event: 3,
 };
 
+type ConcreteDayCategory = Exclude<DayCategory, "all">;
+
+type DayCategoryCounts = Record<ConcreteDayCategory, number>;
+
 type CalendarDayBucket = {
+  categoryCounts: DayCategoryCounts;
   eventCount: number;
 };
 
@@ -139,7 +144,7 @@ function isConcreteDayCategory(value: string | undefined): value is Exclude<DayC
   return value !== "all" && DAY_CATEGORY_CHIPS.some((chip) => chip.key === value);
 }
 
-function normalizeHiddenDayCategories(value: string | undefined): Array<Exclude<DayCategory, "all">> {
+function normalizeHiddenDayCategories(value: string | undefined): ConcreteDayCategory[] {
   const requested = new Set(
     value
       ?.split(",")
@@ -152,7 +157,7 @@ function normalizeHiddenDayCategories(value: string | undefined): Array<Exclude<
   );
 }
 
-function formatHiddenDayCategories(categories: readonly Exclude<DayCategory, "all">[]): string | undefined {
+function formatHiddenDayCategories(categories: readonly ConcreteDayCategory[]): string | undefined {
   return categories.length > 0 ? categories.join(",") : undefined;
 }
 
@@ -347,7 +352,7 @@ function getEventTone(event: Pick<CalendarEventSummary, "artists" | "eventType" 
   return EVENT_TONES[getEventCategoryKind(event)];
 }
 
-function getDayCategory(event: Pick<CalendarEventSummary, "artists" | "eventType" | "title">): Exclude<DayCategory, "all"> {
+function getDayCategory(event: Pick<CalendarEventSummary, "artists" | "eventType" | "title">): ConcreteDayCategory {
   const toneName = getEventTone(event).name.toLowerCase();
 
   if (toneName === "club" || toneName === "live" || toneName === "culture") {
@@ -399,6 +404,15 @@ function compareAgendaEvents(
     : compareAgendaEventsByTime(left, right);
 }
 
+function createEmptyDayCategoryCounts(): DayCategoryCounts {
+  return {
+    club: 0,
+    live: 0,
+    culture: 0,
+    event: 0,
+  };
+}
+
 function getCalendarDayBucket(
   buckets: Map<string, CalendarDayBucket>,
   dayKey: string,
@@ -409,6 +423,7 @@ function getCalendarDayBucket(
   }
 
   const bucket: CalendarDayBucket = {
+    categoryCounts: createEmptyDayCategoryCounts(),
     eventCount: 0,
   };
   buckets.set(dayKey, bucket);
@@ -486,12 +501,15 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       continue;
     }
 
-    if (hiddenDayCategorySet.has(getDayCategory(event))) {
+    const eventCategory = getDayCategory(event);
+    const eventDate = parseNormalizedEventDate(event.date);
+    const dayBucket = getCalendarDayBucket(monthDayBuckets, event.date);
+    dayBucket.categoryCounts[eventCategory] += 1;
+
+    if (hiddenDayCategorySet.has(eventCategory)) {
       continue;
     }
 
-    const eventDate = parseNormalizedEventDate(event.date);
-    const dayBucket = getCalendarDayBucket(monthDayBuckets, event.date);
     dayBucket.eventCount += 1;
     totalFilteredEventCount += 1;
     activeVenueNames.add(event.venue);
@@ -501,7 +519,10 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   }
 
   const venues = Array.from(venueNames).sort((left, right) => left.localeCompare(right));
-  const filteredMonthDayKeys = Array.from(monthDayBuckets.keys()).sort();
+  const filteredMonthDayKeys = Array.from(monthDayBuckets.entries())
+    .filter(([, bucket]) => bucket.eventCount > 0)
+    .map(([dayKey]) => dayKey)
+    .sort();
   const selectedDayKey = getSelectedDay(
     monthStart,
     getSingleValue(searchParams?.day),
@@ -562,6 +583,8 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       weekdayLabel: formatDisplayDate(day, { weekday: "short" }),
       dayNumber: day.getDate(),
       eventCount: dayBucket?.eventCount ?? 0,
+      categoryCounts: dayBucket?.categoryCounts ?? createEmptyDayCategoryCounts(),
+      isWeekend: isWeekendDate(day),
       isSelected: dayKey === selectedDayKey,
       isToday: dayKey === todayKey,
       isAnchor: dayKey === selectedDayKey,
@@ -619,21 +642,25 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const hasActiveFilters = activeFilterControls.length > 0;
   const statCards = [
     {
+      key: "events",
       label: "Events",
       value: totalFilteredEventCount,
       caption: "approved this month",
     },
     {
+      key: "active-days",
       label: "Active days",
       value: activeDayCount,
       caption: "with something on",
     },
     {
+      key: "venues",
       label: "Venues",
       value: activeVenueCount,
       caption: "across Belgrade",
     },
     {
+      key: "weekend",
       label: "Weekend",
       value: weekendEventCount,
       caption: "Fri to Sun events",
@@ -1202,11 +1229,18 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
 
           <div className="-mx-1 flex snap-x gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:none] sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 xl:grid-cols-4 [&::-webkit-scrollbar]:hidden">
             {statCards.map((stat) => (
-              <div className="metric-card min-w-[7.6rem] snap-start bg-card/92 px-3 py-2 sm:min-w-0 sm:px-3.5 sm:py-3.5" key={stat.label}>
+              <div
+                className="metric-card min-w-[7.6rem] snap-start bg-card/92 px-3 py-2 sm:min-w-0 sm:px-3.5 sm:py-3.5"
+                data-calendar-stat-card={stat.key}
+                key={stat.label}
+              >
                 <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground sm:text-[11px] sm:tracking-[0.18em]">
                   {stat.label}
                 </p>
-                <p className="mt-0.5 text-xl font-semibold tracking-[-0.04em] text-foreground sm:mt-2 sm:text-3xl">
+                <p
+                  className="mt-0.5 text-xl font-semibold tracking-[-0.04em] text-foreground sm:mt-2 sm:text-3xl"
+                  data-calendar-stat-value={stat.key}
+                >
                   {stat.value}
                 </p>
                 <p className="mt-1 hidden text-xs text-muted-foreground sm:block">{stat.caption}</p>

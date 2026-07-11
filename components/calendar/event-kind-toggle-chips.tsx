@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
 import { EVENT_CATEGORY_TONES, type EventCategoryKind } from "@/components/events/event-meta";
 import { cn } from "@/lib/utils";
 
@@ -16,10 +17,14 @@ const CATEGORY_KEYS = CATEGORY_CHIPS.map((chip) => chip.key).filter(
 );
 const CATEGORY_KEY_SET = new Set<string>(CATEGORY_KEYS);
 
+const CALENDAR_DATE_COUNT_SELECTOR = "[data-calendar-date-kind-counts]";
+
 type EventKindToggleChipsProps = {
   children?: ReactNode;
   initialHiddenCategories?: readonly EventCategoryKind[];
 };
+
+type CategoryCountMap = Partial<Record<EventCategoryKind, number>>;
 
 function normalizeHiddenCategories(value: string | readonly string[] | null | undefined): EventCategoryKind[] {
   const values: readonly string[] = typeof value === "string" ? value.split(",") : (value ?? []);
@@ -38,6 +43,10 @@ function pluralize(value: number): string {
   return `${value} ${value === 1 ? "event" : "events"}`;
 }
 
+function getCurrentRelativeUrl(): string {
+  return `${window.location.pathname}${window.location.search}${window.location.hash}`;
+}
+
 function readHiddenCategoriesFromLocation(): EventCategoryKind[] {
   if (typeof window === "undefined") {
     return [];
@@ -46,9 +55,13 @@ function readHiddenCategoriesFromLocation(): EventCategoryKind[] {
   return normalizeHiddenCategories(new URL(window.location.href).searchParams.get("hide"));
 }
 
-function writeHiddenCategoriesToUrl(categories: readonly EventCategoryKind[]) {
+function buildHiddenCategoriesUrl(categories: readonly EventCategoryKind[], pathname: string | null): string {
   const url = new URL(window.location.href);
   const hiddenParam = formatHiddenCategories(categories);
+
+  if (pathname) {
+    url.pathname = pathname;
+  }
 
   if (hiddenParam) {
     url.searchParams.set("hide", hiddenParam);
@@ -58,53 +71,83 @@ function writeHiddenCategoriesToUrl(categories: readonly EventCategoryKind[]) {
 
   // Remove the previous include-only category query if it exists from older links.
   url.searchParams.delete("category");
-  window.history.pushState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  return `${url.pathname}${url.search}${url.hash}`;
 }
 
-function syncCalendarLinksAndForms(categories: readonly EventCategoryKind[]) {
-  const hiddenParam = formatHiddenCategories(categories);
+function parseCategoryCounts(rawValue: string | undefined): CategoryCountMap {
+  if (!rawValue) {
+    return {};
+  }
 
-  document.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((anchor) => {
-    const href = anchor.getAttribute("href");
-    if (!href) {
-      return;
+  try {
+    const parsed = JSON.parse(rawValue) as Record<string, unknown>;
+    const counts: CategoryCountMap = {};
+    CATEGORY_KEYS.forEach((key) => {
+      const value = parsed[key];
+      counts[key] = typeof value === "number" && Number.isFinite(value) ? value : 0;
+    });
+    return counts;
+  } catch {
+    return {};
+  }
+}
+
+function getVisibleCountFromCategoryCounts(
+  counts: CategoryCountMap,
+  hiddenCategories: readonly EventCategoryKind[],
+): number {
+  const hiddenSet = new Set(hiddenCategories);
+  return CATEGORY_KEYS.reduce((total, category) => {
+    if (hiddenSet.has(category)) {
+      return total;
+    }
+    return total + (counts[category] ?? 0);
+  }, 0);
+}
+
+function setMetricValue(metricKey: string, value: number) {
+  document.querySelectorAll<HTMLElement>(`[data-calendar-stat-value="${metricKey}"]`).forEach((target) => {
+    target.textContent = String(value);
+  });
+}
+
+function syncDateStripAndMetricCounts(categories: readonly EventCategoryKind[]) {
+  const countedDayKeys = new Set<string>();
+  let totalVisibleEvents = 0;
+  let activeDayCount = 0;
+  let weekendVisibleEvents = 0;
+
+  document.querySelectorAll<HTMLElement>(CALENDAR_DATE_COUNT_SELECTOR).forEach((dateLink) => {
+    const counts = parseCategoryCounts(dateLink.dataset.calendarDateKindCounts);
+    const visibleCount = getVisibleCountFromCategoryCounts(counts, categories);
+    const dayKey = dateLink.dataset.calendarDate;
+    const shouldCountForStats = Boolean(dayKey && !countedDayKeys.has(dayKey));
+    const isWeekend = dateLink.dataset.calendarDateWeekend === "true";
+
+    if (shouldCountForStats && dayKey) {
+      countedDayKeys.add(dayKey);
+      totalVisibleEvents += visibleCount;
+      if (visibleCount > 0) {
+        activeDayCount += 1;
+        if (isWeekend) {
+          weekendVisibleEvents += visibleCount;
+        }
+      }
     }
 
-    const url = new URL(href, window.location.origin);
-    if (url.origin !== window.location.origin || url.pathname !== "/") {
-      return;
-    }
-
-    if (hiddenParam) {
-      url.searchParams.set("hide", hiddenParam);
-    } else {
-      url.searchParams.delete("hide");
-    }
-    url.searchParams.delete("category");
-    anchor.setAttribute("href", `${url.pathname}${url.search}${url.hash}`);
+    dateLink.dataset.calendarVisibleEventCount = String(visibleCount);
+    dateLink.querySelectorAll<HTMLElement>("[data-calendar-date-visible-event-count]").forEach((target) => {
+      target.textContent = String(visibleCount);
+    });
+    dateLink.querySelectorAll<HTMLElement>("[data-calendar-date-count-dot]").forEach((target) => {
+      target.classList.toggle("bg-primary", visibleCount > 0);
+      target.classList.toggle("bg-border", visibleCount === 0);
+    });
   });
 
-  document.querySelectorAll<HTMLFormElement>('form[method="get"]').forEach((form) => {
-    if (!form.querySelector('input[name="month"]')) {
-      return;
-    }
-
-    form.querySelector('input[name="category"]')?.remove();
-    let hideInput = form.querySelector<HTMLInputElement>('input[name="hide"]');
-
-    if (!hiddenParam) {
-      hideInput?.remove();
-      return;
-    }
-
-    if (!hideInput) {
-      hideInput = document.createElement("input");
-      hideInput.type = "hidden";
-      hideInput.name = "hide";
-      form.appendChild(hideInput);
-    }
-    hideInput.value = hiddenParam;
-  });
+  setMetricValue("events", totalVisibleEvents);
+  setMetricValue("active-days", activeDayCount);
+  setMetricValue("weekend", weekendVisibleEvents);
 }
 
 function applyAgendaVisibility(categories: readonly EventCategoryKind[]) {
@@ -136,26 +179,54 @@ function applyAgendaVisibility(categories: readonly EventCategoryKind[]) {
     const category = control.dataset.calendarClearFilter?.replace("category-", "");
     control.hidden = !Boolean(category && hiddenSet.has(category as EventCategoryKind));
   });
+
+  syncDateStripAndMetricCounts(categories);
 }
 
 export function EventKindToggleChips({
   children,
   initialHiddenCategories = [],
 }: EventKindToggleChipsProps) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const [, startTransition] = useTransition();
+  const initialHiddenCategoryKey = useMemo(
+    () => formatHiddenCategories(normalizeHiddenCategories(initialHiddenCategories)) ?? "",
+    [initialHiddenCategories],
+  );
   const [hiddenCategories, setHiddenCategories] = useState<EventCategoryKind[]>(() =>
     normalizeHiddenCategories(initialHiddenCategories),
   );
   const hiddenSet = useMemo(() => new Set(hiddenCategories), [hiddenCategories]);
 
-  const setHiddenCategoriesAndUrl = useCallback((nextCategories: EventCategoryKind[]) => {
-    const normalized = normalizeHiddenCategories(nextCategories);
-    setHiddenCategories(normalized);
-    writeHiddenCategoriesToUrl(normalized);
-  }, []);
+  const setHiddenCategoriesAndUrl = useCallback(
+    (nextCategories: EventCategoryKind[]) => {
+      const normalized = normalizeHiddenCategories(nextCategories);
+      const targetUrl = buildHiddenCategoriesUrl(normalized, pathname || "/");
+
+      setHiddenCategories(normalized);
+      applyAgendaVisibility(normalized);
+
+      if (targetUrl !== getCurrentRelativeUrl()) {
+        startTransition(() => {
+          router.replace(targetUrl, { scroll: false });
+        });
+      }
+    },
+    [pathname, router, startTransition],
+  );
+
+  useEffect(() => {
+    const nextCategories = normalizeHiddenCategories(initialHiddenCategoryKey);
+    setHiddenCategories((currentCategories) => {
+      const currentKey = formatHiddenCategories(currentCategories) ?? "";
+      const nextKey = formatHiddenCategories(nextCategories) ?? "";
+      return currentKey === nextKey ? currentCategories : nextCategories;
+    });
+  }, [initialHiddenCategoryKey]);
 
   useEffect(() => {
     applyAgendaVisibility(hiddenCategories);
-    syncCalendarLinksAndForms(hiddenCategories);
   }, [hiddenCategories]);
 
   useEffect(() => {

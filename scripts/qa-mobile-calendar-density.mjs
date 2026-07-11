@@ -87,16 +87,22 @@ assert.ok(
 );
 assert.ok(
   calendarSource.includes('data-calendar-clear-filter={control.key}') &&
-    calendarSource.includes('data-calendar-active-filter-chips="true"'),
-  "Active filters should render removable chips instead of locked text labels.",
+    calendarSource.includes('data-calendar-active-filter-chips="true"') &&
+    calendarSource.includes('data-calendar-stat-card={stat.key}') &&
+    calendarSource.includes('data-calendar-stat-value={stat.key}'),
+  "Active filters should render removable chips and stat cards should expose updateable count markers.",
 );
 assert.ok(
   eventKindToggleSource.includes('data-calendar-kind-toggle={chip.key}') &&
-    eventKindToggleSource.includes("window.history.pushState") &&
-    eventKindToggleSource.includes("applyAgendaVisibility") &&
+    eventKindToggleSource.includes("router.replace(targetUrl, { scroll: false })") &&
+    eventKindToggleSource.includes("syncDateStripAndMetricCounts") &&
+    mobileMonthDayStripSource.includes("router.push(nextUrl, { scroll: false })") &&
+    mobileMonthDayStripSource.includes('currentUrl.searchParams.get("hide")') &&
+    mobileMonthDayStripSource.includes('data-calendar-date-kind-counts={JSON.stringify(day.categoryCounts)}') &&
+    mobileMonthDayStripSource.includes('data-calendar-date-visible-event-count="true"') &&
     calendarSource.includes('data-calendar-event-kind={eventCategory}') &&
     calendarSource.includes('hidden={isHiddenByKind}'),
-  "Tapping an event-kind chip should turn that category off on the client without a full page refresh.",
+  "Tapping an event-kind chip should update URL, visible rows, selected counts, date-strip counts, and server state without a full document refresh.",
 );
 assert.ok(
   calendarSource.includes('data-calendar-mobile-search-panel="true"') &&
@@ -114,6 +120,8 @@ assert.ok(
     calendarSource.includes("closeOnApply={isMobileFilter}") &&
     autoApplyFilterFormSource.includes('data-calendar-auto-apply-filter-form="true"') &&
     autoApplyFilterFormSource.includes("router.replace") &&
+    autoApplyFilterFormSource.includes('searchParams.get("hide")') &&
+    autoApplyFilterFormSource.includes('params.delete("category")') &&
     autoApplyFilterFormSource.includes("target instanceof HTMLSelectElement") &&
     autoApplyFilterFormSource.includes('closest("details")') &&
     autoApplyFilterFormSource.includes('removeAttribute("open")') &&
@@ -145,9 +153,11 @@ assert.ok(
   mobileMonthDayStripSource.includes('data-calendar-mobile-date-strip={surface === "mobile" ? "true" : undefined}') &&
     mobileMonthDayStripSource.includes('data-calendar-desktop-date-strip={surface === "desktop" ? "true" : undefined}') &&
     mobileMonthDayStripSource.includes("surface?: \"mobile\" | \"desktop\"") &&
+    mobileMonthDayStripSource.includes('data-calendar-date-event-count={day.eventCount}') &&
+    mobileMonthDayStripSource.includes('data-calendar-date-selected={day.isSelected ? "true" : undefined}') &&
     calendarSource.includes('data-calendar-desktop-date-selector="true"') &&
     calendarSource.includes('<MobileMonthDayStrip days={mobileMonthDays} surface="desktop" />'),
-  "Calendar date slider should be available on both mobile and desktop with stable QA markers.",
+  "Calendar date slider should be available on both mobile and desktop with stable QA/count markers.",
 );
 assert.ok(
   calendarSource.includes('aria-label="Previous day"') &&

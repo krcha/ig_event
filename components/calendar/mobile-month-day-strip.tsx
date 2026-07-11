@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { type MouseEvent, useCallback, useEffect, useMemo, useRef } from "react";
+import { useRouter } from "next/navigation";
+import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useTransition } from "react";
 import { cn } from "@/lib/utils";
 
 type MobileMonthDay = {
@@ -10,6 +11,8 @@ type MobileMonthDay = {
   weekdayLabel: string;
   dayNumber: number;
   eventCount: number;
+  categoryCounts: Record<"club" | "live" | "culture" | "event", number>;
+  isWeekend: boolean;
   isSelected: boolean;
   isToday: boolean;
   isAnchor: boolean;
@@ -21,6 +24,8 @@ type MobileMonthDayStripProps = {
 };
 
 export function MobileMonthDayStrip({ days, surface = "mobile" }: MobileMonthDayStripProps) {
+  const router = useRouter();
+  const [, startTransition] = useTransition();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const anchorRef = useRef<HTMLAnchorElement | null>(null);
   const hasAlignedSelectionRef = useRef(false);
@@ -80,13 +85,30 @@ export function MobileMonthDayStrip({ days, surface = "mobile" }: MobileMonthDay
         return;
       }
 
+      event.preventDefault();
       event.currentTarget.scrollIntoView({
         behavior: shouldReduceMotion() ? "auto" : "smooth",
         block: "nearest",
         inline: "center",
       });
+
+      const targetUrl = new URL(event.currentTarget.href);
+      const currentUrl = new URL(window.location.href);
+      const hiddenCategories = currentUrl.searchParams.get("hide");
+
+      if (hiddenCategories) {
+        targetUrl.searchParams.set("hide", hiddenCategories);
+      } else {
+        targetUrl.searchParams.delete("hide");
+      }
+      targetUrl.searchParams.delete("category");
+
+      const nextUrl = `${targetUrl.pathname}${targetUrl.search}${targetUrl.hash}`;
+      startTransition(() => {
+        router.push(nextUrl, { scroll: false });
+      });
     },
-    [shouldReduceMotion],
+    [router, shouldReduceMotion, startTransition],
   );
 
   return (
@@ -108,6 +130,10 @@ export function MobileMonthDayStrip({ days, surface = "mobile" }: MobileMonthDay
             day.isSelected && "border-primary/35 bg-primary/[0.08] text-primary shadow-[0_20px_42px_-34px_rgba(14,116,144,0.42)]",
           )}
           data-calendar-date={day.dayKey}
+          data-calendar-date-event-count={day.eventCount}
+          data-calendar-date-kind-counts={JSON.stringify(day.categoryCounts)}
+          data-calendar-date-selected={day.isSelected ? "true" : undefined}
+          data-calendar-date-weekend={day.isWeekend ? "true" : undefined}
           data-calendar-desktop-date={surface === "desktop" ? day.dayKey : undefined}
           data-calendar-mobile-date={surface === "mobile" ? day.dayKey : undefined}
           href={day.href}
@@ -134,8 +160,9 @@ export function MobileMonthDayStrip({ days, surface = "mobile" }: MobileMonthDay
                 "h-1.5 w-1.5 rounded-full",
                 day.eventCount > 0 ? "bg-primary" : "bg-border",
               )}
+              data-calendar-date-count-dot="true"
             />
-            <span>{day.eventCount}</span>
+            <span data-calendar-date-visible-event-count="true">{day.eventCount}</span>
           </div>
         </Link>
       ))}
