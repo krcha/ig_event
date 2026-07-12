@@ -183,6 +183,7 @@ const publicEventsSource = readFileSync("lib/events/public-events.ts", "utf8");
 const adminRouteSource = readFileSync("app/api/admin/venues/route.ts", "utf8");
 const adminUiSource = readFileSync("components/admin/venue-manager.tsx", "utf8");
 const migrationSource = readFileSync("scripts/migrate-venue-lifecycle.mjs", "utf8");
+const placeIdResolverSource = readFileSync("scripts/resolve-venue-place-ids.mjs", "utf8");
 
 for (const field of ["scrapeActive", "publicStatus"]) {
   assert.ok(schemaSource.includes(field), `Venue schema should include ${field}.`);
@@ -235,6 +236,18 @@ assert.match(migrationSource, /expectedRollbackManifestJson/);
 assert.match(
   venuesSource,
   /args\.expectedRollbackManifestJson !== currentRollbackManifestJson/,
+);
+assert.match(placeIdResolverSource, /isVenueScrapeActive\(venue\)/);
+assert.doesNotMatch(placeIdResolverSource, /venue\.isActive\s*!==\s*false/);
+assert.equal(
+  isVenueScrapeActive({ scrapeActive: false, publicStatus: "published" }),
+  false,
+  "published but scrape-paused venues must not incur place resolution",
+);
+assert.equal(
+  isVenueScrapeActive({ scrapeActive: true, publicStatus: "hidden" }),
+  true,
+  "hidden but scrape-active venues remain operationally eligible",
 );
 
 console.log("Venue lifecycle state-matrix and leakage QA passed.");
