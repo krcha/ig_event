@@ -7,7 +7,7 @@ migration; replacing those services remains separate work.
 
 Checked against this repo on 2026-06-05:
 
-- The app is a standard Next.js 14 app with `npm run build` and `npm run start`;
+- The app is a standard Next.js 15 app with `npm run build` and `npm run start`;
   Docker image builds also run `npm run lint` and `npm run typecheck` before the
   production build.
 - The in-repo deployment path has two modes: a one-container web-only path, and

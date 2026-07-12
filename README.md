@@ -42,7 +42,7 @@ explicitly replaces them.
 
 ## Stack
 
-- Next.js 14 App Router + React 18 + TypeScript
+- Next.js 15 App Router + React 19 + TypeScript
 - Tailwind CSS
 - Convex for data, functions, generated types, and scheduled cleanup (hosted
   Convex Cloud or self-hosted Convex via Docker Compose overlay)

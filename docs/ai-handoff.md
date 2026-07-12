@@ -81,7 +81,7 @@ Important env vars:
 
 ## Architecture Overview
 
-This is a Next.js 14 App Router app with TypeScript, Tailwind CSS, Convex,
+This is a Next.js 15 App Router app with React 19, TypeScript, Tailwind CSS, Convex,
 Clerk, OpenAI, and Apify.
 
 Top-level areas:
