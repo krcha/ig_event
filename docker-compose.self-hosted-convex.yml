@@ -56,6 +56,7 @@ services:
       timeout: 5s
       retries: 6
       start_period: 20s
+      start_interval: 5s
 
   convex-dashboard:
     image: ghcr.io/get-convex/convex-dashboard@sha256:bbc4d2c43d19fd6f2791dd6c5153a76e127f3eea489c1639e5acf66999c216bf

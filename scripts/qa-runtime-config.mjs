@@ -9,6 +9,7 @@ const envExample = read(".env.example");
 const envProductionExample = read(".env.production.example");
 const dockerComposeSource = read("docker-compose.yml");
 const dockerComposeRuntimeSource = read("docker-compose.runtime.yml");
+const dockerComposeSelfHostedConvexSource = read("docker-compose.self-hosted-convex.yml");
 const envUtilsSource = read("lib/utils/env.ts");
 const middlewareSource = read("middleware.ts");
 const readinessSource = read("lib/config/readiness.ts");
@@ -57,6 +58,16 @@ assert.ok(
     "CLERK_AUTHORIZED_PARTIES: ${CLERK_AUTHORIZED_PARTIES:-https://events.ineedtofeedmyrabbit.com}",
   ),
   "docker-compose.runtime.yml should provide the production Clerk authorized party default.",
+);
+assert.match(
+  dockerComposeSelfHostedConvexSource,
+  /healthcheck:[\s\S]*?start_interval:\s*5s/,
+  "self-hosted Convex should become healthy during startup instead of waiting for the long steady-state interval.",
+);
+assert.match(
+  dockerComposeSelfHostedConvexSource,
+  /traefik\.http\.routers\.ig-event-convex\.rule=Host\(`\$\{CONVEX_TRAEFIK_HOST:-convex-events\.ineedtofeedmyrabbit\.com\}`\)/,
+  "self-hosted Convex should expose the browser-facing production hostname through Traefik.",
 );
 
 assert.match(
