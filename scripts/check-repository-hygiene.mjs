@@ -3,21 +3,21 @@ import { spawnSync } from "node:child_process";
 const forbiddenRules = [
   {
     description: "generated build output",
-    pattern: /^(?:\.next|out|build)(?: \d+)?(?:\/|$)/u,
+    pattern: /^(?:\.next|out|build)(?: [0-9]{1,3})?\//u,
   },
   {
     description: "generated test output",
     pattern:
-      /^(?:test-results|playwright-report|blob-report|coverage)(?: \d+)?(?:\/|$)/u,
+      /^(?:test-results|playwright-report|blob-report|coverage)(?: [0-9]{1,3})?\//u,
   },
   {
     description: "generated trace or screenshot directory",
-    pattern: /^(?:traces?|screenshots?)(?: \d+)?(?:\/|$)/iu,
+    pattern: /^(?:traces?|screenshots?)(?: [0-9]{1,3})?\//u,
   },
   {
     description: "generated trace or screenshot file",
     pattern:
-      /^(?:[^/]+\.trace|trace(?: \d+)?\.(?:json|zip)|screenshot(?:[-_ ][^/]*)?\.(?:jpe?g|png|webp))$/iu,
+      /^(?:[^/]+\.trace|trace(?: [0-9]{1,3})?\.(?:json|zip)|screenshot(?:[-_ ][^/]*)?\.(?:jpe?g|png|webp))$/u,
   },
   {
     description: "temporary script",
@@ -26,7 +26,7 @@ const forbiddenRules = [
   {
     description: "copy-style numeric source filename suffix",
     pattern:
-      /^(?:app|components|convex|lib|scripts)\/.+ \d+\.[cm]?[jt]sx?$/u,
+      /^(?:app|components|convex|lib|scripts)\/(?:[^/]+\/)*[^/]+ [0-9]{1,3}\.(?:[jt]sx?|[cm][jt]s)$/u,
   },
 ];
 
@@ -47,12 +47,20 @@ const matcherFixtures = {
     "lib/build/manifest.ts",
     "scripts/Chapter 2.md",
     "components/season 2/card.tsx",
+    "build notes/readme.md",
+    "lib/parser 2 draft.ts",
+    "build 1234/server.js",
+    "coverage 1234/lcov.info",
+    "screenshots 1234/failing-test.png",
+    "trace 1234.zip",
+    "lib/parser 1234.mts",
   ],
   rejected: [
     { file: ".next/cache/index.pack", description: "generated build output" },
     { file: ".next 2/server/app/page.js", description: "generated build output" },
     { file: "out/index.html", description: "generated build output" },
     { file: "build 3/server.js", description: "generated build output" },
+    { file: "build 123/server.js", description: "generated build output" },
     { file: "test-results/results.json", description: "generated test output" },
     {
       file: "playwright-report 2/index.html",
@@ -60,22 +68,57 @@ const matcherFixtures = {
     },
     { file: "blob-report/report.zip", description: "generated test output" },
     { file: "coverage/lcov.info", description: "generated test output" },
+    { file: "coverage 2/lcov.info", description: "generated test output" },
     {
       file: "screenshots/failing-test.png",
+      description: "generated trace or screenshot directory",
+    },
+    {
+      file: "screenshots 2/failing-test.png",
       description: "generated trace or screenshot directory",
     },
     {
       file: "screenshot-failing-test.png",
       description: "generated trace or screenshot file",
     },
+    { file: "trace.json", description: "generated trace or screenshot file" },
     { file: "trace.zip", description: "generated trace or screenshot file" },
+    { file: "trace 2.zip", description: "generated trace or screenshot file" },
     { file: "scripts/tmp-debug.ts", description: "temporary script" },
     {
       file: "lib/venues/venue-hours-cache 2.ts",
       description: "copy-style numeric source filename suffix",
     },
     {
-      file: "scripts/qa-venue-hours 12.mjs",
+      file: "app/parser 1.js",
+      description: "copy-style numeric source filename suffix",
+    },
+    {
+      file: "components/parser 2.jsx",
+      description: "copy-style numeric source filename suffix",
+    },
+    {
+      file: "convex/parser 3.ts",
+      description: "copy-style numeric source filename suffix",
+    },
+    {
+      file: "lib/parser 4.tsx",
+      description: "copy-style numeric source filename suffix",
+    },
+    {
+      file: "scripts/parser 5.mjs",
+      description: "copy-style numeric source filename suffix",
+    },
+    {
+      file: "lib/parser 2.mts",
+      description: "copy-style numeric source filename suffix",
+    },
+    {
+      file: "app/parser 7.cjs",
+      description: "copy-style numeric source filename suffix",
+    },
+    {
+      file: "scripts/parser 8.cts",
       description: "copy-style numeric source filename suffix",
     },
   ],
@@ -126,7 +169,63 @@ function runMatcherFixtureTests() {
   );
 }
 
+function runGitIgnoreFixtureTests() {
+  const fixtures = [
+    ...matcherFixtures.accepted.map((file) => ({ file, ignored: false })),
+    ...matcherFixtures.rejected.map(({ file }) => ({ file, ignored: true })),
+  ];
+  const result = spawnSync(
+    "git",
+    ["check-ignore", "--no-index", "-z", "--stdin"],
+    {
+      encoding: "utf8",
+      input: `${fixtures.map(({ file }) => file).join("\0")}\0`,
+    },
+  );
+
+  if (result.error) {
+    console.error(
+      `Repository .gitignore fixtures could not run git: ${result.error.message}`,
+    );
+    process.exit(1);
+  }
+
+  if (result.status !== 0 && result.status !== 1) {
+    console.error("Repository .gitignore fixtures could not check paths.");
+    if (result.stderr) {
+      console.error(result.stderr.trim());
+    }
+    process.exit(result.status ?? 1);
+  }
+
+  const ignoredFiles = new Set(result.stdout.split("\0").filter(Boolean));
+  const failures = fixtures.flatMap(({ file, ignored }) => {
+    const actual = ignoredFiles.has(file);
+    if (actual === ignored) {
+      return [];
+    }
+    return [
+      `${file} should be ${ignored ? "ignored" : "accepted"} but was ${
+        actual ? "ignored" : "accepted"
+      }`,
+    ];
+  });
+
+  if (failures.length > 0) {
+    console.error("Repository .gitignore fixtures failed:");
+    for (const failure of failures) {
+      console.error(`- ${failure}`);
+    }
+    process.exit(1);
+  }
+
+  console.log(
+    `Repository .gitignore fixtures passed (${fixtures.length} accepted/rejected paths).`,
+  );
+}
+
 runMatcherFixtureTests();
+runGitIgnoreFixtureTests();
 
 const result = spawnSync("git", ["ls-files", "--cached", "-z"], {
   encoding: "utf8",

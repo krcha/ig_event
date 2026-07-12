@@ -13,40 +13,126 @@
 
 # root-level generated test output
 /coverage/
+/coverage [0-9]/
+/coverage [0-9][0-9]/
+/coverage [0-9][0-9][0-9]/
 /test-results/
-/test-results */
+/test-results [0-9]/
+/test-results [0-9][0-9]/
+/test-results [0-9][0-9][0-9]/
 /playwright-report/
-/playwright-report */
+/playwright-report [0-9]/
+/playwright-report [0-9][0-9]/
+/playwright-report [0-9][0-9][0-9]/
 /blob-report/
-/blob-report */
+/blob-report [0-9]/
+/blob-report [0-9][0-9]/
+/blob-report [0-9][0-9][0-9]/
+/trace/
+/trace [0-9]/
+/trace [0-9][0-9]/
+/trace [0-9][0-9][0-9]/
 /traces/
+/traces [0-9]/
+/traces [0-9][0-9]/
+/traces [0-9][0-9][0-9]/
+/screenshot/
+/screenshot [0-9]/
+/screenshot [0-9][0-9]/
+/screenshot [0-9][0-9][0-9]/
 /screenshots/
-/*.trace
+/screenshots [0-9]/
+/screenshots [0-9][0-9]/
+/screenshots [0-9][0-9][0-9]/
+/?*.trace
+/trace.json
+/trace [0-9].json
+/trace [0-9][0-9].json
+/trace [0-9][0-9][0-9].json
 /trace.zip
+/trace [0-9].zip
+/trace [0-9][0-9].zip
+/trace [0-9][0-9][0-9].zip
+/screenshot.jpg
+/screenshot.jpeg
+/screenshot.png
+/screenshot.webp
+/screenshot-*.jpg
+/screenshot-*.jpeg
+/screenshot-*.png
+/screenshot-*.webp
+/screenshot_*.jpg
+/screenshot_*.jpeg
+/screenshot_*.png
+/screenshot_*.webp
+/screenshot *.jpg
+/screenshot *.jpeg
+/screenshot *.png
+/screenshot *.webp
 
 # next.js root output
 /.next/
-/.next */
+/.next [0-9]/
+/.next [0-9][0-9]/
+/.next [0-9][0-9][0-9]/
 /out/
-/out */
+/out [0-9]/
+/out [0-9][0-9]/
+/out [0-9][0-9][0-9]/
 
 # production root output
 /build/
-/build */
+/build [0-9]/
+/build [0-9][0-9]/
+/build [0-9][0-9][0-9]/
 
 # scratch scripts and copy-style source duplicates
 /scripts/tmp-*
-/app/**/* [0-9]*.[jt]s
-/app/**/* [0-9]*.[jt]sx
-/components/**/* [0-9]*.[jt]s
-/components/**/* [0-9]*.[jt]sx
-/convex/**/* [0-9]*.[jt]s
-/convex/**/* [0-9]*.[jt]sx
-/lib/**/* [0-9]*.[jt]s
-/lib/**/* [0-9]*.[jt]sx
-/scripts/**/* [0-9]*.[cm][jt]s
-/scripts/**/* [0-9]*.[jt]s
-/scripts/**/* [0-9]*.[jt]sx
+/app/**/?* [0-9].[jt]s
+/app/**/?* [0-9].[jt]sx
+/app/**/?* [0-9].[cm][jt]s
+/app/**/?* [0-9][0-9].[jt]s
+/app/**/?* [0-9][0-9].[jt]sx
+/app/**/?* [0-9][0-9].[cm][jt]s
+/app/**/?* [0-9][0-9][0-9].[jt]s
+/app/**/?* [0-9][0-9][0-9].[jt]sx
+/app/**/?* [0-9][0-9][0-9].[cm][jt]s
+/components/**/?* [0-9].[jt]s
+/components/**/?* [0-9].[jt]sx
+/components/**/?* [0-9].[cm][jt]s
+/components/**/?* [0-9][0-9].[jt]s
+/components/**/?* [0-9][0-9].[jt]sx
+/components/**/?* [0-9][0-9].[cm][jt]s
+/components/**/?* [0-9][0-9][0-9].[jt]s
+/components/**/?* [0-9][0-9][0-9].[jt]sx
+/components/**/?* [0-9][0-9][0-9].[cm][jt]s
+/convex/**/?* [0-9].[jt]s
+/convex/**/?* [0-9].[jt]sx
+/convex/**/?* [0-9].[cm][jt]s
+/convex/**/?* [0-9][0-9].[jt]s
+/convex/**/?* [0-9][0-9].[jt]sx
+/convex/**/?* [0-9][0-9].[cm][jt]s
+/convex/**/?* [0-9][0-9][0-9].[jt]s
+/convex/**/?* [0-9][0-9][0-9].[jt]sx
+/convex/**/?* [0-9][0-9][0-9].[cm][jt]s
+/lib/**/?* [0-9].[jt]s
+/lib/**/?* [0-9].[jt]sx
+/lib/**/?* [0-9].[cm][jt]s
+/lib/**/?* [0-9][0-9].[jt]s
+/lib/**/?* [0-9][0-9].[jt]sx
+/lib/**/?* [0-9][0-9].[cm][jt]s
+/lib/**/?* [0-9][0-9][0-9].[jt]s
+/lib/**/?* [0-9][0-9][0-9].[jt]sx
+/lib/**/?* [0-9][0-9][0-9].[cm][jt]s
+/scripts/**/?* [0-9].[jt]s
+/scripts/**/?* [0-9].[jt]sx
+/scripts/**/?* [0-9].[cm][jt]s
+/scripts/**/?* [0-9][0-9].[jt]s
+/scripts/**/?* [0-9][0-9].[jt]sx
+/scripts/**/?* [0-9][0-9].[cm][jt]s
+/scripts/**/?* [0-9][0-9][0-9].[jt]s
+/scripts/**/?* [0-9][0-9][0-9].[jt]sx
+/scripts/**/?* [0-9][0-9][0-9].[cm][jt]s
 
 # misc
 .DS_Store
