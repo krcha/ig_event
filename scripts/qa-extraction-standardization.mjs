@@ -1476,6 +1476,11 @@ function runDescriptionStartTimeQa() {
     "Lokal radi od 9 do 17",
     "Bar hours: 9h-17h",
     "Od 10 do 20 posto popusta",
+    "We are open from 9 to 17",
+    "Otvoreni smo od 9 do 17",
+    "Lokal je otvoren od 9 do 17",
+    "Bar is open from 9 to 17",
+    "Od 10 do 20 procenata popusta",
   ];
   for (const [index, unsupportedText] of unsupportedTimeContexts.entries()) {
     for (const evidencePath of ["caption", "ocr"]) {
@@ -1520,6 +1525,10 @@ function runDescriptionStartTimeQa() {
     "Ulaz od 18 godina, početak u 21h",
     "Popust 20% pre 22h, početak u 21h",
     "Radno vreme do 17, koncert počinje u 21h",
+    "Ulaz od 18 godina a početak u 21h",
+    "Popust 20% pre 22h ali koncert počinje u 21h",
+    "Radno vreme do 17 a koncert počinje u 21h",
+    "Početak u 21h uz 20% popusta",
   ].entries()) {
     for (const evidencePath of ["caption", "ocr"]) {
       const mixedTimeEvent = assertSingleOkPreparedEvent(

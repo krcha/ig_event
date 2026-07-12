@@ -30,6 +30,10 @@ for (const [text, expected] of [
   ["Ulaz od 18 godina, početak u 21h", "21:00"],
   ["Popust 20% pre 22h, početak u 21h", "21:00"],
   ["Radno vreme do 17, koncert počinje u 21h", "21:00"],
+  ["Ulaz od 18 godina a početak u 21h", "21:00"],
+  ["Popust 20% pre 22h ali koncert počinje u 21h", "21:00"],
+  ["Radno vreme do 17 a koncert počinje u 21h", "21:00"],
+  ["Početak u 21h uz 20% popusta", "21:00"],
 ]) {
   assert.equal(extractEventTimeEvidenceFromText(text)?.time, expected, `time evidence: ${text}`);
 }
@@ -50,6 +54,11 @@ for (const text of [
   "Lokal radi od 9 do 17",
   "Bar hours: 9h-17h",
   "Od 10 do 20 posto popusta",
+  "We are open from 9 to 17",
+  "Otvoreni smo od 9 do 17",
+  "Lokal je otvoren od 9 do 17",
+  "Bar is open from 9 to 17",
+  "Od 10 do 20 procenata popusta",
   "Adresa: Knez Mihailova 21",
   "Address: 21 Main Street",
   "Kapacitet 20 ljudi",
@@ -114,7 +123,12 @@ assert.equal(
   true,
   "Duplicate repair must explicitly clear stale evidence.",
 );
-assert.equal(unknownDuplicateRepair.patch.timeEvidenceText, undefined);
+assert.equal(unknownDuplicateRepair.patch.timeEvidenceText, null);
+const wireDuplicatePatch = JSON.parse(JSON.stringify(unknownDuplicateRepair.patch));
+assert.equal(wireDuplicatePatch.timeEvidenceText, null, "Convex wire serialization must retain the clear sentinel.");
+const normalizedWireDuplicatePatch = normalizeEventTimeWritePatch(wireDuplicatePatch);
+assert.equal(normalizedWireDuplicatePatch.timeEvidenceText, undefined);
+assert.equal(Object.hasOwn(normalizedWireDuplicatePatch, "timeEvidenceText"), true);
 
 assert.deepEqual(normalizeEventTimeWritePatch({ time: "22:00" }), {
   time: "22:00",
@@ -140,9 +154,18 @@ assert.deepEqual(
   },
 );
 assert.equal(
-  normalizeEventTimeWritePatch({ timeEvidenceText: null }).timeEvidenceText,
+  normalizeEventTimeWritePatch({
+    timeSource: "unknown",
+    timeEvidenceText: null,
+    timeConfidence: 0,
+    timeStatus: "unknown",
+  }).timeEvidenceText,
   undefined,
   "Null evidence must translate to a Convex field removal.",
+);
+assert.throws(
+  () => normalizeEventTimeWritePatch({ timeSource: "caption" }),
+  /must provide timeSource, timeConfidence, and timeStatus together/,
 );
 assert.throws(
   () => normalizeEventTimeWritePatch({ time: "21:00", timeSource: "caption" }),

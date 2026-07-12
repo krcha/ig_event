@@ -4251,7 +4251,7 @@ export function buildDuplicateUpdatePatch(
     date?: string;
     time?: string;
     timeSource?: EventTimeSource;
-    timeEvidenceText?: string;
+    timeEvidenceText?: string | null;
     timeConfidence?: number;
     timeStatus?: EventTimeProvenance["status"];
     venue?: string;
@@ -4300,7 +4300,7 @@ export function buildDuplicateUpdatePatch(
       date: next.date,
       ...(next.time ? { time: next.time } : {}),
       timeSource: next.timeSource,
-      timeEvidenceText: next.timeEvidenceText,
+      timeEvidenceText: next.timeEvidenceText ?? null,
       timeConfidence: next.timeConfidence,
       timeStatus: next.timeStatus,
       venue: next.venue,

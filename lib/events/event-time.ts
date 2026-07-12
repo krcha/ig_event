@@ -199,16 +199,13 @@ function getLocalTimeTokenContext(
   const windowEnd = Math.min(sourceText.length, tokenEnd + 80);
   const beforeWindow = sourceText.slice(windowStart, tokenStart);
   const afterWindow = sourceText.slice(tokenEnd, windowEnd);
-  const priorBoundary = Math.max(
-    beforeWindow.lastIndexOf("\n"),
-    beforeWindow.lastIndexOf("."),
-    beforeWindow.lastIndexOf("!"),
-    beforeWindow.lastIndexOf("?"),
-    beforeWindow.lastIndexOf(";"),
-    beforeWindow.lastIndexOf(","),
-  );
-  const nextBoundaryMatch = afterWindow.match(/[\n.!?;,]/u);
-  const before = beforeWindow.slice(priorBoundary + 1);
+  const clauseBoundaryPattern = /(?:[\n.!?;,]|\s+\b(?:a|ali|and|but|uz)\b\s+)/giu;
+  let beforeStart = 0;
+  for (const match of beforeWindow.matchAll(clauseBoundaryPattern)) {
+    beforeStart = (match.index ?? 0) + match[0].length;
+  }
+  const nextBoundaryMatch = /(?:[\n.!?;,]|\s+\b(?:a|ali|and|but|uz)\b\s+)/iu.exec(afterWindow);
+  const before = beforeWindow.slice(beforeStart);
   const after = nextBoundaryMatch ? afterWindow.slice(0, nextBoundaryMatch.index) : afterWindow;
   return `${before} ${sourceText.slice(tokenStart, tokenEnd)} ${after}`.trim();
 }
@@ -226,6 +223,7 @@ function hasRejectedTimeTokenContext(sourceText: string, tokenStart: number, tok
 
   const nearbyText = `${before} ${after}`;
   const localContext = getLocalTimeTokenContext(sourceText, tokenStart, tokenEnd);
+
   if (
     /(?:\bkapacitet\b|\bcapacity\b|\buzrast\b|\bage(?:s)?\b|\badresa\b|\baddress\b|\bulica\b|\bstreet\b|\bbroj(?:evi)?\b|\bnumber(?:s)?\b)[^.!?\n]{0,18}$/iu.test(before) ||
     /^\s*(?:ljudi|osoba|učesnika|ucesnika|people|persons?|guests?|mesta|places?)\b/iu.test(after)
@@ -242,11 +240,11 @@ function hasRejectedTimeTokenContext(sourceText: string, tokenStart: number, tok
   if (/\b(?:raspon|range)\b/iu.test(localContext)) {
     return true;
   }
-  if (/\b(?:popust|discount|posto)\b|%/iu.test(localContext)) {
+  if (/\b(?:popust|discount|posto|procen(?:at|ata|ta|ti))\b|%/iu.test(localContext)) {
     return true;
   }
   if (
-    /\b(?:radno\s+(?:vreme|vrijeme)|working\s+hours?|opening\s+hours?|business\s+hours?|venue\s+hours?|hours?\s+of\s+operation|open\s+daily|otvoreno|lokal\s+radi|bar\s+hours?)\b/iu.test(
+    /\b(?:radno\s+(?:vreme|vrijeme)|working\s+hours?|opening\s+hours?|business\s+hours?|venue\s+hours?|hours?\s+of\s+operation|open\s+daily|(?:we\s+are|bar\s+is|venue\s+is)\s+open|otvoren(?:o|i|a|e)?(?:\s+smo)?|lokal(?:\s+je)?\s+otvoren|lokal\s+radi|bar\s+hours?)\b/iu.test(
       localContext,
     )
   ) {

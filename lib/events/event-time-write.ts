@@ -34,10 +34,6 @@ export function normalizeEventTimeWritePatch<T extends EventTimeWritePatch>(
     normalized.timeEvidenceText = patch.timeEvidenceText ?? undefined;
   }
 
-  if (patch.time === undefined) {
-    return normalized;
-  }
-
   const provenanceKeys = [
     "timeSource",
     "timeEvidenceText",
@@ -46,7 +42,11 @@ export function normalizeEventTimeWritePatch<T extends EventTimeWritePatch>(
   ] as const;
   const hasAnyProvenance = provenanceKeys.some((key) => Object.hasOwn(patch, key));
 
-  if (!hasAnyProvenance) {
+  if (patch.time === undefined && !hasAnyProvenance) {
+    return normalized;
+  }
+
+  if (patch.time !== undefined && !hasAnyProvenance) {
     return {
       ...normalized,
       timeSource: "unknown",
@@ -64,6 +64,10 @@ export function normalizeEventTimeWritePatch<T extends EventTimeWritePatch>(
     throw new Error(
       "A time update must provide timeSource, timeConfidence, and timeStatus together.",
     );
+  }
+
+  if (!Object.hasOwn(patch, "timeEvidenceText")) {
+    normalized.timeEvidenceText = undefined;
   }
 
   if (!Number.isFinite(patch.timeConfidence) || patch.timeConfidence < 0 || patch.timeConfidence > 1) {
