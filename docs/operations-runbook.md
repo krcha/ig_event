@@ -282,9 +282,12 @@ Clerk profile images and telemetry, and approved Apify images. Production omits
 `unsafe-eval`; local `next dev` adds it because Next requires it and does not
 upgrade local HTTP to HTTPS.
 
-Traefik alone owns `Strict-Transport-Security`. The middleware is attached only
-to the canonical HTTPS router for `events.ineedtofeedmyrabbit.com`; local HTTP
-and noncanonical app origins do not emit HSTS. Verify after deployment:
+Traefik alone owns `Strict-Transport-Security`. The same middleware is defined in
+both supported production Compose paths (`docker-compose.yml` and
+`docker-compose.runtime.yml`) and attached only to the canonical HTTPS router for
+`events.ineedtofeedmyrabbit.com`; local HTTP and noncanonical app origins do not
+emit HSTS. Health and readiness responses explicitly use `Cache-Control: no-store`
+while static assets retain framework-managed public caching. Verify after deployment:
 
 ```bash
 for path in / /sign-in /api/health /does-not-exist; do

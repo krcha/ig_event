@@ -59,6 +59,10 @@ services:
       - traefik.http.routers.ig-event.rule=Host(`events.ineedtofeedmyrabbit.com`)
       - traefik.http.routers.ig-event.tls=true
       - traefik.http.routers.ig-event.tls.certresolver=mytlschallenge
+      - traefik.http.routers.ig-event.middlewares=ig-event-hsts@docker
+      - traefik.http.middlewares.ig-event-hsts.headers.stsSeconds=31536000
+      - traefik.http.middlewares.ig-event-hsts.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.ig-event-hsts.headers.stsPreload=false
       - traefik.http.services.ig-event.loadbalancer.server.port=3000
     ports:
       - "${APP_BIND:-127.0.0.1}:${APP_PORT:-3007}:3000"

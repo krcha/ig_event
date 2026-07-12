@@ -14,6 +14,14 @@ const runtimeComposeSource = fs.readFileSync(
   path.join(root, "docker-compose.runtime.yml"),
   "utf8",
 );
+const imageComposeSource = fs.readFileSync(path.join(root, "docker-compose.yml"), "utf8");
+const dockerfileSource = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
+const healthRouteSource = fs.readFileSync(path.join(root, "app/api/health/route.ts"), "utf8");
+const readyRouteSource = fs.readFileSync(path.join(root, "app/api/ready/route.ts"), "utf8");
+const httpQaSource = fs.readFileSync(
+  path.join(root, "scripts/qa-security-headers-http.mjs"),
+  "utf8",
+);
 
 const productionCsp = buildContentSecurityPolicy({
   clerkOrigin: "https://clerk.events.ineedtofeedmyrabbit.com",
@@ -43,6 +51,10 @@ for (const directive of [
   assert.ok(productionCsp.includes(directive), `Production CSP must include ${directive}`);
 }
 assert.ok(!productionCsp.includes("'unsafe-eval'"), "Production CSP must not allow unsafe-eval.");
+assert.ok(
+  !productionCsp.includes("media-src 'self' blob: https:"),
+  "Production media-src must not allow every HTTPS origin.",
+);
 for (const source of [
   "https://clerk.events.ineedtofeedmyrabbit.com",
   "https://convex-events.ineedtofeedmyrabbit.com",
@@ -76,8 +88,11 @@ assert.ok(!headerMap.has("strict-transport-security"));
 assert.deepEqual(SECURITY_HEADER_OWNERSHIP.canonicalHttpsProxy, ["Strict-Transport-Security"]);
 assert.match(nextConfigSource, /source:\s*["']\/:path\*["']/);
 for (const route of ["/", "/sign-in", "/api/health", "/does-not-exist"]) {
-  assert.ok(route.startsWith("/"), `Global header scope must cover ${route}`);
+  assert.ok(httpQaSource.includes(`["${route}"`), `HTTP QA must request ${route}`);
 }
+assert.match(healthRouteSource, /Cache-Control["']:\s*["']no-store, max-age=0/);
+assert.match(readyRouteSource, /Cache-Control["']:\s*["']no-store, max-age=0/);
+assert.match(dockerfileSource, /\/app\/lib\/security \.\/lib\/security/);
 assert.match(
   runtimeComposeSource,
   /traefik\.http\.routers\.ig-event\.rule=Host\(`events\.ineedtofeedmyrabbit\.com`\)/,
@@ -86,6 +101,10 @@ assert.match(runtimeComposeSource, /traefik\.http\.routers\.ig-event\.middleware
 assert.match(runtimeComposeSource, /ig-event-hsts\.headers\.stsSeconds=31536000/);
 assert.match(runtimeComposeSource, /ig-event-hsts\.headers\.stsIncludeSubdomains=true/);
 assert.match(runtimeComposeSource, /ig-event-hsts\.headers\.stsPreload=false/);
+assert.match(imageComposeSource, /traefik\.http\.routers\.ig-event\.middlewares=ig-event-hsts@docker/);
+assert.match(imageComposeSource, /ig-event-hsts\.headers\.stsSeconds=31536000/);
+assert.match(imageComposeSource, /ig-event-hsts\.headers\.stsIncludeSubdomains=true/);
+assert.match(imageComposeSource, /ig-event-hsts\.headers\.stsPreload=false/);
 
 console.log(
   "Security-header QA passed for production CSP, local development, global routes, and canonical HTTPS HSTS ownership.",

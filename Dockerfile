@@ -43,6 +43,7 @@ RUN npm ci --omit=dev \
 COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/next.config.mjs ./next.config.mjs
+COPY --from=builder --chown=nextjs:nodejs /app/lib/security ./lib/security
 
 USER nextjs
 EXPOSE 3000
