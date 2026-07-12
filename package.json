@@ -46,6 +46,7 @@
     "qa:runtime-config": "node scripts/qa-runtime-config.mjs",
     "qa:convex-retention-cron": "node scripts/qa-convex-retention-cron.mjs",
     "qa:clerk-email-auth": "node scripts/qa-clerk-email-auth.mjs",
+    "qa:user-api-auth": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-user-api-auth.mjs",
     "qa:admin-auth": "node scripts/qa-admin-auth.mjs",
     "qa:release": "node scripts/release-check.mjs",
     "qa:self-hosted-convex-compose": "docker compose --env-file .env.production.example -f docker-compose.yml -f docker-compose.self-hosted-convex.yml config --quiet",
