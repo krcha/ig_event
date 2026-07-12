@@ -1,8 +1,4 @@
-import {
-  formatVenueHoursWindow,
-  getVenueHoursWindowForDate,
-  type VenueHoursCacheFields,
-} from "../venues/venue-hours-cache.ts";
+import type { VenueHoursCacheFields } from "../venues/venue-hours-cache.ts";
 import { looksLikeBareDate } from "./event-validation.ts";
 
 const MISSING_EVENT_TIME_LABELS = new Set([
@@ -20,6 +16,36 @@ const MISSING_EVENT_TIME_LABELS = new Set([
 const TBD_EVENT_TIME_LABELS = new Set(["tbd", "time tbd"]);
 
 export const TBD_EVENT_TIME = "TBD";
+export const UNKNOWN_EVENT_TIME_LABEL = "Time not announced";
+
+export type EventTimeSource =
+  | "alt_text"
+  | "caption"
+  | "description"
+  | "model"
+  | "poster"
+  | "schedule_entry"
+  | "unknown";
+export type EventTimeStatus = "confirmed" | "inferred" | "unknown";
+
+export type EventTimeProvenance = {
+  confidence: number;
+  evidenceText: string | null;
+  source: EventTimeSource;
+  status: EventTimeStatus;
+};
+
+export type EventTimeProvenanceFields = {
+  timeConfidence?: number | null;
+  timeEvidenceText?: string | null;
+  timeSource?: EventTimeSource | null;
+  timeStatus?: EventTimeStatus | null;
+};
+
+export type ExtractedEventTimeEvidence = {
+  evidence: string;
+  time: string;
+};
 
 export type NormalizedEventTime = {
   allDay: boolean;
@@ -29,12 +55,7 @@ export type NormalizedEventTime = {
 };
 
 export type EventDayPeriod = "day" | "night" | "unknown";
-export type EventTimeDisplaySource =
-  | "closed"
-  | "event"
-  | "event_with_venue_hours"
-  | "unknown"
-  | "venue_hours";
+export type EventTimeDisplaySource = "event" | "unknown";
 
 export type ResolvedEventTimeDisplay = {
   dayPeriod: EventDayPeriod;
@@ -151,6 +172,7 @@ const PRICE_OR_AGE_WORD_NEAR_TIME_RE = /(?:\bulaz\b|\bkarte?\b|\btickets?\b|\bpr
 
 type ExtractedEventTimeCandidate = {
   endLabel?: string;
+  evidence: string;
   index: number;
   rawEndToken?: string;
   rawStartToken: string;
@@ -180,6 +202,12 @@ function hasRejectedTimeTokenContext(sourceText: string, tokenStart: number, tok
   }
 
   const nearbyText = `${before} ${after}`;
+  if (
+    /(?:\bkapacitet\b|\bcapacity\b|\buzrast\b|\bage(?:s)?\b|\badresa\b|\baddress\b|\bulica\b|\bstreet\b|\bbroj(?:evi)?\b|\bnumber(?:s)?\b)[^.!?\n]{0,18}$/iu.test(before) ||
+    /^\s*(?:ljudi|osoba|učesnika|ucesnika|people|persons?|guests?|mesta|places?)\b/iu.test(after)
+  ) {
+    return true;
+  }
   if (/^\s*(?:rsd|din(?:ara)?|eur|€|din\b)/iu.test(after) && PRICE_OR_AGE_WORD_NEAR_TIME_RE.test(nearbyText)) {
     return true;
   }
@@ -195,6 +223,7 @@ function buildEventTimeCandidate(options: {
   allowBareEnd?: boolean;
   allowBareStart: boolean;
   endToken?: string;
+  evidence: string;
   index: number;
   rawMatch: string;
   score: number;
@@ -239,6 +268,7 @@ function buildEventTimeCandidate(options: {
 
   return {
     ...(endLabel ? { endLabel, rawEndToken: options.endToken } : {}),
+    evidence: options.evidence,
     index: tokenStart,
     rawStartToken: options.startToken,
     score: options.score,
@@ -256,7 +286,14 @@ function formatExtractedTimeCandidate(candidate: ExtractedEventTimeCandidate): s
  * bare "22:30") while rejecting common dates, prices, and age limits.
  */
 export function extractEventTimeFromText(value: string | null | undefined): string | undefined {
-  const text = value?.replace(/\s+/g, " ").trim();
+  return extractEventTimeEvidenceFromText(value)?.time;
+}
+
+/** Return a normalized clock value together with the exact matched source snippet. */
+export function extractEventTimeEvidenceFromText(
+  value: string | null | undefined,
+): ExtractedEventTimeEvidence | undefined {
+  const text = value?.trim();
   if (!text) {
     return undefined;
   }
@@ -275,6 +312,7 @@ export function extractEventTimeFromText(value: string | null | undefined): stri
     const candidate = buildEventTimeCandidate({
       allowBareStart: true,
       endToken: match[3],
+      evidence: rawMatch.slice((match[1] ?? "").length).trim(),
       index: match.index ?? 0,
       rawMatch,
       score: match[3] ? 120 : 110,
@@ -306,6 +344,7 @@ export function extractEventTimeFromText(value: string | null | undefined): stri
       allowBareEnd: startHasMarker,
       allowBareStart: Boolean(endToken && endHasMarker),
       endToken,
+      evidence: rawMatch.slice((match[1] ?? "").length).trim(),
       index: match.index ?? 0,
       rawMatch,
       score: endToken ? 90 : 80,
@@ -318,7 +357,59 @@ export function extractEventTimeFromText(value: string | null | undefined): stri
   }
 
   candidates.sort((left, right) => right.score - left.score || left.index - right.index);
-  return candidates[0] ? formatExtractedTimeCandidate(candidates[0]) : undefined;
+  return candidates[0]
+    ? {
+        evidence: candidates[0].evidence,
+        time: formatExtractedTimeCandidate(candidates[0]),
+      }
+    : undefined;
+}
+
+export function getEventTimeProvenanceLabel(
+  provenance: EventTimeProvenance | null | undefined,
+): string {
+  if (!provenance || provenance.status === "unknown") {
+    return "No confirmed start-time source";
+  }
+
+  const sourceLabel: Record<EventTimeSource, string> = {
+    alt_text: "poster OCR",
+    caption: "caption",
+    description: "description",
+    model: "AI extraction",
+    poster: "poster",
+    schedule_entry: "schedule row",
+    unknown: "unknown source",
+  };
+  return `${provenance.status === "confirmed" ? "Confirmed" : "Inferred"} from ${sourceLabel[provenance.source]}`;
+}
+
+export function resolveEventTimeProvenance(
+  fields: EventTimeProvenanceFields | null | undefined,
+): EventTimeProvenance {
+  const confidence = fields?.timeConfidence;
+  const evidenceText = fields?.timeEvidenceText?.trim() || null;
+  const source = fields?.timeSource ?? "unknown";
+  const status = fields?.timeStatus ?? "unknown";
+
+  if (status === "unknown" || source === "unknown") {
+    return {
+      confidence: 0,
+      evidenceText: null,
+      source: "unknown",
+      status: "unknown",
+    };
+  }
+
+  return {
+    confidence:
+      typeof confidence === "number" && Number.isFinite(confidence)
+        ? Math.max(0, Math.min(1, confidence))
+        : 0,
+    evidenceText,
+    source,
+    status,
+  };
 }
 
 function shouldExtractTextTimeForTimeField(value: string): boolean {
@@ -422,65 +513,14 @@ export function getDayPeriodForStartTime(value: string | null | undefined): Even
   return minutes >= 8 * 60 && minutes < 18 * 60 ? "day" : "night";
 }
 
-function readDisplayMinutes(value: string | undefined): number | null {
-  if (!value) {
-    return null;
-  }
-
-  const match = /^(\d{2}):(\d{2})$/.exec(value);
-  if (!match) {
-    return null;
-  }
-
-  const hours = Number.parseInt(match[1], 10);
-  const minutes = Number.parseInt(match[2], 10);
-  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
-    return null;
-  }
-
-  return hours * 60 + minutes;
-}
-
-function canUseVenueEndTime(startLabel: string, endLabel: string, spansNextDay?: boolean): boolean {
-  const start = readDisplayMinutes(startLabel);
-  const end = readDisplayMinutes(endLabel);
-  if (start === null || end === null) {
-    return false;
-  }
-
-  return spansNextDay || end > start;
-}
-
 export function resolveEventTimeDisplay(options: {
   date: string;
   time?: string | null;
   venueHours?: VenueHoursCacheFields | null;
 }): ResolvedEventTimeDisplay {
+  // Venue opening hours are separate venue context, never event start-time evidence.
   const eventTime = normalizeEventTime(options.time);
   if (eventTime.startLabel) {
-    const venueWindow = getVenueHoursWindowForDate(
-      options.venueHours,
-      options.date,
-      eventTime.startLabel,
-    );
-    if (
-      !eventTime.endLabel &&
-      venueWindow.status === "open" &&
-      canUseVenueEndTime(
-        eventTime.startLabel,
-        venueWindow.window.end,
-        venueWindow.window.spansNextDay,
-      )
-    ) {
-      return {
-        dayPeriod: getDayPeriodForStartTime(eventTime.startLabel),
-        endLabel: venueWindow.window.end,
-        label: `${eventTime.startLabel}–${venueWindow.window.end}`,
-        source: "event_with_venue_hours",
-        startLabel: eventTime.startLabel,
-      };
-    }
-
     return {
       dayPeriod: getDayPeriodForStartTime(eventTime.startLabel),
       ...(eventTime.endLabel ? { endLabel: eventTime.endLabel } : {}),
@@ -492,36 +532,9 @@ export function resolveEventTimeDisplay(options: {
     };
   }
 
-  if (isTbdEventTime(options.time)) {
-    return {
-      dayPeriod: "unknown",
-      label: TBD_EVENT_TIME,
-      source: "unknown",
-    };
-  }
-
-  const venueWindow = getVenueHoursWindowForDate(options.venueHours, options.date);
-  if (venueWindow.status === "open") {
-    return {
-      dayPeriod: getDayPeriodForStartTime(venueWindow.window.start),
-      endLabel: venueWindow.window.end,
-      label: formatVenueHoursWindow(venueWindow.window),
-      source: "venue_hours",
-      startLabel: venueWindow.window.start,
-    };
-  }
-
-  if (venueWindow.status === "closed") {
-    return {
-      dayPeriod: "unknown",
-      label: "Closed",
-      source: "closed",
-    };
-  }
-
   return {
     dayPeriod: "unknown",
-    label: "TBD",
+    label: UNKNOWN_EVENT_TIME_LABEL,
     source: "unknown",
   };
 }

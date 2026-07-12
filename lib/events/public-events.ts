@@ -8,9 +8,12 @@ import {
 } from "@/lib/events/approved-event-duplicates";
 import {
   getDisplayEventTime,
+  resolveEventTimeProvenance,
   resolveEventTimeDisplay,
   type EventDayPeriod,
   type EventTimeDisplaySource,
+  type EventTimeSource,
+  type EventTimeStatus,
 } from "@/lib/events/event-time";
 import { sortPublicEventsByDateVenueTimeTitle } from "@/lib/events/public-event-sort";
 import {
@@ -41,6 +44,10 @@ export type PublicEvent = {
   title: string;
   date: string;
   time?: string;
+  timeSource?: EventTimeSource;
+  timeEvidenceText?: string;
+  timeConfidence?: number;
+  timeStatus?: EventTimeStatus;
   dayPeriod?: EventDayPeriod;
   displayTimeEnd?: string;
   displayTimeLabel?: string;
@@ -444,6 +451,7 @@ function normalizePublicEvent(
       ? eventTypeFromVenueCategory(venueCategory ?? eventVenueCategory)
       : canonicalEventType;
   const time = getDisplayEventTime(event.time);
+  const timeProvenance = resolveEventTimeProvenance(event);
   const displayTime = resolveEventTimeDisplay({
     date: event.date,
     time: event.time,
@@ -454,6 +462,12 @@ function normalizePublicEvent(
     ...event,
     venueId,
     ...(time ? { time } : { time: undefined }),
+    timeSource: timeProvenance.source,
+    ...(timeProvenance.evidenceText
+      ? { timeEvidenceText: timeProvenance.evidenceText }
+      : { timeEvidenceText: undefined }),
+    timeConfidence: timeProvenance.confidence,
+    timeStatus: timeProvenance.status,
     dayPeriod: displayTime.dayPeriod,
     ...(displayTime.endLabel ? { displayTimeEnd: displayTime.endLabel } : {}),
     displayTimeLabel: displayTime.label,

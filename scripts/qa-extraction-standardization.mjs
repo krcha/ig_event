@@ -29,6 +29,7 @@ import {
 import {
   extractEventTimeFromText,
   TBD_EVENT_TIME,
+  UNKNOWN_EVENT_TIME_LABEL,
   normalizeEventTime,
   resolveEventTimeDisplay,
 } from "../lib/events/event-time.ts";
@@ -1436,7 +1437,7 @@ function runDescriptionStartTimeQa() {
   );
   const rawTimeFields = readPreparedNormalizedFields(rawTimeTextEvent);
   assert.equal(rawTimeTextEvent.event.time, "22:30");
-  assert.equal(rawTimeFields.timeSource, "extracted_time");
+  assert.equal(rawTimeFields.timeSource, "model");
 
   const dateRangeTextEvent = assertSingleOkPreparedEvent(
     prepareEventsForInsert(
@@ -1472,7 +1473,7 @@ function runScheduleConsistencyQa() {
   assert.equal(normalizeEventTime("19.30").startLabel, "19:30");
   assert.equal(
     resolveEventTimeDisplay({ date: "2026-06-20", time: TBD_EVENT_TIME }).label,
-    TBD_EVENT_TIME,
+    UNKNOWN_EVENT_TIME_LABEL,
   );
 
   const fridayIsoDate = nextIsoDateForWeekday(5);

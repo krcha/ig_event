@@ -3,6 +3,8 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { EventTimeProvenanceText } from "@/components/events/event-time-provenance-text";
+import type { EventTimeSource, EventTimeStatus } from "@/lib/events/event-time";
 import { getModerationQueuePriorityScore } from "@/lib/events/moderation-queue";
 import {
   AUTO_APPROVE_CONFIDENCE_THRESHOLD,
@@ -41,6 +43,10 @@ type ModerationEvent = {
   title: string;
   date: string;
   time: string | null;
+  timeSource: EventTimeSource;
+  timeEvidenceText: string | null;
+  timeConfidence: number;
+  timeStatus: EventTimeStatus;
   venue: string;
   artists: string[];
   description: string | null;
@@ -1750,6 +1756,14 @@ export function ModerationDashboard() {
                         {" · "}
                         {event.venue}
                       </p>
+                      <EventTimeProvenanceText
+                        className="mt-1 max-w-2xl"
+                        time={event.time}
+                        timeConfidence={event.timeConfidence}
+                        timeEvidenceText={event.timeEvidenceText}
+                        timeSource={event.timeSource}
+                        timeStatus={event.timeStatus}
+                      />
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         Queued {formatDateTime(event.createdAt)}
                         {" · "}

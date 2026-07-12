@@ -13,6 +13,7 @@ const checks = [
   { script: "qa:automerge", timeoutMs: 60_000 },
   { script: "qa:master-review", timeoutMs: 60_000 },
   { script: "qa:extraction", timeoutMs: 60_000 },
+  { script: "qa:event-time-provenance", timeoutMs: 60_000 },
   { script: "qa:moderation-queue", timeoutMs: 60_000 },
   { script: "qa:ingestion-triage", timeoutMs: 60_000 },
   { script: "qa:venue-types", timeoutMs: 60_000 },

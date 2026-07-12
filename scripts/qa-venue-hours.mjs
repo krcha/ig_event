@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import {
   TBD_EVENT_TIME,
+  UNKNOWN_EVENT_TIME_LABEL,
   getDayPeriodForStartTime,
   resolveEventTimeDisplay,
 } from "../lib/events/event-time.ts";
@@ -135,12 +136,11 @@ assert.deepEqual(
   }),
   {
     dayPeriod: "night",
-    endLabel: "02:00",
-    label: "21:00–02:00",
-    source: "event_with_venue_hours",
+    label: "21:00",
+    source: "event",
     startLabel: "21:00",
   },
-  "Venue closing time should fill a missing event end time.",
+  "Venue closing time must stay separate from a missing event end time.",
 );
 
 assert.deepEqual(
@@ -158,8 +158,8 @@ assert.deepEqual(
       }),
     },
   }).label,
-  "21:00–02:00",
-  "Venue fallback should choose the opening window containing the event start.",
+  "21:00",
+  "Venue hours must not extend an event start into an unsupported range.",
 );
 
 assert.deepEqual(
@@ -176,7 +176,7 @@ assert.deepEqual(
   }),
   {
     dayPeriod: "unknown",
-    label: TBD_EVENT_TIME,
+    label: UNKNOWN_EVENT_TIME_LABEL,
     source: "unknown",
   },
   "Explicit TBD event time should not be replaced by venue hours.",
@@ -194,13 +194,11 @@ assert.deepEqual(
     },
   }),
   {
-    dayPeriod: "night",
-    endLabel: "02:00",
-    label: "18:00–02:00",
-    source: "venue_hours",
-    startLabel: "18:00",
+    dayPeriod: "unknown",
+    label: UNKNOWN_EVENT_TIME_LABEL,
+    source: "unknown",
   },
-  "Missing event time should fall back to the venue opening window.",
+  "Missing event time must remain unknown instead of using venue hours.",
 );
 
 assert.equal(
@@ -210,13 +208,13 @@ assert.equal(
       hoursJson: createHoursJson({ closed: true, day: 3, windows: [] }),
     },
   }).label,
-  "Closed",
-  "Closed venue hours should render a closed fallback.",
+  UNKNOWN_EVENT_TIME_LABEL,
+  "Closed venue hours must remain separate from event-time display.",
 );
 
 assert.equal(
   resolveEventTimeDisplay({ date: WEDNESDAY }).label,
-  "TBD",
+  UNKNOWN_EVENT_TIME_LABEL,
   "Missing event time and missing venue hours should render the unknown fallback.",
 );
 

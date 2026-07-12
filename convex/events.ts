@@ -24,6 +24,20 @@ const eventStatus = v.union(
   v.literal("rejected"),
 );
 const promotionTier = v.union(v.literal("featured"), v.literal("promoted"));
+const eventTimeSource = v.union(
+  v.literal("alt_text"),
+  v.literal("caption"),
+  v.literal("description"),
+  v.literal("model"),
+  v.literal("poster"),
+  v.literal("schedule_entry"),
+  v.literal("unknown"),
+);
+const eventTimeStatus = v.union(
+  v.literal("confirmed"),
+  v.literal("inferred"),
+  v.literal("unknown"),
+);
 const moderationStatus = v.union(v.literal("approved"), v.literal("rejected"));
 const DEFAULT_EXPIRED_EVENT_DELETE_BATCH_SIZE = 100;
 const DISCOVER_ORGANIC_SCAN_LIMIT = 120;
@@ -387,6 +401,10 @@ function toPublicCalendarEvent(event: Doc<"events">) {
     ...(event.instagramPostUrl ? { instagramPostUrl: event.instagramPostUrl } : {}),
     ...(event.ticketPrice ? { ticketPrice: event.ticketPrice } : {}),
     ...(event.time ? { time: event.time } : {}),
+    ...(event.timeSource ? { timeSource: event.timeSource } : {}),
+    ...(event.timeEvidenceText ? { timeEvidenceText: event.timeEvidenceText } : {}),
+    ...(event.timeConfidence !== undefined ? { timeConfidence: event.timeConfidence } : {}),
+    ...(event.timeStatus ? { timeStatus: event.timeStatus } : {}),
     ...(event.venueCategory ? { venueCategory: event.venueCategory } : {}),
     ...(event.venueId ? { venueId: event.venueId } : {}),
     ...(event.venueInstagramHandle
@@ -677,6 +695,10 @@ export const createEvent = mutation({
     title: v.string(),
     date: v.string(),
     time: v.optional(v.string()),
+    timeSource: v.optional(eventTimeSource),
+    timeEvidenceText: v.optional(v.string()),
+    timeConfidence: v.optional(v.number()),
+    timeStatus: v.optional(eventTimeStatus),
     venue: v.string(),
     artists: v.array(v.string()),
     description: v.optional(v.string()),
@@ -727,6 +749,10 @@ export const updateEvent = mutation({
       title: v.optional(v.string()),
       date: v.optional(v.string()),
       time: v.optional(v.string()),
+      timeSource: v.optional(eventTimeSource),
+      timeEvidenceText: v.optional(v.string()),
+      timeConfidence: v.optional(v.number()),
+      timeStatus: v.optional(eventTimeStatus),
       venue: v.optional(v.string()),
       artists: v.optional(v.array(v.string())),
       description: v.optional(v.string()),
@@ -880,6 +906,10 @@ export const mergeApprovedEvents = mutation({
       title: v.optional(v.string()),
       date: v.optional(v.string()),
       time: v.optional(v.string()),
+      timeSource: v.optional(eventTimeSource),
+      timeEvidenceText: v.optional(v.string()),
+      timeConfidence: v.optional(v.number()),
+      timeStatus: v.optional(eventTimeStatus),
       venue: v.optional(v.string()),
       artists: v.optional(v.array(v.string())),
       description: v.optional(v.string()),
