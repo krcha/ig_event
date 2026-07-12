@@ -20,16 +20,24 @@ export type VenueLifecycleMigrationRecord = VenueLifecycleFields & {
   instagramHandle?: string;
 };
 
+export type VenueLifecycleRollbackValues = {
+  isActive: boolean | null;
+  publicStatus: VenuePublicStatus | null;
+  scrapeActive: boolean | null;
+};
+
 export type VenueLifecycleMigrationChange = {
   id: string;
   instagramHandle: string | null;
   before: VenueLifecycleFields;
   apply: Required<Pick<VenueLifecycleFields, "publicStatus" | "scrapeActive">>;
-  rollback: {
-    isActive: boolean | null;
-    publicStatus: VenuePublicStatus | null;
-    scrapeActive: boolean | null;
-  };
+  rollback: VenueLifecycleRollbackValues;
+};
+
+export type VenueLifecycleRollbackManifestRecord = {
+  id: string;
+  instagramHandle: string | null;
+  rollback: VenueLifecycleRollbackValues;
 };
 
 export type VenueLifecycleMigrationPlan = {
@@ -146,4 +154,14 @@ export function buildVenueLifecycleMigrationPlan(
   }
 
   return { counts, changes };
+}
+
+export function buildVenueLifecycleRollbackManifest(
+  changes: VenueLifecycleMigrationChange[],
+): VenueLifecycleRollbackManifestRecord[] {
+  return changes.map((change) => ({
+    id: change.id,
+    instagramHandle: change.instagramHandle,
+    rollback: { ...change.rollback },
+  }));
 }

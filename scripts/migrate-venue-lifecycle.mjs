@@ -1,4 +1,5 @@
 import process from "node:process";
+import { writeFileSync } from "node:fs";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api.js";
 
@@ -6,9 +7,10 @@ const CONFIRMATION = "APPLY_VENUE_LIFECYCLE";
 
 function usage() {
   return [
-    "Usage: npm run migrate:venue-lifecycle -- [--apply --confirm APPLY_VENUE_LIFECYCLE --backup-reference REF] [--limit N]",
+    "Usage: npm run migrate:venue-lifecycle -- [--rollback-manifest PATH] [--apply --confirm APPLY_VENUE_LIFECYCLE --backup-reference REF] [--limit N]",
     "",
-    "Dry-run is the default. It reports migration counts and rollbackMapping without writing data.",
+    "Dry-run is the default. It reports migration counts and the complete exact rollbackManifest without writing data.",
+    "Use --rollback-manifest PATH to export the complete per-record rollback manifest as JSON.",
     "Apply mode requires a verified Convex backup reference and an explicit confirmation token.",
   ].join("\n");
 }
@@ -26,6 +28,7 @@ function parseArgs(argv) {
   let backupReference = "";
   let confirm = "";
   let limit = 50;
+  let rollbackManifestPath = "";
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -49,11 +52,18 @@ function parseArgs(argv) {
       limit = readPositiveInteger(argv[++index], "--limit");
       continue;
     }
+    if (arg === "--rollback-manifest") {
+      rollbackManifestPath = argv[++index]?.trim() ?? "";
+      if (!rollbackManifestPath) {
+        throw new Error("--rollback-manifest requires a path.");
+      }
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
 
   const dryRun = !apply;
-  return { apply, backupReference, confirm, dryRun, limit };
+  return { apply, backupReference, confirm, dryRun, limit, rollbackManifestPath };
 }
 
 async function main() {
@@ -77,6 +87,14 @@ async function main() {
     serviceSecret,
   });
   console.log(JSON.stringify({ dryRun: options.dryRun, ...preview }, null, 2));
+  if (options.rollbackManifestPath) {
+    writeFileSync(
+      options.rollbackManifestPath,
+      `${JSON.stringify(preview.rollbackManifest, null, 2)}\n`,
+      "utf8",
+    );
+    console.error(`Wrote ${preview.rollbackManifest.length} rollback records to ${options.rollbackManifestPath}.`);
+  }
 
   if (options.dryRun || preview.counts.needsMigration === 0) return;
 

@@ -2,10 +2,15 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   buildVenueLifecycleMigrationPlan,
+  buildVenueLifecycleRollbackManifest,
   getEffectiveVenueLifecycle,
   isVenuePublic,
   isVenueScrapeActive,
 } from "../lib/venues/venue-lifecycle.ts";
+import {
+  sanitizeVenueLinkedPublicEventFields,
+  VENUE_LINKED_PUBLIC_EVENT_FIELDS,
+} from "../lib/events/public-event-venue-fields.ts";
 
 const stateMatrix = [
   {
@@ -65,6 +70,46 @@ for (const fixture of stateMatrix) {
   assert.equal(effective.publicStatus, fixture.publicStatus, fixture.label);
   assert.equal(isVenueScrapeActive(fixture.input), fixture.scrapeActive, fixture.label);
   assert.equal(isVenuePublic(fixture.input), fixture.public, fixture.label);
+}
+
+const venueLeakageEvent = {
+  _id: "event-with-private-venue",
+  title: "Event remains public",
+  venue: "Private Venue Name",
+  sourceCaption: "Exact source caption must remain available.",
+  venueCategory: "club",
+  venueHours: { hoursJson: "secret-hours" },
+  venueId: "private-venue-id",
+  venueInstagramHandle: "private.handle",
+  venueLatitude: 44.8125,
+  venueLocation: "Private location",
+  venueLongitude: 20.4612,
+};
+const privateVenueFixtures = [
+  {
+    label: "new pending venue",
+    venue: { scrapeActive: true, publicStatus: "pending" },
+  },
+  {
+    label: "legacy-active venue explicitly hidden",
+    venue: { isActive: true, publicStatus: "hidden" },
+  },
+];
+for (const fixture of privateVenueFixtures) {
+  const sanitized = sanitizeVenueLinkedPublicEventFields(
+    venueLeakageEvent,
+    isVenuePublic(fixture.venue),
+  );
+  assert.equal(sanitized._id, venueLeakageEvent._id, `${fixture.label}: preserve event`);
+  assert.equal(
+    sanitized.sourceCaption,
+    venueLeakageEvent.sourceCaption,
+    `${fixture.label}: preserve source caption`,
+  );
+  assert.equal(sanitized.venue, venueLeakageEvent.venue, `${fixture.label}: preserve venue text`);
+  for (const field of VENUE_LINKED_PUBLIC_EVENT_FIELDS) {
+    assert.equal(field in sanitized, false, `${fixture.label}: remove ${field}`);
+  }
 }
 
 const migrationPlan = buildVenueLifecycleMigrationPlan([
@@ -157,6 +202,6 @@ assert.match(migrationSource, /(?:dryRun:\s*!apply|const dryRun = !apply)/);
 assert.match(migrationSource, /--backup-reference/);
 assert.match(migrationSource, /--confirm/);
 assert.match(migrationSource, /APPLY_VENUE_LIFECYCLE/);
-assert.match(migrationSource, /rollbackMapping/);
+assert.match(migrationSource, /rollbackManifest/);
 
 console.log("Venue lifecycle state-matrix and leakage QA passed.");

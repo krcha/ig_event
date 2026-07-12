@@ -6,6 +6,7 @@ import { normalizeHandle, toSearchableText } from "../lib/pipeline/venue-normali
 import { canonicalizeVenueCategory } from "../lib/taxonomy/venue-types";
 import {
   buildVenueLifecycleMigrationPlan,
+  buildVenueLifecycleRollbackManifest,
   getEffectiveVenueLifecycle,
   isVenuePublic,
   isVenueScrapeActive,
@@ -806,9 +807,10 @@ export const previewVenueLifecycleMigration = query({
     return {
       counts: plan.counts,
       sampleChanges: plan.changes.slice(0, 20),
+      rollbackManifest: buildVenueLifecycleRollbackManifest(plan.changes),
       rollbackMapping: {
         beforeIndependentEdits:
-          "restore isActive from rollback.isActive and remove scrapeActive/publicStatus",
+          "restore each isActive, scrapeActive, and publicStatus field from its rollback value; null means remove only that field, otherwise set the exact value",
         afterIndependentEdits:
           "restore the referenced Convex backup; one legacy boolean cannot preserve independent states",
       },
@@ -855,7 +857,7 @@ export const applyVenueLifecycleMigrationBatch = mutation({
         before,
         after,
         createdAt: now,
-        note: `backup=${backupReference}; rollback=remove scrapeActive/publicStatus; legacy isActive retained`,
+        note: `backup=${backupReference}; rollback=${JSON.stringify(change.rollback)}`,
         venueId: venue._id,
       });
       applied += 1;

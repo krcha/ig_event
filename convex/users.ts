@@ -2,6 +2,7 @@ import type { UserIdentity } from "convex/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
+import { sanitizeVenueLinkedPublicEventFields } from "../lib/events/public-event-venue-fields";
 import { isVenuePublic } from "../lib/venues/venue-lifecycle";
 import { isAdminSubject, requireViewerIdentity } from "./authz";
 
@@ -83,20 +84,18 @@ function notNull<T>(value: T | null): value is T {
   return value !== null;
 }
 
-async function hideNonPublicVenueLink(
+async function sanitizeSavedEventVenueFields(
   ctx: QueryCtx,
   event: Doc<"events">,
-): Promise<Doc<"events"> | Omit<Doc<"events">, "venueId">> {
+): Promise<Doc<"events">> {
   if (!event.venueId) {
     return event;
   }
   const venue = await ctx.db.get(event.venueId);
-  if (venue && isVenuePublic(venue)) {
-    return event;
-  }
-  const { venueId: _hiddenVenueId, ...publicEvent } = event;
-  void _hiddenVenueId;
-  return publicEvent;
+  return sanitizeVenueLinkedPublicEventFields(
+    event,
+    venue !== null && isVenuePublic(venue),
+  );
 }
 
 async function loadLibraryForUser(ctx: QueryCtx, userId: string) {
@@ -116,7 +115,7 @@ async function loadLibraryForUser(ctx: QueryCtx, userId: string) {
     .filter(notNull)
     .filter((event) => event.status === "approved");
   const savedEvents = await Promise.all(
-    approvedSavedEvents.map((event) => hideNonPublicVenueLink(ctx, event)),
+    approvedSavedEvents.map((event) => sanitizeSavedEventVenueFields(ctx, event)),
   );
   const favoriteVenues = (
     await Promise.all(favoriteRefs.map((ref) => ctx.db.get(ref.venueId)))
