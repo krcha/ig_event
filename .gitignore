@@ -11,32 +11,42 @@
 !.yarn/releases
 !.yarn/versions
 
-# testing
+# root-level generated test output
 /coverage/
-**/test-results/
-**/test-results */
-**/playwright-report/
-**/playwright-report */
-**/blob-report/
-**/blob-report */
-**/traces/
-**/screenshots/
-*.trace
-trace.zip
+/test-results/
+/test-results */
+/playwright-report/
+/playwright-report */
+/blob-report/
+/blob-report */
+/traces/
+/screenshots/
+/*.trace
+/trace.zip
 
-# next.js
+# next.js root output
 /.next/
 /.next */
 /out/
 /out */
 
-# production
+# production root output
 /build/
 /build */
 
-# scratch files and copy-style duplicates
+# scratch scripts and copy-style source duplicates
 /scripts/tmp-*
-**/* 2.*
+/app/**/* [0-9]*.[jt]s
+/app/**/* [0-9]*.[jt]sx
+/components/**/* [0-9]*.[jt]s
+/components/**/* [0-9]*.[jt]sx
+/convex/**/* [0-9]*.[jt]s
+/convex/**/* [0-9]*.[jt]sx
+/lib/**/* [0-9]*.[jt]s
+/lib/**/* [0-9]*.[jt]sx
+/scripts/**/* [0-9]*.[cm][jt]s
+/scripts/**/* [0-9]*.[jt]s
+/scripts/**/* [0-9]*.[jt]sx
 
 # misc
 .DS_Store
