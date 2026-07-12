@@ -1471,6 +1471,11 @@ function runDescriptionStartTimeQa() {
     "Popust od 10 do 20%",
     "Radno vreme: od 9 do 17",
     "Working hours from 9 to 17",
+    "Open daily from 9 to 17",
+    "Otvoreno od 9 do 17",
+    "Lokal radi od 9 do 17",
+    "Bar hours: 9h-17h",
+    "Od 10 do 20 posto popusta",
   ];
   for (const [index, unsupportedText] of unsupportedTimeContexts.entries()) {
     for (const evidencePath of ["caption", "ocr"]) {
@@ -1508,6 +1513,46 @@ function runDescriptionStartTimeQa() {
       assert.equal(unsupportedTimeEvent.event.timeConfidence, 0);
       assert.equal(unsupportedTimeEvent.event.timeStatus, "unknown");
       assert.equal(unsupportedTimeEvent.event.timeEvidenceText, undefined);
+    }
+  }
+
+  for (const [index, mixedText] of [
+    "Ulaz od 18 godina, početak u 21h",
+    "Popust 20% pre 22h, početak u 21h",
+    "Radno vreme do 17, koncert počinje u 21h",
+  ].entries()) {
+    for (const evidencePath of ["caption", "ocr"]) {
+      const mixedTimeEvent = assertSingleOkPreparedEvent(
+        prepareEventsForInsert(
+          makeInstagramPost({
+            caption: evidencePath === "caption" ? mixedText : "QA event announcement.",
+            altText: evidencePath === "ocr" ? mixedText : null,
+            postType: "image",
+            username: "kcgrad",
+          }),
+          makeExtractedEvent({
+            title: `Mixed ${evidencePath} Time ${index}`,
+            date: isoDateDaysFromNow(13),
+            time: "",
+            venue: "KC Grad",
+            artists: ["QA DJ"],
+            description: "Nightlife event.",
+            confidence: 0.95,
+            source_caption: "",
+            field_confirmation: makeFieldConfirmation(0.95),
+          }),
+          "https://cdn.example.com/poster.jpg",
+          {},
+          {},
+          {},
+        ),
+      );
+      assert.equal(mixedTimeEvent.event.time, "21:00");
+      assert.equal(
+        mixedTimeEvent.event.timeSource,
+        evidencePath === "caption" ? "caption" : "alt_text",
+      );
+      assert.equal(mixedTimeEvent.event.timeStatus, "inferred");
     }
   }
 }

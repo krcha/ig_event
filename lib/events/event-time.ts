@@ -205,8 +205,9 @@ function getLocalTimeTokenContext(
     beforeWindow.lastIndexOf("!"),
     beforeWindow.lastIndexOf("?"),
     beforeWindow.lastIndexOf(";"),
+    beforeWindow.lastIndexOf(","),
   );
-  const nextBoundaryMatch = afterWindow.match(/[\n.!?;]/u);
+  const nextBoundaryMatch = afterWindow.match(/[\n.!?;,]/u);
   const before = beforeWindow.slice(priorBoundary + 1);
   const after = nextBoundaryMatch ? afterWindow.slice(0, nextBoundaryMatch.index) : afterWindow;
   return `${before} ${sourceText.slice(tokenStart, tokenEnd)} ${after}`.trim();
@@ -241,11 +242,11 @@ function hasRejectedTimeTokenContext(sourceText: string, tokenStart: number, tok
   if (/\b(?:raspon|range)\b/iu.test(localContext)) {
     return true;
   }
-  if (/\b(?:popust|discount)\b|%/iu.test(localContext)) {
+  if (/\b(?:popust|discount|posto)\b|%/iu.test(localContext)) {
     return true;
   }
   if (
-    /\b(?:radno\s+(?:vreme|vrijeme)|working\s+hours?|opening\s+hours?|business\s+hours?|venue\s+hours?|hours?\s+of\s+operation)\b/iu.test(
+    /\b(?:radno\s+(?:vreme|vrijeme)|working\s+hours?|opening\s+hours?|business\s+hours?|venue\s+hours?|hours?\s+of\s+operation|open\s+daily|otvoreno|lokal\s+radi|bar\s+hours?)\b/iu.test(
       localContext,
     )
   ) {

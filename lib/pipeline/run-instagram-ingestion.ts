@@ -4300,9 +4300,7 @@ export function buildDuplicateUpdatePatch(
       date: next.date,
       ...(next.time ? { time: next.time } : {}),
       timeSource: next.timeSource,
-      ...(next.timeEvidenceText !== undefined
-        ? { timeEvidenceText: next.timeEvidenceText }
-        : {}),
+      timeEvidenceText: next.timeEvidenceText,
       timeConfidence: next.timeConfidence,
       timeStatus: next.timeStatus,
       venue: next.venue,

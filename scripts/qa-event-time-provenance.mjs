@@ -7,6 +7,7 @@ import {
   getEventTimeProvenanceLabel,
   resolveEventTimeDisplay,
 } from "../lib/events/event-time.ts";
+import { normalizeEventTimeWritePatch } from "../lib/events/event-time-write.ts";
 import { getNightlifeDefaultDateKey } from "../lib/events/nightlife-date.ts";
 import { buildDuplicateUpdatePatch } from "../lib/pipeline/run-instagram-ingestion.ts";
 
@@ -26,6 +27,9 @@ for (const [text, expected] of [
   ["Music from 9 to 17", "09:00-17:00"],
   ["Event at 9", "09:00"],
   ["22h - 05h", "22:00-05:00"],
+  ["Ulaz od 18 godina, početak u 21h", "21:00"],
+  ["Popust 20% pre 22h, početak u 21h", "21:00"],
+  ["Radno vreme do 17, koncert počinje u 21h", "21:00"],
 ]) {
   assert.equal(extractEventTimeEvidenceFromText(text)?.time, expected, `time evidence: ${text}`);
 }
@@ -41,6 +45,11 @@ for (const text of [
   "Popust od 10 do 20%",
   "Radno vreme: od 9 do 17",
   "Working hours from 9 to 17",
+  "Open daily from 9 to 17",
+  "Otvoreno od 9 do 17",
+  "Lokal radi od 9 do 17",
+  "Bar hours: 9h-17h",
+  "Od 10 do 20 posto popusta",
   "Adresa: Knez Mihailova 21",
   "Address: 21 Main Street",
   "Kapacitet 20 ljudi",
@@ -102,8 +111,42 @@ assert.equal(unknownDuplicateRepair.patch.timeConfidence, 0);
 assert.equal(unknownDuplicateRepair.patch.timeStatus, "unknown");
 assert.equal(
   Object.hasOwn(unknownDuplicateRepair.patch, "timeEvidenceText"),
-  false,
-  "Duplicate repair must not overwrite evidence with an undefined value.",
+  true,
+  "Duplicate repair must explicitly clear stale evidence.",
+);
+assert.equal(unknownDuplicateRepair.patch.timeEvidenceText, undefined);
+
+assert.deepEqual(normalizeEventTimeWritePatch({ time: "22:00" }), {
+  time: "22:00",
+  timeSource: "unknown",
+  timeEvidenceText: undefined,
+  timeConfidence: 0,
+  timeStatus: "unknown",
+});
+assert.deepEqual(
+  normalizeEventTimeWritePatch({
+    time: "21:00",
+    timeSource: "caption",
+    timeEvidenceText: "Početak 21H",
+    timeConfidence: 0.95,
+    timeStatus: "confirmed",
+  }),
+  {
+    time: "21:00",
+    timeSource: "caption",
+    timeEvidenceText: "Početak 21H",
+    timeConfidence: 0.95,
+    timeStatus: "confirmed",
+  },
+);
+assert.equal(
+  normalizeEventTimeWritePatch({ timeEvidenceText: null }).timeEvidenceText,
+  undefined,
+  "Null evidence must translate to a Convex field removal.",
+);
+assert.throws(
+  () => normalizeEventTimeWritePatch({ time: "21:00", timeSource: "caption" }),
+  /must provide timeSource, timeConfidence, and timeStatus together/,
 );
 
 assert.equal(
@@ -197,6 +240,16 @@ for (const field of ["timeSource", "timeEvidenceText", "timeConfidence", "timeSt
   assert.ok(adminApiSource.includes(field), `Moderation API should include ${field}.`);
   assert.ok(moderationSource.includes(field), `Moderation UI should consume ${field}.`);
 }
+assert.ok(eventsSource.includes("normalizeEventTimeWritePatch"));
+assert.match(
+  eventsSource,
+  /export const updateEvent[\s\S]*?normalizeEventTimeWritePatch\(args\.patch\)/,
+);
+assert.match(
+  eventsSource,
+  /export const mergeApprovedEvents[\s\S]*?normalizeEventTimeWritePatch\(args\.patch\)/,
+);
+assert.match(eventsSource, /timeEvidenceText:\s*v\.optional\(v\.union\(v\.string\(\), v\.null\(\)\)\)/);
 assert.ok(calendarSource.includes("EventTimeProvenanceText"));
 assert.ok(detailSource.includes("EventTimeProvenanceText"));
 assert.ok(calendarSource.includes("Time not announced") || calendarSource.includes("UNKNOWN_EVENT_TIME_LABEL"));

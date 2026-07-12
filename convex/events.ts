@@ -9,6 +9,7 @@ import {
   getEventExpiryCutoff,
   isEventExpiredAtCutoff,
 } from "../lib/events/event-retention";
+import { normalizeEventTimeWritePatch } from "../lib/events/event-time-write";
 import {
   buildCanonicalVenueNamesByHandle,
   canonicalizeVenueNameDetailed,
@@ -696,7 +697,7 @@ export const createEvent = mutation({
     date: v.string(),
     time: v.optional(v.string()),
     timeSource: v.optional(eventTimeSource),
-    timeEvidenceText: v.optional(v.string()),
+    timeEvidenceText: v.optional(v.union(v.string(), v.null())),
     timeConfidence: v.optional(v.number()),
     timeStatus: v.optional(eventTimeStatus),
     venue: v.string(),
@@ -724,8 +725,9 @@ export const createEvent = mutation({
     void _serviceSecret;
     const now = Date.now();
     const venueFields = await resolveVenueDenormalizedFields(ctx, eventArgs.venue);
+    const normalizedEventArgs = normalizeEventTimeWritePatch(eventArgs);
     const eventId = await ctx.db.insert("events", {
-      ...eventArgs,
+      ...normalizedEventArgs,
       ...venueFields,
       eventType: canonicalizeEventType(eventArgs.eventType),
       status: eventArgs.status ?? "pending",
@@ -735,7 +737,7 @@ export const createEvent = mutation({
 
     await writeEventAuditLog(ctx, eventId, "created", {
       actor,
-      patch: eventArgs,
+      patch: normalizedEventArgs,
     });
 
     return eventId;
@@ -750,7 +752,7 @@ export const updateEvent = mutation({
       date: v.optional(v.string()),
       time: v.optional(v.string()),
       timeSource: v.optional(eventTimeSource),
-      timeEvidenceText: v.optional(v.string()),
+      timeEvidenceText: v.optional(v.union(v.string(), v.null())),
       timeConfidence: v.optional(v.number()),
       timeStatus: v.optional(eventTimeStatus),
       venue: v.optional(v.string()),
@@ -784,7 +786,7 @@ export const updateEvent = mutation({
         ? await resolveVenueDenormalizedFields(ctx, args.patch.venue)
         : {};
     const patch = {
-      ...args.patch,
+      ...normalizeEventTimeWritePatch(args.patch),
       ...venueFields,
       ...(args.patch.eventType !== undefined
         ? { eventType: canonicalizeEventType(args.patch.eventType) }
@@ -907,7 +909,7 @@ export const mergeApprovedEvents = mutation({
       date: v.optional(v.string()),
       time: v.optional(v.string()),
       timeSource: v.optional(eventTimeSource),
-      timeEvidenceText: v.optional(v.string()),
+      timeEvidenceText: v.optional(v.union(v.string(), v.null())),
       timeConfidence: v.optional(v.number()),
       timeStatus: v.optional(eventTimeStatus),
       venue: v.optional(v.string()),
@@ -947,7 +949,7 @@ export const mergeApprovedEvents = mutation({
           ? await resolveVenueDenormalizedFields(ctx, args.patch.venue)
           : {};
       const patch = {
-        ...args.patch,
+        ...normalizeEventTimeWritePatch(args.patch),
         ...venueFields,
         ...(args.patch.eventType !== undefined
           ? { eventType: canonicalizeEventType(args.patch.eventType) }
