@@ -4,6 +4,7 @@ import process from "node:process";
 const DEFAULT_TIMEOUT_MS = 120_000;
 
 const checks = [
+  { script: "qa:repo-hygiene", timeoutMs: 30_000 },
   { script: "lint", timeoutMs: 120_000 },
   { script: "typecheck", timeoutMs: 180_000 },
   { script: "build", timeoutMs: 900_000 },

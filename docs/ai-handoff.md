@@ -31,8 +31,8 @@ Current priorities from `DEVELOPMENT_PLAN.md`:
 
 Known current follow-up:
 
-- `npm run qa:release` is the intended deterministic gate and includes
-  `next build`.
+- `npm run qa:release` is the intended deterministic gate. It starts with the
+  repository hygiene guard and includes `next build`.
 - Treat any build failure or timeout as a normal release blocker before handoff
   or production rollout.
 
@@ -355,6 +355,9 @@ calls the job POST route, the job will not keep advancing.
 
 Use these scripts:
 
+- `npm run qa:repo-hygiene`: checks tracked paths for generated output,
+  temporary scripts, and copy-style source duplicates, with deterministic
+  accepted/rejected matcher fixtures.
 - `npm run lint`: ESLint.
 - `npm run typecheck`: TypeScript.
 - `npm run qa:dedupe`: deterministic duplicate QA.
@@ -362,10 +365,10 @@ Use these scripts:
 - `npm run qa:extraction`: deterministic extraction/normalization QA.
 - `npm run qa:clerk-email-auth`: static QA for the custom Clerk email
   sign-in/sign-up flow and social-provider guardrails.
-- `npm run qa:release`: runs lint, typecheck, `next build`, dedupe QA,
-  automerge QA, extraction QA, venue taxonomy QA, public search QA, Apify
-  cost-control QA, follow-discovery QA, Convex retention-cron QA, and Clerk
-  email auth QA with timeouts.
+- `npm run qa:release`: runs repository hygiene, lint, typecheck, `next build`,
+  dedupe QA, automerge QA, extraction QA, venue taxonomy QA, public search QA,
+  Apify cost-control QA, follow-discovery QA, Convex retention-cron QA, and
+  Clerk email auth QA with timeouts.
 - `npm run qa:self-hosted-convex-compose`: validates the Docker Compose overlay
   for the web app plus self-hosted Convex backend/dashboard.
 - `npm run convex:codegen`: refresh Convex generated types.
