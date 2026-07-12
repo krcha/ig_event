@@ -173,6 +173,7 @@ npm run build
 npm run start
 npm run lint
 npm run typecheck
+npm run qa:repo-hygiene
 npm run qa:dedupe
 npm run qa:automerge
 npm run qa:master-review
@@ -184,10 +185,10 @@ npm run qa:self-hosted-convex-compose
 npm run convex:codegen
 ```
 
-`qa:release` runs the deterministic release gate used by CI: lint, typecheck,
-`next build`, dedupe QA, automerge QA, extraction QA, venue taxonomy QA, public
-search/sort/mobile QA, Apify cost-control QA, follow-discovery QA, Convex
-retention-cron QA, and Clerk email auth QA.
+`qa:release` runs the deterministic release gate used by CI: repository hygiene,
+lint, typecheck, `next build`, dedupe QA, automerge QA, extraction QA, venue
+taxonomy QA, public search/sort/mobile QA, Apify cost-control QA,
+follow-discovery QA, Convex retention-cron QA, and Clerk email auth QA.
 
 `npm run build` is a normal release requirement. Treat any build failure or
 timeout as a release blocker before production rollout.

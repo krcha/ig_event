@@ -12,14 +12,31 @@
 !.yarn/versions
 
 # testing
-/coverage
+/coverage/
+**/test-results/
+**/test-results */
+**/playwright-report/
+**/playwright-report */
+**/blob-report/
+**/blob-report */
+**/traces/
+**/screenshots/
+*.trace
+trace.zip
 
 # next.js
 /.next/
+/.next */
 /out/
+/out */
 
 # production
-/build
+/build/
+/build */
+
+# scratch files and copy-style duplicates
+/scripts/tmp-*
+**/* 2.*
 
 # misc
 .DS_Store

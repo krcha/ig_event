@@ -76,8 +76,9 @@ Convex data contract:
 Release gate contract:
 
 - `npm run qa:release` must pass before handoff.
-- It includes lint, typecheck, `next build`, dedupe QA, automerge QA,
-  extraction QA, venue taxonomy QA, public search QA, and Apify cost-control QA.
+- It includes repository hygiene, lint, typecheck, `next build`, dedupe QA,
+  automerge QA, extraction QA, venue taxonomy QA, public search QA, and Apify
+  cost-control QA.
 - Treat any `next build` failure or timeout as a normal release blocker.
 
 ## Important Paths
@@ -131,6 +132,7 @@ Run focused checks when relevant:
 ```bash
 npm run lint
 npm run typecheck
+npm run qa:repo-hygiene
 npm run build
 npm run qa:dedupe
 npm run qa:automerge
