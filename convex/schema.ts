@@ -30,6 +30,11 @@ const eventTimeStatus = v.union(
   v.literal("inferred"),
   v.literal("unknown"),
 );
+const venuePublicStatus = v.union(
+  v.literal("pending"),
+  v.literal("published"),
+  v.literal("hidden"),
+);
 
 export default defineSchema({
   events: defineTable({
@@ -104,12 +109,19 @@ export default defineSchema({
     osmElementType: v.optional(v.string()),
     googlePlaceId: v.optional(v.string()),
     hoursError: v.optional(v.string()),
-    isActive: v.boolean(),
+    // Optional during rollout so legacy rows remain readable before migration.
+    // New writes use scrapeActive and publicStatus; isActive remains only for
+    // backward-compatible reads and an exact rollback path.
+    isActive: v.optional(v.boolean()),
+    scrapeActive: v.optional(v.boolean()),
+    publicStatus: v.optional(venuePublicStatus),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_instagramHandle", ["instagramHandle"])
-    .index("by_isActive", ["isActive"]),
+    .index("by_isActive", ["isActive"])
+    .index("by_scrapeActive", ["scrapeActive"])
+    .index("by_publicStatus", ["publicStatus"]),
   users: defineTable({
     clerkId: v.string(),
     email: v.optional(v.string()),
@@ -194,5 +206,16 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_event", ["eventId"])
+    .index("by_createdAt", ["createdAt"]),
+  venueAuditLog: defineTable({
+    venueId: v.id("venues"),
+    action: v.string(),
+    actor: v.optional(v.string()),
+    beforeJson: v.string(),
+    afterJson: v.string(),
+    note: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_venue", ["venueId"])
     .index("by_createdAt", ["createdAt"]),
 });

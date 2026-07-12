@@ -186,7 +186,9 @@ async function loadEvent(eventId: string): Promise<{
       event.displayTimeSource = displayTime.source;
       event.displayTimeStart = displayTime.startLabel;
       event.venueCategory = venue?.category ?? event.venueCategory ?? undefined;
-      event.venueId = event.venueId ?? venue?._id;
+      // The public venue query fails closed. Never retain the denormalized ID
+      // when the referenced venue is pending or hidden.
+      event.venueId = venue?._id;
       event.venueHours = venue
         ? {
             googlePlaceId: venue.googlePlaceId ?? null,
@@ -371,7 +373,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                     <p className="pointer-events-none relative z-10 mt-1.5 flex items-start gap-2 text-sm font-semibold leading-5 text-foreground">
                       <MapPin className="mt-0.5 h-4 w-4 flex-none text-primary" />
                       <span className="min-w-0 flex-1 break-words">{event.venue}</span>
-                      {authEnabled ? (
+                      {authEnabled && event.venueId ? (
                         <FavoriteVenueButton
                           className="pointer-events-auto relative z-20 -mt-1"
                           venueId={event.venueId}

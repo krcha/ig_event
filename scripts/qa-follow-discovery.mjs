@@ -101,6 +101,8 @@ assert.deepEqual(
 );
 assert.equal(planned.newVenues[0].name, "New Place");
 assert.equal(planned.newVenues[0].category, "venue");
+assert.equal(planned.newVenues[0].scrapeActive, true);
+assert.equal(planned.newVenues[0].publicStatus, "pending");
 assert.equal(planned.skippedExisting, 3);
 assert.equal(planned.skippedDuplicate, 2);
 assert.equal(planned.skippedInvalid, 2);
@@ -140,7 +142,8 @@ assert.deepEqual(createdVenues, [
     name: "New Place",
     instagramHandle: "new.place",
     category: "venue",
-    isActive: true,
+    publicStatus: "pending",
+    scrapeActive: true,
   },
 ]);
 assert.deepEqual(ingestionCalls, [

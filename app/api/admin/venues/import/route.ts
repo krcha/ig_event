@@ -11,7 +11,8 @@ type VenueRecord = {
   instagramHandle: string;
   category: string;
   location?: string;
-  isActive: boolean;
+  scrapeActive: boolean;
+  publicStatus: "pending" | "published" | "hidden";
 };
 
 type ParsedCsvVenue = {
@@ -92,7 +93,15 @@ export async function POST(request: Request) {
   }
 
   const category = canonicalizeVenueCategory(formData.get("category")?.toString());
-  const isActive = formData.get("isActive")?.toString() !== "false";
+  const scrapeActive = formData.get("scrapeActive")?.toString() !== "false";
+  const publicStatusValue = formData.get("publicStatus")?.toString() ?? "pending";
+  if (!["pending", "published", "hidden"].includes(publicStatusValue)) {
+    return NextResponse.json(
+      { error: "publicStatus must be pending, published, or hidden." },
+      { status: 400 },
+    );
+  }
+  const publicStatus = publicStatusValue as "pending" | "published" | "hidden";
 
   let csvText: string;
   try {
@@ -140,7 +149,9 @@ export async function POST(request: Request) {
           name: venue.name,
           instagramHandle: venue.instagramHandle,
           category,
-          isActive,
+          scrapeActive,
+          publicStatus,
+          auditNote: "Created from the admin CSV importer.",
         });
         created += 1;
         continue;

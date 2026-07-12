@@ -1,9 +1,17 @@
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import { normalizeHandle, toSearchableText } from "../lib/pipeline/venue-normalization";
 import { canonicalizeVenueCategory } from "../lib/taxonomy/venue-types";
+import {
+  buildVenueLifecycleMigrationPlan,
+  getEffectiveVenueLifecycle,
+  isVenuePublic,
+  isVenueScrapeActive,
+  type VenueLifecycleFields,
+  type VenuePublicStatus,
+} from "../lib/venues/venue-lifecycle";
 import { requireAdminIdentity, requireAdminOrServiceSecret } from "./authz";
 
 const DEFAULT_PUBLIC_VENUE_EVENT_LIMIT = 12;
@@ -17,6 +25,11 @@ const venueHoursSource = v.union(
   v.literal("google"),
   v.literal("manual"),
   v.literal("none"),
+);
+const venuePublicStatus = v.union(
+  v.literal("pending"),
+  v.literal("published"),
+  v.literal("hidden"),
 );
 
 const venueHoursPatch = {
@@ -136,6 +149,84 @@ function buildInstagramProfileUrl(handle: string): string {
   return normalized ? `https://www.instagram.com/${normalized}/` : "";
 }
 
+function mergeUniqueVenues(venues: Doc<"venues">[]): Doc<"venues">[] {
+  const byId = new Map<Id<"venues">, Doc<"venues">>();
+  for (const venue of venues) {
+    byId.set(venue._id, venue);
+  }
+  return [...byId.values()];
+}
+
+async function collectScrapeActiveVenues(ctx: QueryCtx): Promise<Doc<"venues">[]> {
+  const [explicit, legacy] = await Promise.all([
+    ctx.db
+      .query("venues")
+      .withIndex("by_scrapeActive", (q) => q.eq("scrapeActive", true))
+      .collect(),
+    ctx.db
+      .query("venues")
+      .withIndex("by_isActive", (q) => q.eq("isActive", true))
+      .collect(),
+  ]);
+  return mergeUniqueVenues([...explicit, ...legacy]).filter(isVenueScrapeActive);
+}
+
+async function collectPublicVenues(ctx: QueryCtx): Promise<Doc<"venues">[]> {
+  const [explicit, legacy] = await Promise.all([
+    ctx.db
+      .query("venues")
+      .withIndex("by_publicStatus", (q) => q.eq("publicStatus", "published"))
+      .collect(),
+    ctx.db
+      .query("venues")
+      .withIndex("by_isActive", (q) => q.eq("isActive", true))
+      .collect(),
+  ]);
+  return mergeUniqueVenues([...explicit, ...legacy]).filter(isVenuePublic);
+}
+
+type LifecycleAuditSnapshot = {
+  effectivePublicStatus: VenuePublicStatus;
+  effectiveScrapeActive: boolean;
+  isActive: boolean | null;
+  publicStatus: VenuePublicStatus | null;
+  scrapeActive: boolean | null;
+};
+
+function lifecycleAuditSnapshot(venue: VenueLifecycleFields): LifecycleAuditSnapshot {
+  const effective = getEffectiveVenueLifecycle(venue);
+  return {
+    effectivePublicStatus: effective.publicStatus,
+    effectiveScrapeActive: effective.scrapeActive,
+    isActive: venue.isActive ?? null,
+    publicStatus: venue.publicStatus ?? null,
+    scrapeActive: venue.scrapeActive ?? null,
+  };
+}
+
+async function insertVenueLifecycleAudit(
+  ctx: MutationCtx,
+  options: {
+    action: string;
+    actor: string;
+    after: LifecycleAuditSnapshot;
+    before: LifecycleAuditSnapshot | Record<string, never>;
+    createdAt: number;
+    note?: string;
+    venueId: Id<"venues">;
+  },
+) {
+  await ctx.db.insert("venueAuditLog", {
+    venueId: options.venueId,
+    action: options.action,
+    actor: options.actor,
+    beforeJson: JSON.stringify(options.before),
+    afterJson: JSON.stringify(options.after),
+    ...(options.note ? { note: options.note } : {}),
+    createdAt: options.createdAt,
+  });
+}
+
 function toPublicVenue(venue: Doc<"venues">) {
   return {
     _id: venue._id,
@@ -151,7 +242,6 @@ function toPublicVenue(venue: Doc<"venues">) {
     instagramFollowerCountUpdatedAt: venue.instagramFollowerCountUpdatedAt,
     instagramHandle: venue.instagramHandle,
     instagramProfileUrl: buildInstagramProfileUrl(venue.instagramHandle),
-    isActive: venue.isActive,
     latitude: venue.latitude,
     location: venue.location,
     longitude: venue.longitude,
@@ -201,20 +291,33 @@ export const listVenues = query({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    return ctx.db.query("venues").order("asc").collect();
+    const venues = await ctx.db.query("venues").order("asc").collect();
+    return venues.map((venue) => ({
+      ...venue,
+      ...getEffectiveVenueLifecycle(venue),
+    }));
   },
 });
 
+export const listScrapeActiveVenues = query({
+  args: {
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    return collectScrapeActiveVenues(ctx);
+  },
+});
+
+// Backward-compatible function name for callers deployed during the rollout.
+// Its behavior now follows scrape activation only, never publication state.
 export const listActiveVenues = query({
   args: {
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    return ctx.db
-      .query("venues")
-      .withIndex("by_isActive", (q) => q.eq("isActive", true))
-      .collect();
+    return collectScrapeActiveVenues(ctx);
   },
 });
 
@@ -243,13 +346,10 @@ export const listActiveVenueIngestionFieldsPaginated = query({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const result = await ctx.db
-      .query("venues")
-      .withIndex("by_isActive", (q) => q.eq("isActive", true))
-      .paginate(args.paginationOpts);
+    const result = await ctx.db.query("venues").paginate(args.paginationOpts);
     return {
       ...result,
-      page: result.page.map((venue) => ({
+      page: result.page.filter(isVenueScrapeActive).map((venue) => ({
         name: venue.name,
         instagramHandle: venue.instagramHandle,
       })),
@@ -273,7 +373,7 @@ export const listPublicVenueFieldsByIds = query({
     const uniqueIds = [...new Set(args.ids)];
     const venues = await Promise.all(uniqueIds.map((id) => ctx.db.get(id)));
     return venues.flatMap((venue) =>
-      venue
+      venue && isVenuePublic(venue)
         ? [
             {
               _id: venue._id,
@@ -285,7 +385,6 @@ export const listPublicVenueFieldsByIds = query({
               instagramFollowerCountUpdatedAt: venue.instagramFollowerCountUpdatedAt,
               instagramHandle: venue.instagramHandle,
               instagramProfileUrl: buildInstagramProfileUrl(venue.instagramHandle),
-              isActive: venue.isActive,
               latitude: venue.latitude,
               location: venue.location,
               longitude: venue.longitude,
@@ -298,6 +397,25 @@ export const listPublicVenueFieldsByIds = query({
   },
 });
 
+export const listPublicVenueFields = query({
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = normalizeLimit(
+      args.limit,
+      DEFAULT_PUBLIC_VENUE_DIRECTORY_LIMIT,
+      MAX_PUBLIC_VENUE_DIRECTORY_LIMIT,
+    );
+    const venues = (await collectPublicVenues(ctx)).slice(0, limit);
+
+    return venues.map(toPublicVenue).sort((left, right) =>
+      left.name.localeCompare(right.name, undefined, { sensitivity: "base" }),
+    );
+  },
+});
+
+// Backward-compatible name retained while older web builds are drained.
 export const listPublicActiveVenueFields = query({
   args: {
     limit: v.optional(v.number()),
@@ -308,15 +426,12 @@ export const listPublicActiveVenueFields = query({
       DEFAULT_PUBLIC_VENUE_DIRECTORY_LIMIT,
       MAX_PUBLIC_VENUE_DIRECTORY_LIMIT,
     );
-
-    const venues = await ctx.db
-      .query("venues")
-      .withIndex("by_isActive", (q) => q.eq("isActive", true))
-      .take(limit);
-
-    return venues.map(toPublicVenue).sort((left, right) =>
-      left.name.localeCompare(right.name, undefined, { sensitivity: "base" }),
-    );
+    return (await collectPublicVenues(ctx))
+      .slice(0, limit)
+      .map(toPublicVenue)
+      .sort((left, right) =>
+        left.name.localeCompare(right.name, undefined, { sensitivity: "base" }),
+      );
   },
 });
 
@@ -329,7 +444,7 @@ export const getPublicVenuePage = query({
   },
   handler: async (ctx, args) => {
     const venue = await ctx.db.get(args.id);
-    if (!venue) {
+    if (!venue || !isVenuePublic(venue)) {
       return null;
     }
 
@@ -453,10 +568,7 @@ export const listPublicVenueDirectory = query({
       MAX_PUBLIC_VENUE_DIRECTORY_LIMIT,
     );
     const [venues, upcomingEvents] = await Promise.all([
-      ctx.db
-        .query("venues")
-        .withIndex("by_isActive", (q) => q.eq("isActive", true))
-        .take(limit),
+      collectPublicVenues(ctx).then((items) => items.slice(0, limit)),
       ctx.db
         .query("events")
         .withIndex("by_status_date", (q) =>
@@ -501,12 +613,28 @@ export const createVenue = mutation({
     longitude: v.optional(v.number()),
     neighborhood: v.optional(v.string()),
     lastFullScrapeAttemptAt: v.optional(v.number()),
+    // Accepted during rollout so older callers map their one state to both
+    // independent lifecycle fields. New callers must use the explicit fields.
     isActive: v.optional(v.boolean()),
+    scrapeActive: v.optional(v.boolean()),
+    publicStatus: v.optional(venuePublicStatus),
+    auditNote: v.optional(v.string()),
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const { serviceSecret: _serviceSecret, ...venueArgs } = args;
+    const authorization = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const {
+      auditNote,
+      isActive: legacyActive,
+      serviceSecret: _serviceSecret,
+      publicStatus = legacyActive === undefined
+        ? ("pending" as VenuePublicStatus)
+        : legacyActive
+          ? ("published" as VenuePublicStatus)
+          : ("hidden" as VenuePublicStatus),
+      scrapeActive = legacyActive ?? true,
+      ...venueArgs
+    } = args;
     void _serviceSecret;
     const instagramHandle = normalizeHandle(venueArgs.instagramHandle);
     if (!instagramHandle) {
@@ -525,14 +653,25 @@ export const createVenue = mutation({
       return existingVenue._id;
     }
     const now = Date.now();
-    return ctx.db.insert("venues", {
+    const venueId = await ctx.db.insert("venues", {
       ...venueArgs,
       instagramHandle,
       category: canonicalizeVenueCategory(venueArgs.category),
-      isActive: venueArgs.isActive ?? true,
+      publicStatus,
+      scrapeActive,
       createdAt: now,
       updatedAt: now,
     });
+    await insertVenueLifecycleAudit(ctx, {
+      action: "venue.lifecycle.created",
+      actor: authorization.actor,
+      before: {},
+      after: lifecycleAuditSnapshot({ publicStatus, scrapeActive }),
+      createdAt: now,
+      note: auditNote,
+      venueId,
+    });
+    return venueId;
   },
 });
 
@@ -550,16 +689,26 @@ export const updateVenue = mutation({
       longitude: v.optional(v.number()),
       neighborhood: v.optional(v.string()),
       lastFullScrapeAttemptAt: v.optional(v.number()),
+      // Backward-compatible legacy input; it maps to both explicit states.
       isActive: v.optional(v.boolean()),
+      scrapeActive: v.optional(v.boolean()),
+      publicStatus: v.optional(venuePublicStatus),
     }),
+    auditNote: v.optional(v.string()),
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const authorization = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const existing = await ctx.db.get(args.id);
+    if (!existing) {
+      throw new Error("Venue not found.");
+    }
+
     const now = Date.now();
+    const { isActive: legacyActive, ...rawExplicitPatch } = args.patch;
     let instagramHandle: string | undefined;
-    if (args.patch.instagramHandle !== undefined) {
-      const normalizedInstagramHandle = normalizeHandle(args.patch.instagramHandle);
+    if (rawExplicitPatch.instagramHandle !== undefined) {
+      const normalizedInstagramHandle = normalizeHandle(rawExplicitPatch.instagramHandle);
       if (!normalizedInstagramHandle) {
         throw new Error("Venue Instagram handle is required.");
       }
@@ -579,14 +728,145 @@ export const updateVenue = mutation({
         throw new Error("A venue with that normalized Instagram handle already exists.");
       }
     }
-    const patch = {
-      ...args.patch,
+    const explicitPatch = {
+      ...rawExplicitPatch,
       ...(instagramHandle !== undefined ? { instagramHandle } : {}),
-      ...(args.patch.category !== undefined
-        ? { category: canonicalizeVenueCategory(args.patch.category) }
+    };
+    const patch = {
+      ...explicitPatch,
+      ...(legacyActive !== undefined && explicitPatch.scrapeActive === undefined
+        ? { scrapeActive: legacyActive }
+        : {}),
+      ...(legacyActive !== undefined && explicitPatch.publicStatus === undefined
+        ? { publicStatus: legacyActive ? ("published" as const) : ("hidden" as const) }
+        : {}),
+      ...(explicitPatch.category !== undefined
+        ? { category: canonicalizeVenueCategory(explicitPatch.category) }
         : {}),
     };
+    const before = lifecycleAuditSnapshot(existing);
+    const after = lifecycleAuditSnapshot({ ...existing, ...patch });
     await ctx.db.patch(args.id, { ...patch, updatedAt: now });
+
+    if (
+      (explicitPatch.scrapeActive !== undefined || legacyActive !== undefined) &&
+      before.effectiveScrapeActive !== after.effectiveScrapeActive
+    ) {
+      await insertVenueLifecycleAudit(ctx, {
+        action: "venue.scrape_activation.changed",
+        actor: authorization.actor,
+        before,
+        after,
+        createdAt: now,
+        note: args.auditNote,
+        venueId: args.id,
+      });
+    }
+    if (
+      (explicitPatch.publicStatus !== undefined || legacyActive !== undefined) &&
+      before.effectivePublicStatus !== after.effectivePublicStatus
+    ) {
+      await insertVenueLifecycleAudit(ctx, {
+        action: "venue.public_status.changed",
+        actor: authorization.actor,
+        before,
+        after,
+        createdAt: now,
+        note: args.auditNote,
+        venueId: args.id,
+      });
+    }
+  },
+});
+
+export const listVenueAuditLog = query({
+  args: {
+    venueId: v.id("venues"),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminIdentity(ctx);
+    const limit = normalizeLimit(args.limit, 25, 100);
+    return ctx.db
+      .query("venueAuditLog")
+      .withIndex("by_venue", (q) => q.eq("venueId", args.venueId))
+      .order("desc")
+      .take(limit);
+  },
+});
+
+export const previewVenueLifecycleMigration = query({
+  args: {
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const venues = await ctx.db.query("venues").collect();
+    const plan = buildVenueLifecycleMigrationPlan(venues);
+    return {
+      counts: plan.counts,
+      sampleChanges: plan.changes.slice(0, 20),
+      rollbackMapping: {
+        beforeIndependentEdits:
+          "restore isActive from rollback.isActive and remove scrapeActive/publicStatus",
+        afterIndependentEdits:
+          "restore the referenced Convex backup; one legacy boolean cannot preserve independent states",
+      },
+    };
+  },
+});
+
+export const applyVenueLifecycleMigrationBatch = mutation({
+  args: {
+    backupReference: v.string(),
+    limit: v.optional(v.number()),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authorization = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const backupReference = args.backupReference.trim();
+    if (!backupReference) {
+      throw new Error("A non-empty backupReference is required.");
+    }
+
+    const limit = normalizeLimit(args.limit, 50, 100);
+    const venues = await ctx.db.query("venues").collect();
+    const plan = buildVenueLifecycleMigrationPlan(venues);
+    const venueById = new Map(venues.map((venue) => [venue._id, venue] as const));
+    const batch = plan.changes.slice(0, limit);
+    const now = Date.now();
+    let applied = 0;
+
+    for (const change of batch) {
+      const venue = venueById.get(change.id as Id<"venues">);
+      if (!venue || getEffectiveVenueLifecycle(venue).source === "explicit") {
+        continue;
+      }
+      const before = lifecycleAuditSnapshot(venue);
+      const after = lifecycleAuditSnapshot({ ...venue, ...change.apply });
+      await ctx.db.patch(venue._id, {
+        publicStatus: change.apply.publicStatus,
+        scrapeActive: change.apply.scrapeActive,
+        updatedAt: now,
+      });
+      await insertVenueLifecycleAudit(ctx, {
+        action: "venue.lifecycle.migrated",
+        actor: authorization.actor,
+        before,
+        after,
+        createdAt: now,
+        note: `backup=${backupReference}; rollback=remove scrapeActive/publicStatus; legacy isActive retained`,
+        venueId: venue._id,
+      });
+      applied += 1;
+    }
+
+    return {
+      applied,
+      backupReference,
+      beforeCounts: plan.counts,
+      remaining: Math.max(0, plan.counts.needsMigration - applied),
+    };
   },
 });
 

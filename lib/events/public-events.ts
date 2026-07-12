@@ -111,6 +111,7 @@ type PublicEventsCacheEntry = {
 
 type VenueLookup = {
   canonicalVenueNamesByHandle: Record<string, string>;
+  publicVenueIds: Set<string>;
   venueNameOverridesByHandle: Record<string, string>;
   venuesByHandle: Map<string, VenueRecord>;
   venuesByName: Map<string, VenueRecord>;
@@ -230,13 +231,19 @@ function buildVenuesByName(
   return venuesByName;
 }
 
-function createVenueRecordFromEvent(event: PublicEvent): VenueRecord | null {
+function createVenueRecordFromEvent(
+  event: PublicEvent,
+  publicVenueIds: Set<string>,
+): VenueRecord | null {
   if (!event.venueId && !event.venueCategory && !event.venueInstagramHandle) {
     return null;
   }
 
   return {
-    _id: isRealVenueId(event.venueId) ? event.venueId : `event:${event._id}`,
+    _id:
+      isRealVenueId(event.venueId) && publicVenueIds.has(event.venueId)
+        ? event.venueId
+        : `event:${event._id}`,
     name: event.venue,
     instagramHandle: event.venueInstagramHandle ?? event.instagramHandle ?? "",
     category: event.venueCategory ?? null,
@@ -267,8 +274,11 @@ async function loadVenueLookup(
         }) as Promise<VenueRecord[]>)
       : Promise.resolve([]),
   ]);
+  const publicVenueIds = new Set(
+    [...activeVenues, ...venues].map((venue) => venue._id),
+  );
   const denormalizedVenues = events
-    .map(createVenueRecordFromEvent)
+    .map((event) => createVenueRecordFromEvent(event, publicVenueIds))
     .filter((venue): venue is VenueRecord => venue !== null);
   const lookupVenues = [...activeVenues, ...venues, ...denormalizedVenues];
   let venueNameOverridesByHandle: Record<string, string> = {};
@@ -282,6 +292,7 @@ async function loadVenueLookup(
   );
   return {
     canonicalVenueNamesByHandle,
+    publicVenueIds,
     venueNameOverridesByHandle,
     venuesByHandle: buildVenuesByHandle(lookupVenues),
     venuesByName: buildVenuesByName(lookupVenues, venueNameOverridesByHandle),
@@ -439,11 +450,12 @@ function normalizePublicEvent(
     (canonicalVenueName
       ? venueLookup.venuesByName.get(normalizeVenueLookupKey(canonicalVenueName))
       : undefined);
-  const venueId = isRealVenueId(event.venueId)
-    ? event.venueId
-    : isRealVenueId(venue?._id)
-      ? venue._id
-      : undefined;
+  const venueId =
+    isRealVenueId(event.venueId) && venueLookup.publicVenueIds.has(event.venueId)
+      ? event.venueId
+      : isRealVenueId(venue?._id) && venueLookup.publicVenueIds.has(venue._id)
+        ? venue._id
+        : undefined;
   const venueCategory = venue?.category ?? undefined;
   const eventVenueCategory = event.venueCategory ?? undefined;
   const eventType =

@@ -37,7 +37,6 @@ export type PublicVenue = VenueHoursCacheFields & {
   instagramFollowerCountUpdatedAt?: number | null;
   instagramHandle: string;
   instagramProfileUrl?: string | null;
-  isActive: boolean;
   latitude?: number | null;
   location?: string | null;
   longitude?: number | null;

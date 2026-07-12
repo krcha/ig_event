@@ -1,0 +1,108 @@
+import process from "node:process";
+import { ConvexHttpClient } from "convex/browser";
+import { api } from "../convex/_generated/api.js";
+
+const CONFIRMATION = "APPLY_VENUE_LIFECYCLE";
+
+function usage() {
+  return [
+    "Usage: npm run migrate:venue-lifecycle -- [--apply --confirm APPLY_VENUE_LIFECYCLE --backup-reference REF] [--limit N]",
+    "",
+    "Dry-run is the default. It reports migration counts and rollbackMapping without writing data.",
+    "Apply mode requires a verified Convex backup reference and an explicit confirmation token.",
+  ].join("\n");
+}
+
+function readPositiveInteger(value, label) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 100) {
+    throw new Error(`${label} must be an integer from 1 to 100.`);
+  }
+  return parsed;
+}
+
+function parseArgs(argv) {
+  let apply = false;
+  let backupReference = "";
+  let confirm = "";
+  let limit = 50;
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--help" || arg === "-h") {
+      console.log(usage());
+      process.exit(0);
+    }
+    if (arg === "--apply") {
+      apply = true;
+      continue;
+    }
+    if (arg === "--backup-reference") {
+      backupReference = argv[++index]?.trim() ?? "";
+      continue;
+    }
+    if (arg === "--confirm") {
+      confirm = argv[++index]?.trim() ?? "";
+      continue;
+    }
+    if (arg === "--limit") {
+      limit = readPositiveInteger(argv[++index], "--limit");
+      continue;
+    }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+
+  const dryRun = !apply;
+  return { apply, backupReference, confirm, dryRun, limit };
+}
+
+async function main() {
+  const options = parseArgs(process.argv.slice(2));
+  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL?.trim();
+  const serviceSecret = process.env.CRON_SECRET?.trim();
+  if (!convexUrl) throw new Error("NEXT_PUBLIC_CONVEX_URL is required.");
+  if (!serviceSecret) throw new Error("CRON_SECRET is required.");
+
+  if (options.apply) {
+    if (options.confirm !== CONFIRMATION) {
+      throw new Error(`Apply mode requires --confirm ${CONFIRMATION}.`);
+    }
+    if (!options.backupReference) {
+      throw new Error("Apply mode requires --backup-reference REF.");
+    }
+  }
+
+  const client = new ConvexHttpClient(convexUrl);
+  const preview = await client.query(api.venues.previewVenueLifecycleMigration, {
+    serviceSecret,
+  });
+  console.log(JSON.stringify({ dryRun: options.dryRun, ...preview }, null, 2));
+
+  if (options.dryRun || preview.counts.needsMigration === 0) return;
+
+  let remaining = preview.counts.needsMigration;
+  let appliedTotal = 0;
+  while (remaining > 0) {
+    const result = await client.mutation(api.venues.applyVenueLifecycleMigrationBatch, {
+      backupReference: options.backupReference,
+      limit: options.limit,
+      serviceSecret,
+    });
+    appliedTotal += result.applied;
+    remaining = result.remaining;
+    console.log(JSON.stringify({ appliedTotal, ...result }, null, 2));
+    if (result.applied === 0 && remaining > 0) {
+      throw new Error("Migration made no progress; stop and inspect before retrying.");
+    }
+  }
+
+  const finalPreview = await client.query(api.venues.previewVenueLifecycleMigration, {
+    serviceSecret,
+  });
+  console.log(JSON.stringify({ appliedTotal, dryRun: false, final: finalPreview }, null, 2));
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : error);
+  process.exitCode = 1;
+});

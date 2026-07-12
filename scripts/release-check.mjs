@@ -17,6 +17,7 @@ const checks = [
   { script: "qa:moderation-queue", timeoutMs: 60_000 },
   { script: "qa:ingestion-triage", timeoutMs: 60_000 },
   { script: "qa:venue-types", timeoutMs: 60_000 },
+  { script: "qa:venue-lifecycle", timeoutMs: 60_000 },
   { script: "qa:venue-hours", timeoutMs: 60_000 },
   { script: "qa:google-hours", timeoutMs: 60_000 },
   { script: "qa:public-search", timeoutMs: 60_000 },
