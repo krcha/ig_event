@@ -190,9 +190,31 @@ function hasDateLikeDotTimeToken(value: string): boolean {
   return second >= 1 && second <= 12;
 }
 
+function getLocalTimeTokenContext(
+  sourceText: string,
+  tokenStart: number,
+  tokenEnd: number,
+): string {
+  const windowStart = Math.max(0, tokenStart - 80);
+  const windowEnd = Math.min(sourceText.length, tokenEnd + 80);
+  const beforeWindow = sourceText.slice(windowStart, tokenStart);
+  const afterWindow = sourceText.slice(tokenEnd, windowEnd);
+  const priorBoundary = Math.max(
+    beforeWindow.lastIndexOf("\n"),
+    beforeWindow.lastIndexOf("."),
+    beforeWindow.lastIndexOf("!"),
+    beforeWindow.lastIndexOf("?"),
+    beforeWindow.lastIndexOf(";"),
+  );
+  const nextBoundaryMatch = afterWindow.match(/[\n.!?;]/u);
+  const before = beforeWindow.slice(priorBoundary + 1);
+  const after = nextBoundaryMatch ? afterWindow.slice(0, nextBoundaryMatch.index) : afterWindow;
+  return `${before} ${sourceText.slice(tokenStart, tokenEnd)} ${after}`.trim();
+}
+
 function hasRejectedTimeTokenContext(sourceText: string, tokenStart: number, tokenEnd: number): boolean {
-  const before = sourceText.slice(Math.max(0, tokenStart - 24), tokenStart);
-  const after = sourceText.slice(tokenEnd, Math.min(sourceText.length, tokenEnd + 36));
+  const before = sourceText.slice(Math.max(0, tokenStart - 64), tokenStart);
+  const after = sourceText.slice(tokenEnd, Math.min(sourceText.length, tokenEnd + 64));
   if (/^\s*\+/.test(after)) {
     return true;
   }
@@ -202,9 +224,30 @@ function hasRejectedTimeTokenContext(sourceText: string, tokenStart: number, tok
   }
 
   const nearbyText = `${before} ${after}`;
+  const localContext = getLocalTimeTokenContext(sourceText, tokenStart, tokenEnd);
   if (
     /(?:\bkapacitet\b|\bcapacity\b|\buzrast\b|\bage(?:s)?\b|\badresa\b|\baddress\b|\bulica\b|\bstreet\b|\bbroj(?:evi)?\b|\bnumber(?:s)?\b)[^.!?\n]{0,18}$/iu.test(before) ||
     /^\s*(?:ljudi|osoba|učesnika|ucesnika|people|persons?|guests?|mesta|places?)\b/iu.test(after)
+  ) {
+    return true;
+  }
+  if (
+    /^\s*(?:godin(?:a|e|u|om|ama)?|years?\b)/iu.test(after) ||
+    (/(?:\bulaz\b|\bentry\b|\buzrast\b|\bage(?:s)?\b)/iu.test(localContext) &&
+      /\b(?:godin(?:a|e|u|om|ama)?|years?)\b/iu.test(localContext))
+  ) {
+    return true;
+  }
+  if (/\b(?:raspon|range)\b/iu.test(localContext)) {
+    return true;
+  }
+  if (/\b(?:popust|discount)\b|%/iu.test(localContext)) {
+    return true;
+  }
+  if (
+    /\b(?:radno\s+(?:vreme|vrijeme)|working\s+hours?|opening\s+hours?|business\s+hours?|venue\s+hours?|hours?\s+of\s+operation)\b/iu.test(
+      localContext,
+    )
   ) {
     return true;
   }

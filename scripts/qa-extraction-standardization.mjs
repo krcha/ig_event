@@ -1464,6 +1464,52 @@ function runDescriptionStartTimeQa() {
     ),
   );
   assert.equal(dateRangeTextEvent.event.time, TBD_EVENT_TIME);
+
+  const unsupportedTimeContexts = [
+    "Ulaz od 18 godina",
+    "Raspon od 10 do 20",
+    "Popust od 10 do 20%",
+    "Radno vreme: od 9 do 17",
+    "Working hours from 9 to 17",
+  ];
+  for (const [index, unsupportedText] of unsupportedTimeContexts.entries()) {
+    for (const evidencePath of ["caption", "ocr"]) {
+      const unsupportedTimeEvent = assertSingleOkPreparedEvent(
+        prepareEventsForInsert(
+          makeInstagramPost({
+            caption: evidencePath === "caption" ? unsupportedText : "QA event announcement.",
+            altText: evidencePath === "ocr" ? unsupportedText : null,
+            postType: "image",
+            username: "kcgrad",
+          }),
+          makeExtractedEvent({
+            title: `Unsupported ${evidencePath} Time ${index}`,
+            date: isoDateDaysFromNow(12),
+            time: "",
+            venue: "KC Grad",
+            artists: ["QA DJ"],
+            description: "Nightlife event.",
+            confidence: 0.95,
+            source_caption: "",
+            field_confirmation: makeFieldConfirmation(0.95),
+          }),
+          "https://cdn.example.com/poster.jpg",
+          {},
+          {},
+          {},
+        ),
+      );
+      assert.equal(
+        unsupportedTimeEvent.event.time,
+        TBD_EVENT_TIME,
+        `${evidencePath} must reject unsupported time context: ${unsupportedText}`,
+      );
+      assert.equal(unsupportedTimeEvent.event.timeSource, "unknown");
+      assert.equal(unsupportedTimeEvent.event.timeConfidence, 0);
+      assert.equal(unsupportedTimeEvent.event.timeStatus, "unknown");
+      assert.equal(unsupportedTimeEvent.event.timeEvidenceText, undefined);
+    }
+  }
 }
 
 function runScheduleConsistencyQa() {

@@ -8,6 +8,7 @@ import {
   resolveEventTimeDisplay,
 } from "../lib/events/event-time.ts";
 import { getNightlifeDefaultDateKey } from "../lib/events/nightlife-date.ts";
+import { buildDuplicateUpdatePatch } from "../lib/pipeline/run-instagram-ingestion.ts";
 
 const exactEvidence = extractEventTimeEvidenceFromText("Poster line: POČETAK   21H tonight");
 assert.deepEqual(exactEvidence, {
@@ -20,7 +21,10 @@ for (const [text, expected] of [
   ["21 h", "21:00"],
   ["21:00", "21:00"],
   ["Početak 21H", "21:00"],
+  ["Start at 9", "09:00"],
   ["Doors open 8:30 pm", "20:30"],
+  ["Music from 9 to 17", "09:00-17:00"],
+  ["Event at 9", "09:00"],
   ["22h - 05h", "22:00-05:00"],
 ]) {
   assert.equal(extractEventTimeEvidenceFromText(text)?.time, expected, `time evidence: ${text}`);
@@ -32,6 +36,11 @@ for (const text of [
   "od 11. do 17. juna",
   "Karte od 1000 RSD",
   "Ulaz od 18+",
+  "Ulaz od 18 godina",
+  "Raspon od 10 do 20",
+  "Popust od 10 do 20%",
+  "Radno vreme: od 9 do 17",
+  "Working hours from 9 to 17",
   "Adresa: Knez Mihailova 21",
   "Address: 21 Main Street",
   "Kapacitet 20 ljudi",
@@ -39,6 +48,63 @@ for (const text of [
 ]) {
   assert.equal(extractEventTimeEvidenceFromText(text), undefined, `reject non-time: ${text}`);
 }
+
+const existingDuplicate = {
+  _id: "event-1",
+  title: "QA Event",
+  date: "2026-07-15",
+  time: "21:00",
+  venue: "QA Venue",
+  artists: ["QA Artist"],
+  eventType: "nightlife",
+  status: "pending",
+};
+const preparedDuplicate = {
+  title: "QA Event",
+  date: "2026-07-15",
+  time: "21:00",
+  timeSource: "caption",
+  timeEvidenceText: "Početak 21H",
+  timeConfidence: 0.95,
+  timeStatus: "confirmed",
+  venue: "QA Venue",
+  artists: ["QA Artist"],
+  instagramPostUrl: "https://www.instagram.com/p/qa-event/",
+  instagramPostId: "qa-event",
+  eventType: "nightlife",
+  status: "pending",
+};
+const duplicateRepair = buildDuplicateUpdatePatch(existingDuplicate, preparedDuplicate);
+assert.deepEqual(
+  {
+    timeSource: duplicateRepair.patch.timeSource,
+    timeEvidenceText: duplicateRepair.patch.timeEvidenceText,
+    timeConfidence: duplicateRepair.patch.timeConfidence,
+    timeStatus: duplicateRepair.patch.timeStatus,
+  },
+  {
+    timeSource: "caption",
+    timeEvidenceText: "Početak 21H",
+    timeConfidence: 0.95,
+    timeStatus: "confirmed",
+  },
+  "Duplicate repair must propagate all event-time provenance fields.",
+);
+const unknownDuplicateRepair = buildDuplicateUpdatePatch(existingDuplicate, {
+  ...preparedDuplicate,
+  timeSource: "unknown",
+  timeEvidenceText: undefined,
+  timeConfidence: 0,
+  timeStatus: "unknown",
+});
+assert.equal(unknownDuplicateRepair.patch.timeSource, "unknown");
+assert.equal(unknownDuplicateRepair.patch.timeConfidence, 0);
+assert.equal(unknownDuplicateRepair.patch.timeStatus, "unknown");
+assert.equal(
+  Object.hasOwn(unknownDuplicateRepair.patch, "timeEvidenceText"),
+  false,
+  "Duplicate repair must not overwrite evidence with an undefined value.",
+);
 
 assert.equal(
   resolveEventTimeDisplay({

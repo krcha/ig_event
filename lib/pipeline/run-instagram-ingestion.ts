@@ -4242,7 +4242,7 @@ function hasMaterialEventChange(
   return false;
 }
 
-function buildDuplicateUpdatePatch(
+export function buildDuplicateUpdatePatch(
   existing: ExistingEventRecord,
   next: PreparedEvent,
 ): {
@@ -4250,6 +4250,10 @@ function buildDuplicateUpdatePatch(
     title?: string;
     date?: string;
     time?: string;
+    timeSource?: EventTimeSource;
+    timeEvidenceText?: string;
+    timeConfidence?: number;
+    timeStatus?: EventTimeProvenance["status"];
     venue?: string;
     artists?: string[];
     description?: string;
@@ -4295,6 +4299,12 @@ function buildDuplicateUpdatePatch(
       title: next.title,
       date: next.date,
       ...(next.time ? { time: next.time } : {}),
+      timeSource: next.timeSource,
+      ...(next.timeEvidenceText !== undefined
+        ? { timeEvidenceText: next.timeEvidenceText }
+        : {}),
+      timeConfidence: next.timeConfidence,
+      timeStatus: next.timeStatus,
       venue: next.venue,
       artists: next.artists,
       ...(descriptionChanged && preferredDescription
