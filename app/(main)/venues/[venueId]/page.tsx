@@ -24,7 +24,7 @@ import { cn } from "@/lib/utils";
 export const revalidate = 60;
 
 type VenuePageProps = {
-  params: { venueId: string };
+  params: Promise<{ venueId: string }>;
 };
 
 type VenueEventPost = PublicVenueEvent & {
@@ -342,7 +342,8 @@ function EventPostTile({
 }
 
 export async function generateMetadata({ params }: VenuePageProps): Promise<Metadata> {
-  const { historyEvents, upcomingEvents, venue } = await loadPublicVenuePage(params.venueId, {
+  const { venueId } = await params;
+  const { historyEvents, upcomingEvents, venue } = await loadPublicVenuePage(venueId, {
     historyLimit: 3,
     upcomingLimit: 3,
   });
@@ -376,8 +377,9 @@ export async function generateMetadata({ params }: VenuePageProps): Promise<Meta
 }
 
 export default async function VenuePage({ params }: VenuePageProps) {
+  const { venueId } = await params;
   const { error, historyEvents, stats, upcomingEvents, venue } = await loadPublicVenuePage(
-    params.venueId,
+    venueId,
     {
       historyLimit: 50,
       upcomingLimit: 50,

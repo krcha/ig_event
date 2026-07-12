@@ -6,7 +6,7 @@ export const fetchCache = "force-no-store";
 type RedirectSearchParams = Record<string, string | string[] | undefined>;
 
 type RedirectPageProps = {
-  searchParams?: RedirectSearchParams;
+  searchParams?: Promise<RedirectSearchParams>;
 };
 
 function buildEventsHref(searchParams?: RedirectSearchParams): string {
@@ -26,6 +26,6 @@ function buildEventsHref(searchParams?: RedirectSearchParams): string {
   return query ? `/?${query}` : "/";
 }
 
-export default function CalendarRedirectPage({ searchParams }: RedirectPageProps) {
-  redirect(buildEventsHref(searchParams));
+export default async function CalendarRedirectPage({ searchParams }: RedirectPageProps) {
+  redirect(buildEventsHref(await searchParams));
 }

@@ -12,9 +12,9 @@ import {
 export const runtime = "nodejs";
 
 type RouteContext = {
-  params: {
+  params: Promise<{
     eventId: string;
-  };
+  }>;
 };
 
 type EventRecord = {
@@ -119,10 +119,11 @@ export async function GET(request: Request, context: RouteContext) {
   }
 
   const handle = normalizeHandle(new URL(request.url).searchParams.get("handle"));
+  const { eventId } = await context.params;
 
   try {
     const event = (await convex.query(getPublicApprovedEventQuery, {
-      id: context.params.eventId,
+      id: eventId,
     })) as EventRecord | null;
     if (!event) {
       return errorResponse("Image not found.", 404);

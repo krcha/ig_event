@@ -7,6 +7,7 @@ const checks = [
   { script: "qa:repo-hygiene", timeoutMs: 30_000 },
   { script: "lint", timeoutMs: 120_000 },
   { script: "typecheck", timeoutMs: 180_000 },
+  { script: "qa:framework-compat", timeoutMs: 60_000 },
   { script: "build", timeoutMs: 900_000 },
   { script: "qa:dedupe", timeoutMs: 60_000 },
   { script: "qa:automerge", timeoutMs: 60_000 },

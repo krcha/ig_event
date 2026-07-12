@@ -33,7 +33,7 @@ type VenuesSearchParams = {
 };
 
 type VenuesPageProps = {
-  searchParams?: VenuesSearchParams;
+  searchParams?: Promise<VenuesSearchParams>;
 };
 
 function getSingleValue(value: string | string[] | undefined): string | undefined {
@@ -181,10 +181,11 @@ function VenueDirectoryCard({
 }
 
 export default async function VenuesPage({ searchParams }: VenuesPageProps) {
+  const resolvedSearchParams = await searchParams;
   const { error, venues } = await loadPublicVenueDirectory();
-  const selectedCategory = getSingleValue(searchParams?.category)?.trim();
-  const searchQuery = getSingleValue(searchParams?.q)?.trim() ?? "";
-  const upcomingOnly = getSingleValue(searchParams?.upcoming) === "1";
+  const selectedCategory = getSingleValue(resolvedSearchParams?.category)?.trim();
+  const searchQuery = getSingleValue(resolvedSearchParams?.q)?.trim() ?? "";
+  const upcomingOnly = getSingleValue(resolvedSearchParams?.upcoming) === "1";
   const categories = Array.from(
     new Set(venues.map((venue) => venue.category).filter((category): category is string => Boolean(category))),
   ).sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));

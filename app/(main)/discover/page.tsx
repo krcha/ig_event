@@ -17,9 +17,9 @@ import {
 export const revalidate = 60;
 
 type DiscoverPageProps = {
-  searchParams?: {
+  searchParams?: Promise<{
     date?: string | string[];
-  };
+  }>;
 };
 
 function mapPublicEvent(event: PublicEvent): DiscoverFeedEvent {
@@ -122,8 +122,9 @@ function formatEventDateShort(dateKey: string): string {
 }
 
 export default async function DiscoverPage({ searchParams }: DiscoverPageProps) {
+  const resolvedSearchParams = await searchParams;
   const today = getNightlifeDefaultDateKey();
-  const selectedDate = normalizeRequestedDate(searchParams?.date, today);
+  const selectedDate = normalizeRequestedDate(resolvedSearchParams?.date, today);
   const { error, events } = await loadDiscoverEvents(selectedDate);
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
