@@ -25,7 +25,10 @@ export type VenueLinkedPublicEventFields = {
 export function sanitizeVenueLinkedPublicEventFields<
   T extends VenueLinkedPublicEventFields,
 >(event: T, isLinkedVenuePublic: boolean): T {
-  if (!event.venueId || isLinkedVenuePublic) {
+  const hasVenueLinkedFields = VENUE_LINKED_PUBLIC_EVENT_FIELDS.some(
+    (field) => Object.hasOwn(event, field) && event[field] !== undefined,
+  );
+  if (!hasVenueLinkedFields || (event.venueId && isLinkedVenuePublic)) {
     return event;
   }
 

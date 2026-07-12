@@ -111,6 +111,19 @@ for (const fixture of privateVenueFixtures) {
     assert.equal(field in sanitized, false, `${fixture.label}: remove ${field}`);
   }
 }
+const legacyDenormalizedEvent = { ...venueLeakageEvent };
+delete legacyDenormalizedEvent.venueId;
+const sanitizedLegacyDenormalizedEvent = sanitizeVenueLinkedPublicEventFields(
+  legacyDenormalizedEvent,
+  false,
+);
+for (const field of VENUE_LINKED_PUBLIC_EVENT_FIELDS) {
+  assert.equal(
+    field in sanitizedLegacyDenormalizedEvent,
+    false,
+    `legacy event without venueId: remove ${field}`,
+  );
+}
 
 const migrationPlan = buildVenueLifecycleMigrationPlan([
   { _id: "legacy-on", instagramHandle: "legacy.on", isActive: true },
@@ -153,10 +166,18 @@ assert.deepEqual(migrationPlan.changes[2].apply, {
   scrapeActive: false,
   publicStatus: "published",
 });
+const rollbackManifest = buildVenueLifecycleRollbackManifest(migrationPlan.changes);
+assert.equal(rollbackManifest.length, migrationPlan.counts.needsMigration);
+assert.deepEqual(rollbackManifest[2], {
+  id: "partial",
+  instagramHandle: "partial",
+  rollback: { isActive: true, publicStatus: null, scrapeActive: false },
+});
 
 const schemaSource = readFileSync("convex/schema.ts", "utf8");
 const venuesSource = readFileSync("convex/venues.ts", "utf8");
 const usersSource = readFileSync("convex/users.ts", "utf8");
+const eventsSource = readFileSync("convex/events.ts", "utf8");
 const eventDetailSource = readFileSync("app/(main)/events/[eventId]/page.tsx", "utf8");
 const publicEventsSource = readFileSync("lib/events/public-events.ts", "utf8");
 const adminRouteSource = readFileSync("app/api/admin/venues/route.ts", "utf8");
@@ -189,6 +210,12 @@ assert.match(usersSource, /toggleFavoriteVenueForUser[\s\S]*isVenuePublic/);
 assert.match(eventDetailSource, /event\.venueId = venue\?\._id/);
 assert.match(publicEventsSource, /publicVenueIds/);
 assert.match(publicEventsSource, /publicVenueIds\.has\(event\.venueId/);
+assert.match(
+  eventsSource,
+  /export const getDiscoverFeed[\s\S]*?loadPublicVenueIdsForEvents[\s\S]*?sanitizeGroup/,
+);
+assert.match(eventsSource, /new Set\(events\.map/);
+assert.match(usersSource, /new Set\([\s\S]*?events[\s\S]*?event\.venueId/);
 
 for (const value of ["scrapeActive", "publicStatus", "Scraping", "Publication"]) {
   assert.ok(adminRouteSource.includes(value) || adminUiSource.includes(value));
@@ -203,5 +230,11 @@ assert.match(migrationSource, /--backup-reference/);
 assert.match(migrationSource, /--confirm/);
 assert.match(migrationSource, /APPLY_VENUE_LIFECYCLE/);
 assert.match(migrationSource, /rollbackManifest/);
+assert.match(migrationSource, /readFileSync\(options\.rollbackManifestPath/);
+assert.match(migrationSource, /expectedRollbackManifestJson/);
+assert.match(
+  venuesSource,
+  /args\.expectedRollbackManifestJson !== currentRollbackManifestJson/,
+);
 
 console.log("Venue lifecycle state-matrix and leakage QA passed.");

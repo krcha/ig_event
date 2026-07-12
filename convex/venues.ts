@@ -821,6 +821,7 @@ export const previewVenueLifecycleMigration = query({
 export const applyVenueLifecycleMigrationBatch = mutation({
   args: {
     backupReference: v.string(),
+    expectedRollbackManifestJson: v.string(),
     limit: v.optional(v.number()),
     serviceSecret: v.optional(v.string()),
   },
@@ -834,10 +835,19 @@ export const applyVenueLifecycleMigrationBatch = mutation({
     const limit = normalizeLimit(args.limit, 50, 100);
     const venues = await ctx.db.query("venues").collect();
     const plan = buildVenueLifecycleMigrationPlan(venues);
+    const currentRollbackManifestJson = JSON.stringify(
+      buildVenueLifecycleRollbackManifest(plan.changes),
+    );
+    if (args.expectedRollbackManifestJson !== currentRollbackManifestJson) {
+      throw new Error(
+        "Venue lifecycle state changed after rollback-manifest review; export and review a fresh manifest before applying.",
+      );
+    }
     const venueById = new Map(venues.map((venue) => [venue._id, venue] as const));
     const batch = plan.changes.slice(0, limit);
     const now = Date.now();
     let applied = 0;
+    const appliedIds: Id<"venues">[] = [];
 
     for (const change of batch) {
       const venue = venueById.get(change.id as Id<"venues">);
@@ -861,10 +871,12 @@ export const applyVenueLifecycleMigrationBatch = mutation({
         venueId: venue._id,
       });
       applied += 1;
+      appliedIds.push(venue._id);
     }
 
     return {
       applied,
+      appliedIds,
       backupReference,
       beforeCounts: plan.counts,
       remaining: Math.max(0, plan.counts.needsMigration - applied),

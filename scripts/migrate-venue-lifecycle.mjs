@@ -1,5 +1,5 @@
 import process from "node:process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api.js";
 
@@ -11,7 +11,7 @@ function usage() {
     "",
     "Dry-run is the default. It reports migration counts and the complete exact rollbackManifest without writing data.",
     "Use --rollback-manifest PATH to export the complete per-record rollback manifest as JSON.",
-    "Apply mode requires a verified Convex backup reference and an explicit confirmation token.",
+    "Apply mode requires the reviewed rollback-manifest file, a verified Convex backup reference, and an explicit confirmation token.",
   ].join("\n");
 }
 
@@ -80,6 +80,25 @@ async function main() {
     if (!options.backupReference) {
       throw new Error("Apply mode requires --backup-reference REF.");
     }
+    if (!options.rollbackManifestPath) {
+      throw new Error("Apply mode requires --rollback-manifest PATH from the reviewed dry-run.");
+    }
+  }
+
+  let reviewedRollbackManifest = null;
+  if (options.apply) {
+    try {
+      reviewedRollbackManifest = JSON.parse(
+        readFileSync(options.rollbackManifestPath, "utf8"),
+      );
+    } catch (error) {
+      throw new Error(
+        `Failed to read reviewed rollback manifest: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+    if (!Array.isArray(reviewedRollbackManifest)) {
+      throw new Error("Reviewed rollback manifest must be a JSON array.");
+    }
   }
 
   const client = new ConvexHttpClient(convexUrl);
@@ -87,7 +106,7 @@ async function main() {
     serviceSecret,
   });
   console.log(JSON.stringify({ dryRun: options.dryRun, ...preview }, null, 2));
-  if (options.rollbackManifestPath) {
+  if (options.rollbackManifestPath && options.dryRun) {
     writeFileSync(
       options.rollbackManifestPath,
       `${JSON.stringify(preview.rollbackManifest, null, 2)}\n`,
@@ -96,18 +115,31 @@ async function main() {
     console.error(`Wrote ${preview.rollbackManifest.length} rollback records to ${options.rollbackManifestPath}.`);
   }
 
-  if (options.dryRun || preview.counts.needsMigration === 0) return;
+  if (options.dryRun) return;
+
+  if (JSON.stringify(reviewedRollbackManifest) !== JSON.stringify(preview.rollbackManifest)) {
+    throw new Error(
+      "Current lifecycle state does not match the reviewed rollback manifest; export and review a fresh manifest.",
+    );
+  }
+  if (preview.counts.needsMigration === 0) return;
 
   let remaining = preview.counts.needsMigration;
   let appliedTotal = 0;
+  let remainingRollbackManifest = reviewedRollbackManifest;
   while (remaining > 0) {
     const result = await client.mutation(api.venues.applyVenueLifecycleMigrationBatch, {
       backupReference: options.backupReference,
+      expectedRollbackManifestJson: JSON.stringify(remainingRollbackManifest),
       limit: options.limit,
       serviceSecret,
     });
     appliedTotal += result.applied;
     remaining = result.remaining;
+    const appliedIds = new Set(result.appliedIds);
+    remainingRollbackManifest = remainingRollbackManifest.filter(
+      (record) => !appliedIds.has(record.id),
+    );
     console.log(JSON.stringify({ appliedTotal, ...result }, null, 2));
     if (result.applied === 0 && remaining > 0) {
       throw new Error("Migration made no progress; stop and inspect before retrying.");

@@ -37,10 +37,11 @@ npm run migrate:venue-lifecycle -- \
   --apply \
   --confirm APPLY_VENUE_LIFECYCLE \
   --backup-reference '<verified-backup-id>' \
+  --rollback-manifest './venue-lifecycle-rollback.json' \
   --limit 50
 ```
 
-Apply mode is idempotent and processes only records missing one or both explicit lifecycle fields. Every migrated record writes an audit entry containing the explicit before/after state and backup reference. Re-running after completion reports zero pending changes.
+Apply mode is idempotent and processes only records missing one or both explicit lifecycle fields. Before every batch, the mutation compares the complete remaining migration plan with the reviewed manifest and rejects any drift. If a venue changed after export, stop, export a fresh manifest, inspect the difference, and obtain a new review before applying. Every migrated record writes an audit entry containing the explicit before/after state and backup reference. Re-running after completion with a fresh empty manifest reports zero pending changes.
 
 ## Rollback
 

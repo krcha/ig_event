@@ -84,17 +84,22 @@ function notNull<T>(value: T | null): value is T {
   return value !== null;
 }
 
-async function sanitizeSavedEventVenueFields(
+async function loadPublicVenueIdsForSavedEvents(
   ctx: QueryCtx,
-  event: Doc<"events">,
-): Promise<Doc<"events">> {
-  if (!event.venueId) {
-    return event;
-  }
-  const venue = await ctx.db.get(event.venueId);
-  return sanitizeVenueLinkedPublicEventFields(
-    event,
-    venue !== null && isVenuePublic(venue),
+  events: Doc<"events">[],
+): Promise<Set<Id<"venues">>> {
+  const venueIds = [
+    ...new Set(
+      events
+        .map((event) => event.venueId)
+        .filter((venueId): venueId is Id<"venues"> => venueId !== undefined),
+    ),
+  ];
+  const venues = await Promise.all(venueIds.map((venueId) => ctx.db.get(venueId)));
+  return new Set(
+    venues
+      .filter((venue): venue is Doc<"venues"> => venue !== null && isVenuePublic(venue))
+      .map((venue) => venue._id),
   );
 }
 
@@ -114,8 +119,12 @@ async function loadLibraryForUser(ctx: QueryCtx, userId: string) {
   )
     .filter(notNull)
     .filter((event) => event.status === "approved");
-  const savedEvents = await Promise.all(
-    approvedSavedEvents.map((event) => sanitizeSavedEventVenueFields(ctx, event)),
+  const publicVenueIds = await loadPublicVenueIdsForSavedEvents(ctx, approvedSavedEvents);
+  const savedEvents = approvedSavedEvents.map((event) =>
+    sanitizeVenueLinkedPublicEventFields(
+      event,
+      event.venueId !== undefined && publicVenueIds.has(event.venueId),
+    ),
   );
   const favoriteVenues = (
     await Promise.all(favoriteRefs.map((ref) => ctx.db.get(ref.venueId)))

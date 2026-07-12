@@ -108,26 +108,45 @@ async function resolveVenueDenormalizedFields(
   };
 }
 
+async function loadPublicVenueIdsForEvents(
+  ctx: QueryCtx,
+  events: Doc<"events">[],
+): Promise<Set<Id<"venues">>> {
+  const venueIds = [
+    ...new Set(events.map((event) => event.venueId).filter((id): id is Id<"venues"> => id !== undefined)),
+  ];
+  const venues = await Promise.all(venueIds.map((venueId) => ctx.db.get(venueId)));
+  return new Set(
+    venues
+      .filter((venue): venue is Doc<"venues"> => venue !== null && isVenuePublic(venue))
+      .map((venue) => venue._id),
+  );
+}
+
+function sanitizePublicEventWithVenueIds(
+  event: Doc<"events">,
+  publicVenueIds: Set<Id<"venues">>,
+): Doc<"events"> {
+  return sanitizeVenueLinkedPublicEventFields(
+    event,
+    event.venueId !== undefined && publicVenueIds.has(event.venueId),
+  );
+}
+
 async function sanitizePublicEventVenueFields(
   ctx: QueryCtx,
   event: Doc<"events">,
 ): Promise<Doc<"events">> {
-  if (!event.venueId) {
-    return event;
-  }
-
-  const venue = await ctx.db.get(event.venueId);
-  return sanitizeVenueLinkedPublicEventFields(
-    event,
-    venue !== null && isVenuePublic(venue),
-  );
+  const publicVenueIds = await loadPublicVenueIdsForEvents(ctx, [event]);
+  return sanitizePublicEventWithVenueIds(event, publicVenueIds);
 }
 
 async function sanitizePublicEventPage(
   ctx: QueryCtx,
   events: Doc<"events">[],
 ): Promise<Doc<"events">[]> {
-  return Promise.all(events.map((event) => sanitizePublicEventVenueFields(ctx, event)));
+  const publicVenueIds = await loadPublicVenueIdsForEvents(ctx, events);
+  return events.map((event) => sanitizePublicEventWithVenueIds(event, publicVenueIds));
 }
 
 async function writeEventAuditLog(
@@ -698,12 +717,22 @@ export const getDiscoverFeed = query({
       .sort(compareOrganicEvents)
       .slice(0, 12);
 
+    const publicVenueIds = await loadPublicVenueIdsForEvents(ctx, [
+      ...featured,
+      ...free,
+      ...promoted,
+      ...tonight,
+      ...weekend,
+    ]);
+    const sanitizeGroup = (events: Doc<"events">[]) =>
+      events.map((event) => sanitizePublicEventWithVenueIds(event, publicVenueIds));
+
     return {
-      featured,
-      free,
-      promoted,
-      tonight,
-      weekend,
+      featured: sanitizeGroup(featured),
+      free: sanitizeGroup(free),
+      promoted: sanitizeGroup(promoted),
+      tonight: sanitizeGroup(tonight),
+      weekend: sanitizeGroup(weekend),
     };
   },
 });
