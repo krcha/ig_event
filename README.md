@@ -32,6 +32,7 @@ explicitly replaces them.
 
 - Public event discovery at `/events`
 - Monthly browsing at `/calendar`
+- Public venue directory at `/venues`
 - Event details at `/events/[eventId]`
 - Admin moderation at `/admin`
 - Scrape controls and ingestion job status at `/admin/scraper`

@@ -30,6 +30,11 @@ const nextConfig = {
         permanent: true,
       },
       {
+        source: "/map",
+        destination: "/venues",
+        permanent: false,
+      },
+      {
         source: "/calendar",
         destination: "/",
         permanent: false,

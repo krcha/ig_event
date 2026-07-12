@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import nextConfig from "../next.config.mjs";
 
 const toolbarPath = "components/navigation/app-toolbar.tsx";
 const source = readFileSync(toolbarPath, "utf8");
@@ -13,6 +14,7 @@ const profileAvatarSource = readFileSync(
   "components/navigation/profile-avatar-link.tsx",
   "utf8",
 );
+const redirects = await nextConfig.redirects();
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -91,7 +93,7 @@ assert.equal(
   "Mobile top header should not render the old right-side current-tab chip.",
 );
 
-for (const label of ["Events", "Discover", "Map", "Saved", "You"]) {
+for (const label of ["Events", "Discover", "Venues", "Saved", "You"]) {
   assert.equal(
     new RegExp(`>\\s*${escapeRegExp(label)}\\s*<`).test(mobileTopbarSource),
     false,
@@ -102,7 +104,7 @@ for (const label of ["Events", "Discover", "Map", "Saved", "You"]) {
 assert.equal(
   /\b(pathname|isActivePath|desktopToolbarItems|mobileToolbarItems)\b/.test(mobileTopbarSource),
   false,
-  "Mobile top header markup should be path/tab-independent so it stays identical on Events, Map, Saved, and You.",
+  "Mobile top header markup should be path/tab-independent so it stays identical on Events, Venues, Saved, and You.",
 );
 
 const publicItemsStart = source.indexOf("const PUBLIC_TOOLBAR_ITEMS");
@@ -119,14 +121,14 @@ const publicItemsSource = source.slice(publicItemsStart, adminItemsStart);
 
 assert.deepEqual(
   [...publicItemsSource.matchAll(/\blabel:\s*"([^"]+)"/g)].map(([, label]) => label),
-  ["Events", "Discover", "Map", "Saved"],
-  "Public bottom navigation tabs should remain exactly Events, Discover, Map, Saved.",
+  ["Events", "Discover", "Venues", "Saved"],
+  "Public navigation tabs should remain exactly Events, Discover, Venues, Saved.",
 );
 
 for (const { href, label } of [
   { href: "/", label: "Events" },
   { href: "/discover", label: "Discover" },
-  { href: "/map", label: "Map" },
+  { href: "/venues", label: "Venues" },
   { href: "/saved", label: "Saved" },
 ]) {
   assert.match(
@@ -135,6 +137,35 @@ for (const { href, label } of [
     `Public toolbar should keep ${label} mapped to ${href}.`,
   );
 }
+
+assert.equal(
+  /href:\s*"\/map"|label:\s*"Map"/.test(publicItemsSource),
+  false,
+  "Primary navigation should not expose the placeholder Map destination.",
+);
+assert.deepEqual(
+  redirects.find(({ source }) => source === "/map"),
+  {
+    source: "/map",
+    destination: "/venues",
+    permanent: false,
+  },
+  "Next config should issue a non-permanent HTTP redirect from /map to /venues.",
+);
+assert.ok(
+  source.includes('aria-label="Global"') && source.includes('aria-label="Mobile navigation"'),
+  "Desktop and mobile primary navigation should retain accessible names.",
+);
+assert.ok(
+  source.includes('aria-current={active ? "page" : undefined}'),
+  "Primary navigation links should expose the active destination with aria-current.",
+);
+assert.ok(
+  source.includes('className="flex w-full items-center gap-1 overflow-hidden"') &&
+    source.includes("inline-flex min-w-0 flex-1 flex-col") &&
+    source.includes('className="max-w-full truncate"'),
+  "Mobile primary navigation should keep four flexible, truncating tabs without horizontal overflow at 320px.",
+);
 
 assert.ok(
   layoutSource.includes("<Suspense fallback={null}>") && layoutSource.includes("<NavigationFeedback />"),
