@@ -271,6 +271,32 @@ docker compose --env-file /opt/ig_event/.env.production \
 The Compose default binds the container to `127.0.0.1:3000`. Put Caddy or nginx
 in front for public HTTPS.
 
+### Security-header ownership
+
+The application owns the enforced `Content-Security-Policy`, `X-Frame-Options`,
+`X-Content-Type-Options`, `Referrer-Policy`, and `Permissions-Policy` headers in
+`lib/security/headers.mjs` and applies them to every page and API through
+`next.config.mjs`. The policy explicitly permits only the custom Clerk frontend,
+Cloudflare's Clerk challenge frame, the configured Convex HTTPS/WebSocket origin,
+Clerk profile images and telemetry, and approved Apify images. Production omits
+`unsafe-eval`; local `next dev` adds it because Next requires it and does not
+upgrade local HTTP to HTTPS.
+
+Traefik alone owns `Strict-Transport-Security`. The middleware is attached only
+to the canonical HTTPS router for `events.ineedtofeedmyrabbit.com`; local HTTP
+and noncanonical app origins do not emit HSTS. Verify after deployment:
+
+```bash
+for path in / /sign-in /api/health /does-not-exist; do
+  curl -sS -D - -o /dev/null "https://events.ineedtofeedmyrabbit.com${path}"
+done
+```
+
+Before expanding CSP sources, identify the exact blocked origin and the required
+directive. Do not add broad `*` sources or production `unsafe-eval`. If an
+approved Clerk or Convex origin is blocked, roll back only the header-policy
+commit or narrowly amend that directive; do not disable authentication or TLS.
+
 ## Clerk Production DNS
 
 The current Clerk production instance uses `events.ineedtofeedmyrabbit.com` as
