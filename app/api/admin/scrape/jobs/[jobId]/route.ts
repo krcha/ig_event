@@ -164,14 +164,14 @@ function buildJobResponse(job: IngestionJobRecord) {
 
 export async function GET(
   _request: Request,
-  context: { params: { jobId: string } },
+  context: { params: Promise<{ jobId: string }> },
 ) {
   try {
     const adminAccess = await requireAdminApiAccess();
     if (!adminAccess.ok) {
       return adminAccess.response;
     }
-    const { jobId } = context.params;
+    const { jobId } = await context.params;
     const convex = await createAuthenticatedConvexHttpClient();
     const job = await loadJob(convex, jobId);
 
@@ -196,14 +196,14 @@ export async function GET(
 
 export async function POST(
   _request: Request,
-  context: { params: { jobId: string } },
+  context: { params: Promise<{ jobId: string }> },
 ) {
   try {
     const adminAccess = await requireAdminApiAccess();
     if (!adminAccess.ok) {
       return adminAccess.response;
     }
-    const { jobId } = context.params;
+    const { jobId } = await context.params;
     const convex = await createAuthenticatedConvexHttpClient();
     const job = await loadJob(convex, jobId);
 

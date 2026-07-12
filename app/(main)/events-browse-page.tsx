@@ -41,7 +41,7 @@ type CalendarSearchParams = {
 };
 
 type CalendarPageProps = {
-  searchParams?: CalendarSearchParams;
+  searchParams?: Promise<CalendarSearchParams>;
 };
 
 type EventTone = {
@@ -471,9 +471,10 @@ function isUpcomingCalendarDay(dayKey: string, defaultDayKey: string): boolean {
 }
 
 export default async function CalendarPage({ searchParams }: CalendarPageProps) {
+  const resolvedSearchParams = await searchParams;
   const todayKey = getNightlifeDefaultDateKey();
   const today = dateKeyToLocalNoonDate(todayKey);
-  const requestedMonth = getSingleValue(searchParams?.month);
+  const requestedMonth = getSingleValue(resolvedSearchParams?.month);
   const monthStart = parseMonthParam(requestedMonth, today);
   const monthParam = formatMonthParam(monthStart);
   const nextMonthStart = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
@@ -481,11 +482,11 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const fromDate = monthStartKey;
   const beforeDate = formatDateKey(nextMonthStart);
   const { events, error } = await loadPublicCalendarEventsWindow({ beforeDate, fromDate });
-  const selectedVenue = getSingleValue(searchParams?.venue);
-  const hiddenDayCategories = normalizeHiddenDayCategories(getSingleValue(searchParams?.hide));
+  const selectedVenue = getSingleValue(resolvedSearchParams?.venue);
+  const hiddenDayCategories = normalizeHiddenDayCategories(getSingleValue(resolvedSearchParams?.hide));
   const hiddenDayCategorySet = new Set(hiddenDayCategories);
-  const selectedSortMode = normalizeAgendaSortMode(getSingleValue(searchParams?.sort));
-  const selectedSearchQuery = getSingleValue(searchParams?.q)?.trim() || undefined;
+  const selectedSortMode = normalizeAgendaSortMode(getSingleValue(resolvedSearchParams?.sort));
+  const selectedSearchQuery = getSingleValue(resolvedSearchParams?.q)?.trim() || undefined;
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
   const venueNames = new Set<string>();
@@ -529,7 +530,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     .sort();
   const selectedDayKey = getSelectedDay(
     monthStart,
-    getSingleValue(searchParams?.day),
+    getSingleValue(resolvedSearchParams?.day),
     filteredMonthDayKeys,
     todayKey,
   );

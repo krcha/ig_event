@@ -97,7 +97,7 @@ type VenueRecord = {
 };
 
 type EventDetailPageProps = {
-  params: { eventId: string };
+  params: Promise<{ eventId: string }>;
 };
 
 const getPublicApprovedEventQuery =
@@ -279,7 +279,8 @@ function EventImage({
 }
 
 export default async function EventDetailPage({ params }: EventDetailPageProps) {
-  const { event, error } = await loadEvent(params.eventId);
+  const { eventId } = await params;
+  const { event, error } = await loadEvent(eventId);
   if (!event && !error) {
     notFound();
   }
