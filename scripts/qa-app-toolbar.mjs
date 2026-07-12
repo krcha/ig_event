@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import nextConfig from "../next.config.mjs";
 
 const toolbarPath = "components/navigation/app-toolbar.tsx";
 const source = readFileSync(toolbarPath, "utf8");
-const mapRouteSource = readFileSync("app/(main)/map/page.tsx", "utf8");
 const layoutSource = readFileSync("app/layout.tsx", "utf8");
 const navigationFeedbackSource = readFileSync(
   "components/navigation/navigation-feedback.tsx",
@@ -14,6 +14,7 @@ const profileAvatarSource = readFileSync(
   "components/navigation/profile-avatar-link.tsx",
   "utf8",
 );
+const redirects = await nextConfig.redirects();
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -142,9 +143,14 @@ assert.equal(
   false,
   "Primary navigation should not expose the placeholder Map destination.",
 );
-assert.ok(
-  mapRouteSource.includes('redirect("/venues")'),
-  "The retired /map route should redirect to the venue directory.",
+assert.deepEqual(
+  redirects.find(({ source }) => source === "/map"),
+  {
+    source: "/map",
+    destination: "/venues",
+    permanent: false,
+  },
+  "Next config should issue a non-permanent HTTP redirect from /map to /venues.",
 );
 assert.ok(
   source.includes('aria-label="Global"') && source.includes('aria-label="Mobile navigation"'),
