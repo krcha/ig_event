@@ -205,9 +205,9 @@ const createEventMutation =
 const updateEventMutation =
   "events:updateEvent" as unknown as FunctionReference<"mutation">;
 const listActiveVenuesQuery =
-  "venues:listActiveVenues" as unknown as FunctionReference<"query">;
+  "venues:listActiveVenueIngestionFields" as unknown as FunctionReference<"query">;
 const listVenuesQuery =
-  "venues:listVenues" as unknown as FunctionReference<"query">;
+  "venues:listVenueIngestionFields" as unknown as FunctionReference<"query">;
 const listScrapedPostsByHandleQuery =
   "scrapedPosts:listByHandle" as unknown as FunctionReference<"query">;
 const listScrapedPostsByHandlePaginatedQuery =
