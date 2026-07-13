@@ -65,6 +65,7 @@ for (const functionName of [
   "createEvent",
   "updateEvent",
   "listByStatus",
+  "listByStatusPaginated",
   "listByDate",
   "getByInstagramPostId",
   "getByInstagramPostUrl",
