@@ -322,6 +322,22 @@ export const listByStatus = query({
   },
 });
 
+export const listByStatusPaginated = query({
+  args: {
+    status: eventStatus,
+    paginationOpts: paginationOptsValidator,
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    return ctx.db
+      .query("events")
+      .withIndex("by_status", (q) => q.eq("status", args.status))
+      .order("desc")
+      .paginate(args.paginationOpts);
+  },
+});
+
 export const listByStatusDateWindow = query({
   args: {
     status: eventStatus,

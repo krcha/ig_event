@@ -3,7 +3,10 @@ import {
   buildApprovedEventAutoCleanupGroups,
   filterUpcomingApprovedEventsForDuplicateCleanup,
 } from "../lib/events/approved-event-duplicates.ts";
-import { simulateApprovedEventAutoMerge } from "../lib/events/approved-event-automerge.ts";
+import {
+  runApprovedEventAutoMerge,
+  simulateApprovedEventAutoMerge,
+} from "../lib/events/approved-event-automerge.ts";
 
 const fixtureStartDate = new Date();
 const todayDate = createFixtureDate(0);
@@ -357,6 +360,40 @@ assert.equal(summary.finalApprovedCount, 5);
 assert.equal(summary.failedCount, 0);
 assert.equal(summary.passes, 2);
 assert(summary.duplicateGroupCount >= 3);
+
+let paginatedQueryCalls = 0;
+const paginatedSourceEvent = {
+  ...sameheadsPrimary,
+  _id: sameheadsPrimary.id,
+  status: "approved",
+};
+const paginatedSummary = await runApprovedEventAutoMerge({
+  async query(_query, args) {
+    paginatedQueryCalls += 1;
+    assert.equal(args.status, "approved");
+    assert.equal(args.paginationOpts.numItems, 100);
+    if (paginatedQueryCalls === 1) {
+      assert.equal(args.paginationOpts.cursor, null);
+      return {
+        page: [paginatedSourceEvent],
+        isDone: false,
+        continueCursor: "page-2",
+      };
+    }
+    assert.equal(args.paginationOpts.cursor, "page-2");
+    return {
+      page: [],
+      isDone: true,
+      continueCursor: "",
+    };
+  },
+  async mutation() {
+    throw new Error("No merge mutation should run for a single approved event.");
+  },
+});
+assert.equal(paginatedQueryCalls, 2);
+assert.equal(paginatedSummary.approvedCount, 1);
+assert.equal(paginatedSummary.failedCount, 0);
 
 console.log(
   "QA passed: approved-event automerge uses future fixtures, collapses known duplicate groups, and leaves unrelated same-night entries separate.",

@@ -50,7 +50,7 @@ export type ApprovedEventAutoMergeSummary = {
 };
 
 const listByStatusQuery =
-  "events:listByStatus" as unknown as FunctionReference<"query">;
+  "events:listByStatusPaginated" as unknown as FunctionReference<"query">;
 const mergeApprovedEventsMutation =
   "events:mergeApprovedEvents" as unknown as FunctionReference<"mutation">;
 
@@ -153,11 +153,32 @@ async function loadApprovedEvents(
   limit: number,
   serviceSecret?: string,
 ): Promise<ApprovedEventSourceRecord[]> {
-  return (await convex.query(listByStatusQuery, {
-    status: "approved",
-    limit,
-    ...(serviceSecret ? { serviceSecret } : {}),
-  })) as ApprovedEventSourceRecord[];
+  const events: ApprovedEventSourceRecord[] = [];
+  let cursor: string | null = null;
+
+  while (events.length < limit) {
+    const pageSize = Math.min(100, limit - events.length);
+    const result = (await convex.query(listByStatusQuery, {
+      status: "approved",
+      paginationOpts: {
+        cursor,
+        numItems: pageSize,
+      },
+      ...(serviceSecret ? { serviceSecret } : {}),
+    })) as {
+      page: ApprovedEventSourceRecord[];
+      isDone: boolean;
+      continueCursor: string;
+    };
+
+    events.push(...result.page);
+    if (result.isDone || !result.continueCursor || result.continueCursor === cursor) {
+      break;
+    }
+    cursor = result.continueCursor;
+  }
+
+  return events.slice(0, limit);
 }
 
 export async function runApprovedEventAutoMerge(
