@@ -15,7 +15,8 @@ import { getRequiredEnv } from "@/lib/utils/env";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const listVenuesQuery = "venues:listVenues" as unknown as FunctionReference<"query">;
+const listVenuesQuery =
+  "venues:listVenueIngestionFields" as unknown as FunctionReference<"query">;
 const createVenueMutation =
   "venues:createVenue" as unknown as FunctionReference<"mutation">;
 

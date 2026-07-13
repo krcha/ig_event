@@ -47,7 +47,7 @@ for (const composeValue of [
   "CRON_INGESTION_MAX_STEPS: ${CRON_INGESTION_MAX_STEPS:-20}",
   "CRON_INGESTION_BATCH_SIZE: ${CRON_INGESTION_BATCH_SIZE:-64}",
   "CRON_RESULTS_LIMIT: ${CRON_RESULTS_LIMIT:-1}",
-  "CRON_MAX_HANDLES_PER_RUN: ${CRON_MAX_HANDLES_PER_RUN:-600}",
+  "CRON_MAX_HANDLES_PER_RUN: ${CRON_MAX_HANDLES_PER_RUN:-1500}",
   "CRON_FULL_SCRAPE_COOLDOWN_HOURS: ${CRON_FULL_SCRAPE_COOLDOWN_HOURS:-23}",
 ]) {
   assert.ok(dockerComposeSource.includes(composeValue), `docker-compose.yml should include ${composeValue}.`);

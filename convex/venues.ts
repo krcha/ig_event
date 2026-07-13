@@ -10,6 +10,7 @@ const MAX_PUBLIC_VENUE_EVENT_LIMIT = 50;
 const DEFAULT_PUBLIC_VENUE_DIRECTORY_LIMIT = 500;
 const MAX_PUBLIC_VENUE_DIRECTORY_LIMIT = 1000;
 const PUBLIC_VENUE_FALLBACK_SCAN_LIMIT = 1000;
+const MAX_OPERATIONAL_VENUE_LIMIT = 1500;
 
 const venueHoursSource = v.union(
   v.literal("osm"),
@@ -214,6 +215,37 @@ export const listActiveVenues = query({
       .query("venues")
       .withIndex("by_isActive", (q) => q.eq("isActive", true))
       .collect();
+  },
+});
+
+export const listVenueIngestionFields = query({
+  args: {
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const venues = await ctx.db.query("venues").take(MAX_OPERATIONAL_VENUE_LIMIT);
+    return venues.map((venue) => ({
+      name: venue.name,
+      instagramHandle: venue.instagramHandle,
+    }));
+  },
+});
+
+export const listActiveVenueIngestionFields = query({
+  args: {
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const venues = await ctx.db
+      .query("venues")
+      .withIndex("by_isActive", (q) => q.eq("isActive", true))
+      .take(MAX_OPERATIONAL_VENUE_LIMIT);
+    return venues.map((venue) => ({
+      name: venue.name,
+      instagramHandle: venue.instagramHandle,
+    }));
   },
 });
 

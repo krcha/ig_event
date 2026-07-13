@@ -104,7 +104,14 @@ for (const functionName of [
   assert.match(usersSource, pattern, `${functionName} should derive identity from the authenticated viewer.`);
 }
 
-for (const functionName of ["listVenues", "createVenue", "updateVenue", "patchVenueHours"]) {
+for (const functionName of [
+  "listVenues",
+  "listVenueIngestionFields",
+  "listActiveVenueIngestionFields",
+  "createVenue",
+  "updateVenue",
+  "patchVenueHours",
+]) {
   const pattern = new RegExp(`export const ${functionName} = [\\s\\S]*?requireAdminOrServiceSecret`);
   assert.match(venuesSource, pattern, `${functionName} should require admin or service secret.`);
 }

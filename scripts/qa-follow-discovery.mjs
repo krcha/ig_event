@@ -23,8 +23,8 @@ assert.deepEqual(
 
 assert.equal(DEFAULT_FOLLOW_DISCOVERY_SOURCE_HANDLE, "going_places11");
 assert.equal(DEFAULT_FOLLOW_DISCOVERY_ACTOR_ID, "scraping_solutions/instagram-scraper-followers-following-no-cookies");
-assert.equal(DEFAULT_FOLLOW_DISCOVERY_RESULTS_LIMIT, 700);
-assert.equal(DEFAULT_FOLLOW_DISCOVERY_MAX_TOTAL_CHARGE_USD, 0.5);
+assert.equal(DEFAULT_FOLLOW_DISCOVERY_RESULTS_LIMIT, 1500);
+assert.equal(DEFAULT_FOLLOW_DISCOVERY_MAX_TOTAL_CHARGE_USD, 1.1);
 
 const defaultConfig = getFollowDiscoveryConfig({});
 assert.equal(defaultConfig.sourceHandle, "going_places11");
@@ -179,6 +179,7 @@ const routeSource = readFileSync(
 assert.match(routeSource, /isAuthorizedCronRequestHeader/);
 assert.match(routeSource, /runFollowDiscoveryWorkflow/);
 assert.match(routeSource, /venues:createVenue/);
+assert.match(routeSource, /venues:listVenueIngestionFields/);
 assert.match(routeSource, /runInstagramIngestion/);
 
 console.log("Follow-discovery QA passed.");

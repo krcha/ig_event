@@ -63,7 +63,7 @@ const cronConfig = getCronIngestionConfig({});
 assert.deepEqual(cronConfig, {
   resultsLimit: 1,
   daysBack: 10,
-  maxHandlesPerRun: 600,
+  maxHandlesPerRun: 1500,
   fullScrapeCooldownHours: 23,
 });
 
@@ -90,6 +90,14 @@ const ingestionJobsSource = readFileSync(
   new URL("../convex/ingestionJobs.ts", import.meta.url),
   "utf8",
 );
+const ingestionRunnerSource = readFileSync(
+  new URL("../lib/pipeline/run-instagram-ingestion.ts", import.meta.url),
+  "utf8",
+);
+
+assert.match(ingestionRunnerSource, /venues:listActiveVenueIngestionFields/);
+assert.match(ingestionRunnerSource, /venues:listVenueIngestionFields/);
+assert.doesNotMatch(ingestionRunnerSource, /"venues:listActiveVenues"/);
 
 for (const [label, source] of [
   ["instagram scraper", instagramScraperSource],
@@ -142,12 +150,12 @@ assert.equal(
 
 assert.deepEqual(
   selectCronIngestionHandles({
-    activeVenueHandles: Array.from({ length: 600 }, (_, index) => `venue-${index + 1}`),
+    activeVenueHandles: Array.from({ length: 1500 }, (_, index) => `venue-${index + 1}`),
     recentlyAttemptedHandles: [],
     maxHandlesPerRun: cronConfig.maxHandlesPerRun,
   }),
   {
-    handles: Array.from({ length: 600 }, (_, index) => `venue-${index + 1}`),
+    handles: Array.from({ length: 1500 }, (_, index) => `venue-${index + 1}`),
     skippedRecentlyAttempted: 0,
     skippedDueToRunLimit: 0,
   },
