@@ -157,7 +157,7 @@ async function loadApprovedEvents(
   let cursor: string | null = null;
 
   while (events.length < limit) {
-    const pageSize = Math.min(100, limit - events.length);
+    const pageSize = Math.min(10, limit - events.length);
     const result = (await convex.query(listByStatusQuery, {
       status: "approved",
       paginationOpts: {
