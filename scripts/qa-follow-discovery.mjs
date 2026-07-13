@@ -176,10 +176,21 @@ const routeSource = readFileSync(
   new URL("../app/api/cron/discover-following/route.ts", import.meta.url),
   "utf8",
 );
+const venuesSource = readFileSync(
+  new URL("../convex/venues.ts", import.meta.url),
+  "utf8",
+);
 assert.match(routeSource, /isAuthorizedCronRequestHeader/);
 assert.match(routeSource, /runFollowDiscoveryWorkflow/);
 assert.match(routeSource, /venues:createVenue/);
-assert.match(routeSource, /venues:listVenueIngestionFields/);
+assert.match(routeSource, /loadOperationalVenueRecords/);
 assert.match(routeSource, /runInstagramIngestion/);
+assert.match(venuesSource, /listVenueIngestionFieldsPaginated/);
+assert.match(venuesSource, /listActiveVenueIngestionFieldsPaginated/);
+assert.match(
+  venuesSource,
+  /withIndex\("by_instagramHandle"[\s\S]*?return existingVenue\._id/,
+  "venue creation should be idempotent by normalized Instagram handle",
+);
 
 console.log("Follow-discovery QA passed.");

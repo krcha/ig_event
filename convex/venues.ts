@@ -1,5 +1,6 @@
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import { normalizeHandle, toSearchableText } from "../lib/pipeline/venue-normalization";
 import { canonicalizeVenueCategory } from "../lib/taxonomy/venue-types";
@@ -10,7 +11,6 @@ const MAX_PUBLIC_VENUE_EVENT_LIMIT = 50;
 const DEFAULT_PUBLIC_VENUE_DIRECTORY_LIMIT = 500;
 const MAX_PUBLIC_VENUE_DIRECTORY_LIMIT = 1000;
 const PUBLIC_VENUE_FALLBACK_SCAN_LIMIT = 1000;
-const MAX_OPERATIONAL_VENUE_LIMIT = 1500;
 
 const venueHoursSource = v.union(
   v.literal("osm"),
@@ -218,34 +218,42 @@ export const listActiveVenues = query({
   },
 });
 
-export const listVenueIngestionFields = query({
+export const listVenueIngestionFieldsPaginated = query({
   args: {
+    paginationOpts: paginationOptsValidator,
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const venues = await ctx.db.query("venues").take(MAX_OPERATIONAL_VENUE_LIMIT);
-    return venues.map((venue) => ({
-      name: venue.name,
-      instagramHandle: venue.instagramHandle,
-    }));
+    const result = await ctx.db.query("venues").paginate(args.paginationOpts);
+    return {
+      ...result,
+      page: result.page.map((venue) => ({
+        name: venue.name,
+        instagramHandle: venue.instagramHandle,
+      })),
+    };
   },
 });
 
-export const listActiveVenueIngestionFields = query({
+export const listActiveVenueIngestionFieldsPaginated = query({
   args: {
+    paginationOpts: paginationOptsValidator,
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const venues = await ctx.db
+    const result = await ctx.db
       .query("venues")
       .withIndex("by_isActive", (q) => q.eq("isActive", true))
-      .take(MAX_OPERATIONAL_VENUE_LIMIT);
-    return venues.map((venue) => ({
-      name: venue.name,
-      instagramHandle: venue.instagramHandle,
-    }));
+      .paginate(args.paginationOpts);
+    return {
+      ...result,
+      page: result.page.map((venue) => ({
+        name: venue.name,
+        instagramHandle: venue.instagramHandle,
+      })),
+    };
   },
 });
 
@@ -500,9 +508,26 @@ export const createVenue = mutation({
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const { serviceSecret: _serviceSecret, ...venueArgs } = args;
     void _serviceSecret;
+    const instagramHandle = normalizeHandle(venueArgs.instagramHandle);
+    if (!instagramHandle) {
+      throw new Error("Venue Instagram handle is required.");
+    }
+    const indexedVenue = await ctx.db
+      .query("venues")
+      .withIndex("by_instagramHandle", (q) => q.eq("instagramHandle", instagramHandle))
+      .first();
+    const existingVenue =
+      indexedVenue ??
+      (await ctx.db.query("venues").collect()).find(
+        (venue) => normalizeHandle(venue.instagramHandle) === instagramHandle,
+      );
+    if (existingVenue) {
+      return existingVenue._id;
+    }
     const now = Date.now();
     return ctx.db.insert("venues", {
       ...venueArgs,
+      instagramHandle,
       category: canonicalizeVenueCategory(venueArgs.category),
       isActive: venueArgs.isActive ?? true,
       createdAt: now,
@@ -532,8 +557,31 @@ export const updateVenue = mutation({
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const now = Date.now();
+    let instagramHandle: string | undefined;
+    if (args.patch.instagramHandle !== undefined) {
+      const normalizedInstagramHandle = normalizeHandle(args.patch.instagramHandle);
+      if (!normalizedInstagramHandle) {
+        throw new Error("Venue Instagram handle is required.");
+      }
+      instagramHandle = normalizedInstagramHandle;
+      const indexedVenue = await ctx.db
+        .query("venues")
+        .withIndex("by_instagramHandle", (q) =>
+          q.eq("instagramHandle", normalizedInstagramHandle),
+        )
+        .first();
+      const equivalentVenue =
+        indexedVenue ??
+        (await ctx.db.query("venues").collect()).find(
+          (venue) => normalizeHandle(venue.instagramHandle) === normalizedInstagramHandle,
+        );
+      if (equivalentVenue && equivalentVenue._id !== args.id) {
+        throw new Error("A venue with that normalized Instagram handle already exists.");
+      }
+    }
     const patch = {
       ...args.patch,
+      ...(instagramHandle !== undefined ? { instagramHandle } : {}),
       ...(args.patch.category !== undefined
         ? { category: canonicalizeVenueCategory(args.patch.category) }
         : {}),

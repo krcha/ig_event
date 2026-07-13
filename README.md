@@ -122,7 +122,7 @@ OPENAI_REVIEW_MODEL=gpt-4.1-mini
 CRON_SECRET=
 CRON_RESULTS_LIMIT=1
 CRON_DAYS_BACK=10
-CRON_INGESTION_MAX_STEPS=4
+CRON_INGESTION_MAX_STEPS=20
 CRON_MAX_HANDLES_PER_RUN=1500
 CRON_FULL_SCRAPE_COOLDOWN_HOURS=23
 EVENTS_TIMEZONE=Europe/Belgrade
@@ -151,7 +151,14 @@ Notes:
   production.
 - Cron ingestion defaults to one latest Instagram post per active venue handle,
   all active handles up to the 1500-handle safety cap, and a 23-hour cooldown so
-  the daily 07:00 UTC schedule is not blocked by normal scheduler jitter.
+  the daily 07:00 UTC schedule is not blocked by normal scheduler jitter. Each
+  Convex ingestion-job document is capped at 500 handles; the source-controlled
+  host runner makes up to three authenticated requests to finish the 1500-handle
+  schedule without approaching Convex's 1 MiB document limit.
+- Post scraping has a `$0.01` hard charge cap per account run. At the current
+  basic-data result price, 1500 one-post runs are expected to cost about `$2.25`;
+  the aggregate configured worst-case cap is `$15`, plus OpenAI usage and the
+  separately capped following-discovery Actor.
 - `EVENTS_TIMEZONE` controls local event-day handling.
 - `ADMIN_CLERK_USER_IDS` is a comma- or space-separated allowlist for admin
   pages and `/api/admin/*`.

@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ENV_FILE="${IG_EVENT_CRON_ENV:-/etc/ig_event/cron.env}"
+LOG_DIR="${IG_EVENT_CRON_LOG_DIR:-/var/log/ig_event}"
+DRY_RUN=0
+
+if [[ "${1:-}" == "--dry-run" ]]; then
+  DRY_RUN=1
+  shift
+fi
+
+JOB="${1:-}"
+case "$JOB" in
+  ingest-venues|discover-following)
+    ;;
+  *)
+    echo "usage: $0 [--dry-run] {ingest-venues|discover-following}" >&2
+    exit 64
+    ;;
+esac
+
+if [[ ! -r "$ENV_FILE" ]]; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=missing_env_file env_file=$ENV_FILE" >&2
+  exit 78
+fi
+
+# shellcheck disable=SC1090
+. "$ENV_FILE"
+
+if [[ -z "${APP_ORIGIN:-}" || -z "${CRON_SECRET:-}" ]]; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=missing_APP_ORIGIN_or_CRON_SECRET" >&2
+  exit 78
+fi
+
+case "$JOB" in
+  ingest-venues)
+    PATH_SUFFIX="/api/cron/ingest-venues"
+    CURL_TIMEOUT_SECONDS="${INGEST_CRON_TIMEOUT_SECONDS:-7200}"
+    MAX_REQUESTS="${INGEST_CRON_MAX_REQUESTS_PER_RUN:-3}"
+    ;;
+  discover-following)
+    PATH_SUFFIX="/api/cron/discover-following"
+    CURL_TIMEOUT_SECONDS="${DISCOVER_CRON_TIMEOUT_SECONDS:-3600}"
+    MAX_REQUESTS=1
+    ;;
+esac
+
+if [[ ! "$MAX_REQUESTS" =~ ^[1-9][0-9]*$ || "$MAX_REQUESTS" -gt 10 ]]; then
+  echo "invalid max request count: $MAX_REQUESTS" >&2
+  exit 64
+fi
+
+APP_ORIGIN="${APP_ORIGIN%/}"
+URL="${APP_ORIGIN}${PATH_SUFFIX}"
+mkdir -p "$LOG_DIR"
+chmod 700 "$LOG_DIR"
+
+LOCK_FILE="/run/lock/ig-event-${JOB}.lock"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=skipped reason=already_running url=$URL"
+  exit 0
+fi
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=dry_run url=$URL env_file=$ENV_FILE timeout=${CURL_TIMEOUT_SECONDS}s max_requests=$MAX_REQUESTS"
+  exit 0
+fi
+
+STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+START_EPOCH="$(date +%s)"
+LAST_BODY="${LOG_DIR}/cron-${JOB}-last.json"
+LAST_ERR="${LOG_DIR}/cron-${JOB}-last.stderr"
+LAST_DONE="false"
+LAST_SELECTED=0
+LAST_SKIPPED_DUE=0
+REQUESTS_COMPLETED=0
+TOTAL_SELECTED=0
+HOST_RUN_MAX_HANDLES=0
+CURRENT_CURL_CONFIG=""
+
+cleanup_sensitive_temp_file() {
+  if [[ -n "$CURRENT_CURL_CONFIG" ]]; then
+    rm -f "$CURRENT_CURL_CONFIG"
+  fi
+}
+trap cleanup_sensitive_temp_file EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+run_request() {
+  local request_index="$1"
+  local request_url="$2"
+  local tmp_body tmp_config tmp_stderr http_code curl_exit finished_at duration_seconds
+  tmp_body="$(mktemp "${LOG_DIR}/cron-${JOB}.XXXXXX.json")"
+  tmp_config="$(mktemp "${LOG_DIR}/cron-${JOB}.curl.XXXXXX")"
+  CURRENT_CURL_CONFIG="$tmp_config"
+  tmp_stderr="${tmp_body}.stderr"
+  chmod 600 "$tmp_body" "$tmp_config"
+
+  {
+    printf 'silent\n'
+    printf 'show-error\n'
+    printf 'max-time = %s\n' "$CURL_TIMEOUT_SECONDS"
+    printf 'header = "Authorization: Bearer %s"\n' "$CRON_SECRET"
+    printf 'header = "User-Agent: ig-event-vps-cron/1.1"\n'
+    printf 'output = "%s"\n' "$tmp_body"
+    printf 'write-out = "%%{http_code}"\n'
+    printf 'url = "%s"\n' "$request_url"
+  } > "$tmp_config"
+
+  set +e
+  http_code="$(curl --config "$tmp_config" 2>"$tmp_stderr")"
+  curl_exit=$?
+  set -e
+  rm -f "$tmp_config"
+  CURRENT_CURL_CONFIG=""
+
+  mv "$tmp_body" "$LAST_BODY"
+  if [[ -s "$tmp_stderr" ]]; then
+    mv "$tmp_stderr" "$LAST_ERR"
+  else
+    rm -f "$tmp_stderr"
+    : > "$LAST_ERR"
+  fi
+  chmod 600 "$LAST_BODY" "$LAST_ERR"
+
+  finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  duration_seconds=$(( $(date +%s) - START_EPOCH ))
+  if [[ "$curl_exit" -ne 0 || ! "$http_code" =~ ^2[0-9][0-9]$ ]]; then
+    echo "${finished_at} job=${JOB} request=${request_index}/${MAX_REQUESTS} status=failed http_code=${http_code} curl_exit=${curl_exit} duration_seconds=${duration_seconds} started_at=${STARTED_AT} url=${request_url} body=${LAST_BODY} stderr=${LAST_ERR}"
+    return 1
+  fi
+
+  echo "${finished_at} job=${JOB} request=${request_index}/${MAX_REQUESTS} status=ok http_code=${http_code} curl_exit=${curl_exit} duration_seconds=${duration_seconds} started_at=${STARTED_AT} url=${request_url} body=${LAST_BODY}"
+}
+
+for request_index in $(seq 1 "$MAX_REQUESTS"); do
+  request_url="$URL"
+  if [[ "$JOB" == "ingest-venues" && "$HOST_RUN_MAX_HANDLES" -gt 0 ]]; then
+    host_run_remaining=$(( HOST_RUN_MAX_HANDLES - TOTAL_SELECTED ))
+    if [[ "$host_run_remaining" -le 0 ]]; then
+      break
+    fi
+    request_url="${URL}?hostRunRemaining=${host_run_remaining}"
+  fi
+  run_request "$request_index" "$request_url"
+  REQUESTS_COMPLETED="$request_index"
+
+  if [[ "$JOB" != "ingest-venues" ]]; then
+    break
+  fi
+
+  response_state="$(python3 - "$LAST_BODY" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+handles = payload.get("handles")
+selected = len(handles) if isinstance(handles, list) else 0
+done = payload.get("done") is True
+skipped = payload.get("skippedDueToRunLimit", 0)
+status = payload.get("status", "none")
+host_max = payload.get("hostRunMaxHandles", 0)
+resumed = payload.get("resumedJob") is True
+selected_increment = 0 if resumed else selected
+print("true" if done else "false", selected, skipped if isinstance(skipped, int) else 0, status, host_max if isinstance(host_max, int) else 0, selected_increment)
+PY
+)"
+  read -r LAST_DONE LAST_SELECTED LAST_SKIPPED_DUE LAST_STATUS RESPONSE_HOST_MAX SELECTED_INCREMENT <<<"$response_state"
+  TOTAL_SELECTED=$(( TOTAL_SELECTED + SELECTED_INCREMENT ))
+  if [[ "$RESPONSE_HOST_MAX" -gt 0 ]]; then
+    HOST_RUN_MAX_HANDLES="$RESPONSE_HOST_MAX"
+  fi
+
+  if [[ "$LAST_SELECTED" -eq 0 ]]; then
+    break
+  fi
+  if [[ "$LAST_DONE" != "true" ]]; then
+    if [[ "$request_index" -eq "$MAX_REQUESTS" ]]; then
+      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=incomplete_job requests=$REQUESTS_COMPLETED selected=$LAST_SELECTED response_status=$LAST_STATUS body=$LAST_BODY" >&2
+      exit 1
+    fi
+    continue
+  fi
+  if [[ "$LAST_SKIPPED_DUE" -le 0 ]]; then
+    break
+  fi
+  if [[ "$HOST_RUN_MAX_HANDLES" -gt 0 && "$TOTAL_SELECTED" -ge "$HOST_RUN_MAX_HANDLES" ]]; then
+    break
+  fi
+done
+
+FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+DURATION_SECONDS=$(( $(date +%s) - START_EPOCH ))
+FINAL_STATUS="ok"
+if [[ "$JOB" == "ingest-venues" && "$LAST_DONE" == "true" && "$LAST_SKIPPED_DUE" -gt 0 && "$REQUESTS_COMPLETED" -eq "$MAX_REQUESTS" ]]; then
+  FINAL_STATUS="cap_reached"
+fi
+
+echo "${FINISHED_AT} job=${JOB} status=${FINAL_STATUS} requests=${REQUESTS_COMPLETED} selected=${TOTAL_SELECTED} host_run_max=${HOST_RUN_MAX_HANDLES} duration_seconds=${DURATION_SECONDS} started_at=${STARTED_AT} url=${URL} body=${LAST_BODY}"

@@ -1,6 +1,11 @@
 import { internalMutation, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { requireAdminOrServiceSecret } from "./authz";
+import {
+  MAX_INGESTION_JOB_HANDLES,
+  assertIngestionJobPayloadWithinBounds,
+  truncateIngestionError,
+} from "../lib/pipeline/ingestion-job-safety";
 
 const ingestionJobStatus = v.union(
   v.literal("queued"),
@@ -29,6 +34,7 @@ export const createJob = mutation({
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const { serviceSecret: _serviceSecret, ...jobArgs } = args;
     void _serviceSecret;
+    assertIngestionJobPayloadWithinBounds(jobArgs);
     const now = Date.now();
     return ctx.db.insert("ingestionJobs", {
       source: jobArgs.source,
@@ -104,8 +110,20 @@ export const patchJob = mutation({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const job = await ctx.db.get(args.id);
+    if (!job) {
+      throw new Error("Ingestion job not found.");
+    }
+    assertIngestionJobPayloadWithinBounds({
+      handles: job.handles,
+      summaryJson: args.patch.summaryJson ?? job.summaryJson,
+      stateJson: args.patch.stateJson ?? job.stateJson,
+    });
     await ctx.db.patch(args.id, {
       ...args.patch,
+      ...(args.patch.error
+        ? { error: truncateIngestionError(args.patch.error) }
+        : {}),
       updatedAt: Date.now(),
     });
   },
@@ -200,6 +218,11 @@ export const completeStep = mutation({
     if ((job.stateVersion ?? 0) !== args.stateVersion) {
       throw new Error("Ingestion job state version mismatch.");
     }
+    assertIngestionJobPayloadWithinBounds({
+      handles: job.handles,
+      summaryJson: args.patch.summaryJson ?? job.summaryJson,
+      stateJson: args.patch.stateJson ?? job.stateJson,
+    });
 
     const now = Date.now();
     const status = args.patch.status ?? job.status;
@@ -245,10 +268,21 @@ export const failStep = mutation({
     if ((job.stateVersion ?? 0) !== args.stateVersion) {
       throw new Error("Ingestion job state version mismatch.");
     }
+    if (job.handles.length <= MAX_INGESTION_JOB_HANDLES) {
+      assertIngestionJobPayloadWithinBounds({
+        handles: job.handles,
+        summaryJson: args.summaryJson ?? job.summaryJson,
+        stateJson: args.stateJson ?? job.stateJson,
+      });
+    } else if (args.summaryJson !== undefined || args.stateJson !== undefined) {
+      throw new Error(
+        "Oversized legacy ingestion jobs may only be terminalized without payload updates.",
+      );
+    }
 
     const now = Date.now();
     const patch = {
-      error: args.error,
+      error: truncateIngestionError(args.error),
       finishedAt: new Date(now).toISOString(),
       leaseExpiresAt: undefined,
       leaseOwner: undefined,

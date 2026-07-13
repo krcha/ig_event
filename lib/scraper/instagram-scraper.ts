@@ -23,6 +23,7 @@ const SUPPORTED_APIFY_MEMORY_MBYTES = [
   32768,
 ] as const;
 const MIN_APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN = 0.01;
+const MAX_APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN = 0.01;
 const DEFAULT_APIFY_MAX_TOTAL_CHARGE_USD_PER_RESULT = 0.005;
 const APIFY_API_BASE_URL = "https://api.apify.com/v2";
 const INSTAGRAM_HOSTNAMES = new Set(["instagram.com", "www.instagram.com"]);
@@ -231,17 +232,16 @@ function normalizeApifyMaxTotalChargeUsdPerRun(
   value: string | undefined,
   resultsLimit: number,
 ): number {
-  if (value) {
-    const parsed = Number.parseFloat(value);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed;
-    }
-  }
+  const configured = value ? Number.parseFloat(value) : Number.NaN;
+  const requested =
+    Number.isFinite(configured) && configured > 0
+      ? configured
+      : Math.max(
+          MIN_APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN,
+          resultsLimit * DEFAULT_APIFY_MAX_TOTAL_CHARGE_USD_PER_RESULT,
+        );
 
-  return Math.max(
-    MIN_APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN,
-    resultsLimit * DEFAULT_APIFY_MAX_TOTAL_CHARGE_USD_PER_RESULT,
-  );
+  return Math.min(requested, MAX_APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN);
 }
 
 function normalizeApifyMemoryMbytes(value: string | undefined): number | undefined {

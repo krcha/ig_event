@@ -29,6 +29,7 @@ for (const envName of [
   "SCRAPED_POST_PAGE_SIZE=25",
   "CRON_INGESTION_MAX_STEPS=20",
   "CRON_INGESTION_BATCH_SIZE=64",
+  "APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN=0.01",
   "OPENAI_VISION_MODEL=gpt-4.1-mini",
   "OPENAI_REVIEW_MODEL=gpt-4.1-mini",
 ]) {
@@ -49,6 +50,7 @@ for (const composeValue of [
   "CRON_RESULTS_LIMIT: ${CRON_RESULTS_LIMIT:-1}",
   "CRON_MAX_HANDLES_PER_RUN: ${CRON_MAX_HANDLES_PER_RUN:-1500}",
   "CRON_FULL_SCRAPE_COOLDOWN_HOURS: ${CRON_FULL_SCRAPE_COOLDOWN_HOURS:-23}",
+  "APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN: ${APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN:-0.01}",
 ]) {
   assert.ok(dockerComposeSource.includes(composeValue), `docker-compose.yml should include ${composeValue}.`);
 }
@@ -58,6 +60,12 @@ assert.ok(
     "CLERK_AUTHORIZED_PARTIES: ${CLERK_AUTHORIZED_PARTIES:-https://events.ineedtofeedmyrabbit.com}",
   ),
   "docker-compose.runtime.yml should provide the production Clerk authorized party default.",
+);
+assert.ok(
+  dockerComposeRuntimeSource.includes(
+    "APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN: ${APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN:-0.01}",
+  ),
+  "runtime Compose should retain the bounded per-account Apify charge cap.",
 );
 assert.match(
   dockerComposeSelfHostedConvexSource,

@@ -329,11 +329,26 @@ Use the same `CRON_SECRET` value in `/etc/ig_event/cron.env` and the web app
 runtime env. If a job returns `401`, check the header and secret first. The
 runner keeps the bearer token out of process arguments by writing a temporary
 root-only curl config file, and it uses `/run/lock/ig-event-<job>.lock` to avoid
-overlapping runs. The cron endpoint resumes any recent `cron_active_venues` job
-before creating a new one, defaults to `CRON_INGESTION_MAX_STEPS=20` and
-`CRON_INGESTION_BATCH_SIZE=64`, and should finish the current 1500-handle cap in a
-single host cron request while preserving `CRON_RESULTS_LIMIT=1` and the 23-hour
-cooldown.
+overlapping runs. Install the source-controlled runner with:
+
+```bash
+install -o root -g root -m 0755 scripts/ig-event-cron-runner \
+  /usr/local/sbin/ig-event-cron-runner
+```
+
+The cron endpoint resumes any recent `cron_active_venues` job before creating a
+new one. It defaults to `CRON_INGESTION_MAX_STEPS=20` and
+`CRON_INGESTION_BATCH_SIZE=64`. Each Convex job is bounded to 500 handles so the
+serialized summary and state retain substantial headroom below the 1 MiB
+Convex document limit. The host runner makes up to three requests, respecting
+the 1500-handle schedule cap while preserving `CRON_RESULTS_LIMIT=1` and the
+23-hour cooldown. Set `INGEST_CRON_MAX_REQUESTS_PER_RUN` only when intentionally
+changing that aggregate cap.
+
+The per-account Apify Actor charge is capped at `$0.01`. At the current
+basic-data result price, 1500 one-post account runs are expected to cost about
+`$2.25`; the aggregate configured worst case is `$15`, plus OpenAI usage and the
+separate following-discovery Actor cap.
 
 The Convex retention cleanup is separate: it is a native Convex cron that runs
 Wednesday 05:00 UTC and is not called by VPS cron.
