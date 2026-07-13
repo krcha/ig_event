@@ -14,7 +14,6 @@ import {
   normalizeHandle,
   normalizeVenueFromEvidence,
   toSearchableText,
-  type CanonicalVenueRecord,
   type VenueNormalization,
 } from "@/lib/pipeline/venue-normalization";
 import {
@@ -64,6 +63,7 @@ import {
   hasVenueContextSupport,
 } from "@/lib/events/deduplication-shared";
 import { loadVenueNameOverridesByHandle } from "@/lib/pipeline/venue-name-overrides";
+import { loadOperationalVenueRecords } from "@/lib/pipeline/operational-venues";
 import { getRequiredEnv } from "@/lib/utils/env";
 
 type RunInstagramIngestionOptions = {
@@ -204,10 +204,6 @@ const createEventMutation =
   "events:createEvent" as unknown as FunctionReference<"mutation">;
 const updateEventMutation =
   "events:updateEvent" as unknown as FunctionReference<"mutation">;
-const listActiveVenuesQuery =
-  "venues:listActiveVenueIngestionFields" as unknown as FunctionReference<"query">;
-const listVenuesQuery =
-  "venues:listVenueIngestionFields" as unknown as FunctionReference<"query">;
 const listScrapedPostsByHandleQuery =
   "scrapedPosts:listByHandle" as unknown as FunctionReference<"query">;
 const listScrapedPostsByHandlePaginatedQuery =
@@ -909,13 +905,6 @@ function getConvexClient(): ConvexHttpClient {
   return new ConvexHttpClient(convexUrl);
 }
 
-type ActiveVenueRecord = {
-  name: string;
-  instagramHandle: string;
-};
-
-type VenueRecord = CanonicalVenueRecord;
-
 type EventImportRecord = {
   _id: string;
   title: string;
@@ -960,10 +949,11 @@ async function loadCanonicalVenueNamesByHandle(
   client: ConvexHttpClient,
   serviceSecret: string,
 ): Promise<Record<string, string>> {
-  const venues = (await client.query(
-    listVenuesQuery,
-    withServiceSecret({}, serviceSecret),
-  )) as VenueRecord[];
+  const venues = await loadOperationalVenueRecords({
+    client,
+    serviceSecret,
+    activeOnly: false,
+  });
   return buildCanonicalVenueNamesByHandle(venues);
 }
 
@@ -5797,10 +5787,11 @@ export async function getActiveVenueHandles(options?: {
 }): Promise<string[]> {
   const client = getConvexClient();
   const serviceSecret = getConfiguredServiceSecret(options?.serviceSecret);
-  const venues = (await client.query(
-    listActiveVenuesQuery,
-    withServiceSecret({}, serviceSecret),
-  )) as ActiveVenueRecord[];
+  const venues = await loadOperationalVenueRecords({
+    client,
+    serviceSecret,
+    activeOnly: true,
+  });
   const uniqueHandles = new Set<string>();
 
   for (const venue of venues) {
@@ -5859,10 +5850,11 @@ export async function importUpcomingEventsToSavedPosts(options?: {
 }): Promise<ExistingEventImportSummary> {
   const client = getConvexClient();
   const serviceSecret = getConfiguredServiceSecret(options?.serviceSecret);
-  const venues = (await client.query(
-    listVenuesQuery,
-    withServiceSecret({}, serviceSecret),
-  )) as VenueRecord[];
+  const venues = await loadOperationalVenueRecords({
+    client,
+    serviceSecret,
+    activeOnly: false,
+  });
   const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle(venues);
   const handlesByVenueName = buildVenueHandleByCanonicalVenueName(
     canonicalVenueNamesByHandle,

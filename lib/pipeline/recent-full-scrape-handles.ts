@@ -215,6 +215,7 @@ export async function getRecentFullScrapeAttemptSummary(options: {
   candidateHandles: string[];
   minCreatedAt?: number;
   serviceSecret?: string;
+  includeErroredCompletedHandles?: boolean;
 }): Promise<RecentFullScrapeAttemptSummary> {
   const normalizedCandidates = [
     ...new Set(options.candidateHandles.map((handle) => normalizeHandle(handle)).filter(Boolean)),
@@ -242,7 +243,10 @@ export async function getRecentFullScrapeAttemptSummary(options: {
   let lastFreshScrapeAtMs: number | null = null;
 
   for (const job of recentJobs) {
-    const attemptedHandles = getAttemptedHandlesFromRecentJob(job);
+    const attemptedHandles =
+      options.includeErroredCompletedHandles && job.status === "completed"
+        ? job.handles
+        : getAttemptedHandlesFromRecentJob(job);
     if (attemptedHandles.length === 0) {
       continue;
     }
@@ -277,6 +281,7 @@ export async function getRecentlyAttemptedFullScrapeHandles(options: {
   candidateHandles: string[];
   minCreatedAt?: number;
   serviceSecret?: string;
+  includeErroredCompletedHandles?: boolean;
 }): Promise<string[]> {
   const summary = await getRecentFullScrapeAttemptSummary(options);
   return summary.attemptedHandles;

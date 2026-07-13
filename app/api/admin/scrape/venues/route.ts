@@ -18,6 +18,10 @@ import {
   getCronIngestionConfig,
   selectCronIngestionHandles,
 } from "@/lib/pipeline/cron-ingestion-config";
+import {
+  MAX_INGESTION_JOB_HANDLES,
+  serializeSafeIngestionJobPayload,
+} from "@/lib/pipeline/ingestion-job-safety";
 
 type Body = {
   resultsLimit?: number;
@@ -107,9 +111,9 @@ export async function POST(request: Request) {
       );
     }
 
-    handles = activeVenueHandles;
+    handles = activeVenueHandles.slice(0, MAX_INGESTION_JOB_HANDLES);
     let skippedRecentlyAttempted = 0;
-    let skippedDueToRunLimit = 0;
+    let skippedDueToRunLimit = Math.max(0, activeVenueHandles.length - handles.length);
     const cronConfig = getCronIngestionConfig();
 
     if (mode === "full_scrape") {
@@ -123,7 +127,10 @@ export async function POST(request: Request) {
       const handleSelection = selectCronIngestionHandles({
         activeVenueHandles,
         recentlyAttemptedHandles: recentFullScrapeSummary.attemptedHandles,
-        maxHandlesPerRun: cronConfig.maxHandlesPerRun,
+        maxHandlesPerRun: Math.min(
+          cronConfig.maxHandlesPerRun,
+          MAX_INGESTION_JOB_HANDLES,
+        ),
       });
       handles = handleSelection.handles;
       skippedRecentlyAttempted = handleSelection.skippedRecentlyAttempted;
@@ -157,6 +164,7 @@ export async function POST(request: Request) {
       ...(daysBack ? { daysBack } : {}),
     });
     const state = createInitialIngestionBatchState();
+    const persistedPayload = serializeSafeIngestionJobPayload({ handles, summary, state });
 
     const jobId = (await convex.mutation(createIngestionJobMutation, {
       source: "active_venues",
@@ -165,8 +173,8 @@ export async function POST(request: Request) {
       resultsLimit,
       daysBack,
       batchSize: DEFAULT_BATCH_SIZE,
-      summaryJson: JSON.stringify(summary),
-      stateJson: JSON.stringify(state),
+      summaryJson: persistedPayload.summaryJson,
+      stateJson: persistedPayload.stateJson,
     })) as string;
 
     logInfo("scrape_started", {

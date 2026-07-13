@@ -9,14 +9,13 @@ import {
   type VenueListRecord,
 } from "@/lib/pipeline/follow-discovery";
 import { runInstagramIngestion } from "@/lib/pipeline/run-instagram-ingestion";
+import { loadOperationalVenueRecords } from "@/lib/pipeline/operational-venues";
 import { isAuthorizedCronRequestHeader } from "@/lib/pipeline/cron-ingestion-config";
 import { getRequiredEnv } from "@/lib/utils/env";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const listVenuesQuery =
-  "venues:listVenueIngestionFields" as unknown as FunctionReference<"query">;
 const createVenueMutation =
   "venues:createVenue" as unknown as FunctionReference<"mutation">;
 
@@ -62,7 +61,11 @@ export async function GET(request: Request) {
         scrapeFollowing: (apifyRequest) =>
           scrapeInstagramFollowingAccounts({ request: apifyRequest }),
         listVenues: async () =>
-          (await convex.query(listVenuesQuery, { serviceSecret })) as VenueListRecord[],
+          (await loadOperationalVenueRecords({
+            client: convex,
+            serviceSecret,
+            activeOnly: false,
+          })) as VenueListRecord[],
         createVenue: async (venue: DiscoveredVenueInput) =>
           convex.mutation(createVenueMutation, { ...venue, serviceSecret }),
         runVenueIngestion: async (options) =>

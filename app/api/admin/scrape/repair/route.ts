@@ -17,6 +17,10 @@ import {
   getCronIngestionConfig,
   selectCronIngestionHandles,
 } from "@/lib/pipeline/cron-ingestion-config";
+import {
+  MAX_INGESTION_JOB_HANDLES,
+  serializeSafeIngestionJobPayload,
+} from "@/lib/pipeline/ingestion-job-safety";
 
 type Body = {
   resultsLimit?: number;
@@ -116,7 +120,10 @@ export async function POST(request: Request) {
     const handleSelection = selectCronIngestionHandles({
       activeVenueHandles,
       recentlyAttemptedHandles: recentFullScrapeSummary.attemptedHandles,
-      maxHandlesPerRun: cronConfig.maxHandlesPerRun,
+      maxHandlesPerRun: Math.min(
+        cronConfig.maxHandlesPerRun,
+        MAX_INGESTION_JOB_HANDLES,
+      ),
     });
     handles = handleSelection.handles;
 
@@ -146,6 +153,7 @@ export async function POST(request: Request) {
       daysBack,
     });
     const state = createInitialIngestionBatchState();
+    const persistedPayload = serializeSafeIngestionJobPayload({ handles, summary, state });
 
     const jobId = (await convex.mutation(createIngestionJobMutation, {
       source: "repair_active_venues",
@@ -154,8 +162,8 @@ export async function POST(request: Request) {
       resultsLimit,
       daysBack,
       batchSize: DEFAULT_BATCH_SIZE,
-      summaryJson: JSON.stringify(summary),
-      stateJson: JSON.stringify(state),
+      summaryJson: persistedPayload.summaryJson,
+      stateJson: persistedPayload.stateJson,
     })) as string;
 
     logInfo("scrape_started", {

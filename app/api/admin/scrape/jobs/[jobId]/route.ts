@@ -16,6 +16,10 @@ import {
   runInstagramIngestionBatchStep,
 } from "@/lib/pipeline/run-instagram-ingestion";
 import { buildOperationsTriageSummary } from "@/lib/pipeline/ingestion-run-triage";
+import {
+  serializeSafeIngestionJobPayload,
+  truncateIngestionError,
+} from "@/lib/pipeline/ingestion-job-safety";
 
 type IngestionJobStatus = "queued" | "running" | "completed" | "failed";
 
@@ -260,6 +264,11 @@ export async function POST(
         serviceSecret,
       });
 
+      const persistedPayload = serializeSafeIngestionJobPayload({
+        handles: claimedJob.handles,
+        summary: batchResult.summary,
+        state: batchResult.state,
+      });
       const finishedAt = batchResult.done ? new Date().toISOString() : undefined;
       await convex.mutation(completeStepMutation, {
         id: jobId,
@@ -267,8 +276,8 @@ export async function POST(
         stateVersion,
         patch: {
           status: batchResult.done ? "completed" : "running",
-          summaryJson: JSON.stringify(batchResult.summary),
-          stateJson: JSON.stringify(batchResult.state),
+          summaryJson: persistedPayload.summaryJson,
+          stateJson: persistedPayload.stateJson,
           ...(finishedAt ? { finishedAt } : {}),
           startedAt,
         },
@@ -300,9 +309,9 @@ export async function POST(
         source: claimedJob.source,
         status: batchResult.done ? "completed" : "running",
         handles: claimedJob.handles,
-        summary: batchResult.summary,
+        summary: persistedPayload.summary,
         triage: buildOperationsTriageSummary({
-          summary: batchResult.summary,
+          summary: persistedPayload.summary,
           status: batchResult.done ? "completed" : "running",
           handles: claimedJob.handles,
         }),
@@ -311,15 +320,19 @@ export async function POST(
         finishedAt: finishedAt ?? null,
       });
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to run ingestion batch.";
+      const message = truncateIngestionError(error);
+      const failedPayload = serializeSafeIngestionJobPayload({
+        handles: claimedJob.handles,
+        summary,
+        state,
+      });
       await convex.mutation(failStepMutation, {
         id: jobId,
         leaseOwner,
         stateVersion,
         error: message,
-        summaryJson: JSON.stringify(summary),
-        stateJson: JSON.stringify(state),
+        summaryJson: failedPayload.summaryJson,
+        stateJson: failedPayload.stateJson,
       });
       logError("scrape_failed", {
         jobId,

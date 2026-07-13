@@ -107,8 +107,8 @@ for (const functionName of [
 
 for (const functionName of [
   "listVenues",
-  "listVenueIngestionFields",
-  "listActiveVenueIngestionFields",
+  "listVenueIngestionFieldsPaginated",
+  "listActiveVenueIngestionFieldsPaginated",
   "createVenue",
   "updateVenue",
   "patchVenueHours",
