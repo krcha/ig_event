@@ -362,37 +362,51 @@ assert.equal(summary.passes, 2);
 assert(summary.duplicateGroupCount >= 3);
 
 let paginatedQueryCalls = 0;
-const paginatedSourceEvent = {
-  ...sameheadsPrimary,
-  _id: sameheadsPrimary.id,
+const paginatedSourceEvents = Array.from({ length: 25 }, (_, index) => ({
+  ...createEvent({
+    id: `paginated-${index}`,
+    title: `Unique paginated event ${index}`,
+    date: createFixtureDate(index + 10),
+    venue: `Unique venue ${index}`,
+    instagramPostUrl: `https://www.instagram.com/p/paginated-${index}/`,
+  }),
+  _id: `paginated-${index}`,
   status: "approved",
-};
+}));
 const paginatedSummary = await runApprovedEventAutoMerge({
   async query(_query, args) {
     paginatedQueryCalls += 1;
     assert.equal(args.status, "approved");
-    assert.equal(args.paginationOpts.numItems, 100);
+    assert.equal(args.paginationOpts.numItems, 10);
     if (paginatedQueryCalls === 1) {
       assert.equal(args.paginationOpts.cursor, null);
       return {
-        page: [paginatedSourceEvent],
+        page: paginatedSourceEvents.slice(0, 10),
         isDone: false,
         continueCursor: "page-2",
       };
     }
-    assert.equal(args.paginationOpts.cursor, "page-2");
+    if (paginatedQueryCalls === 2) {
+      assert.equal(args.paginationOpts.cursor, "page-2");
+      return {
+        page: paginatedSourceEvents.slice(10, 20),
+        isDone: false,
+        continueCursor: "page-3",
+      };
+    }
+    assert.equal(args.paginationOpts.cursor, "page-3");
     return {
-      page: [],
+      page: paginatedSourceEvents.slice(20),
       isDone: true,
       continueCursor: "",
     };
   },
   async mutation() {
-    throw new Error("No merge mutation should run for a single approved event.");
+    throw new Error("No merge mutation should run for unique approved events.");
   },
 });
-assert.equal(paginatedQueryCalls, 2);
-assert.equal(paginatedSummary.approvedCount, 1);
+assert.equal(paginatedQueryCalls, 3);
+assert.equal(paginatedSummary.approvedCount, 25);
 assert.equal(paginatedSummary.failedCount, 0);
 
 console.log(
