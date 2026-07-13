@@ -1350,6 +1350,15 @@ function runDescriptionStartTimeQa() {
     "Ulaz od 18+.",
     "Karte od 1000 RSD.",
     "Kapacitet 20 ljudi.",
+    "Ulaz od 10 do 20 evra",
+    "Cena od 10 do 20 eura",
+    "Karte od 10 do 20 dolara",
+    "Tickets from 10 to 20 dollars",
+    "Entry from 10 to 20 euros",
+    "Open: 9h-17h",
+    "Hours: 9h-17h",
+    "Happy hour from 5 to 8",
+    "Happy hours: 5h-8h",
   ]) {
     assert.equal(extractEventTimeFromText(text), undefined, `reject non-time text: ${text}`);
   }
@@ -1481,6 +1490,15 @@ function runDescriptionStartTimeQa() {
     "Lokal je otvoren od 9 do 17",
     "Bar is open from 9 to 17",
     "Od 10 do 20 procenata popusta",
+    "Ulaz od 10 do 20 evra",
+    "Cena od 10 do 20 eura",
+    "Karte od 10 do 20 dolara",
+    "Tickets from 10 to 20 dollars",
+    "Entry from 10 to 20 euros",
+    "Open: 9h-17h",
+    "Hours: 9h-17h",
+    "Happy hour from 5 to 8",
+    "Happy hours: 5h-8h",
   ];
   for (const [index, unsupportedText] of unsupportedTimeContexts.entries()) {
     for (const evidencePath of ["caption", "ocr"]) {
@@ -1529,6 +1547,10 @@ function runDescriptionStartTimeQa() {
     "Popust 20% pre 22h ali koncert počinje u 21h",
     "Radno vreme do 17 a koncert počinje u 21h",
     "Početak u 21h uz 20% popusta",
+    "Ulaz od 10 do 20 evra, početak u 21h",
+    "Tickets from 10 to 20 dollars but event starts at 21h",
+    "Open: 9h-17h, concert starts at 21h",
+    "Happy hour from 5 to 8 but show starts at 21h",
   ].entries()) {
     for (const evidencePath of ["caption", "ocr"]) {
       const mixedTimeEvent = assertSingleOkPreparedEvent(

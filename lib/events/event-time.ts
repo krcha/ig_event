@@ -168,7 +168,9 @@ const EVENT_TIME_TOKEN_PATTERN = String.raw`(?:[01]?\d|2[0-3])(?:\s*(?:[:.,h])\s
 const EVENT_TIME_RANGE_CONNECTOR_PATTERN = String.raw`(?:-|–|—|/|\bto\b|\bdo\b)`;
 const EVENT_TIME_CONTEXT_PATTERN = String.raw`(?:početak|pocetak|počinje|pocinje|kreće|krece|start(?:s|ing)?|begin(?:s|ning)?|doors(?:\s+open)?|vrata|kapije|program|nastup|svirka|show|from|od|at|u)`;
 const DATE_MONTH_WORD_AFTER_TIME_RE = /^\s*\.\s*(?:do\b|jan(?:uar)?\b|januar[au]?\b|feb(?:ruar)?\b|februar[au]?\b|mar(?:t|ch)?\b|marta\b|apr(?:il)?\b|aprila\b|maj(?:a)?\b|jun(?:e|a|i)?\b|jul(?:y|a|i)?\b|avg(?:ust)?(?:a)?\b|aug(?:ust)?\b|sep(?:t|tember)?(?:a)?\b|okt(?:obar|obra)?\b|oct(?:ober)?\b|nov(?:embar|embra|ember)?\b|dec(?:embar|embra|ember)?\b|\d)/iu;
-const PRICE_OR_AGE_WORD_NEAR_TIME_RE = /(?:\bulaz\b|\bkarte?\b|\btickets?\b|\bprice\b|\bcena\b|\bcijena\b|\brsd\b|\bdin(?:ara)?\b|\beur\b|€|\bkapacitet\b|\bage\b|\bages\b)/iu;
+const PRICE_OR_AGE_WORD_NEAR_TIME_RE = /(?:\bulaz\b|\bentry\b|\bkarte?\b|\btickets?\b|\bprice\b|\bcena\b|\bcijena\b|\brsd\b|\bdin(?:ara)?\b|\beur\b|€|\bkapacitet\b|\bage\b|\bages\b)/iu;
+const PRICE_CUE_BEFORE_TIME_RE = /(?:\bulaz\b|\bentry\b|\bkarte?\b|\btickets?\b|\bprice\b|\bcena\b|\bcijena\b)[^.!?\n]{0,24}$/iu;
+const CURRENCY_NEAR_TIME_RE = /(?:\brsd\b|\bdin(?:ar\p{L}*)?\b|\beur(?:o|a|u|om|ima|i|e|os?)?\b|\bevr(?:o|a|u|om|ima|i|e)\b|\bdollars?\b|\bdol(?:ar\p{L}*)?\b|\bpounds?\b|\bfunt(?:a|e|i|u|om|ama)?\b|[$€£])/iu;
 
 type ExtractedEventTimeCandidate = {
   endLabel?: string;
@@ -243,10 +245,14 @@ function hasRejectedTimeTokenContext(sourceText: string, tokenStart: number, tok
   if (/\b(?:popust|discount|posto|procen(?:at|ata|ta|ti))\b|%/iu.test(localContext)) {
     return true;
   }
+  if (PRICE_CUE_BEFORE_TIME_RE.test(before) && CURRENCY_NEAR_TIME_RE.test(nearbyText)) {
+    return true;
+  }
   if (
-    /\b(?:radno\s+(?:vreme|vrijeme)|working\s+hours?|opening\s+hours?|business\s+hours?|venue\s+hours?|hours?\s+of\s+operation|open\s+daily|(?:we\s+are|bar\s+is|venue\s+is)\s+open|otvoren(?:o|i|a|e)?(?:\s+smo)?|lokal(?:\s+je)?\s+otvoren|lokal\s+radi|bar\s+hours?)\b/iu.test(
+    /\b(?:radno\s+(?:vreme|vrijeme)|working\s+hours?|opening\s+hours?|business\s+hours?|venue\s+hours?|hours?\s+of\s+operation|open\s+daily|(?:we\s+are|bar\s+is|venue\s+is)\s+open|otvoren(?:o|i|a|e)?(?:\s+smo)?|lokal(?:\s+je)?\s+otvoren|lokal\s+radi|bar\s+hours?|happy\s+hours?)\b/iu.test(
       localContext,
-    )
+    ) ||
+    /(?:^|[^\p{L}])(?:open|hours?)\s*(?::|[-–—])/iu.test(localContext)
   ) {
     return true;
   }

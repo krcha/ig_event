@@ -34,6 +34,10 @@ for (const [text, expected] of [
   ["Popust 20% pre 22h ali koncert počinje u 21h", "21:00"],
   ["Radno vreme do 17 a koncert počinje u 21h", "21:00"],
   ["Početak u 21h uz 20% popusta", "21:00"],
+  ["Ulaz od 10 do 20 evra, početak u 21h", "21:00"],
+  ["Tickets from 10 to 20 dollars but event starts at 21h", "21:00"],
+  ["Open: 9h-17h, concert starts at 21h", "21:00"],
+  ["Happy hour from 5 to 8 but show starts at 21h", "21:00"],
 ]) {
   assert.equal(extractEventTimeEvidenceFromText(text)?.time, expected, `time evidence: ${text}`);
 }
@@ -59,6 +63,15 @@ for (const text of [
   "Lokal je otvoren od 9 do 17",
   "Bar is open from 9 to 17",
   "Od 10 do 20 procenata popusta",
+  "Ulaz od 10 do 20 evra",
+  "Cena od 10 do 20 eura",
+  "Karte od 10 do 20 dolara",
+  "Tickets from 10 to 20 dollars",
+  "Entry from 10 to 20 euros",
+  "Open: 9h-17h",
+  "Hours: 9h-17h",
+  "Happy hour from 5 to 8",
+  "Happy hours: 5h-8h",
   "Adresa: Knez Mihailova 21",
   "Address: 21 Main Street",
   "Kapacitet 20 ljudi",
