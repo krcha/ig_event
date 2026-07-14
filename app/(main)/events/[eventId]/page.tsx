@@ -28,6 +28,7 @@ import {
 import { SaveEventButton } from "@/components/events/save-event-button";
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
 import { VenueWeeklyHours } from "@/components/venues/venue-weekly-hours";
+import { loadPublicEventDetailData } from "@/lib/events/public-event-detail-data";
 import {
   DEFAULT_EVENT_TYPE,
   canonicalizeEventType,
@@ -146,69 +147,64 @@ function findVenueForEvent(event: EventRecord, venues: VenueRecord[]): VenueReco
   );
 }
 
-async function loadEvent(eventId: string): Promise<{
-  event: EventRecord | null;
-  error?: string;
-}> {
+async function loadEvent(eventId: string): Promise<EventRecord | null> {
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
   if (!convexUrl) {
-    return { event: null, error: "Convex is not configured yet." };
+    throw new Error("Convex is not configured yet.");
   }
 
-  try {
-    const convex = new ConvexHttpClient(convexUrl);
-    const event = (await convex.query(getPublicApprovedEventQuery, { id: eventId })) as EventRecord | null;
-    if (event) {
-      const venues = event.venueId
-        ? ((await convex.query(listPublicVenueFieldsByIdsQuery, {
-            ids: [event.venueId],
-          })) as VenueRecord[])
-        : ((await convex.query(listPublicActiveVenueFieldsQuery, {
+  const convex = new ConvexHttpClient(convexUrl);
+  const { event, venues } = await loadPublicEventDetailData<EventRecord, VenueRecord>({
+    loadEvent: () => convex.query(getPublicApprovedEventQuery, { id: eventId }) as Promise<EventRecord | null>,
+    loadVenues: (loadedEvent) =>
+      loadedEvent.venueId
+        ? (convex.query(listPublicVenueFieldsByIdsQuery, {
+            ids: [loadedEvent.venueId],
+          }) as Promise<VenueRecord[]>)
+        : (convex.query(listPublicActiveVenueFieldsQuery, {
             limit: 1000,
-          })) as VenueRecord[]);
-      const venue = event.venueId
-        ? venues[0] ?? findVenueForEvent(event, venues)
-        : findVenueForEvent(event, venues);
-      const canonicalEventType = canonicalizeEventType(event.eventType);
-      const displayTime = resolveEventTimeDisplay({
-        date: event.date,
-        time: event.time,
-        venueHours: venue,
-      });
-      event.eventType =
-        canonicalEventType === DEFAULT_EVENT_TYPE
-          ? eventTypeFromVenueCategory(venue?.category ?? event.venueCategory)
-          : canonicalEventType;
-      event.dayPeriod = displayTime.dayPeriod;
-      event.displayTimeEnd = displayTime.endLabel;
-      event.displayTimeLabel = displayTime.label;
-      event.displayTimeSource = displayTime.source;
-      event.displayTimeStart = displayTime.startLabel;
-      event.venueCategory = venue?.category ?? event.venueCategory ?? undefined;
-      // The public venue query fails closed. Never retain the denormalized ID
-      // when the referenced venue is pending or hidden.
-      event.venueId = venue?._id;
-      event.venueHours = venue
-        ? {
-            googlePlaceId: venue.googlePlaceId ?? null,
-            hoursError: venue.hoursError ?? null,
-            hoursExpiresAt: venue.hoursExpiresAt ?? null,
-            hoursFetchedAt: venue.hoursFetchedAt ?? null,
-            hoursJson: venue.hoursJson ?? null,
-            hoursSource: venue.hoursSource ?? null,
-            hoursTimezone: venue.hoursTimezone ?? null,
-            osmElementId: venue.osmElementId ?? null,
-            osmElementType: venue.osmElementType ?? null,
-          }
-        : undefined;
-    }
-    return { event };
-  } catch (error) {
-    return {
-      event: null,
-      error: error instanceof Error ? error.message : "Failed to load event details.",
-    };
+          }) as Promise<VenueRecord[]>),
+  });
+  if (!event) {
+    return null;
   }
+
+  const venue = event.venueId
+    ? venues[0] ?? findVenueForEvent(event, venues)
+    : findVenueForEvent(event, venues);
+  const canonicalEventType = canonicalizeEventType(event.eventType);
+  const displayTime = resolveEventTimeDisplay({
+    date: event.date,
+    time: event.time,
+    venueHours: venue,
+  });
+  event.eventType =
+    canonicalEventType === DEFAULT_EVENT_TYPE
+      ? eventTypeFromVenueCategory(venue?.category ?? event.venueCategory)
+      : canonicalEventType;
+  event.dayPeriod = displayTime.dayPeriod;
+  event.displayTimeEnd = displayTime.endLabel;
+  event.displayTimeLabel = displayTime.label;
+  event.displayTimeSource = displayTime.source;
+  event.displayTimeStart = displayTime.startLabel;
+  event.venueCategory = venue?.category ?? event.venueCategory ?? undefined;
+  // The public venue query fails closed. Never retain the denormalized ID
+  // when the referenced venue is pending or hidden.
+  event.venueId = venue?._id;
+  event.venueHours = venue
+    ? {
+        googlePlaceId: venue.googlePlaceId ?? null,
+        hoursError: venue.hoursError ?? null,
+        hoursExpiresAt: venue.hoursExpiresAt ?? null,
+        hoursFetchedAt: venue.hoursFetchedAt ?? null,
+        hoursJson: venue.hoursJson ?? null,
+        hoursSource: venue.hoursSource ?? null,
+        hoursTimezone: venue.hoursTimezone ?? null,
+        osmElementId: venue.osmElementId ?? null,
+        osmElementType: venue.osmElementType ?? null,
+      }
+    : undefined;
+  return event;
 }
 
 function formatEventDate(value: string): string {
@@ -293,19 +289,16 @@ function EventImage({
 
 export default async function EventDetailPage({ params }: EventDetailPageProps) {
   const { eventId } = await params;
-  const { event, error } = await loadEvent(eventId);
-  if (!event && !error) {
+  const event = await loadEvent(eventId);
+  if (!event) {
     notFound();
   }
-  const eventTime = event
-    ? event.displayTimeLabel ?? getDisplayEventTime(event.time) ?? UNKNOWN_EVENT_TIME_LABEL
-    : undefined;
-  const whatToKnowText = event
-    ? (event.sourceCaption?.trim() || event.description?.trim() || "")
-    : "";
+  const eventTime =
+    event.displayTimeLabel ?? getDisplayEventTime(event.time) ?? UNKNOWN_EVENT_TIME_LABEL;
+  const whatToKnowText = event.sourceCaption?.trim() || event.description?.trim() || "";
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
-  const venueHref = event?.venueId ? `/venues/${event.venueId}` : null;
-  const calendarHref = event ? buildCalendarHref(event) : "/";
+  const venueHref = event.venueId ? `/venues/${event.venueId}` : null;
+  const calendarHref = buildCalendarHref(event);
 
   return (
     <main className="app-page gap-3 pb-[calc(9.5rem+env(safe-area-inset-bottom))] md:pb-9">
@@ -319,11 +312,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
         ) : null}
       </div>
 
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-
-      {event ? (
-        <>
-          <article className="hero-panel overflow-hidden">
+      <article className="hero-panel overflow-hidden">
             <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,22rem)]">
               <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-6 lg:px-7">
                 <div className="flex flex-wrap gap-2">
@@ -495,18 +484,6 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
               </EventCalendarBackLink>
             </div>
           </div>
-        </>
-      ) : (
-        <div className="glass-panel px-6 py-10 text-center">
-          <p className="text-base font-semibold text-foreground">Event not found.</p>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            It may have been removed or has not been approved yet.
-          </p>
-          <Link className="button-primary mt-5" href="/">
-            Browse events
-          </Link>
-        </div>
-      )}
     </main>
   );
 }

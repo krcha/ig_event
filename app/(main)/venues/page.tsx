@@ -19,6 +19,7 @@ import {
   type PublicVenueDirectoryItem,
 } from "@/lib/venues/public-venue-pages";
 import {
+  buildPublicVenueDirectoryPageHref,
   normalizePublicVenueDirectoryPage,
   paginatePublicVenueDirectory,
 } from "@/lib/venues/public-venue-directory-pagination";
@@ -110,17 +111,6 @@ function filterVenues(
     }
     return venueMatchesQuery(venue, options.query ?? "");
   });
-}
-
-function buildQueryString(params: Record<string, string | undefined>): string {
-  const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value) {
-      query.set(key, value);
-    }
-  }
-  const serialized = query.toString();
-  return serialized ? `?${serialized}` : "";
 }
 
 function VenueDirectoryCard({
@@ -216,13 +206,13 @@ export default async function VenuesPage({ searchParams }: VenuesPageProps) {
     Boolean,
   ).length;
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
-  const previousPageHref = buildQueryString({
+  const previousPageHref = buildPublicVenueDirectoryPageHref({
     category: selectedCategory,
     page: currentPage > 2 ? String(currentPage - 1) : undefined,
     q: searchQuery || undefined,
     upcoming: upcomingOnly ? "1" : undefined,
   });
-  const nextPageHref = buildQueryString({
+  const nextPageHref = buildPublicVenueDirectoryPageHref({
     category: selectedCategory,
     page: String(currentPage + 1),
     q: searchQuery || undefined,

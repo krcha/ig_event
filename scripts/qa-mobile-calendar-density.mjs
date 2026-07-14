@@ -207,7 +207,7 @@ assert.ok(
     calendarSource.includes('data-calendar-event-link="true"') &&
     calendarSource.includes('data-calendar-scroll-region="selected-day-agenda"') &&
     eventDetailSource.includes("EventCalendarBackLink") &&
-    eventDetailSource.includes("const calendarHref = event ? buildCalendarHref(event) : \"/\""),
+    eventDetailSource.includes("const calendarHref = buildCalendarHref(event)"),
   "Opening an event from the calendar should preserve enough return context for exact scroll restoration.",
 );
 assert.ok(

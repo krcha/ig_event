@@ -1247,7 +1247,97 @@ function extractContextualEventTitleCandidate(value: string): string | null {
   return trimTitleCandidate(match[1] ?? "");
 }
 
-function extractQuotedEventTitleCandidate(value: string): string | null {
+const QUOTED_CULTURAL_WORK_CONTEXT_STEMS = [
+  "film",
+  "movie",
+  "screening",
+  "projekc",
+  "bioskop",
+  "cinema",
+  "predstav",
+  "pozor",
+  "theatr",
+  "knjig",
+  "book",
+  "roman",
+  "novel",
+  "izloz",
+  "izlož",
+  "exhibition",
+  "galer",
+  "opera",
+  "balet",
+  "ballet",
+  "dokumentar",
+];
+
+const QUOTED_PROMOTIONAL_PHRASES = [
+  /^vidimo se(?: tamo)?$/u,
+  /^see you(?: there)?$/u,
+  /^(?:dođi|dodji|dođite|dodjite)$/u,
+  /^(?:rezerviši|rezervisi|reserve now)$/u,
+  /^(?:kupi kartu|kupite karte|buy tickets)$/u,
+  /^(?:save the date|stay tuned)$/u,
+  /^(?:ne propustite|pridruži nam se|pridruzi nam se)$/u,
+];
+
+const QUOTED_CULTURAL_WORK_LINK_WORDS = new Set([
+  "pod",
+  "nazivom",
+  "naslovom",
+  "naslova",
+]);
+
+const QUOTED_NON_TITLE_CONTEXT_STEMS = [
+  "poruc",
+  "poruč",
+  "kaze",
+  "kaže",
+  "replik",
+  "citat",
+  "slogan",
+  "moto",
+  "kod",
+  "code",
+  "promo",
+  "popust",
+  "discount",
+];
+
+function isCulturalWorkEventType(value: string | undefined): boolean {
+  const normalized = toSearchableText(value ?? "");
+  return ["arts culture", "film", "cinema", "theatre", "theater", "literature", "exhibition"]
+    .some((category) => normalized.includes(category));
+}
+
+function hasDirectCulturalWorkLabel(value: string): boolean {
+  const tokens = toSearchableText(value).split(/\s+/u).filter(Boolean);
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    if (!QUOTED_CULTURAL_WORK_CONTEXT_STEMS.some((stem) => tokens[index]?.includes(stem))) {
+      continue;
+    }
+    const trailingTokens = tokens.slice(index + 1);
+    return (
+      trailingTokens.length <= 3 &&
+      trailingTokens.every((token) => QUOTED_CULTURAL_WORK_LINK_WORDS.has(token))
+    );
+  }
+  return false;
+}
+
+function hasQuotedNonTitleContext(value: string): boolean {
+  const normalized = toSearchableText(value);
+  return QUOTED_NON_TITLE_CONTEXT_STEMS.some((stem) => normalized.includes(stem));
+}
+
+function hasImmediateQuotedWorkYear(text: string, matchEnd: number): boolean {
+  return /^\s*[([]?\s*(?:19|20)\d{2}\s*[)\]]?/u.test(text.slice(matchEnd, matchEnd + 16));
+}
+
+function extractQuotedCulturalWorkTitleCandidate(
+  value: string,
+  eventType: string | undefined,
+): string | null {
   const text = normalizeString(value);
   if (!text) {
     return null;
@@ -1257,14 +1347,25 @@ function extractQuotedEventTitleCandidate(value: string): string | null {
     const candidate = trimTitleCandidate(match[1] ?? "");
     const normalized = toSearchableText(candidate);
     const tokenCount = normalized.split(/\s+/u).filter(Boolean).length;
+    const matchStart = match.index ?? 0;
+    const matchEnd = matchStart + match[0].length;
+    const contextBeforeCandidate = text.slice(Math.max(0, matchStart - 100), matchStart);
+    const immediateContextBeforeCandidate =
+      contextBeforeCandidate.split(/[\r\n.!?]/u).pop() ?? contextBeforeCandidate;
+    const hasCulturalContext =
+      isCulturalWorkEventType(eventType) &&
+      hasDirectCulturalWorkLabel(immediateContextBeforeCandidate);
     if (
       candidate &&
       /\p{L}/u.test(candidate) &&
       tokenCount >= 1 &&
       tokenCount <= 10 &&
+      !QUOTED_PROMOTIONAL_PHRASES.some((pattern) => pattern.test(normalized)) &&
+      !hasQuotedNonTitleContext(immediateContextBeforeCandidate) &&
       !isMeaninglessEventTitle(candidate) &&
       !isGenericEventTitle(candidate) &&
-      !isWeakEventTitleSectionHeading(candidate)
+      !isWeakEventTitleSectionHeading(candidate) &&
+      (hasImmediateQuotedWorkYear(text, matchEnd) || hasCulturalContext)
     ) {
       return candidate;
     }
@@ -1346,8 +1447,9 @@ function buildContextDerivedEventTitle(
   configuredVenueNamesByHandle: Record<string, string>,
 ): { title: string; contextCandidate: string } | null {
   const rawTitleParts = getWeakEventTitleSectionParts(rawTitle);
-  const quotedCaptionTitle = extractQuotedEventTitleCandidate(
+  const quotedCaptionTitle = extractQuotedCulturalWorkTitleCandidate(
     normalizeString(post.caption || extracted.source_caption),
+    extracted.category,
   );
   if (
     quotedCaptionTitle &&

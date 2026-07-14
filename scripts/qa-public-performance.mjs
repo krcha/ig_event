@@ -3,8 +3,10 @@ import { readFileSync } from "node:fs";
 import {
   MAX_PUBLIC_VENUE_DIRECTORY_PAGE_SIZE,
   PUBLIC_VENUE_DIRECTORY_PAGE_SIZE,
+  buildPublicVenueDirectoryPageHref,
   paginatePublicVenueDirectory,
 } from "../lib/venues/public-venue-directory-pagination.ts";
+import { loadPublicEventDetailData } from "../lib/events/public-event-detail-data.ts";
 
 function read(path) {
   return readFileSync(path, "utf8");
@@ -60,6 +62,52 @@ assertDoesNotInclude(
   'export const fetchCache = "force-no-store"',
   "Event details should not opt out of the short public cache.",
 );
+assert.match(
+  eventDetailSource,
+  /const event = await loadEvent\(eventId\);[\s\S]*if \(!event\) \{[\s\S]*notFound\(\);/,
+  "Only an authoritative missing approved event should render the not-found route.",
+);
+assertDoesNotInclude(
+  eventDetailSource,
+  "Failed to load event details.",
+  "Event details must not convert backend failures into cacheable successful error pages.",
+);
+
+let loadVenuesCalled = false;
+assert.deepEqual(
+  await loadPublicEventDetailData({
+    loadEvent: async () => null,
+    loadVenues: async () => {
+      loadVenuesCalled = true;
+      return [];
+    },
+  }),
+  { event: null, venues: [] },
+  "An authoritative null event should remain distinguishable from a backend failure.",
+);
+assert.equal(loadVenuesCalled, false, "A missing event must not trigger a venue query.");
+const eventQueryFailure = new Error("transient event query failure");
+await assert.rejects(
+  loadPublicEventDetailData({
+    loadEvent: async () => {
+      throw eventQueryFailure;
+    },
+    loadVenues: async () => [],
+  }),
+  (error) => error === eventQueryFailure,
+  "Event query failures must propagate so ISR can retain stale good content.",
+);
+const venueQueryFailure = new Error("transient venue query failure");
+await assert.rejects(
+  loadPublicEventDetailData({
+    loadEvent: async () => ({ id: "event-1" }),
+    loadVenues: async () => {
+      throw venueQueryFailure;
+    },
+  }),
+  (error) => error === venueQueryFailure,
+  "Venue query failures must propagate instead of being cached as not-found pages.",
+);
 
 assert.match(
   eventDetailSource,
@@ -68,7 +116,7 @@ assert.match(
 );
 assert.match(
   eventDetailSource,
-  /const whatToKnowText = event[\s\S]*event\.sourceCaption\?\.trim\(\) \|\| event\.description\?\.trim\(\)/,
+  /const whatToKnowText = event\.sourceCaption\?\.trim\(\) \|\| event\.description\?\.trim\(\) \|\| "";/,
   "Event detail What to know text should prefer the exact scraped Instagram caption over generated descriptions.",
 );
 
@@ -101,6 +149,30 @@ assert.equal(
   paginatePublicVenueDirectory(venueFixture, 1, 100).pageItems.length,
   50,
   "Caller-provided venue page sizes must be hard-capped at 50.",
+);
+for (const page of ["2", "4"]) {
+  const href = buildPublicVenueDirectoryPageHref({
+    category: "nightlife",
+    page,
+    q: "jazz bar",
+    upcoming: "1",
+  });
+  const query = new URLSearchParams(href);
+  assert.deepEqual(
+    Object.fromEntries(query),
+    { category: "nightlife", page, q: "jazz bar", upcoming: "1" },
+    "Previous and next venue links must preserve every active directory filter.",
+  );
+}
+assert.equal(
+  buildPublicVenueDirectoryPageHref({
+    category: "nightlife",
+    page: undefined,
+    q: "jazz bar",
+    upcoming: "1",
+  }),
+  "?category=nightlife&q=jazz+bar&upcoming=1",
+  "The first venue page should omit page=1 without dropping filters.",
 );
 assert.match(
   venuesPageSource,
