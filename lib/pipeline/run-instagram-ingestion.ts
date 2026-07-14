@@ -1247,6 +1247,50 @@ function extractContextualEventTitleCandidate(value: string): string | null {
   return trimTitleCandidate(match[1] ?? "");
 }
 
+function extractQuotedEventTitleCandidate(value: string): string | null {
+  const text = normalizeString(value);
+  if (!text) {
+    return null;
+  }
+
+  for (const match of text.matchAll(/[“„«"]([^”“„«»"\r\n]{2,100})[”»"]/gu)) {
+    const candidate = trimTitleCandidate(match[1] ?? "");
+    const normalized = toSearchableText(candidate);
+    const tokenCount = normalized.split(/\s+/u).filter(Boolean).length;
+    if (
+      candidate &&
+      /\p{L}/u.test(candidate) &&
+      tokenCount >= 1 &&
+      tokenCount <= 10 &&
+      !isMeaninglessEventTitle(candidate) &&
+      !isGenericEventTitle(candidate) &&
+      !isWeakEventTitleSectionHeading(candidate)
+    ) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function isQuotedEventTitleDistinctFromVenue(
+  candidate: string,
+  post: InstagramScrapedPost,
+  venue: VenueNormalization,
+  configuredVenueNamesByHandle: Record<string, string>,
+): boolean {
+  const normalizedCandidate = toSearchableText(candidate);
+  const normalizedVenue = toSearchableText(venue.venue ?? "");
+  const normalizedHandleTitle = toSearchableText(
+    humanizeHandle(post.username, configuredVenueNamesByHandle),
+  );
+  return Boolean(
+    normalizedCandidate &&
+      normalizedCandidate !== normalizedVenue &&
+      normalizedCandidate !== normalizedHandleTitle,
+  );
+}
+
 function isUsableContextEventTitleCandidate(
   candidate: string,
   post: InstagramScrapedPost,
@@ -1302,6 +1346,24 @@ function buildContextDerivedEventTitle(
   configuredVenueNamesByHandle: Record<string, string>,
 ): { title: string; contextCandidate: string } | null {
   const rawTitleParts = getWeakEventTitleSectionParts(rawTitle);
+  const quotedCaptionTitle = extractQuotedEventTitleCandidate(
+    normalizeString(post.caption || extracted.source_caption),
+  );
+  if (
+    quotedCaptionTitle &&
+    isQuotedEventTitleDistinctFromVenue(
+      quotedCaptionTitle,
+      post,
+      venue,
+      configuredVenueNamesByHandle,
+    )
+  ) {
+    return {
+      title: quotedCaptionTitle,
+      contextCandidate: quotedCaptionTitle,
+    };
+  }
+
   const contextSources = [
     normalizeString(extracted.description),
     normalizeString(post.caption),

@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import {
+  MAX_PUBLIC_VENUE_DIRECTORY_PAGE_SIZE,
+  PUBLIC_VENUE_DIRECTORY_PAGE_SIZE,
+  paginatePublicVenueDirectory,
+} from "../lib/venues/public-venue-directory-pagination.ts";
 
 function read(path) {
   return readFileSync(path, "utf8");
@@ -14,6 +19,8 @@ const browsePageSource = read("app/(main)/events-browse-page.tsx");
 const publicEventsSource = read("lib/events/public-events.ts");
 const convexEventsSource = read("convex/events.ts");
 const mobileMonthDayStripSource = read("components/calendar/mobile-month-day-strip.tsx");
+const venuesPageSource = read("app/(main)/venues/page.tsx");
+const venuePaginationSource = read("lib/venues/public-venue-directory-pagination.ts");
 const eventDetailSource = read("app/(main)/events/[eventId]/page.tsx");
 const savedPanelSource = read("components/saved/saved-library-panel.tsx");
 const middlewareSource = read("middleware.ts");
@@ -24,7 +31,6 @@ const releaseCheckSource = read("scripts/release-check.mjs");
 for (const [label, source] of [
   ["root page", appPageSource],
   ["events browse page", browsePageSource],
-  ["event detail page", eventDetailSource],
 ]) {
   assert.match(
     source,
@@ -38,6 +44,22 @@ for (const [label, source] of [
   );
   assertDoesNotInclude(source, "export const revalidate", `${label} should not use ISR caching.`);
 }
+
+assert.match(
+  eventDetailSource,
+  /export const revalidate\s*=\s*60;/,
+  "Approved public event details should use short ISR caching instead of repeating Convex work.",
+);
+assertDoesNotInclude(
+  eventDetailSource,
+  'export const dynamic = "force-dynamic"',
+  "Event details should not force a fresh server render on every request.",
+);
+assertDoesNotInclude(
+  eventDetailSource,
+  'export const fetchCache = "force-no-store"',
+  "Event details should not opt out of the short public cache.",
+);
 
 assert.match(
   eventDetailSource,
@@ -59,6 +81,45 @@ assertDoesNotInclude(
   publicEventsSource,
   "noStore()",
   "Public event loaders should not call noStore().",
+);
+
+assert.equal(PUBLIC_VENUE_DIRECTORY_PAGE_SIZE, 24);
+assert.equal(MAX_PUBLIC_VENUE_DIRECTORY_PAGE_SIZE, 50);
+const venueFixture = Array.from({ length: 83 }, (_, index) => `venue-${index + 1}`);
+const pagedVenueIds = [];
+for (let page = 1; page <= 4; page += 1) {
+  const result = paginatePublicVenueDirectory(venueFixture, page);
+  assert.ok(result.pageItems.length <= 24, "A venue page must remain bounded.");
+  pagedVenueIds.push(...result.pageItems);
+}
+assert.deepEqual(
+  pagedVenueIds,
+  venueFixture,
+  "Venue pages must preserve deterministic order without missing or duplicate IDs.",
+);
+assert.equal(
+  paginatePublicVenueDirectory(venueFixture, 1, 100).pageItems.length,
+  50,
+  "Caller-provided venue page sizes must be hard-capped at 50.",
+);
+assert.match(
+  venuesPageSource,
+  /visibleVenues\.map\(\(venue\)/,
+  "The venue page should serialize only the current bounded page of cards.",
+);
+assertDoesNotInclude(
+  venuesPageSource,
+  "filteredVenues.map((venue)",
+  "The venue page must not serialize every matching venue into the initial response.",
+);
+assert.ok(
+  (venuesPageSource.match(/prefetch=\{false\}/g) ?? []).length >= 4,
+  "Venue cards and pagination should avoid eager background RSC prefetches.",
+);
+assert.match(
+  venuePaginationSource,
+  /PUBLIC_VENUE_DIRECTORY_PAGE_SIZE = 24/,
+  "The default public venue response should stay comfortably below the 50-card ceiling.",
 );
 
 for (const field of ["fromDate?: string", "beforeDate?: string", "daysAhead?: number"]) {
