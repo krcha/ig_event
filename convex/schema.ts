@@ -16,12 +16,30 @@ const ingestionJobMode = v.union(
   v.literal("full_scrape"),
   v.literal("saved_posts"),
 );
+const eventTimeSource = v.union(
+  v.literal("alt_text"),
+  v.literal("caption"),
+  v.literal("description"),
+  v.literal("model"),
+  v.literal("poster"),
+  v.literal("schedule_entry"),
+  v.literal("unknown"),
+);
+const eventTimeStatus = v.union(
+  v.literal("confirmed"),
+  v.literal("inferred"),
+  v.literal("unknown"),
+);
 
 export default defineSchema({
   events: defineTable({
     title: v.string(),
     date: v.string(),
     time: v.optional(v.string()),
+    timeSource: v.optional(eventTimeSource),
+    timeEvidenceText: v.optional(v.string()),
+    timeConfidence: v.optional(v.number()),
+    timeStatus: v.optional(eventTimeStatus),
     venue: v.string(),
     venueCategory: v.optional(v.string()),
     venueId: v.optional(v.id("venues")),

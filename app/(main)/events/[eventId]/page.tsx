@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import type { ReactNode } from "react";
 import {
   ArrowLeft,
   CalendarDays,
@@ -12,13 +13,17 @@ import {
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { EventCategoryPill, EventMetaRow, EventPriceChip } from "@/components/events/event-meta";
+import { EventTimeProvenanceText } from "@/components/events/event-time-provenance-text";
 import { EventCalendarBackLink } from "@/components/calendar/calendar-scroll-restoration";
 import { ReadMoreText } from "@/components/ui/read-more-text";
 import {
+  UNKNOWN_EVENT_TIME_LABEL,
   getDisplayEventTime,
   resolveEventTimeDisplay,
   type EventDayPeriod,
   type EventTimeDisplaySource,
+  type EventTimeSource,
+  type EventTimeStatus,
 } from "@/lib/events/event-time";
 import { SaveEventButton } from "@/components/events/save-event-button";
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
@@ -46,6 +51,10 @@ type EventRecord = {
   title: string;
   date: string;
   time?: string;
+  timeSource?: EventTimeSource;
+  timeEvidenceText?: string;
+  timeConfidence?: number;
+  timeStatus?: EventTimeStatus;
   dayPeriod?: EventDayPeriod;
   displayTimeEnd?: string;
   displayTimeLabel?: string;
@@ -222,10 +231,12 @@ function buildCalendarHref(event: EventRecord): string {
 }
 
 function InfoTile({
+  detail,
   icon: Icon,
   label,
   value,
 }: {
+  detail?: ReactNode;
   icon: typeof CalendarDays;
   label: string;
   value: string;
@@ -237,6 +248,7 @@ function InfoTile({
         <Icon className="mt-0.5 h-4 w-4 flex-none text-primary" />
         <span className="min-w-0 break-words">{value}</span>
       </p>
+      {detail}
     </div>
   );
 }
@@ -284,7 +296,9 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
   if (!event && !error) {
     notFound();
   }
-  const eventTime = event ? event.displayTimeLabel ?? getDisplayEventTime(event.time) : undefined;
+  const eventTime = event
+    ? event.displayTimeLabel ?? getDisplayEventTime(event.time) ?? UNKNOWN_EVENT_TIME_LABEL
+    : undefined;
   const whatToKnowText = event
     ? (event.sourceCaption?.trim() || event.description?.trim() || "")
     : "";
@@ -325,7 +339,23 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
 
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                   <InfoTile icon={CalendarDays} label="Date" value={formatEventDate(event.date)} />
-                  {eventTime ? <InfoTile icon={Clock3} label="Time" value={eventTime} /> : null}
+                  {eventTime ? (
+                    <InfoTile
+                      detail={
+                        <EventTimeProvenanceText
+                          className="mt-1.5 pl-6"
+                          time={event.time}
+                          timeConfidence={event.timeConfidence}
+                          timeEvidenceText={event.timeEvidenceText}
+                          timeSource={event.timeSource}
+                          timeStatus={event.timeStatus}
+                        />
+                      }
+                      icon={Clock3}
+                      label="Time"
+                      value={eventTime}
+                    />
+                  ) : null}
                   <div className="relative overflow-hidden rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3 transition hover:border-primary/35 hover:bg-white/[0.045]">
                     {venueHref ? (
                       <Link

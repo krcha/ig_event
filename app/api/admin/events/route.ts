@@ -2,6 +2,7 @@ import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
 import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
+import type { EventTimeSource, EventTimeStatus } from "@/lib/events/event-time";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 
 type EventStatus = "pending" | "approved" | "rejected";
@@ -29,6 +30,10 @@ type EventRecord = {
   title: string;
   date: string;
   time?: string;
+  timeSource?: EventTimeSource;
+  timeEvidenceText?: string;
+  timeConfidence?: number;
+  timeStatus?: EventTimeStatus;
   venue: string;
   artists: string[];
   description?: string;
@@ -66,6 +71,10 @@ function mapEventRecord(event: EventRecord) {
     title: event.title,
     date: event.date,
     time: event.time ?? null,
+    timeSource: event.timeSource ?? "unknown",
+    timeEvidenceText: event.timeEvidenceText ?? null,
+    timeConfidence: event.timeConfidence ?? 0,
+    timeStatus: event.timeStatus ?? "unknown",
     venue: event.venue,
     artists: event.artists,
     description: event.description ?? null,

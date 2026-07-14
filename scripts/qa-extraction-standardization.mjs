@@ -29,6 +29,7 @@ import {
 import {
   extractEventTimeFromText,
   TBD_EVENT_TIME,
+  UNKNOWN_EVENT_TIME_LABEL,
   normalizeEventTime,
   resolveEventTimeDisplay,
 } from "../lib/events/event-time.ts";
@@ -1349,6 +1350,15 @@ function runDescriptionStartTimeQa() {
     "Ulaz od 18+.",
     "Karte od 1000 RSD.",
     "Kapacitet 20 ljudi.",
+    "Ulaz od 10 do 20 evra",
+    "Cena od 10 do 20 eura",
+    "Karte od 10 do 20 dolara",
+    "Tickets from 10 to 20 dollars",
+    "Entry from 10 to 20 euros",
+    "Open: 9h-17h",
+    "Hours: 9h-17h",
+    "Happy hour from 5 to 8",
+    "Happy hours: 5h-8h",
   ]) {
     assert.equal(extractEventTimeFromText(text), undefined, `reject non-time text: ${text}`);
   }
@@ -1436,7 +1446,7 @@ function runDescriptionStartTimeQa() {
   );
   const rawTimeFields = readPreparedNormalizedFields(rawTimeTextEvent);
   assert.equal(rawTimeTextEvent.event.time, "22:30");
-  assert.equal(rawTimeFields.timeSource, "extracted_time");
+  assert.equal(rawTimeFields.timeSource, "model");
 
   const dateRangeTextEvent = assertSingleOkPreparedEvent(
     prepareEventsForInsert(
@@ -1463,6 +1473,119 @@ function runDescriptionStartTimeQa() {
     ),
   );
   assert.equal(dateRangeTextEvent.event.time, TBD_EVENT_TIME);
+
+  const unsupportedTimeContexts = [
+    "Ulaz od 18 godina",
+    "Raspon od 10 do 20",
+    "Popust od 10 do 20%",
+    "Radno vreme: od 9 do 17",
+    "Working hours from 9 to 17",
+    "Open daily from 9 to 17",
+    "Otvoreno od 9 do 17",
+    "Lokal radi od 9 do 17",
+    "Bar hours: 9h-17h",
+    "Od 10 do 20 posto popusta",
+    "We are open from 9 to 17",
+    "Otvoreni smo od 9 do 17",
+    "Lokal je otvoren od 9 do 17",
+    "Bar is open from 9 to 17",
+    "Od 10 do 20 procenata popusta",
+    "Ulaz od 10 do 20 evra",
+    "Cena od 10 do 20 eura",
+    "Karte od 10 do 20 dolara",
+    "Tickets from 10 to 20 dollars",
+    "Entry from 10 to 20 euros",
+    "Open: 9h-17h",
+    "Hours: 9h-17h",
+    "Happy hour from 5 to 8",
+    "Happy hours: 5h-8h",
+  ];
+  for (const [index, unsupportedText] of unsupportedTimeContexts.entries()) {
+    for (const evidencePath of ["caption", "ocr"]) {
+      const unsupportedTimeEvent = assertSingleOkPreparedEvent(
+        prepareEventsForInsert(
+          makeInstagramPost({
+            caption: evidencePath === "caption" ? unsupportedText : "QA event announcement.",
+            altText: evidencePath === "ocr" ? unsupportedText : null,
+            postType: "image",
+            username: "kcgrad",
+          }),
+          makeExtractedEvent({
+            title: `Unsupported ${evidencePath} Time ${index}`,
+            date: isoDateDaysFromNow(12),
+            time: "",
+            venue: "KC Grad",
+            artists: ["QA DJ"],
+            description: "Nightlife event.",
+            confidence: 0.95,
+            source_caption: "",
+            field_confirmation: makeFieldConfirmation(0.95),
+          }),
+          "https://cdn.example.com/poster.jpg",
+          {},
+          {},
+          {},
+        ),
+      );
+      assert.equal(
+        unsupportedTimeEvent.event.time,
+        TBD_EVENT_TIME,
+        `${evidencePath} must reject unsupported time context: ${unsupportedText}`,
+      );
+      assert.equal(unsupportedTimeEvent.event.timeSource, "unknown");
+      assert.equal(unsupportedTimeEvent.event.timeConfidence, 0);
+      assert.equal(unsupportedTimeEvent.event.timeStatus, "unknown");
+      assert.equal(unsupportedTimeEvent.event.timeEvidenceText, undefined);
+    }
+  }
+
+  for (const [index, mixedText] of [
+    "Ulaz od 18 godina, početak u 21h",
+    "Popust 20% pre 22h, početak u 21h",
+    "Radno vreme do 17, koncert počinje u 21h",
+    "Ulaz od 18 godina a početak u 21h",
+    "Popust 20% pre 22h ali koncert počinje u 21h",
+    "Radno vreme do 17 a koncert počinje u 21h",
+    "Početak u 21h uz 20% popusta",
+    "Ulaz od 10 do 20 evra, početak u 21h",
+    "Tickets from 10 to 20 dollars but event starts at 21h",
+    "Open: 9h-17h, concert starts at 21h",
+    "Happy hour from 5 to 8 but show starts at 21h",
+  ].entries()) {
+    for (const evidencePath of ["caption", "ocr"]) {
+      const mixedTimeEvent = assertSingleOkPreparedEvent(
+        prepareEventsForInsert(
+          makeInstagramPost({
+            caption: evidencePath === "caption" ? mixedText : "QA event announcement.",
+            altText: evidencePath === "ocr" ? mixedText : null,
+            postType: "image",
+            username: "kcgrad",
+          }),
+          makeExtractedEvent({
+            title: `Mixed ${evidencePath} Time ${index}`,
+            date: isoDateDaysFromNow(13),
+            time: "",
+            venue: "KC Grad",
+            artists: ["QA DJ"],
+            description: "Nightlife event.",
+            confidence: 0.95,
+            source_caption: "",
+            field_confirmation: makeFieldConfirmation(0.95),
+          }),
+          "https://cdn.example.com/poster.jpg",
+          {},
+          {},
+          {},
+        ),
+      );
+      assert.equal(mixedTimeEvent.event.time, "21:00");
+      assert.equal(
+        mixedTimeEvent.event.timeSource,
+        evidencePath === "caption" ? "caption" : "alt_text",
+      );
+      assert.equal(mixedTimeEvent.event.timeStatus, "inferred");
+    }
+  }
 }
 
 function runScheduleConsistencyQa() {
@@ -1472,7 +1595,7 @@ function runScheduleConsistencyQa() {
   assert.equal(normalizeEventTime("19.30").startLabel, "19:30");
   assert.equal(
     resolveEventTimeDisplay({ date: "2026-06-20", time: TBD_EVENT_TIME }).label,
-    TBD_EVENT_TIME,
+    UNKNOWN_EVENT_TIME_LABEL,
   );
 
   const fridayIsoDate = nextIsoDateForWeekday(5);

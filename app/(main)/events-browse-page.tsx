@@ -18,9 +18,15 @@ import { CalendarScrollRestoration } from "@/components/calendar/calendar-scroll
 import { EventKindToggleChips } from "@/components/calendar/event-kind-toggle-chips";
 import { MobileMonthDayStrip } from "@/components/calendar/mobile-month-day-strip";
 import { EventMetaRow, getEventCategoryKind } from "@/components/events/event-meta";
+import { EventTimeProvenanceText } from "@/components/events/event-time-provenance-text";
 import { SaveEventButton } from "@/components/events/save-event-button";
 import { cn } from "@/lib/utils";
-import { getDisplayEventTime, getEventTimeSortMinutes, normalizeEventTime } from "@/lib/events/event-time";
+import {
+  UNKNOWN_EVENT_TIME_LABEL,
+  getDisplayEventTime,
+  getEventTimeSortMinutes,
+  normalizeEventTime,
+} from "@/lib/events/event-time";
 import { dateKeyToLocalNoonDate, getNightlifeDefaultDateKey } from "@/lib/events/nightlife-date";
 import { matchesPublicEventNameArtistOrVenue } from "@/lib/events/public-event-search";
 
@@ -59,6 +65,10 @@ type CalendarEventSummary = Pick<
   | "title"
   | "date"
   | "time"
+  | "timeSource"
+  | "timeEvidenceText"
+  | "timeConfidence"
+  | "timeStatus"
   | "dayPeriod"
   | "displayTimeEnd"
   | "displayTimeLabel"
@@ -328,6 +338,10 @@ function toCalendarEventSummary(event: PublicEvent): CalendarEventSummary {
     title: event.title,
     date: event.date,
     time: event.time,
+    timeSource: event.timeSource,
+    timeEvidenceText: event.timeEvidenceText,
+    timeConfidence: event.timeConfidence,
+    timeStatus: event.timeStatus,
     dayPeriod: event.dayPeriod,
     displayTimeEnd: event.displayTimeEnd,
     displayTimeLabel: event.displayTimeLabel,
@@ -435,7 +449,7 @@ function formatArtistMeta(event: CalendarEventSummary): string | undefined {
 }
 
 function getResolvedDisplayTime(event: CalendarEventSummary): string | undefined {
-  return event.displayTimeLabel ?? getDisplayEventTime(event.time);
+  return event.displayTimeLabel ?? getDisplayEventTime(event.time) ?? UNKNOWN_EVENT_TIME_LABEL;
 }
 
 function getResolvedTimeParts(event: CalendarEventSummary) {
@@ -448,14 +462,6 @@ function getResolvedTimeParts(event: CalendarEventSummary) {
   }
 
   return normalizeEventTime(event.time);
-}
-
-function getSupplementalDisplayTime(event: CalendarEventSummary): string | undefined {
-  if (!event.displayTimeLabel || event.displayTimeStart) {
-    return undefined;
-  }
-
-  return event.displayTimeLabel;
 }
 
 function pluralize(value: number, singular: string, plural = `${singular}s`): string {
@@ -880,7 +886,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
             const isHiddenByKind = hiddenDayCategorySet.has(eventCategory);
             const eventTime = getResolvedTimeParts(event);
             const displayEventTime = getResolvedDisplayTime(event);
-            const supplementalDisplayTime = getSupplementalDisplayTime(event);
             const artistMeta = formatArtistMeta(event);
 
             if (isMobile) {
@@ -947,11 +952,14 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                         className="mt-0.5 block truncate text-[11px] font-medium leading-4 text-muted-foreground"
                         event={event}
                       />
-                      {supplementalDisplayTime ? (
-                        <p className="truncate text-[11px] font-medium leading-4 text-muted-foreground/85">
-                          {supplementalDisplayTime}
-                        </p>
-                      ) : null}
+                      <EventTimeProvenanceText
+                        className="mt-0.5 text-[10px] leading-3"
+                        time={event.time}
+                        timeConfidence={event.timeConfidence}
+                        timeEvidenceText={event.timeEvidenceText}
+                        timeSource={event.timeSource}
+                        timeStatus={event.timeStatus}
+                      />
                       <EventMetaRow className="mt-1 flex-nowrap" event={event} />
                     </div>
                   </div>
@@ -1005,6 +1013,14 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                       <VenueNameLink
                         className="mt-1 block truncate text-xs leading-5 text-muted-foreground"
                         event={event}
+                      />
+                      <EventTimeProvenanceText
+                        className="mt-0.5"
+                        time={event.time}
+                        timeConfidence={event.timeConfidence}
+                        timeEvidenceText={event.timeEvidenceText}
+                        timeSource={event.timeSource}
+                        timeStatus={event.timeStatus}
                       />
                       <EventMetaRow className="mt-1.5" event={event} />
                       {artistMeta ? (
