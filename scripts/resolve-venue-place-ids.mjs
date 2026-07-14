@@ -3,6 +3,7 @@ import process from "node:process";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api.js";
 import { parseVenueHoursJson } from "../lib/venues/venue-hours-cache.ts";
+import { isVenueScrapeActive } from "../lib/venues/venue-lifecycle.ts";
 
 const TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText";
 const DEFAULT_LIMIT = 25;
@@ -83,19 +84,19 @@ function hasUsableHours(venue) {
   return Boolean(hoursJson && hoursJson.weekly.some((day) => day.windows.length > 0));
 }
 
-function isActive(venue) {
+function isEligibleForPlaceIdResolution(venue) {
   return (
     typeof venue._id === "string" &&
     venue._id.length > 0 &&
     typeof venue.name === "string" &&
     venue.name.trim().length > 0 &&
-    venue.isActive !== false
+    isVenueScrapeActive(venue)
   );
 }
 
 function selectVenues(venues, options) {
   return venues
-    .filter(isActive)
+    .filter(isEligibleForPlaceIdResolution)
     .filter((venue) => options.force || !venue.googlePlaceId)
     .filter((venue) => options.all || !hasUsableHours(venue))
     .slice(0, options.limit);

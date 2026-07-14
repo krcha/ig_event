@@ -6,6 +6,8 @@ import {
   DEFAULT_VENUE_CATEGORY,
 } from "@/lib/taxonomy/venue-types";
 
+type VenuePublicStatus = "pending" | "published" | "hidden";
+
 type Venue = {
   id: string;
   name: string;
@@ -17,7 +19,8 @@ type Venue = {
   hoursFetchedAt: number | null;
   hoursExpiresAt: number | null;
   hoursError: string | null;
-  isActive: boolean;
+  scrapeActive: boolean;
+  publicStatus: VenuePublicStatus;
   createdAt: number;
   updatedAt: number;
 };
@@ -46,9 +49,12 @@ type VenueFormState = {
   category: string;
   location: string;
   manualOpeningHours: string;
+  scrapeActive: boolean;
+  publicStatus: VenuePublicStatus;
 };
 
-type VenueStatusFilter = "all" | "active" | "inactive";
+type VenueScrapingFilter = "all" | "scraping" | "paused";
+type VenuePublicationFilter = "all" | VenuePublicStatus;
 type VenueSortMode = "name" | "updated_desc" | "handle";
 
 const EMPTY_FORM: VenueFormState = {
@@ -57,6 +63,8 @@ const EMPTY_FORM: VenueFormState = {
   category: DEFAULT_VENUE_CATEGORY,
   location: "",
   manualOpeningHours: "",
+  scrapeActive: true,
+  publicStatus: "pending",
 };
 
 function VenueCategorySelect({
@@ -141,7 +149,9 @@ export function VenueManager() {
   const [editForm, setEditForm] = useState<VenueFormState>(EMPTY_FORM);
   const [busyVenueId, setBusyVenueId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<VenueStatusFilter>("all");
+  const [scrapingFilter, setScrapingFilter] = useState<VenueScrapingFilter>("all");
+  const [publicationFilter, setPublicationFilter] =
+    useState<VenuePublicationFilter>("all");
   const [sortMode, setSortMode] = useState<VenueSortMode>("updated_desc");
 
   async function loadVenues() {
@@ -180,7 +190,8 @@ export function VenueManager() {
           instagramHandle: normalizeHandleInput(createForm.instagramHandle),
           category: createForm.category.trim(),
           location: createForm.location.trim() || undefined,
-          isActive: true,
+          scrapeActive: createForm.scrapeActive,
+          publicStatus: createForm.publicStatus,
         }),
       });
       const payload = (await response.json()) as { error?: string };
@@ -212,7 +223,8 @@ export function VenueManager() {
       const formData = new FormData();
       formData.set("file", importFile);
       formData.set("category", importCategory || DEFAULT_VENUE_CATEGORY);
-      formData.set("isActive", "true");
+      formData.set("scrapeActive", "true");
+      formData.set("publicStatus", "pending");
 
       const response = await fetch("/api/admin/venues/import", {
         method: "POST",
@@ -243,6 +255,8 @@ export function VenueManager() {
       category: venue.category,
       location: venue.location ?? "",
       manualOpeningHours: getManualOpeningHoursInput(venue),
+      scrapeActive: venue.scrapeActive,
+      publicStatus: venue.publicStatus,
     });
   }
 
@@ -265,6 +279,8 @@ export function VenueManager() {
             instagramHandle: normalizeHandleInput(editForm.instagramHandle),
             category: editForm.category.trim(),
             location: editForm.location.trim() || undefined,
+            scrapeActive: editForm.scrapeActive,
+            publicStatus: editForm.publicStatus,
             ...(editForm.manualOpeningHours.trim()
               ? { manualOpeningHours: editForm.manualOpeningHours.trim() }
               : {}),
@@ -286,7 +302,10 @@ export function VenueManager() {
     }
   }
 
-  async function toggleVenueActiveState(venue: Venue) {
+  async function updateVenueLifecycle(
+    venue: Venue,
+    patch: Partial<Pick<Venue, "scrapeActive" | "publicStatus">>,
+  ) {
     setBusyVenueId(venue.id);
     setError(null);
     try {
@@ -295,19 +314,19 @@ export function VenueManager() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           id: venue.id,
-          patch: {
-            isActive: !venue.isActive,
-          },
+          patch,
         }),
       });
       const payload = (await response.json()) as { error?: string };
       if (!response.ok) {
-        throw new Error(payload.error ?? "Failed to update venue.");
+        throw new Error(payload.error ?? "Failed to update venue lifecycle.");
       }
       await loadVenues();
     } catch (caughtError) {
       setError(
-        caughtError instanceof Error ? caughtError.message : "Unknown update venue error.",
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unknown venue lifecycle update error.",
       );
     } finally {
       setBusyVenueId(null);
@@ -380,10 +399,13 @@ export function VenueManager() {
   const filteredVenues = useMemo(() => {
     const query = searchableText(searchQuery);
     const next = venues.filter((venue) => {
-      if (statusFilter === "active" && !venue.isActive) {
+      if (scrapingFilter === "scraping" && !venue.scrapeActive) {
         return false;
       }
-      if (statusFilter === "inactive" && venue.isActive) {
+      if (scrapingFilter === "paused" && venue.scrapeActive) {
+        return false;
+      }
+      if (publicationFilter !== "all" && venue.publicStatus !== publicationFilter) {
         return false;
       }
       if (!query) {
@@ -412,13 +434,13 @@ export function VenueManager() {
     });
 
     return next;
-  }, [searchQuery, sortMode, statusFilter, venues]);
+  }, [publicationFilter, scrapingFilter, searchQuery, sortMode, venues]);
 
   const stats = useMemo(
     () => ({
       total: venues.length,
-      active: venues.filter((venue) => venue.isActive).length,
-      inactive: venues.filter((venue) => !venue.isActive).length,
+      scraping: venues.filter((venue) => venue.scrapeActive).length,
+      published: venues.filter((venue) => venue.publicStatus === "published").length,
       filtered: filteredVenues.length,
     }),
     [filteredVenues.length, venues],
@@ -432,12 +454,12 @@ export function VenueManager() {
           <p className="mt-2 text-3xl font-semibold">{stats.total}</p>
         </div>
         <div className="rounded-2xl border border-border bg-background/80 p-4">
-          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Active</p>
-          <p className="mt-2 text-3xl font-semibold">{stats.active}</p>
+          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Scraping</p>
+          <p className="mt-2 text-3xl font-semibold">{stats.scraping}</p>
         </div>
         <div className="rounded-2xl border border-border bg-background/80 p-4">
-          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Inactive</p>
-          <p className="mt-2 text-3xl font-semibold">{stats.inactive}</p>
+          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Published</p>
+          <p className="mt-2 text-3xl font-semibold">{stats.published}</p>
         </div>
         <div className="rounded-2xl border border-border bg-background/80 p-4">
           <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Visible now</p>
@@ -485,6 +507,36 @@ export function VenueManager() {
               placeholder="Location (optional)"
               value={createForm.location}
             />
+            <label className="flex items-center gap-2 rounded-xl border border-input px-3 py-2 text-sm">
+              <input
+                checked={createForm.scrapeActive}
+                onChange={(event) =>
+                  setCreateForm((current) => ({
+                    ...current,
+                    scrapeActive: event.target.checked,
+                  }))
+                }
+                type="checkbox"
+              />
+              Scraping enabled
+            </label>
+            <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+              Publication
+              <select
+                className="rounded-xl border border-input bg-background px-3 py-2 text-sm text-foreground"
+                onChange={(event) =>
+                  setCreateForm((current) => ({
+                    ...current,
+                    publicStatus: event.target.value as VenuePublicStatus,
+                  }))
+                }
+                value={createForm.publicStatus}
+              >
+                <option value="pending">Pending review</option>
+                <option value="published">Published</option>
+                <option value="hidden">Hidden</option>
+              </select>
+            </label>
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -571,7 +623,7 @@ export function VenueManager() {
           </button>
         </div>
 
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_180px]">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_160px_170px_180px]">
           <input
             className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
             onChange={(event) => setSearchQuery(event.target.value)}
@@ -579,13 +631,27 @@ export function VenueManager() {
             value={searchQuery}
           />
           <select
+            aria-label="Scraping filter"
             className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
-            onChange={(event) => setStatusFilter(event.target.value as VenueStatusFilter)}
-            value={statusFilter}
+            onChange={(event) => setScrapingFilter(event.target.value as VenueScrapingFilter)}
+            value={scrapingFilter}
           >
-            <option value="all">All statuses</option>
-            <option value="active">Active only</option>
-            <option value="inactive">Inactive only</option>
+            <option value="all">All scraping</option>
+            <option value="scraping">Scraping</option>
+            <option value="paused">Paused</option>
+          </select>
+          <select
+            aria-label="Publication filter"
+            className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
+            onChange={(event) =>
+              setPublicationFilter(event.target.value as VenuePublicationFilter)
+            }
+            value={publicationFilter}
+          >
+            <option value="all">All publication</option>
+            <option value="pending">Pending</option>
+            <option value="published">Published</option>
+            <option value="hidden">Hidden</option>
           </select>
           <select
             className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
@@ -659,6 +725,36 @@ export function VenueManager() {
                         placeholder="Manual opening_hours, e.g. Mo-Su 18:00-02:00"
                         value={editForm.manualOpeningHours}
                       />
+                      <label className="flex items-center gap-2 rounded-xl border border-input px-3 py-2 text-sm">
+                        <input
+                          checked={editForm.scrapeActive}
+                          onChange={(event) =>
+                            setEditForm((current) => ({
+                              ...current,
+                              scrapeActive: event.target.checked,
+                            }))
+                          }
+                          type="checkbox"
+                        />
+                        Scraping enabled
+                      </label>
+                      <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+                        Publication
+                        <select
+                          className="rounded-xl border border-input bg-background px-3 py-2 text-sm text-foreground"
+                          onChange={(event) =>
+                            setEditForm((current) => ({
+                              ...current,
+                              publicStatus: event.target.value as VenuePublicStatus,
+                            }))
+                          }
+                          value={editForm.publicStatus}
+                        >
+                          <option value="pending">Pending review</option>
+                          <option value="published">Published</option>
+                          <option value="hidden">Hidden</option>
+                        </select>
+                      </label>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <button
@@ -685,12 +781,15 @@ export function VenueManager() {
                         <p className="text-base font-semibold">{venue.name}</p>
                         <span
                           className={`rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide ${
-                            venue.isActive
+                            venue.scrapeActive
                               ? "bg-emerald-100 text-emerald-800"
                               : "bg-slate-200 text-slate-700"
                           }`}
                         >
-                          {venue.isActive ? "Active" : "Inactive"}
+                          Scraping: {venue.scrapeActive ? "enabled" : "paused"}
+                        </span>
+                        <span className="rounded-full bg-blue-100 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-blue-800">
+                          Publication: {venue.publicStatus}
                         </span>
                         <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                           {venue.category}
@@ -739,11 +838,32 @@ export function VenueManager() {
                       <button
                         className="rounded-xl border border-border px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
                         disabled={isBusy}
-                        onClick={() => void toggleVenueActiveState(venue)}
+                        onClick={() =>
+                          void updateVenueLifecycle(venue, {
+                            scrapeActive: !venue.scrapeActive,
+                          })
+                        }
                         type="button"
                       >
-                        {venue.isActive ? "Deactivate" : "Activate"}
+                        {venue.scrapeActive ? "Pause scraping" : "Enable scraping"}
                       </button>
+                      <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+                        Publication
+                        <select
+                          className="rounded-xl border border-input bg-background px-3 py-2 text-sm text-foreground disabled:opacity-60"
+                          disabled={isBusy}
+                          onChange={(event) =>
+                            void updateVenueLifecycle(venue, {
+                              publicStatus: event.target.value as VenuePublicStatus,
+                            })
+                          }
+                          value={venue.publicStatus}
+                        >
+                          <option value="pending">Pending</option>
+                          <option value="published">Published</option>
+                          <option value="hidden">Hidden</option>
+                        </select>
+                      </label>
                       <button
                         className="rounded-xl border border-destructive px-3 py-2 text-sm font-medium text-destructive disabled:cursor-not-allowed disabled:opacity-60"
                         disabled={isBusy}

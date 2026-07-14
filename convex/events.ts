@@ -16,7 +16,9 @@ import {
   normalizeHandle,
   toSearchableText,
 } from "../lib/pipeline/venue-normalization";
+import { sanitizeVenueLinkedPublicEventFields } from "../lib/events/public-event-venue-fields";
 import { canonicalizeEventType } from "../lib/taxonomy/venue-types";
+import { isVenuePublic } from "../lib/venues/venue-lifecycle";
 import { requireAdminIdentity, requireAdminOrServiceSecret } from "./authz";
 
 const eventStatus = v.union(
@@ -75,9 +77,7 @@ async function resolveVenueDenormalizedFields(
     return CLEARED_VENUE_DENORMALIZED_FIELDS;
   }
 
-  const venues = (await ctx.db.query("venues").collect()).filter(
-    (venue) => venue.isActive !== false,
-  );
+  const venues = (await ctx.db.query("venues").collect()).filter(isVenuePublic);
   const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle(venues);
   const canonicalization = canonicalizeVenueNameDetailed(
     rawVenueName,
@@ -106,6 +106,47 @@ async function resolveVenueDenormalizedFields(
     ...(venue.location ? { venueLocation: venue.location } : {}),
     ...(venue.longitude !== undefined ? { venueLongitude: venue.longitude } : {}),
   };
+}
+
+async function loadPublicVenueIdsForEvents(
+  ctx: QueryCtx,
+  events: Doc<"events">[],
+): Promise<Set<Id<"venues">>> {
+  const venueIds = [
+    ...new Set(events.map((event) => event.venueId).filter((id): id is Id<"venues"> => id !== undefined)),
+  ];
+  const venues = await Promise.all(venueIds.map((venueId) => ctx.db.get(venueId)));
+  return new Set(
+    venues
+      .filter((venue): venue is Doc<"venues"> => venue !== null && isVenuePublic(venue))
+      .map((venue) => venue._id),
+  );
+}
+
+function sanitizePublicEventWithVenueIds(
+  event: Doc<"events">,
+  publicVenueIds: Set<Id<"venues">>,
+): Doc<"events"> {
+  return sanitizeVenueLinkedPublicEventFields(
+    event,
+    event.venueId !== undefined && publicVenueIds.has(event.venueId),
+  );
+}
+
+async function sanitizePublicEventVenueFields(
+  ctx: QueryCtx,
+  event: Doc<"events">,
+): Promise<Doc<"events">> {
+  const publicVenueIds = await loadPublicVenueIdsForEvents(ctx, [event]);
+  return sanitizePublicEventWithVenueIds(event, publicVenueIds);
+}
+
+async function sanitizePublicEventPage(
+  ctx: QueryCtx,
+  events: Doc<"events">[],
+): Promise<Doc<"events">[]> {
+  const publicVenueIds = await loadPublicVenueIdsForEvents(ctx, events);
+  return events.map((event) => sanitizePublicEventWithVenueIds(event, publicVenueIds));
 }
 
 async function writeEventAuditLog(
@@ -250,7 +291,7 @@ export const getPublicApprovedEvent = query({
       return null;
     }
 
-    return event;
+    return sanitizePublicEventVenueFields(ctx, event);
   },
 });
 
@@ -378,12 +419,16 @@ export const listPublicEventsWindow = query({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    return ctx.db
+    const result = await ctx.db
       .query("events")
       .withIndex("by_status_date", (q) =>
         q.eq("status", "approved").gte("date", args.fromDate).lt("date", args.beforeDate),
       )
       .paginate(args.paginationOpts);
+    return {
+      ...result,
+      page: await sanitizePublicEventPage(ctx, result.page),
+    };
   },
 });
 
@@ -430,7 +475,8 @@ export const listPublicCalendarEventsWindow = query({
       )
       .collect();
 
-    return events.map(toPublicCalendarEvent);
+    const publicEvents = await sanitizePublicEventPage(ctx, events);
+    return publicEvents.map(toPublicCalendarEvent);
   },
 });
 
@@ -440,12 +486,16 @@ export const listApprovedUpcomingByDatePaginated = query({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    return ctx.db
+    const result = await ctx.db
       .query("events")
       .withIndex("by_status_date", (q) =>
         q.eq("status", "approved").gte("date", args.fromDate),
       )
       .paginate(args.paginationOpts);
+    return {
+      ...result,
+      page: await sanitizePublicEventPage(ctx, result.page),
+    };
   },
 });
 
@@ -667,12 +717,22 @@ export const getDiscoverFeed = query({
       .sort(compareOrganicEvents)
       .slice(0, 12);
 
+    const publicVenueIds = await loadPublicVenueIdsForEvents(ctx, [
+      ...featured,
+      ...free,
+      ...promoted,
+      ...tonight,
+      ...weekend,
+    ]);
+    const sanitizeGroup = (events: Doc<"events">[]) =>
+      events.map((event) => sanitizePublicEventWithVenueIds(event, publicVenueIds));
+
     return {
-      featured,
-      free,
-      promoted,
-      tonight,
-      weekend,
+      featured: sanitizeGroup(featured),
+      free: sanitizeGroup(free),
+      promoted: sanitizeGroup(promoted),
+      tonight: sanitizeGroup(tonight),
+      weekend: sanitizeGroup(weekend),
     };
   },
 });

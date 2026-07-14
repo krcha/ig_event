@@ -82,7 +82,8 @@ export type DiscoveredVenueInput = {
   name: string;
   instagramHandle: string;
   category: string;
-  isActive: boolean;
+  publicStatus: "pending";
+  scrapeActive: true;
 };
 
 export type FollowDiscoveryPlan = {
@@ -411,7 +412,8 @@ export function planFollowDiscoveryVenues(options: {
       name: deriveVenueName(account, handle),
       instagramHandle: handle,
       category: DEFAULT_VENUE_CATEGORY,
-      isActive: true,
+      publicStatus: "pending",
+      scrapeActive: true,
     });
   }
 

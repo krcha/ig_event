@@ -1,7 +1,9 @@
 import type { UserIdentity } from "convex/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
+import { sanitizeVenueLinkedPublicEventFields } from "../lib/events/public-event-venue-fields";
+import { isVenuePublic } from "../lib/venues/venue-lifecycle";
 import { isAdminSubject, requireViewerIdentity } from "./authz";
 
 type ViewerLibraryUser = {
@@ -82,6 +84,25 @@ function notNull<T>(value: T | null): value is T {
   return value !== null;
 }
 
+async function loadPublicVenueIdsForSavedEvents(
+  ctx: QueryCtx,
+  events: Doc<"events">[],
+): Promise<Set<Id<"venues">>> {
+  const venueIds = [
+    ...new Set(
+      events
+        .map((event) => event.venueId)
+        .filter((venueId): venueId is Id<"venues"> => venueId !== undefined),
+    ),
+  ];
+  const venues = await Promise.all(venueIds.map((venueId) => ctx.db.get(venueId)));
+  return new Set(
+    venues
+      .filter((venue): venue is Doc<"venues"> => venue !== null && isVenuePublic(venue))
+      .map((venue) => venue._id),
+  );
+}
+
 async function loadLibraryForUser(ctx: QueryCtx, userId: string) {
   const savedRefs = await ctx.db
     .query("savedEvents")
@@ -93,17 +114,28 @@ async function loadLibraryForUser(ctx: QueryCtx, userId: string) {
     .withIndex("by_user", (q) => q.eq("userId", userId))
     .order("desc")
     .collect();
-  const savedEvents = (await Promise.all(savedRefs.map((ref) => ctx.db.get(ref.eventId))))
+  const approvedSavedEvents = (
+    await Promise.all(savedRefs.map((ref) => ctx.db.get(ref.eventId)))
+  )
     .filter(notNull)
     .filter((event) => event.status === "approved");
+  const publicVenueIds = await loadPublicVenueIdsForSavedEvents(ctx, approvedSavedEvents);
+  const savedEvents = approvedSavedEvents.map((event) =>
+    sanitizeVenueLinkedPublicEventFields(
+      event,
+      event.venueId !== undefined && publicVenueIds.has(event.venueId),
+    ),
+  );
   const favoriteVenues = (
     await Promise.all(favoriteRefs.map((ref) => ctx.db.get(ref.venueId)))
-  ).filter(notNull);
+  )
+    .filter(notNull)
+    .filter(isVenuePublic);
 
   return {
     savedEventIds: savedEvents.map((event) => event._id),
     savedEvents,
-    favoriteVenueIds: favoriteRefs.map((ref) => ref.venueId),
+    favoriteVenueIds: favoriteVenues.map((venue) => venue._id),
     favoriteVenues,
   };
 }
@@ -257,19 +289,24 @@ async function toggleFavoriteVenueForUser(
   venueId: Id<"venues">,
   favorite?: boolean,
 ) {
-  const venue = await ctx.db.get(venueId);
-  if (!venue) {
-    throw new Error("Venue not found.");
-  }
-
   const existing = await ctx.db
     .query("favoriteVenues")
     .withIndex("by_user_venue", (q) =>
       q.eq("userId", userId).eq("venueId", venueId),
     )
     .unique();
-
   const shouldFavorite = favorite ?? !existing;
+  const venue = await ctx.db.get(venueId);
+
+  // A stale favorite can always be removed, but pending/hidden venues must be
+  // indistinguishable from missing venues when a public user tries to add one.
+  if (!venue || !isVenuePublic(venue)) {
+    if (existing && !shouldFavorite) {
+      await ctx.db.delete(existing._id);
+      return { favorite: false, venueId };
+    }
+    throw new Error("Venue not found.");
+  }
 
   if (existing && !shouldFavorite) {
     await ctx.db.delete(existing._id);

@@ -31,7 +31,8 @@ type VenueRecord = {
   osmElementType?: string;
   googlePlaceId?: string;
   hoursError?: string;
-  isActive: boolean;
+  scrapeActive: boolean;
+  publicStatus: "pending" | "published" | "hidden";
   createdAt: number;
   updatedAt: number;
 };
@@ -47,7 +48,8 @@ type CreateVenueBody = {
   longitude?: number;
   neighborhood?: string;
   lastFullScrapeAttemptAt?: number;
-  isActive?: boolean;
+  scrapeActive?: boolean;
+  publicStatus?: "pending" | "published" | "hidden";
 };
 
 type UpdateVenueBody = {
@@ -63,7 +65,8 @@ type UpdateVenueBody = {
     longitude?: number;
     neighborhood?: string;
     lastFullScrapeAttemptAt?: number;
-    isActive?: boolean;
+    scrapeActive?: boolean;
+    publicStatus?: "pending" | "published" | "hidden";
     clearVenueHours?: boolean;
     manualOpeningHours?: string;
   };
@@ -82,6 +85,14 @@ const patchVenueHoursMutation =
   "venues:patchVenueHours" as unknown as FunctionReference<"mutation">;
 const removeVenueMutation =
   "venues:removeVenue" as unknown as FunctionReference<"mutation">;
+
+const VENUE_PUBLIC_STATUSES = new Set(["pending", "published", "hidden"]);
+
+function isVenuePublicStatus(
+  value: unknown,
+): value is "pending" | "published" | "hidden" {
+  return typeof value === "string" && VENUE_PUBLIC_STATUSES.has(value);
+}
 
 function createClearVenueHoursPatch(now = Date.now()) {
   const generatedAt = new Date(now).toISOString();
@@ -134,7 +145,8 @@ export async function GET() {
         osmElementType: venue.osmElementType ?? null,
         googlePlaceId: venue.googlePlaceId ?? null,
         hoursError: venue.hoursError ?? null,
-        isActive: venue.isActive,
+        scrapeActive: venue.scrapeActive,
+        publicStatus: venue.publicStatus,
         createdAt: venue.createdAt,
         updatedAt: venue.updatedAt,
       })),
@@ -172,6 +184,12 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+  if (body.publicStatus !== undefined && !isVenuePublicStatus(body.publicStatus)) {
+    return NextResponse.json(
+      { error: "publicStatus must be pending, published, or hidden." },
+      { status: 400 },
+    );
+  }
 
   try {
     const convex = await createAuthenticatedConvexHttpClient();
@@ -192,7 +210,9 @@ export async function POST(request: Request) {
       ...(typeof body.lastFullScrapeAttemptAt === "number"
         ? { lastFullScrapeAttemptAt: body.lastFullScrapeAttemptAt }
         : {}),
-      isActive: body.isActive ?? true,
+      scrapeActive: body.scrapeActive ?? true,
+      publicStatus: body.publicStatus ?? "pending",
+      auditNote: "Created from the admin venue manager.",
     });
 
     return NextResponse.json({ id });
@@ -222,6 +242,15 @@ export async function PATCH(request: Request) {
   if (!body.id || !body.patch) {
     return NextResponse.json(
       { error: "id and patch are required." },
+      { status: 400 },
+    );
+  }
+  if (
+    body.patch.publicStatus !== undefined &&
+    !isVenuePublicStatus(body.patch.publicStatus)
+  ) {
+    return NextResponse.json(
+      { error: "publicStatus must be pending, published, or hidden." },
       { status: 400 },
     );
   }
@@ -272,7 +301,12 @@ export async function PATCH(request: Request) {
       ...(typeof body.patch.lastFullScrapeAttemptAt === "number"
         ? { lastFullScrapeAttemptAt: body.patch.lastFullScrapeAttemptAt }
         : {}),
-      ...(body.patch.isActive !== undefined ? { isActive: body.patch.isActive } : {}),
+      ...(body.patch.scrapeActive !== undefined
+        ? { scrapeActive: body.patch.scrapeActive }
+        : {}),
+      ...(body.patch.publicStatus !== undefined
+        ? { publicStatus: body.patch.publicStatus }
+        : {}),
       ...(body.patch.category !== undefined
         ? { category: canonicalizeVenueCategory(body.patch.category) }
         : {}),
@@ -282,6 +316,7 @@ export async function PATCH(request: Request) {
       await convex.mutation(updateVenueMutation, {
         id: body.id,
         patch: venuePatch,
+        auditNote: "Updated from the admin venue manager.",
       });
     }
 

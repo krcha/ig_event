@@ -2,10 +2,13 @@ import {
   shouldRefreshVenueHoursCache,
   type VenueHoursCacheFields,
 } from "@/lib/venues/venue-hours-cache";
+import {
+  isVenueScrapeActive,
+  type VenueLifecycleFields,
+} from "@/lib/venues/venue-lifecycle";
 
-export type VenueHoursRefreshTarget = VenueHoursCacheFields & {
+export type VenueHoursRefreshTarget = VenueHoursCacheFields & VenueLifecycleFields & {
   _id?: string;
-  isActive?: boolean;
   name: string;
 };
 
@@ -21,7 +24,7 @@ function isActiveRefreshTarget(
     venue._id.length > 0 &&
     typeof venue.name === "string" &&
     venue.name.trim().length > 0 &&
-    venue.isActive !== false
+    isVenueScrapeActive(venue)
   );
 }
 

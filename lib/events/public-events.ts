@@ -15,6 +15,7 @@ import {
   type EventTimeSource,
   type EventTimeStatus,
 } from "@/lib/events/event-time";
+import { sanitizeVenueLinkedPublicEventFields } from "@/lib/events/public-event-venue-fields";
 import { sortPublicEventsByDateVenueTimeTitle } from "@/lib/events/public-event-sort";
 import {
   DEFAULT_EVENT_TYPE,
@@ -111,6 +112,7 @@ type PublicEventsCacheEntry = {
 
 type VenueLookup = {
   canonicalVenueNamesByHandle: Record<string, string>;
+  publicVenueIds: Set<string>;
   venueNameOverridesByHandle: Record<string, string>;
   venuesByHandle: Map<string, VenueRecord>;
   venuesByName: Map<string, VenueRecord>;
@@ -230,13 +232,22 @@ function buildVenuesByName(
   return venuesByName;
 }
 
-function createVenueRecordFromEvent(event: PublicEvent): VenueRecord | null {
-  if (!event.venueId && !event.venueCategory && !event.venueInstagramHandle) {
+function createVenueRecordFromEvent(
+  event: PublicEvent,
+  publicVenueIds: Set<string>,
+): VenueRecord | null {
+  if (
+    (isRealVenueId(event.venueId) && !publicVenueIds.has(event.venueId)) ||
+    (!event.venueId && !event.venueCategory && !event.venueInstagramHandle)
+  ) {
     return null;
   }
 
   return {
-    _id: isRealVenueId(event.venueId) ? event.venueId : `event:${event._id}`,
+    _id:
+      isRealVenueId(event.venueId) && publicVenueIds.has(event.venueId)
+        ? event.venueId
+        : `event:${event._id}`,
     name: event.venue,
     instagramHandle: event.venueInstagramHandle ?? event.instagramHandle ?? "",
     category: event.venueCategory ?? null,
@@ -267,8 +278,11 @@ async function loadVenueLookup(
         }) as Promise<VenueRecord[]>)
       : Promise.resolve([]),
   ]);
+  const publicVenueIds = new Set(
+    [...activeVenues, ...venues].map((venue) => venue._id),
+  );
   const denormalizedVenues = events
-    .map(createVenueRecordFromEvent)
+    .map((event) => createVenueRecordFromEvent(event, publicVenueIds))
     .filter((venue): venue is VenueRecord => venue !== null);
   const lookupVenues = [...activeVenues, ...venues, ...denormalizedVenues];
   let venueNameOverridesByHandle: Record<string, string> = {};
@@ -282,6 +296,7 @@ async function loadVenueLookup(
   );
   return {
     canonicalVenueNamesByHandle,
+    publicVenueIds,
     venueNameOverridesByHandle,
     venuesByHandle: buildVenuesByHandle(lookupVenues),
     venuesByName: buildVenuesByName(lookupVenues, venueNameOverridesByHandle),
@@ -425,41 +440,51 @@ function normalizePublicEvent(
   event: PublicEvent,
   venueLookup: VenueLookup,
 ): PublicEvent {
-  const canonicalEventType = canonicalizeEventType(event.eventType);
+  const hasNonPublicLinkedVenue =
+    isRealVenueId(event.venueId) && !venueLookup.publicVenueIds.has(event.venueId);
+  const publicEvent = sanitizeVenueLinkedPublicEventFields(
+    event,
+    !hasNonPublicLinkedVenue,
+  );
+  const canonicalEventType = canonicalizeEventType(publicEvent.eventType);
   const canonicalVenueName = canonicalizeVenueName(
-    event.venue,
+    publicEvent.venue,
     venueLookup.canonicalVenueNamesByHandle,
     {
       handleVenueNamesByHandle: venueLookup.venueNameOverridesByHandle,
     },
   );
-  const venue =
-    venueLookup.venuesByHandle.get(normalizeHandle(event.venueInstagramHandle ?? "")) ??
-    venueLookup.venuesByName.get(normalizeVenueLookupKey(event.venue)) ??
-    (canonicalVenueName
-      ? venueLookup.venuesByName.get(normalizeVenueLookupKey(canonicalVenueName))
-      : undefined);
-  const venueId = isRealVenueId(event.venueId)
-    ? event.venueId
-    : isRealVenueId(venue?._id)
-      ? venue._id
-      : undefined;
+  const venue = hasNonPublicLinkedVenue
+    ? undefined
+    : venueLookup.venuesByHandle.get(
+        normalizeHandle(publicEvent.venueInstagramHandle ?? ""),
+      ) ??
+      venueLookup.venuesByName.get(normalizeVenueLookupKey(publicEvent.venue)) ??
+      (canonicalVenueName
+        ? venueLookup.venuesByName.get(normalizeVenueLookupKey(canonicalVenueName))
+        : undefined);
+  const venueId =
+    isRealVenueId(publicEvent.venueId) && venueLookup.publicVenueIds.has(publicEvent.venueId)
+      ? publicEvent.venueId
+      : isRealVenueId(venue?._id) && venueLookup.publicVenueIds.has(venue._id)
+        ? venue._id
+        : undefined;
   const venueCategory = venue?.category ?? undefined;
-  const eventVenueCategory = event.venueCategory ?? undefined;
+  const eventVenueCategory = publicEvent.venueCategory ?? undefined;
   const eventType =
     canonicalEventType === DEFAULT_EVENT_TYPE
       ? eventTypeFromVenueCategory(venueCategory ?? eventVenueCategory)
       : canonicalEventType;
-  const time = getDisplayEventTime(event.time);
-  const timeProvenance = resolveEventTimeProvenance(event);
+  const time = getDisplayEventTime(publicEvent.time);
+  const timeProvenance = resolveEventTimeProvenance(publicEvent);
   const displayTime = resolveEventTimeDisplay({
-    date: event.date,
-    time: event.time,
+    date: publicEvent.date,
+    time: publicEvent.time,
     venueHours: venue,
   });
 
   return {
-    ...event,
+    ...publicEvent,
     venueId,
     ...(time ? { time } : { time: undefined }),
     timeSource: timeProvenance.source,
@@ -474,11 +499,11 @@ function normalizePublicEvent(
     displayTimeSource: displayTime.source,
     ...(displayTime.startLabel ? { displayTimeStart: displayTime.startLabel } : {}),
     eventType,
-    ...(venue?.instagramHandle || event.venueInstagramHandle
-      ? { instagramHandle: venue?.instagramHandle || event.venueInstagramHandle }
+    ...(venue?.instagramHandle || publicEvent.venueInstagramHandle
+      ? { instagramHandle: venue?.instagramHandle || publicEvent.venueInstagramHandle }
       : {}),
-    ...(venue?.category || event.venueCategory
-      ? { venueCategory: venue?.category ?? event.venueCategory }
+    ...(venue?.category || publicEvent.venueCategory
+      ? { venueCategory: venue?.category ?? publicEvent.venueCategory }
       : {}),
     ...(venue
       ? {
