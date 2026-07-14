@@ -62,6 +62,10 @@ for (const source of [
   "https://challenges.cloudflare.com",
   "https://img.clerk.com",
   "https://images.apifyusercontent.com",
+  "https://cdninstagram.com",
+  "https://*.cdninstagram.com",
+  "https://fbcdn.net",
+  "https://*.fbcdn.net",
 ]) {
   assert.ok(productionCsp.includes(source), `Production CSP must allow ${source}`);
 }
