@@ -296,6 +296,11 @@ function runPromptQa() {
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /explicitly quoted work name.*Battle Royale.*event title/i,
+    "Prompt must prefer an explicitly quoted cultural-work title over schedule metadata.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
     /GIVE EVERY ROW A TITLE/i,
     "Prompt must tell the model to title every dated schedule row.",
   );
@@ -1803,6 +1808,56 @@ function runTicketPriceQa() {
   }
 }
 
+function runQuotedCaptionTitleQa() {
+  const date = isoDateDaysFromNow(7);
+  const [year, month, day] = date.split("-");
+  const captionDate = `${Number(day)}.${month}.${year.slice(-2)}.`;
+  const caption = [
+    `Utorak ${captionDate} u 21h u Zvezdi!`,
+    "",
+    "“Battle Royale” (2000)",
+    "",
+    "Kultni japanski film Battle Royale, u režiji Kinjija Fukasakua.",
+    "",
+    "Titl engleski. Vrata se otvaraju u 20:30h. Vidimo se!",
+  ].join("\n");
+  const results = prepareEventsForInsert(
+    makeInstagramPost({
+      caption,
+      postType: "image",
+      postedAt: new Date().toISOString(),
+      username: "novi_bioskop_zvezda",
+    }),
+    makeExtractedEvent({
+      title: "",
+      date,
+      time: "",
+      venue: "New Cinema Zvezda",
+      artists: [],
+      category: "arts & culture",
+      description: "Screening of the Japanese film Battle Royale (2000).",
+      source_caption: caption,
+      reasoning_notes: "The caption announces a Battle Royale screening.",
+      confidence: 0.95,
+    }),
+    "https://images.example.com/battle-royale.jpg",
+    {},
+    {},
+    {},
+  );
+  const prepared = results.find(
+    (result) =>
+      result.kind === "ok" &&
+      JSON.parse(result.event.normalizedFieldsJson).normalizedDate === date,
+  );
+  assert.ok(prepared && prepared.kind === "ok", "Battle Royale fixture must produce an event.");
+  assert.equal(
+    prepared.event.title,
+    "Battle Royale",
+    "A quoted film title must beat a date/time/location-only caption line.",
+  );
+}
+
 runPromptQa();
 runVenueQa();
 runArtistAndDescriptionQa();
@@ -1813,6 +1868,7 @@ runCaptionDateRangeQa();
 runNumericCaptionDatePrecedenceQa();
 runSerbianRelativeDateQa();
 runDescriptionStartTimeQa();
+runQuotedCaptionTitleQa();
 runScheduleConsistencyQa();
 runTicketPriceQa();
 

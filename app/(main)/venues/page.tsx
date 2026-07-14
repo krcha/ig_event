@@ -3,6 +3,8 @@ import Link from "next/link";
 import {
   ArrowRight,
   CalendarDays,
+  ChevronLeft,
+  ChevronRight,
   Heart,
   Instagram,
   MapPin,
@@ -16,6 +18,10 @@ import {
   loadPublicVenueDirectory,
   type PublicVenueDirectoryItem,
 } from "@/lib/venues/public-venue-pages";
+import {
+  normalizePublicVenueDirectoryPage,
+  paginatePublicVenueDirectory,
+} from "@/lib/venues/public-venue-directory-pagination";
 import { cn } from "@/lib/utils";
 
 export const revalidate = 60;
@@ -28,6 +34,7 @@ export const metadata: Metadata = {
 
 type VenuesSearchParams = {
   category?: string | string[];
+  page?: string | string[];
   q?: string | string[];
   upcoming?: string | string[];
 };
@@ -126,7 +133,7 @@ function VenueDirectoryCard({
   return (
     <article className="rounded-[1rem] border border-border/75 bg-white/[0.025] p-4 transition hover:border-primary/35 hover:bg-white/[0.045]">
       <div className="flex items-start justify-between gap-3">
-        <Link className="min-w-0" href={`/venues/${venue._id}`}>
+        <Link className="min-w-0" href={`/venues/${venue._id}`} prefetch={false}>
           <p className="section-kicker">{venue.category || "Venue"}</p>
           <h2 className="mt-1 line-clamp-2 text-lg font-semibold leading-6 text-foreground">
             {venue.name}
@@ -172,6 +179,7 @@ function VenueDirectoryCard({
       <Link
         className="button-secondary mt-4 min-h-10 w-full gap-2 px-4 py-0"
         href={`/venues/${venue._id}`}
+        prefetch={false}
       >
         Venue page
         <ArrowRight className="h-4 w-4" />
@@ -194,10 +202,32 @@ export default async function VenuesPage({ searchParams }: VenuesPageProps) {
     query: searchQuery,
     upcomingOnly,
   });
+  const requestedPage = normalizePublicVenueDirectoryPage(
+    getSingleValue(resolvedSearchParams?.page),
+  );
+  const {
+    currentPage,
+    firstItemNumber,
+    lastItemNumber,
+    pageItems: visibleVenues,
+    totalPages,
+  } = paginatePublicVenueDirectory(filteredVenues, requestedPage);
   const activeFilterCount = [selectedCategory, searchQuery, upcomingOnly ? "1" : ""].filter(
     Boolean,
   ).length;
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
+  const previousPageHref = buildQueryString({
+    category: selectedCategory,
+    page: currentPage > 2 ? String(currentPage - 1) : undefined,
+    q: searchQuery || undefined,
+    upcoming: upcomingOnly ? "1" : undefined,
+  });
+  const nextPageHref = buildQueryString({
+    category: selectedCategory,
+    page: String(currentPage + 1),
+    q: searchQuery || undefined,
+    upcoming: upcomingOnly ? "1" : undefined,
+  });
 
   return (
     <main className="app-page gap-4 pb-[calc(7rem+env(safe-area-inset-bottom))] md:pb-9">
@@ -286,11 +316,52 @@ export default async function VenuesPage({ searchParams }: VenuesPageProps) {
       ) : null}
 
       {filteredVenues.length > 0 ? (
-        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {filteredVenues.map((venue) => (
-            <VenueDirectoryCard authEnabled={authEnabled} key={venue._id} venue={venue} />
-          ))}
-        </section>
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
+            <p aria-live="polite">
+              Showing {firstItemNumber}–{lastItemNumber} of {filteredVenues.length} venues
+            </p>
+            <p>
+              Page {currentPage} of {totalPages}
+            </p>
+          </div>
+          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {visibleVenues.map((venue) => (
+              <VenueDirectoryCard authEnabled={authEnabled} key={venue._id} venue={venue} />
+            ))}
+          </section>
+          {totalPages > 1 ? (
+            <nav
+              aria-label="Venue directory pages"
+              className="flex items-center justify-between gap-3"
+            >
+              {currentPage > 1 ? (
+                <Link
+                  className="button-secondary min-h-11 gap-2 px-4 py-0"
+                  href={`/venues${previousPageHref}`}
+                  prefetch={false}
+                  rel="prev"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Previous
+                </Link>
+              ) : (
+                <span />
+              )}
+              {currentPage < totalPages ? (
+                <Link
+                  className="button-secondary min-h-11 gap-2 px-4 py-0"
+                  href={`/venues${nextPageHref}`}
+                  prefetch={false}
+                  rel="next"
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4" />
+                </Link>
+              ) : null}
+            </nav>
+          ) : null}
+        </>
       ) : (
         <section className="rounded-[1rem] border border-dashed border-border/80 bg-white/[0.025] px-4 py-10 text-center">
           <Heart className="mx-auto h-7 w-7 text-primary" />

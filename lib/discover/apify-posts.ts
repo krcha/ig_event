@@ -4,9 +4,7 @@ import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import type { DiscoverFeedEvent } from "@/components/discover/discover-feed";
 import { getDiscoverDisplayImageUrl } from "@/lib/discover/discover-image-source";
-import {
-  normalizeInstagramPostUrl,
-} from "@/lib/images/apify-images";
+import { normalizeInstagramPostUrl } from "@/lib/images/apify-images";
 
 type ScrapedPostRecord = {
   caption?: string | null;
@@ -16,8 +14,14 @@ type ScrapedPostRecord = {
   postId: string;
 };
 
-const getScrapedPostByHandleAndPostRefQuery =
-  "scrapedPosts:getByHandleAndPostRef" as unknown as FunctionReference<"query">;
+type ScrapedPostRef = {
+  handle: string;
+  instagramPostUrl?: string;
+  postId?: string;
+};
+
+const getManyScrapedPostsByHandleAndPostRefsQuery =
+  "scrapedPosts:getManyByHandleAndPostRefs" as unknown as FunctionReference<"query">;
 
 function normalizeHandle(value: string | undefined): string {
   return value?.replace(/^@/, "").trim().toLowerCase() ?? "";
@@ -28,21 +32,18 @@ function normalizeCaption(value: string | null | undefined): string | null {
   return caption ? caption : null;
 }
 
-async function loadMatchingScrapedPost(
-  convex: ConvexHttpClient,
-  event: DiscoverFeedEvent,
-): Promise<ScrapedPostRecord | null> {
+function getScrapedPostRef(event: DiscoverFeedEvent): ScrapedPostRef | null {
   const handle = normalizeHandle(event.instagramHandle);
   const instagramPostUrl = normalizeInstagramPostUrl(event.instagramPostUrl);
   if (!handle || (!event.instagramPostId && !instagramPostUrl)) {
     return null;
   }
 
-  return (await convex.query(getScrapedPostByHandleAndPostRefQuery, {
+  return {
     handle,
     ...(instagramPostUrl ? { instagramPostUrl } : {}),
     ...(event.instagramPostId ? { postId: event.instagramPostId } : {}),
-  })) as ScrapedPostRecord | null;
+  };
 }
 
 function mergeApifyPostIntoDiscoverEvent(
@@ -66,15 +67,26 @@ export async function enrichDiscoverEventsWithApifyPosts(
     return events.map((event) => mergeApifyPostIntoDiscoverEvent(event, null));
   }
 
-  const convex = new ConvexHttpClient(convexUrl);
+  const refsByEvent = events.map(getScrapedPostRef);
+  const refs = refsByEvent.filter((ref): ref is ScrapedPostRef => ref !== null).slice(0, 100);
+  if (refs.length === 0) {
+    return events.map((event) => mergeApifyPostIntoDiscoverEvent(event, null));
+  }
 
   try {
-    const posts = await Promise.all(
-      events.map((event) => loadMatchingScrapedPost(convex, event)),
-    );
-    return events.map((event, index) =>
-      mergeApifyPostIntoDiscoverEvent(event, posts[index] ?? null),
-    );
+    const convex = new ConvexHttpClient(convexUrl);
+    const posts = (await convex.query(getManyScrapedPostsByHandleAndPostRefsQuery, {
+      refs,
+    })) as Array<ScrapedPostRecord | null>;
+    let postIndex = 0;
+    return events.map((event, eventIndex) => {
+      if (!refsByEvent[eventIndex] || postIndex >= posts.length) {
+        return mergeApifyPostIntoDiscoverEvent(event, null);
+      }
+      const post = posts[postIndex] ?? null;
+      postIndex += 1;
+      return mergeApifyPostIntoDiscoverEvent(event, post);
+    });
   } catch {
     return events.map((event) => mergeApifyPostIntoDiscoverEvent(event, null));
   }

@@ -253,8 +253,13 @@ assert.equal(
 
 assertIncludes(
   apifyPostsSource,
-  "scrapedPosts:getByHandleAndPostRef",
-  "Discover should look up matching stored Apify scraped posts by post reference.",
+  "scrapedPosts:getManyByHandleAndPostRefs",
+  "Discover should load matching stored Apify posts through one bounded batch query.",
+);
+assert.equal(
+  (apifyPostsSource.match(/convex\.query\(/g) ?? []).length,
+  1,
+  "Discover enrichment should make one Convex round-trip per feed, not one per event.",
 );
 assertIncludes(
   apifyPostsSource,
@@ -273,8 +278,13 @@ assertIncludes(
 );
 assertIncludes(
   scrapedPostsSource,
-  "export const getByHandleAndPostRef = query",
-  "Convex scrapedPosts should expose an indexed post-reference lookup for Discover.",
+  "export const getManyByHandleAndPostRefs = query",
+  "Convex scrapedPosts should expose one bounded indexed batch lookup for Discover.",
+);
+assertIncludes(
+  scrapedPostsSource,
+  "args.refs.length > 100",
+  "Discover's public scraped-post batch must have a hard upper bound.",
 );
 assertIncludes(
   scrapedPostsSource,

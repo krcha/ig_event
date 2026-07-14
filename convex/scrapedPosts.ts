@@ -124,6 +124,67 @@ export const getManyByIds = query({
   },
 });
 
+export const getManyByHandleAndPostRefs = query({
+  args: {
+    refs: v.array(
+      v.object({
+        handle: v.string(),
+        instagramPostUrl: v.optional(v.string()),
+        postId: v.optional(v.string()),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    if (args.refs.length > 100) {
+      throw new Error("Discover scraped-post lookup supports at most 100 references.");
+    }
+
+    return Promise.all(
+      args.refs.map(async (ref) => {
+        if (ref.postId) {
+          const byPostId = await ctx.db
+            .query("scrapedPosts")
+            .withIndex("by_handle_postId", (q) =>
+              q.eq("handle", ref.handle).eq("postId", ref.postId as string),
+            )
+            .first();
+          if (byPostId) {
+            return {
+              caption: byPostId.caption,
+              imageUrl: byPostId.imageUrl,
+              imageUrls: byPostId.imageUrls,
+              instagramPostUrl: byPostId.instagramPostUrl,
+              postId: byPostId.postId,
+            };
+          }
+        }
+
+        if (ref.instagramPostUrl) {
+          const byPostUrl = await ctx.db
+            .query("scrapedPosts")
+            .withIndex("by_handle_postUrl", (q) =>
+              q
+                .eq("handle", ref.handle)
+                .eq("instagramPostUrl", ref.instagramPostUrl as string),
+            )
+            .first();
+          if (byPostUrl) {
+            return {
+              caption: byPostUrl.caption,
+              imageUrl: byPostUrl.imageUrl,
+              imageUrls: byPostUrl.imageUrls,
+              instagramPostUrl: byPostUrl.instagramPostUrl,
+              postId: byPostUrl.postId,
+            };
+          }
+        }
+
+        return null;
+      }),
+    );
+  },
+});
+
 export const getByHandleAndPostRef = query({
   args: {
     handle: v.string(),

@@ -69,6 +69,7 @@ Rules:
 - Do not return a promoter, organizer, collective, sponsor, or ticketing account as "venue" unless the source clearly shows that it is also the physical venue.
 - If the only location evidence is generic text such as Belgrade, Serbia, club, nightclub, or event space, return empty string for "venue".
 - Prefer a non-empty "title" only when an explicit event/program/act name is clearly written in the caption or flyer.
+- For film screenings, plays, books, exhibitions, and similar cultural programs, an explicitly quoted work name (for example “Battle Royale” (2000)) is the event title; never use the surrounding date/time/location phrase as the title.
 - Prefer the parent event/program name over poster subsection labels. If the flyer says something like "Aktivnosti", "Program", "Lineup", "Radionice", or another section heading, and the caption/flyer also names the actual event, return the actual event name as "title".
 - If the source only indicates a genre, format, or generic session type (for example jam session, techno night, live music), return an empty string for "title".
 - Do not treat poster subsections, schedule headings, or detail blocks as event titles.
