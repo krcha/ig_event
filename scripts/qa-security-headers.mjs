@@ -62,12 +62,19 @@ for (const source of [
   "https://challenges.cloudflare.com",
   "https://img.clerk.com",
   "https://images.apifyusercontent.com",
+]) {
+  assert.ok(productionCsp.includes(source), `Production CSP must allow ${source}`);
+}
+for (const blockedImageSource of [
   "https://cdninstagram.com",
   "https://*.cdninstagram.com",
   "https://fbcdn.net",
   "https://*.fbcdn.net",
 ]) {
-  assert.ok(productionCsp.includes(source), `Production CSP must allow ${source}`);
+  assert.ok(
+    !productionCsp.includes(blockedImageSource),
+    `Production CSP must prevent direct expiring image loads from ${blockedImageSource}`,
+  );
 }
 assert.ok(developmentCsp.includes("'unsafe-eval'"), "Local Next development requires unsafe-eval.");
 assert.ok(

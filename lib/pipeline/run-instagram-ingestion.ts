@@ -67,6 +67,7 @@ import {
 } from "@/lib/events/deduplication-shared";
 import { loadVenueNameOverridesByHandle } from "@/lib/pipeline/venue-name-overrides";
 import { loadOperationalVenueRecords } from "@/lib/pipeline/operational-venues";
+import { isApifyImageUrl } from "@/lib/images/apify-images";
 import { getRequiredEnv } from "@/lib/utils/env";
 
 type RunInstagramIngestionOptions = {
@@ -102,6 +103,8 @@ type HandleSummary = {
   duplicate_update_failed: number;
   failedDownloads: number;
   failed_downloads: number;
+  failedImagePersistence: number;
+  failed_image_persistence: number;
   failedConversions: number;
   failed_conversions: number;
   failedExtractions: number;
@@ -215,6 +218,8 @@ const getScrapedPostsManyByIdsQuery =
   "scrapedPosts:getManyByIds" as unknown as FunctionReference<"query">;
 const upsertScrapedPostsByHandleMutation =
   "scrapedPosts:upsertManyByHandle" as unknown as FunctionReference<"mutation">;
+const persistInstagramImageAction =
+  "mediaAssets:persistInstagramImage" as unknown as FunctionReference<"action">;
 const SCRAPED_POST_UPSERT_BATCH_SIZE = 25;
 const DEFAULT_SCRAPED_POST_PAGE_SIZE = 25;
 const MAX_SCRAPED_POST_PAGE_SIZE = 100;
@@ -318,6 +323,7 @@ type PreparedEvent = {
   artists: string[];
   description?: string;
   imageUrl?: string;
+  imageStorageId?: string;
   instagramPostUrl: string;
   instagramPostId: string;
   ticketPrice?: string;
@@ -925,6 +931,7 @@ type EventImportRecord = {
   artists: string[];
   description?: string;
   imageUrl?: string;
+  imageStorageId?: string;
   instagramPostUrl?: string;
   instagramPostId?: string;
   sourceCaption?: string;
@@ -938,6 +945,7 @@ type SavedScrapedPostRecord = {
   caption?: string;
   altText?: string;
   imageUrl?: string;
+  imageStorageId?: string;
   imageUrls: string[];
   postType?: string;
   locationName?: string;
@@ -2049,6 +2057,8 @@ function createEmptyHandleSummary(handle: string): HandleSummary {
     duplicate_update_failed: 0,
     failedDownloads: 0,
     failed_downloads: 0,
+    failedImagePersistence: 0,
+    failed_image_persistence: 0,
     failedConversions: 0,
     failed_conversions: 0,
     failedExtractions: 0,
@@ -2199,6 +2209,54 @@ function chunkItems<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
+type PersistedInstagramImage = {
+  storageId: string;
+  url: string;
+};
+
+function getStablePostImageUrl(post: InstagramScrapedPost): string | null {
+  if (post.imageStorageId && post.imageUrl) return post.imageUrl;
+  return isApifyImageUrl(post.imageUrl) ? post.imageUrl : null;
+}
+
+async function persistImageForScrapedPost(
+  client: ConvexHttpClient,
+  handle: string,
+  post: InstagramScrapedPost,
+  serviceSecret: string,
+  summary: HandleSummary,
+): Promise<void> {
+  const candidates = [...new Set([post.imageUrl, ...post.imageUrls].filter(
+    (value): value is string => Boolean(value),
+  ))];
+  if (candidates.length === 0) return;
+
+  try {
+    const persisted = (await client.action(persistInstagramImageAction, {
+      candidates,
+      handle,
+      instagramPostId: post.postId,
+      instagramPostUrl: post.instagramPostUrl,
+      serviceSecret,
+      sourceKey: `${handle}:${post.postId || post.instagramPostUrl}`,
+    })) as PersistedInstagramImage;
+    post.imageStorageId = persisted.storageId;
+    post.imageUrl = persisted.url;
+    post.imageUrls = [persisted.url];
+  } catch (error) {
+    summary.failedImagePersistence += 1;
+    summary.failed_image_persistence += 1;
+    logError("ingestion.image.persistence_failed", {
+      step: "fetch_posts" satisfies IngestionStep,
+      handle,
+      sourcePostId: post.postId,
+      shortcode: extractShortcodeFromPostUrl(post.instagramPostUrl),
+      instagramUrl: post.instagramPostUrl,
+      error: getErrorMessage(error),
+    });
+  }
+}
+
 async function persistScrapedPostsForHandle(
   client: ConvexHttpClient,
   handle: string,
@@ -2215,19 +2273,23 @@ async function persistScrapedPostsForHandle(
       withServiceSecret(
         {
           handle,
-          posts: postBatch.map((post) => ({
-            handle,
-            postId: post.postId,
-            ...(post.caption ? { caption: post.caption } : {}),
-            ...(post.altText ? { altText: post.altText } : {}),
-            ...(post.imageUrl ? { imageUrl: post.imageUrl } : {}),
-            imageUrls: post.imageUrls,
-            ...(post.postType ? { postType: post.postType } : {}),
-            ...(post.locationName ? { locationName: post.locationName } : {}),
-            instagramPostUrl: post.instagramPostUrl,
-            ...(post.postedAt ? { postedAt: post.postedAt } : {}),
-            username: post.username,
-          })),
+          posts: postBatch.map((post) => {
+            const imageUrl = getStablePostImageUrl(post);
+            return {
+              handle,
+              postId: post.postId,
+              ...(post.caption ? { caption: post.caption } : {}),
+              ...(post.altText ? { altText: post.altText } : {}),
+              ...(imageUrl ? { imageUrl } : {}),
+              ...(post.imageStorageId ? { imageStorageId: post.imageStorageId } : {}),
+              imageUrls: imageUrl ? [imageUrl] : [],
+              ...(post.postType ? { postType: post.postType } : {}),
+              ...(post.locationName ? { locationName: post.locationName } : {}),
+              instagramPostUrl: post.instagramPostUrl,
+              ...(post.postedAt ? { postedAt: post.postedAt } : {}),
+              username: post.username,
+            };
+          }),
         },
         serviceSecret,
       ),
@@ -2574,6 +2636,7 @@ function normalizeScrapedPost(post: InstagramScrapedPost): InstagramScrapedPost 
     caption: normalizeString(post.caption) || null,
     altText: normalizeString(post.altText) || null,
     imageUrl: normalizeString(post.imageUrl) || null,
+    imageStorageId: normalizeString(post.imageStorageId) || null,
     imageUrls: normalizedImageUrls,
     postType: normalizeString(post.postType).toLowerCase() || null,
     locationName: normalizeString(post.locationName) || null,
@@ -2674,6 +2737,7 @@ function mapImportedEventToSavedScrapedPost(
     caption: caption || null,
     altText: !imageUrl ? fallbackText : null,
     imageUrl: imageUrl || null,
+    imageStorageId: event.imageStorageId ?? null,
     imageUrls: imageUrl ? [imageUrl] : [],
     postType: imageUrl ? "image" : "video",
     locationName: normalizeString(event.venue) || null,
@@ -2794,6 +2858,7 @@ function mapSavedScrapedPostToInstagramPost(
     caption: record.caption ?? null,
     altText: record.altText ?? null,
     imageUrl: record.imageUrl ?? null,
+    imageStorageId: record.imageStorageId ?? null,
     imageUrls: record.imageUrls,
     postType: record.postType ?? null,
     locationName: record.locationName ?? null,
@@ -5303,6 +5368,9 @@ export function prepareEventsForInsert(
         artists: variant.artists,
         ...(variant.description ? { description: variant.description } : {}),
         ...(selectedImageUrl ? { imageUrl: selectedImageUrl } : {}),
+        ...(selectedImageUrl && post.imageStorageId
+          ? { imageStorageId: post.imageStorageId }
+          : {}),
         instagramPostUrl: post.instagramPostUrl,
         instagramPostId: post.postId,
         ...(ticketPrice ? { ticketPrice } : {}),
@@ -5517,11 +5585,30 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     preparedResults = prepareEventsForInsert(
       post,
       extracted,
-      selectedImageUrl,
+      null,
       canonicalVenueNamesByHandle,
       venueNameOverridesByHandle,
       configuredVenueNamesByHandle,
     );
+
+    if (preparedResults.some((result) => result.kind === "ok")) {
+      await persistImageForScrapedPost(client, handle, post, serviceSecret, summary);
+      const stableImageUrl = getStablePostImageUrl(post);
+      if (stableImageUrl) {
+        preparedResults = preparedResults.map((result) =>
+          result.kind === "ok"
+            ? {
+                ...result,
+                event: {
+                  ...result.event,
+                  imageUrl: stableImageUrl,
+                  ...(post.imageStorageId ? { imageStorageId: post.imageStorageId } : {}),
+                },
+              }
+            : result,
+        );
+      }
+    }
   } catch (error) {
     summary.failedExtractions += 1;
     summary.failed_extractions += 1;

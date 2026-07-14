@@ -46,7 +46,7 @@
     "qa:convex-auth-boundaries": "node scripts/qa-convex-auth-boundaries.mjs",
     "qa:ingestion-leases": "node scripts/qa-ingestion-leases.mjs",
     "qa:public-event-windows": "node scripts/qa-public-event-windows.mjs",
-    "qa:image-guardrails": "node scripts/qa-image-guardrails.mjs",
+    "qa:image-guardrails": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-image-guardrails.mjs",
     "qa:runtime-config": "node scripts/qa-runtime-config.mjs",
     "qa:security-headers": "node scripts/qa-security-headers.mjs",
     "qa:security-headers-http": "node scripts/qa-security-headers-http.mjs",

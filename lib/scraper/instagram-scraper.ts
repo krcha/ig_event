@@ -35,6 +35,7 @@ export type InstagramScrapedPost = {
   caption: string | null;
   altText: string | null;
   imageUrl: string | null;
+  imageStorageId?: string | null;
   imageUrls: string[];
   postType: string | null;
   locationName: string | null;

@@ -2,12 +2,10 @@ import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { getDiscoverImageCandidate } from "@/lib/discover/discover-image-source";
 import {
+  isConvexStorageImageUrl,
   normalizeInstagramPostUrl,
 } from "@/lib/images/apify-images";
-import {
-  assertImageResponseHeaders,
-  readImageResponseBodyWithLimit,
-} from "@/lib/images/image-response-guardrails";
+import { fetchTrustedEventImage } from "@/lib/images/trusted-event-images";
 
 export const runtime = "nodejs";
 
@@ -71,7 +69,7 @@ function errorResponse(message: string, status: number): Response {
   });
 }
 
-function placeholderImageResponse(): Response {
+function placeholderImageResponse(cacheable = true): Response {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1500" role="img" aria-label="Poster unavailable">
   <defs>
     <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
@@ -88,28 +86,14 @@ function placeholderImageResponse(): Response {
 
   return new Response(svg, {
     headers: {
-      "cache-control": "public, max-age=600, stale-while-revalidate=3600",
+      "cache-control": cacheable
+        ? "public, max-age=600, stale-while-revalidate=3600"
+        : "no-store",
       "content-type": "image/svg+xml; charset=utf-8",
       "x-content-type-options": "nosniff",
+      "x-event-image-source": "placeholder",
     },
   });
-}
-
-async function fetchImage(url: string): Promise<Response> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 12_000);
-
-  try {
-    return await fetch(url, {
-      cache: "no-store",
-      headers: {
-        accept: "image/*,*/*;q=0.8",
-      },
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeoutId);
-  }
 }
 
 export async function GET(request: Request, context: RouteContext) {
@@ -132,25 +116,26 @@ export async function GET(request: Request, context: RouteContext) {
     const post = await loadMatchingScrapedPost(convex, event, handle);
     const sourceUrl = getDiscoverImageCandidate(event, post);
     if (!sourceUrl) {
-      return errorResponse("Image not found.", 404);
-    }
-
-    const imageResponse = await fetchImage(sourceUrl);
-    if (!imageResponse.ok) {
       return placeholderImageResponse();
     }
-    const contentType = assertImageResponseHeaders(imageResponse);
-    const imageBuffer = await readImageResponseBodyWithLimit(imageResponse);
 
-    return new Response(new Uint8Array(imageBuffer), {
+    const image = await fetchTrustedEventImage(sourceUrl, {
+      storedMediaOrigin: process.env.NEXT_PUBLIC_CONVEX_URL,
+    });
+    const persisted = isConvexStorageImageUrl(sourceUrl);
+
+    return new Response(image.bytes, {
       headers: {
-        "cache-control": "public, max-age=3600, stale-while-revalidate=86400",
-        "content-type": contentType,
-        "content-length": String(imageBuffer.byteLength),
+        "cache-control": persisted
+          ? "public, max-age=86400, stale-while-revalidate=604800"
+          : "public, max-age=3600, stale-while-revalidate=86400",
+        "content-type": image.contentType,
+        "content-length": String(image.bytes.byteLength),
         "x-content-type-options": "nosniff",
+        "x-event-image-source": persisted ? "stored" : "upstream",
       },
     });
   } catch {
-    return placeholderImageResponse();
+    return placeholderImageResponse(false);
   }
 }

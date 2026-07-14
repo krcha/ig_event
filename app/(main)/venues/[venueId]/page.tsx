@@ -18,7 +18,7 @@ import {
 } from "@/lib/venues/public-venue-pages";
 import { buildDiscoverImageUrl } from "@/lib/discover/discover-image-source";
 import { getDisplayEventTime } from "@/lib/events/event-time";
-import { isApifyImageUrl, isApifySourcedImageUrl } from "@/lib/images/apify-images";
+import { isApifyImageUrl } from "@/lib/images/apify-images";
 import { cn } from "@/lib/utils";
 
 export const revalidate = 60;
@@ -280,19 +280,16 @@ function ProfileActions({
 }
 
 function getEventPostImageSrc(event: VenueEventPost, venue: PublicVenue): string | null {
-  if (!event.imageUrl) {
+  if (!event.imageUrl && !event.instagramPostUrl) {
     return null;
   }
 
-  if (isApifySourcedImageUrl(event.imageUrl)) {
-    return buildDiscoverImageUrl({
-      _id: event._id,
-      imageUrl: event.imageUrl,
-      instagramHandle: venue.instagramHandle,
-    });
-  }
-
-  return event.imageUrl;
+  return buildDiscoverImageUrl({
+    _id: event._id,
+    imageUrl: event.imageUrl,
+    instagramHandle: venue.instagramHandle,
+    instagramPostUrl: event.instagramPostUrl,
+  });
 }
 
 function EventPostTile({
@@ -362,7 +359,20 @@ export async function generateMetadata({ params }: VenuePageProps): Promise<Meta
   ]
     .filter(Boolean)
     .join(" - ");
-  const image = [...upcomingEvents, ...historyEvents].find((event) => event.imageUrl)?.imageUrl;
+  const imageEvent = [...upcomingEvents, ...historyEvents].find(
+    (event) => event.imageUrl || event.instagramPostUrl,
+  );
+  const image = imageEvent
+    ? new URL(
+        buildDiscoverImageUrl({
+          _id: imageEvent._id,
+          imageUrl: imageEvent.imageUrl,
+          instagramHandle: venue.instagramHandle,
+          instagramPostUrl: imageEvent.instagramPostUrl,
+        }),
+        "https://events.ineedtofeedmyrabbit.com",
+      ).toString()
+    : null;
 
   return {
     title: `${venue.name} - Belgrade venue events`,

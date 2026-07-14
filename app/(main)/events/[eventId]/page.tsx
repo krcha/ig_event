@@ -29,6 +29,7 @@ import { SaveEventButton } from "@/components/events/save-event-button";
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
 import { VenueWeeklyHours } from "@/components/venues/venue-weekly-hours";
 import { loadPublicEventDetailData } from "@/lib/events/public-event-detail-data";
+import { buildDiscoverImageUrl } from "@/lib/discover/discover-image-source";
 import {
   DEFAULT_EVENT_TYPE,
   canonicalizeEventType,
@@ -299,6 +300,14 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
   const venueHref = event.venueId ? `/venues/${event.venueId}` : null;
   const calendarHref = buildCalendarHref(event);
+  const eventImageUrl = event.imageUrl || event.instagramPostUrl
+    ? buildDiscoverImageUrl({
+        _id: event._id,
+        imageUrl: event.imageUrl,
+        instagramHandle: event.venueInstagramHandle,
+        instagramPostUrl: event.instagramPostUrl,
+      })
+    : null;
 
   return (
     <main className="app-page gap-3 pb-[calc(9.5rem+env(safe-area-inset-bottom))] md:pb-9">
@@ -431,7 +440,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
               </div>
 
               <aside className="border-t border-border/75 bg-muted/[0.22] p-3 sm:p-5 lg:border-l lg:border-t-0">
-                {event.imageUrl ? (
+                {eventImageUrl ? (
                   <div className="overflow-hidden rounded-[1.1rem] border border-border/75 bg-card p-1.5 shadow-[0_24px_68px_-48px_rgba(0,0,0,0.82)]">
                     <div className="relative aspect-[16/10] max-h-64 w-full overflow-hidden rounded-[0.9rem] lg:aspect-[4/5] lg:max-h-none">
                     <EventImage
@@ -439,7 +448,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                       className="object-cover"
                       priority
                       sizes="(max-width: 1024px) 100vw, 352px"
-                      src={event.imageUrl}
+                      src={eventImageUrl}
                       />
                     </div>
                   </div>

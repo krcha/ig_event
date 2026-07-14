@@ -1,9 +1,13 @@
-import { pickApifySourcedImageUrl } from "@/lib/images/apify-images";
+import {
+  pickApifySourcedImageUrl,
+  pickStablePublicImageUrl,
+} from "@/lib/images/apify-images";
 
 export type DiscoverImageEventSource = {
   _id: string;
   imageUrl?: string | null;
   instagramHandle?: string | null;
+  instagramPostUrl?: string | null;
 };
 
 export type DiscoverImagePostSource = {
@@ -25,16 +29,19 @@ export function getDiscoverImageCandidate(
   event: DiscoverImageEventSource,
   post: DiscoverImagePostSource | null,
 ): string | null {
-  return pickApifySourcedImageUrl([
+  const candidates = [
     event.imageUrl,
     post?.imageUrl,
     ...(post?.imageUrls ?? []),
-  ]);
+  ];
+  return pickStablePublicImageUrl(candidates) ?? pickApifySourcedImageUrl(candidates);
 }
 
 export function getDiscoverDisplayImageUrl(
   event: DiscoverImageEventSource,
   post: DiscoverImagePostSource | null,
 ): string | undefined {
-  return getDiscoverImageCandidate(event, post) ? buildDiscoverImageUrl(event) : undefined;
+  return getDiscoverImageCandidate(event, post) || event.instagramPostUrl
+    ? buildDiscoverImageUrl(event)
+    : undefined;
 }

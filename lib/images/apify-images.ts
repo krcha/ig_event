@@ -27,6 +27,22 @@ export function isInstagramCdnImageUrl(value: string | null | undefined): value 
   );
 }
 
+export function isConvexStorageImageUrl(
+  value: string | null | undefined,
+  convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL,
+): value is string {
+  if (!value || !convexUrl) return false;
+  try {
+    return new URL(value).origin === new URL(convexUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
+export function isStablePublicImageUrl(value: string | null | undefined): value is string {
+  return isApifyImageUrl(value) || isConvexStorageImageUrl(value);
+}
+
 export function isApifySourcedImageUrl(value: string | null | undefined): value is string {
   return isApifyImageUrl(value) || isInstagramCdnImageUrl(value);
 }
@@ -35,6 +51,12 @@ export function pickApifyImageUrl(
   candidates: readonly (string | null | undefined)[],
 ): string | null {
   return candidates.find(isApifyImageUrl) ?? null;
+}
+
+export function pickStablePublicImageUrl(
+  candidates: readonly (string | null | undefined)[],
+): string | null {
+  return candidates.find(isStablePublicImageUrl) ?? null;
 }
 
 export function pickApifySourcedImageUrl(

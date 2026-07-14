@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { EventTimeProvenanceText } from "@/components/events/event-time-provenance-text";
 import type { EventTimeSource, EventTimeStatus } from "@/lib/events/event-time";
 import { getModerationQueuePriorityScore } from "@/lib/events/moderation-queue";
+import { buildDiscoverImageUrl } from "@/lib/discover/discover-image-source";
 import {
   AUTO_APPROVE_CONFIDENCE_THRESHOLD,
   CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
@@ -1664,6 +1665,13 @@ export function ModerationDashboard() {
             "pendingReasons",
           );
           const scorecardSignals = readStringArrayField(extractionScorecard, "signals");
+          const posterUrl = event.imageUrl || event.instagramPostUrl
+            ? buildDiscoverImageUrl({
+                _id: event.id,
+                imageUrl: event.imageUrl,
+                instagramPostUrl: event.instagramPostUrl,
+              })
+            : null;
 
           return (
           <article
@@ -1672,13 +1680,17 @@ export function ModerationDashboard() {
           >
             <div className="grid gap-0 lg:grid-cols-[180px_minmax(0,1fr)]">
               <div className="border-b border-border bg-muted lg:border-b-0 lg:border-r">
-                {event.imageUrl ? (
-                  <a href={event.imageUrl} rel="noreferrer" target="_blank">
+                {posterUrl ? (
+                  <a
+                    href={event.instagramPostUrl ?? event.imageUrl ?? posterUrl}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
                     <Image
                       alt={event.title}
                       className="h-40 w-full object-cover lg:h-full"
                       height={720}
-                      src={event.imageUrl}
+                      src={posterUrl}
                       width={720}
                     />
                   </a>

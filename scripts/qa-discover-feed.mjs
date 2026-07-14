@@ -400,13 +400,8 @@ assertIncludes(
 );
 assertIncludes(
   discoverImageRouteSource,
-  "assertImageResponseHeaders",
-  "Discover image route should enforce shared image content-type and content-length guardrails.",
-);
-assertIncludes(
-  discoverImageRouteSource,
-  "readImageResponseBodyWithLimit",
-  "Discover image route should enforce a streamed byte cap before proxying.",
+  "fetchTrustedEventImage",
+  "Discover image route should enforce allowlisted redirects, MIME checks, and streamed byte limits.",
 );
 assertIncludes(
   discoverImageRouteSource,
@@ -415,8 +410,13 @@ assertIncludes(
 );
 assertIncludes(
   discoverImageRouteSource,
-  "\"cache-control\": \"public, max-age=3600, stale-while-revalidate=86400\"",
-  "Discover image route should cache first-party image responses.",
+  "public, max-age=86400, stale-while-revalidate=604800",
+  "Discover image route should cache durable stored images.",
+);
+assertIncludes(
+  discoverImageRouteSource,
+  "public, max-age=3600, stale-while-revalidate=86400",
+  "Discover image route should bound caching for temporary upstream responses.",
 );
 assertDoesNotInclude(
   nextConfigSource,

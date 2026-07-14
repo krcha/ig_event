@@ -55,6 +55,7 @@ export default defineSchema({
     artists: v.array(v.string()),
     description: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
+    imageStorageId: v.optional(v.id("_storage")),
     instagramPostUrl: v.optional(v.string()),
     instagramPostId: v.optional(v.string()),
     ticketPrice: v.optional(v.string()),
@@ -80,6 +81,7 @@ export default defineSchema({
     .index("by_status_promotionTier", ["status", "promotionTier"])
     .index("by_instagramPostId", ["instagramPostId"])
     .index("by_instagramPostUrl", ["instagramPostUrl"])
+    .index("by_imageStorageId", ["imageStorageId"])
     .index("by_venueId", ["venueId"])
     .index("by_venueId_status_date", ["venueId", "status", "date"]),
   venues: defineTable({
@@ -159,6 +161,7 @@ export default defineSchema({
     caption: v.optional(v.string()),
     altText: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
+    imageStorageId: v.optional(v.id("_storage")),
     imageUrls: v.array(v.string()),
     postedAtMs: v.optional(v.number()),
     postType: v.optional(v.string()),
@@ -174,6 +177,20 @@ export default defineSchema({
     .index("by_handle_postedAtMs", ["handle", "postedAtMs"])
     .index("by_handle_postId", ["handle", "postId"])
     .index("by_handle_postUrl", ["handle", "instagramPostUrl"])
+    .index("by_imageStorageId", ["imageStorageId"])
+    .index("by_updatedAt", ["updatedAt"]),
+  mediaAssets: defineTable({
+    sourceKey: v.string(),
+    storageId: v.id("_storage"),
+    url: v.string(),
+    contentType: v.string(),
+    byteLength: v.number(),
+    sha256: v.string(),
+    sourceHost: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_sourceKey", ["sourceKey"])
     .index("by_updatedAt", ["updatedAt"]),
   ingestionJobs: defineTable({
     source: v.string(),

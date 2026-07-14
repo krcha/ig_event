@@ -31,4 +31,17 @@ crons.weekly(
   },
 );
 
+crons.daily(
+  "cleanup orphaned stored event images",
+  {
+    hourUTC: 4,
+    minuteUTC: 30,
+  },
+  internal.mediaAssets.pruneOrphanedAssets,
+  {
+    batchSize: 50,
+    minAgeMs: 7 * 24 * 60 * 60 * 1_000,
+  },
+);
+
 export default crons;

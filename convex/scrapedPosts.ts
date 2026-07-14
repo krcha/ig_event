@@ -1,4 +1,4 @@
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
@@ -13,6 +13,7 @@ const scrapedPostRecord = {
   caption: v.optional(v.string()),
   altText: v.optional(v.string()),
   imageUrl: v.optional(v.string()),
+  imageStorageId: v.optional(v.id("_storage")),
   imageUrls: v.array(v.string()),
   postType: v.optional(v.string()),
   locationName: v.optional(v.string()),
@@ -152,6 +153,7 @@ export const getManyByHandleAndPostRefs = query({
             return {
               caption: byPostId.caption,
               imageUrl: byPostId.imageUrl,
+              imageStorageId: byPostId.imageStorageId,
               imageUrls: byPostId.imageUrls,
               instagramPostUrl: byPostId.instagramPostUrl,
               postId: byPostId.postId,
@@ -172,6 +174,7 @@ export const getManyByHandleAndPostRefs = query({
             return {
               caption: byPostUrl.caption,
               imageUrl: byPostUrl.imageUrl,
+              imageStorageId: byPostUrl.imageStorageId,
               imageUrls: byPostUrl.imageUrls,
               instagramPostUrl: byPostUrl.instagramPostUrl,
               postId: byPostUrl.postId,
@@ -220,6 +223,51 @@ export const getByHandleAndPostRef = query({
   },
 });
 
+export const attachStoredImageToSource = internalMutation({
+  args: {
+    handle: v.string(),
+    imageStorageId: v.id("_storage"),
+    imageUrl: v.string(),
+    instagramPostId: v.optional(v.string()),
+    instagramPostUrl: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const matches = new Map<Id<"scrapedPosts">, Doc<"scrapedPosts">>();
+    if (args.instagramPostId) {
+      const byPostId = await ctx.db
+        .query("scrapedPosts")
+        .withIndex("by_handle_postId", (q) =>
+          q.eq("handle", args.handle).eq("postId", args.instagramPostId as string),
+        )
+        .collect();
+      for (const post of byPostId) matches.set(post._id, post);
+    }
+    const byUrl = await ctx.db
+      .query("scrapedPosts")
+      .withIndex("by_handle_postUrl", (q) =>
+        q.eq("handle", args.handle).eq("instagramPostUrl", args.instagramPostUrl),
+      )
+      .collect();
+    for (const post of byUrl) matches.set(post._id, post);
+
+    const now = Date.now();
+    let updatedCount = 0;
+    for (const post of matches.values()) {
+      if (post.imageStorageId === args.imageStorageId && post.imageUrl === args.imageUrl) {
+        continue;
+      }
+      await ctx.db.patch(post._id, {
+        imageStorageId: args.imageStorageId,
+        imageUrl: args.imageUrl,
+        imageUrls: [args.imageUrl],
+        updatedAt: now,
+      });
+      updatedCount += 1;
+    }
+    return { matchedCount: matches.size, updatedCount };
+  },
+});
+
 export const upsertManyByHandle = mutation({
   args: {
     handle: v.string(),
@@ -252,6 +300,9 @@ export const upsertManyByHandle = mutation({
         handle: args.handle,
         postedAtMs: parsePostedAtMs(post.postedAt),
         sourceKey: getSourceKey({ ...post, handle: args.handle }),
+        ...(post.imageUrl !== undefined && post.imageStorageId === undefined
+          ? { imageStorageId: undefined }
+          : {}),
         updatedAt: now,
       };
 

@@ -751,6 +751,56 @@ export const listByDate = query({
   },
 });
 
+export const attachStoredImageToSource = internalMutation({
+  args: {
+    imageStorageId: v.id("_storage"),
+    imageUrl: v.string(),
+    instagramPostId: v.optional(v.string()),
+    instagramPostUrl: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const matchesById = new Map<Id<"events">, Doc<"events">>();
+    const byUrl = await ctx.db
+      .query("events")
+      .withIndex("by_instagramPostUrl", (q) =>
+        q.eq("instagramPostUrl", args.instagramPostUrl),
+      )
+      .collect();
+    for (const event of byUrl) matchesById.set(event._id, event);
+
+    if (args.instagramPostId) {
+      const byPostId = await ctx.db
+        .query("events")
+        .withIndex("by_instagramPostId", (q) =>
+          q.eq("instagramPostId", args.instagramPostId),
+        )
+        .collect();
+      for (const event of byPostId) matchesById.set(event._id, event);
+    }
+
+    const now = Date.now();
+    let updatedCount = 0;
+    for (const event of matchesById.values()) {
+      if (event.imageStorageId === args.imageStorageId && event.imageUrl === args.imageUrl) {
+        continue;
+      }
+      const patch = {
+        imageStorageId: args.imageStorageId,
+        imageUrl: args.imageUrl,
+        updatedAt: now,
+      };
+      await ctx.db.patch(event._id, patch);
+      await writeEventAuditLog(ctx, event._id, "image_stored", {
+        actor: "service:media-persistence",
+        patch,
+      });
+      updatedCount += 1;
+    }
+
+    return { matchedCount: matchesById.size, updatedCount };
+  },
+});
+
 export const createEvent = mutation({
   args: {
     title: v.string(),
@@ -764,6 +814,7 @@ export const createEvent = mutation({
     artists: v.array(v.string()),
     description: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
+    imageStorageId: v.optional(v.id("_storage")),
     instagramPostUrl: v.optional(v.string()),
     instagramPostId: v.optional(v.string()),
     ticketPrice: v.optional(v.string()),
@@ -819,6 +870,7 @@ export const updateEvent = mutation({
       artists: v.optional(v.array(v.string())),
       description: v.optional(v.string()),
       imageUrl: v.optional(v.string()),
+      imageStorageId: v.optional(v.id("_storage")),
       instagramPostUrl: v.optional(v.string()),
       instagramPostId: v.optional(v.string()),
       ticketPrice: v.optional(v.string()),
@@ -850,6 +902,9 @@ export const updateEvent = mutation({
       ...venueFields,
       ...(args.patch.eventType !== undefined
         ? { eventType: canonicalizeEventType(args.patch.eventType) }
+        : {}),
+      ...(args.patch.imageUrl !== undefined && args.patch.imageStorageId === undefined
+        ? { imageStorageId: undefined }
         : {}),
     };
     await ctx.db.patch(args.id, { ...patch, updatedAt: now });
@@ -976,6 +1031,7 @@ export const mergeApprovedEvents = mutation({
       artists: v.optional(v.array(v.string())),
       description: v.optional(v.string()),
       imageUrl: v.optional(v.string()),
+      imageStorageId: v.optional(v.id("_storage")),
       ticketPrice: v.optional(v.string()),
       eventType: v.optional(v.string()),
     }),
@@ -1013,6 +1069,9 @@ export const mergeApprovedEvents = mutation({
         ...venueFields,
         ...(args.patch.eventType !== undefined
           ? { eventType: canonicalizeEventType(args.patch.eventType) }
+          : {}),
+        ...(args.patch.imageUrl !== undefined && args.patch.imageStorageId === undefined
+          ? { imageStorageId: undefined }
           : {}),
       };
       await ctx.db.patch(args.primaryId, {
