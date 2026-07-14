@@ -1,6 +1,13 @@
+import { buildApplicationSecurityHeaders } from "./lib/security/headers.mjs";
+
 /** @type {import("next").NextConfig} */
 const CANONICAL_APP_ORIGIN = "https://events.ineedtofeedmyrabbit.com";
 const VERCEL_PRODUCTION_HOST = "ig-event.vercel.app";
+const applicationSecurityHeaders = buildApplicationSecurityHeaders({
+  clerkOrigin: process.env.CLERK_JWT_ISSUER_DOMAIN,
+  convexOrigin: process.env.NEXT_PUBLIC_CONVEX_URL,
+  production: process.env.NODE_ENV === "production",
+});
 
 const nextConfig = {
   // Release checks and Docker builds run `npm run lint` and `npm run typecheck`
@@ -20,6 +27,14 @@ const nextConfig = {
     }
 
     return config;
+  },
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: applicationSecurityHeaders,
+      },
+    ];
   },
   async redirects() {
     return [

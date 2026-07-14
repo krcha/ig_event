@@ -48,6 +48,8 @@
     "qa:public-event-windows": "node scripts/qa-public-event-windows.mjs",
     "qa:image-guardrails": "node scripts/qa-image-guardrails.mjs",
     "qa:runtime-config": "node scripts/qa-runtime-config.mjs",
+    "qa:security-headers": "node scripts/qa-security-headers.mjs",
+    "qa:security-headers-http": "node scripts/qa-security-headers-http.mjs",
     "qa:convex-retention-cron": "node scripts/qa-convex-retention-cron.mjs",
     "qa:clerk-email-auth": "node scripts/qa-clerk-email-auth.mjs",
     "qa:user-api-auth": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-user-api-auth.mjs",

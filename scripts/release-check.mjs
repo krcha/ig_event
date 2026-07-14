@@ -33,6 +33,8 @@ const checks = [
   { script: "qa:public-event-windows", timeoutMs: 60_000 },
   { script: "qa:image-guardrails", timeoutMs: 60_000 },
   { script: "qa:runtime-config", timeoutMs: 60_000 },
+  { script: "qa:security-headers", timeoutMs: 60_000 },
+  { script: "qa:security-headers-http", timeoutMs: 120_000 },
   { script: "qa:convex-retention-cron", timeoutMs: 60_000 },
   { script: "qa:clerk-email-auth", timeoutMs: 60_000 },
   { script: "qa:user-api-auth", timeoutMs: 60_000 },
