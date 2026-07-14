@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
+  MAX_DISCOVER_SCRAPED_POST_REFS,
+  buildDiscoverScrapedPostBatch,
+  mergeDiscoverScrapedPostBatch,
+} from "../lib/discover/apify-post-alignment.ts";
+import {
   buildDiscoverImageUrl,
   getDiscoverDisplayImageUrl,
   getDiscoverImageCandidate,
@@ -29,6 +34,7 @@ function assertDoesNotInclude(source, value, message) {
 const discoverPageSource = read("app/(main)/discover/page.tsx");
 const discoverFeedSource = read("components/discover/discover-feed.tsx");
 const discoverImageSourceSource = read("lib/discover/discover-image-source.ts");
+const apifyPostAlignmentSource = read("lib/discover/apify-post-alignment.ts");
 const apifyPostsSource = read("lib/discover/apify-posts.ts");
 const discoverImageRouteSource = read("app/api/discover/images/[eventId]/route.ts");
 const readMoreTextSource = read("components/ui/read-more-text.tsx");
@@ -251,6 +257,91 @@ assert.equal(
   "At 07:00 Belgrade time, Discover should roll over to the calendar date.",
 );
 
+function makeDiscoverEvent(id, overrides = {}) {
+  return {
+    _id: id,
+    artists: [],
+    date: "2026-07-14",
+    eventType: "nightlife",
+    status: "approved",
+    title: id,
+    venue: "Fixture Venue",
+    ...overrides,
+  };
+}
+
+const alignmentEvents = [
+  makeDiscoverEvent("missing-ref"),
+  makeDiscoverEvent("event-a", {
+    instagramHandle: "@Fixture",
+    instagramPostId: "post-a",
+  }),
+  makeDiscoverEvent("event-a-duplicate", {
+    instagramHandle: "fixture",
+    instagramPostId: "post-a",
+    sourceCaption: "Exact event caption",
+  }),
+  makeDiscoverEvent("event-b", {
+    instagramHandle: "fixture",
+    instagramPostUrl: "https://www.instagram.com/p/POSTB/?utm_source=test",
+  }),
+];
+const alignmentBatch = buildDiscoverScrapedPostBatch(alignmentEvents);
+assert.deepEqual(
+  alignmentBatch.postIndexByEvent,
+  [null, 0, 0, 1],
+  "Null refs and duplicate refs must retain event-to-result alignment.",
+);
+assert.equal(alignmentBatch.refs.length, 2, "Duplicate Discover refs should be queried only once.");
+const alignedEvents = mergeDiscoverScrapedPostBatch(
+  alignmentEvents,
+  alignmentBatch.postIndexByEvent,
+  [
+    {
+      caption: "Stored caption",
+      imageUrl: "https://images.apifyusercontent.com/event-a.jpg",
+      instagramPostUrl: "https://www.instagram.com/p/POSTA/",
+      postId: "post-a",
+    },
+    null,
+  ],
+);
+assert.equal(alignedEvents[0].sourceCaption, undefined);
+assert.equal(alignedEvents[1].sourceCaption, "Stored caption");
+assert.equal(
+  alignedEvents[2].sourceCaption,
+  "Exact event caption",
+  "Exact event captions must win when duplicate events share one scraped-post result.",
+);
+assert.equal(alignedEvents[3].sourceCaption, undefined);
+
+const boundaryEvents = Array.from({ length: MAX_DISCOVER_SCRAPED_POST_REFS + 1 }, (_, index) =>
+  makeDiscoverEvent(`boundary-${index}`, {
+    instagramHandle: "fixture",
+    instagramPostId: `post-${index}`,
+  }),
+);
+const boundaryBatch = buildDiscoverScrapedPostBatch(boundaryEvents);
+assert.equal(boundaryBatch.refs.length, 100, "Discover's client batch must stop at 100 unique refs.");
+assert.equal(
+  boundaryBatch.postIndexByEvent[100],
+  null,
+  "The 101st unique ref must remain unenriched instead of shifting result alignment.",
+);
+const duplicateAfterBoundary = buildDiscoverScrapedPostBatch([
+  ...boundaryEvents.slice(0, 100),
+  makeDiscoverEvent("duplicate-after-boundary", {
+    instagramHandle: "fixture",
+    instagramPostId: "post-0",
+  }),
+]);
+assert.equal(duplicateAfterBoundary.refs.length, 100);
+assert.equal(
+  duplicateAfterBoundary.postIndexByEvent[100],
+  0,
+  "A duplicate after the 100-ref boundary should reuse the existing batched result.",
+);
+
 assertIncludes(
   apifyPostsSource,
   "scrapedPosts:getManyByHandleAndPostRefs",
@@ -262,7 +353,7 @@ assert.equal(
   "Discover enrichment should make one Convex round-trip per feed, not one per event.",
 );
 assertIncludes(
-  apifyPostsSource,
+  apifyPostAlignmentSource,
   "getDiscoverDisplayImageUrl(event, post)",
   "Discover scraped-post enrichment should use the shared first-party image URL helper.",
 );
@@ -272,7 +363,7 @@ assertIncludes(
   "Discover image helper should expose first-party image proxy URLs.",
 );
 assertIncludes(
-  apifyPostsSource,
+  apifyPostAlignmentSource,
   "normalizeCaption(event.sourceCaption) ?? normalizeCaption(post?.caption)",
   "Discover scraped-post enrichment should preserve exact event captions and backfill exact scraped captions.",
 );

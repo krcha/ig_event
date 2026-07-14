@@ -1,6 +1,22 @@
 export const PUBLIC_VENUE_DIRECTORY_PAGE_SIZE = 24;
 export const MAX_PUBLIC_VENUE_DIRECTORY_PAGE_SIZE = 50;
 
+export function buildPublicVenueDirectoryPageHref(params: {
+  category?: string;
+  page?: string;
+  q?: string;
+  upcoming?: string;
+}): string {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value) {
+      query.set(key, value);
+    }
+  }
+  const serialized = query.toString();
+  return serialized ? `?${serialized}` : "";
+}
+
 export function normalizePublicVenueDirectoryPage(value: string | undefined): number {
   const parsed = Number.parseInt(value ?? "1", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;

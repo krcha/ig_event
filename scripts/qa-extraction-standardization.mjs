@@ -1856,6 +1856,87 @@ function runQuotedCaptionTitleQa() {
     "Battle Royale",
     "A quoted film title must beat a date/time/location-only caption line.",
   );
+
+  function prepareQuotedFixture(testCaption, category = "nightlife") {
+    const [result] = prepareEventsForInsert(
+      makeInstagramPost({
+        caption: testCaption,
+        postType: "image",
+        postedAt: new Date().toISOString(),
+        username: "quoted_title_fixture",
+      }),
+      makeExtractedEvent({
+        title: "",
+        date,
+        time: "21:00",
+        venue: "Fixture Venue",
+        artists: [],
+        category,
+        description: "Fixture event description.",
+        source_caption: testCaption,
+        confidence: 0.95,
+      }),
+      "https://images.example.com/fixture.jpg",
+      {},
+      {},
+      {},
+    );
+    assert.equal(result.kind, "ok", "Quoted-title fixture must produce an event.");
+    return result;
+  }
+
+  for (const { caption: negativeCaption, rejectedTitle, category } of [
+    {
+      caption: "Organizatori poručuju: “Vidimo se!”",
+      rejectedTitle: "Vidimo se",
+      category: "nightlife",
+    },
+    {
+      caption: "Filmska projekcija večeras. Junak kaže: “Nikada više”.",
+      rejectedTitle: "Nikada više",
+      category: "arts & culture",
+    },
+    {
+      caption: "Izložba umetnika. Moto večeri je “Make art not war”.",
+      rejectedTitle: "Make art not war",
+      category: "arts & culture",
+    },
+    {
+      caption: "Kod za popust je “SUMMER20” (2026).",
+      rejectedTitle: "SUMMER20",
+      category: "nightlife",
+    },
+  ]) {
+    const result = prepareQuotedFixture(negativeCaption, category);
+    assert.notEqual(
+      result.event.title,
+      rejectedTitle,
+      `Quoted promotional or dialogue text must not become the event title: ${rejectedTitle}`,
+    );
+  }
+
+  const multipleQuoteResult = prepareQuotedFixture(
+    [
+      "Organizatori poručuju: “Vidimo se!”",
+      "Večeras gledamo “Battle Royale” (2000).",
+    ].join("\n"),
+    "arts & culture",
+  );
+  assert.equal(
+    multipleQuoteResult.event.title,
+    "Battle Royale",
+    "The matcher must skip an earlier CTA quote and recover the later year-qualified film title.",
+  );
+
+  const directlyLabeledWork = prepareQuotedFixture(
+    "Predstava “Hamlet” igra se sledeće nedelje.",
+    "arts & culture",
+  );
+  assert.equal(
+    directlyLabeledWork.event.title,
+    "Hamlet",
+    "A directly labeled cultural work may supply a quoted title even without a release year.",
+  );
 }
 
 runPromptQa();
