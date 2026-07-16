@@ -208,7 +208,7 @@ Ingestion:
 2. Active venues are loaded from Convex.
 3. Apify fetches recent Instagram posts per venue handle.
 4. OpenAI extracts structured event data from captions/images.
-5. Automatic approval requires both confidence and independent raw-source grounding: the final title, date, billed artists, and any explicit published time must be recoverable from the same deterministic Instagram caption/alt-text segment. Model-only/image-only candidates stay pending for owner review.
+5. Automatic approval requires both confidence and independent raw-source grounding: the final title, date, billed artists, and any explicit published time must be recoverable from the same deterministic raw Instagram caption/alt-text segment, and the segment must contain explicit event context (for example a published time, an event/DJ cue, or an `@`-billed artist). A candidate with missing or ambiguous grounding stays pending with `unverified_core_event_source`; model-authored captions, schedule `source_text`, field-confirmation snippets, and inferred evidence never count as provenance. Model-derived maintenance repairs are always returned to pending, and pending duplicate re-scrapes cannot overwrite approved public records. Ambiguous image-only posters intentionally fail closed.
 6. Approved duplicate automerge runs when ingestion completes.
 
 Moderation:

@@ -40,6 +40,12 @@ import {
 } from "../lib/events/event-validation.ts";
 import { buildBackfillDecision } from "./backfill-moderation-scores.mjs";
 import { buildPatch as buildTbdRepairPatch } from "./repair-event-tbd-times.mjs";
+import {
+  buildPatch as buildScheduleRepairPatch,
+  buildSafeUpdatePatch as buildSafeScheduleUpdatePatch,
+} from "./repair-event-schedule-entries.mjs";
+import { buildRepair as buildConsistencyRepair } from "./repair-event-consistency.mjs";
+import { markModelDerivedRepairPending } from "./source-grounding-guard.mjs";
 
 const STATIC_VENUE_BY_HANDLE = {
   "20_44.nightclub": "Klub 20/44",
@@ -612,7 +618,7 @@ function runVideoModerationQa() {
   const relaxedVideo = assertSingleOkPreparedEvent(
     prepareEventsForInsert(
       makeInstagramPost({
-        caption: `archiebhamilton ${ddmmForIsoDate(isoDateDaysFromNow(7))} u Barutani.`,
+        caption: `DJ archiebhamilton ${ddmmForIsoDate(isoDateDaysFromNow(7))} u Barutani.`,
         postType: "video",
         username: "footworksshow",
       }),
@@ -775,7 +781,7 @@ function runVideoModerationQa() {
 
 function runUnverifiedPosterScheduleModerationQa() {
   const groundedDate = isoDateDaysFromNow(7);
-  const groundedRow = `${ddmmForIsoDate(groundedDate)} KAXX`;
+  const groundedRow = `${ddmmForIsoDate(groundedDate)} DJ KAXX`;
   assert.deepEqual(
     getPosterScheduleAutoApprovalBlockers({
       splitSource: "poster_schedule",
@@ -1011,6 +1017,46 @@ function runSourceGroundingAdversarialQa() {
     "Compact multi-row alt text must not permit cross-row swaps.",
   );
   assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm} ALICE 22:00; BOB 23:00`,
+      title: "BOB",
+      artists: ["BOB"],
+      time: "22:00",
+    }).verified,
+    false,
+    "Same-date semicolon rows must not associate BOB with ALICE's time.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm} ALICE 22:00 BOB 23:00`,
+      title: "BOB",
+      artists: ["BOB"],
+      time: "22:00",
+    }).verified,
+    false,
+    "A segment containing multiple clocks must fail closed.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `Summer memories ${firstDdmm}`,
+      title: "Summer memories",
+      artists: [],
+      time: "",
+    }).verified,
+    false,
+    "Arbitrary lifestyle prose plus a date is not a billed event identity.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `DJ ALICE ${firstDdmm}`,
+      title: "ALICE",
+      artists: ["ALICE"],
+      time: "",
+    }).verified,
+    true,
+    "An explicit raw DJ billing with a date remains eligible without a published time.",
+  );
+  assert.equal(
     evaluate({ independentTextEvidence: "ALICE 22:00" }).verified,
     false,
     "A raw title without its event date must remain pending.",
@@ -1083,6 +1129,68 @@ function runMaintenancePromotionGroundingQa() {
     }).patch.status,
     "approved",
   );
+
+  const invalidated = markModelDerivedRepairPending(
+    {
+      sourceGroundingVerified: true,
+      moderationAutoApproved: true,
+      moderationAutoApproveRule: "legacy",
+    },
+    "qa:model-repair",
+  );
+  assert.equal(invalidated.sourceGroundingVerified, false);
+  assert.equal(invalidated.sourceGroundingIdentityContextVerified, false);
+  assert.equal(invalidated.moderationAutoApproved, false);
+  assert.ok(invalidated.moderationPendingReasons.includes("unverified_core_event_source"));
+
+  const scheduleSource = {
+    ...event,
+    _id: "approved-source",
+    status: "approved",
+    sourcePostedAt: new Date().toISOString(),
+    normalizedFieldsJson: JSON.stringify({ sourceGroundingVerified: true }),
+  };
+  const scheduleEntry = {
+    date: event.date,
+    time: "22:00",
+    title: "MODEL ROW",
+    artists: ["MODEL ROW"],
+    description: "Model-derived repair row.",
+    source_text: `${event.date} MODEL ROW 22:00`,
+  };
+  const schedulePatch = buildScheduleRepairPatch(scheduleSource, scheduleEntry, 0, 1);
+  assert.equal(schedulePatch.status, "pending");
+  const scheduleFields = JSON.parse(schedulePatch.normalizedFieldsJson);
+  assert.equal(scheduleFields.sourceGroundingVerified, false);
+  assert.equal(
+    scheduleFields.sourceGroundingInvalidatedBy,
+    "scripts/repair-event-schedule-entries.mjs",
+  );
+  assert.equal(
+    buildSafeScheduleUpdatePatch({ ...scheduleSource, status: "approved" }, schedulePatch).status,
+    "pending",
+    "A model schedule repair must demote an approved record before changing public fields.",
+  );
+
+  const consistencyRepair = buildConsistencyRepair({
+    ...scheduleSource,
+    title: "This week",
+    time: event.date.slice(5).replace("-", "."),
+    artists: [],
+    normalizedFieldsJson: JSON.stringify({
+      splitEventIndex: 1,
+      titleDerivedFromContext: true,
+      sourceGroundingVerified: true,
+    }),
+    rawExtractionJson: JSON.stringify({ schedule_entries: [scheduleEntry] }),
+  });
+  assert.ok(consistencyRepair.patch);
+  assert.equal(consistencyRepair.patch.status, "pending");
+  assert.equal(
+    JSON.parse(consistencyRepair.patch.normalizedFieldsJson).sourceGroundingVerified,
+    false,
+    "Consistency repair must invalidate stale source grounding.",
+  );
 }
 
 function runHallucinatedPhotoScheduleGroundingQa() {
@@ -1139,6 +1247,7 @@ function runHallucinatedPhotoScheduleGroundingQa() {
     assert.equal(fields.sourceGroundingTitleVerified, false);
     assert.equal(fields.sourceGroundingDateVerified, false);
     assert.equal(fields.sourceGroundingIdentityVerified, false);
+    assert.equal(fields.sourceGroundingIdentityContextVerified, false);
     assert.equal(fields.sourceGroundingTimeVerified, false);
     assert.equal(fields.sourceGroundingArtistsVerified, false);
     assert.equal(fields.sourceGroundingRowVerified, false);

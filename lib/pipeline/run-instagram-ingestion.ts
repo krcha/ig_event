@@ -1673,6 +1673,7 @@ export type CoreEventSourceGrounding = {
   titleVerified: boolean;
   dateVerified: boolean;
   identityVerified: boolean;
+  identityContextVerified: boolean;
   timeVerified: boolean | null;
   artistsVerified: boolean | null;
   rowVerified: boolean;
@@ -1720,9 +1721,20 @@ function splitSourceLineAtDateAnchors(value: string): string[] {
 
 function buildSourceGroundingSegments(value: string | null | undefined): string[] {
   return normalizeString(value)
-    .split(/\r?\n/)
+    .split(/\r?\n|[,;•·●▪◦]+|\s+\|\s+/u)
     .flatMap(splitSourceLineAtDateAnchors)
     .filter(Boolean);
+}
+
+function countSourceClockValues(value: string): number {
+  const withoutDates = value.replace(
+    /\b(?:20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}[./-]\d{1,2}(?:[./-](?:\d{2}|\d{4}))?)\b/gu,
+    " ",
+  );
+  const clockValues = withoutDates.match(
+    /\b(?:(?:[01]?\d|2[0-3])[:.]\d{2}|(?:[01]?\d|2[0-3])\s*h)\b/giu,
+  ) ?? [];
+  return new Set(clockValues.map((value) => toSearchableText(value))).size;
 }
 
 function collectSupportedDates(
@@ -1735,6 +1747,42 @@ function collectSupportedDates(
       (candidate) => candidate.isoDate,
     ),
   )];
+}
+
+function hasExplicitBilledEventContext(segment: string, artists: string[]): boolean {
+  if (extractEventTimeFromText(segment)) {
+    return true;
+  }
+
+  const searchableSegment = toSearchableText(segment);
+  if (
+    /\b(?:event|dogadjaj\w*|dj|party|concert|festival|exhibition|opening|show|gig|workshop|quiz|afterparty|matinee|zur\w*|svir\w*|koncert\w*|festival\w*|izloz\w*|predstav\w*|radionic\w*|kviz\w*|nastup\w*|matine\w*)\b/iu.test(
+      searchableSegment,
+    )
+  ) {
+    return true;
+  }
+
+  return artists.some((artist) => {
+    const searchableArtist = toSearchableText(artist);
+    if (!searchableArtist) {
+      return false;
+    }
+    if (
+      segment.includes("@") &&
+      containsNormalizedTokenSequence(searchableSegment, searchableArtist)
+    ) {
+      return true;
+    }
+    return [
+      `dj ${searchableArtist}`,
+      `live ${searchableArtist}`,
+      `with ${searchableArtist}`,
+      `uz ${searchableArtist}`,
+      `${searchableArtist} live`,
+      `${searchableArtist} b2b`,
+    ].some((pattern) => containsNormalizedTokenSequence(searchableSegment, pattern));
+  });
 }
 
 /**
@@ -1781,7 +1829,12 @@ export function evaluateCoreEventSourceGrounding(options: {
   const dateVerified =
     Boolean(normalizedDate) &&
     segments.some((segment) => collectSupportedDates(segment, options.postedAt).includes(normalizedDate));
-  const identityVerified = titleVerified;
+  const identityContextVerified = segments.some(
+    (segment) =>
+      containsNormalizedTokenSequence(segment, title) &&
+      hasExplicitBilledEventContext(segment, artists),
+  );
+  const identityVerified = titleVerified && identityContextVerified;
   const timeVerified = expectedTime
     ? segments.some((segment) => extractEventTimeFromText(segment) === expectedTime)
     : null;
@@ -1798,7 +1851,9 @@ export function evaluateCoreEventSourceGrounding(options: {
       if (
         supportedDates.length !== 1 ||
         supportedDates[0] !== normalizedDate ||
-        !containsNormalizedTokenSequence(segment, title)
+        countSourceClockValues(segment) > 1 ||
+        !containsNormalizedTokenSequence(segment, title) ||
+        !hasExplicitBilledEventContext(segment, artists)
       ) {
         return false;
       }
@@ -1819,6 +1874,7 @@ export function evaluateCoreEventSourceGrounding(options: {
     titleVerified,
     dateVerified,
     identityVerified,
+    identityContextVerified,
     timeVerified,
     artistsVerified,
     rowVerified,
@@ -5390,6 +5446,7 @@ export function prepareEventsForInsert(
       sourceGroundingTitleVerified: sourceGrounding.titleVerified,
       sourceGroundingDateVerified: sourceGrounding.dateVerified,
       sourceGroundingIdentityVerified: sourceGrounding.identityVerified,
+      sourceGroundingIdentityContextVerified: sourceGrounding.identityContextVerified,
       sourceGroundingTimeVerified: sourceGrounding.timeVerified,
       sourceGroundingArtistsVerified: sourceGrounding.artistsVerified,
       sourceGroundingRowVerified: sourceGrounding.rowVerified,
