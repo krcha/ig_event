@@ -10,6 +10,7 @@ import {
   isEventExpiredAtCutoff,
 } from "../lib/events/event-retention";
 import { normalizeEventTimeWritePatch } from "../lib/events/event-time-write";
+import { assertExpectedEventStatus } from "../lib/events/event-update-precondition";
 import {
   buildCanonicalVenueNamesByHandle,
   canonicalizeVenueNameDetailed,
@@ -836,10 +837,17 @@ export const updateEvent = mutation({
       reviewedBy: v.optional(v.string()),
       moderationNote: v.optional(v.string()),
     }),
+    expectedStatus: v.optional(eventStatus),
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { actor } = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const existingEvent = await ctx.db.get(args.id);
+    if (!existingEvent) {
+      throw new Error("Event not found.");
+    }
+    assertExpectedEventStatus(existingEvent.status, args.expectedStatus);
+
     const now = Date.now();
     const venueFields =
       args.patch.venue !== undefined

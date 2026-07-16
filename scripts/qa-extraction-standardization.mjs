@@ -39,6 +39,7 @@ import {
   checkWeekdayConsistency,
   looksLikeBareDate,
 } from "../lib/events/event-validation.ts";
+import { assertExpectedEventStatus } from "../lib/events/event-update-precondition.ts";
 import { buildBackfillDecision } from "./backfill-moderation-scores.mjs";
 import { buildPatch as buildTbdRepairPatch } from "./repair-event-tbd-times.mjs";
 import {
@@ -2660,6 +2661,16 @@ function runQuotedCaptionTitleQa() {
   );
 }
 
+function runAtomicDuplicateStatusPreconditionQa() {
+  assert.doesNotThrow(() => assertExpectedEventStatus("pending", "pending"));
+  assert.doesNotThrow(() => assertExpectedEventStatus("approved", "approved"));
+  assert.throws(
+    () => assertExpectedEventStatus("approved", "pending"),
+    /Event status changed during update/,
+    "A moderator approval racing ingestion must abort the stale machine update.",
+  );
+}
+
 runPromptQa();
 runVenueQa();
 runArtistAndDescriptionQa();
@@ -2676,5 +2687,6 @@ runDescriptionStartTimeQa();
 runQuotedCaptionTitleQa();
 runScheduleConsistencyQa();
 runTicketPriceQa();
+runAtomicDuplicateStatusPreconditionQa();
 
-console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, human-review publication gating, source grounding, caption date ranges, Serbian relative dates, description start times, schedule consistency, and ticket prices.");
+console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, human-review publication gating, source grounding, atomic duplicate status preconditions, caption date ranges, Serbian relative dates, description start times, schedule consistency, and ticket prices.");

@@ -6042,6 +6042,7 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
         await client.mutation(updateEventMutation, {
           id: existingMatch.existingEvent._id,
           patch: updatePayload.patch,
+          expectedStatus: existingMatch.existingEvent.status,
           serviceSecret,
         });
         summary.updated_duplicates_bad_data += 1;
