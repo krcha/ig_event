@@ -127,7 +127,7 @@ const DAY_CATEGORY_CHIPS = [
 ] as const;
 
 type DayCategory = (typeof DAY_CATEGORY_CHIPS)[number]["key"];
-type AgendaSortMode = "time" | "type";
+type AgendaSortMode = "time" | "type" | "venue";
 
 const DAY_CATEGORY_SORT_ORDER: Record<Exclude<DayCategory, "all">, number> = {
   club: 0,
@@ -167,7 +167,7 @@ function formatHiddenDayCategories(categories: readonly ConcreteDayCategory[]): 
 }
 
 function normalizeAgendaSortMode(value: string | undefined): AgendaSortMode {
-  return value === "type" ? "type" : "time";
+  return value === "type" || value === "venue" ? value : "time";
 }
 
 function getSingleValue(value: string | string[] | undefined): string | undefined {
@@ -399,14 +399,23 @@ function compareAgendaEventsByType(left: CalendarEventSummary, right: CalendarEv
   return compareAgendaEventsByTime(left, right);
 }
 
+function compareAgendaEventsByVenue(left: CalendarEventSummary, right: CalendarEventSummary): number {
+  const venueResult = compareAlphabetical(left.venue, right.venue);
+  return venueResult !== 0 ? venueResult : compareAgendaEventsByTime(left, right);
+}
+
 function compareAgendaEvents(
   left: CalendarEventSummary,
   right: CalendarEventSummary,
   sortMode: AgendaSortMode,
 ): number {
-  return sortMode === "type"
-    ? compareAgendaEventsByType(left, right)
-    : compareAgendaEventsByTime(left, right);
+  if (sortMode === "type") {
+    return compareAgendaEventsByType(left, right);
+  }
+  if (sortMode === "venue") {
+    return compareAgendaEventsByVenue(left, right);
+  }
+  return compareAgendaEventsByTime(left, right);
 }
 
 function createEmptyDayCategoryCounts(): DayCategoryCounts {
@@ -460,7 +469,10 @@ function pluralize(value: number, singular: string, plural = `${singular}s`): st
 }
 
 function getAgendaSortLabel(sortMode: AgendaSortMode): string {
-  return sortMode === "type" ? "Type" : "Time";
+  if (sortMode === "type") {
+    return "Type";
+  }
+  return sortMode === "venue" ? "Venue name" : "Time";
 }
 
 function isUpcomingCalendarDay(dayKey: string, defaultDayKey: string): boolean {
@@ -786,6 +798,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
               >
                 <option value="">Time</option>
                 <option value="type">Type</option>
+                <option value="venue">Venue name</option>
               </select>
             </label>
           </>

@@ -52,8 +52,9 @@ assert.ok(
 assert.ok(
   calendarSource.includes('data-calendar-sort-select="true"') &&
     calendarSource.includes('name="sort"') &&
-    calendarSource.includes('<option value="type">Type</option>'),
-  "Calendar filters should allow sorting the selected day by time or event type.",
+    calendarSource.includes('<option value="type">Type</option>') &&
+    calendarSource.includes('<option value="venue">Venue name</option>'),
+  "Calendar filters should allow sorting the selected day by time, event type, or venue name.",
 );
 assert.ok(
   calendarSource.includes("getNightlifeDefaultDateKey()") &&
@@ -82,6 +83,7 @@ assert.ok(
 assert.ok(
   calendarSource.includes("compareAgendaEventsByTime") &&
     calendarSource.includes("compareAgendaEventsByType") &&
+    calendarSource.includes("compareAgendaEventsByVenue") &&
     calendarSource.includes("selectedDayAgendaEvents.sort"),
   "Selected-day agenda events should be explicitly sorted by the chosen mode.",
 );
