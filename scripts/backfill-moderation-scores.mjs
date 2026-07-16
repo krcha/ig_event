@@ -11,18 +11,12 @@ import {
 } from "../lib/utils/confidence.ts";
 import {
   UNVERIFIED_CORE_EVENT_SOURCE_REASON,
+  getHardPendingReasons,
   hasVerifiedSourceGrounding,
 } from "./source-grounding-guard.mjs";
 
 const CAPTION_ONLY_CORE_FIELDS_MIN_CONFIDENCE = 0.8;
 const REVIEWED_BY = "moderation-backfill";
-const RECOMPUTABLE_PENDING_REASONS = new Set([
-  "missing_confidence",
-  "below_auto_approve_threshold",
-  "missing_image",
-  "suspicious_year",
-  "low_date_confidence",
-]);
 
 function uniqueStrings(values) {
   return [...new Set(values.filter((value) => typeof value === "string" && value))];
@@ -118,12 +112,7 @@ export function buildBackfillDecision(event) {
   const suspiciousYear = readBoolean(normalizedFields, "dateSuspiciousYear");
   const titleUsedFallback = readBoolean(normalizedFields, "titleUsedFallback");
   const sourceGroundingVerified = hasVerifiedSourceGrounding(normalizedFields);
-  const existingPendingReasons = Array.isArray(normalizedFields.moderationPendingReasons)
-    ? normalizedFields.moderationPendingReasons.filter((value) => typeof value === "string")
-    : [];
-  const hardPendingReasons = existingPendingReasons.filter(
-    (reason) => !RECOMPUTABLE_PENDING_REASONS.has(reason),
-  );
+  const hardPendingReasons = getHardPendingReasons(normalizedFields);
   const dateConfidence = readString(normalizedFields, "dateConfidence");
   const missingTime = !event.time;
   const timeTbdApplies = missingTime && hasDate;

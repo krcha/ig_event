@@ -9,11 +9,16 @@ import {
 } from "../lib/utils/confidence.ts";
 import {
   UNVERIFIED_CORE_EVENT_SOURCE_REASON,
+  getHardPendingReasons,
   hasVerifiedSourceGrounding,
 } from "./source-grounding-guard.mjs";
 
 const DEFAULT_LIMIT = 1000;
 const DEFAULT_STATUSES = ["pending"];
+
+function uniqueStrings(values) {
+  return [...new Set(values.filter((value) => typeof value === "string" && value))];
+}
 
 function usage() {
   return [
@@ -136,15 +141,18 @@ export function buildPatch(event) {
   const allowMissingImage = readBoolean(normalizedFields, "moderationAllowMissingImage");
   const titleUsedFallback = readBoolean(normalizedFields, "titleUsedFallback");
   const sourceGroundingVerified = hasVerifiedSourceGrounding(normalizedFields);
+  const hardPendingReasons = getHardPendingReasons(normalizedFields);
   const suspiciousYear = readBoolean(normalizedFields, "dateSuspiciousYear");
   const lowConfidence = confidenceScore !== null && confidenceScore < 0.7;
   const autoApproved =
     sourceGroundingVerified &&
+    hardPendingReasons.length === 0 &&
     !suspiciousYear &&
     normalizeString(normalizedFields.dateConfidence) !== "low" &&
     confidenceScore !== null &&
     confidenceScore >= CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
-  const moderationSignals = [
+  const moderationSignals = uniqueStrings([
+    ...hardPendingReasons,
     ...(missingImage ? ["missing_image"] : []),
     ...(allowMissingImage ? ["missing_image_allowed"] : []),
     ...(titleUsedFallback ? ["fallback_title"] : []),
@@ -152,10 +160,11 @@ export function buildPatch(event) {
     "time_tbd",
     ...(suspiciousYear ? ["suspicious_year"] : []),
     ...(lowConfidence ? ["low_confidence"] : []),
-  ];
+  ]);
   const moderationPendingReasons = autoApproved
     ? []
-    : [
+    : uniqueStrings([
+        ...hardPendingReasons,
         ...(confidenceScore === null ? ["missing_confidence"] : []),
         ...(confidenceScore !== null && confidenceScore < CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD
           ? ["below_auto_approve_threshold"]
@@ -163,7 +172,7 @@ export function buildPatch(event) {
         ...(missingImage && !allowMissingImage ? ["missing_image"] : []),
         ...(suspiciousYear ? ["suspicious_year"] : []),
         ...(!sourceGroundingVerified ? [UNVERIFIED_CORE_EVENT_SOURCE_REASON] : []),
-      ];
+      ]);
 
   return {
     patch: {

@@ -1205,7 +1205,7 @@ function runSourceGroundingAdversarialQa() {
       makeInstagramPost({
         id: "content-drop-party-prose",
         shortCode: "content-drop-party-prose",
-        caption: `Party people. Album drops ${firstDdmm}.`,
+        caption: `Party people. (Album drops ${firstDdmm}. at 22:00.)`,
         altText: null,
         username: "qa_venue",
         imageUrl: "https://example.com/content-drop.jpg",
@@ -1214,7 +1214,7 @@ function runSourceGroundingAdversarialQa() {
       makeExtractedEvent({
         title: "Party people",
         date: firstDate,
-        time: "",
+        time: "22:00",
         venue: "QA Venue",
         artists: [],
         confidence: 0.95,
@@ -1303,6 +1303,25 @@ function runMaintenancePromotionGroundingQa() {
     "Backfill must not discard a persisted hard non-event blocker.",
   );
   assert.ok(hardBlockedDecision.pendingReasons.includes("non_event_closure_notice"));
+  const hardBlockedTbdRepair = buildTbdRepairPatch({
+    ...event,
+    normalizedFieldsJson: JSON.stringify({
+      ...normalizedFields,
+      ...completeGrounding,
+      moderationConfidenceScore: 0.99,
+      moderationPendingReasons: ["non_event_closure_notice"],
+      moderationSignals: ["non_event_closure_notice"],
+    }),
+  });
+  assert.equal(
+    hardBlockedTbdRepair.patch.status,
+    undefined,
+    "TBD repair must not approve an event carrying a hard non-event blocker.",
+  );
+  assert.ok(
+    JSON.parse(hardBlockedTbdRepair.patch.normalizedFieldsJson)
+      .moderationPendingReasons.includes("non_event_closure_notice"),
+  );
   assert.equal(
     buildBackfillDecision({
       ...event,

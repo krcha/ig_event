@@ -1722,7 +1722,7 @@ function splitSourceLineAtDateAnchors(value: string): string[] {
 function buildSourceGroundingSegments(value: string | null | undefined): string[] {
   return normalizeString(value)
     .split(
-      /\r?\n|[,;•·●▪◦]+|\s+\|\s+|\s+\/\s+|(?<=[!?])\s+|(?<=\.)\s+(?=[\p{Lu}])/u,
+      /\r?\n|[,;•·●▪◦]+|\s+\|\s+|\s+\/\s+|\s+[—–-]\s+|(?<=[.!?])\s+/u,
     )
     .flatMap(splitSourceLineAtDateAnchors)
     .filter(Boolean);
@@ -1763,7 +1763,7 @@ function hasExplicitBilledEventContext(
   }
 
   if (
-    /^(?:vidimo se|see you|save the date|dodjite(?: svi)?|dođite(?: svi)?|join us|come through|pridruzite se|pridružite se|ne propustite|dont miss|rezervisite|rezervišite|book now|saznajte vise|saznajte više|dress code|doors? open|vrata|ulaz|entry|tickets?|karte|reservations?|rezervacije|summer memories|good vibes|tonight|today|sutra|veceras|lineup|raspored|program|schedule|this week|ove nedelje|weekend)$/iu.test(
+    /^(?:vidimo se|see you|save the date|dodjite(?: svi)?|dođite(?: svi)?|join us|come through|pridruzite se|pridružite se|ne propustite|dont miss|rezervisite|rezervišite|book now|saznajte vise|saznajte više|dress code|doors? open|vrata|ulaz|entry|tickets?|karte|reservations?|rezervacije|summer memories|party people|dj mix|album drops?|new album|new single|music video|photo dump|throwback album|good vibes|tonight|today|sutra|veceras|lineup|raspored|program|schedule|this week|ove nedelje|weekend)$/iu.test(
       searchableTitle,
     )
   ) {
@@ -1775,7 +1775,16 @@ function hasExplicitBilledEventContext(
       searchableTitle,
     )
   ) {
-    return extractEventTimeFromText(segment) !== null;
+    if (searchableSegment.startsWith(`${searchableTitle} `)) {
+      const suffix = searchableSegment.slice(searchableTitle.length).trim();
+      if (
+        /^(?:(?:pon|ponedeljak|uto|utorak|sre|sreda|cet|cetvrtak|pet|petak|sub|subota|ned|nedelja|mon|monday|tue|tuesday|wed|wednesday|thu|thursday|fri|friday|sat|saturday|sun|sunday)\s+)?\d{1,2}\b/iu.test(
+          suffix,
+        )
+      ) {
+        return true;
+      }
+    }
   }
 
   if (

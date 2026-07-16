@@ -1,10 +1,26 @@
 export const UNVERIFIED_CORE_EVENT_SOURCE_REASON = "unverified_core_event_source";
+const RECOMPUTABLE_PENDING_REASONS = new Set([
+  "missing_confidence",
+  "below_auto_approve_threshold",
+  "missing_image",
+  "suspicious_year",
+  "low_date_confidence",
+]);
 
 function uniqueStrings(values) {
   const strings = (Array.isArray(values) ? values : []).filter(
     (value) => typeof value === "string" && value,
   );
   return [...new Set(strings)];
+}
+
+export function getHardPendingReasons(normalizedFields) {
+  const pendingReasons = Array.isArray(normalizedFields?.moderationPendingReasons)
+    ? normalizedFields.moderationPendingReasons
+    : [];
+  return uniqueStrings(pendingReasons).filter(
+    (reason) => !RECOMPUTABLE_PENDING_REASONS.has(reason),
+  );
 }
 
 /**
