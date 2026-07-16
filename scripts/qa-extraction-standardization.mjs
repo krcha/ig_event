@@ -2690,6 +2690,11 @@ function runAtomicDuplicateStatusPreconditionQa() {
     /must demote an approved event/,
     "A service may not change an approved event's public fields in place.",
   );
+  assert.throws(
+    () => assertServiceUpdateEventPolicy("approved", { sourceCaption: "UNREVIEWED MACHINE TEXT" }),
+    /must demote an approved event/,
+    "A service may not replace a publicly displayed caption on an approved event.",
+  );
   assert.doesNotThrow(() =>
     assertServiceUpdateEventPolicy("approved", {
       normalizedFieldsJson: JSON.stringify({ checked: true }),

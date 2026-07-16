@@ -20,6 +20,7 @@ const PUBLIC_EVENT_FIELDS = new Set([
   "instagramPostId",
   "ticketPrice",
   "eventType",
+  "sourceCaption",
   "promotionTier",
   "promotionStart",
   "promotionEnd",
