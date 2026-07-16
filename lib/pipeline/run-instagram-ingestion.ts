@@ -34,7 +34,6 @@ import {
   calculateModerationConfidenceScore,
   normalizeConfidencePayload,
   normalizeConfidenceScore,
-  shouldAutoApproveConfidenceScore,
 } from "@/lib/utils/confidence";
 import {
   runApprovedEventAutoMerge,
@@ -619,6 +618,7 @@ type ModerationDecision = {
 };
 
 const UNVERIFIED_CORE_EVENT_SOURCE_REASON = "unverified_core_event_source";
+const HUMAN_REVIEW_REQUIRED_REASON = "requires_human_approval";
 const NON_EVENT_CLOSURE_NOTICE_REASON = "non_event_closure_notice";
 
 const EXTRACTION_FIELD_LABELS: Array<{
@@ -665,9 +665,9 @@ function buildModerationDecision(options: {
     allowMissingImage: options.allowMissingImage,
   });
   const autoApprovalBlockers = [...new Set(options.autoApprovalBlockers ?? [])];
-  const hasAutoApprovalBlockers = autoApprovalBlockers.length > 0;
   const timeTbdApplies = options.missingTime && options.hasDate;
   const signals = [
+    HUMAN_REVIEW_REQUIRED_REASON,
     ...(options.missingImage ? ["missing_image"] : []),
     ...(options.allowMissingImage ? ["missing_image_allowed"] : []),
     ...(options.titleUsedFallback ? ["fallback_title"] : []),
@@ -677,46 +677,22 @@ function buildModerationDecision(options: {
     ...autoApprovalBlockers,
   ];
 
-  const qualifiesForStrictConfidence =
-    !hasAutoApprovalBlockers && shouldAutoApproveConfidenceScore(confidenceScore);
-  const qualifiesForCaptionOnlyVideo =
-    !hasAutoApprovalBlockers &&
-    options.extractionMode === "caption_only" &&
-    options.isVideoPost &&
-    options.hasDate &&
-    options.hasVenue &&
-    !options.suspiciousYear &&
-    options.dateConfidence !== "low" &&
-    confidenceScore !== null &&
-    confidenceScore >= CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE;
-  const qualifiesForCoreEventFields =
-    !hasAutoApprovalBlockers &&
-    options.hasDate &&
-    options.hasVenue &&
-    !options.suspiciousYear &&
-    options.dateConfidence !== "low" &&
-    confidenceScore !== null &&
-    confidenceScore >= CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
-  const autoApproveRule = qualifiesForStrictConfidence
-    ? "confidence_threshold"
-    : qualifiesForCaptionOnlyVideo
-      ? "caption_only_video_core_fields"
-      : qualifiesForCoreEventFields
-        ? "core_event_fields"
-        : null;
-  const autoApproved = autoApproveRule !== null;
-  const pendingReasons = autoApproved
-    ? []
-    : [
-        ...autoApprovalBlockers,
-        ...(confidenceScore === null ? ["missing_confidence"] : []),
-        ...(confidenceScore !== null && confidenceScore < CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD
-          ? ["below_auto_approve_threshold"]
-          : []),
-        ...(options.missingImage && !options.allowMissingImage ? ["missing_image"] : []),
-        ...(options.suspiciousYear ? ["suspicious_year"] : []),
-        ...(options.dateConfidence === "low" ? ["low_date_confidence"] : []),
-      ];
+  // Machine extraction can establish deterministic evidence metadata, but it can
+  // never publish. Only the authenticated moderation workflow may approve an
+  // Instagram-derived event.
+  const autoApproveRule = null;
+  const autoApproved = false;
+  const pendingReasons = [
+    HUMAN_REVIEW_REQUIRED_REASON,
+    ...autoApprovalBlockers,
+    ...(confidenceScore === null ? ["missing_confidence"] : []),
+    ...(confidenceScore !== null && confidenceScore < CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD
+      ? ["below_auto_approve_threshold"]
+      : []),
+    ...(options.missingImage && !options.allowMissingImage ? ["missing_image"] : []),
+    ...(options.suspiciousYear ? ["suspicious_year"] : []),
+    ...(options.dateConfidence === "low" ? ["low_date_confidence"] : []),
+  ];
 
   return {
     confidenceScore,

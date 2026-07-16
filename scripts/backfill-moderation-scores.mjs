@@ -7,9 +7,9 @@ import {
   CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
   calculateModerationConfidenceScore,
   normalizeConfidenceScore,
-  shouldAutoApproveConfidenceScore,
 } from "../lib/utils/confidence.ts";
 import {
+  HUMAN_REVIEW_REQUIRED_REASON,
   UNVERIFIED_CORE_EVENT_SOURCE_REASON,
   getHardPendingReasons,
   hasVerifiedSourceGrounding,
@@ -137,36 +137,12 @@ export function buildBackfillDecision(event) {
     missingImage,
     allowMissingImage,
   });
-  const strictConfidenceAutoApproved = shouldAutoApproveConfidenceScore(confidenceScore);
-  const captionOnlyCoreAutoApproved =
-    allowMissingImage &&
-    hasDate &&
-    hasVenue &&
-    hasTitle &&
-    !suspiciousYear &&
-    dateConfidence !== "low" &&
-    confidenceScore !== null &&
-    confidenceScore >= CAPTION_ONLY_CORE_FIELDS_MIN_CONFIDENCE;
-  const coreFieldsAutoApproved =
-    hasDate &&
-    hasVenue &&
-    !suspiciousYear &&
-    dateConfidence !== "low" &&
-    confidenceScore !== null &&
-    confidenceScore >= CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
-  const autoApproveRule = sourceGroundingVerified && hardPendingReasons.length === 0
-    ? strictConfidenceAutoApproved
-      ? "confidence_threshold"
-      : captionOnlyCoreAutoApproved
-        ? hasVideoPostType
-          ? "caption_only_video_core_fields"
-          : "legacy_caption_only_core_fields"
-        : coreFieldsAutoApproved
-          ? "core_event_fields"
-          : null
-    : null;
-  const autoApproved = autoApproveRule !== null;
+  // Metadata backfills never publish; approval is reserved for authenticated
+  // human moderation.
+  const autoApproveRule = null;
+  const autoApproved = false;
   const moderationSignals = uniqueStrings([
+    HUMAN_REVIEW_REQUIRED_REASON,
     ...hardPendingReasons,
     ...(missingImage ? ["missing_image"] : []),
     ...(allowMissingImage ? ["missing_image_allowed"] : []),
@@ -180,6 +156,7 @@ export function buildBackfillDecision(event) {
   const moderationPendingReasons = autoApproved
     ? []
     : uniqueStrings([
+        HUMAN_REVIEW_REQUIRED_REASON,
         ...hardPendingReasons,
         ...(confidenceScore === null ? ["missing_confidence"] : []),
         ...(confidenceScore !== null && confidenceScore < CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD

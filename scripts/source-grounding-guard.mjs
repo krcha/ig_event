@@ -1,4 +1,5 @@
 export const UNVERIFIED_CORE_EVENT_SOURCE_REASON = "unverified_core_event_source";
+export const HUMAN_REVIEW_REQUIRED_REASON = "requires_human_approval";
 const RECOMPUTABLE_PENDING_REASONS = new Set([
   "missing_confidence",
   "below_auto_approve_threshold",

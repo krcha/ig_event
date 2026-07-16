@@ -8,6 +8,7 @@ import {
   normalizeConfidenceScore,
 } from "../lib/utils/confidence.ts";
 import {
+  HUMAN_REVIEW_REQUIRED_REASON,
   UNVERIFIED_CORE_EVENT_SOURCE_REASON,
   getHardPendingReasons,
   hasVerifiedSourceGrounding,
@@ -147,15 +148,10 @@ export function buildPatch(event) {
   ]);
   const suspiciousYear = readBoolean(normalizedFields, "dateSuspiciousYear");
   const lowConfidence = confidenceScore !== null && confidenceScore < 0.7;
-  const autoApproved =
-    event.status !== "rejected" &&
-    sourceGroundingVerified &&
-    hardPendingReasons.length === 0 &&
-    !suspiciousYear &&
-    normalizeString(normalizedFields.dateConfidence) !== "low" &&
-    confidenceScore !== null &&
-    confidenceScore >= CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
+  // Time normalization is metadata-only; it never publishes an event.
+  const autoApproved = false;
   const moderationSignals = uniqueStrings([
+    HUMAN_REVIEW_REQUIRED_REASON,
     ...hardPendingReasons,
     ...(missingImage ? ["missing_image"] : []),
     ...(allowMissingImage ? ["missing_image_allowed"] : []),
@@ -168,6 +164,7 @@ export function buildPatch(event) {
   const moderationPendingReasons = autoApproved
     ? []
     : uniqueStrings([
+        HUMAN_REVIEW_REQUIRED_REASON,
         ...hardPendingReasons,
         ...(confidenceScore === null ? ["missing_confidence"] : []),
         ...(confidenceScore !== null && confidenceScore < CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD

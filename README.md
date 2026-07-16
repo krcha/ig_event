@@ -208,7 +208,7 @@ Ingestion:
 2. Active venues are loaded from Convex.
 3. Apify fetches recent Instagram posts per venue handle.
 4. OpenAI extracts structured event data from captions/images.
-5. Automatic approval requires both confidence and independent raw-source grounding: the final title, date, billed artists, and any explicit published time must be recoverable from the same deterministic raw Instagram caption/alt-text segment, and the segment must contain explicit event context (for example a published time, an event/DJ cue, or an `@`-billed artist). A candidate with missing or ambiguous grounding stays pending with `unverified_core_event_source`; model-authored captions, schedule `source_text`, field-confirmation snippets, and inferred evidence never count as provenance. Model-derived maintenance repairs are always returned to pending, and pending duplicate re-scrapes cannot overwrite approved public records. Ambiguous image-only posters intentionally fail closed.
+5. Machine extraction never publishes an event. Every Instagram-derived candidate stays pending with `requires_human_approval` until an authenticated admin approves it. Deterministic raw-source grounding is still recorded for review: title, date, billed artists, and any explicit time must come from one coherent raw caption/alt-text segment. Model-authored captions, schedule `source_text`, field-confirmation snippets, and inferred evidence never count as provenance. Maintenance scripts cannot promote records, and pending duplicate re-scrapes cannot overwrite approved public fields.
 6. Approved duplicate automerge runs when ingestion completes.
 
 Moderation:
@@ -245,7 +245,7 @@ docs/                 handoff, operations, deployment, and cost documentation
 
 Completed stabilization work includes:
 
-- Conservative auto-approval threshold and extraction QA coverage.
+- Human-only publication for Instagram-derived candidates, with extraction and maintenance QA coverage.
 - Future-relative approved-event automerge QA.
 - Queued ingestion batch-size fix for full-scrape jobs.
 - Admin scraper dashboard copy aligned with approved/pending/quota/automerge

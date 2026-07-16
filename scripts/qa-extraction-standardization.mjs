@@ -599,14 +599,14 @@ function runVideoModerationQa() {
     ),
   );
   const highConfidenceFields = readPreparedNormalizedFields(highConfidenceVideo);
-  assert.equal(highConfidenceVideo.event.status, "approved");
+  assert.equal(highConfidenceVideo.event.status, "pending");
   assert.equal(highConfidenceFields.moderationConfidenceScore, 0.95);
   assert.equal(highConfidenceFields.extractionMode, "caption_only");
-  assert.deepEqual(highConfidenceFields.moderationPendingReasons, []);
+  assert.ok(highConfidenceFields.moderationPendingReasons.includes("requires_human_approval"));
   assert.equal(highConfidenceFields.extractionScorecard.agent, "event_extraction");
   assert.equal(highConfidenceFields.extractionScorecard.baseConfidenceScore, 0.95);
   assert.equal(highConfidenceFields.extractionScorecard.finalModerationConfidenceScore, 0.95);
-  assert.equal(highConfidenceFields.extractionScorecard.autoApproved, true);
+  assert.equal(highConfidenceFields.extractionScorecard.autoApproved, false);
   assert.ok(Array.isArray(highConfidenceFields.extractionScorecard.fieldEvidence));
   assert.ok(
     highConfidenceFields.extractionScorecard.fieldEvidence.some(
@@ -640,9 +640,9 @@ function runVideoModerationQa() {
     ),
   );
   const relaxedFields = readPreparedNormalizedFields(relaxedVideo);
-  assert.equal(relaxedVideo.event.status, "approved");
-  assert.equal(relaxedFields.moderationAutoApproveRule, "caption_only_video_core_fields");
-  assert.deepEqual(relaxedFields.moderationPendingReasons, []);
+  assert.equal(relaxedVideo.event.status, "pending");
+  assert.equal(relaxedFields.moderationAutoApproveRule, null);
+  assert.ok(relaxedFields.moderationPendingReasons.includes("requires_human_approval"));
   assert.equal(relaxedVideo.event.title, "archiebhamilton");
   assert.equal(relaxedFields.titleSource, "artist_fallback");
   assert.ok(!relaxedFields.moderationSignals.includes("fallback_title"));
@@ -674,17 +674,21 @@ function runVideoModerationQa() {
   const highConfidenceDateMissingTimeFields = readPreparedNormalizedFields(
     highConfidenceDateMissingTime,
   );
-  assert.equal(highConfidenceDateMissingTime.event.status, "approved");
+  assert.equal(highConfidenceDateMissingTime.event.status, "pending");
   assert.equal(highConfidenceDateMissingTime.event.time, TBD_EVENT_TIME);
   assert.equal(
     highConfidenceDateMissingTimeFields.moderationAutoApproveRule,
-    "core_event_fields",
+    null,
   );
   assert.equal(
     highConfidenceDateMissingTimeFields.moderationCoreEventAutoApproveThreshold,
     CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
   );
-  assert.deepEqual(highConfidenceDateMissingTimeFields.moderationPendingReasons, []);
+  assert.ok(
+    highConfidenceDateMissingTimeFields.moderationPendingReasons.includes(
+      "requires_human_approval",
+    ),
+  );
   assert.ok(highConfidenceDateMissingTimeFields.moderationSignals.includes("time_tbd"));
   assert.ok(!highConfidenceDateMissingTimeFields.moderationSignals.includes("missing_time"));
 
@@ -715,6 +719,7 @@ function runVideoModerationQa() {
   assert.equal(fallbackTitleCoreFields.event.time, TBD_EVENT_TIME);
   assert.equal(fallbackTitleCoreFieldsNormalized.moderationAutoApproveRule, null);
   assert.deepEqual(fallbackTitleCoreFieldsNormalized.moderationPendingReasons, [
+    "requires_human_approval",
     "unverified_core_event_source",
   ]);
   assert.equal(fallbackTitleCoreFieldsNormalized.sourceGroundingTitleVerified, false);
@@ -748,6 +753,7 @@ function runVideoModerationQa() {
   assert.equal(lowCoreConfidence.event.status, "pending");
   assert.equal(lowCoreConfidence.event.time, TBD_EVENT_TIME);
   assert.deepEqual(lowCoreConfidenceFields.moderationPendingReasons, [
+    "requires_human_approval",
     "below_auto_approve_threshold",
   ]);
   assert.ok(lowCoreConfidenceFields.moderationSignals.includes("time_tbd"));
@@ -778,7 +784,10 @@ function runVideoModerationQa() {
   const sparseFields = readPreparedNormalizedFields(sparseVenueVideo);
   assert.equal(sparseVenueVideo.event.status, "pending");
   assert.equal(sparseFields.moderationAutoApproveRule, null);
-  assert.deepEqual(sparseFields.moderationPendingReasons, ["unverified_core_event_source"]);
+  assert.deepEqual(sparseFields.moderationPendingReasons, [
+    "requires_human_approval",
+    "unverified_core_event_source",
+  ]);
 }
 
 function runUnverifiedPosterScheduleModerationQa() {
@@ -943,7 +952,10 @@ function runUnverifiedPosterScheduleModerationQa() {
     assert.equal(fields.moderationAutoApproveRule, null);
     assert.ok(fields.moderationSignals.includes("time_tbd"));
     assert.ok(fields.moderationSignals.includes("unverified_core_event_source"));
-    assert.deepEqual(fields.moderationPendingReasons, ["unverified_core_event_source"]);
+    assert.deepEqual(fields.moderationPendingReasons, [
+      "requires_human_approval",
+      "unverified_core_event_source",
+    ]);
   }
 
   const closurePrepared = prepareEventsForInsert(
@@ -1443,16 +1455,15 @@ function runMaintenancePromotionGroundingQa() {
     JSON.parse(hardBlockedTbdRepair.patch.normalizedFieldsJson)
       .moderationPendingReasons.includes("non_event_closure_notice"),
   );
-  assert.equal(
-    buildBackfillDecision({
-      ...event,
-      normalizedFieldsJson: JSON.stringify({
-        ...normalizedFields,
-        ...completeGrounding,
-      }),
-    }).autoApproved,
-    true,
-  );
+  const completeBackfillDecision = buildBackfillDecision({
+    ...event,
+    normalizedFieldsJson: JSON.stringify({
+      ...normalizedFields,
+      ...completeGrounding,
+    }),
+  });
+  assert.equal(completeBackfillDecision.autoApproved, false);
+  assert.ok(completeBackfillDecision.pendingReasons.includes("requires_human_approval"));
 
   const repairBlocked = buildTbdRepairPatch(event);
   assert.equal(repairBlocked.patch.status, undefined);
@@ -1460,15 +1471,17 @@ function runMaintenancePromotionGroundingQa() {
     JSON.parse(repairBlocked.patch.normalizedFieldsJson)
       .moderationPendingReasons.includes("unverified_core_event_source"),
   );
-  assert.equal(
-    buildTbdRepairPatch({
-      ...event,
-      normalizedFieldsJson: JSON.stringify({
-        ...normalizedFields,
-        ...completeGrounding,
-      }),
-    }).patch.status,
-    "approved",
+  const completeTbdRepair = buildTbdRepairPatch({
+    ...event,
+    normalizedFieldsJson: JSON.stringify({
+      ...normalizedFields,
+      ...completeGrounding,
+    }),
+  });
+  assert.equal(completeTbdRepair.patch.status, undefined);
+  assert.ok(
+    JSON.parse(completeTbdRepair.patch.normalizedFieldsJson)
+      .moderationPendingReasons.includes("requires_human_approval"),
   );
 
   const invalidated = markModelDerivedRepairPending(
@@ -2664,4 +2677,4 @@ runQuotedCaptionTitleQa();
 runScheduleConsistencyQa();
 runTicketPriceQa();
 
-console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, source-grounded auto-approval, caption date ranges, Serbian relative dates, description start times, schedule consistency, and ticket prices.");
+console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, human-review publication gating, source grounding, caption date ranges, Serbian relative dates, description start times, schedule consistency, and ticket prices.");
