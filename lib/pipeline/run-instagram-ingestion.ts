@@ -1721,7 +1721,9 @@ function splitSourceLineAtDateAnchors(value: string): string[] {
 
 function buildSourceGroundingSegments(value: string | null | undefined): string[] {
   return normalizeString(value)
-    .split(/\r?\n|[,;•·●▪◦]+|\s+\|\s+|\s+\/\s+/u)
+    .split(
+      /\r?\n|[,;•·●▪◦]+|\s+\|\s+|\s+\/\s+|(?<=[!?])\s+|(?<=\.)\s+(?=[\p{Lu}])/u,
+    )
     .flatMap(splitSourceLineAtDateAnchors)
     .filter(Boolean);
 }
@@ -1773,7 +1775,7 @@ function hasExplicitBilledEventContext(
       searchableTitle,
     )
   ) {
-    return true;
+    return extractEventTimeFromText(segment) !== null;
   }
 
   if (

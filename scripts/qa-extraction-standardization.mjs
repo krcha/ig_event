@@ -1080,6 +1080,16 @@ function runSourceGroundingAdversarialQa() {
   );
   assert.equal(
     evaluate({
+      independentTextEvidence: `Party people. Album drops ${firstDdmm}.`,
+      title: "Party people",
+      artists: [],
+      time: "",
+    }).verified,
+    false,
+    "A content-drop caption is not an event merely because the proposed title says party.",
+  );
+  assert.equal(
+    evaluate({
       independentTextEvidence: `${firstDdmm} Vidimo se!`,
       title: "Vidimo se",
       artists: [],
@@ -1189,6 +1199,49 @@ function runSourceGroundingAdversarialQa() {
     {},
     "A weak model identity must stay pending and cannot mutate an approved duplicate.",
   );
+
+  const contentDropPrepared = assertSingleOkPreparedEvent(
+    prepareEventsForInsert(
+      makeInstagramPost({
+        id: "content-drop-party-prose",
+        shortCode: "content-drop-party-prose",
+        caption: `Party people. Album drops ${firstDdmm}.`,
+        altText: null,
+        username: "qa_venue",
+        imageUrl: "https://example.com/content-drop.jpg",
+        images: ["https://example.com/content-drop.jpg"],
+      }),
+      makeExtractedEvent({
+        title: "Party people",
+        date: firstDate,
+        time: "",
+        venue: "QA Venue",
+        artists: [],
+        confidence: 0.95,
+      }),
+      "https://example.com/content-drop.jpg",
+      [],
+    ),
+  );
+  assert.equal(contentDropPrepared.event.status, "pending");
+  assert.equal(
+    readPreparedNormalizedFields(contentDropPrepared).sourceGroundingVerified,
+    false,
+  );
+  const protectedContentDropDuplicate = buildDuplicateUpdatePatch(
+    {
+      title: "REAL APPROVED EVENT",
+      date: firstDate,
+      time: "22:00",
+      venue: "QA Venue",
+      artists: ["REAL ARTIST"],
+      eventType: "nightlife",
+      status: "approved",
+    },
+    contentDropPrepared.event,
+  );
+  assert.equal(protectedContentDropDuplicate.protectedApprovedFromPending, true);
+  assert.deepEqual(protectedContentDropDuplicate.patch, {});
 }
 
 function runMaintenancePromotionGroundingQa() {
@@ -1235,6 +1288,21 @@ function runMaintenancePromotionGroundingQa() {
     "A stale single grounding boolean must not promote a pending event.",
   );
   assert.equal(buildTbdRepairPatch(stalePartialEvent).patch.status, undefined);
+  const hardBlockedDecision = buildBackfillDecision({
+    ...event,
+    normalizedFieldsJson: JSON.stringify({
+      ...normalizedFields,
+      ...completeGrounding,
+      moderationPendingReasons: ["non_event_closure_notice"],
+      moderationSignals: ["non_event_closure_notice"],
+    }),
+  });
+  assert.equal(
+    hardBlockedDecision.autoApproved,
+    false,
+    "Backfill must not discard a persisted hard non-event blocker.",
+  );
+  assert.ok(hardBlockedDecision.pendingReasons.includes("non_event_closure_notice"));
   assert.equal(
     buildBackfillDecision({
       ...event,

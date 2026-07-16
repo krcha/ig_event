@@ -16,6 +16,17 @@ import {
 
 const CAPTION_ONLY_CORE_FIELDS_MIN_CONFIDENCE = 0.8;
 const REVIEWED_BY = "moderation-backfill";
+const RECOMPUTABLE_PENDING_REASONS = new Set([
+  "missing_confidence",
+  "below_auto_approve_threshold",
+  "missing_image",
+  "suspicious_year",
+  "low_date_confidence",
+]);
+
+function uniqueStrings(values) {
+  return [...new Set(values.filter((value) => typeof value === "string" && value))];
+}
 
 function loadEnvFiles() {
   for (const envFile of [".env.local", ".env"]) {
@@ -107,6 +118,12 @@ export function buildBackfillDecision(event) {
   const suspiciousYear = readBoolean(normalizedFields, "dateSuspiciousYear");
   const titleUsedFallback = readBoolean(normalizedFields, "titleUsedFallback");
   const sourceGroundingVerified = hasVerifiedSourceGrounding(normalizedFields);
+  const existingPendingReasons = Array.isArray(normalizedFields.moderationPendingReasons)
+    ? normalizedFields.moderationPendingReasons.filter((value) => typeof value === "string")
+    : [];
+  const hardPendingReasons = existingPendingReasons.filter(
+    (reason) => !RECOMPUTABLE_PENDING_REASONS.has(reason),
+  );
   const dateConfidence = readString(normalizedFields, "dateConfidence");
   const missingTime = !event.time;
   const timeTbdApplies = missingTime && hasDate;
@@ -148,7 +165,7 @@ export function buildBackfillDecision(event) {
     dateConfidence !== "low" &&
     confidenceScore !== null &&
     confidenceScore >= CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
-  const autoApproveRule = sourceGroundingVerified
+  const autoApproveRule = sourceGroundingVerified && hardPendingReasons.length === 0
     ? strictConfidenceAutoApproved
       ? "confidence_threshold"
       : captionOnlyCoreAutoApproved
@@ -160,7 +177,8 @@ export function buildBackfillDecision(event) {
           : null
     : null;
   const autoApproved = autoApproveRule !== null;
-  const moderationSignals = [
+  const moderationSignals = uniqueStrings([
+    ...hardPendingReasons,
     ...(missingImage ? ["missing_image"] : []),
     ...(allowMissingImage ? ["missing_image_allowed"] : []),
     ...(legacyCaptionOnlyCoreFields ? ["legacy_caption_only_core_fields"] : []),
@@ -169,10 +187,11 @@ export function buildBackfillDecision(event) {
     ...(timeTbdApplies ? ["time_tbd"] : []),
     ...(suspiciousYear ? ["suspicious_year"] : []),
     ...(confidenceScore !== null && confidenceScore < 0.7 ? ["low_confidence"] : []),
-  ];
+  ]);
   const moderationPendingReasons = autoApproved
     ? []
-    : [
+    : uniqueStrings([
+        ...hardPendingReasons,
         ...(confidenceScore === null ? ["missing_confidence"] : []),
         ...(confidenceScore !== null && confidenceScore < CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD
           ? ["below_auto_approve_threshold"]
@@ -181,7 +200,7 @@ export function buildBackfillDecision(event) {
         ...(suspiciousYear ? ["suspicious_year"] : []),
         ...(dateConfidence === "low" ? ["low_date_confidence"] : []),
         ...(!sourceGroundingVerified ? [UNVERIFIED_CORE_EVENT_SOURCE_REASON] : []),
-      ];
+      ]);
   const nextNormalizedFields = {
     ...normalizedFields,
     extractionMode: normalizedFields.extractionMode ?? (missingImage ? "caption_only" : "poster"),

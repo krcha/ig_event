@@ -10,6 +10,11 @@ const applicationSecurityHeaders = buildApplicationSecurityHeaders({
 });
 
 const nextConfig = {
+  // Limit static-generation workers so release and Docker builds stay within the
+  // memory budget of the production VPS instead of stalling under swap pressure.
+  experimental: {
+    cpus: 1,
+  },
   // Release checks and Docker builds run `npm run lint` and `npm run typecheck`
   // explicitly before `next build`. Skipping Next's duplicate internal checks
   // prevents production builds from hanging in the post-compile validation phase
