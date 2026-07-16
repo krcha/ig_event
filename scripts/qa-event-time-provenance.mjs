@@ -335,8 +335,17 @@ assert.match(
   /export const mergeApprovedEvents[\s\S]*?normalizeEventTimeWritePatch\(args\.patch\)/,
 );
 assert.match(eventsSource, /timeEvidenceText:\s*v\.optional\(v\.union\(v\.string\(\), v\.null\(\)\)\)/);
-assert.ok(calendarSource.includes("EventTimeProvenanceText"));
-assert.ok(detailSource.includes("EventTimeProvenanceText"));
+assert.ok(moderationSource.includes("EventTimeProvenanceText"));
+assert.equal(
+  calendarSource.includes("EventTimeProvenanceText"),
+  false,
+  "Public event listings must not display extraction provenance, confidence, or evidence text.",
+);
+assert.equal(
+  detailSource.includes("EventTimeProvenanceText"),
+  false,
+  "Public event details must not display extraction provenance, confidence, or evidence text.",
+);
 assert.ok(calendarSource.includes("Time not announced") || calendarSource.includes("UNKNOWN_EVENT_TIME_LABEL"));
 assert.ok(detailSource.includes("Time not announced") || detailSource.includes("UNKNOWN_EVENT_TIME_LABEL"));
 assert.ok(venueHoursSource.includes("Venue hours"), "Venue hours must be explicitly labeled.");
