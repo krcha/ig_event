@@ -580,7 +580,7 @@ function runVideoModerationQa() {
   const highConfidenceVideo = assertSingleOkPreparedEvent(
     prepareEventsForInsert(
       makeInstagramPost({
-        caption: `OTVARANJE LETNJE SEZONE ŠLEPARENJA NA RECI ${ddmmForIsoDate(isoDateDaysFromNow(7))} uz Šlep 23:30 at Nova Zappa Barka.`,
+        caption: `${ddmmForIsoDate(isoDateDaysFromNow(7))} OTVARANJE LETNJE SEZONE ŠLEPARENJA NA RECI uz Šlep 23:30 at Nova Zappa Barka.`,
         postType: "video",
         username: "slep_slep_slep",
       }),
@@ -620,7 +620,7 @@ function runVideoModerationQa() {
   const relaxedVideo = assertSingleOkPreparedEvent(
     prepareEventsForInsert(
       makeInstagramPost({
-        caption: `DJ archiebhamilton ${ddmmForIsoDate(isoDateDaysFromNow(7))} u Barutani.`,
+        caption: `${ddmmForIsoDate(isoDateDaysFromNow(7))} DJ archiebhamilton u Barutani.`,
         postType: "video",
         username: "footworksshow",
       }),
@@ -652,7 +652,7 @@ function runVideoModerationQa() {
   const highConfidenceDateMissingTime = assertSingleOkPreparedEvent(
     prepareEventsForInsert(
       makeInstagramPost({
-        caption: `Saturday Night ${ddmmForIsoDate(isoDateDaysFromNow(7))} with QA DJ at Sprat.`,
+        caption: `${new Date(`${isoDateDaysFromNow(7)}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "long", timeZone: "UTC" })} Saturday Night with QA DJ at Sprat.`,
         postType: "image",
         username: "sprat_bar",
       }),
@@ -1121,7 +1121,7 @@ function runSourceGroundingAdversarialQa() {
   );
   assert.equal(
     evaluate({
-      independentTextEvidence: `DJ ALICE ${firstDdmm}`,
+      independentTextEvidence: `${firstDdmm} DJ ALICE`,
       title: "ALICE",
       artists: ["ALICE"],
       time: "",
@@ -1294,13 +1294,13 @@ function runSourceGroundingAdversarialQa() {
   const extraWeakCases = [
     {
       id: "age-marker-content-drop",
-      caption: `18+ Summer Party photo album drops ${firstDdmm}`,
+      caption: `18+ Summer Party DJ ALICE photo album drops ${firstDdmm}`,
       event: makeExtractedEvent({
         title: "Summer Party",
         date: firstDate,
         time: "",
         venue: "QA Venue",
-        artists: [],
+        artists: ["ALICE"],
         confidence: 0.95,
       }),
     },

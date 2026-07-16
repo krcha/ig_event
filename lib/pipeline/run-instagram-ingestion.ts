@@ -1751,10 +1751,66 @@ function collectSupportedDates(
   )];
 }
 
+function prefixSupportsNormalizedEventDate(
+  prefixTokens: string[],
+  normalizedDate: string,
+  postedAt: string | null | undefined,
+): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(normalizedDate);
+  if (!match || prefixTokens.length === 0 || prefixTokens.length > 4) {
+    return false;
+  }
+  const year = Number.parseInt(match[1], 10);
+  const month = Number.parseInt(match[2], 10);
+  const day = Number.parseInt(match[3], 10);
+  const weekdayTokens = new Set([
+    "pon", "ponedeljak", "uto", "utorak", "sre", "sreda",
+    "cet", "cetvrtak", "pet", "petak", "sub", "subota",
+    "ned", "nedelja", "mon", "monday", "tue", "tuesday",
+    "wed", "wednesday", "thu", "thursday", "fri", "friday",
+    "sat", "saturday", "sun", "sunday",
+  ]);
+  if (
+    !prefixTokens.every(
+      (token) =>
+        /^\d{1,4}$/u.test(token) ||
+        MONTH_ALIASES[token] !== undefined ||
+        weekdayTokens.has(token),
+    )
+  ) {
+    return false;
+  }
+  const numericValues = prefixTokens
+    .filter((token) => /^\d{1,4}$/u.test(token))
+    .map((token) => Number.parseInt(token, 10));
+  if (numericValues.some((value) => ![day, month, year].includes(value))) {
+    return false;
+  }
+  if (collectSupportedDates(prefixTokens.join(" "), postedAt).includes(normalizedDate)) {
+    return true;
+  }
+  for (let index = 0; index < prefixTokens.length - 1; index += 1) {
+    const first = Number.parseInt(prefixTokens[index], 10);
+    const second = Number.parseInt(prefixTokens[index + 1], 10);
+    if (first === day && second === month) {
+      return true;
+    }
+    if (MONTH_ALIASES[prefixTokens[index]] === month && second === day) {
+      return true;
+    }
+    if (first === day && MONTH_ALIASES[prefixTokens[index + 1]] === month) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function hasExplicitBilledEventContext(
   segment: string,
   title: string,
   artists: string[],
+  normalizedDate: string,
+  postedAt: string | null | undefined,
 ): boolean {
   const searchableSegment = toSearchableText(segment);
   const searchableTitle = toSearchableText(title);
@@ -1771,14 +1827,14 @@ function hasExplicitBilledEventContext(
   }
 
   if (
-    /\b(?:sponsor(?:ed)? by|presented by|powered by|photo(?:s)?|album|archive|recap|memories|drop(?:s)?|please|kindly|join us|you are invited)\b/iu.test(
-      searchableTitle,
+    /\b(?:sponsor(?:ed)? by|presented by|powered by|photo(?:s)?|album|archive|recap|memories|drop(?:s)?|song|single|video|release|out now|please|kindly|join us|you are invited)\b/iu.test(
+      `${searchableTitle} ${searchableSegment}`,
     )
   ) {
     return false;
   }
 
-  return artists.some((artist) => {
+  const hasExplicitArtistCue = artists.some((artist) => {
     const searchableArtist = toSearchableText(artist);
     if (!searchableArtist) {
       return false;
@@ -1792,6 +1848,27 @@ function hasExplicitBilledEventContext(
       `${searchableArtist} b2b`,
     ].some((pattern) => containsNormalizedTokenSequence(searchableSegment, pattern));
   });
+  if (!hasExplicitArtistCue) {
+    return false;
+  }
+
+  const segmentTokens = searchableSegment.split(/\s+/u).filter(Boolean);
+  const titleTokens = searchableTitle.split(/\s+/u).filter(Boolean);
+  const titleStart = segmentTokens.findIndex((_, index) =>
+    titleTokens.every((token, offset) => segmentTokens[index + offset] === token),
+  );
+  if (titleStart <= 0) {
+    return false;
+  }
+  const prefixTokens = segmentTokens.slice(0, titleStart);
+  if (["dj", "live"].includes(prefixTokens.at(-1) ?? "")) {
+    prefixTokens.pop();
+  }
+  return prefixSupportsNormalizedEventDate(
+    prefixTokens,
+    normalizedDate,
+    postedAt,
+  );
 }
 
 function hasCoherentBilledArtists(
@@ -1867,7 +1944,13 @@ export function evaluateCoreEventSourceGrounding(options: {
   const identityContextVerified = segments.some(
     (segment) =>
       containsNormalizedTokenSequence(segment, title) &&
-      hasExplicitBilledEventContext(segment, title, artists),
+      hasExplicitBilledEventContext(
+        segment,
+        title,
+        artists,
+        normalizedDate,
+        options.postedAt,
+      ),
   );
   const identityVerified = titleVerified && identityContextVerified;
   const timeVerified = expectedTime
@@ -1888,7 +1971,13 @@ export function evaluateCoreEventSourceGrounding(options: {
         supportedDates[0] !== normalizedDate ||
         countSourceClockValues(segment) > 1 ||
         !containsNormalizedTokenSequence(segment, title) ||
-        !hasExplicitBilledEventContext(segment, title, artists) ||
+        !hasExplicitBilledEventContext(
+          segment,
+          title,
+          artists,
+          normalizedDate,
+          options.postedAt,
+        ) ||
         !hasCoherentBilledArtists(segment, artists)
       ) {
         return false;
