@@ -2686,6 +2686,11 @@ function runAtomicDuplicateStatusPreconditionQa() {
     "A service-authenticated update must never publish.",
   );
   assert.throws(
+    () => assertServiceUpdateEventPolicy("approved", {}),
+    /must demote an approved event/,
+    "Even an empty service patch must not update an approved row's updatedAt timestamp.",
+  );
+  assert.throws(
     () => assertServiceUpdateEventPolicy("approved", { title: "MODEL HALLUCINATION" }),
     /must demote an approved event/,
     "A service may not change an approved event's public fields in place.",

@@ -31,13 +31,10 @@ export function assertServiceUpdateEventPolicy(
     throw new Error("Service-authenticated event updates cannot approve an event.");
   }
 
-  const keepsEventPublic = currentStatus === "approved" && patch.status === undefined;
-  const changesApprovedRow = Object.entries(patch).some(
-    ([field, value]) => field !== "status" && value !== undefined,
-  );
-  if (keepsEventPublic && changesApprovedRow) {
+  const keepsEventApproved = currentStatus === "approved" && patch.status === undefined;
+  if (keepsEventApproved) {
     throw new Error(
-      "Service-authenticated updates must demote an approved event before changing it.",
+      "Service-authenticated updates must demote an approved event before updating it.",
     );
   }
 }
