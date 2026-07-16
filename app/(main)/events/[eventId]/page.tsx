@@ -13,7 +13,6 @@ import {
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { EventCategoryPill, EventMetaRow, EventPriceChip } from "@/components/events/event-meta";
-import { EventTimeProvenanceText } from "@/components/events/event-time-provenance-text";
 import { EventCalendarBackLink } from "@/components/calendar/calendar-scroll-restoration";
 import { ReadMoreText } from "@/components/ui/read-more-text";
 import {
@@ -22,8 +21,6 @@ import {
   resolveEventTimeDisplay,
   type EventDayPeriod,
   type EventTimeDisplaySource,
-  type EventTimeSource,
-  type EventTimeStatus,
 } from "@/lib/events/event-time";
 import { SaveEventButton } from "@/components/events/save-event-button";
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
@@ -51,10 +48,6 @@ type EventRecord = {
   title: string;
   date: string;
   time?: string;
-  timeSource?: EventTimeSource;
-  timeEvidenceText?: string;
-  timeConfidence?: number;
-  timeStatus?: EventTimeStatus;
   dayPeriod?: EventDayPeriod;
   displayTimeEnd?: string;
   displayTimeLabel?: string;
@@ -331,16 +324,6 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                   <InfoTile icon={CalendarDays} label="Date" value={formatEventDate(event.date)} />
                   {eventTime ? (
                     <InfoTile
-                      detail={
-                        <EventTimeProvenanceText
-                          className="mt-1.5 pl-6"
-                          time={event.time}
-                          timeConfidence={event.timeConfidence}
-                          timeEvidenceText={event.timeEvidenceText}
-                          timeSource={event.timeSource}
-                          timeStatus={event.timeStatus}
-                        />
-                      }
                       icon={Clock3}
                       label="Time"
                       value={eventTime}

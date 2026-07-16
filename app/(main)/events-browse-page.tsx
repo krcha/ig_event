@@ -18,7 +18,6 @@ import { CalendarScrollRestoration } from "@/components/calendar/calendar-scroll
 import { EventKindToggleChips } from "@/components/calendar/event-kind-toggle-chips";
 import { MobileMonthDayStrip } from "@/components/calendar/mobile-month-day-strip";
 import { EventMetaRow, getEventCategoryKind } from "@/components/events/event-meta";
-import { EventTimeProvenanceText } from "@/components/events/event-time-provenance-text";
 import { SaveEventButton } from "@/components/events/save-event-button";
 import { cn } from "@/lib/utils";
 import {
@@ -65,10 +64,6 @@ type CalendarEventSummary = Pick<
   | "title"
   | "date"
   | "time"
-  | "timeSource"
-  | "timeEvidenceText"
-  | "timeConfidence"
-  | "timeStatus"
   | "dayPeriod"
   | "displayTimeEnd"
   | "displayTimeLabel"
@@ -338,10 +333,6 @@ function toCalendarEventSummary(event: PublicEvent): CalendarEventSummary {
     title: event.title,
     date: event.date,
     time: event.time,
-    timeSource: event.timeSource,
-    timeEvidenceText: event.timeEvidenceText,
-    timeConfidence: event.timeConfidence,
-    timeStatus: event.timeStatus,
     dayPeriod: event.dayPeriod,
     displayTimeEnd: event.displayTimeEnd,
     displayTimeLabel: event.displayTimeLabel,
@@ -952,14 +943,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                         className="mt-0.5 block truncate text-[11px] font-medium leading-4 text-muted-foreground"
                         event={event}
                       />
-                      <EventTimeProvenanceText
-                        className="mt-0.5 text-[10px] leading-3"
-                        time={event.time}
-                        timeConfidence={event.timeConfidence}
-                        timeEvidenceText={event.timeEvidenceText}
-                        timeSource={event.timeSource}
-                        timeStatus={event.timeStatus}
-                      />
                       <EventMetaRow className="mt-1 flex-nowrap" event={event} />
                     </div>
                   </div>
@@ -1013,14 +996,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                       <VenueNameLink
                         className="mt-1 block truncate text-xs leading-5 text-muted-foreground"
                         event={event}
-                      />
-                      <EventTimeProvenanceText
-                        className="mt-0.5"
-                        time={event.time}
-                        timeConfidence={event.timeConfidence}
-                        timeEvidenceText={event.timeEvidenceText}
-                        timeSource={event.timeSource}
-                        timeStatus={event.timeStatus}
                       />
                       <EventMetaRow className="mt-1.5" event={event} />
                       {artistMeta ? (
