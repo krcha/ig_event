@@ -34,7 +34,6 @@ import {
   calculateModerationConfidenceScore,
   normalizeConfidencePayload,
   normalizeConfidenceScore,
-  shouldAutoApproveConfidenceScore,
 } from "@/lib/utils/confidence";
 import {
   runApprovedEventAutoMerge,
@@ -535,6 +534,9 @@ const MONTH_ALIASES: Record<string, number> = {
   децембра: 12,
 };
 const DATE_MONTH_WORD_PATTERN = "[A-Za-zČĆŠĐŽčćšđžА-Яа-яЈј]{3,14}";
+const SOURCE_GROUNDING_MONTH_PATTERN = Object.keys(MONTH_ALIASES)
+  .sort((left, right) => right.length - left.length)
+  .join("|");
 
 type RelativeWeekdayQualifier = "this" | "next" | "bare_list";
 
@@ -615,7 +617,8 @@ type ModerationDecision = {
   allowMissingImage: boolean;
 };
 
-const UNVERIFIED_POSTER_SCHEDULE_TBD_REASON = "unverified_poster_schedule_tbd";
+const UNVERIFIED_CORE_EVENT_SOURCE_REASON = "unverified_core_event_source";
+const HUMAN_REVIEW_REQUIRED_REASON = "requires_human_approval";
 const NON_EVENT_CLOSURE_NOTICE_REASON = "non_event_closure_notice";
 
 const EXTRACTION_FIELD_LABELS: Array<{
@@ -662,9 +665,9 @@ function buildModerationDecision(options: {
     allowMissingImage: options.allowMissingImage,
   });
   const autoApprovalBlockers = [...new Set(options.autoApprovalBlockers ?? [])];
-  const hasAutoApprovalBlockers = autoApprovalBlockers.length > 0;
   const timeTbdApplies = options.missingTime && options.hasDate;
   const signals = [
+    HUMAN_REVIEW_REQUIRED_REASON,
     ...(options.missingImage ? ["missing_image"] : []),
     ...(options.allowMissingImage ? ["missing_image_allowed"] : []),
     ...(options.titleUsedFallback ? ["fallback_title"] : []),
@@ -674,46 +677,22 @@ function buildModerationDecision(options: {
     ...autoApprovalBlockers,
   ];
 
-  const qualifiesForStrictConfidence =
-    !hasAutoApprovalBlockers && shouldAutoApproveConfidenceScore(confidenceScore);
-  const qualifiesForCaptionOnlyVideo =
-    !hasAutoApprovalBlockers &&
-    options.extractionMode === "caption_only" &&
-    options.isVideoPost &&
-    options.hasDate &&
-    options.hasVenue &&
-    !options.suspiciousYear &&
-    options.dateConfidence !== "low" &&
-    confidenceScore !== null &&
-    confidenceScore >= CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE;
-  const qualifiesForCoreEventFields =
-    !hasAutoApprovalBlockers &&
-    options.hasDate &&
-    options.hasVenue &&
-    !options.suspiciousYear &&
-    options.dateConfidence !== "low" &&
-    confidenceScore !== null &&
-    confidenceScore >= CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
-  const autoApproveRule = qualifiesForStrictConfidence
-    ? "confidence_threshold"
-    : qualifiesForCaptionOnlyVideo
-      ? "caption_only_video_core_fields"
-      : qualifiesForCoreEventFields
-        ? "core_event_fields"
-        : null;
-  const autoApproved = autoApproveRule !== null;
-  const pendingReasons = autoApproved
-    ? []
-    : [
-        ...autoApprovalBlockers,
-        ...(confidenceScore === null ? ["missing_confidence"] : []),
-        ...(confidenceScore !== null && confidenceScore < CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD
-          ? ["below_auto_approve_threshold"]
-          : []),
-        ...(options.missingImage && !options.allowMissingImage ? ["missing_image"] : []),
-        ...(options.suspiciousYear ? ["suspicious_year"] : []),
-        ...(options.dateConfidence === "low" ? ["low_date_confidence"] : []),
-      ];
+  // Machine extraction can establish deterministic evidence metadata, but it can
+  // never publish. Only the authenticated moderation workflow may approve an
+  // Instagram-derived event.
+  const autoApproveRule = null;
+  const autoApproved = false;
+  const pendingReasons = [
+    HUMAN_REVIEW_REQUIRED_REASON,
+    ...autoApprovalBlockers,
+    ...(confidenceScore === null ? ["missing_confidence"] : []),
+    ...(confidenceScore !== null && confidenceScore < CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD
+      ? ["below_auto_approve_threshold"]
+      : []),
+    ...(options.missingImage && !options.allowMissingImage ? ["missing_image"] : []),
+    ...(options.suspiciousYear ? ["suspicious_year"] : []),
+    ...(options.dateConfidence === "low" ? ["low_date_confidence"] : []),
+  ];
 
   return {
     confidenceScore,
@@ -1666,19 +1645,372 @@ function buildPostTextEvidence(
     .join("\n");
 }
 
+export type CoreEventSourceGrounding = {
+  titleVerified: boolean;
+  dateVerified: boolean;
+  identityVerified: boolean;
+  identityContextVerified: boolean;
+  timeVerified: boolean | null;
+  artistsVerified: boolean | null;
+  rowVerified: boolean;
+  verified: boolean;
+  blockers: string[];
+};
+
+function containsNormalizedTokenSequence(value: string, expected: string): boolean {
+  const valueTokens = toSearchableText(value).split(/\s+/).filter(Boolean);
+  const expectedTokens = toSearchableText(expected).split(/\s+/).filter(Boolean);
+  if (expectedTokens.length === 0 || expectedTokens.length > valueTokens.length) {
+    return false;
+  }
+
+  return valueTokens.some((_, startIndex) =>
+    expectedTokens.every(
+      (token, tokenIndex) => valueTokens[startIndex + tokenIndex] === token,
+    ),
+  );
+}
+
+function splitSourceLineAtDateAnchors(value: string): string[] {
+  const line = normalizeString(value);
+  if (!line) {
+    return [];
+  }
+
+  const dateAnchorPattern = new RegExp(
+    String.raw`\b(?:20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}[./-]\d{1,2}(?:[./-](?:\d{2}|\d{4}))?|\d{1,2}(?:st|nd|rd|th|\.)?\s+(?:${SOURCE_GROUNDING_MONTH_PATTERN})|(?:${SOURCE_GROUNDING_MONTH_PATTERN})\s+\d{1,2}(?:st|nd|rd|th)?)\b`,
+    "giu",
+  );
+  const matches = [...line.matchAll(dateAnchorPattern)];
+  if (matches.length <= 1) {
+    return [line];
+  }
+
+  return matches
+    .map((match, index) => {
+      const start = index === 0 ? 0 : match.index;
+      const end = matches[index + 1]?.index ?? line.length;
+      return line.slice(start, end).trim();
+    })
+    .filter(Boolean);
+}
+
+function buildSourceGroundingSegments(value: string | null | undefined): string[] {
+  return normalizeString(value)
+    .split(
+      /\r?\n|[,;•·●▪◦]+|\s+\|\s+|\s+\/\s+|\s+[—–-]\s+|(?<=[.!?])\s+/u,
+    )
+    .flatMap(splitSourceLineAtDateAnchors)
+    .filter(Boolean);
+}
+
+function countSourceClockValues(value: string): number {
+  const withoutDates = value.replace(
+    /\b(?:20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}[./-]\d{1,2}(?:[./-](?:\d{2}|\d{4}))?)\b/gu,
+    " ",
+  );
+  const clockValues = withoutDates.match(
+    /\b(?:(?:[01]?\d|2[0-3])(?:[:.h][0-5]\d|\s*h))\b/giu,
+  ) ?? [];
+  return clockValues.length;
+}
+
+function collectSupportedDates(
+  value: string,
+  postedAt: string | null | undefined,
+): string[] {
+  const postDate = parsePostedAt(postedAt ?? null);
+  return [...new Set(
+    collectDateCandidates(value, "caption", postDate).map(
+      (candidate) => candidate.isoDate,
+    ),
+  )];
+}
+
+function prefixSupportsNormalizedEventDate(
+  prefixTokens: string[],
+  normalizedDate: string,
+  postedAt: string | null | undefined,
+): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(normalizedDate);
+  if (!match || prefixTokens.length === 0 || prefixTokens.length > 4) {
+    return false;
+  }
+  const year = Number.parseInt(match[1], 10);
+  const month = Number.parseInt(match[2], 10);
+  const day = Number.parseInt(match[3], 10);
+  const weekdayTokens = new Set([
+    "pon", "ponedeljak", "uto", "utorak", "sre", "sreda",
+    "cet", "cetvrtak", "pet", "petak", "sub", "subota",
+    "ned", "nedelja", "mon", "monday", "tue", "tuesday",
+    "wed", "wednesday", "thu", "thursday", "fri", "friday",
+    "sat", "saturday", "sun", "sunday",
+  ]);
+  if (
+    !prefixTokens.every(
+      (token) =>
+        /^\d{1,4}$/u.test(token) ||
+        MONTH_ALIASES[token] !== undefined ||
+        weekdayTokens.has(token),
+    )
+  ) {
+    return false;
+  }
+  const numericValues = prefixTokens
+    .filter((token) => /^\d{1,4}$/u.test(token))
+    .map((token) => Number.parseInt(token, 10));
+  if (numericValues.some((value) => ![day, month, year].includes(value))) {
+    return false;
+  }
+  if (collectSupportedDates(prefixTokens.join(" "), postedAt).includes(normalizedDate)) {
+    return true;
+  }
+  for (let index = 0; index < prefixTokens.length - 1; index += 1) {
+    const first = Number.parseInt(prefixTokens[index], 10);
+    const second = Number.parseInt(prefixTokens[index + 1], 10);
+    if (first === day && second === month) {
+      return true;
+    }
+    if (MONTH_ALIASES[prefixTokens[index]] === month && second === day) {
+      return true;
+    }
+    if (first === day && MONTH_ALIASES[prefixTokens[index + 1]] === month) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasExplicitBilledEventContext(
+  segment: string,
+  title: string,
+  artists: string[],
+  normalizedDate: string,
+  postedAt: string | null | undefined,
+): boolean {
+  const searchableSegment = toSearchableText(segment);
+  const searchableTitle = toSearchableText(title);
+  if (!searchableTitle) {
+    return false;
+  }
+
+  if (
+    /^(?:vidimo se|see you|save the date|dodjite(?: svi)?|dođite(?: svi)?|join us|come through|pridruzite se|pridružite se|ne propustite|dont miss|rezervisite|rezervišite|book now|saznajte vise|saznajte više|dress code|doors? open|vrata|ulaz|entry|tickets?|karte|reservations?|rezervacije|summer memories|party people|dj mix|album drops?|new album|new single|music video|photo dump|throwback album|good vibes|tonight|today|sutra|veceras|lineup|raspored|program|schedule|this week|ove nedelje|weekend)(?:\s|$)/iu.test(
+      searchableTitle,
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    /\b(?:sponsor(?:ed)? by|presented by|powered by|photo(?:s)?|album|archive|recap|memories|drop(?:s)?|song|single|video|release|out now|please|kindly|join us|you are invited)\b/iu.test(
+      `${searchableTitle} ${searchableSegment}`,
+    )
+  ) {
+    return false;
+  }
+
+  const hasExplicitArtistCue = artists.some((artist) => {
+    const searchableArtist = toSearchableText(artist);
+    if (!searchableArtist) {
+      return false;
+    }
+    return [
+      `dj ${searchableArtist}`,
+      `live ${searchableArtist}`,
+      `with ${searchableArtist}`,
+      `uz ${searchableArtist}`,
+      `${searchableArtist} live`,
+      `${searchableArtist} b2b`,
+    ].some((pattern) => containsNormalizedTokenSequence(searchableSegment, pattern));
+  });
+  if (!hasExplicitArtistCue) {
+    return false;
+  }
+
+  const segmentTokens = searchableSegment.split(/\s+/u).filter(Boolean);
+  const titleTokens = searchableTitle.split(/\s+/u).filter(Boolean);
+  const titleStart = segmentTokens.findIndex((_, index) =>
+    titleTokens.every((token, offset) => segmentTokens[index + offset] === token),
+  );
+  if (titleStart <= 0) {
+    return false;
+  }
+  const prefixTokens = segmentTokens.slice(0, titleStart);
+  if (["dj", "live"].includes(prefixTokens.at(-1) ?? "")) {
+    prefixTokens.pop();
+  }
+  return prefixSupportsNormalizedEventDate(
+    prefixTokens,
+    normalizedDate,
+    postedAt,
+  );
+}
+
+function hasCoherentBilledArtists(
+  segment: string,
+  artists: string[],
+): boolean {
+  if (artists.length === 0) {
+    return true;
+  }
+
+  const searchableSegment = toSearchableText(segment);
+
+  return artists.every((artist) => {
+    const searchableArtist = toSearchableText(artist);
+    if (!searchableArtist || !containsNormalizedTokenSequence(searchableSegment, searchableArtist)) {
+      return false;
+    }
+    return [
+      `dj ${searchableArtist}`,
+      `live ${searchableArtist}`,
+      `with ${searchableArtist}`,
+      `uz ${searchableArtist}`,
+      `${searchableArtist} live`,
+      `${searchableArtist} b2b`,
+    ].some((pattern) => containsNormalizedTokenSequence(searchableSegment, pattern));
+  });
+}
+
+/**
+ * Fail closed for automatic publication: model confidence and model-authored
+ * evidence are not source evidence. The final title, date, billed artists, and
+ * any explicit published time must be recoverable from one deterministic raw
+ * Instagram caption/alt-text segment. Image-only candidates remain pending for
+ * owner review rather than becoming public automatically.
+ */
+export function evaluateCoreEventSourceGrounding(options: {
+  independentTextEvidence: string | null | undefined;
+  title: string | null | undefined;
+  normalizedDate: string | null | undefined;
+  postedAt: string | null | undefined;
+  splitSource: string | null | undefined;
+  titleUsedFallback: boolean;
+  time?: string | null;
+  artists?: string[] | null;
+  venue?: string | null;
+  instagramHandle?: string | null;
+}): CoreEventSourceGrounding {
+  const segments = buildSourceGroundingSegments(options.independentTextEvidence);
+  const title = normalizeString(options.title);
+  const normalizedDate = normalizeString(options.normalizedDate);
+  const expectedTime = isTbdEventTime(options.time)
+    ? ""
+    : normalizeString(options.time);
+  const artists = [...new Set(
+    (options.artists ?? []).map(normalizeString).filter(Boolean),
+  )];
+  const titleMatchesVenue =
+    Boolean(title) &&
+    Boolean(normalizeString(options.venue)) &&
+    toSearchableText(title) === toSearchableText(normalizeString(options.venue));
+  const titleMatchesHandle =
+    Boolean(title) &&
+    Boolean(normalizeString(options.instagramHandle)) &&
+    toSearchableText(title) ===
+      toSearchableText(normalizeString(options.instagramHandle).replace(/^@/, ""));
+  const identityAllowed =
+    !options.titleUsedFallback && !titleMatchesVenue && !titleMatchesHandle;
+  const titleVerified =
+    identityAllowed && segments.some((segment) => containsNormalizedTokenSequence(segment, title));
+  const dateVerified =
+    Boolean(normalizedDate) &&
+    segments.some((segment) => collectSupportedDates(segment, options.postedAt).includes(normalizedDate));
+  const identityContextVerified = segments.some(
+    (segment) =>
+      containsNormalizedTokenSequence(segment, title) &&
+      hasExplicitBilledEventContext(
+        segment,
+        title,
+        artists,
+        normalizedDate,
+        options.postedAt,
+      ),
+  );
+  const identityVerified = titleVerified && identityContextVerified;
+  const timeVerified = expectedTime
+    ? segments.some((segment) => extractEventTimeFromText(segment) === expectedTime)
+    : null;
+  const artistsVerified = artists.length > 0
+    ? artists.every((artist) =>
+        segments.some((segment) => containsNormalizedTokenSequence(segment, artist)),
+      )
+    : null;
+  const rowVerified =
+    identityAllowed &&
+    Boolean(normalizedDate) &&
+    segments.some((segment) => {
+      const supportedDates = collectSupportedDates(segment, options.postedAt);
+      if (
+        supportedDates.length !== 1 ||
+        supportedDates[0] !== normalizedDate ||
+        countSourceClockValues(segment) > 1 ||
+        !containsNormalizedTokenSequence(segment, title) ||
+        !hasExplicitBilledEventContext(
+          segment,
+          title,
+          artists,
+          normalizedDate,
+          options.postedAt,
+        ) ||
+        !hasCoherentBilledArtists(segment, artists)
+      ) {
+        return false;
+      }
+      if (
+        artists.length > 0 &&
+        !artists.every((artist) => containsNormalizedTokenSequence(segment, artist))
+      ) {
+        return false;
+      }
+      if (expectedTime && extractEventTimeFromText(segment) !== expectedTime) {
+        return false;
+      }
+      return true;
+    });
+  const verified = rowVerified;
+
+  return {
+    titleVerified,
+    dateVerified,
+    identityVerified,
+    identityContextVerified,
+    timeVerified,
+    artistsVerified,
+    rowVerified,
+    verified,
+    blockers: verified ? [] : [UNVERIFIED_CORE_EVENT_SOURCE_REASON],
+  };
+}
+
 export function getPosterScheduleAutoApprovalBlockers(options: {
   splitSource: string | null | undefined;
   independentTextEvidence: string | null | undefined;
-  hasTime: boolean;
+  title?: string | null;
+  normalizedDate?: string | null;
+  postedAt?: string | null;
+  titleUsedFallback?: boolean;
+  time?: string | null;
+  artists?: string[] | null;
+  venue?: string | null;
+  instagramHandle?: string | null;
 }): string[] {
-  if (
-    options.splitSource === "poster_schedule" &&
-    !normalizeString(options.independentTextEvidence) &&
-    !options.hasTime
-  ) {
-    return [UNVERIFIED_POSTER_SCHEDULE_TBD_REASON];
+  if (options.splitSource !== "poster_schedule") {
+    return [];
   }
-  return [];
+  return evaluateCoreEventSourceGrounding({
+    independentTextEvidence: options.independentTextEvidence,
+    title: options.title,
+    normalizedDate: options.normalizedDate,
+    postedAt: options.postedAt,
+    splitSource: options.splitSource,
+    titleUsedFallback: options.titleUsedFallback ?? false,
+    time: options.time,
+    artists: options.artists,
+    venue: options.venue,
+    instagramHandle: options.instagramHandle,
+  }).blockers;
 }
 
 export function isNonEventClosureNotice(value: string | null | undefined): boolean {
@@ -4406,6 +4738,24 @@ function hasMaterialEventChange(
   return false;
 }
 
+function hasCompletePersistedSourceGrounding(value: string | undefined): boolean {
+  const fields = parseJsonRecord(value);
+  return (
+    fields?.sourceGroundingVersion === 2 &&
+    fields?.sourceGroundingEvidence === "instagram_caption_or_alt_text" &&
+    fields?.sourceGroundingVerified === true &&
+    fields?.sourceGroundingTitleVerified === true &&
+    fields?.sourceGroundingDateVerified === true &&
+    fields?.sourceGroundingIdentityVerified === true &&
+    fields?.sourceGroundingIdentityContextVerified === true &&
+    fields?.sourceGroundingRowVerified === true &&
+    (fields?.sourceGroundingTimeVerified === true ||
+      fields?.sourceGroundingTimeVerified === null) &&
+    (fields?.sourceGroundingArtistsVerified === true ||
+      fields?.sourceGroundingArtistsVerified === null)
+  );
+}
+
 export function buildDuplicateUpdatePatch(
   existing: ExistingEventRecord,
   next: PreparedEvent,
@@ -4438,6 +4788,7 @@ export function buildDuplicateUpdatePatch(
   materiallyChanged: boolean;
   statusResetToPending: boolean;
   statusAutoApproved: boolean;
+  protectedApprovedFromPending: boolean;
 } {
   const preferredDescription = choosePreferredDescription(
     existing.description,
@@ -4445,12 +4796,29 @@ export function buildDuplicateUpdatePatch(
     next.normalizedFieldsJson,
   );
   const materiallyChanged = hasMaterialEventChange(existing, next, preferredDescription);
-  const statusAutoApproved = next.status === "approved" && existing.status !== "approved";
-  // Keep previously approved events out of moderation on re-scrape.
+  const effectiveNextStatus: EventStatus =
+    next.status === "approved" &&
+    !hasCompletePersistedSourceGrounding(next.normalizedFieldsJson)
+      ? "pending"
+      : next.status;
+  const statusAutoApproved =
+    effectiveNextStatus === "approved" && existing.status !== "approved";
+  const protectedApprovedFromPending =
+    existing.status === "approved" && effectiveNextStatus !== "approved";
+  if (protectedApprovedFromPending) {
+    return {
+      patch: {},
+      materiallyChanged: false,
+      statusResetToPending: false,
+      statusAutoApproved: false,
+      protectedApprovedFromPending: true,
+    };
+  }
+  // Rejected records can return to pending when a material, non-approved rescrape improves them.
   const statusResetToPending =
-    materiallyChanged && existing.status === "rejected" && next.status !== "approved";
+    materiallyChanged && existing.status === "rejected" && effectiveNextStatus !== "approved";
   const nextStatus: EventStatus =
-    next.status === "approved"
+    effectiveNextStatus === "approved"
       ? "approved"
       : statusResetToPending
         ? "pending"
@@ -4493,6 +4861,7 @@ export function buildDuplicateUpdatePatch(
     materiallyChanged,
     statusResetToPending,
     statusAutoApproved,
+    protectedApprovedFromPending: false,
   };
 }
 
@@ -5119,12 +5488,20 @@ export function prepareEventsForInsert(
     const dateRepairReason = consistencyIssues.includes("weekday_date_mismatch")
       ? "weekday_date_mismatch_numeric_date_authoritative"
       : null;
+    const sourceGrounding = evaluateCoreEventSourceGrounding({
+      independentTextEvidence: independentPostTextEvidence,
+      title: variant.title,
+      normalizedDate: date,
+      postedAt: post.postedAt,
+      splitSource: variant.splitSource,
+      titleUsedFallback: variant.titleUsedFallback,
+      time: eventConsistency.sanitizedTime,
+      artists: variant.artists,
+      venue: venueNormalization.venue,
+      instagramHandle: post.username,
+    });
     const autoApprovalBlockers = [
-      ...getPosterScheduleAutoApprovalBlockers({
-        splitSource: variant.splitSource,
-        independentTextEvidence: independentPostTextEvidence,
-        hasTime: Boolean(eventConsistency.sanitizedTime),
-      }),
+      ...sourceGrounding.blockers,
       ...getNonEventAutoApprovalBlockers(
         [
           postTextEvidence,
@@ -5188,6 +5565,16 @@ export function prepareEventsForInsert(
       moderationAutoApproveThreshold: AUTO_APPROVE_CONFIDENCE_THRESHOLD,
       moderationCoreEventAutoApproveThreshold: CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
       moderationCaptionOnlyVideoMinConfidence: CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE,
+      sourceGroundingVersion: 2,
+      sourceGroundingEvidence: "instagram_caption_or_alt_text",
+      sourceGroundingVerified: sourceGrounding.verified,
+      sourceGroundingTitleVerified: sourceGrounding.titleVerified,
+      sourceGroundingDateVerified: sourceGrounding.dateVerified,
+      sourceGroundingIdentityVerified: sourceGrounding.identityVerified,
+      sourceGroundingIdentityContextVerified: sourceGrounding.identityContextVerified,
+      sourceGroundingTimeVerified: sourceGrounding.timeVerified,
+      sourceGroundingArtistsVerified: sourceGrounding.artistsVerified,
+      sourceGroundingRowVerified: sourceGrounding.rowVerified,
       moderationAutoApproved: moderationDecision.autoApproved,
       moderationAutoApproveRule: moderationDecision.autoApproveRule,
       moderationPendingReasons: moderationDecision.pendingReasons,
@@ -5633,10 +6020,29 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
         prepared.event,
       );
 
+      if (updatePayload.protectedApprovedFromPending) {
+        summary.skippedDuplicates += 1;
+        summary.skipped_duplicates += 1;
+        summary.skipped_duplicates_clean += 1;
+        logInfo("duplicate_approved_protected_from_pending_update", {
+          ...postContext,
+          extractionMode,
+          selectedImageUrl,
+          matchedBy: existingMatch.matchedBy,
+          matchedValue: existingMatch.matchedValue,
+          existingEventId: existingMatch.existingEvent._id,
+          existingStatus: existingMatch.existingEvent.status,
+          candidateStatus: prepared.event.status,
+          normalizedFields: prepared.normalizedFields,
+        });
+        continue;
+      }
+
       try {
         await client.mutation(updateEventMutation, {
           id: existingMatch.existingEvent._id,
           patch: updatePayload.patch,
+          expectedStatus: existingMatch.existingEvent.status,
           serviceSecret,
         });
         summary.updated_duplicates_bad_data += 1;

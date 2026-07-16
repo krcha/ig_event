@@ -1,6 +1,8 @@
 import { ConvexHttpClient } from "convex/browser";
+import { pathToFileURL } from "node:url";
 import { api } from "../convex/_generated/api.js";
 import { sanitizeTimeAgainstDate } from "../lib/events/event-validation.ts";
+import { markModelDerivedRepairPending } from "./source-grounding-guard.mjs";
 
 const DEFAULT_LIMIT = 1000;
 const DEFAULT_STATUSES = ["approved", "pending"];
@@ -192,7 +194,7 @@ function chooseSourceEvent(events) {
   })[0];
 }
 
-function buildNormalizedFields(sourceEvent, entry, index, total, date, time) {
+export function buildNormalizedFields(sourceEvent, entry, index, total, date, time) {
   const normalizedFields = parseJson(sourceEvent.normalizedFieldsJson) ?? {};
   normalizedFields.time = time || null;
   normalizedFields.title = String(entry.title ?? "").trim();
@@ -225,10 +227,15 @@ function buildNormalizedFields(sourceEvent, entry, index, total, date, time) {
     sourceEventId: sourceEvent._id,
     script: "scripts/repair-event-schedule-entries.mjs",
   };
-  return JSON.stringify(normalizedFields);
+  return JSON.stringify(
+    markModelDerivedRepairPending(
+      normalizedFields,
+      "scripts/repair-event-schedule-entries.mjs",
+    ),
+  );
 }
 
-function buildPatch(sourceEvent, entry, index, total) {
+export function buildPatch(sourceEvent, entry, index, total) {
   const date = normalizeEntryDate(entry.date, sourceEvent);
   const title = String(entry.title ?? "").trim();
   if (!date || !title) {
@@ -254,7 +261,7 @@ function buildPatch(sourceEvent, entry, index, total) {
     ...(sourceEvent.sourcePostedAt ? { sourcePostedAt: sourceEvent.sourcePostedAt } : {}),
     ...(sourceEvent.rawExtractionJson ? { rawExtractionJson: sourceEvent.rawExtractionJson } : {}),
     normalizedFieldsJson: buildNormalizedFields(sourceEvent, entry, index, total, date, time),
-    status: sourceEvent.status,
+    status: "pending",
   };
 }
 
@@ -281,7 +288,7 @@ function needsScheduleMetadataPatch(existing) {
   );
 }
 
-function buildSafeUpdatePatch(existing, patch) {
+export function buildSafeUpdatePatch(existing, patch) {
   return {
     title: patch.title,
     date: patch.date,
@@ -298,7 +305,7 @@ function buildSafeUpdatePatch(existing, patch) {
     ...(patch.sourcePostedAt ? { sourcePostedAt: patch.sourcePostedAt } : {}),
     ...(patch.rawExtractionJson ? { rawExtractionJson: patch.rawExtractionJson } : {}),
     normalizedFieldsJson: patch.normalizedFieldsJson,
-    status: existing.status ?? patch.status,
+    status: "pending",
   };
 }
 
@@ -457,7 +464,9 @@ async function main() {
   );
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
-});
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
+}

@@ -21,6 +21,8 @@ import {
   toSearchableText,
 } from "../lib/pipeline/venue-normalization.ts";
 import {
+  buildDuplicateUpdatePatch,
+  evaluateCoreEventSourceGrounding,
   getNonEventAutoApprovalBlockers,
   getPosterScheduleAutoApprovalBlockers,
   normalizeEventDate,
@@ -37,6 +39,20 @@ import {
   checkWeekdayConsistency,
   looksLikeBareDate,
 } from "../lib/events/event-validation.ts";
+import {
+  assertExpectedEventStatus,
+  assertServiceCreateEventPolicy,
+  assertServiceUpdateEventPolicy,
+} from "../lib/events/event-update-precondition.ts";
+import { buildBackfillDecision } from "./backfill-moderation-scores.mjs";
+import { buildPatch as buildTbdRepairPatch } from "./repair-event-tbd-times.mjs";
+import {
+  buildPatch as buildScheduleRepairPatch,
+  buildSafeUpdatePatch as buildSafeScheduleUpdatePatch,
+} from "./repair-event-schedule-entries.mjs";
+import { buildRepair as buildConsistencyRepair } from "./repair-event-consistency.mjs";
+import { chooseAction as chooseEventQualityAction } from "./audit-event-quality.mjs";
+import { markModelDerivedRepairPending } from "./source-grounding-guard.mjs";
 
 const STATIC_VENUE_BY_HANDLE = {
   "20_44.nightclub": "Klub 20/44",
@@ -251,8 +267,8 @@ function runPromptQa() {
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
-    /Goal is HIGH RECALL/i,
-    "Prompt must prioritize high-recall schedule capture.",
+    /high recall only among rows that are actually legible/i,
+    "Prompt must keep schedule recall subordinate to source legibility.",
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
@@ -301,8 +317,18 @@ function runPromptQa() {
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
-    /GIVE EVERY ROW A TITLE/i,
-    "Prompt must tell the model to title every dated schedule row.",
+    /ONLY SOURCE-GROUNDED TITLES/i,
+    "Prompt must require source-grounded schedule titles.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /lifestyle photo.*no legible event text/i,
+    "Prompt must reject lifestyle photos without explicit event evidence.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /If you cannot quote that exact row, do not emit the schedule entry/i,
+    "Prompt must prohibit unquotable schedule rows.",
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
@@ -559,7 +585,7 @@ function runVideoModerationQa() {
   const highConfidenceVideo = assertSingleOkPreparedEvent(
     prepareEventsForInsert(
       makeInstagramPost({
-        caption: "Opening season on the river. See you at Nova Zappa Barka.",
+        caption: `${ddmmForIsoDate(isoDateDaysFromNow(7))} OTVARANJE LETNJE SEZONE ŠLEPARENJA NA RECI uz Šlep 23:30 at Nova Zappa Barka.`,
         postType: "video",
         username: "slep_slep_slep",
       }),
@@ -578,14 +604,14 @@ function runVideoModerationQa() {
     ),
   );
   const highConfidenceFields = readPreparedNormalizedFields(highConfidenceVideo);
-  assert.equal(highConfidenceVideo.event.status, "approved");
+  assert.equal(highConfidenceVideo.event.status, "pending");
   assert.equal(highConfidenceFields.moderationConfidenceScore, 0.95);
   assert.equal(highConfidenceFields.extractionMode, "caption_only");
-  assert.deepEqual(highConfidenceFields.moderationPendingReasons, []);
+  assert.ok(highConfidenceFields.moderationPendingReasons.includes("requires_human_approval"));
   assert.equal(highConfidenceFields.extractionScorecard.agent, "event_extraction");
   assert.equal(highConfidenceFields.extractionScorecard.baseConfidenceScore, 0.95);
   assert.equal(highConfidenceFields.extractionScorecard.finalModerationConfidenceScore, 0.95);
-  assert.equal(highConfidenceFields.extractionScorecard.autoApproved, true);
+  assert.equal(highConfidenceFields.extractionScorecard.autoApproved, false);
   assert.ok(Array.isArray(highConfidenceFields.extractionScorecard.fieldEvidence));
   assert.ok(
     highConfidenceFields.extractionScorecard.fieldEvidence.some(
@@ -599,7 +625,7 @@ function runVideoModerationQa() {
   const relaxedVideo = assertSingleOkPreparedEvent(
     prepareEventsForInsert(
       makeInstagramPost({
-        caption: "Vidimo se u Barutani za tacno 7 dana.",
+        caption: `${ddmmForIsoDate(isoDateDaysFromNow(7))} DJ archiebhamilton u Barutani.`,
         postType: "video",
         username: "footworksshow",
       }),
@@ -619,9 +645,9 @@ function runVideoModerationQa() {
     ),
   );
   const relaxedFields = readPreparedNormalizedFields(relaxedVideo);
-  assert.equal(relaxedVideo.event.status, "approved");
-  assert.equal(relaxedFields.moderationAutoApproveRule, "caption_only_video_core_fields");
-  assert.deepEqual(relaxedFields.moderationPendingReasons, []);
+  assert.equal(relaxedVideo.event.status, "pending");
+  assert.equal(relaxedFields.moderationAutoApproveRule, null);
+  assert.ok(relaxedFields.moderationPendingReasons.includes("requires_human_approval"));
   assert.equal(relaxedVideo.event.title, "archiebhamilton");
   assert.equal(relaxedFields.titleSource, "artist_fallback");
   assert.ok(!relaxedFields.moderationSignals.includes("fallback_title"));
@@ -631,7 +657,7 @@ function runVideoModerationQa() {
   const highConfidenceDateMissingTime = assertSingleOkPreparedEvent(
     prepareEventsForInsert(
       makeInstagramPost({
-        caption: "Saturday event at Sprat.",
+        caption: `${new Date(`${isoDateDaysFromNow(7)}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "long", timeZone: "UTC" })} Saturday Night with QA DJ at Sprat.`,
         postType: "image",
         username: "sprat_bar",
       }),
@@ -653,17 +679,21 @@ function runVideoModerationQa() {
   const highConfidenceDateMissingTimeFields = readPreparedNormalizedFields(
     highConfidenceDateMissingTime,
   );
-  assert.equal(highConfidenceDateMissingTime.event.status, "approved");
+  assert.equal(highConfidenceDateMissingTime.event.status, "pending");
   assert.equal(highConfidenceDateMissingTime.event.time, TBD_EVENT_TIME);
   assert.equal(
     highConfidenceDateMissingTimeFields.moderationAutoApproveRule,
-    "core_event_fields",
+    null,
   );
   assert.equal(
     highConfidenceDateMissingTimeFields.moderationCoreEventAutoApproveThreshold,
     CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
   );
-  assert.deepEqual(highConfidenceDateMissingTimeFields.moderationPendingReasons, []);
+  assert.ok(
+    highConfidenceDateMissingTimeFields.moderationPendingReasons.includes(
+      "requires_human_approval",
+    ),
+  );
   assert.ok(highConfidenceDateMissingTimeFields.moderationSignals.includes("time_tbd"));
   assert.ok(!highConfidenceDateMissingTimeFields.moderationSignals.includes("missing_time"));
 
@@ -690,10 +720,14 @@ function runVideoModerationQa() {
     ),
   );
   const fallbackTitleCoreFieldsNormalized = readPreparedNormalizedFields(fallbackTitleCoreFields);
-  assert.equal(fallbackTitleCoreFields.event.status, "approved");
+  assert.equal(fallbackTitleCoreFields.event.status, "pending");
   assert.equal(fallbackTitleCoreFields.event.time, TBD_EVENT_TIME);
-  assert.equal(fallbackTitleCoreFieldsNormalized.moderationAutoApproveRule, "core_event_fields");
-  assert.deepEqual(fallbackTitleCoreFieldsNormalized.moderationPendingReasons, []);
+  assert.equal(fallbackTitleCoreFieldsNormalized.moderationAutoApproveRule, null);
+  assert.deepEqual(fallbackTitleCoreFieldsNormalized.moderationPendingReasons, [
+    "requires_human_approval",
+    "unverified_core_event_source",
+  ]);
+  assert.equal(fallbackTitleCoreFieldsNormalized.sourceGroundingTitleVerified, false);
   assert.ok(fallbackTitleCoreFieldsNormalized.moderationSignals.includes("fallback_title"));
   assert.ok(fallbackTitleCoreFieldsNormalized.moderationSignals.includes("time_tbd"));
   assert.ok(!fallbackTitleCoreFieldsNormalized.moderationSignals.includes("missing_time"));
@@ -701,7 +735,7 @@ function runVideoModerationQa() {
   const lowCoreConfidence = assertSingleOkPreparedEvent(
     prepareEventsForInsert(
       makeInstagramPost({
-        caption: "Petak u Spratu.",
+        caption: `${ddmmForIsoDate(isoDateDaysFromNow(7))} Friday Event with DJ KAXX u Spratu.`,
         postType: "image",
         username: "sprat_bar",
       }),
@@ -710,7 +744,7 @@ function runVideoModerationQa() {
         date: isoDateDaysFromNow(7),
         time: "",
         venue: "Sprat",
-        artists: [],
+        artists: ["KAXX"],
         confidence: 0.79,
         field_confirmation: makeFieldConfirmation(0.79),
       }),
@@ -724,6 +758,7 @@ function runVideoModerationQa() {
   assert.equal(lowCoreConfidence.event.status, "pending");
   assert.equal(lowCoreConfidence.event.time, TBD_EVENT_TIME);
   assert.deepEqual(lowCoreConfidenceFields.moderationPendingReasons, [
+    "requires_human_approval",
     "below_auto_approve_threshold",
   ]);
   assert.ok(lowCoreConfidenceFields.moderationSignals.includes("time_tbd"));
@@ -752,34 +787,47 @@ function runVideoModerationQa() {
     ),
   );
   const sparseFields = readPreparedNormalizedFields(sparseVenueVideo);
-  assert.equal(sparseVenueVideo.event.status, "approved");
-  assert.equal(sparseFields.moderationAutoApproveRule, "caption_only_video_core_fields");
+  assert.equal(sparseVenueVideo.event.status, "pending");
+  assert.equal(sparseFields.moderationAutoApproveRule, null);
+  assert.deepEqual(sparseFields.moderationPendingReasons, [
+    "requires_human_approval",
+    "unverified_core_event_source",
+  ]);
 }
 
 function runUnverifiedPosterScheduleModerationQa() {
+  const groundedDate = isoDateDaysFromNow(7);
+  const groundedRow = `${ddmmForIsoDate(groundedDate)} DJ KAXX`;
   assert.deepEqual(
     getPosterScheduleAutoApprovalBlockers({
       splitSource: "poster_schedule",
       independentTextEvidence: "",
-      hasTime: false,
+      title: "KAXX",
+      normalizedDate: groundedDate,
+      postedAt: new Date().toISOString(),
     }),
-    ["unverified_poster_schedule_tbd"],
+    ["unverified_core_event_source"],
   );
   assert.deepEqual(
     getPosterScheduleAutoApprovalBlockers({
       splitSource: "poster_schedule",
-      independentTextEvidence: "11/07 KAXX",
-      hasTime: false,
+      independentTextEvidence: groundedRow,
+      title: "DJ KAXX",
+      artists: ["KAXX"],
+      normalizedDate: groundedDate,
+      postedAt: new Date().toISOString(),
     }),
     [],
   );
   assert.deepEqual(
     getPosterScheduleAutoApprovalBlockers({
       splitSource: "poster_schedule",
-      independentTextEvidence: "",
-      hasTime: true,
+      independentTextEvidence: "Fast and furious 🚨",
+      title: "Theodore Flex",
+      normalizedDate: groundedDate,
+      postedAt: new Date().toISOString(),
     }),
-    [],
+    ["unverified_core_event_source"],
   );
   assert.deepEqual(
     getNonEventAutoApprovalBlockers(
@@ -908,8 +956,11 @@ function runUnverifiedPosterScheduleModerationQa() {
     assert.equal(fields.moderationAutoApproved, false);
     assert.equal(fields.moderationAutoApproveRule, null);
     assert.ok(fields.moderationSignals.includes("time_tbd"));
-    assert.ok(fields.moderationSignals.includes("unverified_poster_schedule_tbd"));
-    assert.deepEqual(fields.moderationPendingReasons, ["unverified_poster_schedule_tbd"]);
+    assert.ok(fields.moderationSignals.includes("unverified_core_event_source"));
+    assert.deepEqual(fields.moderationPendingReasons, [
+      "requires_human_approval",
+      "unverified_core_event_source",
+    ]);
   }
 
   const closurePrepared = prepareEventsForInsert(
@@ -942,6 +993,681 @@ function runUnverifiedPosterScheduleModerationQa() {
     assert.equal(closureFields.moderationAutoApproved, false);
     assert.ok(closureFields.moderationSignals.includes("non_event_closure_notice"));
     assert.ok(closureFields.moderationPendingReasons.includes("non_event_closure_notice"));
+  }
+}
+
+function runSourceGroundingAdversarialQa() {
+  const firstDate = isoDateDaysFromNow(7);
+  const secondDate = isoDateDaysFromNow(8);
+  const firstDdmm = ddmmForIsoDate(firstDate);
+  const secondDdmm = ddmmForIsoDate(secondDate);
+  const evaluate = (overrides = {}) => evaluateCoreEventSourceGrounding({
+    independentTextEvidence: `${firstDdmm} DJ ALICE 22:00`,
+    title: "ALICE",
+    normalizedDate: firstDate,
+    postedAt: new Date().toISOString(),
+    splitSource: "poster_schedule",
+    titleUsedFallback: false,
+    time: "22:00",
+    artists: ["ALICE"],
+    venue: "QA Venue",
+    instagramHandle: "qa_handle",
+    ...overrides,
+  });
+
+  assert.equal(evaluate().verified, true, "An exact raw row must remain eligible.");
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm} ALICE 22:00\n${secondDdmm} BOB 23:00`,
+      title: "BOB",
+      artists: ["BOB"],
+      time: "23:00",
+    }).verified,
+    false,
+    "A model must not combine a date from one raw row with identity/time from another.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm} ALICE 22:00 ${secondDdmm} BOB 23:00`,
+      title: "BOB",
+      artists: ["BOB"],
+      time: "23:00",
+    }).verified,
+    false,
+    "Compact multi-row alt text must not permit cross-row swaps.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm} ALICE 22:00; BOB 23:00`,
+      title: "BOB",
+      artists: ["BOB"],
+      time: "22:00",
+    }).verified,
+    false,
+    "Same-date semicolon rows must not associate BOB with ALICE's time.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm} ALICE 22h30 / BOB 23h30`,
+      title: "BOB",
+      artists: ["BOB"],
+      time: "22:30",
+    }).verified,
+    false,
+    "Slash-delimited rows and hMM clocks must not cross-associate BOB with ALICE.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm} ALICE: 22:00 / BOB: 22:00`,
+      title: "ALICE",
+      artists: ["BOB"],
+      time: "22:00",
+    }).verified,
+    false,
+    "A title and unrelated artist sharing the same clock are not one billed row.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm} ALICE 22:00 BOB 23:00`,
+      title: "BOB",
+      artists: ["BOB"],
+      time: "22:00",
+    }).verified,
+    false,
+    "A segment containing multiple clocks must fail closed.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `Summer memories ${firstDdmm}`,
+      title: "Summer memories",
+      artists: [],
+      time: "",
+    }).verified,
+    false,
+    "Arbitrary lifestyle prose plus a date is not a billed event identity.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `Summer memories from our last party. Throwback album ${firstDdmm}.`,
+      title: "Summer memories",
+      artists: [],
+      time: "",
+    }).verified,
+    false,
+    "An unrelated party cue elsewhere in prose must not validate a lifestyle slogan.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `Party people. Album drops ${firstDdmm}.`,
+      title: "Party people",
+      artists: [],
+      time: "",
+    }).verified,
+    false,
+    "A content-drop caption is not an event merely because the proposed title says party.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm} Vidimo se!`,
+      title: "Vidimo se",
+      artists: [],
+      time: "",
+    }).verified,
+    false,
+    "A dated call to action is not an event identity.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm} Dođite svi!`,
+      title: "Dođite svi",
+      artists: [],
+      time: "",
+    }).verified,
+    false,
+    "A Serbian dated call to action is not an event identity.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm} Dress code WHITE. Doors open 22:00.`,
+      title: "WHITE",
+      artists: [],
+      time: "22:00",
+    }).verified,
+    false,
+    "Dress-code prose and a door time must not bill WHITE as an event.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm} DJ ALICE`,
+      title: "ALICE",
+      artists: ["ALICE"],
+      time: "",
+    }).verified,
+    true,
+    "An explicit raw DJ billing with a date remains eligible without a published time.",
+  );
+  assert.equal(
+    evaluate({ independentTextEvidence: "ALICE 22:00" }).verified,
+    false,
+    "A raw title without its event date must remain pending.",
+  );
+  assert.equal(
+    evaluate({ independentTextEvidence: `${firstDdmm} 22:00` }).verified,
+    false,
+    "A raw date without a billed identity must remain pending.",
+  );
+  assert.equal(
+    evaluate({ time: "23:00" }).verified,
+    false,
+    "A model-authored time that disagrees with the raw row must remain pending.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm} QA Venue 22:00`,
+      title: "QA Venue",
+      artists: [],
+      venue: "QA Venue",
+    }).verified,
+    false,
+    "A venue name must not substitute for a separately billed event identity.",
+  );
+
+  const weakPrepared = assertSingleOkPreparedEvent(
+    prepareEventsForInsert(
+      makeInstagramPost({
+        caption: `${firstDdmm} Vidimo se!`,
+        postType: "image",
+        username: "qa_handle",
+      }),
+      makeExtractedEvent({
+        title: "Vidimo se",
+        date: firstDate,
+        time: "",
+        venue: "QA Venue",
+        artists: [],
+        confidence: 0.95,
+      }),
+      "https://cdn.example.com/lifestyle.jpg",
+      {},
+      {},
+      {},
+    ),
+  );
+  assert.equal(weakPrepared.event.status, "pending");
+  assert.equal(
+    readPreparedNormalizedFields(weakPrepared).sourceGroundingVerified,
+    false,
+  );
+  const protectedDuplicate = buildDuplicateUpdatePatch(
+    {
+      _id: "approved-existing",
+      title: "Real Event",
+      date: firstDate,
+      time: "22:00",
+      venue: "QA Venue",
+      artists: ["REAL ARTIST"],
+      eventType: "nightlife",
+      status: "approved",
+    },
+    weakPrepared.event,
+  );
+  assert.equal(protectedDuplicate.protectedApprovedFromPending, true);
+  assert.deepEqual(
+    protectedDuplicate.patch,
+    {},
+    "A weak model identity must stay pending and cannot mutate an approved duplicate.",
+  );
+
+  const contentDropPrepared = assertSingleOkPreparedEvent(
+    prepareEventsForInsert(
+      makeInstagramPost({
+        id: "content-drop-party-prose",
+        shortCode: "content-drop-party-prose",
+        caption: `Party people. (Album drops ${firstDdmm}. at 22:00.)`,
+        altText: null,
+        username: "qa_venue",
+        imageUrl: "https://example.com/content-drop.jpg",
+        images: ["https://example.com/content-drop.jpg"],
+      }),
+      makeExtractedEvent({
+        title: "Party people",
+        date: firstDate,
+        time: "22:00",
+        venue: "QA Venue",
+        artists: [],
+        confidence: 0.95,
+      }),
+      "https://example.com/content-drop.jpg",
+      [],
+    ),
+  );
+  assert.equal(contentDropPrepared.event.status, "pending");
+  assert.equal(
+    readPreparedNormalizedFields(contentDropPrepared).sourceGroundingVerified,
+    false,
+  );
+  const protectedContentDropDuplicate = buildDuplicateUpdatePatch(
+    {
+      title: "REAL APPROVED EVENT",
+      date: firstDate,
+      time: "22:00",
+      venue: "QA Venue",
+      artists: ["REAL ARTIST"],
+      eventType: "nightlife",
+      status: "approved",
+    },
+    contentDropPrepared.event,
+  );
+  assert.equal(protectedContentDropDuplicate.protectedApprovedFromPending, true);
+  assert.deepEqual(protectedContentDropDuplicate.patch, {});
+
+  const numberedArchivePrepared = assertSingleOkPreparedEvent(
+    prepareEventsForInsert(
+      makeInstagramPost({
+        id: "numbered-party-archive",
+        shortCode: "numbered-party-archive",
+        caption: `Party archive 20 photos drop ${firstDdmm}.`,
+        altText: null,
+        username: "qa_venue",
+        imageUrl: "https://example.com/numbered-party-archive.jpg",
+        images: ["https://example.com/numbered-party-archive.jpg"],
+      }),
+      makeExtractedEvent({
+        title: "Party archive",
+        date: firstDate,
+        time: "",
+        venue: "QA Venue",
+        artists: [],
+        confidence: 0.95,
+      }),
+      "https://example.com/numbered-party-archive.jpg",
+      [],
+    ),
+  );
+  assert.equal(numberedArchivePrepared.event.status, "pending");
+  assert.equal(
+    readPreparedNormalizedFields(numberedArchivePrepared).sourceGroundingVerified,
+    false,
+  );
+  const protectedNumberedArchiveDuplicate = buildDuplicateUpdatePatch(
+    {
+      title: "REAL APPROVED EVENT",
+      date: firstDate,
+      time: null,
+      venue: "QA Venue",
+      artists: ["REAL ARTIST"],
+      eventType: "nightlife",
+      status: "approved",
+    },
+    numberedArchivePrepared.event,
+  );
+  assert.equal(protectedNumberedArchiveDuplicate.protectedApprovedFromPending, true);
+  assert.deepEqual(
+    protectedNumberedArchiveDuplicate.patch,
+    {},
+    "An unrelated number after an event-keyword title is not date evidence.",
+  );
+
+  const extraWeakCases = [
+    {
+      id: "age-marker-content-drop",
+      caption: `18+ Summer Party DJ ALICE photo album drops ${firstDdmm}`,
+      event: makeExtractedEvent({
+        title: "Summer Party",
+        date: firstDate,
+        time: "",
+        venue: "QA Venue",
+        artists: ["ALICE"],
+        confidence: 0.95,
+      }),
+    },
+    {
+      id: "extended-cta-title",
+      caption: `${firstDdmm} Please join us for cocktails`,
+      event: makeExtractedEvent({
+        title: "Please join us for cocktails",
+        date: firstDate,
+        time: "",
+        venue: "QA Venue",
+        artists: [],
+        confidence: 0.95,
+      }),
+    },
+    {
+      id: "sponsor-as-artist",
+      caption: `${firstDdmm} Summer Party sponsored by ACME`,
+      event: makeExtractedEvent({
+        title: "Summer Party sponsored by ACME",
+        date: firstDate,
+        time: "",
+        venue: "QA Venue",
+        artists: ["ACME"],
+        confidence: 0.95,
+      }),
+    },
+  ];
+  for (const testCase of extraWeakCases) {
+    const prepared = assertSingleOkPreparedEvent(
+      prepareEventsForInsert(
+        makeInstagramPost({
+          id: testCase.id,
+          shortCode: testCase.id,
+          caption: testCase.caption,
+          altText: null,
+          username: "qa_venue",
+          imageUrl: `https://example.com/${testCase.id}.jpg`,
+          images: [`https://example.com/${testCase.id}.jpg`],
+        }),
+        testCase.event,
+        `https://example.com/${testCase.id}.jpg`,
+        [],
+      ),
+    );
+    assert.equal(prepared.event.status, "pending");
+    assert.equal(readPreparedNormalizedFields(prepared).sourceGroundingVerified, false);
+    const duplicatePatch = buildDuplicateUpdatePatch(
+      {
+        title: "REAL APPROVED EVENT",
+        date: firstDate,
+        time: null,
+        venue: "QA Venue",
+        artists: ["REAL ARTIST"],
+        eventType: "nightlife",
+        status: "approved",
+      },
+      prepared.event,
+    );
+    assert.equal(duplicatePatch.protectedApprovedFromPending, true);
+    assert.deepEqual(duplicatePatch.patch, {});
+  }
+}
+
+function runMaintenancePromotionGroundingQa() {
+  const normalizedFields = {
+    confidence: 0.99,
+    dateConfidence: "high",
+    sourceGroundingVerified: false,
+  };
+  const completeGrounding = {
+    sourceGroundingVersion: 2,
+    sourceGroundingEvidence: "instagram_caption_or_alt_text",
+    sourceGroundingVerified: true,
+    sourceGroundingTitleVerified: true,
+    sourceGroundingDateVerified: true,
+    sourceGroundingIdentityVerified: true,
+    sourceGroundingIdentityContextVerified: true,
+    sourceGroundingTimeVerified: null,
+    sourceGroundingArtistsVerified: null,
+    sourceGroundingRowVerified: true,
+  };
+  const event = {
+    title: "ALICE",
+    date: isoDateDaysFromNow(7),
+    time: null,
+    venue: "QA Venue",
+    imageUrl: "https://cdn.example.com/poster.jpg",
+    sourceCaption: `${ddmmForIsoDate(isoDateDaysFromNow(7))} ALICE`,
+    normalizedFieldsJson: JSON.stringify(normalizedFields),
+    rawExtractionJson: JSON.stringify({ confidence: 0.99 }),
+  };
+  const backfillBlocked = buildBackfillDecision(event);
+  assert.equal(backfillBlocked.autoApproved, false);
+  assert.ok(backfillBlocked.pendingReasons.includes("unverified_core_event_source"));
+  const stalePartialEvent = {
+    ...event,
+    normalizedFieldsJson: JSON.stringify({
+      ...normalizedFields,
+      sourceGroundingVerified: true,
+    }),
+  };
+  assert.equal(
+    buildBackfillDecision(stalePartialEvent).autoApproved,
+    false,
+    "A stale single grounding boolean must not promote a pending event.",
+  );
+  assert.equal(buildTbdRepairPatch(stalePartialEvent).patch.status, undefined);
+  const hardBlockedDecision = buildBackfillDecision({
+    ...event,
+    normalizedFieldsJson: JSON.stringify({
+      ...normalizedFields,
+      ...completeGrounding,
+      moderationPendingReasons: ["non_event_closure_notice"],
+      moderationSignals: ["non_event_closure_notice"],
+    }),
+  });
+  assert.equal(
+    hardBlockedDecision.autoApproved,
+    false,
+    "Backfill must not discard a persisted hard non-event blocker.",
+  );
+  assert.ok(hardBlockedDecision.pendingReasons.includes("non_event_closure_notice"));
+  const hardBlockedTbdRepair = buildTbdRepairPatch({
+    ...event,
+    normalizedFieldsJson: JSON.stringify({
+      ...normalizedFields,
+      ...completeGrounding,
+      moderationConfidenceScore: 0.99,
+      moderationPendingReasons: ["non_event_closure_notice"],
+      moderationSignals: ["non_event_closure_notice"],
+    }),
+  });
+  assert.equal(
+    hardBlockedTbdRepair.patch.status,
+    undefined,
+    "TBD repair must not approve an event carrying a hard non-event blocker.",
+  );
+  assert.ok(
+    JSON.parse(hardBlockedTbdRepair.patch.normalizedFieldsJson)
+      .moderationPendingReasons.includes("non_event_closure_notice"),
+  );
+  const completeBackfillDecision = buildBackfillDecision({
+    ...event,
+    normalizedFieldsJson: JSON.stringify({
+      ...normalizedFields,
+      ...completeGrounding,
+    }),
+  });
+  assert.equal(completeBackfillDecision.autoApproved, false);
+  assert.ok(completeBackfillDecision.pendingReasons.includes("requires_human_approval"));
+
+  const repairBlocked = buildTbdRepairPatch(event);
+  assert.equal(repairBlocked.patch.status, undefined);
+  assert.ok(
+    JSON.parse(repairBlocked.patch.normalizedFieldsJson)
+      .moderationPendingReasons.includes("unverified_core_event_source"),
+  );
+  const completeTbdRepair = buildTbdRepairPatch({
+    ...event,
+    normalizedFieldsJson: JSON.stringify({
+      ...normalizedFields,
+      ...completeGrounding,
+    }),
+  });
+  assert.equal(completeTbdRepair.patch.status, undefined);
+  assert.ok(
+    JSON.parse(completeTbdRepair.patch.normalizedFieldsJson)
+      .moderationPendingReasons.includes("requires_human_approval"),
+  );
+
+  const invalidated = markModelDerivedRepairPending(
+    {
+      sourceGroundingVerified: true,
+      moderationAutoApproved: true,
+      moderationAutoApproveRule: "legacy",
+    },
+    "qa:model-repair",
+  );
+  assert.equal(invalidated.sourceGroundingVerified, false);
+  assert.equal(invalidated.sourceGroundingIdentityContextVerified, false);
+  assert.equal(invalidated.moderationAutoApproved, false);
+  assert.ok(invalidated.moderationPendingReasons.includes("unverified_core_event_source"));
+
+  const scheduleSource = {
+    ...event,
+    _id: "approved-source",
+    status: "approved",
+    sourcePostedAt: new Date().toISOString(),
+    normalizedFieldsJson: JSON.stringify({ sourceGroundingVerified: true }),
+  };
+  const scheduleEntry = {
+    date: event.date,
+    time: "22:00",
+    title: "MODEL ROW",
+    artists: ["MODEL ROW"],
+    description: "Model-derived repair row.",
+    source_text: `${event.date} MODEL ROW 22:00`,
+  };
+  const schedulePatch = buildScheduleRepairPatch(scheduleSource, scheduleEntry, 0, 1);
+  assert.equal(schedulePatch.status, "pending");
+  const scheduleFields = JSON.parse(schedulePatch.normalizedFieldsJson);
+  assert.equal(scheduleFields.sourceGroundingVerified, false);
+  assert.equal(
+    scheduleFields.sourceGroundingInvalidatedBy,
+    "scripts/repair-event-schedule-entries.mjs",
+  );
+  assert.equal(
+    buildSafeScheduleUpdatePatch({ ...scheduleSource, status: "approved" }, schedulePatch).status,
+    "pending",
+    "A model schedule repair must demote an approved record before changing public fields.",
+  );
+
+  const consistencyRepair = buildConsistencyRepair({
+    ...scheduleSource,
+    title: "This week",
+    time: event.date.slice(5).replace("-", "."),
+    artists: [],
+    normalizedFieldsJson: JSON.stringify({
+      splitEventIndex: 1,
+      titleDerivedFromContext: true,
+      sourceGroundingVerified: true,
+    }),
+    rawExtractionJson: JSON.stringify({ schedule_entries: [scheduleEntry] }),
+  });
+  assert.ok(consistencyRepair.patch);
+  assert.equal(consistencyRepair.patch.status, "pending");
+  assert.equal(
+    JSON.parse(consistencyRepair.patch.normalizedFieldsJson).sourceGroundingVerified,
+    false,
+    "Consistency repair must invalidate stale source grounding.",
+  );
+
+  const qualityRepairAction = chooseEventQualityAction(
+    {
+      ...scheduleSource,
+      normalizedFieldsJson: JSON.stringify(completeGrounding),
+    },
+    [
+      {
+        kind: "weak_title_source_grounded_repair",
+        severity: "repair",
+        patch: { title: "MODEL QUALITY REPAIR", artists: ["MODEL ARTIST"] },
+      },
+    ],
+  );
+  assert.equal(qualityRepairAction.action, "repair");
+  assert.equal(qualityRepairAction.patch.status, "pending");
+  const qualityRepairFields = JSON.parse(qualityRepairAction.patch.normalizedFieldsJson);
+  assert.equal(qualityRepairFields.sourceGroundingVerified, false);
+  assert.equal(
+    qualityRepairFields.sourceGroundingInvalidatedBy,
+    "scripts/audit-event-quality.mjs",
+  );
+
+  const qualityRejectAction = chooseEventQualityAction(
+    {
+      ...event,
+      status: "pending",
+      normalizedFieldsJson: JSON.stringify({
+        ...normalizedFields,
+        ...completeGrounding,
+        moderationConfidenceScore: 0.99,
+      }),
+    },
+    [
+      {
+        kind: "non_event_closure_notice",
+        severity: "reject",
+      },
+    ],
+  );
+  assert.equal(qualityRejectAction.action, "reject");
+  assert.equal(qualityRejectAction.patch.status, "rejected");
+  const qualityRejectFields = JSON.parse(qualityRejectAction.patch.normalizedFieldsJson);
+  assert.ok(qualityRejectFields.moderationPendingReasons.includes("non_event_closure_notice"));
+  const rejectedTbdRepair = buildTbdRepairPatch({
+    ...event,
+    status: "rejected",
+    normalizedFieldsJson: qualityRejectAction.patch.normalizedFieldsJson,
+  });
+  assert.equal(
+    rejectedTbdRepair.patch.status,
+    undefined,
+    "TBD repair must never reapprove an event rejected by quality audit.",
+  );
+  assert.ok(
+    JSON.parse(rejectedTbdRepair.patch.normalizedFieldsJson)
+      .moderationPendingReasons.includes("non_event_closure_notice"),
+  );
+}
+
+function runHallucinatedPhotoScheduleGroundingQa() {
+  const titles = ["Theodore Flex", "Mona B2B Jale", "Lenno", "Vjeran Pas"];
+  const dates = titles.map((_, index) => isoDateDaysFromNow(7 + index));
+  const prepared = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: "Fast and furious 🚨",
+      altText: null,
+      imageUrl: "https://cdn.example.com/lifestyle-photo.jpg",
+      imageUrls: ["https://cdn.example.com/lifestyle-photo.jpg"],
+      postType: "sidecar",
+      username: "vjeran_pas",
+    }),
+    makeExtractedEvent({
+      title: "",
+      date: "",
+      time: "",
+      venue: "Svašta nam se dogadja",
+      artists: [],
+      category: "nightlife",
+      description: "Weekly DJ schedule.",
+      confidence: 0.95,
+      source_caption: titles
+        .map((title, index) => `${dates[index]} ${title} 22:00-03:00`)
+        .join("\n"),
+      field_confirmation: makeFieldConfirmation(0.95),
+      schedule_entries: titles.map((title, index) => ({
+        date: dates[index],
+        time: "22:00-03:00",
+        title,
+        artists: [title],
+        description: `DJ set by ${title}.`,
+        source_text: `${dates[index]} ${title} 22:00-03:00`,
+      })),
+    }),
+    "https://cdn.example.com/lifestyle-photo.jpg",
+    {},
+    {},
+    {},
+  );
+
+  assert.equal(prepared.length, 4);
+  for (const result of prepared) {
+    assert.equal(result.kind, "ok");
+    assert.equal(
+      result.event.status,
+      "pending",
+      "A model-only schedule must never auto-publish when raw caption/alt text contains neither its title nor date.",
+    );
+    const fields = readPreparedNormalizedFields(result);
+    assert.equal(fields.moderationAutoApproved, false);
+    assert.ok(fields.moderationPendingReasons.includes("unverified_core_event_source"));
+    assert.equal(fields.sourceGroundingTitleVerified, false);
+    assert.equal(fields.sourceGroundingDateVerified, false);
+    assert.equal(fields.sourceGroundingIdentityVerified, false);
+    assert.equal(fields.sourceGroundingIdentityContextVerified, false);
+    assert.equal(fields.sourceGroundingTimeVerified, false);
+    assert.equal(fields.sourceGroundingArtistsVerified, false);
+    assert.equal(fields.sourceGroundingRowVerified, false);
   }
 }
 
@@ -1939,12 +2665,66 @@ function runQuotedCaptionTitleQa() {
   );
 }
 
+function runAtomicDuplicateStatusPreconditionQa() {
+  assert.doesNotThrow(() => assertExpectedEventStatus("pending", "pending"));
+  assert.doesNotThrow(() => assertExpectedEventStatus("approved", "approved"));
+  assert.throws(
+    () => assertExpectedEventStatus("approved", "pending"),
+    /Event status changed during update/,
+    "A moderator approval racing ingestion must abort the stale machine update.",
+  );
+
+  assert.doesNotThrow(() => assertServiceCreateEventPolicy("pending"));
+  assert.throws(
+    () => assertServiceCreateEventPolicy("approved"),
+    /cannot approve an event/,
+    "A service-authenticated create must never publish.",
+  );
+  assert.throws(
+    () => assertServiceUpdateEventPolicy("pending", { status: "approved" }),
+    /cannot approve an event/,
+    "A service-authenticated update must never publish.",
+  );
+  assert.throws(
+    () => assertServiceUpdateEventPolicy("approved", {}),
+    /must demote an approved event/,
+    "Even an empty service patch must not update an approved row's updatedAt timestamp.",
+  );
+  assert.throws(
+    () => assertServiceUpdateEventPolicy("approved", { title: "MODEL HALLUCINATION" }),
+    /must demote an approved event/,
+    "A service may not change an approved event's public fields in place.",
+  );
+  assert.throws(
+    () => assertServiceUpdateEventPolicy("approved", { sourceCaption: "UNREVIEWED MACHINE TEXT" }),
+    /must demote an approved event/,
+    "A service may not replace a publicly displayed caption on an approved event.",
+  );
+  assert.throws(
+    () =>
+      assertServiceUpdateEventPolicy("approved", {
+        normalizedFieldsJson: JSON.stringify({ checked: true }),
+      }),
+    /must demote an approved event/,
+    "Service metadata updates must also demote approved rows so future fields fail closed.",
+  );
+  assert.doesNotThrow(() =>
+    assertServiceUpdateEventPolicy("approved", {
+      status: "pending",
+      title: "Needs renewed human review",
+    }),
+  );
+}
+
 runPromptQa();
 runVenueQa();
 runArtistAndDescriptionQa();
 runConfidenceQa();
 runVideoModerationQa();
 runUnverifiedPosterScheduleModerationQa();
+runSourceGroundingAdversarialQa();
+runMaintenancePromotionGroundingQa();
+runHallucinatedPhotoScheduleGroundingQa();
 runCaptionDateRangeQa();
 runNumericCaptionDatePrecedenceQa();
 runSerbianRelativeDateQa();
@@ -1952,5 +2732,6 @@ runDescriptionStartTimeQa();
 runQuotedCaptionTitleQa();
 runScheduleConsistencyQa();
 runTicketPriceQa();
+runAtomicDuplicateStatusPreconditionQa();
 
-console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, unverified poster schedule moderation, caption date ranges, Serbian relative dates, description start times, schedule consistency, and ticket prices.");
+console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, human-review publication gating, source grounding, atomic duplicate status preconditions, caption date ranges, Serbian relative dates, description start times, schedule consistency, and ticket prices.");

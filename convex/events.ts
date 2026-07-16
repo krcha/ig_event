@@ -11,6 +11,11 @@ import {
 } from "../lib/events/event-retention";
 import { normalizeEventTimeWritePatch } from "../lib/events/event-time-write";
 import {
+  assertExpectedEventStatus,
+  assertServiceCreateEventPolicy,
+  assertServiceUpdateEventPolicy,
+} from "../lib/events/event-update-precondition";
+import {
   buildCanonicalVenueNamesByHandle,
   canonicalizeVenueNameDetailed,
   normalizeHandle,
@@ -780,7 +785,10 @@ export const createEvent = mutation({
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { actor } = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const { actor, kind } = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    if (kind === "service") {
+      assertServiceCreateEventPolicy(args.status);
+    }
     const { serviceSecret: _serviceSecret, ...eventArgs } = args;
     void _serviceSecret;
     const now = Date.now();
@@ -836,10 +844,20 @@ export const updateEvent = mutation({
       reviewedBy: v.optional(v.string()),
       moderationNote: v.optional(v.string()),
     }),
+    expectedStatus: v.optional(eventStatus),
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { actor } = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const { actor, kind } = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const existingEvent = await ctx.db.get(args.id);
+    if (!existingEvent) {
+      throw new Error("Event not found.");
+    }
+    assertExpectedEventStatus(existingEvent.status, args.expectedStatus);
+    if (kind === "service") {
+      assertServiceUpdateEventPolicy(existingEvent.status, args.patch);
+    }
+
     const now = Date.now();
     const venueFields =
       args.patch.venue !== undefined
@@ -982,13 +1000,16 @@ export const mergeApprovedEvents = mutation({
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { actor } = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const { actor, kind } = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const primaryEvent = await ctx.db.get(args.primaryId);
     if (!primaryEvent) {
       throw new Error("Primary event not found.");
     }
     if (primaryEvent.status !== "approved") {
       throw new Error("Only approved events can be merged.");
+    }
+    if (kind === "service") {
+      assertServiceUpdateEventPolicy(primaryEvent.status, args.patch);
     }
 
     const duplicateIds = [...new Set(args.duplicateIds)].filter((id) => id !== args.primaryId);

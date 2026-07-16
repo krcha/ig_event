@@ -1,9 +1,11 @@
 import { ConvexHttpClient } from "convex/browser";
+import { pathToFileURL } from "node:url";
 import { api } from "../convex/_generated/api.js";
 import {
   looksLikeBareDate,
   sanitizeTimeAgainstDate,
 } from "../lib/events/event-validation.ts";
+import { markModelDerivedRepairPending } from "./source-grounding-guard.mjs";
 
 const DEFAULT_LIMIT = 200;
 const DEFAULT_STATUSES = ["approved", "pending"];
@@ -386,7 +388,7 @@ function isGenericStoredDescription(description) {
   return /^nightlife event with\b/iu.test(String(description ?? "").trim());
 }
 
-function buildRepair(event) {
+export function buildRepair(event) {
   const normalizedFields = parseJson(event.normalizedFieldsJson) ?? {};
   const rawExtraction = parseJson(event.rawExtractionJson);
   const scheduleEntry = findScheduleEntryForEvent(event, normalizedFields, rawExtraction);
@@ -491,7 +493,7 @@ function buildRepair(event) {
     return { patch: null, repairs, unrecoverable };
   }
 
-  const repairedNormalizedFields = {
+  const repairedNormalizedFields = markModelDerivedRepairPending({
     ...normalizedFields,
     ...(patch.title !== undefined ? { title: patch.title } : {}),
     ...(patch.date !== undefined ? { normalizedDate: patch.date } : {}),
@@ -503,9 +505,10 @@ function buildRepair(event) {
       repairs,
       script: "scripts/repair-event-consistency.mjs",
     },
-  };
+  }, "scripts/repair-event-consistency.mjs");
 
   patch.normalizedFieldsJson = JSON.stringify(repairedNormalizedFields);
+  patch.status = "pending";
 
   return { patch, repairs, unrecoverable };
 }
@@ -591,7 +594,9 @@ async function main() {
   );
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
-});
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
+}

@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api.js";
 import { TBD_EVENT_TIME } from "../lib/events/event-time.ts";
@@ -6,9 +7,19 @@ import {
   CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
   normalizeConfidenceScore,
 } from "../lib/utils/confidence.ts";
+import {
+  HUMAN_REVIEW_REQUIRED_REASON,
+  UNVERIFIED_CORE_EVENT_SOURCE_REASON,
+  getHardPendingReasons,
+  hasVerifiedSourceGrounding,
+} from "./source-grounding-guard.mjs";
 
 const DEFAULT_LIMIT = 1000;
 const DEFAULT_STATUSES = ["pending"];
+
+function uniqueStrings(values) {
+  return [...new Set(values.filter((value) => typeof value === "string" && value))];
+}
 
 function usage() {
   return [
@@ -113,7 +124,7 @@ function readBoolean(record, key) {
   return record[key] === true;
 }
 
-function buildPatch(event) {
+export function buildPatch(event) {
   if (normalizeString(event.time)) {
     return null;
   }
@@ -130,31 +141,39 @@ function buildPatch(event) {
   const missingImage = readBoolean(normalizedFields, "missingImage");
   const allowMissingImage = readBoolean(normalizedFields, "moderationAllowMissingImage");
   const titleUsedFallback = readBoolean(normalizedFields, "titleUsedFallback");
+  const sourceGroundingVerified = hasVerifiedSourceGrounding(normalizedFields);
+  const hardPendingReasons = uniqueStrings([
+    ...getHardPendingReasons(normalizedFields),
+    ...(event.status === "rejected" ? ["rejected_status"] : []),
+  ]);
   const suspiciousYear = readBoolean(normalizedFields, "dateSuspiciousYear");
   const lowConfidence = confidenceScore !== null && confidenceScore < 0.7;
-  const autoApproved =
-    !suspiciousYear &&
-    normalizeString(normalizedFields.dateConfidence) !== "low" &&
-    confidenceScore !== null &&
-    confidenceScore >= CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
-  const moderationSignals = [
+  // Time normalization is metadata-only; it never publishes an event.
+  const autoApproved = false;
+  const moderationSignals = uniqueStrings([
+    HUMAN_REVIEW_REQUIRED_REASON,
+    ...hardPendingReasons,
     ...(missingImage ? ["missing_image"] : []),
     ...(allowMissingImage ? ["missing_image_allowed"] : []),
     ...(titleUsedFallback ? ["fallback_title"] : []),
+    ...(!sourceGroundingVerified ? [UNVERIFIED_CORE_EVENT_SOURCE_REASON] : []),
     "time_tbd",
     ...(suspiciousYear ? ["suspicious_year"] : []),
     ...(lowConfidence ? ["low_confidence"] : []),
-  ];
+  ]);
   const moderationPendingReasons = autoApproved
     ? []
-    : [
+    : uniqueStrings([
+        HUMAN_REVIEW_REQUIRED_REASON,
+        ...hardPendingReasons,
         ...(confidenceScore === null ? ["missing_confidence"] : []),
         ...(confidenceScore !== null && confidenceScore < CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD
           ? ["below_auto_approve_threshold"]
           : []),
         ...(missingImage && !allowMissingImage ? ["missing_image"] : []),
         ...(suspiciousYear ? ["suspicious_year"] : []),
-      ];
+        ...(!sourceGroundingVerified ? [UNVERIFIED_CORE_EVENT_SOURCE_REASON] : []),
+      ]);
 
   return {
     patch: {
@@ -260,7 +279,9 @@ async function main() {
   );
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
-});
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
+}

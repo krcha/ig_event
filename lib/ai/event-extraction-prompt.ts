@@ -20,6 +20,8 @@ Standardize venue names to a canonical display name when the evidence clearly po
 Never hallucinate unreadable or missing text.
 Use the caption as primary context, then refine/fill from the image and Instagram metadata.
 If no image is provided, use only the caption, alt text, location tag, and canonical venue hint.
+If the image is a lifestyle photo, crowd photo, venue photo, food photo, or other scene with no legible event text, and the caption does not explicitly name an event and date, return empty event fields, [] schedule_entries, and low confidence.
+Never infer a lineup from people, faces, clothing, cars, venue identity, posting history, or general visual context. Do not use remembered artist names or schedules.
 Return strict JSON with:
 {
   "title": string,
@@ -73,7 +75,7 @@ Rules:
 - Prefer the parent event/program name over poster subsection labels. If the flyer says something like "Aktivnosti", "Program", "Lineup", "Radionice", or another section heading, and the caption/flyer also names the actual event, return the actual event name as "title".
 - If the source only indicates a genre, format, or generic session type (for example jam session, techno night, live music), return an empty string for "title".
 - Do not treat poster subsections, schedule headings, or detail blocks as event titles.
-- If no event/program/act title exists, use a concise last-resort fallback title from the venue, organizer, account, or handle so the event can still be captured. In that case, make "description" capture concrete supported details from the caption/poster instead of just repeating the fallback title.
+- If no explicit event/program/act title exists, return an empty title. A venue, organizer, account, or handle is not a substitute for evidence that an event exists.
 - Do not create, paraphrase, beautify, or normalize event titles.
 - "artists" must contain only explicitly billed performers, DJs, live acts, hosts, or speakers who are presented as part of the lineup.
 - Exclude section headings, organizer names, venue names, sponsor names, ticket links, hashtags, and generic labels like "lineup" or "special guests" when no specific names are given.
@@ -93,11 +95,11 @@ Rules:
 === ONE POST OFTEN CONTAINS MANY EVENTS — CAPTURE THEM ALL ===
 - Weekly/monthly venue lineups list several events on different dates (sometimes several on one date). Treat every post as possibly multi-event.
 - Put EACH distinct dated event in "schedule_entries" — one entry per (date + act) row. Read the poster image AND the caption; they usually repeat the lineup, so reconcile them row by row.
-- Goal is HIGH RECALL. Never collapse a lineup into one event. Never merge two rows. Never drop a row because one field is unclear — include it with empty strings for the unknown parts.
+- Keep high recall only among rows that are actually legible in the source. Never collapse or merge readable rows, but omit any row whose exact date and billed act/title cannot be read.
 
 === EACH ROW IS INDEPENDENT ===
 - Every field in a row must come from THAT row's own text/region. NEVER copy a date, time, title, or artist from one row into another.
-- "source_text": copy the exact snippet (date + act + time) you read that row from.
+- "source_text": copy the exact snippet (date + act/title + optional time) you read that row from. If you cannot quote that exact row, do not emit the schedule entry.
 
 === DATES (per row) — "DD.MM" IS A DATE, NEVER A TIME ===
 - European/Serbian dates are day.month: "19.06" / "19.06." / "19/06" = 19 June. Put this in "date".
@@ -111,9 +113,9 @@ Rules:
 - Start-time cue phrases count as time evidence: "od 9", "početak 21h"/"pocetak 21h", "počinje u 21", "u 20.30", "22:30", "start at 10pm", "doors open 8:30 pm". Normalize them into "time" and do not leave them only in "description".
 - NEVER put a date in "time". "19.06" is a date, not "19:06". If a row's only number is its date, leave "time" empty. If no time is given, leave it empty — do not guess.
 
-=== TITLES (per row) — GIVE EVERY ROW A TITLE ===
+=== TITLES (per row) — ONLY SOURCE-GROUNDED TITLES ===
 - Use the act/event name billed for that row, exactly: "Zalazak", "Sreda na Kućici", "Los Tres", "Mladost", "Ludost". If a row bills only an artist/handle, use that as the title.
-- Give every dated row a title when any name is shown, so no row is lost. Use act/event names first; if no act/event name is shown, use a venue, organizer, account, or handle as a last-resort row title and preserve all readable row details in "description" and "source_text".
+- Emit a dated row only when its act/event title is explicitly readable. Never use the venue, organizer, account, handle, or a guessed familiar artist as a last-resort row title.
 
 === VENUE (per row) ===
 - If the poster is one venue, every row uses that venue. If a row names its own venue, use it. Apply the canonical venue hint when it matches.
