@@ -4,29 +4,6 @@ type EventWritePatch = Record<string, unknown> & {
   status?: EventStatusPrecondition;
 };
 
-const PUBLIC_EVENT_FIELDS = new Set([
-  "title",
-  "date",
-  "time",
-  "timeSource",
-  "timeEvidenceText",
-  "timeConfidence",
-  "timeStatus",
-  "venue",
-  "artists",
-  "description",
-  "imageUrl",
-  "instagramPostUrl",
-  "instagramPostId",
-  "ticketPrice",
-  "eventType",
-  "sourceCaption",
-  "promotionTier",
-  "promotionStart",
-  "promotionEnd",
-  "promotionPriority",
-]);
-
 export function assertExpectedEventStatus(
   currentStatus: EventStatusPrecondition,
   expectedStatus: EventStatusPrecondition | undefined,
@@ -55,12 +32,12 @@ export function assertServiceUpdateEventPolicy(
   }
 
   const keepsEventPublic = currentStatus === "approved" && patch.status === undefined;
-  const changesPublicField = Object.keys(patch).some(
-    (field) => patch[field] !== undefined && PUBLIC_EVENT_FIELDS.has(field),
+  const changesApprovedRow = Object.entries(patch).some(
+    ([field, value]) => field !== "status" && value !== undefined,
   );
-  if (keepsEventPublic && changesPublicField) {
+  if (keepsEventPublic && changesApprovedRow) {
     throw new Error(
-      "Service-authenticated updates must demote an approved event before changing public fields.",
+      "Service-authenticated updates must demote an approved event before changing it.",
     );
   }
 }
