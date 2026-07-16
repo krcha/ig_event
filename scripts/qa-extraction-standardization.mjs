@@ -39,7 +39,11 @@ import {
   checkWeekdayConsistency,
   looksLikeBareDate,
 } from "../lib/events/event-validation.ts";
-import { assertExpectedEventStatus } from "../lib/events/event-update-precondition.ts";
+import {
+  assertExpectedEventStatus,
+  assertServiceCreateEventPolicy,
+  assertServiceUpdateEventPolicy,
+} from "../lib/events/event-update-precondition.ts";
 import { buildBackfillDecision } from "./backfill-moderation-scores.mjs";
 import { buildPatch as buildTbdRepairPatch } from "./repair-event-tbd-times.mjs";
 import {
@@ -2668,6 +2672,34 @@ function runAtomicDuplicateStatusPreconditionQa() {
     () => assertExpectedEventStatus("approved", "pending"),
     /Event status changed during update/,
     "A moderator approval racing ingestion must abort the stale machine update.",
+  );
+
+  assert.doesNotThrow(() => assertServiceCreateEventPolicy("pending"));
+  assert.throws(
+    () => assertServiceCreateEventPolicy("approved"),
+    /cannot approve an event/,
+    "A service-authenticated create must never publish.",
+  );
+  assert.throws(
+    () => assertServiceUpdateEventPolicy("pending", { status: "approved" }),
+    /cannot approve an event/,
+    "A service-authenticated update must never publish.",
+  );
+  assert.throws(
+    () => assertServiceUpdateEventPolicy("approved", { title: "MODEL HALLUCINATION" }),
+    /must demote an approved event/,
+    "A service may not change an approved event's public fields in place.",
+  );
+  assert.doesNotThrow(() =>
+    assertServiceUpdateEventPolicy("approved", {
+      normalizedFieldsJson: JSON.stringify({ checked: true }),
+    }),
+  );
+  assert.doesNotThrow(() =>
+    assertServiceUpdateEventPolicy("approved", {
+      status: "pending",
+      title: "Needs renewed human review",
+    }),
   );
 }
 
