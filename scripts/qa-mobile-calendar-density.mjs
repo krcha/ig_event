@@ -52,9 +52,11 @@ assert.ok(
 assert.ok(
   calendarSource.includes('data-calendar-sort-select="true"') &&
     calendarSource.includes('name="sort"') &&
+    calendarSource.includes('defaultValue={selectedSortMode}') &&
+    calendarSource.includes('<option value="time">Time</option>') &&
     calendarSource.includes('<option value="type">Type</option>') &&
     calendarSource.includes('<option value="venue">Venue name</option>'),
-  "Calendar filters should allow sorting the selected day by time, event type, or venue name.",
+  "Calendar filters should default to venue name while allowing time or event-type sorting.",
 );
 assert.ok(
   calendarSource.includes("getNightlifeDefaultDateKey()") &&

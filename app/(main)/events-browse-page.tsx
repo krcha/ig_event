@@ -167,7 +167,7 @@ function formatHiddenDayCategories(categories: readonly ConcreteDayCategory[]): 
 }
 
 function normalizeAgendaSortMode(value: string | undefined): AgendaSortMode {
-  return value === "type" || value === "venue" ? value : "time";
+  return value === "time" || value === "type" ? value : "venue";
 }
 
 function getSingleValue(value: string | string[] | undefined): string | undefined {
@@ -577,7 +577,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   ).length;
   const activeVenueCount = activeVenueNames.size;
   const hiddenCategoriesParam = formatHiddenDayCategories(hiddenDayCategories);
-  const hiddenSort = selectedSortMode === "time" ? undefined : selectedSortMode;
+  const hiddenSort = selectedSortMode === "venue" ? undefined : selectedSortMode;
 
   const baseFilters = {
     q: selectedSearchQuery,
@@ -793,10 +793,10 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
               <select
                 className={cn("input-control", !isDesktop && "h-10 rounded-xl")}
                 data-calendar-sort-select="true"
-                defaultValue={hiddenSort ?? ""}
+                defaultValue={selectedSortMode}
                 name="sort"
               >
-                <option value="">Time</option>
+                <option value="time">Time</option>
                 <option value="type">Type</option>
                 <option value="venue">Venue name</option>
               </select>
