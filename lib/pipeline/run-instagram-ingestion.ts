@@ -1771,23 +1771,6 @@ function hasExplicitBilledEventContext(
   }
 
   if (
-    /\b(?:event|dogadjaj\w*|dj|party|concert|festival|exhibition|opening|otvaranj\w*|show|gig|workshop|quiz|afterparty|matinee|zur\w*|svir\w*|koncert\w*|festival\w*|izloz\w*|predstav\w*|radionic\w*|kviz\w*|nastup\w*|matine\w*)\b/iu.test(
-      searchableTitle,
-    )
-  ) {
-    if (searchableSegment.startsWith(`${searchableTitle} `)) {
-      const suffix = searchableSegment.slice(searchableTitle.length).trim();
-      if (
-        /^(?:(?:pon|ponedeljak|uto|utorak|sre|sreda|cet|cetvrtak|pet|petak|sub|subota|ned|nedelja|mon|monday|tue|tuesday|wed|wednesday|thu|thursday|fri|friday|sat|saturday|sun|sunday)\s+)?\d{1,2}\b/iu.test(
-          suffix,
-        )
-      ) {
-        return true;
-      }
-    }
-  }
-
-  if (
     artists.some((artist) => {
       const searchableArtist = toSearchableText(artist);
       if (!searchableArtist) {

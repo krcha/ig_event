@@ -580,7 +580,7 @@ function runVideoModerationQa() {
   const highConfidenceVideo = assertSingleOkPreparedEvent(
     prepareEventsForInsert(
       makeInstagramPost({
-        caption: `OTVARANJE LETNJE SEZONE ŠLEPARENJA NA RECI ${ddmmForIsoDate(isoDateDaysFromNow(7))} Šlep 23:30 at Nova Zappa Barka.`,
+        caption: `OTVARANJE LETNJE SEZONE ŠLEPARENJA NA RECI ${ddmmForIsoDate(isoDateDaysFromNow(7))} uz Šlep 23:30 at Nova Zappa Barka.`,
         postType: "video",
         username: "slep_slep_slep",
       }),
@@ -725,7 +725,7 @@ function runVideoModerationQa() {
   const lowCoreConfidence = assertSingleOkPreparedEvent(
     prepareEventsForInsert(
       makeInstagramPost({
-        caption: `Friday Event ${ddmmForIsoDate(isoDateDaysFromNow(7))} u Spratu.`,
+        caption: `${ddmmForIsoDate(isoDateDaysFromNow(7))} Friday Event u Spratu.`,
         postType: "image",
         username: "sprat_bar",
       }),
@@ -1242,6 +1242,53 @@ function runSourceGroundingAdversarialQa() {
   );
   assert.equal(protectedContentDropDuplicate.protectedApprovedFromPending, true);
   assert.deepEqual(protectedContentDropDuplicate.patch, {});
+
+  const numberedArchivePrepared = assertSingleOkPreparedEvent(
+    prepareEventsForInsert(
+      makeInstagramPost({
+        id: "numbered-party-archive",
+        shortCode: "numbered-party-archive",
+        caption: `Party archive 20 photos drop ${firstDdmm}.`,
+        altText: null,
+        username: "qa_venue",
+        imageUrl: "https://example.com/numbered-party-archive.jpg",
+        images: ["https://example.com/numbered-party-archive.jpg"],
+      }),
+      makeExtractedEvent({
+        title: "Party archive",
+        date: firstDate,
+        time: "",
+        venue: "QA Venue",
+        artists: [],
+        confidence: 0.95,
+      }),
+      "https://example.com/numbered-party-archive.jpg",
+      [],
+    ),
+  );
+  assert.equal(numberedArchivePrepared.event.status, "pending");
+  assert.equal(
+    readPreparedNormalizedFields(numberedArchivePrepared).sourceGroundingVerified,
+    false,
+  );
+  const protectedNumberedArchiveDuplicate = buildDuplicateUpdatePatch(
+    {
+      title: "REAL APPROVED EVENT",
+      date: firstDate,
+      time: null,
+      venue: "QA Venue",
+      artists: ["REAL ARTIST"],
+      eventType: "nightlife",
+      status: "approved",
+    },
+    numberedArchivePrepared.event,
+  );
+  assert.equal(protectedNumberedArchiveDuplicate.protectedApprovedFromPending, true);
+  assert.deepEqual(
+    protectedNumberedArchiveDuplicate.patch,
+    {},
+    "An unrelated number after an event-keyword title is not date evidence.",
+  );
 }
 
 function runMaintenancePromotionGroundingQa() {
