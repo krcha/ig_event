@@ -208,7 +208,7 @@ Ingestion:
 2. Active venues are loaded from Convex.
 3. Apify fetches recent Instagram posts per venue handle.
 4. OpenAI extracts structured event data from captions/images.
-5. High-confidence events are auto-approved; uncertain items stay pending.
+5. Automatic approval requires both confidence and independent raw-source grounding: the final title, date, billed artists, and any explicit published time must be recoverable from the same deterministic Instagram caption/alt-text segment. Model-only/image-only candidates stay pending for owner review.
 6. Approved duplicate automerge runs when ingestion completes.
 
 Moderation:

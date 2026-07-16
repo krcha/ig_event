@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api.js";
 import { TBD_EVENT_TIME } from "../lib/events/event-time.ts";
@@ -6,6 +7,10 @@ import {
   CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
   normalizeConfidenceScore,
 } from "../lib/utils/confidence.ts";
+import {
+  UNVERIFIED_CORE_EVENT_SOURCE_REASON,
+  hasVerifiedSourceGrounding,
+} from "./source-grounding-guard.mjs";
 
 const DEFAULT_LIMIT = 1000;
 const DEFAULT_STATUSES = ["pending"];
@@ -113,7 +118,7 @@ function readBoolean(record, key) {
   return record[key] === true;
 }
 
-function buildPatch(event) {
+export function buildPatch(event) {
   if (normalizeString(event.time)) {
     return null;
   }
@@ -130,9 +135,11 @@ function buildPatch(event) {
   const missingImage = readBoolean(normalizedFields, "missingImage");
   const allowMissingImage = readBoolean(normalizedFields, "moderationAllowMissingImage");
   const titleUsedFallback = readBoolean(normalizedFields, "titleUsedFallback");
+  const sourceGroundingVerified = hasVerifiedSourceGrounding(normalizedFields);
   const suspiciousYear = readBoolean(normalizedFields, "dateSuspiciousYear");
   const lowConfidence = confidenceScore !== null && confidenceScore < 0.7;
   const autoApproved =
+    sourceGroundingVerified &&
     !suspiciousYear &&
     normalizeString(normalizedFields.dateConfidence) !== "low" &&
     confidenceScore !== null &&
@@ -141,6 +148,7 @@ function buildPatch(event) {
     ...(missingImage ? ["missing_image"] : []),
     ...(allowMissingImage ? ["missing_image_allowed"] : []),
     ...(titleUsedFallback ? ["fallback_title"] : []),
+    ...(!sourceGroundingVerified ? [UNVERIFIED_CORE_EVENT_SOURCE_REASON] : []),
     "time_tbd",
     ...(suspiciousYear ? ["suspicious_year"] : []),
     ...(lowConfidence ? ["low_confidence"] : []),
@@ -154,6 +162,7 @@ function buildPatch(event) {
           : []),
         ...(missingImage && !allowMissingImage ? ["missing_image"] : []),
         ...(suspiciousYear ? ["suspicious_year"] : []),
+        ...(!sourceGroundingVerified ? [UNVERIFIED_CORE_EVENT_SOURCE_REASON] : []),
       ];
 
   return {
@@ -260,7 +269,9 @@ async function main() {
   );
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
-});
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
+}

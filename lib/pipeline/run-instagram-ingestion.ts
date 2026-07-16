@@ -535,6 +535,9 @@ const MONTH_ALIASES: Record<string, number> = {
   децембра: 12,
 };
 const DATE_MONTH_WORD_PATTERN = "[A-Za-zČĆŠĐŽčćšđžА-Яа-яЈј]{3,14}";
+const SOURCE_GROUNDING_MONTH_PATTERN = Object.keys(MONTH_ALIASES)
+  .sort((left, right) => right.length - left.length)
+  .join("|");
 
 type RelativeWeekdayQualifier = "this" | "next" | "bare_list";
 
@@ -615,7 +618,7 @@ type ModerationDecision = {
   allowMissingImage: boolean;
 };
 
-const UNVERIFIED_POSTER_SCHEDULE_TBD_REASON = "unverified_poster_schedule_tbd";
+const UNVERIFIED_CORE_EVENT_SOURCE_REASON = "unverified_core_event_source";
 const NON_EVENT_CLOSURE_NOTICE_REASON = "non_event_closure_notice";
 
 const EXTRACTION_FIELD_LABELS: Array<{
@@ -1666,19 +1669,191 @@ function buildPostTextEvidence(
     .join("\n");
 }
 
+export type CoreEventSourceGrounding = {
+  titleVerified: boolean;
+  dateVerified: boolean;
+  identityVerified: boolean;
+  timeVerified: boolean | null;
+  artistsVerified: boolean | null;
+  rowVerified: boolean;
+  verified: boolean;
+  blockers: string[];
+};
+
+function containsNormalizedTokenSequence(value: string, expected: string): boolean {
+  const valueTokens = toSearchableText(value).split(/\s+/).filter(Boolean);
+  const expectedTokens = toSearchableText(expected).split(/\s+/).filter(Boolean);
+  if (expectedTokens.length === 0 || expectedTokens.length > valueTokens.length) {
+    return false;
+  }
+
+  return valueTokens.some((_, startIndex) =>
+    expectedTokens.every(
+      (token, tokenIndex) => valueTokens[startIndex + tokenIndex] === token,
+    ),
+  );
+}
+
+function splitSourceLineAtDateAnchors(value: string): string[] {
+  const line = normalizeString(value);
+  if (!line) {
+    return [];
+  }
+
+  const dateAnchorPattern = new RegExp(
+    String.raw`\b(?:20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}[./-]\d{1,2}(?:[./-](?:\d{2}|\d{4}))?|\d{1,2}(?:st|nd|rd|th|\.)?\s+(?:${SOURCE_GROUNDING_MONTH_PATTERN})|(?:${SOURCE_GROUNDING_MONTH_PATTERN})\s+\d{1,2}(?:st|nd|rd|th)?)\b`,
+    "giu",
+  );
+  const matches = [...line.matchAll(dateAnchorPattern)];
+  if (matches.length <= 1) {
+    return [line];
+  }
+
+  return matches
+    .map((match, index) => {
+      const start = index === 0 ? 0 : match.index;
+      const end = matches[index + 1]?.index ?? line.length;
+      return line.slice(start, end).trim();
+    })
+    .filter(Boolean);
+}
+
+function buildSourceGroundingSegments(value: string | null | undefined): string[] {
+  return normalizeString(value)
+    .split(/\r?\n/)
+    .flatMap(splitSourceLineAtDateAnchors)
+    .filter(Boolean);
+}
+
+function collectSupportedDates(
+  value: string,
+  postedAt: string | null | undefined,
+): string[] {
+  const postDate = parsePostedAt(postedAt ?? null);
+  return [...new Set(
+    collectDateCandidates(value, "caption", postDate).map(
+      (candidate) => candidate.isoDate,
+    ),
+  )];
+}
+
+/**
+ * Fail closed for automatic publication: model confidence and model-authored
+ * evidence are not source evidence. The final title, date, billed artists, and
+ * any explicit published time must be recoverable from one deterministic raw
+ * Instagram caption/alt-text segment. Image-only candidates remain pending for
+ * owner review rather than becoming public automatically.
+ */
+export function evaluateCoreEventSourceGrounding(options: {
+  independentTextEvidence: string | null | undefined;
+  title: string | null | undefined;
+  normalizedDate: string | null | undefined;
+  postedAt: string | null | undefined;
+  splitSource: string | null | undefined;
+  titleUsedFallback: boolean;
+  time?: string | null;
+  artists?: string[] | null;
+  venue?: string | null;
+  instagramHandle?: string | null;
+}): CoreEventSourceGrounding {
+  const segments = buildSourceGroundingSegments(options.independentTextEvidence);
+  const title = normalizeString(options.title);
+  const normalizedDate = normalizeString(options.normalizedDate);
+  const expectedTime = isTbdEventTime(options.time)
+    ? ""
+    : normalizeString(options.time);
+  const artists = [...new Set(
+    (options.artists ?? []).map(normalizeString).filter(Boolean),
+  )];
+  const titleMatchesVenue =
+    Boolean(title) &&
+    Boolean(normalizeString(options.venue)) &&
+    toSearchableText(title) === toSearchableText(normalizeString(options.venue));
+  const titleMatchesHandle =
+    Boolean(title) &&
+    Boolean(normalizeString(options.instagramHandle)) &&
+    toSearchableText(title) ===
+      toSearchableText(normalizeString(options.instagramHandle).replace(/^@/, ""));
+  const identityAllowed =
+    !options.titleUsedFallback && !titleMatchesVenue && !titleMatchesHandle;
+  const titleVerified =
+    identityAllowed && segments.some((segment) => containsNormalizedTokenSequence(segment, title));
+  const dateVerified =
+    Boolean(normalizedDate) &&
+    segments.some((segment) => collectSupportedDates(segment, options.postedAt).includes(normalizedDate));
+  const identityVerified = titleVerified;
+  const timeVerified = expectedTime
+    ? segments.some((segment) => extractEventTimeFromText(segment) === expectedTime)
+    : null;
+  const artistsVerified = artists.length > 0
+    ? artists.every((artist) =>
+        segments.some((segment) => containsNormalizedTokenSequence(segment, artist)),
+      )
+    : null;
+  const rowVerified =
+    identityAllowed &&
+    Boolean(normalizedDate) &&
+    segments.some((segment) => {
+      const supportedDates = collectSupportedDates(segment, options.postedAt);
+      if (
+        supportedDates.length !== 1 ||
+        supportedDates[0] !== normalizedDate ||
+        !containsNormalizedTokenSequence(segment, title)
+      ) {
+        return false;
+      }
+      if (
+        artists.length > 0 &&
+        !artists.every((artist) => containsNormalizedTokenSequence(segment, artist))
+      ) {
+        return false;
+      }
+      if (expectedTime && extractEventTimeFromText(segment) !== expectedTime) {
+        return false;
+      }
+      return true;
+    });
+  const verified = rowVerified;
+
+  return {
+    titleVerified,
+    dateVerified,
+    identityVerified,
+    timeVerified,
+    artistsVerified,
+    rowVerified,
+    verified,
+    blockers: verified ? [] : [UNVERIFIED_CORE_EVENT_SOURCE_REASON],
+  };
+}
+
 export function getPosterScheduleAutoApprovalBlockers(options: {
   splitSource: string | null | undefined;
   independentTextEvidence: string | null | undefined;
-  hasTime: boolean;
+  title?: string | null;
+  normalizedDate?: string | null;
+  postedAt?: string | null;
+  titleUsedFallback?: boolean;
+  time?: string | null;
+  artists?: string[] | null;
+  venue?: string | null;
+  instagramHandle?: string | null;
 }): string[] {
-  if (
-    options.splitSource === "poster_schedule" &&
-    !normalizeString(options.independentTextEvidence) &&
-    !options.hasTime
-  ) {
-    return [UNVERIFIED_POSTER_SCHEDULE_TBD_REASON];
+  if (options.splitSource !== "poster_schedule") {
+    return [];
   }
-  return [];
+  return evaluateCoreEventSourceGrounding({
+    independentTextEvidence: options.independentTextEvidence,
+    title: options.title,
+    normalizedDate: options.normalizedDate,
+    postedAt: options.postedAt,
+    splitSource: options.splitSource,
+    titleUsedFallback: options.titleUsedFallback ?? false,
+    time: options.time,
+    artists: options.artists,
+    venue: options.venue,
+    instagramHandle: options.instagramHandle,
+  }).blockers;
 }
 
 export function isNonEventClosureNotice(value: string | null | undefined): boolean {
@@ -5119,12 +5294,20 @@ export function prepareEventsForInsert(
     const dateRepairReason = consistencyIssues.includes("weekday_date_mismatch")
       ? "weekday_date_mismatch_numeric_date_authoritative"
       : null;
+    const sourceGrounding = evaluateCoreEventSourceGrounding({
+      independentTextEvidence: independentPostTextEvidence,
+      title: variant.title,
+      normalizedDate: date,
+      postedAt: post.postedAt,
+      splitSource: variant.splitSource,
+      titleUsedFallback: variant.titleUsedFallback,
+      time: eventConsistency.sanitizedTime,
+      artists: variant.artists,
+      venue: venueNormalization.venue,
+      instagramHandle: post.username,
+    });
     const autoApprovalBlockers = [
-      ...getPosterScheduleAutoApprovalBlockers({
-        splitSource: variant.splitSource,
-        independentTextEvidence: independentPostTextEvidence,
-        hasTime: Boolean(eventConsistency.sanitizedTime),
-      }),
+      ...sourceGrounding.blockers,
       ...getNonEventAutoApprovalBlockers(
         [
           postTextEvidence,
@@ -5188,6 +5371,15 @@ export function prepareEventsForInsert(
       moderationAutoApproveThreshold: AUTO_APPROVE_CONFIDENCE_THRESHOLD,
       moderationCoreEventAutoApproveThreshold: CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
       moderationCaptionOnlyVideoMinConfidence: CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE,
+      sourceGroundingVersion: 2,
+      sourceGroundingEvidence: "instagram_caption_or_alt_text",
+      sourceGroundingVerified: sourceGrounding.verified,
+      sourceGroundingTitleVerified: sourceGrounding.titleVerified,
+      sourceGroundingDateVerified: sourceGrounding.dateVerified,
+      sourceGroundingIdentityVerified: sourceGrounding.identityVerified,
+      sourceGroundingTimeVerified: sourceGrounding.timeVerified,
+      sourceGroundingArtistsVerified: sourceGrounding.artistsVerified,
+      sourceGroundingRowVerified: sourceGrounding.rowVerified,
       moderationAutoApproved: moderationDecision.autoApproved,
       moderationAutoApproveRule: moderationDecision.autoApproveRule,
       moderationPendingReasons: moderationDecision.pendingReasons,

@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api.js";
 import {
@@ -8,6 +9,10 @@ import {
   normalizeConfidenceScore,
   shouldAutoApproveConfidenceScore,
 } from "../lib/utils/confidence.ts";
+import {
+  UNVERIFIED_CORE_EVENT_SOURCE_REASON,
+  hasVerifiedSourceGrounding,
+} from "./source-grounding-guard.mjs";
 
 const CAPTION_ONLY_CORE_FIELDS_MIN_CONFIDENCE = 0.8;
 const REVIEWED_BY = "moderation-backfill";
@@ -80,7 +85,7 @@ function isVideoLikePostType(value) {
   return postType.includes("video") || postType.includes("reel");
 }
 
-function buildBackfillDecision(event) {
+export function buildBackfillDecision(event) {
   const normalizedFields = parseJsonObject(event.normalizedFieldsJson);
   const rawExtraction = parseJsonObject(event.rawExtractionJson);
   const baseConfidenceScore =
@@ -101,6 +106,7 @@ function buildBackfillDecision(event) {
     Boolean(event.sourceCaption);
   const suspiciousYear = readBoolean(normalizedFields, "dateSuspiciousYear");
   const titleUsedFallback = readBoolean(normalizedFields, "titleUsedFallback");
+  const sourceGroundingVerified = hasVerifiedSourceGrounding(normalizedFields);
   const dateConfidence = readString(normalizedFields, "dateConfidence");
   const missingTime = !event.time;
   const timeTbdApplies = missingTime && hasDate;
@@ -142,21 +148,24 @@ function buildBackfillDecision(event) {
     dateConfidence !== "low" &&
     confidenceScore !== null &&
     confidenceScore >= CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
-  const autoApproveRule = strictConfidenceAutoApproved
-    ? "confidence_threshold"
-    : captionOnlyCoreAutoApproved
-      ? hasVideoPostType
-        ? "caption_only_video_core_fields"
-        : "legacy_caption_only_core_fields"
-      : coreFieldsAutoApproved
-        ? "core_event_fields"
-        : null;
+  const autoApproveRule = sourceGroundingVerified
+    ? strictConfidenceAutoApproved
+      ? "confidence_threshold"
+      : captionOnlyCoreAutoApproved
+        ? hasVideoPostType
+          ? "caption_only_video_core_fields"
+          : "legacy_caption_only_core_fields"
+        : coreFieldsAutoApproved
+          ? "core_event_fields"
+          : null
+    : null;
   const autoApproved = autoApproveRule !== null;
   const moderationSignals = [
     ...(missingImage ? ["missing_image"] : []),
     ...(allowMissingImage ? ["missing_image_allowed"] : []),
     ...(legacyCaptionOnlyCoreFields ? ["legacy_caption_only_core_fields"] : []),
     ...(titleUsedFallback ? ["fallback_title"] : []),
+    ...(!sourceGroundingVerified ? [UNVERIFIED_CORE_EVENT_SOURCE_REASON] : []),
     ...(timeTbdApplies ? ["time_tbd"] : []),
     ...(suspiciousYear ? ["suspicious_year"] : []),
     ...(confidenceScore !== null && confidenceScore < 0.7 ? ["low_confidence"] : []),
@@ -171,6 +180,7 @@ function buildBackfillDecision(event) {
         ...(missingImage && !allowMissingImage ? ["missing_image"] : []),
         ...(suspiciousYear ? ["suspicious_year"] : []),
         ...(dateConfidence === "low" ? ["low_date_confidence"] : []),
+        ...(!sourceGroundingVerified ? [UNVERIFIED_CORE_EVENT_SOURCE_REASON] : []),
       ];
   const nextNormalizedFields = {
     ...normalizedFields,
@@ -207,6 +217,7 @@ function buildBackfillDecision(event) {
   };
 }
 
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
 loadEnvFiles();
 const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
 if (!convexUrl) {
@@ -277,3 +288,4 @@ console.log(JSON.stringify({
   autoApproved,
   examples,
 }, null, 2));
+}
