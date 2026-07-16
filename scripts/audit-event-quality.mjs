@@ -630,10 +630,35 @@ function buildFindings(event) {
 export function chooseAction(event, findings) {
   const rejectFindings = findings.filter((finding) => finding.severity === "reject");
   if (rejectFindings.length > 0 && event.status !== "rejected") {
+    const normalizedFields = parseJson(event.normalizedFieldsJson);
+    const rejectReasons = rejectFindings.map((finding) => finding.kind);
+    const moderationPendingReasons = [
+      ...new Set([
+        ...(Array.isArray(normalizedFields.moderationPendingReasons)
+          ? normalizedFields.moderationPendingReasons
+          : []),
+        ...rejectReasons,
+      ]),
+    ];
+    const moderationSignals = [
+      ...new Set([
+        ...(Array.isArray(normalizedFields.moderationSignals)
+          ? normalizedFields.moderationSignals
+          : []),
+        ...rejectReasons,
+      ]),
+    ];
     return {
       action: "reject",
       patch: {
         status: "rejected",
+        normalizedFieldsJson: JSON.stringify({
+          ...normalizedFields,
+          moderationAutoApproved: false,
+          moderationAutoApproveRule: null,
+          moderationPendingReasons,
+          moderationSignals,
+        }),
         reviewedAt: Date.now(),
         reviewedBy: "event-quality-audit",
         moderationNote: `Rejected by ${SCAN_SCRIPT}: ${rejectFindings.map((finding) => finding.kind).join(", ")}.`,

@@ -1289,6 +1289,67 @@ function runSourceGroundingAdversarialQa() {
     {},
     "An unrelated number after an event-keyword title is not date evidence.",
   );
+
+  const extraWeakCases = [
+    {
+      id: "extended-cta-title",
+      caption: `${firstDdmm} Join us for cocktails`,
+      event: makeExtractedEvent({
+        title: "Join us for cocktails",
+        date: firstDate,
+        time: "",
+        venue: "QA Venue",
+        artists: [],
+        confidence: 0.95,
+      }),
+    },
+    {
+      id: "sponsor-as-artist",
+      caption: `${firstDdmm} Summer Party sponsored by ACME`,
+      event: makeExtractedEvent({
+        title: "Summer Party",
+        date: firstDate,
+        time: "",
+        venue: "QA Venue",
+        artists: ["ACME"],
+        confidence: 0.95,
+      }),
+    },
+  ];
+  for (const testCase of extraWeakCases) {
+    const prepared = assertSingleOkPreparedEvent(
+      prepareEventsForInsert(
+        makeInstagramPost({
+          id: testCase.id,
+          shortCode: testCase.id,
+          caption: testCase.caption,
+          altText: null,
+          username: "qa_venue",
+          imageUrl: `https://example.com/${testCase.id}.jpg`,
+          images: [`https://example.com/${testCase.id}.jpg`],
+        }),
+        testCase.event,
+        `https://example.com/${testCase.id}.jpg`,
+        [],
+      ),
+    );
+    assert.equal(prepared.event.status, "pending");
+    assert.equal(readPreparedNormalizedFields(prepared).sourceGroundingVerified, false);
+    const duplicatePatch = buildDuplicateUpdatePatch(
+      {
+        title: "REAL APPROVED EVENT",
+        date: firstDate,
+        time: null,
+        venue: "QA Venue",
+        artists: ["REAL ARTIST"],
+        eventType: "nightlife",
+        status: "approved",
+      },
+      prepared.event,
+    );
+    assert.equal(duplicatePatch.protectedApprovedFromPending, true);
+    assert.deepEqual(duplicatePatch.patch, {});
+  }
 }
 
 function runMaintenancePromotionGroundingQa() {
@@ -1479,6 +1540,42 @@ function runMaintenancePromotionGroundingQa() {
   assert.equal(
     qualityRepairFields.sourceGroundingInvalidatedBy,
     "scripts/audit-event-quality.mjs",
+  );
+
+  const qualityRejectAction = chooseEventQualityAction(
+    {
+      ...event,
+      status: "pending",
+      normalizedFieldsJson: JSON.stringify({
+        ...normalizedFields,
+        ...completeGrounding,
+        moderationConfidenceScore: 0.99,
+      }),
+    },
+    [
+      {
+        kind: "non_event_closure_notice",
+        severity: "reject",
+      },
+    ],
+  );
+  assert.equal(qualityRejectAction.action, "reject");
+  assert.equal(qualityRejectAction.patch.status, "rejected");
+  const qualityRejectFields = JSON.parse(qualityRejectAction.patch.normalizedFieldsJson);
+  assert.ok(qualityRejectFields.moderationPendingReasons.includes("non_event_closure_notice"));
+  const rejectedTbdRepair = buildTbdRepairPatch({
+    ...event,
+    status: "rejected",
+    normalizedFieldsJson: qualityRejectAction.patch.normalizedFieldsJson,
+  });
+  assert.equal(
+    rejectedTbdRepair.patch.status,
+    undefined,
+    "TBD repair must never reapprove an event rejected by quality audit.",
+  );
+  assert.ok(
+    JSON.parse(rejectedTbdRepair.patch.normalizedFieldsJson)
+      .moderationPendingReasons.includes("non_event_closure_notice"),
   );
 }
 

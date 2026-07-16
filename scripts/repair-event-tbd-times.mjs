@@ -141,10 +141,14 @@ export function buildPatch(event) {
   const allowMissingImage = readBoolean(normalizedFields, "moderationAllowMissingImage");
   const titleUsedFallback = readBoolean(normalizedFields, "titleUsedFallback");
   const sourceGroundingVerified = hasVerifiedSourceGrounding(normalizedFields);
-  const hardPendingReasons = getHardPendingReasons(normalizedFields);
+  const hardPendingReasons = uniqueStrings([
+    ...getHardPendingReasons(normalizedFields),
+    ...(event.status === "rejected" ? ["rejected_status"] : []),
+  ]);
   const suspiciousYear = readBoolean(normalizedFields, "dateSuspiciousYear");
   const lowConfidence = confidenceScore !== null && confidenceScore < 0.7;
   const autoApproved =
+    event.status !== "rejected" &&
     sourceGroundingVerified &&
     hardPendingReasons.length === 0 &&
     !suspiciousYear &&

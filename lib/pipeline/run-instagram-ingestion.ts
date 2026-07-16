@@ -1763,7 +1763,7 @@ function hasExplicitBilledEventContext(
   }
 
   if (
-    /^(?:vidimo se|see you|save the date|dodjite(?: svi)?|dođite(?: svi)?|join us|come through|pridruzite se|pridružite se|ne propustite|dont miss|rezervisite|rezervišite|book now|saznajte vise|saznajte više|dress code|doors? open|vrata|ulaz|entry|tickets?|karte|reservations?|rezervacije|summer memories|party people|dj mix|album drops?|new album|new single|music video|photo dump|throwback album|good vibes|tonight|today|sutra|veceras|lineup|raspored|program|schedule|this week|ove nedelje|weekend)$/iu.test(
+    /^(?:vidimo se|see you|save the date|dodjite(?: svi)?|dođite(?: svi)?|join us|come through|pridruzite se|pridružite se|ne propustite|dont miss|rezervisite|rezervišite|book now|saznajte vise|saznajte više|dress code|doors? open|vrata|ulaz|entry|tickets?|karte|reservations?|rezervacije|summer memories|party people|dj mix|album drops?|new album|new single|music video|photo dump|throwback album|good vibes|tonight|today|sutra|veceras|lineup|raspored|program|schedule|this week|ove nedelje|weekend)(?:\s|$)/iu.test(
       searchableTitle,
     )
   ) {
@@ -1826,10 +1826,6 @@ function hasCoherentBilledArtists(
 
   const searchableSegment = toSearchableText(segment);
   const searchableTitle = toSearchableText(title);
-  const titleIsExplicitEvent =
-    /\b(?:event|dogadjaj\w*|party|concert|festival|exhibition|opening|otvaranj\w*|show|gig|workshop|quiz|afterparty|matinee|zur\w*|svir\w*|koncert\w*|festival\w*|izloz\w*|predstav\w*|radionic\w*|kviz\w*|nastup\w*|matine\w*)\b/iu.test(
-      searchableTitle,
-    );
 
   return artists.every((artist) => {
     const searchableArtist = toSearchableText(artist);
@@ -1838,8 +1834,7 @@ function hasCoherentBilledArtists(
     }
     if (
       containsNormalizedTokenSequence(searchableTitle, searchableArtist) ||
-      containsNormalizedTokenSequence(searchableArtist, searchableTitle) ||
-      titleIsExplicitEvent
+      containsNormalizedTokenSequence(searchableArtist, searchableTitle)
     ) {
       return true;
     }
