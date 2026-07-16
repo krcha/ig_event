@@ -725,7 +725,7 @@ function runVideoModerationQa() {
   const lowCoreConfidence = assertSingleOkPreparedEvent(
     prepareEventsForInsert(
       makeInstagramPost({
-        caption: `${ddmmForIsoDate(isoDateDaysFromNow(7))} Friday Event u Spratu.`,
+        caption: `${ddmmForIsoDate(isoDateDaysFromNow(7))} Friday Event with DJ KAXX u Spratu.`,
         postType: "image",
         username: "sprat_bar",
       }),
@@ -734,7 +734,7 @@ function runVideoModerationQa() {
         date: isoDateDaysFromNow(7),
         time: "",
         venue: "Sprat",
-        artists: [],
+        artists: ["KAXX"],
         confidence: 0.79,
         field_confirmation: makeFieldConfirmation(0.79),
       }),
@@ -799,6 +799,7 @@ function runUnverifiedPosterScheduleModerationQa() {
       splitSource: "poster_schedule",
       independentTextEvidence: groundedRow,
       title: "DJ KAXX",
+      artists: ["KAXX"],
       normalizedDate: groundedDate,
       postedAt: new Date().toISOString(),
     }),
@@ -984,7 +985,7 @@ function runSourceGroundingAdversarialQa() {
   const firstDdmm = ddmmForIsoDate(firstDate);
   const secondDdmm = ddmmForIsoDate(secondDate);
   const evaluate = (overrides = {}) => evaluateCoreEventSourceGrounding({
-    independentTextEvidence: `${firstDdmm} ALICE 22:00`,
+    independentTextEvidence: `${firstDdmm} DJ ALICE 22:00`,
     title: "ALICE",
     normalizedDate: firstDate,
     postedAt: new Date().toISOString(),
@@ -1292,10 +1293,22 @@ function runSourceGroundingAdversarialQa() {
 
   const extraWeakCases = [
     {
-      id: "extended-cta-title",
-      caption: `${firstDdmm} Join us for cocktails`,
+      id: "age-marker-content-drop",
+      caption: `18+ Summer Party photo album drops ${firstDdmm}`,
       event: makeExtractedEvent({
-        title: "Join us for cocktails",
+        title: "Summer Party",
+        date: firstDate,
+        time: "",
+        venue: "QA Venue",
+        artists: [],
+        confidence: 0.95,
+      }),
+    },
+    {
+      id: "extended-cta-title",
+      caption: `${firstDdmm} Please join us for cocktails`,
+      event: makeExtractedEvent({
+        title: "Please join us for cocktails",
         date: firstDate,
         time: "",
         venue: "QA Venue",
@@ -1307,7 +1320,7 @@ function runSourceGroundingAdversarialQa() {
       id: "sponsor-as-artist",
       caption: `${firstDdmm} Summer Party sponsored by ACME`,
       event: makeExtractedEvent({
-        title: "Summer Party",
+        title: "Summer Party sponsored by ACME",
         date: firstDate,
         time: "",
         venue: "QA Venue",

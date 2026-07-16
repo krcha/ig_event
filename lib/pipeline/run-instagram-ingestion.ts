@@ -1771,53 +1771,31 @@ function hasExplicitBilledEventContext(
   }
 
   if (
-    artists.some((artist) => {
-      const searchableArtist = toSearchableText(artist);
-      if (!searchableArtist) {
-        return false;
-      }
-      return [
-        `dj ${searchableArtist}`,
-        `live ${searchableArtist}`,
-        `with ${searchableArtist}`,
-        `uz ${searchableArtist}`,
-        `${searchableArtist} live`,
-        `${searchableArtist} b2b`,
-      ].some((pattern) => containsNormalizedTokenSequence(searchableSegment, pattern));
-    })
+    /\b(?:sponsor(?:ed)? by|presented by|powered by|photo(?:s)?|album|archive|recap|memories|drop(?:s)?|please|kindly|join us|you are invited)\b/iu.test(
+      searchableTitle,
+    )
   ) {
-    return true;
-  }
-
-  const segmentTokens = searchableSegment.split(/\s+/u).filter(Boolean);
-  const titleTokens = searchableTitle.split(/\s+/u).filter(Boolean);
-  const titleStart = segmentTokens.findIndex((_, index) =>
-    titleTokens.every((token, offset) => segmentTokens[index + offset] === token),
-  );
-  if (titleStart <= 0 || titleStart > 5) {
     return false;
   }
 
-  const allowedDatePrefixTokens = new Set([
-    ...Object.keys(MONTH_ALIASES),
-    "pon", "ponedeljak", "uto", "utorak", "sre", "sreda",
-    "cet", "cetvrtak", "pet", "petak", "sub", "subota",
-    "ned", "nedelja", "mon", "monday", "tue", "tuesday",
-    "wed", "wednesday", "thu", "thursday", "fri", "friday",
-    "sat", "saturday", "sun", "sunday",
-  ]);
-  const prefixTokens = segmentTokens.slice(0, titleStart);
-  return (
-    prefixTokens.some((token) => /^\d{1,4}$/u.test(token)) &&
-    prefixTokens.every(
-      (token) => /^\d{1,4}$/u.test(token) || allowedDatePrefixTokens.has(token),
-    )
-  );
+  return artists.some((artist) => {
+    const searchableArtist = toSearchableText(artist);
+    if (!searchableArtist) {
+      return false;
+    }
+    return [
+      `dj ${searchableArtist}`,
+      `live ${searchableArtist}`,
+      `with ${searchableArtist}`,
+      `uz ${searchableArtist}`,
+      `${searchableArtist} live`,
+      `${searchableArtist} b2b`,
+    ].some((pattern) => containsNormalizedTokenSequence(searchableSegment, pattern));
+  });
 }
 
 function hasCoherentBilledArtists(
   segment: string,
-  title: string,
   artists: string[],
 ): boolean {
   if (artists.length === 0) {
@@ -1825,18 +1803,11 @@ function hasCoherentBilledArtists(
   }
 
   const searchableSegment = toSearchableText(segment);
-  const searchableTitle = toSearchableText(title);
 
   return artists.every((artist) => {
     const searchableArtist = toSearchableText(artist);
     if (!searchableArtist || !containsNormalizedTokenSequence(searchableSegment, searchableArtist)) {
       return false;
-    }
-    if (
-      containsNormalizedTokenSequence(searchableTitle, searchableArtist) ||
-      containsNormalizedTokenSequence(searchableArtist, searchableTitle)
-    ) {
-      return true;
     }
     return [
       `dj ${searchableArtist}`,
@@ -1918,7 +1889,7 @@ export function evaluateCoreEventSourceGrounding(options: {
         countSourceClockValues(segment) > 1 ||
         !containsNormalizedTokenSequence(segment, title) ||
         !hasExplicitBilledEventContext(segment, title, artists) ||
-        !hasCoherentBilledArtists(segment, title, artists)
+        !hasCoherentBilledArtists(segment, artists)
       ) {
         return false;
       }
