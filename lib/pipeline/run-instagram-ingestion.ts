@@ -1749,40 +1749,76 @@ function collectSupportedDates(
   )];
 }
 
-function hasExplicitBilledEventContext(segment: string, artists: string[]): boolean {
-  if (extractEventTimeFromText(segment)) {
-    return true;
+function hasExplicitBilledEventContext(
+  segment: string,
+  title: string,
+  artists: string[],
+): boolean {
+  const searchableSegment = toSearchableText(segment);
+  const searchableTitle = toSearchableText(title);
+  if (!searchableTitle) {
+    return false;
   }
 
-  const searchableSegment = toSearchableText(segment);
   if (
-    /\b(?:event|dogadjaj\w*|dj|party|concert|festival|exhibition|opening|show|gig|workshop|quiz|afterparty|matinee|zur\w*|svir\w*|koncert\w*|festival\w*|izloz\w*|predstav\w*|radionic\w*|kviz\w*|nastup\w*|matine\w*)\b/iu.test(
-      searchableSegment,
+    /^(?:vidimo se|see you|save the date|dodjite(?: svi)?|dođite(?: svi)?|join us|come through|pridruzite se|pridružite se|ne propustite|dont miss|rezervisite|rezervišite|book now|saznajte vise|saznajte više|dress code|doors? open|vrata|ulaz|entry|tickets?|karte|reservations?|rezervacije|summer memories|good vibes|tonight|today|sutra|veceras|lineup|raspored|program|schedule|this week|ove nedelje|weekend)$/iu.test(
+      searchableTitle,
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    /\b(?:event|dogadjaj\w*|dj|party|concert|festival|exhibition|opening|otvaranj\w*|show|gig|workshop|quiz|afterparty|matinee|zur\w*|svir\w*|koncert\w*|festival\w*|izloz\w*|predstav\w*|radionic\w*|kviz\w*|nastup\w*|matine\w*)\b/iu.test(
+      searchableTitle,
     )
   ) {
     return true;
   }
 
-  return artists.some((artist) => {
-    const searchableArtist = toSearchableText(artist);
-    if (!searchableArtist) {
-      return false;
-    }
-    if (
-      segment.includes("@") &&
-      containsNormalizedTokenSequence(searchableSegment, searchableArtist)
-    ) {
-      return true;
-    }
-    return [
-      `dj ${searchableArtist}`,
-      `live ${searchableArtist}`,
-      `with ${searchableArtist}`,
-      `uz ${searchableArtist}`,
-      `${searchableArtist} live`,
-      `${searchableArtist} b2b`,
-    ].some((pattern) => containsNormalizedTokenSequence(searchableSegment, pattern));
-  });
+  if (
+    artists.some((artist) => {
+      const searchableArtist = toSearchableText(artist);
+      if (!searchableArtist) {
+        return false;
+      }
+      return [
+        `dj ${searchableArtist}`,
+        `live ${searchableArtist}`,
+        `with ${searchableArtist}`,
+        `uz ${searchableArtist}`,
+        `${searchableArtist} live`,
+        `${searchableArtist} b2b`,
+      ].some((pattern) => containsNormalizedTokenSequence(searchableSegment, pattern));
+    })
+  ) {
+    return true;
+  }
+
+  const segmentTokens = searchableSegment.split(/\s+/u).filter(Boolean);
+  const titleTokens = searchableTitle.split(/\s+/u).filter(Boolean);
+  const titleStart = segmentTokens.findIndex((_, index) =>
+    titleTokens.every((token, offset) => segmentTokens[index + offset] === token),
+  );
+  if (titleStart <= 0 || titleStart > 5) {
+    return false;
+  }
+
+  const allowedDatePrefixTokens = new Set([
+    ...Object.keys(MONTH_ALIASES),
+    "pon", "ponedeljak", "uto", "utorak", "sre", "sreda",
+    "cet", "cetvrtak", "pet", "petak", "sub", "subota",
+    "ned", "nedelja", "mon", "monday", "tue", "tuesday",
+    "wed", "wednesday", "thu", "thursday", "fri", "friday",
+    "sat", "saturday", "sun", "sunday",
+  ]);
+  const prefixTokens = segmentTokens.slice(0, titleStart);
+  return (
+    prefixTokens.some((token) => /^\d{1,4}$/u.test(token)) &&
+    prefixTokens.every(
+      (token) => /^\d{1,4}$/u.test(token) || allowedDatePrefixTokens.has(token),
+    )
+  );
 }
 
 /**
@@ -1832,7 +1868,7 @@ export function evaluateCoreEventSourceGrounding(options: {
   const identityContextVerified = segments.some(
     (segment) =>
       containsNormalizedTokenSequence(segment, title) &&
-      hasExplicitBilledEventContext(segment, artists),
+      hasExplicitBilledEventContext(segment, title, artists),
   );
   const identityVerified = titleVerified && identityContextVerified;
   const timeVerified = expectedTime
@@ -1853,7 +1889,7 @@ export function evaluateCoreEventSourceGrounding(options: {
         supportedDates[0] !== normalizedDate ||
         countSourceClockValues(segment) > 1 ||
         !containsNormalizedTokenSequence(segment, title) ||
-        !hasExplicitBilledEventContext(segment, artists)
+        !hasExplicitBilledEventContext(segment, title, artists)
       ) {
         return false;
       }

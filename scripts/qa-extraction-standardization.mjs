@@ -21,6 +21,7 @@ import {
   toSearchableText,
 } from "../lib/pipeline/venue-normalization.ts";
 import {
+  buildDuplicateUpdatePatch,
   evaluateCoreEventSourceGrounding,
   getNonEventAutoApprovalBlockers,
   getPosterScheduleAutoApprovalBlockers,
@@ -796,7 +797,7 @@ function runUnverifiedPosterScheduleModerationQa() {
     getPosterScheduleAutoApprovalBlockers({
       splitSource: "poster_schedule",
       independentTextEvidence: groundedRow,
-      title: "KAXX",
+      title: "DJ KAXX",
       normalizedDate: groundedDate,
       postedAt: new Date().toISOString(),
     }),
@@ -1048,6 +1049,36 @@ function runSourceGroundingAdversarialQa() {
   );
   assert.equal(
     evaluate({
+      independentTextEvidence: `${firstDdmm} Vidimo se!`,
+      title: "Vidimo se",
+      artists: [],
+      time: "",
+    }).verified,
+    false,
+    "A dated call to action is not an event identity.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm} Dođite svi!`,
+      title: "Dođite svi",
+      artists: [],
+      time: "",
+    }).verified,
+    false,
+    "A Serbian dated call to action is not an event identity.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm} Dress code WHITE. Doors open 22:00.`,
+      title: "WHITE",
+      artists: [],
+      time: "22:00",
+    }).verified,
+    false,
+    "Dress-code prose and a door time must not bill WHITE as an event.",
+  );
+  assert.equal(
+    evaluate({
       independentTextEvidence: `DJ ALICE ${firstDdmm}`,
       title: "ALICE",
       artists: ["ALICE"],
@@ -1080,6 +1111,52 @@ function runSourceGroundingAdversarialQa() {
     }).verified,
     false,
     "A venue name must not substitute for a separately billed event identity.",
+  );
+
+  const weakPrepared = assertSingleOkPreparedEvent(
+    prepareEventsForInsert(
+      makeInstagramPost({
+        caption: `${firstDdmm} Vidimo se!`,
+        postType: "image",
+        username: "qa_handle",
+      }),
+      makeExtractedEvent({
+        title: "Vidimo se",
+        date: firstDate,
+        time: "",
+        venue: "QA Venue",
+        artists: [],
+        confidence: 0.95,
+      }),
+      "https://cdn.example.com/lifestyle.jpg",
+      {},
+      {},
+      {},
+    ),
+  );
+  assert.equal(weakPrepared.event.status, "pending");
+  assert.equal(
+    readPreparedNormalizedFields(weakPrepared).sourceGroundingVerified,
+    false,
+  );
+  const protectedDuplicate = buildDuplicateUpdatePatch(
+    {
+      _id: "approved-existing",
+      title: "Real Event",
+      date: firstDate,
+      time: "22:00",
+      venue: "QA Venue",
+      artists: ["REAL ARTIST"],
+      eventType: "nightlife",
+      status: "approved",
+    },
+    weakPrepared.event,
+  );
+  assert.equal(protectedDuplicate.protectedApprovedFromPending, true);
+  assert.deepEqual(
+    protectedDuplicate.patch,
+    {},
+    "A weak model identity must stay pending and cannot mutate an approved duplicate.",
   );
 }
 
