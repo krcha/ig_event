@@ -110,8 +110,10 @@ const browsePageSource = readFileSync("app/(main)/events-browse-page.tsx", "utf8
 assert.ok(
   browsePageSource.includes('type AgendaSortMode = "time" | "type" | "venue"') &&
     browsePageSource.includes("compareAgendaEventsByVenue") &&
+    browsePageSource.includes('return value === "time" || value === "type" ? value : "venue"') &&
+    browsePageSource.includes('selectedSortMode === "venue" ? undefined : selectedSortMode') &&
     browsePageSource.includes('<option value="venue">Venue name</option>'),
-  "Public event filters should expose an explicit venue-name sort mode.",
+  "Public event filters should use venue-name sorting by default.",
 );
 assert.equal(
   browsePageSource.includes("month-events-table"),
