@@ -119,6 +119,41 @@ assert.deepEqual(
   {},
   "A pending model-only duplicate must never overwrite an already public event.",
 );
+const staleApprovedDuplicate = buildDuplicateUpdatePatch(
+  { ...existingDuplicate, status: "approved" },
+  {
+    ...preparedDuplicate,
+    status: "approved",
+    title: "STALE BOOLEAN BYPASS",
+    normalizedFieldsJson: JSON.stringify({ sourceGroundingVerified: true }),
+  },
+);
+assert.equal(
+  staleApprovedDuplicate.protectedApprovedFromPending,
+  true,
+  "An approved label with incomplete grounding metadata must fail closed to pending.",
+);
+assert.deepEqual(staleApprovedDuplicate.patch, {});
+const completeApprovedDuplicate = buildDuplicateUpdatePatch(
+  { ...existingDuplicate, status: "approved" },
+  {
+    ...preparedDuplicate,
+    status: "approved",
+    normalizedFieldsJson: JSON.stringify({
+      sourceGroundingVersion: 2,
+      sourceGroundingEvidence: "instagram_caption_or_alt_text",
+      sourceGroundingVerified: true,
+      sourceGroundingTitleVerified: true,
+      sourceGroundingDateVerified: true,
+      sourceGroundingIdentityVerified: true,
+      sourceGroundingIdentityContextVerified: true,
+      sourceGroundingTimeVerified: true,
+      sourceGroundingArtistsVerified: true,
+      sourceGroundingRowVerified: true,
+    }),
+  },
+);
+assert.equal(completeApprovedDuplicate.protectedApprovedFromPending, false);
 const duplicateRepair = buildDuplicateUpdatePatch(existingDuplicate, preparedDuplicate);
 assert.deepEqual(
   {

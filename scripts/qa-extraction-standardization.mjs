@@ -46,6 +46,7 @@ import {
   buildSafeUpdatePatch as buildSafeScheduleUpdatePatch,
 } from "./repair-event-schedule-entries.mjs";
 import { buildRepair as buildConsistencyRepair } from "./repair-event-consistency.mjs";
+import { chooseAction as chooseEventQualityAction } from "./audit-event-quality.mjs";
 import { markModelDerivedRepairPending } from "./source-grounding-guard.mjs";
 
 const STATIC_VENUE_BY_HANDLE = {
@@ -1029,6 +1030,26 @@ function runSourceGroundingAdversarialQa() {
   );
   assert.equal(
     evaluate({
+      independentTextEvidence: `${firstDdmm} ALICE 22h30 / BOB 23h30`,
+      title: "BOB",
+      artists: ["BOB"],
+      time: "22:30",
+    }).verified,
+    false,
+    "Slash-delimited rows and hMM clocks must not cross-associate BOB with ALICE.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm} ALICE: 22:00 / BOB: 22:00`,
+      title: "ALICE",
+      artists: ["BOB"],
+      time: "22:00",
+    }).verified,
+    false,
+    "A title and unrelated artist sharing the same clock are not one billed row.",
+  );
+  assert.equal(
+    evaluate({
       independentTextEvidence: `${firstDdmm} ALICE 22:00 BOB 23:00`,
       title: "BOB",
       artists: ["BOB"],
@@ -1046,6 +1067,16 @@ function runSourceGroundingAdversarialQa() {
     }).verified,
     false,
     "Arbitrary lifestyle prose plus a date is not a billed event identity.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `Summer memories from our last party. Throwback album ${firstDdmm}.`,
+      title: "Summer memories",
+      artists: [],
+      time: "",
+    }).verified,
+    false,
+    "An unrelated party cue elsewhere in prose must not validate a lifestyle slogan.",
   );
   assert.equal(
     evaluate({
@@ -1166,6 +1197,18 @@ function runMaintenancePromotionGroundingQa() {
     dateConfidence: "high",
     sourceGroundingVerified: false,
   };
+  const completeGrounding = {
+    sourceGroundingVersion: 2,
+    sourceGroundingEvidence: "instagram_caption_or_alt_text",
+    sourceGroundingVerified: true,
+    sourceGroundingTitleVerified: true,
+    sourceGroundingDateVerified: true,
+    sourceGroundingIdentityVerified: true,
+    sourceGroundingIdentityContextVerified: true,
+    sourceGroundingTimeVerified: null,
+    sourceGroundingArtistsVerified: null,
+    sourceGroundingRowVerified: true,
+  };
   const event = {
     title: "ALICE",
     date: isoDateDaysFromNow(7),
@@ -1179,12 +1222,25 @@ function runMaintenancePromotionGroundingQa() {
   const backfillBlocked = buildBackfillDecision(event);
   assert.equal(backfillBlocked.autoApproved, false);
   assert.ok(backfillBlocked.pendingReasons.includes("unverified_core_event_source"));
+  const stalePartialEvent = {
+    ...event,
+    normalizedFieldsJson: JSON.stringify({
+      ...normalizedFields,
+      sourceGroundingVerified: true,
+    }),
+  };
+  assert.equal(
+    buildBackfillDecision(stalePartialEvent).autoApproved,
+    false,
+    "A stale single grounding boolean must not promote a pending event.",
+  );
+  assert.equal(buildTbdRepairPatch(stalePartialEvent).patch.status, undefined);
   assert.equal(
     buildBackfillDecision({
       ...event,
       normalizedFieldsJson: JSON.stringify({
         ...normalizedFields,
-        sourceGroundingVerified: true,
+        ...completeGrounding,
       }),
     }).autoApproved,
     true,
@@ -1201,7 +1257,7 @@ function runMaintenancePromotionGroundingQa() {
       ...event,
       normalizedFieldsJson: JSON.stringify({
         ...normalizedFields,
-        sourceGroundingVerified: true,
+        ...completeGrounding,
       }),
     }).patch.status,
     "approved",
@@ -1267,6 +1323,28 @@ function runMaintenancePromotionGroundingQa() {
     JSON.parse(consistencyRepair.patch.normalizedFieldsJson).sourceGroundingVerified,
     false,
     "Consistency repair must invalidate stale source grounding.",
+  );
+
+  const qualityRepairAction = chooseEventQualityAction(
+    {
+      ...scheduleSource,
+      normalizedFieldsJson: JSON.stringify(completeGrounding),
+    },
+    [
+      {
+        kind: "weak_title_source_grounded_repair",
+        severity: "repair",
+        patch: { title: "MODEL QUALITY REPAIR", artists: ["MODEL ARTIST"] },
+      },
+    ],
+  );
+  assert.equal(qualityRepairAction.action, "repair");
+  assert.equal(qualityRepairAction.patch.status, "pending");
+  const qualityRepairFields = JSON.parse(qualityRepairAction.patch.normalizedFieldsJson);
+  assert.equal(qualityRepairFields.sourceGroundingVerified, false);
+  assert.equal(
+    qualityRepairFields.sourceGroundingInvalidatedBy,
+    "scripts/audit-event-quality.mjs",
   );
 }
 

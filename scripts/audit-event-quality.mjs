@@ -1,6 +1,8 @@
 import { writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api.js";
+import { markModelDerivedRepairPending } from "./source-grounding-guard.mjs";
 
 const DEFAULT_STATUSES = ["approved", "pending"];
 const DEFAULT_APPROVED_WINDOW_DAYS_BACK = 90;
@@ -625,7 +627,7 @@ function buildFindings(event) {
   return { findings, normalizedFields, rawExtraction, sourceText };
 }
 
-function chooseAction(event, findings) {
+export function chooseAction(event, findings) {
   const rejectFindings = findings.filter((finding) => finding.severity === "reject");
   if (rejectFindings.length > 0 && event.status !== "rejected") {
     return {
@@ -642,10 +644,16 @@ function chooseAction(event, findings) {
   const repairFindings = findings.filter((finding) => finding.severity === "repair" && finding.patch);
   if (repairFindings.length > 0) {
     const patch = Object.assign({}, ...repairFindings.map((finding) => finding.patch));
+    const guardedNormalizedFields = markModelDerivedRepairPending(
+      parseJson(event.normalizedFieldsJson),
+      SCAN_SCRIPT,
+    );
     return {
       action: "repair",
       patch: {
         ...patch,
+        status: "pending",
+        normalizedFieldsJson: JSON.stringify(guardedNormalizedFields),
         reviewedAt: Date.now(),
         reviewedBy: "event-quality-audit",
         moderationNote: `Repaired by ${SCAN_SCRIPT}: ${repairFindings.map((finding) => finding.kind).join(", ")}.`,
@@ -772,7 +780,9 @@ async function main() {
   console.log(JSON.stringify(summary, null, 2));
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
-});
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
+}

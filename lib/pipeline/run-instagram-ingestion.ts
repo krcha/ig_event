@@ -1721,7 +1721,7 @@ function splitSourceLineAtDateAnchors(value: string): string[] {
 
 function buildSourceGroundingSegments(value: string | null | undefined): string[] {
   return normalizeString(value)
-    .split(/\r?\n|[,;•·●▪◦]+|\s+\|\s+/u)
+    .split(/\r?\n|[,;•·●▪◦]+|\s+\|\s+|\s+\/\s+/u)
     .flatMap(splitSourceLineAtDateAnchors)
     .filter(Boolean);
 }
@@ -1732,9 +1732,9 @@ function countSourceClockValues(value: string): number {
     " ",
   );
   const clockValues = withoutDates.match(
-    /\b(?:(?:[01]?\d|2[0-3])[:.]\d{2}|(?:[01]?\d|2[0-3])\s*h)\b/giu,
+    /\b(?:(?:[01]?\d|2[0-3])(?:[:.h][0-5]\d|\s*h))\b/giu,
   ) ?? [];
-  return new Set(clockValues.map((value) => toSearchableText(value))).size;
+  return clockValues.length;
 }
 
 function collectSupportedDates(
@@ -1821,6 +1821,45 @@ function hasExplicitBilledEventContext(
   );
 }
 
+function hasCoherentBilledArtists(
+  segment: string,
+  title: string,
+  artists: string[],
+): boolean {
+  if (artists.length === 0) {
+    return true;
+  }
+
+  const searchableSegment = toSearchableText(segment);
+  const searchableTitle = toSearchableText(title);
+  const titleIsExplicitEvent =
+    /\b(?:event|dogadjaj\w*|party|concert|festival|exhibition|opening|otvaranj\w*|show|gig|workshop|quiz|afterparty|matinee|zur\w*|svir\w*|koncert\w*|festival\w*|izloz\w*|predstav\w*|radionic\w*|kviz\w*|nastup\w*|matine\w*)\b/iu.test(
+      searchableTitle,
+    );
+
+  return artists.every((artist) => {
+    const searchableArtist = toSearchableText(artist);
+    if (!searchableArtist || !containsNormalizedTokenSequence(searchableSegment, searchableArtist)) {
+      return false;
+    }
+    if (
+      containsNormalizedTokenSequence(searchableTitle, searchableArtist) ||
+      containsNormalizedTokenSequence(searchableArtist, searchableTitle) ||
+      titleIsExplicitEvent
+    ) {
+      return true;
+    }
+    return [
+      `dj ${searchableArtist}`,
+      `live ${searchableArtist}`,
+      `with ${searchableArtist}`,
+      `uz ${searchableArtist}`,
+      `${searchableArtist} live`,
+      `${searchableArtist} b2b`,
+    ].some((pattern) => containsNormalizedTokenSequence(searchableSegment, pattern));
+  });
+}
+
 /**
  * Fail closed for automatic publication: model confidence and model-authored
  * evidence are not source evidence. The final title, date, billed artists, and
@@ -1889,7 +1928,8 @@ export function evaluateCoreEventSourceGrounding(options: {
         supportedDates[0] !== normalizedDate ||
         countSourceClockValues(segment) > 1 ||
         !containsNormalizedTokenSequence(segment, title) ||
-        !hasExplicitBilledEventContext(segment, title, artists)
+        !hasExplicitBilledEventContext(segment, title, artists) ||
+        !hasCoherentBilledArtists(segment, title, artists)
       ) {
         return false;
       }
@@ -4673,6 +4713,24 @@ function hasMaterialEventChange(
   return false;
 }
 
+function hasCompletePersistedSourceGrounding(value: string | undefined): boolean {
+  const fields = parseJsonRecord(value);
+  return (
+    fields?.sourceGroundingVersion === 2 &&
+    fields?.sourceGroundingEvidence === "instagram_caption_or_alt_text" &&
+    fields?.sourceGroundingVerified === true &&
+    fields?.sourceGroundingTitleVerified === true &&
+    fields?.sourceGroundingDateVerified === true &&
+    fields?.sourceGroundingIdentityVerified === true &&
+    fields?.sourceGroundingIdentityContextVerified === true &&
+    fields?.sourceGroundingRowVerified === true &&
+    (fields?.sourceGroundingTimeVerified === true ||
+      fields?.sourceGroundingTimeVerified === null) &&
+    (fields?.sourceGroundingArtistsVerified === true ||
+      fields?.sourceGroundingArtistsVerified === null)
+  );
+}
+
 export function buildDuplicateUpdatePatch(
   existing: ExistingEventRecord,
   next: PreparedEvent,
@@ -4713,9 +4771,15 @@ export function buildDuplicateUpdatePatch(
     next.normalizedFieldsJson,
   );
   const materiallyChanged = hasMaterialEventChange(existing, next, preferredDescription);
-  const statusAutoApproved = next.status === "approved" && existing.status !== "approved";
+  const effectiveNextStatus: EventStatus =
+    next.status === "approved" &&
+    !hasCompletePersistedSourceGrounding(next.normalizedFieldsJson)
+      ? "pending"
+      : next.status;
+  const statusAutoApproved =
+    effectiveNextStatus === "approved" && existing.status !== "approved";
   const protectedApprovedFromPending =
-    existing.status === "approved" && next.status !== "approved";
+    existing.status === "approved" && effectiveNextStatus !== "approved";
   if (protectedApprovedFromPending) {
     return {
       patch: {},
@@ -4727,9 +4791,9 @@ export function buildDuplicateUpdatePatch(
   }
   // Rejected records can return to pending when a material, non-approved rescrape improves them.
   const statusResetToPending =
-    materiallyChanged && existing.status === "rejected" && next.status !== "approved";
+    materiallyChanged && existing.status === "rejected" && effectiveNextStatus !== "approved";
   const nextStatus: EventStatus =
-    next.status === "approved"
+    effectiveNextStatus === "approved"
       ? "approved"
       : statusResetToPending
         ? "pending"

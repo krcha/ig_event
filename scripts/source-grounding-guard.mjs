@@ -32,11 +32,13 @@ export function markModelDerivedRepairPending(normalizedFields, script) {
     moderationAutoApproved: false,
     moderationAutoApproveRule: null,
     moderationPendingReasons: uniqueStrings([
-      ...(current.moderationPendingReasons ?? []),
+      ...(Array.isArray(current.moderationPendingReasons)
+        ? current.moderationPendingReasons
+        : []),
       UNVERIFIED_CORE_EVENT_SOURCE_REASON,
     ]),
     moderationSignals: uniqueStrings([
-      ...(current.moderationSignals ?? []),
+      ...(Array.isArray(current.moderationSignals) ? current.moderationSignals : []),
       UNVERIFIED_CORE_EVENT_SOURCE_REASON,
     ]),
   };
@@ -48,5 +50,18 @@ export function markModelDerivedRepairPending(normalizedFields, script) {
  * caption/alt-text grounding result.
  */
 export function hasVerifiedSourceGrounding(normalizedFields) {
-  return normalizedFields?.sourceGroundingVerified === true;
+  return (
+    normalizedFields?.sourceGroundingVersion === 2 &&
+    normalizedFields?.sourceGroundingEvidence === "instagram_caption_or_alt_text" &&
+    normalizedFields?.sourceGroundingVerified === true &&
+    normalizedFields?.sourceGroundingTitleVerified === true &&
+    normalizedFields?.sourceGroundingDateVerified === true &&
+    normalizedFields?.sourceGroundingIdentityVerified === true &&
+    normalizedFields?.sourceGroundingIdentityContextVerified === true &&
+    normalizedFields?.sourceGroundingRowVerified === true &&
+    (normalizedFields?.sourceGroundingTimeVerified === true ||
+      normalizedFields?.sourceGroundingTimeVerified === null) &&
+    (normalizedFields?.sourceGroundingArtistsVerified === true ||
+      normalizedFields?.sourceGroundingArtistsVerified === null)
+  );
 }
