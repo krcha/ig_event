@@ -105,6 +105,20 @@ const preparedDuplicate = {
   eventType: "nightlife",
   status: "pending",
 };
+const protectedApprovedDuplicate = buildDuplicateUpdatePatch(
+  { ...existingDuplicate, status: "approved" },
+  {
+    ...preparedDuplicate,
+    title: "MODEL-ONLY HALLUCINATION",
+    normalizedFieldsJson: JSON.stringify({ sourceGroundingVerified: false }),
+  },
+);
+assert.equal(protectedApprovedDuplicate.protectedApprovedFromPending, true);
+assert.deepEqual(
+  protectedApprovedDuplicate.patch,
+  {},
+  "A pending model-only duplicate must never overwrite an already public event.",
+);
 const duplicateRepair = buildDuplicateUpdatePatch(existingDuplicate, preparedDuplicate);
 assert.deepEqual(
   {

@@ -4613,6 +4613,7 @@ export function buildDuplicateUpdatePatch(
   materiallyChanged: boolean;
   statusResetToPending: boolean;
   statusAutoApproved: boolean;
+  protectedApprovedFromPending: boolean;
 } {
   const preferredDescription = choosePreferredDescription(
     existing.description,
@@ -4621,7 +4622,18 @@ export function buildDuplicateUpdatePatch(
   );
   const materiallyChanged = hasMaterialEventChange(existing, next, preferredDescription);
   const statusAutoApproved = next.status === "approved" && existing.status !== "approved";
-  // Keep previously approved events out of moderation on re-scrape.
+  const protectedApprovedFromPending =
+    existing.status === "approved" && next.status !== "approved";
+  if (protectedApprovedFromPending) {
+    return {
+      patch: {},
+      materiallyChanged: false,
+      statusResetToPending: false,
+      statusAutoApproved: false,
+      protectedApprovedFromPending: true,
+    };
+  }
+  // Rejected records can return to pending when a material, non-approved rescrape improves them.
   const statusResetToPending =
     materiallyChanged && existing.status === "rejected" && next.status !== "approved";
   const nextStatus: EventStatus =
@@ -4668,6 +4680,7 @@ export function buildDuplicateUpdatePatch(
     materiallyChanged,
     statusResetToPending,
     statusAutoApproved,
+    protectedApprovedFromPending: false,
   };
 }
 
@@ -5824,6 +5837,24 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
         existingMatch.existingEvent,
         prepared.event,
       );
+
+      if (updatePayload.protectedApprovedFromPending) {
+        summary.skippedDuplicates += 1;
+        summary.skipped_duplicates += 1;
+        summary.skipped_duplicates_clean += 1;
+        logInfo("duplicate_approved_protected_from_pending_update", {
+          ...postContext,
+          extractionMode,
+          selectedImageUrl,
+          matchedBy: existingMatch.matchedBy,
+          matchedValue: existingMatch.matchedValue,
+          existingEventId: existingMatch.existingEvent._id,
+          existingStatus: existingMatch.existingEvent.status,
+          candidateStatus: prepared.event.status,
+          normalizedFields: prepared.normalizedFields,
+        });
+        continue;
+      }
 
       try {
         await client.mutation(updateEventMutation, {
