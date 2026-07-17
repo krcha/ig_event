@@ -1528,6 +1528,199 @@ function runHashtagOnlyScheduleIdentityQa() {
     "The same billed act at different explicit times must remain distinct events.",
   );
 
+  const prefixArtistCaption = [
+    `${firstDateLabel} - DJ Bob Marley 22H`,
+    `${secondDateLabel} - DJ Charlie 23H`,
+  ].join("\n");
+  const prefixArtists = prepareBaraka(
+    { caption: prefixArtistCaption },
+    {
+      source_caption: prefixArtistCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "22:00",
+          title: "Bob",
+          artists: ["Bob"],
+          description: "DJ set.",
+          source_text: `${firstDateLabel} DJ Bob 22H`,
+        },
+        {
+          date: secondDateLabel,
+          time: "23:00",
+          title: "Charlie",
+          artists: ["Charlie"],
+          description: "DJ set.",
+          source_text: `${secondDateLabel} DJ Charlie 23H`,
+        },
+      ],
+    },
+  );
+  assert.deepEqual(
+    prefixArtists.map((result) => {
+      assert.equal(result.kind, "ok");
+      return { date: result.event.date, artists: result.event.artists };
+    }),
+    [
+      { date: firstDate, artists: ["Bob"] },
+      { date: firstDate, artists: ["DJ Bob Marley"] },
+      { date: secondDate, artists: ["Charlie"] },
+    ],
+    "A token-prefix act must not be collapsed into a distinct longer artist name.",
+  );
+
+  const compositeHashtagCaption = [
+    `${firstDateLabel} - Summer Party #Bob 22H`,
+    `${secondDateLabel} - DJ Charlie 23H`,
+    "#Bob",
+  ].join("\n");
+  const compositeHashtag = prepareBaraka(
+    { caption: compositeHashtagCaption },
+    {
+      source_caption: compositeHashtagCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "22:00",
+          title: "Summer Party",
+          artists: [],
+          description: "Nightlife event.",
+          source_text: `${firstDateLabel} Summer Party 22H`,
+        },
+        {
+          date: secondDateLabel,
+          time: "23:00",
+          title: "Charlie",
+          artists: ["Charlie"],
+          description: "DJ set.",
+          source_text: `${secondDateLabel} DJ Charlie 23H`,
+        },
+      ],
+    },
+  );
+  assert.equal(compositeHashtag.length, 2);
+  assert.equal(compositeHashtag[0].kind, "ok");
+  assert.equal(compositeHashtag[0].event.title, "Summer Party");
+  assert.deepEqual(compositeHashtag[0].event.artists, []);
+  assert.doesNotMatch(compositeHashtag[0].event.title, /#/u);
+
+  const compositeFields = readPreparedNormalizedFields(compositeHashtag[0]);
+  const rowGroundedPendingNext = {
+    ...compositeHashtag[0].event,
+    artists: [],
+    normalizedFieldsJson: JSON.stringify({
+      ...compositeFields,
+      artistsWereSanitized: true,
+      rowSourceText: `${firstDateLabel} - DJ Legit #greizaci 22H`,
+      splitSourceLine: `${firstDateLabel} - DJ Legit #greizaci 22H`,
+    }),
+  };
+  const preservedPendingArtist = buildDuplicateUpdatePatch(
+    {
+      ...compositeHashtag[0].event,
+      _id: "pending-row-grounded-artist",
+      artists: ["DJ Legit"],
+      status: "pending",
+    },
+    rowGroundedPendingNext,
+  );
+  assert.deepEqual(
+    preservedPendingArtist.patch.artists,
+    ["DJ Legit"],
+    "A deliberately sanitized rescrape must retain an existing artist still billed in the exact row.",
+  );
+
+  const hashtagOnlyPendingNext = {
+    ...compositeHashtag[0].event,
+    artists: [],
+    normalizedFieldsJson: JSON.stringify({
+      ...compositeFields,
+      artistsWereSanitized: true,
+      rowSourceText: `${firstDateLabel} - Summer Party #greizaci 22H`,
+      splitSourceLine: `${firstDateLabel} - Summer Party #greizaci 22H`,
+    }),
+  };
+  const clearedPendingHashtagArtist = buildDuplicateUpdatePatch(
+    {
+      ...compositeHashtag[0].event,
+      _id: "pending-hashtag-only-artist",
+      artists: ["DJ greizaci"],
+      status: "pending",
+    },
+    hashtagOnlyPendingNext,
+  );
+  assert.deepEqual(
+    clearedPendingHashtagArtist.patch.artists,
+    [],
+    "A pending hashtag-only artist must still be cleared when the exact row does not bill it.",
+  );
+
+  const multipleFallbackTimesCaption = [
+    `${firstDateLabel} | 21H`,
+    `${firstDateLabel} | 23H`,
+    `${secondDateLabel} - DJ Charlie 22H`,
+  ].join("\n");
+  const multipleFallbackTimes = prepareBaraka(
+    { caption: multipleFallbackTimesCaption },
+    {
+      source_caption: multipleFallbackTimesCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Bob",
+          artists: ["Bob"],
+          description: "DJ set.",
+          source_text: `${firstDateLabel} DJ Bob`,
+        },
+        {
+          date: secondDateLabel,
+          time: "22:00",
+          title: "Charlie",
+          artists: ["Charlie"],
+          description: "DJ set.",
+          source_text: `${secondDateLabel} DJ Charlie 22H`,
+        },
+      ],
+    },
+  );
+  assert.deepEqual(
+    multipleFallbackTimes.map((result) => {
+      assert.equal(result.kind, "ok");
+      return { date: result.event.date, time: result.event.time };
+    }),
+    [
+      { date: firstDate, time: "21:00" },
+      { date: firstDate, time: "23:00" },
+      { date: secondDate, time: "22:00" },
+    ],
+    "Multiple explicit same-date fallback times must not be assigned or discarded arbitrarily.",
+  );
+  assert.equal(
+    readPreparedNormalizedFields(multipleFallbackTimes[1]).titleSource,
+    "unnamed_schedule_fallback",
+  );
+
+  const exactCombinedDuplicateCaption = [
+    `FRIDAY ${firstDateLabel} / SATURDAY ${secondDateLabel} | 21H`,
+    `${firstDateLabel} | 21H`,
+  ].join("\n");
+  const exactCombinedDuplicates = prepareBaraka(
+    { caption: exactCombinedDuplicateCaption },
+    { source_caption: exactCombinedDuplicateCaption },
+  );
+  assert.deepEqual(
+    exactCombinedDuplicates.map((result) => {
+      assert.equal(result.kind, "ok");
+      return { date: result.event.date, time: result.event.time };
+    }),
+    [
+      { date: firstDate, time: "21:00" },
+      { date: secondDate, time: "21:00" },
+    ],
+    "Combined and standalone caption parsers must share compatible dedupe keys.",
+  );
+
   const malformedCombinedCaption =
     `FRIDAY ${firstDateLabel} / ${secondDateLabel} / SUNDAY ${thirdDateLabel} | 21H`;
   const malformedCombined = prepareBaraka(
