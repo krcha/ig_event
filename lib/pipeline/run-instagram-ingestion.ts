@@ -1575,7 +1575,7 @@ function cleanSplitCaptionEntryText(value: string): string {
     normalizeString(value)
       .replace(/[\p{Cf}]/gu, "")
       .replace(/@([\p{L}\p{N}._-]+)/gu, (_match, handle: string) => humanizeArtistHandle(handle))
-      .replace(/\s*[•·|]+\s*/g, " ")
+      .replace(/\s*[•·●▪‣∙◦‧⁃◆◇■□▸►▶|]+\s*/gu, " | ")
       .replace(/[\p{Extended_Pictographic}\uFE0F]+$/gu, "")
       .replace(/\s+/g, " "),
   );
@@ -2038,9 +2038,10 @@ export function getNonEventAutoApprovalBlockers(value: string | null | undefined
 }
 
 function parseSplitCaptionEntryArtists(value: string): string[] {
+  const normalizedDelimiters = value.replace(/\s+x\s+/gu, " & ");
   return [...new Set(
-    value
-      .split(/\s*(?:,|&|\+|\bx\b|\bb2b\b|\band\b)\s*/iu)
+    normalizedDelimiters
+      .split(/\s*(?:,|&|\+|\bb2b\b|\band\b|[|•·●▪‣∙◦‧⁃◆◇■□▸►▶])\s*/iu)
       .map((item) => normalizeArtistDisplayName(item))
       .filter((item) => titleContainsAlphanumeric(item)),
   )];
@@ -2068,13 +2069,22 @@ function stripHashtagTokens(value: string): string {
 }
 
 const HASHTAG_IDENTITY_DECORATION_TOKENS = new Set([
+  "by",
   "concert",
   "dj",
   "event",
+  "feat",
+  "featuring",
+  "ft",
+  "gostuje",
+  "guest",
   "live",
+  "music",
+  "nastupa",
   "night",
   "party",
   "performance",
+  "performing",
   "presenting",
   "presents",
   "set",
@@ -2465,7 +2475,9 @@ function extractModelSplitEventCandidates(
     const rawDate = normalizeString(scheduleEntry.date);
     const description = normalizeExtractedDescription(scheduleEntry.description);
     const rawScheduleTime = normalizeString(scheduleEntry.time);
-    const rawModelTitle = cleanSplitCaptionEntryText(scheduleEntry.title);
+    const rawModelTitle = cleanSplitCaptionEntryText(
+      stripSplitEntryTime(scheduleEntry.title),
+    );
     const explicitSourceLine = normalizeString(scheduleEntry.source_text);
     const sourceLine =
       explicitSourceLine ||
@@ -2704,7 +2716,7 @@ function extractCaptionSplitEventCandidates(
     const rawTitle = explicitScheduleMatch
       ? explicitScheduleMatch[2] ?? ""
       : stripSplitEntryTime(stripSplitEntryDateText(line, rawDate));
-    const sourceTitle = cleanSplitCaptionEntryText(rawTitle);
+    const sourceTitle = cleanSplitCaptionEntryText(stripSplitEntryTime(rawTitle));
     const sourceIdentity = sanitizeSplitEventIdentity({
       rawTitle: sourceTitle,
       rawArtists: parseSplitCaptionEntryArtists(sourceTitle),
@@ -2883,37 +2895,66 @@ function sortSplitCandidatesByDate(candidates: SplitEventCandidate[]): SplitEven
     .map(({ candidate }) => candidate);
 }
 
+function splitIdentityValuesMatch(left: string, right: string): boolean {
+  return identityVariantsOverlap(left, right) ||
+    containsNormalizedTokenSequence(left, right) ||
+    containsNormalizedTokenSequence(right, left);
+}
+
+function splitCandidatesShareIdentity(
+  left: SplitEventCandidate,
+  right: SplitEventCandidate,
+): boolean {
+  if (left.titleUsedFallback && right.titleUsedFallback) {
+    return true;
+  }
+  if (left.time && right.time && left.time !== right.time) {
+    return false;
+  }
+  if (splitIdentityValuesMatch(left.lineTitle, right.lineTitle)) {
+    return true;
+  }
+  return left.artists.some((leftArtist) =>
+    right.artists.some((rightArtist) => splitIdentityValuesMatch(leftArtist, rightArtist)),
+  );
+}
+
 function reconcileSplitCandidateCoverage(
   primary: SplitEventCandidate[],
   supplemental: SplitEventCandidate[],
 ): SplitEventCandidate[] {
   const reconciled = [...primary];
-  const supplementalByDate = new Map<string, SplitEventCandidate[]>();
+
   for (const candidate of supplemental) {
     const dateKey = getSplitCandidateDateKey(candidate);
     if (!dateKey) {
       continue;
     }
-    supplementalByDate.set(dateKey, [...(supplementalByDate.get(dateKey) ?? []), candidate]);
-  }
-
-  for (const [dateKey, supplementalForDate] of supplementalByDate) {
-    const primaryIndexes = reconciled
-      .map((candidate, index) => ({ candidate, index }))
-      .filter(({ candidate }) => getSplitCandidateDateKey(candidate) === dateKey)
+    const sameDateIndexes = reconciled
+      .map((existing, index) => ({ existing, index }))
+      .filter(({ existing }) => getSplitCandidateDateKey(existing) === dateKey)
       .map(({ index }) => index);
-    if (primaryIndexes.length === 0) {
-      reconciled.push(...supplementalForDate);
+    if (sameDateIndexes.length === 0) {
+      reconciled.push(candidate);
+      continue;
+    }
+    if (candidate.titleUsedFallback) {
       continue;
     }
     if (
-      primaryIndexes.length === 1 &&
-      supplementalForDate.length === 1 &&
-      reconciled[primaryIndexes[0]]?.titleUsedFallback &&
-      !supplementalForDate[0]?.titleUsedFallback
+      sameDateIndexes.some((index) => {
+        const existing = reconciled[index];
+        return existing ? splitCandidatesShareIdentity(existing, candidate) : false;
+      })
     ) {
-      reconciled[primaryIndexes[0]] = supplementalForDate[0];
+      continue;
     }
+    const fallbackIndex = sameDateIndexes.find((index) => reconciled[index]?.titleUsedFallback);
+    if (fallbackIndex !== undefined) {
+      reconciled[fallbackIndex] = candidate;
+      continue;
+    }
+    reconciled.push(candidate);
   }
 
   return sortSplitCandidatesByDate(reconciled);

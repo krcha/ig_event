@@ -1168,6 +1168,33 @@ function runHashtagOnlyScheduleIdentityQa() {
   );
   assert.ok(decoratedModelRows.every((result) => !/greizaci/iu.test(result.event.title)));
 
+  assertTwoUnnamedFallbacks(
+    prepareBaraka(
+      {},
+      {
+        schedule_entries: [
+          {
+            date: firstDateLabel,
+            time: "21:00",
+            title: "DJ set by greizaci",
+            artists: ["DJ set by greizaci"],
+            description: "Party night at BARAKA BAŠTA.",
+            source_text: "",
+          },
+          {
+            date: secondDateLabel,
+            time: "21:00",
+            title: "Music by greizaci",
+            artists: ["Music by greizaci"],
+            description: "Party night at BARAKA BAŠTA.",
+            source_text: "",
+          },
+        ],
+      },
+    ),
+    "Billing/decorative phrases without independent source evidence must not evade the hashtag guard.",
+  );
+
   const threeDayCaption =
     `FRIDAY ${firstDateLabel} / SATURDAY ${secondDateLabel} / SUNDAY ${thirdDateLabel} | 21H`;
   const threeDayUnnamed = prepareBaraka(
@@ -1225,6 +1252,117 @@ function runHashtagOnlyScheduleIdentityQa() {
     "unnamed_schedule_fallback",
   );
   assert.deepEqual(partialModelSchedule[2].event.artists, []);
+
+  for (const separator of ["|", "•", "·", "●"]) {
+    const partialCreditCaption = [
+      `${firstDateLabel} - DJ Alpha 21H`,
+      `${secondDateLabel} Photo: Alice ${separator} DJ Bob 22H`,
+      `${thirdDateLabel} - DJ Charlie 23H`,
+    ].join("\n");
+    const partialCreditSchedule = prepareBaraka(
+      { caption: partialCreditCaption },
+      {
+        source_caption: partialCreditCaption,
+        schedule_entries: [
+          {
+            date: firstDateLabel,
+            time: "21:00",
+            title: "Alpha",
+            artists: ["Alpha"],
+            description: "DJ set.",
+            source_text: `${firstDateLabel} DJ Alpha 21H`,
+          },
+          {
+            date: thirdDateLabel,
+            time: "23:00",
+            title: "Charlie",
+            artists: ["Charlie"],
+            description: "DJ set.",
+            source_text: `${thirdDateLabel} DJ Charlie 23H`,
+          },
+        ],
+      },
+    );
+    assert.equal(partialCreditSchedule.length, 3);
+    assert.equal(partialCreditSchedule[1].kind, "ok");
+    assert.equal(partialCreditSchedule[1].event.title, "DJ Bob");
+    assert.deepEqual(partialCreditSchedule[1].event.artists, ["DJ Bob"]);
+  }
+
+  const simpleSupplementCaption = [
+    `${firstDateLabel} - DJ Alpha 21H`,
+    `${secondDateLabel} - DJ Bravo 22H`,
+    `${thirdDateLabel} - DJ Charlie 23H`,
+  ].join("\n");
+  const simpleSupplement = prepareBaraka(
+    { caption: simpleSupplementCaption },
+    {
+      source_caption: simpleSupplementCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "21:00",
+          title: "Alpha",
+          artists: ["Alpha"],
+          description: "DJ set.",
+          source_text: `${firstDateLabel} DJ Alpha 21H`,
+        },
+        {
+          date: thirdDateLabel,
+          time: "23:00",
+          title: "Charlie",
+          artists: ["Charlie"],
+          description: "DJ set.",
+          source_text: `${thirdDateLabel} DJ Charlie 23H`,
+        },
+      ],
+    },
+  );
+  assert.equal(simpleSupplement[1].kind, "ok");
+  assert.equal(simpleSupplement[1].event.title, "DJ Bravo");
+  assert.deepEqual(simpleSupplement[1].event.artists, ["DJ Bravo"]);
+
+  const sameDateCaption = [
+    `${firstDateLabel} - DJ Alice 21H`,
+    `${firstDateLabel} - DJ Bob 23H`,
+    `${secondDateLabel} - DJ Charlie 22H`,
+  ].join("\n");
+  const sameDateActs = prepareBaraka(
+    { caption: sameDateCaption },
+    {
+      source_caption: sameDateCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "21:00",
+          title: "Alice",
+          artists: ["Alice"],
+          description: "DJ set.",
+          source_text: `${firstDateLabel} DJ Alice 21H`,
+        },
+        {
+          date: secondDateLabel,
+          time: "22:00",
+          title: "Charlie",
+          artists: ["Charlie"],
+          description: "DJ set.",
+          source_text: `${secondDateLabel} DJ Charlie 22H`,
+        },
+      ],
+    },
+  );
+  assert.deepEqual(
+    sameDateActs.map((result) => {
+      assert.equal(result.kind, "ok");
+      return { date: result.event.date, artists: result.event.artists };
+    }),
+    [
+      { date: firstDate, artists: ["Alice"] },
+      { date: firstDate, artists: ["DJ Bob"] },
+      { date: secondDate, artists: ["Charlie"] },
+    ],
+    "Distinct same-date acts must survive deterministic reconciliation.",
+  );
 
   const malformedCombinedCaption =
     `FRIDAY ${firstDateLabel} / ${secondDateLabel} / SUNDAY ${thirdDateLabel} | 21H`;
@@ -1292,6 +1430,23 @@ function runHashtagOnlyScheduleIdentityQa() {
     "Short billed act names must remain valid when token-bound billing evidence exists.",
   );
 
+  const oneCharacterCaption =
+    `${firstDateLabel} - DJ X\n${secondDateLabel} - #X\n#X`;
+  const oneCharacterRows = prepareBaraka(
+    { caption: oneCharacterCaption },
+    { source_caption: oneCharacterCaption },
+  );
+  assert.equal(oneCharacterRows.length, 2);
+  assert.equal(oneCharacterRows[0].kind, "ok");
+  assert.equal(oneCharacterRows[0].event.title, "DJ X");
+  assert.deepEqual(oneCharacterRows[0].event.artists, ["DJ X"]);
+  assert.equal(oneCharacterRows[1].kind, "ok");
+  assert.deepEqual(oneCharacterRows[1].event.artists, []);
+  assert.equal(
+    readPreparedNormalizedFields(oneCharacterRows[1]).titleSource,
+    "unnamed_schedule_fallback",
+  );
+
   const captionHashtagRows = assertTwoUnnamedFallbacks(
     prepareBaraka(
       { caption: `${firstDateLabel} - #greizaci\n${secondDateLabel} - #greizaci` },
@@ -1351,6 +1506,32 @@ function runHashtagOnlyScheduleIdentityQa() {
     malformedAltRows.filter((result) => result.kind === "ok").length,
     0,
     "Alt-text combined schedules with an unpaired date must fail closed.",
+  );
+
+  const captionAltCaption = [
+    `${firstDateLabel} - DJ Alpha 21H`,
+    `${secondDateLabel} - DJ Alice 22H`,
+  ].join("\n");
+  const captionAltUnion = prepareBaraka(
+    {
+      caption: captionAltCaption,
+      altText:
+        `Photo text: '${secondDateLabel} - DJ Bob 23H ${thirdDateLabel} - DJ Charlie 24H'.`,
+    },
+    { source_caption: captionAltCaption },
+  );
+  assert.deepEqual(
+    captionAltUnion.map((result) => {
+      assert.equal(result.kind, "ok");
+      return { date: result.event.date, artists: result.event.artists };
+    }),
+    [
+      { date: firstDate, artists: ["DJ Alpha"] },
+      { date: secondDate, artists: ["DJ Alice"] },
+      { date: secondDate, artists: ["DJ Bob"] },
+      { date: thirdDate, artists: ["DJ Charlie"] },
+    ],
+    "Caption/alt reconciliation must preserve distinct same-date acts while deduplicating coverage.",
   );
 
   const rowScopedCaption =
