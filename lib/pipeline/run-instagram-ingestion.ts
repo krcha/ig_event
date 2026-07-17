@@ -2269,6 +2269,27 @@ function isStrictScheduleIdentityRow(
     !unknownTokens.some((token) => NON_BILLING_CONTEXT_TOKENS.has(token));
 }
 
+function splitLogicalEvidenceClauses(value: string): string[] {
+  return value.split(/[|•·●▪‣∙◦‧⁃◆◇■□▸►▶]+/u);
+}
+
+function isNonBillingEvidenceClause(value: string): boolean {
+  const tokens = getSearchableTokens(value);
+  if (tokens.some((token) => ["hvala", "thank", "thanks", "zahvaljujemo"].includes(token))) {
+    return true;
+  }
+  return /\b(?:credit|credits|design|foto|fotografija|photo|photos|photography|powered|produced|production|produkcija|sponsor|sponsored|video|visuals)\s*(?::|by\b)/iu.test(
+    value,
+  );
+}
+
+function stripNonBillingIdentityClauses(value: string): string {
+  return splitLogicalEvidenceClauses(value)
+    .map((clause) => normalizeString(clause))
+    .filter((clause) => clause && !isNonBillingEvidenceClause(clause))
+    .join(" | ");
+}
+
 function hasScheduleAnchor(segment: string, segmentTokens: string[]): boolean {
   return /\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b/u.test(segment) ||
     /\b\d{1,2}(?::\d{2})?\s*(?:h|am|pm)\b|\b\d{1,2}:\d{2}\b/iu.test(segment) ||
@@ -2285,7 +2306,7 @@ function hasExplicitBilledIdentityEvidence(value: string, evidence: string): boo
     const line = normalizeString(rawLine);
     const lineTokens = getSearchableTokens(line);
     const lineHasScheduleAnchor = hasScheduleAnchor(line, lineTokens);
-    for (const rawSegment of line.split(/[|•·]+/u)) {
+    for (const rawSegment of splitLogicalEvidenceClauses(line)) {
       const segment = normalizeString(rawSegment);
       const segmentTokens = getSearchableTokens(segment);
       if (segmentTokens.length === 0) {
@@ -2371,9 +2392,15 @@ function sanitizeSplitEventIdentity(options: {
   post: InstagramScrapedPost;
   additionalEvidence?: string[];
 }): { title: string; artists: string[]; artistsWereSanitized: boolean } {
-  const originalArtists = options.rawArtists
+  const billableRawTitle = stripNonBillingIdentityClauses(options.rawTitle);
+  const titleClausesWereSanitized =
+    normalizeString(billableRawTitle) !== normalizeString(options.rawTitle);
+  const artistCandidates = options.rawArtists
     .map((artist) => normalizeArtistDisplayName(artist))
     .filter((artist) => titleContainsAlphanumeric(artist));
+  const originalArtists = titleClausesWereSanitized
+    ? artistCandidates.filter((artist) => containsNormalizedTokenSequence(billableRawTitle, artist))
+    : artistCandidates;
   const validArtists = originalArtists.filter((artist) =>
     !isHashtagOnlySourceIdentity(
       artist,
@@ -2382,25 +2409,28 @@ function sanitizeSplitEventIdentity(options: {
       "additional",
     ),
   );
-  const guardedTitle = isHashtagOnlySourceIdentity(
-    options.rawTitle,
+  const guardedTitle = !billableRawTitle || isHashtagOnlySourceIdentity(
+    billableRawTitle,
     options.post,
     options.additionalEvidence ?? [],
     "additional",
   )
     ? ""
-    : options.rawTitle;
-  const removedHashtagOnlyArtist = validArtists.length < originalArtists.length;
+    : billableRawTitle;
+  const artistsWereSanitized =
+    titleClausesWereSanitized ||
+    originalArtists.length < artistCandidates.length ||
+    validArtists.length < originalArtists.length;
   const titleListsEveryExtractedArtist =
-    originalArtists.length > 0 &&
-    originalArtists.every((artist) => containsNormalizedTokenSequence(guardedTitle, artist));
+    artistCandidates.length > 0 &&
+    artistCandidates.every((artist) => containsNormalizedTokenSequence(guardedTitle, artist));
   return {
     title:
-      removedHashtagOnlyArtist && titleListsEveryExtractedArtist
+      artistsWereSanitized && titleListsEveryExtractedArtist
         ? formatArtistTitleList(validArtists)
         : guardedTitle,
     artists: validArtists,
-    artistsWereSanitized: removedHashtagOnlyArtist,
+    artistsWereSanitized,
   };
 }
 
@@ -2732,7 +2762,7 @@ function extractCaptionSplitEventCandidates(
     });
   }
 
-  return hasMultipleResolvedSplitDates(entries) ? entries : [];
+  return entries;
 }
 
 function extractAltTextSplitEventCandidates(
@@ -2838,6 +2868,57 @@ function extractAltTextSplitEventCandidates(
   return hasMultipleResolvedSplitDates(entries) ? entries : [];
 }
 
+function getSplitCandidateDateKey(candidate: SplitEventCandidate): string {
+  return candidate.normalizedDate.isoDate ?? toSearchableText(candidate.rawDate);
+}
+
+function sortSplitCandidatesByDate(candidates: SplitEventCandidate[]): SplitEventCandidate[] {
+  return candidates
+    .map((candidate, index) => ({ candidate, index }))
+    .sort((left, right) => {
+      const leftKey = left.candidate.normalizedDate.isoDate ?? "9999-99-99";
+      const rightKey = right.candidate.normalizedDate.isoDate ?? "9999-99-99";
+      return leftKey.localeCompare(rightKey) || left.index - right.index;
+    })
+    .map(({ candidate }) => candidate);
+}
+
+function reconcileSplitCandidateCoverage(
+  primary: SplitEventCandidate[],
+  supplemental: SplitEventCandidate[],
+): SplitEventCandidate[] {
+  const reconciled = [...primary];
+  const supplementalByDate = new Map<string, SplitEventCandidate[]>();
+  for (const candidate of supplemental) {
+    const dateKey = getSplitCandidateDateKey(candidate);
+    if (!dateKey) {
+      continue;
+    }
+    supplementalByDate.set(dateKey, [...(supplementalByDate.get(dateKey) ?? []), candidate]);
+  }
+
+  for (const [dateKey, supplementalForDate] of supplementalByDate) {
+    const primaryIndexes = reconciled
+      .map((candidate, index) => ({ candidate, index }))
+      .filter(({ candidate }) => getSplitCandidateDateKey(candidate) === dateKey)
+      .map(({ index }) => index);
+    if (primaryIndexes.length === 0) {
+      reconciled.push(...supplementalForDate);
+      continue;
+    }
+    if (
+      primaryIndexes.length === 1 &&
+      supplementalForDate.length === 1 &&
+      reconciled[primaryIndexes[0]]?.titleUsedFallback &&
+      !supplementalForDate[0]?.titleUsedFallback
+    ) {
+      reconciled[primaryIndexes[0]] = supplementalForDate[0];
+    }
+  }
+
+  return sortSplitCandidatesByDate(reconciled);
+}
+
 function extractSplitEventCandidates(
   post: InstagramScrapedPost,
   extracted: ExtractedEventData,
@@ -2850,22 +2931,22 @@ function extractSplitEventCandidates(
     eventType,
     venue,
   );
-  if (modelCandidates.length > 0) {
-    return modelCandidates;
-  }
-
   const captionCandidates = extractCaptionSplitEventCandidates(
     post,
     extracted,
     eventType,
     venue,
   );
-  if (captionCandidates.length > 1) {
-    return captionCandidates;
-  }
-
   const altTextCandidates = extractAltTextSplitEventCandidates(post, eventType, venue);
-  return altTextCandidates.length > 1 ? altTextCandidates : [];
+  const deterministicCandidates = reconcileSplitCandidateCoverage(
+    captionCandidates,
+    altTextCandidates,
+  );
+
+  if (modelCandidates.length > 0) {
+    return reconcileSplitCandidateCoverage(modelCandidates, deterministicCandidates);
+  }
+  return deterministicCandidates.length > 1 ? deterministicCandidates : [];
 }
 
 function buildSplitEventDescription(

@@ -1188,6 +1188,44 @@ function runHashtagOnlyScheduleIdentityQa() {
     "Combined weekday/date parsing must preserve every explicit occurrence.",
   );
 
+  const partialModelSchedule = prepareBaraka(
+    { caption: threeDayCaption },
+    {
+      source_caption: threeDayCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "21:00",
+          title: "DJ Friday",
+          artists: ["DJ Friday"],
+          description: "Friday DJ set.",
+          source_text: `${firstDateLabel} DJ Friday 21H`,
+        },
+        {
+          date: secondDateLabel,
+          time: "21:00",
+          title: "DJ Saturday",
+          artists: ["DJ Saturday"],
+          description: "Saturday DJ set.",
+          source_text: `${secondDateLabel} DJ Saturday 21H`,
+        },
+      ],
+    },
+  );
+  assert.deepEqual(
+    partialModelSchedule.map((result) => {
+      assert.equal(result.kind, "ok");
+      return result.event.date;
+    }),
+    [firstDate, secondDate, thirdDate],
+    "A partial model schedule must be supplemented with every independently parsed explicit date.",
+  );
+  assert.equal(
+    readPreparedNormalizedFields(partialModelSchedule[2]).titleSource,
+    "unnamed_schedule_fallback",
+  );
+  assert.deepEqual(partialModelSchedule[2].event.artists, []);
+
   const malformedCombinedCaption =
     `FRIDAY ${firstDateLabel} / ${secondDateLabel} / SUNDAY ${thirdDateLabel} | 21H`;
   const malformedCombined = prepareBaraka(
@@ -1458,21 +1496,24 @@ function runHashtagOnlyScheduleIdentityQa() {
     "A separately billed co-artist must remain valid even when the same name is also a hashtag.",
   );
 
-  const mixedCreditAndBillingCaption = `${firstDateLabel} Photo: Alice | DJ Bob 21H\n#Bob`;
-  const mixedCreditAndBilling = prepareBaraka(
-    { caption: mixedCreditAndBillingCaption },
-    {
-      title: "Bob",
-      date: firstDateLabel,
-      time: "21:00",
-      artists: ["Bob"],
-      source_caption: mixedCreditAndBillingCaption,
-    },
-  );
-  assert.equal(mixedCreditAndBilling.length, 1);
-  assert.equal(mixedCreditAndBilling[0].kind, "ok");
-  assert.equal(mixedCreditAndBilling[0].event.title, "Bob");
-  assert.deepEqual(mixedCreditAndBilling[0].event.artists, ["Bob"]);
+  for (const separator of ["|", "●", "▪", "‣", "∙"]) {
+    const mixedCreditAndBillingCaption =
+      `${firstDateLabel} Photo: Alice ${separator} DJ Bob 21H\n#Bob`;
+    const mixedCreditAndBilling = prepareBaraka(
+      { caption: mixedCreditAndBillingCaption },
+      {
+        title: "Bob",
+        date: firstDateLabel,
+        time: "21:00",
+        artists: ["Bob"],
+        source_caption: mixedCreditAndBillingCaption,
+      },
+    );
+    assert.equal(mixedCreditAndBilling.length, 1);
+    assert.equal(mixedCreditAndBilling[0].kind, "ok");
+    assert.equal(mixedCreditAndBilling[0].event.title, "Bob");
+    assert.deepEqual(mixedCreditAndBilling[0].event.artists, ["Bob"]);
+  }
 
   const longThankYouCaption =
     `${firstDateLabel} Hvala vam puno svima od srca na dugogodišnjoj podršci DJ Bob 21H\n#Bob`;
