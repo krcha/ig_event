@@ -2527,7 +2527,7 @@ function extractModelSplitEventCandidates(
       weekdayEvidence: sourceLine,
     });
     const time = consistency.sanitizedTime;
-    const dedupeKey = `${normalizedDate.isoDate ?? rawDate}:${toSearchableText(lineTitle)}`;
+    const dedupeKey = `${normalizedDate.isoDate ?? rawDate}:${toSearchableText(lineTitle)}:${time ?? ""}`;
     if (seenEntries.has(dedupeKey)) {
       continue;
     }
@@ -2639,7 +2639,7 @@ function extractCombinedWeekdayDateSplitEventCandidates(options: {
       continue;
     }
     for (const entry of lineEntries) {
-      const dedupeKey = `${entry.normalizedDate.isoDate ?? entry.rawDate}:${toSearchableText(entry.lineTitle)}`;
+      const dedupeKey = `${entry.normalizedDate.isoDate ?? entry.rawDate}:${toSearchableText(entry.lineTitle)}:${entry.time ?? ""}`;
       if (!seenEntries.has(dedupeKey)) {
         seenEntries.add(dedupeKey);
         combinedEntries.push(entry);
@@ -2744,7 +2744,7 @@ function extractCaptionSplitEventCandidates(
       weekdayEvidence: line,
     });
 
-    const dedupeKey = `${normalizedDate.isoDate}:${toSearchableText(lineTitle)}`;
+    const dedupeKey = `${normalizedDate.isoDate}:${toSearchableText(lineTitle)}:${time ?? ""}`;
     if (seenEntries.has(dedupeKey)) {
       continue;
     }
@@ -2851,7 +2851,7 @@ function extractAltTextSplitEventCandidates(
       time,
       weekdayEvidence: sourceLine,
     });
-    const dedupeKey = `${normalizedDate.isoDate ?? rawDate}:${toSearchableText(lineTitle)}`;
+    const dedupeKey = `${normalizedDate.isoDate ?? rawDate}:${toSearchableText(lineTitle)}:${time ?? ""}`;
     if (seenEntries.has(dedupeKey)) {
       continue;
     }
@@ -2919,6 +2919,45 @@ function splitCandidatesShareIdentity(
   );
 }
 
+function mergeEquivalentSplitCandidates(
+  existing: SplitEventCandidate,
+  supplemental: SplitEventCandidate,
+): SplitEventCandidate {
+  const artists = [...existing.artists];
+  for (const artist of supplemental.artists) {
+    if (!artists.some((current) => splitIdentityValuesMatch(current, artist))) {
+      artists.push(artist);
+    }
+  }
+  const artistsAdded = artists.length > existing.artists.length;
+  const fillsTime = !existing.time && Boolean(supplemental.time);
+  const useSupplementalEvidence = artistsAdded || fillsTime;
+
+  return {
+    ...existing,
+    artists,
+    artistsWereSanitized: Boolean(
+      existing.artistsWereSanitized || supplemental.artistsWereSanitized,
+    ),
+    ...(!existing.time && supplemental.time ? { time: supplemental.time } : {}),
+    rawTime:
+      existing.rawTime ||
+      (fillsTime ? supplemental.rawTime || supplemental.time : existing.time) ||
+      "",
+    consistencyIssues: [
+      ...new Set([...existing.consistencyIssues, ...supplemental.consistencyIssues]),
+    ],
+    description: existing.description ?? supplemental.description,
+    ...(useSupplementalEvidence
+      ? {
+          source: supplemental.source,
+          sourceLine: supplemental.sourceLine,
+          titleSource: existing.titleSource ?? existing.source,
+        }
+      : {}),
+  };
+}
+
 function reconcileSplitCandidateCoverage(
   primary: SplitEventCandidate[],
   supplemental: SplitEventCandidate[],
@@ -2939,14 +2978,24 @@ function reconcileSplitCandidateCoverage(
       continue;
     }
     if (candidate.titleUsedFallback) {
+      if (sameDateIndexes.length === 1) {
+        const existingIndex = sameDateIndexes[0];
+        const existing = reconciled[existingIndex];
+        if (existing) {
+          reconciled[existingIndex] = mergeEquivalentSplitCandidates(existing, candidate);
+        }
+      }
       continue;
     }
-    if (
-      sameDateIndexes.some((index) => {
-        const existing = reconciled[index];
-        return existing ? splitCandidatesShareIdentity(existing, candidate) : false;
-      })
-    ) {
+    const equivalentIndex = sameDateIndexes.find((index) => {
+      const existing = reconciled[index];
+      return existing ? splitCandidatesShareIdentity(existing, candidate) : false;
+    });
+    if (equivalentIndex !== undefined) {
+      const existing = reconciled[equivalentIndex];
+      if (existing) {
+        reconciled[equivalentIndex] = mergeEquivalentSplitCandidates(existing, candidate);
+      }
       continue;
     }
     const fallbackIndex = sameDateIndexes.find((index) => reconciled[index]?.titleUsedFallback);

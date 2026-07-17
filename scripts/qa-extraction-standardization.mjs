@@ -1253,7 +1253,25 @@ function runHashtagOnlyScheduleIdentityQa() {
   );
   assert.deepEqual(partialModelSchedule[2].event.artists, []);
 
-  for (const separator of ["|", "•", "·", "●"]) {
+  for (const separator of [
+    "|",
+    "•",
+    "·",
+    "●",
+    "▪",
+    "‣",
+    "∙",
+    "◦",
+    "‧",
+    "⁃",
+    "◆",
+    "◇",
+    "■",
+    "□",
+    "▸",
+    "►",
+    "▶",
+  ]) {
     const partialCreditCaption = [
       `${firstDateLabel} - DJ Alpha 21H`,
       `${secondDateLabel} Photo: Alice ${separator} DJ Bob 22H`,
@@ -1362,6 +1380,152 @@ function runHashtagOnlyScheduleIdentityQa() {
       { date: secondDate, artists: ["Charlie"] },
     ],
     "Distinct same-date acts must survive deterministic reconciliation.",
+  );
+
+  const equivalentEvidenceCaption = [
+    `${firstDateLabel} - DJ Bob 22H`,
+    `${secondDateLabel} - DJ Charlie 23H`,
+  ].join("\n");
+  const equivalentArtistEvidence = prepareBaraka(
+    { caption: equivalentEvidenceCaption },
+    {
+      source_caption: equivalentEvidenceCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "22:00",
+          title: "Bob",
+          artists: [],
+          description: "DJ set.",
+          source_text: `${firstDateLabel} DJ Bob 22H`,
+        },
+        {
+          date: secondDateLabel,
+          time: "23:00",
+          title: "Charlie",
+          artists: ["Charlie"],
+          description: "DJ set.",
+          source_text: `${secondDateLabel} DJ Charlie 23H`,
+        },
+      ],
+    },
+  );
+  assert.equal(equivalentArtistEvidence[0].kind, "ok");
+  assert.equal(equivalentArtistEvidence[0].event.title, "Bob");
+  assert.deepEqual(equivalentArtistEvidence[0].event.artists, ["DJ Bob"]);
+  assert.equal(equivalentArtistEvidence[0].event.time, "22:00");
+  const equivalentArtistFields = readPreparedNormalizedFields(equivalentArtistEvidence[0]);
+  assert.equal(equivalentArtistFields.titleSource, "poster_schedule");
+  assert.equal(equivalentArtistFields.splitSource, "caption_schedule");
+  assert.match(equivalentArtistFields.splitSourceLine, /DJ Bob 22H/u);
+
+  const equivalentTimeEvidence = prepareBaraka(
+    { caption: equivalentEvidenceCaption },
+    {
+      source_caption: equivalentEvidenceCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Bob",
+          artists: ["Bob"],
+          description: "DJ set.",
+          source_text: `${firstDateLabel} DJ Bob`,
+        },
+        {
+          date: secondDateLabel,
+          time: "23:00",
+          title: "Charlie",
+          artists: ["Charlie"],
+          description: "DJ set.",
+          source_text: `${secondDateLabel} DJ Charlie 23H`,
+        },
+      ],
+    },
+  );
+  assert.equal(equivalentTimeEvidence[0].kind, "ok");
+  assert.equal(equivalentTimeEvidence[0].event.time, "22:00");
+  assert.deepEqual(equivalentTimeEvidence[0].event.artists, ["Bob"]);
+  const equivalentTimeFields = readPreparedNormalizedFields(equivalentTimeEvidence[0]);
+  assert.equal(equivalentTimeFields.timeSource, "schedule_entry");
+  assert.match(equivalentTimeFields.timeEvidenceText, /22H/u);
+  assert.equal(equivalentTimeFields.splitSource, "caption_schedule");
+
+  const combinedTimeOnlyCaption =
+    `FRIDAY ${firstDateLabel} / SATURDAY ${secondDateLabel} | 21H`;
+  const fallbackTimeEnrichment = prepareBaraka(
+    { caption: combinedTimeOnlyCaption },
+    {
+      source_caption: combinedTimeOnlyCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Bob",
+          artists: ["Bob"],
+          description: "DJ set.",
+          source_text: `${firstDateLabel} DJ Bob`,
+        },
+        {
+          date: secondDateLabel,
+          time: "",
+          title: "Charlie",
+          artists: ["Charlie"],
+          description: "DJ set.",
+          source_text: `${secondDateLabel} DJ Charlie`,
+        },
+      ],
+    },
+  );
+  assert.deepEqual(
+    fallbackTimeEnrichment.map((result) => {
+      assert.equal(result.kind, "ok");
+      return result.event.time;
+    }),
+    ["21:00", "21:00"],
+    "A date-only fallback row may enrich the sole same-date candidate's explicit time.",
+  );
+
+  const repeatedActCaption = [
+    `${firstDateLabel} - DJ Bob 21H`,
+    `${firstDateLabel} - DJ Bob 23H`,
+    `${secondDateLabel} - DJ Charlie 22H`,
+  ].join("\n");
+  const repeatedActTimes = prepareBaraka(
+    { caption: repeatedActCaption },
+    {
+      source_caption: repeatedActCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "21:00",
+          title: "Bob",
+          artists: ["Bob"],
+          description: "DJ set.",
+          source_text: `${firstDateLabel} DJ Bob 21H`,
+        },
+        {
+          date: secondDateLabel,
+          time: "22:00",
+          title: "Charlie",
+          artists: ["Charlie"],
+          description: "DJ set.",
+          source_text: `${secondDateLabel} DJ Charlie 22H`,
+        },
+      ],
+    },
+  );
+  assert.deepEqual(
+    repeatedActTimes.map((result) => {
+      assert.equal(result.kind, "ok");
+      return { title: result.event.title, time: result.event.time };
+    }),
+    [
+      { title: "Bob", time: "21:00" },
+      { title: "DJ Bob", time: "23:00" },
+      { title: "Charlie", time: "22:00" },
+    ],
+    "The same billed act at different explicit times must remain distinct events.",
   );
 
   const malformedCombinedCaption =
