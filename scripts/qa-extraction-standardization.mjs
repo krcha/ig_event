@@ -322,6 +322,11 @@ function runPromptQa() {
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /multiple dates\/times are explicit.*keep schedule_entries empty.*pending unnamed fallbacks/i,
+    "Prompt must leave unnamed schedules to deterministic pending fallback handling.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
     /ONLY SOURCE-GROUNDED TITLES/i,
     "Prompt must require source-grounded schedule titles.",
   );
@@ -1026,28 +1031,11 @@ function runHashtagOnlyScheduleIdentityQa() {
       date: "",
       time: "",
       venue: "BARAKA BAŠTA",
-      artists: ["greizaci"],
+      artists: [],
       category: "nightlife",
       description: "Party nights on Friday and Saturday starting at 21:00.",
       source_caption: caption,
-      schedule_entries: [
-        {
-          date: firstDateLabel,
-          time: "21:00",
-          title: "greizaci",
-          artists: ["greizaci"],
-          description: "Party night at BARAKA BAŠTA starting at 21:00.",
-          source_text: `PETAK ${firstDateLabel} 21H`,
-        },
-        {
-          date: secondDateLabel,
-          time: "21:00",
-          title: "greizaci",
-          artists: ["greizaci"],
-          description: "Party night at BARAKA BAŠTA starting at 21:00.",
-          source_text: `SUBOTA ${secondDateLabel} 21H`,
-        },
-      ],
+      schedule_entries: [],
     }),
     "https://cdn.example.com/baraka.jpg",
     { baraka_basta: "BARAKA BAŠTA" },
@@ -1081,10 +1069,220 @@ function runHashtagOnlyScheduleIdentityQa() {
     assert.ok(fields.moderationPendingReasons.includes("requires_human_approval"));
   }
 
-  const topLevelHashtagOnly = assertSingleOkPreparedEvent(
+  const prepareBaraka = (postOverrides, extractedOverrides) =>
     prepareEventsForInsert(
       makeInstagramPost({
         caption,
+        postType: "image",
+        username: "baraka_basta",
+        ...postOverrides,
+      }),
+      makeExtractedEvent({
+        title: "",
+        date: "",
+        time: "",
+        venue: "BARAKA BAŠTA",
+        artists: [],
+        category: "nightlife",
+        source_caption: caption,
+        schedule_entries: [],
+        ...extractedOverrides,
+      }),
+      "https://cdn.example.com/baraka-adversarial.jpg",
+      { baraka_basta: "BARAKA BAŠTA" },
+      {},
+      { baraka_basta: "BARAKA BAŠTA" },
+    );
+  const assertTwoUnnamedFallbacks = (results, label) => {
+    const okResults = results.map((result) => {
+      assert.equal(result.kind, "ok", label);
+      return result;
+    });
+    assert.equal(okResults.length, 2, label);
+    for (const result of okResults) {
+      const fields = readPreparedNormalizedFields(result);
+      assert.deepEqual(result.event.artists, [], label);
+      assert.equal(fields.titleSource, "unnamed_schedule_fallback", label);
+      assert.equal(fields.titleUsedFallback, true, label);
+      assert.ok(fields.moderationSignals.includes("fallback_title"), label);
+    }
+    return okResults;
+  };
+
+  const modelHashtagRows = assertTwoUnnamedFallbacks(
+    prepareBaraka(
+      {},
+      {
+        artists: ["greizaci"],
+        schedule_entries: [
+          {
+            date: firstDateLabel,
+            time: "21:00",
+            title: "greizaci",
+            artists: ["greizaci"],
+            description: "Party night at BARAKA BAŠTA.",
+            source_text: `PETAK ${firstDateLabel} 21H`,
+          },
+          {
+            date: secondDateLabel,
+            time: "21:00",
+            title: "greizaci",
+            artists: ["greizaci"],
+            description: "Party night at BARAKA BAŠTA.",
+            source_text: `SUBOTA ${secondDateLabel} 21H`,
+          },
+        ],
+      },
+    ),
+    "Model schedule rows must not promote hashtag-only identities.",
+  );
+  assert.ok(modelHashtagRows.every((result) => !result.event.title.includes("greizaci")));
+
+  const decoratedModelRows = assertTwoUnnamedFallbacks(
+    prepareBaraka(
+      {},
+      {
+        schedule_entries: [
+          {
+            date: firstDateLabel,
+            time: "21:00",
+            title: "DJ greizaci",
+            artists: ["DJ greizaci"],
+            description: "Party night at BARAKA BAŠTA.",
+            source_text: "",
+          },
+          {
+            date: secondDateLabel,
+            time: "21:00",
+            title: "greizaci live",
+            artists: ["greizaci live"],
+            description: "Party night at BARAKA BAŠTA.",
+            source_text: "",
+          },
+        ],
+      },
+    ),
+    "DJ/live decorations must not evade the hashtag-only guard.",
+  );
+  assert.ok(decoratedModelRows.every((result) => !/greizaci/iu.test(result.event.title)));
+
+  const captionHashtagRows = assertTwoUnnamedFallbacks(
+    prepareBaraka(
+      { caption: `${firstDateLabel} - #greizaci\n${secondDateLabel} - #greizaci` },
+      {
+        source_caption: `${firstDateLabel} - #greizaci\n${secondDateLabel} - #greizaci`,
+      },
+    ),
+    "Caption schedule rows containing only hashtags must use unnamed fallbacks.",
+  );
+  assert.ok(captionHashtagRows.every((result) => !result.event.title.includes("#")));
+
+  const altHashtagRows = assertTwoUnnamedFallbacks(
+    prepareBaraka(
+      {
+        caption: "#greizaci",
+        altText:
+          `Photo by BARAKA BAŠTA. Text says '${firstDateLabel} - #greizaci ${secondDateLabel} - #greizaci'.`,
+      },
+      { source_caption: "#greizaci" },
+    ),
+    "Alt-text schedule rows containing only hashtags must use unnamed fallbacks.",
+  );
+  assert.ok(altHashtagRows.every((result) => !result.event.title.includes("#")));
+
+  const posterOnlyBilled = prepareBaraka(
+    {},
+    {
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "21:00",
+          title: "greizaci",
+          artists: ["greizaci"],
+          description: "DJ set at BARAKA BAŠTA.",
+          source_text: `${firstDateLabel} DJ greizaci 21H`,
+        },
+        {
+          date: secondDateLabel,
+          time: "21:00",
+          title: "greizaci",
+          artists: ["greizaci"],
+          description: "DJ set at BARAKA BAŠTA.",
+          source_text: `${secondDateLabel} DJ greizaci 21H`,
+        },
+      ],
+    },
+  );
+  assert.deepEqual(
+    posterOnlyBilled.map((result) => {
+      assert.equal(result.kind, "ok");
+      return { title: result.event.title, artists: result.event.artists };
+    }),
+    [
+      { title: "greizaci", artists: ["greizaci"] },
+      { title: "greizaci", artists: ["greizaci"] },
+    ],
+    "A direct billed performer in poster row source_text must remain available for human review.",
+  );
+
+  const mixedArtists = prepareBaraka(
+    { caption: `${caption}\nDJ Legit` },
+    {
+      source_caption: `${caption}\nDJ Legit`,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "21:00",
+          title: "DJ Legit & greizaci",
+          artists: ["DJ Legit", "greizaci"],
+          description: "DJ set at BARAKA BAŠTA.",
+          source_text: `${firstDateLabel} DJ Legit 21H`,
+        },
+        {
+          date: secondDateLabel,
+          time: "21:00",
+          title: "DJ Legit & greizaci",
+          artists: ["DJ Legit", "greizaci"],
+          description: "DJ set at BARAKA BAŠTA.",
+          source_text: `${secondDateLabel} DJ Legit 21H`,
+        },
+      ],
+    },
+  );
+  assert.deepEqual(
+    mixedArtists.map((result) => {
+      assert.equal(result.kind, "ok");
+      return { title: result.event.title, artists: result.event.artists };
+    }),
+    [
+      { title: "DJ Legit", artists: ["DJ Legit"] },
+      { title: "DJ Legit", artists: ["DJ Legit"] },
+    ],
+    "Mixed rows must retain billed artists while removing hashtag-only identities.",
+  );
+
+  const nonBillingCaption = `${firstDateLabel} | 21H\nHvala greizaci na podršci.\n#greizaci`;
+  const nonBillingMention = assertSingleOkPreparedEvent(
+    prepareBaraka(
+      { caption: nonBillingCaption },
+      {
+        title: "DJ greizaci",
+        date: firstDateLabel,
+        time: "21:00",
+        artists: ["greizaci"],
+        source_caption: nonBillingCaption,
+      },
+    ),
+  );
+  assert.equal(nonBillingMention.event.title, "BARAKA BAŠTA");
+  assert.deepEqual(nonBillingMention.event.artists, []);
+  assert.equal(readPreparedNormalizedFields(nonBillingMention).titleUsedFallback, true);
+
+  const singleHashtagCaption = `${firstDateLabel} | 21H\n#greizaci`;
+  const topLevelHashtagOnly = assertSingleOkPreparedEvent(
+    prepareEventsForInsert(
+      makeInstagramPost({
+        caption: singleHashtagCaption,
         postType: "image",
         username: "baraka_basta",
       }),
@@ -1095,7 +1293,7 @@ function runHashtagOnlyScheduleIdentityQa() {
         venue: "BARAKA BAŠTA",
         artists: [],
         category: "nightlife",
-        source_caption: caption,
+        source_caption: singleHashtagCaption,
         schedule_entries: [],
       }),
       "https://cdn.example.com/baraka-single.jpg",
