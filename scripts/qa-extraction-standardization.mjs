@@ -1772,6 +1772,39 @@ function runHashtagOnlyScheduleIdentityQa() {
     "Fallback clocks split between caption and alt text must be grouped before enrichment.",
   );
 
+  const reversedSourceCaption = [
+    `${firstDateLabel} | 21H`,
+    `${secondDateLabel} - DJ Charlie 22H`,
+  ].join("\n");
+  const reversedSourceAlt = [
+    `${firstDateLabel} - DJ Bob`,
+    `${firstDateLabel} | 23H`,
+    `${secondDateLabel} - DJ Charlie 22H`,
+  ].join("\n");
+  const reversedCaptionAltFallbackTimes = prepareBaraka(
+    {
+      caption: reversedSourceCaption,
+      altText: reversedSourceAlt,
+    },
+    {
+      source_caption: reversedSourceCaption,
+      schedule_entries: multipleFallbackModelSchedule,
+    },
+  );
+  assert.deepEqual(
+    summarizeFallbackRows(reversedCaptionAltFallbackTimes),
+    expectedMultipleFallbackRows,
+    "Named candidates from alt text must not replace caption fallback clocks before global reconciliation.",
+  );
+  assert.deepEqual(
+    reversedCaptionAltFallbackTimes.map((result) => {
+      assert.equal(result.kind, "ok");
+      return readPreparedNormalizedFields(result).splitSource;
+    }),
+    ["poster_schedule", "caption_schedule", "alt_text_schedule", "poster_schedule"],
+    "Caption/alt fallback provenance must remain attached to each retained clock.",
+  );
+
   const exactCombinedDuplicateCaption = [
     `FRIDAY ${firstDateLabel} / SATURDAY ${secondDateLabel} | 21H`,
     `${firstDateLabel} | 21H`,

@@ -3079,9 +3079,20 @@ function reconcileSplitCandidateCoverage(
       }
       continue;
     }
-    const fallbackIndex = sameDateIndexes.find((index) => reconciled[index]?.titleUsedFallback);
-    if (fallbackIndex !== undefined) {
-      reconciled[fallbackIndex] = candidate;
+    const matchingFallbackIndex = sameDateIndexes.find((index) => {
+      const existing = reconciled[index];
+      return Boolean(
+        existing?.titleUsedFallback &&
+        existing.time &&
+        candidate.time &&
+        existing.time === candidate.time,
+      );
+    });
+    if (matchingFallbackIndex !== undefined) {
+      const fallback = reconciled[matchingFallbackIndex];
+      if (fallback) {
+        reconciled[matchingFallbackIndex] = mergeEquivalentSplitCandidates(candidate, fallback);
+      }
       continue;
     }
     reconciled.push(candidate);
@@ -3109,10 +3120,11 @@ function extractSplitEventCandidates(
     venue,
   );
   const altTextCandidates = extractAltTextSplitEventCandidates(post, eventType, venue);
-  const deterministicCandidates = reconcileSplitCandidateCoverage(
+  const deterministicUnion = reconcileSplitCandidateCoverage(
     captionCandidates,
     altTextCandidates,
   );
+  const deterministicCandidates = reconcileSplitCandidateCoverage([], deterministicUnion);
 
   if (modelCandidates.length > 0) {
     return reconcileSplitCandidateCoverage(modelCandidates, deterministicCandidates);
