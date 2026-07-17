@@ -1747,6 +1747,31 @@ function runHashtagOnlyScheduleIdentityQa() {
     "Conflicting fallback-clock reconciliation must be invariant to source-row order.",
   );
 
+  const splitCaptionFallbackTimes = [
+    `${firstDateLabel} - DJ Bob`,
+    `${firstDateLabel} | 21H`,
+    `${secondDateLabel} - DJ Charlie 22H`,
+  ].join("\n");
+  const splitAltFallbackTimes = [
+    `${firstDateLabel} | 23H`,
+    `${secondDateLabel} - DJ Charlie 22H`,
+  ].join("\n");
+  const captionAltFallbackTimes = prepareBaraka(
+    {
+      caption: splitCaptionFallbackTimes,
+      altText: splitAltFallbackTimes,
+    },
+    {
+      source_caption: splitCaptionFallbackTimes,
+      schedule_entries: multipleFallbackModelSchedule,
+    },
+  );
+  assert.deepEqual(
+    summarizeFallbackRows(captionAltFallbackTimes),
+    expectedMultipleFallbackRows,
+    "Fallback clocks split between caption and alt text must be grouped before enrichment.",
+  );
+
   const exactCombinedDuplicateCaption = [
     `FRIDAY ${firstDateLabel} / SATURDAY ${secondDateLabel} | 21H`,
     `${firstDateLabel} | 21H`,

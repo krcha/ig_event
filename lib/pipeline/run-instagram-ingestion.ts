@@ -3020,7 +3020,7 @@ function reconcileSplitCandidateCoverage(
 ): SplitEventCandidate[] {
   const reconciled = [...primary];
   const fallbackTimesByDate = new Map<string, Set<string>>();
-  for (const candidate of supplemental) {
+  for (const candidate of [...primary, ...supplemental]) {
     if (!candidate.titleUsedFallback || !candidate.time) {
       continue;
     }
