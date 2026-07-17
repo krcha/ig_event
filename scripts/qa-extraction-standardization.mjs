@@ -1655,6 +1655,62 @@ function runHashtagOnlyScheduleIdentityQa() {
     "A pending hashtag-only artist must still be cleared when the exact row does not bill it.",
   );
 
+  const multipleFallbackModelSchedule = [
+    {
+      date: firstDateLabel,
+      time: "",
+      title: "Bob",
+      artists: ["Bob"],
+      description: "DJ set.",
+      source_text: `${firstDateLabel} DJ Bob`,
+    },
+    {
+      date: secondDateLabel,
+      time: "22:00",
+      title: "Charlie",
+      artists: ["Charlie"],
+      description: "DJ set.",
+      source_text: `${secondDateLabel} DJ Charlie 22H`,
+    },
+  ];
+  const summarizeFallbackRows = (results) =>
+    results.map((result) => {
+      assert.equal(result.kind, "ok");
+      const fields = readPreparedNormalizedFields(result);
+      return {
+        date: result.event.date,
+        time: result.event.time,
+        title: result.event.title,
+        titleSource: fields.titleSource,
+      };
+    });
+  const expectedMultipleFallbackRows = [
+    {
+      date: firstDate,
+      time: TBD_EVENT_TIME,
+      title: "Bob",
+      titleSource: "poster_schedule",
+    },
+    {
+      date: firstDate,
+      time: "21:00",
+      title: "Friday Night at BARAKA BAŠTA",
+      titleSource: "unnamed_schedule_fallback",
+    },
+    {
+      date: firstDate,
+      time: "23:00",
+      title: "Friday Night at BARAKA BAŠTA",
+      titleSource: "unnamed_schedule_fallback",
+    },
+    {
+      date: secondDate,
+      time: "22:00",
+      title: "Charlie",
+      titleSource: "poster_schedule",
+    },
+  ];
+
   const multipleFallbackTimesCaption = [
     `${firstDateLabel} | 21H`,
     `${firstDateLabel} | 23H`,
@@ -1664,41 +1720,31 @@ function runHashtagOnlyScheduleIdentityQa() {
     { caption: multipleFallbackTimesCaption },
     {
       source_caption: multipleFallbackTimesCaption,
-      schedule_entries: [
-        {
-          date: firstDateLabel,
-          time: "",
-          title: "Bob",
-          artists: ["Bob"],
-          description: "DJ set.",
-          source_text: `${firstDateLabel} DJ Bob`,
-        },
-        {
-          date: secondDateLabel,
-          time: "22:00",
-          title: "Charlie",
-          artists: ["Charlie"],
-          description: "DJ set.",
-          source_text: `${secondDateLabel} DJ Charlie 22H`,
-        },
-      ],
+      schedule_entries: multipleFallbackModelSchedule,
     },
   );
   assert.deepEqual(
-    multipleFallbackTimes.map((result) => {
-      assert.equal(result.kind, "ok");
-      return { date: result.event.date, time: result.event.time };
-    }),
-    [
-      { date: firstDate, time: "21:00" },
-      { date: firstDate, time: "23:00" },
-      { date: secondDate, time: "22:00" },
-    ],
-    "Multiple explicit same-date fallback times must not be assigned or discarded arbitrarily.",
+    summarizeFallbackRows(multipleFallbackTimes),
+    expectedMultipleFallbackRows,
+    "Conflicting fallback clocks must leave the named row untimed and preserve each clock.",
   );
-  assert.equal(
-    readPreparedNormalizedFields(multipleFallbackTimes[1]).titleSource,
-    "unnamed_schedule_fallback",
+
+  const reversedFallbackTimesCaption = [
+    `${firstDateLabel} | 23H`,
+    `${firstDateLabel} | 21H`,
+    `${secondDateLabel} - DJ Charlie 22H`,
+  ].join("\n");
+  const reversedFallbackTimes = prepareBaraka(
+    { caption: reversedFallbackTimesCaption },
+    {
+      source_caption: reversedFallbackTimesCaption,
+      schedule_entries: multipleFallbackModelSchedule,
+    },
+  );
+  assert.deepEqual(
+    summarizeFallbackRows(reversedFallbackTimes),
+    expectedMultipleFallbackRows,
+    "Conflicting fallback-clock reconciliation must be invariant to source-row order.",
   );
 
   const exactCombinedDuplicateCaption = [

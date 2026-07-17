@@ -2918,7 +2918,13 @@ function sortSplitCandidatesByDate(candidates: SplitEventCandidate[]): SplitEven
     .sort((left, right) => {
       const leftKey = left.candidate.normalizedDate.isoDate ?? "9999-99-99";
       const rightKey = right.candidate.normalizedDate.isoDate ?? "9999-99-99";
-      return leftKey.localeCompare(rightKey) || left.index - right.index;
+      const dateOrder = leftKey.localeCompare(rightKey);
+      if (dateOrder !== 0) {
+        return dateOrder;
+      }
+      const leftTime = left.candidate.time ?? "";
+      const rightTime = right.candidate.time ?? "";
+      return leftTime.localeCompare(rightTime) || left.index - right.index;
     })
     .map(({ candidate }) => candidate);
 }
@@ -3013,6 +3019,19 @@ function reconcileSplitCandidateCoverage(
   supplemental: SplitEventCandidate[],
 ): SplitEventCandidate[] {
   const reconciled = [...primary];
+  const fallbackTimesByDate = new Map<string, Set<string>>();
+  for (const candidate of supplemental) {
+    if (!candidate.titleUsedFallback || !candidate.time) {
+      continue;
+    }
+    const dateKey = getSplitCandidateDateKey(candidate);
+    if (!dateKey) {
+      continue;
+    }
+    const times = fallbackTimesByDate.get(dateKey) ?? new Set<string>();
+    times.add(candidate.time);
+    fallbackTimesByDate.set(dateKey, times);
+  }
 
   for (const candidate of supplemental) {
     const dateKey = getSplitCandidateDateKey(candidate);
@@ -3034,10 +3053,12 @@ function reconcileSplitCandidateCoverage(
       if (matchingTimeIndex !== undefined) {
         continue;
       }
-      if (sameDateIndexes.length === 1) {
-        const existingIndex = sameDateIndexes[0];
+      const uniqueFallbackTimes = fallbackTimesByDate.get(dateKey) ?? new Set<string>();
+      const untimedIndexes = sameDateIndexes.filter((index) => !reconciled[index]?.time);
+      if (uniqueFallbackTimes.size === 1 && untimedIndexes.length === 1 && candidate.time) {
+        const existingIndex = untimedIndexes[0];
         const existing = reconciled[existingIndex];
-        if (existing && !existing.time && candidate.time) {
+        if (existing) {
           reconciled[existingIndex] = mergeEquivalentSplitCandidates(existing, candidate);
           continue;
         }
