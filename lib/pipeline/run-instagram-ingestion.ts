@@ -369,6 +369,8 @@ type SplitEventCandidate = {
   description?: string;
   sourceLine: string;
   source: SplitEventCandidateSource;
+  titleSource?: SplitEventCandidateSource | "unnamed_schedule_fallback";
+  titleUsedFallback?: boolean;
 };
 
 type PrepareEventResult =
@@ -1508,21 +1510,22 @@ function normalizeEventTitle(
   contextCandidate: string | null;
 } {
   const rawTitle = normalizeString(extracted.title);
+  const usableRawTitle = isHashtagOnlySourceIdentity(rawTitle, post) ? "" : rawTitle;
   const captionText = normalizeString(post.caption);
-  const normalizedRawTitle = toSearchableText(rawTitle);
+  const normalizedRawTitle = toSearchableText(usableRawTitle);
   const normalizedCaption = toSearchableText(captionText);
   const titleAppearsInCaption =
     normalizedRawTitle.length > 0 && normalizedCaption.includes(normalizedRawTitle);
-  const weakSectionTitle = isWeakEventTitleSectionHeading(rawTitle);
+  const weakSectionTitle = isWeakEventTitleSectionHeading(usableRawTitle);
 
   if (
-    rawTitle &&
-    !isMeaninglessEventTitle(rawTitle) &&
+    usableRawTitle &&
+    !isMeaninglessEventTitle(usableRawTitle) &&
     !weakSectionTitle &&
-    (!isGenericEventTitle(rawTitle) || titleAppearsInCaption)
+    (!isGenericEventTitle(usableRawTitle) || titleAppearsInCaption)
   ) {
     return {
-      title: rawTitle,
+      title: usableRawTitle,
       source: "model",
       rawTitle,
       usedFallback: false,
@@ -1531,7 +1534,7 @@ function normalizeEventTitle(
   }
 
   const contextDerivedTitle = buildContextDerivedEventTitle(
-    rawTitle,
+    usableRawTitle,
     extracted,
     post,
     venue,
@@ -2054,6 +2057,60 @@ function buildSplitEventSourceLine(parts: Array<string | null | undefined>): str
     .join(" | ");
 }
 
+function stripHashtagTokens(value: string): string {
+  return normalizeString(value).replace(/#[\p{L}\p{N}_.-]+/gu, " ");
+}
+
+function isHashtagOnlySourceIdentity(
+  value: string,
+  post: InstagramScrapedPost,
+): boolean {
+  const candidate = toSearchableText(value);
+  if (!candidate) {
+    return false;
+  }
+
+  const caption = normalizeString(post.caption);
+  const hashtagIdentities = [...caption.matchAll(/#([\p{L}\p{N}_.-]+)/gu)]
+    .map((match) => toSearchableText(match[1] ?? ""))
+    .filter(Boolean);
+  if (!hashtagIdentities.includes(candidate)) {
+    return false;
+  }
+
+  const nonHashtagEvidence = [
+    stripHashtagTokens(caption),
+    stripHashtagTokens(extractPostAltTextEvidence(post.altText)),
+  ].join("\n");
+  return !containsNormalizedTokenSequence(nonHashtagEvidence, value);
+}
+
+function buildUnnamedScheduleFallbackTitle(options: {
+  eventType: string;
+  venue: string | null;
+  isoDate: string | null;
+}): string {
+  const weekday = options.isoDate
+    ? new Intl.DateTimeFormat("en-US", {
+        weekday: "long",
+        timeZone: "UTC",
+      }).format(new Date(`${options.isoDate}T00:00:00Z`))
+    : "";
+  const eventType = toSearchableText(options.eventType);
+  const eventLabel =
+    eventType === "nightlife" || eventType === "club"
+      ? "Night"
+      : eventType === "live music"
+        ? "Live music"
+        : eventType === "arts culture"
+          ? "Program"
+          : "Event";
+  const venue = normalizeString(options.venue ?? "");
+  return [weekday, eventLabel, venue ? `at ${venue}` : ""]
+    .filter(Boolean)
+    .join(" ");
+}
+
 function extractSplitEntryTime(value: string): string | undefined {
   return extractEventTimeFromText(value);
 }
@@ -2070,6 +2127,8 @@ function stripSplitEntryTime(value: string): string {
 function extractModelSplitEventCandidates(
   post: InstagramScrapedPost,
   extracted: ExtractedEventData,
+  eventType: string,
+  venue: string | null,
 ): SplitEventCandidate[] {
   if (extracted.schedule_entries.length === 0) {
     return [];
@@ -2081,20 +2140,23 @@ function extractModelSplitEventCandidates(
 
   for (const scheduleEntry of extracted.schedule_entries) {
     const rawDate = normalizeString(scheduleEntry.date);
+    const description = normalizeExtractedDescription(scheduleEntry.description);
+    const rawScheduleTime = normalizeString(scheduleEntry.time);
+    const rawModelTitle = cleanSplitCaptionEntryText(scheduleEntry.title);
+    const sourceLine =
+      normalizeString(scheduleEntry.source_text) ||
+      buildSplitEventSourceLine([rawDate, rawModelTitle, rawScheduleTime, description]);
+    const rawTitle = isHashtagOnlySourceIdentity(rawModelTitle, post)
+      ? ""
+      : rawModelTitle;
     const normalizedArtists = normalizeExtractedArtists(scheduleEntry.artists)
       .map((artist) => normalizeArtistDisplayName(artist))
-      .filter((artist) => titleContainsAlphanumeric(artist));
-    const rawTitle = cleanSplitCaptionEntryText(scheduleEntry.title);
-    const lineTitle = rawTitle || normalizedArtists.join(", ");
-    if (!rawDate || !lineTitle) {
+      .filter((artist) => titleContainsAlphanumeric(artist))
+      .filter((artist) => !isHashtagOnlySourceIdentity(artist, post));
+    if (!rawDate) {
       continue;
     }
 
-    const description = normalizeExtractedDescription(scheduleEntry.description);
-    const rawScheduleTime = normalizeString(scheduleEntry.time);
-    const sourceLine =
-      normalizeString(scheduleEntry.source_text) ||
-      buildSplitEventSourceLine([rawDate, rawTitle, rawScheduleTime, description]);
     const timeResolution = resolveEventTimeFromExtractionAndEvidence({
       rawDate,
       rawTime: rawScheduleTime,
@@ -2107,6 +2169,18 @@ function extractModelSplitEventCandidates(
     const normalizedDate = normalizeEventDate(rawDate, sourceLine || rawDate, post.postedAt);
     if (normalizedDate.isoDate) {
       rawResolvedDates.add(normalizedDate.isoDate);
+    }
+    const titleUsedFallback = !rawTitle && normalizedArtists.length === 0;
+    const lineTitle =
+      rawTitle ||
+      normalizedArtists.join(", ") ||
+      buildUnnamedScheduleFallbackTitle({
+        eventType,
+        venue,
+        isoDate: normalizedDate.isoDate,
+      });
+    if (!lineTitle) {
+      continue;
     }
     const consistency = checkEventConsistency({
       isoDate: normalizedDate.isoDate,
@@ -2126,13 +2200,19 @@ function extractModelSplitEventCandidates(
       normalizedDate,
       lineTitle,
       artists:
-        normalizedArtists.length > 0 ? normalizedArtists : parseSplitCaptionEntryArtists(lineTitle),
+        normalizedArtists.length > 0 ? normalizedArtists : parseSplitCaptionEntryArtists(rawTitle),
       ...(time ? { time } : {}),
       rawTime,
       consistencyIssues: consistency.issues,
       ...(description ? { description } : {}),
       sourceLine,
       source: "poster_schedule",
+      ...(titleUsedFallback
+        ? {
+            titleSource: "unnamed_schedule_fallback" as const,
+            titleUsedFallback: true,
+          }
+        : {}),
     });
   }
 
@@ -2287,8 +2367,15 @@ function extractAltTextSplitEventCandidates(
 function extractSplitEventCandidates(
   post: InstagramScrapedPost,
   extracted: ExtractedEventData,
+  eventType: string,
+  venue: string | null,
 ): SplitEventCandidate[] {
-  const modelCandidates = extractModelSplitEventCandidates(post, extracted);
+  const modelCandidates = extractModelSplitEventCandidates(
+    post,
+    extracted,
+    eventType,
+    venue,
+  );
   if (modelCandidates.length > 0) {
     return modelCandidates;
   }
@@ -5176,11 +5263,17 @@ export function prepareEventsForInsert(
       : dateNormalization.isoDate
         ? [dateNormalization.isoDate]
         : [];
-  const splitEventCandidates = extractSplitEventCandidates(post, extracted);
+  const splitEventCandidates = extractSplitEventCandidates(
+    post,
+    extracted,
+    eventType,
+    venueNormalization.venue,
+  );
   const usesSplitEventCandidates = splitEventCandidates.length > 0;
   const extractedArtists = normalizeExtractedArtists(extracted.artists)
     .map((artist) => normalizeArtistDisplayName(artist))
-    .filter((artist) => titleContainsAlphanumeric(artist));
+    .filter((artist) => titleContainsAlphanumeric(artist))
+    .filter((artist) => !isHashtagOnlySourceIdentity(artist, post));
   const artistFallbackTitle = titleNormalization.usedFallback
     ? formatArtistTitleList(extractedArtists)
     : "";
@@ -5251,10 +5344,10 @@ export function prepareEventsForInsert(
     usesSplitEventCandidates && referenceSplitCandidate ? referenceSplitCandidate.lineTitle : baseTitle;
   const referenceTitleSource =
     usesSplitEventCandidates && referenceSplitCandidate
-      ? referenceSplitCandidate.source
+      ? referenceSplitCandidate.titleSource ?? referenceSplitCandidate.source
       : baseTitleSource;
   const referenceTitleUsedFallback = usesSplitEventCandidates
-    ? false
+    ? referenceSplitCandidate?.titleUsedFallback ?? false
     : baseTitleUsedFallback;
   const referenceTitleDerivedFromContext = usesSplitEventCandidates
     ? false
@@ -5426,8 +5519,11 @@ export function prepareEventsForInsert(
           baseDescription;
         return {
           title: usesSplitScheduleTitle ? variantTitle : baseTitle,
-          titleSource: usesSplitScheduleTitle ? entry.source : baseTitleSource,
-          titleUsedFallback: usesSplitScheduleTitle ? false : baseTitleUsedFallback,
+          titleSource:
+            entry.titleSource ?? (usesSplitScheduleTitle ? entry.source : baseTitleSource),
+          titleUsedFallback:
+            entry.titleUsedFallback ??
+            (usesSplitScheduleTitle ? false : baseTitleUsedFallback),
           titleDerivedFromContext:
             usesSplitScheduleTitle ? false : titleNormalization.source === "context_derived",
           titleContextCandidate:

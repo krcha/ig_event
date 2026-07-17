@@ -79,6 +79,7 @@ Rules:
 - Do not create, paraphrase, beautify, or normalize event titles.
 - "artists" must contain only explicitly billed performers, DJs, live acts, hosts, or speakers who are presented as part of the lineup.
 - Exclude section headings, organizer names, venue names, sponsor names, ticket links, hashtags, and generic labels like "lineup" or "special guests" when no specific names are given.
+- A hashtag is discovery/marketing metadata, never an artist, billed act, schedule-row title, or event title unless the same identity is separately and explicitly billed outside the hashtag in caption or poster text.
 - Deduplicate artists and keep their readable stage names in source order when possible.
 - "category" must be exactly one of: ${CANONICAL_EVENT_TYPE_PROMPT_LIST}.
 - Choose the closest real type. Use "event" ONLY when none of the five clearly fit — never just because the subtype is uncertain.

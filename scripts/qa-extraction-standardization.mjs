@@ -317,6 +317,11 @@ function runPromptQa() {
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /hashtag is discovery\/marketing metadata, never an artist.*schedule-row title.*event title/i,
+    "Prompt must reject hashtag-only artist and event identities.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
     /ONLY SOURCE-GROUNDED TITLES/i,
     "Prompt must require source-grounded schedule titles.",
   );
@@ -994,6 +999,146 @@ function runUnverifiedPosterScheduleModerationQa() {
     assert.ok(closureFields.moderationSignals.includes("non_event_closure_notice"));
     assert.ok(closureFields.moderationPendingReasons.includes("non_event_closure_notice"));
   }
+}
+
+function runHashtagOnlyScheduleIdentityQa() {
+  const firstDate = nextIsoDateForWeekday(5, 7);
+  const secondDate = addIsoDays(firstDate, 1);
+  const firstDateLabel = ddmmForIsoDate(firstDate);
+  const secondDateLabel = ddmmForIsoDate(secondDate);
+  const caption = [
+    "BAŠ TAkve noći biramo iznova i iznova 🥂❤️‍🔥",
+    "",
+    `PETAK ${firstDateLabel} / SUBOTA ${secondDateLabel} | 21H`,
+    "",
+    "#baraka #beograd #greizaci #beogradnocu",
+  ].join("\n");
+  const prepared = prepareEventsForInsert(
+    makeInstagramPost({
+      caption,
+      altText:
+        `Photo by BARAKA BAŠTA. Text says BARAKA BAŠTA PETAK ${firstDateLabel} 21H SUBOTA ${secondDateLabel}.`,
+      postType: "image",
+      username: "baraka_basta",
+    }),
+    makeExtractedEvent({
+      title: "",
+      date: "",
+      time: "",
+      venue: "BARAKA BAŠTA",
+      artists: ["greizaci"],
+      category: "nightlife",
+      description: "Party nights on Friday and Saturday starting at 21:00.",
+      source_caption: caption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "21:00",
+          title: "greizaci",
+          artists: ["greizaci"],
+          description: "Party night at BARAKA BAŠTA starting at 21:00.",
+          source_text: `PETAK ${firstDateLabel} 21H`,
+        },
+        {
+          date: secondDateLabel,
+          time: "21:00",
+          title: "greizaci",
+          artists: ["greizaci"],
+          description: "Party night at BARAKA BAŠTA starting at 21:00.",
+          source_text: `SUBOTA ${secondDateLabel} 21H`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/baraka.jpg",
+    { baraka_basta: "BARAKA BAŠTA" },
+    {},
+    { baraka_basta: "BARAKA BAŠTA" },
+  );
+  const events = prepared.map((result) => {
+    assert.equal(result.kind, "ok");
+    return result;
+  });
+  assert.equal(events.length, 2);
+  assert.deepEqual(
+    events.map((result) => result.event.title),
+    [firstDate, secondDate].map((date) => {
+      const weekday = new Intl.DateTimeFormat("en-US", {
+        weekday: "long",
+        timeZone: "UTC",
+      }).format(new Date(`${date}T00:00:00Z`));
+      return `${weekday} Night at BARAKA BAŠTA`;
+    }),
+  );
+  for (const result of events) {
+    const fields = readPreparedNormalizedFields(result);
+    assert.deepEqual(result.event.artists, []);
+    assert.equal(result.event.status, "pending");
+    assert.equal(result.event.sourceCaption, caption);
+    assert.equal(fields.titleSource, "unnamed_schedule_fallback");
+    assert.equal(fields.titleUsedFallback, true);
+    assert.equal(fields.sourceGroundingTitleVerified, false);
+    assert.ok(fields.moderationSignals.includes("fallback_title"));
+    assert.ok(fields.moderationPendingReasons.includes("requires_human_approval"));
+  }
+
+  const topLevelHashtagOnly = assertSingleOkPreparedEvent(
+    prepareEventsForInsert(
+      makeInstagramPost({
+        caption,
+        postType: "image",
+        username: "baraka_basta",
+      }),
+      makeExtractedEvent({
+        title: "greizaci",
+        date: firstDateLabel,
+        time: "21:00",
+        venue: "BARAKA BAŠTA",
+        artists: [],
+        category: "nightlife",
+        source_caption: caption,
+        schedule_entries: [],
+      }),
+      "https://cdn.example.com/baraka-single.jpg",
+      { baraka_basta: "BARAKA BAŠTA" },
+      {},
+      { baraka_basta: "BARAKA BAŠTA" },
+    ),
+  );
+  assert.equal(topLevelHashtagOnly.event.title, "BARAKA BAŠTA");
+  const topLevelHashtagFields = readPreparedNormalizedFields(topLevelHashtagOnly);
+  assert.equal(topLevelHashtagFields.rawTitle, "greizaci");
+  assert.equal(topLevelHashtagFields.titleSource, "handle_fallback");
+  assert.equal(topLevelHashtagFields.titleUsedFallback, true);
+
+  const billedCaption = `${firstDateLabel} DJ greizaci at BARAKA BAŠTA. #greizaci`;
+  const billed = assertSingleOkPreparedEvent(
+    prepareEventsForInsert(
+      makeInstagramPost({
+        caption: billedCaption,
+        postType: "image",
+        username: "baraka_basta",
+      }),
+      makeExtractedEvent({
+        title: "",
+        date: firstDateLabel,
+        time: "21:00",
+        venue: "BARAKA BAŠTA",
+        artists: ["greizaci"],
+        category: "nightlife",
+        source_caption: billedCaption,
+        schedule_entries: [],
+      }),
+      "https://cdn.example.com/baraka-billed.jpg",
+      { baraka_basta: "BARAKA BAŠTA" },
+      {},
+      { baraka_basta: "BARAKA BAŠTA" },
+    ),
+  );
+  assert.equal(billed.event.title, "greizaci");
+  assert.deepEqual(billed.event.artists, ["greizaci"]);
+  const billedFields = readPreparedNormalizedFields(billed);
+  assert.notEqual(billedFields.titleSource, "unnamed_schedule_fallback");
+  assert.equal(billedFields.titleUsedFallback, false);
 }
 
 function runSourceGroundingAdversarialQa() {
@@ -2722,6 +2867,7 @@ runArtistAndDescriptionQa();
 runConfidenceQa();
 runVideoModerationQa();
 runUnverifiedPosterScheduleModerationQa();
+runHashtagOnlyScheduleIdentityQa();
 runSourceGroundingAdversarialQa();
 runMaintenancePromotionGroundingQa();
 runHallucinatedPhotoScheduleGroundingQa();
