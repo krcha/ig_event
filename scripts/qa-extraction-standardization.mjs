@@ -1188,6 +1188,35 @@ function runHashtagOnlyScheduleIdentityQa() {
     "Combined weekday/date parsing must preserve every explicit occurrence.",
   );
 
+  const malformedCombinedCaption =
+    `FRIDAY ${firstDateLabel} / ${secondDateLabel} / SUNDAY ${thirdDateLabel} | 21H`;
+  const malformedCombined = prepareBaraka(
+    { caption: malformedCombinedCaption },
+    { source_caption: malformedCombinedCaption },
+  );
+  assert.equal(
+    malformedCombined.filter((result) => result.kind === "ok").length,
+    0,
+    "A combined line with an unpaired date must fail closed instead of dropping that date.",
+  );
+
+  const combinedPlusLaterCaption = [
+    `FRIDAY ${firstDateLabel} / SATURDAY ${secondDateLabel} | 21.00`,
+    `${thirdDateLabel} - DJ Third`,
+  ].join("\n");
+  const combinedPlusLater = prepareBaraka(
+    { caption: combinedPlusLaterCaption },
+    { source_caption: combinedPlusLaterCaption },
+  );
+  assert.deepEqual(
+    combinedPlusLater.map((result) => {
+      assert.equal(result.kind, "ok");
+      return result.event.date;
+    }),
+    [firstDate, secondDate, thirdDate],
+    "Combined rows must be accumulated with later dated caption rows.",
+  );
+
   const shortActCaption = `${caption}\n#EZ`;
   const shortActRows = prepareBaraka(
     { caption: shortActCaption },
@@ -1248,6 +1277,42 @@ function runHashtagOnlyScheduleIdentityQa() {
     "Alt-text schedule rows containing only hashtags must use unnamed fallbacks.",
   );
   assert.ok(altHashtagRows.every((result) => !result.event.title.includes("#")));
+
+  const rowScopedCaption =
+    `${firstDateLabel} - DJ greizaci\n${secondDateLabel} - #greizaci\n#greizaci`;
+  const rowScopedCaptionRows = prepareBaraka(
+    { caption: rowScopedCaption },
+    { source_caption: rowScopedCaption },
+  );
+  assert.equal(rowScopedCaptionRows.length, 2);
+  assert.equal(rowScopedCaptionRows[0].kind, "ok");
+  assert.equal(rowScopedCaptionRows[1].kind, "ok");
+  assert.deepEqual(rowScopedCaptionRows[0].event.artists, ["DJ greizaci"]);
+  assert.deepEqual(rowScopedCaptionRows[1].event.artists, []);
+  assert.equal(
+    readPreparedNormalizedFields(rowScopedCaptionRows[1]).titleSource,
+    "unnamed_schedule_fallback",
+    "A billed identity on one caption row must not authorize a hashtag-only sibling row.",
+  );
+
+  const rowScopedAltRows = prepareBaraka(
+    {
+      caption: "#greizaci",
+      altText:
+        `Photo text: '${firstDateLabel} - DJ greizaci ${secondDateLabel} - #greizaci'.`,
+    },
+    { source_caption: "#greizaci" },
+  );
+  assert.equal(rowScopedAltRows.length, 2);
+  assert.equal(rowScopedAltRows[0].kind, "ok");
+  assert.equal(rowScopedAltRows[1].kind, "ok");
+  assert.deepEqual(rowScopedAltRows[0].event.artists, ["DJ greizaci"]);
+  assert.deepEqual(rowScopedAltRows[1].event.artists, []);
+  assert.equal(
+    readPreparedNormalizedFields(rowScopedAltRows[1]).titleSource,
+    "unnamed_schedule_fallback",
+    "A billed identity on one alt-text row must not authorize a hashtag-only sibling row.",
+  );
 
   const directMixedCaption =
     `${firstDateLabel} - DJ Legit & #greizaci\n${secondDateLabel} - DJ Legit & #greizaci`;
@@ -1427,6 +1492,75 @@ function runHashtagOnlyScheduleIdentityQa() {
       { title: "DJ Legit", artists: ["DJ Legit"] },
     ],
     "A sanitized unnamed row must not inherit a performer from another schedule row.",
+  );
+
+  const namedRowWithSanitizedArtists = prepareBaraka(
+    { caption: `${caption}\nDJ Legit` },
+    {
+      source_caption: `${caption}\nDJ Legit`,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "21:00",
+          title: "Summer Party",
+          artists: ["greizaci"],
+          description: "Party night at BARAKA BAŠTA.",
+          source_text: `${firstDateLabel} Summer Party 21H`,
+        },
+        {
+          date: secondDateLabel,
+          time: "21:00",
+          title: "DJ Legit",
+          artists: ["DJ Legit"],
+          description: "DJ set at BARAKA BAŠTA.",
+          source_text: `${secondDateLabel} DJ Legit 21H`,
+        },
+      ],
+    },
+  );
+  assert.deepEqual(
+    namedRowWithSanitizedArtists.map((result) => {
+      assert.equal(result.kind, "ok");
+      return { title: result.event.title, artists: result.event.artists };
+    }),
+    [
+      { title: "Summer Party", artists: [] },
+      { title: "DJ Legit", artists: ["DJ Legit"] },
+    ],
+    "A named row whose artists were sanitized must not repopulate artists from its title.",
+  );
+
+  const creditCaption = [
+    `${firstDateLabel} photos by greizaci & friends 21H`,
+    `${secondDateLabel} photos by greizaci & friends 21H`,
+    "#greizaci",
+  ].join("\n");
+  assertTwoUnnamedFallbacks(
+    prepareBaraka(
+      { caption: creditCaption },
+      {
+        source_caption: creditCaption,
+        schedule_entries: [
+          {
+            date: firstDateLabel,
+            time: "21:00",
+            title: "greizaci",
+            artists: ["greizaci"],
+            description: "Photo credit.",
+            source_text: `${firstDateLabel} photos by greizaci & friends 21H`,
+          },
+          {
+            date: secondDateLabel,
+            time: "21:00",
+            title: "greizaci",
+            artists: ["greizaci"],
+            description: "Photo credit.",
+            source_text: `${secondDateLabel} photos by greizaci & friends 21H`,
+          },
+        ],
+      },
+    ),
+    "Photo/production-style credits must not count as performer billing.",
   );
 
   const nonBillingCaption =

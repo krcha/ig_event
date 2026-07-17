@@ -363,6 +363,7 @@ type SplitEventCandidate = {
   normalizedDate: DateNormalization;
   lineTitle: string;
   artists: string[];
+  artistsWereSanitized?: boolean;
   time?: string;
   rawTime?: string;
   consistencyIssues: EventConsistencyIssue[];
@@ -2101,11 +2102,28 @@ const BILLING_CUE_BEFORE_TOKENS = new Set([
 ]);
 const BILLING_CUE_AFTER_TOKENS = new Set(["b2b", "dj", "live", "set"]);
 const NON_BILLING_CONTEXT_TOKENS = new Set([
+  "credit",
+  "credits",
+  "design",
+  "foto",
+  "fotografija",
   "hvala",
+  "photo",
+  "photos",
+  "photography",
   "podrsci",
   "podršci",
+  "powered",
+  "produced",
+  "production",
+  "produkcija",
+  "recap",
+  "sponsor",
+  "sponsored",
   "thank",
   "thanks",
+  "video",
+  "visuals",
   "zahvaljujemo",
 ]);
 const STRICT_SCHEDULE_ROW_TOKENS = new Set([
@@ -2291,13 +2309,17 @@ function isHashtagOnlySourceIdentity(
   value: string,
   post: InstagramScrapedPost,
   additionalEvidence: string[] = [],
+  billingScope: "post" | "additional" = "post",
 ): boolean {
-  const evidence = [
+  const postEvidence = [
     normalizeString(post.caption),
     extractPostAltTextEvidence(post.altText),
-    ...additionalEvidence.map((item) => normalizeString(item)),
   ].filter(Boolean);
-  const hashtags = evidence.flatMap((item) =>
+  const normalizedAdditionalEvidence = additionalEvidence
+    .map((item) => normalizeString(item))
+    .filter(Boolean);
+  const hashtagEvidence = [...postEvidence, ...normalizedAdditionalEvidence];
+  const hashtags = hashtagEvidence.flatMap((item) =>
     [...item.matchAll(/#([\p{L}\p{N}_.-]+)/gu)]
       .map((match) => normalizeString(match[1]))
       .filter(Boolean),
@@ -2306,7 +2328,9 @@ function isHashtagOnlySourceIdentity(
     return false;
   }
 
-  return !evidence.some((item) => hasExplicitBilledIdentityEvidence(value, item));
+  const billingEvidence =
+    billingScope === "additional" ? normalizedAdditionalEvidence : hashtagEvidence;
+  return !billingEvidence.some((item) => hasExplicitBilledIdentityEvidence(value, item));
 }
 
 function buildUnnamedScheduleFallbackTitle(options: {
@@ -2340,7 +2364,7 @@ function sanitizeSplitEventIdentity(options: {
   rawArtists: string[];
   post: InstagramScrapedPost;
   additionalEvidence?: string[];
-}): { title: string; artists: string[] } {
+}): { title: string; artists: string[]; artistsWereSanitized: boolean } {
   const originalArtists = options.rawArtists
     .map((artist) => normalizeArtistDisplayName(artist))
     .filter((artist) => titleContainsAlphanumeric(artist));
@@ -2349,12 +2373,14 @@ function sanitizeSplitEventIdentity(options: {
       artist,
       options.post,
       options.additionalEvidence ?? [],
+      "additional",
     ),
   );
   const guardedTitle = isHashtagOnlySourceIdentity(
     options.rawTitle,
     options.post,
     options.additionalEvidence ?? [],
+    "additional",
   )
     ? ""
     : options.rawTitle;
@@ -2368,6 +2394,7 @@ function sanitizeSplitEventIdentity(options: {
         ? formatArtistTitleList(validArtists)
         : guardedTitle,
     artists: validArtists,
+    artistsWereSanitized: removedHashtagOnlyArtist,
   };
 }
 
@@ -2462,8 +2489,8 @@ function extractModelSplitEventCandidates(
       rawDate,
       normalizedDate,
       lineTitle,
-      artists:
-        normalizedArtists.length > 0 ? normalizedArtists : parseSplitCaptionEntryArtists(rawTitle),
+      artists: normalizedArtists,
+      artistsWereSanitized: identity.artistsWereSanitized,
       ...(time ? { time } : {}),
       rawTime,
       consistencyIssues: consistency.issues,
@@ -2482,32 +2509,54 @@ function extractModelSplitEventCandidates(
   return hasMultipleResolvedSplitDates(entries) || rawResolvedDates.size >= 2 ? entries : [];
 }
 
+const COMBINED_SCHEDULE_WEEKDAY_TOKEN =
+  "(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?|ponedeljak|pon|utorak|uto|sreda|sre|cetvrtak|četvrtak|cet|čet|petak|pet|subota|sub|nedelja|nedjelja|ned)";
+const COMBINED_SCHEDULE_DATE_TOKEN =
+  "(?:0?[1-9]|[12]\\d|3[01])[./-](?:0?[1-9]|1[0-2])(?:[./-](?:\\d{2}|\\d{4}))?\\.?";
+
+function getCombinedWeekdayDateMatches(value: string): RegExpMatchArray[] {
+  const pattern = new RegExp(
+    `\\b(${COMBINED_SCHEDULE_WEEKDAY_TOKEN})\\s+(${COMBINED_SCHEDULE_DATE_TOKEN})`,
+    "giu",
+  );
+  return [...value.matchAll(pattern)];
+}
+
+function countNumericDateAnchors(value: string): number {
+  return [...value.matchAll(
+    /\b(?:0?[1-9]|[12]\d|3[01])[./-](?:0?[1-9]|1[0-2])(?:[./-](?:\d{2}|\d{4}))?\.?/gu,
+  )].length;
+}
+
+function hasMalformedCombinedWeekdayDateSchedule(value: string): boolean {
+  return value.split(/\r?\n/u).some((rawLine) => {
+    const line = normalizeString(rawLine);
+    const pairCount = getCombinedWeekdayDateMatches(line).length;
+    const numericDateCount = countNumericDateAnchors(line);
+    return numericDateCount >= 2 && pairCount > 0 && numericDateCount !== pairCount;
+  });
+}
+
 function extractCombinedWeekdayDateSplitEventCandidates(options: {
   post: InstagramScrapedPost;
   captionText: string;
   eventType: string;
   venue: string | null;
 }): SplitEventCandidate[] {
-  const weekdayToken =
-    "(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?|ponedeljak|pon|utorak|uto|sreda|sre|cetvrtak|četvrtak|cet|čet|petak|pet|subota|sub|nedelja|nedjelja|ned)";
-  const dateToken = "\\d{1,2}[./-]\\d{1,2}(?:[./-](?:\\d{2}|\\d{4}))?\\.?";
-  const weekdayDatePattern = new RegExp(`\\b(${weekdayToken})\\s+(${dateToken})`, "giu");
+  const combinedEntries: SplitEventCandidate[] = [];
+  const seenEntries = new Set<string>();
 
   for (const rawLine of options.captionText.split(/\r?\n/u)) {
     const line = normalizeString(rawLine);
-    const pairMatches = [...line.matchAll(weekdayDatePattern)];
-    if (pairMatches.length < 2) {
+    const pairMatches = getCombinedWeekdayDateMatches(line);
+    if (pairMatches.length < 2 || countNumericDateAnchors(line) !== pairMatches.length) {
       continue;
     }
 
     const lastMatch = pairMatches.at(-1);
     const tailStart = (lastMatch?.index ?? 0) + (lastMatch?.[0].length ?? 0);
-    const tail = line.slice(tailStart);
-    if (/\b\d{1,2}[./-]\d{1,2}(?:[./-](?:\d{2}|\d{4}))?\b/u.test(tail)) {
-      continue;
-    }
-    const sharedRawTime = extractSplitEntryTime(tail);
-    const entries = pairMatches.map((match) => {
+    const sharedRawTime = extractSplitEntryTime(line.slice(tailStart));
+    const lineEntries = pairMatches.map((match) => {
       const weekday = normalizeString(match[1]);
       const rawDate = normalizeString(match[2]).replace(/\.$/u, "");
       const time = sanitizeTimeAgainstDate(sharedRawTime, rawDate);
@@ -2537,12 +2586,19 @@ function extractCombinedWeekdayDateSplitEventCandidates(options: {
         titleUsedFallback: true,
       };
     });
-    if (hasMultipleResolvedSplitDates(entries)) {
-      return entries;
+    if (!hasMultipleResolvedSplitDates(lineEntries)) {
+      continue;
+    }
+    for (const entry of lineEntries) {
+      const dedupeKey = `${entry.normalizedDate.isoDate ?? entry.rawDate}:${toSearchableText(entry.lineTitle)}`;
+      if (!seenEntries.has(dedupeKey)) {
+        seenEntries.add(dedupeKey);
+        combinedEntries.push(entry);
+      }
     }
   }
 
-  return [];
+  return hasMultipleResolvedSplitDates(combinedEntries) ? combinedEntries : [];
 }
 
 function extractCaptionSplitEventCandidates(
@@ -2562,18 +2618,22 @@ function extractCaptionSplitEventCandidates(
     eventType,
     venue,
   });
-  if (combinedWeekdayEntries.length > 1) {
-    return combinedWeekdayEntries;
-  }
 
-  const entries: SplitEventCandidate[] = [];
-  const seenEntries = new Set<string>();
+  const entries: SplitEventCandidate[] = [...combinedWeekdayEntries];
+  const seenEntries = new Set(
+    combinedWeekdayEntries.map(
+      (entry) => `${entry.normalizedDate.isoDate ?? entry.rawDate}:${toSearchableText(entry.lineTitle)}`,
+    ),
+  );
   const postDate = parsePostedAt(post.postedAt);
   let previousContextTitle = "";
 
   for (const rawLine of captionText.split(/\r?\n/)) {
     const line = normalizeString(rawLine);
     if (!line) {
+      continue;
+    }
+    if (countNumericDateAnchors(line) >= 2) {
       continue;
     }
 
@@ -2594,7 +2654,7 @@ function extractCaptionSplitEventCandidates(
     if (!normalizedDate.isoDate || !rawDate) {
       if (isLikelyCaptionContextTitle(line)) {
         const contextTitle = cleanSplitCaptionEntryText(line);
-        if (!isHashtagOnlySourceIdentity(contextTitle, post)) {
+        if (!isHashtagOnlySourceIdentity(contextTitle, post, [line], "additional")) {
           previousContextTitle = contextTitle;
         }
       }
@@ -2611,6 +2671,7 @@ function extractCaptionSplitEventCandidates(
       rawTitle: sourceTitle,
       rawArtists: parseSplitCaptionEntryArtists(sourceTitle),
       post,
+      additionalEvidence: [line],
     });
     const guardedSourceTitle = sourceIdentity.title;
     const titleUsedFallback = !guardedSourceTitle && !previousContextTitle;
@@ -2648,6 +2709,7 @@ function extractCaptionSplitEventCandidates(
         : guardedSourceTitle
           ? sourceIdentity.artists
           : parseSplitCaptionEntryArtists(lineTitle),
+      artistsWereSanitized: sourceIdentity.artistsWereSanitized,
       ...(consistency.sanitizedTime ? { time: consistency.sanitizedTime } : {}),
       rawTime,
       consistencyIssues: consistency.issues,
@@ -2708,6 +2770,7 @@ function extractAltTextSplitEventCandidates(
       rawTitle,
       rawArtists: parseSplitCaptionEntryArtists(rawTitle),
       post,
+      additionalEvidence: [sourceLine],
     });
     const guardedTitle = sourceIdentity.title;
     const titleUsedFallback = !guardedTitle;
@@ -2738,6 +2801,7 @@ function extractAltTextSplitEventCandidates(
       normalizedDate,
       lineTitle,
       artists: titleUsedFallback ? [] : sourceIdentity.artists,
+      artistsWereSanitized: sourceIdentity.artistsWereSanitized,
       ...(consistency.sanitizedTime ? { time: consistency.sanitizedTime } : {}),
       rawTime,
       consistencyIssues: consistency.issues,
@@ -5653,18 +5717,26 @@ export function prepareEventsForInsert(
     post.postedAt,
     postTextEvidence,
   );
-  const candidateDates =
+  let candidateDates =
     expandedRangeDates && expandedRangeDates.length > 1
       ? expandedRangeDates
       : dateNormalization.isoDate
         ? [dateNormalization.isoDate]
         : [];
-  const splitEventCandidates = extractSplitEventCandidates(
-    post,
-    extracted,
-    eventType,
-    venueNormalization.venue,
+  const malformedCombinedSchedule = hasMalformedCombinedWeekdayDateSchedule(
+    normalizeString(post.caption || extracted.source_caption),
   );
+  const splitEventCandidates = malformedCombinedSchedule
+    ? []
+    : extractSplitEventCandidates(
+        post,
+        extracted,
+        eventType,
+        venueNormalization.venue,
+      );
+  if (malformedCombinedSchedule) {
+    candidateDates = [];
+  }
   const usesSplitEventCandidates = splitEventCandidates.length > 0;
   const modelScheduleEvidence = extracted.schedule_entries
     .map((entry) => normalizeString(entry.source_text))
@@ -5717,6 +5789,7 @@ export function prepareEventsForInsert(
     extractionMode,
     postType: normalizeString(post.postType).toLowerCase() || null,
     missingImage,
+    malformedCombinedSchedule,
     moderationAllowMissingImage: allowMissingImageForModeration,
     moderationMissingImageReason: missingImage
       ? allowMissingImageForModeration
@@ -5755,7 +5828,8 @@ export function prepareEventsForInsert(
     ? null
     : titleNormalization.contextCandidate;
   const referenceArtists = referenceSplitCandidate
-    ? referenceSplitCandidate.titleUsedFallback
+    ? referenceSplitCandidate.titleUsedFallback ||
+      (referenceSplitCandidate.artistsWereSanitized && referenceSplitCandidate.artists.length === 0)
       ? []
       : referenceSplitCandidate.artists.length > 0
         ? referenceSplitCandidate.artists
@@ -5905,8 +5979,9 @@ export function prepareEventsForInsert(
 
   const eventVariants = usesSplitEventCandidates
     ? splitEventCandidates.map((entry) => {
-        const variantArtists = entry.titleUsedFallback
-          ? []
+        const variantArtists =
+          entry.titleUsedFallback || (entry.artistsWereSanitized && entry.artists.length === 0)
+            ? []
           : entry.artists.length > 0
             ? entry.artists
             : extractedArtists;
@@ -5942,6 +6017,7 @@ export function prepareEventsForInsert(
           timeProvenance: buildScheduleEntryTimeProvenance(entry),
           consistencyIssues: entry.consistencyIssues,
           artists: variantArtists,
+          artistsWereSanitized: entry.artistsWereSanitized ?? false,
           description: variantDescription,
           splitSource: entry.source,
           splitSourceLine: entry.sourceLine,
@@ -5966,6 +6042,7 @@ export function prepareEventsForInsert(
         }),
         consistencyIssues: extractedTimeIssues,
         artists: extractedArtists,
+        artistsWereSanitized: false,
         description: baseDescription,
         splitSource: null,
         splitSourceLine: null,
@@ -6052,6 +6129,7 @@ export function prepareEventsForInsert(
       dateYearSelectionReason: variant.dateNormalization.yearSelectionReason,
       dateReason: variant.dateNormalization.reason ?? null,
       artists: variant.artists,
+      artistsWereSanitized: variant.artistsWereSanitized,
       description: variant.description,
       dateRangeExpanded: !usesSplitEventCandidates && candidateDates.length > 1,
       dateRangeExpandedCount: !usesSplitEventCandidates ? candidateDates.length : 1,
