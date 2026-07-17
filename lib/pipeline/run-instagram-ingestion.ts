@@ -2233,11 +2233,7 @@ function hasBoundBillingCue(
   const before = segmentTokens[identityMatch.start - 1] ?? "";
   const beforeTwo = segmentTokens.slice(Math.max(0, identityMatch.start - 2), identityMatch.start).join(" ");
   const after = segmentTokens[identityMatch.end] ?? "";
-  const nearbyTokens = segmentTokens.slice(
-    Math.max(0, identityMatch.start - 5),
-    Math.min(segmentTokens.length, identityMatch.end + 5),
-  );
-  if (nearbyTokens.some((token) => NON_BILLING_CONTEXT_TOKENS.has(token))) {
+  if (segmentTokens.some((token) => NON_BILLING_CONTEXT_TOKENS.has(token))) {
     return false;
   }
   return BILLING_CUE_BEFORE_TOKENS.has(before) ||
@@ -2273,32 +2269,42 @@ function isStrictScheduleIdentityRow(
     !unknownTokens.some((token) => NON_BILLING_CONTEXT_TOKENS.has(token));
 }
 
+function hasScheduleAnchor(segment: string, segmentTokens: string[]): boolean {
+  return /\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b/u.test(segment) ||
+    /\b\d{1,2}(?::\d{2})?\s*(?:h|am|pm)\b|\b\d{1,2}:\d{2}\b/iu.test(segment) ||
+    [...SCHEDULE_WEEKDAY_TOKENS].some((weekday) => segmentTokens.includes(weekday));
+}
+
 function hasExplicitBilledIdentityEvidence(value: string, evidence: string): boolean {
   const text = stripHashtagTokens(evidence);
   if (!text) {
     return false;
   }
 
-  for (const rawSegment of text.split(/[\r\n!?;]+/u)) {
-    const segment = normalizeString(rawSegment);
-    const segmentTokens = getSearchableTokens(segment);
-    if (segmentTokens.length === 0) {
-      continue;
-    }
-    const identityMatch = findIdentityTokenMatch(segmentTokens, value);
-    if (!identityMatch) {
-      continue;
-    }
+  for (const rawLine of text.split(/[\r\n!?;]+/u)) {
+    const line = normalizeString(rawLine);
+    const lineTokens = getSearchableTokens(line);
+    const lineHasScheduleAnchor = hasScheduleAnchor(line, lineTokens);
+    for (const rawSegment of line.split(/[|•·]+/u)) {
+      const segment = normalizeString(rawSegment);
+      const segmentTokens = getSearchableTokens(segment);
+      if (segmentTokens.length === 0) {
+        continue;
+      }
+      const identityMatch = findIdentityTokenMatch(segmentTokens, value);
+      if (!identityMatch) {
+        continue;
+      }
 
-    if (hasBoundBillingCue(segmentTokens, identityMatch)) {
-      return true;
-    }
-    const hasScheduleAnchor =
-      /\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b/u.test(segment) ||
-      /\b\d{1,2}(?::\d{2})?\s*(?:h|am|pm)\b|\b\d{1,2}:\d{2}\b/iu.test(segment) ||
-      [...SCHEDULE_WEEKDAY_TOKENS].some((weekday) => segmentTokens.includes(weekday));
-    if (hasScheduleAnchor && isStrictScheduleIdentityRow(segment, segmentTokens, identityMatch)) {
-      return true;
+      if (hasBoundBillingCue(segmentTokens, identityMatch)) {
+        return true;
+      }
+      if (
+        (lineHasScheduleAnchor || hasScheduleAnchor(segment, segmentTokens)) &&
+        isStrictScheduleIdentityRow(segment, segmentTokens, identityMatch)
+      ) {
+        return true;
+      }
     }
   }
 
@@ -2542,6 +2548,7 @@ function extractCombinedWeekdayDateSplitEventCandidates(options: {
   captionText: string;
   eventType: string;
   venue: string | null;
+  source: "caption_schedule" | "alt_text_schedule";
 }): SplitEventCandidate[] {
   const combinedEntries: SplitEventCandidate[] = [];
   const seenEntries = new Set<string>();
@@ -2581,7 +2588,7 @@ function extractCombinedWeekdayDateSplitEventCandidates(options: {
         rawTime: sharedRawTime,
         consistencyIssues: consistency.issues,
         sourceLine,
-        source: "caption_schedule" as const,
+        source: options.source,
         titleSource: "unnamed_schedule_fallback" as const,
         titleUsedFallback: true,
       };
@@ -2617,6 +2624,7 @@ function extractCaptionSplitEventCandidates(
     captionText,
     eventType,
     venue,
+    source: "caption_schedule",
   });
 
   const entries: SplitEventCandidate[] = [...combinedWeekdayEntries];
@@ -2735,6 +2743,17 @@ function extractAltTextSplitEventCandidates(
   const altText = extractPostAltTextEvidence(post.altText);
   if (!altText) {
     return [];
+  }
+
+  const combinedWeekdayEntries = extractCombinedWeekdayDateSplitEventCandidates({
+    post,
+    captionText: altText,
+    eventType,
+    venue,
+    source: "alt_text_schedule",
+  });
+  if (combinedWeekdayEntries.length > 1) {
+    return combinedWeekdayEntries;
   }
 
   const compactText = altText.replace(/\s+/g, " ").trim();
@@ -5724,7 +5743,10 @@ export function prepareEventsForInsert(
         ? [dateNormalization.isoDate]
         : [];
   const malformedCombinedSchedule = hasMalformedCombinedWeekdayDateSchedule(
-    normalizeString(post.caption || extracted.source_caption),
+    [
+      normalizeString(post.caption || extracted.source_caption),
+      extractPostAltTextEvidence(post.altText),
+    ].filter(Boolean).join("\n"),
   );
   const splitEventCandidates = malformedCombinedSchedule
     ? []

@@ -1229,7 +1229,7 @@ function runHashtagOnlyScheduleIdentityQa() {
           title: "EZ",
           artists: ["EZ"],
           description: "DJ set at BARAKA BAŠTA.",
-          source_text: `${firstDateLabel} EZ 21H`,
+          source_text: `${firstDateLabel} | EZ 21H`,
         },
         {
           date: secondDateLabel,
@@ -1277,6 +1277,43 @@ function runHashtagOnlyScheduleIdentityQa() {
     "Alt-text schedule rows containing only hashtags must use unnamed fallbacks.",
   );
   assert.ok(altHashtagRows.every((result) => !result.event.title.includes("#")));
+
+  const combinedAltRows = prepareBaraka(
+    {
+      caption: "#greizaci",
+      altText:
+        `Photo text: 'FRIDAY ${firstDateLabel} / SATURDAY ${secondDateLabel} | 21H'.`,
+    },
+    { source_caption: "#greizaci" },
+  );
+  assert.deepEqual(
+    combinedAltRows.map((result) => {
+      assert.equal(result.kind, "ok");
+      const fields = readPreparedNormalizedFields(result);
+      assert.equal(fields.titleSource, "unnamed_schedule_fallback");
+      assert.deepEqual(result.event.artists, []);
+      return { date: result.event.date, title: result.event.title };
+    }),
+    [
+      { date: firstDate, title: "Friday Night at BARAKA BAŠTA" },
+      { date: secondDate, title: "Saturday Night at BARAKA BAŠTA" },
+    ],
+    "Combined alt-text schedules must fail closed to unnamed rows, not parse weekday fragments as artists.",
+  );
+
+  const malformedAltRows = prepareBaraka(
+    {
+      caption: "#greizaci",
+      altText:
+        `Photo text: 'FRIDAY ${firstDateLabel} / ${secondDateLabel} / SUNDAY ${thirdDateLabel} | 21H'.`,
+    },
+    { source_caption: "#greizaci" },
+  );
+  assert.equal(
+    malformedAltRows.filter((result) => result.kind === "ok").length,
+    0,
+    "Alt-text combined schedules with an unpaired date must fail closed.",
+  );
 
   const rowScopedCaption =
     `${firstDateLabel} - DJ greizaci\n${secondDateLabel} - #greizaci\n#greizaci`;
@@ -1420,6 +1457,39 @@ function runHashtagOnlyScheduleIdentityQa() {
     [["Alice", "Bob"], ["Alice", "Bob"]],
     "A separately billed co-artist must remain valid even when the same name is also a hashtag.",
   );
+
+  const mixedCreditAndBillingCaption = `${firstDateLabel} Photo: Alice | DJ Bob 21H\n#Bob`;
+  const mixedCreditAndBilling = prepareBaraka(
+    { caption: mixedCreditAndBillingCaption },
+    {
+      title: "Bob",
+      date: firstDateLabel,
+      time: "21:00",
+      artists: ["Bob"],
+      source_caption: mixedCreditAndBillingCaption,
+    },
+  );
+  assert.equal(mixedCreditAndBilling.length, 1);
+  assert.equal(mixedCreditAndBilling[0].kind, "ok");
+  assert.equal(mixedCreditAndBilling[0].event.title, "Bob");
+  assert.deepEqual(mixedCreditAndBilling[0].event.artists, ["Bob"]);
+
+  const longThankYouCaption =
+    `${firstDateLabel} Hvala vam puno svima od srca na dugogodišnjoj podršci DJ Bob 21H\n#Bob`;
+  const longThankYou = prepareBaraka(
+    { caption: longThankYouCaption },
+    {
+      title: "Bob",
+      date: firstDateLabel,
+      time: "21:00",
+      artists: ["Bob"],
+      source_caption: longThankYouCaption,
+    },
+  );
+  assert.equal(longThankYou.length, 1);
+  assert.equal(longThankYou[0].kind, "ok");
+  assert.notEqual(longThankYou[0].event.title, "Bob");
+  assert.deepEqual(longThankYou[0].event.artists, []);
 
   const mixedArtists = prepareBaraka(
     { caption: `${caption}\nDJ Legit` },
