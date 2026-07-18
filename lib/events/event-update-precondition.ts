@@ -129,6 +129,7 @@ function hasBoundPublicFields(
     !isCaptionSourceCoherentWithEvent({
       title: publicTitle,
       date: publicDate,
+      time: publicTime,
       venue: publicVenue,
       artists: publicArtists,
       sourceCaption: publicSourceCaption,

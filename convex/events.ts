@@ -73,19 +73,66 @@ function normalizeLookup(value: string): string {
   return toSearchableText(value).replace(/\s+/g, " ").trim();
 }
 
+function normalizeSourceCaption(value: string | undefined): string {
+  return value?.normalize("NFKC").replace(/\s+/gu, " ").trim() ?? "";
+}
+
+function normalizeInstagramSourceUrl(value: string | undefined): string {
+  if (!value) return "";
+  try {
+    const parsed = new URL(value);
+    if (!/(^|\.)instagram\.com$/iu.test(parsed.hostname)) return "";
+    return parsed.pathname.replace(/\/+$/u, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
 type ApprovalCandidateFields = {
   title: string;
   date: string;
   venue: string;
   venueId?: Id<"venues">;
   venueInstagramHandle?: string;
+  instagramPostId?: string;
   instagramPostUrl?: string;
 };
+
+type ServiceSourceCandidateFields = ApprovalCandidateFields & {
+  sourceCaption?: string;
+};
+
+async function assertPersistedServiceSourcePolicy(
+  ctx: MutationCtx,
+  candidate: ServiceSourceCandidateFields,
+): Promise<void> {
+  const handle = normalizeHandle(candidate.venueInstagramHandle ?? "");
+  const postId = candidate.instagramPostId?.trim() ?? "";
+  const postUrl = normalizeInstagramSourceUrl(candidate.instagramPostUrl);
+  const sourceCaption = normalizeSourceCaption(candidate.sourceCaption);
+  if (!handle || !postId || !postUrl || !sourceCaption) {
+    throw new Error("Service approval requires a persisted Instagram source post.");
+  }
+  const persisted = await ctx.db
+    .query("scrapedPosts")
+    .withIndex("by_handle_postId", (q) => q.eq("handle", handle).eq("postId", postId))
+    .first();
+  if (
+    !persisted ||
+    normalizeHandle(persisted.handle) !== handle ||
+    normalizeHandle(persisted.username) !== handle ||
+    persisted.postId !== postId ||
+    normalizeInstagramSourceUrl(persisted.instagramPostUrl) !== postUrl ||
+    normalizeSourceCaption(persisted.caption) !== sourceCaption
+  ) {
+    throw new Error("Service approval source does not match the persisted Instagram post.");
+  }
+}
 
 async function assertApprovalCandidatePolicy(
   ctx: MutationCtx,
   candidate: ApprovalCandidateFields,
-  excludeEventId?: Id<"events">,
+  excludeEventIds: Id<"events">[] = [],
 ): Promise<void> {
   if (!isSensibleEventTitleForApproval(candidate)) {
     throw new Error("Event title is not suitable for approval.");
@@ -96,10 +143,11 @@ async function assertApprovalCandidatePolicy(
     .withIndex("by_date", (q) => q.eq("date", candidate.date))
     .collect();
   const candidateVenue = normalizeLookup(candidate.venue);
-  const candidateTitle = normalizeLookup(candidate.title);
   const candidatePostUrl = normalizeLookup(candidate.instagramPostUrl ?? "");
+  const candidatePostId = candidate.instagramPostId?.trim() ?? "";
+  const excluded = new Set(excludeEventIds);
   const conflict = sameDateEvents.find((event) => {
-    if (event._id === excludeEventId || event.status !== "approved") {
+    if (excluded.has(event._id) || event.status !== "approved") {
       return false;
     }
     const sameVenue =
@@ -111,9 +159,9 @@ async function assertApprovalCandidatePolicy(
           normalizeHandle(candidate.venueInstagramHandle ?? "")) ||
       (Boolean(candidateVenue) && normalizeLookup(event.venue) === candidateVenue);
     const sameSourceEvent =
-      Boolean(candidatePostUrl) &&
-      normalizeLookup(event.instagramPostUrl ?? "") === candidatePostUrl &&
-      normalizeLookup(event.title) === candidateTitle;
+      (Boolean(candidatePostId) && event.instagramPostId?.trim() === candidatePostId) ||
+      (Boolean(candidatePostUrl) &&
+        normalizeLookup(event.instagramPostUrl ?? "") === candidatePostUrl);
     return sameVenue || sameSourceEvent;
   });
 
@@ -848,6 +896,9 @@ export const createEvent = mutation({
         ...eventArgs,
         ...venueFields,
       });
+      if (eventArgs.status === "approved") {
+        await assertPersistedServiceSourcePolicy(ctx, { ...eventArgs, ...venueFields });
+      }
     }
     void _serviceSecret;
     const now = Date.now();
@@ -936,6 +987,9 @@ export const updateEvent = mutation({
         );
       }
       assertServiceUpdateEventPolicy(existingEvent.status, patch, existingEvent);
+      if (patch.status === "approved") {
+        await assertPersistedServiceSourcePolicy(ctx, effectiveEvent);
+      }
     }
     if (effectiveEvent.status === "approved") {
       await assertApprovalCandidatePolicy(
@@ -946,9 +1000,10 @@ export const updateEvent = mutation({
           venue: effectiveEvent.venue,
           venueId: effectiveEvent.venueId,
           venueInstagramHandle: effectiveEvent.venueInstagramHandle,
+          instagramPostId: effectiveEvent.instagramPostId,
           instagramPostUrl: effectiveEvent.instagramPostUrl,
         },
-        args.id,
+        [args.id],
       );
     }
     await ctx.db.patch(args.id, { ...patch, updatedAt: now });
@@ -978,18 +1033,22 @@ export const setEventStatus = mutation({
     }
 
     if (args.status === "approved") {
+      const venueFields = await resolveVenueDenormalizedFields(ctx, existingEvent.venue);
       await assertApprovalCandidatePolicy(
         ctx,
         {
           title: existingEvent.title,
           date: existingEvent.date,
           venue: existingEvent.venue,
-          venueId: existingEvent.venueId,
-          venueInstagramHandle: existingEvent.venueInstagramHandle,
+          venueId: venueFields.venueId ?? existingEvent.venueId,
+          venueInstagramHandle:
+            venueFields.venueInstagramHandle ?? existingEvent.venueInstagramHandle,
+          instagramPostId: existingEvent.instagramPostId,
           instagramPostUrl: existingEvent.instagramPostUrl,
         },
-        args.id,
+        [args.id],
       );
+      await ctx.db.patch(args.id, venueFields);
     }
 
     const now = Date.now();
@@ -1031,18 +1090,22 @@ export const setEventStatuses = mutation({
 
       if (args.status === "approved") {
         try {
+          const venueFields = await resolveVenueDenormalizedFields(ctx, existingEvent.venue);
           await assertApprovalCandidatePolicy(
             ctx,
             {
               title: existingEvent.title,
               date: existingEvent.date,
               venue: existingEvent.venue,
-              venueId: existingEvent.venueId,
-              venueInstagramHandle: existingEvent.venueInstagramHandle,
+              venueId: venueFields.venueId ?? existingEvent.venueId,
+              venueInstagramHandle:
+                venueFields.venueInstagramHandle ?? existingEvent.venueInstagramHandle,
+              instagramPostId: existingEvent.instagramPostId,
               instagramPostUrl: existingEvent.instagramPostUrl,
             },
-            id,
+            [id],
           );
+          await ctx.db.patch(id, venueFields);
         } catch (error) {
           if (
             !(error instanceof Error) ||
@@ -1160,6 +1223,20 @@ export const mergeApprovedEvents = mutation({
           ? { eventType: canonicalizeEventType(args.patch.eventType) }
           : {}),
       };
+      const effectiveEvent = { ...primaryEvent, ...patch };
+      await assertApprovalCandidatePolicy(
+        ctx,
+        {
+          title: effectiveEvent.title,
+          date: effectiveEvent.date,
+          venue: effectiveEvent.venue,
+          venueId: effectiveEvent.venueId,
+          venueInstagramHandle: effectiveEvent.venueInstagramHandle,
+          instagramPostId: effectiveEvent.instagramPostId,
+          instagramPostUrl: effectiveEvent.instagramPostUrl,
+        },
+        [args.primaryId, ...duplicateIds],
+      );
       await ctx.db.patch(args.primaryId, {
         ...patch,
         updatedAt: now,
