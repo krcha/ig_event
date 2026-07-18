@@ -84,6 +84,8 @@ type ApifyInstagramImage =
     };
 
 type ApifyInstagramItem = {
+  error?: unknown;
+  errorDescription?: string;
   type?: string;
   productType?: string;
   mediaType?: string;
@@ -650,10 +652,13 @@ function collectImageUrls(item: ApifyInstagramItem): string[] {
   return [...candidates];
 }
 
-function mapApifyItemToInstagramPost(
+export function mapApifyItemToInstagramPost(
   item: ApifyInstagramItem,
   fallbackUsername: string,
 ): InstagramScrapedPost | null {
+  if (item.error !== undefined && item.error !== null) {
+    return null;
+  }
   const postId = buildPostId(item);
   const instagramPostUrl = buildPostUrl(item);
   const username = readUsername(item, fallbackUsername);

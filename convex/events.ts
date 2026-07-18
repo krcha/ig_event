@@ -787,7 +787,7 @@ export const createEvent = mutation({
   handler: async (ctx, args) => {
     const { actor, kind } = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     if (kind === "service") {
-      assertServiceCreateEventPolicy(args.status);
+      assertServiceCreateEventPolicy(args.status, args.normalizedFieldsJson);
     }
     const { serviceSecret: _serviceSecret, ...eventArgs } = args;
     void _serviceSecret;

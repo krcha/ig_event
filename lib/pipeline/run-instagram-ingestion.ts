@@ -67,6 +67,7 @@ import {
 import { loadVenueNameOverridesByHandle } from "@/lib/pipeline/venue-name-overrides";
 import { loadOperationalVenueRecords } from "@/lib/pipeline/operational-venues";
 import { getRequiredEnv } from "@/lib/utils/env";
+import { hasCompleteSourceGroundedAutoApproval } from "@/lib/events/event-update-precondition";
 
 type RunInstagramIngestionOptions = {
   handles: string[];
@@ -614,6 +615,7 @@ type ModerationDecision = {
     | "confidence_threshold"
     | "caption_only_video_core_fields"
     | "core_event_fields"
+    | "source_grounded_core_event_fields"
     | null;
   pendingReasons: string[];
   signals: string[];
@@ -660,6 +662,7 @@ function buildModerationDecision(options: {
   hasVenue: boolean;
   extractionMode: "poster" | "caption_only";
   isVideoPost: boolean;
+  sourceGroundingVerified: boolean;
   autoApprovalBlockers?: string[];
 }): ModerationDecision {
   const confidenceScore = calculateModerationConfidenceScore(options.baseConfidenceScore, {
@@ -669,8 +672,20 @@ function buildModerationDecision(options: {
   });
   const autoApprovalBlockers = [...new Set(options.autoApprovalBlockers ?? [])];
   const timeTbdApplies = options.missingTime && options.hasDate;
+  const autoApproved =
+    options.sourceGroundingVerified &&
+    autoApprovalBlockers.length === 0 &&
+    options.hasDate &&
+    options.hasVenue &&
+    !options.titleUsedFallback &&
+    !options.suspiciousYear &&
+    (options.dateConfidence === "high" || options.dateConfidence === "medium") &&
+    confidenceScore !== null &&
+    confidenceScore >= CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD &&
+    (!options.missingImage || options.allowMissingImage);
+  const autoApproveRule = autoApproved ? "source_grounded_core_event_fields" : null;
   const signals = [
-    HUMAN_REVIEW_REQUIRED_REASON,
+    ...(!autoApproved ? [HUMAN_REVIEW_REQUIRED_REASON] : []),
     ...(options.missingImage ? ["missing_image"] : []),
     ...(options.allowMissingImage ? ["missing_image_allowed"] : []),
     ...(options.titleUsedFallback ? ["fallback_title"] : []),
@@ -680,22 +695,20 @@ function buildModerationDecision(options: {
     ...autoApprovalBlockers,
   ];
 
-  // Machine extraction can establish deterministic evidence metadata, but it can
-  // never publish. Only the authenticated moderation workflow may approve an
-  // Instagram-derived event.
-  const autoApproveRule = null;
-  const autoApproved = false;
-  const pendingReasons = [
-    HUMAN_REVIEW_REQUIRED_REASON,
-    ...autoApprovalBlockers,
-    ...(confidenceScore === null ? ["missing_confidence"] : []),
-    ...(confidenceScore !== null && confidenceScore < CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD
-      ? ["below_auto_approve_threshold"]
-      : []),
-    ...(options.missingImage && !options.allowMissingImage ? ["missing_image"] : []),
-    ...(options.suspiciousYear ? ["suspicious_year"] : []),
-    ...(options.dateConfidence === "low" ? ["low_date_confidence"] : []),
-  ];
+  const pendingReasons = autoApproved
+    ? []
+    : [
+        HUMAN_REVIEW_REQUIRED_REASON,
+        ...autoApprovalBlockers,
+        ...(confidenceScore === null ? ["missing_confidence"] : []),
+        ...(confidenceScore !== null &&
+        confidenceScore < CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD
+          ? ["below_auto_approve_threshold"]
+          : []),
+        ...(options.missingImage && !options.allowMissingImage ? ["missing_image"] : []),
+        ...(options.suspiciousYear ? ["suspicious_year"] : []),
+        ...(options.dateConfidence === "low" ? ["low_date_confidence"] : []),
+      ];
 
   return {
     confidenceScore,
@@ -3014,6 +3027,17 @@ function mergeEquivalentSplitCandidates(
   };
 }
 
+function isScheduleHelperIdentity(value: string): boolean {
+  const normalized = toSearchableText(value);
+  if (!normalized) {
+    return true;
+  }
+  if (/^(?:premijera|premiere|naredna igranja|next performances?)\b/iu.test(normalized)) {
+    return true;
+  }
+  return /^(?:\d{1,2}\s*)+(?:i|and)?$/iu.test(normalized);
+}
+
 function reconcileSplitCandidateCoverage(
   primary: SplitEventCandidate[],
   supplemental: SplitEventCandidate[],
@@ -3042,6 +3066,9 @@ function reconcileSplitCandidateCoverage(
       .map((existing, index) => ({ existing, index }))
       .filter(({ existing }) => getSplitCandidateDateKey(existing) === dateKey)
       .map(({ index }) => index);
+    if (sameDateIndexes.length > 0 && isScheduleHelperIdentity(candidate.lineTitle)) {
+      continue;
+    }
     if (sameDateIndexes.length === 0) {
       reconciled.push(candidate);
       continue;
@@ -5588,24 +5615,6 @@ function hasMaterialEventChange(
   return false;
 }
 
-function hasCompletePersistedSourceGrounding(value: string | undefined): boolean {
-  const fields = parseJsonRecord(value);
-  return (
-    fields?.sourceGroundingVersion === 2 &&
-    fields?.sourceGroundingEvidence === "instagram_caption_or_alt_text" &&
-    fields?.sourceGroundingVerified === true &&
-    fields?.sourceGroundingTitleVerified === true &&
-    fields?.sourceGroundingDateVerified === true &&
-    fields?.sourceGroundingIdentityVerified === true &&
-    fields?.sourceGroundingIdentityContextVerified === true &&
-    fields?.sourceGroundingRowVerified === true &&
-    (fields?.sourceGroundingTimeVerified === true ||
-      fields?.sourceGroundingTimeVerified === null) &&
-    (fields?.sourceGroundingArtistsVerified === true ||
-      fields?.sourceGroundingArtistsVerified === null)
-  );
-}
-
 export function buildDuplicateUpdatePatch(
   existing: ExistingEventRecord,
   next: PreparedEvent,
@@ -5658,13 +5667,13 @@ export function buildDuplicateUpdatePatch(
   );
   const effectiveNextStatus: EventStatus =
     next.status === "approved" &&
-    !hasCompletePersistedSourceGrounding(next.normalizedFieldsJson)
+    (existing.status === "rejected" ||
+      !hasCompleteSourceGroundedAutoApproval(next.normalizedFieldsJson))
       ? "pending"
       : next.status;
   const statusAutoApproved =
     effectiveNextStatus === "approved" && existing.status !== "approved";
-  const protectedApprovedFromPending =
-    existing.status === "approved" && effectiveNextStatus !== "approved";
+  const protectedApprovedFromPending = existing.status === "approved";
   if (protectedApprovedFromPending) {
     return {
       patch: {},
@@ -6424,6 +6433,7 @@ export function prepareEventsForInsert(
       hasVenue: Boolean(venueNormalization.venue),
       extractionMode,
       isVideoPost: isCaptionOnlyVideo,
+      sourceGroundingVerified: sourceGrounding.verified,
       autoApprovalBlockers,
     });
     const eventStatus: EventStatus = moderationDecision.autoApproved ? "approved" : "pending";

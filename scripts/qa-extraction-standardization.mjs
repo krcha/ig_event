@@ -614,14 +614,24 @@ function runVideoModerationQa() {
     ),
   );
   const highConfidenceFields = readPreparedNormalizedFields(highConfidenceVideo);
-  assert.equal(highConfidenceVideo.event.status, "pending");
+  assert.equal(highConfidenceVideo.event.status, "approved");
   assert.equal(highConfidenceFields.moderationConfidenceScore, 0.95);
   assert.equal(highConfidenceFields.extractionMode, "caption_only");
-  assert.ok(highConfidenceFields.moderationPendingReasons.includes("requires_human_approval"));
+  assert.deepEqual(highConfidenceFields.moderationPendingReasons, []);
+  assert.equal(
+    highConfidenceFields.moderationAutoApproveRule,
+    "source_grounded_core_event_fields",
+  );
   assert.equal(highConfidenceFields.extractionScorecard.agent, "event_extraction");
   assert.equal(highConfidenceFields.extractionScorecard.baseConfidenceScore, 0.95);
   assert.equal(highConfidenceFields.extractionScorecard.finalModerationConfidenceScore, 0.95);
-  assert.equal(highConfidenceFields.extractionScorecard.autoApproved, false);
+  assert.equal(highConfidenceFields.extractionScorecard.autoApproved, true);
+  assert.doesNotThrow(() =>
+    assertServiceCreateEventPolicy(
+      highConfidenceVideo.event.status,
+      highConfidenceVideo.event.normalizedFieldsJson,
+    ),
+  );
   assert.ok(Array.isArray(highConfidenceFields.extractionScorecard.fieldEvidence));
   assert.ok(
     highConfidenceFields.extractionScorecard.fieldEvidence.some(
@@ -655,9 +665,9 @@ function runVideoModerationQa() {
     ),
   );
   const relaxedFields = readPreparedNormalizedFields(relaxedVideo);
-  assert.equal(relaxedVideo.event.status, "pending");
-  assert.equal(relaxedFields.moderationAutoApproveRule, null);
-  assert.ok(relaxedFields.moderationPendingReasons.includes("requires_human_approval"));
+  assert.equal(relaxedVideo.event.status, "approved");
+  assert.equal(relaxedFields.moderationAutoApproveRule, "source_grounded_core_event_fields");
+  assert.deepEqual(relaxedFields.moderationPendingReasons, []);
   assert.equal(relaxedVideo.event.title, "archiebhamilton");
   assert.equal(relaxedFields.titleSource, "artist_fallback");
   assert.ok(!relaxedFields.moderationSignals.includes("fallback_title"));
@@ -689,19 +699,23 @@ function runVideoModerationQa() {
   const highConfidenceDateMissingTimeFields = readPreparedNormalizedFields(
     highConfidenceDateMissingTime,
   );
-  assert.equal(highConfidenceDateMissingTime.event.status, "pending");
+  assert.equal(highConfidenceDateMissingTime.event.status, "approved");
   assert.equal(highConfidenceDateMissingTime.event.time, TBD_EVENT_TIME);
   assert.equal(
     highConfidenceDateMissingTimeFields.moderationAutoApproveRule,
-    null,
+    "source_grounded_core_event_fields",
   );
   assert.equal(
     highConfidenceDateMissingTimeFields.moderationCoreEventAutoApproveThreshold,
     CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
   );
-  assert.ok(
-    highConfidenceDateMissingTimeFields.moderationPendingReasons.includes(
-      "requires_human_approval",
+  assert.deepEqual(highConfidenceDateMissingTimeFields.moderationPendingReasons, []);
+  assert.equal(highConfidenceDateMissingTimeFields.sourceGroundingTimeVerified, null);
+  assert.equal(highConfidenceDateMissingTimeFields.sourceGroundingRowVerified, true);
+  assert.doesNotThrow(() =>
+    assertServiceCreateEventPolicy(
+      highConfidenceDateMissingTime.event.status,
+      highConfidenceDateMissingTime.event.normalizedFieldsJson,
     ),
   );
   assert.ok(highConfidenceDateMissingTimeFields.moderationSignals.includes("time_tbd"));
@@ -4081,7 +4095,150 @@ function runQuotedCaptionTitleQa() {
   );
 }
 
+function runNamedRepertoireScheduleDeduplicationQa() {
+  const previousDateNow = Date.now;
+  Date.now = () => new Date("2026-07-18T10:00:00.000Z").getTime();
+  const caption = [
+    "ŠEKSPIR FEST 2.0",
+    "",
+    "MLETAČKI TRGOVAC",
+    "Režija: Strahinja Padežanin",
+    "Premijera: 15. avgust u 21 č",
+    "Naredna igranja:",
+    "16, 19, 21. i 25. avgust",
+    "3. septermbar",
+    "10. oktobar",
+    "",
+    "BURA",
+    "Režija: Vanja Vodeničarević",
+    "Premijera: 22. avgust u 21 č",
+    "Naredna igranja:",
+    "23, 26. i 28. avgust",
+    "1. i 10. septermbar",
+    "11. oktobar",
+    "",
+    "CRNA DAMA IZ SONETA",
+    "Režija: Anisja Gavrilović",
+    "Premijera: 29. avgust u 21 č",
+    "Naredna igranja:",
+    "31. avgust",
+    "2, 4, 8. i 17. septermbar",
+    "12. oktobar",
+    "",
+    "VESELE ŽENE VINDZORSKE",
+    "Režija: Ljubiša Ristić",
+    "Premijera: 5. sdeptembar u 21 č",
+    "Naredna igranja:",
+    "6, 9, 11, 15. i 24. septermbar",
+    "13. oktobar",
+    "",
+    "ROMEO I JULIJA",
+    "Režija: Strahinja Padežanin",
+    "Premijera: 13. septembar u 21 č",
+    "Naredna igranja:",
+    "16, 18. i 22. septermbar",
+    "1. i 14. oktobar",
+    "",
+    "KROĆENJE GOROPADI",
+    "Režija: Vanja Vodeničarević",
+    "Premijera: 20. septembar u 21 č",
+    "Naredna igranja:",
+    "21, 23, 25. i 29. septermbar",
+    "8. i 15. oktobar",
+  ].join("\n");
+  const plays = [
+    ["MLETAČKI TRGOVAC", ["2026-08-15", "2026-08-16", "2026-08-19", "2026-08-21", "2026-08-25", "2026-09-03", "2026-10-10"]],
+    ["BURA", ["2026-08-22", "2026-08-23", "2026-08-26", "2026-08-28", "2026-09-01", "2026-09-10", "2026-10-11"]],
+    ["CRNA DAMA IZ SONETA", ["2026-08-29", "2026-08-31", "2026-09-02", "2026-09-04", "2026-09-08", "2026-09-17", "2026-10-12"]],
+    ["VESELE ŽENE VINDZORSKE", ["2026-09-05", "2026-09-06", "2026-09-09", "2026-09-11", "2026-09-15", "2026-09-24", "2026-10-13"]],
+    ["ROMEO I JULIJA", ["2026-09-13", "2026-09-16", "2026-09-18", "2026-09-22", "2026-10-01", "2026-10-14"]],
+    ["KROĆENJE GOROPADI", ["2026-09-20", "2026-09-21", "2026-09-23", "2026-09-25", "2026-09-29", "2026-10-08", "2026-10-15"]],
+  ];
+  const scheduleEntries = plays.flatMap(([title, dates]) =>
+    dates.map((date) => ({
+      title,
+      date,
+      time: "21:00",
+      artists: [],
+      description: `Predstava ${title}`,
+      source_text: date,
+    })),
+  );
+  const expectedKeys = new Set(
+    plays.flatMap(([title, dates]) => dates.map((date) => `${title}::${date}`)),
+  );
+  const prepared = prepareEventsForInsert(
+    makeInstagramPost({
+      caption,
+      postType: "image",
+      username: "kpgteatar",
+      postedAt: "2026-07-17T12:00:00.000Z",
+    }),
+    makeExtractedEvent({
+      title: "Šekspir Fest 2.0",
+      date: "",
+      time: "21:00",
+      venue: "KPGT",
+      artists: [],
+      category: "arts & culture",
+      source_caption: caption,
+      schedule_entries: scheduleEntries,
+    }),
+    "https://cdn.example.com/kpgt-schedule.jpg",
+    {},
+    {},
+    {},
+  );
+  Date.now = previousDateNow;
+  const events = prepared.filter((result) => result.kind === "ok").map((result) => result.event);
+  const actualKeys = new Set(events.map((event) => `${event.title}::${event.date}`));
+  if (events.length !== expectedKeys.size) {
+    console.error(JSON.stringify({
+      missing: [...expectedKeys].filter((key) => !actualKeys.has(key)),
+      unexpected: [...actualKeys].filter((key) => !expectedKeys.has(key)),
+    }));
+  }
+  assert.equal(
+    events.length,
+    expectedKeys.size,
+    "Caption helper text and date-list fragments must not create extra schedule events when model rows already cover the repertoire.",
+  );
+  assert.deepEqual(
+    new Set(events.map((event) => `${event.title}::${event.date}`)),
+    expectedKeys,
+  );
+  assert.ok(
+    events.every((event) => !/^(?:premijera|naredna igranja|\d)/iu.test(event.title)),
+    "Schedule headings and numeric date-list fragments must never become event titles.",
+  );
+}
+
 function runAtomicDuplicateStatusPreconditionQa() {
+  const completeSourceGroundedApproval = JSON.stringify({
+    sourceGroundingVersion: 2,
+    sourceGroundingEvidence: "instagram_caption_or_alt_text",
+    sourceGroundingVerified: true,
+    sourceGroundingTitleVerified: true,
+    sourceGroundingDateVerified: true,
+    sourceGroundingIdentityVerified: true,
+    sourceGroundingIdentityContextVerified: true,
+    sourceGroundingTimeVerified: null,
+    sourceGroundingArtistsVerified: true,
+    sourceGroundingRowVerified: true,
+    moderationAutoApproved: true,
+    moderationAutoApproveRule: "source_grounded_core_event_fields",
+    moderationPendingReasons: [],
+    moderationSignals: ["time_tbd"],
+    moderationConfidenceScore: 0.95,
+    normalizedDate: "2026-07-30",
+    normalizedVenue: "QA Venue",
+    normalizedIsValid: true,
+    titleUsedFallback: false,
+    dateSuspiciousYear: false,
+    dateConfidence: "high",
+    missingImage: false,
+    moderationAllowMissingImage: false,
+  });
   assert.doesNotThrow(() => assertExpectedEventStatus("pending", "pending"));
   assert.doesNotThrow(() => assertExpectedEventStatus("approved", "approved"));
   assert.throws(
@@ -4094,12 +4251,51 @@ function runAtomicDuplicateStatusPreconditionQa() {
   assert.throws(
     () => assertServiceCreateEventPolicy("approved"),
     /cannot approve an event/,
-    "A service-authenticated create must never publish.",
+    "A service-authenticated create must not publish without complete source grounding.",
+  );
+  assert.throws(
+    () =>
+      assertServiceCreateEventPolicy(
+        "approved",
+        JSON.stringify({ sourceGroundingVerified: true }),
+      ),
+    /cannot approve an event/,
+    "A stale aggregate grounding boolean must not authorize publication.",
+  );
+  assert.doesNotThrow(() =>
+    assertServiceCreateEventPolicy("approved", completeSourceGroundedApproval),
   );
   assert.throws(
     () => assertServiceUpdateEventPolicy("pending", { status: "approved" }),
     /cannot approve an event/,
-    "A service-authenticated update must never publish.",
+    "A service-authenticated update must not publish without complete source grounding.",
+  );
+  assert.doesNotThrow(() =>
+    assertServiceUpdateEventPolicy("pending", {
+      status: "approved",
+      normalizedFieldsJson: completeSourceGroundedApproval,
+    }),
+  );
+  assert.throws(
+    () =>
+      assertServiceUpdateEventPolicy("rejected", {
+        status: "approved",
+        normalizedFieldsJson: completeSourceGroundedApproval,
+      }),
+    /cannot approve an event/,
+    "A service replay must not override a human rejection.",
+  );
+  assert.throws(
+    () =>
+      assertServiceUpdateEventPolicy("pending", {
+        status: "approved",
+        normalizedFieldsJson: JSON.stringify({
+          ...JSON.parse(completeSourceGroundedApproval),
+          moderationPendingReasons: ["non_event_closure_notice"],
+        }),
+      }),
+    /cannot approve an event/,
+    "Any persisted moderation blocker must keep a service proposal pending.",
   );
   assert.throws(
     () => assertServiceUpdateEventPolicy("approved", {}),
@@ -4149,6 +4345,7 @@ runDescriptionStartTimeQa();
 runQuotedCaptionTitleQa();
 runScheduleConsistencyQa();
 runTicketPriceQa();
+runNamedRepertoireScheduleDeduplicationQa();
 runAtomicDuplicateStatusPreconditionQa();
 
-console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, human-review publication gating, source grounding, atomic duplicate status preconditions, caption date ranges, Serbian relative dates, description start times, schedule consistency, and ticket prices.");
+console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, source-grounded auto-approval, fail-closed review gating, atomic duplicate status preconditions, caption date ranges, Serbian relative dates, description start times, schedule consistency, and ticket prices.");
