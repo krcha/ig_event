@@ -208,7 +208,7 @@ Ingestion:
 2. Active venues are loaded from Convex.
 3. Apify fetches recent Instagram posts per venue handle.
 4. OpenAI extracts structured event data from captions/images.
-5. Ingestion auto-approves only high-confidence candidates whose complete title, date, billed artists, and any explicit time are deterministically recoverable from one coherent scraper-owned caption/alt-text segment. Missing time may publish as `TBD`; model-only or image-only facts, fallback identities, low-confidence dates, missing required venue/date fields, and any moderation blocker remain pending with `requires_human_approval`. Model-authored captions, schedule `source_text`, field-confirmation snippets, and inferred evidence never count as provenance. Maintenance scripts cannot promote records, and pending duplicate re-scrapes cannot overwrite approved public fields.
+5. Ingestion auto-approves only high-confidence candidates whose complete title, date, billed artists, and any explicit time are deterministically recoverable from one coherent scraper-owned Instagram caption. The approval attestation is bound to the exact stored caption, Instagram post ID/URL, and public event payload. Titles must be event-like, exact/source duplicates are skipped, and an existing approved event at the same canonical venue on the same date keeps the candidate pending. Missing time may publish as `TBD`; alt-text-only, model-only, image-only, fallback, low-confidence, malformed-title, and conflicting venue/date candidates remain pending with `requires_human_approval`.
 6. Approved duplicate automerge runs when ingestion completes.
 
 Moderation:

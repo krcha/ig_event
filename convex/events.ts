@@ -10,6 +10,7 @@ import {
   isEventExpiredAtCutoff,
 } from "../lib/events/event-retention";
 import { normalizeEventTimeWritePatch } from "../lib/events/event-time-write";
+import { isSensibleEventTitleForApproval } from "../lib/events/event-title-approval";
 import {
   assertExpectedEventStatus,
   assertServiceCreateEventPolicy,
@@ -70,6 +71,55 @@ const CLEARED_VENUE_DENORMALIZED_FIELDS: VenueDenormalizedFields = {
 
 function normalizeLookup(value: string): string {
   return toSearchableText(value).replace(/\s+/g, " ").trim();
+}
+
+type ApprovalCandidateFields = {
+  title: string;
+  date: string;
+  venue: string;
+  venueId?: Id<"venues">;
+  venueInstagramHandle?: string;
+  instagramPostUrl?: string;
+};
+
+async function assertApprovalCandidatePolicy(
+  ctx: MutationCtx,
+  candidate: ApprovalCandidateFields,
+  excludeEventId?: Id<"events">,
+): Promise<void> {
+  if (!isSensibleEventTitleForApproval(candidate)) {
+    throw new Error("Event title is not suitable for approval.");
+  }
+
+  const sameDateEvents = await ctx.db
+    .query("events")
+    .withIndex("by_date", (q) => q.eq("date", candidate.date))
+    .collect();
+  const candidateVenue = normalizeLookup(candidate.venue);
+  const candidateTitle = normalizeLookup(candidate.title);
+  const candidatePostUrl = normalizeLookup(candidate.instagramPostUrl ?? "");
+  const conflict = sameDateEvents.find((event) => {
+    if (event._id === excludeEventId || event.status !== "approved") {
+      return false;
+    }
+    const sameVenue =
+      (candidate.venueId !== undefined &&
+        event.venueId !== undefined &&
+        event.venueId === candidate.venueId) ||
+      (Boolean(candidate.venueInstagramHandle) &&
+        normalizeHandle(event.venueInstagramHandle ?? "") ===
+          normalizeHandle(candidate.venueInstagramHandle ?? "")) ||
+      (Boolean(candidateVenue) && normalizeLookup(event.venue) === candidateVenue);
+    const sameSourceEvent =
+      Boolean(candidatePostUrl) &&
+      normalizeLookup(event.instagramPostUrl ?? "") === candidatePostUrl &&
+      normalizeLookup(event.title) === candidateTitle;
+    return sameVenue || sameSourceEvent;
+  });
+
+  if (conflict) {
+    throw new Error("An approved event already exists for this venue and date.");
+  }
 }
 
 async function resolveVenueDenormalizedFields(
@@ -787,12 +837,23 @@ export const createEvent = mutation({
   handler: async (ctx, args) => {
     const { actor, kind } = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const { serviceSecret: _serviceSecret, ...eventArgs } = args;
+    const venueFields = await resolveVenueDenormalizedFields(ctx, eventArgs.venue);
     if (kind === "service") {
-      assertServiceCreateEventPolicy(args.status, args.normalizedFieldsJson, eventArgs);
+      if (eventArgs.status === "approved" && !venueFields.venueInstagramHandle) {
+        throw new Error(
+          "Service-authenticated event creation cannot approve an event without a resolved source venue handle.",
+        );
+      }
+      assertServiceCreateEventPolicy(args.status, args.normalizedFieldsJson, {
+        ...eventArgs,
+        ...venueFields,
+      });
     }
     void _serviceSecret;
     const now = Date.now();
-    const venueFields = await resolveVenueDenormalizedFields(ctx, eventArgs.venue);
+    if (eventArgs.status === "approved") {
+      await assertApprovalCandidatePolicy(ctx, { ...eventArgs, ...venueFields });
+    }
     const normalizedEventArgs = normalizeEventTimeWritePatch(eventArgs);
     const eventId = await ctx.db.insert("events", {
       ...normalizedEventArgs,
@@ -867,8 +928,28 @@ export const updateEvent = mutation({
         ? { eventType: canonicalizeEventType(args.patch.eventType) }
         : {}),
     };
+    const effectiveEvent = { ...existingEvent, ...patch };
     if (kind === "service") {
+      if (patch.status === "approved" && !effectiveEvent.venueInstagramHandle) {
+        throw new Error(
+          "Service-authenticated event updates cannot approve an event without a resolved source venue handle.",
+        );
+      }
       assertServiceUpdateEventPolicy(existingEvent.status, patch, existingEvent);
+    }
+    if (effectiveEvent.status === "approved") {
+      await assertApprovalCandidatePolicy(
+        ctx,
+        {
+          title: effectiveEvent.title,
+          date: effectiveEvent.date,
+          venue: effectiveEvent.venue,
+          venueId: effectiveEvent.venueId,
+          venueInstagramHandle: effectiveEvent.venueInstagramHandle,
+          instagramPostUrl: effectiveEvent.instagramPostUrl,
+        },
+        args.id,
+      );
     }
     await ctx.db.patch(args.id, { ...patch, updatedAt: now });
     await writeEventAuditLog(ctx, args.id, "updated", {
@@ -894,6 +975,21 @@ export const setEventStatus = mutation({
 
     if (existingEvent.status !== "pending") {
       throw new Error("Only pending events can be moderated.");
+    }
+
+    if (args.status === "approved") {
+      await assertApprovalCandidatePolicy(
+        ctx,
+        {
+          title: existingEvent.title,
+          date: existingEvent.date,
+          venue: existingEvent.venue,
+          venueId: existingEvent.venueId,
+          venueInstagramHandle: existingEvent.venueInstagramHandle,
+          instagramPostUrl: existingEvent.instagramPostUrl,
+        },
+        args.id,
+      );
     }
 
     const now = Date.now();
@@ -931,6 +1027,34 @@ export const setEventStatuses = mutation({
       if (!existingEvent || existingEvent.status !== "pending") {
         skippedCount += 1;
         continue;
+      }
+
+      if (args.status === "approved") {
+        try {
+          await assertApprovalCandidatePolicy(
+            ctx,
+            {
+              title: existingEvent.title,
+              date: existingEvent.date,
+              venue: existingEvent.venue,
+              venueId: existingEvent.venueId,
+              venueInstagramHandle: existingEvent.venueInstagramHandle,
+              instagramPostUrl: existingEvent.instagramPostUrl,
+            },
+            id,
+          );
+        } catch (error) {
+          if (
+            !(error instanceof Error) ||
+            !/^(?:Event title is not suitable for approval|An approved event already exists for this venue and date)\.$/.test(
+              error.message,
+            )
+          ) {
+            throw error;
+          }
+          skippedCount += 1;
+          continue;
+        }
       }
 
       await ctx.db.patch(id, {

@@ -111,7 +111,7 @@ export function buildBackfillDecision(event) {
     Boolean(event.sourceCaption);
   const suspiciousYear = readBoolean(normalizedFields, "dateSuspiciousYear");
   const titleUsedFallback = readBoolean(normalizedFields, "titleUsedFallback");
-  const sourceGroundingVerified = hasVerifiedSourceGrounding(normalizedFields);
+  const sourceGroundingVerified = hasVerifiedSourceGrounding(normalizedFields, event);
   const hardPendingReasons = getHardPendingReasons(normalizedFields);
   const dateConfidence = readString(normalizedFields, "dateConfidence");
   const missingTime = !event.time;

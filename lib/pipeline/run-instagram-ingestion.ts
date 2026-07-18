@@ -68,6 +68,8 @@ import { loadVenueNameOverridesByHandle } from "@/lib/pipeline/venue-name-overri
 import { loadOperationalVenueRecords } from "@/lib/pipeline/operational-venues";
 import { getRequiredEnv } from "@/lib/utils/env";
 import { hasCompleteSourceGroundedAutoApproval } from "@/lib/events/event-update-precondition";
+import { isSensibleEventTitleForApproval } from "@/lib/events/event-title-approval";
+import { isCaptionSourceCoherentWithEvent } from "@/lib/events/event-source-approval";
 
 type RunInstagramIngestionOptions = {
   handles: string[];
@@ -1647,12 +1649,7 @@ function extractPostAltTextEvidence(value: string | null | undefined): string {
 }
 
 function buildIndependentPostTextEvidence(post: InstagramScrapedPost): string {
-  return [...new Set([
-    normalizeString(post.caption),
-    extractPostAltTextEvidence(post.altText),
-  ])]
-    .filter((value) => value.length > 0)
-    .join("\n");
+  return normalizeString(post.caption);
 }
 
 function buildPostTextEvidence(
@@ -6125,6 +6122,11 @@ export function prepareEventsForInsert(
     sourceCaptionFromModel: normalizeString(extracted.source_caption),
     sourceUrlFromModel: normalizeString(extracted.source_url),
     postAltText: extractPostAltTextEvidence(post.altText) || null,
+    sourceGroundingSourceKind: "caption",
+    sourceGroundingSourceCaption: normalizeString(post.caption) || null,
+    sourceGroundingInstagramPostId: normalizeString(post.postId) || null,
+    sourceGroundingInstagramPostUrl: normalizeString(post.instagramPostUrl) || null,
+    sourceGroundingInstagramHandle: normalizeHandle(post.username) || null,
     fieldConfirmation: extracted.field_confirmation,
     extractionFieldEvidence: buildExtractionFieldEvidence(extracted.field_confirmation),
     postTimestamp: post.postedAt,
@@ -6410,8 +6412,25 @@ export function prepareEventsForInsert(
       venue: venueNormalization.venue,
       instagramHandle: post.username,
     });
+    const approvalTitleSensible = isSensibleEventTitleForApproval({
+      title: variant.title,
+      venue: venueNormalization.venue,
+    });
+    const approvalCaptionSourceCoherent = isCaptionSourceCoherentWithEvent({
+      title: variant.title,
+      date,
+      venue: venueNormalization.venue,
+      artists: variant.artists,
+      sourceCaption: post.caption,
+      instagramPostId: post.postId,
+      instagramPostUrl: post.instagramPostUrl,
+      sourceInstagramHandle: post.username,
+      venueInstagramHandle: post.username,
+    });
     const autoApprovalBlockers = [
       ...sourceGrounding.blockers,
+      ...(!approvalTitleSensible ? ["unusable_event_title"] : []),
+      ...(!approvalCaptionSourceCoherent ? ["caption_source_event_mismatch"] : []),
       ...getNonEventAutoApprovalBlockers(
         [
           postTextEvidence,
@@ -6477,8 +6496,10 @@ export function prepareEventsForInsert(
       moderationAutoApproveThreshold: AUTO_APPROVE_CONFIDENCE_THRESHOLD,
       moderationCoreEventAutoApproveThreshold: CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
       moderationCaptionOnlyVideoMinConfidence: CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE,
-      sourceGroundingVersion: 2,
-      sourceGroundingEvidence: "instagram_caption_or_alt_text",
+      sourceGroundingVersion: 3,
+      sourceGroundingEvidence: "instagram_caption",
+      approvalTitleSensible,
+      approvalCaptionSourceCoherent,
       sourceGroundingVerified: sourceGrounding.verified,
       sourceGroundingTitleVerified: sourceGrounding.titleVerified,
       sourceGroundingDateVerified: sourceGrounding.dateVerified,
@@ -6893,6 +6914,35 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
         normalizedFields: prepared.normalizedFields,
       });
       continue;
+    }
+
+    if (
+      prepared.event.status === "approved" &&
+      existingMatches.some(
+        (match) =>
+          match.existingEvent.status === "approved" &&
+          match.existingEvent.date === prepared.event.date &&
+          toSearchableText(match.existingEvent.venue) === toSearchableText(prepared.event.venue),
+      )
+    ) {
+      const pendingReasons = [
+        ...new Set([
+          ...((prepared.normalizedFields.moderationPendingReasons as string[] | undefined) ?? []),
+          "approved_venue_date_conflict",
+        ]),
+      ];
+      const moderationSignals = [
+        ...new Set([
+          ...((prepared.normalizedFields.moderationSignals as string[] | undefined) ?? []),
+          "approved_venue_date_conflict",
+        ]),
+      ];
+      prepared.normalizedFields.moderationAutoApproved = false;
+      prepared.normalizedFields.moderationAutoApproveRule = null;
+      prepared.normalizedFields.moderationPendingReasons = pendingReasons;
+      prepared.normalizedFields.moderationSignals = moderationSignals;
+      prepared.event.status = "pending";
+      prepared.event.normalizedFieldsJson = JSON.stringify(prepared.normalizedFields);
     }
 
     const existingMatch = findBestExistingMatchForPreparedEvent(

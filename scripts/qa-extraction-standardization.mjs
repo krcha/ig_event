@@ -45,6 +45,7 @@ import {
   assertServiceUpdateEventPolicy,
   hasCompleteSourceGroundedAutoApproval,
 } from "../lib/events/event-update-precondition.ts";
+import { isSensibleEventTitleForApproval } from "../lib/events/event-title-approval.ts";
 import { buildBackfillDecision } from "./backfill-moderation-scores.mjs";
 import { buildPatch as buildTbdRepairPatch } from "./repair-event-tbd-times.mjs";
 import {
@@ -54,7 +55,7 @@ import {
 import { buildRepair as buildConsistencyRepair } from "./repair-event-consistency.mjs";
 import { chooseAction as chooseEventQualityAction } from "./audit-event-quality.mjs";
 import { markModelDerivedRepairPending } from "./source-grounding-guard.mjs";
-import { createEvent, updateEvent } from "../convex/events.ts";
+import { createEvent, setEventStatus, updateEvent } from "../convex/events.ts";
 
 const STATIC_VENUE_BY_HANDLE = {
   "20_44.nightclub": "Klub 20/44",
@@ -163,7 +164,7 @@ function futureSameMonthIsoDateRange(length, minOffsetDays = 7) {
 
 function makeInstagramPost(overrides = {}) {
   return {
-    postId: "qa-post-id",
+    postId: "qa-post",
     caption: "",
     altText: null,
     imageUrl: null,
@@ -755,6 +756,8 @@ function runVideoModerationQa() {
   assert.deepEqual(fallbackTitleCoreFieldsNormalized.moderationPendingReasons, [
     "requires_human_approval",
     "unverified_core_event_source",
+    "unusable_event_title",
+    "caption_source_event_mismatch",
   ]);
   assert.equal(fallbackTitleCoreFieldsNormalized.sourceGroundingTitleVerified, false);
   assert.ok(fallbackTitleCoreFieldsNormalized.moderationSignals.includes("fallback_title"));
@@ -821,6 +824,7 @@ function runVideoModerationQa() {
   assert.deepEqual(sparseFields.moderationPendingReasons, [
     "requires_human_approval",
     "unverified_core_event_source",
+    "caption_source_event_mismatch",
   ]);
 }
 
@@ -989,6 +993,7 @@ function runUnverifiedPosterScheduleModerationQa() {
     assert.deepEqual(fields.moderationPendingReasons, [
       "requires_human_approval",
       "unverified_core_event_source",
+      "caption_source_event_mismatch",
     ]);
   }
 
@@ -2824,8 +2829,15 @@ function runMaintenancePromotionGroundingQa() {
     sourceGroundingVerified: false,
   };
   const completeGrounding = {
-    sourceGroundingVersion: 2,
-    sourceGroundingEvidence: "instagram_caption_or_alt_text",
+    sourceGroundingVersion: 3,
+    sourceGroundingEvidence: "instagram_caption",
+    sourceGroundingSourceKind: "caption",
+    sourceGroundingSourceCaption: `${ddmmForIsoDate(isoDateDaysFromNow(7))} ALICE`,
+    sourceGroundingInstagramPostId: "qa-maintenance-post",
+    sourceGroundingInstagramPostUrl: "https://www.instagram.com/p/qa-maintenance-post/",
+    sourceGroundingInstagramHandle: "qa_venue",
+    approvalTitleSensible: true,
+    approvalCaptionSourceCoherent: true,
     sourceGroundingVerified: true,
     sourceGroundingTitleVerified: true,
     sourceGroundingDateVerified: true,
@@ -2840,8 +2852,11 @@ function runMaintenancePromotionGroundingQa() {
     date: isoDateDaysFromNow(7),
     time: null,
     venue: "QA Venue",
+    venueInstagramHandle: "qa_venue",
     imageUrl: "https://cdn.example.com/poster.jpg",
     sourceCaption: `${ddmmForIsoDate(isoDateDaysFromNow(7))} ALICE`,
+    instagramPostId: "qa-maintenance-post",
+    instagramPostUrl: "https://www.instagram.com/p/qa-maintenance-post/",
     normalizedFieldsJson: JSON.stringify(normalizedFields),
     rawExtractionJson: JSON.stringify({ confidence: 0.99 }),
   };
@@ -4227,14 +4242,23 @@ function runAtomicDuplicateStatusPreconditionQa() {
     artists: ["QA Artist"],
     imageUrl: "https://example.com/grounded-qa-event.jpg",
     sourceCaption: "Grounded QA Event 30. jul @ QA Venue uz QA Artist",
+    instagramPostId: "grounded-qa-event-post",
+    instagramPostUrl: "https://www.instagram.com/p/grounded-qa-event-post/",
   };
   const completeSourceGroundedApproval = JSON.stringify({
     title: approvalPublicFields.title,
     time: approvalPublicFields.time,
     artists: approvalPublicFields.artists,
     postAltText: null,
-    sourceGroundingVersion: 2,
-    sourceGroundingEvidence: "instagram_caption_or_alt_text",
+    sourceGroundingSourceKind: "caption",
+    sourceGroundingSourceCaption: approvalPublicFields.sourceCaption,
+    sourceGroundingInstagramPostId: approvalPublicFields.instagramPostId,
+    sourceGroundingInstagramPostUrl: approvalPublicFields.instagramPostUrl,
+    sourceGroundingInstagramHandle: "qa_venue",
+    sourceGroundingVersion: 3,
+    sourceGroundingEvidence: "instagram_caption",
+    approvalTitleSensible: true,
+    approvalCaptionSourceCoherent: true,
     sourceGroundingVerified: true,
     sourceGroundingTitleVerified: true,
     sourceGroundingDateVerified: true,
@@ -4258,6 +4282,41 @@ function runAtomicDuplicateStatusPreconditionQa() {
     moderationAllowMissingImage: false,
   });
   assert.doesNotThrow(() => assertExpectedEventStatus("pending", "pending"));
+  for (const title of [
+    "World Cup Final",
+    "Open Air Summer Season Closing",
+    "Every Thursday Night",
+    "Docile Bodies",
+  ]) {
+    assert.equal(
+      isSensibleEventTitleForApproval({ title, venue: "QA Venue" }),
+      true,
+      `Expected a sensible event title: ${title}`,
+    );
+  }
+  for (const title of [
+    "FINAL",
+    "petak 17.7",
+    "🗓️ 20",
+    "Karađorđeva 44 2nd Floor",
+    "i njegov trio održaće Koncert",
+    "SPECIAL PIZZA AND KOKTELS IN BUFFALO 50",
+    "QA Venue",
+  ]) {
+    assert.equal(
+      isSensibleEventTitleForApproval({ title, venue: "QA Venue" }),
+      false,
+      `Expected an unusable event title: ${title}`,
+    );
+  }
+  assert.equal(
+    isSensibleEventTitleForApproval({
+      title: "Cantina de Frida hours",
+      venue: "Cantina de Frida",
+    }),
+    false,
+    "A venue opening-hours label must not be approvable as an event title.",
+  );
   assert.doesNotThrow(() => assertExpectedEventStatus("approved", "approved"));
   assert.throws(
     () => assertExpectedEventStatus("approved", "pending"),
@@ -4350,6 +4409,9 @@ function runAtomicDuplicateStatusPreconditionQa() {
     ["time", "23:59"],
     ["venue", "DIFFERENT MODEL VENUE"],
     ["artists", ["MODEL-ONLY ARTIST"]],
+    ["sourceCaption", "UNRELATED SOURCE CAPTION"],
+    ["instagramPostId", "unrelated-post-id"],
+    ["instagramPostUrl", "https://www.instagram.com/p/unrelated-post-id/"],
   ]) {
     assert.throws(
       () =>
@@ -4395,6 +4457,38 @@ function runAtomicDuplicateStatusPreconditionQa() {
     "Null artist grounding must not authorize nonempty public artists.",
   );
   assert.throws(
+    () =>
+      assertServiceCreateEventPolicy(
+        "approved",
+        JSON.stringify({
+          ...JSON.parse(completeSourceGroundedApproval),
+          sourceGroundingSourceKind: "alt_text",
+          sourceGroundingSourceCaption: null,
+          postAltText: "UNRELATED ALT TEXT",
+        }),
+        approvalPublicFields,
+      ),
+    /cannot approve an event/,
+    "Alt-text-only metadata must not authorize automatic publication.",
+  );
+  assert.throws(
+    () =>
+      assertServiceCreateEventPolicy(
+        "approved",
+        JSON.stringify({
+          ...JSON.parse(completeSourceGroundedApproval),
+          sourceGroundingSourceCaption:
+            "Unrelated Showcase 30. jul @ QA Venue uz QA Artist",
+        }),
+        {
+          ...approvalPublicFields,
+          sourceCaption: "Unrelated Showcase 30. jul @ QA Venue uz QA Artist",
+        },
+      ),
+    /cannot approve an event/,
+    "A self-consistent but unrelated caption attestation must not authorize publication.",
+  );
+  assert.throws(
     () => assertServiceUpdateEventPolicy("approved", {}),
     /must demote an approved event/,
     "Even an empty service patch must not update an approved row's updatedAt timestamp.",
@@ -4427,16 +4521,30 @@ function runAtomicDuplicateStatusPreconditionQa() {
 
 async function runServiceApprovalMutationBoundaryQa() {
   const previousCronSecret = process.env.CRON_SECRET;
+  const previousAdminUserIds = process.env.ADMIN_CLERK_USER_IDS;
   const serviceSecret = "qa-service-approval-boundary-secret";
+  const adminUserId = "qa-admin-user";
   process.env.CRON_SECRET = serviceSecret;
+  process.env.ADMIN_CLERK_USER_IDS = adminUserId;
 
+  const sourceCaption =
+    "Grounded Handler Event 30. jul @ Grounded Handler Venue uz Grounded Handler Artist";
+  const instagramPostUrl = "https://www.instagram.com/p/qa-handler-boundary/";
+  const instagramPostId = "qa-handler-boundary";
   const normalizedFieldsJson = JSON.stringify({
     title: "Grounded Handler Event",
     time: TBD_EVENT_TIME,
     artists: ["Grounded Handler Artist"],
     postAltText: null,
-    sourceGroundingVersion: 2,
-    sourceGroundingEvidence: "instagram_caption_or_alt_text",
+    sourceGroundingSourceKind: "caption",
+    sourceGroundingSourceCaption: sourceCaption,
+    sourceGroundingInstagramPostId: instagramPostId,
+    sourceGroundingInstagramPostUrl: instagramPostUrl,
+    sourceGroundingInstagramHandle: "qa_venue",
+    sourceGroundingVersion: 3,
+    sourceGroundingEvidence: "instagram_caption",
+    approvalTitleSensible: true,
+    approvalCaptionSourceCoherent: true,
     sourceGroundingVerified: true,
     sourceGroundingTitleVerified: true,
     sourceGroundingDateVerified: true,
@@ -4466,20 +4574,21 @@ async function runServiceApprovalMutationBoundaryQa() {
     venue: "Grounded Handler Venue",
     artists: ["Grounded Handler Artist"],
     imageUrl: "https://example.com/grounded-handler-event.jpg",
-    sourceCaption:
-      "Grounded Handler Event 30. jul @ Grounded Handler Venue uz Grounded Handler Artist",
-    instagramPostUrl: "https://www.instagram.com/p/qa-handler-boundary/",
-    instagramPostId: "qa-handler-boundary",
+    sourceCaption,
+    instagramPostUrl,
+    instagramPostId,
     eventType: "nightlife",
     status: "approved",
     normalizedFieldsJson,
   };
   let inserted = false;
   let patched = false;
+  let sameDateEvents = [];
   const fakeDb = {
     get: async () => ({
       _id: "qa-existing-event",
       ...groundedPublicFields,
+      venueInstagramHandle: "qa_venue",
       status: "pending",
     }),
     insert: async () => {
@@ -4489,12 +4598,28 @@ async function runServiceApprovalMutationBoundaryQa() {
     patch: async () => {
       patched = true;
     },
-    query: () => ({
-      withIndex: () => ({ first: async () => null }),
-    }),
+    query: (table) =>
+      table === "venues"
+        ? {
+            collect: async () => [
+              {
+                _id: "qa-venue-id",
+                name: "Grounded Handler Venue",
+                instagramHandle: "qa_venue",
+                category: "nightlife",
+                publicStatus: "published",
+              },
+            ],
+          }
+        : {
+            withIndex: () => ({
+              collect: async () => sameDateEvents,
+              first: async () => null,
+            }),
+          },
   };
   const ctx = {
-    auth: { getUserIdentity: async () => null },
+    auth: { getUserIdentity: async () => ({ subject: adminUserId }) },
     db: fakeDb,
   };
 
@@ -4510,7 +4635,7 @@ async function runServiceApprovalMutationBoundaryQa() {
           artists: ["MODEL-ONLY ARTIST"],
           serviceSecret,
         }),
-      /bound to the public fields/,
+      /(?:bound to the public fields|resolved source venue handle)/,
       "The real create mutation must reject an attestation for different public fields.",
     );
     assert.equal(inserted, false);
@@ -4531,11 +4656,183 @@ async function runServiceApprovalMutationBoundaryQa() {
       "The real update mutation must reject a mismatched merged payload.",
     );
     assert.equal(patched, false);
+
+    const sourceSwapCases = [
+      {
+        label: "caption",
+        createPatch: { sourceCaption: "UNRELATED SOURCE CAPTION" },
+        updatePatch: { sourceCaption: "UNRELATED SOURCE CAPTION" },
+      },
+      {
+        label: "post ID",
+        createPatch: { instagramPostId: "unrelated-post-id" },
+        updatePatch: { instagramPostId: "unrelated-post-id" },
+      },
+      {
+        label: "post URL",
+        createPatch: {
+          instagramPostUrl: "https://www.instagram.com/p/unrelated-post-id/",
+        },
+        updatePatch: {
+          instagramPostUrl: "https://www.instagram.com/p/unrelated-post-id/",
+        },
+      },
+      {
+        label: "source account",
+        normalizedFieldsJson: JSON.stringify({
+          ...JSON.parse(normalizedFieldsJson),
+          sourceGroundingInstagramHandle: "unrelated_venue",
+        }),
+        createPatch: {},
+        updatePatch: {},
+      },
+      {
+        label: "self-consistent unrelated caption",
+        normalizedFieldsJson: JSON.stringify({
+          ...JSON.parse(normalizedFieldsJson),
+          sourceGroundingSourceCaption:
+            "Unrelated Showcase 30. jul @ Grounded Handler Venue uz Grounded Handler Artist",
+        }),
+        createPatch: {
+          sourceCaption:
+            "Unrelated Showcase 30. jul @ Grounded Handler Venue uz Grounded Handler Artist",
+        },
+        updatePatch: {
+          sourceCaption:
+            "Unrelated Showcase 30. jul @ Grounded Handler Venue uz Grounded Handler Artist",
+        },
+      },
+      {
+        label: "alt-text-only source",
+        normalizedFieldsJson: JSON.stringify({
+          ...JSON.parse(normalizedFieldsJson),
+          sourceGroundingSourceKind: "alt_text",
+          sourceGroundingSourceCaption: null,
+          postAltText: "UNRELATED ALT TEXT",
+        }),
+        createPatch: {},
+        updatePatch: {},
+      },
+    ];
+    for (const testCase of sourceSwapCases) {
+      inserted = false;
+      patched = false;
+      const candidateNormalizedFieldsJson =
+        testCase.normalizedFieldsJson ?? normalizedFieldsJson;
+      await assert.rejects(
+        () =>
+          createEvent._handler(ctx, {
+            ...groundedPublicFields,
+            ...testCase.createPatch,
+            normalizedFieldsJson: candidateNormalizedFieldsJson,
+            serviceSecret,
+          }),
+        /bound to the public fields/,
+        `The real create mutation must reject a swapped ${testCase.label}.`,
+      );
+      assert.equal(inserted, false);
+
+      await assert.rejects(
+        () =>
+          updateEvent._handler(ctx, {
+            id: "qa-existing-event",
+            expectedStatus: "pending",
+            serviceSecret,
+            patch: {
+              status: "approved",
+              normalizedFieldsJson: candidateNormalizedFieldsJson,
+              ...testCase.updatePatch,
+            },
+          }),
+        /bound to the public fields/,
+        `The real update mutation must reject a swapped ${testCase.label}.`,
+      );
+      assert.equal(patched, false);
+    }
+
+    sameDateEvents = [];
+    inserted = false;
+    await assert.doesNotReject(() =>
+      createEvent._handler(ctx, {
+        ...groundedPublicFields,
+        serviceSecret,
+      }),
+    );
+    assert.equal(inserted, true, "A fully bound unique service create should write.");
+
+    patched = false;
+    await assert.doesNotReject(() =>
+      updateEvent._handler(ctx, {
+        id: "qa-existing-event",
+        expectedStatus: "pending",
+        serviceSecret,
+        patch: {
+          status: "approved",
+          normalizedFieldsJson,
+        },
+      }),
+    );
+    assert.equal(patched, true, "A fully bound unique pending promotion should write.");
+
+    sameDateEvents = [
+      {
+        _id: "qa-approved-conflict",
+        title: "Other Approved Event",
+        date: groundedPublicFields.date,
+        venue: groundedPublicFields.venue,
+        status: "approved",
+      },
+    ];
+    inserted = false;
+    patched = false;
+    await assert.rejects(
+      () =>
+        createEvent._handler(ctx, {
+          ...groundedPublicFields,
+          serviceSecret,
+        }),
+      /already exists for this venue and date/,
+      "Service create must not approve a second event for one venue/date.",
+    );
+    assert.equal(inserted, false);
+
+    await assert.rejects(
+      () =>
+        updateEvent._handler(ctx, {
+          id: "qa-existing-event",
+          expectedStatus: "pending",
+          serviceSecret,
+          patch: {
+            status: "approved",
+            normalizedFieldsJson,
+          },
+        }),
+      /already exists for this venue and date/,
+      "Service update must not approve a second event for one venue/date.",
+    );
+    assert.equal(patched, false);
+
+    await assert.rejects(
+      () =>
+        setEventStatus._handler(ctx, {
+          id: "qa-existing-event",
+          status: "approved",
+          reviewedBy: adminUserId,
+        }),
+      /already exists for this venue and date/,
+      "Manual moderation must not approve a second event for one venue/date.",
+    );
+    assert.equal(patched, false);
   } finally {
     if (previousCronSecret === undefined) {
       delete process.env.CRON_SECRET;
     } else {
       process.env.CRON_SECRET = previousCronSecret;
+    }
+    if (previousAdminUserIds === undefined) {
+      delete process.env.ADMIN_CLERK_USER_IDS;
+    } else {
+      process.env.ADMIN_CLERK_USER_IDS = previousAdminUserIds;
     }
   }
 }
