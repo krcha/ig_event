@@ -141,7 +141,7 @@ export function buildPatch(event) {
   const missingImage = readBoolean(normalizedFields, "missingImage");
   const allowMissingImage = readBoolean(normalizedFields, "moderationAllowMissingImage");
   const titleUsedFallback = readBoolean(normalizedFields, "titleUsedFallback");
-  const sourceGroundingVerified = hasVerifiedSourceGrounding(normalizedFields);
+  const sourceGroundingVerified = hasVerifiedSourceGrounding(normalizedFields, event);
   const hardPendingReasons = uniqueStrings([
     ...getHardPendingReasons(normalizedFields),
     ...(event.status === "rejected" ? ["rejected_status"] : []),

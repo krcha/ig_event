@@ -1,4 +1,6 @@
 import { TBD_EVENT_TIME } from "./event-time.ts";
+import { isSensibleEventTitleForApproval } from "./event-title-approval.ts";
+import { isCaptionSourceCoherentWithEvent } from "./event-source-approval.ts";
 import { CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD } from "../utils/confidence.ts";
 
 export type EventStatusPrecondition = "pending" | "approved" | "rejected";
@@ -11,6 +13,9 @@ type EventApprovalFields = Record<string, unknown> & {
   artists?: unknown;
   imageUrl?: unknown;
   sourceCaption?: unknown;
+  instagramPostId?: unknown;
+  instagramPostUrl?: unknown;
+  venueInstagramHandle?: unknown;
 };
 
 type EventWritePatch = EventApprovalFields & {
@@ -89,8 +94,12 @@ function hasBoundPublicFields(
   const publicVenue = normalizeComparableText(eventFields.venue);
   const publicArtists = normalizeComparableArtists(eventFields.artists ?? []);
   const publicImageUrl = normalizeComparableText(eventFields.imageUrl);
-  const sourceCaption = normalizeComparableText(eventFields.sourceCaption);
-  const postAltText = normalizeComparableText(fields.postAltText);
+  const publicSourceCaption = normalizeComparableText(eventFields.sourceCaption);
+  const publicPostId = normalizeComparableText(eventFields.instagramPostId);
+  const publicPostUrl = normalizeComparableText(eventFields.instagramPostUrl);
+  const attestedSourceCaption = normalizeComparableText(fields.sourceGroundingSourceCaption);
+  const attestedPostId = normalizeComparableText(fields.sourceGroundingInstagramPostId);
+  const attestedPostUrl = normalizeComparableText(fields.sourceGroundingInstagramPostUrl);
 
   if (
     !attestedTitle ||
@@ -105,7 +114,30 @@ function hasBoundPublicFields(
     attestedDate !== publicDate ||
     attestedVenue !== publicVenue ||
     !arraysEqual(attestedArtists, publicArtists) ||
-    (!sourceCaption && !postAltText)
+    fields.sourceGroundingSourceKind !== "caption" ||
+    !attestedSourceCaption ||
+    !attestedPostId ||
+    !attestedPostUrl ||
+    !publicSourceCaption ||
+    !publicPostId ||
+    !publicPostUrl ||
+    attestedSourceCaption !== publicSourceCaption ||
+    attestedPostId !== publicPostId ||
+    attestedPostUrl !== publicPostUrl ||
+    fields.approvalTitleSensible !== true ||
+    !isSensibleEventTitleForApproval({ title: publicTitle, venue: publicVenue }) ||
+    !isCaptionSourceCoherentWithEvent({
+      title: publicTitle,
+      date: publicDate,
+      venue: publicVenue,
+      artists: publicArtists,
+      sourceCaption: publicSourceCaption,
+      instagramPostId: publicPostId,
+      instagramPostUrl: publicPostUrl,
+      sourceInstagramHandle: fields.sourceGroundingInstagramHandle,
+      venueInstagramHandle:
+        eventFields.venueInstagramHandle ?? fields.sourceGroundingInstagramHandle,
+    })
   ) {
     return false;
   }
@@ -161,8 +193,10 @@ export function hasCompleteSourceGroundedAutoApproval(
   const missingImage = fields.missingImage;
 
   return (
-    fields.sourceGroundingVersion === 2 &&
-    fields.sourceGroundingEvidence === "instagram_caption_or_alt_text" &&
+    fields.sourceGroundingVersion === 3 &&
+    fields.sourceGroundingEvidence === "instagram_caption" &&
+    fields.approvalTitleSensible === true &&
+    fields.approvalCaptionSourceCoherent === true &&
     fields.sourceGroundingVerified === true &&
     fields.sourceGroundingTitleVerified === true &&
     fields.sourceGroundingDateVerified === true &&
