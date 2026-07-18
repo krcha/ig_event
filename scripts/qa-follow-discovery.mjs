@@ -15,19 +15,25 @@ import {
 } from "../lib/pipeline/follow-discovery.ts";
 
 const vercelConfig = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8"));
+const composeSource = readFileSync(new URL("../docker-compose.yml", import.meta.url), "utf8");
 assert.deepEqual(
   vercelConfig.crons,
   [],
   "Vercel Cron should stay disabled; the VPS host cron owns ingestion and follow-discovery scheduling.",
 );
 
-assert.equal(DEFAULT_FOLLOW_DISCOVERY_SOURCE_HANDLE, "going_places11");
+assert.equal(DEFAULT_FOLLOW_DISCOVERY_SOURCE_HANDLE, "eventzeka");
+assert.match(
+  composeSource,
+  /FOLLOW_DISCOVERY_SOURCE_HANDLE: \$\{FOLLOW_DISCOVERY_SOURCE_HANDLE:-eventzeka\}/,
+  "Compose should default follow-discovery to the Event Zeka curator account.",
+);
 assert.equal(DEFAULT_FOLLOW_DISCOVERY_ACTOR_ID, "scraping_solutions/instagram-scraper-followers-following-no-cookies");
 assert.equal(DEFAULT_FOLLOW_DISCOVERY_RESULTS_LIMIT, 1500);
 assert.equal(DEFAULT_FOLLOW_DISCOVERY_MAX_TOTAL_CHARGE_USD, 1.1);
 
 const defaultConfig = getFollowDiscoveryConfig({});
-assert.equal(defaultConfig.sourceHandle, "going_places11");
+assert.equal(defaultConfig.sourceHandle, "eventzeka");
 assert.equal(defaultConfig.actorId, DEFAULT_FOLLOW_DISCOVERY_ACTOR_ID);
 assert.equal(defaultConfig.resultsLimit, DEFAULT_FOLLOW_DISCOVERY_RESULTS_LIMIT);
 assert.equal(defaultConfig.maxTotalChargeUsd, DEFAULT_FOLLOW_DISCOVERY_MAX_TOTAL_CHARGE_USD);
@@ -35,12 +41,12 @@ assert.equal(defaultConfig.ingestionResultsLimit, 1);
 assert.equal(defaultConfig.ingestionDaysBack, 10);
 
 const normalizedConfig = getFollowDiscoveryConfig({
-  FOLLOW_DISCOVERY_SOURCE_HANDLE: " https://www.instagram.com/Going_Places11/ ",
+  FOLLOW_DISCOVERY_SOURCE_HANDLE: " https://www.instagram.com/EventZeka/ ",
   FOLLOW_DISCOVERY_RESULTS_LIMIT: "999999",
   FOLLOW_DISCOVERY_MAX_TOTAL_CHARGE_USD: "999",
   FOLLOW_DISCOVERY_TIMEOUT_SECONDS: "999",
 });
-assert.equal(normalizedConfig.sourceHandle, "going_places11");
+assert.equal(normalizedConfig.sourceHandle, "eventzeka");
 assert.equal(normalizedConfig.resultsLimit, MAX_FOLLOW_DISCOVERY_RESULTS_LIMIT);
 assert.equal(normalizedConfig.maxTotalChargeUsd, MAX_FOLLOW_DISCOVERY_MAX_TOTAL_CHARGE_USD);
 assert.ok(normalizedConfig.timeoutSeconds <= 300);
@@ -50,14 +56,14 @@ const blankOverrideConfig = getFollowDiscoveryConfig({
   FOLLOW_DISCOVERY_RESULTS_LIMIT: "0",
   FOLLOW_DISCOVERY_MAX_TOTAL_CHARGE_USD: "free",
 });
-assert.equal(blankOverrideConfig.sourceHandle, "going_places11");
+assert.equal(blankOverrideConfig.sourceHandle, "eventzeka");
 assert.equal(blankOverrideConfig.resultsLimit, DEFAULT_FOLLOW_DISCOVERY_RESULTS_LIMIT);
 assert.equal(blankOverrideConfig.maxTotalChargeUsd, DEFAULT_FOLLOW_DISCOVERY_MAX_TOTAL_CHARGE_USD);
 
 const followingRequest = buildApifyFollowingScrapeRequest(defaultConfig);
 assert.equal(followingRequest.actorId, DEFAULT_FOLLOW_DISCOVERY_ACTOR_ID);
 assert.deepEqual(followingRequest.input, {
-  Account: ["going_places11"],
+  Account: ["eventzeka"],
   resultsLimit: DEFAULT_FOLLOW_DISCOVERY_RESULTS_LIMIT,
   dataToScrape: "Followings",
 });
@@ -136,7 +142,7 @@ const workflowResult = await runFollowDiscoveryWorkflow({
     },
   },
 });
-assert.equal(workflowResult.sourceHandle, "going_places11");
+assert.equal(workflowResult.sourceHandle, "eventzeka");
 assert.deepEqual(createdVenues, [
   {
     name: "New Place",

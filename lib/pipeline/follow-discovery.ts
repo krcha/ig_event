@@ -4,7 +4,7 @@ import { getRequiredEnv } from "../utils/env.ts";
 const APIFY_API_BASE_URL = "https://api.apify.com/v2";
 
 export const FOLLOW_DISCOVERY_CRON_PATH = "/api/cron/discover-following";
-export const DEFAULT_FOLLOW_DISCOVERY_SOURCE_HANDLE = "going_places11";
+export const DEFAULT_FOLLOW_DISCOVERY_SOURCE_HANDLE = "eventzeka";
 export const DEFAULT_FOLLOW_DISCOVERY_ACTOR_ID =
   "scraping_solutions/instagram-scraper-followers-following-no-cookies";
 export const DEFAULT_FOLLOW_DISCOVERY_RESULTS_LIMIT = 1500;
