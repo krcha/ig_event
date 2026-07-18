@@ -5668,7 +5668,7 @@ export function buildDuplicateUpdatePatch(
   const effectiveNextStatus: EventStatus =
     next.status === "approved" &&
     (existing.status === "rejected" ||
-      !hasCompleteSourceGroundedAutoApproval(next.normalizedFieldsJson))
+      !hasCompleteSourceGroundedAutoApproval(next.normalizedFieldsJson, next))
       ? "pending"
       : next.status;
   const statusAutoApproved =

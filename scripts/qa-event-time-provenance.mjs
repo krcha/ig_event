@@ -100,6 +100,8 @@ const preparedDuplicate = {
   timeStatus: "confirmed",
   venue: "QA Venue",
   artists: ["QA Artist"],
+  imageUrl: "https://example.com/qa-event.jpg",
+  sourceCaption: "QA Event 15. jul u 21h @ QA Venue uz QA Artist",
   instagramPostUrl: "https://www.instagram.com/p/qa-event/",
   instagramPostId: "qa-event",
   eventType: "nightlife",
@@ -135,6 +137,10 @@ assert.equal(
 );
 assert.deepEqual(staleApprovedDuplicate.patch, {});
 const completeSourceGroundedApprovalJson = JSON.stringify({
+  title: "QA Event",
+  time: "21:00",
+  artists: ["QA Artist"],
+  postAltText: null,
   sourceGroundingVersion: 2,
   sourceGroundingEvidence: "instagram_caption_or_alt_text",
   sourceGroundingVerified: true,
@@ -150,7 +156,7 @@ const completeSourceGroundedApprovalJson = JSON.stringify({
   moderationPendingReasons: [],
   moderationSignals: [],
   moderationConfidenceScore: 0.95,
-  normalizedDate: "2026-07-30",
+  normalizedDate: "2026-07-15",
   normalizedVenue: "QA Venue",
   normalizedIsValid: true,
   titleUsedFallback: false,
@@ -179,7 +185,8 @@ const rejectedAutoApprovedDuplicate = buildDuplicateUpdatePatch(
   },
 );
 assert.equal(rejectedAutoApprovedDuplicate.statusAutoApproved, false);
-assert.equal(rejectedAutoApprovedDuplicate.patch.status, undefined);
+assert.equal(rejectedAutoApprovedDuplicate.statusResetToPending, true);
+assert.equal(rejectedAutoApprovedDuplicate.patch.status, "pending");
 const completeApprovedDuplicate = buildDuplicateUpdatePatch(
   { ...existingDuplicate, status: "approved" },
   {

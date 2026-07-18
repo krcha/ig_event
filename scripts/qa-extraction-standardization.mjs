@@ -43,6 +43,7 @@ import {
   assertExpectedEventStatus,
   assertServiceCreateEventPolicy,
   assertServiceUpdateEventPolicy,
+  hasCompleteSourceGroundedAutoApproval,
 } from "../lib/events/event-update-precondition.ts";
 import { buildBackfillDecision } from "./backfill-moderation-scores.mjs";
 import { buildPatch as buildTbdRepairPatch } from "./repair-event-tbd-times.mjs";
@@ -53,6 +54,7 @@ import {
 import { buildRepair as buildConsistencyRepair } from "./repair-event-consistency.mjs";
 import { chooseAction as chooseEventQualityAction } from "./audit-event-quality.mjs";
 import { markModelDerivedRepairPending } from "./source-grounding-guard.mjs";
+import { createEvent, updateEvent } from "../convex/events.ts";
 
 const STATIC_VENUE_BY_HANDLE = {
   "20_44.nightclub": "Klub 20/44",
@@ -626,11 +628,13 @@ function runVideoModerationQa() {
   assert.equal(highConfidenceFields.extractionScorecard.baseConfidenceScore, 0.95);
   assert.equal(highConfidenceFields.extractionScorecard.finalModerationConfidenceScore, 0.95);
   assert.equal(highConfidenceFields.extractionScorecard.autoApproved, true);
-  assert.doesNotThrow(() =>
-    assertServiceCreateEventPolicy(
-      highConfidenceVideo.event.status,
+  assert.equal(
+    hasCompleteSourceGroundedAutoApproval(
       highConfidenceVideo.event.normalizedFieldsJson,
+      highConfidenceVideo.event,
     ),
+    true,
+    JSON.stringify({ event: highConfidenceVideo.event, fields: highConfidenceFields }, null, 2),
   );
   assert.ok(Array.isArray(highConfidenceFields.extractionScorecard.fieldEvidence));
   assert.ok(
@@ -716,6 +720,7 @@ function runVideoModerationQa() {
     assertServiceCreateEventPolicy(
       highConfidenceDateMissingTime.event.status,
       highConfidenceDateMissingTime.event.normalizedFieldsJson,
+      highConfidenceDateMissingTime.event,
     ),
   );
   assert.ok(highConfidenceDateMissingTimeFields.moderationSignals.includes("time_tbd"));
@@ -4214,7 +4219,20 @@ function runNamedRepertoireScheduleDeduplicationQa() {
 }
 
 function runAtomicDuplicateStatusPreconditionQa() {
+  const approvalPublicFields = {
+    title: "Grounded QA Event",
+    date: "2026-07-30",
+    time: TBD_EVENT_TIME,
+    venue: "QA Venue",
+    artists: ["QA Artist"],
+    imageUrl: "https://example.com/grounded-qa-event.jpg",
+    sourceCaption: "Grounded QA Event 30. jul @ QA Venue uz QA Artist",
+  };
   const completeSourceGroundedApproval = JSON.stringify({
+    title: approvalPublicFields.title,
+    time: approvalPublicFields.time,
+    artists: approvalPublicFields.artists,
+    postAltText: null,
     sourceGroundingVersion: 2,
     sourceGroundingEvidence: "instagram_caption_or_alt_text",
     sourceGroundingVerified: true,
@@ -4263,7 +4281,11 @@ function runAtomicDuplicateStatusPreconditionQa() {
     "A stale aggregate grounding boolean must not authorize publication.",
   );
   assert.doesNotThrow(() =>
-    assertServiceCreateEventPolicy("approved", completeSourceGroundedApproval),
+    assertServiceCreateEventPolicy(
+      "approved",
+      completeSourceGroundedApproval,
+      approvalPublicFields,
+    ),
   );
   assert.throws(
     () => assertServiceUpdateEventPolicy("pending", { status: "approved" }),
@@ -4271,31 +4293,106 @@ function runAtomicDuplicateStatusPreconditionQa() {
     "A service-authenticated update must not publish without complete source grounding.",
   );
   assert.doesNotThrow(() =>
-    assertServiceUpdateEventPolicy("pending", {
-      status: "approved",
-      normalizedFieldsJson: completeSourceGroundedApproval,
-    }),
+    assertServiceUpdateEventPolicy(
+      "pending",
+      {
+        status: "approved",
+        normalizedFieldsJson: completeSourceGroundedApproval,
+      },
+      approvalPublicFields,
+    ),
   );
   assert.throws(
     () =>
-      assertServiceUpdateEventPolicy("rejected", {
-        status: "approved",
-        normalizedFieldsJson: completeSourceGroundedApproval,
-      }),
+      assertServiceUpdateEventPolicy(
+        "rejected",
+        {
+          status: "approved",
+          normalizedFieldsJson: completeSourceGroundedApproval,
+        },
+        approvalPublicFields,
+      ),
     /cannot approve an event/,
     "A service replay must not override a human rejection.",
   );
   assert.throws(
     () =>
-      assertServiceUpdateEventPolicy("pending", {
-        status: "approved",
-        normalizedFieldsJson: JSON.stringify({
-          ...JSON.parse(completeSourceGroundedApproval),
-          moderationPendingReasons: ["non_event_closure_notice"],
-        }),
-      }),
+      assertServiceUpdateEventPolicy(
+        "pending",
+        {
+          status: "approved",
+          normalizedFieldsJson: JSON.stringify({
+            ...JSON.parse(completeSourceGroundedApproval),
+            moderationPendingReasons: ["non_event_closure_notice"],
+          }),
+        },
+        approvalPublicFields,
+      ),
     /cannot approve an event/,
     "Any persisted moderation blocker must keep a service proposal pending.",
+  );
+  assert.throws(
+    () =>
+      assertServiceCreateEventPolicy(
+        "approved",
+        JSON.stringify({
+          ...JSON.parse(completeSourceGroundedApproval),
+          moderationSignals: ["time_tbd", "future_unknown_blocker"],
+        }),
+        approvalPublicFields,
+      ),
+    /cannot approve an event/,
+    "Unknown moderation signals must fail closed.",
+  );
+  for (const [field, mismatchedValue] of [
+    ["title", "MODEL-ONLY TITLE"],
+    ["date", "2099-12-31"],
+    ["time", "23:59"],
+    ["venue", "DIFFERENT MODEL VENUE"],
+    ["artists", ["MODEL-ONLY ARTIST"]],
+  ]) {
+    assert.throws(
+      () =>
+        assertServiceCreateEventPolicy(
+          "approved",
+          completeSourceGroundedApproval,
+          { ...approvalPublicFields, [field]: mismatchedValue },
+        ),
+      /cannot approve an event/,
+      `An attestation for different ${field} fields must not authorize publication.`,
+    );
+  }
+  assert.throws(
+    () =>
+      assertServiceUpdateEventPolicy(
+        "pending",
+        {
+          status: "approved",
+          normalizedFieldsJson: completeSourceGroundedApproval,
+          title: "MODEL-ONLY TITLE",
+          date: "2099-12-31",
+          time: "23:59",
+          venue: "DIFFERENT MODEL VENUE",
+          artists: ["MODEL-ONLY ARTIST"],
+        },
+        approvalPublicFields,
+      ),
+    /cannot approve an event/,
+    "A valid attestation for another event must not authorize a mismatched merged update.",
+  );
+  assert.throws(
+    () =>
+      assertServiceCreateEventPolicy(
+        "approved",
+        JSON.stringify({
+          ...JSON.parse(completeSourceGroundedApproval),
+          artists: [],
+          sourceGroundingArtistsVerified: null,
+        }),
+        approvalPublicFields,
+      ),
+    /cannot approve an event/,
+    "Null artist grounding must not authorize nonempty public artists.",
   );
   assert.throws(
     () => assertServiceUpdateEventPolicy("approved", {}),
@@ -4328,6 +4425,121 @@ function runAtomicDuplicateStatusPreconditionQa() {
   );
 }
 
+async function runServiceApprovalMutationBoundaryQa() {
+  const previousCronSecret = process.env.CRON_SECRET;
+  const serviceSecret = "qa-service-approval-boundary-secret";
+  process.env.CRON_SECRET = serviceSecret;
+
+  const normalizedFieldsJson = JSON.stringify({
+    title: "Grounded Handler Event",
+    time: TBD_EVENT_TIME,
+    artists: ["Grounded Handler Artist"],
+    postAltText: null,
+    sourceGroundingVersion: 2,
+    sourceGroundingEvidence: "instagram_caption_or_alt_text",
+    sourceGroundingVerified: true,
+    sourceGroundingTitleVerified: true,
+    sourceGroundingDateVerified: true,
+    sourceGroundingIdentityVerified: true,
+    sourceGroundingIdentityContextVerified: true,
+    sourceGroundingTimeVerified: null,
+    sourceGroundingArtistsVerified: true,
+    sourceGroundingRowVerified: true,
+    moderationAutoApproved: true,
+    moderationAutoApproveRule: "source_grounded_core_event_fields",
+    moderationPendingReasons: [],
+    moderationSignals: ["time_tbd"],
+    moderationConfidenceScore: 0.95,
+    normalizedDate: "2026-07-30",
+    normalizedVenue: "Grounded Handler Venue",
+    normalizedIsValid: true,
+    titleUsedFallback: false,
+    dateSuspiciousYear: false,
+    dateConfidence: "high",
+    missingImage: false,
+    moderationAllowMissingImage: false,
+  });
+  const groundedPublicFields = {
+    title: "Grounded Handler Event",
+    date: "2026-07-30",
+    time: TBD_EVENT_TIME,
+    venue: "Grounded Handler Venue",
+    artists: ["Grounded Handler Artist"],
+    imageUrl: "https://example.com/grounded-handler-event.jpg",
+    sourceCaption:
+      "Grounded Handler Event 30. jul @ Grounded Handler Venue uz Grounded Handler Artist",
+    instagramPostUrl: "https://www.instagram.com/p/qa-handler-boundary/",
+    instagramPostId: "qa-handler-boundary",
+    eventType: "nightlife",
+    status: "approved",
+    normalizedFieldsJson,
+  };
+  let inserted = false;
+  let patched = false;
+  const fakeDb = {
+    get: async () => ({
+      _id: "qa-existing-event",
+      ...groundedPublicFields,
+      status: "pending",
+    }),
+    insert: async () => {
+      inserted = true;
+      return "qa-created-event";
+    },
+    patch: async () => {
+      patched = true;
+    },
+    query: () => ({
+      withIndex: () => ({ first: async () => null }),
+    }),
+  };
+  const ctx = {
+    auth: { getUserIdentity: async () => null },
+    db: fakeDb,
+  };
+
+  try {
+    await assert.rejects(
+      () =>
+        createEvent._handler(ctx, {
+          ...groundedPublicFields,
+          title: "MODEL-ONLY TITLE",
+          date: "2099-12-31",
+          time: "23:59",
+          venue: "DIFFERENT MODEL VENUE",
+          artists: ["MODEL-ONLY ARTIST"],
+          serviceSecret,
+        }),
+      /bound to the public fields/,
+      "The real create mutation must reject an attestation for different public fields.",
+    );
+    assert.equal(inserted, false);
+
+    await assert.rejects(
+      () =>
+        updateEvent._handler(ctx, {
+          id: "qa-existing-event",
+          expectedStatus: "pending",
+          serviceSecret,
+          patch: {
+            status: "approved",
+            normalizedFieldsJson,
+            title: "MODEL-ONLY TITLE",
+          },
+        }),
+      /bound to the public fields/,
+      "The real update mutation must reject a mismatched merged payload.",
+    );
+    assert.equal(patched, false);
+  } finally {
+    if (previousCronSecret === undefined) {
+      delete process.env.CRON_SECRET;
+    } else {
+      process.env.CRON_SECRET = previousCronSecret;
+    }
+  }
+}
+
 runPromptQa();
 runVenueQa();
 runArtistAndDescriptionQa();
@@ -4347,5 +4559,6 @@ runScheduleConsistencyQa();
 runTicketPriceQa();
 runNamedRepertoireScheduleDeduplicationQa();
 runAtomicDuplicateStatusPreconditionQa();
+await runServiceApprovalMutationBoundaryQa();
 
-console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, source-grounded auto-approval, fail-closed review gating, atomic duplicate status preconditions, caption date ranges, Serbian relative dates, description start times, schedule consistency, and ticket prices.");
+console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, source-grounded auto-approval, fail-closed review gating, service mutation payload binding, atomic duplicate status preconditions, caption date ranges, Serbian relative dates, description start times, schedule consistency, and ticket prices.");
