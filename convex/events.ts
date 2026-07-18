@@ -786,10 +786,10 @@ export const createEvent = mutation({
   },
   handler: async (ctx, args) => {
     const { actor, kind } = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    if (kind === "service") {
-      assertServiceCreateEventPolicy(args.status);
-    }
     const { serviceSecret: _serviceSecret, ...eventArgs } = args;
+    if (kind === "service") {
+      assertServiceCreateEventPolicy(args.status, args.normalizedFieldsJson, eventArgs);
+    }
     void _serviceSecret;
     const now = Date.now();
     const venueFields = await resolveVenueDenormalizedFields(ctx, eventArgs.venue);
@@ -854,9 +854,6 @@ export const updateEvent = mutation({
       throw new Error("Event not found.");
     }
     assertExpectedEventStatus(existingEvent.status, args.expectedStatus);
-    if (kind === "service") {
-      assertServiceUpdateEventPolicy(existingEvent.status, args.patch);
-    }
 
     const now = Date.now();
     const venueFields =
@@ -870,6 +867,9 @@ export const updateEvent = mutation({
         ? { eventType: canonicalizeEventType(args.patch.eventType) }
         : {}),
     };
+    if (kind === "service") {
+      assertServiceUpdateEventPolicy(existingEvent.status, patch, existingEvent);
+    }
     await ctx.db.patch(args.id, { ...patch, updatedAt: now });
     await writeEventAuditLog(ctx, args.id, "updated", {
       actor,

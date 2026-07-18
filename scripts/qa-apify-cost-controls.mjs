@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { getDocumentSize } from "convex/values";
 import {
   buildApifyInstagramScrapeRequest,
+  mapApifyItemToInstagramPost,
 } from "../lib/scraper/instagram-scraper.ts";
 import {
   getCronIngestionConfig,
@@ -38,6 +39,21 @@ assert.equal(request.runOptions.memory, undefined);
 assert.ok(
   request.runOptions.maxTotalChargeUsd > 0 && request.runOptions.maxTotalChargeUsd <= 0.01,
   "default Apify per-run charge cap should stay low",
+);
+
+assert.equal(
+  mapApifyItemToInstagramPost(
+    {
+      id: "not-a-post",
+      url: "https://www.instagram.com/private_venue/",
+      username: "private_venue",
+      error: "no_items",
+      errorDescription: "Empty, private, or restricted profile.",
+    },
+    "private_venue",
+  ),
+  null,
+  "Apify error/result-marker rows must never become fetched Instagram posts.",
 );
 
 const detailedRequest = buildApifyInstagramScrapeRequest({

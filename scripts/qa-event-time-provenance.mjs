@@ -100,6 +100,8 @@ const preparedDuplicate = {
   timeStatus: "confirmed",
   venue: "QA Venue",
   artists: ["QA Artist"],
+  imageUrl: "https://example.com/qa-event.jpg",
+  sourceCaption: "QA Event 15. jul u 21h @ QA Venue uz QA Artist",
   instagramPostUrl: "https://www.instagram.com/p/qa-event/",
   instagramPostId: "qa-event",
   eventType: "nightlife",
@@ -134,26 +136,71 @@ assert.equal(
   "An approved label with incomplete grounding metadata must fail closed to pending.",
 );
 assert.deepEqual(staleApprovedDuplicate.patch, {});
+const completeSourceGroundedApprovalJson = JSON.stringify({
+  title: "QA Event",
+  time: "21:00",
+  artists: ["QA Artist"],
+  postAltText: null,
+  sourceGroundingVersion: 2,
+  sourceGroundingEvidence: "instagram_caption_or_alt_text",
+  sourceGroundingVerified: true,
+  sourceGroundingTitleVerified: true,
+  sourceGroundingDateVerified: true,
+  sourceGroundingIdentityVerified: true,
+  sourceGroundingIdentityContextVerified: true,
+  sourceGroundingTimeVerified: true,
+  sourceGroundingArtistsVerified: true,
+  sourceGroundingRowVerified: true,
+  moderationAutoApproved: true,
+  moderationAutoApproveRule: "source_grounded_core_event_fields",
+  moderationPendingReasons: [],
+  moderationSignals: [],
+  moderationConfidenceScore: 0.95,
+  normalizedDate: "2026-07-15",
+  normalizedVenue: "QA Venue",
+  normalizedIsValid: true,
+  titleUsedFallback: false,
+  dateSuspiciousYear: false,
+  dateConfidence: "high",
+  missingImage: false,
+  moderationAllowMissingImage: false,
+});
+const pendingAutoApprovedDuplicate = buildDuplicateUpdatePatch(
+  { ...existingDuplicate, status: "pending" },
+  {
+    ...preparedDuplicate,
+    status: "approved",
+    normalizedFieldsJson: completeSourceGroundedApprovalJson,
+  },
+);
+assert.equal(pendingAutoApprovedDuplicate.statusAutoApproved, true);
+assert.equal(pendingAutoApprovedDuplicate.patch.status, "approved");
+assert.equal(pendingAutoApprovedDuplicate.protectedApprovedFromPending, false);
+const rejectedAutoApprovedDuplicate = buildDuplicateUpdatePatch(
+  { ...existingDuplicate, status: "rejected" },
+  {
+    ...preparedDuplicate,
+    status: "approved",
+    normalizedFieldsJson: completeSourceGroundedApprovalJson,
+  },
+);
+assert.equal(rejectedAutoApprovedDuplicate.statusAutoApproved, false);
+assert.equal(rejectedAutoApprovedDuplicate.statusResetToPending, true);
+assert.equal(rejectedAutoApprovedDuplicate.patch.status, "pending");
 const completeApprovedDuplicate = buildDuplicateUpdatePatch(
   { ...existingDuplicate, status: "approved" },
   {
     ...preparedDuplicate,
     status: "approved",
-    normalizedFieldsJson: JSON.stringify({
-      sourceGroundingVersion: 2,
-      sourceGroundingEvidence: "instagram_caption_or_alt_text",
-      sourceGroundingVerified: true,
-      sourceGroundingTitleVerified: true,
-      sourceGroundingDateVerified: true,
-      sourceGroundingIdentityVerified: true,
-      sourceGroundingIdentityContextVerified: true,
-      sourceGroundingTimeVerified: true,
-      sourceGroundingArtistsVerified: true,
-      sourceGroundingRowVerified: true,
-    }),
+    normalizedFieldsJson: completeSourceGroundedApprovalJson,
   },
 );
-assert.equal(completeApprovedDuplicate.protectedApprovedFromPending, false);
+assert.equal(
+  completeApprovedDuplicate.protectedApprovedFromPending,
+  true,
+  "Even a fully grounded service replay must not rewrite an already approved public event.",
+);
+assert.deepEqual(completeApprovedDuplicate.patch, {});
 const duplicateRepair = buildDuplicateUpdatePatch(existingDuplicate, preparedDuplicate);
 assert.deepEqual(
   {
