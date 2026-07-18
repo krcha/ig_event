@@ -1,6 +1,6 @@
 # Self-Hosted Convex Deployment
 
-This guide runs Convex on the same VPS and Docker Compose project as the Ig Event
+This guide runs Convex on the same VPS and Docker Compose project as the Event Zeka
 web app. It keeps the application code on Convex APIs, but moves the Convex
 backend out of Convex Cloud.
 

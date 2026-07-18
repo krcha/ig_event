@@ -1,4 +1,4 @@
-# Ig Events Development Plan
+# Event Zeka Development Plan
 
 ## Mission
 

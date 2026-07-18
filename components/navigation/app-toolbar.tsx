@@ -12,6 +12,7 @@ import {
   Telescope,
   Warehouse,
 } from "lucide-react";
+import { EventZekaBrand } from "@/components/brand/event-zeka-brand";
 import { ProfileAvatarLink } from "@/components/navigation/profile-avatar-link";
 import { useUserLibrary } from "@/components/providers/user-library-provider";
 import { cn } from "@/lib/utils";
@@ -149,10 +150,8 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
       <div className="mobile-topbar">
         <div className="glass-panel px-3 py-2">
           <div className="flex items-center justify-between gap-3">
-            <Link className="inline-flex min-w-0 items-center gap-2" href="/">
-              <span className="inline-flex h-9 items-center rounded-full bg-primary px-3 text-xs font-semibold text-primary-foreground">
-                Belgrade nights
-              </span>
+            <Link aria-label="Event Zeka home" className="inline-flex min-w-0" href="/">
+              <EventZekaBrand compact />
             </Link>
             <ProfileAvatarLink />
           </div>
@@ -168,13 +167,8 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
         <div className="mx-auto w-full max-w-[88rem]">
           <div className="glass-panel px-4 py-3">
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-              <Link className="inline-flex w-fit items-center gap-2" href="/">
-                <span className="inline-flex h-9 items-center rounded-full bg-primary px-3.5 text-sm font-semibold text-primary-foreground shadow-[0_16px_34px_-22px_rgba(14,116,144,0.5)]">
-                  Belgrade nights
-                </span>
-                <span className="hidden text-sm font-medium text-muted-foreground lg:inline">
-                  night plans, live
-                </span>
+              <Link aria-label="Event Zeka home" className="inline-flex w-fit" href="/">
+                <EventZekaBrand showTagline />
               </Link>
               <div className="flex flex-wrap items-center gap-2 xl:justify-end">
                 <nav
