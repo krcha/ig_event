@@ -9,8 +9,29 @@ import { UserLibraryProvider } from "@/components/providers/user-library-provide
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Belgrade Events — Nightlife calendar",
-  description: "A dark, mobile-first calendar for Belgrade nightlife, concerts, club nights, and culture.",
+  metadataBase: new URL("https://events.ineedtofeedmyrabbit.com"),
+  applicationName: "Event Zeka",
+  title: {
+    default: "Event Zeka — Belgrade events",
+    template: "%s | Event Zeka",
+  },
+  description:
+    "Discover Belgrade nightlife, concerts, club nights, and culture with Event Zeka.",
+  manifest: "/manifest.webmanifest",
+  openGraph: {
+    type: "website",
+    locale: "en_RS",
+    siteName: "Event Zeka",
+    title: "Event Zeka — Belgrade events",
+    description:
+      "Belgrade nightlife, concerts, club nights, and culture — one hop away.",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Event Zeka — Belgrade events",
+    description:
+      "Belgrade nightlife, concerts, club nights, and culture — one hop away.",
+  },
 };
 
 export const viewport: Viewport = {

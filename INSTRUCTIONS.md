@@ -1,4 +1,4 @@
-# Ig Event AI Handoff Instructions
+# Event Zeka AI Handoff Instructions
 
 These instructions are for any AI or engineer taking over the repository from a
 GitHub link. They are intentionally explicit so the next agent can start safely

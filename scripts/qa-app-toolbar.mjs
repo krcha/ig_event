@@ -4,6 +4,7 @@ import nextConfig from "../next.config.mjs";
 
 const toolbarPath = "components/navigation/app-toolbar.tsx";
 const source = readFileSync(toolbarPath, "utf8");
+const brandSource = readFileSync("components/brand/event-zeka-brand.tsx", "utf8");
 const layoutSource = readFileSync("app/layout.tsx", "utf8");
 const navigationFeedbackSource = readFileSync(
   "components/navigation/navigation-feedback.tsx",
@@ -42,8 +43,20 @@ assert.notEqual(
 const desktopHeaderSource = source.slice(desktopHeaderStart, mobileNavStart);
 
 assert.ok(
-  mobileTopbarSource.includes("Belgrade nights"),
-  "Mobile top header should keep the left brand label.",
+  mobileTopbarSource.includes("<EventZekaBrand compact />") &&
+    brandSource.includes("Event Zeka") &&
+    brandSource.includes("EventZekaMark"),
+  "Mobile top header should render the Event Zeka name and rabbit mark.",
+);
+assert.ok(
+  desktopHeaderSource.includes("<EventZekaBrand showTagline />") &&
+    brandSource.includes("Belgrade, happening now"),
+  "Desktop header should render the Event Zeka lockup and tagline.",
+);
+assert.equal(
+  [...source.matchAll(/aria-label="Event Zeka home"/g)].length,
+  2,
+  "Mobile and desktop brand links should have an accessible Event Zeka home label.",
 );
 
 assert.ok(

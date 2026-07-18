@@ -350,7 +350,7 @@ export async function generateMetadata({ params }: VenuePageProps): Promise<Meta
 
   if (!venue) {
     return {
-      title: "Venue not found - Belgrade nights",
+      title: "Venue not found",
     };
   }
 

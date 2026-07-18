@@ -83,7 +83,7 @@ function placeholderImageResponse(): Response {
   <circle cx="600" cy="650" r="110" fill="#8b86fb" fill-opacity="0.18"/>
   <path d="M485 690h230l-74-98-58 72-35-44-63 70Z" fill="#8b86fb" fill-opacity="0.72"/>
   <text x="600" y="855" fill="#d7d4ff" font-family="Inter, Arial, sans-serif" font-size="54" font-weight="700" text-anchor="middle">Poster unavailable</text>
-  <text x="600" y="930" fill="#8b86fb" fill-opacity="0.9" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="600" text-anchor="middle">Belgrade nights</text>
+  <text x="600" y="930" fill="#8b86fb" fill-opacity="0.9" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="600" text-anchor="middle">Event Zeka</text>
 </svg>`;
 
   return new Response(svg, {

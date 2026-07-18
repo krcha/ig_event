@@ -1,6 +1,6 @@
 # Architecture Overview
 
-Ig Event is a Next.js application backed by Convex. Convex can stay hosted in
+Event Zeka is a Next.js application backed by Convex. Convex can stay hosted in
 Convex Cloud or run as a self-hosted backend in the same Docker Compose project
 as the app. The product turns Instagram venue posts into reviewed public event
 listings.

@@ -1,9 +1,11 @@
-# Ig Event
+# Event Zeka
 
-Ig Event is a Next.js app for turning Instagram venue activity into a moderated,
-public Belgrade nightlife calendar. It scrapes venue profiles, extracts event
-details with AI, stores records in Convex, gives admins a moderation workflow,
-and publishes approved events to public list and calendar views.
+Event Zeka is a Next.js app for turning Instagram venue activity into a moderated,
+public Belgrade nightlife calendar. The repository and infrastructure retain the
+internal `ig_event` identifier while the public product brand is Event Zeka. It
+scrapes venue profiles, extracts event details with AI, stores records in Convex,
+gives admins a moderation workflow, and publishes approved events to public list
+and calendar views.
 
 ## Start Here For Handoff
 
@@ -267,7 +269,7 @@ Remaining high-priority follow-up:
 For another AI, use:
 
 ```text
-You are taking over the Ig Event repo. Read README.md, INSTRUCTIONS.md,
+You are taking over the Event Zeka repo. Read README.md, INSTRUCTIONS.md,
 DEVELOPMENT_PLAN.md, docs/ai-handoff.md, docs/architecture.md,
 docs/operations-runbook.md, docs/vps-self-hosting.md, and
 docs/self-hosted-convex.md first. Convex can run hosted or self-hosted through
