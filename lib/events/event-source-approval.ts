@@ -29,14 +29,31 @@ function normalizeText(value: unknown): string {
 
 function hasTextIdentity(caption: string, identity: unknown): boolean {
   const normalizedIdentity = normalizeText(identity);
-  if (!normalizedIdentity) {
-    return false;
-  }
-  if (caption.includes(normalizedIdentity)) {
+  return Boolean(normalizedIdentity) && caption.includes(normalizedIdentity);
+}
+
+function normalizeHandleExact(value: unknown): string {
+  return typeof value === "string" ? value.replace(/^@+/, "").trim().toLowerCase() : "";
+}
+
+function hasExplicitTime(caption: string, eventTime: unknown): boolean {
+  if (typeof eventTime !== "string" || !eventTime.trim() || eventTime.trim().toUpperCase() === "TBD") {
     return true;
   }
-  const tokens = normalizedIdentity.split(" ").filter((token) => token.length >= 2);
-  return tokens.length > 0 && tokens.every((token) => caption.includes(token));
+  const match = /^(\d{1,2}):(\d{2})/.exec(eventTime.trim());
+  if (!match) {
+    return false;
+  }
+  const hour = Number(match[1]);
+  const minute = match[2];
+  const numericTime = new RegExp(
+    `(?:^|\\D)0?${hour}(?::|\\.|h)${minute}(?:\\D|$)`,
+    "u",
+  );
+  if (numericTime.test(caption)) {
+    return true;
+  }
+  return minute === "00" && new RegExp(`(?:^|\\D)0?${hour}\\s*(?:h|casova)(?:\\D|$)`, "u").test(caption);
 }
 
 function hasExplicitDate(caption: string, isoDate: unknown): boolean {
@@ -83,6 +100,7 @@ function postUrlMatchesId(url: unknown, postId: unknown): boolean {
 export function isCaptionSourceCoherentWithEvent(options: {
   title: unknown;
   date: unknown;
+  time?: unknown;
   venue: unknown;
   artists: unknown;
   sourceCaption: unknown;
@@ -101,8 +119,8 @@ export function isCaptionSourceCoherentWithEvent(options: {
           .replace(/\s+/g, " ")
           .trim()
       : "";
-  const sourceHandle = normalizeText(options.sourceInstagramHandle).replace(/\s+/g, "");
-  const venueHandle = normalizeText(options.venueInstagramHandle).replace(/\s+/g, "");
+  const sourceHandle = normalizeHandleExact(options.sourceInstagramHandle);
+  const venueHandle = normalizeHandleExact(options.venueInstagramHandle);
   const artists = Array.isArray(options.artists) ? options.artists : [];
 
   return (
@@ -110,6 +128,7 @@ export function isCaptionSourceCoherentWithEvent(options: {
     isSensibleEventTitleForApproval({ title: options.title, venue: options.venue }) &&
     hasTextIdentity(caption, options.title) &&
     hasExplicitDate(dateCaption, options.date) &&
+    hasExplicitTime(dateCaption, options.time) &&
     artists.every((artist) => hasTextIdentity(caption, artist)) &&
     postUrlMatchesId(options.instagramPostUrl, options.instagramPostId) &&
     Boolean(sourceHandle) &&

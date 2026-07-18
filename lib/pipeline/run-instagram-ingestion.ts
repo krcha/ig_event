@@ -6419,6 +6419,7 @@ export function prepareEventsForInsert(
     const approvalCaptionSourceCoherent = isCaptionSourceCoherentWithEvent({
       title: variant.title,
       date,
+      time,
       venue: venueNormalization.venue,
       artists: variant.artists,
       sourceCaption: post.caption,

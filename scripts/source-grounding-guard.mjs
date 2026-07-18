@@ -91,6 +91,7 @@ export function hasVerifiedSourceGrounding(normalizedFields, event) {
     isCaptionSourceCoherentWithEvent({
       title: event?.title,
       date: event?.date,
+      time: event?.time,
       venue: event?.venue,
       artists: event?.artists,
       sourceCaption: event?.sourceCaption,

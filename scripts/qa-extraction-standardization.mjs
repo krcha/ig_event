@@ -55,7 +55,12 @@ import {
 import { buildRepair as buildConsistencyRepair } from "./repair-event-consistency.mjs";
 import { chooseAction as chooseEventQualityAction } from "./audit-event-quality.mjs";
 import { markModelDerivedRepairPending } from "./source-grounding-guard.mjs";
-import { createEvent, setEventStatus, updateEvent } from "../convex/events.ts";
+import {
+  createEvent,
+  mergeApprovedEvents,
+  setEventStatus,
+  updateEvent,
+} from "../convex/events.ts";
 
 const STATIC_VENUE_BY_HANDLE = {
   "20_44.nightclub": "Klub 20/44",
@@ -4244,6 +4249,7 @@ function runAtomicDuplicateStatusPreconditionQa() {
     sourceCaption: "Grounded QA Event 30. jul @ QA Venue uz QA Artist",
     instagramPostId: "grounded-qa-event-post",
     instagramPostUrl: "https://www.instagram.com/p/grounded-qa-event-post/",
+    venueInstagramHandle: "qa_venue",
   };
   const completeSourceGroundedApproval = JSON.stringify({
     title: approvalPublicFields.title,
@@ -4303,6 +4309,7 @@ function runAtomicDuplicateStatusPreconditionQa() {
     "Karađorđeva 44 2nd Floor",
     "i njegov trio održaće Koncert",
     "SPECIAL PIZZA AND KOKTELS IN BUFFALO 50",
+    "Closed for vacation",
     "QA Venue",
   ]) {
     assert.equal(
@@ -4347,6 +4354,35 @@ function runAtomicDuplicateStatusPreconditionQa() {
       completeSourceGroundedApproval,
       approvalPublicFields,
     ),
+  );
+  const explicitUngroundedTimeFields = {
+    ...JSON.parse(completeSourceGroundedApproval),
+    time: "21:00",
+    sourceGroundingTimeVerified: true,
+    moderationSignals: [],
+  };
+  assert.throws(
+    () =>
+      assertServiceCreateEventPolicy(
+        "approved",
+        JSON.stringify(explicitUngroundedTimeFields),
+        { ...approvalPublicFields, time: "21:00" },
+      ),
+    /cannot approve an event/,
+    "An explicit public time must appear in the exact source caption.",
+  );
+  assert.throws(
+    () =>
+      assertServiceCreateEventPolicy(
+        "approved",
+        JSON.stringify({
+          ...JSON.parse(completeSourceGroundedApproval),
+          sourceGroundingInstagramHandle: "qa.venue",
+        }),
+        approvalPublicFields,
+      ),
+    /cannot approve an event/,
+    "Source handles that differ only after punctuation erasure must not be considered equal.",
   );
   assert.throws(
     () => assertServiceUpdateEventPolicy("pending", { status: "approved" }),
@@ -4586,11 +4622,21 @@ async function runServiceApprovalMutationBoundaryQa() {
   let inserted = false;
   let patched = false;
   let sameDateEvents = [];
+  let existingVenue = groundedPublicFields.venue;
+  let existingVenueInstagramHandle = "qa_venue";
+  const persistedSourcePost = {
+    handle: "qa_venue",
+    username: "qa_venue",
+    postId: instagramPostId,
+    instagramPostUrl,
+    caption: sourceCaption,
+  };
   const fakeDb = {
     get: async () => ({
       _id: "qa-existing-event",
       ...groundedPublicFields,
-      venueInstagramHandle: "qa_venue",
+      venue: existingVenue,
+      venueInstagramHandle: existingVenueInstagramHandle,
       status: "pending",
     }),
     insert: async () => {
@@ -4613,12 +4659,18 @@ async function runServiceApprovalMutationBoundaryQa() {
               },
             ],
           }
-        : {
-            withIndex: () => ({
-              collect: async () => sameDateEvents,
-              first: async () => null,
-            }),
-          },
+        : table === "scrapedPosts"
+          ? {
+              withIndex: () => ({
+                first: async () => persistedSourcePost,
+              }),
+            }
+          : {
+              withIndex: () => ({
+                collect: async () => sameDateEvents,
+                first: async () => null,
+              }),
+            },
   };
   const ctx = {
     auth: { getUserIdentity: async () => ({ subject: adminUserId }) },
@@ -4752,6 +4804,33 @@ async function runServiceApprovalMutationBoundaryQa() {
       assert.equal(patched, false);
     }
 
+    const forgedPostId = "forged-handler-post";
+    const forgedPostUrl = `https://www.instagram.com/reel/${forgedPostId}/`;
+    const forgedCaption =
+      "Forged Handler Event 30. jul @ Grounded Handler Venue uz Grounded Handler Artist";
+    const forgedNormalizedFieldsJson = JSON.stringify({
+      ...JSON.parse(normalizedFieldsJson),
+      title: "Forged Handler Event",
+      sourceGroundingSourceCaption: forgedCaption,
+      sourceGroundingInstagramPostId: forgedPostId,
+      sourceGroundingInstagramPostUrl: forgedPostUrl,
+    });
+    await assert.rejects(
+      () =>
+        createEvent._handler(ctx, {
+          ...groundedPublicFields,
+          title: "Forged Handler Event",
+          sourceCaption: forgedCaption,
+          instagramPostId: forgedPostId,
+          instagramPostUrl: forgedPostUrl,
+          normalizedFieldsJson: forgedNormalizedFieldsJson,
+          serviceSecret,
+        }),
+      /persisted Instagram post/,
+      "A self-consistent caption, post-ID, and URL swap must fail against the persisted source post.",
+    );
+    assert.equal(inserted, false);
+
     sameDateEvents = [];
     inserted = false;
     await assert.doesNotReject(() =>
@@ -4782,6 +4861,7 @@ async function runServiceApprovalMutationBoundaryQa() {
         title: "Other Approved Event",
         date: groundedPublicFields.date,
         venue: groundedPublicFields.venue,
+        venueId: "qa-venue-id",
         status: "approved",
       },
     ];
@@ -4814,6 +4894,8 @@ async function runServiceApprovalMutationBoundaryQa() {
     );
     assert.equal(patched, false);
 
+    existingVenue = "@qa_venue";
+    existingVenueInstagramHandle = undefined;
     await assert.rejects(
       () =>
         setEventStatus._handler(ctx, {
@@ -4822,7 +4904,30 @@ async function runServiceApprovalMutationBoundaryQa() {
           reviewedBy: adminUserId,
         }),
       /already exists for this venue and date/,
-      "Manual moderation must not approve a second event for one venue/date.",
+      "Manual moderation must resolve a legacy venue alias before checking the venue/date conflict.",
+    );
+    assert.equal(patched, false);
+
+    sameDateEvents = [
+      {
+        _id: "qa-approved-source-duplicate",
+        title: "Different Title",
+        date: groundedPublicFields.date,
+        venue: "Different Venue",
+        instagramPostId,
+        instagramPostUrl: `https://www.instagram.com/reel/${instagramPostId}/`,
+        status: "approved",
+      },
+    ];
+    await assert.rejects(
+      () =>
+        setEventStatus._handler(ctx, {
+          id: "qa-existing-event",
+          status: "approved",
+          reviewedBy: adminUserId,
+        }),
+      /already exists for this venue and date/,
+      "Manual moderation must reject the same persisted post ID even when URL type, title, and venue differ.",
     );
     assert.equal(patched, false);
   } finally {
@@ -4836,6 +4941,98 @@ async function runServiceApprovalMutationBoundaryQa() {
     } else {
       process.env.ADMIN_CLERK_USER_IDS = previousAdminUserIds;
     }
+  }
+}
+
+async function runApprovedMergeBoundaryQa() {
+  const previousAdminUserIds = process.env.ADMIN_CLERK_USER_IDS;
+  const adminUserId = "qa-merge-admin";
+  process.env.ADMIN_CLERK_USER_IDS = adminUserId;
+  const primary = {
+    _id: "qa-primary",
+    title: "Primary Event",
+    date: "2026-08-01",
+    time: TBD_EVENT_TIME,
+    venue: "Venue One",
+    venueId: "venue-one",
+    artists: [],
+    eventType: "nightlife",
+    status: "approved",
+  };
+  const duplicate = { ...primary, _id: "qa-duplicate", title: "Primary Event duplicate" };
+  const conflict = {
+    ...primary,
+    _id: "qa-conflict",
+    title: "Other Event",
+    venue: "Venue Two",
+    venueId: "venue-two",
+  };
+  let patched = false;
+  const ctx = {
+    auth: { getUserIdentity: async () => ({ subject: adminUserId }) },
+    db: {
+      get: async (id) =>
+        id === primary._id
+          ? primary
+          : id === duplicate._id
+            ? duplicate
+            : id === conflict._id
+              ? conflict
+              : null,
+      patch: async () => {
+        patched = true;
+      },
+      query: (table) =>
+        table === "venues"
+          ? {
+              collect: async () => [
+                {
+                  _id: "venue-one",
+                  name: "Venue One",
+                  instagramHandle: "venue_one",
+                  category: "nightlife",
+                  publicStatus: "published",
+                },
+                {
+                  _id: "venue-two",
+                  name: "Venue Two",
+                  instagramHandle: "venue_two",
+                  category: "nightlife",
+                  publicStatus: "published",
+                },
+              ],
+            }
+          : {
+              withIndex: () => ({ collect: async () => [primary, duplicate, conflict] }),
+            },
+    },
+  };
+  try {
+    await assert.rejects(
+      () =>
+        mergeApprovedEvents._handler(ctx, {
+          primaryId: primary._id,
+          duplicateIds: [duplicate._id],
+          patch: { title: "Closed for vacation" },
+        }),
+      /title is not suitable/,
+      "Approved-event merge must not replace the primary with a non-event title.",
+    );
+    assert.equal(patched, false);
+    await assert.rejects(
+      () =>
+        mergeApprovedEvents._handler(ctx, {
+          primaryId: primary._id,
+          duplicateIds: [duplicate._id],
+          patch: { venue: "Venue Two" },
+        }),
+      /already exists for this venue and date/,
+      "Approved-event merge must not move the primary onto another approved venue/date.",
+    );
+    assert.equal(patched, false);
+  } finally {
+    if (previousAdminUserIds === undefined) delete process.env.ADMIN_CLERK_USER_IDS;
+    else process.env.ADMIN_CLERK_USER_IDS = previousAdminUserIds;
   }
 }
 
@@ -4859,5 +5056,6 @@ runTicketPriceQa();
 runNamedRepertoireScheduleDeduplicationQa();
 runAtomicDuplicateStatusPreconditionQa();
 await runServiceApprovalMutationBoundaryQa();
+await runApprovedMergeBoundaryQa();
 
 console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, source-grounded auto-approval, fail-closed review gating, service mutation payload binding, atomic duplicate status preconditions, caption date ranges, Serbian relative dates, description start times, schedule consistency, and ticket prices.");

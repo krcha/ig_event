@@ -4,6 +4,7 @@ const BROKEN_SENTENCE_PREFIX = /^(?:i|a|ali|pa|te|koji|koja|koje|and|but)\s+/iu;
 const GENERIC_ONLY_TITLE = /^(?:event|dogadjaj|događaj|program|schedule|raspored|premijera|premiere|naredna igranja|final|finale|party|concert|koncert|live music|muzika|subota|petak|saturday|friday)$/iu;
 const GENERIC_HOURS_TITLE = /^(?:opening|working|business|venue)?\s*hours?$|^radno\s+vreme$/iu;
 const MENU_PROMOTION_TITLE = /^(?:special|specials|promo|promotion|ponuda)\b.*\b(?:pizzas?|pice?|burgers?|koktels?|cocktails?|food|hrana|menu)\b/iu;
+const CLOSURE_NOTICE_TITLE = /^(?:closed\s+(?:today|for\s+(?:vacation|holiday))|(?:vacation|holiday)\s+closure|zatvoreno(?:\s+danas)?|ne\s+radimo(?:\s+danas)?|na\s+odmoru)$/iu;
 
 function normalizeComparableText(value: unknown): string {
   if (typeof value !== "string") {
@@ -44,7 +45,8 @@ export function isSensibleEventTitleForApproval(options: {
     (normalizedVenue &&
       normalizedTitle.startsWith(`${normalizedVenue} `) &&
       /\bhours?$/.test(normalizedTitle)) ||
-    MENU_PROMOTION_TITLE.test(normalizedTitle)
+    MENU_PROMOTION_TITLE.test(normalizedTitle) ||
+    CLOSURE_NOTICE_TITLE.test(normalizedTitle)
   ) {
     return false;
   }
