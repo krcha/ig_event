@@ -4284,6 +4284,8 @@ function runAtomicDuplicateStatusPreconditionQa() {
   assert.doesNotThrow(() => assertExpectedEventStatus("pending", "pending"));
   for (const title of [
     "World Cup Final",
+    "Finale Svetskog prvenstva 2026",
+    "Street Party",
     "Open Air Summer Season Closing",
     "Every Thursday Night",
     "Docile Bodies",

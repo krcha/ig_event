@@ -1,5 +1,5 @@
 const DATE_OR_TIME_FRAGMENT = /^(?:\p{L}+\s+)?\d{1,2}(?:[./-]\d{1,2})?(?:[./-]\d{2,4})?(?:\s*(?:h|č|casova|hours?))?$/iu;
-const ADDRESS_FRAGMENT = /^(?:[\p{L}.'’ -]+\s+)?\d{1,4}(?:\s+\d{1,2}(?:st|nd|rd|th)\s+(?:floor|sprat)|\s*(?:floor|sprat))?$/iu;
+const ADDRESS_FRAGMENT = /^(?:(?:ulica|bulevar|trg|avenija|street|road)\b[\p{L}\p{N}.'’ -]*\d{1,4}[a-z]?|[\p{L}.'’ -]+\s+\d{1,4}[a-z]?\s+\d{1,2}(?:st|nd|rd|th)\s+(?:floor|sprat))$/iu;
 const BROKEN_SENTENCE_PREFIX = /^(?:i|a|ali|pa|te|koji|koja|koje|and|but)\s+/iu;
 const GENERIC_ONLY_TITLE = /^(?:event|dogadjaj|događaj|program|schedule|raspored|premijera|premiere|naredna igranja|final|finale|party|concert|koncert|live music|muzika|subota|petak|saturday|friday)$/iu;
 const GENERIC_HOURS_TITLE = /^(?:opening|working|business|venue)?\s*hours?$|^radno\s+vreme$/iu;
