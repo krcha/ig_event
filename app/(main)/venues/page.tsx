@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { cache } from "react";
 import {
   ArrowRight,
   CalendarDays,
@@ -14,6 +15,7 @@ import {
   Warehouse,
 } from "lucide-react";
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
+import { JsonLd } from "@/components/seo/json-ld";
 import {
   loadPublicVenueDirectory,
   type PublicVenueDirectoryItem,
@@ -23,15 +25,15 @@ import {
   normalizePublicVenueDirectoryPage,
   paginatePublicVenueDirectory,
 } from "@/lib/venues/public-venue-directory-pagination";
+import {
+  SITE_ORIGIN,
+  buildVenueDirectoryStructuredData,
+} from "@/lib/seo/site";
 import { cn } from "@/lib/utils";
 
 export const revalidate = 60;
 
-export const metadata: Metadata = {
-  title: "Belgrade venues - Nightlife venue guide",
-  description:
-    "Browse Belgrade nightlife venues with upcoming approved events, Instagram identity, hours, location, and social momentum.",
-};
+const loadVenueDirectory = cache(() => loadPublicVenueDirectory());
 
 type VenuesSearchParams = {
   category?: string | string[];
@@ -43,6 +45,62 @@ type VenuesSearchParams = {
 type VenuesPageProps = {
   searchParams?: Promise<VenuesSearchParams>;
 };
+
+export async function generateMetadata({ searchParams }: VenuesPageProps): Promise<Metadata> {
+  const resolvedSearchParams = await searchParams;
+  const requestedPage = normalizePublicVenueDirectoryPage(
+    getSingleValue(resolvedSearchParams?.page),
+  );
+  const hasFilters = Boolean(
+    getSingleValue(resolvedSearchParams?.category)?.trim() ||
+      getSingleValue(resolvedSearchParams?.q)?.trim() ||
+      getSingleValue(resolvedSearchParams?.upcoming),
+  );
+  const { venues } = await loadVenueDirectory();
+  const currentPage = hasFilters
+    ? 1
+    : paginatePublicVenueDirectory(venues, requestedPage).currentPage;
+  const canonicalPath = currentPage > 1 ? `/venues?page=${currentPage}` : "/venues";
+  const title =
+    currentPage > 1
+      ? `Belgrade Venue Guide — Page ${currentPage}`
+      : "Belgrade Venues: Nightlife & Culture Guide";
+  const description =
+    "Explore Belgrade clubs, bars, concert spaces, galleries, theatres, and cultural venues with upcoming events, locations, and official Instagram links.";
+
+  return {
+    title,
+    description,
+    alternates: {
+      canonical: canonicalPath,
+    },
+    openGraph: {
+      title: `${title} | Event Zeka`,
+      description,
+      type: "website",
+      locale: "en_RS",
+
+      siteName: "Event Zeka",
+      url: new URL(canonicalPath, SITE_ORIGIN).toString(),
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: `${title} | Event Zeka`,
+      description,
+    },
+    robots: {
+      index: !hasFilters,
+      follow: true,
+      googleBot: {
+        index: !hasFilters,
+        follow: true,
+        "max-image-preview": "large",
+        "max-snippet": -1,
+        "max-video-preview": -1,
+      },
+    },
+  };
+}
 
 function getSingleValue(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) {
@@ -180,7 +238,11 @@ function VenueDirectoryCard({
 
 export default async function VenuesPage({ searchParams }: VenuesPageProps) {
   const resolvedSearchParams = await searchParams;
-  const { error, venues } = await loadPublicVenueDirectory();
+  const { error, venues } = await loadVenueDirectory();
+  if (error) {
+    throw new Error(`Failed to load public venue directory: ${error}`);
+  }
+
   const selectedCategory = getSingleValue(resolvedSearchParams?.category)?.trim();
   const searchQuery = getSingleValue(resolvedSearchParams?.q)?.trim() ?? "";
   const upcomingOnly = getSingleValue(resolvedSearchParams?.upcoming) === "1";
@@ -221,6 +283,9 @@ export default async function VenuesPage({ searchParams }: VenuesPageProps) {
 
   return (
     <main className="app-page gap-4 pb-[calc(7rem+env(safe-area-inset-bottom))] md:pb-9">
+      <JsonLd
+        data={buildVenueDirectoryStructuredData(visibleVenues, currentPage, firstItemNumber)}
+      />
       <section className="hero-panel px-4 py-6 sm:px-6 lg:px-8">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
           <div className="min-w-0">
@@ -232,7 +297,8 @@ export default async function VenuesPage({ searchParams }: VenuesPageProps) {
               Belgrade venue guide
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
-              Clubs, bars, galleries, stages, and late-night rooms with their next nights out.
+              Clubs, bars, galleries, theatres, concert spaces, and late-night rooms for locals and
+              visitors. Vodič kroz beogradske klubove i kulturne prostore sa aktuelnim događajima.
             </p>
           </div>
           <div className="grid w-full grid-cols-2 gap-2 lg:w-auto lg:min-w-80">
@@ -253,8 +319,6 @@ export default async function VenuesPage({ searchParams }: VenuesPageProps) {
           </div>
         </div>
       </section>
-
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
       <form className="glass-panel grid gap-3 px-4 py-4 lg:grid-cols-[minmax(0,1fr)_14rem_auto_auto] lg:items-center" action="/venues">
         <label className="relative min-w-0">

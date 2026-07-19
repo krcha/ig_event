@@ -25,6 +25,7 @@ const checks = [
   { script: "qa:public-performance", timeoutMs: 60_000 },
   { script: "qa:mobile-calendar", timeoutMs: 60_000 },
   { script: "qa:app-toolbar", timeoutMs: 60_000 },
+  { script: "qa:seo", timeoutMs: 60_000 },
   { script: "qa:brand", timeoutMs: 60_000 },
   { script: "qa:discover-feed", timeoutMs: 60_000 },
   { script: "qa:apify", timeoutMs: 60_000 },

@@ -6,31 +6,48 @@ import { NavigationFeedback } from "@/components/navigation/navigation-feedback"
 import { AuthUserProvider } from "@/components/providers/auth-user-provider";
 import { ConvexClientProvider } from "@/components/providers/convex-client-provider";
 import { UserLibraryProvider } from "@/components/providers/user-library-provider";
+import { SITE_DESCRIPTION, SITE_ORIGIN } from "@/lib/seo/site";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://events.ineedtofeedmyrabbit.com"),
+  metadataBase: new URL(SITE_ORIGIN),
   applicationName: "Event Zeka",
   title: {
     default: "Event Zeka — Belgrade events",
     template: "%s | Event Zeka",
   },
-  description:
-    "Discover Belgrade nightlife, concerts, club nights, and culture with Event Zeka.",
+  description: SITE_DESCRIPTION,
+  category: "events",
+  formatDetection: {
+    address: false,
+    email: false,
+    telephone: false,
+  },
   manifest: "/manifest.webmanifest",
   openGraph: {
     type: "website",
     locale: "en_RS",
+
     siteName: "Event Zeka",
     title: "Event Zeka — Belgrade events",
-    description:
-      "Belgrade nightlife, concerts, club nights, and culture — one hop away.",
+    description: SITE_DESCRIPTION,
+    url: SITE_ORIGIN,
   },
   twitter: {
     card: "summary_large_image",
     title: "Event Zeka — Belgrade events",
-    description:
-      "Belgrade nightlife, concerts, club nights, and culture — one hop away.",
+    description: SITE_DESCRIPTION,
+  },
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+      "max-video-preview": -1,
+    },
   },
 };
 
@@ -82,7 +99,7 @@ function AppDocument({
   );
 
   return (
-    <html className="dark" lang="en">
+    <html className="dark" lang="en-RS">
       <body className="min-h-screen bg-background text-foreground antialiased">
         {authEnabled ? (
           <AuthUserProvider>

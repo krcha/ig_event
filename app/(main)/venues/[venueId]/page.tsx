@@ -11,14 +11,22 @@ import {
   MapPin,
 } from "lucide-react";
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
+import { JsonLd } from "@/components/seo/json-ld";
 import {
   loadPublicVenuePage,
   type PublicVenue,
   type PublicVenueEvent,
 } from "@/lib/venues/public-venue-pages";
 import { buildDiscoverImageUrl } from "@/lib/discover/discover-image-source";
+import { isPlausibleConvexPublicId } from "@/lib/convex/public-id";
 import { getDisplayEventTime } from "@/lib/events/event-time";
 import { isApifyImageUrl, isApifySourcedImageUrl } from "@/lib/images/apify-images";
+import {
+  absoluteUrl,
+  buildBreadcrumbStructuredData,
+  buildVenueStructuredData,
+  clipText,
+} from "@/lib/seo/site";
 import { cn } from "@/lib/utils";
 
 export const revalidate = 60;
@@ -343,41 +351,78 @@ function EventPostTile({
 
 export async function generateMetadata({ params }: VenuePageProps): Promise<Metadata> {
   const { venueId } = await params;
-  const { historyEvents, upcomingEvents, venue } = await loadPublicVenuePage(venueId, {
+  if (!isPlausibleConvexPublicId(venueId)) {
+    return {
+      title: "Venue not found",
+      robots: { index: false, follow: false },
+    };
+  }
+
+  const { error, historyEvents, upcomingEvents, venue } = await loadPublicVenuePage(venueId, {
     historyLimit: 3,
     upcomingLimit: 3,
   });
 
   if (!venue) {
     return {
-      title: "Venue not found",
+      title: error ? "Venue temporarily unavailable" : "Venue not found",
+      robots: { index: false, follow: false },
     };
   }
 
-  const description = [
-    `${venue.name} in Belgrade`,
+  const canonicalPath = `/venues/${venue._id}`;
+  const location = getLocationLabel(venue);
+  const description = clipText(
     upcomingEvents.length > 0
-      ? `${upcomingEvents.length} upcoming approved event${upcomingEvents.length === 1 ? "" : "s"}`
-      : "upcoming events, hours, location, and Instagram identity",
-  ]
-    .filter(Boolean)
-    .join(" - ");
+      ? `${venue.name} in ${location}: ${upcomingEvents.length} upcoming Belgrade event${upcomingEvents.length === 1 ? "" : "s"}, location, Instagram, and venue details.`
+      : `${venue.name} in ${location}: Belgrade venue guide with location, official Instagram, and approved event history.`,
+    160,
+  );
   const image = [...upcomingEvents, ...historyEvents].find((event) => event.imageUrl)?.imageUrl;
+  const socialTitle = `${venue.name} — Belgrade venue events`;
 
   return {
-    title: `${venue.name} - Belgrade venue events`,
+    title: clipText(`${venue.name} — Belgrade venue events`, 62),
     description,
+    alternates: {
+      canonical: canonicalPath,
+    },
     openGraph: {
-      title: `${venue.name} - Belgrade venue events`,
+      title: socialTitle,
       description,
-      ...(image ? { images: [image] } : {}),
+      ...(image ? { images: [{ url: absoluteUrl(image), alt: `${venue.name} in Belgrade` }] } : {}),
       type: "website",
+      locale: "en_RS",
+
+      siteName: "Event Zeka",
+      url: absoluteUrl(canonicalPath),
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: socialTitle,
+      description,
+      ...(image ? { images: [absoluteUrl(image)] } : {}),
+    },
+    robots: {
+      index: true,
+      follow: true,
+      googleBot: {
+        index: true,
+        follow: true,
+        "max-image-preview": "large",
+        "max-snippet": -1,
+        "max-video-preview": -1,
+      },
     },
   };
 }
 
 export default async function VenuePage({ params }: VenuePageProps) {
   const { venueId } = await params;
+  if (!isPlausibleConvexPublicId(venueId)) {
+    notFound();
+  }
+
   const { error, historyEvents, stats, upcomingEvents, venue } = await loadPublicVenuePage(
     venueId,
     {
@@ -386,7 +431,10 @@ export default async function VenuePage({ params }: VenuePageProps) {
     },
   );
 
-  if (!venue && !error) {
+  if (error) {
+    throw new Error(`Failed to load public venue page: ${error}`);
+  }
+  if (!venue) {
     notFound();
   }
 
@@ -410,15 +458,34 @@ export default async function VenuePage({ params }: VenuePageProps) {
 
   return (
     <main className="app-page pb-[calc(7rem+env(safe-area-inset-bottom))] md:pb-9">
+      {venue ? (
+        <>
+          <JsonLd data={buildVenueStructuredData(venue)} />
+          <JsonLd
+            data={buildBreadcrumbStructuredData([
+              { name: "Belgrade events", path: "/" },
+              { name: "Belgrade venues", path: "/venues" },
+              { name: venue.name, path: `/venues/${venue._id}` },
+            ])}
+          />
+        </>
+      ) : null}
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-5">
+        {venue ? (
+          <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <Link className="hover:text-primary" href="/">Belgrade events</Link>
+            <span aria-hidden="true">/</span>
+            <Link className="hover:text-primary" href="/venues">Venues</Link>
+            <span aria-hidden="true">/</span>
+            <span aria-current="page" className="min-w-0 truncate text-foreground">{venue.name}</span>
+          </nav>
+        ) : null}
         <div className="flex items-center justify-between gap-3">
           <Link className="button-secondary min-h-10 gap-2 px-4 py-0" href={calendarHref}>
             <ArrowLeft className="h-4 w-4" />
             Calendar
           </Link>
         </div>
-
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
         {venue ? (
           <>

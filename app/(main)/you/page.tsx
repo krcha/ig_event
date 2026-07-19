@@ -1,4 +1,10 @@
+import type { Metadata } from "next";
 import { YouProfilePanel } from "@/components/auth/you-profile-panel";
+
+export const metadata: Metadata = {
+  title: "Your profile",
+  robots: { index: false, follow: false },
+};
 
 export default function YouPage() {
   if (!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) {

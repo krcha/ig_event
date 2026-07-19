@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import {
   type DiscoverDateTab,
   DiscoverFeed,
@@ -13,6 +14,7 @@ import {
   getNightlifeDefaultDateKey,
   parseDateKeyToUtcNoon,
 } from "@/lib/events/nightlife-date";
+import { SITE_ORIGIN } from "@/lib/seo/site";
 
 export const revalidate = 60;
 
@@ -21,6 +23,51 @@ type DiscoverPageProps = {
     date?: string | string[];
   }>;
 };
+
+export async function generateMetadata({ searchParams }: DiscoverPageProps): Promise<Metadata> {
+  const resolvedSearchParams = await searchParams;
+  const hasDateFilter = Boolean(
+    Array.isArray(resolvedSearchParams?.date)
+      ? resolvedSearchParams.date[0]
+      : resolvedSearchParams?.date,
+  );
+  const title = "Belgrade Events Tonight: Nightlife & Culture Picks";
+  const description =
+    "Discover what to do in Belgrade tonight: approved club nights, concerts, DJ sets, exhibitions, theatre, film, and cultural events.";
+
+  return {
+    title,
+    description,
+    alternates: {
+      canonical: "/discover",
+    },
+    openGraph: {
+      title: `${title} | Event Zeka`,
+      description,
+      type: "website",
+      locale: "en_RS",
+
+      siteName: "Event Zeka",
+      url: `${SITE_ORIGIN}/discover`,
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: `${title} | Event Zeka`,
+      description,
+    },
+    robots: {
+      index: !hasDateFilter,
+      follow: true,
+      googleBot: {
+        index: !hasDateFilter,
+        follow: true,
+        "max-image-preview": "large",
+        "max-snippet": -1,
+        "max-video-preview": -1,
+      },
+    },
+  };
+}
 
 function mapPublicEvent(event: PublicEvent): DiscoverFeedEvent {
   return {

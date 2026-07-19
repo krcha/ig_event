@@ -52,17 +52,17 @@ const nextConfig = {
       {
         source: "/map",
         destination: "/venues",
-        permanent: false,
+        permanent: true,
       },
       {
         source: "/calendar",
         destination: "/",
-        permanent: false,
+        permanent: true,
       },
       {
         source: "/events",
         destination: "/",
-        permanent: false,
+        permanent: true,
       },
     ];
   },

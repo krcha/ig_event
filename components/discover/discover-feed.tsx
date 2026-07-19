@@ -316,9 +316,12 @@ export function DiscoverFeed({
             <div className="min-w-0">
               <p className="section-kicker">Belgrade feed</p>
               <h1 className="mt-2 text-3xl font-semibold leading-none tracking-tight text-foreground sm:text-5xl">
-                Discover
+                Discover Belgrade
               </h1>
               <p className="mt-2 text-sm font-medium text-muted-foreground">{subline}</p>
+              <p className="mt-1.5 max-w-xl text-sm leading-6 text-muted-foreground">
+                Tonight&apos;s approved nightlife, concerts, DJ sets, and culture picks for locals and visitors.
+              </p>
             </div>
             <div className="flex flex-none items-center gap-2">
               <Link

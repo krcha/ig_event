@@ -85,7 +85,7 @@ try {
   }
 
   const redirect = await fetchWithTimeout("/map?source=security-qa", { redirect: "manual" });
-  assert.equal(redirect.status, 307);
+  assert.equal(redirect.status, 308);
   assert.equal(redirect.headers.get("location"), "/venues?source=security-qa");
 
   console.log(

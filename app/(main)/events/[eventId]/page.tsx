@@ -1,7 +1,8 @@
+import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import type { ReactNode } from "react";
+import { cache, type ReactNode } from "react";
 import {
   ArrowLeft,
   CalendarDays,
@@ -15,6 +16,7 @@ import type { FunctionReference } from "convex/server";
 import { EventCategoryPill, EventMetaRow, EventPriceChip } from "@/components/events/event-meta";
 import { EventCalendarBackLink } from "@/components/calendar/calendar-scroll-restoration";
 import { ReadMoreText } from "@/components/ui/read-more-text";
+import { JsonLd } from "@/components/seo/json-ld";
 import {
   UNKNOWN_EVENT_TIME_LABEL,
   getDisplayEventTime,
@@ -26,6 +28,8 @@ import { SaveEventButton } from "@/components/events/save-event-button";
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
 import { VenueWeeklyHours } from "@/components/venues/venue-weekly-hours";
 import { loadPublicEventDetailData } from "@/lib/events/public-event-detail-data";
+import { buildDiscoverImageUrl } from "@/lib/discover/discover-image-source";
+import { isPlausibleConvexPublicId } from "@/lib/convex/public-id";
 import {
   DEFAULT_EVENT_TYPE,
   canonicalizeEventType,
@@ -38,6 +42,12 @@ import {
   toSearchableText,
 } from "@/lib/pipeline/venue-normalization";
 import { isApifyImageUrl } from "@/lib/images/apify-images";
+import {
+  absoluteUrl,
+  buildBreadcrumbStructuredData,
+  buildEventStructuredData,
+  clipText,
+} from "@/lib/seo/site";
 import { cn } from "@/lib/utils";
 import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 
@@ -140,7 +150,11 @@ function findVenueForEvent(event: EventRecord, venues: VenueRecord[]): VenueReco
   );
 }
 
-async function loadEvent(eventId: string): Promise<EventRecord | null> {
+const loadEvent = cache(async function loadEvent(eventId: string): Promise<EventRecord | null> {
+  if (!isPlausibleConvexPublicId(eventId)) {
+    return null;
+  }
+
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
   if (!convexUrl) {
     throw new Error("Convex is not configured yet.");
@@ -198,7 +212,7 @@ async function loadEvent(eventId: string): Promise<EventRecord | null> {
       }
     : undefined;
   return event;
-}
+});
 
 function formatEventDate(value: string): string {
   const parsed = new Date(`${value}T00:00:00`);
@@ -218,6 +232,86 @@ function buildCalendarHref(event: EventRecord): string {
   const month = event.date.slice(0, 7);
   const query = new URLSearchParams({ month, day: event.date });
   return `/?${query.toString()}`;
+}
+
+function buildStableEventImageUrl(event: EventRecord): string | null {
+  if (!event.imageUrl) {
+    return null;
+  }
+
+  return absoluteUrl(
+    buildDiscoverImageUrl({
+      _id: event._id,
+      imageUrl: event.imageUrl,
+      instagramHandle: event.venueInstagramHandle,
+    }),
+  );
+}
+
+export async function generateMetadata({ params }: EventDetailPageProps): Promise<Metadata> {
+  const { eventId } = await params;
+  const event = await loadEvent(eventId);
+  if (!event) {
+    return {
+      title: "Event not found",
+      robots: { index: false, follow: false },
+    };
+  }
+
+  const canonicalPath = `/events/${event._id}`;
+  const eventDate = formatEventDate(event.date);
+  const baseDescription = `${event.title} at ${event.venue} in Belgrade on ${eventDate}.`;
+  const moderatedSummary = clipText(event.description?.trim(), 72);
+  const description = clipText(
+    `${baseDescription}${moderatedSummary ? ` ${moderatedSummary}` : " See announced time, artists, venue details, and the original event announcement."}`,
+    160,
+  );
+  const socialTitle = clipText(`${event.title} at ${event.venue}, Belgrade`, 90);
+  const imageUrl = buildStableEventImageUrl(event);
+
+  return {
+    title: clipText(`${event.title} at ${event.venue}, Belgrade`, 62),
+    description,
+    alternates: {
+      canonical: canonicalPath,
+    },
+    openGraph: {
+      title: socialTitle,
+      description,
+      type: "article",
+      locale: "en_RS",
+
+      siteName: "Event Zeka",
+      url: absoluteUrl(canonicalPath),
+      ...(imageUrl
+        ? {
+            images: [
+              {
+                url: imageUrl,
+                alt: `${event.title} at ${event.venue}`,
+              },
+            ],
+          }
+        : {}),
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: socialTitle,
+      description,
+      ...(imageUrl ? { images: [imageUrl] } : {}),
+    },
+    robots: {
+      index: true,
+      follow: true,
+      googleBot: {
+        index: true,
+        follow: true,
+        "max-image-preview": "large",
+        "max-snippet": -1,
+        "max-video-preview": -1,
+      },
+    },
+  };
 }
 
 function InfoTile({
@@ -292,9 +386,33 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
   const venueHref = event.venueId ? `/venues/${event.venueId}` : null;
   const calendarHref = buildCalendarHref(event);
+  const breadcrumbItems = [
+    { name: "Belgrade events", path: "/" },
+    ...(venueHref ? [{ name: event.venue, path: venueHref }] : []),
+    { name: event.title, path: `/events/${event._id}` },
+  ];
 
   return (
     <main className="app-page gap-3 pb-[calc(9.5rem+env(safe-area-inset-bottom))] md:pb-9">
+      <JsonLd
+        data={buildEventStructuredData({
+          ...event,
+          description: event.description,
+          imageUrl: buildStableEventImageUrl(event) ?? undefined,
+        })}
+      />
+      <JsonLd data={buildBreadcrumbStructuredData(breadcrumbItems)} />
+      <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+        <Link className="hover:text-primary" href="/">Belgrade events</Link>
+        <span aria-hidden="true">/</span>
+        {venueHref ? (
+          <>
+            <Link className="min-w-0 truncate hover:text-primary" href={venueHref}>{event.venue}</Link>
+            <span aria-hidden="true">/</span>
+          </>
+        ) : null}
+        <span aria-current="page" className="min-w-0 truncate text-foreground">{event.title}</span>
+      </nav>
       <div className="flex items-center justify-between gap-3">
         <EventCalendarBackLink className="button-secondary min-h-10 gap-2 px-4 py-0" href={calendarHref}>
           <ArrowLeft className="h-4 w-4" />

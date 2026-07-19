@@ -161,9 +161,9 @@ assert.deepEqual(
   {
     source: "/map",
     destination: "/venues",
-    permanent: false,
+    permanent: true,
   },
-  "Next config should issue a non-permanent HTTP redirect from /map to /venues.",
+  "Next config should issue a permanent HTTP redirect from /map to /venues.",
 );
 assert.ok(
   source.includes('aria-label="Global"') && source.includes('aria-label="Mobile navigation"'),

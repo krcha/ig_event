@@ -15,6 +15,7 @@ import {
 } from "@/lib/events/public-events";
 import { AutoApplyFilterForm } from "@/components/calendar/auto-apply-filter-form";
 import { CalendarScrollRestoration } from "@/components/calendar/calendar-scroll-restoration";
+import { JsonLd } from "@/components/seo/json-ld";
 import { EventKindToggleChips } from "@/components/calendar/event-kind-toggle-chips";
 import { MobileMonthDayStrip } from "@/components/calendar/mobile-month-day-strip";
 import { EventMetaRow, getEventCategoryKind } from "@/components/events/event-meta";
@@ -28,6 +29,7 @@ import {
 } from "@/lib/events/event-time";
 import { dateKeyToLocalNoonDate, getNightlifeDefaultDateKey } from "@/lib/events/nightlife-date";
 import { matchesPublicEventNameArtistOrVenue } from "@/lib/events/public-event-search";
+import { HOME_FAQ_ITEMS, buildHomePageStructuredData } from "@/lib/seo/site";
 
 // Keep the public calendar out of Next.js' persisted route cache. The page data
 // comes from Convex and must reflect completed ingestion runs without manual
@@ -1126,7 +1128,32 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
 
   return (
     <main className="app-page app-page-wide gap-3 sm:gap-4">
+      <JsonLd data={buildHomePageStructuredData(selectedDayAgendaEvents)} />
       <CalendarScrollRestoration />
+
+      <section className="rounded-[1.15rem] border border-border/75 bg-card/72 px-3.5 py-3.5 sm:px-5 sm:py-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          <div className="max-w-3xl">
+            <p className="section-kicker">Belgrade event calendar</p>
+            <h1 className="mt-1.5 text-2xl font-semibold tracking-[-0.045em] text-foreground sm:text-4xl">
+              Belgrade events, nightlife & culture
+            </h1>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground sm:text-base">
+              Find what&apos;s on in Belgrade today: club nights, concerts, DJ sets, exhibitions,
+              theatre, film, festivals, and workshops. Događaji u Beogradu za lokalce i posetioce.
+            </p>
+          </div>
+          <nav aria-label="Explore Belgrade events" className="flex flex-wrap gap-2">
+            <Link className="app-chip bg-primary/10 text-primary hover:bg-primary/15" href="/discover">
+              Tonight&apos;s picks
+            </Link>
+            <Link className="app-chip bg-white/[0.04] hover:bg-white/[0.07]" href="/venues">
+              Belgrade venues
+            </Link>
+          </nav>
+        </div>
+      </section>
+
       <header className="relative z-20 rounded-[1.15rem] border border-border/75 bg-card/92 px-2.5 py-2 shadow-[0_18px_52px_-40px_rgba(0,0,0,0.9)] backdrop-blur-sm lg:hidden">
         <div className="flex items-center gap-1.5">
           <div className="inline-flex h-9 min-w-0 flex-1 items-center rounded-full border border-border/75 bg-white/[0.035]">
@@ -1185,11 +1212,11 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 Night calendar
               </div>
               <div>
-                <h1 className="text-3xl font-semibold tracking-[-0.05em] text-foreground sm:text-5xl">
+                <h2 className="text-3xl font-semibold tracking-[-0.05em] text-foreground sm:text-5xl">
                   {monthLabel}
-                </h1>
+                </h2>
                 <p className="mt-1 max-w-xl text-sm leading-5 text-muted-foreground sm:mt-2 sm:text-base sm:leading-6">
-                  Swipe dates, open a day agenda, and filter only when needed.
+                  Browse approved Belgrade events by date, venue, or type.
                 </p>
               </div>
             </div>
@@ -1291,9 +1318,51 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       {!error ? (
         <>
           <section>{renderSelectedDayAgenda({ mobile: true })}</section>
-
         </>
       ) : null}
+
+      <section
+        aria-labelledby="belgrade-events-guide"
+        className="rounded-[1.2rem] border border-border/75 bg-card/65 px-4 py-5 sm:px-6 sm:py-6"
+      >
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(18rem,0.9fr)]">
+          <div>
+            <p className="section-kicker">Local guide</p>
+            <h2 id="belgrade-events-guide" className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
+              What&apos;s on in Belgrade?
+            </h2>
+            <p className="mt-3 text-sm leading-6 text-muted-foreground">
+              Use Event Zeka to plan a night out or a culture-filled day. Check the selected date,
+              open an event for announced times and ticket details, then confirm the latest information
+              with the linked venue or original Instagram post.
+            </p>
+            <p className="mt-3 text-sm leading-6 text-muted-foreground" lang="sr-Latn-RS">
+              <strong className="text-foreground">Događaji u Beogradu:</strong> izaberite datum,
+              pretražite izvođača ili mesto i proverite detalje događaja pre polaska.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Link className="button-secondary min-h-10 px-4 py-0" href="/discover">
+                Discover tonight
+              </Link>
+              <Link className="button-secondary min-h-10 px-4 py-0" href="/venues">
+                Explore venues
+              </Link>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <h2 className="text-lg font-semibold text-foreground">Belgrade events FAQ</h2>
+            {HOME_FAQ_ITEMS.map((item) => (
+              <details className="rounded-[0.95rem] border border-border/75 bg-white/[0.025] px-3.5 py-3" key={item.question}>
+                <summary className="cursor-pointer text-sm font-semibold text-foreground">
+                  {item.question}
+                </summary>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">{item.answer}</p>
+              </details>
+            ))}
+          </div>
+        </div>
+      </section>
     </main>
   );
 }
