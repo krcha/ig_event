@@ -282,7 +282,7 @@ const weakerWeeklyScheduleDuplicate = {
   imageUrl: "https://example.com/weaker-weekly-schedule.jpg",
   instagramPostUrl: "https://www.instagram.com/p/weaker-weekly-schedule/",
   instagramPostId: "weaker-weekly-schedule",
-  sourceCaption: undefined,
+  sourceCaption: "Nedeljni program: sedam događaja u Bluz i Pivo.",
   sourcePostedAt: "2026-07-18T09:52:49.000Z",
   eventType: "live music",
   rawExtractionJson: JSON.stringify({ source_url: "weaker-weekly-schedule" }),

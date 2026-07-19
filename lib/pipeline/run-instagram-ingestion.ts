@@ -5608,8 +5608,7 @@ function shouldPreserveExistingSinglePostSource(
   if (
     isMultiEventNormalizedFields(existingFields) ||
     !isMultiEventNormalizedFields(nextFields) ||
-    !normalizeString(existing.sourceCaption) ||
-    normalizeString(next.sourceCaption)
+    !normalizeString(existing.sourceCaption)
   ) {
     return false;
   }

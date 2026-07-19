@@ -367,12 +367,14 @@ install -o root -g root -m 0755 scripts/ig-event-cron-runner \
 
 The cron endpoint resumes any recent `cron_active_venues` job before creating a
 new one. It defaults to `CRON_INGESTION_MAX_STEPS=20` and
-`CRON_INGESTION_BATCH_SIZE=64`. Each Convex job is bounded to 200 handles so an
-empty persisted summary stays near 125 KiB instead of the roughly 312 KiB
-produced by the former 500-handle boundary; this avoids self-hosted Convex
-`createJob` user-timeout failures while retaining document-size headroom. The
-host runner makes up to eight requests, stopping at the 1500-handle schedule
-cap while preserving `CRON_RESULTS_LIMIT=1` and the 23-hour cooldown. Set
+`CRON_INGESTION_BATCH_SIZE=64`. Each new scheduled Convex job is bounded to 200
+handles so an empty persisted summary stays near 125 KiB instead of the roughly
+312 KiB produced by a 500-handle job; this avoids self-hosted Convex `createJob`
+user-timeout failures while retaining document-size headroom. The historical
+500-handle hard boundary remains so queued and manual jobs are rollout-safe.
+The host runner makes up to eight requests, counts each resumed or new job once,
+and stops at the 1500-handle schedule cap while preserving
+`CRON_RESULTS_LIMIT=1` and the 23-hour cooldown. Set
 `INGEST_CRON_MAX_REQUESTS_PER_RUN` only when intentionally changing that
 aggregate cap.
 

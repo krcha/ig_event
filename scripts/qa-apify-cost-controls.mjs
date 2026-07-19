@@ -1,5 +1,15 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getDocumentSize } from "convex/values";
 import {
   buildApifyInstagramScrapeRequest,
@@ -17,6 +27,7 @@ import {
 } from "../lib/pipeline/run-instagram-ingestion.ts";
 import { loadOperationalVenueRecords } from "../lib/pipeline/operational-venues.ts";
 import {
+  MAX_CRON_INGESTION_JOB_HANDLES,
   MAX_INGESTION_JOB_HANDLES,
   MAX_INGESTION_JOB_PERSISTED_JSON_BYTES,
   serializeSafeIngestionJobPayload,
@@ -263,13 +274,23 @@ assert.doesNotMatch(
 );
 assert.equal(
   MAX_INGESTION_JOB_HANDLES,
+  500,
+  "the historical hard bound must remain rollout-compatible for queued and manual jobs",
+);
+assert.equal(
+  MAX_CRON_INGESTION_JOB_HANDLES,
   200,
-  "all ingestion job creation paths must share the mutation-time-safe handle bound",
+  "scheduled cron jobs must use the mutation-time-safe handle bound",
 );
 assert.match(
   cronRouteSource,
-  /MAX_INGESTION_JOB_HANDLES/,
-  "cron jobs must use the central Convex document-size boundary",
+  /MAX_CRON_INGESTION_JOB_HANDLES/,
+  "new cron jobs must use the scheduled mutation-time-safe boundary",
+);
+assert.match(
+  cronRouteSource,
+  /maxHandles: Math\.min\(hostRunRemaining, MAX_INGESTION_JOB_HANDLES\)/,
+  "cron must still resume rollout-era jobs up to the historical hard boundary",
 );
 for (const [label, source] of [
   ["admin all-venues scrape", adminVenueScrapeRouteSource],
@@ -278,7 +299,7 @@ for (const [label, source] of [
   assert.match(
     source,
     /MAX_INGESTION_JOB_HANDLES/,
-    `${label} must use the central 200-handle job boundary`,
+    `${label} must retain the rollout-compatible 500-handle hard boundary`,
   );
   assert.match(source, /serializeSafeIngestionJobPayload/);
 }
@@ -295,6 +316,8 @@ assert.match(
 assert.match(hostCronRunnerSource, /skippedDueToRunLimit/);
 assert.match(hostCronRunnerSource, /hostRunRemaining/);
 assert.match(hostCronRunnerSource, /HOST_RUN_MAX_HANDLES - TOTAL_SELECTED/);
+assert.match(hostCronRunnerSource, /declare -A COUNTED_JOB_IDS=\(\)/);
+assert.match(hostCronRunnerSource, /COUNTED_JOB_IDS\[\$RESPONSE_JOB_ID\]=1/);
 assert.match(hostCronRunnerSource, /trap cleanup_sensitive_temp_file EXIT/);
 assert.match(
   ingestionJobsSource,
@@ -374,8 +397,21 @@ const boundaryDocumentSize = getDocumentSize({
   updatedAt: Date.now(),
 });
 assert.ok(
-  boundaryDocumentSize < 350_000,
-  `${MAX_INGESTION_JOB_HANDLES}-handle job with adversarial provider errors should retain mutation-time and document-size headroom, got ${boundaryDocumentSize} bytes`,
+  boundaryDocumentSize < 850_000,
+  `${MAX_INGESTION_JOB_HANDLES}-handle legacy-compatible job with adversarial provider errors should retain document-size headroom, got ${boundaryDocumentSize} bytes`,
+);
+const cronHandles = Array.from(
+  { length: MAX_CRON_INGESTION_JOB_HANDLES },
+  (_, index) => `auto-${index}`,
+);
+const cronPayload = serializeSafeIngestionJobPayload({
+  handles: cronHandles,
+  summary: createEmptyIngestionSummary(cronHandles),
+  state: createInitialIngestionBatchState(),
+});
+assert.ok(
+  Buffer.byteLength(cronPayload.summaryJson) < 150_000,
+  "cron empty summaries must retain ample mutation-time headroom",
 );
 assert.throws(
   () =>
@@ -392,7 +428,7 @@ assert.throws(
       ),
       state: createInitialIngestionBatchState(),
     }),
-  /limited to 200 handles/,
+  /limited to 500 handles/,
 );
 assert.throws(
   () =>
@@ -439,6 +475,108 @@ assert.deepEqual(
   }),
   ["good-zero", "good-fetched", "legacy-no-summary"],
   "completed jobs should not cool down handles that only recorded scraper/API errors",
+);
+
+function runCronRunnerCapFixture(mode) {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "ig-event-cron-cap-"));
+  const fakeBin = join(fixtureRoot, "bin");
+  const logDir = join(fixtureRoot, "logs");
+  const envFile = join(fixtureRoot, "cron.env");
+  const stateFile = join(fixtureRoot, "curl-state.json");
+  mkdirSync(fakeBin);
+  mkdirSync(logDir);
+  writeFileSync(
+    envFile,
+    [
+      "APP_ORIGIN=https://example.invalid",
+      "CRON_SECRET=fixture-secret",
+      "INGEST_CRON_MAX_REQUESTS_PER_RUN=8",
+      "INGEST_CRON_TIMEOUT_SECONDS=10",
+      "",
+    ].join("\n"),
+    { mode: 0o600 },
+  );
+  const fakeCurlPath = join(fakeBin, "curl");
+  writeFileSync(
+    fakeCurlPath,
+    `#!/usr/bin/env node
+import { readFileSync, writeFileSync } from "node:fs";
+const configPath = process.argv[process.argv.indexOf("--config") + 1];
+const config = readFileSync(configPath, "utf8");
+const outputPath = config.match(/^output = "([^"]+)"$/m)?.[1];
+const url = config.match(/^url = "([^"]+)"$/m)?.[1];
+if (!outputPath || !url) process.exit(2);
+let state = { count: 0, requests: [] };
+try { state = JSON.parse(readFileSync(process.env.FAKE_CURL_STATE, "utf8")); } catch {}
+const requestIndex = state.count + 1;
+const parsedUrl = new URL(url);
+const remaining = Number(parsedUrl.searchParams.get("hostRunRemaining") ?? "1500");
+const selected = Math.min(200, Math.max(0, remaining));
+const repeat = process.env.FAKE_CURL_MODE === "repeat-resume";
+const jobId = repeat && requestIndex <= 2 ? "resumed-job" : "job-" + requestIndex;
+const done = !(repeat && requestIndex === 1);
+const payload = {
+  jobId,
+  resumedJob: requestIndex === 1 || (repeat && requestIndex === 2),
+  status: done ? "completed" : "running",
+  done,
+  handles: Array.from({ length: selected }, (_, index) => "handle-" + requestIndex + "-" + index),
+  skippedDueToRunLimit: remaining > selected ? 1 : 0,
+  hostRunMaxHandles: 1500,
+};
+state.count = requestIndex;
+state.requests.push({ requestIndex, remaining, selected, jobId, done });
+writeFileSync(process.env.FAKE_CURL_STATE, JSON.stringify(state));
+writeFileSync(outputPath, JSON.stringify(payload));
+process.stdout.write("200");
+`,
+    { mode: 0o755 },
+  );
+  chmodSync(fakeCurlPath, 0o755);
+
+  try {
+    const result = spawnSync("bash", ["scripts/ig-event-cron-runner", "ingest-venues"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        FAKE_CURL_MODE: mode,
+        FAKE_CURL_STATE: stateFile,
+        IG_EVENT_CRON_ENV: envFile,
+        IG_EVENT_CRON_LOG_DIR: logDir,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+      },
+    });
+    const state = JSON.parse(readFileSync(stateFile, "utf8"));
+    return { result, state };
+  } finally {
+    rmSync(fixtureRoot, { force: true, recursive: true });
+  }
+}
+
+const resumedCapFixture = runCronRunnerCapFixture("single-resume");
+assert.equal(resumedCapFixture.result.status, 0, resumedCapFixture.result.stderr);
+assert.match(
+  resumedCapFixture.result.stdout,
+  /status=ok requests=8 selected=1500 host_run_max=1500/,
+  "one resumed job plus fresh jobs must stop exactly at the 1500-handle aggregate cap",
+);
+assert.deepEqual(
+  resumedCapFixture.state.requests.map((request) => request.remaining),
+  [1500, 1300, 1100, 900, 700, 500, 300, 100],
+);
+
+const repeatedResumeFixture = runCronRunnerCapFixture("repeat-resume");
+assert.equal(repeatedResumeFixture.result.status, 0, repeatedResumeFixture.result.stderr);
+assert.match(
+  repeatedResumeFixture.result.stdout,
+  /status=cap_reached requests=8 selected=1400 host_run_max=1500/,
+  "multiple steps for one resumed job must count that job's handles only once",
+);
+assert.deepEqual(
+  repeatedResumeFixture.state.requests.slice(0, 3).map((request) => request.remaining),
+  [1500, 1300, 1300],
+  "the same resumed job ID must not consume the host budget twice",
 );
 
 console.log("Apify cost-control QA passed.");

@@ -154,9 +154,10 @@ Notes:
 - Cron ingestion defaults to one latest Instagram post per active venue handle,
   all active handles up to the 1500-handle safety cap, and a 23-hour cooldown so
   the daily 07:00 UTC schedule is not blocked by normal scheduler jitter. Each
-  Convex ingestion-job document is capped at 200 handles; the source-controlled
-  host runner makes up to eight authenticated requests to finish the 1500-handle
-  schedule without oversized self-hosted Convex mutations.
+  scheduled Convex ingestion chunk is capped at 200 handles; the historical
+  500-handle hard boundary remains for queued/manual rollout compatibility. The
+  source-controlled host runner makes up to eight authenticated requests to
+  finish the 1500-handle schedule without oversized self-hosted Convex mutations.
 - Post scraping has a `$0.01` hard charge cap per account run. At the current
   basic-data result price, 1500 one-post runs are expected to cost about `$2.25`;
   the aggregate configured worst-case cap is `$15`, plus OpenAI usage and the

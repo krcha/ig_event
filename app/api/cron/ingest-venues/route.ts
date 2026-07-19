@@ -19,6 +19,7 @@ import {
 } from "@/lib/pipeline/cron-ingestion-config";
 import { createConvexHttpClient, requireServiceSecret } from "@/lib/convex/server";
 import {
+  MAX_CRON_INGESTION_JOB_HANDLES,
   MAX_INGESTION_JOB_HANDLES,
   serializeSafeIngestionJobPayload,
   truncateIngestionError,
@@ -247,13 +248,13 @@ export async function GET(request: Request) {
     const maxHandlesPerJob = Math.min(
       cronConfig.maxHandlesPerRun,
       hostRunRemaining,
-      MAX_INGESTION_JOB_HANDLES,
+      MAX_CRON_INGESTION_JOB_HANDLES,
     );
     const resumableJob = await findResumableCronJob({
       convex,
       serviceSecret,
       minCreatedAt,
-      maxHandles: maxHandlesPerJob,
+      maxHandles: Math.min(hostRunRemaining, MAX_INGESTION_JOB_HANDLES),
     });
     let handles: string[];
     let skippedRecentlyAttempted = 0;

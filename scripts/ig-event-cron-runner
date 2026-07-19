@@ -79,6 +79,7 @@ REQUESTS_COMPLETED=0
 TOTAL_SELECTED=0
 HOST_RUN_MAX_HANDLES=0
 CURRENT_CURL_CONFIG=""
+declare -A COUNTED_JOB_IDS=()
 
 cleanup_sensitive_temp_file() {
   if [[ -n "$CURRENT_CURL_CONFIG" ]]; then
@@ -163,13 +164,21 @@ done = payload.get("done") is True
 skipped = payload.get("skippedDueToRunLimit", 0)
 status = payload.get("status", "none")
 host_max = payload.get("hostRunMaxHandles", 0)
-resumed = payload.get("resumedJob") is True
-selected_increment = 0 if resumed else selected
-print("true" if done else "false", selected, skipped if isinstance(skipped, int) else 0, status, host_max if isinstance(host_max, int) else 0, selected_increment)
+job_id = payload.get("jobId")
+print("true" if done else "false", selected, skipped if isinstance(skipped, int) else 0, status, host_max if isinstance(host_max, int) else 0, job_id if isinstance(job_id, str) and job_id else "-")
 PY
 )"
-  read -r LAST_DONE LAST_SELECTED LAST_SKIPPED_DUE LAST_STATUS RESPONSE_HOST_MAX SELECTED_INCREMENT <<<"$response_state"
-  TOTAL_SELECTED=$(( TOTAL_SELECTED + SELECTED_INCREMENT ))
+  read -r LAST_DONE LAST_SELECTED LAST_SKIPPED_DUE LAST_STATUS RESPONSE_HOST_MAX RESPONSE_JOB_ID <<<"$response_state"
+  if [[ "$LAST_SELECTED" -gt 0 ]]; then
+    if [[ "$RESPONSE_JOB_ID" == "-" ]]; then
+      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=missing_job_id selected=$LAST_SELECTED body=$LAST_BODY" >&2
+      exit 1
+    fi
+    if [[ -z "${COUNTED_JOB_IDS[$RESPONSE_JOB_ID]+x}" ]]; then
+      TOTAL_SELECTED=$(( TOTAL_SELECTED + LAST_SELECTED ))
+      COUNTED_JOB_IDS[$RESPONSE_JOB_ID]=1
+    fi
+  fi
   if [[ "$RESPONSE_HOST_MAX" -gt 0 ]]; then
     HOST_RUN_MAX_HANDLES="$RESPONSE_HOST_MAX"
   fi
