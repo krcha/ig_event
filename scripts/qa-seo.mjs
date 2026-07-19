@@ -171,6 +171,7 @@ assert.equal(
 );
 assert.ok(sitemap.includes("loadPublicCalendarEventsWindow"));
 assert.ok(sitemap.includes("loadPublicVenueDirectory"));
+assert.ok(sitemap.includes("limit: 500"));
 assert.ok(sitemap.includes("/discover"));
 assert.ok(sitemap.includes("/venues"));
 assert.ok(sitemap.includes("/events/${event._id}"));

@@ -22,7 +22,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       fromDate: today,
       beforeDate: addDaysToDateKey(today, 367),
     }),
-    loadPublicVenueDirectory({ limit: 1000, today }),
+    loadPublicVenueDirectory({ limit: 500, today }),
   ]);
 
   const staticRoutes: MetadataRoute.Sitemap = [
