@@ -112,7 +112,7 @@ const cronConfig = getCronIngestionConfig({});
 assert.deepEqual(cronConfig, {
   resultsLimit: 1,
   daysBack: 10,
-  maxHandlesPerRun: 1500,
+  maxHandlesPerRun: 2000,
   fullScrapeCooldownHours: 23,
 });
 
@@ -163,6 +163,8 @@ const adminRepairRouteSource = readFileSync(
 assert.match(operationalVenuesSource, /venues:listActiveVenueIngestionFieldsPaginated/);
 assert.match(operationalVenuesSource, /venues:listVenueIngestionFieldsPaginated/);
 assert.match(operationalVenuesSource, /continueCursor/);
+assert.match(operationalVenuesSource, /seenCursors/);
+assert.doesNotMatch(operationalVenuesSource, /MAX_OPERATIONAL_VENUE_PAGE_REQUESTS/);
 assert.doesNotMatch(ingestionRunnerSource, /"venues:listActiveVenues"/);
 
 let operationalPageCalls = 0;
@@ -241,6 +243,27 @@ assert.deepEqual(
   "SplitRequired pages must be replaced by both complete cursor ranges",
 );
 
+let cyclePageCalls = 0;
+await assert.rejects(
+  () =>
+    loadOperationalVenueRecords({
+      client: {
+        query: async () => {
+          cyclePageCalls += 1;
+          return {
+            page: [],
+            isDone: false,
+            continueCursor: cyclePageCalls === 1 ? "cursor-a" : cyclePageCalls === 2 ? "cursor-b" : "cursor-a",
+          };
+        },
+      },
+      serviceSecret: "service-secret",
+      activeOnly: true,
+    }),
+  /cursor cycle/,
+);
+assert.equal(cyclePageCalls, 3, "cursor cycles must fail closed without a venue-count cap");
+
 for (const [label, source] of [
   ["instagram scraper", instagramScraperSource],
   ["follow discovery", followDiscoverySource],
@@ -305,14 +328,20 @@ for (const [label, source] of [
 }
 assert.match(
   cronRouteSource,
-  /maxHandlesPerRun: maxHandlesPerJob/,
-  "cron route should chunk the 1500-handle run into bounded jobs",
+  /const hostRunMaxHandles = activeVenueHandles\.length/,
+  "scheduled ingestion must size the host run from the complete active venue set",
+);
+assert.match(
+  cronRouteSource,
+  /normalizeHostRunRemaining\(request, hostRunMaxHandles\)/,
+  "scheduled ingestion must not apply the compatibility max-handle setting to the all-active run",
 );
 assert.match(
   hostCronRunnerSource,
-  /INGEST_CRON_MAX_REQUESTS_PER_RUN:-8/,
-  "host runner should complete up to eight 200-handle chunks per scheduled run",
+  /required_chunks=.*HOST_RUN_MAX_HANDLES.*RESPONSE_JOB_CHUNK/,
+  "host runner safety must scale from the live active count instead of capping venue coverage",
 );
+assert.doesNotMatch(hostCronRunnerSource, /INGEST_CRON_MAX_REQUESTS_PER_RUN/);
 assert.match(hostCronRunnerSource, /skippedDueToRunLimit/);
 assert.match(hostCronRunnerSource, /hostRunRemaining/);
 assert.match(hostCronRunnerSource, /HOST_RUN_MAX_HANDLES - TOTAL_SELECTED/);
@@ -349,12 +378,12 @@ assert.equal(
 
 assert.deepEqual(
   selectCronIngestionHandles({
-    activeVenueHandles: Array.from({ length: 1500 }, (_, index) => `venue-${index + 1}`),
+    activeVenueHandles: Array.from({ length: 2000 }, (_, index) => `venue-${index + 1}`),
     recentlyAttemptedHandles: [],
     maxHandlesPerRun: cronConfig.maxHandlesPerRun,
   }),
   {
-    handles: Array.from({ length: 1500 }, (_, index) => `venue-${index + 1}`),
+    handles: Array.from({ length: 2000 }, (_, index) => `venue-${index + 1}`),
     skippedRecentlyAttempted: 0,
     skippedDueToRunLimit: 0,
   },
@@ -490,7 +519,6 @@ function runCronRunnerCapFixture(mode) {
     [
       "APP_ORIGIN=https://example.invalid",
       "CRON_SECRET=fixture-secret",
-      "INGEST_CRON_MAX_REQUESTS_PER_RUN=8",
       "INGEST_CRON_TIMEOUT_SECONDS=10",
       "",
     ].join("\n"),
@@ -510,7 +538,7 @@ let state = { count: 0, requests: [] };
 try { state = JSON.parse(readFileSync(process.env.FAKE_CURL_STATE, "utf8")); } catch {}
 const requestIndex = state.count + 1;
 const parsedUrl = new URL(url);
-const remaining = Number(parsedUrl.searchParams.get("hostRunRemaining") ?? "1500");
+const remaining = Number(parsedUrl.searchParams.get("hostRunRemaining") ?? "2400");
 const selected = Math.min(200, Math.max(0, remaining));
 const repeat = process.env.FAKE_CURL_MODE === "repeat-resume";
 const jobId = repeat && requestIndex <= 2 ? "resumed-job" : "job-" + requestIndex;
@@ -522,7 +550,8 @@ const payload = {
   done,
   handles: Array.from({ length: selected }, (_, index) => "handle-" + requestIndex + "-" + index),
   skippedDueToRunLimit: remaining > selected ? 1 : 0,
-  hostRunMaxHandles: 1500,
+  hostRunMaxHandles: 2400,
+  maxHandlesPerJob: 200,
 };
 state.count = requestIndex;
 state.requests.push({ requestIndex, remaining, selected, jobId, done });
@@ -558,24 +587,24 @@ const resumedCapFixture = runCronRunnerCapFixture("single-resume");
 assert.equal(resumedCapFixture.result.status, 0, resumedCapFixture.result.stderr);
 assert.match(
   resumedCapFixture.result.stdout,
-  /status=ok requests=8 selected=1500 host_run_max=1500/,
-  "one resumed job plus fresh jobs must stop exactly at the 1500-handle aggregate cap",
+  /status=ok requests=12 selected=2400 host_run_max=2400/,
+  "the runner must cover a live active set larger than the 2000-handle compatibility default",
 );
 assert.deepEqual(
   resumedCapFixture.state.requests.map((request) => request.remaining),
-  [1500, 1300, 1100, 900, 700, 500, 300, 100],
+  [2400, 2200, 2000, 1800, 1600, 1400, 1200, 1000, 800, 600, 400, 200],
 );
 
 const repeatedResumeFixture = runCronRunnerCapFixture("repeat-resume");
 assert.equal(repeatedResumeFixture.result.status, 0, repeatedResumeFixture.result.stderr);
 assert.match(
   repeatedResumeFixture.result.stdout,
-  /status=cap_reached requests=8 selected=1400 host_run_max=1500/,
-  "multiple steps for one resumed job must count that job's handles only once",
+  /status=ok requests=13 selected=2400 host_run_max=2400/,
+  "multiple steps for one resumed job must count that job's handles only once while covering all venues",
 );
 assert.deepEqual(
   repeatedResumeFixture.state.requests.slice(0, 3).map((request) => request.remaining),
-  [1500, 1300, 1300],
+  [2400, 2200, 2200],
   "the same resumed job ID must not consume the host budget twice",
 );
 

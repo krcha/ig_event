@@ -244,12 +244,9 @@ export async function GET(request: Request) {
 
     const minCreatedAt = Date.now() - cronConfig.fullScrapeCooldownHours * MS_PER_HOUR;
     const effectiveBatchSize = normalizeCronBatchSize(process.env.CRON_INGESTION_BATCH_SIZE);
-    const hostRunRemaining = normalizeHostRunRemaining(request, cronConfig.maxHandlesPerRun);
-    const maxHandlesPerJob = Math.min(
-      cronConfig.maxHandlesPerRun,
-      hostRunRemaining,
-      MAX_CRON_INGESTION_JOB_HANDLES,
-    );
+    const hostRunMaxHandles = activeVenueHandles.length;
+    const hostRunRemaining = normalizeHostRunRemaining(request, hostRunMaxHandles);
+    const maxHandlesPerJob = Math.min(hostRunRemaining, MAX_CRON_INGESTION_JOB_HANDLES);
     const resumableJob = await findResumableCronJob({
       convex,
       serviceSecret,
@@ -309,7 +306,7 @@ export async function GET(request: Request) {
           skippedRecentlyAttempted,
           skippedDueToRunLimit,
           fullScrapeCooldownHours: cronConfig.fullScrapeCooldownHours,
-          maxHandlesPerRun: cronConfig.maxHandlesPerRun,
+          maxHandlesPerRun: hostRunMaxHandles,
           resultsLimit: cronConfig.resultsLimit,
           daysBack: cronConfig.daysBack,
         }),
@@ -317,9 +314,9 @@ export async function GET(request: Request) {
         skippedRecentlyAttempted,
         skippedDueToRunLimit,
         maxHandlesPerJob,
-        hostRunMaxHandles: cronConfig.maxHandlesPerRun,
+        hostRunMaxHandles,
         hostRunRemaining,
-        costControls: cronConfig,
+        costControls: { ...cronConfig, maxHandlesPerRun: hostRunMaxHandles },
       });
     }
 
@@ -331,7 +328,7 @@ export async function GET(request: Request) {
       skippedRecentlyAttempted,
       skippedDueToRunLimit,
       fullScrapeCooldownHours: cronConfig.fullScrapeCooldownHours,
-      maxHandlesPerRun: cronConfig.maxHandlesPerRun,
+      maxHandlesPerRun: hostRunMaxHandles,
       resultsLimit: cronConfig.resultsLimit,
       daysBack: cronConfig.daysBack,
     });
@@ -453,9 +450,9 @@ export async function GET(request: Request) {
       skippedRecentlyAttempted,
       skippedDueToRunLimit,
       maxHandlesPerJob,
-      hostRunMaxHandles: cronConfig.maxHandlesPerRun,
+      hostRunMaxHandles,
       hostRunRemaining,
-      costControls: cronConfig,
+      costControls: { ...cronConfig, maxHandlesPerRun: hostRunMaxHandles },
     });
   } catch (error) {
     return NextResponse.json(

@@ -119,6 +119,9 @@ const nextConfig = read("next.config.mjs");
 const convexEvents = read("convex/events.ts");
 const convexVenues = read("convex/venues.ts");
 
+assert.match(convexVenues, /DEFAULT_PUBLIC_VENUE_DIRECTORY_LIMIT = 2000/);
+assert.match(convexVenues, /MAX_PUBLIC_VENUE_DIRECTORY_LIMIT = 2000/);
+
 assert.ok(layout.includes('lang="en-RS"'));
 assert.equal(layout.includes('alternateLocale: "sr_RS"'), false);
 assert.ok(rootPage.includes("generateMetadata"));
@@ -182,7 +185,7 @@ assert.ok(sitemap.includes("loadPublicCalendarEventsWindow"));
 assert.ok(sitemap.includes("loadPublicVenueDirectory"));
 assert.ok(sitemap.includes('dynamic = "force-dynamic"'));
 assert.ok(sitemap.includes("unstable_cache"));
-assert.ok(sitemap.includes("limit: 500"));
+assert.ok(sitemap.includes("limit: 2000"));
 assert.ok(sitemap.includes("/discover"));
 assert.ok(sitemap.includes("/venues"));
 assert.ok(sitemap.includes("/events/${event._id}"));

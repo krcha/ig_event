@@ -341,13 +341,15 @@ calls the job POST route, the job will not keep advancing.
 2. Live VPS cron calls `GET /api/cron/discover-following` Mondays at
    `10:00 UTC` through the same runner.
 3. Both routes check the bearer token when `CRON_SECRET` is set.
-4. Venue ingestion paginates all active venue handles, skips handles with a
-   fresh full-scrape attempt inside the 23-hour cooldown window, and covers up
-   to 1500 active handles per host run. To retain Convex mutation-time and
+4. Venue ingestion paginates all active venue handles and skips only handles
+   with a fresh full-scrape attempt inside the 23-hour cooldown window. The host
+   run derives its size from the complete live active set, so no venue is
+   dropped by an aggregate count cap. To retain Convex mutation-time and
    document-size headroom, each new scheduled ingestion job contains at most 200
    handles; the historical 500-handle hard boundary remains for queued/manual
-   rollout compatibility. The host runner makes up to eight authenticated
-   requests. Each handle scrapes the latest 1 post, runs direct full-scrape
+   rollout compatibility. The host runner scales its request safety allowance
+   from the live active count and continues until every eligible handle is
+   covered. Each handle scrapes the latest 1 post, runs direct full-scrape
    ingestion, and patches job status.
 5. Convex internal cron `delete expired events` runs weekly Wednesday at 05:00
    UTC and deletes expired events older than the 3-day retention grace period

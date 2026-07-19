@@ -19,7 +19,6 @@ const listVenueIngestionFieldsPaginatedQuery =
 const listActiveVenueIngestionFieldsPaginatedQuery =
   "venues:listActiveVenueIngestionFieldsPaginated" as unknown as FunctionReference<"query">;
 const OPERATIONAL_VENUE_PAGE_SIZE = 50;
-const MAX_OPERATIONAL_VENUE_PAGE_REQUESTS = 1_000;
 const MAX_OPERATIONAL_VENUE_SPLIT_DEPTH = 20;
 
 export async function loadOperationalVenueRecords(options: {
@@ -30,8 +29,6 @@ export async function loadOperationalVenueRecords(options: {
   const query = options.activeOnly
     ? listActiveVenueIngestionFieldsPaginatedQuery
     : listVenueIngestionFieldsPaginatedQuery;
-  let requestCount = 0;
-
   async function loadRange(
     startCursor: string | null,
     endCursor?: string,
@@ -39,14 +36,13 @@ export async function loadOperationalVenueRecords(options: {
   ): Promise<OperationalVenueRecord[]> {
     const records: OperationalVenueRecord[] = [];
     let cursor = startCursor;
+    const seenCursors = new Set<string | null>();
 
     while (true) {
-      requestCount += 1;
-      if (requestCount > MAX_OPERATIONAL_VENUE_PAGE_REQUESTS) {
-        throw new Error(
-          `Operational venue pagination exceeded ${MAX_OPERATIONAL_VENUE_PAGE_REQUESTS} requests.`,
-        );
+      if (seenCursors.has(cursor)) {
+        throw new Error("Operational venue pagination returned a cursor cycle.");
       }
+      seenCursors.add(cursor);
 
       const result = (await options.client.query(query, {
         serviceSecret: options.serviceSecret,

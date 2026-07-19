@@ -372,15 +372,15 @@ handles so an empty persisted summary stays near 125 KiB instead of the roughly
 312 KiB produced by a 500-handle job; this avoids self-hosted Convex `createJob`
 user-timeout failures while retaining document-size headroom. The historical
 500-handle hard boundary remains so queued and manual jobs are rollout-safe.
-The host runner makes up to eight requests, counts each resumed or new job once,
-and stops at the 1500-handle schedule cap while preserving
-`CRON_RESULTS_LIMIT=1` and the 23-hour cooldown. Set
-`INGEST_CRON_MAX_REQUESTS_PER_RUN` only when intentionally changing that
-aggregate cap.
+The host run derives its total from the complete live active-venue set. The
+runner counts each resumed or new job once, scales its request safety allowance
+from that live count and the returned chunk size, and continues until every
+eligible venue is covered. There is no aggregate venue-count cap;
+`CRON_RESULTS_LIMIT=1` and the 23-hour cooldown remain unchanged.
 
 The per-account Apify Actor charge is capped at `$0.01`. At the current
-basic-data result price, 1500 one-post account runs are expected to cost about
-`$2.25`; the aggregate configured worst case is `$15`, plus OpenAI usage and the
+basic-data result price, 2000 one-post account runs are expected to cost about
+`$3.00`; the aggregate configured worst case is `$20`, plus OpenAI usage and the
 separate following-discovery Actor cap.
 
 The Convex retention cleanup is separate: it is a native Convex cron that runs

@@ -125,7 +125,7 @@ CRON_SECRET=
 CRON_RESULTS_LIMIT=1
 CRON_DAYS_BACK=10
 CRON_INGESTION_MAX_STEPS=20
-CRON_MAX_HANDLES_PER_RUN=1500
+CRON_MAX_HANDLES_PER_RUN=2000
 CRON_FULL_SCRAPE_COOLDOWN_HOURS=23
 EVENTS_TIMEZONE=Europe/Belgrade
 APP_BIND=127.0.0.1
@@ -151,16 +151,17 @@ Notes:
   launched from the app UI.
 - `CRON_SECRET` protects the cron ingestion route when set. Set it in
   production.
-- Cron ingestion defaults to one latest Instagram post per active venue handle,
-  all active handles up to the 1500-handle safety cap, and a 23-hour cooldown so
-  the daily 07:00 UTC schedule is not blocked by normal scheduler jitter. Each
-  scheduled Convex ingestion chunk is capped at 200 handles; the historical
-  500-handle hard boundary remains for queued/manual rollout compatibility. The
-  source-controlled host runner makes up to eight authenticated requests to
-  finish the 1500-handle schedule without oversized self-hosted Convex mutations.
+- Cron ingestion defaults to one latest Instagram post per scrape-active venue handle
+  and a 23-hour cooldown so the daily 07:00 UTC schedule is not blocked by normal
+  scheduler jitter. The route paginates the complete active-venue set and the host
+  runner keeps creating safe 200-handle Convex chunks until every eligible handle
+  is covered; there is no aggregate venue-count truncation. The historical
+  500-handle hard boundary remains only for queued/manual rollout compatibility.
+  `CRON_MAX_HANDLES_PER_RUN=2000` remains the compatibility/default ceiling for
+  non-scheduled selectors, not the daily all-active host run.
 - Post scraping has a `$0.01` hard charge cap per account run. At the current
-  basic-data result price, 1500 one-post runs are expected to cost about `$2.25`;
-  the aggregate configured worst-case cap is `$15`, plus OpenAI usage and the
+  basic-data result price, 2000 one-post runs are expected to cost about `$3.00`;
+  the aggregate configured worst-case cap is `$20`, plus OpenAI usage and the
   separately capped following-discovery Actor.
 - `EVENTS_TIMEZONE` controls local event-day handling.
 - `ADMIN_CLERK_USER_IDS` is a comma- or space-separated allowlist for admin

@@ -29,8 +29,8 @@ assert.match(
   "Compose should default follow-discovery to the Event Zeka curator account.",
 );
 assert.equal(DEFAULT_FOLLOW_DISCOVERY_ACTOR_ID, "scraping_solutions/instagram-scraper-followers-following-no-cookies");
-assert.equal(DEFAULT_FOLLOW_DISCOVERY_RESULTS_LIMIT, 1500);
-assert.equal(DEFAULT_FOLLOW_DISCOVERY_MAX_TOTAL_CHARGE_USD, 1.1);
+assert.equal(DEFAULT_FOLLOW_DISCOVERY_RESULTS_LIMIT, 2000);
+assert.equal(DEFAULT_FOLLOW_DISCOVERY_MAX_TOTAL_CHARGE_USD, 1.5);
 
 const defaultConfig = getFollowDiscoveryConfig({});
 assert.equal(defaultConfig.sourceHandle, "eventzeka");

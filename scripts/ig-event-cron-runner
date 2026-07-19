@@ -37,7 +37,9 @@ case "$JOB" in
   ingest-venues)
     PATH_SUFFIX="/api/cron/ingest-venues"
     CURL_TIMEOUT_SECONDS="${INGEST_CRON_TIMEOUT_SECONDS:-7200}"
-    MAX_REQUESTS="${INGEST_CRON_MAX_REQUESTS_PER_RUN:-8}"
+    # This is a pre-response loop guard, not a venue cap. After the first
+    # response it scales from the live active count and the server's chunk size.
+    MAX_REQUESTS=25
     ;;
   discover-following)
     PATH_SUFFIX="/api/cron/discover-following"
@@ -45,11 +47,6 @@ case "$JOB" in
     MAX_REQUESTS=1
     ;;
 esac
-
-if [[ ! "$MAX_REQUESTS" =~ ^[1-9][0-9]*$ || "$MAX_REQUESTS" -gt 10 ]]; then
-  echo "invalid max request count: $MAX_REQUESTS" >&2
-  exit 64
-fi
 
 APP_ORIGIN="${APP_ORIGIN%/}"
 URL="${APP_ORIGIN}${PATH_SUFFIX}"
@@ -137,7 +134,14 @@ run_request() {
   echo "${finished_at} job=${JOB} request=${request_index}/${MAX_REQUESTS} status=ok http_code=${http_code} curl_exit=${curl_exit} duration_seconds=${duration_seconds} started_at=${STARTED_AT} url=${request_url} body=${LAST_BODY}"
 }
 
-for request_index in $(seq 1 "$MAX_REQUESTS"); do
+request_index=0
+while true; do
+  request_index=$(( request_index + 1 ))
+  if [[ "$request_index" -gt "$MAX_REQUESTS" ]]; then
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=request_safety_limit requests=$REQUESTS_COMPLETED selected=$TOTAL_SELECTED host_run_max=$HOST_RUN_MAX_HANDLES" >&2
+    exit 1
+  fi
+
   request_url="$URL"
   if [[ "$JOB" == "ingest-venues" && "$HOST_RUN_MAX_HANDLES" -gt 0 ]]; then
     host_run_remaining=$(( HOST_RUN_MAX_HANDLES - TOTAL_SELECTED ))
@@ -164,11 +168,12 @@ done = payload.get("done") is True
 skipped = payload.get("skippedDueToRunLimit", 0)
 status = payload.get("status", "none")
 host_max = payload.get("hostRunMaxHandles", 0)
+job_chunk = payload.get("maxHandlesPerJob", selected)
 job_id = payload.get("jobId")
-print("true" if done else "false", selected, skipped if isinstance(skipped, int) else 0, status, host_max if isinstance(host_max, int) else 0, job_id if isinstance(job_id, str) and job_id else "-")
+print("true" if done else "false", selected, skipped if isinstance(skipped, int) else 0, status, host_max if isinstance(host_max, int) else 0, job_chunk if isinstance(job_chunk, int) else selected, job_id if isinstance(job_id, str) and job_id else "-")
 PY
 )"
-  read -r LAST_DONE LAST_SELECTED LAST_SKIPPED_DUE LAST_STATUS RESPONSE_HOST_MAX RESPONSE_JOB_ID <<<"$response_state"
+  read -r LAST_DONE LAST_SELECTED LAST_SKIPPED_DUE LAST_STATUS RESPONSE_HOST_MAX RESPONSE_JOB_CHUNK RESPONSE_JOB_ID <<<"$response_state"
   if [[ "$LAST_SELECTED" -gt 0 ]]; then
     if [[ "$RESPONSE_JOB_ID" == "-" ]]; then
       echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=missing_job_id selected=$LAST_SELECTED body=$LAST_BODY" >&2
@@ -181,13 +186,18 @@ PY
   fi
   if [[ "$RESPONSE_HOST_MAX" -gt 0 ]]; then
     HOST_RUN_MAX_HANDLES="$RESPONSE_HOST_MAX"
+    if [[ "$RESPONSE_JOB_CHUNK" -gt 0 ]]; then
+      required_chunks=$(( (HOST_RUN_MAX_HANDLES + RESPONSE_JOB_CHUNK - 1) / RESPONSE_JOB_CHUNK ))
+      # Allow repeated resumptions without imposing a count ceiling on venues.
+      MAX_REQUESTS=$(( required_chunks * 12 + 10 ))
+    fi
   fi
 
   if [[ "$LAST_SELECTED" -eq 0 ]]; then
     break
   fi
   if [[ "$LAST_DONE" != "true" ]]; then
-    if [[ "$request_index" -eq "$MAX_REQUESTS" ]]; then
+    if [[ "$request_index" -ge "$MAX_REQUESTS" ]]; then
       echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=incomplete_job requests=$REQUESTS_COMPLETED selected=$LAST_SELECTED response_status=$LAST_STATUS body=$LAST_BODY" >&2
       exit 1
     fi
@@ -204,8 +214,5 @@ done
 FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 DURATION_SECONDS=$(( $(date +%s) - START_EPOCH ))
 FINAL_STATUS="ok"
-if [[ "$JOB" == "ingest-venues" && "$LAST_DONE" == "true" && "$LAST_SKIPPED_DUE" -gt 0 && "$REQUESTS_COMPLETED" -eq "$MAX_REQUESTS" ]]; then
-  FINAL_STATUS="cap_reached"
-fi
 
 echo "${FINISHED_AT} job=${JOB} status=${FINAL_STATUS} requests=${REQUESTS_COMPLETED} selected=${TOTAL_SELECTED} host_run_max=${HOST_RUN_MAX_HANDLES} duration_seconds=${DURATION_SECONDS} started_at=${STARTED_AT} url=${URL} body=${LAST_BODY}"

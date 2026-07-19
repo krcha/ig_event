@@ -13,7 +13,7 @@ const loadSitemapPublicData = unstable_cache(
       fromDate: today,
       beforeDate: addDaysToDateKey(today, 367),
     });
-    const venueResult = await loadPublicVenueDirectory({ limit: 500, today });
+    const venueResult = await loadPublicVenueDirectory({ limit: 2000, today });
     return { eventResult, venueResult };
   },
   ["seo-sitemap-public-data"],
