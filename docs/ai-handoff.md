@@ -343,10 +343,10 @@ calls the job POST route, the job will not keep advancing.
 3. Both routes check the bearer token when `CRON_SECRET` is set.
 4. Venue ingestion paginates all active venue handles, skips handles with a
    fresh full-scrape attempt inside the 23-hour cooldown window, and covers up
-   to 1500 active handles per host run. To retain Convex document-size headroom,
-   each ingestion job contains at most 500 handles; the host runner makes up to
-   three authenticated requests. Each handle scrapes the latest 1 post, runs
-   direct full-scrape ingestion, and patches job status.
+   to 1500 active handles per host run. To retain Convex mutation-time and
+   document-size headroom, each ingestion job contains at most 200 handles; the
+   host runner makes up to eight authenticated requests. Each handle scrapes the
+   latest 1 post, runs direct full-scrape ingestion, and patches job status.
 5. Convex internal cron `delete expired events` runs weekly Wednesday at 05:00
    UTC and deletes expired events older than the 3-day retention grace period
    plus saved-event references in bounded batches until clear or until the

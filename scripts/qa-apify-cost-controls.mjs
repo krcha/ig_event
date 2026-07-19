@@ -263,8 +263,8 @@ assert.doesNotMatch(
 );
 assert.equal(
   MAX_INGESTION_JOB_HANDLES,
-  500,
-  "all ingestion job creation paths must share the Convex-safe handle bound",
+  200,
+  "all ingestion job creation paths must share the mutation-time-safe handle bound",
 );
 assert.match(
   cronRouteSource,
@@ -278,7 +278,7 @@ for (const [label, source] of [
   assert.match(
     source,
     /MAX_INGESTION_JOB_HANDLES/,
-    `${label} must use the central 500-handle job boundary`,
+    `${label} must use the central 200-handle job boundary`,
   );
   assert.match(source, /serializeSafeIngestionJobPayload/);
 }
@@ -289,8 +289,8 @@ assert.match(
 );
 assert.match(
   hostCronRunnerSource,
-  /INGEST_CRON_MAX_REQUESTS_PER_RUN:-3/,
-  "host runner should complete three 500-handle chunks per scheduled run",
+  /INGEST_CRON_MAX_REQUESTS_PER_RUN:-8/,
+  "host runner should complete up to eight 200-handle chunks per scheduled run",
 );
 assert.match(hostCronRunnerSource, /skippedDueToRunLimit/);
 assert.match(hostCronRunnerSource, /hostRunRemaining/);
@@ -339,7 +339,7 @@ assert.deepEqual(
 );
 
 const boundaryHandles = Array.from(
-  { length: 500 },
+  { length: MAX_INGESTION_JOB_HANDLES },
   (_, index) => `v${String(index).padStart(29, "0")}`,
 );
 const boundarySummary = createEmptyIngestionSummary(boundaryHandles);
@@ -374,19 +374,25 @@ const boundaryDocumentSize = getDocumentSize({
   updatedAt: Date.now(),
 });
 assert.ok(
-  boundaryDocumentSize < 850_000,
-  `500-handle job with adversarial provider errors should retain document-size headroom, got ${boundaryDocumentSize} bytes`,
+  boundaryDocumentSize < 350_000,
+  `${MAX_INGESTION_JOB_HANDLES}-handle job with adversarial provider errors should retain mutation-time and document-size headroom, got ${boundaryDocumentSize} bytes`,
 );
 assert.throws(
   () =>
     serializeSafeIngestionJobPayload({
-      handles: Array.from({ length: 501 }, (_, index) => `too-many-${index}`),
+      handles: Array.from(
+        { length: MAX_INGESTION_JOB_HANDLES + 1 },
+        (_, index) => `too-many-${index}`,
+      ),
       summary: createEmptyIngestionSummary(
-        Array.from({ length: 501 }, (_, index) => `too-many-${index}`),
+        Array.from(
+          { length: MAX_INGESTION_JOB_HANDLES + 1 },
+          (_, index) => `too-many-${index}`,
+        ),
       ),
       state: createInitialIngestionBatchState(),
     }),
-  /limited to 500 handles/,
+  /limited to 200 handles/,
 );
 assert.throws(
   () =>

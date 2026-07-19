@@ -37,7 +37,7 @@ case "$JOB" in
   ingest-venues)
     PATH_SUFFIX="/api/cron/ingest-venues"
     CURL_TIMEOUT_SECONDS="${INGEST_CRON_TIMEOUT_SECONDS:-7200}"
-    MAX_REQUESTS="${INGEST_CRON_MAX_REQUESTS_PER_RUN:-3}"
+    MAX_REQUESTS="${INGEST_CRON_MAX_REQUESTS_PER_RUN:-8}"
     ;;
   discover-following)
     PATH_SUFFIX="/api/cron/discover-following"

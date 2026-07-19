@@ -3,7 +3,10 @@ import type {
   IngestionSummary,
 } from "@/lib/pipeline/run-instagram-ingestion";
 
-export const MAX_INGESTION_JOB_HANDLES = 500;
+// Keep persisted job payloads small enough for self-hosted Convex mutation runtime limits.
+// A 500-handle empty summary is already ~312 KiB and has timed out during createJob;
+// 200 handles keeps the same payload near 125 KiB while the host runner spans the full cap.
+export const MAX_INGESTION_JOB_HANDLES = 200;
 export const MAX_INGESTION_JOB_PERSISTED_JSON_BYTES = 600_000;
 export const MAX_PERSISTED_INGESTION_ERROR_LENGTH = 256;
 export const MAX_PERSISTED_ERRORS_PER_HANDLE = 1;

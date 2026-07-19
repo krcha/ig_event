@@ -367,12 +367,14 @@ install -o root -g root -m 0755 scripts/ig-event-cron-runner \
 
 The cron endpoint resumes any recent `cron_active_venues` job before creating a
 new one. It defaults to `CRON_INGESTION_MAX_STEPS=20` and
-`CRON_INGESTION_BATCH_SIZE=64`. Each Convex job is bounded to 500 handles so the
-serialized summary and state retain substantial headroom below the 1 MiB
-Convex document limit. The host runner makes up to three requests, respecting
-the 1500-handle schedule cap while preserving `CRON_RESULTS_LIMIT=1` and the
-23-hour cooldown. Set `INGEST_CRON_MAX_REQUESTS_PER_RUN` only when intentionally
-changing that aggregate cap.
+`CRON_INGESTION_BATCH_SIZE=64`. Each Convex job is bounded to 200 handles so an
+empty persisted summary stays near 125 KiB instead of the roughly 312 KiB
+produced by the former 500-handle boundary; this avoids self-hosted Convex
+`createJob` user-timeout failures while retaining document-size headroom. The
+host runner makes up to eight requests, stopping at the 1500-handle schedule
+cap while preserving `CRON_RESULTS_LIMIT=1` and the 23-hour cooldown. Set
+`INGEST_CRON_MAX_REQUESTS_PER_RUN` only when intentionally changing that
+aggregate cap.
 
 The per-account Apify Actor charge is capped at `$0.01`. At the current
 basic-data result price, 1500 one-post account runs are expected to cost about

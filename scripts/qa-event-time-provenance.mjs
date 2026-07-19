@@ -246,6 +246,102 @@ const normalizedWireDuplicatePatch = normalizeEventTimeWritePatch(wireDuplicateP
 assert.equal(normalizedWireDuplicatePatch.timeEvidenceText, undefined);
 assert.equal(Object.hasOwn(normalizedWireDuplicatePatch, "timeEvidenceText"), true);
 
+const richerSinglePostDuplicate = {
+  ...existingDuplicate,
+  time: "20:00",
+  timeSource: "poster",
+  timeEvidenceText: "NEDELJA 19.JUL 20h",
+  timeConfidence: 0.95,
+  timeStatus: "confirmed",
+  artists: ["DJ Džoni"],
+  description:
+    "DJ Džoni pušta muziku od početka večeri; finale Svetskog prvenstva gleda se od 21:00.",
+  imageUrl: "https://example.com/richer-single-post.jpg",
+  instagramPostUrl: "https://www.instagram.com/p/richer-single-post/",
+  instagramPostId: "richer-single-post",
+  sourceCaption: "DJ Džoni bira muziku, a finale gledamo od 21:00.",
+  sourcePostedAt: "2026-07-18T09:54:05.000Z",
+  rawExtractionJson: JSON.stringify({ source_url: "richer-single-post" }),
+  normalizedFieldsJson: JSON.stringify({
+    multiEventSplitDetected: false,
+    title: "QA Event",
+    normalizedDate: "2026-07-15",
+    time: "20:00",
+    artists: ["DJ Džoni"],
+  }),
+};
+const weakerWeeklyScheduleDuplicate = {
+  ...preparedDuplicate,
+  time: "TBD",
+  timeSource: "unknown",
+  timeEvidenceText: undefined,
+  timeConfidence: 0,
+  timeStatus: "unknown",
+  artists: [],
+  description: "Weekly venue schedule with several events.",
+  imageUrl: "https://example.com/weaker-weekly-schedule.jpg",
+  instagramPostUrl: "https://www.instagram.com/p/weaker-weekly-schedule/",
+  instagramPostId: "weaker-weekly-schedule",
+  sourceCaption: undefined,
+  sourcePostedAt: "2026-07-18T09:52:49.000Z",
+  eventType: "live music",
+  rawExtractionJson: JSON.stringify({ source_url: "weaker-weekly-schedule" }),
+  normalizedFieldsJson: JSON.stringify({
+    multiEventSplitDetected: true,
+    multiEventSplitCount: 7,
+    title: "QA Event",
+    normalizedDate: "2026-07-15",
+    time: "TBD",
+    artists: [],
+  }),
+};
+const preservedRicherDuplicate = buildDuplicateUpdatePatch(
+  richerSinglePostDuplicate,
+  weakerWeeklyScheduleDuplicate,
+);
+assert.deepEqual(
+  {
+    time: preservedRicherDuplicate.patch.time,
+    timeSource: preservedRicherDuplicate.patch.timeSource,
+    timeEvidenceText: preservedRicherDuplicate.patch.timeEvidenceText,
+    timeConfidence: preservedRicherDuplicate.patch.timeConfidence,
+    timeStatus: preservedRicherDuplicate.patch.timeStatus,
+    artists: preservedRicherDuplicate.patch.artists,
+    description: preservedRicherDuplicate.patch.description,
+    imageUrl: preservedRicherDuplicate.patch.imageUrl,
+    instagramPostUrl: preservedRicherDuplicate.patch.instagramPostUrl,
+    instagramPostId: preservedRicherDuplicate.patch.instagramPostId,
+    sourceCaption: preservedRicherDuplicate.patch.sourceCaption,
+    sourcePostedAt: preservedRicherDuplicate.patch.sourcePostedAt,
+    rawExtractionJson: preservedRicherDuplicate.patch.rawExtractionJson,
+    normalizedFieldsJson: preservedRicherDuplicate.patch.normalizedFieldsJson,
+    eventType: preservedRicherDuplicate.patch.eventType,
+  },
+  {
+    time: richerSinglePostDuplicate.time,
+    timeSource: richerSinglePostDuplicate.timeSource,
+    timeEvidenceText: richerSinglePostDuplicate.timeEvidenceText,
+    timeConfidence: richerSinglePostDuplicate.timeConfidence,
+    timeStatus: richerSinglePostDuplicate.timeStatus,
+    artists: richerSinglePostDuplicate.artists,
+    description: richerSinglePostDuplicate.description,
+    imageUrl: richerSinglePostDuplicate.imageUrl,
+    instagramPostUrl: richerSinglePostDuplicate.instagramPostUrl,
+    instagramPostId: richerSinglePostDuplicate.instagramPostId,
+    sourceCaption: richerSinglePostDuplicate.sourceCaption,
+    sourcePostedAt: richerSinglePostDuplicate.sourcePostedAt,
+    rawExtractionJson: richerSinglePostDuplicate.rawExtractionJson,
+    normalizedFieldsJson: richerSinglePostDuplicate.normalizedFieldsJson,
+    eventType: richerSinglePostDuplicate.eventType,
+  },
+  "A weaker multi-event schedule must not erase richer single-post fields or replace their source provenance.",
+);
+assert.equal(
+  preservedRicherDuplicate.materiallyChanged,
+  false,
+  "Preserving an already-richer pending event must not be reported as a material rewrite.",
+);
+
 assert.deepEqual(normalizeEventTimeWritePatch({ time: "22:00" }), {
   time: "22:00",
   timeSource: "unknown",
@@ -387,6 +483,11 @@ assert.match(
 assert.match(
   eventsSource,
   /export const mergeApprovedEvents[\s\S]*?normalizeEventTimeWritePatch\(args\.patch\)/,
+);
+assert.match(
+  ingestionSource,
+  /existingMatch\.existingEvent = \{[\s\S]*?\.\.\.updatePayload\.patch/,
+  "The in-memory duplicate snapshot must follow the actual reconciled patch rather than the weaker raw candidate.",
 );
 assert.match(eventsSource, /timeEvidenceText:\s*v\.optional\(v\.union\(v\.string\(\), v\.null\(\)\)\)/);
 assert.ok(moderationSource.includes("EventTimeProvenanceText"));

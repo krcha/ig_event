@@ -5559,10 +5559,6 @@ function choosePreferredDescription(
     return normalizedExisting;
   }
 
-  if (readJsonBoolean(nextNormalizedFields, "multiEventSplitDetected") && normalizedNext) {
-    return normalizedNext;
-  }
-
   if (normalizedNext.length >= normalizedExisting.length * 1.25) {
     return normalizedNext;
   }
@@ -5580,12 +5576,58 @@ function choosePreferredArtists(
   }
   const fields = parseJsonRecord(nextNormalizedFieldsJson);
   if (!readJsonBoolean(fields, "artistsWereSanitized")) {
-    return next;
+    return existing;
   }
   const rowEvidence =
     readJsonString(fields, "rowSourceText") ?? readJsonString(fields, "splitSourceLine") ?? "";
   return existing.filter((artist) =>
     hasExplicitBilledIdentityEvidence(artist, rowEvidence),
+  );
+}
+
+function hasReliableEventTime(event: {
+  time?: string;
+  timeSource?: EventTimeSource;
+  timeStatus?: EventTimeProvenance["status"];
+}): boolean {
+  const time = normalizeString(event.time);
+  return (
+    Boolean(time) &&
+    time.toLocaleLowerCase() !== TBD_EVENT_TIME.toLocaleLowerCase() &&
+    event.timeSource !== "unknown" &&
+    event.timeStatus !== "unknown"
+  );
+}
+
+function shouldPreserveExistingSinglePostSource(
+  existing: ExistingEventRecord,
+  next: PreparedEvent,
+): boolean {
+  const existingFields = parseJsonRecord(existing.normalizedFieldsJson);
+  const nextFields = parseJsonRecord(next.normalizedFieldsJson);
+  if (
+    isMultiEventNormalizedFields(existingFields) ||
+    !isMultiEventNormalizedFields(nextFields) ||
+    !normalizeString(existing.sourceCaption) ||
+    normalizeString(next.sourceCaption)
+  ) {
+    return false;
+  }
+
+  const preferredDescription = choosePreferredDescription(
+    existing.description,
+    next.description,
+    next.normalizedFieldsJson,
+  );
+  const nextWouldDowngradeDescription =
+    Boolean(normalizeString(existing.description)) &&
+    normalizeString(preferredDescription) === normalizeString(existing.description) &&
+    normalizeString(next.description) !== normalizeString(existing.description);
+
+  return (
+    (hasReliableEventTime(existing) && !hasReliableEventTime(next)) ||
+    (existing.artists.length > 0 && next.artists.length === 0) ||
+    nextWouldDowngradeDescription
   );
 }
 
@@ -5646,26 +5688,55 @@ export function buildDuplicateUpdatePatch(
   statusAutoApproved: boolean;
   protectedApprovedFromPending: boolean;
 } {
-  const preferredDescription = choosePreferredDescription(
-    existing.description,
-    next.description,
-    next.normalizedFieldsJson,
-  );
-  const preferredArtists = choosePreferredArtists(
-    existing.artists,
-    next.artists,
-    next.normalizedFieldsJson,
-  );
+  const preserveExistingSource = shouldPreserveExistingSinglePostSource(existing, next);
+  const preferredDescription = preserveExistingSource
+    ? existing.description
+    : choosePreferredDescription(
+        existing.description,
+        next.description,
+        next.normalizedFieldsJson,
+      );
+  const preferredArtists = preserveExistingSource
+    ? existing.artists
+    : choosePreferredArtists(
+        existing.artists,
+        next.artists,
+        next.normalizedFieldsJson,
+      );
+  const preferredNext: PreparedEvent = {
+    ...next,
+    artists: preferredArtists,
+    description: preferredDescription,
+    ...(preserveExistingSource
+      ? {
+          time: existing.time,
+          timeSource: existing.timeSource ?? "unknown",
+          timeEvidenceText: existing.timeEvidenceText,
+          timeConfidence: existing.timeConfidence ?? 0,
+          timeStatus: existing.timeStatus ?? "unknown",
+          imageUrl: existing.imageUrl,
+          instagramPostUrl: existing.instagramPostUrl ?? next.instagramPostUrl,
+          instagramPostId: existing.instagramPostId ?? next.instagramPostId,
+          ticketPrice: existing.ticketPrice,
+          eventType: existing.eventType,
+          sourceCaption: existing.sourceCaption,
+          sourcePostedAt: existing.sourcePostedAt,
+          rawExtractionJson: existing.rawExtractionJson,
+          normalizedFieldsJson: existing.normalizedFieldsJson,
+        }
+      : {}),
+  };
   const materiallyChanged = hasMaterialEventChange(
     existing,
-    next,
+    preferredNext,
     preferredDescription,
     preferredArtists,
   );
-  const effectiveNextStatus: EventStatus =
-    next.status === "approved" &&
-    (existing.status === "rejected" ||
-      !hasCompleteSourceGroundedAutoApproval(next.normalizedFieldsJson, next))
+  const effectiveNextStatus: EventStatus = preserveExistingSource
+    ? existing.status
+    : next.status === "approved" &&
+        (existing.status === "rejected" ||
+          !hasCompleteSourceGroundedAutoApproval(next.normalizedFieldsJson, next))
       ? "pending"
       : next.status;
   const statusAutoApproved =
@@ -5694,27 +5765,33 @@ export function buildDuplicateUpdatePatch(
 
   return {
     patch: {
-      title: next.title,
-      date: next.date,
-      ...(next.time ? { time: next.time } : {}),
-      timeSource: next.timeSource,
-      timeEvidenceText: next.timeEvidenceText ?? null,
-      timeConfidence: next.timeConfidence,
-      timeStatus: next.timeStatus,
-      venue: next.venue,
+      title: preferredNext.title,
+      date: preferredNext.date,
+      ...(preferredNext.time ? { time: preferredNext.time } : {}),
+      timeSource: preferredNext.timeSource,
+      timeEvidenceText: preferredNext.timeEvidenceText ?? null,
+      timeConfidence: preferredNext.timeConfidence,
+      timeStatus: preferredNext.timeStatus,
+      venue: preferredNext.venue,
       artists: preferredArtists,
       ...(descriptionChanged && preferredDescription
         ? { description: preferredDescription }
+        : preserveExistingSource && preferredDescription
+          ? { description: preferredDescription }
+          : {}),
+      ...(preferredNext.imageUrl ? { imageUrl: preferredNext.imageUrl } : {}),
+      instagramPostUrl: preferredNext.instagramPostUrl,
+      instagramPostId: preferredNext.instagramPostId,
+      ...(preferredNext.ticketPrice ? { ticketPrice: preferredNext.ticketPrice } : {}),
+      eventType: preferredNext.eventType,
+      ...(preferredNext.sourceCaption ? { sourceCaption: preferredNext.sourceCaption } : {}),
+      ...(preferredNext.sourcePostedAt ? { sourcePostedAt: preferredNext.sourcePostedAt } : {}),
+      ...(preferredNext.rawExtractionJson
+        ? { rawExtractionJson: preferredNext.rawExtractionJson }
         : {}),
-      ...(next.imageUrl ? { imageUrl: next.imageUrl } : {}),
-      instagramPostUrl: next.instagramPostUrl,
-      instagramPostId: next.instagramPostId,
-      ...(next.ticketPrice ? { ticketPrice: next.ticketPrice } : {}),
-      eventType: next.eventType,
-      ...(next.sourceCaption ? { sourceCaption: next.sourceCaption } : {}),
-      ...(next.sourcePostedAt ? { sourcePostedAt: next.sourcePostedAt } : {}),
-      ...(next.rawExtractionJson ? { rawExtractionJson: next.rawExtractionJson } : {}),
-      ...(next.normalizedFieldsJson ? { normalizedFieldsJson: next.normalizedFieldsJson } : {}),
+      ...(preferredNext.normalizedFieldsJson
+        ? { normalizedFieldsJson: preferredNext.normalizedFieldsJson }
+        : {}),
       ...(nextStatus !== existing.status ? { status: nextStatus } : {}),
       ...(statusResetToPending || statusAutoApproved
         ? {
@@ -7029,7 +7106,8 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
         });
         existingMatch.existingEvent = {
           ...existingMatch.existingEvent,
-          ...prepared.event,
+          ...updatePayload.patch,
+          timeEvidenceText: updatePayload.patch.timeEvidenceText ?? undefined,
           status:
             updatePayload.patch.status ?? existingMatch.existingEvent.status,
           reviewedAt:
