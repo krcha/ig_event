@@ -387,9 +387,14 @@ export const listEvents = query({
 });
 
 export const getPublicApprovedEvent = query({
-  args: { id: v.id("events") },
+  args: { id: v.string() },
   handler: async (ctx, args) => {
-    const event = await ctx.db.get(args.id);
+    const eventId = ctx.db.normalizeId("events", args.id);
+    if (!eventId) {
+      return null;
+    }
+
+    const event = await ctx.db.get(eventId);
     if (!event || event.status !== "approved") {
       return null;
     }

@@ -252,10 +252,7 @@ export async function generateMetadata({ params }: EventDetailPageProps): Promis
   const { eventId } = await params;
   const event = await loadEvent(eventId);
   if (!event) {
-    return {
-      title: "Event not found",
-      robots: { index: false, follow: false },
-    };
+    notFound();
   }
 
   const canonicalPath = `/events/${event._id}`;

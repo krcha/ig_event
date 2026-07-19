@@ -116,6 +116,8 @@ const authLayout = read("app/(auth)/layout.tsx");
 const robots = read("app/robots.ts");
 const sitemap = read("app/sitemap.ts");
 const nextConfig = read("next.config.mjs");
+const convexEvents = read("convex/events.ts");
+const convexVenues = read("convex/venues.ts");
 
 assert.ok(layout.includes('lang="en-RS"'));
 assert.equal(layout.includes('alternateLocale: "sr_RS"'), false);
@@ -139,7 +141,8 @@ assert.ok(eventPage.includes("buildEventStructuredData"));
 assert.ok(eventPage.includes("generateMetadata"));
 assert.ok(eventPage.includes('type: "article"'));
 assert.ok(venuePage.includes("buildVenueStructuredData"));
-assert.ok(venuePage.includes("robots: { index: false, follow: false }"));
+assert.match(eventPage, /generateMetadata[\s\S]*notFound\(\)/);
+assert.match(venuePage, /generateMetadata[\s\S]*notFound\(\)/);
 assert.ok(venueDirectory.includes("buildVenueDirectoryStructuredData"));
 assert.ok(discoverPage.includes("index: !hasDateFilter"));
 
@@ -169,6 +172,11 @@ assert.equal(
   false,
   "The event detail segment must not stream a 200 loading shell before notFound() can return 404.",
 );
+assert.equal(
+  existsSync("app/loading.tsx"),
+  false,
+  "The root segment must not stream a 200 loading shell before dynamic notFound() responses can return 404.",
+);
 assert.ok(sitemap.includes("loadPublicCalendarEventsWindow"));
 assert.ok(sitemap.includes("loadPublicVenueDirectory"));
 assert.ok(sitemap.includes('dynamic = "force-dynamic"'));
@@ -179,5 +187,14 @@ assert.ok(sitemap.includes("/venues"));
 assert.ok(sitemap.includes("/events/${event._id}"));
 assert.ok(sitemap.includes("/venues/${venue._id}"));
 assert.equal((nextConfig.match(/permanent: true/g) ?? []).length >= 4, true);
+assert.ok(nextConfig.includes("htmlLimitedBots: /.*/"));
+assert.match(
+  convexEvents,
+  /getPublicApprovedEvent = query[\s\S]*args: \{ id: v\.string\(\) \}[\s\S]*normalizeId\("events", args\.id\)/,
+);
+assert.match(
+  convexVenues,
+  /getPublicVenuePage = query[\s\S]*id: v\.string\(\)[\s\S]*normalizeId\("venues", args\.id\)/,
+);
 
 console.log("SEO QA passed: metadata, canonicals, crawl controls, structured data, and local intent copy are present.");

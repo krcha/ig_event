@@ -352,10 +352,7 @@ function EventPostTile({
 export async function generateMetadata({ params }: VenuePageProps): Promise<Metadata> {
   const { venueId } = await params;
   if (!isPlausibleConvexPublicId(venueId)) {
-    return {
-      title: "Venue not found",
-      robots: { index: false, follow: false },
-    };
+    notFound();
   }
 
   const { error, historyEvents, upcomingEvents, venue } = await loadPublicVenuePage(venueId, {
@@ -363,11 +360,11 @@ export async function generateMetadata({ params }: VenuePageProps): Promise<Meta
     upcomingLimit: 3,
   });
 
+  if (error) {
+    throw new Error(`Failed to load public venue metadata: ${error}`);
+  }
   if (!venue) {
-    return {
-      title: error ? "Venue temporarily unavailable" : "Venue not found",
-      robots: { index: false, follow: false },
-    };
+    notFound();
   }
 
   const canonicalPath = `/venues/${venue._id}`;

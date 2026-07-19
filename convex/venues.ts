@@ -438,13 +438,18 @@ export const listPublicActiveVenueFields = query({
 
 export const getPublicVenuePage = query({
   args: {
-    id: v.id("venues"),
+    id: v.string(),
     historyLimit: v.optional(v.number()),
     today: v.string(),
     upcomingLimit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const venue = await ctx.db.get(args.id);
+    const venueId = ctx.db.normalizeId("venues", args.id) as Id<"venues"> | null;
+    if (!venueId) {
+      return null;
+    }
+
+    const venue = await ctx.db.get(venueId);
     if (!venue || !isVenuePublic(venue)) {
       return null;
     }
@@ -470,25 +475,25 @@ export const getPublicVenuePage = query({
     ] = await Promise.all([
       ctx.db
         .query("favoriteVenues")
-        .withIndex("by_venue", (q) => q.eq("venueId", args.id))
+        .withIndex("by_venue", (q) => q.eq("venueId", venue._id))
         .collect(),
       ctx.db
         .query("events")
         .withIndex("by_venueId_status_date", (q) =>
-          q.eq("venueId", args.id).eq("status", "approved"),
+          q.eq("venueId", venue._id).eq("status", "approved"),
         )
         .collect(),
       ctx.db
         .query("events")
         .withIndex("by_venueId_status_date", (q) =>
-          q.eq("venueId", args.id).eq("status", "approved").gte("date", args.today),
+          q.eq("venueId", venueId).eq("status", "approved").gte("date", args.today),
         )
         .order("asc")
         .take(upcomingLimit),
       ctx.db
         .query("events")
         .withIndex("by_venueId_status_date", (q) =>
-          q.eq("venueId", args.id).eq("status", "approved").lt("date", args.today),
+          q.eq("venueId", venueId).eq("status", "approved").lt("date", args.today),
         )
         .order("desc")
         .take(historyLimit),

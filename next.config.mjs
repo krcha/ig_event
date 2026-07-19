@@ -10,6 +10,9 @@ const applicationSecurityHeaders = buildApplicationSecurityHeaders({
 });
 
 const nextConfig = {
+  // Resolve route metadata before streaming for every user agent so dynamic
+  // notFound() responses preserve real 404 status codes for crawlers and users.
+  htmlLimitedBots: /.*/,
   // Limit static-generation workers so release and Docker builds stay within the
   // memory budget of the production VPS instead of stalling under swap pressure.
   experimental: {

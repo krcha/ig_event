@@ -56,8 +56,10 @@ try {
   for (const [route, expectedStatus] of [
     ["/", 200],
     ["/sign-in", 200],
-    ["/api/health", 200],
+    ["/api/ready", 200],
     ["/does-not-exist", 404],
+    ["/events/not-an-id", 404],
+    ["/venues/not-an-id", 404],
   ]) {
     const response = await fetchWithTimeout(route, { redirect: "manual" });
     assert.equal(response.status, expectedStatus, `${route} status`);
