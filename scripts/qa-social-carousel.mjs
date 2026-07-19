@@ -132,6 +132,8 @@ assert.match(payloadRouteSource, /isAuthorizedCronRequestHeader/);
 assert.match(payloadRouteSource, /listPublicCalendarEventsWindow/);
 assert.match(payloadRouteSource, /dayAfterTomorrow/);
 assert.match(payloadRouteSource, /fromDate: tomorrow/);
+assert.match(payloadRouteSource, /getPublicOrigin/);
+assert.match(payloadRouteSource, /EVENT_ZEKA_PUBLIC_ORIGIN/);
 assert.match(payloadRouteSource, /hasUsablePoster/);
 assert.match(payloadRouteSource, /selectPosterReadyEvents/);
 assert.match(eventRouteSource, /getPublicApprovedEvent/);
