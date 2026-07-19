@@ -5,6 +5,7 @@ import { isAuthorizedCronRequestHeader } from "@/lib/pipeline/cron-ingestion-con
 import {
   balanceDailyCarouselEvents,
   buildDailyCarouselPayload,
+  EVENT_ZEKA_PUBLIC_ORIGIN,
   getBelgradeDate,
   getNextIsoDate,
   rankDailyCarouselEvents,
@@ -32,6 +33,18 @@ function getRequestedDate(request: Request): string {
   }
   getNextIsoDate(requestedDate);
   return requestedDate;
+}
+
+function getPublicOrigin(request: Request): string {
+  const configuredOrigin = process.env.EVENT_ZEKA_PUBLIC_ORIGIN?.trim();
+  if (configuredOrigin) {
+    return configuredOrigin.replace(/\/+$/, "");
+  }
+  const requestUrl = new URL(request.url);
+  if (requestUrl.hostname === "localhost" || requestUrl.hostname === "127.0.0.1") {
+    return requestUrl.origin;
+  }
+  return EVENT_ZEKA_PUBLIC_ORIGIN;
 }
 
 async function hasUsablePoster(request: Request, event: DailyCarouselEvent): Promise<boolean> {
@@ -110,7 +123,7 @@ export async function GET(request: Request) {
       fromDate: tomorrow,
       beforeDate: getNextIsoDate(dayAfterTomorrow),
     })) as DailyCarouselEvent[];
-    const origin = new URL(request.url).origin;
+    const origin = getPublicOrigin(request);
     const selectedEvents = await selectPosterReadyEvents(
       request,
       events,
