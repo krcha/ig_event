@@ -171,6 +171,8 @@ assert.equal(
 );
 assert.ok(sitemap.includes("loadPublicCalendarEventsWindow"));
 assert.ok(sitemap.includes("loadPublicVenueDirectory"));
+assert.ok(sitemap.includes('dynamic = "force-dynamic"'));
+assert.ok(sitemap.includes("unstable_cache"));
 assert.ok(sitemap.includes("limit: 500"));
 assert.ok(sitemap.includes("/discover"));
 assert.ok(sitemap.includes("/venues"));

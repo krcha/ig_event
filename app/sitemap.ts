@@ -1,10 +1,24 @@
 import type { MetadataRoute } from "next";
+import { unstable_cache } from "next/cache";
 import { loadPublicCalendarEventsWindow } from "@/lib/events/public-events";
 import { addDaysToDateKey, getNightlifeDefaultDateKey } from "@/lib/events/nightlife-date";
 import { absoluteUrl } from "@/lib/seo/site";
 import { loadPublicVenueDirectory } from "@/lib/venues/public-venue-pages";
 
-export const revalidate = 3600;
+export const dynamic = "force-dynamic";
+
+const loadSitemapPublicData = unstable_cache(
+  async (today: string) => {
+    const eventResult = await loadPublicCalendarEventsWindow({
+      fromDate: today,
+      beforeDate: addDaysToDateKey(today, 367),
+    });
+    const venueResult = await loadPublicVenueDirectory({ limit: 500, today });
+    return { eventResult, venueResult };
+  },
+  ["seo-sitemap-public-data"],
+  { revalidate: 3600 },
+);
 
 function safeLastModified(value: number | null | undefined): Date | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -17,13 +31,13 @@ function safeLastModified(value: number | null | undefined): Date | undefined {
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const today = getNightlifeDefaultDateKey();
-  const [eventResult, venueResult] = await Promise.all([
-    loadPublicCalendarEventsWindow({
-      fromDate: today,
-      beforeDate: addDaysToDateKey(today, 367),
-    }),
-    loadPublicVenueDirectory({ limit: 500, today }),
-  ]);
+  const { eventResult, venueResult } = await loadSitemapPublicData(today);
+
+  if (eventResult.error || venueResult.error) {
+    throw new Error(
+      `Unable to build SEO sitemap: ${eventResult.error ?? venueResult.error ?? "Unknown public data error."}`,
+    );
+  }
 
   const staticRoutes: MetadataRoute.Sitemap = [
     {
