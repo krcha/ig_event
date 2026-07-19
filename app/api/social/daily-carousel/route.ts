@@ -3,6 +3,7 @@ import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { isAuthorizedCronRequestHeader } from "@/lib/pipeline/cron-ingestion-config";
 import {
+  balanceDailyCarouselEvents,
   buildDailyCarouselPayload,
   getBelgradeDate,
   getNextIsoDate,
@@ -61,37 +62,37 @@ async function selectPosterReadyEvents(
   request: Request,
   events: DailyCarouselEvent[],
   publishDate: string,
+  eventDates: string[],
 ): Promise<DailyCarouselEvent[]> {
-  const ranked = rankDailyCarouselEvents(events, publishDate);
+  const ranked = rankDailyCarouselEvents(events, publishDate, eventDates);
   const candidates = ranked.slice(0, MAX_POSTER_CANDIDATES);
-  const selected: DailyCarouselEvent[] = [];
+  const posterReady: DailyCarouselEvent[] = [];
 
-  for (
-    let offset = 0;
-    offset < candidates.length && selected.length < 6;
-    offset += POSTER_PROBE_BATCH_SIZE
-  ) {
+  for (let offset = 0; offset < candidates.length; offset += POSTER_PROBE_BATCH_SIZE) {
     const batch = candidates.slice(offset, offset + POSTER_PROBE_BATCH_SIZE);
     const availability = await Promise.all(batch.map((event) => hasUsablePoster(request, event)));
     batch.forEach((event, index) => {
-      if (availability[index] && selected.length < 6) {
-        selected.push(event);
+      if (availability[index]) {
+        posterReady.push(event);
       }
     });
-  }
-
-  if (selected.length < 6) {
-    const selectedIds = new Set(selected.map((event) => event._id));
-    for (const event of ranked) {
-      if (!selectedIds.has(event._id)) {
-        selected.push(event);
-      }
-      if (selected.length >= 6) {
-        break;
-      }
+    const balanced = balanceDailyCarouselEvents(posterReady, eventDates);
+    const quota = Math.floor(6 / Math.max(1, eventDates.length));
+    if (
+      balanced.length >= 6 &&
+      eventDates.every(
+        (date) => balanced.filter((event) => event.date === date).length >= quota,
+      )
+    ) {
+      return balanced;
     }
   }
-  return selected;
+
+  const posterReadyIds = new Set(posterReady.map((event) => event._id));
+  return balanceDailyCarouselEvents(
+    [...posterReady, ...ranked.filter((event) => !posterReadyIds.has(event._id))],
+    eventDates,
+  );
 }
 
 export async function GET(request: Request) {
@@ -101,16 +102,25 @@ export async function GET(request: Request) {
 
   try {
     const publishDate = getRequestedDate(request);
+    const tomorrow = getNextIsoDate(publishDate);
+    const dayAfterTomorrow = getNextIsoDate(tomorrow);
+    const eventDates = [tomorrow, dayAfterTomorrow];
     const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
     const events = (await convex.query(listPublicCalendarEventsWindowQuery, {
-      fromDate: publishDate,
-      beforeDate: getNextIsoDate(publishDate),
+      fromDate: tomorrow,
+      beforeDate: getNextIsoDate(dayAfterTomorrow),
     })) as DailyCarouselEvent[];
     const origin = new URL(request.url).origin;
-    const selectedEvents = await selectPosterReadyEvents(request, events, publishDate);
+    const selectedEvents = await selectPosterReadyEvents(
+      request,
+      events,
+      publishDate,
+      eventDates,
+    );
     const payload = buildDailyCarouselPayload({
       events,
       publishDate,
+      eventDates,
       publicOrigin: origin,
       selectedEvents,
     });

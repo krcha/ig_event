@@ -29,6 +29,7 @@ export type DailyCarouselSlide = {
 
 export type DailyCarouselPayload = {
   publishDate: string;
+  eventDates: string[];
   selectionKey: string;
   sourceEventCount: number;
   selectedCount: number;
@@ -72,15 +73,19 @@ export function getNextIsoDate(date: string): string {
 export function rankDailyCarouselEvents(
   events: DailyCarouselEvent[],
   publishDate: string,
+  eventDates: string[] = [publishDate],
 ): DailyCarouselEvent[] {
+  const includedDates = new Set(eventDates);
   const ranked = events
-    .filter((event) => event.date === publishDate && normalizeInstagramHandle(event.venueInstagramHandle))
+    .filter(
+      (event) => includedDates.has(event.date) && normalizeInstagramHandle(event.venueInstagramHandle),
+    )
     .map((event) => ({
       event: {
         ...event,
         venueInstagramHandle: normalizeInstagramHandle(event.venueInstagramHandle),
       },
-      rank: stableHash(`${publishDate}:${event._id}`),
+      rank: stableHash(`${publishDate}:${event.date}:${event._id}`),
     }))
     .sort((left, right) => left.rank - right.rank || left.event._id.localeCompare(right.event._id));
 
@@ -101,9 +106,49 @@ export function selectDailyCarouselEvents(
   events: DailyCarouselEvent[],
   publishDate: string,
   limit = DEFAULT_CAROUSEL_EVENT_LIMIT,
+  eventDates: string[] = [publishDate],
 ): DailyCarouselEvent[] {
   const boundedLimit = Math.max(1, Math.min(DEFAULT_CAROUSEL_EVENT_LIMIT, Math.floor(limit)));
-  return rankDailyCarouselEvents(events, publishDate).slice(0, boundedLimit);
+  return balanceDailyCarouselEvents(
+    rankDailyCarouselEvents(events, publishDate, eventDates),
+    eventDates,
+    boundedLimit,
+  );
+}
+
+export function balanceDailyCarouselEvents(
+  rankedEvents: DailyCarouselEvent[],
+  eventDates: string[],
+  limit = DEFAULT_CAROUSEL_EVENT_LIMIT,
+): DailyCarouselEvent[] {
+  const boundedLimit = Math.max(1, Math.min(DEFAULT_CAROUSEL_EVENT_LIMIT, Math.floor(limit)));
+  const selected: DailyCarouselEvent[] = [];
+  const selectedIds = new Set<string>();
+  const dateQuota = Math.floor(boundedLimit / Math.max(1, eventDates.length));
+
+  for (const date of eventDates) {
+    for (const event of rankedEvents) {
+      if (event.date !== date || selectedIds.has(event._id)) {
+        continue;
+      }
+      selected.push(event);
+      selectedIds.add(event._id);
+      if (selected.filter((candidate) => candidate.date === date).length >= dateQuota) {
+        break;
+      }
+    }
+  }
+
+  for (const event of rankedEvents) {
+    if (!selectedIds.has(event._id)) {
+      selected.push(event);
+      selectedIds.add(event._id);
+    }
+    if (selected.length >= boundedLimit) {
+      break;
+    }
+  }
+  return selected.slice(0, boundedLimit);
 }
 
 function compactCaptionText(value: string, maxLength = MAX_CAPTION_EVENT_TITLE_LENGTH): string {
@@ -122,9 +167,20 @@ function displayEventTime(value: string | undefined): string {
   return `${normalized} — `;
 }
 
+function displayEventDay(date: string, eventDates: string[]): string {
+  if (date === eventDates[0]) {
+    return "SUTRA";
+  }
+  if (date === eventDates[1]) {
+    return "PREKOSUTRA";
+  }
+  return date;
+}
+
 export function buildDailyCarouselCaption(
   selectedEvents: DailyCarouselEvent[],
   publicOrigin = EVENT_ZEKA_PUBLIC_ORIGIN,
+  eventDates: string[] = [],
 ): string {
   if (selectedEvents.length === 0) {
     return "";
@@ -132,13 +188,14 @@ export function buildDailyCarouselCaption(
 
   const entries = selectedEvents.map((event, index) => {
     const handle = normalizeInstagramHandle(event.venueInstagramHandle);
-    return `${index + 1}. ${displayEventTime(event.time)}${compactCaptionText(event.title)}\n@${handle}`;
+    const day = displayEventDay(event.date, eventDates);
+    return `${index + 1}. ${day} • ${displayEventTime(event.time)}${compactCaptionText(event.title)}\n@${handle}`;
   });
 
   return [
-    "Beograde, gde ćemo danas? 🐇",
+    "Beograde, plan za sutra i prekosutra 🐇",
     "",
-    `Danas izdvajamo ${selectedEvents.length} događaja na ${selectedEvents.length} različitih mesta:`,
+    `Izdvajamo ${selectedEvents.length} događaja na ${selectedEvents.length} različitih mesta:`,
     "",
     ...entries.flatMap((entry) => [entry, ""]),
     "Sve događaje, detalje i još predloga pronađi na:",
@@ -146,19 +203,26 @@ export function buildDailyCarouselCaption(
     "",
     "Zeka zna gde se ide. 💜",
     "",
-    "#EventZeka #GdeDanas #Beograd #DesavanjaBeograd #BeogradskiDogadjaji",
+    "#EventZeka #GdeSutra #Beograd #DesavanjaBeograd #BeogradskiDogadjaji",
   ].join("\n");
 }
 
 export function buildDailyCarouselPayload(options: {
   events: DailyCarouselEvent[];
   publishDate: string;
+  eventDates?: string[];
   publicOrigin: string;
   selectedEvents?: DailyCarouselEvent[];
 }): DailyCarouselPayload {
+  const eventDates = options.eventDates ?? [options.publishDate];
   const selected = options.selectedEvents
     ? options.selectedEvents.slice(0, DEFAULT_CAROUSEL_EVENT_LIMIT)
-    : selectDailyCarouselEvents(options.events, options.publishDate);
+    : selectDailyCarouselEvents(
+        options.events,
+        options.publishDate,
+        DEFAULT_CAROUSEL_EVENT_LIMIT,
+        eventDates,
+      );
   const eventSlides: DailyCarouselSlide[] = selected.map((event) => {
     const username = normalizeInstagramHandle(event.venueInstagramHandle);
     return {
@@ -183,10 +247,11 @@ export function buildDailyCarouselPayload(options: {
 
   return {
     publishDate: options.publishDate,
-    selectionKey: `${options.publishDate}:${selected.map((event) => event._id).join(",")}`,
+    eventDates,
+    selectionKey: `${options.publishDate}:${eventDates.join("+")}:${selected.map((event) => event._id).join(",")}`,
     sourceEventCount: options.events.length,
     selectedCount: selected.length,
-    caption: buildDailyCarouselCaption(selected, options.publicOrigin),
+    caption: buildDailyCarouselCaption(selected, options.publicOrigin, eventDates),
     slides,
   };
 }
