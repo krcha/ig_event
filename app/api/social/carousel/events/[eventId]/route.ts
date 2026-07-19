@@ -42,6 +42,11 @@ async function fetchPoster(request: Request, event: PublicEventRecord): Promise<
     if (!response.ok) {
       return null;
     }
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    if (!contentType.startsWith("image/") || contentType.includes("svg")) {
+      await response.body?.cancel();
+      return null;
+    }
     const contentLength = Number.parseInt(response.headers.get("content-length") ?? "0", 10);
     if (contentLength > MAX_POSTER_BYTES) {
       return null;

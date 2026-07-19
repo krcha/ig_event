@@ -12,38 +12,48 @@ import {
 } from "../lib/social/carousel-images.ts";
 
 const publishDate = "2026-07-19";
+const eventDates = ["2026-07-20", "2026-07-21"];
 const fixtures = [
-  { _id: "event-a", title: "Noć u gradu", venue: "Venue A", date: publishDate, time: "21:00", venueInstagramHandle: "venue.a" },
-  { _id: "event-b", title: "Koncert B", venue: "Venue B", date: publishDate, time: "TBD", venueInstagramHandle: "venue_b" },
-  { _id: "event-c", title: "Izložba C", venue: "Venue C", date: publishDate, venueInstagramHandle: "venue.c" },
-  { _id: "event-d", title: "Predstava D", venue: "Venue D", date: publishDate, venueInstagramHandle: "venue_d" },
-  { _id: "event-e", title: "DJ veče E", venue: "Venue E", date: publishDate, venueInstagramHandle: "venue.e" },
-  { _id: "event-f", title: "Festival F", venue: "Venue F", date: publishDate, venueInstagramHandle: "venue_f" },
-  { _id: "event-g", title: "Drugi događaj istog mesta", venue: "Venue A", date: publishDate, venueInstagramHandle: "VENUE.A" },
-  { _id: "event-h", title: "Bez Instagram naloga", venue: "Venue H", date: publishDate },
-  { _id: "event-i", title: "Sutra", venue: "Venue I", date: "2026-07-20", venueInstagramHandle: "venue_i" },
+  { _id: "event-a", title: "Noć u gradu", venue: "Venue A", date: eventDates[0], time: "21:00", venueInstagramHandle: "venue.a" },
+  { _id: "event-b", title: "Koncert B", venue: "Venue B", date: eventDates[0], time: "TBD", venueInstagramHandle: "venue_b" },
+  { _id: "event-c", title: "Izložba C", venue: "Venue C", date: eventDates[0], venueInstagramHandle: "venue.c" },
+  { _id: "event-d", title: "Predstava D", venue: "Venue D", date: eventDates[1], venueInstagramHandle: "venue_d" },
+  { _id: "event-e", title: "DJ veče E", venue: "Venue E", date: eventDates[1], venueInstagramHandle: "venue.e" },
+  { _id: "event-f", title: "Festival F", venue: "Venue F", date: eventDates[1], venueInstagramHandle: "venue_f" },
+  { _id: "event-g", title: "Drugi događaj istog mesta", venue: "Venue A", date: eventDates[1], venueInstagramHandle: "VENUE.A" },
+  { _id: "event-h", title: "Bez Instagram naloga", venue: "Venue H", date: eventDates[0] },
+  { _id: "event-i", title: "Danas se ne bira", venue: "Venue I", date: publishDate, venueInstagramHandle: "venue_i" },
+  { _id: "event-j", title: "Tri dana unapred se ne bira", venue: "Venue J", date: "2026-07-22", venueInstagramHandle: "venue_j" },
 ];
 
 assert.equal(getNextIsoDate("2026-07-19"), "2026-07-20");
 assert.throws(() => getNextIsoDate("not-a-date"), /Invalid carousel date/);
 
-const selected = selectDailyCarouselEvents(fixtures, publishDate);
+const selected = selectDailyCarouselEvents(fixtures, publishDate, 6, eventDates);
 assert.equal(selected.length, 6);
 assert.equal(new Set(selected.map((event) => event.venueInstagramHandle)).size, 6);
-assert.deepEqual(selected, selectDailyCarouselEvents(fixtures, publishDate));
-assert.ok(selected.every((event) => event.date === publishDate && event.venueInstagramHandle));
+assert.deepEqual(selected, selectDailyCarouselEvents(fixtures, publishDate, 6, eventDates));
+assert.ok(selected.every((event) => eventDates.includes(event.date) && event.venueInstagramHandle));
+assert.deepEqual(new Set(selected.map((event) => event.date)), new Set(eventDates));
+for (const date of eventDates) {
+  assert.equal(selected.filter((event) => event.date === date).length, 3);
+}
 
 const payload = buildDailyCarouselPayload({
   events: fixtures,
   publishDate,
+  eventDates,
   publicOrigin: "https://events.example.test",
 });
 assert.equal(payload.selectedCount, 6);
+assert.deepEqual(payload.eventDates, eventDates);
 assert.equal(payload.slides.length, 7);
 assert.equal(payload.slides.at(-1)?.kind, "cta");
 assert.match(payload.slides.at(-1)?.imageUrl ?? "", /\/api\/social\/carousel\/cta$/);
-assert.ok(payload.selectionKey.startsWith(`${publishDate}:`));
-assert.match(payload.caption, /Beograde, gde ćemo danas/);
+assert.ok(payload.selectionKey.startsWith(`${publishDate}:${eventDates.join("+")}:`));
+assert.match(payload.caption, /plan za sutra i prekosutra/);
+assert.match(payload.caption, /SUTRA/);
+assert.match(payload.caption, /PREKOSUTRA/);
 assert.match(payload.caption, /events\.example\.test/);
 assert.doesNotMatch(payload.caption, /TBD —/);
 for (const event of selected) {
@@ -57,9 +67,11 @@ for (const slide of payload.slides.filter((candidate) => candidate.kind === "eve
 const emptyPayload = buildDailyCarouselPayload({
   events: [],
   publishDate,
+  eventDates,
   publicOrigin: "https://events.example.test",
 });
 assert.equal(emptyPayload.selectedCount, 0);
+assert.deepEqual(emptyPayload.eventDates, eventDates);
 assert.deepEqual(emptyPayload.slides, []);
 assert.equal(emptyPayload.caption, "");
 
@@ -78,7 +90,7 @@ const eventImage = await renderEventCarouselSlide({
   title: "Šta se dešava večeras?",
   venue: "Kulturni centar Beograda",
   instagramHandle: "kcb_beograd",
-  date: publishDate,
+  date: eventDates[0],
   time: "20:30",
 });
 const eventMetadata = await sharp(eventImage).metadata();
@@ -91,7 +103,7 @@ const fallbackEventImage = await renderEventCarouselSlide({
   title: "Događaj bez dostupnog postera",
   venue: "Beograd",
   instagramHandle: "eventzeka",
-  date: publishDate,
+  date: eventDates[1],
 });
 const fallbackMetadata = await sharp(fallbackEventImage).metadata();
 assert.equal(fallbackMetadata.width, 1080);
@@ -118,9 +130,12 @@ const imageRendererSource = readFileSync(
 );
 assert.match(payloadRouteSource, /isAuthorizedCronRequestHeader/);
 assert.match(payloadRouteSource, /listPublicCalendarEventsWindow/);
+assert.match(payloadRouteSource, /dayAfterTomorrow/);
+assert.match(payloadRouteSource, /fromDate: tomorrow/);
 assert.match(payloadRouteSource, /hasUsablePoster/);
 assert.match(payloadRouteSource, /selectPosterReadyEvents/);
 assert.match(eventRouteSource, /getPublicApprovedEvent/);
+assert.match(eventRouteSource, /contentType\.includes\("svg"\)/);
 assert.match(eventRouteSource, /renderEventCarouselSlide/);
 assert.match(imageRendererSource, /datePillWidth/);
 

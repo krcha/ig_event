@@ -1,0 +1,70 @@
+[
+  {
+    "id": "EzekaDailyIg001",
+    "name": "Event Zeka — Daily Instagram Carousel",
+    "description": "Daily 00:01 Belgrade-time carousel for tomorrow and the day after: six unique venues with approved events, tagged venue accounts, and Event Zeka CTA slide.",
+    "active": false,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {},
+        "id": "manual-trigger",
+        "name": "Manual Test",
+        "type": "n8n-nodes-base.manualTrigger",
+        "typeVersion": 1,
+        "position": [-520, 180]
+      },
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "cronExpression",
+                "expression": "1 0 * * *"
+              }
+            ]
+          }
+        },
+        "id": "daily-schedule",
+        "name": "Daily at 00:01 Belgrade",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [-520, -40]
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "jsCode": "const origin = String($env.EVENTZEKA_API_ORIGIN || '').replace(/\\/+$/, '');\nconst cronSecret = String($env.EVENTZEKA_CRON_SECRET || '');\nconst graphBase = String($env.EVENTZEKA_IG_GRAPH_BASE_URL || 'https://graph.instagram.com').replace(/\\/+$/, '');\nconst graphVersion = String($env.EVENTZEKA_IG_GRAPH_VERSION || 'v25.0').replace(/^\\/+|\\/+$/g, '');\nconst igUserId = String($env.EVENTZEKA_IG_USER_ID || '');\nconst accessToken = String($env.EVENTZEKA_IG_ACCESS_TOKEN || '');\n\nif (!origin || !cronSecret) {\n  throw new Error('Event Zeka API origin or cron secret is not configured.');\n}\n\nconst payloadResponse = await fetch(`${origin}/api/social/daily-carousel`, {\n  headers: { Authorization: `Bearer ${cronSecret}`, Accept: 'application/json' },\n});\nconst payloadText = await payloadResponse.text();\nlet payload;\ntry {\n  payload = JSON.parse(payloadText);\n} catch {\n  throw new Error(`Carousel generator returned non-JSON HTTP ${payloadResponse.status}.`);\n}\nif (!payloadResponse.ok) {\n  throw new Error(`Carousel generator failed: ${payload.error || `HTTP ${payloadResponse.status}`}`);\n}\nif (!payload.selectedCount || !Array.isArray(payload.slides) || payload.slides.length < 2) {\n  return [{ json: { status: 'skipped_no_events', publishDate: payload.publishDate, selectedCount: payload.selectedCount || 0 } }];\n}\n\nconst state = $getWorkflowStaticData('global');\nif (state.lastSelectionKey === payload.selectionKey) {\n  return [{ json: { status: 'skipped_already_published', publishDate: payload.publishDate, selectionKey: payload.selectionKey, postId: state.lastPostId || null } }];\n}\n\nif (!igUserId || !accessToken) {\n  return [{ json: {\n    status: 'blocked_meta_authorization_required',\n    publishDate: payload.publishDate,\n    selectionKey: payload.selectionKey,\n    selectedCount: payload.selectedCount,\n    slideCount: payload.slides.length,\n    venues: payload.slides.filter((slide) => slide.kind === 'event').map((slide) => `@${slide.username}`),\n    previewUrls: payload.slides.map((slide) => slide.imageUrl),\n  } }];\n}\n\nconst wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));\nconst graphUrl = (path) => [graphBase, graphVersion, path.replace(/^\\/+/, '')].filter(Boolean).join('/');\n\nasync function readResponse(response) {\n  const text = await response.text();\n  try { return text ? JSON.parse(text) : {}; } catch { return { raw: text.slice(0, 500) }; }\n}\n\nasync function graphRequest(path, options = {}) {\n  let lastError;\n  for (let attempt = 1; attempt <= 3; attempt += 1) {\n    const body = options.body ? new URLSearchParams(options.body) : undefined;\n    const response = await fetch(graphUrl(path), {\n      method: options.method || 'GET',\n      headers: {\n        Authorization: `Bearer ${accessToken}`,\n        Accept: 'application/json',\n        ...(body ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),\n      },\n      body,\n    });\n    const data = await readResponse(response);\n    if (response.ok) return data;\n    const message = data?.error?.message || data?.error?.error_user_msg || `HTTP ${response.status}`;\n    lastError = new Error(`Instagram Graph request failed for ${path}: ${message}`);\n    if (response.status !== 429 && response.status < 500) throw lastError;\n    await wait(attempt * 3000);\n  }\n  throw lastError;\n}\n\nasync function waitForContainer(containerId) {\n  for (let attempt = 1; attempt <= 18; attempt += 1) {\n    const status = await graphRequest(`${containerId}?fields=status_code,status`);\n    if (status.status_code === 'FINISHED') return status;\n    if (status.status_code === 'ERROR' || status.status_code === 'EXPIRED') {\n      throw new Error(`Instagram media container ${containerId} ended with ${status.status_code}.`);\n    }\n    await wait(5000);\n  }\n  throw new Error(`Instagram media container ${containerId} did not finish within 90 seconds.`);\n}\n\nconst childIds = [];\nconst fallbackMentionTags = [];\nfor (const slide of payload.slides) {\n  const body = { image_url: slide.imageUrl, is_carousel_item: 'true' };\n  if (slide.kind === 'event' && Array.isArray(slide.userTags) && slide.userTags.length) {\n    body.user_tags = JSON.stringify(slide.userTags);\n  }\n  let child;\n  try {\n    child = await graphRequest(`${igUserId}/media`, { method: 'POST', body });\n  } catch (error) {\n    if (!body.user_tags) throw error;\n    delete body.user_tags;\n    fallbackMentionTags.push(slide.username);\n    child = await graphRequest(`${igUserId}/media`, { method: 'POST', body });\n  }\n  if (!child.id) throw new Error('Instagram did not return a child media container ID.');\n  await waitForContainer(child.id);\n  childIds.push(child.id);\n}\n\nconst carousel = await graphRequest(`${igUserId}/media`, {\n  method: 'POST',\n  body: {\n    media_type: 'CAROUSEL',\n    children: childIds.join(','),\n    caption: payload.caption,\n  },\n});\nif (!carousel.id) throw new Error('Instagram did not return a carousel container ID.');\nawait waitForContainer(carousel.id);\nconst published = await graphRequest(`${igUserId}/media_publish`, {\n  method: 'POST',\n  body: { creation_id: carousel.id },\n});\nif (!published.id) throw new Error('Instagram did not return a published media ID.');\n\nstate.lastSelectionKey = payload.selectionKey;\nstate.lastPublishDate = payload.publishDate;\nstate.lastPostId = published.id;\nstate.lastPublishedAt = new Date().toISOString();\n\nreturn [{ json: {\n  status: 'published',\n  publishDate: payload.publishDate,\n  selectionKey: payload.selectionKey,\n  postId: published.id,\n  selectedCount: payload.selectedCount,\n  slideCount: payload.slides.length,\n  fallbackMentionTags,\n} }];"
+        },
+        "id": "generate-and-publish",
+        "name": "Generate and Publish Carousel",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [-180, 70]
+      }
+    ],
+    "connections": {
+      "Manual Test": {
+        "main": [[{"node": "Generate and Publish Carousel", "type": "main", "index": 0}]]
+      },
+      "Daily at 00:01 Belgrade": {
+        "main": [[{"node": "Generate and Publish Carousel", "type": "main", "index": 0}]]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "timezone": "Europe/Belgrade",
+      "saveManualExecutions": true,
+      "saveExecutionProgress": true,
+      "saveDataErrorExecution": "all",
+      "saveDataSuccessExecution": "all"
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": {},
+    "versionId": "b4e28659-8ccb-4a1f-a37d-2cf335e7818d",
+    "versionCounter": 1,
+    "triggerCount": 1,
+    "tags": []
+  }
+]
