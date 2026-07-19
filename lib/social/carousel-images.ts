@@ -18,7 +18,6 @@ const SERBIAN_MONTHS = [
 ];
 
 export type EventCarouselSlideInput = {
-  poster?: Buffer | null;
   title: string;
   venue: string;
   instagramHandle: string;
@@ -28,6 +27,7 @@ export type EventCarouselSlideInput = {
 
 function escapeXml(value: string): string {
   return value
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
@@ -36,7 +36,10 @@ function escapeXml(value: string): string {
 }
 
 function compactText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
+  return value
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function wrapText(value: string, maxCharacters: number, maxLines: number): string[] {
@@ -71,8 +74,8 @@ function formatDateLabel(date: string, time?: string): string {
   const dateLabel = match
     ? `${Number.parseInt(match[3], 10)}. ${SERBIAN_MONTHS[Number.parseInt(match[2], 10) - 1]}`
     : date;
-  const normalizedTime = time?.trim() ?? "";
-  return normalizedTime && normalizedTime.toUpperCase() !== "TBD"
+  const normalizedTime = compactText(time ?? "").slice(0, 20);
+  return /^\d{1,2}:\d{2}(?:\s*[-–]\s*\d{1,2}:\d{2})?$/.test(normalizedTime)
     ? `${dateLabel} • ${normalizedTime}`
     : dateLabel;
 }
@@ -86,12 +89,26 @@ function eventOverlaySvg(input: EventCarouselSlideInput): Buffer {
     )
     .join("");
   const venue = compactText(input.venue);
-  const handle = input.instagramHandle.trim().replace(/^@+/, "").toLowerCase();
+  const normalizedHandle = compactText(input.instagramHandle)
+    .replace(/^@+/, "")
+    .toLowerCase();
+  const handle = /^(?!.*\.\.)(?!.*\.$)[a-z0-9._]{1,30}$/.test(normalizedHandle)
+    ? normalizedHandle
+    : "eventzeka";
   const dateLabel = formatDateLabel(input.date, input.time);
   const datePillWidth = Math.min(520, Math.max(220, 56 + dateLabel.length * 17));
 
   return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${SLIDE_WIDTH}" height="${SLIDE_HEIGHT}">
     <defs>
+      <radialGradient id="bg" cx="72%" cy="44%" r="82%">
+        <stop offset="0" stop-color="#282255"/>
+        <stop offset="0.48" stop-color="#101222"/>
+        <stop offset="1" stop-color="#050609"/>
+      </radialGradient>
+      <linearGradient id="fur" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#B4B1FF"/>
+        <stop offset="1" stop-color="#7C76F2"/>
+      </linearGradient>
       <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0" stop-color="#050609" stop-opacity="0"/>
         <stop offset="0.2" stop-color="#050609" stop-opacity="0.78"/>
@@ -103,6 +120,15 @@ function eventOverlaySvg(input: EventCarouselSlideInput): Buffer {
         <stop offset="1" stop-color="#7C76F2"/>
       </linearGradient>
     </defs>
+    <rect width="1080" height="1350" fill="url(#bg)"/>
+    <circle cx="540" cy="510" r="350" fill="none" stroke="#8B86FB" stroke-width="3" opacity="0.16"/>
+    <ellipse cx="430" cy="355" rx="78" ry="205" transform="rotate(-14 430 355)" fill="url(#fur)" opacity="0.76"/>
+    <ellipse cx="650" cy="355" rx="78" ry="205" transform="rotate(14 650 355)" fill="url(#fur)" opacity="0.76"/>
+    <circle cx="540" cy="650" r="255" fill="url(#fur)" opacity="0.76"/>
+    <circle cx="460" cy="620" r="27" fill="#090A14"/>
+    <circle cx="620" cy="620" r="27" fill="#090A14"/>
+    <path d="M514 695c13-11 39-11 52 0-6 17-17 26-26 26s-20-9-26-26Z" fill="#090A14"/>
+    <path d="m835 240 16 37 37 16-37 16-16 37-16-37-37-16 37-16 16-37Z" fill="#F7F8F8"/>
     <rect x="0" y="0" width="1080" height="1350" fill="url(#fade)"/>
     <g transform="translate(48 42)">
       <rect width="360" height="78" rx="39" fill="#090B12" fill-opacity="0.94" stroke="#8B86FB" stroke-width="2"/>
@@ -121,76 +147,10 @@ function eventOverlaySvg(input: EventCarouselSlideInput): Buffer {
   </svg>`);
 }
 
-async function buildPosterBackground(poster?: Buffer | null): Promise<Buffer> {
-  if (!poster) {
-    const fallback = `<svg xmlns="http://www.w3.org/2000/svg" width="${SLIDE_WIDTH}" height="${SLIDE_HEIGHT}">
-      <defs>
-        <radialGradient id="bg" cx="72%" cy="44%" r="82%">
-          <stop offset="0" stop-color="#282255"/>
-          <stop offset="0.48" stop-color="#101222"/>
-          <stop offset="1" stop-color="#050609"/>
-        </radialGradient>
-        <linearGradient id="fur" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stop-color="#B4B1FF"/>
-          <stop offset="1" stop-color="#7C76F2"/>
-        </linearGradient>
-      </defs>
-      <rect width="1080" height="1350" fill="url(#bg)"/>
-      <circle cx="540" cy="510" r="350" fill="none" stroke="#8B86FB" stroke-width="3" opacity="0.16"/>
-      <ellipse cx="430" cy="355" rx="78" ry="205" transform="rotate(-14 430 355)" fill="url(#fur)" opacity="0.76"/>
-      <ellipse cx="650" cy="355" rx="78" ry="205" transform="rotate(14 650 355)" fill="url(#fur)" opacity="0.76"/>
-      <circle cx="540" cy="650" r="255" fill="url(#fur)" opacity="0.76"/>
-      <circle cx="460" cy="620" r="27" fill="#090A14"/>
-      <circle cx="620" cy="620" r="27" fill="#090A14"/>
-      <path d="M514 695c13-11 39-11 52 0-6 17-17 26-26 26s-20-9-26-26Z" fill="#090A14"/>
-      <path d="m835 240 16 37 37 16-37 16-16 37-16-37-37-16 37-16 16-37Z" fill="#F7F8F8"/>
-    </svg>`;
-    return sharp(Buffer.from(fallback)).png().toBuffer();
-  }
-
-  try {
-    return await sharp(poster)
-      .rotate()
-      .resize(SLIDE_WIDTH, SLIDE_HEIGHT, { fit: "cover" })
-      .blur(24)
-      .modulate({ brightness: 0.45, saturation: 0.72 })
-      .png()
-      .toBuffer();
-  } catch {
-    return buildPosterBackground(null);
-  }
-}
-
-async function buildContainedPoster(poster?: Buffer | null): Promise<Buffer | null> {
-  if (!poster) {
-    return null;
-  }
-  try {
-    return await sharp(poster)
-      .rotate()
-      .resize(920, 840, {
-        fit: "contain",
-        background: { r: 0, g: 0, b: 0, alpha: 0 },
-      })
-      .png()
-      .toBuffer();
-  } catch {
-    return null;
-  }
-}
-
 export async function renderEventCarouselSlide(input: EventCarouselSlideInput): Promise<Buffer> {
-  const [background, containedPoster] = await Promise.all([
-    buildPosterBackground(input.poster),
-    buildContainedPoster(input.poster),
-  ]);
-  const composites: sharp.OverlayOptions[] = [];
-  if (containedPoster) {
-    composites.push({ input: containedPoster, left: 80, top: 100 });
-  }
-  composites.push({ input: eventOverlaySvg(input), left: 0, top: 0 });
-
-  return sharp(background).composite(composites).png({ compressionLevel: 9 }).toBuffer();
+  return sharp(eventOverlaySvg(input), { limitInputPixels: 2_000_000 })
+    .jpeg({ quality: 91, chromaSubsampling: "4:4:4" })
+    .toBuffer();
 }
 
 export async function renderCtaCarouselSlide(): Promise<Buffer> {
@@ -231,5 +191,7 @@ export async function renderCtaCarouselSlide(): Promise<Buffer> {
     <path d="m941 700 14 32 32 14-32 14-14 32-14-32-32-14 32-14 14-32Z" fill="#F7F8F8"/>
   </svg>`;
 
-  return sharp(Buffer.from(svg)).png({ compressionLevel: 9 }).toBuffer();
+  return sharp(Buffer.from(svg), { limitInputPixels: 2_000_000 })
+    .jpeg({ quality: 91, chromaSubsampling: "4:4:4" })
+    .toBuffer();
 }

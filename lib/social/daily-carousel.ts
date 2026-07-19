@@ -1,5 +1,8 @@
 const DEFAULT_CAROUSEL_EVENT_LIMIT = 6;
 const MAX_CAPTION_EVENT_TITLE_LENGTH = 120;
+const MAX_INSTAGRAM_CAPTION_LENGTH = 2_200;
+const INSTAGRAM_HANDLE_PATTERN = /^(?!.*\.\.)(?!.*\.$)[a-z0-9._]{1,30}$/;
+const XML_CONTROL_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 
 export const EVENT_ZEKA_PUBLIC_ORIGIN = "https://events.ineedtofeedmyrabbit.com";
 
@@ -37,8 +40,9 @@ export type DailyCarouselPayload = {
   slides: DailyCarouselSlide[];
 };
 
-function normalizeInstagramHandle(value: string | undefined): string {
-  return value?.trim().replace(/^@+/, "").toLowerCase() ?? "";
+export function normalizeInstagramHandle(value: string | undefined): string {
+  const normalized = value?.trim().replace(/^@+/, "").toLowerCase() ?? "";
+  return INSTAGRAM_HANDLE_PATTERN.test(normalized) ? normalized : "";
 }
 
 function stableHash(value: string): number {
@@ -62,12 +66,36 @@ export function getBelgradeDate(now = new Date()): string {
 }
 
 export function getNextIsoDate(date: string): string {
-  const parsed = new Date(`${date}T12:00:00.000Z`);
-  if (Number.isNaN(parsed.getTime())) {
+  const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    throw new Error("Invalid carousel date.");
+  }
+  const year = Number.parseInt(match[1], 10);
+  const month = Number.parseInt(match[2], 10);
+  const day = Number.parseInt(match[3], 10);
+  const parsed = new Date(Date.UTC(year, month - 1, day, 12));
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
     throw new Error("Invalid carousel date.");
   }
   parsed.setUTCDate(parsed.getUTCDate() + 1);
   return parsed.toISOString().slice(0, 10);
+}
+
+export function buildEventRenderVersion(event: DailyCarouselEvent): string {
+  return stableHash(
+    [
+      event._id,
+      event.title,
+      event.venue,
+      event.date,
+      event.time ?? "",
+      normalizeInstagramHandle(event.venueInstagramHandle),
+    ].join("\u001F"),
+  ).toString(36);
 }
 
 export function rankDailyCarouselEvents(
@@ -152,7 +180,11 @@ export function balanceDailyCarouselEvents(
 }
 
 function compactCaptionText(value: string, maxLength = MAX_CAPTION_EVENT_TITLE_LENGTH): string {
-  const compact = value.replace(/\s+/g, " ").trim();
+  const compact = value
+    .replace(XML_CONTROL_PATTERN, "")
+    .replace(/[@#]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (compact.length <= maxLength) {
     return compact;
   }
@@ -160,8 +192,12 @@ function compactCaptionText(value: string, maxLength = MAX_CAPTION_EVENT_TITLE_L
 }
 
 function displayEventTime(value: string | undefined): string {
-  const normalized = value?.trim() ?? "";
-  if (!normalized || normalized.toUpperCase() === "TBD") {
+  const normalized = value?.replace(XML_CONTROL_PATTERN, "").trim() ?? "";
+  if (
+    !normalized ||
+    normalized.toUpperCase() === "TBD" ||
+    !/^\d{1,2}:\d{2}(?:\s*[-–]\s*\d{1,2}:\d{2})?$/.test(normalized)
+  ) {
     return "";
   }
   return `${normalized} — `;
@@ -192,7 +228,7 @@ export function buildDailyCarouselCaption(
     return `${index + 1}. ${day} • ${displayEventTime(event.time)}${compactCaptionText(event.title)}\n@${handle}`;
   });
 
-  return [
+  const caption = [
     "Beograde, plan za sutra i prekosutra 🐇",
     "",
     `Izdvajamo ${selectedEvents.length} događaja na ${selectedEvents.length} različitih mesta:`,
@@ -205,6 +241,7 @@ export function buildDailyCarouselCaption(
     "",
     "#EventZeka #GdeSutra #Beograd #DesavanjaBeograd #BeogradskiDogadjaji",
   ].join("\n");
+  return caption.slice(0, MAX_INSTAGRAM_CAPTION_LENGTH);
 }
 
 export function buildDailyCarouselPayload(options: {
@@ -225,13 +262,14 @@ export function buildDailyCarouselPayload(options: {
       );
   const eventSlides: DailyCarouselSlide[] = selected.map((event) => {
     const username = normalizeInstagramHandle(event.venueInstagramHandle);
+    const renderVersion = buildEventRenderVersion(event);
     return {
       kind: "event",
       eventId: event._id,
       title: event.title,
       venue: event.venue,
       username,
-      imageUrl: `${options.publicOrigin}/api/social/carousel/events/${encodeURIComponent(event._id)}`,
+      imageUrl: `${options.publicOrigin}/api/social/carousel/events/${encodeURIComponent(event._id)}?v=${renderVersion}`,
       userTags: [{ username, x: 0.5, y: 0.82 }],
     };
   });
@@ -240,7 +278,7 @@ export function buildDailyCarouselPayload(options: {
         ...eventSlides,
         {
           kind: "cta" as const,
-          imageUrl: `${options.publicOrigin}/api/social/carousel/cta`,
+          imageUrl: `${options.publicOrigin}/api/social/carousel/cta?v=2`,
         },
       ]
     : [];
@@ -248,7 +286,7 @@ export function buildDailyCarouselPayload(options: {
   return {
     publishDate: options.publishDate,
     eventDates,
-    selectionKey: `${options.publishDate}:${eventDates.join("+")}:${selected.map((event) => event._id).join(",")}`,
+    selectionKey: `${options.publishDate}:${eventDates.join("+")}:${selected.map((event) => `${event._id}@${buildEventRenderVersion(event)}`).join(",")}`,
     sourceEventCount: options.events.length,
     selectedCount: selected.length,
     caption: buildDailyCarouselCaption(selected, options.publicOrigin, eventDates),
