@@ -52,8 +52,18 @@ assert.match(
 );
 assert.match(
   venuesSource,
-  /event\.venueId \?\? venues\.find\(\(venue\) =>\s*eventMatchesVenueIdentity\(event, venue\),\s*\)\?\._id/s,
-  "Venue directory counts should also include approved upcoming events missing venueId when their venue identity matches.",
+  /const venueIdByHandle = new Map/,
+  "Venue directory fallback counting should index venues by normalized Instagram handle.",
+);
+assert.match(
+  venuesSource,
+  /const venueIdByName = new Map/,
+  "Venue directory fallback counting should index venues by normalized name.",
+);
+assert.match(
+  venuesSource,
+  /event\.venueId \?\?[\s\S]*venueIdByHandle\.get\(eventHandle\)[\s\S]*venueIdByName\.get\(eventVenueName\)/,
+  "Venue directory counts should include approved upcoming events missing venueId without an events-by-venues scan.",
 );
 assert.match(
   publicEventsSource,

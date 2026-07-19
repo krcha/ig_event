@@ -583,10 +583,25 @@ export const listPublicVenueDirectory = query({
         .take(1000),
     ]);
     const upcomingCountsByVenueId = new Map<string, number>();
+    const venueIdByHandle = new Map<string, Id<"venues">>();
+    const venueIdByName = new Map<string, Id<"venues">>();
+    for (const venue of venues) {
+      const handle = normalizeHandle(venue.instagramHandle);
+      const name = toSearchableText(venue.name);
+      if (handle && !venueIdByHandle.has(handle)) {
+        venueIdByHandle.set(handle, venue._id);
+      }
+      if (name && !venueIdByName.has(name)) {
+        venueIdByName.set(name, venue._id);
+      }
+    }
     for (const event of upcomingEvents) {
-      const venueId = event.venueId ?? venues.find((venue) =>
-        eventMatchesVenueIdentity(event, venue),
-      )?._id;
+      const eventHandle = normalizeHandle(event.venueInstagramHandle ?? "");
+      const eventVenueName = toSearchableText(event.venue);
+      const venueId =
+        event.venueId ??
+        (eventHandle ? venueIdByHandle.get(eventHandle) : undefined) ??
+        (eventVenueName ? venueIdByName.get(eventVenueName) : undefined);
       if (!venueId) {
         continue;
       }
