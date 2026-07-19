@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { cache } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -34,6 +35,13 @@ export const revalidate = 60;
 type VenuePageProps = {
   params: Promise<{ venueId: string }>;
 };
+
+const loadVenuePage = cache((venueId: string) =>
+  loadPublicVenuePage(venueId, {
+    historyLimit: 50,
+    upcomingLimit: 50,
+  }),
+);
 
 type VenueEventPost = PublicVenueEvent & {
   postStatus: "past" | "upcoming";
@@ -355,10 +363,7 @@ export async function generateMetadata({ params }: VenuePageProps): Promise<Meta
     notFound();
   }
 
-  const { error, historyEvents, upcomingEvents, venue } = await loadPublicVenuePage(venueId, {
-    historyLimit: 3,
-    upcomingLimit: 3,
-  });
+  const { error, historyEvents, upcomingEvents, venue } = await loadVenuePage(venueId);
 
   if (error) {
     throw new Error(`Failed to load public venue metadata: ${error}`);
@@ -420,13 +425,7 @@ export default async function VenuePage({ params }: VenuePageProps) {
     notFound();
   }
 
-  const { error, historyEvents, stats, upcomingEvents, venue } = await loadPublicVenuePage(
-    venueId,
-    {
-      historyLimit: 50,
-      upcomingLimit: 50,
-    },
-  );
+  const { error, historyEvents, stats, upcomingEvents, venue } = await loadVenuePage(venueId);
 
   if (error) {
     throw new Error(`Failed to load public venue page: ${error}`);

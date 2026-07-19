@@ -141,6 +141,7 @@ assert.ok(eventPage.includes("buildEventStructuredData"));
 assert.ok(eventPage.includes("generateMetadata"));
 assert.ok(eventPage.includes('type: "article"'));
 assert.ok(venuePage.includes("buildVenueStructuredData"));
+assert.ok(venuePage.includes("const loadVenuePage = cache("));
 assert.match(eventPage, /generateMetadata[\s\S]*notFound\(\)/);
 assert.match(venuePage, /generateMetadata[\s\S]*notFound\(\)/);
 assert.ok(venueDirectory.includes("buildVenueDirectoryStructuredData"));
