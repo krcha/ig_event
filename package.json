@@ -44,6 +44,7 @@
     "qa:discover-feed": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-discover-feed.mjs",
     "qa:apify": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-apify-cost-controls.mjs",
     "qa:follow-discovery": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-follow-discovery.mjs",
+    "qa:social-carousel": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-social-carousel.mjs",
     "qa:convex-auth-boundaries": "node scripts/qa-convex-auth-boundaries.mjs",
     "qa:ingestion-leases": "node scripts/qa-ingestion-leases.mjs",
     "qa:public-event-windows": "node scripts/qa-public-event-windows.mjs",
