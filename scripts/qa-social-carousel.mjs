@@ -112,11 +112,16 @@ const eventRouteSource = readFileSync(
   new URL("../app/api/social/carousel/events/[eventId]/route.ts", import.meta.url),
   "utf8",
 );
+const imageRendererSource = readFileSync(
+  new URL("../lib/social/carousel-images.ts", import.meta.url),
+  "utf8",
+);
 assert.match(payloadRouteSource, /isAuthorizedCronRequestHeader/);
 assert.match(payloadRouteSource, /listPublicCalendarEventsWindow/);
 assert.match(payloadRouteSource, /hasUsablePoster/);
 assert.match(payloadRouteSource, /selectPosterReadyEvents/);
 assert.match(eventRouteSource, /getPublicApprovedEvent/);
 assert.match(eventRouteSource, /renderEventCarouselSlide/);
+assert.match(imageRendererSource, /datePillWidth/);
 
 console.log("Daily Instagram carousel QA passed: deterministic six-venue selection, tags, caption, auth, and 1080x1350 PNG rendering.");

@@ -87,6 +87,8 @@ function eventOverlaySvg(input: EventCarouselSlideInput): Buffer {
     .join("");
   const venue = compactText(input.venue);
   const handle = input.instagramHandle.trim().replace(/^@+/, "").toLowerCase();
+  const dateLabel = formatDateLabel(input.date, input.time);
+  const datePillWidth = Math.min(520, Math.max(220, 56 + dateLabel.length * 17));
 
   return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${SLIDE_WIDTH}" height="${SLIDE_HEIGHT}">
     <defs>
@@ -110,8 +112,8 @@ function eventOverlaySvg(input: EventCarouselSlideInput): Buffer {
       <text x="98" y="50" fill="#F7F8F8" font-family="DejaVu Sans, Arial, sans-serif" font-size="27" font-weight="700" letter-spacing="2">EVENT ZEKA</text>
     </g>
     <g transform="translate(72 936)">
-      <rect width="330" height="66" rx="33" fill="url(#pill)"/>
-      <text x="28" y="44" fill="#090A14" font-family="DejaVu Sans, Arial, sans-serif" font-size="27" font-weight="700" letter-spacing="1">${escapeXml(formatDateLabel(input.date, input.time))}</text>
+      <rect width="${datePillWidth}" height="66" rx="33" fill="url(#pill)"/>
+      <text x="28" y="44" fill="#090A14" font-family="DejaVu Sans, Arial, sans-serif" font-size="27" font-weight="700" letter-spacing="1">${escapeXml(dateLabel)}</text>
     </g>
     ${titleText}
     <text x="73" y="1244" fill="#D8D9E2" font-family="DejaVu Sans, Arial, sans-serif" font-size="34" font-weight="600">${escapeXml(venue.length > 42 ? `${venue.slice(0, 41)}…` : venue)}</text>
