@@ -121,16 +121,29 @@ function eventOverlaySvg(input: EventCarouselSlideInput): Buffer {
 
 async function buildPosterBackground(poster?: Buffer | null): Promise<Buffer> {
   if (!poster) {
-    return sharp({
-      create: {
-        width: SLIDE_WIDTH,
-        height: SLIDE_HEIGHT,
-        channels: 4,
-        background: { r: 5, g: 6, b: 9, alpha: 1 },
-      },
-    })
-      .png()
-      .toBuffer();
+    const fallback = `<svg xmlns="http://www.w3.org/2000/svg" width="${SLIDE_WIDTH}" height="${SLIDE_HEIGHT}">
+      <defs>
+        <radialGradient id="bg" cx="72%" cy="44%" r="82%">
+          <stop offset="0" stop-color="#282255"/>
+          <stop offset="0.48" stop-color="#101222"/>
+          <stop offset="1" stop-color="#050609"/>
+        </radialGradient>
+        <linearGradient id="fur" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#B4B1FF"/>
+          <stop offset="1" stop-color="#7C76F2"/>
+        </linearGradient>
+      </defs>
+      <rect width="1080" height="1350" fill="url(#bg)"/>
+      <circle cx="540" cy="510" r="350" fill="none" stroke="#8B86FB" stroke-width="3" opacity="0.16"/>
+      <ellipse cx="430" cy="355" rx="78" ry="205" transform="rotate(-14 430 355)" fill="url(#fur)" opacity="0.76"/>
+      <ellipse cx="650" cy="355" rx="78" ry="205" transform="rotate(14 650 355)" fill="url(#fur)" opacity="0.76"/>
+      <circle cx="540" cy="650" r="255" fill="url(#fur)" opacity="0.76"/>
+      <circle cx="460" cy="620" r="27" fill="#090A14"/>
+      <circle cx="620" cy="620" r="27" fill="#090A14"/>
+      <path d="M514 695c13-11 39-11 52 0-6 17-17 26-26 26s-20-9-26-26Z" fill="#090A14"/>
+      <path d="m835 240 16 37 37 16-37 16-16 37-16-37-37-16 37-16 16-37Z" fill="#F7F8F8"/>
+    </svg>`;
+    return sharp(Buffer.from(fallback)).png().toBuffer();
   }
 
   try {

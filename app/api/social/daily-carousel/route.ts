@@ -6,16 +6,20 @@ import {
   buildDailyCarouselPayload,
   getBelgradeDate,
   getNextIsoDate,
+  rankDailyCarouselEvents,
   type DailyCarouselEvent,
 } from "@/lib/social/daily-carousel";
 import { getRequiredEnv } from "@/lib/utils/env";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 const listPublicCalendarEventsWindowQuery =
   "events:listPublicCalendarEventsWindow" as unknown as FunctionReference<"query">;
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_POSTER_CANDIDATES = 30;
+const POSTER_PROBE_BATCH_SIZE = 6;
 
 function getRequestedDate(request: Request): string {
   const requestedDate = new URL(request.url).searchParams.get("date")?.trim();
@@ -27,6 +31,67 @@ function getRequestedDate(request: Request): string {
   }
   getNextIsoDate(requestedDate);
   return requestedDate;
+}
+
+async function hasUsablePoster(request: Request, event: DailyCarouselEvent): Promise<boolean> {
+  const url = new URL(`/api/discover/images/${encodeURIComponent(event._id)}`, request.url);
+  const handle = event.venueInstagramHandle?.trim().replace(/^@+/, "").toLowerCase();
+  if (handle) {
+    url.searchParams.set("handle", handle);
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const response = await fetch(url, {
+      cache: "no-store",
+      headers: { accept: "image/avif,image/webp,image/png,image/jpeg" },
+      signal: controller.signal,
+    });
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    await response.body?.cancel();
+    return response.ok && contentType.startsWith("image/") && !contentType.includes("svg");
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function selectPosterReadyEvents(
+  request: Request,
+  events: DailyCarouselEvent[],
+  publishDate: string,
+): Promise<DailyCarouselEvent[]> {
+  const ranked = rankDailyCarouselEvents(events, publishDate);
+  const candidates = ranked.slice(0, MAX_POSTER_CANDIDATES);
+  const selected: DailyCarouselEvent[] = [];
+
+  for (
+    let offset = 0;
+    offset < candidates.length && selected.length < 6;
+    offset += POSTER_PROBE_BATCH_SIZE
+  ) {
+    const batch = candidates.slice(offset, offset + POSTER_PROBE_BATCH_SIZE);
+    const availability = await Promise.all(batch.map((event) => hasUsablePoster(request, event)));
+    batch.forEach((event, index) => {
+      if (availability[index] && selected.length < 6) {
+        selected.push(event);
+      }
+    });
+  }
+
+  if (selected.length < 6) {
+    const selectedIds = new Set(selected.map((event) => event._id));
+    for (const event of ranked) {
+      if (!selectedIds.has(event._id)) {
+        selected.push(event);
+      }
+      if (selected.length >= 6) {
+        break;
+      }
+    }
+  }
+  return selected;
 }
 
 export async function GET(request: Request) {
@@ -42,7 +107,13 @@ export async function GET(request: Request) {
       beforeDate: getNextIsoDate(publishDate),
     })) as DailyCarouselEvent[];
     const origin = new URL(request.url).origin;
-    const payload = buildDailyCarouselPayload({ events, publishDate, publicOrigin: origin });
+    const selectedEvents = await selectPosterReadyEvents(request, events, publishDate);
+    const payload = buildDailyCarouselPayload({
+      events,
+      publishDate,
+      publicOrigin: origin,
+      selectedEvents,
+    });
 
     return NextResponse.json(payload, {
       headers: {

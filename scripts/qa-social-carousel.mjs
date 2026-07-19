@@ -86,6 +86,18 @@ assert.equal(eventMetadata.width, 1080);
 assert.equal(eventMetadata.height, 1350);
 assert.equal(eventMetadata.format, "png");
 
+const fallbackEventImage = await renderEventCarouselSlide({
+  poster: null,
+  title: "Događaj bez dostupnog postera",
+  venue: "Beograd",
+  instagramHandle: "eventzeka",
+  date: publishDate,
+});
+const fallbackMetadata = await sharp(fallbackEventImage).metadata();
+assert.equal(fallbackMetadata.width, 1080);
+assert.equal(fallbackMetadata.height, 1350);
+assert.equal(fallbackMetadata.format, "png");
+
 const ctaImage = await renderCtaCarouselSlide();
 const ctaMetadata = await sharp(ctaImage).metadata();
 assert.equal(ctaMetadata.width, 1080);
@@ -102,6 +114,8 @@ const eventRouteSource = readFileSync(
 );
 assert.match(payloadRouteSource, /isAuthorizedCronRequestHeader/);
 assert.match(payloadRouteSource, /listPublicCalendarEventsWindow/);
+assert.match(payloadRouteSource, /hasUsablePoster/);
+assert.match(payloadRouteSource, /selectPosterReadyEvents/);
 assert.match(eventRouteSource, /getPublicApprovedEvent/);
 assert.match(eventRouteSource, /renderEventCarouselSlide/);
 

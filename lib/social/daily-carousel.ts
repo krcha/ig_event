@@ -69,12 +69,10 @@ export function getNextIsoDate(date: string): string {
   return parsed.toISOString().slice(0, 10);
 }
 
-export function selectDailyCarouselEvents(
+export function rankDailyCarouselEvents(
   events: DailyCarouselEvent[],
   publishDate: string,
-  limit = DEFAULT_CAROUSEL_EVENT_LIMIT,
 ): DailyCarouselEvent[] {
-  const boundedLimit = Math.max(1, Math.min(DEFAULT_CAROUSEL_EVENT_LIMIT, Math.floor(limit)));
   const ranked = events
     .filter((event) => event.date === publishDate && normalizeInstagramHandle(event.venueInstagramHandle))
     .map((event) => ({
@@ -95,11 +93,17 @@ export function selectDailyCarouselEvents(
     }
     seenVenues.add(venueKey);
     selected.push(event);
-    if (selected.length >= boundedLimit) {
-      break;
-    }
   }
   return selected;
+}
+
+export function selectDailyCarouselEvents(
+  events: DailyCarouselEvent[],
+  publishDate: string,
+  limit = DEFAULT_CAROUSEL_EVENT_LIMIT,
+): DailyCarouselEvent[] {
+  const boundedLimit = Math.max(1, Math.min(DEFAULT_CAROUSEL_EVENT_LIMIT, Math.floor(limit)));
+  return rankDailyCarouselEvents(events, publishDate).slice(0, boundedLimit);
 }
 
 function compactCaptionText(value: string, maxLength = MAX_CAPTION_EVENT_TITLE_LENGTH): string {
@@ -150,8 +154,11 @@ export function buildDailyCarouselPayload(options: {
   events: DailyCarouselEvent[];
   publishDate: string;
   publicOrigin: string;
+  selectedEvents?: DailyCarouselEvent[];
 }): DailyCarouselPayload {
-  const selected = selectDailyCarouselEvents(options.events, options.publishDate);
+  const selected = options.selectedEvents
+    ? options.selectedEvents.slice(0, DEFAULT_CAROUSEL_EVENT_LIMIT)
+    : selectDailyCarouselEvents(options.events, options.publishDate);
   const eventSlides: DailyCarouselSlide[] = selected.map((event) => {
     const username = normalizeInstagramHandle(event.venueInstagramHandle);
     return {
