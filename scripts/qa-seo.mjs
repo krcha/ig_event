@@ -8,6 +8,7 @@ import {
   buildVenueStructuredData,
   serializeJsonLd,
 } from "../lib/seo/site.ts";
+import { loadValidatedSitemapPublicData } from "../lib/seo/sitemap-data.ts";
 
 function read(path) {
   return readFileSync(path, "utf8");
@@ -96,6 +97,61 @@ assert.deepEqual(venueJsonLd.address, {
   streetAddress: "Dorcol, Belgrade",
 });
 
+const successfulEventResult = { events: [{ _id: "event-1" }] };
+const successfulVenueResult = { venues: [{ _id: "venue-1" }] };
+let venueLoaderCalls = 0;
+await assert.rejects(
+  () =>
+    loadValidatedSitemapPublicData({
+      today: "2026-07-20",
+      loadEvents: async () => ({ events: [], error: "events unavailable" }),
+      loadVenues: async () => {
+        venueLoaderCalls += 1;
+        return successfulVenueResult;
+      },
+    }),
+  /Unable to build SEO sitemap: events unavailable/,
+);
+assert.equal(
+  venueLoaderCalls,
+  0,
+  "A failed event load should throw before the cached callback can return or start venue work.",
+);
+
+let eventAttempts = 0;
+const retryResult = await (async () => {
+  const options = {
+    today: "2026-07-20",
+    loadEvents: async () => {
+      eventAttempts += 1;
+      return eventAttempts === 1
+        ? { events: [], error: "transient Convex error" }
+        : successfulEventResult;
+    },
+    loadVenues: async () => successfulVenueResult,
+  };
+  await assert.rejects(
+    () => loadValidatedSitemapPublicData(options),
+    /Unable to build SEO sitemap: transient Convex error/,
+  );
+  return loadValidatedSitemapPublicData(options);
+})();
+assert.equal(eventAttempts, 2, "A transient failure should be retryable rather than returned as cache data.");
+assert.deepEqual(retryResult, {
+  eventResult: successfulEventResult,
+  venueResult: successfulVenueResult,
+});
+
+await assert.rejects(
+  () =>
+    loadValidatedSitemapPublicData({
+      today: "2026-07-20",
+      loadEvents: async () => successfulEventResult,
+      loadVenues: async () => ({ venues: [], error: "venues unavailable" }),
+    }),
+  /Unable to build SEO sitemap: venues unavailable/,
+);
+
 const serialized = serializeJsonLd({ text: "</script>\u2028\u2029" });
 assert.equal(serialized.includes("</script>"), false);
 assert.ok(serialized.includes("\\u003c/script>"));
@@ -115,6 +171,7 @@ const adminLayout = read("app/(dashboard)/admin/layout.tsx");
 const authLayout = read("app/(auth)/layout.tsx");
 const robots = read("app/robots.ts");
 const sitemap = read("app/sitemap.ts");
+const sitemapData = read("lib/seo/sitemap-data.ts");
 const nextConfig = read("next.config.mjs");
 const convexEvents = read("convex/events.ts");
 const convexVenues = read("convex/venues.ts");
@@ -191,7 +248,10 @@ assert.ok(sitemap.includes("loadPublicCalendarEventsWindow"));
 assert.ok(sitemap.includes("loadPublicVenueDirectory"));
 assert.ok(sitemap.includes('dynamic = "force-dynamic"'));
 assert.ok(sitemap.includes("unstable_cache"));
-assert.ok(sitemap.includes("limit: 2000"));
+assert.ok(sitemap.includes("loadValidatedSitemapPublicData"));
+assert.ok(sitemap.includes('"seo-sitemap-public-data-v2"'));
+assert.ok(sitemapData.includes("limit: 2000"));
+assert.ok(sitemapData.includes("addDaysToDateKey(options.today, 367)"));
 assert.ok(sitemap.includes("/discover"));
 assert.ok(sitemap.includes("/venues"));
 assert.ok(sitemap.includes("/events/${event._id}"));
