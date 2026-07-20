@@ -1609,6 +1609,7 @@ function stripSplitEntryDateText(value: string, rawDate: string): string {
   return stripped
     .replace(SPLIT_ENTRY_WEEKDAY_PREFIX_REGEX, "")
     .replace(/\b(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?|ponedeljak|pon|utorak|uto|sreda|sre|cetvrtak|četvrtak|cet|čet|petak|pet|subota|sub|nedelja|nedjelja|ned)\b/giu, " ")
+    .replace(/^[\s.,:;|/\\—–-]+/u, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -1690,6 +1691,17 @@ function containsNormalizedTokenSequence(value: string, expected: string): boole
   );
 }
 
+function stripHashtagIdentityTokens(value: string): string {
+  return value.replace(/#[\p{L}\p{N}._-]+/gu, " ");
+}
+
+const LOCAL_BILLED_MENTION_PATTERN_SOURCE =
+  String.raw`(?:^|[\s|,;])(?:w\/|with|uz|sa|feat(?:uring)?|ft\.?)\s*@([\p{L}\p{N}_.-]+)`;
+
+function containsNonHashtagIdentity(value: string, expected: string): boolean {
+  return containsNormalizedTokenSequence(stripHashtagIdentityTokens(value), expected);
+}
+
 function splitSourceLineAtDateAnchors(value: string): string[] {
   const line = normalizeString(value);
   if (!line) {
@@ -1715,12 +1727,40 @@ function splitSourceLineAtDateAnchors(value: string): string[] {
 }
 
 function buildSourceGroundingSegments(value: string | null | undefined): string[] {
-  return normalizeString(value)
+  const datePeriodPlaceholder = "\uE000";
+  const protectedText = normalizeString(value).replace(
+    /\b(\d{1,2}[./-]\d{1,2}(?:[./-](?:\d{2}|\d{4}))?)\.(?=\s|$)/gu,
+    `$1${datePeriodPlaceholder}`,
+  );
+  const atomicSegments = protectedText
     .split(
-      /\r?\n|[,;•·●▪◦]+|\s+\|\s+|\s+\/\s+|\s+[—–-]\s+|(?<=[.!?])\s+/u,
+      /\r?\n|[;•·●▪◦]+|\s+\|\s+|\s+\/\s+|\s+[—–-]\s+|(?<=[.!?])\s+/u,
     )
+    .map((segment) => segment.replaceAll(datePeriodPlaceholder, "."))
     .flatMap(splitSourceLineAtDateAnchors)
     .filter(Boolean);
+  const structuredLineAnchors = protectedText
+    .split(/\r?\n/u)
+    .map((line) => line.split(/(?<=[.!?])\s+/u, 1)[0] ?? "")
+    .filter((line) => /\s\|\s/u.test(line))
+    .map((line) => line.replaceAll(datePeriodPlaceholder, ".").trim())
+    .filter(Boolean);
+  return [...new Set([...atomicSegments, ...structuredLineAnchors])];
+}
+
+const SOURCE_GROUNDING_CLOCK_PATTERN =
+  String.raw`(?:[01]?\d|2[0-3])(?:[:.][0-5]\d\s*h?|\s*h(?:[0-5]\d)?)`;
+const SOURCE_GROUNDING_LABELED_CLOCK_PATTERN =
+  String.raw`(?:${SOURCE_GROUNDING_CLOCK_PATTERN}|(?:[01]?\d|2[0-3]))`;
+
+function stripDoorOpeningClockValues(value: string): string {
+  return value.replace(
+    new RegExp(
+      String.raw`\b(?:vrata(?:\s+se)?\s+otvaraju|doors?\s+open(?:s)?)[^\n.!?]{0,40}?(?:u|at)?\s*${SOURCE_GROUNDING_LABELED_CLOCK_PATTERN}\b`,
+      "giu",
+    ),
+    " ",
+  );
 }
 
 function countSourceClockValues(value: string): number {
@@ -1729,7 +1769,7 @@ function countSourceClockValues(value: string): number {
     " ",
   );
   const clockValues = withoutDates.match(
-    /\b(?:(?:[01]?\d|2[0-3])(?:[:.h][0-5]\d|\s*h))\b/giu,
+    new RegExp(String.raw`\b${SOURCE_GROUNDING_CLOCK_PATTERN}\b`, "giu"),
   ) ?? [];
   return clockValues.length;
 }
@@ -1739,11 +1779,39 @@ function collectSupportedDates(
   postedAt: string | null | undefined,
 ): string[] {
   const postDate = parsePostedAt(postedAt ?? null);
-  return [...new Set(
-    collectDateCandidates(value, "caption", postDate).map(
-      (candidate) => candidate.isoDate,
+  const withoutExplicitClocks = value.replace(
+    /\b(?:[01]?\d|2[0-3])(?:[:.][0-5]\d)?\s*h(?:[0-5]\d)?\b|\b(?:[01]?\d|2[0-3]):[0-5]\d\b/giu,
+    " ",
+  );
+  const candidates = collectDateCandidates(withoutExplicitClocks, "caption", postDate);
+  const dayFirstNumericAnchors = [
+    ...withoutExplicitClocks.matchAll(
+      /\b(\d{1,2})[./-](\d{1,2})(?:[./-](?:\d{2}|\d{4}))?\b/gu,
     ),
-  )];
+  ]
+    .map((match) => ({
+      day: Number.parseInt(match[1] ?? "", 10),
+      month: Number.parseInt(match[2] ?? "", 10),
+    }))
+    .filter(({ day, month }) => day >= 1 && day <= 31 && month >= 1 && month <= 12);
+  if (dayFirstNumericAnchors.length > 0) {
+    return [...new Set(
+      candidates
+        .filter((candidate) => {
+          const match = /^\d{4}-(\d{2})-(\d{2})$/u.exec(candidate.isoDate);
+          if (!match) {
+            return false;
+          }
+          const month = Number.parseInt(match[1], 10);
+          const day = Number.parseInt(match[2], 10);
+          return dayFirstNumericAnchors.some(
+            (anchor) => anchor.day === day && anchor.month === month,
+          );
+        })
+        .map((candidate) => candidate.isoDate),
+    )];
+  }
+  return [...new Set(candidates.map((candidate) => candidate.isoDate))];
 }
 
 function prefixSupportsNormalizedEventDate(
@@ -1807,11 +1875,42 @@ function hasExplicitBilledEventContext(
   normalizedDate: string,
   postedAt: string | null | undefined,
 ): boolean {
-  const searchableSegment = toSearchableText(segment);
+  const searchableSegment = toSearchableText(stripHashtagIdentityTokens(segment));
   const searchableTitle = toSearchableText(title);
   if (!searchableTitle) {
     return false;
   }
+  const quotedWorkTitle = extractQuotedCulturalWorkTitleCandidate(segment, undefined);
+  const hasQuotedYearQualifiedTitle =
+    toSearchableText(quotedWorkTitle ?? "") === searchableTitle;
+  const quotedCulturalWorkTitle = extractQuotedCulturalWorkTitleCandidate(segment, "film");
+  const hasQuotedCulturalWorkInTitle = Boolean(
+    quotedCulturalWorkTitle &&
+      containsNormalizedTokenSequence(searchableTitle, quotedCulturalWorkTitle),
+  );
+  const titleIsBilledArtist = artists.some(
+    (artist) => toSearchableText(artist) === searchableTitle,
+  );
+  const titleArtistTokens = searchableTitle
+    .split(/\s+/u)
+    .filter((token) => token.length >= 2);
+  const titleArtistKeys = [
+    titleArtistTokens.join(""),
+    [...titleArtistTokens].reverse().join(""),
+  ];
+  const hasSourceMentionForTitleArtist =
+    titleIsBilledArtist &&
+    titleArtistTokens.length >= 2 &&
+    [...segment.matchAll(
+      new RegExp(LOCAL_BILLED_MENTION_PATTERN_SOURCE, "giu"),
+    )].some((match) => {
+      const searchableMention = toSearchableText(match[1] ?? "").replace(/\s+/gu, "");
+      return titleArtistKeys.includes(searchableMention);
+    });
+  const titleHasDirectEventFormatLabel =
+    /^(?:projekcija filma|filmska projekcija|pozorisna predstava|pozori[sš]na predstava|izlozba|izlo[zž]ba|radionica|kviz|koncert|jam session)\b/iu.test(
+      searchableTitle,
+    ) && /\s[|•·●▪◦]\s/u.test(segment);
 
   if (
     /^(?:vidimo se|see you|save the date|dodjite(?: svi)?|dođite(?: svi)?|join us|come through|pridruzite se|pridružite se|ne propustite|dont miss|rezervisite|rezervišite|book now|saznajte vise|saznajte više|dress code|doors? open|vrata|ulaz|entry|tickets?|karte|reservations?|rezervacije|summer memories|party people|dj mix|album drops?|new album|new single|music video|photo dump|throwback album|good vibes|tonight|today|sutra|veceras|lineup|raspored|program|schedule|this week|ove nedelje|weekend)(?:\s|$)/iu.test(
@@ -1839,53 +1938,97 @@ function hasExplicitBilledEventContext(
       `live ${searchableArtist}`,
       `with ${searchableArtist}`,
       `uz ${searchableArtist}`,
+      `svira ${searchableArtist}`,
+      `${searchableArtist} svira`,
+      `nastupa ${searchableArtist}`,
+      `${searchableArtist} nastupa`,
+      `gostuje ${searchableArtist}`,
+      `${searchableArtist} gostuje`,
       `${searchableArtist} live`,
       `${searchableArtist} b2b`,
     ].some((pattern) => containsNormalizedTokenSequence(searchableSegment, pattern));
   });
-  if (!hasExplicitArtistCue) {
-    return false;
-  }
+  const hasExplicitEventCue = [
+    `svira ${searchableTitle}`,
+    `${searchableTitle} svira`,
+    `nastupa ${searchableTitle}`,
+    `${searchableTitle} nastupa`,
+    `gostuje ${searchableTitle}`,
+    `${searchableTitle} gostuje`,
+    `live ${searchableTitle}`,
+    `${searchableTitle} live`,
+    `projekcija ${searchableTitle}`,
+    `prikazujemo ${searchableTitle}`,
+    `film ${searchableTitle}`,
+    `predstava ${searchableTitle}`,
+    `izlozba ${searchableTitle}`,
+    `radionica ${searchableTitle}`,
+    `kviz ${searchableTitle}`,
+    `koncert ${searchableTitle}`,
+    `jam session ${searchableTitle}`,
+  ].some((pattern) => containsNormalizedTokenSequence(searchableSegment, pattern));
+  const hasEventLogisticsCue =
+    /\b(?:vrata(?:\s+se)?\s+otvaraju|doors?\s+open(?:s)?)\b/iu.test(searchableSegment);
 
   const segmentTokens = searchableSegment.split(/\s+/u).filter(Boolean);
   const titleTokens = searchableTitle.split(/\s+/u).filter(Boolean);
   const titleStart = segmentTokens.findIndex((_, index) =>
     titleTokens.every((token, offset) => segmentTokens[index + offset] === token),
   );
-  if (titleStart <= 0) {
+  if (titleStart < 0) {
     return false;
   }
   const prefixTokens = segmentTokens.slice(0, titleStart);
   if (["dj", "live"].includes(prefixTokens.at(-1) ?? "")) {
     prefixTokens.pop();
   }
-  return prefixSupportsNormalizedEventDate(
+  const hasStructuredDatePrefix = prefixSupportsNormalizedEventDate(
     prefixTokens,
     normalizedDate,
     postedAt,
+  );
+  return (
+    hasStructuredDatePrefix ||
+    hasExplicitArtistCue ||
+    hasExplicitEventCue ||
+    hasQuotedCulturalWorkInTitle ||
+    titleHasDirectEventFormatLabel ||
+    (titleStart === 0 && hasSourceMentionForTitleArtist) ||
+    (hasEventLogisticsCue && hasQuotedYearQualifiedTitle)
   );
 }
 
 function hasCoherentBilledArtists(
   segment: string,
   artists: string[],
+  title: string,
 ): boolean {
   if (artists.length === 0) {
     return true;
   }
 
-  const searchableSegment = toSearchableText(segment);
+  const searchableSegment = toSearchableText(stripHashtagIdentityTokens(segment));
+  const searchableTitle = toSearchableText(title);
 
   return artists.every((artist) => {
     const searchableArtist = toSearchableText(artist);
     if (!searchableArtist || !containsNormalizedTokenSequence(searchableSegment, searchableArtist)) {
       return false;
     }
+    if (searchableArtist === searchableTitle) {
+      return true;
+    }
     return [
       `dj ${searchableArtist}`,
       `live ${searchableArtist}`,
       `with ${searchableArtist}`,
       `uz ${searchableArtist}`,
+      `svira ${searchableArtist}`,
+      `${searchableArtist} svira`,
+      `nastupa ${searchableArtist}`,
+      `${searchableArtist} nastupa`,
+      `gostuje ${searchableArtist}`,
+      `${searchableArtist} gostuje`,
       `${searchableArtist} live`,
       `${searchableArtist} b2b`,
     ].some((pattern) => containsNormalizedTokenSequence(searchableSegment, pattern));
@@ -1911,7 +2054,46 @@ export function evaluateCoreEventSourceGrounding(options: {
   venue?: string | null;
   instagramHandle?: string | null;
 }): CoreEventSourceGrounding {
-  const segments = buildSourceGroundingSegments(options.independentTextEvidence);
+  const sourceText = normalizeString(options.independentTextEvidence);
+  const baseSegments = buildSourceGroundingSegments(sourceText);
+  const segments = [...baseSegments];
+  const sourceDates = collectSupportedDates(sourceText, options.postedAt);
+  const explicitStartSegmentPattern = new RegExp(
+    String.raw`^(?:po[cč]etak(?:\s+(?:u|od))?|starts?(?:\s+at)?)\s*${SOURCE_GROUNDING_LABELED_CLOCK_PATTERN}\b`,
+    "iu",
+  );
+  if (!normalizeString(options.splitSource) && sourceDates.length === 1) {
+    const [sourceDate] = sourceDates;
+    const datedSegments = baseSegments.filter((segment) =>
+      collectSupportedDates(segment, options.postedAt).includes(sourceDate),
+    );
+    const explicitlyLabeledStarts = baseSegments.filter((segment) =>
+      explicitStartSegmentPattern.test(normalizeString(segment)),
+    );
+    const quotedWorkSegments = baseSegments.filter((segment) =>
+      Boolean(extractQuotedCulturalWorkTitleCandidate(segment, undefined)),
+    );
+    const locallyBilledMentionSegments = baseSegments.filter((segment) =>
+      new RegExp(LOCAL_BILLED_MENTION_PATTERN_SOURCE, "iu").test(segment),
+    );
+    for (const datedSegment of datedSegments) {
+      for (const followingStart of explicitlyLabeledStarts) {
+        // Bind only an explicitly labeled start clock to the single dated
+        // event row. Never rejoin arbitrary prose or unrelated clocks.
+        segments.push(`${datedSegment} ${followingStart}`);
+      }
+      for (const quotedWorkSegment of quotedWorkSegments) {
+        // A quoted work with an immediate year is deterministic cultural-work
+        // identity and may occupy the next layout line of a single-date post.
+        segments.push(`${datedSegment} ${quotedWorkSegment}`);
+      }
+      for (const billedMentionSegment of locallyBilledMentionSegments) {
+        // A local billing cue plus handle is source authority; a bare or
+        // unrelated account mention is not.
+        segments.push(`${datedSegment} ${billedMentionSegment}`);
+      }
+    }
+  }
   const title = normalizeString(options.title);
   const normalizedDate = normalizeString(options.normalizedDate);
   const expectedTime = isTbdEventTime(options.time)
@@ -1932,13 +2114,13 @@ export function evaluateCoreEventSourceGrounding(options: {
   const identityAllowed =
     !options.titleUsedFallback && !titleMatchesVenue && !titleMatchesHandle;
   const titleVerified =
-    identityAllowed && segments.some((segment) => containsNormalizedTokenSequence(segment, title));
+    identityAllowed && segments.some((segment) => containsNonHashtagIdentity(segment, title));
   const dateVerified =
     Boolean(normalizedDate) &&
     segments.some((segment) => collectSupportedDates(segment, options.postedAt).includes(normalizedDate));
   const identityContextVerified = segments.some(
     (segment) =>
-      containsNormalizedTokenSequence(segment, title) &&
+      containsNonHashtagIdentity(segment, title) &&
       hasExplicitBilledEventContext(
         segment,
         title,
@@ -1949,11 +2131,14 @@ export function evaluateCoreEventSourceGrounding(options: {
   );
   const identityVerified = titleVerified && identityContextVerified;
   const timeVerified = expectedTime
-    ? segments.some((segment) => extractEventTimeFromText(segment) === expectedTime)
+    ? segments.some(
+        (segment) =>
+          extractEventTimeFromText(stripDoorOpeningClockValues(segment)) === expectedTime,
+      )
     : null;
   const artistsVerified = artists.length > 0
     ? artists.every((artist) =>
-        segments.some((segment) => containsNormalizedTokenSequence(segment, artist)),
+        segments.some((segment) => containsNonHashtagIdentity(segment, artist)),
       )
     : null;
   const rowVerified =
@@ -1962,10 +2147,9 @@ export function evaluateCoreEventSourceGrounding(options: {
     segments.some((segment) => {
       const supportedDates = collectSupportedDates(segment, options.postedAt);
       if (
-        supportedDates.length !== 1 ||
-        supportedDates[0] !== normalizedDate ||
-        countSourceClockValues(segment) > 1 ||
-        !containsNormalizedTokenSequence(segment, title) ||
+        !supportedDates.includes(normalizedDate) ||
+        countSourceClockValues(stripDoorOpeningClockValues(segment)) > 1 ||
+        !containsNonHashtagIdentity(segment, title) ||
         !hasExplicitBilledEventContext(
           segment,
           title,
@@ -1973,17 +2157,20 @@ export function evaluateCoreEventSourceGrounding(options: {
           normalizedDate,
           options.postedAt,
         ) ||
-        !hasCoherentBilledArtists(segment, artists)
+        !hasCoherentBilledArtists(segment, artists, title)
       ) {
         return false;
       }
       if (
         artists.length > 0 &&
-        !artists.every((artist) => containsNormalizedTokenSequence(segment, artist))
+        !artists.every((artist) => containsNonHashtagIdentity(segment, artist))
       ) {
         return false;
       }
-      if (expectedTime && extractEventTimeFromText(segment) !== expectedTime) {
+      if (
+        expectedTime &&
+        extractEventTimeFromText(stripDoorOpeningClockValues(segment)) !== expectedTime
+      ) {
         return false;
       }
       return true;
@@ -3557,7 +3744,8 @@ function findEventTimeEvidence(
     }
     seenText.add(dedupeKey);
 
-    const extracted = extractEventTimeEvidenceFromText(text);
+    const startTimeText = stripDoorOpeningClockValues(text);
+    const extracted = extractEventTimeEvidenceFromText(startTimeText);
     if (extracted) {
       return {
         source: candidate.source,
@@ -6495,7 +6683,7 @@ export function prepareEventsForInsert(
     const approvalCaptionSourceCoherent = isCaptionSourceCoherentWithEvent({
       title: variant.title,
       date,
-      time,
+      time: safeTime,
       venue: venueNormalization.venue,
       artists: variant.artists,
       sourceCaption: post.caption,
