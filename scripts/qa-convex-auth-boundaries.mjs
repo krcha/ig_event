@@ -64,6 +64,7 @@ for (const functionName of [
 for (const functionName of [
   "createEvent",
   "updateEvent",
+  "reprocessPendingSourceGroundingBatch",
   "listByStatus",
   "listByStatusPaginated",
   "listByDate",
@@ -73,6 +74,31 @@ for (const functionName of [
   const pattern = new RegExp(`export const ${functionName} = [\\s\\S]*?requireAdminOrServiceSecret`);
   assert.match(eventsSource, pattern, `${functionName} should require admin or service secret.`);
 }
+
+const reprocessMutationSource = eventsSource.match(
+  /export const reprocessPendingSourceGroundingBatch = mutation\(\{([\s\S]*?)\n\}\);/,
+)?.[1];
+assert.ok(reprocessMutationSource, "Source-grounding reprocessing mutation should exist.");
+assert.match(
+  reprocessMutationSource,
+  /serviceSecret:\s*v\.string\(\)/,
+  "Source-grounding reprocessing must require an explicit service secret.",
+);
+assert.match(
+  reprocessMutationSource,
+  /kind !== "service"/,
+  "Source-grounding reprocessing must reject authenticated admin fallback.",
+);
+assert.match(
+  eventsSource,
+  /const sourceGroundingReprocessItem = v\.object\(\{\s*id: v\.id\("events"\),\s*expectedUpdatedAt: v\.number\(\),\s*expectedNormalizedFieldsJson: v\.string\(\),\s*nextNormalizedFieldsJson: v\.string\(\),\s*\}\);/,
+  "The reprocessing payload must contain only the event ID and exact attestation preconditions.",
+);
+assert.doesNotMatch(
+  reprocessMutationSource.match(/args:\s*\{([\s\S]*?)\n\s*\},\n\s*handler:/)?.[1] ?? "",
+  /\b(?:patch|title|date|time|venue|artists|sourceCaption|instagramPostId|instagramPostUrl)\b/,
+  "The reprocessing mutation must not accept caller-controlled public or source fields.",
+);
 
 assert.match(
   eventsSource,

@@ -6253,6 +6253,7 @@ export function prepareEventsForInsert(
   canonicalVenueNamesByHandle: Record<string, string>,
   venueNameOverridesByHandle: Record<string, string>,
   configuredVenueNamesByHandle: Record<string, string>,
+  options: { eventDateFilterNow?: Date } = {},
 ): PrepareEventResult[] {
   const eventType = canonicalizeEventType(normalizeString(extracted.category));
   const description = normalizeExtractedDescription(extracted.description);
@@ -6346,7 +6347,7 @@ export function prepareEventsForInsert(
         venue: venueNormalization.venue,
       })
     : description;
-  const eventDateFilter = getEventDateFilterContext();
+  const eventDateFilter = getEventDateFilterContext(options.eventDateFilterNow);
   const isCaptionOnlyVideo = isVideoPostWithoutSelectedImage(post, selectedImageUrl);
   const extractionMode = selectedImageUrl ? "poster" : "caption_only";
   const missingImage = !selectedImageUrl;

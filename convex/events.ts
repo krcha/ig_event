@@ -48,6 +48,13 @@ const eventTimeStatus = v.union(
   v.literal("unknown"),
 );
 const moderationStatus = v.union(v.literal("approved"), v.literal("rejected"));
+const sourceGroundingReprocessItem = v.object({
+  id: v.id("events"),
+  expectedUpdatedAt: v.number(),
+  expectedNormalizedFieldsJson: v.string(),
+  nextNormalizedFieldsJson: v.string(),
+});
+const MAX_SOURCE_GROUNDING_REPROCESS_BATCH_SIZE = 100;
 const DEFAULT_EXPIRED_EVENT_DELETE_BATCH_SIZE = 100;
 const DISCOVER_ORGANIC_SCAN_LIMIT = 120;
 
@@ -1016,6 +1023,86 @@ export const updateEvent = mutation({
       actor,
       patch,
     });
+  },
+});
+
+export const reprocessPendingSourceGroundingBatch = mutation({
+  args: {
+    serviceSecret: v.string(),
+    items: v.array(sourceGroundingReprocessItem),
+  },
+  handler: async (ctx, args) => {
+    const { actor, kind } = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    if (kind !== "service") {
+      throw new Error("Service authentication required.");
+    }
+    if (args.items.length === 0) {
+      throw new Error("Source-grounding reprocessing requires at least one event.");
+    }
+    if (args.items.length > MAX_SOURCE_GROUNDING_REPROCESS_BATCH_SIZE) {
+      throw new Error(
+        `Source-grounding reprocessing is limited to ${MAX_SOURCE_GROUNDING_REPROCESS_BATCH_SIZE} events.`,
+      );
+    }
+
+    const eventIds = new Set<string>();
+    const prepared: Array<{
+      event: Doc<"events">;
+      item: (typeof args.items)[number];
+    }> = [];
+    for (const item of args.items) {
+      if (eventIds.has(item.id)) {
+        throw new Error(`Duplicate source-grounding reprocess event ID: ${item.id}.`);
+      }
+      eventIds.add(item.id);
+      if (!Number.isSafeInteger(item.expectedUpdatedAt)) {
+        throw new Error(`Invalid expectedUpdatedAt for event ${item.id}.`);
+      }
+      if (item.nextNormalizedFieldsJson === item.expectedNormalizedFieldsJson) {
+        throw new Error(`Source-grounding attestation did not change for event ${item.id}.`);
+      }
+
+      const event = await ctx.db.get(item.id);
+      if (!event) {
+        throw new Error(`Event not found: ${item.id}.`);
+      }
+      assertExpectedEventStatus(event.status, "pending");
+      if (event.updatedAt !== item.expectedUpdatedAt) {
+        throw new Error(`Event changed during reprocessing: ${item.id}.`);
+      }
+      if (event.normalizedFieldsJson !== item.expectedNormalizedFieldsJson) {
+        throw new Error(`Normalized fields changed during reprocessing: ${item.id}.`);
+      }
+      prepared.push({ event, item });
+    }
+
+    const now = Date.now();
+    for (const { event, item } of prepared) {
+      if (!event.venueInstagramHandle) {
+        throw new Error(`Resolved source venue handle required for event ${event._id}.`);
+      }
+      const policyPatch = {
+        status: "approved" as const,
+        normalizedFieldsJson: item.nextNormalizedFieldsJson,
+      };
+      assertServiceUpdateEventPolicy(event.status, policyPatch, event);
+      await assertPersistedServiceSourcePolicy(ctx, event);
+      await assertApprovalCandidatePolicy(ctx, event, [event._id]);
+      await ctx.db.patch(event._id, {
+        status: "approved",
+        normalizedFieldsJson: item.nextNormalizedFieldsJson,
+        updatedAt: now,
+      });
+      await writeEventAuditLog(ctx, event._id, "source_grounding_reprocessed", {
+        actor,
+        patch: policyPatch,
+      });
+    }
+
+    return {
+      updatedCount: prepared.length,
+      eventIds: prepared.map(({ event }) => event._id),
+    };
   },
 });
 

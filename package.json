@@ -25,6 +25,7 @@
     "qa:google-hours": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-google-hours-mapping.mjs",
     "qa:reclassify-dryrun": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/reclassify-event-types.mjs",
     "repair:event-consistency": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/repair-event-consistency.mjs",
+    "reprocess:source-grounding": "node --conditions=react-server --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/reprocess-pending-source-grounding.mjs",
     "repair:event-schedule-entries": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/repair-event-schedule-entries.mjs",
     "repair:event-tbd-times": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/repair-event-tbd-times.mjs",
     "repair:event-venue-names": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/repair-event-venue-names.mjs",
