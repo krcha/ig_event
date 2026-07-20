@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { ConvexHttpClient } from "convex/browser";
 
@@ -254,13 +255,12 @@ function createExclusiveBackup(targets, manifestSha256) {
   return { backupPath, backupSha256: sha256(reread) };
 }
 
-async function loadExactTargetRows(client, serviceSecret, targets) {
+export async function loadExactTargetRows(client, serviceSecret, targets) {
   const dates = [...new Set(targets.map((event) => event.date))];
-  const rows = (
-    await Promise.all(
-      dates.map((date) => client.query("events:listByDate", { date, serviceSecret })),
-    )
-  ).flat();
+  const rows = [];
+  for (const date of dates) {
+    rows.push(...(await client.query("events:listByDate", { date, serviceSecret })));
+  }
   const targetIds = new Set(targets.map((event) => event._id));
   const byId = new Map(rows.filter((event) => targetIds.has(event._id)).map((event) => [event._id, event]));
   if (byId.size !== targetIds.size) {
@@ -447,4 +447,6 @@ async function main() {
   console.log(JSON.stringify({ ...report, reportPath }, null, 2));
 }
 
-await main();
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  await main();
+}
