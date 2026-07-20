@@ -56,13 +56,23 @@ try {
   for (const [route, expectedStatus] of [
     ["/", 200],
     ["/sign-in", 200],
-    ["/api/ready", 200],
+    ["/api/ready", null],
     ["/does-not-exist", 404],
     ["/events/not-an-id", 404],
     ["/venues/not-an-id", 404],
   ]) {
     const response = await fetchWithTimeout(route, { redirect: "manual" });
-    assert.equal(response.status, expectedStatus, `${route} status`);
+    if (route === "/api/ready") {
+      const readiness = await response.clone().json();
+      assert.equal(typeof readiness.ok, "boolean", "/api/ready body must expose boolean ok");
+      assert.equal(
+        response.status,
+        readiness.ok ? 200 : 503,
+        "/api/ready status must reflect configured readiness",
+      );
+    } else {
+      assert.equal(response.status, expectedStatus, `${route} status`);
+    }
     for (const header of [
       "content-security-policy",
       "permissions-policy",

@@ -90,8 +90,41 @@ function postUrlMatchesId(url: unknown, postId: unknown): boolean {
     if (!/(^|\.)instagram\.com$/iu.test(parsed.hostname)) {
       return false;
     }
-    const match = /^\/(?:p|reel|tv)\/([^/]+)/iu.exec(parsed.pathname);
-    return match?.[1] === postId.trim();
+    const match = /^\/(?:p|reel|reels|tv)\/([^/]+)/iu.exec(parsed.pathname);
+    const shortcode = match?.[1];
+    const normalizedPostId = postId.trim();
+    if (!shortcode) {
+      return false;
+    }
+
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    if (!/^\d+$/u.test(normalizedPostId)) {
+      // Legacy/imported rows may use the shortcode itself as a nonnumeric ID.
+      return shortcode === normalizedPostId;
+    }
+
+    // Apify's post `id` is normally Instagram's numeric media ID, while the
+    // canonical post URL contains a reversible base64-like shortcode. Decode
+    // and re-encode so leading-zero aliases cannot impersonate the same media.
+    let decodedMediaId = BigInt(0);
+    for (const character of shortcode) {
+      const digit = alphabet.indexOf(character);
+      if (digit < 0) {
+        return false;
+      }
+      decodedMediaId = decodedMediaId * BigInt(64) + BigInt(digit);
+    }
+    let canonicalShortcode = "";
+    let remaining = decodedMediaId;
+    do {
+      const digit = Number(remaining % BigInt(64));
+      canonicalShortcode = alphabet[digit] + canonicalShortcode;
+      remaining /= BigInt(64);
+    } while (remaining > BigInt(0));
+    return (
+      canonicalShortcode === shortcode &&
+      decodedMediaId.toString() === normalizedPostId
+    );
   } catch {
     return false;
   }

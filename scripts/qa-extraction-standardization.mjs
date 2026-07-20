@@ -46,6 +46,7 @@ import {
   hasCompleteSourceGroundedAutoApproval,
 } from "../lib/events/event-update-precondition.ts";
 import { isSensibleEventTitleForApproval } from "../lib/events/event-title-approval.ts";
+import { isCaptionSourceCoherentWithEvent } from "../lib/events/event-source-approval.ts";
 import { buildBackfillDecision } from "./backfill-moderation-scores.mjs";
 import { buildPatch as buildTbdRepairPatch } from "./repair-event-tbd-times.mjs";
 import {
@@ -939,6 +940,57 @@ function runUnverifiedPosterScheduleModerationQa() {
   );
   assert.deepEqual(lavashEvents[1].artists, ["Adisskaljo", "Puls Bend"]);
   assert.equal(lavashEvents[1].sourceCaption, lavashCaption);
+
+  const safeTimeFirstDate = isoDateDaysFromNow(9);
+  const safeTimeSecondDate = isoDateDaysFromNow(10);
+  const safeTimeCaption = [
+    `${ddmmForIsoDate(safeTimeFirstDate)}. @alice 21h`,
+    `${ddmmForIsoDate(safeTimeSecondDate)}. @bob 22h`,
+  ].join("\n");
+  const safeTimePrepared = prepareEventsForInsert(
+    makeInstagramPost({ caption: safeTimeCaption, postType: "image", username: "qa_handle" }),
+    makeExtractedEvent({
+      title: "",
+      date: "",
+      time: "23:00",
+      venue: "QA Venue",
+      artists: [],
+      confidence: 0.95,
+      source_caption: safeTimeCaption,
+      schedule_entries: [
+        {
+          date: safeTimeFirstDate,
+          time: "21:00",
+          title: "@alice",
+          artists: ["@alice"],
+          source_text: `${ddmmForIsoDate(safeTimeFirstDate)}. @alice 21h`,
+        },
+        {
+          date: safeTimeSecondDate,
+          time: "22:00",
+          title: "@bob",
+          artists: ["@bob"],
+          source_text: `${ddmmForIsoDate(safeTimeSecondDate)}. @bob 22h`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/safe-time-schedule.jpg",
+    {},
+    {},
+    {},
+  );
+  const safeTimeEvents = safeTimePrepared.map((result) => assertSingleOkPreparedEvent([result]));
+  assert.deepEqual(safeTimeEvents.map((result) => result.event.time), ["21:00", "22:00"]);
+  for (const result of safeTimeEvents) {
+    const fields = readPreparedNormalizedFields(result);
+    assert.equal(
+      fields.sourceGroundingVerified,
+      true,
+      JSON.stringify({ event: result.event, fields }),
+    );
+    assert.equal(fields.approvalCaptionSourceCoherent, true);
+    assert.equal(result.event.status, "approved");
+  }
 
   const firstDate = isoDateDaysFromNow(7);
   const secondDate = isoDateDaysFromNow(8);
@@ -2461,6 +2513,354 @@ function runSourceGroundingAdversarialQa() {
   });
 
   assert.equal(evaluate().verified, true, "An exact raw row must remain eligible.");
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm}. @verajamarko`,
+      title: "Verajamarko",
+      artists: ["Verajamarko"],
+      time: "",
+    }).verified,
+    true,
+    "A compact raw schedule row may bill an exact artist identity without a redundant DJ label.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm}. #verajamarko`,
+      title: "Verajamarko",
+      artists: ["Verajamarko"],
+      time: "",
+    }).verified,
+    false,
+    "A hashtag-only identity must not become source authority for an event title or artist.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm}. od 21h u VOXu svira Inke.`,
+      title: "INKE",
+      artists: ["INKE"],
+      time: "21:00",
+      splitSource: null,
+    }).verified,
+    true,
+    "An explicit Serbian performance sentence must ground its named artist, date, and time.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `MILENA ĆERANIĆ | ${firstDdmm}. | 23h\nLet the music begin w/ @ceranicmilena`,
+      title: "MILENA ĆERANIĆ",
+      artists: ["MILENA ĆERANIĆ"],
+      time: "23:00",
+      splitSource: null,
+    }).verified,
+    true,
+    "A single-date caption may ground an exact title/date/time split across harmless layout delimiters.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm}. U 21h na otvorenom!\n“(500) Days of Summer” (2009)\nVrata se otvaraju u 20:30h.`,
+      title: "(500) Days of Summer",
+      artists: [],
+      time: "21:00",
+      splitSource: null,
+    }).verified,
+    true,
+    "A single dated film caption may retain a separately labeled door-opening time.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `Cocktails with friends ${firstDdmm}. at 22h`,
+      title: "Cocktails with friends",
+      artists: [],
+      time: "22:00",
+      splitSource: null,
+    }).verified,
+    false,
+    "A title-like lifestyle phrase at the start of ordinary prose is not event billing.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `Cocktails with friends ${firstDdmm}. at 22h`,
+      title: "Cocktails with friends",
+      artists: ["Cocktails with friends"],
+      time: "22:00",
+      splitSource: null,
+    }).verified,
+    false,
+    "A model cannot turn ordinary prose into billing by copying the title into artists.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `COCKTAILS WITH FRIENDS | ${firstDdmm}. | 22h`,
+      title: "COCKTAILS WITH FRIENDS",
+      artists: ["COCKTAILS WITH FRIENDS"],
+      time: "22:00",
+      splitSource: null,
+    }).verified,
+    false,
+    "An all-caps layout still needs independent source authority for a claimed artist.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `Cocktails with friends. More at @cocktailswithfriends. ${firstDdmm}. at 22h.`,
+      title: "Cocktails with friends",
+      artists: ["Cocktails with friends"],
+      time: "22:00",
+      splitSource: null,
+    }).verified,
+    false,
+    "An unrelated matching account mention must not establish local performer billing.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `Cinema Night ${firstDdmm}. at 21h. Doors open at 20h.`,
+      title: "Cinema Night",
+      artists: [],
+      time: "21:00",
+      splitSource: null,
+    }).verified,
+    false,
+    "Door-opening logistics alone must not establish a generic no-artist event identity.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `Film recommendations for friends. ${firstDdmm}. at 22h.`,
+      title: "Film recommendations for friends",
+      artists: [],
+      time: "22:00",
+      splitSource: null,
+    }).verified,
+    false,
+    "A cultural keyword prefix does not turn recommendations or prose into event billing.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `Projekcija filma "Searching for Sugar Man" | ${firstDdmm}. | 20:45h`,
+      title: `Projekcija filma "Searching for Sugar Man"`,
+      artists: [],
+      time: "20:45",
+      splitSource: null,
+    }).verified,
+    true,
+    "A quoted cultural work bound to an explicit local projection label is source-grounded.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `Projekcija filma Cinema Night | ${firstDdmm}. | Doors open at 20:30.`,
+      title: "Projekcija filma Cinema Night",
+      artists: [],
+      time: "20:30",
+      splitSource: null,
+    }).verified,
+    false,
+    "A door-opening clock must not verify the event start time.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `Projekcija filma Cinema Night | ${firstDdmm}. | Doors open at 20. Happy hour ends at 20h.`,
+      title: "Projekcija filma Cinema Night",
+      artists: [],
+      time: "20:00",
+      splitSource: null,
+    }).verified,
+    false,
+    "A bare door hour must not borrow an unrelated same-value clock from another clause.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `Projekcija filma Cinema Night | ${firstDdmm}. | Doors open at 20:30.`,
+      title: "Projekcija filma Cinema Night",
+      artists: [],
+      time: "",
+      splitSource: null,
+    }).verified,
+    true,
+    "A grounded event with only a door-opening clock may remain eligible with a missing start time.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `Projekcija filma Cinema Night | ${firstDdmm}. | Doors open at 20:30. Početak u 21h.`,
+      title: "Projekcija filma Cinema Night",
+      artists: [],
+      time: "21:00",
+      splitSource: null,
+    }).verified,
+    true,
+    "An explicitly labeled start after a door time must remain verifiable.",
+  );
+  const earlyDateGrounding = {
+    independentTextEvidence: "08.07. DJ ALICE 22h",
+    title: "ALICE",
+    artists: ["ALICE"],
+    time: "22:00",
+    postedAt: "2026-07-01T12:00:00.000Z",
+  };
+  assert.equal(
+    evaluate({ ...earlyDateGrounding, normalizedDate: "2026-07-08" }).verified,
+    true,
+    "Serbian numeric dates must use the authoritative day-month interpretation.",
+  );
+  assert.equal(
+    evaluate({ ...earlyDateGrounding, normalizedDate: "2026-08-07" }).verified,
+    false,
+    "The alternate month-day interpretation must not ground the same Serbian row.",
+  );
+  assert.equal(
+    evaluate({
+      ...earlyDateGrounding,
+      independentTextEvidence: "08.07. DJ ALICE 22h\n07.08. DJ BOB 23h",
+      normalizedDate: "2026-08-07",
+    }).verified,
+    false,
+    "A second row must not supply the swapped date interpretation for the first artist.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: "MILENA ĆERANIĆ | 08.07. | 23h\nLet the music begin w/ @ceranicmilena",
+      title: "MILENA ĆERANIĆ",
+      artists: ["MILENA ĆERANIĆ"],
+      time: "23:00",
+      normalizedDate: "2026-07-08",
+      postedAt: "2026-07-01T12:00:00.000Z",
+      splitSource: null,
+    }).verified,
+    true,
+    "Early-month single-event layouts must remain grounded under day-month parsing.",
+  );
+  const prepareSingleGroundingCase = ({
+    caption,
+    title,
+    time,
+    artists = [],
+    category = "nightlife",
+  }) =>
+    assertSingleOkPreparedEvent(
+      prepareEventsForInsert(
+        makeInstagramPost({ caption, postType: "image", username: "qa_venue" }),
+        makeExtractedEvent({
+          title,
+          date: firstDate,
+          time,
+          venue: "QA Venue",
+          artists,
+          category,
+          confidence: 0.95,
+          source_caption: caption,
+          schedule_entries: [],
+        }),
+        "https://cdn.example.com/source-grounding-case.jpg",
+        { qa_venue: "QA Venue" },
+        {},
+        { qa_venue: "QA Venue" },
+      ),
+    );
+  const arbitraryProsePrepared = prepareSingleGroundingCase({
+    caption: `Cocktails with friends. ${firstDdmm}. at 22h.`,
+    title: "Cocktails with friends",
+    time: "22:00",
+  });
+  assert.equal(arbitraryProsePrepared.event.status, "pending");
+  assert.equal(readPreparedNormalizedFields(arbitraryProsePrepared).sourceGroundingVerified, false);
+  const arbitrarySelfArtistPrepared = prepareSingleGroundingCase({
+    caption: `Cocktails with friends. ${firstDdmm}. at 22h.`,
+    title: "Cocktails with friends",
+    artists: ["Cocktails with friends"],
+    time: "22:00",
+  });
+  assert.equal(arbitrarySelfArtistPrepared.event.status, "pending");
+  assert.equal(
+    readPreparedNormalizedFields(arbitrarySelfArtistPrepared).sourceGroundingVerified,
+    false,
+  );
+  const unrelatedMentionPrepared = prepareSingleGroundingCase({
+    caption: `Cocktails with friends. More at @cocktailswithfriends. ${firstDdmm}. at 22h.`,
+    title: "Cocktails with friends",
+    artists: ["Cocktails with friends"],
+    time: "22:00",
+  });
+  assert.equal(unrelatedMentionPrepared.event.status, "pending");
+  assert.equal(
+    readPreparedNormalizedFields(unrelatedMentionPrepared).sourceGroundingVerified,
+    false,
+  );
+  const doorClockPrepared = prepareSingleGroundingCase({
+    caption: `Projekcija filma Cinema Night | ${firstDdmm}. | Doors open at 20:30.`,
+    title: "Projekcija filma Cinema Night",
+    time: "20:30",
+    category: "arts & culture",
+  });
+  assert.equal(doorClockPrepared.event.status, "pending");
+  assert.equal(readPreparedNormalizedFields(doorClockPrepared).sourceGroundingTimeVerified, false);
+  const crossClauseDoorClockPrepared = prepareSingleGroundingCase({
+    caption: `Projekcija filma Cinema Night | ${firstDdmm}. | Doors open at 20. Happy hour ends at 20h.`,
+    title: "Projekcija filma Cinema Night",
+    time: "20:00",
+    category: "arts & culture",
+  });
+  assert.equal(crossClauseDoorClockPrepared.event.status, "pending");
+  assert.equal(
+    readPreparedNormalizedFields(crossClauseDoorClockPrepared).sourceGroundingVerified,
+    false,
+  );
+  const doorClockTbdPrepared = prepareSingleGroundingCase({
+    caption: `Projekcija filma Cinema Night | ${firstDdmm}. | Doors open at 20:30.`,
+    title: "Projekcija filma Cinema Night",
+    time: "",
+    category: "arts & culture",
+  });
+  assert.equal(doorClockTbdPrepared.event.time, TBD_EVENT_TIME);
+  assert.equal(doorClockTbdPrepared.event.status, "approved");
+  assert.equal(readPreparedNormalizedFields(doorClockTbdPrepared).sourceGroundingVerified, true);
+  const naturalLanguageCaption = `${firstDdmm}. od 21h u VOXu svira Inke.`;
+  const coherentNumericMediaId = {
+    title: "INKE",
+    date: firstDate,
+    time: "21:00",
+    venue: "Vox Blues club",
+    artists: ["INKE"],
+    sourceCaption: naturalLanguageCaption,
+    instagramPostId: "3944924586821733370",
+    instagramPostUrl: "https://www.instagram.com/p/Da_MAK3Nsv6/",
+    sourceInstagramHandle: "voxbluesclub",
+    venueInstagramHandle: "voxbluesclub",
+  };
+  assert.equal(
+    isCaptionSourceCoherentWithEvent(coherentNumericMediaId),
+    true,
+    "Apify numeric media IDs and Instagram URL shortcodes are distinct valid identities from one source post.",
+  );
+  assert.equal(
+    isCaptionSourceCoherentWithEvent({
+      ...coherentNumericMediaId,
+      instagramPostId: "9999999999999999999",
+    }),
+    false,
+    "A numeric media ID must decode exactly from the URL shortcode.",
+  );
+  assert.equal(
+    isCaptionSourceCoherentWithEvent({
+      ...coherentNumericMediaId,
+      instagramPostUrl: "https://www.instagram.com/p/ADa_MAK3Nsv6/",
+    }),
+    false,
+    "A leading-zero shortcode alias must not match the canonical numeric media ID.",
+  );
+  assert.equal(
+    isCaptionSourceCoherentWithEvent({
+      ...coherentNumericMediaId,
+      instagramPostId: "123",
+      instagramPostUrl: "https://www.instagram.com/p/123/",
+    }),
+    false,
+    "A numeric post ID must not bypass decoding through direct shortcode equality.",
+  );
+  assert.equal(
+    isCaptionSourceCoherentWithEvent({
+      ...coherentNumericMediaId,
+      instagramPostId: "unrelated-opaque-id",
+    }),
+    false,
+    "An unrelated opaque post ID must not be accepted as coherent with a different shortcode.",
+  );
   assert.equal(
     evaluate({
       independentTextEvidence: `${firstDdmm} ALICE 22:00\n${secondDdmm} BOB 23:00`,
