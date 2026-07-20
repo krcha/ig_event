@@ -2790,6 +2790,54 @@ function runSourceGroundingAdversarialQa() {
   });
   assert.equal(doorClockPrepared.event.status, "pending");
   assert.equal(readPreparedNormalizedFields(doorClockPrepared).sourceGroundingTimeVerified, false);
+  for (const [doorText, proposedTime] of [
+    ["Vrata se otvaraju u 20 časova.", "20:00"],
+    ["Vrata se otvaraju u 20 casova.", "20:00"],
+    ["Vrata se otvaraju u 20 čas.", "20:00"],
+    ["Vrata se otvaraju u 20 cas.", "20:00"],
+    ["Vrata se otvaraju u 20 sati.", "20:00"],
+    ["Vrata se otvaraju u 20 sata.", "20:00"],
+    ["Vrata se otvaraju u 20 sat.", "20:00"],
+    ["Doors open at 20h.", "20:00"],
+    ["Doors open at 20 hour.", "20:00"],
+    ["Doors open at 20 hours.", "20:00"],
+    ["Doors open at 20 hr.", "20:00"],
+    ["Doors open at 20 hrs.", "20:00"],
+    ["Doors open at 8:30 am.", "08:30"],
+    ["Doors open at 8:30 a.m.", "08:30"],
+    ["Doors open at 8:30 pm.", "20:30"],
+    ["Doors open at 8:30 p.m.", "20:30"],
+  ]) {
+    const doorSuffixAsStart = prepareSingleGroundingCase({
+      caption: `Projekcija filma Cinema Night | ${firstDdmm}. | ${doorText}`,
+      title: "Projekcija filma Cinema Night",
+      time: proposedTime,
+      category: "arts & culture",
+    });
+    assert.equal(
+      doorSuffixAsStart.event.status,
+      "pending",
+      `Door-only clock must not publish as start time: ${doorText}`,
+    );
+    assert.equal(
+      readPreparedNormalizedFields(doorSuffixAsStart).sourceGroundingTimeVerified,
+      false,
+      `Door-only clock must not verify source start time: ${doorText}`,
+    );
+
+    const doorSuffixAsTbd = prepareSingleGroundingCase({
+      caption: `Projekcija filma Cinema Night | ${firstDdmm}. | ${doorText}`,
+      title: "Projekcija filma Cinema Night",
+      time: "",
+      category: "arts & culture",
+    });
+    assert.equal(
+      doorSuffixAsTbd.event.status,
+      "approved",
+      `Grounded event with only a door clock should remain eligible as TBD: ${doorText}`,
+    );
+    assert.equal(doorSuffixAsTbd.event.time, TBD_EVENT_TIME);
+  }
   const crossClauseDoorClockPrepared = prepareSingleGroundingCase({
     caption: `Projekcija filma Cinema Night | ${firstDdmm}. | Doors open at 20. Happy hour ends at 20h.`,
     title: "Projekcija filma Cinema Night",
