@@ -59,6 +59,7 @@ import { markModelDerivedRepairPending } from "./source-grounding-guard.mjs";
 import {
   createEvent,
   mergeApprovedEvents,
+  reprocessPendingSourceGroundingBatch,
   setEventStatus,
   updateEvent,
 } from "../convex/events.ts";
@@ -5484,6 +5485,318 @@ async function runApprovedMergeBoundaryQa() {
   }
 }
 
+async function runTransactionalSourceGroundingReprocessQa() {
+  const previousCronSecret = process.env.CRON_SECRET;
+  const previousAdminUserIds = process.env.ADMIN_CLERK_USER_IDS;
+  const serviceSecret = "qa-source-grounding-reprocess-secret";
+  const adminUserId = "qa-source-grounding-reprocess-admin";
+  process.env.CRON_SECRET = serviceSecret;
+  process.env.ADMIN_CLERK_USER_IDS = adminUserId;
+
+  const makeEvent = ({ id, date, day, venue, handle, postId, updatedAt }) => {
+    const title = `Grounded Batch Event ${id.toUpperCase()}`;
+    const artist = `Grounded Batch Artist ${id.toUpperCase()}`;
+    const caption = `${title} ${day}. jul @ ${venue} uz ${artist}`;
+    const instagramPostUrl = `https://www.instagram.com/p/${postId}/`;
+    const event = {
+      _id: id,
+      title,
+      date,
+      time: TBD_EVENT_TIME,
+      venue,
+      venueInstagramHandle: handle,
+      artists: [artist],
+      imageUrl: `https://example.com/${id}.jpg`,
+      sourceCaption: caption,
+      instagramPostId: postId,
+      instagramPostUrl,
+      eventType: "nightlife",
+      status: "pending",
+      normalizedFieldsJson: JSON.stringify({
+        sourceGroundingVerified: false,
+        moderationPendingReasons: ["caption_source_event_mismatch"],
+      }),
+      createdAt: updatedAt - 100,
+      updatedAt,
+    };
+    const nextNormalizedFieldsJson = JSON.stringify({
+      title,
+      time: TBD_EVENT_TIME,
+      artists: [artist],
+      postAltText: null,
+      sourceGroundingSourceKind: "caption",
+      sourceGroundingSourceCaption: caption,
+      sourceGroundingInstagramPostId: postId,
+      sourceGroundingInstagramPostUrl: instagramPostUrl,
+      sourceGroundingInstagramHandle: handle,
+      sourceGroundingVersion: 3,
+      sourceGroundingEvidence: "instagram_caption",
+      approvalTitleSensible: true,
+      approvalCaptionSourceCoherent: true,
+      sourceGroundingVerified: true,
+      sourceGroundingTitleVerified: true,
+      sourceGroundingDateVerified: true,
+      sourceGroundingIdentityVerified: true,
+      sourceGroundingIdentityContextVerified: true,
+      sourceGroundingTimeVerified: null,
+      sourceGroundingArtistsVerified: true,
+      sourceGroundingRowVerified: true,
+      moderationAutoApproved: true,
+      moderationAutoApproveRule: "source_grounded_core_event_fields",
+      moderationPendingReasons: [],
+      moderationSignals: ["time_tbd"],
+      moderationConfidenceScore: 0.95,
+      normalizedDate: date,
+      normalizedVenue: venue,
+      normalizedIsValid: true,
+      titleUsedFallback: false,
+      dateSuspiciousYear: false,
+      dateConfidence: "high",
+      missingImage: false,
+      moderationAllowMissingImage: false,
+    });
+    return {
+      event,
+      nextNormalizedFieldsJson,
+      sourcePost: {
+        handle,
+        username: handle,
+        postId,
+        instagramPostUrl,
+        caption,
+      },
+    };
+  };
+
+  const qaA = makeEvent({
+    id: "qa-batch-a",
+    date: "2026-07-30",
+    day: 30,
+    venue: "Grounded Batch Venue A",
+    handle: "qa_batch_venue_a",
+    postId: "qa-batch-post-a",
+    updatedAt: 1000,
+  });
+  const qaB = makeEvent({
+    id: "qa-batch-b",
+    date: "2026-07-31",
+    day: 31,
+    venue: "Grounded Batch Venue B",
+    handle: "qa_batch_venue_b",
+    postId: "qa-batch-post-b",
+    updatedAt: 2000,
+  });
+  const replayWindowResults = prepareEventsForInsert(
+    {
+      postId: "qa-replay-window-post",
+      caption:
+        "Grounded Replay Window Event 20. jul @ Grounded Replay Window Venue uz Grounded Replay Artist",
+      altText: null,
+      imageUrl: "https://example.com/qa-replay-window.jpg",
+      imageUrls: ["https://example.com/qa-replay-window.jpg"],
+      postType: "image",
+      locationName: null,
+      instagramPostUrl: "https://www.instagram.com/p/qa-replay-window-post/",
+      postedAt: "2026-07-20T08:00:00.000Z",
+      username: "qa_replay_window",
+    },
+    makeExtractedEvent({
+      title: "Grounded Replay Window Event",
+      date: "2026-07-20",
+      time: "",
+      venue: "Grounded Replay Window Venue",
+      artists: ["Grounded Replay Artist"],
+      description: "Grounded Replay Window Event",
+      category: "nightlife",
+      price: "",
+      currency: "",
+      confidence: 0.95,
+      source_caption:
+        "Grounded Replay Window Event 20. jul @ Grounded Replay Window Venue uz Grounded Replay Artist",
+      schedule_entries: [],
+    }),
+    "https://example.com/qa-replay-window.jpg",
+    {},
+    {},
+    {},
+    { eventDateFilterNow: new Date("2026-07-20T12:00:00.000Z") },
+  );
+  assert.ok(
+    replayWindowResults.some(
+      (result) => result.kind === "ok" && result.event.date === "2026-07-20",
+    ),
+    "Backlog preparation must support an explicit original date-window clock.",
+  );
+  const clone = (value) => JSON.parse(JSON.stringify(value));
+
+  const createHarness = (records = [qaA, qaB]) => {
+    let committedEvents = new Map(records.map(({ event }) => [event._id, clone(event)]));
+    let committedAuditRows = [];
+    const sourcePosts = records.map(({ sourcePost }) => clone(sourcePost));
+    const snapshot = () => ({
+      events: [...committedEvents.values()].map(clone),
+      audits: committedAuditRows.map(clone),
+    });
+
+    const run = async (args) => {
+      const stagedEvents = new Map(
+        [...committedEvents.entries()].map(([id, event]) => [id, clone(event)]),
+      );
+      const stagedAuditRows = committedAuditRows.map(clone);
+      const makeQuery = (table) => {
+        const filters = {};
+        const q = {
+          eq(field, value) {
+            filters[field] = value;
+            return q;
+          },
+        };
+        const readRows = () => {
+          const rows = table === "events" ? [...stagedEvents.values()] : sourcePosts;
+          return rows.filter((row) =>
+            Object.entries(filters).every(([field, value]) => row[field] === value),
+          );
+        };
+        return {
+          withIndex(_indexName, build) {
+            build(q);
+            return {
+              collect: async () => readRows().map(clone),
+              first: async () => clone(readRows()[0] ?? null),
+            };
+          },
+        };
+      };
+      const ctx = {
+        auth: { getUserIdentity: async () => ({ subject: adminUserId }) },
+        db: {
+          get: async (id) => clone(stagedEvents.get(id) ?? null),
+          patch: async (id, patch) => {
+            stagedEvents.set(id, { ...stagedEvents.get(id), ...clone(patch) });
+          },
+          insert: async (table, value) => {
+            assert.equal(table, "eventAuditLog");
+            stagedAuditRows.push({ _id: `audit-${stagedAuditRows.length + 1}`, ...clone(value) });
+            return `audit-${stagedAuditRows.length}`;
+          },
+          query: makeQuery,
+        },
+      };
+      const result = await reprocessPendingSourceGroundingBatch._handler(ctx, args);
+      committedEvents = stagedEvents;
+      committedAuditRows = stagedAuditRows;
+      return result;
+    };
+    return { run, snapshot };
+  };
+
+  const itemFor = ({ event, nextNormalizedFieldsJson }) => ({
+    id: event._id,
+    expectedUpdatedAt: event.updatedAt,
+    expectedNormalizedFieldsJson: event.normalizedFieldsJson,
+    nextNormalizedFieldsJson,
+  });
+  const argsFor = (records) => ({ serviceSecret, items: records.map(itemFor) });
+
+  try {
+    const success = createHarness();
+    const before = success.snapshot();
+    const result = await success.run(argsFor([qaA, qaB]));
+    assert.deepEqual(result.eventIds, [qaA.event._id, qaB.event._id]);
+    assert.equal(result.updatedCount, 2);
+    const after = success.snapshot();
+    assert.equal(after.audits.length, 2);
+    for (const source of [qaA, qaB]) {
+      const previous = before.events.find((event) => event._id === source.event._id);
+      const current = after.events.find((event) => event._id === source.event._id);
+      const changedKeys = Object.keys(current).filter(
+        (key) => JSON.stringify(current[key]) !== JSON.stringify(previous[key]),
+      );
+      assert.deepEqual(changedKeys.sort(), ["normalizedFieldsJson", "status", "updatedAt"]);
+      assert.equal(current.status, "approved");
+      assert.equal(current.normalizedFieldsJson, source.nextNormalizedFieldsJson);
+    }
+    for (const audit of after.audits) {
+      assert.equal(audit.action, "source_grounding_reprocessed");
+      assert.deepEqual(Object.keys(JSON.parse(audit.patchJson)).sort(), [
+        "normalizedFieldsJson",
+        "status",
+      ]);
+    }
+    const successfulSnapshot = success.snapshot();
+    await assert.rejects(() => success.run(argsFor([qaA, qaB])), /expected pending|status changed/iu);
+    assert.deepEqual(success.snapshot(), successfulSnapshot);
+
+    const duplicate = createHarness();
+    const duplicateBefore = duplicate.snapshot();
+    await assert.rejects(
+      () => duplicate.run({ serviceSecret, items: [itemFor(qaA), itemFor(qaA)] }),
+      /duplicate/iu,
+    );
+    assert.deepEqual(duplicate.snapshot(), duplicateBefore);
+
+    const stale = createHarness();
+    const staleBefore = stale.snapshot();
+    await assert.rejects(
+      () =>
+        stale.run({
+          serviceSecret,
+          items: [itemFor(qaA), { ...itemFor(qaB), expectedUpdatedAt: qaB.event.updatedAt - 1 }],
+        }),
+      /changed during reprocessing|updatedAt/iu,
+    );
+    assert.deepEqual(stale.snapshot(), staleBefore);
+
+    const invalid = createHarness();
+    const invalidBefore = invalid.snapshot();
+    await assert.rejects(
+      () =>
+        invalid.run({
+          serviceSecret,
+          items: [
+            itemFor(qaA),
+            {
+              ...itemFor(qaB),
+              nextNormalizedFieldsJson: JSON.stringify({ sourceGroundingVerified: true }),
+            },
+          ],
+        }),
+      /complete source-grounded evidence|cannot approve/iu,
+    );
+    assert.deepEqual(invalid.snapshot(), invalidBefore);
+
+    const conflictB = makeEvent({
+      id: "qa-batch-b",
+      date: "2026-07-30",
+      day: 30,
+      venue: "Grounded Batch Venue A",
+      handle: "qa_batch_venue_b",
+      postId: "qa-batch-post-b",
+      updatedAt: 2000,
+    });
+    const conflict = createHarness([qaA, conflictB]);
+    const conflictBefore = conflict.snapshot();
+    await assert.rejects(
+      () => conflict.run(argsFor([qaA, conflictB])),
+      /already exists for this venue and date/iu,
+    );
+    assert.deepEqual(conflict.snapshot(), conflictBefore);
+
+    const adminFallback = createHarness();
+    const adminBefore = adminFallback.snapshot();
+    await assert.rejects(
+      () => adminFallback.run({ ...argsFor([qaA]), serviceSecret: "wrong-secret" }),
+      /service authentication required/iu,
+    );
+    assert.deepEqual(adminFallback.snapshot(), adminBefore);
+  } finally {
+    if (previousCronSecret === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = previousCronSecret;
+    if (previousAdminUserIds === undefined) delete process.env.ADMIN_CLERK_USER_IDS;
+    else process.env.ADMIN_CLERK_USER_IDS = previousAdminUserIds;
+  }
+}
+
 runPromptQa();
 runVenueQa();
 runArtistAndDescriptionQa();
@@ -5505,5 +5818,6 @@ runNamedRepertoireScheduleDeduplicationQa();
 runAtomicDuplicateStatusPreconditionQa();
 await runServiceApprovalMutationBoundaryQa();
 await runApprovedMergeBoundaryQa();
+await runTransactionalSourceGroundingReprocessQa();
 
-console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, source-grounded auto-approval, fail-closed review gating, service mutation payload binding, atomic duplicate status preconditions, caption date ranges, Serbian relative dates, description start times, schedule consistency, and ticket prices.");
+console.log("QA passed: extraction prompt, venue standardization, artists, description, video moderation, source-grounded auto-approval, fail-closed review gating, service mutation payload binding, transactional source-grounding reprocessing, atomic duplicate status preconditions, caption date ranges, Serbian relative dates, description start times, schedule consistency, and ticket prices.");
