@@ -132,6 +132,10 @@ assert.ok(rootPage.includes("index: !hasSearchParams"));
 assert.ok(browsePage.includes("Belgrade events, nightlife & culture"));
 assert.equal((browsePage.match(/<h1/g) ?? []).length, 1, "The calendar should expose one H1.");
 assert.ok(browsePage.includes("Događaji u Beogradu"));
+assert.ok(browsePage.includes("Događaji u Beogradu za sve"));
+assert.ok(!browsePage.includes("Događaji u Beogradu za lokalce i posetioce"));
+assert.ok(!browsePage.includes("Tonight&apos;s picks"));
+assert.ok(!browsePage.includes("Belgrade venues"));
 assert.ok(browsePage.includes("buildHomePageStructuredData"));
 
 for (const [label, source] of [

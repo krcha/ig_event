@@ -32,6 +32,7 @@ function assertDoesNotInclude(source, value, message) {
 }
 
 const discoverPageSource = read("app/(main)/discover/page.tsx");
+const discoverErrorSource = read("app/(main)/discover/error.tsx");
 const discoverFeedSource = read("components/discover/discover-feed.tsx");
 const discoverImageSourceSource = read("lib/discover/discover-image-source.ts");
 const apifyPostAlignmentSource = read("lib/discover/apify-post-alignment.ts");
@@ -128,6 +129,31 @@ assertIncludes(
   discoverPageSource,
   "getNightlifeDefaultDateKey()",
   "Discover should use the nightlife business date so 00:00-06:59 defaults to the previous night.",
+);
+assertIncludes(
+  discoverPageSource,
+  "const DISCOVER_PAGE_SIZE = 9",
+  "Discover should render a small first batch instead of hydrating a high-volume night at once.",
+);
+assertIncludes(
+  discoverPageSource,
+  "matchingEvents.slice(startIndex, startIndex + DISCOVER_PAGE_SIZE)",
+  "Discover should slice the requested batch before Apify post enrichment.",
+);
+assertIncludes(
+  discoverFeedSource,
+  'data-discover-pagination="bounded"',
+  "Discover should expose bounded previous/more controls for incremental loading.",
+);
+assertIncludes(
+  discoverFeedSource,
+  'contentVisibility: "auto"',
+  "Discover cards should skip off-screen rendering work.",
+);
+assertIncludes(
+  discoverErrorSource,
+  'href="/discover"',
+  "Discover should provide a clean document reload when a client route error occurs.",
 );
 assertIncludes(
   discoverPageSource,

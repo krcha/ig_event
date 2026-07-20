@@ -1,4 +1,4 @@
-export const PUBLIC_VENUE_DIRECTORY_PAGE_SIZE = 24;
+export const PUBLIC_VENUE_DIRECTORY_PAGE_SIZE = 12;
 export const MAX_PUBLIC_VENUE_DIRECTORY_PAGE_SIZE = 50;
 
 export function buildPublicVenueDirectoryPageHref(params: {

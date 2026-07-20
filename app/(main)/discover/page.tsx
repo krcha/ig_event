@@ -21,8 +21,11 @@ export const revalidate = 60;
 type DiscoverPageProps = {
   searchParams?: Promise<{
     date?: string | string[];
+    page?: string | string[];
   }>;
 };
+
+const DISCOVER_PAGE_SIZE = 9;
 
 export async function generateMetadata({ searchParams }: DiscoverPageProps): Promise<Metadata> {
   const resolvedSearchParams = await searchParams;
@@ -31,6 +34,7 @@ export async function generateMetadata({ searchParams }: DiscoverPageProps): Pro
       ? resolvedSearchParams.date[0]
       : resolvedSearchParams?.date,
   );
+  const hasPageFilter = normalizeRequestedPage(resolvedSearchParams?.page) > 1;
   const title = "Belgrade Events Tonight: Nightlife & Culture Picks";
   const description =
     "Discover what to do in Belgrade tonight: approved club nights, concerts, DJ sets, exhibitions, theatre, film, and cultural events.";
@@ -56,10 +60,10 @@ export async function generateMetadata({ searchParams }: DiscoverPageProps): Pro
       description,
     },
     robots: {
-      index: !hasDateFilter,
+      index: !hasDateFilter && !hasPageFilter,
       follow: true,
       googleBot: {
-        index: !hasDateFilter,
+        index: !hasDateFilter && !hasPageFilter,
         follow: true,
         "max-image-preview": "large",
         "max-snippet": -1,
@@ -89,9 +93,14 @@ function mapPublicEvent(event: PublicEvent): DiscoverFeedEvent {
   };
 }
 
-async function loadDiscoverEvents(date: string): Promise<{
+async function loadDiscoverEvents(date: string, requestedPage: number): Promise<{
+  currentPage: number;
   error?: string;
   events: DiscoverFeedEvent[];
+  firstEventNumber: number;
+  lastEventNumber: number;
+  totalEvents: number;
+  totalPages: number;
 }> {
   const beforeDate = addDaysToDateKey(date, 1);
   const result = await loadPublicCalendarEventsWindow({
@@ -99,13 +108,23 @@ async function loadDiscoverEvents(date: string): Promise<{
     fromDate: date,
   });
 
-  const events = result.events
+  const matchingEvents = result.events
     .filter((event) => event.date === date)
     .map(mapPublicEvent);
+  const totalEvents = matchingEvents.length;
+  const totalPages = Math.max(1, Math.ceil(totalEvents / DISCOVER_PAGE_SIZE));
+  const currentPage = Math.min(requestedPage, totalPages);
+  const startIndex = (currentPage - 1) * DISCOVER_PAGE_SIZE;
+  const pageEvents = matchingEvents.slice(startIndex, startIndex + DISCOVER_PAGE_SIZE);
 
   return {
+    currentPage,
     ...(result.error ? { error: result.error } : {}),
-    events: await enrichDiscoverEventsWithApifyPosts(events),
+    events: await enrichDiscoverEventsWithApifyPosts(pageEvents),
+    firstEventNumber: pageEvents.length > 0 ? startIndex + 1 : 0,
+    lastEventNumber: startIndex + pageEvents.length,
+    totalEvents,
+    totalPages,
   };
 }
 
@@ -137,6 +156,28 @@ function normalizeRequestedDate(
   return candidate && allowedDates.includes(candidate) && parseDateKeyToUtcNoon(candidate)
     ? candidate
     : today;
+}
+
+function normalizeRequestedPage(value: string | string[] | undefined): number {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  const parsed = Number.parseInt(candidate ?? "1", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function buildDiscoverPageHref(options: {
+  date: string;
+  page: number;
+  today: string;
+}): string {
+  const query = new URLSearchParams();
+  if (options.date !== options.today) {
+    query.set("date", options.date);
+  }
+  if (options.page > 1) {
+    query.set("page", String(options.page));
+  }
+  const serialized = query.toString();
+  return serialized ? `/discover?${serialized}` : "/discover";
 }
 
 function buildDateTabs(today: string, selectedDate: string): DiscoverDateTab[] {
@@ -172,7 +213,16 @@ export default async function DiscoverPage({ searchParams }: DiscoverPageProps) 
   const resolvedSearchParams = await searchParams;
   const today = getNightlifeDefaultDateKey();
   const selectedDate = normalizeRequestedDate(resolvedSearchParams?.date, today);
-  const { error, events } = await loadDiscoverEvents(selectedDate);
+  const requestedPage = normalizeRequestedPage(resolvedSearchParams?.page);
+  const {
+    currentPage,
+    error,
+    events,
+    firstEventNumber,
+    lastEventNumber,
+    totalEvents,
+    totalPages,
+  } = await loadDiscoverEvents(selectedDate, requestedPage);
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
   return (
@@ -181,6 +231,31 @@ export default async function DiscoverPage({ searchParams }: DiscoverPageProps) 
       dateTabs={buildDateTabs(today, selectedDate)}
       error={error}
       events={events}
+      pagination={{
+        currentPage,
+        firstEventNumber,
+        lastEventNumber,
+        ...(currentPage > 1
+          ? {
+              previousHref: buildDiscoverPageHref({
+                date: selectedDate,
+                page: currentPage - 1,
+                today,
+              }),
+            }
+          : {}),
+        ...(currentPage < totalPages
+          ? {
+              nextHref: buildDiscoverPageHref({
+                date: selectedDate,
+                page: currentPage + 1,
+                today,
+              }),
+            }
+          : {}),
+        totalEvents,
+        totalPages,
+      }}
       subline={formatDiscoverSubline(selectedDate)}
     />
   );

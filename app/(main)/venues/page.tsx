@@ -179,7 +179,10 @@ function VenueDirectoryCard({
   venue: PublicVenueDirectoryItem;
 }) {
   return (
-    <article className="rounded-[1rem] border border-border/75 bg-white/[0.025] p-4 transition hover:border-primary/35 hover:bg-white/[0.045]">
+    <article
+      className="rounded-[1rem] border border-border/75 bg-white/[0.025] p-4 transition hover:border-primary/35 hover:bg-white/[0.045]"
+      style={{ containIntrinsicSize: "310px", contentVisibility: "auto" }}
+    >
       <div className="flex items-start justify-between gap-3">
         <Link className="min-w-0" href={`/venues/${venue._id}`} prefetch={false}>
           <p className="section-kicker">{venue.category || "Venue"}</p>

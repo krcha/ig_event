@@ -1140,17 +1140,9 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
             </h1>
             <p className="mt-2 text-sm leading-6 text-muted-foreground sm:text-base">
               Find what&apos;s on in Belgrade today: club nights, concerts, DJ sets, exhibitions,
-              theatre, film, festivals, and workshops. Događaji u Beogradu za lokalce i posetioce.
+              theatre, film, festivals, and workshops. Događaji u Beogradu za sve
             </p>
           </div>
-          <nav aria-label="Explore Belgrade events" className="flex flex-wrap gap-2">
-            <Link className="app-chip bg-primary/10 text-primary hover:bg-primary/15" href="/discover">
-              Tonight&apos;s picks
-            </Link>
-            <Link className="app-chip bg-white/[0.04] hover:bg-white/[0.07]" href="/venues">
-              Belgrade venues
-            </Link>
-          </nav>
         </div>
       </section>
 

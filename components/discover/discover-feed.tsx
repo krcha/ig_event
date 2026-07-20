@@ -37,11 +37,22 @@ export type DiscoverDateTab = {
   sublabel: string;
 };
 
+type DiscoverPagination = {
+  currentPage: number;
+  firstEventNumber: number;
+  lastEventNumber: number;
+  nextHref?: string;
+  previousHref?: string;
+  totalEvents: number;
+  totalPages: number;
+};
+
 type DiscoverFeedProps = {
   authEnabled: boolean;
   dateTabs: DiscoverDateTab[];
   error?: string;
   events: DiscoverFeedEvent[];
+  pagination: DiscoverPagination;
   subline: string;
 };
 
@@ -155,6 +166,7 @@ function DiscoverPost({
     <article
       className="overflow-hidden rounded-[1.25rem] border border-white/[0.07] bg-[#0d0f16] shadow-[0_26px_70px_-48px_rgba(0,0,0,0.92)]"
       data-discover-post="true"
+      style={{ containIntrinsicSize: "780px", contentVisibility: "auto" }}
     >
       <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-3 py-3">
         <div className="flex min-w-0 items-center gap-3">
@@ -304,6 +316,7 @@ export function DiscoverFeed({
   dateTabs,
   error,
   events,
+  pagination,
   subline,
 }: DiscoverFeedProps) {
   const hasEvents = events.length > 0;
@@ -324,13 +337,13 @@ export function DiscoverFeed({
               </p>
             </div>
             <div className="flex flex-none items-center gap-2">
-              <Link
+              <a
                 aria-label="Search events"
                 className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.05] text-muted-foreground ring-1 ring-white/[0.08] hover:bg-primary/[0.16] hover:text-primary"
                 href="/"
               >
                 <Search className="h-4 w-4" />
-              </Link>
+              </a>
             </div>
           </div>
           <nav
@@ -338,7 +351,7 @@ export function DiscoverFeed({
             className="mt-4 grid grid-cols-3 gap-1 rounded-full border border-white/[0.07] bg-white/[0.035] p-1"
           >
             {dateTabs.map((tab) => (
-              <Link
+              <a
                 aria-current={tab.active ? "date" : undefined}
                 className={cn(
                   "min-w-0 rounded-full px-2.5 py-2 text-center",
@@ -353,7 +366,7 @@ export function DiscoverFeed({
                 <span className="mt-0.5 block truncate text-[10px] font-medium opacity-75">
                   {tab.sublabel}
                 </span>
-              </Link>
+              </a>
             ))}
           </nav>
         </header>
@@ -366,6 +379,31 @@ export function DiscoverFeed({
             <DiscoverPost authEnabled={authEnabled} event={event} key={event._id} />
           ))}
         </section>
+        {hasEvents && pagination.totalPages > 1 ? (
+          <nav
+            aria-label="Discover feed pages"
+            className="mx-auto flex w-full max-w-[38rem] items-center justify-between gap-3 rounded-[1rem] border border-border/75 bg-card/70 px-3 py-2.5 lg:max-w-none"
+            data-discover-pagination="bounded"
+          >
+            {pagination.previousHref ? (
+              <a className="button-secondary min-h-10 px-4 py-0" href={pagination.previousHref}>
+                Previous
+              </a>
+            ) : (
+              <span />
+            )}
+            <span className="text-center text-xs font-medium text-muted-foreground">
+              {pagination.firstEventNumber}–{pagination.lastEventNumber} of {pagination.totalEvents}
+            </span>
+            {pagination.nextHref ? (
+              <a className="button-primary min-h-10 px-4 py-0" href={pagination.nextHref}>
+                More picks
+              </a>
+            ) : (
+              <span />
+            )}
+          </nav>
+        ) : null}
         {!hasEvents || error ? <EmptyDiscoverState error={error} /> : null}
       </div>
     </main>

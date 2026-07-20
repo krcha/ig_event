@@ -173,6 +173,11 @@ assert.ok(
   source.includes('aria-current={active ? "page" : undefined}'),
   "Primary navigation links should expose the active destination with aria-current.",
 );
+assert.equal(
+  [...source.matchAll(/data-global-navigation="document"/g)].length,
+  2,
+  "Desktop and mobile primary navigation should use native document navigation so the first tap cannot stall on a large RSC transition.",
+);
 assert.ok(
   source.includes('className="flex w-full items-center gap-1 overflow-hidden"') &&
     source.includes("inline-flex min-w-0 flex-1 flex-col") &&

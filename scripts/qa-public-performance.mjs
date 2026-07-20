@@ -131,13 +131,20 @@ assertDoesNotInclude(
   "Public event loaders should not call noStore().",
 );
 
-assert.equal(PUBLIC_VENUE_DIRECTORY_PAGE_SIZE, 24);
+assert.equal(PUBLIC_VENUE_DIRECTORY_PAGE_SIZE, 12);
 assert.equal(MAX_PUBLIC_VENUE_DIRECTORY_PAGE_SIZE, 50);
 const venueFixture = Array.from({ length: 83 }, (_, index) => `venue-${index + 1}`);
 const pagedVenueIds = [];
-for (let page = 1; page <= 4; page += 1) {
+for (
+  let page = 1;
+  page <= Math.ceil(venueFixture.length / PUBLIC_VENUE_DIRECTORY_PAGE_SIZE);
+  page += 1
+) {
   const result = paginatePublicVenueDirectory(venueFixture, page);
-  assert.ok(result.pageItems.length <= 24, "A venue page must remain bounded.");
+  assert.ok(
+    result.pageItems.length <= PUBLIC_VENUE_DIRECTORY_PAGE_SIZE,
+    "A venue page must remain bounded.",
+  );
   pagedVenueIds.push(...result.pageItems);
 }
 assert.deepEqual(
@@ -190,7 +197,7 @@ assert.ok(
 );
 assert.match(
   venuePaginationSource,
-  /PUBLIC_VENUE_DIRECTORY_PAGE_SIZE = 24/,
+  /PUBLIC_VENUE_DIRECTORY_PAGE_SIZE = 12/,
   "The default public venue response should stay comfortably below the 50-card ceiling.",
 );
 

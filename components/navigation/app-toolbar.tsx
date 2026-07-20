@@ -181,7 +181,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                     const badgeCount = getBadgeCount(item);
 
                     return (
-                      <Link
+                      <a
                         aria-current={active ? "page" : undefined}
                         className={cn(
                           "inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-sm font-semibold",
@@ -191,6 +191,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                         )}
                         href={item.href}
                         key={item.href}
+                        data-global-navigation="document"
                       >
                         <span className="relative inline-flex">
                           <Icon className="h-4 w-4" />
@@ -201,7 +202,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                           ) : null}
                         </span>
                         <span>{item.label}</span>
-                      </Link>
+                      </a>
                     );
                   })}
                 </nav>
@@ -221,7 +222,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
               const badgeCount = getBadgeCount(item);
 
               return (
-                <Link
+                <a
                   aria-current={active ? "page" : undefined}
                   className={cn(
                     "inline-flex min-w-0 flex-1 flex-col items-center gap-1 rounded-[1rem] px-2 py-2 text-[11px] font-semibold",
@@ -231,6 +232,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                   )}
                   href={item.href}
                   key={item.href}
+                  data-global-navigation="document"
                 >
                   <span className="relative inline-flex">
                     <Icon className="h-4 w-4" />
@@ -248,7 +250,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                     ) : null}
                   </span>
                   <span className="max-w-full truncate">{item.label}</span>
-                </Link>
+                </a>
               );
             })}
           </div>
