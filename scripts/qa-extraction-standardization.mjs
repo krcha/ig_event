@@ -2798,6 +2798,7 @@ function runSourceGroundingAdversarialQa() {
     ["Vrata se otvaraju u 20 sati.", "20:00"],
     ["Vrata se otvaraju u 20 sata.", "20:00"],
     ["Vrata se otvaraju u 20 sat.", "20:00"],
+    ["Doors open at 20h.", "20:00"],
     ["Doors open at 20 hour.", "20:00"],
     ["Doors open at 20 hours.", "20:00"],
     ["Doors open at 20 hr.", "20:00"],
