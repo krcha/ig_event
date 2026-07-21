@@ -407,7 +407,7 @@ assertDoesNotInclude(
 );
 assert.match(
   nextConfigSource,
-  /const CANONICAL_APP_ORIGIN = "https:\/\/events\.ineedtofeedmyrabbit\.com";/,
+  /const CANONICAL_APP_ORIGIN = "https:\/\/eventzeka\.com";/,
   "Next config should define the canonical public app origin.",
 );
 assert.match(

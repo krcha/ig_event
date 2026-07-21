@@ -97,10 +97,18 @@ for (const route of ["/", "/sign-in", "/api/health", "/does-not-exist"]) {
 assert.match(healthRouteSource, /Cache-Control["']:\s*["']no-store, max-age=0/);
 assert.match(readyRouteSource, /Cache-Control["']:\s*["']no-store, max-age=0/);
 assert.match(dockerfileSource, /\/app\/lib\/security \.\/lib\/security/);
-assert.match(
-  runtimeComposeSource,
-  /traefik\.http\.routers\.ig-event\.rule=Host\(`events\.ineedtofeedmyrabbit\.com`\)/,
-);
+for (const source of [runtimeComposeSource, imageComposeSource]) {
+  for (const hostname of [
+    "eventzeka.com",
+    "www.eventzeka.com",
+    "events.ineedtofeedmyrabbit.com",
+  ]) {
+    assert.ok(
+      source.includes(`Host(\`${hostname}\`)`),
+      `Production routing should retain HTTPS coverage for ${hostname}.`,
+    );
+  }
+}
 assert.match(runtimeComposeSource, /traefik\.http\.routers\.ig-event\.middlewares=ig-event-hsts@docker/);
 assert.match(runtimeComposeSource, /ig-event-hsts\.headers\.stsSeconds=31536000/);
 assert.match(runtimeComposeSource, /ig-event-hsts\.headers\.stsIncludeSubdomains=true/);

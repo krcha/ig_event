@@ -102,7 +102,7 @@ Copy `.env.example` to `.env.local` for development or
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
 CLERK_SECRET_KEY=
 CLERK_JWT_ISSUER_DOMAIN=
-CLERK_AUTHORIZED_PARTIES=https://events.ineedtofeedmyrabbit.com
+CLERK_AUTHORIZED_PARTIES=https://eventzeka.com,https://events.ineedtofeedmyrabbit.com
 NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
 NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
 NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/
@@ -142,9 +142,10 @@ Notes:
 - `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, and the
   fallback redirect URLs point Clerk at the in-app `/sign-in` and `/sign-up`
   pages and send successful default sign-ins back to `/`.
-- `CLERK_AUTHORIZED_PARTIES` should be set in production to the public app
-  origin so Clerk middleware rejects session tokens minted for another
-  subdomain.
+- `CLERK_AUTHORIZED_PARTIES` should include the canonical
+  `https://eventzeka.com` origin and the retained legacy
+  `https://events.ineedtofeedmyrabbit.com` origin so Clerk middleware accepts
+  both public entry points while rejecting unrelated parties.
 - The in-app auth pages use custom Clerk email/password sign-in and sign-up
   forms with email-code verification. They intentionally avoid Clerk's generic
   social provider picker so disabled or unconfigured OAuth providers cannot be

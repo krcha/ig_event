@@ -580,6 +580,13 @@ process.stdout.write("200");
   writeFileSync(fakeSleepPath, "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
   chmodSync(fakeSleepPath, 0o755);
 
+  // The fixture exercises request budgeting and no-progress handling, not the
+  // host-wide singleton lock. Stub flock so a live production runner cannot
+  // make this otherwise isolated fixture exit before invoking fake curl.
+  const fakeFlockPath = join(fakeBin, "flock");
+  writeFileSync(fakeFlockPath, "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
+  chmodSync(fakeFlockPath, 0o755);
+
   try {
     const result = spawnSync("bash", ["scripts/ig-event-cron-runner", "ingest-venues"], {
       cwd: process.cwd(),

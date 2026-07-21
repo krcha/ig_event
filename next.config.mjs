@@ -1,7 +1,7 @@
 import { buildApplicationSecurityHeaders } from "./lib/security/headers.mjs";
 
 /** @type {import("next").NextConfig} */
-const CANONICAL_APP_ORIGIN = "https://events.ineedtofeedmyrabbit.com";
+const CANONICAL_APP_ORIGIN = "https://eventzeka.com";
 const VERCEL_PRODUCTION_HOST = "ig-event.vercel.app";
 const applicationSecurityHeaders = buildApplicationSecurityHeaders({
   clerkOrigin: process.env.CLERK_JWT_ISSUER_DOMAIN,

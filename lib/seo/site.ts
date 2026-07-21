@@ -1,5 +1,5 @@
 export const SITE_NAME = "Event Zeka";
-export const SITE_ORIGIN = "https://events.ineedtofeedmyrabbit.com";
+export const SITE_ORIGIN = "https://eventzeka.com";
 export const SITE_DESCRIPTION =
   "Find Belgrade events today: nightlife, concerts, DJ nights, exhibitions, theatre, film, festivals, and culture for locals and visitors.";
 export const BELGRADE_TIME_ZONE = "Europe/Belgrade";

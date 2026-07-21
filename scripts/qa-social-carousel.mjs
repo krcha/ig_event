@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import sharp from "sharp";
 import {
   buildDailyCarouselPayload,
+  EVENT_ZEKA_PUBLIC_ORIGIN,
   getNextIsoDate,
   normalizeInstagramHandle,
   selectDailyCarouselEvents,
@@ -11,6 +12,8 @@ import {
   renderCtaCarouselSlide,
   renderEventCarouselSlide,
 } from "../lib/social/carousel-images.ts";
+
+assert.equal(EVENT_ZEKA_PUBLIC_ORIGIN, "https://eventzeka.com");
 
 const publishDate = "2026-07-19";
 const eventDates = ["2026-07-20", "2026-07-21"];

@@ -93,7 +93,7 @@ NODE_ENV=production
 PORT=3000
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
 CLERK_SECRET_KEY=
-CLERK_AUTHORIZED_PARTIES=https://events.ineedtofeedmyrabbit.com
+CLERK_AUTHORIZED_PARTIES=https://eventzeka.com,https://events.ineedtofeedmyrabbit.com
 NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
 NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
 NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/
@@ -284,14 +284,17 @@ upgrade local HTTP to HTTPS.
 
 Traefik alone owns `Strict-Transport-Security`. The same middleware is defined in
 both supported production Compose paths (`docker-compose.yml` and
-`docker-compose.runtime.yml`) and attached only to the canonical HTTPS router for
-`events.ineedtofeedmyrabbit.com`; local HTTP and noncanonical app origins do not
-emit HSTS. Health and readiness responses explicitly use `Cache-Control: no-store`
+`docker-compose.runtime.yml`) and attached to the HTTPS router for canonical
+`eventzeka.com`, `www.eventzeka.com`, and the retained
+`events.ineedtofeedmyrabbit.com` origin; local HTTP does not emit HSTS. Health
+and readiness responses explicitly use `Cache-Control: no-store`
 while static assets retain framework-managed public caching. Verify after deployment:
 
 ```bash
-for path in / /sign-in /api/health /does-not-exist; do
-  curl -sS -D - -o /dev/null "https://events.ineedtofeedmyrabbit.com${path}"
+for origin in https://eventzeka.com https://www.eventzeka.com https://events.ineedtofeedmyrabbit.com; do
+  for path in / /sign-in /api/health /does-not-exist; do
+    curl -sS -D - -o /dev/null "${origin}${path}"
+  done
 done
 ```
 
@@ -302,8 +305,9 @@ commit or narrowly amend that directive; do not disable authentication or TLS.
 
 ## Clerk Production DNS
 
-The current Clerk production instance uses `events.ineedtofeedmyrabbit.com` as
-its primary domain. Clerk auth will not work in production until these CNAME
+The Clerk production frontend/JWT infrastructure remains on
+`events.ineedtofeedmyrabbit.com` even though the app's canonical public origin
+is `eventzeka.com`. Clerk auth will not work in production until these CNAME
 records exist and resolve:
 
 ```text

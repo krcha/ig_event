@@ -15,7 +15,7 @@ function read(path) {
 }
 
 assert.equal(SITE_NAME, "Event Zeka");
-assert.equal(SITE_ORIGIN, "https://events.ineedtofeedmyrabbit.com");
+assert.equal(SITE_ORIGIN, "https://eventzeka.com");
 assert.equal(isPlausibleConvexPublicId("j578mw1v72asdhawga974smym989xcjj"), true);
 assert.equal(isPlausibleConvexPublicId("not-an-id"), false);
 

@@ -201,6 +201,7 @@ After import, run read-only app checks before running ingestion:
 ```bash
 curl -fsS http://127.0.0.1:3210/version
 curl -fsS http://127.0.0.1:3000/api/health
+curl -fsS -I https://eventzeka.com/
 curl -fsS -I https://events.ineedtofeedmyrabbit.com/
 ```
 

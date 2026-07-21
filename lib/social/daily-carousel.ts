@@ -4,7 +4,7 @@ const MAX_INSTAGRAM_CAPTION_LENGTH = 2_200;
 const INSTAGRAM_HANDLE_PATTERN = /^(?!.*\.\.)(?!.*\.$)[a-z0-9._]{1,30}$/;
 const XML_CONTROL_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 
-export const EVENT_ZEKA_PUBLIC_ORIGIN = "https://events.ineedtofeedmyrabbit.com";
+export const EVENT_ZEKA_PUBLIC_ORIGIN = "https://eventzeka.com";
 
 export type DailyCarouselEvent = {
   _id: string;
