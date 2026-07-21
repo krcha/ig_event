@@ -506,7 +506,7 @@ assert.deepEqual(
   "completed jobs should not cool down handles that only recorded scraper/API errors",
 );
 
-function runCronRunnerCapFixture(mode) {
+function runCronRunnerCapFixture(mode, activeCount = 2400) {
   const fixtureRoot = mkdtempSync(join(tmpdir(), "ig-event-cron-cap-"));
   const fakeBin = join(fixtureRoot, "bin");
   const logDir = join(fixtureRoot, "logs");
@@ -538,11 +538,22 @@ let state = { count: 0, requests: [] };
 try { state = JSON.parse(readFileSync(process.env.FAKE_CURL_STATE, "utf8")); } catch {}
 const requestIndex = state.count + 1;
 const parsedUrl = new URL(url);
-const remaining = Number(parsedUrl.searchParams.get("hostRunRemaining") ?? "2400");
+const activeCount = Number(process.env.FAKE_CURL_ACTIVE_COUNT ?? "2400");
+const remaining = Number(parsedUrl.searchParams.get("hostRunRemaining") ?? String(activeCount));
 const selected = Math.min(200, Math.max(0, remaining));
 const repeat = process.env.FAKE_CURL_MODE === "repeat-resume";
-const jobId = repeat && requestIndex <= 2 ? "resumed-job" : "job-" + requestIndex;
-const done = !(repeat && requestIndex === 1);
+const singleHandleProgress = process.env.FAKE_CURL_MODE === "single-handle-progress";
+const zeroProgress = process.env.FAKE_CURL_MODE === "zero-progress";
+const jobId = singleHandleProgress || zeroProgress
+  ? process.env.FAKE_CURL_MODE + "-job"
+  : repeat && requestIndex <= 2
+    ? "resumed-job"
+    : "job-" + requestIndex;
+const done = zeroProgress
+  ? false
+  : singleHandleProgress
+    ? requestIndex >= selected
+    : !(repeat && requestIndex === 1);
 const payload = {
   jobId,
   resumedJob: requestIndex === 1 || (repeat && requestIndex === 2),
@@ -550,8 +561,11 @@ const payload = {
   done,
   handles: Array.from({ length: selected }, (_, index) => "handle-" + requestIndex + "-" + index),
   skippedDueToRunLimit: remaining > selected ? 1 : 0,
-  hostRunMaxHandles: 2400,
+  hostRunMaxHandles: activeCount,
   maxHandlesPerJob: 200,
+  effectiveBatchSize: singleHandleProgress || zeroProgress ? 1 : selected,
+  maxSteps: 1,
+  stepsAdvanced: zeroProgress ? 0 : 1,
 };
 state.count = requestIndex;
 state.requests.push({ requestIndex, remaining, selected, jobId, done });
@@ -562,6 +576,9 @@ process.stdout.write("200");
     { mode: 0o755 },
   );
   chmodSync(fakeCurlPath, 0o755);
+  const fakeSleepPath = join(fakeBin, "sleep");
+  writeFileSync(fakeSleepPath, "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
+  chmodSync(fakeSleepPath, 0o755);
 
   try {
     const result = spawnSync("bash", ["scripts/ig-event-cron-runner", "ingest-venues"], {
@@ -569,6 +586,7 @@ process.stdout.write("200");
       encoding: "utf8",
       env: {
         ...process.env,
+        FAKE_CURL_ACTIVE_COUNT: String(activeCount),
         FAKE_CURL_MODE: mode,
         FAKE_CURL_STATE: stateFile,
         IG_EVENT_CRON_ENV: envFile,
@@ -606,6 +624,37 @@ assert.deepEqual(
   repeatedResumeFixture.state.requests.slice(0, 3).map((request) => request.remaining),
   [2400, 2200, 2200],
   "the same resumed job ID must not consume the host budget twice",
+);
+
+const singleHandleProgressFixture = runCronRunnerCapFixture("single-handle-progress", 47);
+assert.equal(
+  singleHandleProgressFixture.result.status,
+  0,
+  singleHandleProgressFixture.result.stderr,
+);
+assert.match(
+  singleHandleProgressFixture.result.stdout,
+  /status=ok requests=47 selected=47 host_run_max=47/,
+  "a one-handle-per-request route must finish the selected job instead of exhausting a chunk-based request budget",
+);
+assert.equal(singleHandleProgressFixture.state.requests.length, 47);
+assert.deepEqual(
+  [...new Set(singleHandleProgressFixture.state.requests.map((request) => request.remaining))],
+  [47],
+  "an incomplete final job must retain enough host-run allowance to resume until done",
+);
+
+const zeroProgressFixture = runCronRunnerCapFixture("zero-progress", 47);
+assert.equal(zeroProgressFixture.result.status, 1);
+assert.match(
+  zeroProgressFixture.result.stderr,
+  /reason=no_progress consecutive=6/,
+  "a leased or stalled job must stop after a bounded number of no-progress responses",
+);
+assert.equal(
+  zeroProgressFixture.state.requests.length,
+  6,
+  "zero-progress responses must not consume the full throughput-sized request budget",
 );
 
 console.log("Apify cost-control QA passed.");
