@@ -11,7 +11,8 @@ Use separate containers in the same Compose stack:
 ```text
 internet
   -> Traefik/Caddy/nginx TLS
-  -> events.ineedtofeedmyrabbit.com       -> web container :3000
+  -> eventzeka.com                         -> web container :3000
+  -> events.ineedtofeedmyrabbit.com        -> web container :3000 (legacy)
   -> convex-events.ineedtofeedmyrabbit.com -> convex-backend container :3210
 
 operator SSH tunnel, local only

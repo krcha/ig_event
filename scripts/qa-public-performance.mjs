@@ -417,6 +417,16 @@ assert.match(
 );
 assert.match(
   nextConfigSource,
+  /const WWW_APP_HOST = "www\.eventzeka\.com";/,
+  "Next config should define the www alias host.",
+);
+assert.match(
+  nextConfigSource,
+  /has:\s*\[\{ type: "host", value: WWW_APP_HOST \}\]/,
+  "The www hostname should redirect before Clerk-backed application routes.",
+);
+assert.match(
+  nextConfigSource,
   /has:\s*\[\{ type: "host", value: VERCEL_PRODUCTION_HOST \}\]/,
   "Vercel production alias should redirect by Host header.",
 );

@@ -285,9 +285,9 @@ upgrade local HTTP to HTTPS.
 Traefik alone owns `Strict-Transport-Security`. The same middleware is defined in
 both supported production Compose paths (`docker-compose.yml` and
 `docker-compose.runtime.yml`) and attached to the HTTPS router for canonical
-`eventzeka.com`, `www.eventzeka.com`, and the retained
-`events.ineedtofeedmyrabbit.com` origin; local HTTP does not emit HSTS. Health
-and readiness responses explicitly use `Cache-Control: no-store`
+`eventzeka.com`, the permanently redirected `www.eventzeka.com` alias, and the
+retained `events.ineedtofeedmyrabbit.com` origin; local HTTP does not emit HSTS.
+Health and readiness responses explicitly use `Cache-Control: no-store`
 while static assets retain framework-managed public caching. Verify after deployment:
 
 ```bash

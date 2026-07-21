@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { request as httpRequest } from "node:http";
 import process from "node:process";
 
 const port = 33_000 + (process.pid % 1_000);
@@ -21,6 +22,28 @@ async function fetchWithTimeout(path, options = {}) {
   return fetch(`${origin}${path}`, {
     ...options,
     signal: AbortSignal.timeout(30_000),
+  });
+}
+
+function requestWithHost(path, host) {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(
+      {
+        headers: { host },
+        hostname: "127.0.0.1",
+        path,
+        port,
+      },
+      (response) => {
+        response.resume();
+        response.once("end", () => resolve(response));
+      },
+    );
+    request.setTimeout(30_000, () =>
+      request.destroy(new Error("Host redirect request timed out.")),
+    );
+    request.once("error", reject);
+    request.end();
   });
 }
 
@@ -100,8 +123,18 @@ try {
   assert.equal(redirect.status, 308);
   assert.equal(redirect.headers.get("location"), "/venues?source=security-qa");
 
+  const wwwRedirect = await requestWithHost(
+    "/saved?source=security-qa",
+    "www.eventzeka.com",
+  );
+  assert.equal(wwwRedirect.statusCode, 308);
+  assert.equal(
+    wwwRedirect.headers.location,
+    "https://eventzeka.com/saved?source=security-qa",
+  );
+
   console.log(
-    "Security-header HTTP QA passed for home, sign-in, health, readiness, 404, local HSTS ownership, and redirects.",
+    "Security-header HTTP QA passed for home, sign-in, health, readiness, 404, local HSTS ownership, and canonical redirects.",
   );
 } catch (error) {
   console.error(output.join(""));

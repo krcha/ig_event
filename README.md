@@ -145,7 +145,9 @@ Notes:
 - `CLERK_AUTHORIZED_PARTIES` should include the canonical
   `https://eventzeka.com` origin and the retained legacy
   `https://events.ineedtofeedmyrabbit.com` origin so Clerk middleware accepts
-  both public entry points while rejecting unrelated parties.
+  both public entry points while rejecting unrelated parties. The
+  `https://www.eventzeka.com` alias redirects permanently to the apex before
+  Clerk-backed routes run.
 - The in-app auth pages use custom Clerk email/password sign-in and sign-up
   forms with email-code verification. They intentionally avoid Clerk's generic
   social provider picker so disabled or unconfigured OAuth providers cannot be

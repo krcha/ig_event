@@ -2,6 +2,7 @@ import { buildApplicationSecurityHeaders } from "./lib/security/headers.mjs";
 
 /** @type {import("next").NextConfig} */
 const CANONICAL_APP_ORIGIN = "https://eventzeka.com";
+const WWW_APP_HOST = "www.eventzeka.com";
 const VERCEL_PRODUCTION_HOST = "ig-event.vercel.app";
 const applicationSecurityHeaders = buildApplicationSecurityHeaders({
   clerkOrigin: process.env.CLERK_JWT_ISSUER_DOMAIN,
@@ -46,6 +47,12 @@ const nextConfig = {
   },
   async redirects() {
     return [
+      {
+        source: "/:path*",
+        has: [{ type: "host", value: WWW_APP_HOST }],
+        destination: `${CANONICAL_APP_ORIGIN}/:path*`,
+        permanent: true,
+      },
       {
         source: "/:path*",
         has: [{ type: "host", value: VERCEL_PRODUCTION_HOST }],

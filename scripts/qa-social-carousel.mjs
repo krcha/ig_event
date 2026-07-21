@@ -167,6 +167,8 @@ assert.match(ctaRouteSource, /"content-type": "image\/jpeg"/);
 assert.match(imageRendererSource, /limitInputPixels: 2_000_000/);
 assert.match(imageRendererSource, /\.jpeg\(/);
 assert.match(imageRendererSource, /datePillWidth/);
+assert.match(imageRendererSource, />eventzeka\.com<\/text>/);
+assert.doesNotMatch(imageRendererSource, />events\.ineedtofeedmyrabbit\.com<\/text>/);
 assert.equal(scheduleNode?.parameters?.rule?.interval?.[0]?.expression, "1 0 * * *");
 assert.match(workflowCode, /this\.helpers\.httpRequest/);
 assert.doesNotMatch(workflowCode, /await fetch\(/);
