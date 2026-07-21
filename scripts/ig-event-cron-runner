@@ -145,6 +145,11 @@ while true; do
   request_url="$URL"
   if [[ "$JOB" == "ingest-venues" && "$HOST_RUN_MAX_HANDLES" -gt 0 ]]; then
     host_run_remaining=$(( HOST_RUN_MAX_HANDLES - TOTAL_SELECTED ))
+    if [[ "$LAST_DONE" != "true" && "$LAST_SELECTED" -gt "$host_run_remaining" ]]; then
+      # The selected handles count against the aggregate budget on first sight,
+      # but a partial final job still needs enough allowance to be resumed.
+      host_run_remaining="$LAST_SELECTED"
+    fi
     if [[ "$host_run_remaining" -le 0 ]]; then
       break
     fi
@@ -169,11 +174,23 @@ skipped = payload.get("skippedDueToRunLimit", 0)
 status = payload.get("status", "none")
 host_max = payload.get("hostRunMaxHandles", 0)
 job_chunk = payload.get("maxHandlesPerJob", selected)
+effective_batch_size = payload.get("effectiveBatchSize", 1)
+max_steps = payload.get("maxSteps", 1)
 job_id = payload.get("jobId")
-print("true" if done else "false", selected, skipped if isinstance(skipped, int) else 0, status, host_max if isinstance(host_max, int) else 0, job_chunk if isinstance(job_chunk, int) else selected, job_id if isinstance(job_id, str) and job_id else "-")
+print(
+    "true" if done else "false",
+    selected,
+    skipped if isinstance(skipped, int) else 0,
+    status,
+    host_max if isinstance(host_max, int) else 0,
+    job_chunk if isinstance(job_chunk, int) else selected,
+    effective_batch_size if isinstance(effective_batch_size, int) and effective_batch_size > 0 else 1,
+    max_steps if isinstance(max_steps, int) and max_steps > 0 else 1,
+    job_id if isinstance(job_id, str) and job_id else "-",
+)
 PY
 )"
-  read -r LAST_DONE LAST_SELECTED LAST_SKIPPED_DUE LAST_STATUS RESPONSE_HOST_MAX RESPONSE_JOB_CHUNK RESPONSE_JOB_ID <<<"$response_state"
+  read -r LAST_DONE LAST_SELECTED LAST_SKIPPED_DUE LAST_STATUS RESPONSE_HOST_MAX RESPONSE_JOB_CHUNK RESPONSE_EFFECTIVE_BATCH_SIZE RESPONSE_MAX_STEPS RESPONSE_JOB_ID <<<"$response_state"
   if [[ "$LAST_SELECTED" -gt 0 ]]; then
     if [[ "$RESPONSE_JOB_ID" == "-" ]]; then
       echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=missing_job_id selected=$LAST_SELECTED body=$LAST_BODY" >&2
@@ -188,8 +205,11 @@ PY
     HOST_RUN_MAX_HANDLES="$RESPONSE_HOST_MAX"
     if [[ "$RESPONSE_JOB_CHUNK" -gt 0 ]]; then
       required_chunks=$(( (HOST_RUN_MAX_HANDLES + RESPONSE_JOB_CHUNK - 1) / RESPONSE_JOB_CHUNK ))
-      # Allow repeated resumptions without imposing a count ceiling on venues.
-      MAX_REQUESTS=$(( required_chunks * 12 + 10 ))
+      handles_per_request=$(( RESPONSE_EFFECTIVE_BATCH_SIZE * RESPONSE_MAX_STEPS ))
+      required_progress_requests=$(( (HOST_RUN_MAX_HANDLES + handles_per_request - 1) / handles_per_request ))
+      # Cover the advertised route throughput, then retain bounded slack for
+      # leases, interrupted requests, and repeated resumptions per job chunk.
+      MAX_REQUESTS=$(( required_progress_requests + required_chunks * 12 + 10 ))
     fi
   fi
 
