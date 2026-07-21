@@ -4,6 +4,8 @@ set -Eeuo pipefail
 ENV_FILE="${IG_EVENT_CRON_ENV:-/etc/ig_event/cron.env}"
 LOG_DIR="${IG_EVENT_CRON_LOG_DIR:-/var/log/ig_event}"
 DRY_RUN=0
+MAX_CONSECUTIVE_NO_PROGRESS=6
+NO_PROGRESS_BACKOFF_BASE_SECONDS=5
 
 if [[ "${1:-}" == "--dry-run" ]]; then
   DRY_RUN=1
@@ -75,6 +77,7 @@ LAST_SKIPPED_DUE=0
 REQUESTS_COMPLETED=0
 TOTAL_SELECTED=0
 HOST_RUN_MAX_HANDLES=0
+CONSECUTIVE_NO_PROGRESS=0
 CURRENT_CURL_CONFIG=""
 declare -A COUNTED_JOB_IDS=()
 
@@ -176,6 +179,7 @@ host_max = payload.get("hostRunMaxHandles", 0)
 job_chunk = payload.get("maxHandlesPerJob", selected)
 effective_batch_size = payload.get("effectiveBatchSize", 1)
 max_steps = payload.get("maxSteps", 1)
+steps_advanced = payload.get("stepsAdvanced", 0)
 job_id = payload.get("jobId")
 print(
     "true" if done else "false",
@@ -186,11 +190,12 @@ print(
     job_chunk if isinstance(job_chunk, int) else selected,
     effective_batch_size if isinstance(effective_batch_size, int) and effective_batch_size > 0 else 1,
     max_steps if isinstance(max_steps, int) and max_steps > 0 else 1,
+    steps_advanced if isinstance(steps_advanced, int) and steps_advanced >= 0 else 0,
     job_id if isinstance(job_id, str) and job_id else "-",
 )
 PY
 )"
-  read -r LAST_DONE LAST_SELECTED LAST_SKIPPED_DUE LAST_STATUS RESPONSE_HOST_MAX RESPONSE_JOB_CHUNK RESPONSE_EFFECTIVE_BATCH_SIZE RESPONSE_MAX_STEPS RESPONSE_JOB_ID <<<"$response_state"
+  read -r LAST_DONE LAST_SELECTED LAST_SKIPPED_DUE LAST_STATUS RESPONSE_HOST_MAX RESPONSE_JOB_CHUNK RESPONSE_EFFECTIVE_BATCH_SIZE RESPONSE_MAX_STEPS RESPONSE_STEPS_ADVANCED RESPONSE_JOB_ID <<<"$response_state"
   if [[ "$LAST_SELECTED" -gt 0 ]]; then
     if [[ "$RESPONSE_JOB_ID" == "-" ]]; then
       echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=missing_job_id selected=$LAST_SELECTED body=$LAST_BODY" >&2
@@ -217,12 +222,25 @@ PY
     break
   fi
   if [[ "$LAST_DONE" != "true" ]]; then
+    if [[ "$RESPONSE_STEPS_ADVANCED" -eq 0 ]]; then
+      CONSECUTIVE_NO_PROGRESS=$(( CONSECUTIVE_NO_PROGRESS + 1 ))
+      if [[ "$CONSECUTIVE_NO_PROGRESS" -ge "$MAX_CONSECUTIVE_NO_PROGRESS" ]]; then
+        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=no_progress consecutive=$CONSECUTIVE_NO_PROGRESS requests=$REQUESTS_COMPLETED selected=$LAST_SELECTED response_status=$LAST_STATUS response_job_id=$RESPONSE_JOB_ID body=$LAST_BODY" >&2
+        exit 1
+      fi
+      backoff_seconds=$(( CONSECUTIVE_NO_PROGRESS * NO_PROGRESS_BACKOFF_BASE_SECONDS ))
+      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=waiting reason=no_progress consecutive=$CONSECUTIVE_NO_PROGRESS backoff_seconds=$backoff_seconds response_job_id=$RESPONSE_JOB_ID"
+      sleep "$backoff_seconds"
+    else
+      CONSECUTIVE_NO_PROGRESS=0
+    fi
     if [[ "$request_index" -ge "$MAX_REQUESTS" ]]; then
       echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=incomplete_job requests=$REQUESTS_COMPLETED selected=$LAST_SELECTED response_status=$LAST_STATUS body=$LAST_BODY" >&2
       exit 1
     fi
     continue
   fi
+  CONSECUTIVE_NO_PROGRESS=0
   if [[ "$LAST_SKIPPED_DUE" -le 0 ]]; then
     break
   fi
