@@ -87,8 +87,8 @@ assert.equal(
 );
 assert.equal(
   buildDiscoverImageUrl({ _id: "event123", instagramHandle: "@DrugstoreBelgrade" }),
-  "/api/discover/images/event123?handle=drugstorebelgrade",
-  "Discover image URLs should be first-party and carry the normalized handle.",
+  "/api/discover/images/event123",
+  "Discover image URLs should use only first-party event identity, without venue-handle coupling.",
 );
 assert.equal(
   getDiscoverImageCandidate(
@@ -188,8 +188,8 @@ assertIncludes(
 );
 assertIncludes(
   discoverFeedSource,
-  'data-discover-image-source="apify-proxy"',
-  "Discover image rendering should mark the Apify-backed first-party image path.",
+  'data-discover-image-source="event-proxy"',
+  "Discover image rendering should mark the first-party event image proxy path.",
 );
 assertIncludes(
   discoverFeedSource,
@@ -216,10 +216,10 @@ assertIncludes(
   'event.imageUrl?.startsWith("/api/discover/images/")',
   "Discover should render first-party image proxy URLs.",
 );
-assertIncludes(
+assertDoesNotInclude(
   discoverFeedSource,
-  "isApifyImageUrl(event.imageUrl) ? event.imageUrl : null",
-  "Discover should still allow direct Apify-hosted image URLs.",
+  "isApifyImageUrl(event.imageUrl)",
+  "Discover should never bypass the first-party proxy for direct Apify image URLs.",
 );
 assertIncludes(
   discoverFeedSource,
@@ -385,7 +385,7 @@ assertIncludes(
 );
 assertIncludes(
   discoverImageSourceSource,
-  "`/api/discover/images/${encodeURIComponent(event._id)}${query}`",
+  "return `/api/discover/images/${encodeURIComponent(event._id)}`;",
   "Discover image helper should expose first-party image proxy URLs.",
 );
 assertIncludes(
@@ -416,13 +416,13 @@ assertIncludes(
 
 assertIncludes(
   discoverImageRouteSource,
-  "getDiscoverImageCandidate",
-  "Discover image route should resolve only Apify-sourced image candidates.",
+  "mediaAssets:getPublicEventImageSource",
+  "Discover image route should resolve media through the event source identity query.",
 );
 assertIncludes(
   discoverImageRouteSource,
-  "events:getPublicApprovedEvent",
-  "Discover image route should load only approved public event records.",
+  'source.kind === "stored"',
+  "Discover image route should prefer durable stored media.",
 );
 assertIncludes(
   discoverImageRouteSource,
@@ -441,8 +441,8 @@ assertIncludes(
 );
 assertIncludes(
   discoverImageRouteSource,
-  "\"cache-control\": \"public, max-age=3600, stale-while-revalidate=86400\"",
-  "Discover image route should cache first-party image responses.",
+  "public, max-age=3600, stale-while-revalidate=86400",
+  "Discover image route should cache durable first-party image responses.",
 );
 assertDoesNotInclude(
   nextConfigSource,

@@ -107,6 +107,11 @@ const HANDLE_SUMMARY_METRICS: Array<{
   },
   { label: "Skipped video", getValue: (item) => item.skipped_video },
   { label: "Skipped invalid event", getValue: (item) => item.skipped_invalid_event },
+  { label: "Persisted images", getValue: (item) => item.persistedImages ?? 0 },
+  {
+    label: "Failed image persistence",
+    getValue: (item) => item.failedImagePersistence ?? 0,
+  },
   {
     label: "Failed downloads",
     getValue: (item) => countFirstMetric(item.failedDownloads, item.failed_downloads),

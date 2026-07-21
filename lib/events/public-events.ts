@@ -76,6 +76,7 @@ export type PublicEvent = {
   sourceCaption?: string;
   description?: string;
   imageUrl?: string;
+  imageStorageId?: string;
   instagramHandle?: string;
   instagramPostUrl?: string;
   instagramPostId?: string;

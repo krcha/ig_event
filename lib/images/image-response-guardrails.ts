@@ -33,8 +33,14 @@ export function assertImageResponseHeaders(
 
   const contentLength = response.headers.get("content-length");
   if (contentLength) {
-    const parsed = Number.parseInt(contentLength, 10);
-    if (Number.isFinite(parsed) && parsed > maxBytes) {
+    if (!/^\d+$/u.test(contentLength.trim())) {
+      throw new Error("Image response has an invalid content-length header.");
+    }
+    const parsed = Number(contentLength);
+    if (!Number.isSafeInteger(parsed)) {
+      throw new Error("Image response has an invalid content-length header.");
+    }
+    if (parsed > maxBytes) {
       throw new Error(`Image response exceeds ${maxBytes} bytes.`);
     }
   }

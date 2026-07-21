@@ -25,6 +25,8 @@ import {
 import { sanitizeVenueLinkedPublicEventFields } from "../lib/events/public-event-venue-fields";
 import { canonicalizeEventType } from "../lib/taxonomy/venue-types";
 import { isVenuePublic } from "../lib/venues/venue-lifecycle";
+import { normalizeInstagramPostUrl } from "../lib/images/apify-images";
+import { assertPublicEventImageWrite } from "../lib/images/public-event-image";
 import { requireAdminIdentity, requireAdminOrServiceSecret } from "./authz";
 
 const eventStatus = v.union(
@@ -879,6 +881,7 @@ export const createEvent = mutation({
     artists: v.array(v.string()),
     description: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
+    imageStorageId: v.optional(v.id("_storage")),
     instagramPostUrl: v.optional(v.string()),
     instagramPostId: v.optional(v.string()),
     ticketPrice: v.optional(v.string()),
@@ -914,12 +917,16 @@ export const createEvent = mutation({
     }
     void _serviceSecret;
     const now = Date.now();
+    assertPublicEventImageWrite(eventArgs.imageUrl, eventArgs.imageStorageId);
     if (eventArgs.status === "approved") {
       await assertApprovalCandidatePolicy(ctx, { ...eventArgs, ...venueFields });
     }
     const normalizedEventArgs = normalizeEventTimeWritePatch(eventArgs);
     const eventId = await ctx.db.insert("events", {
       ...normalizedEventArgs,
+      ...(eventArgs.instagramPostUrl
+        ? { normalizedInstagramPostUrl: normalizeInstagramPostUrl(eventArgs.instagramPostUrl) }
+        : {}),
       ...venueFields,
       eventType: canonicalizeEventType(eventArgs.eventType),
       status: eventArgs.status ?? "pending",
@@ -951,6 +958,7 @@ export const updateEvent = mutation({
       artists: v.optional(v.array(v.string())),
       description: v.optional(v.string()),
       imageUrl: v.optional(v.string()),
+      imageStorageId: v.optional(v.id("_storage")),
       instagramPostUrl: v.optional(v.string()),
       instagramPostId: v.optional(v.string()),
       ticketPrice: v.optional(v.string()),
@@ -984,9 +992,28 @@ export const updateEvent = mutation({
       args.patch.venue !== undefined
         ? await resolveVenueDenormalizedFields(ctx, args.patch.venue)
         : {};
+    const nextImageStorageId =
+      args.patch.imageStorageId ??
+      (args.patch.imageUrl !== undefined && args.patch.imageUrl === existingEvent.imageUrl
+        ? existingEvent.imageStorageId
+        : undefined);
+    assertPublicEventImageWrite(args.patch.imageUrl, nextImageStorageId);
+    const imagePairPatch =
+      args.patch.imageUrl !== undefined
+        ? {
+            imageUrl: args.patch.imageUrl,
+            imageStorageId: nextImageStorageId,
+          }
+        : {};
     const patch = {
       ...normalizeEventTimeWritePatch(args.patch),
+      ...imagePairPatch,
       ...venueFields,
+      ...(args.patch.instagramPostUrl !== undefined
+        ? {
+            normalizedInstagramPostUrl: normalizeInstagramPostUrl(args.patch.instagramPostUrl),
+          }
+        : {}),
       ...(args.patch.eventType !== undefined
         ? { eventType: canonicalizeEventType(args.patch.eventType) }
         : {}),
@@ -1273,6 +1300,7 @@ export const mergeApprovedEvents = mutation({
       artists: v.optional(v.array(v.string())),
       description: v.optional(v.string()),
       imageUrl: v.optional(v.string()),
+      imageStorageId: v.optional(v.id("_storage")),
       ticketPrice: v.optional(v.string()),
       eventType: v.optional(v.string()),
     }),
@@ -1292,6 +1320,7 @@ export const mergeApprovedEvents = mutation({
     }
 
     const duplicateIds = [...new Set(args.duplicateIds)].filter((id) => id !== args.primaryId);
+    const duplicateEvents: Doc<"events">[] = [];
     for (const duplicateId of duplicateIds) {
       const duplicateEvent = await ctx.db.get(duplicateId);
       if (!duplicateEvent) {
@@ -1300,16 +1329,29 @@ export const mergeApprovedEvents = mutation({
       if (duplicateEvent.status !== "approved") {
         throw new Error("Only approved duplicate events can be removed.");
       }
+      duplicateEvents.push(duplicateEvent);
     }
 
     const now = Date.now();
     if (Object.keys(args.patch).length > 0) {
+      assertPublicEventImageWrite(args.patch.imageUrl, args.patch.imageStorageId);
       const venueFields =
         args.patch.venue !== undefined
           ? await resolveVenueDenormalizedFields(ctx, args.patch.venue)
           : {};
       const patch = {
         ...normalizeEventTimeWritePatch(args.patch),
+        ...(args.patch.imageUrl !== undefined
+          ? {
+              imageUrl: args.patch.imageUrl,
+              imageStorageId:
+                args.patch.imageStorageId ??
+                [primaryEvent, ...duplicateEvents].find(
+                  (event) =>
+                    event.imageUrl === args.patch.imageUrl && event.imageStorageId !== undefined,
+                )?.imageStorageId,
+            }
+          : {}),
         ...venueFields,
         ...(args.patch.eventType !== undefined
           ? { eventType: canonicalizeEventType(args.patch.eventType) }

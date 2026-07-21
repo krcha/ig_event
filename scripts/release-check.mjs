@@ -36,6 +36,7 @@ const checks = [
   { script: "qa:ingestion-leases", timeoutMs: 60_000 },
   { script: "qa:public-event-windows", timeoutMs: 60_000 },
   { script: "qa:image-guardrails", timeoutMs: 60_000 },
+  { script: "qa:durable-instagram-images", timeoutMs: 60_000 },
   { script: "qa:runtime-config", timeoutMs: 60_000 },
   { script: "qa:security-headers", timeoutMs: 60_000 },
   { script: "qa:security-headers-http", timeoutMs: 120_000 },

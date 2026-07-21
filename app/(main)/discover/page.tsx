@@ -9,6 +9,7 @@ import {
   type PublicEvent,
 } from "@/lib/events/public-events";
 import { enrichDiscoverEventsWithApifyPosts } from "@/lib/discover/apify-posts";
+import { getDiscoverDisplayImageUrl } from "@/lib/discover/discover-image-source";
 import {
   addDaysToDateKey,
   getNightlifeDefaultDateKey,
@@ -74,12 +75,14 @@ export async function generateMetadata({ searchParams }: DiscoverPageProps): Pro
 }
 
 function mapPublicEvent(event: PublicEvent): DiscoverFeedEvent {
+  const imageUrl = getDiscoverDisplayImageUrl(event, null);
   return {
     _id: event._id,
     artists: event.artists,
     date: event.date,
     eventType: event.eventType,
-    ...(event.imageUrl ? { imageUrl: event.imageUrl } : {}),
+    ...(imageUrl ? { imageUrl } : {}),
+    ...(event.imageStorageId ? { imageStorageId: event.imageStorageId } : {}),
     ...(event.instagramHandle ? { instagramHandle: event.instagramHandle } : {}),
     ...(event.instagramPostId ? { instagramPostId: event.instagramPostId } : {}),
     ...(event.instagramPostUrl ? { instagramPostUrl: event.instagramPostUrl } : {}),

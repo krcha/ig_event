@@ -9,7 +9,6 @@ import {
 import { SaveEventButton } from "@/components/events/save-event-button";
 import { ReadMoreText } from "@/components/ui/read-more-text";
 import { resolveEventTimeDisplay, type EventDayPeriod } from "@/lib/events/event-time";
-import { isApifyImageUrl } from "@/lib/images/apify-images";
 import { cn } from "@/lib/utils";
 
 export type DiscoverFeedEvent = {
@@ -18,6 +17,7 @@ export type DiscoverFeedEvent = {
   date: string;
   eventType: string;
   imageUrl?: string;
+  imageStorageId?: string;
   instagramHandle?: string;
   instagramPostId?: string;
   instagramPostUrl?: string;
@@ -106,10 +106,7 @@ function getInstagramHandleLabel(event: DiscoverFeedEvent): string {
 }
 
 function getStableImageUrl(event: DiscoverFeedEvent): string | null {
-  if (event.imageUrl?.startsWith("/api/discover/images/")) {
-    return event.imageUrl;
-  }
-  return isApifyImageUrl(event.imageUrl) ? event.imageUrl : null;
+  return event.imageUrl?.startsWith("/api/discover/images/") ? event.imageUrl : null;
 }
 
 function EventMetaChips({ event }: { event: DiscoverFeedEvent }) {
@@ -201,7 +198,7 @@ function DiscoverPost({
         <Link
           aria-label={`Open ${event.title}`}
           className="relative block aspect-[4/5] overflow-hidden bg-black"
-          data-discover-image-source="apify-proxy"
+          data-discover-image-source="event-proxy"
           href={`/events/${event._id}`}
         >
           <Image

@@ -3,22 +3,19 @@ import { pickApifySourcedImageUrl } from "@/lib/images/apify-images";
 export type DiscoverImageEventSource = {
   _id: string;
   imageUrl?: string | null;
-  instagramHandle?: string | null;
+  imageStorageId?: string | null;
+  instagramPostId?: string | null;
+  instagramPostUrl?: string | null;
 };
 
 export type DiscoverImagePostSource = {
   imageUrl?: string | null;
+  imageStorageId?: string | null;
   imageUrls?: string[];
 };
 
-export function normalizeDiscoverImageHandle(value: string | null | undefined): string {
-  return value?.replace(/^@/, "").trim().toLowerCase() ?? "";
-}
-
 export function buildDiscoverImageUrl(event: DiscoverImageEventSource): string {
-  const handle = normalizeDiscoverImageHandle(event.instagramHandle);
-  const query = handle ? `?handle=${encodeURIComponent(handle)}` : "";
-  return `/api/discover/images/${encodeURIComponent(event._id)}${query}`;
+  return `/api/discover/images/${encodeURIComponent(event._id)}`;
 }
 
 export function getDiscoverImageCandidate(
@@ -32,9 +29,22 @@ export function getDiscoverImageCandidate(
   ]);
 }
 
+export function hasDiscoverImageSource(
+  event: DiscoverImageEventSource,
+  post: DiscoverImagePostSource | null = null,
+): boolean {
+  return Boolean(
+    event.imageStorageId ||
+      event.instagramPostId ||
+      event.instagramPostUrl ||
+      post?.imageStorageId ||
+      getDiscoverImageCandidate(event, post),
+  );
+}
+
 export function getDiscoverDisplayImageUrl(
   event: DiscoverImageEventSource,
   post: DiscoverImagePostSource | null,
 ): string | undefined {
-  return getDiscoverImageCandidate(event, post) ? buildDiscoverImageUrl(event) : undefined;
+  return hasDiscoverImageSource(event, post) ? buildDiscoverImageUrl(event) : undefined;
 }

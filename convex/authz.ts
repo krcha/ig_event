@@ -1,7 +1,7 @@
 import type { UserIdentity } from "convex/server";
-import type { MutationCtx, QueryCtx } from "./_generated/server";
+import type { ActionCtx, MutationCtx, QueryCtx } from "./_generated/server";
 
-type AuthzCtx = Pick<QueryCtx | MutationCtx, "auth">;
+type AuthzCtx = Pick<ActionCtx | QueryCtx | MutationCtx, "auth">;
 
 const ADMIN_USER_ID_SEPARATOR = /[\s,]+/;
 

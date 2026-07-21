@@ -28,7 +28,10 @@ import { SaveEventButton } from "@/components/events/save-event-button";
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
 import { VenueWeeklyHours } from "@/components/venues/venue-weekly-hours";
 import { loadPublicEventDetailData } from "@/lib/events/public-event-detail-data";
-import { buildDiscoverImageUrl } from "@/lib/discover/discover-image-source";
+import {
+  buildDiscoverImageUrl,
+  hasDiscoverImageSource,
+} from "@/lib/discover/discover-image-source";
 import { isPlausibleConvexPublicId } from "@/lib/convex/public-id";
 import {
   DEFAULT_EVENT_TYPE,
@@ -41,14 +44,14 @@ import {
   normalizeHandle,
   toSearchableText,
 } from "@/lib/pipeline/venue-normalization";
-import { isApifyImageUrl } from "@/lib/images/apify-images";
+
 import {
   absoluteUrl,
   buildBreadcrumbStructuredData,
   buildEventStructuredData,
   clipText,
 } from "@/lib/seo/site";
-import { cn } from "@/lib/utils";
+
 import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 
 export const revalidate = 60;
@@ -75,6 +78,8 @@ type EventRecord = {
   description?: string;
   sourceCaption?: string;
   imageUrl?: string;
+  imageStorageId?: string;
+  instagramPostId?: string;
   instagramPostUrl?: string;
   ticketPrice?: string;
   attendance?: number | string;
@@ -235,17 +240,11 @@ function buildCalendarHref(event: EventRecord): string {
 }
 
 function buildStableEventImageUrl(event: EventRecord): string | null {
-  if (!event.imageUrl) {
+  if (!hasDiscoverImageSource(event)) {
     return null;
   }
 
-  return absoluteUrl(
-    buildDiscoverImageUrl({
-      _id: event._id,
-      imageUrl: event.imageUrl,
-      instagramHandle: event.venueInstagramHandle,
-    }),
-  );
+  return absoluteUrl(buildDiscoverImageUrl(event));
 }
 
 export async function generateMetadata({ params }: EventDetailPageProps): Promise<Metadata> {
@@ -347,26 +346,15 @@ function EventImage({
   sizes: string;
   src: string;
 }) {
-  if (isApifyImageUrl(src)) {
-    return (
-      <Image
-        alt={alt}
-        className={className}
-        fill
-        priority={priority}
-        sizes={sizes}
-        src={src}
-      />
-    );
-  }
-
   return (
-    <img
+    <Image
       alt={alt}
-      className={cn("absolute inset-0 h-full w-full", className)}
-      decoding="async"
-      loading={priority ? "eager" : "lazy"}
+      className={className}
+      fill
+      priority={priority}
+      sizes={sizes}
       src={src}
+      unoptimized
     />
   );
 }
@@ -383,6 +371,9 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
   const venueHref = event.venueId ? `/venues/${event.venueId}` : null;
   const calendarHref = buildCalendarHref(event);
+  const eventImageUrl = hasDiscoverImageSource(event)
+    ? buildDiscoverImageUrl(event)
+    : null;
   const breadcrumbItems = [
     { name: "Belgrade events", path: "/" },
     ...(venueHref ? [{ name: event.venue, path: venueHref }] : []),
@@ -529,15 +520,15 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
               </div>
 
               <aside className="border-t border-border/75 bg-muted/[0.22] p-3 sm:p-5 lg:border-l lg:border-t-0">
-                {event.imageUrl ? (
+                {eventImageUrl ? (
                   <div className="overflow-hidden rounded-[1.1rem] border border-border/75 bg-card p-1.5 shadow-[0_24px_68px_-48px_rgba(0,0,0,0.82)]">
                     <div className="relative aspect-[16/10] max-h-64 w-full overflow-hidden rounded-[0.9rem] lg:aspect-[4/5] lg:max-h-none">
                     <EventImage
                       alt={event.title}
-                      className="object-cover"
+                      className="object-contain"
                       priority
                       sizes="(max-width: 1024px) 100vw, 352px"
-                      src={event.imageUrl}
+                      src={eventImageUrl}
                       />
                     </div>
                   </div>
