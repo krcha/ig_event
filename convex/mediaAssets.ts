@@ -26,16 +26,9 @@ async function assertCoherentPersistedSourceIdentity(
   if (!identity.postId?.trim() || !identity.instagramPostUrl?.trim()) {
     return;
   }
-  const normalized = normalizeInstagramMediaSourceIdentity(identity);
   const [matchingPosts, matchingEvents] = await Promise.all([
-    ctx.db
-      .query("scrapedPosts")
-      .withIndex("by_postId", (q) => q.eq("postId", normalized.postId))
-      .collect(),
-    ctx.db
-      .query("events")
-      .withIndex("by_instagramPostId", (q) => q.eq("instagramPostId", normalized.postId))
-      .collect(),
+    collectScrapedPostsByIdentity(ctx, identity),
+    collectEventsByIdentity(ctx, identity),
   ]);
   const coherent = hasCoherentInstagramMediaSourceRecord(
     identity,

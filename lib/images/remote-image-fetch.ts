@@ -42,6 +42,7 @@ export async function fetchAllowedRemoteRasterImage(
     throw new Error("Remote image timeout is invalid.");
   }
 
+  let currentUrl = assertAllowedRemoteImageUrl(initialUrl);
   const controller = new AbortController();
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_resolve, reject) => {
@@ -50,8 +51,6 @@ export async function fetchAllowedRemoteRasterImage(
       reject(new Error(`Remote image fetch exceeded ${timeoutMs}ms.`));
     }, timeoutMs);
   });
-
-  let currentUrl = assertAllowedRemoteImageUrl(initialUrl);
   let redirectCount = 0;
 
   try {

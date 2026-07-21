@@ -93,6 +93,25 @@ await assert.rejects(
     }),
   /not allowed/,
 );
+{
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    await assert.rejects(
+      () =>
+        fetchAllowedRemoteRasterImage("https://evil.example/x.jpg", {
+          fetchImpl: async () => new Promise(() => undefined),
+          timeoutMs: 10,
+        }),
+      /not allowed/,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+}
 await assert.rejects(
   () =>
     fetchAllowedRemoteRasterImage(APIFY_IMAGE, {
@@ -180,6 +199,16 @@ assert.equal(
   hasCoherentInstagramMediaSourceRecord(
     { postId: "post-a", instagramPostUrl: "https://www.instagram.com/p/BBB/" },
     [{ postId: "post-a", instagramPostUrl: "https://www.instagram.com/p/AAA/" }],
+  ),
+  false,
+);
+assert.equal(
+  hasCoherentInstagramMediaSourceRecord(
+    { postId: "post-a", instagramPostUrl: "https://www.instagram.com/p/AAA/" },
+    [
+      { postId: "post-a", instagramPostUrl: "https://www.instagram.com/p/AAA/" },
+      { postId: "post-b", instagramPostUrl: "https://www.instagram.com/p/AAA/" },
+    ],
   ),
   false,
 );

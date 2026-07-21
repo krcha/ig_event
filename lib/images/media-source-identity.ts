@@ -49,11 +49,29 @@ export function hasCoherentInstagramMediaSourceRecord(
     return true;
   }
   const normalized = normalizeInstagramMediaSourceIdentity(identity);
-  return persistedRecords.some((record) => {
+  let exactPairFound = false;
+  for (const record of persistedRecords) {
     const persisted = normalizeInstagramMediaSourceIdentity(record);
-    return (
+    if (
+      persisted.postId === normalized.postId &&
+      persisted.normalizedInstagramPostUrl &&
+      persisted.normalizedInstagramPostUrl !== normalized.normalizedInstagramPostUrl
+    ) {
+      return false;
+    }
+    if (
+      persisted.normalizedInstagramPostUrl === normalized.normalizedInstagramPostUrl &&
+      persisted.postId &&
+      persisted.postId !== normalized.postId
+    ) {
+      return false;
+    }
+    if (
       persisted.postId === normalized.postId &&
       persisted.normalizedInstagramPostUrl === normalized.normalizedInstagramPostUrl
-    );
-  });
+    ) {
+      exactPairFound = true;
+    }
+  }
+  return exactPairFound;
 }
