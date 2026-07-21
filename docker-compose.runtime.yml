@@ -10,7 +10,7 @@ services:
       NODE_ENV: production
       PORT: 3000
       HOSTNAME: 0.0.0.0
-      CLERK_AUTHORIZED_PARTIES: ${CLERK_AUTHORIZED_PARTIES:-https://events.ineedtofeedmyrabbit.com}
+      CLERK_AUTHORIZED_PARTIES: ${CLERK_AUTHORIZED_PARTIES:-https://eventzeka.com,https://events.ineedtofeedmyrabbit.com}
       APIFY_DATA_DETAIL_LEVEL: ${APIFY_DATA_DETAIL_LEVEL:-basicData}
       APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN: ${APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN:-0.01}
       APIFY_RUN_TIMEOUT_SECONDS: ${APIFY_RUN_TIMEOUT_SECONDS:-180}
@@ -27,7 +27,7 @@ services:
       - traefik.enable=true
       - traefik.docker.network=n8n-compose_default
       - traefik.http.routers.ig-event.entrypoints=websecure
-      - traefik.http.routers.ig-event.rule=Host(`events.ineedtofeedmyrabbit.com`)
+      - traefik.http.routers.ig-event.rule=Host(`eventzeka.com`) || Host(`www.eventzeka.com`) || Host(`events.ineedtofeedmyrabbit.com`)
       - traefik.http.routers.ig-event.tls=true
       - traefik.http.routers.ig-event.tls.certresolver=mytlschallenge
       - traefik.http.routers.ig-event.middlewares=ig-event-hsts@docker

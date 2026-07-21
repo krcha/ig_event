@@ -176,7 +176,7 @@ export async function renderCtaCarouselSlide(): Promise<Buffer> {
     <text x="72" y="754" fill="#F7F8F8" font-family="DejaVu Sans, Arial, sans-serif" font-size="38" font-weight="700">Svi događaji. Svi detalji.</text>
     <text x="72" y="810" fill="#C6C8D2" font-family="DejaVu Sans, Arial, sans-serif" font-size="31">Na jednom mestu, svakog dana.</text>
     <rect x="70" y="885" width="780" height="116" rx="58" fill="#F7F8F8"/>
-    <text x="108" y="955" fill="#080A17" font-family="DejaVu Sans, Arial, sans-serif" font-size="30" font-weight="700">events.ineedtofeedmyrabbit.com</text>
+    <text x="108" y="955" fill="#080A17" font-family="DejaVu Sans, Arial, sans-serif" font-size="30" font-weight="700">eventzeka.com</text>
     <text x="75" y="1092" fill="#A6A2FF" font-family="DejaVu Sans, Arial, sans-serif" font-size="27" font-weight="700" letter-spacing="2">ZAPRATI @EVENTZEKA</text>
     <g>
       <ellipse cx="810" cy="1030" rx="70" ry="176" transform="rotate(-13 810 1030)" fill="url(#fur)"/>

@@ -57,9 +57,9 @@ for (const composeValue of [
 
 assert.ok(
   dockerComposeRuntimeSource.includes(
-    "CLERK_AUTHORIZED_PARTIES: ${CLERK_AUTHORIZED_PARTIES:-https://events.ineedtofeedmyrabbit.com}",
+    "CLERK_AUTHORIZED_PARTIES: ${CLERK_AUTHORIZED_PARTIES:-https://eventzeka.com,https://events.ineedtofeedmyrabbit.com}",
   ),
-  "docker-compose.runtime.yml should provide the production Clerk authorized party default.",
+  "docker-compose.runtime.yml should authorize the canonical and legacy production origins.",
 );
 assert.ok(
   dockerComposeRuntimeSource.includes(

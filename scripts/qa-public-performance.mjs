@@ -407,13 +407,23 @@ assertDoesNotInclude(
 );
 assert.match(
   nextConfigSource,
-  /const CANONICAL_APP_ORIGIN = "https:\/\/events\.ineedtofeedmyrabbit\.com";/,
+  /const CANONICAL_APP_ORIGIN = "https:\/\/eventzeka\.com";/,
   "Next config should define the canonical public app origin.",
 );
 assert.match(
   nextConfigSource,
   /const VERCEL_PRODUCTION_HOST = "ig-event\.vercel\.app";/,
   "Next config should define the Vercel production alias host.",
+);
+assert.match(
+  nextConfigSource,
+  /const WWW_APP_HOST = "www\.eventzeka\.com";/,
+  "Next config should define the www alias host.",
+);
+assert.match(
+  nextConfigSource,
+  /has:\s*\[\{ type: "host", value: WWW_APP_HOST \}\]/,
+  "The www hostname should redirect before Clerk-backed application routes.",
 );
 assert.match(
   nextConfigSource,

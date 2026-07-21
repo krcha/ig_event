@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import sharp from "sharp";
 import {
   buildDailyCarouselPayload,
+  EVENT_ZEKA_PUBLIC_ORIGIN,
   getNextIsoDate,
   normalizeInstagramHandle,
   selectDailyCarouselEvents,
@@ -11,6 +12,8 @@ import {
   renderCtaCarouselSlide,
   renderEventCarouselSlide,
 } from "../lib/social/carousel-images.ts";
+
+assert.equal(EVENT_ZEKA_PUBLIC_ORIGIN, "https://eventzeka.com");
 
 const publishDate = "2026-07-19";
 const eventDates = ["2026-07-20", "2026-07-21"];
@@ -164,6 +167,8 @@ assert.match(ctaRouteSource, /"content-type": "image\/jpeg"/);
 assert.match(imageRendererSource, /limitInputPixels: 2_000_000/);
 assert.match(imageRendererSource, /\.jpeg\(/);
 assert.match(imageRendererSource, /datePillWidth/);
+assert.match(imageRendererSource, />eventzeka\.com<\/text>/);
+assert.doesNotMatch(imageRendererSource, />events\.ineedtofeedmyrabbit\.com<\/text>/);
 assert.equal(scheduleNode?.parameters?.rule?.interval?.[0]?.expression, "1 0 * * *");
 assert.match(workflowCode, /this\.helpers\.httpRequest/);
 assert.doesNotMatch(workflowCode, /await fetch\(/);
