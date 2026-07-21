@@ -55,7 +55,9 @@ export default defineSchema({
     artists: v.array(v.string()),
     description: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
+    imageStorageId: v.optional(v.id("_storage")),
     instagramPostUrl: v.optional(v.string()),
+    normalizedInstagramPostUrl: v.optional(v.string()),
     instagramPostId: v.optional(v.string()),
     ticketPrice: v.optional(v.string()),
     eventType: v.string(),
@@ -77,9 +79,11 @@ export default defineSchema({
     .index("by_date", ["date"])
     .index("by_status", ["status"])
     .index("by_status_date", ["status", "date"])
+    .index("by_image_storage_id", ["imageStorageId"])
     .index("by_status_promotionTier", ["status", "promotionTier"])
     .index("by_instagramPostId", ["instagramPostId"])
     .index("by_instagramPostUrl", ["instagramPostUrl"])
+    .index("by_normalizedInstagramPostUrl", ["normalizedInstagramPostUrl"])
     .index("by_venueId", ["venueId"])
     .index("by_venueId_status_date", ["venueId", "status", "date"]),
   venues: defineTable({
@@ -159,11 +163,13 @@ export default defineSchema({
     caption: v.optional(v.string()),
     altText: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
+    imageStorageId: v.optional(v.id("_storage")),
     imageUrls: v.array(v.string()),
     postedAtMs: v.optional(v.number()),
     postType: v.optional(v.string()),
     locationName: v.optional(v.string()),
     instagramPostUrl: v.string(),
+    normalizedInstagramPostUrl: v.optional(v.string()),
     postedAt: v.optional(v.string()),
     sourceKey: v.optional(v.string()),
     username: v.string(),
@@ -173,7 +179,30 @@ export default defineSchema({
     .index("by_handle", ["handle"])
     .index("by_handle_postedAtMs", ["handle", "postedAtMs"])
     .index("by_handle_postId", ["handle", "postId"])
+    .index("by_image_storage_id", ["imageStorageId"])
     .index("by_handle_postUrl", ["handle", "instagramPostUrl"])
+    .index("by_postId", ["postId"])
+    .index("by_instagramPostUrl", ["instagramPostUrl"])
+    .index("by_normalizedInstagramPostUrl", ["normalizedInstagramPostUrl"])
+    .index("by_updatedAt", ["updatedAt"]),
+  mediaAssets: defineTable({
+    sourceKey: v.string(),
+    sourceKind: v.literal("instagram_post"),
+    instagramPostId: v.optional(v.string()),
+    normalizedInstagramPostUrl: v.optional(v.string()),
+    storageId: v.id("_storage"),
+    url: v.string(),
+    upstreamUrl: v.string(),
+    mimeType: v.string(),
+    byteLength: v.number(),
+    checksumSha256: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    lastAttachedAt: v.number(),
+  })
+    .index("by_sourceKey", ["sourceKey"])
+    .index("by_instagramPostId", ["instagramPostId"])
+    .index("by_normalizedInstagramPostUrl", ["normalizedInstagramPostUrl"])
     .index("by_updatedAt", ["updatedAt"]),
   ingestionJobs: defineTable({
     source: v.string(),

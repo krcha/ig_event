@@ -8,6 +8,7 @@ function read(path) {
 const authConfigSource = read("convex/auth.config.ts");
 const authzSource = read("convex/authz.ts");
 const eventsSource = read("convex/events.ts");
+const mediaAssetsSource = read("convex/mediaAssets.ts");
 const usersSource = read("convex/users.ts");
 const venuesSource = read("convex/venues.ts");
 const eventDetailSource = read("app/(main)/events/[eventId]/page.tsx");
@@ -117,8 +118,13 @@ assert.match(
 );
 assert.match(
   discoverImageRouteSource,
-  /events:getPublicApprovedEvent/,
-  "Discover image proxy should use the approved-only event query.",
+  /mediaAssets:getPublicEventImageSource/,
+  "Discover image proxy should use the public event image-source query.",
+);
+assert.match(
+  mediaAssetsSource,
+  /export const getPublicEventImageSource = query[\s\S]*event\.status !== "approved"/,
+  "Public event image-source query should return media only for approved events.",
 );
 
 for (const functionName of [

@@ -18,10 +18,13 @@ import {
   type PublicVenue,
   type PublicVenueEvent,
 } from "@/lib/venues/public-venue-pages";
-import { buildDiscoverImageUrl } from "@/lib/discover/discover-image-source";
+import {
+  buildDiscoverImageUrl,
+  hasDiscoverImageSource,
+} from "@/lib/discover/discover-image-source";
 import { isPlausibleConvexPublicId } from "@/lib/convex/public-id";
 import { getDisplayEventTime } from "@/lib/events/event-time";
-import { isApifyImageUrl, isApifySourcedImageUrl } from "@/lib/images/apify-images";
+
 import {
   absoluteUrl,
   buildBreadcrumbStructuredData,
@@ -155,30 +158,15 @@ function PublicImage({
   sizes: string;
   src: string;
 }) {
-  const useNextImage = src.startsWith("/api/discover/images/") || isApifyImageUrl(src);
-
-  if (useNextImage) {
-    return (
-      <Image
-        alt={alt}
-        className={className}
-        fill
-        priority={priority}
-        sizes={sizes}
-        src={src}
-        unoptimized
-      />
-    );
-  }
-
   return (
-    <img
+    <Image
       alt={alt}
-      className={cn("absolute inset-0 h-full w-full", className)}
-      decoding="async"
-      fetchPriority={priority ? "high" : undefined}
-      loading={priority ? "eager" : "lazy"}
+      className={className}
+      fill
+      priority={priority}
+      sizes={sizes}
       src={src}
+      unoptimized
     />
   );
 }
@@ -295,33 +283,19 @@ function ProfileActions({
   );
 }
 
-function getEventPostImageSrc(event: VenueEventPost, venue: PublicVenue): string | null {
-  if (!event.imageUrl) {
-    return null;
-  }
-
-  if (isApifySourcedImageUrl(event.imageUrl)) {
-    return buildDiscoverImageUrl({
-      _id: event._id,
-      imageUrl: event.imageUrl,
-      instagramHandle: venue.instagramHandle,
-    });
-  }
-
-  return event.imageUrl;
+function getEventPostImageSrc(event: VenueEventPost): string | null {
+  return hasDiscoverImageSource(event) ? buildDiscoverImageUrl(event) : null;
 }
 
 function EventPostTile({
   event,
   priority = false,
-  venue,
 }: {
   event: VenueEventPost;
   priority?: boolean;
-  venue: PublicVenue;
 }) {
   const eventTime = event.displayTimeLabel ?? getDisplayEventTime(event.time);
-  const imageSrc = getEventPostImageSrc(event, venue);
+  const imageSrc = getEventPostImageSrc(event);
 
   return (
     <Link
@@ -380,7 +354,10 @@ export async function generateMetadata({ params }: VenuePageProps): Promise<Meta
       : `${venue.name} in ${location}: Belgrade venue guide with location, official Instagram, and approved event history.`,
     160,
   );
-  const image = [...upcomingEvents, ...historyEvents].find((event) => event.imageUrl)?.imageUrl;
+  const imageEvent = [...upcomingEvents, ...historyEvents].find((event) =>
+    hasDiscoverImageSource(event),
+  );
+  const image = imageEvent ? buildDiscoverImageUrl(imageEvent) : null;
   const socialTitle = `${venue.name} — Belgrade venue events`;
 
   return {
@@ -441,7 +418,7 @@ export default async function VenuePage({ params }: VenuePageProps) {
   const upcomingCount = String(stats?.approvedUpcomingCount ?? upcomingEvents.length);
   const calendarHref = venue ? `/?venue=${encodeURIComponent(venue.name)}` : "/";
   const priorityEventId = venue
-    ? eventPosts.find((event) => getEventPostImageSrc(event, venue))?._id
+    ? eventPosts.find((event) => getEventPostImageSrc(event))?._id
     : null;
   const profileStats = venue
     ? getProfileStats({
@@ -545,7 +522,6 @@ export default async function VenuePage({ params }: VenuePageProps) {
                       event={event}
                       key={event._id}
                       priority={event._id === priorityEventId}
-                      venue={venue}
                     />
                   ))}
                 </div>

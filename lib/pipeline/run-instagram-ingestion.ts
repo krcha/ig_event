@@ -18,11 +18,13 @@ import {
 } from "@/lib/pipeline/venue-normalization";
 import {
   downloadImage,
-  isInstagramOrFbCdnUrl,
   normalizeToJpeg,
-  resolveBestImageUrl,
   toDataUrl,
 } from "@/lib/ai/prepare-image-for-openai";
+import { getNonExpiringPublicEventImageUrl } from "@/lib/images/public-event-image";
+import {
+  resolveInstagramIngestionMediaSelection,
+} from "@/lib/pipeline/instagram-media-selection";
 import {
   loadRecentApifyRunPosts,
   scrapeInstagramAccount,
@@ -102,6 +104,8 @@ type HandleSummary = {
   skipped_far_future_event: number;
   updated_duplicates_bad_data: number;
   duplicate_update_failed: number;
+  persistedImages: number;
+  failedImagePersistence: number;
   failedDownloads: number;
   failed_downloads: number;
   failedConversions: number;
@@ -209,6 +213,8 @@ const createEventMutation =
   "events:createEvent" as unknown as FunctionReference<"mutation">;
 const updateEventMutation =
   "events:updateEvent" as unknown as FunctionReference<"mutation">;
+const persistInstagramImageAction =
+  "mediaActions:persistInstagramImage" as unknown as FunctionReference<"action">;
 const listScrapedPostsByHandleQuery =
   "scrapedPosts:listByHandle" as unknown as FunctionReference<"query">;
 const listScrapedPostsByHandlePaginatedQuery =
@@ -320,6 +326,7 @@ type PreparedEvent = {
   artists: string[];
   description?: string;
   imageUrl?: string;
+  imageStorageId?: string;
   instagramPostUrl: string;
   instagramPostId: string;
   ticketPrice?: string;
@@ -407,6 +414,7 @@ type ExistingEventRecord = {
   artists: string[];
   description?: string;
   imageUrl?: string;
+  imageStorageId?: string;
   instagramPostUrl?: string;
   instagramPostId?: string;
   ticketPrice?: string;
@@ -906,6 +914,63 @@ function getPostContext(handle: string, post: InstagramScrapedPost): IngestionPo
     shortcode: extractShortcodeFromPostUrl(instagramUrl),
     instagramUrl,
   };
+}
+
+export function hasDurableMediaEligibleNormalizedFields(
+  normalizedFields: Record<string, unknown> | null,
+): boolean {
+  return (
+    normalizedFields?.normalizedIsValid === true &&
+    normalizedFields.sourceGroundingVerified === true
+  );
+}
+
+export function isExistingEventEligibleForDurableMediaRetry(
+  event: Pick<ExistingEventRecord, "imageStorageId" | "normalizedFieldsJson">,
+): boolean {
+  return (
+    !event.imageStorageId &&
+    hasDurableMediaEligibleNormalizedFields(parseJsonRecord(event.normalizedFieldsJson))
+  );
+}
+
+export async function persistInstagramMediaCandidate(options: {
+  client: ConvexHttpClient;
+  handle: string;
+  post: InstagramScrapedPost;
+  serviceSecret: string;
+  summary: Pick<HandleSummary, "errors" | "failedImagePersistence" | "persistedImages">;
+  upstreamUrl: string;
+}): Promise<boolean> {
+  try {
+    await options.client.action(
+      persistInstagramImageAction,
+      withServiceSecret(
+        {
+          postId: options.post.postId,
+          instagramPostUrl: options.post.instagramPostUrl,
+          upstreamUrl: options.upstreamUrl,
+        },
+        options.serviceSecret,
+      ),
+    );
+    options.summary.persistedImages += 1;
+    logInfo("ingestion.image.persistence.succeeded", {
+      ...getPostContext(options.handle, options.post),
+      upstreamUrl: options.upstreamUrl,
+    });
+    return true;
+  } catch (error) {
+    const message = getErrorMessage(error);
+    options.summary.failedImagePersistence += 1;
+    options.summary.errors.push(`Durable image persistence failed: ${message}`);
+    logError("ingestion.image.persistence.failed", {
+      ...getPostContext(options.handle, options.post),
+      upstreamUrl: options.upstreamUrl,
+      error: message,
+    });
+    return false;
+  }
 }
 
 function getConvexClient(): ConvexHttpClient {
@@ -3420,6 +3485,8 @@ function createEmptyHandleSummary(handle: string): HandleSummary {
     skipped_far_future_event: 0,
     updated_duplicates_bad_data: 0,
     duplicate_update_failed: 0,
+    persistedImages: 0,
+    failedImagePersistence: 0,
     failedDownloads: 0,
     failed_downloads: 0,
     failedConversions: 0,
@@ -5832,6 +5899,7 @@ function hasMaterialEventChange(
   if (normalizeString(existing.ticketPrice) !== normalizeString(next.ticketPrice)) return true;
   if (normalizeString(existing.description) !== normalizeString(nextDescription)) return true;
   if (normalizeString(existing.imageUrl) !== normalizeString(next.imageUrl)) return true;
+  if (normalizeString(existing.imageStorageId) !== normalizeString(next.imageStorageId)) return true;
   if (
     JSON.stringify(normalizeArtistsForComparison(existing.artists)) !==
     JSON.stringify(normalizeArtistsForComparison(nextArtists))
@@ -5857,6 +5925,7 @@ export function buildDuplicateUpdatePatch(
     artists?: string[];
     description?: string;
     imageUrl?: string;
+    imageStorageId?: string;
     instagramPostUrl?: string;
     instagramPostId?: string;
     ticketPrice?: string;
@@ -5913,6 +5982,10 @@ export function buildDuplicateUpdatePatch(
         }
       : {}),
   };
+  if (existing.imageStorageId && existing.imageUrl) {
+    preferredNext.imageStorageId = existing.imageStorageId;
+    preferredNext.imageUrl = existing.imageUrl;
+  }
   const materiallyChanged = hasMaterialEventChange(
     existing,
     preferredNext,
@@ -5966,7 +6039,14 @@ export function buildDuplicateUpdatePatch(
         : preserveExistingSource && preferredDescription
           ? { description: preferredDescription }
           : {}),
-      ...(preferredNext.imageUrl ? { imageUrl: preferredNext.imageUrl } : {}),
+      ...(preferredNext.imageUrl && preferredNext.imageStorageId
+        ? {
+            imageUrl: preferredNext.imageUrl,
+            imageStorageId: preferredNext.imageStorageId,
+          }
+        : preferredNext.imageUrl
+          ? { imageUrl: preferredNext.imageUrl }
+          : {}),
       instagramPostUrl: preferredNext.instagramPostUrl,
       instagramPostId: preferredNext.instagramPostId,
       ...(preferredNext.ticketPrice ? { ticketPrice: preferredNext.ticketPrice } : {}),
@@ -6646,6 +6726,7 @@ export function prepareEventsForInsert(
       }));
 
   const preparedEvents: PrepareEventResult[] = [];
+  const publicEventImageUrl = getNonExpiringPublicEventImageUrl(selectedImageUrl);
 
   for (const [index, variant] of eventVariants.entries()) {
     const date = variant.dateNormalization.isoDate;
@@ -6888,7 +6969,7 @@ export function prepareEventsForInsert(
         venue: venueNormalization.venue,
         artists: variant.artists,
         ...(variant.description ? { description: variant.description } : {}),
-        ...(selectedImageUrl ? { imageUrl: selectedImageUrl } : {}),
+        ...(publicEventImageUrl ? { imageUrl: publicEventImageUrl } : {}),
         instagramPostUrl: post.instagramPostUrl,
         instagramPostId: post.postId,
         ...(ticketPrice ? { ticketPrice } : {}),
@@ -6935,9 +7016,11 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
       STATIC_VENUE_BY_HANDLE,
     ) || null;
   const canUseCaptionOnlyExtraction = buildPostTextEvidence(post).length > 0;
-  const extractionMode = post.postType === "video" ? "caption_only" : "poster";
+  const mediaSelection = resolveInstagramIngestionMediaSelection(post);
+  const extractionMode = mediaSelection.extractionMode;
+  const durableMediaCandidate = mediaSelection.durableMediaCandidate;
   let sourceIdentityMatches: ExistingSourceMatch[] = [];
-  let selectedImageUrl: string | null = null;
+  const selectedImageUrl = mediaSelection.selectedImageUrl;
   let imageDataUrl: string | null = null;
 
   try {
@@ -6965,6 +7048,19 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
   );
 
   if (sourceDuplicateSkipDecision) {
+    const retryTarget = sourceIdentityMatches.find((match) =>
+      isExistingEventEligibleForDurableMediaRetry(match.existingEvent),
+    );
+    if (retryTarget && durableMediaCandidate) {
+      await persistInstagramMediaCandidate({
+        client,
+        handle,
+        post,
+        summary,
+        serviceSecret,
+        upstreamUrl: durableMediaCandidate,
+      });
+    }
     recordSourceDuplicateSkip(summary, sourceDuplicateSkipDecision);
     logInfo("duplicate_source_precheck_skip", {
       ...postContext,
@@ -6981,7 +7077,7 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     return;
   }
 
-  if (post.postType === "video") {
+  if (extractionMode === "caption_only") {
     if (!canUseCaptionOnlyExtraction) {
       summary.skipped_video += 1;
       logInfo("ingestion.post.skipped_video", {
@@ -6990,22 +7086,14 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
       });
       return;
     }
-
-    {
-      const candidateImageUrl = resolveBestImageUrl(post);
-      selectedImageUrl =
-        candidateImageUrl && !isInstagramOrFbCdnUrl(candidateImageUrl)
-          ? candidateImageUrl
-          : null;
-    }
     logInfo("ingestion.post.video_caption_only", {
       ...postContext,
       captionLength: normalizeString(post.caption).length,
       hasAltText: extractPostAltTextEvidence(post.altText).length > 0,
       selectedImageUrl,
+      durableMediaCandidate,
     });
   } else {
-    selectedImageUrl = resolveBestImageUrl(post);
     if (!selectedImageUrl) {
       summary.skippedNoImage += 1;
       logInfo("ingestion.image.skipped_no_image", {
@@ -7018,7 +7106,8 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     logInfo("ingestion.image.selected", {
       ...postContext,
       selectedImageUrl,
-      isInstagramOrFbCdn: isInstagramOrFbCdnUrl(selectedImageUrl),
+      isInstagramOrFbCdn:
+        getNonExpiringPublicEventImageUrl(selectedImageUrl) === undefined,
     });
 
     let downloadedImage: Awaited<ReturnType<typeof downloadImage>>;
@@ -7155,6 +7244,7 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     return;
   }
 
+  let hasDurableMediaAttachmentTarget = false;
   for (const prepared of preparedResults) {
     if (prepared.kind === "skip") {
       if (prepared.reason === "missing_date") {
@@ -7181,6 +7271,10 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
       });
       continue;
     }
+
+    const durableMediaEligible = hasDurableMediaEligibleNormalizedFields(
+      prepared.normalizedFields,
+    );
 
     if (
       prepared.event.status === "approved" &&
@@ -7225,6 +7319,9 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
       );
 
       if (!quality.isLowQuality && !hasMaterialChange) {
+        if (durableMediaEligible) {
+          hasDurableMediaAttachmentTarget = true;
+        }
         summary.skippedDuplicates += 1;
         summary.skipped_duplicates += 1;
         summary.skipped_duplicates_clean += 1;
@@ -7249,6 +7346,9 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
       );
 
       if (updatePayload.protectedApprovedFromPending) {
+        if (durableMediaEligible) {
+          hasDurableMediaAttachmentTarget = true;
+        }
         summary.skippedDuplicates += 1;
         summary.skipped_duplicates += 1;
         summary.skipped_duplicates_clean += 1;
@@ -7273,6 +7373,9 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
           expectedStatus: existingMatch.existingEvent.status,
           serviceSecret,
         });
+        if (durableMediaEligible) {
+          hasDurableMediaAttachmentTarget = true;
+        }
         summary.updated_duplicates_bad_data += 1;
         logInfo(updateReasonEvent, {
           phase: "duplicate_updated",
@@ -7329,6 +7432,9 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
           serviceSecret,
         },
       )) as string;
+      if (durableMediaEligible) {
+        hasDurableMediaAttachmentTarget = true;
+      }
       summary.insertedEvents += 1;
       summary.inserted_events += 1;
       if (prepared.event.status === "approved") {
@@ -7366,6 +7472,17 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
         error: getErrorMessage(error),
       });
     }
+  }
+
+  if (hasDurableMediaAttachmentTarget && durableMediaCandidate) {
+    await persistInstagramMediaCandidate({
+      client,
+      handle,
+      post,
+      summary,
+      serviceSecret,
+      upstreamUrl: durableMediaCandidate,
+    });
   }
 }
 
@@ -7437,7 +7554,10 @@ async function runInstagramIngestionFullScrapeBatchStep(
 ): Promise<IngestionBatchStepResult> {
   const summary = options.summary;
   const state = options.state;
-  const handleBatchSize = normalizeBatchSize(options.batchSize);
+  // Full scrapes include remote extraction plus a bounded durable-media action.
+  // Keep each checkpoint step to one handle so one route request cannot queue
+  // dozens of serial 15-second media imports before saving its lease state.
+  const handleBatchSize = Math.min(normalizeBatchSize(options.batchSize), 1);
   const handleBatch = options.handles.slice(
     state.handleIndex,
     state.handleIndex + handleBatchSize,

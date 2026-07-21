@@ -51,7 +51,8 @@ export function normalizeInstagramPostUrl(value: string | null | undefined): str
 
   try {
     const url = new URL(raw);
-    if (!url.hostname.toLowerCase().endsWith("instagram.com")) {
+    const hostname = url.hostname.toLowerCase();
+    if (hostname !== "instagram.com" && !hostname.endsWith(".instagram.com")) {
       return raw;
     }
 

@@ -31,6 +31,8 @@ function makeHandle(handle, overrides = {}) {
     failedExtractions: 0,
     failed_extractions: 0,
     failed_extraction: 0,
+    failedImagePersistence: 0,
+    persistedImages: 0,
     errors: [],
     ...overrides,
   };
@@ -100,6 +102,25 @@ const completedWithWarnings = buildOperationsTriageSummary({
 });
 assert.equal(completedWithWarnings.tone, "warning");
 assert.match(completedWithWarnings.title, /Completed with warnings/);
+
+const completedWithImagePersistenceWarning = buildOperationsTriageSummary({
+  status: "completed",
+  summary: makeSummary([
+    makeHandle("club", {
+      fetchedPosts: 1,
+      insertedEvents: 1,
+      insertedApprovedEvents: 1,
+      failedImagePersistence: 1,
+    }),
+  ]),
+});
+assert.equal(completedWithImagePersistenceWarning.tone, "warning");
+assert.equal(completedWithImagePersistenceWarning.totals.failedImagePersistence, 1);
+assert.ok(
+  completedWithImagePersistenceWarning.issueGroups.some(
+    (issue) => issue.category === "image_persistence" && issue.handle === "club",
+  ),
+);
 
 const fetchedNoInserts = buildOperationsTriageSummary({
   status: "completed",

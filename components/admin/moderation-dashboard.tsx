@@ -1679,6 +1679,7 @@ export function ModerationDashboard() {
                       className="h-40 w-full object-cover lg:h-full"
                       height={720}
                       src={event.imageUrl}
+                      unoptimized
                       width={720}
                     />
                   </a>

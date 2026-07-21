@@ -61,6 +61,8 @@ export type PublicVenueEvent = {
   displayTimeStart?: string;
   eventType: string;
   imageUrl?: string;
+  imageStorageId?: string;
+  instagramPostId?: string;
   instagramPostUrl?: string;
   ticketPrice?: string;
   time?: string;
@@ -202,6 +204,8 @@ function publicEventToVenueEvent(event: PublicEvent, venue: PublicVenue): Public
       displayTimeStart: event.displayTimeStart,
       eventType: event.eventType,
       imageUrl: event.imageUrl,
+      imageStorageId: event.imageStorageId,
+      instagramPostId: event.instagramPostId,
       instagramPostUrl: event.instagramPostUrl,
       ticketPrice: event.ticketPrice,
       time: event.time,

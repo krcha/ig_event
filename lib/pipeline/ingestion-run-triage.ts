@@ -30,6 +30,7 @@ export type OperationsTriageSummary = {
     failedDownloads: number;
     failedConversions: number;
     failedExtractions: number;
+    failedImagePersistence: number;
     handlesWithErrors: number;
   };
   providerStatus: {
@@ -197,6 +198,13 @@ function collectIssueGroups(
       count(handle.skipped_far_future_event),
       "Posts were skipped because the normalized event date was too far ahead.",
     );
+    addCountIssue(
+      issues,
+      handle.handle,
+      "image_persistence",
+      count(handle.failedImagePersistence),
+      "Events were written, but their durable poster image could not be persisted.",
+    );
   }
 
   const recurringKeys = new Map<string, number>();
@@ -210,6 +218,7 @@ function collectIssueGroups(
           "failed_extraction",
           countFirst(handle.failedExtractions, handle.failed_extractions, handle.failed_extraction),
         ] as const,
+        ["image_persistence", count(handle.failedImagePersistence)] as const,
       ];
       for (const [category, issueCount] of handleIssues) {
         if (issueCount > 0) {
@@ -271,6 +280,7 @@ export function buildOperationsTriageSummary(
     failedDownloads: 0,
     failedConversions: 0,
     failedExtractions: 0,
+    failedImagePersistence: 0,
     handlesWithErrors: 0,
   };
 
@@ -322,6 +332,7 @@ export function buildOperationsTriageSummary(
     failedExtractions: sum(summary, (handle) =>
       countFirst(handle.failedExtractions, handle.failed_extractions, handle.failed_extraction),
     ),
+    failedImagePersistence: sum(summary, (handle) => count(handle.failedImagePersistence)),
     handlesWithErrors: summary.handles.filter((handle) => handle.errors.length > 0).length,
   };
   const issueGroups = collectIssueGroups(summary, options.recentSummaries ?? []);
@@ -330,7 +341,10 @@ export function buildOperationsTriageSummary(
     apify: getProviderStatus(issueGroups, "apify"),
   };
   const failed =
-    totals.failedDownloads + totals.failedConversions + totals.failedExtractions;
+    totals.failedDownloads +
+    totals.failedConversions +
+    totals.failedExtractions +
+    totals.failedImagePersistence;
   const hasWarnings = failed > 0 || issueGroups.length > 0;
   const openAiBlocked = providerStatus.openai === "blocked";
   const apifyBlocked = providerStatus.apify === "blocked";

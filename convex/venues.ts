@@ -261,6 +261,8 @@ function toPublicEvent(event: {
   description?: string;
   eventType: string;
   imageUrl?: string;
+  imageStorageId?: Id<"_storage">;
+  instagramPostId?: string;
   instagramPostUrl?: string;
   ticketPrice?: string;
   time?: string;
@@ -276,6 +278,8 @@ function toPublicEvent(event: {
     description: event.description,
     eventType: event.eventType,
     imageUrl: event.imageUrl,
+    imageStorageId: event.imageStorageId,
+    instagramPostId: event.instagramPostId,
     instagramPostUrl: event.instagramPostUrl,
     ticketPrice: event.ticketPrice,
     time: event.time,

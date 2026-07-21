@@ -3,6 +3,7 @@ import { internalMutation, mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import { requireAdminOrServiceSecret } from "./authz";
+import { normalizeInstagramPostUrl } from "../lib/images/apify-images";
 
 const DEFAULT_PUBLIC_RECENT_POST_LIMIT = 6;
 const MAX_PUBLIC_RECENT_POST_LIMIT = 12;
@@ -79,7 +80,7 @@ export const listPublicRecentPostsByHandle = query({
 
     return posts.map((post) => ({
       _id: post._id,
-      imageUrl: post.imageUrl,
+      imageUrl: post.imageStorageId ? post.imageUrl : undefined,
       instagramPostUrl: post.instagramPostUrl,
       locationName: post.locationName,
       postType: post.postType,
@@ -151,8 +152,8 @@ export const getManyByHandleAndPostRefs = query({
           if (byPostId) {
             return {
               caption: byPostId.caption,
-              imageUrl: byPostId.imageUrl,
-              imageUrls: byPostId.imageUrls,
+              imageUrl: byPostId.imageStorageId ? byPostId.imageUrl : undefined,
+              imageUrls: [],
               instagramPostUrl: byPostId.instagramPostUrl,
               postId: byPostId.postId,
             };
@@ -171,8 +172,8 @@ export const getManyByHandleAndPostRefs = query({
           if (byPostUrl) {
             return {
               caption: byPostUrl.caption,
-              imageUrl: byPostUrl.imageUrl,
-              imageUrls: byPostUrl.imageUrls,
+              imageUrl: byPostUrl.imageStorageId ? byPostUrl.imageUrl : undefined,
+              imageUrls: [],
               instagramPostUrl: byPostUrl.instagramPostUrl,
               postId: byPostUrl.postId,
             };
@@ -201,7 +202,11 @@ export const getByHandleAndPostRef = query({
         )
         .take(1);
       if (byPostId[0]) {
-        return byPostId[0];
+        return {
+          ...byPostId[0],
+          imageUrl: byPostId[0].imageStorageId ? byPostId[0].imageUrl : undefined,
+          imageUrls: byPostId[0].imageStorageId ? byPostId[0].imageUrls : [],
+        };
       }
     }
 
@@ -213,7 +218,13 @@ export const getByHandleAndPostRef = query({
           q.eq("handle", args.handle).eq("instagramPostUrl", instagramPostUrl),
         )
         .take(1);
-      return byPostUrl[0] ?? null;
+      return byPostUrl[0]
+        ? {
+            ...byPostUrl[0],
+            imageUrl: byPostUrl[0].imageStorageId ? byPostUrl[0].imageUrl : undefined,
+            imageUrls: byPostUrl[0].imageStorageId ? byPostUrl[0].imageUrls : [],
+          }
+        : null;
     }
 
     return null;
@@ -247,16 +258,29 @@ export const upsertManyByHandle = mutation({
           )
           .take(1))[0];
 
+      const existing = existingByUrl;
+      const rawImageUrl = post.imageUrl?.trim();
+      const imageUrls = [...new Set([rawImageUrl, ...post.imageUrls].filter(Boolean))] as string[];
+      const hasDurableImage = Boolean(existing?.imageStorageId && existing.imageUrl);
+      const { imageUrl: _rawImageUrl, imageUrls: _rawImageUrls, ...postWithoutPrimaryImage } = post;
+      void _rawImageUrl;
+      void _rawImageUrls;
       const nextRecord = {
-        ...post,
+        ...postWithoutPrimaryImage,
+        imageUrls,
         handle: args.handle,
         postedAtMs: parsePostedAtMs(post.postedAt),
         sourceKey: getSourceKey({ ...post, handle: args.handle }),
+        normalizedInstagramPostUrl: normalizeInstagramPostUrl(post.instagramPostUrl),
         updatedAt: now,
       };
 
-      if (existingByUrl) {
-        await ctx.db.patch(existingByUrl._id, nextRecord);
+      if (existing) {
+        await ctx.db.patch(existing._id, {
+          ...nextRecord,
+          imageUrl: hasDurableImage ? existing.imageUrl : undefined,
+          imageStorageId: hasDurableImage ? existing.imageStorageId : undefined,
+        });
       } else {
         await ctx.db.insert("scrapedPosts", {
           ...nextRecord,
