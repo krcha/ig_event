@@ -31,4 +31,18 @@ crons.weekly(
   },
 );
 
+crons.weekly(
+  "cleanup orphaned media assets",
+  {
+    dayOfWeek: "friday",
+    hourUTC: 5,
+    minuteUTC: 0,
+  },
+  internal.maintenance.cleanupOrphanedMediaAssetsUntilDone,
+  {
+    batchSize: 100,
+    maxBatches: 100,
+  },
+);
+
 export default crons;

@@ -40,10 +40,10 @@ const completeStepMutation =
   "ingestionJobs:completeStep" as unknown as FunctionReference<"mutation">;
 const failStepMutation =
   "ingestionJobs:failStep" as unknown as FunctionReference<"mutation">;
-const DEFAULT_BATCH_SIZE = 64;
-const MAX_CRON_BATCH_SIZE = 64;
-const DEFAULT_CRON_MAX_STEPS_PER_REQUEST = 20;
-const MAX_CRON_MAX_STEPS_PER_REQUEST = 200;
+const DEFAULT_BATCH_SIZE = 1;
+const MAX_CRON_BATCH_SIZE = 1;
+const DEFAULT_CRON_MAX_STEPS_PER_REQUEST = 1;
+const MAX_CRON_MAX_STEPS_PER_REQUEST = 1;
 const DEFAULT_INGESTION_JOB_LEASE_MS = 30 * 60 * 1000;
 const CRON_CHUNK_ATTEMPT_WINDOW_MS = 6 * 60 * 60 * 1000;
 const MS_PER_HOUR = 60 * 60 * 1000;
@@ -384,7 +384,7 @@ export async function GET(request: Request) {
           state,
           resultsLimit: claimedJob.resultsLimit,
           daysBack: claimedJob.daysBack,
-          batchSize: Math.max(claimedJob.batchSize, effectiveBatchSize),
+          batchSize: Math.min(claimedJob.batchSize, effectiveBatchSize),
           mode: claimedJob.mode ?? "full_scrape",
           serviceSecret,
         });

@@ -11,6 +11,11 @@ import {
   assertPublicEventImageWrite,
   getNonExpiringPublicEventImageUrl,
 } from "../lib/images/public-event-image.ts";
+import { normalizeInstagramPostUrl } from "../lib/images/apify-images.ts";
+import {
+  hasCoherentInstagramMediaSourceRecord,
+  normalizeInstagramMediaSourceIdentity,
+} from "../lib/images/media-source-identity.ts";
 import {
   resolveInstagramIngestionMediaSelection,
 } from "../lib/pipeline/instagram-media-selection.ts";
@@ -152,6 +157,32 @@ assert.equal(getNonExpiringPublicEventImageUrl(APIFY_IMAGE), APIFY_IMAGE);
 assert.throws(() => assertPublicEventImageWrite(INSTAGRAM_IMAGE, undefined), /must not reference/);
 assert.throws(() => assertPublicEventImageWrite(undefined, "storage-id"), /requires/);
 assert.doesNotThrow(() => assertPublicEventImageWrite(APIFY_IMAGE, undefined));
+assert.equal(
+  normalizeInstagramPostUrl("https://evilinstagram.com/p/QA123/?x=1"),
+  "https://evilinstagram.com/p/QA123/?x=1",
+);
+assert.throws(
+  () =>
+    normalizeInstagramMediaSourceIdentity({
+      postId: "post-a",
+      instagramPostUrl: "https://evilinstagram.com/p/QA123/",
+    }),
+  /Instagram post URL/,
+);
+assert.equal(
+  hasCoherentInstagramMediaSourceRecord(
+    { postId: "post-a", instagramPostUrl: "https://www.instagram.com/p/AAA/" },
+    [{ postId: "post-a", instagramPostUrl: "https://instagram.com/p/AAA/?x=1" }],
+  ),
+  true,
+);
+assert.equal(
+  hasCoherentInstagramMediaSourceRecord(
+    { postId: "post-a", instagramPostUrl: "https://www.instagram.com/p/BBB/" },
+    [{ postId: "post-a", instagramPostUrl: "https://www.instagram.com/p/AAA/" }],
+  ),
+  false,
+);
 
 const parsedRows = parseManifestText(
   JSON.stringify([
@@ -236,6 +267,9 @@ const venuePageSource = read("app/(main)/venues/[venueId]/page.tsx");
 const discoverPageSource = read("app/(main)/discover/page.tsx");
 const discoverFeedSource = read("components/discover/discover-feed.tsx");
 const dashboardSource = read("components/admin/scraper-dashboard.tsx");
+const moderationDashboardSource = read("components/admin/moderation-dashboard.tsx");
+const maintenanceSource = read("convex/maintenance.ts");
+const cronsSource = read("convex/crons.ts");
 
 assert.match(schemaSource, /mediaAssets: defineTable/);
 assert.match(schemaSource, /checksumSha256: v\.string\(\)/);
@@ -244,6 +278,10 @@ assert.match(mediaActionSource, /computeSha256Hex/);
 assert.match(mediaActionSource, /ctx\.storage\.delete\(provisionalStorageId\)/);
 assert.match(mediaAssetSource, /event\.imageStorageId !== attachment\.storageId/);
 assert.match(mediaAssetSource, /imageStorageId: attachment\.storageId,[\s\S]*imageUrl: attachment\.url/);
+assert.match(mediaAssetSource, /assertCoherentPersistedSourceIdentity/);
+assert.match(mediaAssetSource, /matchingPosts, matchingEvents/);
+assert.match(mediaAssetSource, /withIndex\("by_image_storage_id"/);
+assert.match(mediaAssetSource, /ctx\.storage\.delete\(asset\.storageId\)/);
 assert.match(eventsConvexSource, /const nextImageStorageId =/);
 assert.match(eventsConvexSource, /imageStorageId: nextImageStorageId/);
 assert.match(ingestionSource, /getNonExpiringPublicEventImageUrl\(selectedImageUrl\)/);
@@ -253,6 +291,10 @@ assert.match(ingestionSource, /failedImagePersistence \+= 1/);
 assert.match(ingestionSource, /imageStorageId: preferredNext\.imageStorageId/);
 assert.match(dashboardSource, /Persisted images/);
 assert.match(dashboardSource, /Failed image persistence/);
+assert.match(moderationDashboardSource, /src=\{event\.imageUrl\}[\s\S]*unoptimized/);
+assert.match(schemaSource, /\.index\("by_image_storage_id", \["imageStorageId"\]\)/);
+assert.match(maintenanceSource, /cleanupOrphanedMediaAssetsUntilDone/);
+assert.match(cronsSource, /"cleanup orphaned media assets"/);
 for (const source of [eventPageSource, venuePageSource, discoverPageSource]) {
   assert.match(source, /buildDiscoverImageUrl|getDiscoverDisplayImageUrl/);
 }

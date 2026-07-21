@@ -10,6 +10,7 @@ const DEFAULT_INGESTION_ARTIFACT_CLEANUP_BATCH_SIZE = 100;
 const DEFAULT_INGESTION_ARTIFACT_CLEANUP_MAX_BATCHES = 10;
 const INGESTION_JOB_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const SCRAPED_POST_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+const ORPHANED_MEDIA_ASSET_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 
 type DeleteExpiredEventsResult = {
   deletedEventCount: number;
@@ -84,6 +85,28 @@ const deleteOldIngestionJobsMutation: DeleteByUpdatedAtMutation = (internal as u
     deleteTerminalOlderThan: DeleteByUpdatedAtMutation;
   };
 }).ingestionJobs.deleteTerminalOlderThan;
+
+type DeleteOrphanedMediaAssetsPageResult = {
+  continueCursor: string;
+  deletedAssetCount: number;
+  deletedStorageObjectCount: number;
+  isDone: boolean;
+  scannedAssetCount: number;
+};
+
+const deleteOrphanedMediaAssetsPageMutation = (internal as unknown as {
+  mediaAssets: {
+    deleteOrphanedPage: FunctionReference<
+      "mutation",
+      "internal",
+      {
+        cutoffUpdatedAt: number;
+        paginationOpts: { cursor: string | null; numItems: number };
+      },
+      DeleteOrphanedMediaAssetsPageResult
+    >;
+  };
+}).mediaAssets.deleteOrphanedPage;
 
 function normalizeBatchSize(value: number | undefined): number {
   if (value === undefined || !Number.isFinite(value)) {
@@ -208,6 +231,56 @@ export const cleanupIngestionArtifactsUntilDone = internalAction({
       scrapedPostsHaveMore,
       jobCutoffUpdatedAt,
       scrapedPostCutoffUpdatedAt,
+    };
+  },
+});
+
+export const cleanupOrphanedMediaAssetsUntilDone = internalAction({
+  args: {
+    batchSize: v.optional(v.number()),
+    maxBatches: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const batchSize = normalizeBatchSize(
+      args.batchSize ?? DEFAULT_INGESTION_ARTIFACT_CLEANUP_BATCH_SIZE,
+    );
+    const maxBatches = normalizeMaxBatches(
+      args.maxBatches ?? DEFAULT_INGESTION_ARTIFACT_CLEANUP_MAX_BATCHES,
+    );
+    const cutoffUpdatedAt = Date.now() - ORPHANED_MEDIA_ASSET_GRACE_MS;
+    let cursor: string | null = null;
+    let batchesRun = 0;
+    let scannedAssetCount = 0;
+    let deletedAssetCount = 0;
+    let deletedStorageObjectCount = 0;
+    let isDone = false;
+
+    for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
+      const result: DeleteOrphanedMediaAssetsPageResult = await ctx.runMutation(
+        deleteOrphanedMediaAssetsPageMutation,
+        {
+          cutoffUpdatedAt,
+          paginationOpts: { cursor, numItems: batchSize },
+        },
+      );
+      batchesRun += 1;
+      scannedAssetCount += result.scannedAssetCount;
+      deletedAssetCount += result.deletedAssetCount;
+      deletedStorageObjectCount += result.deletedStorageObjectCount;
+      cursor = result.continueCursor;
+      isDone = result.isDone;
+      if (result.isDone) break;
+    }
+
+    return {
+      batchSize,
+      maxBatches,
+      batchesRun,
+      scannedAssetCount,
+      deletedAssetCount,
+      deletedStorageObjectCount,
+      cutoffUpdatedAt,
+      hasMore: !isDone,
     };
   },
 });

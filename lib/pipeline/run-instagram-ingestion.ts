@@ -7554,7 +7554,10 @@ async function runInstagramIngestionFullScrapeBatchStep(
 ): Promise<IngestionBatchStepResult> {
   const summary = options.summary;
   const state = options.state;
-  const handleBatchSize = normalizeBatchSize(options.batchSize);
+  // Full scrapes include remote extraction plus a bounded durable-media action.
+  // Keep each checkpoint step to one handle so one route request cannot queue
+  // dozens of serial 15-second media imports before saving its lease state.
+  const handleBatchSize = Math.min(normalizeBatchSize(options.batchSize), 1);
   const handleBatch = options.handles.slice(
     state.handleIndex,
     state.handleIndex + handleBatchSize,

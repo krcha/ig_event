@@ -92,13 +92,28 @@ assert.doesNotMatch(
 );
 assert.match(
   cronIngestSource,
-  /DEFAULT_CRON_MAX_STEPS_PER_REQUEST = 20/,
-  "cron ingestion route should default to enough bounded steps for a full active-venue run.",
+  /DEFAULT_CRON_MAX_STEPS_PER_REQUEST = 1/,
+  "cron ingestion should checkpoint one leased full-scrape step per request.",
 );
 assert.match(
   cronIngestSource,
-  /DEFAULT_BATCH_SIZE = 64/,
-  "cron ingestion route should default to the maximum bounded handle batch size.",
+  /DEFAULT_BATCH_SIZE = 1/,
+  "cron ingestion should checkpoint after each full-scrape handle.",
+);
+assert.match(
+  cronIngestSource,
+  /MAX_CRON_MAX_STEPS_PER_REQUEST = 1/,
+  "cron ingestion should complete at most one leased full-scrape step per request.",
+);
+assert.match(
+  cronIngestSource,
+  /Math\.min\(claimedJob\.batchSize, effectiveBatchSize\)/,
+  "resumed jobs must not bypass the current safe handle-step cap.",
+);
+assert.match(
+  pipelineSource,
+  /handleBatchSize = Math\.min\(normalizeBatchSize\(options\.batchSize\), 1\)/,
+  "full-scrape pipeline steps must remain bounded to one handle.",
 );
 assert.match(
   cronIngestSource,

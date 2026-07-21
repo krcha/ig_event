@@ -1,8 +1,12 @@
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, internalQuery, query } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
-import { normalizeInstagramMediaSourceIdentity } from "../lib/images/media-source-identity";
+import {
+  hasCoherentInstagramMediaSourceRecord,
+  normalizeInstagramMediaSourceIdentity,
+} from "../lib/images/media-source-identity";
 import { isAllowedRemoteImageUrl } from "../lib/images/remote-image-policy";
 
 const sourceIdentityArgs = {
@@ -14,6 +18,44 @@ type SourceIdentity = {
   postId?: string;
   instagramPostUrl?: string;
 };
+
+async function assertCoherentPersistedSourceIdentity(
+  ctx: QueryCtx | MutationCtx,
+  identity: SourceIdentity,
+): Promise<void> {
+  if (!identity.postId?.trim() || !identity.instagramPostUrl?.trim()) {
+    return;
+  }
+  const normalized = normalizeInstagramMediaSourceIdentity(identity);
+  const [matchingPosts, matchingEvents] = await Promise.all([
+    ctx.db
+      .query("scrapedPosts")
+      .withIndex("by_postId", (q) => q.eq("postId", normalized.postId))
+      .collect(),
+    ctx.db
+      .query("events")
+      .withIndex("by_instagramPostId", (q) => q.eq("instagramPostId", normalized.postId))
+      .collect(),
+  ]);
+  const coherent = hasCoherentInstagramMediaSourceRecord(
+    identity,
+    [
+      ...matchingPosts.map((post) => ({
+        postId: post.postId,
+        instagramPostUrl: post.instagramPostUrl,
+      })),
+      ...matchingEvents.map((event) => ({
+        postId: event.instagramPostId,
+        instagramPostUrl: event.instagramPostUrl,
+      })),
+    ],
+  );
+  if (!coherent) {
+    throw new Error(
+      "Instagram post ID and URL must identify the same persisted source record.",
+    );
+  }
+}
 
 type AssetAttachment = {
   assetId: Id<"mediaAssets">;
@@ -191,7 +233,10 @@ async function attachAssetToSourceRecords(
 
 export const findBySourceIdentity = internalQuery({
   args: sourceIdentityArgs,
-  handler: async (ctx, args) => findAssetByIdentity(ctx, args),
+  handler: async (ctx, args) => {
+    await assertCoherentPersistedSourceIdentity(ctx, args);
+    return findAssetByIdentity(ctx, args);
+  },
 });
 
 export const claimAndAttach = internalMutation({
@@ -206,6 +251,7 @@ export const claimAndAttach = internalMutation({
     actor: v.string(),
   },
   handler: async (ctx, args) => {
+    await assertCoherentPersistedSourceIdentity(ctx, args);
     const normalized = normalizeInstagramMediaSourceIdentity(args);
     const existing = await findAssetByIdentity(ctx, args);
     const now = Date.now();
@@ -259,6 +305,7 @@ export const refreshAndAttach = internalMutation({
     actor: v.string(),
   },
   handler: async (ctx, args) => {
+    await assertCoherentPersistedSourceIdentity(ctx, args);
     const asset = await ctx.db.get(args.assetId);
     if (!asset || asset.storageId !== args.storageId) {
       throw new Error("Media asset changed before attachment refresh.");
@@ -293,6 +340,7 @@ export const replaceMissingAndAttach = internalMutation({
     actor: v.string(),
   },
   handler: async (ctx, args) => {
+    await assertCoherentPersistedSourceIdentity(ctx, args);
     const asset = await ctx.db.get(args.assetId);
     if (!asset || asset.storageId !== args.expectedStorageId) {
       throw new Error("Media asset changed before missing storage replacement.");
@@ -335,6 +383,7 @@ export const removeMissingAsset = internalMutation({
     actor: v.string(),
   },
   handler: async (ctx, args) => {
+    await assertCoherentPersistedSourceIdentity(ctx, args);
     const asset = await ctx.db.get(args.assetId);
     if (!asset || asset.storageId !== args.expectedStorageId) return false;
     const [events, posts] = await Promise.all([
@@ -371,6 +420,50 @@ export const removeMissingAsset = internalMutation({
     }
     await ctx.db.delete(asset._id);
     return true;
+  },
+});
+
+export const deleteOrphanedPage = internalMutation({
+  args: {
+    cutoffUpdatedAt: v.number(),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("mediaAssets")
+      .withIndex("by_updatedAt", (q) => q.lt("updatedAt", args.cutoffUpdatedAt))
+      .paginate(args.paginationOpts);
+    let deletedAssetCount = 0;
+    let deletedStorageObjectCount = 0;
+
+    for (const asset of page.page) {
+      const [eventReference, scrapedPostReference] = await Promise.all([
+        ctx.db
+          .query("events")
+          .withIndex("by_image_storage_id", (q) => q.eq("imageStorageId", asset.storageId))
+          .first(),
+        ctx.db
+          .query("scrapedPosts")
+          .withIndex("by_image_storage_id", (q) => q.eq("imageStorageId", asset.storageId))
+          .first(),
+      ]);
+      if (eventReference || scrapedPostReference) {
+        continue;
+      }
+
+      await ctx.storage.delete(asset.storageId);
+      await ctx.db.delete(asset._id);
+      deletedAssetCount += 1;
+      deletedStorageObjectCount += 1;
+    }
+
+    return {
+      continueCursor: page.continueCursor,
+      deletedAssetCount,
+      deletedStorageObjectCount,
+      isDone: page.isDone,
+      scannedAssetCount: page.page.length,
+    };
   },
 });
 
