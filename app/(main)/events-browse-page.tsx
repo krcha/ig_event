@@ -30,6 +30,7 @@ import {
 import { dateKeyToLocalNoonDate, getNightlifeDefaultDateKey } from "@/lib/events/nightlife-date";
 import { matchesPublicEventNameArtistOrVenue } from "@/lib/events/public-event-search";
 import { HOME_FAQ_ITEMS, buildHomePageStructuredData } from "@/lib/seo/site";
+import { groupCalendarEventsByTimeBand } from "@/lib/events/calendar-time-bands";
 
 // Keep the public calendar out of Next.js' persisted route cache. The page data
 // comes from Convex and must reflect completed ingestion runs without manual
@@ -818,6 +819,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     mobile?: boolean;
   } = {}) {
     const agendaEvents = selectedDayAgendaEvents;
+    const agendaTimeBandGroups = groupCalendarEventsByTimeBand(agendaEvents);
     const initialVisibleAgendaEventCount = agendaEvents.filter(
       (event) => !hiddenDayCategorySet.has(getDayCategory(event)),
     ).length;
@@ -886,7 +888,41 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     function renderAgendaCards(isMobile = false) {
       return (
         <>
-          {agendaEvents.map((event) => {
+          {agendaTimeBandGroups.map((timeBand) => {
+            const initialVisibleTimeBandCount = timeBand.events.filter(
+              (event) => !hiddenDayCategorySet.has(getDayCategory(event)),
+            ).length;
+
+            return (
+              <section
+                aria-labelledby={`calendar-${isMobile ? "mobile" : "desktop"}-${timeBand.key}`}
+                className="space-y-1.5"
+                data-calendar-time-band-event-count={timeBand.events.length}
+                data-calendar-time-band={timeBand.key}
+                hidden={initialVisibleTimeBandCount === 0}
+                key={timeBand.key}
+              >
+                <div className="flex min-w-0 items-baseline justify-between gap-3 px-1 pt-1">
+                  <div className="min-w-0">
+                    <h3
+                      className="truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground"
+                      id={`calendar-${isMobile ? "mobile" : "desktop"}-${timeBand.key}`}
+                    >
+                      {timeBand.label}
+                    </h3>
+                    <p className="truncate text-[10px] leading-4 text-muted-foreground">
+                      {timeBand.description}
+                    </p>
+                  </div>
+                  <span
+                    className="flex-none text-[10px] font-medium tabular-nums text-muted-foreground"
+                    data-calendar-time-band-visible-count="true"
+                  >
+                    {pluralize(initialVisibleTimeBandCount, "event")}
+                  </span>
+                </div>
+                <div className={cn("space-y-1.5", !isMobile && "space-y-2")}>
+                  {timeBand.events.map((event) => {
             const tone = getEventTone(event);
             const eventCategory = getDayCategory(event);
             const isHiddenByKind = hiddenDayCategorySet.has(eventCategory);
@@ -902,6 +938,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                     tone.panel,
                   )}
                   data-calendar-event-kind={eventCategory}
+                  data-calendar-event-id={event._id}
                   data-calendar-hidden-by-kind={isHiddenByKind ? "true" : "false"}
                   data-calendar-mobile-event-row="true"
                   data-event-time={event.displayTimeLabel ?? event.time}
@@ -976,6 +1013,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 )}
                 data-calendar-desktop-event-row="true"
                 data-calendar-event-kind={eventCategory}
+                data-calendar-event-id={event._id}
                 data-calendar-hidden-by-kind={isHiddenByKind ? "true" : "false"}
                 hidden={isHiddenByKind}
                 key={event._id}
@@ -1027,6 +1065,10 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   ) : null}
                 </div>
               </article>
+            );
+                  })}
+                </div>
+              </section>
             );
           })}
 
