@@ -1,33 +1,45 @@
 import assert from "node:assert/strict";
 
 import {
+  getSourceGroundingReprocessReasonGate,
   loadExactTargetRows,
   loadPendingEventsPaginated,
 } from "./reprocess-pending-source-grounding.mjs";
 
-const targets = [
-  { _id: "event-a", date: "2026-07-20" },
-  { _id: "event-b", date: "2026-07-22" },
-  { _id: "event-c", date: "2026-07-20" },
-];
-const rowsByDate = new Map([
-  [
-    "2026-07-20",
-    [
-      { _id: "event-a", date: "2026-07-20" },
-      { _id: "unrelated", date: "2026-07-20" },
-      { _id: "event-c", date: "2026-07-20" },
-    ],
-  ],
-  ["2026-07-22", [{ _id: "event-b", date: "2026-07-22" }]],
-]);
+assert.deepEqual(
+  getSourceGroundingReprocessReasonGate(
+    JSON.stringify({
+      moderationPendingReasons: [
+        "caption_source_event_mismatch",
+        "requires_human_approval",
+      ],
+    }),
+  ),
+  { hasSourceGroundingReason: true, nonRemovablePendingReasons: [] },
+);
+assert.deepEqual(
+  getSourceGroundingReprocessReasonGate(
+    JSON.stringify({
+      moderationPendingReasons: [
+        "unverified_core_event_source",
+        "manual_safety_hold",
+      ],
+    }),
+  ),
+  { hasSourceGroundingReason: true, nonRemovablePendingReasons: ["manual_safety_hold"] },
+);
+
+const targets = Array.from({ length: 205 }, (_, index) => ({
+  _id: `event-${index.toString().padStart(3, "0")}`,
+  date: "2026-07-20",
+}));
 let inFlight = 0;
 let maxInFlight = 0;
-const requestedDates = [];
+const requestedIdBatches = [];
 const client = {
   async query(functionName, args) {
-    assert.equal(functionName, "events:listByDate");
-    requestedDates.push(args.date);
+    assert.equal(functionName, "events:getManyByIds");
+    requestedIdBatches.push(args.ids);
     inFlight += 1;
     maxInFlight = Math.max(maxInFlight, inFlight);
     if (inFlight > 1) {
@@ -35,15 +47,14 @@ const client = {
     }
     await new Promise((resolve) => setTimeout(resolve, 5));
     inFlight -= 1;
-    return rowsByDate.get(args.date) ?? [];
+    return args.ids.map((id) => ({ _id: id, date: "2026-07-20" }));
   },
 };
 
 const rows = await loadExactTargetRows(client, "qa-service-secret", targets);
-assert.equal(maxInFlight, 1, "Post-apply date queries must be strictly sequential.");
-assert.deepEqual(requestedDates, ["2026-07-20", "2026-07-22"]);
-assert.deepEqual([...rows.keys()].sort(), ["event-a", "event-b", "event-c"]);
-assert.equal(rows.has("unrelated"), false);
+assert.equal(maxInFlight, 1, "Post-apply exact-ID queries must be strictly sequential.");
+assert.deepEqual(requestedIdBatches.map((batch) => batch.length), [100, 100, 5]);
+assert.deepEqual([...rows.keys()].sort(), targets.map((event) => event._id));
 
 const pendingPages = [
   { page: [{ _id: "pending-a" }, { _id: "pending-b" }], isDone: false, continueCursor: "cursor-2" },
@@ -67,4 +78,23 @@ assert.deepEqual(
   ],
 );
 
-console.log("Source-grounding reprocess QA passed: pending reads paginate safely and post-apply readback is sequential/exact-ID scoped.");
+await assert.rejects(
+  () =>
+    loadPendingEventsPaginated(
+      {
+        async query() {
+          return {
+            page: [{ _id: "incomplete" }],
+            isDone: true,
+            continueCursor: "range-end",
+            pageStatus: "SplitRequired",
+            splitCursor: "range-middle",
+          };
+        },
+      },
+      "qa-service-secret",
+    ),
+  /requires a split; refusing a partial backlog read/,
+);
+
+console.log("Source-grounding reprocess QA passed: pending reads fail closed on split ranges and post-apply readback is sequential/exact-ID scoped.");

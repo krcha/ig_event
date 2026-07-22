@@ -1761,7 +1761,7 @@ function stripHashtagIdentityTokens(value: string): string {
 }
 
 const LOCAL_BILLED_MENTION_PATTERN_SOURCE =
-  String.raw`(?:^|[\s|,;])(?:w\/|with|uz|sa|feat(?:uring)?|ft\.?|slu[sš]amo)\s*@([\p{L}\p{N}_.-]+)`;
+  String.raw`(?:^|[\s|,;])(?:w\/|with|uz|sa|feat(?:uring)?|ft\.?)\s*@([\p{L}\p{N}_.-]+)`;
 
 function containsNonHashtagIdentity(value: string, expected: string): boolean {
   return containsNormalizedTokenSequence(stripHashtagIdentityTokens(value), expected);
@@ -1798,11 +1798,20 @@ function buildDateHeaderEventRowSegments(value: string | null | undefined): stri
     "iu",
   );
   const explicitEventRowPattern = /^(?:🎬|🎤|🎭|🎨|🖼️?)\s*\S/u;
+  const eventMarkerPattern = /[🎬🎤🎭🎨🖼]/u;
+  const dateAnchorGlobalPattern = new RegExp(dateAnchorPattern.source, "giu");
+  const headerClockPattern = new RegExp(String.raw`\b${SOURCE_GROUNDING_CLOCK_PATTERN}\b`, "giu");
   const segments: string[] = [];
 
   for (let index = 0; index < lines.length; index += 1) {
     const dateLine = lines[index] ?? "";
     if (!dateLine || !dateAnchorPattern.test(dateLine)) {
+      continue;
+    }
+    const headerRemainder = dateLine
+      .replace(dateAnchorGlobalPattern, " ")
+      .replace(headerClockPattern, " ");
+    if (eventMarkerPattern.test(dateLine) || /\p{L}/u.test(headerRemainder)) {
       continue;
     }
     const blockRows: string[] = [];
@@ -2042,7 +2051,6 @@ function hasExplicitBilledEventContext(
       `live ${searchableArtist}`,
       `with ${searchableArtist}`,
       `uz ${searchableArtist}`,
-      `slusamo ${searchableArtist}`,
       `svira ${searchableArtist}`,
       `${searchableArtist} svira`,
       `nastupa ${searchableArtist}`,
@@ -2129,7 +2137,6 @@ function hasCoherentBilledArtists(
       `live ${searchableArtist}`,
       `with ${searchableArtist}`,
       `uz ${searchableArtist}`,
-      `slusamo ${searchableArtist}`,
       `svira ${searchableArtist}`,
       `${searchableArtist} svira`,
       `nastupa ${searchableArtist}`,
@@ -2164,43 +2171,6 @@ export function evaluateCoreEventSourceGrounding(options: {
   const sourceText = normalizeString(options.independentTextEvidence);
   const baseSegments = buildSourceGroundingSegments(sourceText);
   const segments = [...baseSegments];
-  const sourceDates = collectSupportedDates(sourceText, options.postedAt);
-  const explicitStartSegmentPattern = new RegExp(
-    String.raw`^(?:po[cč]etak(?:\s+(?:u|od))?|starts?(?:\s+at)?)\s*${SOURCE_GROUNDING_LABELED_CLOCK_PATTERN}\b`,
-    "iu",
-  );
-  if (!normalizeString(options.splitSource) && sourceDates.length === 1) {
-    const [sourceDate] = sourceDates;
-    const datedSegments = baseSegments.filter((segment) =>
-      collectSupportedDates(segment, options.postedAt).includes(sourceDate),
-    );
-    const explicitlyLabeledStarts = baseSegments.filter((segment) =>
-      explicitStartSegmentPattern.test(normalizeString(segment)),
-    );
-    const quotedWorkSegments = baseSegments.filter((segment) =>
-      Boolean(extractQuotedCulturalWorkTitleCandidate(segment, undefined)),
-    );
-    const locallyBilledMentionSegments = baseSegments.filter((segment) =>
-      new RegExp(LOCAL_BILLED_MENTION_PATTERN_SOURCE, "iu").test(segment),
-    );
-    for (const datedSegment of datedSegments) {
-      for (const followingStart of explicitlyLabeledStarts) {
-        // Bind only an explicitly labeled start clock to the single dated
-        // event row. Never rejoin arbitrary prose or unrelated clocks.
-        segments.push(`${datedSegment} ${followingStart}`);
-      }
-      for (const quotedWorkSegment of quotedWorkSegments) {
-        // A quoted work with an immediate year is deterministic cultural-work
-        // identity and may occupy the next layout line of a single-date post.
-        segments.push(`${datedSegment} ${quotedWorkSegment}`);
-      }
-      for (const billedMentionSegment of locallyBilledMentionSegments) {
-        // A local billing cue plus handle is source authority; a bare or
-        // unrelated account mention is not.
-        segments.push(`${datedSegment} ${billedMentionSegment}`);
-      }
-    }
-  }
   const title = normalizeString(options.title);
   const normalizedDate = normalizeString(options.normalizedDate);
   const expectedTime = isTbdEventTime(options.time)
@@ -5971,6 +5941,7 @@ export function buildDuplicateUpdatePatch(
     instagramPostUrl?: string;
     instagramPostId?: string;
     ticketPrice?: string;
+    clearTicketPrice?: boolean;
     eventType?: string;
     sourceCaption?: string;
     sourcePostedAt?: string;
@@ -6064,6 +6035,9 @@ export function buildDuplicateUpdatePatch(
         : existing.status;
   const descriptionChanged =
     normalizeString(existing.description) !== normalizeString(preferredDescription);
+  const clearTicketPrice =
+    Boolean(normalizeString(existing.ticketPrice)) &&
+    !normalizeString(preferredNext.ticketPrice);
 
   return {
     patch: {
@@ -6091,7 +6065,11 @@ export function buildDuplicateUpdatePatch(
           : {}),
       instagramPostUrl: preferredNext.instagramPostUrl,
       instagramPostId: preferredNext.instagramPostId,
-      ...(preferredNext.ticketPrice ? { ticketPrice: preferredNext.ticketPrice } : {}),
+      ...(preferredNext.ticketPrice
+        ? { ticketPrice: preferredNext.ticketPrice }
+        : clearTicketPrice
+          ? { clearTicketPrice: true }
+          : {}),
       eventType: preferredNext.eventType,
       ...(preferredNext.sourceCaption ? { sourceCaption: preferredNext.sourceCaption } : {}),
       ...(preferredNext.sourcePostedAt ? { sourcePostedAt: preferredNext.sourcePostedAt } : {}),
@@ -7437,9 +7415,11 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
           rawExtraction: extracted,
           normalizedFields: prepared.normalizedFields,
         });
+        const { clearTicketPrice, ...persistedPatch } = updatePayload.patch;
         existingMatch.existingEvent = {
           ...existingMatch.existingEvent,
-          ...updatePayload.patch,
+          ...persistedPatch,
+          ...(clearTicketPrice ? { ticketPrice: undefined } : {}),
           timeEvidenceText: updatePayload.patch.timeEvidenceText ?? undefined,
           status:
             updatePayload.patch.status ?? existingMatch.existingEvent.status,

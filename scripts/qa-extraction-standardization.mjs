@@ -2559,14 +2559,36 @@ function runSourceGroundingAdversarialQa() {
   );
   assert.equal(
     evaluate({
+      independentTextEvidence: `📅 ${firstDdmm} | 🕘 20.30 | 🎬 EVENT A\n🎬 EVENT B`,
+      title: "EVENT B",
+      artists: [],
+      time: "20:30",
+      splitSource: "caption_schedule",
+    }).verified,
+    false,
+    "A date line that already contains an event identity cannot serve as a pure header for another row.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm} DJ ALICE\nStarts at 22:00\nDJ BOB\nStarts at 23:00`,
+      title: "ALICE",
+      artists: ["ALICE"],
+      time: "23:00",
+      splitSource: null,
+    }).verified,
+    false,
+    "Separated start rows must never be Cartesian-joined to another billed artist.",
+  );
+  assert.equal(
+    evaluate({
       independentTextEvidence: `U subotu ${firstDdmm}. ponovo kao na moru!\nSlušamo @bendarhivatori`,
       title: "Bendarhivatori",
       artists: ["Bendarhivatori"],
       time: "",
       splitSource: null,
     }).verified,
-    true,
-    "An exact locally billed performer mention may bind to the only dated event row in a caption.",
+    false,
+    "Listening-language alone must remain moderator evidence rather than live-performer authority.",
   );
   assert.equal(
     evaluate({
@@ -2619,8 +2641,8 @@ function runSourceGroundingAdversarialQa() {
       time: "23:00",
       splitSource: null,
     }).verified,
-    true,
-    "A single-date caption may ground an exact title/date/time split across harmless layout delimiters.",
+    false,
+    "Separated billing evidence must remain pending without a uniquely attributable row binding.",
   );
   assert.equal(
     evaluate({
@@ -2630,8 +2652,8 @@ function runSourceGroundingAdversarialQa() {
       time: "21:00",
       splitSource: null,
     }).verified,
-    true,
-    "A single dated film caption may retain a separately labeled door-opening time.",
+    false,
+    "A quoted title on a separate line cannot inherit a dated start time without strict structural binding.",
   );
   assert.equal(
     evaluate({
@@ -2751,8 +2773,8 @@ function runSourceGroundingAdversarialQa() {
       time: "21:00",
       splitSource: null,
     }).verified,
-    true,
-    "An explicitly labeled start after a door time must remain verifiable.",
+    false,
+    "A separated start sentence must remain pending without strict continuation binding.",
   );
   const earlyDateGrounding = {
     independentTextEvidence: "08.07. DJ ALICE 22h",
@@ -2790,8 +2812,8 @@ function runSourceGroundingAdversarialQa() {
       postedAt: "2026-07-01T12:00:00.000Z",
       splitSource: null,
     }).verified,
-    true,
-    "Early-month single-event layouts must remain grounded under day-month parsing.",
+    false,
+    "Early-month layouts still require billing evidence in the same event row.",
   );
   const prepareSingleGroundingCase = ({
     caption,
@@ -5137,6 +5159,7 @@ async function runServiceApprovalMutationBoundaryQa() {
   let inserted = false;
   let patched = false;
   let lastPatch = null;
+  let lastAudit = null;
   let sameDateEvents = [];
   let existingVenue = groundedPublicFields.venue;
   let existingVenueInstagramHandle = "qa_venue";
@@ -5155,7 +5178,11 @@ async function runServiceApprovalMutationBoundaryQa() {
       venueInstagramHandle: existingVenueInstagramHandle,
       status: "pending",
     }),
-    insert: async () => {
+    insert: async (table, value) => {
+      if (table === "eventAuditLog") {
+        lastAudit = value;
+        return "qa-audit-row";
+      }
       inserted = true;
       return "qa-created-event";
     },
@@ -5228,12 +5255,30 @@ async function runServiceApprovalMutationBoundaryQa() {
     );
     assert.equal(patched, false);
 
+    const ticketClearDecision = buildDuplicateUpdatePatch(
+      {
+        ...groundedPublicFields,
+        status: "pending",
+        imageUrl: undefined,
+        ticketPrice: "2500 RSD",
+      },
+      {
+        ...groundedPublicFields,
+        status: "pending",
+        imageUrl: undefined,
+        ticketPrice: undefined,
+      },
+    );
+    assert.equal(ticketClearDecision.patch.clearTicketPrice, true);
+    assert.equal(Object.hasOwn(ticketClearDecision.patch, "ticketPrice"), false);
+
     lastPatch = null;
+    lastAudit = null;
     await updateEvent._handler(ctx, {
       id: "qa-existing-event",
       expectedStatus: "pending",
       serviceSecret,
-      patch: { clearTicketPrice: true },
+      patch: { clearTicketPrice: ticketClearDecision.patch.clearTicketPrice },
     });
     assert.equal(patched, true);
     assert.equal(lastPatch.ticketPrice, undefined);
@@ -5242,6 +5287,7 @@ async function runServiceApprovalMutationBoundaryQa() {
       false,
       "The transport-only clear flag must never be written to the event document.",
     );
+    assert.equal(JSON.parse(lastAudit.patchJson).clearTicketPrice, true);
     patched = false;
 
     const sourceSwapCases = [
@@ -5830,6 +5876,27 @@ async function runTransactionalSourceGroundingReprocessQa() {
       /changed during reprocessing|updatedAt/iu,
     );
     assert.deepEqual(stale.snapshot(), staleBefore);
+
+    const heldB = {
+      ...qaB,
+      event: {
+        ...qaB.event,
+        normalizedFieldsJson: JSON.stringify({
+          sourceGroundingVerified: false,
+          moderationPendingReasons: [
+            "caption_source_event_mismatch",
+            "manual_safety_hold",
+          ],
+        }),
+      },
+    };
+    const unrelatedHold = createHarness([qaA, heldB]);
+    const unrelatedHoldBefore = unrelatedHold.snapshot();
+    await assert.rejects(
+      () => unrelatedHold.run(argsFor([qaA, heldB])),
+      /unrelated moderation holds block source-grounding reprocessing/iu,
+    );
+    assert.deepEqual(unrelatedHold.snapshot(), unrelatedHoldBefore);
 
     const invalid = createHarness();
     const invalidBefore = invalid.snapshot();

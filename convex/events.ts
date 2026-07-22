@@ -57,8 +57,45 @@ const sourceGroundingReprocessItem = v.object({
   nextNormalizedFieldsJson: v.string(),
 });
 const MAX_SOURCE_GROUNDING_REPROCESS_BATCH_SIZE = 100;
+const MAX_EVENTS_GET_MANY_BY_IDS = 100;
+const SOURCE_GROUNDING_REPROCESS_SOURCE_REASONS = new Set([
+  "caption_source_event_mismatch",
+  "unverified_core_event_source",
+]);
+const SOURCE_GROUNDING_REPROCESS_REMOVABLE_REASONS = new Set([
+  ...SOURCE_GROUNDING_REPROCESS_SOURCE_REASONS,
+  "requires_human_approval",
+]);
 const DEFAULT_EXPIRED_EVENT_DELETE_BATCH_SIZE = 100;
 const DISCOVER_ORGANIC_SCAN_LIMIT = 120;
+
+function readModerationPendingReasons(normalizedFieldsJson: string | undefined): string[] {
+  try {
+    const parsed = JSON.parse(normalizedFieldsJson ?? "{}");
+    return Array.isArray(parsed?.moderationPendingReasons)
+      ? parsed.moderationPendingReasons.filter(
+          (reason: unknown): reason is string => typeof reason === "string" && reason.length > 0,
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function assertSourceGroundingReprocessReasons(event: Doc<"events">): void {
+  const reasons = readModerationPendingReasons(event.normalizedFieldsJson);
+  if (!reasons.some((reason) => SOURCE_GROUNDING_REPROCESS_SOURCE_REASONS.has(reason))) {
+    throw new Error(`Source-grounding hold required for event ${event._id}.`);
+  }
+  const nonRemovable = reasons.filter(
+    (reason) => !SOURCE_GROUNDING_REPROCESS_REMOVABLE_REASONS.has(reason),
+  );
+  if (nonRemovable.length > 0) {
+    throw new Error(
+      `Unrelated moderation holds block source-grounding reprocessing for event ${event._id}: ${nonRemovable.join(", ")}.`,
+    );
+  }
+}
 
 type VenueDenormalizedFields = {
   venueCategory?: string | undefined;
@@ -508,6 +545,24 @@ export const listByStatusPaginated = query({
       .withIndex("by_status", (q) => q.eq("status", args.status))
       .order("desc")
       .paginate(args.paginationOpts);
+  },
+});
+
+export const getManyByIds = query({
+  args: {
+    ids: v.array(v.id("events")),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    if (args.ids.length === 0 || args.ids.length > MAX_EVENTS_GET_MANY_BY_IDS) {
+      throw new Error(`Event ID reads require 1-${MAX_EVENTS_GET_MANY_BY_IDS} IDs.`);
+    }
+    if (new Set(args.ids).size !== args.ids.length) {
+      throw new Error("Event ID reads require unique IDs.");
+    }
+    const events = await Promise.all(args.ids.map((id) => ctx.db.get(id)));
+    return events.filter((event): event is Doc<"events"> => event !== null);
   },
 });
 
@@ -1052,9 +1107,12 @@ export const updateEvent = mutation({
       );
     }
     await ctx.db.patch(args.id, { ...patch, updatedAt: now });
+    const auditPatch = clearTicketPrice
+      ? { ...patch, clearTicketPrice: true }
+      : patch;
     await writeEventAuditLog(ctx, args.id, "updated", {
       actor,
-      patch,
+      patch: auditPatch,
     });
   },
 });
@@ -1106,6 +1164,7 @@ export const reprocessPendingSourceGroundingBatch = mutation({
       if (event.normalizedFieldsJson !== item.expectedNormalizedFieldsJson) {
         throw new Error(`Normalized fields changed during reprocessing: ${item.id}.`);
       }
+      assertSourceGroundingReprocessReasons(event);
       prepared.push({ event, item });
     }
 
