@@ -24,7 +24,7 @@ const httpQaSource = fs.readFileSync(
 );
 
 const productionCsp = buildContentSecurityPolicy({
-  clerkOrigin: "https://clerk.events.ineedtofeedmyrabbit.com",
+  clerkOrigin: "https://clerk.eventzeka.com",
   convexOrigin: "https://convex-events.ineedtofeedmyrabbit.com",
   production: true,
 });
@@ -56,7 +56,7 @@ assert.ok(
   "Production media-src must not allow every HTTPS origin.",
 );
 for (const source of [
-  "https://clerk.events.ineedtofeedmyrabbit.com",
+  "https://clerk.eventzeka.com",
   "https://convex-events.ineedtofeedmyrabbit.com",
   "wss://convex-events.ineedtofeedmyrabbit.com",
   "https://challenges.cloudflare.com",

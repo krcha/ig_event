@@ -422,6 +422,11 @@ assert.match(
 );
 assert.match(
   nextConfigSource,
+  /const LEGACY_APP_HOST = "events\.ineedtofeedmyrabbit\.com";/,
+  "Next config should define the retained legacy app host.",
+);
+assert.match(
+  nextConfigSource,
   /has:\s*\[\{ type: "host", value: WWW_APP_HOST \}\]/,
   "The www hostname should redirect before Clerk-backed application routes.",
 );
@@ -434,6 +439,16 @@ assert.match(
   nextConfigSource,
   /destination: `\$\{CANONICAL_APP_ORIGIN\}\/:path\*`/,
   "Vercel production alias should preserve the path on the canonical origin.",
+);
+assert.match(
+  nextConfigSource,
+  /source: "\/sign-in\/:path\*",[\s\S]*?has: \[\{ type: "host", value: LEGACY_APP_HOST \}\],[\s\S]*?destination: `\$\{CANONICAL_APP_ORIGIN\}\/sign-in\/:path\*`/,
+  "Legacy sign-in requests should redirect to the canonical Clerk origin.",
+);
+assert.match(
+  nextConfigSource,
+  /source: "\/sign-up\/:path\*",[\s\S]*?has: \[\{ type: "host", value: LEGACY_APP_HOST \}\],[\s\S]*?destination: `\$\{CANONICAL_APP_ORIGIN\}\/sign-up\/:path\*`/,
+  "Legacy sign-up requests should redirect to the canonical Clerk origin.",
 );
 
 assert.ok(

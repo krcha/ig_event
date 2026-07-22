@@ -305,24 +305,27 @@ commit or narrowly amend that directive; do not disable authentication or TLS.
 
 ## Clerk Production DNS
 
-The Clerk production frontend/JWT infrastructure remains on
-`events.ineedtofeedmyrabbit.com` even though the app's canonical public origin
-is `eventzeka.com`. Clerk auth will not work in production until these CNAME
-records exist and resolve:
+The Clerk production frontend/JWT infrastructure uses the same registrable
+domain as the canonical app origin. Clerk auth will not work in production
+until these CNAME records exist and resolve:
 
 ```text
-clerk.events.ineedtofeedmyrabbit.com        CNAME frontend-api.clerk.services
-accounts.events.ineedtofeedmyrabbit.com     CNAME accounts.clerk.services
-clkmail.events.ineedtofeedmyrabbit.com      CNAME mail.nqid57ertcr1.clerk.services
-clk._domainkey.events.ineedtofeedmyrabbit.com  CNAME dkim1.nqid57ertcr1.clerk.services
-clk2._domainkey.events.ineedtofeedmyrabbit.com CNAME dkim2.nqid57ertcr1.clerk.services
+clerk.eventzeka.com            CNAME frontend-api.clerk.services
+accounts.eventzeka.com         CNAME accounts.clerk.services
+clkmail.eventzeka.com          CNAME mail.f0rgc0wqgso3.clerk.services
+clk._domainkey.eventzeka.com   CNAME dkim1.f0rgc0wqgso3.clerk.services
+clk2._domainkey.eventzeka.com  CNAME dkim2.f0rgc0wqgso3.clerk.services
 ```
 
 After DNS propagates, verify:
 
 ```bash
-curl -fsS https://clerk.events.ineedtofeedmyrabbit.com/.well-known/jwks.json
+curl -fsS https://clerk.eventzeka.com/.well-known/jwks.json
 ```
+
+Clerk binds browser sessions to the primary production domain. The retained
+`events.ineedtofeedmyrabbit.com` calendar remains available, but its `/sign-in`
+and `/sign-up` routes redirect to the canonical `eventzeka.com` auth routes.
 
 Caddy example:
 
