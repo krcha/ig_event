@@ -2570,6 +2570,28 @@ function runSourceGroundingAdversarialQa() {
   );
   assert.equal(
     evaluate({
+      independentTextEvidence: `📅 ${firstDdmm} | 🕘 20.30 | 1984\n🎬 EVENT B`,
+      title: "EVENT B",
+      artists: [],
+      time: "20:30",
+      splitSource: "caption_schedule",
+    }).verified,
+    false,
+    "Numeric title content cannot be hidden inside a reusable date header.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `📅 ${firstDdmm} | 🕘 20.30\n🎬 EVENT A | 🎬 EVENT B`,
+      title: "EVENT B",
+      artists: [],
+      time: "20:30",
+      splitSource: "caption_schedule",
+    }).verified,
+    false,
+    "A single following row with multiple event markers remains ambiguous.",
+  );
+  assert.equal(
+    evaluate({
       independentTextEvidence: `${firstDdmm} DJ ALICE\nStarts at 22:00\nDJ BOB\nStarts at 23:00`,
       title: "ALICE",
       artists: ["ALICE"],

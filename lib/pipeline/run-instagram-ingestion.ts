@@ -1811,7 +1811,7 @@ function buildDateHeaderEventRowSegments(value: string | null | undefined): stri
     const headerRemainder = dateLine
       .replace(dateAnchorGlobalPattern, " ")
       .replace(headerClockPattern, " ");
-    if (eventMarkerPattern.test(dateLine) || /\p{L}/u.test(headerRemainder)) {
+    if (eventMarkerPattern.test(dateLine) || /[\p{L}\p{N}]/u.test(headerRemainder)) {
       continue;
     }
     const blockRows: string[] = [];
@@ -1822,8 +1822,12 @@ function buildDateHeaderEventRowSegments(value: string | null | undefined): stri
       }
       blockRows.push(row);
     }
-    if (blockRows.length === 1 && explicitEventRowPattern.test(blockRows[0] ?? "")) {
-      segments.push(`${dateLine} ${blockRows[0]}`);
+    if (blockRows.length === 1) {
+      const eventRow = blockRows[0] ?? "";
+      const eventMarkerCount = eventRow.match(/[🎬🎤🎭🎨🖼]/gu)?.length ?? 0;
+      if (explicitEventRowPattern.test(eventRow) && eventMarkerCount === 1) {
+        segments.push(`${dateLine} ${eventRow}`);
+      }
     }
   }
   return segments;
