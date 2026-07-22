@@ -48,6 +48,7 @@ const ALLOWED_NORMALIZED_FIELD_CHANGES = new Set([
   "sourceGroundingTimeVerified",
   "sourceGroundingTitleVerified",
   "sourceGroundingVerified",
+  "sourceGroundingVersion",
 ]);
 
 function parseArgs(argv) {
@@ -160,7 +161,7 @@ function buildExtracted(existing, normalizedFields) {
   };
 }
 
-function prepareExistingEvent(existing) {
+export function prepareExistingEvent(existing) {
   const previousNormalizedFields = parseObject(existing.normalizedFieldsJson);
   const post = buildPost(existing, previousNormalizedFields);
   const extracted = buildExtracted(existing, previousNormalizedFields);
@@ -255,6 +256,27 @@ function createExclusiveBackup(targets, manifestSha256) {
   return { backupPath, backupSha256: sha256(reread) };
 }
 
+export async function loadPendingEventsPaginated(client, serviceSecret) {
+  const events = [];
+  let cursor = null;
+  for (let pageNumber = 0; pageNumber < 1000; pageNumber += 1) {
+    const result = await client.query("events:listByStatusPaginated", {
+      status: "pending",
+      paginationOpts: { numItems: 20, cursor },
+      serviceSecret,
+    });
+    events.push(...result.page);
+    if (result.isDone) {
+      return events;
+    }
+    if (!result.continueCursor || result.continueCursor === cursor) {
+      throw new Error("Pending-event pagination cursor stalled.");
+    }
+    cursor = result.continueCursor;
+  }
+  throw new Error("Pending-event pagination exceeded the 1000-page safety limit.");
+}
+
 export async function loadExactTargetRows(client, serviceSecret, targets) {
   const dates = [...new Set(targets.map((event) => event.date))];
   const rows = [];
@@ -304,11 +326,7 @@ async function main() {
     throw new Error("Missing production Convex configuration.");
   }
   const client = new ConvexHttpClient(convexUrl);
-  const pending = await client.query("events:listByStatus", {
-    status: "pending",
-    limit: 1000,
-    serviceSecret,
-  });
+  const pending = await loadPendingEventsPaginated(client, serviceSecret);
   const targets = pending
     .filter((event) => {
       const fields = parseObject(event.normalizedFieldsJson);

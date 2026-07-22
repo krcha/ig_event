@@ -962,6 +962,7 @@ export const updateEvent = mutation({
       instagramPostUrl: v.optional(v.string()),
       instagramPostId: v.optional(v.string()),
       ticketPrice: v.optional(v.string()),
+      clearTicketPrice: v.optional(v.boolean()),
       eventType: v.optional(v.string()),
       sourceCaption: v.optional(v.string()),
       sourcePostedAt: v.optional(v.string()),
@@ -988,34 +989,39 @@ export const updateEvent = mutation({
     assertExpectedEventStatus(existingEvent.status, args.expectedStatus);
 
     const now = Date.now();
+    const { clearTicketPrice, ...eventPatch } = args.patch;
+    if (clearTicketPrice && eventPatch.ticketPrice !== undefined) {
+      throw new Error("ticketPrice and clearTicketPrice cannot be used together.");
+    }
     const venueFields =
-      args.patch.venue !== undefined
-        ? await resolveVenueDenormalizedFields(ctx, args.patch.venue)
+      eventPatch.venue !== undefined
+        ? await resolveVenueDenormalizedFields(ctx, eventPatch.venue)
         : {};
     const nextImageStorageId =
-      args.patch.imageStorageId ??
-      (args.patch.imageUrl !== undefined && args.patch.imageUrl === existingEvent.imageUrl
+      eventPatch.imageStorageId ??
+      (eventPatch.imageUrl !== undefined && eventPatch.imageUrl === existingEvent.imageUrl
         ? existingEvent.imageStorageId
         : undefined);
-    assertPublicEventImageWrite(args.patch.imageUrl, nextImageStorageId);
+    assertPublicEventImageWrite(eventPatch.imageUrl, nextImageStorageId);
     const imagePairPatch =
-      args.patch.imageUrl !== undefined
+      eventPatch.imageUrl !== undefined
         ? {
-            imageUrl: args.patch.imageUrl,
+            imageUrl: eventPatch.imageUrl,
             imageStorageId: nextImageStorageId,
           }
         : {};
     const patch = {
-      ...normalizeEventTimeWritePatch(args.patch),
+      ...normalizeEventTimeWritePatch(eventPatch),
+      ...(clearTicketPrice ? { ticketPrice: undefined } : {}),
       ...imagePairPatch,
       ...venueFields,
-      ...(args.patch.instagramPostUrl !== undefined
+      ...(eventPatch.instagramPostUrl !== undefined
         ? {
-            normalizedInstagramPostUrl: normalizeInstagramPostUrl(args.patch.instagramPostUrl),
+            normalizedInstagramPostUrl: normalizeInstagramPostUrl(eventPatch.instagramPostUrl),
           }
         : {}),
-      ...(args.patch.eventType !== undefined
-        ? { eventType: canonicalizeEventType(args.patch.eventType) }
+      ...(eventPatch.eventType !== undefined
+        ? { eventType: canonicalizeEventType(eventPatch.eventType) }
         : {}),
     };
     const effectiveEvent = { ...existingEvent, ...patch };

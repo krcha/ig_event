@@ -194,7 +194,7 @@ export function hasCompleteSourceGroundedAutoApproval(
   const missingImage = fields.missingImage;
 
   return (
-    fields.sourceGroundingVersion === 3 &&
+    fields.sourceGroundingVersion === 4 &&
     fields.sourceGroundingEvidence === "instagram_caption" &&
     fields.approvalTitleSensible === true &&
     fields.approvalCaptionSourceCoherent === true &&

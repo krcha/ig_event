@@ -2526,6 +2526,50 @@ function runSourceGroundingAdversarialQa() {
   );
   assert.equal(
     evaluate({
+      independentTextEvidence: `📅 ${firstDdmm} | 🕘 20.30\n🎬 SAUNDTREK ZA PREVRAT (Soundtrack to a Coup d'Etat) | 150’`,
+      title: "SAUNDTREK ZA PREVRAT (Soundtrack to a Coup d'Etat)",
+      artists: [],
+      time: "20:30",
+      splitSource: "caption_schedule",
+    }).verified,
+    true,
+    "A multiline schedule row may bind one explicit date/time header to its single immediately following event line.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `📅 ${firstDdmm} | 🕘 20.30\n🎬 ZEMLJA (Zemlja) | 10’\n🎬 DŽOJMEJKERS (Joymakers) | 46’`,
+      title: "ZEMLJA (Zemlja)",
+      artists: [],
+      time: "20:30",
+      splitSource: "caption_schedule",
+    }).verified,
+    false,
+    "One shared date/time header must not auto-publish one arbitrary title from a multi-title block.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `U subotu ${firstDdmm}. ponovo kao na moru!\nSlušamo @bendarhivatori`,
+      title: "Bendarhivatori",
+      artists: ["Bendarhivatori"],
+      time: "",
+      splitSource: null,
+    }).verified,
+    true,
+    "An exact locally billed performer mention may bind to the only dated event row in a caption.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `U subotu ${firstDdmm}. ponovo kao na moru!\nSlušamo #bendarhivatori`,
+      title: "Bendarhivatori",
+      artists: ["Bendarhivatori"],
+      time: "",
+      splitSource: null,
+    }).verified,
+    false,
+    "A hashtag after a local billing phrase must not establish performer identity.",
+  );
+  assert.equal(
+    evaluate({
       independentTextEvidence: `${firstDdmm}. #verajamarko`,
       title: "Verajamarko",
       artists: ["Verajamarko"],
@@ -3283,7 +3327,7 @@ function runMaintenancePromotionGroundingQa() {
     sourceGroundingVerified: false,
   };
   const completeGrounding = {
-    sourceGroundingVersion: 3,
+    sourceGroundingVersion: 4,
     sourceGroundingEvidence: "instagram_caption",
     sourceGroundingSourceKind: "caption",
     sourceGroundingSourceCaption: `${ddmmForIsoDate(isoDateDaysFromNow(7))} ALICE`,
@@ -4710,7 +4754,7 @@ function runAtomicDuplicateStatusPreconditionQa() {
     sourceGroundingInstagramPostId: approvalPublicFields.instagramPostId,
     sourceGroundingInstagramPostUrl: approvalPublicFields.instagramPostUrl,
     sourceGroundingInstagramHandle: "qa_venue",
-    sourceGroundingVersion: 3,
+    sourceGroundingVersion: 4,
     sourceGroundingEvidence: "instagram_caption",
     approvalTitleSensible: true,
     approvalCaptionSourceCoherent: true,
@@ -5028,7 +5072,7 @@ async function runServiceApprovalMutationBoundaryQa() {
     sourceGroundingInstagramPostId: instagramPostId,
     sourceGroundingInstagramPostUrl: instagramPostUrl,
     sourceGroundingInstagramHandle: "qa_venue",
-    sourceGroundingVersion: 3,
+    sourceGroundingVersion: 4,
     sourceGroundingEvidence: "instagram_caption",
     approvalTitleSensible: true,
     approvalCaptionSourceCoherent: true,
@@ -5070,6 +5114,7 @@ async function runServiceApprovalMutationBoundaryQa() {
   };
   let inserted = false;
   let patched = false;
+  let lastPatch = null;
   let sameDateEvents = [];
   let existingVenue = groundedPublicFields.venue;
   let existingVenueInstagramHandle = "qa_venue";
@@ -5092,8 +5137,9 @@ async function runServiceApprovalMutationBoundaryQa() {
       inserted = true;
       return "qa-created-event";
     },
-    patch: async () => {
+    patch: async (_id, patch) => {
       patched = true;
+      lastPatch = patch;
     },
     query: (table) =>
       table === "venues"
@@ -5159,6 +5205,22 @@ async function runServiceApprovalMutationBoundaryQa() {
       "The real update mutation must reject a mismatched merged payload.",
     );
     assert.equal(patched, false);
+
+    lastPatch = null;
+    await updateEvent._handler(ctx, {
+      id: "qa-existing-event",
+      expectedStatus: "pending",
+      serviceSecret,
+      patch: { clearTicketPrice: true },
+    });
+    assert.equal(patched, true);
+    assert.equal(lastPatch.ticketPrice, undefined);
+    assert.equal(
+      Object.hasOwn(lastPatch, "clearTicketPrice"),
+      false,
+      "The transport-only clear flag must never be written to the event document.",
+    );
+    patched = false;
 
     const sourceSwapCases = [
       {
@@ -5529,7 +5591,7 @@ async function runTransactionalSourceGroundingReprocessQa() {
       sourceGroundingInstagramPostId: postId,
       sourceGroundingInstagramPostUrl: instagramPostUrl,
       sourceGroundingInstagramHandle: handle,
-      sourceGroundingVersion: 3,
+      sourceGroundingVersion: 4,
       sourceGroundingEvidence: "instagram_caption",
       approvalTitleSensible: true,
       approvalCaptionSourceCoherent: true,

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 
-import { loadExactTargetRows } from "./reprocess-pending-source-grounding.mjs";
+import {
+  loadExactTargetRows,
+  loadPendingEventsPaginated,
+} from "./reprocess-pending-source-grounding.mjs";
 
 const targets = [
   { _id: "event-a", date: "2026-07-20" },
@@ -42,4 +45,26 @@ assert.deepEqual(requestedDates, ["2026-07-20", "2026-07-22"]);
 assert.deepEqual([...rows.keys()].sort(), ["event-a", "event-b", "event-c"]);
 assert.equal(rows.has("unrelated"), false);
 
-console.log("Source-grounding reprocess QA passed: post-apply readback is sequential and exact-ID scoped.");
+const pendingPages = [
+  { page: [{ _id: "pending-a" }, { _id: "pending-b" }], isDone: false, continueCursor: "cursor-2" },
+  { page: [{ _id: "pending-c" }], isDone: true, continueCursor: "cursor-done" },
+];
+const pendingRequests = [];
+const pendingClient = {
+  async query(functionName, args) {
+    assert.equal(functionName, "events:listByStatusPaginated");
+    pendingRequests.push(args);
+    return pendingPages[pendingRequests.length - 1];
+  },
+};
+const pendingRows = await loadPendingEventsPaginated(pendingClient, "qa-service-secret");
+assert.deepEqual(pendingRows.map((event) => event._id), ["pending-a", "pending-b", "pending-c"]);
+assert.deepEqual(
+  pendingRequests.map((request) => request.paginationOpts),
+  [
+    { numItems: 20, cursor: null },
+    { numItems: 20, cursor: "cursor-2" },
+  ],
+);
+
+console.log("Source-grounding reprocess QA passed: pending reads paginate safely and post-apply readback is sequential/exact-ID scoped.");

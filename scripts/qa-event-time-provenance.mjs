@@ -146,7 +146,7 @@ const completeSourceGroundedApprovalJson = JSON.stringify({
   sourceGroundingInstagramPostId: preparedDuplicate.instagramPostId,
   sourceGroundingInstagramPostUrl: preparedDuplicate.instagramPostUrl,
   sourceGroundingInstagramHandle: "qa_venue",
-  sourceGroundingVersion: 3,
+  sourceGroundingVersion: 4,
   sourceGroundingEvidence: "instagram_caption",
   approvalTitleSensible: true,
   approvalCaptionSourceCoherent: true,

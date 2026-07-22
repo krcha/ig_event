@@ -1761,7 +1761,7 @@ function stripHashtagIdentityTokens(value: string): string {
 }
 
 const LOCAL_BILLED_MENTION_PATTERN_SOURCE =
-  String.raw`(?:^|[\s|,;])(?:w\/|with|uz|sa|feat(?:uring)?|ft\.?)\s*@([\p{L}\p{N}_.-]+)`;
+  String.raw`(?:^|[\s|,;])(?:w\/|with|uz|sa|feat(?:uring)?|ft\.?|slu[sš]amo|curated\s+by)\s*@([\p{L}\p{N}_.-]+)`;
 
 function containsNonHashtagIdentity(value: string, expected: string): boolean {
   return containsNormalizedTokenSequence(stripHashtagIdentityTokens(value), expected);
@@ -1791,6 +1791,37 @@ function splitSourceLineAtDateAnchors(value: string): string[] {
     .filter(Boolean);
 }
 
+function buildDateHeaderEventRowSegments(value: string | null | undefined): string[] {
+  const lines = normalizeString(value).split(/\r?\n/u).map((line) => line.trim());
+  const dateAnchorPattern = new RegExp(
+    String.raw`\b(?:20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}[./-]\d{1,2}(?:[./-](?:\d{2}|\d{4}))?|\d{1,2}(?:st|nd|rd|th|\.)?\s+(?:${SOURCE_GROUNDING_MONTH_PATTERN})|(?:${SOURCE_GROUNDING_MONTH_PATTERN})\s+\d{1,2}(?:st|nd|rd|th)?)\b`,
+    "iu",
+  );
+  const explicitEventRowPattern = /^(?:🎬|🎤|🎭|🎨|🖼️?)\s*\S/u;
+  const segments: string[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const dateLine = lines[index] ?? "";
+    if (!dateLine || !dateAnchorPattern.test(dateLine)) {
+      continue;
+    }
+    const eventRows: string[] = [];
+    for (let rowIndex = index + 1; rowIndex < lines.length; rowIndex += 1) {
+      const row = lines[rowIndex] ?? "";
+      if (!row || dateAnchorPattern.test(row)) {
+        break;
+      }
+      if (explicitEventRowPattern.test(row)) {
+        eventRows.push(row);
+      }
+    }
+    if (eventRows.length === 1) {
+      segments.push(`${dateLine} ${eventRows[0]}`);
+    }
+  }
+  return segments;
+}
+
 function buildSourceGroundingSegments(value: string | null | undefined): string[] {
   const datePeriodPlaceholder = "\uE000";
   const protectedText = normalizeString(value).replace(
@@ -1810,7 +1841,11 @@ function buildSourceGroundingSegments(value: string | null | undefined): string[
     .filter((line) => /\s\|\s/u.test(line))
     .map((line) => line.replaceAll(datePeriodPlaceholder, ".").trim())
     .filter(Boolean);
-  return [...new Set([...atomicSegments, ...structuredLineAnchors])];
+  return [...new Set([
+    ...atomicSegments,
+    ...structuredLineAnchors,
+    ...buildDateHeaderEventRowSegments(value),
+  ])];
 }
 
 const SOURCE_GROUNDING_CLOCK_PATTERN =
@@ -1976,6 +2011,12 @@ function hasExplicitBilledEventContext(
     /^(?:projekcija filma|filmska projekcija|pozorisna predstava|pozori[sš]na predstava|izlozba|izlo[zž]ba|radionica|kviz|koncert|jam session)\b/iu.test(
       searchableTitle,
     ) && /\s[|•·●▪◦]\s/u.test(segment);
+  const hasExplicitEventRowMarker = [...segment.matchAll(/[🎬🎤🎭🎨🖼]/gu)].some(
+    (match) =>
+      toSearchableText(segment.slice((match.index ?? 0) + match[0].length)).startsWith(
+        searchableTitle,
+      ),
+  );
 
   if (
     /^(?:vidimo se|see you|save the date|dodjite(?: svi)?|dođite(?: svi)?|join us|come through|pridruzite se|pridružite se|ne propustite|dont miss|rezervisite|rezervišite|book now|saznajte vise|saznajte više|dress code|doors? open|vrata|ulaz|entry|tickets?|karte|reservations?|rezervacije|summer memories|party people|dj mix|album drops?|new album|new single|music video|photo dump|throwback album|good vibes|tonight|today|sutra|veceras|lineup|raspored|program|schedule|this week|ove nedelje|weekend)(?:\s|$)/iu.test(
@@ -2003,6 +2044,8 @@ function hasExplicitBilledEventContext(
       `live ${searchableArtist}`,
       `with ${searchableArtist}`,
       `uz ${searchableArtist}`,
+      `slusamo ${searchableArtist}`,
+      `curated by ${searchableArtist}`,
       `svira ${searchableArtist}`,
       `${searchableArtist} svira`,
       `nastupa ${searchableArtist}`,
@@ -2058,6 +2101,7 @@ function hasExplicitBilledEventContext(
     hasExplicitEventCue ||
     hasQuotedCulturalWorkInTitle ||
     titleHasDirectEventFormatLabel ||
+    hasExplicitEventRowMarker ||
     (titleStart === 0 && hasSourceMentionForTitleArtist) ||
     (hasEventLogisticsCue && hasQuotedYearQualifiedTitle)
   );
@@ -2088,6 +2132,8 @@ function hasCoherentBilledArtists(
       `live ${searchableArtist}`,
       `with ${searchableArtist}`,
       `uz ${searchableArtist}`,
+      `slusamo ${searchableArtist}`,
+      `curated by ${searchableArtist}`,
       `svira ${searchableArtist}`,
       `${searchableArtist} svira`,
       `nastupa ${searchableArtist}`,
@@ -6843,7 +6889,7 @@ export function prepareEventsForInsert(
       moderationAutoApproveThreshold: AUTO_APPROVE_CONFIDENCE_THRESHOLD,
       moderationCoreEventAutoApproveThreshold: CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
       moderationCaptionOnlyVideoMinConfidence: CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE,
-      sourceGroundingVersion: 3,
+      sourceGroundingVersion: 4,
       sourceGroundingEvidence: "instagram_caption",
       approvalTitleSensible,
       approvalCaptionSourceCoherent,
