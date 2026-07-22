@@ -67,6 +67,7 @@ type CalendarEventSummary = Pick<
   | "title"
   | "date"
   | "time"
+  | "timeStatus"
   | "dayPeriod"
   | "displayTimeEnd"
   | "displayTimeLabel"
@@ -336,6 +337,7 @@ function toCalendarEventSummary(event: PublicEvent): CalendarEventSummary {
     title: event.title,
     date: event.date,
     time: event.time,
+    timeStatus: event.timeStatus,
     dayPeriod: event.dayPeriod,
     displayTimeEnd: event.displayTimeEnd,
     displayTimeLabel: event.displayTimeLabel,
@@ -371,6 +373,9 @@ function getDayCategory(event: Pick<CalendarEventSummary, "artists" | "eventType
 }
 
 function getAgendaEventSortMinutes(event: CalendarEventSummary): number {
+  if (event.timeStatus === "unknown") {
+    return Number.POSITIVE_INFINITY;
+  }
   return getEventTimeSortMinutes(event.displayTimeStart ?? event.time) ?? Number.POSITIVE_INFINITY;
 }
 

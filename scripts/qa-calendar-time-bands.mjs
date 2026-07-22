@@ -194,6 +194,12 @@ assert.ok(
   "The selected-day agenda must render through the deterministic time-band helper.",
 );
 assert.ok(
+  calendarSource.includes('| "timeStatus"') &&
+    calendarSource.includes("timeStatus: event.timeStatus") &&
+    calendarSource.includes('event.timeStatus === "unknown"'),
+  "The agenda summary and time sort must preserve explicit unknown-time provenance even when stale time text exists.",
+);
+assert.ok(
   groupingSource.includes("aria-labelledby=") &&
     groupingSource.includes("data-calendar-time-band={timeBand.key}") &&
     groupingSource.includes("data-calendar-time-band-visible-count"),
