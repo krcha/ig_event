@@ -2548,6 +2548,17 @@ function runSourceGroundingAdversarialQa() {
   );
   assert.equal(
     evaluate({
+      independentTextEvidence: `📅 ${firstDdmm} | 🕘 20.30\nNENAJAVLJENI FILM | 70’\n🎬 SAUNDTREK ZA PREVRAT (Soundtrack to a Coup d'Etat) | 150’`,
+      title: "SAUNDTREK ZA PREVRAT (Soundtrack to a Coup d'Etat)",
+      artists: [],
+      time: "20:30",
+      splitSource: "caption_schedule",
+    }).verified,
+    false,
+    "A dated block with any extra unmarked row must remain ambiguous even when exactly one later row has an event marker.",
+  );
+  assert.equal(
+    evaluate({
       independentTextEvidence: `U subotu ${firstDdmm}. ponovo kao na moru!\nSlušamo @bendarhivatori`,
       title: "Bendarhivatori",
       artists: ["Bendarhivatori"],
@@ -2567,6 +2578,17 @@ function runSourceGroundingAdversarialQa() {
     }).verified,
     false,
     "A hashtag after a local billing phrase must not establish performer identity.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `ALICE | ${firstDdmm}.\nPlaylist curated by @alice`,
+      title: "ALICE",
+      artists: ["ALICE"],
+      time: "",
+      splitSource: null,
+    }).verified,
+    false,
+    "A playlist curator mention must not be treated as a billed live performer.",
   );
   assert.equal(
     evaluate({

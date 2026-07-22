@@ -1761,7 +1761,7 @@ function stripHashtagIdentityTokens(value: string): string {
 }
 
 const LOCAL_BILLED_MENTION_PATTERN_SOURCE =
-  String.raw`(?:^|[\s|,;])(?:w\/|with|uz|sa|feat(?:uring)?|ft\.?|slu[sš]amo|curated\s+by)\s*@([\p{L}\p{N}_.-]+)`;
+  String.raw`(?:^|[\s|,;])(?:w\/|with|uz|sa|feat(?:uring)?|ft\.?|slu[sš]amo)\s*@([\p{L}\p{N}_.-]+)`;
 
 function containsNonHashtagIdentity(value: string, expected: string): boolean {
   return containsNormalizedTokenSequence(stripHashtagIdentityTokens(value), expected);
@@ -1805,18 +1805,16 @@ function buildDateHeaderEventRowSegments(value: string | null | undefined): stri
     if (!dateLine || !dateAnchorPattern.test(dateLine)) {
       continue;
     }
-    const eventRows: string[] = [];
+    const blockRows: string[] = [];
     for (let rowIndex = index + 1; rowIndex < lines.length; rowIndex += 1) {
       const row = lines[rowIndex] ?? "";
       if (!row || dateAnchorPattern.test(row)) {
         break;
       }
-      if (explicitEventRowPattern.test(row)) {
-        eventRows.push(row);
-      }
+      blockRows.push(row);
     }
-    if (eventRows.length === 1) {
-      segments.push(`${dateLine} ${eventRows[0]}`);
+    if (blockRows.length === 1 && explicitEventRowPattern.test(blockRows[0] ?? "")) {
+      segments.push(`${dateLine} ${blockRows[0]}`);
     }
   }
   return segments;
@@ -2045,7 +2043,6 @@ function hasExplicitBilledEventContext(
       `with ${searchableArtist}`,
       `uz ${searchableArtist}`,
       `slusamo ${searchableArtist}`,
-      `curated by ${searchableArtist}`,
       `svira ${searchableArtist}`,
       `${searchableArtist} svira`,
       `nastupa ${searchableArtist}`,
@@ -2133,7 +2130,6 @@ function hasCoherentBilledArtists(
       `with ${searchableArtist}`,
       `uz ${searchableArtist}`,
       `slusamo ${searchableArtist}`,
-      `curated by ${searchableArtist}`,
       `svira ${searchableArtist}`,
       `${searchableArtist} svira`,
       `nastupa ${searchableArtist}`,
