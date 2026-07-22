@@ -131,6 +131,18 @@ const redirects = await nextConfig.redirects();
 for (const source of ["/map", "/calendar", "/events"]) {
   assert.ok(redirects.some((redirect) => redirect.source === source), `${source} redirect must remain configured.`);
 }
+for (const route of ["sign-in", "sign-up"]) {
+  const redirect = redirects.find(
+    (candidate) =>
+      candidate.source === `/${route}/:path*` &&
+      candidate.has?.some(
+        (condition) =>
+          condition.type === "host" && condition.value === "events.ineedtofeedmyrabbit.com",
+      ),
+  );
+  assert.ok(redirect, `Legacy ${route} requests must redirect to the canonical Clerk origin.`);
+  assert.equal(redirect.destination, `https://eventzeka.com/${route}/:path*`);
+}
 
 const middlewareSource = read("middleware.ts");
 assert.match(
