@@ -55,7 +55,10 @@ services:
       interval: 2h
       timeout: 5s
       retries: 6
-      start_period: 20s
+      # Cold starts can exceed 20 seconds on the production VPS. Keep the
+      # fast startup probe active long enough to register the backend healthy
+      # before Docker falls back to the two-hour steady-state interval.
+      start_period: 5m
       start_interval: 5s
 
   convex-dashboard:

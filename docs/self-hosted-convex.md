@@ -286,6 +286,13 @@ docker compose --env-file .env.production \
 curl -fsS http://127.0.0.1:3210/version
 ```
 
+The backend health check uses a five-second startup probe for up to five
+minutes, then a two-hour steady-state interval. Keep the startup grace period
+long enough for a cold VPS start. If local `/version` returns `200` while the
+container remains `health: starting` and the public hostname returns `404`, an
+older short startup window probably expired before Convex became ready; apply
+the current Compose configuration and recreate only `convex-backend`.
+
 ## Rollback
 
 If the web app cannot read Convex after migration:

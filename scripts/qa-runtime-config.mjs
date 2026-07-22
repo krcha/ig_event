@@ -74,6 +74,11 @@ assert.match(
 );
 assert.match(
   dockerComposeSelfHostedConvexSource,
+  /healthcheck:[\s\S]*?start_period:\s*5m/,
+  "self-hosted Convex should keep fast startup probes active across slow VPS cold starts.",
+);
+assert.match(
+  dockerComposeSelfHostedConvexSource,
   /traefik\.http\.routers\.ig-event-convex\.rule=Host\(`\$\{CONVEX_TRAEFIK_HOST:-convex-events\.ineedtofeedmyrabbit\.com\}`\)/,
   "self-hosted Convex should expose the browser-facing production hostname through Traefik.",
 );
