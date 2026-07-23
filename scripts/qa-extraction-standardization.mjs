@@ -1626,6 +1626,107 @@ function runHashtagOnlyScheduleIdentityQa() {
     "Identity-like suffixes must survive even when every row uses a reschedule cue.",
   );
 
+  for (const [caseName, firstSuffix, secondSuffix] of [
+    ["allowed context words", "The Venue", "The Space"],
+    ["bare numeric identities", "42", "54"],
+  ]) {
+    const acceptedGrammarDistinctTitlesCaption = [
+      `Beogradski koncert Joss Stone ${repeatedSingleEventDateText} ${firstSuffix} seli se u Ložionicu!`,
+      `Beogradski koncert Joss Stone ${repeatedSingleEventDateText} ${secondSuffix} seli se u Ložionicu!`,
+    ].join("\n");
+    const acceptedGrammarDistinctTitles = prepareEventsForInsert(
+      makeInstagramPost({
+        caption: acceptedGrammarDistinctTitlesCaption,
+        postType: "image",
+        username: "tickets.rs",
+      }),
+      makeExtractedEvent({
+        title: "Joss Stone",
+        date: firstDateLabel,
+        time: "",
+        venue: "Ložionica",
+        artists: ["Joss Stone"],
+        category: "live music",
+        description: "Joss Stone concert at Ložionica.",
+        source_caption: acceptedGrammarDistinctTitlesCaption,
+        schedule_entries: [
+          {
+            date: firstDateLabel,
+            time: "",
+            title: "Joss Stone",
+            artists: ["Joss Stone"],
+            description: "Joss Stone concert at Ložionica.",
+            source_text: `JOSS STONE ${firstDateLabel}. LOŽIONICA`,
+          },
+        ],
+      }),
+      "https://cdn.example.com/joss-stone-accepted-grammar-negative.jpg",
+      { "tickets.rs": "Ložionica" },
+      {},
+      { "tickets.rs": "Ložionica" },
+    );
+    assert.equal(
+      acceptedGrammarDistinctTitles.length,
+      2,
+      `${caseName} must not be discarded as harmless announcement metadata.`,
+    );
+    assert.deepEqual(
+      acceptedGrammarDistinctTitles.map((result) => {
+        assert.equal(result.kind, "ok");
+        return readPreparedNormalizedFields(result).splitSourceLine;
+      }).sort(),
+      acceptedGrammarDistinctTitlesCaption.split("\n").sort(),
+      `${caseName} must retain both exact source rows.`,
+    );
+  }
+
+  const conflictingSingleDateAltText = `Poster text: ${firstDateLabel} - Alice live at Ložionica`;
+  const repeatedSingleEventWithConflictingAlt = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: repeatedSingleEventCaption,
+      altText: conflictingSingleDateAltText,
+      postType: "image",
+      username: "tickets.rs",
+    }),
+    makeExtractedEvent({
+      title: "Joss Stone",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: ["Joss Stone"],
+      category: "live music",
+      description: "Joss Stone concert at Ložionica.",
+      source_caption: repeatedSingleEventCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Joss Stone",
+          artists: ["Joss Stone"],
+          description: "Joss Stone concert at Ložionica.",
+          source_text: `JOSS STONE ${firstDateLabel}. LOŽIONICA`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/joss-stone-conflicting-alt.jpg",
+    { "tickets.rs": "Ložionica" },
+    {},
+    { "tickets.rs": "Ložionica" },
+  );
+  assert.equal(
+    repeatedSingleEventWithConflictingAlt.length,
+    2,
+    "Nonempty single-date alt/poster evidence must block destructive caption suppression.",
+  );
+  assert.deepEqual(
+    repeatedSingleEventWithConflictingAlt.map((result) => {
+      assert.equal(result.kind, "ok");
+      return readPreparedNormalizedFields(result).splitSourceLine;
+    }).sort(),
+    repeatedSingleEventCaption.split("\n").filter(Boolean).sort(),
+    "Conflicting single-date alt evidence must retain the exact caption-derived rows.",
+  );
+
   const partialTimeRepeatedIdentityCaption = [
     `${firstDateLabel} Cinema Week moved to Ložionica at 19H`,
     `${firstDateLabel} Cinema Week moved to Ložionica`,

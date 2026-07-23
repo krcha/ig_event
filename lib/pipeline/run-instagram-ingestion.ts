@@ -3445,105 +3445,30 @@ function hasCompetingLocalBillingIdentity(
   });
 }
 
-const SAME_EVENT_ANNOUNCEMENT_PREFIX_TOKENS = new Set([
-  "beogradska",
-  "beogradski",
-  "beogradsko",
-  "britanska",
-  "britanske",
-  "britanski",
-  "concert",
-  "i",
-  "koncert",
-  "star",
-  "the",
-  "zvezda",
-  "zvezde",
+const SAME_EVENT_ANNOUNCEMENT_PREFIXES = new Set([
+  "",
+  "i beogradski koncert",
+  "beogradski koncert",
+  "beogradski koncert britanske zvezde",
 ]);
 
-const SAME_EVENT_ANNOUNCEMENT_SUFFIX_TOKENS = new Set([
-  "at",
-  "be",
-  "bice",
-  "due",
-  "friday",
-  "held",
-  "in",
-  "januara",
-  "februara",
-  "marta",
-  "aprila",
-  "maja",
-  "juna",
-  "jula",
-  "avgusta",
-  "septembra",
-  "oktobra",
-  "novembra",
-  "decembra",
-  "monday",
-  "moved",
-  "moves",
-  "na",
-  "nepovoljnih",
-  "odrzan",
-  "odrzana",
-  "odrzano",
-  "odrzace",
-  "originally",
-  "petak",
-  "premesta",
-  "prebacuje",
-  "prostor",
-  "prostoru",
-  "relocated",
-  "rescheduled",
-  "saturday",
-  "scheduled",
-  "se",
-  "seli",
-  "space",
-  "subotu",
-  "sunday",
-  "the",
-  "thursday",
-  "to",
-  "tuesday",
-  "u",
-  "uslova",
-  "venue",
-  "vremenskih",
-  "wednesday",
-  "will",
-  "zakazan",
-  "zakazana",
-  "zakazano",
-  "za",
-]);
+type RepeatedAnnouncementContextKind = "relocation" | "scheduled_held";
 
-function hasOnlySameEventAnnouncementContext(
+function classifyRepeatedAnnouncementContext(
   value: string,
   canonicalIdentities: string[],
   canonicalVenue: string,
-): boolean {
+): RepeatedAnnouncementContextKind | null {
   const searchableValue = toSearchableText(value);
-  if (
-    !/\b(?:bice odrzan|moved|moves|odrzace|prebacuje|premesta|relocated|rescheduled|scheduled|seli se|zakazan|zakazana|zakazano)\b/u.test(
-      searchableValue,
-    )
-  ) {
-    return false;
-  }
-
   const searchableTitle = toSearchableText(canonicalIdentities[0] ?? "");
   if (!searchableTitle) {
-    return false;
+    return null;
   }
   const paddedValue = ` ${searchableValue} `;
   const paddedTitle = ` ${searchableTitle} `;
   const titleStart = paddedValue.indexOf(paddedTitle);
   if (titleStart < 0) {
-    return false;
+    return null;
   }
   let prefix = paddedValue.slice(0, titleStart).trim();
   let suffix = paddedValue.slice(titleStart + paddedTitle.length).trim();
@@ -3555,36 +3480,46 @@ function hasOnlySameEventAnnouncementContext(
     }
     const pattern = escapeRegExp(searchableIdentity).replace(/\s+/gu, "\\s+");
     const identityPattern = new RegExp(`\\b${pattern}\\b`, "gu");
-    prefix = prefix.replace(identityPattern, " ");
-    suffix = suffix.replace(identityPattern, " ");
+    prefix = prefix.replace(identityPattern, " ").replace(/\s+/gu, " ").trim();
+    suffix = suffix.replace(identityPattern, " ").replace(/\s+/gu, " ").trim();
+  }
+  if (!SAME_EVENT_ANNOUNCEMENT_PREFIXES.has(prefix)) {
+    return null;
   }
 
   const venueTokens = toSearchableText(canonicalVenue).split(/\s+/u).filter(Boolean);
-  const monthPattern = new RegExp(`^(?:${SOURCE_GROUNDING_MONTH_PATTERN})$`, "iu");
-  const tokenIsVenueInflection = (token: string): boolean =>
-    venueTokens.some(
+  if (venueTokens.length === 0) {
+    return null;
+  }
+  const suffixTokens = suffix.split(/\s+/u).filter(Boolean).map((token) => {
+    const isVenueInflection = venueTokens.some(
       (venueToken) =>
         token === venueToken ||
         (token.length >= 6 &&
           venueToken.length >= 6 &&
           token.slice(0, 6) === venueToken.slice(0, 6)),
     );
-  const contextIsSupported = (valuePart: string, allowedTokens: Set<string>): boolean =>
-    valuePart
-      .split(/\s+/u)
-      .filter(Boolean)
-      .every(
-        (token) =>
-          /^\d{1,4}(?:h\d{0,2})?$/u.test(token) ||
-          monthPattern.test(token) ||
-          allowedTokens.has(token) ||
-          tokenIsVenueInflection(token),
-      );
-
-  return (
-    contextIsSupported(prefix, SAME_EVENT_ANNOUNCEMENT_PREFIX_TOKENS) &&
-    contextIsSupported(suffix, SAME_EVENT_ANNOUNCEMENT_SUFFIX_TOKENS)
+    return isVenueInflection ? "venue" : token;
+  });
+  const ownedSuffix = suffixTokens.join(" ");
+  const serbianMonth =
+    "(?:januara|februara|marta|aprila|maja|juna|jula|avgusta|septembra|oktobra|novembra|decembra)";
+  const serbianWeekday =
+    "(?:ponedeljak|ponedeljka|utorak|utorka|sreda|sredu|cetvrtak|cetvrtka|petak|petka|subota|subotu|nedelja|nedelju)";
+  const dateClause = `\\d{1,2} ${serbianMonth}`;
+  const venueClause = "venue(?: venue)*";
+  const relocationPattern = new RegExp(
+    `^${dateClause} (?:seli se|premesta se|prebacuje se) (?:u|na) (?:prostoru )?${venueClause}$`,
+    "u",
   );
+  if (relocationPattern.test(ownedSuffix)) {
+    return "relocation";
+  }
+  const scheduledHeldPattern = new RegExp(
+    `^(?:prvobitno )?zakazan(?:a|o)? za (?:${serbianWeekday} )?${dateClause} (?:bice odrzan(?:a|o)?|odrzace se) (?:u|na) (?:prostoru )?${venueClause}$`,
+    "u",
+  );
+  return scheduledHeldPattern.test(ownedSuffix) ? "scheduled_held" : null;
 }
 
 type RepeatedSingleEventCaptionDisposition = "collapse" | "preserve" | "none";
@@ -3651,15 +3586,21 @@ function classifyRepeatedSingleEventCaptionCandidates(options: {
   ) {
     return "preserve";
   }
+  if (extractPostAltTextEvidence(options.post.altText)) {
+    return "preserve";
+  }
+  const announcementContexts = options.candidates.map((candidate) =>
+    classifyRepeatedAnnouncementContext(
+      candidate.sourceLine,
+      canonicalIdentities,
+      canonicalVenue,
+    ),
+  );
+  const announcementContextKinds = new Set(announcementContexts.filter(Boolean));
   if (
-    options.candidates.some(
-      (candidate) =>
-        !hasOnlySameEventAnnouncementContext(
-          candidate.sourceLine,
-          canonicalIdentities,
-          canonicalVenue,
-        ),
-    )
+    announcementContexts.some((context) => !context) ||
+    !announcementContextKinds.has("relocation") ||
+    !announcementContextKinds.has("scheduled_held")
   ) {
     return "preserve";
   }
