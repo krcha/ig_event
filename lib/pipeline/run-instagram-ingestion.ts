@@ -1792,13 +1792,13 @@ function splitSourceLineAtDateAnchors(value: string): string[] {
 }
 
 function hasAmbiguousDelimitedEventIdentityClause(value: string): boolean {
-  const clauses = value.split(/\s+(?:\||\/)\s+/u);
+  const clauses = value.split(/\s*(?:\||\/)\s*/u);
   if (clauses.length <= 1) {
     return false;
   }
 
   const nonIdentityMetadataPattern =
-    /^(?:\d{1,3}\s*(?:['’′]|m|min(?:ute)?s?|minut(?:a|e))?|(?:[01]?\d|2[0-3])[:.][0-5]\d\s*h?|\d{1,2}\+?)$/iu;
+    /^(?:\d{1,3}\s*(?:['’′]|m|min(?:ute)?s?|minut(?:a|e))|(?:[01]?\d|2[0-3])[:.][0-5]\d\s*h?|\d{1,2}\+)$/iu;
   return clauses.slice(1).some((clause) => {
     const normalizedClause = normalizeString(clause.replace(/[🎬🎤🎭🎨🖼]/gu, " "));
     return Boolean(normalizedClause && !nonIdentityMetadataPattern.test(normalizedClause));

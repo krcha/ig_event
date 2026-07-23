@@ -2635,6 +2635,72 @@ function runSourceGroundingAdversarialQa() {
   assert.ok(
     markedAndUnmarkedFields.moderationPendingReasons.includes("unverified_core_event_source"),
   );
+
+  const compactAndNumericAmbiguousRows = [
+    "🎬 EVENT A|EVENT B",
+    "🎬 EVENT A |EVENT B",
+    "🎬 EVENT A| EVENT B",
+    "🎬 EVENT A/EVENT B",
+    "🎬 EVENT A /EVENT B",
+    "🎬 EVENT A/ EVENT B",
+    "🎬 EVENT A | 42",
+    "🎬 EVENT A/42",
+  ];
+  for (const [variantIndex, eventRow] of compactAndNumericAmbiguousRows.entries()) {
+    const ambiguousCaption = `📅 ${firstDdmm} | 🕘 20.30\n${eventRow}`;
+    assert.equal(
+      evaluate({
+        independentTextEvidence: ambiguousCaption,
+        title: "EVENT A",
+        artists: [],
+        time: "20:30",
+        splitSource: "caption_schedule",
+      }).verified,
+      false,
+      `Compact or numeric delimited event row must remain ambiguous: ${eventRow}`,
+    );
+
+    const preparedVariants = prepareEventsForInsert(
+      makeInstagramPost({
+        caption: ambiguousCaption,
+        postId: `qa-ambiguous-delimiter-${variantIndex}`,
+        postType: "image",
+        username: "qa_handle",
+      }),
+      makeExtractedEvent({
+        title: "EVENT A",
+        date: firstDate,
+        time: "20:30",
+        venue: "QA Venue",
+        artists: [],
+        category: "culture",
+        description: "EVENT A.",
+        source_caption: ambiguousCaption,
+      }),
+      `https://cdn.example.com/ambiguous-delimiter-${variantIndex}.jpg`,
+      { qa_handle: "QA Venue" },
+      {},
+      { qa_handle: "QA Venue" },
+    );
+    const preparedOkVariants = preparedVariants.filter((result) => result.kind === "ok");
+    assert.ok(
+      preparedOkVariants.length >= 1,
+      `Ambiguous delimiter fixture must reach moderation: ${eventRow}`,
+    );
+    for (const preparedVariant of preparedOkVariants) {
+      assert.equal(
+        preparedVariant.event.status,
+        "pending",
+        `Ambiguous delimiter fixture must fail closed through prepareEventsForInsert: ${eventRow}`,
+      );
+      assert.ok(
+        readPreparedNormalizedFields(preparedVariant).moderationPendingReasons.includes(
+          "unverified_core_event_source",
+        ),
+      );
+    }
+  }
+
   assert.equal(
     evaluate({
       independentTextEvidence: `${firstDdmm} DJ ALICE\nStarts at 22:00\nDJ BOB\nStarts at 23:00`,
