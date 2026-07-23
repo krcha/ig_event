@@ -1583,6 +1583,111 @@ function runHashtagOnlyScheduleIdentityQa() {
     "Competing support-act rows must stay separately pending for human review.",
   );
 
+  const competingAmpersandCaption = [
+    `${firstDateLabel} - Joss Stone & Alice`,
+    `${firstDateLabel} - Joss Stone & Bob`,
+  ].join("\n");
+  const competingAmpersandRows = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: competingAmpersandCaption,
+      postType: "image",
+      username: "tickets.rs",
+    }),
+    makeExtractedEvent({
+      title: "Joss Stone",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: ["Joss Stone"],
+      category: "live music",
+      description: "Joss Stone concert at Ložionica.",
+      source_caption: competingAmpersandCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Joss Stone",
+          artists: ["Joss Stone"],
+          description: "Joss Stone concert at Ložionica.",
+          source_text: `${firstDateLabel} - Joss Stone`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/joss-stone-ampersand.jpg",
+    { "tickets.rs": "Ložionica" },
+    {},
+    { "tickets.rs": "Ložionica" },
+  );
+  assert.deepEqual(
+    competingAmpersandRows.map((result) => {
+      assert.equal(result.kind, "ok");
+      return {
+        status: result.event.status,
+        splitSourceLine: readPreparedNormalizedFields(result).splitSourceLine,
+      };
+    }),
+    competingAmpersandCaption.split("\n").map((splitSourceLine) => ({
+      status: "pending",
+      splitSourceLine,
+    })),
+    "Competing ampersand-billed rows must bypass canonical model reconciliation and remain distinct.",
+  );
+
+  const distinctHeadlinerRowsCaption = [
+    `${firstDateLabel} - Koncert Joss Stone: Acoustic Set | Alice`,
+    `${firstDateLabel} - Koncert Joss Stone: Electric Set | Bob`,
+  ].join("\n");
+  const distinctHeadlinerRows = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: distinctHeadlinerRowsCaption,
+      postType: "image",
+      username: "tickets.rs",
+    }),
+    makeExtractedEvent({
+      title: "Joss Stone",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: ["Joss Stone"],
+      category: "live music",
+      description: "Joss Stone concert at Ložionica.",
+      source_caption: distinctHeadlinerRowsCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Joss Stone",
+          artists: ["Joss Stone"],
+          description: "Joss Stone concert at Ložionica.",
+          source_text: `${firstDateLabel} - Joss Stone`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/joss-stone-distinct-rows.jpg",
+    { "tickets.rs": "Ložionica" },
+    {},
+    { "tickets.rs": "Ložionica" },
+  );
+  assert.equal(
+    distinctHeadlinerRows.length,
+    2,
+    "Schedule-shaped rows with the same headliner but different suffix titles and billed artists must not collapse.",
+  );
+  assert.deepEqual(
+    distinctHeadlinerRows.map((result) => {
+      assert.equal(result.kind, "ok");
+      return {
+        status: result.event.status,
+        splitSourceLine: readPreparedNormalizedFields(result).splitSourceLine,
+      };
+    }),
+    distinctHeadlinerRowsCaption.split("\n").map((splitSourceLine) => ({
+      status: "pending",
+      splitSourceLine,
+    })),
+    "Distinct shared-headliner rows must retain both source rows for review.",
+  );
+
   const conflictingShowtimesCaption = [
     `${firstDateLabel} - Joss Stone 19H`,
     `${firstDateLabel} - Joss Stone 22H`,

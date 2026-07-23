@@ -3389,7 +3389,14 @@ function hasCompetingLocalBillingIdentity(
   value: string,
   canonicalIdentities: string[],
 ): boolean {
-  if (/(?:\s(?:&|\+|×)\s|\bb2b\b|\s[xX]\s)/u.test(value)) {
+  const withoutClockValues = value.replace(
+    /\b(?:[01]?\d|2[0-3])[:.][0-5]\d\b/gu,
+    " ",
+  );
+  if (
+    /\s(?:\||\/|[-–—])\s|:\s*\p{L}/u.test(withoutClockValues) ||
+    /(?:\s(?:&|\+|×)\s|\bb2b\b|\s[xX]\s)/u.test(value)
+  ) {
     return true;
   }
 
@@ -3404,18 +3411,20 @@ function hasCompetingLocalBillingIdentity(
   });
 }
 
-function areRepeatedSingleEventCaptionCandidates(options: {
+type RepeatedSingleEventCaptionDisposition = "collapse" | "preserve" | "none";
+
+function classifyRepeatedSingleEventCaptionCandidates(options: {
   post: InstagramScrapedPost;
   extracted: ExtractedEventData;
   candidates: SplitEventCandidate[];
-}): boolean {
+}): RepeatedSingleEventCaptionDisposition {
   if (options.extracted.schedule_entries.length !== 1 || options.candidates.length < 2) {
-    return false;
+    return "none";
   }
 
   const modelEntry = options.extracted.schedule_entries[0];
   if (!modelEntry) {
-    return false;
+    return "none";
   }
   const canonicalTitle = normalizeString(modelEntry.title || options.extracted.title);
   const canonicalArtists = normalizeExtractedArtists(
@@ -3423,7 +3432,7 @@ function areRepeatedSingleEventCaptionCandidates(options: {
   );
   const canonicalRawDate = normalizeString(modelEntry.date || options.extracted.date);
   if (!canonicalTitle || !canonicalRawDate) {
-    return false;
+    return "none";
   }
 
   const canonicalDate = normalizeEventDate(
@@ -3432,7 +3441,7 @@ function areRepeatedSingleEventCaptionCandidates(options: {
     options.post.postedAt,
   ).isoDate;
   if (!canonicalDate) {
-    return false;
+    return "none";
   }
 
   const candidateDates = new Set(
@@ -3441,10 +3450,10 @@ function areRepeatedSingleEventCaptionCandidates(options: {
       .filter((value): value is string => Boolean(value)),
   );
   if (candidateDates.size !== 1 || !candidateDates.has(canonicalDate)) {
-    return false;
+    return "none";
   }
   if (options.candidates.some((candidate) => candidate.source !== "caption_schedule")) {
-    return false;
+    return "none";
   }
   if (
     options.candidates.some(
@@ -3452,27 +3461,35 @@ function areRepeatedSingleEventCaptionCandidates(options: {
         !containsNonHashtagIdentity(candidate.sourceLine, canonicalTitle) ||
         canonicalArtists.some(
           (artist) => !containsNonHashtagIdentity(candidate.sourceLine, artist),
-        ) ||
-        hasCompetingLocalBillingIdentity(candidate.sourceLine, [
-          canonicalTitle,
-          ...canonicalArtists,
-        ]),
+        ),
     )
   ) {
-    return false;
+    return "none";
+  }
+  if (
+    options.candidates.some((candidate) =>
+      hasCompetingLocalBillingIdentity(candidate.sourceLine, [
+        canonicalTitle,
+        ...canonicalArtists,
+      ]),
+    )
+  ) {
+    return "preserve";
   }
 
   const candidateTimes = new Set(
     options.candidates.map((candidate) => candidate.time).filter(Boolean),
   );
   if (candidateTimes.size > 1) {
-    return false;
+    return "none";
   }
   const modelTime = sanitizeTimeAgainstDate(
     normalizeString(modelEntry.time || options.extracted.time),
     canonicalRawDate,
   );
-  return !modelTime || candidateTimes.size === 0 || candidateTimes.has(modelTime);
+  return !modelTime || candidateTimes.size === 0 || candidateTimes.has(modelTime)
+    ? "collapse"
+    : "none";
 }
 
 function extractSplitEventCandidates(
@@ -3498,15 +3515,19 @@ function extractSplitEventCandidates(
     captionCandidates,
     altTextCandidates,
   );
-  const deterministicCandidates = reconcileSplitCandidateCoverage([], deterministicUnion);
-
-  if (areRepeatedSingleEventCaptionCandidates({
+  const repeatedCaptionDisposition = classifyRepeatedSingleEventCaptionCandidates({
     post,
     extracted,
-    candidates: deterministicCandidates,
-  })) {
+    candidates: captionCandidates,
+  });
+  if (repeatedCaptionDisposition === "collapse" && altTextCandidates.length === 0) {
     return [];
   }
+  if (repeatedCaptionDisposition === "preserve") {
+    return sortSplitCandidatesByDate(deterministicUnion);
+  }
+
+  const deterministicCandidates = reconcileSplitCandidateCoverage([], deterministicUnion);
   if (modelCandidates.length > 0) {
     return reconcileSplitCandidateCoverage(modelCandidates, deterministicCandidates);
   }
