@@ -1793,10 +1793,18 @@ function splitSourceLineAtDateAnchors(value: string): string[] {
 
 function buildSourceGroundingSegments(value: string | null | undefined): string[] {
   const datePeriodPlaceholder = "\uE000";
-  const protectedText = normalizeString(value).replace(
-    /\b(\d{1,2}[./-]\d{1,2}(?:[./-](?:\d{2}|\d{4}))?)\.(?=\s|$)/gu,
-    `$1${datePeriodPlaceholder}`,
-  );
+  const protectedText = normalizeString(value)
+    .replace(
+      /\b(\d{1,2}[./-]\d{1,2}(?:[./-](?:\d{2}|\d{4}))?)\.(?=\s|$)/gu,
+      `$1${datePeriodPlaceholder}`,
+    )
+    .replace(
+      new RegExp(
+        String.raw`\b(\d{1,2})\.(?=\s+(?:${SOURCE_GROUNDING_MONTH_PATTERN})\b)`,
+        "giu",
+      ),
+      `$1${datePeriodPlaceholder}`,
+    );
   const atomicSegments = protectedText
     .split(
       /\r?\n|[;•·●▪◦]+|\s+\|\s+|\s+\/\s+|\s+[—–-]\s+|(?<=[.!?])\s+/u,
@@ -3377,6 +3385,73 @@ function reconcileSplitCandidateCoverage(
   return sortSplitCandidatesByDate(reconciled);
 }
 
+function areRepeatedSingleEventCaptionCandidates(options: {
+  post: InstagramScrapedPost;
+  extracted: ExtractedEventData;
+  candidates: SplitEventCandidate[];
+}): boolean {
+  if (options.extracted.schedule_entries.length !== 1 || options.candidates.length < 2) {
+    return false;
+  }
+
+  const modelEntry = options.extracted.schedule_entries[0];
+  if (!modelEntry) {
+    return false;
+  }
+  const canonicalTitle = normalizeString(modelEntry.title || options.extracted.title);
+  const canonicalArtists = normalizeExtractedArtists(
+    modelEntry.artists.length > 0 ? modelEntry.artists : options.extracted.artists,
+  );
+  const canonicalRawDate = normalizeString(modelEntry.date || options.extracted.date);
+  if (!canonicalTitle || !canonicalRawDate) {
+    return false;
+  }
+
+  const canonicalDate = normalizeEventDate(
+    canonicalRawDate,
+    normalizeString(modelEntry.source_text) || canonicalRawDate,
+    options.post.postedAt,
+  ).isoDate;
+  if (!canonicalDate) {
+    return false;
+  }
+
+  const candidateDates = new Set(
+    options.candidates
+      .map((candidate) => candidate.normalizedDate.isoDate)
+      .filter((value): value is string => Boolean(value)),
+  );
+  if (candidateDates.size !== 1 || !candidateDates.has(canonicalDate)) {
+    return false;
+  }
+  if (options.candidates.some((candidate) => candidate.source !== "caption_schedule")) {
+    return false;
+  }
+  if (
+    options.candidates.some(
+      (candidate) =>
+        !containsNonHashtagIdentity(candidate.sourceLine, canonicalTitle) ||
+        canonicalArtists.some(
+          (artist) => !containsNonHashtagIdentity(candidate.sourceLine, artist),
+        ),
+    )
+  ) {
+    return false;
+  }
+
+  const candidateTimes = new Set(
+    options.candidates.map((candidate) => candidate.time).filter(Boolean),
+  );
+  if (candidateTimes.size > 1) {
+    return false;
+  }
+  const modelTime = sanitizeTimeAgainstDate(
+    normalizeString(modelEntry.time || options.extracted.time),
+    canonicalRawDate,
+  );
+  return !modelTime || candidateTimes.size === 0 || candidateTimes.has(modelTime);
+}
+
 function extractSplitEventCandidates(
   post: InstagramScrapedPost,
   extracted: ExtractedEventData,
@@ -3402,6 +3477,13 @@ function extractSplitEventCandidates(
   );
   const deterministicCandidates = reconcileSplitCandidateCoverage([], deterministicUnion);
 
+  if (areRepeatedSingleEventCaptionCandidates({
+    post,
+    extracted,
+    candidates: deterministicCandidates,
+  })) {
+    return [];
+  }
   if (modelCandidates.length > 0) {
     return reconcileSplitCandidateCoverage(modelCandidates, deterministicCandidates);
   }

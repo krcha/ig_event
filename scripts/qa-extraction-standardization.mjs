@@ -1464,6 +1464,160 @@ function runHashtagOnlyScheduleIdentityQa() {
     "Distinct same-date acts must survive deterministic reconciliation.",
   );
 
+  const [, repeatedSingleEventMonth, repeatedSingleEventDay] = firstDate.split("-");
+  const repeatedSingleEventDateText = `${Number(repeatedSingleEventDay)}. ${
+    SERBIAN_MONTH_GENITIVES[Number(repeatedSingleEventMonth) - 1]
+  }`;
+  const repeatedSingleEventCaption = [
+    `ℹ️ Beogradski koncert Joss Stone ${repeatedSingleEventDateText} seli se u Ložionicu!`,
+    "",
+    `Beogradski koncert britanske zvezde Joss Stone, zakazan za petak, ${repeatedSingleEventDateText}, biće održan u prostoru Ložionice.`,
+  ].join("\n");
+  const repeatedSingleEvent = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: repeatedSingleEventCaption,
+      postType: "image",
+      username: "tickets.rs",
+    }),
+    makeExtractedEvent({
+      title: "Joss Stone",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: ["Joss Stone"],
+      category: "live music",
+      description: "Joss Stone concert at Ložionica.",
+      source_caption: repeatedSingleEventCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Joss Stone",
+          artists: ["Joss Stone"],
+          description: "Joss Stone concert at Ložionica.",
+          source_text: `JOSS STONE ${firstDateLabel}. LOŽIONICA`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/joss-stone.jpg",
+    { "tickets.rs": "Ložionica" },
+    {},
+    { "tickets.rs": "Ložionica" },
+  );
+  assert.equal(
+    repeatedSingleEvent.length,
+    1,
+    "Repeated caption prose for one identity/date must not manufacture duplicate schedule rows.",
+  );
+  assert.equal(repeatedSingleEvent[0].kind, "ok");
+  assert.deepEqual(
+    {
+      title: repeatedSingleEvent[0].event.title,
+      artists: repeatedSingleEvent[0].event.artists,
+      date: repeatedSingleEvent[0].event.date,
+      time: repeatedSingleEvent[0].event.time,
+      status: repeatedSingleEvent[0].event.status,
+    },
+    {
+      title: "Joss Stone",
+      artists: ["Joss Stone"],
+      date: firstDate,
+      time: TBD_EVENT_TIME,
+      status: "approved",
+    },
+    "A repeated same-event announcement must keep the canonical grounded model event.",
+  );
+
+  const conflictingShowtimesCaption = [
+    `${firstDateLabel} - Joss Stone 19H`,
+    `${firstDateLabel} - Joss Stone 22H`,
+  ].join("\n");
+  const conflictingShowtimes = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: conflictingShowtimesCaption,
+      postType: "image",
+      username: "tickets.rs",
+    }),
+    makeExtractedEvent({
+      title: "Joss Stone",
+      date: firstDateLabel,
+      time: "19:00",
+      venue: "Ložionica",
+      artists: ["Joss Stone"],
+      category: "live music",
+      source_caption: conflictingShowtimesCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "19:00",
+          title: "Joss Stone",
+          artists: ["Joss Stone"],
+          description: "Joss Stone concert at Ložionica.",
+          source_text: `${firstDateLabel} - Joss Stone 19H`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/joss-stone-showtimes.jpg",
+    { "tickets.rs": "Ložionica" },
+    {},
+    { "tickets.rs": "Ložionica" },
+  );
+  assert.deepEqual(
+    conflictingShowtimes.map((result) => {
+      assert.equal(result.kind, "ok");
+      return result.event.time;
+    }),
+    ["19:00", "22:00"],
+    "Repeated identity/date rows with conflicting explicit times must remain distinct.",
+  );
+
+  const distinctIdentityCaption = [
+    `${firstDateLabel} - Summer Festival | Alice`,
+    `${firstDateLabel} - Autumn Showcase | Bob`,
+  ].join("\n");
+  const distinctIdentityRows = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: distinctIdentityCaption,
+      postType: "image",
+      username: "tickets.rs",
+    }),
+    makeExtractedEvent({
+      title: "Summer Festival",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: ["Alice"],
+      category: "live music",
+      source_caption: distinctIdentityCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Summer Festival",
+          artists: ["Alice"],
+          description: "Summer Festival with Alice.",
+          source_text: `${firstDateLabel} - Summer Festival | Alice`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/summer-festival.jpg",
+    { "tickets.rs": "Ložionica" },
+    {},
+    { "tickets.rs": "Ložionica" },
+  );
+  assert.equal(
+    distinctIdentityRows.length,
+    2,
+    "Same-date rows with different identities must remain distinct.",
+  );
+  assert.deepEqual(
+    distinctIdentityRows.map((result) => {
+      assert.equal(result.kind, "ok");
+      return readPreparedNormalizedFields(result).splitSourceLine;
+    }),
+    distinctIdentityCaption.split("\n"),
+  );
+
   const equivalentEvidenceCaption = [
     `${firstDateLabel} - DJ Bob 22H`,
     `${secondDateLabel} - DJ Charlie 23H`,
