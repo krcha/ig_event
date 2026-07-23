@@ -22,11 +22,13 @@ import {
 } from "../lib/pipeline/venue-normalization.ts";
 import {
   buildDuplicateUpdatePatch,
+  createEmptyIngestionSummary,
   evaluateCoreEventSourceGrounding,
   getNonEventAutoApprovalBlockers,
   getPosterScheduleAutoApprovalBlockers,
   normalizeEventDate,
   prepareEventsForInsert,
+  processIngestionPostWithExtractionForTesting,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
 import {
   extractEventTimeFromText,
@@ -6449,6 +6451,302 @@ async function runHardMappedVenueAuthorityMutationBoundaryQa() {
   }
 }
 
+async function withoutConsoleInfo(callback) {
+  const originalConsoleInfo = console.info;
+  console.info = () => {};
+  try {
+    return await callback();
+  } finally {
+    console.info = originalConsoleInfo;
+  }
+}
+
+async function runDistinctOccurrencePersistenceQa() {
+  const eventDate = isoDateDaysFromNow(7);
+  const eventDateLabel = ddmmForIsoDate(eventDate);
+  const sourceCaption = [
+    `${eventDateLabel} - Joss Stone 19H`,
+    `${eventDateLabel} - Joss Stone 22H`,
+  ].join("\n");
+  const post = makeInstagramPost({
+    postId: "qa-distinct-occurrence-persistence",
+    instagramPostUrl: "https://www.instagram.com/p/qa-distinct-occurrence-persistence/",
+    caption: sourceCaption,
+    postType: "video",
+    username: "tickets.rs",
+  });
+  const extracted = makeExtractedEvent({
+    title: "Joss Stone",
+    date: eventDateLabel,
+    time: "19:00",
+    venue: "Ložionica",
+    artists: ["Joss Stone"],
+    category: "live music",
+    description: "Joss Stone concert at Ložionica.",
+    source_caption: sourceCaption,
+    schedule_entries: [
+      {
+        date: eventDateLabel,
+        time: "19:00",
+        title: "Joss Stone",
+        artists: ["Joss Stone"],
+        description: "Joss Stone concert at Ložionica.",
+        source_text: `${eventDateLabel} - Joss Stone 19H`,
+      },
+    ],
+  });
+  const summary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  const inserted = [];
+  const updated = [];
+  const client = {
+    query: async () => [],
+    mutation: async (_reference, args) => {
+      if ("id" in args) {
+        updated.push(args);
+        return args.id;
+      }
+      inserted.push(args);
+      return `qa-distinct-occurrence-${inserted.length}`;
+    },
+  };
+
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client,
+      handle: "tickets.rs",
+      post,
+      summary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted,
+    }),
+  );
+
+  assert.equal(
+    inserted.length,
+    2,
+    "The real ingestion persistence loop must insert both same-source occurrences when their explicit times differ.",
+  );
+  assert.equal(updated.length, 0, "A distinct second occurrence must not overwrite the first row.");
+  assert.deepEqual(
+    inserted.map((event) => ({
+      time: event.time,
+      splitSourceLine: JSON.parse(event.normalizedFieldsJson).splitSourceLine,
+      sourceOccurrenceExpectedCount: JSON.parse(event.normalizedFieldsJson)
+        .sourceOccurrenceExpectedCount,
+    })),
+    sourceCaption.split("\n").map((splitSourceLine, index) => ({
+      time: index === 0 ? "19:00" : "22:00",
+      splitSourceLine,
+      sourceOccurrenceExpectedCount: 2,
+    })),
+    "Both persisted records must retain their distinct time and exact split-row provenance.",
+  );
+  assert.equal(summary.insertedEvents, 2);
+  assert.equal(summary.skippedDuplicates, 0);
+  assert.equal(summary.updated_duplicates_bad_data, 0);
+
+  const existingFirstOccurrence = {
+    ...inserted[0],
+    _id: "qa-existing-first-occurrence",
+    normalizedFieldsJson: JSON.stringify({
+      ...JSON.parse(inserted[0].normalizedFieldsJson),
+      splitSource: "model_schedule",
+    }),
+  };
+  const retrySummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  const retryInserted = [];
+  const retryUpdated = [];
+  const retryClient = {
+    query: async () => [existingFirstOccurrence],
+    mutation: async (_reference, args) => {
+      if ("id" in args) {
+        retryUpdated.push(args);
+        return args.id;
+      }
+      retryInserted.push(args);
+      return `qa-recovered-occurrence-${retryInserted.length}`;
+    },
+  };
+
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: retryClient,
+      handle: "tickets.rs",
+      post,
+      summary: retrySummary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted,
+    }),
+  );
+
+  assert.deepEqual(
+    retryInserted.map((event) => event.time),
+    ["22:00"],
+    "Retrying a partially persisted multi-event post must recover the missing occurrence.",
+  );
+  assert.equal(retryUpdated.length, 0);
+  assert.equal(retrySummary.insertedEvents, 1);
+  assert.equal(retrySummary.skippedDuplicates, 1);
+
+  const completeExistingOccurrences = inserted.map((event, index) => ({
+    ...event,
+    _id: `qa-complete-occurrence-${index + 1}`,
+  }));
+  const completeSummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  const completeMutations = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => completeExistingOccurrences,
+        mutation: async (_reference, args) => {
+          completeMutations.push(args);
+          return "qa-unexpected-complete-mutation";
+        },
+      },
+      handle: "tickets.rs",
+      post,
+      summary: completeSummary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted,
+    }),
+  );
+  assert.equal(completeMutations.length, 0);
+  assert.equal(
+    completeSummary.skippedDuplicates,
+    1,
+    "A complete deterministic child set should retain the cheap source-post precheck skip.",
+  );
+
+  const pastDateLabel = ddmmForIsoDate(isoDateDaysFromNow(-1));
+  const eligibleDateLabel = ddmmForIsoDate(isoDateDaysFromNow(8));
+  const mixedCaption = [
+    `${pastDateLabel} - Historical Set 18H`,
+    `${eligibleDateLabel} - Upcoming Set 20H`,
+  ].join("\n");
+  const mixedPost = makeInstagramPost({
+    postId: "qa-mixed-eligibility-persistence",
+    instagramPostUrl: "https://www.instagram.com/p/qa-mixed-eligibility-persistence/",
+    caption: mixedCaption,
+    postType: "video",
+    username: "tickets.rs",
+  });
+  const mixedExtracted = makeExtractedEvent({
+    title: "Upcoming Set",
+    date: eligibleDateLabel,
+    time: "20:00",
+    venue: "Ložionica",
+    artists: ["Upcoming Set"],
+    source_caption: mixedCaption,
+  });
+  const mixedSummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  const mixedInserted = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => [],
+        mutation: async (_reference, args) => {
+          mixedInserted.push(args);
+          return "qa-mixed-eligible-occurrence";
+        },
+      },
+      handle: "tickets.rs",
+      post: mixedPost,
+      summary: mixedSummary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted: mixedExtracted,
+    }),
+  );
+  assert.equal(mixedInserted.length, 1);
+  assert.equal(
+    JSON.parse(mixedInserted[0].normalizedFieldsJson).sourceOccurrenceExpectedCount,
+    1,
+    "Expected child count must describe persistable occurrences, not intentionally skipped rows.",
+  );
+  assert.equal(mixedSummary.skipped_past_event, 1);
+
+  const mixedRetrySummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  const mixedRetryMutations = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => [{ ...mixedInserted[0], _id: "qa-mixed-existing" }],
+        mutation: async (_reference, args) => {
+          mixedRetryMutations.push(args);
+          return "qa-unexpected-mixed-retry-mutation";
+        },
+      },
+      handle: "tickets.rs",
+      post: mixedPost,
+      summary: mixedRetrySummary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted: mixedExtracted,
+    }),
+  );
+  assert.equal(mixedRetryMutations.length, 0);
+  assert.equal(mixedRetrySummary.skippedDuplicates, 1);
+  assert.equal(
+    mixedRetrySummary.skipped_past_event,
+    0,
+    "A complete eligible child set must skip before re-extracting intentionally omitted past rows.",
+  );
+
+  const semanticSummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  const semanticInserted = [];
+  const semanticUpdated = [];
+  const semanticExisting = {
+    ...inserted[0],
+    _id: "qa-other-source-same-time",
+    instagramPostId: "qa-other-source-post",
+    instagramPostUrl: "https://www.instagram.com/p/qa-other-source-post/",
+  };
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async (_reference, args) => ("date" in args ? [semanticExisting] : []),
+        mutation: async (_reference, args) => {
+          if ("id" in args) {
+            semanticUpdated.push(args);
+            return args.id;
+          }
+          semanticInserted.push(args);
+          return `qa-semantic-occurrence-${semanticInserted.length}`;
+        },
+      },
+      handle: "tickets.rs",
+      post,
+      summary: semanticSummary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted,
+    }),
+  );
+  assert.deepEqual(
+    semanticInserted.map((event) => event.time),
+    ["22:00"],
+    "A same-title/date event from another source must not absorb a distinct explicit time.",
+  );
+  assert.equal(semanticUpdated.length, 0);
+  assert.equal(semanticSummary.skippedDuplicates, 1);
+  assert.equal(semanticSummary.insertedEvents, 1);
+}
+
 async function runApprovedMergeBoundaryQa() {
   const previousAdminUserIds = process.env.ADMIN_CLERK_USER_IDS;
   const adminUserId = "qa-merge-admin";
@@ -6895,6 +7193,7 @@ runNamedRepertoireScheduleDeduplicationQa();
 runAtomicDuplicateStatusPreconditionQa();
 await runServiceApprovalMutationBoundaryQa();
 await runHardMappedVenueAuthorityMutationBoundaryQa();
+await runDistinctOccurrencePersistenceQa();
 await runApprovedMergeBoundaryQa();
 await runTransactionalSourceGroundingReprocessQa();
 

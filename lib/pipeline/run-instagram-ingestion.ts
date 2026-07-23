@@ -5628,6 +5628,67 @@ function shouldReprocessExistingSourcePosts(): boolean {
   return normalizeString(process.env.INGESTION_REPROCESS_EXISTING_SOURCE_POSTS).toLowerCase() === "true";
 }
 
+function hasIncompleteMultiEventSourceSet(matches: ExistingSourceMatch[]): boolean {
+  let expectedOccurrenceCount = 0;
+  const persistedOccurrenceKeys = new Set<string>();
+
+  for (const match of matches) {
+    const normalizedFields = parseJsonRecord(match.existingEvent.normalizedFieldsJson);
+    if (!isMultiEventNormalizedFields(normalizedFields)) {
+      continue;
+    }
+
+    expectedOccurrenceCount = Math.max(
+      expectedOccurrenceCount,
+      readJsonNumber(normalizedFields, "sourceOccurrenceExpectedCount") ??
+        readJsonNumber(normalizedFields, "multiEventSplitCount") ??
+        2,
+    );
+    const occurrenceKey = getSourceOccurrenceProvenanceKey(normalizedFields);
+    if (occurrenceKey) {
+      persistedOccurrenceKeys.add(occurrenceKey);
+    }
+  }
+
+  return (
+    expectedOccurrenceCount > 1 &&
+    persistedOccurrenceKeys.size < expectedOccurrenceCount
+  );
+}
+
+function bindSourceOccurrenceExpectedCount(
+  preparedResults: PrepareEventResult[],
+): PrepareEventResult[] {
+  const persistableOccurrenceCount = preparedResults.filter(
+    (prepared) => prepared.kind === "ok",
+  ).length;
+  if (persistableOccurrenceCount === 0) {
+    return preparedResults;
+  }
+
+  return preparedResults.map((prepared) => {
+    if (
+      prepared.kind !== "ok" ||
+      !isMultiEventNormalizedFields(prepared.normalizedFields)
+    ) {
+      return prepared;
+    }
+
+    const normalizedFields = {
+      ...prepared.normalizedFields,
+      sourceOccurrenceExpectedCount: persistableOccurrenceCount,
+    };
+    return {
+      ...prepared,
+      normalizedFields,
+      event: {
+        ...prepared.event,
+        normalizedFieldsJson: JSON.stringify(normalizedFields),
+      },
+    };
+  });
+}
+
 type SourceDuplicateSkipDecision = {
   match: ExistingSourceMatch;
   quality: ExistingEventQuality;
@@ -5640,6 +5701,13 @@ function getPreExtractionSourceDuplicateSkipDecision(
 ): SourceDuplicateSkipDecision | null {
   const firstMatch = matches[0];
   if (!firstMatch) {
+    return null;
+  }
+
+  // A source post that advertised multiple occurrences is only complete when all
+  // deterministic child-row identities are already persisted. Re-extract a partial
+  // set so retries can recover a sibling that failed after an earlier insert.
+  if (hasIncompleteMultiEventSourceSet(matches)) {
     return null;
   }
 
@@ -5973,6 +6041,13 @@ function getSemanticDuplicateMatchScore(
     nextEvidenceCandidates,
   );
   const timeMatches = areTimesCompatible(existing.time, next.time);
+  if (
+    hasReliableEventTime(existing) &&
+    hasReliableEventTime(next) &&
+    normalizeString(existing.time) !== normalizeString(next.time)
+  ) {
+    return -1;
+  }
   const hasFallbackTitle =
     hasUnreliableComparableTitle(existingNormalizedFields) ||
     hasUnreliableComparableTitle(nextNormalizedFields);
@@ -6539,6 +6614,56 @@ function normalizeTitleKey(value: string | undefined): string {
   return normalizeString(value).toLowerCase().replace(/\s+/g, " ");
 }
 
+function getSourceOccurrenceProvenanceKey(
+  normalizedFields: Record<string, unknown> | null,
+): string | null {
+  const rowSourceText =
+    readJsonString(normalizedFields, "rowSourceText") ??
+    readJsonString(normalizedFields, "splitSourceLine");
+  const normalizedRowSourceText = toSearchableText(rowSourceText ?? "");
+  if (!normalizedRowSourceText) {
+    return null;
+  }
+
+  return normalizedRowSourceText;
+}
+
+function hasCompatibleSourceOccurrenceIdentity(
+  existing: ExistingEventRecord,
+  next: PreparedEvent,
+  nextNormalizedFields: Record<string, unknown>,
+): boolean {
+  const existingNormalizedFields = parseJsonRecord(existing.normalizedFieldsJson);
+  if (
+    !isMultiEventNormalizedFields(existingNormalizedFields) &&
+    !isMultiEventNormalizedFields(nextNormalizedFields)
+  ) {
+    return true;
+  }
+
+  const existingHasReliableTime = hasReliableEventTime(existing);
+  const nextHasReliableTime = hasReliableEventTime(next);
+  if (
+    existingHasReliableTime &&
+    nextHasReliableTime &&
+    normalizeString(existing.time) !== normalizeString(next.time)
+  ) {
+    return false;
+  }
+
+  const existingProvenanceKey = getSourceOccurrenceProvenanceKey(existingNormalizedFields);
+  const nextProvenanceKey = getSourceOccurrenceProvenanceKey(nextNormalizedFields);
+  if (existingProvenanceKey && nextProvenanceKey) {
+    return existingProvenanceKey === nextProvenanceKey;
+  }
+
+  return (
+    existingHasReliableTime &&
+    nextHasReliableTime &&
+    normalizeString(existing.time) === normalizeString(next.time)
+  );
+}
+
 function findBestExistingMatchForPreparedEvent(
   existingMatches: ExistingSourceMatch[],
   nextEvent: PreparedEvent,
@@ -6551,7 +6676,12 @@ function findBestExistingMatchForPreparedEvent(
   const exactMatch = sourceIdentityMatches.find(
     (existing) =>
       normalizeString(existing.existingEvent.date) === nextEvent.date &&
-      normalizeTitleKey(existing.existingEvent.title) === titleKey,
+      normalizeTitleKey(existing.existingEvent.title) === titleKey &&
+      hasCompatibleSourceOccurrenceIdentity(
+        existing.existingEvent,
+        nextEvent,
+        nextNormalizedFields,
+      ),
   );
   if (exactMatch) {
     return exactMatch;
@@ -7273,7 +7403,18 @@ type ProcessIngestionPostOptions = {
   serviceSecret: string;
 };
 
-async function processIngestionPost(options: ProcessIngestionPostOptions): Promise<void> {
+type ProcessIngestionPostDependencies = {
+  extractEventDataFromPost: typeof extractEventDataFromInstagramPost;
+};
+
+const DEFAULT_PROCESS_INGESTION_POST_DEPENDENCIES: ProcessIngestionPostDependencies = {
+  extractEventDataFromPost: extractEventDataFromInstagramPost,
+};
+
+async function processIngestionPost(
+  options: ProcessIngestionPostOptions,
+  dependencies: ProcessIngestionPostDependencies = DEFAULT_PROCESS_INGESTION_POST_DEPENDENCIES,
+): Promise<void> {
   const {
     client,
     handle,
@@ -7435,7 +7576,7 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
 
   let extracted: ExtractedEventData;
   try {
-    extracted = await extractEventDataFromInstagramPost({
+    extracted = await dependencies.extractEventDataFromPost({
       imageDataUrl,
       caption: post.caption,
       altText: post.altText,
@@ -7473,6 +7614,7 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
       venueNameOverridesByHandle,
       configuredVenueNamesByHandle,
     );
+    preparedResults = bindSourceOccurrenceExpectedCount(preparedResults);
   } catch (error) {
     summary.failedExtractions += 1;
     summary.failed_extractions += 1;
@@ -7762,6 +7904,15 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
       upstreamUrl: durableMediaCandidate,
     });
   }
+}
+
+export async function processIngestionPostWithExtractionForTesting(
+  options: ProcessIngestionPostOptions & { extracted: ExtractedEventData },
+): Promise<void> {
+  const { extracted, ...processOptions } = options;
+  await processIngestionPost(processOptions, {
+    extractEventDataFromPost: async () => extracted,
+  });
 }
 
 type ProcessLoadedPostsForHandleOptions = {
