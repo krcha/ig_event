@@ -1528,6 +1528,59 @@ function runHashtagOnlyScheduleIdentityQa() {
     "A repeated same-event announcement must keep the canonical grounded model event.",
   );
 
+  const hardMappedVenueMismatch = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: repeatedSingleEventCaption,
+      postType: "image",
+      username: "kcgrad",
+    }),
+    makeExtractedEvent({
+      title: "Joss Stone",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: ["Joss Stone"],
+      category: "live music",
+      description: "Joss Stone concert at Ložionica.",
+      source_caption: repeatedSingleEventCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Joss Stone",
+          artists: ["Joss Stone"],
+          description: "Joss Stone concert at Ložionica.",
+          source_text: `JOSS STONE ${firstDateLabel}. LOŽIONICA`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/joss-stone-hard-mapped-venue.jpg",
+    { kcgrad: "KC Grad" },
+    { kcgrad: "KC Grad" },
+    { kcgrad: "KC Grad" },
+  );
+  assert.equal(
+    hardMappedVenueMismatch.length,
+    2,
+    "A hard per-handle venue override that disagrees with the source-owned venue must block destructive caption suppression.",
+  );
+  assert.deepEqual(
+    hardMappedVenueMismatch.map((result) => {
+      assert.equal(result.kind, "ok");
+      return {
+        status: result.event.status,
+        venue: result.event.venue,
+        splitSourceLine: readPreparedNormalizedFields(result).splitSourceLine,
+      };
+    }),
+    repeatedSingleEventCaption.split("\n").filter(Boolean).map((splitSourceLine) => ({
+      status: "pending",
+      venue: "KC Grad",
+      splitSourceLine,
+    })),
+    "Venue-authority disagreement must preserve both exact source rows as pending while retaining the final normalized venue.",
+  );
+
   const sharedUmbrellaDistinctEventsCaption = [
     `${firstDateLabel} Cinema Week presents Film A`,
     `${firstDateLabel} Cinema Week presents Film B`,
@@ -6294,6 +6347,108 @@ async function runServiceApprovalMutationBoundaryQa() {
   }
 }
 
+async function runHardMappedVenueAuthorityMutationBoundaryQa() {
+  const previousCronSecret = process.env.CRON_SECRET;
+  const serviceSecret = "qa-hard-mapped-venue-authority-secret";
+  process.env.CRON_SECRET = serviceSecret;
+
+  const eventDate = isoDateDaysFromNow(7);
+  const eventDateLabel = ddmmForIsoDate(eventDate);
+  const [, month, day] = eventDate.split("-");
+  const eventDateText = `${Number(day)}. ${SERBIAN_MONTH_GENITIVES[Number(month) - 1]}`;
+  const sourceCaption = [
+    `ℹ️ Beogradski koncert Joss Stone ${eventDateText} seli se u Ložionicu!`,
+    `Beogradski koncert britanske zvezde Joss Stone, zakazan za petak, ${eventDateText}, biće održan u prostoru Ložionice.`,
+  ].join("\n");
+  const instagramPostId = "qa-kcgrad-lozionica-authority";
+  const instagramPostUrl = `https://www.instagram.com/p/${instagramPostId}/`;
+  const prepared = prepareEventsForInsert(
+    makeInstagramPost({
+      postId: instagramPostId,
+      instagramPostUrl,
+      caption: sourceCaption,
+      postType: "image",
+      username: "kcgrad",
+    }),
+    makeExtractedEvent({
+      title: "Joss Stone",
+      date: eventDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: ["Joss Stone"],
+      category: "live music",
+      description: "Joss Stone concert at Ložionica.",
+      source_caption: sourceCaption,
+      schedule_entries: [
+        {
+          date: eventDateLabel,
+          time: "",
+          title: "Joss Stone",
+          artists: ["Joss Stone"],
+          description: "Joss Stone concert at Ložionica.",
+          source_text: `JOSS STONE ${eventDateLabel}. LOŽIONICA`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/joss-stone-hard-mapped-boundary.jpg",
+    { kcgrad: "KC Grad" },
+    { kcgrad: "KC Grad" },
+    { kcgrad: "KC Grad" },
+  );
+
+  assert.equal(prepared.length, 2);
+  const firstPrepared = prepared[0];
+  assert.equal(firstPrepared.kind, "ok");
+  assert.equal(firstPrepared.event.status, "pending");
+  assert.equal(firstPrepared.event.venue, "KC Grad");
+
+  let insertedEvent = null;
+  const ctx = {
+    auth: { getUserIdentity: async () => null },
+    db: {
+      insert: async (table, value) => {
+        if (table === "events") {
+          insertedEvent = value;
+          return "qa-hard-mapped-event";
+        }
+        return "qa-hard-mapped-audit";
+      },
+      query: (table) =>
+        table === "venues"
+          ? {
+              collect: async () => [
+                {
+                  _id: "qa-kcgrad-venue",
+                  name: "KC Grad",
+                  instagramHandle: "kcgrad",
+                  category: "culture",
+                  publicStatus: "published",
+                },
+              ],
+            }
+          : {
+              withIndex: () => ({
+                collect: async () => [],
+                first: async () => null,
+              }),
+            },
+    },
+  };
+
+  try {
+    await createEvent._handler(ctx, {
+      ...firstPrepared.event,
+      serviceSecret,
+    });
+    assert.equal(insertedEvent?.status, "pending");
+    assert.equal(insertedEvent?.venue, "KC Grad");
+    assert.equal(insertedEvent?.venueInstagramHandle, "kcgrad");
+  } finally {
+    if (previousCronSecret === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = previousCronSecret;
+  }
+}
+
 async function runApprovedMergeBoundaryQa() {
   const previousAdminUserIds = process.env.ADMIN_CLERK_USER_IDS;
   const adminUserId = "qa-merge-admin";
@@ -6739,6 +6894,7 @@ runTicketPriceQa();
 runNamedRepertoireScheduleDeduplicationQa();
 runAtomicDuplicateStatusPreconditionQa();
 await runServiceApprovalMutationBoundaryQa();
+await runHardMappedVenueAuthorityMutationBoundaryQa();
 await runApprovedMergeBoundaryQa();
 await runTransactionalSourceGroundingReprocessQa();
 

@@ -3527,6 +3527,7 @@ function classifyRepeatedSingleEventCaptionCandidates(options: {
   post: InstagramScrapedPost;
   extracted: ExtractedEventData;
   candidates: SplitEventCandidate[];
+  persistedVenue: string | null;
 }): RepeatedSingleEventCaptionDisposition {
   if (options.extracted.schedule_entries.length !== 1 || options.candidates.length < 2) {
     return "none";
@@ -3540,7 +3541,15 @@ function classifyRepeatedSingleEventCaptionCandidates(options: {
   const canonicalArtists = normalizeExtractedArtists(
     modelEntry.artists.length > 0 ? modelEntry.artists : options.extracted.artists,
   );
-  const canonicalVenue = normalizeString(options.extracted.venue);
+  const modelVenue = normalizeString(options.extracted.venue);
+  const canonicalVenue = normalizeString(options.persistedVenue);
+  if (
+    !modelVenue ||
+    !canonicalVenue ||
+    toSearchableText(modelVenue) !== toSearchableText(canonicalVenue)
+  ) {
+    return "preserve";
+  }
   const canonicalRawDate = normalizeString(modelEntry.date || options.extracted.date);
   if (!canonicalTitle || !canonicalRawDate) {
     return "none";
@@ -3651,6 +3660,7 @@ function extractSplitEventCandidates(
     post,
     extracted,
     candidates: captionCandidates,
+    persistedVenue: venue,
   });
   if (repeatedCaptionDisposition === "collapse" && altTextCandidates.length === 0) {
     return [];
