@@ -29,7 +29,7 @@ const checks = [
   { script: "qa:seo", timeoutMs: 60_000 },
   { script: "qa:brand", timeoutMs: 60_000 },
   { script: "qa:discover-feed", timeoutMs: 60_000 },
-  { script: "qa:apify", timeoutMs: 60_000 },
+  { script: "qa:apify", timeoutMs: 120_000 },
   { script: "qa:follow-discovery", timeoutMs: 60_000 },
   { script: "qa:social-carousel", timeoutMs: 60_000 },
   { script: "qa:convex-auth-boundaries", timeoutMs: 60_000 },

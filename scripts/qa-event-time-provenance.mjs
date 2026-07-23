@@ -146,7 +146,7 @@ const completeSourceGroundedApprovalJson = JSON.stringify({
   sourceGroundingInstagramPostId: preparedDuplicate.instagramPostId,
   sourceGroundingInstagramPostUrl: preparedDuplicate.instagramPostUrl,
   sourceGroundingInstagramHandle: "qa_venue",
-  sourceGroundingVersion: 3,
+  sourceGroundingVersion: 4,
   sourceGroundingEvidence: "instagram_caption",
   approvalTitleSensible: true,
   approvalCaptionSourceCoherent: true,
@@ -486,8 +486,8 @@ assert.match(
 );
 assert.match(
   ingestionSource,
-  /existingMatch\.existingEvent = \{[\s\S]*?\.\.\.updatePayload\.patch/,
-  "The in-memory duplicate snapshot must follow the actual reconciled patch rather than the weaker raw candidate.",
+  /const \{ clearTicketPrice, \.\.\.persistedPatch \} = updatePayload\.patch;[\s\S]*?existingMatch\.existingEvent = \{[\s\S]*?\.\.\.persistedPatch,[\s\S]*?clearTicketPrice \? \{ ticketPrice: undefined \}/,
+  "The in-memory duplicate snapshot must follow the actual reconciled patch and mirror ticket deletion.",
 );
 assert.match(eventsSource, /timeEvidenceText:\s*v\.optional\(v\.union\(v\.string\(\), v\.null\(\)\)\)/);
 assert.ok(moderationSource.includes("EventTimeProvenanceText"));

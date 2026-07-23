@@ -1791,6 +1791,66 @@ function splitSourceLineAtDateAnchors(value: string): string[] {
     .filter(Boolean);
 }
 
+function hasAmbiguousDelimitedEventIdentityClause(value: string): boolean {
+  const clauses = value.split(/\s*(?:\||\/)\s*/u);
+  if (clauses.length <= 1) {
+    return false;
+  }
+
+  const nonIdentityMetadataPattern =
+    /^(?:\d{1,3}\s*(?:['’′]|m|min(?:ute)?s?|minut(?:a|e))|(?:[01]?\d|2[0-3])[:.][0-5]\d\s*h?|\d{1,2}\+)$/iu;
+  return clauses.slice(1).some((clause) => {
+    const normalizedClause = normalizeString(clause.replace(/[🎬🎤🎭🎨🖼]/gu, " "));
+    return Boolean(normalizedClause && !nonIdentityMetadataPattern.test(normalizedClause));
+  });
+}
+
+function buildDateHeaderEventRowSegments(value: string | null | undefined): string[] {
+  const lines = normalizeString(value).split(/\r?\n/u).map((line) => line.trim());
+  const dateAnchorPattern = new RegExp(
+    String.raw`\b(?:20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}[./-]\d{1,2}(?:[./-](?:\d{2}|\d{4}))?|\d{1,2}(?:st|nd|rd|th|\.)?\s+(?:${SOURCE_GROUNDING_MONTH_PATTERN})|(?:${SOURCE_GROUNDING_MONTH_PATTERN})\s+\d{1,2}(?:st|nd|rd|th)?)\b`,
+    "iu",
+  );
+  const explicitEventRowPattern = /^(?:🎬|🎤|🎭|🎨|🖼️?)\s*\S/u;
+  const eventMarkerPattern = /[🎬🎤🎭🎨🖼]/u;
+  const dateAnchorGlobalPattern = new RegExp(dateAnchorPattern.source, "giu");
+  const headerClockPattern = new RegExp(String.raw`\b${SOURCE_GROUNDING_CLOCK_PATTERN}\b`, "giu");
+  const segments: string[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const dateLine = lines[index] ?? "";
+    if (!dateLine || !dateAnchorPattern.test(dateLine)) {
+      continue;
+    }
+    const headerRemainder = dateLine
+      .replace(dateAnchorGlobalPattern, " ")
+      .replace(headerClockPattern, " ");
+    if (eventMarkerPattern.test(dateLine) || /[\p{L}\p{N}]/u.test(headerRemainder)) {
+      continue;
+    }
+    const blockRows: string[] = [];
+    for (let rowIndex = index + 1; rowIndex < lines.length; rowIndex += 1) {
+      const row = lines[rowIndex] ?? "";
+      if (!row || dateAnchorPattern.test(row)) {
+        break;
+      }
+      blockRows.push(row);
+    }
+    if (blockRows.length === 1) {
+      const eventRow = blockRows[0] ?? "";
+      const eventMarkerCount = eventRow.match(/[🎬🎤🎭🎨🖼]/gu)?.length ?? 0;
+      if (
+        explicitEventRowPattern.test(eventRow) &&
+        eventMarkerCount === 1 &&
+        !hasAmbiguousDelimitedEventIdentityClause(eventRow)
+      ) {
+        segments.push(`${dateLine} ${eventRow}`);
+      }
+    }
+  }
+  return segments;
+}
+
 function buildSourceGroundingSegments(value: string | null | undefined): string[] {
   const datePeriodPlaceholder = "\uE000";
   const protectedText = normalizeString(value)
@@ -1818,7 +1878,11 @@ function buildSourceGroundingSegments(value: string | null | undefined): string[
     .filter((line) => /\s\|\s/u.test(line))
     .map((line) => line.replaceAll(datePeriodPlaceholder, ".").trim())
     .filter(Boolean);
-  return [...new Set([...atomicSegments, ...structuredLineAnchors])];
+  return [...new Set([
+    ...atomicSegments,
+    ...structuredLineAnchors,
+    ...buildDateHeaderEventRowSegments(value),
+  ])];
 }
 
 const SOURCE_GROUNDING_CLOCK_PATTERN =
@@ -1984,6 +2048,12 @@ function hasExplicitBilledEventContext(
     /^(?:projekcija filma|filmska projekcija|pozorisna predstava|pozori[sš]na predstava|izlozba|izlo[zž]ba|radionica|kviz|koncert|jam session)\b/iu.test(
       searchableTitle,
     ) && /\s[|•·●▪◦]\s/u.test(segment);
+  const hasExplicitEventRowMarker = [...segment.matchAll(/[🎬🎤🎭🎨🖼]/gu)].some(
+    (match) =>
+      toSearchableText(segment.slice((match.index ?? 0) + match[0].length)).startsWith(
+        searchableTitle,
+      ),
+  );
 
   if (
     /^(?:vidimo se|see you|save the date|dodjite(?: svi)?|dođite(?: svi)?|join us|come through|pridruzite se|pridružite se|ne propustite|dont miss|rezervisite|rezervišite|book now|saznajte vise|saznajte više|dress code|doors? open|vrata|ulaz|entry|tickets?|karte|reservations?|rezervacije|summer memories|party people|dj mix|album drops?|new album|new single|music video|photo dump|throwback album|good vibes|tonight|today|sutra|veceras|lineup|raspored|program|schedule|this week|ove nedelje|weekend)(?:\s|$)/iu.test(
@@ -2066,6 +2136,7 @@ function hasExplicitBilledEventContext(
     hasExplicitEventCue ||
     hasQuotedCulturalWorkInTitle ||
     titleHasDirectEventFormatLabel ||
+    hasExplicitEventRowMarker ||
     (titleStart === 0 && hasSourceMentionForTitleArtist) ||
     (hasEventLogisticsCue && hasQuotedYearQualifiedTitle)
   );
@@ -2130,43 +2201,6 @@ export function evaluateCoreEventSourceGrounding(options: {
   const sourceText = normalizeString(options.independentTextEvidence);
   const baseSegments = buildSourceGroundingSegments(sourceText);
   const segments = [...baseSegments];
-  const sourceDates = collectSupportedDates(sourceText, options.postedAt);
-  const explicitStartSegmentPattern = new RegExp(
-    String.raw`^(?:po[cč]etak(?:\s+(?:u|od))?|starts?(?:\s+at)?)\s*${SOURCE_GROUNDING_LABELED_CLOCK_PATTERN}\b`,
-    "iu",
-  );
-  if (!normalizeString(options.splitSource) && sourceDates.length === 1) {
-    const [sourceDate] = sourceDates;
-    const datedSegments = baseSegments.filter((segment) =>
-      collectSupportedDates(segment, options.postedAt).includes(sourceDate),
-    );
-    const explicitlyLabeledStarts = baseSegments.filter((segment) =>
-      explicitStartSegmentPattern.test(normalizeString(segment)),
-    );
-    const quotedWorkSegments = baseSegments.filter((segment) =>
-      Boolean(extractQuotedCulturalWorkTitleCandidate(segment, undefined)),
-    );
-    const locallyBilledMentionSegments = baseSegments.filter((segment) =>
-      new RegExp(LOCAL_BILLED_MENTION_PATTERN_SOURCE, "iu").test(segment),
-    );
-    for (const datedSegment of datedSegments) {
-      for (const followingStart of explicitlyLabeledStarts) {
-        // Bind only an explicitly labeled start clock to the single dated
-        // event row. Never rejoin arbitrary prose or unrelated clocks.
-        segments.push(`${datedSegment} ${followingStart}`);
-      }
-      for (const quotedWorkSegment of quotedWorkSegments) {
-        // A quoted work with an immediate year is deterministic cultural-work
-        // identity and may occupy the next layout line of a single-date post.
-        segments.push(`${datedSegment} ${quotedWorkSegment}`);
-      }
-      for (const billedMentionSegment of locallyBilledMentionSegments) {
-        // A local billing cue plus handle is source authority; a bare or
-        // unrelated account mention is not.
-        segments.push(`${datedSegment} ${billedMentionSegment}`);
-      }
-    }
-  }
   const title = normalizeString(options.title);
   const normalizedDate = normalizeString(options.normalizedDate);
   const expectedTime = isTbdEventTime(options.time)
@@ -6055,6 +6089,7 @@ export function buildDuplicateUpdatePatch(
     instagramPostUrl?: string;
     instagramPostId?: string;
     ticketPrice?: string;
+    clearTicketPrice?: boolean;
     eventType?: string;
     sourceCaption?: string;
     sourcePostedAt?: string;
@@ -6148,6 +6183,9 @@ export function buildDuplicateUpdatePatch(
         : existing.status;
   const descriptionChanged =
     normalizeString(existing.description) !== normalizeString(preferredDescription);
+  const clearTicketPrice =
+    Boolean(normalizeString(existing.ticketPrice)) &&
+    !normalizeString(preferredNext.ticketPrice);
 
   return {
     patch: {
@@ -6175,7 +6213,11 @@ export function buildDuplicateUpdatePatch(
           : {}),
       instagramPostUrl: preferredNext.instagramPostUrl,
       instagramPostId: preferredNext.instagramPostId,
-      ...(preferredNext.ticketPrice ? { ticketPrice: preferredNext.ticketPrice } : {}),
+      ...(preferredNext.ticketPrice
+        ? { ticketPrice: preferredNext.ticketPrice }
+        : clearTicketPrice
+          ? { clearTicketPrice: true }
+          : {}),
       eventType: preferredNext.eventType,
       ...(preferredNext.sourceCaption ? { sourceCaption: preferredNext.sourceCaption } : {}),
       ...(preferredNext.sourcePostedAt ? { sourcePostedAt: preferredNext.sourcePostedAt } : {}),
@@ -6969,7 +7011,7 @@ export function prepareEventsForInsert(
       moderationAutoApproveThreshold: AUTO_APPROVE_CONFIDENCE_THRESHOLD,
       moderationCoreEventAutoApproveThreshold: CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
       moderationCaptionOnlyVideoMinConfidence: CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE,
-      sourceGroundingVersion: 3,
+      sourceGroundingVersion: 4,
       sourceGroundingEvidence: "instagram_caption",
       approvalTitleSensible,
       approvalCaptionSourceCoherent,
@@ -7521,9 +7563,11 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
           rawExtraction: extracted,
           normalizedFields: prepared.normalizedFields,
         });
+        const { clearTicketPrice, ...persistedPatch } = updatePayload.patch;
         existingMatch.existingEvent = {
           ...existingMatch.existingEvent,
-          ...updatePayload.patch,
+          ...persistedPatch,
+          ...(clearTicketPrice ? { ticketPrice: undefined } : {}),
           timeEvidenceText: updatePayload.patch.timeEvidenceText ?? undefined,
           status:
             updatePayload.patch.status ?? existingMatch.existingEvent.status,

@@ -38,7 +38,7 @@ export function markModelDerivedRepairPending(normalizedFields, script) {
     : {};
   return {
     ...current,
-    sourceGroundingVersion: 3,
+    sourceGroundingVersion: 4,
     sourceGroundingEvidence: "instagram_caption",
     sourceGroundingVerified: false,
     sourceGroundingTitleVerified: false,
@@ -78,7 +78,7 @@ export function hasVerifiedSourceGrounding(normalizedFields, event) {
   const instagramPostId = normalizeComparableText(event?.instagramPostId);
   const instagramPostUrl = normalizeComparableText(event?.instagramPostUrl);
   return (
-    normalizedFields?.sourceGroundingVersion === 3 &&
+    normalizedFields?.sourceGroundingVersion === 4 &&
     normalizedFields?.sourceGroundingEvidence === "instagram_caption" &&
     normalizedFields?.sourceGroundingSourceKind === "caption" &&
     normalizeComparableText(normalizedFields?.sourceGroundingSourceCaption) === sourceCaption &&

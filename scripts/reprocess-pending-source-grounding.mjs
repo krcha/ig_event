@@ -12,6 +12,14 @@ import {
 import { hasCompleteSourceGroundedAutoApproval } from "../lib/events/event-update-precondition.ts";
 
 const REPROCESS_REASON = "caption_source_event_mismatch";
+const REPROCESS_SOURCE_REASONS = new Set([
+  REPROCESS_REASON,
+  "unverified_core_event_source",
+]);
+const REPROCESS_REMOVABLE_REASONS = new Set([
+  ...REPROCESS_SOURCE_REASONS,
+  "requires_human_approval",
+]);
 const REPROCESS_PUBLIC_DATE = "2026-07-20";
 const BACKUP_ROOT = "/root/backups/ig-event-source-grounding-reprocess-20260720";
 const PUBLIC_EVENT_FIELDS = [
@@ -48,6 +56,7 @@ const ALLOWED_NORMALIZED_FIELD_CHANGES = new Set([
   "sourceGroundingTimeVerified",
   "sourceGroundingTitleVerified",
   "sourceGroundingVerified",
+  "sourceGroundingVersion",
 ]);
 
 function parseArgs(argv) {
@@ -160,8 +169,27 @@ function buildExtracted(existing, normalizedFields) {
   };
 }
 
-function prepareExistingEvent(existing) {
+export function getSourceGroundingReprocessReasonGate(normalizedFieldsJson) {
+  const normalizedFields = parseObject(normalizedFieldsJson);
+  const previousPendingReasons = Array.isArray(normalizedFields.moderationPendingReasons)
+    ? normalizedFields.moderationPendingReasons.filter(
+        (reason) => typeof reason === "string" && reason.length > 0,
+      )
+    : [];
+  return {
+    hasSourceGroundingReason: previousPendingReasons.some((reason) =>
+      REPROCESS_SOURCE_REASONS.has(reason),
+    ),
+    nonRemovablePendingReasons: previousPendingReasons.filter(
+      (reason) => !REPROCESS_REMOVABLE_REASONS.has(reason),
+    ),
+  };
+}
+
+export function prepareExistingEvent(existing) {
   const previousNormalizedFields = parseObject(existing.normalizedFieldsJson);
+  const { hasSourceGroundingReason, nonRemovablePendingReasons } =
+    getSourceGroundingReprocessReasonGate(existing.normalizedFieldsJson);
   const post = buildPost(existing, previousNormalizedFields);
   const extracted = buildExtracted(existing, previousNormalizedFields);
   const venueSource = normalize(previousNormalizedFields.venueSource);
@@ -212,6 +240,8 @@ function prepareExistingEvent(existing) {
     (key) => !ALLOWED_NORMALIZED_FIELD_CHANGES.has(key),
   );
   const eligible =
+    hasSourceGroundingReason &&
+    nonRemovablePendingReasons.length === 0 &&
     exact.event.status === "approved" &&
     duplicateDecision.statusAutoApproved === true &&
     duplicateDecision.patch.status === "approved" &&
@@ -227,6 +257,7 @@ function prepareExistingEvent(existing) {
     changedPublicFields,
     normalizedChangedKeys,
     disallowedNormalizedChanges,
+    nonRemovablePendingReasons,
     preparedStatus: exact.event.status,
     statusAutoApproved: duplicateDecision.statusAutoApproved,
   };
@@ -255,16 +286,40 @@ function createExclusiveBackup(targets, manifestSha256) {
   return { backupPath, backupSha256: sha256(reread) };
 }
 
-export async function loadExactTargetRows(client, serviceSecret, targets) {
-  const dates = [...new Set(targets.map((event) => event.date))];
-  const rows = [];
-  for (const date of dates) {
-    rows.push(...(await client.query("events:listByDate", { date, serviceSecret })));
+export async function loadPendingEventsPaginated(client, serviceSecret) {
+  const events = [];
+  let cursor = null;
+  for (let pageNumber = 0; pageNumber < 1000; pageNumber += 1) {
+    const result = await client.query("events:listByStatusPaginated", {
+      status: "pending",
+      paginationOpts: { numItems: 20, cursor },
+      serviceSecret,
+    });
+    if (result.pageStatus === "SplitRequired") {
+      throw new Error("Pending-event pagination requires a split; refusing a partial backlog read.");
+    }
+    events.push(...result.page);
+    if (result.isDone) {
+      return events;
+    }
+    if (!result.continueCursor || result.continueCursor === cursor) {
+      throw new Error("Pending-event pagination cursor stalled.");
+    }
+    cursor = result.continueCursor;
   }
-  const targetIds = new Set(targets.map((event) => event._id));
-  const byId = new Map(rows.filter((event) => targetIds.has(event._id)).map((event) => [event._id, event]));
-  if (byId.size !== targetIds.size) {
-    throw new Error(`Exact post-apply readback found ${byId.size}/${targetIds.size} target rows.`);
+  throw new Error("Pending-event pagination exceeded the 1000-page safety limit.");
+}
+
+export async function loadExactTargetRows(client, serviceSecret, targets) {
+  const targetIds = [...new Set(targets.map((event) => event._id))];
+  const rows = [];
+  for (let index = 0; index < targetIds.length; index += 100) {
+    const ids = targetIds.slice(index, index + 100);
+    rows.push(...(await client.query("events:getManyByIds", { ids, serviceSecret })));
+  }
+  const byId = new Map(rows.map((event) => [event._id, event]));
+  if (byId.size !== targetIds.length) {
+    throw new Error(`Exact post-apply readback found ${byId.size}/${targetIds.length} target rows.`);
   }
   return byId;
 }
@@ -304,11 +359,7 @@ async function main() {
     throw new Error("Missing production Convex configuration.");
   }
   const client = new ConvexHttpClient(convexUrl);
-  const pending = await client.query("events:listByStatus", {
-    status: "pending",
-    limit: 1000,
-    serviceSecret,
-  });
+  const pending = await loadPendingEventsPaginated(client, serviceSecret);
   const targets = pending
     .filter((event) => {
       const fields = parseObject(event.normalizedFieldsJson);
