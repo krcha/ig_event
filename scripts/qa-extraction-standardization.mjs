@@ -1528,6 +1528,61 @@ function runHashtagOnlyScheduleIdentityQa() {
     "A repeated same-event announcement must keep the canonical grounded model event.",
   );
 
+  const competingSupportActsCaption = [
+    `Koncert Joss Stone ${repeatedSingleEventDateText} uz Alice.`,
+    `Koncert Joss Stone ${repeatedSingleEventDateText} uz Bob.`,
+  ].join("\n");
+  const competingSupportActs = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: competingSupportActsCaption,
+      postType: "image",
+      username: "tickets.rs",
+    }),
+    makeExtractedEvent({
+      title: "Joss Stone",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: ["Joss Stone"],
+      category: "live music",
+      description: "Joss Stone concert at Ložionica.",
+      source_caption: competingSupportActsCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Joss Stone",
+          artists: ["Joss Stone"],
+          description: "Joss Stone concert at Ložionica.",
+          source_text: `JOSS STONE ${firstDateLabel}. LOŽIONICA`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/joss-stone-support.jpg",
+    { "tickets.rs": "Ložionica" },
+    {},
+    { "tickets.rs": "Ložionica" },
+  );
+  assert.equal(
+    competingSupportActs.length,
+    2,
+    "Repeated canonical identity/date prose with different locally billed support acts must not collapse.",
+  );
+  assert.deepEqual(
+    competingSupportActs.map((result) => {
+      assert.equal(result.kind, "ok");
+      return {
+        status: result.event.status,
+        splitSourceLine: readPreparedNormalizedFields(result).splitSourceLine,
+      };
+    }),
+    competingSupportActsCaption.split("\n").map((splitSourceLine) => ({
+      status: "pending",
+      splitSourceLine,
+    })),
+    "Competing support-act rows must stay separately pending for human review.",
+  );
+
   const conflictingShowtimesCaption = [
     `${firstDateLabel} - Joss Stone 19H`,
     `${firstDateLabel} - Joss Stone 22H`,

@@ -3385,6 +3385,25 @@ function reconcileSplitCandidateCoverage(
   return sortSplitCandidatesByDate(reconciled);
 }
 
+function hasCompetingLocalBillingIdentity(
+  value: string,
+  canonicalIdentities: string[],
+): boolean {
+  if (/(?:\s(?:&|\+|×)\s|\bb2b\b|\s[xX]\s)/u.test(value)) {
+    return true;
+  }
+
+  const canonicalKeys = new Set(
+    canonicalIdentities.map((identity) => toSearchableText(identity)).filter(Boolean),
+  );
+  const localBillingPattern =
+    /\b(?:w\/|with|uz|sa|feat(?:uring)?|ft\.?|b2b)\s+([^,;|.!?\n]+)/giu;
+  return [...value.matchAll(localBillingPattern)].some((match) => {
+    const billedIdentityKey = toSearchableText(match[1] ?? "");
+    return Boolean(billedIdentityKey && !canonicalKeys.has(billedIdentityKey));
+  });
+}
+
 function areRepeatedSingleEventCaptionCandidates(options: {
   post: InstagramScrapedPost;
   extracted: ExtractedEventData;
@@ -3433,7 +3452,11 @@ function areRepeatedSingleEventCaptionCandidates(options: {
         !containsNonHashtagIdentity(candidate.sourceLine, canonicalTitle) ||
         canonicalArtists.some(
           (artist) => !containsNonHashtagIdentity(candidate.sourceLine, artist),
-        ),
+        ) ||
+        hasCompetingLocalBillingIdentity(candidate.sourceLine, [
+          canonicalTitle,
+          ...canonicalArtists,
+        ]),
     )
   ) {
     return false;
