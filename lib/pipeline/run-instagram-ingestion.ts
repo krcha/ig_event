@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import {
@@ -335,6 +336,7 @@ type PreparedEvent = {
   sourcePostedAt?: string;
   rawExtractionJson?: string;
   normalizedFieldsJson?: string;
+  sourceOccurrenceKey?: string;
   status: EventStatus;
 };
 
@@ -423,6 +425,7 @@ type ExistingEventRecord = {
   sourcePostedAt?: string;
   rawExtractionJson?: string;
   normalizedFieldsJson?: string;
+  sourceOccurrenceKey?: string;
   status: EventStatus;
   reviewedAt?: number;
   reviewedBy?: string;
@@ -1853,10 +1856,18 @@ function buildDateHeaderEventRowSegments(value: string | null | undefined): stri
 
 function buildSourceGroundingSegments(value: string | null | undefined): string[] {
   const datePeriodPlaceholder = "\uE000";
-  const protectedText = normalizeString(value).replace(
-    /\b(\d{1,2}[./-]\d{1,2}(?:[./-](?:\d{2}|\d{4}))?)\.(?=\s|$)/gu,
-    `$1${datePeriodPlaceholder}`,
-  );
+  const protectedText = normalizeString(value)
+    .replace(
+      /\b(\d{1,2}[./-]\d{1,2}(?:[./-](?:\d{2}|\d{4}))?)\.(?=\s|$)/gu,
+      `$1${datePeriodPlaceholder}`,
+    )
+    .replace(
+      new RegExp(
+        String.raw`\b(\d{1,2})\.(?=\s+(?:${SOURCE_GROUNDING_MONTH_PATTERN})\b)`,
+        "giu",
+      ),
+      `$1${datePeriodPlaceholder}`,
+    );
   const atomicSegments = protectedText
     .split(
       /\r?\n|[;•·●▪◦]+|\s+\|\s+|\s+\/\s+|\s+[—–-]\s+|(?<=[.!?])\s+/u,
@@ -3411,6 +3422,220 @@ function reconcileSplitCandidateCoverage(
   return sortSplitCandidatesByDate(reconciled);
 }
 
+function hasCompetingLocalBillingIdentity(
+  value: string,
+  canonicalIdentities: string[],
+): boolean {
+  const withoutClockValues = value.replace(
+    /\b(?:[01]?\d|2[0-3])[:.][0-5]\d\b/gu,
+    " ",
+  );
+  if (
+    /\s(?:\||\/|[-–—])\s|:\s*\p{L}/u.test(withoutClockValues) ||
+    /(?:\s(?:&|\+|×)\s|\bb2b\b|\s[xX]\s)/u.test(value)
+  ) {
+    return true;
+  }
+
+  const canonicalKeys = new Set(
+    canonicalIdentities.map((identity) => toSearchableText(identity)).filter(Boolean),
+  );
+  const localBillingPattern =
+    /\b(?:w\/|with|uz|sa|feat(?:uring)?|ft\.?|b2b)\s+([^,;|.!?\n]+)/giu;
+  return [...value.matchAll(localBillingPattern)].some((match) => {
+    const billedIdentityKey = toSearchableText(match[1] ?? "");
+    return Boolean(billedIdentityKey && !canonicalKeys.has(billedIdentityKey));
+  });
+}
+
+const SAME_EVENT_ANNOUNCEMENT_PREFIXES = new Set([
+  "",
+  "i beogradski koncert",
+  "beogradski koncert",
+  "beogradski koncert britanske zvezde",
+]);
+
+type RepeatedAnnouncementContextKind = "relocation" | "scheduled_held";
+
+const SAME_EVENT_ANNOUNCEMENT_VENUE_FORMS: Record<
+  string,
+  { relocation: string; scheduledHeld: string }
+> = {
+  lozionica: {
+    relocation: "lozionicu",
+    scheduledHeld: "lozionice",
+  },
+};
+
+function classifyRepeatedAnnouncementContext(
+  value: string,
+  canonicalIdentities: string[],
+  canonicalVenue: string,
+): RepeatedAnnouncementContextKind | null {
+  const searchableValue = toSearchableText(value);
+  const searchableTitle = toSearchableText(canonicalIdentities[0] ?? "");
+  if (!searchableTitle) {
+    return null;
+  }
+  const paddedValue = ` ${searchableValue} `;
+  const paddedTitle = ` ${searchableTitle} `;
+  const titleStart = paddedValue.indexOf(paddedTitle);
+  if (titleStart < 0) {
+    return null;
+  }
+  let prefix = paddedValue.slice(0, titleStart).trim();
+  let suffix = paddedValue.slice(titleStart + paddedTitle.length).trim();
+
+  for (const identity of canonicalIdentities) {
+    const searchableIdentity = toSearchableText(identity);
+    if (!searchableIdentity) {
+      continue;
+    }
+    const pattern = escapeRegExp(searchableIdentity).replace(/\s+/gu, "\\s+");
+    const identityPattern = new RegExp(`\\b${pattern}\\b`, "gu");
+    prefix = prefix.replace(identityPattern, " ").replace(/\s+/gu, " ").trim();
+    suffix = suffix.replace(identityPattern, " ").replace(/\s+/gu, " ").trim();
+  }
+  if (!SAME_EVENT_ANNOUNCEMENT_PREFIXES.has(prefix)) {
+    return null;
+  }
+
+  const venueForms =
+    SAME_EVENT_ANNOUNCEMENT_VENUE_FORMS[toSearchableText(canonicalVenue)];
+  if (!venueForms) {
+    return null;
+  }
+  const serbianMonth =
+    "(?:januara|februara|marta|aprila|maja|juna|jula|avgusta|septembra|oktobra|novembra|decembra)";
+  const serbianWeekday =
+    "(?:ponedeljak|ponedeljka|utorak|utorka|sreda|sredu|cetvrtak|cetvrtka|petak|petka|subota|subotu|nedelja|nedelju)";
+  const dateClause = `\\d{1,2} ${serbianMonth}`;
+  const relocationPattern = new RegExp(
+    `^${dateClause} (?:seli se|premesta se|prebacuje se) u ${escapeRegExp(venueForms.relocation)}$`,
+    "u",
+  );
+  if (relocationPattern.test(suffix)) {
+    return "relocation";
+  }
+  const scheduledHeldPattern = new RegExp(
+    `^(?:prvobitno )?zakazan(?:a|o)? za (?:${serbianWeekday} )?${dateClause} (?:bice odrzan(?:a|o)?|odrzace se) u prostoru ${escapeRegExp(venueForms.scheduledHeld)}$`,
+    "u",
+  );
+  return scheduledHeldPattern.test(suffix) ? "scheduled_held" : null;
+}
+
+type RepeatedSingleEventCaptionDisposition = "collapse" | "preserve" | "none";
+
+function classifyRepeatedSingleEventCaptionCandidates(options: {
+  post: InstagramScrapedPost;
+  extracted: ExtractedEventData;
+  candidates: SplitEventCandidate[];
+  persistedVenue: string | null;
+}): RepeatedSingleEventCaptionDisposition {
+  if (options.extracted.schedule_entries.length !== 1 || options.candidates.length < 2) {
+    return "none";
+  }
+
+  const modelEntry = options.extracted.schedule_entries[0];
+  if (!modelEntry) {
+    return "none";
+  }
+  const canonicalTitle = normalizeString(modelEntry.title || options.extracted.title);
+  const canonicalArtists = normalizeExtractedArtists(
+    modelEntry.artists.length > 0 ? modelEntry.artists : options.extracted.artists,
+  );
+  const modelVenue = normalizeString(options.extracted.venue);
+  const canonicalVenue = normalizeString(options.persistedVenue);
+  if (
+    !modelVenue ||
+    !canonicalVenue ||
+    toSearchableText(modelVenue) !== toSearchableText(canonicalVenue)
+  ) {
+    return "preserve";
+  }
+  const canonicalRawDate = normalizeString(modelEntry.date || options.extracted.date);
+  if (!canonicalTitle || !canonicalRawDate) {
+    return "none";
+  }
+
+  const canonicalDate = normalizeEventDate(
+    canonicalRawDate,
+    normalizeString(modelEntry.source_text) || canonicalRawDate,
+    options.post.postedAt,
+  ).isoDate;
+  if (!canonicalDate) {
+    return "none";
+  }
+
+  const candidateDates = new Set(
+    options.candidates
+      .map((candidate) => candidate.normalizedDate.isoDate)
+      .filter((value): value is string => Boolean(value)),
+  );
+  if (candidateDates.size !== 1 || !candidateDates.has(canonicalDate)) {
+    return "none";
+  }
+  if (options.candidates.some((candidate) => candidate.source !== "caption_schedule")) {
+    return "none";
+  }
+  if (
+    options.candidates.some(
+      (candidate) =>
+        !containsNonHashtagIdentity(candidate.sourceLine, canonicalTitle) ||
+        canonicalArtists.some(
+          (artist) => !containsNonHashtagIdentity(candidate.sourceLine, artist),
+        ),
+    )
+  ) {
+    return "none";
+  }
+  const canonicalIdentities = [canonicalTitle, ...canonicalArtists];
+  if (
+    options.candidates.some((candidate) =>
+      hasCompetingLocalBillingIdentity(candidate.sourceLine, canonicalIdentities),
+    )
+  ) {
+    return "preserve";
+  }
+  if (extractPostAltTextEvidence(options.post.altText)) {
+    return "preserve";
+  }
+  const announcementContexts = options.candidates.map((candidate) =>
+    classifyRepeatedAnnouncementContext(
+      candidate.sourceLine,
+      canonicalIdentities,
+      canonicalVenue,
+    ),
+  );
+  const announcementContextKinds = new Set(announcementContexts.filter(Boolean));
+  if (
+    announcementContexts.some((context) => !context) ||
+    !announcementContextKinds.has("relocation") ||
+    !announcementContextKinds.has("scheduled_held")
+  ) {
+    return "preserve";
+  }
+
+  const candidateTimeValues = options.candidates.map((candidate) => candidate.time);
+  const candidateTimes = new Set(candidateTimeValues.filter(Boolean));
+  if (
+    candidateTimes.size > 1 ||
+    (candidateTimes.size === 1 && candidateTimeValues.some((candidateTime) => !candidateTime))
+  ) {
+    return "preserve";
+  }
+  const modelTime = sanitizeTimeAgainstDate(
+    normalizeString(modelEntry.time || options.extracted.time),
+    canonicalRawDate,
+  );
+  if (!modelTime && candidateTimes.size === 0) {
+    return "collapse";
+  }
+  return modelTime && candidateTimeValues.every((candidateTime) => candidateTime === modelTime)
+    ? "collapse"
+    : "preserve";
+}
+
 function extractSplitEventCandidates(
   post: InstagramScrapedPost,
   extracted: ExtractedEventData,
@@ -3434,8 +3659,20 @@ function extractSplitEventCandidates(
     captionCandidates,
     altTextCandidates,
   );
-  const deterministicCandidates = reconcileSplitCandidateCoverage([], deterministicUnion);
+  const repeatedCaptionDisposition = classifyRepeatedSingleEventCaptionCandidates({
+    post,
+    extracted,
+    candidates: captionCandidates,
+    persistedVenue: venue,
+  });
+  if (repeatedCaptionDisposition === "collapse" && altTextCandidates.length === 0) {
+    return [];
+  }
+  if (repeatedCaptionDisposition === "preserve") {
+    return sortSplitCandidatesByDate(deterministicUnion);
+  }
 
+  const deterministicCandidates = reconcileSplitCandidateCoverage([], deterministicUnion);
   if (modelCandidates.length > 0) {
     return reconcileSplitCandidateCoverage(modelCandidates, deterministicCandidates);
   }
@@ -5394,6 +5631,100 @@ function shouldReprocessExistingSourcePosts(): boolean {
   return normalizeString(process.env.INGESTION_REPROCESS_EXISTING_SOURCE_POSTS).toLowerCase() === "true";
 }
 
+function hasIncompleteMultiEventSourceSet(matches: ExistingSourceMatch[]): boolean {
+  let expectedOccurrenceCount = 0;
+  const persistedOccurrenceKeys = new Set<string>();
+
+  for (const match of matches) {
+    const normalizedFields = parseJsonRecord(match.existingEvent.normalizedFieldsJson);
+    if (!isMultiEventNormalizedFields(normalizedFields)) {
+      continue;
+    }
+
+    expectedOccurrenceCount = Math.max(
+      expectedOccurrenceCount,
+      readJsonNumber(normalizedFields, "sourceOccurrenceExpectedCount") ??
+        readJsonNumber(normalizedFields, "multiEventSplitCount") ??
+        2,
+    );
+    const occurrenceKey =
+      normalizeString(match.existingEvent.sourceOccurrenceKey) ||
+      readJsonString(normalizedFields, "sourceOccurrenceKey") ||
+      getSourceOccurrenceProvenanceKey(normalizedFields);
+    if (occurrenceKey) {
+      persistedOccurrenceKeys.add(occurrenceKey);
+    }
+  }
+
+  return (
+    expectedOccurrenceCount > 1 &&
+    persistedOccurrenceKeys.size < expectedOccurrenceCount
+  );
+}
+
+function buildSourceOccurrenceKey(
+  post: InstagramScrapedPost,
+  event: PreparedEvent,
+  normalizedFields: Record<string, unknown>,
+): string {
+  const sourceIdentity =
+    extractShortcodeFromPostUrl(post.instagramPostUrl) ||
+    normalizeString(post.postId) ||
+    normalizeString(post.instagramPostUrl).toLowerCase();
+  const provenanceKey = getSourceOccurrenceProvenanceKey(normalizedFields);
+  const comparableTime = extractComparableTimeParts(event.time).join(",");
+  const splitIndex = readJsonNumber(normalizedFields, "multiEventSplitIndex");
+  const occurrenceIdentity = isMultiEventNormalizedFields(normalizedFields)
+    ? `${event.date}|row:${provenanceKey ?? "missing"}|time:${
+        comparableTime || normalizeString(event.time).toLowerCase() || "unknown"
+      }|fallback-index:${provenanceKey ? "unused" : (splitIndex ?? "unknown")}`
+    : `${event.date}|single`;
+  const digest = createHash("sha256")
+    .update(`instagram-occurrence-v1\u0000${sourceIdentity}\u0000${occurrenceIdentity}`)
+    .digest("hex");
+  return `instagram-occurrence-v1:${digest}`;
+}
+
+function bindSourceOccurrenceMetadata(
+  post: InstagramScrapedPost,
+  preparedResults: PrepareEventResult[],
+): PrepareEventResult[] {
+  const persistableOccurrenceCount = preparedResults.filter(
+    (prepared) => prepared.kind === "ok",
+  ).length;
+  if (persistableOccurrenceCount === 0) {
+    return preparedResults;
+  }
+
+  return preparedResults.map((prepared) => {
+    if (prepared.kind !== "ok") {
+      return prepared;
+    }
+
+    const sourceOccurrenceKey = buildSourceOccurrenceKey(
+      post,
+      prepared.event,
+      prepared.normalizedFields,
+    );
+    const normalizedFields = {
+      ...prepared.normalizedFields,
+      ...(isMultiEventNormalizedFields(prepared.normalizedFields)
+        ? { sourceOccurrenceExpectedCount: persistableOccurrenceCount }
+        : {}),
+      sourceOccurrenceKey,
+    };
+    return {
+      ...prepared,
+      normalizedFields,
+      event: {
+        ...prepared.event,
+        sourceOccurrenceKey,
+        normalizedFieldsJson: JSON.stringify(normalizedFields),
+      },
+    };
+  });
+}
+
 type SourceDuplicateSkipDecision = {
   match: ExistingSourceMatch;
   quality: ExistingEventQuality;
@@ -5406,6 +5737,13 @@ function getPreExtractionSourceDuplicateSkipDecision(
 ): SourceDuplicateSkipDecision | null {
   const firstMatch = matches[0];
   if (!firstMatch) {
+    return null;
+  }
+
+  // A source post that advertised multiple occurrences is only complete when all
+  // deterministic child-row identities are already persisted. Re-extract a partial
+  // set so retries can recover a sibling that failed after an earlier insert.
+  if (hasIncompleteMultiEventSourceSet(matches)) {
     return null;
   }
 
@@ -5739,6 +6077,13 @@ function getSemanticDuplicateMatchScore(
     nextEvidenceCandidates,
   );
   const timeMatches = areTimesCompatible(existing.time, next.time);
+  if (
+    hasReliableEventTime(existing) &&
+    hasReliableEventTime(next) &&
+    !areTimesCompatible(existing.time, next.time)
+  ) {
+    return -1;
+  }
   const hasFallbackTitle =
     hasUnreliableComparableTitle(existingNormalizedFields) ||
     hasUnreliableComparableTitle(nextNormalizedFields);
@@ -6305,6 +6650,56 @@ function normalizeTitleKey(value: string | undefined): string {
   return normalizeString(value).toLowerCase().replace(/\s+/g, " ");
 }
 
+function getSourceOccurrenceProvenanceKey(
+  normalizedFields: Record<string, unknown> | null,
+): string | null {
+  const rowSourceText =
+    readJsonString(normalizedFields, "rowSourceText") ??
+    readJsonString(normalizedFields, "splitSourceLine");
+  const normalizedRowSourceText = toSearchableText(rowSourceText ?? "");
+  if (!normalizedRowSourceText) {
+    return null;
+  }
+
+  return normalizedRowSourceText;
+}
+
+function hasCompatibleSourceOccurrenceIdentity(
+  existing: ExistingEventRecord,
+  next: PreparedEvent,
+  nextNormalizedFields: Record<string, unknown>,
+): boolean {
+  const existingNormalizedFields = parseJsonRecord(existing.normalizedFieldsJson);
+  if (
+    !isMultiEventNormalizedFields(existingNormalizedFields) &&
+    !isMultiEventNormalizedFields(nextNormalizedFields)
+  ) {
+    return true;
+  }
+
+  const existingHasReliableTime = hasReliableEventTime(existing);
+  const nextHasReliableTime = hasReliableEventTime(next);
+  if (
+    existingHasReliableTime &&
+    nextHasReliableTime &&
+    !areTimesCompatible(existing.time, next.time)
+  ) {
+    return false;
+  }
+
+  const existingProvenanceKey = getSourceOccurrenceProvenanceKey(existingNormalizedFields);
+  const nextProvenanceKey = getSourceOccurrenceProvenanceKey(nextNormalizedFields);
+  if (existingProvenanceKey && nextProvenanceKey) {
+    return existingProvenanceKey === nextProvenanceKey;
+  }
+
+  return (
+    existingHasReliableTime &&
+    nextHasReliableTime &&
+    areTimesCompatible(existing.time, next.time)
+  );
+}
+
 function findBestExistingMatchForPreparedEvent(
   existingMatches: ExistingSourceMatch[],
   nextEvent: PreparedEvent,
@@ -6313,11 +6708,35 @@ function findBestExistingMatchForPreparedEvent(
   const sourceIdentityMatches = existingMatches.filter(
     (existing) => existing.matchedBy !== "same_date_semantic",
   );
+  const sourceOccurrenceMatch = sourceIdentityMatches.find((existing) => {
+    const existingNormalizedFields = parseJsonRecord(
+      existing.existingEvent.normalizedFieldsJson,
+    );
+    return (
+      normalizeString(existing.existingEvent.date) === nextEvent.date &&
+      (isMultiEventNormalizedFields(existingNormalizedFields) ||
+        isMultiEventNormalizedFields(nextNormalizedFields)) &&
+      hasCompatibleSourceOccurrenceIdentity(
+        existing.existingEvent,
+        nextEvent,
+        nextNormalizedFields,
+      )
+    );
+  });
+  if (sourceOccurrenceMatch) {
+    return sourceOccurrenceMatch;
+  }
+
   const titleKey = normalizeTitleKey(nextEvent.title);
   const exactMatch = sourceIdentityMatches.find(
     (existing) =>
       normalizeString(existing.existingEvent.date) === nextEvent.date &&
-      normalizeTitleKey(existing.existingEvent.title) === titleKey,
+      normalizeTitleKey(existing.existingEvent.title) === titleKey &&
+      hasCompatibleSourceOccurrenceIdentity(
+        existing.existingEvent,
+        nextEvent,
+        nextNormalizedFields,
+      ),
   );
   if (exactMatch) {
     return exactMatch;
@@ -7039,7 +7458,18 @@ type ProcessIngestionPostOptions = {
   serviceSecret: string;
 };
 
-async function processIngestionPost(options: ProcessIngestionPostOptions): Promise<void> {
+type ProcessIngestionPostDependencies = {
+  extractEventDataFromPost: typeof extractEventDataFromInstagramPost;
+};
+
+const DEFAULT_PROCESS_INGESTION_POST_DEPENDENCIES: ProcessIngestionPostDependencies = {
+  extractEventDataFromPost: extractEventDataFromInstagramPost,
+};
+
+async function processIngestionPost(
+  options: ProcessIngestionPostOptions,
+  dependencies: ProcessIngestionPostDependencies = DEFAULT_PROCESS_INGESTION_POST_DEPENDENCIES,
+): Promise<void> {
   const {
     client,
     handle,
@@ -7084,6 +7514,8 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     return;
   }
 
+  const recoveringIncompleteMultiEventSourceSet =
+    hasIncompleteMultiEventSourceSet(sourceIdentityMatches);
   const sourceDuplicateSkipDecision = getPreExtractionSourceDuplicateSkipDecision(
     sourceIdentityMatches,
     post,
@@ -7201,7 +7633,7 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
 
   let extracted: ExtractedEventData;
   try {
-    extracted = await extractEventDataFromInstagramPost({
+    extracted = await dependencies.extractEventDataFromPost({
       imageDataUrl,
       caption: post.caption,
       altText: post.altText,
@@ -7239,6 +7671,7 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
       venueNameOverridesByHandle,
       configuredVenueNamesByHandle,
     );
+    preparedResults = bindSourceOccurrenceMetadata(post, preparedResults);
   } catch (error) {
     summary.failedExtractions += 1;
     summary.failed_extractions += 1;
@@ -7354,6 +7787,34 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     );
 
     if (existingMatch) {
+      const preservesExistingSiblingDuringRecovery =
+        recoveringIncompleteMultiEventSourceSet &&
+        existingMatch.matchedBy !== "same_date_semantic" &&
+        normalizeString(existingMatch.existingEvent.date) === prepared.event.date &&
+        hasCompatibleSourceOccurrenceIdentity(
+          existingMatch.existingEvent,
+          prepared.event,
+          prepared.normalizedFields,
+        );
+      if (preservesExistingSiblingDuringRecovery) {
+        if (durableMediaEligible) {
+          hasDurableMediaAttachmentTarget = true;
+        }
+        summary.skippedDuplicates += 1;
+        summary.skipped_duplicates += 1;
+        summary.skipped_duplicates_clean += 1;
+        logInfo("duplicate_incomplete_source_sibling_preserved", {
+          ...postContext,
+          extractionMode,
+          selectedImageUrl,
+          matchedBy: existingMatch.matchedBy,
+          matchedValue: existingMatch.matchedValue,
+          existingEventId: existingMatch.existingEvent._id,
+          normalizedFields: prepared.normalizedFields,
+        });
+        continue;
+      }
+
       const quality = isLowQualityExistingEvent(existingMatch.existingEvent, post.postedAt);
       const hasMaterialChange = hasMaterialEventChange(
         existingMatch.existingEvent,
@@ -7469,15 +7930,42 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     }
 
     try {
-      const insertedId = (await client.mutation(
+      const createResult = (await client.mutation(
         createEventMutation,
         {
           ...prepared.event,
+          returnCreateDisposition: true,
           serviceSecret,
         },
-      )) as string;
+      )) as string | { eventId: string; created: boolean };
+      const insertedId =
+        typeof createResult === "string" ? createResult : createResult.eventId;
+      const wasCreated =
+        typeof createResult === "string" ? true : createResult.created;
       if (durableMediaEligible) {
         hasDurableMediaAttachmentTarget = true;
+      }
+      if (!wasCreated) {
+        summary.skippedDuplicates += 1;
+        summary.skipped_duplicates += 1;
+        summary.skipped_duplicates_clean += 1;
+        existingMatches.push({
+          existingEvent: {
+            _id: insertedId,
+            ...prepared.event,
+          },
+          matchedBy: "post_url",
+          matchedValue: prepared.event.instagramPostUrl,
+        });
+        logInfo("duplicate_atomic_source_occurrence_skip", {
+          ...postContext,
+          extractionMode,
+          selectedImageUrl,
+          existingEventId: insertedId,
+          sourceOccurrenceKey: prepared.event.sourceOccurrenceKey,
+          normalizedFields: prepared.normalizedFields,
+        });
+        continue;
       }
       summary.insertedEvents += 1;
       summary.inserted_events += 1;
@@ -7528,6 +8016,15 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
       upstreamUrl: durableMediaCandidate,
     });
   }
+}
+
+export async function processIngestionPostWithExtractionForTesting(
+  options: ProcessIngestionPostOptions & { extracted: ExtractedEventData },
+): Promise<void> {
+  const { extracted, ...processOptions } = options;
+  await processIngestionPost(processOptions, {
+    extractEventDataFromPost: async () => extracted,
+  });
 }
 
 type ProcessLoadedPostsForHandleOptions = {
