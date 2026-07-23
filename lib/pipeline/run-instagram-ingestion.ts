@@ -3454,6 +3454,16 @@ const SAME_EVENT_ANNOUNCEMENT_PREFIXES = new Set([
 
 type RepeatedAnnouncementContextKind = "relocation" | "scheduled_held";
 
+const SAME_EVENT_ANNOUNCEMENT_VENUE_FORMS: Record<
+  string,
+  { relocation: string; scheduledHeld: string }
+> = {
+  lozionica: {
+    relocation: "lozionicu",
+    scheduledHeld: "lozionice",
+  },
+};
+
 function classifyRepeatedAnnouncementContext(
   value: string,
   canonicalIdentities: string[],
@@ -3487,39 +3497,28 @@ function classifyRepeatedAnnouncementContext(
     return null;
   }
 
-  const venueTokens = toSearchableText(canonicalVenue).split(/\s+/u).filter(Boolean);
-  if (venueTokens.length === 0) {
+  const venueForms =
+    SAME_EVENT_ANNOUNCEMENT_VENUE_FORMS[toSearchableText(canonicalVenue)];
+  if (!venueForms) {
     return null;
   }
-  const suffixTokens = suffix.split(/\s+/u).filter(Boolean).map((token) => {
-    const isVenueInflection = venueTokens.some(
-      (venueToken) =>
-        token === venueToken ||
-        (token.length >= 6 &&
-          venueToken.length >= 6 &&
-          token.slice(0, 6) === venueToken.slice(0, 6)),
-    );
-    return isVenueInflection ? "venue" : token;
-  });
-  const ownedSuffix = suffixTokens.join(" ");
   const serbianMonth =
     "(?:januara|februara|marta|aprila|maja|juna|jula|avgusta|septembra|oktobra|novembra|decembra)";
   const serbianWeekday =
     "(?:ponedeljak|ponedeljka|utorak|utorka|sreda|sredu|cetvrtak|cetvrtka|petak|petka|subota|subotu|nedelja|nedelju)";
   const dateClause = `\\d{1,2} ${serbianMonth}`;
-  const venueClause = "venue(?: venue)*";
   const relocationPattern = new RegExp(
-    `^${dateClause} (?:seli se|premesta se|prebacuje se) (?:u|na) (?:prostoru )?${venueClause}$`,
+    `^${dateClause} (?:seli se|premesta se|prebacuje se) u ${escapeRegExp(venueForms.relocation)}$`,
     "u",
   );
-  if (relocationPattern.test(ownedSuffix)) {
+  if (relocationPattern.test(suffix)) {
     return "relocation";
   }
   const scheduledHeldPattern = new RegExp(
-    `^(?:prvobitno )?zakazan(?:a|o)? za (?:${serbianWeekday} )?${dateClause} (?:bice odrzan(?:a|o)?|odrzace se) (?:u|na) (?:prostoru )?${venueClause}$`,
+    `^(?:prvobitno )?zakazan(?:a|o)? za (?:${serbianWeekday} )?${dateClause} (?:bice odrzan(?:a|o)?|odrzace se) u prostoru ${escapeRegExp(venueForms.scheduledHeld)}$`,
     "u",
   );
-  return scheduledHeldPattern.test(ownedSuffix) ? "scheduled_held" : null;
+  return scheduledHeldPattern.test(suffix) ? "scheduled_held" : null;
 }
 
 type RepeatedSingleEventCaptionDisposition = "collapse" | "preserve" | "none";

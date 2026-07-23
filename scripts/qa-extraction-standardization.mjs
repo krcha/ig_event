@@ -1680,6 +1680,82 @@ function runHashtagOnlyScheduleIdentityQa() {
     );
   }
 
+  for (const venueCollisionCase of [
+    {
+      name: "extra prefix-colliding venue token",
+      canonicalVenue: "Ložionica",
+      relocationVenue: "Ložionicu Ložionizer",
+      heldVenue: "Ložionice Ložionizer",
+    },
+    {
+      name: "substituted prefix-colliding venue token",
+      canonicalVenue: "Ložionica",
+      relocationVenue: "Ložionizer",
+      heldVenue: "Ložionizer",
+    },
+    {
+      name: "missing canonical multiword venue token",
+      canonicalVenue: "Kulturni Centar",
+      relocationVenue: "Kulturni",
+      heldVenue: "Kulturni",
+    },
+    {
+      name: "reordered canonical multiword venue tokens",
+      canonicalVenue: "Kulturni Centar",
+      relocationVenue: "Centar Kulturni",
+      heldVenue: "Centar Kulturni",
+    },
+  ]) {
+    const venueCollisionCaption = [
+      `Beogradski koncert Joss Stone ${repeatedSingleEventDateText} seli se u ${venueCollisionCase.relocationVenue}`,
+      `Beogradski koncert britanske zvezde Joss Stone, zakazan za petak, ${repeatedSingleEventDateText}, biće održan u prostoru ${venueCollisionCase.heldVenue}`,
+    ].join("\n");
+    const venueCollisionResults = prepareEventsForInsert(
+      makeInstagramPost({
+        caption: venueCollisionCaption,
+        postType: "image",
+        username: "tickets.rs",
+      }),
+      makeExtractedEvent({
+        title: "Joss Stone",
+        date: firstDateLabel,
+        time: "",
+        venue: venueCollisionCase.canonicalVenue,
+        artists: ["Joss Stone"],
+        category: "live music",
+        description: `Joss Stone concert at ${venueCollisionCase.canonicalVenue}.`,
+        source_caption: venueCollisionCaption,
+        schedule_entries: [
+          {
+            date: firstDateLabel,
+            time: "",
+            title: "Joss Stone",
+            artists: ["Joss Stone"],
+            description: `Joss Stone concert at ${venueCollisionCase.canonicalVenue}.`,
+            source_text: `JOSS STONE ${firstDateLabel}. ${venueCollisionCase.canonicalVenue}`,
+          },
+        ],
+      }),
+      "https://cdn.example.com/joss-stone-venue-collision.jpg",
+      { "tickets.rs": venueCollisionCase.canonicalVenue },
+      {},
+      { "tickets.rs": venueCollisionCase.canonicalVenue },
+    );
+    assert.equal(
+      venueCollisionResults.length,
+      2,
+      `${venueCollisionCase.name} must block destructive caption suppression.`,
+    );
+    assert.deepEqual(
+      venueCollisionResults.map((result) => {
+        assert.equal(result.kind, "ok");
+        return readPreparedNormalizedFields(result).splitSourceLine;
+      }).sort(),
+      venueCollisionCaption.split("\n").sort(),
+      `${venueCollisionCase.name} must retain both exact source rows.`,
+    );
+  }
+
   const conflictingSingleDateAltText = `Poster text: ${firstDateLabel} - Alice live at Ložionica`;
   const repeatedSingleEventWithConflictingAlt = prepareEventsForInsert(
     makeInstagramPost({
