@@ -6547,10 +6547,143 @@ async function runDistinctOccurrencePersistenceQa() {
   assert.equal(summary.insertedEvents, 2);
   assert.equal(summary.skippedDuplicates, 0);
   assert.equal(summary.updated_duplicates_bad_data, 0);
+  assert.match(
+    inserted[0].sourceOccurrenceKey,
+    /^instagram-occurrence-v1:[a-f0-9]{64}$/,
+  );
+  assert.notEqual(
+    inserted[0].sourceOccurrenceKey,
+    inserted[1].sourceOccurrenceKey,
+    "Distinct source children must receive distinct atomic occurrence keys.",
+  );
+
+  const previousCronSecret = process.env.CRON_SECRET;
+  const atomicServiceSecret = "qa-atomic-source-occurrence-secret";
+  process.env.CRON_SECRET = atomicServiceSecret;
+  const atomicEvents = [];
+  const atomicAuditLogs = [];
+  const atomicCtx = {
+    auth: { getUserIdentity: async () => null },
+    db: {
+      query: (table) => {
+        if (table === "venues") {
+          return {
+            collect: async () => [
+              {
+                _id: "qa-atomic-lozionica-venue",
+                name: "Ložionica",
+                instagramHandle: "tickets.rs",
+                category: "live music",
+                publicStatus: "published",
+              },
+            ],
+          };
+        }
+        return {
+          withIndex: (_indexName, configure) => {
+            let sourceOccurrenceKey = null;
+            const indexBuilder = {
+              eq: (field, value) => {
+                if (field === "sourceOccurrenceKey") sourceOccurrenceKey = value;
+                return indexBuilder;
+              },
+            };
+            configure(indexBuilder);
+            return {
+              unique: async () =>
+                atomicEvents.find(
+                  (event) => event.sourceOccurrenceKey === sourceOccurrenceKey,
+                ) ?? null,
+            };
+          },
+        };
+      },
+      insert: async (table, value) => {
+        if (table === "events") {
+          const event = {
+            _id: `qa-atomic-event-${atomicEvents.length + 1}`,
+            ...value,
+          };
+          atomicEvents.push(event);
+          return event._id;
+        }
+        atomicAuditLogs.push(value);
+        return `qa-atomic-audit-${atomicAuditLogs.length}`;
+      },
+    },
+  };
+  const {
+    serviceSecret: _capturedServiceSecret,
+    returnCreateDisposition: _capturedDisposition,
+    ...atomicEventArgs
+  } = inserted[0];
+  try {
+    const firstAtomicCreate = await createEvent._handler(atomicCtx, {
+      ...atomicEventArgs,
+      returnCreateDisposition: true,
+      serviceSecret: atomicServiceSecret,
+    });
+    const racedAtomicCreate = await createEvent._handler(atomicCtx, {
+      ...atomicEventArgs,
+      title: "Joss Stone — concurrently normalized title",
+      time: "19h",
+      returnCreateDisposition: true,
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.deepEqual(firstAtomicCreate, {
+      eventId: "qa-atomic-event-1",
+      created: true,
+    });
+    assert.deepEqual(racedAtomicCreate, {
+      eventId: "qa-atomic-event-1",
+      created: false,
+    });
+    assert.equal(
+      atomicEvents.length,
+      1,
+      "The indexed source-occurrence check and insert must share one mutation boundary.",
+    );
+    assert.equal(atomicAuditLogs.length, 1);
+    assert.equal(atomicEvents[0].title, atomicEventArgs.title);
+  } finally {
+    if (previousCronSecret === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = previousCronSecret;
+  }
+
+  const atomicRaceSummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  const atomicRaceCreates = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => [],
+        mutation: async (_reference, args) => {
+          assert.equal("id" in args, false);
+          atomicRaceCreates.push(args);
+          return args.time === "19:00"
+            ? { eventId: "qa-raced-existing-19", created: false }
+            : { eventId: "qa-created-22", created: true };
+        },
+      },
+      handle: "tickets.rs",
+      post,
+      summary: atomicRaceSummary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted,
+    }),
+  );
+  assert.equal(atomicRaceCreates.length, 2);
+  assert.equal(atomicRaceSummary.insertedEvents, 1);
+  assert.equal(atomicRaceSummary.skippedDuplicates, 1);
+  assert.equal(atomicRaceSummary.updated_duplicates_bad_data, 0);
 
   const existingFirstOccurrence = {
     ...inserted[0],
     _id: "qa-existing-first-occurrence",
+    title: "Joss Stone — moderated title",
+    time: "19h",
     normalizedFieldsJson: JSON.stringify({
       ...JSON.parse(inserted[0].normalizedFieldsJson),
       splitSource: "model_schedule",

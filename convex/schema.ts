@@ -65,6 +65,7 @@ export default defineSchema({
     sourcePostedAt: v.optional(v.string()),
     rawExtractionJson: v.optional(v.string()),
     normalizedFieldsJson: v.optional(v.string()),
+    sourceOccurrenceKey: v.optional(v.string()),
     promotionTier: v.optional(v.union(v.literal("featured"), v.literal("promoted"))),
     promotionStart: v.optional(v.string()),
     promotionEnd: v.optional(v.string()),
@@ -84,6 +85,7 @@ export default defineSchema({
     .index("by_instagramPostId", ["instagramPostId"])
     .index("by_instagramPostUrl", ["instagramPostUrl"])
     .index("by_normalizedInstagramPostUrl", ["normalizedInstagramPostUrl"])
+    .index("by_sourceOccurrenceKey", ["sourceOccurrenceKey"])
     .index("by_venueId", ["venueId"])
     .index("by_venueId_status_date", ["venueId", "status", "date"]),
   venues: defineTable({

@@ -945,16 +945,35 @@ export const createEvent = mutation({
     sourcePostedAt: v.optional(v.string()),
     rawExtractionJson: v.optional(v.string()),
     normalizedFieldsJson: v.optional(v.string()),
+    sourceOccurrenceKey: v.optional(v.string()),
     promotionTier: v.optional(promotionTier),
     promotionStart: v.optional(v.string()),
     promotionEnd: v.optional(v.string()),
     promotionPriority: v.optional(v.number()),
     status: v.optional(eventStatus),
+    returnCreateDisposition: v.optional(v.boolean()),
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { actor, kind } = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const { serviceSecret: _serviceSecret, ...eventArgs } = args;
+    const {
+      serviceSecret: _serviceSecret,
+      returnCreateDisposition,
+      ...eventArgs
+    } = args;
+    if (eventArgs.sourceOccurrenceKey) {
+      const existingOccurrence = await ctx.db
+        .query("events")
+        .withIndex("by_sourceOccurrenceKey", (q) =>
+          q.eq("sourceOccurrenceKey", eventArgs.sourceOccurrenceKey),
+        )
+        .unique();
+      if (existingOccurrence) {
+        return returnCreateDisposition
+          ? { eventId: existingOccurrence._id, created: false }
+          : existingOccurrence._id;
+      }
+    }
     const venueFields = await resolveVenueDenormalizedFields(ctx, eventArgs.venue);
     if (kind === "service") {
       if (eventArgs.status === "approved" && !venueFields.venueInstagramHandle) {
@@ -994,7 +1013,9 @@ export const createEvent = mutation({
       patch: normalizedEventArgs,
     });
 
-    return eventId;
+    return returnCreateDisposition
+      ? { eventId, created: true }
+      : eventId;
   },
 });
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import {
@@ -335,6 +336,7 @@ type PreparedEvent = {
   sourcePostedAt?: string;
   rawExtractionJson?: string;
   normalizedFieldsJson?: string;
+  sourceOccurrenceKey?: string;
   status: EventStatus;
 };
 
@@ -423,6 +425,7 @@ type ExistingEventRecord = {
   sourcePostedAt?: string;
   rawExtractionJson?: string;
   normalizedFieldsJson?: string;
+  sourceOccurrenceKey?: string;
   status: EventStatus;
   reviewedAt?: number;
   reviewedBy?: string;
@@ -5644,7 +5647,10 @@ function hasIncompleteMultiEventSourceSet(matches: ExistingSourceMatch[]): boole
         readJsonNumber(normalizedFields, "multiEventSplitCount") ??
         2,
     );
-    const occurrenceKey = getSourceOccurrenceProvenanceKey(normalizedFields);
+    const occurrenceKey =
+      normalizeString(match.existingEvent.sourceOccurrenceKey) ||
+      readJsonString(normalizedFields, "sourceOccurrenceKey") ||
+      getSourceOccurrenceProvenanceKey(normalizedFields);
     if (occurrenceKey) {
       persistedOccurrenceKeys.add(occurrenceKey);
     }
@@ -5656,7 +5662,31 @@ function hasIncompleteMultiEventSourceSet(matches: ExistingSourceMatch[]): boole
   );
 }
 
-function bindSourceOccurrenceExpectedCount(
+function buildSourceOccurrenceKey(
+  post: InstagramScrapedPost,
+  event: PreparedEvent,
+  normalizedFields: Record<string, unknown>,
+): string {
+  const sourceIdentity =
+    extractShortcodeFromPostUrl(post.instagramPostUrl) ||
+    normalizeString(post.postId) ||
+    normalizeString(post.instagramPostUrl).toLowerCase();
+  const provenanceKey = getSourceOccurrenceProvenanceKey(normalizedFields);
+  const comparableTime = extractComparableTimeParts(event.time).join(",");
+  const splitIndex = readJsonNumber(normalizedFields, "multiEventSplitIndex");
+  const occurrenceIdentity = isMultiEventNormalizedFields(normalizedFields)
+    ? `${event.date}|row:${provenanceKey ?? "missing"}|time:${
+        comparableTime || normalizeString(event.time).toLowerCase() || "unknown"
+      }|fallback-index:${provenanceKey ? "unused" : (splitIndex ?? "unknown")}`
+    : `${event.date}|single`;
+  const digest = createHash("sha256")
+    .update(`instagram-occurrence-v1\u0000${sourceIdentity}\u0000${occurrenceIdentity}`)
+    .digest("hex");
+  return `instagram-occurrence-v1:${digest}`;
+}
+
+function bindSourceOccurrenceMetadata(
+  post: InstagramScrapedPost,
   preparedResults: PrepareEventResult[],
 ): PrepareEventResult[] {
   const persistableOccurrenceCount = preparedResults.filter(
@@ -5667,22 +5697,28 @@ function bindSourceOccurrenceExpectedCount(
   }
 
   return preparedResults.map((prepared) => {
-    if (
-      prepared.kind !== "ok" ||
-      !isMultiEventNormalizedFields(prepared.normalizedFields)
-    ) {
+    if (prepared.kind !== "ok") {
       return prepared;
     }
 
+    const sourceOccurrenceKey = buildSourceOccurrenceKey(
+      post,
+      prepared.event,
+      prepared.normalizedFields,
+    );
     const normalizedFields = {
       ...prepared.normalizedFields,
-      sourceOccurrenceExpectedCount: persistableOccurrenceCount,
+      ...(isMultiEventNormalizedFields(prepared.normalizedFields)
+        ? { sourceOccurrenceExpectedCount: persistableOccurrenceCount }
+        : {}),
+      sourceOccurrenceKey,
     };
     return {
       ...prepared,
       normalizedFields,
       event: {
         ...prepared.event,
+        sourceOccurrenceKey,
         normalizedFieldsJson: JSON.stringify(normalizedFields),
       },
     };
@@ -6044,7 +6080,7 @@ function getSemanticDuplicateMatchScore(
   if (
     hasReliableEventTime(existing) &&
     hasReliableEventTime(next) &&
-    normalizeString(existing.time) !== normalizeString(next.time)
+    !areTimesCompatible(existing.time, next.time)
   ) {
     return -1;
   }
@@ -6646,7 +6682,7 @@ function hasCompatibleSourceOccurrenceIdentity(
   if (
     existingHasReliableTime &&
     nextHasReliableTime &&
-    normalizeString(existing.time) !== normalizeString(next.time)
+    !areTimesCompatible(existing.time, next.time)
   ) {
     return false;
   }
@@ -6660,7 +6696,7 @@ function hasCompatibleSourceOccurrenceIdentity(
   return (
     existingHasReliableTime &&
     nextHasReliableTime &&
-    normalizeString(existing.time) === normalizeString(next.time)
+    areTimesCompatible(existing.time, next.time)
   );
 }
 
@@ -6672,6 +6708,25 @@ function findBestExistingMatchForPreparedEvent(
   const sourceIdentityMatches = existingMatches.filter(
     (existing) => existing.matchedBy !== "same_date_semantic",
   );
+  const sourceOccurrenceMatch = sourceIdentityMatches.find((existing) => {
+    const existingNormalizedFields = parseJsonRecord(
+      existing.existingEvent.normalizedFieldsJson,
+    );
+    return (
+      normalizeString(existing.existingEvent.date) === nextEvent.date &&
+      (isMultiEventNormalizedFields(existingNormalizedFields) ||
+        isMultiEventNormalizedFields(nextNormalizedFields)) &&
+      hasCompatibleSourceOccurrenceIdentity(
+        existing.existingEvent,
+        nextEvent,
+        nextNormalizedFields,
+      )
+    );
+  });
+  if (sourceOccurrenceMatch) {
+    return sourceOccurrenceMatch;
+  }
+
   const titleKey = normalizeTitleKey(nextEvent.title);
   const exactMatch = sourceIdentityMatches.find(
     (existing) =>
@@ -7459,6 +7514,8 @@ async function processIngestionPost(
     return;
   }
 
+  const recoveringIncompleteMultiEventSourceSet =
+    hasIncompleteMultiEventSourceSet(sourceIdentityMatches);
   const sourceDuplicateSkipDecision = getPreExtractionSourceDuplicateSkipDecision(
     sourceIdentityMatches,
     post,
@@ -7614,7 +7671,7 @@ async function processIngestionPost(
       venueNameOverridesByHandle,
       configuredVenueNamesByHandle,
     );
-    preparedResults = bindSourceOccurrenceExpectedCount(preparedResults);
+    preparedResults = bindSourceOccurrenceMetadata(post, preparedResults);
   } catch (error) {
     summary.failedExtractions += 1;
     summary.failed_extractions += 1;
@@ -7730,6 +7787,34 @@ async function processIngestionPost(
     );
 
     if (existingMatch) {
+      const preservesExistingSiblingDuringRecovery =
+        recoveringIncompleteMultiEventSourceSet &&
+        existingMatch.matchedBy !== "same_date_semantic" &&
+        normalizeString(existingMatch.existingEvent.date) === prepared.event.date &&
+        hasCompatibleSourceOccurrenceIdentity(
+          existingMatch.existingEvent,
+          prepared.event,
+          prepared.normalizedFields,
+        );
+      if (preservesExistingSiblingDuringRecovery) {
+        if (durableMediaEligible) {
+          hasDurableMediaAttachmentTarget = true;
+        }
+        summary.skippedDuplicates += 1;
+        summary.skipped_duplicates += 1;
+        summary.skipped_duplicates_clean += 1;
+        logInfo("duplicate_incomplete_source_sibling_preserved", {
+          ...postContext,
+          extractionMode,
+          selectedImageUrl,
+          matchedBy: existingMatch.matchedBy,
+          matchedValue: existingMatch.matchedValue,
+          existingEventId: existingMatch.existingEvent._id,
+          normalizedFields: prepared.normalizedFields,
+        });
+        continue;
+      }
+
       const quality = isLowQualityExistingEvent(existingMatch.existingEvent, post.postedAt);
       const hasMaterialChange = hasMaterialEventChange(
         existingMatch.existingEvent,
@@ -7845,15 +7930,42 @@ async function processIngestionPost(
     }
 
     try {
-      const insertedId = (await client.mutation(
+      const createResult = (await client.mutation(
         createEventMutation,
         {
           ...prepared.event,
+          returnCreateDisposition: true,
           serviceSecret,
         },
-      )) as string;
+      )) as string | { eventId: string; created: boolean };
+      const insertedId =
+        typeof createResult === "string" ? createResult : createResult.eventId;
+      const wasCreated =
+        typeof createResult === "string" ? true : createResult.created;
       if (durableMediaEligible) {
         hasDurableMediaAttachmentTarget = true;
+      }
+      if (!wasCreated) {
+        summary.skippedDuplicates += 1;
+        summary.skipped_duplicates += 1;
+        summary.skipped_duplicates_clean += 1;
+        existingMatches.push({
+          existingEvent: {
+            _id: insertedId,
+            ...prepared.event,
+          },
+          matchedBy: "post_url",
+          matchedValue: prepared.event.instagramPostUrl,
+        });
+        logInfo("duplicate_atomic_source_occurrence_skip", {
+          ...postContext,
+          extractionMode,
+          selectedImageUrl,
+          existingEventId: insertedId,
+          sourceOccurrenceKey: prepared.event.sourceOccurrenceKey,
+          normalizedFields: prepared.normalizedFields,
+        });
+        continue;
       }
       summary.insertedEvents += 1;
       summary.inserted_events += 1;
