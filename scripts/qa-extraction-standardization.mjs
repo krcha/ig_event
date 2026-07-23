@@ -2526,6 +2526,227 @@ function runSourceGroundingAdversarialQa() {
   );
   assert.equal(
     evaluate({
+      independentTextEvidence: `📅 ${firstDdmm} | 🕘 20.30\n🎬 SAUNDTREK ZA PREVRAT (Soundtrack to a Coup d'Etat) | 150’`,
+      title: "SAUNDTREK ZA PREVRAT (Soundtrack to a Coup d'Etat)",
+      artists: [],
+      time: "20:30",
+      splitSource: "caption_schedule",
+    }).verified,
+    true,
+    "A multiline schedule row may bind one explicit date/time header to its single immediately following event line.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `📅 ${firstDdmm} | 🕘 20.30\n🎬 ZEMLJA (Zemlja) | 10’\n🎬 DŽOJMEJKERS (Joymakers) | 46’`,
+      title: "ZEMLJA (Zemlja)",
+      artists: [],
+      time: "20:30",
+      splitSource: "caption_schedule",
+    }).verified,
+    false,
+    "One shared date/time header must not auto-publish one arbitrary title from a multi-title block.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `📅 ${firstDdmm} | 🕘 20.30\nNENAJAVLJENI FILM | 70’\n🎬 SAUNDTREK ZA PREVRAT (Soundtrack to a Coup d'Etat) | 150’`,
+      title: "SAUNDTREK ZA PREVRAT (Soundtrack to a Coup d'Etat)",
+      artists: [],
+      time: "20:30",
+      splitSource: "caption_schedule",
+    }).verified,
+    false,
+    "A dated block with any extra unmarked row must remain ambiguous even when exactly one later row has an event marker.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `📅 ${firstDdmm} | 🕘 20.30 | 🎬 EVENT A\n🎬 EVENT B`,
+      title: "EVENT B",
+      artists: [],
+      time: "20:30",
+      splitSource: "caption_schedule",
+    }).verified,
+    false,
+    "A date line that already contains an event identity cannot serve as a pure header for another row.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `📅 ${firstDdmm} | 🕘 20.30 | 1984\n🎬 EVENT B`,
+      title: "EVENT B",
+      artists: [],
+      time: "20:30",
+      splitSource: "caption_schedule",
+    }).verified,
+    false,
+    "Numeric title content cannot be hidden inside a reusable date header.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `📅 ${firstDdmm} | 🕘 20.30\n🎬 EVENT A | 🎬 EVENT B`,
+      title: "EVENT B",
+      artists: [],
+      time: "20:30",
+      splitSource: "caption_schedule",
+    }).verified,
+    false,
+    "A single following row with multiple event markers remains ambiguous.",
+  );
+  const markedAndUnmarkedCaption = `📅 ${firstDdmm} | 🕘 20.30\n🎬 EVENT A | EVENT B`;
+  assert.equal(
+    evaluate({
+      independentTextEvidence: markedAndUnmarkedCaption,
+      title: "EVENT A",
+      artists: [],
+      time: "20:30",
+      splitSource: "caption_schedule",
+    }).verified,
+    false,
+    "A single following row with one marked and one unmarked event identity remains ambiguous.",
+  );
+  const markedAndUnmarkedPrepared = assertSingleOkPreparedEvent(
+    prepareEventsForInsert(
+      makeInstagramPost({
+        caption: markedAndUnmarkedCaption,
+        postType: "image",
+        username: "qa_handle",
+      }),
+      makeExtractedEvent({
+        title: "EVENT A",
+        date: firstDate,
+        time: "20:30",
+        venue: "QA Venue",
+        artists: [],
+        category: "culture",
+        description: "EVENT A.",
+        source_caption: markedAndUnmarkedCaption,
+      }),
+      "https://cdn.example.com/ambiguous-event-row.jpg",
+      { qa_handle: "QA Venue" },
+      {},
+      { qa_handle: "QA Venue" },
+    ),
+  );
+  const markedAndUnmarkedFields = readPreparedNormalizedFields(markedAndUnmarkedPrepared);
+  assert.equal(
+    markedAndUnmarkedPrepared.event.status,
+    "pending",
+    "A marked-plus-unmarked event row must fail closed through prepareEventsForInsert.",
+  );
+  assert.equal(markedAndUnmarkedFields.sourceGroundingVerified, false);
+  assert.ok(
+    markedAndUnmarkedFields.moderationPendingReasons.includes("unverified_core_event_source"),
+  );
+
+  const compactAndNumericAmbiguousRows = [
+    "🎬 EVENT A|EVENT B",
+    "🎬 EVENT A |EVENT B",
+    "🎬 EVENT A| EVENT B",
+    "🎬 EVENT A/EVENT B",
+    "🎬 EVENT A /EVENT B",
+    "🎬 EVENT A/ EVENT B",
+    "🎬 EVENT A | 42",
+    "🎬 EVENT A/42",
+  ];
+  for (const [variantIndex, eventRow] of compactAndNumericAmbiguousRows.entries()) {
+    const ambiguousCaption = `📅 ${firstDdmm} | 🕘 20.30\n${eventRow}`;
+    assert.equal(
+      evaluate({
+        independentTextEvidence: ambiguousCaption,
+        title: "EVENT A",
+        artists: [],
+        time: "20:30",
+        splitSource: "caption_schedule",
+      }).verified,
+      false,
+      `Compact or numeric delimited event row must remain ambiguous: ${eventRow}`,
+    );
+
+    const preparedVariants = prepareEventsForInsert(
+      makeInstagramPost({
+        caption: ambiguousCaption,
+        postId: `qa-ambiguous-delimiter-${variantIndex}`,
+        postType: "image",
+        username: "qa_handle",
+      }),
+      makeExtractedEvent({
+        title: "EVENT A",
+        date: firstDate,
+        time: "20:30",
+        venue: "QA Venue",
+        artists: [],
+        category: "culture",
+        description: "EVENT A.",
+        source_caption: ambiguousCaption,
+      }),
+      `https://cdn.example.com/ambiguous-delimiter-${variantIndex}.jpg`,
+      { qa_handle: "QA Venue" },
+      {},
+      { qa_handle: "QA Venue" },
+    );
+    const preparedOkVariants = preparedVariants.filter((result) => result.kind === "ok");
+    assert.ok(
+      preparedOkVariants.length >= 1,
+      `Ambiguous delimiter fixture must reach moderation: ${eventRow}`,
+    );
+    for (const preparedVariant of preparedOkVariants) {
+      assert.equal(
+        preparedVariant.event.status,
+        "pending",
+        `Ambiguous delimiter fixture must fail closed through prepareEventsForInsert: ${eventRow}`,
+      );
+      assert.ok(
+        readPreparedNormalizedFields(preparedVariant).moderationPendingReasons.includes(
+          "unverified_core_event_source",
+        ),
+      );
+    }
+  }
+
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm} DJ ALICE\nStarts at 22:00\nDJ BOB\nStarts at 23:00`,
+      title: "ALICE",
+      artists: ["ALICE"],
+      time: "23:00",
+      splitSource: null,
+    }).verified,
+    false,
+    "Separated start rows must never be Cartesian-joined to another billed artist.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `U subotu ${firstDdmm}. ponovo kao na moru!\nSlušamo @bendarhivatori`,
+      title: "Bendarhivatori",
+      artists: ["Bendarhivatori"],
+      time: "",
+      splitSource: null,
+    }).verified,
+    false,
+    "Listening-language alone must remain moderator evidence rather than live-performer authority.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `U subotu ${firstDdmm}. ponovo kao na moru!\nSlušamo #bendarhivatori`,
+      title: "Bendarhivatori",
+      artists: ["Bendarhivatori"],
+      time: "",
+      splitSource: null,
+    }).verified,
+    false,
+    "A hashtag after a local billing phrase must not establish performer identity.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `ALICE | ${firstDdmm}.\nPlaylist curated by @alice`,
+      title: "ALICE",
+      artists: ["ALICE"],
+      time: "",
+      splitSource: null,
+    }).verified,
+    false,
+    "A playlist curator mention must not be treated as a billed live performer.",
+  );
+  assert.equal(
+    evaluate({
       independentTextEvidence: `${firstDdmm}. #verajamarko`,
       title: "Verajamarko",
       artists: ["Verajamarko"],
@@ -2553,8 +2774,8 @@ function runSourceGroundingAdversarialQa() {
       time: "23:00",
       splitSource: null,
     }).verified,
-    true,
-    "A single-date caption may ground an exact title/date/time split across harmless layout delimiters.",
+    false,
+    "Separated billing evidence must remain pending without a uniquely attributable row binding.",
   );
   assert.equal(
     evaluate({
@@ -2564,8 +2785,8 @@ function runSourceGroundingAdversarialQa() {
       time: "21:00",
       splitSource: null,
     }).verified,
-    true,
-    "A single dated film caption may retain a separately labeled door-opening time.",
+    false,
+    "A quoted title on a separate line cannot inherit a dated start time without strict structural binding.",
   );
   assert.equal(
     evaluate({
@@ -2685,8 +2906,8 @@ function runSourceGroundingAdversarialQa() {
       time: "21:00",
       splitSource: null,
     }).verified,
-    true,
-    "An explicitly labeled start after a door time must remain verifiable.",
+    false,
+    "A separated start sentence must remain pending without strict continuation binding.",
   );
   const earlyDateGrounding = {
     independentTextEvidence: "08.07. DJ ALICE 22h",
@@ -2724,8 +2945,8 @@ function runSourceGroundingAdversarialQa() {
       postedAt: "2026-07-01T12:00:00.000Z",
       splitSource: null,
     }).verified,
-    true,
-    "Early-month single-event layouts must remain grounded under day-month parsing.",
+    false,
+    "Early-month layouts still require billing evidence in the same event row.",
   );
   const prepareSingleGroundingCase = ({
     caption,
@@ -3283,7 +3504,7 @@ function runMaintenancePromotionGroundingQa() {
     sourceGroundingVerified: false,
   };
   const completeGrounding = {
-    sourceGroundingVersion: 3,
+    sourceGroundingVersion: 4,
     sourceGroundingEvidence: "instagram_caption",
     sourceGroundingSourceKind: "caption",
     sourceGroundingSourceCaption: `${ddmmForIsoDate(isoDateDaysFromNow(7))} ALICE`,
@@ -4710,7 +4931,7 @@ function runAtomicDuplicateStatusPreconditionQa() {
     sourceGroundingInstagramPostId: approvalPublicFields.instagramPostId,
     sourceGroundingInstagramPostUrl: approvalPublicFields.instagramPostUrl,
     sourceGroundingInstagramHandle: "qa_venue",
-    sourceGroundingVersion: 3,
+    sourceGroundingVersion: 4,
     sourceGroundingEvidence: "instagram_caption",
     approvalTitleSensible: true,
     approvalCaptionSourceCoherent: true,
@@ -5028,7 +5249,7 @@ async function runServiceApprovalMutationBoundaryQa() {
     sourceGroundingInstagramPostId: instagramPostId,
     sourceGroundingInstagramPostUrl: instagramPostUrl,
     sourceGroundingInstagramHandle: "qa_venue",
-    sourceGroundingVersion: 3,
+    sourceGroundingVersion: 4,
     sourceGroundingEvidence: "instagram_caption",
     approvalTitleSensible: true,
     approvalCaptionSourceCoherent: true,
@@ -5070,6 +5291,8 @@ async function runServiceApprovalMutationBoundaryQa() {
   };
   let inserted = false;
   let patched = false;
+  let lastPatch = null;
+  let lastAudit = null;
   let sameDateEvents = [];
   let existingVenue = groundedPublicFields.venue;
   let existingVenueInstagramHandle = "qa_venue";
@@ -5088,12 +5311,17 @@ async function runServiceApprovalMutationBoundaryQa() {
       venueInstagramHandle: existingVenueInstagramHandle,
       status: "pending",
     }),
-    insert: async () => {
+    insert: async (table, value) => {
+      if (table === "eventAuditLog") {
+        lastAudit = value;
+        return "qa-audit-row";
+      }
       inserted = true;
       return "qa-created-event";
     },
-    patch: async () => {
+    patch: async (_id, patch) => {
       patched = true;
+      lastPatch = patch;
     },
     query: (table) =>
       table === "venues"
@@ -5159,6 +5387,41 @@ async function runServiceApprovalMutationBoundaryQa() {
       "The real update mutation must reject a mismatched merged payload.",
     );
     assert.equal(patched, false);
+
+    const ticketClearDecision = buildDuplicateUpdatePatch(
+      {
+        ...groundedPublicFields,
+        status: "pending",
+        imageUrl: undefined,
+        ticketPrice: "2500 RSD",
+      },
+      {
+        ...groundedPublicFields,
+        status: "pending",
+        imageUrl: undefined,
+        ticketPrice: undefined,
+      },
+    );
+    assert.equal(ticketClearDecision.patch.clearTicketPrice, true);
+    assert.equal(Object.hasOwn(ticketClearDecision.patch, "ticketPrice"), false);
+
+    lastPatch = null;
+    lastAudit = null;
+    await updateEvent._handler(ctx, {
+      id: "qa-existing-event",
+      expectedStatus: "pending",
+      serviceSecret,
+      patch: { clearTicketPrice: ticketClearDecision.patch.clearTicketPrice },
+    });
+    assert.equal(patched, true);
+    assert.equal(lastPatch.ticketPrice, undefined);
+    assert.equal(
+      Object.hasOwn(lastPatch, "clearTicketPrice"),
+      false,
+      "The transport-only clear flag must never be written to the event document.",
+    );
+    assert.equal(JSON.parse(lastAudit.patchJson).clearTicketPrice, true);
+    patched = false;
 
     const sourceSwapCases = [
       {
@@ -5529,7 +5792,7 @@ async function runTransactionalSourceGroundingReprocessQa() {
       sourceGroundingInstagramPostId: postId,
       sourceGroundingInstagramPostUrl: instagramPostUrl,
       sourceGroundingInstagramHandle: handle,
-      sourceGroundingVersion: 3,
+      sourceGroundingVersion: 4,
       sourceGroundingEvidence: "instagram_caption",
       approvalTitleSensible: true,
       approvalCaptionSourceCoherent: true,
@@ -5746,6 +6009,27 @@ async function runTransactionalSourceGroundingReprocessQa() {
       /changed during reprocessing|updatedAt/iu,
     );
     assert.deepEqual(stale.snapshot(), staleBefore);
+
+    const heldB = {
+      ...qaB,
+      event: {
+        ...qaB.event,
+        normalizedFieldsJson: JSON.stringify({
+          sourceGroundingVerified: false,
+          moderationPendingReasons: [
+            "caption_source_event_mismatch",
+            "manual_safety_hold",
+          ],
+        }),
+      },
+    };
+    const unrelatedHold = createHarness([qaA, heldB]);
+    const unrelatedHoldBefore = unrelatedHold.snapshot();
+    await assert.rejects(
+      () => unrelatedHold.run(argsFor([qaA, heldB])),
+      /unrelated moderation holds block source-grounding reprocessing/iu,
+    );
+    assert.deepEqual(unrelatedHold.snapshot(), unrelatedHoldBefore);
 
     const invalid = createHarness();
     const invalidBefore = invalid.snapshot();
