@@ -2590,6 +2590,51 @@ function runSourceGroundingAdversarialQa() {
     false,
     "A single following row with multiple event markers remains ambiguous.",
   );
+  const markedAndUnmarkedCaption = `📅 ${firstDdmm} | 🕘 20.30\n🎬 EVENT A | EVENT B`;
+  assert.equal(
+    evaluate({
+      independentTextEvidence: markedAndUnmarkedCaption,
+      title: "EVENT A",
+      artists: [],
+      time: "20:30",
+      splitSource: "caption_schedule",
+    }).verified,
+    false,
+    "A single following row with one marked and one unmarked event identity remains ambiguous.",
+  );
+  const markedAndUnmarkedPrepared = assertSingleOkPreparedEvent(
+    prepareEventsForInsert(
+      makeInstagramPost({
+        caption: markedAndUnmarkedCaption,
+        postType: "image",
+        username: "qa_handle",
+      }),
+      makeExtractedEvent({
+        title: "EVENT A",
+        date: firstDate,
+        time: "20:30",
+        venue: "QA Venue",
+        artists: [],
+        category: "culture",
+        description: "EVENT A.",
+        source_caption: markedAndUnmarkedCaption,
+      }),
+      "https://cdn.example.com/ambiguous-event-row.jpg",
+      { qa_handle: "QA Venue" },
+      {},
+      { qa_handle: "QA Venue" },
+    ),
+  );
+  const markedAndUnmarkedFields = readPreparedNormalizedFields(markedAndUnmarkedPrepared);
+  assert.equal(
+    markedAndUnmarkedPrepared.event.status,
+    "pending",
+    "A marked-plus-unmarked event row must fail closed through prepareEventsForInsert.",
+  );
+  assert.equal(markedAndUnmarkedFields.sourceGroundingVerified, false);
+  assert.ok(
+    markedAndUnmarkedFields.moderationPendingReasons.includes("unverified_core_event_source"),
+  );
   assert.equal(
     evaluate({
       independentTextEvidence: `${firstDdmm} DJ ALICE\nStarts at 22:00\nDJ BOB\nStarts at 23:00`,

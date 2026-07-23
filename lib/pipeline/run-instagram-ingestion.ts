@@ -1791,6 +1791,20 @@ function splitSourceLineAtDateAnchors(value: string): string[] {
     .filter(Boolean);
 }
 
+function hasAmbiguousDelimitedEventIdentityClause(value: string): boolean {
+  const clauses = value.split(/\s+(?:\||\/)\s+/u);
+  if (clauses.length <= 1) {
+    return false;
+  }
+
+  const nonIdentityMetadataPattern =
+    /^(?:\d{1,3}\s*(?:['’′]|m|min(?:ute)?s?|minut(?:a|e))?|(?:[01]?\d|2[0-3])[:.][0-5]\d\s*h?|\d{1,2}\+?)$/iu;
+  return clauses.slice(1).some((clause) => {
+    const normalizedClause = normalizeString(clause.replace(/[🎬🎤🎭🎨🖼]/gu, " "));
+    return Boolean(normalizedClause && !nonIdentityMetadataPattern.test(normalizedClause));
+  });
+}
+
 function buildDateHeaderEventRowSegments(value: string | null | undefined): string[] {
   const lines = normalizeString(value).split(/\r?\n/u).map((line) => line.trim());
   const dateAnchorPattern = new RegExp(
@@ -1825,7 +1839,11 @@ function buildDateHeaderEventRowSegments(value: string | null | undefined): stri
     if (blockRows.length === 1) {
       const eventRow = blockRows[0] ?? "";
       const eventMarkerCount = eventRow.match(/[🎬🎤🎭🎨🖼]/gu)?.length ?? 0;
-      if (explicitEventRowPattern.test(eventRow) && eventMarkerCount === 1) {
+      if (
+        explicitEventRowPattern.test(eventRow) &&
+        eventMarkerCount === 1 &&
+        !hasAmbiguousDelimitedEventIdentityClause(eventRow)
+      ) {
         segments.push(`${dateLine} ${eventRow}`);
       }
     }
