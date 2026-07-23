@@ -3445,6 +3445,148 @@ function hasCompetingLocalBillingIdentity(
   });
 }
 
+const SAME_EVENT_ANNOUNCEMENT_PREFIX_TOKENS = new Set([
+  "beogradska",
+  "beogradski",
+  "beogradsko",
+  "britanska",
+  "britanske",
+  "britanski",
+  "concert",
+  "i",
+  "koncert",
+  "star",
+  "the",
+  "zvezda",
+  "zvezde",
+]);
+
+const SAME_EVENT_ANNOUNCEMENT_SUFFIX_TOKENS = new Set([
+  "at",
+  "be",
+  "bice",
+  "due",
+  "friday",
+  "held",
+  "in",
+  "januara",
+  "februara",
+  "marta",
+  "aprila",
+  "maja",
+  "juna",
+  "jula",
+  "avgusta",
+  "septembra",
+  "oktobra",
+  "novembra",
+  "decembra",
+  "monday",
+  "moved",
+  "moves",
+  "na",
+  "nepovoljnih",
+  "odrzan",
+  "odrzana",
+  "odrzano",
+  "odrzace",
+  "originally",
+  "petak",
+  "premesta",
+  "prebacuje",
+  "prostor",
+  "prostoru",
+  "relocated",
+  "rescheduled",
+  "saturday",
+  "scheduled",
+  "se",
+  "seli",
+  "space",
+  "subotu",
+  "sunday",
+  "the",
+  "thursday",
+  "to",
+  "tuesday",
+  "u",
+  "uslova",
+  "venue",
+  "vremenskih",
+  "wednesday",
+  "will",
+  "zakazan",
+  "zakazana",
+  "zakazano",
+  "za",
+]);
+
+function hasOnlySameEventAnnouncementContext(
+  value: string,
+  canonicalIdentities: string[],
+  canonicalVenue: string,
+): boolean {
+  const searchableValue = toSearchableText(value);
+  if (
+    !/\b(?:bice odrzan|moved|moves|odrzace|prebacuje|premesta|relocated|rescheduled|scheduled|seli se|zakazan|zakazana|zakazano)\b/u.test(
+      searchableValue,
+    )
+  ) {
+    return false;
+  }
+
+  const searchableTitle = toSearchableText(canonicalIdentities[0] ?? "");
+  if (!searchableTitle) {
+    return false;
+  }
+  const paddedValue = ` ${searchableValue} `;
+  const paddedTitle = ` ${searchableTitle} `;
+  const titleStart = paddedValue.indexOf(paddedTitle);
+  if (titleStart < 0) {
+    return false;
+  }
+  let prefix = paddedValue.slice(0, titleStart).trim();
+  let suffix = paddedValue.slice(titleStart + paddedTitle.length).trim();
+
+  for (const identity of canonicalIdentities) {
+    const searchableIdentity = toSearchableText(identity);
+    if (!searchableIdentity) {
+      continue;
+    }
+    const pattern = escapeRegExp(searchableIdentity).replace(/\s+/gu, "\\s+");
+    const identityPattern = new RegExp(`\\b${pattern}\\b`, "gu");
+    prefix = prefix.replace(identityPattern, " ");
+    suffix = suffix.replace(identityPattern, " ");
+  }
+
+  const venueTokens = toSearchableText(canonicalVenue).split(/\s+/u).filter(Boolean);
+  const monthPattern = new RegExp(`^(?:${SOURCE_GROUNDING_MONTH_PATTERN})$`, "iu");
+  const tokenIsVenueInflection = (token: string): boolean =>
+    venueTokens.some(
+      (venueToken) =>
+        token === venueToken ||
+        (token.length >= 6 &&
+          venueToken.length >= 6 &&
+          token.slice(0, 6) === venueToken.slice(0, 6)),
+    );
+  const contextIsSupported = (valuePart: string, allowedTokens: Set<string>): boolean =>
+    valuePart
+      .split(/\s+/u)
+      .filter(Boolean)
+      .every(
+        (token) =>
+          /^\d{1,4}(?:h\d{0,2})?$/u.test(token) ||
+          monthPattern.test(token) ||
+          allowedTokens.has(token) ||
+          tokenIsVenueInflection(token),
+      );
+
+  return (
+    contextIsSupported(prefix, SAME_EVENT_ANNOUNCEMENT_PREFIX_TOKENS) &&
+    contextIsSupported(suffix, SAME_EVENT_ANNOUNCEMENT_SUFFIX_TOKENS)
+  );
+}
+
 type RepeatedSingleEventCaptionDisposition = "collapse" | "preserve" | "none";
 
 function classifyRepeatedSingleEventCaptionCandidates(options: {
@@ -3464,6 +3606,7 @@ function classifyRepeatedSingleEventCaptionCandidates(options: {
   const canonicalArtists = normalizeExtractedArtists(
     modelEntry.artists.length > 0 ? modelEntry.artists : options.extracted.artists,
   );
+  const canonicalVenue = normalizeString(options.extracted.venue);
   const canonicalRawDate = normalizeString(modelEntry.date || options.extracted.date);
   if (!canonicalTitle || !canonicalRawDate) {
     return "none";
@@ -3500,30 +3643,45 @@ function classifyRepeatedSingleEventCaptionCandidates(options: {
   ) {
     return "none";
   }
+  const canonicalIdentities = [canonicalTitle, ...canonicalArtists];
   if (
     options.candidates.some((candidate) =>
-      hasCompetingLocalBillingIdentity(candidate.sourceLine, [
-        canonicalTitle,
-        ...canonicalArtists,
-      ]),
+      hasCompetingLocalBillingIdentity(candidate.sourceLine, canonicalIdentities),
+    )
+  ) {
+    return "preserve";
+  }
+  if (
+    options.candidates.some(
+      (candidate) =>
+        !hasOnlySameEventAnnouncementContext(
+          candidate.sourceLine,
+          canonicalIdentities,
+          canonicalVenue,
+        ),
     )
   ) {
     return "preserve";
   }
 
-  const candidateTimes = new Set(
-    options.candidates.map((candidate) => candidate.time).filter(Boolean),
-  );
-  if (candidateTimes.size > 1) {
-    return "none";
+  const candidateTimeValues = options.candidates.map((candidate) => candidate.time);
+  const candidateTimes = new Set(candidateTimeValues.filter(Boolean));
+  if (
+    candidateTimes.size > 1 ||
+    (candidateTimes.size === 1 && candidateTimeValues.some((candidateTime) => !candidateTime))
+  ) {
+    return "preserve";
   }
   const modelTime = sanitizeTimeAgainstDate(
     normalizeString(modelEntry.time || options.extracted.time),
     canonicalRawDate,
   );
-  return !modelTime || candidateTimes.size === 0 || candidateTimes.has(modelTime)
+  if (!modelTime && candidateTimes.size === 0) {
+    return "collapse";
+  }
+  return modelTime && candidateTimeValues.every((candidateTime) => candidateTime === modelTime)
     ? "collapse"
-    : "none";
+    : "preserve";
 }
 
 function extractSplitEventCandidates(

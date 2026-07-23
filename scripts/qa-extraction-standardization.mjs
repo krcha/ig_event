@@ -1528,6 +1528,153 @@ function runHashtagOnlyScheduleIdentityQa() {
     "A repeated same-event announcement must keep the canonical grounded model event.",
   );
 
+  const sharedUmbrellaDistinctEventsCaption = [
+    `${firstDateLabel} Cinema Week presents Film A`,
+    `${firstDateLabel} Cinema Week presents Film B`,
+  ].join("\n");
+  const sharedUmbrellaDistinctEvents = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: sharedUmbrellaDistinctEventsCaption,
+      postType: "image",
+      username: "cinema.week",
+    }),
+    makeExtractedEvent({
+      title: "Cinema Week",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: [],
+      category: "film",
+      description: "Cinema Week at Ložionica.",
+      source_caption: sharedUmbrellaDistinctEventsCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Cinema Week",
+          artists: [],
+          description: "Cinema Week at Ložionica.",
+          source_text: `${firstDateLabel} Cinema Week`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/cinema-week.jpg",
+    { "cinema.week": "Ložionica" },
+    {},
+    { "cinema.week": "Ložionica" },
+  );
+  assert.equal(
+    sharedUmbrellaDistinctEvents.length,
+    2,
+    "Distinct rows that share only a canonical umbrella title must never collapse.",
+  );
+  assert.deepEqual(
+    sharedUmbrellaDistinctEvents.map((result) => {
+      assert.equal(result.kind, "ok");
+      return readPreparedNormalizedFields(result).splitSourceLine;
+    }).sort(),
+    sharedUmbrellaDistinctEventsCaption.split("\n").sort(),
+    "Every shared-umbrella source row must survive deterministic reconciliation.",
+  );
+
+  const announcementCueDistinctTitlesCaption = [
+    `${firstDateLabel} Cinema Week scheduled Star at Ložionica`,
+    `${firstDateLabel} Cinema Week scheduled Concert at Ložionica`,
+  ].join("\n");
+  const announcementCueDistinctTitles = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: announcementCueDistinctTitlesCaption,
+      postType: "image",
+      username: "cinema.week",
+    }),
+    makeExtractedEvent({
+      title: "Cinema Week",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: [],
+      category: "film",
+      description: "Cinema Week at Ložionica.",
+      source_caption: announcementCueDistinctTitlesCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Cinema Week",
+          artists: [],
+          description: "Cinema Week at Ložionica.",
+          source_text: `${firstDateLabel} Cinema Week`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/cinema-week-announcement-titles.jpg",
+    { "cinema.week": "Ložionica" },
+    {},
+    { "cinema.week": "Ložionica" },
+  );
+  assert.equal(
+    announcementCueDistinctTitles.length,
+    2,
+    "An announcement verb must not hide different trailing event titles.",
+  );
+  assert.deepEqual(
+    announcementCueDistinctTitles.map((result) => {
+      assert.equal(result.kind, "ok");
+      return readPreparedNormalizedFields(result).splitSourceLine;
+    }).sort(),
+    announcementCueDistinctTitlesCaption.split("\n").sort(),
+    "Identity-like suffixes must survive even when every row uses a reschedule cue.",
+  );
+
+  const partialTimeRepeatedIdentityCaption = [
+    `${firstDateLabel} Cinema Week moved to Ložionica at 19H`,
+    `${firstDateLabel} Cinema Week moved to Ložionica`,
+  ].join("\n");
+  const partialTimeRepeatedIdentity = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: partialTimeRepeatedIdentityCaption,
+      postType: "image",
+      username: "cinema.week",
+    }),
+    makeExtractedEvent({
+      title: "Cinema Week",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: [],
+      category: "film",
+      description: "Cinema Week at Ložionica.",
+      source_caption: partialTimeRepeatedIdentityCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Cinema Week",
+          artists: [],
+          description: "Cinema Week at Ložionica.",
+          source_text: `${firstDateLabel} Cinema Week`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/cinema-week-time.jpg",
+    { "cinema.week": "Ložionica" },
+    {},
+    { "cinema.week": "Ložionica" },
+  );
+  assert.equal(
+    partialTimeRepeatedIdentity.length,
+    2,
+    "One explicit and one missing candidate time must remain separate rather than inheriting one canonical event.",
+  );
+  assert.deepEqual(
+    partialTimeRepeatedIdentity.map((result) => {
+      assert.equal(result.kind, "ok");
+      return readPreparedNormalizedFields(result).splitSourceLine;
+    }).sort(),
+    partialTimeRepeatedIdentityCaption.split("\n").sort(),
+    "Partial candidate-time coverage must preserve every source row.",
+  );
+
   const competingSupportActsCaption = [
     `Koncert Joss Stone ${repeatedSingleEventDateText} uz Alice.`,
     `Koncert Joss Stone ${repeatedSingleEventDateText} uz Bob.`,
