@@ -356,11 +356,11 @@ async function loadApprovedDateCohort(
   return cohort.length > PUBLIC_DUPLICATE_DATE_COHORT_LIMIT ? null : cohort;
 }
 
-async function getPublicDuplicateEventIds(
+export async function getPublicDuplicateEventIds(
   ctx: QueryCtx,
   page: Doc<"events">[],
 ): Promise<Set<Id<"events">>> {
-  if (page.length < 2) {
+  if (page.length === 0) {
     return new Set();
   }
 

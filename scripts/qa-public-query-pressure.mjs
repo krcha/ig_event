@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 
+import { getPublicDuplicateEventIds } from "../convex/events.ts";
 import { projectPublicEvent } from "../convex/publicEventProjection.ts";
 import { buildNormalizedEventVenueIdentity } from "../lib/events/event-venue-identity.ts";
 
@@ -200,6 +201,80 @@ assert.doesNotMatch(
   publicEventsSource,
   /normalizedFieldsJson:\s*null|filterDuplicatePublicEvents|buildApprovedEventAutoCleanupGroups/,
   "Projected events must not attempt duplicate classification after private inputs are removed.",
+);
+
+const singletonDate = "2030-07-25";
+const singletonNormalizedFieldsJson = JSON.stringify({
+  normalizedDate: singletonDate,
+  normalizedVenue: "KC Grad",
+  rawVenue: "Kulturni centar Grad",
+  sourceCaptionFromModel: "The Weight of Light by Irena Ivanovic at KC Grad, 19:00.",
+  titleUsedFallback: false,
+});
+const singletonPrimary = {
+  _id: "event-singleton-primary",
+  _creationTime: 2,
+  artists: ["Irena Ivanovic"],
+  createdAt: 2,
+  date: singletonDate,
+  description: "Opening of The Weight of Light by Irena Ivanovic.",
+  eventType: "exhibition",
+  imageUrl: "https://example.com/primary.jpg",
+  instagramPostId: "singleton-primary-post",
+  instagramPostUrl: "https://www.instagram.com/p/singleton-primary/",
+  normalizedFieldsJson: singletonNormalizedFieldsJson,
+  sourceCaption: "The Weight of Light by Irena Ivanovic at KC Grad, 19:00.",
+  status: "approved",
+  time: "19:00",
+  title: "The Weight of Light",
+  updatedAt: 2,
+  venue: "KC Grad",
+};
+const singletonDuplicate = {
+  ...singletonPrimary,
+  _id: "event-singleton-duplicate",
+  _creationTime: 1,
+  createdAt: 1,
+  description: undefined,
+  imageUrl: undefined,
+  instagramPostId: "singleton-duplicate-post",
+  instagramPostUrl: "https://www.instagram.com/p/singleton-duplicate/",
+  updatedAt: 1,
+};
+let singletonCohortReads = 0;
+const singletonQueryBuilder = {
+  eq() {
+    return this;
+  },
+};
+const singletonCtx = {
+  db: {
+    query(table) {
+      assert.equal(table, "events");
+      return {
+        withIndex(index, configure) {
+          assert.equal(index, "by_status_date");
+          configure(singletonQueryBuilder);
+          return {
+            async take(limit) {
+              singletonCohortReads += 1;
+              assert.equal(limit, 26);
+              return [singletonPrimary, singletonDuplicate];
+            },
+          };
+        },
+      };
+    },
+  },
+};
+const singletonHiddenIds = await getPublicDuplicateEventIds(singletonCtx, [
+  singletonDuplicate,
+]);
+assert.equal(singletonCohortReads, 1, "A singleton raw page must load its same-date cohort.");
+assert.equal(
+  singletonHiddenIds.has(singletonDuplicate._id),
+  true,
+  "A duplicate on a singleton final page must remain suppressed before projection.",
 );
 
 assert.ok(existsSync(projectionPath), "Public event responses must use an explicit projection module.");
