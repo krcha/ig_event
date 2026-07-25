@@ -3,7 +3,6 @@ import Link from "next/link";
 import { cache } from "react";
 import {
   ArrowRight,
-  CalendarDays,
   ChevronLeft,
   ChevronRight,
   Heart,
@@ -39,7 +38,6 @@ type VenuesSearchParams = {
   category?: string | string[];
   page?: string | string[];
   q?: string | string[];
-  upcoming?: string | string[];
 };
 
 type VenuesPageProps = {
@@ -53,8 +51,7 @@ export async function generateMetadata({ searchParams }: VenuesPageProps): Promi
   );
   const hasFilters = Boolean(
     getSingleValue(resolvedSearchParams?.category)?.trim() ||
-      getSingleValue(resolvedSearchParams?.q)?.trim() ||
-      getSingleValue(resolvedSearchParams?.upcoming),
+      getSingleValue(resolvedSearchParams?.q)?.trim(),
   );
   const { venues } = await loadVenueDirectory();
   const currentPage = hasFilters
@@ -157,14 +154,10 @@ function filterVenues(
   options: {
     category?: string;
     query?: string;
-    upcomingOnly: boolean;
   },
 ): PublicVenueDirectoryItem[] {
   return venues.filter((venue) => {
     if (options.category && venue.category !== options.category) {
-      return false;
-    }
-    if (options.upcomingOnly && venue.upcomingEventCount < 1) {
       return false;
     }
     return venueMatchesQuery(venue, options.query ?? "");
@@ -210,14 +203,7 @@ function VenueDirectoryCard({
         </p>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-2">
-        <div className="rounded-[0.85rem] border border-border/70 bg-card/70 px-3 py-2">
-          <p className="section-kicker">Upcoming</p>
-          <p className="mt-1 flex items-center gap-2 text-sm font-semibold text-foreground">
-            <CalendarDays className="h-4 w-4 text-primary" />
-            {venue.upcomingEventCount}
-          </p>
-        </div>
+      <div className="mt-4">
         <div className="rounded-[0.85rem] border border-border/70 bg-card/70 px-3 py-2">
           <p className="section-kicker">Followers</p>
           <p className="mt-1 flex items-center gap-2 text-sm font-semibold text-foreground">
@@ -248,14 +234,12 @@ export default async function VenuesPage({ searchParams }: VenuesPageProps) {
 
   const selectedCategory = getSingleValue(resolvedSearchParams?.category)?.trim();
   const searchQuery = getSingleValue(resolvedSearchParams?.q)?.trim() ?? "";
-  const upcomingOnly = getSingleValue(resolvedSearchParams?.upcoming) === "1";
   const categories = Array.from(
     new Set(venues.map((venue) => venue.category).filter((category): category is string => Boolean(category))),
   ).sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
   const filteredVenues = filterVenues(venues, {
     category: selectedCategory,
     query: searchQuery,
-    upcomingOnly,
   });
   const requestedPage = normalizePublicVenueDirectoryPage(
     getSingleValue(resolvedSearchParams?.page),
@@ -267,21 +251,17 @@ export default async function VenuesPage({ searchParams }: VenuesPageProps) {
     pageItems: visibleVenues,
     totalPages,
   } = paginatePublicVenueDirectory(filteredVenues, requestedPage);
-  const activeFilterCount = [selectedCategory, searchQuery, upcomingOnly ? "1" : ""].filter(
-    Boolean,
-  ).length;
+  const activeFilterCount = [selectedCategory, searchQuery].filter(Boolean).length;
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
   const previousPageHref = buildPublicVenueDirectoryPageHref({
     category: selectedCategory,
     page: currentPage > 2 ? String(currentPage - 1) : undefined,
     q: searchQuery || undefined,
-    upcoming: upcomingOnly ? "1" : undefined,
   });
   const nextPageHref = buildPublicVenueDirectoryPageHref({
     category: selectedCategory,
     page: String(currentPage + 1),
     q: searchQuery || undefined,
-    upcoming: upcomingOnly ? "1" : undefined,
   });
 
   return (
@@ -313,17 +293,17 @@ export default async function VenuesPage({ searchParams }: VenuesPageProps) {
               </p>
             </div>
             <div className="rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3">
-              <p className="section-kicker">With events</p>
+              <p className="section-kicker">With IG data</p>
               <p className="mt-1 flex items-center gap-2 text-lg font-semibold text-foreground">
-                <CalendarDays className="h-4 w-4 text-primary" />
-                {venues.filter((venue) => venue.upcomingEventCount > 0).length}
+                <Users className="h-4 w-4 text-primary" />
+                {venues.filter((venue) => typeof venue.instagramFollowerCount === "number").length}
               </p>
             </div>
           </div>
         </div>
       </section>
 
-      <form className="glass-panel grid gap-3 px-4 py-4 lg:grid-cols-[minmax(0,1fr)_14rem_auto_auto] lg:items-center" action="/venues">
+      <form className="glass-panel grid gap-3 px-4 py-4 lg:grid-cols-[minmax(0,1fr)_14rem_auto] lg:items-center" action="/venues">
         <label className="relative min-w-0">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <input
@@ -346,16 +326,6 @@ export default async function VenuesPage({ searchParams }: VenuesPageProps) {
               </option>
             ))}
           </select>
-        </label>
-        <label className="inline-flex min-h-11 items-center justify-center gap-2 rounded-[0.9rem] border border-border/75 bg-background/80 px-3 text-sm font-semibold text-foreground">
-          <input
-            className="h-4 w-4 accent-primary"
-            defaultChecked={upcomingOnly}
-            name="upcoming"
-            type="checkbox"
-            value="1"
-          />
-          Upcoming
         </label>
         <button className="button-primary min-h-11 gap-2 px-4 py-0" type="submit">
           <SlidersHorizontal className="h-4 w-4" />

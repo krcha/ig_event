@@ -8,12 +8,7 @@ import {
   type EventDayPeriod,
   type EventTimeDisplaySource,
 } from "@/lib/events/event-time";
-import { addDaysToDateKey, getPublicTodayKey } from "@/lib/events/public-date";
-import {
-  loadPublicCalendarEventsWindow,
-  type PublicEvent,
-} from "@/lib/events/public-events";
-import { toSearchableText } from "@/lib/pipeline/venue-normalization";
+import { getPublicTodayKey } from "@/lib/events/public-date";
 import {
   DEFAULT_EVENT_TYPE,
   canonicalizeEventType,
@@ -22,7 +17,6 @@ import {
 import type { VenueHoursCacheFields, VenueHoursSource } from "@/lib/venues/venue-hours-cache";
 
 const DEFAULT_RECENT_INSTAGRAM_POST_LIMIT = 6;
-const PUBLIC_VENUE_DIRECTORY_EVENT_WINDOW_DAYS = 366;
 
 const getPublicVenuePageQuery =
   "venues:getPublicVenuePage" as unknown as FunctionReference<"query">;
@@ -46,9 +40,7 @@ export type PublicVenue = VenueHoursCacheFields & {
   updatedAt?: number | null;
 };
 
-export type PublicVenueDirectoryItem = PublicVenue & {
-  upcomingEventCount: number;
-};
+export type PublicVenueDirectoryItem = PublicVenue;
 
 export type PublicVenueEvent = {
   _id: string;
@@ -97,7 +89,7 @@ type RawPublicVenuePageResponse = {
   venue: PublicVenue;
   upcomingEvents: PublicVenueEvent[];
   historyEvents: PublicVenueEvent[];
-  stats: PublicVenueStats;
+  stats: PublicVenueStats | null;
 } | null;
 
 export function getPublicVenueTodayKey(): string {
@@ -168,47 +160,6 @@ function compareVenueEvents(left: PublicVenueEvent, right: PublicVenueEvent): nu
   }
 
   return left._id.localeCompare(right._id);
-}
-
-function attachUpcomingEventCounts(
-  venues: PublicVenue[],
-  events: PublicEvent[],
-): PublicVenueDirectoryItem[] {
-  const venueIndexById = new Map(venues.map((venue, index) => [venue._id, index]));
-  const venueIndexByHandle = new Map<string, number>();
-  const venueIndexByName = new Map<string, number>();
-  const counts = venues.map(() => 0);
-
-  venues.forEach((venue, index) => {
-    const handle = normalizeHandle(venue.instagramHandle);
-    const name = toSearchableText(venue.name);
-    if (handle) {
-      venueIndexByHandle.set(handle, index);
-    }
-    if (name) {
-      venueIndexByName.set(name, index);
-    }
-  });
-
-  for (const event of events) {
-    let venueIndex = event.venueId ? venueIndexById.get(event.venueId) : undefined;
-    if (venueIndex === undefined) {
-      const handle = normalizeHandle(event.venueInstagramHandle ?? event.instagramHandle ?? "");
-      venueIndex = handle ? venueIndexByHandle.get(handle) : undefined;
-    }
-    if (venueIndex === undefined) {
-      const name = toSearchableText(event.venue);
-      venueIndex = name ? venueIndexByName.get(name) : undefined;
-    }
-    if (venueIndex !== undefined) {
-      counts[venueIndex] += 1;
-    }
-  }
-
-  return venues.map((venue, index) => ({
-    ...venue,
-    upcomingEventCount: counts[index],
-  }));
 }
 
 async function loadRecentInstagramPosts(
@@ -311,7 +262,6 @@ export async function loadPublicVenuePage(
 
 export async function loadPublicVenueDirectory(options: {
   limit?: number;
-  today?: string;
 } = {}): Promise<{
   error?: string;
   venues: PublicVenueDirectoryItem[];
@@ -323,23 +273,10 @@ export async function loadPublicVenueDirectory(options: {
 
   try {
     const convex = new ConvexHttpClient(convexUrl);
-    const today = options.today ?? getPublicVenueTodayKey();
-    const beforeDate = addDaysToDateKey(
-      today,
-      PUBLIC_VENUE_DIRECTORY_EVENT_WINDOW_DAYS,
-    );
-    const [venues, calendarWindow] = await Promise.all([
-      convex.query(listPublicVenueDirectoryQuery, {
-        limit: options.limit,
-      }) as Promise<PublicVenue[]>,
-      loadPublicCalendarEventsWindow({ fromDate: today, beforeDate }),
-    ]);
-    if (calendarWindow.error) {
-      throw new Error(calendarWindow.error);
-    }
-    return {
-      venues: attachUpcomingEventCounts(venues, calendarWindow.events),
-    };
+    const venues = (await convex.query(listPublicVenueDirectoryQuery, {
+      limit: options.limit,
+    })) as PublicVenue[];
+    return { venues };
   } catch (error) {
     return {
       venues: [],

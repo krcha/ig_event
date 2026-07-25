@@ -56,39 +56,6 @@ function normalizeLimit(
   return Math.max(1, Math.min(maxValue, Math.trunc(value as number)));
 }
 
-function readDateParts(value: string): { day: number; month: number; year: number } | null {
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) {
-    return null;
-  }
-
-  const year = Number.parseInt(match[1], 10);
-  const month = Number.parseInt(match[2], 10);
-  const day = Number.parseInt(match[3], 10);
-  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
-    return null;
-  }
-
-  return { day, month, year };
-}
-
-function formatDateKey(date: Date): string {
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(
-    date.getUTCDate(),
-  ).padStart(2, "0")}`;
-}
-
-function addDaysToDateKey(value: string, days: number): string {
-  const parts = readDateParts(value);
-  if (!parts) {
-    return value;
-  }
-
-  const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
-  date.setUTCDate(date.getUTCDate() + days);
-  return formatDateKey(date);
-}
-
 function compareVenueEvents(
   left: Pick<Doc<"events">, "_id" | "date" | "time" | "title">,
   right: Pick<Doc<"events">, "_id" | "date" | "time" | "title">,
@@ -120,22 +87,6 @@ function compareVenueEventsDesc(
   return compareVenueEvents(right, left);
 }
 
-function eventMatchesVenueIdentity(event: Doc<"events">, venue: Doc<"venues">): boolean {
-  if (event.venueId === venue._id) {
-    return true;
-  }
-
-  const eventHandle = normalizeHandle(event.venueInstagramHandle ?? "");
-  const venueHandle = normalizeHandle(venue.instagramHandle);
-  if (eventHandle && venueHandle && eventHandle === venueHandle) {
-    return true;
-  }
-
-  const eventVenue = toSearchableText(event.venue);
-  const venueName = toSearchableText(venue.name);
-  return Boolean(eventVenue && venueName && eventVenue === venueName);
-}
-
 function mergeUniqueEvents(events: Doc<"events">[]): Doc<"events">[] {
   const eventsById = new Map<Id<"events">, Doc<"events">>();
   for (const event of events) {
@@ -144,42 +95,60 @@ function mergeUniqueEvents(events: Doc<"events">[]): Doc<"events">[] {
   return [...eventsById.values()];
 }
 
-async function collectLegacyVenueEventsByIdentity(
+async function loadBoundedVenueEventCards(
   ctx: QueryCtx,
   venue: Doc<"venues">,
+  options: { direction: "history" | "upcoming"; limit: number; today: string },
 ): Promise<Doc<"events">[]> {
   const normalizedHandle = normalizeHandle(venue.instagramHandle);
-  const handleVariants = [
-    normalizedHandle,
-    venue.instagramHandle.trim(),
-    normalizedHandle ? `@${normalizedHandle}` : "",
-  ].filter((value, index, values) => value && values.indexOf(value) === index);
-  const venueName = venue.name.trim();
-
-  const [handleMatches, nameMatches] = await Promise.all([
-    Promise.all(
-      handleVariants.map((handle) =>
-        ctx.db
-          .query("events")
-          .withIndex("by_status_venueInstagramHandle_date", (q) =>
-            q.eq("status", "approved").eq("venueInstagramHandle", handle),
-          )
-          .collect(),
-      ),
-    ).then((groups) => groups.flat()),
-    venueName
-      ? ctx.db
-          .query("events")
-          .withIndex("by_status_venue_date", (q) =>
-            q.eq("status", "approved").eq("venue", venueName),
-          )
-          .collect()
-      : Promise.resolve([]),
+  const normalizedVenueIdentity = toSearchableText(venue.name);
+  const isHistory = options.direction === "history";
+  const order = isHistory ? ("desc" as const) : ("asc" as const);
+  const byVenueId = ctx.db
+    .query("events")
+    .withIndex("by_venueId_status_date", (q) => {
+      const indexed = q.eq("venueId", venue._id).eq("status", "approved");
+      return isHistory ? indexed.lt("date", options.today) : indexed.gte("date", options.today);
+    })
+    .order(order)
+    .take(options.limit);
+  const byNormalizedHandle = normalizedHandle
+    ? ctx.db
+        .query("events")
+        .withIndex("by_normalizedVenueHandle_status_date", (q) => {
+          const indexed = q
+            .eq("normalizedVenueInstagramHandle", normalizedHandle)
+            .eq("status", "approved");
+          return isHistory
+            ? indexed.lt("date", options.today)
+            : indexed.gte("date", options.today);
+        })
+        .order(order)
+        .take(options.limit)
+    : Promise.resolve([]);
+  const byNormalizedVenueIdentity = normalizedVenueIdentity
+    ? ctx.db
+        .query("events")
+        .withIndex("by_normalizedVenueIdentity_status_date", (q) => {
+          const indexed = q
+            .eq("normalizedVenueIdentity", normalizedVenueIdentity)
+            .eq("status", "approved");
+          return isHistory
+            ? indexed.lt("date", options.today)
+            : indexed.gte("date", options.today);
+        })
+        .order(order)
+        .take(options.limit)
+    : Promise.resolve([]);
+  const [linked, handleMatches, identityMatches] = await Promise.all([
+    byVenueId,
+    byNormalizedHandle,
+    byNormalizedVenueIdentity,
   ]);
-
-  return mergeUniqueEvents([...handleMatches, ...nameMatches]).filter(
-    (event) => !event.venueId && eventMatchesVenueIdentity(event, venue),
-  );
+  const legacy = [...handleMatches, ...identityMatches].filter((event) => !event.venueId);
+  const merged = mergeUniqueEvents([...linked, ...legacy]);
+  merged.sort(isHistory ? compareVenueEventsDesc : compareVenueEvents);
+  return merged.slice(0, options.limit);
 }
 
 function buildInstagramProfileUrl(handle: string): string {
@@ -214,11 +183,11 @@ async function collectPublicVenues(ctx: QueryCtx): Promise<Doc<"venues">[]> {
     ctx.db
       .query("venues")
       .withIndex("by_publicStatus", (q) => q.eq("publicStatus", "published"))
-      .collect(),
+      .take(MAX_PUBLIC_VENUE_DIRECTORY_LIMIT),
     ctx.db
       .query("venues")
       .withIndex("by_isActive", (q) => q.eq("isActive", true))
-      .collect(),
+      .take(MAX_PUBLIC_VENUE_DIRECTORY_LIMIT),
   ]);
   return mergeUniqueVenues([...explicit, ...legacy]).filter(isVenuePublic);
 }
@@ -413,6 +382,9 @@ export const listPublicVenueFieldsByIds = query({
   },
   handler: async (ctx, args) => {
     const uniqueIds = [...new Set(args.ids)];
+    if (uniqueIds.length > 100) {
+      throw new Error("Public venue field reads are limited to 100 unique IDs.");
+    }
     const venues = await Promise.all(uniqueIds.map((id) => ctx.db.get(id)));
     return venues.flatMap((venue) =>
       venue && isVenuePublic(venue)
@@ -506,54 +478,24 @@ export const getPublicVenuePage = query({
       MAX_PUBLIC_VENUE_EVENT_LIMIT,
     );
 
-    const [favoriteRefs, approvedEventsByVenueId, legacyEvents] = await Promise.all([
-      ctx.db
-        .query("favoriteVenues")
-        .withIndex("by_venue", (q) => q.eq("venueId", venue._id))
-        .collect(),
-      ctx.db
-        .query("events")
-        .withIndex("by_venueId_status_date", (q) =>
-          q.eq("venueId", venue._id).eq("status", "approved"),
-        )
-        .collect(),
-      collectLegacyVenueEventsByIdentity(ctx, venue),
+    const [upcomingEvents, historyEvents] = await Promise.all([
+      loadBoundedVenueEventCards(ctx, venue, {
+        direction: "upcoming",
+        limit: upcomingLimit,
+        today: args.today,
+      }),
+      loadBoundedVenueEventCards(ctx, venue, {
+        direction: "history",
+        limit: historyLimit,
+        today: args.today,
+      }),
     ]);
-    const approvedEvents = mergeUniqueEvents([
-      ...approvedEventsByVenueId,
-      ...legacyEvents,
-    ]);
-    const upcomingEvents = approvedEvents
-      .filter((event) => event.date >= args.today)
-      .sort(compareVenueEvents)
-      .slice(0, upcomingLimit);
-    const historyEvents = approvedEvents
-      .filter((event) => event.date < args.today)
-      .sort(compareVenueEventsDesc)
-      .slice(0, historyLimit);
-    const recentWindowStart = addDaysToDateKey(args.today, -30);
-    const approvedUpcomingCount = approvedEvents.filter(
-      (event) => event.date >= args.today,
-    ).length;
-    const approvedHistoryCount = approvedEvents.filter(
-      (event) => event.date < args.today,
-    ).length;
-    const recentApprovedCount = approvedEvents.filter(
-      (event) => event.date >= recentWindowStart && event.date < args.today,
-    ).length;
 
     return {
       venue: toPublicVenue(venue),
       upcomingEvents: upcomingEvents.map(toPublicEvent),
       historyEvents: historyEvents.map(toPublicEvent),
-      stats: {
-        appFollowerCount: favoriteRefs.length,
-        approvedEventCount: approvedEvents.length,
-        approvedHistoryCount,
-        approvedUpcomingCount,
-        recentApprovedCount,
-        recentWindowDays: 30,
-      },
+      stats: null,
     };
   },
 });
@@ -569,48 +511,12 @@ export const listPublicVenueDirectory = query({
       DEFAULT_PUBLIC_VENUE_DIRECTORY_LIMIT,
       MAX_PUBLIC_VENUE_DIRECTORY_LIMIT,
     );
-    const [venues, upcomingEvents] = await Promise.all([
-      collectPublicVenues(ctx).then((items) => items.slice(0, limit)),
-      ctx.db
-        .query("events")
-        .withIndex("by_status_date", (q) =>
-          q.eq("status", "approved").gte("date", args.today),
-        )
-        .take(1000),
-    ]);
-    const upcomingCountsByVenueId = new Map<string, number>();
-    const venueIdByHandle = new Map<string, Id<"venues">>();
-    const venueIdByName = new Map<string, Id<"venues">>();
-    for (const venue of venues) {
-      const handle = normalizeHandle(venue.instagramHandle);
-      const name = toSearchableText(venue.name);
-      if (handle && !venueIdByHandle.has(handle)) {
-        venueIdByHandle.set(handle, venue._id);
-      }
-      if (name && !venueIdByName.has(name)) {
-        venueIdByName.set(name, venue._id);
-      }
-    }
-    for (const event of upcomingEvents) {
-      const eventHandle = normalizeHandle(event.venueInstagramHandle ?? "");
-      const eventVenueName = toSearchableText(event.venue);
-      const venueId =
-        event.venueId ??
-        (eventHandle ? venueIdByHandle.get(eventHandle) : undefined) ??
-        (eventVenueName ? venueIdByName.get(eventVenueName) : undefined);
-      if (!venueId) {
-        continue;
-      }
-      upcomingCountsByVenueId.set(
-        venueId,
-        (upcomingCountsByVenueId.get(venueId) ?? 0) + 1,
-      );
-    }
-
+    const venues = (await collectPublicVenues(ctx)).slice(0, limit);
     return venues
       .map((venue) => ({
         ...toPublicVenue(venue),
-        upcomingEventCount: upcomingCountsByVenueId.get(venue._id) ?? 0,
+        // Compatibility shape only. New clients do not expose this incomplete total.
+        upcomingEventCount: 0,
       }))
       .sort((left, right) =>
         left.name.localeCompare(right.name, undefined, { sensitivity: "base" }),

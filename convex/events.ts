@@ -11,6 +11,7 @@ import {
 } from "../lib/events/event-retention";
 import { normalizeEventTimeWritePatch } from "../lib/events/event-time-write";
 import { isSensibleEventTitleForApproval } from "../lib/events/event-title-approval";
+import { buildNormalizedEventVenueIdentity } from "../lib/events/event-venue-identity";
 import {
   assertExpectedEventStatus,
   assertServiceCreateEventPolicy,
@@ -68,6 +69,18 @@ const SOURCE_GROUNDING_REPROCESS_REMOVABLE_REASONS = new Set([
 ]);
 const DEFAULT_EXPIRED_EVENT_DELETE_BATCH_SIZE = 100;
 const DISCOVER_ORGANIC_SCAN_LIMIT = 120;
+const PUBLIC_EVENT_PAGE_SIZE = 100;
+const MAX_PUBLIC_EVENT_WINDOW_DAYS = 400;
+const MAX_PUBLIC_CALENDAR_WINDOW_DAYS = 45;
+const PUBLIC_CALENDAR_COMPATIBILITY_RESULT_LIMIT = 500;
+
+function buildPublicPaginationOptions(options: { cursor: string | null; numItems: number }) {
+  const requested = Number.isFinite(options.numItems) ? Math.trunc(options.numItems) : 1;
+  return {
+    cursor: options.cursor,
+    numItems: Math.max(1, Math.min(PUBLIC_EVENT_PAGE_SIZE, requested)),
+  };
+}
 
 function readModerationPendingReasons(normalizedFieldsJson: string | undefined): string[] {
   try {
@@ -98,6 +111,8 @@ function assertSourceGroundingReprocessReasons(event: Doc<"events">): void {
 }
 
 type VenueDenormalizedFields = {
+  normalizedVenueIdentity?: string | undefined;
+  normalizedVenueInstagramHandle?: string | undefined;
   venueCategory?: string | undefined;
   venueId?: Id<"venues"> | undefined;
   venueInstagramHandle?: string | undefined;
@@ -107,6 +122,8 @@ type VenueDenormalizedFields = {
 };
 
 const CLEARED_VENUE_DENORMALIZED_FIELDS: VenueDenormalizedFields = {
+  normalizedVenueIdentity: undefined,
+  normalizedVenueInstagramHandle: undefined,
   venueCategory: undefined,
   venueId: undefined,
   venueInstagramHandle: undefined,
@@ -243,11 +260,19 @@ async function resolveVenueDenormalizedFields(
     return normalizeLookup(candidate.name) === canonicalLookupName;
   });
   if (!venue) {
-    return CLEARED_VENUE_DENORMALIZED_FIELDS;
+    return {
+      ...CLEARED_VENUE_DENORMALIZED_FIELDS,
+      normalizedVenueIdentity: canonicalLookupName || lookupName,
+      ...(canonicalHandle ? { normalizedVenueInstagramHandle: canonicalHandle } : {}),
+    };
   }
 
   return {
     ...CLEARED_VENUE_DENORMALIZED_FIELDS,
+    ...buildNormalizedEventVenueIdentity({
+      venue: venue.name,
+      venueInstagramHandle: venue.instagramHandle,
+    }),
     venueCategory: venue.category,
     venueId: venue._id,
     venueInstagramHandle: venue.instagramHandle,
@@ -275,14 +300,12 @@ async function loadPublicVenueIdsForEvents(
 async function projectPublicEventPage(
   ctx: QueryCtx,
   events: Doc<"events">[],
-  options: { includeDuplicateFields?: boolean } = {},
 ) {
   const publicVenueIds = await loadPublicVenueIdsForEvents(ctx, events);
   return events.map((event) =>
     projectPublicEvent(
       event,
       event.venueId !== undefined && publicVenueIds.has(event.venueId),
-      options,
     ),
   );
 }
@@ -555,6 +578,47 @@ export const getManyByIds = query({
   },
 });
 
+export const backfillEventVenueIdentityBatch = mutation({
+  args: {
+    cursor: v.optional(v.union(v.string(), v.null())),
+    limit: v.optional(v.number()),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const requestedLimit = Number.isFinite(args.limit) ? Math.trunc(args.limit as number) : 100;
+    const result = await ctx.db.query("events").paginate({
+      cursor: args.cursor ?? null,
+      numItems: Math.max(1, Math.min(100, requestedLimit)),
+    });
+    let updated = 0;
+
+    for (const event of result.page) {
+      const identity = buildNormalizedEventVenueIdentity(event);
+      const normalizedVenueIdentity = identity.normalizedVenueIdentity;
+      const normalizedVenueInstagramHandle = identity.normalizedVenueInstagramHandle;
+      if (
+        event.normalizedVenueIdentity === normalizedVenueIdentity &&
+        event.normalizedVenueInstagramHandle === normalizedVenueInstagramHandle
+      ) {
+        continue;
+      }
+      await ctx.db.patch(event._id, {
+        normalizedVenueIdentity,
+        normalizedVenueInstagramHandle,
+      });
+      updated += 1;
+    }
+
+    return {
+      continueCursor: result.continueCursor,
+      isDone: result.isDone,
+      scanned: result.page.length,
+      updated,
+    };
+  },
+});
+
 export const listByStatusDateWindow = query({
   args: {
     status: eventStatus,
@@ -580,17 +644,16 @@ export const listPublicEventsWindow = query({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
+    assertPublicEventDateWindow(args.fromDate, args.beforeDate, MAX_PUBLIC_EVENT_WINDOW_DAYS);
     const result = await ctx.db
       .query("events")
       .withIndex("by_status_date", (q) =>
         q.eq("status", "approved").gte("date", args.fromDate).lt("date", args.beforeDate),
       )
-      .paginate(args.paginationOpts);
+      .paginate(buildPublicPaginationOptions(args.paginationOpts));
     return {
       ...result,
-      page: await projectPublicEventPage(ctx, result.page, {
-        includeDuplicateFields: true,
-      }),
+      page: await projectPublicEventPage(ctx, result.page),
     };
   },
 });
@@ -629,15 +692,19 @@ export const listPublicCalendarEventsWindowPaginated = query({
   args: {
     fromDate: v.string(),
     beforeDate: v.string(),
-    paginationOpts: paginationOptsValidator,
+    cursor: v.optional(v.union(v.string(), v.null())),
   },
   handler: async (ctx, args) => {
+    assertPublicEventDateWindow(args.fromDate, args.beforeDate, MAX_PUBLIC_CALENDAR_WINDOW_DAYS);
     const result = await ctx.db
       .query("events")
       .withIndex("by_status_date", (q) =>
         q.eq("status", "approved").gte("date", args.fromDate).lt("date", args.beforeDate),
       )
-      .paginate(args.paginationOpts);
+      .paginate({
+        cursor: args.cursor ?? null,
+        numItems: PUBLIC_EVENT_PAGE_SIZE,
+      });
 
     const publicEvents = await projectPublicEventPage(ctx, result.page);
     return {
@@ -656,12 +723,13 @@ export const listPublicCalendarEventsWindow = query({
     beforeDate: v.string(),
   },
   handler: async (ctx, args) => {
+    assertPublicEventDateWindow(args.fromDate, args.beforeDate, MAX_PUBLIC_CALENDAR_WINDOW_DAYS);
     const events = await ctx.db
       .query("events")
       .withIndex("by_status_date", (q) =>
         q.eq("status", "approved").gte("date", args.fromDate).lt("date", args.beforeDate),
       )
-      .collect();
+      .take(PUBLIC_CALENDAR_COMPATIBILITY_RESULT_LIMIT);
     return (await projectPublicEventPage(ctx, events)).map(toPublicCalendarEvent);
   },
 });
@@ -677,7 +745,7 @@ export const listApprovedUpcomingByDatePaginated = query({
       .withIndex("by_status_date", (q) =>
         q.eq("status", "approved").gte("date", args.fromDate),
       )
-      .paginate(args.paginationOpts);
+      .paginate(buildPublicPaginationOptions(args.paginationOpts));
     return {
       ...result,
       page: await projectPublicEventPage(ctx, result.page),
@@ -705,6 +773,33 @@ function formatDateKey(date: Date): string {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(
     date.getUTCDate(),
   ).padStart(2, "0")}`;
+}
+
+function dateKeyToUtcMs(value: string): number | null {
+  const parts = readDateParts(value);
+  if (!parts) {
+    return null;
+  }
+  const timestamp = Date.UTC(parts.year, parts.month - 1, parts.day);
+  return formatDateKey(new Date(timestamp)) === value ? timestamp : null;
+}
+
+function assertPublicEventDateWindow(
+  fromDate: string,
+  beforeDate: string,
+  maximumDays: number,
+): void {
+  const fromTimestamp = dateKeyToUtcMs(fromDate);
+  const beforeTimestamp = dateKeyToUtcMs(beforeDate);
+  const spanDays =
+    fromTimestamp === null || beforeTimestamp === null
+      ? Number.NaN
+      : (beforeTimestamp - fromTimestamp) / 86_400_000;
+  if (!Number.isInteger(spanDays) || spanDays < 1 || spanDays > maximumDays) {
+    throw new Error(
+      `Public event date window must span 1-${maximumDays} days using valid YYYY-MM-DD dates.`,
+    );
+  }
 }
 
 function addDaysToDateKey(value: string, days: number): string {

@@ -80,7 +80,6 @@ export type PublicEvent = {
   instagramHandle?: string;
   instagramPostUrl?: string;
   instagramPostId?: string;
-  normalizedFieldsJson?: string;
   status: EventStatus;
   createdAt: number;
   updatedAt: number;
@@ -363,7 +362,7 @@ function mapPublicEventToDuplicateRecord(event: PublicEvent): ApprovedEventDupli
     eventType: event.eventType,
     sourceCaption: event.sourceCaption ?? null,
     sourcePostedAt: event.sourcePostedAt ?? null,
-    normalizedFieldsJson: event.normalizedFieldsJson ?? null,
+    normalizedFieldsJson: null,
     createdAt: event.createdAt,
     updatedAt: event.updatedAt,
   };
@@ -584,11 +583,8 @@ async function queryPublicCalendarEventsWindowPage(options: {
 }): Promise<PaginatedEventsResponse> {
   return (await options.convex.query(listPublicCalendarEventsWindowQuery, {
     beforeDate: options.beforeDate,
+    cursor: options.cursor ?? null,
     fromDate: options.fromDate,
-    paginationOpts: {
-      cursor: options.cursor ?? null,
-      numItems: APPROVED_EVENTS_SCAN_BATCH_SIZE,
-    },
   })) as PaginatedEventsResponse;
 }
 

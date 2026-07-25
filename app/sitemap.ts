@@ -59,7 +59,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     url: absoluteUrl(`/venues/${venue._id}`),
     lastModified: safeLastModified(venue.updatedAt),
     changeFrequency: "weekly",
-    priority: venue.upcomingEventCount > 0 ? 0.7 : 0.5,
+    priority: 0.6,
   }));
   const routesByUrl = new Map(
     [...staticRoutes, ...eventRoutes, ...venueRoutes].map((route) => [route.url, route]),

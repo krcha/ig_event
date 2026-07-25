@@ -1,52 +1,8 @@
 import type { Doc } from "./_generated/dataModel";
 import { sanitizeVenueLinkedPublicEventFields } from "../lib/events/public-event-venue-fields";
 
-const PUBLIC_DUPLICATE_FIELD_KEYS = new Set([
-  "description",
-  "locationName",
-  "multiEventSplitCount",
-  "multiEventSplitDetected",
-  "normalizedDate",
-  "normalizedVenue",
-  "postAltText",
-  "rawTitle",
-  "rawVenue",
-  "reasoningNotes",
-  "sourceCaptionFromModel",
-  "splitEventIndex",
-  "splitSourceLine",
-  "titleContextCandidate",
-  "titleDerivedFromContext",
-  "titleUsedFallback",
-]);
-
-function compactDuplicateFields(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return undefined;
-    }
-
-    const compact = Object.fromEntries(
-      Object.entries(parsed).filter(([key]) => PUBLIC_DUPLICATE_FIELD_KEYS.has(key)),
-    );
-    return Object.keys(compact).length > 0 ? JSON.stringify(compact) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-export function projectPublicEvent(
-  event: Doc<"events">,
-  hasPublicLinkedVenue: boolean,
-  options: { includeDuplicateFields?: boolean } = {},
-) {
+export function projectPublicEvent(event: Doc<"events">, hasPublicLinkedVenue: boolean) {
   const publicEvent = sanitizeVenueLinkedPublicEventFields(event, hasPublicLinkedVenue);
-  const normalizedFieldsJson = options.includeDuplicateFields
-    ? compactDuplicateFields(event.normalizedFieldsJson)
-    : undefined;
 
   return {
     _id: publicEvent._id,
@@ -59,7 +15,6 @@ export function projectPublicEvent(
     imageUrl: publicEvent.imageUrl,
     instagramPostId: publicEvent.instagramPostId,
     instagramPostUrl: publicEvent.instagramPostUrl,
-    ...(normalizedFieldsJson ? { normalizedFieldsJson } : {}),
     sourceCaption: publicEvent.sourceCaption,
     sourcePostedAt: publicEvent.sourcePostedAt,
     status: publicEvent.status,

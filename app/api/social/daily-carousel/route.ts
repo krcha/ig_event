@@ -16,7 +16,7 @@ export const runtime = "nodejs";
 export const maxDuration = 30;
 
 const listPublicCalendarEventsWindowQuery =
-  "events:listPublicCalendarEventsWindow" as unknown as FunctionReference<"query">;
+  "events:listPublicCalendarEventsWindowPaginated" as unknown as FunctionReference<"query">;
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 function getRequestedDate(request: Request): string {
@@ -54,10 +54,22 @@ export async function GET(request: Request) {
     const dayAfterTomorrow = getNextIsoDate(tomorrow);
     const eventDates = [tomorrow, dayAfterTomorrow];
     const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
-    const events = (await convex.query(listPublicCalendarEventsWindowQuery, {
-      fromDate: tomorrow,
-      beforeDate: getNextIsoDate(dayAfterTomorrow),
-    })) as DailyCarouselEvent[];
+    const events: DailyCarouselEvent[] = [];
+    let cursor: string | null = null;
+    while (true) {
+      const page = (await convex.query(listPublicCalendarEventsWindowQuery, {
+        beforeDate: getNextIsoDate(dayAfterTomorrow),
+        cursor,
+        fromDate: tomorrow,
+      })) as {
+        continueCursor: string;
+        isDone: boolean;
+        page: DailyCarouselEvent[];
+      };
+      events.push(...page.page);
+      if (page.isDone) break;
+      cursor = page.continueCursor;
+    }
     const origin = getPublicOrigin(request);
     const payload = buildDailyCarouselPayload({
       events,

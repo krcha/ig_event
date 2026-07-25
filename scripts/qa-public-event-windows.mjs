@@ -37,43 +37,33 @@ assert.match(
 );
 assert.match(
   venuesSource,
-  /function eventMatchesVenueIdentity/,
-  "Venue pages should match approved events by venue identity, not only stored venueId.",
+  /async function loadBoundedVenueEventCards/,
+  "Venue pages should match approved events by bounded indexed venue identity reads.",
 );
 assert.match(
   venuesSource,
-  /!event\.venueId && eventMatchesVenueIdentity\(event, venue\)/,
-  "Venue pages should include legacy approved events that match by name/handle but are missing venueId.",
+  /\.filter\(\(event\) => !event\.venueId\)/,
+  "Venue pages should include legacy identity matches only when a stored venueId is absent.",
 );
 assert.match(
   venuesSource,
-  /withIndex\("by_status_venueInstagramHandle_date"/,
-  "Venue page legacy-handle recovery should use the dedicated identity index.",
+  /withIndex\("by_normalizedVenueHandle_status_date"/,
+  "Venue page legacy-handle recovery should use the normalized identity index.",
 );
 assert.match(
   venuesSource,
-  /withIndex\("by_status_venue_date"/,
-  "Venue page legacy-name recovery should use the dedicated identity index.",
+  /withIndex\("by_normalizedVenueIdentity_status_date"/,
+  "Venue page legacy-name recovery should use the normalized identity index.",
 );
 assert.doesNotMatch(
   venuesSource,
   /PUBLIC_VENUE_FALLBACK_SCAN_LIMIT|upcomingApprovedScan|historyApprovedScan/,
   "Venue pages should never scan global approved-event windows for identity fallback.",
 );
-assert.match(
-  venuesSource,
-  /const venueIdByHandle = new Map/,
-  "Venue directory fallback counting should index venues by normalized Instagram handle.",
-);
-assert.match(
-  venuesSource,
-  /const venueIdByName = new Map/,
-  "Venue directory fallback counting should index venues by normalized name.",
-);
-assert.match(
-  venuesSource,
-  /event\.venueId \?\?[\s\S]*venueIdByHandle\.get\(eventHandle\)[\s\S]*venueIdByName\.get\(eventVenueName\)/,
-  "Venue directory counts should include approved upcoming events missing venueId without an events-by-venues scan.",
+assert.doesNotMatch(
+  publicVenuePagesSource,
+  /upcomingEventCount|loadPublicCalendarEventsWindow/,
+  "Venue directory loading should not scan a year of events for incomplete totals.",
 );
 assert.match(
   publicEventsSource,
