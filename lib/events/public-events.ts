@@ -26,6 +26,7 @@ import {
   toSearchableText,
 } from "@/lib/pipeline/venue-normalization";
 import { loadVenueNameOverridesByHandle } from "@/lib/pipeline/venue-name-overrides";
+import { chunkPublicVenueIds } from "@/lib/events/public-venue-batching";
 import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 
 export type EventStatus = "pending" | "approved" | "rejected";
@@ -254,6 +255,21 @@ function createVenueRecordFromEvent(
   };
 }
 
+async function loadPublicVenueRecordsByIds(
+  convex: ConvexHttpClient,
+  venueIds: string[],
+): Promise<VenueRecord[]> {
+  const venues: VenueRecord[] = [];
+  for (const batch of chunkPublicVenueIds(venueIds)) {
+    venues.push(
+      ...((await convex.query(listPublicVenueFieldsByIdsQuery, {
+        ids: batch,
+      })) as VenueRecord[]),
+    );
+  }
+  return venues;
+}
+
 async function loadVenueLookup(
   convex: ConvexHttpClient,
   events: PublicEvent[],
@@ -263,18 +279,10 @@ async function loadVenueLookup(
   const venueIds = [
     ...new Set(events.map((event) => event.venueId).filter(isRealVenueId)),
   ];
-  const [activeVenues, venues] = await Promise.all([
-    includeActiveVenueDirectory
-      ? (convex.query(listPublicActiveVenueFieldsQuery, { limit: 1000 }) as Promise<
-          VenueRecord[]
-        >)
-      : Promise.resolve([]),
-    venueIds.length > 0
-      ? (convex.query(listPublicVenueFieldsByIdsQuery, {
-          ids: venueIds,
-        }) as Promise<VenueRecord[]>)
-      : Promise.resolve([]),
-  ]);
+  const venues = await loadPublicVenueRecordsByIds(convex, venueIds);
+  const activeVenues = includeActiveVenueDirectory
+    ? ((await convex.query(listPublicActiveVenueFieldsQuery, { limit: 1000 })) as VenueRecord[])
+    : [];
   const publicVenueIds = new Set(
     [...activeVenues, ...venues].map((venue) => venue._id),
   );

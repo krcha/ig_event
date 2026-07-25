@@ -4,6 +4,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { getPublicDuplicateEventIds } from "../convex/events.ts";
 import { projectPublicEvent } from "../convex/publicEventProjection.ts";
 import { buildNormalizedEventVenueIdentity } from "../lib/events/event-venue-identity.ts";
+import {
+  chunkPublicVenueIds,
+  PUBLIC_VENUE_FIELDS_BATCH_SIZE,
+} from "../lib/events/public-venue-batching.ts";
 
 function read(path) {
   return readFileSync(path, "utf8");
@@ -147,6 +151,29 @@ assert.match(
   publicEventsSource,
   /events:listPublicCalendarEventsWindowPaginated[\s\S]*async function queryPublicCalendarEventsWindowPage/,
   "The web loader must use the bounded compact-calendar page reader.",
+);
+assert.match(
+  publicEventsSource,
+  /public-venue-batching[\s\S]*chunkPublicVenueIds\(venueIds\)/,
+  "Public venue enrichment must split unique IDs into backend-compatible batches.",
+);
+assert.equal(PUBLIC_VENUE_FIELDS_BATCH_SIZE, 100);
+assert.doesNotMatch(
+  publicEventsSource,
+  /Promise\.all\(\[[\s\S]*listPublicActiveVenueFieldsQuery[\s\S]*listPublicVenueFieldsByIdsQuery/,
+  "Public venue enrichment batches must not run alongside the full active directory query.",
+);
+const venueIdFixture = Array.from({ length: 205 }, (_, index) => `venue-${index}`);
+const venueIdBatches = chunkPublicVenueIds(venueIdFixture);
+assert.deepEqual(
+  venueIdBatches.map((batch) => batch.length),
+  [100, 100, 5],
+  "Venue enrichment must keep every request within the 100-ID backend limit.",
+);
+assert.deepEqual(
+  venueIdBatches.flat(),
+  venueIdFixture,
+  "Venue enrichment batching must preserve every unique ID in order.",
 );
 assert.match(
   publicEventsSource,
