@@ -230,7 +230,7 @@ assert.match(
 );
 assert.match(
   convexEventsSource,
-  /export const listPublicCalendarEventsWindow = query/,
+  /export const listPublicCalendarEventsWindowPaginated = query/,
   "Convex should expose a compact public calendar window query for fast browse loads.",
 );
 assert.match(

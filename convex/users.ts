@@ -2,9 +2,9 @@ import type { UserIdentity } from "convex/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
-import { sanitizeVenueLinkedPublicEventFields } from "../lib/events/public-event-venue-fields";
 import { isVenuePublic } from "../lib/venues/venue-lifecycle";
 import { isAdminSubject, requireViewerIdentity } from "./authz";
+import { projectPublicEvent } from "./publicEventProjection";
 
 type ViewerLibraryUser = {
   clerkId: string;
@@ -121,7 +121,7 @@ async function loadLibraryForUser(ctx: QueryCtx, userId: string) {
     .filter((event) => event.status === "approved");
   const publicVenueIds = await loadPublicVenueIdsForSavedEvents(ctx, approvedSavedEvents);
   const savedEvents = approvedSavedEvents.map((event) =>
-    sanitizeVenueLinkedPublicEventFields(
+    projectPublicEvent(
       event,
       event.venueId !== undefined && publicVenueIds.has(event.venueId),
     ),

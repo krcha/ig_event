@@ -22,12 +22,12 @@ import {
   normalizeHandle,
   toSearchableText,
 } from "../lib/pipeline/venue-normalization";
-import { sanitizeVenueLinkedPublicEventFields } from "../lib/events/public-event-venue-fields";
 import { canonicalizeEventType } from "../lib/taxonomy/venue-types";
 import { isVenuePublic } from "../lib/venues/venue-lifecycle";
 import { normalizeInstagramPostUrl } from "../lib/images/apify-images";
 import { assertPublicEventImageWrite } from "../lib/images/public-event-image";
 import { requireAdminIdentity, requireAdminOrServiceSecret } from "./authz";
+import { projectPublicEvent } from "./publicEventProjection";
 
 const eventStatus = v.union(
   v.literal("pending"),
@@ -272,30 +272,19 @@ async function loadPublicVenueIdsForEvents(
   );
 }
 
-function sanitizePublicEventWithVenueIds(
-  event: Doc<"events">,
-  publicVenueIds: Set<Id<"venues">>,
-): Doc<"events"> {
-  return sanitizeVenueLinkedPublicEventFields(
-    event,
-    event.venueId !== undefined && publicVenueIds.has(event.venueId),
-  );
-}
-
-async function sanitizePublicEventVenueFields(
-  ctx: QueryCtx,
-  event: Doc<"events">,
-): Promise<Doc<"events">> {
-  const publicVenueIds = await loadPublicVenueIdsForEvents(ctx, [event]);
-  return sanitizePublicEventWithVenueIds(event, publicVenueIds);
-}
-
-async function sanitizePublicEventPage(
+async function projectPublicEventPage(
   ctx: QueryCtx,
   events: Doc<"events">[],
-): Promise<Doc<"events">[]> {
+  options: { includeDuplicateFields?: boolean } = {},
+) {
   const publicVenueIds = await loadPublicVenueIdsForEvents(ctx, events);
-  return events.map((event) => sanitizePublicEventWithVenueIds(event, publicVenueIds));
+  return events.map((event) =>
+    projectPublicEvent(
+      event,
+      event.venueId !== undefined && publicVenueIds.has(event.venueId),
+      options,
+    ),
+  );
 }
 
 async function writeEventAuditLog(
@@ -445,7 +434,7 @@ export const getPublicApprovedEvent = query({
       return null;
     }
 
-    return sanitizePublicEventVenueFields(ctx, event);
+    return (await projectPublicEventPage(ctx, [event]))[0];
   },
 });
 
@@ -599,12 +588,14 @@ export const listPublicEventsWindow = query({
       .paginate(args.paginationOpts);
     return {
       ...result,
-      page: await sanitizePublicEventPage(ctx, result.page),
+      page: await projectPublicEventPage(ctx, result.page, {
+        includeDuplicateFields: true,
+      }),
     };
   },
 });
 
-function toPublicCalendarEvent(event: Doc<"events">) {
+function toPublicCalendarEvent(event: ReturnType<typeof projectPublicEvent>) {
   return {
     _id: event._id,
     artists: event.artists,
@@ -634,6 +625,31 @@ function toPublicCalendarEvent(event: Doc<"events">) {
   };
 }
 
+export const listPublicCalendarEventsWindowPaginated = query({
+  args: {
+    fromDate: v.string(),
+    beforeDate: v.string(),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    const result = await ctx.db
+      .query("events")
+      .withIndex("by_status_date", (q) =>
+        q.eq("status", "approved").gte("date", args.fromDate).lt("date", args.beforeDate),
+      )
+      .paginate(args.paginationOpts);
+
+    const publicEvents = await projectPublicEventPage(ctx, result.page);
+    return {
+      ...result,
+      page: publicEvents.map(toPublicCalendarEvent),
+    };
+  },
+});
+
+// Temporary rollout compatibility for the previously deployed web build. New
+// clients use the paginated function above so a single Convex isolate never
+// carries an entire month. Remove this after the old web rollback window closes.
 export const listPublicCalendarEventsWindow = query({
   args: {
     fromDate: v.string(),
@@ -646,9 +662,7 @@ export const listPublicCalendarEventsWindow = query({
         q.eq("status", "approved").gte("date", args.fromDate).lt("date", args.beforeDate),
       )
       .collect();
-
-    const publicEvents = await sanitizePublicEventPage(ctx, events);
-    return publicEvents.map(toPublicCalendarEvent);
+    return (await projectPublicEventPage(ctx, events)).map(toPublicCalendarEvent);
   },
 });
 
@@ -666,7 +680,7 @@ export const listApprovedUpcomingByDatePaginated = query({
       .paginate(args.paginationOpts);
     return {
       ...result,
-      page: await sanitizePublicEventPage(ctx, result.page),
+      page: await projectPublicEventPage(ctx, result.page),
     };
   },
 });
@@ -896,15 +910,20 @@ export const getDiscoverFeed = query({
       ...tonight,
       ...weekend,
     ]);
-    const sanitizeGroup = (events: Doc<"events">[]) =>
-      events.map((event) => sanitizePublicEventWithVenueIds(event, publicVenueIds));
+    const projectGroup = (events: Doc<"events">[]) =>
+      events.map((event) =>
+        projectPublicEvent(
+          event,
+          event.venueId !== undefined && publicVenueIds.has(event.venueId),
+        ),
+      );
 
     return {
-      featured: sanitizeGroup(featured),
-      free: sanitizeGroup(free),
-      promoted: sanitizeGroup(promoted),
-      tonight: sanitizeGroup(tonight),
-      weekend: sanitizeGroup(weekend),
+      featured: projectGroup(featured),
+      free: projectGroup(free),
+      promoted: projectGroup(promoted),
+      tonight: projectGroup(tonight),
+      weekend: projectGroup(weekend),
     };
   },
 });

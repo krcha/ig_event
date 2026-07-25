@@ -79,6 +79,8 @@ export default defineSchema({
     .index("by_date", ["date"])
     .index("by_status", ["status"])
     .index("by_status_date", ["status", "date"])
+    .index("by_status_venueInstagramHandle_date", ["status", "venueInstagramHandle", "date"])
+    .index("by_status_venue_date", ["status", "venue", "date"])
     .index("by_image_storage_id", ["imageStorageId"])
     .index("by_status_promotionTier", ["status", "promotionTier"])
     .index("by_instagramPostId", ["instagramPostId"])

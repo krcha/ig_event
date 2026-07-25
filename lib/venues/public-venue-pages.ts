@@ -8,8 +8,9 @@ import {
   type EventDayPeriod,
   type EventTimeDisplaySource,
 } from "@/lib/events/event-time";
+import { addDaysToDateKey, getPublicTodayKey } from "@/lib/events/public-date";
 import {
-  loadUpcomingApprovedEvents,
+  loadPublicCalendarEventsWindow,
   type PublicEvent,
 } from "@/lib/events/public-events";
 import { toSearchableText } from "@/lib/pipeline/venue-normalization";
@@ -21,12 +22,12 @@ import {
 import type { VenueHoursCacheFields, VenueHoursSource } from "@/lib/venues/venue-hours-cache";
 
 const DEFAULT_RECENT_INSTAGRAM_POST_LIMIT = 6;
-const PUBLIC_VENUE_FALLBACK_UPCOMING_DAYS = 366;
+const PUBLIC_VENUE_DIRECTORY_EVENT_WINDOW_DAYS = 366;
 
 const getPublicVenuePageQuery =
   "venues:getPublicVenuePage" as unknown as FunctionReference<"query">;
 const listPublicVenueDirectoryQuery =
-  "venues:listPublicVenueDirectory" as unknown as FunctionReference<"query">;
+  "venues:listPublicVenueFields" as unknown as FunctionReference<"query">;
 const listPublicRecentPostsByHandleQuery =
   "scrapedPosts:listPublicRecentPostsByHandle" as unknown as FunctionReference<"query">;
 
@@ -99,14 +100,8 @@ type RawPublicVenuePageResponse = {
   stats: PublicVenueStats;
 } | null;
 
-function formatLocalDateKey(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
-    date.getDate(),
-  ).padStart(2, "0")}`;
-}
-
 export function getPublicVenueTodayKey(): string {
-  return formatLocalDateKey(new Date());
+  return getPublicTodayKey();
 }
 
 function venueHoursFromVenue(venue: PublicVenue): VenueHoursCacheFields {
@@ -175,98 +170,45 @@ function compareVenueEvents(left: PublicVenueEvent, right: PublicVenueEvent): nu
   return left._id.localeCompare(right._id);
 }
 
-function eventMatchesVenue(event: PublicEvent, venue: PublicVenue): boolean {
-  if (event.venueId === venue._id) {
-    return true;
-  }
+function attachUpcomingEventCounts(
+  venues: PublicVenue[],
+  events: PublicEvent[],
+): PublicVenueDirectoryItem[] {
+  const venueIndexById = new Map(venues.map((venue, index) => [venue._id, index]));
+  const venueIndexByHandle = new Map<string, number>();
+  const venueIndexByName = new Map<string, number>();
+  const counts = venues.map(() => 0);
 
-  const eventHandle = normalizeHandle(event.venueInstagramHandle ?? event.instagramHandle ?? "");
-  const venueHandle = normalizeHandle(venue.instagramHandle);
-  if (eventHandle && venueHandle && eventHandle === venueHandle) {
-    return true;
-  }
-
-  const eventVenue = toSearchableText(event.venue);
-  const venueName = toSearchableText(venue.name);
-  return Boolean(eventVenue && venueName && eventVenue === venueName);
-}
-
-function publicEventToVenueEvent(event: PublicEvent, venue: PublicVenue): PublicVenueEvent {
-  return normalizeVenueEvent(
-    {
-      _id: event._id,
-      artists: event.artists,
-      date: event.date,
-      description: event.description,
-      displayTimeEnd: event.displayTimeEnd,
-      displayTimeLabel: event.displayTimeLabel,
-      displayTimeSource: event.displayTimeSource,
-      displayTimeStart: event.displayTimeStart,
-      eventType: event.eventType,
-      imageUrl: event.imageUrl,
-      imageStorageId: event.imageStorageId,
-      instagramPostId: event.instagramPostId,
-      instagramPostUrl: event.instagramPostUrl,
-      ticketPrice: event.ticketPrice,
-      time: event.time,
-      title: event.title,
-      venue: event.venue,
-      venueCategory: event.venueCategory,
-      venueId: event.venueId,
-    },
-    venue,
-  );
-}
-
-function mergeUniqueVenueEvents(events: PublicVenueEvent[]): PublicVenueEvent[] {
-  const eventsById = new Map<string, PublicVenueEvent>();
-  for (const event of events) {
-    eventsById.set(event._id, event);
-  }
-  return [...eventsById.values()];
-}
-
-async function loadFallbackUpcomingVenueEvents(options: {
-  limit: number | undefined;
-  today: string;
-  venue: PublicVenue;
-}): Promise<PublicVenueEvent[]> {
-  const result = await loadUpcomingApprovedEvents({
-    daysAhead: PUBLIC_VENUE_FALLBACK_UPCOMING_DAYS,
-    fromDate: options.today,
+  venues.forEach((venue, index) => {
+    const handle = normalizeHandle(venue.instagramHandle);
+    const name = toSearchableText(venue.name);
+    if (handle) {
+      venueIndexByHandle.set(handle, index);
+    }
+    if (name) {
+      venueIndexByName.set(name, index);
+    }
   });
-  if (result.events.length === 0) {
-    return [];
+
+  for (const event of events) {
+    let venueIndex = event.venueId ? venueIndexById.get(event.venueId) : undefined;
+    if (venueIndex === undefined) {
+      const handle = normalizeHandle(event.venueInstagramHandle ?? event.instagramHandle ?? "");
+      venueIndex = handle ? venueIndexByHandle.get(handle) : undefined;
+    }
+    if (venueIndex === undefined) {
+      const name = toSearchableText(event.venue);
+      venueIndex = name ? venueIndexByName.get(name) : undefined;
+    }
+    if (venueIndex !== undefined) {
+      counts[venueIndex] += 1;
+    }
   }
 
-  return result.events
-    .filter((event) => eventMatchesVenue(event, options.venue))
-    .map((event) => publicEventToVenueEvent(event, options.venue))
-    .sort(compareVenueEvents)
-    .slice(0, options.limit);
-}
-
-function mergeVenueStats(
-  stats: PublicVenueStats,
-  pageUpcomingEvents: PublicVenueEvent[],
-  pageHistoryEvents: PublicVenueEvent[],
-  fallbackUpcomingEvents: PublicVenueEvent[],
-  today: string,
-): PublicVenueStats {
-  const mergedEvents = mergeUniqueVenueEvents([
-    ...pageUpcomingEvents,
-    ...pageHistoryEvents,
-    ...fallbackUpcomingEvents,
-  ]);
-  const approvedUpcomingCount = mergedEvents.filter((event) => event.date >= today).length;
-  const approvedHistoryCount = mergedEvents.filter((event) => event.date < today).length;
-
-  return {
-    ...stats,
-    approvedEventCount: Math.max(stats.approvedEventCount, mergedEvents.length),
-    approvedHistoryCount: Math.max(stats.approvedHistoryCount, approvedHistoryCount),
-    approvedUpcomingCount: Math.max(stats.approvedUpcomingCount, approvedUpcomingCount),
-  };
+  return venues.map((venue, index) => ({
+    ...venue,
+    upcomingEventCount: counts[index],
+  }));
 }
 
 async function loadRecentInstagramPosts(
@@ -335,39 +277,22 @@ export async function loadPublicVenuePage(
       };
     }
 
-    const pageUpcomingEvents = page.upcomingEvents.map((event) =>
+    const upcomingEvents = page.upcomingEvents
+      .map((event) => normalizeVenueEvent(event, page.venue))
+      .sort(compareVenueEvents);
+    const historyEvents = page.historyEvents.map((event) =>
       normalizeVenueEvent(event, page.venue),
     );
-    const pageHistoryEvents = page.historyEvents.map((event) =>
-      normalizeVenueEvent(event, page.venue),
-    );
-    const fallbackUpcomingEvents = await loadFallbackUpcomingVenueEvents({
-      limit: options.upcomingLimit,
-      today,
-      venue: page.venue,
-    });
-    const upcomingEvents = mergeUniqueVenueEvents([
-      ...pageUpcomingEvents,
-      ...fallbackUpcomingEvents,
-    ])
-      .sort(compareVenueEvents)
-      .slice(0, options.upcomingLimit);
 
     return {
       venue: page.venue,
       upcomingEvents,
-      historyEvents: pageHistoryEvents,
+      historyEvents,
       recentInstagramPosts: await loadRecentInstagramPosts(
         convex,
         page.venue.instagramHandle,
       ),
-      stats: mergeVenueStats(
-        page.stats,
-        pageUpcomingEvents,
-        pageHistoryEvents,
-        fallbackUpcomingEvents,
-        today,
-      ),
+      stats: page.stats,
     };
   } catch (error) {
     return {
@@ -398,11 +323,23 @@ export async function loadPublicVenueDirectory(options: {
 
   try {
     const convex = new ConvexHttpClient(convexUrl);
-    const venues = (await convex.query(listPublicVenueDirectoryQuery, {
-      limit: options.limit,
-      today: options.today ?? getPublicVenueTodayKey(),
-    })) as PublicVenueDirectoryItem[];
-    return { venues };
+    const today = options.today ?? getPublicVenueTodayKey();
+    const beforeDate = addDaysToDateKey(
+      today,
+      PUBLIC_VENUE_DIRECTORY_EVENT_WINDOW_DAYS,
+    );
+    const [venues, calendarWindow] = await Promise.all([
+      convex.query(listPublicVenueDirectoryQuery, {
+        limit: options.limit,
+      }) as Promise<PublicVenue[]>,
+      loadPublicCalendarEventsWindow({ fromDate: today, beforeDate }),
+    ]);
+    if (calendarWindow.error) {
+      throw new Error(calendarWindow.error);
+    }
+    return {
+      venues: attachUpcomingEventCounts(venues, calendarWindow.events),
+    };
   } catch (error) {
     return {
       venues: [],

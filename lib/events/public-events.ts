@@ -137,7 +137,7 @@ type LoadUpcomingApprovedEventsOptions = {
 const listPublicEventsWindowQuery =
   "events:listPublicEventsWindow" as unknown as FunctionReference<"query">;
 const listPublicCalendarEventsWindowQuery =
-  "events:listPublicCalendarEventsWindow" as unknown as FunctionReference<"query">;
+  "events:listPublicCalendarEventsWindowPaginated" as unknown as FunctionReference<"query">;
 const listPublicVenueFieldsByIdsQuery =
   "venues:listPublicVenueFieldsByIds" as unknown as FunctionReference<"query">;
 const listPublicActiveVenueFieldsQuery =
@@ -576,15 +576,46 @@ async function loadAllApprovedUpcomingEvents(
   );
 }
 
+async function queryPublicCalendarEventsWindowPage(options: {
+  convex: ConvexHttpClient;
+  cursor?: string | null;
+  fromDate: string;
+  beforeDate: string;
+}): Promise<PaginatedEventsResponse> {
+  return (await options.convex.query(listPublicCalendarEventsWindowQuery, {
+    beforeDate: options.beforeDate,
+    fromDate: options.fromDate,
+    paginationOpts: {
+      cursor: options.cursor ?? null,
+      numItems: APPROVED_EVENTS_SCAN_BATCH_SIZE,
+    },
+  })) as PaginatedEventsResponse;
+}
+
 async function loadAllPublicCalendarEventsWindow(
   convex: ConvexHttpClient,
   fromDate: string,
   beforeDate: string,
 ): Promise<PublicEvent[]> {
-  const events = (await convex.query(listPublicCalendarEventsWindowQuery, {
-    beforeDate,
-    fromDate,
-  })) as PublicEvent[];
+  const events: PublicEvent[] = [];
+  let cursor: string | null = null;
+
+  while (true) {
+    const page = await queryPublicCalendarEventsWindowPage({
+      beforeDate,
+      convex,
+      cursor,
+      fromDate,
+    });
+    events.push(...page.page);
+
+    if (page.isDone) {
+      break;
+    }
+
+    cursor = page.continueCursor;
+  }
+
   const venueLookup = await loadVenueLookup(convex, events, {
     includeActiveVenueDirectory: false,
   });

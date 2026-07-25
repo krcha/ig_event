@@ -213,7 +213,7 @@ assert.match(publicEventsSource, /publicVenueIds/);
 assert.match(publicEventsSource, /publicVenueIds\.has\(event\.venueId/);
 assert.match(
   eventsSource,
-  /export const getDiscoverFeed[\s\S]*?loadPublicVenueIdsForEvents[\s\S]*?sanitizeGroup/,
+  /export const getDiscoverFeed[\s\S]*?loadPublicVenueIdsForEvents[\s\S]*?projectGroup/,
 );
 assert.match(eventsSource, /new Set\(events\.map/);
 assert.match(usersSource, /new Set\([\s\S]*?events[\s\S]*?event\.venueId/);

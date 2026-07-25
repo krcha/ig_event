@@ -23,6 +23,7 @@ const checks = [
   { script: "qa:public-search", timeoutMs: 60_000 },
   { script: "qa:public-sort", timeoutMs: 60_000 },
   { script: "qa:public-performance", timeoutMs: 60_000 },
+  { script: "qa:public-query-pressure", timeoutMs: 60_000 },
   { script: "qa:mobile-calendar", timeoutMs: 60_000 },
   { script: "qa:calendar-time-bands", timeoutMs: 60_000 },
   { script: "qa:app-toolbar", timeoutMs: 60_000 },

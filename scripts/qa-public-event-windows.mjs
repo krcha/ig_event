@@ -47,8 +47,18 @@ assert.match(
 );
 assert.match(
   venuesSource,
-  /const PUBLIC_VENUE_FALLBACK_SCAN_LIMIT = 1000;/,
-  "Venue page fallback scans should stay bounded.",
+  /withIndex\("by_status_venueInstagramHandle_date"/,
+  "Venue page legacy-handle recovery should use the dedicated identity index.",
+);
+assert.match(
+  venuesSource,
+  /withIndex\("by_status_venue_date"/,
+  "Venue page legacy-name recovery should use the dedicated identity index.",
+);
+assert.doesNotMatch(
+  venuesSource,
+  /PUBLIC_VENUE_FALLBACK_SCAN_LIMIT|upcomingApprovedScan|historyApprovedScan/,
+  "Venue pages should never scan global approved-event windows for identity fallback.",
 );
 assert.match(
   venuesSource,
@@ -85,20 +95,10 @@ assert.match(
   /venues:listPublicVenueFieldsByIds/,
   "Public loader should fetch venue display fields by current page IDs.",
 );
-assert.match(
+assert.doesNotMatch(
   publicVenuePagesSource,
-  /loadFallbackUpcomingVenueEvents/,
-  "Venue pages should supplement deployed venue queries from the public calendar event window.",
-);
-assert.match(
-  publicVenuePagesSource,
-  /loadUpcomingApprovedEvents\(\{\s*daysAhead: PUBLIC_VENUE_FALLBACK_UPCOMING_DAYS,\s*fromDate: options\.today,/s,
-  "Venue page fallback should use the same public approved-event window as the calendar.",
-);
-assert.match(
-  publicVenuePagesSource,
-  /\.filter\(\(event\) => eventMatchesVenue\(event, options\.venue\)\)/,
-  "Venue page fallback should only merge calendar events that match the requested venue identity.",
+  /loadFallbackUpcomingVenueEvents|PUBLIC_VENUE_FALLBACK_UPCOMING_DAYS|loadUpcomingApprovedEvents/,
+  "Venue pages should trust the indexed Convex result instead of redundantly loading 366 days of events.",
 );
 assert.doesNotMatch(
   publicEventsSource,

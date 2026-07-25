@@ -19,7 +19,6 @@ const DEFAULT_PUBLIC_VENUE_EVENT_LIMIT = 12;
 const MAX_PUBLIC_VENUE_EVENT_LIMIT = 50;
 const DEFAULT_PUBLIC_VENUE_DIRECTORY_LIMIT = 2000;
 const MAX_PUBLIC_VENUE_DIRECTORY_LIMIT = 2000;
-const PUBLIC_VENUE_FALLBACK_SCAN_LIMIT = 1000;
 
 const venueHoursSource = v.union(
   v.literal("osm"),
@@ -143,6 +142,44 @@ function mergeUniqueEvents(events: Doc<"events">[]): Doc<"events">[] {
     eventsById.set(event._id, event);
   }
   return [...eventsById.values()];
+}
+
+async function collectLegacyVenueEventsByIdentity(
+  ctx: QueryCtx,
+  venue: Doc<"venues">,
+): Promise<Doc<"events">[]> {
+  const normalizedHandle = normalizeHandle(venue.instagramHandle);
+  const handleVariants = [
+    normalizedHandle,
+    venue.instagramHandle.trim(),
+    normalizedHandle ? `@${normalizedHandle}` : "",
+  ].filter((value, index, values) => value && values.indexOf(value) === index);
+  const venueName = venue.name.trim();
+
+  const [handleMatches, nameMatches] = await Promise.all([
+    Promise.all(
+      handleVariants.map((handle) =>
+        ctx.db
+          .query("events")
+          .withIndex("by_status_venueInstagramHandle_date", (q) =>
+            q.eq("status", "approved").eq("venueInstagramHandle", handle),
+          )
+          .collect(),
+      ),
+    ).then((groups) => groups.flat()),
+    venueName
+      ? ctx.db
+          .query("events")
+          .withIndex("by_status_venue_date", (q) =>
+            q.eq("status", "approved").eq("venue", venueName),
+          )
+          .collect()
+      : Promise.resolve([]),
+  ]);
+
+  return mergeUniqueEvents([...handleMatches, ...nameMatches]).filter(
+    (event) => !event.venueId && eventMatchesVenueIdentity(event, venue),
+  );
 }
 
 function buildInstagramProfileUrl(handle: string): string {
@@ -469,14 +506,7 @@ export const getPublicVenuePage = query({
       MAX_PUBLIC_VENUE_EVENT_LIMIT,
     );
 
-    const [
-      favoriteRefs,
-      approvedEventsByVenueId,
-      upcomingEventsByVenueId,
-      historyEventsByVenueId,
-      upcomingApprovedScan,
-      historyApprovedScan,
-    ] = await Promise.all([
+    const [favoriteRefs, approvedEventsByVenueId, legacyEvents] = await Promise.all([
       ctx.db
         .query("favoriteVenues")
         .withIndex("by_venue", (q) => q.eq("venueId", venue._id))
@@ -487,58 +517,20 @@ export const getPublicVenuePage = query({
           q.eq("venueId", venue._id).eq("status", "approved"),
         )
         .collect(),
-      ctx.db
-        .query("events")
-        .withIndex("by_venueId_status_date", (q) =>
-          q.eq("venueId", venueId).eq("status", "approved").gte("date", args.today),
-        )
-        .order("asc")
-        .take(upcomingLimit),
-      ctx.db
-        .query("events")
-        .withIndex("by_venueId_status_date", (q) =>
-          q.eq("venueId", venueId).eq("status", "approved").lt("date", args.today),
-        )
-        .order("desc")
-        .take(historyLimit),
-      ctx.db
-        .query("events")
-        .withIndex("by_status_date", (q) =>
-          q.eq("status", "approved").gte("date", args.today),
-        )
-        .order("asc")
-        .take(PUBLIC_VENUE_FALLBACK_SCAN_LIMIT),
-      ctx.db
-        .query("events")
-        .withIndex("by_status_date", (q) =>
-          q.eq("status", "approved").lt("date", args.today),
-        )
-        .order("desc")
-        .take(PUBLIC_VENUE_FALLBACK_SCAN_LIMIT),
+      collectLegacyVenueEventsByIdentity(ctx, venue),
     ]);
-    const fallbackUpcomingEvents = upcomingApprovedScan.filter(
-      (event) => !event.venueId && eventMatchesVenueIdentity(event, venue),
-    );
-    const fallbackHistoryEvents = historyApprovedScan.filter(
-      (event) => !event.venueId && eventMatchesVenueIdentity(event, venue),
-    );
-    const upcomingEvents = mergeUniqueEvents([
-      ...upcomingEventsByVenueId,
-      ...fallbackUpcomingEvents,
-    ])
-      .sort(compareVenueEvents)
-      .slice(0, upcomingLimit);
-    const historyEvents = mergeUniqueEvents([
-      ...historyEventsByVenueId,
-      ...fallbackHistoryEvents,
-    ])
-      .sort(compareVenueEventsDesc)
-      .slice(0, historyLimit);
     const approvedEvents = mergeUniqueEvents([
       ...approvedEventsByVenueId,
-      ...fallbackUpcomingEvents,
-      ...fallbackHistoryEvents,
+      ...legacyEvents,
     ]);
+    const upcomingEvents = approvedEvents
+      .filter((event) => event.date >= args.today)
+      .sort(compareVenueEvents)
+      .slice(0, upcomingLimit);
+    const historyEvents = approvedEvents
+      .filter((event) => event.date < args.today)
+      .sort(compareVenueEventsDesc)
+      .slice(0, historyLimit);
     const recentWindowStart = addDaysToDateKey(args.today, -30);
     const approvedUpcomingCount = approvedEvents.filter(
       (event) => event.date >= args.today,
