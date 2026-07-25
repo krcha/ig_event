@@ -72,8 +72,8 @@ assert.match(
 );
 assert.match(
   publicEventsSource,
-  /MAX_PUBLIC_EVENTS_PAGE_SIZE = 100/,
-  "Public event page size should be clamped to 100.",
+  /MAX_PUBLIC_EVENTS_PAGE_SIZE = 50/,
+  "Public event page size should be clamped to the production-safe 50-row bound.",
 );
 assert.match(
   publicEventsSource,

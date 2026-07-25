@@ -114,7 +114,12 @@ assert.match(
 const calendarQuerySource = section(
   eventsSource,
   "export const listPublicCalendarEventsWindowPaginated",
-  "// Temporary rollout compatibility",
+  "export const listApprovedUpcomingByDatePaginated",
+);
+assert.match(
+  eventsSource,
+  /const PUBLIC_EVENT_PAGE_SIZE = 50;/,
+  "Public event pages must stay below the production isolate timeout threshold.",
 );
 assert.match(
   calendarQuerySource,
@@ -132,26 +137,10 @@ assert.match(
   "Compact calendar reads must construct a fixed server-owned page size.",
 );
 assert.doesNotMatch(calendarQuerySource, /paginationOptsValidator|args\.paginationOpts|\.collect\(\)/);
-
-const compatibilityCalendarSource = section(
-  eventsSource,
-  "export const listPublicCalendarEventsWindow = query",
-  "export const listApprovedUpcomingByDatePaginated",
-);
-assert.match(
-  compatibilityCalendarSource,
-  /assertPublicEventDateWindow/,
-  "The old calendar compatibility endpoint must reject oversized date windows.",
-);
-assert.match(
-  compatibilityCalendarSource,
-  /\.take\(PUBLIC_CALENDAR_COMPATIBILITY_RESULT_LIMIT\)/,
-  "The old calendar compatibility endpoint must cap returned rows.",
-);
 assert.doesNotMatch(
-  compatibilityCalendarSource,
-  /\.collect\(\)/,
-  "The old calendar compatibility endpoint must never collect an unbounded result.",
+  eventsSource,
+  /export const listPublicCalendarEventsWindow = query/,
+  "The pressure-prone non-paginated calendar compatibility endpoint must be retired.",
 );
 
 assert.match(

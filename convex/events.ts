@@ -73,10 +73,9 @@ const SOURCE_GROUNDING_REPROCESS_REMOVABLE_REASONS = new Set([
 ]);
 const DEFAULT_EXPIRED_EVENT_DELETE_BATCH_SIZE = 100;
 const DISCOVER_ORGANIC_SCAN_LIMIT = 120;
-const PUBLIC_EVENT_PAGE_SIZE = 100;
+const PUBLIC_EVENT_PAGE_SIZE = 50;
 const MAX_PUBLIC_EVENT_WINDOW_DAYS = 400;
 const MAX_PUBLIC_CALENDAR_WINDOW_DAYS = 45;
-const PUBLIC_CALENDAR_COMPATIBILITY_RESULT_LIMIT = 500;
 const PUBLIC_DUPLICATE_DATE_COHORT_LIMIT = 25;
 
 function buildPublicPaginationOptions(options: { cursor: string | null; numItems: number }) {
@@ -832,26 +831,6 @@ export const listPublicCalendarEventsWindowPaginated = query({
       ...result,
       page: publicEvents.map(toPublicCalendarEvent),
     };
-  },
-});
-
-// Temporary rollout compatibility for the previously deployed web build. New
-// clients use the paginated function above so a single Convex isolate never
-// carries an entire month. Remove this after the old web rollback window closes.
-export const listPublicCalendarEventsWindow = query({
-  args: {
-    fromDate: v.string(),
-    beforeDate: v.string(),
-  },
-  handler: async (ctx, args) => {
-    assertPublicEventDateWindow(args.fromDate, args.beforeDate, MAX_PUBLIC_CALENDAR_WINDOW_DAYS);
-    const events = await ctx.db
-      .query("events")
-      .withIndex("by_status_date", (q) =>
-        q.eq("status", "approved").gte("date", args.fromDate).lt("date", args.beforeDate),
-      )
-      .take(PUBLIC_CALENDAR_COMPATIBILITY_RESULT_LIMIT);
-    return (await projectDeduplicatedPublicEventPage(ctx, events)).map(toPublicCalendarEvent);
   },
 });
 
