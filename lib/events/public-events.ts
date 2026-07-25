@@ -2,10 +2,7 @@ import "server-only";
 
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
-import {
-  buildApprovedEventAutoCleanupGroups,
-  type ApprovedEventDuplicateRecord,
-} from "@/lib/events/approved-event-duplicates";
+
 import {
   getDisplayEventTime,
   resolveEventTimeProvenance,
@@ -35,7 +32,7 @@ export type EventStatus = "pending" | "approved" | "rejected";
 const APPROVED_EVENTS_SCAN_BATCH_SIZE = 100;
 const PUBLIC_EVENTS_CACHE_MAX_ENTRIES = 48;
 const PUBLIC_EVENTS_CACHE_TTL_MS = 60_000;
-const PUBLIC_DUPLICATE_CLEANUP_MAX_PAIRWISE_EVENTS = 20;
+
 const DEFAULT_PUBLIC_EVENTS_WINDOW_DAYS = 90;
 const DEFAULT_PUBLIC_EVENTS_PAGE_SIZE = 50;
 const MAX_PUBLIC_EVENTS_PAGE_SIZE = 100;
@@ -346,95 +343,6 @@ function prunePublicEventsCache(now = Date.now()): void {
   }
 }
 
-function mapPublicEventToDuplicateRecord(event: PublicEvent): ApprovedEventDuplicateRecord {
-  return {
-    id: event._id,
-    title: event.title,
-    date: event.date,
-    time: event.time ?? null,
-    venue: event.venue,
-    artists: event.artists,
-    description: event.description ?? null,
-    imageUrl: event.imageUrl ?? null,
-    instagramPostUrl: event.instagramPostUrl ?? null,
-    instagramPostId: event.instagramPostId ?? null,
-    ticketPrice: event.ticketPrice ?? null,
-    eventType: event.eventType,
-    sourceCaption: event.sourceCaption ?? null,
-    sourcePostedAt: event.sourcePostedAt ?? null,
-    normalizedFieldsJson: null,
-    createdAt: event.createdAt,
-    updatedAt: event.updatedAt,
-  };
-}
-
-function getExactSourceDuplicateKey(event: PublicEvent): string | null {
-  if (event.instagramPostId) {
-    return `post-id:${event.instagramPostId}`;
-  }
-  if (event.instagramPostUrl) {
-    return `post-url:${event.instagramPostUrl.trim().toLowerCase().replace(/\/+$/, "")}`;
-  }
-  return null;
-}
-
-function hideExactSourceDuplicates(
-  events: PublicEvent[],
-  hiddenDuplicateIds: Set<string>,
-): void {
-  const seenSourceKeys = new Set<string>();
-
-  for (const event of events) {
-    const sourceKey = getExactSourceDuplicateKey(event);
-    if (!sourceKey) {
-      continue;
-    }
-    if (seenSourceKeys.has(sourceKey)) {
-      hiddenDuplicateIds.add(event._id);
-      continue;
-    }
-    seenSourceKeys.add(sourceKey);
-  }
-}
-
-function filterDuplicatePublicEvents(events: PublicEvent[]): PublicEvent[] {
-  const eventsByDate = new Map<string, PublicEvent[]>();
-
-  for (const event of events) {
-    const sameDateEvents = eventsByDate.get(event.date) ?? [];
-    sameDateEvents.push(event);
-    eventsByDate.set(event.date, sameDateEvents);
-  }
-
-  const hiddenDuplicateIds = new Set<string>();
-
-  for (const sameDateEvents of eventsByDate.values()) {
-    hideExactSourceDuplicates(sameDateEvents, hiddenDuplicateIds);
-
-    if (sameDateEvents.length < 2) {
-      continue;
-    }
-    if (sameDateEvents.length > PUBLIC_DUPLICATE_CLEANUP_MAX_PAIRWISE_EVENTS) {
-      continue;
-    }
-
-    const cleanupGroups = buildApprovedEventAutoCleanupGroups(
-      sameDateEvents.map(mapPublicEventToDuplicateRecord),
-    );
-
-    for (const group of cleanupGroups) {
-      for (const duplicateId of group.duplicateEventIds) {
-        hiddenDuplicateIds.add(duplicateId);
-      }
-    }
-  }
-
-  if (hiddenDuplicateIds.size === 0) {
-    return events;
-  }
-
-  return events.filter((event) => !hiddenDuplicateIds.has(event._id));
-}
 
 function normalizePublicEvent(
   event: PublicEvent,
@@ -569,7 +477,7 @@ async function loadAllApprovedUpcomingEvents(
 
   const venueLookup = await loadVenueLookup(convex, events);
   return sortPublicEventsByDateVenueTimeTitle(
-    filterDuplicatePublicEvents(events).map((event) =>
+    events.map((event) =>
       normalizePublicEvent(event, venueLookup),
     ),
   );
@@ -617,7 +525,7 @@ async function loadAllPublicCalendarEventsWindow(
   });
 
   return sortPublicEventsByDateVenueTimeTitle(
-    filterDuplicatePublicEvents(events).map((event) =>
+    events.map((event) =>
       normalizePublicEvent(event, venueLookup),
     ),
   );
@@ -742,7 +650,7 @@ export async function loadPublicEventsWindowPage(options: {
     });
     const venueLookup = await loadVenueLookup(convex, page.page);
     const events = sortPublicEventsByDateVenueTimeTitle(
-      filterDuplicatePublicEvents(page.page).map((event) =>
+      page.page.map((event) =>
         normalizePublicEvent(event, venueLookup),
       ),
     );

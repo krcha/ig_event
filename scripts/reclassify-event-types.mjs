@@ -61,7 +61,7 @@ function buildVenueCategoriesByName(venues) {
   return venueCategoriesByName;
 }
 
-async function loadApprovedEvents(convex, pageSize, limit) {
+async function loadApprovedEvents(convex, pageSize, limit, serviceSecret) {
   const events = [];
   let cursor = null;
 
@@ -73,6 +73,7 @@ async function loadApprovedEvents(convex, pageSize, limit) {
         cursor,
         numItems: remaining,
       },
+      serviceSecret,
     });
 
     events.push(...page.page);
@@ -89,8 +90,9 @@ async function loadApprovedEvents(convex, pageSize, limit) {
 
 loadEnvFiles();
 const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
-if (!convexUrl) {
-  throw new Error("NEXT_PUBLIC_CONVEX_URL is not configured.");
+const serviceSecret = process.env.CRON_SECRET;
+if (!convexUrl || !serviceSecret) {
+  throw new Error("NEXT_PUBLIC_CONVEX_URL and CRON_SECRET are required.");
 }
 
 const pageSize = readPositiveInteger(
@@ -103,8 +105,8 @@ const limit = process.env.RECLASSIFY_LIMIT
   : null;
 const convex = new ConvexHttpClient(convexUrl);
 const [events, venues] = await Promise.all([
-  loadApprovedEvents(convex, pageSize, limit),
-  convex.query(api.venues.listVenues, {}),
+  loadApprovedEvents(convex, pageSize, limit, serviceSecret),
+  convex.query(api.venues.listVenues, { serviceSecret }),
 ]);
 const venueCategoriesByName = buildVenueCategoriesByName(venues);
 

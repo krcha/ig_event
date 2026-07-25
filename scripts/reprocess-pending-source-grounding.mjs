@@ -324,6 +324,30 @@ export async function loadExactTargetRows(client, serviceSecret, targets) {
   return byId;
 }
 
+export async function loadPublicCalendarWindowPaginated(client, fromDate, beforeDate) {
+  const rows = [];
+  let cursor = null;
+  for (let pageNumber = 0; pageNumber < 1000; pageNumber += 1) {
+    const result = await client.query("events:listPublicCalendarEventsWindowPaginated", {
+      beforeDate,
+      cursor,
+      fromDate,
+    });
+    if (result.pageStatus === "SplitRequired") {
+      throw new Error("Public calendar pagination requires a split; refusing a partial delta read.");
+    }
+    rows.push(...result.page);
+    if (result.isDone) {
+      return rows;
+    }
+    if (!result.continueCursor || result.continueCursor === cursor) {
+      throw new Error("Public calendar pagination cursor stalled.");
+    }
+    cursor = result.continueCursor;
+  }
+  throw new Error("Public calendar pagination exceeded the 1000-page safety limit.");
+}
+
 function reconcile({ beforeTargets, afterById, eligibleIds }) {
   const allowedEligibleChanges = ["normalizedFieldsJson", "status", "updatedAt"];
   const eligibleIdSet = new Set(eligibleIds);
@@ -443,10 +467,11 @@ async function main() {
   }
 
   const publicBeforeDate = "2026-07-21";
-  const beforeTodayRows = await client.query("events:listPublicCalendarEventsWindow", {
-    fromDate: REPROCESS_PUBLIC_DATE,
-    beforeDate: publicBeforeDate,
-  });
+  const beforeTodayRows = await loadPublicCalendarWindowPaginated(
+    client,
+    REPROCESS_PUBLIC_DATE,
+    publicBeforeDate,
+  );
   const publicDateCountBefore = beforeTodayRows.length;
   const backup = createExclusiveBackup(targets, manifestSha256);
   const mutationResult = await client.mutation("events:reprocessPendingSourceGroundingBatch", {
@@ -459,10 +484,11 @@ async function main() {
     afterById,
     eligibleIds: eligibleItems.map((item) => item.id),
   });
-  const afterTodayRows = await client.query("events:listPublicCalendarEventsWindow", {
-    fromDate: REPROCESS_PUBLIC_DATE,
-    beforeDate: publicBeforeDate,
-  });
+  const afterTodayRows = await loadPublicCalendarWindowPaginated(
+    client,
+    REPROCESS_PUBLIC_DATE,
+    publicBeforeDate,
+  );
   const publicDateCountAfter = afterTodayRows.length;
   const expectedTodayDelta = eligible.filter(
     (decision) => decision.existing.date === REPROCESS_PUBLIC_DATE,

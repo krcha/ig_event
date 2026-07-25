@@ -22,7 +22,10 @@ const venuesSource = read("convex/venues.ts");
 const publicEventsSource = read("lib/events/public-events.ts");
 const publicVenuePagesSource = read("lib/venues/public-venue-pages.ts");
 const venuesPageSource = read("app/(main)/venues/page.tsx");
+const venueDetailPageSource = read("app/(main)/venues/[venueId]/page.tsx");
 const carouselRouteSource = read("app/api/social/daily-carousel/route.ts");
+const reclassifySource = read("scripts/reclassify-event-types.mjs");
+const reprocessSource = read("scripts/reprocess-pending-source-grounding.mjs");
 const sitemapSource = read("app/sitemap.ts");
 const packageJson = JSON.parse(read("package.json"));
 const releaseCheckSource = read("scripts/release-check.mjs");
@@ -46,8 +49,13 @@ for (const fieldName of ["normalizedVenueIdentity", "normalizedVenueInstagramHan
 }
 assert.match(
   eventsSource,
-  /backfillEventVenueIdentityBatch/,
-  "Normalized event venue identity needs a bounded authenticated backfill.",
+  /backfillEventVenueIdentityBatch[\s\S]*resolveVenueDenormalizedFieldsFromPublicVenues/,
+  "The authenticated backfill must use the same canonical venue resolver as production writes.",
+);
+assert.match(
+  read("scripts/backfill-event-venue-identity.mjs"),
+  /verificationPass[\s\S]*verificationPass\.updated !== 0/,
+  "The venue identity migration must finish with a zero-update idempotence pass.",
 );
 
 const venueCardsSource = section(
@@ -166,6 +174,33 @@ assert.match(
   "The daily carousel must migrate off the old compatibility endpoint.",
 );
 assert.doesNotMatch(carouselRouteSource, /events:listPublicCalendarEventsWindow"/);
+assert.match(
+  reprocessSource,
+  /events:listPublicCalendarEventsWindowPaginated/,
+  "Operator delta verification must use the paginated calendar endpoint.",
+);
+assert.doesNotMatch(reprocessSource, /events:listPublicCalendarEventsWindow"/);
+
+const maintenanceUpcomingSource = section(
+  eventsSource,
+  "export const listApprovedUpcomingByDatePaginated",
+  "function readDateParts",
+);
+assert.match(maintenanceUpcomingSource, /requireAdminOrServiceSecret/);
+assert.match(maintenanceUpcomingSource, /serviceSecret: v\.optional\(v\.string\(\)\)/);
+assert.match(reclassifySource, /CRON_SECRET/);
+assert.match(reclassifySource, /serviceSecret/);
+
+assert.match(
+  eventsSource,
+  /buildApprovedEventAutoCleanupGroups[\s\S]*projectDeduplicatedPublicEventPage/,
+  "Duplicate classification must use private normalized inputs before public projection.",
+);
+assert.doesNotMatch(
+  publicEventsSource,
+  /normalizedFieldsJson:\s*null|filterDuplicatePublicEvents|buildApprovedEventAutoCleanupGroups/,
+  "Projected events must not attempt duplicate classification after private inputs are removed.",
+);
 
 assert.ok(existsSync(projectionPath), "Public event responses must use an explicit projection module.");
 const projectionSource = read(projectionPath);
@@ -242,6 +277,11 @@ assert.doesNotMatch(
   venuesPageSource,
   /upcomingEventCount|name="upcoming"|upcomingOnly/,
   "The venue directory UI must not promise an expensive/incomplete upcoming total.",
+);
+assert.doesNotMatch(
+  venueDetailPageSource,
+  /stats\?\.approvedEventCount\s*\?\?|stats\?\.approvedUpcomingCount\s*\?\?|label:\s*"posts"|label:\s*"upcoming"/,
+  "Bounded venue-card lengths must not be displayed as complete counts.",
 );
 assert.doesNotMatch(
   sitemapSource,
