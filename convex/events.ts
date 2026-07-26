@@ -11,6 +11,11 @@ import {
 } from "../lib/events/event-retention";
 import { normalizeEventTimeWritePatch } from "../lib/events/event-time-write";
 import { isSensibleEventTitleForApproval } from "../lib/events/event-title-approval";
+import { buildNormalizedEventVenueIdentity } from "../lib/events/event-venue-identity";
+import {
+  buildApprovedEventAutoCleanupGroups,
+  type ApprovedEventDuplicateRecord,
+} from "../lib/events/approved-event-duplicates";
 import {
   assertExpectedEventStatus,
   assertServiceCreateEventPolicy,
@@ -22,12 +27,12 @@ import {
   normalizeHandle,
   toSearchableText,
 } from "../lib/pipeline/venue-normalization";
-import { sanitizeVenueLinkedPublicEventFields } from "../lib/events/public-event-venue-fields";
 import { canonicalizeEventType } from "../lib/taxonomy/venue-types";
 import { isVenuePublic } from "../lib/venues/venue-lifecycle";
 import { normalizeInstagramPostUrl } from "../lib/images/apify-images";
 import { assertPublicEventImageWrite } from "../lib/images/public-event-image";
 import { requireAdminIdentity, requireAdminOrServiceSecret } from "./authz";
+import { projectPublicEvent } from "./publicEventProjection";
 
 const eventStatus = v.union(
   v.literal("pending"),
@@ -134,6 +139,18 @@ const SOURCE_GROUNDING_REPROCESS_REMOVABLE_REASONS = new Set([
 ]);
 const DEFAULT_EXPIRED_EVENT_DELETE_BATCH_SIZE = 100;
 const DISCOVER_ORGANIC_SCAN_LIMIT = 120;
+const PUBLIC_EVENT_PAGE_SIZE = 50;
+const MAX_PUBLIC_EVENT_WINDOW_DAYS = 400;
+const MAX_PUBLIC_CALENDAR_WINDOW_DAYS = 45;
+const PUBLIC_DUPLICATE_DATE_COHORT_LIMIT = 25;
+
+function buildPublicPaginationOptions(options: { cursor: string | null; numItems: number }) {
+  const requested = Number.isFinite(options.numItems) ? Math.trunc(options.numItems) : 1;
+  return {
+    cursor: options.cursor,
+    numItems: Math.max(1, Math.min(PUBLIC_EVENT_PAGE_SIZE, requested)),
+  };
+}
 
 function readModerationPendingReasons(normalizedFieldsJson: string | undefined): string[] {
   try {
@@ -164,6 +181,8 @@ function assertSourceGroundingReprocessReasons(event: Doc<"events">): void {
 }
 
 type VenueDenormalizedFields = {
+  normalizedVenueIdentity?: string | undefined;
+  normalizedVenueInstagramHandle?: string | undefined;
   venueCategory?: string | undefined;
   venueId?: Id<"venues"> | undefined;
   venueInstagramHandle?: string | undefined;
@@ -173,6 +192,8 @@ type VenueDenormalizedFields = {
 };
 
 const CLEARED_VENUE_DENORMALIZED_FIELDS: VenueDenormalizedFields = {
+  normalizedVenueIdentity: undefined,
+  normalizedVenueInstagramHandle: undefined,
   venueCategory: undefined,
   venueId: undefined,
   venueInstagramHandle: undefined,
@@ -282,17 +303,16 @@ async function assertApprovalCandidatePolicy(
   }
 }
 
-async function resolveVenueDenormalizedFields(
-  ctx: QueryCtx | MutationCtx,
+function resolveVenueDenormalizedFieldsFromPublicVenues(
+  venues: Doc<"venues">[],
   venueName: string | undefined,
-): Promise<VenueDenormalizedFields> {
+): VenueDenormalizedFields {
   const rawVenueName = venueName ?? "";
   const lookupName = normalizeLookup(rawVenueName);
   if (!lookupName) {
     return CLEARED_VENUE_DENORMALIZED_FIELDS;
   }
 
-  const venues = (await ctx.db.query("venues").collect()).filter(isVenuePublic);
   const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle(venues);
   const canonicalization = canonicalizeVenueNameDetailed(
     rawVenueName,
@@ -302,18 +322,27 @@ async function resolveVenueDenormalizedFields(
     ? normalizeHandle(canonicalization.handle)
     : null;
   const canonicalLookupName = normalizeLookup(canonicalization?.venue ?? rawVenueName);
-  const venue = venues.find((candidate) => {
+  const matchingVenues = venues.filter((candidate) => {
     if (canonicalHandle && normalizeHandle(candidate.instagramHandle) === canonicalHandle) {
       return true;
     }
     return normalizeLookup(candidate.name) === canonicalLookupName;
   });
+  const venue = matchingVenues.length === 1 ? matchingVenues[0] : null;
   if (!venue) {
-    return CLEARED_VENUE_DENORMALIZED_FIELDS;
+    return {
+      ...CLEARED_VENUE_DENORMALIZED_FIELDS,
+      normalizedVenueIdentity: canonicalLookupName || lookupName,
+      ...(canonicalHandle ? { normalizedVenueInstagramHandle: canonicalHandle } : {}),
+    };
   }
 
   return {
     ...CLEARED_VENUE_DENORMALIZED_FIELDS,
+    ...buildNormalizedEventVenueIdentity({
+      venue: venue.name,
+      venueInstagramHandle: venue.instagramHandle,
+    }),
     venueCategory: venue.category,
     venueId: venue._id,
     venueInstagramHandle: venue.instagramHandle,
@@ -321,6 +350,14 @@ async function resolveVenueDenormalizedFields(
     ...(venue.location ? { venueLocation: venue.location } : {}),
     ...(venue.longitude !== undefined ? { venueLongitude: venue.longitude } : {}),
   };
+}
+
+async function resolveVenueDenormalizedFields(
+  ctx: QueryCtx | MutationCtx,
+  venueName: string | undefined,
+): Promise<VenueDenormalizedFields> {
+  const venues = (await ctx.db.query("venues").collect()).filter(isVenuePublic);
+  return resolveVenueDenormalizedFieldsFromPublicVenues(venues, venueName);
 }
 
 async function loadPublicVenueIdsForEvents(
@@ -338,49 +375,103 @@ async function loadPublicVenueIdsForEvents(
   );
 }
 
-function sanitizePublicEventWithVenueIds(
-  event: Doc<"events">,
-  publicVenueIds: Set<Id<"venues">>,
-): Doc<"events"> {
-  const venueSanitized = sanitizeVenueLinkedPublicEventFields(
-    event,
-    event.venueId !== undefined && publicVenueIds.has(event.venueId),
-  );
-  const sanitized = { ...venueSanitized } as Doc<"events"> & Record<string, unknown>;
-  delete sanitized.sourceOccurrenceKey;
-  if (sanitized.normalizedFieldsJson) {
-    try {
-      const normalizedFields = JSON.parse(sanitized.normalizedFieldsJson) as Record<
-        string,
-        unknown
-      >;
-      for (const key of Object.keys(normalizedFields)) {
-        if (key.startsWith("sourceOccurrence")) {
-          delete normalizedFields[key];
-        }
-      }
-      sanitized.normalizedFieldsJson = JSON.stringify(normalizedFields);
-    } catch {
-      delete sanitized.normalizedFieldsJson;
-    }
-  }
-  return sanitized;
-}
-
-async function sanitizePublicEventVenueFields(
-  ctx: QueryCtx,
-  event: Doc<"events">,
-): Promise<Doc<"events">> {
-  const publicVenueIds = await loadPublicVenueIdsForEvents(ctx, [event]);
-  return sanitizePublicEventWithVenueIds(event, publicVenueIds);
-}
-
-async function sanitizePublicEventPage(
+async function projectPublicEventPage(
   ctx: QueryCtx,
   events: Doc<"events">[],
-): Promise<Doc<"events">[]> {
+) {
   const publicVenueIds = await loadPublicVenueIdsForEvents(ctx, events);
-  return events.map((event) => sanitizePublicEventWithVenueIds(event, publicVenueIds));
+  return events.map((event) =>
+    projectPublicEvent(
+      event,
+      event.venueId !== undefined && publicVenueIds.has(event.venueId),
+    ),
+  );
+}
+
+function toApprovedEventDuplicateRecord(event: Doc<"events">): ApprovedEventDuplicateRecord {
+  return {
+    id: event._id,
+    title: event.title,
+    date: event.date,
+    time: event.time ?? null,
+    venue: event.venue,
+    artists: event.artists,
+    description: event.description ?? null,
+    imageUrl: event.imageUrl ?? null,
+    instagramPostUrl: event.instagramPostUrl ?? null,
+    instagramPostId: event.instagramPostId ?? null,
+    ticketPrice: event.ticketPrice ?? null,
+    eventType: event.eventType,
+    sourceCaption: event.sourceCaption ?? null,
+    sourcePostedAt: event.sourcePostedAt ?? null,
+    normalizedFieldsJson: event.normalizedFieldsJson ?? null,
+    createdAt: event.createdAt,
+    updatedAt: event.updatedAt,
+  };
+}
+
+async function loadApprovedDateCohort(
+  ctx: QueryCtx,
+  date: string,
+): Promise<Doc<"events">[] | null> {
+  const cohort = await ctx.db
+    .query("events")
+    .withIndex("by_status_date", (q) => q.eq("status", "approved").eq("date", date))
+    .take(PUBLIC_DUPLICATE_DATE_COHORT_LIMIT + 1);
+  return cohort.length > PUBLIC_DUPLICATE_DATE_COHORT_LIMIT ? null : cohort;
+}
+
+export async function getPublicDuplicateEventIds(
+  ctx: QueryCtx,
+  page: Doc<"events">[],
+): Promise<Set<Id<"events">>> {
+  if (page.length === 0) {
+    return new Set();
+  }
+
+  const eventsByDate = new Map<string, Doc<"events">[]>();
+  for (const event of page) {
+    const cohort = eventsByDate.get(event.date) ?? [];
+    cohort.push(event);
+    eventsByDate.set(event.date, cohort);
+  }
+
+  const boundaryDates = new Set([page[0].date, page[page.length - 1].date]);
+  for (const date of boundaryDates) {
+    const completeCohort = await loadApprovedDateCohort(ctx, date);
+    if (completeCohort === null) {
+      eventsByDate.delete(date);
+    } else {
+      eventsByDate.set(date, completeCohort);
+    }
+  }
+
+  const duplicateIds = new Set<Id<"events">>();
+  for (const cohort of eventsByDate.values()) {
+    if (cohort.length < 2 || cohort.length > PUBLIC_DUPLICATE_DATE_COHORT_LIMIT) {
+      continue;
+    }
+    const groups = buildApprovedEventAutoCleanupGroups(
+      cohort.map(toApprovedEventDuplicateRecord),
+    );
+    for (const group of groups) {
+      for (const duplicateId of group.duplicateEventIds) {
+        duplicateIds.add(duplicateId as Id<"events">);
+      }
+    }
+  }
+  return duplicateIds;
+}
+
+async function projectDeduplicatedPublicEventPage(
+  ctx: QueryCtx,
+  events: Doc<"events">[],
+) {
+  const duplicateIds = await getPublicDuplicateEventIds(ctx, events);
+  return projectPublicEventPage(
+    ctx,
+    events.filter((event) => !duplicateIds.has(event._id)),
+  );
 }
 
 async function writeEventAuditLog(
@@ -530,7 +621,7 @@ export const getPublicApprovedEvent = query({
       return null;
     }
 
-    return sanitizePublicEventVenueFields(ctx, event);
+    return (await projectPublicEventPage(ctx, [event]))[0];
   },
 });
 
@@ -651,6 +742,69 @@ export const getManyByIds = query({
   },
 });
 
+export const backfillEventVenueIdentityBatch = mutation({
+  args: {
+    cursor: v.optional(v.union(v.string(), v.null())),
+    limit: v.optional(v.number()),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const requestedLimit = Number.isFinite(args.limit) ? Math.trunc(args.limit as number) : 100;
+    const result = await ctx.db.query("events").paginate({
+      cursor: args.cursor ?? null,
+      numItems: Math.max(1, Math.min(100, requestedLimit)),
+    });
+    let updated = 0;
+    const publicVenues = (await ctx.db.query("venues").collect()).filter(isVenuePublic);
+    const publicVenuesById = new Map(publicVenues.map((venue) => [venue._id, venue]));
+
+    for (const event of result.page) {
+      const linkedVenue = event.venueId ? publicVenuesById.get(event.venueId) : undefined;
+      const resolved = linkedVenue
+        ? resolveVenueDenormalizedFieldsFromPublicVenues([linkedVenue], linkedVenue.name)
+        : resolveVenueDenormalizedFieldsFromPublicVenues(publicVenues, event.venue);
+      const shouldAssignCanonicalVenue = event.venueId === undefined && resolved.venueId !== undefined;
+      const patch = {
+        normalizedVenueIdentity: resolved.normalizedVenueIdentity,
+        normalizedVenueInstagramHandle: resolved.normalizedVenueInstagramHandle,
+        ...(shouldAssignCanonicalVenue
+          ? {
+              venueCategory: resolved.venueCategory,
+              venueId: resolved.venueId,
+              venueInstagramHandle: resolved.venueInstagramHandle,
+              venueLatitude: resolved.venueLatitude,
+              venueLocation: resolved.venueLocation,
+              venueLongitude: resolved.venueLongitude,
+            }
+          : {}),
+      };
+      const unchanged =
+        event.normalizedVenueIdentity === patch.normalizedVenueIdentity &&
+        event.normalizedVenueInstagramHandle === patch.normalizedVenueInstagramHandle &&
+        (!shouldAssignCanonicalVenue ||
+          (event.venueCategory === patch.venueCategory &&
+            event.venueId === patch.venueId &&
+            event.venueInstagramHandle === patch.venueInstagramHandle &&
+            event.venueLatitude === patch.venueLatitude &&
+            event.venueLocation === patch.venueLocation &&
+            event.venueLongitude === patch.venueLongitude));
+      if (unchanged) {
+        continue;
+      }
+      await ctx.db.patch(event._id, patch);
+      updated += 1;
+    }
+
+    return {
+      continueCursor: result.continueCursor,
+      isDone: result.isDone,
+      scanned: result.page.length,
+      updated,
+    };
+  },
+});
+
 export const listByStatusDateWindow = query({
   args: {
     status: eventStatus,
@@ -676,20 +830,21 @@ export const listPublicEventsWindow = query({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
+    assertPublicEventDateWindow(args.fromDate, args.beforeDate, MAX_PUBLIC_EVENT_WINDOW_DAYS);
     const result = await ctx.db
       .query("events")
       .withIndex("by_status_date", (q) =>
         q.eq("status", "approved").gte("date", args.fromDate).lt("date", args.beforeDate),
       )
-      .paginate(args.paginationOpts);
+      .paginate(buildPublicPaginationOptions(args.paginationOpts));
     return {
       ...result,
-      page: await sanitizePublicEventPage(ctx, result.page),
+      page: await projectDeduplicatedPublicEventPage(ctx, result.page),
     };
   },
 });
 
-function toPublicCalendarEvent(event: Doc<"events">) {
+function toPublicCalendarEvent(event: ReturnType<typeof projectPublicEvent>) {
   return {
     _id: event._id,
     artists: event.artists,
@@ -719,21 +874,29 @@ function toPublicCalendarEvent(event: Doc<"events">) {
   };
 }
 
-export const listPublicCalendarEventsWindow = query({
+export const listPublicCalendarEventsWindowPaginated = query({
   args: {
     fromDate: v.string(),
     beforeDate: v.string(),
+    cursor: v.optional(v.union(v.string(), v.null())),
   },
   handler: async (ctx, args) => {
-    const events = await ctx.db
+    assertPublicEventDateWindow(args.fromDate, args.beforeDate, MAX_PUBLIC_CALENDAR_WINDOW_DAYS);
+    const result = await ctx.db
       .query("events")
       .withIndex("by_status_date", (q) =>
         q.eq("status", "approved").gte("date", args.fromDate).lt("date", args.beforeDate),
       )
-      .collect();
+      .paginate({
+        cursor: args.cursor ?? null,
+        numItems: PUBLIC_EVENT_PAGE_SIZE,
+      });
 
-    const publicEvents = await sanitizePublicEventPage(ctx, events);
-    return publicEvents.map(toPublicCalendarEvent);
+    const publicEvents = await projectDeduplicatedPublicEventPage(ctx, result.page);
+    return {
+      ...result,
+      page: publicEvents.map(toPublicCalendarEvent),
+    };
   },
 });
 
@@ -741,17 +904,19 @@ export const listApprovedUpcomingByDatePaginated = query({
   args: {
     fromDate: v.string(),
     paginationOpts: paginationOptsValidator,
+    serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const result = await ctx.db
       .query("events")
       .withIndex("by_status_date", (q) =>
         q.eq("status", "approved").gte("date", args.fromDate),
       )
-      .paginate(args.paginationOpts);
+      .paginate(buildPublicPaginationOptions(args.paginationOpts));
     return {
       ...result,
-      page: await sanitizePublicEventPage(ctx, result.page),
+      page: await projectPublicEventPage(ctx, result.page),
     };
   },
 });
@@ -776,6 +941,33 @@ function formatDateKey(date: Date): string {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(
     date.getUTCDate(),
   ).padStart(2, "0")}`;
+}
+
+function dateKeyToUtcMs(value: string): number | null {
+  const parts = readDateParts(value);
+  if (!parts) {
+    return null;
+  }
+  const timestamp = Date.UTC(parts.year, parts.month - 1, parts.day);
+  return formatDateKey(new Date(timestamp)) === value ? timestamp : null;
+}
+
+function assertPublicEventDateWindow(
+  fromDate: string,
+  beforeDate: string,
+  maximumDays: number,
+): void {
+  const fromTimestamp = dateKeyToUtcMs(fromDate);
+  const beforeTimestamp = dateKeyToUtcMs(beforeDate);
+  const spanDays =
+    fromTimestamp === null || beforeTimestamp === null
+      ? Number.NaN
+      : (beforeTimestamp - fromTimestamp) / 86_400_000;
+  if (!Number.isInteger(spanDays) || spanDays < 1 || spanDays > maximumDays) {
+    throw new Error(
+      `Public event date window must span 1-${maximumDays} days using valid YYYY-MM-DD dates.`,
+    );
+  }
 }
 
 function addDaysToDateKey(value: string, days: number): string {
@@ -981,15 +1173,20 @@ export const getDiscoverFeed = query({
       ...tonight,
       ...weekend,
     ]);
-    const sanitizeGroup = (events: Doc<"events">[]) =>
-      events.map((event) => sanitizePublicEventWithVenueIds(event, publicVenueIds));
+    const projectGroup = (events: Doc<"events">[]) =>
+      events.map((event) =>
+        projectPublicEvent(
+          event,
+          event.venueId !== undefined && publicVenueIds.has(event.venueId),
+        ),
+      );
 
     return {
-      featured: sanitizeGroup(featured),
-      free: sanitizeGroup(free),
-      promoted: sanitizeGroup(promoted),
-      tonight: sanitizeGroup(tonight),
-      weekend: sanitizeGroup(weekend),
+      featured: projectGroup(featured),
+      free: projectGroup(free),
+      promoted: projectGroup(promoted),
+      tonight: projectGroup(tonight),
+      weekend: projectGroup(weekend),
     };
   },
 });

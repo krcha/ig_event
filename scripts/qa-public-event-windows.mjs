@@ -37,33 +37,33 @@ assert.match(
 );
 assert.match(
   venuesSource,
-  /function eventMatchesVenueIdentity/,
-  "Venue pages should match approved events by venue identity, not only stored venueId.",
+  /async function loadBoundedVenueEventCards/,
+  "Venue pages should match approved events by bounded indexed venue identity reads.",
 );
 assert.match(
   venuesSource,
-  /!event\.venueId && eventMatchesVenueIdentity\(event, venue\)/,
-  "Venue pages should include legacy approved events that match by name/handle but are missing venueId.",
+  /\.filter\(\(event\) => !event\.venueId\)/,
+  "Venue pages should include legacy identity matches only when a stored venueId is absent.",
 );
 assert.match(
   venuesSource,
-  /const PUBLIC_VENUE_FALLBACK_SCAN_LIMIT = 1000;/,
-  "Venue page fallback scans should stay bounded.",
+  /withIndex\("by_normalizedVenueHandle_status_date"/,
+  "Venue page legacy-handle recovery should use the normalized identity index.",
 );
 assert.match(
   venuesSource,
-  /const venueIdByHandle = new Map/,
-  "Venue directory fallback counting should index venues by normalized Instagram handle.",
+  /withIndex\("by_normalizedVenueIdentity_status_date"/,
+  "Venue page legacy-name recovery should use the normalized identity index.",
 );
-assert.match(
+assert.doesNotMatch(
   venuesSource,
-  /const venueIdByName = new Map/,
-  "Venue directory fallback counting should index venues by normalized name.",
+  /PUBLIC_VENUE_FALLBACK_SCAN_LIMIT|upcomingApprovedScan|historyApprovedScan/,
+  "Venue pages should never scan global approved-event windows for identity fallback.",
 );
-assert.match(
-  venuesSource,
-  /event\.venueId \?\?[\s\S]*venueIdByHandle\.get\(eventHandle\)[\s\S]*venueIdByName\.get\(eventVenueName\)/,
-  "Venue directory counts should include approved upcoming events missing venueId without an events-by-venues scan.",
+assert.doesNotMatch(
+  publicVenuePagesSource,
+  /upcomingEventCount|loadPublicCalendarEventsWindow/,
+  "Venue directory loading should not scan a year of events for incomplete totals.",
 );
 assert.match(
   publicEventsSource,
@@ -72,8 +72,8 @@ assert.match(
 );
 assert.match(
   publicEventsSource,
-  /MAX_PUBLIC_EVENTS_PAGE_SIZE = 100/,
-  "Public event page size should be clamped to 100.",
+  /MAX_PUBLIC_EVENTS_PAGE_SIZE = 50/,
+  "Public event page size should be clamped to the production-safe 50-row bound.",
 );
 assert.match(
   publicEventsSource,
@@ -85,20 +85,10 @@ assert.match(
   /venues:listPublicVenueFieldsByIds/,
   "Public loader should fetch venue display fields by current page IDs.",
 );
-assert.match(
+assert.doesNotMatch(
   publicVenuePagesSource,
-  /loadFallbackUpcomingVenueEvents/,
-  "Venue pages should supplement deployed venue queries from the public calendar event window.",
-);
-assert.match(
-  publicVenuePagesSource,
-  /loadUpcomingApprovedEvents\(\{\s*daysAhead: PUBLIC_VENUE_FALLBACK_UPCOMING_DAYS,\s*fromDate: options\.today,/s,
-  "Venue page fallback should use the same public approved-event window as the calendar.",
-);
-assert.match(
-  publicVenuePagesSource,
-  /\.filter\(\(event\) => eventMatchesVenue\(event, options\.venue\)\)/,
-  "Venue page fallback should only merge calendar events that match the requested venue identity.",
+  /loadFallbackUpcomingVenueEvents|PUBLIC_VENUE_FALLBACK_UPCOMING_DAYS|loadUpcomingApprovedEvents/,
+  "Venue pages should trust the indexed Convex result instead of redundantly loading 366 days of events.",
 );
 assert.doesNotMatch(
   publicEventsSource,

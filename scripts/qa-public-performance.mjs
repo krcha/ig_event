@@ -230,7 +230,7 @@ assert.match(
 );
 assert.match(
   convexEventsSource,
-  /export const listPublicCalendarEventsWindow = query/,
+  /export const listPublicCalendarEventsWindowPaginated = query/,
   "Convex should expose a compact public calendar window query for fast browse loads.",
 );
 assert.match(
@@ -265,29 +265,29 @@ assertDoesNotInclude(
   "Public event loaders should not keep the unused load-all-then-slice page helper.",
 );
 assert.match(
-  publicEventsSource,
-  /const eventsByDate = new Map<string, PublicEvent\[\]>\(\);/,
-  "Duplicate cleanup should bucket events by date before running pairwise matching.",
+  convexEventsSource,
+  /const eventsByDate = new Map<string, Doc<"events">\[\]>\(\);/,
+  "Duplicate cleanup should bucket internal events by date before public projection.",
+);
+assert.match(
+  convexEventsSource,
+  /buildApprovedEventAutoCleanupGroups\([\s\S]*cohort\.map\(toApprovedEventDuplicateRecord\)/,
+  "Duplicate cleanup must use private classification inputs before public projection.",
+);
+assert.match(
+  convexEventsSource,
+  /const PUBLIC_DUPLICATE_DATE_COHORT_LIMIT = 25;/,
+  "Duplicate cleanup should cap pairwise matching for high-volume public days.",
+);
+assert.match(
+  convexEventsSource,
+  /\.take\(PUBLIC_DUPLICATE_DATE_COHORT_LIMIT \+ 1\)/,
+  "Boundary-date duplicate cohorts must be bounded at the indexed database read.",
 );
 assert.doesNotMatch(
   publicEventsSource,
-  /buildApprovedEventAutoCleanupGroups\(\s*events\.map\(mapPublicEventToDuplicateRecord\)/,
-  "Duplicate cleanup should not run the O(n^2) grouping over the entire cross-date event set.",
-);
-assert.match(
-  publicEventsSource,
-  /const PUBLIC_DUPLICATE_CLEANUP_MAX_PAIRWISE_EVENTS = 20;/,
-  "Duplicate cleanup should cap expensive pairwise matching for high-volume public days.",
-);
-assert.match(
-  publicEventsSource,
-  /hideExactSourceDuplicates\(sameDateEvents, hiddenDuplicateIds\);/,
-  "Duplicate cleanup should still remove exact same-source duplicates even when pairwise matching is skipped.",
-);
-assert.match(
-  publicEventsSource,
-  /sameDateEvents\.length > PUBLIC_DUPLICATE_CLEANUP_MAX_PAIRWISE_EVENTS/,
-  "Large same-day batches should skip expensive pairwise duplicate heuristics on public page loads.",
+  /hideExactSourceDuplicates|normalizedFieldsJson:\s*null|buildApprovedEventAutoCleanupGroups/,
+  "Projected rows must not collapse distinct split occurrences or classify without private inputs.",
 );
 
 assert.match(

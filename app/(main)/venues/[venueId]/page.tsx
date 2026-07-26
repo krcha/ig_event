@@ -224,15 +224,10 @@ function VenueBio({ venue }: { venue: PublicVenue }) {
 }
 
 function getProfileStats(options: {
-  approvedPostCount: string;
   appFollowerCount: number;
   instagramFollowerCount?: number | null;
-  upcomingCount: string;
 }): Array<{ label: string; value: string }> {
-  const stats = [
-    { label: "posts", value: options.approvedPostCount },
-    { label: "upcoming", value: options.upcomingCount },
-  ];
+  const stats: Array<{ label: string; value: string }> = [];
 
   if (options.appFollowerCount > 0) {
     stats.push({ label: "saved by", value: formatCompactNumber(options.appFollowerCount) });
@@ -414,18 +409,14 @@ export default async function VenuePage({ params }: VenuePageProps) {
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
   const instagramHref = venue ? getInstagramHref(venue) : "";
   const eventPosts = buildEventPosts(upcomingEvents, historyEvents);
-  const approvedPostCount = String(stats?.approvedEventCount ?? eventPosts.length);
-  const upcomingCount = String(stats?.approvedUpcomingCount ?? upcomingEvents.length);
   const calendarHref = venue ? `/?venue=${encodeURIComponent(venue.name)}` : "/";
   const priorityEventId = venue
     ? eventPosts.find((event) => getEventPostImageSrc(event))?._id
     : null;
   const profileStats = venue
     ? getProfileStats({
-        approvedPostCount,
         appFollowerCount: stats?.appFollowerCount ?? 0,
         instagramFollowerCount: venue.instagramFollowerCount,
-        upcomingCount,
       })
     : [];
 
@@ -490,17 +481,18 @@ export default async function VenuePage({ params }: VenuePageProps) {
                     />
                   </div>
 
-                  <div
-                    className={cn(
-                      "grid max-w-xl gap-x-5 gap-y-3",
-                      profileStats.length > 2 ? "grid-cols-3" : "grid-cols-2",
-                      profileStats.length > 3 && "sm:grid-cols-4",
-                    )}
-                  >
-                    {profileStats.map((item) => (
-                      <ProfileStat key={item.label} label={item.label} value={item.value} />
-                    ))}
-                  </div>
+                  {profileStats.length > 0 ? (
+                    <div
+                      className={cn(
+                        "grid max-w-xl gap-x-5 gap-y-3",
+                        profileStats.length > 1 ? "grid-cols-2" : "grid-cols-1",
+                      )}
+                    >
+                      {profileStats.map((item) => (
+                        <ProfileStat key={item.label} label={item.label} value={item.value} />
+                      ))}
+                    </div>
+                  ) : null}
 
                   <VenueBio venue={venue} />
                 </div>

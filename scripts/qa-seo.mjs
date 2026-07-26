@@ -178,8 +178,13 @@ const convexVenues = read("convex/venues.ts");
 
 assert.match(convexVenues, /DEFAULT_PUBLIC_VENUE_DIRECTORY_LIMIT = 2000/);
 assert.match(convexVenues, /MAX_PUBLIC_VENUE_DIRECTORY_LIMIT = 2000/);
-assert.match(convexVenues, /const venueIdByHandle = new Map/);
-assert.match(convexVenues, /const venueIdByName = new Map/);
+assert.match(convexVenues, /by_normalizedVenueHandle_status_date/);
+assert.match(convexVenues, /by_normalizedVenueIdentity_status_date/);
+assert.doesNotMatch(
+  venueDirectory,
+  /upcomingEventCount|name="upcoming"/,
+  "Venue directory SEO must not depend on an incomplete, query-heavy upcoming count.",
+);
 
 assert.ok(layout.includes('lang="en-RS"'));
 assert.equal(layout.includes('alternateLocale: "sr_RS"'), false);

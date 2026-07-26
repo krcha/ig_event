@@ -2,9 +2,9 @@ import type { UserIdentity } from "convex/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
-import { sanitizeVenueLinkedPublicEventFields } from "../lib/events/public-event-venue-fields";
 import { isVenuePublic } from "../lib/venues/venue-lifecycle";
 import { isAdminSubject, requireViewerIdentity } from "./authz";
+import { projectPublicEvent } from "./publicEventProjection";
 
 type ViewerLibraryUser = {
   clerkId: string;
@@ -120,31 +120,12 @@ async function loadLibraryForUser(ctx: QueryCtx, userId: string) {
     .filter(notNull)
     .filter((event) => event.status === "approved");
   const publicVenueIds = await loadPublicVenueIdsForSavedEvents(ctx, approvedSavedEvents);
-  const savedEvents = approvedSavedEvents.map((event) => {
-    const venueSanitized = sanitizeVenueLinkedPublicEventFields(
+  const savedEvents = approvedSavedEvents.map((event) =>
+    projectPublicEvent(
       event,
       event.venueId !== undefined && publicVenueIds.has(event.venueId),
-    );
-    const sanitized = { ...venueSanitized } as Doc<"events"> & Record<string, unknown>;
-    delete sanitized.sourceOccurrenceKey;
-    if (sanitized.normalizedFieldsJson) {
-      try {
-        const normalizedFields = JSON.parse(sanitized.normalizedFieldsJson) as Record<
-          string,
-          unknown
-        >;
-        for (const key of Object.keys(normalizedFields)) {
-          if (key.startsWith("sourceOccurrence")) {
-            delete normalizedFields[key];
-          }
-        }
-        sanitized.normalizedFieldsJson = JSON.stringify(normalizedFields);
-      } catch {
-        delete sanitized.normalizedFieldsJson;
-      }
-    }
-    return sanitized;
-  });
+    ),
+  );
   const favoriteVenues = (
     await Promise.all(favoriteRefs.map((ref) => ctx.db.get(ref.venueId)))
   )
