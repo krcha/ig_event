@@ -3,6 +3,8 @@ import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import {
   extractEventDataFromInstagramPost,
+  isOpenAiProviderBlockedError,
+  OpenAiProviderBlockedError,
   type ExtractedEventData,
 } from "@/lib/ai/extract-event-data";
 import {
@@ -27,6 +29,7 @@ import {
   resolveInstagramIngestionMediaSelection,
 } from "@/lib/pipeline/instagram-media-selection";
 import {
+  getInstagramScrapeRawItemCount,
   loadRecentApifyRunPosts,
   scrapeInstagramAccount,
   type InstagramScrapedPost,
@@ -52,6 +55,7 @@ import {
   extractEventTimeEvidenceFromText,
   extractEventTimeFromText,
   isTbdEventTime,
+  normalizeEventTime,
   TBD_EVENT_TIME,
   type EventTimeProvenance,
   type EventTimeSource,
@@ -89,6 +93,9 @@ type HandleSummary = {
   handle: string;
   fetchedPosts: number;
   fetched_posts: number;
+  newFetchedPosts: number;
+  skippedAlreadyFetchedPosts: number;
+  apifyHighWatermarkApplied: number;
   insertedEvents: number;
   inserted_events: number;
   insertedApprovedEvents: number;
@@ -162,6 +169,7 @@ export type IngestionBatchStepOptions = {
   postStepLimit?: number;
   scrapedPostPageSize?: number;
   serviceSecret?: string;
+  workOwner?: string;
 };
 
 export type IngestionBatchStepResult = {
@@ -212,8 +220,18 @@ const listByDateQuery =
   "events:listByDate" as unknown as FunctionReference<"query">;
 const createEventMutation =
   "events:createEvent" as unknown as FunctionReference<"mutation">;
+const getInstagramSourceOccurrenceReceiptQuery =
+  "events:getInstagramSourceOccurrenceReceipt" as unknown as FunctionReference<"query">;
+const recordInstagramSourceOccurrenceSatisfactionMutation =
+  "events:recordInstagramSourceOccurrenceSatisfaction" as unknown as FunctionReference<"mutation">;
+const reconcileInstagramSourceOccurrenceReceiptMutation =
+  "events:reconcileInstagramSourceOccurrenceReceipt" as unknown as FunctionReference<"mutation">;
+const updateSourceOccurrenceExpectedCountMutation =
+  "events:updateSourceOccurrenceExpectedCount" as unknown as FunctionReference<"mutation">;
 const updateEventMutation =
   "events:updateEvent" as unknown as FunctionReference<"mutation">;
+const updateEventAndRecordInstagramSourceOccurrenceSatisfactionMutation =
+  "events:updateEventAndRecordInstagramSourceOccurrenceSatisfaction" as unknown as FunctionReference<"mutation">;
 const persistInstagramImageAction =
   "mediaActions:persistInstagramImage" as unknown as FunctionReference<"action">;
 const listScrapedPostsByHandleQuery =
@@ -222,11 +240,36 @@ const listScrapedPostsByHandlePaginatedQuery =
   "scrapedPosts:listByHandlePaginated" as unknown as FunctionReference<"query">;
 const getScrapedPostsManyByIdsQuery =
   "scrapedPosts:getManyByIds" as unknown as FunctionReference<"query">;
+const getScrapedPostsManyByHandleAndPostRefsQuery =
+  "scrapedPosts:getManyByHandleAndPostRefs" as unknown as FunctionReference<"query">;
 const upsertScrapedPostsByHandleMutation =
   "scrapedPosts:upsertManyByHandle" as unknown as FunctionReference<"mutation">;
+const recordScrapedPostProcessingResultMutation =
+  "scrapedPosts:recordProcessingResult" as unknown as FunctionReference<"mutation">;
+const claimScrapedPostProcessingMutation =
+  "scrapedPosts:claimProcessing" as unknown as FunctionReference<"mutation">;
+const getScrapedPostBacklogStateByHandleQuery =
+  "scrapedPosts:getBacklogStateByHandle" as unknown as FunctionReference<"query">;
+const claimPaidFetchLeaseMutation =
+  "scrapedPosts:claimPaidFetchLease" as unknown as FunctionReference<"mutation">;
+const releasePaidFetchLeaseMutation =
+  "scrapedPosts:releasePaidFetchLease" as unknown as FunctionReference<"mutation">;
+const recordPaidFetchWindowSaturationMutation =
+  "scrapedPosts:recordPaidFetchWindowSaturation" as unknown as FunctionReference<"mutation">;
+const recordPaidFetchWindowSuccessMutation =
+  "scrapedPosts:recordPaidFetchWindowSuccess" as unknown as FunctionReference<"mutation">;
+const claimProviderLeaseMutation =
+  "scrapedPosts:claimProviderLease" as unknown as FunctionReference<"mutation">;
+const blockProviderMutation =
+  "scrapedPosts:blockProvider" as unknown as FunctionReference<"mutation">;
+const releaseProviderLeaseMutation =
+  "scrapedPosts:releaseProviderLease" as unknown as FunctionReference<"mutation">;
 const SCRAPED_POST_UPSERT_BATCH_SIZE = 25;
 const DEFAULT_SCRAPED_POST_PAGE_SIZE = 25;
 const MAX_SCRAPED_POST_PAGE_SIZE = 100;
+const DEFAULT_FULL_SCRAPE_RESULTS_LIMIT = 3;
+const MAX_FULL_SCRAPE_RESULTS_LIMIT = 20;
+const ENABLE_FRESH_APIFY_FETCH_ENV = "ENABLE_FRESH_APIFY_FETCH";
 const DEFAULT_INGESTION_POST_STEP_LIMIT = 8;
 const MAX_INGESTION_POST_STEP_LIMIT = 50;
 const DEFAULT_DIRECT_FULL_SCRAPE_CONCURRENCY = 4;
@@ -402,6 +445,33 @@ type PrepareEventResult =
         | "far_future";
       normalizedFields: Record<string, unknown>;
     };
+
+type SourceProcessingFence = {
+  handle: string;
+  postId?: string;
+  instagramPostUrl?: string;
+  owner: string;
+  sourceRevision: number;
+};
+
+type SourceOccurrencePlan = {
+  sourceIdentity: string;
+  sourceFingerprint: string;
+  expectedKeys: string[];
+  expectedOccurrences: Array<{
+    key: string;
+    date: string;
+    time?: string;
+    venue: string;
+    title: string;
+    artists: string[];
+  }>;
+  deferredChildCount: number;
+  deferredChildKeys: string[];
+  observedChildKeys: string[];
+  previousSourceFingerprint?: string | null;
+  confirmedPastKeys?: string[];
+};
 
 type ExistingEventRecord = {
   _id: string;
@@ -870,6 +940,18 @@ function normalizeBoundedPositiveInteger(options: {
   return Math.min(Math.trunc(parsed), options.maxValue);
 }
 
+function isFreshApifyFetchEnabled(): boolean {
+  return /^(1|true|yes|on)$/iu.test(process.env[ENABLE_FRESH_APIFY_FETCH_ENV]?.trim() ?? "");
+}
+
+function normalizeFullScrapeResultsLimit(value?: number): number {
+  return normalizeBoundedPositiveInteger({
+    value,
+    defaultValue: DEFAULT_FULL_SCRAPE_RESULTS_LIMIT,
+    maxValue: MAX_FULL_SCRAPE_RESULTS_LIMIT,
+  });
+}
+
 function normalizeIngestionPostStepLimit(value?: number): number {
   return normalizeBoundedPositiveInteger({
     value: value ?? process.env.INGESTION_POST_STEP_LIMIT,
@@ -1011,6 +1093,11 @@ type SavedScrapedPostRecord = {
   postedAtMs?: number;
   sourceKey?: string;
   username: string;
+  processingStatus?: "pending" | "completed" | "retryable_failure";
+  processingAttempts?: number;
+  processingOutcome?: string;
+  processingError?: string;
+  lastProcessedAt?: number;
   createdAt: number;
   updatedAt: number;
 };
@@ -3740,6 +3827,9 @@ function createEmptyHandleSummary(handle: string): HandleSummary {
     handle,
     fetchedPosts: 0,
     fetched_posts: 0,
+    newFetchedPosts: 0,
+    skippedAlreadyFetchedPosts: 0,
+    apifyHighWatermarkApplied: 0,
     insertedEvents: 0,
     inserted_events: 0,
     insertedApprovedEvents: 0,
@@ -3767,6 +3857,17 @@ function createEmptyHandleSummary(handle: string): HandleSummary {
     failed_extraction: 0,
     errors: [],
   };
+}
+
+function getTerminalNoEventSkipCount(summary: HandleSummary): number {
+  return (
+    summary.skippedNoImage +
+    summary.skipped_missing_date +
+    summary.skipped_video +
+    summary.skipped_invalid_event +
+    summary.skipped_past_event +
+    summary.skipped_far_future_event
+  );
 }
 
 function getOrCreateHandleSummary(summary: IngestionSummary, handle: string): HandleSummary {
@@ -3915,6 +4016,7 @@ async function persistScrapedPostsForHandle(
   handle: string,
   posts: InstagramScrapedPost[],
   serviceSecret: string,
+  fetchLeaseOwner?: string,
 ): Promise<void> {
   if (posts.length === 0) {
     return;
@@ -3926,15 +4028,16 @@ async function persistScrapedPostsForHandle(
       withServiceSecret(
         {
           handle,
+          ...(fetchLeaseOwner ? { fetchLeaseOwner } : {}),
           posts: postBatch.map((post) => ({
             handle,
             postId: post.postId,
-            ...(post.caption ? { caption: post.caption } : {}),
-            ...(post.altText ? { altText: post.altText } : {}),
+            caption: post.caption ?? "",
+            altText: post.altText ?? "",
             ...(post.imageUrl ? { imageUrl: post.imageUrl } : {}),
             imageUrls: post.imageUrls,
-            ...(post.postType ? { postType: post.postType } : {}),
-            ...(post.locationName ? { locationName: post.locationName } : {}),
+            postType: post.postType ?? "",
+            locationName: post.locationName ?? "",
             instagramPostUrl: post.instagramPostUrl,
             ...(post.postedAt ? { postedAt: post.postedAt } : {}),
             username: post.username,
@@ -3959,6 +4062,15 @@ async function loadSavedScrapedPostsForHandle(
   )) as SavedScrapedPostRecord[];
 
   const filtered = savedPosts
+    .filter(
+      (record) =>
+        !(
+          record.processingStatus === "completed" &&
+          ["terminal_no_event", "receipt_complete"].includes(
+            record.processingOutcome ?? "",
+          )
+        ),
+    )
     .map(mapSavedScrapedPostToInstagramPost)
     .filter((post) => isPostWithinDaysBack(post.postedAt, daysBack))
     .sort((left, right) => comparePostedAtDescending(left.postedAt, right.postedAt));
@@ -4008,6 +4120,12 @@ async function loadSavedScrapedPostPageForHandle(options: {
       hitDaysBackBoundary = true;
       continue;
     }
+    if (
+      record.processingStatus === "completed" &&
+      ["terminal_no_event", "receipt_complete"].includes(record.processingOutcome ?? "")
+    ) {
+      continue;
+    }
     if (options.resultsLimit && options.resultsLimit > 0 && acceptedCount >= options.resultsLimit) {
       break;
     }
@@ -4043,6 +4161,57 @@ async function loadScrapedPostsByIds(
   return posts
     .map(mapSavedScrapedPostToInstagramPost)
     .sort((left, right) => comparePostedAtDescending(left.postedAt, right.postedAt));
+}
+
+async function loadLatestSavedScrapedPostForHandle(
+  client: ConvexHttpClient,
+  handle: string,
+  serviceSecret: string,
+): Promise<{
+  post: InstagramScrapedPost;
+  processingStatus?: SavedScrapedPostRecord["processingStatus"];
+  processingOutcome?: string;
+} | null> {
+  const page = (await client.query(
+    listScrapedPostsByHandlePaginatedQuery,
+    withServiceSecret(
+      {
+        handle,
+        paginationOpts: { cursor: null, numItems: 1 },
+      },
+      serviceSecret,
+    ),
+  )) as ScrapedPostsPage;
+  const latest = page.page[0];
+  if (!latest) {
+    return null;
+  }
+  return {
+    post: mapSavedScrapedPostToInstagramPost(latest),
+    processingStatus: latest.processingStatus,
+    processingOutcome: latest.processingOutcome,
+  };
+}
+
+async function filterAlreadySavedScrapedPosts(
+  client: ConvexHttpClient,
+  handle: string,
+  posts: InstagramScrapedPost[],
+): Promise<{ freshPosts: InstagramScrapedPost[]; skippedCount: number }> {
+  if (posts.length === 0) {
+    return { freshPosts: [], skippedCount: 0 };
+  }
+  const existing = (await client.query(getScrapedPostsManyByHandleAndPostRefsQuery, {
+    refs: posts.map((post) => ({
+      handle,
+      postId: post.postId || undefined,
+      instagramPostUrl: post.instagramPostUrl || undefined,
+    })),
+  })) as Array<unknown | null>;
+  return {
+    freshPosts: posts.filter((_post, index) => existing[index] == null),
+    skippedCount: existing.filter((record) => record != null).length,
+  };
 }
 
 function normalizeBatchSize(value: number | undefined): number {
@@ -4434,6 +4603,16 @@ function readJsonBoolean(record: Record<string, unknown> | null, key: string): b
 function readJsonString(record: Record<string, unknown> | null, key: string): string | null {
   const value = record?.[key];
   return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function readJsonStringArray(record: Record<string, unknown> | null, key: string): string[] {
+  const value = record?.[key];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(
+    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+  );
 }
 
 function readJsonNumber(record: Record<string, unknown> | null, key: string): number | null {
@@ -5631,29 +5810,117 @@ function shouldReprocessExistingSourcePosts(): boolean {
   return normalizeString(process.env.INGESTION_REPROCESS_EXISTING_SOURCE_POSTS).toLowerCase() === "true";
 }
 
-function hasIncompleteMultiEventSourceSet(matches: ExistingSourceMatch[]): boolean {
+const SOURCE_OCCURRENCE_EXTRACTION_PROTOCOL_VERSION = "2026-07-24-v2";
+
+function buildSourceOccurrenceFingerprint(post: InstagramScrapedPost): string {
+  const digest = createHash("sha256")
+    .update(
+      JSON.stringify({
+        protocolVersion: SOURCE_OCCURRENCE_EXTRACTION_PROTOCOL_VERSION,
+        caption: normalizeString(post.caption),
+        altText: normalizeString(post.altText),
+        locationName: normalizeString(post.locationName),
+      }),
+    )
+    .digest("hex");
+  return `instagram-source-v2:${digest}`;
+}
+
+function buildSourceOccurrenceIdentity(post: InstagramScrapedPost): string {
+  const sourceIdentity =
+    extractShortcodeFromPostUrl(post.instagramPostUrl) ||
+    normalizeString(post.postId) ||
+    normalizeString(post.instagramPostUrl).toLowerCase();
+  return `instagram-source-identity-v1:${sourceIdentity}`;
+}
+
+function hasIncompleteSourceOccurrenceSet(
+  matches: ExistingSourceMatch[],
+  post: InstagramScrapedPost,
+): boolean {
   let expectedOccurrenceCount = 0;
+  let expectedKeySignature: string | null = null;
+  let expectedKeySet: Set<string> | null = null;
+  let allTrackedRowsHaveExactV2Metadata = true;
   const persistedOccurrenceKeys = new Set<string>();
+  const currentSourceFingerprint = buildSourceOccurrenceFingerprint(post);
 
   for (const match of matches) {
     const normalizedFields = parseJsonRecord(match.existingEvent.normalizedFieldsJson);
-    if (!isMultiEventNormalizedFields(normalizedFields)) {
+    const persistedSourceFingerprint = readJsonString(
+      normalizedFields,
+      "sourceOccurrenceSourceFingerprint",
+    );
+    if (!persistedSourceFingerprint || persistedSourceFingerprint !== currentSourceFingerprint) {
+      return true;
+    }
+    if (!isMultiOccurrenceNormalizedFields(normalizedFields)) {
       continue;
     }
-
-    expectedOccurrenceCount = Math.max(
-      expectedOccurrenceCount,
-      readJsonNumber(normalizedFields, "sourceOccurrenceExpectedCount") ??
-        readJsonNumber(normalizedFields, "multiEventSplitCount") ??
-        2,
-    );
-    const occurrenceKey =
-      normalizeString(match.existingEvent.sourceOccurrenceKey) ||
-      readJsonString(normalizedFields, "sourceOccurrenceKey") ||
-      getSourceOccurrenceProvenanceKey(normalizedFields);
-    if (occurrenceKey) {
-      persistedOccurrenceKeys.add(occurrenceKey);
+    if ((readJsonNumber(normalizedFields, "sourceOccurrenceDeferredChildCount") ?? 0) > 0) {
+      return true;
     }
+
+    const fallbackExpectedOccurrenceCount = isDateRangeExpandedNormalizedFields(
+      normalizedFields,
+    )
+      ? (readJsonNumber(normalizedFields, "dateRangeExpandedCount") ??
+        readJsonNumber(normalizedFields, "expandedDateTotal") ??
+        2)
+      : (readJsonNumber(normalizedFields, "multiEventSplitCount") ??
+        readJsonNumber(normalizedFields, "expandedDateTotal") ??
+        2);
+    const rowExpectedCount =
+      readJsonNumber(normalizedFields, "sourceOccurrenceExpectedCount") ??
+      fallbackExpectedOccurrenceCount;
+    expectedOccurrenceCount = Math.max(expectedOccurrenceCount, rowExpectedCount);
+    const persistedSourceOccurrenceKey =
+      normalizeString(match.existingEvent.sourceOccurrenceKey) ||
+      readJsonString(normalizedFields, "sourceOccurrenceKey");
+    const occurrenceKey =
+      persistedSourceOccurrenceKey ||
+      [
+        "legacy",
+        normalizeString(match.existingEvent.date),
+        getSourceOccurrenceProvenanceKey(normalizedFields) ?? "missing-row",
+        normalizeEventTime(match.existingEvent.time).startLabel ||
+          normalizeString(match.existingEvent.time).toLowerCase() ||
+          "unknown-time",
+        readJsonNumber(normalizedFields, "splitEventIndex") ??
+          readJsonNumber(normalizedFields, "expandedDateIndex") ??
+          "unknown-index",
+      ].join("|");
+    persistedOccurrenceKeys.add(occurrenceKey);
+
+    const rowExpectedKeys = readJsonStringArray(
+      normalizedFields,
+      "sourceOccurrenceExpectedKeys",
+    );
+    if (
+      !persistedSourceOccurrenceKey?.startsWith("instagram-occurrence-v2:") ||
+      rowExpectedKeys.length !== rowExpectedCount ||
+      new Set(rowExpectedKeys).size !== rowExpectedKeys.length
+    ) {
+      allTrackedRowsHaveExactV2Metadata = false;
+      continue;
+    }
+    const rowExpectedKeySignature = JSON.stringify([...rowExpectedKeys].sort());
+    if (expectedKeySignature === null) {
+      expectedKeySignature = rowExpectedKeySignature;
+      expectedKeySet = new Set(rowExpectedKeys);
+    } else if (expectedKeySignature !== rowExpectedKeySignature) {
+      return true;
+    }
+  }
+
+  if (expectedKeySet) {
+    if (!allTrackedRowsHaveExactV2Metadata) {
+      return true;
+    }
+    return (
+      persistedOccurrenceKeys.size !== expectedKeySet.size ||
+      [...expectedKeySet].some((key) => !persistedOccurrenceKeys.has(key))
+    );
   }
 
   return (
@@ -5662,67 +5929,363 @@ function hasIncompleteMultiEventSourceSet(matches: ExistingSourceMatch[]): boole
   );
 }
 
+export const hasIncompleteSourceOccurrenceSetForTesting =
+  hasIncompleteSourceOccurrenceSet;
+
+function buildSourceOccurrenceKeyFromFields(
+  post: InstagramScrapedPost,
+  date: string,
+  time: string | undefined,
+  normalizedFields: Record<string, unknown>,
+): string {
+  const sourceIdentity = buildSourceOccurrenceIdentity(post);
+  const canonicalTime = normalizeEventTime(time);
+  const comparableTime =
+    canonicalTime.startLabel ?? extractComparableTimeParts(time)[0] ?? "";
+  const collisionOrdinal = readJsonNumber(
+    normalizedFields,
+    "sourceOccurrenceCollisionOrdinal",
+  );
+  const occurrenceIdentity = isDateRangeExpandedNormalizedFields(normalizedFields)
+    ? `${date}|date-range`
+    : isMultiOccurrenceNormalizedFields(normalizedFields)
+      ? `${date}|row:time:${
+          comparableTime || normalizeString(time).toLowerCase() || "unknown"
+        }${
+          collisionOrdinal === null ? "" : `|collision-ordinal:${collisionOrdinal}`
+        }`
+      : `${date}|single`;
+  const digest = createHash("sha256")
+    .update(`instagram-occurrence-v2\u0000${sourceIdentity}\u0000${occurrenceIdentity}`)
+    .digest("hex");
+  return `instagram-occurrence-v2:${digest}`;
+}
+
 function buildSourceOccurrenceKey(
   post: InstagramScrapedPost,
   event: PreparedEvent,
   normalizedFields: Record<string, unknown>,
 ): string {
-  const sourceIdentity =
-    extractShortcodeFromPostUrl(post.instagramPostUrl) ||
-    normalizeString(post.postId) ||
-    normalizeString(post.instagramPostUrl).toLowerCase();
-  const provenanceKey = getSourceOccurrenceProvenanceKey(normalizedFields);
-  const comparableTime = extractComparableTimeParts(event.time).join(",");
-  const splitIndex = readJsonNumber(normalizedFields, "multiEventSplitIndex");
-  const occurrenceIdentity = isMultiEventNormalizedFields(normalizedFields)
-    ? `${event.date}|row:${provenanceKey ?? "missing"}|time:${
-        comparableTime || normalizeString(event.time).toLowerCase() || "unknown"
-      }|fallback-index:${provenanceKey ? "unused" : (splitIndex ?? "unknown")}`
-    : `${event.date}|single`;
-  const digest = createHash("sha256")
-    .update(`instagram-occurrence-v1\u0000${sourceIdentity}\u0000${occurrenceIdentity}`)
-    .digest("hex");
-  return `instagram-occurrence-v1:${digest}`;
+  return buildSourceOccurrenceKeyFromFields(
+    post,
+    event.date,
+    event.time,
+    normalizedFields,
+  );
 }
 
-function bindSourceOccurrenceMetadata(
+export function buildSourceOccurrenceKeyForTesting(
+  post: InstagramScrapedPost,
+  date: string,
+  time: string | undefined,
+  normalizedFields: Record<string, unknown>,
+): string {
+  return buildSourceOccurrenceKeyFromFields(post, date, time, normalizedFields);
+}
+
+export function bindSourceOccurrenceMetadata(
   post: InstagramScrapedPost,
   preparedResults: PrepareEventResult[],
 ): PrepareEventResult[] {
-  const persistableOccurrenceCount = preparedResults.filter(
-    (prepared) => prepared.kind === "ok",
-  ).length;
-  if (persistableOccurrenceCount === 0) {
-    return preparedResults;
+  const buildKeyForPreparedResult = (
+    prepared: PrepareEventResult,
+    normalizedFields: Record<string, unknown>,
+  ): string | null => {
+    if (prepared.kind === "ok") {
+      return buildSourceOccurrenceKey(post, prepared.event, normalizedFields);
+    }
+    const date = readJsonString(normalizedFields, "normalizedDate");
+    if (!date) {
+      return null;
+    }
+    return buildSourceOccurrenceKeyFromFields(
+      post,
+      date,
+      readJsonString(normalizedFields, "time") ?? undefined,
+      normalizedFields,
+    );
+  };
+  const baseOccurrenceKeys = preparedResults.map((prepared) =>
+    buildKeyForPreparedResult(prepared, prepared.normalizedFields),
+  );
+  const baseKeyCounts = new Map<string, number>();
+  for (const key of baseOccurrenceKeys) {
+    if (key) {
+      baseKeyCounts.set(key, (baseKeyCounts.get(key) ?? 0) + 1);
+    }
   }
+  const seenBaseKeyCounts = new Map<string, number>();
+  const occurrenceNormalizedFields = preparedResults.map((prepared, index) => {
+    const baseKey = baseOccurrenceKeys[index];
+    if (!baseKey || (baseKeyCounts.get(baseKey) ?? 0) < 2) {
+      return prepared.normalizedFields;
+    }
+    const collisionOrdinal = (seenBaseKeyCounts.get(baseKey) ?? 0) + 1;
+    seenBaseKeyCounts.set(baseKey, collisionOrdinal);
+    return {
+      ...prepared.normalizedFields,
+      sourceOccurrenceCollisionOrdinal: collisionOrdinal,
+      sourceOccurrenceAmbiguousProvenance: true,
+    };
+  });
+  const sourceOccurrenceKeys = preparedResults.map((prepared, index) =>
+    buildKeyForPreparedResult(prepared, occurrenceNormalizedFields[index]!),
+  );
+  const persistableOccurrenceKeys = sourceOccurrenceKeys
+    .filter(
+      (key, index): key is string => preparedResults[index]?.kind === "ok" && key !== null,
+    )
+    .sort();
+  const persistableOccurrenceCount = persistableOccurrenceKeys.length;
+  const deferredChildCount = preparedResults.filter(
+    (prepared) => prepared.kind === "skip" && prepared.reason !== "past_event",
+  ).length;
+  const sourceFingerprint = buildSourceOccurrenceFingerprint(post);
 
-  return preparedResults.map((prepared) => {
+  return preparedResults.map((prepared, index) => {
+    const sourceOccurrenceKey = sourceOccurrenceKeys[index];
+    const occurrenceFields = occurrenceNormalizedFields[index] ?? prepared.normalizedFields;
     if (prepared.kind !== "ok") {
-      return prepared;
+      return sourceOccurrenceKey
+        ? {
+            ...prepared,
+            normalizedFields: {
+              ...occurrenceFields,
+              sourceOccurrenceKey,
+            },
+          }
+        : prepared;
     }
 
-    const sourceOccurrenceKey = buildSourceOccurrenceKey(
-      post,
-      prepared.event,
-      prepared.normalizedFields,
-    );
-    const normalizedFields = {
-      ...prepared.normalizedFields,
-      ...(isMultiEventNormalizedFields(prepared.normalizedFields)
-        ? { sourceOccurrenceExpectedCount: persistableOccurrenceCount }
+    if (!sourceOccurrenceKey) {
+      return prepared;
+    }
+    const normalizedFields: Record<string, unknown> = {
+      ...occurrenceFields,
+      sourceOccurrenceSourceFingerprint: sourceFingerprint,
+      ...(isMultiOccurrenceNormalizedFields(occurrenceFields)
+        ? {
+            sourceOccurrenceExpectedCount: persistableOccurrenceCount,
+            sourceOccurrenceExpectedKeys: persistableOccurrenceKeys,
+            sourceOccurrenceDeferredChildCount: deferredChildCount,
+          }
         : {}),
       sourceOccurrenceKey,
     };
+    const hasAmbiguousOccurrenceProvenance =
+      normalizedFields.sourceOccurrenceAmbiguousProvenance === true;
+    if (hasAmbiguousOccurrenceProvenance) {
+      normalizedFields.moderationAutoApproved = false;
+      normalizedFields.moderationAutoApproveRule = null;
+      normalizedFields.moderationPendingReasons = [
+        ...new Set([
+          ...((normalizedFields.moderationPendingReasons as string[] | undefined) ?? []),
+          "ambiguous_source_occurrence_provenance",
+        ]),
+      ];
+    }
     return {
       ...prepared,
       normalizedFields,
       event: {
         ...prepared.event,
+        ...(hasAmbiguousOccurrenceProvenance ? { status: "pending" as const } : {}),
         sourceOccurrenceKey,
         normalizedFieldsJson: JSON.stringify(normalizedFields),
       },
     };
   });
+}
+
+function buildSourceOccurrenceChildTrackingKey(
+  post: InstagramScrapedPost,
+  prepared: PrepareEventResult,
+  index: number,
+): string {
+  const normalizedFields = prepared.normalizedFields;
+  const isMultiOccurrence = isMultiOccurrenceNormalizedFields(normalizedFields);
+  const date = readJsonString(normalizedFields, "normalizedDate");
+  const rawTime = readJsonString(normalizedFields, "time") ?? undefined;
+  const normalizedTime = rawTime
+    ? normalizeEventTime(rawTime).startLabel ??
+      extractComparableTimeParts(rawTime)[0] ??
+      normalizeString(rawTime).toLowerCase()
+    : null;
+  const hasStructuralIdentity = Boolean(date || normalizedTime);
+  const title = hasStructuralIdentity
+    ? null
+    : toSearchableText(readJsonString(normalizedFields, "title") ?? "") || null;
+  const venue = hasStructuralIdentity
+    ? null
+    : toSearchableText(readJsonString(normalizedFields, "venue") ?? "") || null;
+  const artists = hasStructuralIdentity
+    ? []
+    : readJsonStringArray(normalizedFields, "artists")
+        .map((artist) => toSearchableText(artist))
+        .filter(Boolean)
+        .sort();
+  const hasFallbackSemanticIdentity = Boolean(
+    title || venue || artists.length > 0,
+  );
+  const identity = isMultiOccurrence
+    ? {
+        kind: "multi",
+        date,
+        time: normalizedTime,
+        title,
+        venue,
+        artists,
+        expandedDateIndex: readJsonNumber(normalizedFields, "expandedDateIndex"),
+        collisionOrdinal: readJsonNumber(
+          normalizedFields,
+          "sourceOccurrenceCollisionOrdinal",
+        ),
+        fallbackSplitEventIndex: hasStructuralIdentity || hasFallbackSemanticIdentity
+          ? null
+          : readJsonNumber(normalizedFields, "splitEventIndex"),
+        fallbackIndex:
+          hasStructuralIdentity || hasFallbackSemanticIdentity ? null : index,
+      }
+    : {
+        kind: "single",
+      };
+  const digest = createHash("sha256")
+    .update(
+      JSON.stringify({
+        sourceIdentity: buildSourceOccurrenceIdentity(post),
+        identity,
+      }),
+    )
+    .digest("hex");
+  return `instagram-source-child-v1:${digest}`;
+}
+
+export const buildSourceOccurrenceChildTrackingKeyForTesting =
+  buildSourceOccurrenceChildTrackingKey;
+
+function buildSourceOccurrencePlan(
+  post: InstagramScrapedPost,
+  preparedResults: PrepareEventResult[],
+): SourceOccurrencePlan | null {
+  const expectedKeys = preparedResults
+    .filter((prepared): prepared is Extract<PrepareEventResult, { kind: "ok" }> =>
+      prepared.kind === "ok",
+    )
+    .map((prepared) => readJsonString(prepared.normalizedFields, "sourceOccurrenceKey"))
+    .filter((key): key is string => key !== null);
+  const expectedOccurrences = preparedResults
+    .filter((prepared): prepared is Extract<PrepareEventResult, { kind: "ok" }> =>
+      prepared.kind === "ok",
+    )
+    .map((prepared) => ({
+      key: readJsonString(prepared.normalizedFields, "sourceOccurrenceKey"),
+      date: prepared.event.date,
+      ...(prepared.event.time ? { time: prepared.event.time } : {}),
+      venue: prepared.event.venue,
+      title: prepared.event.title,
+      artists: prepared.event.artists,
+    }))
+    .filter(
+      (occurrence): occurrence is {
+        key: string;
+        date: string;
+        time?: string;
+        venue: string;
+        title: string;
+        artists: string[];
+      } => occurrence.key !== null,
+    );
+  if (
+    preparedResults.length === 0 ||
+    new Set(expectedKeys).size !== expectedKeys.length
+  ) {
+    return null;
+  }
+  const observedChildKeys = preparedResults.map((prepared, index) =>
+    buildSourceOccurrenceChildTrackingKey(post, prepared, index),
+  );
+  const deferredChildKeys = preparedResults
+    .map((prepared, index) => ({
+      prepared,
+      key: observedChildKeys[index],
+    }))
+    .filter(
+      ({ prepared }) => prepared.kind === "skip" && prepared.reason !== "past_event",
+    )
+    .map(({ key }) => key);
+  if (
+    new Set(observedChildKeys).size !== observedChildKeys.length ||
+    new Set(deferredChildKeys).size !== deferredChildKeys.length
+  ) {
+    return null;
+  }
+  return {
+    sourceIdentity: buildSourceOccurrenceIdentity(post),
+    sourceFingerprint: buildSourceOccurrenceFingerprint(post),
+    expectedKeys,
+    expectedOccurrences,
+    deferredChildCount: deferredChildKeys.length,
+    deferredChildKeys,
+    observedChildKeys,
+  };
+}
+
+type SourceOccurrenceReceipt = {
+  sourceIdentity: string;
+  sourceFingerprint: string;
+  expectedKeys: string[];
+  satisfiedKeys: string[];
+  satisfiedOccurrences: Array<{ key: string; eventId: string }>;
+  deferredChildCount: number;
+  deferredChildKeys: string[];
+};
+
+function isCompleteSourceOccurrenceReceipt(
+  value: unknown,
+  post: InstagramScrapedPost,
+): value is SourceOccurrenceReceipt {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const receipt = value as Partial<SourceOccurrenceReceipt>;
+  return (
+    receipt.sourceIdentity === buildSourceOccurrenceIdentity(post) &&
+    receipt.sourceFingerprint === buildSourceOccurrenceFingerprint(post) &&
+    Array.isArray(receipt.expectedKeys) &&
+    new Set(receipt.expectedKeys).size === receipt.expectedKeys.length &&
+    Array.isArray(receipt.satisfiedKeys) &&
+    Array.isArray(receipt.satisfiedOccurrences) &&
+    receipt.satisfiedOccurrences.every(
+      (occurrence) =>
+        occurrence &&
+        typeof occurrence === "object" &&
+        typeof occurrence.key === "string" &&
+        typeof occurrence.eventId === "string",
+    ) &&
+    new Set(receipt.satisfiedOccurrences.map((occurrence) => occurrence.eventId)).size ===
+      receipt.satisfiedOccurrences.length &&
+    Array.isArray(receipt.deferredChildKeys) &&
+    new Set(receipt.deferredChildKeys).size === receipt.deferredChildKeys.length &&
+    Number.isInteger(receipt.deferredChildCount) &&
+    receipt.deferredChildCount === receipt.deferredChildKeys.length &&
+    receipt.deferredChildCount === 0 &&
+    receipt.expectedKeys.every((key) => receipt.satisfiedKeys?.includes(key))
+  );
+}
+
+async function getCurrentSourceOccurrenceReceiptState(
+  client: ConvexHttpClient,
+  post: InstagramScrapedPost,
+  serviceSecret: string,
+): Promise<"absent" | "complete" | "incomplete"> {
+  const receipt = await client.query(getInstagramSourceOccurrenceReceiptQuery, {
+    sourceIdentity: buildSourceOccurrenceIdentity(post),
+    serviceSecret,
+  });
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
+    return "absent";
+  }
+  return isCompleteSourceOccurrenceReceipt(receipt, post) ? "complete" : "incomplete";
 }
 
 type SourceDuplicateSkipDecision = {
@@ -5743,7 +6306,7 @@ function getPreExtractionSourceDuplicateSkipDecision(
   // A source post that advertised multiple occurrences is only complete when all
   // deterministic child-row identities are already persisted. Re-extract a partial
   // set so retries can recover a sibling that failed after an earlier insert.
-  if (hasIncompleteMultiEventSourceSet(matches)) {
+  if (hasIncompleteSourceOccurrenceSet(matches, post)) {
     return null;
   }
 
@@ -5885,6 +6448,17 @@ function areTimesCompatible(left: string | undefined, right: string | undefined)
     return true;
   }
 
+  const canonicalLeft = normalizeEventTime(left);
+  const canonicalRight = normalizeEventTime(right);
+  if (canonicalLeft.startLabel && canonicalRight.startLabel) {
+    return (
+      canonicalLeft.startLabel === canonicalRight.startLabel &&
+      (!canonicalLeft.endLabel ||
+        !canonicalRight.endLabel ||
+        canonicalLeft.endLabel === canonicalRight.endLabel)
+    );
+  }
+
   const leftParts = extractComparableTimeParts(left);
   const rightParts = extractComparableTimeParts(right);
   if (leftParts.length === 0 || rightParts.length === 0) {
@@ -5892,6 +6466,13 @@ function areTimesCompatible(left: string | undefined, right: string | undefined)
   }
 
   return JSON.stringify(leftParts) === JSON.stringify(rightParts);
+}
+
+export function areEventTimesCompatibleForTesting(
+  left: string | undefined,
+  right: string | undefined,
+): boolean {
+  return areTimesCompatible(left, right);
 }
 
 function getComparableVenueCandidates(
@@ -6157,6 +6738,25 @@ function isMultiEventNormalizedFields(
   return (
     readJsonBoolean(normalizedFields, "multiEventSplitDetected") === true ||
     (readJsonNumber(normalizedFields, "multiEventSplitCount") ?? 0) > 1
+  );
+}
+
+function isDateRangeExpandedNormalizedFields(
+  normalizedFields: Record<string, unknown> | null,
+): boolean {
+  return (
+    readJsonBoolean(normalizedFields, "dateRangeExpanded") === true ||
+    (readJsonNumber(normalizedFields, "dateRangeExpandedCount") ?? 0) > 1
+  );
+}
+
+function isMultiOccurrenceNormalizedFields(
+  normalizedFields: Record<string, unknown> | null,
+): boolean {
+  return (
+    isMultiEventNormalizedFields(normalizedFields) ||
+    isDateRangeExpandedNormalizedFields(normalizedFields) ||
+    (readJsonNumber(normalizedFields, "expandedDateTotal") ?? 0) > 1
   );
 }
 
@@ -6670,11 +7270,31 @@ function hasCompatibleSourceOccurrenceIdentity(
   nextNormalizedFields: Record<string, unknown>,
 ): boolean {
   const existingNormalizedFields = parseJsonRecord(existing.normalizedFieldsJson);
+  const existingOccurrenceKey =
+    normalizeString(existing.sourceOccurrenceKey) ||
+    readJsonString(existingNormalizedFields, "sourceOccurrenceKey");
+  const nextOccurrenceKey = readJsonString(nextNormalizedFields, "sourceOccurrenceKey");
   if (
-    !isMultiEventNormalizedFields(existingNormalizedFields) &&
-    !isMultiEventNormalizedFields(nextNormalizedFields)
+    existingOccurrenceKey?.startsWith("instagram-occurrence-v2:") &&
+    nextOccurrenceKey?.startsWith("instagram-occurrence-v2:")
+  ) {
+    return existingOccurrenceKey === nextOccurrenceKey;
+  }
+  if (
+    !isMultiOccurrenceNormalizedFields(existingNormalizedFields) &&
+    !isMultiOccurrenceNormalizedFields(nextNormalizedFields)
   ) {
     return true;
+  }
+
+  const existingIsDateRange = isDateRangeExpandedNormalizedFields(existingNormalizedFields);
+  const nextIsDateRange = isDateRangeExpandedNormalizedFields(nextNormalizedFields);
+  if (existingIsDateRange || nextIsDateRange) {
+    return (
+      existingIsDateRange &&
+      nextIsDateRange &&
+      normalizeString(existing.date) === normalizeString(next.date)
+    );
   }
 
   const existingHasReliableTime = hasReliableEventTime(existing);
@@ -6708,14 +7328,59 @@ function findBestExistingMatchForPreparedEvent(
   const sourceIdentityMatches = existingMatches.filter(
     (existing) => existing.matchedBy !== "same_date_semantic",
   );
+  const nextHasAmbiguousProvenance =
+    nextNormalizedFields.sourceOccurrenceAmbiguousProvenance === true;
+  if (nextHasAmbiguousProvenance) {
+    let bestCollisionMatch: ExistingSourceMatch | null = null;
+    let bestCollisionScore = 0;
+    let bestCollisionScoreCount = 0;
+    for (const existing of sourceIdentityMatches) {
+      const existingNormalizedFields = parseJsonRecord(
+        existing.existingEvent.normalizedFieldsJson,
+      );
+      if (
+        !existingNormalizedFields ||
+        existingNormalizedFields.sourceOccurrenceAmbiguousProvenance !== true ||
+        normalizeString(existing.existingEvent.date) !== nextEvent.date ||
+        !areTimesCompatible(existing.existingEvent.time, nextEvent.time)
+      ) {
+        continue;
+      }
+      const existingTitles = new Set(
+        getComparableTitleCandidates(existing.existingEvent, existingNormalizedFields),
+      );
+      const existingArtists = new Set(
+        getComparableArtistCandidates(existing.existingEvent),
+      );
+      const titleMatches = getComparableTitleCandidates(
+        nextEvent,
+        nextNormalizedFields,
+      ).some((value) => existingTitles.has(value));
+      const artistMatches = getComparableArtistCandidates(nextEvent).some((value) =>
+        existingArtists.has(value),
+      );
+      const score = (titleMatches ? 4 : 0) + (artistMatches ? 2 : 0);
+      if (score > bestCollisionScore) {
+        bestCollisionMatch = existing;
+        bestCollisionScore = score;
+        bestCollisionScoreCount = 1;
+      } else if (score > 0 && score === bestCollisionScore) {
+        bestCollisionScoreCount += 1;
+      }
+    }
+    if (bestCollisionScore > 0 && bestCollisionScoreCount === 1) {
+      return bestCollisionMatch;
+    }
+  }
   const sourceOccurrenceMatch = sourceIdentityMatches.find((existing) => {
     const existingNormalizedFields = parseJsonRecord(
       existing.existingEvent.normalizedFieldsJson,
     );
     return (
+      !nextHasAmbiguousProvenance &&
       normalizeString(existing.existingEvent.date) === nextEvent.date &&
-      (isMultiEventNormalizedFields(existingNormalizedFields) ||
-        isMultiEventNormalizedFields(nextNormalizedFields)) &&
+      (isMultiOccurrenceNormalizedFields(existingNormalizedFields) ||
+        isMultiOccurrenceNormalizedFields(nextNormalizedFields)) &&
       hasCompatibleSourceOccurrenceIdentity(
         existing.existingEvent,
         nextEvent,
@@ -6744,6 +7409,7 @@ function findBestExistingMatchForPreparedEvent(
 
   const sameDateMatch = sourceIdentityMatches.find(
     (existing) =>
+      !nextHasAmbiguousProvenance &&
       normalizeString(existing.existingEvent.date) === nextEvent.date &&
       allowsDateOnlySourceIdentityMatch(existing.existingEvent, nextNormalizedFields),
   );
@@ -6786,6 +7452,202 @@ function findBestExistingMatchForPreparedEvent(
 
   return null;
 }
+
+export const findBestExistingMatchForPreparedEventForTesting =
+  findBestExistingMatchForPreparedEvent;
+
+function reconcileAmbiguousOccurrenceKeysWithExistingEvents(
+  preparedResults: PrepareEventResult[],
+  existingMatches: ExistingSourceMatch[],
+): PrepareEventResult[] {
+  if (existingMatches.length === 0) {
+    return preparedResults;
+  }
+  const collisionGroups = new Map<string, number[]>();
+  preparedResults.forEach((prepared, index) => {
+    if (
+      prepared.kind !== "ok" ||
+      prepared.normalizedFields.sourceOccurrenceAmbiguousProvenance !== true
+    ) {
+      return;
+    }
+    const normalizedTime = normalizeEventTime(prepared.event.time);
+    const comparableTime =
+      normalizedTime.startLabel ??
+      extractComparableTimeParts(prepared.event.time)[0] ??
+      (normalizeString(prepared.event.time).toLowerCase() ||
+        "unknown-time");
+    const groupKey = `${prepared.event.date}\u0000${comparableTime}`;
+    collisionGroups.set(groupKey, [...(collisionGroups.get(groupKey) ?? []), index]);
+  });
+  const assignedKeys = new Map<number, string>();
+  for (const collisionIndexes of collisionGroups.values()) {
+    if (collisionIndexes.length < 2) {
+      continue;
+    }
+    const collisionKeyPool = collisionIndexes
+      .map((index) => {
+        const prepared = preparedResults[index];
+        return prepared?.kind === "ok"
+          ? readJsonString(prepared.normalizedFields, "sourceOccurrenceKey")
+          : null;
+      })
+      .filter((key): key is string => key !== null);
+    if (
+      collisionKeyPool.length !== collisionIndexes.length ||
+      new Set(collisionKeyPool).size !== collisionKeyPool.length
+    ) {
+      continue;
+    }
+    const groupAssignedKeys = new Map<number, string>();
+    const usedExistingIds = new Set<string>();
+    const usedKeys = new Set<string>();
+    for (const index of collisionIndexes) {
+      const prepared = preparedResults[index];
+      if (!prepared || prepared.kind !== "ok") {
+        continue;
+      }
+      const match = findBestExistingMatchForPreparedEvent(
+        existingMatches.filter(
+          (candidate) => !usedExistingIds.has(candidate.existingEvent._id),
+        ),
+        prepared.event,
+        prepared.normalizedFields,
+      );
+      if (!match || match.matchedBy === "same_date_semantic") {
+        continue;
+      }
+      const existingFields = parseJsonRecord(match.existingEvent.normalizedFieldsJson);
+      const existingKey =
+        normalizeString(match.existingEvent.sourceOccurrenceKey) ||
+        readJsonString(existingFields, "sourceOccurrenceKey");
+      if (
+        existingFields?.sourceOccurrenceAmbiguousProvenance !== true ||
+        !existingKey ||
+        !collisionKeyPool.includes(existingKey) ||
+        usedKeys.has(existingKey)
+      ) {
+        continue;
+      }
+      groupAssignedKeys.set(index, existingKey);
+      usedExistingIds.add(match.existingEvent._id);
+      usedKeys.add(existingKey);
+    }
+    const availableKeys = collisionKeyPool.filter((key) => !usedKeys.has(key));
+    for (const index of collisionIndexes) {
+      if (groupAssignedKeys.has(index)) {
+        continue;
+      }
+      const nextKey = availableKeys.shift();
+      if (!nextKey) {
+        groupAssignedKeys.clear();
+        break;
+      }
+      groupAssignedKeys.set(index, nextKey);
+    }
+    if (groupAssignedKeys.size === collisionIndexes.length) {
+      for (const [index, key] of groupAssignedKeys) {
+        assignedKeys.set(index, key);
+      }
+    }
+  }
+  if (assignedKeys.size === 0) {
+    return preparedResults;
+  }
+  const allPersistableKeys = preparedResults
+    .map((prepared, index) =>
+      prepared.kind === "ok"
+        ? assignedKeys.get(index) ??
+          readJsonString(prepared.normalizedFields, "sourceOccurrenceKey")
+        : null,
+    )
+    .filter((key): key is string => key !== null)
+    .sort();
+  if (
+    allPersistableKeys.length === 0 ||
+    new Set(allPersistableKeys).size !== allPersistableKeys.length
+  ) {
+    return preparedResults;
+  }
+
+  return preparedResults.map((prepared, index) => {
+    if (prepared.kind !== "ok") {
+      return prepared;
+    }
+    const sourceOccurrenceKey =
+      assignedKeys.get(index) ??
+      readJsonString(prepared.normalizedFields, "sourceOccurrenceKey");
+    if (!sourceOccurrenceKey) {
+      return prepared;
+    }
+    const normalizedFields = {
+      ...prepared.normalizedFields,
+      ...(isMultiOccurrenceNormalizedFields(prepared.normalizedFields)
+        ? {
+            sourceOccurrenceExpectedCount: allPersistableKeys.length,
+            sourceOccurrenceExpectedKeys: allPersistableKeys,
+          }
+        : {}),
+      sourceOccurrenceKey,
+    };
+    return {
+      ...prepared,
+      normalizedFields,
+      event: {
+        ...prepared.event,
+        sourceOccurrenceKey,
+        normalizedFieldsJson: JSON.stringify(normalizedFields),
+      },
+    };
+  });
+}
+
+export const reconcileAmbiguousOccurrenceKeysWithExistingEventsForTesting =
+  reconcileAmbiguousOccurrenceKeysWithExistingEvents;
+
+function hasIncompleteAmbiguousCollisionContext(
+  existingMatches: ExistingSourceMatch[],
+  nextEvent: PreparedEvent,
+  nextNormalizedFields: Record<string, unknown>,
+): boolean {
+  const nextHasAmbiguousProvenance =
+    nextNormalizedFields.sourceOccurrenceAmbiguousProvenance === true;
+  return existingMatches.some((match) => {
+    if (match.matchedBy === "same_date_semantic") {
+      return false;
+    }
+    const existing = match.existingEvent;
+    const existingNormalizedFields = parseJsonRecord(existing.normalizedFieldsJson);
+    if (!existingNormalizedFields) {
+      return false;
+    }
+    const sharesAmbiguousContext =
+      existingNormalizedFields.sourceOccurrenceAmbiguousProvenance === true &&
+      normalizeString(existing.date) === normalizeString(nextEvent.date) &&
+      areTimesCompatible(existing.time, nextEvent.time);
+    if (!sharesAmbiguousContext) {
+      return false;
+    }
+    if (!nextHasAmbiguousProvenance) {
+      return true;
+    }
+    const existingOccurrenceKey =
+      normalizeString(existing.sourceOccurrenceKey) ||
+      readJsonString(existingNormalizedFields, "sourceOccurrenceKey");
+    const nextOccurrenceKey = readJsonString(
+      nextNormalizedFields,
+      "sourceOccurrenceKey",
+    );
+    return Boolean(
+      existingOccurrenceKey &&
+        nextOccurrenceKey &&
+        existingOccurrenceKey === nextOccurrenceKey,
+    );
+  });
+}
+
+export const hasIncompleteAmbiguousCollisionContextForTesting =
+  hasIncompleteAmbiguousCollisionContext;
 
 export function prepareEventsForInsert(
   post: InstagramScrapedPost,
@@ -7447,6 +8309,17 @@ export function prepareEventsForInsert(
   return preparedEvents;
 }
 
+type ProviderExecutionControl = {
+  claim: () => Promise<{
+    claimed: boolean;
+    reason?: "claimed" | "busy" | "provider_blocked" | "invalid";
+    blockedStatus?: number;
+    blockedCode?: string;
+  }>;
+  block: (status: number, code?: string) => Promise<void>;
+  release: () => Promise<void>;
+};
+
 type ProcessIngestionPostOptions = {
   client: ConvexHttpClient;
   handle: string;
@@ -7456,6 +8329,8 @@ type ProcessIngestionPostOptions = {
   venueNameOverridesByHandle: Record<string, string>;
   configuredVenueNamesByHandle: Record<string, string>;
   serviceSecret: string;
+  processingFence?: SourceProcessingFence;
+  providerExecution?: ProviderExecutionControl;
 };
 
 type ProcessIngestionPostDependencies = {
@@ -7479,6 +8354,8 @@ async function processIngestionPost(
     venueNameOverridesByHandle,
     configuredVenueNamesByHandle,
     serviceSecret,
+    processingFence,
+    providerExecution,
   } = options;
   const postContext = getPostContext(handle, post);
   const canonicalVenueName =
@@ -7514,12 +8391,69 @@ async function processIngestionPost(
     return;
   }
 
-  const recoveringIncompleteMultiEventSourceSet =
-    hasIncompleteMultiEventSourceSet(sourceIdentityMatches);
-  const sourceDuplicateSkipDecision = getPreExtractionSourceDuplicateSkipDecision(
-    sourceIdentityMatches,
-    post,
-  );
+  let recoveringIncompleteSourceOccurrenceSet =
+    hasIncompleteSourceOccurrenceSet(sourceIdentityMatches, post);
+
+  let sourceReceipt: SourceOccurrenceReceipt | null = null;
+  try {
+    const queriedSourceReceipt = await client.query(getInstagramSourceOccurrenceReceiptQuery, {
+      sourceIdentity: buildSourceOccurrenceIdentity(post),
+      serviceSecret,
+    });
+    if (
+      queriedSourceReceipt &&
+      typeof queriedSourceReceipt === "object" &&
+      !Array.isArray(queriedSourceReceipt)
+    ) {
+      sourceReceipt = queriedSourceReceipt as SourceOccurrenceReceipt;
+    }
+    if (
+      isCompleteSourceOccurrenceReceipt(queriedSourceReceipt, post) &&
+      !shouldReprocessExistingSourcePosts()
+    ) {
+      const retryTarget = sourceIdentityMatches.find((match) =>
+        isExistingEventEligibleForDurableMediaRetry(match.existingEvent),
+      );
+      if (retryTarget && durableMediaCandidate) {
+        await persistInstagramMediaCandidate({
+          client,
+          handle,
+          post,
+          summary,
+          serviceSecret,
+          upstreamUrl: durableMediaCandidate,
+        });
+      }
+      summary.skippedDuplicates += 1;
+      summary.skipped_duplicates += 1;
+      summary.skipped_duplicates_clean += 1;
+      logInfo("duplicate_source_receipt_precheck_skip", {
+        ...postContext,
+        extractionMode,
+        sourceIdentity: queriedSourceReceipt.sourceIdentity,
+        expectedOccurrenceCount: queriedSourceReceipt.expectedKeys.length,
+      });
+      return;
+    }
+  } catch (error) {
+    summary.failedExtractions += 1;
+    summary.failed_extractions += 1;
+    summary.errors.push(getErrorMessage(error));
+    logError("ingestion.source_receipt_precheck.failed", {
+      step: "duplicate_lookup" satisfies IngestionStep,
+      ...postContext,
+      extractionMode,
+      error: getErrorMessage(error),
+    });
+    return;
+  }
+
+  if (sourceReceipt) {
+    recoveringIncompleteSourceOccurrenceSet = true;
+  }
+  const sourceDuplicateSkipDecision = sourceReceipt
+    ? null
+    : getPreExtractionSourceDuplicateSkipDecision(sourceIdentityMatches, post);
 
   if (sourceDuplicateSkipDecision) {
     const retryTarget = sourceIdentityMatches.find((match) =>
@@ -7632,7 +8566,26 @@ async function processIngestionPost(
   }
 
   let extracted: ExtractedEventData;
+  let providerLeaseHeld = false;
+  let providerBlockPersisted = false;
   try {
+    if (providerExecution) {
+      const claim = await providerExecution.claim();
+      if (!claim.claimed) {
+        if (claim.reason === "provider_blocked") {
+          throw new OpenAiProviderBlockedError(
+            claim.blockedStatus ?? 429,
+            `OpenAI provider circuit is blocked${claim.blockedCode ? ` (${claim.blockedCode})` : ""}.`,
+          );
+        }
+        throw new Error(
+          claim.reason === "busy"
+            ? "OpenAI provider execution lease is busy; retry this saved post later."
+            : "OpenAI provider execution lease could not be acquired.",
+        );
+      }
+      providerLeaseHeld = true;
+    }
     extracted = await dependencies.extractEventDataFromPost({
       imageDataUrl,
       caption: post.caption,
@@ -7647,6 +8600,10 @@ async function processIngestionPost(
     });
     extracted = normalizeConfidencePayload(extracted);
   } catch (error) {
+    if (providerLeaseHeld && providerExecution && isOpenAiProviderBlockedError(error)) {
+      await providerExecution.block(error.status, `http_${error.status}`);
+      providerBlockPersisted = true;
+    }
     summary.failedExtractions += 1;
     summary.failed_extractions += 1;
     summary.failed_extraction += 1;
@@ -7656,9 +8613,21 @@ async function processIngestionPost(
       ...postContext,
       extractionMode,
       sourceImageUrl: selectedImageUrl,
+      providerBlocked: isOpenAiProviderBlockedError(error),
       error: getErrorMessage(error),
     });
+    if (isOpenAiProviderBlockedError(error)) {
+      throw error;
+    }
     return;
+  } finally {
+    if (providerLeaseHeld && providerExecution && !providerBlockPersisted) {
+      try {
+        await providerExecution.release();
+      } catch (releaseError) {
+        summary.errors.push(`OpenAI provider lease release failed: ${getErrorMessage(releaseError)}`);
+      }
+    }
   }
 
   let preparedResults: PrepareEventResult[];
@@ -7719,7 +8688,58 @@ async function processIngestionPost(
     return;
   }
 
+  preparedResults = reconcileAmbiguousOccurrenceKeysWithExistingEvents(
+    preparedResults,
+    existingMatches,
+  );
+  const sourceOccurrencePlan = buildSourceOccurrencePlan(post, preparedResults);
+
+  const todayEpochDay = Math.floor(
+    Date.parse(`${getEventDateFilterContext().todayIsoDate}T00:00:00Z`) / 86_400_000,
+  );
+  const safelyOmittedPastOccurrenceKeys = new Set(
+    preparedResults
+      .filter((prepared) => prepared.kind === "skip" && prepared.reason === "past_event")
+      .filter((prepared) => {
+        const date = readJsonString(prepared.normalizedFields, "normalizedDate");
+        if (!date) {
+          return false;
+        }
+        const eventEpochDay = Math.floor(Date.parse(`${date}T00:00:00Z`) / 86_400_000);
+        return Number.isFinite(eventEpochDay) && todayEpochDay - eventEpochDay >= 2;
+      })
+      .map((prepared) => readJsonString(prepared.normalizedFields, "sourceOccurrenceKey"))
+      .filter((key): key is string => key !== null),
+  );
+  if (sourceOccurrencePlan) {
+    sourceOccurrencePlan.previousSourceFingerprint =
+      sourceReceipt?.sourceFingerprint ?? null;
+    sourceOccurrencePlan.confirmedPastKeys = [
+      ...safelyOmittedPastOccurrenceKeys,
+    ];
+    if (sourceOccurrencePlan.expectedKeys.length === 0) {
+      try {
+        await client.mutation(reconcileInstagramSourceOccurrenceReceiptMutation, {
+          plan: sourceOccurrencePlan,
+          ...(processingFence ? { processingFence } : {}),
+          serviceSecret,
+        });
+      } catch (error) {
+        summary.failedExtractions += 1;
+        summary.failed_extractions += 1;
+        summary.errors.push(getErrorMessage(error));
+        logError("ingestion.source_occurrence_receipt.reconcile_failed", {
+          step: "update_existing_event" satisfies IngestionStep,
+          ...postContext,
+          extractionMode,
+          error: getErrorMessage(error),
+        });
+        return;
+      }
+    }
+  }
   let hasDurableMediaAttachmentTarget = false;
+  const claimedRepresentativeEventIds = new Set<string>();
   for (const prepared of preparedResults) {
     if (prepared.kind === "skip") {
       if (prepared.reason === "missing_date") {
@@ -7781,14 +8801,93 @@ async function processIngestionPost(
     }
 
     const existingMatch = findBestExistingMatchForPreparedEvent(
-      existingMatches,
+      existingMatches.filter(
+        (match) => !claimedRepresentativeEventIds.has(match.existingEvent._id),
+      ),
       prepared.event,
       prepared.normalizedFields,
     );
 
+    if (
+      !existingMatch &&
+      hasIncompleteAmbiguousCollisionContext(
+        existingMatches,
+        prepared.event,
+        prepared.normalizedFields,
+      )
+    ) {
+      const error =
+        "Ambiguous source-occurrence collision requires a complete sibling extraction before persistence.";
+      summary.failedExtractions += 1;
+      summary.failed_extractions += 1;
+      summary.errors.push(error);
+      logError("ingestion.source_occurrence_collision.deferred", {
+        step: "insert_new_event" satisfies IngestionStep,
+        ...postContext,
+        extractionMode,
+        date: prepared.event.date,
+        time: prepared.event.time,
+        sourceOccurrenceKey: readJsonString(
+          prepared.normalizedFields,
+          "sourceOccurrenceKey",
+        ),
+        error,
+      });
+      continue;
+    }
+
     if (existingMatch) {
+      claimedRepresentativeEventIds.add(existingMatch.existingEvent._id);
+      const preparedOccurrenceKey = readJsonString(
+        prepared.normalizedFields,
+        "sourceOccurrenceKey",
+      );
+      const existingReceiptMappings =
+        sourceReceipt?.satisfiedOccurrences.filter(
+          (occurrence) => occurrence.eventId === existingMatch.existingEvent._id,
+        ) ?? [];
+      const supersededOccurrenceKey =
+        sourceOccurrencePlan &&
+        preparedOccurrenceKey &&
+        sourceReceipt &&
+        sourceReceipt.sourceFingerprint !== sourceOccurrencePlan.sourceFingerprint &&
+        existingMatch.matchedBy !== "same_date_semantic" &&
+        existingReceiptMappings.length === 1 &&
+        existingReceiptMappings[0]?.key !== preparedOccurrenceKey &&
+        sourceReceipt.expectedKeys.includes(existingReceiptMappings[0]!.key) &&
+        !sourceOccurrencePlan.expectedKeys.includes(existingReceiptMappings[0]!.key)
+          ? existingReceiptMappings[0]!.key
+          : undefined;
+      const recordPreparedOccurrenceSatisfaction = async (): Promise<boolean> => {
+        if (!sourceOccurrencePlan || !preparedOccurrenceKey) {
+          return true;
+        }
+        try {
+          await client.mutation(recordInstagramSourceOccurrenceSatisfactionMutation, {
+            plan: sourceOccurrencePlan,
+            satisfiedKey: preparedOccurrenceKey,
+            representativeEventId: existingMatch.existingEvent._id,
+            ...(processingFence ? { processingFence } : {}),
+            ...(supersededOccurrenceKey
+              ? { supersededKey: supersededOccurrenceKey }
+              : {}),
+            serviceSecret,
+          });
+          return true;
+        } catch (error) {
+          summary.errors.push(getErrorMessage(error));
+          logError("ingestion.source_occurrence_receipt.failed", {
+            step: "update_existing_event" satisfies IngestionStep,
+            ...postContext,
+            extractionMode,
+            existingEventId: existingMatch.existingEvent._id,
+            error: getErrorMessage(error),
+          });
+          return false;
+        }
+      };
       const preservesExistingSiblingDuringRecovery =
-        recoveringIncompleteMultiEventSourceSet &&
+        recoveringIncompleteSourceOccurrenceSet &&
         existingMatch.matchedBy !== "same_date_semantic" &&
         normalizeString(existingMatch.existingEvent.date) === prepared.event.date &&
         hasCompatibleSourceOccurrenceIdentity(
@@ -7797,6 +8896,127 @@ async function processIngestionPost(
           prepared.normalizedFields,
         );
       if (preservesExistingSiblingDuringRecovery) {
+        const receiptSatisfactionSucceeded =
+          await recordPreparedOccurrenceSatisfaction();
+        if (!receiptSatisfactionSucceeded) {
+          summary.duplicate_update_failed += 1;
+          continue;
+        }
+        const existingNormalizedFields = parseJsonRecord(
+          existingMatch.existingEvent.normalizedFieldsJson,
+        );
+        const currentExpectedCount = readJsonNumber(
+          existingNormalizedFields,
+          "sourceOccurrenceExpectedCount",
+        );
+        const currentExpectedKeys = readJsonStringArray(
+          existingNormalizedFields,
+          "sourceOccurrenceExpectedKeys",
+        );
+        const nextExpectedCount = readJsonNumber(
+          prepared.normalizedFields,
+          "sourceOccurrenceExpectedCount",
+        );
+        const nextExpectedKeys = readJsonStringArray(
+          prepared.normalizedFields,
+          "sourceOccurrenceExpectedKeys",
+        );
+        const currentDeferredChildCount =
+          readJsonNumber(existingNormalizedFields, "sourceOccurrenceDeferredChildCount") ?? 0;
+        const nextDeferredChildCount =
+          readJsonNumber(prepared.normalizedFields, "sourceOccurrenceDeferredChildCount") ?? 0;
+        const currentSourceFingerprint = readJsonString(
+          existingNormalizedFields,
+          "sourceOccurrenceSourceFingerprint",
+        );
+        const nextSourceFingerprint = readJsonString(
+          prepared.normalizedFields,
+          "sourceOccurrenceSourceFingerprint",
+        );
+        const removedExpectedKeys = currentExpectedKeys.filter(
+          (key) => !nextExpectedKeys.includes(key),
+        );
+        const sourceOccurrenceKey =
+          normalizeString(existingMatch.existingEvent.sourceOccurrenceKey) ||
+          readJsonString(existingNormalizedFields, "sourceOccurrenceKey");
+        const nextSourceOccurrenceKey = readJsonString(
+          prepared.normalizedFields,
+          "sourceOccurrenceKey",
+        );
+        const addedExpectedKeys = nextExpectedKeys.filter(
+          (key) => !currentExpectedKeys.includes(key),
+        );
+        const confirmedPastKeys = removedExpectedKeys.filter((key) =>
+          safelyOmittedPastOccurrenceKeys.has(key),
+        );
+        const safeSameSourceTransition =
+          removedExpectedKeys.length === 0 ||
+          (addedExpectedKeys.length === 0 &&
+            confirmedPastKeys.length === removedExpectedKeys.length);
+        const metadataChanged =
+          currentExpectedCount !== nextExpectedCount ||
+          JSON.stringify(currentExpectedKeys) !== JSON.stringify(nextExpectedKeys) ||
+          currentDeferredChildCount !== nextDeferredChildCount ||
+          currentSourceFingerprint !== nextSourceFingerprint;
+        if (
+          sourceOccurrenceKey &&
+          sourceOccurrenceKey === nextSourceOccurrenceKey &&
+          currentExpectedCount !== null &&
+          nextExpectedCount !== null &&
+          nextSourceFingerprint &&
+          currentExpectedCount >= 1 &&
+          nextExpectedCount >= 1 &&
+          currentExpectedKeys.length === currentExpectedCount &&
+          nextExpectedKeys.length === nextExpectedCount &&
+          new Set(currentExpectedKeys).size === currentExpectedKeys.length &&
+          new Set(nextExpectedKeys).size === nextExpectedKeys.length &&
+          metadataChanged &&
+          safeSameSourceTransition
+        ) {
+          try {
+            await client.mutation(updateSourceOccurrenceExpectedCountMutation, {
+              id: existingMatch.existingEvent._id,
+              sourceOccurrenceKey,
+              expectedCurrentCount: currentExpectedCount,
+              expectedCurrentKeys: currentExpectedKeys,
+              expectedCurrentDeferredChildCount: currentDeferredChildCount,
+              expectedCurrentSourceFingerprint: currentSourceFingerprint ?? undefined,
+              nextExpectedCount,
+              nextExpectedKeys,
+              nextDeferredChildCount,
+              nextSourceFingerprint,
+              confirmedPastKeys,
+              serviceSecret,
+            });
+            const normalizedFieldsJson = JSON.stringify({
+              ...(existingNormalizedFields ?? {}),
+              sourceOccurrenceExpectedCount: nextExpectedCount,
+              sourceOccurrenceExpectedKeys: nextExpectedKeys,
+              sourceOccurrenceDeferredChildCount: nextDeferredChildCount,
+              sourceOccurrenceSourceFingerprint: nextSourceFingerprint,
+            });
+            existingMatch.existingEvent.normalizedFieldsJson = normalizedFieldsJson;
+            logInfo("duplicate_incomplete_source_completeness_updated", {
+              ...postContext,
+              extractionMode,
+              existingEventId: existingMatch.existingEvent._id,
+              currentExpectedCount,
+              nextExpectedCount,
+            });
+          } catch (error) {
+            summary.duplicate_update_failed += 1;
+            summary.errors.push(getErrorMessage(error));
+            logError("duplicate_incomplete_source_completeness_update_failed", {
+              step: "update_existing_event" satisfies IngestionStep,
+              ...postContext,
+              extractionMode,
+              existingEventId: existingMatch.existingEvent._id,
+              currentExpectedCount,
+              nextExpectedCount,
+              error: getErrorMessage(error),
+            });
+          }
+        }
         if (durableMediaEligible) {
           hasDurableMediaAttachmentTarget = true;
         }
@@ -7822,6 +9042,12 @@ async function processIngestionPost(
       );
 
       if (!quality.isLowQuality && !hasMaterialChange) {
+        const receiptSatisfactionSucceeded =
+          await recordPreparedOccurrenceSatisfaction();
+        if (!receiptSatisfactionSucceeded) {
+          summary.duplicate_update_failed += 1;
+          continue;
+        }
         if (durableMediaEligible) {
           hasDurableMediaAttachmentTarget = true;
         }
@@ -7849,6 +9075,12 @@ async function processIngestionPost(
       );
 
       if (updatePayload.protectedApprovedFromPending) {
+        const receiptSatisfactionSucceeded =
+          await recordPreparedOccurrenceSatisfaction();
+        if (!receiptSatisfactionSucceeded) {
+          summary.duplicate_update_failed += 1;
+          continue;
+        }
         if (durableMediaEligible) {
           hasDurableMediaAttachmentTarget = true;
         }
@@ -7870,12 +9102,30 @@ async function processIngestionPost(
       }
 
       try {
-        await client.mutation(updateEventMutation, {
-          id: existingMatch.existingEvent._id,
-          patch: updatePayload.patch,
-          expectedStatus: existingMatch.existingEvent.status,
-          serviceSecret,
-        });
+        if (sourceOccurrencePlan && preparedOccurrenceKey) {
+          await client.mutation(
+            updateEventAndRecordInstagramSourceOccurrenceSatisfactionMutation,
+            {
+              id: existingMatch.existingEvent._id,
+              patch: updatePayload.patch,
+              expectedStatus: existingMatch.existingEvent.status,
+              plan: sourceOccurrencePlan,
+              satisfiedKey: preparedOccurrenceKey,
+              ...(processingFence ? { processingFence } : {}),
+              ...(supersededOccurrenceKey
+                ? { supersededKey: supersededOccurrenceKey }
+                : {}),
+              serviceSecret,
+            },
+          );
+        } else {
+          await client.mutation(updateEventMutation, {
+            id: existingMatch.existingEvent._id,
+            patch: updatePayload.patch,
+            expectedStatus: existingMatch.existingEvent.status,
+            serviceSecret,
+          });
+        }
         if (durableMediaEligible) {
           hasDurableMediaAttachmentTarget = true;
         }
@@ -7934,6 +9184,8 @@ async function processIngestionPost(
         createEventMutation,
         {
           ...prepared.event,
+          ...(sourceOccurrencePlan ? { sourceOccurrencePlan } : {}),
+          ...(processingFence ? { processingFence } : {}),
           returnCreateDisposition: true,
           serviceSecret,
         },
@@ -8034,6 +9286,7 @@ type ProcessLoadedPostsForHandleOptions = {
   summary: HandleSummary;
   seenSourceKeys: string[];
   serviceSecret: string;
+  workOwner: string;
 } & IngestionVenueContext;
 
 async function processLoadedPostsForHandle(
@@ -8049,10 +9302,78 @@ async function processLoadedPostsForHandle(
     venueNameOverridesByHandle,
     configuredVenueNamesByHandle,
     serviceSecret,
+    workOwner,
   } = options;
 
   for (const rawPost of posts) {
     let post = rawPost;
+
+    const claim = (await client.mutation(
+      claimScrapedPostProcessingMutation,
+      withServiceSecret(
+        {
+          handle,
+          postId: rawPost.postId || undefined,
+          instagramPostUrl: rawPost.instagramPostUrl || undefined,
+          owner: workOwner,
+          leaseMs: 15 * 60_000,
+        },
+        serviceSecret,
+      ),
+    )) as { claimed?: boolean; sourceRevision?: number };
+    if (!claim.claimed) {
+      continue;
+    }
+    const processingFence: SourceProcessingFence = {
+      handle,
+      ...(rawPost.postId ? { postId: rawPost.postId } : {}),
+      ...(rawPost.instagramPostUrl
+        ? { instagramPostUrl: rawPost.instagramPostUrl }
+        : {}),
+      owner: workOwner,
+      sourceRevision: claim.sourceRevision ?? 1,
+    };
+    const providerLeaseOwner = `${workOwner}:openai:${handle}:${rawPost.postId ?? rawPost.instagramPostUrl}`.slice(
+      0,
+      200,
+    );
+    const providerExecution: ProviderExecutionControl = {
+      claim: async () =>
+        (await client.mutation(
+          claimProviderLeaseMutation,
+          withServiceSecret(
+            {
+              provider: "openai",
+              owner: providerLeaseOwner,
+              leaseMs: 5 * 60_000,
+            },
+            serviceSecret,
+          ),
+        )) as Awaited<ReturnType<ProviderExecutionControl["claim"]>>,
+      block: async (status, code) => {
+        await client.mutation(
+          blockProviderMutation,
+          withServiceSecret(
+            {
+              provider: "openai",
+              owner: providerLeaseOwner,
+              status,
+              ...(code ? { code } : {}),
+            },
+            serviceSecret,
+          ),
+        );
+      },
+      release: async () => {
+        await client.mutation(
+          releaseProviderLeaseMutation,
+          withServiceSecret(
+            { provider: "openai", owner: providerLeaseOwner },
+            serviceSecret,
+          ),
+        );
+      },
+    };
 
     try {
       post = normalizeScrapedPost(post);
@@ -8063,34 +9384,212 @@ async function processLoadedPostsForHandle(
         ...getPostContext(handle, post),
         error: getErrorMessage(error),
       });
+      await client.mutation(
+        recordScrapedPostProcessingResultMutation,
+        withServiceSecret(
+          {
+            handle,
+            postId: rawPost.postId || undefined,
+            instagramPostUrl: rawPost.instagramPostUrl || undefined,
+            status: "retryable_failure",
+            outcome: "normalization_failed",
+            error: getErrorMessage(error),
+            owner: workOwner,
+          },
+          serviceSecret,
+        ),
+      );
       continue;
     }
 
     const sourceKey = getSourceIdentityKey(post);
-    if (sourceKey) {
-      if (seenSourceKeys.includes(sourceKey)) {
-        continue;
+    if (sourceKey && seenSourceKeys.includes(sourceKey)) {
+      let duplicateReceiptState: "absent" | "complete" | "incomplete" = "absent";
+      try {
+        duplicateReceiptState = await getCurrentSourceOccurrenceReceiptState(
+          client,
+          post,
+          serviceSecret,
+        );
+      } catch (error) {
+        summary.errors.push(getErrorMessage(error));
       }
-      seenSourceKeys.push(sourceKey);
+      const duplicateIsComplete = duplicateReceiptState === "complete";
+      await client.mutation(
+        recordScrapedPostProcessingResultMutation,
+        withServiceSecret(
+          {
+            handle,
+            postId: rawPost.postId || undefined,
+            instagramPostUrl: rawPost.instagramPostUrl || undefined,
+            status: duplicateIsComplete ? "completed" : "retryable_failure",
+            outcome: duplicateIsComplete
+              ? "receipt_complete"
+              : "duplicate_source_receipt_incomplete",
+            ...(!duplicateIsComplete
+              ? { error: "Duplicate source identity does not yet have a complete receipt." }
+              : {}),
+            owner: workOwner,
+          },
+          serviceSecret,
+        ),
+      );
+      continue;
     }
 
-    await processIngestionPost({
-      client,
-      handle,
-      post,
-      summary,
-      canonicalVenueNamesByHandle,
-      venueNameOverridesByHandle,
-      configuredVenueNamesByHandle,
-      serviceSecret,
+    const retryableFailureCountBefore =
+      summary.failedDownloads +
+      summary.failedConversions +
+      summary.failedExtractions +
+      summary.duplicate_update_failed;
+    const terminalNoEventSkipCountBefore = getTerminalNoEventSkipCount(summary);
+    const eventActivityCountBefore =
+      summary.insertedEvents + summary.skippedDuplicates + summary.updated_duplicates_bad_data;
+    try {
+      await processIngestionPost({
+        client,
+        handle,
+        post,
+        summary,
+        canonicalVenueNamesByHandle,
+        venueNameOverridesByHandle,
+        configuredVenueNamesByHandle,
+        serviceSecret,
+        processingFence,
+        providerExecution,
+      });
+    } catch (error) {
+      await client.mutation(
+        recordScrapedPostProcessingResultMutation,
+        withServiceSecret(
+          {
+            handle,
+            postId: post.postId || undefined,
+            instagramPostUrl: post.instagramPostUrl || undefined,
+            status: "retryable_failure",
+            outcome: isOpenAiProviderBlockedError(error)
+              ? "provider_blocked"
+              : "processing_exception",
+            error: getErrorMessage(error),
+            owner: workOwner,
+          },
+          serviceSecret,
+        ),
+      );
+      throw error;
+    }
+
+    const retryableFailureCountAfter =
+      summary.failedDownloads +
+      summary.failedConversions +
+      summary.failedExtractions +
+      summary.duplicate_update_failed;
+    const hasProcessingFailure = retryableFailureCountAfter > retryableFailureCountBefore;
+    let receiptState: "absent" | "complete" | "incomplete" = "absent";
+    let receiptInspectionFailed = false;
+    try {
+      receiptState = await getCurrentSourceOccurrenceReceiptState(client, post, serviceSecret);
+    } catch (error) {
+      receiptInspectionFailed = true;
+      summary.errors.push(getErrorMessage(error));
+    }
+    const eventActivityCountAfter =
+      summary.insertedEvents + summary.skippedDuplicates + summary.updated_duplicates_bad_data;
+    const hasTerminalNoEventOutcome =
+      !hasProcessingFailure &&
+      !receiptInspectionFailed &&
+      receiptState === "absent" &&
+      eventActivityCountAfter === eventActivityCountBefore &&
+      getTerminalNoEventSkipCount(summary) > terminalNoEventSkipCountBefore;
+    const hasMissingReceiptAfterEvent =
+      receiptState === "absent" && eventActivityCountAfter > eventActivityCountBefore;
+    const hasRetryableFailure =
+      hasProcessingFailure ||
+      receiptInspectionFailed ||
+      receiptState === "incomplete" ||
+      hasMissingReceiptAfterEvent ||
+      (!hasTerminalNoEventOutcome && receiptState === "absent");
+    await client.mutation(
+      recordScrapedPostProcessingResultMutation,
+      withServiceSecret(
+        {
+          handle,
+          postId: post.postId || undefined,
+          instagramPostUrl: post.instagramPostUrl || undefined,
+          status: hasRetryableFailure ? "retryable_failure" : "completed",
+          owner: workOwner,
+          outcome: hasRetryableFailure
+            ? receiptInspectionFailed
+              ? "receipt_inspection_failed"
+              : receiptState === "incomplete"
+                ? "incomplete_occurrence_receipt"
+                : hasMissingReceiptAfterEvent
+                  ? "missing_occurrence_receipt"
+                  : hasProcessingFailure
+                    ? "processing_failed"
+                    : "unclassified_retryable"
+            : receiptState === "complete"
+              ? "receipt_complete"
+            : hasTerminalNoEventOutcome
+              ? "terminal_no_event"
+              : "unclassified_retryable",
+          ...(hasRetryableFailure
+            ? { error: summary.errors[summary.errors.length - 1] ?? "Processing failed." }
+            : {}),
+        },
+        serviceSecret,
+      ),
+    );
+    if (!hasRetryableFailure && sourceKey) {
+      seenSourceKeys.push(sourceKey);
+    }
+  }
+}
+
+async function processSavedBacklogBeforeFreshFetch(options: {
+  client: ConvexHttpClient;
+  handle: string;
+  summary: HandleSummary;
+  seenSourceKeys: string[];
+  serviceSecret: string;
+  workOwner: string;
+  canonicalVenueNamesByHandle: Record<string, string>;
+  venueNameOverridesByHandle: Record<string, string>;
+  configuredVenueNamesByHandle: Record<string, string>;
+}): Promise<boolean> {
+  const savedPosts = await loadSavedScrapedPostsForHandle(
+    options.client,
+    options.handle,
+    undefined,
+    undefined,
+    options.serviceSecret,
+  );
+  if (savedPosts.length > 0) {
+    await processLoadedPostsForHandle({
+      client: options.client,
+      handle: options.handle,
+      posts: savedPosts,
+      summary: options.summary,
+      seenSourceKeys: options.seenSourceKeys,
+      serviceSecret: options.serviceSecret,
+      workOwner: options.workOwner,
+      canonicalVenueNamesByHandle: options.canonicalVenueNamesByHandle,
+      venueNameOverridesByHandle: options.venueNameOverridesByHandle,
+      configuredVenueNamesByHandle: options.configuredVenueNamesByHandle,
     });
   }
+  const backlog = (await options.client.query(
+    getScrapedPostBacklogStateByHandleQuery,
+    withServiceSecret({ handle: options.handle }, options.serviceSecret),
+  )) as { actionable?: number; busy?: number };
+  return (backlog.actionable ?? 0) === 0 && (backlog.busy ?? 0) === 0;
 }
 
 async function runInstagramIngestionFullScrapeBatchStep(
   options: IngestionBatchStepOptions & IngestionVenueContext & {
     client: ConvexHttpClient;
     serviceSecret: string;
+    workOwner: string;
   },
 ): Promise<IngestionBatchStepResult> {
   const summary = options.summary;
@@ -8105,14 +9604,7 @@ async function runInstagramIngestionFullScrapeBatchStep(
   );
 
   if (handleBatch.length > 0) {
-    const postsByHandle = await fetchFreshPostsForHandlesInParallel(
-      options.client,
-      handleBatch,
-      summary,
-      options,
-      options.serviceSecret,
-    );
-
+    const handlesReadyForFetch: string[] = [];
     for (const handle of handleBatch) {
       state.currentHandle = handle;
       state.currentPostIndex = 0;
@@ -8121,7 +9613,37 @@ async function runInstagramIngestionFullScrapeBatchStep(
       state.currentScrapedPostIds = [];
       state.currentScrapedPostIdIndex = 0;
       state.currentScrapedPostPageDone = false;
+      const seenSourceKeys = state.seenSourceKeysByHandle[handle] ?? [];
+      state.seenSourceKeysByHandle[handle] = seenSourceKeys;
+      const readyForFetch = await processSavedBacklogBeforeFreshFetch({
+        client: options.client,
+        handle,
+        summary: getOrCreateHandleSummary(summary, handle),
+        seenSourceKeys,
+        serviceSecret: options.serviceSecret,
+        workOwner: options.workOwner,
+        canonicalVenueNamesByHandle: options.canonicalVenueNamesByHandle,
+        venueNameOverridesByHandle: options.venueNameOverridesByHandle,
+        configuredVenueNamesByHandle: options.configuredVenueNamesByHandle,
+      });
+      if (readyForFetch) {
+        handlesReadyForFetch.push(handle);
+      }
+    }
 
+    let postsByHandle: Record<string, InstagramScrapedPost[]> = {};
+    if (isFreshApifyFetchEnabled()) {
+      postsByHandle = await fetchFreshPostsForHandlesInParallel(
+        options.client,
+        handlesReadyForFetch,
+        summary,
+        options,
+        options.serviceSecret,
+        options.workOwner,
+      );
+    }
+
+    for (const handle of handleBatch) {
       const posts = postsByHandle[handle];
       if (posts) {
         const seenSourceKeys = state.seenSourceKeysByHandle[handle] ?? [];
@@ -8134,6 +9656,7 @@ async function runInstagramIngestionFullScrapeBatchStep(
           summary: getOrCreateHandleSummary(summary, handle),
           seenSourceKeys,
           serviceSecret: options.serviceSecret,
+          workOwner: options.workOwner,
           canonicalVenueNamesByHandle: options.canonicalVenueNamesByHandle,
           venueNameOverridesByHandle: options.venueNameOverridesByHandle,
           configuredVenueNamesByHandle: options.configuredVenueNamesByHandle,
@@ -8173,6 +9696,8 @@ export async function runInstagramIngestionBatchStep(
 ): Promise<IngestionBatchStepResult> {
   const client = getConvexClient();
   const serviceSecret = getConfiguredServiceSecret(options.serviceSecret);
+  const workOwner =
+    options.workOwner?.trim() || `instagram-ingestion:${globalThis.crypto.randomUUID()}`;
   const {
     canonicalVenueNamesByHandle,
     venueNameOverridesByHandle,
@@ -8195,6 +9720,7 @@ export async function runInstagramIngestionBatchStep(
       batchSize,
       mode,
       serviceSecret,
+      workOwner,
     });
   }
 
@@ -8295,45 +9821,23 @@ export async function runInstagramIngestionBatchStep(
       idsStartIndex + remainingCapacity,
     );
     const posts = await loadScrapedPostsByIds(client, idsToLoad, serviceSecret);
+
+    processedPosts += posts.length;
+    const seenForHandle = state.seenSourceKeysByHandle[handle] ?? [];
+    state.seenSourceKeysByHandle[handle] = seenForHandle;
+    await processLoadedPostsForHandle({
+      client,
+      handle,
+      posts,
+      summary: handleSummary,
+      seenSourceKeys: seenForHandle,
+      canonicalVenueNamesByHandle,
+      venueNameOverridesByHandle,
+      configuredVenueNamesByHandle,
+      serviceSecret,
+      workOwner,
+    });
     state.currentScrapedPostIdIndex = idsStartIndex + idsToLoad.length;
-
-    for (const rawPost of posts) {
-      let post = rawPost;
-      processedPosts += 1;
-
-      try {
-        post = normalizeScrapedPost(post);
-      } catch (error) {
-        handleSummary.errors.push(getErrorMessage(error));
-        logError("ingestion.post.normalize.failed", {
-          step: "normalize_posts" satisfies IngestionStep,
-          ...getPostContext(handle, post),
-          error: getErrorMessage(error),
-        });
-        continue;
-      }
-
-      const sourceKey = getSourceIdentityKey(post);
-      if (sourceKey) {
-        const seenForHandle = state.seenSourceKeysByHandle[handle] ?? [];
-        if (seenForHandle.includes(sourceKey)) {
-          continue;
-        }
-        seenForHandle.push(sourceKey);
-        state.seenSourceKeysByHandle[handle] = seenForHandle;
-      }
-
-      await processIngestionPost({
-        client,
-        handle,
-        post,
-        summary: handleSummary,
-        canonicalVenueNamesByHandle,
-        venueNameOverridesByHandle,
-        configuredVenueNamesByHandle,
-        serviceSecret,
-      });
-    }
 
     if ((state.currentScrapedPostIdIndex ?? 0) >= ids.length) {
       state.currentScrapedPostIds = [];
@@ -8544,6 +10048,7 @@ async function fetchFreshPostsForHandlesInParallel(
   summary: IngestionSummary,
   options: Pick<RunInstagramIngestionOptions, "resultsLimit" | "daysBack">,
   serviceSecret: string,
+  workOwner: string,
 ): Promise<Record<string, InstagramScrapedPost[]>> {
   const postsByHandle: Record<string, InstagramScrapedPost[]> = {};
   let nextHandleIndex = 0;
@@ -8553,15 +10058,85 @@ async function fetchFreshPostsForHandlesInParallel(
       const handle = handles[nextHandleIndex];
       nextHandleIndex += 1;
 
+      let fetchLeaseClaimed = false;
+      const paidFetchLeaseOwner = `${workOwner}:apify:${handle}`.slice(0, 200);
       try {
+        const baseResultsLimit = normalizeFullScrapeResultsLimit(options.resultsLimit);
+        const lease = (await client.mutation(
+          claimPaidFetchLeaseMutation,
+          withServiceSecret(
+            {
+              handle,
+              owner: paidFetchLeaseOwner,
+              leaseMs: 10 * 60_000,
+              requestedResultsLimit: baseResultsLimit,
+            },
+            serviceSecret,
+          ),
+        )) as {
+          claimed?: boolean;
+          reason?: string;
+          onlyPostsNewerThan?: string | null;
+          resultsLimit?: number;
+          expiresAt?: number;
+        };
+        if (!lease.claimed) {
+          if (lease.reason === "hard_cap_saturated") {
+            getOrCreateHandleSummary(summary, handle).errors.push(
+              `Apify fetch window for @${handle} remains hard-blocked at the maximum result cap.`,
+            );
+          }
+          continue;
+        }
+        fetchLeaseClaimed = true;
+
+        const onlyPostsNewerThan = lease.onlyPostsNewerThan ?? null;
+        const requestedResultsLimit = normalizeFullScrapeResultsLimit(
+          lease.resultsLimit ?? baseResultsLimit,
+        );
         const posts = await scrapeInstagramAccount({
           handle,
-          resultsLimit: options.resultsLimit,
+          resultsLimit: requestedResultsLimit,
           daysBack: options.daysBack,
+          onlyPostsNewerThan: onlyPostsNewerThan ?? undefined,
+          abortAtMs: lease.expiresAt ? lease.expiresAt - 60_000 : undefined,
         });
+        const rawItemCount = getInstagramScrapeRawItemCount(posts);
+        if (rawItemCount >= requestedResultsLimit) {
+          const saturation = (await client.mutation(
+            recordPaidFetchWindowSaturationMutation,
+            withServiceSecret(
+              { handle, owner: paidFetchLeaseOwner, rawItemCount },
+              serviceSecret,
+            ),
+          )) as { nextResultsLimit?: number; hardBlocked?: boolean };
+          throw new Error(
+            `Apify raw result window saturated for @${handle} at ${requestedResultsLimit} items ` +
+              `(normalized=${posts.length}); no response was persisted. ` +
+              (saturation.hardBlocked
+                ? "The handle is now durably hard-blocked pending operator review."
+                : `The next bounded attempt will use ${saturation.nextResultsLimit ?? "a larger"} items.`),
+          );
+        }
 
         try {
-          await persistScrapedPostsForHandle(client, handle, posts, serviceSecret);
+          // Persist the complete actor response before filtering. The upsert reopens
+          // terminal rows whose source content changed and keeps fetch state independent
+          // from extraction/moderation state.
+          await persistScrapedPostsForHandle(
+            client,
+            handle,
+            posts,
+            serviceSecret,
+            paidFetchLeaseOwner,
+          );
+          await client.mutation(
+            recordPaidFetchWindowSuccessMutation,
+            withServiceSecret(
+              { handle, owner: paidFetchLeaseOwner },
+              serviceSecret,
+            ),
+          );
         } catch (persistError) {
           logError("ingestion.scrape.persist_failed", {
             step: "fetch_posts" satisfies IngestionStep,
@@ -8571,12 +10146,31 @@ async function fetchFreshPostsForHandlesInParallel(
             instagramUrl: null,
             error: getErrorMessage(persistError),
           });
+          throw persistError;
         }
+
+        const fetchedSourceKeys = new Set(
+          posts.map((post) => getSourceIdentityKey(post)).filter(Boolean),
+        );
+        const actionableSavedPosts = await loadSavedScrapedPostsForHandle(
+          client,
+          handle,
+          undefined,
+          undefined,
+          serviceSecret,
+        );
+        const freshPosts = actionableSavedPosts.filter((post) =>
+          fetchedSourceKeys.has(getSourceIdentityKey(post)),
+        );
+        const skippedCount = Math.max(0, posts.length - freshPosts.length);
 
         const handleSummary = getOrCreateHandleSummary(summary, handle);
         handleSummary.fetchedPosts = posts.length;
         handleSummary.fetched_posts = posts.length;
-        postsByHandle[handle] = posts;
+        handleSummary.newFetchedPosts = freshPosts.length;
+        handleSummary.skippedAlreadyFetchedPosts = skippedCount;
+        handleSummary.apifyHighWatermarkApplied = onlyPostsNewerThan ? 1 : 0;
+        postsByHandle[handle] = freshPosts;
       } catch (error) {
         const message = getErrorMessage(error);
         const handleSummary = getOrCreateHandleSummary(summary, handle);
@@ -8589,6 +10183,24 @@ async function fetchFreshPostsForHandlesInParallel(
           instagramUrl: null,
           error: message,
         });
+      } finally {
+        if (fetchLeaseClaimed) {
+          try {
+            await client.mutation(
+              releasePaidFetchLeaseMutation,
+              withServiceSecret({ owner: paidFetchLeaseOwner }, serviceSecret),
+            );
+          } catch (error) {
+            logError("ingestion.scrape.fetch_lease_release_failed", {
+              step: "fetch_posts" satisfies IngestionStep,
+              handle,
+              sourcePostId: null,
+              shortcode: null,
+              instagramUrl: null,
+              error: getErrorMessage(error),
+            });
+          }
+        }
       }
     }
   }
@@ -8599,51 +10211,6 @@ async function fetchFreshPostsForHandlesInParallel(
   );
 
   return postsByHandle;
-}
-
-async function runInstagramIngestionWithConcurrentFullScrape(
-  options: RunInstagramIngestionOptions,
-  summary: IngestionSummary,
-): Promise<IngestionSummary> {
-  const client = getConvexClient();
-  const serviceSecret = getConfiguredServiceSecret(options.serviceSecret);
-  const venueContext = await loadIngestionVenueContext(client, serviceSecret);
-  const postsByHandle = await fetchFreshPostsForHandlesInParallel(
-    client,
-    options.handles,
-    summary,
-    options,
-    serviceSecret,
-  );
-  const seenSourceKeysByHandle: Record<string, string[]> = {};
-
-  for (const handle of options.handles) {
-    const posts = postsByHandle[handle];
-    if (!posts) {
-      continue;
-    }
-
-    const seenSourceKeys = seenSourceKeysByHandle[handle] ?? [];
-    seenSourceKeysByHandle[handle] = seenSourceKeys;
-
-    await processLoadedPostsForHandle({
-      client,
-      handle,
-      posts,
-      summary: getOrCreateHandleSummary(summary, handle),
-      seenSourceKeys,
-      serviceSecret,
-      ...venueContext,
-    });
-  }
-
-  await runApprovedDuplicateCleanupForIngestion(client, summary, {
-    mode: "full_scrape",
-    handles: options.handles,
-    serviceSecret,
-  });
-  summary.finishedAt = new Date().toISOString();
-  return summary;
 }
 
 export async function runActiveVenueIngestion(options?: {
@@ -8682,14 +10249,8 @@ export async function runInstagramIngestion(
   const summary = createEmptyIngestionSummary(options.handles);
   const serviceSecret = getConfiguredServiceSecret(options.serviceSecret);
 
-  if ((options.mode ?? "full_scrape") === "full_scrape") {
-    return runInstagramIngestionWithConcurrentFullScrape(
-      { ...options, serviceSecret },
-      summary,
-    );
-  }
-
   const state = createInitialIngestionBatchState();
+  const mode = options.mode ?? "full_scrape";
   let done = false;
 
   while (!done) {
@@ -8699,8 +10260,8 @@ export async function runInstagramIngestion(
       state,
       resultsLimit: options.resultsLimit,
       daysBack: options.daysBack,
-      batchSize: 10,
-      mode: options.mode,
+      batchSize: mode === "full_scrape" ? 1 : 10,
+      mode,
       serviceSecret,
     });
     done = batchResult.done;

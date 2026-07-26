@@ -16,6 +16,10 @@ import {
   mapApifyItemToInstagramPost,
 } from "../lib/scraper/instagram-scraper.ts";
 import {
+  extractEventDataFromInstagramPost,
+  isOpenAiProviderBlockedError,
+} from "../lib/ai/extract-event-data.ts";
+import {
   getCronIngestionConfig,
   isAuthorizedCronRequestHeader,
   selectCronIngestionHandles,
@@ -42,15 +46,77 @@ const request = buildApifyInstagramScrapeRequest({
 
 assert.equal(request.input.dataDetailLevel, "basicData");
 assert.equal(request.input.skipPinnedPosts, false);
-assert.equal(request.input.resultsLimit, 2);
+assert.equal(request.input.resultsLimit, 3);
 assert.equal(request.input.onlyPostsNewerThan, "10 days");
-assert.equal(request.runOptions.maxItems, 2);
+assert.equal(request.runOptions.maxItems, 3);
 assert.equal(request.runOptions.timeout, 120);
 assert.equal(request.runOptions.memory, undefined);
 assert.ok(
   request.runOptions.maxTotalChargeUsd > 0 && request.runOptions.maxTotalChargeUsd <= 0.01,
   "default Apify per-run charge cap should stay low",
 );
+
+const persistedHighWaterRequest = buildApifyInstagramScrapeRequest({
+  actorUsernameInput: "clubdrugstore",
+  resultsLimit: 1,
+  daysBack: 10,
+  onlyPostsNewerThan: "2026-07-26T12:34:56.000Z",
+  env: {},
+});
+assert.equal(
+  persistedHighWaterRequest.input.onlyPostsNewerThan,
+  "2026-07-26T12:34:56.000Z",
+  "a persisted per-handle timestamp must replace the broad relative window so Apify does not return already-saved posts",
+);
+
+const invalidHighWaterRequest = buildApifyInstagramScrapeRequest({
+  actorUsernameInput: "clubdrugstore",
+  resultsLimit: 1,
+  daysBack: 10,
+  onlyPostsNewerThan: "not-a-date",
+  env: {},
+});
+assert.equal(
+  invalidHighWaterRequest.input.onlyPostsNewerThan,
+  "10 days",
+  "invalid persisted timestamps must retain the bounded relative fallback",
+);
+
+const originalFetch = globalThis.fetch;
+const originalOpenAiKey = process.env.OPENAI_API_KEY;
+const originalOpenAiVisionModel = process.env.OPENAI_VISION_MODEL;
+let blockedProviderCalls = 0;
+try {
+  process.env.OPENAI_API_KEY = "qa-placeholder";
+  process.env.OPENAI_VISION_MODEL = "qa-model";
+  globalThis.fetch = async () => {
+    blockedProviderCalls += 1;
+    return new Response(
+      JSON.stringify({ error: { type: "insufficient_quota", code: "insufficient_quota" } }),
+      { status: 429, statusText: "Too Many Requests" },
+    );
+  };
+  await assert.rejects(
+    () =>
+      extractEventDataFromInstagramPost({
+        caption: "QA fixture",
+        instagramPostUrl: "https://www.instagram.com/p/qa-fixture/",
+        instagramHandle: "qa_venue",
+      }),
+    (error) => isOpenAiProviderBlockedError(error),
+  );
+  assert.equal(
+    blockedProviderCalls,
+    1,
+    "quota/auth failures must not be retried per post before stopping the ingestion job",
+  );
+} finally {
+  globalThis.fetch = originalFetch;
+  if (originalOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
+  else process.env.OPENAI_API_KEY = originalOpenAiKey;
+  if (originalOpenAiVisionModel === undefined) delete process.env.OPENAI_VISION_MODEL;
+  else process.env.OPENAI_VISION_MODEL = originalOpenAiVisionModel;
+}
 
 assert.equal(
   mapApifyItemToInstagramPost(
@@ -83,7 +149,7 @@ assert.equal(detailedRequest.input.dataDetailLevel, "detailedData");
 assert.equal(detailedRequest.input.skipPinnedPosts, true);
 assert.equal(detailedRequest.input.resultsLimit, 5);
 assert.equal(detailedRequest.input.onlyPostsNewerThan, "30 days");
-assert.equal(detailedRequest.runOptions.maxTotalChargeUsd, 0.01);
+assert.equal(detailedRequest.runOptions.maxTotalChargeUsd, 0.04);
 assert.equal(detailedRequest.runOptions.timeout, 90);
 assert.equal(detailedRequest.runOptions.memory, 8192);
 
@@ -94,7 +160,7 @@ const adversarialChargeRequest = buildApifyInstagramScrapeRequest({
 });
 assert.equal(
   adversarialChargeRequest.runOptions.maxTotalChargeUsd,
-  0.01,
+  0.04,
   "configured Apify charge values must not bypass the hard per-account cap",
 );
 
@@ -110,7 +176,7 @@ assert.equal(normalizedMemoryRequest.runOptions.memory, 4096);
 
 const cronConfig = getCronIngestionConfig({});
 assert.deepEqual(cronConfig, {
-  resultsLimit: 1,
+  resultsLimit: 3,
   daysBack: 10,
   maxHandlesPerRun: 2000,
   fullScrapeCooldownHours: 23,
@@ -139,8 +205,20 @@ const ingestionJobsSource = readFileSync(
   new URL("../convex/ingestionJobs.ts", import.meta.url),
   "utf8",
 );
+const scrapedPostsSource = readFileSync(
+  new URL("../convex/scrapedPosts.ts", import.meta.url),
+  "utf8",
+);
+const convexSchemaSource = readFileSync(
+  new URL("../convex/schema.ts", import.meta.url),
+  "utf8",
+);
 const ingestionRunnerSource = readFileSync(
   new URL("../lib/pipeline/run-instagram-ingestion.ts", import.meta.url),
+  "utf8",
+);
+const extractionSource = readFileSync(
+  new URL("../lib/ai/extract-event-data.ts", import.meta.url),
   "utf8",
 );
 const operationalVenuesSource = readFileSync(
@@ -166,6 +244,66 @@ assert.match(operationalVenuesSource, /continueCursor/);
 assert.match(operationalVenuesSource, /seenCursors/);
 assert.doesNotMatch(operationalVenuesSource, /MAX_OPERATIONAL_VENUE_PAGE_REQUESTS/);
 assert.doesNotMatch(ingestionRunnerSource, /"venues:listActiveVenues"/);
+assert.match(convexSchemaSource, /processingStatus:[\s\S]{0,220}retryable_failure/);
+assert.match(scrapedPostsSource, /processingStatus: "pending"/);
+assert.match(scrapedPostsSource, /recordProcessingResult/);
+assert.match(
+  ingestionRunnerSource,
+  /recordScrapedPostProcessingResultMutation/,
+  "processing completion/failure must be durable and independent from fetch and event approval state",
+);
+assert.match(
+  ingestionRunnerSource,
+  /record\.processingStatus === "completed"[\s\S]{0,240}\["terminal_no_event", "receipt_complete"\]\.includes/,
+  "saved-post replay may skip only explicit terminal no-event or receipt-complete rows",
+);
+assert.match(
+  ingestionRunnerSource,
+  /scrapedPosts:getManyByHandleAndPostRefs/,
+  "fresh scrape results must be checked against durable scraped-post identities before persistence or extraction",
+);
+assert.match(
+  ingestionRunnerSource,
+  /onlyPostsNewerThan:\s*onlyPostsNewerThan \?\? undefined/,
+  "full scrapes must pass the latest persisted per-handle timestamp into Apify",
+);
+assert.match(scrapedPostsSource, /getLatestIngestionBoundaryByHandle/);
+assert.match(scrapedPostsSource, /Date\.now\(\) \+ 5 \* 60 \* 1_000/);
+assert.match(scrapedPostsSource, /by_handle_postedAtMs/);
+assert.doesNotMatch(
+  ingestionRunnerSource,
+  /runInstagramIngestionWithConcurrentFullScrape/,
+  "direct full scrapes must use the same per-handle fetch-persist-process circuit-breaker path",
+);
+assert.match(
+  ingestionRunnerSource,
+  /throw persistError/,
+  "raw persistence failure must stop extraction and cursor advancement",
+);
+assert.match(
+  ingestionRunnerSource,
+  /processSavedBacklogBeforeFreshFetch/,
+  "the full saved backlog must drain before another paid Apify request",
+);
+assert.match(
+  ingestionRunnerSource,
+  /isOpenAiProviderBlockedError\(error\)[\s\S]{0,160}throw error/,
+  "provider quota/auth failures must stop the job instead of scraping the remaining handles",
+);
+assert.match(
+  extractionSource,
+  /response\.status === 401[\s\S]{0,200}response\.status === 403[\s\S]{0,200}response\.status === 429/,
+  "OpenAI auth/quota/rate failures must be classified as provider-blocking",
+);
+const savedCursorBlock = ingestionRunnerSource.slice(
+  ingestionRunnerSource.indexOf("const idsToLoad = ids.slice("),
+  ingestionRunnerSource.indexOf("const done = state.handleIndex", ingestionRunnerSource.indexOf("const idsToLoad = ids.slice(")),
+);
+assert.ok(
+  savedCursorBlock.indexOf("await processLoadedPostsForHandle") <
+    savedCursorBlock.indexOf("state.currentScrapedPostIdIndex = idsStartIndex + idsToLoad.length"),
+  "saved-post cursor must advance only after nonfatal processing returns",
+);
 
 let operationalPageCalls = 0;
 const operationalRecords = await loadOperationalVenueRecords({

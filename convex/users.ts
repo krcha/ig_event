@@ -120,12 +120,31 @@ async function loadLibraryForUser(ctx: QueryCtx, userId: string) {
     .filter(notNull)
     .filter((event) => event.status === "approved");
   const publicVenueIds = await loadPublicVenueIdsForSavedEvents(ctx, approvedSavedEvents);
-  const savedEvents = approvedSavedEvents.map((event) =>
-    sanitizeVenueLinkedPublicEventFields(
+  const savedEvents = approvedSavedEvents.map((event) => {
+    const venueSanitized = sanitizeVenueLinkedPublicEventFields(
       event,
       event.venueId !== undefined && publicVenueIds.has(event.venueId),
-    ),
-  );
+    );
+    const sanitized = { ...venueSanitized } as Doc<"events"> & Record<string, unknown>;
+    delete sanitized.sourceOccurrenceKey;
+    if (sanitized.normalizedFieldsJson) {
+      try {
+        const normalizedFields = JSON.parse(sanitized.normalizedFieldsJson) as Record<
+          string,
+          unknown
+        >;
+        for (const key of Object.keys(normalizedFields)) {
+          if (key.startsWith("sourceOccurrence")) {
+            delete normalizedFields[key];
+          }
+        }
+        sanitized.normalizedFieldsJson = JSON.stringify(normalizedFields);
+      } catch {
+        delete sanitized.normalizedFieldsJson;
+      }
+    }
+    return sanitized;
+  });
   const favoriteVenues = (
     await Promise.all(favoriteRefs.map((ref) => ctx.db.get(ref.venueId)))
   )

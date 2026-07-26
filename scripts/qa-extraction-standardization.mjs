@@ -21,14 +21,22 @@ import {
   toSearchableText,
 } from "../lib/pipeline/venue-normalization.ts";
 import {
+  areEventTimesCompatibleForTesting,
   buildDuplicateUpdatePatch,
+  buildSourceOccurrenceChildTrackingKeyForTesting,
+  buildSourceOccurrenceKeyForTesting,
+  bindSourceOccurrenceMetadata,
   createEmptyIngestionSummary,
   evaluateCoreEventSourceGrounding,
+  findBestExistingMatchForPreparedEventForTesting,
   getNonEventAutoApprovalBlockers,
   getPosterScheduleAutoApprovalBlockers,
+  hasIncompleteAmbiguousCollisionContextForTesting,
+  hasIncompleteSourceOccurrenceSetForTesting,
   normalizeEventDate,
   prepareEventsForInsert,
   processIngestionPostWithExtractionForTesting,
+  reconcileAmbiguousOccurrenceKeysWithExistingEventsForTesting,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
 import {
   extractEventTimeFromText,
@@ -60,10 +68,15 @@ import { chooseAction as chooseEventQualityAction } from "./audit-event-quality.
 import { markModelDerivedRepairPending } from "./source-grounding-guard.mjs";
 import {
   createEvent,
+  getInstagramSourceOccurrenceReceipt,
   mergeApprovedEvents,
+  reconcileInstagramSourceOccurrenceReceipt,
   reprocessPendingSourceGroundingBatch,
+  recordInstagramSourceOccurrenceSatisfaction,
   setEventStatus,
+  updateSourceOccurrenceExpectedCount,
   updateEvent,
+  updateEventAndRecordInstagramSourceOccurrenceSatisfaction,
 } from "../convex/events.ts";
 
 const STATIC_VENUE_BY_HANDLE = {
@@ -6461,7 +6474,26 @@ async function withoutConsoleInfo(callback) {
   }
 }
 
+async function withoutConsoleInfoAndError(callback) {
+  const originalConsoleInfo = console.info;
+  const originalConsoleError = console.error;
+  console.info = () => {};
+  console.error = () => {};
+  try {
+    return await callback();
+  } finally {
+    console.info = originalConsoleInfo;
+    console.error = originalConsoleError;
+  }
+}
+
 async function runDistinctOccurrencePersistenceQa() {
+  assert.equal(areEventTimesCompatibleForTesting("19.30", "19:30"), true);
+  assert.equal(areEventTimesCompatibleForTesting("21h30", "21:30"), true);
+  assert.equal(areEventTimesCompatibleForTesting("7:30 pm", "19:30"), true);
+  assert.equal(areEventTimesCompatibleForTesting("12 am", "00:00"), true);
+  assert.equal(areEventTimesCompatibleForTesting("19.30", "20:30"), false);
+
   const eventDate = isoDateDaysFromNow(7);
   const eventDateLabel = ddmmForIsoDate(eventDate);
   const sourceCaption = [
@@ -6549,7 +6581,7 @@ async function runDistinctOccurrencePersistenceQa() {
   assert.equal(summary.updated_duplicates_bad_data, 0);
   assert.match(
     inserted[0].sourceOccurrenceKey,
-    /^instagram-occurrence-v1:[a-f0-9]{64}$/,
+    /^instagram-occurrence-v2:[a-f0-9]{64}$/,
   );
   assert.notEqual(
     inserted[0].sourceOccurrenceKey,
@@ -6557,11 +6589,327 @@ async function runDistinctOccurrencePersistenceQa() {
     "Distinct source children must receive distinct atomic occurrence keys.",
   );
 
+  const sharedSlotSourceText = `${eventDateLabel} ALICE BOB 21H`;
+  const sharedSlotPost = {
+    ...post,
+    postId: "qa-shared-slot-occurrences",
+    instagramPostUrl: "https://www.instagram.com/p/qa-shared-slot-occurrences/",
+    caption: sharedSlotSourceText,
+  };
+  const sharedSlotBaseFields = {
+    multiEventSplitDetected: true,
+    multiEventSplitCount: 2,
+    splitSourceLine: sharedSlotSourceText,
+    rowSourceText: sharedSlotSourceText,
+  };
+  const sharedSlotBound = bindSourceOccurrenceMetadata(
+    sharedSlotPost,
+    ["ALICE", "BOB"].map((title, index) => ({
+      kind: "ok",
+      normalizedFields: {
+        ...sharedSlotBaseFields,
+        splitEventIndex: index + 1,
+      },
+      event: {
+        ...inserted[0],
+        title,
+        artists: [title],
+        time: "21:00",
+        status: "approved",
+      },
+    })),
+  );
+  assert.equal(sharedSlotBound.length, 2);
+  assert.ok(sharedSlotBound.every((prepared) => prepared.kind === "ok"));
+  const sharedSlotEvents = sharedSlotBound.map((prepared) => prepared.event);
+  assert.notEqual(
+    sharedSlotEvents[0].sourceOccurrenceKey,
+    sharedSlotEvents[1].sourceOccurrenceKey,
+  );
+  for (const event of sharedSlotEvents) {
+    assert.equal(event.status, "pending");
+    assert.equal(
+      JSON.parse(event.normalizedFieldsJson).sourceOccurrenceAmbiguousProvenance,
+      true,
+    );
+  }
+  const originalSharedSlotMatches = sharedSlotEvents.map((event, index) => ({
+    existingEvent: {
+      ...event,
+      _id: `qa-shared-slot-existing-${index + 1}`,
+    },
+    matchedBy: "post_id",
+    matchedValue: sharedSlotPost.postId,
+  }));
+  const reversedSharedSlotResults = bindSourceOccurrenceMetadata(sharedSlotPost, [
+    {
+      kind: "ok",
+      event: {
+        ...sharedSlotEvents[1],
+        sourceOccurrenceKey: undefined,
+        normalizedFieldsJson: JSON.stringify(sharedSlotBaseFields),
+      },
+      normalizedFields: { ...sharedSlotBaseFields },
+    },
+    {
+      kind: "ok",
+      event: {
+        ...sharedSlotEvents[0],
+        sourceOccurrenceKey: undefined,
+        normalizedFieldsJson: JSON.stringify(sharedSlotBaseFields),
+      },
+      normalizedFields: { ...sharedSlotBaseFields },
+    },
+  ]);
+  const reversedBob = reversedSharedSlotResults[0];
+  assert.equal(reversedBob.kind, "ok");
+  const reconciledReversedSharedSlotResults =
+    reconcileAmbiguousOccurrenceKeysWithExistingEventsForTesting(
+      reversedSharedSlotResults,
+      [originalSharedSlotMatches[0]],
+    );
+  assert.equal(reconciledReversedSharedSlotResults[0].kind, "ok");
+  assert.equal(reconciledReversedSharedSlotResults[1].kind, "ok");
+  assert.equal(
+    reconciledReversedSharedSlotResults[0].event.sourceOccurrenceKey,
+    sharedSlotEvents[1].sourceOccurrenceKey,
+    "An unmatched reordered sibling must receive the free ordinal key.",
+  );
+  assert.equal(
+    reconciledReversedSharedSlotResults[1].event.sourceOccurrenceKey,
+    sharedSlotEvents[0].sourceOccurrenceKey,
+    "A semantic sibling must retain its persisted ordinal key after reordering.",
+  );
+  assert.deepEqual(
+    new Set(
+      JSON.parse(reconciledReversedSharedSlotResults[0].event.normalizedFieldsJson)
+        .sourceOccurrenceExpectedKeys,
+    ),
+    new Set(sharedSlotEvents.map((event) => event.sourceOccurrenceKey)),
+  );
+  assert.equal(
+    findBestExistingMatchForPreparedEventForTesting(
+      originalSharedSlotMatches,
+      reversedBob.event,
+      reversedBob.normalizedFields,
+    )?.existingEvent._id,
+    "qa-shared-slot-existing-2",
+    "Ambiguous siblings must match by stable semantic identity before ordinal keys when extraction order changes.",
+  );
+  assert.equal(
+    findBestExistingMatchForPreparedEventForTesting(
+      [originalSharedSlotMatches[0]],
+      reversedBob.event,
+      reversedBob.normalizedFields,
+    ),
+    null,
+  );
+  assert.equal(
+    hasIncompleteAmbiguousCollisionContextForTesting(
+      [originalSharedSlotMatches[0]],
+      reversedBob.event,
+      reversedBob.normalizedFields,
+    ),
+    true,
+    "A reordered partial retry whose ordinal collides with another sibling must defer.",
+  );
+  const originalBobFields = JSON.parse(sharedSlotEvents[1].normalizedFieldsJson);
+  assert.equal(
+    hasIncompleteAmbiguousCollisionContextForTesting(
+      [originalSharedSlotMatches[0]],
+      sharedSlotEvents[1],
+      originalBobFields,
+    ),
+    false,
+    "A missing sibling with a free stable ordinal must remain insertable.",
+  );
+
+  const partialSharedSlotFields = JSON.parse(sharedSlotEvents[1].normalizedFieldsJson);
+  delete partialSharedSlotFields.sourceOccurrenceAmbiguousProvenance;
+  delete partialSharedSlotFields.sourceOccurrenceCollisionOrdinal;
+  delete partialSharedSlotFields.rowSourceText;
+  delete partialSharedSlotFields.splitSourceLine;
+  assert.equal(
+    hasIncompleteAmbiguousCollisionContextForTesting(
+      [
+        {
+          existingEvent: {
+            ...sharedSlotEvents[0],
+            _id: "qa-shared-slot-existing",
+          },
+          matchedBy: "post_id",
+          matchedValue: sharedSlotPost.postId,
+        },
+      ],
+      sharedSlotEvents[1],
+      partialSharedSlotFields,
+    ),
+    true,
+    "A partial retry that loses collision-group context must defer instead of inserting a third ambiguous child.",
+  );
+
+  const mutableLineFieldsA = {
+    ...sharedSlotBaseFields,
+    normalizedDate: sharedSlotEvents[0].date,
+    normalizedTime: sharedSlotEvents[0].time,
+    rowSourceText: "ALICE 21H",
+  };
+  const mutableLineFieldsB = {
+    ...mutableLineFieldsA,
+    title: "ALICE — revised extractor title",
+    venue: "Repaired Venue Name",
+    artists: ["Alice", "Guest"],
+    rowSourceText: "ALICE — updated formatting — 21:00",
+  };
+  assert.equal(
+    buildSourceOccurrenceKeyForTesting(
+      sharedSlotPost,
+      sharedSlotEvents[0].date,
+      sharedSlotEvents[0].time,
+      mutableLineFieldsA,
+    ),
+    buildSourceOccurrenceKeyForTesting(
+      sharedSlotPost,
+      sharedSlotEvents[0].date,
+      sharedSlotEvents[0].time,
+      mutableLineFieldsB,
+    ),
+    "Mutable source-line text must not change a v2 occurrence key.",
+  );
+  assert.equal(
+    buildSourceOccurrenceChildTrackingKeyForTesting(
+      sharedSlotPost,
+      {
+        kind: "skip",
+        reason: "missing_venue",
+        normalizedFields: mutableLineFieldsA,
+      },
+      0,
+    ),
+    buildSourceOccurrenceChildTrackingKeyForTesting(
+      sharedSlotPost,
+      {
+        kind: "skip",
+        reason: "missing_venue",
+        normalizedFields: mutableLineFieldsB,
+      },
+      0,
+    ),
+    "Mutable extractor title, venue, artists, and source-line text must not strand a structurally identified deferred child.",
+  );
+  const pastOnlyBound = bindSourceOccurrenceMetadata(sharedSlotPost, [
+    {
+      kind: "skip",
+      reason: "past_event",
+      normalizedFields: {
+        normalizedDate: "2026-01-01",
+      },
+    },
+  ]);
+  assert.match(
+    pastOnlyBound[0].normalizedFields.sourceOccurrenceKey,
+    /^instagram-occurrence-v2:/,
+    "A past-only extraction must retain its key so the receipt can retire it safely.",
+  );
+
+  const singleOccurrenceResult = bindSourceOccurrenceMetadata(sharedSlotPost, [
+    {
+      kind: "ok",
+      event: {
+        ...sharedSlotEvents[0],
+        sourceOccurrenceKey: undefined,
+        normalizedFieldsJson: "{}",
+      },
+      normalizedFields: {
+        normalizedDate: sharedSlotEvents[0].date,
+      },
+    },
+  ])[0];
+  assert.equal(singleOccurrenceResult.kind, "ok");
+  const singleOccurrenceMatch = {
+    existingEvent: {
+      ...singleOccurrenceResult.event,
+      _id: "qa-single-occurrence-existing",
+    },
+    matchedBy: "post_id",
+    matchedValue: sharedSlotPost.postId,
+  };
+  assert.equal(
+    hasIncompleteSourceOccurrenceSetForTesting([singleOccurrenceMatch], sharedSlotPost),
+    false,
+  );
+  const legacySingleFields = JSON.parse(singleOccurrenceResult.event.normalizedFieldsJson);
+  delete legacySingleFields.sourceOccurrenceSourceFingerprint;
+  assert.equal(
+    hasIncompleteSourceOccurrenceSetForTesting(
+      [
+        {
+          ...singleOccurrenceMatch,
+          existingEvent: {
+            ...singleOccurrenceMatch.existingEvent,
+            normalizedFieldsJson: JSON.stringify(legacySingleFields),
+          },
+        },
+      ],
+      sharedSlotPost,
+    ),
+    true,
+    "A legacy single-event row must be re-extracted so a changed source can add children.",
+  );
+  assert.equal(
+    hasIncompleteSourceOccurrenceSetForTesting(
+      [
+        {
+          ...singleOccurrenceMatch,
+          existingEvent: {
+            ...singleOccurrenceMatch.existingEvent,
+            normalizedFieldsJson: JSON.stringify({
+              ...JSON.parse(singleOccurrenceResult.event.normalizedFieldsJson),
+              sourceOccurrenceSourceFingerprint: "instagram-source-v1:stale",
+            }),
+          },
+        },
+      ],
+      sharedSlotPost,
+    ),
+    true,
+    "A changed source fingerprint must re-extract even when the old source had one event.",
+  );
+  const mixedLegacyFields = {
+    sourceOccurrenceSourceFingerprint: JSON.parse(
+      sharedSlotEvents[0].normalizedFieldsJson,
+    ).sourceOccurrenceSourceFingerprint,
+    multiEventSplitApplied: true,
+    multiEventSplitCount: 2,
+  };
+  assert.equal(
+    hasIncompleteSourceOccurrenceSetForTesting(
+      [
+        originalSharedSlotMatches[0],
+        {
+          existingEvent: {
+            ...sharedSlotEvents[1],
+            _id: "qa-mixed-legacy-existing",
+            sourceOccurrenceKey: undefined,
+            normalizedFieldsJson: JSON.stringify(mixedLegacyFields),
+          },
+          matchedBy: "post_id",
+          matchedValue: sharedSlotPost.postId,
+        },
+      ],
+      sharedSlotPost,
+    ),
+    true,
+    "Mixed exact-v2 and legacy metadata must re-extract rather than fall back to counts.",
+  );
+
   const previousCronSecret = process.env.CRON_SECRET;
   const atomicServiceSecret = "qa-atomic-source-occurrence-secret";
   process.env.CRON_SECRET = atomicServiceSecret;
   const atomicEvents = [];
+  const atomicReceipts = [];
   const atomicAuditLogs = [];
+  const missingAtomicEventIds = new Set();
   const atomicCtx = {
     auth: { getUserIdentity: async () => null },
     db: {
@@ -6577,6 +6925,26 @@ async function runDistinctOccurrencePersistenceQa() {
                 publicStatus: "published",
               },
             ],
+          };
+        }
+        if (table === "instagramSourceOccurrenceReceipts") {
+          return {
+            withIndex: (_indexName, configure) => {
+              let sourceIdentity = null;
+              const indexBuilder = {
+                eq: (field, value) => {
+                  if (field === "sourceIdentity") sourceIdentity = value;
+                  return indexBuilder;
+                },
+              };
+              configure(indexBuilder);
+              return {
+                unique: async () =>
+                  atomicReceipts.find(
+                    (receipt) => receipt.sourceIdentity === sourceIdentity,
+                  ) ?? null,
+              };
+            },
           };
         }
         return {
@@ -6598,6 +6966,17 @@ async function runDistinctOccurrencePersistenceQa() {
           },
         };
       },
+      get: async (id) =>
+        missingAtomicEventIds.has(id)
+          ? null
+          : atomicEvents.find((event) => event._id === id) ?? null,
+      patch: async (id, patch) => {
+        const record =
+          atomicEvents.find((candidate) => candidate._id === id) ??
+          atomicReceipts.find((candidate) => candidate._id === id);
+        assert.ok(record);
+        Object.assign(record, patch);
+      },
       insert: async (table, value) => {
         if (table === "events") {
           const event = {
@@ -6606,6 +6985,14 @@ async function runDistinctOccurrencePersistenceQa() {
           };
           atomicEvents.push(event);
           return event._id;
+        }
+        if (table === "instagramSourceOccurrenceReceipts") {
+          const receipt = {
+            _id: `qa-atomic-receipt-${atomicReceipts.length + 1}`,
+            ...value,
+          };
+          atomicReceipts.push(receipt);
+          return receipt._id;
         }
         atomicAuditLogs.push(value);
         return `qa-atomic-audit-${atomicAuditLogs.length}`;
@@ -6644,7 +7031,372 @@ async function runDistinctOccurrencePersistenceQa() {
       "The indexed source-occurrence check and insert must share one mutation boundary.",
     );
     assert.equal(atomicAuditLogs.length, 1);
+    assert.equal(atomicReceipts.length, 1);
+    assert.deepEqual(atomicReceipts[0].satisfiedKeys, [atomicEventArgs.sourceOccurrenceKey]);
+    const representedReceipt = await getInstagramSourceOccurrenceReceipt._handler(atomicCtx, {
+      sourceIdentity: atomicReceipts[0].sourceIdentity,
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.deepEqual(representedReceipt.satisfiedKeys, [atomicEventArgs.sourceOccurrenceKey]);
+    missingAtomicEventIds.add(atomicEvents[0]._id);
+    const staleRepresentativeReceipt = await getInstagramSourceOccurrenceReceipt._handler(
+      atomicCtx,
+      {
+        sourceIdentity: atomicReceipts[0].sourceIdentity,
+        serviceSecret: atomicServiceSecret,
+      },
+    );
+    assert.deepEqual(
+      staleRepresentativeReceipt.satisfiedKeys,
+      [],
+      "A receipt must not remain complete after the event representing its satisfied child is removed.",
+    );
+    missingAtomicEventIds.delete(atomicEvents[0]._id);
+
+    const deferredSourceIdentity = "instagram-source-identity-v1:qa-deferred-receipt";
+    const deferredFingerprint = "instagram-source-v1:qa-deferred-fingerprint";
+    const deferredFirstKey = `instagram-occurrence-v2:${"a".repeat(64)}`;
+    const deferredSecondKey = `instagram-occurrence-v2:${"b".repeat(64)}`;
+    const deferredFirstChildKey = "instagram-source-child-v1:qa-deferred-first";
+    const deferredSecondChildKey = "instagram-source-child-v1:qa-deferred-second";
+    await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: deferredSourceIdentity,
+        sourceFingerprint: deferredFingerprint,
+        expectedKeys: [deferredFirstKey],
+        deferredChildCount: 1,
+        deferredChildKeys: [deferredSecondChildKey],
+        observedChildKeys: [deferredFirstChildKey, deferredSecondChildKey],
+      },
+      satisfiedKey: deferredFirstKey,
+      representativeEventId: atomicEvents[0]._id,
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.equal(atomicReceipts[1].deferredChildCount, 1);
+    assert.deepEqual(atomicReceipts[1].expectedKeys, [deferredFirstKey]);
+    assert.deepEqual(atomicReceipts[1].satisfiedKeys, [deferredFirstKey]);
+    await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: deferredSourceIdentity,
+        sourceFingerprint: deferredFingerprint,
+        expectedKeys: [deferredFirstKey],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: [deferredFirstChildKey],
+      },
+      satisfiedKey: deferredFirstKey,
+      representativeEventId: atomicEvents[0]._id,
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.equal(
+      atomicReceipts[1].deferredChildCount,
+      1,
+      "A same-fingerprint retry that omits a deferred child must not erase the guard.",
+    );
+    const deferredSecondRepresentativeEventId = await atomicCtx.db.insert("events", {
+      ...atomicEventArgs,
+      sourceOccurrenceKey: deferredSecondKey,
+    });
+    await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: deferredSourceIdentity,
+        sourceFingerprint: deferredFingerprint,
+        expectedKeys: [deferredFirstKey, deferredSecondKey],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: [deferredFirstChildKey, deferredSecondChildKey],
+      },
+      satisfiedKey: deferredSecondKey,
+      representativeEventId: deferredSecondRepresentativeEventId,
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.equal(atomicReceipts[1].deferredChildCount, 0);
+    assert.deepEqual(atomicReceipts[1].expectedKeys, [deferredFirstKey, deferredSecondKey]);
+    assert.deepEqual(atomicReceipts[1].satisfiedKeys, [deferredFirstKey, deferredSecondKey]);
+    await assert.rejects(
+      recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+        plan: {
+          sourceIdentity: deferredSourceIdentity,
+          sourceFingerprint: deferredFingerprint,
+          expectedKeys: [deferredFirstKey, deferredSecondKey, `instagram-occurrence-v2:${"c".repeat(64)}`],
+          deferredChildCount: 0,
+          deferredChildKeys: [],
+          observedChildKeys: [
+            deferredFirstChildKey,
+            deferredSecondChildKey,
+            "instagram-source-child-v1:qa-deferred-third",
+          ],
+        },
+        satisfiedKey: `instagram-occurrence-v2:${"c".repeat(64)}`,
+        representativeEventId: deferredSecondRepresentativeEventId,
+        serviceSecret: atomicServiceSecret,
+      }),
+      /distinct representative events/i,
+    );
+    await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: deferredSourceIdentity,
+        sourceFingerprint: deferredFingerprint,
+        expectedKeys: [deferredSecondKey],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: [deferredSecondChildKey],
+        confirmedPastKeys: [deferredFirstKey],
+      },
+      satisfiedKey: deferredSecondKey,
+      representativeEventId: deferredSecondRepresentativeEventId,
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.deepEqual(
+      atomicReceipts[1].expectedKeys,
+      [deferredSecondKey],
+      "Safely confirmed-past keys must retire from the authoritative receipt.",
+    );
+    assert.deepEqual(atomicReceipts[1].satisfiedKeys, [deferredSecondKey]);
+    await reconcileInstagramSourceOccurrenceReceipt._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: deferredSourceIdentity,
+        sourceFingerprint: deferredFingerprint,
+        expectedKeys: [],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: [deferredSecondChildKey],
+        confirmedPastKeys: [deferredSecondKey],
+      },
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.deepEqual(atomicReceipts[1].expectedKeys, []);
+    assert.deepEqual(atomicReceipts[1].satisfiedKeys, []);
+    assert.deepEqual(atomicReceipts[1].satisfiedOccurrences, []);
+
+    const deferredOnlySourceIdentity =
+      "instagram-source-identity-v1:qa-deferred-only";
+    const deferredOnlyChildKey =
+      "instagram-source-child-v1:qa-deferred-only-child";
+    await reconcileInstagramSourceOccurrenceReceipt._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: deferredOnlySourceIdentity,
+        sourceFingerprint: deferredFingerprint,
+        expectedKeys: [],
+        deferredChildCount: 1,
+        deferredChildKeys: [deferredOnlyChildKey],
+        observedChildKeys: [deferredOnlyChildKey],
+      },
+      serviceSecret: atomicServiceSecret,
+    });
+    const deferredOnlyReceipt = atomicReceipts.find(
+      (receipt) => receipt.sourceIdentity === deferredOnlySourceIdentity,
+    );
+    assert.deepEqual(deferredOnlyReceipt.expectedKeys, []);
+    assert.deepEqual(deferredOnlyReceipt.deferredChildKeys, [deferredOnlyChildKey]);
+    assert.equal(deferredOnlyReceipt.deferredChildCount, 1);
+
+    const staleSourceIdentity = "instagram-source-identity-v1:qa-stale-worker";
+    const staleKey = `instagram-occurrence-v2:${"d".repeat(64)}`;
+    await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: staleSourceIdentity,
+        sourceFingerprint: "instagram-source-v1:f1",
+        expectedKeys: [staleKey],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: ["instagram-source-child-v1:qa-stale"],
+      },
+      satisfiedKey: staleKey,
+      representativeEventId: atomicEvents[0]._id,
+      serviceSecret: atomicServiceSecret,
+    });
+    await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: staleSourceIdentity,
+        sourceFingerprint: "instagram-source-v1:f2",
+        previousSourceFingerprint: "instagram-source-v1:f1",
+        expectedKeys: [staleKey],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: ["instagram-source-child-v1:qa-stale"],
+      },
+      satisfiedKey: staleKey,
+      representativeEventId: atomicEvents[0]._id,
+      serviceSecret: atomicServiceSecret,
+    });
+    await assert.rejects(
+      recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+        plan: {
+          sourceIdentity: staleSourceIdentity,
+          sourceFingerprint: "instagram-source-v1:f1",
+          previousSourceFingerprint: "instagram-source-v1:f1",
+          expectedKeys: [staleKey],
+          deferredChildCount: 0,
+          deferredChildKeys: [],
+          observedChildKeys: ["instagram-source-child-v1:qa-stale"],
+        },
+        satisfiedKey: staleKey,
+        representativeEventId: atomicEvents[0]._id,
+        serviceSecret: atomicServiceSecret,
+      }),
+      /receipt plan is stale/i,
+    );
+    assert.equal(
+      atomicReceipts.find((receipt) => receipt.sourceIdentity === staleSourceIdentity)
+        .sourceFingerprint,
+      "instagram-source-v1:f2",
+    );
+    const descriptionBeforeStaleAtomicUpdate = atomicEvents[0].description;
+    await assert.rejects(
+      updateEventAndRecordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+        id: atomicEvents[0]._id,
+        patch: { description: "stale-f1-write" },
+        expectedStatus: atomicEvents[0].status,
+        plan: {
+          sourceIdentity: staleSourceIdentity,
+          sourceFingerprint: "instagram-source-v1:f1",
+          previousSourceFingerprint: "instagram-source-v1:f1",
+          expectedKeys: [staleKey],
+          deferredChildCount: 0,
+          deferredChildKeys: [],
+          observedChildKeys: ["instagram-source-child-v1:qa-stale"],
+        },
+        satisfiedKey: staleKey,
+        serviceSecret: atomicServiceSecret,
+      }),
+      /receipt plan is stale/i,
+    );
+    assert.equal(
+      atomicEvents[0].description,
+      descriptionBeforeStaleAtomicUpdate,
+      "A stale receipt generation must reject before any public event repair commits.",
+    );
+
+    const migratedSourceIdentity = "instagram-source-identity-v1:qa-key-migration";
+    const migratedOldKey = `instagram-occurrence-v2:${"e".repeat(64)}`;
+    const migratedNewKey = `instagram-occurrence-v2:${"f".repeat(64)}`;
+    const migratedSiblingKey = `instagram-occurrence-v2:${"1".repeat(64)}`;
+    await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: migratedSourceIdentity,
+        sourceFingerprint: "instagram-source-v2:migration-f1",
+        expectedKeys: [migratedOldKey],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: ["instagram-source-child-v1:qa-migration-a"],
+      },
+      satisfiedKey: migratedOldKey,
+      representativeEventId: atomicEvents[0]._id,
+      serviceSecret: atomicServiceSecret,
+    });
+    await updateEventAndRecordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      id: atomicEvents[0]._id,
+      patch: { description: "migrated-f2-a" },
+      expectedStatus: atomicEvents[0].status,
+      plan: {
+        sourceIdentity: migratedSourceIdentity,
+        sourceFingerprint: "instagram-source-v2:migration-f2",
+        previousSourceFingerprint: "instagram-source-v2:migration-f1",
+        expectedKeys: [migratedNewKey, migratedSiblingKey],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: [
+          "instagram-source-child-v1:qa-migration-a",
+          "instagram-source-child-v1:qa-migration-b",
+        ],
+      },
+      satisfiedKey: migratedNewKey,
+      supersededKey: migratedOldKey,
+      serviceSecret: atomicServiceSecret,
+    });
+    const migratedReceipt = atomicReceipts.find(
+      (receipt) => receipt.sourceIdentity === migratedSourceIdentity,
+    );
+    assert.deepEqual(
+      new Set(migratedReceipt.expectedKeys),
+      new Set([migratedNewKey, migratedSiblingKey]),
+    );
+    assert.deepEqual(migratedReceipt.satisfiedKeys, [migratedNewKey]);
+    assert.deepEqual(migratedReceipt.satisfiedOccurrences, [
+      { key: migratedNewKey, eventId: atomicEvents[0]._id },
+    ]);
+    assert.equal(atomicEvents[0].description, "migrated-f2-a");
+    const migratedSiblingEventId = await atomicCtx.db.insert("events", {
+      ...atomicEventArgs,
+      sourceOccurrenceKey: migratedSiblingKey,
+      description: "migrated-f2-b",
+    });
+    await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: migratedSourceIdentity,
+        sourceFingerprint: "instagram-source-v2:migration-f2",
+        previousSourceFingerprint: "instagram-source-v2:migration-f1",
+        expectedKeys: [migratedNewKey, migratedSiblingKey],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: [
+          "instagram-source-child-v1:qa-migration-a",
+          "instagram-source-child-v1:qa-migration-b",
+        ],
+      },
+      satisfiedKey: migratedSiblingKey,
+      representativeEventId: migratedSiblingEventId,
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.deepEqual(
+      new Set(migratedReceipt.satisfiedKeys),
+      new Set([migratedNewKey, migratedSiblingKey]),
+    );
+    await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: migratedSourceIdentity,
+        sourceFingerprint: "instagram-source-v2:migration-f2",
+        previousSourceFingerprint: "instagram-source-v2:migration-f1",
+        expectedKeys: [migratedNewKey, migratedSiblingKey],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: [
+          "instagram-source-child-v1:qa-migration-a",
+          "instagram-source-child-v1:qa-migration-b",
+        ],
+      },
+      satisfiedKey: migratedNewKey,
+      representativeEventId: atomicEvents[0]._id,
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.deepEqual(
+      new Set(migratedReceipt.satisfiedKeys),
+      new Set([migratedNewKey, migratedSiblingKey]),
+    );
     assert.equal(atomicEvents[0].title, atomicEventArgs.title);
+
+    const titleBeforeMetadataReduction = atomicEvents[0].title;
+    const timeBeforeMetadataReduction = atomicEvents[0].time;
+    const atomicOccurrenceMetadata = JSON.parse(atomicEvents[0].normalizedFieldsJson);
+    const atomicExpectedKeys = atomicOccurrenceMetadata.sourceOccurrenceExpectedKeys;
+    atomicEvents[0].status = "approved";
+    const reducedMetadata = await updateSourceOccurrenceExpectedCount._handler(atomicCtx, {
+      id: atomicEvents[0]._id,
+      sourceOccurrenceKey: atomicEvents[0].sourceOccurrenceKey,
+      expectedCurrentCount: 2,
+      expectedCurrentKeys: atomicExpectedKeys,
+      expectedCurrentDeferredChildCount: 0,
+      expectedCurrentSourceFingerprint:
+        atomicOccurrenceMetadata.sourceOccurrenceSourceFingerprint,
+      nextExpectedCount: 1,
+      nextExpectedKeys: [atomicEvents[0].sourceOccurrenceKey],
+      nextDeferredChildCount: 0,
+      nextSourceFingerprint: atomicOccurrenceMetadata.sourceOccurrenceSourceFingerprint,
+      confirmedPastKeys: atomicExpectedKeys.filter(
+        (key) => key !== atomicEvents[0].sourceOccurrenceKey,
+      ),
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.deepEqual(reducedMetadata, { updated: true });
+    assert.equal(atomicEvents[0].title, titleBeforeMetadataReduction);
+    assert.equal(atomicEvents[0].time, timeBeforeMetadataReduction);
+    assert.equal(
+      JSON.parse(atomicEvents[0].normalizedFieldsJson).sourceOccurrenceExpectedCount,
+      1,
+      "Operational completeness metadata must be reducible without changing approved public fields.",
+    );
+    assert.equal(atomicAuditLogs.length, 3);
   } finally {
     if (previousCronSecret === undefined) delete process.env.CRON_SECRET;
     else process.env.CRON_SECRET = previousCronSecret;
@@ -6683,7 +7435,7 @@ async function runDistinctOccurrencePersistenceQa() {
     ...inserted[0],
     _id: "qa-existing-first-occurrence",
     title: "Joss Stone — moderated title",
-    time: "19h",
+    time: "7 pm",
     normalizedFieldsJson: JSON.stringify({
       ...JSON.parse(inserted[0].normalizedFieldsJson),
       splitSource: "model_schedule",
@@ -6692,9 +7444,14 @@ async function runDistinctOccurrencePersistenceQa() {
   const retrySummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
   const retryInserted = [];
   const retryUpdated = [];
+  const retryReceipts = [];
   const retryClient = {
     query: async () => [existingFirstOccurrence],
     mutation: async (_reference, args) => {
+      if ("representativeEventId" in args) {
+        retryReceipts.push(args);
+        return { recorded: true };
+      }
       if ("id" in args) {
         retryUpdated.push(args);
         return args.id;
@@ -6726,6 +7483,46 @@ async function runDistinctOccurrencePersistenceQa() {
   assert.equal(retryUpdated.length, 0);
   assert.equal(retrySummary.insertedEvents, 1);
   assert.equal(retrySummary.skippedDuplicates, 1);
+
+  const legacyFirstNormalizedFields = JSON.parse(inserted[0].normalizedFieldsJson);
+  delete legacyFirstNormalizedFields.sourceOccurrenceExpectedCount;
+  delete legacyFirstNormalizedFields.sourceOccurrenceExpectedKeys;
+  delete legacyFirstNormalizedFields.sourceOccurrenceKey;
+  legacyFirstNormalizedFields.dateRangeExpandedCount = 1;
+  const legacyFirstOccurrence = {
+    ...inserted[0],
+    _id: "qa-legacy-first-occurrence",
+    sourceOccurrenceKey: undefined,
+    normalizedFieldsJson: JSON.stringify(legacyFirstNormalizedFields),
+  };
+  const legacyRetryCreates = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => [legacyFirstOccurrence],
+        mutation: async (_reference, args) => {
+          if ("representativeEventId" in args) {
+            return { recorded: true };
+          }
+          legacyRetryCreates.push(args);
+          return "qa-legacy-recovered-second-occurrence";
+        },
+      },
+      handle: "tickets.rs",
+      post,
+      summary: createEmptyIngestionSummary(["tickets.rs"]).handles[0],
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted,
+    }),
+  );
+  assert.deepEqual(
+    legacyRetryCreates.map((event) => event.time),
+    ["22:00"],
+    "Legacy multi-event counts must not be masked by a non-range count of one.",
+  );
 
   const completeExistingOccurrences = inserted.map((event, index) => ({
     ...event,
@@ -6759,7 +7556,7 @@ async function runDistinctOccurrencePersistenceQa() {
     "A complete deterministic child set should retain the cheap source-post precheck skip.",
   );
 
-  const pastDateLabel = ddmmForIsoDate(isoDateDaysFromNow(-1));
+  const pastDateLabel = ddmmForIsoDate(isoDateDaysFromNow(-3));
   const eligibleDateLabel = ddmmForIsoDate(isoDateDaysFromNow(8));
   const mixedCaption = [
     `${pastDateLabel} - Historical Set 18H`,
@@ -6809,12 +7606,191 @@ async function runDistinctOccurrencePersistenceQa() {
   );
   assert.equal(mixedSummary.skipped_past_event, 1);
 
+  const mixedPastOccurrenceKey = buildSourceOccurrenceKeyForTesting(
+    mixedPost,
+    isoDateDaysFromNow(-3),
+    "18:00",
+    {
+      multiEventSplitDetected: true,
+      multiEventSplitCount: 2,
+      splitEventIndex: 1,
+      splitSourceLine: mixedCaption.split("\n")[0],
+      rowSourceText: mixedCaption.split("\n")[0],
+    },
+  );
+  const mixedCurrentOccurrenceKey = mixedInserted[0].sourceOccurrenceKey;
+  const staleMixedExisting = {
+    ...mixedInserted[0],
+    _id: "qa-mixed-existing",
+    normalizedFieldsJson: JSON.stringify({
+      ...JSON.parse(mixedInserted[0].normalizedFieldsJson),
+      sourceOccurrenceExpectedCount: 2,
+      sourceOccurrenceExpectedKeys: [
+        mixedPastOccurrenceKey,
+        mixedCurrentOccurrenceKey,
+      ],
+    }),
+  };
+  const staleReductionSummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  const staleReductionMutations = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => [staleMixedExisting],
+        mutation: async (_reference, args) => {
+          if ("representativeEventId" in args) {
+            return { recorded: true };
+          }
+          assert.equal(args.id, staleMixedExisting._id);
+          assert.equal(args.expectedCurrentCount, 2);
+          assert.deepEqual(args.expectedCurrentKeys, [
+            mixedPastOccurrenceKey,
+            mixedCurrentOccurrenceKey,
+          ]);
+          assert.equal(args.nextExpectedCount, 1);
+          assert.deepEqual(args.nextExpectedKeys, [mixedCurrentOccurrenceKey]);
+          assert.equal(args.sourceOccurrenceKey, staleMixedExisting.sourceOccurrenceKey);
+          staleReductionMutations.push(args);
+          staleMixedExisting.normalizedFieldsJson = JSON.stringify({
+            ...JSON.parse(staleMixedExisting.normalizedFieldsJson),
+            sourceOccurrenceExpectedCount: args.nextExpectedCount,
+            sourceOccurrenceExpectedKeys: args.nextExpectedKeys,
+          });
+          return { updated: true };
+        },
+      },
+      handle: "tickets.rs",
+      post: mixedPost,
+      summary: staleReductionSummary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted: mixedExtracted,
+    }),
+  );
+  assert.equal(staleReductionMutations.length, 1);
+  assert.equal(staleReductionSummary.insertedEvents, 0);
+  assert.equal(staleReductionSummary.skippedDuplicates, 1);
+  assert.equal(staleReductionSummary.skipped_past_event, 1);
+  assert.equal(
+    JSON.parse(staleMixedExisting.normalizedFieldsJson).sourceOccurrenceExpectedCount,
+    1,
+    "A retry must persist a reduced eligible-child count on the preserved sibling.",
+  );
+
+  const guardedMissingDate = isoDateDaysFromNow(9);
+  const guardedMissingDateLabel = ddmmForIsoDate(guardedMissingDate);
+  const guardedMissingLine = `${guardedMissingDateLabel} - Recovered Set 18H`;
+  const guardedCurrentLine = mixedCaption.split("\n")[1];
+  const guardedMissingOccurrenceKey = buildSourceOccurrenceKeyForTesting(
+    mixedPost,
+    guardedMissingDate,
+    "18:00",
+    {
+      multiEventSplitDetected: true,
+      multiEventSplitCount: 2,
+      splitEventIndex: 1,
+      splitSourceLine: guardedMissingLine,
+      rowSourceText: guardedMissingLine,
+    },
+  );
+  const guardedExisting = {
+    ...mixedInserted[0],
+    _id: "qa-transient-past-guard-existing",
+    normalizedFieldsJson: JSON.stringify({
+      ...JSON.parse(mixedInserted[0].normalizedFieldsJson),
+      sourceOccurrenceExpectedCount: 2,
+      sourceOccurrenceExpectedKeys: [
+        guardedMissingOccurrenceKey,
+        mixedCurrentOccurrenceKey,
+      ],
+    }),
+  };
+  const guardedTransientMutations = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => [guardedExisting],
+        mutation: async (_reference, args) => {
+          if ("representativeEventId" in args) {
+            return { recorded: true };
+          }
+          guardedTransientMutations.push(args);
+          return "qa-unexpected-transient-reduction";
+        },
+      },
+      handle: "tickets.rs",
+      post: mixedPost,
+      summary: createEmptyIngestionSummary(["tickets.rs"]).handles[0],
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted: mixedExtracted,
+    }),
+  );
+  assert.equal(
+    guardedTransientMutations.length,
+    0,
+    "A transient past row with a different occurrence key must not shrink completeness.",
+  );
+  assert.equal(
+    JSON.parse(guardedExisting.normalizedFieldsJson).sourceOccurrenceExpectedCount,
+    2,
+  );
+
+  const guardedCaption = [guardedMissingLine, guardedCurrentLine].join("\n");
+  const guardedPost = {
+    ...mixedPost,
+    caption: guardedCaption,
+  };
+  const guardedExtracted = makeExtractedEvent({
+    title: "Upcoming Set",
+    date: eligibleDateLabel,
+    time: "20:00",
+    venue: "Ložionica",
+    artists: ["Upcoming Set"],
+    source_caption: guardedCaption,
+  });
+  const guardedRecoveryCreates = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => [guardedExisting],
+        mutation: async (_reference, args) => {
+          if ("representativeEventId" in args) {
+            return { recorded: true };
+          }
+          if ("id" in args) {
+            return { updated: true };
+          }
+          guardedRecoveryCreates.push(args);
+          return "qa-transient-guard-recovered-child";
+        },
+      },
+      handle: "tickets.rs",
+      post: guardedPost,
+      summary: createEmptyIngestionSummary(["tickets.rs"]).handles[0],
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted: guardedExtracted,
+    }),
+  );
+  assert.deepEqual(
+    guardedRecoveryCreates.map((event) => event.date),
+    [guardedMissingDate],
+    "A later accurate extraction must still recover the child protected from transient shrinkage.",
+  );
+
   const mixedRetrySummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
   const mixedRetryMutations = [];
   await withoutConsoleInfo(() =>
     processIngestionPostWithExtractionForTesting({
       client: {
-        query: async () => [{ ...mixedInserted[0], _id: "qa-mixed-existing" }],
+        query: async () => [staleMixedExisting],
         mutation: async (_reference, args) => {
           mixedRetryMutations.push(args);
           return "qa-unexpected-mixed-retry-mutation";
@@ -6835,12 +7811,156 @@ async function runDistinctOccurrencePersistenceQa() {
   assert.equal(
     mixedRetrySummary.skipped_past_event,
     0,
-    "A complete eligible child set must skip before re-extracting intentionally omitted past rows.",
+    "A reduced complete eligible child set must skip before re-extracting past rows.",
   );
+
+  const rangeDates = futureSameMonthIsoDateRange(2, 9);
+  const rangeStart = datePartsForIsoDate(rangeDates[0]);
+  const rangeEnd = datePartsForIsoDate(rangeDates[1]);
+  const rangeCaption = [
+    "Bioskop Akademije 28",
+    "BROKEN ENGLISH",
+    `Svake večeri od ${rangeStart.day}. do ${rangeEnd.day}. ${rangeStart.serbianMonthGenitive} u 19h`,
+  ].join("\n");
+  const rangePost = makeInstagramPost({
+    postId: "qa-date-range-partial-persistence",
+    instagramPostUrl: "https://www.instagram.com/p/qa-date-range-partial-persistence/",
+    caption: rangeCaption,
+    postType: "video",
+    username: "akademija28",
+  });
+  const rangeExtracted = makeExtractedEvent({
+    title: "BROKEN ENGLISH",
+    date: "",
+    time: "19:00",
+    venue: "Akademija 28",
+    artists: [],
+    category: "arts & culture",
+    confidence: 0.9,
+    source_caption: rangeCaption,
+    field_confirmation: makeFieldConfirmation(0.9),
+  });
+  const rangeInitialSummary = createEmptyIngestionSummary(["akademija28"]).handles[0];
+  const rangeInitialCreates = [];
+  await withoutConsoleInfoAndError(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => [],
+        mutation: async (_reference, args) => {
+          if (rangeInitialCreates.length > 0) {
+            throw new Error("qa simulated second date insert failure");
+          }
+          rangeInitialCreates.push(args);
+          return "qa-range-first-date";
+        },
+      },
+      handle: "akademija28",
+      post: rangePost,
+      summary: rangeInitialSummary,
+      canonicalVenueNamesByHandle: { akademija28: "Akademija 28" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { akademija28: "Akademija 28" },
+      serviceSecret: "qa-date-range-secret",
+      extracted: rangeExtracted,
+    }),
+  );
+  assert.equal(rangeInitialCreates.length, 1);
+  assert.equal(rangeInitialSummary.insertedEvents, 1);
+  assert.ok(
+    rangeInitialSummary.errors.some((message) =>
+      message.includes("qa simulated second date insert failure"),
+    ),
+    "The initial range pass must attempt and fail the second child before retry recovery.",
+  );
+  assert.equal(rangeInitialCreates[0].date, rangeDates[0]);
+  assert.equal(
+    buildSourceOccurrenceKeyForTesting(
+      rangePost,
+      rangeInitialCreates[0].date,
+      "TBD",
+      JSON.parse(rangeInitialCreates[0].normalizedFieldsJson),
+    ),
+    rangeInitialCreates[0].sourceOccurrenceKey,
+    "Date-range child identity must remain stable when its time presentation changes.",
+  );
+  assert.equal(
+    JSON.parse(rangeInitialCreates[0].normalizedFieldsJson).sourceOccurrenceExpectedCount,
+    2,
+    "Expanded date ranges must participate in source-child completeness tracking.",
+  );
+
+  const rangeFirstExisting = {
+    ...rangeInitialCreates[0],
+    _id: "qa-range-first-existing",
+    time: "TBD",
+    timeStatus: "tbd",
+    normalizedFieldsJson: JSON.stringify({
+      ...JSON.parse(rangeInitialCreates[0].normalizedFieldsJson),
+      time: "TBD",
+      timeStatus: "tbd",
+    }),
+  };
+  const rangeRetrySummary = createEmptyIngestionSummary(["akademija28"]).handles[0];
+  const rangeRetryCreates = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => [rangeFirstExisting],
+        mutation: async (_reference, args) => {
+          if ("representativeEventId" in args) {
+            return { recorded: true };
+          }
+          assert.equal("id" in args, false);
+          rangeRetryCreates.push(args);
+          return "qa-range-recovered-second-date";
+        },
+      },
+      handle: "akademija28",
+      post: rangePost,
+      summary: rangeRetrySummary,
+      canonicalVenueNamesByHandle: { akademija28: "Akademija 28" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { akademija28: "Akademija 28" },
+      serviceSecret: "qa-date-range-secret",
+      extracted: rangeExtracted,
+    }),
+  );
+  assert.deepEqual(rangeRetryCreates.map((event) => event.date), [rangeDates[1]]);
+  assert.equal(rangeRetrySummary.insertedEvents, 1);
+  assert.equal(rangeRetrySummary.skippedDuplicates, 1);
+
+  const rangeCompleteEvents = [
+    rangeFirstExisting,
+    { ...rangeRetryCreates[0], _id: "qa-range-second-existing" },
+  ];
+  const rangeCompleteSummary = createEmptyIngestionSummary(["akademija28"]).handles[0];
+  const rangeCompleteMutations = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => rangeCompleteEvents,
+        mutation: async (_reference, args) => {
+          rangeCompleteMutations.push(args);
+          return "qa-unexpected-range-complete-mutation";
+        },
+      },
+      handle: "akademija28",
+      post: rangePost,
+      summary: rangeCompleteSummary,
+      canonicalVenueNamesByHandle: { akademija28: "Akademija 28" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { akademija28: "Akademija 28" },
+      serviceSecret: "qa-date-range-secret",
+      extracted: rangeExtracted,
+    }),
+  );
+  assert.equal(rangeCompleteMutations.length, 0);
+  assert.equal(rangeCompleteSummary.skippedDuplicates, 1);
 
   const semanticSummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
   const semanticInserted = [];
   const semanticUpdated = [];
+  const semanticReceipts = [];
   const semanticExisting = {
     ...inserted[0],
     _id: "qa-other-source-same-time",
@@ -6852,6 +7972,10 @@ async function runDistinctOccurrencePersistenceQa() {
       client: {
         query: async (_reference, args) => ("date" in args ? [semanticExisting] : []),
         mutation: async (_reference, args) => {
+          if ("representativeEventId" in args) {
+            semanticReceipts.push(args);
+            return { recorded: true };
+          }
           if ("id" in args) {
             semanticUpdated.push(args);
             return args.id;
@@ -6878,6 +8002,165 @@ async function runDistinctOccurrencePersistenceQa() {
   assert.equal(semanticUpdated.length, 0);
   assert.equal(semanticSummary.skippedDuplicates, 1);
   assert.equal(semanticSummary.insertedEvents, 1);
+  assert.equal(semanticReceipts.length, 1);
+  const completedSemanticPlan = semanticReceipts[0].plan;
+  assert.deepEqual(
+    [...completedSemanticPlan.expectedKeys].sort(),
+    [
+      semanticReceipts[0].satisfiedKey,
+      semanticInserted[0].sourceOccurrenceKey,
+    ].sort(),
+  );
+  const semanticReplaySummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  const semanticReplayMutations = [];
+  const semanticReplayMediaActions = [];
+  const semanticReplayPost = {
+    ...post,
+    imageUrl: "https://instagram.example/qa-replay.jpg",
+    imageUrls: ["https://instagram.example/qa-replay.jpg"],
+  };
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async (_reference, args) =>
+          "sourceIdentity" in args
+            ? {
+                ...completedSemanticPlan,
+                satisfiedKeys: completedSemanticPlan.expectedKeys,
+                satisfiedOccurrences: completedSemanticPlan.expectedKeys.map(
+                  (key, index) => ({ key, eventId: `qa-semantic-representative-${index}` }),
+                ),
+              }
+            : [
+                {
+                  ...semanticExisting,
+                  imageStorageId: undefined,
+                  normalizedFieldsJson: JSON.stringify({
+                    ...JSON.parse(semanticExisting.normalizedFieldsJson),
+                    normalizedIsValid: true,
+                    sourceGroundingVerified: true,
+                  }),
+                },
+              ],
+        mutation: async (_reference, args) => {
+          semanticReplayMutations.push(args);
+          return "qa-unexpected-semantic-replay-mutation";
+        },
+        action: async (_reference, args) => {
+          semanticReplayMediaActions.push(args);
+          return { persisted: true };
+        },
+      },
+      handle: "tickets.rs",
+      post: semanticReplayPost,
+      summary: semanticReplaySummary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted,
+    }),
+  );
+  assert.equal(semanticReplayMutations.length, 0);
+  assert.equal(
+    semanticReplayMediaActions.length,
+    1,
+    "A complete source receipt must still retry missing durable media.",
+  );
+  assert.equal(semanticReplaySummary.persistedImages, 1);
+  assert.equal(semanticReplaySummary.skippedDuplicates, 1);
+  assert.equal(semanticReplaySummary.insertedEvents, 0);
+
+  const previousReprocessExisting = process.env.INGESTION_REPROCESS_EXISTING_SOURCE_POSTS;
+  const forcedReplayMutations = [];
+  process.env.INGESTION_REPROCESS_EXISTING_SOURCE_POSTS = "true";
+  try {
+    await withoutConsoleInfo(() =>
+      processIngestionPostWithExtractionForTesting({
+        client: {
+          query: async (_reference, args) =>
+            "sourceIdentity" in args
+              ? {
+                  ...completedSemanticPlan,
+                  satisfiedKeys: completedSemanticPlan.expectedKeys,
+                  satisfiedOccurrences: completedSemanticPlan.expectedKeys.map(
+                    (key, index) => ({
+                      key,
+                      eventId: index === 0 ? semanticExisting._id : `qa-force-event-${index}`,
+                    })),
+                }
+              : [semanticExisting],
+          mutation: async (_reference, args) => {
+            forcedReplayMutations.push(args);
+            return "id" in args
+              ? args.id
+              : { eventId: "qa-force-replay-created", created: true };
+          },
+        },
+        handle: "tickets.rs",
+        post,
+        summary: createEmptyIngestionSummary(["tickets.rs"]).handles[0],
+        canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+        venueNameOverridesByHandle: {},
+        configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+        serviceSecret: "qa-distinct-occurrence-secret",
+        extracted,
+      }),
+    );
+  } finally {
+    if (previousReprocessExisting === undefined) {
+      delete process.env.INGESTION_REPROCESS_EXISTING_SOURCE_POSTS;
+    } else {
+      process.env.INGESTION_REPROCESS_EXISTING_SOURCE_POSTS = previousReprocessExisting;
+    }
+  }
+  assert.ok(
+    forcedReplayMutations.length > 0,
+    "The explicit reprocess override must bypass an otherwise complete receipt.",
+  );
+
+  const failedRepairFields = {
+    ...JSON.parse(semanticExisting.normalizedFieldsJson),
+    confidence: 0.1,
+  };
+  const failedRepairExisting = {
+    ...semanticExisting,
+    normalizedFieldsJson: JSON.stringify(failedRepairFields),
+  };
+  const failedRepairReceipts = [];
+  const failedRepairSummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async (_reference, args) =>
+          "sourceIdentity" in args ? null : "date" in args ? [failedRepairExisting] : [],
+        mutation: async (_reference, args) => {
+          if ("representativeEventId" in args) {
+            failedRepairReceipts.push(args);
+            return { recorded: true };
+          }
+          if ("id" in args) {
+            throw new Error("qa-required-duplicate-repair-failed");
+          }
+          return { eventId: "qa-failed-repair-other-child", created: true };
+        },
+      },
+      handle: "tickets.rs",
+      post,
+      summary: failedRepairSummary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted,
+    }),
+  );
+  assert.equal(failedRepairSummary.duplicate_update_failed, 1);
+  assert.equal(
+    failedRepairReceipts.length,
+    0,
+    "A child whose required duplicate repair failed must not be marked satisfied in the source receipt.",
+  );
 }
 
 async function runApprovedMergeBoundaryQa() {

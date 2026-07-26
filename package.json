@@ -47,6 +47,7 @@
     "qa:seo": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-seo.mjs",
     "qa:brand": "node scripts/qa-event-zeka-brand.mjs",
     "qa:discover-feed": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-discover-feed.mjs",
+    "process:saved-posts": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/process-saved-posts-backlog.mjs",
     "qa:apify": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-apify-cost-controls.mjs",
     "qa:follow-discovery": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-follow-discovery.mjs",
     "qa:social-carousel": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-social-carousel.mjs",
