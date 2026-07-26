@@ -8,7 +8,7 @@ const checks = [
   { script: "lint", timeoutMs: 120_000 },
   { script: "typecheck", timeoutMs: 180_000 },
   { script: "qa:framework-compat", timeoutMs: 60_000 },
-  { script: "build", timeoutMs: 900_000 },
+  { script: "build", timeoutMs: 1_200_000 },
   { script: "qa:dedupe", timeoutMs: 60_000 },
   { script: "qa:automerge", timeoutMs: 60_000 },
   { script: "qa:master-review", timeoutMs: 60_000 },

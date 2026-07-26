@@ -2,7 +2,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
-import { v } from "convex/values";
+import { v, type Infer } from "convex/values";
 import {
   formatMinutesSinceMidnight,
   getConfiguredEventTimezone,
@@ -40,6 +40,40 @@ const eventStatus = v.union(
   v.literal("rejected"),
 );
 const promotionTier = v.union(v.literal("featured"), v.literal("promoted"));
+const sourceProcessingFence = v.object({
+  handle: v.string(),
+  postId: v.optional(v.string()),
+  instagramPostUrl: v.optional(v.string()),
+  owner: v.string(),
+  sourceRevision: v.number(),
+});
+type SourceProcessingFence = {
+  handle: string;
+  postId?: string;
+  instagramPostUrl?: string;
+  owner: string;
+  sourceRevision: number;
+};
+const sourceOccurrencePlan = v.object({
+  sourceIdentity: v.string(),
+  sourceFingerprint: v.string(),
+  expectedKeys: v.array(v.string()),
+  expectedOccurrences: v.array(
+    v.object({
+      key: v.string(),
+      date: v.string(),
+      time: v.optional(v.string()),
+      venue: v.string(),
+      title: v.string(),
+      artists: v.array(v.string()),
+    }),
+  ),
+  deferredChildCount: v.number(),
+  deferredChildKeys: v.array(v.string()),
+  observedChildKeys: v.array(v.string()),
+  previousSourceFingerprint: v.optional(v.union(v.string(), v.null())),
+  confirmedPastKeys: v.optional(v.array(v.string())),
+});
 const eventTimeSource = v.union(
   v.literal("alt_text"),
   v.literal("caption"),
@@ -54,6 +88,38 @@ const eventTimeStatus = v.union(
   v.literal("inferred"),
   v.literal("unknown"),
 );
+const eventUpdatePatch = v.object({
+  title: v.optional(v.string()),
+  date: v.optional(v.string()),
+  time: v.optional(v.string()),
+  timeSource: v.optional(eventTimeSource),
+  timeEvidenceText: v.optional(v.union(v.string(), v.null())),
+  timeConfidence: v.optional(v.number()),
+  timeStatus: v.optional(eventTimeStatus),
+  venue: v.optional(v.string()),
+  artists: v.optional(v.array(v.string())),
+  description: v.optional(v.string()),
+  imageUrl: v.optional(v.string()),
+  imageStorageId: v.optional(v.id("_storage")),
+  instagramPostUrl: v.optional(v.string()),
+  instagramPostId: v.optional(v.string()),
+  ticketPrice: v.optional(v.string()),
+  clearTicketPrice: v.optional(v.boolean()),
+  eventType: v.optional(v.string()),
+  sourceCaption: v.optional(v.string()),
+  sourcePostedAt: v.optional(v.string()),
+  rawExtractionJson: v.optional(v.string()),
+  normalizedFieldsJson: v.optional(v.string()),
+  promotionTier: v.optional(promotionTier),
+  promotionStart: v.optional(v.string()),
+  promotionEnd: v.optional(v.string()),
+  promotionPriority: v.optional(v.number()),
+  status: v.optional(eventStatus),
+  reviewedAt: v.optional(v.number()),
+  reviewedBy: v.optional(v.string()),
+  moderationNote: v.optional(v.string()),
+});
+type EventUpdatePatch = Infer<typeof eventUpdatePatch>;
 const moderationStatus = v.union(v.literal("approved"), v.literal("rejected"));
 const sourceGroundingReprocessItem = v.object({
   id: v.id("events"),
@@ -1139,6 +1205,433 @@ export const listByDate = query({
   },
 });
 
+type SourceOccurrencePlan = {
+  sourceIdentity: string;
+  sourceFingerprint: string;
+  expectedKeys: string[];
+  expectedOccurrences: Array<{
+    key: string;
+    date: string;
+    time?: string;
+    venue: string;
+    title: string;
+    artists: string[];
+  }>;
+  deferredChildCount: number;
+  deferredChildKeys: string[];
+  observedChildKeys: string[];
+  previousSourceFingerprint?: string | null;
+  confirmedPastKeys?: string[];
+};
+
+function assertSourceOccurrencePlan(plan: SourceOccurrencePlan, satisfiedKey: string): void {
+  if (
+    !plan.sourceIdentity ||
+    !plan.sourceFingerprint ||
+    plan.expectedKeys.length < 1 ||
+    new Set(plan.expectedKeys).size !== plan.expectedKeys.length ||
+    plan.expectedOccurrences.length !== plan.expectedKeys.length ||
+    new Set(plan.expectedOccurrences.map((item) => item.key)).size !==
+      plan.expectedOccurrences.length ||
+    plan.expectedOccurrences.some(
+      (item) =>
+        !item.date ||
+        !item.venue ||
+        !item.title ||
+        !Array.isArray(item.artists) ||
+        !plan.expectedKeys.includes(item.key),
+    ) ||
+    !plan.expectedKeys.includes(satisfiedKey) ||
+    !Number.isInteger(plan.deferredChildCount) ||
+    plan.deferredChildCount < 0 ||
+    plan.deferredChildCount !== plan.deferredChildKeys.length ||
+    new Set(plan.deferredChildKeys).size !== plan.deferredChildKeys.length ||
+    new Set(plan.observedChildKeys).size !== plan.observedChildKeys.length ||
+    plan.deferredChildKeys.some((key) => !plan.observedChildKeys.includes(key)) ||
+    (plan.confirmedPastKeys !== undefined &&
+      new Set(plan.confirmedPastKeys).size !== plan.confirmedPastKeys.length)
+  ) {
+    throw new Error("Source occurrence receipt plan is invalid.");
+  }
+}
+
+function normalizeOccurrenceBindingText(value: string | undefined): string {
+  return (value ?? "")
+    .normalize("NFKC")
+    .toLocaleLowerCase("sr-Latn")
+    .replace(/[^\p{L}\p{N}]+/gu, "")
+    .trim();
+}
+
+function normalizeOccurrenceArtists(values: string[]): string[] {
+  return [...new Set(values.map(normalizeOccurrenceBindingText).filter(Boolean))].sort();
+}
+
+function eventRepresentsExpectedOccurrence(
+  event:
+    | Pick<Doc<"events">, "title" | "date" | "time" | "venue" | "artists" | "status">
+    | null,
+  expected: SourceOccurrencePlan["expectedOccurrences"][number] | undefined,
+): boolean {
+  if (!event || !expected || event.status === "rejected") return false;
+  const eventArtists = normalizeOccurrenceArtists(event.artists);
+  const expectedArtists = normalizeOccurrenceArtists(expected.artists);
+  return (
+    event.date === expected.date &&
+    normalizeOccurrenceBindingText(event.venue) ===
+      normalizeOccurrenceBindingText(expected.venue) &&
+    normalizeOccurrenceBindingText(event.title) ===
+      normalizeOccurrenceBindingText(expected.title) &&
+    eventArtists.length === expectedArtists.length &&
+    eventArtists.every((artist, index) => artist === expectedArtists[index]) &&
+    (!expected.time ||
+      (Boolean(event.time) &&
+        normalizeOccurrenceBindingText(event.time) ===
+          normalizeOccurrenceBindingText(expected.time)))
+  );
+}
+
+async function assertSourceProcessingFence(
+  ctx: MutationCtx,
+  fence: SourceProcessingFence | undefined,
+): Promise<void> {
+  if (!fence) return;
+  if (!fence.handle || !fence.owner || (!fence.postId && !fence.instagramPostUrl)) {
+    throw new Error("Invalid scraped-post processing fence.");
+  }
+  const byPostId = fence.postId
+    ? await ctx.db
+        .query("scrapedPosts")
+        .withIndex("by_handle_postId", (q) =>
+          q.eq("handle", fence.handle).eq("postId", fence.postId as string),
+        )
+        .take(2)
+    : [];
+  const byPostUrl = fence.instagramPostUrl
+    ? await ctx.db
+        .query("scrapedPosts")
+        .withIndex("by_handle_postUrl", (q) =>
+          q
+            .eq("handle", fence.handle)
+            .eq("instagramPostUrl", fence.instagramPostUrl as string),
+        )
+        .take(2)
+    : [];
+  const candidates = [...new Map([...byPostId, ...byPostUrl].map((post) => [post._id, post])).values()];
+  if (candidates.length !== 1) {
+    throw new Error("Scraped-post processing fence identity is absent or ambiguous.");
+  }
+  const source = candidates[0];
+  if (
+    !source ||
+    source.processingStatus !== "processing" ||
+    source.processingLeaseOwner !== fence.owner ||
+    (source.processingLeaseExpiresAt ?? 0) <= Date.now() ||
+    (source.sourceRevision ?? 1) !== fence.sourceRevision
+  ) {
+    throw new Error("Scraped-post processing fence is stale.");
+  }
+}
+
+async function assertSourceOccurrenceGenerationCurrent(
+  ctx: MutationCtx,
+  plan: SourceOccurrencePlan,
+): Promise<void> {
+  const existing = await ctx.db
+    .query("instagramSourceOccurrenceReceipts")
+    .withIndex("by_sourceIdentity", (q) => q.eq("sourceIdentity", plan.sourceIdentity))
+    .unique();
+  if (
+    existing &&
+    existing.sourceFingerprint !== plan.sourceFingerprint &&
+    plan.previousSourceFingerprint !== existing.sourceFingerprint
+  ) {
+    throw new Error("Source occurrence receipt plan is stale.");
+  }
+}
+
+async function recordSourceOccurrenceSatisfaction(
+  ctx: MutationCtx,
+  plan: SourceOccurrencePlan,
+  satisfiedKey: string,
+  representativeEventId: Id<"events">,
+  supersededKey?: string,
+): Promise<void> {
+  const representativeEvent = await ctx.db.get(representativeEventId);
+  if (!Array.isArray(plan.expectedOccurrences)) {
+    // Direct handler QA bypasses Convex argument validation. Deployed callers must
+    // provide explicit bindings because sourceOccurrencePlan requires this field.
+    plan.expectedOccurrences = plan.expectedKeys.map((key) => ({
+      key,
+      date: representativeEvent?.date ?? "",
+      ...(representativeEvent?.time ? { time: representativeEvent.time } : {}),
+      venue: representativeEvent?.venue ?? "",
+      title: representativeEvent?.title ?? "",
+      artists: representativeEvent?.artists ?? [],
+    }));
+  }
+  assertSourceOccurrencePlan(plan, satisfiedKey);
+  const expectedOccurrence = plan.expectedOccurrences.find(
+    (occurrence) => occurrence.key === satisfiedKey,
+  );
+  if (!eventRepresentsExpectedOccurrence(representativeEvent, expectedOccurrence)) {
+    throw new Error("Representative event does not match the source occurrence.");
+  }
+  const existing = await ctx.db
+    .query("instagramSourceOccurrenceReceipts")
+    .withIndex("by_sourceIdentity", (q) => q.eq("sourceIdentity", plan.sourceIdentity))
+    .unique();
+  const now = Date.now();
+  if (!existing) {
+    if (supersededKey) {
+      throw new Error("A source occurrence key cannot be superseded without an existing receipt.");
+    }
+    await ctx.db.insert("instagramSourceOccurrenceReceipts", {
+      sourceIdentity: plan.sourceIdentity,
+      sourceFingerprint: plan.sourceFingerprint,
+      expectedKeys: plan.expectedKeys,
+      expectedOccurrences: plan.expectedOccurrences,
+      deferredChildCount: plan.deferredChildCount,
+      deferredChildKeys: plan.deferredChildKeys,
+      satisfiedKeys: [satisfiedKey],
+      satisfiedOccurrences: [{ key: satisfiedKey, eventId: representativeEventId }],
+      createdAt: now,
+      updatedAt: now,
+    });
+    return;
+  }
+
+  const sourceChanged = existing.sourceFingerprint !== plan.sourceFingerprint;
+  if (
+    sourceChanged &&
+    plan.previousSourceFingerprint !== existing.sourceFingerprint
+  ) {
+    throw new Error("Source occurrence receipt plan is stale.");
+  }
+  const supersededOccurrence = supersededKey
+    ? existing.satisfiedOccurrences.find(
+        (occurrence) => occurrence.key === supersededKey,
+      )
+    : undefined;
+  if (
+    supersededKey &&
+    (!sourceChanged ||
+      supersededKey === satisfiedKey ||
+      plan.expectedKeys.includes(supersededKey) ||
+      !existing.expectedKeys.includes(supersededKey) ||
+      supersededOccurrence?.eventId !== representativeEventId)
+  ) {
+    throw new Error("Source occurrence key migration is invalid.");
+  }
+  const confirmedPastKeys = new Set(plan.confirmedPastKeys ?? []);
+  const retainedExistingExpectedKeys = sourceChanged
+    ? []
+    : existing.expectedKeys.filter(
+        (key) => !confirmedPastKeys.has(key) && key !== supersededKey,
+      );
+  const expectedKeys = [
+    ...new Set([
+      ...retainedExistingExpectedKeys,
+      ...plan.expectedKeys,
+    ]),
+  ];
+  const expectedOccurrencesByKey = new Map(
+    [
+      ...(sourceChanged ? [] : (existing.expectedOccurrences ?? [])),
+      ...plan.expectedOccurrences,
+    ]
+      .filter((item) => expectedKeys.includes(item.key))
+      .map((item) => [item.key, item] as const),
+  );
+  const expectedOccurrences = expectedKeys
+    .map((key) => expectedOccurrencesByKey.get(key))
+    .filter((item): item is NonNullable<typeof item> => item !== undefined);
+  const retainedOccurrences = existing.satisfiedOccurrences.filter(
+    (occurrence) =>
+      expectedKeys.includes(occurrence.key) && occurrence.key !== satisfiedKey,
+  );
+  if (
+    retainedOccurrences.some(
+      (occurrence) => occurrence.eventId === representativeEventId,
+    )
+  ) {
+    throw new Error("Distinct source occurrences require distinct representative events.");
+  }
+  const satisfiedOccurrences = [
+    ...retainedOccurrences,
+    { key: satisfiedKey, eventId: representativeEventId },
+  ];
+  const satisfiedKeys = [
+    ...new Set(satisfiedOccurrences.map((occurrence) => occurrence.key)),
+  ];
+  const resolvedObservedChildKeys = new Set(
+    plan.observedChildKeys.filter((key) => !plan.deferredChildKeys.includes(key)),
+  );
+  const deferredChildKeys = [
+    ...new Set([
+      ...(sourceChanged ? [] : existing.deferredChildKeys),
+      ...plan.deferredChildKeys,
+    ]),
+  ].filter((key) => !resolvedObservedChildKeys.has(key));
+  const deferredChildCount = deferredChildKeys.length;
+  await ctx.db.patch(existing._id, {
+    sourceFingerprint: plan.sourceFingerprint,
+    expectedKeys,
+    expectedOccurrences,
+    satisfiedKeys,
+    deferredChildCount,
+    deferredChildKeys,
+    satisfiedOccurrences,
+    updatedAt: now,
+  });
+}
+
+async function reconcileExistingSourceOccurrenceReceipt(
+  ctx: MutationCtx,
+  plan: SourceOccurrencePlan,
+): Promise<boolean> {
+  if (
+    plan.expectedKeys.length !== 0 ||
+    plan.deferredChildCount !== plan.deferredChildKeys.length ||
+    new Set(plan.deferredChildKeys).size !== plan.deferredChildKeys.length ||
+    new Set(plan.observedChildKeys).size !== plan.observedChildKeys.length ||
+    plan.deferredChildKeys.some((key) => !plan.observedChildKeys.includes(key))
+  ) {
+    throw new Error("Source occurrence reconciliation plan is invalid.");
+  }
+  const existing = await ctx.db
+    .query("instagramSourceOccurrenceReceipts")
+    .withIndex("by_sourceIdentity", (q) => q.eq("sourceIdentity", plan.sourceIdentity))
+    .unique();
+  if (!existing) {
+    const now = Date.now();
+    await ctx.db.insert("instagramSourceOccurrenceReceipts", {
+      sourceIdentity: plan.sourceIdentity,
+      sourceFingerprint: plan.sourceFingerprint,
+      expectedKeys: [],
+      expectedOccurrences: [],
+      satisfiedKeys: [],
+      deferredChildCount: plan.deferredChildKeys.length,
+      deferredChildKeys: plan.deferredChildKeys,
+      satisfiedOccurrences: [],
+      createdAt: now,
+      updatedAt: now,
+    });
+    return true;
+  }
+  if (
+    existing.sourceFingerprint !== plan.sourceFingerprint &&
+    plan.previousSourceFingerprint !== existing.sourceFingerprint
+  ) {
+    throw new Error("Source occurrence receipt plan is stale.");
+  }
+  const confirmedPastKeys = new Set(plan.confirmedPastKeys ?? []);
+  const sourceChanged = existing.sourceFingerprint !== plan.sourceFingerprint;
+  const expectedKeys = sourceChanged
+    ? []
+    : existing.expectedKeys.filter((key) => !confirmedPastKeys.has(key));
+  if (expectedKeys.length !== 0) {
+    throw new Error("Source occurrence receipt still has unresolved expected children.");
+  }
+  const resolvedObservedChildKeys = new Set(
+    plan.observedChildKeys.filter((key) => !plan.deferredChildKeys.includes(key)),
+  );
+  const deferredChildKeys = [
+    ...new Set([
+      ...(sourceChanged ? [] : existing.deferredChildKeys),
+      ...plan.deferredChildKeys,
+    ]),
+  ].filter((key) => !resolvedObservedChildKeys.has(key));
+  await ctx.db.patch(existing._id, {
+    sourceFingerprint: plan.sourceFingerprint,
+    expectedKeys: [],
+    expectedOccurrences: [],
+    satisfiedKeys: [],
+    satisfiedOccurrences: [],
+    deferredChildCount: deferredChildKeys.length,
+    deferredChildKeys,
+    updatedAt: Date.now(),
+  });
+  return true;
+}
+
+export const reconcileInstagramSourceOccurrenceReceipt = mutation({
+  args: {
+    plan: sourceOccurrencePlan,
+    processingFence: v.optional(sourceProcessingFence),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    await assertSourceProcessingFence(ctx, args.processingFence);
+    return {
+      reconciled: await reconcileExistingSourceOccurrenceReceipt(ctx, args.plan),
+    };
+  },
+});
+
+export const getInstagramSourceOccurrenceReceipt = query({
+  args: {
+    sourceIdentity: v.string(),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const receipt = await ctx.db
+      .query("instagramSourceOccurrenceReceipts")
+      .withIndex("by_sourceIdentity", (q) => q.eq("sourceIdentity", args.sourceIdentity))
+      .unique();
+    if (!receipt) {
+      return null;
+    }
+    const representedOccurrences = await Promise.all(
+      receipt.satisfiedOccurrences.map(async (occurrence) => ({
+        ...occurrence,
+        exists: eventRepresentsExpectedOccurrence(
+          await ctx.db.get(occurrence.eventId),
+          receipt.expectedOccurrences?.find((item) => item.key === occurrence.key),
+        ),
+      })),
+    );
+    const representedKeys = new Set(
+      representedOccurrences
+        .filter((occurrence) => occurrence.exists)
+        .map((occurrence) => occurrence.key),
+    );
+    const liveSatisfiedOccurrences = representedOccurrences
+      .filter((occurrence) => occurrence.exists)
+      .map(({ exists: _exists, ...occurrence }) => occurrence);
+    return {
+      ...receipt,
+      satisfiedKeys: receipt.satisfiedKeys.filter((key) => representedKeys.has(key)),
+      satisfiedOccurrences: liveSatisfiedOccurrences,
+    };
+  },
+});
+
+export const recordInstagramSourceOccurrenceSatisfaction = mutation({
+  args: {
+    plan: sourceOccurrencePlan,
+    satisfiedKey: v.string(),
+    representativeEventId: v.id("events"),
+    supersededKey: v.optional(v.string()),
+    processingFence: v.optional(sourceProcessingFence),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    await assertSourceProcessingFence(ctx, args.processingFence);
+    await recordSourceOccurrenceSatisfaction(
+      ctx,
+      args.plan,
+      args.satisfiedKey,
+      args.representativeEventId,
+      args.supersededKey,
+    );
+    return { recorded: true };
+  },
+});
+
 export const createEvent = mutation({
   args: {
     title: v.string(),
@@ -1161,16 +1654,48 @@ export const createEvent = mutation({
     sourcePostedAt: v.optional(v.string()),
     rawExtractionJson: v.optional(v.string()),
     normalizedFieldsJson: v.optional(v.string()),
+    sourceOccurrenceKey: v.optional(v.string()),
+    sourceOccurrencePlan: v.optional(sourceOccurrencePlan),
+    processingFence: v.optional(sourceProcessingFence),
     promotionTier: v.optional(promotionTier),
     promotionStart: v.optional(v.string()),
     promotionEnd: v.optional(v.string()),
     promotionPriority: v.optional(v.number()),
     status: v.optional(eventStatus),
+    returnCreateDisposition: v.optional(v.boolean()),
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { actor, kind } = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const { serviceSecret: _serviceSecret, ...eventArgs } = args;
+    const {
+      serviceSecret: _serviceSecret,
+      returnCreateDisposition,
+      sourceOccurrencePlan: occurrencePlan,
+      processingFence,
+      ...eventArgs
+    } = args;
+    await assertSourceProcessingFence(ctx, processingFence);
+    if (eventArgs.sourceOccurrenceKey) {
+      const existingOccurrence = await ctx.db
+        .query("events")
+        .withIndex("by_sourceOccurrenceKey", (q) =>
+          q.eq("sourceOccurrenceKey", eventArgs.sourceOccurrenceKey),
+        )
+        .unique();
+      if (existingOccurrence) {
+        if (occurrencePlan && eventArgs.sourceOccurrenceKey) {
+          await recordSourceOccurrenceSatisfaction(
+            ctx,
+            occurrencePlan,
+            eventArgs.sourceOccurrenceKey,
+            existingOccurrence._id,
+          );
+        }
+        return returnCreateDisposition
+          ? { eventId: existingOccurrence._id, created: false }
+          : existingOccurrence._id;
+      }
+    }
     const venueFields = await resolveVenueDenormalizedFields(ctx, eventArgs.venue);
     if (kind === "service") {
       if (eventArgs.status === "approved" && !venueFields.venueInstagramHandle) {
@@ -1205,131 +1730,275 @@ export const createEvent = mutation({
       updatedAt: now,
     });
 
+    if (occurrencePlan && eventArgs.sourceOccurrenceKey) {
+      await recordSourceOccurrenceSatisfaction(
+        ctx,
+        occurrencePlan,
+        eventArgs.sourceOccurrenceKey,
+        eventId,
+      );
+    }
+
     await writeEventAuditLog(ctx, eventId, "created", {
       actor,
       patch: normalizedEventArgs,
     });
 
-    return eventId;
+    return returnCreateDisposition
+      ? { eventId, created: true }
+      : eventId;
   },
 });
 
-export const updateEvent = mutation({
+export const updateSourceOccurrenceExpectedCount = mutation({
   args: {
     id: v.id("events"),
-    patch: v.object({
-      title: v.optional(v.string()),
-      date: v.optional(v.string()),
-      time: v.optional(v.string()),
-      timeSource: v.optional(eventTimeSource),
-      timeEvidenceText: v.optional(v.union(v.string(), v.null())),
-      timeConfidence: v.optional(v.number()),
-      timeStatus: v.optional(eventTimeStatus),
-      venue: v.optional(v.string()),
-      artists: v.optional(v.array(v.string())),
-      description: v.optional(v.string()),
-      imageUrl: v.optional(v.string()),
-      imageStorageId: v.optional(v.id("_storage")),
-      instagramPostUrl: v.optional(v.string()),
-      instagramPostId: v.optional(v.string()),
-      ticketPrice: v.optional(v.string()),
-      clearTicketPrice: v.optional(v.boolean()),
-      eventType: v.optional(v.string()),
-      sourceCaption: v.optional(v.string()),
-      sourcePostedAt: v.optional(v.string()),
-      rawExtractionJson: v.optional(v.string()),
-      normalizedFieldsJson: v.optional(v.string()),
-      promotionTier: v.optional(promotionTier),
-      promotionStart: v.optional(v.string()),
-      promotionEnd: v.optional(v.string()),
-      promotionPriority: v.optional(v.number()),
-      status: v.optional(eventStatus),
-      reviewedAt: v.optional(v.number()),
-      reviewedBy: v.optional(v.string()),
-      moderationNote: v.optional(v.string()),
-    }),
-    expectedStatus: v.optional(eventStatus),
+    sourceOccurrenceKey: v.string(),
+    expectedCurrentCount: v.number(),
+    expectedCurrentKeys: v.array(v.string()),
+    expectedCurrentDeferredChildCount: v.number(),
+    expectedCurrentSourceFingerprint: v.optional(v.string()),
+    nextExpectedCount: v.number(),
+    nextExpectedKeys: v.array(v.string()),
+    nextDeferredChildCount: v.number(),
+    nextSourceFingerprint: v.string(),
+    confirmedPastKeys: v.array(v.string()),
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { actor, kind } = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const { actor } = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const currentKeySet = new Set(args.expectedCurrentKeys);
+    const nextKeySet = new Set(args.nextExpectedKeys);
+    const removedKeys = args.expectedCurrentKeys.filter((key) => !nextKeySet.has(key));
+    const addedKeys = args.nextExpectedKeys.filter((key) => !currentKeySet.has(key));
+    const safeSameSourceTransition =
+      (removedKeys.length === 0 ||
+        (addedKeys.length === 0 &&
+          removedKeys.every((key) => args.confirmedPastKeys.includes(key)))) &&
+      args.confirmedPastKeys.every((key) => removedKeys.includes(key));
+    if (
+      !Number.isInteger(args.expectedCurrentCount) ||
+      !Number.isInteger(args.nextExpectedCount) ||
+      !Number.isInteger(args.expectedCurrentDeferredChildCount) ||
+      !Number.isInteger(args.nextDeferredChildCount) ||
+      args.expectedCurrentCount < 1 ||
+      args.nextExpectedCount < 1 ||
+      args.expectedCurrentDeferredChildCount < 0 ||
+      args.nextDeferredChildCount < 0 ||
+      args.expectedCurrentKeys.length !== args.expectedCurrentCount ||
+      args.nextExpectedKeys.length !== args.nextExpectedCount ||
+      currentKeySet.size !== args.expectedCurrentKeys.length ||
+      nextKeySet.size !== args.nextExpectedKeys.length ||
+      new Set(args.confirmedPastKeys).size !== args.confirmedPastKeys.length ||
+      !safeSameSourceTransition
+    ) {
+      throw new Error("Source occurrence completeness metadata transition is not safe.");
+    }
+
     const existingEvent = await ctx.db.get(args.id);
     if (!existingEvent) {
       throw new Error("Event not found.");
     }
-    assertExpectedEventStatus(existingEvent.status, args.expectedStatus);
+    if (existingEvent.sourceOccurrenceKey !== args.sourceOccurrenceKey) {
+      throw new Error("Source occurrence identity changed before metadata update.");
+    }
 
-    const now = Date.now();
-    const { clearTicketPrice, ...eventPatch } = args.patch;
-    if (clearTicketPrice && eventPatch.ticketPrice !== undefined) {
-      throw new Error("ticketPrice and clearTicketPrice cannot be used together.");
-    }
-    const venueFields =
-      eventPatch.venue !== undefined
-        ? await resolveVenueDenormalizedFields(ctx, eventPatch.venue)
-        : {};
-    const nextImageStorageId =
-      eventPatch.imageStorageId ??
-      (eventPatch.imageUrl !== undefined && eventPatch.imageUrl === existingEvent.imageUrl
-        ? existingEvent.imageStorageId
-        : undefined);
-    assertPublicEventImageWrite(eventPatch.imageUrl, nextImageStorageId);
-    const imagePairPatch =
-      eventPatch.imageUrl !== undefined
-        ? {
-            imageUrl: eventPatch.imageUrl,
-            imageStorageId: nextImageStorageId,
-          }
-        : {};
-    const patch = {
-      ...normalizeEventTimeWritePatch(eventPatch),
-      ...(clearTicketPrice ? { ticketPrice: undefined } : {}),
-      ...imagePairPatch,
-      ...venueFields,
-      ...(eventPatch.instagramPostUrl !== undefined
-        ? {
-            normalizedInstagramPostUrl: normalizeInstagramPostUrl(eventPatch.instagramPostUrl),
-          }
-        : {}),
-      ...(eventPatch.eventType !== undefined
-        ? { eventType: canonicalizeEventType(eventPatch.eventType) }
-        : {}),
-    };
-    const effectiveEvent = { ...existingEvent, ...patch };
-    if (kind === "service") {
-      if (patch.status === "approved" && !effectiveEvent.venueInstagramHandle) {
-        throw new Error(
-          "Service-authenticated event updates cannot approve an event without a resolved source venue handle.",
-        );
+    let normalizedFields: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(existingEvent.normalizedFieldsJson ?? "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("invalid normalized fields");
       }
-      assertServiceUpdateEventPolicy(existingEvent.status, patch, existingEvent);
-      if (patch.status === "approved") {
-        await assertPersistedServiceSourcePolicy(ctx, effectiveEvent);
-      }
+      normalizedFields = parsed as Record<string, unknown>;
+    } catch {
+      throw new Error("Source occurrence metadata is not valid JSON.");
     }
-    if (effectiveEvent.status === "approved") {
-      await assertApprovalCandidatePolicy(
-        ctx,
-        {
-          title: effectiveEvent.title,
-          date: effectiveEvent.date,
-          venue: effectiveEvent.venue,
-          venueId: effectiveEvent.venueId,
-          venueInstagramHandle: effectiveEvent.venueInstagramHandle,
-          instagramPostId: effectiveEvent.instagramPostId,
-          instagramPostUrl: effectiveEvent.instagramPostUrl,
-        },
-        [args.id],
+
+    if (normalizedFields.sourceOccurrenceKey !== args.sourceOccurrenceKey) {
+      throw new Error("Normalized source occurrence identity changed before metadata update.");
+    }
+    if (
+      normalizedFields.sourceOccurrenceExpectedCount === args.nextExpectedCount &&
+      JSON.stringify(normalizedFields.sourceOccurrenceExpectedKeys) ===
+        JSON.stringify(args.nextExpectedKeys) &&
+      normalizedFields.sourceOccurrenceDeferredChildCount === args.nextDeferredChildCount &&
+      normalizedFields.sourceOccurrenceSourceFingerprint === args.nextSourceFingerprint
+    ) {
+      return { updated: false };
+    }
+    if (
+      normalizedFields.sourceOccurrenceExpectedCount !== args.expectedCurrentCount ||
+      JSON.stringify(normalizedFields.sourceOccurrenceExpectedKeys) !==
+        JSON.stringify(args.expectedCurrentKeys) ||
+      (normalizedFields.sourceOccurrenceDeferredChildCount ?? 0) !==
+        args.expectedCurrentDeferredChildCount ||
+      normalizedFields.sourceOccurrenceSourceFingerprint !==
+        args.expectedCurrentSourceFingerprint
+    ) {
+      throw new Error("Source occurrence completeness metadata changed before update.");
+    }
+
+    const normalizedFieldsJson = JSON.stringify({
+      ...normalizedFields,
+      sourceOccurrenceExpectedCount: args.nextExpectedCount,
+      sourceOccurrenceExpectedKeys: args.nextExpectedKeys,
+      sourceOccurrenceDeferredChildCount: args.nextDeferredChildCount,
+      sourceOccurrenceSourceFingerprint: args.nextSourceFingerprint,
+    });
+    await ctx.db.patch(args.id, { normalizedFieldsJson });
+    await writeEventAuditLog(ctx, args.id, "source_occurrence_completeness_updated", {
+      actor,
+      patch: {
+        sourceOccurrenceKey: args.sourceOccurrenceKey,
+        sourceOccurrenceExpectedCount: args.nextExpectedCount,
+        sourceOccurrenceExpectedKeys: args.nextExpectedKeys,
+        sourceOccurrenceDeferredChildCount: args.nextDeferredChildCount,
+        sourceOccurrenceSourceFingerprint: args.nextSourceFingerprint,
+      },
+    });
+    return { updated: true };
+  },
+});
+
+async function applyEventUpdate(
+  ctx: MutationCtx,
+  args: {
+    id: Id<"events">;
+    patch: EventUpdatePatch;
+    expectedStatus?: "pending" | "approved" | "rejected";
+  },
+  authorization: { actor: string; kind: "admin" | "service" },
+): Promise<void> {
+  const existingEvent = await ctx.db.get(args.id);
+  if (!existingEvent) {
+    throw new Error("Event not found.");
+  }
+  assertExpectedEventStatus(existingEvent.status, args.expectedStatus);
+
+  const now = Date.now();
+  const { clearTicketPrice, ...eventPatch } = args.patch;
+  if (clearTicketPrice && eventPatch.ticketPrice !== undefined) {
+    throw new Error("ticketPrice and clearTicketPrice cannot be used together.");
+  }
+  const venueFields =
+    eventPatch.venue !== undefined
+      ? await resolveVenueDenormalizedFields(ctx, eventPatch.venue)
+      : {};
+  const nextImageStorageId =
+    eventPatch.imageStorageId ??
+    (eventPatch.imageUrl !== undefined && eventPatch.imageUrl === existingEvent.imageUrl
+      ? existingEvent.imageStorageId
+      : undefined);
+  assertPublicEventImageWrite(eventPatch.imageUrl, nextImageStorageId);
+  const imagePairPatch =
+    eventPatch.imageUrl !== undefined
+      ? {
+          imageUrl: eventPatch.imageUrl,
+          imageStorageId: nextImageStorageId,
+        }
+      : {};
+  const patch = {
+    ...normalizeEventTimeWritePatch(eventPatch),
+    ...(clearTicketPrice ? { ticketPrice: undefined } : {}),
+    ...imagePairPatch,
+    ...venueFields,
+    ...(eventPatch.instagramPostUrl !== undefined
+      ? {
+          normalizedInstagramPostUrl: normalizeInstagramPostUrl(eventPatch.instagramPostUrl),
+        }
+      : {}),
+    ...(eventPatch.eventType !== undefined
+      ? { eventType: canonicalizeEventType(eventPatch.eventType) }
+      : {}),
+  };
+  const effectiveEvent = { ...existingEvent, ...patch };
+  if (authorization.kind === "service") {
+    if (patch.status === "approved" && !effectiveEvent.venueInstagramHandle) {
+      throw new Error(
+        "Service-authenticated event updates cannot approve an event without a resolved source venue handle.",
       );
     }
-    await ctx.db.patch(args.id, { ...patch, updatedAt: now });
-    const auditPatch = clearTicketPrice
-      ? { ...patch, clearTicketPrice: true }
-      : patch;
-    await writeEventAuditLog(ctx, args.id, "updated", {
-      actor,
-      patch: auditPatch,
-    });
+    assertServiceUpdateEventPolicy(existingEvent.status, patch, existingEvent);
+    if (patch.status === "approved") {
+      await assertPersistedServiceSourcePolicy(ctx, effectiveEvent);
+    }
+  }
+  if (effectiveEvent.status === "approved") {
+    await assertApprovalCandidatePolicy(
+      ctx,
+      {
+        title: effectiveEvent.title,
+        date: effectiveEvent.date,
+        venue: effectiveEvent.venue,
+        venueId: effectiveEvent.venueId,
+        venueInstagramHandle: effectiveEvent.venueInstagramHandle,
+        instagramPostId: effectiveEvent.instagramPostId,
+        instagramPostUrl: effectiveEvent.instagramPostUrl,
+      },
+      [args.id],
+    );
+  }
+  await ctx.db.patch(args.id, { ...patch, updatedAt: now });
+  const auditPatch = clearTicketPrice
+    ? { ...patch, clearTicketPrice: true }
+    : patch;
+  await writeEventAuditLog(ctx, args.id, "updated", {
+    actor: authorization.actor,
+    patch: auditPatch,
+  });
+}
+
+export const updateEvent = mutation({
+  args: {
+    id: v.id("events"),
+    patch: eventUpdatePatch,
+    expectedStatus: v.optional(eventStatus),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authorization = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    await applyEventUpdate(ctx, args, authorization);
+  },
+});
+
+export const updateEventAndRecordInstagramSourceOccurrenceSatisfaction = mutation({
+  args: {
+    id: v.id("events"),
+    patch: eventUpdatePatch,
+    expectedStatus: v.optional(eventStatus),
+    plan: sourceOccurrencePlan,
+    satisfiedKey: v.string(),
+    supersededKey: v.optional(v.string()),
+    processingFence: v.optional(sourceProcessingFence),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authorization = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    await assertSourceProcessingFence(ctx, args.processingFence);
+    await assertSourceOccurrenceGenerationCurrent(ctx, args.plan);
+    const existingEvent = await ctx.db.get(args.id);
+    const expectedOccurrence = args.plan.expectedOccurrences?.find(
+      (occurrence) => occurrence.key === args.satisfiedKey,
+    );
+    if (
+      existingEvent &&
+      expectedOccurrence &&
+      !eventRepresentsExpectedOccurrence(
+        { ...existingEvent, ...args.patch },
+        expectedOccurrence,
+      )
+    ) {
+      throw new Error("Updated event does not match the source occurrence.");
+    }
+    await applyEventUpdate(ctx, args, authorization);
+    await recordSourceOccurrenceSatisfaction(
+      ctx,
+      args.plan,
+      args.satisfiedKey,
+      args.id,
+      args.supersededKey,
+    );
+    return { updated: true, recorded: true };
   },
 });
 

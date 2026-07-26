@@ -8,6 +8,22 @@ import {
 const OPENAI_REQUEST_TIMEOUT_MS = 40000;
 const OPENAI_MAX_ATTEMPTS = 2;
 
+export class OpenAiProviderBlockedError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "OpenAiProviderBlockedError";
+    this.status = status;
+  }
+}
+
+export function isOpenAiProviderBlockedError(
+  error: unknown,
+): error is OpenAiProviderBlockedError {
+  return error instanceof OpenAiProviderBlockedError;
+}
+
 const extractionEvidenceSnippetSchema = z.object({
   source: z.union([
     z.literal("caption"),
@@ -405,10 +421,9 @@ export async function extractEventDataFromInstagramPost(
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= OPENAI_MAX_ATTEMPTS; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), OPENAI_REQUEST_TIMEOUT_MS);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), OPENAI_REQUEST_TIMEOUT_MS);
-
       const userContent: Array<
         | { type: "input_text"; text: string }
         | { type: "input_image"; image_url: string; detail: "high" }
@@ -467,14 +482,18 @@ export async function extractEventDataFromInstagramPost(
         cache: "no-store",
         signal: controller.signal,
       });
-
-      clearTimeout(timeoutId);
-
       if (!response.ok) {
         const errorBody = await response.text();
-        throw new Error(
-          `OpenAI extraction failed: ${response.status} ${response.statusText} - ${errorBody}`,
-        );
+        const message =
+          `OpenAI extraction failed: ${response.status} ${response.statusText} - ${errorBody}`;
+        if (
+          response.status === 401 ||
+          response.status === 403 ||
+          response.status === 429
+        ) {
+          throw new OpenAiProviderBlockedError(response.status, message);
+        }
+        throw new Error(message);
       }
 
       const payload = (await response.json()) as {
@@ -504,12 +523,20 @@ export async function extractEventDataFromInstagramPost(
       };
     } catch (error) {
       lastError = error;
+      if (isOpenAiProviderBlockedError(error)) {
+        break;
+      }
       if (attempt < OPENAI_MAX_ATTEMPTS) {
         await new Promise((resolve) => setTimeout(resolve, attempt * 700));
       }
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
+  if (isOpenAiProviderBlockedError(lastError)) {
+    throw lastError;
+  }
   const errorMessage =
     lastError instanceof Error ? lastError.message : "Unknown OpenAI extraction error.";
   throw new Error(errorMessage);

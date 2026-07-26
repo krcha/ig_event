@@ -67,6 +67,7 @@ export default defineSchema({
     sourcePostedAt: v.optional(v.string()),
     rawExtractionJson: v.optional(v.string()),
     normalizedFieldsJson: v.optional(v.string()),
+    sourceOccurrenceKey: v.optional(v.string()),
     promotionTier: v.optional(v.union(v.literal("featured"), v.literal("promoted"))),
     promotionStart: v.optional(v.string()),
     promotionEnd: v.optional(v.string()),
@@ -88,8 +89,37 @@ export default defineSchema({
     .index("by_instagramPostId", ["instagramPostId"])
     .index("by_instagramPostUrl", ["instagramPostUrl"])
     .index("by_normalizedInstagramPostUrl", ["normalizedInstagramPostUrl"])
+    .index("by_sourceOccurrenceKey", ["sourceOccurrenceKey"])
     .index("by_venueId", ["venueId"])
     .index("by_venueId_status_date", ["venueId", "status", "date"]),
+  instagramSourceOccurrenceReceipts: defineTable({
+    sourceIdentity: v.string(),
+    sourceFingerprint: v.string(),
+    expectedKeys: v.array(v.string()),
+    expectedOccurrences: v.optional(
+      v.array(
+        v.object({
+          key: v.string(),
+          date: v.string(),
+          time: v.optional(v.string()),
+          venue: v.string(),
+          title: v.string(),
+          artists: v.array(v.string()),
+        }),
+      ),
+    ),
+    satisfiedKeys: v.array(v.string()),
+    deferredChildCount: v.number(),
+    deferredChildKeys: v.array(v.string()),
+    satisfiedOccurrences: v.array(
+      v.object({
+        key: v.string(),
+        eventId: v.id("events"),
+      }),
+    ),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_sourceIdentity", ["sourceIdentity"]),
   venues: defineTable({
     name: v.string(),
     instagramHandle: v.string(),
@@ -176,7 +206,23 @@ export default defineSchema({
     normalizedInstagramPostUrl: v.optional(v.string()),
     postedAt: v.optional(v.string()),
     sourceKey: v.optional(v.string()),
+    sourceRevision: v.optional(v.number()),
+    blocksPaidFetch: v.optional(v.boolean()),
     username: v.string(),
+    processingStatus: v.optional(
+      v.union(
+        v.literal("pending"),
+        v.literal("processing"),
+        v.literal("completed"),
+        v.literal("retryable_failure"),
+      ),
+    ),
+    processingAttempts: v.optional(v.number()),
+    processingOutcome: v.optional(v.string()),
+    processingError: v.optional(v.string()),
+    processingLeaseOwner: v.optional(v.string()),
+    processingLeaseExpiresAt: v.optional(v.number()),
+    lastProcessedAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -188,7 +234,49 @@ export default defineSchema({
     .index("by_postId", ["postId"])
     .index("by_instagramPostUrl", ["instagramPostUrl"])
     .index("by_normalizedInstagramPostUrl", ["normalizedInstagramPostUrl"])
+    .index("by_blocksPaidFetch", ["blocksPaidFetch"])
+    .index("by_handle_blocksPaidFetch", ["handle", "blocksPaidFetch"])
     .index("by_updatedAt", ["updatedAt"]),
+  instagramHandleFetchLeases: defineTable({
+    handle: v.string(),
+    owner: v.string(),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_handle", ["handle"])
+    .index("by_expiresAt", ["expiresAt"]),
+  ingestionProviderLeases: defineTable({
+    provider: v.string(),
+    owner: v.string(),
+    leaseExpiresAt: v.number(),
+    blockedAt: v.optional(v.number()),
+    blockedStatus: v.optional(v.number()),
+    blockedCode: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_provider", ["provider"]),
+  instagramPaidFetchControl: defineTable({
+    key: v.string(),
+    backlogIndexReady: v.boolean(),
+    leaseOwner: v.optional(v.string()),
+    leaseHandle: v.optional(v.string()),
+    leaseExpiresAt: v.optional(v.number()),
+    leaseBoundaryKey: v.optional(v.string()),
+    leaseResultsLimit: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
+  instagramHandleFetchStates: defineTable({
+    handle: v.string(),
+    boundaryKey: v.string(),
+    nextResultsLimit: v.number(),
+    hardBlocked: v.boolean(),
+    lastRequestedMaxItems: v.number(),
+    lastRawItemCount: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_handle", ["handle"]),
   mediaAssets: defineTable({
     sourceKey: v.string(),
     sourceKind: v.literal("instagram_post"),

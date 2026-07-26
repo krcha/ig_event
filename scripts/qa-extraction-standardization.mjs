@@ -21,12 +21,22 @@ import {
   toSearchableText,
 } from "../lib/pipeline/venue-normalization.ts";
 import {
+  areEventTimesCompatibleForTesting,
   buildDuplicateUpdatePatch,
+  buildSourceOccurrenceChildTrackingKeyForTesting,
+  buildSourceOccurrenceKeyForTesting,
+  bindSourceOccurrenceMetadata,
+  createEmptyIngestionSummary,
   evaluateCoreEventSourceGrounding,
+  findBestExistingMatchForPreparedEventForTesting,
   getNonEventAutoApprovalBlockers,
   getPosterScheduleAutoApprovalBlockers,
+  hasIncompleteAmbiguousCollisionContextForTesting,
+  hasIncompleteSourceOccurrenceSetForTesting,
   normalizeEventDate,
   prepareEventsForInsert,
+  processIngestionPostWithExtractionForTesting,
+  reconcileAmbiguousOccurrenceKeysWithExistingEventsForTesting,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
 import {
   extractEventTimeFromText,
@@ -58,10 +68,15 @@ import { chooseAction as chooseEventQualityAction } from "./audit-event-quality.
 import { markModelDerivedRepairPending } from "./source-grounding-guard.mjs";
 import {
   createEvent,
+  getInstagramSourceOccurrenceReceipt,
   mergeApprovedEvents,
+  reconcileInstagramSourceOccurrenceReceipt,
   reprocessPendingSourceGroundingBatch,
+  recordInstagramSourceOccurrenceSatisfaction,
   setEventStatus,
+  updateSourceOccurrenceExpectedCount,
   updateEvent,
+  updateEventAndRecordInstagramSourceOccurrenceSatisfaction,
 } from "../convex/events.ts";
 
 const STATIC_VENUE_BY_HANDLE = {
@@ -1462,6 +1477,697 @@ function runHashtagOnlyScheduleIdentityQa() {
       { date: secondDate, artists: ["Charlie"] },
     ],
     "Distinct same-date acts must survive deterministic reconciliation.",
+  );
+
+  const [, repeatedSingleEventMonth, repeatedSingleEventDay] = firstDate.split("-");
+  const repeatedSingleEventDateText = `${Number(repeatedSingleEventDay)}. ${
+    SERBIAN_MONTH_GENITIVES[Number(repeatedSingleEventMonth) - 1]
+  }`;
+  const repeatedSingleEventCaption = [
+    `ℹ️ Beogradski koncert Joss Stone ${repeatedSingleEventDateText} seli se u Ložionicu!`,
+    "",
+    `Beogradski koncert britanske zvezde Joss Stone, zakazan za petak, ${repeatedSingleEventDateText}, biće održan u prostoru Ložionice.`,
+  ].join("\n");
+  const repeatedSingleEvent = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: repeatedSingleEventCaption,
+      postType: "image",
+      username: "tickets.rs",
+    }),
+    makeExtractedEvent({
+      title: "Joss Stone",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: ["Joss Stone"],
+      category: "live music",
+      description: "Joss Stone concert at Ložionica.",
+      source_caption: repeatedSingleEventCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Joss Stone",
+          artists: ["Joss Stone"],
+          description: "Joss Stone concert at Ložionica.",
+          source_text: `JOSS STONE ${firstDateLabel}. LOŽIONICA`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/joss-stone.jpg",
+    { "tickets.rs": "Ložionica" },
+    {},
+    { "tickets.rs": "Ložionica" },
+  );
+  assert.equal(
+    repeatedSingleEvent.length,
+    1,
+    "Repeated caption prose for one identity/date must not manufacture duplicate schedule rows.",
+  );
+  assert.equal(repeatedSingleEvent[0].kind, "ok");
+  assert.deepEqual(
+    {
+      title: repeatedSingleEvent[0].event.title,
+      artists: repeatedSingleEvent[0].event.artists,
+      date: repeatedSingleEvent[0].event.date,
+      time: repeatedSingleEvent[0].event.time,
+      status: repeatedSingleEvent[0].event.status,
+    },
+    {
+      title: "Joss Stone",
+      artists: ["Joss Stone"],
+      date: firstDate,
+      time: TBD_EVENT_TIME,
+      status: "approved",
+    },
+    "A repeated same-event announcement must keep the canonical grounded model event.",
+  );
+
+  const hardMappedVenueMismatch = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: repeatedSingleEventCaption,
+      postType: "image",
+      username: "kcgrad",
+    }),
+    makeExtractedEvent({
+      title: "Joss Stone",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: ["Joss Stone"],
+      category: "live music",
+      description: "Joss Stone concert at Ložionica.",
+      source_caption: repeatedSingleEventCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Joss Stone",
+          artists: ["Joss Stone"],
+          description: "Joss Stone concert at Ložionica.",
+          source_text: `JOSS STONE ${firstDateLabel}. LOŽIONICA`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/joss-stone-hard-mapped-venue.jpg",
+    { kcgrad: "KC Grad" },
+    { kcgrad: "KC Grad" },
+    { kcgrad: "KC Grad" },
+  );
+  assert.equal(
+    hardMappedVenueMismatch.length,
+    2,
+    "A hard per-handle venue override that disagrees with the source-owned venue must block destructive caption suppression.",
+  );
+  assert.deepEqual(
+    hardMappedVenueMismatch.map((result) => {
+      assert.equal(result.kind, "ok");
+      return {
+        status: result.event.status,
+        venue: result.event.venue,
+        splitSourceLine: readPreparedNormalizedFields(result).splitSourceLine,
+      };
+    }),
+    repeatedSingleEventCaption.split("\n").filter(Boolean).map((splitSourceLine) => ({
+      status: "pending",
+      venue: "KC Grad",
+      splitSourceLine,
+    })),
+    "Venue-authority disagreement must preserve both exact source rows as pending while retaining the final normalized venue.",
+  );
+
+  const sharedUmbrellaDistinctEventsCaption = [
+    `${firstDateLabel} Cinema Week presents Film A`,
+    `${firstDateLabel} Cinema Week presents Film B`,
+  ].join("\n");
+  const sharedUmbrellaDistinctEvents = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: sharedUmbrellaDistinctEventsCaption,
+      postType: "image",
+      username: "cinema.week",
+    }),
+    makeExtractedEvent({
+      title: "Cinema Week",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: [],
+      category: "film",
+      description: "Cinema Week at Ložionica.",
+      source_caption: sharedUmbrellaDistinctEventsCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Cinema Week",
+          artists: [],
+          description: "Cinema Week at Ložionica.",
+          source_text: `${firstDateLabel} Cinema Week`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/cinema-week.jpg",
+    { "cinema.week": "Ložionica" },
+    {},
+    { "cinema.week": "Ložionica" },
+  );
+  assert.equal(
+    sharedUmbrellaDistinctEvents.length,
+    2,
+    "Distinct rows that share only a canonical umbrella title must never collapse.",
+  );
+  assert.deepEqual(
+    sharedUmbrellaDistinctEvents.map((result) => {
+      assert.equal(result.kind, "ok");
+      return readPreparedNormalizedFields(result).splitSourceLine;
+    }).sort(),
+    sharedUmbrellaDistinctEventsCaption.split("\n").sort(),
+    "Every shared-umbrella source row must survive deterministic reconciliation.",
+  );
+
+  const announcementCueDistinctTitlesCaption = [
+    `${firstDateLabel} Cinema Week scheduled Star at Ložionica`,
+    `${firstDateLabel} Cinema Week scheduled Concert at Ložionica`,
+  ].join("\n");
+  const announcementCueDistinctTitles = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: announcementCueDistinctTitlesCaption,
+      postType: "image",
+      username: "cinema.week",
+    }),
+    makeExtractedEvent({
+      title: "Cinema Week",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: [],
+      category: "film",
+      description: "Cinema Week at Ložionica.",
+      source_caption: announcementCueDistinctTitlesCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Cinema Week",
+          artists: [],
+          description: "Cinema Week at Ložionica.",
+          source_text: `${firstDateLabel} Cinema Week`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/cinema-week-announcement-titles.jpg",
+    { "cinema.week": "Ložionica" },
+    {},
+    { "cinema.week": "Ložionica" },
+  );
+  assert.equal(
+    announcementCueDistinctTitles.length,
+    2,
+    "An announcement verb must not hide different trailing event titles.",
+  );
+  assert.deepEqual(
+    announcementCueDistinctTitles.map((result) => {
+      assert.equal(result.kind, "ok");
+      return readPreparedNormalizedFields(result).splitSourceLine;
+    }).sort(),
+    announcementCueDistinctTitlesCaption.split("\n").sort(),
+    "Identity-like suffixes must survive even when every row uses a reschedule cue.",
+  );
+
+  for (const [caseName, firstSuffix, secondSuffix] of [
+    ["allowed context words", "The Venue", "The Space"],
+    ["bare numeric identities", "42", "54"],
+  ]) {
+    const acceptedGrammarDistinctTitlesCaption = [
+      `Beogradski koncert Joss Stone ${repeatedSingleEventDateText} ${firstSuffix} seli se u Ložionicu!`,
+      `Beogradski koncert Joss Stone ${repeatedSingleEventDateText} ${secondSuffix} seli se u Ložionicu!`,
+    ].join("\n");
+    const acceptedGrammarDistinctTitles = prepareEventsForInsert(
+      makeInstagramPost({
+        caption: acceptedGrammarDistinctTitlesCaption,
+        postType: "image",
+        username: "tickets.rs",
+      }),
+      makeExtractedEvent({
+        title: "Joss Stone",
+        date: firstDateLabel,
+        time: "",
+        venue: "Ložionica",
+        artists: ["Joss Stone"],
+        category: "live music",
+        description: "Joss Stone concert at Ložionica.",
+        source_caption: acceptedGrammarDistinctTitlesCaption,
+        schedule_entries: [
+          {
+            date: firstDateLabel,
+            time: "",
+            title: "Joss Stone",
+            artists: ["Joss Stone"],
+            description: "Joss Stone concert at Ložionica.",
+            source_text: `JOSS STONE ${firstDateLabel}. LOŽIONICA`,
+          },
+        ],
+      }),
+      "https://cdn.example.com/joss-stone-accepted-grammar-negative.jpg",
+      { "tickets.rs": "Ložionica" },
+      {},
+      { "tickets.rs": "Ložionica" },
+    );
+    assert.equal(
+      acceptedGrammarDistinctTitles.length,
+      2,
+      `${caseName} must not be discarded as harmless announcement metadata.`,
+    );
+    assert.deepEqual(
+      acceptedGrammarDistinctTitles.map((result) => {
+        assert.equal(result.kind, "ok");
+        return readPreparedNormalizedFields(result).splitSourceLine;
+      }).sort(),
+      acceptedGrammarDistinctTitlesCaption.split("\n").sort(),
+      `${caseName} must retain both exact source rows.`,
+    );
+  }
+
+  for (const venueCollisionCase of [
+    {
+      name: "extra prefix-colliding venue token",
+      canonicalVenue: "Ložionica",
+      relocationVenue: "Ložionicu Ložionizer",
+      heldVenue: "Ložionice Ložionizer",
+    },
+    {
+      name: "substituted prefix-colliding venue token",
+      canonicalVenue: "Ložionica",
+      relocationVenue: "Ložionizer",
+      heldVenue: "Ložionizer",
+    },
+    {
+      name: "missing canonical multiword venue token",
+      canonicalVenue: "Kulturni Centar",
+      relocationVenue: "Kulturni",
+      heldVenue: "Kulturni",
+    },
+    {
+      name: "reordered canonical multiword venue tokens",
+      canonicalVenue: "Kulturni Centar",
+      relocationVenue: "Centar Kulturni",
+      heldVenue: "Centar Kulturni",
+    },
+  ]) {
+    const venueCollisionCaption = [
+      `Beogradski koncert Joss Stone ${repeatedSingleEventDateText} seli se u ${venueCollisionCase.relocationVenue}`,
+      `Beogradski koncert britanske zvezde Joss Stone, zakazan za petak, ${repeatedSingleEventDateText}, biće održan u prostoru ${venueCollisionCase.heldVenue}`,
+    ].join("\n");
+    const venueCollisionResults = prepareEventsForInsert(
+      makeInstagramPost({
+        caption: venueCollisionCaption,
+        postType: "image",
+        username: "tickets.rs",
+      }),
+      makeExtractedEvent({
+        title: "Joss Stone",
+        date: firstDateLabel,
+        time: "",
+        venue: venueCollisionCase.canonicalVenue,
+        artists: ["Joss Stone"],
+        category: "live music",
+        description: `Joss Stone concert at ${venueCollisionCase.canonicalVenue}.`,
+        source_caption: venueCollisionCaption,
+        schedule_entries: [
+          {
+            date: firstDateLabel,
+            time: "",
+            title: "Joss Stone",
+            artists: ["Joss Stone"],
+            description: `Joss Stone concert at ${venueCollisionCase.canonicalVenue}.`,
+            source_text: `JOSS STONE ${firstDateLabel}. ${venueCollisionCase.canonicalVenue}`,
+          },
+        ],
+      }),
+      "https://cdn.example.com/joss-stone-venue-collision.jpg",
+      { "tickets.rs": venueCollisionCase.canonicalVenue },
+      {},
+      { "tickets.rs": venueCollisionCase.canonicalVenue },
+    );
+    assert.equal(
+      venueCollisionResults.length,
+      2,
+      `${venueCollisionCase.name} must block destructive caption suppression.`,
+    );
+    assert.deepEqual(
+      venueCollisionResults.map((result) => {
+        assert.equal(result.kind, "ok");
+        return readPreparedNormalizedFields(result).splitSourceLine;
+      }).sort(),
+      venueCollisionCaption.split("\n").sort(),
+      `${venueCollisionCase.name} must retain both exact source rows.`,
+    );
+  }
+
+  const conflictingSingleDateAltText = `Poster text: ${firstDateLabel} - Alice live at Ložionica`;
+  const repeatedSingleEventWithConflictingAlt = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: repeatedSingleEventCaption,
+      altText: conflictingSingleDateAltText,
+      postType: "image",
+      username: "tickets.rs",
+    }),
+    makeExtractedEvent({
+      title: "Joss Stone",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: ["Joss Stone"],
+      category: "live music",
+      description: "Joss Stone concert at Ložionica.",
+      source_caption: repeatedSingleEventCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Joss Stone",
+          artists: ["Joss Stone"],
+          description: "Joss Stone concert at Ložionica.",
+          source_text: `JOSS STONE ${firstDateLabel}. LOŽIONICA`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/joss-stone-conflicting-alt.jpg",
+    { "tickets.rs": "Ložionica" },
+    {},
+    { "tickets.rs": "Ložionica" },
+  );
+  assert.equal(
+    repeatedSingleEventWithConflictingAlt.length,
+    2,
+    "Nonempty single-date alt/poster evidence must block destructive caption suppression.",
+  );
+  assert.deepEqual(
+    repeatedSingleEventWithConflictingAlt.map((result) => {
+      assert.equal(result.kind, "ok");
+      return readPreparedNormalizedFields(result).splitSourceLine;
+    }).sort(),
+    repeatedSingleEventCaption.split("\n").filter(Boolean).sort(),
+    "Conflicting single-date alt evidence must retain the exact caption-derived rows.",
+  );
+
+  const partialTimeRepeatedIdentityCaption = [
+    `${firstDateLabel} Cinema Week moved to Ložionica at 19H`,
+    `${firstDateLabel} Cinema Week moved to Ložionica`,
+  ].join("\n");
+  const partialTimeRepeatedIdentity = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: partialTimeRepeatedIdentityCaption,
+      postType: "image",
+      username: "cinema.week",
+    }),
+    makeExtractedEvent({
+      title: "Cinema Week",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: [],
+      category: "film",
+      description: "Cinema Week at Ložionica.",
+      source_caption: partialTimeRepeatedIdentityCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Cinema Week",
+          artists: [],
+          description: "Cinema Week at Ložionica.",
+          source_text: `${firstDateLabel} Cinema Week`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/cinema-week-time.jpg",
+    { "cinema.week": "Ložionica" },
+    {},
+    { "cinema.week": "Ložionica" },
+  );
+  assert.equal(
+    partialTimeRepeatedIdentity.length,
+    2,
+    "One explicit and one missing candidate time must remain separate rather than inheriting one canonical event.",
+  );
+  assert.deepEqual(
+    partialTimeRepeatedIdentity.map((result) => {
+      assert.equal(result.kind, "ok");
+      return readPreparedNormalizedFields(result).splitSourceLine;
+    }).sort(),
+    partialTimeRepeatedIdentityCaption.split("\n").sort(),
+    "Partial candidate-time coverage must preserve every source row.",
+  );
+
+  const competingSupportActsCaption = [
+    `Koncert Joss Stone ${repeatedSingleEventDateText} uz Alice.`,
+    `Koncert Joss Stone ${repeatedSingleEventDateText} uz Bob.`,
+  ].join("\n");
+  const competingSupportActs = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: competingSupportActsCaption,
+      postType: "image",
+      username: "tickets.rs",
+    }),
+    makeExtractedEvent({
+      title: "Joss Stone",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: ["Joss Stone"],
+      category: "live music",
+      description: "Joss Stone concert at Ložionica.",
+      source_caption: competingSupportActsCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Joss Stone",
+          artists: ["Joss Stone"],
+          description: "Joss Stone concert at Ložionica.",
+          source_text: `JOSS STONE ${firstDateLabel}. LOŽIONICA`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/joss-stone-support.jpg",
+    { "tickets.rs": "Ložionica" },
+    {},
+    { "tickets.rs": "Ložionica" },
+  );
+  assert.equal(
+    competingSupportActs.length,
+    2,
+    "Repeated canonical identity/date prose with different locally billed support acts must not collapse.",
+  );
+  assert.deepEqual(
+    competingSupportActs.map((result) => {
+      assert.equal(result.kind, "ok");
+      return {
+        status: result.event.status,
+        splitSourceLine: readPreparedNormalizedFields(result).splitSourceLine,
+      };
+    }),
+    competingSupportActsCaption.split("\n").map((splitSourceLine) => ({
+      status: "pending",
+      splitSourceLine,
+    })),
+    "Competing support-act rows must stay separately pending for human review.",
+  );
+
+  const competingAmpersandCaption = [
+    `${firstDateLabel} - Joss Stone & Alice`,
+    `${firstDateLabel} - Joss Stone & Bob`,
+  ].join("\n");
+  const competingAmpersandRows = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: competingAmpersandCaption,
+      postType: "image",
+      username: "tickets.rs",
+    }),
+    makeExtractedEvent({
+      title: "Joss Stone",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: ["Joss Stone"],
+      category: "live music",
+      description: "Joss Stone concert at Ložionica.",
+      source_caption: competingAmpersandCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Joss Stone",
+          artists: ["Joss Stone"],
+          description: "Joss Stone concert at Ložionica.",
+          source_text: `${firstDateLabel} - Joss Stone`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/joss-stone-ampersand.jpg",
+    { "tickets.rs": "Ložionica" },
+    {},
+    { "tickets.rs": "Ložionica" },
+  );
+  assert.deepEqual(
+    competingAmpersandRows.map((result) => {
+      assert.equal(result.kind, "ok");
+      return {
+        status: result.event.status,
+        splitSourceLine: readPreparedNormalizedFields(result).splitSourceLine,
+      };
+    }),
+    competingAmpersandCaption.split("\n").map((splitSourceLine) => ({
+      status: "pending",
+      splitSourceLine,
+    })),
+    "Competing ampersand-billed rows must bypass canonical model reconciliation and remain distinct.",
+  );
+
+  const distinctHeadlinerRowsCaption = [
+    `${firstDateLabel} - Koncert Joss Stone: Acoustic Set | Alice`,
+    `${firstDateLabel} - Koncert Joss Stone: Electric Set | Bob`,
+  ].join("\n");
+  const distinctHeadlinerRows = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: distinctHeadlinerRowsCaption,
+      postType: "image",
+      username: "tickets.rs",
+    }),
+    makeExtractedEvent({
+      title: "Joss Stone",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: ["Joss Stone"],
+      category: "live music",
+      description: "Joss Stone concert at Ložionica.",
+      source_caption: distinctHeadlinerRowsCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Joss Stone",
+          artists: ["Joss Stone"],
+          description: "Joss Stone concert at Ložionica.",
+          source_text: `${firstDateLabel} - Joss Stone`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/joss-stone-distinct-rows.jpg",
+    { "tickets.rs": "Ložionica" },
+    {},
+    { "tickets.rs": "Ložionica" },
+  );
+  assert.equal(
+    distinctHeadlinerRows.length,
+    2,
+    "Schedule-shaped rows with the same headliner but different suffix titles and billed artists must not collapse.",
+  );
+  assert.deepEqual(
+    distinctHeadlinerRows.map((result) => {
+      assert.equal(result.kind, "ok");
+      return {
+        status: result.event.status,
+        splitSourceLine: readPreparedNormalizedFields(result).splitSourceLine,
+      };
+    }),
+    distinctHeadlinerRowsCaption.split("\n").map((splitSourceLine) => ({
+      status: "pending",
+      splitSourceLine,
+    })),
+    "Distinct shared-headliner rows must retain both source rows for review.",
+  );
+
+  const conflictingShowtimesCaption = [
+    `${firstDateLabel} - Joss Stone 19H`,
+    `${firstDateLabel} - Joss Stone 22H`,
+  ].join("\n");
+  const conflictingShowtimes = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: conflictingShowtimesCaption,
+      postType: "image",
+      username: "tickets.rs",
+    }),
+    makeExtractedEvent({
+      title: "Joss Stone",
+      date: firstDateLabel,
+      time: "19:00",
+      venue: "Ložionica",
+      artists: ["Joss Stone"],
+      category: "live music",
+      source_caption: conflictingShowtimesCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "19:00",
+          title: "Joss Stone",
+          artists: ["Joss Stone"],
+          description: "Joss Stone concert at Ložionica.",
+          source_text: `${firstDateLabel} - Joss Stone 19H`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/joss-stone-showtimes.jpg",
+    { "tickets.rs": "Ložionica" },
+    {},
+    { "tickets.rs": "Ložionica" },
+  );
+  assert.deepEqual(
+    conflictingShowtimes.map((result) => {
+      assert.equal(result.kind, "ok");
+      return result.event.time;
+    }),
+    ["19:00", "22:00"],
+    "Repeated identity/date rows with conflicting explicit times must remain distinct.",
+  );
+
+  const distinctIdentityCaption = [
+    `${firstDateLabel} - Summer Festival | Alice`,
+    `${firstDateLabel} - Autumn Showcase | Bob`,
+  ].join("\n");
+  const distinctIdentityRows = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: distinctIdentityCaption,
+      postType: "image",
+      username: "tickets.rs",
+    }),
+    makeExtractedEvent({
+      title: "Summer Festival",
+      date: firstDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: ["Alice"],
+      category: "live music",
+      source_caption: distinctIdentityCaption,
+      schedule_entries: [
+        {
+          date: firstDateLabel,
+          time: "",
+          title: "Summer Festival",
+          artists: ["Alice"],
+          description: "Summer Festival with Alice.",
+          source_text: `${firstDateLabel} - Summer Festival | Alice`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/summer-festival.jpg",
+    { "tickets.rs": "Ložionica" },
+    {},
+    { "tickets.rs": "Ložionica" },
+  );
+  assert.equal(
+    distinctIdentityRows.length,
+    2,
+    "Same-date rows with different identities must remain distinct.",
+  );
+  assert.deepEqual(
+    distinctIdentityRows.map((result) => {
+      assert.equal(result.kind, "ok");
+      return readPreparedNormalizedFields(result).splitSourceLine;
+    }),
+    distinctIdentityCaption.split("\n"),
   );
 
   const equivalentEvidenceCaption = [
@@ -5656,6 +6362,1807 @@ async function runServiceApprovalMutationBoundaryQa() {
   }
 }
 
+async function runHardMappedVenueAuthorityMutationBoundaryQa() {
+  const previousCronSecret = process.env.CRON_SECRET;
+  const serviceSecret = "qa-hard-mapped-venue-authority-secret";
+  process.env.CRON_SECRET = serviceSecret;
+
+  const eventDate = isoDateDaysFromNow(7);
+  const eventDateLabel = ddmmForIsoDate(eventDate);
+  const [, month, day] = eventDate.split("-");
+  const eventDateText = `${Number(day)}. ${SERBIAN_MONTH_GENITIVES[Number(month) - 1]}`;
+  const sourceCaption = [
+    `ℹ️ Beogradski koncert Joss Stone ${eventDateText} seli se u Ložionicu!`,
+    `Beogradski koncert britanske zvezde Joss Stone, zakazan za petak, ${eventDateText}, biće održan u prostoru Ložionice.`,
+  ].join("\n");
+  const instagramPostId = "qa-kcgrad-lozionica-authority";
+  const instagramPostUrl = `https://www.instagram.com/p/${instagramPostId}/`;
+  const prepared = prepareEventsForInsert(
+    makeInstagramPost({
+      postId: instagramPostId,
+      instagramPostUrl,
+      caption: sourceCaption,
+      postType: "image",
+      username: "kcgrad",
+    }),
+    makeExtractedEvent({
+      title: "Joss Stone",
+      date: eventDateLabel,
+      time: "",
+      venue: "Ložionica",
+      artists: ["Joss Stone"],
+      category: "live music",
+      description: "Joss Stone concert at Ložionica.",
+      source_caption: sourceCaption,
+      schedule_entries: [
+        {
+          date: eventDateLabel,
+          time: "",
+          title: "Joss Stone",
+          artists: ["Joss Stone"],
+          description: "Joss Stone concert at Ložionica.",
+          source_text: `JOSS STONE ${eventDateLabel}. LOŽIONICA`,
+        },
+      ],
+    }),
+    "https://cdn.example.com/joss-stone-hard-mapped-boundary.jpg",
+    { kcgrad: "KC Grad" },
+    { kcgrad: "KC Grad" },
+    { kcgrad: "KC Grad" },
+  );
+
+  assert.equal(prepared.length, 2);
+  const firstPrepared = prepared[0];
+  assert.equal(firstPrepared.kind, "ok");
+  assert.equal(firstPrepared.event.status, "pending");
+  assert.equal(firstPrepared.event.venue, "KC Grad");
+
+  let insertedEvent = null;
+  const ctx = {
+    auth: { getUserIdentity: async () => null },
+    db: {
+      insert: async (table, value) => {
+        if (table === "events") {
+          insertedEvent = value;
+          return "qa-hard-mapped-event";
+        }
+        return "qa-hard-mapped-audit";
+      },
+      query: (table) =>
+        table === "venues"
+          ? {
+              collect: async () => [
+                {
+                  _id: "qa-kcgrad-venue",
+                  name: "KC Grad",
+                  instagramHandle: "kcgrad",
+                  category: "culture",
+                  publicStatus: "published",
+                },
+              ],
+            }
+          : {
+              withIndex: () => ({
+                collect: async () => [],
+                first: async () => null,
+              }),
+            },
+    },
+  };
+
+  try {
+    await createEvent._handler(ctx, {
+      ...firstPrepared.event,
+      serviceSecret,
+    });
+    assert.equal(insertedEvent?.status, "pending");
+    assert.equal(insertedEvent?.venue, "KC Grad");
+    assert.equal(insertedEvent?.venueInstagramHandle, "kcgrad");
+  } finally {
+    if (previousCronSecret === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = previousCronSecret;
+  }
+}
+
+async function withoutConsoleInfo(callback) {
+  const originalConsoleInfo = console.info;
+  console.info = () => {};
+  try {
+    return await callback();
+  } finally {
+    console.info = originalConsoleInfo;
+  }
+}
+
+async function withoutConsoleInfoAndError(callback) {
+  const originalConsoleInfo = console.info;
+  const originalConsoleError = console.error;
+  console.info = () => {};
+  console.error = () => {};
+  try {
+    return await callback();
+  } finally {
+    console.info = originalConsoleInfo;
+    console.error = originalConsoleError;
+  }
+}
+
+async function runDistinctOccurrencePersistenceQa() {
+  assert.equal(areEventTimesCompatibleForTesting("19.30", "19:30"), true);
+  assert.equal(areEventTimesCompatibleForTesting("21h30", "21:30"), true);
+  assert.equal(areEventTimesCompatibleForTesting("7:30 pm", "19:30"), true);
+  assert.equal(areEventTimesCompatibleForTesting("12 am", "00:00"), true);
+  assert.equal(areEventTimesCompatibleForTesting("19.30", "20:30"), false);
+
+  const eventDate = isoDateDaysFromNow(7);
+  const eventDateLabel = ddmmForIsoDate(eventDate);
+  const sourceCaption = [
+    `${eventDateLabel} - Joss Stone 19H`,
+    `${eventDateLabel} - Joss Stone 22H`,
+  ].join("\n");
+  const post = makeInstagramPost({
+    postId: "qa-distinct-occurrence-persistence",
+    instagramPostUrl: "https://www.instagram.com/p/qa-distinct-occurrence-persistence/",
+    caption: sourceCaption,
+    postType: "video",
+    username: "tickets.rs",
+  });
+  const extracted = makeExtractedEvent({
+    title: "Joss Stone",
+    date: eventDateLabel,
+    time: "19:00",
+    venue: "Ložionica",
+    artists: ["Joss Stone"],
+    category: "live music",
+    description: "Joss Stone concert at Ložionica.",
+    source_caption: sourceCaption,
+    schedule_entries: [
+      {
+        date: eventDateLabel,
+        time: "19:00",
+        title: "Joss Stone",
+        artists: ["Joss Stone"],
+        description: "Joss Stone concert at Ložionica.",
+        source_text: `${eventDateLabel} - Joss Stone 19H`,
+      },
+    ],
+  });
+  const summary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  const inserted = [];
+  const updated = [];
+  const client = {
+    query: async () => [],
+    mutation: async (_reference, args) => {
+      if ("id" in args) {
+        updated.push(args);
+        return args.id;
+      }
+      inserted.push(args);
+      return `qa-distinct-occurrence-${inserted.length}`;
+    },
+  };
+
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client,
+      handle: "tickets.rs",
+      post,
+      summary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted,
+    }),
+  );
+
+  assert.equal(
+    inserted.length,
+    2,
+    "The real ingestion persistence loop must insert both same-source occurrences when their explicit times differ.",
+  );
+  assert.equal(updated.length, 0, "A distinct second occurrence must not overwrite the first row.");
+  assert.deepEqual(
+    inserted.map((event) => ({
+      time: event.time,
+      splitSourceLine: JSON.parse(event.normalizedFieldsJson).splitSourceLine,
+      sourceOccurrenceExpectedCount: JSON.parse(event.normalizedFieldsJson)
+        .sourceOccurrenceExpectedCount,
+    })),
+    sourceCaption.split("\n").map((splitSourceLine, index) => ({
+      time: index === 0 ? "19:00" : "22:00",
+      splitSourceLine,
+      sourceOccurrenceExpectedCount: 2,
+    })),
+    "Both persisted records must retain their distinct time and exact split-row provenance.",
+  );
+  assert.equal(summary.insertedEvents, 2);
+  assert.equal(summary.skippedDuplicates, 0);
+  assert.equal(summary.updated_duplicates_bad_data, 0);
+  assert.match(
+    inserted[0].sourceOccurrenceKey,
+    /^instagram-occurrence-v2:[a-f0-9]{64}$/,
+  );
+  assert.notEqual(
+    inserted[0].sourceOccurrenceKey,
+    inserted[1].sourceOccurrenceKey,
+    "Distinct source children must receive distinct atomic occurrence keys.",
+  );
+
+  const sharedSlotSourceText = `${eventDateLabel} ALICE BOB 21H`;
+  const sharedSlotPost = {
+    ...post,
+    postId: "qa-shared-slot-occurrences",
+    instagramPostUrl: "https://www.instagram.com/p/qa-shared-slot-occurrences/",
+    caption: sharedSlotSourceText,
+  };
+  const sharedSlotBaseFields = {
+    multiEventSplitDetected: true,
+    multiEventSplitCount: 2,
+    splitSourceLine: sharedSlotSourceText,
+    rowSourceText: sharedSlotSourceText,
+  };
+  const sharedSlotBound = bindSourceOccurrenceMetadata(
+    sharedSlotPost,
+    ["ALICE", "BOB"].map((title, index) => ({
+      kind: "ok",
+      normalizedFields: {
+        ...sharedSlotBaseFields,
+        splitEventIndex: index + 1,
+      },
+      event: {
+        ...inserted[0],
+        title,
+        artists: [title],
+        time: "21:00",
+        status: "approved",
+      },
+    })),
+  );
+  assert.equal(sharedSlotBound.length, 2);
+  assert.ok(sharedSlotBound.every((prepared) => prepared.kind === "ok"));
+  const sharedSlotEvents = sharedSlotBound.map((prepared) => prepared.event);
+  assert.notEqual(
+    sharedSlotEvents[0].sourceOccurrenceKey,
+    sharedSlotEvents[1].sourceOccurrenceKey,
+  );
+  for (const event of sharedSlotEvents) {
+    assert.equal(event.status, "pending");
+    assert.equal(
+      JSON.parse(event.normalizedFieldsJson).sourceOccurrenceAmbiguousProvenance,
+      true,
+    );
+  }
+  const originalSharedSlotMatches = sharedSlotEvents.map((event, index) => ({
+    existingEvent: {
+      ...event,
+      _id: `qa-shared-slot-existing-${index + 1}`,
+    },
+    matchedBy: "post_id",
+    matchedValue: sharedSlotPost.postId,
+  }));
+  const reversedSharedSlotResults = bindSourceOccurrenceMetadata(sharedSlotPost, [
+    {
+      kind: "ok",
+      event: {
+        ...sharedSlotEvents[1],
+        sourceOccurrenceKey: undefined,
+        normalizedFieldsJson: JSON.stringify(sharedSlotBaseFields),
+      },
+      normalizedFields: { ...sharedSlotBaseFields },
+    },
+    {
+      kind: "ok",
+      event: {
+        ...sharedSlotEvents[0],
+        sourceOccurrenceKey: undefined,
+        normalizedFieldsJson: JSON.stringify(sharedSlotBaseFields),
+      },
+      normalizedFields: { ...sharedSlotBaseFields },
+    },
+  ]);
+  const reversedBob = reversedSharedSlotResults[0];
+  assert.equal(reversedBob.kind, "ok");
+  const reconciledReversedSharedSlotResults =
+    reconcileAmbiguousOccurrenceKeysWithExistingEventsForTesting(
+      reversedSharedSlotResults,
+      [originalSharedSlotMatches[0]],
+    );
+  assert.equal(reconciledReversedSharedSlotResults[0].kind, "ok");
+  assert.equal(reconciledReversedSharedSlotResults[1].kind, "ok");
+  assert.equal(
+    reconciledReversedSharedSlotResults[0].event.sourceOccurrenceKey,
+    sharedSlotEvents[1].sourceOccurrenceKey,
+    "An unmatched reordered sibling must receive the free ordinal key.",
+  );
+  assert.equal(
+    reconciledReversedSharedSlotResults[1].event.sourceOccurrenceKey,
+    sharedSlotEvents[0].sourceOccurrenceKey,
+    "A semantic sibling must retain its persisted ordinal key after reordering.",
+  );
+  assert.deepEqual(
+    new Set(
+      JSON.parse(reconciledReversedSharedSlotResults[0].event.normalizedFieldsJson)
+        .sourceOccurrenceExpectedKeys,
+    ),
+    new Set(sharedSlotEvents.map((event) => event.sourceOccurrenceKey)),
+  );
+  assert.equal(
+    findBestExistingMatchForPreparedEventForTesting(
+      originalSharedSlotMatches,
+      reversedBob.event,
+      reversedBob.normalizedFields,
+    )?.existingEvent._id,
+    "qa-shared-slot-existing-2",
+    "Ambiguous siblings must match by stable semantic identity before ordinal keys when extraction order changes.",
+  );
+  assert.equal(
+    findBestExistingMatchForPreparedEventForTesting(
+      [originalSharedSlotMatches[0]],
+      reversedBob.event,
+      reversedBob.normalizedFields,
+    ),
+    null,
+  );
+  assert.equal(
+    hasIncompleteAmbiguousCollisionContextForTesting(
+      [originalSharedSlotMatches[0]],
+      reversedBob.event,
+      reversedBob.normalizedFields,
+    ),
+    true,
+    "A reordered partial retry whose ordinal collides with another sibling must defer.",
+  );
+  const originalBobFields = JSON.parse(sharedSlotEvents[1].normalizedFieldsJson);
+  assert.equal(
+    hasIncompleteAmbiguousCollisionContextForTesting(
+      [originalSharedSlotMatches[0]],
+      sharedSlotEvents[1],
+      originalBobFields,
+    ),
+    false,
+    "A missing sibling with a free stable ordinal must remain insertable.",
+  );
+
+  const partialSharedSlotFields = JSON.parse(sharedSlotEvents[1].normalizedFieldsJson);
+  delete partialSharedSlotFields.sourceOccurrenceAmbiguousProvenance;
+  delete partialSharedSlotFields.sourceOccurrenceCollisionOrdinal;
+  delete partialSharedSlotFields.rowSourceText;
+  delete partialSharedSlotFields.splitSourceLine;
+  assert.equal(
+    hasIncompleteAmbiguousCollisionContextForTesting(
+      [
+        {
+          existingEvent: {
+            ...sharedSlotEvents[0],
+            _id: "qa-shared-slot-existing",
+          },
+          matchedBy: "post_id",
+          matchedValue: sharedSlotPost.postId,
+        },
+      ],
+      sharedSlotEvents[1],
+      partialSharedSlotFields,
+    ),
+    true,
+    "A partial retry that loses collision-group context must defer instead of inserting a third ambiguous child.",
+  );
+
+  const mutableLineFieldsA = {
+    ...sharedSlotBaseFields,
+    normalizedDate: sharedSlotEvents[0].date,
+    normalizedTime: sharedSlotEvents[0].time,
+    rowSourceText: "ALICE 21H",
+  };
+  const mutableLineFieldsB = {
+    ...mutableLineFieldsA,
+    title: "ALICE — revised extractor title",
+    venue: "Repaired Venue Name",
+    artists: ["Alice", "Guest"],
+    rowSourceText: "ALICE — updated formatting — 21:00",
+  };
+  assert.equal(
+    buildSourceOccurrenceKeyForTesting(
+      sharedSlotPost,
+      sharedSlotEvents[0].date,
+      sharedSlotEvents[0].time,
+      mutableLineFieldsA,
+    ),
+    buildSourceOccurrenceKeyForTesting(
+      sharedSlotPost,
+      sharedSlotEvents[0].date,
+      sharedSlotEvents[0].time,
+      mutableLineFieldsB,
+    ),
+    "Mutable source-line text must not change a v2 occurrence key.",
+  );
+  assert.equal(
+    buildSourceOccurrenceChildTrackingKeyForTesting(
+      sharedSlotPost,
+      {
+        kind: "skip",
+        reason: "missing_venue",
+        normalizedFields: mutableLineFieldsA,
+      },
+      0,
+    ),
+    buildSourceOccurrenceChildTrackingKeyForTesting(
+      sharedSlotPost,
+      {
+        kind: "skip",
+        reason: "missing_venue",
+        normalizedFields: mutableLineFieldsB,
+      },
+      0,
+    ),
+    "Mutable extractor title, venue, artists, and source-line text must not strand a structurally identified deferred child.",
+  );
+  const pastOnlyBound = bindSourceOccurrenceMetadata(sharedSlotPost, [
+    {
+      kind: "skip",
+      reason: "past_event",
+      normalizedFields: {
+        normalizedDate: "2026-01-01",
+      },
+    },
+  ]);
+  assert.match(
+    pastOnlyBound[0].normalizedFields.sourceOccurrenceKey,
+    /^instagram-occurrence-v2:/,
+    "A past-only extraction must retain its key so the receipt can retire it safely.",
+  );
+
+  const singleOccurrenceResult = bindSourceOccurrenceMetadata(sharedSlotPost, [
+    {
+      kind: "ok",
+      event: {
+        ...sharedSlotEvents[0],
+        sourceOccurrenceKey: undefined,
+        normalizedFieldsJson: "{}",
+      },
+      normalizedFields: {
+        normalizedDate: sharedSlotEvents[0].date,
+      },
+    },
+  ])[0];
+  assert.equal(singleOccurrenceResult.kind, "ok");
+  const singleOccurrenceMatch = {
+    existingEvent: {
+      ...singleOccurrenceResult.event,
+      _id: "qa-single-occurrence-existing",
+    },
+    matchedBy: "post_id",
+    matchedValue: sharedSlotPost.postId,
+  };
+  assert.equal(
+    hasIncompleteSourceOccurrenceSetForTesting([singleOccurrenceMatch], sharedSlotPost),
+    false,
+  );
+  const legacySingleFields = JSON.parse(singleOccurrenceResult.event.normalizedFieldsJson);
+  delete legacySingleFields.sourceOccurrenceSourceFingerprint;
+  assert.equal(
+    hasIncompleteSourceOccurrenceSetForTesting(
+      [
+        {
+          ...singleOccurrenceMatch,
+          existingEvent: {
+            ...singleOccurrenceMatch.existingEvent,
+            normalizedFieldsJson: JSON.stringify(legacySingleFields),
+          },
+        },
+      ],
+      sharedSlotPost,
+    ),
+    true,
+    "A legacy single-event row must be re-extracted so a changed source can add children.",
+  );
+  assert.equal(
+    hasIncompleteSourceOccurrenceSetForTesting(
+      [
+        {
+          ...singleOccurrenceMatch,
+          existingEvent: {
+            ...singleOccurrenceMatch.existingEvent,
+            normalizedFieldsJson: JSON.stringify({
+              ...JSON.parse(singleOccurrenceResult.event.normalizedFieldsJson),
+              sourceOccurrenceSourceFingerprint: "instagram-source-v1:stale",
+            }),
+          },
+        },
+      ],
+      sharedSlotPost,
+    ),
+    true,
+    "A changed source fingerprint must re-extract even when the old source had one event.",
+  );
+  const mixedLegacyFields = {
+    sourceOccurrenceSourceFingerprint: JSON.parse(
+      sharedSlotEvents[0].normalizedFieldsJson,
+    ).sourceOccurrenceSourceFingerprint,
+    multiEventSplitApplied: true,
+    multiEventSplitCount: 2,
+  };
+  assert.equal(
+    hasIncompleteSourceOccurrenceSetForTesting(
+      [
+        originalSharedSlotMatches[0],
+        {
+          existingEvent: {
+            ...sharedSlotEvents[1],
+            _id: "qa-mixed-legacy-existing",
+            sourceOccurrenceKey: undefined,
+            normalizedFieldsJson: JSON.stringify(mixedLegacyFields),
+          },
+          matchedBy: "post_id",
+          matchedValue: sharedSlotPost.postId,
+        },
+      ],
+      sharedSlotPost,
+    ),
+    true,
+    "Mixed exact-v2 and legacy metadata must re-extract rather than fall back to counts.",
+  );
+
+  const previousCronSecret = process.env.CRON_SECRET;
+  const atomicServiceSecret = "qa-atomic-source-occurrence-secret";
+  process.env.CRON_SECRET = atomicServiceSecret;
+  const atomicEvents = [];
+  const atomicReceipts = [];
+  const atomicAuditLogs = [];
+  const missingAtomicEventIds = new Set();
+  const atomicCtx = {
+    auth: { getUserIdentity: async () => null },
+    db: {
+      query: (table) => {
+        if (table === "venues") {
+          return {
+            collect: async () => [
+              {
+                _id: "qa-atomic-lozionica-venue",
+                name: "Ložionica",
+                instagramHandle: "tickets.rs",
+                category: "live music",
+                publicStatus: "published",
+              },
+            ],
+          };
+        }
+        if (table === "instagramSourceOccurrenceReceipts") {
+          return {
+            withIndex: (_indexName, configure) => {
+              let sourceIdentity = null;
+              const indexBuilder = {
+                eq: (field, value) => {
+                  if (field === "sourceIdentity") sourceIdentity = value;
+                  return indexBuilder;
+                },
+              };
+              configure(indexBuilder);
+              return {
+                unique: async () =>
+                  atomicReceipts.find(
+                    (receipt) => receipt.sourceIdentity === sourceIdentity,
+                  ) ?? null,
+              };
+            },
+          };
+        }
+        return {
+          withIndex: (_indexName, configure) => {
+            let sourceOccurrenceKey = null;
+            const indexBuilder = {
+              eq: (field, value) => {
+                if (field === "sourceOccurrenceKey") sourceOccurrenceKey = value;
+                return indexBuilder;
+              },
+            };
+            configure(indexBuilder);
+            return {
+              unique: async () =>
+                atomicEvents.find(
+                  (event) => event.sourceOccurrenceKey === sourceOccurrenceKey,
+                ) ?? null,
+            };
+          },
+        };
+      },
+      get: async (id) =>
+        missingAtomicEventIds.has(id)
+          ? null
+          : atomicEvents.find((event) => event._id === id) ?? null,
+      patch: async (id, patch) => {
+        const record =
+          atomicEvents.find((candidate) => candidate._id === id) ??
+          atomicReceipts.find((candidate) => candidate._id === id);
+        assert.ok(record);
+        Object.assign(record, patch);
+      },
+      insert: async (table, value) => {
+        if (table === "events") {
+          const event = {
+            _id: `qa-atomic-event-${atomicEvents.length + 1}`,
+            ...value,
+          };
+          atomicEvents.push(event);
+          return event._id;
+        }
+        if (table === "instagramSourceOccurrenceReceipts") {
+          const receipt = {
+            _id: `qa-atomic-receipt-${atomicReceipts.length + 1}`,
+            ...value,
+          };
+          atomicReceipts.push(receipt);
+          return receipt._id;
+        }
+        atomicAuditLogs.push(value);
+        return `qa-atomic-audit-${atomicAuditLogs.length}`;
+      },
+    },
+  };
+  const {
+    serviceSecret: _capturedServiceSecret,
+    returnCreateDisposition: _capturedDisposition,
+    ...atomicEventArgs
+  } = inserted[0];
+  try {
+    const firstAtomicCreate = await createEvent._handler(atomicCtx, {
+      ...atomicEventArgs,
+      returnCreateDisposition: true,
+      serviceSecret: atomicServiceSecret,
+    });
+    const racedAtomicCreate = await createEvent._handler(atomicCtx, {
+      ...atomicEventArgs,
+      title: "Joss Stone — concurrently normalized title",
+      time: "19h",
+      returnCreateDisposition: true,
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.deepEqual(firstAtomicCreate, {
+      eventId: "qa-atomic-event-1",
+      created: true,
+    });
+    assert.deepEqual(racedAtomicCreate, {
+      eventId: "qa-atomic-event-1",
+      created: false,
+    });
+    assert.equal(
+      atomicEvents.length,
+      1,
+      "The indexed source-occurrence check and insert must share one mutation boundary.",
+    );
+    assert.equal(atomicAuditLogs.length, 1);
+    assert.equal(atomicReceipts.length, 1);
+    assert.deepEqual(atomicReceipts[0].satisfiedKeys, [atomicEventArgs.sourceOccurrenceKey]);
+    const representedReceipt = await getInstagramSourceOccurrenceReceipt._handler(atomicCtx, {
+      sourceIdentity: atomicReceipts[0].sourceIdentity,
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.deepEqual(representedReceipt.satisfiedKeys, [atomicEventArgs.sourceOccurrenceKey]);
+    missingAtomicEventIds.add(atomicEvents[0]._id);
+    const staleRepresentativeReceipt = await getInstagramSourceOccurrenceReceipt._handler(
+      atomicCtx,
+      {
+        sourceIdentity: atomicReceipts[0].sourceIdentity,
+        serviceSecret: atomicServiceSecret,
+      },
+    );
+    assert.deepEqual(
+      staleRepresentativeReceipt.satisfiedKeys,
+      [],
+      "A receipt must not remain complete after the event representing its satisfied child is removed.",
+    );
+    missingAtomicEventIds.delete(atomicEvents[0]._id);
+
+    const deferredSourceIdentity = "instagram-source-identity-v1:qa-deferred-receipt";
+    const deferredFingerprint = "instagram-source-v1:qa-deferred-fingerprint";
+    const deferredFirstKey = `instagram-occurrence-v2:${"a".repeat(64)}`;
+    const deferredSecondKey = `instagram-occurrence-v2:${"b".repeat(64)}`;
+    const deferredFirstChildKey = "instagram-source-child-v1:qa-deferred-first";
+    const deferredSecondChildKey = "instagram-source-child-v1:qa-deferred-second";
+    await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: deferredSourceIdentity,
+        sourceFingerprint: deferredFingerprint,
+        expectedKeys: [deferredFirstKey],
+        deferredChildCount: 1,
+        deferredChildKeys: [deferredSecondChildKey],
+        observedChildKeys: [deferredFirstChildKey, deferredSecondChildKey],
+      },
+      satisfiedKey: deferredFirstKey,
+      representativeEventId: atomicEvents[0]._id,
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.equal(atomicReceipts[1].deferredChildCount, 1);
+    assert.deepEqual(atomicReceipts[1].expectedKeys, [deferredFirstKey]);
+    assert.deepEqual(atomicReceipts[1].satisfiedKeys, [deferredFirstKey]);
+    await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: deferredSourceIdentity,
+        sourceFingerprint: deferredFingerprint,
+        expectedKeys: [deferredFirstKey],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: [deferredFirstChildKey],
+      },
+      satisfiedKey: deferredFirstKey,
+      representativeEventId: atomicEvents[0]._id,
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.equal(
+      atomicReceipts[1].deferredChildCount,
+      1,
+      "A same-fingerprint retry that omits a deferred child must not erase the guard.",
+    );
+    const deferredSecondRepresentativeEventId = await atomicCtx.db.insert("events", {
+      ...atomicEventArgs,
+      sourceOccurrenceKey: deferredSecondKey,
+    });
+    await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: deferredSourceIdentity,
+        sourceFingerprint: deferredFingerprint,
+        expectedKeys: [deferredFirstKey, deferredSecondKey],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: [deferredFirstChildKey, deferredSecondChildKey],
+      },
+      satisfiedKey: deferredSecondKey,
+      representativeEventId: deferredSecondRepresentativeEventId,
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.equal(atomicReceipts[1].deferredChildCount, 0);
+    assert.deepEqual(atomicReceipts[1].expectedKeys, [deferredFirstKey, deferredSecondKey]);
+    assert.deepEqual(atomicReceipts[1].satisfiedKeys, [deferredFirstKey, deferredSecondKey]);
+    await assert.rejects(
+      recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+        plan: {
+          sourceIdentity: deferredSourceIdentity,
+          sourceFingerprint: deferredFingerprint,
+          expectedKeys: [deferredFirstKey, deferredSecondKey, `instagram-occurrence-v2:${"c".repeat(64)}`],
+          deferredChildCount: 0,
+          deferredChildKeys: [],
+          observedChildKeys: [
+            deferredFirstChildKey,
+            deferredSecondChildKey,
+            "instagram-source-child-v1:qa-deferred-third",
+          ],
+        },
+        satisfiedKey: `instagram-occurrence-v2:${"c".repeat(64)}`,
+        representativeEventId: deferredSecondRepresentativeEventId,
+        serviceSecret: atomicServiceSecret,
+      }),
+      /distinct representative events/i,
+    );
+    await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: deferredSourceIdentity,
+        sourceFingerprint: deferredFingerprint,
+        expectedKeys: [deferredSecondKey],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: [deferredSecondChildKey],
+        confirmedPastKeys: [deferredFirstKey],
+      },
+      satisfiedKey: deferredSecondKey,
+      representativeEventId: deferredSecondRepresentativeEventId,
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.deepEqual(
+      atomicReceipts[1].expectedKeys,
+      [deferredSecondKey],
+      "Safely confirmed-past keys must retire from the authoritative receipt.",
+    );
+    assert.deepEqual(atomicReceipts[1].satisfiedKeys, [deferredSecondKey]);
+    await reconcileInstagramSourceOccurrenceReceipt._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: deferredSourceIdentity,
+        sourceFingerprint: deferredFingerprint,
+        expectedKeys: [],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: [deferredSecondChildKey],
+        confirmedPastKeys: [deferredSecondKey],
+      },
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.deepEqual(atomicReceipts[1].expectedKeys, []);
+    assert.deepEqual(atomicReceipts[1].satisfiedKeys, []);
+    assert.deepEqual(atomicReceipts[1].satisfiedOccurrences, []);
+
+    const deferredOnlySourceIdentity =
+      "instagram-source-identity-v1:qa-deferred-only";
+    const deferredOnlyChildKey =
+      "instagram-source-child-v1:qa-deferred-only-child";
+    await reconcileInstagramSourceOccurrenceReceipt._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: deferredOnlySourceIdentity,
+        sourceFingerprint: deferredFingerprint,
+        expectedKeys: [],
+        deferredChildCount: 1,
+        deferredChildKeys: [deferredOnlyChildKey],
+        observedChildKeys: [deferredOnlyChildKey],
+      },
+      serviceSecret: atomicServiceSecret,
+    });
+    const deferredOnlyReceipt = atomicReceipts.find(
+      (receipt) => receipt.sourceIdentity === deferredOnlySourceIdentity,
+    );
+    assert.deepEqual(deferredOnlyReceipt.expectedKeys, []);
+    assert.deepEqual(deferredOnlyReceipt.deferredChildKeys, [deferredOnlyChildKey]);
+    assert.equal(deferredOnlyReceipt.deferredChildCount, 1);
+
+    const staleSourceIdentity = "instagram-source-identity-v1:qa-stale-worker";
+    const staleKey = `instagram-occurrence-v2:${"d".repeat(64)}`;
+    await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: staleSourceIdentity,
+        sourceFingerprint: "instagram-source-v1:f1",
+        expectedKeys: [staleKey],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: ["instagram-source-child-v1:qa-stale"],
+      },
+      satisfiedKey: staleKey,
+      representativeEventId: atomicEvents[0]._id,
+      serviceSecret: atomicServiceSecret,
+    });
+    await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: staleSourceIdentity,
+        sourceFingerprint: "instagram-source-v1:f2",
+        previousSourceFingerprint: "instagram-source-v1:f1",
+        expectedKeys: [staleKey],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: ["instagram-source-child-v1:qa-stale"],
+      },
+      satisfiedKey: staleKey,
+      representativeEventId: atomicEvents[0]._id,
+      serviceSecret: atomicServiceSecret,
+    });
+    await assert.rejects(
+      recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+        plan: {
+          sourceIdentity: staleSourceIdentity,
+          sourceFingerprint: "instagram-source-v1:f1",
+          previousSourceFingerprint: "instagram-source-v1:f1",
+          expectedKeys: [staleKey],
+          deferredChildCount: 0,
+          deferredChildKeys: [],
+          observedChildKeys: ["instagram-source-child-v1:qa-stale"],
+        },
+        satisfiedKey: staleKey,
+        representativeEventId: atomicEvents[0]._id,
+        serviceSecret: atomicServiceSecret,
+      }),
+      /receipt plan is stale/i,
+    );
+    assert.equal(
+      atomicReceipts.find((receipt) => receipt.sourceIdentity === staleSourceIdentity)
+        .sourceFingerprint,
+      "instagram-source-v1:f2",
+    );
+    const descriptionBeforeStaleAtomicUpdate = atomicEvents[0].description;
+    await assert.rejects(
+      updateEventAndRecordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+        id: atomicEvents[0]._id,
+        patch: { description: "stale-f1-write" },
+        expectedStatus: atomicEvents[0].status,
+        plan: {
+          sourceIdentity: staleSourceIdentity,
+          sourceFingerprint: "instagram-source-v1:f1",
+          previousSourceFingerprint: "instagram-source-v1:f1",
+          expectedKeys: [staleKey],
+          deferredChildCount: 0,
+          deferredChildKeys: [],
+          observedChildKeys: ["instagram-source-child-v1:qa-stale"],
+        },
+        satisfiedKey: staleKey,
+        serviceSecret: atomicServiceSecret,
+      }),
+      /receipt plan is stale/i,
+    );
+    assert.equal(
+      atomicEvents[0].description,
+      descriptionBeforeStaleAtomicUpdate,
+      "A stale receipt generation must reject before any public event repair commits.",
+    );
+
+    const migratedSourceIdentity = "instagram-source-identity-v1:qa-key-migration";
+    const migratedOldKey = `instagram-occurrence-v2:${"e".repeat(64)}`;
+    const migratedNewKey = `instagram-occurrence-v2:${"f".repeat(64)}`;
+    const migratedSiblingKey = `instagram-occurrence-v2:${"1".repeat(64)}`;
+    await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: migratedSourceIdentity,
+        sourceFingerprint: "instagram-source-v2:migration-f1",
+        expectedKeys: [migratedOldKey],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: ["instagram-source-child-v1:qa-migration-a"],
+      },
+      satisfiedKey: migratedOldKey,
+      representativeEventId: atomicEvents[0]._id,
+      serviceSecret: atomicServiceSecret,
+    });
+    await updateEventAndRecordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      id: atomicEvents[0]._id,
+      patch: { description: "migrated-f2-a" },
+      expectedStatus: atomicEvents[0].status,
+      plan: {
+        sourceIdentity: migratedSourceIdentity,
+        sourceFingerprint: "instagram-source-v2:migration-f2",
+        previousSourceFingerprint: "instagram-source-v2:migration-f1",
+        expectedKeys: [migratedNewKey, migratedSiblingKey],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: [
+          "instagram-source-child-v1:qa-migration-a",
+          "instagram-source-child-v1:qa-migration-b",
+        ],
+      },
+      satisfiedKey: migratedNewKey,
+      supersededKey: migratedOldKey,
+      serviceSecret: atomicServiceSecret,
+    });
+    const migratedReceipt = atomicReceipts.find(
+      (receipt) => receipt.sourceIdentity === migratedSourceIdentity,
+    );
+    assert.deepEqual(
+      new Set(migratedReceipt.expectedKeys),
+      new Set([migratedNewKey, migratedSiblingKey]),
+    );
+    assert.deepEqual(migratedReceipt.satisfiedKeys, [migratedNewKey]);
+    assert.deepEqual(migratedReceipt.satisfiedOccurrences, [
+      { key: migratedNewKey, eventId: atomicEvents[0]._id },
+    ]);
+    assert.equal(atomicEvents[0].description, "migrated-f2-a");
+    const migratedSiblingEventId = await atomicCtx.db.insert("events", {
+      ...atomicEventArgs,
+      sourceOccurrenceKey: migratedSiblingKey,
+      description: "migrated-f2-b",
+    });
+    await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: migratedSourceIdentity,
+        sourceFingerprint: "instagram-source-v2:migration-f2",
+        previousSourceFingerprint: "instagram-source-v2:migration-f1",
+        expectedKeys: [migratedNewKey, migratedSiblingKey],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: [
+          "instagram-source-child-v1:qa-migration-a",
+          "instagram-source-child-v1:qa-migration-b",
+        ],
+      },
+      satisfiedKey: migratedSiblingKey,
+      representativeEventId: migratedSiblingEventId,
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.deepEqual(
+      new Set(migratedReceipt.satisfiedKeys),
+      new Set([migratedNewKey, migratedSiblingKey]),
+    );
+    await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
+      plan: {
+        sourceIdentity: migratedSourceIdentity,
+        sourceFingerprint: "instagram-source-v2:migration-f2",
+        previousSourceFingerprint: "instagram-source-v2:migration-f1",
+        expectedKeys: [migratedNewKey, migratedSiblingKey],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        observedChildKeys: [
+          "instagram-source-child-v1:qa-migration-a",
+          "instagram-source-child-v1:qa-migration-b",
+        ],
+      },
+      satisfiedKey: migratedNewKey,
+      representativeEventId: atomicEvents[0]._id,
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.deepEqual(
+      new Set(migratedReceipt.satisfiedKeys),
+      new Set([migratedNewKey, migratedSiblingKey]),
+    );
+    assert.equal(atomicEvents[0].title, atomicEventArgs.title);
+
+    const titleBeforeMetadataReduction = atomicEvents[0].title;
+    const timeBeforeMetadataReduction = atomicEvents[0].time;
+    const atomicOccurrenceMetadata = JSON.parse(atomicEvents[0].normalizedFieldsJson);
+    const atomicExpectedKeys = atomicOccurrenceMetadata.sourceOccurrenceExpectedKeys;
+    atomicEvents[0].status = "approved";
+    const reducedMetadata = await updateSourceOccurrenceExpectedCount._handler(atomicCtx, {
+      id: atomicEvents[0]._id,
+      sourceOccurrenceKey: atomicEvents[0].sourceOccurrenceKey,
+      expectedCurrentCount: 2,
+      expectedCurrentKeys: atomicExpectedKeys,
+      expectedCurrentDeferredChildCount: 0,
+      expectedCurrentSourceFingerprint:
+        atomicOccurrenceMetadata.sourceOccurrenceSourceFingerprint,
+      nextExpectedCount: 1,
+      nextExpectedKeys: [atomicEvents[0].sourceOccurrenceKey],
+      nextDeferredChildCount: 0,
+      nextSourceFingerprint: atomicOccurrenceMetadata.sourceOccurrenceSourceFingerprint,
+      confirmedPastKeys: atomicExpectedKeys.filter(
+        (key) => key !== atomicEvents[0].sourceOccurrenceKey,
+      ),
+      serviceSecret: atomicServiceSecret,
+    });
+    assert.deepEqual(reducedMetadata, { updated: true });
+    assert.equal(atomicEvents[0].title, titleBeforeMetadataReduction);
+    assert.equal(atomicEvents[0].time, timeBeforeMetadataReduction);
+    assert.equal(
+      JSON.parse(atomicEvents[0].normalizedFieldsJson).sourceOccurrenceExpectedCount,
+      1,
+      "Operational completeness metadata must be reducible without changing approved public fields.",
+    );
+    assert.equal(atomicAuditLogs.length, 3);
+  } finally {
+    if (previousCronSecret === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = previousCronSecret;
+  }
+
+  const atomicRaceSummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  const atomicRaceCreates = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => [],
+        mutation: async (_reference, args) => {
+          assert.equal("id" in args, false);
+          atomicRaceCreates.push(args);
+          return args.time === "19:00"
+            ? { eventId: "qa-raced-existing-19", created: false }
+            : { eventId: "qa-created-22", created: true };
+        },
+      },
+      handle: "tickets.rs",
+      post,
+      summary: atomicRaceSummary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted,
+    }),
+  );
+  assert.equal(atomicRaceCreates.length, 2);
+  assert.equal(atomicRaceSummary.insertedEvents, 1);
+  assert.equal(atomicRaceSummary.skippedDuplicates, 1);
+  assert.equal(atomicRaceSummary.updated_duplicates_bad_data, 0);
+
+  const existingFirstOccurrence = {
+    ...inserted[0],
+    _id: "qa-existing-first-occurrence",
+    title: "Joss Stone — moderated title",
+    time: "7 pm",
+    normalizedFieldsJson: JSON.stringify({
+      ...JSON.parse(inserted[0].normalizedFieldsJson),
+      splitSource: "model_schedule",
+    }),
+  };
+  const retrySummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  const retryInserted = [];
+  const retryUpdated = [];
+  const retryReceipts = [];
+  const retryClient = {
+    query: async () => [existingFirstOccurrence],
+    mutation: async (_reference, args) => {
+      if ("representativeEventId" in args) {
+        retryReceipts.push(args);
+        return { recorded: true };
+      }
+      if ("id" in args) {
+        retryUpdated.push(args);
+        return args.id;
+      }
+      retryInserted.push(args);
+      return `qa-recovered-occurrence-${retryInserted.length}`;
+    },
+  };
+
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: retryClient,
+      handle: "tickets.rs",
+      post,
+      summary: retrySummary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted,
+    }),
+  );
+
+  assert.deepEqual(
+    retryInserted.map((event) => event.time),
+    ["22:00"],
+    "Retrying a partially persisted multi-event post must recover the missing occurrence.",
+  );
+  assert.equal(retryUpdated.length, 0);
+  assert.equal(retrySummary.insertedEvents, 1);
+  assert.equal(retrySummary.skippedDuplicates, 1);
+
+  const legacyFirstNormalizedFields = JSON.parse(inserted[0].normalizedFieldsJson);
+  delete legacyFirstNormalizedFields.sourceOccurrenceExpectedCount;
+  delete legacyFirstNormalizedFields.sourceOccurrenceExpectedKeys;
+  delete legacyFirstNormalizedFields.sourceOccurrenceKey;
+  legacyFirstNormalizedFields.dateRangeExpandedCount = 1;
+  const legacyFirstOccurrence = {
+    ...inserted[0],
+    _id: "qa-legacy-first-occurrence",
+    sourceOccurrenceKey: undefined,
+    normalizedFieldsJson: JSON.stringify(legacyFirstNormalizedFields),
+  };
+  const legacyRetryCreates = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => [legacyFirstOccurrence],
+        mutation: async (_reference, args) => {
+          if ("representativeEventId" in args) {
+            return { recorded: true };
+          }
+          legacyRetryCreates.push(args);
+          return "qa-legacy-recovered-second-occurrence";
+        },
+      },
+      handle: "tickets.rs",
+      post,
+      summary: createEmptyIngestionSummary(["tickets.rs"]).handles[0],
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted,
+    }),
+  );
+  assert.deepEqual(
+    legacyRetryCreates.map((event) => event.time),
+    ["22:00"],
+    "Legacy multi-event counts must not be masked by a non-range count of one.",
+  );
+
+  const completeExistingOccurrences = inserted.map((event, index) => ({
+    ...event,
+    _id: `qa-complete-occurrence-${index + 1}`,
+  }));
+  const completeSummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  const completeMutations = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => completeExistingOccurrences,
+        mutation: async (_reference, args) => {
+          completeMutations.push(args);
+          return "qa-unexpected-complete-mutation";
+        },
+      },
+      handle: "tickets.rs",
+      post,
+      summary: completeSummary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted,
+    }),
+  );
+  assert.equal(completeMutations.length, 0);
+  assert.equal(
+    completeSummary.skippedDuplicates,
+    1,
+    "A complete deterministic child set should retain the cheap source-post precheck skip.",
+  );
+
+  const pastDateLabel = ddmmForIsoDate(isoDateDaysFromNow(-3));
+  const eligibleDateLabel = ddmmForIsoDate(isoDateDaysFromNow(8));
+  const mixedCaption = [
+    `${pastDateLabel} - Historical Set 18H`,
+    `${eligibleDateLabel} - Upcoming Set 20H`,
+  ].join("\n");
+  const mixedPost = makeInstagramPost({
+    postId: "qa-mixed-eligibility-persistence",
+    instagramPostUrl: "https://www.instagram.com/p/qa-mixed-eligibility-persistence/",
+    caption: mixedCaption,
+    postType: "video",
+    username: "tickets.rs",
+  });
+  const mixedExtracted = makeExtractedEvent({
+    title: "Upcoming Set",
+    date: eligibleDateLabel,
+    time: "20:00",
+    venue: "Ložionica",
+    artists: ["Upcoming Set"],
+    source_caption: mixedCaption,
+  });
+  const mixedSummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  const mixedInserted = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => [],
+        mutation: async (_reference, args) => {
+          mixedInserted.push(args);
+          return "qa-mixed-eligible-occurrence";
+        },
+      },
+      handle: "tickets.rs",
+      post: mixedPost,
+      summary: mixedSummary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted: mixedExtracted,
+    }),
+  );
+  assert.equal(mixedInserted.length, 1);
+  assert.equal(
+    JSON.parse(mixedInserted[0].normalizedFieldsJson).sourceOccurrenceExpectedCount,
+    1,
+    "Expected child count must describe persistable occurrences, not intentionally skipped rows.",
+  );
+  assert.equal(mixedSummary.skipped_past_event, 1);
+
+  const mixedPastOccurrenceKey = buildSourceOccurrenceKeyForTesting(
+    mixedPost,
+    isoDateDaysFromNow(-3),
+    "18:00",
+    {
+      multiEventSplitDetected: true,
+      multiEventSplitCount: 2,
+      splitEventIndex: 1,
+      splitSourceLine: mixedCaption.split("\n")[0],
+      rowSourceText: mixedCaption.split("\n")[0],
+    },
+  );
+  const mixedCurrentOccurrenceKey = mixedInserted[0].sourceOccurrenceKey;
+  const staleMixedExisting = {
+    ...mixedInserted[0],
+    _id: "qa-mixed-existing",
+    normalizedFieldsJson: JSON.stringify({
+      ...JSON.parse(mixedInserted[0].normalizedFieldsJson),
+      sourceOccurrenceExpectedCount: 2,
+      sourceOccurrenceExpectedKeys: [
+        mixedPastOccurrenceKey,
+        mixedCurrentOccurrenceKey,
+      ],
+    }),
+  };
+  const staleReductionSummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  const staleReductionMutations = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => [staleMixedExisting],
+        mutation: async (_reference, args) => {
+          if ("representativeEventId" in args) {
+            return { recorded: true };
+          }
+          assert.equal(args.id, staleMixedExisting._id);
+          assert.equal(args.expectedCurrentCount, 2);
+          assert.deepEqual(args.expectedCurrentKeys, [
+            mixedPastOccurrenceKey,
+            mixedCurrentOccurrenceKey,
+          ]);
+          assert.equal(args.nextExpectedCount, 1);
+          assert.deepEqual(args.nextExpectedKeys, [mixedCurrentOccurrenceKey]);
+          assert.equal(args.sourceOccurrenceKey, staleMixedExisting.sourceOccurrenceKey);
+          staleReductionMutations.push(args);
+          staleMixedExisting.normalizedFieldsJson = JSON.stringify({
+            ...JSON.parse(staleMixedExisting.normalizedFieldsJson),
+            sourceOccurrenceExpectedCount: args.nextExpectedCount,
+            sourceOccurrenceExpectedKeys: args.nextExpectedKeys,
+          });
+          return { updated: true };
+        },
+      },
+      handle: "tickets.rs",
+      post: mixedPost,
+      summary: staleReductionSummary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted: mixedExtracted,
+    }),
+  );
+  assert.equal(staleReductionMutations.length, 1);
+  assert.equal(staleReductionSummary.insertedEvents, 0);
+  assert.equal(staleReductionSummary.skippedDuplicates, 1);
+  assert.equal(staleReductionSummary.skipped_past_event, 1);
+  assert.equal(
+    JSON.parse(staleMixedExisting.normalizedFieldsJson).sourceOccurrenceExpectedCount,
+    1,
+    "A retry must persist a reduced eligible-child count on the preserved sibling.",
+  );
+
+  const guardedMissingDate = isoDateDaysFromNow(9);
+  const guardedMissingDateLabel = ddmmForIsoDate(guardedMissingDate);
+  const guardedMissingLine = `${guardedMissingDateLabel} - Recovered Set 18H`;
+  const guardedCurrentLine = mixedCaption.split("\n")[1];
+  const guardedMissingOccurrenceKey = buildSourceOccurrenceKeyForTesting(
+    mixedPost,
+    guardedMissingDate,
+    "18:00",
+    {
+      multiEventSplitDetected: true,
+      multiEventSplitCount: 2,
+      splitEventIndex: 1,
+      splitSourceLine: guardedMissingLine,
+      rowSourceText: guardedMissingLine,
+    },
+  );
+  const guardedExisting = {
+    ...mixedInserted[0],
+    _id: "qa-transient-past-guard-existing",
+    normalizedFieldsJson: JSON.stringify({
+      ...JSON.parse(mixedInserted[0].normalizedFieldsJson),
+      sourceOccurrenceExpectedCount: 2,
+      sourceOccurrenceExpectedKeys: [
+        guardedMissingOccurrenceKey,
+        mixedCurrentOccurrenceKey,
+      ],
+    }),
+  };
+  const guardedTransientMutations = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => [guardedExisting],
+        mutation: async (_reference, args) => {
+          if ("representativeEventId" in args) {
+            return { recorded: true };
+          }
+          guardedTransientMutations.push(args);
+          return "qa-unexpected-transient-reduction";
+        },
+      },
+      handle: "tickets.rs",
+      post: mixedPost,
+      summary: createEmptyIngestionSummary(["tickets.rs"]).handles[0],
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted: mixedExtracted,
+    }),
+  );
+  assert.equal(
+    guardedTransientMutations.length,
+    0,
+    "A transient past row with a different occurrence key must not shrink completeness.",
+  );
+  assert.equal(
+    JSON.parse(guardedExisting.normalizedFieldsJson).sourceOccurrenceExpectedCount,
+    2,
+  );
+
+  const guardedCaption = [guardedMissingLine, guardedCurrentLine].join("\n");
+  const guardedPost = {
+    ...mixedPost,
+    caption: guardedCaption,
+  };
+  const guardedExtracted = makeExtractedEvent({
+    title: "Upcoming Set",
+    date: eligibleDateLabel,
+    time: "20:00",
+    venue: "Ložionica",
+    artists: ["Upcoming Set"],
+    source_caption: guardedCaption,
+  });
+  const guardedRecoveryCreates = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => [guardedExisting],
+        mutation: async (_reference, args) => {
+          if ("representativeEventId" in args) {
+            return { recorded: true };
+          }
+          if ("id" in args) {
+            return { updated: true };
+          }
+          guardedRecoveryCreates.push(args);
+          return "qa-transient-guard-recovered-child";
+        },
+      },
+      handle: "tickets.rs",
+      post: guardedPost,
+      summary: createEmptyIngestionSummary(["tickets.rs"]).handles[0],
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted: guardedExtracted,
+    }),
+  );
+  assert.deepEqual(
+    guardedRecoveryCreates.map((event) => event.date),
+    [guardedMissingDate],
+    "A later accurate extraction must still recover the child protected from transient shrinkage.",
+  );
+
+  const mixedRetrySummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  const mixedRetryMutations = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => [staleMixedExisting],
+        mutation: async (_reference, args) => {
+          mixedRetryMutations.push(args);
+          return "qa-unexpected-mixed-retry-mutation";
+        },
+      },
+      handle: "tickets.rs",
+      post: mixedPost,
+      summary: mixedRetrySummary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted: mixedExtracted,
+    }),
+  );
+  assert.equal(mixedRetryMutations.length, 0);
+  assert.equal(mixedRetrySummary.skippedDuplicates, 1);
+  assert.equal(
+    mixedRetrySummary.skipped_past_event,
+    0,
+    "A reduced complete eligible child set must skip before re-extracting past rows.",
+  );
+
+  const rangeDates = futureSameMonthIsoDateRange(2, 9);
+  const rangeStart = datePartsForIsoDate(rangeDates[0]);
+  const rangeEnd = datePartsForIsoDate(rangeDates[1]);
+  const rangeCaption = [
+    "Bioskop Akademije 28",
+    "BROKEN ENGLISH",
+    `Svake večeri od ${rangeStart.day}. do ${rangeEnd.day}. ${rangeStart.serbianMonthGenitive} u 19h`,
+  ].join("\n");
+  const rangePost = makeInstagramPost({
+    postId: "qa-date-range-partial-persistence",
+    instagramPostUrl: "https://www.instagram.com/p/qa-date-range-partial-persistence/",
+    caption: rangeCaption,
+    postType: "video",
+    username: "akademija28",
+  });
+  const rangeExtracted = makeExtractedEvent({
+    title: "BROKEN ENGLISH",
+    date: "",
+    time: "19:00",
+    venue: "Akademija 28",
+    artists: [],
+    category: "arts & culture",
+    confidence: 0.9,
+    source_caption: rangeCaption,
+    field_confirmation: makeFieldConfirmation(0.9),
+  });
+  const rangeInitialSummary = createEmptyIngestionSummary(["akademija28"]).handles[0];
+  const rangeInitialCreates = [];
+  await withoutConsoleInfoAndError(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => [],
+        mutation: async (_reference, args) => {
+          if (rangeInitialCreates.length > 0) {
+            throw new Error("qa simulated second date insert failure");
+          }
+          rangeInitialCreates.push(args);
+          return "qa-range-first-date";
+        },
+      },
+      handle: "akademija28",
+      post: rangePost,
+      summary: rangeInitialSummary,
+      canonicalVenueNamesByHandle: { akademija28: "Akademija 28" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { akademija28: "Akademija 28" },
+      serviceSecret: "qa-date-range-secret",
+      extracted: rangeExtracted,
+    }),
+  );
+  assert.equal(rangeInitialCreates.length, 1);
+  assert.equal(rangeInitialSummary.insertedEvents, 1);
+  assert.ok(
+    rangeInitialSummary.errors.some((message) =>
+      message.includes("qa simulated second date insert failure"),
+    ),
+    "The initial range pass must attempt and fail the second child before retry recovery.",
+  );
+  assert.equal(rangeInitialCreates[0].date, rangeDates[0]);
+  assert.equal(
+    buildSourceOccurrenceKeyForTesting(
+      rangePost,
+      rangeInitialCreates[0].date,
+      "TBD",
+      JSON.parse(rangeInitialCreates[0].normalizedFieldsJson),
+    ),
+    rangeInitialCreates[0].sourceOccurrenceKey,
+    "Date-range child identity must remain stable when its time presentation changes.",
+  );
+  assert.equal(
+    JSON.parse(rangeInitialCreates[0].normalizedFieldsJson).sourceOccurrenceExpectedCount,
+    2,
+    "Expanded date ranges must participate in source-child completeness tracking.",
+  );
+
+  const rangeFirstExisting = {
+    ...rangeInitialCreates[0],
+    _id: "qa-range-first-existing",
+    time: "TBD",
+    timeStatus: "tbd",
+    normalizedFieldsJson: JSON.stringify({
+      ...JSON.parse(rangeInitialCreates[0].normalizedFieldsJson),
+      time: "TBD",
+      timeStatus: "tbd",
+    }),
+  };
+  const rangeRetrySummary = createEmptyIngestionSummary(["akademija28"]).handles[0];
+  const rangeRetryCreates = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => [rangeFirstExisting],
+        mutation: async (_reference, args) => {
+          if ("representativeEventId" in args) {
+            return { recorded: true };
+          }
+          assert.equal("id" in args, false);
+          rangeRetryCreates.push(args);
+          return "qa-range-recovered-second-date";
+        },
+      },
+      handle: "akademija28",
+      post: rangePost,
+      summary: rangeRetrySummary,
+      canonicalVenueNamesByHandle: { akademija28: "Akademija 28" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { akademija28: "Akademija 28" },
+      serviceSecret: "qa-date-range-secret",
+      extracted: rangeExtracted,
+    }),
+  );
+  assert.deepEqual(rangeRetryCreates.map((event) => event.date), [rangeDates[1]]);
+  assert.equal(rangeRetrySummary.insertedEvents, 1);
+  assert.equal(rangeRetrySummary.skippedDuplicates, 1);
+
+  const rangeCompleteEvents = [
+    rangeFirstExisting,
+    { ...rangeRetryCreates[0], _id: "qa-range-second-existing" },
+  ];
+  const rangeCompleteSummary = createEmptyIngestionSummary(["akademija28"]).handles[0];
+  const rangeCompleteMutations = [];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async () => rangeCompleteEvents,
+        mutation: async (_reference, args) => {
+          rangeCompleteMutations.push(args);
+          return "qa-unexpected-range-complete-mutation";
+        },
+      },
+      handle: "akademija28",
+      post: rangePost,
+      summary: rangeCompleteSummary,
+      canonicalVenueNamesByHandle: { akademija28: "Akademija 28" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { akademija28: "Akademija 28" },
+      serviceSecret: "qa-date-range-secret",
+      extracted: rangeExtracted,
+    }),
+  );
+  assert.equal(rangeCompleteMutations.length, 0);
+  assert.equal(rangeCompleteSummary.skippedDuplicates, 1);
+
+  const semanticSummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  const semanticInserted = [];
+  const semanticUpdated = [];
+  const semanticReceipts = [];
+  const semanticExisting = {
+    ...inserted[0],
+    _id: "qa-other-source-same-time",
+    instagramPostId: "qa-other-source-post",
+    instagramPostUrl: "https://www.instagram.com/p/qa-other-source-post/",
+  };
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async (_reference, args) => ("date" in args ? [semanticExisting] : []),
+        mutation: async (_reference, args) => {
+          if ("representativeEventId" in args) {
+            semanticReceipts.push(args);
+            return { recorded: true };
+          }
+          if ("id" in args) {
+            semanticUpdated.push(args);
+            return args.id;
+          }
+          semanticInserted.push(args);
+          return `qa-semantic-occurrence-${semanticInserted.length}`;
+        },
+      },
+      handle: "tickets.rs",
+      post,
+      summary: semanticSummary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted,
+    }),
+  );
+  assert.deepEqual(
+    semanticInserted.map((event) => event.time),
+    ["22:00"],
+    "A same-title/date event from another source must not absorb a distinct explicit time.",
+  );
+  assert.equal(semanticUpdated.length, 0);
+  assert.equal(semanticSummary.skippedDuplicates, 1);
+  assert.equal(semanticSummary.insertedEvents, 1);
+  assert.equal(semanticReceipts.length, 1);
+  const completedSemanticPlan = semanticReceipts[0].plan;
+  assert.deepEqual(
+    [...completedSemanticPlan.expectedKeys].sort(),
+    [
+      semanticReceipts[0].satisfiedKey,
+      semanticInserted[0].sourceOccurrenceKey,
+    ].sort(),
+  );
+  const semanticReplaySummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  const semanticReplayMutations = [];
+  const semanticReplayMediaActions = [];
+  const semanticReplayPost = {
+    ...post,
+    imageUrl: "https://instagram.example/qa-replay.jpg",
+    imageUrls: ["https://instagram.example/qa-replay.jpg"],
+  };
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async (_reference, args) =>
+          "sourceIdentity" in args
+            ? {
+                ...completedSemanticPlan,
+                satisfiedKeys: completedSemanticPlan.expectedKeys,
+                satisfiedOccurrences: completedSemanticPlan.expectedKeys.map(
+                  (key, index) => ({ key, eventId: `qa-semantic-representative-${index}` }),
+                ),
+              }
+            : [
+                {
+                  ...semanticExisting,
+                  imageStorageId: undefined,
+                  normalizedFieldsJson: JSON.stringify({
+                    ...JSON.parse(semanticExisting.normalizedFieldsJson),
+                    normalizedIsValid: true,
+                    sourceGroundingVerified: true,
+                  }),
+                },
+              ],
+        mutation: async (_reference, args) => {
+          semanticReplayMutations.push(args);
+          return "qa-unexpected-semantic-replay-mutation";
+        },
+        action: async (_reference, args) => {
+          semanticReplayMediaActions.push(args);
+          return { persisted: true };
+        },
+      },
+      handle: "tickets.rs",
+      post: semanticReplayPost,
+      summary: semanticReplaySummary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted,
+    }),
+  );
+  assert.equal(semanticReplayMutations.length, 0);
+  assert.equal(
+    semanticReplayMediaActions.length,
+    1,
+    "A complete source receipt must still retry missing durable media.",
+  );
+  assert.equal(semanticReplaySummary.persistedImages, 1);
+  assert.equal(semanticReplaySummary.skippedDuplicates, 1);
+  assert.equal(semanticReplaySummary.insertedEvents, 0);
+
+  const previousReprocessExisting = process.env.INGESTION_REPROCESS_EXISTING_SOURCE_POSTS;
+  const forcedReplayMutations = [];
+  process.env.INGESTION_REPROCESS_EXISTING_SOURCE_POSTS = "true";
+  try {
+    await withoutConsoleInfo(() =>
+      processIngestionPostWithExtractionForTesting({
+        client: {
+          query: async (_reference, args) =>
+            "sourceIdentity" in args
+              ? {
+                  ...completedSemanticPlan,
+                  satisfiedKeys: completedSemanticPlan.expectedKeys,
+                  satisfiedOccurrences: completedSemanticPlan.expectedKeys.map(
+                    (key, index) => ({
+                      key,
+                      eventId: index === 0 ? semanticExisting._id : `qa-force-event-${index}`,
+                    })),
+                }
+              : [semanticExisting],
+          mutation: async (_reference, args) => {
+            forcedReplayMutations.push(args);
+            return "id" in args
+              ? args.id
+              : { eventId: "qa-force-replay-created", created: true };
+          },
+        },
+        handle: "tickets.rs",
+        post,
+        summary: createEmptyIngestionSummary(["tickets.rs"]).handles[0],
+        canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+        venueNameOverridesByHandle: {},
+        configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+        serviceSecret: "qa-distinct-occurrence-secret",
+        extracted,
+      }),
+    );
+  } finally {
+    if (previousReprocessExisting === undefined) {
+      delete process.env.INGESTION_REPROCESS_EXISTING_SOURCE_POSTS;
+    } else {
+      process.env.INGESTION_REPROCESS_EXISTING_SOURCE_POSTS = previousReprocessExisting;
+    }
+  }
+  assert.ok(
+    forcedReplayMutations.length > 0,
+    "The explicit reprocess override must bypass an otherwise complete receipt.",
+  );
+
+  const failedRepairFields = {
+    ...JSON.parse(semanticExisting.normalizedFieldsJson),
+    confidence: 0.1,
+  };
+  const failedRepairExisting = {
+    ...semanticExisting,
+    normalizedFieldsJson: JSON.stringify(failedRepairFields),
+  };
+  const failedRepairReceipts = [];
+  const failedRepairSummary = createEmptyIngestionSummary(["tickets.rs"]).handles[0];
+  await withoutConsoleInfo(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async (_reference, args) =>
+          "sourceIdentity" in args ? null : "date" in args ? [failedRepairExisting] : [],
+        mutation: async (_reference, args) => {
+          if ("representativeEventId" in args) {
+            failedRepairReceipts.push(args);
+            return { recorded: true };
+          }
+          if ("id" in args) {
+            throw new Error("qa-required-duplicate-repair-failed");
+          }
+          return { eventId: "qa-failed-repair-other-child", created: true };
+        },
+      },
+      handle: "tickets.rs",
+      post,
+      summary: failedRepairSummary,
+      canonicalVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { "tickets.rs": "Ložionica" },
+      serviceSecret: "qa-distinct-occurrence-secret",
+      extracted,
+    }),
+  );
+  assert.equal(failedRepairSummary.duplicate_update_failed, 1);
+  assert.equal(
+    failedRepairReceipts.length,
+    0,
+    "A child whose required duplicate repair failed must not be marked satisfied in the source receipt.",
+  );
+}
+
 async function runApprovedMergeBoundaryQa() {
   const previousAdminUserIds = process.env.ADMIN_CLERK_USER_IDS;
   const adminUserId = "qa-merge-admin";
@@ -6101,6 +8608,8 @@ runTicketPriceQa();
 runNamedRepertoireScheduleDeduplicationQa();
 runAtomicDuplicateStatusPreconditionQa();
 await runServiceApprovalMutationBoundaryQa();
+await runHardMappedVenueAuthorityMutationBoundaryQa();
+await runDistinctOccurrencePersistenceQa();
 await runApprovedMergeBoundaryQa();
 await runTransactionalSourceGroundingReprocessQa();
 
