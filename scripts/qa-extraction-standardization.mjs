@@ -3010,8 +3010,15 @@ function runSourceGroundingAdversarialQa() {
     time: "20:30",
     category: "arts & culture",
   });
-  assert.equal(doorClockPrepared.event.status, "pending");
-  assert.equal(readPreparedNormalizedFields(doorClockPrepared).sourceGroundingTimeVerified, false);
+  assert.equal(doorClockPrepared.event.status, "approved");
+  assert.equal(doorClockPrepared.event.time, TBD_EVENT_TIME);
+  assert.equal(readPreparedNormalizedFields(doorClockPrepared).sourceGroundingTimeVerified, null);
+  assert.equal(readPreparedNormalizedFields(doorClockPrepared).unsourcedTimeDemotedToTbd, true);
+  assert.ok(
+    readPreparedNormalizedFields(doorClockPrepared).moderationSignals.includes(
+      "unsourced_time_demoted_to_tbd",
+    ),
+  );
   for (const [doorText, proposedTime] of [
     ["Vrata se otvaraju u 20 časova.", "20:00"],
     ["Vrata se otvaraju u 20 casova.", "20:00"],
@@ -3036,15 +3043,20 @@ function runSourceGroundingAdversarialQa() {
       time: proposedTime,
       category: "arts & culture",
     });
+    assert.equal(doorSuffixAsStart.event.status, "approved");
     assert.equal(
-      doorSuffixAsStart.event.status,
-      "pending",
-      `Door-only clock must not publish as start time: ${doorText}`,
+      doorSuffixAsStart.event.time,
+      TBD_EVENT_TIME,
+      `Door-only clock must be demoted rather than published as start time: ${doorText}`,
     );
     assert.equal(
       readPreparedNormalizedFields(doorSuffixAsStart).sourceGroundingTimeVerified,
-      false,
+      null,
       `Door-only clock must not verify source start time: ${doorText}`,
+    );
+    assert.equal(
+      readPreparedNormalizedFields(doorSuffixAsStart).unsourcedTimeDemotedToTbd,
+      true,
     );
 
     const doorSuffixAsTbd = prepareSingleGroundingCase({
@@ -5569,14 +5581,87 @@ async function runServiceApprovalMutationBoundaryQa() {
 
     sameDateEvents = [
       {
-        _id: "qa-approved-conflict",
+        _id: "qa-approved-distinct-occurrence",
         title: "Other Approved Event",
         date: groundedPublicFields.date,
+        time: "23:30",
         venue: groundedPublicFields.venue,
         venueId: "qa-venue-id",
+        artists: ["Other Approved Artist"],
+        description: "A different independently billed occurrence.",
+        eventType: "nightlife",
         status: "approved",
       },
     ];
+    inserted = false;
+    patched = false;
+    await assert.doesNotReject(() =>
+      createEvent._handler(ctx, {
+        ...groundedPublicFields,
+        serviceSecret,
+      }),
+    );
+    assert.equal(inserted, true, "Distinct same-venue/date occurrences must remain insertable.");
+
+    await assert.doesNotReject(() =>
+      updateEvent._handler(ctx, {
+        id: "qa-existing-event",
+        expectedStatus: "pending",
+        serviceSecret,
+        patch: {
+          status: "approved",
+          normalizedFieldsJson,
+        },
+      }),
+    );
+    assert.equal(patched, true, "Distinct same-venue/date pending rows must remain approvable.");
+
+    existingVenue = "@qa_venue";
+    existingVenueInstagramHandle = undefined;
+    patched = false;
+    await assert.doesNotReject(() =>
+      setEventStatus._handler(ctx, {
+        id: "qa-existing-event",
+        status: "approved",
+        reviewedBy: adminUserId,
+      }),
+    );
+    assert.equal(patched, true, "Manual moderation may approve a distinct same-day occurrence.");
+
+    sameDateEvents = [
+      {
+        _id: "qa-approved-source-neighbor",
+        title: "Different Title",
+        date: groundedPublicFields.date,
+        time: "23:30",
+        venue: "Different Venue",
+        artists: ["Different Artist"],
+        description: "Different occurrence.",
+        eventType: "nightlife",
+        instagramPostId,
+        instagramPostUrl: `https://www.instagram.com/reel/${instagramPostId}/`,
+        status: "approved",
+      },
+    ];
+    patched = false;
+    await assert.doesNotReject(() =>
+      setEventStatus._handler(ctx, {
+        id: "qa-existing-event",
+        status: "approved",
+        reviewedBy: adminUserId,
+      }),
+    );
+    assert.equal(patched, true, "Sharing a source post alone must not collapse a distinct occurrence.");
+
+    sameDateEvents = [
+      {
+        _id: "qa-approved-semantic-duplicate",
+        ...groundedPublicFields,
+        status: "approved",
+      },
+    ];
+    existingVenue = groundedPublicFields.venue;
+    existingVenueInstagramHandle = "qa_venue";
     inserted = false;
     patched = false;
     await assert.rejects(
@@ -5585,61 +5670,20 @@ async function runServiceApprovalMutationBoundaryQa() {
           ...groundedPublicFields,
           serviceSecret,
         }),
-      /already exists for this venue and date/,
-      "Service create must not approve a second event for one venue/date.",
+      /semantic duplicate/,
+      "Service creation must reject a proven semantic duplicate.",
     );
     assert.equal(inserted, false);
-
     await assert.rejects(
       () =>
         updateEvent._handler(ctx, {
           id: "qa-existing-event",
           expectedStatus: "pending",
           serviceSecret,
-          patch: {
-            status: "approved",
-            normalizedFieldsJson,
-          },
+          patch: { status: "approved", normalizedFieldsJson },
         }),
-      /already exists for this venue and date/,
-      "Service update must not approve a second event for one venue/date.",
-    );
-    assert.equal(patched, false);
-
-    existingVenue = "@qa_venue";
-    existingVenueInstagramHandle = undefined;
-    await assert.rejects(
-      () =>
-        setEventStatus._handler(ctx, {
-          id: "qa-existing-event",
-          status: "approved",
-          reviewedBy: adminUserId,
-        }),
-      /already exists for this venue and date/,
-      "Manual moderation must resolve a legacy venue alias before checking the venue/date conflict.",
-    );
-    assert.equal(patched, false);
-
-    sameDateEvents = [
-      {
-        _id: "qa-approved-source-duplicate",
-        title: "Different Title",
-        date: groundedPublicFields.date,
-        venue: "Different Venue",
-        instagramPostId,
-        instagramPostUrl: `https://www.instagram.com/reel/${instagramPostId}/`,
-        status: "approved",
-      },
-    ];
-    await assert.rejects(
-      () =>
-        setEventStatus._handler(ctx, {
-          id: "qa-existing-event",
-          status: "approved",
-          reviewedBy: adminUserId,
-        }),
-      /already exists for this venue and date/,
-      "Manual moderation must reject the same persisted post ID even when URL type, title, and venue differ.",
+      /semantic duplicate/,
+      "Service promotion must reject a proven semantic duplicate.",
     );
     assert.equal(patched, false);
   } finally {
@@ -5667,7 +5711,7 @@ async function runApprovedMergeBoundaryQa() {
     time: TBD_EVENT_TIME,
     venue: "Venue One",
     venueId: "venue-one",
-    artists: [],
+    artists: ["Primary Artist"],
     eventType: "nightlife",
     status: "approved",
   };
@@ -5675,7 +5719,7 @@ async function runApprovedMergeBoundaryQa() {
   const conflict = {
     ...primary,
     _id: "qa-conflict",
-    title: "Other Event",
+    title: "Primary Event",
     venue: "Venue Two",
     venueId: "venue-two",
   };
@@ -5738,8 +5782,8 @@ async function runApprovedMergeBoundaryQa() {
           duplicateIds: [duplicate._id],
           patch: { venue: "Venue Two" },
         }),
-      /already exists for this venue and date/,
-      "Approved-event merge must not move the primary onto another approved venue/date.",
+      /semantic duplicate/,
+      "Approved-event merge must not move the primary onto a proven semantic duplicate.",
     );
     assert.equal(patched, false);
   } finally {
@@ -6049,7 +6093,7 @@ async function runTransactionalSourceGroundingReprocessQa() {
     );
     assert.deepEqual(invalid.snapshot(), invalidBefore);
 
-    const conflictB = makeEvent({
+    const distinctSameDayB = makeEvent({
       id: "qa-batch-b",
       date: "2026-07-30",
       day: 30,
@@ -6058,13 +6102,42 @@ async function runTransactionalSourceGroundingReprocessQa() {
       postId: "qa-batch-post-b",
       updatedAt: 2000,
     });
-    const conflict = createHarness([qaA, conflictB]);
-    const conflictBefore = conflict.snapshot();
-    await assert.rejects(
-      () => conflict.run(argsFor([qaA, conflictB])),
-      /already exists for this venue and date/iu,
+    const distinctSameDay = createHarness([qaA, distinctSameDayB]);
+    const distinctResult = await distinctSameDay.run(argsFor([qaA, distinctSameDayB]));
+    assert.equal(distinctResult.updatedCount, 2);
+    assert.ok(
+      distinctSameDay.snapshot().events.every((event) => event.status === "approved"),
+      "Two independently identified occurrences at the same venue/date must both be approvable.",
     );
-    assert.deepEqual(conflict.snapshot(), conflictBefore);
+
+    const semanticDuplicatePostId = "qa-batch-post-duplicate";
+    const semanticDuplicatePostUrl = `https://www.instagram.com/p/${semanticDuplicatePostId}/`;
+    const semanticDuplicateB = {
+      event: {
+        ...clone(qaA.event),
+        _id: "qa-batch-duplicate",
+        instagramPostId: semanticDuplicatePostId,
+        instagramPostUrl: semanticDuplicatePostUrl,
+        updatedAt: 3000,
+      },
+      nextNormalizedFieldsJson: JSON.stringify({
+        ...JSON.parse(qaA.nextNormalizedFieldsJson),
+        sourceGroundingInstagramPostId: semanticDuplicatePostId,
+        sourceGroundingInstagramPostUrl: semanticDuplicatePostUrl,
+      }),
+      sourcePost: {
+        ...clone(qaA.sourcePost),
+        postId: semanticDuplicatePostId,
+        instagramPostUrl: semanticDuplicatePostUrl,
+      },
+    };
+    const duplicateConflict = createHarness([qaA, semanticDuplicateB]);
+    const duplicateConflictBefore = duplicateConflict.snapshot();
+    await assert.rejects(
+      () => duplicateConflict.run(argsFor([qaA, semanticDuplicateB])),
+      /semantic duplicate/iu,
+    );
+    assert.deepEqual(duplicateConflict.snapshot(), duplicateConflictBefore);
 
     const adminFallback = createHarness();
     const adminBefore = adminFallback.snapshot();

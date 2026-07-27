@@ -72,6 +72,10 @@ import { getRequiredEnv } from "@/lib/utils/env";
 import { hasCompleteSourceGroundedAutoApproval } from "@/lib/events/event-update-precondition";
 import { isSensibleEventTitleForApproval } from "@/lib/events/event-title-approval";
 import { isCaptionSourceCoherentWithEvent } from "@/lib/events/event-source-approval";
+import {
+  areApprovedEventOccurrencesSemanticDuplicates,
+  type ApprovedEventDuplicateRecord,
+} from "@/lib/events/approved-event-duplicates";
 
 type RunInstagramIngestionOptions = {
   handles: string[];
@@ -666,6 +670,7 @@ function buildModerationDecision(options: {
   allowMissingImage: boolean;
   titleUsedFallback: boolean;
   missingTime: boolean;
+  unsourcedTimeDemotedToTbd?: boolean;
   suspiciousYear: boolean;
   dateConfidence: DateConfidence | null;
   hasDate: boolean;
@@ -700,6 +705,7 @@ function buildModerationDecision(options: {
     ...(options.allowMissingImage ? ["missing_image_allowed"] : []),
     ...(options.titleUsedFallback ? ["fallback_title"] : []),
     ...(timeTbdApplies ? ["time_tbd"] : []),
+    ...(options.unsourcedTimeDemotedToTbd ? ["unsourced_time_demoted_to_tbd"] : []),
     ...(options.suspiciousYear ? ["suspicious_year"] : []),
     ...(confidenceScore !== null && confidenceScore < 0.7 ? ["low_confidence"] : []),
     ...autoApprovalBlockers,
@@ -1654,6 +1660,8 @@ function cleanSplitCaptionEntryText(value: string): string {
   return trimTitleCandidate(
     normalizeString(value)
       .replace(/[\p{Cf}]/gu, "")
+      .replace(/^[\p{Extended_Pictographic}\uFE0F]+\s*/gu, "")
+      .replace(/^[^\p{L}\p{N}@#\r\n]*\|\s*/u, "")
       .replace(/@([\p{L}\p{N}._-]+)/gu, (_match, handle: string) => humanizeArtistHandle(handle))
       .replace(/\s*[•·●▪‣∙◦‧⁃◆◇■□▸►▶|]+\s*/gu, " | ")
       .replace(/[\p{Extended_Pictographic}\uFE0F]+$/gu, "")
@@ -1831,7 +1839,13 @@ function buildDateHeaderEventRowSegments(value: string | null | undefined): stri
     const blockRows: string[] = [];
     for (let rowIndex = index + 1; rowIndex < lines.length; rowIndex += 1) {
       const row = lines[rowIndex] ?? "";
-      if (!row || dateAnchorPattern.test(row)) {
+      if (!row) {
+        if (blockRows.length === 0) {
+          continue;
+        }
+        break;
+      }
+      if (dateAnchorPattern.test(row)) {
         break;
       }
       blockRows.push(row);
@@ -1853,10 +1867,18 @@ function buildDateHeaderEventRowSegments(value: string | null | undefined): stri
 
 function buildSourceGroundingSegments(value: string | null | undefined): string[] {
   const datePeriodPlaceholder = "\uE000";
-  const protectedText = normalizeString(value).replace(
-    /\b(\d{1,2}[./-]\d{1,2}(?:[./-](?:\d{2}|\d{4}))?)\.(?=\s|$)/gu,
-    `$1${datePeriodPlaceholder}`,
-  );
+  const protectedText = normalizeString(value)
+    .replace(
+      new RegExp(
+        String.raw`\b(\d{1,2})\.(?=\s+(?:${SOURCE_GROUNDING_MONTH_PATTERN})\b)`,
+        "giu",
+      ),
+      `$1${datePeriodPlaceholder}`,
+    )
+    .replace(
+      /\b(\d{1,2}[./-]\d{1,2}(?:[./-](?:\d{2}|\d{4}))?)\.(?=\s|$)/gu,
+      `$1${datePeriodPlaceholder}`,
+    );
   const atomicSegments = protectedText
     .split(
       /\r?\n|[;•·●▪◦]+|\s+\|\s+|\s+\/\s+|\s+[—–-]\s+|(?<=[.!?])\s+/u,
@@ -2079,6 +2101,8 @@ function hasExplicitBilledEventContext(
       `${searchableArtist} nastupa`,
       `gostuje ${searchableArtist}`,
       `${searchableArtist} gostuje`,
+      `pusta ${searchableArtist}`,
+      `${searchableArtist} pusta`,
       `${searchableArtist} live`,
       `${searchableArtist} b2b`,
     ].some((pattern) => containsNormalizedTokenSequence(searchableSegment, pattern));
@@ -2165,10 +2189,72 @@ function hasCoherentBilledArtists(
       `${searchableArtist} nastupa`,
       `gostuje ${searchableArtist}`,
       `${searchableArtist} gostuje`,
+      `pusta ${searchableArtist}`,
+      `${searchableArtist} pusta`,
       `${searchableArtist} live`,
       `${searchableArtist} b2b`,
     ].some((pattern) => containsNormalizedTokenSequence(searchableSegment, pattern));
   });
+}
+
+function buildSingleOccurrenceCompositeSegment(options: {
+  sourceText: string;
+  title: string;
+  normalizedDate: string;
+  postedAt: string | null | undefined;
+  expectedTime: string;
+  artists: string[];
+}): string | null {
+  // Never compose evidence across arbitrary caption lines. This narrow repair
+  // only restores one compact sentence that segmentation split at punctuation.
+  const sourceLines = options.sourceText
+    .split(/\r?\n/u)
+    .map(normalizeString)
+    .filter(Boolean);
+  if (sourceLines.length !== 1) {
+    return null;
+  }
+  const sourceLine = sourceLines[0] ?? "";
+  const withoutDatePunctuation = sourceLine.replace(
+    /\b(?:20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}[./-]\d{1,2}(?:[./-](?:\d{2}|\d{4}))?)\.?/gu,
+    " ",
+  );
+  const sentenceBoundaries = withoutDatePunctuation.match(/[.!?](?=\s|$)/gu) ?? [];
+  if (sentenceBoundaries.length > 1) {
+    return null;
+  }
+
+  const supportedDates = collectSupportedDates(sourceLine, options.postedAt);
+
+  if (
+    supportedDates.length !== 1 ||
+    supportedDates[0] !== options.normalizedDate ||
+    !containsNonHashtagIdentity(sourceLine, options.title)
+  ) {
+    return null;
+  }
+
+  const withoutDoorTimes = stripDoorOpeningClockValues(sourceLine);
+  if (
+    countSourceClockValues(withoutDoorTimes) > 1 ||
+    (options.expectedTime && extractEventTimeFromText(withoutDoorTimes) !== options.expectedTime)
+  ) {
+    return null;
+  }
+  if (
+    !hasExplicitBilledEventContext(
+      sourceLine,
+      options.title,
+      options.artists,
+      options.normalizedDate,
+      options.postedAt,
+    ) ||
+    !hasCoherentBilledArtists(sourceLine, options.artists, options.title)
+  ) {
+    return null;
+  }
+
+  return sourceLine;
 }
 
 /**
@@ -2201,6 +2287,17 @@ export function evaluateCoreEventSourceGrounding(options: {
   const artists = [...new Set(
     (options.artists ?? []).map(normalizeString).filter(Boolean),
   )];
+  const compositeSegment = buildSingleOccurrenceCompositeSegment({
+    sourceText,
+    title,
+    normalizedDate,
+    postedAt: options.postedAt,
+    expectedTime,
+    artists,
+  });
+  if (compositeSegment) {
+    segments.push(compositeSegment);
+  }
   const titleMatchesVenue =
     Boolean(title) &&
     Boolean(normalizeString(options.venue)) &&
@@ -6305,6 +6402,31 @@ function normalizeTitleKey(value: string | undefined): string {
   return normalizeString(value).toLowerCase().replace(/\s+/g, " ");
 }
 
+function toApprovedEventDuplicateRecord(
+  event: PreparedEvent | ExistingEventRecord,
+  id: string,
+): ApprovedEventDuplicateRecord {
+  return {
+    id,
+    title: event.title,
+    date: event.date,
+    time: event.time ?? null,
+    venue: event.venue,
+    artists: event.artists,
+    description: event.description ?? null,
+    imageUrl: event.imageUrl ?? null,
+    instagramPostUrl: event.instagramPostUrl ?? null,
+    instagramPostId: event.instagramPostId ?? null,
+    ticketPrice: event.ticketPrice ?? null,
+    eventType: event.eventType,
+    sourceCaption: event.sourceCaption ?? null,
+    sourcePostedAt: event.sourcePostedAt ?? null,
+    normalizedFieldsJson: event.normalizedFieldsJson ?? null,
+    createdAt: 0,
+    updatedAt: 0,
+  };
+}
+
 function findBestExistingMatchForPreparedEvent(
   existingMatches: ExistingSourceMatch[],
   nextEvent: PreparedEvent,
@@ -6314,10 +6436,29 @@ function findBestExistingMatchForPreparedEvent(
     (existing) => existing.matchedBy !== "same_date_semantic",
   );
   const titleKey = normalizeTitleKey(nextEvent.title);
+  if (nextEvent.status === "approved") {
+    const nextDuplicateRecord = toApprovedEventDuplicateRecord(nextEvent, "candidate");
+    const approvedDuplicate = existingMatches.find(
+      (existing) =>
+        existing.existingEvent.status === "approved" &&
+        areApprovedEventOccurrencesSemanticDuplicates(
+          toApprovedEventDuplicateRecord(
+            existing.existingEvent,
+            existing.existingEvent._id,
+          ),
+          nextDuplicateRecord,
+        ),
+    );
+    if (approvedDuplicate) {
+      return approvedDuplicate;
+    }
+  }
+
   const exactMatch = sourceIdentityMatches.find(
     (existing) =>
       normalizeString(existing.existingEvent.date) === nextEvent.date &&
-      normalizeTitleKey(existing.existingEvent.title) === titleKey,
+      normalizeTitleKey(existing.existingEvent.title) === titleKey &&
+      areTimesCompatible(existing.existingEvent.time, nextEvent.time),
   );
   if (exactMatch) {
     return exactMatch;
@@ -6782,13 +6923,15 @@ export function prepareEventsForInsert(
       ...variant.consistencyIssues,
       ...eventConsistency.issues,
     ])];
-    const timeTbdApplied = !eventConsistency.sanitizedTime && Boolean(date);
-    const safeTime = eventConsistency.sanitizedTime || (timeTbdApplied ? TBD_EVENT_TIME : "");
-    const timeSanitized = consistencyIssues.includes("time_is_date");
+    let timeTbdApplied = !eventConsistency.sanitizedTime && Boolean(date);
+    let unsourcedTimeDemotedToTbd = false;
+    let safeTime = eventConsistency.sanitizedTime || (timeTbdApplied ? TBD_EVENT_TIME : "");
+    let effectiveTimeProvenance: EventTimeProvenance = variant.timeProvenance;
+    let timeSanitized = consistencyIssues.includes("time_is_date");
     const dateRepairReason = consistencyIssues.includes("weekday_date_mismatch")
       ? "weekday_date_mismatch_numeric_date_authoritative"
       : null;
-    const sourceGrounding = evaluateCoreEventSourceGrounding({
+    let sourceGrounding = evaluateCoreEventSourceGrounding({
       independentTextEvidence: independentPostTextEvidence,
       title: variant.title,
       normalizedDate: date,
@@ -6800,6 +6943,39 @@ export function prepareEventsForInsert(
       venue: venueNormalization.venue,
       instagramHandle: post.username,
     });
+
+    if (
+      eventConsistency.sanitizedTime &&
+      !sourceGrounding.verified &&
+      countSourceClockValues(stripDoorOpeningClockValues(independentPostTextEvidence)) === 0
+    ) {
+      const withoutUnsourcedTime = evaluateCoreEventSourceGrounding({
+        independentTextEvidence: independentPostTextEvidence,
+        title: variant.title,
+        normalizedDate: date,
+        postedAt: post.postedAt,
+        splitSource: variant.splitSource,
+        titleUsedFallback: variant.titleUsedFallback,
+        time: "",
+        artists: variant.artists,
+        venue: venueNormalization.venue,
+        instagramHandle: post.username,
+      });
+
+      if (withoutUnsourcedTime.verified) {
+        sourceGrounding = withoutUnsourcedTime;
+        safeTime = TBD_EVENT_TIME;
+        timeTbdApplied = true;
+        unsourcedTimeDemotedToTbd = true;
+        timeSanitized = true;
+        effectiveTimeProvenance = {
+          confidence: 0,
+          evidenceText: null,
+          source: "unknown",
+          status: "unknown",
+        };
+      }
+    }
     const approvalTitleSensible = isSensibleEventTitleForApproval({
       title: variant.title,
       venue: venueNormalization.venue,
@@ -6834,7 +7010,8 @@ export function prepareEventsForInsert(
       missingImage,
       allowMissingImage: allowMissingImageForModeration,
       titleUsedFallback: variant.titleUsedFallback,
-      missingTime: !eventConsistency.sanitizedTime,
+      missingTime: isTbdEventTime(safeTime),
+      unsourcedTimeDemotedToTbd,
       suspiciousYear: variant.dateNormalization.suspiciousYear,
       dateConfidence: variant.dateNormalization.confidence,
       hasDate: Boolean(date),
@@ -6848,10 +7025,10 @@ export function prepareEventsForInsert(
     const normalizedFields: Record<string, unknown> = {
       ...normalizedFieldsCommon,
       time: safeTime || null,
-      timeSource: variant.timeProvenance.source,
-      timeEvidenceText: variant.timeProvenance.evidenceText,
-      timeConfidence: variant.timeProvenance.confidence,
-      timeStatus: variant.timeProvenance.status,
+      timeSource: effectiveTimeProvenance.source,
+      timeEvidenceText: effectiveTimeProvenance.evidenceText,
+      timeConfidence: effectiveTimeProvenance.confidence,
+      timeStatus: effectiveTimeProvenance.status,
       title: variant.title,
       titleSource: variant.titleSource,
       titleUsedFallback: variant.titleUsedFallback,
@@ -6904,6 +7081,7 @@ export function prepareEventsForInsert(
       consistencyIssues,
       timeSanitized,
       timeTbdApplied,
+      unsourcedTimeDemotedToTbd,
       timeSanitizedFrom: timeSanitized
         ? normalizeString(variant.rawTime || variant.time) || null
         : null,
@@ -7002,12 +7180,12 @@ export function prepareEventsForInsert(
         title: variant.title,
         date,
         ...(safeTime ? { time: safeTime } : {}),
-        timeSource: variant.timeProvenance.source,
-        ...(variant.timeProvenance.evidenceText
-          ? { timeEvidenceText: variant.timeProvenance.evidenceText }
+        timeSource: effectiveTimeProvenance.source,
+        ...(effectiveTimeProvenance.evidenceText
+          ? { timeEvidenceText: effectiveTimeProvenance.evidenceText }
           : {}),
-        timeConfidence: variant.timeProvenance.confidence,
-        timeStatus: variant.timeProvenance.status,
+        timeConfidence: effectiveTimeProvenance.confidence,
+        timeStatus: effectiveTimeProvenance.status,
         venue: venueNormalization.venue,
         artists: variant.artists,
         ...(variant.description ? { description: variant.description } : {}),
@@ -7317,35 +7495,6 @@ async function processIngestionPost(options: ProcessIngestionPostOptions): Promi
     const durableMediaEligible = hasDurableMediaEligibleNormalizedFields(
       prepared.normalizedFields,
     );
-
-    if (
-      prepared.event.status === "approved" &&
-      existingMatches.some(
-        (match) =>
-          match.existingEvent.status === "approved" &&
-          match.existingEvent.date === prepared.event.date &&
-          toSearchableText(match.existingEvent.venue) === toSearchableText(prepared.event.venue),
-      )
-    ) {
-      const pendingReasons = [
-        ...new Set([
-          ...((prepared.normalizedFields.moderationPendingReasons as string[] | undefined) ?? []),
-          "approved_venue_date_conflict",
-        ]),
-      ];
-      const moderationSignals = [
-        ...new Set([
-          ...((prepared.normalizedFields.moderationSignals as string[] | undefined) ?? []),
-          "approved_venue_date_conflict",
-        ]),
-      ];
-      prepared.normalizedFields.moderationAutoApproved = false;
-      prepared.normalizedFields.moderationAutoApproveRule = null;
-      prepared.normalizedFields.moderationPendingReasons = pendingReasons;
-      prepared.normalizedFields.moderationSignals = moderationSignals;
-      prepared.event.status = "pending";
-      prepared.event.normalizedFieldsJson = JSON.stringify(prepared.normalizedFields);
-    }
 
     const existingMatch = findBestExistingMatchForPreparedEvent(
       existingMatches,

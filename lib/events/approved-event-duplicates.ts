@@ -201,6 +201,12 @@ function normalizeComparisonText(value: string): string {
     .trim();
 }
 
+function normalizeStrictArtistIdentity(artists: string[]): string[] {
+  return [
+    ...new Set(artists.map(normalizeComparisonText).filter(Boolean)),
+  ].sort();
+}
+
 function extractComparableTimeParts(value: string | null | undefined): string[] {
   const matches = (value ?? "").match(/\d{1,2}(?::\d{2})?/g) ?? [];
   return matches.map((match) => {
@@ -563,6 +569,74 @@ function areAutoCleanupDuplicateEvents(
   }
 
   return false;
+}
+
+export type ApprovedEventOccurrenceDuplicateReason =
+  | "semantic_duplicate"
+  | "date_mismatch"
+  | "venue_mismatch"
+  | "distinct_multi_occurrence_rows"
+  | "time_mismatch"
+  | "title_mismatch"
+  | "insufficient_identity_corroboration";
+
+export type ApprovedEventOccurrenceDuplicateDecision = {
+  isDuplicate: boolean;
+  reason: ApprovedEventOccurrenceDuplicateReason;
+};
+
+/**
+ * Pure conservative ingestion-time duplicate proof. Same source, date, venue,
+ * or title alone is never enough: a second identity channel must agree and
+ * known start times must be compatible. Ambiguous candidates remain
+ * independently moderatable instead of being merged or blocked.
+ */
+export function decideApprovedEventOccurrenceDuplicate(
+  leftRecord: ApprovedEventDuplicateRecord,
+  rightRecord: ApprovedEventDuplicateRecord,
+): ApprovedEventOccurrenceDuplicateDecision {
+  const left = decorateEventForDuplicateCleanup(leftRecord);
+  const right = decorateEventForDuplicateCleanup(rightRecord);
+  if (!left.duplicateDateKey || left.duplicateDateKey !== right.duplicateDateKey) {
+    return { isDuplicate: false, reason: "date_mismatch" };
+  }
+  if (!areSimilarVenues(left.duplicateVenueText, right.duplicateVenueText)) {
+    return { isDuplicate: false, reason: "venue_mismatch" };
+  }
+  if (areDistinctMultiEventScheduleRows(left, right)) {
+    return { isDuplicate: false, reason: "distinct_multi_occurrence_rows" };
+  }
+  if (!areDuplicateTimesCompatible(left.time, right.time)) {
+    return { isDuplicate: false, reason: "time_mismatch" };
+  }
+
+  const titleMatches = areSimilarDuplicateTexts(
+    left.duplicateTitleText,
+    right.duplicateTitleText,
+  );
+  if (!titleMatches) {
+    return { isDuplicate: false, reason: "title_mismatch" };
+  }
+  const leftArtistIdentity = normalizeStrictArtistIdentity(leftRecord.artists);
+  const rightArtistIdentity = normalizeStrictArtistIdentity(rightRecord.artists);
+  const artistMatches =
+    leftArtistIdentity.length > 0 &&
+    rightArtistIdentity.length > 0 &&
+    JSON.stringify(leftArtistIdentity) === JSON.stringify(rightArtistIdentity);
+  const descriptionMatches =
+    Boolean(left.duplicateDescriptionText) &&
+    Boolean(right.duplicateDescriptionText) &&
+    left.duplicateDescriptionText === right.duplicateDescriptionText;
+  return artistMatches || descriptionMatches
+    ? { isDuplicate: true, reason: "semantic_duplicate" }
+    : { isDuplicate: false, reason: "insufficient_identity_corroboration" };
+}
+
+export function areApprovedEventOccurrencesSemanticDuplicates(
+  leftRecord: ApprovedEventDuplicateRecord,
+  rightRecord: ApprovedEventDuplicateRecord,
+): boolean {
+  return decideApprovedEventOccurrenceDuplicate(leftRecord, rightRecord).isDuplicate;
 }
 
 function toApprovedEventRecord(event: DecoratedDuplicateEvent): ApprovedEventDuplicateRecord {
