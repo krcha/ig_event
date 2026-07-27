@@ -13,6 +13,7 @@ import { normalizeEventTimeWritePatch } from "../lib/events/event-time-write";
 import { isSensibleEventTitleForApproval } from "../lib/events/event-title-approval";
 import { buildNormalizedEventVenueIdentity } from "../lib/events/event-venue-identity";
 import {
+  areApprovedEventOccurrencesSemanticDuplicates,
   buildApprovedEventAutoCleanupGroups,
   type ApprovedEventDuplicateRecord,
 } from "../lib/events/approved-event-duplicates";
@@ -158,12 +159,46 @@ function normalizeInstagramSourceUrl(value: string | undefined): string {
 type ApprovalCandidateFields = {
   title: string;
   date: string;
+  time?: string;
   venue: string;
+  artists?: string[];
+  description?: string;
+  imageUrl?: string;
+  ticketPrice?: string;
+  eventType?: string;
+  sourceCaption?: string;
+  sourcePostedAt?: string;
+  normalizedFieldsJson?: string;
   venueId?: Id<"venues">;
   venueInstagramHandle?: string;
   instagramPostId?: string;
   instagramPostUrl?: string;
 };
+
+function toApprovalDuplicateRecord(
+  candidate: ApprovalCandidateFields,
+  id: string,
+): ApprovedEventDuplicateRecord {
+  return {
+    id,
+    title: candidate.title,
+    date: candidate.date,
+    time: candidate.time ?? null,
+    venue: candidate.venue,
+    artists: candidate.artists ?? [],
+    description: candidate.description ?? null,
+    imageUrl: candidate.imageUrl ?? null,
+    instagramPostUrl: candidate.instagramPostUrl ?? null,
+    instagramPostId: candidate.instagramPostId ?? null,
+    ticketPrice: candidate.ticketPrice ?? null,
+    eventType: candidate.eventType ?? "event",
+    sourceCaption: candidate.sourceCaption ?? null,
+    sourcePostedAt: candidate.sourcePostedAt ?? null,
+    normalizedFieldsJson: candidate.normalizedFieldsJson ?? null,
+    createdAt: 0,
+    updatedAt: 0,
+  };
+}
 
 type ServiceSourceCandidateFields = ApprovalCandidateFields & {
   sourceCaption?: string;
@@ -209,31 +244,20 @@ async function assertApprovalCandidatePolicy(
     .query("events")
     .withIndex("by_date", (q) => q.eq("date", candidate.date))
     .collect();
-  const candidateVenue = normalizeLookup(candidate.venue);
-  const candidatePostUrl = normalizeLookup(candidate.instagramPostUrl ?? "");
-  const candidatePostId = candidate.instagramPostId?.trim() ?? "";
   const excluded = new Set(excludeEventIds);
+  const candidateRecord = toApprovalDuplicateRecord(candidate, "candidate");
   const conflict = sameDateEvents.find((event) => {
     if (excluded.has(event._id) || event.status !== "approved") {
       return false;
     }
-    const sameVenue =
-      (candidate.venueId !== undefined &&
-        event.venueId !== undefined &&
-        event.venueId === candidate.venueId) ||
-      (Boolean(candidate.venueInstagramHandle) &&
-        normalizeHandle(event.venueInstagramHandle ?? "") ===
-          normalizeHandle(candidate.venueInstagramHandle ?? "")) ||
-      (Boolean(candidateVenue) && normalizeLookup(event.venue) === candidateVenue);
-    const sameSourceEvent =
-      (Boolean(candidatePostId) && event.instagramPostId?.trim() === candidatePostId) ||
-      (Boolean(candidatePostUrl) &&
-        normalizeLookup(event.instagramPostUrl ?? "") === candidatePostUrl);
-    return sameVenue || sameSourceEvent;
+    return areApprovedEventOccurrencesSemanticDuplicates(
+      toApprovalDuplicateRecord(event, event._id),
+      candidateRecord,
+    );
   });
 
   if (conflict) {
-    throw new Error("An approved event already exists for this venue and date.");
+    throw new Error("An approved semantic duplicate already exists.");
   }
 }
 
@@ -1310,15 +1334,7 @@ export const updateEvent = mutation({
     if (effectiveEvent.status === "approved") {
       await assertApprovalCandidatePolicy(
         ctx,
-        {
-          title: effectiveEvent.title,
-          date: effectiveEvent.date,
-          venue: effectiveEvent.venue,
-          venueId: effectiveEvent.venueId,
-          venueInstagramHandle: effectiveEvent.venueInstagramHandle,
-          instagramPostId: effectiveEvent.instagramPostId,
-          instagramPostUrl: effectiveEvent.instagramPostUrl,
-        },
+        effectiveEvent,
         [args.id],
       );
     }
@@ -1437,14 +1453,8 @@ export const setEventStatus = mutation({
       await assertApprovalCandidatePolicy(
         ctx,
         {
-          title: existingEvent.title,
-          date: existingEvent.date,
-          venue: existingEvent.venue,
-          venueId: venueFields.venueId ?? existingEvent.venueId,
-          venueInstagramHandle:
-            venueFields.venueInstagramHandle ?? existingEvent.venueInstagramHandle,
-          instagramPostId: existingEvent.instagramPostId,
-          instagramPostUrl: existingEvent.instagramPostUrl,
+          ...existingEvent,
+          ...venueFields,
         },
         [args.id],
       );
@@ -1494,14 +1504,8 @@ export const setEventStatuses = mutation({
           await assertApprovalCandidatePolicy(
             ctx,
             {
-              title: existingEvent.title,
-              date: existingEvent.date,
-              venue: existingEvent.venue,
-              venueId: venueFields.venueId ?? existingEvent.venueId,
-              venueInstagramHandle:
-                venueFields.venueInstagramHandle ?? existingEvent.venueInstagramHandle,
-              instagramPostId: existingEvent.instagramPostId,
-              instagramPostUrl: existingEvent.instagramPostUrl,
+              ...existingEvent,
+              ...venueFields,
             },
             [id],
           );
@@ -1509,7 +1513,7 @@ export const setEventStatuses = mutation({
         } catch (error) {
           if (
             !(error instanceof Error) ||
-            !/^(?:Event title is not suitable for approval|An approved event already exists for this venue and date)\.$/.test(
+            !/^(?:Event title is not suitable for approval|An approved semantic duplicate already exists)\.$/.test(
               error.message,
             )
           ) {
@@ -1641,15 +1645,7 @@ export const mergeApprovedEvents = mutation({
       const effectiveEvent = { ...primaryEvent, ...patch };
       await assertApprovalCandidatePolicy(
         ctx,
-        {
-          title: effectiveEvent.title,
-          date: effectiveEvent.date,
-          venue: effectiveEvent.venue,
-          venueId: effectiveEvent.venueId,
-          venueInstagramHandle: effectiveEvent.venueInstagramHandle,
-          instagramPostId: effectiveEvent.instagramPostId,
-          instagramPostUrl: effectiveEvent.instagramPostUrl,
-        },
+        effectiveEvent,
         [args.primaryId, ...duplicateIds],
       );
       await ctx.db.patch(args.primaryId, {

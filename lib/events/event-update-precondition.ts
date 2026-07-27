@@ -28,6 +28,7 @@ const APPROVED_MODERATION_SIGNALS = new Set([
   "missing_image",
   "missing_image_allowed",
   "time_tbd",
+  "unsourced_time_demoted_to_tbd",
 ]);
 
 function parseNormalizedFields(value: string | undefined): Record<string, unknown> | null {
