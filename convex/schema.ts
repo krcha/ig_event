@@ -46,9 +46,14 @@ export default defineSchema({
     timeConfidence: v.optional(v.number()),
     timeStatus: v.optional(eventTimeStatus),
     venue: v.string(),
+    // Rollback compatibility: these optional derived fields were written by
+    // later revisions. Retain them so the exact c27eaf1 function set can be
+    // deployed without deleting production data.
+    normalizedVenueIdentity: v.optional(v.string()),
     venueCategory: v.optional(v.string()),
     venueId: v.optional(v.id("venues")),
     venueInstagramHandle: v.optional(v.string()),
+    normalizedVenueInstagramHandle: v.optional(v.string()),
     venueLatitude: v.optional(v.number()),
     venueLocation: v.optional(v.string()),
     venueLongitude: v.optional(v.number()),
@@ -79,6 +84,8 @@ export default defineSchema({
     .index("by_date", ["date"])
     .index("by_status", ["status"])
     .index("by_status_date", ["status", "date"])
+    .index("by_normalizedVenueHandle_status_date", ["normalizedVenueInstagramHandle", "status", "date"])
+    .index("by_normalizedVenueIdentity_status_date", ["normalizedVenueIdentity", "status", "date"])
     .index("by_image_storage_id", ["imageStorageId"])
     .index("by_status_promotionTier", ["status", "promotionTier"])
     .index("by_instagramPostId", ["instagramPostId"])
