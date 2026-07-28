@@ -31,6 +31,28 @@ const WEEKDAY_BY_NAME: Record<string, number> = {
   pet: 5,
   subota: 6,
   sub: 6,
+  "недеља": 0,
+  "недељу": 0,
+  "воскресенье": 0,
+  "понедељак": 1,
+  "понедељка": 1,
+  "понедельник": 1,
+  "уторак": 2,
+  "уторка": 2,
+  "вторник": 2,
+  "среда": 3,
+  "среду": 3,
+  "среде": 3,
+  "четвртак": 4,
+  "четвртка": 4,
+  "четверг": 4,
+  "петак": 5,
+  "петка": 5,
+  "пятница": 5,
+  "субота": 6,
+  "суботу": 6,
+  "суботе": 6,
+  "суббота": 6,
 };
 
 const DATE_SHAPE_RE = /^\s*(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?\s*$/;
@@ -43,14 +65,31 @@ function foldText(value: string): string {
     .toLowerCase();
 }
 
+function containsWeekdayAlias(folded: string, name: string): boolean {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    `(?:^|[^\\p{L}\\p{N}_])${escapedName}(?=$|[^\\p{L}\\p{N}_])`,
+    "u",
+  ).test(folded);
+}
+
+export function containsNamedWeekday(
+  value: string | null | undefined,
+  expectedWeekday: number,
+): boolean {
+  if (!value) return false;
+  const folded = foldText(value);
+  return Object.entries(WEEKDAY_BY_NAME).some(
+    ([name, weekday]) => weekday === expectedWeekday && containsWeekdayAlias(folded, name),
+  );
+}
+
 export function findNamedWeekday(value: string | null | undefined): number | null {
-  if (!value) {
-    return null;
-  }
+  if (!value) return null;
 
   const folded = foldText(value);
   for (const [name, weekday] of Object.entries(WEEKDAY_BY_NAME)) {
-    if (new RegExp(`\\b${name}\\b`, "u").test(folded)) {
+    if (containsWeekdayAlias(folded, name)) {
       return weekday;
     }
   }

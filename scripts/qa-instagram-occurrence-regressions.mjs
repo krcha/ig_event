@@ -1,0 +1,520 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+
+import { eventRepresentsExpectedOccurrenceForTesting } from "../convex/events.ts";
+import { containsNamedWeekday, findNamedWeekday } from "../lib/events/event-validation.ts";
+import {
+  bindSourceOccurrenceMetadata,
+  buildSourceOccurrenceKeyForTesting,
+  createEmptyIngestionSummary,
+  findBestExistingMatchForPreparedEventForTesting,
+  prepareEventsForInsert,
+  processIngestionPostWithExtractionForTesting,
+} from "../lib/pipeline/run-instagram-ingestion.ts";
+
+const NOW = new Date("2026-07-28T18:00:00Z");
+const IMAGE_URL = "https://example.com/poster.jpg";
+
+async function withoutConsoleNoise(callback) {
+  const original = {
+    error: console.error,
+    info: console.info,
+    log: console.log,
+    warn: console.warn,
+  };
+  console.error = () => {};
+  console.info = () => {};
+  console.log = () => {};
+  console.warn = () => {};
+  try {
+    return await callback();
+  } finally {
+    console.error = original.error;
+    console.info = original.info;
+    console.log = original.log;
+    console.warn = original.warn;
+  }
+}
+
+function makePost(overrides = {}) {
+  return {
+    caption: "",
+    altText: null,
+    locationName: null,
+    username: "venue",
+    handle: "venue",
+    postId: "qa-post",
+    instagramPostUrl: "https://www.instagram.com/p/qa-post/",
+    postedAt: "2026-07-28T12:00:00.000Z",
+    imageUrl: IMAGE_URL,
+    imageUrls: [IMAGE_URL],
+    postType: "image",
+    ...overrides,
+  };
+}
+
+function makeExtraction(overrides = {}) {
+  return {
+    title: "",
+    date: "",
+    time: "",
+    venue: "Venue",
+    city: "Belgrade",
+    country: "Serbia",
+    price: "",
+    currency: "RSD",
+    artists: [],
+    category: "learning",
+    description: "",
+    confidence: 0.95,
+    reasoning_notes: "",
+    source_caption: "",
+    source_url: "https://www.instagram.com/p/qa-post/",
+    schedule_entries: [],
+    field_confirmation: Object.fromEntries(
+      ["title", "location", "location_name", "price", "start_time", "short_description", "artists"].map(
+        (key) => [
+          key,
+          {
+            confidence: 0.95,
+            found_in: ["poster"],
+            evidence: key,
+            evidence_snippets: [{ source: "poster", text: key }],
+            notes: "",
+          },
+        ],
+      ),
+    ),
+    ...overrides,
+  };
+}
+
+assert.equal(findNamedWeekday("ПОНЕДЕЛЬНИК : 14:00"), 1);
+assert.equal(findNamedWeekday("СРЕДА: 19:00"), 3);
+assert.equal(findNamedWeekday("ПОНЕДЕЉАК 14:00"), 1);
+assert.equal(containsNamedWeekday("ПОНЕДЕЛЬНИК 14:00 / СРЕДА 19:00", 3), true);
+
+const fromCaption = [
+  "🔥 FRØM THURSDAY at @20_44.nightclub",
+  "Every Thursday we are gathering and dancing in the garden! Last Thursday was fire, and for this one we prepared nothing less!",
+  "📅 Date: July 30",
+  "⏰ Time: 21:00 to 03:00",
+  "📍 Garden of Club 20/44",
+].join("\n");
+const fromPost = makePost({
+  caption: fromCaption,
+  username: "from_sound",
+  handle: "20_44.nightclub",
+  postId: "3950723823108129557",
+  postedAt: "2026-07-27T20:10:01.000Z",
+  postType: "sidecar",
+});
+const fromResults = prepareEventsForInsert(
+  fromPost,
+  makeExtraction({
+    venue: "frǾm",
+    category: "nightlife",
+    description: "Thursday garden party at 20/44.",
+    source_caption: fromCaption,
+    schedule_entries: [
+      {
+        date: "30.07.2026",
+        time: "21:00-03:00",
+        title: "FRØM THURSDAYS",
+        artists: ["Boogie Groove", "Anton Melnik", "Zgonja", "NIKO"],
+        description: "Thursday garden party at 20/44 club.",
+        source_text:
+          "30 JULY GARDEN /// 21:00-03:00 20|44 FRØM THURSDAYS BOOGIE GROOVE ANTON MELNIK ZGONJA NIKO",
+      },
+    ],
+  }),
+  IMAGE_URL,
+  { from_sound: "frǾm" },
+  {},
+  { from_sound: "frǾm" },
+  { eventDateFilterNow: NOW, sourceRolesByHandle: { from_sound: "promoter" } },
+);
+assert.equal(fromResults.length, 1, "single-date structured FRØM child must replace helpers");
+const boundFromResults = bindSourceOccurrenceMetadata(fromPost, fromResults);
+assert.equal(boundFromResults[0]?.normalizedFields.multiEventSplitDetected, false);
+assert.equal(boundFromResults[0]?.normalizedFields.multiEventSplitCount, 1);
+const fromOccurrenceKey = boundFromResults[0]?.normalizedFields.sourceOccurrenceKey;
+assert.equal(
+  typeof fromOccurrenceKey,
+  "string",
+  "the repaired single child still needs a durable occurrence identity",
+);
+assert.equal(
+  fromOccurrenceKey,
+  buildSourceOccurrenceKeyForTesting(fromPost, "2026-07-30", "21:00-03:00", {
+    multiEventSplitDetected: false,
+    multiEventSplitCount: 1,
+  }),
+  "a single structured row must retain the legacy single-event occurrence namespace",
+);
+assert.equal(fromResults[0]?.kind, "ok");
+if (fromResults[0]?.kind === "ok") {
+  assert.deepEqual(
+    {
+      title: fromResults[0].event.title,
+      date: fromResults[0].event.date,
+      time: fromResults[0].event.time,
+      venue: fromResults[0].event.venue,
+      splitSource: fromResults[0].normalizedFields.splitSource,
+    },
+    {
+      title: "FRØM THURSDAYS",
+      date: "2026-07-30",
+      time: "21:00-03:00",
+      venue: "frǾm",
+      splitSource: "poster_schedule",
+    },
+  );
+}
+
+const fromPrepared = fromResults[0];
+assert.equal(fromPrepared?.kind, "ok");
+if (fromPrepared?.kind === "ok") {
+  const malformedExistingRows = [
+    {
+      _id: "rejected-helper",
+      title: "📅 Date",
+      date: "2026-07-30",
+      time: "TBD",
+      venue: "frǾm",
+      artists: ["📅 Date"],
+      status: "rejected",
+      normalizedFieldsJson: JSON.stringify({
+        multiEventSplitDetected: true,
+        multiEventSplitCount: 2,
+        splitSourceLine: "📅 Date: July 30",
+      }),
+    },
+    {
+      _id: "rejected-narrative",
+      title: "Every we are gathering and dancing in the garden",
+      date: "2026-07-30",
+      time: "TBD",
+      venue: "frǾm",
+      artists: ["Every we are gathering"],
+      status: "rejected",
+      normalizedFieldsJson: JSON.stringify({
+        multiEventSplitDetected: true,
+        multiEventSplitCount: 2,
+        splitSourceLine: "Every Thursday we are gathering and dancing in the garden!",
+      }),
+    },
+  ].map((existingEvent) => ({ existingEvent, matchedBy: "post_id" }));
+  assert.equal(
+    findBestExistingMatchForPreparedEventForTesting(
+      malformedExistingRows,
+      fromPrepared.event,
+      fromPrepared.normalizedFields,
+    ),
+    null,
+    "the genuine FRØM child must not repurpose either rejected malformed row",
+  );
+}
+
+const commonCaption = [
+  "Разговорный клуб итальянского языка в COMMON",
+  "Понедельник — 14:00",
+  "Среда — 19:00",
+  "Ponedeljak — 14:00",
+  "Sreda — 19:00",
+].join("\n");
+const commonPost = makePost({
+  caption: commonCaption,
+  username: "common.belgrade",
+  handle: "common.belgrade",
+  postId: "3951307652074938678",
+  postedAt: "2026-07-28T15:30:10.000Z",
+});
+const commonExtraction = makeExtraction({
+  venue: "COMMON",
+  category: "learning",
+  artists: ["Alberto"],
+  description:
+    "Weekly Italian conversation club starting from 03.08.26, every Monday at 14:00 and Wednesday at 19:00.",
+  source_caption: commonCaption,
+  schedule_entries: [
+    {
+      date: "03.08.2026",
+      time: "14:00",
+      title: "Итальянский разговорный клуб",
+      artists: ["Alberto"],
+      description: "Weekly Italian language conversation club",
+      source_text: "ЕЖЕНЕДЕЛЬНО С 03.08.26\nПОНЕДЕЛЬНИК : 14:00",
+    },
+    {
+      date: "03.08.2026",
+      time: "19:00",
+      title: "Итальянский разговорный клуб",
+      artists: ["Alberto"],
+      description: "Weekly Italian language conversation club",
+      source_text: "СРЕДА: 19:00",
+    },
+  ],
+});
+const commonResults = prepareEventsForInsert(
+  commonPost,
+  commonExtraction,
+  IMAGE_URL,
+  { "common.belgrade": "COMMON | Белград | Мероприятия" },
+  {},
+  { "common.belgrade": "COMMON | Белград | Мероприятия" },
+  { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+);
+const commonOk = commonResults.filter((result) => result.kind === "ok");
+const commonDeferred = commonResults.filter(
+  (result) => result.kind === "skip" && result.reason === "far_future",
+);
+assert.equal(commonResults.length, 26, "weekly plan should preserve every bounded occurrence");
+assert.equal(commonOk.length, 25);
+assert.equal(commonDeferred.length, 1, "bounded far-future child must remain deferred");
+const boundCommonResults = bindSourceOccurrenceMetadata(commonPost, commonResults);
+assert.ok(
+  boundCommonResults.every(
+    (result) => result.normalizedFields.sourceOccurrencePlanUnverified === true,
+  ),
+  "model-only recurrence plans must remain explicitly unverified",
+);
+const firstBoundCommon = boundCommonResults.find((result) => result.kind === "ok");
+assert.ok(firstBoundCommon && firstBoundCommon.kind === "ok");
+if (firstBoundCommon?.kind === "ok") {
+  const expectedOccurrence = {
+    key: firstBoundCommon.normalizedFields.sourceOccurrenceKey,
+    date: firstBoundCommon.event.date,
+    time: firstBoundCommon.event.time,
+    venue: firstBoundCommon.event.venue,
+    title: firstBoundCommon.event.title,
+    artists: firstBoundCommon.event.artists,
+  };
+  assert.equal(
+    eventRepresentsExpectedOccurrenceForTesting(
+      firstBoundCommon.event,
+      expectedOccurrence,
+    ),
+    false,
+    "an unapproved model-only recurrence must not satisfy its source receipt",
+  );
+  assert.equal(
+    eventRepresentsExpectedOccurrenceForTesting(
+      firstBoundCommon.event,
+      expectedOccurrence,
+      { allowUnverifiedPending: true },
+    ),
+    true,
+    "atomic persistence may bind the pending candidate while receipt reads remain incomplete",
+  );
+  assert.equal(
+    eventRepresentsExpectedOccurrenceForTesting(
+      { ...firstBoundCommon.event, status: "approved" },
+      expectedOccurrence,
+    ),
+    true,
+    "human approval may make the reviewed recurrence authoritative",
+  );
+  const groundedNormalizedFields = {
+    ...firstBoundCommon.normalizedFields,
+    sourceOccurrencePlanUnverified: false,
+  };
+  assert.equal(
+    eventRepresentsExpectedOccurrenceForTesting(
+      {
+        ...firstBoundCommon.event,
+        normalizedFieldsJson: JSON.stringify(groundedNormalizedFields),
+      },
+      expectedOccurrence,
+    ),
+    true,
+    "a source-grounded pending occurrence remains a valid persisted representative",
+  );
+}
+
+const persistenceSummary = createEmptyIngestionSummary(["common.belgrade"]).handles[0];
+const persistedCommonEvents = [];
+const persistenceUpdates = [];
+await withoutConsoleNoise(() =>
+  processIngestionPostWithExtractionForTesting({
+    client: {
+      query: async () => [],
+      mutation: async (_reference, args) => {
+        if ("representativeEventId" in args) return { recorded: true };
+        if ("id" in args) {
+          persistenceUpdates.push(args);
+          return args.id;
+        }
+        persistedCommonEvents.push(args);
+        return `qa-common-occurrence-${persistedCommonEvents.length}`;
+      },
+    },
+    handle: "common.belgrade",
+    post: { ...commonPost, postType: "video" },
+    summary: persistenceSummary,
+    canonicalVenueNamesByHandle: { "common.belgrade": "COMMON | Белград | Мероприятия" },
+    venueNameOverridesByHandle: {},
+    configuredVenueNamesByHandle: { "common.belgrade": "COMMON | Белград | Мероприятия" },
+    serviceSecret: "qa",
+    extracted: commonExtraction,
+  }),
+);
+assert.equal(
+  persistedCommonEvents.length,
+  25,
+  "the real persistence loop must create every currently eligible recurring child",
+);
+assert.equal(persistenceUpdates.length, 0, "a later recurring child must not overwrite a sibling");
+assert.equal(
+  new Set(persistedCommonEvents.map((event) => event.sourceOccurrenceKey)).size,
+  25,
+  "every persisted recurring child needs a distinct occurrence key",
+);
+assert.ok(
+  persistedCommonEvents.every(
+    (event) => JSON.parse(event.normalizedFieldsJson).sourceOccurrencePlanUnverified === true,
+  ),
+  "the persistence loop must preserve the fail-closed model-only recurrence marker",
+);
+assert.equal(persistenceSummary.insertedEvents, 25);
+
+const commonOccurrenceKeys = boundCommonResults.map(
+  (result) => result.normalizedFields.sourceOccurrenceKey,
+);
+assert.equal(new Set(commonOccurrenceKeys).size, 26, "every recurrence needs a unique key");
+assert.ok(commonOccurrenceKeys.every((key) => typeof key === "string" && key.length > 0));
+assert.ok(
+  boundCommonResults
+    .filter((result) => result.kind === "ok")
+    .every(
+      (result) => result.normalizedFields.sourceOccurrenceDeferredChildCount === 1,
+    ),
+  "the exact receipt plan must retain the one deferred child",
+);
+assert.deepEqual(
+  commonOk.slice(0, 4).map((result) =>
+    result.kind === "ok" ? [result.event.date, result.event.time] : null,
+  ),
+  [
+    ["2026-08-03", "14:00"],
+    ["2026-08-05", "19:00"],
+    ["2026-08-10", "14:00"],
+    ["2026-08-12", "19:00"],
+  ],
+);
+assert.ok(
+  commonResults.every(
+    (result) =>
+      (result.kind === "ok" ? result.event.date : result.normalizedFields.normalizedDate) !==
+      "2026-07-29",
+  ),
+  "a recurring schedule must not invent a pre-start Wednesday",
+);
+assert.equal(
+  commonDeferred[0]?.normalizedFields.normalizedDate,
+  "2026-10-28",
+);
+
+const modelDriftExtraction = {
+  ...commonExtraction,
+  schedule_entries: commonExtraction.schedule_entries.map((entry, index) => ({
+    ...entry,
+    date: "10.08.2026",
+    source_text:
+      index === 0
+        ? "ЕЖЕНЕДЕЛЬНО С 10.08.26\nПОНЕДЕЛЬНИК : 14:00"
+        : entry.source_text,
+  })),
+};
+const modelDriftResults = prepareEventsForInsert(
+  commonPost,
+  modelDriftExtraction,
+  IMAGE_URL,
+  { "common.belgrade": "COMMON | Белград | Мероприятия" },
+  {},
+  { "common.belgrade": "COMMON | Белград | Мероприятия" },
+  { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+);
+assert.equal(
+  modelDriftResults.find((result) => result.kind === "ok")?.event.date,
+  "2026-08-10",
+  "the fixture must prove that changing only model output can change the proposed schedule",
+);
+assert.ok(
+  modelDriftResults.every(
+    (result) => result.normalizedFields.sourceOccurrencePlanUnverified === true,
+  ),
+  "a model-shifted schedule under unchanged source evidence must remain fail-closed",
+);
+
+const boundaryExtraction = {
+  ...commonExtraction,
+  schedule_entries: commonExtraction.schedule_entries.map((entry, index) => ({
+    ...entry,
+    date: "01.08.2026",
+    source_text:
+      index === 0
+        ? "ЕЖЕНЕДЕЛЬНО С 01.08.26\nПОНЕДЕЛЬНИК : 14:00"
+        : entry.source_text,
+  })),
+};
+const boundaryResults = prepareEventsForInsert(
+  commonPost,
+  boundaryExtraction,
+  IMAGE_URL,
+  { "common.belgrade": "COMMON | Белград | Мероприятия" },
+  {},
+  { "common.belgrade": "COMMON | Белград | Мероприятия" },
+  { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+);
+assert.deepEqual(
+  boundaryResults
+    .filter((result) => result.kind === "ok")
+    .slice(0, 2)
+    .map((result) => [result.event.date, result.event.time]),
+  [
+    ["2026-08-03", "14:00"],
+    ["2026-08-05", "19:00"],
+  ],
+  "a recurrence boundary may precede the first scheduled weekday",
+);
+assert.ok(
+  boundaryResults.every(
+    (result) =>
+      (result.kind === "ok" ? result.event.date : result.normalizedFields.normalizedDate) !==
+      "2026-08-01",
+  ),
+  "the recurrence boundary itself must not become an event without a matching lane",
+);
+
+const groundedCommonPost = {
+  ...commonPost,
+  caption: `${commonCaption}\nWeekly from 03.08.26: Monday 14:00, Wednesday 19:00`,
+};
+const groundedCommonResults = prepareEventsForInsert(
+  groundedCommonPost,
+  commonExtraction,
+  IMAGE_URL,
+  { "common.belgrade": "COMMON | Белград | Мероприятия" },
+  {},
+  { "common.belgrade": "COMMON | Белград | Мероприятия" },
+  { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+);
+assert.ok(
+  groundedCommonResults.every(
+    (result) => result.normalizedFields.sourceOccurrencePlanUnverified === false,
+  ),
+  "an exact captured recurrence start, lanes, and times should ground the bounded plan",
+);
+
+const ingestionSource = readFileSync(
+  new URL("../lib/pipeline/run-instagram-ingestion.ts", import.meta.url),
+  "utf8",
+);
+assert.match(
+  ingestionSource,
+  /SOURCE_OCCURRENCE_EXTRACTION_PROTOCOL_VERSION\s*=\s*"2026-07-28-v3"/,
+  "the protocol fingerprint must invalidate receipts produced by the old split policy",
+);
+
+console.log("Instagram occurrence regression QA passed.");

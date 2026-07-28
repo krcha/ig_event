@@ -48,8 +48,10 @@ import {
 } from "@/lib/events/approved-event-automerge";
 import {
   checkEventConsistency,
+  containsNamedWeekday,
   findNamedWeekday,
   sanitizeTimeAgainstDate,
+  weekdayOfIsoDate,
   type EventConsistencyIssue,
 } from "@/lib/events/event-validation";
 import {
@@ -446,6 +448,7 @@ type SplitEventCandidate = {
   description?: string;
   sourceLine: string;
   source: SplitEventCandidateSource;
+  occurrencePlanUnverified?: boolean;
   titleSource?: SplitEventCandidateSource | "unnamed_schedule_fallback";
   titleUsedFallback?: boolean;
 };
@@ -2908,6 +2911,116 @@ function stripSplitEntryTime(value: string): string {
     .trim();
 }
 
+type RecurringModelScheduleContext = {
+  startIsoDate: string;
+  endIsoDate: string;
+  weekdaysByEntry: number[];
+  sourceGroundingVerified: boolean;
+};
+
+const RECURRING_SCHEDULE_START_PATTERN =
+  /(?:weekly|every\s+week|svake\s+(?:nedelje|sedmice)|svakog\s+tjedna|nedeljno|tjedno|недељно|еженедельно)\s*(?:starting\s+)?(?:from|od|с)\s*((?:0?[1-9]|[12]\d|3[01])[./-](?:0?[1-9]|1[0-2])[./-](?:\d{2}|\d{4}))/iu;
+
+function extractRecurringScheduleStartDate(value: string): string | null {
+  return normalizeString(value.match(RECURRING_SCHEDULE_START_PATTERN)?.[1]) || null;
+}
+
+function containsScheduleTime(value: string, rawTime: string): boolean {
+  const normalizedTime = extractEventTimeFromText(rawTime);
+  if (!normalizedTime) return false;
+  const [hourText, minuteText = "00"] = normalizedTime.split(":");
+  const hour = Number.parseInt(hourText ?? "", 10);
+  const minute = Number.parseInt(minuteText, 10);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return false;
+  const compactSource = value.toLowerCase();
+  const hourPattern = hour.toString().padStart(1, "0");
+  const minutePattern = minute.toString().padStart(2, "0");
+  return new RegExp(
+    `(?:^|[^\\d])0?${hourPattern}(?::|\\.)${minutePattern}(?!\\d)`,
+    "u",
+  ).test(compactSource);
+}
+
+function getRecurringModelScheduleContext(
+  post: InstagramScrapedPost,
+  scheduleEntries: ExtractedEventData["schedule_entries"],
+): RecurringModelScheduleContext | null {
+  if (scheduleEntries.length === 0) {
+    return null;
+  }
+
+  const sourceText = scheduleEntries
+    .map((entry) => normalizeString(entry.source_text))
+    .filter(Boolean)
+    .join("\n");
+  const rawStartDate = extractRecurringScheduleStartDate(sourceText);
+  if (!rawStartDate) {
+    return null;
+  }
+
+  const startIsoDate = normalizeEventDate(
+    rawStartDate,
+    sourceText || rawStartDate,
+    post.postedAt,
+  ).isoDate;
+  const endIsoDate = startIsoDate
+    ? addDaysToIsoDate(startIsoDate, MAX_EVENT_DAYS_AHEAD)
+    : null;
+  const weekdaysByEntry = scheduleEntries.map((entry) =>
+    findNamedWeekday(normalizeString(entry.source_text)),
+  );
+  if (
+    !startIsoDate ||
+    !endIsoDate ||
+    weekdaysByEntry.some((weekday) => weekday === null)
+  ) {
+    return null;
+  }
+
+  const independentSourceText = [post.caption, post.altText]
+    .map((value) => normalizeString(value))
+    .filter(Boolean)
+    .join("\n");
+  const independentRawStartDate = extractRecurringScheduleStartDate(independentSourceText);
+  const independentStartIsoDate = independentRawStartDate
+    ? normalizeEventDate(
+        independentRawStartDate,
+        independentSourceText,
+        post.postedAt,
+      ).isoDate
+    : null;
+  const sourceGroundingVerified =
+    independentStartIsoDate === startIsoDate &&
+    (weekdaysByEntry as number[]).every((weekday) =>
+      containsNamedWeekday(independentSourceText, weekday),
+    ) &&
+    scheduleEntries.every((entry) =>
+      containsScheduleTime(independentSourceText, normalizeString(entry.time)),
+    );
+
+  return {
+    startIsoDate,
+    endIsoDate,
+    weekdaysByEntry: weekdaysByEntry as number[],
+    sourceGroundingVerified,
+  };
+}
+
+function listRecurringScheduleDates(
+  context: RecurringModelScheduleContext,
+  weekday: number,
+): string[] {
+  const dates: string[] = [];
+  let cursor: string | null = context.startIsoDate;
+  while (cursor && cursor <= context.endIsoDate) {
+    if (weekdayOfIsoDate(cursor) === weekday) {
+      dates.push(cursor);
+    }
+    cursor = addDaysToIsoDate(cursor, 1);
+  }
+  return dates;
+}
+
 function extractModelSplitEventCandidates(
   post: InstagramScrapedPost,
   extracted: ExtractedEventData,
@@ -2920,9 +3033,9 @@ function extractModelSplitEventCandidates(
 
   const entries: SplitEventCandidate[] = [];
   const seenEntries = new Set<string>();
-  const rawResolvedDates = new Set<string>();
+  const recurringContext = getRecurringModelScheduleContext(post, extracted.schedule_entries);
 
-  for (const scheduleEntry of extracted.schedule_entries) {
+  for (const [scheduleEntryIndex, scheduleEntry] of extracted.schedule_entries.entries()) {
     const rawDate = normalizeString(scheduleEntry.date);
     const description = normalizeExtractedDescription(scheduleEntry.description);
     const rawScheduleTime = normalizeString(scheduleEntry.time);
@@ -2955,57 +3068,71 @@ function extractModelSplitEventCandidates(
       ],
     });
     const rawTime = timeResolution.rawTime;
-    const normalizedDate = normalizeEventDate(rawDate, sourceLine || rawDate, post.postedAt);
-    if (normalizedDate.isoDate) {
-      rawResolvedDates.add(normalizedDate.isoDate);
-    }
+    const baseNormalizedDate = normalizeEventDate(rawDate, sourceLine || rawDate, post.postedAt);
+    const occurrenceDates = recurringContext
+      ? listRecurringScheduleDates(
+          recurringContext,
+          recurringContext.weekdaysByEntry[scheduleEntryIndex] ?? -1,
+        )
+      : baseNormalizedDate.isoDate
+        ? [baseNormalizedDate.isoDate]
+        : [];
     const titleUsedFallback = !rawTitle && normalizedArtists.length === 0;
-    const lineTitle =
-      rawTitle ||
-      normalizedArtists.join(", ") ||
-      buildUnnamedScheduleFallbackTitle({
-        eventType,
-        venue,
-        isoDate: normalizedDate.isoDate,
-      });
-    if (!lineTitle) {
-      continue;
-    }
-    const consistency = checkEventConsistency({
-      isoDate: normalizedDate.isoDate,
-      rawDateText: rawDate,
-      time: timeResolution.time,
-      weekdayEvidence: sourceLine,
-    });
-    const time = consistency.sanitizedTime;
-    const dedupeKey = `${normalizedDate.isoDate ?? rawDate}:${toSearchableText(lineTitle)}:${time ?? ""}`;
-    if (seenEntries.has(dedupeKey)) {
-      continue;
-    }
-    seenEntries.add(dedupeKey);
 
-    entries.push({
-      rawDate,
-      normalizedDate,
-      lineTitle,
-      artists: normalizedArtists,
-      artistsWereSanitized: identity.artistsWereSanitized,
-      ...(time ? { time } : {}),
-      rawTime,
-      consistencyIssues: consistency.issues,
-      ...(description ? { description } : {}),
-      sourceLine,
-      source: "poster_schedule",
-      ...(titleUsedFallback
-        ? {
-            titleSource: "unnamed_schedule_fallback" as const,
-            titleUsedFallback: true,
-          }
-        : {}),
-    });
+    for (const occurrenceDate of occurrenceDates) {
+      const normalizedDate = recurringContext
+        ? normalizeEventDate(occurrenceDate, sourceLine || occurrenceDate, post.postedAt)
+        : baseNormalizedDate;
+      const lineTitle =
+        rawTitle ||
+        normalizedArtists.join(", ") ||
+        buildUnnamedScheduleFallbackTitle({
+          eventType,
+          venue,
+          isoDate: normalizedDate.isoDate,
+        });
+      if (!lineTitle) {
+        continue;
+      }
+      const consistency = checkEventConsistency({
+        isoDate: normalizedDate.isoDate,
+        rawDateText: occurrenceDate,
+        time: timeResolution.time,
+        weekdayEvidence: sourceLine,
+      });
+      const time = consistency.sanitizedTime;
+      const dedupeKey = `${normalizedDate.isoDate ?? occurrenceDate}:${toSearchableText(lineTitle)}:${time ?? ""}`;
+      if (seenEntries.has(dedupeKey)) {
+        continue;
+      }
+      seenEntries.add(dedupeKey);
+
+      entries.push({
+        rawDate: occurrenceDate,
+        normalizedDate,
+        lineTitle,
+        artists: normalizedArtists,
+        artistsWereSanitized: identity.artistsWereSanitized,
+        ...(time ? { time } : {}),
+        rawTime,
+        consistencyIssues: consistency.issues,
+        ...(description ? { description } : {}),
+        sourceLine,
+        source: "poster_schedule",
+        ...(recurringContext && !recurringContext.sourceGroundingVerified
+          ? { occurrencePlanUnverified: true }
+          : {}),
+        ...(titleUsedFallback
+          ? {
+              titleSource: "unnamed_schedule_fallback" as const,
+              titleUsedFallback: true,
+            }
+          : {}),
+      });
+    }
   }
 
-  return hasMultipleResolvedSplitDates(entries) || rawResolvedDates.size >= 2 ? entries : [];
+  return entries;
 }
 
 const COMBINED_SCHEDULE_WEEKDAY_TOKEN =
@@ -3184,7 +3311,11 @@ function extractCaptionSplitEventCandidates(
         venue,
         isoDate: normalizedDate.isoDate,
       });
-    if (!lineTitle) {
+    if (
+      !lineTitle ||
+      isScheduleHelperIdentity(lineTitle) ||
+      isLikelyNarrativeScheduleIdentity(lineTitle)
+    ) {
       continue;
     }
 
@@ -3442,10 +3573,22 @@ function isScheduleHelperIdentity(value: string): boolean {
   if (!normalized) {
     return true;
   }
+  if (
+    /^(?:date|datum|when|kada|day|dan|time|vreme|vrijeme|location|lokacija|venue)$/iu.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
   if (/^(?:premijera|premiere|naredna igranja|next performances?)\b/iu.test(normalized)) {
     return true;
   }
   return /^(?:\d{1,2}\s*)+(?:i|and)?$/iu.test(normalized);
+}
+
+function isLikelyNarrativeScheduleIdentity(value: string): boolean {
+  const tokens = getSearchableTokens(value);
+  return tokens.length >= 10 && /[.!?]/u.test(value);
 }
 
 function reconcileSplitCandidateCoverage(
@@ -3782,7 +3925,7 @@ function extractSplitEventCandidates(
     persistedVenue: venue,
   });
   if (repeatedCaptionDisposition === "collapse" && altTextCandidates.length === 0) {
-    return [];
+    return sortSplitCandidatesByDate(modelCandidates);
   }
   if (repeatedCaptionDisposition === "preserve") {
     return sortSplitCandidatesByDate(deterministicUnion);
@@ -5885,7 +6028,7 @@ function shouldReprocessExistingSourcePosts(): boolean {
   return normalizeString(process.env.INGESTION_REPROCESS_EXISTING_SOURCE_POSTS).toLowerCase() === "true";
 }
 
-const SOURCE_OCCURRENCE_EXTRACTION_PROTOCOL_VERSION = "2026-07-24-v2";
+const SOURCE_OCCURRENCE_EXTRACTION_PROTOCOL_VERSION = "2026-07-28-v3";
 
 function buildSourceOccurrenceFingerprint(post: InstagramScrapedPost): string {
   const digest = createHash("sha256")
@@ -8100,6 +8243,7 @@ export function prepareEventsForInsert(
           description: variantDescription,
           splitSource: entry.source,
           splitSourceLine: entry.sourceLine,
+          occurrencePlanUnverified: entry.occurrencePlanUnverified ?? false,
         };
       })
     : candidateDates.map((date) => ({
@@ -8125,6 +8269,7 @@ export function prepareEventsForInsert(
         description: baseDescription,
         splitSource: null,
         splitSourceLine: null,
+        occurrencePlanUnverified: false,
       }));
 
   const preparedEvents: PrepareEventResult[] = [];
@@ -8178,6 +8323,7 @@ export function prepareEventsForInsert(
     });
     const autoApprovalBlockers = [
       ...sourceGrounding.blockers,
+      ...(variant.occurrencePlanUnverified ? ["unverified_occurrence_plan"] : []),
       ...(!approvalTitleSensible ? ["unusable_event_title"] : []),
       ...(!approvalCaptionSourceCoherent ? ["caption_source_event_mismatch"] : []),
       ...getNonEventAutoApprovalBlockers(
@@ -8232,8 +8378,12 @@ export function prepareEventsForInsert(
       description: variant.description,
       dateRangeExpanded: !usesSplitEventCandidates && candidateDates.length > 1,
       dateRangeExpandedCount: !usesSplitEventCandidates ? candidateDates.length : 1,
-      multiEventSplitDetected: usesSplitEventCandidates,
-      multiEventSplitCount: usesSplitEventCandidates ? splitEventCandidates.length : 1,
+      multiEventSplitDetected: usesSplitEventCandidates && splitEventCandidates.length > 1,
+      multiEventSplitCount:
+        usesSplitEventCandidates && splitEventCandidates.length > 1
+          ? splitEventCandidates.length
+          : 1,
+      sourceOccurrencePlanUnverified: variant.occurrencePlanUnverified,
       splitEventIndex: index + 1,
       splitEventTotal: eventVariants.length,
       splitSource: variant.splitSource,

@@ -1267,16 +1267,43 @@ function normalizeOccurrenceArtists(values: string[]): string[] {
   return [...new Set(values.map(normalizeOccurrenceBindingText).filter(Boolean))].sort();
 }
 
-function eventRepresentsExpectedOccurrence(
+function eventHasUnverifiedSourceOccurrencePlan(
+  event: Pick<Doc<"events">, "normalizedFieldsJson">,
+): boolean {
+  if (!event.normalizedFieldsJson) return false;
+  try {
+    const parsed = JSON.parse(event.normalizedFieldsJson) as Record<string, unknown>;
+    return parsed.sourceOccurrencePlanUnverified === true;
+  } catch {
+    return false;
+  }
+}
+
+export function eventRepresentsExpectedOccurrenceForTesting(
   event:
     | Pick<
         Doc<"events">,
-        "title" | "date" | "time" | "venue" | "artists" | "status" | "sourceOccurrenceKey"
+        | "title"
+        | "date"
+        | "time"
+        | "venue"
+        | "artists"
+        | "status"
+        | "sourceOccurrenceKey"
+        | "normalizedFieldsJson"
       >
     | null,
   expected: SourceOccurrencePlan["expectedOccurrences"][number] | undefined,
+  options: { allowUnverifiedPending?: boolean } = {},
 ): boolean {
   if (!event || !expected || event.status === "rejected") return false;
+  if (
+    !options.allowUnverifiedPending &&
+    event.status !== "approved" &&
+    eventHasUnverifiedSourceOccurrencePlan(event)
+  ) {
+    return false;
+  }
   // Once an event is durably bound to this source occurrence, moderation may
   // legitimately change mutable display fields such as title or time. Keep
   // same-source provenance stable instead of reopening an already represented
@@ -1298,6 +1325,8 @@ function eventRepresentsExpectedOccurrence(
           normalizeOccurrenceBindingText(expected.time)))
   );
 }
+
+const eventRepresentsExpectedOccurrence = eventRepresentsExpectedOccurrenceForTesting;
 
 async function assertSourceProcessingFence(
   ctx: MutationCtx,
@@ -1386,7 +1415,11 @@ async function recordSourceOccurrenceSatisfaction(
   const expectedOccurrence = plan.expectedOccurrences.find(
     (occurrence) => occurrence.key === satisfiedKey,
   );
-  if (!eventRepresentsExpectedOccurrence(representativeEvent, expectedOccurrence)) {
+  if (
+    !eventRepresentsExpectedOccurrence(representativeEvent, expectedOccurrence, {
+      allowUnverifiedPending: true,
+    })
+  ) {
     throw new Error("Representative event does not match the source occurrence.");
   }
   const existing = await ctx.db
@@ -2002,6 +2035,7 @@ export const updateEventAndRecordInstagramSourceOccurrenceSatisfaction = mutatio
       !eventRepresentsExpectedOccurrence(
         { ...existingEvent, ...args.patch },
         expectedOccurrence,
+        { allowUnverifiedPending: true },
       )
     ) {
       throw new Error("Updated event does not match the source occurrence.");
