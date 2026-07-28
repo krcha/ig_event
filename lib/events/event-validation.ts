@@ -84,17 +84,22 @@ export function containsNamedWeekday(
   );
 }
 
-export function findNamedWeekday(value: string | null | undefined): number | null {
-  if (!value) return null;
+export function findNamedWeekdays(value: string | null | undefined): number[] {
+  if (!value) return [];
 
   const folded = foldText(value);
+  const weekdays = new Set<number>();
   for (const [name, weekday] of Object.entries(WEEKDAY_BY_NAME)) {
     if (containsWeekdayAlias(folded, name)) {
-      return weekday;
+      weekdays.add(weekday);
     }
   }
 
-  return null;
+  return Array.from(weekdays).sort((left, right) => left - right);
+}
+
+export function findNamedWeekday(value: string | null | undefined): number | null {
+  return findNamedWeekdays(value)[0] ?? null;
 }
 
 export function weekdayOfIsoDate(value: string | null | undefined): number | null {

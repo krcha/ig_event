@@ -48,8 +48,8 @@ import {
 } from "@/lib/events/approved-event-automerge";
 import {
   checkEventConsistency,
-  containsNamedWeekday,
   findNamedWeekday,
+  findNamedWeekdays,
   sanitizeTimeAgainstDate,
   weekdayOfIsoDate,
   type EventConsistencyIssue,
@@ -2916,6 +2916,12 @@ type RecurringModelScheduleContext = {
   endIsoDate: string;
   weekdaysByEntry: number[];
   sourceGroundingVerified: boolean;
+  sourcePlanCoverageRejected: boolean;
+};
+
+type RecurringScheduleLane = {
+  weekday: number;
+  time: string;
 };
 
 const RECURRING_SCHEDULE_START_PATTERN =
@@ -2925,20 +2931,43 @@ function extractRecurringScheduleStartDate(value: string): string | null {
   return normalizeString(value.match(RECURRING_SCHEDULE_START_PATTERN)?.[1]) || null;
 }
 
-function containsScheduleTime(value: string, rawTime: string): boolean {
-  const normalizedTime = extractEventTimeFromText(rawTime);
-  if (!normalizedTime) return false;
-  const [hourText, minuteText = "00"] = normalizedTime.split(":");
-  const hour = Number.parseInt(hourText ?? "", 10);
-  const minute = Number.parseInt(minuteText, 10);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return false;
-  const compactSource = value.toLowerCase();
-  const hourPattern = hour.toString().padStart(1, "0");
-  const minutePattern = minute.toString().padStart(2, "0");
-  return new RegExp(
-    `(?:^|[^\\d])0?${hourPattern}(?::|\\.)${minutePattern}(?!\\d)`,
-    "u",
-  ).test(compactSource);
+function extractRecurringSegmentTimes(value: string): string[] {
+  const tokens =
+    value.match(
+      /(?:^|[^\p{L}\p{N}_])((?:[01]?\d|2[0-3])(?::|\.)[0-5]\d|(?:[01]?\d|2[0-3])\s*(?:h|ч))(?=$|[^\p{L}\p{N}_])/giu,
+    ) ?? [];
+  return Array.from(
+    new Set(
+      tokens
+        .map((token) => extractEventTimeFromText(token))
+        .filter((time): time is string => Boolean(time)),
+    ),
+  ).sort();
+}
+
+function extractPreservedRecurringLanes(value: string): {
+  ambiguous: boolean;
+  lanes: RecurringScheduleLane[];
+} {
+  const lanes = new Map<string, RecurringScheduleLane>();
+  let ambiguous = false;
+  for (const segment of value.split(/\r?\n|[;,]/u).map((item) => normalizeString(item))) {
+    if (!segment) continue;
+    const weekdays = findNamedWeekdays(segment);
+    const times = extractRecurringSegmentTimes(segment);
+    if (weekdays.length === 0 && times.length === 0) continue;
+    if (weekdays.length !== 1 || times.length !== 1) {
+      if (weekdays.length > 0) ambiguous = true;
+      continue;
+    }
+    const lane = { weekday: weekdays[0]!, time: times[0]! };
+    lanes.set(`${lane.weekday}|${lane.time}`, lane);
+  }
+  return { ambiguous, lanes: Array.from(lanes.values()) };
+}
+
+function recurringLaneKey(lane: RecurringScheduleLane): string {
+  return `${lane.weekday}|${lane.time}`;
 }
 
 function getRecurringModelScheduleContext(
@@ -2966,14 +2995,20 @@ function getRecurringModelScheduleContext(
   const endIsoDate = startIsoDate
     ? addDaysToIsoDate(startIsoDate, MAX_EVENT_DAYS_AHEAD)
     : null;
-  const weekdaysByEntry = scheduleEntries.map((entry) =>
-    findNamedWeekday(normalizeString(entry.source_text)),
-  );
-  if (
-    !startIsoDate ||
-    !endIsoDate ||
-    weekdaysByEntry.some((weekday) => weekday === null)
-  ) {
+  const modelLanes = scheduleEntries.map((entry) => {
+    const weekdays = findNamedWeekdays(normalizeString(entry.source_text));
+    const time = extractEventTimeFromText(normalizeString(entry.time));
+    return weekdays.length === 1 && time
+      ? { weekday: weekdays[0]!, time }
+      : null;
+  });
+  if (!startIsoDate || !endIsoDate || modelLanes.some((lane) => lane === null)) {
+    return null;
+  }
+
+  const concreteModelLanes = modelLanes as RecurringScheduleLane[];
+  const modelLaneKeys = concreteModelLanes.map(recurringLaneKey);
+  if (new Set(modelLaneKeys).size !== modelLaneKeys.length) {
     return null;
   }
 
@@ -2989,20 +3024,23 @@ function getRecurringModelScheduleContext(
         post.postedAt,
       ).isoDate
     : null;
+  const preservedPlan = extractPreservedRecurringLanes(independentSourceText);
+  const preservedLaneKeys = new Set(preservedPlan.lanes.map(recurringLaneKey));
+  const sourceStartMatches = independentStartIsoDate === startIsoDate;
+  const sourcePlanCoverageRejected =
+    sourceStartMatches &&
+    (preservedPlan.ambiguous || preservedLaneKeys.size !== modelLaneKeys.length);
   const sourceGroundingVerified =
-    independentStartIsoDate === startIsoDate &&
-    (weekdaysByEntry as number[]).every((weekday) =>
-      containsNamedWeekday(independentSourceText, weekday),
-    ) &&
-    scheduleEntries.every((entry) =>
-      containsScheduleTime(independentSourceText, normalizeString(entry.time)),
-    );
+    sourceStartMatches &&
+    !sourcePlanCoverageRejected &&
+    modelLaneKeys.every((key) => preservedLaneKeys.has(key));
 
   return {
     startIsoDate,
     endIsoDate,
-    weekdaysByEntry: weekdaysByEntry as number[],
+    weekdaysByEntry: concreteModelLanes.map((lane) => lane.weekday),
     sourceGroundingVerified,
+    sourcePlanCoverageRejected,
   };
 }
 
@@ -3034,6 +3072,16 @@ function extractModelSplitEventCandidates(
   const entries: SplitEventCandidate[] = [];
   const seenEntries = new Set<string>();
   const recurringContext = getRecurringModelScheduleContext(post, extracted.schedule_entries);
+  const modelRecurringSourceText = extracted.schedule_entries
+    .map((entry) => normalizeString(entry.source_text))
+    .filter(Boolean)
+    .join("\n");
+  if (
+    extractRecurringScheduleStartDate(modelRecurringSourceText) &&
+    (!recurringContext || recurringContext.sourcePlanCoverageRejected)
+  ) {
+    return [];
+  }
 
   for (const [scheduleEntryIndex, scheduleEntry] of extracted.schedule_entries.entries()) {
     const rawDate = normalizeString(scheduleEntry.date);
@@ -3895,6 +3943,10 @@ function classifyRepeatedSingleEventCaptionCandidates(options: {
     : "preserve";
 }
 
+function isRecurringScheduleBoundaryCandidate(candidate: SplitEventCandidate): boolean {
+  return extractRecurringScheduleStartDate(normalizeString(candidate.sourceLine)) !== null;
+}
+
 function extractSplitEventCandidates(
   post: InstagramScrapedPost,
   extracted: ExtractedEventData,
@@ -3912,8 +3964,10 @@ function extractSplitEventCandidates(
     extracted,
     eventType,
     venue,
+  ).filter((candidate) => !isRecurringScheduleBoundaryCandidate(candidate));
+  const altTextCandidates = extractAltTextSplitEventCandidates(post, eventType, venue).filter(
+    (candidate) => !isRecurringScheduleBoundaryCandidate(candidate),
   );
-  const altTextCandidates = extractAltTextSplitEventCandidates(post, eventType, venue);
   const deterministicUnion = reconcileSplitCandidateCoverage(
     captionCandidates,
     altTextCandidates,
@@ -7932,6 +7986,20 @@ export function prepareEventsForInsert(
       : dateNormalization.isoDate
         ? [dateNormalization.isoDate]
         : [];
+  const modelScheduleEvidence = extracted.schedule_entries
+    .map((entry) => normalizeString(entry.source_text))
+    .filter(Boolean);
+  const modelRecurringSourceText = modelScheduleEvidence.join("\n");
+  const recurringScheduleContext = getRecurringModelScheduleContext(
+    post,
+    extracted.schedule_entries,
+  );
+  const rejectedRecurringModelSchedule =
+    Boolean(extractRecurringScheduleStartDate(modelRecurringSourceText)) &&
+    (!recurringScheduleContext || recurringScheduleContext.sourcePlanCoverageRejected);
+  if (rejectedRecurringModelSchedule) {
+    candidateDates = [];
+  }
   const malformedCombinedSchedule = hasMalformedCombinedWeekdayDateSchedule(
     [
       normalizeString(post.caption || extracted.source_caption),
@@ -7950,9 +8018,6 @@ export function prepareEventsForInsert(
     candidateDates = [];
   }
   const usesSplitEventCandidates = splitEventCandidates.length > 0;
-  const modelScheduleEvidence = extracted.schedule_entries
-    .map((entry) => normalizeString(entry.source_text))
-    .filter(Boolean);
   const extractedArtists = normalizeExtractedArtists(extracted.artists)
     .map((artist) => normalizeArtistDisplayName(artist))
     .filter((artist) => titleContainsAlphanumeric(artist))
@@ -8002,6 +8067,7 @@ export function prepareEventsForInsert(
     postType: normalizeString(post.postType).toLowerCase() || null,
     missingImage,
     malformedCombinedSchedule,
+    rejectedRecurringModelSchedule,
     moderationAllowMissingImage: allowMissingImageForModeration,
     moderationMissingImageReason: missingImage
       ? allowMissingImageForModeration

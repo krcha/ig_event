@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { eventRepresentsExpectedOccurrenceForTesting } from "../convex/events.ts";
-import { containsNamedWeekday, findNamedWeekday } from "../lib/events/event-validation.ts";
+import {
+  eventRepresentsExpectedOccurrenceForTesting,
+  getInstagramSourceOccurrenceReceipt,
+} from "../convex/events.ts";
+import {
+  containsNamedWeekday,
+  findNamedWeekday,
+  findNamedWeekdays,
+} from "../lib/events/event-validation.ts";
 import {
   bindSourceOccurrenceMetadata,
   buildSourceOccurrenceKeyForTesting,
@@ -93,6 +100,7 @@ assert.equal(findNamedWeekday("ПОНЕДЕЛЬНИК : 14:00"), 1);
 assert.equal(findNamedWeekday("СРЕДА: 19:00"), 3);
 assert.equal(findNamedWeekday("ПОНЕДЕЉАК 14:00"), 1);
 assert.equal(containsNamedWeekday("ПОНЕДЕЛЬНИК 14:00 / СРЕДА 19:00", 3), true);
+assert.deepEqual(findNamedWeekdays("Monday and Wednesday at 14:00"), [1, 3]);
 
 const fromCaption = [
   "🔥 FRØM THURSDAY at @20_44.nightclub",
@@ -489,11 +497,11 @@ assert.ok(
 
 const groundedCommonPost = {
   ...commonPost,
-  caption: `${commonCaption}\nWeekly from 03.08.26: Monday 14:00, Wednesday 19:00`,
+  caption: `${commonCaption}\nWeekly from 01.08.26: Monday 14:00, Wednesday 19:00`,
 };
 const groundedCommonResults = prepareEventsForInsert(
   groundedCommonPost,
-  commonExtraction,
+  boundaryExtraction,
   IMAGE_URL,
   { "common.belgrade": "COMMON | Белград | Мероприятия" },
   {},
@@ -504,8 +512,253 @@ assert.ok(
   groundedCommonResults.every(
     (result) => result.normalizedFields.sourceOccurrencePlanUnverified === false,
   ),
-  "an exact captured recurrence start, lanes, and times should ground the bounded plan",
+  "an exact captured recurrence start and coherent weekday/time lanes should ground the plan",
 );
+assert.deepEqual(
+  groundedCommonResults
+    .filter((result) => result.kind === "ok")
+    .slice(0, 2)
+    .map((result) => [result.event.date, result.event.time]),
+  [
+    ["2026-08-03", "14:00"],
+    ["2026-08-05", "19:00"],
+  ],
+  "a grounded non-lane boundary must start expansion without becoming an event",
+);
+assert.ok(
+  groundedCommonResults.every(
+    (result) =>
+      (result.kind === "ok" ? result.event.date : result.normalizedFields.normalizedDate) !==
+      "2026-08-01",
+  ),
+  "grounding must not reinterpret the recurrence start boundary as an occurrence",
+);
+
+const swappedLaneExtraction = {
+  ...boundaryExtraction,
+  schedule_entries: boundaryExtraction.schedule_entries.map((entry, index) => ({
+    ...entry,
+    time: index === 0 ? "19:00" : "14:00",
+    source_text:
+      index === 0
+        ? "ЕЖЕНЕДЕЛЬНО С 01.08.26\nПОНЕДЕЛЬНИК : 19:00"
+        : "СРЕДА: 14:00",
+  })),
+};
+const swappedLaneResults = prepareEventsForInsert(
+  groundedCommonPost,
+  swappedLaneExtraction,
+  IMAGE_URL,
+  { "common.belgrade": "COMMON | Белград | Мероприятия" },
+  {},
+  { "common.belgrade": "COMMON | Белград | Мероприятия" },
+  { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+);
+assert.ok(swappedLaneResults.length > 0, "the model lane-swap fixture must emit review candidates");
+assert.ok(
+  swappedLaneResults.every(
+    (result) => result.normalizedFields.sourceOccurrencePlanUnverified === true,
+  ),
+  "weekday/time tokens found elsewhere in the caption must not authorize swapped lane pairs",
+);
+assert.ok(
+  swappedLaneResults.every(
+    (result) =>
+      (result.kind === "ok" ? result.event.date : result.normalizedFields.normalizedDate) !==
+      "2026-08-01",
+  ),
+  "a swapped-lane proposal must not revive the non-event recurrence boundary",
+);
+const firstSwappedLane = bindSourceOccurrenceMetadata(groundedCommonPost, swappedLaneResults).find(
+  (result) => result.kind === "ok",
+);
+assert.ok(firstSwappedLane && firstSwappedLane.kind === "ok");
+if (firstSwappedLane?.kind === "ok") {
+  assert.equal(
+    eventRepresentsExpectedOccurrenceForTesting(firstSwappedLane.event, {
+      key: firstSwappedLane.normalizedFields.sourceOccurrenceKey,
+      date: firstSwappedLane.event.date,
+      time: firstSwappedLane.event.time,
+      venue: firstSwappedLane.event.venue,
+      title: firstSwappedLane.event.title,
+      artists: firstSwappedLane.event.artists,
+    }),
+    false,
+    "a pending swapped-lane candidate must not satisfy a receipt",
+  );
+}
+
+const missingLanePost = {
+  ...groundedCommonPost,
+  caption: `${groundedCommonPost.caption}\nFriday 20:00`,
+};
+const missingLaneResults = prepareEventsForInsert(
+  missingLanePost,
+  boundaryExtraction,
+  IMAGE_URL,
+  { "common.belgrade": "COMMON | Белград | Мероприятия" },
+  {},
+  { "common.belgrade": "COMMON | Белград | Мероприятия" },
+  { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+);
+assert.equal(
+  missingLaneResults.filter((result) => result.kind === "ok").length,
+  0,
+  "a model plan that omits a coherent preserved-source lane must be rejected",
+);
+assert.ok(
+  missingLaneResults.every(
+    (result) => result.normalizedFields.rejectedRecurringModelSchedule === true,
+  ),
+  "a source-lane omission must remain auditable instead of disappearing from the receipt plan",
+);
+
+const ambiguousLanePost = {
+  ...commonPost,
+  caption: "Weekly from 01.08.26: Monday and Wednesday at 14:00",
+};
+const ambiguousLaneExtraction = makeExtraction({
+  venue: "COMMON",
+  category: "learning",
+  schedule_entries: [
+    {
+      date: "01.08.2026",
+      time: "14:00",
+      title: "Language club",
+      artists: [],
+      description: "Weekly language club",
+      source_text: "WEEKLY FROM 01.08.26\nMONDAY AND WEDNESDAY 14:00",
+    },
+  ],
+});
+const ambiguousLaneResults = prepareEventsForInsert(
+  ambiguousLanePost,
+  ambiguousLaneExtraction,
+  IMAGE_URL,
+  { "common.belgrade": "COMMON | Белград | Мероприятия" },
+  {},
+  { "common.belgrade": "COMMON | Белград | Мероприятия" },
+  { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+);
+assert.equal(
+  ambiguousLaneResults.filter((result) => result.kind === "ok").length,
+  0,
+  "an ambiguous multi-weekday recurrence must not persist a model-selected first weekday",
+);
+assert.ok(
+  ambiguousLaneResults.every(
+    (result) => result.normalizedFields.rejectedRecurringModelSchedule === true,
+  ),
+);
+const ambiguousLaneDates = ambiguousLaneResults.map((result) =>
+  result.kind === "ok" ? [result.event.date, result.event.time, result.event.title] : [result.kind, result.normalizedFields.normalizedDate],
+);
+assert.ok(
+  ambiguousLaneDates.every(([date]) => date !== "2026-08-01"),
+  `an ambiguous multi-weekday lane must be rejected rather than fabricating its boundary: ${JSON.stringify(ambiguousLaneDates)}`,
+);
+
+const swappedPersistenceSummary = createEmptyIngestionSummary(["common.belgrade"]).handles[0];
+const persistedSwappedLaneEvents = [];
+await withoutConsoleNoise(() =>
+  processIngestionPostWithExtractionForTesting({
+    client: {
+      query: async () => [],
+      mutation: async (_reference, args) => {
+        if ("representativeEventId" in args) return { recorded: true };
+        if ("id" in args) return args.id;
+        persistedSwappedLaneEvents.push(args);
+        return `qa-swapped-lane-${persistedSwappedLaneEvents.length}`;
+      },
+    },
+    handle: "common.belgrade",
+    post: { ...groundedCommonPost, postType: "video" },
+    summary: swappedPersistenceSummary,
+    canonicalVenueNamesByHandle: { "common.belgrade": "COMMON | Белград | Мероприятия" },
+    venueNameOverridesByHandle: {},
+    configuredVenueNamesByHandle: { "common.belgrade": "COMMON | Белград | Мероприятия" },
+    serviceSecret: "qa",
+    extracted: swappedLaneExtraction,
+  }),
+);
+assert.ok(persistedSwappedLaneEvents.length > 0);
+assert.ok(
+  persistedSwappedLaneEvents.every(
+    (event) => JSON.parse(event.normalizedFieldsJson).sourceOccurrencePlanUnverified === true,
+  ),
+  "the real persistence loop must preserve the swapped-lane unverified marker",
+);
+
+const persistedSwappedLane = persistedSwappedLaneEvents[0];
+const persistedSwappedExpected = persistedSwappedLane.sourceOccurrencePlan.expectedOccurrences.find(
+  (item) => item.key === persistedSwappedLane.sourceOccurrenceKey,
+);
+assert.ok(persistedSwappedExpected);
+const persistedSwappedEventId = "qa-swapped-lane-event";
+const persistedSwappedReceipt = {
+  _id: "qa-swapped-lane-receipt",
+  sourceIdentity: persistedSwappedLane.sourceOccurrencePlan.sourceIdentity,
+  sourceFingerprint: persistedSwappedLane.sourceOccurrencePlan.sourceFingerprint,
+  expectedKeys: persistedSwappedLane.sourceOccurrencePlan.expectedKeys,
+  expectedOccurrences: persistedSwappedLane.sourceOccurrencePlan.expectedOccurrences,
+  deferredChildCount: persistedSwappedLane.sourceOccurrencePlan.deferredChildCount,
+  deferredChildKeys: persistedSwappedLane.sourceOccurrencePlan.deferredChildKeys,
+  satisfiedKeys: [persistedSwappedLane.sourceOccurrenceKey],
+  satisfiedOccurrences: [
+    {
+      key: persistedSwappedLane.sourceOccurrenceKey,
+      eventId: persistedSwappedEventId,
+    },
+  ],
+};
+const previousCronSecret = process.env.CRON_SECRET;
+process.env.CRON_SECRET = "qa-receipt-secret";
+try {
+  const liveSwappedReceipt = await getInstagramSourceOccurrenceReceipt._handler(
+    {
+      auth: { getUserIdentity: async () => null },
+      db: {
+        get: async (id) =>
+          id === persistedSwappedEventId
+            ? {
+                _id: persistedSwappedEventId,
+                ...persistedSwappedLane,
+                status: "pending",
+              }
+            : null,
+        query: (table) => {
+          assert.equal(table, "instagramSourceOccurrenceReceipts");
+          return {
+            withIndex: (_indexName, configure) => {
+              const builder = {
+                eq: (field, value) => {
+                  assert.equal(field, "sourceIdentity");
+                  assert.equal(value, persistedSwappedReceipt.sourceIdentity);
+                  return builder;
+                },
+              };
+              configure(builder);
+              return { unique: async () => persistedSwappedReceipt };
+            },
+          };
+        },
+      },
+    },
+    {
+      sourceIdentity: persistedSwappedReceipt.sourceIdentity,
+      serviceSecret: "qa-receipt-secret",
+    },
+  );
+  assert.deepEqual(
+    liveSwappedReceipt.satisfiedKeys,
+    [],
+    "the real receipt query must exclude a pending swapped-lane representative",
+  );
+  assert.deepEqual(liveSwappedReceipt.satisfiedOccurrences, []);
+} finally {
+  if (previousCronSecret === undefined) delete process.env.CRON_SECRET;
+  else process.env.CRON_SECRET = previousCronSecret;
+}
 
 const ingestionSource = readFileSync(
   new URL("../lib/pipeline/run-instagram-ingestion.ts", import.meta.url),
