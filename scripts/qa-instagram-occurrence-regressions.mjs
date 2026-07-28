@@ -612,6 +612,36 @@ assert.ok(
   ),
   "a source-lane omission must remain auditable instead of disappearing from the receipt plan",
 );
+const rejectedCoverageSummary = createEmptyIngestionSummary(["common.belgrade"]).handles[0];
+let rejectedCoverageMutationCount = 0;
+await withoutConsoleNoise(() =>
+  processIngestionPostWithExtractionForTesting({
+    client: {
+      query: async () => [],
+      mutation: async () => {
+        rejectedCoverageMutationCount += 1;
+        return null;
+      },
+    },
+    handle: "common.belgrade",
+    post: { ...missingLanePost, postType: "video" },
+    summary: rejectedCoverageSummary,
+    canonicalVenueNamesByHandle: { "common.belgrade": "COMMON | Белград | Мероприятия" },
+    venueNameOverridesByHandle: {},
+    configuredVenueNamesByHandle: { "common.belgrade": "COMMON | Белград | Мероприятия" },
+    serviceSecret: "qa",
+    extracted: boundaryExtraction,
+  }),
+);
+assert.equal(rejectedCoverageSummary.insertedEvents, 0);
+assert.equal(rejectedCoverageSummary.failedExtractions, 1);
+assert.equal(rejectedCoverageSummary.failed_extraction, 1);
+assert.equal(
+  rejectedCoverageMutationCount,
+  0,
+  "a rejected lane-coverage plan must not reconcile an empty receipt or write events",
+);
+assert.match(rejectedCoverageSummary.errors[0] ?? "", /Recurring schedule rejected/u);
 
 const ambiguousLanePost = {
   ...commonPost,

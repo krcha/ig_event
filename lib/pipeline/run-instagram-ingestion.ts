@@ -9017,6 +9017,27 @@ async function processIngestionPost(
     return;
   }
 
+  if (
+    preparedResults.some(
+      (prepared) => prepared.normalizedFields.rejectedRecurringModelSchedule === true,
+    )
+  ) {
+    const error =
+      "Recurring schedule rejected because model lanes are ambiguous or omit preserved source lanes.";
+    summary.failedExtractions += 1;
+    summary.failed_extractions += 1;
+    summary.failed_extraction += 1;
+    summary.errors.push(error);
+    logError("ingestion.recurring_schedule.rejected", {
+      step: "normalize_posts" satisfies IngestionStep,
+      ...postContext,
+      extractionMode,
+      selectedImageUrl,
+      error,
+    });
+    return;
+  }
+
   let existingMatches: ExistingSourceMatch[] = [];
   try {
     const sameDateMatches = await listExistingEventsByPreparedDates(
