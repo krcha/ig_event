@@ -2926,6 +2926,12 @@ type RecurringScheduleLane = {
 
 const RECURRING_SCHEDULE_START_PATTERN =
   /(?:weekly|every\s+week|svake\s+(?:nedelje|sedmice)|svakog\s+tjedna|nedeljno|tjedno|недељно|еженедельно)\s*[\p{P}\p{S}]{0,3}\s*(?:(?:starting|beginning|starts?|begins?)\s*[\p{P}\p{S}]{0,3}\s*(?:(?:from|on)\s*)?|(?:from|on|od|с)\s*)((?:0?[1-9]|[12]\d|3[01])[./-](?:0?[1-9]|1[0-2])[./-](?:\d{2}|\d{4}))/iu;
+const RECURRING_SCHEDULE_START_SUSPICION_PATTERN =
+  /(?:weekly|every\s+week|svake\s+(?:nedelje|sedmice)|svakog\s+tjedna|nedeljno|tjedno|недељно|еженедельно)[\s\S]{0,120}?((?:0?[1-9]|[12]\d|3[01])[./-](?:0?[1-9]|1[0-2])[./-](?:\d{2}|\d{4}))/iu;
+
+function hasRecurringScheduleStartSuspicion(value: string): boolean {
+  return RECURRING_SCHEDULE_START_SUSPICION_PATTERN.test(normalizeString(value));
+}
 
 function extractRecurringScheduleStartDate(value: string): string | null {
   return normalizeString(value.match(RECURRING_SCHEDULE_START_PATTERN)?.[1]) || null;
@@ -3076,8 +3082,16 @@ function extractModelSplitEventCandidates(
     .map((entry) => normalizeString(entry.source_text))
     .filter(Boolean)
     .join("\n");
+  const recurringScheduleEvidenceText = [
+    modelRecurringSourceText,
+    post.caption,
+    extractPostAltTextEvidence(post.altText),
+  ]
+    .map((value) => normalizeString(value))
+    .filter(Boolean)
+    .join("\n");
   if (
-    extractRecurringScheduleStartDate(modelRecurringSourceText) &&
+    hasRecurringScheduleStartSuspicion(recurringScheduleEvidenceText) &&
     (!recurringContext || recurringContext.sourcePlanCoverageRejected)
   ) {
     return [];
@@ -7994,8 +8008,16 @@ export function prepareEventsForInsert(
     post,
     extracted.schedule_entries,
   );
+  const recurringScheduleEvidenceText = [
+    modelRecurringSourceText,
+    post.caption,
+    extractPostAltTextEvidence(post.altText),
+  ]
+    .map((value) => normalizeString(value))
+    .filter(Boolean)
+    .join("\n");
   const rejectedRecurringModelSchedule =
-    Boolean(extractRecurringScheduleStartDate(modelRecurringSourceText)) &&
+    hasRecurringScheduleStartSuspicion(recurringScheduleEvidenceText) &&
     (!recurringScheduleContext || recurringScheduleContext.sourcePlanCoverageRejected);
   if (rejectedRecurringModelSchedule) {
     candidateDates = [];
@@ -8006,9 +8028,10 @@ export function prepareEventsForInsert(
       extractPostAltTextEvidence(post.altText),
     ].filter(Boolean).join("\n"),
   );
-  const splitEventCandidates = malformedCombinedSchedule
-    ? []
-    : extractSplitEventCandidates(
+  const splitEventCandidates =
+    malformedCombinedSchedule || rejectedRecurringModelSchedule
+      ? []
+      : extractSplitEventCandidates(
         post,
         extracted,
         eventType,

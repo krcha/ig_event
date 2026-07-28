@@ -628,6 +628,83 @@ for (const recurrenceMarker of [
   }
 }
 
+for (const suspiciousRecurrenceMarker of [
+  "Weekly schedule begins around 01.08.26",
+  "Weekly :::: from 01.08.26",
+  "Weekly occurs beginning the week of 01.08.26",
+]) {
+  const suspiciousPost = {
+    ...commonPost,
+    caption: `${commonCaption}\n${suspiciousRecurrenceMarker}: Monday 14:00, Wednesday 19:00`,
+  };
+  const suspiciousExtraction = {
+    ...boundaryExtraction,
+    schedule_entries: boundaryExtraction.schedule_entries.map((entry, index) => ({
+      ...entry,
+      source_text:
+        index === 0
+          ? `${suspiciousRecurrenceMarker}\nMONDAY 14:00`
+          : "WEDNESDAY 19:00",
+    })),
+  };
+  const suspiciousResults = prepareEventsForInsert(
+    suspiciousPost,
+    suspiciousExtraction,
+    IMAGE_URL,
+    { "common.belgrade": "COMMON | Белград | Мероприятия" },
+    {},
+    { "common.belgrade": "COMMON | Белград | Мероприятия" },
+    { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+  );
+  assert.ok(
+    suspiciousResults.every((result) => result.kind !== "ok"),
+    `${suspiciousRecurrenceMarker} must fail closed rather than fabricate events`,
+  );
+  assert.ok(
+    suspiciousResults.every(
+      (result) => result.normalizedFields.rejectedRecurringModelSchedule === true,
+    ),
+    `${suspiciousRecurrenceMarker} must remain auditable as a rejected recurrence`,
+  );
+
+  if (suspiciousRecurrenceMarker.includes("schedule begins")) {
+    const suspiciousSummary = createEmptyIngestionSummary(["common.belgrade"]).handles[0];
+    let suspiciousMutationCalls = 0;
+    await withoutConsoleNoise(() =>
+      processIngestionPostWithExtractionForTesting({
+        client: {
+          query: async () => [],
+          mutation: async () => {
+            suspiciousMutationCalls += 1;
+            return "unexpected-recurrence-suspicion-mutation";
+          },
+        },
+        handle: "common.belgrade",
+        post: { ...suspiciousPost, postType: "video" },
+        summary: suspiciousSummary,
+        canonicalVenueNamesByHandle: {
+          "common.belgrade": "COMMON | Белград | Мероприятия",
+        },
+        venueNameOverridesByHandle: {},
+        configuredVenueNamesByHandle: {
+          "common.belgrade": "COMMON | Белград | Мероприятия",
+        },
+        serviceSecret: "qa",
+        extracted: suspiciousExtraction,
+      }),
+    );
+    assert.equal(suspiciousSummary.insertedEvents, 0);
+    assert.equal(suspiciousSummary.failedExtractions, 1);
+    assert.equal(suspiciousMutationCalls, 0);
+    assert.ok(
+      suspiciousSummary.errors.some((error) =>
+        error.includes("Recurring schedule rejected because model lanes"),
+      ),
+      "unrecognized recurrence grammar must stay retryable and never complete an empty receipt",
+    );
+  }
+}
+
 const swappedLaneExtraction = {
   ...boundaryExtraction,
   schedule_entries: boundaryExtraction.schedule_entries.map((entry, index) => ({
