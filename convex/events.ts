@@ -2158,11 +2158,17 @@ export const setEventStatuses = mutation({
     status: moderationStatus,
     reviewedBy: v.optional(v.string()),
     moderationNote: v.optional(v.string()),
+    approveAsDistinctSameVenueDateBatch: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const identity = await requireAdminIdentity(ctx);
     const now = Date.now();
     const uniqueIds = [...new Set(args.ids)];
+    if (args.approveAsDistinctSameVenueDateBatch && (args.status !== "approved" || uniqueIds.length < 2)) {
+      throw new Error(
+        "Distinct same-venue/date batch approval requires at least two approved event IDs.",
+      );
+    }
     let updatedCount = 0;
     let skippedCount = 0;
 
@@ -2188,7 +2194,7 @@ export const setEventStatuses = mutation({
               instagramPostId: existingEvent.instagramPostId,
               instagramPostUrl: existingEvent.instagramPostUrl,
             },
-            [id],
+            args.approveAsDistinctSameVenueDateBatch ? uniqueIds : [id],
           );
           await ctx.db.patch(id, venueFields);
         } catch (error) {
