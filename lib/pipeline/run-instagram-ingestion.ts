@@ -2925,7 +2925,7 @@ type RecurringScheduleLane = {
 };
 
 const RECURRING_SCHEDULE_START_PATTERN =
-  /(?:weekly|every\s+week|svake\s+(?:nedelje|sedmice)|svakog\s+tjedna|nedeljno|tjedno|недељно|еженедельно)\s*[\p{P}\p{S}]{0,3}\s*(?:(?:starting|beginning|starts?|begins?)\s*[\p{P}\p{S}]{0,3}\s*(?:(?:from|on)\s*)?|(?:from|on|od|с)\s*)((?:0?[1-9]|[12]\d|3[01])[./-](?:0?[1-9]|1[0-2])[./-](?:\d{2}|\d{4}))/iu;
+  /(?:weekly|every\s+week|svake\s+(?:nedelje|sedmice)|svakog\s+tjedna|nedeljno|tjedno|недељно|еженедельно)\s*[\p{P}\p{S}]{0,3}\s*(?:(?:starting|beginning|starts?|begins?)\s*[\p{P}\p{S}]{0,3}\s*(?:(?:from|on)\s*[\p{P}\p{S}]{0,3}\s*)?|(?:from|on|od|с)\s*[\p{P}\p{S}]{0,3}\s*)((?:0?[1-9]|[12]\d|3[01])[./-](?:0?[1-9]|1[0-2])[./-](?:\d{2}|\d{4}))/iu;
 const RECURRING_SCHEDULE_START_SUSPICION_PATTERN =
   /(?:weekly|every\s+week|svake\s+(?:nedelje|sedmice)|svakog\s+tjedna|nedeljno|tjedno|недељно|еженедельно)[\s\S]{0,120}?((?:0?[1-9]|[12]\d|3[01])[./-](?:0?[1-9]|1[0-2])[./-](?:\d{2}|\d{4}))/iu;
 
@@ -3957,8 +3957,16 @@ function classifyRepeatedSingleEventCaptionCandidates(options: {
     : "preserve";
 }
 
-function isRecurringScheduleBoundaryCandidate(candidate: SplitEventCandidate): boolean {
-  return extractRecurringScheduleStartDate(normalizeString(candidate.sourceLine)) !== null;
+function isRecurringScheduleBoundaryCandidate(
+  candidate: SplitEventCandidate,
+  recurringStartIsoDate: string | null,
+): boolean {
+  return (
+    extractRecurringScheduleStartDate(normalizeString(candidate.sourceLine)) !== null ||
+    Boolean(
+      recurringStartIsoDate && candidate.normalizedDate.isoDate === recurringStartIsoDate,
+    )
+  );
 }
 
 function extractSplitEventCandidates(
@@ -3967,6 +3975,14 @@ function extractSplitEventCandidates(
   eventType: string,
   venue: string | null,
 ): SplitEventCandidate[] {
+  const recurringSourceEvidence = [post.caption, extractPostAltTextEvidence(post.altText)]
+    .map((value) => normalizeString(value))
+    .filter(Boolean)
+    .join("\n");
+  const recurringStartRawDate = extractRecurringScheduleStartDate(recurringSourceEvidence);
+  const recurringStartIsoDate = recurringStartRawDate
+    ? normalizeEventDate(recurringStartRawDate, recurringSourceEvidence, post.postedAt).isoDate
+    : null;
   const modelCandidates = extractModelSplitEventCandidates(
     post,
     extracted,
@@ -3978,9 +3994,11 @@ function extractSplitEventCandidates(
     extracted,
     eventType,
     venue,
-  ).filter((candidate) => !isRecurringScheduleBoundaryCandidate(candidate));
+  ).filter((candidate) =>
+    !isRecurringScheduleBoundaryCandidate(candidate, recurringStartIsoDate)
+  );
   const altTextCandidates = extractAltTextSplitEventCandidates(post, eventType, venue).filter(
-    (candidate) => !isRecurringScheduleBoundaryCandidate(candidate),
+    (candidate) => !isRecurringScheduleBoundaryCandidate(candidate, recurringStartIsoDate),
   );
   const deterministicUnion = reconcileSplitCandidateCoverage(
     captionCandidates,
