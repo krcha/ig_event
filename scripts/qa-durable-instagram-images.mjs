@@ -19,6 +19,7 @@ import {
 import {
   resolveInstagramIngestionMediaSelection,
 } from "../lib/pipeline/instagram-media-selection.ts";
+import { getRetryableProcessingFailureCount } from "../lib/pipeline/run-instagram-ingestion.ts";
 import {
   parseArgs,
   parseManifestText,
@@ -28,6 +29,23 @@ import {
 const APIFY_IMAGE = "https://images.apifyusercontent.com/example/poster.webp";
 const INSTAGRAM_IMAGE = "https://instagram.fna.fbcdn.net/example/poster.jpg";
 const POST_URL = "https://www.instagram.com/p/QA123/?utm_source=test";
+
+const processingFailureCounts = {
+  failedDownloads: 0,
+  failedConversions: 0,
+  failedExtractions: 0,
+  failedImagePersistence: 0,
+  duplicate_update_failed: 0,
+};
+assert.equal(getRetryableProcessingFailureCount(processingFailureCounts), 0);
+assert.equal(
+  getRetryableProcessingFailureCount({
+    ...processingFailureCounts,
+    failedImagePersistence: 1,
+  }),
+  1,
+  "A durable-media failure must keep the saved source retryable.",
+);
 
 function read(path) {
   return readFileSync(path, "utf8");
@@ -317,6 +335,14 @@ assert.match(ingestionSource, /getNonExpiringPublicEventImageUrl\(selectedImageU
 assert.match(ingestionSource, /hasDurableMediaAttachmentTarget && durableMediaCandidate/);
 assert.match(ingestionSource, /isExistingEventEligibleForDurableMediaRetry/);
 assert.match(ingestionSource, /failedImagePersistence \+= 1/);
+assert.match(
+  ingestionSource,
+  /retryableFailureCountBefore = getRetryableProcessingFailureCount\(summary\)/,
+);
+assert.match(
+  ingestionSource,
+  /retryableFailureCountAfter = getRetryableProcessingFailureCount\(summary\)/,
+);
 assert.match(ingestionSource, /imageStorageId: preferredNext\.imageStorageId/);
 assert.match(dashboardSource, /Persisted images/);
 assert.match(dashboardSource, /Failed image persistence/);

@@ -3901,6 +3901,25 @@ function getTerminalNoEventSkipCount(summary: HandleSummary): number {
   );
 }
 
+export function getRetryableProcessingFailureCount(
+  summary: Pick<
+    HandleSummary,
+    | "failedDownloads"
+    | "failedConversions"
+    | "failedExtractions"
+    | "failedImagePersistence"
+    | "duplicate_update_failed"
+  >,
+): number {
+  return (
+    summary.failedDownloads +
+    summary.failedConversions +
+    summary.failedExtractions +
+    summary.failedImagePersistence +
+    summary.duplicate_update_failed
+  );
+}
+
 function getOrCreateHandleSummary(summary: IngestionSummary, handle: string): HandleSummary {
   const existing = summary.handles.find((entry) => entry.handle === handle);
   if (existing) {
@@ -9590,11 +9609,7 @@ async function processLoadedPostsForHandle(
       continue;
     }
 
-    const retryableFailureCountBefore =
-      summary.failedDownloads +
-      summary.failedConversions +
-      summary.failedExtractions +
-      summary.duplicate_update_failed;
+    const retryableFailureCountBefore = getRetryableProcessingFailureCount(summary);
     const terminalNoEventSkipCountBefore = getTerminalNoEventSkipCount(summary);
     const terminalPermanentFailureCountBefore =
       summary.terminalPermanentExtractionFailures ?? 0;
@@ -9637,11 +9652,7 @@ async function processLoadedPostsForHandle(
       throw error;
     }
 
-    const retryableFailureCountAfter =
-      summary.failedDownloads +
-      summary.failedConversions +
-      summary.failedExtractions +
-      summary.duplicate_update_failed;
+    const retryableFailureCountAfter = getRetryableProcessingFailureCount(summary);
     const hasTerminalPermanentFailure =
       (summary.terminalPermanentExtractionFailures ?? 0) > terminalPermanentFailureCountBefore;
     const hasProcessingFailure =
