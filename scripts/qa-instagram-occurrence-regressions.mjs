@@ -537,6 +537,11 @@ assert.ok(
 for (const recurrenceMarker of [
   "Weekly: from 01.08.26",
   "Weekly starting on 01.08.26",
+  "Weekly; from 01.08.26",
+  "Weekly, starting on 01.08.26",
+  "Weekly starting 01.08.26",
+  "Every week — from 01.08.26",
+  "Nedeljno: od 01.08.26",
 ]) {
   const syntaxPost = {
     ...commonPost,
