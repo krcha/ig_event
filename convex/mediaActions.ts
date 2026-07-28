@@ -14,6 +14,22 @@ type SourceIdentityArgs = {
   instagramPostUrl?: string;
 };
 
+type SourceProcessingFence = {
+  handle: string;
+  postId?: string;
+  instagramPostUrl?: string;
+  owner: string;
+  sourceRevision: number;
+};
+
+const sourceProcessingFenceValidator = v.object({
+  handle: v.string(),
+  postId: v.optional(v.string()),
+  instagramPostUrl: v.optional(v.string()),
+  owner: v.string(),
+  sourceRevision: v.number(),
+});
+
 type MediaAssetLookup = {
   _id: Id<"mediaAssets">;
   storageId: Id<"_storage">;
@@ -48,6 +64,7 @@ const refreshAndAttach =
       storageId: Id<"_storage">;
       url: string;
       actor: string;
+      processingFence?: SourceProcessingFence;
     },
     AttachmentCounts
   >;
@@ -59,6 +76,7 @@ const removeMissingAsset =
       assetId: Id<"mediaAssets">;
       expectedStorageId: Id<"_storage">;
       actor: string;
+      processingFence?: SourceProcessingFence;
     },
     boolean
   >;
@@ -74,6 +92,7 @@ const claimAndAttach =
       byteLength: number;
       checksumSha256: string;
       actor: string;
+      processingFence?: SourceProcessingFence;
     },
     ClaimedAsset
   >;
@@ -91,6 +110,7 @@ const replaceMissingAndAttach =
       byteLength: number;
       checksumSha256: string;
       actor: string;
+      processingFence?: SourceProcessingFence;
     },
     AttachmentCounts & { assetId: Id<"mediaAssets">; checksumSha256: string }
   >;
@@ -100,10 +120,17 @@ export const persistInstagramImage = action({
     postId: v.optional(v.string()),
     instagramPostUrl: v.optional(v.string()),
     upstreamUrl: v.string(),
+    processingFence: v.optional(sourceProcessingFenceValidator),
+    maintenanceReason: v.optional(v.literal("durable_image_repair")),
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authorization = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    if (Boolean(args.processingFence) === Boolean(args.maintenanceReason)) {
+      throw new Error(
+        "Durable image persistence requires exactly one processing fence or maintenance reason.",
+      );
+    }
     const identity = normalizeInstagramMediaSourceIdentity(args);
     const sourceArgs = {
       ...(identity.postId ? { postId: identity.postId } : {}),
@@ -111,6 +138,9 @@ export const persistInstagramImage = action({
         ? { instagramPostUrl: identity.normalizedInstagramPostUrl }
         : {}),
     };
+    const processingFenceArgs = args.processingFence
+      ? { processingFence: args.processingFence }
+      : {};
 
     const existing = await ctx.runQuery(findBySourceIdentity, sourceArgs);
     if (existing) {
@@ -118,6 +148,7 @@ export const persistInstagramImage = action({
       if (currentUrl) {
         const counts = await ctx.runMutation(refreshAndAttach, {
           ...sourceArgs,
+          ...processingFenceArgs,
           assetId: existing._id,
           storageId: existing.storageId,
           url: currentUrl,
@@ -134,6 +165,7 @@ export const persistInstagramImage = action({
       }
       await ctx.runMutation(removeMissingAsset, {
         ...sourceArgs,
+        ...processingFenceArgs,
         assetId: existing._id,
         expectedStorageId: existing.storageId,
         actor: authorization.actor,
@@ -156,6 +188,7 @@ export const persistInstagramImage = action({
 
       const claim = await ctx.runMutation(claimAndAttach, {
         ...sourceArgs,
+        ...processingFenceArgs,
         storageId: provisionalStorageId,
         url: provisionalUrl,
         upstreamUrl: image.finalUrl,
@@ -184,6 +217,7 @@ export const persistInstagramImage = action({
         provisionalStorageId = null;
         const counts = await ctx.runMutation(refreshAndAttach, {
           ...sourceArgs,
+          ...processingFenceArgs,
           assetId: claim.assetId,
           storageId: claim.storageId,
           url: winnerUrl,
@@ -201,6 +235,7 @@ export const persistInstagramImage = action({
 
       const replacement = await ctx.runMutation(replaceMissingAndAttach, {
         ...sourceArgs,
+        ...processingFenceArgs,
         assetId: claim.assetId,
         expectedStorageId: claim.storageId,
         storageId: provisionalStorageId,

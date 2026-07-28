@@ -15,7 +15,7 @@ export const MAX_FOLLOW_DISCOVERY_MAX_TOTAL_CHARGE_USD = 1.5;
 export const DEFAULT_FOLLOW_DISCOVERY_TIMEOUT_SECONDS = 300;
 export const MIN_FOLLOW_DISCOVERY_TIMEOUT_SECONDS = 30;
 export const MAX_FOLLOW_DISCOVERY_TIMEOUT_SECONDS = 300;
-export const DEFAULT_FOLLOW_DISCOVERY_INGESTION_RESULTS_LIMIT = 1;
+export const DEFAULT_FOLLOW_DISCOVERY_INGESTION_RESULTS_LIMIT = 5;
 export const DEFAULT_FOLLOW_DISCOVERY_INGESTION_DAYS_BACK = 10;
 const MAX_FOLLOW_DISCOVERY_INGESTION_RESULTS_LIMIT = 5;
 const MAX_FOLLOW_DISCOVERY_INGESTION_DAYS_BACK = 30;
@@ -426,10 +426,19 @@ export function planFollowDiscoveryVenues(options: {
   };
 }
 
-export async function scrapeInstagramFollowingAccounts(options: {
+export type FollowDiscoveryScrapeResult = {
+  accounts: FollowDiscoveryAccount[];
+  rawItemCount: number;
+  malformedItemCount: number;
+  duplicateItemCount: number;
+  capped: boolean;
+  complete: boolean;
+};
+
+export async function scrapeInstagramFollowingAccountsDetailed(options: {
   request: ApifyFollowingScrapeRequest;
   env?: Record<string, string | undefined>;
-}): Promise<FollowDiscoveryAccount[]> {
+}): Promise<FollowDiscoveryScrapeResult> {
   const env = options.env ?? process.env;
   const apiToken = env.APIFY_API_TOKEN?.trim() || getRequiredEnv("APIFY_API_TOKEN");
   const actorIdForPath = normalizeApifyActorIdForPath(options.request.actorId);
@@ -474,10 +483,40 @@ export async function scrapeInstagramFollowingAccounts(options: {
     );
   }
 
-  const rawItems = (await response.json()) as unknown[];
-  return rawItems
+  const payload = (await response.json()) as unknown;
+  if (!Array.isArray(payload)) {
+    throw new Error("Apify following scraper returned a non-array payload.");
+  }
+  const normalized = payload
     .map((item) => normalizeApifyFollowingAccount(item))
     .filter((item): item is FollowDiscoveryAccount => item !== null);
+  const accounts = [
+    ...new Map(
+      normalized.map((account) => [normalizeInstagramHandle(account.username), account]),
+    ).values(),
+  ];
+  const malformedItemCount = payload.length - normalized.length;
+  const duplicateItemCount = normalized.length - accounts.length;
+  const capped = payload.length >= options.request.runOptions.maxItems;
+  return {
+    accounts,
+    rawItemCount: payload.length,
+    malformedItemCount,
+    duplicateItemCount,
+    capped,
+    complete:
+      payload.length > 0 &&
+      malformedItemCount === 0 &&
+      duplicateItemCount === 0 &&
+      !capped,
+  };
+}
+
+export async function scrapeInstagramFollowingAccounts(options: {
+  request: ApifyFollowingScrapeRequest;
+  env?: Record<string, string | undefined>;
+}): Promise<FollowDiscoveryAccount[]> {
+  return (await scrapeInstagramFollowingAccountsDetailed(options)).accounts;
 }
 
 export async function runFollowDiscoveryWorkflow(options: {

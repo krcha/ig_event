@@ -4,9 +4,75 @@ import {
   buildEventExtractionUserPrompt,
   EVENT_EXTRACTION_SYSTEM_PROMPT,
 } from "./event-extraction-prompt";
+import { getOpenAiMaxAttemptsPerPost } from "@/lib/pipeline/instagram-ingestion-durability";
 
 const OPENAI_REQUEST_TIMEOUT_MS = 40000;
-const OPENAI_MAX_ATTEMPTS = 2;
+
+export class OpenAiProviderBlockedError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "OpenAiProviderBlockedError";
+    this.status = status;
+  }
+}
+
+export function isOpenAiProviderBlockedError(
+  error: unknown,
+): error is OpenAiProviderBlockedError {
+  return error instanceof OpenAiProviderBlockedError;
+}
+
+export class OpenAiPermanentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OpenAiPermanentError";
+  }
+}
+
+export function isOpenAiPermanentError(error: unknown): error is OpenAiPermanentError {
+  return error instanceof OpenAiPermanentError;
+}
+
+export class OpenAiTransientError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "OpenAiTransientError";
+    this.status = status;
+  }
+}
+
+export function classifyOpenAiHttpFailure(
+  status: number,
+  errorBody: string,
+): "blocked" | "transient" | "permanent" {
+  if (status === 401 || status === 403) return "blocked";
+  if (status === 429) {
+    const normalized = errorBody.toLocaleLowerCase();
+    if (
+      normalized.includes("insufficient_quota") ||
+      normalized.includes("billing_hard_limit") ||
+      normalized.includes("billing") ||
+      normalized.includes("quota") ||
+      normalized.includes("credit balance")
+    ) {
+      return "blocked";
+    }
+    return "transient";
+  }
+  if (status === 408 || status === 409 || status >= 500) return "transient";
+  return "permanent";
+}
+
+function isTransientOpenAiFailure(error: unknown): boolean {
+  return (
+    error instanceof OpenAiTransientError ||
+    (error instanceof Error && ["AbortError", "TimeoutError", "TypeError"].includes(error.name))
+  );
+}
 
 const extractionEvidenceSnippetSchema = z.object({
   source: z.union([
@@ -66,10 +132,18 @@ const extractedEventSchema = z.object({
   }),
 });
 
-export type ExtractedEventData = z.infer<typeof extractedEventSchema>;
+export type ExtractedEventData = z.infer<typeof extractedEventSchema> & {
+  _openaiUsage?: {
+    model?: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+  };
+};
 
 type ExtractEventDataOptions = {
   imageDataUrl?: string | null;
+  imageDataUrls?: string[];
   caption?: string | null;
   altText?: string | null;
   instagramPostUrl: string;
@@ -404,11 +478,11 @@ export async function extractEventDataFromInstagramPost(
   const openAiVisionModel = getOpenAiModelEnv("OPENAI_VISION_MODEL");
   let lastError: unknown;
 
-  for (let attempt = 1; attempt <= OPENAI_MAX_ATTEMPTS; attempt += 1) {
+  const maxAttempts = getOpenAiMaxAttemptsPerPost();
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), OPENAI_REQUEST_TIMEOUT_MS);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), OPENAI_REQUEST_TIMEOUT_MS);
-
       const userContent: Array<
         | { type: "input_text"; text: string }
         | { type: "input_image"; image_url: string; detail: "high" }
@@ -429,10 +503,14 @@ export async function extractEventDataFromInstagramPost(
         },
       ];
 
-      if (options.imageDataUrl) {
+      const imageDataUrls = [
+        ...(options.imageDataUrls ?? []),
+        options.imageDataUrl,
+      ].filter((value): value is string => Boolean(value));
+      for (const imageDataUrl of [...new Set(imageDataUrls)]) {
         userContent.push({
           type: "input_image",
-          image_url: options.imageDataUrl,
+          image_url: imageDataUrl,
           detail: "high",
         });
       }
@@ -467,17 +545,27 @@ export async function extractEventDataFromInstagramPost(
         cache: "no-store",
         signal: controller.signal,
       });
-
-      clearTimeout(timeoutId);
-
       if (!response.ok) {
         const errorBody = await response.text();
-        throw new Error(
-          `OpenAI extraction failed: ${response.status} ${response.statusText} - ${errorBody}`,
-        );
+        const message =
+          `OpenAI extraction failed: ${response.status} ${response.statusText} - ${errorBody}`;
+        const classification = classifyOpenAiHttpFailure(response.status, errorBody);
+        if (classification === "blocked") {
+          throw new OpenAiProviderBlockedError(response.status, message);
+        }
+        if (classification === "transient") {
+          throw new OpenAiTransientError(response.status, message);
+        }
+        throw new OpenAiPermanentError(message);
       }
 
       const payload = (await response.json()) as {
+        model?: string;
+        usage?: {
+          input_tokens?: number;
+          output_tokens?: number;
+          total_tokens?: number;
+        };
         output_text?: string;
         output?: Array<{
           content?: Array<{ type?: string; text?: string }>;
@@ -501,15 +589,40 @@ export async function extractEventDataFromInstagramPost(
         ...parsed,
         source_caption: options.caption ?? "",
         source_url: options.instagramPostUrl,
+        _openaiUsage: {
+          model: payload.model ?? openAiVisionModel,
+          inputTokens: payload.usage?.input_tokens,
+          outputTokens: payload.usage?.output_tokens,
+          totalTokens: payload.usage?.total_tokens,
+        },
       };
     } catch (error) {
       lastError = error;
-      if (attempt < OPENAI_MAX_ATTEMPTS) {
+      if (isOpenAiProviderBlockedError(error)) {
+        break;
+      }
+      if (!isTransientOpenAiFailure(error)) {
+        lastError = isOpenAiPermanentError(error)
+          ? error
+          : new OpenAiPermanentError(
+              error instanceof Error ? error.message : "Permanent OpenAI response/schema failure.",
+            );
+        break;
+      }
+      if (attempt < maxAttempts) {
         await new Promise((resolve) => setTimeout(resolve, attempt * 700));
       }
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
+  if (isOpenAiProviderBlockedError(lastError)) {
+    throw lastError;
+  }
+  if (isOpenAiPermanentError(lastError)) {
+    throw lastError;
+  }
   const errorMessage =
     lastError instanceof Error ? lastError.message : "Unknown OpenAI extraction error.";
   throw new Error(errorMessage);

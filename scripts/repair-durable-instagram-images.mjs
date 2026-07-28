@@ -182,6 +182,7 @@ export async function runRepair(options) {
           ...(row.postId ? { postId: row.postId } : {}),
           ...(row.instagramPostUrl ? { instagramPostUrl: row.instagramPostUrl } : {}),
           upstreamUrl: row.upstreamUrl,
+          maintenanceReason: "durable_image_repair",
           serviceSecret: options.serviceSecret,
         });
         results[index] = {

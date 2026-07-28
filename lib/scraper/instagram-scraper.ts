@@ -1,8 +1,8 @@
 import { getRequiredEnv } from "../utils/env.ts";
 
 const DEFAULT_APIFY_ACTOR_ID = "apify/instagram-post-scraper";
-const DEFAULT_RESULTS_LIMIT = 2;
-const MAX_TOP_LEVEL_POSTS_PER_ACCOUNT = 5;
+const DEFAULT_RESULTS_LIMIT = 3;
+const MAX_TOP_LEVEL_POSTS_PER_ACCOUNT = 20;
 const DEFAULT_DAYS_BACK = 10;
 const DEFAULT_APIFY_HISTORY_RUNS_LIMIT = 100;
 const MAX_APIFY_HISTORY_RUNS_LIMIT = 200;
@@ -23,8 +23,8 @@ const SUPPORTED_APIFY_MEMORY_MBYTES = [
   32768,
 ] as const;
 const MIN_APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN = 0.01;
-const MAX_APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN = 0.01;
-const DEFAULT_APIFY_MAX_TOTAL_CHARGE_USD_PER_RESULT = 0.005;
+const MAX_APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN = 0.04;
+const DEFAULT_APIFY_MAX_TOTAL_CHARGE_USD_PER_RESULT = 0.002;
 const APIFY_API_BASE_URL = "https://api.apify.com/v2";
 const INSTAGRAM_HOSTNAMES = new Set(["instagram.com", "www.instagram.com"]);
 const INSTAGRAM_POST_PATH_PREFIXES = new Set(["p", "reel", "reels", "tv"]);
@@ -43,10 +43,21 @@ export type InstagramScrapedPost = {
   username: string;
 };
 
+export const INSTAGRAM_SCRAPE_RAW_ITEM_COUNT = Symbol("instagramScrapeRawItemCount");
+
+export function getInstagramScrapeRawItemCount(posts: InstagramScrapedPost[]): number {
+  const annotated = posts as InstagramScrapedPost[] & {
+    [INSTAGRAM_SCRAPE_RAW_ITEM_COUNT]?: number;
+  };
+  return annotated[INSTAGRAM_SCRAPE_RAW_ITEM_COUNT] ?? posts.length;
+}
+
 type ScrapeInstagramAccountOptions = {
   handle: string;
   resultsLimit?: number;
   daysBack?: number;
+  onlyPostsNewerThan?: string;
+  abortAtMs?: number;
 };
 
 type ApifyDataDetailLevel = "basicData" | "detailedData";
@@ -274,12 +285,18 @@ export function buildApifyInstagramScrapeRequest(options: {
   actorUsernameInput: string;
   resultsLimit?: number;
   daysBack?: number;
+  onlyPostsNewerThan?: string;
   env?: Record<string, string | undefined>;
 }): ApifyInstagramScrapeRequest {
   const env = options.env ?? process.env;
   const resultsLimit = normalizeResultsLimit(options.resultsLimit);
   const daysBack = normalizeDaysBack(options.daysBack);
-  const onlyPostsNewerThan = `${daysBack} day${daysBack === 1 ? "" : "s"}`;
+  const parsedOnlyPostsNewerThan = options.onlyPostsNewerThan
+    ? Date.parse(options.onlyPostsNewerThan)
+    : Number.NaN;
+  const onlyPostsNewerThan = Number.isFinite(parsedOnlyPostsNewerThan)
+    ? new Date(parsedOnlyPostsNewerThan).toISOString()
+    : `${daysBack} day${daysBack === 1 ? "" : "s"}`;
 
   return {
     input: {
@@ -844,6 +861,7 @@ export async function scrapeInstagramAccount(
     actorUsernameInput: target.actorUsernameInput,
     resultsLimit: options.resultsLimit,
     daysBack: options.daysBack,
+    onlyPostsNewerThan: options.onlyPostsNewerThan,
   });
   const { input, runOptions } = requestSettings;
   const resultsLimit = input.resultsLimit;
@@ -878,24 +896,46 @@ export async function scrapeInstagramAccount(
     }),
   );
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      ...getApifyHeaders(apiToken),
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(input),
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(
-      `Apify scraper request failed for ${target.label}: ${response.status} ${response.statusText} - ${errorBody}`,
-    );
+  const requestDeadlineMs = Math.min(
+    options.abortAtMs ?? Number.POSITIVE_INFINITY,
+    Date.now() + (runOptions.timeout + 30) * 1_000,
+  );
+  const requestTimeoutMs = requestDeadlineMs - Date.now();
+  if (!Number.isFinite(requestTimeoutMs) || requestTimeoutMs < 5_000) {
+    throw new Error(`Apify scraper lease deadline is too close for ${target.label}.`);
   }
+  const abortController = new AbortController();
+  const abortTimer = setTimeout(
+    () => abortController.abort(new Error("Apify scraper request exceeded its lease-safe deadline.")),
+    requestTimeoutMs,
+  );
+  abortTimer.unref?.();
 
-  const rawItems = (await response.json()) as ApifyInstagramItem[];
+  let response: Response;
+  let rawItems: ApifyInstagramItem[];
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        ...getApifyHeaders(apiToken),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(input),
+      cache: "no-store",
+      signal: abortController.signal,
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(
+        `Apify scraper request failed for ${target.label}: ${response.status} ${response.statusText} - ${errorBody}`,
+      );
+    }
+
+    rawItems = (await response.json()) as ApifyInstagramItem[];
+  } finally {
+    clearTimeout(abortTimer);
+  }
   const scrapedPosts = rawItems
     .map((item) => mapApifyItemToInstagramPost(item, target.fallbackUsername || target.label))
     .filter((item): item is InstagramScrapedPost => {
@@ -919,5 +959,12 @@ export async function scrapeInstagramAccount(
       parsePostedAtTimestamp(right.postedAt) - parsePostedAtTimestamp(left.postedAt),
   );
 
-  return normalizedTopLevelPosts.slice(0, resultsLimit);
+  const result = normalizedTopLevelPosts.slice(0, resultsLimit);
+  Object.defineProperty(result, INSTAGRAM_SCRAPE_RAW_ITEM_COUNT, {
+    value: rawItems.length,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return result;
 }

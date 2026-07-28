@@ -14,6 +14,22 @@ const sourceIdentityArgs = {
   instagramPostUrl: v.optional(v.string()),
 };
 
+const sourceProcessingFenceValidator = v.object({
+  handle: v.string(),
+  postId: v.optional(v.string()),
+  instagramPostUrl: v.optional(v.string()),
+  owner: v.string(),
+  sourceRevision: v.number(),
+});
+
+type SourceProcessingFence = {
+  handle: string;
+  postId?: string;
+  instagramPostUrl?: string;
+  owner: string;
+  sourceRevision: number;
+};
+
 type SourceIdentity = {
   postId?: string;
   instagramPostUrl?: string;
@@ -154,6 +170,29 @@ async function collectScrapedPostsByIdentity(
   return [...posts.values()];
 }
 
+async function assertSourceProcessingFence(
+  ctx: MutationCtx,
+  fence: SourceProcessingFence | undefined,
+): Promise<void> {
+  if (!fence) return;
+  const posts = (await collectScrapedPostsByIdentity(ctx, fence)).filter(
+    (post) => post.handle === fence.handle,
+  );
+  if (posts.length !== 1) {
+    throw new Error("Instagram media processing fence identity is absent or ambiguous.");
+  }
+  const source = posts[0];
+  if (
+    source.processingStatus !== "processing" ||
+    source.processingLeaseOwner !== fence.owner ||
+    (source.processingLeaseExpiresAt ?? 0) <= Date.now() ||
+    !Number.isSafeInteger(fence.sourceRevision) ||
+    (source.sourceRevision ?? 1) !== fence.sourceRevision
+  ) {
+    throw new Error("Instagram media processing fence is stale.");
+  }
+}
+
 async function attachAssetToSourceRecords(
   ctx: MutationCtx,
   identity: SourceIdentity,
@@ -242,9 +281,11 @@ export const claimAndAttach = internalMutation({
     byteLength: v.number(),
     checksumSha256: v.string(),
     actor: v.string(),
+    processingFence: v.optional(sourceProcessingFenceValidator),
   },
   handler: async (ctx, args) => {
     await assertCoherentPersistedSourceIdentity(ctx, args);
+    await assertSourceProcessingFence(ctx, args.processingFence);
     const normalized = normalizeInstagramMediaSourceIdentity(args);
     const existing = await findAssetByIdentity(ctx, args);
     const now = Date.now();
@@ -296,9 +337,11 @@ export const refreshAndAttach = internalMutation({
     storageId: v.id("_storage"),
     url: v.string(),
     actor: v.string(),
+    processingFence: v.optional(sourceProcessingFenceValidator),
   },
   handler: async (ctx, args) => {
     await assertCoherentPersistedSourceIdentity(ctx, args);
+    await assertSourceProcessingFence(ctx, args.processingFence);
     const asset = await ctx.db.get(args.assetId);
     if (!asset || asset.storageId !== args.storageId) {
       throw new Error("Media asset changed before attachment refresh.");
@@ -331,9 +374,11 @@ export const replaceMissingAndAttach = internalMutation({
     byteLength: v.number(),
     checksumSha256: v.string(),
     actor: v.string(),
+    processingFence: v.optional(sourceProcessingFenceValidator),
   },
   handler: async (ctx, args) => {
     await assertCoherentPersistedSourceIdentity(ctx, args);
+    await assertSourceProcessingFence(ctx, args.processingFence);
     const asset = await ctx.db.get(args.assetId);
     if (!asset || asset.storageId !== args.expectedStorageId) {
       throw new Error("Media asset changed before missing storage replacement.");
@@ -374,9 +419,11 @@ export const removeMissingAsset = internalMutation({
     assetId: v.id("mediaAssets"),
     expectedStorageId: v.id("_storage"),
     actor: v.string(),
+    processingFence: v.optional(sourceProcessingFenceValidator),
   },
   handler: async (ctx, args) => {
     await assertCoherentPersistedSourceIdentity(ctx, args);
+    await assertSourceProcessingFence(ctx, args.processingFence);
     const asset = await ctx.db.get(args.assetId);
     if (!asset || asset.storageId !== args.expectedStorageId) return false;
     const [events, posts] = await Promise.all([

@@ -215,6 +215,9 @@ export const completeStep = mutation({
     if (job.leaseOwner !== args.leaseOwner) {
       throw new Error("Ingestion job lease owner mismatch.");
     }
+    if ((job.leaseExpiresAt ?? 0) <= Date.now()) {
+      throw new Error("Ingestion job lease expired.");
+    }
     if ((job.stateVersion ?? 0) !== args.stateVersion) {
       throw new Error("Ingestion job state version mismatch.");
     }
@@ -264,6 +267,9 @@ export const failStep = mutation({
     }
     if (job.leaseOwner !== args.leaseOwner) {
       throw new Error("Ingestion job lease owner mismatch.");
+    }
+    if ((job.leaseExpiresAt ?? 0) <= Date.now()) {
+      throw new Error("Ingestion job lease expired.");
     }
     if ((job.stateVersion ?? 0) !== args.stateVersion) {
       throw new Error("Ingestion job state version mismatch.");

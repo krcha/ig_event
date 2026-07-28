@@ -38,6 +38,7 @@ type NormalizeVenueInput = {
   canonicalVenueNamesByHandle: CanonicalVenueMap;
   handleVenueNamesByHandle?: CanonicalVenueMap;
   staticVenueByHandle?: StaticVenueMap;
+  allowCanonicalHandleFallback?: boolean;
 };
 
 const SERBIAN_CYRILLIC_TO_LATIN: Record<string, string> = {
@@ -668,14 +669,17 @@ export function normalizeVenueFromEvidence(
 ): VenueNormalization {
   const staticVenueByHandle = input.staticVenueByHandle ?? {};
   const handleVenueNamesByHandle = input.handleVenueNamesByHandle ?? {};
-  const hardMappedVenue =
-    getConfiguredVenueNameForHandle(input.handle, handleVenueNamesByHandle, {}) ?? "";
-  const mappedVenue =
-    getConfiguredVenueNameForHandle(
-      input.handle,
-      input.canonicalVenueNamesByHandle,
-      staticVenueByHandle,
-    ) ?? "";
+  const allowCanonicalHandleFallback = input.allowCanonicalHandleFallback !== false;
+  const hardMappedVenue = allowCanonicalHandleFallback
+    ? getConfiguredVenueNameForHandle(input.handle, handleVenueNamesByHandle, {}) ?? ""
+    : "";
+  const mappedVenue = allowCanonicalHandleFallback
+    ? getConfiguredVenueNameForHandle(
+        input.handle,
+        input.canonicalVenueNamesByHandle,
+        staticVenueByHandle,
+      ) ?? ""
+    : "";
   const locationName = trimWrappedPunctuation(normalizeString(input.locationName));
   const modelVenue = trimWrappedPunctuation(normalizeString(input.rawModelVenue));
 

@@ -13,6 +13,8 @@ import {
   planFollowDiscoveryVenues,
   runFollowDiscoveryWorkflow,
 } from "../lib/pipeline/follow-discovery.ts";
+import { isCompleteFollowingSnapshot } from "../lib/pipeline/instagram-ingestion-durability.ts";
+import { syncFollowingSnapshot } from "../convex/instagramSources.ts";
 
 const vercelConfig = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8"));
 const composeSource = readFileSync(new URL("../docker-compose.yml", import.meta.url), "utf8");
@@ -37,7 +39,7 @@ assert.equal(defaultConfig.sourceHandle, "eventzeka");
 assert.equal(defaultConfig.actorId, DEFAULT_FOLLOW_DISCOVERY_ACTOR_ID);
 assert.equal(defaultConfig.resultsLimit, DEFAULT_FOLLOW_DISCOVERY_RESULTS_LIMIT);
 assert.equal(defaultConfig.maxTotalChargeUsd, DEFAULT_FOLLOW_DISCOVERY_MAX_TOTAL_CHARGE_USD);
-assert.equal(defaultConfig.ingestionResultsLimit, 1);
+assert.equal(defaultConfig.ingestionResultsLimit, 5);
 assert.equal(defaultConfig.ingestionDaysBack, 10);
 
 const normalizedConfig = getFollowDiscoveryConfig({
@@ -156,7 +158,7 @@ assert.deepEqual(ingestionCalls, [
   {
     handles: ["new.place"],
     mode: "full_scrape",
-    resultsLimit: 1,
+    resultsLimit: 5,
     daysBack: 10,
   },
 ]);
@@ -190,9 +192,8 @@ const venuesSource = readFileSync(
   "utf8",
 );
 assert.match(routeSource, /isAuthorizedCronRequestHeader/);
-assert.match(routeSource, /runFollowDiscoveryWorkflow/);
-assert.match(routeSource, /venues:createVenue/);
-assert.match(routeSource, /loadOperationalVenueRecords/);
+assert.match(routeSource, /scrapeInstagramFollowingAccountsDetailed/);
+assert.match(routeSource, /instagramSources:syncFollowingSnapshot/);
 assert.match(routeSource, /runInstagramIngestion/);
 assert.match(venuesSource, /listVenueIngestionFieldsPaginated/);
 assert.match(venuesSource, /listActiveVenueIngestionFieldsPaginated/);
@@ -201,5 +202,135 @@ assert.match(
   /withIndex\("by_instagramHandle"[\s\S]*?return existingVenue\._id/,
   "venue creation should be idempotent by normalized Instagram handle",
 );
+
+assert.equal(
+  isCompleteFollowingSnapshot({
+    providerSucceeded: true,
+    rawItemCount: 2,
+    validItemCount: 2,
+    malformedItemCount: 0,
+    maxItems: 10,
+  }),
+  true,
+);
+assert.equal(
+  isCompleteFollowingSnapshot({
+    providerSucceeded: true,
+    rawItemCount: 10,
+    validItemCount: 10,
+    malformedItemCount: 0,
+    maxItems: 10,
+  }),
+  false,
+  "A capped provider response must never authorize deactivation.",
+);
+assert.equal(
+  isCompleteFollowingSnapshot({
+    providerSucceeded: true,
+    rawItemCount: 3,
+    validItemCount: 2,
+    malformedItemCount: 1,
+    maxItems: 10,
+  }),
+  false,
+  "Malformed rows must make the snapshot partial.",
+);
+
+const previousCronSecret = process.env.CRON_SECRET;
+process.env.CRON_SECRET = "qa-follow-secret";
+try {
+  const tables = {
+    instagramSources: [
+      { _id: "source-a", handle: "source.a", role: "unknown", active: true },
+      { _id: "source-gone", handle: "source.gone", role: "venue", active: true },
+    ],
+    instagramFollowingSyncState: [],
+  };
+  let nextId = 1;
+  const ctx = {
+    auth: { getUserIdentity: async () => null },
+    db: {
+      query: (tableName) => {
+        let predicates = [];
+        const builder = {
+          withIndex: (_indexName, apply) => {
+            const q = {
+              eq: (field, value) => {
+                predicates.push((row) => row[field] === value);
+                return q;
+              },
+            };
+            apply(q);
+            return builder;
+          },
+          collect: async () => tables[tableName].filter((row) => predicates.every((fn) => fn(row))),
+          unique: async () => {
+            const rows = tables[tableName].filter((row) => predicates.every((fn) => fn(row)));
+            assert.ok(rows.length <= 1, `Expected unique ${tableName} query.`);
+            return rows[0] ?? null;
+          },
+        };
+        return builder;
+      },
+      insert: async (tableName, value) => {
+        const row = { _id: `${tableName}-${nextId++}`, ...value };
+        tables[tableName].push(row);
+        return row._id;
+      },
+      patch: async (id, patch) => {
+        const row = Object.values(tables).flat().find((candidate) => candidate._id === id);
+        assert.ok(row, `Missing row ${id}`);
+        Object.assign(row, patch);
+      },
+      get: async () => null,
+    },
+  };
+  const baseArgs = {
+    sourceHandle: "eventzeka",
+    providerSucceeded: true,
+    startedAt: 1,
+    serviceSecret: "qa-follow-secret",
+  };
+
+  const partial = await syncFollowingSnapshot._handler(ctx, {
+    ...baseArgs,
+    accounts: [{ handle: "source.a" }, { handle: "source.new" }],
+    snapshotComplete: true,
+    rawItemCount: 2,
+    malformedItemCount: 0,
+    maxItems: 2,
+  });
+  assert.equal(partial.complete, false);
+  assert.equal(tables.instagramSources.find((row) => row.handle === "source.gone").active, true);
+  assert.equal(tables.instagramSources.find((row) => row.handle === "source.new").active, true);
+
+  const complete = await syncFollowingSnapshot._handler(ctx, {
+    ...baseArgs,
+    accounts: [{ handle: "source.a" }, { handle: "source.new" }],
+    snapshotComplete: true,
+    rawItemCount: 2,
+    malformedItemCount: 0,
+    maxItems: 10,
+  });
+  assert.equal(complete.complete, true);
+  assert.equal(complete.deactivatedCount, 1);
+  assert.equal(tables.instagramSources.find((row) => row.handle === "source.gone").active, false);
+
+  const reactivated = await syncFollowingSnapshot._handler(ctx, {
+    ...baseArgs,
+    accounts: [{ handle: "source.a" }, { handle: "source.new" }, { handle: "source.gone" }],
+    snapshotComplete: true,
+    rawItemCount: 3,
+    malformedItemCount: 0,
+    maxItems: 10,
+  });
+  assert.deepEqual(reactivated.activatedHandles, ["source.gone"]);
+  const restored = tables.instagramSources.find((row) => row.handle === "source.gone");
+  assert.equal(restored.active, true);
+  assert.equal(typeof restored.lastSeenFollowingAt, "number");
+} finally {
+  if (previousCronSecret === undefined) delete process.env.CRON_SECRET;
+  else process.env.CRON_SECRET = previousCronSecret;
+}
 
 console.log("Follow-discovery QA passed.");

@@ -383,9 +383,9 @@ The host run derives its total from the complete live active-venue set. The
 runner counts each resumed or new job once, scales its request safety allowance
 from that live count and the returned chunk size, and continues until every
 eligible venue is covered. There is no aggregate venue-count cap;
-`CRON_RESULTS_LIMIT=1` and the 23-hour cooldown remain unchanged.
+`CRON_RESULTS_LIMIT=3` and the 23-hour cooldown provide a one-row safety margin over the observed two-post daily burst; cap-saturated windows fail closed without advancing the source boundary.
 
-The per-account Apify Actor charge is capped at `$0.01`. At the current
+The default basic-data Actor request is capped at `$0.01`; the absolute per-run hard cap is `$0.04` for explicitly deeper bounded requests. At the current
 basic-data result price, 2000 one-post account runs are expected to cost about
 `$3.00`; the aggregate configured worst case is `$20`, plus OpenAI usage and the
 separate following-discovery Actor cap.
