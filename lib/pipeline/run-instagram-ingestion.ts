@@ -2925,7 +2925,7 @@ type RecurringScheduleLane = {
 };
 
 const RECURRING_SCHEDULE_START_PATTERN =
-  /(?:weekly|every\s+week|svake\s+(?:nedelje|sedmice)|svakog\s+tjedna|nedeljno|tjedno|недељно|еженедельно)\s*(?:starting\s+)?(?:from|od|с)\s*((?:0?[1-9]|[12]\d|3[01])[./-](?:0?[1-9]|1[0-2])[./-](?:\d{2}|\d{4}))/iu;
+  /(?:weekly|every\s+week|svake\s+(?:nedelje|sedmice)|svakog\s+tjedna|nedeljno|tjedno|недељно|еженедельно)\s*[:\-–—]?\s*(?:(?:starting|beginning|starts?|begins?)\s*[:\-–—]?\s*(?:from|on)|(?:from|od|с))\s*((?:0?[1-9]|[12]\d|3[01])[./-](?:0?[1-9]|1[0-2])[./-](?:\d{2}|\d{4}))/iu;
 
 function extractRecurringScheduleStartDate(value: string): string | null {
   return normalizeString(value.match(RECURRING_SCHEDULE_START_PATTERN)?.[1]) || null;

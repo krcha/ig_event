@@ -534,6 +534,95 @@ assert.ok(
   "grounding must not reinterpret the recurrence start boundary as an occurrence",
 );
 
+for (const recurrenceMarker of [
+  "Weekly: from 01.08.26",
+  "Weekly starting on 01.08.26",
+]) {
+  const syntaxPost = {
+    ...commonPost,
+    caption: `${commonCaption}\n${recurrenceMarker}: Monday 14:00, Wednesday 19:00`,
+  };
+  const syntaxExtraction = {
+    ...boundaryExtraction,
+    schedule_entries: boundaryExtraction.schedule_entries.map((entry, index) => ({
+      ...entry,
+      source_text:
+        index === 0
+          ? `${recurrenceMarker}\nMONDAY 14:00`
+          : "WEDNESDAY 19:00",
+    })),
+  };
+  const syntaxResults = prepareEventsForInsert(
+    syntaxPost,
+    syntaxExtraction,
+    IMAGE_URL,
+    { "common.belgrade": "COMMON | Белград | Мероприятия" },
+    {},
+    { "common.belgrade": "COMMON | Белград | Мероприятия" },
+    { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+  );
+  assert.equal(syntaxResults.length, 26, `${recurrenceMarker} must preserve the bounded plan`);
+  assert.ok(
+    syntaxResults.every(
+      (result) => result.normalizedFields.sourceOccurrencePlanUnverified === false,
+    ),
+    `${recurrenceMarker} must use coherent source lanes rather than bypass recurrence checks`,
+  );
+  assert.ok(
+    syntaxResults.every(
+      (result) =>
+        (result.kind === "ok" ? result.event.date : result.normalizedFields.normalizedDate) !==
+        "2026-08-01",
+    ),
+    `${recurrenceMarker} must not fabricate the recurrence boundary as an event`,
+  );
+
+  if (recurrenceMarker.startsWith("Weekly:")) {
+    const syntaxPersistenceSummary = createEmptyIngestionSummary(["common.belgrade"]).handles[0];
+    const persistedSyntaxEvents = [];
+    await withoutConsoleNoise(() =>
+      processIngestionPostWithExtractionForTesting({
+        client: {
+          query: async () => [],
+          mutation: async (_reference, args) => {
+            if ("representativeEventId" in args) return { recorded: true };
+            if ("id" in args) return args.id;
+            persistedSyntaxEvents.push(args);
+            return `qa-recurring-syntax-${persistedSyntaxEvents.length}`;
+          },
+        },
+        handle: "common.belgrade",
+        post: { ...syntaxPost, postType: "video" },
+        summary: syntaxPersistenceSummary,
+        canonicalVenueNamesByHandle: {
+          "common.belgrade": "COMMON | Белград | Мероприятия",
+        },
+        venueNameOverridesByHandle: {},
+        configuredVenueNamesByHandle: {
+          "common.belgrade": "COMMON | Белград | Мероприятия",
+        },
+        serviceSecret: "qa",
+        extracted: syntaxExtraction,
+      }),
+    );
+    assert.equal(persistedSyntaxEvents.length, 25);
+    assert.equal(syntaxPersistenceSummary.insertedEvents, 25);
+    assert.ok(
+      persistedSyntaxEvents.every((event) => event.date !== "2026-08-01"),
+      "real persistence must not insert the colon-form recurrence boundary",
+    );
+    assert.ok(
+      persistedSyntaxEvents.every(
+        (event) =>
+          event.sourceOccurrencePlan.expectedKeys.length === 25 &&
+          event.sourceOccurrencePlan.deferredChildCount === 1 &&
+          event.sourceOccurrencePlan.deferredChildKeys.length === 1,
+      ),
+      "real persistence must retain every current child plus the bounded deferred child",
+    );
+  }
+}
+
 const swappedLaneExtraction = {
   ...boundaryExtraction,
   schedule_entries: boundaryExtraction.schedule_entries.map((entry, index) => ({
