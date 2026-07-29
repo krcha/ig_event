@@ -3146,7 +3146,7 @@ function extractModelSplitEventCandidates(
 
     for (const occurrenceDate of occurrenceDates) {
       const normalizedDate = recurringContext
-        ? normalizeEventDate(occurrenceDate, sourceLine || occurrenceDate, post.postedAt)
+        ? normalizeEventDate(occurrenceDate, occurrenceDate, post.postedAt)
         : baseNormalizedDate;
       const lineTitle =
         rawTitle ||

@@ -632,6 +632,115 @@ for (const recurrenceMarker of [
   }
 }
 
+const midweekBoundaryCaption = [
+  "Italian conversation club",
+  "Weekly",
+  "from: 29.07.26",
+  "Monday 14:00",
+  "Friday 19:00",
+].join("\n");
+const midweekBoundaryPost = {
+  ...commonPost,
+  caption: midweekBoundaryCaption,
+  postId: "qa-midweek-boundary",
+  shortcode: "qa-midweek-boundary",
+  instagramPostUrl: "https://www.instagram.com/p/qa-midweek-boundary/",
+};
+const midweekBoundaryExtraction = makeExtraction({
+  venue: "COMMON",
+  category: "learning",
+  artists: ["Alberto"],
+  description: "Weekly Italian conversation club.",
+  source_caption: midweekBoundaryCaption,
+  schedule_entries: [
+    {
+      date: "29.07.2026",
+      time: "14:00",
+      title: "Italian conversation club",
+      artists: ["Alberto"],
+      description: "Weekly Italian conversation club.",
+      source_text: "WEEKLY\nFROM: 29.07.26\nMONDAY 14:00",
+    },
+    {
+      date: "29.07.2026",
+      time: "19:00",
+      title: "Italian conversation club",
+      artists: ["Alberto"],
+      description: "Weekly Italian conversation club.",
+      source_text: "FRIDAY 19:00",
+    },
+  ],
+});
+const midweekBoundaryResults = prepareEventsForInsert(
+  midweekBoundaryPost,
+  midweekBoundaryExtraction,
+  IMAGE_URL,
+  { "common.belgrade": "COMMON | Белград | Мероприятия" },
+  {},
+  { "common.belgrade": "COMMON | Белград | Мероприятия" },
+  { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+);
+const midweekBoundaryOk = midweekBoundaryResults.filter((result) => result.kind === "ok");
+assert.equal(midweekBoundaryResults.length, 26);
+assert.equal(midweekBoundaryOk.length, 26);
+assert.ok(
+  midweekBoundaryOk.every((result) => result.event.date !== "2026-07-29"),
+  "a Wednesday recurrence boundary must never become an occurrence",
+);
+assert.equal(
+  midweekBoundaryOk.filter((result) =>
+    result.event.date.endsWith("-08-03") ||
+    new Date(`${result.event.date}T00:00:00Z`).getUTCDay() === 1,
+  ).length,
+  13,
+  "every Monday lane must survive generated-date normalization",
+);
+assert.equal(
+  midweekBoundaryOk.filter(
+    (result) => new Date(`${result.event.date}T00:00:00Z`).getUTCDay() === 5,
+  ).length,
+  13,
+  "every Friday lane must survive generated-date normalization",
+);
+const midweekPersistenceSummary = createEmptyIngestionSummary(["common.belgrade"]).handles[0];
+const persistedMidweekEvents = [];
+await withoutConsoleNoise(() =>
+  processIngestionPostWithExtractionForTesting({
+    client: {
+      query: async () => [],
+      mutation: async (_reference, args) => {
+        if ("representativeEventId" in args) return { recorded: true };
+        if ("id" in args) return args.id;
+        persistedMidweekEvents.push(args);
+        return `qa-midweek-boundary-${persistedMidweekEvents.length}`;
+      },
+    },
+    handle: "common.belgrade",
+    post: { ...midweekBoundaryPost, postType: "video" },
+    summary: midweekPersistenceSummary,
+    canonicalVenueNamesByHandle: {
+      "common.belgrade": "COMMON | Белград | Мероприятия",
+    },
+    venueNameOverridesByHandle: {},
+    configuredVenueNamesByHandle: {
+      "common.belgrade": "COMMON | Белград | Мероприятия",
+    },
+    serviceSecret: "qa",
+    extracted: midweekBoundaryExtraction,
+  }),
+);
+assert.equal(midweekPersistenceSummary.insertedEvents, 26);
+assert.equal(persistedMidweekEvents.length, 26);
+assert.ok(persistedMidweekEvents.every((event) => event.date !== "2026-07-29"));
+assert.ok(
+  persistedMidweekEvents.every(
+    (event) =>
+      event.sourceOccurrencePlan.expectedKeys.length === 26 &&
+      event.sourceOccurrencePlan.deferredChildCount === 0,
+  ),
+  "the real persistence plan must retain both complete lanes without a boundary child",
+);
+
 for (const suspiciousRecurrenceMarker of [
   "Weekly schedule begins around 01.08.26",
   "Weekly :::: from 01.08.26",
