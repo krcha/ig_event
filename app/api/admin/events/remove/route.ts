@@ -5,7 +5,12 @@ import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
 
 type RequestBody = {
   eventId?: string;
+  expectedUpdatedAt?: number;
 };
+
+function isVersionConflict(error: unknown): boolean {
+  return error instanceof Error && /reviewed version|expectedUpdatedAt/iu.test(error.message);
+}
 
 const deleteApprovedEventMutation =
   "events:deleteApprovedEvent" as unknown as FunctionReference<"mutation">;
@@ -27,11 +32,18 @@ export async function POST(request: Request) {
   if (!eventId) {
     return NextResponse.json({ error: "eventId is required." }, { status: 400 });
   }
+  if (!Number.isSafeInteger(body.expectedUpdatedAt)) {
+    return NextResponse.json(
+      { error: "expectedUpdatedAt must be the exact reviewed event version." },
+      { status: 400 },
+    );
+  }
 
   try {
     const convex = await createAuthenticatedConvexHttpClient();
     await convex.mutation(deleteApprovedEventMutation, {
       id: eventId,
+      expectedUpdatedAt: body.expectedUpdatedAt,
     });
 
     return NextResponse.json({
@@ -44,7 +56,7 @@ export async function POST(request: Request) {
         error:
           error instanceof Error ? error.message : "Failed to remove approved event.",
       },
-      { status: 500 },
+      { status: isVersionConflict(error) ? 409 : 500 },
     );
   }
 }

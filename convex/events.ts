@@ -19,6 +19,7 @@ import {
 import {
   assertExpectedEventStatus,
   assertExpectedEventUpdatedAt,
+  nextEventUpdatedAt,
   assertServiceCreateEventPolicy,
   assertServiceUpdateEventPolicy,
 } from "../lib/events/event-update-precondition";
@@ -793,7 +794,10 @@ export const backfillEventVenueIdentityBatch = mutation({
       if (unchanged) {
         continue;
       }
-      await ctx.db.patch(event._id, patch);
+      await ctx.db.patch(event._id, {
+        ...patch,
+        updatedAt: nextEventUpdatedAt(event.updatedAt),
+      });
       updated += 1;
     }
 
@@ -1740,7 +1744,7 @@ export const createEvent = mutation({
           );
         }
         return returnCreateDisposition
-          ? { eventId: existingOccurrence._id, created: false }
+          ? { eventId: existingOccurrence._id, created: false, updatedAt: existingOccurrence.updatedAt }
           : existingOccurrence._id;
       }
     }
@@ -1793,7 +1797,7 @@ export const createEvent = mutation({
     });
 
     return returnCreateDisposition
-      ? { eventId, created: true }
+      ? { eventId, created: true, updatedAt: now }
       : eventId;
   },
 });
@@ -1895,7 +1899,10 @@ export const updateSourceOccurrenceExpectedCount = mutation({
       sourceOccurrenceDeferredChildCount: args.nextDeferredChildCount,
       sourceOccurrenceSourceFingerprint: args.nextSourceFingerprint,
     });
-    await ctx.db.patch(args.id, { normalizedFieldsJson });
+    await ctx.db.patch(args.id, {
+      normalizedFieldsJson,
+      updatedAt: nextEventUpdatedAt(existingEvent.updatedAt),
+    });
     await writeEventAuditLog(ctx, args.id, "source_occurrence_completeness_updated", {
       actor,
       patch: {
@@ -1919,7 +1926,7 @@ async function applyEventUpdate(
     expectedUpdatedAt?: number;
   },
   authorization: { actor: string; kind: "admin" | "service" },
-): Promise<void> {
+): Promise<{ updatedAt: number }> {
   const existingEvent = await ctx.db.get(args.id);
   if (!existingEvent) {
     throw new Error("Event not found.");
@@ -1927,7 +1934,7 @@ async function applyEventUpdate(
   assertExpectedEventStatus(existingEvent.status, args.expectedStatus);
   assertExpectedEventUpdatedAt(existingEvent.updatedAt, args.expectedUpdatedAt);
 
-  const now = Date.now();
+  const updatedAt = nextEventUpdatedAt(existingEvent.updatedAt);
   const { clearTicketPrice, ...eventPatch } = args.patch;
   if (clearTicketPrice && eventPatch.ticketPrice !== undefined) {
     throw new Error("ticketPrice and clearTicketPrice cannot be used together.");
@@ -1990,7 +1997,7 @@ async function applyEventUpdate(
       [args.id],
     );
   }
-  await ctx.db.patch(args.id, { ...patch, updatedAt: now });
+  await ctx.db.patch(args.id, { ...patch, updatedAt });
   const auditPatch = clearTicketPrice
     ? { ...patch, clearTicketPrice: true }
     : patch;
@@ -1998,6 +2005,7 @@ async function applyEventUpdate(
     actor: authorization.actor,
     patch: auditPatch,
   });
+  return { updatedAt };
 }
 
 export const updateEvent = mutation({
@@ -2010,7 +2018,7 @@ export const updateEvent = mutation({
   },
   handler: async (ctx, args) => {
     const authorization = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    await applyEventUpdate(ctx, args, authorization);
+    return applyEventUpdate(ctx, args, authorization);
   },
 });
 
@@ -2045,7 +2053,7 @@ export const updateEventAndRecordInstagramSourceOccurrenceSatisfaction = mutatio
     ) {
       throw new Error("Updated event does not match the source occurrence.");
     }
-    await applyEventUpdate(ctx, args, authorization);
+    const updateResult = await applyEventUpdate(ctx, args, authorization);
     await recordSourceOccurrenceSatisfaction(
       ctx,
       args.plan,
@@ -2053,7 +2061,7 @@ export const updateEventAndRecordInstagramSourceOccurrenceSatisfaction = mutatio
       args.id,
       args.supersededKey,
     );
-    return { updated: true, recorded: true };
+    return { updated: true, recorded: true, updatedAt: updateResult.updatedAt };
   },
 });
 
@@ -2108,7 +2116,6 @@ export const reprocessPendingSourceGroundingBatch = mutation({
       prepared.push({ event, item });
     }
 
-    const now = Date.now();
     for (const { event, item } of prepared) {
       if (!event.venueInstagramHandle) {
         throw new Error(`Resolved source venue handle required for event ${event._id}.`);
@@ -2123,7 +2130,7 @@ export const reprocessPendingSourceGroundingBatch = mutation({
       await ctx.db.patch(event._id, {
         status: "approved",
         normalizedFieldsJson: item.nextNormalizedFieldsJson,
-        updatedAt: now,
+        updatedAt: nextEventUpdatedAt(event.updatedAt),
       });
       await writeEventAuditLog(ctx, event._id, "source_grounding_reprocessed", {
         actor,
@@ -2183,7 +2190,7 @@ export const setEventStatus = mutation({
       reviewedAt: now,
       reviewedBy: args.reviewedBy,
       moderationNote: args.moderationNote,
-      updatedAt: now,
+      updatedAt: nextEventUpdatedAt(existingEvent.updatedAt, now),
     });
     await writeEventAuditLog(ctx, args.id, args.status, {
       actor: identity.subject,
@@ -2196,6 +2203,10 @@ export const setEventStatus = mutation({
 export const setEventStatuses = mutation({
   args: {
     ids: v.array(v.id("events")),
+    expectedVersions: v.optional(v.array(v.object({
+      id: v.id("events"),
+      expectedUpdatedAt: v.number(),
+    }))),
     status: moderationStatus,
     reviewedBy: v.optional(v.string()),
     moderationNote: v.optional(v.string()),
@@ -2205,6 +2216,27 @@ export const setEventStatuses = mutation({
     const identity = await requireAdminIdentity(ctx);
     const now = Date.now();
     const uniqueIds = [...new Set(args.ids)];
+    const preloadedEvents = new Map<Id<"events">, Doc<"events">>();
+    if (args.expectedVersions !== undefined) {
+      const expectedVersionById = new Map(
+        args.expectedVersions.map((item) => [item.id, item.expectedUpdatedAt] as const),
+      );
+      if (
+        expectedVersionById.size !== args.expectedVersions.length ||
+        expectedVersionById.size !== uniqueIds.length ||
+        uniqueIds.some((id) => !expectedVersionById.has(id))
+      ) {
+        throw new Error("Expected versions must exactly match the moderated event IDs.");
+      }
+      for (const id of uniqueIds) {
+        const event = await ctx.db.get(id);
+        if (!event || event.status !== "pending") {
+          throw new Error(`Event changed since the reviewed version: ${id} is missing or no longer pending.`);
+        }
+        assertExpectedEventUpdatedAt(event.updatedAt, expectedVersionById.get(id));
+        preloadedEvents.set(id, event);
+      }
+    }
     if (args.approveAsDistinctSameVenueDateBatch && (args.status !== "approved" || uniqueIds.length < 2)) {
       throw new Error(
         "Distinct same-venue/date batch approval requires at least two approved event IDs.",
@@ -2214,7 +2246,7 @@ export const setEventStatuses = mutation({
     let skippedCount = 0;
 
     for (const id of uniqueIds) {
-      const existingEvent = await ctx.db.get(id);
+      const existingEvent = preloadedEvents.get(id) ?? await ctx.db.get(id);
       if (!existingEvent || existingEvent.status !== "pending") {
         skippedCount += 1;
         continue;
@@ -2257,7 +2289,7 @@ export const setEventStatuses = mutation({
         reviewedAt: now,
         reviewedBy: args.reviewedBy,
         moderationNote: args.moderationNote,
-        updatedAt: now,
+        updatedAt: nextEventUpdatedAt(existingEvent.updatedAt, now),
       });
       await writeEventAuditLog(ctx, id, args.status, {
         actor: identity.subject,
@@ -2277,6 +2309,7 @@ export const setEventStatuses = mutation({
 export const deleteApprovedEvent = mutation({
   args: {
     id: v.id("events"),
+    expectedUpdatedAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const identity = await requireAdminIdentity(ctx);
@@ -2288,6 +2321,7 @@ export const deleteApprovedEvent = mutation({
     if (existingEvent.status !== "approved") {
       throw new Error("Only approved events can be removed.");
     }
+    assertExpectedEventUpdatedAt(existingEvent.updatedAt, args.expectedUpdatedAt);
 
     await deleteEventWithSavedReferences(ctx, args.id);
     await writeEventAuditLog(ctx, args.id, "deleted", {
@@ -2301,6 +2335,15 @@ export const mergeApprovedEvents = mutation({
   args: {
     primaryId: v.id("events"),
     duplicateIds: v.array(v.id("events")),
+    expectedPrimaryUpdatedAt: v.optional(v.number()),
+    expectedDuplicateVersions: v.optional(
+      v.array(
+        v.object({
+          id: v.id("events"),
+          expectedUpdatedAt: v.number(),
+        }),
+      ),
+    ),
     patch: v.object({
       title: v.optional(v.string()),
       date: v.optional(v.string()),
@@ -2328,11 +2371,29 @@ export const mergeApprovedEvents = mutation({
     if (primaryEvent.status !== "approved") {
       throw new Error("Only approved events can be merged.");
     }
+    assertExpectedEventUpdatedAt(primaryEvent.updatedAt, args.expectedPrimaryUpdatedAt);
     if (kind === "service") {
       assertServiceUpdateEventPolicy(primaryEvent.status, args.patch);
     }
 
     const duplicateIds = [...new Set(args.duplicateIds)].filter((id) => id !== args.primaryId);
+    let expectedDuplicateVersionById: Map<string, number> | undefined;
+    if (args.expectedDuplicateVersions !== undefined) {
+      expectedDuplicateVersionById = new Map<string, number>();
+      for (const item of args.expectedDuplicateVersions) {
+        const key = String(item.id);
+        if (expectedDuplicateVersionById.has(key)) {
+          throw new Error("Expected duplicate versions contain a duplicate event ID.");
+        }
+        expectedDuplicateVersionById.set(key, item.expectedUpdatedAt);
+      }
+      if (
+        expectedDuplicateVersionById.size !== duplicateIds.length ||
+        duplicateIds.some((id) => !expectedDuplicateVersionById?.has(String(id)))
+      ) {
+        throw new Error("Expected duplicate versions must exactly match the duplicate event IDs.");
+      }
+    }
     const duplicateEvents: Doc<"events">[] = [];
     for (const duplicateId of duplicateIds) {
       const duplicateEvent = await ctx.db.get(duplicateId);
@@ -2342,10 +2403,13 @@ export const mergeApprovedEvents = mutation({
       if (duplicateEvent.status !== "approved") {
         throw new Error("Only approved duplicate events can be removed.");
       }
+      assertExpectedEventUpdatedAt(
+        duplicateEvent.updatedAt,
+        expectedDuplicateVersionById?.get(String(duplicateId)),
+      );
       duplicateEvents.push(duplicateEvent);
     }
 
-    const now = Date.now();
     if (Object.keys(args.patch).length > 0) {
       assertPublicEventImageWrite(args.patch.imageUrl, args.patch.imageStorageId);
       const venueFields =
@@ -2386,7 +2450,7 @@ export const mergeApprovedEvents = mutation({
       );
       await ctx.db.patch(args.primaryId, {
         ...patch,
-        updatedAt: now,
+        updatedAt: nextEventUpdatedAt(primaryEvent.updatedAt),
       });
       await writeEventAuditLog(ctx, args.primaryId, "merged_primary_updated", {
         actor,

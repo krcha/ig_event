@@ -7,6 +7,8 @@ import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 type RequestBody = {
   primaryEventId?: string;
   duplicateEventIds?: string[];
+  expectedPrimaryUpdatedAt?: number;
+  expectedDuplicateVersions?: Array<{ eventId?: string; expectedUpdatedAt?: number }>;
   primaryPatch?: {
     title?: string;
     date?: string;
@@ -22,6 +24,10 @@ type RequestBody = {
 
 const mergeApprovedEventsMutation =
   "events:mergeApprovedEvents" as unknown as FunctionReference<"mutation">;
+
+function isVersionConflict(error: unknown): boolean {
+  return error instanceof Error && /reviewed version|expectedUpdatedAt/iu.test(error.message);
+}
 
 function normalizeString(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -86,6 +92,33 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+  if (!Number.isSafeInteger(body.expectedPrimaryUpdatedAt)) {
+    return NextResponse.json(
+      { error: "expectedPrimaryUpdatedAt must be the exact reviewed primary version." },
+      { status: 400 },
+    );
+  }
+  const expectedDuplicateVersions = Array.isArray(body.expectedDuplicateVersions)
+    ? body.expectedDuplicateVersions.map((item) => ({
+        id: item.eventId?.trim() || "",
+        expectedUpdatedAt: item.expectedUpdatedAt,
+      }))
+    : [];
+  const expectedDuplicateVersionById = new Map(
+    expectedDuplicateVersions.map((item) => [item.id, item.expectedUpdatedAt]),
+  );
+  if (
+    expectedDuplicateVersions.length !== duplicateEventIds.length ||
+    expectedDuplicateVersionById.size !== duplicateEventIds.length ||
+    duplicateEventIds.some(
+      (id) => !Number.isSafeInteger(expectedDuplicateVersionById.get(id)),
+    )
+  ) {
+    return NextResponse.json(
+      { error: "expectedDuplicateVersions must exactly match the reviewed duplicate events." },
+      { status: 400 },
+    );
+  }
 
   try {
     const convex = await createAuthenticatedConvexHttpClient();
@@ -93,6 +126,8 @@ export async function POST(request: Request) {
     const result = await convex.mutation(mergeApprovedEventsMutation, {
       primaryId: primaryEventId,
       duplicateIds: duplicateEventIds,
+      expectedPrimaryUpdatedAt: body.expectedPrimaryUpdatedAt,
+      expectedDuplicateVersions,
       patch,
     });
 
@@ -108,7 +143,7 @@ export async function POST(request: Request) {
             ? error.message
             : "Failed to apply approved event master review.",
       },
-      { status: 500 },
+      { status: isVersionConflict(error) ? 409 : 500 },
     );
   }
 }

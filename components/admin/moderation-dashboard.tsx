@@ -97,6 +97,7 @@ type MasterReviewCandidateEvent = {
   imageUrl: string | null;
   ticketPrice: string | null;
   eventType: string;
+  updatedAt: number;
 };
 
 type MasterReviewPrimaryPatch = {
@@ -909,17 +910,25 @@ export function ModerationDashboard() {
         : undefined;
 
     try {
+      const reviewedEvent = events.find((event) => event.id === eventId);
+      if (!reviewedEvent || !Number.isSafeInteger(reviewedEvent.updatedAt)) {
+        throw new Error("The reviewed event version is unavailable. Refresh and try again.");
+      }
       const response = await fetch("/api/admin/events/moderate", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           eventId,
+          expectedUpdatedAt: reviewedEvent.updatedAt,
           status: nextStatus,
           moderationNote,
         }),
       });
       const payload = (await response.json()) as { error?: string };
       if (!response.ok) {
+        if (response.status === 409) {
+          await fetchEvents();
+        }
         throw new Error(payload.error ?? "Failed to update event moderation.");
       }
 
@@ -1096,16 +1105,23 @@ export function ModerationDashboard() {
     setError(null);
 
     try {
+      const expectedVersions = filteredEvents
+        .filter((event) => visiblePendingEventIds.includes(event.id))
+        .map((event) => ({ eventId: event.id, expectedUpdatedAt: event.updatedAt }));
       const response = await fetch("/api/admin/events/moderate", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           eventIds: visiblePendingEventIds,
+          expectedVersions,
           status: "approved",
         }),
       });
       const payload = (await response.json()) as { error?: string };
       if (!response.ok) {
+        if (response.status === 409) {
+          await fetchEvents();
+        }
         throw new Error(payload.error ?? "Failed to approve visible events.");
       }
 
@@ -1131,13 +1147,20 @@ export function ModerationDashboard() {
     setError(null);
 
     try {
+      const reviewedEvent = events.find((event) => event.id === eventId);
+      if (!reviewedEvent || !Number.isSafeInteger(reviewedEvent.updatedAt)) {
+        throw new Error("The reviewed event version is unavailable. Refresh and try again.");
+      }
       const response = await fetch("/api/admin/events/remove", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ eventId }),
+        body: JSON.stringify({ eventId, expectedUpdatedAt: reviewedEvent.updatedAt }),
       });
       const payload = (await response.json()) as { error?: string };
       if (!response.ok) {
+        if (response.status === 409) {
+          await fetchEvents();
+        }
         throw new Error(payload.error ?? "Failed to remove approved event.");
       }
 
@@ -1158,16 +1181,24 @@ export function ModerationDashboard() {
     setError(null);
 
     try {
+      const reviewedEvent = events.find((event) => event.id === eventId);
+      if (!reviewedEvent || !Number.isSafeInteger(reviewedEvent.updatedAt)) {
+        throw new Error("The reviewed event version is unavailable. Refresh and try again.");
+      }
       const response = await fetch("/api/admin/events", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           eventId,
+          expectedUpdatedAt: reviewedEvent.updatedAt,
           ...patch,
         }),
       });
       const payload = (await response.json()) as { error?: string };
       if (!response.ok) {
+        if (response.status === 409) {
+          await fetchEvents();
+        }
         throw new Error(payload.error ?? "Failed to update promotion.");
       }
 
@@ -1226,17 +1257,38 @@ export function ModerationDashboard() {
     setError(null);
 
     try {
+      const candidateById = new Map(group.candidateEvents.map((event) => [event.id, event]));
+      const primaryEvent = candidateById.get(group.primaryEventId);
+      const duplicateEvents = group.duplicateEventIds.map((id) => candidateById.get(id));
+      if (
+        !primaryEvent ||
+        !Number.isSafeInteger(primaryEvent.updatedAt) ||
+        duplicateEvents.some(
+          (event) => !event || !Number.isSafeInteger(event.updatedAt),
+        )
+      ) {
+        throw new Error("The master-review event versions are unavailable. Run the review again.");
+      }
       const response = await fetch("/api/admin/events/master-review/apply", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           primaryEventId: group.primaryEventId,
           duplicateEventIds: group.duplicateEventIds,
+          expectedPrimaryUpdatedAt: primaryEvent.updatedAt,
+          expectedDuplicateVersions: duplicateEvents.map((event) => ({
+            eventId: event!.id,
+            expectedUpdatedAt: event!.updatedAt,
+          })),
           primaryPatch: group.recommendedAction === "merge_delete" ? group.primaryPatch : {},
         }),
       });
       const payload = (await response.json()) as { error?: string };
       if (!response.ok) {
+        if (response.status === 409) {
+          await fetchEvents();
+          await runMasterReview();
+        }
         throw new Error(payload.error ?? "Failed to apply AI master review.");
       }
 

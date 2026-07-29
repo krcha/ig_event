@@ -8,6 +8,8 @@ type EventStatus = "approved" | "rejected";
 type RequestBody = {
   eventId?: string;
   eventIds?: string[];
+  expectedUpdatedAt?: number;
+  expectedVersions?: Array<{ eventId?: string; expectedUpdatedAt?: number }>;
   status?: EventStatus;
   moderationNote?: string;
 };
@@ -19,6 +21,10 @@ const setEventStatusesMutation =
 
 function isValidStatus(status: string | undefined): status is EventStatus {
   return status === "approved" || status === "rejected";
+}
+
+function isVersionConflict(error: unknown): boolean {
+  return error instanceof Error && /reviewed version|expected versions|expectedUpdatedAt/iu.test(error.message);
 }
 
 export async function POST(request: Request) {
@@ -63,8 +69,32 @@ export async function POST(request: Request) {
     const moderationNote = body.moderationNote?.trim() || undefined;
 
     if (eventIds.length > 0) {
+      const expectedVersions = Array.isArray(body.expectedVersions)
+        ? body.expectedVersions.map((item) => ({
+            id: item.eventId?.trim() || "",
+            expectedUpdatedAt: item.expectedUpdatedAt,
+          }))
+        : [];
+      const expectedVersionById = new Map(
+        expectedVersions.map((item) => [item.id, item.expectedUpdatedAt] as const),
+      );
+      if (
+        expectedVersions.some((item) => !item.id || !Number.isSafeInteger(item.expectedUpdatedAt)) ||
+        expectedVersionById.size !== expectedVersions.length ||
+        expectedVersionById.size !== eventIds.length ||
+        eventIds.some((id) => !expectedVersionById.has(id))
+      ) {
+        return NextResponse.json(
+          { error: "expectedVersions must provide one exact reviewed version per eventId." },
+          { status: 400 },
+        );
+      }
       const result = (await convex.mutation(setEventStatusesMutation, {
         ids: eventIds,
+        expectedVersions: expectedVersions.map((item) => ({
+          id: item.id,
+          expectedUpdatedAt: item.expectedUpdatedAt as number,
+        })),
         status: body.status,
         reviewedBy,
         moderationNote,
@@ -82,8 +112,16 @@ export async function POST(request: Request) {
       });
     }
 
+    if (!Number.isSafeInteger(body.expectedUpdatedAt)) {
+      return NextResponse.json(
+        { error: "expectedUpdatedAt must be the exact reviewed event version." },
+        { status: 400 },
+      );
+    }
+
     await convex.mutation(setEventStatusMutation, {
       id: eventId,
+      expectedUpdatedAt: body.expectedUpdatedAt,
       status: body.status,
       reviewedBy,
       moderationNote,
@@ -100,7 +138,7 @@ export async function POST(request: Request) {
         error:
           error instanceof Error ? error.message : "Failed to update moderation status.",
       },
-      { status: 500 },
+      { status: isVersionConflict(error) ? 409 : 500 },
     );
   }
 }

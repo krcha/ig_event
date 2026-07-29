@@ -240,6 +240,8 @@ const listByDateQuery =
   "events:listByDate" as unknown as FunctionReference<"query">;
 const createEventMutation =
   "events:createEvent" as unknown as FunctionReference<"mutation">;
+const getEventQuery =
+  "events:getEvent" as unknown as FunctionReference<"query">;
 const getInstagramSourceOccurrenceReceiptQuery =
   "events:getInstagramSourceOccurrenceReceipt" as unknown as FunctionReference<"query">;
 const recordInstagramSourceOccurrenceSatisfactionMutation =
@@ -524,6 +526,7 @@ type ExistingEventRecord = {
   reviewedAt?: number;
   reviewedBy?: string;
   moderationNote?: string;
+  updatedAt: number;
 };
 
 type ExistingSourceMatch = {
@@ -9529,13 +9532,15 @@ async function processIngestionPost(
       }
 
       try {
+        let persistedUpdate: { updatedAt: number };
         if (sourceOccurrencePlan && preparedOccurrenceKey) {
-          await client.mutation(
+          persistedUpdate = await client.mutation(
             updateEventAndRecordInstagramSourceOccurrenceSatisfactionMutation,
             {
               id: existingMatch.existingEvent._id,
               patch: updatePayload.patch,
               expectedStatus: existingMatch.existingEvent.status,
+              expectedUpdatedAt: existingMatch.existingEvent.updatedAt,
               plan: sourceOccurrencePlan,
               satisfiedKey: preparedOccurrenceKey,
               processingFence,
@@ -9546,12 +9551,13 @@ async function processIngestionPost(
             },
           );
         } else {
-          await client.mutation(updateEventMutation, {
+          persistedUpdate = await client.mutation(updateEventMutation, {
             id: existingMatch.existingEvent._id,
             patch: updatePayload.patch,
             expectedStatus: existingMatch.existingEvent.status,
+            expectedUpdatedAt: existingMatch.existingEvent.updatedAt,
             serviceSecret,
-          });
+          }) as { updatedAt: number };
         }
         if (durableMediaEligible) {
           hasDurableMediaAttachmentTarget = true;
@@ -9589,6 +9595,7 @@ async function processIngestionPost(
             updatePayload.patch.reviewedBy ?? existingMatch.existingEvent.reviewedBy,
           moderationNote:
             updatePayload.patch.moderationNote ?? existingMatch.existingEvent.moderationNote,
+          updatedAt: persistedUpdate.updatedAt,
         };
       } catch (error) {
         summary.duplicate_update_failed += 1;
@@ -9616,11 +9623,23 @@ async function processIngestionPost(
           returnCreateDisposition: true,
           serviceSecret,
         },
-      )) as string | { eventId: string; created: boolean };
+      )) as string | { eventId: string; created: boolean; updatedAt?: number };
       const insertedId =
         typeof createResult === "string" ? createResult : createResult.eventId;
       const wasCreated =
         typeof createResult === "string" ? true : createResult.created;
+      let insertedUpdatedAt =
+        typeof createResult === "string" ? undefined : createResult.updatedAt;
+      if (!Number.isSafeInteger(insertedUpdatedAt)) {
+        const persistedEvent = (await client.query(getEventQuery, { id: insertedId })) as
+          | { updatedAt?: number }
+          | null;
+        insertedUpdatedAt = persistedEvent?.updatedAt;
+      }
+      if (!Number.isSafeInteger(insertedUpdatedAt)) {
+        throw new Error("Created event did not expose an exact updatedAt version.");
+      }
+      const exactInsertedUpdatedAt = insertedUpdatedAt as number;
       if (durableMediaEligible) {
         hasDurableMediaAttachmentTarget = true;
       }
@@ -9632,6 +9651,7 @@ async function processIngestionPost(
           existingEvent: {
             _id: insertedId,
             ...prepared.event,
+            updatedAt: exactInsertedUpdatedAt,
           },
           matchedBy: "post_url",
           matchedValue: prepared.event.instagramPostUrl,
@@ -9657,6 +9677,7 @@ async function processIngestionPost(
         existingEvent: {
           _id: insertedId,
           ...prepared.event,
+          updatedAt: exactInsertedUpdatedAt,
         },
         matchedBy: "post_url",
         matchedValue: prepared.event.instagramPostUrl,

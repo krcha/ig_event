@@ -249,6 +249,19 @@ export function assertExpectedEventStatus(
   }
 }
 
+export function nextEventUpdatedAt(currentUpdatedAt: number, now = Date.now()): number {
+  if (!Number.isSafeInteger(currentUpdatedAt)) {
+    throw new Error("The current event updatedAt is invalid.");
+  }
+  if (!Number.isSafeInteger(now)) {
+    throw new Error("The event update clock is invalid.");
+  }
+  if (currentUpdatedAt >= Number.MAX_SAFE_INTEGER) {
+    throw new Error("The event updatedAt revision cannot be advanced safely.");
+  }
+  return Math.max(now, currentUpdatedAt + 1);
+}
+
 export function assertExpectedEventUpdatedAt(
   currentUpdatedAt: number,
   expectedUpdatedAt: number | undefined,

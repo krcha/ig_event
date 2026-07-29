@@ -8,6 +8,7 @@ import {
   normalizeInstagramMediaSourceIdentity,
 } from "../lib/images/media-source-identity";
 import { isAllowedRemoteImageUrl } from "../lib/images/remote-image-policy";
+import { nextEventUpdatedAt } from "../lib/events/event-update-precondition";
 
 const sourceIdentityArgs = {
   postId: v.optional(v.string()),
@@ -222,7 +223,7 @@ async function attachAssetToSourceRecords(
       ...(normalized.normalizedInstagramPostUrl
         ? { normalizedInstagramPostUrl: normalized.normalizedInstagramPostUrl }
         : {}),
-      updatedAt: Date.now(),
+      updatedAt: nextEventUpdatedAt(event.updatedAt),
     };
     await ctx.db.patch(event._id, patch);
     await ctx.db.insert("eventAuditLog", {
@@ -435,7 +436,7 @@ export const removeMissingAsset = internalMutation({
       await ctx.db.patch(event._id, {
         imageStorageId: undefined,
         imageUrl: undefined,
-        updatedAt: Date.now(),
+        updatedAt: nextEventUpdatedAt(event.updatedAt),
       });
       await ctx.db.insert("eventAuditLog", {
         eventId: event._id,

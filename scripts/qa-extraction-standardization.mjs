@@ -6029,6 +6029,7 @@ async function runServiceApprovalMutationBoundaryQa() {
       venue: existingVenue,
       venueInstagramHandle: existingVenueInstagramHandle,
       status: "pending",
+      updatedAt: 1,
     }),
     insert: async (table, value) => {
       if (table === "eventAuditLog") {
@@ -6548,10 +6549,15 @@ async function runDistinctOccurrencePersistenceQa() {
     mutation: async (_reference, args) => {
       if ("id" in args) {
         updated.push(args);
-        return args.id;
+        return { updatedAt: 1000 + updated.length };
       }
-      inserted.push(args);
-      return `qa-distinct-occurrence-${inserted.length}`;
+      const updatedAt = inserted.length + 1;
+      inserted.push({ ...args, updatedAt });
+      return {
+        eventId: `qa-distinct-occurrence-${inserted.length}`,
+        created: true,
+        updatedAt,
+      };
     },
   };
 
@@ -7074,10 +7080,12 @@ async function runDistinctOccurrencePersistenceQa() {
     assert.deepEqual(firstAtomicCreate, {
       eventId: "qa-atomic-event-1",
       created: true,
+      updatedAt: atomicEvents[0].updatedAt,
     });
     assert.deepEqual(racedAtomicCreate, {
       eventId: "qa-atomic-event-1",
       created: false,
+      updatedAt: atomicEvents[0].updatedAt,
     });
     await assert.rejects(
       createEvent._handler(atomicCtx, {
@@ -7611,8 +7619,8 @@ async function runDistinctOccurrencePersistenceQa() {
           assert.equal("id" in args, false);
           atomicRaceCreates.push(args);
           return args.time === "19:00"
-            ? { eventId: "qa-raced-existing-19", created: false }
-            : { eventId: "qa-created-22", created: true };
+            ? { eventId: "qa-raced-existing-19", created: false, updatedAt: 100 }
+            : { eventId: "qa-created-22", created: true, updatedAt: 200 };
         },
       },
       handle: "tickets.rs",
@@ -7653,10 +7661,14 @@ async function runDistinctOccurrencePersistenceQa() {
       }
       if ("id" in args) {
         retryUpdated.push(args);
-        return args.id;
+        return { updatedAt: existingFirstOccurrence.updatedAt + retryUpdated.length };
       }
       retryInserted.push(args);
-      return `qa-recovered-occurrence-${retryInserted.length}`;
+      return {
+        eventId: `qa-recovered-occurrence-${retryInserted.length}`,
+        created: true,
+        updatedAt: 1000 + retryInserted.length,
+      };
     },
   };
 
@@ -7704,7 +7716,11 @@ async function runDistinctOccurrencePersistenceQa() {
             return { recorded: true };
           }
           legacyRetryCreates.push(args);
-          return "qa-legacy-recovered-second-occurrence";
+          return {
+            eventId: "qa-legacy-recovered-second-occurrence",
+            created: true,
+            updatedAt: 1000,
+          };
         },
       },
       handle: "tickets.rs",
@@ -7783,8 +7799,12 @@ async function runDistinctOccurrencePersistenceQa() {
       client: {
         query: async () => [],
         mutation: async (_reference, args) => {
-          mixedInserted.push(args);
-          return "qa-mixed-eligible-occurrence";
+          mixedInserted.push({ ...args, updatedAt: 1000 });
+          return {
+            eventId: "qa-mixed-eligible-occurrence",
+            created: true,
+            updatedAt: 1000,
+          };
         },
       },
       handle: "tickets.rs",
@@ -7965,7 +7985,11 @@ async function runDistinctOccurrencePersistenceQa() {
             return { updated: true };
           }
           guardedRecoveryCreates.push(args);
-          return "qa-transient-guard-recovered-child";
+          return {
+            eventId: "qa-transient-guard-recovered-child",
+            created: true,
+            updatedAt: 2000,
+          };
         },
       },
       handle: "tickets.rs",
@@ -8049,8 +8073,8 @@ async function runDistinctOccurrencePersistenceQa() {
           if (rangeInitialCreates.length > 0) {
             throw new Error("qa simulated second date insert failure");
           }
-          rangeInitialCreates.push(args);
-          return "qa-range-first-date";
+          rangeInitialCreates.push({ ...args, updatedAt: 1000 });
+          return { eventId: "qa-range-first-date", created: true, updatedAt: 1000 };
         },
       },
       handle: "akademija28",
@@ -8110,8 +8134,12 @@ async function runDistinctOccurrencePersistenceQa() {
             return { recorded: true };
           }
           assert.equal("id" in args, false);
-          rangeRetryCreates.push(args);
-          return "qa-range-recovered-second-date";
+          rangeRetryCreates.push({ ...args, updatedAt: 2000 });
+          return {
+            eventId: "qa-range-recovered-second-date",
+            created: true,
+            updatedAt: 2000,
+          };
         },
       },
       handle: "akademija28",
@@ -8177,10 +8205,15 @@ async function runDistinctOccurrencePersistenceQa() {
           }
           if ("id" in args) {
             semanticUpdated.push(args);
-            return args.id;
+            return { updatedAt: semanticExisting.updatedAt + semanticUpdated.length };
           }
-          semanticInserted.push(args);
-          return `qa-semantic-occurrence-${semanticInserted.length}`;
+          const updatedAt = 2000 + semanticInserted.length;
+          semanticInserted.push({ ...args, updatedAt });
+          return {
+            eventId: `qa-semantic-occurrence-${semanticInserted.length}`,
+            created: true,
+            updatedAt,
+          };
         },
       },
       handle: "tickets.rs",
@@ -8292,8 +8325,8 @@ async function runDistinctOccurrencePersistenceQa() {
           mutation: async (_reference, args) => {
             forcedReplayMutations.push(args);
             return "id" in args
-              ? args.id
-              : { eventId: "qa-force-replay-created", created: true };
+              ? { updatedAt: semanticExisting.updatedAt + forcedReplayMutations.length }
+              : { eventId: "qa-force-replay-created", created: true, updatedAt: 3000 };
           },
         },
         handle: "tickets.rs",
@@ -8341,7 +8374,7 @@ async function runDistinctOccurrencePersistenceQa() {
           if ("id" in args) {
             throw new Error("qa-required-duplicate-repair-failed");
           }
-          return { eventId: "qa-failed-repair-other-child", created: true };
+          return { eventId: "qa-failed-repair-other-child", created: true, updatedAt: 4000 };
         },
       },
       handle: "tickets.rs",

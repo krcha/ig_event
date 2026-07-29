@@ -354,7 +354,11 @@ await withoutConsoleNoise(() =>
           return args.id;
         }
         persistedCommonEvents.push(args);
-        return `qa-common-occurrence-${persistedCommonEvents.length}`;
+        return {
+          eventId: `qa-common-occurrence-${persistedCommonEvents.length}`,
+          created: true,
+          updatedAt: persistedCommonEvents.length,
+        };
       },
     },
     handle: "common.belgrade",
@@ -595,9 +599,13 @@ for (const recurrenceMarker of [
           query: async () => [],
           mutation: async (_reference, args) => {
             if ("representativeEventId" in args) return { recorded: true };
-            if ("id" in args) return args.id;
+            if ("id" in args) return { updatedAt: 1000 };
             persistedSyntaxEvents.push(args);
-            return `qa-recurring-syntax-${persistedSyntaxEvents.length}`;
+            return {
+              eventId: `qa-recurring-syntax-${persistedSyntaxEvents.length}`,
+              created: true,
+              updatedAt: persistedSyntaxEvents.length,
+            };
           },
         },
         handle: "common.belgrade",
@@ -710,9 +718,13 @@ await withoutConsoleNoise(() =>
       query: async () => [],
       mutation: async (_reference, args) => {
         if ("representativeEventId" in args) return { recorded: true };
-        if ("id" in args) return args.id;
+        if ("id" in args) return { updatedAt: 1000 };
         persistedMidweekEvents.push(args);
-        return `qa-midweek-boundary-${persistedMidweekEvents.length}`;
+        return {
+          eventId: `qa-midweek-boundary-${persistedMidweekEvents.length}`,
+          created: true,
+          updatedAt: persistedMidweekEvents.length,
+        };
       },
     },
     handle: "common.belgrade",
@@ -982,9 +994,13 @@ await withoutConsoleNoise(() =>
       query: async () => [],
       mutation: async (_reference, args) => {
         if ("representativeEventId" in args) return { recorded: true };
-        if ("id" in args) return args.id;
+        if ("id" in args) return { updatedAt: 1000 };
         persistedSwappedLaneEvents.push(args);
-        return `qa-swapped-lane-${persistedSwappedLaneEvents.length}`;
+        return {
+          eventId: `qa-swapped-lane-${persistedSwappedLaneEvents.length}`,
+          created: true,
+          updatedAt: persistedSwappedLaneEvents.length,
+        };
       },
     },
     handle: "common.belgrade",

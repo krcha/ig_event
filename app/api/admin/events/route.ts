@@ -19,6 +19,7 @@ type EventListAllQuery = {
 
 type UpdatePromotionRequestBody = {
   eventId?: string;
+  expectedUpdatedAt?: number;
   promotionEnd?: string | null;
   promotionPriority?: number | string | null;
   promotionStart?: string | null;
@@ -139,6 +140,10 @@ function normalizePromotionTier(value: unknown): PromotionTier | "none" {
   throw new Error("Promotion tier must be none, featured, or promoted.");
 }
 
+function isVersionConflict(error: unknown): boolean {
+  return error instanceof Error && /reviewed version|expectedUpdatedAt/iu.test(error.message);
+}
+
 export async function GET(request: Request) {
   const adminAccess = await requireAdminApiAccess();
   if (!adminAccess.ok) {
@@ -197,6 +202,12 @@ export async function PATCH(request: Request) {
   if (!eventId) {
     return NextResponse.json({ error: "eventId is required." }, { status: 400 });
   }
+  if (!Number.isSafeInteger(body.expectedUpdatedAt)) {
+    return NextResponse.json(
+      { error: "expectedUpdatedAt must be the exact reviewed event version." },
+      { status: 400 },
+    );
+  }
 
   try {
     const tier = normalizePromotionTier(body.promotionTier);
@@ -217,6 +228,7 @@ export async function PATCH(request: Request) {
     const convex = await createAuthenticatedConvexHttpClient();
     await convex.mutation(updateEventMutation, {
       id: eventId,
+      expectedUpdatedAt: body.expectedUpdatedAt,
       patch,
     });
 
@@ -230,7 +242,7 @@ export async function PATCH(request: Request) {
         error:
           error instanceof Error ? error.message : "Failed to update promotion.",
       },
-      { status: 500 },
+      { status: isVersionConflict(error) ? 409 : 500 },
     );
   }
 }

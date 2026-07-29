@@ -218,11 +218,22 @@ export async function runApprovedEventAutoMerge(
     }
 
     let mergedThisPass = 0;
+    const approvedEventById = new Map(approvedEvents.map((event) => [event._id, event]));
     for (const group of cleanupGroups) {
       try {
+        const primaryEvent = approvedEventById.get(group.primaryEventId);
+        const duplicateEvents = group.duplicateEventIds.map((id) => approvedEventById.get(id));
+        if (!primaryEvent || duplicateEvents.some((event) => !event)) {
+          throw new Error("Approved-event cleanup versions are unavailable.");
+        }
         await convex.mutation(mergeApprovedEventsMutation, {
           primaryId: group.primaryEventId,
           duplicateIds: group.duplicateEventIds,
+          expectedPrimaryUpdatedAt: primaryEvent.updatedAt,
+          expectedDuplicateVersions: duplicateEvents.map((event) => ({
+            id: event!._id,
+            expectedUpdatedAt: event!.updatedAt,
+          })),
           patch: {},
           ...(options?.serviceSecret ? { serviceSecret: options.serviceSecret } : {}),
         });
