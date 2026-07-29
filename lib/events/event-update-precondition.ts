@@ -249,6 +249,23 @@ export function assertExpectedEventStatus(
   }
 }
 
+export function assertExpectedEventUpdatedAt(
+  currentUpdatedAt: number,
+  expectedUpdatedAt: number | undefined,
+): void {
+  if (expectedUpdatedAt === undefined) {
+    return;
+  }
+  if (!Number.isSafeInteger(expectedUpdatedAt)) {
+    throw new Error("expectedUpdatedAt must be a safe integer.");
+  }
+  if (currentUpdatedAt !== expectedUpdatedAt) {
+    throw new Error(
+      `Event changed since the reviewed version (expected updatedAt ${expectedUpdatedAt}, found ${currentUpdatedAt}).`,
+    );
+  }
+}
+
 export function assertServiceCreateEventPolicy(
   requestedStatus: EventStatusPrecondition | undefined,
   normalizedFieldsJson?: string,

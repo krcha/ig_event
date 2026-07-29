@@ -19,6 +19,7 @@
     "qa:event-time-provenance": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-event-time-provenance.mjs",
     "qa:moderation-queue": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-moderation-queue.mjs",
     "qa:moderation-distinct-batch": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-moderation-distinct-batch.mjs",
+    "qa:event-version-preconditions": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-event-version-preconditions.mjs",
     "qa:instagram-occurrences": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-instagram-occurrence-regressions.mjs",
     "qa:ingestion-triage": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-ingestion-run-triage.mjs",
     "qa:venue-types": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-venue-type-taxonomy.mjs",

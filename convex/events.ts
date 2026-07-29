@@ -18,6 +18,7 @@ import {
 } from "../lib/events/approved-event-duplicates";
 import {
   assertExpectedEventStatus,
+  assertExpectedEventUpdatedAt,
   assertServiceCreateEventPolicy,
   assertServiceUpdateEventPolicy,
 } from "../lib/events/event-update-precondition";
@@ -1915,6 +1916,7 @@ async function applyEventUpdate(
     id: Id<"events">;
     patch: EventUpdatePatch;
     expectedStatus?: "pending" | "approved" | "rejected";
+    expectedUpdatedAt?: number;
   },
   authorization: { actor: string; kind: "admin" | "service" },
 ): Promise<void> {
@@ -1923,6 +1925,7 @@ async function applyEventUpdate(
     throw new Error("Event not found.");
   }
   assertExpectedEventStatus(existingEvent.status, args.expectedStatus);
+  assertExpectedEventUpdatedAt(existingEvent.updatedAt, args.expectedUpdatedAt);
 
   const now = Date.now();
   const { clearTicketPrice, ...eventPatch } = args.patch;
@@ -2002,6 +2005,7 @@ export const updateEvent = mutation({
     id: v.id("events"),
     patch: eventUpdatePatch,
     expectedStatus: v.optional(eventStatus),
+    expectedUpdatedAt: v.optional(v.number()),
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -2015,6 +2019,7 @@ export const updateEventAndRecordInstagramSourceOccurrenceSatisfaction = mutatio
     id: v.id("events"),
     patch: eventUpdatePatch,
     expectedStatus: v.optional(eventStatus),
+    expectedUpdatedAt: v.optional(v.number()),
     plan: sourceOccurrencePlan,
     satisfiedKey: v.string(),
     supersededKey: v.optional(v.string()),
@@ -2139,6 +2144,7 @@ export const setEventStatus = mutation({
     status: moderationStatus,
     reviewedBy: v.optional(v.string()),
     moderationNote: v.optional(v.string()),
+    expectedUpdatedAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const identity = await requireAdminIdentity(ctx);
@@ -2150,6 +2156,7 @@ export const setEventStatus = mutation({
     if (existingEvent.status !== "pending") {
       throw new Error("Only pending events can be moderated.");
     }
+    assertExpectedEventUpdatedAt(existingEvent.updatedAt, args.expectedUpdatedAt);
 
     if (args.status === "approved") {
       const venueFields = await resolveVenueDenormalizedFields(ctx, existingEvent.venue);
