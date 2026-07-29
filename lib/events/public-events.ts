@@ -27,6 +27,7 @@ import {
 } from "@/lib/pipeline/venue-normalization";
 import { loadVenueNameOverridesByHandle } from "@/lib/pipeline/venue-name-overrides";
 import { chunkPublicVenueIds } from "@/lib/events/public-venue-batching";
+import { buildPublicCalendarDateWindows } from "@/lib/events/public-calendar-windows";
 import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 
 export type EventStatus = "pending" | "approved" | "rejected";
@@ -510,22 +511,24 @@ async function loadAllPublicCalendarEventsWindow(
   beforeDate: string,
 ): Promise<PublicEvent[]> {
   const events: PublicEvent[] = [];
-  let cursor: string | null = null;
 
-  while (true) {
-    const page = await queryPublicCalendarEventsWindowPage({
-      beforeDate,
-      convex,
-      cursor,
-      fromDate,
-    });
-    events.push(...page.page);
+  for (const window of buildPublicCalendarDateWindows(fromDate, beforeDate)) {
+    let cursor: string | null = null;
+    while (true) {
+      const page = await queryPublicCalendarEventsWindowPage({
+        beforeDate: window.beforeDate,
+        convex,
+        cursor,
+        fromDate: window.fromDate,
+      });
+      events.push(...page.page);
 
-    if (page.isDone) {
-      break;
+      if (page.isDone) {
+        break;
+      }
+
+      cursor = page.continueCursor;
     }
-
-    cursor = page.continueCursor;
   }
 
   const venueLookup = await loadVenueLookup(convex, events, {

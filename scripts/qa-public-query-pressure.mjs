@@ -5,6 +5,10 @@ import { getPublicDuplicateEventIds } from "../convex/events.ts";
 import { projectPublicEvent } from "../convex/publicEventProjection.ts";
 import { buildNormalizedEventVenueIdentity } from "../lib/events/event-venue-identity.ts";
 import {
+  buildPublicCalendarDateWindows,
+  MAX_PUBLIC_CALENDAR_WINDOW_DAYS,
+} from "../lib/events/public-calendar-windows.ts";
+import {
   chunkPublicVenueIds,
   PUBLIC_VENUE_FIELDS_BATCH_SIZE,
 } from "../lib/events/public-venue-batching.ts";
@@ -191,6 +195,36 @@ assert.match(
   "The daily carousel must migrate off the old compatibility endpoint.",
 );
 assert.doesNotMatch(carouselRouteSource, /events:listPublicCalendarEventsWindow"/);
+assert.equal(MAX_PUBLIC_CALENDAR_WINDOW_DAYS, 45);
+const sitemapCalendarWindows = buildPublicCalendarDateWindows("2026-07-29", "2027-07-31");
+assert.equal(sitemapCalendarWindows.length, 9);
+assert.deepEqual(sitemapCalendarWindows[0], {
+  fromDate: "2026-07-29",
+  beforeDate: "2026-09-12",
+});
+assert.deepEqual(sitemapCalendarWindows.at(-1), {
+  fromDate: "2027-07-24",
+  beforeDate: "2027-07-31",
+});
+for (const [index, window] of sitemapCalendarWindows.entries()) {
+  const spanDays =
+    (Date.parse(`${window.beforeDate}T00:00:00Z`) -
+      Date.parse(`${window.fromDate}T00:00:00Z`)) /
+    86_400_000;
+  assert.ok(spanDays >= 1 && spanDays <= MAX_PUBLIC_CALENDAR_WINDOW_DAYS);
+  if (index > 0) {
+    assert.equal(
+      sitemapCalendarWindows[index - 1].beforeDate,
+      window.fromDate,
+      "Sitemap calendar windows must be contiguous without overlap or gaps.",
+    );
+  }
+}
+assert.match(
+  publicEventsSource,
+  /buildPublicCalendarDateWindows\(fromDate, beforeDate\)[\s\S]*window\.beforeDate[\s\S]*window\.fromDate/,
+  "The public calendar loader must split long sitemap ranges into backend-safe windows.",
+);
 assert.match(
   reprocessSource,
   /events:listPublicCalendarEventsWindowPaginated/,
