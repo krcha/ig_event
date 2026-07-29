@@ -647,7 +647,9 @@ for (const suspiciousRecurrenceMarker of [
       ...entry,
       source_text:
         index === 0
-          ? `${suspiciousRecurrenceMarker}\nMONDAY 14:00`
+          ? suspiciousRecurrenceMarker.includes("schedule begins")
+            ? "WEEKLY FROM 01.08.26\nMONDAY 14:00"
+            : `${suspiciousRecurrenceMarker}\nMONDAY 14:00`
           : "WEDNESDAY 19:00",
     })),
   };

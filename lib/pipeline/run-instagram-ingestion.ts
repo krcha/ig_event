@@ -3032,10 +3032,13 @@ function getRecurringModelScheduleContext(
     : null;
   const preservedPlan = extractPreservedRecurringLanes(independentSourceText);
   const preservedLaneKeys = new Set(preservedPlan.lanes.map(recurringLaneKey));
+  const sourceRecurrenceSuspected = hasRecurringScheduleStartSuspicion(independentSourceText);
   const sourceStartMatches = independentStartIsoDate === startIsoDate;
   const sourcePlanCoverageRejected =
-    sourceStartMatches &&
-    (preservedPlan.ambiguous || preservedLaneKeys.size !== modelLaneKeys.length);
+    sourceRecurrenceSuspected &&
+    (!sourceStartMatches ||
+      preservedPlan.ambiguous ||
+      preservedLaneKeys.size !== modelLaneKeys.length);
   const sourceGroundingVerified =
     sourceStartMatches &&
     !sourcePlanCoverageRejected &&
