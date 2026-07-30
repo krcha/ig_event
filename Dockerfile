@@ -27,7 +27,8 @@ RUN npm run lint \
 
 FROM node:22-alpine AS runner
 WORKDIR /app
-RUN apk add --no-cache libc6-compat \
+RUN apk add --no-cache libc6-compat font-dejavu \
+  && fc-cache -f \
   && addgroup -S nodejs \
   && adduser -S nextjs -G nodejs
 

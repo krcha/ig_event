@@ -59,7 +59,7 @@ assert.equal(payload.selectedCount, 6);
 assert.deepEqual(payload.eventDates, eventDates);
 assert.equal(payload.slides.length, 7);
 assert.equal(payload.slides.at(-1)?.kind, "cta");
-assert.match(payload.slides.at(-1)?.imageUrl ?? "", /\/api\/social\/carousel\/cta\?v=2$/);
+assert.match(payload.slides.at(-1)?.imageUrl ?? "", /\/api\/social\/carousel\/cta\?v=3$/);
 assert.ok(payload.selectionKey.startsWith(`${publishDate}:${eventDates.join("+")}:`));
 assert.match(payload.selectionKey, /event-[a-f]@[a-z0-9]+/);
 assert.match(payload.caption, /plan za sutra i prekosutra/);
@@ -146,6 +146,7 @@ const imageRendererSource = readFileSync(
   new URL("../lib/social/carousel-images.ts", import.meta.url),
   "utf8",
 );
+const dockerfileSource = readFileSync(new URL("../Dockerfile", import.meta.url), "utf8");
 const workflow = JSON.parse(
   readFileSync(new URL("../ops/n8n/event-zeka-daily-instagram-carousel.json", import.meta.url), "utf8"),
 )[0];
@@ -169,6 +170,8 @@ assert.match(imageRendererSource, /\.jpeg\(/);
 assert.match(imageRendererSource, /datePillWidth/);
 assert.match(imageRendererSource, />eventzeka\.com<\/text>/);
 assert.doesNotMatch(imageRendererSource, />events\.ineedtofeedmyrabbit\.com<\/text>/);
+assert.match(dockerfileSource, /font-dejavu/);
+assert.match(dockerfileSource, /fc-cache -f/);
 assert.equal(scheduleNode?.parameters?.rule?.interval?.[0]?.expression, "1 0 * * *");
 assert.match(workflowCode, /this\.helpers\.httpRequest/);
 assert.doesNotMatch(workflowCode, /await fetch\(/);

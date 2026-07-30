@@ -1,6 +1,7 @@
 const DEFAULT_CAROUSEL_EVENT_LIMIT = 6;
 const MAX_CAPTION_EVENT_TITLE_LENGTH = 120;
 const MAX_INSTAGRAM_CAPTION_LENGTH = 2_200;
+const CAROUSEL_RENDER_VERSION = "3";
 const INSTAGRAM_HANDLE_PATTERN = /^(?!.*\.\.)(?!.*\.$)[a-z0-9._]{1,30}$/;
 const XML_CONTROL_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 
@@ -88,6 +89,7 @@ export function getNextIsoDate(date: string): string {
 export function buildEventRenderVersion(event: DailyCarouselEvent): string {
   return stableHash(
     [
+      CAROUSEL_RENDER_VERSION,
       event._id,
       event.title,
       event.venue,
@@ -278,7 +280,7 @@ export function buildDailyCarouselPayload(options: {
         ...eventSlides,
         {
           kind: "cta" as const,
-          imageUrl: `${options.publicOrigin}/api/social/carousel/cta?v=2`,
+          imageUrl: `${options.publicOrigin}/api/social/carousel/cta?v=${CAROUSEL_RENDER_VERSION}`,
         },
       ]
     : [];
