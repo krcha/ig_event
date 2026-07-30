@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { deleteExpiredEvents } from "../convex/events.ts";
 
 const cronsSource = readFileSync(new URL("../convex/crons.ts", import.meta.url), "utf8");
 const maintenanceSource = readFileSync(
@@ -41,6 +42,26 @@ assert.match(
   maintenanceSource,
   /ctx\.runMutation\(deleteExpiredEventsMutation/,
   "retention action should run the bounded internal deletion mutation through a typed function reference",
+);
+assert.match(
+  eventsSource,
+  /beforeDate: v\.optional\(v\.string\(\)\)/,
+  "operators should be able to request a strict explicit date cutoff without changing cron retention",
+);
+assert.match(
+  eventsSource,
+  /dateKeyToUtcMs\(explicitBeforeDate \?\? ""\) === null/,
+  "explicit deletion cutoffs must reject invalid calendar dates",
+);
+assert.match(
+  eventsSource,
+  /shouldDeleteSameDayExpiredEvents = explicitBeforeDate === undefined/,
+  "an explicit beforeDate must preserve every event on the cutoff date",
+);
+assert.match(
+  maintenanceSource,
+  /beforeDate: args\.beforeDate/,
+  "the bounded all-batches action must forward the explicit strict cutoff to every mutation batch",
 );
 assert.match(
   maintenanceSource,
@@ -104,5 +125,91 @@ assert.match(
   /internal\.maintenance\.cleanupIngestionArtifactsUntilDone/,
   "ingestion artifact cleanup cron should call the internal maintenance action",
 );
+
+function makeStrictCutoffCtx() {
+  const events = new Map([
+    ["event-before", { _id: "event-before", date: "2026-07-25", time: "23:59" }],
+    ["event-cutoff", { _id: "event-cutoff", date: "2026-07-26", time: "00:00" }],
+  ]);
+  const saved = new Map([
+    ["saved-before", { _id: "saved-before", eventId: "event-before" }],
+    ["saved-cutoff", { _id: "saved-cutoff", eventId: "event-cutoff" }],
+  ]);
+  const legacySaved = new Map();
+  const deleted = [];
+  return {
+    ctx: {
+      db: {
+        query(table) {
+          return {
+            withIndex(_index, buildRange) {
+              let constraint;
+              buildRange({
+                eq(_field, value) {
+                  constraint = { kind: "eq", value };
+                  return this;
+                },
+                lt(_field, value) {
+                  constraint = { kind: "lt", value };
+                  return this;
+                },
+              });
+              return {
+                async take(limit) {
+                  assert.equal(table, "events");
+                  assert.equal(constraint?.kind, "lt");
+                  return [...events.values()]
+                    .filter((event) => event.date < constraint.value)
+                    .slice(0, limit);
+                },
+                async collect() {
+                  const records = table === "savedEvents" ? saved : legacySaved;
+                  return [...records.values()].filter(
+                    (record) => record.eventId === constraint?.value,
+                  );
+                },
+              };
+            },
+          };
+        },
+        async delete(id) {
+          deleted.push(id);
+          events.delete(id);
+          saved.delete(id);
+          legacySaved.delete(id);
+        },
+      },
+    },
+    deleted,
+    events,
+    saved,
+  };
+}
+
+const strictCutoff = makeStrictCutoffCtx();
+const strictCutoffResult = await deleteExpiredEvents._handler(strictCutoff.ctx, {
+  batchSize: 500,
+  beforeDate: "2026-07-26",
+});
+assert.equal(strictCutoffResult.deletedEventCount, 1);
+assert.equal(strictCutoffResult.deletedSavedEventCount, 1);
+assert.equal(strictCutoffResult.cutoffDate, "2026-07-26");
+assert.equal(strictCutoffResult.cutoffTime, "00:00");
+assert.equal(strictCutoffResult.sameDayExpiredEventCount, 0);
+assert.equal(strictCutoff.events.has("event-before"), false);
+assert.equal(strictCutoff.events.has("event-cutoff"), true);
+assert.equal(strictCutoff.saved.has("saved-before"), false);
+assert.equal(strictCutoff.saved.has("saved-cutoff"), true);
+assert.deepEqual(strictCutoff.deleted.sort(), ["event-before", "saved-before"]);
+
+const invalidCutoff = makeStrictCutoffCtx();
+await assert.rejects(
+  deleteExpiredEvents._handler(invalidCutoff.ctx, {
+    batchSize: 500,
+    beforeDate: "2026-02-30",
+  }),
+  /valid YYYY-MM-DD date/,
+);
+assert.deepEqual(invalidCutoff.deleted, []);
 
 console.log("Convex retention cron QA passed.");

@@ -2482,11 +2482,19 @@ export const mergeApprovedEvents = mutation({
 export const deleteExpiredEvents = internalMutation({
   args: {
     batchSize: v.optional(v.number()),
+    beforeDate: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const batchSize = normalizeExpiredEventDeleteBatchSize(args.batchSize);
     const timeZone = getConfiguredEventTimezone();
-    const cutoff = getEventExpiryCutoff(new Date(), timeZone);
+    const explicitBeforeDate = args.beforeDate?.trim();
+    if (args.beforeDate !== undefined && dateKeyToUtcMs(explicitBeforeDate ?? "") === null) {
+      throw new Error("beforeDate must be a valid YYYY-MM-DD date.");
+    }
+    const cutoff = explicitBeforeDate
+      ? { isoDate: explicitBeforeDate, minutesSinceMidnight: 0 }
+      : getEventExpiryCutoff(new Date(), timeZone);
+    const shouldDeleteSameDayExpiredEvents = explicitBeforeDate === undefined;
     const eventsBeforeCutoffDate = await ctx.db
       .query("events")
       .withIndex("by_date", (q) => q.lt("date", cutoff.isoDate))
@@ -2504,7 +2512,7 @@ export const deleteExpiredEvents = internalMutation({
     let skippedSameDayEventCount = 0;
     let sameDayExpiredEventCount = 0;
 
-    if (remainingSlots > 0) {
+    if (shouldDeleteSameDayExpiredEvents && remainingSlots > 0) {
       const eventsOnCutoffDate = await ctx.db
         .query("events")
         .withIndex("by_date", (q) => q.eq("date", cutoff.isoDate))
@@ -2530,7 +2538,8 @@ export const deleteExpiredEvents = internalMutation({
       cutoffTime: formatMinutesSinceMidnight(cutoff.minutesSinceMidnight),
       timeZone,
       hasMore:
-        eventsBeforeCutoffDate.length === batchSize || skippedSameDayEventCount > 0,
+        eventsBeforeCutoffDate.length === batchSize ||
+        (shouldDeleteSameDayExpiredEvents && skippedSameDayEventCount > 0),
       skippedSameDayEventCount,
       sameDayExpiredEventCount,
     };

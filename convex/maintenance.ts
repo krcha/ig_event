@@ -43,7 +43,7 @@ const deleteExpiredEventsMutation = (internal as unknown as {
     deleteExpiredEvents: FunctionReference<
       "mutation",
       "internal",
-      { batchSize?: number },
+      { batchSize?: number; beforeDate?: string },
       DeleteExpiredEventsResult
     >;
   };
@@ -127,6 +127,7 @@ function normalizeMaxBatches(value: number | undefined): number {
 export const deleteExpiredEventsUntilDone = internalAction({
   args: {
     batchSize: v.optional(v.number()),
+    beforeDate: v.optional(v.string()),
     maxBatches: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<DeleteExpiredEventsUntilDoneResult> => {
@@ -144,7 +145,10 @@ export const deleteExpiredEventsUntilDone = internalAction({
     let sameDayExpiredEventCount = 0;
 
     for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
-      const result: DeleteExpiredEventsResult = await ctx.runMutation(deleteExpiredEventsMutation, { batchSize });
+      const result: DeleteExpiredEventsResult = await ctx.runMutation(deleteExpiredEventsMutation, {
+        batchSize,
+        beforeDate: args.beforeDate,
+      });
 
       batchesRun += 1;
       deletedEventCount += result.deletedEventCount;
