@@ -10772,6 +10772,7 @@ async function fetchFreshPostsForHandlesInParallel(
           handleSummary.errors.push(
             `Fresh Apify fetch for @${handle} was not attempted (${denialReason}).`,
           );
+          handleSummary.freshFetchAttempted = 0;
           if (denialReason === "hard_cap_saturated") {
             handleSummary.fetchHardBlocked = (handleSummary.fetchHardBlocked ?? 0) + 1;
           }
@@ -10878,6 +10879,9 @@ async function fetchFreshPostsForHandlesInParallel(
       } catch (error) {
         const message = getErrorMessage(error);
         const handleSummary = getOrCreateHandleSummary(summary, handle);
+        if (handleSummary.freshFetchAttempted === undefined) {
+          handleSummary.freshFetchAttempted = providerRequestStarted ? 1 : 0;
+        }
         handleSummary.errors.push(message);
         logError("ingestion.scrape.failed", {
           step: "fetch_posts" satisfies IngestionStep,

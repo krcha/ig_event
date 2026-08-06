@@ -46,7 +46,6 @@ const request = buildApifyInstagramScrapeRequest({
   daysBack: undefined,
   env: {},
 });
-
 assert.equal(request.input.dataDetailLevel, "basicData");
 assert.equal(request.input.skipPinnedPosts, false);
 assert.equal(request.input.resultsLimit, 3);
@@ -291,6 +290,16 @@ assert.match(
   ingestionRunnerSource,
   /processSavedBacklogBeforeFreshFetch/,
   "the full saved backlog must drain before another paid Apify request",
+);
+assert.match(
+  ingestionRunnerSource,
+  /if \(!lease\.claimed\)[\s\S]{0,600}freshFetchAttempted = 0/,
+  "a denied lease must persist a negative provider-attempt receipt",
+);
+assert.match(
+  ingestionRunnerSource,
+  /providerRequestStarted = true;[\s\S]{0,220}freshFetchAttempted[\s\S]{0,80}\+ 1/,
+  "a claimed lease must persist a positive provider-attempt receipt before provider execution",
 );
 assert.match(
   recentFullScrapeHandlesSource,
