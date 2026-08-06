@@ -939,10 +939,16 @@ export const claimPaidFetchLease = mutation({
     const horizonCutoffMs = Number.isFinite(args.horizonCutoffMs)
       ? Math.trunc(args.horizonCutoffMs as number)
       : null;
-    let blocker = await ctx.db
-      .query("scrapedPosts")
-      .withIndex("by_blocksPaidFetch", (q) => q.eq("blocksPaidFetch", true))
-      .first();
+    // Backlog admission is source-scoped. A saved post from an inactive or
+    // unrelated handle must not starve fresh acquisition for every venue.
+    const findBlocker = () =>
+      ctx.db
+        .query("scrapedPosts")
+        .withIndex("by_handle_blocksPaidFetch", (q) =>
+          q.eq("handle", handle).eq("blocksPaidFetch", true),
+        )
+        .first();
+    let blocker = await findBlocker();
     let reconciledBlockers = 0;
     while (blocker && reconciledBlockers < 100) {
       const isTerminal =
@@ -991,10 +997,7 @@ export const claimPaidFetchLease = mutation({
         });
       }
       reconciledBlockers += 1;
-      blocker = await ctx.db
-        .query("scrapedPosts")
-        .withIndex("by_blocksPaidFetch", (q) => q.eq("blocksPaidFetch", true))
-        .first();
+      blocker = await findBlocker();
     }
     if (blocker) {
       return {

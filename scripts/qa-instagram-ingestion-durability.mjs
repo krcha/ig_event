@@ -290,7 +290,7 @@ try {
     scrapedPosts: [
       {
         _id: "terminal-stale-blocker",
-        handle: "terminal.source",
+        handle: "source.one",
         postId: "terminal-post",
         blocksPaidFetch: true,
         processingStatus: "completed",
@@ -298,7 +298,7 @@ try {
       },
       {
         _id: "retryable-stale-blocker",
-        handle: "retry.source",
+        handle: "source.one",
         postId: "retry-post",
         blocksPaidFetch: true,
         processingStatus: "retryable_failure",
@@ -306,7 +306,7 @@ try {
       },
       {
         _id: "expired-processing-blocker",
-        handle: "expired.source",
+        handle: "source.one",
         postId: "expired-post",
         blocksPaidFetch: true,
         processingStatus: "processing",
@@ -316,7 +316,7 @@ try {
       },
       {
         _id: "old-out-of-horizon-blocker",
-        handle: "old.source",
+        handle: "source.one",
         postId: "old-post",
         postedAtMs: horizonCutoffMs - 1,
         blocksPaidFetch: true,
@@ -433,14 +433,24 @@ try {
   assert.equal(tables.ingestionDailyBudgets[0].chargedMicros, 50_000);
   assert.equal(tables.ingestionDailyBudgets[0].reservedMicros, 0);
 
-  const nPlusOneOldPosts = Array.from({ length: 101 }, (_, index) => ({
-    _id: `old-blocker-${index}`,
-    handle: "old.source",
-    postId: `old-post-${index}`,
-    postedAtMs: horizonCutoffMs - index - 1,
-    blocksPaidFetch: true,
-    processingStatus: "pending",
-  }));
+  const nPlusOneOldPosts = [
+    ...Array.from({ length: 101 }, (_, index) => ({
+      _id: `old-blocker-${index}`,
+      handle: "source.n1",
+      postId: `old-post-${index}`,
+      postedAtMs: horizonCutoffMs - index - 1,
+      blocksPaidFetch: true,
+      processingStatus: "pending",
+    })),
+    {
+      _id: "unrelated-inactive-blocker",
+      handle: "inactive.source",
+      postId: "unrelated-post",
+      postedAtMs: horizonCutoffMs + 1,
+      blocksPaidFetch: true,
+      processingStatus: "pending",
+    },
+  ];
   const { db: nPlusOneDb, tables: nPlusOneTables } = createDb({
     instagramPaidFetchControl: [
       { _id: "control-apify-n1", key: "apify", backlogIndexReady: true, createdAt: 1, updatedAt: 1 },
@@ -464,13 +474,27 @@ try {
   assert.equal(maintenanceBatch.claimed, false);
   assert.equal(maintenanceBatch.reason, "backlog_maintenance_incomplete");
   assert.equal(
-    nPlusOneTables.scrapedPosts.filter((post) => post.blocksPaidFetch).length,
+    nPlusOneTables.scrapedPosts.filter(
+      (post) => post.handle === "source.n1" && post.blocksPaidFetch,
+    ).length,
     1,
     "the first bounded mutation should leave exactly the N+1 row for same-step maintenance",
   );
   const nPlusOneClaim = await claimPaidFetchLease._handler(nPlusOneCtx, nPlusOneArgs);
   assert.equal(nPlusOneClaim.claimed, true);
-  assert.equal(nPlusOneTables.scrapedPosts.some((post) => post.blocksPaidFetch), false);
+  assert.equal(
+    nPlusOneTables.scrapedPosts.some(
+      (post) => post.handle === "source.n1" && post.blocksPaidFetch,
+    ),
+    false,
+  );
+  assert.equal(
+    nPlusOneTables.scrapedPosts.some(
+      (post) => post.handle === "inactive.source" && post.blocksPaidFetch,
+    ),
+    true,
+    "an unrelated inactive source may retain backlog without starving this handle's paid fetch",
+  );
 
   const { db: mediaRefreshDb, tables: mediaRefreshTables } = createDb({
     scrapedPosts: [

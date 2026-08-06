@@ -38,6 +38,7 @@ import {
   MAX_INGESTION_JOB_PERSISTED_JSON_BYTES,
   serializeSafeIngestionJobPayload,
 } from "../lib/pipeline/ingestion-job-safety.ts";
+import { getFreshCompletedAttemptHandles } from "../convex/ingestionJobs.ts";
 
 const request = buildApifyInstagramScrapeRequest({
   actorUsernameInput: "clubdrugstore",
@@ -745,6 +746,24 @@ assert.deepEqual(
   }),
   ["good-zero", "good-fetched", "legacy-no-summary"],
   "completed jobs should not cool down handles that only recorded scraper/API errors",
+);
+
+assert.deepEqual(
+  getFreshCompletedAttemptHandles(
+    ["provider-zero", "gate-denied", "provider-fetched"],
+    JSON.stringify({
+      handles: [
+        { handle: "provider-zero", errors: [] },
+        {
+          handle: "gate-denied",
+          errors: ["Fresh Apify fetch for @gate-denied was not attempted (saved_backlog_present)."],
+        },
+        { handle: "provider-fetched", fetchedPosts: 1, errors: [] },
+      ],
+    }),
+  ),
+  ["provider-zero", "provider-fetched"],
+  "a denied provider lease must not create a 24-hour fresh-attempt cooldown",
 );
 
 function runCronRunnerCapFixture(mode, activeCount = 2400, job = "ingest-venues") {

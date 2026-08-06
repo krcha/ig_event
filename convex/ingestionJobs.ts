@@ -123,7 +123,10 @@ function normalizeJobHandle(value: unknown): string {
   return typeof value === "string" ? value.trim().replace(/^@+/, "").toLowerCase() : "";
 }
 
-function getFreshCompletedAttemptHandles(handles: string[], summaryJson: string): string[] {
+export function getFreshCompletedAttemptHandles(
+  handles: string[],
+  summaryJson: string,
+): string[] {
   try {
     const parsed = JSON.parse(summaryJson) as {
       handles?: Array<Record<string, unknown> & { errors?: unknown; handle?: unknown }>;

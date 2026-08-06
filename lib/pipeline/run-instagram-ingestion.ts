@@ -10766,10 +10766,13 @@ async function fetchFreshPostsForHandlesInParallel(
             )) as PaidFetchLeaseResult,
         );
         if (!lease.claimed) {
-          if (lease.reason === "hard_cap_saturated") {
-            getOrCreateHandleSummary(summary, handle).errors.push(
-              `Apify fetch window for @${handle} remains hard-blocked at the maximum result cap.`,
-            );
+          const handleSummary = getOrCreateHandleSummary(summary, handle);
+          const denialReason = lease.reason ?? "unknown";
+          handleSummary.errors.push(
+            `Fresh Apify fetch for @${handle} was not attempted (${denialReason}).`,
+          );
+          if (denialReason === "hard_cap_saturated") {
+            handleSummary.fetchHardBlocked = (handleSummary.fetchHardBlocked ?? 0) + 1;
           }
           continue;
         }
