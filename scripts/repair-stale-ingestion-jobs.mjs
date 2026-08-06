@@ -5,8 +5,10 @@ const DEFAULT_STALE_HOURS = 6;
 const DEFAULT_LOOKBACK_DAYS = 30;
 const DEFAULT_SOURCE = "cron_active_venues";
 const DEFAULT_REPAIR_LEASE_MS = 5 * 60 * 1000;
+const REPAIR_JOB_PAGE_SIZE = 100;
+const MAX_REPAIR_JOB_PAGES = 10_000;
 
-const listRecentFullScrapeJobsQuery = "ingestionJobs:listRecentFullScrapeJobs";
+const listJobsForRepairPageQuery = "ingestionJobs:listJobsForRepairPage";
 const claimStepMutation = "ingestionJobs:claimStep";
 const failStepMutation = "ingestionJobs:failStep";
 
@@ -110,6 +112,31 @@ function getTimestamp(job) {
   return job.createdAt;
 }
 
+async function listAllJobsForRepair(client, { minCreatedAt, serviceSecret }) {
+  const jobs = [];
+  const seenCursors = new Set();
+  let cursor = null;
+  for (let pageIndex = 0; pageIndex < MAX_REPAIR_JOB_PAGES; pageIndex += 1) {
+    const result = await client.query(listJobsForRepairPageQuery, {
+      minCreatedAt,
+      paginationOpts: { numItems: REPAIR_JOB_PAGE_SIZE, cursor },
+      serviceSecret,
+    });
+    jobs.push(...result.page);
+    if (result.isDone) {
+      return jobs;
+    }
+    if (!result.continueCursor || seenCursors.has(result.continueCursor)) {
+      throw new Error("Stale-ingestion-job repair pagination did not advance.");
+    }
+    seenCursors.add(result.continueCursor);
+    cursor = result.continueCursor;
+  }
+  throw new Error(
+    `Stale-ingestion-job repair exceeded ${MAX_REPAIR_JOB_PAGES} pages; refusing a partial repair.`,
+  );
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   loadEnvFiles();
@@ -127,12 +154,13 @@ async function main() {
   const minCreatedAt = now - options.lookbackDays * 24 * 60 * 60 * 1000;
   const staleBefore = now - options.staleHours * 60 * 60 * 1000;
   const client = new ConvexHttpClient(convexUrl);
-  const jobs = await client.query(listRecentFullScrapeJobsQuery, {
+  const jobs = await listAllJobsForRepair(client, {
     minCreatedAt,
     serviceSecret,
   });
 
   const staleJobs = jobs
+    .filter((job) => job.mode !== "saved_posts")
     .filter((job) => job.status === "running")
     .filter((job) => options.allSources || job.source === options.source)
     .filter((job) => getTimestamp(job) < staleBefore)
@@ -150,7 +178,7 @@ async function main() {
     samples: staleJobs.slice(0, 20).map((job) => ({
       id: job._id,
       source: job.source,
-      handleCount: Array.isArray(job.handles) ? job.handles.length : null,
+      handleCount: Number.isInteger(job.handleCount) ? job.handleCount : null,
       createdAt: new Date(job.createdAt).toISOString(),
       startedAt: job.startedAt ?? null,
       ageHours: Number(((now - getTimestamp(job)) / (60 * 60 * 1000)).toFixed(2)),

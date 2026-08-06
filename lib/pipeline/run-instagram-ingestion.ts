@@ -162,6 +162,7 @@ export type IngestionRunContext = {
   skippedDueToRunLimit?: number;
   fullScrapeCooldownHours?: number;
   maxHandlesPerRun?: number;
+  hostRunCursor?: string;
   resultsLimit?: number;
   daysBack?: number;
   source?: string;
@@ -294,18 +295,21 @@ const blockProviderMutation =
   "scrapedPosts:blockProvider" as unknown as FunctionReference<"mutation">;
 const releaseProviderLeaseMutation =
   "scrapedPosts:releaseProviderLease" as unknown as FunctionReference<"mutation">;
-const listActiveInstagramSourcesPageQuery =
-  "instagramSources:listActiveSourcesPage" as unknown as FunctionReference<"query">;
-const listLegacyVenueSourcesPageQuery =
-  "instagramSources:listLegacyVenueSourcesPage" as unknown as FunctionReference<"query">;
-type ActiveInstagramSourceView = {
-  handle?: string;
-  role?: "venue" | "promoter" | "unknown";
-};
-type SourcePage = {
-  page: ActiveInstagramSourceView[];
+const listActiveInstagramSourceHandlesPageQuery =
+  "instagramSources:listActiveSourceHandlesPage" as unknown as FunctionReference<"query">;
+const listLegacyVenueHandlesPageQuery =
+  "instagramSources:listLegacyVenueHandlesPage" as unknown as FunctionReference<"query">;
+const getInstagramIngestionContextsByHandlesQuery =
+  "instagramSources:getIngestionContextsByHandles" as unknown as FunctionReference<"query">;
+type HandlePage = {
+  page: string[];
   isDone: boolean;
   continueCursor: string;
+};
+type InstagramIngestionSourceContext = {
+  handle: string;
+  role: "venue" | "promoter" | "unknown";
+  canonicalVenueName?: string;
 };
 const ACTIVE_SOURCE_PAGE_SIZE = 200;
 const MAX_ACTIVE_SOURCE_PAGES = 10_000;
@@ -4381,31 +4385,30 @@ async function runApprovedDuplicateCleanupForIngestion(
   }
 }
 
-async function loadAllActiveInstagramSources(
+async function loadAllActiveInstagramSourceHandles(
   client: ConvexHttpClient,
   serviceSecret: string,
-): Promise<ActiveInstagramSourceView[]> {
-  const sourcesByHandle = new Map<string, ActiveInstagramSourceView>();
+): Promise<string[]> {
+  const handles = new Set<string>();
   const partitions = [
-    { query: listLegacyVenueSourcesPageQuery, overwrite: false },
-    { query: listActiveInstagramSourcesPageQuery, overwrite: true },
+    listLegacyVenueHandlesPageQuery,
+    listActiveInstagramSourceHandlesPageQuery,
   ];
 
-  for (const partition of partitions) {
+  for (const query of partitions) {
     let cursor: string | null = null;
     let completed = false;
     for (let pageIndex = 0; pageIndex < MAX_ACTIVE_SOURCE_PAGES; pageIndex += 1) {
       const result = (await client.query(
-        partition.query,
+        query,
         withServiceSecret(
           { paginationOpts: { numItems: ACTIVE_SOURCE_PAGE_SIZE, cursor } },
           serviceSecret,
         ),
-      )) as SourcePage;
-      for (const source of result.page) {
-        const handle = normalizeHandle(source.handle ?? "");
-        if (!handle || (!partition.overwrite && sourcesByHandle.has(handle))) continue;
-        sourcesByHandle.set(handle, { ...source, handle });
+      )) as HandlePage;
+      for (const rawHandle of result.page) {
+        const handle = normalizeHandle(rawHandle);
+        if (handle) handles.add(handle);
       }
       if (result.isDone) {
         completed = true;
@@ -4423,7 +4426,77 @@ async function loadAllActiveInstagramSources(
     }
   }
 
-  return [...sourcesByHandle.values()];
+  return [...handles].sort((left, right) => left.localeCompare(right));
+}
+
+async function loadInstagramIngestionContextsForHandles(
+  client: ConvexHttpClient,
+  serviceSecret: string,
+  handles: string[],
+): Promise<InstagramIngestionSourceContext[]> {
+  const normalizedHandles = [...new Set(handles.map(normalizeHandle).filter(Boolean))];
+  const contexts: InstagramIngestionSourceContext[] = [];
+  for (let index = 0; index < normalizedHandles.length; index += 25) {
+    const chunk = normalizedHandles.slice(index, index + 25);
+    const result = (await client.query(
+      getInstagramIngestionContextsByHandlesQuery,
+      withServiceSecret({ handles: chunk }, serviceSecret),
+    )) as InstagramIngestionSourceContext[];
+    contexts.push(...result);
+  }
+  return contexts;
+}
+
+async function loadIngestionVenueContextForHandles(
+  client: ConvexHttpClient,
+  serviceSecret: string,
+  handles: string[],
+): Promise<IngestionVenueContext> {
+  const requestedHandles = new Set(handles.map(normalizeHandle).filter(Boolean));
+  let contexts: InstagramIngestionSourceContext[] = [];
+  let venueNameOverridesByHandle: Record<string, string> = {};
+  try {
+    contexts = await loadInstagramIngestionContextsForHandles(
+      client,
+      serviceSecret,
+      [...requestedHandles],
+    );
+  } catch (error) {
+    logError("ingestion.sources.context_load_failed", {
+      step: "normalize_posts" satisfies IngestionStep,
+      handles: [...requestedHandles],
+      error: getErrorMessage(error),
+    });
+  }
+  try {
+    const allOverrides = await loadVenueNameOverridesByHandle();
+    venueNameOverridesByHandle = Object.fromEntries(
+      Object.entries(allOverrides).filter(([handle]) => requestedHandles.has(normalizeHandle(handle))),
+    );
+  } catch (error) {
+    logError("ingestion.venues.override_load_failed", {
+      step: "normalize_posts" satisfies IngestionStep,
+      error: getErrorMessage(error),
+    });
+  }
+  const canonicalVenueNamesByHandle = Object.fromEntries(
+    contexts
+      .filter((context) => context.canonicalVenueName)
+      .map((context) => [normalizeHandle(context.handle), context.canonicalVenueName as string]),
+  );
+  const sourceRolesByHandle = Object.fromEntries(
+    contexts.map((context) => [normalizeHandle(context.handle), context.role]),
+  );
+  return {
+    canonicalVenueNamesByHandle,
+    venueNameOverridesByHandle,
+    configuredVenueNamesByHandle: buildConfiguredVenueNamesByHandle(
+      canonicalVenueNamesByHandle,
+      venueNameOverridesByHandle,
+      sourceRolesByHandle,
+    ),
+    sourceRolesByHandle,
+  };
 }
 
 async function loadIngestionVenueContext(
@@ -4441,10 +4514,15 @@ async function loadIngestionVenueContext(
       serviceSecret,
     );
     try {
-      const sources = await loadAllActiveInstagramSources(client, serviceSecret);
+      const handles = await loadAllActiveInstagramSourceHandles(client, serviceSecret);
+      const sources = await loadInstagramIngestionContextsForHandles(
+        client,
+        serviceSecret,
+        handles,
+      );
       sourceRolesByHandle = Object.fromEntries(
         sources
-          .map((source) => [normalizeHandle(source.handle ?? ""), source.role] as const)
+          .map((source) => [normalizeHandle(source.handle), source.role] as const)
           .filter(
             (entry): entry is readonly [string, "venue" | "promoter" | "unknown"] =>
               Boolean(entry[0] && entry[1]),
@@ -10446,14 +10524,22 @@ export async function runInstagramIngestionBatchStep(
   const serviceSecret = getConfiguredServiceSecret(options.serviceSecret);
   const workOwner =
     options.workOwner?.trim() || `instagram-ingestion:${globalThis.crypto.randomUUID()}`;
+  const mode = options.mode ?? "full_scrape";
+  const venueContext =
+    mode === "full_scrape"
+      ? await loadIngestionVenueContextForHandles(
+          client,
+          serviceSecret,
+          options.handles.slice(options.state.handleIndex, options.state.handleIndex + 1),
+        )
+      : await loadIngestionVenueContext(client, serviceSecret);
   const {
     canonicalVenueNamesByHandle,
     venueNameOverridesByHandle,
     configuredVenueNamesByHandle,
     sourceRolesByHandle,
-  } = await loadIngestionVenueContext(client, serviceSecret);
+  } = venueContext;
   const batchSize = normalizeBatchSize(options.batchSize);
-  const mode = options.mode ?? "full_scrape";
   const summary = options.summary;
   const state = options.state;
   const postStepLimit = normalizeIngestionPostStepLimit(options.postStepLimit);
@@ -10635,17 +10721,7 @@ export async function getActiveVenueHandles(options?: {
 }): Promise<string[]> {
   const client = getConvexClient();
   const serviceSecret = getConfiguredServiceSecret(options?.serviceSecret);
-  const sources = await loadAllActiveInstagramSources(client, serviceSecret);
-  const uniqueHandles = new Set<string>();
-
-  for (const source of sources) {
-    const normalizedHandle = normalizeHandle(source.handle ?? "");
-    if (normalizedHandle.length > 0) {
-      uniqueHandles.add(normalizedHandle);
-    }
-  }
-
-  return [...uniqueHandles];
+  return loadAllActiveInstagramSourceHandles(client, serviceSecret);
 }
 
 export async function importRecentApifyRunPostsToSavedPosts(options: {
@@ -10896,6 +10972,8 @@ async function fetchFreshPostsForHandlesInParallel(
                 serviceSecret,
               ),
             );
+          },
+          onTransportInvoked: () => {
             providerRequestStarted = true;
             const fetchSummary = getOrCreateHandleSummary(summary, handle);
             fetchSummary.freshFetchAttempted =

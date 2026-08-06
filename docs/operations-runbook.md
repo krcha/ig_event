@@ -353,13 +353,20 @@ Installed files on the VPS:
 /var/log/ig_event/cron-*-last.json   last response body per job
 ```
 
-Current host cron schedule uses UTC to match the original Vercel/Convex schedule:
+Debian cron on the production host evaluates `/etc/cron.d` entries in the host's
+`Europe/Belgrade` timezone; its implementation does not honor a per-file
+`CRON_TZ` directive. The current schedule is therefore deliberately documented
+in host-local time:
 
 ```cron
-CRON_TZ=UTC
 0 7 * * * root /usr/local/sbin/ig-event-cron-runner ingest-venues >> /var/log/ig_event/cron.log 2>&1
 0 10 * * 1 root /usr/local/sbin/ig-event-cron-runner discover-following >> /var/log/ig_event/cron.log 2>&1
 ```
+
+If fixed UTC execution is required, replace these entries with one systemd timer
+per job using `OnCalendar=... UTC`; do not install a second scheduler alongside
+the cron entries. The runner's `flock` remains a final overlap guard, not a
+substitute for single scheduler ownership.
 
 Use the same `CRON_SECRET` value in `/etc/ig_event/cron.env` and the web app
 runtime env. If a job returns `401`, check the header and secret first. The
@@ -372,8 +379,11 @@ install -o root -g root -m 0755 scripts/ig-event-cron-runner \
   /usr/local/sbin/ig-event-cron-runner
 ```
 
-The cron endpoint resumes any recent `cron_active_venues` job before creating a
-new one. It defaults to `CRON_INGESTION_MAX_STEPS=20` and
+The cron endpoint resolves resumable `cron_active_venues` work before any global
+source enumeration. `CRON_INGESTION_RESUMABLE_LOOKBACK_HOURS=168` keeps interrupted
+daily jobs recoverable across the 23-hour provider cooldown without extending the
+cooldown itself. Persisted job snapshots are reused for each continuation request.
+It defaults to `CRON_INGESTION_MAX_STEPS=20` and
 `CRON_INGESTION_BATCH_SIZE=64`. Each new scheduled Convex job is bounded to 200
 handles so an empty persisted summary stays near 125 KiB instead of the roughly
 312 KiB produced by a 500-handle job; this avoids self-hosted Convex `createJob`

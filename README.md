@@ -155,7 +155,7 @@ Notes:
 - `CRON_SECRET` protects the cron ingestion route when set. Set it in
   production.
 - Cron ingestion defaults to one latest Instagram post per scrape-active venue handle
-  and a 23-hour cooldown so the daily 07:00 UTC schedule is not blocked by normal
+  and a 23-hour cooldown so the daily 07:00 host-local schedule is not blocked by normal
   scheduler jitter. The route paginates the complete active-venue set and the host
   runner keeps creating safe 200-handle Convex chunks until every eligible handle
   is covered; there is no aggregate venue-count truncation. The historical

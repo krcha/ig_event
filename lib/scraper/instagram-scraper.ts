@@ -59,6 +59,7 @@ type ScrapeInstagramAccountOptions = {
   onlyPostsNewerThan?: string;
   abortAtMs?: number;
   onRequestStarted?: () => void | Promise<void>;
+  onTransportInvoked?: () => void;
 };
 
 type ApifyDataDetailLevel = "basicData" | "detailedData";
@@ -879,21 +880,13 @@ export async function scrapeInstagramAccount(
   }
   const endpoint = `https://api.apify.com/v2/acts/${encodeURIComponent(actorIdForPath)}/run-sync-get-dataset-items?${query.toString()}`;
 
-  const requestDeadlineMs = Math.min(
-    options.abortAtMs ?? Number.POSITIVE_INFINITY,
-    Date.now() + (runOptions.timeout + 30) * 1_000,
-  );
-  const requestTimeoutMs = requestDeadlineMs - Date.now();
-  if (!Number.isFinite(requestTimeoutMs) || requestTimeoutMs < 5_000) {
+  const providerRequestTimeoutMs = (runOptions.timeout + 30) * 1_000;
+  const preflightLeaseRemainingMs =
+    typeof options.abortAtMs === "number" ? options.abortAtMs - Date.now() : Number.POSITIVE_INFINITY;
+  if (Number.isFinite(preflightLeaseRemainingMs) && preflightLeaseRemainingMs < 5_000) {
     throw new Error(`Apify scraper lease deadline is too close for ${target.label}.`);
   }
   const abortController = new AbortController();
-  const abortTimer = setTimeout(
-    () => abortController.abort(new Error("Apify scraper request exceeded its lease-safe deadline.")),
-    requestTimeoutMs,
-  );
-  abortTimer.unref?.();
-
   const requestInit: RequestInit = {
     method: "POST",
     headers: {
@@ -905,13 +898,29 @@ export async function scrapeInstagramAccount(
     signal: abortController.signal,
   };
 
+  let abortTimer: ReturnType<typeof setTimeout> | undefined;
   let response: Response;
   let rawItems: ApifyInstagramItem[];
   try {
-    // Keep every local/preflight failure on the unused-reservation path. The
-    // durable positive receipt is written only at the final outbound boundary,
-    // immediately before fetch makes provider execution transport-ambiguous.
+    // The awaited hook commits a crash-safe marker, not proof of provider
+    // transport. Re-check the absolute lease deadline after it returns: a slow
+    // marker must never reset an expired deadline into a new paid window.
     await options.onRequestStarted?.();
+    const remainingLeaseMs =
+      typeof options.abortAtMs === "number"
+        ? options.abortAtMs - Date.now()
+        : Number.POSITIVE_INFINITY;
+    if (Number.isFinite(remainingLeaseMs) && remainingLeaseMs < 5_000) {
+      throw new Error(`Apify scraper lease deadline expired before transport for ${target.label}.`);
+    }
+    const requestTimeoutMs = Number.isFinite(remainingLeaseMs)
+      ? Math.min(providerRequestTimeoutMs, remainingLeaseMs)
+      : providerRequestTimeoutMs;
+    abortTimer = setTimeout(
+      () => abortController.abort(new Error("Apify scraper request exceeded its lease-safe deadline.")),
+      requestTimeoutMs,
+    );
+    abortTimer.unref?.();
     console.info(
       JSON.stringify({
         level: "info",
@@ -929,6 +938,10 @@ export async function scrapeInstagramAccount(
         memory: runOptions.memory ?? null,
       }),
     );
+    // No awaited or fallible business work belongs between this process-local
+    // receipt and fetch. A surviving worker can retract the durable marker only
+    // when this callback was never reached; crashes remain fail-closed.
+    options.onTransportInvoked?.();
     response = await fetch(endpoint, requestInit);
 
     if (!response.ok) {

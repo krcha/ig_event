@@ -130,12 +130,29 @@ export const listActiveSourcesPage = query({
       .query("instagramSources")
       .withIndex("by_active", (q) => q.eq("active", true))
       .paginate(args.paginationOpts);
-    const page = await Promise.all(
-      result.page.map(async (source) =>
-        toSourceView(source, source.venueId ? await ctx.db.get(source.venueId) : null),
-      ),
-    );
+    // This compatibility surface intentionally omits venue joins. Callers that
+    // need venue context must use the bounded handle-targeted query below rather
+    // than multiplying one document read per source on every pagination pass.
+    const page = result.page.map((source) => toSourceView(source));
     return { ...result, page };
+  },
+});
+
+export const listActiveSourceHandlesPage = query({
+  args: {
+    paginationOpts: paginationOptsValidator,
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const result = await ctx.db
+      .query("instagramSources")
+      .withIndex("by_active", (q) => q.eq("active", true))
+      .paginate(args.paginationOpts);
+    return {
+      ...result,
+      page: result.page.map((source) => source.handle),
+    };
   },
 });
 
@@ -175,6 +192,26 @@ export const listLegacyVenueSourcesPage = query({
           deferredAt: undefined,
         }];
       }),
+    };
+  },
+});
+
+export const listLegacyVenueHandlesPage = query({
+  args: {
+    paginationOpts: paginationOptsValidator,
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const result = await ctx.db
+      .query("venues")
+      .withIndex("by_scrapeActive", (q) => q.eq("scrapeActive", true))
+      .paginate(args.paginationOpts);
+    return {
+      ...result,
+      page: result.page
+        .map((venue) => normalizeInstagramHandle(venue.instagramHandle))
+        .filter(Boolean),
     };
   },
 });
@@ -229,6 +266,53 @@ export const listFreshFetchAttemptMetadata = query({
       handle: source.handle,
       lastFetchAttemptAt: source.lastFetchAttemptAt,
     }));
+  },
+});
+
+export const getIngestionContextsByHandles = query({
+  args: {
+    handles: v.array(v.string()),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const handles = [
+      ...new Set(args.handles.map(normalizeInstagramHandle).filter(Boolean)),
+    ];
+    if (handles.length > 25) {
+      throw new Error("Ingestion source context queries are limited to 25 handles.");
+    }
+
+    return Promise.all(
+      handles.map(async (handle) => {
+        const source = await ctx.db
+          .query("instagramSources")
+          .withIndex("by_handle", (q) => q.eq("handle", handle))
+          .unique();
+        const indexedVenue = await ctx.db
+          .query("venues")
+          .withIndex("by_instagramHandle", (q) => q.eq("instagramHandle", handle))
+          .first();
+        const linkedVenue =
+          !indexedVenue && source?.venueId ? await ctx.db.get(source.venueId) : null;
+        const handleVenue =
+          indexedVenue ??
+          (linkedVenue && normalizeInstagramHandle(linkedVenue.instagramHandle) === handle
+            ? linkedVenue
+            : null);
+        const activeLegacyVenue = handleVenue?.scrapeActive === true ? handleVenue : null;
+        const role = source?.active
+          ? source.role
+          : activeLegacyVenue
+            ? roleForLegacyVenue(activeLegacyVenue)
+            : "unknown";
+        return {
+          handle,
+          role,
+          canonicalVenueName: handleVenue?.name,
+        };
+      }),
+    );
   },
 });
 

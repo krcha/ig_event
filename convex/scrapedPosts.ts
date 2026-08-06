@@ -1578,10 +1578,12 @@ export const releasePaidFetchLease = mutation({
         .unique();
       if (reservation?.status === "active") {
         const durableRequestStarted = typeof reservation.requestStartedAt === "number";
-        const requestStarted =
-          reservation.requestBoundaryVersion === 1
-            ? durableRequestStarted || args.requestStarted === true
-            : args.requestStarted ?? durableRequestStarted;
+        // Boundary-aware callers distinguish the crash-safe marker from actual
+        // transport invocation. An explicit false from the still-owning worker
+        // proves that fetch was never called and may retract the marker. If the
+        // worker crashes, no release arrives and stale reconciliation continues
+        // to treat the durable marker conservatively as chargeable.
+        const requestStarted = args.requestStarted ?? durableRequestStarted;
         chargedMicros = requestStarted
           ? args.actualChargeUsd === undefined
             ? reservation.reservedMicros
@@ -1612,7 +1614,6 @@ export const releasePaidFetchLease = mutation({
         });
         if (
           !requestStarted &&
-          reservation.requestBoundaryVersion !== 1 &&
           reservation.handle &&
           typeof reservation.requestStartedAt === "number"
         ) {

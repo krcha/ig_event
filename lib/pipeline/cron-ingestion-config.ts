@@ -88,16 +88,24 @@ export function selectCronIngestionHandles(options: {
   activeVenueHandles: string[];
   recentlyAttemptedHandles: string[];
   maxHandlesPerRun: number;
+  afterHandle?: string;
 }): CronHandleSelection {
   const recentlyAttemptedHandleSet = new Set(options.recentlyAttemptedHandles);
-  const eligibleHandles = options.activeVenueHandles.filter(
+  // Active handles are returned in stable lexical order by the ingestion loader.
+  // A host-run cursor advances even when an earlier chunk performed only saved
+  // backlog maintenance and therefore created no provider-attempt cooldown.
+  const afterHandle = options.afterHandle;
+  const candidateHandles = afterHandle
+    ? options.activeVenueHandles.filter((handle) => handle.localeCompare(afterHandle) > 0)
+    : options.activeVenueHandles;
+  const eligibleHandles = candidateHandles.filter(
     (handle) => !recentlyAttemptedHandleSet.has(handle),
   );
   const handles = eligibleHandles.slice(0, options.maxHandlesPerRun);
 
   return {
     handles,
-    skippedRecentlyAttempted: options.activeVenueHandles.length - eligibleHandles.length,
+    skippedRecentlyAttempted: candidateHandles.length - eligibleHandles.length,
     skippedDueToRunLimit: Math.max(0, eligibleHandles.length - handles.length),
   };
 }

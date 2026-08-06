@@ -9,6 +9,7 @@ const schemaSource = read("convex/schema.ts");
 const ingestionJobsSource = read("convex/ingestionJobs.ts");
 const scrapedPostsSource = read("convex/scrapedPosts.ts");
 const pipelineSource = read("lib/pipeline/run-instagram-ingestion.ts");
+const resumptionHelperSource = read("lib/pipeline/cron-ingestion-resumption.ts");
 const cronIngestSource = read("app/api/cron/ingest-venues/route.ts");
 const adminJobRouteSource = read("app/api/admin/scrape/jobs/[jobId]/route.ts");
 const repairStaleJobsSource = read("scripts/repair-stale-ingestion-jobs.mjs");
@@ -122,6 +123,22 @@ assert.match(
 );
 assert.match(
   cronIngestSource,
+  /loadCronIngestionCandidateSnapshot/,
+  "the route must delegate lookup ordering to the behaviorally tested resumption boundary",
+);
+const resumableLookupAt = resumptionHelperSource.indexOf("await options.findResumableJob");
+const activeSnapshotAt = resumptionHelperSource.indexOf("await options.loadActiveHandles");
+assert.ok(
+  resumableLookupAt >= 0 && activeSnapshotAt > resumableLookupAt,
+  "the route must reuse a resumable job before loading a new global active-source snapshot",
+);
+assert.match(
+  pipelineSource,
+  /mode === "full_scrape"[\s\S]{0,240}loadIngestionVenueContextForHandles[\s\S]{0,220}state\.handleIndex/,
+  "each full-scrape step must resolve context only for its current handle",
+);
+assert.match(
+  cronIngestSource,
   /claimStep/,
   "cron ingestion route should claim leased job steps.",
 );
@@ -144,6 +161,18 @@ assert.match(
   repairStaleJobsSource,
   /CRON_SECRET/,
   "stale job repair should authenticate with the service secret.",
+);
+assert.match(
+  repairStaleJobsSource,
+  /ingestionJobs:listJobsForRepairPage/,
+  "stale job repair should use the complete paginated maintenance query.",
+);
+assert.match(repairStaleJobsSource, /paginationOpts/);
+assert.match(repairStaleJobsSource, /MAX_REPAIR_JOB_PAGES/);
+assert.doesNotMatch(
+  repairStaleJobsSource,
+  /ingestionJobs:listRecentFullScrapeJobs/,
+  "stale job repair must not inherit the 12-document rollback compatibility cap.",
 );
 assert.match(
   repairStaleJobsSource,

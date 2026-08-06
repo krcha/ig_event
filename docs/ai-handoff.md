@@ -200,8 +200,8 @@ Vercel or VPS:
 
 - `vercel.json` documents the desired schedule, but the live self-hosted VPS
   uses `/etc/cron.d/ig_event`.
-- VPS cron calls `GET /api/cron/ingest-venues` daily at `07:00 UTC` and
-  `GET /api/cron/discover-following` Mondays at `10:00 UTC` through
+- VPS cron calls `GET /api/cron/ingest-venues` daily at `07:00 Europe/Belgrade` and
+  `GET /api/cron/discover-following` Mondays at `10:00 Europe/Belgrade` through
   `/usr/local/sbin/ig-event-cron-runner`.
 - `/etc/ig_event/cron.env` stores `APP_ORIGIN` and `CRON_SECRET` with mode
   `0600`; cron output goes to `/var/log/ig_event/cron.log`.
@@ -336,10 +336,10 @@ calls the job POST route, the job will not keep advancing.
 
 ### Scheduled Ingestion And Retention
 
-1. Live VPS cron calls `GET /api/cron/ingest-venues` daily at `07:00 UTC`
+1. Live VPS cron calls `GET /api/cron/ingest-venues` daily at `07:00 Europe/Belgrade`
    through `/usr/local/sbin/ig-event-cron-runner`.
 2. Live VPS cron calls `GET /api/cron/discover-following` Mondays at
-   `10:00 UTC` through the same runner.
+   `10:00 Europe/Belgrade` through the same runner.
 3. Both routes check the bearer token when `CRON_SECRET` is set.
 4. Venue ingestion paginates all active venue handles and skips only handles
    with a fresh full-scrape attempt inside the 23-hour cooldown window. The host

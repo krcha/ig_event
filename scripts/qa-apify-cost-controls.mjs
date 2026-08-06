@@ -28,6 +28,7 @@ import {
   selectCronIngestionHandles,
 } from "../lib/pipeline/cron-ingestion-config.ts";
 import { getAttemptedHandlesFromRecentJob } from "../lib/pipeline/recent-full-scrape-handles.ts";
+import { loadCronIngestionCandidateSnapshot } from "../lib/pipeline/cron-ingestion-resumption.ts";
 import {
   createEmptyIngestionSummary,
   createInitialIngestionBatchState,
@@ -42,12 +43,17 @@ import {
 } from "../lib/pipeline/ingestion-job-safety.ts";
 import {
   getFreshCompletedAttemptHandles,
+  findLatestResumableFullScrapeJob,
+  listJobsForRepairPage,
   listRecentFullScrapeAttemptMetadata,
 } from "../convex/ingestionJobs.ts";
 import {
+  getIngestionContextsByHandles,
+  listActiveSourceHandlesPage,
   listActiveSourcesPage,
   listFreshFetchAttemptMetadata,
   listFreshFetchAttemptMetadataPage,
+  listLegacyVenueHandlesPage,
   listLegacyVenueSourcesPage,
 } from "../convex/instagramSources.ts";
 
@@ -72,8 +78,10 @@ assert.ok(
 const previousApifyToken = process.env.APIFY_API_TOKEN;
 const originalApifyBoundaryFetch = globalThis.fetch;
 const originalApifyBoundaryConsoleInfo = console.info;
+const originalDateNow = Date.now;
 process.env.APIFY_API_TOKEN = "qa-apify-boundary-token";
 let providerBoundaryMarked = false;
+let providerTransportInvoked = false;
 let providerBoundaryFetches = 0;
 let providerRequestLogs = 0;
 console.info = (message, ...args) => {
@@ -83,11 +91,21 @@ console.info = (message, ...args) => {
   }
   originalApifyBoundaryConsoleInfo(message, ...args);
 };
-globalThis.fetch = async () => {
+globalThis.fetch = async (_url, init) => {
   assert.equal(
     providerBoundaryMarked,
     true,
-    "the durable attempt callback must complete immediately before outbound provider execution",
+    "the durable marker must commit before outbound provider execution",
+  );
+  assert.equal(
+    providerTransportInvoked,
+    true,
+    "the process-local transport receipt must be set immediately before fetch",
+  );
+  assert.equal(
+    init?.signal?.aborted,
+    false,
+    "fetch must never receive a signal that expired while the durable marker was awaited",
   );
   providerBoundaryFetches += 1;
   return new Response("[]", {
@@ -103,12 +121,65 @@ try {
     onRequestStarted: async () => {
       providerBoundaryMarked = true;
     },
+    onTransportInvoked: () => {
+      providerTransportInvoked = true;
+    },
   });
   assert.equal(providerBoundaryFetches, 1);
   assert.equal(providerRequestLogs, 1);
 
   providerBoundaryMarked = false;
+  providerTransportInvoked = false;
   providerBoundaryFetches = 0;
+  let fakeNow = 10_000;
+  Date.now = () => fakeNow;
+  await assert.rejects(
+    scrapeInstagramAccount({
+      handle: "qa-slow-provider-marker",
+      resultsLimit: 1,
+      daysBack: 1,
+      abortAtMs: fakeNow + 5_000,
+      onRequestStarted: async () => {
+        providerBoundaryMarked = true;
+        fakeNow += 6_000;
+      },
+      onTransportInvoked: () => {
+        providerTransportInvoked = true;
+      },
+    }),
+    /deadline expired before transport/,
+  );
+  assert.equal(providerBoundaryMarked, true);
+  assert.equal(providerTransportInvoked, false);
+  assert.equal(providerBoundaryFetches, 0);
+  assert.equal(providerRequestLogs, 1);
+  Date.now = originalDateNow;
+
+  providerBoundaryMarked = false;
+  providerTransportInvoked = false;
+  providerBoundaryFetches = 0;
+  await assert.rejects(
+    scrapeInstagramAccount({
+      handle: "qa-marker-acknowledgement-loss",
+      resultsLimit: 1,
+      daysBack: 1,
+      onRequestStarted: async () => {
+        providerBoundaryMarked = true;
+        throw new Error("simulated marker acknowledgement loss");
+      },
+      onTransportInvoked: () => {
+        providerTransportInvoked = true;
+      },
+    }),
+    /simulated marker acknowledgement loss/,
+  );
+  assert.equal(providerBoundaryMarked, true);
+  assert.equal(providerTransportInvoked, false);
+  assert.equal(providerBoundaryFetches, 0);
+  assert.equal(providerRequestLogs, 1);
+
+  providerBoundaryMarked = false;
+  providerTransportInvoked = false;
   await assert.rejects(
     scrapeInstagramAccount({
       handle: "qa-local-preflight",
@@ -118,22 +189,80 @@ try {
       onRequestStarted: async () => {
         providerBoundaryMarked = true;
       },
+      onTransportInvoked: () => {
+        providerTransportInvoked = true;
+      },
     }),
     /lease deadline is too close/,
   );
   assert.equal(providerBoundaryMarked, false);
+  assert.equal(providerTransportInvoked, false);
   assert.equal(providerBoundaryFetches, 0);
   assert.equal(
     providerRequestLogs,
     1,
-    "local preflight rejection must not emit a provider-request log",
+    "no-transport paths must not emit provider-request telemetry",
   );
 } finally {
+  Date.now = originalDateNow;
   globalThis.fetch = originalApifyBoundaryFetch;
   console.info = originalApifyBoundaryConsoleInfo;
   if (previousApifyToken === undefined) delete process.env.APIFY_API_TOKEN;
   else process.env.APIFY_API_TOKEN = previousApifyToken;
 }
+
+const persistedSnapshotJob = {
+  _id: "job-resume-fixture",
+  handles: ["snapshot.one", "snapshot.two"],
+};
+const persistedSnapshotCalls = [];
+const persistedSnapshot = await loadCronIngestionCandidateSnapshot({
+  resumeCapacity: 200,
+  findResumableJob: async () => {
+    persistedSnapshotCalls.push("resume");
+    return persistedSnapshotJob;
+  },
+  loadActiveHandles: async () => {
+    persistedSnapshotCalls.push("global");
+    return ["new.global.source"];
+  },
+});
+assert.deepEqual(persistedSnapshotCalls, ["resume"]);
+assert.equal(persistedSnapshot.resumableJob, persistedSnapshotJob);
+assert.deepEqual(persistedSnapshot.resumableJob.handles, ["snapshot.one", "snapshot.two"]);
+assert.deepEqual(persistedSnapshot.activeHandles, []);
+
+const newSnapshotCalls = [];
+const newSnapshot = await loadCronIngestionCandidateSnapshot({
+  resumeCapacity: 200,
+  findResumableJob: async () => {
+    newSnapshotCalls.push("resume");
+    return null;
+  },
+  loadActiveHandles: async () => {
+    newSnapshotCalls.push("global");
+    return ["new.global.source"];
+  },
+});
+assert.deepEqual(newSnapshotCalls, ["resume", "global"]);
+assert.deepEqual(newSnapshot.activeHandles, ["new.global.source"]);
+
+let zeroCapacityCalls = 0;
+assert.deepEqual(
+  await loadCronIngestionCandidateSnapshot({
+    resumeCapacity: 0,
+    findResumableJob: async () => {
+      zeroCapacityCalls += 1;
+      return persistedSnapshotJob;
+    },
+    loadActiveHandles: async () => {
+      zeroCapacityCalls += 1;
+      return ["unexpected"];
+    },
+  }),
+  { resumableJob: null, activeHandles: [] },
+);
+assert.equal(zeroCapacityCalls, 0, "an exhausted host run must not query jobs or global sources");
 
 const persistedHighWaterRequest = buildApifyInstagramScrapeRequest({
   actorUsernameInput: "clubdrugstore",
@@ -418,8 +547,9 @@ assert.match(
 );
 assert.match(recentFullScrapeHandlesSource, /continueCursor/);
 assert.match(recentFullScrapeHandlesSource, /MAX_FRESH_ATTEMPT_PAGES/);
-assert.match(ingestionRunnerSource, /instagramSources:listActiveSourcesPage/);
-assert.match(ingestionRunnerSource, /instagramSources:listLegacyVenueSourcesPage/);
+assert.match(ingestionRunnerSource, /instagramSources:listActiveSourceHandlesPage/);
+assert.match(ingestionRunnerSource, /instagramSources:listLegacyVenueHandlesPage/);
+assert.match(ingestionRunnerSource, /instagramSources:getIngestionContextsByHandles/);
 assert.match(ingestionRunnerSource, /MAX_ACTIVE_SOURCE_PAGES/);
 assert.match(ingestionRunnerSource, /paginationOpts: \{ numItems: ACTIVE_SOURCE_PAGE_SIZE, cursor \}/);
 assert.doesNotMatch(
@@ -446,6 +576,30 @@ assert.match(
   instagramSourcesSource,
   /listLegacyVenueSourcesPage[\s\S]{0,500}by_scrapeActive[\s\S]{0,160}\.paginate\(args\.paginationOpts\)/,
   "legacy venue sources must be paginated",
+);
+assert.match(
+  instagramSourcesSource,
+  /listActiveSourceHandlesPage[\s\S]{0,500}by_active[\s\S]{0,180}\.paginate\(args\.paginationOpts\)[\s\S]{0,180}source\.handle/,
+  "new-job source discovery must use a compact handle-only active-source page",
+);
+assert.match(
+  instagramSourcesSource,
+  /listLegacyVenueHandlesPage[\s\S]{0,500}by_scrapeActive[\s\S]{0,180}\.paginate\(args\.paginationOpts\)/,
+  "new-job legacy discovery must use a compact handle-only page",
+);
+const compatibilityActivePageSource = instagramSourcesSource.slice(
+  instagramSourcesSource.indexOf("export const listActiveSourcesPage"),
+  instagramSourcesSource.indexOf("export const listActiveSourceHandlesPage"),
+);
+assert.doesNotMatch(
+  compatibilityActivePageSource,
+  /ctx\.db\.get/,
+  "active-source pagination must not fan out one venue read per source",
+);
+assert.match(
+  ingestionJobsSource,
+  /listJobsForRepairPage[\s\S]{0,600}by_createdAt[\s\S]{0,180}\.paginate\(args\.paginationOpts\)/,
+  "maintenance repair must use its own complete paginated job query",
 );
 assert.match(instagramSourcesSource, /\.take\(limit \+ 1\)/);
 assert.match(
@@ -602,6 +756,17 @@ try {
               )
               .slice(0, limit);
           },
+          async first() {
+            return (
+              rows
+                .filter((row) => predicates.every((predicate) => predicate(row)))
+                .sort((left, right) =>
+                  direction === "desc"
+                    ? right.createdAt - left.createdAt
+                    : left.createdAt - right.createdAt,
+                )[0] ?? null
+            );
+          },
         };
         return builder;
       },
@@ -631,6 +796,53 @@ try {
     assert.fail("pagination did not terminate within its QA bound");
   }
 
+  const resumableNow = Date.now();
+  const resumableJob = await findLatestResumableFullScrapeJob._handler(
+    {
+      auth: { getUserIdentity: async () => null },
+      db: createPagedDb({
+        ingestionJobs: [
+          {
+            _id: "newer-completed-job",
+            source: "cron_active_venues",
+            status: "completed",
+            mode: "full_scrape",
+            handles: ["completed"],
+            createdAt: resumableNow - 1_000,
+          },
+          {
+            _id: "oversized-queued-job",
+            source: "cron_active_venues",
+            status: "queued",
+            mode: "full_scrape",
+            handles: Array.from({ length: 201 }, (_, index) => `large.${index}`),
+            createdAt: resumableNow - 2_000,
+          },
+          {
+            _id: "recoverable-running-job",
+            source: "cron_active_venues",
+            status: "running",
+            mode: "full_scrape",
+            handles: ["persisted.snapshot"],
+            createdAt: resumableNow - 26 * 60 * 60_000,
+          },
+        ],
+      }),
+    },
+    {
+      source: "cron_active_venues",
+      minCreatedAt: resumableNow - 7 * 24 * 60 * 60_000,
+      maxHandles: 200,
+      serviceSecret: "qa-cooldown-secret",
+    },
+  );
+  assert.equal(
+    resumableJob?._id,
+    "recoverable-running-job",
+    "a persisted partial job older than the 23-hour provider cooldown must still resume",
+  );
+  assert.deepEqual(resumableJob?.handles, ["persisted.snapshot"]);
+
   const boundarySourceRows = Array.from({ length: 5_001 }, (_, index) => ({
     _id: `source-${String(index).padStart(5, "0")}`,
     handle: `source.${index}`,
@@ -640,11 +852,100 @@ try {
     createdAt: 1,
     updatedAt: 1,
   }));
+  const activeSourcePageDb = createPagedDb({ instagramSources: boundarySourceRows });
+  let activeSourceVenueJoinReads = 0;
+  activeSourcePageDb.get = async () => {
+    activeSourceVenueJoinReads += 1;
+    return null;
+  };
   const drainedSources = await drainHandler(
     listActiveSourcesPage._handler,
-    createPagedDb({ instagramSources: boundarySourceRows }),
+    activeSourcePageDb,
   );
   assert.equal(drainedSources.length, 5_001, "all active sources must cross the old 5,000 boundary");
+  assert.equal(
+    activeSourceVenueJoinReads,
+    0,
+    "active-source pages must not issue one venue read per source",
+  );
+  const drainedSourceHandles = await drainHandler(
+    listActiveSourceHandlesPage._handler,
+    createPagedDb({ instagramSources: boundarySourceRows }),
+  );
+  assert.equal(drainedSourceHandles.length, 5_001);
+  assert.equal(typeof drainedSourceHandles[0], "string");
+
+  const targetedContextQueries = [];
+  const targetedContextDb = {
+    query(table) {
+      return {
+        withIndex(indexName, apply) {
+          let matchedValue;
+          const q = {
+            eq(_field, value) {
+              matchedValue = value;
+              return q;
+            },
+          };
+          apply(q);
+          targetedContextQueries.push({ table, indexName, matchedValue });
+          return {
+            async unique() {
+              return table === "instagramSources" && matchedValue === "source.0"
+                ? {
+                    _id: "source-context-0",
+                    handle: "source.0",
+                    role: "venue",
+                    active: true,
+                    createdAt: 1,
+                    updatedAt: 1,
+                  }
+                : null;
+            },
+            async first() {
+              return table === "venues" && matchedValue === "source.0"
+                ? {
+                    _id: "venue-context-0",
+                    name: "Source Zero",
+                    instagramHandle: "source.0",
+                    scrapeActive: true,
+                    publicStatus: "published",
+                  }
+                : null;
+            },
+          };
+        },
+      };
+    },
+    async get() {
+      assert.fail("the indexed venue match should avoid a linked-venue fallback read");
+    },
+  };
+  const targetedContexts = await getIngestionContextsByHandles._handler(
+    { auth: { getUserIdentity: async () => null }, db: targetedContextDb },
+    { handles: ["source.0"], serviceSecret: "qa-cooldown-secret" },
+  );
+  assert.deepEqual(targetedContexts, [
+    { handle: "source.0", role: "venue", canonicalVenueName: "Source Zero" },
+  ]);
+  assert.deepEqual(
+    targetedContextQueries.map(({ table, indexName }) => [table, indexName]),
+    [
+      ["instagramSources", "by_handle"],
+      ["venues", "by_instagramHandle"],
+    ],
+    "one ingestion step should resolve only its current source and venue",
+  );
+  await assert.rejects(
+    getIngestionContextsByHandles._handler(
+      { auth: { getUserIdentity: async () => null }, db: targetedContextDb },
+      {
+        handles: Array.from({ length: 26 }, (_, index) => `source.${index}`),
+        serviceSecret: "qa-cooldown-secret",
+      },
+    ),
+    /limited to 25 handles/,
+  );
 
   const drainedAttempts = await drainHandler(
     listFreshFetchAttemptMetadataPage._handler,
@@ -670,6 +971,31 @@ try {
     createPagedDb({ venues: legacyVenueRows }),
   );
   assert.equal(drainedLegacySources.length, 311, "legacy venue sources must also drain every page");
+  const drainedLegacyHandles = await drainHandler(
+    listLegacyVenueHandlesPage._handler,
+    createPagedDb({ venues: legacyVenueRows }),
+  );
+  assert.equal(drainedLegacyHandles.length, 311);
+  assert.equal(typeof drainedLegacyHandles[0], "string");
+
+  const repairJobRows = Array.from({ length: 5_001 }, (_, index) => ({
+    _id: `repair-job-${String(index).padStart(5, "0")}`,
+    source: "cron_active_venues",
+    mode: "full_scrape",
+    status: index % 2 === 0 ? "running" : "completed",
+    handles: [`repair.${index}`],
+    createdAt: 20_000 + index,
+  }));
+  const drainedRepairJobs = await drainHandler(
+    listJobsForRepairPage._handler,
+    createPagedDb({ ingestionJobs: repairJobRows }),
+    { minCreatedAt: 0 },
+  );
+  assert.equal(
+    drainedRepairJobs.length,
+    5_001,
+    "maintenance repair queries must not inherit the 12-job rollback compatibility cap",
+  );
 
   const createLegacyJob = (index, mode) => ({
     _id: `job-${mode ?? "legacy"}-${index}`,
@@ -718,7 +1044,17 @@ try {
 assert.match(
   cronRouteSource,
   /ingestionJobs:findLatestResumableFullScrapeJob/,
-  "daily resume lookup must use an indexed projected query",
+  "daily resume lookup must use the bounded indexed resumable query",
+);
+assert.doesNotMatch(
+  cronRouteSource,
+  /ingestionJobs:getJob/,
+  "the resumable query must return the compatible full job and avoid a duplicate read",
+);
+assert.match(
+  ingestionJobsSource,
+  /by_source_status_createdAt[\s\S]{0,360}\.first\(\)/,
+  "resume lookup must read at most the newest queued and running job for the source",
 );
 assert.doesNotMatch(
   cronRouteSource,
@@ -937,8 +1273,18 @@ for (const [label, source] of [
 
 assert.match(
   cronRouteSource,
-  /const minCreatedAt = Date\.now\(\) - cronConfig\.fullScrapeCooldownHours \* MS_PER_HOUR/,
-  "cron route should honor the configured cooldown instead of forcing a longer interval",
+  /const cooldownMinCreatedAt =\s*Date\.now\(\) - cronConfig\.fullScrapeCooldownHours \* MS_PER_HOUR/,
+  "cron route should honor the configured cooldown independently of recovery lookback",
+);
+assert.match(
+  cronRouteSource,
+  /DEFAULT_RESUMABLE_LOOKBACK_HOURS = 7 \* 24/,
+  "the recovery window must outlive the daily provider cooldown",
+);
+assert.match(
+  cronRouteSource,
+  /minCreatedAt: resumableMinCreatedAt/,
+  "interrupted daily jobs must use the recovery cutoff rather than the cooldown cutoff",
 );
 assert.match(
   cronRouteSource,
@@ -982,7 +1328,7 @@ assert.match(
 );
 assert.match(
   cronRouteSource,
-  /maxHandles: Math\.min\(hostRunRemaining, MAX_INGESTION_JOB_HANDLES\)/,
+  /resumeCapacity = normalizeHostRunRemaining\(request, MAX_INGESTION_JOB_HANDLES\)[\s\S]{0,360}maxHandles: resumeCapacity/,
   "cron must still resume rollout-era jobs up to the historical hard boundary",
 );
 for (const [label, source] of [
@@ -998,8 +1344,8 @@ for (const [label, source] of [
 }
 assert.match(
   cronRouteSource,
-  /const hostRunMaxHandles = activeVenueHandles\.length/,
-  "scheduled ingestion must size the host run from the complete active venue set",
+  /activeVenueCount = activeVenueHandles\.length;[\s\S]{0,100}hostRunMaxHandles = activeVenueCount/,
+  "scheduled ingestion must size a new host run from the complete active venue set",
 );
 assert.match(
   cronRouteSource,
@@ -1153,6 +1499,36 @@ assert.deepEqual(
 );
 
 assert.deepEqual(
+  selectCronIngestionHandles({
+    activeVenueHandles: ["a", "b", "c", "d", "e"],
+    recentlyAttemptedHandles: [],
+    maxHandlesPerRun: 2,
+    afterHandle: "b",
+  }),
+  {
+    handles: ["c", "d"],
+    skippedRecentlyAttempted: 0,
+    skippedDueToRunLimit: 1,
+  },
+  "a maintenance-only first chunk must not be selected again merely because it created no cooldown receipt",
+);
+
+assert.deepEqual(
+  selectCronIngestionHandles({
+    activeVenueHandles: ["a", "b", "c", "d", "e"],
+    recentlyAttemptedHandles: ["d"],
+    maxHandlesPerRun: 2,
+    afterHandle: "bb",
+  }),
+  {
+    handles: ["c", "e"],
+    skippedRecentlyAttempted: 1,
+    skippedDueToRunLimit: 0,
+  },
+  "a deleted cursor handle must still advance lexically without repeating the first chunk",
+);
+
+assert.deepEqual(
   getAttemptedHandlesFromRecentJob({
     _id: "job_ok",
     source: "cron_active_venues",
@@ -1270,6 +1646,7 @@ const requestIndex = successfulRequests + 1;
 const parsedUrl = new URL(url);
 const activeCount = Number(process.env.FAKE_CURL_ACTIVE_COUNT ?? "2400");
 const remaining = Number(parsedUrl.searchParams.get("hostRunRemaining") ?? String(activeCount));
+const incomingCursor = parsedUrl.searchParams.get("hostRunAfter");
 const selected = Math.min(200, Math.max(0, remaining));
 const repeat = process.env.FAKE_CURL_MODE === "repeat-resume";
 const singleHandleProgress = process.env.FAKE_CURL_MODE === "single-handle-progress";
@@ -1279,6 +1656,7 @@ const jobId = singleHandleProgress || zeroProgress
   : repeat && requestIndex <= 2
     ? "resumed-job"
     : "job-" + requestIndex;
+const hostRunCursor = "cursor_" + jobId.replace(/[^a-z0-9._]/g, "_");
 const done = zeroProgress
   ? false
   : singleHandleProgress
@@ -1292,6 +1670,7 @@ const payload = {
   handles: Array.from({ length: selected }, (_, index) => "handle-" + requestIndex + "-" + index),
   skippedDueToRunLimit: remaining > selected ? 1 : 0,
   hostRunMaxHandles: activeCount,
+  hostRunCursor,
   maxHandlesPerJob: 200,
   effectiveBatchSize: singleHandleProgress || zeroProgress ? 1 : selected,
   maxSteps: 1,
@@ -1302,6 +1681,7 @@ state.requests.push({
   httpCode: 200,
   requestIndex,
   remaining,
+  incomingCursor,
   selected,
   jobId,
   done,
@@ -1356,6 +1736,11 @@ assert.deepEqual(
   resumedCapFixture.state.requests.map((request) => request.remaining),
   [2400, 2200, 2000, 1800, 1600, 1400, 1200, 1000, 800, 600, 400, 200],
 );
+assert.deepEqual(
+  resumedCapFixture.state.requests.slice(0, 3).map((request) => request.incomingCursor),
+  [null, "cursor_job_1", "cursor_job_2"],
+  "each completed job must advance the host-run source cursor",
+);
 
 const repeatedResumeFixture = runCronRunnerCapFixture("repeat-resume");
 assert.equal(repeatedResumeFixture.result.status, 0, repeatedResumeFixture.result.stderr);
@@ -1366,8 +1751,13 @@ assert.match(
 );
 assert.deepEqual(
   repeatedResumeFixture.state.requests.slice(0, 3).map((request) => request.remaining),
-  [2400, 2200, 2200],
-  "the same resumed job ID must not consume the host budget twice",
+  [2400, 2400, 2200],
+  "an incomplete job must not consume the host budget before durable completion",
+);
+assert.deepEqual(
+  repeatedResumeFixture.state.requests.slice(0, 3).map((request) => request.incomingCursor),
+  [null, null, "cursor_resumed_job"],
+  "resuming the same job must not advance its cursor until that job completes",
 );
 
 const singleHandleProgressFixture = runCronRunnerCapFixture("single-handle-progress", 47);
@@ -1386,6 +1776,11 @@ assert.deepEqual(
   [...new Set(singleHandleProgressFixture.state.requests.map((request) => request.remaining))],
   [47],
   "an incomplete final job must retain enough host-run allowance to resume until done",
+);
+assert.deepEqual(
+  [...new Set(singleHandleProgressFixture.state.requests.map((request) => request.incomingCursor))],
+  [null],
+  "an incomplete final job must not advance the source cursor before its terminal response",
 );
 
 const zeroProgressFixture = runCronRunnerCapFixture("zero-progress", 47);

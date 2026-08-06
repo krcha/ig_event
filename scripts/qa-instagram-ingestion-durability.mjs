@@ -401,6 +401,11 @@ try {
   });
   assert.equal(releasedUnused.chargedMicros, 0);
   assert.equal(releasedUnused.releasedMicros, 40_000);
+  assert.equal(
+    tables.instagramSources[0].lastFetchAttemptAt,
+    undefined,
+    "a claim released before transport starts must not create source cooldown",
+  );
 
   const secondClaim = await claimPaidFetchLease._handler(ctx, { ...common, owner: "owner-b" });
   assert.equal(secondClaim.claimed, true);
@@ -527,6 +532,11 @@ try {
   assert.equal(preBoundary.tables.ingestionCostReservations[0].releasedMicros, 40_000);
   assert.equal(preBoundary.tables.ingestionDailyBudgets[0].chargedMicros, 0);
   assert.equal(preBoundary.tables.ingestionDailyBudgets[0].releasedMicros, 40_000);
+  assert.equal(
+    preBoundary.tables.instagramSources[0].lastFetchAttemptAt,
+    undefined,
+    "a pre-transport crash must not create a false provider cooldown receipt",
+  );
   await releasePaidFetchLease._handler(preBoundary.ctx, {
     owner: "pre-boundary-owner-b",
     requestStarted: false,
@@ -587,17 +597,29 @@ try {
     owner: boundaryAwareFinalizeArgs.owner,
     serviceSecret: "qa-durability-secret",
   });
-  const incorrectCallerRelease = await releasePaidFetchLease._handler(boundaryAwareFinalize.ctx, {
-    owner: boundaryAwareFinalizeArgs.owner,
-    requestStarted: false,
-    serviceSecret: "qa-durability-secret",
-  });
-  assert.equal(
-    incorrectCallerRelease.chargedMicros,
-    40_000,
-    "a boundary-aware durable request receipt must override an incorrect process-local false flag",
+  const provenNoTransportRelease = await releasePaidFetchLease._handler(
+    boundaryAwareFinalize.ctx,
+    {
+      owner: boundaryAwareFinalizeArgs.owner,
+      requestStarted: false,
+      serviceSecret: "qa-durability-secret",
+    },
   );
-  assert.equal(incorrectCallerRelease.releasedMicros, 0);
+  assert.equal(
+    provenNoTransportRelease.chargedMicros,
+    0,
+    "a surviving boundary-aware worker must retract a marker when transport was never invoked",
+  );
+  assert.equal(provenNoTransportRelease.releasedMicros, 40_000);
+  assert.equal(
+    boundaryAwareFinalize.tables.instagramSources[0].lastFetchAttemptAt,
+    undefined,
+    "marker retraction must remove the false source cooldown receipt",
+  );
+  assert.equal(
+    boundaryAwareFinalize.tables.instagramSources[0].lastFetchStatus,
+    "preflight_released",
+  );
 
   const legacyBridge = createPaidFetchCrashFixture("source.legacy-bridge");
   const legacyClaim = await claimPaidFetchLease._handler(legacyBridge.ctx, {

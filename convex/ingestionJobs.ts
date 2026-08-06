@@ -1,5 +1,6 @@
 import { internalMutation, mutation, query, type QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
+import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import { requireAdminOrServiceSecret } from "./authz";
 import {
@@ -62,6 +63,34 @@ export const getJob = query({
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     return ctx.db.get(args.id);
+  },
+});
+
+export const listJobsForRepairPage = query({
+  args: {
+    minCreatedAt: v.number(),
+    paginationOpts: paginationOptsValidator,
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const result = await ctx.db
+      .query("ingestionJobs")
+      .withIndex("by_createdAt", (q) => q.gte("createdAt", args.minCreatedAt))
+      .order("desc")
+      .paginate(args.paginationOpts);
+    return {
+      ...result,
+      page: result.page.map((job) => ({
+        _id: job._id,
+        source: job.source,
+        mode: job.mode,
+        status: job.status,
+        handleCount: job.handles.length,
+        createdAt: job.createdAt,
+        startedAt: job.startedAt,
+      })),
+    };
   },
 });
 
@@ -227,20 +256,32 @@ export const findLatestResumableFullScrapeJob = query({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const jobs = await ctx.db
-      .query("ingestionJobs")
-      .withIndex("by_source_createdAt", (q) =>
-        q.eq("source", args.source).gte("createdAt", args.minCreatedAt),
-      )
-      .order("desc")
-      .take(20);
-    const job = jobs.find(
-      (candidate) =>
-        candidate.mode !== "saved_posts" &&
-        (candidate.status === "queued" || candidate.status === "running") &&
-        candidate.handles.length <= Math.max(1, Math.trunc(args.maxHandles)),
+    const maxHandles = Math.max(1, Math.trunc(args.maxHandles));
+    const [queued, running] = await Promise.all(
+      (["queued", "running"] as const).map((status) =>
+        ctx.db
+          .query("ingestionJobs")
+          .withIndex("by_source_status_createdAt", (q) =>
+            q
+              .eq("source", args.source)
+              .eq("status", status)
+              .gte("createdAt", args.minCreatedAt),
+          )
+          .order("desc")
+          .first(),
+      ),
     );
-    return job ? { _id: job._id } : null;
+    return (
+      [queued, running]
+        .filter((candidate) =>
+          Boolean(
+            candidate &&
+              candidate.mode !== "saved_posts" &&
+              candidate.handles.length <= maxHandles,
+          ),
+        )
+        .sort((left, right) => (right?.createdAt ?? 0) - (left?.createdAt ?? 0))[0] ?? null
+    );
   },
 });
 
