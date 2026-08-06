@@ -1613,6 +1613,71 @@ async function assertSourceOccurrenceGenerationCurrent(
   }
 }
 
+async function upsertInstagramEventSourceLink(
+  ctx: MutationCtx,
+  plan: SourceOccurrencePlan,
+  satisfiedKey: string,
+  representativeEvent: Doc<"events">,
+  supersededKey?: string,
+): Promise<void> {
+  const existingTarget = await ctx.db
+    .query("instagramEventSources")
+    .withIndex("by_source_occurrence", (q) =>
+      q
+        .eq("sourceIdentity", plan.sourceIdentity)
+        .eq("sourceOccurrenceKey", satisfiedKey),
+    )
+    .unique();
+  if (existingTarget && existingTarget.eventId !== representativeEvent._id) {
+    throw new Error("Instagram occurrence source is already linked to another event.");
+  }
+
+  const supersededLink = supersededKey
+    ? await ctx.db
+        .query("instagramEventSources")
+        .withIndex("by_source_occurrence", (q) =>
+          q
+            .eq("sourceIdentity", plan.sourceIdentity)
+            .eq("sourceOccurrenceKey", supersededKey),
+        )
+        .unique()
+    : null;
+  if (supersededLink && supersededLink.eventId !== representativeEvent._id) {
+    throw new Error("Superseded Instagram occurrence source is linked to another event.");
+  }
+
+  const now = Date.now();
+  const patch = {
+    eventId: representativeEvent._id,
+    sourceIdentity: plan.sourceIdentity,
+    sourceFingerprint: plan.sourceFingerprint,
+    sourceOccurrenceKey: satisfiedKey,
+    ...(representativeEvent.instagramPostId
+      ? { instagramPostId: representativeEvent.instagramPostId }
+      : {}),
+    ...(representativeEvent.instagramPostUrl
+      ? { instagramPostUrl: representativeEvent.instagramPostUrl }
+      : {}),
+    updatedAt: now,
+  };
+
+  if (existingTarget) {
+    await ctx.db.patch(existingTarget._id, patch);
+    if (supersededLink && supersededLink._id !== existingTarget._id) {
+      await ctx.db.delete(supersededLink._id);
+    }
+    return;
+  }
+  if (supersededLink) {
+    await ctx.db.patch(supersededLink._id, patch);
+    return;
+  }
+  await ctx.db.insert("instagramEventSources", {
+    ...patch,
+    linkedAt: now,
+  });
+}
+
 async function recordSourceOccurrenceSatisfaction(
   ctx: MutationCtx,
   plan: SourceOccurrencePlan,
@@ -1621,6 +1686,9 @@ async function recordSourceOccurrenceSatisfaction(
   supersededKey?: string,
 ): Promise<void> {
   const representativeEvent = await ctx.db.get(representativeEventId);
+  if (!representativeEvent) {
+    throw new Error("Representative event does not exist.");
+  }
   if (!Array.isArray(plan.expectedOccurrences)) {
     // Direct handler QA bypasses Convex argument validation. Deployed callers must
     // provide explicit bindings because sourceOccurrencePlan requires this field.
@@ -1665,6 +1733,13 @@ async function recordSourceOccurrenceSatisfaction(
       createdAt: now,
       updatedAt: now,
     });
+    await upsertInstagramEventSourceLink(
+      ctx,
+      plan,
+      satisfiedKey,
+      representativeEvent,
+      supersededKey,
+    );
     return;
   }
 
@@ -1752,6 +1827,13 @@ async function recordSourceOccurrenceSatisfaction(
     satisfiedOccurrences,
     updatedAt: now,
   });
+  await upsertInstagramEventSourceLink(
+    ctx,
+    plan,
+    satisfiedKey,
+    representativeEvent,
+    supersededKey,
+  );
 }
 
 async function reconcileExistingSourceOccurrenceReceipt(

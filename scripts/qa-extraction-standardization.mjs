@@ -7059,6 +7059,7 @@ async function runDistinctOccurrencePersistenceQa() {
   process.env.CRON_SECRET = atomicServiceSecret;
   const atomicEvents = [];
   const atomicReceipts = [];
+  const atomicSourceLinks = [];
   const atomicAuditLogs = [];
   const atomicProcessingFence = {
     handle: "qa-atomic-handle",
@@ -7135,6 +7136,26 @@ async function runDistinctOccurrencePersistenceQa() {
             },
           };
         }
+        if (table === "instagramEventSources") {
+          return {
+            withIndex: (_indexName, configure) => {
+              const filters = {};
+              const indexBuilder = {
+                eq: (field, value) => {
+                  filters[field] = value;
+                  return indexBuilder;
+                },
+              };
+              configure(indexBuilder);
+              return {
+                unique: async () =>
+                  atomicSourceLinks.find((link) =>
+                    Object.entries(filters).every(([field, value]) => link[field] === value),
+                  ) ?? null,
+              };
+            },
+          };
+        }
         return {
           withIndex: (_indexName, configure) => {
             let sourceOccurrenceKey = null;
@@ -7162,6 +7183,7 @@ async function runDistinctOccurrencePersistenceQa() {
         const record =
           atomicEvents.find((candidate) => candidate._id === id) ??
           atomicReceipts.find((candidate) => candidate._id === id) ??
+          atomicSourceLinks.find((candidate) => candidate._id === id) ??
           (atomicScrapedPost._id === id ? atomicScrapedPost : null);
         assert.ok(record);
         Object.assign(record, patch);
@@ -7182,6 +7204,14 @@ async function runDistinctOccurrencePersistenceQa() {
           };
           atomicReceipts.push(receipt);
           return receipt._id;
+        }
+        if (table === "instagramEventSources") {
+          const sourceLink = {
+            _id: `qa-atomic-source-link-${atomicSourceLinks.length + 1}`,
+            ...value,
+          };
+          atomicSourceLinks.push(sourceLink);
+          return sourceLink._id;
         }
         atomicAuditLogs.push(value);
         return `qa-atomic-audit-${atomicAuditLogs.length}`;
@@ -7246,6 +7276,16 @@ async function runDistinctOccurrencePersistenceQa() {
     );
     assert.equal(atomicAuditLogs.length, 1);
     assert.equal(atomicReceipts.length, 1);
+    assert.equal(atomicSourceLinks.length, 1);
+    assert.equal(atomicSourceLinks[0].eventId, "qa-atomic-event-1");
+    assert.equal(
+      atomicSourceLinks[0].sourceIdentity,
+      atomicEventArgs.sourceOccurrencePlan.sourceIdentity,
+    );
+    assert.equal(
+      atomicSourceLinks[0].sourceOccurrenceKey,
+      atomicEventArgs.sourceOccurrenceKey,
+    );
     assert.deepEqual(atomicReceipts[0].satisfiedKeys, [atomicEventArgs.sourceOccurrenceKey]);
     const representedReceipt = await getInstagramSourceOccurrenceReceipt._handler(atomicCtx, {
       sourceIdentity: atomicReceipts[0].sourceIdentity,

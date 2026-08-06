@@ -4,6 +4,7 @@ import { preflightUserApiAccess } from "../lib/auth/user-api.ts";
 import { createLibraryRouteHandlers } from "../app/api/user/library/handler.ts";
 import { createSavedEventRouteHandlers } from "../app/api/user/saved-events/handler.ts";
 import { createFavoriteVenueRouteHandlers } from "../app/api/user/favorite-venues/handler.ts";
+import { toggleMySavedEvent } from "../convex/users.ts";
 
 const signedInUserId = "user_test_123";
 const eventId = "event_123";
@@ -409,6 +410,73 @@ for (const routeCase of routeCases) {
   });
 }
 
+{
+  const tables = {
+    users: new Map([
+      ["legacy-user-row", {
+        _id: "legacy-user-row",
+        clerkId: signedInUserId,
+        createdAt: 1,
+        updatedAt: 1,
+      }],
+    ]),
+    savedEvents: new Map(),
+    userSavedEvents: new Map([
+      ["legacy-save-row", {
+        _id: "legacy-save-row",
+        userId: "legacy-user-row",
+        eventId,
+        savedAt: 1,
+      }],
+    ]),
+  };
+  const db = {
+    query(table) {
+      return {
+        withIndex(_index, apply) {
+          const filters = {};
+          const builder = {
+            eq(field, value) {
+              filters[field] = value;
+              return builder;
+            },
+          };
+          apply(builder);
+          return {
+            async unique() {
+              return [...tables[table].values()].find((row) =>
+                Object.entries(filters).every(([field, value]) => row[field] === value),
+              ) ?? null;
+            },
+          };
+        },
+      };
+    },
+    async get(id) {
+      return tables.users.get(id) ?? null;
+    },
+    async patch(id, patch) {
+      const row = tables.users.get(id);
+      if (row) tables.users.set(id, { ...row, ...patch });
+    },
+    async delete(id) {
+      for (const table of Object.values(tables)) table.delete(id);
+    },
+    async insert() {
+      throw new Error("Legacy unsave must not insert a replacement row.");
+    },
+  };
+  const result = await toggleMySavedEvent._handler(
+    {
+      auth: { getUserIdentity: async () => ({ subject: signedInUserId }) },
+      db,
+    },
+    { eventId, saved: false },
+  );
+  assert.deepEqual(result, { eventId, saved: false });
+  assert.equal(tables.userSavedEvents.size, 0, "Legacy-only saves must be durably removed.");
+}
+
 console.log(
-  `User API auth QA passed (${routeCases.length} methods; signed-out, unconfigured, validation, success, not-found, dependency, and unexpected failures).`,
+  `User API auth QA passed (${routeCases.length} methods; signed-out, unconfigured, validation, success, not-found, dependency, unexpected failures, and legacy unsave).`,
 );

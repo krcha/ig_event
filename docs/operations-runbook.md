@@ -371,8 +371,13 @@ field automatically. If preflight/apply fails, leave the old web and runner in
 place.
 
 After any backfill, web/runner rollback may retain the newer additive Convex
-backend. Before redeploying an older Convex schema that does not declare
-`normalizedInstagramHandle`, first preview and apply the bounded reverse migration:
+backend. If an older Convex schema does not declare `normalizedInstagramHandle`,
+the reverse migration and backend rollback are a single maintenance operation:
+
+1. Stop/disable the ingestion and discovery scheduler, wait for both runner locks
+   and all ingestion leases to become idle, and leave public reads on the newer
+   additive backend.
+2. Preview and apply the bounded reverse migration:
 
 ```bash
 node --env-file=.env.local --env-file=.env.self-hosted \
@@ -382,11 +387,17 @@ node --env-file=.env.local --env-file=.env.self-hosted \
   --rollback --apply --confirm CLEAR_NORMALIZED_VENUE_HANDLES
 ```
 
-The rollback command uses the same complete pagination, 25-row limit, and
-previous-value compare-and-set checks, then verifies that no venue retains the
-optional field. Only after that verification is it safe to deploy an exact older
-backend schema. If reverse migration cannot complete, retain the forward-compatible
-backend or restore the pre-migration Convex backup; do not attempt the old schema.
+3. Without resuming ingestion in between, deploy the older backend schema and
+   verify its exact-handle context path. Only then restore the scheduler.
+
+The rollback command uses complete pagination, a 25-row limit, and previous-value
+compare-and-set checks, then verifies that no venue retains the optional field.
+The current indexed context reader intentionally fails closed for mixed-case
+legacy rows during the interval after clearing and before the older backend is
+active, which is why ingestion must remain quiesced throughout. If reverse
+migration or the older deploy cannot complete, redeploy/retain the
+forward-compatible backend (or restore the verified pre-migration Convex
+backup) before resuming ingestion; never run paid work in the transition state.
 
 ## Cron Replacement
 

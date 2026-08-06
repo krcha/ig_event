@@ -248,34 +248,46 @@ async function toggleSavedEventForUser(
   eventId: Id<"events">,
   saved?: boolean,
 ) {
-  const existing = await ctx.db
-    .query("savedEvents")
-    .withIndex("by_user_event", (q) =>
-      q.eq("userId", userId).eq("eventId", eventId),
-    )
-    .unique();
+  const [existing, userRecord] = await Promise.all([
+    ctx.db
+      .query("savedEvents")
+      .withIndex("by_user_event", (q) =>
+        q.eq("userId", userId).eq("eventId", eventId),
+      )
+      .unique(),
+    ctx.db
+      .query("users")
+      .withIndex("by_clerkId", (q) => q.eq("clerkId", userId))
+      .unique(),
+  ]);
+  const legacyExisting = userRecord
+    ? await ctx.db
+        .query("userSavedEvents")
+        .withIndex("by_user_event", (q) =>
+          q.eq("userId", userRecord._id).eq("eventId", eventId),
+        )
+        .unique()
+    : null;
 
   const event = await ctx.db.get(eventId);
-  const shouldSave = saved ?? !existing;
+  const shouldSave = saved ?? !(existing || legacyExisting);
+
+  if (!shouldSave) {
+    if (existing) await ctx.db.delete(existing._id);
+    if (legacyExisting) await ctx.db.delete(legacyExisting._id);
+    return { eventId, saved: false };
+  }
 
   if (
     !event ||
     event.status !== "approved" ||
     !(await isCanonicallyGroundedApprovedEvent(ctx, event))
   ) {
-    if (existing && !shouldSave) {
-      await ctx.db.delete(existing._id);
-      return { eventId, saved: false };
-    }
     throw new Error("Approved event not found.");
   }
 
-  if (existing && !shouldSave) {
-    await ctx.db.delete(existing._id);
-    return { eventId, saved: false };
-  }
-
   if (existing) {
+    if (legacyExisting) await ctx.db.delete(legacyExisting._id);
     return {
       createdAt: existing.createdAt,
       eventId,
@@ -284,16 +296,13 @@ async function toggleSavedEventForUser(
     };
   }
 
-  if (!shouldSave) {
-    return { eventId, saved: false };
-  }
-
-  const createdAt = Date.now();
+  const createdAt = legacyExisting?.savedAt ?? Date.now();
   const savedEventId = await ctx.db.insert("savedEvents", {
     userId,
     eventId,
     createdAt,
   });
+  if (legacyExisting) await ctx.db.delete(legacyExisting._id);
 
   return { createdAt, eventId, saved: true, savedEventId };
 }
