@@ -1,4 +1,5 @@
-import { internalMutation, mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query, type QueryCtx } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { requireAdminOrServiceSecret } from "./authz";
 import {
@@ -64,6 +65,35 @@ export const getJob = query({
   },
 });
 
+const MAX_RECENT_FULL_SCRAPE_JOB_DOCUMENTS = 12;
+
+async function listBoundedRecentFullScrapeJobs(
+  ctx: QueryCtx,
+  minCreatedAt: number,
+): Promise<Array<Doc<"ingestionJobs">>> {
+  const currentJobs = await ctx.db
+    .query("ingestionJobs")
+    .withIndex("by_mode_createdAt", (q) =>
+      q.eq("mode", "full_scrape").gte("createdAt", minCreatedAt),
+    )
+    .order("desc")
+    .take(MAX_RECENT_FULL_SCRAPE_JOB_DOCUMENTS);
+  const remaining = MAX_RECENT_FULL_SCRAPE_JOB_DOCUMENTS - currentJobs.length;
+  const legacyJobs =
+    remaining > 0
+      ? await ctx.db
+          .query("ingestionJobs")
+          .withIndex("by_mode_createdAt", (q) =>
+            q.eq("mode", undefined).gte("createdAt", minCreatedAt),
+          )
+          .order("desc")
+          .take(remaining)
+      : [];
+  return [...currentJobs, ...legacyJobs]
+    .sort((left, right) => right.createdAt - left.createdAt)
+    .slice(0, MAX_RECENT_FULL_SCRAPE_JOB_DOCUMENTS);
+}
+
 export const listRecentFullScrapeJobs = query({
   args: {
     minCreatedAt: v.number(),
@@ -71,24 +101,18 @@ export const listRecentFullScrapeJobs = query({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const jobs = await ctx.db
-      .query("ingestionJobs")
-      .withIndex("by_createdAt", (q) => q.gte("createdAt", args.minCreatedAt))
-      .collect();
-
-    return jobs
-      .filter((job) => job.mode !== "saved_posts")
-      .map((job) => ({
-        _id: job._id,
-        source: job.source,
-        status: job.status,
-        handles: job.handles,
-        summaryJson: job.summaryJson,
-        stateJson: job.stateJson,
-        createdAt: job.createdAt,
-        startedAt: job.startedAt,
-        finishedAt: job.finishedAt,
-      }));
+    const jobs = await listBoundedRecentFullScrapeJobs(ctx, args.minCreatedAt);
+    return jobs.map((job) => ({
+      _id: job._id,
+      source: job.source,
+      status: job.status,
+      handles: job.handles,
+      summaryJson: job.summaryJson,
+      stateJson: job.stateJson,
+      createdAt: job.createdAt,
+      startedAt: job.startedAt,
+      finishedAt: job.finishedAt,
+    }));
   },
 });
 
@@ -159,8 +183,9 @@ export function getFreshCompletedAttemptHandles(
 }
 
 /**
- * Request-per-step cron routes call this query repeatedly. Keep the returned
- * shape projected: summaryJson can be hundreds of KB for a 200-handle job.
+ * Rollback compatibility for older web images. New code reads compact source
+ * receipts instead; keep this legacy function hard-bounded so a web rollback
+ * cannot reintroduce unbounded Convex document reads.
  */
 export const listRecentFullScrapeAttemptMetadata = query({
   args: {
@@ -169,27 +194,21 @@ export const listRecentFullScrapeAttemptMetadata = query({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const jobs = await ctx.db
-      .query("ingestionJobs")
-      .withIndex("by_createdAt", (q) => q.gte("createdAt", args.minCreatedAt))
-      .collect();
-
-    return jobs
-      .filter((job) => job.mode !== "saved_posts")
-      .map((job) => ({
-        _id: job._id,
-        source: job.source,
-        status: job.status,
-        handles: job.handles,
-        freshAttemptHandles:
-          job.status === "completed"
-            ? getFreshCompletedAttemptHandles(job.handles, job.summaryJson)
-            : [],
-        stateJson: job.stateJson,
-        createdAt: job.createdAt,
-        startedAt: job.startedAt,
-        finishedAt: job.finishedAt,
-      }));
+    const jobs = await listBoundedRecentFullScrapeJobs(ctx, args.minCreatedAt);
+    return jobs.map((job) => ({
+      _id: job._id,
+      source: job.source,
+      status: job.status,
+      handles: job.handles,
+      freshAttemptHandles:
+        job.status === "completed"
+          ? getFreshCompletedAttemptHandles(job.handles, job.summaryJson)
+          : [],
+      stateJson: job.stateJson,
+      createdAt: job.createdAt,
+      startedAt: job.startedAt,
+      finishedAt: job.finishedAt,
+    }));
   },
 });
 

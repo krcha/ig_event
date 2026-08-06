@@ -30,8 +30,13 @@ export type RecentFullScrapeAttemptSummary = {
   lastFreshScrapeAt: string | null;
 };
 
-const listRecentFullScrapeAttemptMetadataQuery =
-  "ingestionJobs:listRecentFullScrapeAttemptMetadata" as unknown as FunctionReference<"query">;
+type FreshFetchAttemptMetadata = {
+  handle: string;
+  lastFetchAttemptAt?: number;
+};
+
+const listFreshFetchAttemptMetadataQuery =
+  "instagramSources:listFreshFetchAttemptMetadata" as unknown as FunctionReference<"query">;
 
 function parseBatchStateSnapshot(stateJson: string): IngestionBatchStateSnapshot {
   try {
@@ -80,22 +85,10 @@ export function getAttemptedHandlesFromRecentJob(
   return [...new Set(attemptedHandles)];
 }
 
-function getAttemptTimestamp(job: RecentFullScrapeJobRecord): number {
-  if (typeof job.startedAt === "string") {
-    const parsedStartedAt = Date.parse(job.startedAt);
-    if (Number.isFinite(parsedStartedAt)) {
-      return parsedStartedAt;
-    }
-  }
-
-  return job.createdAt;
-}
-
 export async function getRecentFullScrapeAttemptSummary(options: {
   candidateHandles: string[];
   minCreatedAt?: number;
   serviceSecret?: string;
-  includeErroredCompletedHandles?: boolean;
 }): Promise<RecentFullScrapeAttemptSummary> {
   const normalizedCandidates = [
     ...new Set(options.candidateHandles.map((handle) => normalizeHandle(handle)).filter(Boolean)),
@@ -111,42 +104,35 @@ export async function getRecentFullScrapeAttemptSummary(options: {
   const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
   const serviceSecret = options.serviceSecret ?? process.env.CRON_SECRET?.trim();
   if (!serviceSecret) {
-    throw new Error("CRON_SECRET is required to read recent ingestion jobs.");
+    throw new Error("CRON_SECRET is required to read recent provider attempts.");
   }
-  const recentJobs = (await convex.query(listRecentFullScrapeAttemptMetadataQuery, {
-    minCreatedAt: options.minCreatedAt ?? Date.now() - FULL_SCRAPE_COOLDOWN_MS,
+  const minAttemptAt = options.minCreatedAt ?? Date.now() - FULL_SCRAPE_COOLDOWN_MS;
+  const recentAttempts = (await convex.query(listFreshFetchAttemptMetadataQuery, {
+    minAttemptAt,
+    limit: 5_000,
     serviceSecret,
-  })) as RecentFullScrapeJobRecord[];
+  })) as FreshFetchAttemptMetadata[];
 
   const candidateSet = new Set(normalizedCandidates);
   const recentHandles = new Set<string>();
   let lastFreshScrapeAtMs: number | null = null;
 
-  for (const job of recentJobs) {
-    const attemptedHandles =
-      options.includeErroredCompletedHandles && job.status === "completed"
-        ? job.handles
-        : getAttemptedHandlesFromRecentJob(job);
-    if (attemptedHandles.length === 0) {
+  for (const attempt of recentAttempts) {
+    const normalizedHandle = normalizeHandle(attempt.handle);
+    if (!normalizedHandle || !candidateSet.has(normalizedHandle)) {
       continue;
     }
-
-    const attemptTimestamp = getAttemptTimestamp(job);
-    let matchedCandidateHandle = false;
-
-    for (const handle of attemptedHandles) {
-      const normalizedHandle = normalizeHandle(handle);
-      if (normalizedHandle && candidateSet.has(normalizedHandle)) {
-        recentHandles.add(normalizedHandle);
-        matchedCandidateHandle = true;
-      }
-    }
-
+    const attemptedAt = attempt.lastFetchAttemptAt;
     if (
-      matchedCandidateHandle &&
-      (lastFreshScrapeAtMs === null || attemptTimestamp > lastFreshScrapeAtMs)
+      typeof attemptedAt !== "number" ||
+      !Number.isFinite(attemptedAt) ||
+      attemptedAt < minAttemptAt
     ) {
-      lastFreshScrapeAtMs = attemptTimestamp;
+      continue;
+    }
+    recentHandles.add(normalizedHandle);
+    if (lastFreshScrapeAtMs === null || attemptedAt > lastFreshScrapeAtMs) {
+      lastFreshScrapeAtMs = attemptedAt;
     }
   }
 
@@ -161,7 +147,6 @@ export async function getRecentlyAttemptedFullScrapeHandles(options: {
   candidateHandles: string[];
   minCreatedAt?: number;
   serviceSecret?: string;
-  includeErroredCompletedHandles?: boolean;
 }): Promise<string[]> {
   const summary = await getRecentFullScrapeAttemptSummary(options);
   return summary.attemptedHandles;

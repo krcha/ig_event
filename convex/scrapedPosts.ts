@@ -1198,15 +1198,6 @@ export const claimPaidFetchLease = mutation({
       leaseWindowStatus: "active",
       updatedAt: now,
     });
-    if (source) {
-      await ctx.db.patch(source._id, {
-        lastFetchAttemptAt: now,
-        lastFetchStatus: "fetching",
-        lastFetchError: undefined,
-        deferredAt: undefined,
-        updatedAt: now,
-      });
-    }
     return {
       claimed: true,
       reason: "claimed" as const,
@@ -1220,6 +1211,59 @@ export const claimPaidFetchLease = mutation({
       remainingMicros: Math.max(0, limitMicros - budgetReserved - budgetCharged - reserveMicros),
       expiresAt: leaseExpiresAt,
     };
+  },
+});
+
+export const markPaidFetchRequestStarted = mutation({
+  args: {
+    handle: v.string(),
+    owner: v.string(),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const handle = args.handle.trim().replace(/^@+/, "").toLocaleLowerCase();
+    const owner = args.owner.trim().slice(0, 200);
+    const now = Date.now();
+    const control = await ctx.db
+      .query("instagramPaidFetchControl")
+      .withIndex("by_key", (q) => q.eq("key", "apify"))
+      .unique();
+    if (
+      !control ||
+      control.leaseOwner !== owner ||
+      control.leaseHandle !== handle ||
+      (control.leaseExpiresAt ?? 0) <= now ||
+      control.leaseWindowStatus !== "active"
+    ) {
+      throw new Error("Cannot mark provider request from a stale paid-fetch lease.");
+    }
+
+    const source = await ctx.db
+      .query("instagramSources")
+      .withIndex("by_handle", (q) => q.eq("handle", handle))
+      .unique();
+    const patch = {
+      lastFetchAttemptAt: now,
+      lastFetchStatus: "fetching",
+      lastFetchError: undefined,
+      deferredAt: undefined,
+      updatedAt: now,
+    };
+    if (source) {
+      await ctx.db.patch(source._id, patch);
+    } else {
+      await ctx.db.insert("instagramSources", {
+        handle,
+        role: "unknown",
+        active: true,
+        discoveredAt: now,
+        activatedAt: now,
+        ...patch,
+        createdAt: now,
+      });
+    }
+    return { marked: true, requestStartedAt: now };
   },
 });
 

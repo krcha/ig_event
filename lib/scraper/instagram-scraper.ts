@@ -58,6 +58,7 @@ type ScrapeInstagramAccountOptions = {
   daysBack?: number;
   onlyPostsNewerThan?: string;
   abortAtMs?: number;
+  onRequestStarted?: () => void | Promise<void>;
 };
 
 type ApifyDataDetailLevel = "basicData" | "detailedData";
@@ -878,24 +879,6 @@ export async function scrapeInstagramAccount(
   }
   const endpoint = `https://api.apify.com/v2/acts/${encodeURIComponent(actorIdForPath)}/run-sync-get-dataset-items?${query.toString()}`;
 
-  console.info(
-    JSON.stringify({
-      level: "info",
-      event: "apify.instagram.request",
-      handles: [target.label],
-      actorId,
-      username: input.username,
-      resultsLimit: input.resultsLimit,
-      onlyPostsNewerThan: input.onlyPostsNewerThan,
-      skipPinnedPosts: input.skipPinnedPosts,
-      dataDetailLevel: input.dataDetailLevel,
-      maxItems: runOptions.maxItems,
-      maxTotalChargeUsd: runOptions.maxTotalChargeUsd,
-      timeout: runOptions.timeout,
-      memory: runOptions.memory ?? null,
-    }),
-  );
-
   const requestDeadlineMs = Math.min(
     options.abortAtMs ?? Number.POSITIVE_INFINITY,
     Date.now() + (runOptions.timeout + 30) * 1_000,
@@ -911,19 +894,42 @@ export async function scrapeInstagramAccount(
   );
   abortTimer.unref?.();
 
+  const requestInit: RequestInit = {
+    method: "POST",
+    headers: {
+      ...getApifyHeaders(apiToken),
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(input),
+    cache: "no-store",
+    signal: abortController.signal,
+  };
+
   let response: Response;
   let rawItems: ApifyInstagramItem[];
   try {
-    response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        ...getApifyHeaders(apiToken),
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(input),
-      cache: "no-store",
-      signal: abortController.signal,
-    });
+    // Keep every local/preflight failure on the unused-reservation path. The
+    // durable positive receipt is written only at the final outbound boundary,
+    // immediately before fetch makes provider execution transport-ambiguous.
+    await options.onRequestStarted?.();
+    console.info(
+      JSON.stringify({
+        level: "info",
+        event: "apify.instagram.request",
+        handles: [target.label],
+        actorId,
+        username: input.username,
+        resultsLimit: input.resultsLimit,
+        onlyPostsNewerThan: input.onlyPostsNewerThan,
+        skipPinnedPosts: input.skipPinnedPosts,
+        dataDetailLevel: input.dataDetailLevel,
+        maxItems: runOptions.maxItems,
+        maxTotalChargeUsd: runOptions.maxTotalChargeUsd,
+        timeout: runOptions.timeout,
+        memory: runOptions.memory ?? null,
+      }),
+    );
+    response = await fetch(endpoint, requestInit);
 
     if (!response.ok) {
       const errorBody = await response.text();

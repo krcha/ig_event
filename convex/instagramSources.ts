@@ -103,6 +103,29 @@ export const listActive = query({
   },
 });
 
+export const listFreshFetchAttemptMetadata = query({
+  args: {
+    minAttemptAt: v.number(),
+    limit: v.optional(v.number()),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const limit = Math.max(1, Math.min(5_000, Math.trunc(args.limit ?? 5_000)));
+    const sources = await ctx.db
+      .query("instagramSources")
+      .withIndex("by_active_lastFetchAttemptAt", (q) =>
+        q.eq("active", true).gte("lastFetchAttemptAt", args.minAttemptAt),
+      )
+      .order("desc")
+      .take(limit);
+    return sources.map((source) => ({
+      handle: source.handle,
+      lastFetchAttemptAt: source.lastFetchAttemptAt,
+    }));
+  },
+});
+
 export const getByHandle = query({
   args: { handle: v.string(), serviceSecret: v.optional(v.string()) },
   handler: async (ctx, args) => {

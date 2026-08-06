@@ -14,6 +14,7 @@ import { getDocumentSize } from "convex/values";
 import {
   buildApifyInstagramScrapeRequest,
   mapApifyItemToInstagramPost,
+  scrapeInstagramAccount,
 } from "../lib/scraper/instagram-scraper.ts";
 import {
   classifyOpenAiHttpFailure,
@@ -30,6 +31,7 @@ import { getAttemptedHandlesFromRecentJob } from "../lib/pipeline/recent-full-sc
 import {
   createEmptyIngestionSummary,
   createInitialIngestionBatchState,
+  markFreshFetchNotAttempted,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
 import { loadOperationalVenueRecords } from "../lib/pipeline/operational-venues.ts";
 import {
@@ -39,6 +41,7 @@ import {
   serializeSafeIngestionJobPayload,
 } from "../lib/pipeline/ingestion-job-safety.ts";
 import { getFreshCompletedAttemptHandles } from "../convex/ingestionJobs.ts";
+import { listFreshFetchAttemptMetadata } from "../convex/instagramSources.ts";
 
 const request = buildApifyInstagramScrapeRequest({
   actorUsernameInput: "clubdrugstore",
@@ -57,6 +60,72 @@ assert.ok(
   request.runOptions.maxTotalChargeUsd > 0 && request.runOptions.maxTotalChargeUsd <= 0.01,
   "default Apify per-run charge cap should stay low",
 );
+
+const previousApifyToken = process.env.APIFY_API_TOKEN;
+const originalApifyBoundaryFetch = globalThis.fetch;
+const originalApifyBoundaryConsoleInfo = console.info;
+process.env.APIFY_API_TOKEN = "qa-apify-boundary-token";
+let providerBoundaryMarked = false;
+let providerBoundaryFetches = 0;
+let providerRequestLogs = 0;
+console.info = (message, ...args) => {
+  if (typeof message === "string" && message.includes('"event":"apify.instagram.request"')) {
+    providerRequestLogs += 1;
+    return;
+  }
+  originalApifyBoundaryConsoleInfo(message, ...args);
+};
+globalThis.fetch = async () => {
+  assert.equal(
+    providerBoundaryMarked,
+    true,
+    "the durable attempt callback must complete immediately before outbound provider execution",
+  );
+  providerBoundaryFetches += 1;
+  return new Response("[]", {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+};
+try {
+  await scrapeInstagramAccount({
+    handle: "qa-provider-boundary",
+    resultsLimit: 1,
+    daysBack: 1,
+    onRequestStarted: async () => {
+      providerBoundaryMarked = true;
+    },
+  });
+  assert.equal(providerBoundaryFetches, 1);
+  assert.equal(providerRequestLogs, 1);
+
+  providerBoundaryMarked = false;
+  providerBoundaryFetches = 0;
+  await assert.rejects(
+    scrapeInstagramAccount({
+      handle: "qa-local-preflight",
+      resultsLimit: 1,
+      daysBack: 1,
+      abortAtMs: Date.now() + 1_000,
+      onRequestStarted: async () => {
+        providerBoundaryMarked = true;
+      },
+    }),
+    /lease deadline is too close/,
+  );
+  assert.equal(providerBoundaryMarked, false);
+  assert.equal(providerBoundaryFetches, 0);
+  assert.equal(
+    providerRequestLogs,
+    1,
+    "local preflight rejection must not emit a provider-request log",
+  );
+} finally {
+  globalThis.fetch = originalApifyBoundaryFetch;
+  console.info = originalApifyBoundaryConsoleInfo;
+  if (previousApifyToken === undefined) delete process.env.APIFY_API_TOKEN;
+  else process.env.APIFY_API_TOKEN = previousApifyToken;
+}
 
 const persistedHighWaterRequest = buildApifyInstagramScrapeRequest({
   actorUsernameInput: "clubdrugstore",
@@ -207,6 +276,10 @@ const ingestionJobsSource = readFileSync(
   new URL("../convex/ingestionJobs.ts", import.meta.url),
   "utf8",
 );
+const instagramSourcesSource = readFileSync(
+  new URL("../convex/instagramSources.ts", import.meta.url),
+  "utf8",
+);
 const scrapedPostsSource = readFileSync(
   new URL("../convex/scrapedPosts.ts", import.meta.url),
   "utf8",
@@ -293,24 +366,119 @@ assert.match(
 );
 assert.match(
   ingestionRunnerSource,
-  /if \(!lease\.claimed\)[\s\S]{0,600}freshFetchAttempted = 0/,
+  /if \(readyForFetch\)[\s\S]{0,180}else[\s\S]{0,180}markFreshFetchNotAttempted\(summary, handle, "saved_backlog_not_ready"\)/,
+  "maintenance-only saved backlog work must persist a negative provider-attempt receipt",
+);
+assert.match(
+  ingestionRunnerSource,
+  /if \(!lease\.claimed\)[\s\S]{0,300}markFreshFetchNotAttempted\(summary, handle, denialReason, true\)/,
   "a denied lease must persist a negative provider-attempt receipt",
 );
 assert.match(
   ingestionRunnerSource,
-  /providerRequestStarted = true;[\s\S]{0,220}freshFetchAttempted[\s\S]{0,80}\+ 1/,
-  "a claimed lease must persist a positive provider-attempt receipt before provider execution",
+  /onRequestStarted: async \(\) =>[\s\S]{0,500}markPaidFetchRequestStartedMutation[\s\S]{0,500}providerRequestStarted = true;[\s\S]{0,220}freshFetchAttempted/,
+  "positive attempt and budget receipts must be written at the provider network boundary",
 );
 assert.match(
   recentFullScrapeHandlesSource,
-  /ingestionJobs:listRecentFullScrapeAttemptMetadata/,
-  "daily cooldown checks must use projected attempt metadata instead of transferring full job summaries",
+  /instagramSources:listFreshFetchAttemptMetadata/,
+  "daily cooldown checks must use compact source-level provider-attempt receipts",
 );
 assert.doesNotMatch(
   recentFullScrapeHandlesSource,
-  /ingestionJobs:listRecentFullScrapeJobs/,
-  "daily cooldown checks must not repeatedly transfer high-cardinality summaryJson payloads",
+  /ingestionJobs:/,
+  "daily cooldown checks must not read high-cardinality ingestion job documents",
 );
+assert.match(
+  instagramSourcesSource,
+  /by_active_lastFetchAttemptAt[\s\S]{0,220}\.take\(limit\)/,
+  "cooldown receipt reads must be indexed, active-source scoped, and hard bounded",
+);
+assert.match(
+  ingestionJobsSource,
+  /MAX_RECENT_FULL_SCRAPE_JOB_DOCUMENTS = 12/,
+  "rollback compatibility must hard-cap full ingestion-job reads",
+);
+assert.match(
+  ingestionJobsSource,
+  /by_mode_createdAt[\s\S]{0,180}eq\("mode", "full_scrape"\)[\s\S]{0,180}\.take\(MAX_RECENT_FULL_SCRAPE_JOB_DOCUMENTS\)/,
+  "rollback compatibility must use the exact full-scrape index partition",
+);
+assert.match(
+  ingestionJobsSource,
+  /eq\("mode", undefined\)[\s\S]{0,180}\.take\(remaining\)/,
+  "rollback compatibility must include legacy jobs without exceeding the shared cap",
+);
+assert.match(
+  ingestionJobsSource,
+  /listRecentFullScrapeAttemptMetadata[\s\S]{0,500}listBoundedRecentFullScrapeJobs/,
+  "older web images must retain a bounded cooldown function for safe rollback",
+);
+
+const cooldownRows = [
+  { handle: "recent-active", active: true, lastFetchAttemptAt: 300 },
+  { handle: "older-active", active: true, lastFetchAttemptAt: 200 },
+  { handle: "recent-inactive", active: false, lastFetchAttemptAt: 400 },
+  { handle: "outside-window", active: true, lastFetchAttemptAt: 50 },
+];
+let cooldownIndexName = null;
+let cooldownOrder = null;
+let cooldownTakeLimit = null;
+const cooldownQueryBuilder = {
+  predicates: [],
+  withIndex(indexName, apply) {
+    cooldownIndexName = indexName;
+    const q = {
+      eq: (field, value) => {
+        cooldownQueryBuilder.predicates.push((row) => row[field] === value);
+        return q;
+      },
+      gte: (field, value) => {
+        cooldownQueryBuilder.predicates.push((row) => row[field] >= value);
+        return q;
+      },
+    };
+    apply(q);
+    return cooldownQueryBuilder;
+  },
+  order(direction) {
+    cooldownOrder = direction;
+    return cooldownQueryBuilder;
+  },
+  async take(limit) {
+    cooldownTakeLimit = limit;
+    return cooldownRows
+      .filter((row) => cooldownQueryBuilder.predicates.every((predicate) => predicate(row)))
+      .sort((left, right) => right.lastFetchAttemptAt - left.lastFetchAttemptAt)
+      .slice(0, limit);
+  },
+};
+const previousCooldownSecret = process.env.CRON_SECRET;
+process.env.CRON_SECRET = "qa-cooldown-secret";
+try {
+  const projectedCooldownRows = await listFreshFetchAttemptMetadata._handler(
+    {
+      auth: { getUserIdentity: async () => null },
+      db: {
+        query: (table) => {
+          assert.equal(table, "instagramSources");
+          return cooldownQueryBuilder;
+        },
+      },
+    },
+    { minAttemptAt: 100, limit: 1, serviceSecret: "qa-cooldown-secret" },
+  );
+  assert.deepEqual(projectedCooldownRows, [
+    { handle: "recent-active", lastFetchAttemptAt: 300 },
+  ]);
+  assert.equal(cooldownIndexName, "by_active_lastFetchAttemptAt");
+  assert.equal(cooldownOrder, "desc");
+  assert.equal(cooldownTakeLimit, 1);
+} finally {
+  if (previousCooldownSecret === undefined) delete process.env.CRON_SECRET;
+  else process.env.CRON_SECRET = previousCooldownSecret;
+}
+
 assert.match(
   cronRouteSource,
   /ingestionJobs:findLatestResumableFullScrapeJob/,
@@ -541,10 +709,15 @@ assert.match(
   /findResumableCronJob/,
   "cron route should resume recent cron jobs before applying cooldown skips",
 );
+assert.equal(
+  [...cronRouteSource.matchAll(/await getRecentlyAttemptedFullScrapeHandles\(/g)].length,
+  1,
+  "each cron step must perform one compact cooldown lookup, not duplicate range reads",
+);
 assert.match(
-  ingestionJobsSource,
-  /freshAttemptHandles:[\s\S]*getFreshCompletedAttemptHandles\(job\.handles, job\.summaryJson\)/,
-  "recent full-scrape metadata should derive cooldown handles server-side",
+  instagramSourcesSource,
+  /lastFetchAttemptAt: source\.lastFetchAttemptAt/,
+  "recent full-scrape cooldown metadata must remain a compact source projection",
 );
 assert.doesNotMatch(
   recentFullScrapeHandlesSource,
@@ -615,9 +788,9 @@ assert.match(
   "the central Convex mutation boundary must reject oversized job documents",
 );
 assert.match(
-  cronRouteSource,
-  /includeErroredCompletedHandles: true/,
-  "same host run should advance past errored handles instead of retrying one chunk",
+  recentFullScrapeHandlesSource,
+  /lastFetchAttemptAt/,
+  "same host run must advance past every transport-attempted handle, including provider errors",
 );
 
 assert.equal(
@@ -755,6 +928,39 @@ assert.deepEqual(
   }),
   ["good-zero", "good-fetched", "legacy-no-summary"],
   "completed jobs should not cool down handles that only recorded scraper/API errors",
+);
+
+const maintenanceOnlySummary = createEmptyIngestionSummary(["maintenance-only"]);
+maintenanceOnlySummary.handles[0].insertedEvents = 1;
+markFreshFetchNotAttempted(
+  maintenanceOnlySummary,
+  "maintenance-only",
+  "saved_backlog_not_ready",
+);
+assert.equal(maintenanceOnlySummary.handles[0].freshFetchAttempted, 0);
+assert.deepEqual(
+  maintenanceOnlySummary.handles[0].errors,
+  [],
+  "normal backlog maintenance must not be misreported as an ingestion error",
+);
+assert.deepEqual(
+  getFreshCompletedAttemptHandles(
+    ["maintenance-only"],
+    JSON.stringify(maintenanceOnlySummary),
+  ),
+  [],
+  "saved-backlog-only maintenance must not manufacture a fresh-fetch cooldown",
+);
+maintenanceOnlySummary.handles[0].freshFetchAttempted = 1;
+markFreshFetchNotAttempted(
+  maintenanceOnlySummary,
+  "maintenance-only",
+  "resume_after_transport_ambiguity",
+);
+assert.equal(
+  maintenanceOnlySummary.handles[0].freshFetchAttempted,
+  1,
+  "a later maintenance denial must not erase an already durable positive attempt receipt",
 );
 
 assert.deepEqual(

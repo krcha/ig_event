@@ -61,6 +61,7 @@ export default defineSchema({
   })
     .index("by_handle", ["handle"])
     .index("by_active", ["active"])
+    .index("by_active_lastFetchAttemptAt", ["active", "lastFetchAttemptAt"])
     .index("by_role_active", ["role", "active"]),
 
   instagramFollowingSyncState: defineTable({
@@ -438,6 +439,7 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_createdAt", ["createdAt"])
     .index("by_status_updatedAt", ["status", "updatedAt"])
+    .index("by_mode_createdAt", ["mode", "createdAt"])
     .index("by_source_createdAt", ["source", "createdAt"]),
   eventAuditLog: defineTable({
     eventId: v.id("events"),

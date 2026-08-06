@@ -280,6 +280,8 @@ const getScrapedPostBacklogStateByHandleQuery =
   "scrapedPosts:getBacklogStateByHandle" as unknown as FunctionReference<"query">;
 const claimPaidFetchLeaseMutation =
   "scrapedPosts:claimPaidFetchLease" as unknown as FunctionReference<"mutation">;
+const markPaidFetchRequestStartedMutation =
+  "scrapedPosts:markPaidFetchRequestStarted" as unknown as FunctionReference<"mutation">;
 const releasePaidFetchLeaseMutation =
   "scrapedPosts:releasePaidFetchLease" as unknown as FunctionReference<"mutation">;
 const recordPaidFetchWindowSaturationMutation =
@@ -4251,6 +4253,27 @@ function getOrCreateHandleSummary(summary: IngestionSummary, handle: string): Ha
   const created = createEmptyHandleSummary(handle);
   summary.handles.push(created);
   return created;
+}
+
+export function markFreshFetchNotAttempted(
+  summary: IngestionSummary,
+  handle: string,
+  reason: string,
+  recordError = false,
+): void {
+  const handleSummary = getOrCreateHandleSummary(summary, handle);
+  if (
+    typeof handleSummary.freshFetchAttempted !== "number" ||
+    handleSummary.freshFetchAttempted <= 0
+  ) {
+    handleSummary.freshFetchAttempted = 0;
+  }
+  if (recordError) {
+    const message = `Fresh Apify fetch for @${handle} was not attempted (${reason}).`;
+    if (!handleSummary.errors.includes(message)) {
+      handleSummary.errors.push(message);
+    }
+  }
 }
 
 export function createEmptyIngestionSummary(
@@ -10278,6 +10301,8 @@ async function runInstagramIngestionFullScrapeBatchStep(
       });
       if (readyForFetch) {
         handlesReadyForFetch.push(handle);
+      } else {
+        markFreshFetchNotAttempted(summary, handle, "saved_backlog_not_ready");
       }
     }
 
@@ -10291,6 +10316,10 @@ async function runInstagramIngestionFullScrapeBatchStep(
         options.serviceSecret,
         options.workOwner,
       );
+    } else {
+      for (const handle of handlesReadyForFetch) {
+        markFreshFetchNotAttempted(summary, handle, "fresh_fetch_disabled");
+      }
     }
 
     for (const handle of handleBatch) {
@@ -10769,10 +10798,7 @@ async function fetchFreshPostsForHandlesInParallel(
         if (!lease.claimed) {
           const handleSummary = getOrCreateHandleSummary(summary, handle);
           const denialReason = lease.reason ?? "unknown";
-          handleSummary.errors.push(
-            `Fresh Apify fetch for @${handle} was not attempted (${denialReason}).`,
-          );
-          handleSummary.freshFetchAttempted = 0;
+          markFreshFetchNotAttempted(summary, handle, denialReason, true);
           if (denialReason === "hard_cap_saturated") {
             handleSummary.fetchHardBlocked = (handleSummary.fetchHardBlocked ?? 0) + 1;
           }
@@ -10784,15 +10810,25 @@ async function fetchFreshPostsForHandlesInParallel(
         const requestedResultsLimit = normalizeFullScrapeResultsLimit(
           lease.resultsLimit ?? baseResultsLimit,
         );
-        providerRequestStarted = true;
-        const fetchSummary = getOrCreateHandleSummary(summary, handle);
-        fetchSummary.freshFetchAttempted = (fetchSummary.freshFetchAttempted ?? 0) + 1;
         const posts = await scrapeInstagramAccount({
           handle,
           resultsLimit: requestedResultsLimit,
           daysBack: options.daysBack,
           onlyPostsNewerThan: onlyPostsNewerThan ?? undefined,
           abortAtMs: lease.expiresAt ? lease.expiresAt - 60_000 : undefined,
+          onRequestStarted: async () => {
+            await client.mutation(
+              markPaidFetchRequestStartedMutation,
+              withServiceSecret(
+                { handle, owner: paidFetchLeaseOwner },
+                serviceSecret,
+              ),
+            );
+            providerRequestStarted = true;
+            const fetchSummary = getOrCreateHandleSummary(summary, handle);
+            fetchSummary.freshFetchAttempted =
+              (fetchSummary.freshFetchAttempted ?? 0) + 1;
+          },
         });
         const rawItemCount = getInstagramScrapeRawItemCount(posts);
         const saturated = rawItemCount >= requestedResultsLimit;

@@ -45,7 +45,6 @@ const MAX_CRON_BATCH_SIZE = 1;
 const DEFAULT_CRON_MAX_STEPS_PER_REQUEST = 1;
 const MAX_CRON_MAX_STEPS_PER_REQUEST = 1;
 const DEFAULT_INGESTION_JOB_LEASE_MS = 30 * 60 * 1000;
-const CRON_CHUNK_ATTEMPT_WINDOW_MS = 6 * 60 * 60 * 1000;
 const MS_PER_HOUR = 60 * 60 * 1000;
 
 type IngestionJobStatus = "queued" | "running" | "completed" | "failed";
@@ -251,22 +250,11 @@ export async function GET(request: Request) {
       skippedDueToRunLimit = resumableSummary.runContext?.skippedDueToRunLimit ?? 0;
       resumedJob = true;
     } else {
-      const [freshlyAttemptedHandles, currentRunAttemptedHandles] = await Promise.all([
-        getRecentlyAttemptedFullScrapeHandles({
-          candidateHandles: activeVenueHandles,
-          minCreatedAt,
-          serviceSecret,
-        }),
-        getRecentlyAttemptedFullScrapeHandles({
-          candidateHandles: activeVenueHandles,
-          minCreatedAt: Date.now() - CRON_CHUNK_ATTEMPT_WINDOW_MS,
-          serviceSecret,
-          includeErroredCompletedHandles: true,
-        }),
-      ]);
-      const recentlyAttemptedHandles = [
-        ...new Set([...freshlyAttemptedHandles, ...currentRunAttemptedHandles]),
-      ];
+      const recentlyAttemptedHandles = await getRecentlyAttemptedFullScrapeHandles({
+        candidateHandles: activeVenueHandles,
+        minCreatedAt,
+        serviceSecret,
+      });
       const handleSelection = selectCronIngestionHandles({
         activeVenueHandles,
         recentlyAttemptedHandles,

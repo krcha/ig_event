@@ -13,6 +13,7 @@ import {
   claimPaidFetchLease,
   claimProcessing,
   getBacklogStateByHandle,
+  markPaidFetchRequestStarted,
   reconcilePaidFetchFlags,
   recordOpenAiAnalysis,
   recordProcessingResult,
@@ -353,6 +354,11 @@ try {
   const firstClaim = await claimPaidFetchLease._handler(ctx, { ...common, owner: "owner-a" });
   assert.equal(firstClaim.claimed, true);
   assert.equal(
+    tables.instagramSources[0].lastFetchAttemptAt,
+    undefined,
+    "claiming budget and a lease must not record a provider attempt before the network boundary",
+  );
+  assert.equal(
     tables.scrapedPosts.filter((post) => post.blocksPaidFetch === true).length,
     0,
     "terminal, retryable, expired-lease, and out-of-horizon poison rows must all be reconciled before evaluating the paid-fetch gate",
@@ -379,6 +385,17 @@ try {
 
   const secondClaim = await claimPaidFetchLease._handler(ctx, { ...common, owner: "owner-b" });
   assert.equal(secondClaim.claimed, true);
+  const requestReceipt = await markPaidFetchRequestStarted._handler(ctx, {
+    handle: "source.one",
+    owner: "owner-b",
+    serviceSecret: "qa-durability-secret",
+  });
+  assert.equal(requestReceipt.marked, true);
+  assert.equal(
+    tables.instagramSources[0].lastFetchAttemptAt,
+    requestReceipt.requestStartedAt,
+    "the source attempt receipt must appear exactly when provider execution begins",
+  );
   const saturated = await recordPaidFetchWindowSaturation._handler(ctx, {
     handle: "source.one",
     owner: "owner-b",
@@ -413,6 +430,11 @@ try {
   const thirdClaim = await claimPaidFetchLease._handler(ctx, { ...common, owner: "owner-c" });
   assert.equal(thirdClaim.claimed, true);
   assert.equal(thirdClaim.resultsLimit, 10, "Continuation state must increase the next bounded window.");
+  await markPaidFetchRequestStarted._handler(ctx, {
+    handle: "source.one",
+    owner: "owner-c",
+    serviceSecret: "qa-durability-secret",
+  });
   const success = await recordPaidFetchWindowSuccess._handler(ctx, {
     handle: "source.one",
     owner: "owner-c",
