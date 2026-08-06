@@ -5,6 +5,7 @@ import { v } from "convex/values";
 import { isVenuePublic } from "../lib/venues/venue-lifecycle";
 import { isAdminSubject, requireViewerIdentity } from "./authz";
 import { projectPublicEvent } from "./publicEventProjection";
+import { isCanonicallyGroundedApprovedEvent } from "./publicEventGrounding";
 
 type ViewerLibraryUser = {
   clerkId: string;
@@ -114,11 +115,19 @@ async function loadLibraryForUser(ctx: QueryCtx, userId: string) {
     .withIndex("by_user", (q) => q.eq("userId", userId))
     .order("desc")
     .collect();
-  const approvedSavedEvents = (
+  const approvedSavedEventCandidates = (
     await Promise.all(savedRefs.map((ref) => ctx.db.get(ref.eventId)))
   )
     .filter(notNull)
     .filter((event) => event.status === "approved");
+  const savedEventGrounding = await Promise.all(
+    approvedSavedEventCandidates.map((event) =>
+      isCanonicallyGroundedApprovedEvent(ctx, event),
+    ),
+  );
+  const approvedSavedEvents = approvedSavedEventCandidates.filter(
+    (_, index) => savedEventGrounding[index],
+  );
   const publicVenueIds = await loadPublicVenueIdsForSavedEvents(ctx, approvedSavedEvents);
   const savedEvents = approvedSavedEvents.map((event) =>
     projectPublicEvent(
@@ -223,7 +232,11 @@ async function toggleSavedEventForUser(
   const event = await ctx.db.get(eventId);
   const shouldSave = saved ?? !existing;
 
-  if (!event || event.status !== "approved") {
+  if (
+    !event ||
+    event.status !== "approved" ||
+    !(await isCanonicallyGroundedApprovedEvent(ctx, event))
+  ) {
     if (existing && !shouldSave) {
       await ctx.db.delete(existing._id);
       return { eventId, saved: false };
@@ -369,7 +382,11 @@ export const saveEvent = mutation({
       throw new Error("Cannot save for another user.");
     }
     const event = await ctx.db.get(args.eventId);
-    if (!event || event.status !== "approved") {
+    if (
+    !event ||
+    event.status !== "approved" ||
+    !(await isCanonicallyGroundedApprovedEvent(ctx, event))
+  ) {
       throw new Error("Approved event not found.");
     }
 

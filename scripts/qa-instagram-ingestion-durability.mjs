@@ -14,6 +14,7 @@ import {
   claimProcessing,
   getBacklogStateByHandle,
   markPaidFetchRequestStarted,
+  markOpenAiAnalysisAttemptStarted,
   reconcilePaidFetchFlags,
   recordOpenAiAnalysis,
   recordProcessingResult,
@@ -791,6 +792,7 @@ try {
         processingLeaseExpiresAt: Date.now() + 60_000,
       },
     ],
+    ingestionDailyBudgets: [],
   });
   const analysisCtx = { auth: { getUserIdentity: async () => null }, db: analysisDb };
   const analysisArgs = {
@@ -805,6 +807,27 @@ try {
     totalTokens: 30,
     serviceSecret: "qa-durability-secret",
   };
+  const startArgs = {
+    handle: "source.one",
+    postId: "post-one",
+    owner: "analysis-owner",
+    sourceRevision: 3,
+    protocol: "qa-protocol-v1",
+    budgetDayKey: "2026-07-28",
+    dailyRequestLimit: 2,
+    serviceSecret: "qa-durability-secret",
+  };
+  assert.equal(
+    (await markOpenAiAnalysisAttemptStarted._handler(analysisCtx, startArgs)).recorded,
+    true,
+  );
+  assert.equal(analysisTables.ingestionDailyBudgets[0].chargedMicros, 1);
+  assert.deepEqual(
+    await markOpenAiAnalysisAttemptStarted._handler(analysisCtx, startArgs),
+    { recorded: false, reason: "already_started" },
+    "a repeated start marker must not create a second daily charge",
+  );
+  assert.equal(analysisTables.ingestionDailyBudgets[0].chargedMicros, 1);
   assert.deepEqual(await recordOpenAiAnalysis._handler(analysisCtx, analysisArgs), {
     recorded: true,
     reason: "recorded",

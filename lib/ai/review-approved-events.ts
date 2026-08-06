@@ -5,9 +5,15 @@ import {
 } from "@/lib/ai/approved-events-master-review-prompt";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 import { getOpenAiModelEnv, getRequiredEnv } from "@/lib/utils/env";
+import {
+  classifyOpenAiHttpFailure,
+  OpenAiPermanentError,
+  OpenAiProviderBlockedError,
+  OpenAiTransientError,
+} from "@/lib/ai/extract-event-data";
 
 const APPROVED_EVENTS_REVIEW_TIMEOUT_MS = 60_000;
-const APPROVED_EVENTS_REVIEW_MAX_ATTEMPTS = 2;
+const APPROVED_EVENTS_REVIEW_MAX_ATTEMPTS = 1;
 
 const SERBIAN_CYRILLIC_TO_LATIN: Record<string, string> = {
   а: "a",
@@ -803,9 +809,16 @@ export async function reviewApprovedEventsForMasterReview(options: {
 
       if (!response.ok) {
         const errorBody = await response.text();
-        throw new Error(
-          `OpenAI master review failed: ${response.status} ${response.statusText} - ${errorBody}`,
-        );
+        const message =
+          `OpenAI master review failed: ${response.status} ${response.statusText} - ${errorBody}`;
+        const classification = classifyOpenAiHttpFailure(response.status, errorBody);
+        if (classification === "blocked") {
+          throw new OpenAiProviderBlockedError(response.status, message);
+        }
+        if (classification === "permanent") {
+          throw new OpenAiPermanentError(message);
+        }
+        throw new OpenAiTransientError(response.status, message);
       }
 
       const payload = (await response.json()) as {

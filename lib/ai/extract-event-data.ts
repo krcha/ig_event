@@ -4,7 +4,7 @@ import {
   buildEventExtractionUserPrompt,
   EVENT_EXTRACTION_SYSTEM_PROMPT,
 } from "./event-extraction-prompt";
-import { getOpenAiMaxAttemptsPerPost } from "@/lib/pipeline/instagram-ingestion-durability";
+
 
 const OPENAI_REQUEST_TIMEOUT_MS = 40000;
 
@@ -153,6 +153,8 @@ type ExtractEventDataOptions = {
   instagramLocationName?: string | null;
   canonicalVenueName?: string | null;
   extractionMode?: "poster" | "caption_only";
+  beforeTransport?: () => Promise<void>;
+  onTransportStarted?: () => void;
 };
 
 const extractionJsonSchema = {
@@ -478,7 +480,10 @@ export async function extractEventDataFromInstagramPost(
   const openAiVisionModel = getOpenAiModelEnv("OPENAI_VISION_MODEL");
   let lastError: unknown;
 
-  const maxAttempts = getOpenAiMaxAttemptsPerPost();
+  // A source revision owns exactly one paid transport. Cross-process retries
+  // are driven by the durable analysis artifact; repeating an ambiguous
+  // transport here would defeat that generation boundary.
+  const maxAttempts = 1;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), OPENAI_REQUEST_TIMEOUT_MS);
@@ -515,6 +520,8 @@ export async function extractEventDataFromInstagramPost(
         });
       }
 
+      await options.beforeTransport?.();
+      options.onTransportStarted?.();
       const response = await fetch("https://api.openai.com/v1/responses", {
         method: "POST",
         headers: {

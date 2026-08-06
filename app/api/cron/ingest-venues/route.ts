@@ -244,6 +244,7 @@ export async function GET(request: Request) {
     let hostRunMaxHandles = 0;
     let hostRunRemaining = resumeCapacity;
     let hostRunCursor = incomingHostRunCursor;
+    let hostRunCompletedThrough = 0;
     let maxHandlesPerJob = Math.min(hostRunRemaining, MAX_CRON_INGESTION_JOB_HANDLES);
     let handles: string[];
     let skippedRecentlyAttempted = 0;
@@ -264,6 +265,8 @@ export async function GET(request: Request) {
         resumableSummary.runContext?.hostRunCursor ??
         resumableJob.handles.at(-1) ??
         incomingHostRunCursor;
+      hostRunCompletedThrough =
+        resumableSummary.runContext?.hostRunCompletedThrough ?? 0;
       maxHandlesPerJob = Math.min(hostRunRemaining, MAX_CRON_INGESTION_JOB_HANDLES);
       skippedRecentlyAttempted = resumableSummary.runContext?.skippedRecentlyAttempted ?? 0;
       skippedDueToRunLimit = resumableSummary.runContext?.skippedDueToRunLimit ?? 0;
@@ -293,12 +296,27 @@ export async function GET(request: Request) {
         });
         handles = handleSelection.handles;
         hostRunCursor = handles.at(-1) ?? incomingHostRunCursor;
+        const cursorIndex = hostRunCursor
+          ? activeVenueHandles.indexOf(hostRunCursor)
+          : -1;
+        hostRunCompletedThrough =
+          cursorIndex >= 0
+            ? cursorIndex + 1
+            : handles.length === 0
+              ? activeVenueCount
+              : 0;
         skippedRecentlyAttempted = handleSelection.skippedRecentlyAttempted;
         skippedDueToRunLimit = handleSelection.skippedDueToRunLimit;
       }
     }
 
     if (handles.length === 0) {
+      if (hostRunRemaining === 0 || activeVenueCount === 0) {
+        hostRunCompletedThrough = hostRunMaxHandles;
+      } else if (hostRunCompletedThrough === 0) {
+        // Every remaining active handle has a durable recent-attempt receipt.
+        hostRunCompletedThrough = activeVenueCount;
+      }
       return NextResponse.json({
         source: "cron_active_venues",
         handles: [],
@@ -312,6 +330,7 @@ export async function GET(request: Request) {
           fullScrapeCooldownHours: cronConfig.fullScrapeCooldownHours,
           maxHandlesPerRun: hostRunMaxHandles,
           ...(hostRunCursor ? { hostRunCursor } : {}),
+          hostRunCompletedThrough,
           resultsLimit: cronConfig.resultsLimit,
           daysBack: cronConfig.daysBack,
         }),
@@ -322,6 +341,9 @@ export async function GET(request: Request) {
         hostRunMaxHandles,
         hostRunRemaining,
         hostRunCursor: hostRunCursor ?? null,
+        hostRunCompletedThrough,
+        done: true,
+        status: "completed",
         costControls: { ...cronConfig, maxHandlesPerRun: hostRunMaxHandles },
       });
     }
@@ -338,6 +360,7 @@ export async function GET(request: Request) {
         fullScrapeCooldownHours: cronConfig.fullScrapeCooldownHours,
         maxHandlesPerRun: hostRunMaxHandles,
         ...(hostRunCursor ? { hostRunCursor } : {}),
+        hostRunCompletedThrough,
         resultsLimit: cronConfig.resultsLimit,
         daysBack: cronConfig.daysBack,
       });
@@ -462,6 +485,7 @@ export async function GET(request: Request) {
       hostRunMaxHandles,
       hostRunRemaining,
       hostRunCursor: hostRunCursor ?? null,
+      hostRunCompletedThrough: done ? hostRunCompletedThrough : null,
       costControls: { ...cronConfig, maxHandlesPerRun: hostRunMaxHandles },
     });
   } catch (error) {

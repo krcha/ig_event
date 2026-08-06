@@ -47,6 +47,7 @@ import {
   runApprovedEventAutoMerge,
   type ApprovedEventAutoMergeSummary,
 } from "@/lib/events/approved-event-automerge";
+import { classifyApprovalOccurrenceRelation } from "@/lib/events/approval-occurrence-conflict";
 import {
   checkEventConsistency,
   findNamedWeekday,
@@ -163,6 +164,7 @@ export type IngestionRunContext = {
   fullScrapeCooldownHours?: number;
   maxHandlesPerRun?: number;
   hostRunCursor?: string;
+  hostRunCompletedThrough?: number;
   resultsLimit?: number;
   daysBack?: number;
   source?: string;
@@ -275,6 +277,10 @@ const recordScrapedPostProcessingResultMutation =
   "scrapedPosts:recordProcessingResult" as unknown as FunctionReference<"mutation">;
 const recordScrapedPostOpenAiAnalysisMutation =
   "scrapedPosts:recordOpenAiAnalysis" as unknown as FunctionReference<"mutation">;
+const markScrapedPostOpenAiAnalysisAttemptStartedMutation =
+  "scrapedPosts:markOpenAiAnalysisAttemptStarted" as unknown as FunctionReference<"mutation">;
+const releaseScrapedPostOpenAiAnalysisAttemptMutation =
+  "scrapedPosts:releaseOpenAiAnalysisAttempt" as unknown as FunctionReference<"mutation">;
 const claimScrapedPostProcessingMutation =
   "scrapedPosts:claimProcessing" as unknown as FunctionReference<"mutation">;
 const getScrapedPostBacklogStateByHandleQuery =
@@ -9274,6 +9280,8 @@ async function processIngestionPost(
   } else {
     let providerLeaseHeld = false;
     let providerBlockPersisted = false;
+    let analysisAttemptRecorded = false;
+    let transportStarted = false;
     try {
     if (providerExecution) {
       const claim = await providerExecution.claim();
@@ -9304,6 +9312,35 @@ async function processIngestionPost(
       instagramLocationName: post.locationName,
       canonicalVenueName,
       extractionMode,
+      ...(providerExecution
+        ? {
+            beforeTransport: async () => {
+              const marker = await client.mutation(
+                markScrapedPostOpenAiAnalysisAttemptStartedMutation,
+                withServiceSecret(
+                  {
+                    handle: processingFence.handle,
+                    postId: processingFence.postId,
+                    instagramPostUrl: processingFence.instagramPostUrl,
+                    owner: processingFence.owner,
+                    sourceRevision: processingFence.sourceRevision,
+                    protocol: "openai-responses:event-extraction:v1",
+                    budgetDayKey: getBudgetDayKey(),
+                    dailyRequestLimit: getOpenAiDailyPostLimit(),
+                  },
+                  serviceSecret,
+                ),
+              );
+              if (!marker.recorded) {
+                throw new Error(`OpenAI analysis attempt was not started (${marker.reason}).`);
+              }
+              analysisAttemptRecorded = true;
+            },
+            onTransportStarted: () => {
+              transportStarted = true;
+            },
+          }
+        : {}),
     });
     extracted = normalizeConfidencePayload(extracted);
     if (providerExecution) {
@@ -9353,6 +9390,27 @@ async function processIngestionPost(
     }
     return;
   } finally {
+    if (analysisAttemptRecorded && !transportStarted) {
+      try {
+        await client.mutation(
+          releaseScrapedPostOpenAiAnalysisAttemptMutation,
+          withServiceSecret(
+            {
+              handle: processingFence.handle,
+              postId: processingFence.postId,
+              instagramPostUrl: processingFence.instagramPostUrl,
+              owner: processingFence.owner,
+              sourceRevision: processingFence.sourceRevision,
+            },
+            serviceSecret,
+          ),
+        );
+      } catch (releaseError) {
+        summary.errors.push(
+          `OpenAI definitely-unsent attempt release failed: ${getErrorMessage(releaseError)}`,
+        );
+      }
+    }
     if (providerLeaseHeld && providerExecution && !providerBlockPersisted) {
       try {
         await providerExecution.release();
@@ -9526,25 +9584,46 @@ async function processIngestionPost(
       prepared.normalizedFields,
     );
 
-    if (
-      prepared.event.status === "approved" &&
-      existingMatches.some(
+    const approvedOccurrenceRelations = existingMatches
+      .filter(
         (match) =>
           match.existingEvent.status === "approved" &&
-          match.existingEvent.date === prepared.event.date &&
-          toSearchableText(match.existingEvent.venue) === toSearchableText(prepared.event.venue),
+          match.existingEvent.date === prepared.event.date,
       )
+      .map((match) => {
+        const existing = match.existingEvent;
+        const sameVenue =
+          toSearchableText(existing.venue) === toSearchableText(prepared.event.venue);
+        const existingShortcode = extractShortcodeFromPostUrl(existing.instagramPostUrl ?? "");
+        const candidateShortcode = extractShortcodeFromPostUrl(
+          prepared.event.instagramPostUrl ?? "",
+        );
+        const sameSource =
+          (Boolean(existing.instagramPostId) &&
+            existing.instagramPostId === prepared.event.instagramPostId) ||
+          (Boolean(existingShortcode) && existingShortcode === candidateShortcode);
+        return classifyApprovalOccurrenceRelation({
+          candidate: prepared.event,
+          existing,
+          sameVenue,
+          sameSource,
+        });
+      });
+
+    if (
+      prepared.event.status === "approved" &&
+      approvedOccurrenceRelations.includes("ambiguous")
     ) {
       const pendingReasons = [
         ...new Set([
           ...((prepared.normalizedFields.moderationPendingReasons as string[] | undefined) ?? []),
-          "approved_venue_date_conflict",
+          "ambiguous_approved_occurrence",
         ]),
       ];
       const moderationSignals = [
         ...new Set([
           ...((prepared.normalizedFields.moderationSignals as string[] | undefined) ?? []),
-          "approved_venue_date_conflict",
+          "ambiguous_approved_occurrence",
         ]),
       ];
       prepared.normalizedFields.moderationAutoApproved = false;
@@ -10116,10 +10195,19 @@ async function processLoadedPostsForHandle(
       ),
     )) as {
       claimed?: boolean;
+      reason?: string;
       sourceRevision?: number;
       analysisResultJson?: string;
     };
     if (!claim.claimed) {
+      if (claim.reason === "analysis_attempt_ambiguous") {
+        summary.failedExtractions += 1;
+        summary.failed_extractions += 1;
+        summary.failed_extraction += 1;
+        summary.errors.push(
+          `OpenAI transport outcome is ambiguous for ${rawPost.postId ?? rawPost.instagramPostUrl}; automatic replay is blocked.`,
+        );
+      }
       continue;
     }
     const processingFence: SourceProcessingFence = {

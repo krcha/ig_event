@@ -9,6 +9,8 @@ import {
   type ApprovedEventRecordForReview,
 } from "@/lib/ai/review-approved-events";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
+import { OpenAiProviderBlockedError } from "@/lib/ai/extract-event-data";
+import { getOpenAiCircuitCooldownMs } from "@/lib/pipeline/instagram-ingestion-durability";
 
 type EventRecord = {
   _id: string;
@@ -32,6 +34,12 @@ type EventRecord = {
 
 const listByStatusQuery =
   "events:listByStatus" as unknown as FunctionReference<"query">;
+const claimProviderLeaseMutation =
+  "scrapedPosts:claimProviderLease" as unknown as FunctionReference<"mutation">;
+const blockProviderMutation =
+  "scrapedPosts:blockProvider" as unknown as FunctionReference<"mutation">;
+const releaseProviderLeaseMutation =
+  "scrapedPosts:releaseProviderLease" as unknown as FunctionReference<"mutation">;
 
 export const maxDuration = 180;
 
@@ -72,10 +80,56 @@ export async function POST() {
       approvedEvents.map(mapApprovedEvent),
     );
     const candidateGroups = buildApprovedEventReviewCandidateGroups(activeApprovedEvents);
-    const review = await reviewApprovedEventsForMasterReview({
-      events: activeApprovedEvents,
-      candidateGroups,
-    });
+    const providerOwner = `master-review:${crypto.randomUUID()}`.slice(0, 200);
+    let providerLeaseHeld = false;
+    let providerBlockPersisted = false;
+    let review;
+    try {
+      if (candidateGroups.length > 0) {
+        const claim = (await convex.mutation(claimProviderLeaseMutation, {
+          provider: "openai",
+          owner: providerOwner,
+          leaseMs: 3 * 60_000,
+        })) as {
+          claimed?: boolean;
+          reason?: string;
+          blockedStatus?: number;
+          blockedCode?: string;
+        };
+        if (!claim.claimed) {
+          throw new OpenAiProviderBlockedError(
+            claim.blockedStatus ?? 503,
+            claim.reason === "provider_blocked"
+              ? `OpenAI provider circuit is blocked${claim.blockedCode ? ` (${claim.blockedCode})` : ""}.`
+              : `OpenAI provider execution is unavailable (${claim.reason ?? "unknown"}).`,
+          );
+        }
+        providerLeaseHeld = true;
+      }
+      review = await reviewApprovedEventsForMasterReview({
+        events: activeApprovedEvents,
+        candidateGroups,
+      });
+    } catch (error) {
+      if (providerLeaseHeld && error instanceof OpenAiProviderBlockedError) {
+        await convex.mutation(blockProviderMutation, {
+          provider: "openai",
+          owner: providerOwner,
+          status: error.status,
+          code: `http_${error.status}`,
+          cooldownMs: getOpenAiCircuitCooldownMs(),
+        });
+        providerBlockPersisted = true;
+      }
+      throw error;
+    } finally {
+      if (providerLeaseHeld && !providerBlockPersisted) {
+        await convex.mutation(releaseProviderLeaseMutation, {
+          provider: "openai",
+          owner: providerOwner,
+        });
+      }
+    }
     const candidateGroupById = new Map(
       candidateGroups.map((group) => [group.groupId, group] as const),
     );

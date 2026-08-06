@@ -6379,8 +6379,8 @@ async function runServiceApprovalMutationBoundaryQa() {
           ...groundedPublicFields,
           serviceSecret,
         }),
-      /already exists for this venue and date/,
-      "Service create must not approve a second event for one venue/date.",
+      /same-day occurrence is ambiguous/,
+      "Service create must keep an unresolved same-day occurrence out of the public feed.",
     );
     assert.equal(inserted, false);
 
@@ -6395,11 +6395,69 @@ async function runServiceApprovalMutationBoundaryQa() {
             normalizedFieldsJson,
           },
         }),
-      /already exists for this venue and date/,
-      "Service update must not approve a second event for one venue/date.",
+      /same-day occurrence is ambiguous/,
+      "Service update must keep an unresolved same-day occurrence out of the public feed.",
     );
     assert.equal(patched, false);
 
+    sameDateEvents = [
+      {
+        _id: "qa-approved-first-occurrence",
+        title: "Grounded Handler Event",
+        date: groundedPublicFields.date,
+        time: "19:00",
+        venue: groundedPublicFields.venue,
+        venueId: "qa-venue-id",
+        instagramPostId,
+        instagramPostUrl,
+        sourceOccurrenceKey: "occurrence:first",
+        status: "approved",
+      },
+    ];
+    const secondOccurrenceFieldsJson = JSON.stringify({
+      ...JSON.parse(normalizedFieldsJson),
+      sourceOccurrenceKey: "occurrence:second",
+    });
+    inserted = false;
+    await assert.doesNotReject(() =>
+      createEvent._handler(ctx, {
+        ...groundedPublicFields,
+        normalizedFieldsJson: secondOccurrenceFieldsJson,
+        serviceSecret,
+      }),
+    );
+    assert.equal(
+      inserted,
+      true,
+      "A second source-keyed occurrence at the same venue/date must persist independently.",
+    );
+
+    inserted = false;
+    await assert.rejects(
+      () =>
+        createEvent._handler(ctx, {
+          ...groundedPublicFields,
+          normalizedFieldsJson: JSON.stringify({
+            ...JSON.parse(normalizedFieldsJson),
+            sourceOccurrenceKey: "occurrence:first",
+          }),
+          serviceSecret,
+        }),
+      /canonical occurrence/,
+      "The exact same source occurrence key must still be rejected as a duplicate.",
+    );
+    assert.equal(inserted, false);
+
+    sameDateEvents = [
+      {
+        _id: "qa-approved-conflict",
+        title: "Other Approved Event",
+        date: groundedPublicFields.date,
+        venue: groundedPublicFields.venue,
+        venueId: "qa-venue-id",
+        status: "approved",
+      },
+    ];
     existingVenue = "@qa_venue";
     existingVenueInstagramHandle = undefined;
     await assert.rejects(
@@ -6409,8 +6467,8 @@ async function runServiceApprovalMutationBoundaryQa() {
           status: "approved",
           reviewedBy: adminUserId,
         }),
-      /already exists for this venue and date/,
-      "Manual moderation must resolve a legacy venue alias before checking the venue/date conflict.",
+      /same-day occurrence is ambiguous/,
+      "Manual moderation must resolve a legacy venue alias before classifying the occurrence.",
     );
     assert.equal(patched, false);
 
@@ -6432,8 +6490,8 @@ async function runServiceApprovalMutationBoundaryQa() {
           status: "approved",
           reviewedBy: adminUserId,
         }),
-      /already exists for this venue and date/,
-      "Manual moderation must reject the same persisted post ID even when URL type, title, and venue differ.",
+      /same-day occurrence is ambiguous/,
+      "One post may contain multiple events, but an occurrence with no distinct key/time must remain ambiguous.",
     );
     assert.equal(patched, false);
   } finally {
@@ -8551,7 +8609,7 @@ async function runApprovedMergeBoundaryQa() {
           duplicateIds: [duplicate._id],
           patch: { venue: "Venue Two" },
         }),
-      /already exists for this venue and date/,
+      /same-day occurrence is ambiguous/,
       "Approved-event merge must not move the primary onto another approved venue/date.",
     );
     assert.equal(patched, false);
@@ -8877,7 +8935,7 @@ async function runTransactionalSourceGroundingReprocessQa() {
     const conflictBefore = conflict.snapshot();
     await assert.rejects(
       () => conflict.run(argsFor([qaA, conflictB])),
-      /already exists for this venue and date/iu,
+      /(?:canonical occurrence|same-day occurrence is ambiguous)/iu,
     );
     assert.deepEqual(conflict.snapshot(), conflictBefore);
 

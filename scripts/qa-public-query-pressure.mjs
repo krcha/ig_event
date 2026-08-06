@@ -253,32 +253,73 @@ assert.doesNotMatch(
   "Projected events must not attempt duplicate classification after private inputs are removed.",
 );
 
-const singletonDate = "2030-07-25";
-const singletonNormalizedFieldsJson = JSON.stringify({
-  normalizedDate: singletonDate,
-  normalizedVenue: "KC Grad",
-  rawVenue: "Kulturni centar Grad",
-  sourceCaptionFromModel: "The Weight of Light by Irena Ivanovic at KC Grad, 19:00.",
-  titleUsedFallback: false,
-});
+const singletonDate = "2026-07-30";
+const singletonCaption =
+  "Grounded Handler Event 30. jul @ Grounded Handler Venue uz Grounded Handler Artist";
+const singletonPostedAt = "2026-07-01T12:00:00.000Z";
+function singletonGroundingJson(postId, postUrl) {
+  return JSON.stringify({
+    title: "Grounded Handler Event",
+    time: "TBD",
+    artists: ["Grounded Handler Artist"],
+    postAltText: null,
+    sourceGroundingSourceKind: "caption",
+    sourceGroundingSourceCaption: singletonCaption,
+    sourceGroundingInstagramPostId: postId,
+    sourceGroundingInstagramPostUrl: postUrl,
+    sourceGroundingInstagramHandle: "qa_venue",
+    sourceGroundingVersion: 4,
+    sourceGroundingEvidence: "instagram_caption",
+    approvalTitleSensible: true,
+    approvalCaptionSourceCoherent: true,
+    sourceGroundingVerified: true,
+    sourceGroundingTitleVerified: true,
+    sourceGroundingDateVerified: true,
+    sourceGroundingIdentityVerified: true,
+    sourceGroundingIdentityContextVerified: true,
+    sourceGroundingTimeVerified: null,
+    sourceGroundingArtistsVerified: true,
+    sourceGroundingRowVerified: true,
+    moderationAutoApproved: true,
+    moderationAutoApproveRule: "source_grounded_core_event_fields",
+    moderationPendingReasons: [],
+    moderationSignals: ["time_tbd"],
+    moderationConfidenceScore: 0.95,
+    normalizedDate: singletonDate,
+    normalizedVenue: "Grounded Handler Venue",
+    rawVenue: "Grounded Handler Venue",
+    sourceCaptionFromModel: singletonCaption,
+    normalizedIsValid: true,
+    titleUsedFallback: false,
+    dateSuspiciousYear: false,
+    dateConfidence: "high",
+    missingImage: false,
+    moderationAllowMissingImage: false,
+  });
+}
 const singletonPrimary = {
   _id: "event-singleton-primary",
   _creationTime: 2,
-  artists: ["Irena Ivanovic"],
+  artists: ["Grounded Handler Artist"],
   createdAt: 2,
   date: singletonDate,
-  description: "Opening of The Weight of Light by Irena Ivanovic.",
+  description: "Grounded handler event.",
   eventType: "exhibition",
   imageUrl: "https://example.com/primary.jpg",
-  instagramPostId: "singleton-primary-post",
+  instagramPostId: "singleton-primary",
   instagramPostUrl: "https://www.instagram.com/p/singleton-primary/",
-  normalizedFieldsJson: singletonNormalizedFieldsJson,
-  sourceCaption: "The Weight of Light by Irena Ivanovic at KC Grad, 19:00.",
+  normalizedFieldsJson: singletonGroundingJson(
+    "singleton-primary",
+    "https://www.instagram.com/p/singleton-primary/",
+  ),
+  sourceCaption: singletonCaption,
+  sourcePostedAt: singletonPostedAt,
+  venueInstagramHandle: "qa_venue",
   status: "approved",
-  time: "19:00",
-  title: "The Weight of Light",
+  time: "TBD",
+  title: "Grounded Handler Event",
   updatedAt: 2,
-  venue: "KC Grad",
+  venue: "Grounded Handler Venue",
 };
 const singletonDuplicate = {
   ...singletonPrimary,
@@ -286,9 +327,12 @@ const singletonDuplicate = {
   _creationTime: 1,
   createdAt: 1,
   description: undefined,
-  imageUrl: undefined,
-  instagramPostId: "singleton-duplicate-post",
+  instagramPostId: "singleton-duplicate",
   instagramPostUrl: "https://www.instagram.com/p/singleton-duplicate/",
+  normalizedFieldsJson: singletonGroundingJson(
+    "singleton-duplicate",
+    "https://www.instagram.com/p/singleton-duplicate/",
+  ),
   updatedAt: 1,
 };
 let singletonCohortReads = 0;
@@ -297,9 +341,42 @@ const singletonQueryBuilder = {
     return this;
   },
 };
+const singletonPostsById = new Map(
+  [singletonPrimary, singletonDuplicate].map((event) => [
+    event.instagramPostId,
+    {
+      handle: "qa_venue",
+      postId: event.instagramPostId,
+      instagramPostUrl: event.instagramPostUrl,
+      caption: singletonCaption,
+      postedAt: singletonPostedAt,
+    },
+  ]),
+);
 const singletonCtx = {
   db: {
     query(table) {
+      if (table === "scrapedPosts") {
+        const criteria = {};
+        const sourceQueryBuilder = {
+          eq(field, value) {
+            criteria[field] = value;
+            return this;
+          },
+        };
+        return {
+          withIndex(index, configure) {
+            assert.equal(index, "by_handle_postId");
+            configure(sourceQueryBuilder);
+            return {
+              async first() {
+                assert.equal(criteria.handle, "qa_venue");
+                return singletonPostsById.get(criteria.postId) ?? null;
+              },
+            };
+          },
+        };
+      }
       assert.equal(table, "events");
       return {
         withIndex(index, configure) {
@@ -317,9 +394,12 @@ const singletonCtx = {
     },
   },
 };
+const originalSingletonDateNow = Date.now;
+Date.now = () => Date.parse("2026-07-27T12:00:00.000Z");
 const singletonHiddenIds = await getPublicDuplicateEventIds(singletonCtx, [
   singletonDuplicate,
 ]);
+Date.now = originalSingletonDateNow;
 assert.equal(singletonCohortReads, 1, "A singleton raw page must load its same-date cohort.");
 assert.equal(
   singletonHiddenIds.has(singletonDuplicate._id),

@@ -440,6 +440,11 @@ export const upsertManyByHandle = mutation({
                 processingOutcome: undefined,
                 processingError: undefined,
                 processingRetryAt: undefined,
+                analysisAttemptRevision: undefined,
+                analysisAttemptStartedAt: undefined,
+                analysisAttemptOwner: undefined,
+                analysisAttemptProtocol: undefined,
+                analysisAttemptBudgetDayKey: undefined,
                 analysisRevision: undefined,
                 analysisResultJson: undefined,
                 analysisCompletedAt: undefined,
@@ -507,6 +512,33 @@ export const claimProcessing = mutation({
       return { claimed: false, reason: "terminal" as const };
     }
     const now = Date.now();
+    const sourceRevision = existing.sourceRevision ?? 1;
+    if (
+      existing.analysisAttemptRevision === sourceRevision &&
+      !(
+        existing.analysisRevision === sourceRevision &&
+        existing.analysisResultJson
+      )
+    ) {
+      await ctx.db.patch(existing._id, {
+        processingStatus: "retryable_failure",
+        blocksPaidFetch: false,
+        processingOutcome: "openai_transport_ambiguous",
+        processingError:
+          "A paid OpenAI request may have started for this source revision; automatic replay is blocked.",
+        processingLeaseOwner: undefined,
+        processingLeaseExpiresAt: undefined,
+        processingRetryAt: undefined,
+        lastProcessedAt: now,
+        updatedAt: now,
+      });
+      return {
+        claimed: false,
+        reason: "analysis_attempt_ambiguous" as const,
+        sourceRevision,
+        analysisAttemptStartedAt: existing.analysisAttemptStartedAt,
+      };
+    }
     if (
       existing.processingStatus === "retryable_failure" &&
       (existing.processingRetryAt ?? 0) > now
@@ -539,12 +571,175 @@ export const claimProcessing = mutation({
     return {
       claimed: true,
       reason: "claimed" as const,
-      sourceRevision: existing.sourceRevision ?? 1,
+      sourceRevision,
       analysisResultJson:
-        existing.analysisRevision === (existing.sourceRevision ?? 1)
+        existing.analysisRevision === sourceRevision
           ? existing.analysisResultJson
           : undefined,
     };
+  },
+});
+
+export const markOpenAiAnalysisAttemptStarted = mutation({
+  args: {
+    handle: v.string(),
+    postId: v.optional(v.string()),
+    instagramPostUrl: v.optional(v.string()),
+    owner: v.string(),
+    sourceRevision: v.number(),
+    protocol: v.string(),
+    budgetDayKey: v.string(),
+    dailyRequestLimit: v.number(),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const existingByPostId = args.postId
+      ? await ctx.db
+          .query("scrapedPosts")
+          .withIndex("by_handle_postId", (q) =>
+            q.eq("handle", args.handle).eq("postId", args.postId as string),
+          )
+          .first()
+      : null;
+    const existing =
+      existingByPostId ??
+      (args.instagramPostUrl
+        ? await ctx.db
+            .query("scrapedPosts")
+            .withIndex("by_handle_postUrl", (q) =>
+              q.eq("handle", args.handle).eq("instagramPostUrl", args.instagramPostUrl as string),
+            )
+            .first()
+        : null);
+    if (!existing) throw new Error("Cannot start analysis for an unknown scraped post.");
+    const now = Date.now();
+    if (
+      existing.processingStatus !== "processing" ||
+      existing.processingLeaseOwner !== args.owner ||
+      (existing.processingLeaseExpiresAt ?? 0) <= now ||
+      (existing.sourceRevision ?? 1) !== args.sourceRevision
+    ) {
+      throw new Error("Cannot start analysis from a stale processing fence.");
+    }
+    if (existing.analysisRevision === args.sourceRevision && existing.analysisResultJson) {
+      return { recorded: false, reason: "already_completed" as const };
+    }
+    if (existing.analysisAttemptRevision === args.sourceRevision) {
+      return { recorded: false, reason: "already_started" as const };
+    }
+
+    const dayKey = args.budgetDayKey.trim();
+    const dailyLimit = Math.max(0, Math.trunc(args.dailyRequestLimit));
+    const budgetKey = `openai:${dayKey}`;
+    const budget = await ctx.db
+      .query("ingestionDailyBudgets")
+      .withIndex("by_key", (q) => q.eq("key", budgetKey))
+      .unique();
+    const used = (budget?.chargedMicros ?? 0) + (budget?.reservedMicros ?? 0);
+    if (!dayKey || dailyLimit <= 0 || used >= dailyLimit) {
+      return { recorded: false, reason: "budget_exhausted" as const, used, dailyLimit };
+    }
+    if (budget) {
+      await ctx.db.patch(budget._id, {
+        limitMicros: dailyLimit,
+        chargedMicros: budget.chargedMicros + 1,
+        reconciledCount: budget.reconciledCount + 1,
+        updatedAt: now,
+      });
+    } else {
+      await ctx.db.insert("ingestionDailyBudgets", {
+        key: budgetKey,
+        provider: "openai",
+        dayKey,
+        limitMicros: dailyLimit,
+        reservedMicros: 0,
+        chargedMicros: 1,
+        releasedMicros: 0,
+        reservationCount: 0,
+        reconciledCount: 1,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    await ctx.db.patch(existing._id, {
+      analysisAttemptRevision: args.sourceRevision,
+      analysisAttemptStartedAt: now,
+      analysisAttemptOwner: args.owner.slice(0, 200),
+      analysisAttemptProtocol: args.protocol.slice(0, 160),
+      analysisAttemptBudgetDayKey: dayKey,
+      updatedAt: now,
+    });
+    return { recorded: true, reason: "started" as const, startedAt: now };
+  },
+});
+
+export const releaseOpenAiAnalysisAttempt = mutation({
+  args: {
+    handle: v.string(),
+    postId: v.optional(v.string()),
+    instagramPostUrl: v.optional(v.string()),
+    owner: v.string(),
+    sourceRevision: v.number(),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const existingByPostId = args.postId
+      ? await ctx.db
+          .query("scrapedPosts")
+          .withIndex("by_handle_postId", (q) =>
+            q.eq("handle", args.handle).eq("postId", args.postId as string),
+          )
+          .first()
+      : null;
+    const existing =
+      existingByPostId ??
+      (args.instagramPostUrl
+        ? await ctx.db
+            .query("scrapedPosts")
+            .withIndex("by_handle_postUrl", (q) =>
+              q.eq("handle", args.handle).eq("instagramPostUrl", args.instagramPostUrl as string),
+            )
+            .first()
+        : null);
+    if (!existing) return { released: false, reason: "missing" as const };
+    const now = Date.now();
+    if (
+      existing.processingStatus !== "processing" ||
+      existing.processingLeaseOwner !== args.owner ||
+      (existing.processingLeaseExpiresAt ?? 0) <= now ||
+      (existing.sourceRevision ?? 1) !== args.sourceRevision ||
+      existing.analysisAttemptRevision !== args.sourceRevision ||
+      existing.analysisAttemptOwner !== args.owner ||
+      existing.analysisRevision === args.sourceRevision
+    ) {
+      return { released: false, reason: "stale_or_used" as const };
+    }
+    const dayKey = existing.analysisAttemptBudgetDayKey;
+    if (dayKey) {
+      const budget = await ctx.db
+        .query("ingestionDailyBudgets")
+        .withIndex("by_key", (q) => q.eq("key", `openai:${dayKey}`))
+        .unique();
+      if (budget && budget.chargedMicros > 0) {
+        await ctx.db.patch(budget._id, {
+          chargedMicros: budget.chargedMicros - 1,
+          releasedMicros: budget.releasedMicros + 1,
+          reconciledCount: budget.reconciledCount + 1,
+          updatedAt: now,
+        });
+      }
+    }
+    await ctx.db.patch(existing._id, {
+      analysisAttemptRevision: undefined,
+      analysisAttemptStartedAt: undefined,
+      analysisAttemptOwner: undefined,
+      analysisAttemptProtocol: undefined,
+      analysisAttemptBudgetDayKey: undefined,
+      updatedAt: now,
+    });
+    return { released: true, reason: "definitely_unsent" as const };
   },
 });
 
@@ -592,7 +787,9 @@ export const recordOpenAiAnalysis = mutation({
       existing.processingStatus !== "processing" ||
       existing.processingLeaseOwner !== args.owner ||
       (existing.processingLeaseExpiresAt ?? 0) <= now ||
-      (existing.sourceRevision ?? 1) !== args.sourceRevision
+      (existing.sourceRevision ?? 1) !== args.sourceRevision ||
+      existing.analysisAttemptRevision !== args.sourceRevision ||
+      existing.analysisAttemptOwner !== args.owner
     ) {
       throw new Error("Cannot cache analysis from a stale processing fence.");
     }
@@ -1686,36 +1883,17 @@ export const claimProviderLease = mutation({
     if (provider === "openai" && args.budgetDayKey && args.dailyRequestLimit !== undefined) {
       const dayKey = args.budgetDayKey.trim();
       const dailyLimit = Math.max(0, Math.trunc(args.dailyRequestLimit));
-      const key = `${provider}:${dayKey}`;
       const budget = await ctx.db
         .query("ingestionDailyBudgets")
-        .withIndex("by_key", (q) => q.eq("key", key))
+        .withIndex("by_key", (q) => q.eq("key", `${provider}:${dayKey}`))
         .unique();
       const used = (budget?.chargedMicros ?? 0) + (budget?.reservedMicros ?? 0);
       if (!dayKey || dailyLimit <= 0 || used >= dailyLimit) {
         return { claimed: false, reason: "budget_exhausted" as const, used, dailyLimit };
       }
-      if (budget) {
-        await ctx.db.patch(budget._id, {
-          limitMicros: dailyLimit,
-          chargedMicros: budget.chargedMicros + 1,
-          updatedAt: now,
-        });
-      } else {
-        await ctx.db.insert("ingestionDailyBudgets", {
-          key,
-          provider,
-          dayKey,
-          limitMicros: dailyLimit,
-          reservedMicros: 0,
-          chargedMicros: 1,
-          releasedMicros: 0,
-          reservationCount: 0,
-          reconciledCount: 1,
-          createdAt: now,
-          updatedAt: now,
-        });
-      }
+      // This is only a capacity preflight. The daily counter is charged by
+      // markOpenAiAnalysisAttemptStarted at the durable pre-transport boundary.
+      // A lease that is released before that marker therefore costs nothing.
     }
     const leaseMs = Math.max(
       30_000,

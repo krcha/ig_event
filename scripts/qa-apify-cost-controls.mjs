@@ -1390,7 +1390,11 @@ try {
     return new Response('{"error":"server error"}', { status: 500, statusText: "Server Error" });
   };
   await assert.rejects(extractEventDataFromInstagramPost(extractionInput), /server error/i);
-  assert.equal(calls, 3, "Transient OpenAI failures must use the bounded retry limit.");
+  assert.equal(
+    calls,
+    1,
+    "A source revision must make exactly one paid OpenAI transport even for transient failures.",
+  );
 
   calls = 0;
   globalThis.fetch = async () => {
@@ -1633,8 +1637,10 @@ assert.doesNotMatch(hostCronRunnerSource, /INGEST_CRON_MAX_REQUESTS_PER_RUN/);
 assert.match(hostCronRunnerSource, /skippedDueToRunLimit/);
 assert.match(hostCronRunnerSource, /hostRunRemaining/);
 assert.match(hostCronRunnerSource, /HOST_RUN_MAX_HANDLES - TOTAL_SELECTED/);
-assert.match(hostCronRunnerSource, /declare -A COUNTED_JOB_IDS=\(\)/);
-assert.match(hostCronRunnerSource, /COUNTED_JOB_IDS\[\$RESPONSE_JOB_ID\]=1/);
+assert.match(hostCronRunnerSource, /hostRunCompletedThrough/);
+assert.match(hostCronRunnerSource, /missing_host_completion_accounting/);
+assert.match(hostCronRunnerSource, /incomplete_host_accounting/);
+assert.doesNotMatch(hostCronRunnerSource, /COUNTED_JOB_IDS/);
 assert.match(hostCronRunnerSource, /trap cleanup_sensitive_temp_file EXIT/);
 assert.match(
   ingestionJobsSource,
@@ -1898,6 +1904,13 @@ if (!outputPath || !url) process.exit(2);
 let state = { count: 0, requests: [], failedOnce: false };
 try { state = JSON.parse(readFileSync(process.env.FAKE_CURL_STATE, "utf8")); } catch {}
 state.count += 1;
+if (process.env.FAKE_CURL_MODE === "lost-terminal" && !state.failedOnce) {
+  state.failedOnce = true;
+  state.requests.push({ attempt: state.count, httpCode: 200, transportLost: true, selected: 200 });
+  writeFileSync(process.env.FAKE_CURL_STATE, JSON.stringify(state));
+  writeFileSync(outputPath, JSON.stringify({ done: true, hostRunCompletedThrough: 200 }));
+  process.exit(28);
+}
 if (process.env.FAKE_CURL_MODE === "transient-500" && !state.failedOnce) {
   state.failedOnce = true;
   state.requests.push({ attempt: state.count, httpCode: 500 });
@@ -1934,6 +1947,9 @@ const done = zeroProgress
   : singleHandleProgress
     ? requestIndex >= selected
     : !(repeat && requestIndex === 1);
+const hostRunCompletedThrough = process.env.FAKE_CURL_MODE === "lost-terminal"
+  ? Math.min(activeCount, requestIndex * 200)
+  : Math.min(activeCount, activeCount - remaining + (done ? selected : 0));
 const payload = {
   jobId,
   resumedJob: requestIndex === 1 || (repeat && requestIndex === 2),
@@ -1943,6 +1959,7 @@ const payload = {
   skippedDueToRunLimit: remaining > selected ? 1 : 0,
   hostRunMaxHandles: activeCount,
   hostRunCursor,
+  hostRunCompletedThrough,
   maxHandlesPerJob: 200,
   effectiveBatchSize: singleHandleProgress || zeroProgress ? 1 : selected,
   maxSteps: 1,
@@ -2076,6 +2093,19 @@ assert.deepEqual(
   "a transient HTTP 500 must be retried idempotently within the same scheduled run",
 );
 assert.match(transientHttpFixture.result.stdout, /status=ok requests=1 selected=200/);
+
+const lostTerminalFixture = runCronRunnerCapFixture("lost-terminal", 630);
+assert.equal(lostTerminalFixture.result.status, 0, lostTerminalFixture.result.stderr);
+assert.match(
+  lostTerminalFixture.result.stdout,
+  /status=ok requests=3 selected=630 host_run_max=630/,
+  "a lost terminal response must reconcile completed fleet coverage from the next durable cursor rank",
+);
+assert.deepEqual(
+  lostTerminalFixture.state.requests.map((request) => request.selected),
+  [200, 200, 200, 30],
+  "the 630-handle fleet must remain covered as [200,200,200,30] across a lost response",
+);
 
 const nonIdempotentDiscoveryFixture = runCronRunnerCapFixture(
   "transient-500",

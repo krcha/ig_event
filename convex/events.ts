@@ -11,6 +11,7 @@ import {
 } from "../lib/events/event-retention";
 import { normalizeEventTimeWritePatch } from "../lib/events/event-time-write";
 import { isSensibleEventTitleForApproval } from "../lib/events/event-title-approval";
+import { classifyApprovalOccurrenceRelation } from "../lib/events/approval-occurrence-conflict";
 import { isCaptionSourceCoherentWithEvent } from "../lib/events/event-source-approval";
 import { buildNormalizedEventVenueIdentity } from "../lib/events/event-venue-identity";
 import {
@@ -36,6 +37,7 @@ import { normalizeInstagramPostUrl } from "../lib/images/apify-images";
 import { assertPublicEventImageWrite } from "../lib/images/public-event-image";
 import { requireAdminIdentity, requireAdminOrServiceSecret } from "./authz";
 import { projectPublicEvent } from "./publicEventProjection";
+import { isCanonicallyGroundedApprovedEvent } from "./publicEventGrounding";
 
 const eventStatus = v.union(
   v.literal("pending"),
@@ -232,11 +234,13 @@ type ApprovalCandidateFields = {
   venueInstagramHandle?: string;
   instagramPostId?: string;
   instagramPostUrl?: string;
+  time?: string;
+  artists?: string[];
+  sourceOccurrenceKey?: string;
+  normalizedFieldsJson?: string;
 };
 
 type ServiceSourceCandidateFields = ApprovalCandidateFields & {
-  time?: string;
-  artists?: string[];
   sourceCaption?: string;
   sourcePostedAt?: string;
 };
@@ -304,9 +308,10 @@ async function assertApprovalCandidatePolicy(
   const candidatePostUrl = normalizeLookup(candidate.instagramPostUrl ?? "");
   const candidatePostId = candidate.instagramPostId?.trim() ?? "";
   const excluded = new Set(excludeEventIds);
-  const conflict = sameDateEvents.find((event) => {
+  let ambiguousConflict = false;
+  for (const event of sameDateEvents) {
     if (excluded.has(event._id) || event.status !== "approved") {
-      return false;
+      continue;
     }
     const sameVenue =
       (candidate.venueId !== undefined &&
@@ -320,11 +325,24 @@ async function assertApprovalCandidatePolicy(
       (Boolean(candidatePostId) && event.instagramPostId?.trim() === candidatePostId) ||
       (Boolean(candidatePostUrl) &&
         normalizeLookup(event.instagramPostUrl ?? "") === candidatePostUrl);
-    return sameVenue || sameSourceEvent;
-  });
+    const relation = classifyApprovalOccurrenceRelation({
+      candidate,
+      existing: event,
+      sameVenue,
+      sameSource: sameSourceEvent,
+    });
+    if (relation === "proven_duplicate") {
+      throw new Error("An approved event already exists for this canonical occurrence.");
+    }
+    if (relation === "ambiguous") {
+      ambiguousConflict = true;
+    }
+  }
 
-  if (conflict) {
-    throw new Error("An approved event already exists for this venue and date.");
+  if (ambiguousConflict) {
+    throw new Error(
+      "This same-day occurrence is ambiguous against an approved event and cannot be auto-approved.",
+    );
   }
 }
 
@@ -404,8 +422,19 @@ async function projectPublicEventPage(
   ctx: QueryCtx,
   events: Doc<"events">[],
 ) {
-  const publicVenueIds = await loadPublicVenueIdsForEvents(ctx, events);
-  return events.map((event) =>
+  const groundingDecisions = await Promise.all(
+    events.map((event) => isCanonicallyGroundedApprovedEvent(ctx, event)),
+  );
+  const groundedEvents = events.filter((_, index) => groundingDecisions[index]);
+  return projectCanonicallyGroundedPublicEventPage(ctx, groundedEvents);
+}
+
+async function projectCanonicallyGroundedPublicEventPage(
+  ctx: QueryCtx,
+  groundedEvents: Doc<"events">[],
+) {
+  const publicVenueIds = await loadPublicVenueIdsForEvents(ctx, groundedEvents);
+  return groundedEvents.map((event) =>
     projectPublicEvent(
       event,
       event.venueId !== undefined && publicVenueIds.has(event.venueId),
@@ -443,7 +472,11 @@ async function loadApprovedDateCohort(
     .query("events")
     .withIndex("by_status_date", (q) => q.eq("status", "approved").eq("date", date))
     .take(PUBLIC_DUPLICATE_DATE_COHORT_LIMIT + 1);
-  return cohort.length > PUBLIC_DUPLICATE_DATE_COHORT_LIMIT ? null : cohort;
+  if (cohort.length > PUBLIC_DUPLICATE_DATE_COHORT_LIMIT) return null;
+  const groundingDecisions = await Promise.all(
+    cohort.map((event) => isCanonicallyGroundedApprovedEvent(ctx, event)),
+  );
+  return cohort.filter((_, index) => groundingDecisions[index]);
 }
 
 export async function getPublicDuplicateEventIds(
@@ -492,10 +525,14 @@ async function projectDeduplicatedPublicEventPage(
   ctx: QueryCtx,
   events: Doc<"events">[],
 ) {
-  const duplicateIds = await getPublicDuplicateEventIds(ctx, events);
-  return projectPublicEventPage(
+  const groundingDecisions = await Promise.all(
+    events.map((event) => isCanonicallyGroundedApprovedEvent(ctx, event)),
+  );
+  const groundedEvents = events.filter((_, index) => groundingDecisions[index]);
+  const duplicateIds = await getPublicDuplicateEventIds(ctx, groundedEvents);
+  return projectCanonicallyGroundedPublicEventPage(
     ctx,
-    events.filter((event) => !duplicateIds.has(event._id)),
+    groundedEvents.filter((event) => !duplicateIds.has(event._id)),
   );
 }
 
@@ -2016,6 +2053,10 @@ async function applyEventUpdate(
         venueInstagramHandle: effectiveEvent.venueInstagramHandle,
         instagramPostId: effectiveEvent.instagramPostId,
         instagramPostUrl: effectiveEvent.instagramPostUrl,
+        time: effectiveEvent.time,
+        artists: effectiveEvent.artists,
+        sourceOccurrenceKey: effectiveEvent.sourceOccurrenceKey,
+        normalizedFieldsJson: effectiveEvent.normalizedFieldsJson,
       },
       [args.id],
     );
@@ -2149,7 +2190,11 @@ export const reprocessPendingSourceGroundingBatch = mutation({
       };
       assertServiceUpdateEventPolicy(event.status, policyPatch, event);
       await assertPersistedServiceSourcePolicy(ctx, event);
-      await assertApprovalCandidatePolicy(ctx, event, [event._id]);
+      await assertApprovalCandidatePolicy(
+        ctx,
+        { ...event, normalizedFieldsJson: item.nextNormalizedFieldsJson },
+        [event._id],
+      );
       await ctx.db.patch(event._id, {
         status: "approved",
         normalizedFieldsJson: item.nextNormalizedFieldsJson,
@@ -2201,6 +2246,10 @@ export const setEventStatus = mutation({
             venueFields.venueInstagramHandle ?? existingEvent.venueInstagramHandle,
           instagramPostId: existingEvent.instagramPostId,
           instagramPostUrl: existingEvent.instagramPostUrl,
+          time: existingEvent.time,
+          artists: existingEvent.artists,
+          sourceOccurrenceKey: existingEvent.sourceOccurrenceKey,
+          normalizedFieldsJson: existingEvent.normalizedFieldsJson,
         },
         [args.id],
       );
@@ -2289,6 +2338,10 @@ export const setEventStatuses = mutation({
                 venueFields.venueInstagramHandle ?? existingEvent.venueInstagramHandle,
               instagramPostId: existingEvent.instagramPostId,
               instagramPostUrl: existingEvent.instagramPostUrl,
+              time: existingEvent.time,
+              artists: existingEvent.artists,
+              sourceOccurrenceKey: existingEvent.sourceOccurrenceKey,
+              normalizedFieldsJson: existingEvent.normalizedFieldsJson,
             },
             args.approveAsDistinctSameVenueDateBatch ? uniqueIds : [id],
           );
@@ -2296,7 +2349,7 @@ export const setEventStatuses = mutation({
         } catch (error) {
           if (
             !(error instanceof Error) ||
-            !/^(?:Event title is not suitable for approval|An approved event already exists for this venue and date)\.$/.test(
+            !/^(?:Event title is not suitable for approval|An approved event already exists for this canonical occurrence|This same-day occurrence is ambiguous against an approved event and cannot be auto-approved)\.$/.test(
               error.message,
             )
           ) {
@@ -2468,6 +2521,10 @@ export const mergeApprovedEvents = mutation({
           venueInstagramHandle: effectiveEvent.venueInstagramHandle,
           instagramPostId: effectiveEvent.instagramPostId,
           instagramPostUrl: effectiveEvent.instagramPostUrl,
+          time: effectiveEvent.time,
+          artists: effectiveEvent.artists,
+          sourceOccurrenceKey: effectiveEvent.sourceOccurrenceKey,
+          normalizedFieldsJson: effectiveEvent.normalizedFieldsJson,
         },
         [args.primaryId, ...duplicateIds],
       );

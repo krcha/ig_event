@@ -91,7 +91,6 @@ CONSECUTIVE_NO_PROGRESS=0
 CURRENT_CURL_CONFIG=""
 LAST_HTTP_CODE=""
 LAST_CURL_EXIT=0
-declare -A COUNTED_JOB_IDS=()
 
 cleanup_sensitive_temp_file() {
   if [[ -n "$CURRENT_CURL_CONFIG" ]]; then
@@ -242,6 +241,7 @@ max_steps = payload.get("maxSteps", 1)
 steps_advanced = payload.get("stepsAdvanced", 0)
 job_id = payload.get("jobId")
 host_cursor = payload.get("hostRunCursor")
+host_completed = payload.get("hostRunCompletedThrough")
 if host_cursor is not None and (
     not isinstance(host_cursor, str)
     or not host_cursor
@@ -261,24 +261,36 @@ print(
     steps_advanced if isinstance(steps_advanced, int) and steps_advanced >= 0 else 0,
     job_id if isinstance(job_id, str) and job_id else "-",
     host_cursor or "-",
+    host_completed if isinstance(host_completed, int) and host_completed >= 0 else -1,
 )
 PY
 )"
-  read -r LAST_DONE LAST_SELECTED LAST_SKIPPED_DUE LAST_STATUS RESPONSE_HOST_MAX RESPONSE_JOB_CHUNK RESPONSE_EFFECTIVE_BATCH_SIZE RESPONSE_MAX_STEPS RESPONSE_STEPS_ADVANCED RESPONSE_JOB_ID RESPONSE_HOST_CURSOR <<<"$response_state"
+  read -r LAST_DONE LAST_SELECTED LAST_SKIPPED_DUE LAST_STATUS RESPONSE_HOST_MAX RESPONSE_JOB_CHUNK RESPONSE_EFFECTIVE_BATCH_SIZE RESPONSE_MAX_STEPS RESPONSE_STEPS_ADVANCED RESPONSE_JOB_ID RESPONSE_HOST_CURSOR RESPONSE_HOST_COMPLETED <<<"$response_state"
   if [[ "$LAST_SELECTED" -gt 0 ]]; then
     if [[ "$RESPONSE_JOB_ID" == "-" ]]; then
       echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=missing_job_id selected=$LAST_SELECTED body=$LAST_BODY" >&2
       exit 1
     fi
-    if [[ "$LAST_DONE" == "true" && -z "${COUNTED_JOB_IDS[$RESPONSE_JOB_ID]+x}" ]]; then
-      TOTAL_SELECTED=$(( TOTAL_SELECTED + LAST_SELECTED ))
-      COUNTED_JOB_IDS[$RESPONSE_JOB_ID]=1
+  fi
+  if [[ "$LAST_DONE" == "true" ]]; then
+    if [[ "$RESPONSE_HOST_COMPLETED" -lt 0 ]]; then
+      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=missing_host_completion_accounting body=$LAST_BODY" >&2
+      exit 1
     fi
+    if [[ "$RESPONSE_HOST_COMPLETED" -lt "$TOTAL_SELECTED" ]]; then
+      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=regressed_host_completion previous=$TOTAL_SELECTED response=$RESPONSE_HOST_COMPLETED body=$LAST_BODY" >&2
+      exit 1
+    fi
+    TOTAL_SELECTED="$RESPONSE_HOST_COMPLETED"
   fi
   if [[ "$LAST_DONE" == "true" && "$RESPONSE_HOST_CURSOR" != "-" ]]; then
     HOST_RUN_CURSOR="$RESPONSE_HOST_CURSOR"
   fi
   if [[ "$RESPONSE_HOST_MAX" -gt 0 ]]; then
+    if [[ "$HOST_RUN_MAX_HANDLES" -gt 0 && "$HOST_RUN_MAX_HANDLES" -ne "$RESPONSE_HOST_MAX" ]]; then
+      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=host_run_max_changed previous=$HOST_RUN_MAX_HANDLES response=$RESPONSE_HOST_MAX body=$LAST_BODY" >&2
+      exit 1
+    fi
     HOST_RUN_MAX_HANDLES="$RESPONSE_HOST_MAX"
     if [[ "$RESPONSE_JOB_CHUNK" -gt 0 ]]; then
       required_chunks=$(( (HOST_RUN_MAX_HANDLES + RESPONSE_JOB_CHUNK - 1) / RESPONSE_JOB_CHUNK ))
@@ -320,6 +332,11 @@ PY
     break
   fi
 done
+
+if [[ "$JOB" == "ingest-venues" && "$TOTAL_SELECTED" -ne "$HOST_RUN_MAX_HANDLES" ]]; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=incomplete_host_accounting selected=$TOTAL_SELECTED host_run_max=$HOST_RUN_MAX_HANDLES body=$LAST_BODY" >&2
+  exit 1
+fi
 
 FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 DURATION_SECONDS=$(( $(date +%s) - START_EPOCH ))

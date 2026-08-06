@@ -16,6 +16,7 @@ import type * as instagramSources from "../instagramSources.js";
 import type * as maintenance from "../maintenance.js";
 import type * as mediaActions from "../mediaActions.js";
 import type * as mediaAssets from "../mediaAssets.js";
+import type * as publicEventGrounding from "../publicEventGrounding.js";
 import type * as publicEventProjection from "../publicEventProjection.js";
 import type * as scrapedPosts from "../scrapedPosts.js";
 import type * as users from "../users.js";
@@ -36,6 +37,7 @@ declare const fullApi: ApiFromModules<{
   maintenance: typeof maintenance;
   mediaActions: typeof mediaActions;
   mediaAssets: typeof mediaAssets;
+  publicEventGrounding: typeof publicEventGrounding;
   publicEventProjection: typeof publicEventProjection;
   scrapedPosts: typeof scrapedPosts;
   users: typeof users;
