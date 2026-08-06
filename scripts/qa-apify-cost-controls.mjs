@@ -40,8 +40,16 @@ import {
   MAX_INGESTION_JOB_PERSISTED_JSON_BYTES,
   serializeSafeIngestionJobPayload,
 } from "../lib/pipeline/ingestion-job-safety.ts";
-import { getFreshCompletedAttemptHandles } from "../convex/ingestionJobs.ts";
-import { listFreshFetchAttemptMetadata } from "../convex/instagramSources.ts";
+import {
+  getFreshCompletedAttemptHandles,
+  listRecentFullScrapeAttemptMetadata,
+} from "../convex/ingestionJobs.ts";
+import {
+  listActiveSourcesPage,
+  listFreshFetchAttemptMetadata,
+  listFreshFetchAttemptMetadataPage,
+  listLegacyVenueSourcesPage,
+} from "../convex/instagramSources.ts";
 
 const request = buildApifyInstagramScrapeRequest({
   actorUsernameInput: "clubdrugstore",
@@ -371,18 +379,53 @@ assert.match(
 );
 assert.match(
   ingestionRunnerSource,
-  /if \(!lease\.claimed\)[\s\S]{0,300}markFreshFetchNotAttempted\(summary, handle, denialReason, true\)/,
+  /if \(!lease\.claimed\)[\s\S]{0,500}markFreshFetchNotAttempted\([\s\S]{0,220}denialReason/,
   "a denied lease must persist a negative provider-attempt receipt",
 );
+assert.match(
+  ingestionRunnerSource,
+  /requestBoundaryVersion: 1/,
+  "boundary-aware web code must explicitly select request-boundary accounting",
+);
+assert.match(ingestionRunnerSource, /attemptCooldownMs: getProviderAttemptCooldownMs\(\)/);
 assert.match(
   ingestionRunnerSource,
   /onRequestStarted: async \(\) =>[\s\S]{0,500}markPaidFetchRequestStartedMutation[\s\S]{0,500}providerRequestStarted = true;[\s\S]{0,220}freshFetchAttempted/,
   "positive attempt and budget receipts must be written at the provider network boundary",
 );
+assert.match(convexSchemaSource, /ingestionCostReservations:[\s\S]{0,500}requestStartedAt: v\.optional\(v\.number\(\)\)/);
+assert.match(scrapedPostsSource, /requestBoundaryVersion: v\.optional\(v\.literal\(1\)\)/);
+assert.match(
+  scrapedPostsSource,
+  /requestStartedAt: args\.requestBoundaryVersion === 1 \? undefined : now/,
+  "mixed-version claims must preserve conservative legacy accounting without moving new callers off the network boundary",
+);
+assert.match(scrapedPostsSource, /typeof oldReservation\.requestStartedAt === "number"/);
+assert.match(
+  scrapedPostsSource,
+  /status: requestStarted \? "reconciled" : "released"/,
+  "expired reservations must distinguish pre-boundary release from post-boundary charging",
+);
+assert.match(
+  scrapedPostsSource,
+  /recent_provider_attempt/,
+  "paid lease admission must reject a durable provider attempt inside cooldown",
+);
 assert.match(
   recentFullScrapeHandlesSource,
-  /instagramSources:listFreshFetchAttemptMetadata/,
-  "daily cooldown checks must use compact source-level provider-attempt receipts",
+  /instagramSources:listFreshFetchAttemptMetadataPage/,
+  "daily cooldown checks must use paginated compact source-level provider-attempt receipts",
+);
+assert.match(recentFullScrapeHandlesSource, /continueCursor/);
+assert.match(recentFullScrapeHandlesSource, /MAX_FRESH_ATTEMPT_PAGES/);
+assert.match(ingestionRunnerSource, /instagramSources:listActiveSourcesPage/);
+assert.match(ingestionRunnerSource, /instagramSources:listLegacyVenueSourcesPage/);
+assert.match(ingestionRunnerSource, /MAX_ACTIVE_SOURCE_PAGES/);
+assert.match(ingestionRunnerSource, /paginationOpts: \{ numItems: ACTIVE_SOURCE_PAGE_SIZE, cursor \}/);
+assert.doesNotMatch(
+  ingestionRunnerSource,
+  /"instagramSources:listActive"/,
+  "the current ingestion path must not call the legacy capped active-source query",
 );
 assert.doesNotMatch(
   recentFullScrapeHandlesSource,
@@ -391,28 +434,46 @@ assert.doesNotMatch(
 );
 assert.match(
   instagramSourcesSource,
-  /by_active_lastFetchAttemptAt[\s\S]{0,220}\.take\(limit\)/,
-  "cooldown receipt reads must be indexed, active-source scoped, and hard bounded",
+  /listFreshFetchAttemptMetadataPage[\s\S]{0,700}by_active_lastFetchAttemptAt[\s\S]{0,240}\.paginate\(args\.paginationOpts\)/,
+  "active cooldown reads must be indexed and explicitly paginated",
+);
+assert.match(
+  instagramSourcesSource,
+  /listActiveSourcesPage[\s\S]{0,500}by_active[\s\S]{0,160}\.paginate\(args\.paginationOpts\)/,
+  "active explicit sources must be paginated",
+);
+assert.match(
+  instagramSourcesSource,
+  /listLegacyVenueSourcesPage[\s\S]{0,500}by_scrapeActive[\s\S]{0,160}\.paginate\(args\.paginationOpts\)/,
+  "legacy venue sources must be paginated",
+);
+assert.match(instagramSourcesSource, /\.take\(limit \+ 1\)/);
+assert.match(
+  instagramSourcesSource,
+  /Legacy recent-attempt query exceeded its fail-closed limit/,
+  "legacy cooldown reads must fail closed instead of truncating",
 );
 assert.match(
   ingestionJobsSource,
   /MAX_RECENT_FULL_SCRAPE_JOB_DOCUMENTS = 12/,
   "rollback compatibility must hard-cap full ingestion-job reads",
 );
+assert.match(ingestionJobsSource, /\.take\(MAX_RECENT_FULL_SCRAPE_JOB_DOCUMENTS \+ 1\)/);
 assert.match(
   ingestionJobsSource,
-  /by_mode_createdAt[\s\S]{0,180}eq\("mode", "full_scrape"\)[\s\S]{0,180}\.take\(MAX_RECENT_FULL_SCRAPE_JOB_DOCUMENTS\)/,
-  "rollback compatibility must use the exact full-scrape index partition",
+  /Legacy full-scrape history exceeded the fail-closed/,
+  "rollback compatibility must fail closed when current-mode history exceeds the shared cap",
 );
+assert.match(ingestionJobsSource, /\.take\(remaining \+ 1\)/);
 assert.match(
   ingestionJobsSource,
-  /eq\("mode", undefined\)[\s\S]{0,180}\.take\(remaining\)/,
-  "rollback compatibility must include legacy jobs without exceeding the shared cap",
+  /Legacy optional-mode history exceeded the fail-closed/,
+  "rollback compatibility must fail closed when optional-mode history exceeds the remaining cap",
 );
 assert.match(
   ingestionJobsSource,
   /listRecentFullScrapeAttemptMetadata[\s\S]{0,500}listBoundedRecentFullScrapeJobs/,
-  "older web images must retain a bounded cooldown function for safe rollback",
+  "older web images must retain a bounded fail-closed cooldown function for safe rollback",
 );
 
 const cooldownRows = [
@@ -466,14 +527,189 @@ try {
         },
       },
     },
-    { minAttemptAt: 100, limit: 1, serviceSecret: "qa-cooldown-secret" },
+    { minAttemptAt: 100, limit: 2, serviceSecret: "qa-cooldown-secret" },
   );
   assert.deepEqual(projectedCooldownRows, [
     { handle: "recent-active", lastFetchAttemptAt: 300 },
+    { handle: "older-active", lastFetchAttemptAt: 200 },
   ]);
   assert.equal(cooldownIndexName, "by_active_lastFetchAttemptAt");
   assert.equal(cooldownOrder, "desc");
-  assert.equal(cooldownTakeLimit, 1);
+  assert.equal(cooldownTakeLimit, 3);
+  await assert.rejects(
+    listFreshFetchAttemptMetadata._handler(
+      {
+        auth: { getUserIdentity: async () => null },
+        db: { query: () => cooldownQueryBuilder },
+      },
+      { minAttemptAt: 100, limit: 1, serviceSecret: "qa-cooldown-secret" },
+    ),
+    /fail-closed limit of 1/i,
+    "legacy cooldown reads must reject overflow instead of silently dropping attempts",
+  );
+
+  function createPagedDb(rowsByTable) {
+    return {
+      query(table) {
+        const rows = rowsByTable[table] ?? [];
+        const predicates = [];
+        let direction = "asc";
+        const builder = {
+          withIndex(_name, apply) {
+            const q = {
+              eq(field, value) {
+                predicates.push((row) => row[field] === value);
+                return q;
+              },
+              gte(field, value) {
+                predicates.push((row) => row[field] >= value);
+                return q;
+              },
+            };
+            apply(q);
+            return builder;
+          },
+          order(value) {
+            direction = value;
+            return builder;
+          },
+          async paginate({ numItems, cursor }) {
+            const filtered = rows
+              .filter((row) => predicates.every((predicate) => predicate(row)))
+              .sort((left, right) => {
+                const field =
+                  "lastFetchAttemptAt" in left
+                    ? "lastFetchAttemptAt"
+                    : "createdAt" in left
+                      ? "createdAt"
+                      : "_id";
+                const comparison = left[field] < right[field] ? -1 : left[field] > right[field] ? 1 : 0;
+                return direction === "desc" ? -comparison : comparison;
+              });
+            const start = cursor ? Number.parseInt(cursor, 10) : 0;
+            const end = Math.min(filtered.length, start + numItems);
+            return {
+              page: filtered.slice(start, end),
+              isDone: end >= filtered.length,
+              continueCursor: String(end),
+            };
+          },
+          async take(limit) {
+            return rows
+              .filter((row) => predicates.every((predicate) => predicate(row)))
+              .sort((left, right) =>
+                direction === "desc" ? right.createdAt - left.createdAt : left.createdAt - right.createdAt,
+              )
+              .slice(0, limit);
+          },
+        };
+        return builder;
+      },
+      async get() {
+        return null;
+      },
+    };
+  }
+
+  async function drainHandler(handler, db, extraArgs = {}) {
+    const rows = [];
+    let cursor = null;
+    for (let page = 0; page < 100; page += 1) {
+      const result = await handler(
+        { auth: { getUserIdentity: async () => null }, db },
+        {
+          ...extraArgs,
+          paginationOpts: { numItems: 137, cursor },
+          serviceSecret: "qa-cooldown-secret",
+        },
+      );
+      rows.push(...result.page);
+      if (result.isDone) return rows;
+      assert.notEqual(result.continueCursor, cursor, "pagination cursor must advance");
+      cursor = result.continueCursor;
+    }
+    assert.fail("pagination did not terminate within its QA bound");
+  }
+
+  const boundarySourceRows = Array.from({ length: 5_001 }, (_, index) => ({
+    _id: `source-${String(index).padStart(5, "0")}`,
+    handle: `source.${index}`,
+    role: "unknown",
+    active: true,
+    lastFetchAttemptAt: 10_000 + index,
+    createdAt: 1,
+    updatedAt: 1,
+  }));
+  const drainedSources = await drainHandler(
+    listActiveSourcesPage._handler,
+    createPagedDb({ instagramSources: boundarySourceRows }),
+  );
+  assert.equal(drainedSources.length, 5_001, "all active sources must cross the old 5,000 boundary");
+
+  const drainedAttempts = await drainHandler(
+    listFreshFetchAttemptMetadataPage._handler,
+    createPagedDb({ instagramSources: boundarySourceRows }),
+    { minAttemptAt: 1 },
+  );
+  assert.equal(
+    drainedAttempts.length,
+    5_001,
+    "all recent attempts must cross the old 5,000 cooldown boundary",
+  );
+  assert.equal(new Set(drainedAttempts.map((row) => row.handle)).size, 5_001);
+
+  const legacyVenueRows = Array.from({ length: 311 }, (_, index) => ({
+    _id: `venue-${String(index).padStart(4, "0")}`,
+    name: `Venue ${index}`,
+    instagramHandle: `legacy.${index}`,
+    scrapeActive: true,
+    publicStatus: "published",
+  }));
+  const drainedLegacySources = await drainHandler(
+    listLegacyVenueSourcesPage._handler,
+    createPagedDb({ venues: legacyVenueRows }),
+  );
+  assert.equal(drainedLegacySources.length, 311, "legacy venue sources must also drain every page");
+
+  const createLegacyJob = (index, mode) => ({
+    _id: `job-${mode ?? "legacy"}-${index}`,
+    mode,
+    source: "cron_active_venues",
+    status: "completed",
+    handles: [`job-handle-${mode ?? "legacy"}-${index}`],
+    summaryJson: "{}",
+    stateJson: "{}",
+    createdAt: 1_000 + index,
+  });
+  const invokeLegacyAttemptMetadata = (rows) =>
+    listRecentFullScrapeAttemptMetadata._handler(
+      {
+        auth: { getUserIdentity: async () => null },
+        db: createPagedDb({ ingestionJobs: rows }),
+      },
+      { minCreatedAt: 0, serviceSecret: "qa-cooldown-secret" },
+    );
+
+  const validRollbackWindow = await invokeLegacyAttemptMetadata([
+    ...Array.from({ length: 6 }, (_, index) => createLegacyJob(index, "full_scrape")),
+    ...Array.from({ length: 6 }, (_, index) => createLegacyJob(100 + index, undefined)),
+  ]);
+  assert.equal(validRollbackWindow.length, 12);
+  await assert.rejects(
+    invokeLegacyAttemptMetadata(
+      Array.from({ length: 13 }, (_, index) => createLegacyJob(index, "full_scrape")),
+    ),
+    /full-scrape history exceeded the fail-closed 12-document/i,
+    "a 13th current-mode job must fail closed instead of dropping attempted handles",
+  );
+  await assert.rejects(
+    invokeLegacyAttemptMetadata([
+      ...Array.from({ length: 12 }, (_, index) => createLegacyJob(index, "full_scrape")),
+      createLegacyJob(999, undefined),
+    ]),
+    /optional-mode history exceeded the fail-closed 12-document/i,
+    "a newer optional-mode legacy job must fail closed when the shared cap is already full",
+  );
 } finally {
   if (previousCooldownSecret === undefined) delete process.env.CRON_SECRET;
   else process.env.CRON_SECRET = previousCooldownSecret;

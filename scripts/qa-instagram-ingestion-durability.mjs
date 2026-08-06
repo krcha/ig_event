@@ -348,6 +348,8 @@ try {
     dailyBudgetUsd: 0.05,
     maxChargeUsd: 0.04,
     horizonCutoffMs,
+    attemptCooldownMs: 0,
+    requestBoundaryVersion: 1,
     serviceSecret: "qa-durability-secret",
   };
 
@@ -357,6 +359,11 @@ try {
     tables.instagramSources[0].lastFetchAttemptAt,
     undefined,
     "claiming budget and a lease must not record a provider attempt before the network boundary",
+  );
+  assert.equal(
+    tables.ingestionCostReservations[0].requestStartedAt,
+    undefined,
+    "boundary-aware claims must leave the budget reservation explicitly pre-request",
   );
   assert.equal(
     tables.scrapedPosts.filter((post) => post.blocksPaidFetch === true).length,
@@ -373,6 +380,18 @@ try {
   );
   assert.equal(firstClaim.resultsLimit, 5);
   assert.equal(Date.parse(firstClaim.onlyPostsNewerThan), checkpointBefore - 5 * 60_000);
+  const lostClaimAcknowledgementRetry = await claimPaidFetchLease._handler(ctx, {
+    ...common,
+    owner: "owner-a",
+  });
+  assert.equal(lostClaimAcknowledgementRetry.claimed, true);
+  assert.equal(lostClaimAcknowledgementRetry.reason, "resumed_claim");
+  assert.equal(lostClaimAcknowledgementRetry.reservationId, firstClaim.reservationId);
+  assert.equal(
+    tables.ingestionCostReservations.length,
+    1,
+    "a lost claim acknowledgement must resume the exact reservation without double spending",
+  );
   const busyClaim = await claimPaidFetchLease._handler(ctx, { ...common, owner: "owner-b" });
   assert.deepEqual(busyClaim, { claimed: false, reason: "busy" });
   const releasedUnused = await releasePaidFetchLease._handler(ctx, {
@@ -395,6 +414,11 @@ try {
     tables.instagramSources[0].lastFetchAttemptAt,
     requestReceipt.requestStartedAt,
     "the source attempt receipt must appear exactly when provider execution begins",
+  );
+  assert.equal(
+    tables.ingestionCostReservations.find((row) => row.owner === "owner-b").requestStartedAt,
+    requestReceipt.requestStartedAt,
+    "the budget reservation must durably record the same provider request boundary",
   );
   const saturated = await recordPaidFetchWindowSaturation._handler(ctx, {
     handle: "source.one",
@@ -454,6 +478,183 @@ try {
   assert.equal(exhausted.reason, "budget_exhausted");
   assert.equal(tables.ingestionDailyBudgets[0].chargedMicros, 50_000);
   assert.equal(tables.ingestionDailyBudgets[0].reservedMicros, 0);
+
+  const createPaidFetchCrashFixture = (handle) => {
+    const fixture = createDb({
+      instagramPaidFetchControl: [
+        {
+          _id: `control-${handle}`,
+          key: "apify",
+          backlogIndexReady: true,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+      scrapedPosts: [],
+      instagramSources: [
+        { _id: `source-${handle}`, handle, active: true, createdAt: 1, updatedAt: 1 },
+      ],
+      ingestionCostReservations: [],
+      ingestionDailyBudgets: [],
+      instagramHandleFetchStates: [],
+    });
+    return {
+      ...fixture,
+      ctx: { auth: { getUserIdentity: async () => null }, db: fixture.db },
+    };
+  };
+
+  const preBoundary = createPaidFetchCrashFixture("source.pre-boundary");
+  const preBoundaryArgs = {
+    ...common,
+    handle: "source.pre-boundary",
+    owner: "pre-boundary-owner-a",
+    dayKey: "2026-07-29",
+    attemptCooldownMs: 23 * 60 * 60_000,
+  };
+  const preBoundaryClaim = await claimPaidFetchLease._handler(preBoundary.ctx, preBoundaryArgs);
+  assert.equal(preBoundaryClaim.claimed, true);
+  assert.equal(preBoundary.tables.ingestionCostReservations[0].requestStartedAt, undefined);
+  preBoundary.tables.instagramPaidFetchControl[0].leaseExpiresAt = Date.now() - 1;
+  const preBoundaryRetry = await claimPaidFetchLease._handler(preBoundary.ctx, {
+    ...preBoundaryArgs,
+    owner: "pre-boundary-owner-b",
+    fetchStartedAt: Date.now(),
+  });
+  assert.equal(preBoundaryRetry.claimed, true, "a pre-boundary crash may safely retry");
+  assert.equal(preBoundary.tables.ingestionCostReservations[0].status, "released");
+  assert.equal(preBoundary.tables.ingestionCostReservations[0].chargedMicros, 0);
+  assert.equal(preBoundary.tables.ingestionCostReservations[0].releasedMicros, 40_000);
+  assert.equal(preBoundary.tables.ingestionDailyBudgets[0].chargedMicros, 0);
+  assert.equal(preBoundary.tables.ingestionDailyBudgets[0].releasedMicros, 40_000);
+  await releasePaidFetchLease._handler(preBoundary.ctx, {
+    owner: "pre-boundary-owner-b",
+    requestStarted: false,
+    serviceSecret: "qa-durability-secret",
+  });
+
+  const postBoundary = createPaidFetchCrashFixture("source.post-boundary");
+  const postBoundaryArgs = {
+    ...common,
+    handle: "source.post-boundary",
+    owner: "post-boundary-owner-a",
+    dayKey: "2026-07-30",
+    attemptCooldownMs: 23 * 60 * 60_000,
+  };
+  assert.equal(
+    (await claimPaidFetchLease._handler(postBoundary.ctx, postBoundaryArgs)).claimed,
+    true,
+  );
+  await markPaidFetchRequestStarted._handler(postBoundary.ctx, {
+    handle: "source.post-boundary",
+    owner: "post-boundary-owner-a",
+    serviceSecret: "qa-durability-secret",
+  });
+  const sameOwnerRetry = await claimPaidFetchLease._handler(postBoundary.ctx, postBoundaryArgs);
+  assert.equal(sameOwnerRetry.claimed, false);
+  assert.equal(sameOwnerRetry.reason, "recent_provider_attempt");
+  assert.equal(postBoundary.tables.ingestionCostReservations.length, 1);
+  postBoundary.tables.instagramPaidFetchControl[0].leaseExpiresAt = Date.now() - 1;
+  const postBoundaryRetry = await claimPaidFetchLease._handler(postBoundary.ctx, {
+    ...postBoundaryArgs,
+    owner: "post-boundary-owner-b",
+    fetchStartedAt: Date.now(),
+  });
+  assert.equal(postBoundaryRetry.claimed, false);
+  assert.equal(postBoundaryRetry.reason, "recent_provider_attempt");
+  assert.equal(
+    postBoundary.tables.ingestionCostReservations.length,
+    1,
+    "a post-boundary crash must not create a second paid reservation inside cooldown",
+  );
+  assert.equal(postBoundary.tables.ingestionCostReservations[0].status, "reconciled");
+  assert.equal(postBoundary.tables.ingestionDailyBudgets[0].chargedMicros, 40_000);
+  assert.equal(postBoundary.tables.ingestionDailyBudgets[0].reservedMicros, 0);
+
+  const boundaryAwareFinalize = createPaidFetchCrashFixture("source.boundary-aware-finalize");
+  const boundaryAwareFinalizeArgs = {
+    ...common,
+    handle: "source.boundary-aware-finalize",
+    owner: "boundary-aware-finalize-owner",
+    dayKey: "2026-07-30-finalize",
+  };
+  assert.equal(
+    (await claimPaidFetchLease._handler(boundaryAwareFinalize.ctx, boundaryAwareFinalizeArgs)).claimed,
+    true,
+  );
+  await markPaidFetchRequestStarted._handler(boundaryAwareFinalize.ctx, {
+    handle: boundaryAwareFinalizeArgs.handle,
+    owner: boundaryAwareFinalizeArgs.owner,
+    serviceSecret: "qa-durability-secret",
+  });
+  const incorrectCallerRelease = await releasePaidFetchLease._handler(boundaryAwareFinalize.ctx, {
+    owner: boundaryAwareFinalizeArgs.owner,
+    requestStarted: false,
+    serviceSecret: "qa-durability-secret",
+  });
+  assert.equal(
+    incorrectCallerRelease.chargedMicros,
+    40_000,
+    "a boundary-aware durable request receipt must override an incorrect process-local false flag",
+  );
+  assert.equal(incorrectCallerRelease.releasedMicros, 0);
+
+  const legacyBridge = createPaidFetchCrashFixture("source.legacy-bridge");
+  const legacyClaim = await claimPaidFetchLease._handler(legacyBridge.ctx, {
+    ...common,
+    handle: "source.legacy-bridge",
+    owner: "legacy-owner",
+    dayKey: "2026-07-31",
+    attemptCooldownMs: 0,
+    requestBoundaryVersion: undefined,
+  });
+  assert.equal(legacyClaim.claimed, true);
+  assert.equal(
+    typeof legacyBridge.tables.instagramSources[0].lastFetchAttemptAt,
+    "number",
+    "older web images must retain a conservative source-level cooldown receipt",
+  );
+  assert.equal(
+    legacyBridge.tables.ingestionCostReservations[0].requestStartedAt,
+    legacyBridge.tables.instagramSources[0].lastFetchAttemptAt,
+    "older web claims must remain crash-conservative during mixed-version rollout",
+  );
+  const legacyPreflightRelease = await releasePaidFetchLease._handler(legacyBridge.ctx, {
+    owner: "legacy-owner",
+    requestStarted: false,
+    serviceSecret: "qa-durability-secret",
+  });
+  assert.equal(legacyPreflightRelease.chargedMicros, 0);
+  assert.equal(legacyPreflightRelease.releasedMicros, 40_000);
+  assert.equal(
+    legacyBridge.tables.instagramSources[0].lastFetchAttemptAt,
+    undefined,
+    "an older web caller's clean preflight release must remove its conservative claim receipt",
+  );
+  assert.equal(legacyBridge.tables.instagramSources[0].lastFetchStatus, "preflight_released");
+
+  const legacyCrashBridge = createPaidFetchCrashFixture("source.legacy-crash");
+  const legacyCrashArgs = {
+    ...common,
+    handle: "source.legacy-crash",
+    owner: "legacy-crash-owner",
+    dayKey: "2026-08-01",
+    attemptCooldownMs: 23 * 60 * 60_000,
+    requestBoundaryVersion: undefined,
+  };
+  assert.equal((await claimPaidFetchLease._handler(legacyCrashBridge.ctx, legacyCrashArgs)).claimed, true);
+  legacyCrashBridge.tables.instagramPaidFetchControl[0].leaseExpiresAt = Date.now() - 1;
+  const afterWebCutoverRetry = await claimPaidFetchLease._handler(legacyCrashBridge.ctx, {
+    ...legacyCrashArgs,
+    owner: "boundary-aware-owner-after-cutover",
+    requestBoundaryVersion: 1,
+    fetchStartedAt: Date.now(),
+  });
+  assert.equal(afterWebCutoverRetry.claimed, false);
+  assert.equal(afterWebCutoverRetry.reason, "recent_provider_attempt");
+  assert.equal(legacyCrashBridge.tables.ingestionCostReservations.length, 1);
+  assert.equal(legacyCrashBridge.tables.ingestionCostReservations[0].status, "reconciled");
+  assert.equal(legacyCrashBridge.tables.ingestionDailyBudgets[0].chargedMicros, 40_000);
 
   const nPlusOneOldPosts = [
     ...Array.from({ length: 101 }, (_, index) => ({

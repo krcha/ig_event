@@ -35,8 +35,17 @@ type FreshFetchAttemptMetadata = {
   lastFetchAttemptAt?: number;
 };
 
-const listFreshFetchAttemptMetadataQuery =
-  "instagramSources:listFreshFetchAttemptMetadata" as unknown as FunctionReference<"query">;
+const listFreshFetchAttemptMetadataPageQuery =
+  "instagramSources:listFreshFetchAttemptMetadataPage" as unknown as FunctionReference<"query">;
+
+type FreshFetchAttemptMetadataPage = {
+  page: FreshFetchAttemptMetadata[];
+  isDone: boolean;
+  continueCursor: string;
+};
+
+const FRESH_ATTEMPT_PAGE_SIZE = 200;
+const MAX_FRESH_ATTEMPT_PAGES = 10_000;
 
 function parseBatchStateSnapshot(stateJson: string): IngestionBatchStateSnapshot {
   try {
@@ -107,33 +116,55 @@ export async function getRecentFullScrapeAttemptSummary(options: {
     throw new Error("CRON_SECRET is required to read recent provider attempts.");
   }
   const minAttemptAt = options.minCreatedAt ?? Date.now() - FULL_SCRAPE_COOLDOWN_MS;
-  const recentAttempts = (await convex.query(listFreshFetchAttemptMetadataQuery, {
-    minAttemptAt,
-    limit: 5_000,
-    serviceSecret,
-  })) as FreshFetchAttemptMetadata[];
-
   const candidateSet = new Set(normalizedCandidates);
   const recentHandles = new Set<string>();
   let lastFreshScrapeAtMs: number | null = null;
+  let cursor: string | null = null;
+  let completed = false;
 
-  for (const attempt of recentAttempts) {
-    const normalizedHandle = normalizeHandle(attempt.handle);
-    if (!normalizedHandle || !candidateSet.has(normalizedHandle)) {
-      continue;
+  for (let pageIndex = 0; pageIndex < MAX_FRESH_ATTEMPT_PAGES; pageIndex += 1) {
+    const result = (await convex.query(
+      listFreshFetchAttemptMetadataPageQuery,
+      {
+        minAttemptAt,
+        paginationOpts: { numItems: FRESH_ATTEMPT_PAGE_SIZE, cursor },
+        serviceSecret,
+      },
+    )) as FreshFetchAttemptMetadataPage;
+
+    for (const attempt of result.page) {
+      const normalizedHandle = normalizeHandle(attempt.handle);
+      if (!normalizedHandle || !candidateSet.has(normalizedHandle)) {
+        continue;
+      }
+      const attemptedAt = attempt.lastFetchAttemptAt;
+      if (
+        typeof attemptedAt !== "number" ||
+        !Number.isFinite(attemptedAt) ||
+        attemptedAt < minAttemptAt
+      ) {
+        continue;
+      }
+      recentHandles.add(normalizedHandle);
+      if (lastFreshScrapeAtMs === null || attemptedAt > lastFreshScrapeAtMs) {
+        lastFreshScrapeAtMs = attemptedAt;
+      }
     }
-    const attemptedAt = attempt.lastFetchAttemptAt;
-    if (
-      typeof attemptedAt !== "number" ||
-      !Number.isFinite(attemptedAt) ||
-      attemptedAt < minAttemptAt
-    ) {
-      continue;
+
+    if (result.isDone || recentHandles.size === candidateSet.size) {
+      completed = true;
+      break;
     }
-    recentHandles.add(normalizedHandle);
-    if (lastFreshScrapeAtMs === null || attemptedAt > lastFreshScrapeAtMs) {
-      lastFreshScrapeAtMs = attemptedAt;
+    if (!result.continueCursor || result.continueCursor === cursor) {
+      throw new Error("Recent provider-attempt pagination did not advance.");
     }
+    cursor = result.continueCursor;
+  }
+
+  if (!completed) {
+    throw new Error(
+      `Recent provider-attempt pagination exceeded ${MAX_FRESH_ATTEMPT_PAGES} pages.`,
+    );
   }
 
   return {

@@ -115,6 +115,8 @@ export default defineSchema({
     reservedMicros: v.number(),
     chargedMicros: v.optional(v.number()),
     releasedMicros: v.optional(v.number()),
+    requestStartedAt: v.optional(v.number()),
+    requestBoundaryVersion: v.optional(v.number()),
     status: v.union(v.literal("active"), v.literal("reconciled"), v.literal("released")),
     createdAt: v.number(),
     updatedAt: v.number(),

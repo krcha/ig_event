@@ -917,6 +917,8 @@ export const claimPaidFetchLease = mutation({
     dailyBudgetUsd: v.optional(v.number()),
     maxChargeUsd: v.optional(v.number()),
     horizonCutoffMs: v.optional(v.number()),
+    attemptCooldownMs: v.optional(v.number()),
+    requestBoundaryVersion: v.optional(v.literal(1)),
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -929,6 +931,14 @@ export const claimPaidFetchLease = mutation({
     }
 
     const now = Date.now();
+    const attemptCooldownMs = Math.max(
+      0,
+      Math.min(
+        30 * 24 * 60 * 60_000,
+        Math.trunc(args.attemptCooldownMs ?? 23 * 60 * 60_000),
+      ),
+    );
+    const recentAttemptCutoff = now - attemptCooldownMs;
     const control = await ctx.db
       .query("instagramPaidFetchControl")
       .withIndex("by_key", (q) => q.eq("key", "apify"))
@@ -1012,14 +1022,52 @@ export const claimPaidFetchLease = mutation({
 
     if (
       (control.leaseExpiresAt ?? 0) > now &&
-      control.leaseOwner &&
-      control.leaseOwner !== owner
+      control.leaseOwner
     ) {
-      return { claimed: false, reason: "busy" as const };
+      if (control.leaseOwner !== owner || control.leaseHandle !== handle) {
+        return { claimed: false, reason: "busy" as const };
+      }
+      const activeSource = await ctx.db
+        .query("instagramSources")
+        .withIndex("by_handle", (q) => q.eq("handle", handle))
+        .unique();
+      if (
+        attemptCooldownMs > 0 &&
+        typeof activeSource?.lastFetchAttemptAt === "number" &&
+        activeSource.lastFetchAttemptAt >= recentAttemptCutoff
+      ) {
+        return {
+          claimed: false,
+          reason: "recent_provider_attempt" as const,
+          lastFetchAttemptAt: activeSource.lastFetchAttemptAt,
+        };
+      }
+      const resumedFetchStartedAt = control.leaseFetchStartedAt ?? now;
+      const resumedBoundary = getFetchBoundary({
+        successfulFetchThroughAt: activeSource?.lastSuccessfulFetchThroughAt,
+        fetchStartedAt: resumedFetchStartedAt,
+        bootstrapDays: Math.max(
+          1,
+          Math.min(90, Math.trunc(args.bootstrapDays ?? DEFAULT_INGESTION_BOOTSTRAP_DAYS)),
+        ),
+      });
+      return {
+        claimed: true,
+        reason: "resumed_claim" as const,
+        onlyPostsNewerThan: new Date(resumedBoundary.requestNewerThanAt).toISOString(),
+        boundaryKey: control.leaseBoundaryKey,
+        checkpointAt: control.leaseCheckpointAt ?? null,
+        fetchStartedAt: resumedFetchStartedAt,
+        resultsLimit: control.leaseResultsLimit,
+        reservationId: control.leaseReservationId,
+        reservedMicros: control.leaseReservedMicros,
+        expiresAt: control.leaseExpiresAt,
+      };
     }
 
-    // A crashed owner cannot strand reserved budget forever. Conservatively charge
-    // an expired reservation because the provider request may already have started.
+    // A crashed owner cannot strand reserved budget forever. The reservation's
+    // durable request-start receipt separates a pre-boundary crash (release) from
+    // a transport-ambiguous post-boundary crash (charge).
     if (
       (control.leaseExpiresAt ?? 0) <= now &&
       control.leaseReservationId &&
@@ -1034,21 +1082,31 @@ export const claimPaidFetchLease = mutation({
       if (oldReservation?.status === "active") {
         const oldBudget = await ctx.db
           .query("ingestionDailyBudgets")
-          .withIndex("by_key", (q) => q.eq("key", `${oldReservation.provider}:${oldReservation.dayKey}`))
+          .withIndex("by_key", (q) =>
+            q.eq("key", `${oldReservation.provider}:${oldReservation.dayKey}`),
+          )
           .unique();
-        const chargedMicros = oldReservation.reservedMicros;
+        const requestStarted =
+          typeof oldReservation.requestStartedAt === "number" &&
+          Number.isFinite(oldReservation.requestStartedAt);
+        const chargedMicros = requestStarted ? oldReservation.reservedMicros : 0;
+        const releasedMicros = Math.max(0, oldReservation.reservedMicros - chargedMicros);
         if (oldBudget) {
           await ctx.db.patch(oldBudget._id, {
-            reservedMicros: Math.max(0, oldBudget.reservedMicros - oldReservation.reservedMicros),
+            reservedMicros: Math.max(
+              0,
+              oldBudget.reservedMicros - oldReservation.reservedMicros,
+            ),
             chargedMicros: oldBudget.chargedMicros + chargedMicros,
+            releasedMicros: oldBudget.releasedMicros + releasedMicros,
             reconciledCount: oldBudget.reconciledCount + 1,
             updatedAt: now,
           });
         }
         await ctx.db.patch(oldReservation._id, {
           chargedMicros,
-          releasedMicros: 0,
-          status: "reconciled",
+          releasedMicros,
+          status: requestStarted ? "reconciled" : "released",
           updatedAt: now,
         });
       }
@@ -1060,6 +1118,17 @@ export const claimPaidFetchLease = mutation({
       .unique();
     if (source && !source.active) {
       return { claimed: false, reason: "source_inactive" as const };
+    }
+    if (
+      attemptCooldownMs > 0 &&
+      typeof source?.lastFetchAttemptAt === "number" &&
+      source.lastFetchAttemptAt >= recentAttemptCutoff
+    ) {
+      return {
+        claimed: false,
+        reason: "recent_provider_attempt" as const,
+        lastFetchAttemptAt: source.lastFetchAttemptAt,
+      };
     }
     const fetchStartedAt = Math.max(
       1,
@@ -1152,6 +1221,8 @@ export const claimPaidFetchLease = mutation({
       owner,
       handle,
       reservedMicros: reserveMicros,
+      requestStartedAt: args.requestBoundaryVersion === 1 ? undefined : now,
+      requestBoundaryVersion: args.requestBoundaryVersion,
       status: "active",
       createdAt: now,
       updatedAt: now,
@@ -1198,6 +1269,31 @@ export const claimPaidFetchLease = mutation({
       leaseWindowStatus: "active",
       updatedAt: now,
     });
+    // During backend-first rollout or rollback, older web images do not know
+    // about the explicit request-boundary mutation. Preserve their conservative
+    // claim-time receipt, while boundary-aware callers defer it until fetch.
+    if (args.requestBoundaryVersion !== 1) {
+      const compatibilityPatch = {
+        lastFetchAttemptAt: now,
+        lastFetchStatus: "fetching",
+        lastFetchError: undefined,
+        deferredAt: undefined,
+        updatedAt: now,
+      };
+      if (source) {
+        await ctx.db.patch(source._id, compatibilityPatch);
+      } else {
+        await ctx.db.insert("instagramSources", {
+          handle,
+          role: "unknown",
+          active: true,
+          discoveredAt: now,
+          activatedAt: now,
+          ...compatibilityPatch,
+          createdAt: now,
+        });
+      }
+    }
     return {
       claimed: true,
       reason: "claimed" as const,
@@ -1239,12 +1335,34 @@ export const markPaidFetchRequestStarted = mutation({
       throw new Error("Cannot mark provider request from a stale paid-fetch lease.");
     }
 
+    if (!control.leaseReservationId) {
+      throw new Error("Cannot mark provider request without an active budget reservation.");
+    }
+    const reservation = await ctx.db
+      .query("ingestionCostReservations")
+      .withIndex("by_reservationId", (q) =>
+        q.eq("reservationId", control.leaseReservationId as string),
+      )
+      .unique();
+    if (
+      !reservation ||
+      reservation.status !== "active" ||
+      reservation.owner !== owner ||
+      reservation.handle !== handle
+    ) {
+      throw new Error("Cannot mark provider request against a stale budget reservation.");
+    }
+    const requestStartedAt = reservation.requestStartedAt ?? now;
+    if (reservation.requestStartedAt === undefined) {
+      await ctx.db.patch(reservation._id, { requestStartedAt, updatedAt: now });
+    }
+
     const source = await ctx.db
       .query("instagramSources")
       .withIndex("by_handle", (q) => q.eq("handle", handle))
       .unique();
     const patch = {
-      lastFetchAttemptAt: now,
+      lastFetchAttemptAt: requestStartedAt,
       lastFetchStatus: "fetching",
       lastFetchError: undefined,
       deferredAt: undefined,
@@ -1263,7 +1381,7 @@ export const markPaidFetchRequestStarted = mutation({
         createdAt: now,
       });
     }
-    return { marked: true, requestStartedAt: now };
+    return { marked: true, requestStartedAt };
   },
 });
 
@@ -1459,7 +1577,12 @@ export const releasePaidFetchLease = mutation({
         )
         .unique();
       if (reservation?.status === "active") {
-        chargedMicros = args.requestStarted
+        const durableRequestStarted = typeof reservation.requestStartedAt === "number";
+        const requestStarted =
+          reservation.requestBoundaryVersion === 1
+            ? durableRequestStarted || args.requestStarted === true
+            : args.requestStarted ?? durableRequestStarted;
+        chargedMicros = requestStarted
           ? args.actualChargeUsd === undefined
             ? reservation.reservedMicros
             : Math.min(
@@ -1487,6 +1610,27 @@ export const releasePaidFetchLease = mutation({
           status: chargedMicros > 0 ? "reconciled" : "released",
           updatedAt: now,
         });
+        if (
+          !requestStarted &&
+          reservation.requestBoundaryVersion !== 1 &&
+          reservation.handle &&
+          typeof reservation.requestStartedAt === "number"
+        ) {
+          const source = await ctx.db
+            .query("instagramSources")
+            .withIndex("by_handle", (q) => q.eq("handle", reservation.handle as string))
+            .unique();
+          if (
+            source?.lastFetchAttemptAt === reservation.requestStartedAt &&
+            source.lastFetchStatus === "fetching"
+          ) {
+            await ctx.db.patch(source._id, {
+              lastFetchAttemptAt: undefined,
+              lastFetchStatus: "preflight_released",
+              updatedAt: now,
+            });
+          }
+        }
       }
     }
     await ctx.db.patch(control._id, {

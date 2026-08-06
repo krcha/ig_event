@@ -77,21 +77,27 @@ async function listBoundedRecentFullScrapeJobs(
       q.eq("mode", "full_scrape").gte("createdAt", minCreatedAt),
     )
     .order("desc")
-    .take(MAX_RECENT_FULL_SCRAPE_JOB_DOCUMENTS);
+    .take(MAX_RECENT_FULL_SCRAPE_JOB_DOCUMENTS + 1);
+  if (currentJobs.length > MAX_RECENT_FULL_SCRAPE_JOB_DOCUMENTS) {
+    throw new Error(
+      `Legacy full-scrape history exceeded the fail-closed ${MAX_RECENT_FULL_SCRAPE_JOB_DOCUMENTS}-document compatibility budget.`,
+    );
+  }
   const remaining = MAX_RECENT_FULL_SCRAPE_JOB_DOCUMENTS - currentJobs.length;
-  const legacyJobs =
-    remaining > 0
-      ? await ctx.db
-          .query("ingestionJobs")
-          .withIndex("by_mode_createdAt", (q) =>
-            q.eq("mode", undefined).gte("createdAt", minCreatedAt),
-          )
-          .order("desc")
-          .take(remaining)
-      : [];
+  const legacyJobs = await ctx.db
+    .query("ingestionJobs")
+    .withIndex("by_mode_createdAt", (q) =>
+      q.eq("mode", undefined).gte("createdAt", minCreatedAt),
+    )
+    .order("desc")
+    .take(remaining + 1);
+  if (legacyJobs.length > remaining) {
+    throw new Error(
+      `Legacy optional-mode history exceeded the fail-closed ${MAX_RECENT_FULL_SCRAPE_JOB_DOCUMENTS}-document compatibility budget.`,
+    );
+  }
   return [...currentJobs, ...legacyJobs]
-    .sort((left, right) => right.createdAt - left.createdAt)
-    .slice(0, MAX_RECENT_FULL_SCRAPE_JOB_DOCUMENTS);
+    .sort((left, right) => right.createdAt - left.createdAt);
 }
 
 export const listRecentFullScrapeJobs = query({

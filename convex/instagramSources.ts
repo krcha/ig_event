@@ -56,15 +56,26 @@ export const listActive = query({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const limit = Math.max(1, Math.min(5_000, Math.trunc(args.limit ?? 5_000)));
     const explicitSources = await ctx.db
       .query("instagramSources")
       .withIndex("by_active", (q) => q.eq("active", true))
-      .collect();
+      .take(limit + 1);
+    if (explicitSources.length > limit) {
+      throw new Error(
+        `Legacy active-source query exceeded its fail-closed limit of ${limit}; use paginated source queries.`,
+      );
+    }
     const sourcesByHandle = new Map(explicitSources.map((source) => [source.handle, source]));
     const legacyVenues = await ctx.db
       .query("venues")
       .withIndex("by_scrapeActive", (q) => q.eq("scrapeActive", true))
-      .collect();
+      .take(limit + 1);
+    if (legacyVenues.length > limit) {
+      throw new Error(
+        `Legacy venue-source query exceeded its fail-closed limit of ${limit}; use paginated source queries.`,
+      );
+    }
     const venueById = new Map(legacyVenues.map((venue) => [venue._id, venue]));
     const views = await Promise.all(
       explicitSources.map(async (source) => {
@@ -99,7 +110,97 @@ export const listActive = query({
         });
       }
     }
-    return selectSourcesFairly(views, Math.max(1, Math.min(5_000, Math.trunc(args.limit ?? 5_000))));
+    if (views.length > limit) {
+      throw new Error(
+        `Legacy combined active-source query exceeded its fail-closed limit of ${limit}; use paginated source queries.`,
+      );
+    }
+    return selectSourcesFairly(views, limit);
+  },
+});
+
+export const listActiveSourcesPage = query({
+  args: {
+    paginationOpts: paginationOptsValidator,
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const result = await ctx.db
+      .query("instagramSources")
+      .withIndex("by_active", (q) => q.eq("active", true))
+      .paginate(args.paginationOpts);
+    const page = await Promise.all(
+      result.page.map(async (source) =>
+        toSourceView(source, source.venueId ? await ctx.db.get(source.venueId) : null),
+      ),
+    );
+    return { ...result, page };
+  },
+});
+
+export const listLegacyVenueSourcesPage = query({
+  args: {
+    paginationOpts: paginationOptsValidator,
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const result = await ctx.db
+      .query("venues")
+      .withIndex("by_scrapeActive", (q) => q.eq("scrapeActive", true))
+      .paginate(args.paginationOpts);
+    return {
+      ...result,
+      page: result.page.flatMap((venue) => {
+        const handle = normalizeInstagramHandle(venue.instagramHandle);
+        if (!handle) return [];
+        const role = roleForLegacyVenue(venue);
+        return [{
+          _id: undefined,
+          handle,
+          role,
+          venueId: role === "venue" ? venue._id : undefined,
+          venueName: role === "venue" ? venue.name : undefined,
+          active: true,
+          lastSeenFollowingAt: undefined,
+          lastFetchAttemptAt: undefined,
+          lastSuccessfulFetchThroughAt: undefined,
+          lastFetchCompletedAt: undefined,
+          lastFetchStatus: "legacy_fallback",
+          continuationActive: undefined,
+          continuationBoundaryAt: undefined,
+          continuationResultsLimit: undefined,
+          continuationReason: undefined,
+          deferredAt: undefined,
+        }];
+      }),
+    };
+  },
+});
+
+export const listFreshFetchAttemptMetadataPage = query({
+  args: {
+    minAttemptAt: v.number(),
+    paginationOpts: paginationOptsValidator,
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const result = await ctx.db
+      .query("instagramSources")
+      .withIndex("by_active_lastFetchAttemptAt", (q) =>
+        q.eq("active", true).gte("lastFetchAttemptAt", args.minAttemptAt),
+      )
+      .order("desc")
+      .paginate(args.paginationOpts);
+    return {
+      ...result,
+      page: result.page.map((source) => ({
+        handle: source.handle,
+        lastFetchAttemptAt: source.lastFetchAttemptAt,
+      })),
+    };
   },
 });
 
@@ -118,7 +219,12 @@ export const listFreshFetchAttemptMetadata = query({
         q.eq("active", true).gte("lastFetchAttemptAt", args.minAttemptAt),
       )
       .order("desc")
-      .take(limit);
+      .take(limit + 1);
+    if (sources.length > limit) {
+      throw new Error(
+        `Legacy recent-attempt query exceeded its fail-closed limit of ${limit}; use paginated attempt queries.`,
+      );
+    }
     return sources.map((source) => ({
       handle: source.handle,
       lastFetchAttemptAt: source.lastFetchAttemptAt,

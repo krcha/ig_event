@@ -294,8 +294,21 @@ const blockProviderMutation =
   "scrapedPosts:blockProvider" as unknown as FunctionReference<"mutation">;
 const releaseProviderLeaseMutation =
   "scrapedPosts:releaseProviderLease" as unknown as FunctionReference<"mutation">;
-const listActiveInstagramSourcesQuery =
-  "instagramSources:listActive" as unknown as FunctionReference<"query">;
+const listActiveInstagramSourcesPageQuery =
+  "instagramSources:listActiveSourcesPage" as unknown as FunctionReference<"query">;
+const listLegacyVenueSourcesPageQuery =
+  "instagramSources:listLegacyVenueSourcesPage" as unknown as FunctionReference<"query">;
+type ActiveInstagramSourceView = {
+  handle?: string;
+  role?: "venue" | "promoter" | "unknown";
+};
+type SourcePage = {
+  page: ActiveInstagramSourceView[];
+  isDone: boolean;
+  continueCursor: string;
+};
+const ACTIVE_SOURCE_PAGE_SIZE = 200;
+const MAX_ACTIVE_SOURCE_PAGES = 10_000;
 const SCRAPED_POST_UPSERT_BATCH_SIZE = 25;
 const DEFAULT_SCRAPED_POST_PAGE_SIZE = 25;
 const MAX_SCRAPED_POST_PAGE_SIZE = 100;
@@ -305,6 +318,8 @@ const DEFAULT_INGESTION_POST_STEP_LIMIT = 8;
 const MAX_INGESTION_POST_STEP_LIMIT = 50;
 const DEFAULT_DIRECT_FULL_SCRAPE_CONCURRENCY = 4;
 const MAX_DIRECT_FULL_SCRAPE_CONCURRENCY = 16;
+const DEFAULT_PROVIDER_ATTEMPT_COOLDOWN_HOURS = 23;
+const MAX_PROVIDER_ATTEMPT_COOLDOWN_HOURS = 24 * 30;
 const MAX_INGESTION_BATCH_SIZE = 64;
 const EXISTING_EVENT_IMPORT_LIMIT_PER_STATUS = 1000;
 const STATIC_VENUE_BY_HANDLE: Record<string, string> = {
@@ -951,6 +966,17 @@ function normalizeDirectFullScrapeConcurrency(
   }
 
   return Math.min(parsed, MAX_DIRECT_FULL_SCRAPE_CONCURRENCY);
+}
+
+function getProviderAttemptCooldownMs(
+  value: string | undefined = process.env.CRON_FULL_SCRAPE_COOLDOWN_HOURS,
+): number {
+  const hours = normalizeBoundedPositiveInteger({
+    value,
+    defaultValue: DEFAULT_PROVIDER_ATTEMPT_COOLDOWN_HOURS,
+    maxValue: MAX_PROVIDER_ATTEMPT_COOLDOWN_HOURS,
+  });
+  return hours * 60 * 60_000;
 }
 
 function normalizeBoundedPositiveInteger(options: {
@@ -4355,6 +4381,51 @@ async function runApprovedDuplicateCleanupForIngestion(
   }
 }
 
+async function loadAllActiveInstagramSources(
+  client: ConvexHttpClient,
+  serviceSecret: string,
+): Promise<ActiveInstagramSourceView[]> {
+  const sourcesByHandle = new Map<string, ActiveInstagramSourceView>();
+  const partitions = [
+    { query: listLegacyVenueSourcesPageQuery, overwrite: false },
+    { query: listActiveInstagramSourcesPageQuery, overwrite: true },
+  ];
+
+  for (const partition of partitions) {
+    let cursor: string | null = null;
+    let completed = false;
+    for (let pageIndex = 0; pageIndex < MAX_ACTIVE_SOURCE_PAGES; pageIndex += 1) {
+      const result = (await client.query(
+        partition.query,
+        withServiceSecret(
+          { paginationOpts: { numItems: ACTIVE_SOURCE_PAGE_SIZE, cursor } },
+          serviceSecret,
+        ),
+      )) as SourcePage;
+      for (const source of result.page) {
+        const handle = normalizeHandle(source.handle ?? "");
+        if (!handle || (!partition.overwrite && sourcesByHandle.has(handle))) continue;
+        sourcesByHandle.set(handle, { ...source, handle });
+      }
+      if (result.isDone) {
+        completed = true;
+        break;
+      }
+      if (!result.continueCursor || result.continueCursor === cursor) {
+        throw new Error("Active Instagram source pagination did not advance.");
+      }
+      cursor = result.continueCursor;
+    }
+    if (!completed) {
+      throw new Error(
+        `Active Instagram source pagination exceeded ${MAX_ACTIVE_SOURCE_PAGES} pages.`,
+      );
+    }
+  }
+
+  return [...sourcesByHandle.values()];
+}
+
 async function loadIngestionVenueContext(
   client: ConvexHttpClient,
   serviceSecret: string,
@@ -4370,10 +4441,7 @@ async function loadIngestionVenueContext(
       serviceSecret,
     );
     try {
-      const sources = (await client.query(listActiveInstagramSourcesQuery, {
-        limit: 5_000,
-        serviceSecret,
-      })) as Array<{ handle?: string; role?: "venue" | "promoter" | "unknown" }>;
+      const sources = await loadAllActiveInstagramSources(client, serviceSecret);
       sourceRolesByHandle = Object.fromEntries(
         sources
           .map((source) => [normalizeHandle(source.handle ?? ""), source.role] as const)
@@ -10567,10 +10635,7 @@ export async function getActiveVenueHandles(options?: {
 }): Promise<string[]> {
   const client = getConvexClient();
   const serviceSecret = getConfiguredServiceSecret(options?.serviceSecret);
-  const sources = (await client.query(listActiveInstagramSourcesQuery, {
-    limit: 5_000,
-    serviceSecret,
-  })) as Array<{ handle?: string }>;
+  const sources = await loadAllActiveInstagramSources(client, serviceSecret);
   const uniqueHandles = new Set<string>();
 
   for (const source of sources) {
@@ -10786,6 +10851,8 @@ async function fetchFreshPostsForHandlesInParallel(
                   dayKey: getBudgetDayKey(new Date(fetchStartedAt)),
                   dailyBudgetUsd: budget.dailyBudgetMicros / 1_000_000,
                   maxChargeUsd: budget.maxChargePerHandleMicros / 1_000_000,
+                  attemptCooldownMs: getProviderAttemptCooldownMs(),
+                  requestBoundaryVersion: 1,
                   ...(options.daysBack && options.daysBack > 0
                     ? { horizonCutoffMs: fetchStartedAt - options.daysBack * 86_400_000 }
                     : {}),
@@ -10798,7 +10865,12 @@ async function fetchFreshPostsForHandlesInParallel(
         if (!lease.claimed) {
           const handleSummary = getOrCreateHandleSummary(summary, handle);
           const denialReason = lease.reason ?? "unknown";
-          markFreshFetchNotAttempted(summary, handle, denialReason, true);
+          markFreshFetchNotAttempted(
+            summary,
+            handle,
+            denialReason,
+            denialReason !== "recent_provider_attempt",
+          );
           if (denialReason === "hard_cap_saturated") {
             handleSummary.fetchHardBlocked = (handleSummary.fetchHardBlocked ?? 0) + 1;
           }
