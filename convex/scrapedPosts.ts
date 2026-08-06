@@ -17,6 +17,8 @@ import {
 
 const DEFAULT_PUBLIC_RECENT_POST_LIMIT = 6;
 const MAX_PUBLIC_RECENT_POST_LIMIT = 12;
+const MIN_PROCESSING_RETRY_DELAY_MS = 15 * 60_000;
+const MAX_PROCESSING_RETRY_DELAY_MS = 6 * 60 * 60_000;
 const processingStatusValidator = v.union(
   v.literal("completed"),
   v.literal("retryable_failure"),
@@ -62,6 +64,19 @@ function parsePostedAtMs(postedAt: string | undefined): number | undefined {
 
   const parsed = Date.parse(postedAt);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function getProcessingRetryAt(now: number, attempts: number | undefined): number {
+  const retryIndex = Math.max(0, Math.min(5, Math.trunc(attempts ?? 1) - 1));
+  const delayMs = Math.min(
+    MAX_PROCESSING_RETRY_DELAY_MS,
+    MIN_PROCESSING_RETRY_DELAY_MS * 2 ** retryIndex,
+  );
+  return now + delayMs;
+}
+
+function stringArraysEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function normalizePublicRecentPostLimit(value: number | undefined): number {
@@ -401,12 +416,21 @@ export const upsertManyByHandle = mutation({
           (post.postType !== undefined && post.postType !== existing.postType) ||
           (post.locationName !== undefined && post.locationName !== existing.locationName) ||
           (effectivePostedAt !== undefined && effectivePostedAt !== existing.postedAt);
+        const hasImageCandidatesChanged = !stringArraysEqual(
+          imageUrls,
+          existing.imageUrls ?? [],
+        );
+        const shouldWakeRetry =
+          hasImageCandidatesChanged && existing.processingStatus === "retryable_failure";
         await ctx.db.patch(existing._id, {
           ...nextRecord,
           sourceRevision: hasSourceContentChanged
             ? (existing.sourceRevision ?? 1) + 1
             : (existing.sourceRevision ?? 1),
-          blocksPaidFetch: hasSourceContentChanged ? true : (existing.blocksPaidFetch ?? true),
+          blocksPaidFetch:
+            hasSourceContentChanged || shouldWakeRetry
+              ? true
+              : (existing.blocksPaidFetch ?? true),
           imageUrl: hasDurableImage ? existing.imageUrl : undefined,
           imageStorageId: hasDurableImage ? existing.imageStorageId : undefined,
           ...(hasSourceContentChanged
@@ -414,6 +438,7 @@ export const upsertManyByHandle = mutation({
                 processingStatus: "pending" as const,
                 processingOutcome: undefined,
                 processingError: undefined,
+                processingRetryAt: undefined,
                 analysisRevision: undefined,
                 analysisResultJson: undefined,
                 analysisCompletedAt: undefined,
@@ -424,7 +449,9 @@ export const upsertManyByHandle = mutation({
                 processingLeaseOwner: undefined,
                 processingLeaseExpiresAt: undefined,
               }
-            : {}),
+            : shouldWakeRetry
+              ? { processingRetryAt: undefined }
+              : {}),
         });
       } else {
         await ctx.db.insert("scrapedPosts", {
@@ -482,6 +509,16 @@ export const claimProcessing = mutation({
     }
     const now = Date.now();
     if (
+      existing.processingStatus === "retryable_failure" &&
+      (existing.processingRetryAt ?? 0) > now
+    ) {
+      return {
+        claimed: false,
+        reason: "deferred" as const,
+        retryAt: existing.processingRetryAt,
+      };
+    }
+    if (
       existing.processingStatus === "processing" &&
       (existing.processingLeaseExpiresAt ?? 0) > now &&
       existing.processingLeaseOwner !== args.owner
@@ -497,6 +534,7 @@ export const claimProcessing = mutation({
       processingLeaseExpiresAt: now + leaseMs,
       processingOutcome: "processing",
       processingError: undefined,
+      processingRetryAt: undefined,
       lastProcessedAt: now,
     });
     return {
@@ -610,9 +648,16 @@ export const getBacklogStateByHandle = query({
         continue;
       }
       if (
+        post.processingStatus === "retryable_failure" &&
+        (post.processingRetryAt ?? 0) > now
+      ) {
+        continue;
+      }
+      const postedAtMs = post.postedAtMs ?? parsePostedAtMs(post.postedAt);
+      if (
         Number.isFinite(args.horizonCutoffMs) &&
-        typeof post.postedAtMs === "number" &&
-        post.postedAtMs < (args.horizonCutoffMs as number) &&
+        typeof postedAtMs === "number" &&
+        postedAtMs < (args.horizonCutoffMs as number) &&
         post.processingStatus !== "processing"
       ) {
         continue;
@@ -742,10 +787,91 @@ export const backfillPaidFetchFlags = mutation({
       const isTerminal =
         post.processingStatus === "completed" &&
         ["terminal_no_event", "terminal_permanent_failure", "receipt_complete"].includes(post.processingOutcome ?? "");
-      await ctx.db.patch(id, { blocksPaidFetch: !isTerminal });
+      const isRetryable = post.processingStatus === "retryable_failure";
+      await ctx.db.patch(id, {
+        blocksPaidFetch: !isTerminal && !isRetryable,
+        ...(isRetryable
+          ? { processingRetryAt: getProcessingRetryAt(Date.now(), post.processingAttempts) }
+          : {}),
+      });
       updated += 1;
     }
     return { updated };
+  },
+});
+
+export const reconcilePaidFetchFlags = mutation({
+  args: {
+    ids: v.array(v.id("scrapedPosts")),
+    horizonCutoffMs: v.number(),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const now = Date.now();
+    let scanned = 0;
+    let releasedTerminal = 0;
+    let releasedRetryable = 0;
+    let releasedOutOfHorizon = 0;
+    let releasedExpiredLease = 0;
+
+    for (const id of [...new Set(args.ids)].slice(0, 100)) {
+      const post = await ctx.db.get(id);
+      if (!post || post.blocksPaidFetch !== true) continue;
+      scanned += 1;
+      const isTerminal =
+        post.processingStatus === "completed" &&
+        ["terminal_no_event", "terminal_permanent_failure", "receipt_complete"].includes(
+          post.processingOutcome ?? "",
+        );
+      if (isTerminal) {
+        await ctx.db.patch(id, { blocksPaidFetch: false, processingRetryAt: undefined });
+        releasedTerminal += 1;
+        continue;
+      }
+      if (post.processingStatus === "retryable_failure") {
+        await ctx.db.patch(id, {
+          blocksPaidFetch: false,
+          processingRetryAt: getProcessingRetryAt(now, post.processingAttempts),
+        });
+        releasedRetryable += 1;
+        continue;
+      }
+      if (
+        post.processingStatus === "processing" &&
+        (post.processingLeaseExpiresAt ?? 0) <= now
+      ) {
+        await ctx.db.patch(id, {
+          processingStatus: "retryable_failure",
+          blocksPaidFetch: false,
+          processingOutcome: "processing_lease_expired",
+          processingError: post.processingError ?? "Processing lease expired before completion.",
+          processingLeaseOwner: undefined,
+          processingLeaseExpiresAt: undefined,
+          processingRetryAt: getProcessingRetryAt(now, post.processingAttempts),
+          lastProcessedAt: now,
+        });
+        releasedExpiredLease += 1;
+        continue;
+      }
+      const postedAtMs = post.postedAtMs ?? parsePostedAtMs(post.postedAt);
+      if (
+        post.processingStatus !== "processing" &&
+        postedAtMs !== undefined &&
+        postedAtMs < args.horizonCutoffMs
+      ) {
+        await ctx.db.patch(id, { blocksPaidFetch: false });
+        releasedOutOfHorizon += 1;
+      }
+    }
+
+    return {
+      scanned,
+      releasedTerminal,
+      releasedRetryable,
+      releasedOutOfHorizon,
+      releasedExpiredLease,
+    };
   },
 });
 
@@ -818,21 +944,54 @@ export const claimPaidFetchLease = mutation({
       .query("scrapedPosts")
       .withIndex("by_blocksPaidFetch", (q) => q.eq("blocksPaidFetch", true))
       .first();
-    let reconciledOutOfHorizon = 0;
-    while (
-      blocker &&
-      horizonCutoffMs !== null &&
-      typeof blocker.postedAtMs === "number" &&
-      blocker.postedAtMs < horizonCutoffMs &&
-      blocker.processingStatus !== "processing" &&
-      reconciledOutOfHorizon < 50
-    ) {
-      await ctx.db.patch(blocker._id, {
-        blocksPaidFetch: false,
-        processingOutcome: blocker.processingOutcome ?? "outside_ingestion_horizon",
-        updatedAt: now,
-      });
-      reconciledOutOfHorizon += 1;
+    let reconciledBlockers = 0;
+    while (blocker && reconciledBlockers < 100) {
+      const isTerminal =
+        blocker.processingStatus === "completed" &&
+        ["terminal_no_event", "terminal_permanent_failure", "receipt_complete"].includes(
+          blocker.processingOutcome ?? "",
+        );
+      const isRetryable = blocker.processingStatus === "retryable_failure";
+      const isExpiredProcessing =
+        blocker.processingStatus === "processing" &&
+        (blocker.processingLeaseExpiresAt ?? 0) <= now;
+      const postedAtMs = blocker.postedAtMs ?? parsePostedAtMs(blocker.postedAt);
+      const isOutOfHorizon =
+        horizonCutoffMs !== null &&
+        typeof postedAtMs === "number" &&
+        postedAtMs < horizonCutoffMs &&
+        blocker.processingStatus !== "processing";
+
+      if (!isTerminal && !isRetryable && !isExpiredProcessing && !isOutOfHorizon) {
+        break;
+      }
+
+      if (isExpiredProcessing) {
+        await ctx.db.patch(blocker._id, {
+          processingStatus: "retryable_failure",
+          blocksPaidFetch: false,
+          processingOutcome: "processing_lease_expired",
+          processingError:
+            blocker.processingError ?? "Processing lease expired before completion.",
+          processingLeaseOwner: undefined,
+          processingLeaseExpiresAt: undefined,
+          processingRetryAt: getProcessingRetryAt(now, blocker.processingAttempts),
+          lastProcessedAt: now,
+          updatedAt: now,
+        });
+      } else {
+        await ctx.db.patch(blocker._id, {
+          blocksPaidFetch: false,
+          ...(isRetryable
+            ? { processingRetryAt: getProcessingRetryAt(now, blocker.processingAttempts) }
+            : { processingRetryAt: undefined }),
+          ...(isOutOfHorizon && !isTerminal
+            ? { processingOutcome: blocker.processingOutcome ?? "outside_ingestion_horizon" }
+            : {}),
+          updatedAt: now,
+        });
+      }
+      reconciledBlockers += 1;
       blocker = await ctx.db
         .query("scrapedPosts")
         .withIndex("by_blocksPaidFetch", (q) => q.eq("blocksPaidFetch", true))
@@ -1538,13 +1697,19 @@ export const recordProcessingResult = mutation({
       throw new Error("Completed scraped-post processing requires an explicit terminal outcome.");
     }
 
+    const isRetryable = args.status === "retryable_failure";
     await ctx.db.patch(existing._id, {
       processingStatus: args.status,
-      blocksPaidFetch: !isExplicitTerminal,
+      // Retryable work remains durable but is circuit-delayed instead of
+      // globally deadlocking every subsequent paid source fetch.
+      blocksPaidFetch: false,
       processingOutcome: args.outcome.slice(0, 160),
       processingError: args.error?.slice(0, 1_000),
       processingLeaseOwner: undefined,
       processingLeaseExpiresAt: undefined,
+      processingRetryAt: isRetryable
+        ? getProcessingRetryAt(now, existing.processingAttempts)
+        : undefined,
       lastProcessedAt: now,
     });
   },

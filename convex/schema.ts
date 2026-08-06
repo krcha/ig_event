@@ -330,6 +330,7 @@ export default defineSchema({
     analysisTotalTokens: v.optional(v.number()),
     processingLeaseOwner: v.optional(v.string()),
     processingLeaseExpiresAt: v.optional(v.number()),
+    processingRetryAt: v.optional(v.number()),
     lastProcessedAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),

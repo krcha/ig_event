@@ -11,7 +11,11 @@ import {
 } from "../lib/pipeline/instagram-ingestion-durability.ts";
 import {
   claimPaidFetchLease,
+  claimProcessing,
+  getBacklogStateByHandle,
+  reconcilePaidFetchFlags,
   recordOpenAiAnalysis,
+  recordProcessingResult,
   recordPaidFetchWindowSaturation,
   recordPaidFetchWindowSuccess,
   releasePaidFetchLease,
@@ -259,6 +263,32 @@ try {
     ],
     scrapedPosts: [
       {
+        _id: "terminal-stale-blocker",
+        handle: "terminal.source",
+        postId: "terminal-post",
+        blocksPaidFetch: true,
+        processingStatus: "completed",
+        processingOutcome: "receipt_complete",
+      },
+      {
+        _id: "retryable-stale-blocker",
+        handle: "retry.source",
+        postId: "retry-post",
+        blocksPaidFetch: true,
+        processingStatus: "retryable_failure",
+        processingAttempts: 2,
+      },
+      {
+        _id: "expired-processing-blocker",
+        handle: "expired.source",
+        postId: "expired-post",
+        blocksPaidFetch: true,
+        processingStatus: "processing",
+        processingAttempts: 1,
+        processingLeaseOwner: "dead-owner",
+        processingLeaseExpiresAt: mutationFetchStartedAt - 1,
+      },
+      {
         _id: "old-out-of-horizon-blocker",
         handle: "old.source",
         postId: "old-post",
@@ -297,9 +327,17 @@ try {
   const firstClaim = await claimPaidFetchLease._handler(ctx, { ...common, owner: "owner-a" });
   assert.equal(firstClaim.claimed, true);
   assert.equal(
-    tables.scrapedPosts[0].blocksPaidFetch,
-    false,
-    "out-of-horizon saved rows must be reconciled before evaluating the paid-fetch gate",
+    tables.scrapedPosts.filter((post) => post.blocksPaidFetch === true).length,
+    0,
+    "terminal, retryable, expired-lease, and out-of-horizon poison rows must all be reconciled before evaluating the paid-fetch gate",
+  );
+  assert.equal(
+    tables.scrapedPosts.find((post) => post._id === "expired-processing-blocker").processingStatus,
+    "retryable_failure",
+  );
+  assert.ok(
+    tables.scrapedPosts.find((post) => post._id === "retryable-stale-blocker").processingRetryAt >
+      mutationFetchStartedAt,
   );
   assert.equal(firstClaim.resultsLimit, 5);
   assert.equal(Date.parse(firstClaim.onlyPostsNewerThan), checkpointBefore - 5 * 60_000);
@@ -429,6 +467,101 @@ try {
     recordOpenAiAnalysis._handler(analysisCtx, { ...analysisArgs, sourceRevision: 4 }),
     /stale processing fence/i,
   );
+
+  const retryStartedAt = Date.now();
+  const { db: retryDb, tables: retryTables } = createDb({
+    scrapedPosts: [
+      {
+        _id: "saved-post-retry",
+        handle: "source.retry",
+        postId: "post-retry",
+        instagramPostUrl: "https://www.instagram.com/p/post-retry/",
+        sourceRevision: 2,
+        processingStatus: "processing",
+        processingAttempts: 3,
+        processingLeaseOwner: "retry-owner",
+        processingLeaseExpiresAt: retryStartedAt + 60_000,
+        blocksPaidFetch: true,
+      },
+    ],
+  });
+  const retryCtx = { auth: { getUserIdentity: async () => null }, db: retryDb };
+  await recordProcessingResult._handler(retryCtx, {
+    handle: "source.retry",
+    postId: "post-retry",
+    status: "retryable_failure",
+    outcome: "processing_exception",
+    error: "transient failure",
+    owner: "retry-owner",
+    sourceRevision: 2,
+    serviceSecret: "qa-durability-secret",
+  });
+  const retryPost = retryTables.scrapedPosts[0];
+  assert.equal(retryPost.blocksPaidFetch, false);
+  assert.ok(retryPost.processingRetryAt > retryStartedAt);
+  assert.deepEqual(
+    await getBacklogStateByHandle._handler(retryCtx, {
+      handle: "source.retry",
+      horizonCutoffMs: retryStartedAt - 10 * 24 * 60 * 60_000,
+      serviceSecret: "qa-durability-secret",
+    }),
+    { actionable: 0, busy: 0, total: 1 },
+    "circuit-delayed retryable rows must not block a fresh fetch for the same handle",
+  );
+  assert.deepEqual(
+    await claimProcessing._handler(retryCtx, {
+      handle: "source.retry",
+      postId: "post-retry",
+      owner: "next-owner",
+      serviceSecret: "qa-durability-secret",
+    }),
+    {
+      claimed: false,
+      reason: "deferred",
+      retryAt: retryPost.processingRetryAt,
+    },
+  );
+  retryPost.processingRetryAt = Date.now() - 1;
+  const dueClaim = await claimProcessing._handler(retryCtx, {
+    handle: "source.retry",
+    postId: "post-retry",
+    owner: "next-owner",
+    serviceSecret: "qa-durability-secret",
+  });
+  assert.equal(dueClaim.claimed, true);
+  assert.equal(retryPost.blocksPaidFetch, true);
+  assert.equal(retryPost.processingRetryAt, undefined);
+
+  const now = Date.now();
+  const cutoff = now - 10 * 24 * 60 * 60_000;
+  const { db: reconcileDb, tables: reconcileTables } = createDb({
+    scrapedPosts: [
+      { _id: "retryable", processingStatus: "retryable_failure", processingAttempts: 2, blocksPaidFetch: true },
+      { _id: "old-pending", processingStatus: "pending", postedAtMs: cutoff - 1, blocksPaidFetch: true },
+      { _id: "expired", processingStatus: "processing", processingLeaseExpiresAt: now - 1, blocksPaidFetch: true },
+      { _id: "active", processingStatus: "processing", processingLeaseExpiresAt: now + 60_000, blocksPaidFetch: true },
+      { _id: "terminal", processingStatus: "completed", processingOutcome: "terminal_no_event", blocksPaidFetch: true },
+      { _id: "recent", processingStatus: "pending", postedAtMs: cutoff + 1, blocksPaidFetch: true },
+    ],
+  });
+  const reconcileCtx = { auth: { getUserIdentity: async () => null }, db: reconcileDb };
+  assert.deepEqual(
+    await reconcilePaidFetchFlags._handler(reconcileCtx, {
+      ids: reconcileTables.scrapedPosts.map((post) => post._id),
+      horizonCutoffMs: cutoff,
+      serviceSecret: "qa-durability-secret",
+    }),
+    {
+      scanned: 6,
+      releasedTerminal: 1,
+      releasedRetryable: 1,
+      releasedOutOfHorizon: 1,
+      releasedExpiredLease: 1,
+    },
+  );
+  assert.equal(reconcileTables.scrapedPosts.find((post) => post._id === "active").blocksPaidFetch, true);
+  assert.equal(reconcileTables.scrapedPosts.find((post) => post._id === "recent").blocksPaidFetch, true);
+  assert.equal(reconcileTables.scrapedPosts.find((post) => post._id === "expired").processingStatus, "retryable_failure");
 
   const scrapedPostsSource = readFileSync(
     new URL("../convex/scrapedPosts.ts", import.meta.url),

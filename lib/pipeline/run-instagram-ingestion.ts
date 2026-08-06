@@ -1195,10 +1195,11 @@ type SavedScrapedPostRecord = {
   postedAtMs?: number;
   sourceKey?: string;
   username: string;
-  processingStatus?: "pending" | "completed" | "retryable_failure";
+  processingStatus?: "pending" | "processing" | "completed" | "retryable_failure";
   processingAttempts?: number;
   processingOutcome?: string;
   processingError?: string;
+  processingRetryAt?: number;
   lastProcessedAt?: number;
   createdAt: number;
   updatedAt: number;
@@ -4449,14 +4450,19 @@ async function loadSavedScrapedPostsForHandle(
     withServiceSecret({ handle }, serviceSecret),
   )) as SavedScrapedPostRecord[];
 
+  const now = Date.now();
   const filtered = savedPosts
     .filter(
       (record) =>
         !(
           record.processingStatus === "completed" &&
-          ["terminal_no_event", "receipt_complete"].includes(
+          ["terminal_no_event", "terminal_permanent_failure", "receipt_complete"].includes(
             record.processingOutcome ?? "",
           )
+        ) &&
+        !(
+          record.processingStatus === "retryable_failure" &&
+          (record.processingRetryAt ?? 0) > now
         ),
     )
     .map(mapSavedScrapedPostToInstagramPost)
@@ -4510,7 +4516,15 @@ async function loadSavedScrapedPostPageForHandle(options: {
     }
     if (
       record.processingStatus === "completed" &&
-      ["terminal_no_event", "receipt_complete"].includes(record.processingOutcome ?? "")
+      ["terminal_no_event", "terminal_permanent_failure", "receipt_complete"].includes(
+        record.processingOutcome ?? "",
+      )
+    ) {
+      continue;
+    }
+    if (
+      record.processingStatus === "retryable_failure" &&
+      (record.processingRetryAt ?? 0) > Date.now()
     ) {
       continue;
     }

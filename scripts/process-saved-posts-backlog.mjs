@@ -27,6 +27,21 @@ for (const filePath of [".env.local", ".env", "events-api-keys.env", ".env.self-
 }
 
 const apply = process.argv.includes("--apply");
+const daysBackArg = process.argv.find((value) => value.startsWith("--days-back="));
+const parsedDaysBack = Number.parseInt(daysBackArg?.split("=", 2)[1] ?? "10", 10);
+const daysBack = Number.isFinite(parsedDaysBack)
+  ? Math.max(1, Math.min(30, parsedDaysBack))
+  : 10;
+const auditConcurrencyArg = process.argv.find((value) =>
+  value.startsWith("--audit-concurrency="),
+);
+const parsedAuditConcurrency = Number.parseInt(
+  auditConcurrencyArg?.split("=", 2)[1] ?? "2",
+  10,
+);
+const auditConcurrency = Number.isFinite(parsedAuditConcurrency)
+  ? Math.max(1, Math.min(4, parsedAuditConcurrency))
+  : 2;
 const convexUrl =
   process.env.NEXT_PUBLIC_CONVEX_URL ??
   process.env.CONVEX_SELF_HOSTED_URL ??
@@ -43,6 +58,26 @@ const { getActiveVenueHandles, runInstagramIngestion } = await import(
   "../lib/pipeline/run-instagram-ingestion.ts"
 );
 const client = new ConvexHttpClient(convexUrl);
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withConvexRetry(label, operation) {
+  let lastError;
+  for (let attempt = 1; attempt <= 6; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt === 6) break;
+      await sleep(250 * 2 ** (attempt - 1));
+    }
+  }
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`${label} failed after retries: ${message}`);
+}
+
 const activeHandles = await getActiveVenueHandles({ serviceSecret });
 
 async function listAllSavedHandles() {
@@ -54,10 +89,12 @@ async function listAllSavedHandles() {
       throw new Error("Cursor cycle while listing saved handles.");
     }
     if (cursor) seenCursors.add(cursor);
-    const page = await client.query("scrapedPosts:listAllHandlesPaginated", {
-      paginationOpts: { cursor, numItems: 100 },
-      serviceSecret,
-    });
+    const page = await withConvexRetry("List saved handles", () =>
+      client.query("scrapedPosts:listAllHandlesPaginated", {
+        paginationOpts: { cursor, numItems: 100 },
+        serviceSecret,
+      }),
+    );
     for (const handle of page.page ?? []) {
       if (typeof handle === "string" && handle.trim()) handles.add(handle);
     }
@@ -83,11 +120,13 @@ async function countBacklogForHandle(handle) {
       throw new Error(`Cursor cycle while auditing ${handle}.`);
     }
     if (cursor) seenCursors.add(cursor);
-    const page = await client.query("scrapedPosts:listByHandlePaginated", {
-      handle,
-      paginationOpts: { cursor, numItems: 100 },
-      serviceSecret,
-    });
+    const page = await withConvexRetry(`Audit saved posts for ${handle}`, () =>
+      client.query("scrapedPosts:listByHandlePaginated", {
+        handle,
+        paginationOpts: { cursor, numItems: 100 },
+        serviceSecret,
+      }),
+    );
     for (const post of page.page ?? []) {
       if (post.processingStatus === "completed") completed += 1;
       else if (post.processingStatus === "retryable_failure") retryable += 1;
@@ -143,7 +182,7 @@ async function auditBacklog() {
       );
     }
   }
-  await Promise.all(Array.from({ length: Math.min(8, handles.length) }, () => worker()));
+  await Promise.all(Array.from({ length: Math.min(auditConcurrency, handles.length) }, () => worker()));
   return totals;
 }
 
@@ -152,30 +191,56 @@ async function migratePaidFetchFlags() {
   let scanned = 0;
   let missing = 0;
   let updated = 0;
+  const reconciled = {
+    scanned: 0,
+    releasedTerminal: 0,
+    releasedRetryable: 0,
+    releasedOutOfHorizon: 0,
+    releasedExpiredLease: 0,
+  };
+  const horizonCutoffMs = Date.now() - daysBack * 24 * 60 * 60_000;
   const seenCursors = new Set();
   while (true) {
     if (cursor && seenCursors.has(cursor)) {
       throw new Error("Cursor cycle while migrating paid-fetch flags.");
     }
     if (cursor) seenCursors.add(cursor);
-    const page = await client.query("scrapedPosts:listPaidFetchMigrationPage", {
-      paginationOpts: { cursor, numItems: 100 },
-      serviceSecret,
-    });
-    scanned += page.page?.length ?? 0;
-    const ids = (page.page ?? []).filter((post) => post.missing).map((post) => post._id);
-    missing += ids.length;
-    if (ids.length > 0) {
-      const result = await client.mutation("scrapedPosts:backfillPaidFetchFlags", {
-        ids,
+    const page = await withConvexRetry("List paid-fetch migration page", () =>
+      client.query("scrapedPosts:listPaidFetchMigrationPage", {
+        paginationOpts: { cursor, numItems: 100 },
         serviceSecret,
-      });
+      }),
+    );
+    const pageRows = page.page ?? [];
+    const pageIds = pageRows.map((post) => post._id);
+    scanned += pageRows.length;
+    const missingIds = pageRows.filter((post) => post.missing).map((post) => post._id);
+    missing += missingIds.length;
+    if (missingIds.length > 0) {
+      const result = await withConvexRetry("Backfill paid-fetch flags", () =>
+        client.mutation("scrapedPosts:backfillPaidFetchFlags", {
+          ids: missingIds,
+          serviceSecret,
+        }),
+      );
       updated += result.updated ?? 0;
+    }
+    if (pageIds.length > 0) {
+      const result = await withConvexRetry("Reconcile paid-fetch flags", () =>
+        client.mutation("scrapedPosts:reconcilePaidFetchFlags", {
+          ids: pageIds,
+          horizonCutoffMs,
+          serviceSecret,
+        }),
+      );
+      for (const key of Object.keys(reconciled)) {
+        reconciled[key] += result[key] ?? 0;
+      }
     }
     if (page.isDone) break;
     cursor = page.continueCursor;
   }
-  return { scanned, missing, updated };
+  return { scanned, missing, updated, horizonCutoffMs, reconciled };
 }
 
 const before = await auditBacklog();
@@ -183,6 +248,8 @@ if (!apply) {
   console.log(
     JSON.stringify({
       mode: "dry_run",
+      daysBack,
+      auditConcurrency,
       activeHandles: activeHandles.length,
       savedHandles: handles.length,
       backlog: before,
@@ -203,6 +270,7 @@ try {
   const summary = await runInstagramIngestion({
     handles,
     mode: "saved_posts",
+    daysBack,
     serviceSecret,
   });
   const totals = summary.handles.reduce(
@@ -224,13 +292,14 @@ try {
     },
   );
   const after = await auditBacklog();
-  const paidFetchGate = await client.mutation(
-    "scrapedPosts:markPaidFetchBacklogIndexReady",
-    { serviceSecret },
+  const paidFetchGate = await withConvexRetry("Mark paid-fetch backlog index ready", () =>
+    client.mutation("scrapedPosts:markPaidFetchBacklogIndexReady", { serviceSecret }),
   );
   console.log(
     JSON.stringify({
       mode: "apply",
+      daysBack,
+      auditConcurrency,
       activeHandles: activeHandles.length,
       savedHandles: handles.length,
       before,
@@ -246,6 +315,8 @@ try {
   console.error(
     JSON.stringify({
       mode: "apply",
+      daysBack,
+      auditConcurrency,
       activeHandles: activeHandles.length,
       savedHandles: handles.length,
       before,
