@@ -115,6 +115,7 @@ type HandleSummary = {
   apifyHighWatermarkApplied: number;
   fetchContinuations?: number;
   fetchHardBlocked?: number;
+  freshFetchAttempted?: number;
   insertedEvents: number;
   inserted_events: number;
   insertedApprovedEvents: number;
@@ -10783,6 +10784,8 @@ async function fetchFreshPostsForHandlesInParallel(
           lease.resultsLimit ?? baseResultsLimit,
         );
         providerRequestStarted = true;
+        const fetchSummary = getOrCreateHandleSummary(summary, handle);
+        fetchSummary.freshFetchAttempted = (fetchSummary.freshFetchAttempted ?? 0) + 1;
         const posts = await scrapeInstagramAccount({
           handle,
           resultsLimit: requestedResultsLimit,

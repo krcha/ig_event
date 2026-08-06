@@ -753,12 +753,14 @@ assert.deepEqual(
     ["provider-zero", "gate-denied", "provider-fetched"],
     JSON.stringify({
       handles: [
-        { handle: "provider-zero", errors: [] },
+        { handle: "provider-zero", freshFetchAttempted: 1, errors: [] },
         {
           handle: "gate-denied",
+          freshFetchAttempted: 0,
+          insertedEvents: 1,
           errors: ["Fresh Apify fetch for @gate-denied was not attempted (saved_backlog_present)."],
         },
-        { handle: "provider-fetched", fetchedPosts: 1, errors: [] },
+        { handle: "provider-fetched", freshFetchAttempted: 1, fetchedPosts: 1, errors: [] },
       ],
     }),
   ),

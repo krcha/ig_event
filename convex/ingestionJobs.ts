@@ -141,6 +141,12 @@ export function getFreshCompletedAttemptHandles(
     return handles.filter((handle) => {
       const summary = summaries.get(normalizeJobHandle(handle));
       if (!summary) return true;
+      const freshFetchAttempted = summary.freshFetchAttempted;
+      if (typeof freshFetchAttempted === "number" && Number.isFinite(freshFetchAttempted)) {
+        return freshFetchAttempted > 0;
+      }
+      // Legacy summaries predate the explicit provider-attempt receipt. Retain
+      // their historical progress/error projection only for backward compatibility.
       const hasProgress = COMPLETED_HANDLE_PROGRESS_KEYS.some((key) => {
         const value = summary[key];
         return typeof value === "number" && Number.isFinite(value) && value > 0;
