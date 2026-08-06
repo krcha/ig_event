@@ -25,6 +25,16 @@ export type NormalizedImage = {
   wasConverted: boolean;
 };
 
+export class RemoteMediaHttpError extends Error {
+  readonly status: number;
+
+  constructor(status: number, statusText = "") {
+    super(`Image download failed with status ${status}${statusText ? ` ${statusText}` : ""}`);
+    this.name = "RemoteMediaHttpError";
+    this.status = status;
+  }
+}
+
 function isHttpUrl(value: string): boolean {
   try {
     const url = new URL(value);
@@ -111,9 +121,7 @@ export async function downloadImage(
         });
 
         if (!response.ok) {
-          throw new Error(
-            `Image download failed with status ${response.status} ${response.statusText}`,
-          );
+          throw new RemoteMediaHttpError(response.status, response.statusText);
         }
 
         const contentType = assertImageResponseHeaders(response);
@@ -135,8 +143,10 @@ export async function downloadImage(
     }
   }
 
-  const errorMessage =
-    lastError instanceof Error ? lastError.message : "Unknown download error.";
+  if (lastError instanceof RemoteMediaHttpError) {
+    throw lastError;
+  }
+  const errorMessage = lastError instanceof Error ? lastError.message : "Unknown download error.";
   throw new Error(`Failed to download image after ${maxAttempts} attempts: ${errorMessage}`);
 }
 

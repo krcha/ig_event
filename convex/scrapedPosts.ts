@@ -420,20 +420,21 @@ export const upsertManyByHandle = mutation({
           imageUrls,
           existing.imageUrls ?? [],
         );
-        const shouldWakeRetry =
-          hasImageCandidatesChanged && existing.processingStatus === "retryable_failure";
+        const shouldReprocessForNewMedia =
+          hasImageCandidatesChanged &&
+          (existing.processingStatus === "retryable_failure" ||
+            (existing.processingStatus === "completed" &&
+              existing.processingOutcome === "terminal_permanent_failure"));
+        const shouldResetProcessing = hasSourceContentChanged || shouldReprocessForNewMedia;
         await ctx.db.patch(existing._id, {
           ...nextRecord,
-          sourceRevision: hasSourceContentChanged
+          sourceRevision: shouldResetProcessing
             ? (existing.sourceRevision ?? 1) + 1
             : (existing.sourceRevision ?? 1),
-          blocksPaidFetch:
-            hasSourceContentChanged || shouldWakeRetry
-              ? true
-              : (existing.blocksPaidFetch ?? true),
+          blocksPaidFetch: shouldResetProcessing ? true : (existing.blocksPaidFetch ?? true),
           imageUrl: hasDurableImage ? existing.imageUrl : undefined,
           imageStorageId: hasDurableImage ? existing.imageStorageId : undefined,
-          ...(hasSourceContentChanged
+          ...(shouldResetProcessing
             ? {
                 processingStatus: "pending" as const,
                 processingOutcome: undefined,
@@ -449,9 +450,7 @@ export const upsertManyByHandle = mutation({
                 processingLeaseOwner: undefined,
                 processingLeaseExpiresAt: undefined,
               }
-            : shouldWakeRetry
-              ? { processingRetryAt: undefined }
-              : {}),
+            : {}),
         });
       } else {
         await ctx.db.insert("scrapedPosts", {
@@ -998,7 +997,14 @@ export const claimPaidFetchLease = mutation({
         .first();
     }
     if (blocker) {
-      return { claimed: false, reason: "saved_backlog_present" as const };
+      return {
+        claimed: false,
+        reason:
+          reconciledBlockers >= 100
+            ? ("backlog_maintenance_incomplete" as const)
+            : ("saved_backlog_present" as const),
+        reconciledBlockers,
+      };
     }
 
     if (

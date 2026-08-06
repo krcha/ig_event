@@ -204,8 +204,16 @@ while true; do
     fi
     request_url="${URL}?hostRunRemaining=${host_run_remaining}"
   fi
-  if ! run_request_with_retry "$request_index" "$request_url"; then
-    exit 1
+  if [[ "$JOB" == "ingest-venues" ]]; then
+    if ! run_request_with_retry "$request_index" "$request_url"; then
+      exit 1
+    fi
+  else
+    # Following discovery directly starts paid, non-idempotent provider work.
+    # An ambiguous 5xx/transport failure must not automatically start it again.
+    if ! run_request "$request_index" "$request_url"; then
+      exit 1
+    fi
   fi
   REQUESTS_COMPLETED="$request_index"
 

@@ -85,7 +85,9 @@ export async function fetchAllowedRemoteRasterImage(
 
       if (!response.ok) {
         await response.body?.cancel().catch(() => undefined);
-        throw new Error(`Remote image fetch failed with status ${response.status}.`);
+        throw new Error(
+          `REMOTE_MEDIA_HTTP_STATUS=${response.status}; Remote image fetch failed.`,
+        );
       }
 
       const contentType = assertImageResponseHeaders(response, { maxBytes });

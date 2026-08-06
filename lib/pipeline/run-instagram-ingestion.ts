@@ -23,6 +23,7 @@ import {
 import {
   downloadImage,
   normalizeToJpeg,
+  RemoteMediaHttpError,
   toDataUrl,
 } from "@/lib/ai/prepare-image-for-openai";
 import { getNonExpiringPublicEventImageUrl } from "@/lib/images/public-event-image";
@@ -1020,22 +1021,13 @@ function getErrorMessage(error: unknown): string {
 }
 
 export function isPermanentRemoteMediaFailure(error: unknown): boolean {
-  const status =
-    error && typeof error === "object"
-      ? Number(
-          "status" in error
-            ? (error as { status?: unknown }).status
-            : "statusCode" in error
-              ? (error as { statusCode?: unknown }).statusCode
-              : Number.NaN,
-        )
-      : Number.NaN;
-  if ([403, 404, 410].includes(status)) {
-    return true;
+  if (error instanceof RemoteMediaHttpError) {
+    return [403, 404, 410].includes(error.status);
   }
-  return /(?:status|http(?:\s+status)?)\s*[:=]?\s*(403|404|410)\b/i.test(
+  const marker = /(?:^|\b)REMOTE_MEDIA_HTTP_STATUS=(403|404|410)(?:;|\b)/.exec(
     getErrorMessage(error),
   );
+  return marker !== null;
 }
 
 export function resolveFailedMediaAttemptPolicy(options: {
@@ -1133,7 +1125,7 @@ export async function persistInstagramMediaCandidate(options: {
   }
 }
 
-async function persistInstagramMediaCandidates(options: {
+export async function persistInstagramMediaCandidates(options: {
   client: ConvexHttpClient;
   handle: string;
   post: InstagramScrapedPost;
@@ -1142,6 +1134,9 @@ async function persistInstagramMediaCandidates(options: {
   summary: HandleSummary;
   upstreamUrls: string[];
 }): Promise<boolean> {
+  const failedBefore = options.summary.failedImagePersistence;
+  const permanentFailedBefore = options.summary.permanentImagePersistenceFailures ?? 0;
+  const errorsBefore = options.summary.errors.length;
   for (const upstreamUrl of deduplicateMediaUrls(options.upstreamUrls, 8)) {
     if (
       await persistInstagramMediaCandidate({
@@ -1154,6 +1149,11 @@ async function persistInstagramMediaCandidates(options: {
         upstreamUrl,
       })
     ) {
+      // Candidate failures are diagnostics, not a failed persistence operation,
+      // when a later candidate succeeds. Detailed per-candidate logs remain.
+      options.summary.failedImagePersistence = failedBefore;
+      options.summary.permanentImagePersistenceFailures = permanentFailedBefore;
+      options.summary.errors.splice(errorsBefore);
       return true;
     }
   }
@@ -8780,11 +8780,15 @@ type ProcessIngestionPostOptions = {
 };
 
 type ProcessIngestionPostDependencies = {
+  downloadImage: typeof downloadImage;
   extractEventDataFromPost: typeof extractEventDataFromInstagramPost;
+  normalizeToJpeg: typeof normalizeToJpeg;
 };
 
 const DEFAULT_PROCESS_INGESTION_POST_DEPENDENCIES: ProcessIngestionPostDependencies = {
+  downloadImage,
   extractEventDataFromPost: extractEventDataFromInstagramPost,
+  normalizeToJpeg,
 };
 
 async function processIngestionPost(
@@ -8978,11 +8982,17 @@ async function processIngestionPost(
       [selectedImageUrl, ...(post.imageUrls ?? []), post.imageUrl],
       getOpenAiMaxImagesPerPost(),
     );
+    const failedDownloadsBefore = summary.failedDownloads;
+    const failedDownloadsSnakeBefore = summary.failed_downloads;
+    const permanentDownloadsBefore = summary.permanentMediaDownloadFailures ?? 0;
+    const failedConversionsBefore = summary.failedConversions;
+    const failedConversionsSnakeBefore = summary.failed_conversions;
+    const mediaErrorsBefore = summary.errors.length;
     const mediaAttemptErrors: unknown[] = [];
     for (const candidateImageUrl of relevantImageUrls) {
       let downloadedImage: Awaited<ReturnType<typeof downloadImage>>;
       try {
-        downloadedImage = await downloadImage(candidateImageUrl);
+        downloadedImage = await dependencies.downloadImage(candidateImageUrl);
         logInfo("ingestion.image.download.success", {
           ...postContext,
           selectedImageUrl: candidateImageUrl,
@@ -9008,7 +9018,7 @@ async function processIngestionPost(
       }
 
       try {
-        const normalizedImage = await normalizeToJpeg(
+        const normalizedImage = await dependencies.normalizeToJpeg(
           downloadedImage.imageBuffer,
           downloadedImage.contentType ?? candidateImageUrl,
         );
@@ -9034,6 +9044,17 @@ async function processIngestionPost(
           error: getErrorMessage(error),
         });
       }
+    }
+
+    if (imageDataUrls.length > 0) {
+      // A candidate set succeeds as an operation when any candidate is usable.
+      // Keep failed-candidate details in structured logs, not retry counters.
+      summary.failedDownloads = failedDownloadsBefore;
+      summary.failed_downloads = failedDownloadsSnakeBefore;
+      summary.permanentMediaDownloadFailures = permanentDownloadsBefore;
+      summary.failedConversions = failedConversionsBefore;
+      summary.failed_conversions = failedConversionsSnakeBefore;
+      summary.errors.splice(mediaErrorsBefore);
     }
 
     if (imageDataUrls.length === 0) {
@@ -9854,11 +9875,12 @@ async function processIngestionPost(
 
 export async function processIngestionPostWithExtractionForTesting(
   options: Omit<ProcessIngestionPostOptions, "processingFence"> & {
+    dependencies?: Partial<Omit<ProcessIngestionPostDependencies, "extractEventDataFromPost">>;
     extracted: ExtractedEventData;
     processingFence?: SourceProcessingFence;
   },
 ): Promise<void> {
-  const { extracted, processingFence, ...processOptions } = options;
+  const { dependencies, extracted, processingFence, ...processOptions } = options;
   const effectiveProcessingFence = processingFence ?? {
     handle: options.handle,
     ...(options.post.postId ? { postId: options.post.postId } : {}),
@@ -9871,6 +9893,8 @@ export async function processIngestionPostWithExtractionForTesting(
   await processIngestionPost(
     { ...processOptions, processingFence: effectiveProcessingFence },
     {
+      ...DEFAULT_PROCESS_INGESTION_POST_DEPENDENCIES,
+      ...dependencies,
       extractEventDataFromPost: async () => extracted,
     },
   );
@@ -10670,6 +10694,30 @@ export async function importUpcomingEventsToSavedPosts(options?: {
   };
 }
 
+type PaidFetchLeaseResult = {
+  claimed?: boolean;
+  reason?: string;
+  onlyPostsNewerThan?: string | null;
+  resultsLimit?: number;
+  expiresAt?: number;
+};
+
+export async function resolvePaidFetchLeaseAfterBacklogMaintenance(
+  claim: () => Promise<PaidFetchLeaseResult>,
+  maxMaintenanceBatches = 25,
+): Promise<PaidFetchLeaseResult> {
+  const boundedMaxBatches = Math.max(1, Math.min(100, Math.trunc(maxMaintenanceBatches)));
+  for (let batch = 0; batch < boundedMaxBatches; batch += 1) {
+    const lease = await claim();
+    if (lease.reason !== "backlog_maintenance_incomplete") {
+      return lease;
+    }
+  }
+  throw new Error(
+    `Saved-post backlog maintenance exceeded ${boundedMaxBatches} batches without reaching a stable claim decision.`,
+  );
+}
+
 async function fetchFreshPostsForHandlesInParallel(
   client: ConvexHttpClient,
   handles: string[],
@@ -10693,33 +10741,30 @@ async function fetchFreshPostsForHandlesInParallel(
         const baseResultsLimit = normalizeFullScrapeResultsLimit(options.resultsLimit);
         const fetchStartedAt = Date.now();
         const budget = getApifyBudgetConfig();
-        const lease = (await client.mutation(
-          claimPaidFetchLeaseMutation,
-          withServiceSecret(
-            {
-              handle,
-              owner: paidFetchLeaseOwner,
-              leaseMs: 10 * 60_000,
-              requestedResultsLimit: baseResultsLimit,
-              fetchStartedAt,
-              bootstrapDays: getIngestionBootstrapDays(),
-              dayKey: getBudgetDayKey(new Date(fetchStartedAt)),
-              dailyBudgetUsd: budget.dailyBudgetMicros / 1_000_000,
-              maxChargeUsd: budget.maxChargePerHandleMicros / 1_000_000,
-              ...(options.daysBack && options.daysBack > 0
-                ? { horizonCutoffMs: fetchStartedAt - options.daysBack * 86_400_000 }
-                : {}),
-              paidEnabled: isPaidIngestionEnabled(),
-            },
-            serviceSecret,
-          ),
-        )) as {
-          claimed?: boolean;
-          reason?: string;
-          onlyPostsNewerThan?: string | null;
-          resultsLimit?: number;
-          expiresAt?: number;
-        };
+        const lease = await resolvePaidFetchLeaseAfterBacklogMaintenance(
+          async () =>
+            (await client.mutation(
+              claimPaidFetchLeaseMutation,
+              withServiceSecret(
+                {
+                  handle,
+                  owner: paidFetchLeaseOwner,
+                  leaseMs: 10 * 60_000,
+                  requestedResultsLimit: baseResultsLimit,
+                  fetchStartedAt,
+                  bootstrapDays: getIngestionBootstrapDays(),
+                  dayKey: getBudgetDayKey(new Date(fetchStartedAt)),
+                  dailyBudgetUsd: budget.dailyBudgetMicros / 1_000_000,
+                  maxChargeUsd: budget.maxChargePerHandleMicros / 1_000_000,
+                  ...(options.daysBack && options.daysBack > 0
+                    ? { horizonCutoffMs: fetchStartedAt - options.daysBack * 86_400_000 }
+                    : {}),
+                  paidEnabled: isPaidIngestionEnabled(),
+                },
+                serviceSecret,
+              ),
+            )) as PaidFetchLeaseResult,
+        );
         if (!lease.claimed) {
           if (lease.reason === "hard_cap_saturated") {
             getOrCreateHandleSummary(summary, handle).errors.push(

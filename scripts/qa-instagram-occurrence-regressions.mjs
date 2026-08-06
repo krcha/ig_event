@@ -15,9 +15,11 @@ import {
   buildSourceOccurrenceKeyForTesting,
   createEmptyIngestionSummary,
   findBestExistingMatchForPreparedEventForTesting,
+  persistInstagramMediaCandidates,
   prepareEventsForInsert,
   processIngestionPostWithExtractionForTesting,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
+import { RemoteMediaHttpError } from "../lib/ai/prepare-image-for-openai.ts";
 
 const NOW = new Date("2026-07-28T18:00:00Z");
 const IMAGE_URL = "https://example.com/poster.jpg";
@@ -95,6 +97,73 @@ function makeExtraction(overrides = {}) {
     ...overrides,
   };
 }
+
+const mixedDownloadSummary = createEmptyIngestionSummary(["venue"]).handles[0];
+let mixedDownloadAttempts = 0;
+await withoutConsoleNoise(() =>
+  processIngestionPostWithExtractionForTesting({
+    client: { query: async () => [], mutation: async () => ({}) },
+    handle: "venue",
+    post: makePost({
+      imageUrl: "https://example.com/expired.jpg",
+      imageUrls: [
+        "https://example.com/expired.jpg",
+        "https://example.com/current.jpg",
+      ],
+    }),
+    summary: mixedDownloadSummary,
+    canonicalVenueNamesByHandle: { venue: "Venue" },
+    venueNameOverridesByHandle: {},
+    configuredVenueNamesByHandle: { venue: "Venue" },
+    serviceSecret: "qa-secret",
+    extracted: makeExtraction(),
+    eventDateFilterNow: NOW,
+    dependencies: {
+      downloadImage: async (url) => {
+        mixedDownloadAttempts += 1;
+        if (url.includes("expired")) throw new RemoteMediaHttpError(403, "Forbidden");
+        return { imageBuffer: Buffer.from("current"), contentType: "image/jpeg", sourceUrl: url };
+      },
+      normalizeToJpeg: async (imageBuffer) => ({
+        imageBuffer,
+        mimeType: "image/jpeg",
+        wasConverted: false,
+      }),
+    },
+  }),
+);
+assert.equal(mixedDownloadAttempts, 2);
+assert.equal(mixedDownloadSummary.failedDownloads, 0);
+assert.equal(mixedDownloadSummary.permanentMediaDownloadFailures, 0);
+assert.equal(mixedDownloadSummary.errors.length, 0);
+
+const mixedPersistenceSummary = createEmptyIngestionSummary(["venue"]).handles[0];
+let mixedPersistenceAttempts = 0;
+const mixedPersistenceSucceeded = await withoutConsoleNoise(() =>
+  persistInstagramMediaCandidates({
+    client: {
+      action: async () => {
+        mixedPersistenceAttempts += 1;
+        if (mixedPersistenceAttempts === 1) {
+          throw new Error("REMOTE_MEDIA_HTTP_STATUS=403; Remote image fetch failed.");
+        }
+        return {};
+      },
+    },
+    handle: "venue",
+    post: makePost(),
+    processingFence: { handle: "venue", postId: "qa-post", owner: "qa", sourceRevision: 1 },
+    serviceSecret: "qa-secret",
+    summary: mixedPersistenceSummary,
+    upstreamUrls: ["https://example.com/expired.jpg", "https://example.com/current.jpg"],
+  }),
+);
+assert.equal(mixedPersistenceSucceeded, true);
+assert.equal(mixedPersistenceAttempts, 2);
+assert.equal(mixedPersistenceSummary.persistedImages, 1);
+assert.equal(mixedPersistenceSummary.failedImagePersistence, 0);
+assert.equal(mixedPersistenceSummary.permanentImagePersistenceFailures, 0);
+assert.equal(mixedPersistenceSummary.errors.length, 0);
 
 assert.equal(findNamedWeekday("ПОНЕДЕЛЬНИК : 14:00"), 1);
 assert.equal(findNamedWeekday("СРЕДА: 19:00"), 3);

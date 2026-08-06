@@ -747,7 +747,7 @@ assert.deepEqual(
   "completed jobs should not cool down handles that only recorded scraper/API errors",
 );
 
-function runCronRunnerCapFixture(mode, activeCount = 2400) {
+function runCronRunnerCapFixture(mode, activeCount = 2400, job = "ingest-venues") {
   const fixtureRoot = mkdtempSync(join(tmpdir(), "ig-event-cron-cap-"));
   const fakeBin = join(fixtureRoot, "bin");
   const logDir = join(fixtureRoot, "logs");
@@ -853,7 +853,7 @@ process.stdout.write("200");
   chmodSync(fakeFlockPath, 0o755);
 
   try {
-    const result = spawnSync("bash", ["scripts/ig-event-cron-runner", "ingest-venues"], {
+    const result = spawnSync("bash", ["scripts/ig-event-cron-runner", job], {
       cwd: process.cwd(),
       encoding: "utf8",
       env: {
@@ -937,6 +937,18 @@ assert.deepEqual(
   "a transient HTTP 500 must be retried idempotently within the same scheduled run",
 );
 assert.match(transientHttpFixture.result.stdout, /status=ok requests=1 selected=200/);
+
+const nonIdempotentDiscoveryFixture = runCronRunnerCapFixture(
+  "transient-500",
+  200,
+  "discover-following",
+);
+assert.notEqual(nonIdempotentDiscoveryFixture.result.status, 0);
+assert.equal(
+  nonIdempotentDiscoveryFixture.state.requests.length,
+  1,
+  "an ambiguous following-discovery failure must not automatically repeat paid provider work",
+);
 
 const permanentHttpFixture = runCronRunnerCapFixture("permanent-401", 200);
 assert.notEqual(permanentHttpFixture.result.status, 0);

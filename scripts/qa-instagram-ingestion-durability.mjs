@@ -19,11 +19,14 @@ import {
   recordPaidFetchWindowSaturation,
   recordPaidFetchWindowSuccess,
   releasePaidFetchLease,
+  upsertManyByHandle,
 } from "../convex/scrapedPosts.ts";
 import {
   isPermanentRemoteMediaFailure,
+  resolvePaidFetchLeaseAfterBacklogMaintenance,
   resolveFailedMediaAttemptPolicy,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
+import { RemoteMediaHttpError } from "../lib/ai/prepare-image-for-openai.ts";
 
 const startedAt = Date.parse("2026-07-27T10:00:00.000Z");
 assert.equal(
@@ -34,20 +37,30 @@ assert.equal(
 assert.equal(isPaidIngestionEnabled({ PAID_INGESTION_ENABLED: "true" }), true);
 assert.equal(isPaidIngestionEnabled({ PAID_INGESTION_ENABLED: "false" }), false);
 assert.equal(isPaidIngestionEnabled({ ENABLE_FRESH_APIFY_FETCH: "yes" }), true);
-assert.equal(isPermanentRemoteMediaFailure(new Error("Remote image fetch failed with status 403.")), true);
-assert.equal(isPermanentRemoteMediaFailure(new Error("Image download failed with status 410 Gone")), true);
+assert.equal(isPermanentRemoteMediaFailure(new RemoteMediaHttpError(403, "Forbidden")), true);
+assert.equal(
+  isPermanentRemoteMediaFailure(
+    new Error("REMOTE_MEDIA_HTTP_STATUS=410; Remote image fetch failed."),
+  ),
+  true,
+);
+assert.equal(
+  isPermanentRemoteMediaFailure(new Error("Control plane rejected request 403.")),
+  false,
+  "arbitrary control-plane messages containing an HTTP code must remain retryable",
+);
 assert.equal(isPermanentRemoteMediaFailure(new Error("Remote image fetch failed with status 503.")), false);
 assert.equal(
   resolveFailedMediaAttemptPolicy({
     canFallbackToCaptionOnly: true,
-    errors: [new Error("Image download failed with status 403 Forbidden")],
+    errors: [new RemoteMediaHttpError(403, "Forbidden")],
   }),
   "caption_fallback",
 );
 assert.equal(
   resolveFailedMediaAttemptPolicy({
     canFallbackToCaptionOnly: false,
-    errors: [new Error("Image download failed with status 403 Forbidden")],
+    errors: [new RemoteMediaHttpError(403, "Forbidden")],
   }),
   "terminal_permanent",
 );
@@ -57,6 +70,19 @@ assert.equal(
     errors: [new Error("Image download failed with status 503 Service Unavailable")],
   }),
   "retryable",
+);
+let maintenanceClaimAttempts = 0;
+const maintainedLease = await resolvePaidFetchLeaseAfterBacklogMaintenance(async () => {
+  maintenanceClaimAttempts += 1;
+  return maintenanceClaimAttempts === 1
+    ? { claimed: false, reason: "backlog_maintenance_incomplete" }
+    : { claimed: true, reason: "claimed" };
+});
+assert.equal(maintainedLease.claimed, true);
+assert.equal(
+  maintenanceClaimAttempts,
+  2,
+  "bounded backlog maintenance must continue to a fresh-fetch claim in the same handle step",
 );
 assert.deepEqual(getFetchBoundary({ fetchStartedAt: startedAt }), {
   checkpointAt: null,
@@ -406,6 +432,82 @@ try {
   assert.equal(exhausted.reason, "budget_exhausted");
   assert.equal(tables.ingestionDailyBudgets[0].chargedMicros, 50_000);
   assert.equal(tables.ingestionDailyBudgets[0].reservedMicros, 0);
+
+  const nPlusOneOldPosts = Array.from({ length: 101 }, (_, index) => ({
+    _id: `old-blocker-${index}`,
+    handle: "old.source",
+    postId: `old-post-${index}`,
+    postedAtMs: horizonCutoffMs - index - 1,
+    blocksPaidFetch: true,
+    processingStatus: "pending",
+  }));
+  const { db: nPlusOneDb, tables: nPlusOneTables } = createDb({
+    instagramPaidFetchControl: [
+      { _id: "control-apify-n1", key: "apify", backlogIndexReady: true, createdAt: 1, updatedAt: 1 },
+    ],
+    scrapedPosts: nPlusOneOldPosts,
+    instagramSources: [
+      { _id: "source-n1", handle: "source.n1", active: true, createdAt: 1, updatedAt: 1 },
+    ],
+    ingestionCostReservations: [],
+    ingestionDailyBudgets: [],
+    instagramHandleFetchStates: [],
+  });
+  const nPlusOneCtx = { auth: { getUserIdentity: async () => null }, db: nPlusOneDb };
+  const nPlusOneArgs = {
+    ...common,
+    handle: "source.n1",
+    owner: "owner-n1",
+    dayKey: "2026-07-28",
+  };
+  const maintenanceBatch = await claimPaidFetchLease._handler(nPlusOneCtx, nPlusOneArgs);
+  assert.equal(maintenanceBatch.claimed, false);
+  assert.equal(maintenanceBatch.reason, "backlog_maintenance_incomplete");
+  assert.equal(
+    nPlusOneTables.scrapedPosts.filter((post) => post.blocksPaidFetch).length,
+    1,
+    "the first bounded mutation should leave exactly the N+1 row for same-step maintenance",
+  );
+  const nPlusOneClaim = await claimPaidFetchLease._handler(nPlusOneCtx, nPlusOneArgs);
+  assert.equal(nPlusOneClaim.claimed, true);
+  assert.equal(nPlusOneTables.scrapedPosts.some((post) => post.blocksPaidFetch), false);
+
+  const { db: mediaRefreshDb, tables: mediaRefreshTables } = createDb({
+    scrapedPosts: [
+      {
+        _id: "terminal-media-post",
+        handle: "source.media",
+        postId: "post-media",
+        username: "source.media",
+        instagramPostUrl: "https://www.instagram.com/p/post-media/",
+        imageUrls: ["https://example.com/expired.jpg"],
+        sourceRevision: 4,
+        blocksPaidFetch: false,
+        processingStatus: "completed",
+        processingOutcome: "terminal_permanent_failure",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+  });
+  const mediaRefreshCtx = { auth: { getUserIdentity: async () => null }, db: mediaRefreshDb };
+  await upsertManyByHandle._handler(mediaRefreshCtx, {
+    handle: "source.media",
+    posts: [
+      {
+        handle: "source.media",
+        postId: "post-media",
+        username: "source.media",
+        instagramPostUrl: "https://www.instagram.com/p/post-media/",
+        imageUrls: ["https://example.com/current.jpg"],
+      },
+    ],
+    serviceSecret: "qa-durability-secret",
+  });
+  assert.equal(mediaRefreshTables.scrapedPosts[0].processingStatus, "pending");
+  assert.equal(mediaRefreshTables.scrapedPosts[0].processingOutcome, undefined);
+  assert.equal(mediaRefreshTables.scrapedPosts[0].blocksPaidFetch, true);
+  assert.equal(mediaRefreshTables.scrapedPosts[0].sourceRevision, 5);
 
   const { db: analysisDb, tables: analysisTables } = createDb({
     scrapedPosts: [
