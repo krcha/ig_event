@@ -8694,6 +8694,7 @@ export function prepareEventsForInsert(
       venue: venueNormalization.venue,
       artists: variant.artists,
       sourceCaption: post.caption,
+      sourcePostedAt: post.postedAt,
       instagramPostId: post.postId,
       instagramPostUrl: post.instagramPostUrl,
       sourceInstagramHandle: post.username,

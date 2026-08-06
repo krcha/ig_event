@@ -13,6 +13,7 @@ type EventApprovalFields = Record<string, unknown> & {
   artists?: unknown;
   imageUrl?: unknown;
   sourceCaption?: unknown;
+  sourcePostedAt?: unknown;
   instagramPostId?: unknown;
   instagramPostUrl?: unknown;
   venueInstagramHandle?: unknown;
@@ -133,6 +134,7 @@ function hasBoundPublicFields(
       venue: publicVenue,
       artists: publicArtists,
       sourceCaption: publicSourceCaption,
+      sourcePostedAt: eventFields.sourcePostedAt,
       instagramPostId: publicPostId,
       instagramPostUrl: publicPostUrl,
       sourceInstagramHandle: fields.sourceGroundingInstagramHandle,

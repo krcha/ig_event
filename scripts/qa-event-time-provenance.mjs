@@ -102,6 +102,7 @@ const preparedDuplicate = {
   artists: ["QA Artist"],
   imageUrl: "https://example.com/qa-event.jpg",
   sourceCaption: "QA Event 15. jul u 21h @ QA Venue uz QA Artist",
+  sourcePostedAt: "2026-07-01T12:00:00.000Z",
   instagramPostUrl: "https://www.instagram.com/p/qa-event/",
   instagramPostId: "qa-event",
   eventType: "nightlife",

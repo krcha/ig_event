@@ -95,6 +95,7 @@ export function hasVerifiedSourceGrounding(normalizedFields, event) {
       venue: event?.venue,
       artists: event?.artists,
       sourceCaption: event?.sourceCaption,
+      sourcePostedAt: event?.sourcePostedAt,
       instagramPostId: event?.instagramPostId,
       instagramPostUrl: event?.instagramPostUrl,
       sourceInstagramHandle: normalizedFields?.sourceGroundingInstagramHandle,

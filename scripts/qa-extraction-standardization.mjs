@@ -195,7 +195,7 @@ function makeInstagramPost(overrides = {}) {
     postType: "video",
     locationName: null,
     instagramPostUrl: "https://www.instagram.com/p/qa-post/",
-    postedAt: new Date().toISOString(),
+    postedAt: new Date(Date.now()).toISOString(),
     username: "qa_handle",
     ...overrides,
   };
@@ -652,7 +652,11 @@ function runVideoModerationQa() {
     ),
   );
   const highConfidenceFields = readPreparedNormalizedFields(highConfidenceVideo);
-  assert.equal(highConfidenceVideo.event.status, "approved");
+  assert.equal(
+    highConfidenceVideo.event.status,
+    "approved",
+    JSON.stringify({ event: highConfidenceVideo.event, fields: highConfidenceFields }, null, 2),
+  );
   assert.equal(highConfidenceFields.moderationConfidenceScore, 0.95);
   assert.equal(highConfidenceFields.extractionMode, "caption_only");
   assert.deepEqual(highConfidenceFields.moderationPendingReasons, []);
@@ -3807,6 +3811,7 @@ function runSourceGroundingAdversarialQa() {
     venue: "Vox Blues club",
     artists: ["INKE"],
     sourceCaption: naturalLanguageCaption,
+    sourcePostedAt: `${firstDate}T08:00:00.000Z`,
     instagramPostId: "3944924586821733370",
     instagramPostUrl: "https://www.instagram.com/p/Da_MAK3Nsv6/",
     sourceInstagramHandle: "voxbluesclub",
@@ -5636,6 +5641,7 @@ function runAtomicDuplicateStatusPreconditionQa() {
     artists: ["QA Artist"],
     imageUrl: "https://example.com/grounded-qa-event.jpg",
     sourceCaption: "Grounded QA Event 30. jul @ QA Venue uz QA Artist",
+    sourcePostedAt: "2026-07-01T12:00:00.000Z",
     instagramPostId: "grounded-qa-event-post",
     instagramPostUrl: "https://www.instagram.com/p/grounded-qa-event-post/",
     venueInstagramHandle: "qa_venue",
@@ -6002,6 +6008,7 @@ async function runServiceApprovalMutationBoundaryQa() {
     artists: ["Grounded Handler Artist"],
     imageUrl: "https://example.com/grounded-handler-event.jpg",
     sourceCaption,
+    sourcePostedAt: "2026-07-01T12:00:00.000Z",
     instagramPostUrl,
     instagramPostId,
     eventType: "nightlife",
@@ -6015,12 +6022,13 @@ async function runServiceApprovalMutationBoundaryQa() {
   let sameDateEvents = [];
   let existingVenue = groundedPublicFields.venue;
   let existingVenueInstagramHandle = "qa_venue";
-  const persistedSourcePost = {
+  let persistedSourcePost = {
     handle: "qa_venue",
     username: "qa_venue",
     postId: instagramPostId,
     instagramPostUrl,
     caption: sourceCaption,
+    postedAt: "2026-07-01T12:00:00.000Z",
   };
   const fakeDb = {
     get: async () => ({
@@ -6262,6 +6270,72 @@ async function runServiceApprovalMutationBoundaryQa() {
       "A self-consistent caption, post-ID, and URL swap must fail against the persisted source post.",
     );
     assert.equal(inserted, false);
+
+    const originalPersistedSourcePost = persistedSourcePost;
+    const forgedGroundingCases = [
+      {
+        label: "hashtag-only source identity",
+        title: "HashtagOnly",
+        date: "2026-07-30",
+        artists: [],
+        caption: "#HashtagOnly 30. jul",
+      },
+      {
+        label: "giveaway language without a positive event occurrence",
+        title: "Grounded Handler Event",
+        date: "2026-07-30",
+        artists: ["Grounded Handler Artist"],
+        caption:
+          "Giveaway Grounded Handler Event 30. jul @ Grounded Handler Venue uz Grounded Handler Artist",
+      },
+      {
+        label: "title and date stitched across source blocks",
+        title: "Grounded Handler Event",
+        date: "2026-07-30",
+        artists: ["Grounded Handler Artist"],
+        caption:
+          "Grounded Handler Event\n30. jul @ Grounded Handler Venue uz Grounded Handler Artist",
+      },
+      {
+        label: "implausible caller-forged source year",
+        title: "Grounded Handler Event",
+        date: "2099-07-30",
+        artists: ["Grounded Handler Artist"],
+        caption:
+          "Grounded Handler Event 30. jul @ Grounded Handler Venue uz Grounded Handler Artist",
+      },
+    ];
+    for (const forged of forgedGroundingCases) {
+      persistedSourcePost = {
+        ...originalPersistedSourcePost,
+        caption: forged.caption,
+      };
+      const forgedGroundingJson = JSON.stringify({
+        ...JSON.parse(normalizedFieldsJson),
+        title: forged.title,
+        artists: forged.artists,
+        normalizedDate: forged.date,
+        sourceGroundingSourceCaption: forged.caption,
+        sourceGroundingArtistsVerified: forged.artists.length > 0 ? true : null,
+      });
+      inserted = false;
+      await assert.rejects(
+        () =>
+          createEvent._handler(ctx, {
+            ...groundedPublicFields,
+            title: forged.title,
+            date: forged.date,
+            artists: forged.artists,
+            sourceCaption: forged.caption,
+            normalizedFieldsJson: forgedGroundingJson,
+            serviceSecret,
+          }),
+        /(?:cannot approve|independently ground)/,
+        `The real service mutation must reject ${forged.label}.`,
+      );
+      assert.equal(inserted, false, `${forged.label} must perform no event insert.`);
+    }
+    persistedSourcePost = originalPersistedSourcePost;
 
     sameDateEvents = [];
     inserted = false;
@@ -8510,6 +8584,7 @@ async function runTransactionalSourceGroundingReprocessQa() {
       artists: [artist],
       imageUrl: `https://example.com/${id}.jpg`,
       sourceCaption: caption,
+      sourcePostedAt: "2026-07-01T12:00:00.000Z",
       instagramPostId: postId,
       instagramPostUrl,
       eventType: "nightlife",
@@ -8566,6 +8641,7 @@ async function runTransactionalSourceGroundingReprocessQa() {
         postId,
         instagramPostUrl,
         caption,
+        postedAt: "2026-07-01T12:00:00.000Z",
       },
     };
   };

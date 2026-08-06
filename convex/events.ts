@@ -11,6 +11,7 @@ import {
 } from "../lib/events/event-retention";
 import { normalizeEventTimeWritePatch } from "../lib/events/event-time-write";
 import { isSensibleEventTitleForApproval } from "../lib/events/event-title-approval";
+import { isCaptionSourceCoherentWithEvent } from "../lib/events/event-source-approval";
 import { buildNormalizedEventVenueIdentity } from "../lib/events/event-venue-identity";
 import {
   buildApprovedEventAutoCleanupGroups,
@@ -234,7 +235,10 @@ type ApprovalCandidateFields = {
 };
 
 type ServiceSourceCandidateFields = ApprovalCandidateFields & {
+  time?: string;
+  artists?: string[];
   sourceCaption?: string;
+  sourcePostedAt?: string;
 };
 
 async function assertPersistedServiceSourcePolicy(
@@ -261,6 +265,25 @@ async function assertPersistedServiceSourcePolicy(
     normalizeSourceCaption(persisted.caption) !== sourceCaption
   ) {
     throw new Error("Service approval source does not match the persisted Instagram post.");
+  }
+  if (
+    !isCaptionSourceCoherentWithEvent({
+      title: candidate.title,
+      date: candidate.date,
+      time: candidate.time,
+      venue: candidate.venue,
+      artists: candidate.artists ?? [],
+      sourceCaption: persisted.caption,
+      sourcePostedAt: persisted.postedAt,
+      instagramPostId: persisted.postId,
+      instagramPostUrl: persisted.instagramPostUrl,
+      sourceInstagramHandle: persisted.handle,
+      venueInstagramHandle: candidate.venueInstagramHandle,
+    })
+  ) {
+    throw new Error(
+      "Service approval source does not independently ground the final public event fields.",
+    );
   }
 }
 
