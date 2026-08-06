@@ -338,6 +338,38 @@ events.example.com {
 After DNS points to the VPS and ports 80/443 are open, reload the proxy and
 verify HTTPS externally.
 
+## Venue Instagram Handle Normalization Rollout
+
+The ingestion context query uses `venues.by_normalizedInstagramHandle` so legacy
+stored values such as `@Legacy.Handle` retain their canonical venue role and
+name without an unbounded venue scan. The field is optional for additive schema
+rollout, but the new web/runner must not be promoted until every existing venue
+has been backfilled.
+
+After taking the Convex backup and deploying the new functions, run the complete
+read-only preflight first:
+
+```bash
+node --env-file=.env.local --env-file=.env.self-hosted \
+  scripts/migrate-venue-instagram-handles.mjs
+```
+
+The preflight performs no mutations and fails on invalid handles, normalized
+collisions, pagination stalls, or an incomplete fleet read. Apply only after it
+reports zero invalid rows and zero collisions:
+
+```bash
+node --env-file=.env.local --env-file=.env.self-hosted \
+  scripts/migrate-venue-instagram-handles.mjs \
+  --apply --confirm NORMALIZE_VENUE_HANDLES
+```
+
+Apply batches are limited to 25 rows and use exact previous-value preconditions.
+The command is successful only after a second complete read reports zero
+remaining updates. New venue creates and handle changes maintain the normalized
+field automatically. If preflight/apply fails, leave the old web and runner in
+place; the optional field and additive index are rollback-compatible.
+
 ## Cron Replacement
 
 `vercel.json` intentionally has `crons: []`; the self-hosted VPS uses real host
@@ -354,19 +386,23 @@ Installed files on the VPS:
 ```
 
 Debian cron on the production host evaluates `/etc/cron.d` entries in the host's
-`Europe/Belgrade` timezone; its implementation does not honor a per-file
-`CRON_TZ` directive. The current schedule is therefore deliberately documented
-in host-local time:
+`Europe/Berlin` timezone; its implementation does not honor a per-file `CRON_TZ`
+directive. Berlin and Belgrade currently share the same civil UTC offset and DST
+transitions, but the daemon's actual schedule authority is the Berlin host clock.
+The current schedule is therefore deliberately documented in host-local time:
 
 ```cron
 0 7 * * * root /usr/local/sbin/ig-event-cron-runner ingest-venues >> /var/log/ig_event/cron.log 2>&1
 0 10 * * 1 root /usr/local/sbin/ig-event-cron-runner discover-following >> /var/log/ig_event/cron.log 2>&1
 ```
 
-If fixed UTC execution is required, replace these entries with one systemd timer
-per job using `OnCalendar=... UTC`; do not install a second scheduler alongside
-the cron entries. The runner's `flock` remains a final overlap guard, not a
-substitute for single scheduler ownership.
+If exact `Europe/Belgrade` or fixed UTC execution is required independently of
+the host timezone, replace these entries with one systemd timer per job using an
+explicit calendar expression such as
+`OnCalendar=*-*-* 07:00:00 Europe/Belgrade` or the equivalent UTC expression;
+do not install a second scheduler alongside the cron entries. The runner's
+`flock` remains a final overlap guard, not a substitute for single scheduler
+ownership.
 
 Use the same `CRON_SECRET` value in `/etc/ig_event/cron.env` and the web app
 runtime env. If a job returns `401`, check the header and secret first. The

@@ -56,6 +56,10 @@ import {
   listLegacyVenueHandlesPage,
   listLegacyVenueSourcesPage,
 } from "../convex/instagramSources.ts";
+import {
+  applyInstagramHandleNormalizationBatch,
+  listInstagramHandleNormalizationPage,
+} from "../convex/venues.ts";
 
 const request = buildApifyInstagramScrapeRequest({
   actorUsernameInput: "clubdrugstore",
@@ -417,6 +421,10 @@ const instagramSourcesSource = readFileSync(
   new URL("../convex/instagramSources.ts", import.meta.url),
   "utf8",
 );
+const venuesSource = readFileSync(
+  new URL("../convex/venues.ts", import.meta.url),
+  "utf8",
+);
 const scrapedPostsSource = readFileSync(
   new URL("../convex/scrapedPosts.ts", import.meta.url),
   "utf8",
@@ -451,6 +459,10 @@ const adminVenueScrapeRouteSource = readFileSync(
 );
 const adminRepairRouteSource = readFileSync(
   new URL("../app/api/admin/scrape/repair/route.ts", import.meta.url),
+  "utf8",
+);
+const venueHandleMigrationSource = readFileSync(
+  new URL("./migrate-venue-instagram-handles.mjs", import.meta.url),
   "utf8",
 );
 
@@ -596,6 +608,25 @@ assert.doesNotMatch(
   /ctx\.db\.get/,
   "active-source pagination must not fan out one venue read per source",
 );
+assert.match(convexSchemaSource, /normalizedInstagramHandle: v\.optional\(v\.string\(\)\)/);
+assert.match(convexSchemaSource, /by_normalizedInstagramHandle/);
+assert.match(
+  instagramSourcesSource,
+  /getIngestionContextsByHandles[\s\S]{0,1200}by_normalizedInstagramHandle[\s\S]{0,300}\.take\(2\)/,
+  "targeted venue context must use the normalized handle index and fail closed on collisions",
+);
+assert.match(
+  ingestionRunnerSource,
+  /ingestion\.sources\.context_load_failed[\s\S]{0,300}throw error/,
+  "full-scrape context lookup failures must abort before paid provider transport",
+);
+assert.match(venuesSource, /normalizedInstagramHandle: instagramHandle/);
+assert.match(venuesSource, /applyInstagramHandleNormalizationBatch/);
+assert.match(venueHandleMigrationSource, /NORMALIZE_VENUE_HANDLES/);
+assert.match(venueHandleMigrationSource, /args\.indexOf\("--confirm"\)/);
+assert.match(venueHandleMigrationSource, /collisions/);
+assert.match(venueHandleMigrationSource, /verificationUpdatesRemaining/);
+assert.match(venueHandleMigrationSource, /verifiedIdempotent: true/);
 assert.match(
   ingestionJobsSource,
   /listJobsForRepairPage[\s\S]{0,600}by_createdAt[\s\S]{0,180}\.paginate\(args\.paginationOpts\)/,
@@ -902,16 +933,25 @@ try {
                   }
                 : null;
             },
+            async take(limit) {
+              assert.equal(limit, 2);
+              return table === "venues" &&
+                indexName === "by_normalizedInstagramHandle" &&
+                matchedValue === "source.0"
+                ? [
+                    {
+                      _id: "venue-context-0",
+                      name: "Source Zero",
+                      instagramHandle: "source.0",
+                      normalizedInstagramHandle: "source.0",
+                      scrapeActive: true,
+                      publicStatus: "published",
+                    },
+                  ]
+                : [];
+            },
             async first() {
-              return table === "venues" && matchedValue === "source.0"
-                ? {
-                    _id: "venue-context-0",
-                    name: "Source Zero",
-                    instagramHandle: "source.0",
-                    scrapeActive: true,
-                    publicStatus: "published",
-                  }
-                : null;
+              assert.fail("the normalized venue index should avoid the legacy exact fallback");
             },
           };
         },
@@ -932,7 +972,7 @@ try {
     targetedContextQueries.map(({ table, indexName }) => [table, indexName]),
     [
       ["instagramSources", "by_handle"],
-      ["venues", "by_instagramHandle"],
+      ["venues", "by_normalizedInstagramHandle"],
     ],
     "one ingestion step should resolve only its current source and venue",
   );
@@ -945,6 +985,238 @@ try {
       },
     ),
     /limited to 25 handles/,
+  );
+
+  const legacyMixedCaseVenue = {
+    _id: "legacy-mixed-case-venue",
+    name: "Legacy Mixed Case Venue",
+    instagramHandle: "@Legacy.Handle",
+    scrapeActive: true,
+    publicStatus: "published",
+  };
+  const normalizationPreview = await listInstagramHandleNormalizationPage._handler(
+    {
+      auth: { getUserIdentity: async () => null },
+      db: createPagedDb({ venues: [legacyMixedCaseVenue] }),
+    },
+    {
+      paginationOpts: { numItems: 10, cursor: null },
+      serviceSecret: "qa-cooldown-secret",
+    },
+  );
+  assert.deepEqual(normalizationPreview.page, [
+    {
+      id: "legacy-mixed-case-venue",
+      instagramHandle: "@Legacy.Handle",
+      normalizedInstagramHandle: null,
+      expectedNormalizedInstagramHandle: "legacy.handle",
+    },
+  ]);
+  await assert.rejects(
+    listInstagramHandleNormalizationPage._handler(
+      {
+        auth: { getUserIdentity: async () => null },
+        db: createPagedDb({ venues: [legacyMixedCaseVenue] }),
+      },
+      {
+        paginationOpts: { numItems: 201, cursor: null },
+        serviceSecret: "qa-cooldown-secret",
+      },
+    ),
+    /pages must contain 1 to 200 rows/,
+  );
+
+  function createVenueNormalizationDb(initialRows) {
+    const rows = new Map(initialRows.map((row) => [row._id, { ...row }]));
+    let patchCount = 0;
+    return {
+      rows,
+      get patchCount() {
+        return patchCount;
+      },
+      async get(id) {
+        return rows.get(id) ?? null;
+      },
+      async patch(id, patch) {
+        const current = rows.get(id);
+        assert.ok(current, `missing QA venue ${id}`);
+        rows.set(id, { ...current, ...patch });
+        patchCount += 1;
+      },
+      query(table) {
+        return {
+          withIndex(indexName, apply) {
+            let field;
+            let matchedValue;
+            const q = {
+              eq(nextField, value) {
+                field = nextField;
+                matchedValue = value;
+                return q;
+              },
+            };
+            apply(q);
+            const matches = () => {
+              if (table === "instagramSources") return [];
+              assert.equal(table, "venues");
+              if (indexName === "by_normalizedInstagramHandle") {
+                assert.equal(field, "normalizedInstagramHandle");
+              } else if (indexName === "by_instagramHandle") {
+                assert.equal(field, "instagramHandle");
+              } else {
+                assert.fail(`unexpected venue normalization index ${indexName}`);
+              }
+              return [...rows.values()].filter((row) => row[field] === matchedValue);
+            };
+            return {
+              async unique() {
+                const found = matches();
+                assert.ok(found.length <= 1);
+                return found[0] ?? null;
+              },
+              async take(limit) {
+                return matches().slice(0, limit);
+              },
+              async first() {
+                return matches()[0] ?? null;
+              },
+            };
+          },
+        };
+      },
+    };
+  }
+
+  const rollingCanonicalDb = createVenueNormalizationDb([
+    {
+      ...legacyMixedCaseVenue,
+      _id: "rolling-canonical-venue",
+      name: "Rolling Canonical Venue",
+      instagramHandle: "canonical.handle",
+    },
+  ]);
+  const rollingCanonicalContexts = await getIngestionContextsByHandles._handler(
+    { auth: { getUserIdentity: async () => null }, db: rollingCanonicalDb },
+    { handles: ["canonical.handle"], serviceSecret: "qa-cooldown-secret" },
+  );
+  assert.deepEqual(rollingCanonicalContexts, [
+    {
+      handle: "canonical.handle",
+      role: "venue",
+      canonicalVenueName: "Rolling Canonical Venue",
+    },
+  ]);
+
+  await assert.rejects(
+    applyInstagramHandleNormalizationBatch._handler(
+      { auth: { getUserIdentity: async () => null }, db: rollingCanonicalDb },
+      {
+        rows: Array.from({ length: 26 }, (_, index) => ({
+          id: `oversized-${index}`,
+          expectedInstagramHandle: `oversized.${index}`,
+          expectedNormalizedInstagramHandle: null,
+        })),
+        serviceSecret: "qa-cooldown-secret",
+      },
+    ),
+    /batches must contain 1 to 25 rows/,
+  );
+
+  const legacyNormalizationDb = createVenueNormalizationDb([legacyMixedCaseVenue]);
+  const normalizationApply = await applyInstagramHandleNormalizationBatch._handler(
+    { auth: { getUserIdentity: async () => null }, db: legacyNormalizationDb },
+    {
+      rows: [
+        {
+          id: "legacy-mixed-case-venue",
+          expectedInstagramHandle: "@Legacy.Handle",
+          expectedNormalizedInstagramHandle: null,
+        },
+      ],
+      serviceSecret: "qa-cooldown-secret",
+    },
+  );
+  assert.deepEqual(normalizationApply, { scanned: 1, updated: 1 });
+  assert.equal(
+    legacyNormalizationDb.rows.get("legacy-mixed-case-venue").normalizedInstagramHandle,
+    "legacy.handle",
+  );
+  const legacyContexts = await getIngestionContextsByHandles._handler(
+    { auth: { getUserIdentity: async () => null }, db: legacyNormalizationDb },
+    { handles: ["legacy.handle"], serviceSecret: "qa-cooldown-secret" },
+  );
+  assert.deepEqual(legacyContexts, [
+    {
+      handle: "legacy.handle",
+      role: "venue",
+      canonicalVenueName: "Legacy Mixed Case Venue",
+    },
+  ]);
+  await assert.rejects(
+    applyInstagramHandleNormalizationBatch._handler(
+      { auth: { getUserIdentity: async () => null }, db: legacyNormalizationDb },
+      {
+        rows: [
+          {
+            id: "legacy-mixed-case-venue",
+            expectedInstagramHandle: "@Legacy.Handle",
+            expectedNormalizedInstagramHandle: null,
+          },
+        ],
+        serviceSecret: "qa-cooldown-secret",
+      },
+    ),
+    /changed after normalization preflight/,
+    "normalization apply must reject a stale preflight snapshot",
+  );
+  assert.equal(legacyNormalizationDb.patchCount, 1);
+
+  const collisionDb = createVenueNormalizationDb([
+    {
+      ...legacyMixedCaseVenue,
+      _id: "canonical-owner",
+      instagramHandle: "legacy.handle",
+      normalizedInstagramHandle: "legacy.handle",
+    },
+    { ...legacyMixedCaseVenue, _id: "collision-target" },
+  ]);
+  await assert.rejects(
+    applyInstagramHandleNormalizationBatch._handler(
+      { auth: { getUserIdentity: async () => null }, db: collisionDb },
+      {
+        rows: [
+          {
+            id: "collision-target",
+            expectedInstagramHandle: "@Legacy.Handle",
+            expectedNormalizedInstagramHandle: null,
+          },
+        ],
+        serviceSecret: "qa-cooldown-secret",
+      },
+    ),
+    /normalization collision/,
+  );
+  assert.equal(collisionDb.patchCount, 0, "colliding migration batches must make no writes");
+
+  const duplicateNormalizedContextDb = createVenueNormalizationDb([
+    {
+      ...legacyMixedCaseVenue,
+      _id: "duplicate-normalized-a",
+      normalizedInstagramHandle: "legacy.handle",
+    },
+    {
+      ...legacyMixedCaseVenue,
+      _id: "duplicate-normalized-b",
+      normalizedInstagramHandle: "legacy.handle",
+    },
+  ]);
+  await assert.rejects(
+    getIngestionContextsByHandles._handler(
+      { auth: { getUserIdentity: async () => null }, db: duplicateNormalizedContextDb },
+      { handles: ["legacy.handle"], serviceSecret: "qa-cooldown-secret" },
+    ),
+    /multiple venues resolve/i,
+    "ambiguous normalized venue context must fail closed",
   );
 
   const drainedAttempts = await drainHandler(

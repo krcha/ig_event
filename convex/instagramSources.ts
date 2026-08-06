@@ -289,10 +289,22 @@ export const getIngestionContextsByHandles = query({
           .query("instagramSources")
           .withIndex("by_handle", (q) => q.eq("handle", handle))
           .unique();
-        const indexedVenue = await ctx.db
+        const normalizedVenues = await ctx.db
           .query("venues")
-          .withIndex("by_instagramHandle", (q) => q.eq("instagramHandle", handle))
-          .first();
+          .withIndex("by_normalizedInstagramHandle", (q) =>
+            q.eq("normalizedInstagramHandle", handle),
+          )
+          .take(2);
+        if (normalizedVenues.length > 1) {
+          throw new Error(`Multiple venues resolve to normalized Instagram handle ${handle}.`);
+        }
+        const legacyExactVenue = normalizedVenues[0]
+          ? null
+          : await ctx.db
+              .query("venues")
+              .withIndex("by_instagramHandle", (q) => q.eq("instagramHandle", handle))
+              .first();
+        const indexedVenue = normalizedVenues[0] ?? legacyExactVenue;
         const linkedVenue =
           !indexedVenue && source?.venueId ? await ctx.db.get(source.venueId) : null;
         const handleVenue =

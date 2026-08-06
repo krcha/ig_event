@@ -40,6 +40,7 @@
     "repair:stale-ingestion-jobs": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/repair-stale-ingestion-jobs.mjs",
     "repair:venue-hours": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/refresh-venue-hours.mjs",
     "migrate:venue-lifecycle": "node scripts/migrate-venue-lifecycle.mjs",
+    "migrate:venue-instagram-handles": "node scripts/migrate-venue-instagram-handles.mjs",
     "migrate:event-venue-identity": "node scripts/backfill-event-venue-identity.mjs",
     "resolve:venue-place-ids": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/resolve-venue-place-ids.mjs",
     "qa:public-search": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-public-event-search.mjs",

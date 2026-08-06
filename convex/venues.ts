@@ -32,6 +32,14 @@ const venuePublicStatus = v.union(
   v.literal("hidden"),
 );
 
+const normalizedInstagramHandleMigrationRow = v.object({
+  id: v.id("venues"),
+  expectedInstagramHandle: v.string(),
+  expectedNormalizedInstagramHandle: v.union(v.string(), v.null()),
+});
+const MAX_INSTAGRAM_HANDLE_NORMALIZATION_PAGE_SIZE = 200;
+const MAX_INSTAGRAM_HANDLE_NORMALIZATION_BATCH_SIZE = 25;
+
 const venueHoursPatch = {
   hoursSource: v.optional(venueHoursSource),
   hoursJson: v.optional(v.string()),
@@ -579,6 +587,7 @@ export const createVenue = mutation({
     const venueId = await ctx.db.insert("venues", {
       ...venueArgs,
       instagramHandle,
+      normalizedInstagramHandle: instagramHandle,
       category: canonicalizeVenueCategory(venueArgs.category),
       publicStatus,
       scrapeActive,
@@ -653,7 +662,9 @@ export const updateVenue = mutation({
     }
     const explicitPatch = {
       ...rawExplicitPatch,
-      ...(instagramHandle !== undefined ? { instagramHandle } : {}),
+      ...(instagramHandle !== undefined
+        ? { instagramHandle, normalizedInstagramHandle: instagramHandle }
+        : {}),
     };
     const patch = {
       ...explicitPatch,
@@ -699,6 +710,118 @@ export const updateVenue = mutation({
         venueId: args.id,
       });
     }
+  },
+});
+
+export const listInstagramHandleNormalizationPage = query({
+  args: {
+    paginationOpts: paginationOptsValidator,
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    if (
+      !Number.isInteger(args.paginationOpts.numItems) ||
+      args.paginationOpts.numItems < 1 ||
+      args.paginationOpts.numItems > MAX_INSTAGRAM_HANDLE_NORMALIZATION_PAGE_SIZE
+    ) {
+      throw new Error(
+        `Venue handle normalization pages must contain 1 to ${MAX_INSTAGRAM_HANDLE_NORMALIZATION_PAGE_SIZE} rows.`,
+      );
+    }
+    const result = await ctx.db.query("venues").paginate(args.paginationOpts);
+    return {
+      ...result,
+      page: result.page.map((venue) => ({
+        id: venue._id,
+        instagramHandle: venue.instagramHandle,
+        normalizedInstagramHandle: venue.normalizedInstagramHandle ?? null,
+        expectedNormalizedInstagramHandle: normalizeHandle(venue.instagramHandle),
+      })),
+    };
+  },
+});
+
+export const applyInstagramHandleNormalizationBatch = mutation({
+  args: {
+    rows: v.array(normalizedInstagramHandleMigrationRow),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    if (
+      args.rows.length < 1 ||
+      args.rows.length > MAX_INSTAGRAM_HANDLE_NORMALIZATION_BATCH_SIZE
+    ) {
+      throw new Error(
+        `Venue handle normalization batches must contain 1 to ${MAX_INSTAGRAM_HANDLE_NORMALIZATION_BATCH_SIZE} rows.`,
+      );
+    }
+
+    const normalizedWithinBatch = new Map<string, Id<"venues">>();
+    const planned: Array<{
+      id: Id<"venues">;
+      normalizedHandle: string;
+      needsUpdate: boolean;
+    }> = [];
+    for (const row of args.rows) {
+      const venue = await ctx.db.get(row.id);
+      if (!venue) {
+        throw new Error(`Venue ${row.id} no longer exists.`);
+      }
+      if (
+        venue.instagramHandle !== row.expectedInstagramHandle ||
+        (venue.normalizedInstagramHandle ?? null) !== row.expectedNormalizedInstagramHandle
+      ) {
+        throw new Error(`Venue ${row.id} changed after normalization preflight.`);
+      }
+      const normalizedHandle = normalizeHandle(venue.instagramHandle);
+      if (!normalizedHandle) {
+        throw new Error(`Venue ${row.id} has an invalid Instagram handle.`);
+      }
+      const batchOwner = normalizedWithinBatch.get(normalizedHandle);
+      if (batchOwner && batchOwner !== row.id) {
+        throw new Error(
+          `Venue handle normalization collision for ${normalizedHandle}: ${batchOwner} and ${row.id}.`,
+        );
+      }
+      normalizedWithinBatch.set(normalizedHandle, row.id);
+
+      const normalizedMatches = await ctx.db
+        .query("venues")
+        .withIndex("by_normalizedInstagramHandle", (q) =>
+          q.eq("normalizedInstagramHandle", normalizedHandle),
+        )
+        .take(2);
+      const normalizedConflict = normalizedMatches.find((candidate) => candidate._id !== row.id);
+      if (normalizedConflict) {
+        throw new Error(
+          `Venue handle normalization collision for ${normalizedHandle}: ${normalizedConflict._id} and ${row.id}.`,
+        );
+      }
+      const exactConflict = await ctx.db
+        .query("venues")
+        .withIndex("by_instagramHandle", (q) => q.eq("instagramHandle", normalizedHandle))
+        .first();
+      if (exactConflict && exactConflict._id !== row.id) {
+        throw new Error(
+          `Venue handle normalization collision for ${normalizedHandle}: ${exactConflict._id} and ${row.id}.`,
+        );
+      }
+      planned.push({
+        id: row.id,
+        normalizedHandle,
+        needsUpdate: venue.normalizedInstagramHandle !== normalizedHandle,
+      });
+    }
+
+    let updated = 0;
+    for (const plan of planned) {
+      if (!plan.needsUpdate) continue;
+      await ctx.db.patch(plan.id, { normalizedInstagramHandle: plan.normalizedHandle });
+      updated += 1;
+    }
+    return { scanned: planned.length, updated };
   },
 });
 

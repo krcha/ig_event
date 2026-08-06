@@ -227,6 +227,7 @@ export default defineSchema({
   venues: defineTable({
     name: v.string(),
     instagramHandle: v.string(),
+    normalizedInstagramHandle: v.optional(v.string()),
     instagramFollowerCount: v.optional(v.number()),
     instagramFollowerCountUpdatedAt: v.optional(v.number()),
     category: v.string(),
@@ -261,6 +262,7 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_instagramHandle", ["instagramHandle"])
+    .index("by_normalizedInstagramHandle", ["normalizedInstagramHandle"])
     .index("by_isActive", ["isActive"])
     .index("by_scrapeActive", ["scrapeActive"])
     .index("by_publicStatus", ["publicStatus"]),

@@ -4467,6 +4467,7 @@ async function loadIngestionVenueContextForHandles(
       handles: [...requestedHandles],
       error: getErrorMessage(error),
     });
+    throw error;
   }
   try {
     const allOverrides = await loadVenueNameOverridesByHandle();
