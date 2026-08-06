@@ -590,6 +590,7 @@ export const recordOpenAiAnalysis = mutation({
 export const getBacklogStateByHandle = query({
   args: {
     handle: v.string(),
+    horizonCutoffMs: v.optional(v.number()),
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -605,6 +606,14 @@ export const getBacklogStateByHandle = query({
       if (
         post.processingStatus === "completed" &&
         ["terminal_no_event", "terminal_permanent_failure", "receipt_complete"].includes(post.processingOutcome ?? "")
+      ) {
+        continue;
+      }
+      if (
+        Number.isFinite(args.horizonCutoffMs) &&
+        typeof post.postedAtMs === "number" &&
+        post.postedAtMs < (args.horizonCutoffMs as number) &&
+        post.processingStatus !== "processing"
       ) {
         continue;
       }
@@ -782,6 +791,7 @@ export const claimPaidFetchLease = mutation({
     dayKey: v.optional(v.string()),
     dailyBudgetUsd: v.optional(v.number()),
     maxChargeUsd: v.optional(v.number()),
+    horizonCutoffMs: v.optional(v.number()),
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -793,6 +803,7 @@ export const claimPaidFetchLease = mutation({
       return { claimed: false, reason: "paid_disabled" as const };
     }
 
+    const now = Date.now();
     const control = await ctx.db
       .query("instagramPaidFetchControl")
       .withIndex("by_key", (q) => q.eq("key", "apify"))
@@ -800,15 +811,37 @@ export const claimPaidFetchLease = mutation({
     if (!control?.backlogIndexReady) {
       return { claimed: false, reason: "backlog_index_not_ready" as const };
     }
-    const blocker = await ctx.db
+    const horizonCutoffMs = Number.isFinite(args.horizonCutoffMs)
+      ? Math.trunc(args.horizonCutoffMs as number)
+      : null;
+    let blocker = await ctx.db
       .query("scrapedPosts")
       .withIndex("by_blocksPaidFetch", (q) => q.eq("blocksPaidFetch", true))
       .first();
+    let reconciledOutOfHorizon = 0;
+    while (
+      blocker &&
+      horizonCutoffMs !== null &&
+      typeof blocker.postedAtMs === "number" &&
+      blocker.postedAtMs < horizonCutoffMs &&
+      blocker.processingStatus !== "processing" &&
+      reconciledOutOfHorizon < 50
+    ) {
+      await ctx.db.patch(blocker._id, {
+        blocksPaidFetch: false,
+        processingOutcome: blocker.processingOutcome ?? "outside_ingestion_horizon",
+        updatedAt: now,
+      });
+      reconciledOutOfHorizon += 1;
+      blocker = await ctx.db
+        .query("scrapedPosts")
+        .withIndex("by_blocksPaidFetch", (q) => q.eq("blocksPaidFetch", true))
+        .first();
+    }
     if (blocker) {
       return { claimed: false, reason: "saved_backlog_present" as const };
     }
 
-    const now = Date.now();
     if (
       (control.leaseExpiresAt ?? 0) > now &&
       control.leaseOwner &&

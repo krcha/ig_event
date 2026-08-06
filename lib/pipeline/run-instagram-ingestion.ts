@@ -139,6 +139,8 @@ type HandleSummary = {
   failedExtractions: number;
   failed_extractions: number;
   failed_extraction: number;
+  permanentMediaDownloadFailures?: number;
+  permanentImagePersistenceFailures?: number;
   terminalPermanentExtractionFailures?: number;
   errors: string[];
 };
@@ -1017,6 +1019,40 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error.";
 }
 
+export function isPermanentRemoteMediaFailure(error: unknown): boolean {
+  const status =
+    error && typeof error === "object"
+      ? Number(
+          "status" in error
+            ? (error as { status?: unknown }).status
+            : "statusCode" in error
+              ? (error as { statusCode?: unknown }).statusCode
+              : Number.NaN,
+        )
+      : Number.NaN;
+  if ([403, 404, 410].includes(status)) {
+    return true;
+  }
+  return /(?:status|http(?:\s+status)?)\s*[:=]?\s*(403|404|410)\b/i.test(
+    getErrorMessage(error),
+  );
+}
+
+export function resolveFailedMediaAttemptPolicy(options: {
+  canFallbackToCaptionOnly: boolean;
+  errors: unknown[];
+}): "caption_fallback" | "terminal_permanent" | "retryable" {
+  if (
+    options.errors.length > 0 &&
+    options.errors.every((error) => isPermanentRemoteMediaFailure(error))
+  ) {
+    return options.canFallbackToCaptionOnly
+      ? "caption_fallback"
+      : "terminal_permanent";
+  }
+  return "retryable";
+}
+
 function getPostContext(handle: string, post: InstagramScrapedPost): IngestionPostContext {
   const sourcePostId = normalizeString(post.postId) || null;
   const instagramUrl = normalizeString(post.instagramPostUrl) || "";
@@ -1052,7 +1088,13 @@ export async function persistInstagramMediaCandidate(options: {
   post: InstagramScrapedPost;
   processingFence: SourceProcessingFence;
   serviceSecret: string;
-  summary: Pick<HandleSummary, "errors" | "failedImagePersistence" | "persistedImages">;
+  summary: Pick<
+    HandleSummary,
+    | "errors"
+    | "failedImagePersistence"
+    | "permanentImagePersistenceFailures"
+    | "persistedImages"
+  >;
   upstreamUrl: string;
 }): Promise<boolean> {
   try {
@@ -1077,6 +1119,10 @@ export async function persistInstagramMediaCandidate(options: {
   } catch (error) {
     const message = getErrorMessage(error);
     options.summary.failedImagePersistence += 1;
+    if (isPermanentRemoteMediaFailure(error)) {
+      options.summary.permanentImagePersistenceFailures =
+        (options.summary.permanentImagePersistenceFailures ?? 0) + 1;
+    }
     options.summary.errors.push(`Durable image persistence failed: ${message}`);
     logError("ingestion.image.persistence.failed", {
       ...getPostContext(options.handle, options.post),
@@ -1085,6 +1131,33 @@ export async function persistInstagramMediaCandidate(options: {
     });
     return false;
   }
+}
+
+async function persistInstagramMediaCandidates(options: {
+  client: ConvexHttpClient;
+  handle: string;
+  post: InstagramScrapedPost;
+  processingFence: SourceProcessingFence;
+  serviceSecret: string;
+  summary: HandleSummary;
+  upstreamUrls: string[];
+}): Promise<boolean> {
+  for (const upstreamUrl of deduplicateMediaUrls(options.upstreamUrls, 8)) {
+    if (
+      await persistInstagramMediaCandidate({
+        client: options.client,
+        handle: options.handle,
+        post: options.post,
+        processingFence: options.processingFence,
+        serviceSecret: options.serviceSecret,
+        summary: options.summary,
+        upstreamUrl,
+      })
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function getConvexClient(): ConvexHttpClient {
@@ -4143,14 +4216,22 @@ export function getRetryableProcessingFailureCount(
     | "failedConversions"
     | "failedExtractions"
     | "failedImagePersistence"
+    | "permanentMediaDownloadFailures"
+    | "permanentImagePersistenceFailures"
     | "duplicate_update_failed"
   >,
 ): number {
   return (
-    summary.failedDownloads +
+    Math.max(
+      0,
+      summary.failedDownloads - (summary.permanentMediaDownloadFailures ?? 0),
+    ) +
     summary.failedConversions +
     summary.failedExtractions +
-    summary.failedImagePersistence +
+    Math.max(
+      0,
+      summary.failedImagePersistence - (summary.permanentImagePersistenceFailures ?? 0),
+    ) +
     summary.duplicate_update_failed
   );
 }
@@ -8681,6 +8762,7 @@ type ProcessIngestionPostOptions = {
   processingFence: SourceProcessingFence;
   cachedAnalysisJson?: string;
   providerExecution?: ProviderExecutionControl;
+  eventDateFilterNow?: Date;
 };
 
 type ProcessIngestionPostDependencies = {
@@ -8708,6 +8790,7 @@ async function processIngestionPost(
     processingFence,
     cachedAnalysisJson,
     providerExecution,
+    eventDateFilterNow,
   } = options;
   const postContext = getPostContext(handle, post);
   const canonicalVenueName =
@@ -8718,10 +8801,14 @@ async function processIngestionPost(
     ) || null;
   const canUseCaptionOnlyExtraction = buildPostTextEvidence(post).length > 0;
   const mediaSelection = resolveInstagramIngestionMediaSelection(post);
-  const extractionMode = mediaSelection.extractionMode;
+  let extractionMode = mediaSelection.extractionMode;
   const durableMediaCandidate = mediaSelection.durableMediaCandidate;
+  const durableMediaCandidates = deduplicateMediaUrls(
+    [durableMediaCandidate, ...(post.imageUrls ?? []), post.imageUrl],
+    8,
+  );
   let sourceIdentityMatches: ExistingSourceMatch[] = [];
-  const selectedImageUrl = mediaSelection.selectedImageUrl;
+  let selectedImageUrl = mediaSelection.selectedImageUrl;
   let imageDataUrl: string | null = null;
   let imageDataUrls: string[] = [];
 
@@ -8767,15 +8854,15 @@ async function processIngestionPost(
       const retryTarget = sourceIdentityMatches.find((match) =>
         isExistingEventEligibleForDurableMediaRetry(match.existingEvent),
       );
-      if (retryTarget && durableMediaCandidate) {
-        await persistInstagramMediaCandidate({
+      if (retryTarget && durableMediaCandidates.length > 0) {
+        await persistInstagramMediaCandidates({
           client,
           handle,
           post,
           processingFence,
           summary,
           serviceSecret,
-          upstreamUrl: durableMediaCandidate,
+          upstreamUrls: durableMediaCandidates,
         });
       }
       summary.skippedDuplicates += 1;
@@ -8813,15 +8900,15 @@ async function processIngestionPost(
     const retryTarget = sourceIdentityMatches.find((match) =>
       isExistingEventEligibleForDurableMediaRetry(match.existingEvent),
     );
-    if (retryTarget && durableMediaCandidate) {
-      await persistInstagramMediaCandidate({
+    if (retryTarget && durableMediaCandidates.length > 0) {
+      await persistInstagramMediaCandidates({
         client,
         handle,
         post,
         processingFence,
         summary,
         serviceSecret,
-        upstreamUrl: durableMediaCandidate,
+        upstreamUrls: durableMediaCandidates,
       });
     }
     recordSourceDuplicateSkip(summary, sourceDuplicateSkipDecision);
@@ -8877,6 +8964,7 @@ async function processIngestionPost(
       [selectedImageUrl, ...(post.imageUrls ?? []), post.imageUrl],
       getOpenAiMaxImagesPerPost(),
     );
+    const mediaAttemptErrors: unknown[] = [];
     for (const candidateImageUrl of relevantImageUrls) {
       let downloadedImage: Awaited<ReturnType<typeof downloadImage>>;
       try {
@@ -8890,13 +8978,19 @@ async function processIngestionPost(
       } catch (error) {
         summary.failedDownloads += 1;
         summary.failed_downloads += 1;
+        if (isPermanentRemoteMediaFailure(error)) {
+          summary.permanentMediaDownloadFailures =
+            (summary.permanentMediaDownloadFailures ?? 0) + 1;
+        }
+        mediaAttemptErrors.push(error);
         summary.errors.push(getErrorMessage(error));
         logError("ingestion.image.download.failed", {
           ...postContext,
           selectedImageUrl: candidateImageUrl,
+          permanentFailure: isPermanentRemoteMediaFailure(error),
           error: getErrorMessage(error),
         });
-        return;
+        continue;
       }
 
       try {
@@ -8905,6 +8999,9 @@ async function processIngestionPost(
           downloadedImage.contentType ?? candidateImageUrl,
         );
         imageDataUrls.push(toDataUrl(normalizedImage.imageBuffer, normalizedImage.mimeType));
+        if (imageDataUrls.length === 1) {
+          selectedImageUrl = candidateImageUrl;
+        }
         logInfo("ingestion.image.conversion.success", {
           ...postContext,
           selectedImageUrl: candidateImageUrl,
@@ -8915,14 +9012,36 @@ async function processIngestionPost(
       } catch (error) {
         summary.failedConversions += 1;
         summary.failed_conversions += 1;
+        mediaAttemptErrors.push(error);
         summary.errors.push(getErrorMessage(error));
         logError("ingestion.image.conversion.failed", {
           ...postContext,
           selectedImageUrl: candidateImageUrl,
           error: getErrorMessage(error),
         });
+      }
+    }
+
+    if (imageDataUrls.length === 0) {
+      const failedMediaPolicy = resolveFailedMediaAttemptPolicy({
+        canFallbackToCaptionOnly: canUseCaptionOnlyExtraction,
+        errors: mediaAttemptErrors,
+      });
+      if (failedMediaPolicy === "terminal_permanent") {
+        summary.terminalPermanentExtractionFailures =
+          (summary.terminalPermanentExtractionFailures ?? 0) + 1;
+        logInfo("ingestion.image.exhausted_permanent_candidates", postContext);
         return;
       }
+      if (failedMediaPolicy === "retryable") {
+        return;
+      }
+      extractionMode = "caption_only";
+      selectedImageUrl = null;
+      logInfo("ingestion.image.caption_fallback", {
+        ...postContext,
+        failedCandidateCount: mediaAttemptErrors.length,
+      });
     }
     imageDataUrl = imageDataUrls[0] ?? null;
   }
@@ -9046,7 +9165,7 @@ async function processIngestionPost(
       canonicalVenueNamesByHandle,
       venueNameOverridesByHandle,
       configuredVenueNamesByHandle,
-      { sourceRolesByHandle },
+      { sourceRolesByHandle, eventDateFilterNow },
     );
     preparedResults = bindSourceOccurrenceMetadata(post, preparedResults);
   } catch (error) {
@@ -9706,15 +9825,15 @@ async function processIngestionPost(
     }
   }
 
-  if (hasDurableMediaAttachmentTarget && durableMediaCandidate) {
-    await persistInstagramMediaCandidate({
+  if (hasDurableMediaAttachmentTarget && durableMediaCandidates.length > 0) {
+    await persistInstagramMediaCandidates({
       client,
       handle,
       post,
       processingFence,
       summary,
       serviceSecret,
-      upstreamUrl: durableMediaCandidate,
+      upstreamUrls: durableMediaCandidates,
     });
   }
 }
@@ -10032,6 +10151,7 @@ async function processSavedBacklogBeforeFreshFetch(options: {
   seenSourceKeys: string[];
   serviceSecret: string;
   workOwner: string;
+  daysBack?: number;
   canonicalVenueNamesByHandle: Record<string, string>;
   venueNameOverridesByHandle: Record<string, string>;
   configuredVenueNamesByHandle: Record<string, string>;
@@ -10041,7 +10161,7 @@ async function processSavedBacklogBeforeFreshFetch(options: {
     options.client,
     options.handle,
     undefined,
-    undefined,
+    options.daysBack,
     options.serviceSecret,
   );
   if (savedPosts.length > 0) {
@@ -10061,7 +10181,15 @@ async function processSavedBacklogBeforeFreshFetch(options: {
   }
   const backlog = (await options.client.query(
     getScrapedPostBacklogStateByHandleQuery,
-    withServiceSecret({ handle: options.handle }, options.serviceSecret),
+    withServiceSecret(
+      {
+        handle: options.handle,
+        ...(options.daysBack && options.daysBack > 0
+          ? { horizonCutoffMs: Date.now() - options.daysBack * 86_400_000 }
+          : {}),
+      },
+      options.serviceSecret,
+    ),
   )) as { actionable?: number; busy?: number };
   return (backlog.actionable ?? 0) === 0 && (backlog.busy ?? 0) === 0;
 }
@@ -10103,6 +10231,7 @@ async function runInstagramIngestionFullScrapeBatchStep(
         seenSourceKeys,
         serviceSecret: options.serviceSecret,
         workOwner: options.workOwner,
+        daysBack: options.daysBack,
         canonicalVenueNamesByHandle: options.canonicalVenueNamesByHandle,
         venueNameOverridesByHandle: options.venueNameOverridesByHandle,
         configuredVenueNamesByHandle: options.configuredVenueNamesByHandle,
@@ -10563,6 +10692,9 @@ async function fetchFreshPostsForHandlesInParallel(
               dayKey: getBudgetDayKey(new Date(fetchStartedAt)),
               dailyBudgetUsd: budget.dailyBudgetMicros / 1_000_000,
               maxChargeUsd: budget.maxChargePerHandleMicros / 1_000_000,
+              ...(options.daysBack && options.daysBack > 0
+                ? { horizonCutoffMs: fetchStartedAt - options.daysBack * 86_400_000 }
+                : {}),
               paidEnabled: isPaidIngestionEnabled(),
             },
             serviceSecret,

@@ -92,6 +92,124 @@ export const listRecentFullScrapeJobs = query({
   },
 });
 
+const COMPLETED_HANDLE_PROGRESS_KEYS = [
+  "fetchedPosts",
+  "fetched_posts",
+  "insertedEvents",
+  "inserted_events",
+  "insertedApprovedEvents",
+  "insertedPendingEvents",
+  "skippedDuplicates",
+  "skipped_duplicates",
+  "skipped_duplicates_clean",
+  "skipped_missing_date",
+  "skipped_missing_venue",
+  "skipped_video",
+  "skipped_invalid_event",
+  "skipped_past_event",
+  "skipped_far_future_event",
+  "updated_duplicates_bad_data",
+  "duplicate_update_failed",
+  "failedDownloads",
+  "failed_downloads",
+  "failedConversions",
+  "failed_conversions",
+  "failedExtractions",
+  "failed_extractions",
+  "failed_extraction",
+] as const;
+
+function normalizeJobHandle(value: unknown): string {
+  return typeof value === "string" ? value.trim().replace(/^@+/, "").toLowerCase() : "";
+}
+
+function getFreshCompletedAttemptHandles(handles: string[], summaryJson: string): string[] {
+  try {
+    const parsed = JSON.parse(summaryJson) as {
+      handles?: Array<Record<string, unknown> & { errors?: unknown; handle?: unknown }>;
+    };
+    if (!Array.isArray(parsed.handles)) return handles;
+
+    const summaries = new Map(
+      parsed.handles
+        .map((summary) => [normalizeJobHandle(summary.handle), summary] as const)
+        .filter(([handle]) => Boolean(handle)),
+    );
+    return handles.filter((handle) => {
+      const summary = summaries.get(normalizeJobHandle(handle));
+      if (!summary) return true;
+      const hasProgress = COMPLETED_HANDLE_PROGRESS_KEYS.some((key) => {
+        const value = summary[key];
+        return typeof value === "number" && Number.isFinite(value) && value > 0;
+      });
+      return hasProgress || !Array.isArray(summary.errors) || summary.errors.length === 0;
+    });
+  } catch {
+    return handles;
+  }
+}
+
+/**
+ * Request-per-step cron routes call this query repeatedly. Keep the returned
+ * shape projected: summaryJson can be hundreds of KB for a 200-handle job.
+ */
+export const listRecentFullScrapeAttemptMetadata = query({
+  args: {
+    minCreatedAt: v.number(),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const jobs = await ctx.db
+      .query("ingestionJobs")
+      .withIndex("by_createdAt", (q) => q.gte("createdAt", args.minCreatedAt))
+      .collect();
+
+    return jobs
+      .filter((job) => job.mode !== "saved_posts")
+      .map((job) => ({
+        _id: job._id,
+        source: job.source,
+        status: job.status,
+        handles: job.handles,
+        freshAttemptHandles:
+          job.status === "completed"
+            ? getFreshCompletedAttemptHandles(job.handles, job.summaryJson)
+            : [],
+        stateJson: job.stateJson,
+        createdAt: job.createdAt,
+        startedAt: job.startedAt,
+        finishedAt: job.finishedAt,
+      }));
+  },
+});
+
+export const findLatestResumableFullScrapeJob = query({
+  args: {
+    source: v.string(),
+    minCreatedAt: v.number(),
+    maxHandles: v.number(),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const jobs = await ctx.db
+      .query("ingestionJobs")
+      .withIndex("by_source_createdAt", (q) =>
+        q.eq("source", args.source).gte("createdAt", args.minCreatedAt),
+      )
+      .order("desc")
+      .take(20);
+    const job = jobs.find(
+      (candidate) =>
+        candidate.mode !== "saved_posts" &&
+        (candidate.status === "queued" || candidate.status === "running") &&
+        candidate.handles.length <= Math.max(1, Math.trunc(args.maxHandles)),
+    );
+    return job ? { _id: job._id } : null;
+  },
+});
+
 export const patchJob = mutation({
   args: {
     id: v.id("ingestionJobs"),

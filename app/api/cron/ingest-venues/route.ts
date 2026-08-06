@@ -32,8 +32,8 @@ const createIngestionJobMutation =
   "ingestionJobs:createJob" as unknown as FunctionReference<"mutation">;
 const getIngestionJobQuery =
   "ingestionJobs:getJob" as unknown as FunctionReference<"query">;
-const listRecentFullScrapeJobsQuery =
-  "ingestionJobs:listRecentFullScrapeJobs" as unknown as FunctionReference<"query">;
+const findLatestResumableFullScrapeJobQuery =
+  "ingestionJobs:findLatestResumableFullScrapeJob" as unknown as FunctionReference<"query">;
 const claimStepMutation =
   "ingestionJobs:claimStep" as unknown as FunctionReference<"mutation">;
 const completeStepMutation =
@@ -66,16 +66,6 @@ type IngestionJobRecord = {
   finishedAt?: string;
 };
 
-type RecentFullScrapeJobRecord = {
-  _id: string;
-  source: string;
-  status: IngestionJobStatus;
-  handles: string[];
-  stateJson: string;
-  createdAt: number;
-  startedAt?: string;
-  finishedAt?: string;
-};
 
 type ConvexClient = ReturnType<typeof createConvexHttpClient>;
 
@@ -186,19 +176,12 @@ async function findResumableCronJob(options: {
   minCreatedAt: number;
   maxHandles: number;
 }): Promise<IngestionJobRecord | null> {
-  const recentJobs = (await options.convex.query(listRecentFullScrapeJobsQuery, {
+  const resumableJob = (await options.convex.query(findLatestResumableFullScrapeJobQuery, {
+    source: "cron_active_venues",
     minCreatedAt: options.minCreatedAt,
+    maxHandles: options.maxHandles,
     serviceSecret: options.serviceSecret,
-  })) as RecentFullScrapeJobRecord[];
-
-  const resumableJob = recentJobs
-    .filter(
-      (job) =>
-        job.source === "cron_active_venues" &&
-        job.handles.length <= options.maxHandles &&
-        (job.status === "queued" || job.status === "running"),
-    )
-    .sort((left, right) => right.createdAt - left.createdAt)[0];
+  })) as { _id: string } | null;
 
   if (!resumableJob) {
     return null;

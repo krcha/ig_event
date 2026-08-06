@@ -16,6 +16,10 @@ import {
   recordPaidFetchWindowSuccess,
   releasePaidFetchLease,
 } from "../convex/scrapedPosts.ts";
+import {
+  isPermanentRemoteMediaFailure,
+  resolveFailedMediaAttemptPolicy,
+} from "../lib/pipeline/run-instagram-ingestion.ts";
 
 const startedAt = Date.parse("2026-07-27T10:00:00.000Z");
 assert.equal(
@@ -26,6 +30,30 @@ assert.equal(
 assert.equal(isPaidIngestionEnabled({ PAID_INGESTION_ENABLED: "true" }), true);
 assert.equal(isPaidIngestionEnabled({ PAID_INGESTION_ENABLED: "false" }), false);
 assert.equal(isPaidIngestionEnabled({ ENABLE_FRESH_APIFY_FETCH: "yes" }), true);
+assert.equal(isPermanentRemoteMediaFailure(new Error("Remote image fetch failed with status 403.")), true);
+assert.equal(isPermanentRemoteMediaFailure(new Error("Image download failed with status 410 Gone")), true);
+assert.equal(isPermanentRemoteMediaFailure(new Error("Remote image fetch failed with status 503.")), false);
+assert.equal(
+  resolveFailedMediaAttemptPolicy({
+    canFallbackToCaptionOnly: true,
+    errors: [new Error("Image download failed with status 403 Forbidden")],
+  }),
+  "caption_fallback",
+);
+assert.equal(
+  resolveFailedMediaAttemptPolicy({
+    canFallbackToCaptionOnly: false,
+    errors: [new Error("Image download failed with status 403 Forbidden")],
+  }),
+  "terminal_permanent",
+);
+assert.equal(
+  resolveFailedMediaAttemptPolicy({
+    canFallbackToCaptionOnly: false,
+    errors: [new Error("Image download failed with status 503 Service Unavailable")],
+  }),
+  "retryable",
+);
 assert.deepEqual(getFetchBoundary({ fetchStartedAt: startedAt }), {
   checkpointAt: null,
   requestNewerThanAt: startedAt - 10 * 24 * 60 * 60_000,
@@ -127,6 +155,11 @@ assert.ok(
   "Every returned provider item must become durable before a saturated window is recorded.",
 );
 assert.match(freshFetchBlock, /if \(saturated\)[\s\S]*recordPaidFetchWindowSaturationMutation[\s\S]*else[\s\S]*recordPaidFetchWindowSuccessMutation/);
+assert.match(
+  runnerSource,
+  /hasTerminalPermanentFailure[\s\S]*\? "terminal_permanent_failure"/,
+  "explicit permanent media failures must be recorded as terminal instead of replaying forever",
+);
 
 function createDb(initialTables) {
   const tables = Object.fromEntries(
@@ -211,6 +244,7 @@ function createDb(initialTables) {
 const previousCronSecret = process.env.CRON_SECRET;
 process.env.CRON_SECRET = "qa-durability-secret";
 try {
+  const horizonCutoffMs = Date.parse("2026-07-20T00:00:00.000Z");
   const mutationFetchStartedAt = Date.now() - 1_000;
   const checkpointBefore = mutationFetchStartedAt - 3_600_000;
   const { db, tables } = createDb({
@@ -223,7 +257,16 @@ try {
         updatedAt: 1,
       },
     ],
-    scrapedPosts: [],
+    scrapedPosts: [
+      {
+        _id: "old-out-of-horizon-blocker",
+        handle: "old.source",
+        postId: "old-post",
+        postedAtMs: horizonCutoffMs - 1,
+        blocksPaidFetch: true,
+        processingStatus: "pending",
+      },
+    ],
     instagramSources: [
       {
         _id: "source-one",
@@ -247,11 +290,17 @@ try {
     dayKey: "2026-07-27",
     dailyBudgetUsd: 0.05,
     maxChargeUsd: 0.04,
+    horizonCutoffMs,
     serviceSecret: "qa-durability-secret",
   };
 
   const firstClaim = await claimPaidFetchLease._handler(ctx, { ...common, owner: "owner-a" });
   assert.equal(firstClaim.claimed, true);
+  assert.equal(
+    tables.scrapedPosts[0].blocksPaidFetch,
+    false,
+    "out-of-horizon saved rows must be reconciled before evaluating the paid-fetch gate",
+  );
   assert.equal(firstClaim.resultsLimit, 5);
   assert.equal(Date.parse(firstClaim.onlyPostsNewerThan), checkpointBefore - 5 * 60_000);
   const busyClaim = await claimPaidFetchLease._handler(ctx, { ...common, owner: "owner-b" });

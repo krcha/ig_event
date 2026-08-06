@@ -231,6 +231,10 @@ const hostCronRunnerSource = readFileSync(
   new URL("./ig-event-cron-runner", import.meta.url),
   "utf8",
 );
+const recentFullScrapeHandlesSource = readFileSync(
+  new URL("../lib/pipeline/recent-full-scrape-handles.ts", import.meta.url),
+  "utf8",
+);
 const adminVenueScrapeRouteSource = readFileSync(
   new URL("../app/api/admin/scrape/venues/route.ts", import.meta.url),
   "utf8",
@@ -287,6 +291,28 @@ assert.match(
   /processSavedBacklogBeforeFreshFetch/,
   "the full saved backlog must drain before another paid Apify request",
 );
+assert.match(
+  recentFullScrapeHandlesSource,
+  /ingestionJobs:listRecentFullScrapeAttemptMetadata/,
+  "daily cooldown checks must use projected attempt metadata instead of transferring full job summaries",
+);
+assert.doesNotMatch(
+  recentFullScrapeHandlesSource,
+  /ingestionJobs:listRecentFullScrapeJobs/,
+  "daily cooldown checks must not repeatedly transfer high-cardinality summaryJson payloads",
+);
+assert.match(
+  cronRouteSource,
+  /ingestionJobs:findLatestResumableFullScrapeJob/,
+  "daily resume lookup must use an indexed projected query",
+);
+assert.doesNotMatch(
+  cronRouteSource,
+  /ingestionJobs:listRecentFullScrapeJobs/,
+  "the request-per-step route must not repeatedly transfer full job summaries",
+);
+assert.match(hostCronRunnerSource, /run_request_with_retry/);
+assert.match(hostCronRunnerSource, /MAX_TRANSIENT_REQUEST_ATTEMPTS/);
 assert.match(
   ingestionRunnerSource,
   /isOpenAiProviderBlockedError\(error\)[\s\S]{0,160}throw error/,
@@ -507,8 +533,13 @@ assert.match(
 );
 assert.match(
   ingestionJobsSource,
-  /summaryJson: job\.summaryJson/,
-  "recent full-scrape job records should expose summaries for cooldown decisions",
+  /freshAttemptHandles:[\s\S]*getFreshCompletedAttemptHandles\(job\.handles, job\.summaryJson\)/,
+  "recent full-scrape metadata should derive cooldown handles server-side",
+);
+assert.doesNotMatch(
+  recentFullScrapeHandlesSource,
+  /summaryJson/,
+  "the request-per-step cooldown helper must not transfer or parse full summaries",
 );
 assert.doesNotMatch(
   cronRouteSource,
@@ -710,17 +741,7 @@ assert.deepEqual(
     handles: ["good-zero", "good-fetched", "apify-hard-limit", "legacy-no-summary"],
     stateJson: "{}",
     createdAt: Date.now(),
-    summaryJson: JSON.stringify({
-      handles: [
-        { handle: "good-zero", fetchedPosts: 0, errors: [] },
-        { handle: "good-fetched", fetchedPosts: 1, errors: [] },
-        {
-          handle: "apify-hard-limit",
-          fetchedPosts: 0,
-          errors: ["Apify scraper request failed: 403 Monthly usage hard limit exceeded"],
-        },
-      ],
-    }),
+    freshAttemptHandles: ["good-zero", "good-fetched", "legacy-no-summary"],
   }),
   ["good-zero", "good-fetched", "legacy-no-summary"],
   "completed jobs should not cool down handles that only recorded scraper/API errors",
@@ -754,9 +775,26 @@ const config = readFileSync(configPath, "utf8");
 const outputPath = config.match(/^output = "([^"]+)"$/m)?.[1];
 const url = config.match(/^url = "([^"]+)"$/m)?.[1];
 if (!outputPath || !url) process.exit(2);
-let state = { count: 0, requests: [] };
+let state = { count: 0, requests: [], failedOnce: false };
 try { state = JSON.parse(readFileSync(process.env.FAKE_CURL_STATE, "utf8")); } catch {}
-const requestIndex = state.count + 1;
+state.count += 1;
+if (process.env.FAKE_CURL_MODE === "transient-500" && !state.failedOnce) {
+  state.failedOnce = true;
+  state.requests.push({ attempt: state.count, httpCode: 500 });
+  writeFileSync(process.env.FAKE_CURL_STATE, JSON.stringify(state));
+  writeFileSync(outputPath, JSON.stringify({ error: "terminated" }));
+  process.stdout.write("500");
+  process.exit(0);
+}
+if (process.env.FAKE_CURL_MODE === "permanent-401") {
+  state.requests.push({ attempt: state.count, httpCode: 401 });
+  writeFileSync(process.env.FAKE_CURL_STATE, JSON.stringify(state));
+  writeFileSync(outputPath, JSON.stringify({ error: "unauthorized" }));
+  process.stdout.write("401");
+  process.exit(0);
+}
+const successfulRequests = state.requests.filter((request) => request.httpCode === 200).length;
+const requestIndex = successfulRequests + 1;
 const parsedUrl = new URL(url);
 const activeCount = Number(process.env.FAKE_CURL_ACTIVE_COUNT ?? "2400");
 const remaining = Number(parsedUrl.searchParams.get("hostRunRemaining") ?? String(activeCount));
@@ -787,8 +825,15 @@ const payload = {
   maxSteps: 1,
   stepsAdvanced: zeroProgress ? 0 : 1,
 };
-state.count = requestIndex;
-state.requests.push({ requestIndex, remaining, selected, jobId, done });
+state.requests.push({
+  attempt: state.count,
+  httpCode: 200,
+  requestIndex,
+  remaining,
+  selected,
+  jobId,
+  done,
+});
 writeFileSync(process.env.FAKE_CURL_STATE, JSON.stringify(state));
 writeFileSync(outputPath, JSON.stringify(payload));
 process.stdout.write("200");
@@ -883,5 +928,19 @@ assert.equal(
   6,
   "zero-progress responses must not consume the full throughput-sized request budget",
 );
+
+const transientHttpFixture = runCronRunnerCapFixture("transient-500", 200);
+assert.equal(transientHttpFixture.result.status, 0, transientHttpFixture.result.stderr);
+assert.deepEqual(
+  transientHttpFixture.state.requests.map((request) => request.httpCode),
+  [500, 200],
+  "a transient HTTP 500 must be retried idempotently within the same scheduled run",
+);
+assert.match(transientHttpFixture.result.stdout, /status=ok requests=1 selected=200/);
+
+const permanentHttpFixture = runCronRunnerCapFixture("permanent-401", 200);
+assert.notEqual(permanentHttpFixture.result.status, 0);
+assert.equal(permanentHttpFixture.state.requests.length, 1);
+assert.equal(permanentHttpFixture.state.requests[0].httpCode, 401);
 
 console.log("Apify cost-control QA passed.");

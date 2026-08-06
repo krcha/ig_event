@@ -368,6 +368,7 @@ await withoutConsoleNoise(() =>
     venueNameOverridesByHandle: {},
     configuredVenueNamesByHandle: { "common.belgrade": "COMMON | Белград | Мероприятия" },
     serviceSecret: "qa",
+    eventDateFilterNow: NOW,
     extracted: commonExtraction,
   }),
 );
@@ -619,6 +620,7 @@ for (const recurrenceMarker of [
           "common.belgrade": "COMMON | Белград | Мероприятия",
         },
         serviceSecret: "qa",
+        eventDateFilterNow: NOW,
         extracted: syntaxExtraction,
       }),
     );
@@ -738,6 +740,7 @@ await withoutConsoleNoise(() =>
       "common.belgrade": "COMMON | Белград | Мероприятия",
     },
     serviceSecret: "qa",
+    eventDateFilterNow: NOW,
     extracted: midweekBoundaryExtraction,
   }),
 );
@@ -817,6 +820,7 @@ for (const suspiciousRecurrenceMarker of [
           "common.belgrade": "COMMON | Белград | Мероприятия",
         },
         serviceSecret: "qa",
+        eventDateFilterNow: NOW,
         extracted: suspiciousExtraction,
       }),
     );
@@ -928,6 +932,7 @@ await withoutConsoleNoise(() =>
     venueNameOverridesByHandle: {},
     configuredVenueNamesByHandle: { "common.belgrade": "COMMON | Белград | Мероприятия" },
     serviceSecret: "qa",
+    eventDateFilterNow: NOW,
     extracted: boundaryExtraction,
   }),
 );
@@ -1010,6 +1015,7 @@ await withoutConsoleNoise(() =>
     venueNameOverridesByHandle: {},
     configuredVenueNamesByHandle: { "common.belgrade": "COMMON | Белград | Мероприятия" },
     serviceSecret: "qa",
+    eventDateFilterNow: NOW,
     extracted: swappedLaneExtraction,
   }),
 );

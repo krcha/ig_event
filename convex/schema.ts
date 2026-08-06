@@ -436,7 +436,8 @@ export default defineSchema({
   })
     .index("by_status", ["status"])
     .index("by_createdAt", ["createdAt"])
-    .index("by_status_updatedAt", ["status", "updatedAt"]),
+    .index("by_status_updatedAt", ["status", "updatedAt"])
+    .index("by_source_createdAt", ["source", "createdAt"]),
   eventAuditLog: defineTable({
     eventId: v.id("events"),
     action: v.string(),
