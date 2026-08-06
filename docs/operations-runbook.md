@@ -368,7 +368,25 @@ Apply batches are limited to 25 rows and use exact previous-value preconditions.
 The command is successful only after a second complete read reports zero
 remaining updates. New venue creates and handle changes maintain the normalized
 field automatically. If preflight/apply fails, leave the old web and runner in
-place; the optional field and additive index are rollback-compatible.
+place.
+
+After any backfill, web/runner rollback may retain the newer additive Convex
+backend. Before redeploying an older Convex schema that does not declare
+`normalizedInstagramHandle`, first preview and apply the bounded reverse migration:
+
+```bash
+node --env-file=.env.local --env-file=.env.self-hosted \
+  scripts/migrate-venue-instagram-handles.mjs --rollback
+node --env-file=.env.local --env-file=.env.self-hosted \
+  scripts/migrate-venue-instagram-handles.mjs \
+  --rollback --apply --confirm CLEAR_NORMALIZED_VENUE_HANDLES
+```
+
+The rollback command uses the same complete pagination, 25-row limit, and
+previous-value compare-and-set checks, then verifies that no venue retains the
+optional field. Only after that verification is it safe to deploy an exact older
+backend schema. If reverse migration cannot complete, retain the forward-compatible
+backend or restore the pre-migration Convex backup; do not attempt the old schema.
 
 ## Cron Replacement
 
@@ -536,9 +554,13 @@ docker compose --env-file /opt/ig_event/.env.production logs --tail 100 web
 curl -fsS http://127.0.0.1:3000/api/health
 ```
 
-If Convex schema/functions were deployed and need rollback, deploy the matching
-Convex code from the known-good commit with the same production deploy key.
-Avoid manual production data edits unless a specific recovery plan exists.
+If Convex schema/functions were deployed and need rollback, first determine whether
+the venue-handle backfill ran. If it did, do not deploy a schema that omits
+`normalizedInstagramHandle` until the reverse migration above verifies zero
+retained fields. A web-only rollback may retain the additive backend. Otherwise,
+deploy the matching Convex code from the known-good commit with the same
+production deploy key. Avoid manual production data edits unless a specific
+recovery plan exists.
 
 ## Rollback
 
@@ -559,8 +581,10 @@ restart:
 docker compose --env-file /opt/ig_event/.env.production up -d
 ```
 
-If a Convex deploy caused the issue, redeploy the last known good code with the
-same Convex deployment target:
+If a Convex deploy caused the issue, a web-only rollback should retain the additive
+backend. For an exact backend rollback after handle normalization, first run the
+bounded `--rollback` preview/apply procedure above and verify zero retained fields;
+then redeploy the last known good code with the same Convex deployment target:
 
 ```bash
 git checkout <known-good-commit>

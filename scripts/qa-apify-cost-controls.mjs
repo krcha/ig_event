@@ -58,6 +58,7 @@ import {
 } from "../convex/instagramSources.ts";
 import {
   applyInstagramHandleNormalizationBatch,
+  clearInstagramHandleNormalizationBatch,
   listInstagramHandleNormalizationPage,
 } from "../convex/venues.ts";
 
@@ -622,7 +623,9 @@ assert.match(
 );
 assert.match(venuesSource, /normalizedInstagramHandle: instagramHandle/);
 assert.match(venuesSource, /applyInstagramHandleNormalizationBatch/);
+assert.match(venuesSource, /clearInstagramHandleNormalizationBatch/);
 assert.match(venueHandleMigrationSource, /NORMALIZE_VENUE_HANDLES/);
+assert.match(venueHandleMigrationSource, /CLEAR_NORMALIZED_VENUE_HANDLES/);
 assert.match(venueHandleMigrationSource, /args\.indexOf\("--confirm"\)/);
 assert.match(venueHandleMigrationSource, /collisions/);
 assert.match(venueHandleMigrationSource, /verificationUpdatesRemaining/);
@@ -1170,6 +1173,41 @@ try {
     "normalization apply must reject a stale preflight snapshot",
   );
   assert.equal(legacyNormalizationDb.patchCount, 1);
+  const normalizationRollback = await clearInstagramHandleNormalizationBatch._handler(
+    { auth: { getUserIdentity: async () => null }, db: legacyNormalizationDb },
+    {
+      rows: [
+        {
+          id: "legacy-mixed-case-venue",
+          expectedInstagramHandle: "@Legacy.Handle",
+          expectedNormalizedInstagramHandle: "legacy.handle",
+        },
+      ],
+      serviceSecret: "qa-cooldown-secret",
+    },
+  );
+  assert.deepEqual(normalizationRollback, { scanned: 1, updated: 1 });
+  assert.equal(
+    legacyNormalizationDb.rows.get("legacy-mixed-case-venue").normalizedInstagramHandle,
+    undefined,
+  );
+  assert.equal(legacyNormalizationDb.patchCount, 2);
+  await assert.rejects(
+    clearInstagramHandleNormalizationBatch._handler(
+      { auth: { getUserIdentity: async () => null }, db: legacyNormalizationDb },
+      {
+        rows: [
+          {
+            id: "legacy-mixed-case-venue",
+            expectedInstagramHandle: "@Legacy.Handle",
+            expectedNormalizedInstagramHandle: "legacy.handle",
+          },
+        ],
+        serviceSecret: "qa-cooldown-secret",
+      },
+    ),
+    /changed after normalization rollback preflight/,
+  );
 
   const collisionDb = createVenueNormalizationDb([
     {

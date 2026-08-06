@@ -175,7 +175,7 @@ function hasBoundPublicFields(
   return true;
 }
 
-export function hasCompleteSourceGroundedAutoApproval(
+export function hasCompleteSourceGroundingAttestation(
   normalizedFieldsJson: string | undefined,
   eventFields?: EventApprovalFields,
 ): boolean {
@@ -184,14 +184,8 @@ export function hasCompleteSourceGroundedAutoApproval(
     return false;
   }
 
-  const pendingReasons = fields.moderationPendingReasons;
-  const moderationSignals = fields.moderationSignals;
-  const confidenceScore = fields.moderationConfidenceScore;
   const normalizedDate = fields.normalizedDate;
   const normalizedVenue = fields.normalizedVenue;
-  const signalValues = Array.isArray(moderationSignals)
-    ? moderationSignals.map((signal) => String(signal))
-    : null;
   const timeGroundingVerified = fields.sourceGroundingTimeVerified;
   const missingImage = fields.missingImage;
 
@@ -208,6 +202,40 @@ export function hasCompleteSourceGroundedAutoApproval(
     fields.sourceGroundingRowVerified === true &&
     isTrueOrNull(timeGroundingVerified) &&
     isTrueOrNull(fields.sourceGroundingArtistsVerified) &&
+    typeof normalizedDate === "string" &&
+    normalizedDate.length > 0 &&
+    typeof normalizedVenue === "string" &&
+    normalizedVenue.length > 0 &&
+    fields.normalizedIsValid === true &&
+    fields.titleUsedFallback === false &&
+    fields.dateSuspiciousYear === false &&
+    (fields.dateConfidence === "high" || fields.dateConfidence === "medium") &&
+    (missingImage === false ||
+      (missingImage === true && fields.moderationAllowMissingImage === true)) &&
+    hasBoundPublicFields(fields, eventFields)
+  );
+}
+
+export function hasCompleteSourceGroundedAutoApproval(
+  normalizedFieldsJson: string | undefined,
+  eventFields?: EventApprovalFields,
+): boolean {
+  const fields = parseNormalizedFields(normalizedFieldsJson);
+  if (!fields) {
+    return false;
+  }
+
+  const pendingReasons = fields.moderationPendingReasons;
+  const moderationSignals = fields.moderationSignals;
+  const confidenceScore = fields.moderationConfidenceScore;
+  const signalValues = Array.isArray(moderationSignals)
+    ? moderationSignals.map((signal) => String(signal))
+    : null;
+  const timeGroundingVerified = fields.sourceGroundingTimeVerified;
+  const missingImage = fields.missingImage;
+
+  return (
+    hasCompleteSourceGroundingAttestation(normalizedFieldsJson, eventFields) &&
     fields.moderationAutoApproved === true &&
     fields.moderationAutoApproveRule === SOURCE_GROUNDED_AUTO_APPROVE_RULE &&
     Array.isArray(pendingReasons) &&
@@ -225,18 +253,7 @@ export function hasCompleteSourceGroundedAutoApproval(
         !signalValues.includes("missing_image_allowed")) &&
     typeof confidenceScore === "number" &&
     Number.isFinite(confidenceScore) &&
-    confidenceScore >= CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD &&
-    typeof normalizedDate === "string" &&
-    normalizedDate.length > 0 &&
-    typeof normalizedVenue === "string" &&
-    normalizedVenue.length > 0 &&
-    fields.normalizedIsValid === true &&
-    fields.titleUsedFallback === false &&
-    fields.dateSuspiciousYear === false &&
-    (fields.dateConfidence === "high" || fields.dateConfidence === "medium") &&
-    (missingImage === false ||
-      (missingImage === true && fields.moderationAllowMissingImage === true)) &&
-    hasBoundPublicFields(fields, eventFields)
+    confidenceScore >= CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD
   );
 }
 

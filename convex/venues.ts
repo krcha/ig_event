@@ -14,6 +14,7 @@ import {
   type VenuePublicStatus,
 } from "../lib/venues/venue-lifecycle";
 import { requireAdminIdentity, requireAdminOrServiceSecret } from "./authz";
+import { isCanonicallyGroundedApprovedEvent } from "./publicEventGrounding";
 
 const DEFAULT_PUBLIC_VENUE_EVENT_LIMIT = 12;
 const MAX_PUBLIC_VENUE_EVENT_LIMIT = 50;
@@ -155,8 +156,12 @@ async function loadBoundedVenueEventCards(
   ]);
   const legacy = [...handleMatches, ...identityMatches].filter((event) => !event.venueId);
   const merged = mergeUniqueEvents([...linked, ...legacy]);
-  merged.sort(isHistory ? compareVenueEventsDesc : compareVenueEvents);
-  return merged.slice(0, options.limit);
+  const grounding = await Promise.all(
+    merged.map((event) => isCanonicallyGroundedApprovedEvent(ctx, event)),
+  );
+  const grounded = merged.filter((_, index) => grounding[index]);
+  grounded.sort(isHistory ? compareVenueEventsDesc : compareVenueEvents);
+  return grounded.slice(0, options.limit);
 }
 
 function buildInstagramProfileUrl(handle: string): string {
@@ -822,6 +827,41 @@ export const applyInstagramHandleNormalizationBatch = mutation({
       updated += 1;
     }
     return { scanned: planned.length, updated };
+  },
+});
+
+export const clearInstagramHandleNormalizationBatch = mutation({
+  args: {
+    rows: v.array(normalizedInstagramHandleMigrationRow),
+    serviceSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    if (
+      args.rows.length < 1 ||
+      args.rows.length > MAX_INSTAGRAM_HANDLE_NORMALIZATION_BATCH_SIZE
+    ) {
+      throw new Error(
+        `Venue handle normalization rollback batches must contain 1 to ${MAX_INSTAGRAM_HANDLE_NORMALIZATION_BATCH_SIZE} rows.`,
+      );
+    }
+
+    const planned: Id<"venues">[] = [];
+    for (const row of args.rows) {
+      const venue = await ctx.db.get(row.id);
+      if (!venue) throw new Error(`Venue ${row.id} no longer exists.`);
+      if (
+        venue.instagramHandle !== row.expectedInstagramHandle ||
+        (venue.normalizedInstagramHandle ?? null) !== row.expectedNormalizedInstagramHandle
+      ) {
+        throw new Error(`Venue ${row.id} changed after normalization rollback preflight.`);
+      }
+      if (venue.normalizedInstagramHandle !== undefined) planned.push(row.id);
+    }
+    for (const id of planned) {
+      await ctx.db.patch(id, { normalizedInstagramHandle: undefined });
+    }
+    return { scanned: args.rows.length, updated: planned.length };
   },
 });
 

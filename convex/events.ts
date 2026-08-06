@@ -21,6 +21,7 @@ import {
 import {
   assertExpectedEventStatus,
   assertExpectedEventUpdatedAt,
+  hasCompleteSourceGroundingAttestation,
   nextEventUpdatedAt,
   assertServiceCreateEventPolicy,
   assertServiceUpdateEventPolicy,
@@ -291,6 +292,71 @@ async function assertPersistedServiceSourcePolicy(
   }
 }
 
+async function assertHumanApprovalSourcePolicy(
+  ctx: MutationCtx,
+  candidate: ServiceSourceCandidateFields & { imageUrl?: string },
+): Promise<void> {
+  await assertPersistedServiceSourcePolicy(ctx, candidate);
+  if (!hasCompleteSourceGroundingAttestation(candidate.normalizedFieldsJson, candidate)) {
+    throw new Error(
+      "Human approval requires complete canonical Instagram source grounding for the final public fields.",
+    );
+  }
+}
+
+function approvalCandidatesShareVenue(
+  left: ApprovalCandidateFields,
+  right: ApprovalCandidateFields,
+): boolean {
+  const leftVenue = normalizeLookup(left.venue);
+  return (
+    (left.venueId !== undefined && right.venueId !== undefined && left.venueId === right.venueId) ||
+    (Boolean(left.venueInstagramHandle) &&
+      normalizeHandle(left.venueInstagramHandle ?? "") ===
+        normalizeHandle(right.venueInstagramHandle ?? "")) ||
+    (Boolean(leftVenue) && leftVenue === normalizeLookup(right.venue))
+  );
+}
+
+function approvalCandidatesShareSource(
+  left: ApprovalCandidateFields,
+  right: ApprovalCandidateFields,
+): boolean {
+  const leftPostId = left.instagramPostId?.trim() ?? "";
+  const leftPostUrl = normalizeLookup(left.instagramPostUrl ?? "");
+  return (
+    (Boolean(leftPostId) && leftPostId === right.instagramPostId?.trim()) ||
+    (Boolean(leftPostUrl) && leftPostUrl === normalizeLookup(right.instagramPostUrl ?? ""))
+  );
+}
+
+function classifyApprovalCandidates(
+  left: ApprovalCandidateFields,
+  right: ApprovalCandidateFields,
+) {
+  if (left.date !== right.date) return "unrelated" as const;
+  return classifyApprovalOccurrenceRelation({
+    candidate: left,
+    existing: right,
+    sameVenue: approvalCandidatesShareVenue(left, right),
+    sameSource: approvalCandidatesShareSource(left, right),
+  });
+}
+
+function assertPairwiseOccurrenceRelation(
+  candidates: ApprovalCandidateFields[],
+  expected: "proven_distinct" | "proven_duplicate",
+  message: string,
+): void {
+  for (let leftIndex = 0; leftIndex < candidates.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < candidates.length; rightIndex += 1) {
+      if (classifyApprovalCandidates(candidates[leftIndex], candidates[rightIndex]) !== expected) {
+        throw new Error(message);
+      }
+    }
+  }
+}
+
 async function assertApprovalCandidatePolicy(
   ctx: MutationCtx,
   candidate: ApprovalCandidateFields,
@@ -401,6 +467,30 @@ async function resolveVenueDenormalizedFields(
 ): Promise<VenueDenormalizedFields> {
   const venues = (await ctx.db.query("venues").collect()).filter(isVenuePublic);
   return resolveVenueDenormalizedFieldsFromPublicVenues(venues, venueName);
+}
+
+async function prepareHumanApprovalCandidate(
+  ctx: MutationCtx,
+  event: Doc<"events">,
+): Promise<{
+  candidate: Doc<"events"> & VenueDenormalizedFields;
+  venuePatch: Partial<Doc<"events">> & VenueDenormalizedFields;
+}> {
+  const venues = (await ctx.db.query("venues").collect()).filter(isVenuePublic);
+  const venueFields = resolveVenueDenormalizedFieldsFromPublicVenues(venues, event.venue);
+  const definedVenueFields = Object.fromEntries(
+    Object.entries(venueFields).filter(([, value]) => value !== undefined),
+  ) as VenueDenormalizedFields;
+  const canonicalVenueName = venueFields.venueId
+    ? venues.find((venue) => venue._id === venueFields.venueId)?.name
+    : undefined;
+  const venuePatch = {
+    ...definedVenueFields,
+    ...(canonicalVenueName && canonicalVenueName !== event.venue
+      ? { venue: canonicalVenueName }
+      : {}),
+  };
+  return { candidate: { ...event, ...venuePatch }, venuePatch };
 }
 
 async function loadPublicVenueIdsForEvents(
@@ -651,6 +741,61 @@ async function reassignSavedEventReferences(
   }
 
   return { movedCount, dedupedCount };
+}
+
+async function reassignInstagramOccurrenceReferences(
+  ctx: MutationCtx,
+  fromEventId: Id<"events">,
+  toEventId: Id<"events">,
+): Promise<void> {
+  if (fromEventId === toEventId) return;
+  const sourceLinks = await ctx.db
+    .query("instagramEventSources")
+    .withIndex("by_event", (q) => q.eq("eventId", fromEventId))
+    .collect();
+
+  for (const sourceLink of sourceLinks) {
+    const primaryLink = await ctx.db
+      .query("instagramEventSources")
+      .withIndex("by_source_occurrence", (q) =>
+        q
+          .eq("sourceIdentity", sourceLink.sourceIdentity)
+          .eq("sourceOccurrenceKey", sourceLink.sourceOccurrenceKey),
+      )
+      .unique();
+    if (primaryLink && primaryLink._id !== sourceLink._id) {
+      if (primaryLink.eventId !== toEventId) {
+        throw new Error("Instagram occurrence source is already linked to another event.");
+      }
+      await ctx.db.delete(sourceLink._id);
+    } else {
+      await ctx.db.patch(sourceLink._id, {
+        eventId: toEventId,
+        updatedAt: nextEventUpdatedAt(sourceLink.updatedAt),
+      });
+    }
+
+    const receipt = await ctx.db
+      .query("instagramSourceOccurrenceReceipts")
+      .withIndex("by_sourceIdentity", (q) => q.eq("sourceIdentity", sourceLink.sourceIdentity))
+      .unique();
+    if (!receipt) continue;
+    const satisfiedOccurrences = receipt.satisfiedOccurrences.map((occurrence) =>
+      occurrence.eventId === fromEventId ? { ...occurrence, eventId: toEventId } : occurrence,
+    );
+    if (satisfiedOccurrences.every((occurrence, index) =>
+      occurrence.eventId === receipt.satisfiedOccurrences[index].eventId
+    )) {
+      continue;
+    }
+    if (new Set(satisfiedOccurrences.map((occurrence) => occurrence.eventId)).size !== satisfiedOccurrences.length) {
+      throw new Error("Merging would collapse distinct Instagram source occurrences.");
+    }
+    await ctx.db.patch(receipt._id, {
+      satisfiedOccurrences,
+      updatedAt: nextEventUpdatedAt(receipt.updatedAt),
+    });
+  }
 }
 
 export const getEvent = query({
@@ -1231,20 +1376,32 @@ export const getDiscoverFeed = query({
       .sort(compareOrganicEvents)
       .slice(0, 12);
 
-    const publicVenueIds = await loadPublicVenueIdsForEvents(ctx, [
+    const selectedEvents = [
       ...featured,
       ...free,
       ...promoted,
       ...tonight,
       ...weekend,
-    ]);
+    ];
+    const groundingDecisions = await Promise.all(
+      selectedEvents.map((event) => isCanonicallyGroundedApprovedEvent(ctx, event)),
+    );
+    const groundedEventIds = new Set(
+      selectedEvents
+        .filter((_, index) => groundingDecisions[index])
+        .map((event) => event._id),
+    );
+    const groundedEvents = selectedEvents.filter((event) => groundedEventIds.has(event._id));
+    const publicVenueIds = await loadPublicVenueIdsForEvents(ctx, groundedEvents);
     const projectGroup = (events: Doc<"events">[]) =>
-      events.map((event) =>
-        projectPublicEvent(
-          event,
-          event.venueId !== undefined && publicVenueIds.has(event.venueId),
-        ),
-      );
+      events
+        .filter((event) => groundedEventIds.has(event._id))
+        .map((event) =>
+          projectPublicEvent(
+            event,
+            event.venueId !== undefined && publicVenueIds.has(event.venueId),
+          ),
+        );
 
     return {
       featured: projectGroup(featured),
@@ -2234,33 +2391,17 @@ export const setEventStatus = mutation({
     assertExpectedEventUpdatedAt(existingEvent.updatedAt, args.expectedUpdatedAt);
 
     if (args.status === "approved") {
-      const venueFields = await resolveVenueDenormalizedFields(ctx, existingEvent.venue);
-      await assertApprovalCandidatePolicy(
-        ctx,
-        {
-          title: existingEvent.title,
-          date: existingEvent.date,
-          venue: existingEvent.venue,
-          venueId: venueFields.venueId ?? existingEvent.venueId,
-          venueInstagramHandle:
-            venueFields.venueInstagramHandle ?? existingEvent.venueInstagramHandle,
-          instagramPostId: existingEvent.instagramPostId,
-          instagramPostUrl: existingEvent.instagramPostUrl,
-          time: existingEvent.time,
-          artists: existingEvent.artists,
-          sourceOccurrenceKey: existingEvent.sourceOccurrenceKey,
-          normalizedFieldsJson: existingEvent.normalizedFieldsJson,
-        },
-        [args.id],
-      );
-      await ctx.db.patch(args.id, venueFields);
+      const prepared = await prepareHumanApprovalCandidate(ctx, existingEvent);
+      await assertHumanApprovalSourcePolicy(ctx, prepared.candidate);
+      await assertApprovalCandidatePolicy(ctx, prepared.candidate, [args.id]);
+      await ctx.db.patch(args.id, prepared.venuePatch);
     }
 
     const now = Date.now();
     await ctx.db.patch(args.id, {
       status: args.status,
       reviewedAt: now,
-      reviewedBy: args.reviewedBy,
+      reviewedBy: args.reviewedBy?.trim() || identity.subject,
       moderationNote: args.moderationNote,
       updatedAt: nextEventUpdatedAt(existingEvent.updatedAt, now),
     });
@@ -2314,6 +2455,35 @@ export const setEventStatuses = mutation({
         "Distinct same-venue/date batch approval requires at least two approved event IDs.",
       );
     }
+    const preparedApprovalCandidates = new Map<
+      Id<"events">,
+      Awaited<ReturnType<typeof prepareHumanApprovalCandidate>>
+    >();
+    if (args.status === "approved") {
+      for (const id of uniqueIds) {
+        const event = preloadedEvents.get(id) ?? await ctx.db.get(id);
+        if (!event || event.status !== "pending") {
+          if (args.approveAsDistinctSameVenueDateBatch) {
+            throw new Error("Every distinct-batch event must still be pending.");
+          }
+          continue;
+        }
+        const prepared = await prepareHumanApprovalCandidate(ctx, event);
+        await assertHumanApprovalSourcePolicy(ctx, prepared.candidate);
+        preparedApprovalCandidates.set(id, prepared);
+      }
+      if (args.approveAsDistinctSameVenueDateBatch) {
+        assertPairwiseOccurrenceRelation(
+          uniqueIds.map((id) => {
+            const prepared = preparedApprovalCandidates.get(id);
+            if (!prepared) throw new Error("Distinct-batch approval candidate is missing.");
+            return prepared.candidate;
+          }),
+          "proven_distinct",
+          "Distinct same-venue/date batch approval requires every pair to be proven distinct.",
+        );
+      }
+    }
     let updatedCount = 0;
     let skippedCount = 0;
 
@@ -2326,26 +2496,16 @@ export const setEventStatuses = mutation({
 
       if (args.status === "approved") {
         try {
-          const venueFields = await resolveVenueDenormalizedFields(ctx, existingEvent.venue);
+          const prepared = preparedApprovalCandidates.get(id);
+          if (!prepared) {
+            throw new Error("Prepared approval candidate is missing.");
+          }
           await assertApprovalCandidatePolicy(
             ctx,
-            {
-              title: existingEvent.title,
-              date: existingEvent.date,
-              venue: existingEvent.venue,
-              venueId: venueFields.venueId ?? existingEvent.venueId,
-              venueInstagramHandle:
-                venueFields.venueInstagramHandle ?? existingEvent.venueInstagramHandle,
-              instagramPostId: existingEvent.instagramPostId,
-              instagramPostUrl: existingEvent.instagramPostUrl,
-              time: existingEvent.time,
-              artists: existingEvent.artists,
-              sourceOccurrenceKey: existingEvent.sourceOccurrenceKey,
-              normalizedFieldsJson: existingEvent.normalizedFieldsJson,
-            },
+            prepared.candidate,
             args.approveAsDistinctSameVenueDateBatch ? uniqueIds : [id],
           );
-          await ctx.db.patch(id, venueFields);
+          await ctx.db.patch(id, prepared.venuePatch);
         } catch (error) {
           if (
             !(error instanceof Error) ||
@@ -2363,7 +2523,7 @@ export const setEventStatuses = mutation({
       await ctx.db.patch(id, {
         status: args.status,
         reviewedAt: now,
-        reviewedBy: args.reviewedBy,
+        reviewedBy: args.reviewedBy?.trim() || identity.subject,
         moderationNote: args.moderationNote,
         updatedAt: nextEventUpdatedAt(existingEvent.updatedAt, now),
       });
@@ -2486,6 +2646,7 @@ export const mergeApprovedEvents = mutation({
       duplicateEvents.push(duplicateEvent);
     }
 
+    let effectivePrimaryEvent: ApprovalCandidateFields = primaryEvent;
     if (Object.keys(args.patch).length > 0) {
       assertPublicEventImageWrite(args.patch.imageUrl, args.patch.imageStorageId);
       const venueFields =
@@ -2511,6 +2672,7 @@ export const mergeApprovedEvents = mutation({
           : {}),
       };
       const effectiveEvent = { ...primaryEvent, ...patch };
+      effectivePrimaryEvent = effectiveEvent;
       await assertApprovalCandidatePolicy(
         ctx,
         {
@@ -2538,8 +2700,15 @@ export const mergeApprovedEvents = mutation({
       });
     }
 
+    assertPairwiseOccurrenceRelation(
+      [effectivePrimaryEvent, ...duplicateEvents],
+      "proven_duplicate",
+      "Approved-event merge requires every pair to be a proven duplicate occurrence.",
+    );
+
     for (const duplicateId of duplicateIds) {
       await reassignSavedEventReferences(ctx, duplicateId, args.primaryId);
+      await reassignInstagramOccurrenceReferences(ctx, duplicateId, args.primaryId);
       await ctx.db.delete(duplicateId);
       await writeEventAuditLog(ctx, duplicateId, "merged_deleted_duplicate", {
         actor,

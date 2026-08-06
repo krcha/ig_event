@@ -104,19 +104,45 @@ async function loadPublicVenueIdsForSavedEvents(
   );
 }
 
+const MAX_USER_LIBRARY_REFERENCES = 100;
+
 async function loadLibraryForUser(ctx: QueryCtx, userId: string) {
-  const savedRefs = await ctx.db
-    .query("savedEvents")
-    .withIndex("by_user", (q) => q.eq("userId", userId))
-    .order("desc")
-    .collect();
-  const favoriteRefs = await ctx.db
-    .query("favoriteVenues")
-    .withIndex("by_user", (q) => q.eq("userId", userId))
-    .order("desc")
-    .collect();
+  const userRecord = await ctx.db
+    .query("users")
+    .withIndex("by_clerkId", (q) => q.eq("clerkId", userId))
+    .unique();
+  const [savedRefs, legacySavedRefs, favoriteRefs] = await Promise.all([
+    ctx.db
+      .query("savedEvents")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .order("desc")
+      .take(MAX_USER_LIBRARY_REFERENCES),
+    userRecord
+      ? ctx.db
+          .query("userSavedEvents")
+          .withIndex("by_user", (q) => q.eq("userId", userRecord._id))
+          .order("desc")
+          .take(MAX_USER_LIBRARY_REFERENCES)
+      : Promise.resolve([]),
+    ctx.db
+      .query("favoriteVenues")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .order("desc")
+      .take(MAX_USER_LIBRARY_REFERENCES),
+  ]);
+  const savedEventIds = [
+    ...savedRefs.map((ref) => ({ eventId: ref.eventId, savedAt: ref.createdAt })),
+    ...legacySavedRefs.map((ref) => ({ eventId: ref.eventId, savedAt: ref.savedAt })),
+  ]
+    .sort((left, right) => right.savedAt - left.savedAt)
+    .filter(
+      (item, index, items) =>
+        items.findIndex((candidate) => candidate.eventId === item.eventId) === index,
+    )
+    .slice(0, MAX_USER_LIBRARY_REFERENCES)
+    .map((item) => item.eventId);
   const approvedSavedEventCandidates = (
-    await Promise.all(savedRefs.map((ref) => ctx.db.get(ref.eventId)))
+    await Promise.all(savedEventIds.map((eventId) => ctx.db.get(eventId)))
   )
     .filter(notNull)
     .filter((event) => event.status === "approved");

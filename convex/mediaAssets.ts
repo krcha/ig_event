@@ -9,6 +9,7 @@ import {
 } from "../lib/images/media-source-identity";
 import { isAllowedRemoteImageUrl } from "../lib/images/remote-image-policy";
 import { nextEventUpdatedAt } from "../lib/events/event-update-precondition";
+import { isCanonicallyGroundedApprovedEvent } from "./publicEventGrounding";
 
 const sourceIdentityArgs = {
   postId: v.optional(v.string()),
@@ -518,7 +519,11 @@ export const getPublicEventImageSource = query({
     const eventId = ctx.db.normalizeId("events", args.eventId);
     if (!eventId) return { eventExists: false as const, kind: "none" as const };
     const event = await ctx.db.get(eventId);
-    if (!event || event.status !== "approved") {
+    if (
+      !event ||
+      event.status !== "approved" ||
+      !(await isCanonicallyGroundedApprovedEvent(ctx, event))
+    ) {
       return { eventExists: false as const, kind: "none" as const };
     }
 

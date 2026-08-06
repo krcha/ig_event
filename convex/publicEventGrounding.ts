@@ -1,7 +1,10 @@
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { isCaptionSourceCoherentWithEvent } from "../lib/events/event-source-approval";
-import { hasCompleteSourceGroundedAutoApproval } from "../lib/events/event-update-precondition";
+import {
+  hasCompleteSourceGroundedAutoApproval,
+  hasCompleteSourceGroundingAttestation,
+} from "../lib/events/event-update-precondition";
 import { normalizeInstagramPostUrl } from "../lib/images/apify-images";
 import { normalizeHandle } from "../lib/pipeline/venue-normalization";
 
@@ -33,8 +36,9 @@ export async function isCanonicallyGroundedApprovedEvent(
   if (event.status !== "approved") return false;
   const fields = parseObject(event.normalizedFieldsJson);
   if (!fields) return false;
-  if (
-    !hasCompleteSourceGroundedAutoApproval(event.normalizedFieldsJson, {
+  const machineAuthorized = hasCompleteSourceGroundedAutoApproval(
+    event.normalizedFieldsJson,
+    {
       title: event.title,
       date: event.date,
       time: event.time,
@@ -45,8 +49,28 @@ export async function isCanonicallyGroundedApprovedEvent(
       instagramPostUrl: event.instagramPostUrl,
       sourceCaption: event.sourceCaption,
       sourcePostedAt: event.sourcePostedAt,
-    })
-  ) {
+      venueInstagramHandle: event.venueInstagramHandle,
+    },
+  );
+  const humanAuthorized =
+    typeof event.reviewedAt === "number" &&
+    Number.isFinite(event.reviewedAt) &&
+    typeof event.reviewedBy === "string" &&
+    Boolean(event.reviewedBy.trim()) &&
+    hasCompleteSourceGroundingAttestation(event.normalizedFieldsJson, {
+      title: event.title,
+      date: event.date,
+      time: event.time,
+      venue: event.venue,
+      artists: event.artists,
+      imageUrl: event.imageUrl,
+      instagramPostId: event.instagramPostId,
+      instagramPostUrl: event.instagramPostUrl,
+      sourceCaption: event.sourceCaption,
+      sourcePostedAt: event.sourcePostedAt,
+      venueInstagramHandle: event.venueInstagramHandle,
+    });
+  if (!machineAuthorized && !humanAuthorized) {
     return false;
   }
 

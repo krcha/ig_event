@@ -3,17 +3,21 @@ import { makeFunctionReference } from "convex/server";
 
 const listPageQuery = makeFunctionReference("venues:listInstagramHandleNormalizationPage");
 const applyBatchMutation = makeFunctionReference("venues:applyInstagramHandleNormalizationBatch");
+const clearBatchMutation = makeFunctionReference("venues:clearInstagramHandleNormalizationBatch");
 const PAGE_SIZE = 200;
 const APPLY_BATCH_SIZE = 25;
 const MAX_PAGES = 10_000;
-const CONFIRMATION = "NORMALIZE_VENUE_HANDLES";
+const APPLY_CONFIRMATION = "NORMALIZE_VENUE_HANDLES";
+const ROLLBACK_CONFIRMATION = "CLEAR_NORMALIZED_VENUE_HANDLES";
 
 const args = process.argv.slice(2);
 const apply = args.includes("--apply");
+const rollback = args.includes("--rollback");
 const confirmIndex = args.indexOf("--confirm");
 const confirmation = confirmIndex >= 0 ? args[confirmIndex + 1] : undefined;
-if (apply && confirmation !== CONFIRMATION) {
-  throw new Error(`Apply requires --confirm ${CONFIRMATION}.`);
+const requiredConfirmation = rollback ? ROLLBACK_CONFIRMATION : APPLY_CONFIRMATION;
+if (apply && confirmation !== requiredConfirmation) {
+  throw new Error(`Apply requires --confirm ${requiredConfirmation}.`);
 }
 
 const convexUrl = (
@@ -63,7 +67,8 @@ async function readSnapshot() {
   const needsUpdate = rows.filter(
     (row) => row.normalizedInstagramHandle !== row.expectedNormalizedInstagramHandle,
   );
-  return { rows, invalid, collisions, needsUpdate };
+  const needsRollback = rows.filter((row) => row.normalizedInstagramHandle !== null);
+  return { rows, invalid, collisions, needsUpdate, needsRollback };
 }
 
 function assertSafeSnapshot(snapshot, label) {
@@ -77,12 +82,16 @@ function assertSafeSnapshot(snapshot, label) {
 
 const preflight = await readSnapshot();
 assertSafeSnapshot(preflight, "Preflight");
+const plannedRows = rollback ? preflight.needsRollback : preflight.needsUpdate;
 console.log(
   JSON.stringify({
     phase: "preflight",
+    mode: rollback ? "rollback" : "normalize",
     apply,
     scanned: preflight.rows.length,
+    plannedUpdates: plannedRows.length,
     needsUpdate: preflight.needsUpdate.length,
+    needsRollback: preflight.needsRollback.length,
     invalid: preflight.invalid.length,
     collisions: preflight.collisions.length,
   }),
@@ -95,9 +104,9 @@ if (!apply) {
 
 let updated = 0;
 let mutationCalls = 0;
-for (let index = 0; index < preflight.needsUpdate.length; index += APPLY_BATCH_SIZE) {
-  const batch = preflight.needsUpdate.slice(index, index + APPLY_BATCH_SIZE);
-  const result = await convex.mutation(applyBatchMutation, {
+for (let index = 0; index < plannedRows.length; index += APPLY_BATCH_SIZE) {
+  const batch = plannedRows.slice(index, index + APPLY_BATCH_SIZE);
+  const result = await convex.mutation(rollback ? clearBatchMutation : applyBatchMutation, {
     rows: batch.map((row) => ({
       id: row.id,
       expectedInstagramHandle: row.instagramHandle,
@@ -121,19 +130,21 @@ if (verification.rows.length !== preflight.rows.length) {
     `Venue count changed during normalization (${preflight.rows.length} to ${verification.rows.length}).`,
   );
 }
-if (verification.needsUpdate.length !== 0) {
+const remaining = rollback ? verification.needsRollback.length : verification.needsUpdate.length;
+if (remaining !== 0) {
   throw new Error(
-    `Venue handle normalization verification left ${verification.needsUpdate.length} rows unresolved.`,
+    `Venue handle normalization ${rollback ? "rollback" : "apply"} verification left ${remaining} rows unresolved.`,
   );
 }
 console.log(
   JSON.stringify({
     status: "complete",
+    mode: rollback ? "rollback" : "normalize",
     scanned: verification.rows.length,
-    plannedUpdates: preflight.needsUpdate.length,
+    plannedUpdates: plannedRows.length,
     updated,
     mutationCalls,
-    verificationUpdatesRemaining: verification.needsUpdate.length,
+    verificationUpdatesRemaining: remaining,
     verifiedIdempotent: true,
   }),
 );
