@@ -14,6 +14,7 @@ import {
 } from "@/lib/pipeline/recent-full-scrape-handles";
 import { loadCronIngestionCandidateSnapshot } from "@/lib/pipeline/cron-ingestion-resumption";
 import {
+  enforceDailySamplingRunContext,
   getCronIngestionConfig,
   isAuthorizedCronRequestHeader,
   selectCronIngestionHandles,
@@ -379,12 +380,19 @@ export async function GET(request: Request) {
         daysBack: effectiveDaysBack,
       });
 
-    initialSummary.runContext = {
-      ...(initialSummary.runContext ?? {}),
+    const persistedRunStartedAtMs = Date.parse(initialSummary.startedAt);
+    const samplingWindowUpperBoundAtMs = samplingMode
+      ? Number.isFinite(persistedRunStartedAtMs)
+        ? persistedRunStartedAtMs
+        : Date.now()
+      : undefined;
+
+    enforceDailySamplingRunContext(initialSummary, {
       resultsLimit: effectiveResultsLimit,
       daysBack: effectiveDaysBack,
       samplingMode,
-    };
+      samplingWindowUpperBoundAtMs,
+    });
 
     const initialState = createInitialIngestionBatchState();
     const initialPayload = serializeSafeIngestionJobPayload({
@@ -428,6 +436,12 @@ export async function GET(request: Request) {
 
       const stateVersion = claimedJob.stateVersion ?? 0;
       summary = parseSummary(claimedJob.summaryJson, claimedJob.handles);
+      enforceDailySamplingRunContext(summary, {
+        resultsLimit: effectiveResultsLimit,
+        daysBack: effectiveDaysBack,
+        samplingMode,
+        samplingWindowUpperBoundAtMs,
+      });
       const state = parseState(claimedJob.stateJson);
 
       try {
@@ -440,6 +454,7 @@ export async function GET(request: Request) {
           batchSize: Math.min(claimedJob.batchSize, effectiveBatchSize),
           mode: claimedJob.mode ?? "full_scrape",
           samplingMode,
+          samplingWindowUpperBoundAtMs,
           serviceSecret,
         });
 

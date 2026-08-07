@@ -89,11 +89,13 @@ import {
   getIngestionFetchPageSize,
   getIngestionMaxPostsPerSource,
   getLatestPost24hSamplingPolicy,
+  resolvePaidFetchSamplingWindow,
   getOpenAiCircuitCooldownMs,
   getOpenAiDailyPostLimit,
   getOpenAiMaxAttemptsPerPost,
   getOpenAiMaxImagesPerPost,
   isPaidIngestionEnabled,
+  isPostedAtWithinSamplingWindow,
   deduplicateMediaUrls,
   type InstagramSamplingMode,
 } from "@/lib/pipeline/instagram-ingestion-durability";
@@ -104,6 +106,7 @@ type RunInstagramIngestionOptions = {
   daysBack?: number;
   mode?: IngestionRunMode;
   samplingMode?: InstagramSamplingMode;
+  samplingWindowUpperBoundAtMs?: number;
   serviceSecret?: string;
 };
 
@@ -173,6 +176,7 @@ export type IngestionRunContext = {
   source?: string;
   mode?: IngestionRunMode;
   samplingMode?: InstagramSamplingMode;
+  samplingWindowUpperBoundAtMs?: number;
 };
 
 export type IngestionBatchState = {
@@ -197,6 +201,7 @@ export type IngestionBatchStepOptions = {
   batchSize?: number;
   mode?: IngestionRunMode;
   samplingMode?: InstagramSamplingMode;
+  samplingWindowUpperBoundAtMs?: number;
   postStepLimit?: number;
   scrapedPostPageSize?: number;
   serviceSecret?: string;
@@ -4626,6 +4631,8 @@ async function loadSavedScrapedPostsForHandle(
   resultsLimit: number | undefined,
   daysBack: number | undefined,
   serviceSecret: string,
+  samplingWindowLowerBoundAtMs?: number,
+  samplingWindowUpperBoundAtMs?: number,
 ): Promise<InstagramScrapedPost[]> {
   const savedPosts = (await client.query(
     listScrapedPostsByHandleQuery,
@@ -4648,7 +4655,19 @@ async function loadSavedScrapedPostsForHandle(
         ),
     )
     .map(mapSavedScrapedPostToInstagramPost)
-    .filter((post) => isPostWithinDaysBack(post.postedAt, daysBack))
+    .filter((post) => {
+      if (
+        Number.isFinite(samplingWindowLowerBoundAtMs) &&
+        Number.isFinite(samplingWindowUpperBoundAtMs)
+      ) {
+        return isPostedAtWithinSamplingWindow(
+          post.postedAt,
+          samplingWindowLowerBoundAtMs as number,
+          samplingWindowUpperBoundAtMs as number,
+        );
+      }
+      return isPostWithinDaysBack(post.postedAt, daysBack);
+    })
     .sort((left, right) => comparePostedAtDescending(left.postedAt, right.postedAt));
 
   if (!resultsLimit || resultsLimit < 1) {
@@ -10455,6 +10474,8 @@ async function processSavedBacklogBeforeFreshFetch(options: {
   serviceSecret: string;
   workOwner: string;
   daysBack?: number;
+  samplingWindowLowerBoundAtMs?: number;
+  samplingWindowUpperBoundAtMs?: number;
   canonicalVenueNamesByHandle: Record<string, string>;
   venueNameOverridesByHandle: Record<string, string>;
   configuredVenueNamesByHandle: Record<string, string>;
@@ -10466,6 +10487,8 @@ async function processSavedBacklogBeforeFreshFetch(options: {
     undefined,
     options.daysBack,
     options.serviceSecret,
+    options.samplingWindowLowerBoundAtMs,
+    options.samplingWindowUpperBoundAtMs,
   );
   if (savedPosts.length > 0) {
     await processLoadedPostsForHandle({
@@ -10481,6 +10504,15 @@ async function processSavedBacklogBeforeFreshFetch(options: {
       configuredVenueNamesByHandle: options.configuredVenueNamesByHandle,
       sourceRolesByHandle: options.sourceRolesByHandle,
     });
+  }
+  if (
+    Number.isFinite(options.samplingWindowLowerBoundAtMs) &&
+    Number.isFinite(options.samplingWindowUpperBoundAtMs)
+  ) {
+    // The paid-fetch claim is the authoritative backlog fence for strict
+    // sampling. It clears stale/missing/future poison rows while preserving
+    // any in-window processing lease that must still block transport.
+    return true;
   }
   const backlog = (await options.client.query(
     getScrapedPostBacklogStateByHandleQuery,
@@ -10535,6 +10567,15 @@ async function runInstagramIngestionFullScrapeBatchStep(
         serviceSecret: options.serviceSecret,
         workOwner: options.workOwner,
         daysBack: options.daysBack,
+        samplingWindowLowerBoundAtMs:
+          options.samplingMode === "latest_one_24h" &&
+          Number.isFinite(options.samplingWindowUpperBoundAtMs)
+            ? (options.samplingWindowUpperBoundAtMs as number) - 24 * 60 * 60_000
+            : undefined,
+        samplingWindowUpperBoundAtMs:
+          options.samplingMode === "latest_one_24h"
+            ? options.samplingWindowUpperBoundAtMs
+            : undefined,
         canonicalVenueNamesByHandle: options.canonicalVenueNamesByHandle,
         venueNameOverridesByHandle: options.venueNameOverridesByHandle,
         configuredVenueNamesByHandle: options.configuredVenueNamesByHandle,
@@ -10964,6 +11005,7 @@ type PaidFetchLeaseResult = {
   claimed?: boolean;
   reason?: string;
   onlyPostsNewerThan?: string | null;
+  samplingWindowUpperBoundAtMs?: number;
   resultsLimit?: number;
   expiresAt?: number;
 };
@@ -10990,7 +11032,7 @@ async function fetchFreshPostsForHandlesInParallel(
   summary: IngestionSummary,
   options: Pick<
     RunInstagramIngestionOptions,
-    "resultsLimit" | "daysBack" | "samplingMode"
+    "resultsLimit" | "daysBack" | "samplingMode" | "samplingWindowUpperBoundAtMs"
   >,
   serviceSecret: string,
   workOwner: string,
@@ -11009,7 +11051,7 @@ async function fetchFreshPostsForHandlesInParallel(
       try {
         const fetchStartedAt = Date.now();
         const latestPostSampling = getLatestPost24hSamplingPolicy({
-          fetchStartedAt,
+          windowUpperBoundAtMs: options.samplingWindowUpperBoundAtMs ?? fetchStartedAt,
           samplingMode: options.samplingMode,
         });
         const baseResultsLimit =
@@ -11034,9 +11076,14 @@ async function fetchFreshPostsForHandlesInParallel(
                   maxChargeUsd: budget.maxChargePerHandleMicros / 1_000_000,
                   attemptCooldownMs: getProviderAttemptCooldownMs(),
                   requestBoundaryVersion: 1,
-                  ...(effectiveDaysBack && effectiveDaysBack > 0
-                    ? { horizonCutoffMs: fetchStartedAt - effectiveDaysBack * 86_400_000 }
-                    : {}),
+                  ...(latestPostSampling
+                    ? {
+                        horizonCutoffMs: latestPostSampling.cutoffAtMs,
+                        samplingWindowUpperBoundAtMs: latestPostSampling.upperBoundAtMs,
+                      }
+                    : effectiveDaysBack && effectiveDaysBack > 0
+                      ? { horizonCutoffMs: fetchStartedAt - effectiveDaysBack * 86_400_000 }
+                      : {}),
                   samplingMode: options.samplingMode,
                   paidEnabled: isPaidIngestionEnabled(),
                 },
@@ -11060,8 +11107,13 @@ async function fetchFreshPostsForHandlesInParallel(
         }
         fetchLeaseClaimed = true;
 
-        const onlyPostsNewerThan =
-          latestPostSampling?.onlyPostsNewerThan ?? lease.onlyPostsNewerThan ?? null;
+        const samplingWindow = resolvePaidFetchSamplingWindow({
+          leaseOnlyPostsNewerThan: lease.onlyPostsNewerThan,
+          leaseSamplingWindowUpperBoundAtMs: lease.samplingWindowUpperBoundAtMs,
+          fallbackOnlyPostsNewerThan: latestPostSampling?.onlyPostsNewerThan,
+          fallbackCutoffAtMs: latestPostSampling?.cutoffAtMs,
+          fallbackUpperBoundAtMs: latestPostSampling?.upperBoundAtMs,
+        });
         const requestedResultsLimit =
           latestPostSampling?.resultsLimit ??
           normalizeFullScrapeResultsLimit(lease.resultsLimit ?? baseResultsLimit);
@@ -11069,9 +11121,9 @@ async function fetchFreshPostsForHandlesInParallel(
           handle,
           resultsLimit: requestedResultsLimit,
           daysBack: effectiveDaysBack,
-          onlyPostsNewerThan: onlyPostsNewerThan ?? undefined,
-          cutoffAtMs: latestPostSampling?.cutoffAtMs,
-          upperBoundAtMs: latestPostSampling?.upperBoundAtMs,
+          onlyPostsNewerThan: samplingWindow.onlyPostsNewerThan ?? undefined,
+          cutoffAtMs: samplingWindow.cutoffAtMs,
+          upperBoundAtMs: samplingWindow.upperBoundAtMs,
           requirePostedAt: latestPostSampling?.enabled,
           skipPinnedPosts: latestPostSampling?.enabled,
           abortAtMs: lease.expiresAt ? lease.expiresAt - 60_000 : undefined,
@@ -11163,6 +11215,8 @@ async function fetchFreshPostsForHandlesInParallel(
           undefined,
           undefined,
           serviceSecret,
+          latestPostSampling?.enabled ? samplingWindow.cutoffAtMs : undefined,
+          latestPostSampling?.enabled ? samplingWindow.upperBoundAtMs : undefined,
         );
         const freshPosts = actionableSavedPosts.filter((post) =>
           fetchedSourceKeys.has(getSourceIdentityKey(post)),
@@ -11174,7 +11228,7 @@ async function fetchFreshPostsForHandlesInParallel(
         handleSummary.fetched_posts = posts.length;
         handleSummary.newFetchedPosts = freshPosts.length;
         handleSummary.skippedAlreadyFetchedPosts = skippedCount;
-        handleSummary.apifyHighWatermarkApplied = onlyPostsNewerThan ? 1 : 0;
+        handleSummary.apifyHighWatermarkApplied = samplingWindow.onlyPostsNewerThan ? 1 : 0;
 
         postsByHandle[handle] = freshPosts;
       } catch (error) {
@@ -11233,6 +11287,7 @@ export async function runActiveVenueIngestion(options?: {
   daysBack?: number;
   mode?: IngestionRunMode;
   samplingMode?: InstagramSamplingMode;
+  samplingWindowUpperBoundAtMs?: number;
   serviceSecret?: string;
 }): Promise<ActiveVenueIngestionResult> {
   const serviceSecret = getConfiguredServiceSecret(options?.serviceSecret);
@@ -11254,6 +11309,7 @@ export async function runActiveVenueIngestion(options?: {
     daysBack: options?.daysBack,
     mode: options?.mode,
     samplingMode: options?.samplingMode,
+    samplingWindowUpperBoundAtMs: options?.samplingWindowUpperBoundAtMs,
     serviceSecret,
   });
 
@@ -11280,6 +11336,7 @@ export async function runInstagramIngestion(
       batchSize: mode === "full_scrape" ? 1 : 10,
       mode,
       samplingMode: options.samplingMode,
+      samplingWindowUpperBoundAtMs: options.samplingWindowUpperBoundAtMs,
       serviceSecret,
     });
     done = batchResult.done;

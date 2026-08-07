@@ -466,8 +466,9 @@ with `PAID_INGESTION_ENABLED=true`. Only the scheduled venue-ingestion route
 opts into this policy; admin and discovery full scrapes retain the high-recall
 protocol. Each active source gets exactly one Apify result slot, pinned rows are
 skipped so an old pin cannot consume that slot, and both the Actor request and
-local acceptance filter use the same inclusive UTC window captured at fetch
-start: `fetchStartedAt - 24h <= postedAt <= fetchStartedAt`. Missing, invalid,
+local acceptance filter use the same inclusive UTC window captured once at the
+durable daily job start and preserved across every batch and retry:
+`runStartedAt - 24h <= postedAt <= runStartedAt`. Missing, invalid,
 stale, and future post timestamps fail closed. A one-row response is complete
 for the sampling lane only: it neither creates a deeper continuation nor
 advances, clears, or otherwise mutates the source's high-recall checkpoint and

@@ -23,6 +23,7 @@ import {
   isOpenAiProviderBlockedError,
 } from "../lib/ai/extract-event-data.ts";
 import {
+  enforceDailySamplingRunContext,
   getCronIngestionConfig,
   isAuthorizedCronRequestHeader,
   selectCronIngestionHandles,
@@ -472,6 +473,29 @@ assert.deepEqual(cronConfig, {
   maxHandlesPerRun: 2000,
   fullScrapeCooldownHours: 23,
 });
+const resumedLegacySummary = {
+  startedAt: "2026-08-07T07:00:00.000Z",
+  finishedAt: "2026-08-07T07:05:00.000Z",
+  handles: [],
+  runContext: {
+    source: "cron_active_venues",
+    resultsLimit: 3,
+    daysBack: 10,
+  },
+};
+enforceDailySamplingRunContext(resumedLegacySummary, {
+  resultsLimit: 1,
+  daysBack: 1,
+  samplingMode: "latest_one_24h",
+  samplingWindowUpperBoundAtMs: Date.parse(resumedLegacySummary.startedAt),
+});
+assert.deepEqual(resumedLegacySummary.runContext, {
+  source: "cron_active_venues",
+  resultsLimit: 1,
+  daysBack: 1,
+  samplingMode: "latest_one_24h",
+  samplingWindowUpperBoundAtMs: Date.parse(resumedLegacySummary.startedAt),
+});
 
 const vercelConfig = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8"));
 assert.deepEqual(
@@ -571,8 +595,8 @@ assert.match(
 );
 assert.match(
   ingestionRunnerSource,
-  /onlyPostsNewerThan:\s*onlyPostsNewerThan \?\? undefined/,
-  "full scrapes must pass the latest persisted per-handle timestamp into Apify",
+  /onlyPostsNewerThan:\s*samplingWindow\.onlyPostsNewerThan \?\? undefined/,
+  "full scrapes must pass the durable lease boundary into Apify",
 );
 assert.match(scrapedPostsSource, /getLatestIngestionBoundaryByHandle/);
 assert.match(scrapedPostsSource, /Date\.now\(\) \+ 5 \* 60 \* 1_000/);

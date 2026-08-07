@@ -52,7 +52,7 @@ export function isLatestPost24hSamplingEnabled(
 }
 
 export function getLatestPost24hSamplingPolicy(options: {
-  fetchStartedAt: number;
+  windowUpperBoundAtMs: number;
   samplingMode?: InstagramSamplingMode;
 }): {
   enabled: boolean;
@@ -65,17 +65,57 @@ export function getLatestPost24hSamplingPolicy(options: {
 } | null {
   if (options.samplingMode !== "latest_one_24h") return null;
 
-  const fetchStartedAt = Math.max(1, Math.trunc(options.fetchStartedAt));
-  const cutoffAtMs = fetchStartedAt - LATEST_POST_SAMPLING_WINDOW_MS;
+  const windowUpperBoundAtMs = Math.max(1, Math.trunc(options.windowUpperBoundAtMs));
+  const cutoffAtMs = windowUpperBoundAtMs - LATEST_POST_SAMPLING_WINDOW_MS;
   return {
     enabled: true,
     resultsLimit: 1,
     daysBack: 1,
     bootstrapDays: 1,
     cutoffAtMs,
-    upperBoundAtMs: fetchStartedAt,
+    upperBoundAtMs: windowUpperBoundAtMs,
     onlyPostsNewerThan: new Date(cutoffAtMs).toISOString(),
   };
+}
+
+export function resolvePaidFetchSamplingWindow(options: {
+  leaseOnlyPostsNewerThan?: string | null;
+  leaseSamplingWindowUpperBoundAtMs?: number;
+  fallbackOnlyPostsNewerThan?: string | null;
+  fallbackCutoffAtMs?: number;
+  fallbackUpperBoundAtMs?: number;
+}): {
+  onlyPostsNewerThan: string | null;
+  cutoffAtMs?: number;
+  upperBoundAtMs?: number;
+} {
+  const onlyPostsNewerThan =
+    options.leaseOnlyPostsNewerThan ?? options.fallbackOnlyPostsNewerThan ?? null;
+  const leaseCutoffAtMs = onlyPostsNewerThan
+    ? Date.parse(onlyPostsNewerThan)
+    : Number.NaN;
+  return {
+    onlyPostsNewerThan,
+    cutoffAtMs: Number.isFinite(leaseCutoffAtMs)
+      ? leaseCutoffAtMs
+      : options.fallbackCutoffAtMs,
+    upperBoundAtMs:
+      options.leaseSamplingWindowUpperBoundAtMs ?? options.fallbackUpperBoundAtMs,
+  };
+}
+
+export function isPostedAtWithinSamplingWindow(
+  postedAt: string | null | undefined,
+  lowerBoundAtMs: number,
+  upperBoundAtMs: number,
+): boolean {
+  if (!postedAt) return false;
+  const postedAtMs = Date.parse(postedAt);
+  return (
+    Number.isFinite(postedAtMs) &&
+    postedAtMs >= lowerBoundAtMs &&
+    postedAtMs <= upperBoundAtMs
+  );
 }
 
 export function getIngestionBootstrapDays(env: NodeJS.ProcessEnv = process.env): number {

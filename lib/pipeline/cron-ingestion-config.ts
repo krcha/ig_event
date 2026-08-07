@@ -1,3 +1,5 @@
+import type { IngestionSummary } from "@/lib/pipeline/run-instagram-ingestion";
+
 const DEFAULT_CRON_RESULTS_LIMIT = 3;
 const DEFAULT_CRON_DAYS_BACK = 10;
 const DEFAULT_CRON_MAX_HANDLES_PER_RUN = 2000;
@@ -19,6 +21,25 @@ export type CronHandleSelection = {
   skippedRecentlyAttempted: number;
   skippedDueToRunLimit: number;
 };
+
+export function enforceDailySamplingRunContext(
+  summary: IngestionSummary,
+  options: {
+    resultsLimit: number;
+    daysBack: number;
+    samplingMode?: "latest_one_24h";
+    samplingWindowUpperBoundAtMs?: number;
+  },
+): IngestionSummary {
+  summary.runContext = {
+    ...(summary.runContext ?? {}),
+    resultsLimit: options.resultsLimit,
+    daysBack: options.daysBack,
+    samplingMode: options.samplingMode,
+    samplingWindowUpperBoundAtMs: options.samplingWindowUpperBoundAtMs,
+  };
+  return summary;
+}
 
 function parseBoundedPositiveInteger(
   value: string | undefined,

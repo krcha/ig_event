@@ -1108,6 +1108,7 @@ export const claimPaidFetchLease = mutation({
     leaseMs: v.optional(v.number()),
     requestedResultsLimit: v.optional(v.number()),
     fetchStartedAt: v.optional(v.number()),
+    samplingWindowUpperBoundAtMs: v.optional(v.number()),
     bootstrapDays: v.optional(v.number()),
     paidEnabled: v.optional(v.boolean()),
     dayKey: v.optional(v.string()),
@@ -1130,6 +1131,15 @@ export const claimPaidFetchLease = mutation({
 
     const now = Date.now();
     const isLatest24hSample = args.samplingMode === "latest_one_24h";
+    const samplingWindowUpperBoundAtMs = isLatest24hSample
+      ? Math.max(
+          1,
+          Math.min(
+            now + 60_000,
+            Math.trunc(args.samplingWindowUpperBoundAtMs ?? args.fetchStartedAt ?? now),
+          ),
+        )
+      : null;
     const attemptCooldownMs = Math.max(
       0,
       Math.min(
@@ -1145,9 +1155,11 @@ export const claimPaidFetchLease = mutation({
     if (!control?.backlogIndexReady) {
       return { claimed: false, reason: "backlog_index_not_ready" as const };
     }
-    const horizonCutoffMs = Number.isFinite(args.horizonCutoffMs)
-      ? Math.trunc(args.horizonCutoffMs as number)
-      : null;
+    const horizonCutoffMs = isLatest24hSample
+      ? (samplingWindowUpperBoundAtMs as number) - 24 * 60 * 60_000
+      : Number.isFinite(args.horizonCutoffMs)
+        ? Math.trunc(args.horizonCutoffMs as number)
+        : null;
     // Backlog admission is source-scoped. A saved post from an inactive or
     // unrelated handle must not starve fresh acquisition for every venue.
     const findBlocker = () =>
@@ -1175,7 +1187,7 @@ export const claimPaidFetchLease = mutation({
         (isLatest24hSample
           ? typeof postedAtMs !== "number" ||
             postedAtMs < horizonCutoffMs ||
-            postedAtMs > Math.trunc(args.fetchStartedAt ?? now)
+            postedAtMs > (samplingWindowUpperBoundAtMs as number)
           : typeof postedAtMs === "number" && postedAtMs < horizonCutoffMs) &&
         blocker.processingStatus !== "processing";
 
@@ -1251,8 +1263,15 @@ export const claimPaidFetchLease = mutation({
         };
       }
       const resumedFetchStartedAt = control.leaseFetchStartedAt ?? now;
+      const encodedSamplingUpperBoundAtMs = Number(
+        control.leaseBoundaryKey?.slice("latest24h:".length),
+      );
+      const resumedSamplingUpperBoundAtMs =
+        isLatest24hSample && Number.isFinite(encodedSamplingUpperBoundAtMs)
+          ? encodedSamplingUpperBoundAtMs
+          : resumedFetchStartedAt;
       const resumedBoundaryAt = isLatest24hSample
-        ? resumedFetchStartedAt - 24 * 60 * 60_000
+        ? resumedSamplingUpperBoundAtMs - 24 * 60 * 60_000
         : getFetchBoundary({
             successfulFetchThroughAt: activeSource?.lastSuccessfulFetchThroughAt,
             fetchStartedAt: resumedFetchStartedAt,
@@ -1268,6 +1287,9 @@ export const claimPaidFetchLease = mutation({
         claimed: true,
         reason: "resumed_claim" as const,
         onlyPostsNewerThan: new Date(resumedBoundaryAt).toISOString(),
+        ...(isLatest24hSample
+          ? { samplingWindowUpperBoundAtMs: resumedSamplingUpperBoundAtMs }
+          : {}),
         boundaryKey: control.leaseBoundaryKey,
         checkpointAt: control.leaseCheckpointAt ?? null,
         fetchStartedAt: resumedFetchStartedAt,
@@ -1355,7 +1377,7 @@ export const claimPaidFetchLease = mutation({
       Math.min(90, Math.trunc(args.bootstrapDays ?? DEFAULT_INGESTION_BOOTSTRAP_DAYS)),
     );
     const lowerBoundMs = isLatest24hSample
-      ? fetchStartedAt - 24 * 60 * 60_000
+      ? (samplingWindowUpperBoundAtMs as number) - 24 * 60 * 60_000
       : getFetchBoundary({
           successfulFetchThroughAt: checkpointAt,
           fetchStartedAt,
@@ -1363,7 +1385,7 @@ export const claimPaidFetchLease = mutation({
         }).requestNewerThanAt;
     const onlyPostsNewerThan = new Date(lowerBoundMs).toISOString();
     const boundaryKey = isLatest24hSample
-      ? `latest24h:${fetchStartedAt}`
+      ? `latest24h:${samplingWindowUpperBoundAtMs}`
       : checkpointAt
         ? String(checkpointAt)
         : `bootstrap:${lowerBoundMs}`;
@@ -1524,6 +1546,7 @@ export const claimPaidFetchLease = mutation({
       claimed: true,
       reason: "claimed" as const,
       onlyPostsNewerThan,
+      ...(isLatest24hSample ? { samplingWindowUpperBoundAtMs } : {}),
       boundaryKey,
       checkpointAt: checkpointAt ?? null,
       fetchStartedAt,
@@ -1886,7 +1909,9 @@ export const releasePaidFetchLease = mutation({
             .unique();
           if (
             source?.lastFetchAttemptAt === reservation.requestStartedAt &&
-            source.lastFetchStatus === "fetching"
+            ["fetching", "latest_24h_sample_fetching"].includes(
+              source.lastFetchStatus ?? "",
+            )
           ) {
             await ctx.db.patch(source._id, {
               lastFetchAttemptAt: undefined,

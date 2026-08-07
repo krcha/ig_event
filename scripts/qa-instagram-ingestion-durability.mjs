@@ -8,7 +8,9 @@ import {
   getLatestPost24hSamplingPolicy,
   isLatestPost24hSamplingEnabled,
   isPaidIngestionEnabled,
+  isPostedAtWithinSamplingWindow,
   nextContinuationResultsLimit,
+  resolvePaidFetchSamplingWindow,
   selectSourcesFairly,
 } from "../lib/pipeline/instagram-ingestion-durability.ts";
 import {
@@ -47,13 +49,13 @@ assert.equal(
   true,
 );
 assert.equal(
-  getLatestPost24hSamplingPolicy({ fetchStartedAt: startedAt }),
+  getLatestPost24hSamplingPolicy({ windowUpperBoundAtMs: startedAt }),
   null,
   "Latest-one sampling must remain opt-in so the high-recall protocol is unchanged by default.",
 );
 assert.deepEqual(
   getLatestPost24hSamplingPolicy({
-    fetchStartedAt: startedAt,
+    windowUpperBoundAtMs: startedAt,
     samplingMode: "latest_one_24h",
   }),
   {
@@ -66,6 +68,38 @@ assert.deepEqual(
     onlyPostsNewerThan: "2026-07-26T10:00:00.000Z",
   },
   "The sampling policy must use one result and one exact UTC 24-hour cutoff.",
+);
+assert.deepEqual(
+  resolvePaidFetchSamplingWindow({
+    leaseOnlyPostsNewerThan: "2026-07-26T10:00:00.000Z",
+    leaseSamplingWindowUpperBoundAtMs: startedAt,
+    fallbackOnlyPostsNewerThan: "2026-07-26T10:05:00.000Z",
+    fallbackCutoffAtMs: startedAt - 24 * 60 * 60_000 + 5 * 60_000,
+    fallbackUpperBoundAtMs: startedAt + 5 * 60_000,
+  }),
+  {
+    onlyPostsNewerThan: "2026-07-26T10:00:00.000Z",
+    cutoffAtMs: startedAt - 24 * 60 * 60_000,
+    upperBoundAtMs: startedAt,
+  },
+  "A resumed request must prefer the immutable durable lease window over a drifting fallback.",
+);
+assert.equal(
+  isPostedAtWithinSamplingWindow(
+    "2026-07-26T10:00:00.000Z",
+    startedAt - 24 * 60 * 60_000,
+    startedAt,
+  ),
+  true,
+);
+assert.equal(isPostedAtWithinSamplingWindow(null, startedAt - 1, startedAt), false);
+assert.equal(
+  isPostedAtWithinSamplingWindow(
+    "2026-07-27T10:00:00.001Z",
+    startedAt - 24 * 60 * 60_000,
+    startedAt,
+  ),
+  false,
 );
 assert.equal(isPermanentRemoteMediaFailure(new RemoteMediaHttpError(403, "Forbidden")), true);
 assert.equal(
@@ -589,13 +623,15 @@ try {
     updatedAt: 1,
   });
   const sampleFetchStartedAt = Date.parse("2026-07-27T12:00:00.000Z");
+  const sampleWindowUpperBoundAtMs = Date.parse("2026-07-27T11:55:00.000Z");
   const sampleClaim = await claimPaidFetchLease._handler(samplingIsolation.ctx, {
     ...common,
     handle: "source.sample-isolation",
     owner: "sample-isolation-owner",
     requestedResultsLimit: 50,
     fetchStartedAt: sampleFetchStartedAt,
-    horizonCutoffMs: sampleFetchStartedAt - 24 * 60 * 60_000,
+    samplingWindowUpperBoundAtMs: sampleWindowUpperBoundAtMs,
+    horizonCutoffMs: 1,
     dayKey: "2026-07-27-sample-isolation",
     dailyBudgetUsd: 0.1,
     maxChargeUsd: 0.01,
@@ -603,11 +639,31 @@ try {
   });
   assert.equal(sampleClaim.claimed, true, "sampling must ignore a high-recall hard block");
   assert.equal(sampleClaim.resultsLimit, 1, "the durable sample lease must itself be capped at one");
-  assert.equal(sampleClaim.boundaryKey, `latest24h:${sampleFetchStartedAt}`);
+  assert.equal(sampleClaim.boundaryKey, `latest24h:${sampleWindowUpperBoundAtMs}`);
+  assert.equal(sampleClaim.samplingWindowUpperBoundAtMs, sampleWindowUpperBoundAtMs);
   assert.equal(
     sampleClaim.onlyPostsNewerThan,
-    "2026-07-26T12:00:00.000Z",
-    "the durable sample lease must retain the exact fetch-start-minus-24h cutoff",
+    "2026-07-26T11:55:00.000Z",
+    "the durable sample lease must retain the exact run-start-minus-24h cutoff",
+  );
+  const resumedSampleClaim = await claimPaidFetchLease._handler(samplingIsolation.ctx, {
+    ...common,
+    handle: "source.sample-isolation",
+    owner: "sample-isolation-owner",
+    requestedResultsLimit: 50,
+    fetchStartedAt: sampleFetchStartedAt + 5 * 60_000,
+    samplingWindowUpperBoundAtMs: sampleWindowUpperBoundAtMs + 5 * 60_000,
+    dayKey: "2026-07-27-sample-isolation",
+    dailyBudgetUsd: 0.1,
+    maxChargeUsd: 0.01,
+    samplingMode: "latest_one_24h",
+  });
+  assert.equal(resumedSampleClaim.reason, "resumed_claim");
+  assert.equal(resumedSampleClaim.onlyPostsNewerThan, "2026-07-26T11:55:00.000Z");
+  assert.equal(
+    resumedSampleClaim.samplingWindowUpperBoundAtMs,
+    sampleWindowUpperBoundAtMs,
+    "a resumed lease must ignore a caller's drifting replacement window",
   );
   await assert.rejects(
     recordPaidFetchWindowSaturation._handler(samplingIsolation.ctx, {
@@ -653,7 +709,8 @@ try {
     owner: "next-day-sample-owner",
     requestedResultsLimit: 50,
     fetchStartedAt: sampleFetchStartedAt + 24 * 60 * 60_000,
-    horizonCutoffMs: sampleFetchStartedAt,
+    samplingWindowUpperBoundAtMs: sampleWindowUpperBoundAtMs + 24 * 60 * 60_000,
+    horizonCutoffMs: 1,
     attemptCooldownMs: 23 * 60 * 60_000,
     dayKey: "2026-07-28-sample-isolation",
     dailyBudgetUsd: 0.1,
@@ -662,8 +719,38 @@ try {
   });
   assert.equal(nextDaySampleClaim.claimed, true);
   assert.equal(nextDaySampleClaim.resultsLimit, 1);
+  await markPaidFetchRequestStarted._handler(samplingIsolation.ctx, {
+    handle: "source.sample-isolation",
+    owner: "next-day-sample-owner",
+    serviceSecret: "qa-durability-secret",
+  });
   await releasePaidFetchLease._handler(samplingIsolation.ctx, {
     owner: "next-day-sample-owner",
+    requestStarted: false,
+    serviceSecret: "qa-durability-secret",
+  });
+  assert.equal(samplingSource.lastFetchAttemptAt, undefined);
+  assert.equal(samplingSource.lastFetchStatus, "preflight_released");
+  const noTransportRetryClaim = await claimPaidFetchLease._handler(samplingIsolation.ctx, {
+    ...common,
+    handle: "source.sample-isolation",
+    owner: "no-transport-retry-owner",
+    requestedResultsLimit: 50,
+    fetchStartedAt: sampleFetchStartedAt + 24 * 60 * 60_000 + 1,
+    samplingWindowUpperBoundAtMs: sampleWindowUpperBoundAtMs + 24 * 60 * 60_000,
+    attemptCooldownMs: 23 * 60 * 60_000,
+    dayKey: "2026-07-28-sample-isolation",
+    dailyBudgetUsd: 0.1,
+    maxChargeUsd: 0.01,
+    samplingMode: "latest_one_24h",
+  });
+  assert.equal(
+    noTransportRetryClaim.claimed,
+    true,
+    "a no-transport sampling release must not leave a false 23-hour cooldown",
+  );
+  await releasePaidFetchLease._handler(samplingIsolation.ctx, {
+    owner: "no-transport-retry-owner",
     requestStarted: false,
     serviceSecret: "qa-durability-secret",
   });
