@@ -1493,6 +1493,11 @@ assert.match(
   "the pre-provider window handshake must explicitly report zero progress",
 );
 assert.match(
+  cronRouteSource,
+  /if \(!resumableSummary && samplingWindowUpperBoundAtMs !== undefined\)[\s\S]{0,260}initialSummary\.startedAt = hostRunStartedAt;[\s\S]{0,120}initialSummary\.finishedAt = hostRunStartedAt;/,
+  "every new persisted chunk must use the host-run sampling boundary as its durable startedAt",
+);
+assert.match(
   hostCronRunnerSource,
   /LAST_STATUS" == "window_sync"[\s\S]*HOST_RUN_SAMPLING_WINDOW_UPPER_BOUND_MS="\$RESPONSE_SAMPLING_WINDOW_UPPER_BOUND_MS"/,
   "the host runner must adopt a durable window only from the explicit side-effect-free handshake",

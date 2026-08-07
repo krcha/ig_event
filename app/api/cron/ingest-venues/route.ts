@@ -367,6 +367,11 @@ export async function GET(request: Request) {
           ? durableEmptyWindowUpperBoundAtMs
           : incomingSamplingWindowUpperBoundAtMs ?? Date.parse(emptySummary.startedAt)
         : undefined;
+      if (emptySamplingWindowUpperBoundAtMs !== undefined) {
+        const hostRunStartedAt = new Date(emptySamplingWindowUpperBoundAtMs).toISOString();
+        emptySummary.startedAt = hostRunStartedAt;
+        emptySummary.finishedAt = hostRunStartedAt;
+      }
       enforceDailySamplingRunContext(emptySummary, {
         resultsLimit: effectiveResultsLimit,
         daysBack: effectiveDaysBack,
@@ -427,6 +432,12 @@ export async function GET(request: Request) {
         : incomingSamplingWindowUpperBoundAtMs ??
           (Number.isFinite(persistedRunStartedAtMs) ? persistedRunStartedAtMs : Date.now())
       : undefined;
+
+    if (!resumableSummary && samplingWindowUpperBoundAtMs !== undefined) {
+      const hostRunStartedAt = new Date(samplingWindowUpperBoundAtMs).toISOString();
+      initialSummary.startedAt = hostRunStartedAt;
+      initialSummary.finishedAt = hostRunStartedAt;
+    }
 
     enforceDailySamplingRunContext(initialSummary, {
       resultsLimit: effectiveResultsLimit,
