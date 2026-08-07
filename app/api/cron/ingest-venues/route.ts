@@ -18,6 +18,7 @@ import {
   isAuthorizedCronRequestHeader,
   selectCronIngestionHandles,
 } from "@/lib/pipeline/cron-ingestion-config";
+import { isLatestPost24hSamplingEnabled } from "@/lib/pipeline/instagram-ingestion-durability";
 import { createConvexHttpClient, requireServiceSecret } from "@/lib/convex/server";
 import {
   MAX_CRON_INGESTION_JOB_HANDLES,
@@ -217,6 +218,11 @@ export async function GET(request: Request) {
   try {
     const serviceSecret = requireServiceSecret();
     const cronConfig = getCronIngestionConfig();
+    const samplingMode = isLatestPost24hSamplingEnabled()
+      ? ("latest_one_24h" as const)
+      : undefined;
+    const effectiveResultsLimit = samplingMode ? 1 : cronConfig.resultsLimit;
+    const effectiveDaysBack = samplingMode ? 1 : cronConfig.daysBack;
     const convex = createConvexHttpClient();
     const resumableMinCreatedAt =
       Date.now() -
@@ -323,6 +329,7 @@ export async function GET(request: Request) {
         summary: createEmptyIngestionSummary([], {
           source: "cron_active_venues",
           mode: "full_scrape",
+          samplingMode,
           activeVenueCount,
           selectedHandleCount: 0,
           skippedRecentlyAttempted,
@@ -331,8 +338,8 @@ export async function GET(request: Request) {
           maxHandlesPerRun: hostRunMaxHandles,
           ...(hostRunCursor ? { hostRunCursor } : {}),
           hostRunCompletedThrough,
-          resultsLimit: cronConfig.resultsLimit,
-          daysBack: cronConfig.daysBack,
+          resultsLimit: effectiveResultsLimit,
+          daysBack: effectiveDaysBack,
         }),
         activeVenueCount,
         skippedRecentlyAttempted,
@@ -344,7 +351,13 @@ export async function GET(request: Request) {
         hostRunCompletedThrough,
         done: true,
         status: "completed",
-        costControls: { ...cronConfig, maxHandlesPerRun: hostRunMaxHandles },
+        costControls: {
+          ...cronConfig,
+          resultsLimit: effectiveResultsLimit,
+          daysBack: effectiveDaysBack,
+          maxHandlesPerRun: hostRunMaxHandles,
+          samplingMode,
+        },
       });
     }
 
@@ -353,6 +366,7 @@ export async function GET(request: Request) {
       createEmptyIngestionSummary(handles, {
         source: "cron_active_venues",
         mode: "full_scrape",
+        samplingMode,
         activeVenueCount,
         selectedHandleCount: handles.length,
         skippedRecentlyAttempted,
@@ -361,9 +375,16 @@ export async function GET(request: Request) {
         maxHandlesPerRun: hostRunMaxHandles,
         ...(hostRunCursor ? { hostRunCursor } : {}),
         hostRunCompletedThrough,
-        resultsLimit: cronConfig.resultsLimit,
-        daysBack: cronConfig.daysBack,
+        resultsLimit: effectiveResultsLimit,
+        daysBack: effectiveDaysBack,
       });
+
+    initialSummary.runContext = {
+      ...(initialSummary.runContext ?? {}),
+      resultsLimit: effectiveResultsLimit,
+      daysBack: effectiveDaysBack,
+      samplingMode,
+    };
 
     const initialState = createInitialIngestionBatchState();
     const initialPayload = serializeSafeIngestionJobPayload({
@@ -376,8 +397,8 @@ export async function GET(request: Request) {
         source: "cron_active_venues",
         mode: "full_scrape",
         handles,
-        resultsLimit: cronConfig.resultsLimit,
-        daysBack: cronConfig.daysBack,
+        resultsLimit: effectiveResultsLimit,
+        daysBack: effectiveDaysBack,
         batchSize: effectiveBatchSize,
         summaryJson: initialPayload.summaryJson,
         stateJson: initialPayload.stateJson,
@@ -414,10 +435,11 @@ export async function GET(request: Request) {
           handles: claimedJob.handles,
           summary,
           state,
-          resultsLimit: claimedJob.resultsLimit,
-          daysBack: claimedJob.daysBack,
+          resultsLimit: effectiveResultsLimit,
+          daysBack: effectiveDaysBack,
           batchSize: Math.min(claimedJob.batchSize, effectiveBatchSize),
           mode: claimedJob.mode ?? "full_scrape",
+          samplingMode,
           serviceSecret,
         });
 
@@ -486,7 +508,13 @@ export async function GET(request: Request) {
       hostRunRemaining,
       hostRunCursor: hostRunCursor ?? null,
       hostRunCompletedThrough: done ? hostRunCompletedThrough : null,
-      costControls: { ...cronConfig, maxHandlesPerRun: hostRunMaxHandles },
+      costControls: {
+          ...cronConfig,
+          resultsLimit: effectiveResultsLimit,
+          daysBack: effectiveDaysBack,
+          maxHandlesPerRun: hostRunMaxHandles,
+          samplingMode,
+        },
     });
   } catch (error) {
     return NextResponse.json(

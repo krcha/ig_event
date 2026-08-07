@@ -80,6 +80,23 @@ assert.ok(
   "default Apify per-run charge cap should stay low",
 );
 
+const latestPostRequest = buildApifyInstagramScrapeRequest({
+  actorUsernameInput: "clubdrugstore",
+  resultsLimit: 1,
+  daysBack: 1,
+  onlyPostsNewerThan: "2026-08-06T12:00:00.000Z",
+  skipPinnedPosts: true,
+  env: { APIFY_SKIP_PINNED_POSTS: "false" },
+});
+assert.equal(latestPostRequest.input.resultsLimit, 1);
+assert.equal(latestPostRequest.runOptions.maxItems, 1);
+assert.equal(latestPostRequest.input.onlyPostsNewerThan, "2026-08-06T12:00:00.000Z");
+assert.equal(
+  latestPostRequest.input.skipPinnedPosts,
+  true,
+  "Latest-one sampling must skip pinned rows so a stale pin cannot consume the only result.",
+);
+
 const previousApifyToken = process.env.APIFY_API_TOKEN;
 const originalApifyBoundaryFetch = globalThis.fetch;
 const originalApifyBoundaryConsoleInfo = console.info;
@@ -214,6 +231,67 @@ try {
   console.info = originalApifyBoundaryConsoleInfo;
   if (previousApifyToken === undefined) delete process.env.APIFY_API_TOKEN;
   else process.env.APIFY_API_TOKEN = previousApifyToken;
+}
+
+const samplingCutoffAtMs = Date.parse("2026-08-06T12:00:00.000Z");
+const previousSamplingToken = process.env.APIFY_API_TOKEN;
+const originalSamplingFetch = globalThis.fetch;
+process.env.APIFY_API_TOKEN = "qa-latest-one-token";
+let samplingActorInput = null;
+globalThis.fetch = async (_url, init) => {
+  samplingActorInput = JSON.parse(String(init?.body ?? "{}"));
+  return new Response(
+    JSON.stringify([
+      {
+        id: "recent-post",
+        shortCode: "recentPost",
+        username: "latest_source",
+        timestamp: "2026-08-06T12:00:00.000Z",
+        displayUrl: "https://images.example/recent.jpg",
+      },
+      {
+        id: "stale-post",
+        shortCode: "stalePost",
+        username: "latest_source",
+        timestamp: "2026-08-06T11:59:59.999Z",
+        displayUrl: "https://images.example/stale.jpg",
+      },
+      {
+        id: "missing-date-post",
+        shortCode: "missingDatePost",
+        username: "latest_source",
+        displayUrl: "https://images.example/missing.jpg",
+      },
+      {
+        id: "future-post",
+        shortCode: "futurePost",
+        username: "latest_source",
+        timestamp: "2026-08-07T12:00:00.001Z",
+        displayUrl: "https://images.example/future.jpg",
+      },
+    ]),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+};
+try {
+  const sampledPosts = await scrapeInstagramAccount({
+    handle: "latest_source",
+    resultsLimit: 1,
+    daysBack: 1,
+    onlyPostsNewerThan: new Date(samplingCutoffAtMs).toISOString(),
+    cutoffAtMs: samplingCutoffAtMs,
+    upperBoundAtMs: Date.parse("2026-08-07T12:00:00.000Z"),
+    requirePostedAt: true,
+    skipPinnedPosts: true,
+  });
+  assert.deepEqual(sampledPosts.map((post) => post.postId), ["recent-post"]);
+  assert.equal(samplingActorInput.resultsLimit, 1);
+  assert.equal(samplingActorInput.onlyPostsNewerThan, "2026-08-06T12:00:00.000Z");
+  assert.equal(samplingActorInput.skipPinnedPosts, true);
+} finally {
+  globalThis.fetch = originalSamplingFetch;
+  if (previousSamplingToken === undefined) delete process.env.APIFY_API_TOKEN;
+  else process.env.APIFY_API_TOKEN = previousSamplingToken;
 }
 
 const persistedSnapshotJob = {

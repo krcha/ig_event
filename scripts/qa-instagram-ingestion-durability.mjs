@@ -5,6 +5,8 @@ import {
   DEFAULT_INGESTION_MAX_POSTS_PER_SOURCE_PER_RUN,
   evaluateFetchWindow,
   getFetchBoundary,
+  getLatestPost24hSamplingPolicy,
+  isLatestPost24hSamplingEnabled,
   isPaidIngestionEnabled,
   nextContinuationResultsLimit,
   selectSourcesFairly,
@@ -39,6 +41,32 @@ assert.equal(
 assert.equal(isPaidIngestionEnabled({ PAID_INGESTION_ENABLED: "true" }), true);
 assert.equal(isPaidIngestionEnabled({ PAID_INGESTION_ENABLED: "false" }), false);
 assert.equal(isPaidIngestionEnabled({ ENABLE_FRESH_APIFY_FETCH: "yes" }), true);
+assert.equal(isLatestPost24hSamplingEnabled({}), false);
+assert.equal(
+  isLatestPost24hSamplingEnabled({ INGESTION_LATEST_POST_24H_SAMPLING: "yes" }),
+  true,
+);
+assert.equal(
+  getLatestPost24hSamplingPolicy({ fetchStartedAt: startedAt }),
+  null,
+  "Latest-one sampling must remain opt-in so the high-recall protocol is unchanged by default.",
+);
+assert.deepEqual(
+  getLatestPost24hSamplingPolicy({
+    fetchStartedAt: startedAt,
+    samplingMode: "latest_one_24h",
+  }),
+  {
+    enabled: true,
+    resultsLimit: 1,
+    daysBack: 1,
+    bootstrapDays: 1,
+    cutoffAtMs: startedAt - 24 * 60 * 60_000,
+    upperBoundAtMs: startedAt,
+    onlyPostsNewerThan: "2026-07-26T10:00:00.000Z",
+  },
+  "The sampling policy must use one result and one exact UTC 24-hour cutoff.",
+);
 assert.equal(isPermanentRemoteMediaFailure(new RemoteMediaHttpError(403, "Forbidden")), true);
 assert.equal(
   isPermanentRemoteMediaFailure(
@@ -177,6 +205,27 @@ const runnerSource = readFileSync(
   new URL("../lib/pipeline/run-instagram-ingestion.ts", import.meta.url),
   "utf8",
 );
+const dailyCronRouteSource = readFileSync(
+  new URL("../app/api/cron/ingest-venues/route.ts", import.meta.url),
+  "utf8",
+);
+assert.doesNotMatch(
+  runnerSource,
+  /isLatestPost24hSamplingEnabled/,
+  "The shared ingestion runner must not turn admin or discovery scrapes into daily sampling.",
+);
+assert.match(
+  dailyCronRouteSource,
+  /const samplingMode = isLatestPost24hSamplingEnabled\(\)[\s\S]*samplingMode,/,
+  "Only the daily venue cron route should opt into latest-one sampling.",
+);
+assert.match(
+  dailyCronRouteSource,
+  /resultsLimit: effectiveResultsLimit,[\s\S]*daysBack: effectiveDaysBack,[\s\S]*samplingMode,/,
+  "The daily route must override resumable legacy 3/10 jobs with the strict 1/1 sampling policy.",
+);
+assert.doesNotMatch(dailyCronRouteSource, /resultsLimit: claimedJob\.resultsLimit/);
+assert.doesNotMatch(dailyCronRouteSource, /daysBack: claimedJob\.daysBack/);
 const freshFetchBlock = runnerSource.slice(
   runnerSource.indexOf("const rawItemCount = getInstagramScrapeRawItemCount(posts)"),
   runnerSource.indexOf("const fetchedSourceKeys", runnerSource.indexOf("const rawItemCount = getInstagramScrapeRawItemCount(posts)")),
@@ -187,6 +236,16 @@ assert.ok(
   "Every returned provider item must become durable before a saturated window is recorded.",
 );
 assert.match(freshFetchBlock, /if \(saturated\)[\s\S]*recordPaidFetchWindowSaturationMutation[\s\S]*else[\s\S]*recordPaidFetchWindowSuccessMutation/);
+assert.match(
+  freshFetchBlock,
+  /latestPostSampling === null && rawItemCount >= requestedResultsLimit/,
+  "Intentional latest-one sampling must mark a one-row response complete instead of scheduling a deeper continuation.",
+);
+assert.match(
+  runnerSource,
+  /requirePostedAt: latestPostSampling\?\.enabled/,
+  "Latest-one sampling must fail closed when Apify does not provide a post timestamp.",
+);
 assert.match(
   runnerSource,
   /hasTerminalPermanentFailure[\s\S]*\? "terminal_permanent_failure"/,
@@ -509,6 +568,120 @@ try {
       ctx: { auth: { getUserIdentity: async () => null }, db: fixture.db },
     };
   };
+
+  const samplingIsolation = createPaidFetchCrashFixture("source.sample-isolation");
+  const samplingSource = samplingIsolation.tables.instagramSources[0];
+  samplingSource.lastSuccessfulFetchThroughAt = checkpointBefore;
+  samplingSource.continuationActive = true;
+  samplingSource.continuationBoundaryAt = checkpointBefore;
+  samplingSource.continuationResultsLimit = 50;
+  samplingSource.continuationReason = "provider_result_cap_at_configured_max";
+  samplingSource.deferredAt = checkpointBefore + 1;
+  samplingIsolation.tables.instagramHandleFetchStates.push({
+    _id: "sample-isolation-high-recall-state",
+    handle: "source.sample-isolation",
+    boundaryKey: String(checkpointBefore),
+    nextResultsLimit: 50,
+    hardBlocked: true,
+    lastRequestedMaxItems: 50,
+    lastRawItemCount: 50,
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  const sampleFetchStartedAt = Date.parse("2026-07-27T12:00:00.000Z");
+  const sampleClaim = await claimPaidFetchLease._handler(samplingIsolation.ctx, {
+    ...common,
+    handle: "source.sample-isolation",
+    owner: "sample-isolation-owner",
+    requestedResultsLimit: 50,
+    fetchStartedAt: sampleFetchStartedAt,
+    horizonCutoffMs: sampleFetchStartedAt - 24 * 60 * 60_000,
+    dayKey: "2026-07-27-sample-isolation",
+    dailyBudgetUsd: 0.1,
+    maxChargeUsd: 0.01,
+    samplingMode: "latest_one_24h",
+  });
+  assert.equal(sampleClaim.claimed, true, "sampling must ignore a high-recall hard block");
+  assert.equal(sampleClaim.resultsLimit, 1, "the durable sample lease must itself be capped at one");
+  assert.equal(sampleClaim.boundaryKey, `latest24h:${sampleFetchStartedAt}`);
+  assert.equal(
+    sampleClaim.onlyPostsNewerThan,
+    "2026-07-26T12:00:00.000Z",
+    "the durable sample lease must retain the exact fetch-start-minus-24h cutoff",
+  );
+  await assert.rejects(
+    recordPaidFetchWindowSaturation._handler(samplingIsolation.ctx, {
+      handle: "source.sample-isolation",
+      owner: "sample-isolation-owner",
+      rawItemCount: 1,
+      serviceSecret: "qa-durability-secret",
+    }),
+    /cannot create high-recall continuation/i,
+  );
+  await markPaidFetchRequestStarted._handler(samplingIsolation.ctx, {
+    handle: "source.sample-isolation",
+    owner: "sample-isolation-owner",
+    serviceSecret: "qa-durability-secret",
+  });
+  const sampleSuccess = await recordPaidFetchWindowSuccess._handler(samplingIsolation.ctx, {
+    handle: "source.sample-isolation",
+    owner: "sample-isolation-owner",
+    serviceSecret: "qa-durability-secret",
+  });
+  assert.deepEqual(sampleSuccess, {
+    recorded: true,
+    checkpointAdvanced: false,
+    checkpointAt: null,
+    sampleCompleted: true,
+  });
+  assert.equal(samplingSource.lastSuccessfulFetchThroughAt, checkpointBefore);
+  assert.equal(samplingSource.continuationActive, true);
+  assert.equal(samplingSource.continuationResultsLimit, 50);
+  assert.equal(samplingSource.deferredAt, checkpointBefore + 1);
+  assert.equal(samplingIsolation.tables.instagramHandleFetchStates.length, 1);
+  assert.equal(samplingIsolation.tables.instagramHandleFetchStates[0].hardBlocked, true);
+  await releasePaidFetchLease._handler(samplingIsolation.ctx, {
+    owner: "sample-isolation-owner",
+    requestStarted: true,
+    actualChargeUsd: 0.01,
+    serviceSecret: "qa-durability-secret",
+  });
+  samplingSource.lastFetchAttemptAt = Date.now() - 24 * 60 * 60_000;
+  const nextDaySampleClaim = await claimPaidFetchLease._handler(samplingIsolation.ctx, {
+    ...common,
+    handle: "source.sample-isolation",
+    owner: "next-day-sample-owner",
+    requestedResultsLimit: 50,
+    fetchStartedAt: sampleFetchStartedAt + 24 * 60 * 60_000,
+    horizonCutoffMs: sampleFetchStartedAt,
+    attemptCooldownMs: 23 * 60 * 60_000,
+    dayKey: "2026-07-28-sample-isolation",
+    dailyBudgetUsd: 0.1,
+    maxChargeUsd: 0.01,
+    samplingMode: "latest_one_24h",
+  });
+  assert.equal(nextDaySampleClaim.claimed, true);
+  assert.equal(nextDaySampleClaim.resultsLimit, 1);
+  await releasePaidFetchLease._handler(samplingIsolation.ctx, {
+    owner: "next-day-sample-owner",
+    requestStarted: false,
+    serviceSecret: "qa-durability-secret",
+  });
+  const preservedHighRecallClaim = await claimPaidFetchLease._handler(samplingIsolation.ctx, {
+    ...common,
+    handle: "source.sample-isolation",
+    owner: "high-recall-owner",
+    attemptCooldownMs: 0,
+    dayKey: "2026-07-27-high-recall",
+    dailyBudgetUsd: 0.1,
+    maxChargeUsd: 0.01,
+  });
+  assert.equal(preservedHighRecallClaim.claimed, false);
+  assert.equal(
+    preservedHighRecallClaim.reason,
+    "hard_cap_saturated",
+    "sampling must leave the legacy high-recall continuation lane untouched",
+  );
 
   const preBoundary = createPaidFetchCrashFixture("source.pre-boundary");
   const preBoundaryArgs = {

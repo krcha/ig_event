@@ -1116,6 +1116,7 @@ export const claimPaidFetchLease = mutation({
     horizonCutoffMs: v.optional(v.number()),
     attemptCooldownMs: v.optional(v.number()),
     requestBoundaryVersion: v.optional(v.literal(1)),
+    samplingMode: v.optional(v.literal("latest_one_24h")),
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -1128,6 +1129,7 @@ export const claimPaidFetchLease = mutation({
     }
 
     const now = Date.now();
+    const isLatest24hSample = args.samplingMode === "latest_one_24h";
     const attemptCooldownMs = Math.max(
       0,
       Math.min(
@@ -1170,8 +1172,11 @@ export const claimPaidFetchLease = mutation({
       const postedAtMs = blocker.postedAtMs ?? parsePostedAtMs(blocker.postedAt);
       const isOutOfHorizon =
         horizonCutoffMs !== null &&
-        typeof postedAtMs === "number" &&
-        postedAtMs < horizonCutoffMs &&
+        (isLatest24hSample
+          ? typeof postedAtMs !== "number" ||
+            postedAtMs < horizonCutoffMs ||
+            postedAtMs > Math.trunc(args.fetchStartedAt ?? now)
+          : typeof postedAtMs === "number" && postedAtMs < horizonCutoffMs) &&
         blocker.processingStatus !== "processing";
 
       if (!isTerminal && !isRetryable && !isExpiredProcessing && !isOutOfHorizon) {
@@ -1221,7 +1226,13 @@ export const claimPaidFetchLease = mutation({
       (control.leaseExpiresAt ?? 0) > now &&
       control.leaseOwner
     ) {
-      if (control.leaseOwner !== owner || control.leaseHandle !== handle) {
+      const activeLeaseIsLatest24hSample =
+        control.leaseBoundaryKey?.startsWith("latest24h:") === true;
+      if (
+        control.leaseOwner !== owner ||
+        control.leaseHandle !== handle ||
+        activeLeaseIsLatest24hSample !== isLatest24hSample
+      ) {
         return { claimed: false, reason: "busy" as const };
       }
       const activeSource = await ctx.db
@@ -1240,22 +1251,27 @@ export const claimPaidFetchLease = mutation({
         };
       }
       const resumedFetchStartedAt = control.leaseFetchStartedAt ?? now;
-      const resumedBoundary = getFetchBoundary({
-        successfulFetchThroughAt: activeSource?.lastSuccessfulFetchThroughAt,
-        fetchStartedAt: resumedFetchStartedAt,
-        bootstrapDays: Math.max(
-          1,
-          Math.min(90, Math.trunc(args.bootstrapDays ?? DEFAULT_INGESTION_BOOTSTRAP_DAYS)),
-        ),
-      });
+      const resumedBoundaryAt = isLatest24hSample
+        ? resumedFetchStartedAt - 24 * 60 * 60_000
+        : getFetchBoundary({
+            successfulFetchThroughAt: activeSource?.lastSuccessfulFetchThroughAt,
+            fetchStartedAt: resumedFetchStartedAt,
+            bootstrapDays: Math.max(
+              1,
+              Math.min(
+                90,
+                Math.trunc(args.bootstrapDays ?? DEFAULT_INGESTION_BOOTSTRAP_DAYS),
+              ),
+            ),
+          }).requestNewerThanAt;
       return {
         claimed: true,
         reason: "resumed_claim" as const,
-        onlyPostsNewerThan: new Date(resumedBoundary.requestNewerThanAt).toISOString(),
+        onlyPostsNewerThan: new Date(resumedBoundaryAt).toISOString(),
         boundaryKey: control.leaseBoundaryKey,
         checkpointAt: control.leaseCheckpointAt ?? null,
         fetchStartedAt: resumedFetchStartedAt,
-        resultsLimit: control.leaseResultsLimit,
+        resultsLimit: isLatest24hSample ? 1 : control.leaseResultsLimit,
         reservationId: control.leaseReservationId,
         reservedMicros: control.leaseReservedMicros,
         expiresAt: control.leaseExpiresAt,
@@ -1331,26 +1347,37 @@ export const claimPaidFetchLease = mutation({
       1,
       Math.min(now + 60_000, Math.trunc(args.fetchStartedAt ?? now)),
     );
-    const checkpointAt = source?.lastSuccessfulFetchThroughAt;
+    const checkpointAt = isLatest24hSample
+      ? undefined
+      : source?.lastSuccessfulFetchThroughAt;
     const bootstrapDays = Math.max(
       1,
       Math.min(90, Math.trunc(args.bootstrapDays ?? DEFAULT_INGESTION_BOOTSTRAP_DAYS)),
     );
-    const lowerBoundMs = getFetchBoundary({
-      successfulFetchThroughAt: checkpointAt,
-      fetchStartedAt,
-      bootstrapDays,
-    }).requestNewerThanAt;
+    const lowerBoundMs = isLatest24hSample
+      ? fetchStartedAt - 24 * 60 * 60_000
+      : getFetchBoundary({
+          successfulFetchThroughAt: checkpointAt,
+          fetchStartedAt,
+          bootstrapDays,
+        }).requestNewerThanAt;
     const onlyPostsNewerThan = new Date(lowerBoundMs).toISOString();
-    const boundaryKey = checkpointAt ? String(checkpointAt) : `bootstrap:${lowerBoundMs}`;
+    const boundaryKey = isLatest24hSample
+      ? `latest24h:${fetchStartedAt}`
+      : checkpointAt
+        ? String(checkpointAt)
+        : `bootstrap:${lowerBoundMs}`;
 
-    let fetchState = await ctx.db
-      .query("instagramHandleFetchStates")
-      .withIndex("by_handle", (q) => q.eq("handle", handle))
-      .unique();
-    if (fetchState && fetchState.boundaryKey !== boundaryKey) {
-      await ctx.db.delete(fetchState._id);
-      fetchState = null;
+    let fetchState: Doc<"instagramHandleFetchStates"> | null = null;
+    if (!isLatest24hSample) {
+      fetchState = await ctx.db
+        .query("instagramHandleFetchStates")
+        .withIndex("by_handle", (q) => q.eq("handle", handle))
+        .unique();
+      if (fetchState && fetchState.boundaryKey !== boundaryKey) {
+        await ctx.db.delete(fetchState._id);
+        fetchState = null;
+      }
     }
     if (fetchState?.hardBlocked) {
       if (source) {
@@ -1375,7 +1402,9 @@ export const claimPaidFetchLease = mutation({
         Math.trunc(args.requestedResultsLimit ?? DEFAULT_INGESTION_FETCH_PAGE_SIZE),
       ),
     );
-    const resultsLimit = Math.max(requestedResultsLimit, fetchState?.nextResultsLimit ?? 0);
+    const resultsLimit = isLatest24hSample
+      ? 1
+      : Math.max(requestedResultsLimit, fetchState?.nextResultsLimit ?? 0);
     const dayKey = (args.dayKey ?? new Date(now).toISOString().slice(0, 10)).trim();
     const limitMicros = usdToMicros(
       args.dailyBudgetUsd,
@@ -1558,11 +1587,12 @@ export const markPaidFetchRequestStarted = mutation({
       .query("instagramSources")
       .withIndex("by_handle", (q) => q.eq("handle", handle))
       .unique();
+    const isLatest24hSample = control.leaseBoundaryKey?.startsWith("latest24h:") === true;
     const patch = {
       lastFetchAttemptAt: requestStartedAt,
-      lastFetchStatus: "fetching",
+      lastFetchStatus: isLatest24hSample ? "latest_24h_sample_fetching" : "fetching",
       lastFetchError: undefined,
-      deferredAt: undefined,
+      ...(isLatest24hSample ? {} : { deferredAt: undefined }),
       updatedAt: now,
     };
     if (source) {
@@ -1604,6 +1634,9 @@ export const recordPaidFetchWindowSaturation = mutation({
       (control.leaseExpiresAt ?? 0) <= Date.now()
     ) {
       throw new Error("Cannot record saturation from a stale paid-fetch lease.");
+    }
+    if (control.leaseBoundaryKey?.startsWith("latest24h:")) {
+      throw new Error("Latest-24h sampling cannot create high-recall continuation state.");
     }
     const requested = control.leaseResultsLimit ?? DEFAULT_INGESTION_FETCH_PAGE_SIZE;
     if (args.rawItemCount < requested) {
@@ -1682,6 +1715,39 @@ export const recordPaidFetchWindowSuccess = mutation({
       control.leaseWindowStatus !== "active"
     ) {
       throw new Error("Cannot record success from a stale paid-fetch lease.");
+    }
+    const isLatest24hSample = control.leaseBoundaryKey?.startsWith("latest24h:") === true;
+    if (isLatest24hSample) {
+      const source = await ctx.db
+        .query("instagramSources")
+        .withIndex("by_handle", (q) => q.eq("handle", handle))
+        .unique();
+      const samplePatch = {
+        lastFetchCompletedAt: now,
+        lastFetchStatus: "latest_24h_sample_completed",
+        lastFetchError: undefined,
+        updatedAt: now,
+      };
+      if (source) {
+        await ctx.db.patch(source._id, samplePatch);
+      } else {
+        await ctx.db.insert("instagramSources", {
+          handle,
+          role: "unknown",
+          active: true,
+          discoveredAt: now,
+          activatedAt: now,
+          lastFetchAttemptAt: now,
+          ...samplePatch,
+          createdAt: now,
+        });
+      }
+      return {
+        recorded: true,
+        checkpointAdvanced: false,
+        checkpointAt: null,
+        sampleCompleted: true,
+      };
     }
     const existing = await ctx.db
       .query("instagramHandleFetchStates")

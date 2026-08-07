@@ -88,12 +88,14 @@ import {
   getIngestionBootstrapDays,
   getIngestionFetchPageSize,
   getIngestionMaxPostsPerSource,
+  getLatestPost24hSamplingPolicy,
   getOpenAiCircuitCooldownMs,
   getOpenAiDailyPostLimit,
   getOpenAiMaxAttemptsPerPost,
   getOpenAiMaxImagesPerPost,
   isPaidIngestionEnabled,
   deduplicateMediaUrls,
+  type InstagramSamplingMode,
 } from "@/lib/pipeline/instagram-ingestion-durability";
 
 type RunInstagramIngestionOptions = {
@@ -101,6 +103,7 @@ type RunInstagramIngestionOptions = {
   resultsLimit?: number;
   daysBack?: number;
   mode?: IngestionRunMode;
+  samplingMode?: InstagramSamplingMode;
   serviceSecret?: string;
 };
 
@@ -169,6 +172,7 @@ export type IngestionRunContext = {
   daysBack?: number;
   source?: string;
   mode?: IngestionRunMode;
+  samplingMode?: InstagramSamplingMode;
 };
 
 export type IngestionBatchState = {
@@ -192,6 +196,7 @@ export type IngestionBatchStepOptions = {
   daysBack?: number;
   batchSize?: number;
   mode?: IngestionRunMode;
+  samplingMode?: InstagramSamplingMode;
   postStepLimit?: number;
   scrapedPostPageSize?: number;
   serviceSecret?: string;
@@ -10983,7 +10988,10 @@ async function fetchFreshPostsForHandlesInParallel(
   client: ConvexHttpClient,
   handles: string[],
   summary: IngestionSummary,
-  options: Pick<RunInstagramIngestionOptions, "resultsLimit" | "daysBack">,
+  options: Pick<
+    RunInstagramIngestionOptions,
+    "resultsLimit" | "daysBack" | "samplingMode"
+  >,
   serviceSecret: string,
   workOwner: string,
 ): Promise<Record<string, InstagramScrapedPost[]>> {
@@ -10999,8 +11007,14 @@ async function fetchFreshPostsForHandlesInParallel(
       let providerRequestStarted = false;
       const paidFetchLeaseOwner = `${workOwner}:apify:${handle}`.slice(0, 200);
       try {
-        const baseResultsLimit = normalizeFullScrapeResultsLimit(options.resultsLimit);
         const fetchStartedAt = Date.now();
+        const latestPostSampling = getLatestPost24hSamplingPolicy({
+          fetchStartedAt,
+          samplingMode: options.samplingMode,
+        });
+        const baseResultsLimit =
+          latestPostSampling?.resultsLimit ?? normalizeFullScrapeResultsLimit(options.resultsLimit);
+        const effectiveDaysBack = latestPostSampling?.daysBack ?? options.daysBack;
         const budget = getApifyBudgetConfig();
         const lease = await resolvePaidFetchLeaseAfterBacklogMaintenance(
           async () =>
@@ -11013,15 +11027,17 @@ async function fetchFreshPostsForHandlesInParallel(
                   leaseMs: 10 * 60_000,
                   requestedResultsLimit: baseResultsLimit,
                   fetchStartedAt,
-                  bootstrapDays: getIngestionBootstrapDays(),
+                  bootstrapDays:
+                    latestPostSampling?.bootstrapDays ?? getIngestionBootstrapDays(),
                   dayKey: getBudgetDayKey(new Date(fetchStartedAt)),
                   dailyBudgetUsd: budget.dailyBudgetMicros / 1_000_000,
                   maxChargeUsd: budget.maxChargePerHandleMicros / 1_000_000,
                   attemptCooldownMs: getProviderAttemptCooldownMs(),
                   requestBoundaryVersion: 1,
-                  ...(options.daysBack && options.daysBack > 0
-                    ? { horizonCutoffMs: fetchStartedAt - options.daysBack * 86_400_000 }
+                  ...(effectiveDaysBack && effectiveDaysBack > 0
+                    ? { horizonCutoffMs: fetchStartedAt - effectiveDaysBack * 86_400_000 }
                     : {}),
+                  samplingMode: options.samplingMode,
                   paidEnabled: isPaidIngestionEnabled(),
                 },
                 serviceSecret,
@@ -11044,15 +11060,20 @@ async function fetchFreshPostsForHandlesInParallel(
         }
         fetchLeaseClaimed = true;
 
-        const onlyPostsNewerThan = lease.onlyPostsNewerThan ?? null;
-        const requestedResultsLimit = normalizeFullScrapeResultsLimit(
-          lease.resultsLimit ?? baseResultsLimit,
-        );
+        const onlyPostsNewerThan =
+          latestPostSampling?.onlyPostsNewerThan ?? lease.onlyPostsNewerThan ?? null;
+        const requestedResultsLimit =
+          latestPostSampling?.resultsLimit ??
+          normalizeFullScrapeResultsLimit(lease.resultsLimit ?? baseResultsLimit);
         const posts = await scrapeInstagramAccount({
           handle,
           resultsLimit: requestedResultsLimit,
-          daysBack: options.daysBack,
+          daysBack: effectiveDaysBack,
           onlyPostsNewerThan: onlyPostsNewerThan ?? undefined,
+          cutoffAtMs: latestPostSampling?.cutoffAtMs,
+          upperBoundAtMs: latestPostSampling?.upperBoundAtMs,
+          requirePostedAt: latestPostSampling?.enabled,
+          skipPinnedPosts: latestPostSampling?.enabled,
           abortAtMs: lease.expiresAt ? lease.expiresAt - 60_000 : undefined,
           onRequestStarted: async () => {
             await client.mutation(
@@ -11071,7 +11092,11 @@ async function fetchFreshPostsForHandlesInParallel(
           },
         });
         const rawItemCount = getInstagramScrapeRawItemCount(posts);
-        const saturated = rawItemCount >= requestedResultsLimit;
+        // Latest-one sampling intentionally accepts one capped provider row as
+        // a complete daily sample. High-recall mode retains continuation
+        // saturation and never advances a potentially incomplete checkpoint.
+        const saturated =
+          latestPostSampling === null && rawItemCount >= requestedResultsLimit;
         let saturation: { nextResultsLimit?: number; hardBlocked?: boolean } | null = null;
 
         try {
@@ -11207,6 +11232,7 @@ export async function runActiveVenueIngestion(options?: {
   resultsLimit?: number;
   daysBack?: number;
   mode?: IngestionRunMode;
+  samplingMode?: InstagramSamplingMode;
   serviceSecret?: string;
 }): Promise<ActiveVenueIngestionResult> {
   const serviceSecret = getConfiguredServiceSecret(options?.serviceSecret);
@@ -11227,6 +11253,7 @@ export async function runActiveVenueIngestion(options?: {
     resultsLimit: options?.resultsLimit,
     daysBack: options?.daysBack,
     mode: options?.mode,
+    samplingMode: options?.samplingMode,
     serviceSecret,
   });
 
@@ -11252,6 +11279,7 @@ export async function runInstagramIngestion(
       daysBack: options.daysBack,
       batchSize: mode === "full_scrape" ? 1 : 10,
       mode,
+      samplingMode: options.samplingMode,
       serviceSecret,
     });
     done = batchResult.done;

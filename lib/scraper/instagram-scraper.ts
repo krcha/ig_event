@@ -57,6 +57,10 @@ type ScrapeInstagramAccountOptions = {
   resultsLimit?: number;
   daysBack?: number;
   onlyPostsNewerThan?: string;
+  cutoffAtMs?: number;
+  upperBoundAtMs?: number;
+  requirePostedAt?: boolean;
+  skipPinnedPosts?: boolean;
   abortAtMs?: number;
   onRequestStarted?: () => void | Promise<void>;
   onTransportInvoked?: () => void;
@@ -288,6 +292,7 @@ export function buildApifyInstagramScrapeRequest(options: {
   resultsLimit?: number;
   daysBack?: number;
   onlyPostsNewerThan?: string;
+  skipPinnedPosts?: boolean;
   env?: Record<string, string | undefined>;
 }): ApifyInstagramScrapeRequest {
   const env = options.env ?? process.env;
@@ -305,7 +310,8 @@ export function buildApifyInstagramScrapeRequest(options: {
       username: [options.actorUsernameInput],
       resultsLimit,
       onlyPostsNewerThan,
-      skipPinnedPosts: normalizeApifySkipPinnedPosts(env.APIFY_SKIP_PINNED_POSTS),
+      skipPinnedPosts:
+        options.skipPinnedPosts ?? normalizeApifySkipPinnedPosts(env.APIFY_SKIP_PINNED_POSTS),
       dataDetailLevel: normalizeApifyDataDetailLevel(env.APIFY_DATA_DETAIL_LEVEL),
     },
     runOptions: {
@@ -864,10 +870,16 @@ export async function scrapeInstagramAccount(
     resultsLimit: options.resultsLimit,
     daysBack: options.daysBack,
     onlyPostsNewerThan: options.onlyPostsNewerThan,
+    skipPinnedPosts: options.skipPinnedPosts,
   });
   const { input, runOptions } = requestSettings;
   const resultsLimit = input.resultsLimit;
-  const cutoff = Date.now() - requestSettings.daysBack * 24 * 60 * 60 * 1000;
+  const cutoff = Number.isFinite(options.cutoffAtMs)
+    ? Math.trunc(options.cutoffAtMs as number)
+    : Date.now() - requestSettings.daysBack * 24 * 60 * 60 * 1000;
+  const upperBound = Number.isFinite(options.upperBoundAtMs)
+    ? Math.trunc(options.upperBoundAtMs as number)
+    : null;
 
   const query = new URLSearchParams({
     clean: "true",
@@ -961,7 +973,11 @@ export async function scrapeInstagramAccount(
       if (!item) {
         return false;
       }
-      return !item.postedAt || parsePostedAtTimestamp(item.postedAt) >= cutoff;
+      if (!item.postedAt) {
+        return options.requirePostedAt !== true;
+      }
+      const postedAtMs = parsePostedAtTimestamp(item.postedAt);
+      return postedAtMs >= cutoff && (upperBound === null || postedAtMs <= upperBound);
     });
 
   const uniqueTopLevelPosts = new Map<string, InstagramScrapedPost>();

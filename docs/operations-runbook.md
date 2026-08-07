@@ -460,6 +460,20 @@ from that live count and the returned chunk size, and continues until every
 eligible venue is covered. There is no aggregate venue-count cap;
 `CRON_RESULTS_LIMIT=3` and the 23-hour cooldown provide a one-row safety margin over the observed two-post daily burst; cap-saturated windows fail closed without advancing the source boundary.
 
+Production can intentionally choose a bounded daily sample instead of complete
+reconciliation by setting `INGESTION_LATEST_POST_24H_SAMPLING=true` together
+with `PAID_INGESTION_ENABLED=true`. Only the scheduled venue-ingestion route
+opts into this policy; admin and discovery full scrapes retain the high-recall
+protocol. Each active source gets exactly one Apify result slot, pinned rows are
+skipped so an old pin cannot consume that slot, and both the Actor request and
+local acceptance filter use the same inclusive UTC window captured at fetch
+start: `fetchStartedAt - 24h <= postedAt <= fetchStartedAt`. Missing, invalid,
+stale, and future post timestamps fail closed. A one-row response is complete
+for the sampling lane only: it neither creates a deeper continuation nor
+advances, clears, or otherwise mutates the source's high-recall checkpoint and
+continuation state. Keep the 23-hour provider cooldown so the once-daily timer
+remains eligible despite ordinary runtime jitter.
+
 The default basic-data Actor request is capped at `$0.01`; the absolute per-run hard cap is `$0.04` for explicitly deeper bounded requests. At the current
 basic-data result price, 2000 one-post account runs are expected to cost about
 `$3.00`; the aggregate configured worst case is `$20`, plus OpenAI usage and the

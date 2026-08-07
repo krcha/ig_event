@@ -8,8 +8,10 @@ export const DEFAULT_OPENAI_MAX_ATTEMPTS_PER_POST = 3;
 export const DEFAULT_OPENAI_CIRCUIT_COOLDOWN_MINUTES = 60;
 export const DEFAULT_OPENAI_MAX_IMAGES_PER_POST = 5;
 export const FETCH_BOUNDARY_OVERLAP_MS = 5 * 60_000;
+export const LATEST_POST_SAMPLING_WINDOW_MS = 24 * 60 * 60_000;
 
 export type InstagramSourceRole = "venue" | "promoter" | "unknown";
+export type InstagramSamplingMode = "latest_one_24h";
 
 export type FairSource = {
   handle: string;
@@ -39,6 +41,41 @@ export function isPaidIngestionEnabled(env: NodeJS.ProcessEnv = process.env): bo
   const legacy = env.ENABLE_FRESH_APIFY_FETCH;
   if (legacy !== undefined) return /^(?:1|true|yes|on)$/iu.test(legacy.trim());
   return false;
+}
+
+export function isLatestPost24hSamplingEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return /^(?:1|true|yes|on)$/iu.test(
+    (env.INGESTION_LATEST_POST_24H_SAMPLING ?? "").trim(),
+  );
+}
+
+export function getLatestPost24hSamplingPolicy(options: {
+  fetchStartedAt: number;
+  samplingMode?: InstagramSamplingMode;
+}): {
+  enabled: boolean;
+  resultsLimit: 1;
+  daysBack: 1;
+  bootstrapDays: 1;
+  cutoffAtMs: number;
+  upperBoundAtMs: number;
+  onlyPostsNewerThan: string;
+} | null {
+  if (options.samplingMode !== "latest_one_24h") return null;
+
+  const fetchStartedAt = Math.max(1, Math.trunc(options.fetchStartedAt));
+  const cutoffAtMs = fetchStartedAt - LATEST_POST_SAMPLING_WINDOW_MS;
+  return {
+    enabled: true,
+    resultsLimit: 1,
+    daysBack: 1,
+    bootstrapDays: 1,
+    cutoffAtMs,
+    upperBoundAtMs: fetchStartedAt,
+    onlyPostsNewerThan: new Date(cutoffAtMs).toISOString(),
+  };
 }
 
 export function getIngestionBootstrapDays(env: NodeJS.ProcessEnv = process.env): number {
