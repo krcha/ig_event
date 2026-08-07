@@ -132,6 +132,24 @@ function normalizeHostRunCursor(request: Request): string | undefined {
   return handle;
 }
 
+function normalizeHostRunSamplingWindowUpperBound(
+  request: Request,
+  now = Date.now(),
+): number | undefined {
+  const raw = new URL(request.url).searchParams.get("samplingWindowUpperBoundAtMs");
+  if (raw === null || raw.trim() === "") {
+    return undefined;
+  }
+  if (!/^\d{13}$/.test(raw.trim())) {
+    throw new Error("samplingWindowUpperBoundAtMs must be a 13-digit UTC epoch timestamp.");
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > now) {
+    throw new Error("samplingWindowUpperBoundAtMs must not be future-dated.");
+  }
+  return parsed;
+}
+
 function parseSummary(summaryJson: string, handles: string[]): IngestionSummary {
   try {
     const parsed = JSON.parse(summaryJson) as IngestionSummary;
@@ -233,6 +251,8 @@ export async function GET(request: Request) {
       Date.now() - cronConfig.fullScrapeCooldownHours * MS_PER_HOUR;
     const effectiveBatchSize = normalizeCronBatchSize(process.env.CRON_INGESTION_BATCH_SIZE);
     const incomingHostRunCursor = normalizeHostRunCursor(request);
+    const incomingSamplingWindowUpperBoundAtMs =
+      normalizeHostRunSamplingWindowUpperBound(request);
     const resumeCapacity = normalizeHostRunRemaining(request, MAX_INGESTION_JOB_HANDLES);
     const candidateSnapshot = await loadCronIngestionCandidateSnapshot({
       resumeCapacity,
@@ -324,24 +344,39 @@ export async function GET(request: Request) {
         // Every remaining active handle has a durable recent-attempt receipt.
         hostRunCompletedThrough = activeVenueCount;
       }
+      const emptySummary = createEmptyIngestionSummary([], {
+        source: "cron_active_venues",
+        mode: "full_scrape",
+        samplingMode,
+        activeVenueCount,
+        selectedHandleCount: 0,
+        skippedRecentlyAttempted,
+        skippedDueToRunLimit,
+        fullScrapeCooldownHours: cronConfig.fullScrapeCooldownHours,
+        maxHandlesPerRun: hostRunMaxHandles,
+        ...(hostRunCursor ? { hostRunCursor } : {}),
+        hostRunCompletedThrough,
+        resultsLimit: effectiveResultsLimit,
+        daysBack: effectiveDaysBack,
+      });
+      const durableEmptyWindowUpperBoundAtMs =
+        resumableSummary?.runContext?.samplingWindowUpperBoundAtMs;
+      const emptySamplingWindowUpperBoundAtMs = samplingMode
+        ? typeof durableEmptyWindowUpperBoundAtMs === "number" &&
+          Number.isFinite(durableEmptyWindowUpperBoundAtMs)
+          ? durableEmptyWindowUpperBoundAtMs
+          : incomingSamplingWindowUpperBoundAtMs ?? Date.parse(emptySummary.startedAt)
+        : undefined;
+      enforceDailySamplingRunContext(emptySummary, {
+        resultsLimit: effectiveResultsLimit,
+        daysBack: effectiveDaysBack,
+        samplingMode,
+        samplingWindowUpperBoundAtMs: emptySamplingWindowUpperBoundAtMs,
+      });
       return NextResponse.json({
         source: "cron_active_venues",
         handles: [],
-        summary: createEmptyIngestionSummary([], {
-          source: "cron_active_venues",
-          mode: "full_scrape",
-          samplingMode,
-          activeVenueCount,
-          selectedHandleCount: 0,
-          skippedRecentlyAttempted,
-          skippedDueToRunLimit,
-          fullScrapeCooldownHours: cronConfig.fullScrapeCooldownHours,
-          maxHandlesPerRun: hostRunMaxHandles,
-          ...(hostRunCursor ? { hostRunCursor } : {}),
-          hostRunCompletedThrough,
-          resultsLimit: effectiveResultsLimit,
-          daysBack: effectiveDaysBack,
-        }),
+        summary: emptySummary,
         activeVenueCount,
         skippedRecentlyAttempted,
         skippedDueToRunLimit,
@@ -350,6 +385,7 @@ export async function GET(request: Request) {
         hostRunRemaining,
         hostRunCursor: hostRunCursor ?? null,
         hostRunCompletedThrough,
+        samplingWindowUpperBoundAtMs: emptySamplingWindowUpperBoundAtMs ?? null,
         done: true,
         status: "completed",
         costControls: {
@@ -358,6 +394,7 @@ export async function GET(request: Request) {
           daysBack: effectiveDaysBack,
           maxHandlesPerRun: hostRunMaxHandles,
           samplingMode,
+          samplingWindowUpperBoundAtMs: emptySamplingWindowUpperBoundAtMs,
         },
       });
     }
@@ -381,10 +418,14 @@ export async function GET(request: Request) {
       });
 
     const persistedRunStartedAtMs = Date.parse(initialSummary.startedAt);
+    const durableSamplingWindowUpperBoundAtMs =
+      resumableSummary?.runContext?.samplingWindowUpperBoundAtMs;
     const samplingWindowUpperBoundAtMs = samplingMode
-      ? Number.isFinite(persistedRunStartedAtMs)
-        ? persistedRunStartedAtMs
-        : Date.now()
+      ? typeof durableSamplingWindowUpperBoundAtMs === "number" &&
+        Number.isFinite(durableSamplingWindowUpperBoundAtMs)
+        ? durableSamplingWindowUpperBoundAtMs
+        : incomingSamplingWindowUpperBoundAtMs ??
+          (Number.isFinite(persistedRunStartedAtMs) ? persistedRunStartedAtMs : Date.now())
       : undefined;
 
     enforceDailySamplingRunContext(initialSummary, {
@@ -393,6 +434,50 @@ export async function GET(request: Request) {
       samplingMode,
       samplingWindowUpperBoundAtMs,
     });
+
+    const maxSteps = normalizeCronMaxSteps(process.env.CRON_INGESTION_MAX_STEPS);
+    const requiresHostRunSamplingWindowSync =
+      samplingMode !== undefined &&
+      incomingSamplingWindowUpperBoundAtMs !== undefined &&
+      typeof durableSamplingWindowUpperBoundAtMs === "number" &&
+      Number.isFinite(durableSamplingWindowUpperBoundAtMs) &&
+      durableSamplingWindowUpperBoundAtMs !== incomingSamplingWindowUpperBoundAtMs;
+
+    if (requiresHostRunSamplingWindowSync) {
+      // Do not cross the paid-provider boundary until the host runner has
+      // acknowledged the durable window of the job it is resuming. If this
+      // response is lost, the retry repeats this side-effect-free handshake.
+      return NextResponse.json({
+        source: "cron_active_venues",
+        jobId,
+        handles,
+        summary: initialSummary,
+        status: "window_sync",
+        done: false,
+        stepsAdvanced: 0,
+        maxSteps,
+        effectiveBatchSize,
+        resumedJob: true,
+        finishedAt: null,
+        activeVenueCount,
+        skippedRecentlyAttempted,
+        skippedDueToRunLimit,
+        maxHandlesPerJob,
+        hostRunMaxHandles,
+        hostRunRemaining,
+        hostRunCursor: hostRunCursor ?? null,
+        hostRunCompletedThrough: null,
+        samplingWindowUpperBoundAtMs: samplingWindowUpperBoundAtMs ?? null,
+        costControls: {
+          ...cronConfig,
+          resultsLimit: effectiveResultsLimit,
+          daysBack: effectiveDaysBack,
+          maxHandlesPerRun: hostRunMaxHandles,
+          samplingMode,
+          samplingWindowUpperBoundAtMs,
+        },
+      });
+    }
 
     const initialState = createInitialIngestionBatchState();
     const initialPayload = serializeSafeIngestionJobPayload({
@@ -414,7 +499,6 @@ export async function GET(request: Request) {
       })) as string;
     }
 
-    const maxSteps = normalizeCronMaxSteps(process.env.CRON_INGESTION_MAX_STEPS);
     let stepsAdvanced = 0;
     let done = false;
     let summary = initialSummary;
@@ -523,12 +607,14 @@ export async function GET(request: Request) {
       hostRunRemaining,
       hostRunCursor: hostRunCursor ?? null,
       hostRunCompletedThrough: done ? hostRunCompletedThrough : null,
+      samplingWindowUpperBoundAtMs: samplingWindowUpperBoundAtMs ?? null,
       costControls: {
           ...cronConfig,
           resultsLimit: effectiveResultsLimit,
           daysBack: effectiveDaysBack,
           maxHandlesPerRun: hostRunMaxHandles,
           samplingMode,
+          samplingWindowUpperBoundAtMs,
         },
     });
   } catch (error) {

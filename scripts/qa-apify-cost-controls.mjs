@@ -1475,6 +1475,28 @@ assert.doesNotMatch(
 );
 assert.match(hostCronRunnerSource, /run_request_with_retry/);
 assert.match(hostCronRunnerSource, /MAX_TRANSIENT_REQUEST_ATTEMPTS/);
+const samplingWindowSyncGuardIndex = cronRouteSource.indexOf(
+  "if (requiresHostRunSamplingWindowSync)",
+);
+const paidClaimIndex = cronRouteSource.indexOf(
+  "convex.mutation(claimStepMutation",
+  samplingWindowSyncGuardIndex,
+);
+assert.ok(
+  samplingWindowSyncGuardIndex >= 0 &&
+    paidClaimIndex > samplingWindowSyncGuardIndex,
+  "a resumed-window mismatch must return before the provider-bearing claim step",
+);
+assert.match(
+  cronRouteSource.slice(samplingWindowSyncGuardIndex, paidClaimIndex),
+  /status: "window_sync"[\s\S]*stepsAdvanced: 0/,
+  "the pre-provider window handshake must explicitly report zero progress",
+);
+assert.match(
+  hostCronRunnerSource,
+  /LAST_STATUS" == "window_sync"[\s\S]*HOST_RUN_SAMPLING_WINDOW_UPPER_BOUND_MS="\$RESPONSE_SAMPLING_WINDOW_UPPER_BOUND_MS"/,
+  "the host runner must adopt a durable window only from the explicit side-effect-free handshake",
+);
 assert.match(
   ingestionRunnerSource,
   /isOpenAiProviderBlockedError\(error\)[\s\S]{0,160}throw error/,
@@ -2041,14 +2063,58 @@ const config = readFileSync(configPath, "utf8");
 const outputPath = config.match(/^output = "([^"]+)"$/m)?.[1];
 const url = config.match(/^url = "([^"]+)"$/m)?.[1];
 if (!outputPath || !url) process.exit(2);
+const parsedUrl = new URL(url);
+const incomingSamplingWindowUpperBoundAtMs = Number(
+  parsedUrl.searchParams.get("samplingWindowUpperBoundAtMs"),
+);
+if (!Number.isSafeInteger(incomingSamplingWindowUpperBoundAtMs)) process.exit(2);
 let state = { count: 0, requests: [], failedOnce: false };
 try { state = JSON.parse(readFileSync(process.env.FAKE_CURL_STATE, "utf8")); } catch {}
+if (!Number.isSafeInteger(state.samplingWindowUpperBoundAtMs)) {
+  const resumedDeltaMs = Number(process.env.FAKE_CURL_RESUMED_WINDOW_DELTA_MS ?? "0");
+  state.samplingWindowUpperBoundAtMs = incomingSamplingWindowUpperBoundAtMs - resumedDeltaMs;
+}
+const windowSync =
+  (process.env.FAKE_CURL_MODE === "resumed-window" ||
+    process.env.FAKE_CURL_MODE === "lost-window-sync") &&
+  incomingSamplingWindowUpperBoundAtMs !== state.samplingWindowUpperBoundAtMs;
 state.count += 1;
+if (process.env.FAKE_CURL_MODE === "lost-window-sync" && windowSync && !state.failedOnce) {
+  state.failedOnce = true;
+  state.requests.push({
+    attempt: state.count,
+    httpCode: 200,
+    transportLost: true,
+    incomingSamplingWindowUpperBoundAtMs,
+    returnedSamplingWindowUpperBoundAtMs: state.samplingWindowUpperBoundAtMs,
+    windowSync: true,
+    selected: 200,
+  });
+  writeFileSync(process.env.FAKE_CURL_STATE, JSON.stringify(state));
+  writeFileSync(outputPath, JSON.stringify({
+    jobId: "resumed-window-job",
+    status: "window_sync",
+    done: false,
+    handles: Array.from({ length: 200 }, (_, index) => "handle-sync-" + index),
+    hostRunMaxHandles: Number(process.env.FAKE_CURL_ACTIVE_COUNT ?? "630"),
+    hostRunCompletedThrough: null,
+    maxHandlesPerJob: 200,
+    effectiveBatchSize: 1,
+    maxSteps: 1,
+    stepsAdvanced: 0,
+    samplingWindowUpperBoundAtMs: state.samplingWindowUpperBoundAtMs,
+  }));
+  process.exit(28);
+}
 if (process.env.FAKE_CURL_MODE === "lost-terminal" && !state.failedOnce) {
   state.failedOnce = true;
   state.requests.push({ attempt: state.count, httpCode: 200, transportLost: true, selected: 200 });
   writeFileSync(process.env.FAKE_CURL_STATE, JSON.stringify(state));
-  writeFileSync(outputPath, JSON.stringify({ done: true, hostRunCompletedThrough: 200 }));
+  writeFileSync(outputPath, JSON.stringify({
+    done: true,
+    hostRunCompletedThrough: 200,
+    samplingWindowUpperBoundAtMs: state.samplingWindowUpperBoundAtMs,
+  }));
   process.exit(28);
 }
 if (process.env.FAKE_CURL_MODE === "transient-500" && !state.failedOnce) {
@@ -2068,7 +2134,6 @@ if (process.env.FAKE_CURL_MODE === "permanent-401") {
 }
 const successfulRequests = state.requests.filter((request) => request.httpCode === 200).length;
 const requestIndex = successfulRequests + 1;
-const parsedUrl = new URL(url);
 const activeCount = Number(process.env.FAKE_CURL_ACTIVE_COUNT ?? "2400");
 const remaining = Number(parsedUrl.searchParams.get("hostRunRemaining") ?? String(activeCount));
 const incomingCursor = parsedUrl.searchParams.get("hostRunAfter");
@@ -2076,24 +2141,28 @@ const selected = Math.min(200, Math.max(0, remaining));
 const repeat = process.env.FAKE_CURL_MODE === "repeat-resume";
 const singleHandleProgress = process.env.FAKE_CURL_MODE === "single-handle-progress";
 const zeroProgress = process.env.FAKE_CURL_MODE === "zero-progress";
-const jobId = singleHandleProgress || zeroProgress
+const jobId = windowSync
+  ? "resumed-window-job"
+  : singleHandleProgress || zeroProgress
   ? process.env.FAKE_CURL_MODE + "-job"
   : repeat && requestIndex <= 2
     ? "resumed-job"
     : "job-" + requestIndex;
 const hostRunCursor = "cursor_" + jobId.replace(/[^a-z0-9._]/g, "_");
-const done = zeroProgress
+const done = windowSync || zeroProgress
   ? false
   : singleHandleProgress
     ? requestIndex >= selected
     : !(repeat && requestIndex === 1);
-const hostRunCompletedThrough = process.env.FAKE_CURL_MODE === "lost-terminal"
+const hostRunCompletedThrough = windowSync
+  ? null
+  : process.env.FAKE_CURL_MODE === "lost-terminal"
   ? Math.min(activeCount, requestIndex * 200)
   : Math.min(activeCount, activeCount - remaining + (done ? selected : 0));
 const payload = {
   jobId,
-  resumedJob: requestIndex === 1 || (repeat && requestIndex === 2),
-  status: done ? "completed" : "running",
+  resumedJob: windowSync || requestIndex === 1 || (repeat && requestIndex === 2),
+  status: windowSync ? "window_sync" : done ? "completed" : "running",
   done,
   handles: Array.from({ length: selected }, (_, index) => "handle-" + requestIndex + "-" + index),
   skippedDueToRunLimit: remaining > selected ? 1 : 0,
@@ -2103,7 +2172,8 @@ const payload = {
   maxHandlesPerJob: 200,
   effectiveBatchSize: singleHandleProgress || zeroProgress ? 1 : selected,
   maxSteps: 1,
-  stepsAdvanced: zeroProgress ? 0 : 1,
+  stepsAdvanced: windowSync || zeroProgress ? 0 : 1,
+  samplingWindowUpperBoundAtMs: state.samplingWindowUpperBoundAtMs,
 };
 state.requests.push({
   attempt: state.count,
@@ -2111,6 +2181,9 @@ state.requests.push({
   requestIndex,
   remaining,
   incomingCursor,
+  incomingSamplingWindowUpperBoundAtMs,
+  returnedSamplingWindowUpperBoundAtMs: state.samplingWindowUpperBoundAtMs,
+  windowSync,
   selected,
   jobId,
   done,
@@ -2141,6 +2214,8 @@ process.stdout.write("200");
         ...process.env,
         FAKE_CURL_ACTIVE_COUNT: String(activeCount),
         FAKE_CURL_MODE: mode,
+        FAKE_CURL_RESUMED_WINDOW_DELTA_MS:
+          mode === "resumed-window" || mode === "lost-window-sync" ? "60000" : "0",
         FAKE_CURL_STATE: stateFile,
         IG_EVENT_CRON_ENV: envFile,
         IG_EVENT_CRON_LOG_DIR: logDir,
@@ -2169,6 +2244,89 @@ assert.deepEqual(
   resumedCapFixture.state.requests.slice(0, 3).map((request) => request.incomingCursor),
   [null, "cursor_job_1", "cursor_job_2"],
   "each completed job must advance the host-run source cursor",
+);
+
+const resumedWindowFixture = runCronRunnerCapFixture("resumed-window", 630);
+assert.equal(resumedWindowFixture.result.status, 0, resumedWindowFixture.result.stderr);
+assert.equal(resumedWindowFixture.state.requests.length, 5);
+const authoritativeHostWindow = resumedWindowFixture.state.samplingWindowUpperBoundAtMs;
+assert.ok(Number.isSafeInteger(authoritativeHostWindow));
+assert.equal(
+  resumedWindowFixture.state.requests[0].incomingSamplingWindowUpperBoundAtMs,
+  authoritativeHostWindow + 60_000,
+  "the first response may restore an older durable window from a resumed job",
+);
+assert.deepEqual(
+  resumedWindowFixture.state.requests
+    .slice(1)
+    .map((request) => request.incomingSamplingWindowUpperBoundAtMs),
+  [
+    authoritativeHostWindow,
+    authoritativeHostWindow,
+    authoritativeHostWindow,
+    authoritativeHostWindow,
+  ],
+  "every later HTTP chunk must send the durable first-job sampling window",
+);
+assert.equal(
+  resumedWindowFixture.state.requests[0].windowSync,
+  true,
+  "a mismatched resumed job must first return a side-effect-free window handshake",
+);
+assert.deepEqual(
+  resumedWindowFixture.state.requests.slice(1).map((request) => request.windowSync),
+  [false, false, false, false],
+  "provider-progress responses begin only after the runner adopts the durable window",
+);
+assert.deepEqual(
+  resumedWindowFixture.state.requests.slice(1).map((request) => request.selected),
+  [200, 200, 200, 30],
+  "the synchronized host run must still cover the complete 630-source fleet",
+);
+assert.deepEqual(
+  [...new Set(
+    resumedWindowFixture.state.requests.map(
+      (request) => request.returnedSamplingWindowUpperBoundAtMs,
+    ),
+  )],
+  [authoritativeHostWindow],
+  "all 200/200/200/30 source chunks must report one immutable host-run window",
+);
+
+const lostWindowSyncFixture = runCronRunnerCapFixture("lost-window-sync", 630);
+assert.equal(lostWindowSyncFixture.result.status, 0, lostWindowSyncFixture.result.stderr);
+assert.match(
+  lostWindowSyncFixture.result.stdout,
+  /status=ok requests=5 selected=630 host_run_max=630/,
+);
+assert.equal(lostWindowSyncFixture.state.requests.length, 6);
+assert.deepEqual(
+  lostWindowSyncFixture.state.requests.slice(0, 2).map((request) => request.windowSync),
+  [true, true],
+  "losing the first handshake acknowledgement must repeat only the no-progress handshake",
+);
+assert.deepEqual(
+  lostWindowSyncFixture.state.requests.slice(0, 2).map(
+    (request) => request.incomingSamplingWindowUpperBoundAtMs,
+  ),
+  [
+    lostWindowSyncFixture.state.samplingWindowUpperBoundAtMs + 60_000,
+    lostWindowSyncFixture.state.samplingWindowUpperBoundAtMs + 60_000,
+  ],
+  "the runner must not adopt an unacknowledged durable window",
+);
+assert.deepEqual(
+  lostWindowSyncFixture.state.requests.slice(2).map((request) => request.selected),
+  [200, 200, 200, 30],
+  "fleet progress must begin only after the repeated handshake is acknowledged",
+);
+assert.deepEqual(
+  [...new Set(
+    lostWindowSyncFixture.state.requests.map(
+      (request) => request.returnedSamplingWindowUpperBoundAtMs,
+    ),
+  )],
+  [lostWindowSyncFixture.state.samplingWindowUpperBoundAtMs],
 );
 
 const repeatedResumeFixture = runCronRunnerCapFixture("repeat-resume");

@@ -78,6 +78,7 @@ fi
 
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 START_EPOCH="$(date +%s)"
+HOST_RUN_SAMPLING_WINDOW_UPPER_BOUND_MS=$(( START_EPOCH * 1000 ))
 LAST_BODY="${LOG_DIR}/cron-${JOB}-last.json"
 LAST_ERR="${LOG_DIR}/cron-${JOB}-last.stderr"
 LAST_DONE="false"
@@ -192,6 +193,9 @@ while true; do
   fi
 
   request_url="$URL"
+  if [[ "$JOB" == "ingest-venues" ]]; then
+    request_url="${URL}?samplingWindowUpperBoundAtMs=${HOST_RUN_SAMPLING_WINDOW_UPPER_BOUND_MS}"
+  fi
   if [[ "$JOB" == "ingest-venues" && "$HOST_RUN_MAX_HANDLES" -gt 0 ]]; then
     host_run_remaining=$(( HOST_RUN_MAX_HANDLES - TOTAL_SELECTED ))
     if [[ "$LAST_DONE" != "true" && "$LAST_SELECTED" -gt "$host_run_remaining" ]]; then
@@ -202,7 +206,7 @@ while true; do
     if [[ "$host_run_remaining" -le 0 ]]; then
       break
     fi
-    request_url="${URL}?hostRunRemaining=${host_run_remaining}"
+    request_url="${request_url}&hostRunRemaining=${host_run_remaining}"
     if [[ -n "$HOST_RUN_CURSOR" ]]; then
       request_url="${request_url}&hostRunAfter=${HOST_RUN_CURSOR}"
     fi
@@ -242,6 +246,7 @@ steps_advanced = payload.get("stepsAdvanced", 0)
 job_id = payload.get("jobId")
 host_cursor = payload.get("hostRunCursor")
 host_completed = payload.get("hostRunCompletedThrough")
+sampling_window_upper_bound_ms = payload.get("samplingWindowUpperBoundAtMs")
 if host_cursor is not None and (
     not isinstance(host_cursor, str)
     or not host_cursor
@@ -249,6 +254,12 @@ if host_cursor is not None and (
     or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789._" for character in host_cursor)
 ):
     raise ValueError("invalid hostRunCursor")
+if (
+    not isinstance(sampling_window_upper_bound_ms, int)
+    or isinstance(sampling_window_upper_bound_ms, bool)
+    or sampling_window_upper_bound_ms <= 0
+):
+    raise ValueError("invalid samplingWindowUpperBoundAtMs")
 print(
     "true" if done else "false",
     selected,
@@ -262,10 +273,23 @@ print(
     job_id if isinstance(job_id, str) and job_id else "-",
     host_cursor or "-",
     host_completed if isinstance(host_completed, int) and host_completed >= 0 else -1,
+    sampling_window_upper_bound_ms,
 )
 PY
 )"
-  read -r LAST_DONE LAST_SELECTED LAST_SKIPPED_DUE LAST_STATUS RESPONSE_HOST_MAX RESPONSE_JOB_CHUNK RESPONSE_EFFECTIVE_BATCH_SIZE RESPONSE_MAX_STEPS RESPONSE_STEPS_ADVANCED RESPONSE_JOB_ID RESPONSE_HOST_CURSOR RESPONSE_HOST_COMPLETED <<<"$response_state"
+  read -r LAST_DONE LAST_SELECTED LAST_SKIPPED_DUE LAST_STATUS RESPONSE_HOST_MAX RESPONSE_JOB_CHUNK RESPONSE_EFFECTIVE_BATCH_SIZE RESPONSE_MAX_STEPS RESPONSE_STEPS_ADVANCED RESPONSE_JOB_ID RESPONSE_HOST_CURSOR RESPONSE_HOST_COMPLETED RESPONSE_SAMPLING_WINDOW_UPPER_BOUND_MS <<<"$response_state"
+  if [[ "$LAST_STATUS" == "window_sync" ]]; then
+    if [[ "$LAST_DONE" != "false" || "$RESPONSE_STEPS_ADVANCED" -ne 0 || "$LAST_SELECTED" -le 0 || "$RESPONSE_JOB_ID" == "-" ]]; then
+      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=invalid_window_sync_response body=$LAST_BODY" >&2
+      exit 1
+    fi
+    # A resumed durable job can be older than this host process. The route
+    # returns a side-effect-free handshake before any paid provider work.
+    HOST_RUN_SAMPLING_WINDOW_UPPER_BOUND_MS="$RESPONSE_SAMPLING_WINDOW_UPPER_BOUND_MS"
+  elif [[ "$RESPONSE_SAMPLING_WINDOW_UPPER_BOUND_MS" -ne "$HOST_RUN_SAMPLING_WINDOW_UPPER_BOUND_MS" ]]; then
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=sampling_window_changed expected=$HOST_RUN_SAMPLING_WINDOW_UPPER_BOUND_MS response=$RESPONSE_SAMPLING_WINDOW_UPPER_BOUND_MS body=$LAST_BODY" >&2
+    exit 1
+  fi
   if [[ "$LAST_SELECTED" -gt 0 ]]; then
     if [[ "$RESPONSE_JOB_ID" == "-" ]]; then
       echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=missing_job_id selected=$LAST_SELECTED body=$LAST_BODY" >&2
@@ -302,6 +326,10 @@ PY
     fi
   fi
 
+  if [[ "$LAST_STATUS" == "window_sync" ]]; then
+    CONSECUTIVE_NO_PROGRESS=0
+    continue
+  fi
   if [[ "$LAST_SELECTED" -eq 0 ]]; then
     break
   fi
