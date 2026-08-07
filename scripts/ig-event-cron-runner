@@ -78,7 +78,8 @@ fi
 
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 START_EPOCH="$(date +%s)"
-HOST_RUN_SAMPLING_WINDOW_UPPER_BOUND_MS=$(( START_EPOCH * 1000 ))
+HOST_RUN_SAMPLING_WINDOW_UPPER_BOUND_MS=$((START_EPOCH * 1000))
+HOST_RUN_SAMPLING_MODE=""
 LAST_BODY="${LOG_DIR}/cron-${JOB}-last.json"
 LAST_ERR="${LOG_DIR}/cron-${JOB}-last.stderr"
 LAST_DONE="false"
@@ -254,11 +255,15 @@ if host_cursor is not None and (
     or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789._" for character in host_cursor)
 ):
     raise ValueError("invalid hostRunCursor")
-if (
-    not isinstance(sampling_window_upper_bound_ms, int)
-    or isinstance(sampling_window_upper_bound_ms, bool)
-    or sampling_window_upper_bound_ms <= 0
+if sampling_window_upper_bound_ms is None:
+    sampling_window_output = "-"
+elif (
+    isinstance(sampling_window_upper_bound_ms, int)
+    and not isinstance(sampling_window_upper_bound_ms, bool)
+    and sampling_window_upper_bound_ms > 0
 ):
+    sampling_window_output = sampling_window_upper_bound_ms
+else:
     raise ValueError("invalid samplingWindowUpperBoundAtMs")
 print(
     "true" if done else "false",
@@ -273,12 +278,21 @@ print(
     job_id if isinstance(job_id, str) and job_id else "-",
     host_cursor or "-",
     host_completed if isinstance(host_completed, int) and host_completed >= 0 else -1,
-    sampling_window_upper_bound_ms,
+    sampling_window_output,
 )
 PY
 )"
   read -r LAST_DONE LAST_SELECTED LAST_SKIPPED_DUE LAST_STATUS RESPONSE_HOST_MAX RESPONSE_JOB_CHUNK RESPONSE_EFFECTIVE_BATCH_SIZE RESPONSE_MAX_STEPS RESPONSE_STEPS_ADVANCED RESPONSE_JOB_ID RESPONSE_HOST_CURSOR RESPONSE_HOST_COMPLETED RESPONSE_SAMPLING_WINDOW_UPPER_BOUND_MS <<<"$response_state"
-  if [[ "$LAST_STATUS" == "window_sync" ]]; then
+  if [[ "$RESPONSE_SAMPLING_WINDOW_UPPER_BOUND_MS" == "-" ]]; then
+    if [[ "$LAST_STATUS" == "window_sync" || "$HOST_RUN_SAMPLING_MODE" == "sampling" ]]; then
+      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=sampling_mode_changed expected=sampling response=none body=$LAST_BODY" >&2
+      exit 1
+    fi
+    HOST_RUN_SAMPLING_MODE="none"
+  elif [[ "$HOST_RUN_SAMPLING_MODE" == "none" ]]; then
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=sampling_mode_changed expected=none response=sampling body=$LAST_BODY" >&2
+    exit 1
+  elif [[ "$LAST_STATUS" == "window_sync" ]]; then
     if [[ "$LAST_DONE" != "false" || "$RESPONSE_STEPS_ADVANCED" -ne 0 || "$LAST_SELECTED" -le 0 || "$RESPONSE_JOB_ID" == "-" ]]; then
       echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=invalid_window_sync_response body=$LAST_BODY" >&2
       exit 1
@@ -286,9 +300,12 @@ PY
     # A resumed durable job can be older than this host process. The route
     # returns a side-effect-free handshake before any paid provider work.
     HOST_RUN_SAMPLING_WINDOW_UPPER_BOUND_MS="$RESPONSE_SAMPLING_WINDOW_UPPER_BOUND_MS"
+    HOST_RUN_SAMPLING_MODE="sampling"
   elif [[ "$RESPONSE_SAMPLING_WINDOW_UPPER_BOUND_MS" -ne "$HOST_RUN_SAMPLING_WINDOW_UPPER_BOUND_MS" ]]; then
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=failed reason=sampling_window_changed expected=$HOST_RUN_SAMPLING_WINDOW_UPPER_BOUND_MS response=$RESPONSE_SAMPLING_WINDOW_UPPER_BOUND_MS body=$LAST_BODY" >&2
     exit 1
+  else
+    HOST_RUN_SAMPLING_MODE="sampling"
   fi
   if [[ "$LAST_SELECTED" -gt 0 ]]; then
     if [[ "$RESPONSE_JOB_ID" == "-" ]]; then

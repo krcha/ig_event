@@ -2146,6 +2146,10 @@ const selected = Math.min(200, Math.max(0, remaining));
 const repeat = process.env.FAKE_CURL_MODE === "repeat-resume";
 const singleHandleProgress = process.env.FAKE_CURL_MODE === "single-handle-progress";
 const zeroProgress = process.env.FAKE_CURL_MODE === "zero-progress";
+const responseSamplingWindowUpperBoundAtMs =
+  process.env.FAKE_CURL_MODE === "non-sampling"
+    ? null
+    : state.samplingWindowUpperBoundAtMs;
 const jobId = windowSync
   ? "resumed-window-job"
   : singleHandleProgress || zeroProgress
@@ -2178,7 +2182,7 @@ const payload = {
   effectiveBatchSize: singleHandleProgress || zeroProgress ? 1 : selected,
   maxSteps: 1,
   stepsAdvanced: windowSync || zeroProgress ? 0 : 1,
-  samplingWindowUpperBoundAtMs: state.samplingWindowUpperBoundAtMs,
+  samplingWindowUpperBoundAtMs: responseSamplingWindowUpperBoundAtMs,
 };
 state.requests.push({
   attempt: state.count,
@@ -2187,7 +2191,7 @@ state.requests.push({
   remaining,
   incomingCursor,
   incomingSamplingWindowUpperBoundAtMs,
-  returnedSamplingWindowUpperBoundAtMs: state.samplingWindowUpperBoundAtMs,
+  returnedSamplingWindowUpperBoundAtMs: responseSamplingWindowUpperBoundAtMs,
   windowSync,
   selected,
   jobId,
@@ -2233,6 +2237,20 @@ process.stdout.write("200");
     rmSync(fixtureRoot, { force: true, recursive: true });
   }
 }
+
+const nonSamplingFixture = runCronRunnerCapFixture("non-sampling", 630);
+assert.equal(nonSamplingFixture.result.status, 0, nonSamplingFixture.result.stderr);
+assert.match(
+  nonSamplingFixture.result.stdout,
+  /status=ok requests=4 selected=630 host_run_max=630/,
+);
+assert.deepEqual(
+  nonSamplingFixture.state.requests.map(
+    (request) => request.returnedSamplingWindowUpperBoundAtMs,
+  ),
+  [null, null, null, null],
+  "the documented non-sampling mode must complete every host chunk without requiring a window",
+);
 
 const resumedCapFixture = runCronRunnerCapFixture("single-resume");
 assert.equal(resumedCapFixture.result.status, 0, resumedCapFixture.result.stderr);
