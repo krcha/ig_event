@@ -100,6 +100,10 @@ type RunInstagramIngestionOptions = {
   handles: string[];
   resultsLimit?: number;
   daysBack?: number;
+  noAgeCutoff?: boolean;
+  skipPinnedPosts?: boolean;
+  ignoreCheckpoint?: boolean;
+  ignoreCooldown?: boolean;
   mode?: IngestionRunMode;
   serviceSecret?: string;
 };
@@ -190,6 +194,10 @@ export type IngestionBatchStepOptions = {
   state: IngestionBatchState;
   resultsLimit?: number;
   daysBack?: number;
+  noAgeCutoff?: boolean;
+  skipPinnedPosts?: boolean;
+  ignoreCheckpoint?: boolean;
+  ignoreCooldown?: boolean;
   batchSize?: number;
   mode?: IngestionRunMode;
   postStepLimit?: number;
@@ -10983,7 +10991,7 @@ async function fetchFreshPostsForHandlesInParallel(
   client: ConvexHttpClient,
   handles: string[],
   summary: IngestionSummary,
-  options: Pick<RunInstagramIngestionOptions, "resultsLimit" | "daysBack">,
+  options: Pick<RunInstagramIngestionOptions, "resultsLimit" | "daysBack" | "noAgeCutoff" | "skipPinnedPosts" | "ignoreCheckpoint" | "ignoreCooldown">,
   serviceSecret: string,
   workOwner: string,
 ): Promise<Record<string, InstagramScrapedPost[]>> {
@@ -11017,9 +11025,9 @@ async function fetchFreshPostsForHandlesInParallel(
                   dayKey: getBudgetDayKey(new Date(fetchStartedAt)),
                   dailyBudgetUsd: budget.dailyBudgetMicros / 1_000_000,
                   maxChargeUsd: budget.maxChargePerHandleMicros / 1_000_000,
-                  attemptCooldownMs: getProviderAttemptCooldownMs(),
+                  attemptCooldownMs: options.ignoreCooldown ? 0 : getProviderAttemptCooldownMs(),
                   requestBoundaryVersion: 1,
-                  ...(options.daysBack && options.daysBack > 0
+                  ...(!options.noAgeCutoff && options.daysBack && options.daysBack > 0
                     ? { horizonCutoffMs: fetchStartedAt - options.daysBack * 86_400_000 }
                     : {}),
                   paidEnabled: isPaidIngestionEnabled(),
@@ -11052,6 +11060,8 @@ async function fetchFreshPostsForHandlesInParallel(
           handle,
           resultsLimit: requestedResultsLimit,
           daysBack: options.daysBack,
+          noAgeCutoff: options.noAgeCutoff,
+          skipPinnedPosts: options.skipPinnedPosts,
           onlyPostsNewerThan: onlyPostsNewerThan ?? undefined,
           abortAtMs: lease.expiresAt ? lease.expiresAt - 60_000 : undefined,
           onRequestStarted: async () => {

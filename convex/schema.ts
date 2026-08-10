@@ -16,6 +16,25 @@ const ingestionJobMode = v.union(
   v.literal("full_scrape"),
   v.literal("saved_posts"),
 );
+const durableIngestionRunMode = v.union(
+  v.literal("canary"),
+  v.literal("catch_up"),
+  v.literal("daily"),
+);
+const durableIngestionRunStatus = v.union(
+  v.literal("queued"),
+  v.literal("running"),
+  v.literal("completed"),
+  v.literal("failed"),
+);
+const durableIngestionReceiptStatus = v.union(
+  v.literal("queued"),
+  v.literal("running"),
+  v.literal("fetched"),
+  v.literal("no_post"),
+  v.literal("deferred"),
+  v.literal("failed"),
+);
 const eventTimeSource = v.union(
   v.literal("alt_text"),
   v.literal("caption"),
@@ -451,6 +470,67 @@ export default defineSchema({
     .index("by_mode_createdAt", ["mode", "createdAt"])
     .index("by_source_createdAt", ["source", "createdAt"])
     .index("by_source_status_createdAt", ["source", "status", "createdAt"]),
+  // A durable controller owns large scheduled runs.  Existing ingestionJobs
+  // remain the processing implementation detail during rollout.
+  ingestionRuns: defineTable({
+    mode: durableIngestionRunMode,
+    status: durableIngestionRunStatus,
+    sourceSnapshotKey: v.string(),
+    selectedHandleCount: v.number(),
+    terminalReceiptCount: v.number(),
+    failedReceiptCount: v.number(),
+    inFlightCount: v.number(),
+    reservedMicros: v.number(),
+    chargedMicros: v.number(),
+    controls: v.object({
+      resultsLimit: v.number(),
+      daysBack: v.optional(v.number()),
+      skipPinnedPosts: v.boolean(),
+      concurrency: v.number(),
+      costPerProfileMicros: v.number(),
+      budgetMicros: v.number(),
+      ignoreCheckpoint: v.boolean(),
+      ignoreCooldown: v.boolean(),
+    }),
+    createdBy: v.string(),
+    startedAt: v.optional(v.number()),
+    finishedAt: v.optional(v.number()),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_status_createdAt", ["status", "createdAt"])
+    .index("by_mode_createdAt", ["mode", "createdAt"])
+    .index("by_snapshot", ["sourceSnapshotKey"]),
+  ingestionRunChunks: defineTable({
+    runId: v.id("ingestionRuns"),
+    ordinal: v.number(),
+    handleCount: v.number(),
+    terminalReceiptCount: v.number(),
+    status: durableIngestionRunStatus,
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_run_ordinal", ["runId", "ordinal"])
+    .index("by_run_status", ["runId", "status"]),
+  ingestionRunHandleReceipts: defineTable({
+    runId: v.id("ingestionRuns"),
+    chunkId: v.id("ingestionRunChunks"),
+    handle: v.string(),
+    status: durableIngestionReceiptStatus,
+    attemptCount: v.number(),
+    reservedMicros: v.optional(v.number()),
+    leaseOwner: v.optional(v.string()),
+    leaseExpiresAt: v.optional(v.number()),
+    outcomeDetail: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    terminalAt: v.optional(v.number()),
+  })
+    .index("by_run_handle", ["runId", "handle"])
+    .index("by_run_status", ["runId", "status"])
+    .index("by_run_status_leaseExpiresAt", ["runId", "status", "leaseExpiresAt"])
+    .index("by_chunk_status", ["chunkId", "status"]),
   eventAuditLog: defineTable({
     eventId: v.id("events"),
     action: v.string(),

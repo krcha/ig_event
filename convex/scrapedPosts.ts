@@ -1115,6 +1115,7 @@ export const claimPaidFetchLease = mutation({
     maxChargeUsd: v.optional(v.number()),
     horizonCutoffMs: v.optional(v.number()),
     attemptCooldownMs: v.optional(v.number()),
+    ignoreCheckpoint: v.optional(v.boolean()),
     requestBoundaryVersion: v.optional(v.literal(1)),
     serviceSecret: v.optional(v.string()),
   },
@@ -1331,7 +1332,7 @@ export const claimPaidFetchLease = mutation({
       1,
       Math.min(now + 60_000, Math.trunc(args.fetchStartedAt ?? now)),
     );
-    const checkpointAt = source?.lastSuccessfulFetchThroughAt;
+    const checkpointAt = args.ignoreCheckpoint ? undefined : source?.lastSuccessfulFetchThroughAt;
     const bootstrapDays = Math.max(
       1,
       Math.min(90, Math.trunc(args.bootstrapDays ?? DEFAULT_INGESTION_BOOTSTRAP_DAYS)),

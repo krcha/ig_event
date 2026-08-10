@@ -56,6 +56,9 @@ type ScrapeInstagramAccountOptions = {
   handle: string;
   resultsLimit?: number;
   daysBack?: number;
+  /** Controller-only catch-up switch. Never infer this from a missing daysBack. */
+  noAgeCutoff?: boolean;
+  skipPinnedPosts?: boolean;
   onlyPostsNewerThan?: string;
   abortAtMs?: number;
   onRequestStarted?: () => void | Promise<void>;
@@ -288,6 +291,8 @@ export function buildApifyInstagramScrapeRequest(options: {
   resultsLimit?: number;
   daysBack?: number;
   onlyPostsNewerThan?: string;
+  noAgeCutoff?: boolean;
+  skipPinnedPosts?: boolean;
   env?: Record<string, string | undefined>;
 }): ApifyInstagramScrapeRequest {
   const env = options.env ?? process.env;
@@ -296,7 +301,9 @@ export function buildApifyInstagramScrapeRequest(options: {
   const parsedOnlyPostsNewerThan = options.onlyPostsNewerThan
     ? Date.parse(options.onlyPostsNewerThan)
     : Number.NaN;
-  const onlyPostsNewerThan = Number.isFinite(parsedOnlyPostsNewerThan)
+  const onlyPostsNewerThan = options.noAgeCutoff
+    ? "1970-01-01T00:00:00.000Z"
+    : Number.isFinite(parsedOnlyPostsNewerThan)
     ? new Date(parsedOnlyPostsNewerThan).toISOString()
     : `${daysBack} day${daysBack === 1 ? "" : "s"}`;
 
@@ -305,7 +312,7 @@ export function buildApifyInstagramScrapeRequest(options: {
       username: [options.actorUsernameInput],
       resultsLimit,
       onlyPostsNewerThan,
-      skipPinnedPosts: normalizeApifySkipPinnedPosts(env.APIFY_SKIP_PINNED_POSTS),
+      skipPinnedPosts: options.skipPinnedPosts ?? normalizeApifySkipPinnedPosts(env.APIFY_SKIP_PINNED_POSTS),
       dataDetailLevel: normalizeApifyDataDetailLevel(env.APIFY_DATA_DETAIL_LEVEL),
     },
     runOptions: {
@@ -864,10 +871,12 @@ export async function scrapeInstagramAccount(
     resultsLimit: options.resultsLimit,
     daysBack: options.daysBack,
     onlyPostsNewerThan: options.onlyPostsNewerThan,
+    noAgeCutoff: options.noAgeCutoff,
+    skipPinnedPosts: options.skipPinnedPosts,
   });
   const { input, runOptions } = requestSettings;
   const resultsLimit = input.resultsLimit;
-  const cutoff = Date.now() - requestSettings.daysBack * 24 * 60 * 60 * 1000;
+  const cutoff = options.noAgeCutoff ? Number.NEGATIVE_INFINITY : Date.now() - requestSettings.daysBack * 24 * 60 * 60 * 1000;
 
   const query = new URLSearchParams({
     clean: "true",
