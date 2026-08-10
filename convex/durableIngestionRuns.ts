@@ -237,6 +237,51 @@ export const probeRun = query({
   },
 });
 
+// Operational escape hatch for a legacy run that was stopped before the
+// sharded controller was deployed. It never changes receipts, never invokes a
+// provider, and refuses to close a run that still has an active worker lease.
+// This lets a corrected replacement run be queued without erasing the audit
+// trail from the partial run.
+export const abortInactiveRun = mutation({
+  args: {
+    runId: v.id("ingestionRuns"),
+    reason: v.string(),
+    serviceSecret: v.optional(v.string()),
+  },
+  returns: v.object({
+    status: v.literal("failed"),
+    terminalReceiptCount: v.number(),
+    failedReceiptCount: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const run = await ctx.db.get(args.runId);
+    if (!run) throw new Error("Durable ingestion run not found.");
+    if (run.status !== "queued" && run.status !== "running") {
+      throw new Error("Only an inactive queued or running durable run can be aborted.");
+    }
+    const activeLease = await ctx.db
+      .query("ingestionRunHandleReceipts")
+      .withIndex("by_run_status", (q) => q.eq("runId", args.runId).eq("status", "running"))
+      .take(1);
+    if (activeLease.length > 0) {
+      throw new Error("Cannot abort a durable run with an active receipt lease.");
+    }
+    const counts = await terminalCountsForRun(ctx, run._id, run.selectedHandleCount);
+    const now = Date.now();
+    await ctx.db.patch(run._id, {
+      status: "failed",
+      terminalReceiptCount: counts.terminalReceiptCount,
+      failedReceiptCount: counts.failedReceiptCount,
+      inFlightCount: 0,
+      error: args.reason.slice(0, 256),
+      finishedAt: now,
+      updatedAt: now,
+    });
+    return { status: "failed" as const, ...counts };
+  },
+});
+
 export const executeNext = mutation({
   args: { runId: v.id("ingestionRuns"), workerId: v.string(), serviceSecret: v.optional(v.string()) },
   returns: v.any(),
