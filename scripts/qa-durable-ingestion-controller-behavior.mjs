@@ -150,9 +150,10 @@ const handles = Array.from({ length: 632 }, (_, index) => `venue_${String(index)
   assert.equal(db.rows("ingestionRunHandleReceipts").length, 16);
   await assert.rejects(() => queue(db, "canary", handles.slice(0, 17)), /already active|exactly 16/i);
 
-  // Convex retries conflicting mutations transactionally. Claim sequentially in
-  // this deterministic harness, which verifies the persisted semaphore state
-  // that those concurrent transactions contend on.
+  // The harness is not a transactional Convex emulator, so claims are made
+  // sequentially here. Source checks below ensure each real claim writes only
+  // its own receipt (not a shared master counter), letting Convex retry only a
+  // duplicate receipt claim rather than an eight-way counter conflict.
   const claims = [];
   for (let index = 0; index < 8; index += 1) claims.push(await claim(db, runId, `worker-${index}`));
   assert.equal(claims.filter(Boolean).length, 8, "eight slots must be claimable concurrently");
@@ -264,7 +265,7 @@ const handles = Array.from({ length: 632 }, (_, index) => `venue_${String(index)
   assert.equal(run.controls.daysBack, undefined);
   assert.equal(run.controls.ignoreCheckpoint, true);
   assert.equal(run.controls.ignoreCooldown, true);
-  assert.equal(catchUpDb.rows("ingestionRunChunks").length, 2, "632 profiles must be chunked durably");
+  assert.equal(catchUpDb.rows("ingestionRunChunks").length, 632, "each receipt must have its own durable accounting shard");
 
   const dailyDb = new MemoryDb();
   const dailyId = await queue(dailyDb, "daily", handles);
@@ -288,9 +289,9 @@ assert.ok(/markReceiptProviderAttemptStarted/.test(controllerSource), "controlle
 assert.ok(/convex\.mutation\(markProviderAttempt,[\s\S]{0,1800}scrapeInstagramAccount/.test(executorSource), "executor must write that receipt before Apify is called");
 assert.ok(/providerAttemptCount/.test(controllerSource), "each receipt must retain its provider attempt count");
 
-// When a frozen budget cannot admit a remaining selected profile, the run must
-// finish with an auditable deferred receipt. Leaving it queued forever makes a
-// completed all-profile claim impossible after restart.
-assert.ok(/status:\s*["']deferred["'][\s\S]{0,500}budget_exhausted/.test(controllerSource), "budget exhaustion must create a terminal deferred outcome");
+// Admission validates the entire frozen snapshot against budget before any
+// receipt exists. This avoids a shared live budget counter and prevents a run
+// from charging a selected profile beyond its immutable allowance.
+assert.ok(/Selected profiles exceed this run's frozen budget/.test(controllerSource), "queue admission must reject a snapshot that exceeds budget");
 
 console.log("Durable ingestion controller behavioral QA passed.");

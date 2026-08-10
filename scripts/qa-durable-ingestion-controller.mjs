@@ -15,6 +15,7 @@ const dailyRoute = readFileSync("app/api/cron/durable-ingestion/daily/route.ts",
 const dailyLauncher = readFileSync("scripts/ig-event-durable-daily-runner", "utf8");
 const dailyService = readFileSync("ops/systemd/ig-event-durable-daily.service", "utf8");
 const dailyTimer = readFileSync("ops/systemd/ig-event-durable-daily.timer", "utf8");
+const ingestionPipeline = readFileSync("lib/pipeline/run-instagram-ingestion.ts", "utf8");
 
 const handles = Array.from({ length: 632 }, (_, index) => `venue_${String(index).padStart(3, "0")}`);
 const canary = selectDeterministicCanary(handles);
@@ -52,7 +53,7 @@ assert.match(controller, /providerAttemptCount/);
 assert.match(controller, /providerResultStatus/, "controller receipts must distinguish a charge from persisted source data");
 assert.match(controller, /by_run_status_retryNotBeforeAt/, "receipt retries must be queryable without scanning all run rows");
 assert.match(controller, /preserveAttempt/, "waiting for an AI lease must not consume the receipt retry limit");
-assert.match(controller, /budget_exhausted/);
+assert.match(controller, /Selected profiles exceed this run's frozen budget/);
 assert.match(controller, /markReceiptProviderAttemptStarted/);
 assert.match(executor, /complete: state\?\.complete/, "workers must distinguish completion from a busy lease after restart");
 assert.match(launcher, /for _ in \{1\.\.8\}/);
@@ -63,15 +64,17 @@ for (const reason of ["lease_expired_retry_limit", "retry_limit"]) {
   const offset = controller.indexOf(reason);
   assert.ok(offset >= 0, `missing ${reason} terminal branch`);
   const branch = controller.slice(Math.max(0, offset - 700), offset + 700);
-  assert.match(branch, /ctx\.db\.patch\(chunk\._id/);
-  assert.match(branch, /terminalReceiptCount: chunkTerminal/);
-  assert.match(branch, /status: complete \? "completed" : "running"/);
-  assert.match(branch, /finishedAt: now/);
+  assert.match(branch, /finishRunIfTerminal/);
 }
+assert.match(controller, /MAX_HANDLES_PER_CHUNK = 1/);
+assert.match(controller, /activeReceipts/);
 assert.match(launcher, /"complete":true/, "busy workers must wait rather than treat an active lease as completion");
 assert.match(dailyRoute, /mode: "daily"/);
 assert.match(dailyRoute, /resumeDaily: true/);
 assert.match(dailyRoute, /getActiveVenueHandles/);
+assert.match(ingestionPipeline, /listLegacyVenueHandlesPageQuery/, "active snapshots must include scrape-active legacy venues");
+assert.match(ingestionPipeline, /listActiveInstagramSourceHandlesPageQuery/, "active snapshots must include active instagram sources");
+assert.match(ingestionPipeline, /const handles = new Set<string>\(\)/, "active snapshots must deduplicate the source union");
 assert.match(dailyLauncher, /durable-ingestion\/daily/);
 assert.match(dailyLauncher, /ig-event-durable-runner/);
 assert.doesNotMatch(dailyLauncher, /ingest-venues/, "daily durable launcher must not use the legacy fan-out route");
