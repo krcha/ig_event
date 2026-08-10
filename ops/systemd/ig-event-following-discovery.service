@@ -1,0 +1,16 @@
+[Unit]
+Description=Event Zeka weekly Instagram following-list discovery
+Wants=network-online.target
+After=network-online.target docker.service
+ConditionPathExists=/usr/local/sbin/ig-event-cron-runner
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/ig_event/cron.env
+ExecStart=/usr/local/sbin/ig-event-cron-runner discover-following
+TimeoutStartSec=infinity
+Nice=10
+UMask=0077
+StandardOutput=append:/var/log/ig_event/cron.log
+StandardError=append:/var/log/ig_event/cron.log

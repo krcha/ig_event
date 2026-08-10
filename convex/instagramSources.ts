@@ -377,39 +377,41 @@ export const syncFollowingSnapshot = mutation({
     const activatedHandles: string[] = [];
     const presentHandles = new Set(handles);
 
-    for (const handle of handles) {
-      const existing = await ctx.db
-        .query("instagramSources")
-        .withIndex("by_handle", (q) => q.eq("handle", handle))
-        .unique();
-      if (existing) {
-        const reactivated = !existing.active;
-        await ctx.db.patch(existing._id, {
-          active: true,
-          ...(reactivated ? { activatedAt: now, deactivatedAt: undefined } : {}),
-          lastSeenFollowingAt: now,
-          updatedAt: now,
-        });
-        if (reactivated) activatedCount += 1;
-        if (reactivated) activatedHandles.push(handle);
-      } else {
-        await ctx.db.insert("instagramSources", {
-          handle,
-          role: "unknown",
-          active: true,
-          discoveredAt: now,
-          activatedAt: now,
-          lastSeenFollowingAt: now,
-          createdAt: now,
-          updatedAt: now,
-        });
-        discoveredCount += 1;
-        activatedCount += 1;
-        activatedHandles.push(handle);
-      }
-    }
-
+    // A partial or capped provider response is observability only. It must not
+    // alter the active source set: daily ingestion continues from its existing
+    // durable source snapshot until a complete weekly reconciliation succeeds.
     if (complete) {
+      for (const handle of handles) {
+        const existing = await ctx.db
+          .query("instagramSources")
+          .withIndex("by_handle", (q) => q.eq("handle", handle))
+          .unique();
+        if (existing) {
+          const reactivated = !existing.active;
+          await ctx.db.patch(existing._id, {
+            active: true,
+            ...(reactivated ? { activatedAt: now, deactivatedAt: undefined } : {}),
+            lastSeenFollowingAt: now,
+            updatedAt: now,
+          });
+          if (reactivated) activatedCount += 1;
+          if (reactivated) activatedHandles.push(handle);
+        } else {
+          await ctx.db.insert("instagramSources", {
+            handle,
+            role: "unknown",
+            active: true,
+            discoveredAt: now,
+            activatedAt: now,
+            lastSeenFollowingAt: now,
+            createdAt: now,
+            updatedAt: now,
+          });
+          discoveredCount += 1;
+          activatedCount += 1;
+          activatedHandles.push(handle);
+        }
+      }
       const activeSources = await ctx.db
         .query("instagramSources")
         .withIndex("by_active", (q) => q.eq("active", true))

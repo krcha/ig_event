@@ -194,7 +194,12 @@ const venuesSource = readFileSync(
 assert.match(routeSource, /isAuthorizedCronRequestHeader/);
 assert.match(routeSource, /scrapeInstagramFollowingAccountsDetailed/);
 assert.match(routeSource, /instagramSources:syncFollowingSnapshot/);
-assert.match(routeSource, /runInstagramIngestion/);
+assert.doesNotMatch(
+  routeSource,
+  /runInstagramIngestion/,
+  "following discovery must not start post scraping; durable ingestion owns that separately",
+);
+assert.match(routeSource, /bootstrapDeferred: synchronization\.activatedHandles\.length/);
 assert.match(venuesSource, /listVenueIngestionFieldsPaginated/);
 assert.match(venuesSource, /listActiveVenueIngestionFieldsPaginated/);
 assert.match(
@@ -302,7 +307,11 @@ try {
   });
   assert.equal(partial.complete, false);
   assert.equal(tables.instagramSources.find((row) => row.handle === "source.gone").active, true);
-  assert.equal(tables.instagramSources.find((row) => row.handle === "source.new").active, true);
+  assert.equal(
+    tables.instagramSources.find((row) => row.handle === "source.new"),
+    undefined,
+    "a partial snapshot must not add or activate sources",
+  );
 
   const complete = await syncFollowingSnapshot._handler(ctx, {
     ...baseArgs,
@@ -314,6 +323,7 @@ try {
   });
   assert.equal(complete.complete, true);
   assert.equal(complete.deactivatedCount, 1);
+  assert.equal(tables.instagramSources.find((row) => row.handle === "source.new").active, true);
   assert.equal(tables.instagramSources.find((row) => row.handle === "source.gone").active, false);
 
   const reactivated = await syncFollowingSnapshot._handler(ctx, {

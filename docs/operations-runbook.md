@@ -413,6 +413,7 @@ Installed files on the VPS:
 /usr/local/sbin/ig-event-durable-daily-runner root-owned durable daily launcher
 /etc/systemd/system/ig-event-durable-daily.service durable daily service
 /etc/systemd/system/ig-event-durable-daily.timer 09:00 Europe/Belgrade timer
+/etc/systemd/system/ig-event-following-discovery.timer Monday 04:00 Europe/Belgrade timer
 /var/log/ig_event/cron.log           appended cron output
 /var/log/ig_event/cron-*-last.json   last response body per job
 ```
@@ -423,17 +424,29 @@ directive. Berlin and Belgrade currently share the same civil UTC offset and DST
 transitions, but the daemon's actual schedule authority is the Berlin host clock.
 The current schedule is therefore deliberately documented in host-local time:
 
-```cron
-# Paid ingestion is owned by ig-event-durable-daily.timer, not cron.
-0 10 * * 1 root /usr/local/sbin/ig-event-cron-runner discover-following >> /var/log/ig_event/cron.log 2>&1
+The durable daily controller and following-list refresh both use systemd timers
+with explicit `Europe/Belgrade` calendars. They are independent: discovery
+never gates, queues, or starts the daily post-ingestion job. Replace the legacy
+`ig-event-discover.timer` rather than running two discovery schedules:
+
+```bash
+install -o root -g root -m 0644 ops/systemd/ig-event-following-discovery.service \
+  /etc/systemd/system/ig-event-following-discovery.service
+install -o root -g root -m 0644 ops/systemd/ig-event-following-discovery.timer \
+  /etc/systemd/system/ig-event-following-discovery.timer
+systemctl disable --now ig-event-discover.timer
+systemctl daemon-reload
+systemctl enable --now ig-event-following-discovery.timer
+systemctl list-timers ig-event-following-discovery.timer
 ```
 
-For the durable daily controller, replace the legacy `ingest-venues` cron entry
-with the source-controlled `ig-event-durable-daily.timer`. It has an explicit
-`Europe/Belgrade` calendar and resumes an interrupted run after a restart. Do
-not install a second paid-ingestion scheduler alongside it. The runner's
-`flock` remains a final overlap guard, not a substitute for single scheduler
-ownership.
+`ig-event-following-discovery.timer` runs at `04:00 Europe/Belgrade` every
+Monday, including daylight-saving transitions. A complete, uncapped snapshot
+may add, reactivate, or deactivate sources. A partial, malformed, capped, or
+failed snapshot records its outcome but leaves the active source set unchanged.
+It never scrapes posts itself; the separate daily durable controller owns that.
+The runner's `flock` remains a final overlap guard, not a substitute for single
+scheduler ownership.
 
 Use the same `CRON_SECRET` value in `/etc/ig_event/cron.env` and the web app
 runtime env. If a job returns `401`, check the header and secret first. The

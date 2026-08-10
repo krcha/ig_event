@@ -7,7 +7,6 @@ import {
   getFollowDiscoveryConfig,
   scrapeInstagramFollowingAccountsDetailed,
 } from "@/lib/pipeline/follow-discovery";
-import { runInstagramIngestion } from "@/lib/pipeline/run-instagram-ingestion";
 import { getRequiredEnv } from "@/lib/utils/env";
 
 export const dynamic = "force-dynamic";
@@ -67,18 +66,6 @@ async function runFollowingSynchronization(request: NextRequest) {
       activatedHandles: string[];
     };
 
-    const boundedBootstrapHandles = synchronization.activatedHandles.slice(0, 25);
-    const ingestionSummary =
-      boundedBootstrapHandles.length > 0
-        ? await runInstagramIngestion({
-            handles: boundedBootstrapHandles,
-            mode: "full_scrape",
-            resultsLimit: config.ingestionResultsLimit,
-            daysBack: config.ingestionDaysBack,
-            serviceSecret,
-          })
-        : null;
-
     return NextResponse.json({
       success: true,
       sourceHandle: config.sourceHandle,
@@ -96,14 +83,13 @@ async function runFollowingSynchronization(request: NextRequest) {
         discovered: synchronization.discoveredCount,
         activated: synchronization.activatedCount,
         deactivated: synchronization.deactivatedCount,
-        bootstrapDeferred: Math.max(
-          0,
-          synchronization.activatedHandles.length - boundedBootstrapHandles.length,
-        ),
+        // Following discovery is deliberately separate from post ingestion.
+        // The durable daily controller owns all fetching, including new sources.
+        bootstrapDeferred: synchronization.activatedHandles.length,
       },
       bootstrap: {
-        handles: boundedBootstrapHandles,
-        ingestionSummary,
+        handles: [],
+        ingestionSummary: null,
       },
       costControls: {
         followingResultsLimit: config.resultsLimit,
