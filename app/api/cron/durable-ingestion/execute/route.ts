@@ -156,9 +156,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ claimed: true, handle: claimed.handle, outcome: result.outcome });
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown execution failure";
+    const preserveAttempt = isTransientSavedPostProcessingError(reason);
     // A provider/network failure remains explicit and retryable; it does not
     // become a false "checked" receipt.
-    await convex.mutation(retry, { runId, receiptId: claimed.receiptId, workerId, reason, serviceSecret });
-    return NextResponse.json({ claimed: true, retryScheduled: true }, { status: 503 });
+    await convex.mutation(retry, {
+      runId,
+      receiptId: claimed.receiptId,
+      workerId,
+      reason,
+      ...(preserveAttempt ? { retryAfterMs: 30_000, preserveAttempt: true } : {}),
+      serviceSecret,
+    });
+    return NextResponse.json(
+      { claimed: true, retryScheduled: true, processingPending: preserveAttempt },
+      { status: preserveAttempt ? 202 : 503 },
+    );
   }
 }
