@@ -282,6 +282,64 @@ export const abortInactiveRun = mutation({
   },
 });
 
+// This is intentionally narrower than abortInactiveRun: it closes exactly one
+// stalled catch-up selected by the durable run guard. It exists so recovery
+// tooling need not enumerate production documents or guess a run id.
+export const abortOnlyInactiveCatchUpRun = mutation({
+  args: {
+    reason: v.string(),
+    serviceSecret: v.optional(v.string()),
+  },
+  returns: v.object({
+    runId: v.id("ingestionRuns"),
+    status: v.literal("failed"),
+    selectedHandleCount: v.number(),
+    terminalReceiptCount: v.number(),
+    failedReceiptCount: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const active = (await Promise.all(
+      (["queued", "running"] as const).map((status) =>
+        ctx.db
+          .query("ingestionRuns")
+          .withIndex("by_status_createdAt", (q) => q.eq("status", status))
+          .order("desc")
+          .take(3),
+      ),
+    )).flat();
+    const catchUps = active.filter((run) => run.mode === "catch_up");
+    if (catchUps.length !== 1) {
+      throw new Error("Expected exactly one active catch-up run to isolate.");
+    }
+    const run = catchUps[0];
+    const activeLease = await ctx.db
+      .query("ingestionRunHandleReceipts")
+      .withIndex("by_run_status", (q) => q.eq("runId", run._id).eq("status", "running"))
+      .take(1);
+    if (activeLease.length > 0) {
+      throw new Error("Cannot isolate a catch-up run with an active receipt lease.");
+    }
+    const counts = await terminalCountsForRun(ctx, run._id, run.selectedHandleCount);
+    const now = Date.now();
+    await ctx.db.patch(run._id, {
+      status: "failed",
+      terminalReceiptCount: counts.terminalReceiptCount,
+      failedReceiptCount: counts.failedReceiptCount,
+      inFlightCount: 0,
+      error: args.reason.slice(0, 256),
+      finishedAt: now,
+      updatedAt: now,
+    });
+    return {
+      runId: run._id,
+      status: "failed" as const,
+      selectedHandleCount: run.selectedHandleCount,
+      ...counts,
+    };
+  },
+});
+
 export const executeNext = mutation({
   args: { runId: v.id("ingestionRuns"), workerId: v.string(), serviceSecret: v.optional(v.string()) },
   returns: v.any(),
