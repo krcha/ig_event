@@ -98,6 +98,50 @@ function makeExtraction(overrides = {}) {
   };
 }
 
+// Every configured source handle has an exact canonical venue mapping, even
+// when its source role has not been classified yet. That trusted context must
+// reach both AI extraction and venue normalization; it must never fall back to
+// a venue belonging to a different handle.
+const unknownRoleSourcePost = makePost({
+  username: "unknown.source",
+  handle: "unknown.source",
+  postId: "unknown-role-source-post",
+  instagramPostUrl: "https://www.instagram.com/p/unknown-role-source-post/",
+});
+const unknownRoleSourceResults = prepareEventsForInsert(
+  unknownRoleSourcePost,
+  makeExtraction({
+    title: "Grounded event",
+    date: "30.07.2026",
+    venue: "Other Venue",
+  }),
+  IMAGE_URL,
+  {
+    "unknown.source": "Configured Venue",
+    "other.source": "Other Venue",
+  },
+  {},
+  { "unknown.source": "Configured Venue" },
+  {
+    eventDateFilterNow: NOW,
+    sourceRolesByHandle: { "unknown.source": "unknown" },
+  },
+);
+const unknownRoleSourceEvent = unknownRoleSourceResults.find(
+  (result) => result.kind === "ok",
+);
+assert.ok(
+  unknownRoleSourceEvent && unknownRoleSourceEvent.kind === "ok",
+  "an exact configured handle must ground an unknown-role source",
+);
+if (unknownRoleSourceEvent?.kind === "ok") {
+  assert.equal(
+    unknownRoleSourceEvent.event.venue,
+    "Configured Venue",
+    "an unknown-role source must use only its own exact canonical venue, never another handle's model venue",
+  );
+}
+
 const mixedDownloadSummary = createEmptyIngestionSummary(["venue"]).handles[0];
 let mixedDownloadAttempts = 0;
 await withoutConsoleNoise(() =>

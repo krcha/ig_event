@@ -1273,15 +1273,14 @@ async function loadCanonicalVenueNamesByHandle(
 function buildConfiguredVenueNamesByHandle(
   canonicalVenueNamesByHandle: Record<string, string>,
   venueNameOverridesByHandle: Record<string, string>,
-  sourceRolesByHandle: Record<string, "venue" | "promoter" | "unknown"> = {},
+  _sourceRolesByHandle: Record<string, "venue" | "promoter" | "unknown"> = {},
 ): Record<string, string> {
-  const venueSourceNames = Object.fromEntries(
-    Object.entries(canonicalVenueNamesByHandle).filter(
-      ([handle]) => sourceRolesByHandle[normalizeHandle(handle)] === "venue",
-    ),
-  );
+  // A configured source handle is an exact venue-identity mapping. Its role
+  // describes the source, not whether its canonical venue context is safe to
+  // supply to extraction. Dropping the context for an "unknown" role caused
+  // otherwise-grounded posts to be rejected as missing a venue.
   return {
-    ...venueSourceNames,
+    ...canonicalVenueNamesByHandle,
     ...venueNameOverridesByHandle,
   };
 }
@@ -6265,7 +6264,8 @@ function normalizeVenue(
   post: InstagramScrapedPost,
   rawModelVenue: string,
   canonicalVenueNamesByHandle: Record<string, string>,
-  venueNameOverridesByHandle: Record<string, string>,
+  _venueNameOverridesByHandle: Record<string, string>,
+  configuredVenueNamesByHandle: Record<string, string>,
   sourceRolesByHandle: Record<string, "venue" | "promoter" | "unknown"> = {},
 ): VenueNormalization {
   const sourceRole = sourceRolesByHandle[normalizeHandle(post.username)];
@@ -6274,9 +6274,15 @@ function normalizeVenue(
     rawModelVenue,
     locationName: post.locationName,
     canonicalVenueNamesByHandle,
-    handleVenueNamesByHandle: venueNameOverridesByHandle,
+    // This map is keyed by the exact configured source handle. It is not a
+    // fuzzy venue lookup, so it cannot leak another venue's identity into a
+    // post. Overrides retain their existing precedence when the map is built.
+    handleVenueNamesByHandle: configuredVenueNamesByHandle,
     staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
-    allowCanonicalHandleFallback: sourceRole === undefined || sourceRole === "venue",
+    allowCanonicalHandleFallback:
+      Boolean(configuredVenueNamesByHandle[normalizeHandle(post.username)]) ||
+      sourceRole === undefined ||
+      sourceRole === "venue",
   });
 }
 
@@ -8264,6 +8270,7 @@ export function prepareEventsForInsert(
     extracted.venue,
     canonicalVenueNamesByHandle,
     venueNameOverridesByHandle,
+    configuredVenueNamesByHandle,
     options.sourceRolesByHandle,
   );
   const titleNormalization = normalizeEventTitle(
