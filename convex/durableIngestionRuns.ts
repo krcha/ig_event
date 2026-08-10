@@ -217,7 +217,9 @@ export const executeNext = mutation({
         await ctx.db.patch(expired._id, { status: "failed", terminalAt: now, leaseOwner: undefined, leaseExpiresAt: undefined, outcomeDetail: "lease_expired_retry_limit", updatedAt: now });
         const chunkTerminal = chunk.terminalReceiptCount + 1;
         await ctx.db.patch(chunk._id, { terminalReceiptCount: chunkTerminal, status: chunkTerminal === chunk.handleCount ? "completed" : "running", updatedAt: now });
-        await ctx.db.patch(run._id, { terminalReceiptCount: run.terminalReceiptCount + 1, failedReceiptCount: run.failedReceiptCount + 1, inFlightCount: Math.max(0, run.inFlightCount - 1), updatedAt: now });
+        const terminalReceiptCount = run.terminalReceiptCount + 1;
+        const complete = terminalReceiptCount === run.selectedHandleCount;
+        await ctx.db.patch(run._id, { terminalReceiptCount, failedReceiptCount: run.failedReceiptCount + 1, inFlightCount: Math.max(0, run.inFlightCount - 1), status: complete ? "completed" : "running", ...(complete ? { finishedAt: now } : {}), updatedAt: now });
       } else {
         await ctx.db.patch(expired._id, { status: "queued", leaseOwner: undefined, leaseExpiresAt: undefined, outcomeDetail: "lease_expired_requeued", updatedAt: now });
         await ctx.db.patch(run._id, { inFlightCount: Math.max(0, run.inFlightCount - 1), updatedAt: now });
@@ -247,7 +249,9 @@ export const executeNext = mutation({
       await ctx.db.patch(receipt._id, { status: "failed", terminalAt: now, leaseOwner: undefined, leaseExpiresAt: undefined, outcomeDetail: "retry_limit", updatedAt: now });
       const chunkTerminal = chunk.terminalReceiptCount + 1;
       await ctx.db.patch(chunk._id, { terminalReceiptCount: chunkTerminal, status: chunkTerminal === chunk.handleCount ? "completed" : "running", updatedAt: now });
-      await ctx.db.patch(run._id, { terminalReceiptCount: run.terminalReceiptCount + 1, failedReceiptCount: run.failedReceiptCount + 1, updatedAt: now });
+      const terminalReceiptCount = run.terminalReceiptCount + 1;
+      const complete = terminalReceiptCount === run.selectedHandleCount;
+      await ctx.db.patch(run._id, { terminalReceiptCount, failedReceiptCount: run.failedReceiptCount + 1, status: complete ? "completed" : "running", ...(complete ? { finishedAt: now } : {}), updatedAt: now });
       return null;
     }
     const wasRunning = receipt.status === "running";

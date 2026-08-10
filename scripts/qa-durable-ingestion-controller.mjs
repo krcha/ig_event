@@ -54,6 +54,8 @@ for (const reason of ["lease_expired_retry_limit", "retry_limit"]) {
   const branch = controller.slice(Math.max(0, offset - 700), offset + 700);
   assert.match(branch, /ctx\.db\.patch\(chunk\._id/);
   assert.match(branch, /terminalReceiptCount: chunkTerminal/);
+  assert.match(branch, /status: complete \? "completed" : "running"/);
+  assert.match(branch, /finishedAt: now/);
 }
 assert.match(launcher, /"complete":true/, "busy workers must wait rather than treat an active lease as completion");
 assert.match(dailyRoute, /mode: "daily"/);
