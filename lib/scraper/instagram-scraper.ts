@@ -48,6 +48,8 @@ export type InstagramScrapedPost = {
   isPinned?: boolean;
 };
 
+export type InstagramPinnedPostPolicy = "exclude_all" | "include_recent";
+
 export const INSTAGRAM_SCRAPE_RAW_ITEM_COUNT = Symbol("instagramScrapeRawItemCount");
 
 export function getInstagramScrapeRawItemCount(posts: InstagramScrapedPost[]): number {
@@ -64,6 +66,7 @@ type ScrapeInstagramAccountOptions = {
   /** Controller-only catch-up switch. Never infer this from a missing daysBack. */
   noAgeCutoff?: boolean;
   skipPinnedPosts?: boolean;
+  pinnedPostPolicy?: InstagramPinnedPostPolicy;
   maxTotalChargeUsd?: number;
   onlyPostsNewerThan?: string;
   abortAtMs?: number;
@@ -741,12 +744,24 @@ export function mapApifyItemToInstagramPost(
  */
 export function selectLatestOriginalNonPinnedPost(
   posts: InstagramScrapedPost[],
+  options: {
+    pinnedPostPolicy?: InstagramPinnedPostPolicy;
+    nowMs?: number;
+  } = {},
 ): InstagramScrapedPost[] {
+  const pinnedPostPolicy = options.pinnedPostPolicy ?? "exclude_all";
+  const recentPinnedCutoffMs = (options.nowMs ?? Date.now()) - 24 * 60 * 60 * 1_000;
   const newest = posts
-    .filter((post) => post.isPinned !== true)
     .filter((post) => Number.isFinite(parsePostedAtTimestamp(post.postedAt)))
+    .filter((post) => {
+      if (post.isPinned !== true) return true;
+      return (
+        pinnedPostPolicy === "include_recent" &&
+        parsePostedAtTimestamp(post.postedAt) >= recentPinnedCutoffMs
+      );
+    })
     .sort((left, right) => parsePostedAtTimestamp(right.postedAt) - parsePostedAtTimestamp(left.postedAt))[0];
-  return newest ? [{ ...newest, isPinned: undefined }] : [];
+  return newest ? [newest] : [];
 }
 
 async function listRecentSucceededActorRuns(
@@ -1024,7 +1039,11 @@ export async function scrapeInstagramAccount(
   // Request a bounded over-fetch so local pinned-post filtering can choose the
   // latest genuine post. The durable caller asks for four; legacy callers keep
   // their explicit result count semantics.
-  const result = options.skipPinnedPosts
+  const result = options.pinnedPostPolicy
+    ? selectLatestOriginalNonPinnedPost(normalizedTopLevelPosts, {
+        pinnedPostPolicy: options.pinnedPostPolicy,
+      })
+    : options.skipPinnedPosts
     ? selectLatestOriginalNonPinnedPost(normalizedTopLevelPosts)
     : normalizedTopLevelPosts.slice(0, resultsLimit);
   Object.defineProperty(result, INSTAGRAM_SCRAPE_RAW_ITEM_COUNT, {

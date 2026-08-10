@@ -36,7 +36,7 @@ export async function POST(request: Request) {
   const convex = createConvexHttpClient();
   const workerId = `vps:${randomUUID()}`;
   const claimed = await convex.mutation(claim, { runId, workerId, workerSlot, serviceSecret }) as {
-    receiptId: string; handle: string; controls: { resultsLimit: number; daysBack?: number; noAgeCutoff?: boolean; skipPinnedPosts: boolean; ignoreCheckpoint: boolean; ignoreCooldown: boolean; costPerProfileMicros: number };
+    receiptId: string; handle: string; controls: { resultsLimit: number; daysBack?: number; noAgeCutoff?: boolean; skipPinnedPosts: boolean; pinnedPostPolicy?: "exclude_all" | "include_recent"; ignoreCheckpoint: boolean; ignoreCooldown: boolean; costPerProfileMicros: number };
     providerAttemptCount?: number;
     providerResultStatus?: "persisted" | "no_post";
   } | null;
@@ -105,6 +105,9 @@ export async function POST(request: Request) {
         ...(claimed.controls.daysBack === undefined ? {} : { daysBack: claimed.controls.daysBack }),
         noAgeCutoff: claimed.controls.noAgeCutoff ?? claimed.controls.daysBack === undefined,
         skipPinnedPosts: claimed.controls.skipPinnedPosts,
+        ...(claimed.controls.pinnedPostPolicy
+          ? { pinnedPostPolicy: claimed.controls.pinnedPostPolicy }
+          : {}),
         maxTotalChargeUsd: claimed.controls.costPerProfileMicros / 1_000_000,
       });
       // Controller receipts fence this new path. Omit the legacy global lease

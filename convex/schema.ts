@@ -497,6 +497,9 @@ export default defineSchema({
       resultsLimit: v.number(),
       daysBack: v.optional(v.number()),
       skipPinnedPosts: v.boolean(),
+      pinnedPostPolicy: v.optional(
+        v.union(v.literal("exclude_all"), v.literal("include_recent")),
+      ),
       concurrency: v.number(),
       costPerProfileMicros: v.number(),
       budgetMicros: v.number(),

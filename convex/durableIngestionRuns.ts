@@ -71,7 +71,10 @@ function controlsFor(mode: RunMode) {
     return {
       resultsLimit: SOURCE_RESULTS_LIMIT,
       daysBack: 1,
-      skipPinnedPosts: true,
+      // Keep fresh pins in the bounded actor output; selection below the actor
+      // only admits pins that are genuinely <=24h old for canary/daily runs.
+      skipPinnedPosts: false,
+      pinnedPostPolicy: "include_recent" as const,
       concurrency: MAX_CONCURRENCY,
       costPerProfileMicros: COST_PER_PROFILE_MICROS,
       budgetMicros: 16 * COST_PER_PROFILE_MICROS,
@@ -83,6 +86,7 @@ function controlsFor(mode: RunMode) {
     return {
       resultsLimit: SOURCE_RESULTS_LIMIT,
       skipPinnedPosts: true,
+      pinnedPostPolicy: "exclude_all" as const,
       concurrency: MAX_CONCURRENCY,
       costPerProfileMicros: COST_PER_PROFILE_MICROS,
       budgetMicros: 700 * COST_PER_PROFILE_MICROS,
@@ -93,7 +97,8 @@ function controlsFor(mode: RunMode) {
   return {
     resultsLimit: SOURCE_RESULTS_LIMIT,
     daysBack: 1,
-    skipPinnedPosts: true,
+    skipPinnedPosts: false,
+    pinnedPostPolicy: "include_recent" as const,
     concurrency: MAX_CONCURRENCY,
     costPerProfileMicros: COST_PER_PROFILE_MICROS,
     budgetMicros: 700 * COST_PER_PROFILE_MICROS,

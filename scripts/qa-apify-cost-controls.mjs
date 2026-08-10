@@ -406,6 +406,54 @@ assert.deepEqual(
   [],
   "a profile with only pins must truthfully produce no selected post",
 );
+const freshPinned = mapApifyItemToInstagramPost(
+  {
+    id: "fresh-pinned",
+    url: "https://www.instagram.com/p/fresh-pinned/",
+    username: "qa_venue",
+    timestamp: "2026-08-10T11:30:00.000Z",
+    pinned: true,
+    displayUrl: "https://images.apifyusercontent.com/fresh-pinned.jpg",
+  },
+  "qa_venue",
+);
+const oldPinned = mapApifyItemToInstagramPost(
+  {
+    id: "old-pinned",
+    url: "https://www.instagram.com/p/old-pinned/",
+    username: "qa_venue",
+    timestamp: "2026-08-08T12:00:00.000Z",
+    pinned: true,
+    displayUrl: "https://images.apifyusercontent.com/old-pinned.jpg",
+  },
+  "qa_venue",
+);
+assert.ok(freshPinned && oldPinned);
+const selectionNowMs = Date.parse("2026-08-10T12:00:00.000Z");
+assert.deepEqual(
+  selectLatestOriginalNonPinnedPost([pinnedNewest, newestOriginal, freshPinned], {
+    pinnedPostPolicy: "include_recent",
+    nowMs: selectionNowMs,
+  }).map((post) => post.postId),
+  ["fresh-pinned"],
+  "daily/canary selection may include a genuinely fresh pinned post",
+);
+assert.deepEqual(
+  selectLatestOriginalNonPinnedPost([pinnedNewest, newestOriginal, freshPinned], {
+    pinnedPostPolicy: "exclude_all",
+    nowMs: selectionNowMs,
+  }).map((post) => post.postId),
+  ["newest-original"],
+  "catch-up must still exclude every pin regardless of age",
+);
+assert.deepEqual(
+  selectLatestOriginalNonPinnedPost([oldPinned], {
+    pinnedPostPolicy: "include_recent",
+    nowMs: selectionNowMs,
+  }),
+  [],
+  "old pins remain excluded from daily/canary selection",
+);
 const detailedRequest = buildApifyInstagramScrapeRequest({
   actorUsernameInput: "clubdrugstore",
   resultsLimit: 5,

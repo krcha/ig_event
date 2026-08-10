@@ -14,11 +14,13 @@ export const DURABLE_INGESTION_CANARY_SIZE = 16;
 export const DURABLE_INGESTION_FULL_PROFILE_BUDGET_MICROS = 7_000_000;
 
 export type DurableIngestionMode = "canary" | "catch_up" | "daily";
+export type DurablePinnedPostPolicy = "exclude_all" | "include_recent";
 
 export type DurableIngestionControls = {
   resultsLimit: 4;
   daysBack?: 1;
-  skipPinnedPosts: true;
+  skipPinnedPosts: boolean;
+  pinnedPostPolicy: DurablePinnedPostPolicy;
   concurrency: 6;
   costPerProfileMicros: 10_000;
   budgetMicros: number;
@@ -31,7 +33,10 @@ export function durableControlsFor(mode: DurableIngestionMode): DurableIngestion
     return {
       resultsLimit: DURABLE_INGESTION_SOURCE_RESULTS_LIMIT,
       daysBack: 1,
-      skipPinnedPosts: true,
+      // Local policy decides whether a fresh pin is eligible, so do not ask
+      // the actor to hide it before we can inspect its original post date.
+      skipPinnedPosts: false,
+      pinnedPostPolicy: "include_recent",
       concurrency: DURABLE_INGESTION_CONCURRENCY,
       costPerProfileMicros: DURABLE_INGESTION_COST_PER_PROFILE_MICROS,
       budgetMicros: DURABLE_INGESTION_CANARY_SIZE * DURABLE_INGESTION_COST_PER_PROFILE_MICROS,
@@ -43,6 +48,7 @@ export function durableControlsFor(mode: DurableIngestionMode): DurableIngestion
     return {
       resultsLimit: DURABLE_INGESTION_SOURCE_RESULTS_LIMIT,
       skipPinnedPosts: true,
+      pinnedPostPolicy: "exclude_all",
       concurrency: DURABLE_INGESTION_CONCURRENCY,
       costPerProfileMicros: DURABLE_INGESTION_COST_PER_PROFILE_MICROS,
       budgetMicros: DURABLE_INGESTION_FULL_PROFILE_BUDGET_MICROS,
@@ -53,7 +59,8 @@ export function durableControlsFor(mode: DurableIngestionMode): DurableIngestion
   return {
     resultsLimit: DURABLE_INGESTION_SOURCE_RESULTS_LIMIT,
     daysBack: 1,
-    skipPinnedPosts: true,
+    skipPinnedPosts: false,
+    pinnedPostPolicy: "include_recent",
     concurrency: DURABLE_INGESTION_CONCURRENCY,
     costPerProfileMicros: DURABLE_INGESTION_COST_PER_PROFILE_MICROS,
     budgetMicros: DURABLE_INGESTION_FULL_PROFILE_BUDGET_MICROS,
