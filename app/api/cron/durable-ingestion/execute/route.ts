@@ -5,6 +5,7 @@ import { isAuthorizedCronRequestHeader } from "@/lib/pipeline/cron-ingestion-con
 import { createConvexHttpClient, requireServiceSecret } from "@/lib/convex/server";
 import { persistScrapedPostsForHandle, runInstagramIngestion } from "@/lib/pipeline/run-instagram-ingestion";
 import { scrapeInstagramAccount } from "@/lib/scraper/instagram-scraper";
+import { isTransientSavedPostProcessingError } from "@/lib/pipeline/durable-ingestion-execute";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -15,10 +16,6 @@ const retry = "durableIngestionRuns:releaseReceiptForRetry" as unknown as Functi
 const probe = "durableIngestionRuns:probeRun" as unknown as FunctionReference<"query">;
 const markProviderAttempt = "durableIngestionRuns:markReceiptProviderAttemptStarted" as unknown as FunctionReference<"mutation">;
 const markPostsPersisted = "durableIngestionRuns:markReceiptPostsPersisted" as unknown as FunctionReference<"mutation">;
-
-function isTransientSavedPostProcessingError(value: string | undefined): boolean {
-  return Boolean(value && /saved post processing is (busy|deferred)|openai provider execution lease is busy/i.test(value));
-}
 
 /** One receipt per request. The VPS starts one worker per fixed lane. */
 export async function POST(request: Request) {
