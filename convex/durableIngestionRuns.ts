@@ -158,8 +158,9 @@ export const queueRun = mutation({
           runId,
           chunkId,
           handle,
-          status: "queued",
-          attemptCount: 0,
+        status: "queued",
+        attemptCount: 0,
+        providerAttemptCount: 0,
           createdAt: now,
           updatedAt: now,
         });
@@ -243,15 +244,84 @@ export const executeNext = mutation({
     }
     const wasRunning = receipt.status === "running";
     const reservationNeeded = receipt.reservedMicros === undefined;
-    if (reservationNeeded && run.reservedMicros + run.controls.costPerProfileMicros > run.controls.budgetMicros) {
-      // This receipt stays queued.  It is visible and retryable rather than
-      // silently skipped when an operator intentionally selected too many rows.
+    if (
+      reservationNeeded &&
+      run.chargedMicros + run.reservedMicros + run.controls.costPerProfileMicros > run.controls.budgetMicros
+    ) {
+      // A selected handle must never remain queued forever due to budget
+      // exhaustion. It has not made a provider request, so mark the result
+      // explicitly deferred and let the master run finish honestly.
+      const terminal = run.terminalReceiptCount + 1;
+      const complete = terminal === run.selectedHandleCount;
+      const chunk = await ctx.db.get(receipt.chunkId);
+      if (!chunk) throw new Error("Receipt chunk not found.");
+      const chunkTerminal = chunk.terminalReceiptCount + 1;
+      await ctx.db.patch(receipt._id, {
+        status: "deferred",
+        terminalAt: now,
+        outcomeDetail: "budget_exhausted",
+        updatedAt: now,
+      });
+      await ctx.db.patch(chunk._id, {
+        terminalReceiptCount: chunkTerminal,
+        status: chunkTerminal === chunk.handleCount ? "completed" : "running",
+        updatedAt: now,
+      });
+      await ctx.db.patch(run._id, {
+        terminalReceiptCount: terminal,
+        status: complete ? "completed" : "running",
+        ...(complete ? { finishedAt: now } : {}),
+        updatedAt: now,
+      });
       return null;
     }
     await ctx.db.patch(receipt._id, { status: "running", leaseOwner: args.workerId, leaseExpiresAt: now + LEASE_MS, attemptCount: receipt.attemptCount + 1, updatedAt: now });
     await ctx.db.patch(run._id, { status: "running", startedAt: run.startedAt ?? now, inFlightCount: run.inFlightCount + (wasRunning ? 0 : 1), reservedMicros: run.reservedMicros + (reservationNeeded ? run.controls.costPerProfileMicros : 0), updatedAt: now });
     if (reservationNeeded) await ctx.db.patch(receipt._id, { reservedMicros: run.controls.costPerProfileMicros });
     return { receiptId: receipt._id, handle: receipt.handle, controls: run.controls };
+  },
+});
+
+/**
+ * Cross the paid-provider boundary atomically. The first outbound attempt
+ * consumes the claim-time reservation; retries consume new budget. This makes
+ * crash/retry billing conservative and prevents a run from undercounting paid
+ * requests while still respecting its immutable budget.
+ */
+export const markReceiptProviderAttemptStarted = mutation({
+  args: {
+    runId: v.id("ingestionRuns"),
+    receiptId: v.id("ingestionRunHandleReceipts"),
+    workerId: v.string(),
+    serviceSecret: v.optional(v.string()),
+  },
+  returns: v.object({ started: v.boolean(), reason: v.optional(v.string()) }),
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const [run, receipt] = await Promise.all([ctx.db.get(args.runId), ctx.db.get(args.receiptId)]);
+    if (!run || !receipt || receipt.runId !== args.runId) throw new Error("Receipt does not belong to this run.");
+    if (receipt.status !== "running" || receipt.leaseOwner !== args.workerId) throw new Error("Receipt lease mismatch.");
+
+    const cost = run.controls.costPerProfileMicros;
+    const usesReservation = (receipt.reservedMicros ?? 0) > (receipt.chargedMicros ?? 0);
+    // A retry has no unused reservation. Charge it only when spare run budget
+    // remains after all other active claims are accounted for.
+    if (!usesReservation && run.chargedMicros + run.reservedMicros + cost > run.controls.budgetMicros) {
+      return { started: false, reason: "budget_exhausted" };
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(receipt._id, {
+      providerAttemptCount: (receipt.providerAttemptCount ?? 0) + 1,
+      chargedMicros: (receipt.chargedMicros ?? 0) + cost,
+      updatedAt: now,
+    });
+    await ctx.db.patch(run._id, {
+      reservedMicros: usesReservation ? Math.max(0, run.reservedMicros - cost) : run.reservedMicros,
+      chargedMicros: run.chargedMicros + cost,
+      updatedAt: now,
+    });
+    return { started: true };
   },
 });
 
@@ -272,7 +342,7 @@ export const completeReceipt = mutation({
     await ctx.db.patch(receipt._id, { status: args.outcome, outcomeDetail: args.detail?.slice(0, 256), terminalAt: now, leaseOwner: undefined, leaseExpiresAt: undefined, updatedAt: now });
     const chunkTerminal = chunk.terminalReceiptCount + 1;
     await ctx.db.patch(chunk._id, { terminalReceiptCount: chunkTerminal, status: chunkTerminal === chunk.handleCount ? "completed" : "running", updatedAt: now });
-    await ctx.db.patch(run._id, { terminalReceiptCount: terminal, failedReceiptCount: failed, inFlightCount: Math.max(0, run.inFlightCount - 1), chargedMicros: run.chargedMicros + (receipt.reservedMicros ?? 0), status: complete ? "completed" : "running", ...(complete ? { finishedAt: now } : {}), updatedAt: now });
+    await ctx.db.patch(run._id, { terminalReceiptCount: terminal, failedReceiptCount: failed, inFlightCount: Math.max(0, run.inFlightCount - 1), status: complete ? "completed" : "running", ...(complete ? { finishedAt: now } : {}), updatedAt: now });
     return { complete, terminalReceiptCount: terminal, selectedHandleCount: run.selectedHandleCount };
   },
 });

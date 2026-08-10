@@ -519,7 +519,12 @@ export default defineSchema({
     handle: v.string(),
     status: durableIngestionReceiptStatus,
     attemptCount: v.number(),
+    // Provider attempts are separate from receipt claims: an interrupted
+    // receipt may be claimed again and every outbound paid request must remain
+    // auditable and chargeable.
+    providerAttemptCount: v.optional(v.number()),
     reservedMicros: v.optional(v.number()),
+    chargedMicros: v.optional(v.number()),
     leaseOwner: v.optional(v.string()),
     leaseExpiresAt: v.optional(v.number()),
     outcomeDetail: v.optional(v.string()),

@@ -13,6 +13,7 @@ const claim = "durableIngestionRuns:executeNext" as unknown as FunctionReference
 const complete = "durableIngestionRuns:completeReceipt" as unknown as FunctionReference<"mutation">;
 const retry = "durableIngestionRuns:releaseReceiptForRetry" as unknown as FunctionReference<"mutation">;
 const probe = "durableIngestionRuns:probeRun" as unknown as FunctionReference<"query">;
+const markProviderAttempt = "durableIngestionRuns:markReceiptProviderAttemptStarted" as unknown as FunctionReference<"mutation">;
 
 /** One receipt per request. The VPS starts at most eight of these requests in
  * parallel; Convex also enforces the run's eight-slot semaphore. */
@@ -37,6 +38,25 @@ export async function POST(request: Request) {
     });
   }
   try {
+    // This is immediately before the outbound provider call. It consumes the
+    // frozen one-cent reservation or charges a retry only if run budget remains.
+    const providerAttempt = await convex.mutation(markProviderAttempt, {
+      runId,
+      receiptId: claimed.receiptId,
+      workerId,
+      serviceSecret,
+    }) as { started: boolean; reason?: string };
+    if (!providerAttempt.started) {
+      await convex.mutation(complete, {
+        runId,
+        receiptId: claimed.receiptId,
+        workerId,
+        outcome: "deferred",
+        detail: providerAttempt.reason ?? "budget_exhausted",
+        serviceSecret,
+      });
+      return NextResponse.json({ claimed: true, handle: claimed.handle, outcome: "deferred" });
+    }
     // The controller owns the provider reservation and eight-slot semaphore.
     // Do not enter the legacy singleton paid-fetch lease here: that old safety
     // layer serializes all accounts and would turn eight workers into one.
