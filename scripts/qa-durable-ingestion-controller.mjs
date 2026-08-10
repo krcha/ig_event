@@ -34,5 +34,8 @@ assert.match(executor, /noAgeCutoff/);
 assert.match(executor, /skipPinnedPosts/);
 assert.match(executor, /ignoreCheckpoint/);
 assert.match(executor, /ignoreCooldown/);
+assert.match(executor, /legacy singleton paid-fetch lease/);
+assert.match(executor, /persistScrapedPostsForHandle/);
+assert.match(executor, /provider_completed_without_post/);
 assert.match(launcher, /for _ in \{1\.\.8\}/);
 console.log("Durable ingestion controller QA passed.");

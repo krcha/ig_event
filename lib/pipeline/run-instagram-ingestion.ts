@@ -4585,7 +4585,7 @@ function chunkItems<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
-async function persistScrapedPostsForHandle(
+export async function persistScrapedPostsForHandle(
   client: ConvexHttpClient,
   handle: string,
   posts: InstagramScrapedPost[],

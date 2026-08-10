@@ -3,7 +3,8 @@ import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { isAuthorizedCronRequestHeader } from "@/lib/pipeline/cron-ingestion-config";
 import { createConvexHttpClient, requireServiceSecret } from "@/lib/convex/server";
-import { runInstagramIngestion } from "@/lib/pipeline/run-instagram-ingestion";
+import { persistScrapedPostsForHandle, runInstagramIngestion } from "@/lib/pipeline/run-instagram-ingestion";
+import { scrapeInstagramAccount } from "@/lib/scraper/instagram-scraper";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -11,15 +12,6 @@ export const maxDuration = 300;
 const claim = "durableIngestionRuns:executeNext" as unknown as FunctionReference<"mutation">;
 const complete = "durableIngestionRuns:completeReceipt" as unknown as FunctionReference<"mutation">;
 const retry = "durableIngestionRuns:releaseReceiptForRetry" as unknown as FunctionReference<"mutation">;
-
-function terminalOutcome(summary: Awaited<ReturnType<typeof runInstagramIngestion>>) {
-  const handle = summary.handles[0];
-  if (!handle) return { outcome: "deferred" as const, detail: "no_handle_summary" };
-  if (handle.errors.length > 0) return { outcome: "deferred" as const, detail: handle.errors[0] };
-  return handle.freshFetchAttempted && handle.freshFetchAttempted > 0
-    ? { outcome: "fetched" as const, detail: `posts:${handle.fetchedPosts}` }
-    : { outcome: "no_post" as const, detail: "provider_completed_without_new_post" };
-}
 
 /** One receipt per request. The VPS starts at most eight of these requests in
  * parallel; Convex also enforces the run's eight-slot semaphore. */
@@ -37,18 +29,36 @@ export async function POST(request: Request) {
   } | null;
   if (!claimed) return NextResponse.json({ claimed: false, doneOrBusy: true });
   try {
+    // The controller owns the provider reservation and eight-slot semaphore.
+    // Do not enter the legacy singleton paid-fetch lease here: that old safety
+    // layer serializes all accounts and would turn eight workers into one.
+    const posts = await scrapeInstagramAccount({
+      handle: claimed.handle,
+      resultsLimit: claimed.controls.resultsLimit,
+      ...(claimed.controls.daysBack === undefined ? {} : { daysBack: claimed.controls.daysBack }),
+      noAgeCutoff: claimed.controls.noAgeCutoff ?? claimed.controls.daysBack === undefined,
+      skipPinnedPosts: claimed.controls.skipPinnedPosts,
+    });
+    await persistScrapedPostsForHandle(convex, claimed.handle, posts, serviceSecret, workerId);
     const summary = await runInstagramIngestion({
       handles: [claimed.handle],
+      // Fresh content is already persisted above. This phase keeps the existing
+      // AI prompt/model and event processing path unchanged.
       resultsLimit: claimed.controls.resultsLimit,
       ...(claimed.controls.daysBack === undefined ? {} : { daysBack: claimed.controls.daysBack }),
       noAgeCutoff: claimed.controls.noAgeCutoff ?? claimed.controls.daysBack === undefined,
       skipPinnedPosts: claimed.controls.skipPinnedPosts,
       ignoreCheckpoint: claimed.controls.ignoreCheckpoint,
       ignoreCooldown: claimed.controls.ignoreCooldown,
-      mode: "full_scrape",
+      mode: "saved_posts",
       serviceSecret,
     });
-    const result = terminalOutcome(summary);
+    const processingError = summary.handles[0]?.errors[0];
+    const result = processingError
+      ? { outcome: "deferred" as const, detail: processingError }
+      : posts.length > 0
+        ? { outcome: "fetched" as const, detail: `posts:${posts.length}` }
+        : { outcome: "no_post" as const, detail: "provider_completed_without_post" };
     await convex.mutation(complete, { runId, receiptId: claimed.receiptId, workerId, ...result, serviceSecret });
     return NextResponse.json({ claimed: true, handle: claimed.handle, outcome: result.outcome });
   } catch (error) {
