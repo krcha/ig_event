@@ -21,5 +21,19 @@ worker() {
     fi
   done
 }
-for _ in {1..8}; do worker & done
-wait
+pids=()
+for _ in {1..8}; do
+  worker &
+  pids+=("$!")
+done
+
+# `wait` without explicit PIDs returns only one status and can hide another
+# worker's failed curl. Collect every exit so systemd reliably restarts this
+# resumable controller when any leased worker fails.
+failed=0
+for pid in "${pids[@]}"; do
+  if ! wait "$pid"; then
+    failed=1
+  fi
+done
+exit "$failed"

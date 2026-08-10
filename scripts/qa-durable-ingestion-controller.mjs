@@ -48,6 +48,9 @@ assert.match(controller, /budget_exhausted/);
 assert.match(controller, /markReceiptProviderAttemptStarted/);
 assert.match(executor, /complete: state\?\.complete/, "workers must distinguish completion from a busy lease after restart");
 assert.match(launcher, /for _ in \{1\.\.8\}/);
+assert.match(launcher, /pids=\(\)/, "runner must track every worker PID");
+assert.match(launcher, /for pid in "\$\{pids\[@\]\}"/, "runner must wait for every worker");
+assert.match(launcher, /exit "\$failed"/, "a worker failure must reach systemd");
 for (const reason of ["lease_expired_retry_limit", "retry_limit"]) {
   const offset = controller.indexOf(reason);
   assert.ok(offset >= 0, `missing ${reason} terminal branch`);
