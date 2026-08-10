@@ -10215,6 +10215,13 @@ async function processLoadedPostsForHandle(
         summary.errors.push(
           `OpenAI transport outcome is ambiguous for ${rawPost.postId ?? rawPost.instagramPostUrl}; automatic replay is blocked.`,
         );
+      } else if (claim.reason === "busy" || claim.reason === "deferred") {
+        // The post is durably saved, but its current AI worker owns a valid
+        // lease. Surface this to the durable controller so it retries saved
+        // processing instead of falsely completing the paid-fetch receipt.
+        summary.errors.push(
+          `Saved post processing is ${claim.reason}; retry this saved post later.`,
+        );
       }
       continue;
     }

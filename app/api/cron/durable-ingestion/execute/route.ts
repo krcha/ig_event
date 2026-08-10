@@ -14,6 +14,11 @@ const complete = "durableIngestionRuns:completeReceipt" as unknown as FunctionRe
 const retry = "durableIngestionRuns:releaseReceiptForRetry" as unknown as FunctionReference<"mutation">;
 const probe = "durableIngestionRuns:probeRun" as unknown as FunctionReference<"query">;
 const markProviderAttempt = "durableIngestionRuns:markReceiptProviderAttemptStarted" as unknown as FunctionReference<"mutation">;
+const markPostsPersisted = "durableIngestionRuns:markReceiptPostsPersisted" as unknown as FunctionReference<"mutation">;
+
+function isTransientSavedPostProcessingError(value: string | undefined): boolean {
+  return Boolean(value && /saved post processing is (busy|deferred)|openai provider execution lease is busy/i.test(value));
+}
 
 /** One receipt per request. The VPS starts at most eight of these requests in
  * parallel; Convex also enforces the run's eight-slot semaphore. */
@@ -28,6 +33,8 @@ export async function POST(request: Request) {
   const workerId = `vps:${randomUUID()}`;
   const claimed = await convex.mutation(claim, { runId, workerId, serviceSecret }) as {
     receiptId: string; handle: string; controls: { resultsLimit: number; daysBack?: number; noAgeCutoff?: boolean; skipPinnedPosts: boolean; ignoreCheckpoint: boolean; ignoreCooldown: boolean; costPerProfileMicros: number };
+    providerAttemptCount?: number;
+    providerResultStatus?: "persisted" | "no_post";
   } | null;
   if (!claimed) {
     const state = await convex.query(probe, { runId, serviceSecret }) as { complete?: boolean; status?: string } | null;
@@ -38,39 +45,75 @@ export async function POST(request: Request) {
     });
   }
   try {
-    // This is immediately before the outbound provider call. It consumes the
-    // frozen one-cent reservation or charges a retry only if run budget remains.
-    const providerAttempt = await convex.mutation(markProviderAttempt, {
-      runId,
-      receiptId: claimed.receiptId,
-      workerId,
-      serviceSecret,
-    }) as { started: boolean; reason?: string };
-    if (!providerAttempt.started) {
+    let posts: Awaited<ReturnType<typeof scrapeInstagramAccount>> = [];
+    const alreadyFetched = (claimed.providerAttemptCount ?? 0) > 0;
+    if (alreadyFetched && claimed.providerResultStatus === undefined) {
+      // Apify may have charged before the process crashed, but no durable
+      // post-persistence receipt exists. Do not re-fetch and do not pretend a
+      // post was saved; surface the exact uncertainty for operator recovery.
       await convex.mutation(complete, {
         runId,
         receiptId: claimed.receiptId,
         workerId,
         outcome: "deferred",
-        detail: providerAttempt.reason ?? "budget_exhausted",
+        detail: "provider_attempt_persistence_unconfirmed",
         serviceSecret,
       });
       return NextResponse.json({ claimed: true, handle: claimed.handle, outcome: "deferred" });
     }
-    // The controller owns the provider reservation and eight-slot semaphore.
-    // Do not enter the legacy singleton paid-fetch lease here: that old safety
-    // layer serializes all accounts and would turn eight workers into one.
-    const posts = await scrapeInstagramAccount({
-      handle: claimed.handle,
-      resultsLimit: claimed.controls.resultsLimit,
-      ...(claimed.controls.daysBack === undefined ? {} : { daysBack: claimed.controls.daysBack }),
-      noAgeCutoff: claimed.controls.noAgeCutoff ?? claimed.controls.daysBack === undefined,
-      skipPinnedPosts: claimed.controls.skipPinnedPosts,
-      maxTotalChargeUsd: claimed.controls.costPerProfileMicros / 1_000_000,
-    });
-    // Controller receipts fence this new path. Omit the legacy global lease
-    // owner so persistence accepts the controller-owned concurrent fetch.
-    await persistScrapedPostsForHandle(convex, claimed.handle, posts, serviceSecret);
+    if (alreadyFetched && claimed.providerResultStatus === "no_post") {
+      await convex.mutation(complete, {
+        runId,
+        receiptId: claimed.receiptId,
+        workerId,
+        outcome: "no_post",
+        detail: "persisted_provider_no_post",
+        serviceSecret,
+      });
+      return NextResponse.json({ claimed: true, handle: claimed.handle, outcome: "no_post" });
+    }
+    if (!alreadyFetched) {
+      // This is immediately before the outbound provider call. It consumes the
+      // frozen one-cent reservation or charges a retry only if run budget remains.
+      const providerAttempt = await convex.mutation(markProviderAttempt, {
+        runId,
+        receiptId: claimed.receiptId,
+        workerId,
+        serviceSecret,
+      }) as { started: boolean; reason?: string };
+      if (!providerAttempt.started) {
+        await convex.mutation(complete, {
+          runId,
+          receiptId: claimed.receiptId,
+          workerId,
+          outcome: "deferred",
+          detail: providerAttempt.reason ?? "budget_exhausted",
+          serviceSecret,
+        });
+        return NextResponse.json({ claimed: true, handle: claimed.handle, outcome: "deferred" });
+      }
+      // The controller owns the provider reservation and eight-slot semaphore.
+      // Do not enter the legacy singleton paid-fetch lease here: that old safety
+      // layer serializes all accounts and would turn eight workers into one.
+      posts = await scrapeInstagramAccount({
+        handle: claimed.handle,
+        resultsLimit: claimed.controls.resultsLimit,
+        ...(claimed.controls.daysBack === undefined ? {} : { daysBack: claimed.controls.daysBack }),
+        noAgeCutoff: claimed.controls.noAgeCutoff ?? claimed.controls.daysBack === undefined,
+        skipPinnedPosts: claimed.controls.skipPinnedPosts,
+        maxTotalChargeUsd: claimed.controls.costPerProfileMicros / 1_000_000,
+      });
+      // Controller receipts fence this new path. Omit the legacy global lease
+      // owner so persistence accepts the controller-owned concurrent fetch.
+      await persistScrapedPostsForHandle(convex, claimed.handle, posts, serviceSecret);
+      await convex.mutation(markPostsPersisted, {
+        runId,
+        receiptId: claimed.receiptId,
+        workerId,
+        postCount: posts.length,
+        serviceSecret,
+      });
+    }
     const summary = await runInstagramIngestion({
       handles: [claimed.handle],
       // Fresh content is already persisted above. This phase keeps the existing
@@ -85,11 +128,26 @@ export async function POST(request: Request) {
       serviceSecret,
     });
     const processingError = summary.handles[0]?.errors[0];
-    const result = processingError
-      ? { outcome: "deferred" as const, detail: processingError }
-      : posts.length > 0
-        ? { outcome: "fetched" as const, detail: `posts:${posts.length}` }
-        : { outcome: "no_post" as const, detail: "provider_completed_without_post" };
+    if (processingError) {
+      const preserveAttempt = isTransientSavedPostProcessingError(processingError);
+      await convex.mutation(retry, {
+        runId,
+        receiptId: claimed.receiptId,
+        workerId,
+        reason: processingError,
+        ...(preserveAttempt ? { retryAfterMs: 30_000, preserveAttempt: true } : {}),
+        serviceSecret,
+      });
+      return NextResponse.json({
+        claimed: true,
+        handle: claimed.handle,
+        retryScheduled: true,
+        processingPending: preserveAttempt,
+      }, { status: preserveAttempt ? 202 : 503 });
+    }
+    const result = alreadyFetched || posts.length > 0
+      ? { outcome: "fetched" as const, detail: `posts:${posts.length}` }
+      : { outcome: "no_post" as const, detail: "provider_completed_without_post" };
     await convex.mutation(complete, { runId, receiptId: claimed.receiptId, workerId, ...result, serviceSecret });
     return NextResponse.json({ claimed: true, handle: claimed.handle, outcome: result.outcome });
   } catch (error) {

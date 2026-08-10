@@ -1049,7 +1049,9 @@ export const listPublicEventsWindow = query({
       .paginate(buildPublicPaginationOptions(args.paginationOpts));
     return {
       ...result,
-      page: await projectDeduplicatedPublicEventPage(ctx, result.page),
+      // Existing approved records must remain visible. New records are checked
+      // at the write boundary; a legacy metadata gap must not empty a page.
+      page: await projectCanonicallyGroundedPublicEventPage(ctx, result.page),
     };
   },
 });
@@ -1102,7 +1104,9 @@ export const listPublicCalendarEventsWindowPaginated = query({
         numItems: PUBLIC_EVENT_PAGE_SIZE,
       });
 
-    const publicEvents = await projectDeduplicatedPublicEventPage(ctx, result.page);
+    // Match the list view: legacy approved records remain visible.
+    const calendarPage = result.page;
+    const publicEvents = await projectCanonicallyGroundedPublicEventPage(ctx, calendarPage);
     return {
       ...result,
       page: publicEvents.map(toPublicCalendarEvent),

@@ -161,6 +161,7 @@ export const queueRun = mutation({
         status: "queued",
         attemptCount: 0,
         providerAttemptCount: 0,
+        retryNotBeforeAt: now,
           createdAt: now,
           updatedAt: now,
         });
@@ -230,9 +231,22 @@ export const executeNext = mutation({
 
     let receipt = await ctx.db
       .query("ingestionRunHandleReceipts")
-      .withIndex("by_run_status", (q) => q.eq("runId", args.runId).eq("status", "queued"))
+      .withIndex("by_run_status_retryNotBeforeAt", (q) =>
+        q.eq("runId", args.runId).eq("status", "queued").lte("retryNotBeforeAt", now),
+      )
       .order("asc")
       .first();
+    if (!receipt) {
+      // Runs queued by the immediately preceding release do not have the new
+      // optional retry timestamp. Resume those bounded existing receipts
+      // instead of forcing a second paid canary after deployment.
+      receipt = (
+        await ctx.db
+          .query("ingestionRunHandleReceipts")
+          .withIndex("by_run_status", (q) => q.eq("runId", args.runId).eq("status", "queued"))
+          .take(MAX_HANDLES_PER_RUN)
+      ).find((candidate) => candidate.retryNotBeforeAt === undefined) ?? null;
+    }
     if (!receipt) {
       receipt = await ctx.db
         .query("ingestionRunHandleReceipts")
@@ -287,10 +301,18 @@ export const executeNext = mutation({
       });
       return null;
     }
-    await ctx.db.patch(receipt._id, { status: "running", leaseOwner: args.workerId, leaseExpiresAt: now + LEASE_MS, attemptCount: receipt.attemptCount + 1, updatedAt: now });
+    await ctx.db.patch(receipt._id, { status: "running", leaseOwner: args.workerId, leaseExpiresAt: now + LEASE_MS, retryNotBeforeAt: undefined, attemptCount: receipt.attemptCount + 1, updatedAt: now });
     await ctx.db.patch(run._id, { status: "running", startedAt: run.startedAt ?? now, inFlightCount: run.inFlightCount + (wasRunning ? 0 : 1), reservedMicros: run.reservedMicros + (reservationNeeded ? run.controls.costPerProfileMicros : 0), updatedAt: now });
     if (reservationNeeded) await ctx.db.patch(receipt._id, { reservedMicros: run.controls.costPerProfileMicros });
-    return { receiptId: receipt._id, handle: receipt.handle, controls: run.controls };
+    return {
+      receiptId: receipt._id,
+      handle: receipt.handle,
+      controls: run.controls,
+      // Once the provider boundary has been crossed, retries must resume from
+      // the persisted post. Re-fetching would double-charge the same profile.
+      providerAttemptCount: receipt.providerAttemptCount ?? 0,
+      providerResultStatus: receipt.providerResultStatus,
+    };
   },
 });
 
@@ -359,15 +381,71 @@ export const completeReceipt = mutation({
   },
 });
 
+/**
+ * Record the durable boundary after `scrapedPosts:upsertManyByHandle` succeeds.
+ * It is deliberately separate from charging the provider: if a process dies
+ * between those two operations, the receipt remains explicitly unconfirmed
+ * instead of being allowed to report a fictitious fetched result.
+ */
+export const markReceiptPostsPersisted = mutation({
+  args: {
+    runId: v.id("ingestionRuns"),
+    receiptId: v.id("ingestionRunHandleReceipts"),
+    workerId: v.string(),
+    postCount: v.number(),
+    serviceSecret: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const receipt = await ctx.db.get(args.receiptId);
+    if (
+      !receipt ||
+      receipt.runId !== args.runId ||
+      receipt.status !== "running" ||
+      receipt.leaseOwner !== args.workerId ||
+      (receipt.providerAttemptCount ?? 0) < 1
+    ) {
+      throw new Error("Receipt persistence fence mismatch.");
+    }
+    const postCount = Math.max(0, Math.trunc(args.postCount));
+    await ctx.db.patch(receipt._id, {
+      providerResultStatus: postCount > 0 ? "persisted" : "no_post",
+      persistedPostCount: postCount,
+      updatedAt: Date.now(),
+    });
+    return null;
+  },
+});
+
 export const releaseReceiptForRetry = mutation({
-  args: { runId: v.id("ingestionRuns"), receiptId: v.id("ingestionRunHandleReceipts"), workerId: v.string(), reason: v.string(), serviceSecret: v.optional(v.string()) },
+  args: {
+    runId: v.id("ingestionRuns"),
+    receiptId: v.id("ingestionRunHandleReceipts"),
+    workerId: v.string(),
+    reason: v.string(),
+    retryAfterMs: v.optional(v.number()),
+    // Waiting for another AI worker is not a failed provider attempt. Do not
+    // burn this receipt's retry limit while preserving its paid-fetch record.
+    preserveAttempt: v.optional(v.boolean()),
+    serviceSecret: v.optional(v.string()),
+  },
   returns: v.null(),
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const [run, receipt] = await Promise.all([ctx.db.get(args.runId), ctx.db.get(args.receiptId)]);
     if (!run || !receipt || receipt.runId !== args.runId || receipt.status !== "running" || receipt.leaseOwner !== args.workerId) throw new Error("Receipt lease mismatch.");
     const now = Date.now();
-    await ctx.db.patch(receipt._id, { status: "queued", leaseOwner: undefined, leaseExpiresAt: undefined, outcomeDetail: args.reason.slice(0, 256), updatedAt: now });
+    const retryAfterMs = Math.max(0, Math.min(15 * 60_000, Math.trunc(args.retryAfterMs ?? 0)));
+    await ctx.db.patch(receipt._id, {
+      status: "queued",
+      leaseOwner: undefined,
+      leaseExpiresAt: undefined,
+      retryNotBeforeAt: now + retryAfterMs,
+      ...(args.preserveAttempt ? { attemptCount: Math.max(0, receipt.attemptCount - 1) } : {}),
+      outcomeDetail: args.reason.slice(0, 256),
+      updatedAt: now,
+    });
     await ctx.db.patch(run._id, { inFlightCount: Math.max(0, run.inFlightCount - 1), updatedAt: now });
     return null;
   },

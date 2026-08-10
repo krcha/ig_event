@@ -11,6 +11,7 @@ const {
   executeNext,
   completeReceipt,
   releaseReceiptForRetry,
+  markReceiptPostsPersisted,
 } = await import("../convex/durableIngestionRuns.ts");
 
 class MemoryDb {
@@ -113,6 +114,28 @@ async function complete(db, runId, receiptId, workerId, outcome) {
   });
 }
 
+async function releaseForProcessingLease(db, runId, receiptId, workerId) {
+  return releaseReceiptForRetry._handler(ctx(db), {
+    runId,
+    receiptId,
+    workerId,
+    reason: "Saved post processing is busy; retry this saved post later.",
+    retryAfterMs: 30_000,
+    preserveAttempt: true,
+    serviceSecret: process.env.CRON_SECRET,
+  });
+}
+
+async function markPersisted(db, runId, receiptId, workerId, postCount) {
+  return markReceiptPostsPersisted._handler(ctx(db), {
+    runId,
+    receiptId,
+    workerId,
+    postCount,
+    serviceSecret: process.env.CRON_SECRET,
+  });
+}
+
 const handles = Array.from({ length: 632 }, (_, index) => `venue_${String(index).padStart(3, "0")}`);
 
 // The canary contract is exact: sixteen frozen rows and no room for a broad
@@ -142,6 +165,76 @@ const handles = Array.from({ length: 632 }, (_, index) => `venue_${String(index)
   assert.equal(await claim(db, runId, "recovery"), null);
   assert.equal((await db.get(expired._id)).status, "queued");
   assert.ok(await claim(db, runId, "recovery-next"));
+
+}
+
+// A release upgrade must resume an already-paid canary receipt row that
+// predates retryNotBeforeAt. It must not require a second paid canary.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "canary", handles.slice(0, 16));
+  for (const queued of db.rows("ingestionRunHandleReceipts").slice(1)) {
+    await db.patch(queued._id, { retryNotBeforeAt: Date.now() + 60_000 });
+  }
+  const legacyQueued = db.rows("ingestionRunHandleReceipts")[0];
+  await db.patch(legacyQueued._id, { retryNotBeforeAt: undefined, providerAttemptCount: 1, chargedMicros: 10_000 });
+  const resumed = await claim(db, runId, "legacy-recovery");
+  assert.ok(resumed);
+  assert.equal(resumed.receiptId, legacyQueued._id);
+  assert.equal(resumed.providerAttemptCount, 1, "resumed work must retain its original paid attempt");
+}
+
+// A crash after the paid provider boundary but before persistence has no proof
+// of a saved post. The executor must see an explicit unconfirmed state, never
+// convert it to `fetched`, and never make a second paid request automatically.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "canary", handles.slice(0, 16));
+  for (const queued of db.rows("ingestionRunHandleReceipts").slice(1)) {
+    await db.patch(queued._id, { retryNotBeforeAt: Date.now() + 60_000 });
+  }
+  const first = await claim(db, runId, "crash-boundary-worker");
+  assert.ok(first);
+  await db.patch(first.receiptId, { providerAttemptCount: 1, chargedMicros: 10_000 });
+  await releaseReceiptForRetry._handler(ctx(db), {
+    runId,
+    receiptId: first.receiptId,
+    workerId: "crash-boundary-worker",
+    reason: "worker_restart",
+    serviceSecret: process.env.CRON_SECRET,
+  });
+  const resumed = await claim(db, runId, "crash-boundary-recovery");
+  assert.ok(resumed);
+  assert.equal(resumed.providerAttemptCount, 1);
+  assert.equal(resumed.providerResultStatus, undefined, "a charged request alone cannot claim saved posts");
+}
+
+// The persistence marker is only accepted from the currently leased receipt.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "canary", handles.slice(0, 16));
+  const first = await claim(db, runId, "persisted-worker");
+  assert.ok(first);
+  await db.patch(first.receiptId, { providerAttemptCount: 1, chargedMicros: 10_000 });
+  await markPersisted(db, runId, first.receiptId, "persisted-worker", 1);
+  assert.equal((await db.get(first.receiptId)).providerResultStatus, "persisted");
+}
+
+// A paid fetch can finish while another worker owns the saved post's AI
+// lease. This is not a failed provider attempt: keep the durable receipt
+// non-terminal, defer its retry, and resume without consuming the retry cap.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "canary", handles.slice(0, 16));
+  const first = await claim(db, runId, "ai-busy-worker");
+  assert.ok(first);
+  await db.patch(first.receiptId, { providerAttemptCount: 1, chargedMicros: 10_000 });
+  await releaseForProcessingLease(db, runId, first.receiptId, "ai-busy-worker");
+  const deferred = await db.get(first.receiptId);
+  assert.equal(deferred.status, "queued");
+  assert.equal(deferred.attemptCount, 0, "AI lease waiting must not exhaust controller retries");
+  assert.equal(deferred.providerAttemptCount, 1, "the paid fetch must remain recorded");
+  assert.ok(deferred.retryNotBeforeAt > Date.now(), "AI lease waiting needs a bounded backoff");
 }
 
 // A clean "no post" response is terminal and must advance run completion;

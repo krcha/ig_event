@@ -523,10 +523,19 @@ export default defineSchema({
     // receipt may be claimed again and every outbound paid request must remain
     // auditable and chargeable.
     providerAttemptCount: v.optional(v.number()),
+    // This is written only after the fetched provider result has crossed the
+    // durable scraped-post boundary. A charge alone is never evidence that a
+    // post can safely be processed or reported as fetched after a crash.
+    providerResultStatus: v.optional(v.union(v.literal("persisted"), v.literal("no_post"))),
+    persistedPostCount: v.optional(v.number()),
     reservedMicros: v.optional(v.number()),
     chargedMicros: v.optional(v.number()),
     leaseOwner: v.optional(v.string()),
     leaseExpiresAt: v.optional(v.number()),
+    // A post can be safely fetched while its existing AI worker is still
+    // finishing. Keep the paid-fetch receipt retryable without hot-looping the
+    // AI lease or consuming its provider budget again.
+    retryNotBeforeAt: v.optional(v.number()),
     outcomeDetail: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -534,6 +543,7 @@ export default defineSchema({
   })
     .index("by_run_handle", ["runId", "handle"])
     .index("by_run_status", ["runId", "status"])
+    .index("by_run_status_retryNotBeforeAt", ["runId", "status", "retryNotBeforeAt"])
     .index("by_run_status_leaseExpiresAt", ["runId", "status", "leaseExpiresAt"])
     .index("by_chunk_status", ["chunkId", "status"]),
   eventAuditLog: defineTable({
