@@ -59,6 +59,7 @@ type ScrapeInstagramAccountOptions = {
   /** Controller-only catch-up switch. Never infer this from a missing daysBack. */
   noAgeCutoff?: boolean;
   skipPinnedPosts?: boolean;
+  maxTotalChargeUsd?: number;
   onlyPostsNewerThan?: string;
   abortAtMs?: number;
   onRequestStarted?: () => void | Promise<void>;
@@ -293,6 +294,7 @@ export function buildApifyInstagramScrapeRequest(options: {
   onlyPostsNewerThan?: string;
   noAgeCutoff?: boolean;
   skipPinnedPosts?: boolean;
+  maxTotalChargeUsd?: number;
   env?: Record<string, string | undefined>;
 }): ApifyInstagramScrapeRequest {
   const env = options.env ?? process.env;
@@ -317,7 +319,9 @@ export function buildApifyInstagramScrapeRequest(options: {
     },
     runOptions: {
       maxItems: resultsLimit,
-      maxTotalChargeUsd: normalizeApifyMaxTotalChargeUsdPerRun(
+      maxTotalChargeUsd: Number.isFinite(options.maxTotalChargeUsd) && (options.maxTotalChargeUsd as number) > 0
+        ? options.maxTotalChargeUsd as number
+        : normalizeApifyMaxTotalChargeUsdPerRun(
         env.APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN,
         resultsLimit,
       ),
@@ -873,6 +877,7 @@ export async function scrapeInstagramAccount(
     onlyPostsNewerThan: options.onlyPostsNewerThan,
     noAgeCutoff: options.noAgeCutoff,
     skipPinnedPosts: options.skipPinnedPosts,
+    maxTotalChargeUsd: options.maxTotalChargeUsd,
   });
   const { input, runOptions } = requestSettings;
   const resultsLimit = input.resultsLimit;

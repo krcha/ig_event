@@ -25,7 +25,7 @@ export async function POST(request: Request) {
   const convex = createConvexHttpClient();
   const workerId = `vps:${randomUUID()}`;
   const claimed = await convex.mutation(claim, { runId, workerId, serviceSecret }) as {
-    receiptId: string; handle: string; controls: { resultsLimit: number; daysBack?: number; noAgeCutoff?: boolean; skipPinnedPosts: boolean; ignoreCheckpoint: boolean; ignoreCooldown: boolean };
+    receiptId: string; handle: string; controls: { resultsLimit: number; daysBack?: number; noAgeCutoff?: boolean; skipPinnedPosts: boolean; ignoreCheckpoint: boolean; ignoreCooldown: boolean; costPerProfileMicros: number };
   } | null;
   if (!claimed) return NextResponse.json({ claimed: false, doneOrBusy: true });
   try {
@@ -38,8 +38,11 @@ export async function POST(request: Request) {
       ...(claimed.controls.daysBack === undefined ? {} : { daysBack: claimed.controls.daysBack }),
       noAgeCutoff: claimed.controls.noAgeCutoff ?? claimed.controls.daysBack === undefined,
       skipPinnedPosts: claimed.controls.skipPinnedPosts,
+      maxTotalChargeUsd: claimed.controls.costPerProfileMicros / 1_000_000,
     });
-    await persistScrapedPostsForHandle(convex, claimed.handle, posts, serviceSecret, workerId);
+    // Controller receipts fence this new path. Omit the legacy global lease
+    // owner so persistence accepts the controller-owned concurrent fetch.
+    await persistScrapedPostsForHandle(convex, claimed.handle, posts, serviceSecret);
     const summary = await runInstagramIngestion({
       handles: [claimed.handle],
       // Fresh content is already persisted above. This phase keeps the existing
