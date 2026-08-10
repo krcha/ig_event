@@ -8,9 +8,17 @@ RUN_ID="${1:?usage: ig-event-durable-runner RUN_ID}"
 URL="${APP_ORIGIN%/}/api/cron/durable-ingestion/execute?runId=${RUN_ID}"
 worker() {
   while true; do
+    # A transport failure means the receipt was either released for retry or
+    # its lease will expire.  Exit non-zero so systemd restarts the host runner;
+    # never turn it into a false completed profile.
     body="$(curl --fail --silent --show-error --max-time 300 \
       -H "Authorization: Bearer ${CRON_SECRET}" -X POST "$URL")" || exit 1
-    [[ "$body" == *'"claimed":false'* ]] && exit 0
+    if [[ "$body" == *'"claimed":false'* ]]; then
+      [[ "$body" == *'"complete":true'* ]] && exit 0
+      # A restarted runner can see the prior process's valid leases. Wait for
+      # those workers to complete or expire, then reclaim safely.
+      sleep 5
+    fi
   done
 }
 for _ in {1..8}; do worker & done

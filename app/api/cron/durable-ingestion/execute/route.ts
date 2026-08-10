@@ -12,6 +12,7 @@ export const maxDuration = 300;
 const claim = "durableIngestionRuns:executeNext" as unknown as FunctionReference<"mutation">;
 const complete = "durableIngestionRuns:completeReceipt" as unknown as FunctionReference<"mutation">;
 const retry = "durableIngestionRuns:releaseReceiptForRetry" as unknown as FunctionReference<"mutation">;
+const probe = "durableIngestionRuns:probeRun" as unknown as FunctionReference<"query">;
 
 /** One receipt per request. The VPS starts at most eight of these requests in
  * parallel; Convex also enforces the run's eight-slot semaphore. */
@@ -27,7 +28,14 @@ export async function POST(request: Request) {
   const claimed = await convex.mutation(claim, { runId, workerId, serviceSecret }) as {
     receiptId: string; handle: string; controls: { resultsLimit: number; daysBack?: number; noAgeCutoff?: boolean; skipPinnedPosts: boolean; ignoreCheckpoint: boolean; ignoreCooldown: boolean; costPerProfileMicros: number };
   } | null;
-  if (!claimed) return NextResponse.json({ claimed: false, doneOrBusy: true });
+  if (!claimed) {
+    const state = await convex.query(probe, { runId, serviceSecret }) as { complete?: boolean; status?: string } | null;
+    return NextResponse.json({
+      claimed: false,
+      complete: state?.complete ?? true,
+      status: state?.status ?? "missing",
+    });
+  }
   try {
     // The controller owns the provider reservation and eight-slot semaphore.
     // Do not enter the legacy singleton paid-fetch lease here: that old safety

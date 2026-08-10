@@ -1,0 +1,17 @@
+[Unit]
+Description=Event Zeka durable daily Instagram ingestion
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/ig_event/cron.env
+ExecStart=/usr/local/sbin/ig-event-durable-daily-runner
+# Restarting after a host or network failure is safe: the runner resumes the
+# same durable daily run instead of creating a second paid run.
+TimeoutStartSec=infinity
+Restart=on-failure
+RestartSec=15s
+Nice=10
+UMask=0077

@@ -89,7 +89,15 @@ function assertModeScope(mode: RunMode, handles: string[], controls: ReturnType<
 }
 
 export const queueRun = mutation({
-  args: { mode: modeValidator, sourceSnapshotKey: v.string(), handles: v.array(v.string()), serviceSecret: v.optional(v.string()) },
+  args: {
+    mode: modeValidator,
+    sourceSnapshotKey: v.string(),
+    handles: v.array(v.string()),
+    // Only the host-owned daily entry point may opt into resuming a previous
+    // daily run.  Canaries and catch-ups must always be explicit operations.
+    resumeDaily: v.optional(v.boolean()),
+    serviceSecret: v.optional(v.string()),
+  },
   returns: v.id("ingestionRuns"),
   handler: async (ctx, args) => {
     const actor = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
@@ -110,7 +118,13 @@ export const queueRun = mutation({
           .take(2),
       ),
     )).flat();
-    if (active.length > 0) throw new Error("Another durable ingestion run is already active.");
+    if (active.length > 0) {
+      const existingDaily = active.length === 1 && active[0].mode === "daily";
+      if (args.mode === "daily" && args.resumeDaily === true && existingDaily) {
+        return active[0]._id;
+      }
+      throw new Error("Another durable ingestion run is already active.");
+    }
 
     const now = Date.now();
     const runId = await ctx.db.insert("ingestionRuns", {

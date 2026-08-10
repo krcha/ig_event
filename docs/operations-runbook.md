@@ -410,6 +410,9 @@ Installed files on the VPS:
 /etc/cron.d/ig_event                 root-readable cron schedule
 /etc/ig_event/cron.env               APP_ORIGIN + CRON_SECRET, chmod 600
 /usr/local/sbin/ig-event-cron-runner root-owned curl runner with flock locking
+/usr/local/sbin/ig-event-durable-daily-runner root-owned durable daily launcher
+/etc/systemd/system/ig-event-durable-daily.service durable daily service
+/etc/systemd/system/ig-event-durable-daily.timer 09:00 Europe/Belgrade timer
 /var/log/ig_event/cron.log           appended cron output
 /var/log/ig_event/cron-*-last.json   last response body per job
 ```
@@ -421,15 +424,14 @@ transitions, but the daemon's actual schedule authority is the Berlin host clock
 The current schedule is therefore deliberately documented in host-local time:
 
 ```cron
-0 7 * * * root /usr/local/sbin/ig-event-cron-runner ingest-venues >> /var/log/ig_event/cron.log 2>&1
+# Paid ingestion is owned by ig-event-durable-daily.timer, not cron.
 0 10 * * 1 root /usr/local/sbin/ig-event-cron-runner discover-following >> /var/log/ig_event/cron.log 2>&1
 ```
 
-If exact `Europe/Belgrade` or fixed UTC execution is required independently of
-the host timezone, replace these entries with one systemd timer per job using an
-explicit calendar expression such as
-`OnCalendar=*-*-* 07:00:00 Europe/Belgrade` or the equivalent UTC expression;
-do not install a second scheduler alongside the cron entries. The runner's
+For the durable daily controller, replace the legacy `ingest-venues` cron entry
+with the source-controlled `ig-event-durable-daily.timer`. It has an explicit
+`Europe/Belgrade` calendar and resumes an interrupted run after a restart. Do
+not install a second paid-ingestion scheduler alongside it. The runner's
 `flock` remains a final overlap guard, not a substitute for single scheduler
 ownership.
 
@@ -442,6 +444,16 @@ overlapping runs. Install the source-controlled runner with:
 ```bash
 install -o root -g root -m 0755 scripts/ig-event-cron-runner \
   /usr/local/sbin/ig-event-cron-runner
+install -o root -g root -m 0755 scripts/ig-event-durable-runner \
+  /usr/local/sbin/ig-event-durable-runner
+install -o root -g root -m 0755 scripts/ig-event-durable-daily-runner \
+  /usr/local/sbin/ig-event-durable-daily-runner
+install -o root -g root -m 0644 ops/systemd/ig-event-durable-daily.service \
+  /etc/systemd/system/ig-event-durable-daily.service
+install -o root -g root -m 0644 ops/systemd/ig-event-durable-daily.timer \
+  /etc/systemd/system/ig-event-durable-daily.timer
+systemctl daemon-reload
+systemctl enable --now ig-event-durable-daily.timer
 ```
 
 The cron endpoint resolves resumable `cron_active_venues` work before any global

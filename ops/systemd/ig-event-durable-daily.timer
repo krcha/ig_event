@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Event Zeka durable daily Instagram ingestion at 09:00 Belgrade
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 Europe/Belgrade
+Persistent=true
+Unit=ig-event-durable-daily.service
+
+[Install]
+WantedBy=timers.target
