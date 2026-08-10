@@ -212,7 +212,11 @@ export const executeNext = mutation({
       .first();
     if (expired) {
       if (expired.attemptCount >= MAX_ATTEMPTS) {
+        const chunk = await ctx.db.get(expired.chunkId);
+        if (!chunk) throw new Error("Expired receipt chunk not found.");
         await ctx.db.patch(expired._id, { status: "failed", terminalAt: now, leaseOwner: undefined, leaseExpiresAt: undefined, outcomeDetail: "lease_expired_retry_limit", updatedAt: now });
+        const chunkTerminal = chunk.terminalReceiptCount + 1;
+        await ctx.db.patch(chunk._id, { terminalReceiptCount: chunkTerminal, status: chunkTerminal === chunk.handleCount ? "completed" : "running", updatedAt: now });
         await ctx.db.patch(run._id, { terminalReceiptCount: run.terminalReceiptCount + 1, failedReceiptCount: run.failedReceiptCount + 1, inFlightCount: Math.max(0, run.inFlightCount - 1), updatedAt: now });
       } else {
         await ctx.db.patch(expired._id, { status: "queued", leaseOwner: undefined, leaseExpiresAt: undefined, outcomeDetail: "lease_expired_requeued", updatedAt: now });
@@ -238,7 +242,11 @@ export const executeNext = mutation({
     }
     if (!receipt) return null;
     if (receipt.attemptCount >= MAX_ATTEMPTS) {
+      const chunk = await ctx.db.get(receipt.chunkId);
+      if (!chunk) throw new Error("Retry-limited receipt chunk not found.");
       await ctx.db.patch(receipt._id, { status: "failed", terminalAt: now, leaseOwner: undefined, leaseExpiresAt: undefined, outcomeDetail: "retry_limit", updatedAt: now });
+      const chunkTerminal = chunk.terminalReceiptCount + 1;
+      await ctx.db.patch(chunk._id, { terminalReceiptCount: chunkTerminal, status: chunkTerminal === chunk.handleCount ? "completed" : "running", updatedAt: now });
       await ctx.db.patch(run._id, { terminalReceiptCount: run.terminalReceiptCount + 1, failedReceiptCount: run.failedReceiptCount + 1, updatedAt: now });
       return null;
     }

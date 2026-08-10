@@ -48,6 +48,13 @@ assert.match(controller, /budget_exhausted/);
 assert.match(controller, /markReceiptProviderAttemptStarted/);
 assert.match(executor, /complete: state\?\.complete/, "workers must distinguish completion from a busy lease after restart");
 assert.match(launcher, /for _ in \{1\.\.8\}/);
+for (const reason of ["lease_expired_retry_limit", "retry_limit"]) {
+  const offset = controller.indexOf(reason);
+  assert.ok(offset >= 0, `missing ${reason} terminal branch`);
+  const branch = controller.slice(Math.max(0, offset - 700), offset + 700);
+  assert.match(branch, /ctx\.db\.patch\(chunk\._id/);
+  assert.match(branch, /terminalReceiptCount: chunkTerminal/);
+}
 assert.match(launcher, /"complete":true/, "busy workers must wait rather than treat an active lease as completion");
 assert.match(dailyRoute, /mode: "daily"/);
 assert.match(dailyRoute, /resumeDaily: true/);
