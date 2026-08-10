@@ -131,9 +131,18 @@ export async function POST(request: Request) {
       mode: "saved_posts",
       serviceSecret,
     });
-    const processingError = summary.handles[0]?.errors[0];
+    const processingErrors = summary.handles[0]?.errors ?? [];
+    // `runInstagramIngestion` aggregates errors from post persistence, media,
+    // and AI processing. A lease wait may not be the first entry. Prefer it
+    // when present so this already-paid receipt is delayed, rather than
+    // returning a 503 and burning a retry attempt because an earlier warning
+    // happened to be listed first.
+    const transientProcessingError = processingErrors.find(
+      isTransientSavedPostProcessingError,
+    );
+    const processingError = transientProcessingError ?? processingErrors[0];
     if (processingError) {
-      const preserveAttempt = isTransientSavedPostProcessingError(processingError);
+      const preserveAttempt = transientProcessingError !== undefined;
       await convex.mutation(retry, {
         runId,
         receiptId: claimed.receiptId,

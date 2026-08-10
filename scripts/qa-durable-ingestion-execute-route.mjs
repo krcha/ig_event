@@ -12,6 +12,10 @@ for (const leaseContention of [
   "OpenAI provider execution lease could not be acquired.",
   "Saved post processing is busy; retry this saved post later.",
   "Saved post processing is deferred.",
+  "normalization warning; OpenAI provider execution lease is busy; retry this saved post later.",
+  new Error("outer executor error", {
+    cause: new Error("OpenAI provider execution lease could not be acquired."),
+  }),
 ]) {
   assert.equal(
     isTransientSavedPostProcessingError(leaseContention),
@@ -35,6 +39,11 @@ assert.equal(
   transientResponseCount,
   2,
   "both returned and thrown AI-lease contention paths must return 202 and preserve the attempt",
+);
+assert.match(
+  routeSource,
+  /processingErrors\.find\(\s*isTransientSavedPostProcessingError,?\s*\)/,
+  "the route must find lease contention anywhere in the aggregated processing errors, not only at index zero",
 );
 
 console.log("durable execute-route lease classification QA passed");
