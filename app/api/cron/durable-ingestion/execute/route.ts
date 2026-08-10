@@ -26,6 +26,26 @@ const claimProcessing = "durableIngestionRuns:claimNextProcessingReceipt" as unk
 const completeProcessing = "durableIngestionRuns:completeProcessingReceipt" as unknown as FunctionReference<"mutation">;
 const releaseProcessing = "durableIngestionRuns:releaseProcessingReceiptForRetry" as unknown as FunctionReference<"mutation">;
 
+function deferredExecutorResponse(
+  error: unknown,
+  context: { runId: string; workerSlot: number; workerId: string; claimed?: boolean },
+) {
+  console.error(JSON.stringify({
+    level: "error",
+    event: "durable_ingestion.execute.deferred",
+    ...context,
+    error: error instanceof Error ? error.message.slice(0, 512) : "unknown executor failure",
+  }));
+  return NextResponse.json({
+    ...(context.claimed === undefined
+      ? { claimState: "unknown" }
+      : { claimed: context.claimed }),
+    retryDeferred: true,
+    durableStateUnknown: true,
+    error: "durable_executor_temporarily_unavailable",
+  }, { status: 202 });
+}
+
 /** One receipt per request. The VPS starts one worker per fixed lane. */
 export async function POST(request: Request) {
   if (!isAuthorizedCronRequestHeader(request.headers.get("authorization"))) {
@@ -45,11 +65,7 @@ export async function POST(request: Request) {
   // Every existing fixed-lane worker first offers to become the one global AI
   // consumer. Convex grants at most one processing lease, so no runner change
   // or restart is required and the other five requests remain fetch-capable.
-  const processingClaim = await convex.mutation(claimProcessing, {
-    runId,
-    workerId,
-    serviceSecret,
-  }) as {
+  let processingClaim: {
     receiptId: string;
     handle: string;
     scrapedPostId: string;
@@ -57,6 +73,15 @@ export async function POST(request: Request) {
     processingAttemptCount: number;
     providerAttemptCount: number;
   } | null;
+  try {
+    processingClaim = await convex.mutation(claimProcessing, {
+      runId,
+      workerId,
+      serviceSecret,
+    }) as typeof processingClaim;
+  } catch (error) {
+    return deferredExecutorResponse(error, { runId, workerSlot, workerId });
+  }
   if (processingClaim) {
     try {
       const processingResult = await processSavedScrapedPostForDurableReceipt({
@@ -117,18 +142,28 @@ export async function POST(request: Request) {
       const revisionMismatch = isDurableSavedPostRevisionMismatch(error);
       const preserveAttempt =
         revisionMismatch || isTransientSavedPostProcessingError(error);
-      const released = await convex.mutation(releaseProcessing, {
-        runId,
-        receiptId: processingClaim.receiptId,
-        workerId,
-        reason,
-        retryAfterMs: revisionMismatch ? 6 * 60 * 60_000 : 30_000,
-        ...(preserveAttempt ? { preserveAttempt: true } : {}),
-        serviceSecret,
-      }) as {
+      let released: {
         terminal: boolean;
         status: "processing_pending" | "fetched" | "no_post" | "deferred" | "failed";
       };
+      try {
+        released = await convex.mutation(releaseProcessing, {
+          runId,
+          receiptId: processingClaim.receiptId,
+          workerId,
+          reason,
+          retryAfterMs: revisionMismatch ? 6 * 60 * 60_000 : 30_000,
+          ...(preserveAttempt ? { preserveAttempt: true } : {}),
+          serviceSecret,
+        }) as typeof released;
+      } catch (releaseError) {
+        return deferredExecutorResponse(releaseError, {
+          runId,
+          workerSlot,
+          workerId,
+          claimed: true,
+        });
+      }
       // The failure has crossed a durable retry/terminal boundary. Return 202
       // while it remains pending so curl --fail never restarts all six lanes.
       return NextResponse.json({
@@ -140,13 +175,28 @@ export async function POST(request: Request) {
     }
   }
 
-  const claimed = await convex.mutation(claim, { runId, workerId, workerSlot, serviceSecret }) as {
+  let claimed: {
     receiptId: string; handle: string; controls: { resultsLimit: number; daysBack?: number; noAgeCutoff?: boolean; skipPinnedPosts: boolean; pinnedPostPolicy?: "exclude_all" | "include_recent"; ignoreCheckpoint: boolean; ignoreCooldown: boolean; costPerProfileMicros: number };
     providerAttemptCount?: number;
     providerResultStatus?: "persisted" | "no_post";
   } | null;
+  try {
+    claimed = await convex.mutation(claim, {
+      runId,
+      workerId,
+      workerSlot,
+      serviceSecret,
+    }) as typeof claimed;
+  } catch (error) {
+    return deferredExecutorResponse(error, { runId, workerSlot, workerId });
+  }
   if (!claimed) {
-    const state = await convex.query(probe, { runId, serviceSecret }) as { complete?: boolean; status?: string } | null;
+    let state: { complete?: boolean; status?: string } | null;
+    try {
+      state = await convex.query(probe, { runId, serviceSecret }) as typeof state;
+    } catch (error) {
+      return deferredExecutorResponse(error, { runId, workerSlot, workerId, claimed: false });
+    }
     return NextResponse.json({
       claimed: false,
       complete: state?.complete ?? true,
@@ -283,14 +333,23 @@ export async function POST(request: Request) {
     const preserveAttempt = isTransientSavedPostProcessingError(error);
     // A provider/network failure remains explicit and retryable; it does not
     // become a false "checked" receipt.
-    await convex.mutation(retry, {
-      runId,
-      receiptId: claimed.receiptId,
-      workerId,
-      reason,
-      ...(preserveAttempt ? { retryAfterMs: 30_000, preserveAttempt: true } : {}),
-      serviceSecret,
-    });
+    try {
+      await convex.mutation(retry, {
+        runId,
+        receiptId: claimed.receiptId,
+        workerId,
+        reason,
+        ...(preserveAttempt ? { retryAfterMs: 30_000, preserveAttempt: true } : {}),
+        serviceSecret,
+      });
+    } catch (releaseError) {
+      return deferredExecutorResponse(releaseError, {
+        runId,
+        workerSlot,
+        workerId,
+        claimed: true,
+      });
+    }
     return NextResponse.json(
       { claimed: true, retryScheduled: true, processingPending: preserveAttempt },
       { status: preserveAttempt ? 202 : 503 },

@@ -66,6 +66,13 @@ assert.match(launcher, /for slot in \{0\.\.5\}/);
 assert.match(launcher, /pids=\(\)/, "runner must track every worker PID");
 assert.match(launcher, /for pid in "\$\{pids\[@\]\}"/, "runner must wait for every worker");
 assert.match(launcher, /exit "\$failed"/, "a worker failure must reach systemd");
+const retryDeferredOffset = launcher.indexOf(`'"retryDeferred":true'`);
+assert.ok(retryDeferredOffset >= 0, "runner must recognize a durably deferred executor response");
+assert.match(
+  launcher.slice(retryDeferredOffset, retryDeferredOffset + 400),
+  /sleep 5[\s\S]*continue/,
+  "runner must back off a deferred lane for five seconds without restarting all workers",
+);
 for (const reason of ["lease_expired_retry_limit", "retry_limit"]) {
   const offset = controller.indexOf(reason);
   assert.ok(offset >= 0, `missing ${reason} terminal branch`);

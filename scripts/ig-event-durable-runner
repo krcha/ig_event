@@ -14,6 +14,13 @@ worker() {
     # never turn it into a false completed profile.
     body="$(curl --fail --silent --show-error --max-time 300 \
       -H "Authorization: Bearer ${CRON_SECRET}" -X POST "${URL}&workerSlot=${slot}")" || exit 1
+    if [[ "$body" == *'"retryDeferred":true'* ]]; then
+      # The web route could not confirm whether a durable claim/release
+      # mutation committed. Its bounded lease will be retried or reclaimed;
+      # back off this lane without restarting all six workers.
+      sleep 5
+      continue
+    fi
     if [[ "$body" == *'"claimed":false'* ]]; then
       [[ "$body" == *'"complete":true'* ]] && exit 0
       # A restarted runner can see the prior process's valid leases. Wait for

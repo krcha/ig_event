@@ -642,6 +642,37 @@ for (const boundary of ["no_post", "unconfirmed"]) {
     "a receipt must not terminalize merely because its AI worker was claimed",
   );
 
+  await db.patch(scrapedPostId, {
+    processingStatus: "processing",
+    processingLeaseOwner: "ai-worker-1",
+    processingLeaseExpiresAt: Date.now() + 5 * 60_000,
+    updatedAt: Date.now(),
+  });
+  const liveReceiptBeforeForeignRelease = await db.get(first.receiptId);
+  const livePostBeforeForeignRelease = await db.get(scrapedPostId);
+  await assert.rejects(
+    () => releaseProcessingReceiptForRetry._handler(ctx(db), {
+      runId,
+      receiptId: first.receiptId,
+      workerId: "foreign-ai-worker",
+      reason: "foreign worker must not release a live processing owner",
+      retryAfterMs: 6 * 60 * 60_000,
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /lease mismatch/i,
+    "a foreign worker must not release another live processing owner",
+  );
+  assert.deepEqual(
+    await db.get(first.receiptId),
+    liveReceiptBeforeForeignRelease,
+    "a rejected foreign release must not mutate the live receipt",
+  );
+  assert.deepEqual(
+    await db.get(scrapedPostId),
+    livePostBeforeForeignRelease,
+    "a rejected foreign release must not revoke the exact post fence",
+  );
+
   const busyRelease = await releaseProcessingReceiptForRetry._handler(ctx(db), {
     runId,
     receiptId: first.receiptId,
@@ -657,6 +688,46 @@ for (const boundary of ["no_post", "unconfirmed"]) {
   assert.equal(pending.terminalAt, undefined, "AI contention must not falsely terminalize the receipt");
   assert.equal(pending.processingAttemptCount, 0, "lease contention must not consume the AI retry limit");
   assert.equal(pending.providerAttemptCount, 1, "the original paid attempt must remain exact");
+  const releasedPost = await db.get(scrapedPostId);
+  const replayInvariant = {
+    processingAttemptCount: pending.processingAttemptCount,
+    retryNotBeforeAt: pending.retryNotBeforeAt,
+    outcomeDetail: pending.outcomeDetail,
+    scrapedPostId: pending.scrapedPostId,
+    scrapedPostSourceRevision: pending.scrapedPostSourceRevision,
+    providerAttemptCount: pending.providerAttemptCount,
+  };
+  const releaseReplay = await releaseProcessingReceiptForRetry._handler(ctx(db), {
+    runId,
+    receiptId: first.receiptId,
+    workerId: "ai-worker-1",
+    reason: "a replay must not replace the original release outcome",
+    retryAfterMs: 6 * 60 * 60_000,
+    serviceSecret: process.env.CRON_SECRET,
+  });
+  assert.deepEqual(
+    releaseReplay,
+    { terminal: false, status: "processing_pending" },
+    "a release replay after acknowledgement loss must succeed idempotently",
+  );
+  const replayedPending = await db.get(first.receiptId);
+  assert.deepEqual(
+    {
+      processingAttemptCount: replayedPending.processingAttemptCount,
+      retryNotBeforeAt: replayedPending.retryNotBeforeAt,
+      outcomeDetail: replayedPending.outcomeDetail,
+      scrapedPostId: replayedPending.scrapedPostId,
+      scrapedPostSourceRevision: replayedPending.scrapedPostSourceRevision,
+      providerAttemptCount: replayedPending.providerAttemptCount,
+    },
+    replayInvariant,
+    "a processing_pending replay must not change attempts, retry timing, outcome, exact post fence, or provider count",
+  );
+  assert.deepEqual(
+    await db.get(scrapedPostId),
+    releasedPost,
+    "a processing_pending replay must not mutate the already-revoked exact post fence",
+  );
   assert.equal(await claim(db, runId, "fetch-worker"), null, "processing-pending work must never be claimed for Apify");
   await assert.rejects(
     () => startProviderAttempt(db, runId, first.receiptId, "fetch-worker"),

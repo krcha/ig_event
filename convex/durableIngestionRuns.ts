@@ -1180,6 +1180,13 @@ export const releaseProcessingReceiptForRetry = mutation({
         status: receipt.status as "fetched" | "no_post" | "deferred" | "failed",
       };
     }
+    // A mutation can commit even when its HTTP acknowledgement is lost. The
+    // route retries this release from its catch path, so make that replay
+    // read-only and successful once the exact receipt is already pending.
+    // Active receipts still require the original live owner below.
+    if (receipt.status === "processing_pending") {
+      return { terminal: false, status: "processing_pending" as const };
+    }
     const now = Date.now();
     if (
       receipt.status !== "processing" ||
