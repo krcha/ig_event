@@ -1322,7 +1322,7 @@ function buildConfiguredVenueNamesByHandle(
 
 function humanizeHandle(
   handle: string,
-  configuredVenueNamesByHandle: Record<string, string>,
+  configuredVenueNamesByHandle: Record<string, string> = {},
 ): string {
   const normalized = normalizeHandle(handle);
   const mappedVenue = getConfiguredVenueNameForHandle(
@@ -6300,7 +6300,7 @@ function normalizeVenue(
   rawModelVenue: string,
   canonicalVenueNamesByHandle: Record<string, string>,
   _venueNameOverridesByHandle: Record<string, string>,
-  configuredVenueNamesByHandle: Record<string, string>,
+  configuredVenueNamesByHandle: Record<string, string> = {},
   sourceRolesByHandle: Record<string, "venue" | "promoter" | "unknown"> = {},
 ): VenueNormalization {
   const sourceRole = sourceRolesByHandle[normalizeHandle(post.username)];
