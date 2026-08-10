@@ -13,6 +13,7 @@ const {
   completeReceipt,
   releaseReceiptForRetry,
   markReceiptPostsPersisted,
+  prepareReceiptSlotsBatch,
 } = await import("../convex/durableIngestionRuns.ts");
 
 class MemoryDb {
@@ -120,7 +121,8 @@ async function createBuildingRun(db, mode, handles, { resumeDaily = false } = {}
 }
 
 async function claim(db, runId, workerId) {
-  return executeNext._handler(ctx(db), { runId, workerId, serviceSecret: process.env.CRON_SECRET });
+  const slot = Number(workerId.match(/(\d+)/)?.[1] ?? 0) % 6;
+  return executeNext._handler(ctx(db), { runId, workerId, workerSlot: slot, serviceSecret: process.env.CRON_SECRET });
 }
 
 async function complete(db, runId, receiptId, workerId, outcome) {
@@ -193,23 +195,60 @@ const handles = Array.from({ length: 632 }, (_, index) => `venue_${String(index)
   assert.equal(db.rows("ingestionRunHandleReceipts").length, 16);
   await assert.rejects(() => queue(db, "canary", handles.slice(0, 17)), /already active|exactly 16/i);
 
-  // The harness is not a transactional Convex emulator, so claims are made
-  // sequentially here. Source checks below ensure each real claim writes only
-  // its own receipt (not a shared master counter), letting Convex retry only a
-  // duplicate receipt claim rather than an eight-way counter conflict.
+  // Each concurrent host worker owns one fixed lane. They do not contend for
+  // the same first queued receipt or a shared run counter.
   const claims = [];
-  for (let index = 0; index < 8; index += 1) claims.push(await claim(db, runId, `worker-${index}`));
-  assert.equal(claims.filter(Boolean).length, 8, "eight slots must be claimable concurrently");
+  for (let index = 0; index < 6; index += 1) claims.push(await claim(db, runId, `worker-${index}`));
+  assert.equal(claims.filter(Boolean).length, 6, "six fixed lanes must be claimable concurrently");
+  assert.equal(new Set(claims.filter(Boolean).map((claim) => claim.receiptId)).size, 6, "concurrent lanes must never double-claim a receipt");
   assert.equal(await claim(db, runId, "worker-overflow"), null, "ninth worker must not exceed the semaphore");
 
   // A restarted worker must requeue an expired lease, then continue it rather
   // than losing the selected venue.
   const expired = db.rows("ingestionRunHandleReceipts").find((row) => row.status === "running");
   await db.patch(expired._id, { leaseExpiresAt: Date.now() - 1 });
-  assert.equal(await claim(db, runId, "recovery"), null);
+  assert.equal(await claim(db, runId, `worker-${expired.executionSlot}`), null);
   assert.equal((await db.get(expired._id)).status, "queued");
-  assert.ok(await claim(db, runId, "recovery-next"));
+  assert.ok(await claim(db, runId, `worker-${expired.executionSlot}`));
 
+}
+
+// An already-started run from the preceding release has five provider-paid
+// receipts. The lane migration must preserve those receipts and make the run
+// dispatchable without re-fetching them. Six workers can then claim distinct
+// remaining receipts without an OCC-prone shared queue head.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "canary", handles.slice(0, 16));
+  const receipts = db.rows("ingestionRunHandleReceipts");
+  for (const receipt of receipts) await db.patch(receipt._id, { executionSlot: undefined });
+  await db.patch(runId, { dispatchReadyAt: undefined });
+  for (const receipt of receipts.slice(0, 5)) {
+    await db.patch(receipt._id, {
+      providerAttemptCount: 1,
+      chargedMicros: 10_000,
+      providerResultStatus: "persisted",
+      persistedPostCount: 1,
+    });
+  }
+  let prepared;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    prepared = await prepareReceiptSlotsBatch._handler(ctx(db), { runId, serviceSecret: process.env.CRON_SECRET });
+    if (prepared.complete) break;
+  }
+  assert.equal(prepared.complete, true, "legacy receipt lanes must finish in bounded batches");
+  assert.equal((await db.get(runId)).dispatchReadyAt !== undefined, true);
+  const migrated = db.rows("ingestionRunHandleReceipts");
+  assert.equal(migrated.filter((receipt) => receipt.executionSlot === undefined).length, 0);
+  assert.equal(migrated.filter((receipt) => receipt.providerAttemptCount === 1).length, 5, "paid attempts must survive lane migration");
+  const claims = await Promise.all(Array.from({ length: 6 }, (_, slot) => claim(db, runId, `lane-${slot}`)));
+  assert.equal(new Set(claims.filter(Boolean).map((claim) => claim.receiptId)).size, 6, "six concurrent lane claims remain disjoint after migration");
+  for (const claimResult of claims.filter(Boolean)) {
+    const receipt = await db.get(claimResult.receiptId);
+    if (receipt.providerAttemptCount === 1) {
+      assert.equal(claimResult.providerAttemptCount, 1, "paid receipts resume saved-post work without a second provider request");
+    }
+  }
 }
 
 // A release upgrade must resume an already-paid canary receipt row that
@@ -331,6 +370,8 @@ const executorSource = await (await import("node:fs/promises")).readFile("app/ap
 assert.ok(/markReceiptProviderAttemptStarted/.test(controllerSource), "controller needs a durable pre-transport attempt receipt");
 assert.ok(/convex\.mutation\(markProviderAttempt,[\s\S]{0,1800}scrapeInstagramAccount/.test(executorSource), "executor must write that receipt before Apify is called");
 assert.ok(/providerAttemptCount/.test(controllerSource), "each receipt must retain its provider attempt count");
+assert.ok(/executionSlot/.test(controllerSource), "receipt claims need fixed execution lanes to avoid OCC contention");
+assert.ok(/workerSlot/.test(executorSource), "the VPS executor must identify its fixed lane");
 
 // Admission validates the entire frozen snapshot against budget before any
 // receipt exists. This avoids a shared live budget counter and prevents a run

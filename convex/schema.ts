@@ -483,6 +483,10 @@ export default defineSchema({
     selectedHandles: v.optional(v.array(v.string())),
     queueBuildCursor: v.optional(v.number()),
     queueBuildCompletedAt: v.optional(v.number()),
+    // Receipt dispatch is intentionally separate from queue construction. New
+    // runs get lanes while they are built; pre-lane legacy runs are paused
+    // until `prepareReceiptSlotsBatch` has assigned every existing receipt.
+    dispatchReadyAt: v.optional(v.number()),
     selectedHandleCount: v.number(),
     terminalReceiptCount: v.number(),
     failedReceiptCount: v.number(),
@@ -543,6 +547,9 @@ export default defineSchema({
     // finishing. Keep the paid-fetch receipt retryable without hot-looping the
     // AI lease or consuming its provider budget again.
     retryNotBeforeAt: v.optional(v.number()),
+    // A fixed execution lane prevents concurrent host workers from claiming
+    // the same first queued receipt and triggering Convex OCC retries.
+    executionSlot: v.optional(v.number()),
     outcomeDetail: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -550,6 +557,9 @@ export default defineSchema({
   })
     .index("by_run_handle", ["runId", "handle"])
     .index("by_run_status", ["runId", "status"])
+    .index("by_run_status_executionSlot", ["runId", "status", "executionSlot"])
+    .index("by_run_status_executionSlot_retryNotBeforeAt", ["runId", "status", "executionSlot", "retryNotBeforeAt"])
+    .index("by_run_status_executionSlot_leaseExpiresAt", ["runId", "status", "executionSlot", "leaseExpiresAt"])
     .index("by_run_status_retryNotBeforeAt", ["runId", "status", "retryNotBeforeAt"])
     .index("by_run_status_leaseExpiresAt", ["runId", "status", "leaseExpiresAt"])
     .index("by_chunk_status", ["chunkId", "status"]),

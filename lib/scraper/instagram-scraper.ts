@@ -41,6 +41,11 @@ export type InstagramScrapedPost = {
   instagramPostUrl: string;
   postedAt: string | null;
   username: string;
+  /**
+   * Kept only while selecting the current profile's newest post. Pinned posts
+   * are deliberately never persisted into the normal ingestion path.
+   */
+  isPinned?: boolean;
 };
 
 export const INSTAGRAM_SCRAPE_RAW_ITEM_COUNT = Symbol("instagramScrapeRawItemCount");
@@ -147,6 +152,9 @@ type ApifyInstagramItem = {
   locationName?: string;
   location_name?: string;
   location?: { name?: string };
+  isPinned?: boolean;
+  is_pinned?: boolean;
+  pinned?: boolean;
 };
 
 type ApifyCollectionResponse<T> = {
@@ -390,6 +398,10 @@ function parsePostDate(item: ApifyInstagramItem): Date | null {
   }
 
   return null;
+}
+
+function isPinnedApifyItem(item: ApifyInstagramItem): boolean {
+  return item.isPinned === true || item.is_pinned === true || item.pinned === true;
 }
 
 function getApifyHeaders(apiToken: string): HeadersInit {
@@ -717,7 +729,24 @@ export function mapApifyItemToInstagramPost(
     instagramPostUrl,
     postedAt: postedAt ? postedAt.toISOString() : null,
     username,
+    isPinned: isPinnedApifyItem(item),
   };
+}
+
+/**
+ * Apify's skipPinnedPosts input is advisory. Select locally from a small
+ * over-fetch so a pinned profile header can never become the chosen post.
+ * A missing/invalid original post date is intentionally not eligible: there
+ * is no honest way to call it the newest post by date.
+ */
+export function selectLatestOriginalNonPinnedPost(
+  posts: InstagramScrapedPost[],
+): InstagramScrapedPost[] {
+  const newest = posts
+    .filter((post) => post.isPinned !== true)
+    .filter((post) => Number.isFinite(parsePostedAtTimestamp(post.postedAt)))
+    .sort((left, right) => parsePostedAtTimestamp(right.postedAt) - parsePostedAtTimestamp(left.postedAt))[0];
+  return newest ? [{ ...newest, isPinned: undefined }] : [];
 }
 
 async function listRecentSucceededActorRuns(
@@ -992,7 +1021,12 @@ export async function scrapeInstagramAccount(
       parsePostedAtTimestamp(right.postedAt) - parsePostedAtTimestamp(left.postedAt),
   );
 
-  const result = normalizedTopLevelPosts.slice(0, resultsLimit);
+  // Request a bounded over-fetch so local pinned-post filtering can choose the
+  // latest genuine post. The durable caller asks for four; legacy callers keep
+  // their explicit result count semantics.
+  const result = options.skipPinnedPosts
+    ? selectLatestOriginalNonPinnedPost(normalizedTopLevelPosts)
+    : normalizedTopLevelPosts.slice(0, resultsLimit);
   Object.defineProperty(result, INSTAGRAM_SCRAPE_RAW_ITEM_COUNT, {
     value: rawItems.length,
     enumerable: false,

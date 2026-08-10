@@ -11,7 +11,13 @@ const MAX_HANDLES_PER_RUN = 2_000;
 // calls buildQueueBatch; provider execution remains impossible until the
 // frozen snapshot is fully materialized.
 const QUEUE_BUILD_BATCH_SIZE = 32;
-const MAX_CONCURRENCY = 8;
+// Six independent lanes are deliberately below the VPS/provider comfort
+// ceiling. More importantly, each lane owns a disjoint receipt set, so
+// multiple workers never race to patch the same "first queued" receipt.
+const MAX_CONCURRENCY = 6;
+// Actor-side pinned filtering is advisory. Fetch this bounded window, then
+// choose the newest dated non-pinned item locally in the web executor.
+const SOURCE_RESULTS_LIMIT = 4;
 const COST_PER_PROFILE_MICROS = 10_000;
 const LEASE_MS = 10 * 60 * 1000;
 const MAX_ATTEMPTS = 3;
@@ -42,10 +48,28 @@ function uniqueNormalizedHandles(handles: string[]): string[] {
   return [...unique].sort((a, b) => a.localeCompare(b));
 }
 
+function stableExecutionSlot(handle: string): number {
+  // A stable non-cryptographic hash is sufficient for lane distribution. It
+  // must be deterministic across a restart so a receipt never changes owner.
+  let hash = 0;
+  for (let index = 0; index < handle.length; index += 1) {
+    hash = (Math.imul(hash, 31) + handle.charCodeAt(index)) | 0;
+  }
+  return (hash >>> 0) % MAX_CONCURRENCY;
+}
+
+function assertExecutionSlot(value: number | undefined, fallbackKey: string): number {
+  if (value === undefined) return stableExecutionSlot(fallbackKey);
+  if (!Number.isInteger(value) || value < 0 || value >= MAX_CONCURRENCY) {
+    throw new Error(`Worker slot must be an integer from 0 to ${MAX_CONCURRENCY - 1}.`);
+  }
+  return value;
+}
+
 function controlsFor(mode: RunMode) {
   if (mode === "canary") {
     return {
-      resultsLimit: 1,
+      resultsLimit: SOURCE_RESULTS_LIMIT,
       daysBack: 1,
       skipPinnedPosts: true,
       concurrency: MAX_CONCURRENCY,
@@ -57,7 +81,7 @@ function controlsFor(mode: RunMode) {
   }
   if (mode === "catch_up") {
     return {
-      resultsLimit: 1,
+      resultsLimit: SOURCE_RESULTS_LIMIT,
       skipPinnedPosts: true,
       concurrency: MAX_CONCURRENCY,
       costPerProfileMicros: COST_PER_PROFILE_MICROS,
@@ -67,7 +91,7 @@ function controlsFor(mode: RunMode) {
     };
   }
   return {
-    resultsLimit: 1,
+    resultsLimit: SOURCE_RESULTS_LIMIT,
     daysBack: 1,
     skipPinnedPosts: true,
     concurrency: MAX_CONCURRENCY,
@@ -257,6 +281,7 @@ export const buildQueueBatch = mutation({
           status: "queued",
           attemptCount: 0,
           providerAttemptCount: 0,
+          executionSlot: ordinal % MAX_CONCURRENCY,
           retryNotBeforeAt: now,
           createdAt: now,
           updatedAt: now,
@@ -265,7 +290,7 @@ export const buildQueueBatch = mutation({
     const complete = end === handles.length;
     await ctx.db.patch(run._id, {
       queueBuildCursor: end,
-      ...(complete ? { status: "queued", queueBuildCompletedAt: now } : {}),
+      ...(complete ? { status: "queued", queueBuildCompletedAt: now, dispatchReadyAt: now } : {}),
       updatedAt: now,
     });
     return { runId: run._id, builtCount: end, selectedHandleCount: handles.length, complete };
@@ -297,16 +322,15 @@ export const probeRun = query({
       controls: run.controls,
       queueBuildCursor: run.queueBuildCursor ?? 0,
       queueReady: run.queueBuildCompletedAt !== undefined,
+      dispatchReady: run.dispatchReadyAt !== undefined,
       complete: counts.terminalReceiptCount === run.selectedHandleCount,
     };
   },
 });
 
-// Operational escape hatch for a legacy run that was stopped before the
-// sharded controller was deployed. It never changes receipts, never invokes a
-// provider, and refuses to close a run that still has an active worker lease.
-// This lets a corrected replacement run be queued without erasing the audit
-// trail from the partial run.
+// Operational escape hatch for a legacy run that was stopped before a
+// controller repair was deployed. It intentionally preserves all receipts and
+// refuses to close a run while a worker still owns a receipt.
 export const abortInactiveRun = mutation({
   args: {
     runId: v.id("ingestionRuns"),
@@ -347,9 +371,8 @@ export const abortInactiveRun = mutation({
   },
 });
 
-// This is intentionally narrower than abortInactiveRun: it closes exactly one
-// stalled catch-up selected by the durable run guard. It exists so recovery
-// tooling need not enumerate production documents or guess a run id.
+// A narrow operational helper for the single stalled catch-up recovery path.
+// It preserves receipt history and refuses to act if a worker is still active.
 export const abortOnlyInactiveCatchUpRun = mutation({
   args: {
     reason: v.string(),
@@ -405,20 +428,55 @@ export const abortOnlyInactiveCatchUpRun = mutation({
   },
 });
 
+/**
+ * Add fixed execution lanes to an already-materialized run from the preceding
+ * release. This is an offline, bounded migration: execution refuses the run
+ * until every receipt is slotted, so its existing paid receipts are preserved
+ * and cannot be accidentally re-fetched during the upgrade.
+ */
+export const prepareReceiptSlotsBatch = mutation({
+  args: { runId: v.id("ingestionRuns"), serviceSecret: v.optional(v.string()) },
+  returns: v.object({ assignedCount: v.number(), complete: v.boolean() }),
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const run = await ctx.db.get(args.runId);
+    if (!run) throw new Error("Durable ingestion run not found.");
+    if (run.dispatchReadyAt !== undefined) return { assignedCount: run.selectedHandleCount, complete: true };
+    const rows = (await Promise.all(
+      (["queued", "running", "fetched", "no_post", "deferred", "failed"] as const).map((status) =>
+        ctx.db.query("ingestionRunHandleReceipts")
+          .withIndex("by_run_status", (q) => q.eq("runId", run._id).eq("status", status))
+          .take(run.selectedHandleCount + 1),
+      ),
+    )).flat();
+    const missing = rows.filter((receipt) => receipt.executionSlot === undefined);
+    const now = Date.now();
+    for (const receipt of missing.slice(0, QUEUE_BUILD_BATCH_SIZE)) {
+      await ctx.db.patch(receipt._id, { executionSlot: stableExecutionSlot(receipt.handle), updatedAt: now });
+    }
+    if (missing.length <= QUEUE_BUILD_BATCH_SIZE) {
+      await ctx.db.patch(run._id, { dispatchReadyAt: now, updatedAt: now });
+      return { assignedCount: rows.length, complete: true };
+    }
+    return { assignedCount: rows.length - missing.length + QUEUE_BUILD_BATCH_SIZE, complete: false };
+  },
+});
+
 export const executeNext = mutation({
-  args: { runId: v.id("ingestionRuns"), workerId: v.string(), serviceSecret: v.optional(v.string()) },
+  args: { runId: v.id("ingestionRuns"), workerId: v.string(), workerSlot: v.optional(v.number()), serviceSecret: v.optional(v.string()) },
   returns: v.any(),
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const run = await ctx.db.get(args.runId);
-    if (!run || run.status === "building" || run.status === "completed" || run.status === "failed" || run.queueBuildCompletedAt === undefined) return null;
+    if (!run || run.status === "building" || run.status === "completed" || run.status === "failed" || run.queueBuildCompletedAt === undefined || run.dispatchReadyAt === undefined) return null;
+    const workerSlot = assertExecutionSlot(args.workerSlot, args.workerId);
     const now = Date.now();
     // Recover one expired receipt before looking at the semaphore. Without
     // this a crashed set of eight workers could hold the run forever.
     const expired = await ctx.db
       .query("ingestionRunHandleReceipts")
-      .withIndex("by_run_status_leaseExpiresAt", (q) =>
-        q.eq("runId", args.runId).eq("status", "running").lte("leaseExpiresAt", now),
+      .withIndex("by_run_status_executionSlot_leaseExpiresAt", (q) =>
+        q.eq("runId", args.runId).eq("status", "running").eq("executionSlot", workerSlot).lte("leaseExpiresAt", now),
       )
       .order("asc")
       .first();
@@ -431,16 +489,21 @@ export const executeNext = mutation({
       }
       return null;
     }
-    const activeReceipts = await ctx.db
+    // A fixed host worker owns at most one receipt at a time. Without this
+    // guard, a duplicate/restarted worker for the same slot could claim a
+    // second queued receipt in that lane while the first one is still running.
+    // That reintroduces the shared-run concurrency we deliberately removed.
+    const activeInLane = await ctx.db
       .query("ingestionRunHandleReceipts")
-      .withIndex("by_run_status", (q) => q.eq("runId", args.runId).eq("status", "running"))
-      .take(run.controls.concurrency + 1);
-    if (activeReceipts.length >= run.controls.concurrency) return null;
-
+      .withIndex("by_run_status_executionSlot", (q) =>
+        q.eq("runId", args.runId).eq("status", "running").eq("executionSlot", workerSlot),
+      )
+      .first();
+    if (activeInLane) return null;
     let receipt = await ctx.db
       .query("ingestionRunHandleReceipts")
-      .withIndex("by_run_status_retryNotBeforeAt", (q) =>
-        q.eq("runId", args.runId).eq("status", "queued").lte("retryNotBeforeAt", now),
+      .withIndex("by_run_status_executionSlot_retryNotBeforeAt", (q) =>
+        q.eq("runId", args.runId).eq("status", "queued").eq("executionSlot", workerSlot).lte("retryNotBeforeAt", now),
       )
       .order("asc")
       .first();
@@ -451,15 +514,15 @@ export const executeNext = mutation({
       receipt = (
         await ctx.db
           .query("ingestionRunHandleReceipts")
-          .withIndex("by_run_status", (q) => q.eq("runId", args.runId).eq("status", "queued"))
+          .withIndex("by_run_status_executionSlot", (q) => q.eq("runId", args.runId).eq("status", "queued").eq("executionSlot", workerSlot))
           .take(MAX_HANDLES_PER_RUN)
       ).find((candidate) => candidate.retryNotBeforeAt === undefined) ?? null;
     }
     if (!receipt) {
       receipt = await ctx.db
         .query("ingestionRunHandleReceipts")
-        .withIndex("by_run_status_leaseExpiresAt", (q) =>
-          q.eq("runId", args.runId).eq("status", "running").lte("leaseExpiresAt", now),
+        .withIndex("by_run_status_executionSlot_leaseExpiresAt", (q) =>
+          q.eq("runId", args.runId).eq("status", "running").eq("executionSlot", workerSlot).lte("leaseExpiresAt", now),
         )
         .order("asc")
         .first();

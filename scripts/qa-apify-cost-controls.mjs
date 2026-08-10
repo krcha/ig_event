@@ -16,6 +16,7 @@ import {
   buildApifyInstagramScrapeRequest,
   mapApifyItemToInstagramPost,
   scrapeInstagramAccount,
+  selectLatestOriginalNonPinnedPost,
 } from "../lib/scraper/instagram-scraper.ts";
 import {
   classifyOpenAiHttpFailure,
@@ -347,6 +348,64 @@ assert.equal(
   "Apify error/result-marker rows must never become fetched Instagram posts.",
 );
 
+const pinnedNewest = mapApifyItemToInstagramPost(
+  {
+    id: "pinned-newest",
+    url: "https://www.instagram.com/p/pinned-newest/",
+    username: "qa_venue",
+    timestamp: "2026-08-10T10:00:00.000Z",
+    isPinned: true,
+    displayUrl: "https://images.apifyusercontent.com/pinned.jpg",
+  },
+  "qa_venue",
+);
+const newestOriginal = mapApifyItemToInstagramPost(
+  {
+    id: "newest-original",
+    url: "https://www.instagram.com/p/newest-original/",
+    username: "qa_venue",
+    timestamp: "2026-08-09T10:00:00.000Z",
+    is_pinned: false,
+    displayUrl: "https://images.apifyusercontent.com/newest.jpg",
+  },
+  "qa_venue",
+);
+const olderOriginal = mapApifyItemToInstagramPost(
+  {
+    id: "older-original",
+    url: "https://www.instagram.com/p/older-original/",
+    username: "qa_venue",
+    timestamp: "2026-08-08T10:00:00.000Z",
+    pinned: false,
+    displayUrl: "https://images.apifyusercontent.com/older.jpg",
+  },
+  "qa_venue",
+);
+const undatedOriginal = mapApifyItemToInstagramPost(
+  {
+    id: "undated-original",
+    url: "https://www.instagram.com/p/undated-original/",
+    username: "qa_venue",
+    displayUrl: "https://images.apifyusercontent.com/undated.jpg",
+  },
+  "qa_venue",
+);
+assert.ok(pinnedNewest && newestOriginal && olderOriginal && undatedOriginal);
+assert.deepEqual(
+  selectLatestOriginalNonPinnedPost([
+    pinnedNewest,
+    undatedOriginal,
+    olderOriginal,
+    newestOriginal,
+  ]).map((post) => post.postId),
+  ["newest-original"],
+  "local selection must skip a newest pinned item and sort original posts by post date",
+);
+assert.deepEqual(
+  selectLatestOriginalNonPinnedPost([pinnedNewest]),
+  [],
+  "a profile with only pins must truthfully produce no selected post",
+);
 const detailedRequest = buildApifyInstagramScrapeRequest({
   actorUsernameInput: "clubdrugstore",
   resultsLimit: 5,

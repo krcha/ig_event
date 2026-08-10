@@ -2,7 +2,13 @@
  * Frozen mode controls. These are deliberately not read from process.env:
  * a queued run must retain exactly the limits it was approved with.
  */
-export const DURABLE_INGESTION_CONCURRENCY = 8;
+export const DURABLE_INGESTION_CONCURRENCY = 6;
+/**
+ * Apify's pinned-post switch is not reliable enough to select the newest
+ * genuine post. Over-fetch a small bounded window and filter locally before
+ * persisting. Only the selected non-pinned post enters AI processing.
+ */
+export const DURABLE_INGESTION_SOURCE_RESULTS_LIMIT = 4;
 export const DURABLE_INGESTION_COST_PER_PROFILE_MICROS = 10_000;
 export const DURABLE_INGESTION_CANARY_SIZE = 16;
 export const DURABLE_INGESTION_FULL_PROFILE_BUDGET_MICROS = 7_000_000;
@@ -10,10 +16,10 @@ export const DURABLE_INGESTION_FULL_PROFILE_BUDGET_MICROS = 7_000_000;
 export type DurableIngestionMode = "canary" | "catch_up" | "daily";
 
 export type DurableIngestionControls = {
-  resultsLimit: 1;
+  resultsLimit: 4;
   daysBack?: 1;
   skipPinnedPosts: true;
-  concurrency: 8;
+  concurrency: 6;
   costPerProfileMicros: 10_000;
   budgetMicros: number;
   ignoreCheckpoint: boolean;
@@ -23,7 +29,7 @@ export type DurableIngestionControls = {
 export function durableControlsFor(mode: DurableIngestionMode): DurableIngestionControls {
   if (mode === "canary") {
     return {
-      resultsLimit: 1,
+      resultsLimit: DURABLE_INGESTION_SOURCE_RESULTS_LIMIT,
       daysBack: 1,
       skipPinnedPosts: true,
       concurrency: DURABLE_INGESTION_CONCURRENCY,
@@ -35,7 +41,7 @@ export function durableControlsFor(mode: DurableIngestionMode): DurableIngestion
   }
   if (mode === "catch_up") {
     return {
-      resultsLimit: 1,
+      resultsLimit: DURABLE_INGESTION_SOURCE_RESULTS_LIMIT,
       skipPinnedPosts: true,
       concurrency: DURABLE_INGESTION_CONCURRENCY,
       costPerProfileMicros: DURABLE_INGESTION_COST_PER_PROFILE_MICROS,
@@ -45,7 +51,7 @@ export function durableControlsFor(mode: DurableIngestionMode): DurableIngestion
     };
   }
   return {
-    resultsLimit: 1,
+    resultsLimit: DURABLE_INGESTION_SOURCE_RESULTS_LIMIT,
     daysBack: 1,
     skipPinnedPosts: true,
     concurrency: DURABLE_INGESTION_CONCURRENCY,

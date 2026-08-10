@@ -51,12 +51,12 @@ assert.match(executor, /processingPending: preserveAttempt/, "busy AI processing
 assert.match(executor, /retryAfterMs: 30_000/, "busy AI processing must back off instead of hot-looping");
 assert.match(controller, /providerAttemptCount/);
 assert.match(controller, /providerResultStatus/, "controller receipts must distinguish a charge from persisted source data");
-assert.match(controller, /by_run_status_retryNotBeforeAt/, "receipt retries must be queryable without scanning all run rows");
+assert.match(controller, /by_run_status_executionSlot_retryNotBeforeAt/, "receipt retries must be queryable inside a fixed worker lane without scanning all run rows");
 assert.match(controller, /preserveAttempt/, "waiting for an AI lease must not consume the receipt retry limit");
 assert.match(controller, /Selected profiles exceed this run's frozen budget/);
 assert.match(controller, /markReceiptProviderAttemptStarted/);
 assert.match(executor, /complete: state\?\.complete/, "workers must distinguish completion from a busy lease after restart");
-assert.match(launcher, /for _ in \{1\.\.8\}/);
+assert.match(launcher, /for slot in \{0\.\.5\}/);
 assert.match(launcher, /pids=\(\)/, "runner must track every worker PID");
 assert.match(launcher, /for pid in "\$\{pids\[@\]\}"/, "runner must wait for every worker");
 assert.match(launcher, /exit "\$failed"/, "a worker failure must reach systemd");
@@ -67,7 +67,7 @@ for (const reason of ["lease_expired_retry_limit", "retry_limit"]) {
   assert.match(branch, /finishRunIfTerminal/);
 }
 assert.match(controller, /MAX_HANDLES_PER_CHUNK = 1/);
-assert.match(controller, /activeReceipts/);
+assert.match(controller, /activeInLane/);
 assert.match(launcher, /"complete":true/, "busy workers must wait rather than treat an active lease as completion");
 assert.match(dailyRoute, /mode: "daily"/);
 assert.match(dailyRoute, /resumeDaily: true/);

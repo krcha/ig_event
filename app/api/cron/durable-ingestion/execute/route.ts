@@ -20,18 +20,22 @@ function isTransientSavedPostProcessingError(value: string | undefined): boolean
   return Boolean(value && /saved post processing is (busy|deferred)|openai provider execution lease is busy/i.test(value));
 }
 
-/** One receipt per request. The VPS starts at most eight of these requests in
- * parallel; Convex also enforces the run's eight-slot semaphore. */
+/** One receipt per request. The VPS starts one worker per fixed lane. */
 export async function POST(request: Request) {
   if (!isAuthorizedCronRequestHeader(request.headers.get("authorization"))) {
     return NextResponse.json({ error: "Unauthorized cron request." }, { status: 401 });
   }
   const runId = new URL(request.url).searchParams.get("runId");
+  const workerSlotRaw = new URL(request.url).searchParams.get("workerSlot");
   if (!runId) return NextResponse.json({ error: "runId is required." }, { status: 400 });
+  const workerSlot = Number(workerSlotRaw);
+  if (!Number.isInteger(workerSlot) || workerSlot < 0 || workerSlot >= 6) {
+    return NextResponse.json({ error: "workerSlot must be 0 through 5." }, { status: 400 });
+  }
   const serviceSecret = requireServiceSecret();
   const convex = createConvexHttpClient();
   const workerId = `vps:${randomUUID()}`;
-  const claimed = await convex.mutation(claim, { runId, workerId, serviceSecret }) as {
+  const claimed = await convex.mutation(claim, { runId, workerId, workerSlot, serviceSecret }) as {
     receiptId: string; handle: string; controls: { resultsLimit: number; daysBack?: number; noAgeCutoff?: boolean; skipPinnedPosts: boolean; ignoreCheckpoint: boolean; ignoreCooldown: boolean; costPerProfileMicros: number };
     providerAttemptCount?: number;
     providerResultStatus?: "persisted" | "no_post";

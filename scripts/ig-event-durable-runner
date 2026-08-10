@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Starts exactly eight independently leased receipt executors for one durable run.
+# Starts exactly six fixed-lane receipt executors for one durable run.
 set -Eeuo pipefail
 ENV_FILE="${IG_EVENT_CRON_ENV:-/etc/ig_event/cron.env}"
 RUN_ID="${1:?usage: ig-event-durable-runner RUN_ID}"
@@ -7,12 +7,13 @@ RUN_ID="${1:?usage: ig-event-durable-runner RUN_ID}"
 : "${APP_ORIGIN:?missing APP_ORIGIN}" "${CRON_SECRET:?missing CRON_SECRET}"
 URL="${APP_ORIGIN%/}/api/cron/durable-ingestion/execute?runId=${RUN_ID}"
 worker() {
+  local slot="$1"
   while true; do
     # A transport failure means the receipt was either released for retry or
     # its lease will expire.  Exit non-zero so systemd restarts the host runner;
     # never turn it into a false completed profile.
     body="$(curl --fail --silent --show-error --max-time 300 \
-      -H "Authorization: Bearer ${CRON_SECRET}" -X POST "$URL")" || exit 1
+      -H "Authorization: Bearer ${CRON_SECRET}" -X POST "${URL}&workerSlot=${slot}")" || exit 1
     if [[ "$body" == *'"claimed":false'* ]]; then
       [[ "$body" == *'"complete":true'* ]] && exit 0
       # A restarted runner can see the prior process's valid leases. Wait for
@@ -22,8 +23,8 @@ worker() {
   done
 }
 pids=()
-for _ in {1..8}; do
-  worker &
+for slot in {0..5}; do
+  worker "$slot" &
   pids+=("$!")
 done
 
