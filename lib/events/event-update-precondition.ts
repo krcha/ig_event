@@ -25,6 +25,8 @@ type EventWritePatch = EventApprovalFields & {
 };
 
 const SOURCE_GROUNDED_AUTO_APPROVE_RULE = "source_grounded_core_event_fields";
+const TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_RULE = "trusted_source_event_announcement";
+const TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_MIN_CONFIDENCE = 0.65;
 const APPROVED_MODERATION_SIGNALS = new Set([
   "missing_image",
   "missing_image_allowed",
@@ -55,6 +57,23 @@ function normalizeComparableText(value: unknown): string | null {
   }
   const normalized = value.normalize("NFKC").trim().replace(/\s+/gu, " ");
   return normalized || null;
+}
+
+function normalizeComparableHandle(value: unknown): string | null {
+  const normalized = normalizeComparableText(value);
+  return normalized ? normalized.replace(/^@/, "").toLowerCase() : null;
+}
+
+function isFutureIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Belgrade",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const today = `${parts.find((part) => part.type === "year")?.value}-${parts.find((part) => part.type === "month")?.value}-${parts.find((part) => part.type === "day")?.value}`;
+  return value >= today;
 }
 
 function normalizeComparableArtists(value: unknown): string[] | null {
@@ -257,6 +276,104 @@ export function hasCompleteSourceGroundedAutoApproval(
   );
 }
 
+/**
+ * Practical publication path for announcements posted by a configured venue
+ * account. It deliberately relaxes exhaustive caption coherence, but only
+ * after the pipeline has bound the public event to that exact trusted source,
+ * an explicit future date, and a sensible non-fallback title. The Convex
+ * duplicate/ambiguity policy still runs separately at every write.
+ */
+export function hasTrustedSourceEventAnnouncementAutoApproval(
+  normalizedFieldsJson: string | undefined,
+  eventFields?: EventApprovalFields,
+): boolean {
+  const fields = parseNormalizedFields(normalizedFieldsJson);
+  if (!fields || !eventFields) return false;
+
+  const pendingReasons = Array.isArray(fields.moderationPendingReasons)
+    ? fields.moderationPendingReasons.map(String)
+    : null;
+  const signals = Array.isArray(fields.moderationSignals)
+    ? fields.moderationSignals.map(String)
+    : null;
+  const sourceHandle = normalizeComparableHandle(fields.sourceGroundingInstagramHandle);
+  const venueHandle = normalizeComparableHandle(eventFields.venueInstagramHandle);
+  const title = normalizeComparableText(eventFields.title);
+  const date = normalizeComparableText(eventFields.date);
+  const venue = normalizeComparableText(eventFields.venue);
+  const attestedTitle = normalizeComparableText(fields.title);
+  const attestedDate = normalizeComparableText(fields.normalizedDate);
+  const normalizedVenue = normalizeComparableText(fields.normalizedVenue);
+  const sourceCaption = normalizeComparableText(eventFields.sourceCaption);
+  const postId = normalizeComparableText(eventFields.instagramPostId);
+  const postUrl = normalizeComparableText(eventFields.instagramPostUrl);
+  const attestedCaption = normalizeComparableText(fields.sourceGroundingSourceCaption);
+  const attestedPostId = normalizeComparableText(fields.sourceGroundingInstagramPostId);
+  const attestedPostUrl = normalizeComparableText(fields.sourceGroundingInstagramPostUrl);
+  const confidence = fields.moderationConfidenceScore;
+  const permittedSignals = new Set([
+    "missing_image",
+    "missing_image_allowed",
+    "time_tbd",
+    "unverified_core_event_source",
+    "caption_source_event_mismatch",
+    "unverified_occurrence_plan",
+  ]);
+
+  return (
+    fields.moderationAutoApproved === true &&
+    fields.moderationAutoApproveRule === TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_RULE &&
+    fields.trustedVenueSource === true &&
+    fields.normalizedIsValid === true &&
+    fields.titleUsedFallback === false &&
+    fields.dateSuspiciousYear === false &&
+    fields.sourceGroundingTitleVerified === true &&
+    fields.sourceGroundingDateVerified === true &&
+    fields.sourceGroundingIdentityContextVerified === true &&
+    (fields.dateConfidence === "high" || fields.dateConfidence === "medium") &&
+    typeof confidence === "number" &&
+    Number.isFinite(confidence) &&
+    confidence >= TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_MIN_CONFIDENCE &&
+    pendingReasons !== null &&
+    pendingReasons.length === 0 &&
+    signals !== null &&
+    signals.every((signal) => permittedSignals.has(signal)) &&
+    Boolean(sourceHandle && venueHandle && sourceHandle === venueHandle) &&
+    Boolean(
+      title &&
+        date &&
+        venue &&
+        normalizedVenue &&
+        attestedTitle === title &&
+        attestedDate === date &&
+        venue === normalizedVenue,
+    ) &&
+    isFutureIsoDate(date ?? "") &&
+    isSensibleEventTitleForApproval({ title, venue }) &&
+    isCaptionSourceCoherentWithEvent({
+      title: title ?? "",
+      date: date ?? "",
+      time: normalizeComparableText(eventFields.time) ?? undefined,
+      venue: venue ?? "",
+      artists: normalizeComparableArtists(eventFields.artists ?? []) ?? [],
+      sourceCaption: sourceCaption ?? "",
+      sourcePostedAt: eventFields.sourcePostedAt,
+      instagramPostId: postId ?? "",
+      instagramPostUrl: postUrl ?? "",
+      sourceInstagramHandle: sourceHandle ?? "",
+      venueInstagramHandle: venueHandle ?? "",
+    }) &&
+    Boolean(
+      sourceCaption &&
+        postId &&
+        postUrl &&
+        attestedCaption === sourceCaption &&
+        attestedPostId === postId &&
+        attestedPostUrl === postUrl,
+    )
+  );
+}
+
 export function assertExpectedEventStatus(
   currentStatus: EventStatusPrecondition,
   expectedStatus: EventStatusPrecondition | undefined,
@@ -305,7 +422,8 @@ export function assertServiceCreateEventPolicy(
 ): void {
   if (
     requestedStatus === "approved" &&
-    !hasCompleteSourceGroundedAutoApproval(normalizedFieldsJson, eventFields)
+    !hasCompleteSourceGroundedAutoApproval(normalizedFieldsJson, eventFields) &&
+    !hasTrustedSourceEventAnnouncementAutoApproval(normalizedFieldsJson, eventFields)
   ) {
     throw new Error(
       "Service-authenticated event creation cannot approve an event without complete source-grounded evidence bound to the public fields.",
@@ -322,7 +440,8 @@ export function assertServiceUpdateEventPolicy(
   if (
     patch.status === "approved" &&
     (currentStatus !== "pending" ||
-      !hasCompleteSourceGroundedAutoApproval(patch.normalizedFieldsJson, effectiveEvent))
+      !hasCompleteSourceGroundedAutoApproval(patch.normalizedFieldsJson, effectiveEvent) &&
+      !hasTrustedSourceEventAnnouncementAutoApproval(patch.normalizedFieldsJson, effectiveEvent))
   ) {
     throw new Error(
       "Service-authenticated event updates cannot approve an event without complete source-grounded evidence bound to the public fields.",

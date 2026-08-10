@@ -54,6 +54,7 @@ import {
   assertServiceCreateEventPolicy,
   assertServiceUpdateEventPolicy,
   hasCompleteSourceGroundedAutoApproval,
+  hasTrustedSourceEventAnnouncementAutoApproval,
 } from "../lib/events/event-update-precondition.ts";
 import { isSensibleEventTitleForApproval } from "../lib/events/event-title-approval.ts";
 import { isCaptionSourceCoherentWithEvent } from "../lib/events/event-source-approval.ts";
@@ -6083,6 +6084,114 @@ async function runServiceApprovalMutationBoundaryQa() {
   };
 
   try {
+    const trustedSourceCaption =
+      "Koncert Trusted Venue Announcement 31.12.2099 at Grounded Handler Venue uz Grounded Handler Artist";
+    const trustedPostId = "qa-trusted-handler-boundary";
+    const trustedPostUrl = `https://www.instagram.com/p/${trustedPostId}/`;
+    const trustedNormalizedFieldsJson = JSON.stringify({
+      title: "Trusted Venue Announcement",
+      normalizedDate: "2099-12-31",
+      normalizedVenue: "Grounded Handler Venue",
+      trustedVenueSource: true,
+      normalizedIsValid: true,
+      titleUsedFallback: false,
+      dateSuspiciousYear: false,
+      dateConfidence: "high",
+      moderationConfidenceScore: 0.72,
+      moderationAutoApproved: true,
+      moderationAutoApproveRule: "trusted_source_event_announcement",
+      moderationPendingReasons: [],
+      moderationSignals: ["unverified_core_event_source"],
+      sourceGroundingInstagramHandle: "qa_venue",
+      sourceGroundingTitleVerified: true,
+      sourceGroundingDateVerified: true,
+      sourceGroundingIdentityContextVerified: true,
+      sourceGroundingSourceCaption: trustedSourceCaption,
+      sourceGroundingInstagramPostId: trustedPostId,
+      sourceGroundingInstagramPostUrl: trustedPostUrl,
+    });
+    const trustedOriginalPersistedSourcePost = persistedSourcePost;
+    persistedSourcePost = {
+      ...persistedSourcePost,
+      postId: trustedPostId,
+      instagramPostUrl: trustedPostUrl,
+      caption: trustedSourceCaption,
+    };
+    inserted = false;
+    await createEvent._handler(ctx, {
+      ...groundedPublicFields,
+      title: "Trusted Venue Announcement",
+      date: "2099-12-31",
+      instagramPostId: trustedPostId,
+      instagramPostUrl: trustedPostUrl,
+      sourceCaption: trustedSourceCaption,
+      normalizedFieldsJson: trustedNormalizedFieldsJson,
+      serviceSecret,
+    });
+    assert.equal(
+      inserted,
+      true,
+      "The real service mutation must allow an evidence-bound trusted venue announcement.",
+    );
+
+    for (const unsafeTrustedCase of [
+      { label: "unknown mapping", patch: { trustedVenueSource: false } },
+      { label: "non-event", patch: { moderationSignals: ["non_event_closure_notice"] } },
+      { label: "past date", patch: { normalizedDate: "2020-12-31" }, eventPatch: { date: "2020-12-31" } },
+      { label: "cross-venue", patch: { sourceGroundingInstagramHandle: "other_venue" } },
+      { label: "fabricated title", patch: { sourceGroundingTitleVerified: false } },
+      { label: "fabricated date", patch: { sourceGroundingDateVerified: false } },
+    ]) {
+      inserted = false;
+      await assert.rejects(
+        () =>
+          createEvent._handler(ctx, {
+            ...groundedPublicFields,
+            title: "Trusted Venue Announcement",
+            date: "2099-12-31",
+            normalizedFieldsJson: JSON.stringify({
+              ...JSON.parse(trustedNormalizedFieldsJson),
+              ...unsafeTrustedCase.patch,
+            }),
+            ...unsafeTrustedCase.eventPatch,
+            serviceSecret,
+          }),
+        /bound to the public fields/,
+        `The real service mutation must reject trusted-source ${unsafeTrustedCase.label}.`,
+      );
+      assert.equal(inserted, false);
+    }
+    persistedSourcePost = trustedOriginalPersistedSourcePost;
+
+    const genericCaption = "A calm evening at Grounded Handler Venue on 31.12.2099.";
+    persistedSourcePost = {
+      ...persistedSourcePost,
+      postId: trustedPostId,
+      instagramPostUrl: trustedPostUrl,
+      caption: genericCaption,
+    };
+    inserted = false;
+    await assert.rejects(
+      () =>
+        createEvent._handler(ctx, {
+          ...groundedPublicFields,
+          title: "Trusted Venue Announcement",
+          date: "2099-12-31",
+          instagramPostId: trustedPostId,
+          instagramPostUrl: trustedPostUrl,
+          sourceCaption: genericCaption,
+          normalizedFieldsJson: JSON.stringify({
+            ...JSON.parse(trustedNormalizedFieldsJson),
+            sourceGroundingSourceCaption: genericCaption,
+          }),
+          serviceSecret,
+        }),
+      /bound to the public fields/,
+      "A generic venue post with a date but no event announcement evidence must not publish.",
+    );
+    assert.equal(inserted, false);
+    persistedSourcePost = trustedOriginalPersistedSourcePost;
+
     await assert.rejects(
       () =>
         createEvent._handler(ctx, {
@@ -8994,10 +9103,166 @@ async function runTransactionalSourceGroundingReprocessQa() {
   }
 }
 
+function runTrustedSourceAnnouncementModerationQa() {
+  const sourceCaption = "Koncert Open Air Festival 31.12.2099 at QA Trusted Venue";
+  const postId = "qa-trusted-source-post";
+  const postUrl = `https://www.instagram.com/p/${postId}/`;
+  const fields = {
+    title: "Open Air Festival",
+    normalizedDate: "2099-12-31",
+    normalizedVenue: "QA Trusted Venue",
+    trustedVenueSource: true,
+    normalizedIsValid: true,
+    titleUsedFallback: false,
+    dateSuspiciousYear: false,
+    dateConfidence: "high",
+    moderationConfidenceScore: 0.72,
+    moderationAutoApproved: true,
+    moderationAutoApproveRule: "trusted_source_event_announcement",
+    moderationPendingReasons: [],
+    // These strict-source holds are intentionally acceptable for an operator-
+    // configured venue source. A non-event hold is not.
+    moderationSignals: ["unverified_core_event_source"],
+    sourceGroundingInstagramHandle: "qa_trusted_venue",
+    sourceGroundingTitleVerified: true,
+    sourceGroundingDateVerified: true,
+    sourceGroundingIdentityContextVerified: true,
+    sourceGroundingSourceCaption: sourceCaption,
+    sourceGroundingInstagramPostId: postId,
+    sourceGroundingInstagramPostUrl: postUrl,
+  };
+  const event = {
+    title: "Open Air Festival",
+    date: "2099-12-31",
+    venue: "QA Trusted Venue",
+    venueInstagramHandle: "@qa_trusted_venue",
+    sourceCaption,
+    instagramPostId: postId,
+    instagramPostUrl: postUrl,
+  };
+
+  assert.equal(
+    hasTrustedSourceEventAnnouncementAutoApproval(JSON.stringify(fields), event),
+    true,
+    "A configured venue source may publish a supported future announcement despite strict coherence holds.",
+  );
+  assert.doesNotThrow(() =>
+    assertServiceCreateEventPolicy("approved", JSON.stringify(fields), event),
+  );
+
+  assert.equal(
+    hasTrustedSourceEventAnnouncementAutoApproval(
+      JSON.stringify({ ...fields, trustedVenueSource: false }),
+      event,
+    ),
+    false,
+    "Unknown/promoter sources must not use the trusted-source relaxation.",
+  );
+  assert.equal(
+    hasTrustedSourceEventAnnouncementAutoApproval(
+      JSON.stringify({ ...fields, normalizedDate: "2020-07-31" }),
+      { ...event, date: "2020-07-31" },
+    ),
+    false,
+    "Past dates remain blocked even for a trusted venue source.",
+  );
+  assert.equal(
+    hasTrustedSourceEventAnnouncementAutoApproval(
+      JSON.stringify({ ...fields, moderationSignals: ["non_event_closure_notice"] }),
+      event,
+    ),
+    false,
+    "A known venue does not turn a non-event notice into an event.",
+  );
+  assert.equal(
+    hasTrustedSourceEventAnnouncementAutoApproval(
+      JSON.stringify({ ...fields, sourceGroundingTitleVerified: false }),
+      event,
+    ),
+    false,
+    "The venue mapping cannot replace title evidence from the post.",
+  );
+  assert.equal(
+    hasTrustedSourceEventAnnouncementAutoApproval(
+      JSON.stringify({ ...fields, dateSuspiciousYear: true }),
+      event,
+    ),
+    false,
+    "Suspicious dates remain blocked.",
+  );
+
+  const futureDateValue = new Date();
+  futureDateValue.setUTCDate(futureDateValue.getUTCDate() + 7);
+  const futureDate = futureDateValue.toISOString().slice(0, 10);
+  const futureDateParts = datePartsForIsoDate(futureDate);
+  const post = makeInstagramPost({
+    username: "qa_trusted_venue",
+    postedAt: new Date().toISOString(),
+    caption: `Koncert Trusted Poster Night ${futureDateParts.day} ${futureDateParts.monthAbbr} ${futureDate.slice(0, 4)}`,
+  });
+  const extracted = makeExtractedEvent({
+    title: "Trusted Poster Night",
+    date: futureDate,
+    venue: "QA Trusted Venue",
+    confidence: 0.9,
+    artists: [],
+    time: "",
+  });
+  const [unknownRoleResult] = prepareEventsForInsert(
+    post,
+    extracted,
+    null,
+    { qa_trusted_venue: "QA Trusted Venue" },
+    {},
+    { qa_trusted_venue: "QA Trusted Venue" },
+    { sourceRolesByHandle: { qa_trusted_venue: "unknown" }, eventDateFilterNow: new Date() },
+  );
+  assert.equal(unknownRoleResult.kind, "ok", JSON.stringify(unknownRoleResult));
+  assert.equal(
+    unknownRoleResult.normalizedFields.trustedVenueSource,
+    true,
+    "An exact configured canonical mapping works during unknown-role migration.",
+  );
+  assert.equal(unknownRoleResult.event.status, "approved", JSON.stringify(unknownRoleResult));
+
+  const [promoterResult] = prepareEventsForInsert(
+    post,
+    extracted,
+    null,
+    { qa_trusted_venue: "QA Trusted Venue" },
+    {},
+    { qa_trusted_venue: "QA Trusted Venue" },
+    { sourceRolesByHandle: { qa_trusted_venue: "promoter" }, eventDateFilterNow: new Date() },
+  );
+  assert.equal(promoterResult.kind, "ok");
+  assert.equal(promoterResult.normalizedFields.trustedVenueSource, false);
+
+  const [genericSaveTheDate] = prepareEventsForInsert(
+    makeInstagramPost({
+      username: "qa_trusted_venue",
+      postedAt: new Date().toISOString(),
+      caption: `Save the date: ${futureDateParts.day} ${futureDateParts.monthAbbr}.`,
+    }),
+    extracted,
+    null,
+    { qa_trusted_venue: "QA Trusted Venue" },
+    {},
+    { qa_trusted_venue: "QA Trusted Venue" },
+    { sourceRolesByHandle: { qa_trusted_venue: "unknown" }, eventDateFilterNow: new Date() },
+  );
+  assert.equal(genericSaveTheDate.kind, "ok");
+  assert.equal(
+    genericSaveTheDate.event.status,
+    "pending",
+    "A generic Save-the-date post cannot use venue context to invent an event title.",
+  );
+}
+
 runPromptQa();
 runVenueQa();
 runArtistAndDescriptionQa();
 runConfidenceQa();
+runTrustedSourceAnnouncementModerationQa();
 runVideoModerationQa();
 runUnverifiedPosterScheduleModerationQa();
 runHashtagOnlyScheduleIdentityQa();

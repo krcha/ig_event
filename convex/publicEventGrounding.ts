@@ -4,6 +4,7 @@ import { isCaptionSourceCoherentWithEvent } from "../lib/events/event-source-app
 import {
   hasCompleteSourceGroundedAutoApproval,
   hasCompleteSourceGroundingAttestation,
+  hasTrustedSourceEventAnnouncementAutoApproval,
 } from "../lib/events/event-update-precondition";
 import { normalizeInstagramPostUrl } from "../lib/images/apify-images";
 import { normalizeHandle } from "../lib/pipeline/venue-normalization";
@@ -52,6 +53,22 @@ export async function isCanonicallyGroundedApprovedEvent(
       venueInstagramHandle: event.venueInstagramHandle,
     },
   );
+  const trustedSourceAuthorized = hasTrustedSourceEventAnnouncementAutoApproval(
+    event.normalizedFieldsJson,
+    {
+      title: event.title,
+      date: event.date,
+      time: event.time,
+      venue: event.venue,
+      artists: event.artists,
+      imageUrl: event.imageUrl,
+      instagramPostId: event.instagramPostId,
+      instagramPostUrl: event.instagramPostUrl,
+      sourceCaption: event.sourceCaption,
+      sourcePostedAt: event.sourcePostedAt,
+      venueInstagramHandle: event.venueInstagramHandle,
+    },
+  );
   const humanAuthorized =
     typeof event.reviewedAt === "number" &&
     Number.isFinite(event.reviewedAt) &&
@@ -70,7 +87,7 @@ export async function isCanonicallyGroundedApprovedEvent(
       sourcePostedAt: event.sourcePostedAt,
       venueInstagramHandle: event.venueInstagramHandle,
     });
-  if (!machineAuthorized && !humanAuthorized) {
+  if (!machineAuthorized && !trustedSourceAuthorized && !humanAuthorized) {
     return false;
   }
 

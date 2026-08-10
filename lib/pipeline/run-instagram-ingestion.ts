@@ -756,6 +756,12 @@ const DEFAULT_EVENT_TIMEZONE = "Europe/Belgrade";
 const DUPLICATE_TEXT_TOKEN_SIMILARITY_THRESHOLD = 0.72;
 const DUPLICATE_VENUE_TOKEN_SIMILARITY_THRESHOLD = 0.72;
 const CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE = 0.8;
+// A configured venue account is already a strong, operator-owned venue
+// assertion. Keep the model's title/date requirements, but do not make a
+// clear upcoming announcement from that account wait solely because the
+// caption cannot prove every extracted field verbatim (a common poster/403
+// path). Duplicate prevention remains at the Convex write boundary.
+const TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_MIN_CONFIDENCE = 0.65;
 
 type ModerationDecision = {
   confidenceScore: number | null;
@@ -765,6 +771,7 @@ type ModerationDecision = {
     | "caption_only_video_core_fields"
     | "core_event_fields"
     | "source_grounded_core_event_fields"
+    | "trusted_source_event_announcement"
     | null;
   pendingReasons: string[];
   signals: string[];
@@ -812,6 +819,11 @@ function buildModerationDecision(options: {
   extractionMode: "poster" | "caption_only";
   isVideoPost: boolean;
   sourceGroundingVerified: boolean;
+  sourceGroundingTitleVerified: boolean;
+  sourceGroundingDateVerified: boolean;
+  sourceGroundingIdentityContextVerified: boolean;
+  approvalCaptionSourceCoherent: boolean;
+  trustedVenueSource: boolean;
   autoApprovalBlockers?: string[];
 }): ModerationDecision {
   const confidenceScore = calculateModerationConfidenceScore(options.baseConfidenceScore, {
@@ -821,7 +833,7 @@ function buildModerationDecision(options: {
   });
   const autoApprovalBlockers = [...new Set(options.autoApprovalBlockers ?? [])];
   const timeTbdApplies = options.missingTime && options.hasDate;
-  const autoApproved =
+  const strictSourceGroundedApproval =
     options.sourceGroundingVerified &&
     autoApprovalBlockers.length === 0 &&
     options.hasDate &&
@@ -832,7 +844,30 @@ function buildModerationDecision(options: {
     confidenceScore !== null &&
     confidenceScore >= CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD &&
     (!options.missingImage || options.allowMissingImage);
-  const autoApproveRule = autoApproved ? "source_grounded_core_event_fields" : null;
+  const trustedSourceOnlyBlockers = new Set([
+    UNVERIFIED_CORE_EVENT_SOURCE_REASON,
+    "unverified_occurrence_plan",
+  ]);
+  const trustedSourceAnnouncementApproval =
+    options.trustedVenueSource &&
+    autoApprovalBlockers.every((blocker) => trustedSourceOnlyBlockers.has(blocker)) &&
+    options.hasDate &&
+    options.hasVenue &&
+    !options.titleUsedFallback &&
+    !options.suspiciousYear &&
+    options.sourceGroundingTitleVerified &&
+    options.sourceGroundingDateVerified &&
+    options.sourceGroundingIdentityContextVerified &&
+    options.approvalCaptionSourceCoherent &&
+    (options.dateConfidence === "high" || options.dateConfidence === "medium") &&
+    confidenceScore !== null &&
+    confidenceScore >= TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_MIN_CONFIDENCE;
+  const autoApproved = strictSourceGroundedApproval || trustedSourceAnnouncementApproval;
+  const autoApproveRule = strictSourceGroundedApproval
+    ? "source_grounded_core_event_fields"
+    : trustedSourceAnnouncementApproval
+      ? "trusted_source_event_announcement"
+      : null;
   const signals = [
     ...(!autoApproved ? [HUMAN_REVIEW_REQUIRED_REASON] : []),
     ...(options.missingImage ? ["missing_image"] : []),
@@ -8273,6 +8308,26 @@ export function prepareEventsForInsert(
     configuredVenueNamesByHandle,
     options.sourceRolesByHandle,
   );
+  const normalizedSourceHandle = normalizeHandle(post.username);
+  const sourceRole = options.sourceRolesByHandle?.[normalizedSourceHandle];
+  const configuredVenueName = canonicalVenueNamesByHandle[normalizedSourceHandle];
+  const rawModelVenue = normalizeString(extracted.venue);
+  const normalizedRawModelVenue = rawModelVenue
+    ? canonicalizeVenueName(rawModelVenue, canonicalVenueNamesByHandle) ?? rawModelVenue
+    : "";
+  // Only an explicitly configured venue account can use this relaxed
+  // publication path. Promoters and unknown accounts must keep the stricter
+  // source-grounding rules because their posts can advertise another venue.
+  const trustedVenueSource =
+    // Older source records can still be `unknown`; an exact configured
+    // canonical handle mapping is sufficient. Promoter accounts are never
+    // trusted as the venue for this relaxed path.
+    (sourceRole === "venue" || sourceRole === "unknown") &&
+    Boolean(configuredVenueName) &&
+    (!normalizedRawModelVenue ||
+      normalizeString(normalizedRawModelVenue) === normalizeString(configuredVenueName)) &&
+    normalizeString(venueNormalization.venue) ===
+      normalizeString(configuredVenueName);
   const titleNormalization = normalizeEventTitle(
     post,
     extracted,
@@ -8417,6 +8472,7 @@ export function prepareEventsForInsert(
     sourceGroundingInstagramPostId: normalizeString(post.postId) || null,
     sourceGroundingInstagramPostUrl: normalizeString(post.instagramPostUrl) || null,
     sourceGroundingInstagramHandle: normalizeHandle(post.username) || null,
+    trustedVenueSource,
     fieldConfirmation: extracted.field_confirmation,
     extractionFieldEvidence: buildExtractionFieldEvidence(extracted.field_confirmation),
     postTimestamp: post.postedAt,
@@ -8749,6 +8805,11 @@ export function prepareEventsForInsert(
       extractionMode,
       isVideoPost: isCaptionOnlyVideo,
       sourceGroundingVerified: sourceGrounding.verified,
+      sourceGroundingTitleVerified: sourceGrounding.titleVerified,
+      sourceGroundingDateVerified: sourceGrounding.dateVerified,
+      sourceGroundingIdentityContextVerified: sourceGrounding.identityContextVerified,
+      approvalCaptionSourceCoherent,
+      trustedVenueSource,
       autoApprovalBlockers,
     });
     const eventStatus: EventStatus = moderationDecision.autoApproved ? "approved" : "pending";
@@ -8796,11 +8857,14 @@ export function prepareEventsForInsert(
       moderationAutoApproveThreshold: AUTO_APPROVE_CONFIDENCE_THRESHOLD,
       moderationCoreEventAutoApproveThreshold: CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
       moderationCaptionOnlyVideoMinConfidence: CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE,
+      moderationTrustedSourceEventAnnouncementMinConfidence:
+        TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_MIN_CONFIDENCE,
       sourceGroundingVersion: 4,
       sourceGroundingEvidence: "instagram_caption",
       approvalTitleSensible,
       approvalCaptionSourceCoherent,
       sourceGroundingVerified: sourceGrounding.verified,
+      trustedVenueSource,
       sourceGroundingTitleVerified: sourceGrounding.titleVerified,
       sourceGroundingDateVerified: sourceGrounding.dateVerified,
       sourceGroundingIdentityVerified: sourceGrounding.identityVerified,
