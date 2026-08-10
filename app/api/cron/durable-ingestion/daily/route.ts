@@ -8,6 +8,7 @@ import { getActiveVenueHandles } from "@/lib/pipeline/run-instagram-ingestion";
 export const dynamic = "force-dynamic";
 
 const queueDaily = "durableIngestionRuns:queueRun" as unknown as FunctionReference<"mutation">;
+const buildQueueBatch = "durableIngestionRuns:buildQueueBatch" as unknown as FunctionReference<"mutation">;
 
 function snapshotKey(handles: string[]): string {
   return createHash("sha256").update(handles.join("\n")).digest("hex");
@@ -34,7 +35,20 @@ export async function POST(request: Request) {
       resumeDaily: true,
       serviceSecret,
     });
-    return NextResponse.json({ queuedOrResumed: true, mode: "daily", runId, selectedHandleCount: handles.length }, { status: 202 });
+    let built: { builtCount: number; selectedHandleCount: number; complete: boolean } | null = null;
+    for (let attempt = 0; attempt < 128; attempt += 1) {
+      built = await convex.mutation(buildQueueBatch, { runId, serviceSecret }) as { builtCount: number; selectedHandleCount: number; complete: boolean };
+      if (built.complete) break;
+    }
+    const finalBuild = built;
+    return NextResponse.json({
+      queuedOrResumed: finalBuild?.complete === true,
+      building: finalBuild?.complete !== true,
+      mode: "daily",
+      runId,
+      selectedHandleCount: handles.length,
+      builtCount: finalBuild?.builtCount ?? 0,
+    }, { status: 202 });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Could not queue daily durable ingestion." },

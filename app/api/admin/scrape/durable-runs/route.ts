@@ -11,6 +11,8 @@ import { getActiveVenueHandles } from "@/lib/pipeline/run-instagram-ingestion";
 
 const queueRunMutation =
   "durableIngestionRuns:queueRun" as unknown as FunctionReference<"mutation">;
+const buildQueueBatchMutation =
+  "durableIngestionRuns:buildQueueBatch" as unknown as FunctionReference<"mutation">;
 
 type Body = { mode?: DurableIngestionMode; handles?: string[] };
 
@@ -51,7 +53,19 @@ export async function POST(request: Request) {
       sourceSnapshotKey: snapshotKey(handles),
       handles,
     });
-    return NextResponse.json({ queued: true, runId, mode: body.mode, selectedHandleCount: handles.length }, { status: 202 });
+    // Queue construction is bounded inside Convex so a 633-profile snapshot
+    // cannot hit an isolate timeout. This route owns the short resumable loop;
+    // execute workers are not started until `complete` is true.
+    let built: { builtCount: number; selectedHandleCount: number; complete: boolean } | null = null;
+    for (let attempt = 0; attempt < 128; attempt += 1) {
+      built = await convex.mutation(buildQueueBatchMutation, { runId }) as { builtCount: number; selectedHandleCount: number; complete: boolean };
+      if (built.complete) break;
+    }
+    const finalBuild = built;
+    if (!finalBuild || !finalBuild.complete) {
+      return NextResponse.json({ queued: false, building: true, runId, mode: body.mode, selectedHandleCount: handles.length, builtCount: finalBuild?.builtCount ?? 0 }, { status: 202 });
+    }
+    return NextResponse.json({ queued: true, runId, mode: body.mode, selectedHandleCount: handles.length, builtCount: finalBuild.builtCount }, { status: 202 });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Could not queue durable ingestion run." }, { status: 500 });
   }

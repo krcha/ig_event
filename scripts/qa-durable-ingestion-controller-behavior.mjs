@@ -8,6 +8,7 @@ process.env.CRON_SECRET = "qa-durable-controller-secret";
 
 const {
   queueRun,
+  buildQueueBatch,
   executeNext,
   completeReceipt,
   releaseReceiptForRetry,
@@ -91,6 +92,24 @@ function ctx(db) {
 }
 
 async function queue(db, mode, handles, { resumeDaily = false } = {}) {
+  const runId = await queueRun._handler(ctx(db), {
+    mode,
+    sourceSnapshotKey: `snapshot:${mode}`,
+    handles,
+    resumeDaily,
+    serviceSecret: process.env.CRON_SECRET,
+  });
+  for (let attempt = 0; attempt < 128; attempt += 1) {
+    const result = await buildQueueBatch._handler(ctx(db), {
+      runId,
+      serviceSecret: process.env.CRON_SECRET,
+    });
+    if (result.complete) return runId;
+  }
+  throw new Error("Queue construction did not finish in bounded QA loop.");
+}
+
+async function createBuildingRun(db, mode, handles, { resumeDaily = false } = {}) {
   return queueRun._handler(ctx(db), {
     mode,
     sourceSnapshotKey: `snapshot:${mode}`,
@@ -137,6 +156,30 @@ async function markPersisted(db, runId, receiptId, workerId, postCount) {
 }
 
 const handles = Array.from({ length: 632 }, (_, index) => `venue_${String(index).padStart(3, "0")}`);
+
+// A large snapshot is created as a durable parent first, then materialized in
+// small idempotent transactions. A crash between batches neither creates a
+// second run nor permits an executor to make a provider call early.
+{
+  const db = new MemoryDb();
+  const fullHandles = Array.from({ length: 633 }, (_, index) => `full_${String(index).padStart(3, "0")}`);
+  const runId = await createBuildingRun(db, "catch_up", fullHandles);
+  assert.equal((await db.get(runId)).status, "building");
+  assert.equal(await claim(db, runId, "must-not-fetch"), null, "building run must not expose provider work");
+  const first = await buildQueueBatch._handler(ctx(db), { runId, serviceSecret: process.env.CRON_SECRET });
+  assert.equal(first.builtCount, 32, "construction must be bounded");
+  assert.equal(db.rows("ingestionRunHandleReceipts").length, 32);
+  // Retrying the initial queue call after a client crash returns this same
+  // frozen parent. It must not create a second receipt set.
+  assert.equal(await createBuildingRun(db, "catch_up", fullHandles), runId);
+  let built = first;
+  while (!built.complete) {
+    built = await buildQueueBatch._handler(ctx(db), { runId, serviceSecret: process.env.CRON_SECRET });
+  }
+  assert.equal(built.builtCount, 633);
+  assert.equal(db.rows("ingestionRunHandleReceipts").length, 633, "exact snapshot receipt coverage is required before execution");
+  assert.equal((await db.get(runId)).status, "queued");
+}
 
 // The canary contract is exact: sixteen frozen rows and no room for a broad
 // paid request to appear because a caller supplied too many handles.

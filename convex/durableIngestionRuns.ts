@@ -7,6 +7,10 @@ import { requireAdminOrServiceSecret } from "./authz";
 // counter (and therefore fighting Convex's optimistic-concurrency retries).
 const MAX_HANDLES_PER_CHUNK = 1;
 const MAX_HANDLES_PER_RUN = 2_000;
+// Convex mutations are deliberately kept small.  The HTTP route repeatedly
+// calls buildQueueBatch; provider execution remains impossible until the
+// frozen snapshot is fully materialized.
+const QUEUE_BUILD_BATCH_SIZE = 32;
 const MAX_CONCURRENCY = 8;
 const COST_PER_PROFILE_MICROS = 10_000;
 const LEASE_MS = 10 * 60 * 1000;
@@ -144,11 +148,11 @@ export const queueRun = mutation({
     assertModeScope(args.mode, handles, controls);
     if (!args.sourceSnapshotKey.trim()) throw new Error("A frozen source snapshot key is required.");
 
-    // Daily and catch-up must never overlap. The two indexed reads are bounded
+    // Building, daily and catch-up runs must never overlap. The indexed reads are bounded
     // and make a second paid run an explicit operator decision instead of a
     // hidden double-spend race.
     const active = (await Promise.all(
-      (["queued", "running"] as const).map((status) =>
+      (["building", "queued", "running"] as const).map((status) =>
         ctx.db
           .query("ingestionRuns")
           .withIndex("by_status_createdAt", (q) => q.eq("status", status))
@@ -158,17 +162,41 @@ export const queueRun = mutation({
     )).flat();
     if (active.length > 0) {
       const existingDaily = active.length === 1 && active[0].mode === "daily";
+      // Queue requests may be retried by the admin UI after a network error.
+      // For an identical frozen canary, return the original queued run instead
+      // of making the caller interpret the overlap guard as a server failure.
+      // This is deliberately limited to the same snapshot and handle count;
+      // a changed selection must remain an explicit new operator action.
+      const existingCanary =
+        active.length === 1 &&
+        active[0].mode === "canary" &&
+        active[0].sourceSnapshotKey === args.sourceSnapshotKey.trim() &&
+        active[0].selectedHandleCount === handles.length;
+      const existingEquivalent =
+        active.length === 1 &&
+        active[0].mode === args.mode &&
+        active[0].sourceSnapshotKey === args.sourceSnapshotKey.trim() &&
+        active[0].selectedHandleCount === handles.length;
       if (args.mode === "daily" && args.resumeDaily === true && existingDaily) {
         return active[0]._id;
       }
+      if (args.mode === "canary" && existingCanary) {
+        return active[0]._id;
+      }
+      // Network retries of a catch-up queue request must continue materializing
+      // the same frozen run, rather than fail with an overlap error or create
+      // a second snapshot.
+      if (existingEquivalent) return active[0]._id;
       throw new Error("Another durable ingestion run is already active.");
     }
 
     const now = Date.now();
     const runId = await ctx.db.insert("ingestionRuns", {
       mode: args.mode,
-      status: "queued",
+      status: "building",
       sourceSnapshotKey: args.sourceSnapshotKey.trim(),
+      selectedHandles: handles,
+      queueBuildCursor: 0,
       selectedHandleCount: handles.length,
       terminalReceiptCount: 0,
       failedReceiptCount: 0,
@@ -180,32 +208,67 @@ export const queueRun = mutation({
       createdAt: now,
       updatedAt: now,
     });
-    for (let start = 0, ordinal = 0; start < handles.length; start += MAX_HANDLES_PER_CHUNK, ordinal += 1) {
-      const chunkHandles = handles.slice(start, start + MAX_HANDLES_PER_CHUNK);
+    return runId;
+  },
+});
+
+/**
+ * Materialize one bounded slice of the already-frozen parent snapshot. This
+ * is idempotent: Convex commits the receipt inserts and cursor patch together,
+ * so a crash or HTTP retry either repeats no work or advances from the next
+ * ordinal. Execution refuses `building` runs, therefore no provider request
+ * can escape before every selected handle has an auditable receipt.
+ */
+export const buildQueueBatch = mutation({
+  args: {
+    runId: v.id("ingestionRuns"),
+    serviceSecret: v.optional(v.string()),
+  },
+  returns: v.object({ runId: v.id("ingestionRuns"), builtCount: v.number(), selectedHandleCount: v.number(), complete: v.boolean() }),
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const run = await ctx.db.get(args.runId);
+    if (!run) throw new Error("Durable ingestion run not found.");
+    const handles = run.selectedHandles;
+    if (!handles || handles.length !== run.selectedHandleCount) {
+      throw new Error("Run has no valid frozen source snapshot.");
+    }
+    const cursor = Math.max(0, Math.min(handles.length, Math.trunc(run.queueBuildCursor ?? 0)));
+    if (run.status !== "building") {
+      return { runId: run._id, builtCount: cursor, selectedHandleCount: handles.length, complete: run.queueBuildCompletedAt !== undefined };
+    }
+    const end = Math.min(handles.length, cursor + QUEUE_BUILD_BATCH_SIZE);
+    const now = Date.now();
+    for (let ordinal = cursor; ordinal < end; ordinal += 1) {
+      const handle = handles[ordinal];
       const chunkId = await ctx.db.insert("ingestionRunChunks", {
-        runId,
+        runId: run._id,
         ordinal,
-        handleCount: chunkHandles.length,
+        handleCount: 1,
         terminalReceiptCount: 0,
         status: "queued",
         createdAt: now,
         updatedAt: now,
       });
-      for (const handle of chunkHandles) {
-        await ctx.db.insert("ingestionRunHandleReceipts", {
-          runId,
+      await ctx.db.insert("ingestionRunHandleReceipts", {
+          runId: run._id,
           chunkId,
           handle,
-        status: "queued",
-        attemptCount: 0,
-        providerAttemptCount: 0,
-        retryNotBeforeAt: now,
+          status: "queued",
+          attemptCount: 0,
+          providerAttemptCount: 0,
+          retryNotBeforeAt: now,
           createdAt: now,
           updatedAt: now,
-        });
-      }
+      });
     }
-    return runId;
+    const complete = end === handles.length;
+    await ctx.db.patch(run._id, {
+      queueBuildCursor: end,
+      ...(complete ? { status: "queued", queueBuildCompletedAt: now } : {}),
+      updatedAt: now,
+    });
+    return { runId: run._id, builtCount: end, selectedHandleCount: handles.length, complete };
   },
 });
 
@@ -232,6 +295,8 @@ export const probeRun = query({
       failedReceiptCount: counts.failedReceiptCount,
       inFlightCount: inFlightCount.length,
       controls: run.controls,
+      queueBuildCursor: run.queueBuildCursor ?? 0,
+      queueReady: run.queueBuildCompletedAt !== undefined,
       complete: counts.terminalReceiptCount === run.selectedHandleCount,
     };
   },
@@ -346,7 +411,7 @@ export const executeNext = mutation({
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const run = await ctx.db.get(args.runId);
-    if (!run || run.status === "completed" || run.status === "failed") return null;
+    if (!run || run.status === "building" || run.status === "completed" || run.status === "failed" || run.queueBuildCompletedAt === undefined) return null;
     const now = Date.now();
     // Recover one expired receipt before looking at the semaphore. Without
     // this a crashed set of eight workers could hold the run forever.

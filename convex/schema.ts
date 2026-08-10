@@ -22,6 +22,7 @@ const durableIngestionRunMode = v.union(
   v.literal("daily"),
 );
 const durableIngestionRunStatus = v.union(
+  v.literal("building"),
   v.literal("queued"),
   v.literal("running"),
   v.literal("completed"),
@@ -476,6 +477,12 @@ export default defineSchema({
     mode: durableIngestionRunMode,
     status: durableIngestionRunStatus,
     sourceSnapshotKey: v.string(),
+    // The selected source snapshot is persisted on the parent before any
+    // receipt is created.  Large runs are then materialized in bounded,
+    // resumable batches without ever re-reading the active source list.
+    selectedHandles: v.optional(v.array(v.string())),
+    queueBuildCursor: v.optional(v.number()),
+    queueBuildCompletedAt: v.optional(v.number()),
     selectedHandleCount: v.number(),
     terminalReceiptCount: v.number(),
     failedReceiptCount: v.number(),
