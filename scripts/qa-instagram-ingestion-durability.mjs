@@ -23,6 +23,8 @@ import {
   releasePaidFetchLease,
   upsertManyByHandle,
 } from "../convex/scrapedPosts.ts";
+import { createEvent } from "../convex/events.ts";
+import { refreshAndAttach } from "../convex/mediaAssets.ts";
 import {
   isPermanentRemoteMediaFailure,
   resolvePaidFetchLeaseAfterBacklogMaintenance,
@@ -925,6 +927,120 @@ try {
   assert.equal(dueClaim.claimed, true);
   assert.equal(retryPost.blocksPaidFetch, true);
   assert.equal(retryPost.processingRetryAt, undefined);
+
+  // Durable receipts carry an exact scraped-post ID and source revision all
+  // the way through the post fence. Even if legacy duplicate rows share both
+  // public identities, claim and terminal result must mutate only that row.
+  const { db: duplicateDb, tables: duplicateTables } = createDb({
+    scrapedPosts: [
+      {
+        _id: "duplicate-wrong-row",
+        handle: "source.duplicate",
+        postId: "duplicate-post",
+        instagramPostUrl: "https://www.instagram.com/p/duplicate-post/",
+        sourceRevision: 1,
+        processingStatus: "pending",
+        processingAttempts: 0,
+        blocksPaidFetch: true,
+      },
+      {
+        _id: "duplicate-exact-row",
+        handle: "source.duplicate",
+        postId: "duplicate-post",
+        instagramPostUrl: "https://www.instagram.com/p/duplicate-post/",
+        sourceRevision: 2,
+        processingStatus: "pending",
+        processingAttempts: 0,
+        blocksPaidFetch: true,
+      },
+    ],
+    mediaAssets: [
+      {
+        _id: "duplicate-media-asset",
+        storageId: "duplicate-storage",
+        url: "https://example.com/original.jpg",
+        checksumSha256: "duplicate-checksum",
+      },
+    ],
+    events: [],
+    eventAuditLog: [],
+    venues: [],
+  });
+  const duplicateCtx = { auth: { getUserIdentity: async () => null }, db: duplicateDb };
+  assert.deepEqual(
+    await claimProcessing._handler(duplicateCtx, {
+      handle: "source.duplicate",
+      scrapedPostId: "duplicate-exact-row",
+      postId: "duplicate-post",
+      instagramPostUrl: "https://www.instagram.com/p/duplicate-post/",
+      owner: "duplicate-exact-owner",
+      expectedSourceRevision: 1,
+      serviceSecret: "qa-durability-secret",
+    }),
+    { claimed: false, reason: "source_revision_mismatch", sourceRevision: 2 },
+    "an intervening upsert must be rejected before an older loaded payload can claim the row",
+  );
+  const exactDuplicateClaim = await claimProcessing._handler(duplicateCtx, {
+    handle: "source.duplicate",
+    scrapedPostId: "duplicate-exact-row",
+    postId: "duplicate-post",
+    instagramPostUrl: "https://www.instagram.com/p/duplicate-post/",
+    owner: "duplicate-exact-owner",
+    expectedSourceRevision: 2,
+    serviceSecret: "qa-durability-secret",
+  });
+  assert.equal(exactDuplicateClaim.claimed, true);
+  assert.equal(duplicateTables.scrapedPosts[0].processingStatus, "pending");
+  assert.equal(duplicateTables.scrapedPosts[1].processingStatus, "processing");
+  const exactFence = {
+    handle: "source.duplicate",
+    scrapedPostId: "duplicate-exact-row",
+    postId: "duplicate-post",
+    instagramPostUrl: "https://www.instagram.com/p/duplicate-post/",
+    owner: "duplicate-exact-owner",
+    sourceRevision: 2,
+  };
+  await createEvent._handler(duplicateCtx, {
+    title: "Exact duplicate-row event",
+    date: "2026-08-15",
+    venue: "Duplicate venue",
+    artists: [],
+    eventType: "other",
+    instagramPostId: "duplicate-post",
+    instagramPostUrl: "https://www.instagram.com/p/duplicate-post/",
+    status: "pending",
+    processingFence: exactFence,
+    serviceSecret: "qa-durability-secret",
+  });
+  await refreshAndAttach._handler(duplicateCtx, {
+    postId: "duplicate-post",
+    instagramPostUrl: "https://www.instagram.com/p/duplicate-post/",
+    assetId: "duplicate-media-asset",
+    storageId: "duplicate-storage",
+    url: "https://example.com/exact.jpg",
+    actor: "qa-exact-fence",
+    processingFence: exactFence,
+  });
+  assert.equal(
+    duplicateTables.scrapedPosts[0].imageStorageId,
+    undefined,
+    "media fence must not mutate a legacy duplicate row",
+  );
+  assert.equal(duplicateTables.scrapedPosts[1].imageStorageId, "duplicate-storage");
+  await recordProcessingResult._handler(duplicateCtx, {
+    handle: "source.duplicate",
+    scrapedPostId: "duplicate-exact-row",
+    postId: "duplicate-post",
+    instagramPostUrl: "https://www.instagram.com/p/duplicate-post/",
+    status: "completed",
+    outcome: "terminal_no_event",
+    owner: "duplicate-exact-owner",
+    sourceRevision: 2,
+    serviceSecret: "qa-durability-secret",
+  });
+  assert.equal(duplicateTables.scrapedPosts[0].processingStatus, "pending");
+  assert.equal(duplicateTables.scrapedPosts[1].processingStatus, "completed");
+  assert.equal(duplicateTables.scrapedPosts[1].processingOutcome, "terminal_no_event");
 
   const now = Date.now();
   const cutoff = now - 10 * 24 * 60 * 60_000;

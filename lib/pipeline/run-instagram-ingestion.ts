@@ -78,6 +78,7 @@ import {
 } from "@/lib/events/deduplication-shared";
 import { loadVenueNameOverridesByHandle } from "@/lib/pipeline/venue-name-overrides";
 import { loadOperationalVenueRecords } from "@/lib/pipeline/operational-venues";
+import { isTransientSavedPostProcessingError } from "@/lib/pipeline/durable-ingestion-execute";
 import { getRequiredEnv } from "@/lib/utils/env";
 import { hasCompleteSourceGroundedAutoApproval } from "@/lib/events/event-update-precondition";
 import { isSensibleEventTitleForApproval } from "@/lib/events/event-title-approval";
@@ -513,6 +514,7 @@ type PrepareEventResult =
 
 type SourceProcessingFence = {
   handle: string;
+  scrapedPostId?: string;
   postId?: string;
   instagramPostUrl?: string;
   owner: string;
@@ -1282,6 +1284,9 @@ type SavedScrapedPostRecord = {
   processingOutcome?: string;
   processingError?: string;
   processingRetryAt?: number;
+  processingLeaseOwner?: string;
+  processingLeaseExpiresAt?: number;
+  sourceRevision?: number;
   lastProcessedAt?: number;
   createdAt: number;
   updatedAt: number;
@@ -4625,13 +4630,18 @@ export async function persistScrapedPostsForHandle(
   posts: InstagramScrapedPost[],
   serviceSecret: string,
   fetchLeaseOwner?: string,
-): Promise<void> {
+): Promise<Array<{ scrapedPostId: string; postId: string; sourceRevision: number }>> {
   if (posts.length === 0) {
-    return;
+    return [];
   }
 
+  const persistedPosts: Array<{
+    scrapedPostId: string;
+    postId: string;
+    sourceRevision: number;
+  }> = [];
   for (const postBatch of chunkItems(posts, SCRAPED_POST_UPSERT_BATCH_SIZE)) {
-    await client.mutation(
+    const persistedBatch = await client.mutation(
       upsertScrapedPostsByHandleMutation,
       withServiceSecret(
         {
@@ -4653,8 +4663,10 @@ export async function persistScrapedPostsForHandle(
         },
         serviceSecret,
       ),
-    );
+    ) as Array<{ scrapedPostId: string; postId: string; sourceRevision: number }>;
+    persistedPosts.push(...persistedBatch);
   }
+  return persistedPosts;
 }
 
 async function loadSavedScrapedPostsForHandle(
@@ -4782,6 +4794,18 @@ async function loadScrapedPostsByIds(
   return posts
     .map(mapSavedScrapedPostToInstagramPost)
     .sort((left, right) => comparePostedAtDescending(left.postedAt, right.postedAt));
+}
+
+async function loadSavedScrapedPostRecordById(
+  client: ConvexHttpClient,
+  id: string,
+  serviceSecret: string,
+): Promise<SavedScrapedPostRecord | null> {
+  const posts = (await client.query(
+    getScrapedPostsManyByIdsQuery,
+    withServiceSecret({ ids: [id] }, serviceSecret),
+  )) as SavedScrapedPostRecord[];
+  return posts[0] ?? null;
 }
 
 async function loadLatestSavedScrapedPostForHandle(
@@ -9399,6 +9423,7 @@ async function processIngestionPost(
                 withServiceSecret(
                   {
                     handle: processingFence.handle,
+                    scrapedPostId: processingFence.scrapedPostId,
                     postId: processingFence.postId,
                     instagramPostUrl: processingFence.instagramPostUrl,
                     owner: processingFence.owner,
@@ -9428,6 +9453,7 @@ async function processIngestionPost(
         withServiceSecret(
           {
             handle: processingFence.handle,
+            scrapedPostId: processingFence.scrapedPostId,
             postId: processingFence.postId,
             instagramPostUrl: processingFence.instagramPostUrl,
             owner: processingFence.owner,
@@ -9476,6 +9502,7 @@ async function processIngestionPost(
           withServiceSecret(
             {
               handle: processingFence.handle,
+              scrapedPostId: processingFence.scrapedPostId,
               postId: processingFence.postId,
               instagramPostUrl: processingFence.instagramPostUrl,
               owner: processingFence.owner,
@@ -10238,6 +10265,8 @@ type ProcessLoadedPostsForHandleOptions = {
   seenSourceKeys: string[];
   serviceSecret: string;
   workOwner: string;
+  scrapedPostId?: string;
+  expectedSourceRevision?: number;
 } & IngestionVenueContext;
 
 async function processLoadedPostsForHandle(
@@ -10255,6 +10284,8 @@ async function processLoadedPostsForHandle(
     sourceRolesByHandle,
     serviceSecret,
     workOwner,
+    scrapedPostId,
+    expectedSourceRevision,
   } = options;
 
   for (const rawPost of posts) {
@@ -10265,10 +10296,12 @@ async function processLoadedPostsForHandle(
       withServiceSecret(
         {
           handle,
+          ...(scrapedPostId ? { scrapedPostId } : {}),
           postId: rawPost.postId || undefined,
           instagramPostUrl: rawPost.instagramPostUrl || undefined,
           owner: workOwner,
           leaseMs: 15 * 60_000,
+          ...(expectedSourceRevision === undefined ? {} : { expectedSourceRevision }),
         },
         serviceSecret,
       ),
@@ -10293,11 +10326,16 @@ async function processLoadedPostsForHandle(
         summary.errors.push(
           `Saved post processing is ${claim.reason}; retry this saved post later.`,
         );
+      } else if (claim.reason === "source_revision_mismatch") {
+        summary.errors.push(
+          "Durable saved-post source revision changed before processing; exact recovery is required.",
+        );
       }
       continue;
     }
     const processingFence: SourceProcessingFence = {
       handle,
+      ...(scrapedPostId ? { scrapedPostId } : {}),
       ...(rawPost.postId ? { postId: rawPost.postId } : {}),
       ...(rawPost.instagramPostUrl
         ? { instagramPostUrl: rawPost.instagramPostUrl }
@@ -10364,6 +10402,7 @@ async function processLoadedPostsForHandle(
         withServiceSecret(
           {
             handle,
+            scrapedPostId: processingFence.scrapedPostId,
             postId: rawPost.postId || undefined,
             instagramPostUrl: rawPost.instagramPostUrl || undefined,
             status: "retryable_failure",
@@ -10396,6 +10435,7 @@ async function processLoadedPostsForHandle(
         withServiceSecret(
           {
             handle,
+            scrapedPostId: processingFence.scrapedPostId,
             postId: rawPost.postId || undefined,
             instagramPostUrl: rawPost.instagramPostUrl || undefined,
             status: duplicateIsComplete ? "completed" : "retryable_failure",
@@ -10441,6 +10481,7 @@ async function processLoadedPostsForHandle(
         withServiceSecret(
           {
             handle,
+            scrapedPostId: processingFence.scrapedPostId,
             postId: post.postId || undefined,
             instagramPostUrl: post.instagramPostUrl || undefined,
             status: "retryable_failure",
@@ -10493,6 +10534,7 @@ async function processLoadedPostsForHandle(
       withServiceSecret(
         {
           handle,
+          scrapedPostId: processingFence.scrapedPostId,
           postId: post.postId || undefined,
           instagramPostUrl: post.instagramPostUrl || undefined,
           status: hasRetryableFailure ? "retryable_failure" : "completed",
@@ -10526,6 +10568,140 @@ async function processLoadedPostsForHandle(
       seenSourceKeys.push(sourceKey);
     }
   }
+}
+
+const DURABLE_TERMINAL_SAVED_POST_OUTCOMES = new Set([
+  "terminal_no_event",
+  "terminal_permanent_failure",
+  "receipt_complete",
+]);
+
+export type DurableSavedPostProcessingResult =
+  | { state: "terminal"; outcome: string }
+  | { state: "pending"; reason: string; retryAfterMs: number }
+  | { state: "blocked"; reason: string };
+
+function isDurableSavedPostTerminal(record: SavedScrapedPostRecord): boolean {
+  return (
+    record.processingStatus === "completed" &&
+    DURABLE_TERMINAL_SAVED_POST_OUTCOMES.has(record.processingOutcome ?? "")
+  );
+}
+
+/**
+ * Process only the post selected and linked by a durable fetch receipt. This
+ * deliberately reuses the existing extraction pipeline, prompt, model,
+ * scraped-post fence, and global OpenAI lease; it only narrows selection from
+ * a handle page to one durable ID.
+ */
+export async function processSavedScrapedPostForDurableReceipt(options: {
+  handle: string;
+  scrapedPostId: string;
+  expectedSourceRevision: number;
+  workOwner: string;
+  serviceSecret?: string;
+}): Promise<DurableSavedPostProcessingResult> {
+  const client = getConvexClient();
+  const serviceSecret = getConfiguredServiceSecret(options.serviceSecret);
+  const initial = await loadSavedScrapedPostRecordById(
+    client,
+    options.scrapedPostId,
+    serviceSecret,
+  );
+  if (!initial || normalizeHandle(initial.handle) !== normalizeHandle(options.handle)) {
+    return { state: "blocked", reason: "The linked durable saved post is missing or mismatched." };
+  }
+  if ((initial.sourceRevision ?? 1) !== options.expectedSourceRevision) {
+    return {
+      state: "blocked",
+      reason: "Durable saved-post source revision changed; exact recovery is required.",
+    };
+  }
+  const summary = createEmptyIngestionSummary([options.handle]);
+  const handleSummary = getOrCreateHandleSummary(summary, options.handle);
+  if (isDurableSavedPostTerminal(initial)) {
+    await runApprovedDuplicateCleanupForIngestion(client, summary, {
+      mode: "saved_posts",
+      handles: [options.handle],
+      serviceSecret,
+    });
+    return {
+      state: "terminal",
+      outcome: initial.processingOutcome ?? "receipt_complete",
+    };
+  }
+
+  const venueContext = await loadIngestionVenueContextForHandles(
+    client,
+    serviceSecret,
+    [options.handle],
+  );
+  let thrownError: string | undefined;
+  try {
+    await processLoadedPostsForHandle({
+      client,
+      handle: options.handle,
+      posts: [mapSavedScrapedPostToInstagramPost(initial)],
+      summary: handleSummary,
+      seenSourceKeys: [],
+      serviceSecret,
+      workOwner: options.workOwner,
+      scrapedPostId: options.scrapedPostId,
+      expectedSourceRevision: options.expectedSourceRevision,
+      ...venueContext,
+    });
+  } catch (error) {
+    thrownError = getErrorMessage(error);
+  }
+
+  const refreshed = await loadSavedScrapedPostRecordById(
+    client,
+    options.scrapedPostId,
+    serviceSecret,
+  );
+  if (!refreshed) {
+    return { state: "blocked", reason: "The linked durable saved post disappeared during processing." };
+  }
+  if ((refreshed.sourceRevision ?? 1) !== options.expectedSourceRevision) {
+    return {
+      state: "blocked",
+      reason: "Durable saved-post source revision changed during processing; exact recovery is required.",
+    };
+  }
+  if (isDurableSavedPostTerminal(refreshed)) {
+    await runApprovedDuplicateCleanupForIngestion(client, summary, {
+      mode: "saved_posts",
+      handles: [options.handle],
+      serviceSecret,
+    });
+    return {
+      state: "terminal",
+      outcome: refreshed.processingOutcome ?? "receipt_complete",
+    };
+  }
+
+  const processingReasons = [
+    thrownError,
+    refreshed.processingError,
+    ...handleSummary.errors,
+    refreshed.processingOutcome,
+  ].filter((value): value is string => Boolean(value));
+  const reason =
+    processingReasons.find(isTransientSavedPostProcessingError) ??
+    processingReasons[0] ??
+    "Saved post processing did not reach a terminal outcome.";
+  if (refreshed.processingOutcome === "openai_transport_ambiguous") {
+    return { state: "blocked", reason };
+  }
+  const retryAt = Math.max(
+    Date.now() + 1_000,
+    refreshed.processingRetryAt ?? refreshed.processingLeaseExpiresAt ?? Date.now() + 30_000,
+  );
+  return {
+    state: "pending",
+    reason,
+    retryAfterMs: Math.min(6 * 60 * 60_000, Math.max(1_000, retryAt - Date.now())),
+  };
 }
 
 async function processSavedBacklogBeforeFreshFetch(options: {

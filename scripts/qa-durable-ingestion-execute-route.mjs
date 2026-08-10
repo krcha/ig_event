@@ -3,8 +3,18 @@ import { readFile } from "node:fs/promises";
 
 process.env.CRON_SECRET = "qa-durable-execute-route-secret";
 
-const { isTransientSavedPostProcessingError } = await import(
+const {
+  isDurableSavedPostRevisionMismatch,
+  isTransientSavedPostProcessingError,
+} = await import(
   "../lib/pipeline/durable-ingestion-execute.ts"
+);
+
+assert.equal(
+  isDurableSavedPostRevisionMismatch(
+    new Error("Cannot complete a receipt after its saved-post source revision changed."),
+  ),
+  true,
 );
 
 for (const leaseContention of [
@@ -30,20 +40,67 @@ assert.equal(
   "a real provider failure must remain an explicit retryable failure",
 );
 
-const routeSource = await readFile(
-  new URL("../app/api/cron/durable-ingestion/execute/route.ts", import.meta.url),
-  "utf8",
-);
-const transientResponseCount = routeSource.match(/status: preserveAttempt \? 202 : 503/g)?.length ?? 0;
-assert.equal(
-  transientResponseCount,
-  2,
-  "both returned and thrown AI-lease contention paths must return 202 and preserve the attempt",
+const route = await readFile("app/api/cron/durable-ingestion/execute/route.ts", "utf8");
+const ingestionPipeline = await readFile("lib/pipeline/run-instagram-ingestion.ts", "utf8");
+const processingClaimOffset = route.indexOf("convex.mutation(claimProcessing");
+const fetchClaimOffset = route.indexOf("convex.mutation(claim,");
+const providerCallOffset = route.indexOf("scrapeInstagramAccount({");
+assert.ok(processingClaimOffset >= 0 && processingClaimOffset < fetchClaimOffset);
+assert.ok(fetchClaimOffset >= 0 && fetchClaimOffset < providerCallOffset);
+assert.match(
+  route.slice(processingClaimOffset, fetchClaimOffset),
+  /status: released\.terminal \? 200 : 202/,
+  "durably released AI contention must return 202 instead of restarting curl/systemd",
 );
 assert.match(
-  routeSource,
-  /processingErrors\.find\(\s*isTransientSavedPostProcessingError,?\s*\)/,
-  "the route must find lease contention anywhere in the aggregated processing errors, not only at index zero",
+  route,
+  /if \(!alreadyFetched\)[\s\S]*scrapeInstagramAccount/,
+  "only a receipt with zero provider attempts may enter Apify",
+);
+assert.match(
+  route,
+  /outcome: completion\.status/,
+  "the route must report the server-derived permanent-failure or fetched/skip receipt status",
+);
+assert.doesNotMatch(
+  route.slice(processingClaimOffset, fetchClaimOffset),
+  /outcome: "fetched"/,
+  "the AI route must not flatten permanent failures into fetched",
+);
+assert.match(
+  route,
+  /scrapedPostSourceRevision: selectedPersistedPost\.sourceRevision/,
+  "the exact upsert revision must be fenced before it is stored on the receipt",
+);
+assert.match(
+  route,
+  /scrapedPostId: selectedPersistedPost\.scrapedPostId[\s\S]*postId: posts\[0\]\.postId[\s\S]*instagramPostUrl: posts\[0\]\.instagramPostUrl/,
+  "the exact persisted row identity must cross the durable receipt boundary",
+);
+assert.match(
+  route,
+  /processingProtocolVersion: 1/,
+  "only the new web protocol may hand a running receipt to the AI lane during rolling deployment",
+);
+assert.doesNotMatch(
+  route,
+  /runInstagramIngestion\(/,
+  "the AI consumer must process the linked post rather than an arbitrary handle page",
+);
+assert.match(
+  ingestionPipeline,
+  /processingReasons\.find\(isTransientSavedPostProcessingError\)/,
+  "wrapped or non-first AI lease contention must preserve the durable processing attempt",
+);
+assert.match(
+  route,
+  /expectedSourceRevision: processingClaim\.scrapedPostSourceRevision/,
+  "the receipt revision must reach the exact-post helper",
+);
+assert.match(
+  ingestionPipeline,
+  /scrapedPostId: processingFence\.scrapedPostId/g,
+  "every scraped-post processing fence write must retain the exact durable ID",
 );
 
 console.log("durable execute-route lease classification QA passed");

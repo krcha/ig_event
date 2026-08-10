@@ -31,6 +31,8 @@ const durableIngestionRunStatus = v.union(
 const durableIngestionReceiptStatus = v.union(
   v.literal("queued"),
   v.literal("running"),
+  v.literal("processing_pending"),
+  v.literal("processing"),
   v.literal("fetched"),
   v.literal("no_post"),
   v.literal("deferred"),
@@ -542,6 +544,11 @@ export default defineSchema({
     // post can safely be processed or reported as fetched after a crash.
     providerResultStatus: v.optional(v.union(v.literal("persisted"), v.literal("no_post"))),
     persistedPostCount: v.optional(v.number()),
+    // The single post selected by the durable fetch is tied to this receipt.
+    // These fields remain optional so already-live receipts survive rollout.
+    scrapedPostId: v.optional(v.id("scrapedPosts")),
+    scrapedPostSourceRevision: v.optional(v.number()),
+    processingAttemptCount: v.optional(v.number()),
     reservedMicros: v.optional(v.number()),
     chargedMicros: v.optional(v.number()),
     leaseOwner: v.optional(v.string()),
@@ -565,6 +572,7 @@ export default defineSchema({
     .index("by_run_status_executionSlot_leaseExpiresAt", ["runId", "status", "executionSlot", "leaseExpiresAt"])
     .index("by_run_status_retryNotBeforeAt", ["runId", "status", "retryNotBeforeAt"])
     .index("by_run_status_leaseExpiresAt", ["runId", "status", "leaseExpiresAt"])
+    .index("by_run_status_providerResultStatus", ["runId", "status", "providerResultStatus"])
     .index("by_chunk_status", ["chunkId", "status"]),
   eventAuditLog: defineTable({
     eventId: v.id("events"),

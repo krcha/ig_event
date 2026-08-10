@@ -10,6 +10,7 @@
 
 import type * as authz from "../authz.js";
 import type * as crons from "../crons.js";
+import type * as durableIngestionRuns from "../durableIngestionRuns.js";
 import type * as events from "../events.js";
 import type * as ingestionJobs from "../ingestionJobs.js";
 import type * as instagramSources from "../instagramSources.js";
@@ -31,6 +32,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   authz: typeof authz;
   crons: typeof crons;
+  durableIngestionRuns: typeof durableIngestionRuns;
   events: typeof events;
   ingestionJobs: typeof ingestionJobs;
   instagramSources: typeof instagramSources;

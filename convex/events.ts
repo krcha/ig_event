@@ -48,6 +48,7 @@ const eventStatus = v.union(
 const promotionTier = v.union(v.literal("featured"), v.literal("promoted"));
 const sourceProcessingFence = v.object({
   handle: v.string(),
+  scrapedPostId: v.optional(v.id("scrapedPosts")),
   postId: v.optional(v.string()),
   instagramPostUrl: v.optional(v.string()),
   owner: v.string(),
@@ -55,6 +56,7 @@ const sourceProcessingFence = v.object({
 });
 type SourceProcessingFence = {
   handle: string;
+  scrapedPostId?: Id<"scrapedPosts">;
   postId?: string;
   instagramPostUrl?: string;
   owner: string;
@@ -1562,11 +1564,21 @@ async function assertSourceProcessingFence(
     !fence ||
     !fence.handle ||
     !fence.owner ||
-    (!fence.postId && !fence.instagramPostUrl)
+    (!fence.scrapedPostId && !fence.postId && !fence.instagramPostUrl)
   ) {
     throw new Error("Invalid scraped-post processing fence.");
   }
-  const byPostId = fence.postId
+  const exact = fence.scrapedPostId ? await ctx.db.get(fence.scrapedPostId) : null;
+  if (
+    fence.scrapedPostId &&
+    (!exact ||
+      exact.handle !== fence.handle ||
+      (fence.postId && exact.postId !== fence.postId) ||
+      (fence.instagramPostUrl && exact.instagramPostUrl !== fence.instagramPostUrl))
+  ) {
+    throw new Error("Exact scraped-post processing fence identity is absent or mismatched.");
+  }
+  const byPostId = !fence.scrapedPostId && fence.postId
     ? await ctx.db
         .query("scrapedPosts")
         .withIndex("by_handle_postId", (q) =>
@@ -1574,7 +1586,7 @@ async function assertSourceProcessingFence(
         )
         .take(2)
     : [];
-  const byPostUrl = fence.instagramPostUrl
+  const byPostUrl = !fence.scrapedPostId && fence.instagramPostUrl
     ? await ctx.db
         .query("scrapedPosts")
         .withIndex("by_handle_postUrl", (q) =>
@@ -1584,7 +1596,9 @@ async function assertSourceProcessingFence(
         )
         .take(2)
     : [];
-  const candidates = [...new Map([...byPostId, ...byPostUrl].map((post) => [post._id, post])).values()];
+  const candidates = exact
+    ? [exact]
+    : [...new Map([...byPostId, ...byPostUrl].map((post) => [post._id, post])).values()];
   if (candidates.length !== 1) {
     throw new Error("Scraped-post processing fence identity is absent or ambiguous.");
   }

@@ -15,6 +15,10 @@ export function isTransientSavedPostProcessingError(value: unknown): boolean {
   );
 }
 
+export function isDurableSavedPostRevisionMismatch(value: unknown): boolean {
+  return /saved-post source revision changed/i.test(getErrorMessage(value));
+}
+
 function getErrorMessage(value: unknown): string {
   if (typeof value === "string") return value;
   if (value instanceof Error) {

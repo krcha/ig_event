@@ -320,6 +320,13 @@ export const upsertManyByHandle = mutation({
     fetchLeaseOwner: v.optional(v.string()),
     serviceSecret: v.optional(v.string()),
   },
+  returns: v.array(
+    v.object({
+      scrapedPostId: v.id("scrapedPosts"),
+      postId: v.string(),
+      sourceRevision: v.number(),
+    }),
+  ),
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const now = Date.now();
@@ -330,6 +337,11 @@ export const upsertManyByHandle = mutation({
     const activePaidFetchOwner =
       (paidFetchControl?.leaseExpiresAt ?? 0) > now ? paidFetchControl?.leaseOwner : undefined;
     const suppliedFetchOwner = args.fetchLeaseOwner?.trim().slice(0, 200);
+    const persistedPosts: Array<{
+      scrapedPostId: Id<"scrapedPosts">;
+      postId: string;
+      sourceRevision: number;
+    }> = [];
     if (activePaidFetchOwner) {
       if (
         suppliedFetchOwner !== activePaidFetchOwner ||
@@ -426,11 +438,12 @@ export const upsertManyByHandle = mutation({
             (existing.processingStatus === "completed" &&
               existing.processingOutcome === "terminal_permanent_failure"));
         const shouldResetProcessing = hasSourceContentChanged || shouldReprocessForNewMedia;
+        const sourceRevision = shouldResetProcessing
+          ? (existing.sourceRevision ?? 1) + 1
+          : (existing.sourceRevision ?? 1);
         await ctx.db.patch(existing._id, {
           ...nextRecord,
-          sourceRevision: shouldResetProcessing
-            ? (existing.sourceRevision ?? 1) + 1
-            : (existing.sourceRevision ?? 1),
+          sourceRevision,
           blocksPaidFetch: shouldResetProcessing ? true : (existing.blocksPaidFetch ?? true),
           imageUrl: hasDurableImage ? existing.imageUrl : undefined,
           imageStorageId: hasDurableImage ? existing.imageStorageId : undefined,
@@ -457,8 +470,13 @@ export const upsertManyByHandle = mutation({
               }
             : {}),
         });
+        persistedPosts.push({
+          scrapedPostId: existing._id,
+          postId: post.postId,
+          sourceRevision,
+        });
       } else {
-        await ctx.db.insert("scrapedPosts", {
+        const scrapedPostId = await ctx.db.insert("scrapedPosts", {
           ...nextRecord,
           sourceRevision: 1,
           blocksPaidFetch: true,
@@ -466,42 +484,67 @@ export const upsertManyByHandle = mutation({
           processingAttempts: 0,
           createdAt: now,
         });
+        persistedPosts.push({ scrapedPostId, postId: post.postId, sourceRevision: 1 });
       }
     }
+    return persistedPosts;
   },
 });
+
+async function resolveScrapedPostForProcessingFence(ctx: { db: any }, args: any) {
+  if (args.scrapedPostId) {
+    const exact = await ctx.db.get(args.scrapedPostId);
+    if (
+      !exact ||
+      exact.handle !== args.handle ||
+      (args.postId && exact.postId !== args.postId) ||
+      (args.instagramPostUrl && exact.instagramPostUrl !== args.instagramPostUrl)
+    ) {
+      throw new Error("Exact scraped-post processing fence identity mismatch.");
+    }
+    return exact;
+  }
+  const existingByPostId = args.postId
+    ? (
+        await ctx.db
+          .query("scrapedPosts")
+          .withIndex("by_handle_postId", (q: any) =>
+            q.eq("handle", args.handle).eq("postId", args.postId as string),
+          )
+          .take(1)
+      )[0] ?? null
+    : null;
+  return (
+    existingByPostId ??
+    (args.instagramPostUrl
+      ? (
+          await ctx.db
+            .query("scrapedPosts")
+            .withIndex("by_handle_postUrl", (q: any) =>
+              q
+                .eq("handle", args.handle)
+                .eq("instagramPostUrl", args.instagramPostUrl as string),
+            )
+            .take(1)
+        )[0] ?? null
+      : null)
+  );
+}
 
 export const claimProcessing = mutation({
   args: {
     handle: v.string(),
+    scrapedPostId: v.optional(v.id("scrapedPosts")),
     postId: v.optional(v.string()),
     instagramPostUrl: v.optional(v.string()),
     owner: v.string(),
+    expectedSourceRevision: v.optional(v.number()),
     leaseMs: v.optional(v.number()),
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const existingByPostId = args.postId
-      ? await ctx.db
-          .query("scrapedPosts")
-          .withIndex("by_handle_postId", (q) =>
-            q.eq("handle", args.handle).eq("postId", args.postId as string),
-          )
-          .first()
-      : null;
-    const existing =
-      existingByPostId ??
-      (args.instagramPostUrl
-        ? await ctx.db
-            .query("scrapedPosts")
-            .withIndex("by_handle_postUrl", (q) =>
-              q
-                .eq("handle", args.handle)
-                .eq("instagramPostUrl", args.instagramPostUrl as string),
-            )
-            .first()
-        : null);
+    const existing = await resolveScrapedPostForProcessingFence(ctx, args);
     if (!existing) {
       throw new Error("Cannot claim processing for an unknown scraped post.");
     }
@@ -513,6 +556,22 @@ export const claimProcessing = mutation({
     }
     const now = Date.now();
     const sourceRevision = existing.sourceRevision ?? 1;
+    if (
+      args.expectedSourceRevision !== undefined &&
+      (!Number.isInteger(args.expectedSourceRevision) || args.expectedSourceRevision < 1)
+    ) {
+      throw new Error("Expected source revision must be a positive integer.");
+    }
+    if (
+      args.expectedSourceRevision !== undefined &&
+      sourceRevision !== args.expectedSourceRevision
+    ) {
+      return {
+        claimed: false,
+        reason: "source_revision_mismatch" as const,
+        sourceRevision,
+      };
+    }
     if (
       existing.analysisAttemptRevision === sourceRevision &&
       !(
@@ -583,6 +642,7 @@ export const claimProcessing = mutation({
 export const markOpenAiAnalysisAttemptStarted = mutation({
   args: {
     handle: v.string(),
+    scrapedPostId: v.optional(v.id("scrapedPosts")),
     postId: v.optional(v.string()),
     instagramPostUrl: v.optional(v.string()),
     owner: v.string(),
@@ -594,24 +654,7 @@ export const markOpenAiAnalysisAttemptStarted = mutation({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const existingByPostId = args.postId
-      ? await ctx.db
-          .query("scrapedPosts")
-          .withIndex("by_handle_postId", (q) =>
-            q.eq("handle", args.handle).eq("postId", args.postId as string),
-          )
-          .first()
-      : null;
-    const existing =
-      existingByPostId ??
-      (args.instagramPostUrl
-        ? await ctx.db
-            .query("scrapedPosts")
-            .withIndex("by_handle_postUrl", (q) =>
-              q.eq("handle", args.handle).eq("instagramPostUrl", args.instagramPostUrl as string),
-            )
-            .first()
-        : null);
+    const existing = await resolveScrapedPostForProcessingFence(ctx, args);
     if (!existing) throw new Error("Cannot start analysis for an unknown scraped post.");
     const now = Date.now();
     if (
@@ -677,6 +720,7 @@ export const markOpenAiAnalysisAttemptStarted = mutation({
 export const releaseOpenAiAnalysisAttempt = mutation({
   args: {
     handle: v.string(),
+    scrapedPostId: v.optional(v.id("scrapedPosts")),
     postId: v.optional(v.string()),
     instagramPostUrl: v.optional(v.string()),
     owner: v.string(),
@@ -685,24 +729,7 @@ export const releaseOpenAiAnalysisAttempt = mutation({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const existingByPostId = args.postId
-      ? await ctx.db
-          .query("scrapedPosts")
-          .withIndex("by_handle_postId", (q) =>
-            q.eq("handle", args.handle).eq("postId", args.postId as string),
-          )
-          .first()
-      : null;
-    const existing =
-      existingByPostId ??
-      (args.instagramPostUrl
-        ? await ctx.db
-            .query("scrapedPosts")
-            .withIndex("by_handle_postUrl", (q) =>
-              q.eq("handle", args.handle).eq("instagramPostUrl", args.instagramPostUrl as string),
-            )
-            .first()
-        : null);
+    const existing = await resolveScrapedPostForProcessingFence(ctx, args);
     if (!existing) return { released: false, reason: "missing" as const };
     const now = Date.now();
     if (
@@ -746,6 +773,7 @@ export const releaseOpenAiAnalysisAttempt = mutation({
 export const recordOpenAiAnalysis = mutation({
   args: {
     handle: v.string(),
+    scrapedPostId: v.optional(v.id("scrapedPosts")),
     postId: v.optional(v.string()),
     instagramPostUrl: v.optional(v.string()),
     owner: v.string(),
@@ -763,24 +791,7 @@ export const recordOpenAiAnalysis = mutation({
       throw new Error("OpenAI analysis result exceeds the durable cache limit.");
     }
     JSON.parse(args.resultJson);
-    const existingByPostId = args.postId
-      ? await ctx.db
-          .query("scrapedPosts")
-          .withIndex("by_handle_postId", (q) =>
-            q.eq("handle", args.handle).eq("postId", args.postId as string),
-          )
-          .first()
-      : null;
-    const existing =
-      existingByPostId ??
-      (args.instagramPostUrl
-        ? await ctx.db
-            .query("scrapedPosts")
-            .withIndex("by_handle_postUrl", (q) =>
-              q.eq("handle", args.handle).eq("instagramPostUrl", args.instagramPostUrl as string),
-            )
-            .first()
-        : null);
+    const existing = await resolveScrapedPostForProcessingFence(ctx, args);
     if (!existing) throw new Error("Cannot cache analysis for an unknown scraped post.");
     const now = Date.now();
     if (
@@ -2019,6 +2030,7 @@ export const clearProviderBlock = mutation({
 export const recordProcessingResult = mutation({
   args: {
     handle: v.string(),
+    scrapedPostId: v.optional(v.id("scrapedPosts")),
     postId: v.optional(v.string()),
     instagramPostUrl: v.optional(v.string()),
     status: processingStatusValidator,
@@ -2030,30 +2042,7 @@ export const recordProcessingResult = mutation({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const existingByPostId = args.postId
-      ? (
-          await ctx.db
-            .query("scrapedPosts")
-            .withIndex("by_handle_postId", (q) =>
-              q.eq("handle", args.handle).eq("postId", args.postId as string),
-            )
-            .take(1)
-        )[0] ?? null
-      : null;
-    const existing =
-      existingByPostId ??
-      (args.instagramPostUrl
-        ? (
-            await ctx.db
-              .query("scrapedPosts")
-              .withIndex("by_handle_postUrl", (q) =>
-                q
-                  .eq("handle", args.handle)
-                  .eq("instagramPostUrl", args.instagramPostUrl as string),
-              )
-              .take(1)
-          )[0] ?? null
-        : null);
+    const existing = await resolveScrapedPostForProcessingFence(ctx, args);
     if (!existing) {
       throw new Error("Cannot record processing state for an unknown scraped post.");
     }

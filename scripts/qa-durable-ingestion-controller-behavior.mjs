@@ -12,9 +12,19 @@ const {
   executeNext,
   completeReceipt,
   releaseReceiptForRetry,
+  markReceiptProviderAttemptStarted,
   markReceiptPostsPersisted,
+  claimNextProcessingReceipt,
+  releaseProcessingReceiptForRetry,
+  completeProcessingReceipt,
   prepareReceiptSlotsBatch,
+  linkPersistedReceiptPostForRecovery,
+  abortInactiveRun,
+  abortOnlyInactiveCatchUpRun,
 } = await import("../convex/durableIngestionRuns.ts");
+const { createEvent } = await import("../convex/events.ts");
+const { refreshAndAttach } = await import("../convex/mediaAssets.ts");
+const { recordProcessingResult } = await import("../convex/scrapedPosts.ts");
 
 class MemoryDb {
   #tables = new Map();
@@ -64,6 +74,10 @@ class MemoryDb {
             conditions.push((row) => row[field] !== undefined && row[field] <= value);
             return builder;
           },
+          gte(field, value) {
+            conditions.push((row) => row[field] !== undefined && row[field] >= value);
+            return builder;
+          },
         };
         callback(builder);
         return query;
@@ -79,6 +93,12 @@ class MemoryDb {
       },
       async take(limit) { return query.rows().slice(0, limit); },
       async first() { return query.rows()[0] ?? null; },
+      async collect() { return query.rows(); },
+      async unique() {
+        const rows = query.rows();
+        if (rows.length > 1) throw new Error(`Expected one ${tableName} row, received ${rows.length}.`);
+        return rows[0] ?? null;
+      },
     };
     return query;
   }
@@ -135,24 +155,62 @@ async function complete(db, runId, receiptId, workerId, outcome) {
   });
 }
 
-async function releaseForProcessingLease(db, runId, receiptId, workerId) {
-  return releaseReceiptForRetry._handler(ctx(db), {
+async function claimProcessing(db, runId, workerId) {
+  return claimNextProcessingReceipt._handler(ctx(db), {
     runId,
-    receiptId,
     workerId,
-    reason: "Saved post processing is busy; retry this saved post later.",
-    retryAfterMs: 30_000,
-    preserveAttempt: true,
     serviceSecret: process.env.CRON_SECRET,
   });
 }
 
-async function markPersisted(db, runId, receiptId, workerId, postCount) {
+async function startProviderAttempt(db, runId, receiptId, workerId) {
+  return markReceiptProviderAttemptStarted._handler(ctx(db), {
+    runId,
+    receiptId,
+    workerId,
+    serviceSecret: process.env.CRON_SECRET,
+  });
+}
+
+async function insertSavedPost(db, handle, overrides = {}) {
+  const now = Date.now();
+  return db.insert("scrapedPosts", {
+    handle,
+    postId: `${handle}-post`,
+    imageUrls: [],
+    instagramPostUrl: `https://www.instagram.com/p/${handle}-post/`,
+    username: handle,
+    sourceRevision: 1,
+    processingStatus: "pending",
+    processingAttempts: 0,
+    blocksPaidFetch: true,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  });
+}
+
+async function markPersisted(db, runId, receiptId, workerId, scrapedPostId) {
+  const post = await db.get(scrapedPostId);
   return markReceiptPostsPersisted._handler(ctx(db), {
     runId,
     receiptId,
     workerId,
-    postCount,
+    postCount: 1,
+    scrapedPostId,
+    scrapedPostSourceRevision: post.sourceRevision ?? 1,
+    postId: post.postId,
+    instagramPostUrl: post.instagramPostUrl,
+    processingProtocolVersion: 1,
+    serviceSecret: process.env.CRON_SECRET,
+  });
+}
+
+async function linkPersistedPost(db, runId, receiptId, scrapedPostId) {
+  return linkPersistedReceiptPostForRecovery._handler(ctx(db), {
+    runId,
+    receiptId,
+    scrapedPostId,
     serviceSecret: process.env.CRON_SECRET,
   });
 }
@@ -221,14 +279,17 @@ const handles = Array.from({ length: 632 }, (_, index) => `venue_${String(index)
   const db = new MemoryDb();
   const runId = await queue(db, "canary", handles.slice(0, 16));
   const receipts = db.rows("ingestionRunHandleReceipts");
+  const savedPostIds = new Map();
   for (const receipt of receipts) await db.patch(receipt._id, { executionSlot: undefined });
   await db.patch(runId, { dispatchReadyAt: undefined });
   for (const receipt of receipts.slice(0, 5)) {
+    savedPostIds.set(receipt._id, await insertSavedPost(db, receipt.handle));
     await db.patch(receipt._id, {
       providerAttemptCount: 1,
       chargedMicros: 10_000,
       providerResultStatus: "persisted",
       persistedPostCount: 1,
+      updatedAt: Date.now() + 1,
     });
   }
   let prepared;
@@ -242,13 +303,31 @@ const handles = Array.from({ length: 632 }, (_, index) => `venue_${String(index)
   assert.equal(migrated.filter((receipt) => receipt.executionSlot === undefined).length, 0);
   assert.equal(migrated.filter((receipt) => receipt.providerAttemptCount === 1).length, 5, "paid attempts must survive lane migration");
   const claims = await Promise.all(Array.from({ length: 6 }, (_, slot) => claim(db, runId, `lane-${slot}`)));
-  assert.equal(new Set(claims.filter(Boolean).map((claim) => claim.receiptId)).size, 6, "six concurrent lane claims remain disjoint after migration");
-  for (const claimResult of claims.filter(Boolean)) {
-    const receipt = await db.get(claimResult.receiptId);
-    if (receipt.providerAttemptCount === 1) {
-      assert.equal(claimResult.providerAttemptCount, 1, "paid receipts resume saved-post work without a second provider request");
-    }
-  }
+  assert.equal(
+    claims.filter(Boolean).every((claimResult) => claimResult.providerAttemptCount === 0),
+    true,
+    "a paid persisted legacy receipt must never re-enter a fetch lane",
+  );
+  assert.equal(
+    db.rows("ingestionRunHandleReceipts").filter((receipt) => receipt.status === "processing_pending").length,
+    5,
+    "fetch lanes must migrate all already-paid live receipts to the AI queue",
+  );
+  const processing = await claimProcessing(db, runId, "legacy-ai-consumer");
+  assert.equal(processing, null, "an unlinked legacy receipt must never guess a post from timestamps");
+  const recoveredReceipt = db
+    .rows("ingestionRunHandleReceipts")
+    .find((candidate) => candidate.providerAttemptCount === 1);
+  await linkPersistedPost(
+    db,
+    runId,
+    recoveredReceipt._id,
+    savedPostIds.get(recoveredReceipt._id),
+  );
+  const exactProcessing = await claimProcessing(db, runId, "legacy-ai-consumer");
+  assert.ok(exactProcessing, "authenticated exact-ID recovery must make legacy work claimable");
+  assert.equal(exactProcessing.scrapedPostId, savedPostIds.get(recoveredReceipt._id));
+  assert.equal(exactProcessing.providerAttemptCount, 1, "AI recovery must retain the original paid attempt");
 }
 
 // A release upgrade must resume an already-paid canary receipt row that
@@ -260,11 +339,36 @@ const handles = Array.from({ length: 632 }, (_, index) => `venue_${String(index)
     await db.patch(queued._id, { retryNotBeforeAt: Date.now() + 60_000 });
   }
   const legacyQueued = db.rows("ingestionRunHandleReceipts")[0];
-  await db.patch(legacyQueued._id, { retryNotBeforeAt: undefined, providerAttemptCount: 1, chargedMicros: 10_000 });
+  const wrongCandidate = await insertSavedPost(db, legacyQueued.handle, {
+    postId: "legacy-wrong-post",
+    instagramPostUrl: "https://www.instagram.com/p/legacy-wrong-post/",
+  });
+  const exactCandidate = await insertSavedPost(db, legacyQueued.handle, {
+    postId: "legacy-exact-post",
+    instagramPostUrl: "https://www.instagram.com/p/legacy-exact-post/",
+  });
+  await db.patch(legacyQueued._id, {
+    retryNotBeforeAt: undefined,
+    providerAttemptCount: 1,
+    providerResultStatus: "persisted",
+    persistedPostCount: 1,
+    chargedMicros: 10_000,
+    updatedAt: Date.now() + 1,
+  });
   const resumed = await claim(db, runId, "legacy-recovery");
-  assert.ok(resumed);
-  assert.equal(resumed.receiptId, legacyQueued._id);
-  assert.equal(resumed.providerAttemptCount, 1, "resumed work must retain its original paid attempt");
+  assert.equal(resumed, null, "the fetch selector must divert a persisted receipt to processing");
+  assert.equal(
+    await claimProcessing(db, runId, "legacy-processing-before-link"),
+    null,
+    "multiple same-handle posts must not be resolved by recency",
+  );
+  assert.equal((await db.get(legacyQueued._id)).scrapedPostId, undefined);
+  await linkPersistedPost(db, runId, legacyQueued._id, exactCandidate);
+  const processing = await claimProcessing(db, runId, "legacy-processing");
+  assert.equal(processing.receiptId, legacyQueued._id);
+  assert.equal(processing.scrapedPostId, exactCandidate, "only the operator-attested exact ID may be claimed");
+  assert.notEqual(processing.scrapedPostId, wrongCandidate);
+  assert.equal(processing.providerAttemptCount, 1, "resumed work must retain its original paid attempt");
 }
 
 // A crash after the paid provider boundary but before persistence has no proof
@@ -287,9 +391,170 @@ const handles = Array.from({ length: 632 }, (_, index) => `venue_${String(index)
     serviceSecret: process.env.CRON_SECRET,
   });
   const resumed = await claim(db, runId, "crash-boundary-recovery");
-  assert.ok(resumed);
-  assert.equal(resumed.providerAttemptCount, 1);
-  assert.equal(resumed.providerResultStatus, undefined, "a charged request alone cannot claim saved posts");
+  assert.equal(resumed, null);
+  const uncertain = await db.get(first.receiptId);
+  assert.equal(uncertain.status, "deferred");
+  assert.equal(uncertain.outcomeDetail, "provider_attempt_persistence_unconfirmed");
+  assert.equal(uncertain.providerAttemptCount, 1);
+}
+
+// If persistence committed but its receipt marker did not, the exact-ID
+// attestation path can recover the charged boundary without an Apify replay or
+// a manual database edit. Timing and source revision are captured atomically.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "daily", ["persistence_marker_crash"]);
+  const fetched = await claim(db, runId, "marker-crash-fetch");
+  await startProviderAttempt(db, runId, fetched.receiptId, "marker-crash-fetch");
+  const exactSavedPostId = await insertSavedPost(db, fetched.handle);
+  await complete(db, runId, fetched.receiptId, "marker-crash-fetch", "deferred");
+  await db.patch(fetched.receiptId, {
+    outcomeDetail: "provider_attempt_persistence_unconfirmed",
+    updatedAt: Date.now() + 1,
+  });
+  assert.equal(await claimProcessing(db, runId, "unattested-consumer"), null);
+  const attested = await linkPersistedPost(db, runId, fetched.receiptId, exactSavedPostId);
+  assert.equal(attested.reopened, true);
+  const recovered = await claimProcessing(db, runId, "attested-consumer");
+  assert.equal(recovered.scrapedPostId, exactSavedPostId);
+  assert.equal(recovered.providerAttemptCount, 1);
+  assert.equal(recovered.scrapedPostSourceRevision, 1);
+}
+
+// Provider evidence is classified before receipt retry exhaustion. A crash on
+// the third claim must preserve a durable no-post truth and an unconfirmed
+// charged boundary instead of misreporting either as a generic failure.
+for (const boundary of ["no_post", "unconfirmed"]) {
+  const db = new MemoryDb();
+  const runId = await queue(db, "daily", [`third_claim_${boundary}`]);
+  const fetched = await claim(db, runId, `third-${boundary}-fetch`);
+  await startProviderAttempt(db, runId, fetched.receiptId, `third-${boundary}-fetch`);
+  if (boundary === "no_post") {
+    await markReceiptPostsPersisted._handler(ctx(db), {
+      runId,
+      receiptId: fetched.receiptId,
+      workerId: `third-${boundary}-fetch`,
+      postCount: 0,
+      serviceSecret: process.env.CRON_SECRET,
+    });
+  }
+  await db.patch(fetched.receiptId, {
+    attemptCount: 3,
+    leaseExpiresAt: Date.now() - 1,
+  });
+  assert.equal(await claim(db, runId, `third-${boundary}-recovery`), null);
+  const terminal = await db.get(fetched.receiptId);
+  assert.equal(terminal.status, boundary === "no_post" ? "no_post" : "deferred");
+  assert.notEqual(terminal.status, "failed");
+  assert.equal(terminal.providerAttemptCount, 1);
+}
+
+// A live receipt terminalized by the immediately preceding busy-AI patch must
+// stay terminal until an authenticated caller supplies the exact saved row.
+// Same-handle recency is not immutable identity and must never be inferred.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "daily", ["legacy_deferred_ai"]);
+  const receipt = db.rows("ingestionRunHandleReceipts")[0];
+  const savedPostId = await insertSavedPost(db, receipt.handle);
+  await db.patch(receipt._id, {
+    status: "deferred",
+    providerAttemptCount: 1,
+    providerResultStatus: "persisted",
+    persistedPostCount: 1,
+    chargedMicros: 10_000,
+    outcomeDetail: "OpenAI provider execution lease is busy; retry this saved post later.",
+    terminalAt: Date.now(),
+    updatedAt: Date.now() + 1,
+  });
+  await db.patch(runId, {
+    status: "completed",
+    terminalReceiptCount: 1,
+    finishedAt: Date.now(),
+  });
+  const recovered = await claimProcessing(db, runId, "legacy-deferred-consumer");
+  assert.equal(recovered, null, "unlinked deferred work must not be reopened by timestamp inference");
+  assert.equal((await db.get(receipt._id)).status, "deferred");
+  await linkPersistedPost(db, runId, receipt._id, savedPostId);
+  const exactRecovered = await claimProcessing(db, runId, "legacy-deferred-consumer");
+  assert.ok(exactRecovered, "the exact-ID recovery must reopen deferred saved-post work");
+  assert.equal(exactRecovered.scrapedPostId, savedPostId);
+  assert.equal(exactRecovered.providerAttemptCount, 1);
+  assert.equal((await db.get(receipt._id)).status, "processing");
+  assert.equal((await db.get(runId)).status, "queued");
+}
+
+// Exact-ID recovery of a completed run is new admission. It must refuse to
+// overlap a newer active run; recovery inside the already-active queued run
+// remains valid and does not require a second provider call.
+{
+  const db = new MemoryDb();
+  const completedRunId = await queue(db, "daily", ["completed_recovery"]);
+  const completedFetch = await claim(db, completedRunId, "completed-recovery-fetch");
+  await startProviderAttempt(
+    db,
+    completedRunId,
+    completedFetch.receiptId,
+    "completed-recovery-fetch",
+  );
+  const completedPostId = await insertSavedPost(db, completedFetch.handle);
+  await complete(
+    db,
+    completedRunId,
+    completedFetch.receiptId,
+    "completed-recovery-fetch",
+    "deferred",
+  );
+  await db.patch(completedFetch.receiptId, {
+    providerResultStatus: "persisted",
+    persistedPostCount: 1,
+    scrapedPostId: completedPostId,
+    scrapedPostSourceRevision: 1,
+    outcomeDetail: "OpenAI provider execution lease is busy; retry this saved post later.",
+  });
+  assert.equal((await db.get(completedRunId)).status, "completed");
+
+  const activeRunId = await queue(db, "daily", ["active_recovery"]);
+  assert.equal(
+    await claimProcessing(db, completedRunId, "late-completed-runner"),
+    null,
+    "an old runner must not automatically resurrect a completed linked receipt",
+  );
+  assert.equal((await db.get(completedFetch.receiptId)).status, "deferred");
+  assert.equal((await db.get(completedRunId)).status, "completed");
+  await assert.rejects(
+    () => linkPersistedPost(
+      db,
+      completedRunId,
+      completedFetch.receiptId,
+      completedPostId,
+    ),
+    /another durable ingestion run is already active/i,
+    "completed-run recovery must not bypass global paid-run admission",
+  );
+  assert.equal((await db.get(completedFetch.receiptId)).status, "deferred");
+  assert.equal((await db.get(completedRunId)).status, "completed");
+
+  const activeFetch = await claim(db, activeRunId, "active-recovery-fetch");
+  await startProviderAttempt(db, activeRunId, activeFetch.receiptId, "active-recovery-fetch");
+  const activePostId = await insertSavedPost(db, activeFetch.handle);
+  await db.patch(activeFetch.receiptId, {
+    status: "queued",
+    leaseOwner: undefined,
+    leaseExpiresAt: undefined,
+    providerResultStatus: "persisted",
+    persistedPostCount: 1,
+    updatedAt: Date.now() + 1,
+  });
+  const queuedRecovery = await linkPersistedPost(
+    db,
+    activeRunId,
+    activeFetch.receiptId,
+    activePostId,
+  );
+  assert.equal(queuedRecovery.reopened, false);
+  assert.equal((await db.get(activeFetch.receiptId)).status, "processing_pending");
+  assert.equal((await db.get(activeFetch.receiptId)).providerAttemptCount, 1);
 }
 
 // The persistence marker is only accepted from the currently leased receipt.
@@ -298,26 +563,506 @@ const handles = Array.from({ length: 632 }, (_, index) => `venue_${String(index)
   const runId = await queue(db, "canary", handles.slice(0, 16));
   const first = await claim(db, runId, "persisted-worker");
   assert.ok(first);
-  await db.patch(first.receiptId, { providerAttemptCount: 1, chargedMicros: 10_000 });
-  await markPersisted(db, runId, first.receiptId, "persisted-worker", 1);
-  assert.equal((await db.get(first.receiptId)).providerResultStatus, "persisted");
+  assert.equal((await startProviderAttempt(db, runId, first.receiptId, "persisted-worker")).started, true);
+  const scrapedPostId = await insertSavedPost(db, first.handle);
+  const persistedPost = await db.get(scrapedPostId);
+  await assert.rejects(
+    () => markReceiptPostsPersisted._handler(ctx(db), {
+      runId,
+      receiptId: first.receiptId,
+      workerId: "persisted-worker",
+      postCount: 1,
+      scrapedPostId,
+      postId: persistedPost.postId,
+      instagramPostUrl: persistedPost.instagramPostUrl,
+      processingProtocolVersion: 1,
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /protocol 1 requires an exact saved-post ID and positive source revision/i,
+    "the new lane protocol must attest the exact persisted source revision",
+  );
+  await markPersisted(db, runId, first.receiptId, "persisted-worker", scrapedPostId);
+  const receipt = await db.get(first.receiptId);
+  assert.equal(receipt.providerResultStatus, "persisted");
+  assert.equal(receipt.scrapedPostId, scrapedPostId);
+  assert.equal(receipt.status, "processing_pending", "persistence must stay nonterminal until AI finishes");
 }
 
-// A paid fetch can finish while another worker owns the saved post's AI
-// lease. This is not a failed provider attempt: keep the durable receipt
-// non-terminal, defer its retry, and resume without consuming the retry cap.
+// Backend-first rolling deployment remains compatible with an old web worker:
+// without the explicit lane protocol opt-in, persistence records its durable
+// boundary but keeps the old running lease so that worker can truthfully finish
+// or release instead of receiving a lease-mismatch 5xx.
 {
   const db = new MemoryDb();
-  const runId = await queue(db, "canary", handles.slice(0, 16));
-  const first = await claim(db, runId, "ai-busy-worker");
+  const runId = await queue(db, "daily", ["rolling_old_web"]);
+  const fetched = await claim(db, runId, "old-web-worker");
+  await startProviderAttempt(db, runId, fetched.receiptId, "old-web-worker");
+  const scrapedPostId = await insertSavedPost(db, fetched.handle);
+  const post = await db.get(scrapedPostId);
+  const marker = await markReceiptPostsPersisted._handler(ctx(db), {
+    runId,
+    receiptId: fetched.receiptId,
+    workerId: "old-web-worker",
+    postCount: 1,
+    postId: post.postId,
+    instagramPostUrl: post.instagramPostUrl,
+    serviceSecret: process.env.CRON_SECRET,
+  });
+  assert.equal(marker.processingPending, false);
+  assert.equal((await db.get(fetched.receiptId)).status, "running");
+  await complete(db, runId, fetched.receiptId, "old-web-worker", "fetched");
+  assert.equal((await db.get(fetched.receiptId)).status, "fetched");
+}
+
+// End-to-end durable AI lane: paid fetch -> exact saved post -> busy/pending ->
+// one consumer -> terminal saved-post outcome -> original receipt terminal.
+// Duplicate consumers and a stale prior owner are fenced throughout, and no
+// transition can increment or repeat the paid provider attempt.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "daily", ["durable_ai_venue"]);
+  const first = await claim(db, runId, "fetch-worker");
   assert.ok(first);
-  await db.patch(first.receiptId, { providerAttemptCount: 1, chargedMicros: 10_000 });
-  await releaseForProcessingLease(db, runId, first.receiptId, "ai-busy-worker");
-  const deferred = await db.get(first.receiptId);
-  assert.equal(deferred.status, "queued");
-  assert.equal(deferred.attemptCount, 0, "AI lease waiting must not exhaust controller retries");
-  assert.equal(deferred.providerAttemptCount, 1, "the paid fetch must remain recorded");
-  assert.ok(deferred.retryNotBeforeAt > Date.now(), "AI lease waiting needs a bounded backoff");
+  assert.equal((await startProviderAttempt(db, runId, first.receiptId, "fetch-worker")).started, true);
+  const scrapedPostId = await insertSavedPost(db, first.handle);
+  await markPersisted(db, runId, first.receiptId, "fetch-worker", scrapedPostId);
+
+  const aiClaim = await claimProcessing(db, runId, "ai-worker-1");
+  assert.ok(aiClaim);
+  assert.equal(aiClaim.scrapedPostId, scrapedPostId, "the consumer must process the selected saved post only");
+  assert.equal(await claimProcessing(db, runId, "duplicate-ai-worker"), null, "only one AI receipt may be active");
+  await assert.rejects(
+    () => completeProcessingReceipt._handler(ctx(db), {
+      runId,
+      receiptId: first.receiptId,
+      workerId: "ai-worker-1",
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /before its selected saved post is terminal/i,
+    "a receipt must not terminalize merely because its AI worker was claimed",
+  );
+
+  const busyRelease = await releaseProcessingReceiptForRetry._handler(ctx(db), {
+    runId,
+    receiptId: first.receiptId,
+    workerId: "ai-worker-1",
+    reason: "OpenAI provider execution lease is busy; retry this saved post later.",
+    retryAfterMs: 1_000,
+    preserveAttempt: true,
+    serviceSecret: process.env.CRON_SECRET,
+  });
+  assert.deepEqual(busyRelease, { terminal: false, status: "processing_pending" });
+  const pending = await db.get(first.receiptId);
+  assert.equal(pending.status, "processing_pending");
+  assert.equal(pending.terminalAt, undefined, "AI contention must not falsely terminalize the receipt");
+  assert.equal(pending.processingAttemptCount, 0, "lease contention must not consume the AI retry limit");
+  assert.equal(pending.providerAttemptCount, 1, "the original paid attempt must remain exact");
+  assert.equal(await claim(db, runId, "fetch-worker"), null, "processing-pending work must never be claimed for Apify");
+  await assert.rejects(
+    () => startProviderAttempt(db, runId, first.receiptId, "fetch-worker"),
+    /lease mismatch/i,
+    "a processing receipt cannot cross the paid-provider boundary twice",
+  );
+
+  await db.patch(first.receiptId, { retryNotBeforeAt: Date.now() - 1 });
+  const resumed = await claimProcessing(db, runId, "ai-worker-2");
+  assert.ok(resumed, "the durable consumer must reclaim due pending AI work");
+  assert.equal(await claimProcessing(db, runId, "duplicate-ai-worker-2"), null);
+  await assert.rejects(
+    () => completeProcessingReceipt._handler(ctx(db), {
+      runId,
+      receiptId: first.receiptId,
+      workerId: "ai-worker-1",
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /lease mismatch/i,
+    "a stale prior consumer must not terminalize the receipt",
+  );
+
+  // This represents either a successful extraction or the valid-skip path
+  // where the exact scraped post was already terminal when the consumer ran.
+  await db.patch(scrapedPostId, {
+    processingStatus: "completed",
+    processingOutcome: "terminal_no_event",
+    processingLeaseOwner: undefined,
+    processingLeaseExpiresAt: undefined,
+    updatedAt: Date.now(),
+  });
+  const completion = await completeProcessingReceipt._handler(ctx(db), {
+    runId,
+    receiptId: first.receiptId,
+    workerId: "ai-worker-2",
+    serviceSecret: process.env.CRON_SECRET,
+  });
+  assert.equal(completion.complete, true);
+  assert.equal(completion.status, "fetched", "terminal_no_event is a truthful processed-post skip");
+  assert.equal(completion.processingOutcome, "terminal_no_event");
+  const terminal = await db.get(first.receiptId);
+  assert.equal(terminal.status, "fetched");
+  assert.equal(terminal.providerAttemptCount, 1, "AI completion must not cause a paid refetch");
+  assert.equal((await db.get(runId)).status, "completed");
+}
+
+// If the exact saved post became terminal before the receipt consumer (for
+// example, a prior worker committed the result and crashed before receipt
+// completion), the next consumer performs a valid skip and terminalizes the
+// original receipt without another AI or Apify attempt.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "daily", ["valid_skip_venue"]);
+  const fetched = await claim(db, runId, "valid-skip-fetch");
+  await startProviderAttempt(db, runId, fetched.receiptId, "valid-skip-fetch");
+  const scrapedPostId = await insertSavedPost(db, fetched.handle, {
+    processingStatus: "completed",
+    processingOutcome: "receipt_complete",
+    blocksPaidFetch: false,
+  });
+  await markPersisted(db, runId, fetched.receiptId, "valid-skip-fetch", scrapedPostId);
+  const consumer = await claimProcessing(db, runId, "valid-skip-consumer");
+  assert.ok(consumer);
+  await completeProcessingReceipt._handler(ctx(db), {
+    runId,
+    receiptId: fetched.receiptId,
+    workerId: "valid-skip-consumer",
+    serviceSecret: process.env.CRON_SECRET,
+  });
+  const terminal = await db.get(fetched.receiptId);
+  assert.equal(terminal.status, "fetched");
+  assert.equal(terminal.providerAttemptCount, 1);
+  assert.equal(terminal.processingAttemptCount, 1);
+}
+
+// A crashed AI consumer is recovered only after its lease expires. A duplicate
+// cannot claim early, and the stale owner cannot finish after recovery.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "daily", ["stale_ai_venue"]);
+  const fetched = await claim(db, runId, "fetch-stale");
+  await startProviderAttempt(db, runId, fetched.receiptId, "fetch-stale");
+  const scrapedPostId = await insertSavedPost(db, fetched.handle);
+  await markPersisted(db, runId, fetched.receiptId, "fetch-stale", scrapedPostId);
+  assert.ok(await claimProcessing(db, runId, "crashed-ai"));
+  assert.equal(await claimProcessing(db, runId, "too-early-ai"), null);
+  await db.patch(fetched.receiptId, { leaseExpiresAt: Date.now() - 1 });
+  assert.equal(await claimProcessing(db, runId, "recovery-probe"), null, "first pass must durably requeue the stale lease");
+  const recovered = await claimProcessing(db, runId, "recovered-ai");
+  assert.ok(recovered);
+  await assert.rejects(
+    () => completeProcessingReceipt._handler(ctx(db), {
+      runId,
+      receiptId: fetched.receiptId,
+      workerId: "crashed-ai",
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /lease mismatch/i,
+  );
+}
+
+// Permanent saved-post extraction/media failure is terminal but not success.
+// Server-side mapping must surface it in failed receipt/run accounting, while
+// terminal_no_event above remains an explicit successful fetched-post skip.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "daily", ["permanent_processing_failure"]);
+  const fetched = await claim(db, runId, "permanent-fetch");
+  await startProviderAttempt(db, runId, fetched.receiptId, "permanent-fetch");
+  const scrapedPostId = await insertSavedPost(db, fetched.handle);
+  await markPersisted(db, runId, fetched.receiptId, "permanent-fetch", scrapedPostId);
+  await claimProcessing(db, runId, "permanent-ai");
+  await db.patch(scrapedPostId, {
+    processingStatus: "completed",
+    processingOutcome: "terminal_permanent_failure",
+  });
+  const completion = await completeProcessingReceipt._handler(ctx(db), {
+    runId,
+    receiptId: fetched.receiptId,
+    workerId: "permanent-ai",
+    serviceSecret: process.env.CRON_SECRET,
+  });
+  assert.equal(completion.status, "failed");
+  assert.equal(completion.processingOutcome, "terminal_permanent_failure");
+  assert.equal((await db.get(fetched.receiptId)).status, "failed");
+  assert.equal((await db.get(runId)).failedReceiptCount, 1);
+}
+
+// Receipt retry exhaustion also revokes the still-valid exact post fence
+// before terminalizing. The old worker cannot commit a post result or event in
+// the interval where the scraped-post lease would otherwise outlive receipt.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "daily", ["released_terminal_ai"]);
+  const fetched = await claim(db, runId, "released-terminal-fetch");
+  await startProviderAttempt(db, runId, fetched.receiptId, "released-terminal-fetch");
+  const scrapedPostId = await insertSavedPost(db, fetched.handle);
+  await markPersisted(db, runId, fetched.receiptId, "released-terminal-fetch", scrapedPostId);
+  await claimProcessing(db, runId, "released-terminal-ai");
+  const post = await db.get(scrapedPostId);
+  await db.patch(scrapedPostId, {
+    processingStatus: "processing",
+    processingLeaseOwner: "released-terminal-ai",
+    processingLeaseExpiresAt: Date.now() + 5 * 60_000,
+    updatedAt: 1,
+  });
+  await db.patch(fetched.receiptId, { processingAttemptCount: 3 });
+  const released = await releaseProcessingReceiptForRetry._handler(ctx(db), {
+    runId,
+    receiptId: fetched.receiptId,
+    workerId: "released-terminal-ai",
+    reason: "third explicit AI processing failure",
+    serviceSecret: process.env.CRON_SECRET,
+  });
+  assert.deepEqual(released, { terminal: true, status: "failed" });
+  assert.equal((await db.get(fetched.receiptId)).status, "failed");
+  assert.equal((await db.get(scrapedPostId)).processingLeaseOwner, undefined);
+  assert.ok((await db.get(scrapedPostId)).updatedAt > 1);
+  await assert.rejects(
+    () => recordProcessingResult._handler(ctx(db), {
+      handle: fetched.handle,
+      scrapedPostId,
+      postId: post.postId,
+      instagramPostUrl: post.instagramPostUrl,
+      status: "completed",
+      outcome: "terminal_no_event",
+      owner: "released-terminal-ai",
+      sourceRevision: 1,
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /stale processing fence/i,
+  );
+}
+
+// Receipt lease expiry follows the same exact-fence revocation rule.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "daily", ["expired_terminal_ai"]);
+  const fetched = await claim(db, runId, "expired-terminal-fetch");
+  await startProviderAttempt(db, runId, fetched.receiptId, "expired-terminal-fetch");
+  const scrapedPostId = await insertSavedPost(db, fetched.handle);
+  await markPersisted(db, runId, fetched.receiptId, "expired-terminal-fetch", scrapedPostId);
+  await claimProcessing(db, runId, "expired-terminal-ai");
+  const post = await db.get(scrapedPostId);
+  await db.patch(scrapedPostId, {
+    processingStatus: "processing",
+    processingLeaseOwner: "expired-terminal-ai",
+    processingLeaseExpiresAt: Date.now() + 5 * 60_000,
+  });
+  await db.patch(fetched.receiptId, {
+    processingAttemptCount: 3,
+    leaseExpiresAt: Date.now() - 1,
+  });
+  assert.equal(await claimProcessing(db, runId, "expired-terminal-recovery"), null);
+  assert.equal((await db.get(fetched.receiptId)).status, "failed");
+  assert.equal((await db.get(scrapedPostId)).processingLeaseOwner, undefined);
+  await assert.rejects(
+    () => recordProcessingResult._handler(ctx(db), {
+      handle: fetched.handle,
+      scrapedPostId,
+      postId: post.postId,
+      instagramPostUrl: post.instagramPostUrl,
+      status: "completed",
+      outcome: "terminal_no_event",
+      owner: "expired-terminal-ai",
+      sourceRevision: 1,
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /stale processing fence/i,
+  );
+  await assert.rejects(
+    () => createEvent._handler(ctx(db), {
+      title: "Must not survive retry exhaustion",
+      date: "2026-08-15",
+      venue: "Expired venue",
+      artists: [],
+      eventType: "other",
+      status: "pending",
+      processingFence: {
+        handle: fetched.handle,
+        scrapedPostId,
+        postId: post.postId,
+        instagramPostUrl: post.instagramPostUrl,
+        owner: "expired-terminal-ai",
+        sourceRevision: 1,
+      },
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /processing fence is stale/i,
+  );
+}
+
+// The source revision recorded at persistence is immutable for this receipt.
+// If an upsert changes the row after claim, neither a newer terminal outcome
+// nor a stale worker may be credited to the older fetched payload.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "daily", ["revision_race_venue"]);
+  const fetched = await claim(db, runId, "revision-fetch");
+  await startProviderAttempt(db, runId, fetched.receiptId, "revision-fetch");
+  const scrapedPostId = await insertSavedPost(db, fetched.handle);
+  await markPersisted(db, runId, fetched.receiptId, "revision-fetch", scrapedPostId);
+  const processing = await claimProcessing(db, runId, "revision-ai");
+  assert.equal(processing.scrapedPostSourceRevision, 1);
+  await db.patch(scrapedPostId, {
+    sourceRevision: 2,
+    processingStatus: "completed",
+    processingOutcome: "receipt_complete",
+    updatedAt: Date.now() + 10_000,
+  });
+  await assert.rejects(
+    () => completeProcessingReceipt._handler(ctx(db), {
+      runId,
+      receiptId: fetched.receiptId,
+      workerId: "revision-ai",
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /source revision changed/i,
+  );
+  await releaseProcessingReceiptForRetry._handler(ctx(db), {
+    runId,
+    receiptId: fetched.receiptId,
+    workerId: "revision-ai",
+    reason: "Durable saved-post source revision changed during processing; exact recovery is required.",
+    preserveAttempt: true,
+    retryAfterMs: 1_000,
+    serviceSecret: process.env.CRON_SECRET,
+  });
+  await db.patch(fetched.receiptId, { retryNotBeforeAt: Date.now() - 1 });
+  assert.equal(await claimProcessing(db, runId, "revision-ai-retry"), null);
+  const pending = await db.get(fetched.receiptId);
+  assert.equal(pending.status, "processing_pending");
+  assert.equal(pending.scrapedPostSourceRevision, 1);
+  assert.equal(pending.providerAttemptCount, 1);
+  assert.match(pending.outcomeDetail, /revision_changed_recovery_required/);
+  await assert.rejects(
+    () => linkPersistedPost(db, runId, fetched.receiptId, scrapedPostId),
+    /fetch window/i,
+    "a later upsert cannot be silently adopted as the originally fetched revision",
+  );
+}
+
+// Run aborts are fenced against live AI workers. Once the AI lease is stale,
+// abort atomically revokes its owner; completion and release both reject the
+// failed parent run even if that worker resumes afterward.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "daily", ["abort_ai_venue"]);
+  const fetched = await claim(db, runId, "abort-fetch");
+  await startProviderAttempt(db, runId, fetched.receiptId, "abort-fetch");
+  const scrapedPostId = await insertSavedPost(db, fetched.handle);
+  await markPersisted(db, runId, fetched.receiptId, "abort-fetch", scrapedPostId);
+  await claimProcessing(db, runId, "abort-ai");
+  await db.patch(scrapedPostId, {
+    processingStatus: "processing",
+    processingLeaseOwner: "abort-ai",
+    processingLeaseExpiresAt: Date.now() + 5 * 60_000,
+  });
+  await assert.rejects(
+    () => abortInactiveRun._handler(ctx(db), {
+      runId,
+      reason: "qa_abort",
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /active receipt lease/i,
+  );
+  await db.patch(fetched.receiptId, { leaseExpiresAt: Date.now() - 1 });
+  const aborted = await abortInactiveRun._handler(ctx(db), {
+    runId,
+    reason: "qa_abort",
+    serviceSecret: process.env.CRON_SECRET,
+  });
+  assert.equal(aborted.status, "failed");
+  assert.equal((await db.get(fetched.receiptId)).leaseOwner, undefined);
+  const revokedPost = await db.get(scrapedPostId);
+  assert.equal(revokedPost.processingStatus, "retryable_failure");
+  assert.equal(revokedPost.processingLeaseOwner, undefined);
+  await assert.rejects(
+    () => completeProcessingReceipt._handler(ctx(db), {
+      runId,
+      receiptId: fetched.receiptId,
+      workerId: "abort-ai",
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /failed run|lease mismatch/i,
+  );
+  await assert.rejects(
+    () => releaseProcessingReceiptForRetry._handler(ctx(db), {
+      runId,
+      receiptId: fetched.receiptId,
+      workerId: "abort-ai",
+      reason: "stale worker",
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /failed run/i,
+  );
+  const staleFence = {
+    handle: fetched.handle,
+    scrapedPostId,
+    postId: revokedPost.postId,
+    instagramPostUrl: revokedPost.instagramPostUrl,
+    owner: "abort-ai",
+    sourceRevision: 1,
+  };
+  await assert.rejects(
+    () => createEvent._handler(ctx(db), {
+      title: "Must not survive abort",
+      date: "2026-08-15",
+      venue: "Abort venue",
+      artists: [],
+      eventType: "other",
+      status: "pending",
+      processingFence: staleFence,
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /processing fence is stale/i,
+    "an event write cannot outlive the aborted receipt lease",
+  );
+  const assetId = await db.insert("mediaAssets", {
+    storageId: "abort-storage",
+    url: "https://example.com/abort.jpg",
+    checksumSha256: "abort-checksum",
+  });
+  await assert.rejects(
+    () => refreshAndAttach._handler(ctx(db), {
+      postId: revokedPost.postId,
+      instagramPostUrl: revokedPost.instagramPostUrl,
+      assetId,
+      storageId: "abort-storage",
+      url: "https://example.com/abort-new.jpg",
+      actor: "qa-abort",
+      processingFence: staleFence,
+    }),
+    /processing fence is stale/i,
+    "a media write cannot outlive the aborted receipt lease",
+  );
+}
+
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "catch_up", ["abort_catchup_ai"]);
+  const fetched = await claim(db, runId, "abort-catchup-fetch");
+  await startProviderAttempt(db, runId, fetched.receiptId, "abort-catchup-fetch");
+  const scrapedPostId = await insertSavedPost(db, fetched.handle);
+  await markPersisted(db, runId, fetched.receiptId, "abort-catchup-fetch", scrapedPostId);
+  await claimProcessing(db, runId, "abort-catchup-ai");
+  await db.patch(scrapedPostId, {
+    processingStatus: "processing",
+    processingLeaseOwner: "abort-catchup-ai",
+    processingLeaseExpiresAt: Date.now() + 5 * 60_000,
+  });
+  await assert.rejects(
+    () => abortOnlyInactiveCatchUpRun._handler(ctx(db), {
+      reason: "qa_abort_catchup",
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /active receipt lease/i,
+  );
+  await db.patch(fetched.receiptId, { leaseExpiresAt: Date.now() - 1 });
+  const aborted = await abortOnlyInactiveCatchUpRun._handler(ctx(db), {
+    reason: "qa_abort_catchup",
+    serviceSecret: process.env.CRON_SECRET,
+  });
+  assert.equal(aborted.status, "failed");
+  assert.equal((await db.get(fetched.receiptId)).leaseOwner, undefined);
+  assert.equal((await db.get(scrapedPostId)).processingLeaseOwner, undefined);
 }
 
 // A clean "no post" response is terminal and must advance run completion;

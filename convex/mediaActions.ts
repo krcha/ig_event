@@ -16,6 +16,7 @@ type SourceIdentityArgs = {
 
 type SourceProcessingFence = {
   handle: string;
+  scrapedPostId?: Id<"scrapedPosts">;
   postId?: string;
   instagramPostUrl?: string;
   owner: string;
@@ -24,6 +25,7 @@ type SourceProcessingFence = {
 
 const sourceProcessingFenceValidator = v.object({
   handle: v.string(),
+  scrapedPostId: v.optional(v.id("scrapedPosts")),
   postId: v.optional(v.string()),
   instagramPostUrl: v.optional(v.string()),
   owner: v.string(),

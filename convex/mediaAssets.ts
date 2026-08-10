@@ -18,6 +18,7 @@ const sourceIdentityArgs = {
 
 const sourceProcessingFenceValidator = v.object({
   handle: v.string(),
+  scrapedPostId: v.optional(v.id("scrapedPosts")),
   postId: v.optional(v.string()),
   instagramPostUrl: v.optional(v.string()),
   owner: v.string(),
@@ -26,6 +27,7 @@ const sourceProcessingFenceValidator = v.object({
 
 type SourceProcessingFence = {
   handle: string;
+  scrapedPostId?: Id<"scrapedPosts">;
   postId?: string;
   instagramPostUrl?: string;
   owner: string;
@@ -177,9 +179,21 @@ async function assertSourceProcessingFence(
   fence: SourceProcessingFence | undefined,
 ): Promise<void> {
   if (!fence) return;
-  const posts = (await collectScrapedPostsByIdentity(ctx, fence)).filter(
-    (post) => post.handle === fence.handle,
-  );
+  const exact = fence.scrapedPostId ? await ctx.db.get(fence.scrapedPostId) : null;
+  if (
+    fence.scrapedPostId &&
+    (!exact ||
+      exact.handle !== fence.handle ||
+      (fence.postId && exact.postId !== fence.postId) ||
+      (fence.instagramPostUrl && exact.instagramPostUrl !== fence.instagramPostUrl))
+  ) {
+    throw new Error("Exact Instagram media processing fence identity is absent or mismatched.");
+  }
+  const posts = exact
+    ? [exact]
+    : (await collectScrapedPostsByIdentity(ctx, fence)).filter(
+        (post) => post.handle === fence.handle,
+      );
   if (posts.length !== 1) {
     throw new Error("Instagram media processing fence identity is absent or ambiguous.");
   }
@@ -197,15 +211,19 @@ async function assertSourceProcessingFence(
 
 async function attachAssetToSourceRecords(
   ctx: MutationCtx,
-  identity: SourceIdentity,
+  identity: SourceIdentity & { processingFence?: SourceProcessingFence },
   attachment: AssetAttachment,
   actor: string,
 ): Promise<{ attachedEventCount: number; attachedScrapedPostCount: number }> {
   const normalized = normalizeInstagramMediaSourceIdentity(identity);
-  const [events, posts] = await Promise.all([
+  const [events, identityPosts] = await Promise.all([
     collectEventsByIdentity(ctx, identity),
     collectScrapedPostsByIdentity(ctx, identity),
   ]);
+  const exactPost = identity.processingFence?.scrapedPostId
+    ? await ctx.db.get(identity.processingFence.scrapedPostId)
+    : null;
+  const posts = exactPost ? [exactPost] : identityPosts;
   if (events.length === 0 && posts.length === 0) {
     throw new Error("No event or scraped-post record matches the Instagram source identity.");
   }
@@ -428,10 +446,14 @@ export const removeMissingAsset = internalMutation({
     await assertSourceProcessingFence(ctx, args.processingFence);
     const asset = await ctx.db.get(args.assetId);
     if (!asset || asset.storageId !== args.expectedStorageId) return false;
-    const [events, posts] = await Promise.all([
+    const [events, identityPosts] = await Promise.all([
       collectEventsByIdentity(ctx, args),
       collectScrapedPostsByIdentity(ctx, args),
     ]);
+    const exactPost = args.processingFence?.scrapedPostId
+      ? await ctx.db.get(args.processingFence.scrapedPostId)
+      : null;
+    const posts = exactPost ? [exactPost] : identityPosts;
     for (const event of events) {
       if (event.imageStorageId !== args.expectedStorageId) continue;
       await ctx.db.patch(event._id, {

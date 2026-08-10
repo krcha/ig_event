@@ -3,9 +3,15 @@ import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { isAuthorizedCronRequestHeader } from "@/lib/pipeline/cron-ingestion-config";
 import { createConvexHttpClient, requireServiceSecret } from "@/lib/convex/server";
-import { persistScrapedPostsForHandle, runInstagramIngestion } from "@/lib/pipeline/run-instagram-ingestion";
+import {
+  persistScrapedPostsForHandle,
+  processSavedScrapedPostForDurableReceipt,
+} from "@/lib/pipeline/run-instagram-ingestion";
 import { scrapeInstagramAccount } from "@/lib/scraper/instagram-scraper";
-import { isTransientSavedPostProcessingError } from "@/lib/pipeline/durable-ingestion-execute";
+import {
+  isDurableSavedPostRevisionMismatch,
+  isTransientSavedPostProcessingError,
+} from "@/lib/pipeline/durable-ingestion-execute";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -16,6 +22,9 @@ const retry = "durableIngestionRuns:releaseReceiptForRetry" as unknown as Functi
 const probe = "durableIngestionRuns:probeRun" as unknown as FunctionReference<"query">;
 const markProviderAttempt = "durableIngestionRuns:markReceiptProviderAttemptStarted" as unknown as FunctionReference<"mutation">;
 const markPostsPersisted = "durableIngestionRuns:markReceiptPostsPersisted" as unknown as FunctionReference<"mutation">;
+const claimProcessing = "durableIngestionRuns:claimNextProcessingReceipt" as unknown as FunctionReference<"mutation">;
+const completeProcessing = "durableIngestionRuns:completeProcessingReceipt" as unknown as FunctionReference<"mutation">;
+const releaseProcessing = "durableIngestionRuns:releaseProcessingReceiptForRetry" as unknown as FunctionReference<"mutation">;
 
 /** One receipt per request. The VPS starts one worker per fixed lane. */
 export async function POST(request: Request) {
@@ -32,6 +41,105 @@ export async function POST(request: Request) {
   const serviceSecret = requireServiceSecret();
   const convex = createConvexHttpClient();
   const workerId = `vps:${randomUUID()}`;
+
+  // Every existing fixed-lane worker first offers to become the one global AI
+  // consumer. Convex grants at most one processing lease, so no runner change
+  // or restart is required and the other five requests remain fetch-capable.
+  const processingClaim = await convex.mutation(claimProcessing, {
+    runId,
+    workerId,
+    serviceSecret,
+  }) as {
+    receiptId: string;
+    handle: string;
+    scrapedPostId: string;
+    scrapedPostSourceRevision: number;
+    processingAttemptCount: number;
+    providerAttemptCount: number;
+  } | null;
+  if (processingClaim) {
+    try {
+      const processingResult = await processSavedScrapedPostForDurableReceipt({
+        handle: processingClaim.handle,
+        scrapedPostId: processingClaim.scrapedPostId,
+        expectedSourceRevision: processingClaim.scrapedPostSourceRevision,
+        workOwner: workerId,
+        serviceSecret,
+      });
+      if (processingResult.state === "terminal") {
+        const completion = await convex.mutation(completeProcessing, {
+          runId,
+          receiptId: processingClaim.receiptId,
+          workerId,
+          detail: `saved_post:${processingClaim.scrapedPostId};${processingResult.outcome}`,
+          serviceSecret,
+        }) as { status: "fetched" | "failed"; processingOutcome: string };
+        return NextResponse.json({
+          claimed: true,
+          work: "processing",
+          handle: processingClaim.handle,
+          outcome: completion.status,
+          processingOutcome: completion.processingOutcome,
+        });
+      }
+
+      const revisionMismatch = isDurableSavedPostRevisionMismatch(processingResult.reason);
+      const preserveAttempt =
+        revisionMismatch ||
+        (processingResult.state === "pending" &&
+          isTransientSavedPostProcessingError(processingResult.reason));
+      const released = await convex.mutation(releaseProcessing, {
+        runId,
+        receiptId: processingClaim.receiptId,
+        workerId,
+        reason: processingResult.reason,
+        retryAfterMs:
+          revisionMismatch
+            ? 6 * 60 * 60_000
+            : processingResult.state === "pending"
+              ? processingResult.retryAfterMs
+              : 1_000,
+        ...(preserveAttempt ? { preserveAttempt: true } : {}),
+        serviceSecret,
+      }) as {
+        terminal: boolean;
+        status: "processing_pending" | "fetched" | "no_post" | "deferred" | "failed";
+      };
+      return NextResponse.json({
+        claimed: true,
+        work: "processing",
+        handle: processingClaim.handle,
+        processingPending: !released.terminal,
+        outcome: released.terminal ? released.status : undefined,
+      }, { status: released.terminal ? 200 : 202 });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "unknown saved-post processing failure";
+      const revisionMismatch = isDurableSavedPostRevisionMismatch(error);
+      const preserveAttempt =
+        revisionMismatch || isTransientSavedPostProcessingError(error);
+      const released = await convex.mutation(releaseProcessing, {
+        runId,
+        receiptId: processingClaim.receiptId,
+        workerId,
+        reason,
+        retryAfterMs: revisionMismatch ? 6 * 60 * 60_000 : 30_000,
+        ...(preserveAttempt ? { preserveAttempt: true } : {}),
+        serviceSecret,
+      }) as {
+        terminal: boolean;
+        status: "processing_pending" | "fetched" | "no_post" | "deferred" | "failed";
+      };
+      // The failure has crossed a durable retry/terminal boundary. Return 202
+      // while it remains pending so curl --fail never restarts all six lanes.
+      return NextResponse.json({
+        claimed: true,
+        work: "processing",
+        processingPending: !released.terminal,
+        outcome: released.terminal ? released.status : undefined,
+      }, { status: released.terminal ? 200 : 202 });
+    }
+  }
+
   const claimed = await convex.mutation(claim, { runId, workerId, workerSlot, serviceSecret }) as {
     receiptId: string; handle: string; controls: { resultsLimit: number; daysBack?: number; noAgeCutoff?: boolean; skipPinnedPosts: boolean; pinnedPostPolicy?: "exclude_all" | "include_recent"; ignoreCheckpoint: boolean; ignoreCooldown: boolean; costPerProfileMicros: number };
     providerAttemptCount?: number;
@@ -73,6 +181,25 @@ export async function POST(request: Request) {
       });
       return NextResponse.json({ claimed: true, handle: claimed.handle, outcome: "no_post" });
     }
+    if (alreadyFetched && claimed.providerResultStatus === "persisted") {
+      // This can occur only during an old-web/new-Convex rolling overlap. Keep
+      // it queued for the processing migration; never enter Apify or report a
+      // fetched terminal result from this compatibility branch.
+      await convex.mutation(retry, {
+        runId,
+        receiptId: claimed.receiptId,
+        workerId,
+        reason: "saved_post_processing_migration_pending",
+        retryAfterMs: 1_000,
+        preserveAttempt: true,
+        serviceSecret,
+      });
+      return NextResponse.json({
+        claimed: true,
+        handle: claimed.handle,
+        processingPending: true,
+      }, { status: 202 });
+    }
     if (!alreadyFetched) {
       // This is immediately before the outbound provider call. It consumes the
       // frozen one-cent reservation or charges a retry only if run budget remains.
@@ -109,63 +236,51 @@ export async function POST(request: Request) {
       });
       // Controller receipts fence this new path. Omit the legacy global lease
       // owner so persistence accepts the controller-owned concurrent fetch.
-      await persistScrapedPostsForHandle(convex, claimed.handle, posts, serviceSecret);
+      const persistedPosts = await persistScrapedPostsForHandle(
+        convex,
+        claimed.handle,
+        posts,
+        serviceSecret,
+      );
+      const selectedPersistedPost = posts[0]
+        ? persistedPosts.find((post) => post.postId === posts[0].postId)
+        : undefined;
+      if (posts.length === 1 && !selectedPersistedPost) {
+        throw new Error("Selected provider post did not return an exact durable row identity.");
+      }
       await convex.mutation(markPostsPersisted, {
         runId,
         receiptId: claimed.receiptId,
         workerId,
         postCount: posts.length,
+        ...(selectedPersistedPost?.scrapedPostId
+          ? { scrapedPostId: selectedPersistedPost.scrapedPostId }
+          : {}),
+        ...(selectedPersistedPost?.sourceRevision
+          ? { scrapedPostSourceRevision: selectedPersistedPost.sourceRevision }
+          : {}),
+        ...(posts[0]?.postId ? { postId: posts[0].postId } : {}),
+        ...(posts[0]?.instagramPostUrl
+          ? { instagramPostUrl: posts[0].instagramPostUrl }
+          : {}),
+        processingProtocolVersion: 1,
         serviceSecret,
       });
     }
-    const summary = await runInstagramIngestion({
-      handles: [claimed.handle],
-      // Fresh content is already persisted above. This phase keeps the existing
-      // AI prompt/model and event processing path unchanged.
-      resultsLimit: claimed.controls.resultsLimit,
-      ...(claimed.controls.daysBack === undefined ? {} : { daysBack: claimed.controls.daysBack }),
-      noAgeCutoff: claimed.controls.noAgeCutoff ?? claimed.controls.daysBack === undefined,
-      skipPinnedPosts: claimed.controls.skipPinnedPosts,
-      ignoreCheckpoint: claimed.controls.ignoreCheckpoint,
-      ignoreCooldown: claimed.controls.ignoreCooldown,
-      mode: "saved_posts",
-      serviceSecret,
-    });
-    const processingErrors = summary.handles[0]?.errors ?? [];
-    // `runInstagramIngestion` aggregates errors from post persistence, media,
-    // and AI processing. A lease wait may not be the first entry. Prefer it
-    // when present so this already-paid receipt is delayed, rather than
-    // returning a 503 and burning a retry attempt because an earlier warning
-    // happened to be listed first.
-    const transientProcessingError = processingErrors.find(
-      isTransientSavedPostProcessingError,
-    );
-    const processingError = transientProcessingError ?? processingErrors[0];
-    if (processingError) {
-      const preserveAttempt = transientProcessingError !== undefined;
-      await convex.mutation(retry, {
-        runId,
-        receiptId: claimed.receiptId,
-        workerId,
-        reason: processingError,
-        ...(preserveAttempt ? { retryAfterMs: 30_000, preserveAttempt: true } : {}),
-        serviceSecret,
-      });
+    if (posts.length > 0) {
       return NextResponse.json({
         claimed: true,
+        work: "fetch",
         handle: claimed.handle,
-        retryScheduled: true,
-        processingPending: preserveAttempt,
-      }, { status: preserveAttempt ? 202 : 503 });
+        processingPending: true,
+      }, { status: 202 });
     }
-    const result = alreadyFetched || posts.length > 0
-      ? { outcome: "fetched" as const, detail: `posts:${posts.length}` }
-      : { outcome: "no_post" as const, detail: "provider_completed_without_post" };
+    const result = { outcome: "no_post" as const, detail: "provider_completed_without_post" };
     await convex.mutation(complete, { runId, receiptId: claimed.receiptId, workerId, ...result, serviceSecret });
     return NextResponse.json({ claimed: true, handle: claimed.handle, outcome: result.outcome });
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown execution failure";
-    const preserveAttempt = isTransientSavedPostProcessingError(reason);
+    const preserveAttempt = isTransientSavedPostProcessingError(error);
     // A provider/network failure remains explicit and retryable; it does not
     // become a false "checked" receipt.
     await convex.mutation(retry, {
