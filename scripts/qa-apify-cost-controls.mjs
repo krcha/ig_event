@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -529,7 +530,11 @@ assert.match(
   /requestBoundaryVersion: 1/,
   "boundary-aware web code must explicitly select request-boundary accounting",
 );
-assert.match(ingestionRunnerSource, /attemptCooldownMs: getProviderAttemptCooldownMs\(\)/);
+assert.match(
+  ingestionRunnerSource,
+  /attemptCooldownMs: options\.ignoreCooldown \? 0 : getProviderAttemptCooldownMs\(\)/,
+  "the durable catch-up override may bypass cooldown only when explicitly requested; daily callers retain the provider cooldown",
+);
 assert.match(
   ingestionRunnerSource,
   /onRequestStarted: async \(\) =>[\s\S]{0,500}markPaidFetchRequestStartedMutation[\s\S]{0,500}providerRequestStarted = true;[\s\S]{0,220}freshFetchAttempted/,
@@ -2042,9 +2047,11 @@ process.stdout.write("200");
         FAKE_CURL_STATE: stateFile,
         IG_EVENT_CRON_ENV: envFile,
         IG_EVENT_CRON_LOG_DIR: logDir,
+        IG_EVENT_CRON_LOCK_DIR: join(fixtureRoot, "locks"),
         PATH: `${fakeBin}:${process.env.PATH}`,
       },
     });
+    assert.ok(existsSync(stateFile), `host runner never reached fake curl: ${result.stderr || result.stdout}`);
     const state = JSON.parse(readFileSync(stateFile, "utf8"));
     return { result, state };
   } finally {

@@ -64,7 +64,9 @@ URL="${APP_ORIGIN}${PATH_SUFFIX}"
 mkdir -p "$LOG_DIR"
 chmod 700 "$LOG_DIR"
 
-LOCK_FILE="/run/lock/ig-event-${JOB}.lock"
+LOCK_DIR="${IG_EVENT_CRON_LOCK_DIR:-/run/lock}"
+mkdir -p "$LOCK_DIR"
+LOCK_FILE="${LOCK_DIR%/}/ig-event-${JOB}.lock"
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) job=$JOB status=skipped reason=already_running url=$URL"
