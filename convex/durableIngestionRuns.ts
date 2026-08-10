@@ -418,6 +418,70 @@ export const markReceiptPostsPersisted = mutation({
   },
 });
 
+/**
+ * Recover a legacy terminal `deferred` receipt only when its paid result is
+ * already present in Convex storage. This is deliberately an operator/service
+ * action, not a general retry: it never calls Apify and cannot reopen a
+ * receipt unless it has crossed the saved-post boundary.
+ */
+export const reopenDeferredReceiptFromSavedPost = mutation({
+  args: {
+    runId: v.id("ingestionRuns"),
+    receiptId: v.id("ingestionRunHandleReceipts"),
+    serviceSecret: v.optional(v.string()),
+  },
+  returns: v.object({ reopened: v.boolean(), postCount: v.number() }),
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const [run, receipt] = await Promise.all([ctx.db.get(args.runId), ctx.db.get(args.receiptId)]);
+    if (!run || !receipt || receipt.runId !== args.runId) {
+      throw new Error("Receipt does not belong to this run.");
+    }
+    if (receipt.status !== "deferred" || (receipt.providerAttemptCount ?? 0) < 1) {
+      throw new Error("Only a paid terminal deferred receipt can be recovered.");
+    }
+    if (!/saved post processing is (busy|deferred)|openai provider execution lease is busy/i.test(receipt.outcomeDetail ?? "")) {
+      throw new Error("Deferred receipt is not eligible for saved-post recovery.");
+    }
+
+    // The canary stores at most one post per handle. Bound the lookup even for
+    // historic handles and require a post created during this exact run.
+    const savedPosts = await ctx.db
+      .query("scrapedPosts")
+      .withIndex("by_handle", (q) => q.eq("handle", receipt.handle))
+      .take(100);
+    const persistedPostCount = savedPosts.filter((post) => post.createdAt >= run.createdAt).length;
+    if (persistedPostCount === 0) {
+      throw new Error("No saved post from this run; refusing recovery without a durable source result.");
+    }
+
+    const chunk = await ctx.db.get(receipt.chunkId);
+    if (!chunk) throw new Error("Receipt chunk not found.");
+    const now = Date.now();
+    await ctx.db.patch(receipt._id, {
+      status: "queued",
+      terminalAt: undefined,
+      outcomeDetail: "saved_post_recovery_queued",
+      providerResultStatus: "persisted",
+      persistedPostCount,
+      retryNotBeforeAt: now,
+      updatedAt: now,
+    });
+    await ctx.db.patch(chunk._id, {
+      terminalReceiptCount: Math.max(0, chunk.terminalReceiptCount - 1),
+      status: "running",
+      updatedAt: now,
+    });
+    await ctx.db.patch(run._id, {
+      status: "queued",
+      terminalReceiptCount: Math.max(0, run.terminalReceiptCount - 1),
+      finishedAt: undefined,
+      updatedAt: now,
+    });
+    return { reopened: true, postCount: persistedPostCount };
+  },
+});
+
 export const releaseReceiptForRetry = mutation({
   args: {
     runId: v.id("ingestionRuns"),
