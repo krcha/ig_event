@@ -71,6 +71,21 @@ receipts. After that call reopens a completed run, the operator must invoke
 `scripts/ig-event-durable-runner <runId>` for that run ID; the mutation queues
 the work durably but does not launch a host process.
 
+## Host transport
+
+Production starts Next with a 120-second HTTP keep-alive timeout. This must stay
+above Traefik's 90-second upstream idle-connection pool so the proxy cannot
+reuse a five-second Next socket while it is closing and turn an internal POST
+into a synthetic 502.
+
+The durable runner classifies transient curl/network failures and HTTP
+408/425/429/5xx responses per worker. It retries the same durable run and fixed
+slot with exponential backoff capped at 60 seconds; the receipt's atomic
+provider marker prevents a lost response from issuing another Apify request.
+Permanent HTTP failures still fail the supervised runner. Each worker writes
+its bearer header to a mode-0600 temporary curl config, removes the secret from
+curl's inherited environment, and cleans the config on exit.
+
 The new indexes must be ready before switching the web build:
 
 - `ingestionRunHandleReceipts.by_run_status_providerResultStatus`

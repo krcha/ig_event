@@ -5,43 +5,237 @@ ENV_FILE="${IG_EVENT_CRON_ENV:-/etc/ig_event/cron.env}"
 RUN_ID="${1:?usage: ig-event-durable-runner RUN_ID}"
 . "$ENV_FILE"
 : "${APP_ORIGIN:?missing APP_ORIGIN}" "${CRON_SECRET:?missing CRON_SECRET}"
-URL="${APP_ORIGIN%/}/api/cron/durable-ingestion/execute?runId=${RUN_ID}"
+EXECUTOR_ORIGIN="${IG_EVENT_DURABLE_EXECUTOR_ORIGIN:-$APP_ORIGIN}"
+URL="${EXECUTOR_ORIGIN%/}/api/cron/durable-ingestion/execute?runId=${RUN_ID}"
+RUNTIME_DIR="${IG_EVENT_DURABLE_RUNTIME_DIR:-/run/ig_event}"
+mkdir -p "$RUNTIME_DIR"
+chmod 700 "$RUNTIME_DIR"
+umask 077
+RUNNER_PARENT_PID="$$"
+START_GATE="$(mktemp "${RUNTIME_DIR%/}/durable-runner.gate.XXXXXX")"
+STOP_FILE="$(mktemp "${RUNTIME_DIR%/}/durable-runner.stop.XXXXXX")"
+
+is_transient_curl_failure() {
+  case "$1" in
+    5|6|7|18|28|35|47|52|55|56|92) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_transient_http_status() {
+  [[ "$1" =~ ^(408|425|429|5[0-9][0-9])$ ]]
+}
+
 worker() {
   local slot="$1"
+  local body body_file="" child_pid="" config_file="" curl_exit http_code pid_file="" ready_file="" status_file=""
+  local consecutive_failure_count=0
+  local retry_delay_seconds
+
+  cleanup_worker_files() {
+    local worker_exit_status=$?
+    if [[ -n "$child_pid" ]]; then
+      kill "$child_pid" 2>/dev/null || true
+      wait "$child_pid" 2>/dev/null || true
+    fi
+    [[ -z "$body_file" ]] || rm -f "$body_file"
+    [[ -z "$config_file" ]] || rm -f "$config_file"
+    [[ -z "$pid_file" ]] || rm -f "$pid_file"
+    [[ -z "$ready_file" ]] || rm -f "$ready_file"
+    [[ -z "$status_file" ]] || rm -f "$status_file"
+    if [[ "$worker_exit_status" -ne 0 && "$worker_exit_status" -ne 130 && "$worker_exit_status" -ne 143 ]]; then
+      kill -USR1 "$RUNNER_PARENT_PID" 2>/dev/null || true
+    fi
+  }
+  trap cleanup_worker_files EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
+  body_file="$(mktemp "${RUNTIME_DIR%/}/durable-${slot}.body.XXXXXX")"
+  config_file="$(mktemp "${RUNTIME_DIR%/}/durable-${slot}.curl.XXXXXX")"
+  status_file="$(mktemp "${RUNTIME_DIR%/}/durable-${slot}.status.XXXXXX")"
+  chmod 600 "$body_file" "$config_file" "$status_file"
+
+  {
+    printf 'silent\n'
+    printf 'show-error\n'
+    printf 'max-time = 300\n'
+    printf 'request = "POST"\n'
+    printf 'header = "Authorization: Bearer %s"\n' "$CRON_SECRET"
+    printf 'output = "%s"\n' "$body_file"
+    printf 'write-out = "%%{http_code}"\n'
+    printf 'url = "%s&workerSlot=%s"\n' "$URL" "$slot"
+  } > "$config_file"
+
+  # The root-only curl config now owns the bearer token. Do not pass it to
+  # child processes through argv or their inherited environment.
+  unset CRON_SECRET
+
+  # No worker may issue a request until every sibling has finished creating
+  # its supervised temp files. This closes the setup/termination cleanup race.
+  ready_file="${START_GATE}.${slot}.ready"
+  pid_file="${START_GATE}.${slot}.pid"
+  printf 'ready\n' > "$ready_file"
+  while [[ ! -s "$START_GATE" ]]; do
+    [[ -s "$STOP_FILE" ]] && exit 143
+    sleep 0.05
+  done
+
+  wait_with_supervised_sleep() {
+    local delay_seconds="$1"
+    sleep "$delay_seconds" &
+    child_pid="$!"
+    printf '%s\n' "$child_pid" > "$pid_file"
+    if [[ -s "$STOP_FILE" ]]; then
+      kill "$child_pid" 2>/dev/null || true
+    fi
+    wait "$child_pid" 2>/dev/null || true
+    child_pid=""
+    rm -f "$pid_file"
+    [[ -s "$STOP_FILE" ]] && exit 143
+    return 0
+  }
+
+  back_off() {
+    consecutive_failure_count=$((consecutive_failure_count + 1))
+    if [[ "$consecutive_failure_count" -ge 5 ]]; then
+      retry_delay_seconds=60
+    else
+      retry_delay_seconds=$((5 * (2 ** (consecutive_failure_count - 1))))
+    fi
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) event=durable_ingestion.executor.transport_deferred worker_slot=${slot} curl_exit=${curl_exit} http_code=${http_code:-000} attempt=${consecutive_failure_count} retry_after_seconds=${retry_delay_seconds}" >&2
+    wait_with_supervised_sleep "$retry_delay_seconds"
+  }
+
   while true; do
-    # A transport failure means the receipt was either released for retry or
-    # its lease will expire.  Exit non-zero so systemd restarts the host runner;
-    # never turn it into a false completed profile.
-    body="$(curl --fail --silent --show-error --max-time 300 \
-      -H "Authorization: Bearer ${CRON_SECRET}" -X POST "${URL}&workerSlot=${slot}")" || exit 1
+    [[ -s "$STOP_FILE" ]] && exit 143
+    : > "$body_file"
+    : > "$status_file"
+    # `--disable` must be first so a host curlrc cannot enable verbose/trace,
+    # leak the header, or change HTTP error classification.
+    curl --disable --config "$config_file" > "$status_file" &
+    child_pid="$!"
+    printf '%s\n' "$child_pid" > "$pid_file"
+    if [[ -s "$STOP_FILE" ]]; then
+      kill "$child_pid" 2>/dev/null || true
+    fi
+    if wait "$child_pid"; then
+      curl_exit=0
+    else
+      curl_exit=$?
+    fi
+    child_pid=""
+    rm -f "$pid_file"
+    [[ -s "$STOP_FILE" ]] && exit 143
+    http_code="$(<"$status_file")"
+    body="$(<"$body_file")"
+
+    if [[ "$curl_exit" -ne 0 ]]; then
+      if is_transient_curl_failure "$curl_exit"; then
+        back_off
+        continue
+      fi
+      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) event=durable_ingestion.executor.fatal worker_slot=${slot} curl_exit=${curl_exit} http_code=${http_code:-000}" >&2
+      exit 1
+    fi
+    if is_transient_http_status "$http_code"; then
+      back_off
+      continue
+    fi
+    if [[ ! "$http_code" =~ ^2[0-9][0-9]$ ]]; then
+      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) event=durable_ingestion.executor.fatal worker_slot=${slot} curl_exit=0 http_code=${http_code:-000}" >&2
+      exit 1
+    fi
+
     if [[ "$body" == *'"retryDeferred":true'* ]]; then
       # The web route could not confirm whether a durable claim/release
       # mutation committed. Its bounded lease will be retried or reclaimed;
-      # back off this lane without restarting all six workers.
-      sleep 5
+      # back off this lane without restarting all six workers. Treat repeated
+      # infrastructure deferrals like transport faults so an outage cannot
+      # turn six fixed lanes into a synchronized hot loop.
+      curl_exit=0
+      back_off
       continue
     fi
+    consecutive_failure_count=0
     if [[ "$body" == *'"claimed":false'* ]]; then
       [[ "$body" == *'"complete":true'* ]] && exit 0
       # A restarted runner can see the prior process's valid leases. Wait for
       # those workers to complete or expire, then reclaim safely.
-      sleep 5
+      wait_with_supervised_sleep 5
     fi
   done
 }
 pids=()
+failed=0
+
+terminate_workers() {
+  local child_pid pid_file slot
+  printf 'stop\n' > "$STOP_FILE"
+  for slot in {0..5}; do
+    pid_file="${START_GATE}.${slot}.pid"
+    if IFS= read -r child_pid < "$pid_file" 2>/dev/null; then
+      [[ "$child_pid" =~ ^[0-9]+$ ]] && kill "$child_pid" 2>/dev/null || true
+    fi
+  done
+}
+
+cleanup_parent() {
+  local pid slot
+  trap - EXIT
+  trap '' INT TERM USR1
+  terminate_workers
+  for pid in "${pids[@]}"; do
+    while kill -0 "$pid" 2>/dev/null; do
+      wait "$pid" 2>/dev/null || true
+    done
+  done
+  rm -f "$START_GATE"
+  rm -f "$STOP_FILE"
+  for slot in {0..5}; do
+    rm -f "${START_GATE}.${slot}.ready"
+    rm -f "${START_GATE}.${slot}.pid"
+  done
+}
+
+trap cleanup_parent EXIT
+trap 'failed=1; terminate_workers' USR1
+trap 'failed=1; terminate_workers' INT
+trap 'failed=1; terminate_workers' TERM
+
 for slot in {0..5}; do
   worker "$slot" &
   pids+=("$!")
 done
+for slot in {0..5}; do
+  while [[ ! -s "${START_GATE}.${slot}.ready" ]]; do
+    [[ "$failed" == "1" ]] && break 2
+    sleep 0.05
+  done
+done
+if [[ "$failed" == "0" ]]; then
+  printf 'ready\n' > "$START_GATE"
+fi
 
 # `wait` without explicit PIDs returns only one status and can hide another
-# worker's failed curl. Collect every exit so systemd reliably restarts this
-# resumable controller when any leased worker fails.
-failed=0
+# worker's failed curl. Collect every exit; a fatal worker also signals the
+# parent so siblings are terminated promptly instead of leaving a degraded
+# service marked active indefinitely.
 for pid in "${pids[@]}"; do
   if ! wait "$pid"; then
     failed=1
+    terminate_workers
   fi
 done
-exit "$failed"
+if [[ "$failed" == "1" ]]; then
+  # A signal can interrupt `wait` before the corresponding child has exited.
+  # Reap every remaining worker so its trap kills curl and removes secrets.
+  for pid in "${pids[@]}"; do
+    while kill -0 "$pid" 2>/dev/null; do
+      wait "$pid" 2>/dev/null || true
+    done
+  done
+fi
+runner_exit_status="$failed"
+cleanup_parent
+exit "$runner_exit_status"

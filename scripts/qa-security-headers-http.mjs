@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { request as httpRequest } from "node:http";
+import { Agent, request as httpRequest } from "node:http";
 import process from "node:process";
 
 const port = 33_000 + (process.pid % 1_000);
@@ -8,7 +8,16 @@ const origin = `http://127.0.0.1:${port}`;
 const output = [];
 const child = spawn(
   process.execPath,
-  ["node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)],
+  [
+    "node_modules/next/dist/bin/next",
+    "start",
+    "--hostname",
+    "127.0.0.1",
+    "--port",
+    String(port),
+    "--keepAliveTimeout",
+    "120000",
+  ],
   {
     cwd: process.cwd(),
     env: { ...process.env, NODE_ENV: "production" },
@@ -47,6 +56,36 @@ function requestWithHost(path, host) {
   });
 }
 
+function requestOnKeepAliveAgent(agent) {
+  return new Promise((resolve, reject) => {
+    let socket;
+    const request = httpRequest(
+      {
+        agent,
+        hostname: "127.0.0.1",
+        path: "/api/health",
+        port,
+      },
+      (response) => {
+        response.resume();
+        response.once("end", () => resolve({
+          headers: response.headers,
+          socket,
+          statusCode: response.statusCode,
+        }));
+      },
+    );
+    request.once("socket", (assignedSocket) => {
+      socket = assignedSocket;
+    });
+    request.setTimeout(30_000, () =>
+      request.destroy(new Error("Keep-alive request timed out.")),
+    );
+    request.once("error", reject);
+    request.end();
+  });
+}
+
 async function waitForServer() {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     if (child.exitCode !== null) {
@@ -75,6 +114,27 @@ async function stopServer() {
 
 try {
   await waitForServer();
+
+  const keepAliveAgent = new Agent({ keepAlive: true, maxSockets: 1 });
+  try {
+    const firstKeepAliveResponse = await requestOnKeepAliveAgent(keepAliveAgent);
+    assert.equal(firstKeepAliveResponse.statusCode, 200);
+    assert.match(
+      firstKeepAliveResponse.headers["keep-alive"] ?? "",
+      /timeout=120/,
+      "Next should advertise a 120-second keep-alive above Traefik's 90-second pool timeout.",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 5_500));
+    const secondKeepAliveResponse = await requestOnKeepAliveAgent(keepAliveAgent);
+    assert.equal(secondKeepAliveResponse.statusCode, 200);
+    assert.equal(
+      secondKeepAliveResponse.socket,
+      firstKeepAliveResponse.socket,
+      "Next must accept a second HTTP/1.1 request on the same socket after its former five-second timeout.",
+    );
+  } finally {
+    keepAliveAgent.destroy();
+  }
 
   for (const [route, expectedStatus] of [
     ["/", 200],
@@ -134,7 +194,7 @@ try {
   );
 
   console.log(
-    "Security-header HTTP QA passed for home, sign-in, health, readiness, 404, local HSTS ownership, and canonical redirects.",
+    "Security-header HTTP QA passed for keep-alive reuse, home, sign-in, health, readiness, 404, local HSTS ownership, and canonical redirects.",
   );
 } catch (error) {
   console.error(output.join(""));

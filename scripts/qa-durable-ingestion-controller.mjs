@@ -1,5 +1,16 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   DURABLE_INGESTION_CANARY_SIZE,
   DURABLE_INGESTION_FULL_PROFILE_BUDGET_MICROS,
@@ -65,14 +76,24 @@ assert.match(executor, /complete: state\?\.complete/, "workers must distinguish 
 assert.match(launcher, /for slot in \{0\.\.5\}/);
 assert.match(launcher, /pids=\(\)/, "runner must track every worker PID");
 assert.match(launcher, /for pid in "\$\{pids\[@\]\}"/, "runner must wait for every worker");
-assert.match(launcher, /exit "\$failed"/, "a worker failure must reach systemd");
+assert.match(
+  launcher,
+  /runner_exit_status="\$failed"[\s\S]*exit "\$runner_exit_status"/,
+  "a worker failure must reach systemd after cleanup",
+);
 const retryDeferredOffset = launcher.indexOf(`'"retryDeferred":true'`);
 assert.ok(retryDeferredOffset >= 0, "runner must recognize a durably deferred executor response");
 assert.match(
-  launcher.slice(retryDeferredOffset, retryDeferredOffset + 400),
-  /sleep 5[\s\S]*continue/,
-  "runner must back off a deferred lane for five seconds without restarting all workers",
+  launcher.slice(retryDeferredOffset, retryDeferredOffset + 700),
+  /back_off[\s\S]*continue/,
+  "runner must back off a deferred lane without restarting all workers",
 );
+assert.match(launcher, /--config "\$config_file"/, "runner must keep the bearer token out of curl argv");
+assert.doesNotMatch(launcher, /curl[^\n]*Authorization/, "runner must never pass the bearer token in curl argv");
+assert.match(launcher, /5\|6\|7\|18\|28\|35\|47\|52\|55\|56\|92/);
+assert.match(launcher, /408\|425\|429\|5\[0-9\]\[0-9\]/);
+assert.match(launcher, /retry_delay_seconds=60/, "transient transport backoff must be capped at 60 seconds");
+assert.match(launcher, /kill -USR1 "\$RUNNER_PARENT_PID"/, "a fatal lane must notify its supervisor");
 for (const reason of ["lease_expired_retry_limit", "retry_limit"]) {
   const offset = controller.indexOf(reason);
   assert.ok(offset >= 0, `missing ${reason} terminal branch`);
@@ -91,8 +112,177 @@ assert.match(ingestionPipeline, /const handles = new Set<string>\(\)/, "active s
 assert.match(dailyLauncher, /durable-ingestion\/daily/);
 assert.match(dailyLauncher, /ig-event-durable-runner/);
 assert.doesNotMatch(dailyLauncher, /ingest-venues/, "daily durable launcher must not use the legacy fan-out route");
+assert.match(dailyLauncher, /curl --disable --config "\$config_file"/);
+assert.doesNotMatch(dailyLauncher, /curl[^\n]*Authorization/, "daily launcher must keep the bearer token out of curl argv");
+assert.match(dailyLauncher, /unset CRON_SECRET/, "daily curl must not inherit the bearer token");
 assert.match(dailyService, /Restart=on-failure/);
 assert.match(dailyService, /ig-event-durable-daily-runner/);
 assert.match(dailyTimer, /09:00:00 Europe\/Belgrade/);
 assert.match(dailyTimer, /Persistent=true/);
+
+function runDurableRunnerFixture(mode, expectedStatus) {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "ig-event-durable-runner-"));
+  const fakeBin = join(fixtureRoot, "bin");
+  const runtimeDir = join(fixtureRoot, "runtime");
+  const stateDir = join(fixtureRoot, "state");
+  const argvLog = join(fixtureRoot, "curl-argv.log");
+  const blockedPidLog = join(fixtureRoot, "curl-blocked-pids.log");
+  const fileModeLog = join(fixtureRoot, "curl-file-modes.log");
+  const inheritedSecretLog = join(fixtureRoot, "curl-secret-env.log");
+  const validationLog = join(fixtureRoot, "curl-validation.log");
+  const sleepLog = join(fixtureRoot, "sleep.log");
+  const envFile = join(fixtureRoot, "cron.env");
+
+  mkdirSync(fakeBin);
+  mkdirSync(runtimeDir);
+  mkdirSync(stateDir);
+  writeFileSync(envFile, [
+    "APP_ORIGIN=https://public.invalid",
+    "CRON_SECRET=fixture-super-secret",
+    "",
+  ].join("\n"), { mode: 0o600 });
+  for (const logFile of [
+    argvLog,
+    blockedPidLog,
+    fileModeLog,
+    inheritedSecretLog,
+    validationLog,
+    sleepLog,
+  ]) {
+    writeFileSync(logFile, "", { mode: 0o600 });
+  }
+
+  const fakeCurl = join(fakeBin, "curl");
+  writeFileSync(fakeCurl, [
+    "#!/usr/bin/env bash",
+    "set -Eeuo pipefail",
+    'argv="$*"',
+    'config_file=""',
+    'while [[ "$#" -gt 0 ]]; do',
+    '  case "$1" in',
+    '    --config) config_file="$2"; shift 2 ;;',
+    '    *) shift ;;',
+    "  esac",
+    "done",
+    '[[ -n "$config_file" && -r "$config_file" ]]',
+    'printf "%s\\n" "$argv" >> "$FAKE_CURL_ARGV_LOG"',
+    '[[ -z "${CRON_SECRET:-}" ]] || printf "leaked\\n" >> "$FAKE_CURL_SECRET_ENV_LOG"',
+    'config_mode="$(stat -c %a "$config_file" 2>/dev/null || stat -f %Lp "$config_file")"',
+    "body_file=\"$(sed -nE 's/^output = \\\"(.*)\\\"$/\\1/p' \"$config_file\")\"",
+    'body_mode="$(stat -c %a "$body_file" 2>/dev/null || stat -f %Lp "$body_file")"',
+    'printf "%s:%s\\n" "$config_mode" "$body_mode" >> "$FAKE_CURL_FILE_MODE_LOG"',
+    "slot=\"$(sed -nE 's/.*workerSlot=([0-5])\\\"$/\\1/p' \"$config_file\")\"",
+    'if [[ -z "$slot" ]] || ! grep -Fq "Authorization: Bearer fixture-super-secret" "$config_file" || ! grep -Fq "url = \\"http://127.0.0.1:3999/api/cron/durable-ingestion/execute?runId=fixture_run&workerSlot=${slot}\\"" "$config_file"; then',
+    '  printf "invalid\\n" >> "$FAKE_CURL_VALIDATION_LOG"',
+    "  exit 2",
+    "fi",
+    'first_attempt=0',
+    'if mkdir "$FAKE_CURL_STATE/${FAKE_CURL_MODE}-${slot}" 2>/dev/null; then first_attempt=1; fi',
+    'case "$FAKE_CURL_MODE" in',
+    "  http_502)",
+    "    if [[ \"$first_attempt\" == \"1\" ]]; then printf '{\"error\":\"bad_gateway\"}' > \"$body_file\"; printf \"502\"; exit 0; fi",
+    "    ;;",
+    "  timeout)",
+    '    if [[ "$first_attempt" == "1" ]]; then : > "$body_file"; printf "000"; exit 28; fi',
+    "    ;;",
+    "  one_401)",
+    "    if [[ \"$slot\" == \"0\" ]]; then printf '{\"error\":\"unauthorized\"}' > \"$body_file\"; printf \"401\"; exit 0; fi",
+    "    printf '{\"claimed\":false,\"complete\":false}' > \"$body_file\"; printf \"200\"; exit 0",
+    "    ;;",
+    "  one_401_blocked)",
+    "    if [[ \"$slot\" == \"0\" ]]; then printf '{\"error\":\"unauthorized\"}' > \"$body_file\"; printf \"401\"; exit 0; fi",
+    '    printf "%s\\n" "$$" >> "$FAKE_CURL_BLOCKED_PID_LOG"',
+    "    exec /bin/sleep 60",
+    "    ;;",
+    "esac",
+    "printf '{\"claimed\":false,\"complete\":true}' > \"$body_file\"",
+    'printf "200"',
+    "",
+  ].join("\n"), { mode: 0o755 });
+  chmodSync(fakeCurl, 0o755);
+
+  const fakeSleep = join(fakeBin, "sleep");
+  writeFileSync(fakeSleep, [
+    "#!/usr/bin/env bash",
+    'printf "%s\\n" "${1:-}" >> "$FAKE_SLEEP_LOG"',
+    "exit 0",
+    "",
+  ].join("\n"), { mode: 0o755 });
+  chmodSync(fakeSleep, 0o755);
+
+  try {
+    const result = spawnSync("bash", ["scripts/ig-event-durable-runner", "fixture_run"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CRON_SECRET: "must-be-replaced-by-fixture",
+        FAKE_CURL_ARGV_LOG: argvLog,
+        FAKE_CURL_BLOCKED_PID_LOG: blockedPidLog,
+        FAKE_CURL_FILE_MODE_LOG: fileModeLog,
+        FAKE_CURL_MODE: mode,
+        FAKE_CURL_SECRET_ENV_LOG: inheritedSecretLog,
+        FAKE_CURL_STATE: stateDir,
+        FAKE_CURL_VALIDATION_LOG: validationLog,
+        FAKE_SLEEP_LOG: sleepLog,
+        IG_EVENT_CRON_ENV: envFile,
+        IG_EVENT_DURABLE_EXECUTOR_ORIGIN: "http://127.0.0.1:3999",
+        IG_EVENT_DURABLE_RUNTIME_DIR: runtimeDir,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      },
+      timeout: 10_000,
+    });
+    assert.equal(
+      result.status,
+      expectedStatus,
+      `${mode} runner status; stdout=${result.stdout}; stderr=${result.stderr}`,
+    );
+    const argv = readFileSync(argvLog, "utf8");
+    assert.doesNotMatch(argv, /fixture-super-secret|must-be-replaced-by-fixture/);
+    assert.match(argv, /^--disable --config /m, "curl must disable curlrc before its root-only config path");
+    assert.equal(
+      readFileSync(inheritedSecretLog, "utf8"),
+      "",
+      "curl children must not inherit CRON_SECRET",
+    );
+    assert.equal(
+      readFileSync(validationLog, "utf8"),
+      "",
+      "every retry must preserve the exact run and worker-slot URL",
+    );
+    for (const modes of readFileSync(fileModeLog, "utf8").trim().split("\n")) {
+      assert.equal(modes, "600:600", "curl config and response body must stay mode 0600");
+    }
+    if (mode === "http_502" || mode === "timeout") {
+      assert.match(readFileSync(sleepLog, "utf8"), /^5$/m, `${mode} should use the first five-second backoff`);
+    }
+    if (mode === "one_401_blocked") {
+      const blockedPids = readFileSync(blockedPidLog, "utf8")
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map(Number);
+      assert.ok(blockedPids.length > 0, "fixture must block at least one sibling curl");
+      for (const pid of blockedPids) {
+        assert.throws(
+          () => process.kill(pid, 0),
+          (error) => error?.code === "ESRCH",
+          `blocked curl ${pid} must be terminated and reaped`,
+        );
+      }
+    }
+    assert.deepEqual(
+      readdirSync(runtimeDir),
+      [],
+      `${mode} must clean every sensitive worker file`,
+    );
+  } finally {
+    rmSync(fixtureRoot, { force: true, recursive: true });
+  }
+}
+
+runDurableRunnerFixture("http_502", 0);
+runDurableRunnerFixture("timeout", 0);
+runDurableRunnerFixture("one_401", 1);
+runDurableRunnerFixture("one_401_blocked", 1);
 console.log("Durable ingestion controller QA passed.");

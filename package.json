@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "next start --keepAliveTimeout 120000",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "qa:repo-hygiene": "node scripts/check-repository-hygiene.mjs",

@@ -164,5 +164,10 @@ assert.match(
   /qa:runtime-config/,
   "Release gate should include runtime config QA.",
 );
+assert.match(
+  packageJson.scripts.start,
+  /next start --keepAliveTimeout 120000/,
+  "Next keep-alive must outlive the reverse proxy's 90-second idle connection pool.",
+);
 
 console.log("Runtime config QA passed.");

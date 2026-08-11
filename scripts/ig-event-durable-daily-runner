@@ -1,26 +1,52 @@
 #!/usr/bin/env bash
 # Host-owned daily launcher. Queue/resume first, then execute only that frozen
-# run through the durable eight-worker runner. Never call legacy fan-out routes.
+# run through the durable six-worker runner. Never call legacy fan-out routes.
 set -Eeuo pipefail
 
 ENV_FILE="${IG_EVENT_CRON_ENV:-/etc/ig_event/cron.env}"
 LOCK_FILE="/run/lock/ig-event-durable-daily.lock"
+RUNTIME_DIR="${IG_EVENT_DURABLE_RUNTIME_DIR:-/run/ig_event}"
 
 [[ -r "$ENV_FILE" ]] || { echo "missing cron environment" >&2; exit 78; }
 # shellcheck disable=SC1090
 . "$ENV_FILE"
 : "${APP_ORIGIN:?missing APP_ORIGIN}" "${CRON_SECRET:?missing CRON_SECRET}"
 
+mkdir -p "$RUNTIME_DIR"
+chmod 700 "$RUNTIME_DIR"
+umask 077
+body_file="$(mktemp "${RUNTIME_DIR%/}/durable-daily.body.XXXXXX")"
+config_file="$(mktemp "${RUNTIME_DIR%/}/durable-daily.curl.XXXXXX")"
+chmod 600 "$body_file" "$config_file"
+cleanup_sensitive_files() {
+  rm -f "$body_file" "$config_file"
+}
+trap cleanup_sensitive_files EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 exec 9>"$LOCK_FILE"
 flock -n 9 || { echo "durable daily ingestion already running"; exit 0; }
 
-response="$(curl --fail --silent --show-error --max-time 120 \
-  -H "Authorization: Bearer ${CRON_SECRET}" \
-  -X POST "${APP_ORIGIN%/}/api/cron/durable-ingestion/daily")"
+{
+  printf 'fail\n'
+  printf 'silent\n'
+  printf 'show-error\n'
+  printf 'max-time = 120\n'
+  printf 'request = "POST"\n'
+  printf 'header = "Authorization: Bearer %s"\n' "$CRON_SECRET"
+  printf 'output = "%s"\n' "$body_file"
+  printf 'url = "%s/api/cron/durable-ingestion/daily"\n' "${APP_ORIGIN%/}"
+} > "$config_file"
+unset CRON_SECRET
+curl --disable --config "$config_file"
+response="$(<"$body_file")"
 
 # The route emits one compact JSON object. Keep parsing deliberately strict so
 # an error document can never be passed to the paid executor as a run id.
 run_id="$(printf '%s' "$response" | sed -nE 's/.*"runId":"([^"]+)".*/\1/p')"
 [[ -n "$run_id" ]] || { echo "daily durable queue did not return a run id" >&2; exit 1; }
 
+cleanup_sensitive_files
+trap - EXIT INT TERM
 exec "$(dirname "$0")/ig-event-durable-runner" "$run_id"
