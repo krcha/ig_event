@@ -4,6 +4,7 @@ import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import { requireAdminOrServiceSecret } from "./authz";
 import { normalizeInstagramPostUrl } from "../lib/images/apify-images";
+import { normalizeHandle } from "../lib/pipeline/venue-normalization";
 import {
   DEFAULT_APIFY_DAILY_BUDGET_USD,
   DEFAULT_APIFY_MAX_CHARGE_PER_HANDLE_USD,
@@ -329,6 +330,17 @@ export const upsertManyByHandle = mutation({
   ),
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const normalizedHandle = normalizeHandle(args.handle);
+    if (
+      !normalizedHandle ||
+      args.posts.some(
+        (post) =>
+          normalizeHandle(post.handle) !== normalizedHandle ||
+          normalizeHandle(post.username) !== normalizedHandle,
+      )
+    ) {
+      throw new Error("Scraped-post source identity must match the requested handle.");
+    }
     const now = Date.now();
     const paidFetchControl = await ctx.db
       .query("instagramPaidFetchControl")
@@ -392,6 +404,18 @@ export const upsertManyByHandle = mutation({
       }
 
       const existing = existingByUrl ?? existingByNormalizedUrl[0];
+      if (
+        existing &&
+        (normalizeHandle(existing.handle) !== normalizedHandle ||
+          normalizeHandle(existing.username) !== normalizedHandle ||
+          existing.postId !== post.postId ||
+          normalizeInstagramPostUrl(existing.instagramPostUrl) !==
+            normalizedInstagramPostUrl)
+      ) {
+        throw new Error(
+          "Scraped-post durable identity cannot change its post ID or normalized Instagram URL.",
+        );
+      }
       const rawImageUrl = post.imageUrl?.trim();
       const imageUrls = [...new Set([rawImageUrl, ...post.imageUrls].filter(Boolean))] as string[];
       const hasDurableImage = Boolean(existing?.imageStorageId && existing.imageUrl);

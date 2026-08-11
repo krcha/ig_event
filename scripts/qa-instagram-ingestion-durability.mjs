@@ -781,6 +781,103 @@ try {
   assert.equal(mediaRefreshTables.scrapedPosts[0].blocksPaidFetch, true);
   assert.equal(mediaRefreshTables.scrapedPosts[0].sourceRevision, 5);
 
+  await upsertManyByHandle._handler(mediaRefreshCtx, {
+    handle: "source.media",
+    posts: [
+      {
+        handle: "source.media",
+        postId: "post-media",
+        username: "source.media",
+        instagramPostUrl: "https://instagram.com/p/post-media/?utm_source=qa",
+        imageUrls: ["https://example.com/current.jpg"],
+      },
+    ],
+    serviceSecret: "qa-durability-secret",
+  });
+  assert.equal(
+    mediaRefreshTables.scrapedPosts[0].sourceRevision,
+    5,
+    "a raw Instagram URL variant with the same canonical identity must not invalidate the source",
+  );
+  assert.equal(
+    mediaRefreshTables.scrapedPosts[0].normalizedInstagramPostUrl,
+    "https://www.instagram.com/p/post-media/",
+  );
+
+  await assert.rejects(
+    upsertManyByHandle._handler(mediaRefreshCtx, {
+      handle: "source.media",
+      posts: [
+        {
+          handle: "source.media",
+          postId: "post-media",
+          username: "different.account",
+          instagramPostUrl: "https://www.instagram.com/p/post-media/",
+          imageUrls: ["https://example.com/current.jpg"],
+        },
+      ],
+      serviceSecret: "qa-durability-secret",
+    }),
+    /source identity must match/i,
+    "a provider row from another username must not replace or reuse this handle's durable source",
+  );
+  await assert.rejects(
+    upsertManyByHandle._handler(mediaRefreshCtx, {
+      handle: "source.media",
+      posts: [
+        {
+          handle: "source.media",
+          postId: "post-media",
+          username: "source.media",
+          instagramPostUrl: "https://www.instagram.com/p/different-shortcode/",
+          imageUrls: ["https://example.com/current.jpg"],
+        },
+      ],
+      serviceSecret: "qa-durability-secret",
+    }),
+    /durable identity cannot change/i,
+    "a stable post ID must not be rebound to a materially different Instagram URL",
+  );
+  await assert.rejects(
+    upsertManyByHandle._handler(mediaRefreshCtx, {
+      handle: "source.media",
+      posts: [
+        {
+          handle: "source.media",
+          postId: "different-post-id",
+          username: "source.media",
+          instagramPostUrl: "https://www.instagram.com/p/post-media/",
+          imageUrls: ["https://example.com/current.jpg"],
+        },
+      ],
+      serviceSecret: "qa-durability-secret",
+    }),
+    /durable identity cannot change/i,
+    "a stable Instagram URL must not be rebound to a different post ID",
+  );
+  await assert.rejects(
+    upsertManyByHandle._handler(mediaRefreshCtx, {
+      handle: "different.source",
+      posts: [
+        {
+          handle: "different.source",
+          postId: "post-media",
+          username: "different.source",
+          instagramPostUrl: "https://www.instagram.com/p/post-media/",
+          imageUrls: ["https://example.com/current.jpg"],
+        },
+      ],
+      serviceSecret: "qa-durability-secret",
+    }),
+    /durable identity cannot change/i,
+    "a globally unique post must not be rebound to a different source handle",
+  );
+  assert.equal(
+    mediaRefreshTables.scrapedPosts[0].sourceRevision,
+    5,
+    "rejected source-identity drift must leave the durable revision unchanged",
+  );
+
   const { db: analysisDb, tables: analysisTables } = createDb({
     scrapedPosts: [
       {

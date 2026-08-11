@@ -115,7 +115,15 @@ export async function isCanonicallyGroundedApprovedEvent(
     )
     .take(2);
   const persistedPost = persistedPosts.length === 1 ? persistedPosts[0] : null;
-  if (!persistedPost) return false;
+  if (
+    !persistedPost ||
+    typeof persistedPost.handle !== "string" ||
+    typeof persistedPost.username !== "string" ||
+    normalizeHandle(persistedPost.handle) !== sourceHandle ||
+    normalizeHandle(persistedPost.username) !== sourceHandle
+  ) {
+    return false;
+  }
 
   const persistedCaption = persistedPost.caption?.trim() ?? "";
   const persistedUrl = normalizeInstagramPostUrl(persistedPost.instagramPostUrl);
@@ -162,7 +170,10 @@ export async function isCanonicallyGroundedApprovedEvent(
               persistedPost.imageStorageId &&
               posterAsset &&
               posterAsset.storageId === persistedPost.imageStorageId &&
-              posterAsset.checksumSha256 === persistedPost.analysisImageChecksumSha256,
+              posterAsset.checksumSha256 === persistedPost.analysisImageChecksumSha256 &&
+              ((event.imageUrl === undefined && event.imageStorageId === undefined) ||
+                (event.imageUrl === posterAsset.url &&
+                  event.imageStorageId === posterAsset.storageId)),
           )),
     );
   }

@@ -1202,6 +1202,16 @@ export function isExistingEventEligibleForDurableMediaRetry(
   );
 }
 
+function existingEventRequiresExactPosterMediaBinding(
+  event: Pick<ExistingEventRecord, "normalizedFieldsJson">,
+): boolean {
+  const normalizedFields = parseJsonRecord(event.normalizedFieldsJson);
+  return (
+    normalizedFields?.extractionContractVersion === "event_evidence_v2" &&
+    normalizedFields.extractionMode === "poster"
+  );
+}
+
 export async function persistInstagramMediaCandidate(options: {
   client: ConvexHttpClient;
   handle: string;
@@ -9250,7 +9260,12 @@ export function prepareEventsForInsert(
       }));
 
   const preparedEvents: PrepareEventResult[] = [];
-  const publicEventImageUrl = getNonExpiringPublicEventImageUrl(selectedImageUrl);
+  // A structured poster event is created before the exact stored asset URL is
+  // returned to this process. Leave its public image empty until the
+  // checksum-bound media action attaches that exact storage ID/URL.
+  const publicEventImageUrl = usesStructuredEvidence && extractionMode === "poster"
+    ? undefined
+    : getNonExpiringPublicEventImageUrl(selectedImageUrl);
 
   for (const [index, variant] of eventVariants.entries()) {
     const date = variant.dateNormalization.isoDate;
@@ -9734,6 +9749,12 @@ async function processIngestionPost(
       : null;
   let imageDataUrl: string | null = null;
   let imageDataUrls: string[] = [];
+  const durableRecoveryMediaCandidates =
+    cachedExtractionMode === "poster" && selectedImageUrl
+      ? deduplicateMediaUrls([selectedImageUrl, ...durableMediaCandidates], 16)
+      : durableMediaCandidates;
+  const durableRecoveryExpectedChecksum =
+    cachedExtractionMode === "poster" ? selectedImageChecksumSha256 ?? undefined : undefined;
 
   try {
     sourceIdentityMatches = await listExistingEventsBySourceIdentity(
@@ -9777,7 +9798,16 @@ async function processIngestionPost(
       const retryTarget = sourceIdentityMatches.find((match) =>
         isExistingEventEligibleForDurableMediaRetry(match.existingEvent),
       );
-      if (retryTarget && durableMediaCandidates.length > 0) {
+      const missingExactPosterBinding =
+        retryTarget &&
+        existingEventRequiresExactPosterMediaBinding(retryTarget.existingEvent) &&
+        !durableRecoveryExpectedChecksum;
+      if (missingExactPosterBinding) {
+        summary.failedImagePersistence += 1;
+        summary.errors.push(
+          "Structured poster media repair requires the cached analyzed-image checksum.",
+        );
+      } else if (retryTarget && durableRecoveryMediaCandidates.length > 0) {
         await persistInstagramMediaCandidates({
           client,
           handle,
@@ -9785,7 +9815,8 @@ async function processIngestionPost(
           processingFence,
           summary,
           serviceSecret,
-          upstreamUrls: durableMediaCandidates,
+          upstreamUrls: durableRecoveryMediaCandidates,
+          expectedChecksumSha256: durableRecoveryExpectedChecksum,
         });
       }
       summary.skippedDuplicates += 1;
@@ -9823,7 +9854,16 @@ async function processIngestionPost(
     const retryTarget = sourceIdentityMatches.find((match) =>
       isExistingEventEligibleForDurableMediaRetry(match.existingEvent),
     );
-    if (retryTarget && durableMediaCandidates.length > 0) {
+    const missingExactPosterBinding =
+      retryTarget &&
+      existingEventRequiresExactPosterMediaBinding(retryTarget.existingEvent) &&
+      !durableRecoveryExpectedChecksum;
+    if (missingExactPosterBinding) {
+      summary.failedImagePersistence += 1;
+      summary.errors.push(
+        "Structured poster media repair requires the cached analyzed-image checksum.",
+      );
+    } else if (retryTarget && durableRecoveryMediaCandidates.length > 0) {
       await persistInstagramMediaCandidates({
         client,
         handle,
@@ -9831,7 +9871,8 @@ async function processIngestionPost(
         processingFence,
         summary,
         serviceSecret,
-        upstreamUrls: durableMediaCandidates,
+        upstreamUrls: durableRecoveryMediaCandidates,
+        expectedChecksumSha256: durableRecoveryExpectedChecksum,
       });
     }
     recordSourceDuplicateSkip(summary, sourceDuplicateSkipDecision);

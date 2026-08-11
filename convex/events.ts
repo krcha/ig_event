@@ -266,6 +266,8 @@ type ApprovalCandidateFields = {
   dateEvidenceIsRelative?: boolean;
   dateEvidenceResolvedDate?: string;
   sourceConflictFields?: string[];
+  imageUrl?: string;
+  imageStorageId?: Id<"_storage">;
 };
 
 type ServiceSourceCandidateFields = ApprovalCandidateFields & {
@@ -343,7 +345,10 @@ async function assertPersistedServiceSourcePolicy(
           !persisted.imageStorageId ||
           !posterAsset ||
           posterAsset.storageId !== persisted.imageStorageId ||
-          posterAsset.checksumSha256 !== persisted.analysisImageChecksumSha256))
+          posterAsset.checksumSha256 !== persisted.analysisImageChecksumSha256 ||
+          ((candidate.imageUrl !== undefined || candidate.imageStorageId !== undefined) &&
+            (candidate.imageUrl !== posterAsset.url ||
+              candidate.imageStorageId !== posterAsset.storageId))))
     ) {
       throw new Error(
         "Service approval requires current persisted GPT-5 mini event evidence bound to the exact source revision.",

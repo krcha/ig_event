@@ -300,6 +300,7 @@ export const claimAndAttach = internalMutation({
     mimeType: v.string(),
     byteLength: v.number(),
     checksumSha256: v.string(),
+    expectedChecksumSha256: v.optional(v.string()),
     actor: v.string(),
     processingFence: v.optional(sourceProcessingFenceValidator),
   },
@@ -328,6 +329,14 @@ export const claimAndAttach = internalMutation({
     }));
     const winner = existing ?? (await ctx.db.get(assetId));
     if (!winner) throw new Error("Media asset claim failed.");
+    if (
+      args.expectedChecksumSha256 &&
+      winner.checksumSha256 !== args.expectedChecksumSha256
+    ) {
+      throw new Error(
+        "Persisted Instagram image checksum does not match the analyzed poster.",
+      );
+    }
     const counts = await attachAssetToSourceRecords(
       ctx,
       args,

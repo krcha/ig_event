@@ -4,6 +4,7 @@ import { parseExtractedEventData } from "../lib/ai/extract-event-data.ts";
 import {
   bindSourceOccurrenceMetadata,
   createEmptyIngestionSummary,
+  isExistingEventEligibleForDurableMediaRetry,
   processIngestionPostWithExtractionForTesting,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
 import { isCanonicallyGroundedApprovedEvent } from "../convex/publicEventGrounding.ts";
@@ -348,6 +349,7 @@ try {
       _id: "asset-boundary-v2",
       sourceKey: `instagram-post:${postId}`,
       storageId: imageStorageId,
+      url: "https://storage.example.test/boundary-v2.jpg",
       checksumSha256: imageChecksum,
       ...overrides,
     };
@@ -451,6 +453,49 @@ try {
     await isCanonicallyGroundedApprovedEvent(rotatedPosterGrounding.ctx, posterEvent),
     true,
     "A rotating upstream signed URL must not invalidate exact durable poster bytes/checksum.",
+  );
+  const unrelatedDisplayedImageGrounding = makeGroundingCtx(
+    posterPost,
+    [makePosterAsset()],
+  );
+  assert.equal(
+    await isCanonicallyGroundedApprovedEvent(unrelatedDisplayedImageGrounding.ctx, {
+      ...posterEvent,
+      imageStorageId: "unrelated-storage",
+      imageUrl: "https://storage.example.test/unrelated.jpg",
+    }),
+    false,
+    "Poster publication must reject a displayed image that is not the exact attested asset.",
+  );
+  for (const partialImage of [
+    { imageStorageId },
+    { imageUrl: "https://storage.example.test/boundary-v2.jpg" },
+  ]) {
+    assert.equal(
+      await isCanonicallyGroundedApprovedEvent(
+        makeGroundingCtx(posterPost, [makePosterAsset()]).ctx,
+        {
+          ...posterEvent,
+          imageStorageId: undefined,
+          imageUrl: undefined,
+          ...partialImage,
+        },
+      ),
+      false,
+      "Poster publication must reject a partial displayed-image identity.",
+    );
+  }
+  const mismatchedSourceUsernameGrounding = makeGroundingCtx(
+    { ...posterPost, username: "different_account" },
+    [makePosterAsset()],
+  );
+  assert.equal(
+    await isCanonicallyGroundedApprovedEvent(
+      mismatchedSourceUsernameGrounding.ctx,
+      posterEvent,
+    ),
+    false,
+    "Public v2 grounding must reject a persisted username outside the exact source handle.",
   );
 
   function makePublicWindowCtx(events, persistedPost, assets) {
@@ -575,16 +620,23 @@ try {
     const receiptWrites = [];
     const otherMutations = [];
     const actions = [];
+    const queries = [];
     return {
       creates,
       receiptWrites,
       otherMutations,
       actions,
+      queries,
       client: {
         async query(_reference, args) {
-          if ("sourceIdentity" in args) return null;
-          if ("instagramPostId" in args) return [];
-          if ("instagramPostUrl" in args) return [];
+          queries.push(structuredClone(args));
+          if ("sourceIdentity" in args) return options.sourceReceipt ?? null;
+          if ("instagramPostId" in args) {
+            return (options.sourceMatches ?? []).map((match) => match.existingEvent);
+          }
+          if ("instagramPostUrl" in args) {
+            return (options.sourceMatches ?? []).map((match) => match.existingEvent);
+          }
           if ("date" in args) return [];
           if ("id" in args) {
             return creates.find((event) => event._id === args.id) ?? null;
@@ -839,6 +891,213 @@ try {
       "a rotated poster whose current bytes miss the recorded checksum wrote an event/receipt",
     );
   }
+
+  function makeEarlyReturnRecoveryFixture(suffix) {
+    const handle = `early_return_${suffix}`;
+    const fixturePostId = `EARLYRETURN${suffix.toUpperCase()}`;
+    const fixturePost = {
+      postId: fixturePostId,
+      caption: extractionFixture.source_caption,
+      altText: null,
+      imageUrl: rotatedCurrentPosterUrl,
+      imageUrls: [rotatedCurrentPosterUrl],
+      postType: "image",
+      locationName: null,
+      instagramPostUrl: `https://www.instagram.com/p/${fixturePostId}/`,
+      postedAt: sourcePostedAt,
+      username: handle,
+    };
+    const [bound] = bindSourceOccurrenceMetadata(fixturePost, [
+      {
+        kind: "ok",
+        event: {
+          ...posterEvent,
+          instagramPostId: fixturePostId,
+          instagramPostUrl: fixturePost.instagramPostUrl,
+          sourceCaption: fixturePost.caption,
+          sourcePostedAt: fixturePost.postedAt,
+          imageUrl: undefined,
+          imageStorageId: undefined,
+        },
+        normalizedFields: {
+          normalizedDate: eventDate,
+          time: extractionFixture.time,
+        },
+      },
+    ]);
+    assert.equal(bound?.kind, "ok");
+    const sourceOccurrenceKey = bound.normalizedFields.sourceOccurrenceKey;
+    const sourceFingerprint =
+      bound.normalizedFields.sourceOccurrenceSourceFingerprint;
+    assert.equal(typeof sourceOccurrenceKey, "string");
+    assert.equal(typeof sourceFingerprint, "string");
+    const normalizedFieldsJson = JSON.stringify({
+      ...bound.normalizedFields,
+      normalizedIsValid: true,
+      extractionContractVersion: "event_evidence_v2",
+      extractionIsEvent: true,
+      extractionMode: "poster",
+      structuredEvidenceVerified: true,
+    });
+    return {
+      handle,
+      post: fixturePost,
+      sourceMatch: {
+        existingEvent: {
+          ...posterEvent,
+          _id: `existing-${suffix}`,
+          instagramPostId: fixturePostId,
+          instagramPostUrl: fixturePost.instagramPostUrl,
+          sourceCaption: fixturePost.caption,
+          sourcePostedAt: fixturePost.postedAt,
+          imageUrl: undefined,
+          imageStorageId: undefined,
+          sourceOccurrenceKey,
+          normalizedFieldsJson,
+        },
+        matchedBy: "post_id",
+        matchedValue: fixturePostId,
+      },
+      receipt: {
+        sourceIdentity: `instagram-source-identity-v1:${fixturePostId}`,
+        sourceFingerprint,
+        expectedKeys: [sourceOccurrenceKey],
+        satisfiedKeys: [sourceOccurrenceKey],
+        satisfiedOccurrences: [
+          { key: sourceOccurrenceKey, eventId: `existing-${suffix}` },
+        ],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+      },
+    };
+  }
+
+  async function runEarlyReturnRecovery(
+    fixture,
+    offlineClient,
+    providerMessage,
+    { withCachedPoster = true } = {},
+  ) {
+    let providerClaims = 0;
+    const summary = createEmptyIngestionSummary([fixture.handle]).handles[0];
+    await withoutIngestionConsole(() =>
+      processIngestionPostWithExtractionForTesting({
+        client: offlineClient.client,
+        handle: fixture.handle,
+        post: fixture.post,
+        summary,
+        canonicalVenueNamesByHandle: {},
+        venueNameOverridesByHandle: {},
+        configuredVenueNamesByHandle: {},
+        sourceRolesByHandle: { [fixture.handle]: "unknown" },
+        serviceSecret: process.env.CRON_SECRET,
+        ...(withCachedPoster
+          ? {
+              cachedAnalysisJson: JSON.stringify(cachedPosterExtraction),
+              cachedAnalysisContractVersion: "event_evidence_v2",
+              cachedAnalysisImageSourceUrl: cachedPosterUrl,
+              cachedAnalysisImageChecksumSha256: "c".repeat(64),
+            }
+          : {}),
+        providerExecution: {
+          claim: async () => {
+            providerClaims += 1;
+            throw new Error(providerMessage);
+          },
+          block: async () => {},
+          release: async () => {},
+        },
+        extracted: cachedPosterExtraction,
+        dependencies: {
+          downloadImage: async () => {
+            throw new Error("An early-return media retry must not download or re-analyze the post.");
+          },
+        },
+      }),
+    );
+    assert.equal(providerClaims, 0, providerMessage);
+    return summary;
+  }
+
+  const completeRecoveryFixture = makeEarlyReturnRecoveryFixture("complete");
+  assert.equal(
+    isExistingEventEligibleForDurableMediaRetry(
+      completeRecoveryFixture.sourceMatch.existingEvent,
+    ),
+    true,
+    "the completed-receipt fixture must represent a verified event missing its durable image",
+  );
+  const completeRecoveryClient = makeOfflinePipelineClient({
+    sourceReceipt: completeRecoveryFixture.receipt,
+    sourceMatches: [completeRecoveryFixture.sourceMatch],
+    actionHandler: async (args) => {
+      assert.equal(args.expectedChecksumSha256, "c".repeat(64));
+      if (args.upstreamUrl === cachedPosterUrl) {
+        throw new Error("REMOTE_MEDIA_HTTP_STATUS=403; completed receipt URL expired");
+      }
+      assert.equal(args.upstreamUrl, rotatedCurrentPosterUrl);
+      return { persisted: true };
+    },
+  });
+  const completeRecoverySummary = await runEarlyReturnRecovery(
+    completeRecoveryFixture,
+    completeRecoveryClient,
+    "A completed occurrence receipt must not claim OpenAI while repairing its exact media.",
+  );
+  assert.deepEqual(
+    completeRecoveryClient.actions.map((args) => args.upstreamUrl),
+    [cachedPosterUrl, rotatedCurrentPosterUrl],
+    `completed-receipt recovery must try the analyzed URL, then the current signed candidate (${JSON.stringify({ summary: completeRecoverySummary, queries: completeRecoveryClient.queries })})`,
+  );
+  assert.equal(completeRecoveryClient.creates.length, 0);
+  assert.equal(completeRecoveryClient.receiptWrites.length, 0);
+
+  const duplicateRecoveryFixture = makeEarlyReturnRecoveryFixture("duplicate");
+  const duplicateRecoveryClient = makeOfflinePipelineClient({
+    sourceMatches: [duplicateRecoveryFixture.sourceMatch],
+    actionHandler: async (args) => {
+      assert.equal(args.expectedChecksumSha256, "c".repeat(64));
+      if (args.upstreamUrl === cachedPosterUrl) {
+        throw new Error("REMOTE_MEDIA_HTTP_STATUS=403; duplicate source URL expired");
+      }
+      assert.equal(args.upstreamUrl, rotatedCurrentPosterUrl);
+      throw new Error("Fetched Instagram image checksum does not match the analyzed poster.");
+    },
+  });
+  await runEarlyReturnRecovery(
+    duplicateRecoveryFixture,
+    duplicateRecoveryClient,
+    "A source-duplicate media retry must not claim OpenAI or refetch the provider.",
+  );
+  assert.deepEqual(
+    duplicateRecoveryClient.actions.map((args) => args.upstreamUrl),
+    [cachedPosterUrl, rotatedCurrentPosterUrl],
+    "source-duplicate recovery must checksum-fence the old and current media candidates",
+  );
+  assert.equal(duplicateRecoveryClient.creates.length, 0);
+  assert.equal(duplicateRecoveryClient.receiptWrites.length, 0);
+  assert.equal(
+    duplicateRecoveryClient.otherMutations.length,
+    0,
+    "a checksum-mismatched duplicate retry must not attach or write media state",
+  );
+
+  const unboundPosterRecoveryClient = makeOfflinePipelineClient({
+    sourceMatches: [duplicateRecoveryFixture.sourceMatch],
+  });
+  const unboundPosterRecoverySummary = await runEarlyReturnRecovery(
+    duplicateRecoveryFixture,
+    unboundPosterRecoveryClient,
+    "An unbound v2 poster retry must not claim OpenAI while failing closed.",
+    { withCachedPoster: false },
+  );
+  assert.equal(unboundPosterRecoveryClient.actions.length, 0);
+  assert.equal(unboundPosterRecoverySummary.failedImagePersistence, 1);
+  assert.match(
+    unboundPosterRecoverySummary.errors.join("\n"),
+    /requires the cached analyzed-image checksum/i,
+    "a v2 poster retry without an exact cache binding must remain explicitly unrepaired",
+  );
 
   const cachedCaptionExtraction = parseExtractedEventData(
     structuredClone(extractionFixture),
@@ -1119,7 +1378,12 @@ try {
     suffix: "b",
   });
   const missingVenueState = {
-    posts: [firstMissingVenue.persistedPost, secondMissingVenue.persistedPost],
+    posts: [
+      firstMissingVenue.persistedPost,
+      secondMissingVenue.persistedPost,
+      posterPost,
+    ],
+    mediaAssets: [makePosterAsset()],
     events: [],
     receipts: [],
     sourceLinks: [],
@@ -1141,6 +1405,7 @@ try {
           ...missingVenueState.events,
           ...missingVenueState.receipts,
           ...missingVenueState.sourceLinks,
+          ...missingVenueState.mediaAssets,
         ].find((item) => item._id === id);
         if (!record) throw new Error(`Unexpected missing-venue patch ${id}`);
         Object.assign(record, structuredClone(patch));
@@ -1174,7 +1439,7 @@ try {
               if (table === "instagramEventSources") {
                 return missingVenueState.sourceLinks;
               }
-              if (table === "mediaAssets") return [];
+              if (table === "mediaAssets") return missingVenueState.mediaAssets;
               throw new Error(`Unexpected missing-venue table ${table}`);
             };
             const filtered = () =>
@@ -1201,6 +1466,39 @@ try {
       },
     },
   };
+
+  await assert.rejects(
+    createEvent._handler(missingVenueCtx, {
+      title: posterEvent.title,
+      date: posterEvent.date,
+      time: posterEvent.time,
+      timeSource: posterEvent.timeSource,
+      timeEvidenceText: posterEvent.timeEvidenceText,
+      timeConfidence: posterEvent.timeConfidence,
+      timeStatus: posterEvent.timeStatus,
+      timeEvidenceKind: posterEvent.timeEvidenceKind,
+      dateEvidenceText: posterEvent.dateEvidenceText,
+      dateEvidenceSource: posterEvent.dateEvidenceSource,
+      dateEvidenceIsRelative: posterEvent.dateEvidenceIsRelative,
+      dateEvidenceResolvedDate: posterEvent.dateEvidenceResolvedDate,
+      sourceConflictFields: [],
+      venue: posterEvent.venue,
+      artists: posterEvent.artists,
+      eventType: posterEvent.eventType,
+      status: "approved",
+      instagramPostId: posterEvent.instagramPostId,
+      instagramPostUrl: posterEvent.instagramPostUrl,
+      sourceCaption: posterEvent.sourceCaption,
+      sourcePostedAt: posterEvent.sourcePostedAt,
+      rawExtractionJson: posterEvent.rawExtractionJson,
+      normalizedFieldsJson: posterEvent.normalizedFieldsJson,
+      imageStorageId: "unrelated-storage",
+      imageUrl: "https://storage.example.test/unrelated.jpg",
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /exact source revision/i,
+    "The Convex write boundary must reject a poster event displaying an unrelated asset.",
+  );
 
   let missingVenueCreatedEvent = null;
   try {

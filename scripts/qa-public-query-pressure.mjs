@@ -356,6 +356,7 @@ const singletonPostsById = new Map(
     event.instagramPostId,
     {
       handle: "qa_venue",
+      username: "qa_venue",
       postId: event.instagramPostId,
       instagramPostUrl: event.instagramPostUrl,
       caption: singletonCaption,

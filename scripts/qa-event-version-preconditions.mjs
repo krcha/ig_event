@@ -169,6 +169,34 @@ try {
   assert.equal(mediaAttach.events.get(mediaEvent._id).updatedAt, 101);
   assert.equal(mediaAttach.events.get(mediaEvent._id).imageStorageId, mediaAsset.storageId);
 
+  const raceWinner = {
+    ...mediaAsset,
+    _id: "media-race-winner",
+    storageId: "storage-race-winner",
+    checksumSha256: "b".repeat(64),
+  };
+  const mediaRace = makeMediaCtx(
+    { ...mediaEvent, imageStorageId: undefined, imageUrl: undefined },
+    raceWinner,
+  );
+  await assert.rejects(
+    claimAndAttach._handler(mediaRace.ctx, {
+      postId: "post-media-attach",
+      storageId: "storage-provisional-exact",
+      url: "https://convex.example/api/storage/storage-provisional-exact",
+      upstreamUrl: mediaAsset.upstreamUrl,
+      mimeType: mediaAsset.mimeType,
+      byteLength: mediaAsset.byteLength,
+      checksumSha256: "a".repeat(64),
+      expectedChecksumSha256: "a".repeat(64),
+      actor: "qa-media",
+    }),
+    /checksum does not match/i,
+    "a concurrent media winner with different bytes must be rejected before attachment",
+  );
+  assert.equal(mediaRace.events.get(mediaEvent._id).imageStorageId, undefined);
+  assert.equal(mediaRace.audits.length, 0);
+
   const mediaRemove = makeMediaCtx(
     { ...mediaEvent, imageStorageId: mediaAsset.storageId, imageUrl: mediaAsset.url },
     mediaAsset,

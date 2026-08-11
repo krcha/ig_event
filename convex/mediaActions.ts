@@ -93,6 +93,7 @@ const claimAndAttach =
       mimeType: string;
       byteLength: number;
       checksumSha256: string;
+      expectedChecksumSha256?: string;
       actor: string;
       processingFence?: SourceProcessingFence;
     },
@@ -210,6 +211,9 @@ export const persistInstagramImage = action({
         mimeType: image.contentType,
         byteLength: image.bytes.byteLength,
         checksumSha256,
+        ...(args.expectedChecksumSha256
+          ? { expectedChecksumSha256: args.expectedChecksumSha256 }
+          : {}),
         actor: authorization.actor,
       });
 
