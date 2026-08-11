@@ -698,6 +698,18 @@ export const LEGACY_DEFINITIVE_OUTPUT_RECOVERY_ALLOWLIST: readonly LegacyDefinit
   }),
   ]);
 
+export function getLegacyDefinitiveOutputRecoveryFailureAt(
+  entry: LegacyDefinitiveOutputRecoveryEntry,
+): number {
+  const failureAt = Date.parse(entry.failureLogAt);
+  if (!Number.isSafeInteger(failureAt) || failureAt !== entry.failureAt) {
+    throw new Error(
+      "Legacy definitive-output recovery failure time is not bound to its frozen log timestamp.",
+    );
+  }
+  return failureAt;
+}
+
 const entryByReceiptId = new Map(
   LEGACY_DEFINITIVE_OUTPUT_RECOVERY_ALLOWLIST.map((entry) => [
     entry.receiptId,
@@ -707,9 +719,16 @@ const entryByReceiptId = new Map(
 
 if (
   LEGACY_DEFINITIVE_OUTPUT_RECOVERY_ALLOWLIST.length !== 47 ||
-  entryByReceiptId.size !== LEGACY_DEFINITIVE_OUTPUT_RECOVERY_ALLOWLIST.length
+  entryByReceiptId.size !== LEGACY_DEFINITIVE_OUTPUT_RECOVERY_ALLOWLIST.length ||
+  LEGACY_DEFINITIVE_OUTPUT_RECOVERY_ALLOWLIST.some(
+    (entry) => !/^[a-f0-9]{64}$/u.test(entry.evidenceSha256),
+  )
 ) {
   throw new Error("Legacy definitive-output recovery allowlist is not the frozen 47-row set.");
+}
+
+for (const entry of LEGACY_DEFINITIVE_OUTPUT_RECOVERY_ALLOWLIST) {
+  getLegacyDefinitiveOutputRecoveryFailureAt(entry);
 }
 
 export function getLegacyDefinitiveOutputRecoveryEntry(

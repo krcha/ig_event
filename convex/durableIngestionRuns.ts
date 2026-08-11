@@ -7,6 +7,7 @@ import {
   OPENAI_DEFINITIVE_OUTPUT_FAILURE_KINDS,
 } from "../lib/ai/openai-analysis-protocol";
 import {
+  getLegacyDefinitiveOutputRecoveryFailureAt,
   getLegacyDefinitiveOutputRecoveryEntry,
   LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_RECEIPT_IDS,
   LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_SELECTION_SHA256,
@@ -110,7 +111,7 @@ function receiptRevisionMatchesPost(receipt: any, post: any): boolean {
   );
 }
 
-function isDedicatedLegacyDefinitiveOutputRecoveryReceipt(
+function hasDedicatedLegacyDefinitiveOutputRecoveryMarker(
   receipt: any,
   post: any,
 ): boolean {
@@ -125,6 +126,26 @@ function isDedicatedLegacyDefinitiveOutputRecoveryReceipt(
       legacyEntry.savedPostId === post._id &&
       legacyEntry.sourceRevision === receipt.scrapedPostSourceRevision &&
       legacyEntry.sourceRevision === getScrapedPostSourceRevision(post) &&
+      (post.analysisDefinitiveOutputRecoveryRevision !== undefined ||
+        post.analysisDefinitiveOutputRecoveryFromProtocol !== undefined ||
+        post.analysisDefinitiveOutputRecoveryProtocol !== undefined ||
+        post.analysisDefinitiveOutputRecoveryEvidenceSha256 !== undefined ||
+        post.analysisDefinitiveOutputRecoveredAt !== undefined),
+  );
+}
+
+function isDedicatedLegacyDefinitiveOutputRecoveryReceipt(
+  receipt: any,
+  post: any,
+): boolean {
+  const legacyEntry = getLegacyDefinitiveOutputRecoveryEntry(
+    String(receipt?._id ?? ""),
+  );
+  return Boolean(
+    legacyEntry &&
+      hasDedicatedLegacyDefinitiveOutputRecoveryMarker(receipt, post) &&
+      post.analysisDefinitiveOutputRecoveryEvidenceSha256 ===
+        legacyEntry.evidenceSha256 &&
       post.analysisDefinitiveOutputRecoveryRevision ===
         legacyEntry.sourceRevision &&
       post.analysisDefinitiveOutputRecoveryFromProtocol ===
@@ -1396,7 +1417,7 @@ export const claimNextProcessingReceipt = mutation({
       // starved behind them.
       if (
         candidatePost &&
-        isDedicatedLegacyDefinitiveOutputRecoveryReceipt(candidate, candidatePost)
+        hasDedicatedLegacyDefinitiveOutputRecoveryMarker(candidate, candidatePost)
       ) {
         continue;
       }
@@ -1454,7 +1475,7 @@ export const claimNextProcessingReceipt = mutation({
       const isExpiredDedicatedRecovery =
         (activeReceipt.leaseExpiresAt ?? 0) <= now &&
         activePost &&
-        isDedicatedLegacyDefinitiveOutputRecoveryReceipt(
+        hasDedicatedLegacyDefinitiveOutputRecoveryMarker(
           activeReceipt,
           activePost,
         );
@@ -1492,7 +1513,7 @@ export const claimNextProcessingReceipt = mutation({
       // post link reserve it for the processing-only recovery endpoint below.
       // Ordinary workers must leave it untouched even if outcomeDetail later
       // changes while a recovery retry is being reconciled.
-      if (isDedicatedLegacyDefinitiveOutputRecoveryReceipt(candidate, linkedPost)) {
+      if (hasDedicatedLegacyDefinitiveOutputRecoveryMarker(candidate, linkedPost)) {
         continue;
       }
       if (await rejectChangedRevision(candidate, linkedPost)) return null;
@@ -1519,7 +1540,7 @@ export const claimNextProcessingReceipt = mutation({
         if (!candidate.scrapedPostId || (candidate.retryNotBeforeAt ?? 0) > now) continue;
         const linkedPost = await getLinkedReceiptScrapedPost(ctx, candidate);
         if (!linkedPost) continue;
-        if (isDedicatedLegacyDefinitiveOutputRecoveryReceipt(candidate, linkedPost)) {
+        if (hasDedicatedLegacyDefinitiveOutputRecoveryMarker(candidate, linkedPost)) {
           continue;
         }
         if (await rejectChangedRevision(candidate, linkedPost)) return null;
@@ -1552,7 +1573,7 @@ export const claimNextProcessingReceipt = mutation({
         const candidatePost = await getLinkedReceiptScrapedPost(ctx, candidate);
         if (
           candidatePost &&
-          !isDedicatedLegacyDefinitiveOutputRecoveryReceipt(candidate, candidatePost) &&
+          !hasDedicatedLegacyDefinitiveOutputRecoveryMarker(candidate, candidatePost) &&
           !(await rejectChangedRevision(candidate, candidatePost))
         ) {
           receipt = candidate;
@@ -2449,14 +2470,32 @@ export const requeueDefinitiveOutputFailure = mutation({
       );
     }
 
-    const alreadyRequeued =
+    const hasAnyRecoveryMarker =
+      savedPost.analysisDefinitiveOutputRecoveryRevision !== undefined ||
+      savedPost.analysisDefinitiveOutputRecoveryFromProtocol !== undefined ||
+      savedPost.analysisDefinitiveOutputRecoveryProtocol !== undefined ||
+      savedPost.analysisDefinitiveOutputRecoveryEvidenceSha256 !== undefined ||
+      savedPost.analysisDefinitiveOutputRecoveredAt !== undefined;
+    const hasMatchingRecoveryMarker =
       savedPost.analysisDefinitiveOutputRecoveryRevision ===
         args.expectedSourceRevision &&
       savedPost.analysisDefinitiveOutputRecoveryFromProtocol ===
         args.failedAttemptProtocol &&
-      savedPost.analysisDefinitiveOutputRecoveryProtocol === args.recoveryProtocol;
-    if (alreadyRequeued) {
+      savedPost.analysisDefinitiveOutputRecoveryProtocol ===
+        args.recoveryProtocol &&
+      Number.isFinite(savedPost.analysisDefinitiveOutputRecoveredAt) &&
+      (legacyEntry
+        ? savedPost.analysisDefinitiveOutputRecoveryEvidenceSha256 ===
+          legacyEntry.evidenceSha256
+        : savedPost.analysisDefinitiveOutputRecoveryEvidenceSha256 ===
+          undefined);
+    if (hasMatchingRecoveryMarker) {
       return { requeued: false, reason: "already_requeued" as const };
+    }
+    if (hasAnyRecoveryMarker) {
+      throw new Error(
+        "Definitive-output recovery marker is partial, mismatched, or already consumed.",
+      );
     }
 
     const now = Date.now();
@@ -2515,6 +2554,7 @@ export const requeueDefinitiveOutputFailure = mutation({
         savedPost.analysisDefinitiveOutputRecoveryRevision !== undefined ||
         savedPost.analysisDefinitiveOutputRecoveryFromProtocol !== undefined ||
         savedPost.analysisDefinitiveOutputRecoveryProtocol !== undefined ||
+        savedPost.analysisDefinitiveOutputRecoveryEvidenceSha256 !== undefined ||
         savedPost.analysisDefinitiveOutputRecoveredAt !== undefined;
       if (
         savedPost.updatedAt !== legacyEntry.sourceUpdatedAt ||
@@ -2526,16 +2566,17 @@ export const requeueDefinitiveOutputFailure = mutation({
           legacyEntry.analysisAttemptStartedAt ||
         !savedPost.analysisAttemptOwner ||
         receipt.terminalAt !== legacyEntry.receiptTerminalAt ||
-        legacyEntry.failureAt < legacyEntry.analysisAttemptStartedAt ||
-        legacyEntry.failureAt > legacyEntry.receiptTerminalAt ||
+        getLegacyDefinitiveOutputRecoveryFailureAt(legacyEntry) <
+          legacyEntry.analysisAttemptStartedAt ||
+        getLegacyDefinitiveOutputRecoveryFailureAt(legacyEntry) >
+          legacyEntry.receiptTerminalAt ||
         receipt.outcomeDetail !==
           `saved_post:${legacyEntry.savedPostId};terminal_permanent_failure` ||
         savedPost.blocksPaidFetch !== false ||
         receipt.leaseExpiresAt !== undefined ||
         savedPost.processingLeaseExpiresAt !== undefined ||
         hasCompletedAnalysis ||
-        hasPriorDefinitiveAttestation ||
-        !savedPost.processingError
+        hasPriorDefinitiveAttestation
       ) {
         throw new Error(
           "Legacy definitive-output recovery current state has drifted from the frozen manifest.",
@@ -2649,8 +2690,14 @@ export const requeueDefinitiveOutputFailure = mutation({
             legacyEntry.analysisAttemptStartedAt,
           analysisDefinitiveOutputFailureOwner: savedPost.analysisAttemptOwner,
           analysisDefinitiveOutputFailureKind: legacyEntry.failureKind,
-          analysisDefinitiveOutputFailureMessage: savedPost.processingError,
-          analysisDefinitiveOutputFailureAt: legacyEntry.failureAt,
+          ...(savedPost.processingError !== undefined
+            ? {
+                analysisDefinitiveOutputFailureMessage:
+                  savedPost.processingError,
+              }
+            : {}),
+          analysisDefinitiveOutputFailureAt:
+            getLegacyDefinitiveOutputRecoveryFailureAt(legacyEntry),
         }
       : {};
     await ctx.db.patch(savedPost._id, {
@@ -2670,6 +2717,12 @@ export const requeueDefinitiveOutputFailure = mutation({
       analysisDefinitiveOutputRecoveryRevision: args.expectedSourceRevision,
       analysisDefinitiveOutputRecoveryFromProtocol: args.failedAttemptProtocol,
       analysisDefinitiveOutputRecoveryProtocol: args.recoveryProtocol,
+      ...(legacyEntry
+        ? {
+            analysisDefinitiveOutputRecoveryEvidenceSha256:
+              legacyEntry.evidenceSha256,
+          }
+        : {}),
       analysisDefinitiveOutputRecoveredAt: now,
       lastProcessedAt: now,
       updatedAt: now,

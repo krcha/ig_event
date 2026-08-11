@@ -83,8 +83,53 @@ assert.match(activeSemaphore, /\.take\(run\.selectedHandleCount \+ 1\)/, "the ac
 assert.doesNotMatch(activeSemaphore, /\.collect\(/, "the active semaphore must never collect the run receipt table");
 assert.match(activeSemaphore, /for \(const activeReceipt of activeCandidates\)/, "the active semaphore must inspect every bounded candidate");
 assert.match(activeSemaphore, /\(activeReceipt\.leaseExpiresAt \?\? 0\) <= now/, "only expired leases may bypass the normal active-receipt block");
-assert.match(activeSemaphore, /isDedicatedLegacyDefinitiveOutputRecoveryReceipt/, "only the exact dedicated recovery lane may bypass an expired active receipt");
+assert.match(
+  activeSemaphore,
+  /hasDedicatedLegacyDefinitiveOutputRecoveryMarker/,
+  "only an allowlisted reserved recovery marker with an expired lease may bypass an active receipt",
+);
 assert.match(activeSemaphore, /if \(!isExpiredDedicatedRecovery\) return null/, "all live or ordinary processing receipts must still block a second consumer");
+const genericProcessingClaimOffset = controller.indexOf(
+  "export const claimNextProcessingReceipt",
+);
+const dedicatedProcessingClaimOffset = controller.indexOf(
+  "export const claimLegacyDefinitiveOutputRecoveryReceipt",
+);
+assert.ok(
+  genericProcessingClaimOffset >= 0 &&
+    dedicatedProcessingClaimOffset > genericProcessingClaimOffset,
+  "generic and dedicated processing claims must both remain exported",
+);
+const genericProcessingClaim = controller.slice(
+  genericProcessingClaimOffset,
+  dedicatedProcessingClaimOffset,
+);
+assert.equal(
+  (
+    genericProcessingClaim.match(
+      /hasDedicatedLegacyDefinitiveOutputRecoveryMarker/g,
+    ) ?? []
+  ).length,
+  5,
+  "every generic recovery skip path must use the broad fail-closed reservation marker",
+);
+assert.doesNotMatch(
+  genericProcessingClaim,
+  /isDedicatedLegacyDefinitiveOutputRecoveryReceipt/,
+  "the generic consumer must not release a malformed reserved row into AI processing",
+);
+const dedicatedProcessingClaim = controller.slice(
+  dedicatedProcessingClaimOffset,
+  controller.indexOf(
+    "export const releaseProcessingReceiptForRetry",
+    dedicatedProcessingClaimOffset,
+  ),
+);
+assert.match(
+  dedicatedProcessingClaim,
+  /isDedicatedLegacyDefinitiveOutputRecoveryReceipt/,
+  "the dedicated claimant must require the exact recovery provenance fence",
+);
 assert.match(controller, /by_run_status_executionSlot_retryNotBeforeAt/, "receipt retries must be queryable inside a fixed worker lane without scanning all run rows");
 assert.match(controller, /preserveAttempt/, "waiting for an AI lease must not consume the receipt retry limit");
 assert.match(controller, /Selected profiles exceed this run's frozen budget/);

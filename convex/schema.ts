@@ -413,6 +413,9 @@ export default defineSchema({
     analysisDefinitiveOutputRecoveryRevision: v.optional(v.number()),
     analysisDefinitiveOutputRecoveryFromProtocol: v.optional(v.string()),
     analysisDefinitiveOutputRecoveryProtocol: v.optional(v.string()),
+    // Immutable provenance for the frozen legacy recovery authorization. A
+    // source-revision change clears it together with the recovery markers.
+    analysisDefinitiveOutputRecoveryEvidenceSha256: v.optional(v.string()),
     analysisDefinitiveOutputRecoveredAt: v.optional(v.number()),
     processingLeaseOwner: v.optional(v.string()),
     processingLeaseExpiresAt: v.optional(v.number()),

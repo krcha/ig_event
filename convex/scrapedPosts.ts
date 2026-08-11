@@ -520,6 +520,7 @@ export const upsertManyByHandle = mutation({
                 analysisDefinitiveOutputRecoveryRevision: undefined,
                 analysisDefinitiveOutputRecoveryFromProtocol: undefined,
                 analysisDefinitiveOutputRecoveryProtocol: undefined,
+                analysisDefinitiveOutputRecoveryEvidenceSha256: undefined,
                 analysisDefinitiveOutputRecoveredAt: undefined,
                 processingLeaseOwner: undefined,
                 processingLeaseExpiresAt: undefined,

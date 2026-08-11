@@ -21,10 +21,12 @@ import {
   LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_SELECTION_VERSION,
   LEGACY_DEFINITIVE_OUTPUT_RECOVERY_MANIFEST_FILE_SHA256,
   LEGACY_DEFINITIVE_OUTPUT_RECOVERY_MANIFEST_VERSION,
+  getLegacyDefinitiveOutputRecoveryFailureAt,
 } from "../convex/legacyDefinitiveOutputRecoveryAllowlist.ts";
 import {
   claimProcessing,
   recordOpenAiDefinitiveOutputFailure,
+  upsertManyByHandle,
 } from "../convex/scrapedPosts.ts";
 import {
   claimLegacyDefinitiveOutputRecoveryReceipt,
@@ -483,6 +485,7 @@ assert.equal(
 assert.equal(attestedPost.analysisDefinitiveOutputFailureOutputTokens, 4_096);
 assert.equal(attestedPost.analysisDefinitiveOutputFailureReasoningTokens, 3_100);
 assert.equal(attestedPost.analysisDefinitiveOutputFailureModel, "gpt-5-mini-2025-08-07");
+assert.equal(attestedPost.analysisDefinitiveOutputRecoveryEvidenceSha256, undefined);
 await assert.rejects(
   recordOpenAiDefinitiveOutputFailure._handler(ctx(recordDb), {
     handle: livePost.handle,
@@ -804,6 +807,7 @@ await expectRecoveryRejected(
   /active or uncleared lease/i,
 );
 for (const processingError of [
+  undefined,
   "network disconnected before a response",
   "OpenAI transport outcome is ambiguous",
   "OpenAI extraction failed: 400 Bad Request",
@@ -883,6 +887,14 @@ const compiledLegacyRows = LEGACY_DEFINITIVE_OUTPUT_RECOVERY_ALLOWLIST.map(
     entry.evidenceSha256,
   ],
 );
+for (const entry of LEGACY_DEFINITIVE_OUTPUT_RECOVERY_ALLOWLIST) {
+  assert.equal(
+    getLegacyDefinitiveOutputRecoveryFailureAt(entry),
+    Date.parse(entry.failureLogAt),
+    "Every legacy failure time must be derived from its SHA-bound log timestamp.",
+  );
+  assert.match(entry.evidenceSha256, /^[a-f0-9]{64}$/u);
+}
 assert.equal(
   createHash("sha256")
     .update(JSON.stringify(compiledLegacyRows))
@@ -909,10 +921,6 @@ function legacyRecoverySeed(
     processingStatus: "completed",
     processingAttempts: 1,
     processingOutcome: "terminal_permanent_failure",
-    processingError:
-      entry.failureKind === "empty_output"
-        ? "OpenAI response did not contain output text."
-        : "OpenAI response did not contain valid JSON.",
     processingLeaseOwner: undefined,
     processingLeaseExpiresAt: undefined,
     processingRetryAt: undefined,
@@ -1042,11 +1050,21 @@ for (const entry of legacyPositiveEntries) {
     postBefore.analysisAttemptOwner,
   );
   assert.equal(postAfter.analysisDefinitiveOutputFailureKind, entry.failureKind);
+  assert.equal(postBefore.processingError, undefined);
+  assert.equal(postAfter.analysisDefinitiveOutputFailureMessage, undefined);
   assert.equal(
-    postAfter.analysisDefinitiveOutputFailureMessage,
-    postBefore.processingError,
+    Object.hasOwn(postAfter, "analysisDefinitiveOutputFailureMessage"),
+    false,
+    "A missing historical processing error must not create or invent a failure message.",
   );
-  assert.equal(postAfter.analysisDefinitiveOutputFailureAt, entry.failureAt);
+  assert.equal(
+    postAfter.analysisDefinitiveOutputRecoveryEvidenceSha256,
+    entry.evidenceSha256,
+  );
+  assert.equal(
+    postAfter.analysisDefinitiveOutputFailureAt,
+    Date.parse(entry.failureLogAt),
+  );
   assert.equal(postAfter.analysisDefinitiveOutputFailureModel, undefined);
   assert.equal(postAfter.analysisDefinitiveOutputFailureInputTokens, undefined);
   assert.equal(postAfter.analysisDefinitiveOutputFailureOutputTokens, undefined);
@@ -1124,6 +1142,14 @@ await expectRecoveryRejected(
 );
 await expectRecoveryRejected(
   legacyRecoverySeed(legacyInvalidJsonEntry, {
+    analysisDefinitiveOutputRecoveryRevision:
+      legacyInvalidJsonEntry.sourceRevision,
+  }),
+  legacyRequeueArgs(legacyInvalidJsonEntry),
+  /recovery marker is partial, mismatched, or already consumed/i,
+);
+await expectRecoveryRejected(
+  legacyRecoverySeed(legacyInvalidJsonEntry, {
     analysisAttemptProtocol: "openai-responses:transport-ambiguous",
   }),
   legacyRequeueArgs(legacyInvalidJsonEntry),
@@ -1159,6 +1185,14 @@ await expectRecoveryRejected(
   /current analysis/i,
 );
 await expectRecoveryRejected(
+  legacyRecoverySeed(legacyInvalidJsonEntry, {
+    analysisDefinitiveOutputRecoveryEvidenceSha256:
+      legacyInvalidJsonEntry.evidenceSha256,
+  }),
+  legacyRequeueArgs(legacyInvalidJsonEntry),
+  /recovery marker is partial, mismatched, or already consumed/i,
+);
+await expectRecoveryRejected(
   recoverySeed(),
   {
     ...requeueArgs,
@@ -1167,6 +1201,41 @@ await expectRecoveryRejected(
   },
   /refuses a legacy manifest version/i,
 );
+
+// Recovery provenance belongs to one immutable source revision. Any real
+// source-content change must clear it with the rest of the analysis/recovery
+// generation before the incremented revision can be processed.
+{
+  const entry = legacyInvalidJsonEntry;
+  const db = new MemoryDb(legacyRecoverySeed(entry));
+  await requeueDefinitiveOutputFailure._handler(ctx(db), legacyRequeueArgs(entry));
+  const before = db.row("scrapedPosts", entry.savedPostId);
+  assert.equal(
+    before.analysisDefinitiveOutputRecoveryEvidenceSha256,
+    entry.evidenceSha256,
+  );
+  await upsertManyByHandle._handler(ctx(db), {
+    handle: before.handle,
+    posts: [
+      {
+        handle: before.handle,
+        postId: before.postId,
+        caption: "Changed source caption for the next revision.",
+        imageUrls: [],
+        instagramPostUrl: before.instagramPostUrl,
+        username: before.username,
+      },
+    ],
+    serviceSecret: SERVICE_SECRET,
+  });
+  const after = db.row("scrapedPosts", entry.savedPostId);
+  assert.equal(after.sourceRevision, entry.sourceRevision + 1);
+  assert.equal(after.analysisDefinitiveOutputRecoveryRevision, undefined);
+  assert.equal(after.analysisDefinitiveOutputRecoveryFromProtocol, undefined);
+  assert.equal(after.analysisDefinitiveOutputRecoveryProtocol, undefined);
+  assert.equal(after.analysisDefinitiveOutputRecoveryEvidenceSha256, undefined);
+  assert.equal(after.analysisDefinitiveOutputRecoveredAt, undefined);
+}
 
 assert.deepEqual(
   [...LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_RECEIPT_IDS],
@@ -1238,6 +1307,43 @@ function exactClaimArgs(receiptId, overrides = {}) {
   };
 }
 
+function addOrdinaryProcessingCandidate(db, runId) {
+  db.table("ingestionRuns").set(runId, {
+    ...db.row("ingestionRuns", runId),
+    selectedHandleCount: 4,
+  });
+  db.table("scrapedPosts").set("post:ordinary", {
+    _id: "post:ordinary",
+    handle: "ordinary_handle",
+    postId: "ordinary-post",
+    instagramPostUrl: "https://www.instagram.com/p/ordinary-post/",
+    username: "ordinary_handle",
+    imageUrls: [],
+    sourceRevision: 1,
+    processingStatus: "pending",
+    blocksPaidFetch: true,
+    createdAt: now - 1_000,
+    updatedAt: now - 1_000,
+  });
+  db.table("ingestionRunHandleReceipts").set("zz-receipt-ordinary", {
+    _id: "zz-receipt-ordinary",
+    runId,
+    chunkId: "chunk:ordinary",
+    handle: "ordinary_handle",
+    status: "processing_pending",
+    attemptCount: 1,
+    providerAttemptCount: 1,
+    providerResultStatus: "persisted",
+    persistedPostCount: 1,
+    scrapedPostId: "post:ordinary",
+    scrapedPostSourceRevision: 1,
+    processingAttemptCount: 0,
+    retryNotBeforeAt: now - 1,
+    createdAt: now - 2_000,
+    updatedAt: now - 1_000,
+  });
+}
+
 {
   const db = new MemoryDb(legacyInitialBatchSeed());
   await requeueInitialBatch(db);
@@ -1255,6 +1361,114 @@ function exactClaimArgs(receiptId, overrides = {}) {
     db.row("ingestionRunHandleReceipts", target.receiptId).outcomeDetail,
     "legacy_definitive_output_recovery_claimed",
   );
+}
+
+// A later current-protocol definitive failure replaces the failure tuple but
+// must retain the legacy recovery provenance. This keeps a lost completion ACK
+// readable without allowing the one-shot recovery to enqueue a second attempt.
+{
+  const db = new MemoryDb(legacyInitialBatchSeed());
+  await requeueInitialBatch(db);
+  const target = initialLegacyEntries[0];
+  const workerId = "qa-current-failure-readback-worker";
+  const claimed = await claimLegacyDefinitiveOutputRecoveryReceipt._handler(
+    ctx(db),
+    exactClaimArgs(target.receiptId, { workerId }),
+  );
+  assert.equal(claimed.claimed, true);
+  await db.patch(target.savedPostId, {
+    processingStatus: "completed",
+    processingOutcome: "terminal_permanent_failure",
+    processingError: "Current protocol returned a definitive invalid schema.",
+    processingLeaseOwner: undefined,
+    processingLeaseExpiresAt: undefined,
+    processingRetryAt: undefined,
+    blocksPaidFetch: false,
+    analysisAttemptRevision: target.sourceRevision,
+    analysisAttemptStartedAt: now,
+    analysisAttemptOwner: workerId,
+    analysisAttemptProtocol: EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
+    analysisDefinitiveOutputFailureRevision: target.sourceRevision,
+    analysisDefinitiveOutputFailureProtocol:
+      EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
+    analysisDefinitiveOutputFailureAttemptStartedAt: now,
+    analysisDefinitiveOutputFailureOwner: workerId,
+    analysisDefinitiveOutputFailureKind: "invalid_schema",
+    analysisDefinitiveOutputFailureMessage:
+      "Current protocol returned a definitive invalid schema.",
+    analysisDefinitiveOutputFailureAt: now,
+    analysisDefinitiveOutputFailureModel: "gpt-5-mini-qa",
+  });
+  assert.equal(
+    db.row("scrapedPosts", target.savedPostId)
+      .analysisDefinitiveOutputRecoveryEvidenceSha256,
+    target.evidenceSha256,
+  );
+  const completion = await completeProcessingReceipt._handler(ctx(db), {
+    runId: target.runId,
+    receiptId: target.receiptId,
+    workerId,
+    serviceSecret: SERVICE_SECRET,
+  });
+  assert.equal(completion.status, "failed");
+  const readback = await claimLegacyDefinitiveOutputRecoveryReceipt._handler(
+    ctx(db),
+    exactClaimArgs(target.receiptId, {
+      workerId: "qa-current-failure-readback-retry",
+    }),
+  );
+  assert.equal(readback.claimed, false);
+  assert.equal(readback.state, "already_terminal");
+  await expectRecoveryRejected(
+    {
+      scrapedPosts: [db.row("scrapedPosts", target.savedPostId)],
+      ingestionRuns: [db.row("ingestionRuns", target.runId)],
+      ingestionRunChunks: [
+        db.row("ingestionRunChunks", `chunk:${target.receiptId}`),
+      ],
+      ingestionRunHandleReceipts: [
+        db.row("ingestionRunHandleReceipts", target.receiptId),
+      ],
+    },
+    {
+      ...legacyRequeueArgs(target),
+      failedAttemptProtocol: EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
+      legacyManifestVersion: undefined,
+    },
+    /recovery marker is partial, mismatched, or already consumed/i,
+  );
+}
+
+// Corrupted or missing recovery evidence blocks the exact executor while the
+// broad reservation marker keeps every such row out of the generic AI lane.
+for (const recoveryEvidenceSha256 of [undefined, "0".repeat(64)]) {
+  const db = new MemoryDb(legacyInitialBatchSeed());
+  await requeueInitialBatch(db);
+  const target = initialLegacyEntries[0];
+  await db.patch(target.savedPostId, {
+    analysisDefinitiveOutputRecoveryEvidenceSha256: recoveryEvidenceSha256,
+  });
+  await assert.rejects(
+    claimLegacyDefinitiveOutputRecoveryReceipt._handler(
+      ctx(db),
+      exactClaimArgs(target.receiptId),
+    ),
+    /exact persisted recovery fence/i,
+  );
+  await assert.rejects(
+    requeueDefinitiveOutputFailure._handler(
+      ctx(db),
+      legacyRequeueArgs(target),
+    ),
+    /recovery marker is partial, mismatched, or already consumed/i,
+  );
+  addOrdinaryProcessingCandidate(db, target.runId);
+  const genericClaim = await claimNextProcessingReceipt._handler(ctx(db), {
+    runId: target.runId,
+    workerId: "qa-generic-evidence-drift-worker",
+    serviceSecret: SERVICE_SECRET,
+  });
+  assert.equal(genericClaim?.receiptId, "zz-receipt-ordinary");
 }
 
 // Normal exact completions restore the one-row chunk accounting that each
@@ -1359,40 +1573,7 @@ function exactClaimArgs(receiptId, overrides = {}) {
   const db = new MemoryDb(seed);
   await requeueInitialBatch(db);
   const runId = initialLegacyEntries[0].runId;
-  db.table("ingestionRuns").set(runId, {
-    ...db.row("ingestionRuns", runId),
-    selectedHandleCount: 4,
-  });
-  db.table("scrapedPosts").set("post:ordinary", {
-    _id: "post:ordinary",
-    handle: "ordinary_handle",
-    postId: "ordinary-post",
-    instagramPostUrl: "https://www.instagram.com/p/ordinary-post/",
-    username: "ordinary_handle",
-    imageUrls: [],
-    sourceRevision: 1,
-    processingStatus: "pending",
-    blocksPaidFetch: true,
-    createdAt: now - 1_000,
-    updatedAt: now - 1_000,
-  });
-  db.table("ingestionRunHandleReceipts").set("zz-receipt-ordinary", {
-    _id: "zz-receipt-ordinary",
-    runId,
-    chunkId: "chunk:ordinary",
-    handle: "ordinary_handle",
-    status: "processing_pending",
-    attemptCount: 1,
-    providerAttemptCount: 1,
-    providerResultStatus: "persisted",
-    persistedPostCount: 1,
-    scrapedPostId: "post:ordinary",
-    scrapedPostSourceRevision: 1,
-    processingAttemptCount: 0,
-    retryNotBeforeAt: now - 1,
-    createdAt: now - 2_000,
-    updatedAt: now - 1_000,
-  });
+  addOrdinaryProcessingCandidate(db, runId);
   const genericClaim = await claimNextProcessingReceipt._handler(ctx(db), {
     runId,
     workerId: "qa-generic-worker",
