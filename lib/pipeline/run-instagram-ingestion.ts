@@ -3,12 +3,14 @@ import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import {
   extractEventDataFromInstagramPost,
+  isOpenAiDefinitiveOutputError,
   isOpenAiPermanentError,
   isOpenAiProviderBlockedError,
   OpenAiProviderBlockedError,
   parseExtractedEventData,
   type ExtractedEventData,
 } from "@/lib/ai/extract-event-data";
+import { EVENT_EXTRACTION_ANALYSIS_PROTOCOL } from "@/lib/ai/openai-analysis-protocol";
 import {
   buildCanonicalVenueNamesByHandle,
   canonicalizeVenueName,
@@ -292,6 +294,8 @@ const recordScrapedPostProcessingResultMutation =
   "scrapedPosts:recordProcessingResult" as unknown as FunctionReference<"mutation">;
 const recordScrapedPostOpenAiAnalysisMutation =
   "scrapedPosts:recordOpenAiAnalysis" as unknown as FunctionReference<"mutation">;
+const recordScrapedPostOpenAiDefinitiveOutputFailureMutation =
+  "scrapedPosts:recordOpenAiDefinitiveOutputFailure" as unknown as FunctionReference<"mutation">;
 const markScrapedPostOpenAiAnalysisAttemptStartedMutation =
   "scrapedPosts:markOpenAiAnalysisAttemptStarted" as unknown as FunctionReference<"mutation">;
 const releaseScrapedPostOpenAiAnalysisAttemptMutation =
@@ -4410,6 +4414,50 @@ export function getRetryableProcessingFailureCount(
   );
 }
 
+type SourceOccurrenceReceiptState = "absent" | "complete" | "incomplete";
+
+type SavedPostCompletionClassificationInput = {
+  hasTerminalPermanentFailure: boolean;
+  hasProcessingFailure: boolean;
+  receiptInspectionFailed: boolean;
+  receiptState: SourceOccurrenceReceiptState;
+  eventActivityCountBefore: number;
+  eventActivityCountAfter: number;
+  terminalNoEventSkipCountBefore: number;
+  terminalNoEventSkipCountAfter: number;
+};
+
+export function classifySavedPostCompletionForTesting(
+  input: SavedPostCompletionClassificationInput,
+): {
+  hasTerminalNoEventOutcome: boolean;
+  hasMissingReceiptAfterEvent: boolean;
+  hasRetryableFailure: boolean;
+} {
+  const hasTerminalNoEventOutcome =
+    !input.hasTerminalPermanentFailure &&
+    !input.hasProcessingFailure &&
+    !input.receiptInspectionFailed &&
+    input.eventActivityCountAfter === input.eventActivityCountBefore &&
+    input.terminalNoEventSkipCountAfter > input.terminalNoEventSkipCountBefore;
+  const hasMissingReceiptAfterEvent =
+    input.receiptState === "absent" &&
+    input.eventActivityCountAfter > input.eventActivityCountBefore;
+  const hasRetryableFailure =
+    !input.hasTerminalPermanentFailure &&
+    !hasTerminalNoEventOutcome &&
+    (input.hasProcessingFailure ||
+      input.receiptInspectionFailed ||
+      input.receiptState === "incomplete" ||
+      hasMissingReceiptAfterEvent ||
+      input.receiptState === "absent");
+  return {
+    hasTerminalNoEventOutcome,
+    hasMissingReceiptAfterEvent,
+    hasRetryableFailure,
+  };
+}
+
 function getOrCreateHandleSummary(summary: IngestionSummary, handle: string): HandleSummary {
   const existing = summary.handles.find((entry) => entry.handle === handle);
   if (existing) {
@@ -8516,17 +8564,74 @@ function isVerifiedTimeEvidence(options: {
   );
 }
 
+const GENERIC_SHARED_VENUE_TOKENS = new Set([
+  "bar",
+  "cafe",
+  "centar",
+  "center",
+  "cinema",
+  "club",
+  "hall",
+  "hotel",
+  "kafic",
+  "klub",
+  "new",
+  "nova",
+  "novi",
+  "pub",
+  "restaurant",
+  "restoran",
+  "venue",
+]);
+
+function venueValueAppearsInEvidence(value: string, evidence: string): boolean {
+  const normalizedValue = toSearchableText(value);
+  const normalizedEvidence = toSearchableText(evidence);
+  if (!normalizedValue || !normalizedEvidence) return false;
+
+  const valueTokens = normalizedValue.split(/\s+/u).filter(Boolean);
+  const evidenceTokens = normalizedEvidence.split(/\s+/u).filter(Boolean);
+  const containsExactTokenPhrase = evidenceTokens.some((_, startIndex) =>
+    valueTokens.every(
+      (token, offset) => evidenceTokens[startIndex + offset] === token,
+    ),
+  );
+  if (containsExactTokenPhrase) return true;
+
+  const expectedTokens = valueTokens
+    .filter(
+      (token) => token.length >= 4 && !GENERIC_SHARED_VENUE_TOKENS.has(token),
+    );
+  if (expectedTokens.length === 0) return false;
+  const tokensMatch = (expected: string, observed: string): boolean => {
+    if (expected === observed) return true;
+    return (
+      expected.length >= 6 &&
+      observed.length === expected.length &&
+      expected.slice(0, -1) === observed.slice(0, -1)
+    );
+  };
+  return expectedTokens.every((expected) =>
+    evidenceTokens.some((observed) => tokensMatch(expected, observed)),
+  );
+}
+
 function hasVerifiedSharedScheduleContext(
   value: ExtractedEventData["shared_schedule_context"]["venue" | "time"],
   post: InstagramScrapedPost,
   hasPoster: boolean,
+  field: "venue" | "time",
 ): boolean {
   const normalizedValue = toSearchableText(value.value);
   const normalizedEvidence = toSearchableText(value.evidence);
+  const evidenceSupportsValue =
+    field === "venue"
+      ? venueValueAppearsInEvidence(value.value, value.evidence)
+      : normalizedEvidence.includes(normalizedValue);
   return (
     value.applies_to_all === true &&
     Boolean(normalizedValue) &&
-    normalizedEvidence.includes(normalizedValue) &&
+    evidenceSupportsValue &&
     value.source !== "unknown" &&
     extractionEvidenceAppearsInPersistedSource({
       evidenceText: value.evidence,
@@ -8551,13 +8656,13 @@ function isVerifiedEventVenueEvidence(options: {
   if (!normalizeString(options.venue)) return true;
   if (options.trustedVenueSource) return true;
 
-  const searchableValues = [options.venue, options.rawEvidenceValue]
-    .map((value) => toSearchableText(value))
+  const evidenceValues = [options.venue, options.rawEvidenceValue]
+    .map((value) => normalizeString(value))
     .filter(Boolean);
   const supportsVenue = (text: string): boolean => {
-    const searchable = toSearchableText(text);
     return Boolean(
-      searchable && searchableValues.some((value) => searchable.includes(value)),
+      normalizeString(text) &&
+        evidenceValues.some((value) => venueValueAppearsInEvidence(value, text)),
     );
   };
   const isBoundEvidence = (text: string, source: string): boolean => {
@@ -8597,9 +8702,7 @@ function isVerifiedEventVenueEvidence(options: {
   }
   if (
     options.post.locationName &&
-    searchableValues.some((value) =>
-      toSearchableText(options.post.locationName ?? "").includes(value),
-    )
+    supportsVenue(options.post.locationName)
   ) {
     return true;
   }
@@ -9095,11 +9198,13 @@ export function prepareEventsForInsert(
     extracted.shared_schedule_context.venue,
     post,
     hasPosterEvidence,
+    "venue",
   );
   const verifiedSharedTime = hasVerifiedSharedScheduleContext(
     extracted.shared_schedule_context.time,
     post,
     hasPosterEvidence,
+    "time",
   );
   const sharedVenueValue = verifiedSharedVenue
     ? normalizeString(extracted.shared_schedule_context.venue.value)
@@ -9125,7 +9230,7 @@ export function prepareEventsForInsert(
               : extractedArtists;
         const rowVenue = normalizeString(entry.venue);
         const rowVenueGrounded = Boolean(
-          rowVenue && toSearchableText(entry.sourceLine).includes(toSearchableText(rowVenue)),
+          rowVenue && venueValueAppearsInEvidence(rowVenue, entry.sourceLine),
         );
         const variantVenueRaw = usesStructuredEvidence
           ? rowVenueGrounded
@@ -9224,7 +9329,12 @@ export function prepareEventsForInsert(
           artistsWereSanitized: entry.artistsWereSanitized ?? false,
           description: variantDescription,
           venue: variantVenue,
-          venueEvidenceValue: rowVenueGrounded ? rowVenue : sharedVenueValue,
+          venueEvidenceValue:
+            rowVenueGrounded || sharedVenueValue
+              ? rowVenueGrounded
+                ? rowVenue
+                : sharedVenueValue
+              : "",
           splitSource: entry.source,
           splitSourceLine: entry.sourceLine,
           occurrencePlanUnverified: entry.occurrencePlanUnverified ?? false,
@@ -9683,6 +9793,34 @@ const DEFAULT_PROCESS_INGESTION_POST_DEPENDENCIES: ProcessIngestionPostDependenc
   normalizeToJpeg,
 };
 
+function classifyExistingApprovedOccurrence(
+  existing: ExistingEventRecord,
+  candidate: PreparedEvent,
+) {
+  const existingVenue = toSearchableText(existing.venue);
+  const candidateVenue = toSearchableText(candidate.venue);
+  const sameVenue =
+    Boolean(existingVenue) &&
+    Boolean(candidateVenue) &&
+    existingVenue === candidateVenue;
+  const existingShortcode = extractShortcodeFromPostUrl(existing.instagramPostUrl ?? "");
+  const candidateShortcode = extractShortcodeFromPostUrl(candidate.instagramPostUrl ?? "");
+  const sameSource =
+    (Boolean(existing.instagramPostId) &&
+      existing.instagramPostId === candidate.instagramPostId) ||
+    (Boolean(existingShortcode) && existingShortcode === candidateShortcode);
+  return classifyApprovalOccurrenceRelation({
+    candidate,
+    existing,
+    sameVenue,
+    sameSource,
+    unknownVenue: !existingVenue || !candidateVenue,
+  });
+}
+
+export const classifyExistingApprovedOccurrenceForTesting =
+  classifyExistingApprovedOccurrence;
+
 async function processIngestionPost(
   options: ProcessIngestionPostOptions,
   dependencies: ProcessIngestionPostDependencies = DEFAULT_PROCESS_INGESTION_POST_DEPENDENCIES,
@@ -10125,7 +10263,7 @@ async function processIngestionPost(
                     instagramPostUrl: processingFence.instagramPostUrl,
                     owner: processingFence.owner,
                     sourceRevision: processingFence.sourceRevision,
-                    protocol: "openai-responses:event-extraction:event_evidence_v2",
+                    protocol: EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
                     budgetDayKey: getBudgetDayKey(),
                     dailyRequestLimit: getOpenAiDailyPostLimit(),
                   },
@@ -10161,6 +10299,7 @@ async function processIngestionPost(
             model: extracted._openaiUsage?.model,
             inputTokens: extracted._openaiUsage?.inputTokens,
             outputTokens: extracted._openaiUsage?.outputTokens,
+            reasoningTokens: extracted._openaiUsage?.reasoningTokens,
             totalTokens: extracted._openaiUsage?.totalTokens,
           },
           serviceSecret,
@@ -10171,6 +10310,49 @@ async function processIngestionPost(
     if (providerLeaseHeld && providerExecution && isOpenAiProviderBlockedError(error)) {
       await providerExecution.block(error.status, `http_${error.status}`);
       providerBlockPersisted = true;
+    }
+    if (analysisAttemptRecorded && isOpenAiDefinitiveOutputError(error)) {
+      if (!processingFence.scrapedPostId) {
+        throw new Error(
+          "Definitive OpenAI output failure has no exact saved-post identity for durable attestation.",
+        );
+      }
+      try {
+        await client.mutation(
+          recordScrapedPostOpenAiDefinitiveOutputFailureMutation,
+          withServiceSecret(
+            {
+              handle: processingFence.handle,
+              scrapedPostId: processingFence.scrapedPostId,
+              postId: processingFence.postId,
+              instagramPostUrl: processingFence.instagramPostUrl,
+              owner: processingFence.owner,
+              sourceRevision: processingFence.sourceRevision,
+              attemptProtocol: EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
+              failureKind: error.kind,
+              message: error.message,
+              model: error.model,
+              ...(error.inputTokens === undefined
+                ? {}
+                : { inputTokens: error.inputTokens }),
+              ...(error.outputTokens === undefined
+                ? {}
+                : { outputTokens: error.outputTokens }),
+              ...(error.reasoningTokens === undefined
+                ? {}
+                : { reasoningTokens: error.reasoningTokens }),
+              ...(error.totalTokens === undefined
+                ? {}
+                : { totalTokens: error.totalTokens }),
+            },
+            serviceSecret,
+          ),
+        );
+      } catch (attestationError) {
+        throw new Error(
+          `Definitive OpenAI output failure attestation did not complete: ${getErrorMessage(attestationError)}`,
+        );
+      }
     }
     summary.failedExtractions += 1;
     summary.failed_extractions += 1;
@@ -10187,6 +10369,10 @@ async function processIngestionPost(
       sourceImageUrl: selectedImageUrl,
       providerBlocked: isOpenAiProviderBlockedError(error),
       permanentFailure: isOpenAiPermanentError(error),
+      definitiveOutputFailure: isOpenAiDefinitiveOutputError(error),
+      definitiveOutputFailureKind: isOpenAiDefinitiveOutputError(error)
+        ? error.kind
+        : undefined,
       error: getErrorMessage(error),
     });
     if (isOpenAiProviderBlockedError(error)) {
@@ -10437,26 +10623,10 @@ async function processIngestionPost(
           match.existingEvent.date === prepared.event.date,
       )
       .map((match) => {
-        const existing = match.existingEvent;
-        const sameVenue =
-          toSearchableText(existing.venue) === toSearchableText(prepared.event.venue);
-        const existingShortcode = extractShortcodeFromPostUrl(existing.instagramPostUrl ?? "");
-        const candidateShortcode = extractShortcodeFromPostUrl(
-          prepared.event.instagramPostUrl ?? "",
+        return classifyExistingApprovedOccurrence(
+          match.existingEvent,
+          prepared.event,
         );
-        const sameSource =
-          (Boolean(existing.instagramPostId) &&
-            existing.instagramPostId === prepared.event.instagramPostId) ||
-          (Boolean(existingShortcode) && existingShortcode === candidateShortcode);
-        return classifyApprovalOccurrenceRelation({
-          candidate: prepared.event,
-          existing,
-          sameVenue,
-          sameSource,
-          unknownVenue:
-            !toSearchableText(existing.venue) ||
-            !toSearchableText(prepared.event.venue),
-        });
       });
 
     if (
@@ -11253,7 +11423,7 @@ async function processLoadedPostsForHandle(
     const hasProcessingFailure =
       !hasTerminalPermanentFailure &&
       retryableFailureCountAfter > retryableFailureCountBefore;
-    let receiptState: "absent" | "complete" | "incomplete" = "absent";
+    let receiptState: SourceOccurrenceReceiptState = "absent";
     let receiptInspectionFailed = false;
     try {
       receiptState = await getCurrentSourceOccurrenceReceiptState(client, post, serviceSecret);
@@ -11263,21 +11433,20 @@ async function processLoadedPostsForHandle(
     }
     const eventActivityCountAfter =
       summary.insertedEvents + summary.skippedDuplicates + summary.updated_duplicates_bad_data;
-    const hasTerminalNoEventOutcome =
-      !hasProcessingFailure &&
-      !receiptInspectionFailed &&
-      receiptState === "absent" &&
-      eventActivityCountAfter === eventActivityCountBefore &&
-      getTerminalNoEventSkipCount(summary) > terminalNoEventSkipCountBefore;
-    const hasMissingReceiptAfterEvent =
-      receiptState === "absent" && eventActivityCountAfter > eventActivityCountBefore;
-    const hasRetryableFailure =
-      !hasTerminalPermanentFailure &&
-      (hasProcessingFailure ||
-        receiptInspectionFailed ||
-        receiptState === "incomplete" ||
-        hasMissingReceiptAfterEvent ||
-        (!hasTerminalNoEventOutcome && receiptState === "absent"));
+    const {
+      hasTerminalNoEventOutcome,
+      hasMissingReceiptAfterEvent,
+      hasRetryableFailure,
+    } = classifySavedPostCompletionForTesting({
+      hasTerminalPermanentFailure,
+      hasProcessingFailure,
+      receiptInspectionFailed,
+      receiptState,
+      eventActivityCountBefore,
+      eventActivityCountAfter,
+      terminalNoEventSkipCountBefore,
+      terminalNoEventSkipCountAfter: getTerminalNoEventSkipCount(summary),
+    });
     await client.mutation(
       recordScrapedPostProcessingResultMutation,
       withServiceSecret(

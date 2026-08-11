@@ -13,6 +13,7 @@ import {
   createEvent,
   listPublicCalendarEventsWindowPaginated,
   listPublicEventsWindow,
+  repairTrustedV2EventVenue,
   recordInstagramSourceOccurrenceSatisfaction,
 } from "../convex/events.ts";
 import { markOpenAiAnalysisAttemptStarted } from "../convex/scrapedPosts.ts";
@@ -409,6 +410,155 @@ try {
     "Exact persisted poster storage and checksum evidence must authorize publication.",
   );
   assert.equal(exactPosterGrounding.posterQueries, 1);
+
+  const repairVenue = {
+    _id: "venue-boundary-v2",
+    _creationTime: now,
+    name: extractionFixture.venue,
+    instagramHandle: "boundary_venue",
+    category: "music",
+    publicStatus: "published",
+    scrapeActive: true,
+    createdAt: now,
+    updatedAt: now,
+  };
+  const repairSource = {
+    _id: "source-boundary-v2",
+    _creationTime: now,
+    handle: "boundary_venue",
+    role: "unknown",
+    venueId: repairVenue._id,
+    active: true,
+    discoveredAt: now,
+    activatedAt: now,
+    createdAt: now,
+    updatedAt: now,
+  };
+  const repairCurrentFields = {
+    ...makeNormalizedFields("poster", "poster"),
+    rawVenue: extractionFixture.venue,
+    normalizedVenue: "",
+    trustedVenueSource: true,
+  };
+  const repairNextFields = {
+    ...repairCurrentFields,
+    normalizedVenue: extractionFixture.venue,
+  };
+  const repairEvent = {
+    ...posterEvent,
+    _id: "event-trusted-v2-venue-repair",
+    venue: "",
+    normalizedFieldsJson: JSON.stringify(repairCurrentFields),
+  };
+  const repairEvents = [repairEvent];
+  const repairAudits = [];
+  const repairCtx = {
+    auth: { getUserIdentity: async () => null },
+    db: {
+      async get(id) {
+        return repairEvents.find((event) => event._id === id) ?? null;
+      },
+      async patch(id, patch) {
+        const event = repairEvents.find((candidate) => candidate._id === id);
+        if (!event) throw new Error(`Unexpected trusted venue repair patch ${id}`);
+        Object.assign(event, structuredClone(patch));
+      },
+      async insert(table, value) {
+        assert.equal(table, "eventAuditLog");
+        const id = `venue-repair-audit-${repairAudits.length + 1}`;
+        repairAudits.push({ _id: id, ...structuredClone(value) });
+        return id;
+      },
+      query(table) {
+        if (table === "venues") {
+          return { collect: async () => [repairVenue] };
+        }
+        if (table === "events") {
+          return {
+            withIndex(_index, configure) {
+              const criteria = indexCriteria(configure);
+              return {
+                async collect() {
+                  return repairEvents.filter((event) => event.date === criteria.date);
+                },
+              };
+            },
+          };
+        }
+        return {
+          withIndex(_index, configure) {
+            const criteria = indexCriteria(configure);
+            const records =
+              table === "instagramSources"
+                ? [repairSource]
+                : table === "scrapedPosts"
+                  ? [posterPost]
+                  : table === "mediaAssets"
+                    ? [makePosterAsset()]
+                    : [];
+            return {
+              async take(limit) {
+                return records
+                  .filter((record) =>
+                    Object.entries(criteria).every(
+                      ([field, value]) => record[field] === value,
+                    ),
+                  )
+                  .slice(0, limit);
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+  const venueRepairResult = await repairTrustedV2EventVenue._handler(repairCtx, {
+    id: repairEvent._id,
+    expectedStatus: "approved",
+    expectedUpdatedAt: repairEvent.updatedAt,
+    expectedNormalizedFieldsJson: repairEvent.normalizedFieldsJson,
+    nextVenue: extractionFixture.venue,
+    nextNormalizedFieldsJson: JSON.stringify(repairNextFields),
+    moderationNote: "Exact trusted source venue restored after v2 normalization loss.",
+    serviceSecret: process.env.CRON_SECRET,
+  });
+  assert.equal(venueRepairResult.updated, true);
+  assert.equal(repairEvent.venue, extractionFixture.venue);
+  assert.equal(repairEvent.venueId, repairVenue._id);
+  assert.equal(repairEvent.venueInstagramHandle, repairVenue.instagramHandle);
+  assert.equal(
+    JSON.parse(repairEvent.normalizedFieldsJson).normalizedVenue,
+    extractionFixture.venue,
+  );
+  assert.equal(repairAudits.length, 1);
+  assert.equal(repairAudits[0].action, "trusted_v2_venue_repaired");
+
+  const unsafeRepairFields = {
+    ...repairCurrentFields,
+    normalizedVenue: extractionFixture.venue,
+    title: "Changed during venue repair",
+  };
+  const unsafeRepairEvent = {
+    ...posterEvent,
+    _id: "event-unsafe-v2-venue-repair",
+    venue: "",
+    normalizedFieldsJson: JSON.stringify(repairCurrentFields),
+  };
+  repairEvents.push(unsafeRepairEvent);
+  await assert.rejects(
+    repairTrustedV2EventVenue._handler(repairCtx, {
+      id: unsafeRepairEvent._id,
+      expectedStatus: "approved",
+      expectedUpdatedAt: unsafeRepairEvent.updatedAt,
+      expectedNormalizedFieldsJson: unsafeRepairEvent.normalizedFieldsJson,
+      nextVenue: extractionFixture.venue,
+      nextNormalizedFieldsJson: JSON.stringify(unsafeRepairFields),
+      moderationNote: "Attempted unsafe venue repair must fail without any mutation.",
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /may only change normalizedVenue/i,
+  );
+  assert.equal(unsafeRepairEvent.venue, "");
 
   for (const [label, persistedPost, assets] of [
     ["missing media asset", posterPost, []],

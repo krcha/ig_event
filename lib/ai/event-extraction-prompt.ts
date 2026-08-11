@@ -86,6 +86,10 @@ Return strict JSON with:
 }
 Rules:
 - Use empty string for unknown scalar fields; use [] for unknown artists.
+- Keep the response compact; ordinary posts should finish within 3,840 output tokens. Use exact fragments, not prose explanations or repeated caption text.
+- Always return source_caption="" and source_url="". The caller already owns and durably restores both exact source values after parsing.
+- Keep reasoning_notes to one factual sentence (maximum 160 characters), description to 240 characters, conflict reasons to 120 characters, and schedule source_text/evidence fragments to 200 characters.
+- In each field_confirmation use at most two short found_in labels, at most one exact evidence_snippet, evidence no longer than 160 characters, and notes no longer than 80 characters. Do not repeat the same source fragment across evidence, evidence_snippets, and notes.
 - Do not invent facts.
 - Set "is_event" to true only when the post clearly announces or schedules a real event occurrence. A missing time, price, or venue does not make a clear dated event invalid.
 - Set "is_event" to false for closures, recaps/past-event memories, menus or ordinary offers, giveaways/contests, cancellations without a replacement occurrence, and posts too unclear to establish an event. Give one short factual "non_event_reason"; do not rely only on empty event fields.
@@ -177,7 +181,7 @@ Rules:
 - Each field_confirmation entry must set "evidence_snippets" to exact support snippets with source labels. Allowed source labels are: caption, poster, alt_text, location_tag, canonical_hint, handle_context, inference. Use [] for unknown fields.
 - Confidence rubric: use 0.95+ for exact caption/poster evidence, 0.80-0.90 for explicit evidence that required normalization or date inference, 0.60-0.75 for partial/contextual support, and below 0.55 for missing, contradictory, or fallback-only fields.
 - Top-level confidence reflects publishable core fields: date, venue, title or billed act, and time when available. Do not average unrelated optional fields into the top-level confidence.
-- Each field_confirmation entry must explain confidence using the caption, image, location tag, handle context, canonical hint, or explicit inference notes.
+- Each field_confirmation entry should use notes only for a short qualification that is not already present in its evidence snippet; an empty note is preferred when no qualification is needed.
 - Never return markdown, only valid JSON.
 `.trim();
 

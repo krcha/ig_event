@@ -1,5 +1,16 @@
 import { v } from "convex/values";
 import { getBelgradeDayKey } from "../lib/pipeline/belgrade-day-key";
+import {
+  DEFINITIVE_OUTPUT_RECOVERY_PROTOCOL,
+  EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
+  LEGACY_EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
+  OPENAI_DEFINITIVE_OUTPUT_FAILURE_KINDS,
+} from "../lib/ai/openai-analysis-protocol";
+import {
+  getLegacyDefinitiveOutputRecoveryEntry,
+  LEGACY_DEFINITIVE_OUTPUT_RECOVERY_MANIFEST_VERSION,
+  type LegacyDefinitiveOutputRecoveryEntry,
+} from "./legacyDefinitiveOutputRecoveryAllowlist";
 import type { Doc } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx } from "./_generated/server";
 import { requireAdminOrServiceSecret } from "./authz";
@@ -24,6 +35,9 @@ const COST_PER_PROFILE_MICROS = 10_000;
 const LEASE_MS = 10 * 60 * 1000;
 const MAX_ATTEMPTS = 3;
 const MAX_PROCESSING_ATTEMPTS = 3;
+const definitiveOutputFailureKinds = new Set<string>(
+  OPENAI_DEFINITIVE_OUTPUT_FAILURE_KINDS,
+);
 
 const modeValidator = v.union(v.literal("canary"), v.literal("catch_up"), v.literal("daily"));
 const runStatusValidator = v.union(
@@ -775,6 +789,7 @@ export const getCanaryAccounting = query({
     );
     let attributedInputTokens = 0;
     let attributedOutputTokens = 0;
+    let attributedReasoningTokens = 0;
     let attributedTotalTokens = 0;
     let openAiAttemptsStartedDuringRun = 0;
     let openAiAnalysesCompletedDuringRun = 0;
@@ -791,6 +806,7 @@ export const getCanaryAccounting = query({
         openAiAnalysesCompletedDuringRun += 1;
         attributedInputTokens += post.analysisInputTokens ?? 0;
         attributedOutputTokens += post.analysisOutputTokens ?? 0;
+        attributedReasoningTokens += post.analysisReasoningTokens ?? 0;
         attributedTotalTokens += post.analysisTotalTokens ?? 0;
       }
       return {
@@ -808,6 +824,7 @@ export const getCanaryAccounting = query({
         analysisCompletedAt: post?.analysisCompletedAt ?? null,
         analysisInputTokens: post?.analysisInputTokens ?? null,
         analysisOutputTokens: post?.analysisOutputTokens ?? null,
+        analysisReasoningTokens: post?.analysisReasoningTokens ?? null,
         analysisTotalTokens: post?.analysisTotalTokens ?? null,
         attemptStartedDuringRun,
         analysisCompletedDuringRun,
@@ -836,6 +853,7 @@ export const getCanaryAccounting = query({
       openAiAnalysesCompletedDuringRun,
       attributedInputTokens,
       attributedOutputTokens,
+      attributedReasoningTokens,
       attributedTotalTokens,
       rows,
     };
@@ -1817,6 +1835,364 @@ export const reopenDeferredReceiptFromSavedPost = mutation({
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const recovered = await linkPersistedReceiptPostForRecoveryHandler(ctx, args, true);
     return { reopened: recovered.reopened, postCount: 1 };
+  },
+});
+
+const definitiveOutputRequeueResultValidator = v.object({
+  requeued: v.boolean(),
+  reason: v.union(v.literal("requeued"), v.literal("already_requeued")),
+});
+
+/**
+ * Reopen one definitively invalid extraction response without re-entering the
+ * paid Instagram-fetch lane. Eligibility is based on the current protocol's
+ * durable output-failure attestation, never on free-form error text.
+ */
+export const requeueDefinitiveOutputFailure = mutation({
+  args: {
+    runId: v.id("ingestionRuns"),
+    receiptId: v.id("ingestionRunHandleReceipts"),
+    scrapedPostId: v.id("scrapedPosts"),
+    expectedSourceRevision: v.number(),
+    failedAttemptProtocol: v.union(
+      v.literal(EVENT_EXTRACTION_ANALYSIS_PROTOCOL),
+      v.literal(LEGACY_EVENT_EXTRACTION_ANALYSIS_PROTOCOL),
+    ),
+    recoveryProtocol: v.literal(DEFINITIVE_OUTPUT_RECOVERY_PROTOCOL),
+    legacyManifestVersion: v.optional(
+      v.literal(LEGACY_DEFINITIVE_OUTPUT_RECOVERY_MANIFEST_VERSION),
+    ),
+    serviceSecret: v.optional(v.string()),
+  },
+  returns: definitiveOutputRequeueResultValidator,
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const isLegacyRecovery =
+      args.failedAttemptProtocol === LEGACY_EVENT_EXTRACTION_ANALYSIS_PROTOCOL;
+    let legacyEntry: LegacyDefinitiveOutputRecoveryEntry | null = null;
+    if (
+      args.recoveryProtocol !== DEFINITIVE_OUTPUT_RECOVERY_PROTOCOL
+    ) {
+      throw new Error("Definitive-output recovery protocol fence mismatch.");
+    }
+    if (isLegacyRecovery) {
+      if (
+        args.legacyManifestVersion !==
+        LEGACY_DEFINITIVE_OUTPUT_RECOVERY_MANIFEST_VERSION
+      ) {
+        throw new Error(
+          "Legacy definitive-output recovery manifest version mismatch.",
+        );
+      }
+      legacyEntry = getLegacyDefinitiveOutputRecoveryEntry(args.receiptId);
+      if (
+        !legacyEntry ||
+        legacyEntry.runId !== args.runId ||
+        legacyEntry.savedPostId !== args.scrapedPostId ||
+        legacyEntry.sourceRevision !== args.expectedSourceRevision
+      ) {
+        throw new Error(
+          "Legacy definitive-output recovery target is not in the frozen allowlist.",
+        );
+      }
+    } else {
+      if (args.failedAttemptProtocol !== EVENT_EXTRACTION_ANALYSIS_PROTOCOL) {
+        throw new Error("Definitive-output recovery protocol fence mismatch.");
+      }
+      if (args.legacyManifestVersion !== undefined) {
+        throw new Error(
+          "Current definitive-output recovery refuses a legacy manifest version.",
+        );
+      }
+    }
+    const [run, receipt, savedPost] = await Promise.all([
+      ctx.db.get(args.runId),
+      ctx.db.get(args.receiptId),
+      ctx.db.get(args.scrapedPostId),
+    ]);
+    if (!run || !receipt || receipt.runId !== args.runId) {
+      throw new Error("Definitive-output recovery receipt does not belong to this run.");
+    }
+    if (
+      !savedPost ||
+      receipt.scrapedPostId !== savedPost._id ||
+      savedPost.handle !== receipt.handle
+    ) {
+      throw new Error("Definitive-output recovery requires the exact linked saved post.");
+    }
+    if (
+      !Number.isSafeInteger(args.expectedSourceRevision) ||
+      args.expectedSourceRevision < 1 ||
+      receipt.scrapedPostSourceRevision !== args.expectedSourceRevision ||
+      (savedPost.sourceRevision ?? 1) !== args.expectedSourceRevision
+    ) {
+      throw new Error("Definitive-output recovery source revision has drifted.");
+    }
+    if (
+      receipt.providerResultStatus !== "persisted" ||
+      receipt.providerAttemptCount !== 1 ||
+      receipt.persistedPostCount !== 1
+    ) {
+      throw new Error(
+        "Definitive-output recovery requires exactly one persisted paid-fetch result.",
+      );
+    }
+
+    const alreadyRequeued =
+      savedPost.analysisDefinitiveOutputRecoveryRevision ===
+        args.expectedSourceRevision &&
+      savedPost.analysisDefinitiveOutputRecoveryFromProtocol ===
+        args.failedAttemptProtocol &&
+      savedPost.analysisDefinitiveOutputRecoveryProtocol === args.recoveryProtocol;
+    if (alreadyRequeued) {
+      return { requeued: false, reason: "already_requeued" as const };
+    }
+
+    const now = Date.now();
+    if (run.status === "building") {
+      throw new Error("This durable run cannot accept definitive-output recovery.");
+    }
+    if (receipt.status !== "failed") {
+      throw new Error("Only a failed durable receipt can be requeued by this recovery.");
+    }
+    if (
+      receipt.leaseOwner !== undefined ||
+      (receipt.leaseExpiresAt ?? 0) > now ||
+      savedPost.processingLeaseOwner !== undefined ||
+      (savedPost.processingLeaseExpiresAt ?? 0) > now
+    ) {
+      throw new Error("Definitive-output recovery refuses an active or uncleared lease.");
+    }
+    if (
+      savedPost.processingStatus !== "completed" ||
+      savedPost.processingOutcome !== "terminal_permanent_failure"
+    ) {
+      throw new Error("Saved post is not a terminal permanent extraction failure.");
+    }
+    if (
+      savedPost.analysisRevision !== undefined ||
+      Boolean(savedPost.analysisResultJson)
+    ) {
+      throw new Error("Definitive-output recovery refuses a post with current analysis.");
+    }
+    if (legacyEntry) {
+      const hasCompletedAnalysis =
+        savedPost.analysisRevision !== undefined ||
+        savedPost.analysisResultJson !== undefined ||
+        savedPost.analysisCompletedAt !== undefined ||
+        savedPost.analysisModel !== undefined ||
+        savedPost.analysisContractVersion !== undefined ||
+        savedPost.analysisIsEvent !== undefined ||
+        savedPost.analysisNonEventReason !== undefined ||
+        savedPost.analysisInputTokens !== undefined ||
+        savedPost.analysisOutputTokens !== undefined ||
+        savedPost.analysisReasoningTokens !== undefined ||
+        savedPost.analysisTotalTokens !== undefined;
+      const hasPriorDefinitiveAttestation =
+        savedPost.analysisDefinitiveOutputFailureRevision !== undefined ||
+        savedPost.analysisDefinitiveOutputFailureProtocol !== undefined ||
+        savedPost.analysisDefinitiveOutputFailureAttemptStartedAt !== undefined ||
+        savedPost.analysisDefinitiveOutputFailureOwner !== undefined ||
+        savedPost.analysisDefinitiveOutputFailureKind !== undefined ||
+        savedPost.analysisDefinitiveOutputFailureMessage !== undefined ||
+        savedPost.analysisDefinitiveOutputFailureAt !== undefined ||
+        savedPost.analysisDefinitiveOutputFailureModel !== undefined ||
+        savedPost.analysisDefinitiveOutputFailureInputTokens !== undefined ||
+        savedPost.analysisDefinitiveOutputFailureOutputTokens !== undefined ||
+        savedPost.analysisDefinitiveOutputFailureReasoningTokens !== undefined ||
+        savedPost.analysisDefinitiveOutputFailureTotalTokens !== undefined ||
+        savedPost.analysisDefinitiveOutputRecoveryRevision !== undefined ||
+        savedPost.analysisDefinitiveOutputRecoveryFromProtocol !== undefined ||
+        savedPost.analysisDefinitiveOutputRecoveryProtocol !== undefined ||
+        savedPost.analysisDefinitiveOutputRecoveredAt !== undefined;
+      if (
+        savedPost.updatedAt !== legacyEntry.sourceUpdatedAt ||
+        receipt.updatedAt !== legacyEntry.receiptUpdatedAt ||
+        savedPost.analysisAttemptRevision !== legacyEntry.sourceRevision ||
+        savedPost.analysisAttemptProtocol !==
+          LEGACY_EVENT_EXTRACTION_ANALYSIS_PROTOCOL ||
+        savedPost.analysisAttemptStartedAt !==
+          legacyEntry.analysisAttemptStartedAt ||
+        !savedPost.analysisAttemptOwner ||
+        receipt.terminalAt !== legacyEntry.receiptTerminalAt ||
+        legacyEntry.failureAt < legacyEntry.analysisAttemptStartedAt ||
+        legacyEntry.failureAt > legacyEntry.receiptTerminalAt ||
+        receipt.outcomeDetail !==
+          `saved_post:${legacyEntry.savedPostId};terminal_permanent_failure` ||
+        savedPost.blocksPaidFetch !== false ||
+        receipt.leaseExpiresAt !== undefined ||
+        savedPost.processingLeaseExpiresAt !== undefined ||
+        hasCompletedAnalysis ||
+        hasPriorDefinitiveAttestation ||
+        !savedPost.processingError
+      ) {
+        throw new Error(
+          "Legacy definitive-output recovery current state has drifted from the frozen manifest.",
+        );
+      }
+    } else {
+      if (
+        savedPost.analysisAttemptRevision !== args.expectedSourceRevision ||
+        savedPost.analysisAttemptProtocol !== args.failedAttemptProtocol ||
+        !savedPost.analysisAttemptOwner ||
+        savedPost.analysisDefinitiveOutputFailureRevision !==
+          args.expectedSourceRevision ||
+        savedPost.analysisDefinitiveOutputFailureProtocol !==
+          args.failedAttemptProtocol ||
+        savedPost.analysisDefinitiveOutputFailureAttemptStartedAt !==
+          savedPost.analysisAttemptStartedAt ||
+        savedPost.analysisDefinitiveOutputFailureOwner !==
+          savedPost.analysisAttemptOwner ||
+        !definitiveOutputFailureKinds.has(
+          savedPost.analysisDefinitiveOutputFailureKind ?? "",
+        ) ||
+        !savedPost.analysisDefinitiveOutputFailureAt ||
+        !savedPost.analysisDefinitiveOutputFailureModel
+      ) {
+        throw new Error(
+          "Saved post does not carry an exact definitive-output failure attestation.",
+        );
+      }
+    }
+
+    if (run.status === "completed" || run.status === "failed") {
+      const perStatusReceipts = await Promise.all(
+        receiptStatuses.map((status) =>
+          ctx.db
+            .query("ingestionRunHandleReceipts")
+            .withIndex("by_run_status", (q) =>
+              q.eq("runId", run._id).eq("status", status),
+            )
+            .take(run.selectedHandleCount + 1),
+        ),
+      );
+      const allRunReceipts = perStatusReceipts.flat();
+      if (allRunReceipts.length !== run.selectedHandleCount) {
+        throw new Error(
+          "Terminal-run recovery requires complete frozen receipt accounting.",
+        );
+      }
+      const nonTerminalReceipts = allRunReceipts.filter(
+        (candidate) =>
+          !terminalStatuses.includes(
+            candidate.status as (typeof terminalStatuses)[number],
+          ),
+      );
+      const nonTerminalPosts = await Promise.all(
+        nonTerminalReceipts.map((candidate) =>
+          candidate.scrapedPostId
+            ? ctx.db.get(candidate.scrapedPostId)
+            : Promise.resolve(null),
+        ),
+      );
+      if (
+        nonTerminalReceipts.some(
+          (candidate, index) =>
+            candidate.providerAttemptCount !== 1 ||
+            candidate.providerResultStatus !== "persisted" ||
+            candidate.persistedPostCount !== 1 ||
+            !candidate.scrapedPostId ||
+            candidate.scrapedPostSourceRevision === undefined ||
+            (candidate.leaseExpiresAt ?? 0) > now ||
+            !nonTerminalPosts[index] ||
+            nonTerminalPosts[index]?.handle !== candidate.handle ||
+            (nonTerminalPosts[index]?.sourceRevision ?? 1) !==
+              candidate.scrapedPostSourceRevision,
+        )
+      ) {
+        throw new Error(
+          "Terminal-run recovery refuses any nonterminal receipt that could re-enter paid fetch.",
+        );
+      }
+    }
+
+    if (run.status === "completed" || run.status === "failed") {
+      const otherActiveRuns = (await Promise.all(
+        activeRunStatuses.map((status) =>
+          ctx.db
+            .query("ingestionRuns")
+            .withIndex("by_status_createdAt", (q) => q.eq("status", status))
+            .order("desc")
+            .take(2),
+        ),
+      ))
+        .flat()
+        .filter((activeRun) => activeRun._id !== run._id);
+      if (otherActiveRuns.length > 0) {
+        throw new Error(
+          "Another durable ingestion run is active; completed-run recovery cannot overlap it.",
+        );
+      }
+    }
+
+    const chunk = await ctx.db.get(receipt.chunkId);
+    if (!chunk || chunk.runId !== run._id) {
+      throw new Error("Definitive-output recovery receipt chunk is missing or foreign.");
+    }
+    const legacyFailureAttestation = legacyEntry
+      ? {
+          analysisDefinitiveOutputFailureRevision: legacyEntry.sourceRevision,
+          analysisDefinitiveOutputFailureProtocol:
+            LEGACY_EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
+          analysisDefinitiveOutputFailureAttemptStartedAt:
+            legacyEntry.analysisAttemptStartedAt,
+          analysisDefinitiveOutputFailureOwner: savedPost.analysisAttemptOwner,
+          analysisDefinitiveOutputFailureKind: legacyEntry.failureKind,
+          analysisDefinitiveOutputFailureMessage: savedPost.processingError,
+          analysisDefinitiveOutputFailureAt: legacyEntry.failureAt,
+        }
+      : {};
+    await ctx.db.patch(savedPost._id, {
+      ...legacyFailureAttestation,
+      processingStatus: "pending",
+      blocksPaidFetch: true,
+      processingOutcome: "definitive_output_requeued",
+      processingError: undefined,
+      processingLeaseOwner: undefined,
+      processingLeaseExpiresAt: undefined,
+      processingRetryAt: undefined,
+      analysisAttemptRevision: undefined,
+      analysisAttemptStartedAt: undefined,
+      analysisAttemptOwner: undefined,
+      analysisAttemptProtocol: undefined,
+      analysisAttemptBudgetDayKey: undefined,
+      analysisDefinitiveOutputRecoveryRevision: args.expectedSourceRevision,
+      analysisDefinitiveOutputRecoveryFromProtocol: args.failedAttemptProtocol,
+      analysisDefinitiveOutputRecoveryProtocol: args.recoveryProtocol,
+      analysisDefinitiveOutputRecoveredAt: now,
+      lastProcessedAt: now,
+      updatedAt: now,
+    });
+    await ctx.db.patch(receipt._id, {
+      status: "processing_pending",
+      terminalAt: undefined,
+      leaseOwner: undefined,
+      leaseExpiresAt: undefined,
+      retryNotBeforeAt: now,
+      outcomeDetail: "saved_post_definitive_output_requeued",
+      updatedAt: now,
+    });
+    await ctx.db.patch(chunk._id, {
+      terminalReceiptCount: Math.max(0, chunk.terminalReceiptCount - 1),
+      status: "running",
+      updatedAt: now,
+    });
+    const countsAfterRequeue = await terminalCountsForRun(
+      ctx,
+      run._id,
+      run.selectedHandleCount,
+    );
+    await ctx.db.patch(run._id, {
+      status:
+        run.status === "completed" || run.status === "failed"
+          ? "queued"
+          : run.status,
+      terminalReceiptCount: countsAfterRequeue.terminalReceiptCount,
+      failedReceiptCount: countsAfterRequeue.failedReceiptCount,
+      finishedAt: undefined,
+      updatedAt: now,
+    });
+    return { requeued: true, reason: "requeued" as const };
   },
 });
 

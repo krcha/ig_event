@@ -10,7 +10,10 @@ import {
   assertServiceUpdateEventPolicy,
   hasEventEvidenceV2AutoApproval,
 } from "../lib/events/event-update-precondition.ts";
-import { prepareEventsForInsert } from "../lib/pipeline/run-instagram-ingestion.ts";
+import {
+  classifyExistingApprovedOccurrenceForTesting,
+  prepareEventsForInsert,
+} from "../lib/pipeline/run-instagram-ingestion.ts";
 
 function confirmation(evidence, source = "caption") {
   const exactEvidence = String(evidence ?? "").trim();
@@ -899,6 +902,357 @@ function runSemanticNormalizationQa() {
     }
   });
 
+  runCase("trusted venue account carries its canonical venue across schedule rows", () => {
+    const firstDate = isoDateDaysFromNow(23);
+    const secondDate = isoDateDaysFromNow(25);
+    const firstText = ddmmyyyy(firstDate);
+    const secondText = ddmmyyyy(secondDate);
+    const sharedVenueEvidence = "THIS WEEK AT BOHO";
+    const post = makePost({
+      caption: [
+        sharedVenueEvidence,
+        `${firstText} / @qa_first_artist`,
+        `${secondText} / @qa_second_artist`,
+      ].join("\n"),
+      postId: "qa-trusted-account-schedule-venue",
+      username: "bohobar_belgrade",
+    });
+    const scheduleEntry = (date, dateText, artist) => ({
+      date,
+      time: "",
+      venue: "Boho Bar",
+      title: artist,
+      artists: [artist],
+      description: `${artist} performs.`,
+      source_text: `${dateText} / @${artist}`,
+      date_evidence: {
+        exact_text: dateText,
+        source: "caption",
+        is_relative: false,
+        resolved_date: date,
+      },
+      time_evidence: {
+        status: "not_stated",
+        exact_text: "",
+        source: "unknown",
+      },
+    });
+    const extracted = makeEventExtraction({
+      artists: [],
+      caption: post.caption,
+      date: "",
+      dateEvidenceText: "",
+      postUrl: post.instagramPostUrl,
+      title: "",
+      venue: "Boho Bar",
+      date_evidence: {
+        exact_text: "",
+        source: "unknown",
+        is_relative: false,
+        resolved_date: "",
+      },
+      shared_schedule_context: {
+        venue: {
+          applies_to_all: true,
+          value: "Boho Bar",
+          evidence: sharedVenueEvidence,
+          source: "caption",
+        },
+        time: {
+          applies_to_all: false,
+          value: "",
+          evidence: "",
+          source: "unknown",
+        },
+      },
+      schedule_entries: [
+        scheduleEntry(firstDate, firstText, "qa_first_artist"),
+        scheduleEntry(secondDate, secondText, "qa_second_artist"),
+      ],
+      field_confirmation: {
+        ...structuredClone(validExtraction.field_confirmation),
+        title: confirmation(""),
+        location: confirmation(""),
+        location_name: confirmation(sharedVenueEvidence),
+        artists: confirmation("@qa_first_artist @qa_second_artist"),
+      },
+    });
+    const results = prepare(post, extracted, {
+      canonicalVenueNamesByHandle: { bohobar_belgrade: "Boho Bar" },
+      configuredVenueNamesByHandle: { bohobar_belgrade: "Boho Bar" },
+      sourceRolesByHandle: { bohobar_belgrade: "unknown" },
+      selectedImageUrl: "https://images.example.com/boho-week.jpg",
+    });
+    assert.equal(results.length, 2);
+    for (const result of results) {
+      assert.equal(result.kind, "ok");
+      assert.equal(result.event.venue, "Boho Bar");
+      assert.equal(result.normalizedFields.normalizedVenue, "Boho Bar");
+      assert.equal(result.normalizedFields.trustedVenueSource, true);
+      assert.equal(result.normalizedFields.venueEvidenceVerified, true);
+      assert.equal(result.event.status, "approved");
+    }
+
+    const promoterResults = prepare(post, extracted, {
+      canonicalVenueNamesByHandle: { bohobar_belgrade: "Boho Bar" },
+      configuredVenueNamesByHandle: { bohobar_belgrade: "Boho Bar" },
+      sourceRolesByHandle: { bohobar_belgrade: "promoter" },
+      selectedImageUrl: "https://images.example.com/boho-week.jpg",
+    });
+    for (const result of promoterResults) {
+      assert.equal(result.kind, "ok");
+      assert.equal(
+        result.event.venue,
+        "Boho Bar",
+        "a promoter may carry a shared venue only when the source visibly says it applies",
+      );
+      assert.equal(result.normalizedFields.trustedVenueSource, false);
+    }
+
+    const noSharedVenueEvidence = structuredClone(extracted);
+    noSharedVenueEvidence.shared_schedule_context.venue = {
+      applies_to_all: false,
+      value: "",
+      evidence: "",
+      source: "unknown",
+    };
+    const noSharedEvidenceResults = prepare(
+      post,
+      parseExtractedEventData(noSharedVenueEvidence),
+      {
+        canonicalVenueNamesByHandle: { bohobar_belgrade: "Boho Bar" },
+        configuredVenueNamesByHandle: { bohobar_belgrade: "Boho Bar" },
+        sourceRolesByHandle: { bohobar_belgrade: "unknown" },
+        selectedImageUrl: "https://images.example.com/boho-week.jpg",
+      },
+    );
+    for (const result of noSharedEvidenceResults) {
+      assert.equal(result.kind, "ok");
+      assert.equal(
+        result.event.venue,
+        "",
+        "a trusted account alone must not leak its venue across schedule rows",
+      );
+      assert.equal(result.normalizedFields.normalizedVenue, "");
+    }
+
+    const zvezdaEvidence = "NA OTVORENOM U ZVEZDI";
+    const zvezdaPost = makePost({
+      caption: [
+        zvezdaEvidence,
+        `${firstText} / @qa_first_artist`,
+        `${secondText} / @qa_second_artist`,
+      ].join("\n"),
+      postId: "qa-zvezda-inflected-shared-venue",
+      username: "newcinemazvezda",
+    });
+    const zvezdaExtraction = structuredClone(extracted);
+    zvezdaExtraction.source_caption = zvezdaPost.caption;
+    zvezdaExtraction.source_url = zvezdaPost.instagramPostUrl;
+    zvezdaExtraction.venue = "New Cinema Zvezda";
+    zvezdaExtraction.shared_schedule_context.venue = {
+      applies_to_all: true,
+      value: "New Cinema Zvezda",
+      evidence: zvezdaEvidence,
+      source: "caption",
+    };
+    zvezdaExtraction.schedule_entries = zvezdaExtraction.schedule_entries.map(
+      (entry) => ({ ...entry, venue: "New Cinema Zvezda" }),
+    );
+    zvezdaExtraction.field_confirmation.location_name = confirmation(zvezdaEvidence);
+    const zvezdaResults = prepare(
+      zvezdaPost,
+      parseExtractedEventData(zvezdaExtraction),
+      {
+        canonicalVenueNamesByHandle: {
+          newcinemazvezda: "New Cinema Zvezda",
+        },
+        configuredVenueNamesByHandle: {
+          newcinemazvezda: "New Cinema Zvezda",
+        },
+        sourceRolesByHandle: { newcinemazvezda: "unknown" },
+      },
+    );
+    for (const result of zvezdaResults) {
+      assert.equal(result.kind, "ok");
+      assert.equal(result.event.venue, "New Cinema Zvezda");
+      assert.equal(result.normalizedFields.normalizedVenue, "New Cinema Zvezda");
+    }
+
+    const nearPrefixPost = {
+      ...zvezdaPost,
+      caption: zvezdaPost.caption.replace("U ZVEZDI", "U ZVEZDARI"),
+    };
+    const nearPrefixExtraction = structuredClone(zvezdaExtraction);
+    nearPrefixExtraction.source_caption = nearPrefixPost.caption;
+    nearPrefixExtraction.shared_schedule_context.venue.evidence =
+      "NA OTVORENOM U ZVEZDARI";
+    nearPrefixExtraction.field_confirmation.location_name = confirmation(
+      "NA OTVORENOM U ZVEZDARI",
+    );
+    const nearPrefixResults = prepare(
+      nearPrefixPost,
+      parseExtractedEventData(nearPrefixExtraction),
+      {
+        canonicalVenueNamesByHandle: {
+          newcinemazvezda: "New Cinema Zvezda",
+        },
+        configuredVenueNamesByHandle: {
+          newcinemazvezda: "New Cinema Zvezda",
+        },
+        sourceRolesByHandle: { newcinemazvezda: "unknown" },
+      },
+    );
+    for (const result of nearPrefixResults) {
+      assert.equal(result.kind, "ok");
+      assert.equal(
+        result.event.venue,
+        "",
+        "a nearby venue name such as Zvezdara must not be accepted as Zvezda",
+      );
+    }
+
+    const rowAliasLines = [
+      `${firstText} / @qa_first_artist u Zvezdi`,
+      `${secondText} / @qa_second_artist u Zvezdi`,
+    ];
+    const rowAliasPost = makePost({
+      caption: rowAliasLines.join("\n"),
+      postId: "qa-zvezda-row-alias",
+      username: "qa_promoter_source",
+    });
+    const rowAliasExtraction = structuredClone(zvezdaExtraction);
+    rowAliasExtraction.source_caption = rowAliasPost.caption;
+    rowAliasExtraction.source_url = rowAliasPost.instagramPostUrl;
+    rowAliasExtraction.shared_schedule_context.venue = {
+      applies_to_all: false,
+      value: "",
+      evidence: "",
+      source: "unknown",
+    };
+    rowAliasExtraction.schedule_entries = rowAliasExtraction.schedule_entries.map(
+      (entry, index) => ({ ...entry, source_text: rowAliasLines[index] }),
+    );
+    const rowAliasResults = prepare(
+      rowAliasPost,
+      parseExtractedEventData(rowAliasExtraction),
+      {
+        canonicalVenueNamesByHandle: {
+          qa_promoter_source: "Different Promoter Office",
+        },
+        configuredVenueNamesByHandle: {},
+        sourceRolesByHandle: { qa_promoter_source: "promoter" },
+      },
+    );
+    for (const result of rowAliasResults) {
+      assert.equal(result.kind, "ok");
+      assert.equal(
+        result.event.venue,
+        "New Cinema Zvezda",
+        "a row-specific Serbian venue inflection must bind without account fallback",
+      );
+    }
+
+    const shortRowAliasExtraction = structuredClone(rowAliasExtraction);
+    shortRowAliasExtraction.schedule_entries =
+      shortRowAliasExtraction.schedule_entries.map((entry) => ({
+        ...entry,
+        venue: "Zvezda",
+      }));
+    const shortRowAliasResults = prepare(
+      rowAliasPost,
+      parseExtractedEventData(shortRowAliasExtraction),
+      {
+        canonicalVenueNamesByHandle: {
+          qa_promoter_source: "Different Promoter Office",
+        },
+        configuredVenueNamesByHandle: {},
+        sourceRolesByHandle: { qa_promoter_source: "promoter" },
+      },
+    );
+    for (const result of shortRowAliasResults) {
+      assert.equal(result.kind, "ok");
+      assert.equal(
+        result.event.venue,
+        "Zvezda",
+        "a short row venue must accept the exact Serbian inflection Zvezdi",
+      );
+    }
+
+    const rowNearPrefixPost = {
+      ...rowAliasPost,
+      caption: rowAliasPost.caption.replaceAll("Zvezdi", "Zvezdari"),
+    };
+    const rowNearPrefixExtraction = structuredClone(rowAliasExtraction);
+    rowNearPrefixExtraction.source_caption = rowNearPrefixPost.caption;
+    rowNearPrefixExtraction.schedule_entries =
+      rowNearPrefixExtraction.schedule_entries.map((entry) => ({
+        ...entry,
+        venue: "Zvezda",
+        source_text: entry.source_text.replace("Zvezdi", "Zvezdari"),
+      }));
+    const rowNearPrefixResults = prepare(
+      rowNearPrefixPost,
+      parseExtractedEventData(rowNearPrefixExtraction),
+      {
+        canonicalVenueNamesByHandle: {
+          qa_promoter_source: "Different Promoter Office",
+        },
+        configuredVenueNamesByHandle: {},
+        sourceRolesByHandle: { qa_promoter_source: "promoter" },
+      },
+    );
+    for (const result of rowNearPrefixResults) {
+      assert.equal(result.kind, "ok");
+      assert.equal(
+        result.event.venue,
+        "",
+        "a row-specific nearby venue name must not pass alias grounding",
+      );
+    }
+  });
+
+  runCase("blank venues are unknown rather than the same venue", () => {
+    const existing = {
+      title: "Cidade de Deus",
+      date: "2026-08-11",
+      time: "21:00",
+      venue: "",
+      artists: [],
+      instagramPostId: "qa-existing-source",
+      instagramPostUrl: "https://www.instagram.com/p/qa-existing-source/",
+      eventType: "arts & culture",
+      status: "approved",
+      updatedAt: 1,
+      _id: "qa-existing-event",
+    };
+    const unrelated = {
+      title: "Unrelated Club Night",
+      date: existing.date,
+      time: "TBD",
+      venue: "",
+      artists: ["Different Artist"],
+      instagramPostId: "qa-unrelated-source",
+      instagramPostUrl: "https://www.instagram.com/p/qa-unrelated-source/",
+      eventType: "nightlife",
+      status: "approved",
+    };
+    assert.equal(
+      classifyExistingApprovedOccurrenceForTesting(existing, unrelated),
+      "unrelated",
+      "Two absent venue values must not manufacture a same-venue ambiguity.",
+    );
+    assert.equal(
+      classifyExistingApprovedOccurrenceForTesting(existing, {
+        ...unrelated,
+        title: existing.title,
+        time: existing.time,
+      }),
+      "proven_duplicate",
+      "Unknown venues must still fail closed when identity and time prove a duplicate.",
+    );
+  });
+
   runCase("unverified shared context cannot leak", () => {
     const firstDate = isoDateDaysFromNow(26);
     const secondDate = isoDateDaysFromNow(27);
@@ -1004,6 +1358,10 @@ try {
     responseNumber += 1;
 
     const extraction = structuredClone(validExtraction);
+    // Fresh compact outputs never echo source input; the transport wrapper
+    // restores both exact values before durable caching.
+    extraction.source_caption = "";
+    extraction.source_url = "";
     if (responseNumber === 2) {
       delete extraction.date_evidence;
     } else if (responseNumber === 3) {
@@ -1035,7 +1393,9 @@ try {
 
   const request = requestBodies[0];
   assert.equal(request.model, "qa-openai-vision-model");
-  assert.equal(request.max_output_tokens, 4096);
+  assert.equal(request.max_output_tokens, 8192);
+  assert.equal(request.reasoning.effort, "medium");
+  assert.equal(request.text.verbosity, "low");
   assert.equal(request.text.format.type, "json_schema");
   assert.equal(request.text.format.strict, true);
   assert.equal(request.text.format.name, "nightlife_event_extraction");
@@ -1046,6 +1406,19 @@ try {
 
   const schema = request.text.format.schema;
   assert.equal(schema.additionalProperties, false);
+  assert.equal(schema.properties.schedule_entries.maxItems, 64);
+  assert.equal(schema.properties.source_conflicts.maxItems, 32);
+  assert.equal(
+    schema.properties.field_confirmation.properties.title.properties.evidence_snippets.maxItems,
+    1,
+  );
+  assert.equal(JSON.stringify(schema).includes("maxLength"), false);
+  assert.equal(schema.properties.source_caption.pattern, "^$");
+  assert.equal(schema.properties.source_url.pattern, "^$");
+  assert.equal(
+    new RegExp(schema.properties.reasoning_notes.pattern).test("x".repeat(161)),
+    false,
+  );
   assert.deepEqual(schema.properties.extraction_contract_version.enum, [
     "event_evidence_v2",
   ]);

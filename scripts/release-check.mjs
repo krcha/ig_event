@@ -14,6 +14,7 @@ const checks = [
   { script: "qa:master-review", timeoutMs: 60_000 },
   { script: "qa:extraction", timeoutMs: 60_000 },
   { script: "qa:event-extraction-contract", timeoutMs: 60_000 },
+  { script: "qa:definitive-output-recovery", timeoutMs: 60_000 },
   { script: "qa:event-evidence-v2-durability", timeoutMs: 60_000 },
   { script: "qa:event-time-provenance", timeoutMs: 60_000 },
   { script: "qa:moderation-queue", timeoutMs: 60_000 },

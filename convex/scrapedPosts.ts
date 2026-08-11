@@ -5,6 +5,7 @@ import { v } from "convex/values";
 import { requireAdminOrServiceSecret } from "./authz";
 import { normalizeInstagramPostUrl } from "../lib/images/apify-images";
 import { normalizeHandle } from "../lib/pipeline/venue-normalization";
+import { OPENAI_DEFINITIVE_OUTPUT_FAILURE_KINDS } from "../lib/ai/openai-analysis-protocol";
 import {
   DEFAULT_APIFY_DAILY_BUDGET_USD,
   DEFAULT_APIFY_MAX_CHARGE_PER_HANDLE_USD,
@@ -23,6 +24,15 @@ const MAX_PROCESSING_RETRY_DELAY_MS = 6 * 60 * 60_000;
 const processingStatusValidator = v.union(
   v.literal("completed"),
   v.literal("retryable_failure"),
+);
+const openAiDefinitiveOutputFailureKindValidator = v.union(
+  v.literal("incomplete_max_output_tokens"),
+  v.literal("empty_output"),
+  v.literal("invalid_json"),
+  v.literal("invalid_schema"),
+);
+const openAiDefinitiveOutputFailureKinds = new Set<string>(
+  OPENAI_DEFINITIVE_OUTPUT_FAILURE_KINDS,
 );
 
 const scrapedPostRecord = {
@@ -493,7 +503,24 @@ export const upsertManyByHandle = mutation({
                 analysisNonEventReason: undefined,
                 analysisInputTokens: undefined,
                 analysisOutputTokens: undefined,
+                analysisReasoningTokens: undefined,
                 analysisTotalTokens: undefined,
+                analysisDefinitiveOutputFailureRevision: undefined,
+                analysisDefinitiveOutputFailureProtocol: undefined,
+                analysisDefinitiveOutputFailureAttemptStartedAt: undefined,
+                analysisDefinitiveOutputFailureOwner: undefined,
+                analysisDefinitiveOutputFailureKind: undefined,
+                analysisDefinitiveOutputFailureMessage: undefined,
+                analysisDefinitiveOutputFailureAt: undefined,
+                analysisDefinitiveOutputFailureModel: undefined,
+                analysisDefinitiveOutputFailureInputTokens: undefined,
+                analysisDefinitiveOutputFailureOutputTokens: undefined,
+                analysisDefinitiveOutputFailureReasoningTokens: undefined,
+                analysisDefinitiveOutputFailureTotalTokens: undefined,
+                analysisDefinitiveOutputRecoveryRevision: undefined,
+                analysisDefinitiveOutputRecoveryFromProtocol: undefined,
+                analysisDefinitiveOutputRecoveryProtocol: undefined,
+                analysisDefinitiveOutputRecoveredAt: undefined,
                 processingLeaseOwner: undefined,
                 processingLeaseExpiresAt: undefined,
               }
@@ -608,12 +635,27 @@ export const claimProcessing = mutation({
         existing.analysisResultJson
       )
     ) {
+      const hasDefinitiveOutputFailure =
+        existing.analysisDefinitiveOutputFailureRevision === sourceRevision &&
+        existing.analysisDefinitiveOutputFailureProtocol ===
+          existing.analysisAttemptProtocol &&
+        existing.analysisDefinitiveOutputFailureAttemptStartedAt ===
+          existing.analysisAttemptStartedAt &&
+        existing.analysisDefinitiveOutputFailureOwner ===
+          existing.analysisAttemptOwner &&
+        Boolean(existing.analysisDefinitiveOutputFailureKind);
       await ctx.db.patch(existing._id, {
-        processingStatus: "retryable_failure",
+        processingStatus: hasDefinitiveOutputFailure
+          ? "completed"
+          : "retryable_failure",
         blocksPaidFetch: false,
-        processingOutcome: "openai_transport_ambiguous",
-        processingError:
-          "A paid OpenAI request may have started for this source revision; automatic replay is blocked.",
+        processingOutcome: hasDefinitiveOutputFailure
+          ? "terminal_permanent_failure"
+          : "openai_transport_ambiguous",
+        processingError: hasDefinitiveOutputFailure
+          ? existing.analysisDefinitiveOutputFailureMessage ??
+            "OpenAI returned a definitive but unusable output; version-fenced recovery is required."
+          : "A paid OpenAI request may have started for this source revision; automatic replay is blocked.",
         processingLeaseOwner: undefined,
         processingLeaseExpiresAt: undefined,
         processingRetryAt: undefined,
@@ -622,7 +664,9 @@ export const claimProcessing = mutation({
       });
       return {
         claimed: false,
-        reason: "analysis_attempt_ambiguous" as const,
+        reason: hasDefinitiveOutputFailure
+          ? ("analysis_output_definitive" as const)
+          : ("analysis_attempt_ambiguous" as const),
         sourceRevision,
         analysisAttemptStartedAt: existing.analysisAttemptStartedAt,
       };
@@ -762,6 +806,7 @@ export const markOpenAiAnalysisAttemptStarted = mutation({
             analysisNonEventReason: undefined,
             analysisInputTokens: undefined,
             analysisOutputTokens: undefined,
+            analysisReasoningTokens: undefined,
             analysisTotalTokens: undefined,
           }
         : {}),
@@ -773,6 +818,120 @@ export const markOpenAiAnalysisAttemptStarted = mutation({
       updatedAt: now,
     });
     return { recorded: true, reason: "started" as const, startedAt: now };
+  },
+});
+
+const definitiveOutputFailureRecordValidator = v.object({
+  recorded: v.boolean(),
+  reason: v.union(v.literal("recorded"), v.literal("already_recorded")),
+});
+
+/**
+ * Attest only failures proven by a completed OpenAI HTTP response. Timeouts,
+ * connection errors, and HTTP error responses never call this mutation, so a
+ * future recovery cannot mistake transport ambiguity for a replayable output.
+ */
+export const recordOpenAiDefinitiveOutputFailure = mutation({
+  args: {
+    handle: v.string(),
+    scrapedPostId: v.id("scrapedPosts"),
+    postId: v.optional(v.string()),
+    instagramPostUrl: v.optional(v.string()),
+    owner: v.string(),
+    sourceRevision: v.number(),
+    attemptProtocol: v.string(),
+    failureKind: openAiDefinitiveOutputFailureKindValidator,
+    message: v.string(),
+    model: v.string(),
+    inputTokens: v.optional(v.number()),
+    outputTokens: v.optional(v.number()),
+    reasoningTokens: v.optional(v.number()),
+    totalTokens: v.optional(v.number()),
+    serviceSecret: v.optional(v.string()),
+  },
+  returns: definitiveOutputFailureRecordValidator,
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const existing = await resolveScrapedPostForProcessingFence(ctx, args);
+    if (!existing) {
+      throw new Error("Cannot attest definitive output failure for an unknown scraped post.");
+    }
+    const now = Date.now();
+    const attemptProtocol = args.attemptProtocol.trim();
+    const owner = args.owner.slice(0, 200);
+    if (!openAiDefinitiveOutputFailureKinds.has(args.failureKind)) {
+      throw new Error("Unknown OpenAI definitive output failure kind.");
+    }
+    if (
+      !Number.isSafeInteger(args.sourceRevision) ||
+      args.sourceRevision < 1 ||
+      existing.processingStatus !== "processing" ||
+      existing.processingLeaseOwner !== owner ||
+      (existing.processingLeaseExpiresAt ?? 0) <= now ||
+      (existing.sourceRevision ?? 1) !== args.sourceRevision ||
+      existing.analysisAttemptRevision !== args.sourceRevision ||
+      existing.analysisAttemptOwner !== owner ||
+      existing.analysisAttemptProtocol !== attemptProtocol ||
+      (existing.analysisRevision === args.sourceRevision && Boolean(existing.analysisResultJson))
+    ) {
+      throw new Error("Cannot attest definitive output failure from a stale analysis fence.");
+    }
+    for (const tokenCount of [
+      args.inputTokens,
+      args.outputTokens,
+      args.reasoningTokens,
+      args.totalTokens,
+    ]) {
+      if (
+        tokenCount !== undefined &&
+        (!Number.isSafeInteger(tokenCount) || tokenCount < 0)
+      ) {
+        throw new Error("OpenAI definitive output token counts must be non-negative integers.");
+      }
+    }
+    const model = args.model.trim().slice(0, 160);
+    const failureMessage = args.message.trim().slice(0, 1_000);
+    if (!owner.trim() || !attemptProtocol || !model || !failureMessage) {
+      throw new Error("OpenAI definitive output failure requires protocol and model metadata.");
+    }
+    const hasExistingAttestation =
+      existing.analysisDefinitiveOutputFailureRevision === args.sourceRevision &&
+      existing.analysisDefinitiveOutputFailureProtocol === attemptProtocol &&
+      existing.analysisDefinitiveOutputFailureAttemptStartedAt ===
+        existing.analysisAttemptStartedAt &&
+      existing.analysisDefinitiveOutputFailureOwner === owner;
+    if (hasExistingAttestation) {
+      if (
+        existing.analysisDefinitiveOutputFailureKind !== args.failureKind ||
+        existing.analysisDefinitiveOutputFailureMessage !== failureMessage ||
+        existing.analysisDefinitiveOutputFailureModel !== model ||
+        existing.analysisDefinitiveOutputFailureInputTokens !== args.inputTokens ||
+        existing.analysisDefinitiveOutputFailureOutputTokens !== args.outputTokens ||
+        existing.analysisDefinitiveOutputFailureReasoningTokens !==
+          args.reasoningTokens ||
+        existing.analysisDefinitiveOutputFailureTotalTokens !== args.totalTokens
+      ) {
+        throw new Error("A different definitive output failure is already attested for this attempt.");
+      }
+      return { recorded: false, reason: "already_recorded" as const };
+    }
+    await ctx.db.patch(existing._id, {
+      analysisDefinitiveOutputFailureRevision: args.sourceRevision,
+      analysisDefinitiveOutputFailureProtocol: attemptProtocol,
+      analysisDefinitiveOutputFailureAttemptStartedAt:
+        existing.analysisAttemptStartedAt,
+      analysisDefinitiveOutputFailureOwner: owner,
+      analysisDefinitiveOutputFailureKind: args.failureKind,
+      analysisDefinitiveOutputFailureMessage: failureMessage,
+      analysisDefinitiveOutputFailureAt: now,
+      analysisDefinitiveOutputFailureModel: model,
+      analysisDefinitiveOutputFailureInputTokens: args.inputTokens,
+      analysisDefinitiveOutputFailureOutputTokens: args.outputTokens,
+      analysisDefinitiveOutputFailureReasoningTokens: args.reasoningTokens,
+      analysisDefinitiveOutputFailureTotalTokens: args.totalTokens,
+      updatedAt: now,
+    });
+    return { recorded: true, reason: "recorded" as const };
   },
 });
 
@@ -843,6 +1002,7 @@ export const recordOpenAiAnalysis = mutation({
     model: v.optional(v.string()),
     inputTokens: v.optional(v.number()),
     outputTokens: v.optional(v.number()),
+    reasoningTokens: v.optional(v.number()),
     totalTokens: v.optional(v.number()),
     serviceSecret: v.optional(v.string()),
   },
@@ -931,6 +1091,7 @@ export const recordOpenAiAnalysis = mutation({
       analysisNonEventReason: nonEventReason,
       analysisInputTokens: args.inputTokens,
       analysisOutputTokens: args.outputTokens,
+      analysisReasoningTokens: args.reasoningTokens,
       analysisTotalTokens: args.totalTokens,
     });
     return { recorded: true, reason: "recorded" as const };

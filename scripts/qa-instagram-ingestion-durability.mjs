@@ -26,6 +26,7 @@ import {
 import { createEvent } from "../convex/events.ts";
 import { refreshAndAttach } from "../convex/mediaAssets.ts";
 import {
+  classifySavedPostCompletionForTesting,
   isPermanentRemoteMediaFailure,
   resolvePaidFetchLeaseAfterBacklogMaintenance,
   resolveFailedMediaAttemptPolicy,
@@ -54,6 +55,63 @@ assert.equal(
   "arbitrary control-plane messages containing an HTTP code must remain retryable",
 );
 assert.equal(isPermanentRemoteMediaFailure(new Error("Remote image fetch failed with status 503.")), false);
+
+const baseSavedPostCompletion = {
+  hasTerminalPermanentFailure: false,
+  hasProcessingFailure: false,
+  receiptInspectionFailed: false,
+  receiptState: "incomplete",
+  eventActivityCountBefore: 0,
+  eventActivityCountAfter: 0,
+  terminalNoEventSkipCountBefore: 0,
+  terminalNoEventSkipCountAfter: 1,
+};
+assert.deepEqual(
+  classifySavedPostCompletionForTesting(baseSavedPostCompletion),
+  {
+    hasTerminalNoEventOutcome: true,
+    hasMissingReceiptAfterEvent: false,
+    hasRetryableFailure: false,
+  },
+  "a clear not-event skip must terminalize even when its zero-event occurrence receipt is incomplete",
+);
+assert.deepEqual(
+  classifySavedPostCompletionForTesting({
+    ...baseSavedPostCompletion,
+    terminalNoEventSkipCountBefore: 4,
+    terminalNoEventSkipCountAfter: 5,
+  }),
+  {
+    hasTerminalNoEventOutcome: true,
+    hasMissingReceiptAfterEvent: false,
+    hasRetryableFailure: false,
+  },
+  "a missing-date skip must terminalize instead of retrying a zero-event receipt",
+);
+assert.deepEqual(
+  classifySavedPostCompletionForTesting({
+    ...baseSavedPostCompletion,
+    eventActivityCountAfter: 1,
+  }),
+  {
+    hasTerminalNoEventOutcome: false,
+    hasMissingReceiptAfterEvent: false,
+    hasRetryableFailure: true,
+  },
+  "a partial multi-event poster with a deferred child must remain retryable",
+);
+assert.deepEqual(
+  classifySavedPostCompletionForTesting({
+    ...baseSavedPostCompletion,
+    hasProcessingFailure: true,
+  }),
+  {
+    hasTerminalNoEventOutcome: false,
+    hasMissingReceiptAfterEvent: false,
+    hasRetryableFailure: true,
+  },
+  "an extraction or persistence failure must not be hidden by a simultaneous skip",
+);
 assert.equal(
   resolveFailedMediaAttemptPolicy({
     canFallbackToCaptionOnly: true,

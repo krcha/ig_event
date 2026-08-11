@@ -4,13 +4,18 @@ import {
   buildEventExtractionUserPrompt,
   EVENT_EXTRACTION_SYSTEM_PROMPT,
 } from "./event-extraction-prompt";
-
+import type { OpenAiDefinitiveOutputFailureKind } from "./openai-analysis-protocol";
 
 // GPT-5 mini structured vision responses can legitimately take longer than
 // 40 seconds on production poster inputs. Keep this comfortably inside the
 // 300-second executor request and receipt lease while avoiding false
 // transport ambiguity caused by aborting a healthy provider response.
 export const OPENAI_REQUEST_TIMEOUT_MS = 120_000;
+// The evidence-v2 schema includes per-row evidence for multi-event posters.
+// Production responses reached the former 4,096-token cap and were returned
+// as definitive `incomplete` responses, so reserve enough output for the
+// bounded schedule schema without relaxing any parsing or approval rules.
+export const OPENAI_EXTRACTION_MAX_OUTPUT_TOKENS = 8_192;
 
 export class OpenAiProviderBlockedError extends Error {
   readonly status: number;
@@ -37,6 +42,44 @@ export class OpenAiPermanentError extends Error {
 
 export function isOpenAiPermanentError(error: unknown): error is OpenAiPermanentError {
   return error instanceof OpenAiPermanentError;
+}
+
+type OpenAiOutputFailureMetadata = {
+  model: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningTokens?: number;
+  totalTokens?: number;
+};
+
+export class OpenAiDefinitiveOutputError extends OpenAiPermanentError {
+  readonly kind: OpenAiDefinitiveOutputFailureKind;
+  readonly model: string;
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly reasoningTokens?: number;
+  readonly totalTokens?: number;
+
+  constructor(
+    kind: OpenAiDefinitiveOutputFailureKind,
+    message: string,
+    metadata: OpenAiOutputFailureMetadata,
+  ) {
+    super(message);
+    this.name = "OpenAiDefinitiveOutputError";
+    this.kind = kind;
+    this.model = metadata.model;
+    this.inputTokens = metadata.inputTokens;
+    this.outputTokens = metadata.outputTokens;
+    this.reasoningTokens = metadata.reasoningTokens;
+    this.totalTokens = metadata.totalTokens;
+  }
+}
+
+export function isOpenAiDefinitiveOutputError(
+  error: unknown,
+): error is OpenAiDefinitiveOutputError {
+  return error instanceof OpenAiDefinitiveOutputError;
 }
 
 export class OpenAiTransientError extends Error {
@@ -154,6 +197,7 @@ const openAiUsageSchema = z.object({
   model: z.string().optional(),
   inputTokens: z.number().optional(),
   outputTokens: z.number().optional(),
+  reasoningTokens: z.number().optional(),
   totalTokens: z.number().optional(),
 });
 
@@ -244,11 +288,39 @@ const extractionEvidenceSourceJsonSchema = {
   enum: ["caption", "poster", "alt_text", "unknown"],
 } as const;
 
+// Structured Outputs supports string patterns for base GPT-5 models. Use
+// anchored all-character patterns instead of unsupported maxLength keywords;
+// exact evidence remains byte-for-byte unchanged after the provider returns.
+const emptyStringJsonSchema = {
+  type: "string",
+  pattern: "^$",
+} as const;
+const compact80StringJsonSchema = {
+  type: "string",
+  pattern: "^[\\s\\S]{0,80}$",
+} as const;
+const compact120StringJsonSchema = {
+  type: "string",
+  pattern: "^[\\s\\S]{0,120}$",
+} as const;
+const compact160StringJsonSchema = {
+  type: "string",
+  pattern: "^[\\s\\S]{0,160}$",
+} as const;
+const compact200StringJsonSchema = {
+  type: "string",
+  pattern: "^[\\s\\S]{0,200}$",
+} as const;
+const compact240StringJsonSchema = {
+  type: "string",
+  pattern: "^[\\s\\S]{0,240}$",
+} as const;
+
 const extractionDateEvidenceJsonSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    exact_text: { type: "string" },
+    exact_text: compact200StringJsonSchema,
     source: extractionEvidenceSourceJsonSchema,
     is_relative: { type: "boolean" },
     resolved_date: { type: "string" },
@@ -269,7 +341,7 @@ const extractionTimeEvidenceJsonSchema = {
         "doors_open_only",
       ],
     },
-    exact_text: { type: "string" },
+    exact_text: compact200StringJsonSchema,
     source: extractionEvidenceSourceJsonSchema,
   },
   required: ["status", "exact_text", "source"],
@@ -281,10 +353,50 @@ const extractionSharedContextJsonSchema = {
   properties: {
     applies_to_all: { type: "boolean" },
     value: { type: "string" },
-    evidence: { type: "string" },
+    evidence: compact200StringJsonSchema,
     source: extractionEvidenceSourceJsonSchema,
   },
   required: ["applies_to_all", "value", "evidence", "source"],
+} as const;
+
+const extractionFieldConfirmationJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    confidence: { type: ["number", "string"] },
+    found_in: {
+      type: "array",
+      maxItems: 2,
+      items: { type: "string" },
+    },
+    evidence: compact160StringJsonSchema,
+    evidence_snippets: {
+      type: "array",
+      maxItems: 1,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          source: {
+            type: "string",
+            enum: [
+              "caption",
+              "poster",
+              "alt_text",
+              "location_tag",
+              "canonical_hint",
+              "handle_context",
+              "inference",
+            ],
+          },
+          text: compact160StringJsonSchema,
+        },
+        required: ["source", "text"],
+      },
+    },
+    notes: compact80StringJsonSchema,
+  },
+  required: ["confidence", "found_in", "evidence", "evidence_snippets", "notes"],
 } as const;
 
 const extractionJsonSchema = {
@@ -296,7 +408,7 @@ const extractionJsonSchema = {
       enum: ["event_evidence_v2"],
     },
     is_event: { type: "boolean" },
-    non_event_reason: { type: "string" },
+    non_event_reason: compact160StringJsonSchema,
     title: { type: "string" },
     date: { type: "string" },
     time: { type: "string" },
@@ -307,18 +419,20 @@ const extractionJsonSchema = {
     currency: { type: "string" },
     artists: {
       type: "array",
+      maxItems: 64,
       items: { type: "string" },
     },
     category: { type: "string" },
-    description: { type: "string" },
+    description: compact240StringJsonSchema,
     confidence: { type: ["number", "string"] },
-    reasoning_notes: { type: "string" },
-    source_caption: { type: "string" },
-    source_url: { type: "string" },
+    reasoning_notes: compact160StringJsonSchema,
+    source_caption: emptyStringJsonSchema,
+    source_url: emptyStringJsonSchema,
     date_evidence: extractionDateEvidenceJsonSchema,
     time_evidence: extractionTimeEvidenceJsonSchema,
     source_conflicts: {
       type: "array",
+      maxItems: 32,
       items: {
         type: "object",
         additionalProperties: false,
@@ -327,9 +441,9 @@ const extractionJsonSchema = {
             type: "string",
             enum: ["date", "time", "venue", "title", "artists"],
           },
-          poster_value: { type: "string" },
-          caption_value: { type: "string" },
-          reason: { type: "string" },
+          poster_value: compact200StringJsonSchema,
+          caption_value: compact200StringJsonSchema,
+          reason: compact120StringJsonSchema,
         },
         required: ["field", "poster_value", "caption_value", "reason"],
       },
@@ -345,6 +459,7 @@ const extractionJsonSchema = {
     },
     schedule_entries: {
       type: "array",
+      maxItems: 64,
       items: {
         type: "object",
         additionalProperties: false,
@@ -355,10 +470,11 @@ const extractionJsonSchema = {
           title: { type: "string" },
           artists: {
             type: "array",
+            maxItems: 64,
             items: { type: "string" },
           },
-          description: { type: "string" },
-          source_text: { type: "string" },
+          description: compact240StringJsonSchema,
+          source_text: compact200StringJsonSchema,
           date_evidence: extractionDateEvidenceJsonSchema,
           time_evidence: extractionTimeEvidenceJsonSchema,
         },
@@ -379,244 +495,13 @@ const extractionJsonSchema = {
       type: "object",
       additionalProperties: false,
       properties: {
-        title: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            confidence: { type: ["number", "string"] },
-            found_in: { type: "array", items: { type: "string" } },
-            evidence: { type: "string" },
-            evidence_snippets: {
-              type: "array",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  source: {
-                    type: "string",
-                    enum: [
-                      "caption",
-                      "poster",
-                      "alt_text",
-                      "location_tag",
-                      "canonical_hint",
-                      "handle_context",
-                      "inference",
-                    ],
-                  },
-                  text: { type: "string" },
-                },
-                required: ["source", "text"],
-              },
-            },
-            notes: { type: "string" },
-          },
-          required: ["confidence", "found_in", "evidence", "evidence_snippets", "notes"],
-        },
-        location: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            confidence: { type: ["number", "string"] },
-            found_in: { type: "array", items: { type: "string" } },
-            evidence: { type: "string" },
-            evidence_snippets: {
-              type: "array",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  source: {
-                    type: "string",
-                    enum: [
-                      "caption",
-                      "poster",
-                      "alt_text",
-                      "location_tag",
-                      "canonical_hint",
-                      "handle_context",
-                      "inference",
-                    ],
-                  },
-                  text: { type: "string" },
-                },
-                required: ["source", "text"],
-              },
-            },
-            notes: { type: "string" },
-          },
-          required: ["confidence", "found_in", "evidence", "evidence_snippets", "notes"],
-        },
-        location_name: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            confidence: { type: ["number", "string"] },
-            found_in: { type: "array", items: { type: "string" } },
-            evidence: { type: "string" },
-            evidence_snippets: {
-              type: "array",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  source: {
-                    type: "string",
-                    enum: [
-                      "caption",
-                      "poster",
-                      "alt_text",
-                      "location_tag",
-                      "canonical_hint",
-                      "handle_context",
-                      "inference",
-                    ],
-                  },
-                  text: { type: "string" },
-                },
-                required: ["source", "text"],
-              },
-            },
-            notes: { type: "string" },
-          },
-          required: ["confidence", "found_in", "evidence", "evidence_snippets", "notes"],
-        },
-        price: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            confidence: { type: ["number", "string"] },
-            found_in: { type: "array", items: { type: "string" } },
-            evidence: { type: "string" },
-            evidence_snippets: {
-              type: "array",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  source: {
-                    type: "string",
-                    enum: [
-                      "caption",
-                      "poster",
-                      "alt_text",
-                      "location_tag",
-                      "canonical_hint",
-                      "handle_context",
-                      "inference",
-                    ],
-                  },
-                  text: { type: "string" },
-                },
-                required: ["source", "text"],
-              },
-            },
-            notes: { type: "string" },
-          },
-          required: ["confidence", "found_in", "evidence", "evidence_snippets", "notes"],
-        },
-        start_time: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            confidence: { type: ["number", "string"] },
-            found_in: { type: "array", items: { type: "string" } },
-            evidence: { type: "string" },
-            evidence_snippets: {
-              type: "array",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  source: {
-                    type: "string",
-                    enum: [
-                      "caption",
-                      "poster",
-                      "alt_text",
-                      "location_tag",
-                      "canonical_hint",
-                      "handle_context",
-                      "inference",
-                    ],
-                  },
-                  text: { type: "string" },
-                },
-                required: ["source", "text"],
-              },
-            },
-            notes: { type: "string" },
-          },
-          required: ["confidence", "found_in", "evidence", "evidence_snippets", "notes"],
-        },
-        short_description: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            confidence: { type: ["number", "string"] },
-            found_in: { type: "array", items: { type: "string" } },
-            evidence: { type: "string" },
-            evidence_snippets: {
-              type: "array",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  source: {
-                    type: "string",
-                    enum: [
-                      "caption",
-                      "poster",
-                      "alt_text",
-                      "location_tag",
-                      "canonical_hint",
-                      "handle_context",
-                      "inference",
-                    ],
-                  },
-                  text: { type: "string" },
-                },
-                required: ["source", "text"],
-              },
-            },
-            notes: { type: "string" },
-          },
-          required: ["confidence", "found_in", "evidence", "evidence_snippets", "notes"],
-        },
-        artists: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            confidence: { type: ["number", "string"] },
-            found_in: { type: "array", items: { type: "string" } },
-            evidence: { type: "string" },
-            evidence_snippets: {
-              type: "array",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  source: {
-                    type: "string",
-                    enum: [
-                      "caption",
-                      "poster",
-                      "alt_text",
-                      "location_tag",
-                      "canonical_hint",
-                      "handle_context",
-                      "inference",
-                    ],
-                  },
-                  text: { type: "string" },
-                },
-                required: ["source", "text"],
-              },
-            },
-            notes: { type: "string" },
-          },
-          required: ["confidence", "found_in", "evidence", "evidence_snippets", "notes"],
-        },
+        title: extractionFieldConfirmationJsonSchema,
+        location: extractionFieldConfirmationJsonSchema,
+        location_name: extractionFieldConfirmationJsonSchema,
+        price: extractionFieldConfirmationJsonSchema,
+        start_time: extractionFieldConfirmationJsonSchema,
+        short_description: extractionFieldConfirmationJsonSchema,
+        artists: extractionFieldConfirmationJsonSchema,
       },
       required: [
         "title",
@@ -714,7 +599,8 @@ export async function extractEventDataFromInstagramPost(
         },
         body: JSON.stringify({
           model: openAiVisionModel,
-          max_output_tokens: 4096,
+          max_output_tokens: OPENAI_EXTRACTION_MAX_OUTPUT_TOKENS,
+          reasoning: { effort: "medium" },
           input: [
             {
               role: "system",
@@ -726,6 +612,7 @@ export async function extractEventDataFromInstagramPost(
             },
           ],
           text: {
+            verbosity: "low",
             format: {
               type: "json_schema",
               name: "nightlife_event_extraction",
@@ -751,11 +638,15 @@ export async function extractEventDataFromInstagramPost(
         throw new OpenAiPermanentError(message);
       }
 
-      const payload = (await response.json()) as {
+      const responseBody = await response.text();
+      let payload: {
+        status?: string;
+        incomplete_details?: { reason?: string } | null;
         model?: string;
         usage?: {
           input_tokens?: number;
           output_tokens?: number;
+          output_tokens_details?: { reasoning_tokens?: number };
           total_tokens?: number;
         };
         output_text?: string;
@@ -763,6 +654,41 @@ export async function extractEventDataFromInstagramPost(
           content?: Array<{ type?: string; text?: string }>;
         }>;
       };
+      try {
+        payload = JSON.parse(responseBody) as typeof payload;
+      } catch {
+        throw new OpenAiDefinitiveOutputError(
+          "invalid_json",
+          "OpenAI extraction returned an invalid JSON response envelope.",
+          { model: openAiVisionModel },
+        );
+      }
+
+      const responseMetadata: OpenAiOutputFailureMetadata = {
+        model: payload.model ?? openAiVisionModel,
+        inputTokens: payload.usage?.input_tokens,
+        outputTokens: payload.usage?.output_tokens,
+        reasoningTokens: payload.usage?.output_tokens_details?.reasoning_tokens,
+        totalTokens: payload.usage?.total_tokens,
+      };
+      if (
+        payload.status === "incomplete" &&
+        payload.incomplete_details?.reason === "max_output_tokens"
+      ) {
+        throw new OpenAiDefinitiveOutputError(
+          "incomplete_max_output_tokens",
+          `OpenAI extraction reached the ${OPENAI_EXTRACTION_MAX_OUTPUT_TOKENS}-token output cap.`,
+          responseMetadata,
+        );
+      }
+      if (payload.status === "incomplete") {
+        throw new OpenAiPermanentError(
+          `OpenAI extraction was incomplete (${payload.incomplete_details?.reason ?? "unknown_reason"}).`,
+        );
+      }
+      if (payload.status === "failed") {
+        throw new OpenAiPermanentError("OpenAI extraction response reported a failed status.");
+      }
 
       const responseText =
         payload.output_text ??
@@ -772,20 +698,43 @@ export async function extractEventDataFromInstagramPost(
           .find((text) => text.trim().length > 0);
 
       if (!responseText) {
-        throw new Error("OpenAI extraction returned an empty response payload.");
+        throw new OpenAiDefinitiveOutputError(
+          "empty_output",
+          "OpenAI extraction returned an empty output payload.",
+          responseMetadata,
+        );
       }
 
-      const parsedJson = JSON.parse(responseText) as unknown;
-      const parsed = parseExtractedEventData(parsedJson);
+      let parsedJson: unknown;
+      try {
+        parsedJson = JSON.parse(responseText) as unknown;
+      } catch {
+        throw new OpenAiDefinitiveOutputError(
+          "invalid_json",
+          "OpenAI extraction output was not valid JSON.",
+          responseMetadata,
+        );
+      }
+      let parsed: ExtractedEventData;
+      try {
+        parsed = parseExtractedEventData(parsedJson);
+      } catch {
+        throw new OpenAiDefinitiveOutputError(
+          "invalid_schema",
+          "OpenAI extraction output did not satisfy the event-evidence schema.",
+          responseMetadata,
+        );
+      }
       return {
         ...parsed,
         source_caption: options.caption ?? "",
         source_url: options.instagramPostUrl,
         _openaiUsage: {
-          model: payload.model ?? openAiVisionModel,
-          inputTokens: payload.usage?.input_tokens,
-          outputTokens: payload.usage?.output_tokens,
-          totalTokens: payload.usage?.total_tokens,
+          model: responseMetadata.model,
+          inputTokens: responseMetadata.inputTokens,
+          outputTokens: responseMetadata.outputTokens,
+          reasoningTokens: responseMetadata.reasoningTokens,
+          totalTokens: responseMetadata.totalTokens,
         },
       };
     } catch (error) {

@@ -68,6 +68,12 @@ const eventTimeEvidenceKind = v.union(
   v.literal("unreadable"),
   v.literal("doors_open_only"),
 );
+const openAiDefinitiveOutputFailureKind = v.union(
+  v.literal("incomplete_max_output_tokens"),
+  v.literal("empty_output"),
+  v.literal("invalid_json"),
+  v.literal("invalid_schema"),
+);
 const venuePublicStatus = v.union(
   v.literal("pending"),
   v.literal("published"),
@@ -387,7 +393,27 @@ export default defineSchema({
     analysisNonEventReason: v.optional(v.string()),
     analysisInputTokens: v.optional(v.number()),
     analysisOutputTokens: v.optional(v.number()),
+    analysisReasoningTokens: v.optional(v.number()),
     analysisTotalTokens: v.optional(v.number()),
+    // A completed provider response with unusable structured output is
+    // materially different from a timeout or unknown transport result. These
+    // fields preserve that exact attestation for a narrowly fenced requeue.
+    analysisDefinitiveOutputFailureRevision: v.optional(v.number()),
+    analysisDefinitiveOutputFailureProtocol: v.optional(v.string()),
+    analysisDefinitiveOutputFailureAttemptStartedAt: v.optional(v.number()),
+    analysisDefinitiveOutputFailureOwner: v.optional(v.string()),
+    analysisDefinitiveOutputFailureKind: v.optional(openAiDefinitiveOutputFailureKind),
+    analysisDefinitiveOutputFailureMessage: v.optional(v.string()),
+    analysisDefinitiveOutputFailureAt: v.optional(v.number()),
+    analysisDefinitiveOutputFailureModel: v.optional(v.string()),
+    analysisDefinitiveOutputFailureInputTokens: v.optional(v.number()),
+    analysisDefinitiveOutputFailureOutputTokens: v.optional(v.number()),
+    analysisDefinitiveOutputFailureReasoningTokens: v.optional(v.number()),
+    analysisDefinitiveOutputFailureTotalTokens: v.optional(v.number()),
+    analysisDefinitiveOutputRecoveryRevision: v.optional(v.number()),
+    analysisDefinitiveOutputRecoveryFromProtocol: v.optional(v.string()),
+    analysisDefinitiveOutputRecoveryProtocol: v.optional(v.string()),
+    analysisDefinitiveOutputRecoveredAt: v.optional(v.number()),
     processingLeaseOwner: v.optional(v.string()),
     processingLeaseExpiresAt: v.optional(v.number()),
     processingRetryAt: v.optional(v.number()),

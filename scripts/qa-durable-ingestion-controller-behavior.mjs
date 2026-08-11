@@ -1169,6 +1169,7 @@ for (const boundary of ["no_post", "unconfirmed"]) {
     analysisModel: "gpt-5-mini-2025-08-07",
     analysisInputTokens: 1_200,
     analysisOutputTokens: 300,
+    analysisReasoningTokens: 180,
     analysisTotalTokens: 1_500,
     processingOutcome: "receipt_complete",
   });
@@ -1185,6 +1186,7 @@ for (const boundary of ["no_post", "unconfirmed"]) {
   assert.equal(accounting.openAiAnalysesCompletedDuringRun, 1);
   assert.equal(accounting.attributedInputTokens, 1_200);
   assert.equal(accounting.attributedOutputTokens, 300);
+  assert.equal(accounting.attributedReasoningTokens, 180);
   assert.equal(accounting.attributedTotalTokens, 1_500);
 }
 
