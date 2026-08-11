@@ -4,6 +4,7 @@ import {
   getSourceGroundingReprocessReasonGate,
   loadExactTargetRows,
   loadPendingEventsPaginated,
+  prepareExistingEvent,
 } from "./reprocess-pending-source-grounding.mjs";
 
 assert.deepEqual(
@@ -95,6 +96,67 @@ await assert.rejects(
       "qa-service-secret",
     ),
   /requires a split; refusing a partial backlog read/,
+);
+
+assert.doesNotThrow(() =>
+  prepareExistingEvent({
+    _id: "legacy-pending-event",
+    title: "DJ Alice",
+    date: "2026-08-14",
+    time: "21:00",
+    venue: "QA Venue",
+    artists: ["DJ Alice"],
+    description: "DJ Alice performs.",
+    eventType: "music",
+    imageUrl: "https://cdn.example.test/poster.jpg",
+    instagramPostId: "123456789",
+    instagramPostUrl: "https://www.instagram.com/p/QALEGACY/",
+    sourceCaption: "DJ Alice — 14.08.2026. at 21:00, QA Venue.",
+    sourcePostedAt: "2026-08-10T12:00:00.000Z",
+    rawExtractionJson: JSON.stringify({
+      title: "DJ Alice",
+      date: "2026-08-14",
+      time: "21:00",
+      venue: "QA Venue",
+      artists: ["DJ Alice"],
+      confidence: 0.95,
+      schedule_entries: [],
+      field_confirmation: Object.fromEntries(
+        [
+          "title",
+          "location",
+          "location_name",
+          "price",
+          "start_time",
+          "short_description",
+          "artists",
+        ].map((key) => [
+          key,
+          {
+            confidence: 0.95,
+            found_in: ["caption"],
+            evidence: "DJ Alice — 14.08.2026. at 21:00, QA Venue.",
+            evidence_snippets: [],
+            notes: "",
+          },
+        ]),
+      ),
+    }),
+    normalizedFieldsJson: JSON.stringify({
+      sourceGroundingVersion: 4,
+      sourceGroundingInstagramHandle: "qa_venue",
+      venueSource: "handle_map",
+      filterDateToday: "2026-08-11",
+      moderationPendingReasons: [
+        "requires_human_approval",
+        "unverified_core_event_source",
+        "caption_source_event_mismatch",
+      ],
+    }),
+    status: "pending",
+    updatedAt: 1,
+  }),
+  "Legacy pending rows must remain replayable after the v2 extraction contract is introduced.",
 );
 
 console.log("Source-grounding reprocess QA passed: pending reads fail closed on split ranges and post-apply readback is sequential/exact-ID scoped.");

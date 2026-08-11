@@ -215,6 +215,7 @@ export default defineSchema({
     sourcePostedAt: v.optional(v.string()),
     rawExtractionJson: v.optional(v.string()),
     normalizedFieldsJson: v.optional(v.string()),
+    humanReviewedLegacySourcePolicyVersion: v.optional(v.literal(1)),
     sourceOccurrenceKey: v.optional(v.string()),
     promotionTier: v.optional(v.union(v.literal("featured"), v.literal("promoted"))),
     promotionStart: v.optional(v.string()),

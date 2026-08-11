@@ -1,13 +1,27 @@
 import assert from "node:assert/strict";
-import { getPublicApprovedEvent, setEventStatuses } from "../convex/events.ts";
+import {
+  getPublicApprovedEvent,
+  listPublicEventsWindow,
+  setEventStatuses,
+} from "../convex/events.ts";
 import { isCanonicallyGroundedApprovedEvent } from "../convex/publicEventGrounding.ts";
-import { hasCompleteSourceGroundingAttestation } from "../lib/events/event-update-precondition.ts";
+import {
+  hasCompleteSourceGroundingAttestation,
+  hasHumanReviewedLegacySourceAttestation,
+  hasHumanReviewableLegacySourceAttestation,
+} from "../lib/events/event-update-precondition.ts";
 
 process.env.ADMIN_CLERK_USER_IDS = "qa-owner";
 
 const fixturePostedAt = "2026-07-15T12:00:00.000Z";
 const fixtureCaption =
   "Nastupa Concert one 1. avgusta u 20:00 @ Shared Venue uz Artist one; Nastupa Different billed concert 1. avgusta u 22:00 @ Shared Venue uz Artist two";
+const futureDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+  .toISOString()
+  .slice(0, 10);
+const futureBeforeDate = new Date(Date.now() + 31 * 24 * 60 * 60 * 1000)
+  .toISOString()
+  .slice(0, 10);
 
 function groundingJson(item) {
   return JSON.stringify({
@@ -92,7 +106,14 @@ function makeCtx(initialEvents) {
   );
   const audits = [];
   const filterRows = (rows, filters) =>
-    rows.filter((row) => filters.every(([field, value]) => row[field] === value));
+    rows.filter((row) =>
+      filters.every(({ field, operator, value }) => {
+        if (operator === "eq") return row[field] === value;
+        if (operator === "gte") return row[field] >= value;
+        if (operator === "lt") return row[field] < value;
+        return false;
+      }),
+    );
   const query = (table) => {
     const rows = () =>
       table === "events"
@@ -108,7 +129,15 @@ function makeCtx(initialEvents) {
         const filters = [];
         const chain = {
           eq(field, value) {
-            filters.push([field, value]);
+            filters.push({ field, operator: "eq", value });
+            return chain;
+          },
+          gte(field, value) {
+            filters.push({ field, operator: "gte", value });
+            return chain;
+          },
+          lt(field, value) {
+            filters.push({ field, operator: "lt", value });
             return chain;
           },
         };
@@ -122,6 +151,13 @@ function makeCtx(initialEvents) {
           },
           async take(limit) {
             return filterRows(rows(), filters).slice(0, limit);
+          },
+          async paginate() {
+            return {
+              page: filterRows(rows(), filters),
+              isDone: true,
+              continueCursor: "",
+            };
           },
         };
       },
@@ -155,6 +191,7 @@ function makeCtx(initialEvents) {
       },
     },
     events,
+    posts,
     audits,
   };
 }
@@ -223,6 +260,211 @@ assert.equal(
   "A canonically grounded human approval must be public without machine auto-approval.",
 );
 assert.equal(distinctBatch.events.get("one").reviewedBy, "QA owner");
+
+const legacyHumanEvent = event("legacy-human", {
+  title: "Legacy source-reviewed event",
+  date: futureDate,
+  time: "TBD",
+  artists: [],
+});
+legacyHumanEvent.normalizedFieldsJson = JSON.stringify({
+  title: legacyHumanEvent.title,
+  time: legacyHumanEvent.time,
+  artists: legacyHumanEvent.artists,
+  sourceGroundingSourceKind: "caption",
+  sourceGroundingSourceCaption: legacyHumanEvent.sourceCaption,
+  sourceGroundingInstagramPostId: legacyHumanEvent.instagramPostId,
+  sourceGroundingInstagramPostUrl: legacyHumanEvent.instagramPostUrl,
+  sourceGroundingInstagramHandle: legacyHumanEvent.venueInstagramHandle,
+  sourceGroundingVersion: 4,
+  sourceGroundingEvidence: "instagram_caption",
+  sourceGroundingVerified: false,
+  approvalCaptionSourceCoherent: false,
+  moderationPendingReasons: [
+    "requires_human_approval",
+    "unverified_core_event_source",
+    "caption_source_event_mismatch",
+  ],
+  normalizedDate: legacyHumanEvent.date,
+  normalizedVenue: legacyHumanEvent.venue,
+  normalizedIsValid: true,
+  titleUsedFallback: false,
+  dateSuspiciousYear: false,
+});
+assert.equal(
+  hasHumanReviewableLegacySourceAttestation(
+    legacyHumanEvent.normalizedFieldsJson,
+    legacyHumanEvent,
+  ),
+  true,
+  "A future, source-bound legacy row must be eligible for explicit human review.",
+);
+const legacyHumanApproval = await moderate([legacyHumanEvent], {
+  ids: ["legacy-human"],
+  status: "approved",
+});
+assert.deepEqual(legacyHumanApproval.result, { updatedCount: 1, skippedCount: 0 });
+const approvedLegacyHuman = legacyHumanApproval.events.get("legacy-human");
+assert.equal(approvedLegacyHuman.status, "approved");
+const approvedLegacyNormalizedFieldsJson = approvedLegacyHuman.normalizedFieldsJson;
+assert.equal(
+  approvedLegacyHuman.humanReviewedLegacySourcePolicyVersion,
+  1,
+  "The admin mutation must persist a schema-level policy marker as well as JSON evidence.",
+);
+assert.equal(
+  hasHumanReviewedLegacySourceAttestation(
+    approvedLegacyHuman.normalizedFieldsJson,
+    approvedLegacyHuman,
+  ),
+  true,
+  "The admin mutation must mark the exact human-review policy used for public revalidation.",
+);
+assert.equal(
+  await isCanonicallyGroundedApprovedEvent(legacyHumanApproval.ctx, approvedLegacyHuman),
+  true,
+  "Explicit human review plus exact persisted legacy source must authorize visibility.",
+);
+const publicLegacyPage = await listPublicEventsWindow._handler(legacyHumanApproval.ctx, {
+  fromDate: futureDate,
+  beforeDate: futureBeforeDate,
+  paginationOpts: { numItems: 10, cursor: null },
+});
+assert.deepEqual(
+  publicLegacyPage.page.map((item) => item._id),
+  ["legacy-human"],
+  "Marked human-reviewed legacy events must pass the real public list path.",
+);
+legacyHumanApproval.posts.get("qa_venue:post-legacy-human").caption =
+  "The persisted source changed after approval.";
+const hiddenAfterSourceChange = await listPublicEventsWindow._handler(
+  legacyHumanApproval.ctx,
+  {
+    fromDate: futureDate,
+    beforeDate: futureBeforeDate,
+    paginationOpts: { numItems: 10, cursor: null },
+  },
+);
+assert.deepEqual(
+  hiddenAfterSourceChange.page,
+  [],
+  "Marked legacy approvals must fail closed when the persisted source changes.",
+);
+legacyHumanApproval.posts.get("qa_venue:post-legacy-human").caption = fixtureCaption;
+legacyHumanApproval.events.get("legacy-human").title = "Tampered public title";
+const hiddenAfterEventTamper = await listPublicEventsWindow._handler(
+  legacyHumanApproval.ctx,
+  {
+    fromDate: futureDate,
+    beforeDate: futureBeforeDate,
+    paginationOpts: { numItems: 10, cursor: null },
+  },
+);
+assert.deepEqual(
+  hiddenAfterEventTamper.page,
+  [],
+  "A marked legacy event must not bypass canonical checks after its own fields change.",
+);
+legacyHumanApproval.events.get("legacy-human").title = legacyHumanEvent.title;
+legacyHumanApproval.events.get("legacy-human").normalizedFieldsJson = "{corrupted";
+const hiddenAfterJsonCorruption = await listPublicEventsWindow._handler(
+  legacyHumanApproval.ctx,
+  {
+    fromDate: futureDate,
+    beforeDate: futureBeforeDate,
+    paginationOpts: { numItems: 10, cursor: null },
+  },
+);
+assert.deepEqual(
+  hiddenAfterJsonCorruption.page,
+  [],
+  "The durable schema marker must force canonical checks when normalized evidence is corrupted.",
+);
+legacyHumanApproval.events.get("legacy-human").normalizedFieldsJson =
+  approvedLegacyNormalizedFieldsJson;
+delete legacyHumanApproval.events.get("legacy-human")
+  .humanReviewedLegacySourcePolicyVersion;
+const hiddenAfterSchemaMarkerRemoval = await listPublicEventsWindow._handler(
+  legacyHumanApproval.ctx,
+  {
+    fromDate: futureDate,
+    beforeDate: futureBeforeDate,
+    paginationOpts: { numItems: 10, cursor: null },
+  },
+);
+assert.deepEqual(
+  hiddenAfterSchemaMarkerRemoval.page,
+  [],
+  "A JSON-only legacy review marker must fail closed when its durable schema marker is missing.",
+);
+const corruptedV5Event = event("corrupted-v5", {
+  date: futureDate,
+  status: "approved",
+});
+corruptedV5Event.normalizedFieldsJson = JSON.stringify({
+  ...JSON.parse(corruptedV5Event.normalizedFieldsJson),
+  extractionContractVersion: undefined,
+  sourceGroundingVersion: 5,
+  sourceGroundingEvidence: "persisted_openai_event_evidence_v2",
+});
+const corruptedV5State = makeCtx([corruptedV5Event]);
+const corruptedV5PublicPage = await listPublicEventsWindow._handler(corruptedV5State.ctx, {
+  fromDate: futureDate,
+  beforeDate: futureBeforeDate,
+  paginationOpts: { numItems: 10, cursor: null },
+});
+assert.deepEqual(
+  corruptedV5PublicPage.page,
+  [],
+  "Any v5 source marker must force canonical structured-evidence revalidation.",
+);
+await assert.rejects(
+  setEventStatuses._handler(makeCtx([legacyHumanEvent]).ctx, {
+    ids: ["legacy-human"],
+    status: "approved",
+    moderationNote: "too short",
+  }),
+  /substantive moderation note/i,
+);
+const pastLegacyHuman = {
+  ...legacyHumanEvent,
+  date: "2000-01-01",
+};
+pastLegacyHuman.normalizedFieldsJson = JSON.stringify({
+  ...JSON.parse(legacyHumanEvent.normalizedFieldsJson),
+  normalizedDate: pastLegacyHuman.date,
+});
+assert.equal(
+  hasHumanReviewableLegacySourceAttestation(
+    pastLegacyHuman.normalizedFieldsJson,
+    pastLegacyHuman,
+  ),
+  false,
+  "Human review must not make an expired legacy event public.",
+);
+assert.equal(
+  hasHumanReviewableLegacySourceAttestation(
+    JSON.stringify({
+      ...JSON.parse(legacyHumanEvent.normalizedFieldsJson),
+      normalizedDate: "2026-02-31",
+    }),
+    { ...legacyHumanEvent, date: "2026-02-31" },
+  ),
+  false,
+  "Human review must reject impossible calendar dates.",
+);
+assert.equal(
+  hasHumanReviewableLegacySourceAttestation(
+    JSON.stringify({
+      ...JSON.parse(legacyHumanEvent.normalizedFieldsJson),
+      sourceGroundingVersion: 5,
+      sourceGroundingEvidence: "persisted_openai_event_evidence_v2",
+    }),
+    legacyHumanEvent,
+  ),
+  false,
+  "Structured v2 rows must remain on the exact v2 evidence path.",
+);
 
 const outsideConflict = event("outside", {
   title: "Already approved outside event",

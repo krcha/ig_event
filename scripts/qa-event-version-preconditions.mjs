@@ -388,6 +388,7 @@ assert.match(ingestionSource, /expectedUpdatedAt: existingMatch\.existingEvent\.
 assert.match(ingestionSource, /updatedAt: persistedUpdate\.updatedAt/);
 const moderationRouteSource = readFileSync("app/api/admin/events/moderate/route.ts", "utf8");
 assert.match(moderationRouteSource, /expectedVersions must provide one exact reviewed version per eventId/);
+assert.match(moderationRouteSource, /Approval requires a moderation note of at least 20 characters/);
 assert.match(moderationRouteSource, /isVersionConflict\(error\) \? 409 : 500/);
 const promotionRouteSource = readFileSync("app/api/admin/events/route.ts", "utf8");
 assert.match(promotionRouteSource, /expectedUpdatedAt: body\.expectedUpdatedAt/);
@@ -395,6 +396,8 @@ assert.match(promotionRouteSource, /isVersionConflict\(error\) \? 409 : 500/);
 const dashboardSource = readFileSync("components/admin/moderation-dashboard.tsx", "utf8");
 assert.match(dashboardSource, /expectedUpdatedAt: reviewedEvent\.updatedAt/g);
 assert.match(dashboardSource, /expectedVersions,/);
+assert.match(dashboardSource, /Approval note \(required; describe the source evidence and duplicate check\)/);
+assert.match(dashboardSource, /Bulk approval requires a note of at least 20 characters/);
 assert.match(dashboardSource, /expectedPrimaryUpdatedAt: primaryEvent\.updatedAt/);
 assert.match(dashboardSource, /expectedDuplicateVersions:/);
 assert.match(dashboardSource, /response\.status === 409/g);

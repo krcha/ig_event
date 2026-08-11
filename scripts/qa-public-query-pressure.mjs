@@ -431,6 +431,7 @@ for (const privateField of [
   "moderationNote",
   "reviewedAt",
   "reviewedBy",
+  "humanReviewedLegacySourcePolicyVersion",
   "sourceOccurrenceKey",
   "reasoningNotes",
   "postAltText",

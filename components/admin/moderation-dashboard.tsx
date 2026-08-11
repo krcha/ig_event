@@ -901,13 +901,20 @@ export function ModerationDashboard() {
   }, [status]);
 
   async function updateStatus(eventId: string, nextStatus: "approved" | "rejected") {
+    const moderationNote =
+      window.prompt(
+        nextStatus === "approved"
+          ? "Approval note (required; describe the source evidence and duplicate check):"
+          : "Optional rejection note:",
+        "",
+      )?.trim() || undefined;
+    if (nextStatus === "approved" && (moderationNote?.length ?? 0) < 20) {
+      setError("Approval requires a note of at least 20 characters.");
+      return;
+    }
+
     setActionInFlightFor(eventId);
     setError(null);
-
-    const moderationNote =
-      nextStatus === "rejected"
-        ? window.prompt("Optional rejection note:", "") ?? undefined
-        : undefined;
 
     try {
       const reviewedEvent = events.find((event) => event.id === eventId);
@@ -1100,6 +1107,14 @@ export function ModerationDashboard() {
     if (!confirmed) {
       return;
     }
+    const moderationNote = window.prompt(
+      "Approval note for this reviewed batch (required; at least 20 characters):",
+      "",
+    )?.trim();
+    if (!moderationNote || moderationNote.length < 20) {
+      setError("Bulk approval requires a note of at least 20 characters.");
+      return;
+    }
 
     setActionInFlightFor(BULK_APPROVE_ACTION_ID);
     setError(null);
@@ -1115,6 +1130,7 @@ export function ModerationDashboard() {
           eventIds: visiblePendingEventIds,
           expectedVersions,
           status: "approved",
+          moderationNote,
         }),
       });
       const payload = (await response.json()) as { error?: string };

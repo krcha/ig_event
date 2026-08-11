@@ -148,8 +148,21 @@ function buildPost(existing, normalizedFields) {
 
 function buildExtracted(existing, normalizedFields) {
   const raw = parseObject(existing.rawExtractionJson);
+  const emptySharedContext = {
+    applies_to_all: false,
+    value: "",
+    evidence: "",
+    source: "unknown",
+  };
   return {
     ...raw,
+    // This migration intentionally replays pre-event_evidence_v2 rows through
+    // the legacy normalization path. Keep the old semantic contract while
+    // supplying the evidence containers that the current pipeline reads for
+    // both legacy and v2 inputs.
+    extraction_contract_version: raw.extraction_contract_version ?? "legacy_v1",
+    is_event: raw.is_event ?? true,
+    non_event_reason: raw.non_event_reason ?? "",
     title: raw.title ?? existing.title,
     date: raw.date ?? existing.date,
     time: raw.time ?? existing.time ?? "",
@@ -166,6 +179,31 @@ function buildExtracted(existing, normalizedFields) {
         ? raw.field_confirmation
         : {},
     schedule_entries: Array.isArray(raw.schedule_entries) ? raw.schedule_entries : [],
+    date_evidence:
+      raw.date_evidence && typeof raw.date_evidence === "object"
+        ? raw.date_evidence
+        : {
+            exact_text: "",
+            source: "unknown",
+            is_relative: false,
+            resolved_date: "",
+          },
+    time_evidence:
+      raw.time_evidence && typeof raw.time_evidence === "object"
+        ? raw.time_evidence
+        : {
+            status: "not_stated",
+            exact_text: "",
+            source: "unknown",
+          },
+    source_conflicts: Array.isArray(raw.source_conflicts) ? raw.source_conflicts : [],
+    shared_schedule_context:
+      raw.shared_schedule_context && typeof raw.shared_schedule_context === "object"
+        ? raw.shared_schedule_context
+        : {
+            venue: { ...emptySharedContext },
+            time: { ...emptySharedContext },
+          },
   };
 }
 

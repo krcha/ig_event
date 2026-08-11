@@ -67,6 +67,12 @@ export async function POST(request: Request) {
   try {
     const convex = await createAuthenticatedConvexHttpClient();
     const moderationNote = body.moderationNote?.trim() || undefined;
+    if (body.status === "approved" && (moderationNote?.length ?? 0) < 20) {
+      return NextResponse.json(
+        { error: "Approval requires a moderation note of at least 20 characters." },
+        { status: 400 },
+      );
+    }
 
     if (eventIds.length > 0) {
       const expectedVersions = Array.isArray(body.expectedVersions)

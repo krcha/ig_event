@@ -21,8 +21,12 @@ import {
 import {
   assertExpectedEventStatus,
   assertExpectedEventUpdatedAt,
+  HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION,
   hasCompleteSourceGroundingAttestation,
   hasEventEvidenceV2AutoApproval,
+  hasHumanReviewedLegacySourceAttestation,
+  hasHumanReviewedLegacySourcePolicyMarker,
+  hasHumanReviewableLegacySourceAttestation,
   nextEventUpdatedAt,
   assertServiceCreateEventPolicy,
   assertServiceUpdateEventPolicy,
@@ -237,17 +241,6 @@ function normalizeSourceCaption(value: string | undefined): string {
   return value?.normalize("NFKC").replace(/\s+/gu, " ").trim() ?? "";
 }
 
-function normalizeInstagramSourceUrl(value: string | undefined): string {
-  if (!value) return "";
-  try {
-    const parsed = new URL(value);
-    if (!/(^|\.)instagram\.com$/iu.test(parsed.hostname)) return "";
-    return parsed.pathname.replace(/\/+$/u, "").toLowerCase();
-  } catch {
-    return "";
-  }
-}
-
 type ApprovalCandidateFields = {
   title: string;
   date: string;
@@ -279,14 +272,18 @@ type ServiceSourceCandidateFields = ApprovalCandidateFields & {
 async function assertPersistedServiceSourcePolicy(
   ctx: MutationCtx,
   candidate: ServiceSourceCandidateFields,
+  options: { allowHumanReviewedLegacy?: boolean } = {},
 ): Promise<void> {
   const structuredEvidence = hasEventEvidenceV2AutoApproval(
     candidate.normalizedFieldsJson,
     candidate,
   );
+  const humanReviewedLegacy =
+    options.allowHumanReviewedLegacy === true &&
+    hasHumanReviewableLegacySourceAttestation(candidate.normalizedFieldsJson, candidate);
   let structuredSourceHandle = "";
   let structuredExtractionMode = "";
-  if (structuredEvidence) {
+  if (structuredEvidence || humanReviewedLegacy) {
     try {
       const fields = JSON.parse(candidate.normalizedFieldsJson ?? "{}") as Record<string, unknown>;
       structuredSourceHandle =
@@ -302,9 +299,15 @@ async function assertPersistedServiceSourcePolicy(
   }
   const handle = structuredSourceHandle || normalizeHandle(candidate.venueInstagramHandle ?? "");
   const postId = candidate.instagramPostId?.trim() ?? "";
-  const postUrl = normalizeInstagramSourceUrl(candidate.instagramPostUrl);
+  const postUrl = normalizeInstagramPostUrl(candidate.instagramPostUrl);
   const sourceCaption = normalizeSourceCaption(candidate.sourceCaption);
-  if (!handle || !postId || !postUrl || (!structuredEvidence && !sourceCaption)) {
+  if (
+    !handle ||
+    !postId ||
+    !postUrl.startsWith("https://www.instagram.com/") ||
+    !candidate.sourcePostedAt ||
+    (!structuredEvidence && !sourceCaption)
+  ) {
     throw new Error("Service approval requires a persisted Instagram source post.");
   }
   const persistedCandidates = await ctx.db
@@ -317,8 +320,9 @@ async function assertPersistedServiceSourcePolicy(
     normalizeHandle(persisted.handle) !== handle ||
     normalizeHandle(persisted.username) !== handle ||
     persisted.postId !== postId ||
-    normalizeInstagramSourceUrl(persisted.instagramPostUrl) !== postUrl ||
-    normalizeSourceCaption(persisted.caption) !== sourceCaption
+    normalizeInstagramPostUrl(persisted.instagramPostUrl) !== postUrl ||
+    normalizeSourceCaption(persisted.caption) !== sourceCaption ||
+    persisted.postedAt !== candidate.sourcePostedAt
   ) {
     throw new Error("Service approval source does not match the persisted Instagram post.");
   }
@@ -356,6 +360,9 @@ async function assertPersistedServiceSourcePolicy(
     }
     return;
   }
+  if (humanReviewedLegacy) {
+    return;
+  }
   if (
     !isCaptionSourceCoherentWithEvent({
       title: candidate.title,
@@ -380,13 +387,47 @@ async function assertPersistedServiceSourcePolicy(
 async function assertHumanApprovalSourcePolicy(
   ctx: MutationCtx,
   candidate: ServiceSourceCandidateFields & { imageUrl?: string },
-): Promise<void> {
-  await assertPersistedServiceSourcePolicy(ctx, candidate);
-  if (!hasCompleteSourceGroundingAttestation(candidate.normalizedFieldsJson, candidate)) {
+  moderationNote: string | undefined,
+): Promise<{
+  normalizedFieldsJson?: string;
+  humanReviewedLegacySourcePolicyVersion?:
+    typeof HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION;
+}> {
+  const completeMachineAttestation = hasCompleteSourceGroundingAttestation(
+    candidate.normalizedFieldsJson,
+    candidate,
+  );
+  const humanReviewableLegacy = hasHumanReviewableLegacySourceAttestation(
+    candidate.normalizedFieldsJson,
+    candidate,
+  );
+  if (!completeMachineAttestation && !humanReviewableLegacy) {
     throw new Error(
       "Human approval requires complete canonical Instagram source grounding for the final public fields.",
     );
   }
+  if (humanReviewableLegacy && (moderationNote?.trim().length ?? 0) < 20) {
+    throw new Error("Legacy human approval requires a substantive moderation note.");
+  }
+  await assertPersistedServiceSourcePolicy(ctx, candidate, {
+    allowHumanReviewedLegacy: humanReviewableLegacy,
+  });
+  if (!humanReviewableLegacy) {
+    return {};
+  }
+  const normalizedFields = JSON.parse(candidate.normalizedFieldsJson ?? "{}") as Record<
+    string,
+    unknown
+  >;
+  return {
+    humanReviewedLegacySourcePolicyVersion:
+      HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION,
+    normalizedFieldsJson: JSON.stringify({
+      ...normalizedFields,
+      humanReviewedLegacySourcePolicyVersion:
+        HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION,
+    }),
+  };
 }
 
 function approvalCandidatesShareVenue(
@@ -637,8 +678,11 @@ function usesEventEvidenceV2(event: Doc<"events">): boolean {
       normalized &&
       typeof normalized === "object" &&
       !Array.isArray(normalized) &&
-      (normalized as Record<string, unknown>).extractionContractVersion ===
-        "event_evidence_v2"
+      ((normalized as Record<string, unknown>).extractionContractVersion ===
+        "event_evidence_v2" ||
+        (normalized as Record<string, unknown>).sourceGroundingVersion === 5 ||
+        (normalized as Record<string, unknown>).sourceGroundingEvidence ===
+          "persisted_openai_event_evidence_v2")
     ) {
       return true;
     }
@@ -745,7 +789,10 @@ async function projectLegacyCompatiblePublicEventPage(
 ) {
   const visibility = await Promise.all(
     events.map((event) =>
-      usesEventEvidenceV2(event)
+      usesEventEvidenceV2(event) ||
+      event.humanReviewedLegacySourcePolicyVersion ===
+        HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION ||
+      hasHumanReviewedLegacySourcePolicyMarker(event.normalizedFieldsJson)
         ? isCanonicallyGroundedApprovedEvent(ctx, event)
         : Promise.resolve(true),
     ),
@@ -2736,9 +2783,13 @@ export const setEventStatus = mutation({
 
     if (args.status === "approved") {
       const prepared = await prepareHumanApprovalCandidate(ctx, existingEvent);
-      await assertHumanApprovalSourcePolicy(ctx, prepared.candidate);
+      const humanReviewPatch = await assertHumanApprovalSourcePolicy(
+        ctx,
+        prepared.candidate,
+        args.moderationNote,
+      );
       await assertApprovalCandidatePolicy(ctx, prepared.candidate, [args.id]);
-      await ctx.db.patch(args.id, prepared.venuePatch);
+      await ctx.db.patch(args.id, { ...prepared.venuePatch, ...humanReviewPatch });
     }
 
     const now = Date.now();
@@ -2801,7 +2852,13 @@ export const setEventStatuses = mutation({
     }
     const preparedApprovalCandidates = new Map<
       Id<"events">,
-      Awaited<ReturnType<typeof prepareHumanApprovalCandidate>>
+      Awaited<ReturnType<typeof prepareHumanApprovalCandidate>> & {
+        humanReviewPatch: {
+          normalizedFieldsJson?: string;
+          humanReviewedLegacySourcePolicyVersion?:
+            typeof HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION;
+        };
+      }
     >();
     if (args.status === "approved") {
       for (const id of uniqueIds) {
@@ -2813,8 +2870,12 @@ export const setEventStatuses = mutation({
           continue;
         }
         const prepared = await prepareHumanApprovalCandidate(ctx, event);
-        await assertHumanApprovalSourcePolicy(ctx, prepared.candidate);
-        preparedApprovalCandidates.set(id, prepared);
+        const humanReviewPatch = await assertHumanApprovalSourcePolicy(
+          ctx,
+          prepared.candidate,
+          args.moderationNote,
+        );
+        preparedApprovalCandidates.set(id, { ...prepared, humanReviewPatch });
       }
       if (args.approveAsDistinctSameVenueDateBatch) {
         assertPairwiseOccurrenceRelation(
@@ -2849,7 +2910,10 @@ export const setEventStatuses = mutation({
             prepared.candidate,
             args.approveAsDistinctSameVenueDateBatch ? uniqueIds : [id],
           );
-          await ctx.db.patch(id, prepared.venuePatch);
+          await ctx.db.patch(id, {
+            ...prepared.venuePatch,
+            ...prepared.humanReviewPatch,
+          });
         } catch (error) {
           if (
             !(error instanceof Error) ||

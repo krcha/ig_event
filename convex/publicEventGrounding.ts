@@ -2,9 +2,11 @@ import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { isCaptionSourceCoherentWithEvent } from "../lib/events/event-source-approval";
 import {
+  HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION,
   hasCompleteSourceGroundedAutoApproval,
   hasCompleteSourceGroundingAttestation,
   hasEventEvidenceV2AutoApproval,
+  hasHumanReviewedLegacySourceAttestation,
   hasTrustedSourceEventAnnouncementAutoApproval,
 } from "../lib/events/event-update-precondition";
 import { normalizeInstagramPostUrl } from "../lib/images/apify-images";
@@ -74,24 +76,34 @@ export async function isCanonicallyGroundedApprovedEvent(
     event.normalizedFieldsJson,
     event,
   );
-  const humanAuthorized =
+  const hasHumanReviewMetadata =
     typeof event.reviewedAt === "number" &&
     Number.isFinite(event.reviewedAt) &&
     typeof event.reviewedBy === "string" &&
-    Boolean(event.reviewedBy.trim()) &&
-    hasCompleteSourceGroundingAttestation(event.normalizedFieldsJson, {
-      title: event.title,
-      date: event.date,
-      time: event.time,
-      venue: event.venue,
-      artists: event.artists,
-      imageUrl: event.imageUrl,
-      instagramPostId: event.instagramPostId,
-      instagramPostUrl: event.instagramPostUrl,
-      sourceCaption: event.sourceCaption,
-      sourcePostedAt: event.sourcePostedAt,
-      venueInstagramHandle: event.venueInstagramHandle,
-    });
+    Boolean(event.reviewedBy.trim());
+  const humanReviewedLegacyAuthorized =
+    hasHumanReviewMetadata &&
+    event.humanReviewedLegacySourcePolicyVersion ===
+      HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION &&
+    typeof event.moderationNote === "string" &&
+    event.moderationNote.trim().length >= 20 &&
+    hasHumanReviewedLegacySourceAttestation(event.normalizedFieldsJson, event);
+  const humanAuthorized =
+    hasHumanReviewMetadata &&
+    (humanReviewedLegacyAuthorized ||
+      hasCompleteSourceGroundingAttestation(event.normalizedFieldsJson, {
+        title: event.title,
+        date: event.date,
+        time: event.time,
+        venue: event.venue,
+        artists: event.artists,
+        imageUrl: event.imageUrl,
+        instagramPostId: event.instagramPostId,
+        instagramPostUrl: event.instagramPostUrl,
+        sourceCaption: event.sourceCaption,
+        sourcePostedAt: event.sourcePostedAt,
+        venueInstagramHandle: event.venueInstagramHandle,
+      }));
   if (
     !machineAuthorized &&
     !trustedSourceAuthorized &&
@@ -125,18 +137,22 @@ export async function isCanonicallyGroundedApprovedEvent(
     return false;
   }
 
-  const persistedCaption = persistedPost.caption?.trim() ?? "";
+  const normalizeSourceCaption = (value: string | undefined) =>
+    value?.normalize("NFKC").replace(/\s+/gu, " ").trim() ?? "";
+  const persistedCaption = normalizeSourceCaption(persistedPost.caption);
   const persistedUrl = normalizeInstagramPostUrl(persistedPost.instagramPostUrl);
   const eventUrl = normalizeInstagramPostUrl(event.instagramPostUrl);
   const groundedUrl = normalizeInstagramPostUrl(
     readString(fields.sourceGroundingInstagramPostUrl) ?? undefined,
   );
   if (
-    (event.sourceCaption?.trim() ?? "") !== persistedCaption ||
-    (readString(fields.sourceGroundingSourceCaption) ?? "") !== persistedCaption ||
+    normalizeSourceCaption(event.sourceCaption) !== persistedCaption ||
+    normalizeSourceCaption(readString(fields.sourceGroundingSourceCaption) ?? undefined) !==
+      persistedCaption ||
     persistedPost.postId !== postId ||
     readString(fields.sourceGroundingInstagramPostId) !== postId ||
     !persistedUrl ||
+    !persistedUrl.startsWith("https://www.instagram.com/") ||
     persistedUrl !== eventUrl ||
     persistedUrl !== groundedUrl ||
     !persistedPost.postedAt ||
@@ -176,6 +192,10 @@ export async function isCanonicallyGroundedApprovedEvent(
                   event.imageStorageId === posterAsset.storageId)),
           )),
     );
+  }
+
+  if (humanReviewedLegacyAuthorized) {
+    return true;
   }
 
   return isCaptionSourceCoherentWithEvent({

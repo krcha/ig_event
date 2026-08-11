@@ -31,6 +31,7 @@ type EventApprovalFields = Record<string, unknown> & {
   dateEvidenceIsRelative?: unknown;
   dateEvidenceResolvedDate?: unknown;
   sourceConflictFields?: unknown;
+  humanReviewedLegacySourcePolicyVersion?: unknown;
 };
 
 type EventWritePatch = EventApprovalFields & {
@@ -41,6 +42,7 @@ type EventWritePatch = EventApprovalFields & {
 const SOURCE_GROUNDED_AUTO_APPROVE_RULE = "source_grounded_core_event_fields";
 const TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_RULE = "trusted_source_event_announcement";
 const EVENT_EVIDENCE_V2_AUTO_APPROVE_RULE = "event_evidence_v2";
+export const HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION = 1;
 const TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_MIN_CONFIDENCE = 0.65;
 const APPROVED_MODERATION_SIGNALS = new Set([
   "missing_image",
@@ -81,6 +83,15 @@ function normalizeComparableHandle(value: unknown): string | null {
 
 function isFutureIsoDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() + 1 !== month ||
+    parsed.getUTCDate() !== day
+  ) {
+    return false;
+  }
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/Belgrade",
     year: "numeric",
@@ -350,6 +361,93 @@ export function hasCompleteSourceGroundingAttestation(
     (missingImage === false ||
       (missingImage === true && fields.moderationAllowMissingImage === true)) &&
     hasBoundPublicFields(fields, eventFields)
+  );
+}
+
+/**
+ * A human moderator may confirm a legacy extraction even when the historical
+ * deterministic caption parser could not produce a complete v4 attestation.
+ * This is deliberately limited to pre-v2 rows and binds the public
+ * title/date/time plus the immutable Instagram source fields. The Convex
+ * mutation and public query separately re-read the persisted source row and
+ * enforce duplicate/ambiguity policy.
+ */
+export function hasHumanReviewableLegacySourceAttestation(
+  normalizedFieldsJson: string | undefined,
+  eventFields?: EventApprovalFields,
+): boolean {
+  return hasLegacyHumanSourceAttestation(normalizedFieldsJson, eventFields, true);
+}
+
+function hasLegacyHumanSourceAttestation(
+  normalizedFieldsJson: string | undefined,
+  eventFields: EventApprovalFields | undefined,
+  requireFutureDate: boolean,
+): boolean {
+  const fields = parseNormalizedFields(normalizedFieldsJson);
+  if (!fields || !eventFields) return false;
+  const sourceGroundingVersion = fields.sourceGroundingVersion;
+  const pendingReasons = fields.moderationPendingReasons;
+  const conflicts = Array.isArray(eventFields.sourceConflictFields)
+    ? eventFields.sourceConflictFields
+    : [];
+  const publicTitle = normalizeComparableOptionalText(eventFields.title);
+  const publicDate = normalizeComparableOptionalText(eventFields.date);
+  const publicTime = normalizeComparableOptionalText(eventFields.time);
+  const publicVenue = normalizeComparableOptionalText(eventFields.venue);
+  const rawExtraction = parseNormalizedFields(
+    typeof eventFields.rawExtractionJson === "string" ? eventFields.rawExtractionJson : undefined,
+  );
+  return (
+    (sourceGroundingVersion === 3 || sourceGroundingVersion === 4) &&
+    fields.sourceGroundingEvidence === "instagram_caption" &&
+    fields.extractionContractVersion !== "event_evidence_v2" &&
+    rawExtraction?.extraction_contract_version !== "event_evidence_v2" &&
+    fields.sourceGroundingSourceKind === "caption" &&
+    fields.normalizedIsValid === true &&
+    fields.titleUsedFallback === false &&
+    fields.dateSuspiciousYear === false &&
+    Array.isArray(pendingReasons) &&
+    pendingReasons.includes("requires_human_approval") &&
+    conflicts.length === 0 &&
+    publicTitle.length > 0 &&
+    publicDate.length > 0 &&
+    (!requireFutureDate || isFutureIsoDate(publicDate)) &&
+    isSensibleEventTitleForApproval({ title: publicTitle, venue: publicVenue }) &&
+    normalizeComparableOptionalText(fields.title) === publicTitle &&
+    normalizeComparableOptionalText(fields.normalizedDate) === publicDate &&
+    normalizeComparableOptionalText(fields.time) === publicTime &&
+    normalizeComparableOptionalText(fields.sourceGroundingSourceCaption) ===
+      normalizeComparableOptionalText(eventFields.sourceCaption) &&
+    normalizeComparableOptionalText(fields.sourceGroundingInstagramPostId) ===
+      normalizeComparableOptionalText(eventFields.instagramPostId) &&
+    normalizeComparableOptionalText(fields.sourceGroundingInstagramPostUrl) ===
+      normalizeComparableOptionalText(eventFields.instagramPostUrl) &&
+    normalizeComparableHandle(fields.sourceGroundingInstagramHandle) !== null
+  );
+}
+
+export function hasHumanReviewedLegacySourceAttestation(
+  normalizedFieldsJson: string | undefined,
+  eventFields?: EventApprovalFields,
+): boolean {
+  const fields = parseNormalizedFields(normalizedFieldsJson);
+  return (
+    eventFields?.humanReviewedLegacySourcePolicyVersion ===
+      HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION &&
+    fields?.humanReviewedLegacySourcePolicyVersion ===
+      HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION &&
+    hasLegacyHumanSourceAttestation(normalizedFieldsJson, eventFields, false)
+  );
+}
+
+export function hasHumanReviewedLegacySourcePolicyMarker(
+  normalizedFieldsJson: string | undefined,
+): boolean {
+  const fields = parseNormalizedFields(normalizedFieldsJson);
+  return (
+    fields?.humanReviewedLegacySourcePolicyVersion ===
+    HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION
   );
 }
 
