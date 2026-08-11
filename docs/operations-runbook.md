@@ -108,7 +108,7 @@ ADMIN_CLERK_USER_IDS=
 OPENAI_API_KEY=
 APIFY_API_TOKEN=
 APIFY_INSTAGRAM_ACTOR_ID=apify/instagram-post-scraper
-OPENAI_VISION_MODEL=gpt-4.1-mini
+OPENAI_VISION_MODEL=gpt-5-mini
 OPENAI_REVIEW_MODEL=gpt-4.1-mini
 CRON_SECRET=
 EVENTS_TIMEZONE=Europe/Belgrade
@@ -141,7 +141,7 @@ Notes:
   convenience.
 - `EVENTS_TIMEZONE` controls local event-day handling.
 - `OPENAI_VISION_MODEL` and `OPENAI_REVIEW_MODEL` must be set in production;
-  the default cost-control value is `gpt-4.1-mini`.
+  the defaults are `gpt-5-mini` for extraction and `gpt-4.1-mini` for review.
 - `CLERK_JWT_ISSUER_DOMAIN` must match the Clerk JWT issuer configured for the
   Convex `convex` JWT template.
 - `CONVEX_DEPLOY_KEY` is a deploy-time secret only. Do not put it in the VPS
@@ -468,6 +468,13 @@ install -o root -g root -m 0644 ops/systemd/ig-event-durable-daily.timer \
 systemctl daemon-reload
 systemctl enable --now ig-event-durable-daily.timer
 ```
+
+Daily admission is idempotent by `Europe/Belgrade` calendar day. The endpoint
+persists that day's frozen active-source snapshot before returning any older
+active durable run. The locked launcher drains the older run, calls admission
+again, and then runs the persisted daily snapshot; a restart repeats the same
+run IDs instead of creating another paid run. The global active-run guard,
+receipt leases, provider lease, and daily provider budgets remain authoritative.
 
 The cron endpoint resolves resumable `cron_active_venues` work before any global
 source enumeration. `CRON_INGESTION_RESUMABLE_LOOKBACK_HOURS=168` keeps interrupted

@@ -6,6 +6,7 @@ import {
   isOpenAiPermanentError,
   isOpenAiProviderBlockedError,
   OpenAiProviderBlockedError,
+  parseExtractedEventData,
   type ExtractedEventData,
 } from "@/lib/ai/extract-event-data";
 import {
@@ -39,6 +40,7 @@ import {
 import {
   AUTO_APPROVE_CONFIDENCE_THRESHOLD,
   CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+  EVENT_EVIDENCE_V2_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
   calculateModerationConfidenceScore,
   normalizeConfidencePayload,
   normalizeConfidenceScore,
@@ -48,6 +50,7 @@ import {
   type ApprovedEventAutoMergeSummary,
 } from "@/lib/events/approved-event-automerge";
 import { classifyApprovalOccurrenceRelation } from "@/lib/events/approval-occurrence-conflict";
+import { buildAdjacentSingleEventEvidenceSegments } from "@/lib/events/adjacent-source-evidence";
 import {
   checkEventConsistency,
   findNamedWeekday,
@@ -80,7 +83,10 @@ import { loadVenueNameOverridesByHandle } from "@/lib/pipeline/venue-name-overri
 import { loadOperationalVenueRecords } from "@/lib/pipeline/operational-venues";
 import { isTransientSavedPostProcessingError } from "@/lib/pipeline/durable-ingestion-execute";
 import { getRequiredEnv } from "@/lib/utils/env";
-import { hasCompleteSourceGroundedAutoApproval } from "@/lib/events/event-update-precondition";
+import {
+  hasCompleteSourceGroundedAutoApproval,
+  hasEventEvidenceV2AutoApproval,
+} from "@/lib/events/event-update-precondition";
 import { isSensibleEventTitleForApproval } from "@/lib/events/event-title-approval";
 import { isCaptionSourceCoherentWithEvent } from "@/lib/events/event-source-approval";
 import {
@@ -422,6 +428,12 @@ const CONTEXT_EVENT_TITLE_REGEX =
   /([\p{L}\d][\p{L}\d'’.+/&-]*(?:\s+[\p{L}\d][\p{L}\d'’.+/&-]*){0,4}\s+(festival|fest|party|session|night|showcase|weekender|concert|koncert|afterparty|after|takeover|opening|closing|premiere|premijera|birthday|anniversary|matinee|matine))\b/iu;
 
 type EventStatus = "pending" | "approved" | "rejected";
+type EventDateEvidenceSource = "caption" | "poster" | "alt_text" | "unknown";
+type EventTimeEvidenceKind =
+  | "start_time_stated"
+  | "not_stated"
+  | "unreadable"
+  | "doors_open_only";
 
 type PreparedEvent = {
   title: string;
@@ -431,6 +443,12 @@ type PreparedEvent = {
   timeEvidenceText?: string;
   timeConfidence: number;
   timeStatus: EventTimeProvenance["status"];
+  timeEvidenceKind?: EventTimeEvidenceKind;
+  dateEvidenceText?: string;
+  dateEvidenceSource?: EventDateEvidenceSource;
+  dateEvidenceIsRelative?: boolean;
+  dateEvidenceResolvedDate?: string;
+  sourceConflictFields?: string[];
   venue: string;
   artists: string[];
   description?: string;
@@ -486,6 +504,9 @@ type SplitEventCandidate = {
   artistsWereSanitized?: boolean;
   time?: string;
   rawTime?: string;
+  venue?: string;
+  dateEvidence?: ExtractedEventData["date_evidence"];
+  timeEvidence?: ExtractedEventData["time_evidence"];
   consistencyIssues: EventConsistencyIssue[];
   description?: string;
   sourceLine: string;
@@ -506,6 +527,7 @@ type PrepareEventResult =
       reason:
         | "missing_date"
         | "missing_venue"
+        | "not_event"
         | "invalid_event"
         | "past_event"
         | "far_future";
@@ -549,6 +571,12 @@ type ExistingEventRecord = {
   timeEvidenceText?: string;
   timeConfidence?: number;
   timeStatus?: EventTimeProvenance["status"];
+  timeEvidenceKind?: EventTimeEvidenceKind;
+  dateEvidenceText?: string;
+  dateEvidenceSource?: EventDateEvidenceSource;
+  dateEvidenceIsRelative?: boolean;
+  dateEvidenceResolvedDate?: string;
+  sourceConflictFields?: string[];
   venue: string;
   artists: string[];
   description?: string;
@@ -774,6 +802,7 @@ type ModerationDecision = {
     | "core_event_fields"
     | "source_grounded_core_event_fields"
     | "trusted_source_event_announcement"
+    | "event_evidence_v2"
     | null;
   pendingReasons: string[];
   signals: string[];
@@ -826,6 +855,7 @@ function buildModerationDecision(options: {
   sourceGroundingIdentityContextVerified: boolean;
   approvalCaptionSourceCoherent: boolean;
   trustedVenueSource: boolean;
+  structuredEvidenceVerified: boolean;
   autoApprovalBlockers?: string[];
 }): ModerationDecision {
   const confidenceScore = calculateModerationConfidenceScore(options.baseConfidenceScore, {
@@ -835,6 +865,14 @@ function buildModerationDecision(options: {
   });
   const autoApprovalBlockers = [...new Set(options.autoApprovalBlockers ?? [])];
   const timeTbdApplies = options.missingTime && options.hasDate;
+  const structuredEvidenceApproval =
+    options.structuredEvidenceVerified &&
+    autoApprovalBlockers.length === 0 &&
+    options.hasDate &&
+    !options.titleUsedFallback &&
+    !options.suspiciousYear &&
+    confidenceScore !== null &&
+    confidenceScore >= EVENT_EVIDENCE_V2_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
   const strictSourceGroundedApproval =
     options.sourceGroundingVerified &&
     autoApprovalBlockers.length === 0 &&
@@ -864,8 +902,11 @@ function buildModerationDecision(options: {
     (options.dateConfidence === "high" || options.dateConfidence === "medium") &&
     confidenceScore !== null &&
     confidenceScore >= TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_MIN_CONFIDENCE;
-  const autoApproved = strictSourceGroundedApproval || trustedSourceAnnouncementApproval;
-  const autoApproveRule = strictSourceGroundedApproval
+  const autoApproved =
+    structuredEvidenceApproval || strictSourceGroundedApproval || trustedSourceAnnouncementApproval;
+  const autoApproveRule = structuredEvidenceApproval
+    ? "event_evidence_v2"
+    : strictSourceGroundedApproval
     ? "source_grounded_core_event_fields"
     : trustedSourceAnnouncementApproval
       ? "trusted_source_event_announcement"
@@ -1145,7 +1186,10 @@ export function hasDurableMediaEligibleNormalizedFields(
 ): boolean {
   return (
     normalizedFields?.normalizedIsValid === true &&
-    normalizedFields.sourceGroundingVerified === true
+    (normalizedFields.sourceGroundingVerified === true ||
+      (normalizedFields.extractionContractVersion === "event_evidence_v2" &&
+        normalizedFields.extractionIsEvent === true &&
+        normalizedFields.structuredEvidenceVerified === true))
   );
 }
 
@@ -1172,6 +1216,7 @@ export async function persistInstagramMediaCandidate(options: {
     | "persistedImages"
   >;
   upstreamUrl: string;
+  expectedChecksumSha256?: string;
 }): Promise<boolean> {
   try {
     await options.client.action(
@@ -1182,6 +1227,7 @@ export async function persistInstagramMediaCandidate(options: {
           instagramPostUrl: options.post.instagramPostUrl,
           processingFence: options.processingFence,
           upstreamUrl: options.upstreamUrl,
+          expectedChecksumSha256: options.expectedChecksumSha256,
         },
         options.serviceSecret,
       ),
@@ -1217,6 +1263,7 @@ export async function persistInstagramMediaCandidates(options: {
   serviceSecret: string;
   summary: HandleSummary;
   upstreamUrls: string[];
+  expectedChecksumSha256?: string;
 }): Promise<boolean> {
   const failedBefore = options.summary.failedImagePersistence;
   const permanentFailedBefore = options.summary.permanentImagePersistenceFailures ?? 0;
@@ -1231,6 +1278,7 @@ export async function persistInstagramMediaCandidates(options: {
         serviceSecret: options.serviceSecret,
         summary: options.summary,
         upstreamUrl,
+        expectedChecksumSha256: options.expectedChecksumSha256,
       })
     ) {
       // Candidate failures are diagnostics, not a failed persistence operation,
@@ -2167,6 +2215,7 @@ function buildSourceGroundingSegments(value: string | null | undefined): string[
     ...atomicSegments,
     ...structuredLineAnchors,
     ...buildDateHeaderEventRowSegments(value),
+    ...buildAdjacentSingleEventEvidenceSegments(normalizeString(value)),
   ])];
 }
 
@@ -3263,17 +3312,35 @@ function extractModelSplitEventCandidates(
     return [];
   }
 
+  const usesStructuredEvidence =
+    normalizeString(extracted.extraction_contract_version) === "event_evidence_v2";
   for (const [scheduleEntryIndex, scheduleEntry] of extracted.schedule_entries.entries()) {
     const rawDate = normalizeString(scheduleEntry.date);
     const description = normalizeExtractedDescription(scheduleEntry.description);
-    const rawScheduleTime = normalizeString(scheduleEntry.time);
+    const sharedTime = !usesStructuredEvidence && extracted.shared_schedule_context.time.applies_to_all
+      ? normalizeString(extracted.shared_schedule_context.time.value)
+      : "";
+    const rawScheduleTime = normalizeString(scheduleEntry.time) || sharedTime;
+    const sharedVenue = !usesStructuredEvidence && extracted.shared_schedule_context.venue.applies_to_all
+      ? normalizeString(extracted.shared_schedule_context.venue.value)
+      : "";
+    const scheduleVenue = normalizeString(scheduleEntry.venue) || sharedVenue;
     const rawModelTitle = cleanSplitCaptionEntryText(
       stripSplitEntryTime(scheduleEntry.title),
     );
     const explicitSourceLine = normalizeString(scheduleEntry.source_text);
+    if (usesStructuredEvidence && !explicitSourceLine) {
+      continue;
+    }
     const sourceLine =
       explicitSourceLine ||
-      buildSplitEventSourceLine([rawDate, rawModelTitle, rawScheduleTime, description]);
+      buildSplitEventSourceLine([
+        rawDate,
+        rawModelTitle,
+        rawScheduleTime,
+        scheduleVenue,
+        description,
+      ]);
     const sourceBillingEvidence = explicitSourceLine ? [explicitSourceLine] : [];
     const identity = sanitizeSplitEventIdentity({
       rawTitle: rawModelTitle,
@@ -3343,6 +3410,9 @@ function extractModelSplitEventCandidates(
         artistsWereSanitized: identity.artistsWereSanitized,
         ...(time ? { time } : {}),
         rawTime,
+        venue: scheduleVenue,
+        dateEvidence: scheduleEntry.date_evidence,
+        timeEvidence: scheduleEntry.time_evidence,
         consistencyIssues: consistency.issues,
         ...(description ? { description } : {}),
         sourceLine,
@@ -4155,6 +4225,13 @@ function extractSplitEventCandidates(
     eventType,
     venue,
   );
+  // Evidence-v2 rows are the versioned, source-cited schedule contract. Do not
+  // merge heuristic caption rows back into them: doing so can silently turn a
+  // row title into an artist or inject a clock that the structured row marked
+  // absent. Legacy payloads retain the deterministic reconciliation below.
+  if (normalizeString(extracted.extraction_contract_version) === "event_evidence_v2") {
+    return sortSplitCandidatesByDate(modelCandidates);
+  }
   const captionCandidates = extractCaptionSplitEventCandidates(
     post,
     extracted,
@@ -6465,7 +6542,7 @@ function shouldReprocessExistingSourcePosts(): boolean {
   return normalizeString(process.env.INGESTION_REPROCESS_EXISTING_SOURCE_POSTS).toLowerCase() === "true";
 }
 
-const SOURCE_OCCURRENCE_EXTRACTION_PROTOCOL_VERSION = "2026-07-28-v3";
+const SOURCE_OCCURRENCE_EXTRACTION_PROTOCOL_VERSION = "2026-08-11-event-evidence-v2";
 
 function buildSourceOccurrenceFingerprint(post: InstagramScrapedPost): string {
   const digest = createHash("sha256")
@@ -7555,6 +7632,12 @@ export function buildDuplicateUpdatePatch(
     timeEvidenceText?: string | null;
     timeConfidence?: number;
     timeStatus?: EventTimeProvenance["status"];
+    timeEvidenceKind?: EventTimeEvidenceKind;
+    dateEvidenceText?: string;
+    dateEvidenceSource?: EventDateEvidenceSource;
+    dateEvidenceIsRelative?: boolean;
+    dateEvidenceResolvedDate?: string;
+    sourceConflictFields?: string[];
     venue?: string;
     artists?: string[];
     description?: string;
@@ -7605,6 +7688,12 @@ export function buildDuplicateUpdatePatch(
           timeEvidenceText: existing.timeEvidenceText,
           timeConfidence: existing.timeConfidence ?? 0,
           timeStatus: existing.timeStatus ?? "unknown",
+          timeEvidenceKind: existing.timeEvidenceKind,
+          dateEvidenceText: existing.dateEvidenceText,
+          dateEvidenceSource: existing.dateEvidenceSource,
+          dateEvidenceIsRelative: existing.dateEvidenceIsRelative,
+          dateEvidenceResolvedDate: existing.dateEvidenceResolvedDate,
+          sourceConflictFields: existing.sourceConflictFields,
           imageUrl: existing.imageUrl,
           instagramPostUrl: existing.instagramPostUrl ?? next.instagramPostUrl,
           instagramPostId: existing.instagramPostId ?? next.instagramPostId,
@@ -7631,7 +7720,8 @@ export function buildDuplicateUpdatePatch(
     ? existing.status
     : next.status === "approved" &&
         (existing.status === "rejected" ||
-          !hasCompleteSourceGroundedAutoApproval(next.normalizedFieldsJson, next))
+          (!hasCompleteSourceGroundedAutoApproval(next.normalizedFieldsJson, next) &&
+            !hasEventEvidenceV2AutoApproval(next.normalizedFieldsJson, next)))
       ? "pending"
       : next.status;
   const statusAutoApproved =
@@ -7670,6 +7760,24 @@ export function buildDuplicateUpdatePatch(
       timeEvidenceText: preferredNext.timeEvidenceText ?? null,
       timeConfidence: preferredNext.timeConfidence,
       timeStatus: preferredNext.timeStatus,
+      ...(preferredNext.timeEvidenceKind
+        ? { timeEvidenceKind: preferredNext.timeEvidenceKind }
+        : {}),
+      ...(preferredNext.dateEvidenceText
+        ? { dateEvidenceText: preferredNext.dateEvidenceText }
+        : {}),
+      ...(preferredNext.dateEvidenceSource
+        ? { dateEvidenceSource: preferredNext.dateEvidenceSource }
+        : {}),
+      ...(preferredNext.dateEvidenceIsRelative !== undefined
+        ? { dateEvidenceIsRelative: preferredNext.dateEvidenceIsRelative }
+        : {}),
+      ...(preferredNext.dateEvidenceResolvedDate
+        ? { dateEvidenceResolvedDate: preferredNext.dateEvidenceResolvedDate }
+        : {}),
+      ...(preferredNext.sourceConflictFields
+        ? { sourceConflictFields: preferredNext.sourceConflictFields }
+        : {}),
       venue: preferredNext.venue,
       artists: preferredArtists,
       ...(descriptionChanged && preferredDescription
@@ -8304,6 +8412,244 @@ function hasIncompleteAmbiguousCollisionContext(
 export const hasIncompleteAmbiguousCollisionContextForTesting =
   hasIncompleteAmbiguousCollisionContext;
 
+function extractionEvidenceAppearsInPersistedSource(options: {
+  evidenceText: string;
+  source: EventDateEvidenceSource;
+  post: InstagramScrapedPost;
+  hasPoster: boolean;
+}): boolean {
+  const needle = toSearchableText(options.evidenceText);
+  if (!needle) return false;
+  if (options.source === "poster") return options.hasPoster;
+  const sourceText =
+    options.source === "caption"
+      ? options.post.caption
+      : options.source === "alt_text"
+        ? options.post.altText
+        : null;
+  return Boolean(sourceText && toSearchableText(sourceText).includes(needle));
+}
+
+function isVerifiedDateEvidence(options: {
+  evidence: ExtractedEventData["date_evidence"];
+  resolvedDate: string | null;
+  post: InstagramScrapedPost;
+  hasPoster: boolean;
+}): boolean {
+  const evidenceText = normalizeString(options.evidence.exact_text);
+  const evidenceResolvedDate = normalizeString(options.evidence.resolved_date);
+  const independentlyResolved = normalizeEventDate(
+    evidenceText,
+    null,
+    options.post.postedAt,
+  );
+  const independentlyRelative =
+    independentlyResolved.yearSelectionReason === "relative_weekday_from_post_timestamp" ||
+    independentlyResolved.yearSelectionReason === "relative_day_from_post_timestamp";
+  return (
+    Boolean(options.resolvedDate) &&
+    evidenceResolvedDate === options.resolvedDate &&
+    independentlyResolved.isoDate === options.resolvedDate &&
+    options.evidence.is_relative === independentlyRelative &&
+    options.evidence.source !== "unknown" &&
+    extractionEvidenceAppearsInPersistedSource({
+      evidenceText,
+      source: options.evidence.source,
+      post: options.post,
+      hasPoster: options.hasPoster,
+    })
+  );
+}
+
+function isVerifiedTimeEvidence(options: {
+  evidence: ExtractedEventData["time_evidence"];
+  resolvedStartTime: string | null;
+  post: InstagramScrapedPost;
+  hasPoster: boolean;
+}): boolean {
+  const evidenceText = normalizeString(options.evidence.exact_text);
+  const evidenceIsBound =
+    options.evidence.source !== "unknown" &&
+    extractionEvidenceAppearsInPersistedSource({
+      evidenceText,
+      source: options.evidence.source,
+      post: options.post,
+      hasPoster: options.hasPoster,
+    });
+
+  if (options.evidence.status === "not_stated") {
+    return !options.resolvedStartTime && !evidenceText && options.evidence.source === "unknown";
+  }
+  if (options.evidence.status === "unreadable") {
+    return !options.resolvedStartTime && evidenceIsBound;
+  }
+  if (options.evidence.status === "doors_open_only") {
+    const withoutDoorClock = stripDoorOpeningClockValues(evidenceText);
+    return (
+      !options.resolvedStartTime &&
+      evidenceIsBound &&
+      withoutDoorClock !== evidenceText &&
+      Boolean(extractEventTimeFromText(evidenceText))
+    );
+  }
+
+  const startEvidence = stripDoorOpeningClockValues(evidenceText);
+  return (
+    Boolean(options.resolvedStartTime) &&
+    evidenceIsBound &&
+    startEvidence === evidenceText &&
+    extractEventTimeFromText(startEvidence) === options.resolvedStartTime
+  );
+}
+
+function hasVerifiedSharedScheduleContext(
+  value: ExtractedEventData["shared_schedule_context"]["venue" | "time"],
+  post: InstagramScrapedPost,
+  hasPoster: boolean,
+): boolean {
+  const normalizedValue = toSearchableText(value.value);
+  const normalizedEvidence = toSearchableText(value.evidence);
+  return (
+    value.applies_to_all === true &&
+    Boolean(normalizedValue) &&
+    normalizedEvidence.includes(normalizedValue) &&
+    value.source !== "unknown" &&
+    extractionEvidenceAppearsInPersistedSource({
+      evidenceText: value.evidence,
+      source: value.source,
+      post,
+      hasPoster,
+    })
+  );
+}
+
+function isVerifiedEventVenueEvidence(options: {
+  venue: string;
+  rawEvidenceValue: string;
+  extracted: ExtractedEventData;
+  splitSourceLine: string | null;
+  splitEvidenceSource: EventDateEvidenceSource;
+  post: InstagramScrapedPost;
+  hasPoster: boolean;
+  trustedVenueSource: boolean;
+  sharedVenueVerified: boolean;
+}): boolean {
+  if (!normalizeString(options.venue)) return true;
+  if (options.trustedVenueSource) return true;
+
+  const searchableValues = [options.venue, options.rawEvidenceValue]
+    .map((value) => toSearchableText(value))
+    .filter(Boolean);
+  const supportsVenue = (text: string): boolean => {
+    const searchable = toSearchableText(text);
+    return Boolean(
+      searchable && searchableValues.some((value) => searchable.includes(value)),
+    );
+  };
+  const isBoundEvidence = (text: string, source: string): boolean => {
+    if (source === "location_tag") {
+      return Boolean(
+        options.post.locationName &&
+          toSearchableText(options.post.locationName).includes(toSearchableText(text)),
+      );
+    }
+    if (source !== "caption" && source !== "poster" && source !== "alt_text") {
+      return false;
+    }
+    return extractionEvidenceAppearsInPersistedSource({
+      evidenceText: text,
+      source,
+      post: options.post,
+      hasPoster: options.hasPoster,
+    });
+  };
+
+  if (
+    options.splitSourceLine &&
+    supportsVenue(options.splitSourceLine) &&
+    isBoundEvidence(options.splitSourceLine, options.splitEvidenceSource)
+  ) {
+    return true;
+  }
+  if (
+    options.sharedVenueVerified &&
+    supportsVenue(options.extracted.shared_schedule_context.venue.evidence) &&
+    isBoundEvidence(
+      options.extracted.shared_schedule_context.venue.evidence,
+      options.extracted.shared_schedule_context.venue.source,
+    )
+  ) {
+    return true;
+  }
+  if (
+    options.post.locationName &&
+    searchableValues.some((value) =>
+      toSearchableText(options.post.locationName ?? "").includes(value),
+    )
+  ) {
+    return true;
+  }
+  return [
+    ...options.extracted.field_confirmation.location.evidence_snippets,
+    ...options.extracted.field_confirmation.location_name.evidence_snippets,
+  ].some(
+    (snippet) =>
+      supportsVenue(snippet.text) && isBoundEvidence(snippet.text, snippet.source),
+  );
+}
+
+function isVerifiedEventIdentityEvidence(options: {
+  extracted: ExtractedEventData;
+  title: string;
+  artists: string[];
+  splitSourceLine: string | null;
+  splitEvidenceSource: EventDateEvidenceSource;
+  post: InstagramScrapedPost;
+  hasPoster: boolean;
+}): boolean {
+  const supportsTitle = (text: string): boolean => {
+    const searchable = toSearchableText(text);
+    const searchableTitle = toSearchableText(options.title);
+    return Boolean(searchable && searchableTitle && searchable.includes(searchableTitle));
+  };
+  const isBoundEvidence = (text: string, source: string): boolean => {
+    if (source !== "caption" && source !== "poster" && source !== "alt_text") {
+      return false;
+    }
+    return extractionEvidenceAppearsInPersistedSource({
+      evidenceText: text,
+      source,
+      post: options.post,
+      hasPoster: options.hasPoster,
+    });
+  };
+
+  if (options.splitSourceLine) {
+    return (
+      supportsTitle(options.splitSourceLine) &&
+      options.artists.every((artist) =>
+        toSearchableText(options.splitSourceLine ?? "").includes(toSearchableText(artist)),
+      ) &&
+      isBoundEvidence(options.splitSourceLine, options.splitEvidenceSource)
+    );
+  }
+
+  const titleSnippets = options.extracted.field_confirmation.title.evidence_snippets;
+  const artistSnippets = options.extracted.field_confirmation.artists.evidence_snippets;
+  const boundTitleEvidence = titleSnippets.some(
+    (snippet) =>
+      supportsTitle(snippet.text) && isBoundEvidence(snippet.text, snippet.source),
+  );
+  if (!boundTitleEvidence) return false;
+  return options.artists.every((artist) =>
+    [...titleSnippets, ...artistSnippets].some(
+      (snippet) =>
+        toSearchableText(snippet.text).includes(toSearchableText(artist)) &&
+        isBoundEvidence(snippet.text, snippet.source),
+    ),
+  );
+}
+
 export function prepareEventsForInsert(
   post: InstagramScrapedPost,
   extracted: ExtractedEventData,
@@ -8316,6 +8662,36 @@ export function prepareEventsForInsert(
     sourceRolesByHandle?: Record<string, "venue" | "promoter" | "unknown">;
   } = {},
 ): PrepareEventResult[] {
+  const extractionContractVersion = normalizeString(extracted.extraction_contract_version);
+  const usesStructuredEvidence = extractionContractVersion === "event_evidence_v2";
+  const nonEventReason = normalizeString(extracted.non_event_reason);
+  if (!extracted.is_event) {
+    const normalizedFields: Record<string, unknown> = {
+      extractionContractVersion,
+      extractionIsEvent: false,
+      extractionNonEventReason: nonEventReason,
+      extractionSourceConflicts: extracted.source_conflicts,
+      extractionSourceConflictCount: extracted.source_conflicts.length,
+      dateEvidence: extracted.date_evidence,
+      timeEvidence: extracted.time_evidence,
+      sharedScheduleContext: extracted.shared_schedule_context,
+      sourceGroundingInstagramPostId: normalizeString(post.postId) || null,
+      sourceGroundingInstagramPostUrl: normalizeString(post.instagramPostUrl) || null,
+      sourceGroundingInstagramHandle: normalizeHandle(post.username) || null,
+      normalizedIsValid: false,
+      normalizedInvalidReason: "not_event",
+      moderationAutoApproved: false,
+      moderationAutoApproveRule: null,
+      moderationPendingReasons: [],
+      moderationSignals: ["not_event"],
+      extractionScorecard: buildSkippedExtractionScorecard({
+        baseConfidenceScore: normalizeConfidenceScore(extracted.confidence),
+        fieldConfirmation: extracted.field_confirmation,
+        normalizedInvalidReason: "not_event",
+      }),
+    };
+    return [{ kind: "skip", reason: "not_event", normalizedFields }];
+  }
   const eventType = canonicalizeEventType(normalizeString(extracted.category));
   const description = normalizeExtractedDescription(extracted.description);
   const rawExtractedTime = normalizeString(extracted.time ?? undefined);
@@ -8332,6 +8708,7 @@ export function prepareEventsForInsert(
     configuredVenueNamesByHandle,
     options.sourceRolesByHandle,
   );
+  const normalizedVenue = venueNormalization.venue ?? "";
   const normalizedSourceHandle = normalizeHandle(post.username);
   const sourceRole = options.sourceRolesByHandle?.[normalizedSourceHandle];
   const configuredVenueName = canonicalVenueNamesByHandle[normalizedSourceHandle];
@@ -8350,7 +8727,7 @@ export function prepareEventsForInsert(
     Boolean(configuredVenueName) &&
     (!normalizedRawModelVenue ||
       normalizeString(normalizedRawModelVenue) === normalizeString(configuredVenueName)) &&
-    normalizeString(venueNormalization.venue) ===
+    normalizeString(normalizedVenue) ===
       normalizeString(configuredVenueName);
   const titleNormalization = normalizeEventTitle(
     post,
@@ -8425,7 +8802,7 @@ export function prepareEventsForInsert(
         post,
         extracted,
         eventType,
-        venueNormalization.venue,
+        normalizedVenue,
       );
   if (malformedCombinedSchedule) {
     candidateDates = [];
@@ -8447,19 +8824,47 @@ export function prepareEventsForInsert(
         previousTitle: title,
         artists: extractedArtists,
         eventType,
-        venue: venueNormalization.venue,
+        venue: normalizedVenue,
       })
     : description;
   const eventDateFilter = getEventDateFilterContext(options.eventDateFilterNow);
   const isCaptionOnlyVideo = isVideoPostWithoutSelectedImage(post, selectedImageUrl);
   const extractionMode = selectedImageUrl ? "poster" : "caption_only";
   const missingImage = !selectedImageUrl;
-  const allowMissingImageForModeration = isCaptionOnlyVideo;
+  const topLevelVenueEvidenceVerified =
+    !usesStructuredEvidence ||
+    isVerifiedEventVenueEvidence({
+      venue: normalizedVenue,
+      rawEvidenceValue: rawModelVenue,
+      extracted,
+      splitSourceLine: null,
+      splitEvidenceSource: "unknown",
+      post,
+      hasPoster: Boolean(selectedImageUrl),
+      trustedVenueSource,
+      sharedVenueVerified: false,
+    });
+  const effectiveNormalizedVenue = topLevelVenueEvidenceVerified
+    ? normalizedVenue
+    : "";
+  const allowMissingImageForModeration =
+    isCaptionOnlyVideo || usesStructuredEvidence;
   const normalizedFieldsCommon: Record<string, unknown> = {
+    extractionContractVersion,
+    extractionIsEvent: extracted.is_event,
+    extractionNonEventReason: nonEventReason,
+    extractionSourceConflicts: extracted.source_conflicts,
+    extractionSourceConflictCount: extracted.source_conflicts.length,
+    dateEvidence: extracted.date_evidence,
+    timeEvidence: extracted.time_evidence,
+    sharedScheduleContext: extracted.shared_schedule_context,
     rawTitle: titleNormalization.rawTitle,
     rawVenue: normalizeString(extracted.venue),
-    normalizedVenue: venueNormalization.venue,
-    venueSource: venueNormalization.source,
+    normalizedVenue: effectiveNormalizedVenue,
+    venueSource: topLevelVenueEvidenceVerified
+      ? venueNormalization.source
+      : "unsupported_model_venue_cleared",
+    venueEvidenceVerified: topLevelVenueEvidenceVerified,
     locationName: venueNormalization.rawLocationName,
     eventType,
     time,
@@ -8582,7 +8987,10 @@ export function prepareEventsForInsert(
     ];
   }
 
-  if (!venueNormalization.venue) {
+  // Legacy cached/test payloads retain the original venue requirement. The
+  // evidence-v2 contract deliberately permits a real event whose venue was
+  // not stated, as long as its event/date evidence is otherwise verified.
+  if (!normalizedVenue && !usesStructuredEvidence) {
     const normalizedFields: Record<string, unknown> = {
       ...normalizedFieldsCommon,
       time: referenceTime || null,
@@ -8619,13 +9027,7 @@ export function prepareEventsForInsert(
         normalizedInvalidReason: "invalid_venue",
       }),
     };
-    return [
-      {
-        kind: "skip",
-        reason: "missing_venue",
-        normalizedFields,
-      },
-    ];
+    return [{ kind: "skip", reason: "missing_venue", normalizedFields }];
   }
 
   if (!eventType) {
@@ -8674,19 +9076,56 @@ export function prepareEventsForInsert(
     ];
   }
 
+  const hasPosterEvidence = Boolean(selectedImageUrl);
+  const verifiedSharedVenue = hasVerifiedSharedScheduleContext(
+    extracted.shared_schedule_context.venue,
+    post,
+    hasPosterEvidence,
+  );
+  const verifiedSharedTime = hasVerifiedSharedScheduleContext(
+    extracted.shared_schedule_context.time,
+    post,
+    hasPosterEvidence,
+  );
+  const sharedVenueValue = verifiedSharedVenue
+    ? normalizeString(extracted.shared_schedule_context.venue.value)
+    : "";
+  const sharedTimeValue = verifiedSharedTime
+    ? normalizeString(extracted.shared_schedule_context.time.value)
+    : "";
+  const sourceConflictFields = [
+    ...new Set(
+      extracted.source_conflicts
+        .map((conflict) => normalizeString(conflict.field))
+        .filter(Boolean),
+    ),
+  ];
+
   const eventVariants = usesSplitEventCandidates
     ? splitEventCandidates.map((entry) => {
         const variantArtists =
           entry.titleUsedFallback || (entry.artistsWereSanitized && entry.artists.length === 0)
             ? []
-          : entry.artists.length > 0
-            ? entry.artists
-            : extractedArtists;
+            : entry.artists.length > 0 || usesStructuredEvidence
+              ? entry.artists
+              : extractedArtists;
+        const rowVenue = normalizeString(entry.venue);
+        const rowVenueGrounded = Boolean(
+          rowVenue && toSearchableText(entry.sourceLine).includes(toSearchableText(rowVenue)),
+        );
+        const variantVenueRaw = usesStructuredEvidence
+          ? rowVenueGrounded
+            ? rowVenue
+            : sharedVenueValue
+          : normalizedVenue;
+        const variantVenue = variantVenueRaw
+          ? canonicalizeVenueName(variantVenueRaw, canonicalVenueNamesByHandle) ?? variantVenueRaw
+          : "";
         const variantTitle = buildMeaningfulEventTitle({
           title: entry.lineTitle,
           artists: variantArtists,
           eventType,
-          venue: venueNormalization.venue,
+          venue: variantVenue,
           baseTitle,
         });
         const usesSplitScheduleTitle =
@@ -8694,8 +9133,41 @@ export function prepareEventsForInsert(
           !isMeaninglessEventTitle(variantTitle);
         const variantDescription =
           entry.description ??
-          buildSplitEventDescription(eventType, venueNormalization.venue, variantArtists) ??
-          baseDescription;
+          buildSplitEventDescription(eventType, variantVenue, variantArtists) ??
+          (usesStructuredEvidence ? undefined : baseDescription);
+        const derivedEvidenceSource: EventDateEvidenceSource =
+          entry.source === "caption_schedule"
+            ? "caption"
+            : entry.source === "alt_text_schedule"
+              ? "alt_text"
+              : "poster";
+        const variantDateEvidence = entry.dateEvidence ?? {
+          exact_text: entry.rawDate,
+          source: derivedEvidenceSource,
+          is_relative: false,
+          resolved_date: entry.normalizedDate.isoDate ?? "",
+        };
+        const useVerifiedSharedTime =
+          usesStructuredEvidence &&
+          verifiedSharedTime &&
+          !entry.time &&
+          (!entry.timeEvidence || entry.timeEvidence.status === "not_stated");
+        const variantTimeEvidence = useVerifiedSharedTime
+          ? {
+              status: "start_time_stated" as const,
+              exact_text: normalizeString(extracted.shared_schedule_context.time.evidence),
+              source: extracted.shared_schedule_context.time.source,
+            }
+          : entry.timeEvidence ?? {
+              status: entry.time ? "start_time_stated" as const : "not_stated" as const,
+              exact_text: entry.rawTime ?? entry.time ?? "",
+              source: derivedEvidenceSource,
+            };
+        const variantTime = usesStructuredEvidence
+          ? variantTimeEvidence.status === "start_time_stated"
+            ? entry.time || sharedTimeValue
+            : ""
+          : entry.time ?? "";
         return {
           title: entry.titleUsedFallback
             ? entry.lineTitle
@@ -8714,13 +9186,31 @@ export function prepareEventsForInsert(
             usesSplitScheduleTitle ? null : titleNormalization.contextCandidate,
           rawDate: entry.rawDate,
           dateNormalization: entry.normalizedDate,
-          time: entry.time ?? "",
-          rawTime: entry.rawTime ?? entry.time ?? "",
-          timeProvenance: buildScheduleEntryTimeProvenance(entry),
+          dateEvidence: variantDateEvidence,
+          time: variantTime,
+          rawTime: entry.rawTime ?? variantTime,
+          timeEvidence: variantTimeEvidence,
+          timeProvenance: useVerifiedSharedTime
+            ? ({
+                confidence: 0.95,
+                evidenceText: normalizeString(
+                  extracted.shared_schedule_context.time.evidence,
+                ),
+                source:
+                  extracted.shared_schedule_context.time.source === "alt_text"
+                    ? "alt_text"
+                    : extracted.shared_schedule_context.time.source === "poster"
+                      ? "poster"
+                      : "caption",
+                status: "confirmed",
+              } satisfies EventTimeProvenance)
+            : buildScheduleEntryTimeProvenance(entry),
           consistencyIssues: entry.consistencyIssues,
           artists: variantArtists,
           artistsWereSanitized: entry.artistsWereSanitized ?? false,
           description: variantDescription,
+          venue: variantVenue,
+          venueEvidenceValue: rowVenueGrounded ? rowVenue : sharedVenueValue,
           splitSource: entry.source,
           splitSourceLine: entry.sourceLine,
           occurrencePlanUnverified: entry.occurrencePlanUnverified ?? false,
@@ -8737,8 +9227,13 @@ export function prepareEventsForInsert(
           ...dateNormalization,
           isoDate: date,
         } satisfies DateNormalization,
-        time,
+        dateEvidence: extracted.date_evidence,
+        time:
+          !usesStructuredEvidence || extracted.time_evidence.status === "start_time_stated"
+            ? time
+            : "",
         rawTime: rawExtractedTime,
+        timeEvidence: extracted.time_evidence,
         timeProvenance: buildTimeProvenance({
           extracted,
           resolution: extractedTimeResolution,
@@ -8747,6 +9242,8 @@ export function prepareEventsForInsert(
         artists: extractedArtists,
         artistsWereSanitized: false,
         description: baseDescription,
+        venue: effectiveNormalizedVenue,
+        venueEvidenceValue: rawModelVenue,
         splitSource: null,
         splitSourceLine: null,
         occurrencePlanUnverified: false,
@@ -8767,6 +9264,21 @@ export function prepareEventsForInsert(
       ...variant.consistencyIssues,
       ...eventConsistency.issues,
     ])];
+    const timeEvidenceKind: EventTimeEvidenceKind = variant.timeEvidence.status;
+    const semanticTimeProvenance: EventTimeProvenance =
+      timeEvidenceKind === "start_time_stated"
+        ? variant.timeProvenance
+        : {
+            source:
+              variant.timeEvidence.source === "caption" ||
+              variant.timeEvidence.source === "poster" ||
+              variant.timeEvidence.source === "alt_text"
+                ? variant.timeEvidence.source
+                : "unknown",
+            evidenceText: normalizeString(variant.timeEvidence.exact_text) || null,
+            confidence: 0,
+            status: "unknown",
+          };
     const timeTbdApplied = !eventConsistency.sanitizedTime && Boolean(date);
     const safeTime = eventConsistency.sanitizedTime || (timeTbdApplied ? TBD_EVENT_TIME : "");
     const timeSanitized = consistencyIssues.includes("time_is_date");
@@ -8782,18 +9294,18 @@ export function prepareEventsForInsert(
       titleUsedFallback: variant.titleUsedFallback,
       time: eventConsistency.sanitizedTime,
       artists: variant.artists,
-      venue: venueNormalization.venue,
+      venue: variant.venue,
       instagramHandle: post.username,
     });
     const approvalTitleSensible = isSensibleEventTitleForApproval({
       title: variant.title,
-      venue: venueNormalization.venue,
+      venue: variant.venue,
     });
     const approvalCaptionSourceCoherent = isCaptionSourceCoherentWithEvent({
       title: variant.title,
       date,
       time: safeTime,
-      venue: venueNormalization.venue,
+      venue: variant.venue,
       artists: variant.artists,
       sourceCaption: post.caption,
       sourcePostedAt: post.postedAt,
@@ -8802,11 +9314,65 @@ export function prepareEventsForInsert(
       sourceInstagramHandle: post.username,
       venueInstagramHandle: post.username,
     });
+    const dateEvidenceVerified = isVerifiedDateEvidence({
+      evidence: variant.dateEvidence,
+      resolvedDate: date,
+      post,
+      hasPoster: hasPosterEvidence,
+    });
+    const identityEvidenceVerified = isVerifiedEventIdentityEvidence({
+      extracted,
+      title: variant.title,
+      artists: variant.artists,
+      splitSourceLine: variant.splitSourceLine,
+      splitEvidenceSource: variant.dateEvidence.source,
+      post,
+      hasPoster: hasPosterEvidence,
+    });
+    const venueEvidenceVerified = isVerifiedEventVenueEvidence({
+      venue: variant.venue,
+      rawEvidenceValue: variant.venueEvidenceValue,
+      extracted,
+      splitSourceLine: variant.splitSourceLine,
+      splitEvidenceSource: variant.dateEvidence.source,
+      post,
+      hasPoster: hasPosterEvidence,
+      trustedVenueSource,
+      sharedVenueVerified: verifiedSharedVenue,
+    });
+    const timeEvidenceVerified = isVerifiedTimeEvidence({
+      evidence: variant.timeEvidence,
+      resolvedStartTime: eventConsistency.sanitizedTime ?? null,
+      post,
+      hasPoster: hasPosterEvidence,
+    });
+    const structuredEvidenceVerified =
+      usesStructuredEvidence &&
+      extracted.is_event === true &&
+      !nonEventReason &&
+      dateEvidenceVerified &&
+      timeEvidenceVerified &&
+      identityEvidenceVerified &&
+      venueEvidenceVerified &&
+      sourceConflictFields.length === 0;
     const autoApprovalBlockers = [
-      ...sourceGrounding.blockers,
+      ...(!usesStructuredEvidence ? sourceGrounding.blockers : []),
       ...(variant.occurrencePlanUnverified ? ["unverified_occurrence_plan"] : []),
       ...(!approvalTitleSensible ? ["unusable_event_title"] : []),
-      ...(!approvalCaptionSourceCoherent ? ["caption_source_event_mismatch"] : []),
+      ...(!usesStructuredEvidence && !approvalCaptionSourceCoherent
+        ? ["caption_source_event_mismatch"]
+        : []),
+      ...(usesStructuredEvidence && !dateEvidenceVerified ? ["invalid_date_evidence"] : []),
+      ...(usesStructuredEvidence && !identityEvidenceVerified
+        ? ["invalid_identity_evidence"]
+        : []),
+      ...(usesStructuredEvidence && !venueEvidenceVerified
+        ? ["invalid_venue_evidence"]
+        : []),
+      ...(usesStructuredEvidence && !timeEvidenceVerified
+        ? ["invalid_time_evidence"]
+        : []),
+      ...(sourceConflictFields.length > 0 ? ["poster_caption_conflict"] : []),
       ...getNonEventAutoApprovalBlockers(
         [
           postTextEvidence,
@@ -8825,7 +9391,7 @@ export function prepareEventsForInsert(
       suspiciousYear: variant.dateNormalization.suspiciousYear,
       dateConfidence: variant.dateNormalization.confidence,
       hasDate: Boolean(date),
-      hasVenue: Boolean(venueNormalization.venue),
+      hasVenue: Boolean(variant.venue),
       extractionMode,
       isVideoPost: isCaptionOnlyVideo,
       sourceGroundingVerified: sourceGrounding.verified,
@@ -8834,16 +9400,29 @@ export function prepareEventsForInsert(
       sourceGroundingIdentityContextVerified: sourceGrounding.identityContextVerified,
       approvalCaptionSourceCoherent,
       trustedVenueSource,
+      structuredEvidenceVerified,
       autoApprovalBlockers,
     });
     const eventStatus: EventStatus = moderationDecision.autoApproved ? "approved" : "pending";
     const normalizedFields: Record<string, unknown> = {
       ...normalizedFieldsCommon,
       time: safeTime || null,
-      timeSource: variant.timeProvenance.source,
-      timeEvidenceText: variant.timeProvenance.evidenceText,
-      timeConfidence: variant.timeProvenance.confidence,
-      timeStatus: variant.timeProvenance.status,
+      timeSource: semanticTimeProvenance.source,
+      timeEvidenceText: semanticTimeProvenance.evidenceText,
+      timeConfidence: semanticTimeProvenance.confidence,
+      timeStatus: semanticTimeProvenance.status,
+      timeEvidenceKind,
+      dateEvidenceText: normalizeString(variant.dateEvidence.exact_text) || null,
+      dateEvidenceSource: variant.dateEvidence.source,
+      dateEvidenceIsRelative: variant.dateEvidence.is_relative,
+      dateEvidenceResolvedDate: normalizeString(variant.dateEvidence.resolved_date) || null,
+      dateEvidenceVerified,
+      timeEvidenceVerified,
+      identityEvidenceVerified,
+      venueEvidenceVerified,
+      structuredEvidenceVerified,
+      sourceConflictFields,
+      normalizedVenue: variant.venue,
       title: variant.title,
       titleSource: variant.titleSource,
       titleUsedFallback: variant.titleUsedFallback,
@@ -8883,8 +9462,10 @@ export function prepareEventsForInsert(
       moderationCaptionOnlyVideoMinConfidence: CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE,
       moderationTrustedSourceEventAnnouncementMinConfidence:
         TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_MIN_CONFIDENCE,
-      sourceGroundingVersion: 4,
-      sourceGroundingEvidence: "instagram_caption",
+      sourceGroundingVersion: usesStructuredEvidence ? 5 : 4,
+      sourceGroundingEvidence: usesStructuredEvidence
+        ? "persisted_openai_event_evidence_v2"
+        : "instagram_caption",
       approvalTitleSensible,
       approvalCaptionSourceCoherent,
       sourceGroundingVerified: sourceGrounding.verified,
@@ -9001,13 +9582,20 @@ export function prepareEventsForInsert(
         title: variant.title,
         date,
         ...(safeTime ? { time: safeTime } : {}),
-        timeSource: variant.timeProvenance.source,
-        ...(variant.timeProvenance.evidenceText
-          ? { timeEvidenceText: variant.timeProvenance.evidenceText }
+        timeSource: semanticTimeProvenance.source,
+        ...(semanticTimeProvenance.evidenceText
+          ? { timeEvidenceText: semanticTimeProvenance.evidenceText }
           : {}),
-        timeConfidence: variant.timeProvenance.confidence,
-        timeStatus: variant.timeProvenance.status,
-        venue: venueNormalization.venue,
+        timeConfidence: semanticTimeProvenance.confidence,
+        timeStatus: semanticTimeProvenance.status,
+        timeEvidenceKind,
+        dateEvidenceText: normalizeString(variant.dateEvidence.exact_text) || undefined,
+        dateEvidenceSource: variant.dateEvidence.source,
+        dateEvidenceIsRelative: variant.dateEvidence.is_relative,
+        dateEvidenceResolvedDate:
+          normalizeString(variant.dateEvidence.resolved_date) || undefined,
+        sourceConflictFields,
+        venue: variant.venue,
         artists: variant.artists,
         ...(variant.description ? { description: variant.description } : {}),
         ...(publicEventImageUrl ? { imageUrl: publicEventImageUrl } : {}),
@@ -9056,6 +9644,9 @@ type ProcessIngestionPostOptions = {
   serviceSecret: string;
   processingFence: SourceProcessingFence;
   cachedAnalysisJson?: string;
+  cachedAnalysisContractVersion?: string;
+  cachedAnalysisImageSourceUrl?: string;
+  cachedAnalysisImageChecksumSha256?: string;
   providerExecution?: ProviderExecutionControl;
   eventDateFilterNow?: Date;
 };
@@ -9088,6 +9679,9 @@ async function processIngestionPost(
     serviceSecret,
     processingFence,
     cachedAnalysisJson,
+    cachedAnalysisContractVersion,
+    cachedAnalysisImageSourceUrl,
+    cachedAnalysisImageChecksumSha256,
     providerExecution,
     eventDateFilterNow,
   } = options;
@@ -9100,14 +9694,44 @@ async function processIngestionPost(
     ) || null;
   const canUseCaptionOnlyExtraction = buildPostTextEvidence(post).length > 0;
   const mediaSelection = resolveInstagramIngestionMediaSelection(post);
-  let extractionMode = mediaSelection.extractionMode;
+  const hasCurrentEventEvidenceCache =
+    Boolean(cachedAnalysisJson) && cachedAnalysisContractVersion === "event_evidence_v2";
+  const hasCachedPosterUrl = Boolean(normalizeString(cachedAnalysisImageSourceUrl));
+  const hasCachedPosterChecksum = Boolean(
+    normalizeString(cachedAnalysisImageChecksumSha256),
+  );
+  if (hasCurrentEventEvidenceCache && hasCachedPosterUrl !== hasCachedPosterChecksum) {
+    summary.failedExtractions += 1;
+    summary.failed_extractions += 1;
+    summary.failed_extraction += 1;
+    summary.errors.push(
+      "Cached event evidence has an incomplete analyzed-poster binding.",
+    );
+    return;
+  }
+  const cachedExtractionMode: "poster" | "caption_only" | null =
+    hasCurrentEventEvidenceCache
+      ? hasCachedPosterUrl
+        ? "poster"
+        : "caption_only"
+      : null;
+  let extractionMode = cachedExtractionMode ?? mediaSelection.extractionMode;
   const durableMediaCandidate = mediaSelection.durableMediaCandidate;
   const durableMediaCandidates = deduplicateMediaUrls(
     [durableMediaCandidate, ...(post.imageUrls ?? []), post.imageUrl],
     8,
   );
   let sourceIdentityMatches: ExistingSourceMatch[] = [];
-  let selectedImageUrl = mediaSelection.selectedImageUrl;
+  let selectedImageUrl =
+    cachedExtractionMode === "poster"
+      ? normalizeString(cachedAnalysisImageSourceUrl)
+      : cachedExtractionMode === "caption_only"
+        ? null
+        : mediaSelection.selectedImageUrl;
+  let selectedImageChecksumSha256: string | null =
+    cachedExtractionMode === "poster"
+      ? normalizeString(cachedAnalysisImageChecksumSha256).toLocaleLowerCase()
+      : null;
   let imageDataUrl: string | null = null;
   let imageDataUrls: string[] = [];
 
@@ -9226,7 +9850,27 @@ async function processIngestionPost(
     return;
   }
 
-  if (extractionMode === "caption_only") {
+  if (cachedExtractionMode === "poster") {
+    const currentImageUrls = deduplicateMediaUrls(
+      [...(post.imageUrls ?? []), post.imageUrl],
+      16,
+    );
+    if (!selectedImageUrl || !selectedImageChecksumSha256) {
+      summary.failedExtractions += 1;
+      summary.failed_extractions += 1;
+      summary.failed_extraction += 1;
+      summary.errors.push(
+        "Cached poster analysis is missing its exact source URL/checksum binding.",
+      );
+      return;
+    }
+    logInfo("ingestion.openai.cached_poster_binding", {
+      ...postContext,
+      extractionMode,
+      selectedImageUrl,
+      sourceUrlStillAdvertised: currentImageUrls.includes(selectedImageUrl),
+    });
+  } else if (extractionMode === "caption_only") {
     if (!canUseCaptionOnlyExtraction) {
       summary.skipped_video += 1;
       logInfo("ingestion.post.skipped_video", {
@@ -9306,6 +9950,9 @@ async function processIngestionPost(
         imageDataUrls.push(toDataUrl(normalizedImage.imageBuffer, normalizedImage.mimeType));
         if (imageDataUrls.length === 1) {
           selectedImageUrl = candidateImageUrl;
+          selectedImageChecksumSha256 = createHash("sha256")
+            .update(downloadedImage.imageBuffer)
+            .digest("hex");
         }
         logInfo("ingestion.image.conversion.success", {
           ...postContext,
@@ -9314,6 +9961,10 @@ async function processIngestionPost(
           outputMimeType: normalizedImage.mimeType,
           outputBytes: normalizedImage.imageBuffer.byteLength,
         });
+        // The durable analysis attestation currently binds exactly one source
+        // URL and checksum. Send only that successfully decoded image so the
+        // model cannot rely on an unpersisted carousel sibling.
+        break;
       } catch (error) {
         summary.failedConversions += 1;
         summary.failed_conversions += 1;
@@ -9367,7 +10018,7 @@ async function processIngestionPost(
   if (cachedAnalysisJson) {
     try {
       cachedExtracted = normalizeConfidencePayload(
-        JSON.parse(cachedAnalysisJson) as ExtractedEventData,
+        parseExtractedEventData(JSON.parse(cachedAnalysisJson)),
       );
     } catch (error) {
       logError("ingestion.openai.cached_analysis_invalid", {
@@ -9428,7 +10079,7 @@ async function processIngestionPost(
                     instagramPostUrl: processingFence.instagramPostUrl,
                     owner: processingFence.owner,
                     sourceRevision: processingFence.sourceRevision,
-                    protocol: "openai-responses:event-extraction:v1",
+                    protocol: "openai-responses:event-extraction:event_evidence_v2",
                     budgetDayKey: getBudgetDayKey(),
                     dailyRequestLimit: getOpenAiDailyPostLimit(),
                   },
@@ -9459,6 +10110,8 @@ async function processIngestionPost(
             owner: processingFence.owner,
             sourceRevision: processingFence.sourceRevision,
             resultJson: JSON.stringify(extracted),
+            imageSourceUrl: selectedImageUrl ?? undefined,
+            imageChecksumSha256: selectedImageChecksumSha256 ?? undefined,
             model: extracted._openaiUsage?.model,
             inputTokens: extracted._openaiUsage?.inputTokens,
             outputTokens: extracted._openaiUsage?.outputTokens,
@@ -9527,6 +10180,26 @@ async function processIngestionPost(
   }
   }
 
+  let analyzedPosterPersisted = false;
+  if (providerExecution && extracted.is_event && selectedImageUrl && selectedImageChecksumSha256) {
+    analyzedPosterPersisted = await persistInstagramMediaCandidates({
+      client,
+      handle,
+      post,
+      processingFence,
+      summary,
+      serviceSecret,
+      upstreamUrls:
+        cachedExtractionMode === "poster"
+          ? deduplicateMediaUrls(
+              [selectedImageUrl, ...(post.imageUrls ?? []), post.imageUrl],
+              16,
+            )
+          : [selectedImageUrl],
+      expectedChecksumSha256: selectedImageChecksumSha256,
+    });
+  }
+
   let preparedResults: PrepareEventResult[];
   try {
     preparedResults = prepareEventsForInsert(
@@ -9550,6 +10223,27 @@ async function processIngestionPost(
       extractionMode,
       selectedImageUrl,
       error: getErrorMessage(error),
+    });
+    return;
+  }
+
+  const requiresDurableAnalyzedPoster = preparedResults.some(
+    (prepared) =>
+      prepared.kind === "ok" &&
+      prepared.normalizedFields.extractionContractVersion === "event_evidence_v2" &&
+      prepared.normalizedFields.extractionMode === "poster",
+  );
+  if (requiresDurableAnalyzedPoster && !analyzedPosterPersisted) {
+    if (!selectedImageUrl || !selectedImageChecksumSha256) {
+      summary.failedImagePersistence += 1;
+      summary.errors.push(
+        "Approved poster evidence is missing its exact analyzed-image checksum.",
+      );
+    }
+    logError("ingestion.image.analysis_poster_not_durable", {
+      ...postContext,
+      extractionMode,
+      selectedImageUrl,
     });
     return;
   }
@@ -9713,6 +10407,9 @@ async function processIngestionPost(
           existing,
           sameVenue,
           sameSource,
+          unknownVenue:
+            !toSearchableText(existing.venue) ||
+            !toSearchableText(prepared.event.venue),
         });
       });
 
@@ -10310,6 +11007,9 @@ async function processLoadedPostsForHandle(
       reason?: string;
       sourceRevision?: number;
       analysisResultJson?: string;
+      analysisContractVersion?: string;
+      analysisImageSourceUrl?: string;
+      analysisImageChecksumSha256?: string;
     };
     if (!claim.claimed) {
       if (claim.reason === "analysis_attempt_ambiguous") {
@@ -10473,6 +11173,9 @@ async function processLoadedPostsForHandle(
         serviceSecret,
         processingFence,
         cachedAnalysisJson: claim.analysisResultJson,
+        cachedAnalysisContractVersion: claim.analysisContractVersion,
+        cachedAnalysisImageSourceUrl: claim.analysisImageSourceUrl,
+        cachedAnalysisImageChecksumSha256: claim.analysisImageChecksumSha256,
         providerExecution,
       });
     } catch (error) {

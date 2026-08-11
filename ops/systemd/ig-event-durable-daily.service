@@ -8,8 +8,8 @@ Type=oneshot
 User=root
 EnvironmentFile=/etc/ig_event/cron.env
 ExecStart=/usr/local/sbin/ig-event-durable-daily-runner
-# Restarting after a host or network failure is safe: the runner resumes the
-# same durable daily run instead of creating a second paid run.
+# Restarting after a host or network failure is safe: admission is idempotent
+# per Belgrade day and any pending snapshot remains durable behind the active run.
 TimeoutStartSec=infinity
 Restart=on-failure
 RestartSec=15s

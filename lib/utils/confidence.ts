@@ -2,6 +2,11 @@ export const DUPLICATE_CONFIDENCE_MULTIPLIER = 0.5;
 export const MISSING_IMAGE_CONFIDENCE_PENALTY = 0.2;
 export const AUTO_APPROVE_CONFIDENCE_THRESHOLD = 0.9;
 export const CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD = 0.8;
+// The evidence-v2 contract requires an explicit event decision, exact date
+// evidence, no poster/caption conflicts, and a persisted model artifact. That
+// stronger shape lets clear events publish at a lower confidence threshold
+// without reopening the old confidence-only approval path.
+export const EVENT_EVIDENCE_V2_AUTO_APPROVE_CONFIDENCE_THRESHOLD = 0.6;
 
 export function normalizeConfidenceScore(
   value: number | string | null | undefined,

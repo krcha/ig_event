@@ -28,6 +28,10 @@ const durableIngestionRunStatus = v.union(
   v.literal("completed"),
   v.literal("failed"),
 );
+const durableDailySnapshotStatus = v.union(
+  v.literal("pending"),
+  v.literal("assigned"),
+);
 const durableIngestionReceiptStatus = v.union(
   v.literal("queued"),
   v.literal("running"),
@@ -51,6 +55,18 @@ const eventTimeStatus = v.union(
   v.literal("confirmed"),
   v.literal("inferred"),
   v.literal("unknown"),
+);
+const eventDateEvidenceSource = v.union(
+  v.literal("caption"),
+  v.literal("poster"),
+  v.literal("alt_text"),
+  v.literal("unknown"),
+);
+const eventTimeEvidenceKind = v.union(
+  v.literal("start_time_stated"),
+  v.literal("not_stated"),
+  v.literal("unreadable"),
+  v.literal("doors_open_only"),
 );
 const venuePublicStatus = v.union(
   v.literal("pending"),
@@ -171,6 +187,12 @@ export default defineSchema({
     timeEvidenceText: v.optional(v.string()),
     timeConfidence: v.optional(v.number()),
     timeStatus: v.optional(eventTimeStatus),
+    timeEvidenceKind: v.optional(eventTimeEvidenceKind),
+    dateEvidenceText: v.optional(v.string()),
+    dateEvidenceSource: v.optional(eventDateEvidenceSource),
+    dateEvidenceIsRelative: v.optional(v.boolean()),
+    dateEvidenceResolvedDate: v.optional(v.string()),
+    sourceConflictFields: v.optional(v.array(v.string())),
     venue: v.string(),
     normalizedVenueIdentity: v.optional(v.string()),
     venueCategory: v.optional(v.string()),
@@ -357,6 +379,11 @@ export default defineSchema({
     analysisResultJson: v.optional(v.string()),
     analysisCompletedAt: v.optional(v.number()),
     analysisModel: v.optional(v.string()),
+    analysisImageSourceUrl: v.optional(v.string()),
+    analysisImageChecksumSha256: v.optional(v.string()),
+    analysisContractVersion: v.optional(v.string()),
+    analysisIsEvent: v.optional(v.boolean()),
+    analysisNonEventReason: v.optional(v.string()),
     analysisInputTokens: v.optional(v.number()),
     analysisOutputTokens: v.optional(v.number()),
     analysisTotalTokens: v.optional(v.number()),
@@ -479,6 +506,9 @@ export default defineSchema({
     mode: durableIngestionRunMode,
     status: durableIngestionRunStatus,
     sourceSnapshotKey: v.string(),
+    // Optional for rollout compatibility. Every newly admitted daily run gets
+    // the Europe/Belgrade calendar day that owns it.
+    dailyDayKey: v.optional(v.string()),
     // The selected source snapshot is persisted on the parent before any
     // receipt is created.  Large runs are then materialized in bounded,
     // resumable batches without ever re-reading the active source list.
@@ -517,7 +547,24 @@ export default defineSchema({
   })
     .index("by_status_createdAt", ["status", "createdAt"])
     .index("by_mode_createdAt", ["mode", "createdAt"])
+    .index("by_mode_dailyDayKey", ["mode", "dailyDayKey"])
     .index("by_snapshot", ["sourceSnapshotKey"]),
+  // The host timer freezes one active-source snapshot for each Belgrade day.
+  // A pending row survives while an older durable run is resumed, so finishing
+  // yesterday's work cannot silently consume today's only timer invocation.
+  ingestionDailySnapshots: defineTable({
+    dayKey: v.string(),
+    sourceSnapshotKey: v.string(),
+    selectedHandles: v.array(v.string()),
+    selectedHandleCount: v.number(),
+    status: durableDailySnapshotStatus,
+    runId: v.optional(v.id("ingestionRuns")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_dayKey", ["dayKey"])
+    .index("by_status_dayKey", ["status", "dayKey"])
+    .index("by_runId", ["runId"]),
   ingestionRunChunks: defineTable({
     runId: v.id("ingestionRuns"),
     ordinal: v.number(),

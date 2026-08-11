@@ -22,6 +22,7 @@ import {
   assertExpectedEventStatus,
   assertExpectedEventUpdatedAt,
   hasCompleteSourceGroundingAttestation,
+  hasEventEvidenceV2AutoApproval,
   nextEventUpdatedAt,
   assertServiceCreateEventPolicy,
   assertServiceUpdateEventPolicy,
@@ -96,6 +97,18 @@ const eventTimeStatus = v.union(
   v.literal("inferred"),
   v.literal("unknown"),
 );
+const eventDateEvidenceSource = v.union(
+  v.literal("caption"),
+  v.literal("poster"),
+  v.literal("alt_text"),
+  v.literal("unknown"),
+);
+const eventTimeEvidenceKind = v.union(
+  v.literal("start_time_stated"),
+  v.literal("not_stated"),
+  v.literal("unreadable"),
+  v.literal("doors_open_only"),
+);
 const eventUpdatePatch = v.object({
   title: v.optional(v.string()),
   date: v.optional(v.string()),
@@ -104,6 +117,12 @@ const eventUpdatePatch = v.object({
   timeEvidenceText: v.optional(v.union(v.string(), v.null())),
   timeConfidence: v.optional(v.number()),
   timeStatus: v.optional(eventTimeStatus),
+  timeEvidenceKind: v.optional(eventTimeEvidenceKind),
+  dateEvidenceText: v.optional(v.string()),
+  dateEvidenceSource: v.optional(eventDateEvidenceSource),
+  dateEvidenceIsRelative: v.optional(v.boolean()),
+  dateEvidenceResolvedDate: v.optional(v.string()),
+  sourceConflictFields: v.optional(v.array(v.string())),
   venue: v.optional(v.string()),
   artists: v.optional(v.array(v.string())),
   description: v.optional(v.string()),
@@ -241,28 +260,56 @@ type ApprovalCandidateFields = {
   artists?: string[];
   sourceOccurrenceKey?: string;
   normalizedFieldsJson?: string;
+  timeEvidenceKind?: "start_time_stated" | "not_stated" | "unreadable" | "doors_open_only";
+  dateEvidenceText?: string;
+  dateEvidenceSource?: "caption" | "poster" | "alt_text" | "unknown";
+  dateEvidenceIsRelative?: boolean;
+  dateEvidenceResolvedDate?: string;
+  sourceConflictFields?: string[];
 };
 
 type ServiceSourceCandidateFields = ApprovalCandidateFields & {
   sourceCaption?: string;
   sourcePostedAt?: string;
+  rawExtractionJson?: string;
 };
 
 async function assertPersistedServiceSourcePolicy(
   ctx: MutationCtx,
   candidate: ServiceSourceCandidateFields,
 ): Promise<void> {
-  const handle = normalizeHandle(candidate.venueInstagramHandle ?? "");
+  const structuredEvidence = hasEventEvidenceV2AutoApproval(
+    candidate.normalizedFieldsJson,
+    candidate,
+  );
+  let structuredSourceHandle = "";
+  let structuredExtractionMode = "";
+  if (structuredEvidence) {
+    try {
+      const fields = JSON.parse(candidate.normalizedFieldsJson ?? "{}") as Record<string, unknown>;
+      structuredSourceHandle =
+        typeof fields.sourceGroundingInstagramHandle === "string"
+          ? normalizeHandle(fields.sourceGroundingInstagramHandle)
+          : "";
+      structuredExtractionMode =
+        typeof fields.extractionMode === "string" ? fields.extractionMode.trim() : "";
+    } catch {
+      structuredSourceHandle = "";
+      structuredExtractionMode = "";
+    }
+  }
+  const handle = structuredSourceHandle || normalizeHandle(candidate.venueInstagramHandle ?? "");
   const postId = candidate.instagramPostId?.trim() ?? "";
   const postUrl = normalizeInstagramSourceUrl(candidate.instagramPostUrl);
   const sourceCaption = normalizeSourceCaption(candidate.sourceCaption);
-  if (!handle || !postId || !postUrl || !sourceCaption) {
+  if (!handle || !postId || !postUrl || (!structuredEvidence && !sourceCaption)) {
     throw new Error("Service approval requires a persisted Instagram source post.");
   }
-  const persisted = await ctx.db
+  const persistedCandidates = await ctx.db
     .query("scrapedPosts")
     .withIndex("by_handle_postId", (q) => q.eq("handle", handle).eq("postId", postId))
-    .first();
+    .take(2);
+  const persisted = persistedCandidates.length === 1 ? persistedCandidates[0] : null;
   if (
     !persisted ||
     normalizeHandle(persisted.handle) !== handle ||
@@ -272,6 +319,37 @@ async function assertPersistedServiceSourcePolicy(
     normalizeSourceCaption(persisted.caption) !== sourceCaption
   ) {
     throw new Error("Service approval source does not match the persisted Instagram post.");
+  }
+  if (structuredEvidence) {
+    const posterAssets =
+      structuredExtractionMode === "poster"
+        ? await ctx.db
+            .query("mediaAssets")
+            .withIndex("by_sourceKey", (q) => q.eq("sourceKey", `instagram-post:${postId}`))
+            .take(2)
+        : [];
+    const posterAsset = posterAssets.length === 1 ? posterAssets[0] : null;
+    if (
+      !candidate.rawExtractionJson ||
+      candidate.rawExtractionJson !== persisted.analysisResultJson ||
+      persisted.analysisRevision !== (persisted.sourceRevision ?? 1) ||
+      persisted.analysisContractVersion !== "event_evidence_v2" ||
+      persisted.analysisIsEvent !== true ||
+      !persisted.analysisModel?.startsWith("gpt-5-mini") ||
+      candidate.sourcePostedAt !== persisted.postedAt ||
+      (structuredExtractionMode === "poster" &&
+        (!persisted.analysisImageSourceUrl ||
+          !persisted.analysisImageChecksumSha256 ||
+          !persisted.imageStorageId ||
+          !posterAsset ||
+          posterAsset.storageId !== persisted.imageStorageId ||
+          posterAsset.checksumSha256 !== persisted.analysisImageChecksumSha256))
+    ) {
+      throw new Error(
+        "Service approval requires current persisted GPT-5 mini event evidence bound to the exact source revision.",
+      );
+    }
+    return;
   }
   if (
     !isCaptionSourceCoherentWithEvent({
@@ -320,6 +398,14 @@ function approvalCandidatesShareVenue(
   );
 }
 
+function approvalCandidateHasKnownVenue(candidate: ApprovalCandidateFields): boolean {
+  return (
+    candidate.venueId !== undefined ||
+    Boolean(normalizeHandle(candidate.venueInstagramHandle ?? "")) ||
+    Boolean(normalizeLookup(candidate.venue))
+  );
+}
+
 function approvalCandidatesShareSource(
   left: ApprovalCandidateFields,
   right: ApprovalCandidateFields,
@@ -342,6 +428,8 @@ function classifyApprovalCandidates(
     existing: right,
     sameVenue: approvalCandidatesShareVenue(left, right),
     sameSource: approvalCandidatesShareSource(left, right),
+    unknownVenue:
+      !approvalCandidateHasKnownVenue(left) || !approvalCandidateHasKnownVenue(right),
   });
 }
 
@@ -398,6 +486,9 @@ async function assertApprovalCandidatePolicy(
       existing: event,
       sameVenue,
       sameSource: sameSourceEvent,
+      unknownVenue:
+        !approvalCandidateHasKnownVenue(candidate) ||
+        !approvalCandidateHasKnownVenue(event),
     });
     if (relation === "proven_duplicate") {
       throw new Error("An approved event already exists for this canonical occurrence.");
@@ -531,6 +622,132 @@ async function projectCanonicallyGroundedPublicEventPage(
       event,
       event.venueId !== undefined && publicVenueIds.has(event.venueId),
     ),
+  );
+}
+
+function usesEventEvidenceV2(event: Doc<"events">): boolean {
+  try {
+    const normalized = JSON.parse(event.normalizedFieldsJson ?? "null") as unknown;
+    if (
+      normalized &&
+      typeof normalized === "object" &&
+      !Array.isArray(normalized) &&
+      (normalized as Record<string, unknown>).extractionContractVersion ===
+        "event_evidence_v2"
+    ) {
+      return true;
+    }
+  } catch {
+    // A valid raw extraction contract below can still identify the row.
+  }
+  try {
+    const raw = JSON.parse(event.rawExtractionJson ?? "null") as unknown;
+    return Boolean(
+      raw &&
+        typeof raw === "object" &&
+        !Array.isArray(raw) &&
+        (raw as Record<string, unknown>).extraction_contract_version ===
+          "event_evidence_v2",
+    );
+  } catch {
+    return false;
+  }
+}
+
+type MergeDateEvidencePatch = {
+  date?: string;
+  dateEvidenceText?: string | null;
+  dateEvidenceSource?: "caption" | "poster" | "alt_text" | "unknown";
+  dateEvidenceIsRelative?: boolean;
+  dateEvidenceResolvedDate?: string | null;
+  sourceConflictFields?: string[];
+};
+
+function normalizeMergeDateEvidencePatch(
+  patch: MergeDateEvidencePatch,
+  existingDate: string,
+): {
+  dateEvidenceText?: string;
+  dateEvidenceSource?: "caption" | "poster" | "alt_text" | "unknown";
+  dateEvidenceIsRelative?: boolean;
+  dateEvidenceResolvedDate?: string;
+  sourceConflictFields?: string[];
+} {
+  const evidenceKeys = [
+    "dateEvidenceText",
+    "dateEvidenceSource",
+    "dateEvidenceIsRelative",
+    "dateEvidenceResolvedDate",
+    "sourceConflictFields",
+  ] as const;
+  const suppliedKeys = evidenceKeys.filter((key) => Object.hasOwn(patch, key));
+  const dateChanged = patch.date !== undefined && patch.date !== existingDate;
+  if (suppliedKeys.length === 0) {
+    return dateChanged
+      ? {
+          dateEvidenceText: undefined,
+          dateEvidenceSource: undefined,
+          dateEvidenceIsRelative: undefined,
+          dateEvidenceResolvedDate: undefined,
+          sourceConflictFields: undefined,
+        }
+      : {};
+  }
+  if (suppliedKeys.length !== evidenceKeys.length) {
+    throw new Error(
+      "Date evidence text, source, relative flag, resolved date, and source conflicts must be replaced or cleared together.",
+    );
+  }
+  const cleared = patch.dateEvidenceText === null && patch.dateEvidenceResolvedDate === null;
+  if (cleared) {
+    if (
+      patch.dateEvidenceSource !== "unknown" ||
+      patch.dateEvidenceIsRelative !== false ||
+      patch.sourceConflictFields?.length !== 0
+    ) {
+      throw new Error("Cleared date evidence must use unknown/non-relative/empty-conflict metadata.");
+    }
+    return {
+      dateEvidenceText: undefined,
+      dateEvidenceSource: undefined,
+      dateEvidenceIsRelative: undefined,
+      dateEvidenceResolvedDate: undefined,
+      sourceConflictFields: undefined,
+    };
+  }
+  const text = patch.dateEvidenceText?.trim() ?? "";
+  const resolvedDate = patch.dateEvidenceResolvedDate?.trim() ?? "";
+  const effectiveDate = patch.date ?? existingDate;
+  if (!text || !/^\d{4}-\d{2}-\d{2}$/u.test(resolvedDate) || resolvedDate !== effectiveDate) {
+    throw new Error("Replacement date evidence must bind exactly to the effective event date.");
+  }
+  return {
+    dateEvidenceText: text,
+    dateEvidenceSource: patch.dateEvidenceSource,
+    dateEvidenceIsRelative: patch.dateEvidenceIsRelative,
+    dateEvidenceResolvedDate: resolvedDate,
+    sourceConflictFields: patch.sourceConflictFields,
+  };
+}
+
+/**
+ * Preserve already-approved legacy rows while enforcing the full persisted
+ * source/revision/media attestation for every event-evidence-v2 row.
+ */
+async function projectLegacyCompatiblePublicEventPage(
+  ctx: QueryCtx,
+  events: Doc<"events">[],
+) {
+  const visibility = await Promise.all(
+    events.map((event) =>
+      usesEventEvidenceV2(event)
+        ? isCanonicallyGroundedApprovedEvent(ctx, event)
+        : Promise.resolve(true),
+    ),
+  );
+  return projectCanonicallyGroundedPublicEventPage(
+    ctx,
+    events.filter((_, index) => visibility[index]),
   );
 }
 
@@ -1051,9 +1268,7 @@ export const listPublicEventsWindow = query({
       .paginate(buildPublicPaginationOptions(args.paginationOpts));
     return {
       ...result,
-      // Existing approved records must remain visible. New records are checked
-      // at the write boundary; a legacy metadata gap must not empty a page.
-      page: await projectCanonicallyGroundedPublicEventPage(ctx, result.page),
+      page: await projectLegacyCompatiblePublicEventPage(ctx, result.page),
     };
   },
 });
@@ -1106,9 +1321,9 @@ export const listPublicCalendarEventsWindowPaginated = query({
         numItems: PUBLIC_EVENT_PAGE_SIZE,
       });
 
-    // Match the list view: legacy approved records remain visible.
-    const calendarPage = result.page;
-    const publicEvents = await projectCanonicallyGroundedPublicEventPage(ctx, calendarPage);
+    // Match the list view: legacy approved records remain visible, while v2
+    // rows must retain their canonical source/revision/media authorization.
+    const publicEvents = await projectLegacyCompatiblePublicEventPage(ctx, result.page);
     return {
       ...result,
       page: publicEvents.map(toPublicCalendarEvent),
@@ -1464,7 +1679,9 @@ function assertSourceOccurrencePlan(plan: SourceOccurrencePlan, satisfiedKey: st
     plan.expectedOccurrences.some(
       (item) =>
         !item.date ||
-        !item.venue ||
+        // Event-evidence v2 intentionally persists an unknown venue as "".
+        // Reject absent/non-string bindings while preserving that explicit value.
+        typeof item.venue !== "string" ||
         !item.title ||
         !Array.isArray(item.artists) ||
         !plan.expectedKeys.includes(item.key),
@@ -2006,6 +2223,12 @@ export const createEvent = mutation({
     timeEvidenceText: v.optional(v.union(v.string(), v.null())),
     timeConfidence: v.optional(v.number()),
     timeStatus: v.optional(eventTimeStatus),
+    timeEvidenceKind: v.optional(eventTimeEvidenceKind),
+    dateEvidenceText: v.optional(v.string()),
+    dateEvidenceSource: v.optional(eventDateEvidenceSource),
+    dateEvidenceIsRelative: v.optional(v.boolean()),
+    dateEvidenceResolvedDate: v.optional(v.string()),
+    sourceConflictFields: v.optional(v.array(v.string())),
     venue: v.string(),
     artists: v.array(v.string()),
     description: v.optional(v.string()),
@@ -2067,7 +2290,15 @@ export const createEvent = mutation({
     }
     const venueFields = await resolveVenueDenormalizedFields(ctx, eventArgs.venue);
     if (kind === "service") {
-      if (eventArgs.status === "approved" && !venueFields.venueInstagramHandle) {
+      const structuredEvidenceApproval = hasEventEvidenceV2AutoApproval(
+        eventArgs.normalizedFieldsJson,
+        { ...eventArgs, ...venueFields },
+      );
+      if (
+        eventArgs.status === "approved" &&
+        !venueFields.venueInstagramHandle &&
+        !structuredEvidenceApproval
+      ) {
         throw new Error(
           "Service-authenticated event creation cannot approve an event without a resolved source venue handle.",
         );
@@ -2289,7 +2520,15 @@ async function applyEventUpdate(
   };
   const effectiveEvent = { ...existingEvent, ...patch };
   if (authorization.kind === "service") {
-    if (patch.status === "approved" && !effectiveEvent.venueInstagramHandle) {
+    const structuredEvidenceApproval = hasEventEvidenceV2AutoApproval(
+      effectiveEvent.normalizedFieldsJson,
+      effectiveEvent,
+    );
+    if (
+      patch.status === "approved" &&
+      !effectiveEvent.venueInstagramHandle &&
+      !structuredEvidenceApproval
+    ) {
       throw new Error(
         "Service-authenticated event updates cannot approve an event without a resolved source venue handle.",
       );
@@ -2688,6 +2927,12 @@ export const mergeApprovedEvents = mutation({
       timeEvidenceText: v.optional(v.union(v.string(), v.null())),
       timeConfidence: v.optional(v.number()),
       timeStatus: v.optional(eventTimeStatus),
+      timeEvidenceKind: v.optional(eventTimeEvidenceKind),
+      dateEvidenceText: v.optional(v.union(v.string(), v.null())),
+      dateEvidenceSource: v.optional(eventDateEvidenceSource),
+      dateEvidenceIsRelative: v.optional(v.boolean()),
+      dateEvidenceResolvedDate: v.optional(v.union(v.string(), v.null())),
+      sourceConflictFields: v.optional(v.array(v.string())),
       venue: v.optional(v.string()),
       artists: v.optional(v.array(v.string())),
       description: v.optional(v.string()),
@@ -2753,8 +2998,21 @@ export const mergeApprovedEvents = mutation({
         args.patch.venue !== undefined
           ? await resolveVenueDenormalizedFields(ctx, args.patch.venue)
           : {};
+      const dateEvidencePatch = normalizeMergeDateEvidencePatch(
+        args.patch,
+        primaryEvent.date,
+      );
+      const {
+        dateEvidenceText: _dateEvidenceText,
+        dateEvidenceSource: _dateEvidenceSource,
+        dateEvidenceIsRelative: _dateEvidenceIsRelative,
+        dateEvidenceResolvedDate: _dateEvidenceResolvedDate,
+        sourceConflictFields: _sourceConflictFields,
+        ...timeAndPublicFieldPatch
+      } = args.patch;
       const patch = {
-        ...normalizeEventTimeWritePatch(args.patch),
+        ...normalizeEventTimeWritePatch(timeAndPublicFieldPatch),
+        ...dateEvidencePatch,
         ...(args.patch.imageUrl !== undefined
           ? {
               imageUrl: args.patch.imageUrl,

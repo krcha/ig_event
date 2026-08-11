@@ -234,9 +234,16 @@ function makeFieldConfirmation(confidence = 0.95) {
 }
 
 function makeExtractedEvent(overrides = {}) {
+  const date = isoDateDaysFromNow(7);
   return {
+    // Most fixtures in this long-running regression suite exercise the legacy
+    // deterministic grounding paths. Dedicated event_evidence_v2 fixtures
+    // override this value and carry source-bound evidence below.
+    extraction_contract_version: "legacy_qa_fixture_v1",
+    is_event: true,
+    non_event_reason: "",
     title: "QA Event",
-    date: isoDateDaysFromNow(7),
+    date,
     time: "21:00",
     venue: "QA Venue",
     city: "Belgrade",
@@ -250,6 +257,32 @@ function makeExtractedEvent(overrides = {}) {
     reasoning_notes: "QA extraction.",
     source_caption: "QA caption.",
     source_url: "https://www.instagram.com/p/qa-post/",
+    date_evidence: {
+      exact_text: date,
+      source: "caption",
+      is_relative: false,
+      resolved_date: date,
+    },
+    time_evidence: {
+      status: "start_time_stated",
+      exact_text: "21:00",
+      source: "caption",
+    },
+    source_conflicts: [],
+    shared_schedule_context: {
+      venue: {
+        applies_to_all: false,
+        value: "",
+        evidence: "",
+        source: "unknown",
+      },
+      time: {
+        applies_to_all: false,
+        value: "",
+        evidence: "",
+        source: "unknown",
+      },
+    },
     schedule_entries: [],
     field_confirmation: makeFieldConfirmation(),
     ...overrides,
@@ -269,8 +302,8 @@ function runPromptQa() {
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
-    /closed for vacation/i,
-    "Prompt must reject closure/vacation notices as non-events.",
+    /is_event" to false for closures/i,
+    "Prompt must classify closures explicitly as non-events.",
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
@@ -3498,8 +3531,8 @@ function runSourceGroundingAdversarialQa() {
       time: "23:00",
       splitSource: null,
     }).verified,
-    false,
-    "Separated billing evidence must remain pending without a uniquely attributable row binding.",
+    true,
+    "A single dated row may bind its immediately adjacent explicit billed mention.",
   );
   assert.equal(
     evaluate({
@@ -3509,9 +3542,44 @@ function runSourceGroundingAdversarialQa() {
       time: "21:00",
       splitSource: null,
     }).verified,
-    false,
-    "A quoted title on a separate line cannot inherit a dated start time without strict structural binding.",
+    true,
+    "A single dated start row may bind its immediately adjacent quoted work with year while ignoring a doors clock.",
   );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm}. U 21h\n“(500) Days of Summer” (2009)\n🎬 SECOND FILM`,
+      title: "(500) Days of Summer",
+      artists: [],
+      time: "21:00",
+      splitSource: null,
+    }).verified,
+    false,
+    "An adjacent quoted work must not hide a second explicit event row.",
+  );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm}. U 21h\n\n“(500) Days of Summer” (2009)`,
+      title: "(500) Days of Summer",
+      artists: [],
+      time: "21:00",
+      splitSource: null,
+    }).verified,
+    false,
+    "Adjacent layout binding must not cross a blank paragraph boundary.",
+  );
+  for (const extraRow of ["• CHARLIE", "2. CHARLIE"]) {
+    assert.equal(
+      evaluate({
+        independentTextEvidence: `${firstDdmm}. 20:30\n• ALICE with @bob\n${extraRow}`,
+        title: "ALICE",
+        artists: ["bob"],
+        time: "20:30",
+        splitSource: null,
+      }).verified,
+      false,
+      `A bounded adjacent layout must reject a third structured row: ${extraRow}`,
+    );
+  }
   assert.equal(
     evaluate({
       independentTextEvidence: `Cocktails with friends ${firstDdmm}. at 22h`,
@@ -3534,6 +3602,58 @@ function runSourceGroundingAdversarialQa() {
     false,
     "A model cannot turn ordinary prose into billing by copying the title into artists.",
   );
+  assert.equal(
+    evaluate({
+      independentTextEvidence: `${firstDdmm}. DJ ALICE 22h\nwith friends`,
+      title: "friends",
+      artists: ["friends"],
+      time: "22:00",
+      splitSource: null,
+    }).verified,
+    false,
+    "An untagged adjacent 'with friends' prose line must not become performer billing.",
+  );
+  for (const [caption, title, artists] of [
+    [
+      `ALICE | ${firstDdmm}. | 20:30\nLet the music begin with @bob`,
+      "BOB",
+      ["BOB"],
+    ],
+    [`ALICE | ${firstDdmm}. | 20:30\nwith @notalice`, "NOTALICE", ["NOTALICE"]],
+    [`ALICE | ${firstDdmm}. | 20:30\nwith @alice_music`, "ALICE MUSIC", ["ALICE MUSIC"]],
+    [
+      `${firstDdmm}. | 20:30 | EVENT A\n“EVENT B” (2001)`,
+      "EVENT B",
+      [],
+    ],
+    [
+      `${firstDdmm}. | 20:30\n🎤 ALICE with @bob 🎤 CHARLIE`,
+      "ALICE",
+      ["bob"],
+    ],
+    [
+      `${firstDdmm}. | 20:30\nALICE with @bob | CHARLIE`,
+      "ALICE",
+      ["bob"],
+    ],
+    [
+      `${firstDdmm}. | 20:30\n“FILM A” (2001) / “FILM B” (2002)`,
+      "FILM A",
+      [],
+    ],
+  ]) {
+    assert.equal(
+      evaluate({
+        independentTextEvidence: caption,
+        title,
+        artists,
+        time: "20:30",
+        splitSource: null,
+      }).verified,
+      false,
+      `Adjacent evidence must not cross competing identities: ${caption}`,
+    );
+  }
   assert.equal(
     evaluate({
       independentTextEvidence: `COCKTAILS WITH FRIENDS | ${firstDdmm}. | 22h`,
@@ -3669,8 +3789,8 @@ function runSourceGroundingAdversarialQa() {
       postedAt: "2026-07-01T12:00:00.000Z",
       splitSource: null,
     }).verified,
-    false,
-    "Early-month layouts still require billing evidence in the same event row.",
+    true,
+    "An early-month single dated row may bind its immediately adjacent explicit billed mention.",
   );
   const prepareSingleGroundingCase = ({
     caption,
@@ -3823,6 +3943,126 @@ function runSourceGroundingAdversarialQa() {
     true,
     "Apify numeric media IDs and Instagram URL shortcodes are distinct valid identities from one source post.",
   );
+  assert.equal(
+    isCaptionSourceCoherentWithEvent({
+      ...coherentNumericMediaId,
+      title: "MILENA ĆERANIĆ",
+      artists: ["MILENA ĆERANIĆ"],
+      time: "23:00",
+      sourceCaption: `MILENA ĆERANIĆ | ${firstDdmm}. | 23h\nLet the music begin w/ @ceranicmilena`,
+    }),
+    true,
+    "The approval boundary must share the bounded adjacent billed-mention layout parser.",
+  );
+  assert.equal(
+    isCaptionSourceCoherentWithEvent({
+      ...coherentNumericMediaId,
+      title: "(500) Days of Summer",
+      artists: [],
+      time: "21:00",
+      sourceCaption: `${firstDdmm}. U 21h na otvorenom!\n“(500) Days of Summer” (2009)\nVrata se otvaraju u 20:30h.`,
+    }),
+    true,
+    "The approval boundary must bind an adjacent quoted work while excluding a doors-only clock.",
+  );
+  assert.equal(
+    isCaptionSourceCoherentWithEvent({
+      ...coherentNumericMediaId,
+      title: "(500) Days of Summer",
+      artists: [],
+      time: "21:00",
+      sourceCaption: `${firstDdmm}. U 21h na otvorenom!\nTickets in bio\n“(500) Days of Summer” (2009)`,
+    }),
+    false,
+    "A non-adjacent quoted work must not be joined to a dated event row.",
+  );
+  assert.equal(
+    isCaptionSourceCoherentWithEvent({
+      ...coherentNumericMediaId,
+      title: "friends",
+      artists: ["friends"],
+      time: "22:00",
+      sourceCaption: `${firstDdmm}. DJ ALICE 22h\nwith friends`,
+    }),
+    false,
+    "The approval boundary must reject an untagged adjacent 'with friends' prose line.",
+  );
+  for (const [caption, title, artists] of [
+    [
+      `ALICE | ${firstDdmm}. | 20:30\nLet the music begin with @bob`,
+      "BOB",
+      ["BOB"],
+    ],
+    [`ALICE | ${firstDdmm}. | 20:30\nwith @notalice`, "NOTALICE", ["NOTALICE"]],
+    [`ALICE | ${firstDdmm}. | 20:30\nwith @alice_music`, "ALICE MUSIC", ["ALICE MUSIC"]],
+    [
+      `${firstDdmm}. | 20:30 | EVENT A\n“EVENT B” (2001)`,
+      "EVENT B",
+      [],
+    ],
+    [
+      `${firstDdmm}. | 20:30\n🎤 ALICE with @bob 🎤 CHARLIE`,
+      "ALICE",
+      ["bob"],
+    ],
+    [
+      `${firstDdmm}. | 20:30\nALICE with @bob | CHARLIE`,
+      "ALICE",
+      ["bob"],
+    ],
+    [
+      `${firstDdmm}. | 20:30\n“FILM A” (2001) / “FILM B” (2002)`,
+      "FILM A",
+      [],
+    ],
+  ]) {
+    assert.equal(
+      isCaptionSourceCoherentWithEvent({
+        ...coherentNumericMediaId,
+        title,
+        artists,
+        time: "20:30",
+        sourceCaption: caption,
+      }),
+      false,
+      `The approval boundary must reject competing adjacent identities: ${caption}`,
+    );
+  }
+  assert.equal(
+    isCaptionSourceCoherentWithEvent({
+      ...coherentNumericMediaId,
+      title: "(500) Days of Summer",
+      artists: [],
+      time: "21:00",
+      sourceCaption: `${firstDdmm}. U 21h\n“(500) Days of Summer” (2009)\n🎬 SECOND FILM`,
+    }),
+    false,
+    "The approval boundary must reject a joined work when another explicit event row exists.",
+  );
+  assert.equal(
+    isCaptionSourceCoherentWithEvent({
+      ...coherentNumericMediaId,
+      title: "(500) Days of Summer",
+      artists: [],
+      time: "21:00",
+      sourceCaption: `${firstDdmm}. U 21h\n\n“(500) Days of Summer” (2009)`,
+    }),
+    false,
+    "The approval boundary must not join evidence across a blank paragraph boundary.",
+  );
+  for (const extraRow of ["• CHARLIE", "2. CHARLIE"]) {
+    assert.equal(
+      isCaptionSourceCoherentWithEvent({
+        ...coherentNumericMediaId,
+        title: "ALICE",
+        artists: ["bob"],
+        time: "20:30",
+        sourceCaption: `${firstDdmm}. 20:30\n• ALICE with @bob\n${extraRow}`,
+      }),
+      false,
+      `The approval boundary must reject a third structured row: ${extraRow}`,
+    );
+  }
   assert.equal(
     isCaptionSourceCoherentWithEvent({
       ...coherentNumericMediaId,
@@ -6069,6 +6309,7 @@ async function runServiceApprovalMutationBoundaryQa() {
           ? {
               withIndex: () => ({
                 first: async () => persistedSourcePost,
+                take: async (limit) => (persistedSourcePost && limit > 0 ? [persistedSourcePost] : []),
               }),
             }
           : {
@@ -8948,6 +9189,7 @@ async function runTransactionalSourceGroundingReprocessQa() {
             return {
               collect: async () => readRows().map(clone),
               first: async () => clone(readRows()[0] ?? null),
+              take: async (limit) => readRows().slice(0, limit).map(clone),
             };
           },
         };
@@ -9207,6 +9449,17 @@ function runTrustedSourceAnnouncementModerationQa() {
     confidence: 0.9,
     artists: [],
     time: "",
+    date_evidence: {
+      exact_text: `${futureDateParts.day} ${futureDateParts.monthAbbr} ${futureDate.slice(0, 4)}`,
+      source: "caption",
+      is_relative: false,
+      resolved_date: futureDate,
+    },
+    time_evidence: {
+      status: "not_stated",
+      exact_text: "",
+      source: "unknown",
+    },
   });
   const [unknownRoleResult] = prepareEventsForInsert(
     post,

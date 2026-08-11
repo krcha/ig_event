@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 
-import { mergeApprovedEvents } from "../convex/events.ts";
+import {
+  createEvent,
+  mergeApprovedEvents,
+  recordInstagramSourceOccurrenceSatisfaction,
+} from "../convex/events.ts";
+import { classifyApprovalOccurrenceRelation } from "../lib/events/approval-occurrence-conflict.ts";
 
 process.env.ADMIN_CLERK_USER_IDS = "qa-merge-admin";
 
@@ -26,20 +31,49 @@ function approvedEvent(id, overrides = {}) {
   };
 }
 
-function makeDb({ events: eventRows, links = [], receipts = [] }) {
+function makeDb({
+  events: eventRows,
+  links = [],
+  receipts = [],
+  scrapedPosts = [],
+  venues = [],
+}) {
   const tables = {
     events: new Map(eventRows.map((row) => [row._id, structuredClone(row)])),
     instagramEventSources: new Map(links.map((row) => [row._id, structuredClone(row)])),
     instagramSourceOccurrenceReceipts: new Map(
       receipts.map((row) => [row._id, structuredClone(row)]),
     ),
+    scrapedPosts: new Map(scrapedPosts.map((row) => [row._id, structuredClone(row)])),
+    venues: new Map(venues.map((row) => [row._id, structuredClone(row)])),
     userSavedEvents: new Map(),
     savedEvents: new Map(),
     eventAuditLog: new Map(),
   };
-  let auditCounter = 0;
+  const insertCounters = new Map();
   const rows = (table) => [...(tables[table]?.values() ?? [])];
+  const queryResult = (table, filters = []) => {
+    const matches = () =>
+      rows(table).filter((row) => filters.every(([field, value]) => row[field] === value));
+    return {
+      async collect() {
+        return matches();
+      },
+      async take(limit) {
+        return matches().slice(0, limit);
+      },
+      async unique() {
+        const found = matches();
+        if (found.length > 1) throw new Error(`Expected unique ${table} row.`);
+        return found[0] ?? null;
+      },
+      async first() {
+        return matches()[0] ?? null;
+      },
+    };
+  };
   const query = (table) => ({
+    ...queryResult(table),
     withIndex(_index, configure) {
       const filters = [];
       const builder = {
@@ -49,21 +83,7 @@ function makeDb({ events: eventRows, links = [], receipts = [] }) {
         },
       };
       configure(builder);
-      const matches = () =>
-        rows(table).filter((row) => filters.every(([field, value]) => row[field] === value));
-      return {
-        async collect() {
-          return matches();
-        },
-        async unique() {
-          const found = matches();
-          if (found.length > 1) throw new Error(`Expected unique ${table} row.`);
-          return found[0] ?? null;
-        },
-        async first() {
-          return matches()[0] ?? null;
-        },
-      };
+      return queryResult(table, filters);
     },
   });
   return {
@@ -91,14 +111,83 @@ function makeDb({ events: eventRows, links = [], receipts = [] }) {
         throw new Error(`Missing row ${id}.`);
       },
       async insert(table, value) {
-        assert.equal(table, "eventAuditLog");
-        auditCounter += 1;
-        const id = `audit-${auditCounter}`;
-        tables.eventAuditLog.set(id, { _id: id, ...value });
+        assert.ok(tables[table], `Unexpected insert table ${table}.`);
+        const nextCounter = (insertCounters.get(table) ?? 0) + 1;
+        insertCounters.set(table, nextCounter);
+        const id = `${table}-insert-${nextCounter}`;
+        tables[table].set(id, { _id: id, _creationTime: Date.now(), ...structuredClone(value) });
         return id;
       },
     },
   };
+}
+
+function adminCtx(state) {
+  return {
+    auth: { getUserIdentity: async () => ({ subject: "qa-merge-admin" }) },
+    db: state.db,
+  };
+}
+
+function processingPost(overrides = {}) {
+  return {
+    _id: "scraped-empty-venue",
+    handle: "unknown_venue_source",
+    postId: "UNKNOWNVENUEPOST",
+    instagramPostUrl: "https://www.instagram.com/p/UNKNOWNVENUEPOST/",
+    username: "unknown_venue_source",
+    processingStatus: "processing",
+    processingLeaseOwner: "qa-empty-venue-owner",
+    processingLeaseExpiresAt: Date.now() + 60_000,
+    sourceRevision: 1,
+    ...overrides,
+  };
+}
+
+function emptyVenueOccurrenceFixture(overrides = {}) {
+  const post = processingPost(overrides.post);
+  const key = overrides.key ?? "instagram-occurrence-v2:empty-venue";
+  const event = {
+    title: "Canonical concert",
+    date: "2026-08-17",
+    time: "20:00",
+    venue: "",
+    artists: ["Canonical Artist"],
+    eventType: "music",
+    instagramPostId: post.postId,
+    instagramPostUrl: post.instagramPostUrl,
+    sourceOccurrenceKey: key,
+    status: "approved",
+    ...overrides.event,
+  };
+  const plan = {
+    sourceIdentity: "instagram-source-identity-v1:empty-venue",
+    sourceFingerprint: "instagram-source-v2:empty-venue",
+    expectedKeys: [key],
+    expectedOccurrences: [
+      {
+        key,
+        date: event.date,
+        time: event.time,
+        venue: event.venue,
+        title: event.title,
+        artists: event.artists,
+      },
+    ],
+    deferredChildCount: 0,
+    deferredChildKeys: [],
+    observedChildKeys: [key],
+    ...overrides.plan,
+  };
+  const processingFence = {
+    scrapedPostId: post._id,
+    handle: post.handle,
+    postId: post.postId,
+    instagramPostUrl: post.instagramPostUrl,
+    owner: post.processingLeaseOwner,
+    sourceRevision: post.sourceRevision,
+  };
+  return { event, key, plan, post, processingFence };
 }
 
 const distinctState = makeDb({
@@ -184,4 +273,231 @@ assert.deepEqual(
   [{ key: "shared-occurrence", eventId: "duplicate-primary" }],
 );
 
-console.log("Occurrence merge safety QA passed: distinct rows survive and duplicate ledgers rewire.");
+const dateEvidenceMergeState = makeDb({
+  events: [
+    approvedEvent("date-evidence-primary", {
+      dateEvidenceText: "7. avgust",
+      dateEvidenceSource: "caption",
+      dateEvidenceIsRelative: false,
+      dateEvidenceResolvedDate: "2026-08-07",
+      sourceConflictFields: [],
+    }),
+    approvedEvent("date-evidence-duplicate", {
+      date: "2026-08-08",
+      updatedAt: 11,
+    }),
+  ],
+});
+await mergeApprovedEvents._handler(adminCtx(dateEvidenceMergeState), {
+  primaryId: "date-evidence-primary",
+  duplicateIds: ["date-evidence-duplicate"],
+  patch: { date: "2026-08-08" },
+});
+const dateEvidenceMergedPrimary = dateEvidenceMergeState.tables.events.get(
+  "date-evidence-primary",
+);
+for (const key of [
+  "dateEvidenceText",
+  "dateEvidenceSource",
+  "dateEvidenceIsRelative",
+  "dateEvidenceResolvedDate",
+  "sourceConflictFields",
+]) {
+  assert.equal(
+    dateEvidenceMergedPrimary[key],
+    undefined,
+    `A merge date change must atomically clear stale ${key}.`,
+  );
+}
+
+const partialDateEvidenceState = makeDb({
+  events: [
+    approvedEvent("partial-date-primary"),
+    approvedEvent("partial-date-duplicate", { updatedAt: 11 }),
+  ],
+});
+await assert.rejects(
+  mergeApprovedEvents._handler(adminCtx(partialDateEvidenceState), {
+    primaryId: "partial-date-primary",
+    duplicateIds: ["partial-date-duplicate"],
+    patch: { dateEvidenceText: "8. avgust" },
+  }),
+  /must be replaced or cleared together/i,
+);
+
+const unknownVenueRelationBase = {
+  candidate: {
+    title: "Canonical concert",
+    time: "20:00",
+    artists: ["Canonical Artist"],
+    sourceOccurrenceKey: "cross-source-candidate",
+  },
+  existing: {
+    title: "Canonical concert",
+    time: "20:00",
+    artists: ["Canonical Artist"],
+    sourceOccurrenceKey: "cross-source-existing",
+  },
+  sameVenue: false,
+  sameSource: false,
+};
+assert.equal(
+  classifyApprovalOccurrenceRelation({
+    ...unknownVenueRelationBase,
+    unknownVenue: true,
+  }),
+  "proven_duplicate",
+  "Unknown-venue cross-source rows with the same identity and reliable time must be duplicates.",
+);
+assert.equal(
+  classifyApprovalOccurrenceRelation({
+    ...unknownVenueRelationBase,
+    candidate: { ...unknownVenueRelationBase.candidate, time: undefined },
+    existing: { ...unknownVenueRelationBase.existing, time: undefined },
+    unknownVenue: true,
+  }),
+  "ambiguous",
+  "Unknown-venue cross-source rows with matching identity but no reliable time must fail closed.",
+);
+assert.equal(
+  classifyApprovalOccurrenceRelation({
+    ...unknownVenueRelationBase,
+    unknownVenue: false,
+  }),
+  "unrelated",
+  "Known distinct venues and sources must not collapse merely because title and time match.",
+);
+assert.equal(
+  classifyApprovalOccurrenceRelation({
+    ...unknownVenueRelationBase,
+    candidate: {
+      ...unknownVenueRelationBase.candidate,
+      title: "Different concert",
+      artists: ["Different Artist"],
+    },
+    unknownVenue: true,
+  }),
+  "unrelated",
+  "Missing venue alone must not conflate unrelated same-time events.",
+);
+
+const emptyVenueFixture = emptyVenueOccurrenceFixture();
+const emptyVenueCreateState = makeDb({
+  events: [],
+  scrapedPosts: [emptyVenueFixture.post],
+});
+const emptyVenueCreate = await createEvent._handler(adminCtx(emptyVenueCreateState), {
+  ...emptyVenueFixture.event,
+  sourceOccurrencePlan: emptyVenueFixture.plan,
+  processingFence: emptyVenueFixture.processingFence,
+  returnCreateDisposition: true,
+});
+assert.equal(emptyVenueCreate.created, true);
+assert.equal(
+  emptyVenueCreateState.tables.events.get(emptyVenueCreate.eventId).venue,
+  "",
+  "The real Convex create handler must persist the intentional empty venue.",
+);
+const [emptyVenueReceipt] = [
+  ...emptyVenueCreateState.tables.instagramSourceOccurrenceReceipts.values(),
+];
+assert.ok(emptyVenueReceipt, "The empty-venue create must write its occurrence receipt.");
+assert.equal(emptyVenueReceipt.expectedOccurrences[0].venue, "");
+assert.deepEqual(emptyVenueReceipt.satisfiedKeys, [emptyVenueFixture.key]);
+assert.deepEqual(emptyVenueReceipt.satisfiedOccurrences, [
+  { key: emptyVenueFixture.key, eventId: emptyVenueCreate.eventId },
+]);
+const [emptyVenueSourceLink] = [
+  ...emptyVenueCreateState.tables.instagramEventSources.values(),
+];
+assert.equal(emptyVenueSourceLink.eventId, emptyVenueCreate.eventId);
+assert.equal(emptyVenueSourceLink.sourceOccurrenceKey, emptyVenueFixture.key);
+
+const invalidPlanCases = [
+  ["source identity", { sourceIdentity: "" }],
+  ["source fingerprint", { sourceFingerprint: "" }],
+  [
+    "date",
+    {
+      expectedOccurrences: [
+        { ...emptyVenueFixture.plan.expectedOccurrences[0], date: "" },
+      ],
+    },
+  ],
+  [
+    "title",
+    {
+      expectedOccurrences: [
+        { ...emptyVenueFixture.plan.expectedOccurrences[0], title: "" },
+      ],
+    },
+  ],
+  [
+    "key binding",
+    {
+      expectedOccurrences: [
+        { ...emptyVenueFixture.plan.expectedOccurrences[0], key: "different-key" },
+      ],
+    },
+  ],
+  [
+    "venue type",
+    {
+      expectedOccurrences: [
+        { ...emptyVenueFixture.plan.expectedOccurrences[0], venue: undefined },
+      ],
+    },
+  ],
+];
+for (const [label, planPatch] of invalidPlanCases) {
+  await assert.rejects(
+    () =>
+      recordInstagramSourceOccurrenceSatisfaction._handler(adminCtx(emptyVenueCreateState), {
+        plan: { ...emptyVenueFixture.plan, ...planPatch },
+        satisfiedKey: emptyVenueFixture.key,
+        representativeEventId: emptyVenueCreate.eventId,
+        processingFence: emptyVenueFixture.processingFence,
+      }),
+    /Source occurrence receipt plan is invalid/,
+    `Allowing an empty venue must retain the ${label} receipt check.`,
+  );
+}
+
+const crossSourceDuplicateFixture = emptyVenueOccurrenceFixture({
+  key: "instagram-occurrence-v2:cross-source-candidate",
+  plan: {
+    sourceIdentity: "instagram-source-identity-v1:cross-source-candidate",
+    sourceFingerprint: "instagram-source-v2:cross-source-candidate",
+  },
+});
+const crossSourceDuplicateState = makeDb({
+  events: [
+    approvedEvent("unknown-venue-existing", {
+      date: crossSourceDuplicateFixture.event.date,
+      venue: "",
+      venueId: undefined,
+      venueInstagramHandle: undefined,
+      instagramPostId: "OTHERUNKNOWNVENUEPOST",
+      instagramPostUrl: "https://www.instagram.com/p/OTHERUNKNOWNVENUEPOST/",
+      sourceOccurrenceKey: "instagram-occurrence-v2:cross-source-existing",
+    }),
+  ],
+  scrapedPosts: [crossSourceDuplicateFixture.post],
+});
+await assert.rejects(
+  () =>
+    createEvent._handler(adminCtx(crossSourceDuplicateState), {
+      ...crossSourceDuplicateFixture.event,
+      sourceOccurrencePlan: crossSourceDuplicateFixture.plan,
+      processingFence: crossSourceDuplicateFixture.processingFence,
+      returnCreateDisposition: true,
+    }),
+  /approved event already exists for this canonical occurrence/i,
+  "A second cross-source unknown-venue approval with the same identity/time must be rejected.",
+);
+assert.equal(crossSourceDuplicateState.tables.events.size, 1);
+assert.equal(crossSourceDuplicateState.tables.instagramSourceOccurrenceReceipts.size, 0);
+
+console.log(
+  "Occurrence merge safety QA passed: distinct rows survive, duplicate ledgers rewire, empty-venue receipts persist, and unknown-venue approvals fail closed.",
+);

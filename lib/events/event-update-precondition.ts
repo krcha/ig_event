@@ -1,7 +1,10 @@
 import { TBD_EVENT_TIME } from "./event-time.ts";
 import { isSensibleEventTitleForApproval } from "./event-title-approval.ts";
 import { isCaptionSourceCoherentWithEvent } from "./event-source-approval.ts";
-import { CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD } from "../utils/confidence.ts";
+import {
+  CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+  EVENT_EVIDENCE_V2_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+} from "../utils/confidence.ts";
 
 export type EventStatusPrecondition = "pending" | "approved" | "rejected";
 
@@ -17,6 +20,17 @@ type EventApprovalFields = Record<string, unknown> & {
   instagramPostId?: unknown;
   instagramPostUrl?: unknown;
   venueInstagramHandle?: unknown;
+  rawExtractionJson?: unknown;
+  timeSource?: unknown;
+  timeEvidenceText?: unknown;
+  timeConfidence?: unknown;
+  timeStatus?: unknown;
+  timeEvidenceKind?: unknown;
+  dateEvidenceText?: unknown;
+  dateEvidenceSource?: unknown;
+  dateEvidenceIsRelative?: unknown;
+  dateEvidenceResolvedDate?: unknown;
+  sourceConflictFields?: unknown;
 };
 
 type EventWritePatch = EventApprovalFields & {
@@ -26,6 +40,7 @@ type EventWritePatch = EventApprovalFields & {
 
 const SOURCE_GROUNDED_AUTO_APPROVE_RULE = "source_grounded_core_event_fields";
 const TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_RULE = "trusted_source_event_announcement";
+const EVENT_EVIDENCE_V2_AUTO_APPROVE_RULE = "event_evidence_v2";
 const TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_MIN_CONFIDENCE = 0.65;
 const APPROVED_MODERATION_SIGNALS = new Set([
   "missing_image",
@@ -93,6 +108,109 @@ function normalizeComparableArtists(value: unknown): string[] | null {
 
 function arraysEqual(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function normalizeComparableOptionalText(value: unknown): string {
+  return typeof value === "string"
+    ? value.normalize("NFKC").trim().replace(/\s+/gu, " ")
+    : "";
+}
+
+function hasBoundEventEvidenceV2PublicFields(
+  fields: Record<string, unknown>,
+  eventFields: EventApprovalFields | undefined,
+): boolean {
+  if (!eventFields) return false;
+  const attestedArtists = normalizeComparableArtists(fields.artists);
+  const publicArtists = normalizeComparableArtists(eventFields.artists ?? []);
+  const publicTime = normalizeComparableOptionalText(eventFields.time);
+  const timeEvidenceKind = fields.timeEvidenceKind;
+  const sourceConflictFields = Array.isArray(eventFields.sourceConflictFields)
+    ? eventFields.sourceConflictFields
+    : null;
+  return (
+    normalizeComparableOptionalText(fields.title) ===
+      normalizeComparableOptionalText(eventFields.title) &&
+    normalizeComparableOptionalText(fields.normalizedDate) ===
+      normalizeComparableOptionalText(eventFields.date) &&
+    normalizeComparableOptionalText(fields.normalizedVenue) ===
+      normalizeComparableOptionalText(eventFields.venue) &&
+    normalizeComparableOptionalText(fields.time) === publicTime &&
+    fields.timeSource === eventFields.timeSource &&
+    normalizeComparableOptionalText(fields.timeEvidenceText) ===
+      normalizeComparableOptionalText(eventFields.timeEvidenceText) &&
+    fields.timeConfidence === eventFields.timeConfidence &&
+    fields.timeStatus === eventFields.timeStatus &&
+    attestedArtists !== null &&
+    publicArtists !== null &&
+    arraysEqual(attestedArtists, publicArtists) &&
+    normalizeComparableOptionalText(fields.sourceGroundingSourceCaption) ===
+      normalizeComparableOptionalText(eventFields.sourceCaption) &&
+    normalizeComparableOptionalText(fields.sourceGroundingInstagramPostId) ===
+      normalizeComparableOptionalText(eventFields.instagramPostId) &&
+    normalizeComparableOptionalText(fields.sourceGroundingInstagramPostUrl) ===
+      normalizeComparableOptionalText(eventFields.instagramPostUrl) &&
+    normalizeComparableOptionalText(fields.dateEvidenceText) ===
+      normalizeComparableOptionalText(eventFields.dateEvidenceText) &&
+    fields.dateEvidenceSource === eventFields.dateEvidenceSource &&
+    fields.dateEvidenceIsRelative === eventFields.dateEvidenceIsRelative &&
+    normalizeComparableOptionalText(fields.dateEvidenceResolvedDate) ===
+      normalizeComparableOptionalText(eventFields.dateEvidenceResolvedDate) &&
+    timeEvidenceKind === eventFields.timeEvidenceKind &&
+    sourceConflictFields !== null &&
+    sourceConflictFields.length === 0 &&
+    (timeEvidenceKind === "start_time_stated"
+      ? Boolean(publicTime && publicTime !== TBD_EVENT_TIME)
+      : publicTime === TBD_EVENT_TIME)
+  );
+}
+
+export function hasEventEvidenceV2AutoApproval(
+  normalizedFieldsJson: string | undefined,
+  eventFields?: EventApprovalFields,
+): boolean {
+  const fields = parseNormalizedFields(normalizedFieldsJson);
+  if (!fields || !eventFields) return false;
+  const pendingReasons = fields.moderationPendingReasons;
+  const conflicts = fields.extractionSourceConflicts;
+  const confidence = fields.moderationConfidenceScore;
+  const date = normalizeComparableOptionalText(eventFields.date);
+  return (
+    fields.extractionContractVersion === "event_evidence_v2" &&
+    fields.extractionIsEvent === true &&
+    normalizeComparableOptionalText(fields.extractionNonEventReason) === "" &&
+    fields.sourceGroundingVersion === 5 &&
+    fields.sourceGroundingEvidence === "persisted_openai_event_evidence_v2" &&
+    (fields.extractionMode === "poster" || fields.extractionMode === "caption_only") &&
+    fields.dateEvidenceVerified === true &&
+    fields.timeEvidenceVerified === true &&
+    fields.identityEvidenceVerified === true &&
+    fields.venueEvidenceVerified === true &&
+    fields.structuredEvidenceVerified === true &&
+    fields.dateEvidenceSource !== "unknown" &&
+    normalizeComparableOptionalText(fields.dateEvidenceText).length > 0 &&
+    normalizeComparableOptionalText(fields.dateEvidenceResolvedDate) === date &&
+    Array.isArray(conflicts) &&
+    conflicts.length === 0 &&
+    fields.extractionSourceConflictCount === 0 &&
+    fields.approvalTitleSensible === true &&
+    fields.normalizedIsValid === true &&
+    fields.titleUsedFallback === false &&
+    fields.dateSuspiciousYear === false &&
+    fields.moderationAutoApproved === true &&
+    fields.moderationAutoApproveRule === EVENT_EVIDENCE_V2_AUTO_APPROVE_RULE &&
+    Array.isArray(pendingReasons) &&
+    pendingReasons.length === 0 &&
+    typeof confidence === "number" &&
+    Number.isFinite(confidence) &&
+    confidence >= EVENT_EVIDENCE_V2_AUTO_APPROVE_CONFIDENCE_THRESHOLD &&
+    isFutureIsoDate(date) &&
+    isSensibleEventTitleForApproval({
+      title: normalizeComparableOptionalText(eventFields.title),
+      venue: normalizeComparableOptionalText(eventFields.venue),
+    }) &&
+    hasBoundEventEvidenceV2PublicFields(fields, eventFields)
+  );
 }
 
 function hasBoundPublicFields(
@@ -423,7 +541,8 @@ export function assertServiceCreateEventPolicy(
   if (
     requestedStatus === "approved" &&
     !hasCompleteSourceGroundedAutoApproval(normalizedFieldsJson, eventFields) &&
-    !hasTrustedSourceEventAnnouncementAutoApproval(normalizedFieldsJson, eventFields)
+    !hasTrustedSourceEventAnnouncementAutoApproval(normalizedFieldsJson, eventFields) &&
+    !hasEventEvidenceV2AutoApproval(normalizedFieldsJson, eventFields)
   ) {
     throw new Error(
       "Service-authenticated event creation cannot approve an event without complete source-grounded evidence bound to the public fields.",
@@ -441,7 +560,8 @@ export function assertServiceUpdateEventPolicy(
     patch.status === "approved" &&
     (currentStatus !== "pending" ||
       !hasCompleteSourceGroundedAutoApproval(patch.normalizedFieldsJson, effectiveEvent) &&
-      !hasTrustedSourceEventAnnouncementAutoApproval(patch.normalizedFieldsJson, effectiveEvent))
+      !hasTrustedSourceEventAnnouncementAutoApproval(patch.normalizedFieldsJson, effectiveEvent) &&
+      !hasEventEvidenceV2AutoApproval(patch.normalizedFieldsJson, effectiveEvent))
   ) {
     throw new Error(
       "Service-authenticated event updates cannot approve an event without complete source-grounded evidence bound to the public fields.",

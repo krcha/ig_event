@@ -122,6 +122,7 @@ export const persistInstagramImage = action({
     postId: v.optional(v.string()),
     instagramPostUrl: v.optional(v.string()),
     upstreamUrl: v.string(),
+    expectedChecksumSha256: v.optional(v.string()),
     processingFence: v.optional(sourceProcessingFenceValidator),
     maintenanceReason: v.optional(v.literal("durable_image_repair")),
     serviceSecret: v.optional(v.string()),
@@ -146,6 +147,12 @@ export const persistInstagramImage = action({
 
     const existing = await ctx.runQuery(findBySourceIdentity, sourceArgs);
     if (existing) {
+      if (
+        args.expectedChecksumSha256 &&
+        existing.checksumSha256 !== args.expectedChecksumSha256
+      ) {
+        throw new Error("Persisted Instagram image checksum does not match the analyzed poster.");
+      }
       const currentUrl = await ctx.storage.getUrl(existing.storageId);
       if (currentUrl) {
         const counts = await ctx.runMutation(refreshAndAttach, {
@@ -176,6 +183,12 @@ export const persistInstagramImage = action({
 
     const image = await fetchAllowedRemoteRasterImage(args.upstreamUrl);
     const checksumSha256 = computeSha256Hex(image.bytes);
+    if (
+      args.expectedChecksumSha256 &&
+      checksumSha256 !== args.expectedChecksumSha256
+    ) {
+      throw new Error("Fetched Instagram image checksum does not match the analyzed poster.");
+    }
     const storageBytes = new Uint8Array(image.bytes.byteLength);
     storageBytes.set(image.bytes);
     let provisionalStorageId: Id<"_storage"> | null = null;

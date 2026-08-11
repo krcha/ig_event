@@ -43,7 +43,15 @@ assert.ok(632 * durableControlsFor("catch_up").costPerProfileMicros <= durableCo
 for (const required of ["terminalReceiptCount", "lease_expired_requeued", "Another durable ingestion run is already active", "concurrency"]) {
   assert.match(controller, new RegExp(required), `controller must retain ${required}`);
 }
-for (const required of ["ingestionRuns", "ingestionRunChunks", "ingestionRunHandleReceipts", "by_run_handle"]) {
+for (const required of [
+  "ingestionRuns",
+  "ingestionDailySnapshots",
+  "ingestionRunChunks",
+  "ingestionRunHandleReceipts",
+  "by_mode_dailyDayKey",
+  "by_status_dayKey",
+  "by_run_handle",
+]) {
   assert.match(schema, new RegExp(required), `schema must retain ${required}`);
 }
 assert.match(executor, /noAgeCutoff/);
@@ -104,13 +112,17 @@ assert.match(controller, /MAX_HANDLES_PER_CHUNK = 1/);
 assert.match(controller, /activeInLane/);
 assert.match(launcher, /"complete":true/, "busy workers must wait rather than treat an active lease as completion");
 assert.match(dailyRoute, /mode: "daily"/);
-assert.match(dailyRoute, /resumeDaily: true/);
+assert.match(dailyRoute, /durableIngestionRuns:queueDailyRun/);
+assert.match(dailyRoute, /followUpRequired/);
+assert.match(dailyRoute, /executeRequired/);
 assert.match(dailyRoute, /getActiveVenueHandles/);
 assert.match(ingestionPipeline, /listLegacyVenueHandlesPageQuery/, "active snapshots must include scrape-active legacy venues");
 assert.match(ingestionPipeline, /listActiveInstagramSourceHandlesPageQuery/, "active snapshots must include active instagram sources");
 assert.match(ingestionPipeline, /const handles = new Set<string>\(\)/, "active snapshots must deduplicate the source union");
 assert.match(dailyLauncher, /durable-ingestion\/daily/);
 assert.match(dailyLauncher, /ig-event-durable-runner/);
+assert.match(dailyLauncher, /follow_up_required/);
+assert.match(dailyLauncher, /MAX_DRAINED_RUNS/);
 assert.doesNotMatch(dailyLauncher, /ingest-venues/, "daily durable launcher must not use the legacy fan-out route");
 assert.match(dailyLauncher, /curl --disable --config "\$config_file"/);
 assert.doesNotMatch(dailyLauncher, /curl[^\n]*Authorization/, "daily launcher must keep the bearer token out of curl argv");

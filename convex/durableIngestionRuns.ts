@@ -1,5 +1,7 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { getBelgradeDayKey } from "../lib/pipeline/belgrade-day-key";
+import type { Doc } from "./_generated/dataModel";
+import { mutation, query, type MutationCtx } from "./_generated/server";
 import { requireAdminOrServiceSecret } from "./authz";
 
 // A chunk is an accounting shard, not an execution batch. Keeping one receipt
@@ -24,6 +26,13 @@ const MAX_ATTEMPTS = 3;
 const MAX_PROCESSING_ATTEMPTS = 3;
 
 const modeValidator = v.union(v.literal("canary"), v.literal("catch_up"), v.literal("daily"));
+const runStatusValidator = v.union(
+  v.literal("building"),
+  v.literal("queued"),
+  v.literal("running"),
+  v.literal("completed"),
+  v.literal("failed"),
+);
 const outcomeValidator = v.union(
   v.literal("fetched"),
   v.literal("no_post"),
@@ -47,6 +56,18 @@ const processingReceiptCompletionValidator = v.object({
   selectedHandleCount: v.number(),
   status: v.union(v.literal("fetched"), v.literal("failed")),
   processingOutcome: v.string(),
+});
+const dailyRunAdmissionValidator = v.object({
+  runId: v.id("ingestionRuns"),
+  runMode: modeValidator,
+  runStatus: runStatusValidator,
+  currentDayKey: v.string(),
+  runDayKey: v.union(v.string(), v.null()),
+  currentDayQueued: v.boolean(),
+  followUpRequired: v.boolean(),
+  executeRequired: v.boolean(),
+  selectedHandleCount: v.number(),
+  builtCount: v.number(),
 });
 
 function isTerminalScrapedPost(post: any): boolean {
@@ -169,6 +190,13 @@ function assertModeScope(mode: RunMode, handles: string[], controls: ReturnType<
 }
 
 const terminalStatuses = ["fetched", "no_post", "deferred", "failed"] as const;
+const receiptStatuses = [
+  "queued",
+  "running",
+  "processing_pending",
+  "processing",
+  ...terminalStatuses,
+] as const;
 
 async function terminalCountsForRun(ctx: { db: any }, runId: string, selectedHandleCount: number) {
   // A run is admitted only when every selected handle fits inside its frozen
@@ -320,6 +348,105 @@ async function fenceExpiredProcessingForAbort(ctx: { db: any }, run: any, now: n
   }
 }
 
+const activeRunStatuses = ["building", "queued", "running"] as const;
+
+async function getActiveRuns(ctx: MutationCtx): Promise<Array<Doc<"ingestionRuns">>> {
+  return (await Promise.all(
+    activeRunStatuses.map((status) =>
+      ctx.db
+        .query("ingestionRuns")
+        .withIndex("by_status_createdAt", (q) => q.eq("status", status))
+        .order("desc")
+        .take(2),
+    ),
+  )).flat();
+}
+
+async function getDailyRunForDay(
+  ctx: MutationCtx,
+  dayKey: string,
+): Promise<Doc<"ingestionRuns"> | null> {
+  const runs = await ctx.db
+    .query("ingestionRuns")
+    .withIndex("by_mode_dailyDayKey", (q) =>
+      q.eq("mode", "daily").eq("dailyDayKey", dayKey),
+    )
+    .take(2);
+  if (runs.length > 1) {
+    throw new Error(`More than one daily ingestion run exists for ${dayKey}.`);
+  }
+  if (runs[0]) return runs[0];
+
+  // Rollout bridge: runs created before dailyDayKey existed can still be the
+  // current day's one legitimate daily run. Adopt only a bounded recent row
+  // based on its immutable creation time; older completed history stays as-is.
+  const recentLegacyRuns = await ctx.db
+    .query("ingestionRuns")
+    .withIndex("by_mode_createdAt", (q) => q.eq("mode", "daily"))
+    .order("desc")
+    .take(8);
+  const legacyRun = recentLegacyRuns.find(
+    (run) => run.dailyDayKey === undefined && getBelgradeDayKey(run.createdAt) === dayKey,
+  );
+  if (!legacyRun) return null;
+  const now = Date.now();
+  await ctx.db.patch(legacyRun._id, { dailyDayKey: dayKey, updatedAt: now });
+  return { ...legacyRun, dailyDayKey: dayKey, updatedAt: now };
+}
+
+async function insertDurableRun(
+  ctx: MutationCtx,
+  options: {
+    mode: RunMode;
+    sourceSnapshotKey: string;
+    handles: string[];
+    controls: ReturnType<typeof controlsFor>;
+    createdBy: string;
+    dailyDayKey?: string;
+  },
+) {
+  const now = Date.now();
+  return ctx.db.insert("ingestionRuns", {
+    mode: options.mode,
+    status: "building",
+    sourceSnapshotKey: options.sourceSnapshotKey,
+    ...(options.dailyDayKey ? { dailyDayKey: options.dailyDayKey } : {}),
+    selectedHandles: options.handles,
+    queueBuildCursor: 0,
+    selectedHandleCount: options.handles.length,
+    terminalReceiptCount: 0,
+    failedReceiptCount: 0,
+    inFlightCount: 0,
+    reservedMicros: 0,
+    chargedMicros: 0,
+    controls: options.controls,
+    createdBy: options.createdBy,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
+function dailyAdmission(
+  run: Doc<"ingestionRuns">,
+  currentDayKey: string,
+  currentDayQueued: boolean,
+) {
+  const executeRequired =
+    run.status === "building" || run.status === "queued" || run.status === "running";
+  return {
+    runId: run._id,
+    runMode: run.mode,
+    runStatus: run.status,
+    currentDayKey,
+    runDayKey: run.dailyDayKey ?? null,
+    currentDayQueued,
+    followUpRequired: !currentDayQueued,
+    executeRequired,
+    selectedHandleCount: run.selectedHandleCount,
+    builtCount: run.queueBuildCursor ?? 0,
+  };
+}
+
 export const queueRun = mutation({
   args: {
     mode: modeValidator,
@@ -336,20 +463,22 @@ export const queueRun = mutation({
     const handles = uniqueNormalizedHandles(args.handles);
     const controls = controlsFor(args.mode);
     assertModeScope(args.mode, handles, controls);
-    if (!args.sourceSnapshotKey.trim()) throw new Error("A frozen source snapshot key is required.");
+    const sourceSnapshotKey = args.sourceSnapshotKey.trim();
+    if (!sourceSnapshotKey) throw new Error("A frozen source snapshot key is required.");
+    const dailyDayKey = args.mode === "daily" ? getBelgradeDayKey() : undefined;
+
+    // Every daily admission path shares this indexed day fence. A retry after
+    // completion, an admin request, and the host timer all resolve to the same
+    // immutable run for the Europe/Belgrade calendar day.
+    if (dailyDayKey) {
+      const existingForDay = await getDailyRunForDay(ctx, dailyDayKey);
+      if (existingForDay) return existingForDay._id;
+    }
 
     // Building, daily and catch-up runs must never overlap. The indexed reads are bounded
     // and make a second paid run an explicit operator decision instead of a
     // hidden double-spend race.
-    const active = (await Promise.all(
-      (["building", "queued", "running"] as const).map((status) =>
-        ctx.db
-          .query("ingestionRuns")
-          .withIndex("by_status_createdAt", (q) => q.eq("status", status))
-          .order("desc")
-          .take(2),
-      ),
-    )).flat();
+    const active = await getActiveRuns(ctx);
     if (active.length > 0) {
       const existingDaily = active.length === 1 && active[0].mode === "daily";
       // Queue requests may be retried by the admin UI after a network error.
@@ -360,12 +489,12 @@ export const queueRun = mutation({
       const existingCanary =
         active.length === 1 &&
         active[0].mode === "canary" &&
-        active[0].sourceSnapshotKey === args.sourceSnapshotKey.trim() &&
+        active[0].sourceSnapshotKey === sourceSnapshotKey &&
         active[0].selectedHandleCount === handles.length;
       const existingEquivalent =
         active.length === 1 &&
         active[0].mode === args.mode &&
-        active[0].sourceSnapshotKey === args.sourceSnapshotKey.trim() &&
+        active[0].sourceSnapshotKey === sourceSnapshotKey &&
         active[0].selectedHandleCount === handles.length;
       if (args.mode === "daily" && args.resumeDaily === true && existingDaily) {
         return active[0]._id;
@@ -380,25 +509,132 @@ export const queueRun = mutation({
       throw new Error("Another durable ingestion run is already active.");
     }
 
-    const now = Date.now();
-    const runId = await ctx.db.insert("ingestionRuns", {
+    return insertDurableRun(ctx, {
       mode: args.mode,
-      status: "building",
-      sourceSnapshotKey: args.sourceSnapshotKey.trim(),
-      selectedHandles: handles,
-      queueBuildCursor: 0,
-      selectedHandleCount: handles.length,
-      terminalReceiptCount: 0,
-      failedReceiptCount: 0,
-      inFlightCount: 0,
-      reservedMicros: 0,
-      chargedMicros: 0,
+      sourceSnapshotKey,
+      handles,
       controls,
       createdBy: actor.actor,
-      createdAt: now,
+      dailyDayKey,
+    });
+  },
+});
+
+/**
+ * Persist today's frozen source snapshot before resuming older work. The host
+ * launcher calls this again after each returned run; once the active run is
+ * terminal, the oldest pending daily snapshot is admitted behind the same
+ * global active-run fence used by every other mode.
+ */
+export const queueDailyRun = mutation({
+  args: {
+    sourceSnapshotKey: v.string(),
+    handles: v.array(v.string()),
+    serviceSecret: v.optional(v.string()),
+  },
+  returns: dailyRunAdmissionValidator,
+  handler: async (ctx, args) => {
+    const actor = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const currentDayKey = getBelgradeDayKey();
+    let dailySnapshot = await ctx.db
+      .query("ingestionDailySnapshots")
+      .withIndex("by_dayKey", (q) => q.eq("dayKey", currentDayKey))
+      .unique();
+
+    if (!dailySnapshot) {
+      const handles = uniqueNormalizedHandles(args.handles);
+      const controls = controlsFor("daily");
+      assertModeScope("daily", handles, controls);
+      const sourceSnapshotKey = args.sourceSnapshotKey.trim();
+      if (!sourceSnapshotKey) throw new Error("A frozen source snapshot key is required.");
+      const now = Date.now();
+      const snapshotId = await ctx.db.insert("ingestionDailySnapshots", {
+        dayKey: currentDayKey,
+        sourceSnapshotKey,
+        selectedHandles: handles,
+        selectedHandleCount: handles.length,
+        status: "pending",
+        createdAt: now,
+        updatedAt: now,
+      });
+      dailySnapshot = await ctx.db.get(snapshotId);
+      if (!dailySnapshot) throw new Error("Daily source snapshot was not persisted.");
+    }
+
+    const [existingForCurrentDay, active] = await Promise.all([
+      getDailyRunForDay(ctx, currentDayKey),
+      getActiveRuns(ctx),
+    ]);
+    if (active.length > 1) {
+      throw new Error("More than one durable ingestion run is active.");
+    }
+
+    if (existingForCurrentDay) {
+      if (
+        dailySnapshot.status === "assigned" &&
+        dailySnapshot.runId !== undefined &&
+        dailySnapshot.runId !== existingForCurrentDay._id
+      ) {
+        throw new Error("Daily source snapshot is assigned to a different run.");
+      }
+      if (dailySnapshot.status !== "assigned" || dailySnapshot.runId === undefined) {
+        const now = Date.now();
+        await ctx.db.patch(dailySnapshot._id, {
+          status: "assigned",
+          runId: existingForCurrentDay._id,
+          updatedAt: now,
+        });
+      }
+      return dailyAdmission(existingForCurrentDay, currentDayKey, true);
+    }
+
+    if (dailySnapshot.status === "assigned" || dailySnapshot.runId !== undefined) {
+      throw new Error("Daily source snapshot references a missing day-owned run.");
+    }
+
+    if (active.length === 1) {
+      // Do not overlap or replace the prior run. Its controls, receipts, paid
+      // attempt boundaries, and provider leases remain the only executable
+      // work until it reaches a terminal state.
+      return dailyAdmission(active[0], currentDayKey, false);
+    }
+
+    const pendingSnapshot = await ctx.db
+      .query("ingestionDailySnapshots")
+      .withIndex("by_status_dayKey", (q) => q.eq("status", "pending"))
+      .order("asc")
+      .first();
+    if (!pendingSnapshot) {
+      throw new Error("No pending daily source snapshot is available for admission.");
+    }
+    if (pendingSnapshot.selectedHandleCount !== pendingSnapshot.selectedHandles.length) {
+      throw new Error("Pending daily source snapshot has inconsistent handle accounting.");
+    }
+
+    const existingForPendingDay = await getDailyRunForDay(ctx, pendingSnapshot.dayKey);
+    let run = existingForPendingDay;
+    if (!run) {
+      const controls = controlsFor("daily");
+      assertModeScope("daily", pendingSnapshot.selectedHandles, controls);
+      const runId = await insertDurableRun(ctx, {
+        mode: "daily",
+        sourceSnapshotKey: pendingSnapshot.sourceSnapshotKey,
+        handles: pendingSnapshot.selectedHandles,
+        controls,
+        createdBy: actor.actor,
+        dailyDayKey: pendingSnapshot.dayKey,
+      });
+      run = await ctx.db.get(runId);
+      if (!run) throw new Error("Daily ingestion run was not persisted.");
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(pendingSnapshot._id, {
+      status: "assigned",
+      runId: run._id,
       updatedAt: now,
     });
-    return runId;
+    return dailyAdmission(run, currentDayKey, pendingSnapshot.dayKey === currentDayKey);
   },
 });
 
@@ -497,6 +733,111 @@ export const probeRun = query({
       queueReady: run.queueBuildCompletedAt !== undefined,
       dispatchReady: run.dispatchReadyAt !== undefined,
       complete: counts.terminalReceiptCount === run.selectedHandleCount,
+    };
+  },
+});
+
+/**
+ * Authenticated, read-only ledger used to prove a paid canary stayed inside
+ * its provider-attempt and token budget. Token totals include only analyses
+ * completed after this run was created; older cached analyses remain visible
+ * per receipt but are not attributed as new spend.
+ */
+export const getCanaryAccounting = query({
+  args: { runId: v.id("ingestionRuns"), serviceSecret: v.optional(v.string()) },
+  returns: v.any(),
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const run = await ctx.db.get(args.runId);
+    if (!run) return null;
+    if (run.mode !== "canary" || run.selectedHandleCount !== 16) {
+      throw new Error("Detailed paid-test accounting is restricted to exact 16-profile canaries.");
+    }
+    const perStatus = await Promise.all(
+      receiptStatuses.map((status) =>
+        ctx.db
+          .query("ingestionRunHandleReceipts")
+          .withIndex("by_run_status", (q) => q.eq("runId", run._id).eq("status", status))
+          .take(run.selectedHandleCount + 1),
+      ),
+    );
+    const receipts = perStatus.flat();
+    if (receipts.length > run.selectedHandleCount) {
+      throw new Error("Canary receipt accounting exceeded the frozen selection.");
+    }
+    const linkedPosts = await Promise.all(
+      receipts.map((receipt) =>
+        receipt.scrapedPostId ? ctx.db.get(receipt.scrapedPostId) : Promise.resolve(null),
+      ),
+    );
+    const statusCounts = Object.fromEntries(
+      receiptStatuses.map((status, index) => [status, perStatus[index].length]),
+    );
+    let attributedInputTokens = 0;
+    let attributedOutputTokens = 0;
+    let attributedTotalTokens = 0;
+    let openAiAttemptsStartedDuringRun = 0;
+    let openAiAnalysesCompletedDuringRun = 0;
+    const rows = receipts.map((receipt, index) => {
+      const post = linkedPosts[index];
+      const attemptStartedDuringRun =
+        typeof post?.analysisAttemptStartedAt === "number" &&
+        post.analysisAttemptStartedAt >= run.createdAt;
+      const analysisCompletedDuringRun =
+        typeof post?.analysisCompletedAt === "number" &&
+        post.analysisCompletedAt >= run.createdAt;
+      if (attemptStartedDuringRun) openAiAttemptsStartedDuringRun += 1;
+      if (analysisCompletedDuringRun) {
+        openAiAnalysesCompletedDuringRun += 1;
+        attributedInputTokens += post.analysisInputTokens ?? 0;
+        attributedOutputTokens += post.analysisOutputTokens ?? 0;
+        attributedTotalTokens += post.analysisTotalTokens ?? 0;
+      }
+      return {
+        receiptId: receipt._id,
+        handle: receipt.handle,
+        status: receipt.status,
+        providerAttemptCount: receipt.providerAttemptCount ?? 0,
+        providerResultStatus: receipt.providerResultStatus ?? null,
+        chargedMicros: receipt.chargedMicros ?? 0,
+        scrapedPostId: receipt.scrapedPostId ?? null,
+        scrapedPostSourceRevision: receipt.scrapedPostSourceRevision ?? null,
+        processingOutcome: post?.processingOutcome ?? null,
+        analysisModel: post?.analysisModel ?? null,
+        analysisAttemptStartedAt: post?.analysisAttemptStartedAt ?? null,
+        analysisCompletedAt: post?.analysisCompletedAt ?? null,
+        analysisInputTokens: post?.analysisInputTokens ?? null,
+        analysisOutputTokens: post?.analysisOutputTokens ?? null,
+        analysisTotalTokens: post?.analysisTotalTokens ?? null,
+        attemptStartedDuringRun,
+        analysisCompletedDuringRun,
+      };
+    });
+    const providerAttemptCountTotal = receipts.reduce(
+      (total, receipt) => total + (receipt.providerAttemptCount ?? 0),
+      0,
+    );
+    return {
+      runId: run._id,
+      status: run.status,
+      selectedHandleCount: run.selectedHandleCount,
+      receiptCount: receipts.length,
+      statusCounts,
+      providerAttemptCountTotal,
+      providerAttemptCountMax: receipts.reduce(
+        (max, receipt) => Math.max(max, receipt.providerAttemptCount ?? 0),
+        0,
+      ),
+      chargedMicrosTotal: receipts.reduce(
+        (total, receipt) => total + (receipt.chargedMicros ?? 0),
+        0,
+      ),
+      openAiAttemptsStartedDuringRun,
+      openAiAnalysesCompletedDuringRun,
+      attributedInputTokens,
+      attributedOutputTokens,
+      attributedTotalTokens,
+      rows,
     };
   },
 });

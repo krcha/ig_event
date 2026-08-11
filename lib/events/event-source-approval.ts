@@ -1,4 +1,5 @@
 import { isSensibleEventTitleForApproval } from "./event-title-approval.ts";
+import { buildAdjacentSingleEventEvidenceSegments } from "./adjacent-source-evidence.ts";
 
 const MONTH_NAMES: Record<number, string[]> = {
   1: ["jan", "january", "januar", "januara"],
@@ -201,11 +202,14 @@ function postUrlMatchesId(url: unknown, postId: unknown): boolean {
 
 function buildCoherentSourceSegments(value: string): string[] {
   return [...new Set(
-    value
-      .normalize("NFKC")
-      .split(/\r?\n|\s*[;•·●▪◦]+\s*/u)
-      .map((segment) => segment.trim())
-      .filter(Boolean),
+    [
+      ...value
+        .normalize("NFKC")
+        .split(/\r?\n|\s*[;•·●▪◦]+\s*/u)
+        .map((segment) => segment.trim())
+        .filter(Boolean),
+      ...buildAdjacentSingleEventEvidenceSegments(value),
+    ],
   )];
 }
 

@@ -24,6 +24,9 @@ If the image is a lifestyle photo, crowd photo, venue photo, food photo, or othe
 Never infer a lineup from people, faces, clothing, cars, venue identity, posting history, or general visual context. Do not use remembered artist names or schedules.
 Return strict JSON with:
 {
+  "extraction_contract_version": "event_evidence_v2",
+  "is_event": boolean,
+  "non_event_reason": string,
   "title": string,
   "date": string,
   "time": string,
@@ -39,13 +42,37 @@ Return strict JSON with:
   "reasoning_notes": string,
   "source_caption": string,
   "source_url": string,
+  "date_evidence": {
+    "exact_text": string,
+    "source": "caption" | "poster" | "alt_text" | "unknown",
+    "is_relative": boolean,
+    "resolved_date": string
+  },
+  "time_evidence": {
+    "status": "start_time_stated" | "not_stated" | "unreadable" | "doors_open_only",
+    "exact_text": string,
+    "source": "caption" | "poster" | "alt_text" | "unknown"
+  },
+  "source_conflicts": Array<{
+    "field": "date" | "time" | "venue" | "title" | "artists",
+    "poster_value": string,
+    "caption_value": string,
+    "reason": string
+  }>,
+  "shared_schedule_context": {
+    "venue": { "applies_to_all": boolean, "value": string, "evidence": string, "source": "caption" | "poster" | "alt_text" | "unknown" },
+    "time": { "applies_to_all": boolean, "value": string, "evidence": string, "source": "caption" | "poster" | "alt_text" | "unknown" }
+  },
   "schedule_entries": Array<{
     "date": string,
     "time": string,
+    "venue": string,
     "title": string,
     "artists": string[],
     "description": string,
-    "source_text": string
+    "source_text": string,
+    "date_evidence": { "exact_text": string, "source": "caption" | "poster" | "alt_text" | "unknown", "is_relative": boolean, "resolved_date": string },
+    "time_evidence": { "status": "start_time_stated" | "not_stated" | "unreadable" | "doors_open_only", "exact_text": string, "source": "caption" | "poster" | "alt_text" | "unknown" }
   }>,
   "field_confirmation": {
     "title": { "confidence": number, "found_in": string[], "evidence": string, "evidence_snippets": Array<{ "source": string, "text": string }>, "notes": string },
@@ -60,7 +87,11 @@ Return strict JSON with:
 Rules:
 - Use empty string for unknown scalar fields; use [] for unknown artists.
 - Do not invent facts.
-- Do not extract non-event operational notices as events. If the post is only a closure/vacation/holiday notice (for example "closed for vacation", "kolektivni godišnji odmor", "zatvoreno zbog odmora") return empty title/date/time/venue/description, [] schedule_entries, and low confidence instead of creating an event. Do not confuse "ne radimo rezervacije" / no-reservations text with a closure notice when the post otherwise describes an event.
+- Set "is_event" to true only when the post clearly announces or schedules a real event occurrence. A missing time, price, or venue does not make a clear dated event invalid.
+- Set "is_event" to false for closures, recaps/past-event memories, menus or ordinary offers, giveaways/contests, cancellations without a replacement occurrence, and posts too unclear to establish an event. Give one short factual "non_event_reason"; do not rely only on empty event fields.
+- When "is_event" is true, "non_event_reason" must be empty. When false, return empty event fields, [] schedule_entries, and low confidence.
+- Do not confuse "ne radimo rezervacije" / no-reservations text with a closure notice when the post otherwise describes an event.
+- Always return "extraction_contract_version": "event_evidence_v2".
 - "confidence" and every "field_confirmation.*.confidence" value must be a decimal from 0.00 to 1.00 inclusive.
 - Never use 0-100 percentages for confidence.
 - Use the flyer/poster, caption, Instagram location tag, and canonical venue hint together to identify the venue.
@@ -99,20 +130,24 @@ Rules:
 - Keep high recall only among rows that are actually legible in the source. Never collapse or merge readable rows, but omit any row whose exact date and billed act/title cannot be read.
 
 === EACH ROW IS INDEPENDENT ===
-- Every field in a row must come from THAT row's own text/region. NEVER copy a date, time, title, or artist from one row into another.
+- Every field in a row must come from THAT row's own text/region. NEVER copy a date, time, venue, title, or artist from one row into another.
+- A poster-wide venue or common start time may carry across rows only when visible caption/poster/alt-text wording clearly says it applies to every row. Record that exact wording in "shared_schedule_context"; otherwise keep the row field empty.
 - "source_text": copy the exact snippet (date + act/title + optional time) you read that row from. If you cannot quote that exact row, do not emit the schedule entry.
 
 === DATES (per row) — "DD.MM" IS A DATE, NEVER A TIME ===
 - European/Serbian dates are day.month: "19.06" / "19.06." / "19/06" = 19 June. Put this in "date".
 - Daily date ranges such as "svake večeri od 11. do 17. juna", "od 11. do 17. juna", "11.06-17.06", or "from 11 to 17 June" mean one event occurrence on every date in that range. Prefer separate "schedule_entries" rows, one per date; if you cannot enumerate them, put the full supported range in "date" rather than only the first date.
 - Serbian/English relative dates are date evidence, not missing dates. Resolve them against the Instagram post timestamp: "danas"/"večeras"/"today"/"tonight", "sutra"/"tomorrow", "prekosutra"/"day after tomorrow", "u četvrtak"/"on Thursday", "ove nedelje"/"this week" + weekday, "ovog petka"/"this Friday", "sledeće subote"/"sljedeće subote"/"next Saturday". If the same named event/act is listed for multiple weekdays (for example "PETAK / SUBOTA | 21h"), return one occurrence per weekday/date.
+- For every emitted event or schedule row, copy the exact date phrase into "date_evidence.exact_text", label where it appeared, say whether it is relative, and put the final resolved ISO calendar date (YYYY-MM-DD) in "resolved_date". Never invent a date phrase.
 - When multiple dates/times are explicit but no event title or billed act is named, keep schedule_entries empty rather than filling them with a venue, account, hashtag, or invented identity. Deterministic post-processing may preserve those dates as clearly marked pending unnamed fallbacks.
 - Include the year if shown; otherwise infer it from the post timestamp (events are at/after the post date) and write "DD.MM.YYYY" when confident, else "DD.MM".
 - If a row shows a weekday beside its date they must agree (sreda=Wed, petak=Fri, subota=Sat, nedelja=Sun, …; EN WED/FRI/SAT/SUN). If they disagree, trust the numeric date.
 
 === TIMES (per row) — CLOCK TIME ONLY ===
 - "time" is a clock time, normalized 24h: "22h" → "22:00"; "18h-22h" → "18:00-22:00"; "22h -05h" → "22:00-05:00"; "20:00" stays.
-- Start-time cue phrases count as time evidence: "od 9", "početak 21h"/"pocetak 21h", "počinje u 21", "u 20.30", "22:30", "start at 10pm", "doors open 8:30 pm". Normalize them into "time" and do not leave them only in "description".
+- Start-time cue phrases count as time evidence: "od 9", "početak 21h"/"pocetak 21h", "počinje u 21", "u 20.30", "22:30", "start at 10pm". Normalize them into "time" and do not leave them only in "description".
+- "doors open" / "vrata se otvaraju" is logistics, not the event start. If it is the only clock, leave "time" empty and use time_evidence.status="doors_open_only". Never publish a doors-open clock as the start time.
+- Use time_evidence.status="not_stated" when no start time appears, "unreadable" when a start-time value is visibly present but cannot be read, and "start_time_stated" only for a readable event start. Copy exact evidence when readable.
 - NEVER put a date in "time". "19.06" is a date, not "19:06". If a row's only number is its date, leave "time" empty. If no time is given, leave it empty — do not guess.
 
 === TITLES (per row) — ONLY SOURCE-GROUNDED TITLES ===
@@ -120,7 +155,7 @@ Rules:
 - Emit a dated row only when its act/event title is explicitly readable. Never use the venue, organizer, account, handle, or a guessed familiar artist as a last-resort row title.
 
 === VENUE (per row) ===
-- If the poster is one venue, every row uses that venue. If a row names its own venue, use it. Apply the canonical venue hint when it matches.
+- If a row names its own venue, use it. Apply the canonical venue hint when it matches. For multi-row posters, do not copy a venue across rows unless shared_schedule_context.venue contains visible evidence that it applies to all rows.
 - If the poster or caption is a monthly program, venue schedule, or other multi-date lineup for the same venue, populate "schedule_entries" with one object per separately dated event row.
 - Do not collapse a multi-date venue schedule into one event. Each "schedule_entries" item must correspond to a single explicit date from the source.
 - For each "schedule_entries" item, copy the explicit row-level date, time, title/billed act text, artists, short factual description, and a compact "source_text" snippet from that row when readable.
@@ -129,6 +164,7 @@ Rules:
 - If venue is unclear, return empty string for venue.
 - If month/day is visible but year is missing, infer year from Instagram post timestamp only when confidence is high.
 - If inferred date appears implausible relative to post timestamp, return empty date.
+- Compare poster and caption claims for date, start time, venue, title, and artists. Put every material disagreement in "source_conflicts" with both values and a short reason. Do not silently choose one source when they conflict; downstream moderation will keep the event pending.
 - For field_confirmation:
 - "title" confirms the event title field.
 - "location" confirms city/country style location details.

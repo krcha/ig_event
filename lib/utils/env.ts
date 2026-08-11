@@ -47,5 +47,5 @@ export function getOpenAiModelEnv(name: "OPENAI_REVIEW_MODEL" | "OPENAI_VISION_M
     throw new Error(`Missing required production environment variable: ${name}`);
   }
 
-  return "gpt-4.1-mini";
+  return name === "OPENAI_VISION_MODEL" ? "gpt-5-mini" : "gpt-4.1-mini";
 }

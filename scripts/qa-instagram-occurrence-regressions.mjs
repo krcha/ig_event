@@ -64,6 +64,9 @@ function makePost(overrides = {}) {
 
 function makeExtraction(overrides = {}) {
   return {
+    extraction_contract_version: "legacy_qa_fixture_v1",
+    is_event: true,
+    non_event_reason: "",
     title: "",
     date: "",
     time: "",
@@ -79,6 +82,22 @@ function makeExtraction(overrides = {}) {
     reasoning_notes: "",
     source_caption: "",
     source_url: "https://www.instagram.com/p/qa-post/",
+    date_evidence: {
+      exact_text: "",
+      source: "unknown",
+      is_relative: false,
+      resolved_date: "",
+    },
+    time_evidence: {
+      status: "not_stated",
+      exact_text: "",
+      source: "unknown",
+    },
+    source_conflicts: [],
+    shared_schedule_context: {
+      venue: { applies_to_all: false, value: "", evidence: "", source: "unknown" },
+      time: { applies_to_all: false, value: "", evidence: "", source: "unknown" },
+    },
     schedule_entries: [],
     field_confirmation: Object.fromEntries(
       ["title", "location", "location_name", "price", "start_time", "short_description", "artists"].map(
@@ -1217,7 +1236,7 @@ const ingestionSource = readFileSync(
 );
 assert.match(
   ingestionSource,
-  /SOURCE_OCCURRENCE_EXTRACTION_PROTOCOL_VERSION\s*=\s*"2026-07-28-v3"/,
+  /SOURCE_OCCURRENCE_EXTRACTION_PROTOCOL_VERSION\s*=\s*"2026-08-11-event-evidence-v2"/,
   "the protocol fingerprint must invalidate receipts produced by the old split policy",
 );
 

@@ -31,6 +31,12 @@ import { buildPublicCalendarDateWindows } from "@/lib/events/public-calendar-win
 import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 
 export type EventStatus = "pending" | "approved" | "rejected";
+export type EventDateEvidenceSource = "caption" | "poster" | "alt_text" | "unknown";
+export type EventTimeEvidenceKind =
+  | "start_time_stated"
+  | "not_stated"
+  | "unreadable"
+  | "doors_open_only";
 const APPROVED_EVENTS_SCAN_BATCH_SIZE = 100;
 const PUBLIC_EVENTS_CACHE_MAX_ENTRIES = 48;
 const PUBLIC_EVENTS_CACHE_TTL_MS = 60_000;
@@ -43,11 +49,16 @@ export type PublicEvent = {
   _id: string;
   title: string;
   date: string;
+  dateEvidenceText?: string;
+  dateEvidenceSource?: EventDateEvidenceSource;
+  dateEvidenceIsRelative?: boolean;
+  dateEvidenceResolvedDate?: string;
   time?: string;
   timeSource?: EventTimeSource;
   timeEvidenceText?: string;
   timeConfidence?: number;
   timeStatus?: EventTimeStatus;
+  timeEvidenceKind?: EventTimeEvidenceKind;
   dayPeriod?: EventDayPeriod;
   displayTimeEnd?: string;
   displayTimeLabel?: string;

@@ -47,15 +47,18 @@ function comparableIdentity(candidate: ApprovalOccurrenceCandidate): {
  * Classify only candidates already known to share the same event date.
  * "ambiguous" is intentionally distinct from "duplicate": ingestion can
  * persist it as pending instead of dropping a legitimate child occurrence.
+ * When venue context is unavailable, strong cross-source identity overlap
+ * must still fail closed instead of being treated as unrelated.
  */
 export function classifyApprovalOccurrenceRelation(options: {
   candidate: ApprovalOccurrenceCandidate;
   existing: ApprovalOccurrenceCandidate;
   sameVenue: boolean;
   sameSource: boolean;
+  unknownVenue?: boolean;
 }): ApprovalOccurrenceRelation {
-  const { candidate, existing, sameVenue, sameSource } = options;
-  if (!sameVenue && !sameSource) return "unrelated";
+  const { candidate, existing, sameVenue, sameSource, unknownVenue = false } = options;
+  if (!sameVenue && !sameSource && !unknownVenue) return "unrelated";
 
   const candidateKey = normalizedOccurrenceKey(candidate);
   const existingKey = normalizedOccurrenceKey(existing);
@@ -85,6 +88,11 @@ export function classifyApprovalOccurrenceRelation(options: {
     candidateMinutes !== null &&
     existingMinutes !== null &&
     candidateMinutes === existingMinutes;
+
+  if (!sameVenue && !sameSource) {
+    if (!unknownVenue || (!sameTitle && !sharedArtist)) return "unrelated";
+    return sameReliableTime ? "proven_duplicate" : "ambiguous";
+  }
 
   if ((sameTitle || sharedArtist) && (sameReliableTime || sameSource)) {
     return "proven_duplicate";

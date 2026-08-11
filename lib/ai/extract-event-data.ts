@@ -95,51 +95,129 @@ const extractionFieldConfirmationSchema = z.object({
   notes: z.string(),
 });
 
+const extractionEvidenceSourceSchema = z.enum([
+  "caption",
+  "poster",
+  "alt_text",
+  "unknown",
+]);
+
+const extractionDateEvidenceSchema = z.object({
+  exact_text: z.string(),
+  source: extractionEvidenceSourceSchema,
+  is_relative: z.boolean(),
+  resolved_date: z.string(),
+});
+
+const extractionTimeEvidenceSchema = z.object({
+  status: z.enum([
+    "start_time_stated",
+    "not_stated",
+    "unreadable",
+    "doors_open_only",
+  ]),
+  exact_text: z.string(),
+  source: extractionEvidenceSourceSchema,
+});
+
+const extractionSourceConflictSchema = z.object({
+  field: z.enum(["date", "time", "venue", "title", "artists"]),
+  poster_value: z.string(),
+  caption_value: z.string(),
+  reason: z.string(),
+});
+
+const extractionSharedContextSchema = z.object({
+  applies_to_all: z.boolean(),
+  value: z.string(),
+  evidence: z.string(),
+  source: extractionEvidenceSourceSchema,
+});
+
 const extractedScheduleEntrySchema = z.object({
   date: z.string(),
   time: z.string(),
+  venue: z.string(),
   title: z.string(),
   artists: z.array(z.string()).default([]),
   description: z.string(),
   source_text: z.string(),
+  date_evidence: extractionDateEvidenceSchema,
+  time_evidence: extractionTimeEvidenceSchema,
 });
 
-const extractedEventSchema = z.object({
-  title: z.string(),
-  date: z.string(),
-  time: z.string(),
-  venue: z.string(),
-  city: z.string(),
-  country: z.string(),
-  price: z.string(),
-  currency: z.string(),
-  artists: z.array(z.string()).default([]),
-  category: z.string(),
-  description: z.string(),
-  confidence: z.union([z.number(), z.string()]),
-  reasoning_notes: z.string(),
-  source_caption: z.string(),
-  source_url: z.string(),
-  schedule_entries: z.array(extractedScheduleEntrySchema).default([]),
-  field_confirmation: z.object({
-    title: extractionFieldConfirmationSchema,
-    location: extractionFieldConfirmationSchema,
-    location_name: extractionFieldConfirmationSchema,
-    price: extractionFieldConfirmationSchema,
-    start_time: extractionFieldConfirmationSchema,
-    short_description: extractionFieldConfirmationSchema,
-    artists: extractionFieldConfirmationSchema,
-  }),
+const openAiUsageSchema = z.object({
+  model: z.string().optional(),
+  inputTokens: z.number().optional(),
+  outputTokens: z.number().optional(),
+  totalTokens: z.number().optional(),
 });
 
-export type ExtractedEventData = z.infer<typeof extractedEventSchema> & {
-  _openaiUsage?: {
-    model?: string;
-    inputTokens?: number;
-    outputTokens?: number;
-    totalTokens?: number;
-  };
-};
+const extractedEventSchema = z
+  .object({
+    extraction_contract_version: z.literal("event_evidence_v2"),
+    is_event: z.boolean(),
+    non_event_reason: z.string(),
+    title: z.string(),
+    date: z.string(),
+    time: z.string(),
+    venue: z.string(),
+    city: z.string(),
+    country: z.string(),
+    price: z.string(),
+    currency: z.string(),
+    artists: z.array(z.string()).default([]),
+    category: z.string(),
+    description: z.string(),
+    confidence: z.union([z.number(), z.string()]),
+    reasoning_notes: z.string(),
+    source_caption: z.string(),
+    source_url: z.string(),
+    date_evidence: extractionDateEvidenceSchema,
+    time_evidence: extractionTimeEvidenceSchema,
+    source_conflicts: z.array(extractionSourceConflictSchema),
+    shared_schedule_context: z.object({
+      venue: extractionSharedContextSchema,
+      time: extractionSharedContextSchema,
+    }),
+    schedule_entries: z.array(extractedScheduleEntrySchema).default([]),
+    // Added by our transport wrapper after the provider's strict structured
+    // output has been parsed. Keeping it in the durable parser preserves the
+    // exact cached JSON used by the Convex approval attestation.
+    _openaiUsage: openAiUsageSchema.optional(),
+    field_confirmation: z.object({
+      title: extractionFieldConfirmationSchema,
+      location: extractionFieldConfirmationSchema,
+      location_name: extractionFieldConfirmationSchema,
+      price: extractionFieldConfirmationSchema,
+      start_time: extractionFieldConfirmationSchema,
+      short_description: extractionFieldConfirmationSchema,
+      artists: extractionFieldConfirmationSchema,
+    }),
+  })
+  .superRefine((value, context) => {
+    const hasNonEventReason = value.non_event_reason.trim().length > 0;
+    if (!value.is_event && !hasNonEventReason) {
+      context.addIssue({
+        code: "custom",
+        path: ["non_event_reason"],
+        message: "A non-event extraction must include a reason.",
+      });
+    }
+    if (value.is_event && hasNonEventReason) {
+      context.addIssue({
+        code: "custom",
+        path: ["non_event_reason"],
+        message: "An event extraction must leave non_event_reason empty.",
+      });
+    }
+  });
+
+export type ExtractedEventData = z.infer<typeof extractedEventSchema>;
+
+export function parseExtractedEventData(value: unknown): ExtractedEventData {
+  return extractedEventSchema.parse(value);
+}
 
 type ExtractEventDataOptions = {
   imageDataUrl?: string | null;
@@ -157,10 +235,64 @@ type ExtractEventDataOptions = {
   onTransportStarted?: () => void;
 };
 
+const extractionEvidenceSourceJsonSchema = {
+  type: "string",
+  enum: ["caption", "poster", "alt_text", "unknown"],
+} as const;
+
+const extractionDateEvidenceJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    exact_text: { type: "string" },
+    source: extractionEvidenceSourceJsonSchema,
+    is_relative: { type: "boolean" },
+    resolved_date: { type: "string" },
+  },
+  required: ["exact_text", "source", "is_relative", "resolved_date"],
+} as const;
+
+const extractionTimeEvidenceJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    status: {
+      type: "string",
+      enum: [
+        "start_time_stated",
+        "not_stated",
+        "unreadable",
+        "doors_open_only",
+      ],
+    },
+    exact_text: { type: "string" },
+    source: extractionEvidenceSourceJsonSchema,
+  },
+  required: ["status", "exact_text", "source"],
+} as const;
+
+const extractionSharedContextJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    applies_to_all: { type: "boolean" },
+    value: { type: "string" },
+    evidence: { type: "string" },
+    source: extractionEvidenceSourceJsonSchema,
+  },
+  required: ["applies_to_all", "value", "evidence", "source"],
+} as const;
+
 const extractionJsonSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
+    extraction_contract_version: {
+      type: "string",
+      enum: ["event_evidence_v2"],
+    },
+    is_event: { type: "boolean" },
+    non_event_reason: { type: "string" },
     title: { type: "string" },
     date: { type: "string" },
     time: { type: "string" },
@@ -179,6 +311,34 @@ const extractionJsonSchema = {
     reasoning_notes: { type: "string" },
     source_caption: { type: "string" },
     source_url: { type: "string" },
+    date_evidence: extractionDateEvidenceJsonSchema,
+    time_evidence: extractionTimeEvidenceJsonSchema,
+    source_conflicts: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          field: {
+            type: "string",
+            enum: ["date", "time", "venue", "title", "artists"],
+          },
+          poster_value: { type: "string" },
+          caption_value: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["field", "poster_value", "caption_value", "reason"],
+      },
+    },
+    shared_schedule_context: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        venue: extractionSharedContextJsonSchema,
+        time: extractionSharedContextJsonSchema,
+      },
+      required: ["venue", "time"],
+    },
     schedule_entries: {
       type: "array",
       items: {
@@ -187,6 +347,7 @@ const extractionJsonSchema = {
         properties: {
           date: { type: "string" },
           time: { type: "string" },
+          venue: { type: "string" },
           title: { type: "string" },
           artists: {
             type: "array",
@@ -194,8 +355,20 @@ const extractionJsonSchema = {
           },
           description: { type: "string" },
           source_text: { type: "string" },
+          date_evidence: extractionDateEvidenceJsonSchema,
+          time_evidence: extractionTimeEvidenceJsonSchema,
         },
-        required: ["date", "time", "title", "artists", "description", "source_text"],
+        required: [
+          "date",
+          "time",
+          "venue",
+          "title",
+          "artists",
+          "description",
+          "source_text",
+          "date_evidence",
+          "time_evidence",
+        ],
       },
     },
     field_confirmation: {
@@ -453,6 +626,9 @@ const extractionJsonSchema = {
     },
   },
   required: [
+    "extraction_contract_version",
+    "is_event",
+    "non_event_reason",
     "title",
     "date",
     "time",
@@ -468,6 +644,10 @@ const extractionJsonSchema = {
     "reasoning_notes",
     "source_caption",
     "source_url",
+    "date_evidence",
+    "time_evidence",
+    "source_conflicts",
+    "shared_schedule_context",
     "schedule_entries",
     "field_confirmation",
   ],
@@ -530,6 +710,7 @@ export async function extractEventDataFromInstagramPost(
         },
         body: JSON.stringify({
           model: openAiVisionModel,
+          max_output_tokens: 4096,
           input: [
             {
               role: "system",
@@ -591,7 +772,7 @@ export async function extractEventDataFromInstagramPost(
       }
 
       const parsedJson = JSON.parse(responseText) as unknown;
-      const parsed = extractedEventSchema.parse(parsedJson);
+      const parsed = parseExtractedEventData(parsedJson);
       return {
         ...parsed,
         source_caption: options.caption ?? "",

@@ -120,6 +120,9 @@ function makeCtx(initialEvents) {
           async first() {
             return filterRows(rows(), filters)[0] ?? null;
           },
+          async take(limit) {
+            return filterRows(rows(), filters).slice(0, limit);
+          },
         };
       },
     };

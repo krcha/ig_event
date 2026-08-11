@@ -4,6 +4,7 @@ import { isCaptionSourceCoherentWithEvent } from "../lib/events/event-source-app
 import {
   hasCompleteSourceGroundedAutoApproval,
   hasCompleteSourceGroundingAttestation,
+  hasEventEvidenceV2AutoApproval,
   hasTrustedSourceEventAnnouncementAutoApproval,
 } from "../lib/events/event-update-precondition";
 import { normalizeInstagramPostUrl } from "../lib/images/apify-images";
@@ -69,6 +70,10 @@ export async function isCanonicallyGroundedApprovedEvent(
       venueInstagramHandle: event.venueInstagramHandle,
     },
   );
+  const structuredEvidenceAuthorized = hasEventEvidenceV2AutoApproval(
+    event.normalizedFieldsJson,
+    event,
+  );
   const humanAuthorized =
     typeof event.reviewedAt === "number" &&
     Number.isFinite(event.reviewedAt) &&
@@ -87,7 +92,12 @@ export async function isCanonicallyGroundedApprovedEvent(
       sourcePostedAt: event.sourcePostedAt,
       venueInstagramHandle: event.venueInstagramHandle,
     });
-  if (!machineAuthorized && !trustedSourceAuthorized && !humanAuthorized) {
+  if (
+    !machineAuthorized &&
+    !trustedSourceAuthorized &&
+    !structuredEvidenceAuthorized &&
+    !humanAuthorized
+  ) {
     return false;
   }
 
@@ -98,24 +108,24 @@ export async function isCanonicallyGroundedApprovedEvent(
   );
   const postId = event.instagramPostId?.trim();
   if (!sourceHandle || !postId) return false;
-  const persistedPost = await ctx.db
+  const persistedPosts = await ctx.db
     .query("scrapedPosts")
     .withIndex("by_handle_postId", (q) =>
       q.eq("handle", sourceHandle).eq("postId", postId),
     )
-    .first();
+    .take(2);
+  const persistedPost = persistedPosts.length === 1 ? persistedPosts[0] : null;
   if (!persistedPost) return false;
 
-  const persistedCaption = persistedPost.caption?.trim();
+  const persistedCaption = persistedPost.caption?.trim() ?? "";
   const persistedUrl = normalizeInstagramPostUrl(persistedPost.instagramPostUrl);
   const eventUrl = normalizeInstagramPostUrl(event.instagramPostUrl);
   const groundedUrl = normalizeInstagramPostUrl(
     readString(fields.sourceGroundingInstagramPostUrl) ?? undefined,
   );
   if (
-    !persistedCaption ||
-    event.sourceCaption?.trim() !== persistedCaption ||
-    readString(fields.sourceGroundingSourceCaption) !== persistedCaption ||
+    (event.sourceCaption?.trim() ?? "") !== persistedCaption ||
+    (readString(fields.sourceGroundingSourceCaption) ?? "") !== persistedCaption ||
     persistedPost.postId !== postId ||
     readString(fields.sourceGroundingInstagramPostId) !== postId ||
     !persistedUrl ||
@@ -125,6 +135,36 @@ export async function isCanonicallyGroundedApprovedEvent(
     persistedPost.postedAt !== event.sourcePostedAt
   ) {
     return false;
+  }
+
+  if (structuredEvidenceAuthorized) {
+    const posterAssets =
+      fields.extractionMode === "poster"
+        ? await ctx.db
+            .query("mediaAssets")
+            .withIndex("by_sourceKey", (q) =>
+              q.eq("sourceKey", `instagram-post:${postId}`),
+            )
+            .take(2)
+        : [];
+    const posterAsset = posterAssets.length === 1 ? posterAssets[0] : null;
+    return Boolean(
+      event.rawExtractionJson &&
+        event.rawExtractionJson === persistedPost.analysisResultJson &&
+        persistedPost.analysisRevision === (persistedPost.sourceRevision ?? 1) &&
+        persistedPost.analysisContractVersion === "event_evidence_v2" &&
+        persistedPost.analysisIsEvent === true &&
+        persistedPost.analysisModel?.startsWith("gpt-5-mini") &&
+        (fields.extractionMode !== "poster" ||
+          Boolean(
+            persistedPost.analysisImageSourceUrl &&
+              persistedPost.analysisImageChecksumSha256 &&
+              persistedPost.imageStorageId &&
+              posterAsset &&
+              posterAsset.storageId === persistedPost.imageStorageId &&
+              posterAsset.checksumSha256 === persistedPost.analysisImageChecksumSha256,
+          )),
+    );
   }
 
   return isCaptionSourceCoherentWithEvent({

@@ -8,6 +8,11 @@ export type EventTimeWriteSource =
   | "unknown";
 
 export type EventTimeWriteStatus = "confirmed" | "inferred" | "unknown";
+export type EventTimeWriteEvidenceKind =
+  | "start_time_stated"
+  | "not_stated"
+  | "unreadable"
+  | "doors_open_only";
 
 export type EventTimeWritePatch = {
   time?: string;
@@ -15,6 +20,7 @@ export type EventTimeWritePatch = {
   timeEvidenceText?: string | null;
   timeConfidence?: number;
   timeStatus?: EventTimeWriteStatus;
+  timeEvidenceKind?: EventTimeWriteEvidenceKind;
 };
 
 /**
@@ -39,6 +45,7 @@ export function normalizeEventTimeWritePatch<T extends EventTimeWritePatch>(
     "timeEvidenceText",
     "timeConfidence",
     "timeStatus",
+    "timeEvidenceKind",
   ] as const;
   const hasAnyProvenance = provenanceKeys.some((key) => Object.hasOwn(patch, key));
 
@@ -53,6 +60,8 @@ export function normalizeEventTimeWritePatch<T extends EventTimeWritePatch>(
       timeEvidenceText: undefined,
       timeConfidence: 0,
       timeStatus: "unknown",
+      timeEvidenceKind:
+        patch.time && patch.time !== "TBD" ? "start_time_stated" : "not_stated",
     };
   }
 
@@ -68,6 +77,9 @@ export function normalizeEventTimeWritePatch<T extends EventTimeWritePatch>(
 
   if (!Object.hasOwn(patch, "timeEvidenceText")) {
     normalized.timeEvidenceText = undefined;
+  }
+  if (!Object.hasOwn(patch, "timeEvidenceKind")) {
+    normalized.timeEvidenceKind = undefined;
   }
 
   if (!Number.isFinite(patch.timeConfidence) || patch.timeConfidence < 0 || patch.timeConfidence > 1) {

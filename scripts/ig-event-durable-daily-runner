@@ -4,8 +4,10 @@
 set -Eeuo pipefail
 
 ENV_FILE="${IG_EVENT_CRON_ENV:-/etc/ig_event/cron.env}"
-LOCK_FILE="/run/lock/ig-event-durable-daily.lock"
+LOCK_FILE="${IG_EVENT_DURABLE_DAILY_LOCK_FILE:-/run/lock/ig-event-durable-daily.lock}"
 RUNTIME_DIR="${IG_EVENT_DURABLE_RUNTIME_DIR:-/run/ig_event}"
+DURABLE_RUNNER="${IG_EVENT_DURABLE_RUNNER:-$(dirname "$0")/ig-event-durable-runner}"
+MAX_DRAINED_RUNS=32
 
 [[ -r "$ENV_FILE" ]] || { echo "missing cron environment" >&2; exit 78; }
 # shellcheck disable=SC1090
@@ -15,11 +17,13 @@ RUNTIME_DIR="${IG_EVENT_DURABLE_RUNTIME_DIR:-/run/ig_event}"
 mkdir -p "$RUNTIME_DIR"
 chmod 700 "$RUNTIME_DIR"
 umask 077
-body_file="$(mktemp "${RUNTIME_DIR%/}/durable-daily.body.XXXXXX")"
-config_file="$(mktemp "${RUNTIME_DIR%/}/durable-daily.curl.XXXXXX")"
-chmod 600 "$body_file" "$config_file"
+body_file=""
+config_file=""
 cleanup_sensitive_files() {
-  rm -f "$body_file" "$config_file"
+  [[ -z "$body_file" ]] || rm -f "$body_file"
+  [[ -z "$config_file" ]] || rm -f "$config_file"
+  body_file=""
+  config_file=""
 }
 trap cleanup_sensitive_files EXIT
 trap 'exit 130' INT
@@ -28,25 +32,50 @@ trap 'exit 143' TERM
 exec 9>"$LOCK_FILE"
 flock -n 9 || { echo "durable daily ingestion already running"; exit 0; }
 
-{
-  printf 'fail\n'
-  printf 'silent\n'
-  printf 'show-error\n'
-  printf 'max-time = 120\n'
-  printf 'request = "POST"\n'
-  printf 'header = "Authorization: Bearer %s"\n' "$CRON_SECRET"
-  printf 'output = "%s"\n' "$body_file"
-  printf 'url = "%s/api/cron/durable-ingestion/daily"\n' "${APP_ORIGIN%/}"
-} > "$config_file"
+cron_bearer="$CRON_SECRET"
 unset CRON_SECRET
-curl --disable --config "$config_file"
-response="$(<"$body_file")"
 
-# The route emits one compact JSON object. Keep parsing deliberately strict so
-# an error document can never be passed to the paid executor as a run id.
-run_id="$(printf '%s' "$response" | sed -nE 's/.*"runId":"([^"]+)".*/\1/p')"
-[[ -n "$run_id" ]] || { echo "daily durable queue did not return a run id" >&2; exit 1; }
+for ((drained_run_count = 0; drained_run_count < MAX_DRAINED_RUNS; drained_run_count += 1)); do
+  body_file="$(mktemp "${RUNTIME_DIR%/}/durable-daily.body.XXXXXX")"
+  config_file="$(mktemp "${RUNTIME_DIR%/}/durable-daily.curl.XXXXXX")"
+  chmod 600 "$body_file" "$config_file"
+  {
+    printf 'fail\n'
+    printf 'silent\n'
+    printf 'show-error\n'
+    printf 'max-time = 120\n'
+    printf 'request = "POST"\n'
+    printf 'header = "Authorization: Bearer %s"\n' "$cron_bearer"
+    printf 'output = "%s"\n' "$body_file"
+    printf 'url = "%s/api/cron/durable-ingestion/daily"\n' "${APP_ORIGIN%/}"
+  } > "$config_file"
+  curl --disable --config "$config_file"
+  response="$(<"$body_file")"
 
-cleanup_sensitive_files
-trap - EXIT INT TERM
-exec "$(dirname "$0")/ig-event-durable-runner" "$run_id"
+  # The route emits one compact JSON object. Keep parsing deliberately strict
+  # so an error document can never be passed to the durable executor.
+  run_id="$(printf '%s' "$response" | sed -nE 's/.*"runId":"([^"]+)".*/\1/p')"
+  execute_required="$(printf '%s' "$response" | sed -nE 's/.*"executeRequired":(true|false).*/\1/p')"
+  follow_up_required="$(printf '%s' "$response" | sed -nE 's/.*"followUpRequired":(true|false).*/\1/p')"
+  [[ -n "$run_id" ]] || { echo "daily durable queue did not return a run id" >&2; exit 1; }
+  [[ "$execute_required" == "true" || "$execute_required" == "false" ]] || {
+    echo "daily durable queue returned an invalid execution decision" >&2
+    exit 1
+  }
+  [[ "$follow_up_required" == "true" || "$follow_up_required" == "false" ]] || {
+    echo "daily durable queue returned an invalid follow-up decision" >&2
+    exit 1
+  }
+
+  cleanup_sensitive_files
+  if [[ "$execute_required" == "true" ]]; then
+    "$DURABLE_RUNNER" "$run_id"
+  fi
+  if [[ "$follow_up_required" == "false" ]]; then
+    trap - EXIT INT TERM
+    exit 0
+  fi
+done
+
+echo "daily durable ingestion exceeded its bounded pending-run drain" >&2
+exit 1

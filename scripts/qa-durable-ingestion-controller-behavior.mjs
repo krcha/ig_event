@@ -21,6 +21,7 @@ const {
   linkPersistedReceiptPostForRecovery,
   abortInactiveRun,
   abortOnlyInactiveCatchUpRun,
+  getCanaryAccounting,
 } = await import("../convex/durableIngestionRuns.ts");
 const { createEvent } = await import("../convex/events.ts");
 const { refreshAndAttach } = await import("../convex/mediaAssets.ts");
@@ -514,7 +515,7 @@ for (const boundary of ["no_post", "unconfirmed"]) {
   });
   assert.equal((await db.get(completedRunId)).status, "completed");
 
-  const activeRunId = await queue(db, "daily", ["active_recovery"]);
+  const activeRunId = await queue(db, "catch_up", ["active_recovery"]);
   assert.equal(
     await claimProcessing(db, completedRunId, "late-completed-runner"),
     null,
@@ -1151,6 +1152,40 @@ for (const boundary of ["no_post", "unconfirmed"]) {
   assert.equal(run.status, "completed");
   assert.equal(run.terminalReceiptCount, 16);
   assert.equal(db.rows("ingestionRunHandleReceipts").filter((row) => row.status === "no_post").length, 16);
+}
+
+// The paid canary exposes a served, read-only receipt/token ledger so the
+// operator can prove max-one provider attempts and calculate actual model cost.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "canary", handles.slice(0, 16));
+  const run = await db.get(runId);
+  const claimed = await claim(db, runId, "accounting-fetch");
+  await startProviderAttempt(db, runId, claimed.receiptId, "accounting-fetch");
+  const scrapedPostId = await insertSavedPost(db, claimed.handle);
+  await db.patch(scrapedPostId, {
+    analysisAttemptStartedAt: run.createdAt + 1,
+    analysisCompletedAt: run.createdAt + 2,
+    analysisModel: "gpt-5-mini-2025-08-07",
+    analysisInputTokens: 1_200,
+    analysisOutputTokens: 300,
+    analysisTotalTokens: 1_500,
+    processingOutcome: "receipt_complete",
+  });
+  await markPersisted(db, runId, claimed.receiptId, "accounting-fetch", scrapedPostId);
+  const accounting = await getCanaryAccounting._handler(ctx(db), {
+    runId,
+    serviceSecret: process.env.CRON_SECRET,
+  });
+  assert.equal(accounting.receiptCount, 16);
+  assert.equal(accounting.providerAttemptCountTotal, 1);
+  assert.equal(accounting.providerAttemptCountMax, 1);
+  assert.equal(accounting.chargedMicrosTotal, 10_000);
+  assert.equal(accounting.openAiAttemptsStartedDuringRun, 1);
+  assert.equal(accounting.openAiAnalysesCompletedDuringRun, 1);
+  assert.equal(accounting.attributedInputTokens, 1_200);
+  assert.equal(accounting.attributedOutputTokens, 300);
+  assert.equal(accounting.attributedTotalTokens, 1_500);
 }
 
 // Catch-up is one all-profile snapshot with no time cutoff/checkpoint.  Daily

@@ -118,6 +118,11 @@ assert.match(
   /paginate\(buildPublicPaginationOptions\(args\.paginationOpts\)\)/,
   "The compatibility events window must rebuild fixed server-owned pagination options.",
 );
+assert.match(
+  publicEventsWindowSource,
+  /projectLegacyCompatiblePublicEventPage\(ctx, result\.page\)/,
+  "The public list must revalidate structured-v2 rows while preserving approved legacy rows.",
+);
 
 const calendarQuerySource = section(
   eventsSource,
@@ -143,6 +148,11 @@ assert.match(
   calendarQuerySource,
   /\.paginate\(\{[\s\S]*numItems: PUBLIC_EVENT_PAGE_SIZE/,
   "Compact calendar reads must construct a fixed server-owned page size.",
+);
+assert.match(
+  calendarQuerySource,
+  /projectLegacyCompatiblePublicEventPage\(ctx, result\.page\)/,
+  "The public calendar must revalidate structured-v2 rows while preserving approved legacy rows.",
 );
 assert.doesNotMatch(calendarQuerySource, /paginationOptsValidator|args\.paginationOpts|\.collect\(\)/);
 assert.doesNotMatch(
@@ -369,6 +379,11 @@ const singletonCtx = {
             assert.equal(index, "by_handle_postId");
             configure(sourceQueryBuilder);
             return {
+              async take(limit) {
+                assert.equal(criteria.handle, "qa_venue");
+                const found = singletonPostsById.get(criteria.postId);
+                return found ? [found].slice(0, limit) : [];
+              },
               async first() {
                 assert.equal(criteria.handle, "qa_venue");
                 return singletonPostsById.get(criteria.postId) ?? null;

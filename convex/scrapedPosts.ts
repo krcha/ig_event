@@ -462,6 +462,11 @@ export const upsertManyByHandle = mutation({
                 analysisResultJson: undefined,
                 analysisCompletedAt: undefined,
                 analysisModel: undefined,
+                analysisImageSourceUrl: undefined,
+                analysisImageChecksumSha256: undefined,
+                analysisContractVersion: undefined,
+                analysisIsEvent: undefined,
+                analysisNonEventReason: undefined,
                 analysisInputTokens: undefined,
                 analysisOutputTokens: undefined,
                 analysisTotalTokens: undefined,
@@ -635,6 +640,18 @@ export const claimProcessing = mutation({
         existing.analysisRevision === sourceRevision
           ? existing.analysisResultJson
           : undefined,
+      analysisContractVersion:
+        existing.analysisRevision === sourceRevision
+          ? existing.analysisContractVersion
+          : undefined,
+      analysisImageSourceUrl:
+        existing.analysisRevision === sourceRevision
+          ? existing.analysisImageSourceUrl
+          : undefined,
+      analysisImageChecksumSha256:
+        existing.analysisRevision === sourceRevision
+          ? existing.analysisImageChecksumSha256
+          : undefined,
     };
   },
 });
@@ -665,10 +682,12 @@ export const markOpenAiAnalysisAttemptStarted = mutation({
     ) {
       throw new Error("Cannot start analysis from a stale processing fence.");
     }
-    if (existing.analysisRevision === args.sourceRevision && existing.analysisResultJson) {
+    const hasCurrentAnalysis =
+      existing.analysisRevision === args.sourceRevision && Boolean(existing.analysisResultJson);
+    if (hasCurrentAnalysis && existing.analysisContractVersion === "event_evidence_v2") {
       return { recorded: false, reason: "already_completed" as const };
     }
-    if (existing.analysisAttemptRevision === args.sourceRevision) {
+    if (existing.analysisAttemptRevision === args.sourceRevision && !hasCurrentAnalysis) {
       return { recorded: false, reason: "already_started" as const };
     }
 
@@ -706,6 +725,22 @@ export const markOpenAiAnalysisAttemptStarted = mutation({
       });
     }
     await ctx.db.patch(existing._id, {
+      ...(hasCurrentAnalysis
+        ? {
+            analysisRevision: undefined,
+            analysisResultJson: undefined,
+            analysisCompletedAt: undefined,
+            analysisModel: undefined,
+            analysisImageSourceUrl: undefined,
+            analysisImageChecksumSha256: undefined,
+            analysisContractVersion: undefined,
+            analysisIsEvent: undefined,
+            analysisNonEventReason: undefined,
+            analysisInputTokens: undefined,
+            analysisOutputTokens: undefined,
+            analysisTotalTokens: undefined,
+          }
+        : {}),
       analysisAttemptRevision: args.sourceRevision,
       analysisAttemptStartedAt: now,
       analysisAttemptOwner: args.owner.slice(0, 200),
@@ -779,6 +814,8 @@ export const recordOpenAiAnalysis = mutation({
     owner: v.string(),
     sourceRevision: v.number(),
     resultJson: v.string(),
+    imageSourceUrl: v.optional(v.string()),
+    imageChecksumSha256: v.optional(v.string()),
     model: v.optional(v.string()),
     inputTokens: v.optional(v.number()),
     outputTokens: v.optional(v.number()),
@@ -790,9 +827,48 @@ export const recordOpenAiAnalysis = mutation({
     if (args.resultJson.length > 150_000) {
       throw new Error("OpenAI analysis result exceeds the durable cache limit.");
     }
-    JSON.parse(args.resultJson);
+    const parsedResult = JSON.parse(args.resultJson) as unknown;
+    if (!parsedResult || typeof parsedResult !== "object" || Array.isArray(parsedResult)) {
+      throw new Error("OpenAI analysis result must be a JSON object.");
+    }
+    const result = parsedResult as Record<string, unknown>;
+    const contractVersion =
+      typeof result.extraction_contract_version === "string"
+        ? result.extraction_contract_version.trim()
+        : undefined;
+    const isEvent =
+      typeof result.is_event === "boolean" ? result.is_event : undefined;
+    const nonEventReason =
+      typeof result.non_event_reason === "string"
+        ? result.non_event_reason.trim().slice(0, 500)
+        : undefined;
+    if (
+      contractVersion === "event_evidence_v2" &&
+      (isEvent === undefined || nonEventReason === undefined || (isEvent && nonEventReason) || (!isEvent && !nonEventReason))
+    ) {
+      throw new Error("OpenAI event-evidence classification is invalid.");
+    }
     const existing = await resolveScrapedPostForProcessingFence(ctx, args);
     if (!existing) throw new Error("Cannot cache analysis for an unknown scraped post.");
+    const imageSourceUrl = args.imageSourceUrl?.trim();
+    const imageChecksumSha256 = args.imageChecksumSha256?.trim().toLocaleLowerCase();
+    if (
+      imageChecksumSha256 !== undefined &&
+      !/^[a-f0-9]{64}$/u.test(imageChecksumSha256)
+    ) {
+      throw new Error("OpenAI analysis image checksum must be a SHA-256 hex digest.");
+    }
+    if (Boolean(imageSourceUrl) !== Boolean(imageChecksumSha256)) {
+      throw new Error("OpenAI analysis image URL and checksum must be recorded together.");
+    }
+    if (
+      imageSourceUrl &&
+      ![...(existing.imageUrls ?? []), existing.imageUrl].some(
+        (candidate) => candidate?.trim() === imageSourceUrl,
+      )
+    ) {
+      throw new Error("OpenAI analysis image does not match the current scraped-post source.");
+    }
     const now = Date.now();
     if (
       existing.processingStatus !== "processing" ||
@@ -824,6 +900,11 @@ export const recordOpenAiAnalysis = mutation({
       analysisResultJson: args.resultJson,
       analysisCompletedAt: now,
       analysisModel: args.model?.slice(0, 160),
+      analysisImageSourceUrl: imageSourceUrl,
+      analysisImageChecksumSha256: imageChecksumSha256,
+      analysisContractVersion: contractVersion?.slice(0, 80),
+      analysisIsEvent: isEvent,
+      analysisNonEventReason: nonEventReason,
       analysisInputTokens: args.inputTokens,
       analysisOutputTokens: args.outputTokens,
       analysisTotalTokens: args.totalTokens,

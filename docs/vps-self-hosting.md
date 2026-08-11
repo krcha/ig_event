@@ -21,7 +21,8 @@ Checked against this repo on 2026-06-05:
   build-time values for the browser bundle. Build the image with the same public
   values you intend to run in production.
 - Set both OpenAI model env vars explicitly. The low-cost template uses
-  `gpt-4.1-mini`; production readiness fails if either is blank.
+  `gpt-5-mini` for extraction and `gpt-4.1-mini` for review; production
+  readiness fails if either is blank.
 
 ## Recommended Shape
 
@@ -78,7 +79,7 @@ At current small scale, optimize for low fixed cost and controlled usage:
 | Web hosting | Existing VPS | Incremental cost is $0 if the VPS already has spare RAM/CPU. |
 | Convex | Hosted Free/Starter, or self-hosted Convex if cloud quota/cost is the actual blocker | Self-hosting removes Convex Cloud quotas but makes VPS storage, backups, upgrades, and dashboard security your responsibility. |
 | Clerk | Hobby | Free up to the current Hobby limits; keep admin-only usage tiny. |
-| OpenAI | Explicitly set `OPENAI_VISION_MODEL=gpt-4.1-mini` and `OPENAI_REVIEW_MODEL=gpt-4.1-mini` | Usage-based; cap spend in the OpenAI dashboard and avoid reprocessing old posts. |
+| OpenAI | Explicitly set `OPENAI_VISION_MODEL=gpt-5-mini` and `OPENAI_REVIEW_MODEL=gpt-4.1-mini` | Usage-based; cap spend in the OpenAI dashboard and avoid reprocessing old posts. |
 | Apify | Free plan first | The first real cost pressure is scraping volume. Keep cron daily or manual until you see demand. |
 | Backups/monitoring | Provider snapshot plus one external uptime check | Enough for launch; do not add a paid observability stack yet. |
 
@@ -188,7 +189,7 @@ ADMIN_CLERK_USER_IDS=
 OPENAI_API_KEY=
 APIFY_API_TOKEN=
 APIFY_INSTAGRAM_ACTOR_ID=apify/instagram-post-scraper
-OPENAI_VISION_MODEL=gpt-4.1-mini
+OPENAI_VISION_MODEL=gpt-5-mini
 OPENAI_REVIEW_MODEL=gpt-4.1-mini
 CLERK_JWT_ISSUER_DOMAIN=
 CRON_SECRET=

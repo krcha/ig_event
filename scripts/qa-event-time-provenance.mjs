@@ -349,6 +349,7 @@ assert.deepEqual(normalizeEventTimeWritePatch({ time: "22:00" }), {
   timeEvidenceText: undefined,
   timeConfidence: 0,
   timeStatus: "unknown",
+  timeEvidenceKind: "start_time_stated",
 });
 assert.deepEqual(
   normalizeEventTimeWritePatch({
@@ -357,6 +358,7 @@ assert.deepEqual(
     timeEvidenceText: "Početak 21H",
     timeConfidence: 0.95,
     timeStatus: "confirmed",
+    timeEvidenceKind: "start_time_stated",
   }),
   {
     time: "21:00",
@@ -364,7 +366,30 @@ assert.deepEqual(
     timeEvidenceText: "Početak 21H",
     timeConfidence: 0.95,
     timeStatus: "confirmed",
+    timeEvidenceKind: "start_time_stated",
   },
+);
+assert.deepEqual(normalizeEventTimeWritePatch({ time: "TBD" }), {
+  time: "TBD",
+  timeSource: "unknown",
+  timeEvidenceText: undefined,
+  timeConfidence: 0,
+  timeStatus: "unknown",
+  timeEvidenceKind: "not_stated",
+});
+assert.equal(
+  Object.hasOwn(
+    normalizeEventTimeWritePatch({
+      time: "21:00",
+      timeSource: "caption",
+      timeEvidenceText: "Početak 21H",
+      timeConfidence: 0.95,
+      timeStatus: "confirmed",
+    }),
+    "timeEvidenceKind",
+  ),
+  true,
+  "A legacy provenance update must explicitly clear a stale semantic time kind.",
 );
 assert.equal(
   normalizeEventTimeWritePatch({
@@ -479,11 +504,13 @@ for (const field of ["timeSource", "timeEvidenceText", "timeConfidence", "timeSt
 assert.ok(eventsSource.includes("normalizeEventTimeWritePatch"));
 assert.match(
   eventsSource,
-  /export const updateEvent[\s\S]*?normalizeEventTimeWritePatch\(args\.patch\)/,
+  /async function applyEventUpdate[\s\S]*?normalizeEventTimeWritePatch\(eventPatch\)/,
+  "The shared update handler must normalize time and semantic-kind provenance atomically.",
 );
 assert.match(
   eventsSource,
-  /export const mergeApprovedEvents[\s\S]*?normalizeEventTimeWritePatch\(args\.patch\)/,
+  /export const mergeApprovedEvents[\s\S]*?normalizeEventTimeWritePatch\(timeAndPublicFieldPatch\)/,
+  "Approved-event merges must normalize time and semantic-kind provenance atomically.",
 );
 assert.match(
   ingestionSource,
