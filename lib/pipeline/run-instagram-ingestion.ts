@@ -9778,6 +9778,7 @@ type ProcessIngestionPostOptions = {
   cachedAnalysisImageSourceUrl?: string;
   cachedAnalysisImageChecksumSha256?: string;
   providerExecution?: ProviderExecutionControl;
+  onOpenAiTransportStarted?: () => void;
   eventDateFilterNow?: Date;
 };
 
@@ -10276,6 +10277,10 @@ async function processIngestionPost(
               analysisAttemptRecorded = true;
             },
             onTransportStarted: () => {
+              // Recovery callers enforce their transport ceiling here. Run
+              // that guard before marking the transport as started so a
+              // rejected fourth call is durably released as definitely unsent.
+              options.onOpenAiTransportStarted?.();
               transportStarted = true;
             },
           }
@@ -11180,6 +11185,7 @@ type ProcessLoadedPostsForHandleOptions = {
   workOwner: string;
   scrapedPostId?: string;
   expectedSourceRevision?: number;
+  onOpenAiTransportStarted?: () => void;
 } & IngestionVenueContext;
 
 async function processLoadedPostsForHandle(
@@ -11199,6 +11205,7 @@ async function processLoadedPostsForHandle(
     workOwner,
     scrapedPostId,
     expectedSourceRevision,
+    onOpenAiTransportStarted,
   } = options;
 
   for (const rawPost of posts) {
@@ -11393,6 +11400,7 @@ async function processLoadedPostsForHandle(
         cachedAnalysisImageSourceUrl: claim.analysisImageSourceUrl,
         cachedAnalysisImageChecksumSha256: claim.analysisImageChecksumSha256,
         providerExecution,
+        onOpenAiTransportStarted,
       });
     } catch (error) {
       await client.mutation(
@@ -11495,9 +11503,9 @@ const DURABLE_TERMINAL_SAVED_POST_OUTCOMES = new Set([
 ]);
 
 export type DurableSavedPostProcessingResult =
-  | { state: "terminal"; outcome: string }
-  | { state: "pending"; reason: string; retryAfterMs: number }
-  | { state: "blocked"; reason: string };
+  | { state: "terminal"; outcome: string; transportAttempted: boolean }
+  | { state: "pending"; reason: string; retryAfterMs: number; transportAttempted: boolean }
+  | { state: "blocked"; reason: string; transportAttempted: boolean };
 
 function isDurableSavedPostTerminal(record: SavedScrapedPostRecord): boolean {
   return (
@@ -11518,21 +11526,28 @@ export async function processSavedScrapedPostForDurableReceipt(options: {
   expectedSourceRevision: number;
   workOwner: string;
   serviceSecret?: string;
+  onOpenAiTransportStarted?: () => void;
 }): Promise<DurableSavedPostProcessingResult> {
   const client = getConvexClient();
   const serviceSecret = getConfiguredServiceSecret(options.serviceSecret);
+  let transportAttempted = false;
   const initial = await loadSavedScrapedPostRecordById(
     client,
     options.scrapedPostId,
     serviceSecret,
   );
   if (!initial || normalizeHandle(initial.handle) !== normalizeHandle(options.handle)) {
-    return { state: "blocked", reason: "The linked durable saved post is missing or mismatched." };
+    return {
+      state: "blocked",
+      reason: "The linked durable saved post is missing or mismatched.",
+      transportAttempted,
+    };
   }
   if ((initial.sourceRevision ?? 1) !== options.expectedSourceRevision) {
     return {
       state: "blocked",
       reason: "Durable saved-post source revision changed; exact recovery is required.",
+      transportAttempted,
     };
   }
   const summary = createEmptyIngestionSummary([options.handle]);
@@ -11546,6 +11561,7 @@ export async function processSavedScrapedPostForDurableReceipt(options: {
     return {
       state: "terminal",
       outcome: initial.processingOutcome ?? "receipt_complete",
+      transportAttempted,
     };
   }
 
@@ -11566,6 +11582,10 @@ export async function processSavedScrapedPostForDurableReceipt(options: {
       workOwner: options.workOwner,
       scrapedPostId: options.scrapedPostId,
       expectedSourceRevision: options.expectedSourceRevision,
+      onOpenAiTransportStarted: () => {
+        options.onOpenAiTransportStarted?.();
+        transportAttempted = true;
+      },
       ...venueContext,
     });
   } catch (error) {
@@ -11578,12 +11598,17 @@ export async function processSavedScrapedPostForDurableReceipt(options: {
     serviceSecret,
   );
   if (!refreshed) {
-    return { state: "blocked", reason: "The linked durable saved post disappeared during processing." };
+    return {
+      state: "blocked",
+      reason: "The linked durable saved post disappeared during processing.",
+      transportAttempted,
+    };
   }
   if ((refreshed.sourceRevision ?? 1) !== options.expectedSourceRevision) {
     return {
       state: "blocked",
       reason: "Durable saved-post source revision changed during processing; exact recovery is required.",
+      transportAttempted,
     };
   }
   if (isDurableSavedPostTerminal(refreshed)) {
@@ -11595,6 +11620,7 @@ export async function processSavedScrapedPostForDurableReceipt(options: {
     return {
       state: "terminal",
       outcome: refreshed.processingOutcome ?? "receipt_complete",
+      transportAttempted,
     };
   }
 
@@ -11609,7 +11635,7 @@ export async function processSavedScrapedPostForDurableReceipt(options: {
     processingReasons[0] ??
     "Saved post processing did not reach a terminal outcome.";
   if (refreshed.processingOutcome === "openai_transport_ambiguous") {
-    return { state: "blocked", reason };
+    return { state: "blocked", reason, transportAttempted };
   }
   const retryAt = Math.max(
     Date.now() + 1_000,
@@ -11619,6 +11645,7 @@ export async function processSavedScrapedPostForDurableReceipt(options: {
     state: "pending",
     reason,
     retryAfterMs: Math.min(6 * 60 * 60_000, Math.max(1_000, retryAt - Date.now())),
+    transportAttempted,
   };
 }
 

@@ -8,6 +8,9 @@ import {
 } from "../lib/ai/openai-analysis-protocol";
 import {
   getLegacyDefinitiveOutputRecoveryEntry,
+  LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_RECEIPT_IDS,
+  LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_SELECTION_SHA256,
+  LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_SELECTION_VERSION,
   LEGACY_DEFINITIVE_OUTPUT_RECOVERY_MANIFEST_VERSION,
   type LegacyDefinitiveOutputRecoveryEntry,
 } from "./legacyDefinitiveOutputRecoveryAllowlist";
@@ -35,6 +38,10 @@ const COST_PER_PROFILE_MICROS = 10_000;
 const LEASE_MS = 10 * 60 * 1000;
 const MAX_ATTEMPTS = 3;
 const MAX_PROCESSING_ATTEMPTS = 3;
+const MAX_LEGACY_DEFINITIVE_OUTPUT_RECOVERY_BATCH_SIZE = 3;
+const legacyDefinitiveOutputRecoveryInitialReceiptIds = new Set<string>(
+  LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_RECEIPT_IDS,
+);
 const definitiveOutputFailureKinds = new Set<string>(
   OPENAI_DEFINITIVE_OUTPUT_FAILURE_KINDS,
 );
@@ -100,6 +107,31 @@ function receiptRevisionMatchesPost(receipt: any, post: any): boolean {
     post !== null &&
     receipt.scrapedPostSourceRevision !== undefined &&
     receipt.scrapedPostSourceRevision === getScrapedPostSourceRevision(post)
+  );
+}
+
+function isDedicatedLegacyDefinitiveOutputRecoveryReceipt(
+  receipt: any,
+  post: any,
+): boolean {
+  const legacyEntry = getLegacyDefinitiveOutputRecoveryEntry(
+    String(receipt?._id ?? ""),
+  );
+  return Boolean(
+    legacyEntry &&
+      post &&
+      legacyEntry.runId === receipt.runId &&
+      legacyEntry.savedPostId === receipt.scrapedPostId &&
+      legacyEntry.savedPostId === post._id &&
+      legacyEntry.sourceRevision === receipt.scrapedPostSourceRevision &&
+      legacyEntry.sourceRevision === getScrapedPostSourceRevision(post) &&
+      post.analysisDefinitiveOutputRecoveryRevision ===
+        legacyEntry.sourceRevision &&
+      post.analysisDefinitiveOutputRecoveryFromProtocol ===
+        LEGACY_EVENT_EXTRACTION_ANALYSIS_PROTOCOL &&
+      post.analysisDefinitiveOutputRecoveryProtocol ===
+        DEFINITIVE_OUTPUT_RECOVERY_PROTOCOL &&
+      Number.isFinite(post.analysisDefinitiveOutputRecoveredAt),
   );
 }
 
@@ -319,6 +351,29 @@ async function revokeReceiptScrapedPostProcessingLease(
     processingLeaseExpiresAt: undefined,
     processingRetryAt: now,
     lastProcessedAt: now,
+    updatedAt: now,
+  });
+}
+
+async function markReceiptChunkTerminal(
+  ctx: { db: any },
+  receipt: any,
+  now: number,
+) {
+  const chunk = await ctx.db.get(receipt.chunkId);
+  if (!chunk || chunk.runId !== receipt.runId) {
+    throw new Error("Processing receipt chunk is missing or foreign.");
+  }
+  const nextTerminalReceiptCount = Math.min(
+    chunk.handleCount,
+    chunk.terminalReceiptCount + 1,
+  );
+  await ctx.db.patch(chunk._id, {
+    terminalReceiptCount: nextTerminalReceiptCount,
+    status:
+      nextTerminalReceiptCount === chunk.handleCount
+        ? "completed"
+        : "running",
     updatedAt: now,
   });
 }
@@ -1324,13 +1379,31 @@ export const claimNextProcessingReceipt = mutation({
       return true;
     };
 
-    const expired = await ctx.db
+    const expiredCandidates = await ctx.db
       .query("ingestionRunHandleReceipts")
       .withIndex("by_run_status_leaseExpiresAt", (q) =>
         q.eq("runId", args.runId).eq("status", "processing").lte("leaseExpiresAt", now),
       )
       .order("asc")
-      .first();
+      .take(run.selectedHandleCount + 1);
+    let expired = null;
+    let expiredPost = null;
+    for (const candidate of expiredCandidates) {
+      const candidatePost = await getLinkedReceiptScrapedPost(ctx, candidate);
+      // Lost acknowledgements on the dedicated exact lane are reconciled only
+      // by its manifest-bound claimant. The daily consumer must skip those
+      // expired rows and continue so an ordinary expired receipt is not
+      // starved behind them.
+      if (
+        candidatePost &&
+        isDedicatedLegacyDefinitiveOutputRecoveryReceipt(candidate, candidatePost)
+      ) {
+        continue;
+      }
+      expired = candidate;
+      expiredPost = candidatePost;
+      break;
+    }
     if (expired) {
       await revokeReceiptScrapedPostProcessingLease(
         ctx,
@@ -1338,7 +1411,7 @@ export const claimNextProcessingReceipt = mutation({
         now,
         "processing_receipt_lease_expired",
       );
-      const post = await getLinkedReceiptScrapedPost(ctx, expired);
+      const post = expiredPost ?? await getLinkedReceiptScrapedPost(ctx, expired);
       if (await rejectChangedRevision(expired, post)) return null;
       if (
         !isTerminalScrapedPost(post) &&
@@ -1352,6 +1425,7 @@ export const claimNextProcessingReceipt = mutation({
           outcomeDetail: "processing_lease_expired_retry_limit",
           updatedAt: now,
         });
+        await markReceiptChunkTerminal(ctx, expired, now);
         await finishRunIfTerminal(ctx, run, now);
       } else {
         await ctx.db.patch(expired._id, {
@@ -1369,13 +1443,23 @@ export const claimNextProcessingReceipt = mutation({
     // This indexed guard is the global one-worker semaphore for the run. A
     // duplicate host request can continue fetching, but cannot own a second AI
     // receipt while the first lease is valid.
-    const active = await ctx.db
+    const activeCandidates = await ctx.db
       .query("ingestionRunHandleReceipts")
       .withIndex("by_run_status", (q) =>
         q.eq("runId", args.runId).eq("status", "processing"),
       )
-      .first();
-    if (active) return null;
+      .take(run.selectedHandleCount + 1);
+    for (const activeReceipt of activeCandidates) {
+      const activePost = await getLinkedReceiptScrapedPost(ctx, activeReceipt);
+      const isExpiredDedicatedRecovery =
+        (activeReceipt.leaseExpiresAt ?? 0) <= now &&
+        activePost &&
+        isDedicatedLegacyDefinitiveOutputRecoveryReceipt(
+          activeReceipt,
+          activePost,
+        );
+      if (!isExpiredDedicatedRecovery) return null;
+    }
 
     const pendingCandidates = await ctx.db
       .query("ingestionRunHandleReceipts")
@@ -1403,6 +1487,14 @@ export const claimNextProcessingReceipt = mutation({
         });
         return null;
       }
+      // A frozen legacy definitive-output recovery is operator-selected work.
+      // Its durable recovery marker, exact allowlist identity, and persisted
+      // post link reserve it for the processing-only recovery endpoint below.
+      // Ordinary workers must leave it untouched even if outcomeDetail later
+      // changes while a recovery retry is being reconciled.
+      if (isDedicatedLegacyDefinitiveOutputRecoveryReceipt(candidate, linkedPost)) {
+        continue;
+      }
       if (await rejectChangedRevision(candidate, linkedPost)) return null;
       receipt = candidate;
       scrapedPost = linkedPost;
@@ -1427,6 +1519,9 @@ export const claimNextProcessingReceipt = mutation({
         if (!candidate.scrapedPostId || (candidate.retryNotBeforeAt ?? 0) > now) continue;
         const linkedPost = await getLinkedReceiptScrapedPost(ctx, candidate);
         if (!linkedPost) continue;
+        if (isDedicatedLegacyDefinitiveOutputRecoveryReceipt(candidate, linkedPost)) {
+          continue;
+        }
         if (await rejectChangedRevision(candidate, linkedPost)) return null;
         receipt = candidate;
         scrapedPost = linkedPost;
@@ -1455,7 +1550,11 @@ export const claimNextProcessingReceipt = mutation({
           continue;
         }
         const candidatePost = await getLinkedReceiptScrapedPost(ctx, candidate);
-        if (candidatePost && !(await rejectChangedRevision(candidate, candidatePost))) {
+        if (
+          candidatePost &&
+          !isDedicatedLegacyDefinitiveOutputRecoveryReceipt(candidate, candidatePost) &&
+          !(await rejectChangedRevision(candidate, candidatePost))
+        ) {
           receipt = candidate;
           scrapedPost = candidatePost;
           break;
@@ -1498,6 +1597,416 @@ export const claimNextProcessingReceipt = mutation({
       handle: receipt.handle,
       scrapedPostId: scrapedPost._id,
       scrapedPostSourceRevision,
+      processingAttemptCount,
+      providerAttemptCount: receipt.providerAttemptCount ?? 0,
+    };
+  },
+});
+
+const legacyDefinitiveOutputRecoveryClaimValidator = v.object({
+  claimed: v.boolean(),
+  state: v.union(
+    v.literal("claimed"),
+    v.literal("already_terminal"),
+    v.literal("transport_ambiguous"),
+  ),
+  runId: v.id("ingestionRuns"),
+  receiptId: v.id("ingestionRunHandleReceipts"),
+  handle: v.string(),
+  scrapedPostId: v.id("scrapedPosts"),
+  scrapedPostSourceRevision: v.number(),
+  processingAttemptCount: v.number(),
+  providerAttemptCount: v.number(),
+});
+
+function hasUsableCurrentEventEvidence(post: any, sourceRevision: number): boolean {
+  if (
+    post.analysisRevision !== sourceRevision ||
+    post.analysisAttemptRevision !== sourceRevision ||
+    post.analysisAttemptProtocol !== EVENT_EXTRACTION_ANALYSIS_PROTOCOL ||
+    post.analysisContractVersion !== "event_evidence_v2" ||
+    !Number.isFinite(post.analysisCompletedAt) ||
+    typeof post.analysisModel !== "string" ||
+    typeof post.analysisIsEvent !== "boolean" ||
+    !post.analysisResultJson
+  ) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(post.analysisResultJson) as {
+      extraction_contract_version?: unknown;
+    };
+    return Boolean(
+      parsed &&
+        typeof parsed === "object" &&
+        !Array.isArray(parsed) &&
+        parsed.extraction_contract_version === "event_evidence_v2",
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function terminalizeDedicatedLegacyRecoveryReceipt(
+  ctx: { db: any },
+  run: any,
+  receipt: any,
+  now: number,
+  status: "fetched" | "failed",
+  detail: string,
+) {
+  const chunk = await ctx.db.get(receipt.chunkId);
+  if (!chunk || chunk.runId !== run._id) {
+    throw new Error("Legacy recovery receipt chunk is missing or foreign.");
+  }
+  await ctx.db.patch(receipt._id, {
+    status,
+    terminalAt: now,
+    leaseOwner: undefined,
+    leaseExpiresAt: undefined,
+    retryNotBeforeAt: undefined,
+    outcomeDetail: detail.slice(0, 256),
+    updatedAt: now,
+  });
+  await markReceiptChunkTerminal(ctx, receipt, now);
+  await finishRunIfTerminal(ctx, run, now);
+}
+
+/**
+ * Claim only one operator-selected member of a frozen 1-3 receipt batch. The
+ * caller supplies receipt IDs only; run, saved-post, and revision identities
+ * are derived from the compiled legacy manifest. This mutation cannot enter
+ * the Instagram fetch lane and ordinary processing claims explicitly skip the
+ * same exact durable recovery marker above.
+ */
+export const claimLegacyDefinitiveOutputRecoveryReceipt = mutation({
+  args: {
+    selectedReceiptIds: v.array(v.id("ingestionRunHandleReceipts")),
+    receiptId: v.id("ingestionRunHandleReceipts"),
+    workerId: v.string(),
+    legacyManifestVersion: v.literal(
+      LEGACY_DEFINITIVE_OUTPUT_RECOVERY_MANIFEST_VERSION,
+    ),
+    selectionSha256: v.literal(
+      LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_SELECTION_SHA256,
+    ),
+    selectionVersion: v.literal(
+      LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_SELECTION_VERSION,
+    ),
+    recoveryProtocol: v.literal(DEFINITIVE_OUTPUT_RECOVERY_PROTOCOL),
+    serviceSecret: v.optional(v.string()),
+  },
+  returns: legacyDefinitiveOutputRecoveryClaimValidator,
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const selectedReceiptIds = args.selectedReceiptIds.map(String);
+    const uniqueReceiptIds = new Set(selectedReceiptIds);
+    if (
+      selectedReceiptIds.length < 1 ||
+      selectedReceiptIds.length >
+        MAX_LEGACY_DEFINITIVE_OUTPUT_RECOVERY_BATCH_SIZE ||
+      uniqueReceiptIds.size !== selectedReceiptIds.length ||
+      !uniqueReceiptIds.has(String(args.receiptId)) ||
+      selectedReceiptIds.some(
+        (receiptId) =>
+          !legacyDefinitiveOutputRecoveryInitialReceiptIds.has(receiptId),
+      )
+    ) {
+      throw new Error(
+        "Legacy recovery requires one to three unique selected receipt IDs including the target.",
+      );
+    }
+    if (
+      args.legacyManifestVersion !==
+        LEGACY_DEFINITIVE_OUTPUT_RECOVERY_MANIFEST_VERSION ||
+      args.selectionSha256 !==
+        LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_SELECTION_SHA256 ||
+      args.selectionVersion !==
+        LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_SELECTION_VERSION ||
+      args.recoveryProtocol !== DEFINITIVE_OUTPUT_RECOVERY_PROTOCOL
+    ) {
+      throw new Error("Legacy recovery protocol or manifest fence mismatch.");
+    }
+
+    const selectedEntries: LegacyDefinitiveOutputRecoveryEntry[] = [];
+    for (const receiptId of selectedReceiptIds) {
+      const entry = getLegacyDefinitiveOutputRecoveryEntry(receiptId);
+      if (!entry) {
+        throw new Error("Legacy recovery selection is not in the frozen allowlist.");
+      }
+      selectedEntries.push(entry);
+    }
+    const targetEntry = getLegacyDefinitiveOutputRecoveryEntry(args.receiptId);
+    if (
+      !targetEntry ||
+      selectedEntries.some((entry) => entry.runId !== targetEntry.runId)
+    ) {
+      throw new Error("Legacy recovery selection must belong to one frozen run.");
+    }
+
+    const selectedReceipts = await Promise.all(
+      args.selectedReceiptIds.map((receiptId) => ctx.db.get(receiptId)),
+    );
+    const selectedPosts = await Promise.all(
+      selectedReceipts.map((receipt) =>
+        receipt?.scrapedPostId
+          ? ctx.db.get(receipt.scrapedPostId)
+          : Promise.resolve(null),
+      ),
+    );
+    for (let index = 0; index < selectedEntries.length; index += 1) {
+      const entry = selectedEntries[index];
+      const receipt = selectedReceipts[index];
+      const post = selectedPosts[index];
+      if (
+        !receipt ||
+        !post ||
+        entry.receiptId !== receipt._id ||
+        entry.runId !== receipt.runId ||
+        entry.savedPostId !== receipt.scrapedPostId ||
+        entry.savedPostId !== post._id ||
+        receipt.handle !== post.handle ||
+        entry.sourceRevision !== receipt.scrapedPostSourceRevision ||
+        entry.sourceRevision !== getScrapedPostSourceRevision(post) ||
+        receipt.providerAttemptCount !== 1 ||
+        receipt.providerResultStatus !== "persisted" ||
+        receipt.persistedPostCount !== 1 ||
+        !isDedicatedLegacyDefinitiveOutputRecoveryReceipt(receipt, post)
+      ) {
+        throw new Error(
+          "Legacy recovery selection no longer matches its exact persisted recovery fence.",
+        );
+      }
+    }
+
+    const targetIndex = selectedEntries.findIndex(
+      (entry) => entry.receiptId === String(args.receiptId),
+    );
+    const receipt = selectedReceipts[targetIndex];
+    const savedPost = selectedPosts[targetIndex];
+    if (!receipt || !savedPost) {
+      throw new Error("Legacy recovery target disappeared during validation.");
+    }
+    const run = await ctx.db.get(receipt.runId);
+    if (!run || String(run._id) !== targetEntry.runId) {
+      throw new Error("Legacy recovery run identity mismatch.");
+    }
+    const now = Date.now();
+    if (
+      selectedReceipts.some(
+        (selectedReceipt, index) =>
+          (selectedReceipt?.leaseExpiresAt ?? 0) > now ||
+          (selectedPosts[index]?.processingLeaseExpiresAt ?? 0) > now,
+      )
+    ) {
+      throw new Error(
+        "Legacy recovery refuses an active lease anywhere in the selected batch.",
+      );
+    }
+    const targetReceiptLeaseActive = (receipt.leaseExpiresAt ?? 0) > now;
+    const targetPostLeaseActive =
+      (savedPost.processingLeaseExpiresAt ?? 0) > now;
+    if (targetReceiptLeaseActive || targetPostLeaseActive) {
+      throw new Error("Legacy recovery refuses an active receipt or saved-post lease.");
+    }
+    if (!args.workerId.trim()) {
+      throw new Error("Legacy recovery worker identity is required.");
+    }
+
+    const terminalReceipt = terminalStatuses.includes(
+      receipt.status as (typeof terminalStatuses)[number],
+    );
+    if (terminalReceipt) {
+      const isKnownAmbiguousRecoveryTerminal =
+        receipt.status === "failed" &&
+        receipt.outcomeDetail ===
+          `saved_post:${savedPost._id};openai_transport_ambiguous` &&
+        savedPost.processingStatus === "retryable_failure" &&
+        savedPost.processingOutcome === "openai_transport_ambiguous" &&
+        savedPost.analysisAttemptRevision === targetEntry.sourceRevision &&
+        !hasUsableCurrentEventEvidence(savedPost, targetEntry.sourceRevision);
+      if (!isTerminalScrapedPost(savedPost) && !isKnownAmbiguousRecoveryTerminal) {
+        throw new Error(
+          "Legacy recovery terminal receipt does not have a terminal saved post.",
+        );
+      }
+      return {
+        claimed: false,
+        state: isKnownAmbiguousRecoveryTerminal
+          ? ("transport_ambiguous" as const)
+          : ("already_terminal" as const),
+        runId: run._id,
+        receiptId: receipt._id,
+        handle: receipt.handle,
+        scrapedPostId: savedPost._id,
+        scrapedPostSourceRevision: targetEntry.sourceRevision,
+        processingAttemptCount: receipt.processingAttemptCount ?? 0,
+        providerAttemptCount: receipt.providerAttemptCount ?? 0,
+      };
+    }
+    if (run.status === "building" || run.status === "completed" || run.status === "failed") {
+      throw new Error("Legacy recovery run is not in a processable state.");
+    }
+    if (receipt.status !== "processing_pending" && receipt.status !== "processing") {
+      throw new Error("Legacy recovery target is not in the processing-only lane.");
+    }
+    if (
+      receipt.status !== "processing" &&
+      (receipt.leaseOwner !== undefined || receipt.leaseExpiresAt !== undefined)
+    ) {
+      throw new Error("Legacy recovery target has an uncleared receipt lease.");
+    }
+
+    if (isTerminalScrapedPost(savedPost)) {
+      const status =
+        savedPost.processingOutcome === "terminal_permanent_failure"
+          ? ("failed" as const)
+          : ("fetched" as const);
+      await terminalizeDedicatedLegacyRecoveryReceipt(
+        ctx,
+        run,
+        receipt,
+        now,
+        status,
+        `saved_post:${savedPost._id};${savedPost.processingOutcome}`,
+      );
+      return {
+        claimed: false,
+        state: "already_terminal" as const,
+        runId: run._id,
+        receiptId: receipt._id,
+        handle: receipt.handle,
+        scrapedPostId: savedPost._id,
+        scrapedPostSourceRevision: targetEntry.sourceRevision,
+        processingAttemptCount: receipt.processingAttemptCount ?? 0,
+        providerAttemptCount: receipt.providerAttemptCount ?? 0,
+      };
+    }
+
+    const hasCurrentAnalysis = hasUsableCurrentEventEvidence(
+      savedPost,
+      targetEntry.sourceRevision,
+    );
+    const hasUnresolvedTransportAttempt =
+      savedPost.analysisAttemptRevision === targetEntry.sourceRevision &&
+      !hasCurrentAnalysis;
+    if (hasUnresolvedTransportAttempt) {
+      if (
+        savedPost.processingLeaseOwner !== undefined &&
+        targetPostLeaseActive
+      ) {
+        throw new Error("Legacy recovery refuses an active saved-post lease.");
+      }
+      await ctx.db.patch(savedPost._id, {
+        processingStatus: "retryable_failure",
+        blocksPaidFetch: false,
+        processingOutcome: "openai_transport_ambiguous",
+        processingError:
+          "A recovery OpenAI transport may have started; replay remains blocked.",
+        processingLeaseOwner: undefined,
+        processingLeaseExpiresAt: undefined,
+        processingRetryAt: undefined,
+        lastProcessedAt: now,
+        updatedAt: now,
+      });
+      await terminalizeDedicatedLegacyRecoveryReceipt(
+        ctx,
+        run,
+        receipt,
+        now,
+        "failed",
+        `saved_post:${savedPost._id};openai_transport_ambiguous`,
+      );
+      return {
+        claimed: false,
+        state: "transport_ambiguous" as const,
+        runId: run._id,
+        receiptId: receipt._id,
+        handle: receipt.handle,
+        scrapedPostId: savedPost._id,
+        scrapedPostSourceRevision: targetEntry.sourceRevision,
+        processingAttemptCount: receipt.processingAttemptCount ?? 0,
+        providerAttemptCount: receipt.providerAttemptCount ?? 0,
+      };
+    }
+    if (
+      !hasCurrentAnalysis &&
+      (savedPost.analysisAttemptRevision !== undefined ||
+        savedPost.analysisRevision !== undefined)
+    ) {
+      throw new Error("Legacy recovery analysis generation has drifted.");
+    }
+
+    const [providerLease, activeProcessingReceipts] = await Promise.all([
+      ctx.db
+        .query("ingestionProviderLeases")
+        .withIndex("by_provider", (q) => q.eq("provider", "openai"))
+        .unique(),
+      ctx.db
+        .query("ingestionRunHandleReceipts")
+        .withIndex("by_run_status", (q) =>
+          q.eq("runId", run._id).eq("status", "processing"),
+        )
+        .take(2),
+    ]);
+    if ((providerLease?.leaseExpiresAt ?? 0) > now) {
+      throw new Error("Legacy recovery refuses an active OpenAI provider lease.");
+    }
+    if (
+      activeProcessingReceipts.some(
+        (activeReceipt) => activeReceipt._id !== receipt._id,
+      )
+    ) {
+      throw new Error("Legacy recovery refuses an unrelated processing receipt.");
+    }
+    if (
+      savedPost.processingStatus === "processing" &&
+      (savedPost.processingLeaseExpiresAt ?? 0) > now
+    ) {
+      throw new Error("Legacy recovery refuses an active saved-post lease.");
+    }
+    if (
+      savedPost.processingStatus !== "pending" &&
+      savedPost.processingStatus !== "retryable_failure" &&
+      savedPost.processingStatus !== "processing"
+    ) {
+      throw new Error("Legacy recovery saved post is not processable.");
+    }
+
+    // An expired exact-lane owner can be reconciled safely. A current analysis
+    // will be reused without transport; no attempt marker means the previous
+    // request died before OpenAI. The ambiguous case was terminalized above.
+    await ctx.db.patch(savedPost._id, {
+      processingStatus: "pending",
+      blocksPaidFetch: true,
+      processingOutcome: hasCurrentAnalysis
+        ? "definitive_output_recovery_materialization_resume"
+        : "definitive_output_requeued",
+      processingError: undefined,
+      processingLeaseOwner: undefined,
+      processingLeaseExpiresAt: undefined,
+      processingRetryAt: undefined,
+      lastProcessedAt: now,
+      updatedAt: now,
+    });
+    const processingAttemptCount = (receipt.processingAttemptCount ?? 0) + 1;
+    await ctx.db.patch(receipt._id, {
+      status: "processing",
+      processingAttemptCount,
+      leaseOwner: args.workerId.slice(0, 200),
+      leaseExpiresAt: now + LEASE_MS,
+      retryNotBeforeAt: undefined,
+      outcomeDetail: "legacy_definitive_output_recovery_claimed",
+      updatedAt: now,
+    });
+    return {
+      claimed: true,
+      state: "claimed" as const,
+      runId: run._id,
+      receiptId: receipt._id,
+      handle: receipt.handle,
+      scrapedPostId: savedPost._id,
+      scrapedPostSourceRevision: targetEntry.sourceRevision,
       processingAttemptCount,
       providerAttemptCount: receipt.providerAttemptCount ?? 0,
     };
@@ -1577,6 +2086,7 @@ export const releaseProcessingReceiptForRetry = mutation({
         outcomeDetail: args.reason.slice(0, 256),
         updatedAt: now,
       });
+      await markReceiptChunkTerminal(ctx, receipt, now);
       await finishRunIfTerminal(ctx, run, now);
       return { terminal: true, status: "failed" as const };
     }
@@ -1649,6 +2159,7 @@ export const completeProcessingReceipt = mutation({
       retryNotBeforeAt: undefined,
       updatedAt: now,
     });
+    await markReceiptChunkTerminal(ctx, receipt, now);
     const complete = await finishRunIfTerminal(ctx, run, now);
     const counts = await terminalCountsForRun(ctx, run._id, run.selectedHandleCount);
     return {

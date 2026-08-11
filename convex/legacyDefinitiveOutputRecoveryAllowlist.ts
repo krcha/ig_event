@@ -718,3 +718,29 @@ export function getLegacyDefinitiveOutputRecoveryEntry(
   return entryByReceiptId.get(receiptId) ?? null;
 }
 
+/**
+ * Separately reviewed initial cost-gated selection. Recovery execution may
+ * process a subset of these three rows, but never any of the other 44 legacy
+ * allowlist entries. Repeated invocations therefore cannot expand the paid AI
+ * scope beyond this immutable set.
+ */
+export const LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_SELECTION_VERSION =
+  "legacy-definitive-output-recovery-selection-v1:initial-3" as const;
+export const LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_SELECTION_SHA256 =
+  "f6e588cff5778a0bfd41a7d5238c753274bb83c5e0b908ceba6ed1760a34f1e8" as const;
+export const LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_RECEIPT_IDS =
+  Object.freeze([
+    "mx70mzwydg99nrhvyjmxaxzvgd8c9k73",
+    "mx71c7p5csrpzfc7x0zv9a66598c9zx7",
+    "mx70cnynwsxfrcq21nnvvn16x98c9h6c",
+  ] as const);
+
+if (
+  LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_RECEIPT_IDS.some(
+    (receiptId) => !entryByReceiptId.has(receiptId),
+  )
+) {
+  throw new Error(
+    "Legacy definitive-output recovery initial selection is outside the frozen allowlist.",
+  );
+}

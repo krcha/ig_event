@@ -16,6 +16,9 @@ import {
   LEGACY_DEFINITIVE_OUTPUT_RECOVERY_ALLOWLIST,
   LEGACY_DEFINITIVE_OUTPUT_RECOVERY_CONTENT_SHA256,
   LEGACY_DEFINITIVE_OUTPUT_RECOVERY_ENTRIES_SHA256,
+  LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_RECEIPT_IDS,
+  LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_SELECTION_SHA256,
+  LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_SELECTION_VERSION,
   LEGACY_DEFINITIVE_OUTPUT_RECOVERY_MANIFEST_FILE_SHA256,
   LEGACY_DEFINITIVE_OUTPUT_RECOVERY_MANIFEST_VERSION,
 } from "../convex/legacyDefinitiveOutputRecoveryAllowlist.ts";
@@ -23,7 +26,13 @@ import {
   claimProcessing,
   recordOpenAiDefinitiveOutputFailure,
 } from "../convex/scrapedPosts.ts";
-import { requeueDefinitiveOutputFailure } from "../convex/durableIngestionRuns.ts";
+import {
+  claimLegacyDefinitiveOutputRecoveryReceipt,
+  claimNextProcessingReceipt,
+  completeProcessingReceipt,
+  releaseProcessingReceiptForRetry,
+  requeueDefinitiveOutputFailure,
+} from "../convex/durableIngestionRuns.ts";
 
 const SERVICE_SECRET = "qa-definitive-output-secret";
 const previousCronSecret = process.env.CRON_SECRET;
@@ -379,6 +388,11 @@ class MemoryDb {
       },
       async first() {
         return query.rows()[0] ?? null;
+      },
+      async unique() {
+        const rows = query.rows();
+        if (rows.length > 1) throw new Error("MemoryDb unique query returned multiple rows.");
+        return rows[0] ?? null;
       },
     };
     return query;
@@ -1153,6 +1167,680 @@ await expectRecoveryRejected(
   },
   /refuses a legacy manifest version/i,
 );
+
+assert.deepEqual(
+  [...LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_RECEIPT_IDS],
+  [
+    "mx70mzwydg99nrhvyjmxaxzvgd8c9k73",
+    "mx71c7p5csrpzfc7x0zv9a66598c9zx7",
+    "mx70cnynwsxfrcq21nnvvn16x98c9h6c",
+  ],
+);
+assert.equal(
+  LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_SELECTION_SHA256,
+  "f6e588cff5778a0bfd41a7d5238c753274bb83c5e0b908ceba6ed1760a34f1e8",
+);
+
+const initialLegacyEntries = LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_RECEIPT_IDS.map(
+  (receiptId) => {
+    const entry = LEGACY_DEFINITIVE_OUTPUT_RECOVERY_ALLOWLIST.find(
+      (candidate) => candidate.receiptId === receiptId,
+    );
+    assert.ok(entry);
+    return entry;
+  },
+);
+
+function legacyInitialBatchSeed() {
+  const seeds = initialLegacyEntries.map((entry) => legacyRecoverySeed(entry));
+  const run = {
+    ...seeds[0].ingestionRuns[0],
+    selectedHandleCount: initialLegacyEntries.length,
+    terminalReceiptCount: initialLegacyEntries.length,
+    failedReceiptCount: initialLegacyEntries.length,
+    queueBuildCompletedAt: now - 30_000,
+    dispatchReadyAt: now - 30_000,
+  };
+  return {
+    scrapedPosts: seeds.flatMap((seed) => seed.scrapedPosts),
+    ingestionRuns: [run],
+    ingestionRunChunks: seeds.flatMap((seed) => seed.ingestionRunChunks),
+    ingestionRunHandleReceipts: seeds.flatMap(
+      (seed) => seed.ingestionRunHandleReceipts,
+    ),
+    ingestionProviderLeases: [],
+  };
+}
+
+async function requeueInitialBatch(db) {
+  for (const entry of initialLegacyEntries) {
+    assert.deepEqual(
+      await requeueDefinitiveOutputFailure._handler(
+        ctx(db),
+        legacyRequeueArgs(entry),
+      ),
+      { requeued: true, reason: "requeued" },
+    );
+  }
+}
+
+function exactClaimArgs(receiptId, overrides = {}) {
+  return {
+    selectedReceiptIds: [...LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_RECEIPT_IDS],
+    receiptId,
+    workerId: "qa-exact-recovery-worker",
+    legacyManifestVersion: LEGACY_DEFINITIVE_OUTPUT_RECOVERY_MANIFEST_VERSION,
+    selectionSha256: LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_SELECTION_SHA256,
+    selectionVersion: LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_SELECTION_VERSION,
+    recoveryProtocol: DEFINITIVE_OUTPUT_RECOVERY_PROTOCOL,
+    serviceSecret: SERVICE_SECRET,
+    ...overrides,
+  };
+}
+
+{
+  const db = new MemoryDb(legacyInitialBatchSeed());
+  await requeueInitialBatch(db);
+  const target = initialLegacyEntries[0];
+  const claimed = await claimLegacyDefinitiveOutputRecoveryReceipt._handler(
+    ctx(db),
+    exactClaimArgs(target.receiptId),
+  );
+  assert.equal(claimed.claimed, true);
+  assert.equal(claimed.state, "claimed");
+  assert.equal(claimed.scrapedPostId, target.savedPostId);
+  assert.equal(claimed.scrapedPostSourceRevision, target.sourceRevision);
+  assert.equal(claimed.providerAttemptCount, 1);
+  assert.equal(
+    db.row("ingestionRunHandleReceipts", target.receiptId).outcomeDetail,
+    "legacy_definitive_output_recovery_claimed",
+  );
+}
+
+// Normal exact completions restore the one-row chunk accounting that each
+// requeue decremented. A lost completion acknowledgement is read back through
+// the idempotent release boundary without incrementing the chunk twice.
+{
+  const db = new MemoryDb(legacyInitialBatchSeed());
+  await requeueInitialBatch(db);
+  for (let index = 0; index < initialLegacyEntries.length; index += 1) {
+    const target = initialLegacyEntries[index];
+    const workerId = `qa-completion-worker-${index}`;
+    const claimed = await claimLegacyDefinitiveOutputRecoveryReceipt._handler(
+      ctx(db),
+      exactClaimArgs(target.receiptId, { workerId }),
+    );
+    assert.equal(claimed.claimed, true);
+    await db.patch(target.savedPostId, {
+      processingStatus: "completed",
+      processingOutcome: "receipt_complete",
+      processingError: undefined,
+      processingLeaseOwner: undefined,
+      processingLeaseExpiresAt: undefined,
+      processingRetryAt: undefined,
+      blocksPaidFetch: false,
+    });
+    const completion = await completeProcessingReceipt._handler(ctx(db), {
+      runId: target.runId,
+      receiptId: target.receiptId,
+      workerId,
+      serviceSecret: SERVICE_SECRET,
+    });
+    assert.equal(completion.status, "fetched");
+    const chunk = db.row(
+      "ingestionRunChunks",
+      `chunk:${target.receiptId}`,
+    );
+    assert.equal(chunk.terminalReceiptCount, 1);
+    assert.equal(chunk.status, "completed");
+
+    if (index === 0) {
+      const completionReadback =
+        await releaseProcessingReceiptForRetry._handler(ctx(db), {
+          runId: target.runId,
+          receiptId: target.receiptId,
+          workerId,
+          reason: "completion acknowledgement unavailable",
+          serviceSecret: SERVICE_SECRET,
+        });
+      assert.deepEqual(completionReadback, {
+        terminal: true,
+        status: "fetched",
+      });
+      assert.equal(
+        db.row("ingestionRunChunks", `chunk:${target.receiptId}`)
+          .terminalReceiptCount,
+        1,
+        "Completion readback must not double-increment the chunk.",
+      );
+    }
+  }
+  const run = db.row("ingestionRuns", initialLegacyEntries[0].runId);
+  assert.equal(run.status, "completed");
+  assert.equal(run.terminalReceiptCount, 3);
+  assert.equal(run.failedReceiptCount, 0);
+  assert.ok(run.finishedAt);
+}
+
+{
+  const db = new MemoryDb(legacyInitialBatchSeed());
+  await requeueInitialBatch(db);
+  const unselected = LEGACY_DEFINITIVE_OUTPUT_RECOVERY_ALLOWLIST.find(
+    (entry) =>
+      !LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_RECEIPT_IDS.includes(
+        entry.receiptId,
+      ),
+  );
+  assert.ok(unselected);
+  await assert.rejects(
+    claimLegacyDefinitiveOutputRecoveryReceipt._handler(
+      ctx(db),
+      exactClaimArgs(initialLegacyEntries[0].receiptId, {
+        selectedReceiptIds: [initialLegacyEntries[0].receiptId, unselected.receiptId],
+      }),
+    ),
+    /one to three unique selected receipt IDs|initial selection/i,
+  );
+  await assert.rejects(
+    claimLegacyDefinitiveOutputRecoveryReceipt._handler(
+      ctx(db),
+      exactClaimArgs(initialLegacyEntries[0].receiptId, {
+        selectionSha256: "0".repeat(64),
+      }),
+    ),
+    /protocol or manifest fence mismatch/i,
+  );
+}
+
+// Exact recovery markers reserve only those rows. The generic consumer skips
+// all three without starvation and claims the later ordinary candidate.
+{
+  const seed = legacyInitialBatchSeed();
+  const db = new MemoryDb(seed);
+  await requeueInitialBatch(db);
+  const runId = initialLegacyEntries[0].runId;
+  db.table("ingestionRuns").set(runId, {
+    ...db.row("ingestionRuns", runId),
+    selectedHandleCount: 4,
+  });
+  db.table("scrapedPosts").set("post:ordinary", {
+    _id: "post:ordinary",
+    handle: "ordinary_handle",
+    postId: "ordinary-post",
+    instagramPostUrl: "https://www.instagram.com/p/ordinary-post/",
+    username: "ordinary_handle",
+    imageUrls: [],
+    sourceRevision: 1,
+    processingStatus: "pending",
+    blocksPaidFetch: true,
+    createdAt: now - 1_000,
+    updatedAt: now - 1_000,
+  });
+  db.table("ingestionRunHandleReceipts").set("zz-receipt-ordinary", {
+    _id: "zz-receipt-ordinary",
+    runId,
+    chunkId: "chunk:ordinary",
+    handle: "ordinary_handle",
+    status: "processing_pending",
+    attemptCount: 1,
+    providerAttemptCount: 1,
+    providerResultStatus: "persisted",
+    persistedPostCount: 1,
+    scrapedPostId: "post:ordinary",
+    scrapedPostSourceRevision: 1,
+    processingAttemptCount: 0,
+    retryNotBeforeAt: now - 1,
+    createdAt: now - 2_000,
+    updatedAt: now - 1_000,
+  });
+  const genericClaim = await claimNextProcessingReceipt._handler(ctx(db), {
+    runId,
+    workerId: "qa-generic-worker",
+    serviceSecret: SERVICE_SECRET,
+  });
+  assert.equal(genericClaim?.receiptId, "zz-receipt-ordinary");
+}
+
+// Merely being one of the 47 historical allowlist rows does not reserve an
+// untouched receipt; the durable recovery marker is mandatory.
+{
+  const entry = initialLegacyEntries[0];
+  const seed = legacyRecoverySeed(
+    entry,
+    {
+      processingStatus: "pending",
+      processingOutcome: "saved_post_processing_pending",
+      processingError: undefined,
+      analysisAttemptRevision: undefined,
+      analysisAttemptStartedAt: undefined,
+      analysisAttemptOwner: undefined,
+      analysisAttemptProtocol: undefined,
+      blocksPaidFetch: true,
+    },
+    {
+      status: "processing_pending",
+      terminalAt: undefined,
+      retryNotBeforeAt: now - 1,
+      outcomeDetail: "saved_post_processing_pending",
+    },
+    {
+      status: "queued",
+      queueBuildCompletedAt: now - 10_000,
+      dispatchReadyAt: now - 10_000,
+      terminalReceiptCount: 0,
+      failedReceiptCount: 0,
+      finishedAt: undefined,
+    },
+  );
+  seed.ingestionProviderLeases = [];
+  const db = new MemoryDb(seed);
+  const genericClaim = await claimNextProcessingReceipt._handler(ctx(db), {
+    runId: entry.runId,
+    workerId: "qa-untouched-worker",
+    serviceSecret: SERVICE_SECRET,
+  });
+  assert.equal(genericClaim?.receiptId, entry.receiptId);
+}
+
+async function assertDedicatedRecoveryDoesNotStarveStatus(status) {
+  const db = new MemoryDb(legacyInitialBatchSeed());
+  await requeueInitialBatch(db);
+  const runId = initialLegacyEntries[0].runId;
+  for (const entry of initialLegacyEntries) {
+    await db.patch(entry.receiptId, {
+      status,
+      outcomeDetail:
+        status === "deferred"
+          ? "OpenAI provider execution lease is busy."
+          : "saved_post_definitive_output_requeued",
+      terminalAt: status === "deferred" ? now - 1_000 : undefined,
+      retryNotBeforeAt: now - 1,
+    });
+  }
+  await db.patch(runId, {
+    status: "queued",
+    selectedHandleCount: 4,
+    queueBuildCompletedAt: now - 20_000,
+    dispatchReadyAt: now - 20_000,
+    finishedAt: undefined,
+  });
+  db.table("scrapedPosts").set(`post:ordinary:${status}`, {
+    _id: `post:ordinary:${status}`,
+    handle: `ordinary_${status}`,
+    postId: `ordinary-${status}`,
+    instagramPostUrl: `https://www.instagram.com/p/ordinary-${status}/`,
+    username: `ordinary_${status}`,
+    imageUrls: [],
+    sourceRevision: 1,
+    processingStatus: "pending",
+    blocksPaidFetch: true,
+    createdAt: now - 2_000,
+    updatedAt: now - 1_000,
+  });
+  db.table("ingestionRunChunks").set(`chunk:ordinary:${status}`, {
+    _id: `chunk:ordinary:${status}`,
+    runId,
+    status: status === "deferred" ? "completed" : "running",
+    handleCount: 1,
+    terminalReceiptCount: status === "deferred" ? 1 : 0,
+    createdAt: now - 2_000,
+    updatedAt: now - 1_000,
+  });
+  db.table("ingestionRunHandleReceipts").set(`zz-receipt-ordinary-${status}`, {
+    _id: `zz-receipt-ordinary-${status}`,
+    runId,
+    chunkId: `chunk:ordinary:${status}`,
+    handle: `ordinary_${status}`,
+    status,
+    attemptCount: 1,
+    providerAttemptCount: 1,
+    providerResultStatus: "persisted",
+    persistedPostCount: 1,
+    scrapedPostId: `post:ordinary:${status}`,
+    scrapedPostSourceRevision: 1,
+    processingAttemptCount: 0,
+    retryNotBeforeAt: now - 1,
+    outcomeDetail:
+      status === "deferred"
+        ? "OpenAI provider execution lease is busy."
+        : "saved_post_processing_pending",
+    terminalAt: status === "deferred" ? now - 1_000 : undefined,
+    createdAt: now - 2_000,
+    updatedAt: now - 1_000,
+  });
+  const claim = await claimNextProcessingReceipt._handler(ctx(db), {
+    runId,
+    workerId: `qa-${status}-worker`,
+    serviceSecret: SERVICE_SECRET,
+  });
+  assert.equal(claim?.receiptId, `zz-receipt-ordinary-${status}`);
+}
+
+await assertDedicatedRecoveryDoesNotStarveStatus("queued");
+await assertDedicatedRecoveryDoesNotStarveStatus("deferred");
+
+// The generic expired-lease sweep also skips an exact recovery marker before
+// handling a later ordinary expired receipt. It must leave the selected row
+// byte-for-byte claimable by the exact lane after an acknowledgement loss.
+{
+  const db = new MemoryDb(legacyInitialBatchSeed());
+  await requeueInitialBatch(db);
+  const target = initialLegacyEntries[0];
+  await claimLegacyDefinitiveOutputRecoveryReceipt._handler(
+    ctx(db),
+    exactClaimArgs(target.receiptId, {
+      selectedReceiptIds: [target.receiptId],
+      workerId: "qa-expired-exact-owner",
+    }),
+  );
+  await db.patch(target.receiptId, { leaseExpiresAt: now - 1 });
+  await db.patch(target.runId, { selectedHandleCount: 4 });
+  db.table("scrapedPosts").set("post:ordinary-expired", {
+    _id: "post:ordinary-expired",
+    handle: "ordinary_expired",
+    postId: "ordinary-expired",
+    instagramPostUrl: "https://www.instagram.com/p/ordinary-expired/",
+    username: "ordinary_expired",
+    imageUrls: [],
+    sourceRevision: 1,
+    processingStatus: "processing",
+    processingAttempts: 1,
+    processingOutcome: "processing",
+    processingLeaseOwner: "qa-ordinary-expired-owner",
+    processingLeaseExpiresAt: now - 1,
+    blocksPaidFetch: true,
+    createdAt: now - 2_000,
+    updatedAt: now - 1_000,
+  });
+  db.table("ingestionRunChunks").set("chunk:ordinary-expired", {
+    _id: "chunk:ordinary-expired",
+    runId: target.runId,
+    status: "running",
+    handleCount: 1,
+    terminalReceiptCount: 0,
+    createdAt: now - 2_000,
+    updatedAt: now - 1_000,
+  });
+  db.table("ingestionRunHandleReceipts").set("zz-receipt-ordinary-expired", {
+    _id: "zz-receipt-ordinary-expired",
+    runId: target.runId,
+    chunkId: "chunk:ordinary-expired",
+    handle: "ordinary_expired",
+    status: "processing",
+    attemptCount: 1,
+    providerAttemptCount: 1,
+    providerResultStatus: "persisted",
+    persistedPostCount: 1,
+    scrapedPostId: "post:ordinary-expired",
+    scrapedPostSourceRevision: 1,
+    processingAttemptCount: 1,
+    leaseOwner: "qa-ordinary-expired-owner",
+    leaseExpiresAt: now - 1,
+    createdAt: now - 2_000,
+    updatedAt: now - 1_000,
+  });
+  assert.equal(
+    await claimNextProcessingReceipt._handler(ctx(db), {
+      runId: target.runId,
+      workerId: "qa-generic-expired-sweep",
+      serviceSecret: SERVICE_SECRET,
+    }),
+    null,
+  );
+  assert.equal(
+    db.row("ingestionRunHandleReceipts", target.receiptId).status,
+    "processing",
+    "Generic expiry recovery must not mutate the exact selected receipt.",
+  );
+  assert.equal(
+    db.row("ingestionRunHandleReceipts", "zz-receipt-ordinary-expired").status,
+    "processing_pending",
+  );
+  const ordinaryClaim = await claimNextProcessingReceipt._handler(ctx(db), {
+    runId: target.runId,
+    workerId: "qa-generic-expired-claim",
+    serviceSecret: SERVICE_SECRET,
+  });
+  assert.equal(ordinaryClaim?.receiptId, "zz-receipt-ordinary-expired");
+  await db.patch("post:ordinary-expired", {
+    processingStatus: "completed",
+    processingOutcome: "receipt_complete",
+    processingLeaseOwner: undefined,
+    processingLeaseExpiresAt: undefined,
+    blocksPaidFetch: false,
+  });
+  await completeProcessingReceipt._handler(ctx(db), {
+    runId: target.runId,
+    receiptId: "zz-receipt-ordinary-expired",
+    workerId: "qa-generic-expired-claim",
+    serviceSecret: SERVICE_SECRET,
+  });
+  assert.equal(
+    db.row("ingestionRunChunks", "chunk:ordinary-expired").status,
+    "completed",
+  );
+  const exactReclaim =
+    await claimLegacyDefinitiveOutputRecoveryReceipt._handler(
+      ctx(db),
+      exactClaimArgs(target.receiptId, {
+        selectedReceiptIds: [target.receiptId],
+        workerId: "qa-exact-expired-reclaim",
+      }),
+    );
+  assert.equal(exactReclaim.claimed, true);
+  assert.equal(exactReclaim.state, "claimed");
+}
+
+// Ordinary expired processing at the retry ceiling terminalizes both receipt
+// and chunk exactly once.
+{
+  const entry = initialLegacyEntries[0];
+  const seed = legacyRecoverySeed(
+    entry,
+    {
+      processingStatus: "processing",
+      processingOutcome: "processing",
+      processingLeaseOwner: "qa-expired-limit-owner",
+      processingLeaseExpiresAt: now - 1,
+      analysisAttemptRevision: undefined,
+      analysisAttemptStartedAt: undefined,
+      analysisAttemptOwner: undefined,
+      analysisAttemptProtocol: undefined,
+      blocksPaidFetch: true,
+    },
+    {
+      status: "processing",
+      processingAttemptCount: 3,
+      leaseOwner: "qa-expired-limit-owner",
+      leaseExpiresAt: now - 1,
+      terminalAt: undefined,
+      outcomeDetail: "saved_post_processing_claimed",
+    },
+    {
+      status: "queued",
+      queueBuildCompletedAt: now - 10_000,
+      dispatchReadyAt: now - 10_000,
+      terminalReceiptCount: 0,
+      failedReceiptCount: 0,
+      finishedAt: undefined,
+    },
+  );
+  seed.ingestionRunChunks[0] = {
+    ...seed.ingestionRunChunks[0],
+    status: "running",
+    terminalReceiptCount: 0,
+  };
+  seed.ingestionProviderLeases = [];
+  const db = new MemoryDb(seed);
+  assert.equal(
+    await claimNextProcessingReceipt._handler(ctx(db), {
+      runId: entry.runId,
+      workerId: "qa-expired-limit-sweep",
+      serviceSecret: SERVICE_SECRET,
+    }),
+    null,
+  );
+  assert.equal(
+    db.row("ingestionRunHandleReceipts", entry.receiptId).status,
+    "failed",
+  );
+  assert.equal(
+    db.row("ingestionRunChunks", `chunk:${entry.receiptId}`)
+      .terminalReceiptCount,
+    1,
+  );
+  assert.equal(
+    db.row("ingestionRunChunks", `chunk:${entry.receiptId}`).status,
+    "completed",
+  );
+}
+
+// A lost exact-claim acknowledgement can be reconciled after lease expiry if
+// no provider attempt marker exists; it never needs another generic claim.
+{
+  const db = new MemoryDb(legacyInitialBatchSeed());
+  await requeueInitialBatch(db);
+  const target = initialLegacyEntries[0];
+  await claimLegacyDefinitiveOutputRecoveryReceipt._handler(
+    ctx(db),
+    exactClaimArgs(target.receiptId),
+  );
+  await db.patch(target.receiptId, { leaseExpiresAt: now - 1 });
+  const reclaimed = await claimLegacyDefinitiveOutputRecoveryReceipt._handler(
+    ctx(db),
+    exactClaimArgs(target.receiptId, { workerId: "qa-recovery-readback-worker" }),
+  );
+  assert.equal(reclaimed.claimed, true);
+  assert.equal(reclaimed.processingAttemptCount, 3);
+}
+
+// A route death after transport start is one-shot: the exact claimant
+// terminalizes the ambiguous generation, and a lost acknowledgement is
+// replay-readable without another claim or transport.
+{
+  const db = new MemoryDb(legacyInitialBatchSeed());
+  await requeueInitialBatch(db);
+  const target = initialLegacyEntries[0];
+  await claimLegacyDefinitiveOutputRecoveryReceipt._handler(
+    ctx(db),
+    exactClaimArgs(target.receiptId),
+  );
+  await db.patch(target.receiptId, { leaseExpiresAt: now - 1 });
+  await db.patch(target.savedPostId, {
+    processingStatus: "retryable_failure",
+    processingOutcome: "openai_transport_ambiguous",
+    processingLeaseOwner: undefined,
+    processingLeaseExpiresAt: undefined,
+    analysisAttemptRevision: target.sourceRevision,
+    analysisAttemptStartedAt: now - 5_000,
+    analysisAttemptOwner: "qa-recovery-transport-owner",
+    analysisAttemptProtocol: EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
+    analysisRevision: undefined,
+    analysisResultJson: undefined,
+  });
+  const ambiguous = await claimLegacyDefinitiveOutputRecoveryReceipt._handler(
+    ctx(db),
+    exactClaimArgs(target.receiptId),
+  );
+  assert.equal(ambiguous.claimed, false);
+  assert.equal(ambiguous.state, "transport_ambiguous");
+  const replay = await claimLegacyDefinitiveOutputRecoveryReceipt._handler(
+    ctx(db),
+    exactClaimArgs(target.receiptId),
+  );
+  assert.equal(replay.claimed, false);
+  assert.equal(replay.state, "transport_ambiguous");
+  assert.equal(
+    db.row("ingestionRunHandleReceipts", target.receiptId).status,
+    "failed",
+  );
+}
+
+// A committed, exact v2 analysis survives route death and is reclaimed only
+// for cached materialization. The next helper invocation cannot start OpenAI.
+{
+  const db = new MemoryDb(legacyInitialBatchSeed());
+  await requeueInitialBatch(db);
+  const target = initialLegacyEntries[0];
+  await claimLegacyDefinitiveOutputRecoveryReceipt._handler(
+    ctx(db),
+    exactClaimArgs(target.receiptId, {
+      selectedReceiptIds: [target.receiptId],
+      workerId: "qa-cached-analysis-first-owner",
+    }),
+  );
+  await db.patch(target.receiptId, { leaseExpiresAt: now - 1 });
+  await db.patch(target.savedPostId, {
+    processingStatus: "retryable_failure",
+    processingOutcome: "processing_exception",
+    processingLeaseOwner: undefined,
+    processingLeaseExpiresAt: undefined,
+    analysisAttemptRevision: target.sourceRevision,
+    analysisAttemptStartedAt: now - 5_000,
+    analysisAttemptOwner: "qa-cached-analysis-first-owner",
+    analysisAttemptProtocol: EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
+    analysisRevision: target.sourceRevision,
+    analysisResultJson: JSON.stringify(compactExtraction),
+    analysisCompletedAt: now - 1_000,
+    analysisModel: "gpt-5-mini",
+    analysisContractVersion: "event_evidence_v2",
+    analysisIsEvent: true,
+  });
+  const cachedReclaim =
+    await claimLegacyDefinitiveOutputRecoveryReceipt._handler(
+      ctx(db),
+      exactClaimArgs(target.receiptId, {
+        selectedReceiptIds: [target.receiptId],
+        workerId: "qa-cached-analysis-resume-owner",
+      }),
+    );
+  assert.equal(cachedReclaim.claimed, true);
+  assert.equal(
+    db.row("scrapedPosts", target.savedPostId).processingOutcome,
+    "definitive_output_recovery_materialization_resume",
+  );
+}
+
+// Active provider or non-target selected leases block the whole exact batch
+// before any selected target is mutated.
+{
+  const db = new MemoryDb(legacyInitialBatchSeed());
+  await requeueInitialBatch(db);
+  db.table("ingestionProviderLeases").set("provider:openai", {
+    _id: "provider:openai",
+    provider: "openai",
+    owner: "qa-existing-openai-owner",
+    leaseExpiresAt: Date.now() + 60_000,
+    createdAt: now - 1_000,
+    updatedAt: now - 1_000,
+  });
+  await assert.rejects(
+    claimLegacyDefinitiveOutputRecoveryReceipt._handler(
+      ctx(db),
+      exactClaimArgs(initialLegacyEntries[0].receiptId, {
+        selectedReceiptIds: [initialLegacyEntries[0].receiptId],
+      }),
+    ),
+    /active OpenAI provider lease/i,
+  );
+}
+
+{
+  const db = new MemoryDb(legacyInitialBatchSeed());
+  await requeueInitialBatch(db);
+  await db.patch(initialLegacyEntries[1].receiptId, {
+    status: "processing",
+    leaseOwner: "qa-other-selected-owner",
+    leaseExpiresAt: Date.now() + 60_000,
+  });
+  await assert.rejects(
+    claimLegacyDefinitiveOutputRecoveryReceipt._handler(
+      ctx(db),
+      exactClaimArgs(initialLegacyEntries[0].receiptId),
+    ),
+    /active lease anywhere in the selected batch/i,
+  );
+}
 
 if (previousCronSecret === undefined) delete process.env.CRON_SECRET;
 else process.env.CRON_SECRET = previousCronSecret;
