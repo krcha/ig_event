@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   extractEventDataFromInstagramPost,
   isOpenAiPermanentError,
+  OPENAI_REQUEST_TIMEOUT_MS,
   parseExtractedEventData,
 } from "../lib/ai/extract-event-data.ts";
 import { TBD_EVENT_TIME } from "../lib/events/event-time.ts";
@@ -106,6 +107,39 @@ const validExtraction = {
     artists: confirmation("QA Artist"),
   },
 };
+
+assert.equal(
+  OPENAI_REQUEST_TIMEOUT_MS,
+  120_000,
+  "GPT-5 mini extraction must retain a bounded timeout above the observed 40-second production latency",
+);
+
+const cachedMissingTimePayload = {
+  ...structuredClone(validExtraction),
+  time_evidence: {
+    status: "not_stated",
+    exact_text: "",
+    source: "caption",
+  },
+  schedule_entries: validExtraction.schedule_entries.map((entry) => ({
+    ...structuredClone(entry),
+    time: "",
+    time_evidence: {
+      status: "not_stated",
+      exact_text: "",
+      source: "caption",
+    },
+  })),
+};
+const cachedMissingTimeJson = JSON.stringify(cachedMissingTimePayload);
+const parsedMissingTimeEvidence = parseExtractedEventData(
+  JSON.parse(cachedMissingTimeJson),
+);
+assert.equal(
+  JSON.stringify(parsedMissingTimeEvidence),
+  cachedMissingTimeJson,
+  "Parsing an older missing-time cache must preserve its attested JSON bytes",
+);
 
 const semanticQaNow = new Date();
 
@@ -568,11 +602,19 @@ function runSemanticNormalizationQa() {
       dateEvidenceText: dateText,
       postUrl: post.instagramPostUrl,
       title: "QA Time TBD",
+      timeEvidence: {
+        status: "not_stated",
+        exact_text: "",
+        source: "caption",
+      },
     });
     const prepared = assertSingleOk(prepare(post, extracted), "missing time");
     assert.equal(prepared.event.status, "approved");
     assert.equal(prepared.event.time, TBD_EVENT_TIME);
+    assert.equal(prepared.event.timeSource, "unknown");
+    assert.equal(prepared.event.timeStatus, "unknown");
     assert.equal(prepared.event.timeEvidenceKind, "not_stated");
+    assert.equal(prepared.event.rawExtractionJson, JSON.stringify(extracted));
   });
 
   runCase("configured venue context fills missing extracted venue", () => {

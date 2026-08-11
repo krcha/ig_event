@@ -147,7 +147,7 @@ Rules:
 - "time" is a clock time, normalized 24h: "22h" → "22:00"; "18h-22h" → "18:00-22:00"; "22h -05h" → "22:00-05:00"; "20:00" stays.
 - Start-time cue phrases count as time evidence: "od 9", "početak 21h"/"pocetak 21h", "počinje u 21", "u 20.30", "22:30", "start at 10pm". Normalize them into "time" and do not leave them only in "description".
 - "doors open" / "vrata se otvaraju" is logistics, not the event start. If it is the only clock, leave "time" empty and use time_evidence.status="doors_open_only". Never publish a doors-open clock as the start time.
-- Use time_evidence.status="not_stated" when no start time appears, "unreadable" when a start-time value is visibly present but cannot be read, and "start_time_stated" only for a readable event start. Copy exact evidence when readable.
+- Use time_evidence.status="not_stated" when no start time appears. In that case set exact_text="" and source="unknown" because absence has no source snippet. Use "unreadable" when a start-time value is visibly present but cannot be read, and "start_time_stated" only for a readable event start. Copy exact evidence when readable.
 - NEVER put a date in "time". "19.06" is a date, not "19:06". If a row's only number is its date, leave "time" empty. If no time is given, leave it empty — do not guess.
 
 === TITLES (per row) — ONLY SOURCE-GROUNDED TITLES ===

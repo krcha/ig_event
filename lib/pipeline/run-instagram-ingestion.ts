@@ -8488,7 +8488,11 @@ function isVerifiedTimeEvidence(options: {
     });
 
   if (options.evidence.status === "not_stated") {
-    return !options.resolvedStartTime && !evidenceText && options.evidence.source === "unknown";
+    // Absence has no source snippet to bind. Older event_evidence_v2 caches and
+    // some otherwise-valid model responses labeled that absence as caption or
+    // poster. Accept the empty absence semantics without rewriting the cached
+    // JSON bytes that Convex attests exactly.
+    return !options.resolvedStartTime && !evidenceText;
   }
   if (options.evidence.status === "unreadable") {
     return !options.resolvedStartTime && evidenceIsBound;
@@ -9285,9 +9289,10 @@ export function prepareEventsForInsert(
         ? variant.timeProvenance
         : {
             source:
-              variant.timeEvidence.source === "caption" ||
-              variant.timeEvidence.source === "poster" ||
-              variant.timeEvidence.source === "alt_text"
+              timeEvidenceKind !== "not_stated" &&
+              (variant.timeEvidence.source === "caption" ||
+                variant.timeEvidence.source === "poster" ||
+                variant.timeEvidence.source === "alt_text")
                 ? variant.timeEvidence.source
                 : "unknown",
             evidenceText: normalizeString(variant.timeEvidence.exact_text) || null,

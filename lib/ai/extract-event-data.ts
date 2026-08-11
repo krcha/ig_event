@@ -6,7 +6,11 @@ import {
 } from "./event-extraction-prompt";
 
 
-const OPENAI_REQUEST_TIMEOUT_MS = 40000;
+// GPT-5 mini structured vision responses can legitimately take longer than
+// 40 seconds on production poster inputs. Keep this comfortably inside the
+// 300-second executor request and receipt lease while avoiding false
+// transport ambiguity caused by aborting a healthy provider response.
+export const OPENAI_REQUEST_TIMEOUT_MS = 120_000;
 
 export class OpenAiProviderBlockedError extends Error {
   readonly status: number;
