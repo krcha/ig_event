@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { getDiscoverFeed } from "../convex/events.ts";
+import { getDiscoverFeed, getPublicApprovedEvent } from "../convex/events.ts";
 import { getPublicEventImageSource } from "../convex/mediaAssets.ts";
 import { getPublicVenuePage } from "../convex/venues.ts";
 
@@ -39,6 +39,56 @@ const ungrounded = {
   createdAt: 1,
   updatedAt: 1,
 };
+
+const legacyDetailCtx = {
+  db: {
+    normalizeId(table, id) {
+      return table === "events" && id === ungrounded._id ? id : null;
+    },
+    async get(id) {
+      if (id === ungrounded._id) return ungrounded;
+      if (id === venue._id) return venue;
+      return null;
+    },
+    query() {
+      throw new Error("Legacy detail compatibility must not require grounding reads.");
+    },
+  },
+};
+const legacyDetail = await getPublicApprovedEvent._handler(legacyDetailCtx, {
+  id: ungrounded._id,
+});
+assert.equal(
+  legacyDetail?._id,
+  ungrounded._id,
+  "An approved legacy event exposed by the public calendar must retain a working detail page.",
+);
+
+const ungroundedEvidenceV2 = {
+  ...ungrounded,
+  _id: "event-ungrounded-evidence-v2",
+  normalizedFieldsJson: JSON.stringify({ extractionContractVersion: "event_evidence_v2" }),
+};
+const evidenceV2DetailCtx = {
+  db: {
+    normalizeId(table, id) {
+      return table === "events" && id === ungroundedEvidenceV2._id ? id : null;
+    },
+    async get(id) {
+      return id === ungroundedEvidenceV2._id ? ungroundedEvidenceV2 : null;
+    },
+    query() {
+      throw new Error("Incomplete evidence-v2 detail must fail before canonical source reads.");
+    },
+  },
+};
+assert.equal(
+  await getPublicApprovedEvent._handler(evidenceV2DetailCtx, {
+    id: ungroundedEvidenceV2._id,
+  }),
+  null,
+  "An ungrounded evidence-v2 event detail must remain hidden.",
+);
 
 function indexBuilder() {
   const builder = {

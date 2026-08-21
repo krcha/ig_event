@@ -1105,7 +1105,7 @@ export const getPublicApprovedEvent = query({
       return null;
     }
 
-    return (await projectPublicEventPage(ctx, [event]))[0];
+    return (await projectLegacyCompatiblePublicEventPage(ctx, [event]))[0] ?? null;
   },
 });
 
