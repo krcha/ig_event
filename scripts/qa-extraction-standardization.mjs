@@ -7225,6 +7225,231 @@ async function runDistinctOccurrencePersistenceQa() {
     "A missing sibling with a free stable ordinal must remain insertable.",
   );
 
+  const occupiedCollisionBaseFields = {
+    ...sharedSlotBaseFields,
+    multiEventSplitCount: 3,
+    normalizedDate: sharedSlotEvents[0].date,
+    time: "21:00",
+    normalizedVenue: sharedSlotEvents[0].venue,
+  };
+  const makeOccupiedCollisionPrepared = (title, artists, index) => ({
+    kind: "ok",
+    event: {
+      ...sharedSlotEvents[0],
+      title,
+      artists,
+      sourceOccurrenceKey: undefined,
+    },
+    normalizedFields: {
+      ...occupiedCollisionBaseFields,
+      title,
+      artists,
+      splitEventIndex: index + 1,
+    },
+  });
+  const occupiedExistingResults = bindSourceOccurrenceMetadata(
+    sharedSlotPost,
+    [
+      ["Unrelated stale child", []],
+      ["Chillout Zone", []],
+      ["INFECTED", []],
+    ].map(([title, artists], index) =>
+      makeOccupiedCollisionPrepared(title, artists, index),
+    ),
+  );
+  const occupiedExistingMatches = occupiedExistingResults.map((prepared, index) => ({
+    existingEvent: {
+      ...prepared.event,
+      _id: `qa-occupied-collision-${index + 1}`,
+    },
+    matchedBy: "post_id",
+    matchedValue: sharedSlotPost.postId,
+  }));
+  const occupiedRetryResults = bindSourceOccurrenceMetadata(
+    sharedSlotPost,
+    [
+      ["Chillout Zone", []],
+      ["INFECTED", []],
+      ["Bodies Hit The Floor", ["DJ Hellspawn", "DJ Kedlavi", "DJ Sirivs"]],
+    ].map(([title, artists], index) =>
+      makeOccupiedCollisionPrepared(title, artists, index),
+    ),
+  );
+  const occupiedRetryKeys = occupiedRetryResults.map(
+    (prepared) => prepared.event.sourceOccurrenceKey,
+  );
+  const reconciledOccupiedRetry =
+    reconcileAmbiguousOccurrenceKeysWithExistingEventsForTesting(
+      occupiedRetryResults,
+      occupiedExistingMatches,
+    );
+  assert.deepEqual(
+    reconciledOccupiedRetry.map((prepared) => prepared.event.sourceOccurrenceKey),
+    occupiedRetryKeys,
+    "reconciliation must not partially reassign semantic siblings when the unmatched ordinal is still occupied",
+  );
+  assert.notEqual(
+    reconciledOccupiedRetry[0].event.sourceOccurrenceKey,
+    occupiedExistingResults[1].event.sourceOccurrenceKey,
+    "a valid Chillout sibling may not force an unmatched Bodies child onto an occupied stale key",
+  );
+
+  const processCollisionRows = [
+    {
+      title: "Bodies Hit The Floor",
+      artists: ["DJ Hellspawn", "DJ Kedlavi", "DJ Sirivs"],
+    },
+    { title: "Chillout Zone", artists: [] },
+    { title: "INFECTED", artists: [] },
+  ];
+  const processCollisionCaption = processCollisionRows
+    .map(({ title, artists }) =>
+      `${eventDateLabel} - ${title}${artists.length > 0 ? ` - ${artists.join(", ")}` : ""} 21H`,
+    )
+    .join("\n");
+  const processCollisionPost = makeInstagramPost({
+    postId: "qa-process-occupied-collision",
+    instagramPostUrl: "https://www.instagram.com/p/qa-process-occupied-collision/",
+    caption: processCollisionCaption,
+    postType: "video",
+    username: "vrtoglavicaklub",
+  });
+  const processCollisionExtraction = makeExtractedEvent({
+    title: processCollisionRows[0].title,
+    date: eventDateLabel,
+    time: "21:00",
+    venue: "Vrtoglavica",
+    artists: processCollisionRows[0].artists,
+    category: "nightlife",
+    confidence: 0.9,
+    source_caption: processCollisionCaption,
+    schedule_entries: processCollisionRows.map(({ title, artists }) => ({
+      date: eventDateLabel,
+      time: "21:00",
+      title,
+      artists,
+      description: `${title} at Vrtoglavica.`,
+      source_text: `${eventDateLabel} - ${title}${artists.length > 0 ? ` - ${artists.join(", ")}` : ""} 21H`,
+    })),
+  });
+  const processCollisionPrepared = bindSourceOccurrenceMetadata(
+    processCollisionPost,
+    prepareEventsForInsert(
+      processCollisionPost,
+      processCollisionExtraction,
+      null,
+      { vrtoglavicaklub: "Vrtoglavica" },
+      {},
+      { vrtoglavicaklub: "Vrtoglavica" },
+      { sourceRolesByHandle: { vrtoglavicaklub: "venue" } },
+    ),
+  ).filter((prepared) => prepared.kind === "ok");
+  assert.equal(processCollisionPrepared.length, 3);
+  assert.ok(
+    processCollisionPrepared.every(
+      (prepared) =>
+        prepared.normalizedFields.sourceOccurrenceAmbiguousProvenance === true,
+    ),
+  );
+  const [processBodies, processChillout, processInfected] =
+    processCollisionPrepared;
+  const processBodiesKey = processBodies.event.sourceOccurrenceKey;
+  const processChilloutKey = processChillout.event.sourceOccurrenceKey;
+  const processInfectedKey = processInfected.event.sourceOccurrenceKey;
+  const processWrongBodies = {
+    ...processChillout.event,
+    _id: "qa-process-wrong-bodies",
+    sourceOccurrenceKey: processBodiesKey,
+    normalizedFieldsJson: JSON.stringify({
+      ...JSON.parse(processChillout.event.normalizedFieldsJson),
+      sourceOccurrenceKey: processBodiesKey,
+    }),
+    updatedAt: 1,
+  };
+  const processExistingChillout = {
+    ...processChillout.event,
+    _id: "qa-process-chillout",
+    updatedAt: 2,
+  };
+  const processExistingInfected = {
+    ...processInfected.event,
+    _id: "qa-process-infected",
+    updatedAt: 3,
+  };
+  const processCollisionSourceIdentity =
+    "instagram-source-identity-v1:qa-process-occupied-collision";
+  const processCollisionFingerprint = JSON.parse(
+    processBodies.event.normalizedFieldsJson,
+  ).sourceOccurrenceSourceFingerprint;
+  const processCollisionReceipt = {
+    sourceIdentity: processCollisionSourceIdentity,
+    sourceFingerprint: processCollisionFingerprint,
+    expectedKeys: processCollisionPrepared.map(
+      (prepared) => prepared.event.sourceOccurrenceKey,
+    ),
+    expectedOccurrences: processCollisionPrepared.map((prepared) => ({
+      key: prepared.event.sourceOccurrenceKey,
+      date: prepared.event.date,
+      ...(prepared.event.time ? { time: prepared.event.time } : {}),
+      venue: prepared.event.venue,
+      title: prepared.event.title,
+      artists: prepared.event.artists,
+    })),
+    satisfiedKeys: [processChilloutKey, processInfectedKey],
+    satisfiedOccurrences: [
+      { key: processChilloutKey, eventId: processExistingChillout._id },
+      { key: processInfectedKey, eventId: processExistingInfected._id },
+    ],
+    deferredChildCount: 0,
+    deferredChildKeys: [],
+  };
+  const processCollisionMutations = [];
+  const processCollisionSummary = createEmptyIngestionSummary([
+    "vrtoglavicaklub",
+  ]).handles[0];
+  await withoutConsoleInfoAndError(() =>
+    processIngestionPostWithExtractionForTesting({
+      client: {
+        query: async (reference) =>
+          reference === "events:getInstagramSourceOccurrenceReceipt"
+            ? processCollisionReceipt
+            : [
+                processExistingChillout,
+                processExistingInfected,
+                processWrongBodies,
+              ],
+        mutation: async (reference, args) => {
+          processCollisionMutations.push({ reference, args });
+          return { recorded: true };
+        },
+      },
+      handle: "vrtoglavicaklub",
+      post: processCollisionPost,
+      summary: processCollisionSummary,
+      canonicalVenueNamesByHandle: { vrtoglavicaklub: "Vrtoglavica" },
+      venueNameOverridesByHandle: {},
+      configuredVenueNamesByHandle: { vrtoglavicaklub: "Vrtoglavica" },
+      sourceRolesByHandle: { vrtoglavicaklub: "venue" },
+      serviceSecret: "qa-process-occupied-collision-secret",
+      extracted: processCollisionExtraction,
+    }),
+  );
+  assert.ok(
+    processCollisionSummary.errors.some((error) =>
+      error.includes("occupied by a different semantic representative"),
+    ),
+    "the full persistence loop must expose the occupied Bodies key as an explicit repair conflict",
+  );
+  assert.equal(
+    processCollisionMutations.some(
+      ({ args }) =>
+        args.satisfiedKey === processBodiesKey ||
+        args.sourceOccurrenceKey === processBodiesKey,
+    ),
+    false,
+    "the conflicting Bodies child must perform zero record, update, or create mutations",
+  );
+
   const partialSharedSlotFields = JSON.parse(sharedSlotEvents[1].normalizedFieldsJson);
   delete partialSharedSlotFields.sourceOccurrenceAmbiguousProvenance;
   delete partialSharedSlotFields.sourceOccurrenceCollisionOrdinal;

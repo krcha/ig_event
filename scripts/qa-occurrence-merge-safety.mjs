@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import {
   createEvent,
+  getInstagramSourceOccurrenceReceipt,
   mergeApprovedEvents,
   recordInstagramSourceOccurrenceSatisfaction,
 } from "../convex/events.ts";
@@ -497,6 +498,207 @@ await assert.rejects(
 );
 assert.equal(crossSourceDuplicateState.tables.events.size, 1);
 assert.equal(crossSourceDuplicateState.tables.instagramSourceOccurrenceReceipts.size, 0);
+
+const vrtoglavicaSourceIdentity = "instagram-source-identity-v1:qa-vrtoglavica";
+const vrtoglavicaOldFingerprint = "instagram-source-v2:qa-vrtoglavica-old";
+const vrtoglavicaNextFingerprint = "instagram-source-v2:qa-vrtoglavica-next";
+const vrtoglavicaKeys = {
+  bodies: "instagram-occurrence-v2:qa-vrtoglavica-bodies",
+  chillout: "instagram-occurrence-v2:qa-vrtoglavica-chillout",
+  infected: "instagram-occurrence-v2:qa-vrtoglavica-infected",
+};
+const vrtoglavicaBindings = {
+  bodies: {
+    key: vrtoglavicaKeys.bodies,
+    date: "2026-09-26",
+    time: "TBD",
+    venue: "Vrtoglavica",
+    title: "Bodies Hit The Floor",
+    artists: ["DJ Hellspawn", "DJ Kedlavi", "DJ Sirivs"],
+  },
+  chillout: {
+    key: vrtoglavicaKeys.chillout,
+    date: "2026-09-26",
+    time: "TBD",
+    venue: "Vrtoglavica",
+    title: "Chillout Zone",
+    artists: [],
+  },
+  infected: {
+    key: vrtoglavicaKeys.infected,
+    date: "2026-09-26",
+    time: "TBD",
+    venue: "Vrtoglavica",
+    title: "INFECTED",
+    artists: [],
+  },
+};
+const vrtoglavicaPost = processingPost({
+  _id: "scraped-vrtoglavica",
+  handle: "vrtoglavicaklub",
+  postId: "QA-VRTOGLAVICA",
+  instagramPostUrl: "https://www.instagram.com/p/QA-VRTOGLAVICA/",
+  processingLeaseOwner: "qa-vrtoglavica-owner",
+});
+const vrtoglavicaProcessingFence = {
+  scrapedPostId: vrtoglavicaPost._id,
+  handle: vrtoglavicaPost.handle,
+  postId: vrtoglavicaPost.postId,
+  instagramPostUrl: vrtoglavicaPost.instagramPostUrl,
+  owner: vrtoglavicaPost.processingLeaseOwner,
+  sourceRevision: vrtoglavicaPost.sourceRevision,
+};
+
+function vrtoglavicaEvent(id, key, binding) {
+  return approvedEvent(id, {
+    title: binding.title,
+    date: binding.date,
+    time: binding.time,
+    venue: binding.venue,
+    artists: binding.artists,
+    instagramPostId: vrtoglavicaPost.postId,
+    instagramPostUrl: vrtoglavicaPost.instagramPostUrl,
+    sourceOccurrenceKey: key,
+    normalizedFieldsJson: JSON.stringify({
+      sourceOccurrenceKey: key,
+      sourceOccurrenceSourceFingerprint: vrtoglavicaOldFingerprint,
+      sourceOccurrenceAmbiguousProvenance: true,
+      title: binding.title,
+      normalizedDate: binding.date,
+      time: binding.time,
+      normalizedVenue: binding.venue,
+      artists: binding.artists,
+    }),
+  });
+}
+
+const wrongBodiesEvent = vrtoglavicaEvent(
+  "vrtoglavica-wrong-bodies",
+  vrtoglavicaKeys.bodies,
+  vrtoglavicaBindings.chillout,
+);
+const chilloutEvent = vrtoglavicaEvent(
+  "vrtoglavica-chillout",
+  vrtoglavicaKeys.chillout,
+  vrtoglavicaBindings.chillout,
+);
+const infectedEvent = vrtoglavicaEvent(
+  "vrtoglavica-infected",
+  vrtoglavicaKeys.infected,
+  vrtoglavicaBindings.infected,
+);
+const vrtoglavicaSatisfiedOccurrences = [
+  { key: vrtoglavicaKeys.bodies, eventId: wrongBodiesEvent._id },
+  { key: vrtoglavicaKeys.chillout, eventId: chilloutEvent._id },
+  { key: vrtoglavicaKeys.infected, eventId: infectedEvent._id },
+];
+
+function makeVrtoglavicaState({ sourceFingerprint, bodiesExpectedBinding }) {
+  return makeDb({
+    events: [wrongBodiesEvent, chilloutEvent, infectedEvent],
+    scrapedPosts: [vrtoglavicaPost],
+    links: vrtoglavicaSatisfiedOccurrences.map((occurrence, index) => ({
+      _id: `vrtoglavica-link-${index + 1}`,
+      eventId: occurrence.eventId,
+      sourceIdentity: vrtoglavicaSourceIdentity,
+      sourceFingerprint,
+      sourceOccurrenceKey: occurrence.key,
+      instagramPostId: vrtoglavicaPost.postId,
+      instagramPostUrl: vrtoglavicaPost.instagramPostUrl,
+      linkedAt: 1,
+      updatedAt: 1,
+    })),
+    receipts: [
+      {
+        _id: "vrtoglavica-receipt",
+        sourceIdentity: vrtoglavicaSourceIdentity,
+        sourceFingerprint,
+        expectedKeys: Object.values(vrtoglavicaKeys),
+        expectedOccurrences: [
+          { ...bodiesExpectedBinding, key: vrtoglavicaKeys.bodies },
+          vrtoglavicaBindings.chillout,
+          vrtoglavicaBindings.infected,
+        ],
+        satisfiedKeys: Object.values(vrtoglavicaKeys),
+        satisfiedOccurrences: vrtoglavicaSatisfiedOccurrences,
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+  });
+}
+
+const vrtoglavicaNextPlan = {
+  sourceIdentity: vrtoglavicaSourceIdentity,
+  sourceFingerprint: vrtoglavicaNextFingerprint,
+  expectedKeys: Object.values(vrtoglavicaKeys),
+  expectedOccurrences: Object.values(vrtoglavicaBindings),
+  deferredChildCount: 0,
+  deferredChildKeys: [],
+  observedChildKeys: Object.values(vrtoglavicaKeys),
+  previousSourceFingerprint: vrtoglavicaOldFingerprint,
+};
+
+// Recording one valid sibling must not carry an old K->event mapping into a
+// plan whose K now means a different event. Convex must abort before changing
+// the receipt, link ledger, or event row.
+const vrtoglavicaTransitionState = makeVrtoglavicaState({
+  sourceFingerprint: vrtoglavicaOldFingerprint,
+  bodiesExpectedBinding: vrtoglavicaBindings.chillout,
+});
+const beforeVrtoglavicaTransition = structuredClone({
+  events: [...vrtoglavicaTransitionState.tables.events.values()],
+  links: [...vrtoglavicaTransitionState.tables.instagramEventSources.values()],
+  receipts: [
+    ...vrtoglavicaTransitionState.tables.instagramSourceOccurrenceReceipts.values(),
+  ],
+});
+await assert.rejects(
+  () =>
+    recordInstagramSourceOccurrenceSatisfaction._handler(
+      adminCtx(vrtoglavicaTransitionState),
+      {
+        plan: vrtoglavicaNextPlan,
+        satisfiedKey: vrtoglavicaKeys.infected,
+        representativeEventId: infectedEvent._id,
+        processingFence: vrtoglavicaProcessingFence,
+      },
+    ),
+  /Retained source occurrence representative does not match/i,
+);
+assert.deepEqual(
+  {
+    events: [...vrtoglavicaTransitionState.tables.events.values()],
+    links: [...vrtoglavicaTransitionState.tables.instagramEventSources.values()],
+    receipts: [
+      ...vrtoglavicaTransitionState.tables.instagramSourceOccurrenceReceipts.values(),
+    ],
+  },
+  beforeVrtoglavicaTransition,
+  "a retained-binding conflict must leave every provenance table unchanged",
+);
+
+// If a previous release already persisted the false-complete receipt, reads
+// must derive liveness from the immutable representative snapshot and expose K
+// as incomplete instead of trusting its collision key.
+const persistedCorruptVrtoglavicaState = makeVrtoglavicaState({
+  sourceFingerprint: vrtoglavicaNextFingerprint,
+  bodiesExpectedBinding: vrtoglavicaBindings.bodies,
+});
+const liveVrtoglavicaReceipt = await getInstagramSourceOccurrenceReceipt._handler(
+  adminCtx(persistedCorruptVrtoglavicaState),
+  { sourceIdentity: vrtoglavicaSourceIdentity },
+);
+assert.deepEqual(liveVrtoglavicaReceipt.satisfiedKeys, [
+  vrtoglavicaKeys.chillout,
+  vrtoglavicaKeys.infected,
+]);
+assert.deepEqual(
+  liveVrtoglavicaReceipt.satisfiedOccurrences.map((occurrence) => occurrence.key),
+  [vrtoglavicaKeys.chillout, vrtoglavicaKeys.infected],
+);
 
 console.log(
   "Occurrence merge safety QA passed: distinct rows survive, duplicate ledgers rewire, empty-venue receipts persist, and unknown-venue approvals fail closed.",

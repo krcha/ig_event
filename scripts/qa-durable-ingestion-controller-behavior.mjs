@@ -156,12 +156,36 @@ async function complete(db, runId, receiptId, workerId, outcome) {
   });
 }
 
-async function claimProcessing(db, runId, workerId) {
+async function claimProcessing(db, runId, workerId, workerSlot) {
   return claimNextProcessingReceipt._handler(ctx(db), {
     runId,
     workerId,
+    ...(workerSlot === undefined ? {} : { workerSlot }),
     serviceSecret: process.env.CRON_SECRET,
   });
+}
+
+// The six host workers share one AI queue. Only the elected primary may even
+// read that queue; otherwise simultaneous requests all select the same first
+// processing-pending receipt and trigger Convex OCC retries.
+{
+  let databaseReadCount = 0;
+  const noQueueAccessDb = new Proxy(
+    {},
+    {
+      get() {
+        databaseReadCount += 1;
+        throw new Error("non-primary processing worker touched shared queue state");
+      },
+    },
+  );
+  const nonPrimaryClaims = await Promise.all(
+    Array.from({ length: 5 }, (_, index) =>
+      claimProcessing(noQueueAccessDb, "qa-run-no-db", `ai-lane-${index + 1}`, index + 1),
+    ),
+  );
+  assert.deepEqual(nonPrimaryClaims, [null, null, null, null, null]);
+  assert.equal(databaseReadCount, 0);
 }
 
 async function startProviderAttempt(db, runId, receiptId, workerId) {

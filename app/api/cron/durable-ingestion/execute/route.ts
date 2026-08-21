@@ -62,9 +62,9 @@ export async function POST(request: Request) {
   const convex = createConvexHttpClient();
   const workerId = `vps:${randomUUID()}`;
 
-  // Every existing fixed-lane worker first offers to become the one global AI
-  // consumer. Convex grants at most one processing lease, so no runner change
-  // or restart is required and the other five requests remain fetch-capable.
+  // Convex elects fixed slot 0 as the one global AI consumer before reading
+  // shared queue state. The other five requests remain fetch-capable without
+  // contending on the same processing-pending receipt.
   let processingClaim: {
     receiptId: string;
     handle: string;
@@ -77,6 +77,7 @@ export async function POST(request: Request) {
     processingClaim = await convex.mutation(claimProcessing, {
       runId,
       workerId,
+      workerSlot,
       serviceSecret,
     }) as typeof processingClaim;
   } catch (error) {

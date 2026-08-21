@@ -13,6 +13,7 @@ import { normalizeEventTimeWritePatch } from "../lib/events/event-time-write";
 import { isSensibleEventTitleForApproval } from "../lib/events/event-title-approval";
 import { classifyApprovalOccurrenceRelation } from "../lib/events/approval-occurrence-conflict";
 import { isCaptionSourceCoherentWithEvent } from "../lib/events/event-source-approval";
+import { sourceOccurrenceRepresentativeMatchesExpected } from "../lib/events/source-occurrence-representation";
 import { buildNormalizedEventVenueIdentity } from "../lib/events/event-venue-identity";
 import {
   buildApprovedEventAutoCleanupGroups,
@@ -1757,30 +1758,6 @@ function assertSourceOccurrencePlan(plan: SourceOccurrencePlan, satisfiedKey: st
   }
 }
 
-function normalizeOccurrenceBindingText(value: string | undefined): string {
-  return (value ?? "")
-    .normalize("NFKC")
-    .toLocaleLowerCase("sr-Latn")
-    .replace(/[^\p{L}\p{N}]+/gu, "")
-    .trim();
-}
-
-function normalizeOccurrenceArtists(values: string[]): string[] {
-  return [...new Set(values.map(normalizeOccurrenceBindingText).filter(Boolean))].sort();
-}
-
-function eventHasUnverifiedSourceOccurrencePlan(
-  event: Pick<Doc<"events">, "normalizedFieldsJson">,
-): boolean {
-  if (!event.normalizedFieldsJson) return false;
-  try {
-    const parsed = JSON.parse(event.normalizedFieldsJson) as Record<string, unknown>;
-    return parsed.sourceOccurrencePlanUnverified === true;
-  } catch {
-    return false;
-  }
-}
-
 export function eventRepresentsExpectedOccurrenceForTesting(
   event:
     | Pick<
@@ -1798,34 +1775,7 @@ export function eventRepresentsExpectedOccurrenceForTesting(
   expected: SourceOccurrencePlan["expectedOccurrences"][number] | undefined,
   options: { allowUnverifiedPending?: boolean } = {},
 ): boolean {
-  if (!event || !expected || event.status === "rejected") return false;
-  if (
-    !options.allowUnverifiedPending &&
-    event.status !== "approved" &&
-    eventHasUnverifiedSourceOccurrencePlan(event)
-  ) {
-    return false;
-  }
-  // Once an event is durably bound to this source occurrence, moderation may
-  // legitimately change mutable display fields such as title or time. Keep
-  // same-source provenance stable instead of reopening an already represented
-  // child because of a presentation edit.
-  if (event.sourceOccurrenceKey === expected.key) return true;
-  const eventArtists = normalizeOccurrenceArtists(event.artists);
-  const expectedArtists = normalizeOccurrenceArtists(expected.artists);
-  return (
-    event.date === expected.date &&
-    normalizeOccurrenceBindingText(event.venue) ===
-      normalizeOccurrenceBindingText(expected.venue) &&
-    normalizeOccurrenceBindingText(event.title) ===
-      normalizeOccurrenceBindingText(expected.title) &&
-    eventArtists.length === expectedArtists.length &&
-    eventArtists.every((artist, index) => artist === expectedArtists[index]) &&
-    (!expected.time ||
-      (Boolean(event.time) &&
-        normalizeOccurrenceBindingText(event.time) ===
-          normalizeOccurrenceBindingText(expected.time)))
-  );
+  return sourceOccurrenceRepresentativeMatchesExpected(event, expected, options);
 }
 
 const eventRepresentsExpectedOccurrence = eventRepresentsExpectedOccurrenceForTesting;
@@ -2085,6 +2035,28 @@ async function recordSourceOccurrenceSatisfaction(
     (occurrence) =>
       expectedKeys.includes(occurrence.key) && occurrence.key !== satisfiedKey,
   );
+  const retainedRepresentativeChecks = await Promise.all(
+    retainedOccurrences.map(async (occurrence) => ({
+      occurrence,
+      representative: await ctx.db.get(occurrence.eventId),
+      expected: expectedOccurrencesByKey.get(occurrence.key),
+    })),
+  );
+  if (
+    retainedRepresentativeChecks.some(
+      ({ representative, expected }) =>
+        !eventRepresentsExpectedOccurrence(representative, expected, {
+          allowUnverifiedPending: true,
+        }),
+    )
+  ) {
+    // Abort before changing the receipt or source-link tables. Repairing a
+    // stale event key is an explicit provenance operation, not a side effect
+    // of recording a different valid sibling.
+    throw new Error(
+      "Retained source occurrence representative does not match the proposed binding.",
+    );
+  }
   if (
     retainedOccurrences.some(
       (occurrence) => occurrence.eventId === representativeEventId,

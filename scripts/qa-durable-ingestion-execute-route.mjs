@@ -51,6 +51,11 @@ assert.ok(processingClaimOffset >= 0 && processingClaimOffset < fetchClaimOffset
 assert.ok(fetchClaimOffset >= 0 && fetchClaimOffset < providerCallOffset);
 assert.match(
   route.slice(processingClaimOffset, fetchClaimOffset),
+  /workerSlot,/,
+  "the route must identify its fixed slot to the single global AI claimant",
+);
+assert.match(
+  route.slice(processingClaimOffset, fetchClaimOffset),
   /status: released\.terminal \? 200 : 202/,
   "durably released AI contention must return 202 instead of restarting curl/systemd",
 );

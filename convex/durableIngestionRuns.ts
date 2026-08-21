@@ -1357,6 +1357,7 @@ export const claimNextProcessingReceipt = mutation({
   args: {
     runId: v.id("ingestionRuns"),
     workerId: v.string(),
+    workerSlot: v.optional(v.number()),
     serviceSecret: v.optional(v.string()),
   },
   returns: v.union(
@@ -1372,6 +1373,17 @@ export const claimNextProcessingReceipt = mutation({
   ),
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    // The processing queue has one global AI lease, unlike the six sharded
+    // fetch lanes. Elect one fixed runner before reading shared queue rows so
+    // the other five requests cannot contend on the same pending receipt.
+    // Keep the argument optional while an older web executor may overlap this
+    // backend during a rolling deployment.
+    if (
+      args.workerSlot !== undefined &&
+      assertExecutionSlot(args.workerSlot, args.workerId) !== 0
+    ) {
+      return null;
+    }
     const run = await ctx.db.get(args.runId);
     if (
       !run ||

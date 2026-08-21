@@ -91,6 +91,7 @@ import {
 } from "@/lib/events/event-update-precondition";
 import { isSensibleEventTitleForApproval } from "@/lib/events/event-title-approval";
 import { isCaptionSourceCoherentWithEvent } from "@/lib/events/event-source-approval";
+import { sourceOccurrenceRepresentativeMatchesExpected } from "@/lib/events/source-occurrence-representation";
 import {
   getApifyBudgetConfig,
   getBudgetDayKey,
@@ -8146,6 +8147,31 @@ function findBestExistingMatchForPreparedEvent(
   nextEvent: PreparedEvent,
   nextNormalizedFields: Record<string, unknown>,
 ): ExistingSourceMatch | null {
+  const nextOccurrenceKey = readJsonString(
+    nextNormalizedFields,
+    "sourceOccurrenceKey",
+  );
+  if (nextOccurrenceKey) {
+    const expectedOccurrence = {
+      key: nextOccurrenceKey,
+      date: nextEvent.date,
+      ...(nextEvent.time ? { time: nextEvent.time } : {}),
+      venue: nextEvent.venue,
+      title: nextEvent.title,
+      artists: nextEvent.artists,
+    };
+    // Duplicate scoring may locate a plausible candidate, but only the same
+    // semantic predicate used by the atomic Convex receipt write may select a
+    // representative. This prevents a fuzzy same-date/source match from being
+    // sent to a mutation that must reject it (or from rebinding an ordinal key).
+    existingMatches = existingMatches.filter((existing) =>
+      sourceOccurrenceRepresentativeMatchesExpected(
+        existing.existingEvent,
+        expectedOccurrence,
+        { allowUnverifiedPending: true },
+      ),
+    );
+  }
   const sourceIdentityMatches = existingMatches.filter(
     (existing) => existing.matchedBy !== "same_date_semantic",
   );
@@ -8323,6 +8349,19 @@ function reconcileAmbiguousOccurrenceKeysWithExistingEvents(
     const groupAssignedKeys = new Map<number, string>();
     const usedExistingIds = new Set<string>();
     const usedKeys = new Set<string>();
+    const occupiedExistingKeys = new Set(
+      existingMatches
+        .map((match) => {
+          const existingFields = parseJsonRecord(
+            match.existingEvent.normalizedFieldsJson,
+          );
+          return (
+            normalizeString(match.existingEvent.sourceOccurrenceKey) ||
+            readJsonString(existingFields, "sourceOccurrenceKey")
+          );
+        })
+        .filter((key): key is string => Boolean(key)),
+    );
     for (const index of collisionIndexes) {
       const prepared = preparedResults[index];
       if (!prepared || prepared.kind !== "ok") {
@@ -8354,7 +8393,12 @@ function reconcileAmbiguousOccurrenceKeysWithExistingEvents(
       usedExistingIds.add(match.existingEvent._id);
       usedKeys.add(existingKey);
     }
-    const availableKeys = collisionKeyPool.filter((key) => !usedKeys.has(key));
+    // A key is free only if no persisted same-source event owns it. Merely not
+    // choosing an incompatible existing row during this pass does not make its
+    // collision ordinal available for a different semantic child.
+    const availableKeys = collisionKeyPool.filter(
+      (key) => !usedKeys.has(key) && !occupiedExistingKeys.has(key),
+    );
     for (const index of collisionIndexes) {
       if (groupAssignedKeys.has(index)) {
         continue;
@@ -10658,6 +10702,14 @@ async function processIngestionPost(
       prepared.event.normalizedFieldsJson = JSON.stringify(prepared.normalizedFields);
     }
 
+    const preparedOccurrenceKey = readJsonString(
+      prepared.normalizedFields,
+      "sourceOccurrenceKey",
+    );
+    const expectedPreparedOccurrence =
+      sourceOccurrencePlan?.expectedOccurrences.find(
+        (occurrence) => occurrence.key === preparedOccurrenceKey,
+      );
     const existingMatch = findBestExistingMatchForPreparedEvent(
       existingMatches.filter(
         (match) => !claimedRepresentativeEventIds.has(match.existingEvent._id),
@@ -10665,6 +10717,39 @@ async function processIngestionPost(
       prepared.event,
       prepared.normalizedFields,
     );
+
+    const conflictingOccurrenceKey =
+      preparedOccurrenceKey &&
+      expectedPreparedOccurrence
+        ? existingMatches.find((match) => {
+            const existingFields = parseJsonRecord(
+              match.existingEvent.normalizedFieldsJson,
+            );
+            const existingKey =
+              normalizeString(match.existingEvent.sourceOccurrenceKey) ||
+              readJsonString(existingFields, "sourceOccurrenceKey");
+            return (
+              existingKey === preparedOccurrenceKey &&
+              match.existingEvent._id !== existingMatch?.existingEvent._id
+            );
+          })
+        : undefined;
+    if (conflictingOccurrenceKey) {
+      const error =
+        "Source-occurrence key is occupied by a different semantic representative; manual repair is required.";
+      summary.failedExtractions += 1;
+      summary.failed_extractions += 1;
+      summary.errors.push(error);
+      logError("ingestion.source_occurrence_binding.conflict", {
+        step: "update_existing_event" satisfies IngestionStep,
+        ...postContext,
+        extractionMode,
+        sourceOccurrenceKey: preparedOccurrenceKey,
+        conflictingEventId: conflictingOccurrenceKey.existingEvent._id,
+        error,
+      });
+      continue;
+    }
 
     if (
       !existingMatch &&
@@ -10696,10 +10781,6 @@ async function processIngestionPost(
 
     if (existingMatch) {
       claimedRepresentativeEventIds.add(existingMatch.existingEvent._id);
-      const preparedOccurrenceKey = readJsonString(
-        prepared.normalizedFields,
-        "sourceOccurrenceKey",
-      );
       const existingReceiptMappings =
         sourceReceipt?.satisfiedOccurrences.filter(
           (occurrence) => occurrence.eventId === existingMatch.existingEvent._id,

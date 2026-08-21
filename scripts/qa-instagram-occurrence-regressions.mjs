@@ -356,6 +356,139 @@ if (fromPrepared?.kind === "ok") {
   );
 }
 
+// A collision ordinal is not semantic provenance. This is the production
+// shape that previously allowed a Chillout extraction snapshot to satisfy the
+// Bodies Hit The Floor child merely because both carried the same key.
+const occupiedBodiesKey = `instagram-occurrence-v2:${"b".repeat(64)}`;
+const bodiesExpectedOccurrence = {
+  key: occupiedBodiesKey,
+  date: "2026-09-26",
+  time: "TBD",
+  venue: "Vrtoglavica",
+  title: "Bodies Hit The Floor",
+  artists: ["DJ Hellspawn", "DJ Kedlavi", "DJ Sirivs"],
+};
+const sharedVrtoglavicaContext = [
+  "Bodies Hit The Floor — DJ Hellspawn, DJ Kedlavi, DJ Sirivs",
+  "Chillout Zone",
+  "INFECTED",
+].join("\n");
+const wrongBodiesRepresentative = {
+  _id: "qa-vrtoglavica-wrong-bodies-representative",
+  title: "Chillout Zone",
+  date: "2026-09-26",
+  time: "TBD",
+  venue: "Vrtoglavica",
+  artists: [],
+  eventType: "music",
+  sourceCaption: sharedVrtoglavicaContext,
+  instagramPostId: "qa-vrtoglavica-post",
+  instagramPostUrl: "https://www.instagram.com/p/qa-vrtoglavica-post/",
+  sourceOccurrenceKey: occupiedBodiesKey,
+  status: "approved",
+  updatedAt: 1,
+  normalizedFieldsJson: JSON.stringify({
+    sourceOccurrenceKey: occupiedBodiesKey,
+    sourceOccurrenceSourceFingerprint: "instagram-source-v2:old-vrtoglavica",
+    sourceOccurrenceAmbiguousProvenance: true,
+    title: "Chillout Zone",
+    normalizedDate: "2026-09-26",
+    time: "TBD",
+    normalizedVenue: "Vrtoglavica",
+    artists: [],
+    sourceCaptionFromModel: sharedVrtoglavicaContext,
+  }),
+};
+assert.equal(
+  eventRepresentsExpectedOccurrenceForTesting(
+    wrongBodiesRepresentative,
+    bodiesExpectedOccurrence,
+  ),
+  false,
+  "a same-key representative with a different immutable extraction snapshot must fail closed",
+);
+assert.equal(
+  eventRepresentsExpectedOccurrenceForTesting(
+    {
+      ...wrongBodiesRepresentative,
+      normalizedFieldsJson: JSON.stringify({
+        sourceOccurrenceKey: occupiedBodiesKey,
+        sourceOccurrenceSourceFingerprint: "instagram-source-v2:single-old",
+        title: "Chillout Zone",
+        normalizedDate: "2026-09-26",
+        time: "TBD",
+        normalizedVenue: "Vrtoglavica",
+        artists: [],
+      }),
+    },
+    bodiesExpectedOccurrence,
+  ),
+  false,
+  "a non-ambiguous same key still cannot replace semantic representative evidence",
+);
+assert.equal(
+  eventRepresentsExpectedOccurrenceForTesting(
+    {
+      ...wrongBodiesRepresentative,
+      title: "Moderator-corrected public title",
+      time: "21:30",
+      venue: "Moderator-corrected venue",
+      artists: ["Moderator-corrected artist"],
+      normalizedFieldsJson: JSON.stringify({
+        sourceOccurrenceKey: occupiedBodiesKey,
+        sourceOccurrenceSourceFingerprint: "instagram-source-v2:bodies",
+        sourceOccurrenceAmbiguousProvenance: true,
+        title: bodiesExpectedOccurrence.title,
+        normalizedDate: bodiesExpectedOccurrence.date,
+        time: bodiesExpectedOccurrence.time,
+        normalizedVenue: bodiesExpectedOccurrence.venue,
+        artists: bodiesExpectedOccurrence.artists,
+      }),
+    },
+    bodiesExpectedOccurrence,
+  ),
+  true,
+  "moderator edits must remain represented when the immutable extraction snapshot still matches",
+);
+assert.equal(
+  findBestExistingMatchForPreparedEventForTesting(
+    [
+      {
+        existingEvent: wrongBodiesRepresentative,
+        matchedBy: "same_date_semantic",
+        matchedValue: bodiesExpectedOccurrence.date,
+      },
+    ],
+    {
+      title: bodiesExpectedOccurrence.title,
+      date: bodiesExpectedOccurrence.date,
+      time: bodiesExpectedOccurrence.time,
+      timeSource: "unknown",
+      timeConfidence: 0,
+      timeStatus: "unknown",
+      venue: bodiesExpectedOccurrence.venue,
+      artists: bodiesExpectedOccurrence.artists,
+      eventType: "music",
+      sourceCaption: sharedVrtoglavicaContext,
+      instagramPostId: "qa-next-vrtoglavica-post",
+      instagramPostUrl: "https://www.instagram.com/p/qa-next-vrtoglavica-post/",
+      sourceOccurrenceKey: occupiedBodiesKey,
+      status: "pending",
+    },
+    {
+      sourceOccurrenceKey: occupiedBodiesKey,
+      title: bodiesExpectedOccurrence.title,
+      normalizedDate: bodiesExpectedOccurrence.date,
+      time: bodiesExpectedOccurrence.time,
+      normalizedVenue: bodiesExpectedOccurrence.venue,
+      artists: bodiesExpectedOccurrence.artists,
+      sourceCaptionFromModel: sharedVrtoglavicaContext,
+    },
+  ),
+  null,
+  "a fuzzy duplicate candidate that Convex cannot accept must never be selected for occurrence satisfaction",
+);
+
 const commonCaption = [
   "Разговорный клуб итальянского языка в COMMON",
   "Понедельник — 14:00",
