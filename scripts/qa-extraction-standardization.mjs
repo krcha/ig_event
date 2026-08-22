@@ -382,8 +382,13 @@ function runPromptQa() {
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
-    /multiple dates\/times are explicit.*keep schedule_entries empty.*pending unnamed fallbacks/i,
-    "Prompt must leave unnamed schedules to deterministic pending fallback handling.",
+    /schedule row with no event title or billed act.*same row.*exact readable date.*specific physical venue name or a clear event-kind phrase/is,
+    "Prompt must retain only source-grounded unnamed schedule rows for deterministic fallback handling.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /Keep "title" empty and "artists" \[\].*Omit every other unnamed row/is,
+    "Prompt must keep qualifying unnamed rows blank and omit ungrounded ones.",
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
@@ -439,13 +444,20 @@ function runPromptQa() {
     instagramAltText: "Poster text says Friday night at Grad with DJ Python.",
     instagramLocationName: "KC Grad",
     canonicalVenueName: "KC Grad",
+    instagramSourceRole: "venue",
+    instagramSourceName: "KC Grad",
     sourceImageUrl: "https://cdn.example.com/poster.jpg",
   });
 
   assert.match(userPrompt, /Instagram location tag: KC Grad/);
   assert.match(userPrompt, /Canonical venue hint: KC Grad/);
+  assert.match(userPrompt, /Instagram source role: venue/);
+  assert.match(userPrompt, /Instagram source\/account name: KC Grad/);
   assert.match(userPrompt, /Instagram alt text:/);
   assert.match(userPrompt, /schedule_entries/i);
+  assert.match(EVENT_EXTRACTION_SYSTEM_PROMPT, /promoter-role account name identifies the organizer/i);
+  assert.match(EVENT_EXTRACTION_SYSTEM_PROMPT, /Preserve an explicitly billed Instagram artist handle/i);
+  assert.match(EVENT_EXTRACTION_SYSTEM_PROMPT, /minor connector-word difference/i);
 }
 
 function runVenueQa() {
@@ -1003,9 +1015,9 @@ function runUnverifiedPosterScheduleModerationQa() {
   assert.equal(lavashEvents.length, 2);
   assert.deepEqual(
     lavashEvents.map((event) => event.title),
-    ["Kaya Ostojic", "Adisskaljo & Puls Bend"],
+    ["@kaya_ostojic", "Adisskaljo & Puls Bend"],
   );
-  assert.deepEqual(lavashEvents[1].artists, ["Adisskaljo", "Puls Bend"]);
+  assert.deepEqual(lavashEvents[1].artists, ["@adisskaljo", "@puls_bend"]);
   assert.equal(lavashEvents[1].sourceCaption, lavashCaption);
 
   const safeTimeFirstDate = isoDateDaysFromNow(9);
@@ -6316,6 +6328,7 @@ async function runServiceApprovalMutationBoundaryQa() {
               withIndex: () => ({
                 collect: async () => sameDateEvents,
                 first: async () => null,
+                take: async (limit) => sameDateEvents.slice(0, limit),
               }),
             },
   };
@@ -6941,6 +6954,7 @@ async function runHardMappedVenueAuthorityMutationBoundaryQa() {
               withIndex: () => ({
                 collect: async () => [],
                 first: async () => null,
+                take: async () => [],
               }),
             },
     },
@@ -9201,7 +9215,10 @@ async function runApprovedMergeBoundaryQa() {
               ],
             }
           : {
-              withIndex: () => ({ collect: async () => [primary, duplicate, conflict] }),
+              withIndex: () => ({
+                collect: async () => [primary, duplicate, conflict],
+                take: async (limit) => [primary, duplicate, conflict].slice(0, limit),
+              }),
             },
     },
   };

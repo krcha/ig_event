@@ -159,12 +159,31 @@ const sourceGroundingReprocessItem = v.object({
   expectedNormalizedFieldsJson: v.string(),
   nextNormalizedFieldsJson: v.string(),
 });
+const eventEvidencePolicyPatch = v.object({
+  artists: v.optional(v.array(v.string())),
+  dateEvidenceIsRelative: v.boolean(),
+  dateEvidenceResolvedDate: v.string(),
+  dateEvidenceSource: eventDateEvidenceSource,
+  dateEvidenceText: v.string(),
+  normalizedFieldsJson: v.string(),
+  sourceConflictFields: v.array(v.string()),
+  status: eventStatus,
+  venue: v.optional(v.string()),
+});
+const eventEvidencePolicyReprocessItem = v.object({
+  id: v.id("events"),
+  expectedUpdatedAt: v.number(),
+  expectedNormalizedFieldsJson: v.string(),
+  patch: eventEvidencePolicyPatch,
+});
 const trustedV2VenueRepairResult = v.object({
   updated: v.boolean(),
   updatedAt: v.number(),
   status: eventStatus,
 });
 const MAX_SOURCE_GROUNDING_REPROCESS_BATCH_SIZE = 100;
+const MAX_EVENT_EVIDENCE_POLICY_REPROCESS_BATCH_SIZE = 16;
+const MAX_APPROVAL_DATE_COHORT_SIZE = 500;
 const MAX_EVENTS_GET_MANY_BY_IDS = 100;
 const SOURCE_GROUNDING_REPROCESS_SOURCE_REASONS = new Set([
   "caption_source_event_mismatch",
@@ -510,15 +529,20 @@ async function assertApprovalCandidatePolicy(
 
   const sameDateEvents = await ctx.db
     .query("events")
-    .withIndex("by_date", (q) => q.eq("date", candidate.date))
-    .collect();
+    .withIndex("by_status_date", (q) =>
+      q.eq("status", "approved").eq("date", candidate.date),
+    )
+    .take(MAX_APPROVAL_DATE_COHORT_SIZE + 1);
+  if (sameDateEvents.length > MAX_APPROVAL_DATE_COHORT_SIZE) {
+    throw new Error("Approved same-date cohort exceeds the safe review bound.");
+  }
   const candidateVenue = normalizeLookup(candidate.venue);
   const candidatePostUrl = normalizeLookup(candidate.instagramPostUrl ?? "");
   const candidatePostId = candidate.instagramPostId?.trim() ?? "";
   const excluded = new Set(excludeEventIds);
   let ambiguousConflict = false;
   for (const event of sameDateEvents) {
-    if (excluded.has(event._id) || event.status !== "approved") {
+    if (excluded.has(event._id)) {
       continue;
     }
     const sameVenue =
@@ -2935,6 +2959,465 @@ export const reprocessPendingSourceGroundingBatch = mutation({
       updatedCount: prepared.length,
       eventIds: prepared.map(({ event }) => event._id),
     };
+  },
+});
+
+type EventEvidencePolicyReprocessItem = Infer<typeof eventEvidencePolicyReprocessItem>;
+
+function assertEventEvidencePolicyReprocessPatch(
+  item: EventEvidencePolicyReprocessItem,
+  nextStatus: "approved" | "pending",
+): void {
+  if (
+    !Number.isSafeInteger(item.expectedUpdatedAt) ||
+    item.patch.status !== nextStatus ||
+    typeof item.patch.normalizedFieldsJson !== "string" ||
+    item.patch.normalizedFieldsJson.length === 0
+  ) {
+    throw new Error("Event-evidence policy replay requires an exact status and normalized payload.");
+  }
+}
+
+function parseEventEvidencePolicyNormalizedFields(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Fall through to the fail-closed error below.
+  }
+  throw new Error("Event-evidence policy replay normalized payload is invalid.");
+}
+
+function normalizedString(value: unknown): string {
+  return typeof value === "string" ? value.trim().replace(/\s+/gu, " ") : "";
+}
+
+function stringArraysEqual(left: unknown, right: unknown): boolean {
+  return (
+    Array.isArray(left) &&
+    Array.isArray(right) &&
+    left.length === right.length &&
+    left.every((value, index) => typeof value === "string" && value === right[index])
+  );
+}
+
+const EVENT_EVIDENCE_REPLAY_MONTHS = new Map<string, number>([
+  ["januar", 1], ["januara", 1], ["january", 1],
+  ["februar", 2], ["februara", 2], ["february", 2],
+  ["mart", 3], ["marta", 3], ["march", 3],
+  ["april", 4], ["aprila", 4],
+  ["maj", 5], ["maja", 5], ["may", 5],
+  ["jun", 6], ["juna", 6], ["june", 6],
+  ["jul", 7], ["jula", 7], ["july", 7],
+  ["avgust", 8], ["avgusta", 8], ["august", 8],
+  ["septembar", 9], ["septembra", 9], ["september", 9],
+  ["oktobar", 10], ["oktobra", 10], ["october", 10],
+  ["novembar", 11], ["novembra", 11], ["november", 11],
+  ["decembar", 12], ["decembra", 12], ["december", 12],
+]);
+
+function collectEventEvidenceReplayRangeDates(
+  evidenceText: string,
+  referenceDate: string,
+): Set<string> | null {
+  const match = evidenceText.toLocaleLowerCase("sr-Latn").match(
+    /(?:^|[^\p{L}\p{N}_])(?:od\s+)?(\d{1,2})\.?\s*([\p{L}]+)(?:\s*,?\s*(\d{2,4}))?\s*(?:do|to|through|thru|[-–—])\s*(\d{1,2})\.?\s*([\p{L}]+)(?:\s*,?\s*(\d{2,4}))?/iu,
+  );
+  const referenceYear = Number.parseInt(referenceDate.slice(0, 4), 10);
+  const startMonth = EVENT_EVIDENCE_REPLAY_MONTHS.get(match?.[2] ?? "");
+  const endMonth = EVENT_EVIDENCE_REPLAY_MONTHS.get(match?.[5] ?? "");
+  if (!match || !startMonth || !endMonth || !Number.isSafeInteger(referenceYear)) return null;
+  const parseYear = (value: string | undefined): number | null => {
+    if (!value) return null;
+    const parsed = Number.parseInt(value, 10);
+    return value.length === 2 ? 2000 + parsed : parsed;
+  };
+  let startYear = parseYear(match[3]) ?? parseYear(match[6]) ?? referenceYear;
+  const endYear = parseYear(match[6]) ?? parseYear(match[3]) ?? referenceYear;
+  if (!match[3] && startMonth > endMonth) startYear = endYear - 1;
+  const start = new Date(Date.UTC(startYear, startMonth - 1, Number.parseInt(match[1], 10)));
+  const end = new Date(Date.UTC(endYear, endMonth - 1, Number.parseInt(match[4], 10)));
+  if (
+    start.getUTCFullYear() !== startYear ||
+    start.getUTCMonth() !== startMonth - 1 ||
+    start.getUTCDate() !== Number.parseInt(match[1], 10) ||
+    end.getUTCFullYear() !== endYear ||
+    end.getUTCMonth() !== endMonth - 1 ||
+    end.getUTCDate() !== Number.parseInt(match[4], 10) ||
+    end.getTime() < start.getTime()
+  ) {
+    return null;
+  }
+  const dayCount = Math.floor((end.getTime() - start.getTime()) / 86_400_000) + 1;
+  if (dayCount < 2 || dayCount > 31) return null;
+  return new Set(
+    Array.from({ length: dayCount }, (_, index) =>
+      new Date(start.getTime() + index * 86_400_000).toISOString().slice(0, 10),
+    ),
+  );
+}
+
+export function assertEventEvidencePolicyDateEvidenceTransitionForTesting(
+  event: Doc<"events">,
+  item: EventEvidencePolicyReprocessItem,
+): void {
+  const unchanged =
+    item.patch.dateEvidenceText === event.dateEvidenceText &&
+    item.patch.dateEvidenceSource === event.dateEvidenceSource &&
+    item.patch.dateEvidenceIsRelative === event.dateEvidenceIsRelative &&
+    item.patch.dateEvidenceResolvedDate === event.dateEvidenceResolvedDate;
+  if (unchanged) return;
+  if (
+    item.patch.dateEvidenceText !== event.dateEvidenceText ||
+    item.patch.dateEvidenceSource !== event.dateEvidenceSource ||
+    item.patch.dateEvidenceIsRelative !== event.dateEvidenceIsRelative ||
+    typeof event.dateEvidenceText !== "string" ||
+    typeof event.dateEvidenceResolvedDate !== "string" ||
+    typeof item.patch.dateEvidenceResolvedDate !== "string"
+  ) {
+    throw new Error(`Event-evidence policy replay cannot change date evidence: ${item.id}.`);
+  }
+  const rangeDates = collectEventEvidenceReplayRangeDates(
+    event.dateEvidenceText,
+    event.date,
+  );
+  let rawExtraction: Record<string, unknown> | null = null;
+  try {
+    const parsed = JSON.parse(event.rawExtractionJson ?? "null") as unknown;
+    rawExtraction = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    rawExtraction = null;
+  }
+  const rawDateEvidence = rawExtraction?.date_evidence;
+  const rawScheduleEntries = rawExtraction?.schedule_entries;
+  const rawEvidenceCandidates = [
+    rawDateEvidence,
+    ...(Array.isArray(rawScheduleEntries)
+      ? rawScheduleEntries.map((entry) =>
+          entry && typeof entry === "object" && !Array.isArray(entry)
+            ? (entry as Record<string, unknown>).date_evidence
+            : null,
+        )
+      : []),
+  ].filter((value): value is Record<string, unknown> =>
+    Boolean(value && typeof value === "object" && !Array.isArray(value)),
+  );
+  const rawEvidenceMatches = rawEvidenceCandidates.some(
+    (evidence) =>
+      normalizedString(evidence.exact_text) === normalizedString(event.dateEvidenceText) &&
+      evidence.source === event.dateEvidenceSource &&
+      typeof evidence.resolved_date === "string" &&
+      rangeDates?.has(evidence.resolved_date),
+  );
+  if (
+    !rangeDates ||
+    !rawEvidenceMatches ||
+    !rangeDates.has(event.date) ||
+    !rangeDates.has(event.dateEvidenceResolvedDate) ||
+    !rangeDates.has(item.patch.dateEvidenceResolvedDate) ||
+    ![event.dateEvidenceResolvedDate, item.patch.dateEvidenceResolvedDate].includes(event.date)
+  ) {
+    throw new Error(`Event-evidence policy replay date-range correction failed: ${item.id}.`);
+  }
+}
+
+const assertEventEvidencePolicyDateEvidenceTransition =
+  assertEventEvidencePolicyDateEvidenceTransitionForTesting;
+
+function assertEventEvidencePolicyNormalizedBinding(options: {
+  normalizedFieldsJson: string;
+  occurrenceKey: string;
+  sourceFingerprint: string;
+  publicFields: {
+    artists: string[];
+    date: string;
+    dateEvidenceIsRelative?: boolean;
+    dateEvidenceResolvedDate?: string;
+    dateEvidenceSource?: string;
+    dateEvidenceText?: string;
+    sourceConflictFields?: string[];
+    time?: string;
+    title: string;
+    venue: string;
+  };
+}): void {
+  const fields = parseEventEvidencePolicyNormalizedFields(options.normalizedFieldsJson);
+  const event = options.publicFields;
+  if (
+    fields.sourceOccurrenceKey !== options.occurrenceKey ||
+    fields.sourceOccurrenceSourceFingerprint !== options.sourceFingerprint ||
+    normalizedString(fields.title) !== normalizedString(event.title) ||
+    normalizedString(fields.normalizedDate) !== normalizedString(event.date) ||
+    normalizedString(fields.time) !== normalizedString(event.time) ||
+    normalizedString(fields.normalizedVenue) !== normalizedString(event.venue) ||
+    !stringArraysEqual(fields.artists, event.artists) ||
+    !stringArraysEqual(fields.sourceConflictFields, event.sourceConflictFields ?? []) ||
+    normalizedString(fields.dateEvidenceText) !== normalizedString(event.dateEvidenceText) ||
+    fields.dateEvidenceSource !== event.dateEvidenceSource ||
+    fields.dateEvidenceIsRelative !== event.dateEvidenceIsRelative ||
+    normalizedString(fields.dateEvidenceResolvedDate) !==
+      normalizedString(event.dateEvidenceResolvedDate)
+  ) {
+    throw new Error("Event-evidence policy replay normalized/public binding failed.");
+  }
+}
+
+async function applyEventEvidencePolicyTransition(
+  ctx: MutationCtx,
+  args: {
+    sourceIdentity: string;
+    expectedReceiptId: Id<"instagramSourceOccurrenceReceipts">;
+    expectedReceiptUpdatedAt: number;
+    expectedSourceFingerprint: string;
+    items: EventEvidencePolicyReprocessItem[];
+  },
+  authorization: { actor: string; kind: "service" },
+  transition: "apply" | "rollback",
+): Promise<{
+  updatedCount: number;
+  eventIds: Id<"events">[];
+  eventUpdatedAts: Array<{ id: Id<"events">; updatedAt: number }>;
+  receiptUpdatedAt: number;
+}> {
+  const currentStatus = transition === "apply" ? "pending" : "approved";
+  const nextStatus = transition === "apply" ? "approved" : "pending";
+  if (
+    !args.sourceIdentity ||
+    !args.expectedSourceFingerprint ||
+    !Number.isSafeInteger(args.expectedReceiptUpdatedAt) ||
+    args.items.length === 0 ||
+    args.items.length > MAX_EVENT_EVIDENCE_POLICY_REPROCESS_BATCH_SIZE
+  ) {
+    throw new Error("Event-evidence policy replay batch is invalid.");
+  }
+
+  const uniqueEventIds = new Set(args.items.map((item) => item.id));
+  if (uniqueEventIds.size !== args.items.length) {
+    throw new Error("Event-evidence policy replay requires unique event IDs.");
+  }
+  for (const item of args.items) {
+    assertEventEvidencePolicyReprocessPatch(item, nextStatus);
+  }
+
+  const receiptRows = await ctx.db
+    .query("instagramSourceOccurrenceReceipts")
+    .withIndex("by_sourceIdentity", (q) => q.eq("sourceIdentity", args.sourceIdentity))
+    .take(2);
+  const receipt = receiptRows.length === 1 ? receiptRows[0] : null;
+  if (
+    !receipt ||
+    receipt._id !== args.expectedReceiptId ||
+    receipt.updatedAt !== args.expectedReceiptUpdatedAt ||
+    receipt.sourceFingerprint !== args.expectedSourceFingerprint ||
+    !Array.isArray(receipt.expectedOccurrences)
+  ) {
+    throw new Error("Event-evidence policy replay receipt precondition failed.");
+  }
+  const expectedReceiptKeys = receipt.expectedOccurrences.map((occurrence) => occurrence.key);
+  const satisfiedReceiptKeys = receipt.satisfiedOccurrences.map((occurrence) => occurrence.key);
+  if (
+    new Set(expectedReceiptKeys).size !== expectedReceiptKeys.length ||
+    new Set(satisfiedReceiptKeys).size !== satisfiedReceiptKeys.length ||
+    expectedReceiptKeys.length !== satisfiedReceiptKeys.length ||
+    expectedReceiptKeys.some((key) => !satisfiedReceiptKeys.includes(key))
+  ) {
+    throw new Error("Event-evidence policy replay requires a complete unique occurrence receipt.");
+  }
+
+  const prepared: Array<{
+    event: Doc<"events">;
+    item: EventEvidencePolicyReprocessItem;
+    sourceOccurrenceKey: string;
+  }> = [];
+  const replayKeys = new Set<string>();
+  for (const item of args.items) {
+    const event = await ctx.db.get(item.id);
+    if (
+      !event ||
+      event.status !== currentStatus ||
+      event.updatedAt !== item.expectedUpdatedAt ||
+      event.normalizedFieldsJson !== item.expectedNormalizedFieldsJson
+    ) {
+      throw new Error(`Event-evidence policy replay event precondition failed: ${item.id}.`);
+    }
+    if (transition === "rollback") {
+      const [legacySaved, userSaved] = await Promise.all([
+        ctx.db
+          .query("savedEvents")
+          .withIndex("by_event", (q) => q.eq("eventId", event._id))
+          .take(1),
+        ctx.db
+          .query("userSavedEvents")
+          .withIndex("by_event", (q) => q.eq("eventId", event._id))
+          .take(1),
+      ]);
+      if (legacySaved.length > 0 || userSaved.length > 0) {
+        throw new Error(`Event-evidence policy rollback refused for a saved event: ${item.id}.`);
+      }
+    }
+    const sourceLinks = await ctx.db
+      .query("instagramEventSources")
+      .withIndex("by_event", (q) => q.eq("eventId", event._id))
+      .take(2);
+    const sourceLink = sourceLinks.length === 1 ? sourceLinks[0] : null;
+    const expectedOccurrence = receipt.expectedOccurrences.find(
+      (occurrence) => occurrence.key === sourceLink?.sourceOccurrenceKey,
+    );
+    const satisfiedOccurrence = receipt.satisfiedOccurrences.find(
+      (occurrence) => occurrence.key === sourceLink?.sourceOccurrenceKey,
+    );
+    if (
+      !sourceLink ||
+      sourceLink.sourceIdentity !== receipt.sourceIdentity ||
+      sourceLink.sourceFingerprint !== receipt.sourceFingerprint ||
+      sourceLink.sourceOccurrenceKey !== event.sourceOccurrenceKey ||
+      !expectedOccurrence ||
+      satisfiedOccurrence?.eventId !== event._id ||
+      replayKeys.has(sourceLink.sourceOccurrenceKey) ||
+      !eventRepresentsExpectedOccurrence(event, expectedOccurrence, {
+        allowUnverifiedPending: true,
+      })
+    ) {
+      throw new Error(`Event-evidence policy replay occurrence precondition failed: ${item.id}.`);
+    }
+    assertEventEvidencePolicyDateEvidenceTransition(event, item);
+    assertEventEvidencePolicyNormalizedBinding({
+      normalizedFieldsJson: event.normalizedFieldsJson ?? "",
+      occurrenceKey: sourceLink.sourceOccurrenceKey,
+      sourceFingerprint: receipt.sourceFingerprint,
+      publicFields: event,
+    });
+    assertEventEvidencePolicyNormalizedBinding({
+      normalizedFieldsJson: item.patch.normalizedFieldsJson,
+      occurrenceKey: sourceLink.sourceOccurrenceKey,
+      sourceFingerprint: receipt.sourceFingerprint,
+      publicFields: {
+        ...event,
+        artists: item.patch.artists ?? event.artists,
+        dateEvidenceIsRelative: item.patch.dateEvidenceIsRelative,
+        dateEvidenceResolvedDate: item.patch.dateEvidenceResolvedDate,
+        dateEvidenceSource: item.patch.dateEvidenceSource,
+        dateEvidenceText: item.patch.dateEvidenceText,
+        sourceConflictFields: item.patch.sourceConflictFields,
+        venue: item.patch.venue ?? event.venue,
+      },
+    });
+    replayKeys.add(sourceLink.sourceOccurrenceKey);
+    prepared.push({ event, item, sourceOccurrenceKey: sourceLink.sourceOccurrenceKey });
+  }
+
+  const eventUpdatedAts: Array<{ id: Id<"events">; updatedAt: number }> = [];
+  for (const { event, item } of prepared) {
+    const result = await applyEventUpdate(
+      ctx,
+      {
+        id: event._id,
+        patch: item.patch,
+        expectedStatus: currentStatus,
+        expectedUpdatedAt: item.expectedUpdatedAt,
+      },
+      authorization,
+    );
+    eventUpdatedAts.push({ id: event._id, updatedAt: result.updatedAt });
+  }
+
+  const nextExpectedOccurrences = [...receipt.expectedOccurrences];
+  for (const { event, sourceOccurrenceKey } of prepared) {
+    const updatedEvent = await ctx.db.get(event._id);
+    const expectedIndex = nextExpectedOccurrences.findIndex(
+      (occurrence) => occurrence.key === sourceOccurrenceKey,
+    );
+    if (!updatedEvent || expectedIndex < 0) {
+      throw new Error("Event-evidence policy replay lost an occurrence representative.");
+    }
+    const nextExpectedOccurrence = {
+      key: sourceOccurrenceKey,
+      date: updatedEvent.date,
+      ...(updatedEvent.time ? { time: updatedEvent.time } : {}),
+      venue: updatedEvent.venue,
+      title: updatedEvent.title,
+      artists: updatedEvent.artists,
+    };
+    if (!eventRepresentsExpectedOccurrence(updatedEvent, nextExpectedOccurrence)) {
+      throw new Error("Event-evidence policy replay produced an invalid occurrence binding.");
+    }
+    nextExpectedOccurrences[expectedIndex] = nextExpectedOccurrence;
+  }
+
+  for (const satisfied of receipt.satisfiedOccurrences) {
+    const representative = await ctx.db.get(satisfied.eventId);
+    const expected = nextExpectedOccurrences.find(
+      (occurrence) => occurrence.key === satisfied.key,
+    );
+    if (!eventRepresentsExpectedOccurrence(representative, expected)) {
+      throw new Error("Event-evidence policy replay would invalidate a receipt sibling.");
+    }
+  }
+
+  const receiptUpdatedAt = Math.max(Date.now(), receipt.updatedAt + 1);
+  await ctx.db.patch(receipt._id, {
+    expectedOccurrences: nextExpectedOccurrences,
+    updatedAt: receiptUpdatedAt,
+  });
+  return {
+    updatedCount: prepared.length,
+    eventIds: prepared.map(({ event }) => event._id),
+    eventUpdatedAts,
+    receiptUpdatedAt,
+  };
+}
+
+const eventEvidencePolicyTransitionArgs = {
+  sourceIdentity: v.string(),
+  expectedReceiptId: v.id("instagramSourceOccurrenceReceipts"),
+  expectedReceiptUpdatedAt: v.number(),
+  expectedSourceFingerprint: v.string(),
+  items: v.array(eventEvidencePolicyReprocessItem),
+  serviceSecret: v.string(),
+};
+
+const eventEvidencePolicyTransitionResult = v.object({
+  updatedCount: v.number(),
+  eventIds: v.array(v.id("events")),
+  eventUpdatedAts: v.array(v.object({ id: v.id("events"), updatedAt: v.number() })),
+  receiptUpdatedAt: v.number(),
+});
+
+export const reprocessPendingEventEvidencePolicyBatch = mutation({
+  args: eventEvidencePolicyTransitionArgs,
+  returns: eventEvidencePolicyTransitionResult,
+  handler: async (ctx, args) => {
+    const authorization = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    if (authorization.kind !== "service") {
+      throw new Error("Event-evidence policy replay requires service authentication.");
+    }
+    return applyEventEvidencePolicyTransition(
+      ctx,
+      args,
+      { actor: authorization.actor, kind: "service" },
+      "apply",
+    );
+  },
+});
+
+export const rollbackEventEvidencePolicyBatch = mutation({
+  args: eventEvidencePolicyTransitionArgs,
+  returns: eventEvidencePolicyTransitionResult,
+  handler: async (ctx, args) => {
+    const authorization = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    if (authorization.kind !== "service") {
+      throw new Error("Event-evidence policy rollback requires service authentication.");
+    }
+    return applyEventEvidencePolicyTransition(
+      ctx,
+      args,
+      { actor: authorization.actor, kind: "service" },
+      "rollback",
+    );
   },
 });
 

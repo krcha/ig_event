@@ -278,6 +278,8 @@ type ExtractEventDataOptions = {
   instagramPostTimestamp?: string | null;
   instagramLocationName?: string | null;
   canonicalVenueName?: string | null;
+  instagramSourceRole?: "venue" | "promoter" | "unknown";
+  instagramSourceName?: string | null;
   extractionMode?: "poster" | "caption_only";
   beforeTransport?: () => Promise<void>;
   onTransportStarted?: () => void;
@@ -571,6 +573,8 @@ export async function extractEventDataFromInstagramPost(
             instagramAltText: options.altText,
             instagramLocationName: options.instagramLocationName,
             canonicalVenueName: options.canonicalVenueName,
+            instagramSourceRole: options.instagramSourceRole,
+            instagramSourceName: options.instagramSourceName,
             sourceImageUrl: options.sourceImageUrl,
             extractionMode: options.extractionMode,
           }),

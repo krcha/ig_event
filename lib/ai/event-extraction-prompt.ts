@@ -9,6 +9,8 @@ export type EventExtractionPromptContext = {
   sourceImageUrl?: string | null;
   instagramLocationName?: string | null;
   canonicalVenueName?: string | null;
+  instagramSourceRole?: "venue" | "promoter" | "unknown";
+  instagramSourceName?: string | null;
   extractionMode?: "poster" | "caption_only";
 };
 
@@ -98,12 +100,14 @@ Rules:
 - Always return "extraction_contract_version": "event_evidence_v2".
 - "confidence" and every "field_confirmation.*.confidence" value must be a decimal from 0.00 to 1.00 inclusive.
 - Never use 0-100 percentages for confidence.
-- Use the flyer/poster, caption, Instagram location tag, and canonical venue hint together to identify the venue.
+- Use the flyer/poster, caption, Instagram location tag, account role, and canonical venue hint together to identify the venue.
+- Treat the account role as authoritative context. A venue-role account may supply its canonical physical venue when no source evidence names another place. A promoter-role account name identifies the organizer, never the physical venue.
 - The Instagram handle is strong identity context for the account and can help resolve abbreviations or partial venue references, but it is not sufficient on its own to invent unsupported facts.
 - "venue" must be a standardized venue display name only. Do not include the city, country, address, neighborhood, room name, or Instagram handle in the venue field.
 - If a canonical venue hint is provided and the caption, poster, or location tag clearly refer to that same place, return the canonical venue hint as "venue" even when the source uses abbreviations, stylized casing, transliteration, or a partial variant.
 - If the source clearly names a different venue than the canonical venue hint, ignore the hint and return the source venue instead.
 - Do not return a promoter, organizer, collective, sponsor, or ticketing account as "venue" unless the source clearly shows that it is also the physical venue.
+- Venue evidence priority is: an explicit venue in the event row; an explicit physical venue in the poster or caption; the Instagram location tag; then a canonical venue hint, which is a fallback only for a venue-role or unclassified account. For a promoter-role account, return the explicit physical venue and never fall back to the promoter account name.
 - If the only location evidence is generic text such as Belgrade, Serbia, club, nightclub, or event space, return empty string for "venue".
 - Prefer a non-empty "title" only when an explicit event/program/act name is clearly written in the caption or flyer.
 - For film screenings, plays, books, exhibitions, and similar cultural programs, an explicitly quoted work name (for example “Battle Royale” (2000)) is the event title; never use the surrounding date/time/location phrase as the title.
@@ -116,6 +120,7 @@ Rules:
 - Exclude section headings, organizer names, venue names, sponsor names, ticket links, hashtags, and generic labels like "lineup" or "special guests" when no specific names are given.
 - A hashtag is discovery/marketing metadata, never an artist, billed act, schedule-row title, or event title unless the same identity is separately and explicitly billed outside the hashtag in caption or poster text.
 - Deduplicate artists and keep their readable stage names in source order when possible.
+- Preserve an explicitly billed Instagram artist handle exactly with its leading @. When a poster display name and one caption handle clearly identify the same billed act (for example NENI and @ne_nije), keep the handle once instead of returning both spellings, and do not report that harmless alias as a conflict.
 - "category" must be exactly one of: ${CANONICAL_EVENT_TYPE_PROMPT_LIST}.
 - Choose the closest real type. Use "event" ONLY when none of the five clearly fit — never just because the subtype is uncertain.
 - Definitions + cues (captions are often Serbian/Cyrillic — map these):
@@ -131,19 +136,19 @@ Rules:
 === ONE POST OFTEN CONTAINS MANY EVENTS — CAPTURE THEM ALL ===
 - Weekly/monthly venue lineups list several events on different dates (sometimes several on one date). Treat every post as possibly multi-event.
 - Put EACH distinct dated event in "schedule_entries" — one entry per (date + act) row. Read the poster image AND the caption; they usually repeat the lineup, so reconcile them row by row.
-- Keep high recall only among rows that are actually legible in the source. Never collapse or merge readable rows, but omit any row whose exact date and billed act/title cannot be read.
+- Keep high recall only among rows that are actually legible in the source. Never collapse or merge readable rows. Omit a row whose exact date cannot be read. If its billed act/title is absent, emit it only under the narrow unnamed-row rule below.
 
 === EACH ROW IS INDEPENDENT ===
 - Every field in a row must come from THAT row's own text/region. NEVER copy a date, time, venue, title, or artist from one row into another.
 - A poster-wide venue or common start time may carry across rows only when visible caption/poster/alt-text wording clearly says it applies to every row. Record that exact wording in "shared_schedule_context"; otherwise keep the row field empty.
-- "source_text": copy the exact snippet (date + act/title + optional time) you read that row from. If you cannot quote that exact row, do not emit the schedule entry.
+- "source_text": copy the exact snippet (date + act/title, or date + the qualifying row-local venue/event-kind evidence, plus optional time) you read that row from. If you cannot quote that exact row, do not emit the schedule entry.
 
 === DATES (per row) — "DD.MM" IS A DATE, NEVER A TIME ===
 - European/Serbian dates are day.month: "19.06" / "19.06." / "19/06" = 19 June. Put this in "date".
 - Daily date ranges such as "svake večeri od 11. do 17. juna", "od 11. do 17. juna", "11.06-17.06", or "from 11 to 17 June" mean one event occurrence on every date in that range. Prefer separate "schedule_entries" rows, one per date; if you cannot enumerate them, put the full supported range in "date" rather than only the first date.
 - Serbian/English relative dates are date evidence, not missing dates. Resolve them against the Instagram post timestamp: "danas"/"večeras"/"today"/"tonight", "sutra"/"tomorrow", "prekosutra"/"day after tomorrow", "u četvrtak"/"on Thursday", "ove nedelje"/"this week" + weekday, "ovog petka"/"this Friday", "sledeće subote"/"sljedeće subote"/"next Saturday". If the same named event/act is listed for multiple weekdays (for example "PETAK / SUBOTA | 21h"), return one occurrence per weekday/date.
 - For every emitted event or schedule row, copy the exact date phrase into "date_evidence.exact_text", label where it appeared, say whether it is relative, and put the final resolved ISO calendar date (YYYY-MM-DD) in "resolved_date". Never invent a date phrase.
-- When multiple dates/times are explicit but no event title or billed act is named, keep schedule_entries empty rather than filling them with a venue, account, hashtag, or invented identity. Deterministic post-processing may preserve those dates as clearly marked pending unnamed fallbacks.
+- A schedule row with no event title or billed act may still be emitted only when THAT SAME ROW contains (1) an exact readable date and (2) either a specific physical venue name or a clear event-kind phrase such as concert, matinee, exhibition, screening, performance, workshop, live music, jam session, svirka, projekcija, izložba, or radionica. Keep "title" empty and "artists" []; copy the complete qualifying row into "source_text". Omit every other unnamed row. Never use the venue, account, handle, hashtag, date, or event-kind phrase as the title.
 - Include the year if shown; otherwise infer it from the post timestamp (events are at/after the post date) and write "DD.MM.YYYY" when confident, else "DD.MM".
 - If a row shows a weekday beside its date they must agree (sreda=Wed, petak=Fri, subota=Sat, nedelja=Sun, …; EN WED/FRI/SAT/SUN). If they disagree, trust the numeric date.
 
@@ -156,7 +161,7 @@ Rules:
 
 === TITLES (per row) — ONLY SOURCE-GROUNDED TITLES ===
 - Use the act/event name billed for that row, exactly: "Zalazak", "Sreda na Kućici", "Los Tres", "Mladost", "Ludost". If a row bills only an artist/handle, use that as the title.
-- Emit a dated row only when its act/event title is explicitly readable. Never use the venue, organizer, account, handle, or a guessed familiar artist as a last-resort row title.
+- Normally emit a dated row only when its act/event title is explicitly readable. The only exception is the narrow unnamed-row rule above: exact row date plus row-local physical venue or clear event-kind evidence, with empty "title" and empty "artists". Never use the venue, organizer, account, handle, date, event-kind phrase, or a guessed familiar artist as a last-resort row title.
 
 === VENUE (per row) ===
 - If a row names its own venue, use it. Apply the canonical venue hint when it matches. For multi-row posters, do not copy a venue across rows unless shared_schedule_context.venue contains visible evidence that it applies to all rows.
@@ -168,7 +173,10 @@ Rules:
 - If venue is unclear, return empty string for venue.
 - If month/day is visible but year is missing, infer year from Instagram post timestamp only when confidence is high.
 - If inferred date appears implausible relative to post timestamp, return empty date.
-- Compare poster and caption claims for date, start time, venue, title, and artists. Put every material disagreement in "source_conflicts" with both values and a short reason. Do not silently choose one source when they conflict; downstream moderation will keep the event pending.
+- Compare poster and caption claims for date, start time, venue, title, and artists. Put every material disagreement in "source_conflicts" with both values and a short reason. Do not silently choose one source when they truly conflict; downstream moderation will keep the event pending.
+- Do not report a conflict for casing, punctuation, diacritics, a minor connector-word difference, or another wording variation that clearly names the same event (for example “Predstava koja nema ime” and “Predstava nema ime”).
+- Relative and absolute date wording is not a conflict when both resolve to the same event-local calendar date. A generic introductory “today”/“večeras” is not a separate event-date claim when the same caption contains a more specific named weekday/date for the occurrence and that specific date agrees with the poster.
+- A promoter/organizer account name is not a competing venue claim. When the source explicitly names a physical venue, use that venue and do not report its difference from the promoter identity as a venue conflict.
 - For field_confirmation:
 - "title" confirms the event title field.
 - "location" confirms city/country style location details.
@@ -195,6 +203,8 @@ export function buildEventExtractionUserPrompt(
     `Instagram handle: @${context.instagramHandle}`,
     `Instagram post URL: ${context.instagramPostUrl}`,
     `Instagram post timestamp: ${context.instagramPostTimestamp ?? "N/A"}`,
+    `Instagram source role: ${context.instagramSourceRole ?? "unknown"}`,
+    `Instagram source/account name: ${context.instagramSourceName ?? "N/A"}`,
     `Instagram location tag: ${context.instagramLocationName ?? "N/A"}`,
     `Canonical venue hint: ${context.canonicalVenueName ?? "N/A"}`,
     `Instagram caption: ${context.instagramCaption ?? "N/A"}`,

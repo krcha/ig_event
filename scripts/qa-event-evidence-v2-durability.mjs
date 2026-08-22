@@ -241,6 +241,7 @@ try {
       extractionNonEventReason: "",
       extractionSourceConflicts: [],
       extractionSourceConflictCount: 0,
+      sourceConflictFields: [],
       extractionMode,
       sourceGroundingVersion: 5,
       sourceGroundingEvidence: "persisted_openai_event_evidence_v2",
@@ -480,6 +481,11 @@ try {
               return {
                 async collect() {
                   return repairEvents.filter((event) => event.date === criteria.date);
+                },
+                async take(limit) {
+                  return repairEvents
+                    .filter((event) => event.date === criteria.date)
+                    .slice(0, limit);
                 },
               };
             },

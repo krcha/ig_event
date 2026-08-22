@@ -46,6 +46,7 @@ function toSourceView(source: Doc<"instagramSources">, venue?: Doc<"venues"> | n
     continuationResultsLimit: source.continuationResultsLimit,
     continuationReason: source.continuationReason,
     deferredAt: source.deferredAt,
+    updatedAt: source.updatedAt,
   };
 }
 
@@ -107,6 +108,7 @@ export const listActive = query({
           continuationResultsLimit: undefined,
           continuationReason: undefined,
           deferredAt: undefined,
+          updatedAt: venue.updatedAt,
         });
       }
     }
@@ -517,8 +519,10 @@ export const setRole = mutation({
     handle: v.string(),
     role: sourceRoleValidator,
     venueId: v.optional(v.id("venues")),
+    expectedUpdatedAt: v.optional(v.number()),
     serviceSecret: v.optional(v.string()),
   },
+  returns: v.object({ updated: v.boolean(), updatedAt: v.number() }),
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const handle = normalizeInstagramHandle(args.handle);
@@ -527,15 +531,22 @@ export const setRole = mutation({
       .withIndex("by_handle", (q) => q.eq("handle", handle))
       .unique();
     if (!source) throw new Error("Instagram source not found.");
+    if (
+      args.expectedUpdatedAt !== undefined &&
+      source.updatedAt !== args.expectedUpdatedAt
+    ) {
+      throw new Error("Instagram source changed after it was reviewed.");
+    }
     if (args.role === "venue" && !args.venueId) {
       throw new Error("A venue source requires a canonical venue mapping.");
     }
+    const updatedAt = Math.max(Date.now(), source.updatedAt + 1);
     await ctx.db.patch(source._id, {
       role: args.role,
       venueId: args.role === "venue" ? args.venueId : undefined,
-      updatedAt: Date.now(),
+      updatedAt,
     });
-    return { updated: true };
+    return { updated: true, updatedAt };
   },
 });
 

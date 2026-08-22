@@ -45,6 +45,7 @@ const checks = [
   { script: "qa:social-carousel", timeoutMs: 60_000 },
   { script: "qa:convex-auth-boundaries", timeoutMs: 60_000 },
   { script: "qa:source-grounding-reprocess", timeoutMs: 60_000 },
+  { script: "qa:event-evidence-policy-reprocess", timeoutMs: 60_000 },
   { script: "qa:ingestion-leases", timeoutMs: 60_000 },
   { script: "qa:durable-ingestion-controller", timeoutMs: 60_000 },
   { script: "qa:durable-ingestion-controller-behavior", timeoutMs: 60_000 },

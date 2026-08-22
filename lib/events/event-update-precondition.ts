@@ -5,6 +5,15 @@ import {
   CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
   EVENT_EVIDENCE_V2_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
 } from "../utils/confidence.ts";
+import {
+  partitionEventEvidenceSourceConflicts,
+  type EventEvidenceSourceConflict,
+} from "./event-evidence-conflict-policy.ts";
+import {
+  buildUnnamedScheduleFallbackTitle,
+  sourceEvidenceNamesSupportedUnnamedEventKind,
+  specificVenueValueAppearsInUnnamedEventEvidence,
+} from "./unnamed-schedule-fallback.ts";
 
 export type EventStatusPrecondition = "pending" | "approved" | "rejected";
 
@@ -64,6 +73,107 @@ function parseNormalizedFields(value: string | undefined): Record<string, unknow
   }
 }
 
+function arraysContainSameJsonValues(left: unknown[], right: unknown[]): boolean {
+  if (left.length !== right.length) return false;
+  const leftValues = left.map((value) => JSON.stringify(value)).sort();
+  const rightValues = right.map((value) => JSON.stringify(value)).sort();
+  return leftValues.every((value, index) => value === rightValues[index]);
+}
+
+function isEventEvidenceSourceConflict(value: unknown): value is EventEvidenceSourceConflict {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const conflict = value as Record<string, unknown>;
+  return (
+    typeof conflict.field === "string" &&
+    typeof conflict.poster_value === "string" &&
+    typeof conflict.caption_value === "string" &&
+    typeof conflict.reason === "string"
+  );
+}
+
+function getEffectiveEventEvidenceV2Conflicts(
+  fields: Record<string, unknown>,
+  eventFields: EventApprovalFields,
+): unknown[] | null {
+  const reported = fields.extractionSourceConflicts;
+  if (!Array.isArray(reported)) return null;
+  if (fields.sourceConflictResolutionVersion !== 1) {
+    return fields.extractionSourceConflictCount === reported.length ? reported : null;
+  }
+
+  const material = fields.materialSourceConflicts;
+  const benign = fields.benignSourceConflicts;
+  if (
+    !Array.isArray(material) ||
+    !Array.isArray(benign) ||
+    fields.extractionSourceConflictCount !== reported.length ||
+    fields.materialSourceConflictCount !== material.length ||
+    fields.benignSourceConflictCount !== benign.length ||
+    !arraysContainSameJsonValues(reported, [...material, ...benign])
+  ) {
+    return null;
+  }
+
+  if (!reported.every(isEventEvidenceSourceConflict)) return null;
+
+  const sourceAccountRole = fields.sourceAccountRole;
+  if (
+    sourceAccountRole !== "venue" &&
+    sourceAccountRole !== "promoter" &&
+    sourceAccountRole !== "unknown"
+  ) {
+    return null;
+  }
+  const artists = Array.isArray(eventFields.artists)
+    ? eventFields.artists.filter((artist): artist is string => typeof artist === "string")
+    : [];
+  if (artists.length !== (Array.isArray(eventFields.artists) ? eventFields.artists.length : 0)) {
+    return null;
+  }
+  const recomputed = partitionEventEvidenceSourceConflicts(reported, {
+    artists,
+    dateEvidenceVerified: fields.dateEvidenceVerified === true,
+    resolvedDate: typeof eventFields.date === "string" ? eventFields.date : "",
+    selectedTitle: typeof eventFields.title === "string" ? eventFields.title : "",
+    selectedVenue: typeof eventFields.venue === "string" ? eventFields.venue : "",
+    singleOccurrenceSource:
+      fields.splitEventTotal === 1 && fields.multiEventSplitDetected === false,
+    sourceAccountName:
+      typeof fields.sourceAccountName === "string" ? fields.sourceAccountName : "",
+    sourceAccountRole,
+    sourceCaption:
+      typeof eventFields.sourceCaption === "string" ? eventFields.sourceCaption : "",
+    venueEvidenceVerified: fields.venueEvidenceVerified === true,
+  });
+  if (
+    !arraysContainSameJsonValues(material, recomputed.material) ||
+    !arraysContainSameJsonValues(benign, recomputed.benign)
+  ) {
+    return null;
+  }
+
+  try {
+    const rawExtraction = JSON.parse(
+      typeof eventFields.rawExtractionJson === "string" ? eventFields.rawExtractionJson : "null",
+    ) as unknown;
+    if (
+      !rawExtraction ||
+      typeof rawExtraction !== "object" ||
+      Array.isArray(rawExtraction) ||
+      !Array.isArray((rawExtraction as Record<string, unknown>).source_conflicts) ||
+      !arraysContainSameJsonValues(
+        reported,
+        (rawExtraction as Record<string, unknown>).source_conflicts as unknown[],
+      )
+    ) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  return recomputed.material;
+}
+
 function isTrueOrNull(value: unknown): boolean {
   return value === true || value === null;
 }
@@ -121,6 +231,85 @@ function arraysEqual(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+function hasVerifiedFallbackIdentityAttestation(
+  fields: Record<string, unknown>,
+  eventFields: EventApprovalFields,
+): boolean {
+  if (
+    fields.titleUsedFallback !== true ||
+    fields.titleSource !== "unnamed_schedule_fallback" ||
+    fields.fallbackIdentityPolicyVersion !== 1
+  ) {
+    return false;
+  }
+  const publicArtists = normalizeComparableArtists(eventFields.artists ?? []);
+  const sourceLine = normalizeComparableText(fields.splitSourceLine);
+  const publicTitle = normalizeComparableText(eventFields.title);
+  const publicDate = normalizeComparableText(eventFields.date);
+  const publicEventType = normalizeComparableText(eventFields.eventType);
+  const publicVenue = normalizeComparableText(eventFields.venue) ?? "";
+  if (
+    !publicArtists ||
+    publicArtists.length !== 0 ||
+    !sourceLine ||
+    !publicTitle ||
+    !publicDate ||
+    !publicEventType
+  ) {
+    return false;
+  }
+  const expectedTitle = buildUnnamedScheduleFallbackTitle({
+    eventType: publicEventType,
+    venue: publicVenue,
+    isoDate: publicDate,
+  });
+  if (normalizeComparableText(expectedTitle) !== publicTitle) return false;
+
+  try {
+    const rawExtraction = JSON.parse(
+      typeof eventFields.rawExtractionJson === "string"
+        ? eventFields.rawExtractionJson
+        : "null",
+    ) as Record<string, unknown> | null;
+    const entries = rawExtraction?.schedule_entries;
+    if (!Array.isArray(entries)) return false;
+    const sourceEntry = entries.find((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+      const entry = value as Record<string, unknown>;
+      const dateEvidence =
+        entry.date_evidence &&
+        typeof entry.date_evidence === "object" &&
+        !Array.isArray(entry.date_evidence)
+          ? (entry.date_evidence as Record<string, unknown>)
+          : null;
+      return (
+        normalizeComparableText(entry.source_text) === sourceLine &&
+        normalizeComparableText(entry.title) === null &&
+        Array.isArray(entry.artists) &&
+        entry.artists.length === 0 &&
+        dateEvidence !== null &&
+        normalizeComparableText(dateEvidence.exact_text) ===
+          normalizeComparableText(eventFields.dateEvidenceText) &&
+        dateEvidence.source === eventFields.dateEvidenceSource
+      );
+    }) as Record<string, unknown> | undefined;
+    if (!sourceEntry) return false;
+
+    const rawVenue = normalizeComparableText(sourceEntry.venue) ?? "";
+    const rowNamesVenue = Boolean(
+      (publicVenue &&
+        specificVenueValueAppearsInUnnamedEventEvidence(publicVenue, sourceLine)) ||
+        (rawVenue &&
+          specificVenueValueAppearsInUnnamedEventEvidence(rawVenue, sourceLine)),
+    );
+    const rowNamesEventKind =
+      sourceEvidenceNamesSupportedUnnamedEventKind(sourceLine);
+    return rowNamesVenue || rowNamesEventKind;
+  } catch {
+    return false;
+  }
+}
+
 function normalizeComparableOptionalText(value: unknown): string {
   return typeof value === "string"
     ? value.normalize("NFKC").trim().replace(/\s+/gu, " ")
@@ -138,6 +327,9 @@ function hasBoundEventEvidenceV2PublicFields(
   const timeEvidenceKind = fields.timeEvidenceKind;
   const sourceConflictFields = Array.isArray(eventFields.sourceConflictFields)
     ? eventFields.sourceConflictFields
+    : null;
+  const attestedSourceConflictFields = Array.isArray(fields.sourceConflictFields)
+    ? fields.sourceConflictFields
     : null;
   return (
     normalizeComparableOptionalText(fields.title) ===
@@ -169,7 +361,9 @@ function hasBoundEventEvidenceV2PublicFields(
       normalizeComparableOptionalText(eventFields.dateEvidenceResolvedDate) &&
     timeEvidenceKind === eventFields.timeEvidenceKind &&
     sourceConflictFields !== null &&
+    attestedSourceConflictFields !== null &&
     sourceConflictFields.length === 0 &&
+    attestedSourceConflictFields.length === 0 &&
     (timeEvidenceKind === "start_time_stated"
       ? Boolean(publicTime && publicTime !== TBD_EVENT_TIME)
       : publicTime === TBD_EVENT_TIME)
@@ -183,7 +377,7 @@ export function hasEventEvidenceV2AutoApproval(
   const fields = parseNormalizedFields(normalizedFieldsJson);
   if (!fields || !eventFields) return false;
   const pendingReasons = fields.moderationPendingReasons;
-  const conflicts = fields.extractionSourceConflicts;
+  const conflicts = getEffectiveEventEvidenceV2Conflicts(fields, eventFields);
   const confidence = fields.moderationConfidenceScore;
   const date = normalizeComparableOptionalText(eventFields.date);
   return (
@@ -201,12 +395,12 @@ export function hasEventEvidenceV2AutoApproval(
     fields.dateEvidenceSource !== "unknown" &&
     normalizeComparableOptionalText(fields.dateEvidenceText).length > 0 &&
     normalizeComparableOptionalText(fields.dateEvidenceResolvedDate) === date &&
-    Array.isArray(conflicts) &&
+    conflicts !== null &&
     conflicts.length === 0 &&
-    fields.extractionSourceConflictCount === 0 &&
     fields.approvalTitleSensible === true &&
     fields.normalizedIsValid === true &&
-    fields.titleUsedFallback === false &&
+    (fields.titleUsedFallback === false ||
+      hasVerifiedFallbackIdentityAttestation(fields, eventFields)) &&
     fields.dateSuspiciousYear === false &&
     fields.moderationAutoApproved === true &&
     fields.moderationAutoApproveRule === EVENT_EVIDENCE_V2_AUTO_APPROVE_RULE &&

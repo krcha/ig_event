@@ -35,6 +35,8 @@
     "repair:event-consistency": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/repair-event-consistency.mjs",
     "reprocess:source-grounding": "node --conditions=react-server --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/reprocess-pending-source-grounding.mjs",
     "qa:source-grounding-reprocess": "node --conditions=react-server --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-source-grounding-reprocess.mjs",
+    "reprocess:event-evidence-policy": "node --conditions=react-server --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/reprocess-pending-event-evidence-policy.mjs",
+    "qa:event-evidence-policy-reprocess": "node --conditions=react-server --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-event-evidence-policy-reprocess.mjs",
     "repair:event-schedule-entries": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/repair-event-schedule-entries.mjs",
     "repair:event-tbd-times": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/repair-event-tbd-times.mjs",
     "repair:event-venue-names": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/repair-event-venue-names.mjs",

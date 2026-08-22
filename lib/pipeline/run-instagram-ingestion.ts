@@ -93,6 +93,17 @@ import { isSensibleEventTitleForApproval } from "@/lib/events/event-title-approv
 import { isCaptionSourceCoherentWithEvent } from "@/lib/events/event-source-approval";
 import { sourceOccurrenceRepresentativeMatchesExpected } from "@/lib/events/source-occurrence-representation";
 import {
+  conflictExplicitlyIdentifiesArtistHandleAlias,
+  partitionEventEvidenceSourceConflicts,
+  type EventEvidenceSourceConflict,
+} from "@/lib/events/event-evidence-conflict-policy";
+import {
+  buildUnnamedScheduleFallbackTitle,
+  sourceEvidenceNamesSupportedUnnamedEventKind,
+  specificVenueValueAppearsInUnnamedEventEvidence,
+  venueValueAppearsInEventEvidence,
+} from "@/lib/events/unnamed-schedule-fallback";
+import {
   getApifyBudgetConfig,
   getBudgetDayKey,
   getIngestionBootstrapDays,
@@ -874,7 +885,6 @@ function buildModerationDecision(options: {
     options.structuredEvidenceVerified &&
     autoApprovalBlockers.length === 0 &&
     options.hasDate &&
-    !options.titleUsedFallback &&
     !options.suspiciousYear &&
     confidenceScore !== null &&
     confidenceScore >= EVENT_EVIDENCE_V2_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
@@ -1431,7 +1441,7 @@ function buildFallbackTitle(
   post: InstagramScrapedPost,
   venue: VenueNormalization,
   canonicalVenueNamesByHandle: Record<string, string>,
-  configuredVenueNamesByHandle: Record<string, string>,
+  configuredVenueNamesByHandle: Record<string, string> = {},
 ): string {
   const mappedVenue = getConfiguredVenueNameForHandle(
     post.username,
@@ -1500,9 +1510,13 @@ function humanizeArtistHandle(value: string): string {
 }
 
 function normalizeArtistDisplayName(value: string): string {
+  const normalizedValue = normalizeString(value).replace(/[\p{Cf}]/gu, "");
+  const trimmedValue = trimTitleCandidate(normalizedValue);
+  if (/^@[\p{L}\p{N}._-]+$/u.test(trimmedValue)) {
+    return trimmedValue;
+  }
   return trimTitleCandidate(
-    normalizeString(value)
-      .replace(/[\p{Cf}]/gu, "")
+    normalizedValue
       .replace(/@([\p{L}\p{N}._-]+)/gu, (_match, handle: string) => humanizeArtistHandle(handle))
       .replace(/^[\s]*(?:\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?|\d{1,2}\.?\s+[\p{L}]+)\s*[-–—:|•·]*/iu, "")
       .replace(/[\p{Extended_Pictographic}\uFE0F]+$/gu, "")
@@ -1510,12 +1524,53 @@ function normalizeArtistDisplayName(value: string): string {
   );
 }
 
-function formatArtistTitleList(artists: string[]): string {
-  const displayArtists = [...new Set(
-    artists
-      .map((artist) => normalizeArtistDisplayName(artist))
-      .filter((artist) => titleContainsAlphanumeric(artist)),
-  )];
+function artistAliasPairIsSupported(
+  left: string,
+  right: string,
+  conflicts: EventEvidenceSourceConflict[],
+): boolean {
+  return conflicts.some(
+    (conflict) =>
+      conflictExplicitlyIdentifiesArtistHandleAlias(conflict) &&
+      ((toSearchableText(left) === toSearchableText(conflict.poster_value) &&
+          toSearchableText(right) === toSearchableText(conflict.caption_value)) ||
+        (toSearchableText(right) === toSearchableText(conflict.poster_value) &&
+          toSearchableText(left) === toSearchableText(conflict.caption_value))),
+  );
+}
+
+function dedupeArtistDisplayNames(
+  values: string[],
+  aliasConflicts: EventEvidenceSourceConflict[] = [],
+): string[] {
+  const deduped: Array<{ raw: string; display: string }> = [];
+  for (const value of values) {
+    const artist = normalizeArtistDisplayName(value);
+    if (!titleContainsAlphanumeric(artist)) continue;
+    const equivalentIndex = deduped.findIndex(
+      (existing) =>
+        toSearchableText(existing.display) === toSearchableText(artist) ||
+        artistAliasPairIsSupported(existing.raw, value, aliasConflicts),
+    );
+    if (equivalentIndex === -1) {
+      deduped.push({ raw: value, display: artist });
+      continue;
+    }
+    if (artistAliasPairIsSupported(deduped[equivalentIndex].raw, value, aliasConflicts)) {
+      const handleValue = /^@[\p{L}\p{N}._-]+$/u.test(value.trim())
+        ? value.trim()
+        : deduped[equivalentIndex].raw.trim();
+      deduped[equivalentIndex] = { raw: handleValue, display: handleValue };
+    }
+  }
+  return deduped.map((entry) => entry.display);
+}
+
+function formatArtistTitleList(
+  artists: string[],
+  aliasConflicts: EventEvidenceSourceConflict[] = [],
+): string {
+  const displayArtists = dedupeArtistDisplayNames(artists, aliasConflicts);
   if (displayArtists.length <= 2) {
     return displayArtists.join(" & ");
   }
@@ -1999,9 +2054,13 @@ function normalizeEventTitle(
 }
 
 function cleanSplitCaptionEntryText(value: string): string {
+  const normalizedValue = normalizeString(value).replace(/[\p{Cf}]/gu, "");
+  const trimmedValue = trimTitleCandidate(normalizedValue);
+  if (/^@[\p{L}\p{N}._-]+$/u.test(trimmedValue)) {
+    return trimmedValue;
+  }
   return trimTitleCandidate(
-    normalizeString(value)
-      .replace(/[\p{Cf}]/gu, "")
+    normalizedValue
       .replace(/@([\p{L}\p{N}._-]+)/gu, (_match, handle: string) => humanizeArtistHandle(handle))
       .replace(/\s*[•·●▪‣∙◦‧⁃◆◇■□▸►▶|]+\s*/gu, " | ")
       .replace(/[\p{Extended_Pictographic}\uFE0F]+$/gu, "")
@@ -3045,37 +3104,12 @@ function isHashtagOnlySourceIdentity(
   return !billingEvidence.some((item) => hasExplicitBilledIdentityEvidence(value, item));
 }
 
-function buildUnnamedScheduleFallbackTitle(options: {
-  eventType: string;
-  venue: string | null;
-  isoDate: string | null;
-}): string {
-  const weekday = options.isoDate
-    ? new Intl.DateTimeFormat("en-US", {
-        weekday: "long",
-        timeZone: "UTC",
-      }).format(new Date(`${options.isoDate}T00:00:00Z`))
-    : "";
-  const eventType = toSearchableText(options.eventType);
-  const eventLabel =
-    eventType === "nightlife" || eventType === "club"
-      ? "Night"
-      : eventType === "live music"
-        ? "Live music"
-        : eventType === "arts culture"
-          ? "Program"
-          : "Event";
-  const venue = normalizeString(options.venue ?? "");
-  return [weekday, eventLabel, venue ? `at ${venue}` : ""]
-    .filter(Boolean)
-    .join(" ");
-}
-
 function sanitizeSplitEventIdentity(options: {
   rawTitle: string;
   rawArtists: string[];
   post: InstagramScrapedPost;
   additionalEvidence?: string[];
+  artistAliasConflicts?: EventEvidenceSourceConflict[];
 }): { title: string; artists: string[]; artistsWereSanitized: boolean } {
   const billableRawTitle = stripNonBillingIdentityClauses(options.rawTitle);
   const titleClausesWereSanitized =
@@ -3086,9 +3120,10 @@ function sanitizeSplitEventIdentity(options: {
       "",
     ),
   );
-  const artistCandidates = options.rawArtists
-    .map((artist) => normalizeArtistDisplayName(artist))
-    .filter((artist) => titleContainsAlphanumeric(artist));
+  const artistCandidates = dedupeArtistDisplayNames(
+    options.rawArtists,
+    options.artistAliasConflicts,
+  );
   const originalArtists = titleClausesWereSanitized
     ? artistCandidates.filter((artist) => containsNormalizedTokenSequence(billableRawTitle, artist))
     : artistCandidates;
@@ -3362,6 +3397,7 @@ function extractModelSplitEventCandidates(
       rawArtists: normalizeExtractedArtists(scheduleEntry.artists),
       post,
       additionalEvidence: sourceBillingEvidence,
+      artistAliasConflicts: extracted.source_conflicts,
     });
     const rawTitle = identity.title;
     const normalizedArtists = identity.artists;
@@ -3398,7 +3434,7 @@ function extractModelSplitEventCandidates(
         normalizedArtists.join(", ") ||
         buildUnnamedScheduleFallbackTitle({
           eventType,
-          venue,
+          venue: scheduleVenue || venue,
           isoDate: normalizedDate.isoDate,
         });
       if (!lineTitle) {
@@ -5931,11 +5967,11 @@ function hasExplicitDateText(text: string): boolean {
   if (/\b20\d{2}[./-]\d{1,2}[./-]\d{1,2}\b/u.test(normalizedText)) {
     return true;
   }
-  if (/\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b/u.test(normalizedText)) {
+  if (/\b\d{1,2}[ \t]*[./-][ \t]*\d{1,2}(?:[ \t]*[./-][ \t]*\d{2,4})?\b/u.test(normalizedText)) {
     return true;
   }
   const dayMonthPattern = new RegExp(
-    String.raw`\b\d{1,2}(?:st|nd|rd|th|\.)?\s+${DATE_MONTH_WORD_PATTERN}\b`,
+    String.raw`\b\d{1,2}(?:st|nd|rd|th)?(?:\.\s*|\s+)${DATE_MONTH_WORD_PATTERN}\b`,
     "iu",
   );
   const monthDayPattern = new RegExp(
@@ -5996,7 +6032,9 @@ function collectDateCandidates(
     );
   }
 
-  for (const match of normalizedText.matchAll(/\b(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?\b/g)) {
+  for (const match of normalizedText.matchAll(
+    /\b(\d{1,2})[ \t]*[./-][ \t]*(\d{1,2})(?:[ \t]*[./-][ \t]*(\d{2,4}))?\b/g,
+  )) {
     const first = Number.parseInt(match[1], 10);
     const second = Number.parseInt(match[2], 10);
     const rawYear = match[3];
@@ -6037,7 +6075,7 @@ function collectDateCandidates(
 
   for (const match of normalizedText.matchAll(
     new RegExp(
-      String.raw`\b(\d{1,2})(?:st|nd|rd|th|\.)?\s+(${DATE_MONTH_WORD_PATTERN})(?:\s*,?\s*(\d{4}))?\b`,
+      String.raw`\b(\d{1,2})(?:st|nd|rd|th)?(?:\.\s*|\s+)(${DATE_MONTH_WORD_PATTERN})(?:\s*,?\s*(\d{4}))?\b`,
       "giu",
     ),
   )) {
@@ -6253,7 +6291,7 @@ function expandDateRangeFromCandidates(
   }
 
   const distanceDays = Math.round((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000));
-  if (distanceDays < 1 || distanceDays > 14) {
+  if (distanceDays < 1 || distanceDays > 31) {
     return null;
   }
 
@@ -6305,6 +6343,37 @@ function collectExplicitDateRangeDates(
   const normalizedText = normalizeString(text);
   if (!normalizedText) {
     return null;
+  }
+
+  const crossMonthWordRangePattern = new RegExp(
+    String.raw`(?:^|[^\p{L}\p{N}_])(?:od\s+)?(\d{1,2})\.?\s*(${DATE_MONTH_WORD_PATTERN})(?:\s*,?\s*(\d{2,4}))?\s*(?:do|to|through|thru|[-–—])\s*(\d{1,2})\.?\s*(${DATE_MONTH_WORD_PATTERN})(?:\s*,?\s*(\d{2,4}))?`,
+    "giu",
+  );
+  for (const match of normalizedText.matchAll(crossMonthWordRangePattern)) {
+    const startMonth = getMonthNumber(match[2]);
+    const endMonth = getMonthNumber(match[5]);
+    const startYear = match[3];
+    const endYear = match[6];
+    if (
+      !startMonth ||
+      !endMonth ||
+      (startYear && endYear && normalizeYear(startYear) !== normalizeYear(endYear))
+    ) {
+      continue;
+    }
+    const dates = buildDateRangeFromParts({
+      startDay: Number.parseInt(match[1], 10),
+      startMonth,
+      endDay: Number.parseInt(match[4], 10),
+      endMonth,
+      rawYear: endYear ?? startYear,
+      postDate,
+      source,
+      raw: match[0].trim(),
+    });
+    if (dates) {
+      return dates;
+    }
   }
 
   const sharedMonthRangePattern = new RegExp(
@@ -6370,6 +6439,37 @@ function collectExplicitDateRangeDates(
   return null;
 }
 
+function normalizeDateEvidenceForOccurrence(
+  evidence: ExtractedEventData["date_evidence"],
+  occurrenceDate: string | null,
+  postedAt: string | null,
+  preserveExplicitRelativeFlag = false,
+): ExtractedEventData["date_evidence"] {
+  const evidenceText = normalizeString(evidence.exact_text);
+  if (!occurrenceDate || !evidenceText || !hasExplicitDateText(evidenceText)) {
+    return evidence;
+  }
+
+  const independentlyResolved = normalizeEventDate(evidenceText, null, postedAt).isoDate;
+  const independentlyExpandedRange = expandNormalizedDateRange(evidenceText, postedAt);
+  const independentlySupportsOccurrence =
+    independentlyResolved === occurrenceDate ||
+    independentlyExpandedRange?.includes(occurrenceDate) === true;
+  if (!independentlySupportsOccurrence) {
+    return evidence;
+  }
+
+  // The raw extraction remains immutable in rawExtractionJson. This corrected
+  // per-occurrence view prevents one cached range resolution (or an incorrect
+  // is_relative bit on explicit "weekday, DD.MM" text) from poisoning every
+  // independently verified occurrence derived from that evidence.
+  return {
+    ...evidence,
+    is_relative: preserveExplicitRelativeFlag ? evidence.is_relative : false,
+    resolved_date: occurrenceDate,
+  };
+}
+
 function expandNormalizedDateRange(
   rawModelDate: string,
   postedAt: string | null,
@@ -6413,7 +6513,21 @@ function expandNormalizedDateRange(
       postDate,
       "caption",
     );
-    if (relativeCaptionDates.length >= 2) {
+    const namedWeekdayDates = [
+      ...new Set(
+        collectRelativeWeekdayMatches(normalizedCaption)
+          .map((match) => buildRelativeWeekdayCandidate(match, postDate, "caption")?.isoDate)
+          .filter((value): value is string => Boolean(value)),
+      ),
+    ].sort();
+    if (namedWeekdayDates.length >= 2) {
+      return namedWeekdayDates;
+    }
+    const explicitlyJoinedRelativeDays =
+      /\b(?:today|tonight|danas|večeras|veceras|sutra|tomorrow)\b.{0,24}\b(?:and|i|plus|&)\b.{0,24}\b(?:today|tonight|danas|večeras|veceras|sutra|tomorrow)\b/iu.test(
+        normalizedCaption,
+      );
+    if (explicitlyJoinedRelativeDays && relativeCaptionDates.length >= 2) {
       return relativeCaptionDates;
     }
   }
@@ -6463,7 +6577,9 @@ function normalizeVenue(
   configuredVenueNamesByHandle: Record<string, string> = {},
   sourceRolesByHandle: Record<string, "venue" | "promoter" | "unknown"> = {},
 ): VenueNormalization {
-  const sourceRole = sourceRolesByHandle[normalizeHandle(post.username)];
+  const normalizedSourceHandle = normalizeHandle(post.username);
+  const sourceRole = sourceRolesByHandle[normalizedSourceHandle];
+  const promoterSource = sourceRole === "promoter";
   return normalizeVenueFromEvidence({
     handle: post.username,
     rawModelVenue,
@@ -6472,12 +6588,13 @@ function normalizeVenue(
     // This map is keyed by the exact configured source handle. It is not a
     // fuzzy venue lookup, so it cannot leak another venue's identity into a
     // post. Overrides retain their existing precedence when the map is built.
-    handleVenueNamesByHandle: configuredVenueNamesByHandle,
+    handleVenueNamesByHandle: promoterSource ? {} : configuredVenueNamesByHandle,
     staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
     allowCanonicalHandleFallback:
-      Boolean(configuredVenueNamesByHandle[normalizeHandle(post.username)]) ||
-      sourceRole === undefined ||
-      sourceRole === "venue",
+      !promoterSource &&
+      (Boolean(configuredVenueNamesByHandle[normalizedSourceHandle]) ||
+        sourceRole === undefined ||
+        sourceRole === "venue"),
   });
 }
 
@@ -8548,11 +8665,21 @@ function isVerifiedDateEvidence(options: {
   const independentlyRelative =
     independentlyResolved.yearSelectionReason === "relative_weekday_from_post_timestamp" ||
     independentlyResolved.yearSelectionReason === "relative_day_from_post_timestamp";
+  const independentlyExpandedRange = expandNormalizedDateRange(
+    evidenceText,
+    options.post.postedAt,
+  );
+  const resolvesToExpectedDate =
+    independentlyResolved.isoDate === options.resolvedDate ||
+    independentlyExpandedRange?.includes(options.resolvedDate ?? "") === true;
+  const relativeSemanticsCompatible =
+    hasExplicitDateText(evidenceText) ||
+    options.evidence.is_relative === independentlyRelative;
   return (
     Boolean(options.resolvedDate) &&
     evidenceResolvedDate === options.resolvedDate &&
-    independentlyResolved.isoDate === options.resolvedDate &&
-    options.evidence.is_relative === independentlyRelative &&
+    resolvesToExpectedDate &&
+    relativeSemanticsCompatible &&
     options.evidence.source !== "unknown" &&
     extractionEvidenceAppearsInPersistedSource({
       evidenceText,
@@ -8608,58 +8735,6 @@ function isVerifiedTimeEvidence(options: {
   );
 }
 
-const GENERIC_SHARED_VENUE_TOKENS = new Set([
-  "bar",
-  "cafe",
-  "centar",
-  "center",
-  "cinema",
-  "club",
-  "hall",
-  "hotel",
-  "kafic",
-  "klub",
-  "new",
-  "nova",
-  "novi",
-  "pub",
-  "restaurant",
-  "restoran",
-  "venue",
-]);
-
-function venueValueAppearsInEvidence(value: string, evidence: string): boolean {
-  const normalizedValue = toSearchableText(value);
-  const normalizedEvidence = toSearchableText(evidence);
-  if (!normalizedValue || !normalizedEvidence) return false;
-
-  const valueTokens = normalizedValue.split(/\s+/u).filter(Boolean);
-  const evidenceTokens = normalizedEvidence.split(/\s+/u).filter(Boolean);
-  const containsExactTokenPhrase = evidenceTokens.some((_, startIndex) =>
-    valueTokens.every(
-      (token, offset) => evidenceTokens[startIndex + offset] === token,
-    ),
-  );
-  if (containsExactTokenPhrase) return true;
-
-  const expectedTokens = valueTokens
-    .filter(
-      (token) => token.length >= 4 && !GENERIC_SHARED_VENUE_TOKENS.has(token),
-    );
-  if (expectedTokens.length === 0) return false;
-  const tokensMatch = (expected: string, observed: string): boolean => {
-    if (expected === observed) return true;
-    return (
-      expected.length >= 6 &&
-      observed.length === expected.length &&
-      expected.slice(0, -1) === observed.slice(0, -1)
-    );
-  };
-  return expectedTokens.every((expected) =>
-    evidenceTokens.some((observed) => tokensMatch(expected, observed)),
-  );
-}
-
 function hasVerifiedSharedScheduleContext(
   value: ExtractedEventData["shared_schedule_context"]["venue" | "time"],
   post: InstagramScrapedPost,
@@ -8670,7 +8745,7 @@ function hasVerifiedSharedScheduleContext(
   const normalizedEvidence = toSearchableText(value.evidence);
   const evidenceSupportsValue =
     field === "venue"
-      ? venueValueAppearsInEvidence(value.value, value.evidence)
+      ? venueValueAppearsInEventEvidence(value.value, value.evidence)
       : normalizedEvidence.includes(normalizedValue);
   return (
     value.applies_to_all === true &&
@@ -8706,7 +8781,9 @@ function isVerifiedEventVenueEvidence(options: {
   const supportsVenue = (text: string): boolean => {
     return Boolean(
       normalizeString(text) &&
-        evidenceValues.some((value) => venueValueAppearsInEvidence(value, text)),
+        evidenceValues.some((value) =>
+          venueValueAppearsInEventEvidence(value, text),
+        ),
     );
   };
   const isBoundEvidence = (text: string, source: string): boolean => {
@@ -8763,15 +8840,15 @@ function isVerifiedEventIdentityEvidence(options: {
   extracted: ExtractedEventData;
   title: string;
   artists: string[];
+  titleUsedFallback: boolean;
+  venue: string;
   splitSourceLine: string | null;
   splitEvidenceSource: EventDateEvidenceSource;
   post: InstagramScrapedPost;
   hasPoster: boolean;
 }): boolean {
   const supportsTitle = (text: string): boolean => {
-    const searchable = toSearchableText(text);
-    const searchableTitle = toSearchableText(options.title);
-    return Boolean(searchable && searchableTitle && searchable.includes(searchableTitle));
+    return titleIdentityAppearsInText(text, options.title);
   };
   const isBoundEvidence = (text: string, source: string): boolean => {
     if (source !== "caption" && source !== "poster" && source !== "alt_text") {
@@ -8785,30 +8862,138 @@ function isVerifiedEventIdentityEvidence(options: {
     });
   };
 
-  if (options.splitSourceLine) {
+  const titleSnippets = options.extracted.field_confirmation.title.evidence_snippets;
+  const artistConfirmation = options.extracted.field_confirmation.artists;
+  const artistSnippets = artistConfirmation.evidence_snippets;
+  const boundEvidence = [
+    ...(options.splitSourceLine &&
+    isBoundEvidence(options.splitSourceLine, options.splitEvidenceSource)
+      ? [{ text: options.splitSourceLine, source: options.splitEvidenceSource }]
+      : []),
+    ...(!options.splitSourceLine
+      ? titleSnippets.filter((snippet) => isBoundEvidence(snippet.text, snippet.source))
+      : []),
+    ...(!options.splitSourceLine
+      ? artistSnippets.filter((snippet) => isBoundEvidence(snippet.text, snippet.source))
+      : []),
+  ];
+  if (options.titleUsedFallback) {
+    const boundScheduleRow = Boolean(
+      options.splitSourceLine &&
+        isBoundEvidence(options.splitSourceLine, options.splitEvidenceSource),
+    );
+    const rowNamesVenue = Boolean(
+      options.splitSourceLine &&
+        options.venue &&
+        specificVenueValueAppearsInUnnamedEventEvidence(
+          options.venue,
+          options.splitSourceLine,
+        ),
+    );
+    const rowNamesEventKind = Boolean(
+      options.splitSourceLine &&
+        sourceEvidenceNamesSupportedUnnamedEventKind(options.splitSourceLine),
+    );
     return (
-      supportsTitle(options.splitSourceLine) &&
-      options.artists.every((artist) =>
-        toSearchableText(options.splitSourceLine ?? "").includes(toSearchableText(artist)),
-      ) &&
-      isBoundEvidence(options.splitSourceLine, options.splitEvidenceSource)
+      options.artists.length === 0 &&
+      boundScheduleRow &&
+      (rowNamesVenue || rowNamesEventKind)
     );
   }
-
-  const titleSnippets = options.extracted.field_confirmation.title.evidence_snippets;
-  const artistSnippets = options.extracted.field_confirmation.artists.evidence_snippets;
-  const boundTitleEvidence = titleSnippets.some(
-    (snippet) =>
-      supportsTitle(snippet.text) && isBoundEvidence(snippet.text, snippet.source),
-  );
+  const boundTitleEvidence = boundEvidence.some((snippet) => supportsTitle(snippet.text));
   if (!boundTitleEvidence) return false;
+  const artistConfirmationConfidence = normalizeConfidenceScore(artistConfirmation.confidence);
+  const supplementalArtistEvidence = options.splitSourceLine ? [] : [
+    ...(artistConfirmationConfidence !== null &&
+    artistConfirmationConfidence >= 0.7 &&
+    artistConfirmation.found_in.some((source) => source.toLowerCase() === "caption") &&
+    normalizeString(options.post.caption)
+      ? [normalizeString(options.post.caption)]
+      : []),
+    ...(artistConfirmationConfidence !== null &&
+    artistConfirmationConfidence >= 0.7 &&
+    artistConfirmation.found_in.some((source) => source.toLowerCase() === "alt_text") &&
+    normalizeString(options.post.altText)
+      ? [normalizeString(options.post.altText)]
+      : []),
+  ];
   return options.artists.every((artist) =>
-    [...titleSnippets, ...artistSnippets].some(
-      (snippet) =>
-        toSearchableText(snippet.text).includes(toSearchableText(artist)) &&
-        isBoundEvidence(snippet.text, snippet.source),
+    boundEvidence.some((snippet) => artistIdentityAppearsInText(snippet.text, artist)) ||
+    supplementalArtistEvidence.some((text) => artistIdentityAppearsInText(text, artist)),
+  );
+}
+
+const MINOR_TITLE_CONNECTOR_TOKENS = new Set([
+  "a",
+  "an",
+  "i",
+  "je",
+  "koja",
+  "koje",
+  "koji",
+  "the",
+]);
+
+function comparableTitleTokens(value: string): string[] {
+  return toSearchableText(value)
+    .split(/\s+/u)
+    .filter((token) => token && !MINOR_TITLE_CONNECTOR_TOKENS.has(token));
+}
+
+function titleIdentityAppearsInText(text: string, title: string): boolean {
+  if (containsNormalizedTokenSequence(text, title)) return true;
+  const textTokens = comparableTitleTokens(text);
+  const titleTokens = comparableTitleTokens(title);
+  if (titleTokens.length < 3 || titleTokens.length > textTokens.length) return false;
+  return textTokens.some((_, startIndex) =>
+    titleTokens.every((token, offset) => textTokens[startIndex + offset] === token),
+  );
+}
+
+function artistIdentityAppearsInText(text: string, artist: string): boolean {
+  if (containsNormalizedTokenSequence(text, artist)) return true;
+
+  const expectedTokens = toSearchableText(artist).split(/\s+/u).filter(Boolean);
+  const observedTokens = toSearchableText(text).split(/\s+/u).filter(Boolean);
+  if (expectedTokens.length < 2 || expectedTokens.length > observedTokens.length) {
+    return false;
+  }
+  const tokensMatch = (expected: string, observed: string): boolean => {
+    if (expected === observed || expected.length < 4) return expected === observed;
+    if (expected.endsWith("a")) {
+      const stem = expected.slice(0, -1);
+      if ([`${stem}e`, `${stem}i`, `${stem}om`, `${stem}u`].includes(observed)) {
+        return true;
+      }
+    }
+    if (expected.endsWith("ac")) {
+      const stem = expected.slice(0, -2);
+      if ([`${stem}ca`, `${stem}cem`, `${stem}cu`].includes(observed)) {
+        return true;
+      }
+    }
+    return ["a", "e", "em", "i", "om", "u"].some(
+      (suffix) => observed === `${expected}${suffix}`,
+    );
+  };
+  const inflectedNameAppears = observedTokens.some((_, startIndex) =>
+    expectedTokens.every((token, offset) =>
+      tokensMatch(token, observedTokens[startIndex + offset] ?? ""),
     ),
   );
+  if (inflectedNameAppears) return true;
+
+  const expectedCompact = expectedTokens.join("");
+  if (expectedCompact.length < 8) return false;
+  return [...text.matchAll(/@([\p{L}\p{N}._-]+)/gu)].some((match) => {
+    const handleCompact = toSearchableText(match[1] ?? "").replace(/\s+/gu, "");
+    return (
+      handleCompact === expectedCompact ||
+      (handleCompact.length === expectedCompact.length + 1 &&
+        handleCompact.startsWith(expectedCompact) &&
+        handleCompact.at(-1) === expectedCompact.at(-1))
+    );
+  });
 }
 
 export function prepareEventsForInsert(
@@ -8817,9 +9002,10 @@ export function prepareEventsForInsert(
   selectedImageUrl: string | null,
   canonicalVenueNamesByHandle: Record<string, string>,
   venueNameOverridesByHandle: Record<string, string>,
-  configuredVenueNamesByHandle: Record<string, string>,
+  configuredVenueNamesByHandle: Record<string, string> = {},
   options: {
     eventDateFilterNow?: Date;
+    preserveExplicitDateEvidenceRelativeFlag?: boolean;
     sourceRolesByHandle?: Record<string, "venue" | "promoter" | "unknown">;
   } = {},
 ): PrepareEventResult[] {
@@ -8873,6 +9059,8 @@ export function prepareEventsForInsert(
   const normalizedSourceHandle = normalizeHandle(post.username);
   const sourceRole = options.sourceRolesByHandle?.[normalizedSourceHandle];
   const configuredVenueName = canonicalVenueNamesByHandle[normalizedSourceHandle];
+  const configuredSourceName =
+    configuredVenueNamesByHandle[normalizedSourceHandle] ?? configuredVenueName ?? "";
   const rawModelVenue = normalizeString(extracted.venue);
   const normalizedRawModelVenue = rawModelVenue
     ? canonicalizeVenueName(rawModelVenue, canonicalVenueNamesByHandle) ?? rawModelVenue
@@ -8969,8 +9157,10 @@ export function prepareEventsForInsert(
     candidateDates = [];
   }
   const usesSplitEventCandidates = splitEventCandidates.length > 0;
-  const extractedArtists = normalizeExtractedArtists(extracted.artists)
-    .map((artist) => normalizeArtistDisplayName(artist))
+  const extractedArtists = dedupeArtistDisplayNames(
+    normalizeExtractedArtists(extracted.artists),
+    extracted.source_conflicts,
+  )
     .filter((artist) => titleContainsAlphanumeric(artist))
     .filter((artist) => !isHashtagOnlySourceIdentity(artist, post, modelScheduleEvidence));
   const artistFallbackTitle = titleNormalization.usedFallback
@@ -9005,9 +9195,31 @@ export function prepareEventsForInsert(
       trustedVenueSource,
       sharedVenueVerified: false,
     });
+  const explicitModelVenueEvidenceVerified =
+    usesStructuredEvidence &&
+    Boolean(normalizedRawModelVenue) &&
+    normalizeString(normalizedRawModelVenue) !== normalizeString(normalizedVenue) &&
+    isVerifiedEventVenueEvidence({
+      venue: normalizedRawModelVenue,
+      rawEvidenceValue: rawModelVenue,
+      extracted,
+      splitSourceLine: null,
+      splitEvidenceSource: "unknown",
+      post,
+      hasPoster: Boolean(selectedImageUrl),
+      trustedVenueSource: false,
+      sharedVenueVerified: false,
+    });
   const effectiveNormalizedVenue = topLevelVenueEvidenceVerified
     ? normalizedVenue
-    : "";
+    : explicitModelVenueEvidenceVerified
+      ? normalizedRawModelVenue
+      : "";
+  const effectiveVenueSource = topLevelVenueEvidenceVerified
+    ? venueNormalization.source
+    : explicitModelVenueEvidenceVerified
+      ? "model"
+      : "unsupported_model_venue_cleared";
   const allowMissingImageForModeration =
     isCaptionOnlyVideo || usesStructuredEvidence;
   const normalizedFieldsCommon: Record<string, unknown> = {
@@ -9022,10 +9234,9 @@ export function prepareEventsForInsert(
     rawTitle: titleNormalization.rawTitle,
     rawVenue: normalizeString(extracted.venue),
     normalizedVenue: effectiveNormalizedVenue,
-    venueSource: topLevelVenueEvidenceVerified
-      ? venueNormalization.source
-      : "unsupported_model_venue_cleared",
-    venueEvidenceVerified: topLevelVenueEvidenceVerified,
+    venueSource: effectiveVenueSource,
+    venueEvidenceVerified:
+      topLevelVenueEvidenceVerified || explicitModelVenueEvidenceVerified,
     locationName: venueNormalization.rawLocationName,
     eventType,
     time,
@@ -9062,6 +9273,8 @@ export function prepareEventsForInsert(
     sourceGroundingInstagramPostId: normalizeString(post.postId) || null,
     sourceGroundingInstagramPostUrl: normalizeString(post.instagramPostUrl) || null,
     sourceGroundingInstagramHandle: normalizeHandle(post.username) || null,
+    sourceAccountRole: sourceRole ?? "unknown",
+    sourceAccountName: configuredSourceName || null,
     trustedVenueSource,
     fieldConfirmation: extracted.field_confirmation,
     extractionFieldEvidence: buildExtractionFieldEvidence(extracted.field_confirmation),
@@ -9256,14 +9469,6 @@ export function prepareEventsForInsert(
   const sharedTimeValue = verifiedSharedTime
     ? normalizeString(extracted.shared_schedule_context.time.value)
     : "";
-  const sourceConflictFields = [
-    ...new Set(
-      extracted.source_conflicts
-        .map((conflict) => normalizeString(conflict.field))
-        .filter(Boolean),
-    ),
-  ];
-
   const eventVariants = usesSplitEventCandidates
     ? splitEventCandidates.map((entry) => {
         const variantArtists =
@@ -9274,7 +9479,8 @@ export function prepareEventsForInsert(
               : extractedArtists;
         const rowVenue = normalizeString(entry.venue);
         const rowVenueGrounded = Boolean(
-          rowVenue && venueValueAppearsInEvidence(rowVenue, entry.sourceLine),
+          rowVenue &&
+            venueValueAppearsInEventEvidence(rowVenue, entry.sourceLine),
         );
         const variantVenueRaw = usesStructuredEvidence
           ? rowVenueGrounded
@@ -9284,8 +9490,15 @@ export function prepareEventsForInsert(
         const variantVenue = variantVenueRaw
           ? canonicalizeVenueName(variantVenueRaw, canonicalVenueNamesByHandle) ?? variantVenueRaw
           : "";
+        const groundedFallbackTitle = entry.titleUsedFallback
+          ? buildUnnamedScheduleFallbackTitle({
+              eventType,
+              venue: variantVenue,
+              isoDate: entry.normalizedDate.isoDate,
+            })
+          : entry.lineTitle;
         const variantTitle = buildMeaningfulEventTitle({
-          title: entry.lineTitle,
+          title: groundedFallbackTitle,
           artists: variantArtists,
           eventType,
           venue: variantVenue,
@@ -9304,12 +9517,18 @@ export function prepareEventsForInsert(
             : entry.source === "alt_text_schedule"
               ? "alt_text"
               : "poster";
-        const variantDateEvidence = entry.dateEvidence ?? {
+        const rawVariantDateEvidence = entry.dateEvidence ?? {
           exact_text: entry.rawDate,
           source: derivedEvidenceSource,
           is_relative: false,
           resolved_date: entry.normalizedDate.isoDate ?? "",
         };
+        const variantDateEvidence = normalizeDateEvidenceForOccurrence(
+          rawVariantDateEvidence,
+          entry.normalizedDate.isoDate,
+          post.postedAt,
+          options.preserveExplicitDateEvidenceRelativeFlag,
+        );
         const useVerifiedSharedTime =
           usesStructuredEvidence &&
           verifiedSharedTime &&
@@ -9333,7 +9552,7 @@ export function prepareEventsForInsert(
           : entry.time ?? "";
         return {
           title: entry.titleUsedFallback
-            ? entry.lineTitle
+            ? groundedFallbackTitle
             : usesSplitScheduleTitle
               ? variantTitle
               : baseTitle,
@@ -9395,7 +9614,12 @@ export function prepareEventsForInsert(
           ...dateNormalization,
           isoDate: date,
         } satisfies DateNormalization,
-        dateEvidence: extracted.date_evidence,
+        dateEvidence: normalizeDateEvidenceForOccurrence(
+          extracted.date_evidence,
+          date,
+          post.postedAt,
+          options.preserveExplicitDateEvidenceRelativeFlag,
+        ),
         time:
           !usesStructuredEvidence || extracted.time_evidence.status === "start_time_stated"
             ? time
@@ -9481,7 +9705,7 @@ export function prepareEventsForInsert(
       time: safeTime,
       venue: variant.venue,
       artists: variant.artists,
-      sourceCaption: post.caption,
+      sourceCaption: post.caption ?? "",
       sourcePostedAt: post.postedAt,
       instagramPostId: post.postId,
       instagramPostUrl: post.instagramPostUrl,
@@ -9498,6 +9722,8 @@ export function prepareEventsForInsert(
       extracted,
       title: variant.title,
       artists: variant.artists,
+      titleUsedFallback: variant.titleUsedFallback,
+      venue: variant.venue,
       splitSourceLine: variant.splitSourceLine,
       splitEvidenceSource: variant.dateEvidence.source,
       post,
@@ -9514,6 +9740,28 @@ export function prepareEventsForInsert(
       trustedVenueSource,
       sharedVenueVerified: verifiedSharedVenue,
     });
+    const sourceConflictPartition = partitionEventEvidenceSourceConflicts(
+      extracted.source_conflicts,
+      {
+        resolvedDate: date ?? "",
+        dateEvidenceVerified,
+        selectedTitle: variant.title,
+        artists: variant.artists,
+        selectedVenue: variant.venue ?? "",
+        venueEvidenceVerified,
+        sourceAccountRole: sourceRole,
+        sourceAccountName: configuredSourceName,
+        sourceCaption: post.caption ?? "",
+        singleOccurrenceSource: eventVariants.length === 1,
+      },
+    );
+    const sourceConflictFields = [
+      ...new Set(
+        sourceConflictPartition.material
+          .map((conflict) => normalizeString(conflict.field))
+          .filter(Boolean),
+      ),
+    ];
     const timeEvidenceVerified = isVerifiedTimeEvidence({
       evidence: variant.timeEvidence,
       resolvedStartTime: eventConsistency.sanitizedTime ?? null,
@@ -9580,6 +9828,11 @@ export function prepareEventsForInsert(
     const eventStatus: EventStatus = moderationDecision.autoApproved ? "approved" : "pending";
     const normalizedFields: Record<string, unknown> = {
       ...normalizedFieldsCommon,
+      sourceConflictResolutionVersion: 1,
+      materialSourceConflicts: sourceConflictPartition.material,
+      materialSourceConflictCount: sourceConflictPartition.material.length,
+      benignSourceConflicts: sourceConflictPartition.benign,
+      benignSourceConflictCount: sourceConflictPartition.benign.length,
       time: safeTime || null,
       timeSource: semanticTimeProvenance.source,
       timeEvidenceText: semanticTimeProvenance.evidenceText,
@@ -9593,6 +9846,9 @@ export function prepareEventsForInsert(
       dateEvidenceVerified,
       timeEvidenceVerified,
       identityEvidenceVerified,
+      ...(variant.titleUsedFallback && identityEvidenceVerified
+        ? { fallbackIdentityPolicyVersion: 1 }
+        : {}),
       venueEvidenceVerified,
       structuredEvidenceVerified,
       sourceConflictFields,
@@ -9889,12 +10145,14 @@ async function processIngestionPost(
     eventDateFilterNow,
   } = options;
   const postContext = getPostContext(handle, post);
-  const canonicalVenueName =
+  const sourceRole = sourceRolesByHandle[normalizeHandle(post.username)] ?? "unknown";
+  const configuredSourceName =
     getConfiguredVenueNameForHandle(
       post.username,
       configuredVenueNamesByHandle,
       STATIC_VENUE_BY_HANDLE,
     ) || null;
+  const canonicalVenueName = sourceRole === "promoter" ? null : configuredSourceName;
   const canUseCaptionOnlyExtraction = buildPostTextEvidence(post).length > 0;
   const mediaSelection = resolveInstagramIngestionMediaSelection(post);
   const hasCurrentEventEvidenceCache =
@@ -10294,6 +10552,8 @@ async function processIngestionPost(
       instagramPostTimestamp: post.postedAt,
       instagramLocationName: post.locationName,
       canonicalVenueName,
+      instagramSourceRole: sourceRole,
+      instagramSourceName: configuredSourceName,
       extractionMode,
       ...(providerExecution
         ? {

@@ -615,6 +615,7 @@ export const createVenue = mutation({
 export const updateVenue = mutation({
   args: {
     id: v.id("venues"),
+    expectedUpdatedAt: v.optional(v.number()),
     patch: v.object({
       name: v.optional(v.string()),
       instagramHandle: v.optional(v.string()),
@@ -634,14 +635,21 @@ export const updateVenue = mutation({
     auditNote: v.optional(v.string()),
     serviceSecret: v.optional(v.string()),
   },
+  returns: v.object({ updated: v.boolean(), updatedAt: v.number() }),
   handler: async (ctx, args) => {
     const authorization = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const existing = await ctx.db.get(args.id);
     if (!existing) {
       throw new Error("Venue not found.");
     }
+    if (
+      args.expectedUpdatedAt !== undefined &&
+      existing.updatedAt !== args.expectedUpdatedAt
+    ) {
+      throw new Error("Venue changed after it was reviewed.");
+    }
 
-    const now = Date.now();
+    const now = Math.max(Date.now(), existing.updatedAt + 1);
     const { isActive: legacyActive, ...rawExplicitPatch } = args.patch;
     let instagramHandle: string | undefined;
     if (rawExplicitPatch.instagramHandle !== undefined) {
@@ -715,6 +723,7 @@ export const updateVenue = mutation({
         venueId: args.id,
       });
     }
+    return { updated: true, updatedAt: now };
   },
 });
 

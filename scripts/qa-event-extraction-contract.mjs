@@ -7,11 +7,16 @@ import {
 } from "../lib/ai/extract-event-data.ts";
 import { TBD_EVENT_TIME } from "../lib/events/event-time.ts";
 import {
+  eventArtistHandleAliasMatches,
+  eventEvidenceConflictIsBenign,
+} from "../lib/events/event-evidence-conflict-policy.ts";
+import {
   assertServiceUpdateEventPolicy,
   hasEventEvidenceV2AutoApproval,
 } from "../lib/events/event-update-precondition.ts";
 import {
   classifyExistingApprovedOccurrenceForTesting,
+  normalizeEventDate,
   prepareEventsForInsert,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
 
@@ -161,6 +166,51 @@ function addIsoDays(isoDate, offsetDays) {
 function ddmmyyyy(isoDate) {
   const [year, month, day] = isoDate.split("-");
   return `${day}.${month}.${year}`;
+}
+
+const SERBIAN_GENITIVE_MONTHS = [
+  "januara",
+  "februara",
+  "marta",
+  "aprila",
+  "maja",
+  "juna",
+  "jula",
+  "avgusta",
+  "septembra",
+  "oktobra",
+  "novembra",
+  "decembra",
+];
+
+function makeFutureCrossMonthRange() {
+  const dayMs = 24 * 60 * 60 * 1000;
+  let monthOffset = 2;
+  let boundary = new Date(Date.UTC(
+    semanticQaNow.getUTCFullYear(),
+    semanticQaNow.getUTCMonth() + monthOffset,
+    1,
+  ));
+  while (boundary.getUTCMonth() === 0) {
+    monthOffset += 1;
+    boundary = new Date(Date.UTC(
+      semanticQaNow.getUTCFullYear(),
+      semanticQaNow.getUTCMonth() + monthOffset,
+      1,
+    ));
+  }
+  const start = new Date(boundary.getTime() - 6 * dayMs);
+  const end = new Date(start.getTime() + 17 * dayMs);
+  const startDate = start.toISOString().slice(0, 10);
+  const endDate = end.toISOString().slice(0, 10);
+  const startMonth = SERBIAN_GENITIVE_MONTHS[start.getUTCMonth()];
+  const endMonth = SERBIAN_GENITIVE_MONTHS[end.getUTCMonth()];
+  return {
+    startDate,
+    endDate,
+    postedAt: new Date(start.getTime() - 2 * dayMs).toISOString(),
+    text: `od ${start.getUTCDate()}. ${startMonth} do ${end.getUTCDate()}. ${endMonth} ${end.getUTCFullYear()}.`,
+  };
 }
 
 function emptySharedScheduleContext() {
@@ -426,6 +476,215 @@ function runSemanticNormalizationQa() {
     assert.equal(prepared.normalizedFields.dateEvidenceVerified, true);
   });
 
+  runCase("flexible numeric and compact Serbian month date evidence", () => {
+    assert.equal(
+      normalizeEventDate("22. 8. 2026.", null, "2026-08-20T12:00:00.000Z").isoDate,
+      "2026-08-22",
+    );
+    assert.equal(
+      normalizeEventDate("25.08.", null, "2026-08-22T12:00:00.000Z").isoDate,
+      "2026-08-25",
+    );
+    assert.equal(
+      normalizeEventDate("25.AVGUST", null, "2026-08-22T12:00:00.000Z").isoDate,
+      "2026-08-25",
+    );
+    const bareCaptionDate = normalizeEventDate(
+      "12.07.2026",
+      "Event announcement\n11.7.\n20h",
+      "2026-07-07T16:37:24.000Z",
+    );
+    assert.equal(
+      bareCaptionDate.isoDate,
+      "2026-07-11",
+      "A following time line must not be consumed as the year of a bare caption date.",
+    );
+    assert.equal(bareCaptionDate.rawDateText, "11.7");
+    assert.equal(
+      normalizeEventDate("31. 02. 2026.", null, "2026-02-20T12:00:00.000Z").isoDate,
+      null,
+      "Flexible punctuation must not make an impossible calendar date valid.",
+    );
+
+    const date = isoDateDaysFromNow(11);
+    const [year, month, day] = date.split("-").map(Number);
+    const dateText = `${day}. ${month}. ${year}.`;
+    const post = makePost({
+      caption: `QA Flexible Numeric Night ${dateText} at QA Semantic Venue.`,
+      postId: "qa-flexible-numeric-date",
+    });
+    const extracted = makeEventExtraction({
+      caption: post.caption,
+      date,
+      dateEvidenceText: dateText,
+      postUrl: post.instagramPostUrl,
+      title: "QA Flexible Numeric Night",
+    });
+    const prepared = assertSingleOk(prepare(post, extracted), "flexible numeric date");
+    assert.equal(prepared.event.status, "approved");
+    assert.equal(prepared.normalizedFields.dateEvidenceVerified, true);
+  });
+
+  runCase("explicit weekday and numeric date correct a stale relative flag", () => {
+    const date = isoDateDaysFromNow(13);
+    const weekday = [
+      "Nedelja",
+      "Ponedeljak",
+      "Utorak",
+      "Sreda",
+      "Četvrtak",
+      "Petak",
+      "Subota",
+    ][new Date(`${date}T12:00:00.000Z`).getUTCDay()];
+    const [, month, day] = date.split("-").map(Number);
+    const dateText = `${weekday}, ${day}.${month}.`;
+    const post = makePost({
+      caption: `QA Explicit Weekday Night — ${dateText} at QA Semantic Venue.`,
+      postId: "qa-explicit-weekday-stale-relative",
+      postedAt: `${addIsoDays(date, -3)}T12:00:00.000Z`,
+    });
+    const extracted = makeEventExtraction({
+      caption: post.caption,
+      date,
+      dateEvidenceText: dateText,
+      postUrl: post.instagramPostUrl,
+      title: "QA Explicit Weekday Night",
+      date_evidence: {
+        exact_text: dateText,
+        source: "caption",
+        is_relative: true,
+        resolved_date: date,
+      },
+    });
+    const prepared = assertSingleOk(
+      prepare(post, extracted),
+      "explicit weekday stale relative flag",
+    );
+    assert.equal(prepared.event.status, "approved");
+    assert.equal(prepared.event.dateEvidenceIsRelative, false);
+    assert.equal(prepared.normalizedFields.dateEvidenceVerified, true);
+  });
+
+  runCase("cross-month range gets occurrence-specific normalized evidence", () => {
+    const range = makeFutureCrossMonthRange();
+    const post = makePost({
+      caption: `QA Cross Month Exhibition ${range.text} at QA Semantic Venue.`,
+      postId: "qa-cross-month-range",
+      postedAt: range.postedAt,
+    });
+    const extracted = makeEventExtraction({
+      caption: post.caption,
+      date: range.text,
+      dateEvidenceText: range.text,
+      postUrl: post.instagramPostUrl,
+      title: "QA Cross Month Exhibition",
+      date_evidence: {
+        exact_text: range.text,
+        source: "caption",
+        // Deliberately reproduce the stale cached shape: one resolution and
+        // a relative flag are reused for a fully explicit daily range.
+        is_relative: true,
+        resolved_date: range.startDate,
+      },
+    });
+    const results = prepare(post, extracted);
+    assert.equal(results.length, 18);
+    assert.equal(results[0]?.kind, "ok");
+    assert.equal(results.at(-1)?.kind, "ok");
+    assert.equal(results[0]?.event.date, range.startDate);
+    assert.equal(results.at(-1)?.event.date, range.endDate);
+    for (const result of results) {
+      assert.equal(result.kind, "ok");
+      assert.equal(result.event.status, "approved");
+      assert.equal(result.event.dateEvidenceIsRelative, false);
+      assert.equal(result.event.dateEvidenceResolvedDate, result.event.date);
+      assert.equal(result.normalizedFields.dateEvidenceVerified, true);
+      const rawExtraction = JSON.parse(result.event.rawExtractionJson);
+      assert.equal(
+        rawExtraction.date_evidence.resolved_date,
+        range.startDate,
+        "Occurrence normalization must not rewrite the immutable raw extraction.",
+      );
+      assert.equal(rawExtraction.date_evidence.is_relative, true);
+    }
+  });
+
+  runCase("range evidence cannot attest an outside occurrence", () => {
+    const range = makeFutureCrossMonthRange();
+    const outsideDate = addIsoDays(range.endDate, 1);
+    const post = makePost({
+      caption: `QA Outside Range Night ${range.text} at QA Semantic Venue.`,
+      postId: "qa-outside-explicit-range",
+      postedAt: `${outsideDate}T12:00:00.000Z`,
+    });
+    const extracted = makeEventExtraction({
+      caption: post.caption,
+      date: "",
+      dateEvidenceText: "",
+      postUrl: post.instagramPostUrl,
+      title: "QA Outside Range Night",
+      date_evidence: {
+        exact_text: "",
+        source: "unknown",
+        is_relative: false,
+        resolved_date: "",
+      },
+      schedule_entries: [
+        {
+          date: outsideDate,
+          time: "",
+          venue: "QA Semantic Venue",
+          title: "QA Outside Range Night",
+          artists: [],
+          description: "QA Outside Range Night event.",
+          source_text: `QA Outside Range Night ${range.text} at QA Semantic Venue.`,
+          date_evidence: {
+            exact_text: range.text,
+            source: "caption",
+            is_relative: false,
+            resolved_date: outsideDate,
+          },
+          time_evidence: {
+            status: "not_stated",
+            exact_text: "",
+            source: "unknown",
+          },
+        },
+      ],
+    });
+    const prepared = assertSingleOk(prepare(post, extracted), "outside range evidence");
+    assert.equal(prepared.event.date, outsideDate);
+    assert.equal(prepared.event.status, "pending");
+    assert.equal(prepared.normalizedFields.dateEvidenceVerified, false);
+    assert.ok(prepared.normalizedFields.moderationPendingReasons.includes("invalid_date_evidence"));
+  });
+
+  runCase("relative-only evidence keeps strict relative semantics", () => {
+    const postedDate = isoDateDaysFromNow(14);
+    const date = addIsoDays(postedDate, 1);
+    const post = makePost({
+      caption: "Tomorrow: QA Strict Relative Night at QA Semantic Venue.",
+      postId: "qa-strict-relative-flag",
+      postedAt: `${postedDate}T12:00:00.000Z`,
+    });
+    const extracted = makeEventExtraction({
+      caption: post.caption,
+      date,
+      dateEvidenceText: "Tomorrow",
+      postUrl: post.instagramPostUrl,
+      title: "QA Strict Relative Night",
+      date_evidence: {
+        exact_text: "Tomorrow",
+        source: "caption",
+        is_relative: false,
+        resolved_date: date,
+      },
+    });
+    const prepared = assertSingleOk(prepare(post, extracted), "strict relative flag");
+    assert.equal(prepared.event.status, "pending");
+    assert.equal(prepared.normalizedFields.dateEvidenceVerified, false);
+  });
+
   runCase("relative date", () => {
     const date = isoDateDaysFromNow(12);
     const postedDate = addIsoDays(date, -1);
@@ -531,6 +790,690 @@ function runSemanticNormalizationQa() {
       !prepared.normalizedFields.moderationPendingReasons.includes("invalid_identity_evidence"),
       "The conflict case must retain valid title identity evidence.",
     );
+  });
+
+  runCase("generic today plus matching named Saturday is benign", () => {
+    const saturday = new Date(semanticQaNow);
+    const daysUntilSaturday = (6 - saturday.getUTCDay() + 7) % 7 || 7;
+    saturday.setUTCDate(saturday.getUTCDate() + daysUntilSaturday);
+    const eventDate = saturday.toISOString().slice(0, 10);
+    const postedDate = addIsoDays(eventDate, -1);
+    const post = makePost({
+      caption:
+        "Today, the guests are arriving. Dođite ove subote na ACID HOUSE at QA Semantic Venue.",
+      postId: "qa-benign-today-saturday",
+      postedAt: `${postedDate}T16:00:00.000Z`,
+    });
+    const extracted = makeEventExtraction({
+      caption: post.caption,
+      date: eventDate,
+      dateEvidenceText: "SUBOTA",
+      postUrl: post.instagramPostUrl,
+      title: "ACID HOUSE",
+      titleEvidenceSource: "poster",
+      date_evidence: {
+        exact_text: "SUBOTA",
+        source: "poster",
+        is_relative: true,
+        resolved_date: eventDate,
+      },
+      source_conflicts: [
+        {
+          field: "date",
+          poster_value: "Saturday",
+          caption_value: "Today",
+          reason: "Poster says Saturday while the caption opens with Today.",
+        },
+      ],
+    });
+    const prepared = assertSingleOk(
+      prepare(post, extracted, { selectedImageUrl: "https://cdn.example.com/acid-house.jpg" }),
+      "benign today/Saturday wording",
+    );
+    assert.equal(prepared.event.date, eventDate);
+    assert.equal(prepared.event.status, "approved");
+    assert.deepEqual(prepared.event.sourceConflictFields, []);
+    assert.equal(prepared.normalizedFields.extractionSourceConflictCount, 1);
+    assert.equal(prepared.normalizedFields.materialSourceConflictCount, 0);
+    assert.equal(prepared.normalizedFields.benignSourceConflictCount, 1);
+    assert.equal(
+      hasEventEvidenceV2AutoApproval(prepared.event.normalizedFieldsJson, prepared.event),
+      true,
+    );
+
+    const tampered = JSON.parse(prepared.event.normalizedFieldsJson);
+    tampered.benignSourceConflictCount = 0;
+    assert.equal(
+      hasEventEvidenceV2AutoApproval(JSON.stringify(tampered), prepared.event),
+      false,
+      "A benign-conflict partition with tampered counts must fail closed.",
+    );
+
+    const forgedConflict = {
+      field: "date",
+      poster_value: "Sunday",
+      caption_value: "Today",
+      reason: "Poster and caption identify different dates.",
+    };
+    const forgedFields = JSON.parse(prepared.event.normalizedFieldsJson);
+    forgedFields.extractionSourceConflicts = [forgedConflict];
+    forgedFields.extractionSourceConflictCount = 1;
+    forgedFields.materialSourceConflicts = [];
+    forgedFields.materialSourceConflictCount = 0;
+    forgedFields.benignSourceConflicts = [forgedConflict];
+    forgedFields.benignSourceConflictCount = 1;
+    const forgedRaw = JSON.parse(prepared.event.rawExtractionJson);
+    forgedRaw.source_conflicts = [forgedConflict];
+    assert.equal(
+      hasEventEvidenceV2AutoApproval(JSON.stringify(forgedFields), {
+        ...prepared.event,
+        rawExtractionJson: JSON.stringify(forgedRaw),
+      }),
+      false,
+      "A material conflict cannot pass by moving it into a count-consistent benign bucket.",
+    );
+  });
+
+  runCase("minor title wording is benign but a different title is material", () => {
+    const date = isoDateDaysFromNow(15);
+    const dateText = ddmmyyyy(date);
+    const post = makePost({
+      caption: `Predstava nema ime ${dateText} at QA Semantic Venue.`,
+      postId: "qa-benign-title-wording",
+    });
+    const base = makeEventExtraction({
+      caption: post.caption,
+      date,
+      dateEvidenceText: dateText,
+      postUrl: post.instagramPostUrl,
+      title: "PREDSTAVA KOJA NEMA IME",
+      titleEvidenceSource: "poster",
+      source_conflicts: [
+        {
+          field: "title",
+          poster_value: "PREDSTAVA KOJA NEMA IME",
+          caption_value: "Predstava nema ime",
+          reason: "Caption omits one connector word.",
+        },
+      ],
+    });
+    const prepared = assertSingleOk(
+      prepare(post, base, { selectedImageUrl: "https://cdn.example.com/predstava.jpg" }),
+      "minor title wording",
+    );
+    assert.equal(prepared.event.status, "approved");
+    assert.deepEqual(prepared.event.sourceConflictFields, []);
+
+    const material = parseExtractedEventData({
+      ...structuredClone(base),
+      source_conflicts: [
+        {
+          field: "title",
+          poster_value: "PREDSTAVA KOJA NEMA IME",
+          caption_value: "Potpuno druga predstava",
+          reason: "Poster and caption name different plays.",
+        },
+      ],
+    });
+    const materialPrepared = assertSingleOk(
+      prepare(post, material, { selectedImageUrl: "https://cdn.example.com/predstava.jpg" }),
+      "different title wording",
+    );
+    assert.equal(materialPrepared.event.status, "pending");
+    assert.deepEqual(materialPrepared.event.sourceConflictFields, ["title"]);
+
+    const reordered = parseExtractedEventData({
+      ...structuredClone(base),
+      source_conflicts: [
+        {
+          field: "title",
+          poster_value: "Predstava koja nema ime",
+          caption_value: "Predstava ime nema",
+          reason: "The same words appear in a different identity order.",
+        },
+      ],
+    });
+    const reorderedPrepared = assertSingleOk(
+      prepare(post, reordered, { selectedImageUrl: "https://cdn.example.com/predstava.jpg" }),
+      "reordered title wording",
+    );
+    assert.equal(reorderedPrepared.event.status, "pending");
+    assert.deepEqual(reorderedPrepared.event.sourceConflictFields, ["title"]);
+  });
+
+  runCase("artist display name and billed Instagram handle collapse to the handle", () => {
+    const date = isoDateDaysFromNow(16);
+    const dateText = ddmmyyyy(date);
+    const post = makePost({
+      caption: `ESPRESSO MATINÉE ${dateText} at QA Semantic Venue. @ne_nije`,
+      postId: "qa-benign-artist-handle",
+    });
+    const extracted = makeEventExtraction({
+      artists: ["NENI", "@ne_nije"],
+      artistEvidenceText: "@ne_nije",
+      caption: post.caption,
+      date,
+      dateEvidenceText: dateText,
+      postUrl: post.instagramPostUrl,
+      title: "ESPRESSO MATINÉE",
+      source_conflicts: [
+        {
+          field: "artists",
+          poster_value: "NENI",
+          caption_value: "@ne_nije",
+          reason: "Poster uses a display name and caption uses the billed handle.",
+        },
+      ],
+    });
+    const prepared = assertSingleOk(
+      prepare(post, extracted, { selectedImageUrl: "https://cdn.example.com/espresso.jpg" }),
+      "artist handle alias",
+    );
+    assert.deepEqual(prepared.event.artists, ["@ne_nije"]);
+    assert.equal(prepared.event.status, "approved");
+    assert.deepEqual(prepared.event.sourceConflictFields, []);
+    assert.equal(eventArtistHandleAliasMatches("NENI", "@ne_nije"), true);
+    assert.equal(eventArtistHandleAliasMatches("NENI", "@nenika"), false);
+    assert.equal(eventArtistHandleAliasMatches("ABBA", "@abbath"), false);
+    assert.equal(eventArtistHandleAliasMatches("Nina", "@ninari"), false);
+
+    const handleOnly = parseExtractedEventData({
+      ...structuredClone(extracted),
+      artists: ["@ne_nije"],
+      source_conflicts: [],
+    });
+    const handleOnlyPrepared = assertSingleOk(
+      prepare(post, handleOnly, {
+        selectedImageUrl: "https://cdn.example.com/espresso.jpg",
+      }),
+      "single billed artist handle",
+    );
+    assert.deepEqual(
+      handleOnlyPrepared.event.artists,
+      ["@ne_nije"],
+      "A provider-compliant lone billed handle must remain byte-for-byte recognizable.",
+    );
+    assert.equal(handleOnlyPrepared.event.status, "approved");
+
+    const unrelated = parseExtractedEventData({
+      ...structuredClone(extracted),
+      artists: ["NENI", "@other_artist"],
+      field_confirmation: {
+        ...structuredClone(extracted.field_confirmation),
+        artists: confirmation("@other_artist"),
+      },
+      source_conflicts: [
+        {
+          field: "artists",
+          poster_value: "NENI",
+          caption_value: "@other_artist",
+          reason: "Poster and caption bill different artists.",
+        },
+      ],
+    });
+    const unrelatedPrepared = assertSingleOk(
+      prepare(
+        { ...post, caption: post.caption.replace("@ne_nije", "@other_artist") },
+        unrelated,
+        { selectedImageUrl: "https://cdn.example.com/espresso.jpg" },
+      ),
+      "unrelated artist handle",
+    );
+    assert.equal(unrelatedPrepared.event.status, "pending");
+    assert.deepEqual(unrelatedPrepared.event.sourceConflictFields, ["artists"]);
+
+    const nearPrefixAlias = parseExtractedEventData({
+      ...structuredClone(extracted),
+      artists: ["NENI", "@nenika"],
+      field_confirmation: {
+        ...structuredClone(extracted.field_confirmation),
+        artists: confirmation("@nenika"),
+      },
+      source_conflicts: [
+        {
+          field: "artists",
+          poster_value: "NENI",
+          caption_value: "@nenika",
+          reason: "Poster uses a display name and caption uses the billed handle.",
+        },
+      ],
+    });
+    const nearPrefixAliasPrepared = assertSingleOk(
+      prepare(
+        { ...post, caption: post.caption.replace("@ne_nije", "@nenika") },
+        nearPrefixAlias,
+        { selectedImageUrl: "https://cdn.example.com/espresso.jpg" },
+      ),
+      "near-prefix artist handle",
+    );
+    assert.equal(nearPrefixAliasPrepared.event.status, "pending");
+    assert.deepEqual(nearPrefixAliasPrepared.event.sourceConflictFields, ["artists"]);
+
+    const unsupportedAlias = parseExtractedEventData({
+      ...structuredClone(extracted),
+      source_conflicts: [
+        {
+          field: "artists",
+          poster_value: "NENI",
+          caption_value: "@ne_nije",
+          reason: "Poster and caption bill different artists.",
+        },
+      ],
+    });
+    const unsupportedAliasPrepared = assertSingleOk(
+      prepare(post, unsupportedAlias, {
+        selectedImageUrl: "https://cdn.example.com/espresso.jpg",
+      }),
+      "unsupported artist prefix",
+    );
+    assert.equal(unsupportedAliasPrepared.event.status, "pending");
+    assert.deepEqual(unsupportedAliasPrepared.event.sourceConflictFields, ["artists"]);
+  });
+
+  runCase("confirmed caption lineup supports inflected names and billed handles", () => {
+    const date = isoDateDaysFromNow(17);
+    const dateText = ddmmyyyy(date);
+    const post = makePost({
+      caption: [
+        `QA Lineup Night ${dateText} at QA Semantic Venue.`,
+        "Lenhart Tapes sa Skreč majstor Ljubanom i Zoja Borovčanin.",
+        "@nikola_banovicc – bubnjevi",
+      ].join("\n"),
+      postId: "qa-confirmed-caption-lineup",
+    });
+    const artists = [
+      "Lenhart Tapes",
+      "Skreč majstor Ljuban",
+      "Zoja Borovčanin",
+      "Nikola Banović",
+    ];
+    const extracted = makeEventExtraction({
+      artists,
+      caption: post.caption,
+      date,
+      dateEvidenceText: dateText,
+      postUrl: post.instagramPostUrl,
+      title: "QA Lineup Night",
+      field_confirmation: {
+        ...structuredClone(validExtraction.field_confirmation),
+        title: confirmation("QA Lineup Night"),
+        location: confirmation("QA Semantic Venue"),
+        location_name: confirmation("QA Semantic Venue"),
+        artists: {
+          confidence: 0.95,
+          found_in: ["caption"],
+          evidence: "Lenhart Tapes; Skreč majstor Ljuban; Zoja Borovčanin; @nikola_banovicc",
+          evidence_snippets: [{ source: "caption", text: "Lenhart Tapes" }],
+          notes: "All selected artists are billed in the caption.",
+        },
+      },
+    });
+    const prepared = assertSingleOk(prepare(post, extracted), "confirmed caption lineup");
+    assert.equal(prepared.event.status, "approved");
+    assert.equal(prepared.normalizedFields.identityEvidenceVerified, true);
+
+    const unsupported = parseExtractedEventData({
+      ...structuredClone(extracted),
+      artists: [...artists, "Invented Artist"],
+    });
+    const unsupportedPrepared = assertSingleOk(
+      prepare(post, unsupported),
+      "unsupported caption artist",
+    );
+    assert.equal(unsupportedPrepared.event.status, "pending");
+    assert.equal(unsupportedPrepared.normalizedFields.identityEvidenceVerified, false);
+  });
+
+  runCase("a split schedule row cannot borrow another row's artist", () => {
+    const firstDate = isoDateDaysFromNow(20);
+    const secondDate = isoDateDaysFromNow(21);
+    const firstDateText = ddmmyyyy(firstDate);
+    const secondDateText = ddmmyyyy(secondDate);
+    const firstSourceLine = `${firstDateText} | Event One at QA Semantic Venue`;
+    const secondSourceLine =
+      `${secondDateText} | Event Two with Artist Two at QA Semantic Venue`;
+    const caption = [firstSourceLine, secondSourceLine].join("\n");
+    const post = makePost({
+      caption,
+      postId: "qa-cross-row-artist-isolation",
+    });
+    const scheduleEntry = ({ date, dateText, title, artists, sourceText }) => ({
+      date,
+      time: "",
+      venue: "QA Semantic Venue",
+      title,
+      artists,
+      description: "",
+      source_text: sourceText,
+      date_evidence: {
+        exact_text: dateText,
+        source: "caption",
+        is_relative: false,
+        resolved_date: date,
+      },
+      time_evidence: {
+        status: "not_stated",
+        exact_text: "",
+        source: "unknown",
+      },
+    });
+    const extracted = makeEventExtraction({
+      artists: [],
+      caption,
+      date: "",
+      dateEvidenceText: "",
+      postUrl: post.instagramPostUrl,
+      title: "",
+      date_evidence: {
+        exact_text: "",
+        source: "unknown",
+        is_relative: false,
+        resolved_date: "",
+      },
+      schedule_entries: [
+        scheduleEntry({
+          date: firstDate,
+          dateText: firstDateText,
+          title: "Event One",
+          // Deliberately reproduce a model row-association mistake: Artist Two
+          // appears only in the other row of the persisted caption.
+          artists: ["Artist Two"],
+          sourceText: firstSourceLine,
+        }),
+        scheduleEntry({
+          date: secondDate,
+          dateText: secondDateText,
+          title: "Event Two",
+          artists: ["Artist Two"],
+          sourceText: secondSourceLine,
+        }),
+      ],
+      field_confirmation: {
+        ...structuredClone(validExtraction.field_confirmation),
+        title: confirmation("Event One"),
+        location: confirmation("QA Semantic Venue"),
+        location_name: confirmation("QA Semantic Venue"),
+        artists: confirmation("Artist Two"),
+      },
+    });
+    const results = prepare(post, extracted);
+    const first = results.find(
+      (result) => result.kind === "ok" && result.event.date === firstDate,
+    );
+    const second = results.find(
+      (result) => result.kind === "ok" && result.event.date === secondDate,
+    );
+    assert.equal(first?.kind, "ok");
+    assert.equal(first.event.status, "pending");
+    assert.equal(first.normalizedFields.identityEvidenceVerified, false);
+    assert.ok(
+      first.normalizedFields.moderationPendingReasons.includes("invalid_identity_evidence"),
+    );
+    assert.equal(second?.kind, "ok");
+    assert.equal(second.event.status, "approved");
+    assert.equal(second.normalizedFields.identityEvidenceVerified, true);
+  });
+
+  runCase("fresh source-bound unnamed rows may use only the deterministic fallback title", () => {
+    const date = isoDateDaysFromNow(18);
+    const dateText = ddmmyyyy(date);
+    const sourceLine = `${dateText} — BIGZ 011 — Bulevar Vojvode Mišića 17 — od 19h`;
+    const post = makePost({
+      caption: "QA Matinee guide.",
+      postId: "qa-grounded-unnamed-schedule",
+      username: "qa_matinee_guide",
+    });
+    const extracted = makeEventExtraction({
+      artists: [],
+      caption: post.caption,
+      date: "",
+      dateEvidenceText: "",
+      postUrl: post.instagramPostUrl,
+      title: "",
+      venue: "",
+      date_evidence: {
+        exact_text: "",
+        source: "unknown",
+        is_relative: false,
+        resolved_date: "",
+      },
+      schedule_entries: [
+        {
+          date,
+          time: "19:00",
+          venue: "BIGZ 011",
+          title: "",
+          artists: [],
+          description: "Matinee at BIGZ 011.",
+          source_text: sourceLine,
+          date_evidence: {
+            exact_text: dateText,
+            source: "poster",
+            is_relative: false,
+            resolved_date: date,
+          },
+          time_evidence: {
+            status: "start_time_stated",
+            exact_text: "od 19h",
+            source: "poster",
+          },
+        },
+      ],
+      field_confirmation: {
+        ...structuredClone(validExtraction.field_confirmation),
+        title: confirmation(""),
+        location: confirmation(""),
+        location_name: confirmation(""),
+        artists: confirmation(""),
+      },
+    });
+    const prepared = assertSingleOk(
+      prepare(post, extracted, {
+        selectedImageUrl: "https://cdn.example.com/matinee-guide.jpg",
+        canonicalVenueNamesByHandle: { qa_matinee_guide: "QA Matinee Guide" },
+        configuredVenueNamesByHandle: { qa_matinee_guide: "QA Matinee Guide" },
+        sourceRolesByHandle: { qa_matinee_guide: "unknown" },
+      }),
+      "grounded unnamed schedule",
+    );
+    assert.equal(prepared.event.status, "approved");
+    assert.equal(prepared.normalizedFields.titleUsedFallback, true);
+    assert.equal(prepared.normalizedFields.fallbackIdentityPolicyVersion, 1);
+    assert.equal(
+      hasEventEvidenceV2AutoApproval(prepared.event.normalizedFieldsJson, prepared.event),
+      true,
+    );
+
+    const forgedTitleFields = JSON.parse(prepared.event.normalizedFieldsJson);
+    forgedTitleFields.title = "Forged Headliner";
+    assert.equal(
+      hasEventEvidenceV2AutoApproval(JSON.stringify(forgedTitleFields), {
+        ...prepared.event,
+        title: "Forged Headliner",
+      }),
+      false,
+      "A blank raw row cannot attest an arbitrary normalized/public title.",
+    );
+
+    const forgedFields = JSON.parse(prepared.event.normalizedFieldsJson);
+    forgedFields.splitSourceLine = `${dateText} — 19h`;
+    forgedFields.rowSourceText = forgedFields.splitSourceLine;
+    assert.equal(
+      hasEventEvidenceV2AutoApproval(JSON.stringify(forgedFields), prepared.event),
+      false,
+      "A fallback title cannot be approved after detaching it from the raw schedule row.",
+    );
+
+    const ungrounded = parseExtractedEventData({
+      ...structuredClone(extracted),
+      schedule_entries: [
+        {
+          ...structuredClone(extracted.schedule_entries[0]),
+          venue: "",
+          source_text: `${dateText} — 19h`,
+        },
+      ],
+    });
+    const ungroundedPrepared = assertSingleOk(
+      prepare(
+        { ...post, postId: "qa-ungrounded-unnamed-schedule" },
+        ungrounded,
+        { selectedImageUrl: "https://cdn.example.com/ungrounded-schedule.jpg" },
+      ),
+      "ungrounded unnamed schedule",
+    );
+    assert.equal(ungroundedPrepared.event.status, "pending");
+    assert.equal(ungroundedPrepared.normalizedFields.identityEvidenceVerified, false);
+
+    const genericVenueExtraction = parseExtractedEventData({
+      ...structuredClone(extracted),
+      schedule_entries: [
+        {
+          ...structuredClone(extracted.schedule_entries[0]),
+          venue: "club",
+          source_text: `${dateText} — club — od 19h`,
+        },
+      ],
+    });
+    const genericVenuePrepared = assertSingleOk(
+      prepare(
+        { ...post, postId: "qa-generic-venue-unnamed-schedule" },
+        genericVenueExtraction,
+        { selectedImageUrl: "https://cdn.example.com/generic-venue-schedule.jpg" },
+      ),
+      "generic venue unnamed schedule",
+    );
+    assert.equal(genericVenuePrepared.event.status, "pending");
+    assert.equal(genericVenuePrepared.normalizedFields.identityEvidenceVerified, false);
+
+    const inflectedSourceLine = `${dateText} — u Zvezdi — od 19h`;
+    const inflectedExtraction = parseExtractedEventData({
+      ...structuredClone(extracted),
+      schedule_entries: [
+        {
+          ...structuredClone(extracted.schedule_entries[0]),
+          venue: "Zvezda",
+          source_text: inflectedSourceLine,
+        },
+      ],
+    });
+    const inflectedPrepared = assertSingleOk(
+      prepare(
+        { ...post, postId: "qa-inflected-unnamed-schedule" },
+        inflectedExtraction,
+        { selectedImageUrl: "https://cdn.example.com/inflected-schedule.jpg" },
+      ),
+      "Serbian-inflected unnamed schedule venue",
+    );
+    assert.equal(inflectedPrepared.event.venue, "Zvezda");
+    assert.equal(inflectedPrepared.event.status, "approved");
+    assert.equal(
+      hasEventEvidenceV2AutoApproval(
+        inflectedPrepared.event.normalizedFieldsJson,
+        inflectedPrepared.event,
+      ),
+      true,
+      "Convex authorization must use the same Serbian venue inflection policy as local ingestion.",
+    );
+
+    const nearPrefixFields = JSON.parse(inflectedPrepared.event.normalizedFieldsJson);
+    nearPrefixFields.splitSourceLine = `${dateText} — u Zvezdari — od 19h`;
+    nearPrefixFields.rowSourceText = nearPrefixFields.splitSourceLine;
+    const nearPrefixRaw = JSON.parse(inflectedPrepared.event.rawExtractionJson);
+    nearPrefixRaw.schedule_entries[0].source_text = nearPrefixFields.splitSourceLine;
+    assert.equal(
+      hasEventEvidenceV2AutoApproval(JSON.stringify(nearPrefixFields), {
+        ...inflectedPrepared.event,
+        rawExtractionJson: JSON.stringify(nearPrefixRaw),
+      }),
+      false,
+      "A nearby physical venue name must not satisfy the fallback attestation.",
+    );
+  });
+
+  runCase("generic Today cannot borrow a date from a multi-event caption", () => {
+    const saturdayDate = new Date(semanticQaNow);
+    saturdayDate.setUTCDate(
+      saturdayDate.getUTCDate() + ((6 - saturdayDate.getUTCDay() + 7) % 7 || 7),
+    );
+    const saturday = saturdayDate.toISOString().slice(0, 10);
+    const conflict = {
+      field: "date",
+      poster_value: "Saturday",
+      caption_value: "Today",
+      reason: "Poster indicates Saturday while caption says Today.",
+    };
+    const saturdayWeekday = new Date(`${saturday}T12:00:00.000Z`).toLocaleDateString("en-US", {
+      weekday: "long",
+      timeZone: "UTC",
+    });
+    assert.equal(
+      eventEvidenceConflictIsBenign(conflict, {
+        artists: [],
+        dateEvidenceVerified: true,
+        resolvedDate: saturday,
+        selectedTitle: "First Event",
+        selectedVenue: "QA Hall",
+        singleOccurrenceSource: false,
+        sourceAccountName: "QA Hall",
+        sourceAccountRole: "venue",
+        sourceCaption: `Today: First Event. ${saturdayWeekday}: Unrelated Second Event.`,
+        venueEvidenceVerified: true,
+      }),
+      false,
+    );
+  });
+
+  runCase("promoter account cannot override a caption-grounded physical venue", () => {
+    const date = isoDateDaysFromNow(17);
+    const dateText = ddmmyyyy(date);
+    const username = "longplayofficial";
+    const venue = "Botanička bašta Jevremovac";
+    const venueEvidence = "Botaničkoj bašti “Jevremovac”";
+    const post = makePost({
+      caption: `Del Arno Band ${dateText} u ${venueEvidence}.`,
+      postId: "qa-promoter-physical-venue",
+      username,
+    });
+    const extracted = makeEventExtraction({
+      artists: ["Del Arno Band"],
+      artistEvidenceText: "Del Arno Band",
+      caption: post.caption,
+      date,
+      dateEvidenceText: dateText,
+      field_confirmation: {
+        ...structuredClone(validExtraction.field_confirmation),
+        title: confirmation("Del Arno Band"),
+        location: confirmation(venueEvidence),
+        location_name: confirmation(venueEvidence),
+        artists: confirmation("Del Arno Band"),
+      },
+      postUrl: post.instagramPostUrl,
+      title: "Del Arno Band",
+      venue,
+      source_conflicts: [
+        {
+          field: "venue",
+          poster_value: "Long Play",
+          caption_value: venue,
+          reason: "Long Play is the canonical account hint; caption names the venue.",
+        },
+      ],
+    });
+    const prepared = assertSingleOk(
+      prepare(post, extracted, {
+        selectedImageUrl: "https://cdn.example.com/del-arno.jpg",
+        canonicalVenueNamesByHandle: { [username]: "Long Play" },
+        configuredVenueNamesByHandle: { [username]: "Long Play" },
+        sourceRolesByHandle: { [username]: "promoter" },
+      }),
+      "promoter physical venue",
+    );
+    assert.equal(prepared.event.venue, venue);
+    assert.equal(prepared.normalizedFields.venueEvidenceVerified, true);
+    assert.equal(prepared.normalizedFields.trustedVenueSource, false);
+    assert.equal(prepared.event.status, "approved");
+    assert.deepEqual(prepared.event.sourceConflictFields, []);
   });
 
   runCase("poster-caption start-time conflict", () => {
