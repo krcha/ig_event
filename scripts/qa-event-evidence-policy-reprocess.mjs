@@ -520,13 +520,31 @@ for (const patch of [
   );
 }
 
+const fallbackTitleEventDate = "2026-08-23";
+const fallbackTitleEventType = "nightlife";
+const fallbackTitleOriginalVenue = "Promoter Account";
+const fallbackTitleNextVenue = "Physical Venue";
+const fallbackTitleOriginal = buildUnnamedScheduleFallbackTitle({
+  eventType: fallbackTitleEventType,
+  venue: fallbackTitleOriginalVenue,
+  isoDate: fallbackTitleEventDate,
+});
+const fallbackTitleNext = buildUnnamedScheduleFallbackTitle({
+  eventType: fallbackTitleEventType,
+  venue: fallbackTitleNextVenue,
+  isoDate: fallbackTitleEventDate,
+});
 const fallbackTitleEvent = {
   _id: "event-fallback-title-correction",
-  title: "Sunday Night at Promoter Account",
+  title: fallbackTitleOriginal,
+  date: fallbackTitleEventDate,
+  eventType: fallbackTitleEventType,
+  venue: fallbackTitleOriginalVenue,
   normalizedFieldsJson: JSON.stringify({
-    title: "Sunday Night at Promoter Account",
+    title: fallbackTitleOriginal,
     titleUsedFallback: true,
     titleSource: "unnamed_schedule_fallback",
+    fallbackIdentityPolicyVersion: 1,
   }),
 };
 assert.doesNotThrow(() =>
@@ -535,11 +553,13 @@ assert.doesNotThrow(() =>
     expectedUpdatedAt: 1,
     expectedNormalizedFieldsJson: fallbackTitleEvent.normalizedFieldsJson,
     patch: {
-      title: "Sunday Night at Physical Venue",
+      title: fallbackTitleNext,
+      venue: fallbackTitleNextVenue,
       normalizedFieldsJson: JSON.stringify({
-        title: "Sunday Night at Physical Venue",
+        title: fallbackTitleNext,
         titleUsedFallback: true,
         titleSource: "unnamed_schedule_fallback",
+        fallbackIdentityPolicyVersion: 1,
       }),
     },
   }),
@@ -554,6 +574,7 @@ for (const [currentTitleUsedFallback, nextTitleUsedFallback] of [
       title: fallbackTitleEvent.title,
       titleUsedFallback: currentTitleUsedFallback,
       titleSource: currentTitleUsedFallback ? "unnamed_schedule_fallback" : "model",
+      fallbackIdentityPolicyVersion: currentTitleUsedFallback ? 1 : undefined,
     }),
   };
   assert.throws(
@@ -568,6 +589,7 @@ for (const [currentTitleUsedFallback, nextTitleUsedFallback] of [
             title: "Forged Headliner",
             titleUsedFallback: nextTitleUsedFallback,
             titleSource: nextTitleUsedFallback ? "unnamed_schedule_fallback" : "model",
+            fallbackIdentityPolicyVersion: nextTitleUsedFallback ? 1 : undefined,
           }),
         },
       }),
@@ -722,9 +744,13 @@ try {
       },
     ],
   });
-  forgedFallbackTarget.title = "Sunday Night at QA Promoter";
   forgedFallbackTarget.artists = [];
   forgedFallbackTarget.eventType = "nightlife";
+  forgedFallbackTarget.title = buildUnnamedScheduleFallbackTitle({
+    eventType: forgedFallbackTarget.eventType,
+    venue: forgedFallbackTarget.venue,
+    isoDate: forgedFallbackTarget.date,
+  });
   forgedFallbackTarget.rawExtractionJson = forgedFallbackRawExtraction;
   const forgedFallbackCurrentFields = JSON.parse(
     oldNormalizedFields({
@@ -736,6 +762,7 @@ try {
   );
   forgedFallbackCurrentFields.titleUsedFallback = true;
   forgedFallbackCurrentFields.titleSource = "unnamed_schedule_fallback";
+  forgedFallbackCurrentFields.fallbackIdentityPolicyVersion = 1;
   forgedFallbackTarget.normalizedFieldsJson = JSON.stringify(
     forgedFallbackCurrentFields,
   );
@@ -777,7 +804,7 @@ try {
         reprocessPendingEventEvidencePolicyBatch,
         forgedFallbackArgs,
       ),
-    /approv|source-ground/i,
+    /deterministic unnamed fallback|approv|source-ground/i,
   );
   assert.deepEqual(forgedFallback.snapshot(), forgedFallbackBefore);
 
@@ -831,6 +858,27 @@ try {
     ).title,
     validFallbackTitle,
   );
+  const forgedFallbackRollbackArgs = rollbackArgs(
+    validFallbackAfterApply,
+    validFallbackOriginalTarget,
+  );
+  forgedFallbackRollbackArgs.items[0].patch.title = "Forged Rollback Title";
+  const forgedFallbackRollbackFields = JSON.parse(
+    forgedFallbackRollbackArgs.items[0].patch.normalizedFieldsJson,
+  );
+  forgedFallbackRollbackFields.title = "Forged Rollback Title";
+  forgedFallbackRollbackArgs.items[0].patch.normalizedFieldsJson = JSON.stringify(
+    forgedFallbackRollbackFields,
+  );
+  await assert.rejects(
+    () =>
+      validFallback.run(
+        rollbackEventEvidencePolicyBatch,
+        forgedFallbackRollbackArgs,
+      ),
+    /deterministic unnamed fallback/i,
+  );
+  assert.deepEqual(validFallback.snapshot(), validFallbackAfterApply);
   const validFallbackRollbackArgs = rollbackArgs(
     validFallbackAfterApply,
     validFallbackOriginalTarget,

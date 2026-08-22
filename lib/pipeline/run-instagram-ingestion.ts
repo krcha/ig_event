@@ -2293,6 +2293,29 @@ function buildSourceGroundingSegments(value: string | null | undefined): string[
   ])];
 }
 
+function buildSharedScheduleIdentitySegments(
+  value: string | null | undefined,
+): string[] {
+  const datePeriodPlaceholder = "\uE001";
+  return normalizeString(value)
+    .replace(
+      /\b(\d{1,2}[./-]\d{1,2}(?:[./-](?:\d{2}|\d{4}))?)\.(?=\s|$)/gu,
+      `$1${datePeriodPlaceholder}`,
+    )
+    .replace(
+      new RegExp(
+        String.raw`\b(\d{1,2})\.(?=\s+(?:${SOURCE_GROUNDING_MONTH_PATTERN})\b)`,
+        "giu",
+      ),
+      `$1${datePeriodPlaceholder}`,
+    )
+    .split(
+      /\r?\n|[;•·●▪◦]+|\|+|(?<!\d)\/|\/(?!\d)|[—–]+|\s+-\s+|,(?=\s*\p{L})|(?<=[!?])\s+|(?<=\.)\s+(?=[\p{Lu}])/u,
+    )
+    .map((segment) => segment.replaceAll(datePeriodPlaceholder, ".").trim())
+    .filter(Boolean);
+}
+
 const SOURCE_GROUNDING_CLOCK_PATTERN =
   String.raw`(?:[01]?\d|2[0-3])(?:[:.][0-5]\d\s*h?|\s*h(?:[0-5]\d)?)`;
 const SOURCE_GROUNDING_LABELED_CLOCK_PATTERN =
@@ -2357,6 +2380,32 @@ function collectSupportedDates(
     )];
   }
   return [...new Set(candidates.map((candidate) => candidate.isoDate))];
+}
+
+function collectSharedMonthDateListDates(
+  value: string,
+  postedAt: string | null | undefined,
+): string[] {
+  const dates: string[] = [];
+  const pattern = new RegExp(
+    String.raw`(?:^|[^\p{L}\p{N}_])((?:\d{1,2}\.?\s*(?:,|i|and|&)\s*)+\d{1,2}\.?)\s+(${DATE_MONTH_WORD_PATTERN})(?:\s*,?\s*(\d{2,4}))?`,
+    "giu",
+  );
+  for (const match of normalizeString(value).matchAll(pattern)) {
+    const days = [...(match[1] ?? "").matchAll(/\d{1,2}/gu)]
+      .map((dayMatch) => Number.parseInt(dayMatch[0], 10))
+      .filter((day) => day >= 1 && day <= 31);
+    if (days.length < 2 || new Set(days).size !== days.length) continue;
+    for (const day of days) {
+      const normalized = normalizeEventDate(
+        `${day}. ${match[2] ?? ""}${match[3] ? ` ${match[3]}` : ""}`,
+        null,
+        postedAt ?? null,
+      ).isoDate;
+      if (normalized) dates.push(normalized);
+    }
+  }
+  return [...new Set(dates)];
 }
 
 function prefixSupportsNormalizedEventDate(
@@ -8843,7 +8892,7 @@ function isVerifiedEventIdentityEvidence(options: {
   titleUsedFallback: boolean;
   venue: string;
   splitSourceLine: string | null;
-  singleOccurrenceSource: boolean;
+  singleScheduleEntrySource: boolean;
   splitEvidenceSource: EventDateEvidenceSource;
   post: InstagramScrapedPost;
   hasPoster: boolean;
@@ -8867,8 +8916,72 @@ function isVerifiedEventIdentityEvidence(options: {
   const artistConfirmation = options.extracted.field_confirmation.artists;
   const artistSnippets = artistConfirmation.evidence_snippets;
   const expectedScheduleArtists = options.artists.map((artist) => toSearchableText(artist));
-  const scheduleIdentityAppliesToEveryRow =
+  const topLevelArtists = normalizeExtractedArtists(options.extracted.artists).map((artist) =>
+    toSearchableText(normalizeArtistDisplayName(artist)),
+  );
+  const sharedDateEvidence = options.extracted.date_evidence;
+  const sharedDateEvidenceBound =
+    sharedDateEvidence.is_relative === false &&
+    isBoundEvidence(sharedDateEvidence.exact_text, sharedDateEvidence.source);
+  const sharedEvidenceDates = sharedDateEvidenceBound
+    ? new Set([
+        ...collectSupportedDates(sharedDateEvidence.exact_text, options.post.postedAt),
+        ...collectSharedMonthDateListDates(
+          sharedDateEvidence.exact_text,
+          options.post.postedAt,
+        ),
+      ])
+    : new Set<string>();
+  const scheduleDates = options.extracted.schedule_entries.map((entry) =>
+    normalizeEventDate(normalizeString(entry.date), null, options.post.postedAt).isoDate,
+  );
+  const sharedIdentitySourceText =
+    sharedDateEvidence.source === "caption"
+      ? options.post.caption
+      : sharedDateEvidence.source === "alt_text"
+        ? options.post.altText
+        : null;
+  const sharedIdentitySourceSegments = buildSharedScheduleIdentitySegments(
+    sharedIdentitySourceText,
+  );
+  const scheduleDateSet = new Set(scheduleDates.filter((date): date is string => Boolean(date)));
+  const segmentDates = (segment: string): Set<string> =>
+    new Set([
+      ...collectSupportedDates(segment, options.post.postedAt),
+      ...collectSharedMonthDateListDates(segment, options.post.postedAt),
+    ]);
+  const dateBearingSegments = sharedIdentitySourceSegments
+    .map((segment) => ({ segment, dates: segmentDates(segment) }))
+    .filter(({ dates }) => [...dates].some((date) => scheduleDateSet.has(date)));
+  const containsExactScheduleDateSet = (dates: Set<string>): boolean =>
+    dates.size === scheduleDateSet.size &&
+    [...scheduleDateSet].every((date) => dates.has(date));
+  const identityAppliesToAllCue =
+    /\b(?:ovog\s+vikenda|this\s+weekend|oba\s+dana|obe\s+ve[čc]eri|both\s+(?:days|nights)|svak(?:og|e)\s+(?:dana|ve[čc]eri)|every\s+(?:day|night))\b/iu;
+  const sharedIdentitySegmentVerified = sharedIdentitySourceSegments.some((segment) => {
+    const segmentHasIdentity =
+      supportsTitle(segment) &&
+      options.artists.every((artist) => artistIdentityAppearsInText(segment, artist));
+    return (
+      segmentHasIdentity &&
+      (containsExactScheduleDateSet(segmentDates(segment)) ||
+        identityAppliesToAllCue.test(segment))
+    );
+  });
+  const sharedMultiDateIdentityVerified =
     options.extracted.schedule_entries.length > 1 &&
+    toSearchableText(options.extracted.title) === toSearchableText(options.title) &&
+    topLevelArtists.length === expectedScheduleArtists.length &&
+    topLevelArtists.every(
+      (artist, index) => artist === expectedScheduleArtists[index],
+    ) &&
+    scheduleDates.every((date): date is string => Boolean(date)) &&
+    new Set(scheduleDates).size === scheduleDates.length &&
+    sharedEvidenceDates.size === scheduleDates.length &&
+    scheduleDates.every((date) => sharedEvidenceDates.has(date)) &&
+    dateBearingSegments.length > 0 &&
+    dateBearingSegments.every(({ dates }) => containsExactScheduleDateSet(dates)) &&
+    sharedIdentitySegmentVerified &&
     options.extracted.schedule_entries.every((entry) => {
       const entryArtists = normalizeExtractedArtists(entry.artists).map((artist) =>
         toSearchableText(normalizeArtistDisplayName(artist)),
@@ -8883,8 +8996,8 @@ function isVerifiedEventIdentityEvidence(options: {
     });
   const mayUsePostLevelIdentityEvidence =
     !options.splitSourceLine ||
-    options.singleOccurrenceSource ||
-    scheduleIdentityAppliesToEveryRow;
+    options.singleScheduleEntrySource ||
+    sharedMultiDateIdentityVerified;
   const boundEvidence = [
     ...(options.splitSourceLine &&
     isBoundEvidence(options.splitSourceLine, options.splitEvidenceSource)
@@ -9662,6 +9775,9 @@ export function prepareEventsForInsert(
       }));
 
   const preparedEvents: PrepareEventResult[] = [];
+  const exactSingleOccurrenceSource =
+    eventVariants.length === 1 &&
+    (!usesStructuredEvidence || extracted.schedule_entries.length <= 1);
   // A structured poster event is created before the exact stored asset URL is
   // returned to this process. Leave its public image empty until the
   // checksum-bound media action attaches that exact storage ID/URL.
@@ -9745,7 +9861,7 @@ export function prepareEventsForInsert(
       titleUsedFallback: variant.titleUsedFallback,
       venue: variant.venue,
       splitSourceLine: variant.splitSourceLine,
-      singleOccurrenceSource: eventVariants.length === 1,
+      singleScheduleEntrySource: exactSingleOccurrenceSource,
       splitEvidenceSource: variant.dateEvidence.source,
       post,
       hasPoster: hasPosterEvidence,
@@ -9773,7 +9889,7 @@ export function prepareEventsForInsert(
         sourceAccountRole: sourceRole,
         sourceAccountName: configuredSourceName,
         sourceCaption: post.caption ?? "",
-        singleOccurrenceSource: eventVariants.length === 1,
+        singleOccurrenceSource: exactSingleOccurrenceSource,
       },
     );
     const sourceConflictFields = [

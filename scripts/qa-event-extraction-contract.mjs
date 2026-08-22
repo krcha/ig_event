@@ -1274,14 +1274,154 @@ function runSemanticNormalizationQa() {
     assert.equal(prepared.normalizedFields.identityEvidenceVerified, true);
   });
 
+  runCase("repeated model identities cannot substitute for row-bound shared evidence", () => {
+    const firstDate = isoDateDaysFromNow(20);
+    const secondDate = isoDateDaysFromNow(21);
+    const firstDateText = ddmmyyyy(firstDate);
+    const secondDateText = ddmmyyyy(secondDate);
+    const sharedDateText = `${firstDateText} and ${secondDateText}`;
+    const firstSourceLine = `${firstDateText}—Copied Program at QA Semantic Venue`;
+    const secondSourceLine = `${secondDateText}—Other Program at QA Semantic Venue`;
+    const caption = [firstSourceLine, secondSourceLine, sharedDateText].join("|");
+    const post = makePost({ caption, postId: "qa-repeated-model-identity-isolation" });
+    const scheduleEntry = (date, dateText, sourceText) => ({
+      date,
+      time: "20:00",
+      venue: "QA Semantic Venue",
+      title: "Copied Program",
+      artists: [],
+      description: "Copied Program.",
+      source_text: sourceText,
+      date_evidence: {
+        exact_text: dateText,
+        source: "caption",
+        is_relative: false,
+        resolved_date: date,
+      },
+      time_evidence: {
+        status: "start_time_stated",
+        exact_text: "20h",
+        source: "caption",
+      },
+    });
+    const extracted = makeEventExtraction({
+      artists: [],
+      caption,
+      date: "",
+      dateEvidenceText: "",
+      postUrl: post.instagramPostUrl,
+      title: "Copied Program",
+      date_evidence: {
+        exact_text: sharedDateText,
+        source: "caption",
+        is_relative: false,
+        resolved_date: "",
+      },
+      schedule_entries: [
+        scheduleEntry(firstDate, firstDateText, firstSourceLine),
+        scheduleEntry(secondDate, secondDateText, secondSourceLine),
+      ],
+      field_confirmation: {
+        ...structuredClone(validExtraction.field_confirmation),
+        title: confirmation("Copied Program"),
+        location: confirmation("QA Semantic Venue"),
+        location_name: confirmation("QA Semantic Venue"),
+        artists: confirmation(""),
+      },
+    });
+    const prepared = prepare(post, extracted).filter((result) => result.kind === "ok");
+    assert.equal(prepared.length, 2);
+    assert.equal(prepared[1].event.status, "pending");
+    assert.equal(prepared[1].normalizedFields.identityEvidenceVerified, false);
+  });
+
+  runCase("a dropped invalid schedule row does not create single-occurrence identity", () => {
+    const validDate = isoDateDaysFromNow(24);
+    const validDateText = ddmmyyyy(validDate);
+    const validSourceLine = `${validDateText} | 20h at QA Semantic Venue`;
+    const invalidSourceLine = "TBA | another schedule row";
+    const caption = ["Global Program", validSourceLine, invalidSourceLine].join("\n");
+    const post = makePost({ caption, postId: "qa-dropped-row-not-single-occurrence" });
+    const extracted = makeEventExtraction({
+      artists: [],
+      caption,
+      date: "",
+      dateEvidenceText: "",
+      postUrl: post.instagramPostUrl,
+      title: "Global Program",
+      date_evidence: {
+        exact_text: "",
+        source: "unknown",
+        is_relative: false,
+        resolved_date: "",
+      },
+      schedule_entries: [
+        {
+          date: validDate,
+          time: "20:00",
+          venue: "QA Semantic Venue",
+          title: "Global Program",
+          artists: [],
+          description: "Global Program.",
+          source_text: validSourceLine,
+          date_evidence: {
+            exact_text: validDateText,
+            source: "caption",
+            is_relative: false,
+            resolved_date: validDate,
+          },
+          time_evidence: {
+            status: "start_time_stated",
+            exact_text: "20h",
+            source: "caption",
+          },
+        },
+        {
+          date: "not-a-date",
+          time: "",
+          venue: "QA Semantic Venue",
+          title: "Other Program",
+          artists: [],
+          description: "Other Program.",
+          source_text: invalidSourceLine,
+          date_evidence: {
+            exact_text: "TBA",
+            source: "caption",
+            is_relative: false,
+            resolved_date: "",
+          },
+          time_evidence: {
+            status: "not_stated",
+            exact_text: "",
+            source: "unknown",
+          },
+        },
+      ],
+      field_confirmation: {
+        ...structuredClone(validExtraction.field_confirmation),
+        title: confirmation("Global Program"),
+        location: confirmation("QA Semantic Venue"),
+        location_name: confirmation("QA Semantic Venue"),
+        artists: confirmation(""),
+      },
+    });
+    const valid = prepare(post, extracted).find(
+      (result) => result.kind === "ok" && result.event.date === validDate,
+    );
+    assert.equal(valid?.kind, "ok");
+    assert.equal(valid.event.status, "pending");
+    assert.equal(valid.normalizedFields.identityEvidenceVerified, false);
+  });
+
   runCase("a repeated identical event may bind one post-level identity to every date row", () => {
     const firstDate = isoDateDaysFromNow(22);
     const secondDate = isoDateDaysFromNow(23);
     const firstDateText = ddmmyyyy(firstDate);
     const secondDateText = ddmmyyyy(secondDate);
+    const sharedDateText = `${firstDateText} and ${secondDateText}`;
     const caption = [
-      "Repeated Theatre Program",
-      `${firstDateText} and ${secondDateText} at QA Semantic Venue`,
+      "Repeated Theatre Program this weekend",
+      `${sharedDateText} at QA Semantic Venue`,
     ].join("\n");
     const post = makePost({
       caption,
@@ -1315,8 +1455,8 @@ function runSemanticNormalizationQa() {
       postUrl: post.instagramPostUrl,
       title: "Repeated Theatre Program",
       date_evidence: {
-        exact_text: "",
-        source: "unknown",
+        exact_text: sharedDateText,
+        source: "caption",
         is_relative: false,
         resolved_date: "",
       },

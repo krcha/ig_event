@@ -15,6 +15,7 @@ import { classifyApprovalOccurrenceRelation } from "../lib/events/approval-occur
 import { isCaptionSourceCoherentWithEvent } from "../lib/events/event-source-approval";
 import { sourceOccurrenceRepresentativeMatchesExpected } from "../lib/events/source-occurrence-representation";
 import { buildNormalizedEventVenueIdentity } from "../lib/events/event-venue-identity";
+import { buildUnnamedScheduleFallbackTitle } from "../lib/events/unnamed-schedule-fallback";
 import {
   buildApprovedEventAutoCleanupGroups,
   type ApprovedEventDuplicateRecord,
@@ -2983,19 +2984,40 @@ export function assertEventEvidencePolicyTitleTransitionForTesting(
   event: Doc<"events">,
   item: EventEvidencePolicyReprocessItem,
 ): void {
-  if (item.patch.title === undefined || item.patch.title === event.title) return;
   const currentFields = parseEventEvidencePolicyNormalizedFields(
     event.normalizedFieldsJson ?? "",
   );
   const nextFields = parseEventEvidencePolicyNormalizedFields(
     item.patch.normalizedFieldsJson,
   );
+  const currentUsesFallback =
+    currentFields.titleUsedFallback === true &&
+    currentFields.titleSource === "unnamed_schedule_fallback";
+  const nextUsesFallback =
+    nextFields.titleUsedFallback === true &&
+    nextFields.titleSource === "unnamed_schedule_fallback";
+  const nextTitle = item.patch.title ?? event.title;
+  if (!currentUsesFallback && !nextUsesFallback) {
+    if (nextTitle === event.title) return;
+    throw new Error(
+      `Event-evidence policy replay can change only deterministic unnamed fallback titles: ${item.id}.`,
+    );
+  }
   if (
-    currentFields.titleUsedFallback !== true ||
-    currentFields.titleSource !== "unnamed_schedule_fallback" ||
-    nextFields.titleUsedFallback !== true ||
-    nextFields.titleSource !== "unnamed_schedule_fallback" ||
-    !item.patch.title.trim()
+    !currentUsesFallback ||
+    !nextUsesFallback ||
+    currentFields.fallbackIdentityPolicyVersion !== 1 ||
+    nextFields.fallbackIdentityPolicyVersion !== 1 ||
+    normalizedString(event.title) !== normalizedString(buildUnnamedScheduleFallbackTitle({
+      eventType: event.eventType,
+      venue: event.venue,
+      isoDate: event.date,
+    })) ||
+    normalizedString(nextTitle) !== normalizedString(buildUnnamedScheduleFallbackTitle({
+      eventType: event.eventType,
+      venue: item.patch.venue ?? event.venue,
+      isoDate: event.date,
+    }))
   ) {
     throw new Error(
       `Event-evidence policy replay can change only deterministic unnamed fallback titles: ${item.id}.`,
