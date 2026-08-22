@@ -1214,6 +1214,141 @@ function runSemanticNormalizationQa() {
     assert.equal(second.normalizedFields.identityEvidenceVerified, true);
   });
 
+  runCase("a single-occurrence schedule may bind identity from the same saved post", () => {
+    const date = isoDateDaysFromNow(19);
+    const dateText = ddmmyyyy(date);
+    const sourceLine = `${dateText} | 20h at QA Semantic Venue`;
+    const caption = ["Solo Program", "Featuring Solo Artist", sourceLine].join("\n");
+    const post = makePost({
+      caption,
+      postId: "qa-single-occurrence-separated-identity",
+    });
+    const extracted = makeEventExtraction({
+      artists: ["Solo Artist"],
+      caption,
+      date: "",
+      dateEvidenceText: "",
+      postUrl: post.instagramPostUrl,
+      title: "",
+      date_evidence: {
+        exact_text: "",
+        source: "unknown",
+        is_relative: false,
+        resolved_date: "",
+      },
+      schedule_entries: [
+        {
+          date,
+          time: "20:00",
+          venue: "QA Semantic Venue",
+          title: "Solo Program",
+          artists: ["Solo Artist"],
+          description: "Solo Artist performs Solo Program.",
+          source_text: sourceLine,
+          date_evidence: {
+            exact_text: dateText,
+            source: "caption",
+            is_relative: false,
+            resolved_date: date,
+          },
+          time_evidence: {
+            status: "start_time_stated",
+            exact_text: "20h",
+            source: "caption",
+          },
+        },
+      ],
+      field_confirmation: {
+        ...structuredClone(validExtraction.field_confirmation),
+        title: confirmation("Solo Program"),
+        location: confirmation("QA Semantic Venue"),
+        location_name: confirmation("QA Semantic Venue"),
+        artists: confirmation("Solo Artist"),
+      },
+    });
+    const prepared = assertSingleOk(
+      prepare(post, extracted),
+      "single occurrence separated identity",
+    );
+    assert.equal(prepared.event.status, "approved");
+    assert.equal(prepared.normalizedFields.identityEvidenceVerified, true);
+  });
+
+  runCase("a repeated identical event may bind one post-level identity to every date row", () => {
+    const firstDate = isoDateDaysFromNow(22);
+    const secondDate = isoDateDaysFromNow(23);
+    const firstDateText = ddmmyyyy(firstDate);
+    const secondDateText = ddmmyyyy(secondDate);
+    const caption = [
+      "Repeated Theatre Program",
+      `${firstDateText} and ${secondDateText} at QA Semantic Venue`,
+    ].join("\n");
+    const post = makePost({
+      caption,
+      postId: "qa-repeated-identical-schedule-identity",
+    });
+    const scheduleEntry = (date, dateText) => ({
+      date,
+      time: "",
+      venue: "QA Semantic Venue",
+      title: "Repeated Theatre Program",
+      artists: [],
+      description: "Repeated Theatre Program.",
+      source_text: `${dateText} at QA Semantic Venue`,
+      date_evidence: {
+        exact_text: dateText,
+        source: "caption",
+        is_relative: false,
+        resolved_date: date,
+      },
+      time_evidence: {
+        status: "not_stated",
+        exact_text: "",
+        source: "unknown",
+      },
+    });
+    const extracted = makeEventExtraction({
+      artists: [],
+      caption,
+      date: "",
+      dateEvidenceText: "",
+      postUrl: post.instagramPostUrl,
+      title: "Repeated Theatre Program",
+      date_evidence: {
+        exact_text: "",
+        source: "unknown",
+        is_relative: false,
+        resolved_date: "",
+      },
+      schedule_entries: [
+        scheduleEntry(firstDate, firstDateText),
+        scheduleEntry(secondDate, secondDateText),
+      ],
+      field_confirmation: {
+        ...structuredClone(validExtraction.field_confirmation),
+        title: confirmation("Repeated Theatre Program"),
+        location: confirmation("QA Semantic Venue"),
+        location_name: confirmation("QA Semantic Venue"),
+        artists: confirmation(""),
+      },
+    });
+    const prepared = prepare(post, extracted).filter((result) => result.kind === "ok");
+    assert.equal(prepared.length, 2);
+    assert.ok(
+      prepared.every((result) => result.event.status === "approved"),
+      JSON.stringify(
+        prepared.map((result) => ({
+          status: result.event.status,
+          reasons: result.normalizedFields.moderationPendingReasons,
+          identityEvidenceVerified: result.normalizedFields.identityEvidenceVerified,
+        })),
+      ),
+    );
+    assert.ok(
+      prepared.every((result) => result.normalizedFields.identityEvidenceVerified === true),
+    );
+  });
+
   runCase("fresh source-bound unnamed rows may use only the deterministic fallback title", () => {
     const date = isoDateDaysFromNow(18);
     const dateText = ddmmyyyy(date);

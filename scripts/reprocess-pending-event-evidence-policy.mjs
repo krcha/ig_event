@@ -219,7 +219,6 @@ function buildPreimageManifest(targets) {
 }
 
 const STABLE_PUBLIC_FIELDS = [
-  "title",
   "date",
   "time",
   "timeSource",
@@ -243,13 +242,26 @@ const MUTABLE_POLICY_PUBLIC_FIELDS = [
   "artists",
   "dateEvidenceResolvedDate",
   "sourceConflictFields",
+  "title",
   "venue",
 ];
 
-function buildForwardPatch(existing, prepared) {
+export function buildForwardPatch(existing, prepared) {
+  const existingNormalized = parseRecord(existing.normalizedFieldsJson);
+  const preparedNormalized = parseRecord(prepared.normalizedFieldsJson);
+  const titleChanged = !valuesEqual(existing.title, prepared.title);
+  const guardedFallbackTitleChange =
+    titleChanged &&
+    existingNormalized.titleUsedFallback === true &&
+    existingNormalized.titleSource === "unnamed_schedule_fallback" &&
+    preparedNormalized.titleUsedFallback === true &&
+    preparedNormalized.titleSource === "unnamed_schedule_fallback";
   const unsupportedPublicChanges = STABLE_PUBLIC_FIELDS.filter(
     (field) => !valuesEqual(existing[field], prepared[field]),
   );
+  if (titleChanged && !guardedFallbackTitleChange) {
+    unsupportedPublicChanges.push("title");
+  }
   if (unsupportedPublicChanges.length > 0) {
     return { unsupportedPublicChanges, patch: null, changedPublicFields: [] };
   }
@@ -264,6 +276,7 @@ function buildForwardPatch(existing, prepared) {
     dateEvidenceIsRelative: prepared.dateEvidenceIsRelative,
     dateEvidenceResolvedDate: prepared.dateEvidenceResolvedDate,
     sourceConflictFields: prepared.sourceConflictFields,
+    ...(changedPublicFields.includes("title") ? { title: prepared.title } : {}),
     ...(changedPublicFields.includes("venue") ? { venue: prepared.venue } : {}),
     ...(changedPublicFields.includes("artists") ? { artists: prepared.artists } : {}),
   };
@@ -279,6 +292,7 @@ function buildRollbackPatch(existing, changedPublicFields) {
     dateEvidenceIsRelative: existing.dateEvidenceIsRelative,
     dateEvidenceResolvedDate: existing.dateEvidenceResolvedDate,
     sourceConflictFields: existing.sourceConflictFields ?? [],
+    ...(changedPublicFields.includes("title") ? { title: existing.title } : {}),
     ...(changedPublicFields.includes("venue") ? { venue: existing.venue } : {}),
     ...(changedPublicFields.includes("artists") ? { artists: existing.artists } : {}),
   };

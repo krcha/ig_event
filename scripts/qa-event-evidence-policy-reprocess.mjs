@@ -3,10 +3,15 @@ import { readFileSync } from "node:fs";
 
 import {
   assertEventEvidencePolicyDateEvidenceTransitionForTesting,
+  assertEventEvidencePolicyTitleTransitionForTesting,
   reprocessPendingEventEvidencePolicyBatch,
   rollbackEventEvidencePolicyBatch,
 } from "../convex/events.ts";
-import { rollbackAppliedGroups } from "./reprocess-pending-event-evidence-policy.mjs";
+import { buildUnnamedScheduleFallbackTitle } from "../lib/events/unnamed-schedule-fallback.ts";
+import {
+  buildForwardPatch,
+  rollbackAppliedGroups,
+} from "./reprocess-pending-event-evidence-policy.mjs";
 
 const SERVICE_SECRET = "qa-event-evidence-policy-secret";
 const ADMIN_SUBJECT = "qa-event-evidence-policy-admin";
@@ -515,6 +520,61 @@ for (const patch of [
   );
 }
 
+const fallbackTitleEvent = {
+  _id: "event-fallback-title-correction",
+  title: "Sunday Night at Promoter Account",
+  normalizedFieldsJson: JSON.stringify({
+    title: "Sunday Night at Promoter Account",
+    titleUsedFallback: true,
+    titleSource: "unnamed_schedule_fallback",
+  }),
+};
+assert.doesNotThrow(() =>
+  assertEventEvidencePolicyTitleTransitionForTesting(fallbackTitleEvent, {
+    id: fallbackTitleEvent._id,
+    expectedUpdatedAt: 1,
+    expectedNormalizedFieldsJson: fallbackTitleEvent.normalizedFieldsJson,
+    patch: {
+      title: "Sunday Night at Physical Venue",
+      normalizedFieldsJson: JSON.stringify({
+        title: "Sunday Night at Physical Venue",
+        titleUsedFallback: true,
+        titleSource: "unnamed_schedule_fallback",
+      }),
+    },
+  }),
+);
+for (const [currentTitleUsedFallback, nextTitleUsedFallback] of [
+  [false, true],
+  [true, false],
+]) {
+  const event = {
+    ...fallbackTitleEvent,
+    normalizedFieldsJson: JSON.stringify({
+      title: fallbackTitleEvent.title,
+      titleUsedFallback: currentTitleUsedFallback,
+      titleSource: currentTitleUsedFallback ? "unnamed_schedule_fallback" : "model",
+    }),
+  };
+  assert.throws(
+    () =>
+      assertEventEvidencePolicyTitleTransitionForTesting(event, {
+        id: event._id,
+        expectedUpdatedAt: 1,
+        expectedNormalizedFieldsJson: event.normalizedFieldsJson,
+        patch: {
+          title: "Forged Headliner",
+          normalizedFieldsJson: JSON.stringify({
+            title: "Forged Headliner",
+            titleUsedFallback: nextTitleUsedFallback,
+            titleSource: nextTitleUsedFallback ? "unnamed_schedule_fallback" : "model",
+          }),
+        },
+      }),
+    /only deterministic unnamed fallback titles/i,
+  );
+}
+
 try {
   const serviceOnly = createTransactionalHarness();
   const serviceOnlyBefore = serviceOnly.snapshot();
@@ -614,6 +674,186 @@ try {
     /event precondition failed/i,
   );
   assert.deepEqual(wrongStatus.snapshot(), wrongStatusBefore);
+
+  const namedTitleChange = createTransactionalHarness();
+  const namedTitleBefore = namedTitleChange.snapshot();
+  const namedTitleArgs = applyArgs(namedTitleBefore);
+  namedTitleArgs.items[0].patch.title = "Forged Named Event";
+  const namedTitleNormalized = JSON.parse(
+    namedTitleArgs.items[0].patch.normalizedFieldsJson,
+  );
+  namedTitleNormalized.title = "Forged Named Event";
+  namedTitleArgs.items[0].patch.normalizedFieldsJson = JSON.stringify(
+    namedTitleNormalized,
+  );
+  await assert.rejects(
+    () =>
+      namedTitleChange.run(
+        reprocessPendingEventEvidencePolicyBatch,
+        namedTitleArgs,
+      ),
+    /only deterministic unnamed fallback titles/i,
+  );
+  assert.deepEqual(namedTitleChange.snapshot(), namedTitleBefore);
+
+  const forgedFallbackFixture = readyFixture();
+  const forgedFallbackTarget = forgedFallbackFixture.events.find(
+    (event) => event._id === TARGET_ID,
+  );
+  const forgedFallbackSourceLine =
+    `${EVENT_DATE} at 20:00 at QA Physical Hall`;
+  const forgedFallbackRawExtraction = JSON.stringify({
+    extraction_contract_version: "event_evidence_v2",
+    source_conflicts: [benignVenueConflict],
+    schedule_entries: [
+      {
+        date: EVENT_DATE,
+        time: EVENT_TIME,
+        venue: "QA Physical Hall",
+        title: "",
+        artists: [],
+        source_text: forgedFallbackSourceLine,
+        date_evidence: {
+          exact_text: EVENT_DATE,
+          source: "caption",
+          is_relative: false,
+          resolved_date: EVENT_DATE,
+        },
+      },
+    ],
+  });
+  forgedFallbackTarget.title = "Sunday Night at QA Promoter";
+  forgedFallbackTarget.artists = [];
+  forgedFallbackTarget.eventType = "nightlife";
+  forgedFallbackTarget.rawExtractionJson = forgedFallbackRawExtraction;
+  const forgedFallbackCurrentFields = JSON.parse(
+    oldNormalizedFields({
+      title: forgedFallbackTarget.title,
+      venue: forgedFallbackTarget.venue,
+      artists: [],
+      sourceOccurrenceKey: TARGET_KEY,
+    }),
+  );
+  forgedFallbackCurrentFields.titleUsedFallback = true;
+  forgedFallbackCurrentFields.titleSource = "unnamed_schedule_fallback";
+  forgedFallbackTarget.normalizedFieldsJson = JSON.stringify(
+    forgedFallbackCurrentFields,
+  );
+  forgedFallbackFixture.instagramSourceOccurrenceReceipts[0].expectedOccurrences =
+    forgedFallbackFixture.instagramSourceOccurrenceReceipts[0].expectedOccurrences.map(
+      (occurrence) =>
+        occurrence.key === TARGET_KEY
+          ? expectedOccurrence(forgedFallbackTarget)
+          : occurrence,
+    );
+  forgedFallbackFixture.scrapedPosts[0].analysisResultJson =
+    forgedFallbackRawExtraction;
+  const forgedFallback = createTransactionalHarness(forgedFallbackFixture);
+  const forgedFallbackBefore = forgedFallback.snapshot();
+  const forgedFallbackArgs = applyArgs(forgedFallbackBefore);
+  const forgedFallbackApprovedFields = JSON.parse(
+    approvedNormalizedFields({
+      title: "Forged Headliner",
+      venue: "QA Physical Hall",
+      artists: [],
+      sourceOccurrenceKey: TARGET_KEY,
+    }),
+  );
+  Object.assign(forgedFallbackApprovedFields, {
+    titleUsedFallback: true,
+    titleSource: "unnamed_schedule_fallback",
+    fallbackIdentityPolicyVersion: 1,
+    splitSourceLine: forgedFallbackSourceLine,
+    rowSourceText: forgedFallbackSourceLine,
+  });
+  Object.assign(forgedFallbackArgs.items[0].patch, {
+    title: "Forged Headliner",
+    artists: [],
+    normalizedFieldsJson: JSON.stringify(forgedFallbackApprovedFields),
+  });
+  await assert.rejects(
+    () =>
+      forgedFallback.run(
+        reprocessPendingEventEvidencePolicyBatch,
+        forgedFallbackArgs,
+      ),
+    /approv|source-ground/i,
+  );
+  assert.deepEqual(forgedFallback.snapshot(), forgedFallbackBefore);
+
+  const validFallback = createTransactionalHarness(
+    structuredClone(forgedFallbackFixture),
+  );
+  const validFallbackBefore = validFallback.snapshot();
+  const validFallbackOriginalTarget = validFallbackBefore.events.find(
+    (event) => event._id === TARGET_ID,
+  );
+  const validFallbackTitle = buildUnnamedScheduleFallbackTitle({
+    eventType: validFallbackOriginalTarget.eventType,
+    venue: "QA Physical Hall",
+    isoDate: validFallbackOriginalTarget.date,
+  });
+  const validFallbackArgs = applyArgs(validFallbackBefore);
+  const validFallbackApprovedFields = JSON.parse(
+    approvedNormalizedFields({
+      title: validFallbackTitle,
+      venue: "QA Physical Hall",
+      artists: [],
+      sourceOccurrenceKey: TARGET_KEY,
+    }),
+  );
+  Object.assign(validFallbackApprovedFields, {
+    titleUsedFallback: true,
+    titleSource: "unnamed_schedule_fallback",
+    fallbackIdentityPolicyVersion: 1,
+    splitSourceLine: forgedFallbackSourceLine,
+    rowSourceText: forgedFallbackSourceLine,
+  });
+  Object.assign(validFallbackArgs.items[0].patch, {
+    title: validFallbackTitle,
+    artists: [],
+    normalizedFieldsJson: JSON.stringify(validFallbackApprovedFields),
+  });
+  const validFallbackApplied = await validFallback.run(
+    reprocessPendingEventEvidencePolicyBatch,
+    validFallbackArgs,
+  );
+  const validFallbackAfterApply = validFallback.snapshot();
+  const validFallbackAppliedTarget = validFallbackAfterApply.events.find(
+    (event) => event._id === TARGET_ID,
+  );
+  const validFallbackAppliedReceipt =
+    validFallbackAfterApply.instagramSourceOccurrenceReceipts[0];
+  assert.equal(validFallbackAppliedTarget.title, validFallbackTitle);
+  assert.equal(
+    validFallbackAppliedReceipt.expectedOccurrences.find(
+      (occurrence) => occurrence.key === TARGET_KEY,
+    ).title,
+    validFallbackTitle,
+  );
+  const validFallbackRollbackArgs = rollbackArgs(
+    validFallbackAfterApply,
+    validFallbackOriginalTarget,
+  );
+  validFallbackRollbackArgs.items[0].patch.title =
+    validFallbackOriginalTarget.title;
+  const validFallbackRolledBack = await validFallback.run(
+    rollbackEventEvidencePolicyBatch,
+    validFallbackRollbackArgs,
+  );
+  assert.equal(validFallbackApplied.updatedCount, 1);
+  assert.equal(validFallbackRolledBack.updatedCount, 1);
+  const validFallbackAfterRollback = validFallback.snapshot();
+  assert.equal(
+    validFallbackAfterRollback.events.find((event) => event._id === TARGET_ID).title,
+    validFallbackOriginalTarget.title,
+  );
+  assert.equal(
+    validFallbackAfterRollback.instagramSourceOccurrenceReceipts[0].expectedOccurrences.find(
+      (occurrence) => occurrence.key === TARGET_KEY,
+    ).title,
+    validFallbackOriginalTarget.title,
+  );
 
   for (const mutateFixture of [
     (fixture) => {
@@ -994,6 +1234,44 @@ assert.throws(
   /either --apply or --rollback-manifest/i,
 );
 assert.throws(() => parseArgs(["--unknown"]), /unknown argument/i);
+
+const fallbackForwardPatch = buildForwardPatch(
+  {
+    title: "Sunday Night at Promoter Account",
+    normalizedFieldsJson: JSON.stringify({
+      titleUsedFallback: true,
+      titleSource: "unnamed_schedule_fallback",
+    }),
+  },
+  {
+    title: "Sunday Night at Physical Venue",
+    normalizedFieldsJson: JSON.stringify({
+      titleUsedFallback: true,
+      titleSource: "unnamed_schedule_fallback",
+    }),
+  },
+);
+assert.deepEqual(fallbackForwardPatch.unsupportedPublicChanges, []);
+assert.equal(fallbackForwardPatch.patch.title, "Sunday Night at Physical Venue");
+assert.deepEqual(fallbackForwardPatch.changedPublicFields, ["title"]);
+const namedForwardPatch = buildForwardPatch(
+  {
+    title: "Named Event",
+    normalizedFieldsJson: JSON.stringify({
+      titleUsedFallback: false,
+      titleSource: "model",
+    }),
+  },
+  {
+    title: "Different Named Event",
+    normalizedFieldsJson: JSON.stringify({
+      titleUsedFallback: false,
+      titleSource: "model",
+    }),
+  },
+);
+assert.deepEqual(namedForwardPatch.unsupportedPublicChanges, ["title"]);
+assert.equal(namedForwardPatch.patch, null);
 
 const dryRunGate = runnerSource.indexOf("if (!options.apply)");
 const applyAdmission = runnerSource.indexOf("Apply admission failed");

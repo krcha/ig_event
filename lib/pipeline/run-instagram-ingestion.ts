@@ -8843,6 +8843,7 @@ function isVerifiedEventIdentityEvidence(options: {
   titleUsedFallback: boolean;
   venue: string;
   splitSourceLine: string | null;
+  singleOccurrenceSource: boolean;
   splitEvidenceSource: EventDateEvidenceSource;
   post: InstagramScrapedPost;
   hasPoster: boolean;
@@ -8865,15 +8866,34 @@ function isVerifiedEventIdentityEvidence(options: {
   const titleSnippets = options.extracted.field_confirmation.title.evidence_snippets;
   const artistConfirmation = options.extracted.field_confirmation.artists;
   const artistSnippets = artistConfirmation.evidence_snippets;
+  const expectedScheduleArtists = options.artists.map((artist) => toSearchableText(artist));
+  const scheduleIdentityAppliesToEveryRow =
+    options.extracted.schedule_entries.length > 1 &&
+    options.extracted.schedule_entries.every((entry) => {
+      const entryArtists = normalizeExtractedArtists(entry.artists).map((artist) =>
+        toSearchableText(normalizeArtistDisplayName(artist)),
+      );
+      return (
+        toSearchableText(entry.title) === toSearchableText(options.title) &&
+        entryArtists.length === expectedScheduleArtists.length &&
+        entryArtists.every(
+          (artist, index) => artist === expectedScheduleArtists[index],
+        )
+      );
+    });
+  const mayUsePostLevelIdentityEvidence =
+    !options.splitSourceLine ||
+    options.singleOccurrenceSource ||
+    scheduleIdentityAppliesToEveryRow;
   const boundEvidence = [
     ...(options.splitSourceLine &&
     isBoundEvidence(options.splitSourceLine, options.splitEvidenceSource)
       ? [{ text: options.splitSourceLine, source: options.splitEvidenceSource }]
       : []),
-    ...(!options.splitSourceLine
+    ...(mayUsePostLevelIdentityEvidence
       ? titleSnippets.filter((snippet) => isBoundEvidence(snippet.text, snippet.source))
       : []),
-    ...(!options.splitSourceLine
+    ...(mayUsePostLevelIdentityEvidence
       ? artistSnippets.filter((snippet) => isBoundEvidence(snippet.text, snippet.source))
       : []),
   ];
@@ -8903,7 +8923,7 @@ function isVerifiedEventIdentityEvidence(options: {
   const boundTitleEvidence = boundEvidence.some((snippet) => supportsTitle(snippet.text));
   if (!boundTitleEvidence) return false;
   const artistConfirmationConfidence = normalizeConfidenceScore(artistConfirmation.confidence);
-  const supplementalArtistEvidence = options.splitSourceLine ? [] : [
+  const supplementalArtistEvidence = mayUsePostLevelIdentityEvidence ? [
     ...(artistConfirmationConfidence !== null &&
     artistConfirmationConfidence >= 0.7 &&
     artistConfirmation.found_in.some((source) => source.toLowerCase() === "caption") &&
@@ -8916,7 +8936,7 @@ function isVerifiedEventIdentityEvidence(options: {
     normalizeString(options.post.altText)
       ? [normalizeString(options.post.altText)]
       : []),
-  ];
+  ] : [];
   return options.artists.every((artist) =>
     boundEvidence.some((snippet) => artistIdentityAppearsInText(snippet.text, artist)) ||
     supplementalArtistEvidence.some((text) => artistIdentityAppearsInText(text, artist)),
@@ -9725,6 +9745,7 @@ export function prepareEventsForInsert(
       titleUsedFallback: variant.titleUsedFallback,
       venue: variant.venue,
       splitSourceLine: variant.splitSourceLine,
+      singleOccurrenceSource: eventVariants.length === 1,
       splitEvidenceSource: variant.dateEvidence.source,
       post,
       hasPoster: hasPosterEvidence,

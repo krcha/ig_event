@@ -168,6 +168,7 @@ const eventEvidencePolicyPatch = v.object({
   normalizedFieldsJson: v.string(),
   sourceConflictFields: v.array(v.string()),
   status: eventStatus,
+  title: v.optional(v.string()),
   venue: v.optional(v.string()),
 });
 const eventEvidencePolicyReprocessItem = v.object({
@@ -2978,6 +2979,30 @@ function assertEventEvidencePolicyReprocessPatch(
   }
 }
 
+export function assertEventEvidencePolicyTitleTransitionForTesting(
+  event: Doc<"events">,
+  item: EventEvidencePolicyReprocessItem,
+): void {
+  if (item.patch.title === undefined || item.patch.title === event.title) return;
+  const currentFields = parseEventEvidencePolicyNormalizedFields(
+    event.normalizedFieldsJson ?? "",
+  );
+  const nextFields = parseEventEvidencePolicyNormalizedFields(
+    item.patch.normalizedFieldsJson,
+  );
+  if (
+    currentFields.titleUsedFallback !== true ||
+    currentFields.titleSource !== "unnamed_schedule_fallback" ||
+    nextFields.titleUsedFallback !== true ||
+    nextFields.titleSource !== "unnamed_schedule_fallback" ||
+    !item.patch.title.trim()
+  ) {
+    throw new Error(
+      `Event-evidence policy replay can change only deterministic unnamed fallback titles: ${item.id}.`,
+    );
+  }
+}
+
 function parseEventEvidencePolicyNormalizedFields(value: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -3285,6 +3310,7 @@ async function applyEventEvidencePolicyTransition(
       throw new Error(`Event-evidence policy replay occurrence precondition failed: ${item.id}.`);
     }
     assertEventEvidencePolicyDateEvidenceTransition(event, item);
+    assertEventEvidencePolicyTitleTransitionForTesting(event, item);
     assertEventEvidencePolicyNormalizedBinding({
       normalizedFieldsJson: event.normalizedFieldsJson ?? "",
       occurrenceKey: sourceLink.sourceOccurrenceKey,
@@ -3303,6 +3329,7 @@ async function applyEventEvidencePolicyTransition(
         dateEvidenceSource: item.patch.dateEvidenceSource,
         dateEvidenceText: item.patch.dateEvidenceText,
         sourceConflictFields: item.patch.sourceConflictFields,
+        title: item.patch.title ?? event.title,
         venue: item.patch.venue ?? event.venue,
       },
     });
