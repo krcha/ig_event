@@ -10,6 +10,7 @@ import {
 import { buildUnnamedScheduleFallbackTitle } from "../lib/events/unnamed-schedule-fallback.ts";
 import {
   buildForwardPatch,
+  classifyApprovedOccurrenceBlockersForTesting,
   rollbackAppliedGroups,
 } from "./reprocess-pending-event-evidence-policy.mjs";
 
@@ -564,6 +565,173 @@ assert.doesNotThrow(() =>
     },
   }),
 );
+
+const legacyFallbackDate = "2026-08-23";
+const legacyGalleryTitle = buildUnnamedScheduleFallbackTitle({
+  eventType: "arts & culture",
+  venue: "Gradska galerija",
+  isoDate: legacyFallbackDate,
+});
+const legacyGalleryRow = "Exhibition opening on 23 August at 8 PM";
+const legacyGalleryFields = {
+  title: legacyGalleryTitle,
+  titleUsedFallback: true,
+  titleSource: "unnamed_schedule_fallback",
+  sourceGroundingInstagramHandle: "gradska_galerija",
+  rowSourceText: legacyGalleryRow,
+};
+const galleryV1Fields = {
+  ...legacyGalleryFields,
+  title: "Sunday Program",
+  fallbackIdentityPolicyVersion: 1,
+  sourceAccountName: "Gradska galerija",
+};
+const legacyGalleryEvent = {
+  _id: "event-legacy-gallery-title",
+  title: legacyGalleryTitle,
+  date: legacyFallbackDate,
+  eventType: "arts & culture",
+  venue: "",
+  rawExtractionJson: JSON.stringify({
+    schedule_entries: [
+      {
+        venue: "Gradska galerija",
+        source_text: legacyGalleryRow,
+      },
+    ],
+  }),
+  normalizedFieldsJson: JSON.stringify(legacyGalleryFields),
+};
+const legacyGalleryApplyItem = {
+  id: legacyGalleryEvent._id,
+  expectedUpdatedAt: 1,
+  expectedNormalizedFieldsJson: legacyGalleryEvent.normalizedFieldsJson,
+  patch: {
+    title: "Sunday Program",
+    normalizedFieldsJson: JSON.stringify(galleryV1Fields),
+  },
+};
+assert.doesNotThrow(() =>
+  assertEventEvidencePolicyTitleTransitionForTesting(
+    legacyGalleryEvent,
+    legacyGalleryApplyItem,
+  ),
+  "A source-row-bound legacy fallback title must migrate to the exact v1 title.",
+);
+assert.doesNotThrow(() =>
+  assertEventEvidencePolicyTitleTransitionForTesting(
+    {
+      ...legacyGalleryEvent,
+      title: "Sunday Program",
+      normalizedFieldsJson: JSON.stringify(galleryV1Fields),
+    },
+    {
+      ...legacyGalleryApplyItem,
+      expectedNormalizedFieldsJson: JSON.stringify(galleryV1Fields),
+      patch: {
+        title: legacyGalleryTitle,
+        normalizedFieldsJson: JSON.stringify(legacyGalleryFields),
+      },
+    },
+  ),
+  "The exact legacy fallback preimage must remain rollback-safe.",
+);
+
+const legacyAccountTitle = buildUnnamedScheduleFallbackTitle({
+  eventType: "nightlife",
+  venue: "Beogradski Matine",
+  isoDate: legacyFallbackDate,
+});
+const legacyAccountFields = {
+  title: legacyAccountTitle,
+  titleUsedFallback: true,
+  titleSource: "unnamed_schedule_fallback",
+  sourceGroundingInstagramHandle: "beogradskimatine",
+  rowSourceText: "BIGZ 011 — od 19h",
+};
+const accountV1Title = buildUnnamedScheduleFallbackTitle({
+  eventType: "nightlife",
+  venue: "BIGZ 011",
+  isoDate: legacyFallbackDate,
+});
+const accountV1Fields = {
+  ...legacyAccountFields,
+  title: accountV1Title,
+  fallbackIdentityPolicyVersion: 1,
+  sourceAccountName: "Beogradski Matine",
+};
+const legacyAccountEvent = {
+  _id: "event-legacy-account-title",
+  title: legacyAccountTitle,
+  date: legacyFallbackDate,
+  eventType: "nightlife",
+  venue: "BIGZ 011",
+  rawExtractionJson: JSON.stringify({
+    schedule_entries: [
+      { venue: "BIGZ 011", source_text: "BIGZ 011 — od 19h" },
+      { venue: "Other Hall", source_text: "Other Hall — od 20h" },
+    ],
+  }),
+  normalizedFieldsJson: JSON.stringify(legacyAccountFields),
+};
+const legacyAccountApplyItem = {
+  id: legacyAccountEvent._id,
+  expectedUpdatedAt: 1,
+  expectedNormalizedFieldsJson: legacyAccountEvent.normalizedFieldsJson,
+  patch: {
+    title: accountV1Title,
+    normalizedFieldsJson: JSON.stringify(accountV1Fields),
+  },
+};
+assert.doesNotThrow(() =>
+  assertEventEvidencePolicyTitleTransitionForTesting(
+    legacyAccountEvent,
+    legacyAccountApplyItem,
+  ),
+  "A legacy account-derived title may migrate only through the exact handle-bound account name.",
+);
+for (const malformedItem of [
+  {
+    ...legacyAccountApplyItem,
+    patch: {
+      ...legacyAccountApplyItem.patch,
+      title: "Sunday Night at Forged Promoter",
+      normalizedFieldsJson: JSON.stringify({
+        ...accountV1Fields,
+        title: "Sunday Night at Forged Promoter",
+      }),
+    },
+  },
+  {
+    ...legacyAccountApplyItem,
+    patch: {
+      ...legacyAccountApplyItem.patch,
+      normalizedFieldsJson: JSON.stringify({
+        ...accountV1Fields,
+        fallbackIdentityPolicyVersion: 2,
+      }),
+    },
+  },
+  {
+    ...legacyAccountApplyItem,
+    patch: {
+      ...legacyAccountApplyItem.patch,
+      normalizedFieldsJson: JSON.stringify({
+        ...accountV1Fields,
+        fallbackIdentityPolicyVersion: undefined,
+      }),
+    },
+  },
+]) {
+  assert.throws(
+    () =>
+      assertEventEvidencePolicyTitleTransitionForTesting(
+        legacyAccountEvent,
+        malformedItem,
+      ),
+    /only deterministic unnamed fallback titles/i,
+  );
+}
 for (const [currentTitleUsedFallback, nextTitleUsedFallback] of [
   [false, true],
   [true, false],
@@ -901,6 +1069,118 @@ try {
       (occurrence) => occurrence.key === TARGET_KEY,
     ).title,
     validFallbackOriginalTarget.title,
+  );
+
+  const legacyMigrationFixture = structuredClone(forgedFallbackFixture);
+  const legacyMigrationTarget = legacyMigrationFixture.events.find(
+    (event) => event._id === TARGET_ID,
+  );
+  const legacyMigrationTitle = buildUnnamedScheduleFallbackTitle({
+    eventType: legacyMigrationTarget.eventType,
+    venue: "QA Promoter",
+    isoDate: legacyMigrationTarget.date,
+  });
+  legacyMigrationTarget.title = legacyMigrationTitle;
+  legacyMigrationTarget.venue = "";
+  legacyMigrationTarget.sourceConflictFields = [];
+  const legacyMigrationFields = JSON.parse(
+    oldNormalizedFields({
+      title: legacyMigrationTitle,
+      venue: "",
+      artists: [],
+      sourceOccurrenceKey: TARGET_KEY,
+    }),
+  );
+  Object.assign(legacyMigrationFields, {
+    titleUsedFallback: true,
+    titleSource: "unnamed_schedule_fallback",
+    rowSourceText: forgedFallbackSourceLine,
+  });
+  delete legacyMigrationFields.fallbackIdentityPolicyVersion;
+  delete legacyMigrationFields.sourceAccountName;
+  legacyMigrationTarget.normalizedFieldsJson = JSON.stringify(
+    legacyMigrationFields,
+  );
+  legacyMigrationFixture.instagramSourceOccurrenceReceipts[0].expectedOccurrences =
+    legacyMigrationFixture.instagramSourceOccurrenceReceipts[0].expectedOccurrences.map(
+      (occurrence) =>
+        occurrence.key === TARGET_KEY
+          ? expectedOccurrence(legacyMigrationTarget)
+          : occurrence,
+    );
+  const legacyMigration = createTransactionalHarness(legacyMigrationFixture);
+  const legacyMigrationBefore = legacyMigration.snapshot();
+  const legacyMigrationArgs = applyArgs(legacyMigrationBefore);
+  const legacyMigrationV1Title = buildUnnamedScheduleFallbackTitle({
+    eventType: legacyMigrationTarget.eventType,
+    venue: "QA Physical Hall",
+    isoDate: legacyMigrationTarget.date,
+  });
+  const legacyMigrationV1Fields = JSON.parse(
+    approvedNormalizedFields({
+      title: legacyMigrationV1Title,
+      venue: "QA Physical Hall",
+      artists: [],
+      sourceOccurrenceKey: TARGET_KEY,
+    }),
+  );
+  Object.assign(legacyMigrationV1Fields, {
+    titleUsedFallback: true,
+    titleSource: "unnamed_schedule_fallback",
+    fallbackIdentityPolicyVersion: 1,
+    splitSourceLine: forgedFallbackSourceLine,
+    rowSourceText: forgedFallbackSourceLine,
+  });
+  Object.assign(legacyMigrationArgs.items[0].patch, {
+    title: legacyMigrationV1Title,
+    venue: "QA Physical Hall",
+    artists: [],
+    normalizedFieldsJson: JSON.stringify(legacyMigrationV1Fields),
+  });
+  const legacyMigrationApplied = await legacyMigration.run(
+    reprocessPendingEventEvidencePolicyBatch,
+    legacyMigrationArgs,
+  );
+  assert.equal(legacyMigrationApplied.updatedCount, 1);
+  const legacyMigrationAfterApply = legacyMigration.snapshot();
+  assert.equal(
+    legacyMigrationAfterApply.events.find((event) => event._id === TARGET_ID).title,
+    legacyMigrationV1Title,
+  );
+  const forgedLegacyRollbackArgs = rollbackArgs(
+    legacyMigrationAfterApply,
+    legacyMigrationTarget,
+  );
+  forgedLegacyRollbackArgs.items[0].patch.title = "Sunday Night at Forged Promoter";
+  const forgedLegacyRollbackFields = JSON.parse(
+    forgedLegacyRollbackArgs.items[0].patch.normalizedFieldsJson,
+  );
+  forgedLegacyRollbackFields.title = "Sunday Night at Forged Promoter";
+  forgedLegacyRollbackArgs.items[0].patch.normalizedFieldsJson = JSON.stringify(
+    forgedLegacyRollbackFields,
+  );
+  await assert.rejects(
+    () =>
+      legacyMigration.run(
+        rollbackEventEvidencePolicyBatch,
+        forgedLegacyRollbackArgs,
+      ),
+    /deterministic unnamed fallback/i,
+  );
+  assert.deepEqual(legacyMigration.snapshot(), legacyMigrationAfterApply);
+  const legacyMigrationRollbackArgs = rollbackArgs(
+    legacyMigrationAfterApply,
+    legacyMigrationTarget,
+  );
+  legacyMigrationRollbackArgs.items[0].patch.title = legacyMigrationTitle;
+  const legacyMigrationRolledBack = await legacyMigration.run(
+    rollbackEventEvidencePolicyBatch,
+    legacyMigrationRollbackArgs,
+  );
+  assert.equal(legacyMigrationRolledBack.updatedCount, 1);
+  assert.equal(
+    legacyMigration.snapshot().events.find((event) => event._id === TARGET_ID).title,
+    legacyMigrationTitle,
   );
 
   for (const mutateFixture of [
@@ -1320,6 +1600,84 @@ const namedForwardPatch = buildForwardPatch(
 );
 assert.deepEqual(namedForwardPatch.unsupportedPublicChanges, ["title"]);
 assert.equal(namedForwardPatch.patch, null);
+
+const ambiguousExistingApproval = {
+  _id: "approved-ja-ema",
+  status: "approved",
+  title: "Ja, Ema – Ljubavni život Eme Bovari",
+  date: "2026-09-29",
+  time: "TBD",
+  venue: "Opera & Theater Madlenianum",
+  artists: ["Tatjana Mandić Rigonat"],
+  instagramPostId: "older-ja-ema-post",
+  instagramPostUrl: "https://www.instagram.com/p/older-ja-ema-post/",
+};
+assert.deepEqual(
+  classifyApprovedOccurrenceBlockersForTesting(
+    {
+      _id: "pending-ja-ema",
+      status: "pending",
+      title: "„JA, EMA – Ljubavni život Eme Bovari",
+      date: "2026-09-29",
+      time: "TBD",
+      venue: "",
+      artists: [],
+      instagramPostId: "newer-ja-ema-post",
+      instagramPostUrl: "https://www.instagram.com/p/newer-ja-ema-post/",
+    },
+    [ambiguousExistingApproval],
+  ).map(({ relation, approvedEventId }) => ({ relation, approvedEventId })),
+  [{ relation: "ambiguous", approvedEventId: "approved-ja-ema" }],
+  "The replay preflight must keep a same-day unknown-venue collision out of the apply batch.",
+);
+
+const duplicateExistingApproval = {
+  _id: "approved-kavez",
+  status: "approved",
+  title: "Кавез за птице",
+  date: "2026-08-22",
+  time: "20:30",
+  venue: "Beogradsko dramsko pozoriste",
+  artists: ["Кавез за птице"],
+  instagramPostId: "older-kavez-post",
+  instagramPostUrl: "https://www.instagram.com/p/older-kavez-post/",
+};
+assert.deepEqual(
+  classifyApprovedOccurrenceBlockersForTesting(
+    {
+      _id: "pending-kavez",
+      status: "pending",
+      title: "KAVEZ ZA PTICE",
+      date: "2026-08-22",
+      time: "20:30",
+      venue: "",
+      artists: [],
+      instagramPostId: "newer-kavez-post",
+      instagramPostUrl: "https://www.instagram.com/p/newer-kavez-post/",
+    },
+    [duplicateExistingApproval],
+  ).map(({ relation, approvedEventId }) => ({ relation, approvedEventId })),
+  [{ relation: "proven_duplicate", approvedEventId: "approved-kavez" }],
+  "The replay preflight must not create a second public copy of an already-approved occurrence.",
+);
+assert.deepEqual(
+  classifyApprovedOccurrenceBlockersForTesting(
+    {
+      _id: "different-time",
+      status: "pending",
+      title: "Кавез за птице",
+      date: "2026-08-22",
+      time: "22:30",
+      venue: "Beogradsko dramsko pozoriste",
+      artists: [],
+      instagramPostId: "different-time-post",
+      instagramPostUrl: "https://www.instagram.com/p/different-time-post/",
+    },
+    [duplicateExistingApproval],
+  ),
+  [],
+  "A reliably different start time must remain eligible as a distinct occurrence.",
+);
 
 const dryRunGate = runnerSource.indexOf("if (!options.apply)");
 const applyAdmission = runnerSource.indexOf("Apply admission failed");

@@ -9615,10 +9615,38 @@ export function prepareEventsForInsert(
           rowVenue &&
             venueValueAppearsInEventEvidence(rowVenue, entry.sourceLine),
         );
+        const canonicalRowVenue = rowVenue
+          ? canonicalizeVenueName(rowVenue, canonicalVenueNamesByHandle) ?? rowVenue
+          : "";
+        const singleOccurrencePostVenueGrounded = Boolean(
+          splitEventCandidates.length === 1 &&
+            rowVenue &&
+            venueValueAppearsInEventEvidence(
+              rowVenue,
+              independentPostTextEvidence,
+            ),
+        );
+        const trustedSingleOccurrenceVenueGrounded = Boolean(
+          trustedVenueSource &&
+            splitEventCandidates.length === 1 &&
+            canonicalRowVenue &&
+            normalizeString(canonicalRowVenue) === normalizeString(normalizedVenue) &&
+            (
+              venueValueAppearsInEventEvidence(
+                configuredVenueName,
+                independentPostTextEvidence,
+              ) ||
+              venueValueAppearsInEventEvidence(
+                normalizedSourceHandle,
+                independentPostTextEvidence,
+              )
+            ),
+        );
         const variantVenueRaw = usesStructuredEvidence
-          ? rowVenueGrounded
+          ? rowVenueGrounded || singleOccurrencePostVenueGrounded
             ? rowVenue
-            : sharedVenueValue
+            : sharedVenueValue ||
+              (trustedSingleOccurrenceVenueGrounded ? normalizedVenue : "")
           : normalizedVenue;
         const variantVenue = variantVenueRaw
           ? canonicalizeVenueName(variantVenueRaw, canonicalVenueNamesByHandle) ?? variantVenueRaw

@@ -6,12 +6,16 @@ import { pathToFileURL } from "node:url";
 import { ConvexHttpClient } from "convex/browser";
 
 import { parseExtractedEventData } from "../lib/ai/extract-event-data.ts";
+import { classifyApprovalOccurrenceRelation } from "../lib/events/approval-occurrence-conflict.ts";
 import {
   bindSourceOccurrenceMetadata,
   prepareEventsForInsert,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
 import { loadVenueNameOverridesByHandle } from "../lib/pipeline/venue-name-overrides.ts";
-import { normalizeHandle } from "../lib/pipeline/venue-normalization.ts";
+import {
+  normalizeHandle,
+  toSearchableText,
+} from "../lib/pipeline/venue-normalization.ts";
 
 const TARGET_CREATED_AT_FROM = Date.parse("2026-08-22T07:00:00.000Z");
 const TARGET_CREATED_AT_BEFORE = Date.parse("2026-08-22T08:00:00.000Z");
@@ -158,6 +162,28 @@ async function loadPendingEvents(client, serviceSecret) {
   throw new Error("Pending-event pagination exceeded its safety bound.");
 }
 
+async function loadApprovedEvents(client, serviceSecret) {
+  const events = [];
+  let cursor = null;
+  for (let pageNumber = 0; pageNumber < 1_000; pageNumber += 1) {
+    const result = await client.query(listByStatusPaginatedQuery, {
+      status: "approved",
+      paginationOpts: { numItems: 100, cursor },
+      serviceSecret,
+    });
+    if (result.pageStatus === "SplitRequired") {
+      throw new Error("Approved-event pagination requested a split; refusing a partial read.");
+    }
+    events.push(...result.page);
+    if (result.isDone) return events;
+    if (!result.continueCursor || result.continueCursor === cursor) {
+      throw new Error("Approved-event pagination cursor stalled.");
+    }
+    cursor = result.continueCursor;
+  }
+  throw new Error("Approved-event pagination exceeded its safety bound.");
+}
+
 async function loadContexts(client, serviceSecret, handles) {
   const contexts = [];
   for (let index = 0; index < handles.length; index += 25) {
@@ -200,6 +226,67 @@ function targetEventsFromPending(pending) {
       );
     })
     .sort((left, right) => left._id.localeCompare(right._id));
+}
+
+function normalizedLookup(value) {
+  return toSearchableText(typeof value === "string" ? value : "")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function approvalCandidateHasKnownVenue(candidate) {
+  return (
+    candidate.venueId !== undefined ||
+    Boolean(normalizeHandle(candidate.venueInstagramHandle ?? "")) ||
+    Boolean(normalizedLookup(candidate.venue))
+  );
+}
+
+export function classifyApprovedOccurrenceBlockersForTesting(candidate, approvedEvents) {
+  return approvedEvents
+    .filter(
+      (existing) =>
+        existing._id !== candidate._id &&
+        existing.status === "approved" &&
+        existing.date === candidate.date,
+    )
+    .map((existing) => {
+      const candidateVenue = normalizedLookup(candidate.venue);
+      const sameVenue =
+        (candidate.venueId !== undefined &&
+          existing.venueId !== undefined &&
+          candidate.venueId === existing.venueId) ||
+        (Boolean(candidate.venueInstagramHandle) &&
+          normalizeHandle(existing.venueInstagramHandle ?? "") ===
+            normalizeHandle(candidate.venueInstagramHandle ?? "")) ||
+        (Boolean(candidateVenue) && normalizedLookup(existing.venue) === candidateVenue);
+      const candidatePostId = candidate.instagramPostId?.trim() ?? "";
+      const candidatePostUrl = normalizedLookup(candidate.instagramPostUrl);
+      const sameSource =
+        (Boolean(candidatePostId) && existing.instagramPostId?.trim() === candidatePostId) ||
+        (Boolean(candidatePostUrl) &&
+          normalizedLookup(existing.instagramPostUrl) === candidatePostUrl);
+      const relation = classifyApprovalOccurrenceRelation({
+        candidate,
+        existing,
+        sameVenue,
+        sameSource,
+        unknownVenue:
+          !approvalCandidateHasKnownVenue(candidate) ||
+          !approvalCandidateHasKnownVenue(existing),
+      });
+      return relation === "proven_duplicate" || relation === "ambiguous"
+        ? {
+            relation,
+            approvedEventId: existing._id,
+            approvedTitle: existing.title,
+            approvedDate: existing.date,
+            approvedTime: existing.time ?? null,
+            approvedVenue: existing.venue,
+          }
+        : null;
+    })
+    .filter(Boolean);
 }
 
 function buildPreimageManifest(targets) {
@@ -298,7 +385,7 @@ function buildRollbackPatch(existing, changedPublicFields) {
   };
 }
 
-async function buildReplayPlan(client, serviceSecret, targets) {
+async function buildReplayPlan(client, serviceSecret, targets, approvedEvents) {
   if (targets.length !== TARGET_EVENT_COUNT) {
     throw new Error(`Expected ${TARGET_EVENT_COUNT} exact Saturday targets, found ${targets.length}.`);
   }
@@ -429,6 +516,35 @@ async function buildReplayPlan(client, serviceSecret, targets) {
           reason: "unsupported_public_field_drift",
           pendingReasons: [],
           changedPublicFields: patchPlan.unsupportedPublicChanges,
+        });
+        continue;
+      }
+      const approvalBlockers = classifyApprovedOccurrenceBlockersForTesting(
+        {
+          ...existing,
+          ...prepared.event,
+          ...(patchPlan.changedPublicFields.includes("venue")
+            ? {
+                venueId: undefined,
+                venueInstagramHandle: undefined,
+              }
+            : {}),
+        },
+        approvedEvents,
+      );
+      if (approvalBlockers.length > 0) {
+        decisions.push({
+          id: existing._id,
+          title: existing.title,
+          decision: "remain_pending",
+          reason: approvalBlockers.some(
+            (blocker) => blocker.relation === "proven_duplicate",
+          )
+            ? "already_approved_duplicate"
+            : "ambiguous_approved_occurrence",
+          pendingReasons: [],
+          diagnostics: { approvalBlockers },
+          changedPublicFields: [],
         });
         continue;
       }
@@ -785,10 +901,11 @@ async function main() {
   }
 
   const pending = await loadPendingEvents(client, serviceSecret);
+  const approved = await loadApprovedEvents(client, serviceSecret);
   const targets = targetEventsFromPending(pending);
   const preimage = buildPreimageManifest(targets);
   const preimageSha256 = sha256(stableJson(preimage));
-  const plan = await buildReplayPlan(client, serviceSecret, targets);
+  const plan = await buildReplayPlan(client, serviceSecret, targets, approved);
   const eligible = plan.decisions.filter(
     (decision) => decision.decision === "eligible_guarded_replay",
   );

@@ -92,6 +92,14 @@ export function venueValueAppearsInEventEvidence(
   if (expectedTokens.length === 0) return false;
   const tokensMatch = (expected: string, observed: string): boolean => {
     if (expected === observed) return true;
+    if (
+      expected.length >= 6 &&
+      ["a", "e", "i", "om", "u"].some(
+        (suffix) => observed === `${expected}${suffix}`,
+      )
+    ) {
+      return true;
+    }
     if (expected.endsWith("a")) {
       const stem = expected.slice(0, -1);
       if (

@@ -3003,26 +3003,142 @@ export function assertEventEvidencePolicyTitleTransitionForTesting(
       `Event-evidence policy replay can change only deterministic unnamed fallback titles: ${item.id}.`,
     );
   }
+  const currentVersion = currentFields.fallbackIdentityPolicyVersion;
+  const nextVersion = nextFields.fallbackIdentityPolicyVersion;
+  const currentVersionValid = currentVersion === undefined || currentVersion === 1;
+  const nextVersionValid = nextVersion === undefined || nextVersion === 1;
+  const migratesLegacyVersion =
+    (currentVersion === undefined && nextVersion === 1) ||
+    (currentVersion === 1 && nextVersion === undefined);
+  const versionsSupported =
+    (currentVersion === 1 && nextVersion === 1) || migratesLegacyVersion;
+  const currentTitleValid = currentVersion === 1
+    ? fallbackTitleMatchesVenueCandidates(event.title, event, [event.venue])
+    : fallbackTitleMatchesVenueCandidates(
+        event.title,
+        event,
+        legacyFallbackVenueCandidates(event, currentFields, nextFields),
+      );
+  const nextPublicVenue = item.patch.venue ?? event.venue;
+  const nextTitleValid = nextVersion === 1
+    ? fallbackTitleMatchesVenueCandidates(nextTitle, event, [nextPublicVenue])
+    : fallbackTitleMatchesVenueCandidates(
+        nextTitle,
+        event,
+        legacyFallbackVenueCandidates(event, nextFields, currentFields),
+      );
   if (
     !currentUsesFallback ||
     !nextUsesFallback ||
-    currentFields.fallbackIdentityPolicyVersion !== 1 ||
-    nextFields.fallbackIdentityPolicyVersion !== 1 ||
-    normalizedString(event.title) !== normalizedString(buildUnnamedScheduleFallbackTitle({
-      eventType: event.eventType,
-      venue: event.venue,
-      isoDate: event.date,
-    })) ||
-    normalizedString(nextTitle) !== normalizedString(buildUnnamedScheduleFallbackTitle({
-      eventType: event.eventType,
-      venue: item.patch.venue ?? event.venue,
-      isoDate: event.date,
-    }))
+    !currentVersionValid ||
+    !nextVersionValid ||
+    !versionsSupported ||
+    !currentTitleValid ||
+    !nextTitleValid
   ) {
     throw new Error(
       `Event-evidence policy replay can change only deterministic unnamed fallback titles: ${item.id}.`,
     );
   }
+}
+
+function compactFallbackIdentity(value: unknown): string {
+  return toSearchableText(typeof value === "string" ? value : "")
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function verifiedFallbackSourceAccountName(
+  fields: Record<string, unknown>,
+  pairedFields: Record<string, unknown>,
+): string {
+  const handle = normalizeHandle(
+    typeof fields.sourceGroundingInstagramHandle === "string"
+      ? fields.sourceGroundingInstagramHandle
+      : "",
+  );
+  const pairedHandle = normalizeHandle(
+    typeof pairedFields.sourceGroundingInstagramHandle === "string"
+      ? pairedFields.sourceGroundingInstagramHandle
+      : "",
+  );
+  const candidates = [fields.sourceAccountName, pairedFields.sourceAccountName];
+  if (!handle || !pairedHandle || handle !== pairedHandle) return "";
+  return candidates.find(
+    (candidate): candidate is string =>
+      typeof candidate === "string" &&
+      compactFallbackIdentity(candidate) === compactFallbackIdentity(handle),
+  ) ?? "";
+}
+
+function boundRawFallbackVenues(
+  event: Doc<"events">,
+  fields: Record<string, unknown>,
+  pairedFields: Record<string, unknown>,
+): string[] {
+  let rawExtraction: Record<string, unknown> | null = null;
+  try {
+    const parsed = JSON.parse(event.rawExtractionJson ?? "null") as unknown;
+    rawExtraction = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    rawExtraction = null;
+  }
+  const scheduleEntries = Array.isArray(rawExtraction?.schedule_entries)
+    ? rawExtraction.schedule_entries.filter(
+        (entry): entry is Record<string, unknown> =>
+          Boolean(entry && typeof entry === "object" && !Array.isArray(entry)),
+      )
+    : [];
+  const rowSourceText = normalizedString(fields.rowSourceText);
+  const pairedRowSourceText = normalizedString(pairedFields.rowSourceText);
+  const sharedRowSourceText =
+    rowSourceText && rowSourceText === pairedRowSourceText ? rowSourceText : "";
+  const matchingEntries = sharedRowSourceText
+    ? scheduleEntries.filter(
+        (entry) => normalizedString(entry.source_text) === sharedRowSourceText,
+      )
+    : [];
+  const boundEntries = matchingEntries.length > 0
+    ? matchingEntries
+    : scheduleEntries.length === 1
+      ? scheduleEntries
+      : [];
+  return boundEntries
+    .map((entry) => normalizedString(entry.venue))
+    .filter(Boolean);
+}
+
+function legacyFallbackVenueCandidates(
+  event: Doc<"events">,
+  fields: Record<string, unknown>,
+  pairedFields: Record<string, unknown>,
+): string[] {
+  return [
+    "",
+    event.venue,
+    ...boundRawFallbackVenues(event, fields, pairedFields),
+    verifiedFallbackSourceAccountName(fields, pairedFields),
+  ].filter((value, index, values) =>
+    values.findIndex(
+      (candidate) => normalizedString(candidate) === normalizedString(value),
+    ) === index,
+  );
+}
+
+function fallbackTitleMatchesVenueCandidates(
+  title: string,
+  event: Pick<Doc<"events">, "date" | "eventType">,
+  venues: string[],
+): boolean {
+  return venues.some(
+    (venue) =>
+      normalizedString(title) === normalizedString(buildUnnamedScheduleFallbackTitle({
+        eventType: event.eventType,
+        venue,
+        isoDate: event.date,
+      })),
+  );
 }
 
 function parseEventEvidencePolicyNormalizedFields(value: string): Record<string, unknown> {

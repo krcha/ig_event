@@ -2430,6 +2430,130 @@ function runSemanticNormalizationQa() {
     }
   });
 
+  runCase("single-occurrence captions retain the physical venue without trusting promoters", () => {
+    const date = isoDateDaysFromNow(28);
+    const dateText = ddmmyyyy(date);
+    const madlenianumTitle = "JA, EMA – Ljubavni život Eme Bovari";
+    const madlenianumSourceLine = `${madlenianumTitle} | Premijera: ${dateText}`;
+    const madlenianumPost = makePost({
+      caption: [
+        madlenianumTitle,
+        `Premijera: ${dateText}`,
+        "Velika scena Madlenianuma",
+      ].join("\n"),
+      postId: "qa-single-madlenianum-venue",
+      username: "madlenianum",
+    });
+    const madlenianumExtraction = makeEventExtraction({
+      artists: [],
+      caption: madlenianumPost.caption,
+      date: "",
+      dateEvidenceText: "",
+      postUrl: madlenianumPost.instagramPostUrl,
+      title: "",
+      venue: "",
+      schedule_entries: [
+        {
+          date,
+          time: "",
+          venue: "Opera & Theater Madlenianum",
+          title: madlenianumTitle,
+          artists: [],
+          description: "Premijera predstave.",
+          source_text: madlenianumSourceLine,
+          date_evidence: {
+            exact_text: `Premijera: ${dateText}`,
+            source: "caption",
+            is_relative: false,
+            resolved_date: date,
+          },
+          time_evidence: {
+            status: "not_stated",
+            exact_text: "",
+            source: "unknown",
+          },
+        },
+      ],
+      field_confirmation: {
+        ...structuredClone(validExtraction.field_confirmation),
+        title: confirmation(madlenianumTitle),
+        location: confirmation(""),
+        location_name: confirmation("Velika scena Madlenianuma"),
+        artists: confirmation(""),
+      },
+    });
+    const madlenianum = assertSingleOk(
+      prepare(madlenianumPost, madlenianumExtraction, {
+        canonicalVenueNamesByHandle: {
+          madlenianum: "Opera & Theater Madlenianum",
+        },
+        configuredVenueNamesByHandle: {
+          madlenianum: "Opera & Theater Madlenianum",
+        },
+        sourceRolesByHandle: { madlenianum: "unknown" },
+      }),
+      "Madlenianum single occurrence",
+    );
+    assert.equal(madlenianum.event.venue, "Opera & Theater Madlenianum");
+    assert.equal(madlenianum.normalizedFields.trustedVenueSource, true);
+
+    const delArnoTitle = "Del Arno Band";
+    const delArnoSourceLine = `${delArnoTitle} | ${dateText}`;
+    const longPlayPost = makePost({
+      caption: `${delArnoTitle} nastupa ${dateText} u 20:00 u Botaničkoj bašti Jevremovac.`,
+      postId: "qa-single-long-play-promoter",
+      username: "longplayofficial",
+    });
+    const longPlayExtraction = makeEventExtraction({
+      artists: [delArnoTitle],
+      caption: longPlayPost.caption,
+      date: "",
+      dateEvidenceText: "",
+      postUrl: longPlayPost.instagramPostUrl,
+      title: "",
+      venue: "Long Play",
+      schedule_entries: [
+        {
+          date,
+          time: "20:00",
+          venue: "Jevremovac",
+          title: delArnoTitle,
+          artists: [delArnoTitle],
+          description: "Koncert u Botaničkoj bašti Jevremovac.",
+          source_text: delArnoSourceLine,
+          date_evidence: {
+            exact_text: dateText,
+            source: "caption",
+            is_relative: false,
+            resolved_date: date,
+          },
+          time_evidence: {
+            status: "start_time_stated",
+            exact_text: "20:00",
+            source: "caption",
+          },
+        },
+      ],
+      field_confirmation: {
+        ...structuredClone(validExtraction.field_confirmation),
+        title: confirmation(delArnoTitle),
+        location: confirmation(""),
+        location_name: confirmation("Botaničkoj bašti Jevremovac"),
+        artists: confirmation(delArnoTitle),
+      },
+    });
+    const longPlay = assertSingleOk(
+      prepare(longPlayPost, longPlayExtraction, {
+        canonicalVenueNamesByHandle: { longplayofficial: "Long Play" },
+        configuredVenueNamesByHandle: { longplayofficial: "Long Play" },
+        sourceRolesByHandle: { longplayofficial: "promoter" },
+      }),
+      "Long Play promoter single occurrence",
+    );
+    assert.equal(longPlay.event.venue, "Jevremovac");
+    assert.equal(longPlay.normalizedFields.trustedVenueSource, false);
+  });
+
   runCase("blank venues are unknown rather than the same venue", () => {
     const existing = {
       title: "Cidade de Deus",
