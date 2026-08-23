@@ -4337,7 +4337,22 @@ export const coalesceApprovedNightlifeLineupOccurrences = mutation({
         (occurrence) => occurrence.key === event.sourceOccurrenceKey,
       );
       const expectedVersion = expectedVersionByEventId.get(String(event._id));
-      const sourceHandle = normalizeHandle(link?.sourceHandle ?? "");
+      const linkedSourceHandle = normalizeHandle(link?.sourceHandle ?? "");
+      const eventFields = parseNightlifeLineupJsonRecord(
+        event.normalizedFieldsJson ?? "",
+        `Nightlife lineup source handle ${event._id}`,
+      );
+      const attestedSourceHandle = normalizeHandle(
+        normalizedString(eventFields.sourceGroundingInstagramHandle),
+      );
+      const venueSourceHandle = normalizeHandle(event.venueInstagramHandle ?? "");
+      const sourceHandle =
+        linkedSourceHandle ||
+        (link?.sourceHandle === undefined &&
+        attestedSourceHandle &&
+        attestedSourceHandle === venueSourceHandle
+          ? attestedSourceHandle
+          : "");
       const expectedOccurrenceMatches =
         sourceOccurrenceRepresentativeMatchesExpected(event, expectedOccurrence) ||
         Boolean(
@@ -4368,7 +4383,12 @@ export const coalesceApprovedNightlifeLineupOccurrences = mutation({
       ) {
         throw new Error(`Nightlife lineup occurrence link precondition failed: ${event._id}.`);
       }
-      if (!sourceHandle || (commonSourceHandle !== null && sourceHandle !== commonSourceHandle)) {
+      if (
+        !sourceHandle ||
+        sourceHandle !== attestedSourceHandle ||
+        sourceHandle !== venueSourceHandle ||
+        (commonSourceHandle !== null && sourceHandle !== commonSourceHandle)
+      ) {
         throw new Error("Nightlife lineup source handles are inconsistent.");
       }
       commonSourceHandle = sourceHandle;
@@ -4476,6 +4496,7 @@ export const coalesceApprovedNightlifeLineupOccurrences = mutation({
     });
     await ctx.db.patch(primaryLink._id, {
       sourceFingerprint: args.patch.sourceFingerprint,
+      sourceHandle: commonSourceHandle,
       updatedAt: nextEventUpdatedAt(primaryLink.updatedAt, now),
     });
     await ctx.db.patch(receipt._id, {

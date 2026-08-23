@@ -918,6 +918,7 @@ const legacyLineupEvents = lineupSlots.map((slot, index) => ({
   _creationTime: index + 1,
   title: slot.title,
   time: slot.time,
+  venueInstagramHandle: lineupPost.handle,
   timeSource: "poster",
   timeEvidenceText: slot.time_evidence.exact_text,
   timeConfidence: 0.95,
@@ -953,7 +954,9 @@ function makeLineupState(options = {}) {
       sourceOccurrenceKey: event.sourceOccurrenceKey,
       instagramPostId: lineupPost.postId,
       instagramPostUrl: lineupPost.instagramPostUrl,
-      sourceHandle: lineupPost.handle,
+      ...(options.includeSourceLinkHandles === false
+        ? {}
+        : { sourceHandle: lineupPost.handle }),
       linkedAt: 300 + index,
       updatedAt: 400 + index,
     })),
@@ -1161,6 +1164,49 @@ await assert.rejects(
 );
 assert.deepEqual(snapshotLineupState(staleLinkState), staleLinkBefore);
 
+const inconsistentSourceHandleState = makeLineupState();
+inconsistentSourceHandleState.tables.instagramEventSources.set(lineupLinkIds[1], {
+  ...inconsistentSourceHandleState.tables.instagramEventSources.get(lineupLinkIds[1]),
+  sourceHandle: "different_handle",
+});
+const inconsistentSourceHandleBefore = snapshotLineupState(inconsistentSourceHandleState);
+await assert.rejects(
+  () =>
+    coalesceApprovedNightlifeLineupOccurrences._handler(
+      serviceCtx(inconsistentSourceHandleState),
+      validLineupArgs(),
+    ),
+  /source handles are inconsistent/i,
+  "A conflicting persisted source-link handle must remain fail-closed.",
+);
+assert.deepEqual(snapshotLineupState(inconsistentSourceHandleState), inconsistentSourceHandleBefore);
+
+const unattestedMissingSourceHandleState = makeLineupState({
+  includeSourceLinkHandles: false,
+});
+for (const eventId of lineupEventIds) {
+  unattestedMissingSourceHandleState.tables.events.set(eventId, {
+    ...unattestedMissingSourceHandleState.tables.events.get(eventId),
+    venueInstagramHandle: undefined,
+  });
+}
+const unattestedMissingSourceHandleBefore = snapshotLineupState(
+  unattestedMissingSourceHandleState,
+);
+await assert.rejects(
+  () =>
+    coalesceApprovedNightlifeLineupOccurrences._handler(
+      serviceCtx(unattestedMissingSourceHandleState),
+      validLineupArgs(),
+    ),
+  /source handles are inconsistent/i,
+  "A missing legacy link handle must have matching immutable and canonical handle attestations.",
+);
+assert.deepEqual(
+  snapshotLineupState(unattestedMissingSourceHandleState),
+  unattestedMissingSourceHandleBefore,
+);
+
 const conflictingVenueReceiptState = makeLineupState({
   receiptExpectedOccurrences: lineupExpectedOccurrences.map((occurrence, index) => ({
     ...occurrence,
@@ -1228,6 +1274,7 @@ await assert.rejects(
 assert.deepEqual(snapshotLineupState(tamperedVenueCohortState), tamperedVenueCohortBefore);
 
 const blankLegacyVenueReceiptState = makeLineupState({
+  includeSourceLinkHandles: false,
   receiptExpectedOccurrences: lineupExpectedOccurrences.map((occurrence) => ({
     ...occurrence,
     venue: "",
@@ -1251,6 +1298,11 @@ assert.equal(
     "lineup-receipt",
   ).expectedOccurrences[0].venue,
   "Para klub Beograd",
+);
+assert.equal(
+  blankLegacyVenueReceiptState.tables.instagramEventSources.get(lineupLinkIds[0])
+    .sourceHandle,
+  lineupPost.handle,
 );
 
 const successfulLineupState = makeLineupState();
