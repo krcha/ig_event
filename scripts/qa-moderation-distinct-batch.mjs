@@ -91,8 +91,9 @@ function event(id, overrides = {}) {
   };
 }
 
-function makeCtx(initialEvents) {
+function makeCtx(initialEvents, initialVenues = []) {
   const events = new Map(initialEvents.map((item) => [item._id, structuredClone(item)]));
+  const venues = new Map(initialVenues.map((item) => [item._id, structuredClone(item)]));
   const posts = new Map(
     initialEvents.map((item) => [
       `${item.venueInstagramHandle}:${item.instagramPostId}`,
@@ -132,6 +133,8 @@ function makeCtx(initialEvents) {
         ? [...events.values()]
         : table === "scrapedPosts"
           ? [...posts.values()]
+          : table === "venues"
+            ? [...venues.values()]
           : [];
     return {
       async collect() {
@@ -203,13 +206,14 @@ function makeCtx(initialEvents) {
       },
     },
     events,
+    venues,
     posts,
     audits,
   };
 }
 
-async function moderate(initialEvents, args) {
-  const state = makeCtx(initialEvents);
+async function moderate(initialEvents, args, initialVenues = []) {
+  const state = makeCtx(initialEvents, initialVenues);
   const result = await setEventStatuses._handler(state.ctx, {
     reviewedBy: "QA owner",
     moderationNote: "source-reviewed distinct occurrences",
@@ -555,6 +559,85 @@ assert.equal(
   ),
   false,
   "A reviewed v2 event must fail closed if the persisted analysis revision changes.",
+);
+
+const canonicalizedStructuredHumanEvent = event("structured-canonical-venue", {
+  title: "Saturday Night at Kuma Lounge Bar",
+  date: futureDate,
+  time: "22:00",
+  venue: "Kuma Lounge Bar",
+  venueInstagramHandle: "kumabelgrade",
+  artists: [],
+  rawExtractionJson: structuredRawExtractionJson,
+});
+canonicalizedStructuredHumanEvent.normalizedFieldsJson = JSON.stringify({
+  extractionContractVersion: "event_evidence_v2",
+  extractionIsEvent: true,
+  sourceGroundingVersion: 5,
+  sourceGroundingEvidence: "persisted_openai_event_evidence_v2",
+  sourceGroundingSourceCaption: canonicalizedStructuredHumanEvent.sourceCaption,
+  sourceGroundingInstagramPostId: canonicalizedStructuredHumanEvent.instagramPostId,
+  sourceGroundingInstagramPostUrl: canonicalizedStructuredHumanEvent.instagramPostUrl,
+  sourceGroundingInstagramHandle: canonicalizedStructuredHumanEvent.venueInstagramHandle,
+  sourceOccurrenceKey: canonicalizedStructuredHumanEvent.sourceOccurrenceKey,
+  sourceOccurrenceSourceFingerprint: "instagram-source-v2:canonical-venue",
+  title: canonicalizedStructuredHumanEvent.title,
+  normalizedDate: canonicalizedStructuredHumanEvent.date,
+  time: canonicalizedStructuredHumanEvent.time,
+  normalizedVenue: canonicalizedStructuredHumanEvent.venue,
+  artists: canonicalizedStructuredHumanEvent.artists,
+  normalizedIsValid: true,
+  dateSuspiciousYear: false,
+  moderationPendingReasons: ["requires_human_approval", "invalid_identity_evidence"],
+});
+const canonicalVenue = {
+  _id: "venue-kuma",
+  _creationTime: 1,
+  name: "KÚMA Lounge bar & Events",
+  instagramHandle: "kumabelgrade",
+  category: "bar",
+  publicStatus: "published",
+  scrapeActive: true,
+  createdAt: 1,
+  updatedAt: 1,
+};
+const canonicalizedStructuredApproval = await moderate(
+  [canonicalizedStructuredHumanEvent],
+  { ids: ["structured-canonical-venue"], status: "approved" },
+  [canonicalVenue],
+);
+assert.deepEqual(canonicalizedStructuredApproval.result, {
+  updatedCount: 1,
+  skippedCount: 0,
+});
+const approvedCanonicalizedStructured =
+  canonicalizedStructuredApproval.events.get("structured-canonical-venue");
+const canonicalizedNormalizedFields = JSON.parse(
+  approvedCanonicalizedStructured.normalizedFieldsJson,
+);
+assert.equal(approvedCanonicalizedStructured.venue, canonicalVenue.name);
+assert.equal(approvedCanonicalizedStructured.venueId, canonicalVenue._id);
+assert.equal(canonicalizedNormalizedFields.normalizedVenue, canonicalVenue.name);
+assert.equal(
+  canonicalizedNormalizedFields.humanReviewedVenueCanonicalizationPolicyVersion,
+  1,
+  "Human review must audit a canonical venue name rebound after source validation.",
+);
+assert.equal(
+  hasHumanReviewedStructuredSourceAttestation(
+    approvedCanonicalizedStructured.normalizedFieldsJson,
+    approvedCanonicalizedStructured,
+  ),
+  true,
+  "Canonical venue rebinding must remain exact for public structured-source validation.",
+);
+assert.equal(
+  await isCanonicallyGroundedApprovedEvent(
+    canonicalizedStructuredApproval.ctx,
+    approvedCanonicalizedStructured,
+  ),
+  true,
+  "A reviewed handle-mapped venue must remain publicly grounded after canonicalization.",
 );
 
 const outsideConflict = event("outside", {

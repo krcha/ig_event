@@ -701,6 +701,73 @@ async function prepareHumanApprovalCandidate(
   return { candidate: { ...event, ...venuePatch }, venuePatch };
 }
 
+function rebindStructuredHumanReviewToCanonicalVenue(
+  humanReviewPatch: {
+    normalizedFieldsJson?: string;
+    humanReviewedLegacySourcePolicyVersion?:
+      typeof HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION;
+    humanReviewedStructuredSourcePolicyVersion?:
+      typeof HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION;
+  },
+  venuePatch: Partial<Doc<"events">> & VenueDenormalizedFields,
+): typeof humanReviewPatch {
+  const canonicalVenue = venuePatch.venue?.trim();
+  if (
+    !canonicalVenue ||
+    humanReviewPatch.humanReviewedStructuredSourcePolicyVersion !==
+      HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION ||
+    !humanReviewPatch.normalizedFieldsJson
+  ) {
+    return humanReviewPatch;
+  }
+
+  const normalizedFields = JSON.parse(
+    humanReviewPatch.normalizedFieldsJson,
+  ) as Record<string, unknown>;
+  return {
+    ...humanReviewPatch,
+    normalizedFieldsJson: JSON.stringify({
+      ...normalizedFields,
+      normalizedVenue: canonicalVenue,
+      humanReviewedVenueCanonicalizationPolicyVersion: 1,
+    }),
+  };
+}
+
+async function assertHumanApprovalWithCanonicalVenueFallback(
+  ctx: MutationCtx,
+  sourceEvent: Doc<"events">,
+  prepared: Awaited<ReturnType<typeof prepareHumanApprovalCandidate>>,
+  moderationNote: string | undefined,
+) {
+  try {
+    return await assertHumanApprovalSourcePolicy(
+      ctx,
+      prepared.candidate,
+      moderationNote,
+    );
+  } catch (error) {
+    if (
+      !prepared.venuePatch.venue ||
+      !(error instanceof Error) ||
+      error.message !==
+        "Human approval requires complete canonical Instagram source grounding for the final public fields."
+    ) {
+      throw error;
+    }
+  }
+
+  const sourceHumanReviewPatch = await assertHumanApprovalSourcePolicy(
+    ctx,
+    sourceEvent,
+    moderationNote,
+  );
+  return rebindStructuredHumanReviewToCanonicalVenue(
+    sourceHumanReviewPatch,
+    prepared.venuePatch,
+  );
+}
+
 async function loadPublicVenueIdsForEvents(
   ctx: QueryCtx,
   events: Doc<"events">[],
@@ -3646,9 +3713,10 @@ export const setEventStatus = mutation({
 
     if (args.status === "approved") {
       const prepared = await prepareHumanApprovalCandidate(ctx, existingEvent);
-      const humanReviewPatch = await assertHumanApprovalSourcePolicy(
+      const humanReviewPatch = await assertHumanApprovalWithCanonicalVenueFallback(
         ctx,
-        prepared.candidate,
+        existingEvent,
+        prepared,
         args.moderationNote,
       );
       await assertApprovalCandidatePolicy(ctx, prepared.candidate, [args.id]);
@@ -3740,9 +3808,10 @@ export const setEventStatuses = mutation({
           continue;
         }
         const prepared = await prepareHumanApprovalCandidate(ctx, event);
-        const humanReviewPatch = await assertHumanApprovalSourcePolicy(
+        const humanReviewPatch = await assertHumanApprovalWithCanonicalVenueFallback(
           ctx,
-          prepared.candidate,
+          event,
+          prepared,
           args.moderationNote,
         );
         preparedApprovalCandidates.set(id, { ...prepared, humanReviewPatch });
