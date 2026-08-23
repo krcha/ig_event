@@ -2767,8 +2767,8 @@ export const repairTrustedV2EventVenue = mutation({
       canonicalVenueNamesByHandle,
     );
     if (
-      !exactCanonicalVenueSource &&
-      (!rawVenue ||
+      (!rawVenue && !exactCanonicalVenueSource) ||
+      (rawVenue &&
         normalizeHandle(rawVenueCanonicalization?.handle ?? "") !== sourceHandle)
     ) {
       throw new Error("Persisted model venue does not resolve to the source's canonical venue.");

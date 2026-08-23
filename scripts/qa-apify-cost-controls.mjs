@@ -1064,6 +1064,27 @@ try {
     ["conflicting.source", ["venue-context-conflict", "Conflicting Venue"]],
     ["inactive.source", ["venue-context-inactive", "Inactive Venue"]],
   ]);
+  const targetedLegacyVenues = new Map([
+    [
+      "legacy.duplicate",
+      [
+        {
+          _id: "legacy-duplicate-0",
+          name: "Legacy Duplicate Zero",
+          instagramHandle: "legacy.duplicate",
+          scrapeActive: true,
+          publicStatus: "published",
+        },
+        {
+          _id: "legacy-duplicate-1",
+          name: "Legacy Duplicate One",
+          instagramHandle: "legacy.duplicate",
+          scrapeActive: true,
+          publicStatus: "published",
+        },
+      ],
+    ],
+  ]);
   const targetedContextDb = {
     query(table) {
       return {
@@ -1086,20 +1107,26 @@ try {
             async take(limit) {
               assert.equal(limit, 2);
               const venue = targetedVenues.get(matchedValue);
-              return table === "venues" &&
+              if (
+                table === "venues" &&
                 indexName === "by_normalizedInstagramHandle" &&
                 venue
-                ? [
-                    {
-                      _id: venue[0],
-                      name: venue[1],
-                      instagramHandle: matchedValue,
-                      normalizedInstagramHandle: matchedValue,
-                      scrapeActive: true,
-                      publicStatus: "published",
-                    },
-                  ]
-                : [];
+              ) {
+                return [
+                  {
+                    _id: venue[0],
+                    name: venue[1],
+                    instagramHandle: matchedValue,
+                    normalizedInstagramHandle: matchedValue,
+                    scrapeActive: true,
+                    publicStatus: "published",
+                  },
+                ];
+              }
+              if (table === "venues" && indexName === "by_instagramHandle") {
+                return targetedLegacyVenues.get(matchedValue)?.slice(0, limit) ?? [];
+              }
+              return [];
             },
             async first() {
               assert.fail("the normalized venue index should avoid the legacy exact fallback");
@@ -1144,6 +1171,14 @@ try {
     ),
     "one ingestion step should resolve only its requested sources and venues",
   );
+  await assert.rejects(
+    getIngestionContextsByHandles._handler(
+      { auth: { getUserIdentity: async () => null }, db: targetedContextDb },
+      { handles: ["legacy.duplicate"], serviceSecret: "qa-cooldown-secret" },
+    ),
+    /Multiple legacy venues resolve to Instagram handle legacy\.duplicate/,
+    "duplicate legacy handle mappings must fail closed rather than choose an arbitrary venue",
+  );
 
   function createSourceVenueReconciliationDb(venueRows, sourceRows) {
     const sources = new Map(sourceRows.map((row) => [row.handle, { ...row }]));
@@ -1174,6 +1209,34 @@ try {
                 page: venueRows.map((row) => ({ ...row })),
                 isDone: true,
                 continueCursor: "done",
+              };
+            },
+            withIndex(indexName, apply) {
+              let matchedValue = "";
+              const q = {
+                eq(field, value) {
+                  assert.equal(
+                    field,
+                    indexName === "by_normalizedInstagramHandle"
+                      ? "normalizedInstagramHandle"
+                      : "instagramHandle",
+                  );
+                  matchedValue = value;
+                  return q;
+                },
+              };
+              apply(q);
+              return {
+                async take(limit) {
+                  const field =
+                    indexName === "by_normalizedInstagramHandle"
+                      ? "normalizedInstagramHandle"
+                      : "instagramHandle";
+                  return venueRows
+                    .filter((row) => row[field] === matchedValue)
+                    .slice(0, limit)
+                    .map((row) => ({ ...row }));
+                },
               };
             },
           };
@@ -1213,6 +1276,8 @@ try {
     ["venue-same-link", "same.link"],
     ["venue-hidden", "hidden.source", "hidden"],
     ["venue-new", "new.source"],
+    ["venue-duplicate-0", "duplicate.source"],
+    ["venue-duplicate-1", "duplicate.source"],
   ].map(([id, handle, publicStatus = "published"]) => ({
     _id: id,
     name: `Canonical ${handle}`,
@@ -1281,6 +1346,13 @@ try {
       active: true,
       updatedAt: 8,
     },
+    {
+      _id: "source-duplicate",
+      handle: "duplicate.source",
+      role: "unknown",
+      active: true,
+      updatedAt: 9,
+    },
   ];
   const reconciliationDryRunDb = createSourceVenueReconciliationDb(
     reconciliationVenues,
@@ -1298,12 +1370,14 @@ try {
     {
       inserted: reconciliationDryRun.inserted,
       reconciled: reconciliationDryRun.reconciled,
+      ambiguous: reconciliationDryRun.ambiguous,
       alreadyPresent: reconciliationDryRun.alreadyPresent,
       actions: reconciliationDryRun.proposals.map((proposal) => proposal.action),
     },
     {
       inserted: 0,
       reconciled: 0,
+      ambiguous: 2,
       alreadyPresent: 5,
       actions: ["reconcile", "reconcile", "reconcile", "insert"],
     },
@@ -1325,6 +1399,7 @@ try {
   );
   assert.equal(reconciliationApply.reconciled, 3);
   assert.equal(reconciliationApply.inserted, 1);
+  assert.equal(reconciliationApply.ambiguous, 2);
   assert.equal(reconciliationApply.alreadyPresent, 5);
   assert.deepEqual(
     {
@@ -1351,6 +1426,7 @@ try {
     "some-other-venue",
   );
   assert.equal(reconciliationApplyDb.sources.get("hidden.source")?.role, "unknown");
+  assert.equal(reconciliationApplyDb.sources.get("duplicate.source")?.role, "unknown");
   assert.equal(reconciliationApplyDb.sources.get("new.source")?.venueId, "venue-new");
 
   await assert.rejects(

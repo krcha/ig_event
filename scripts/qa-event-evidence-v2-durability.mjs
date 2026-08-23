@@ -518,6 +518,37 @@ try {
       },
     },
   };
+  const conflictingRepairCurrentFields = {
+    ...repairCurrentFields,
+    rawVenue: "Explicit Other Physical Venue",
+  };
+  const conflictingRepairNextFields = {
+    ...conflictingRepairCurrentFields,
+    normalizedVenue: extractionFixture.venue,
+  };
+  const conflictingRepairEvent = {
+    ...posterEvent,
+    _id: "event-conflicting-v2-venue-repair",
+    venue: "",
+    normalizedFieldsJson: JSON.stringify(conflictingRepairCurrentFields),
+  };
+  repairEvents.push(conflictingRepairEvent);
+  await assert.rejects(
+    repairTrustedV2EventVenue._handler(repairCtx, {
+      id: conflictingRepairEvent._id,
+      expectedStatus: "approved",
+      expectedUpdatedAt: conflictingRepairEvent.updatedAt,
+      expectedNormalizedFieldsJson: conflictingRepairEvent.normalizedFieldsJson,
+      nextVenue: extractionFixture.venue,
+      nextNormalizedFieldsJson: JSON.stringify(conflictingRepairNextFields),
+      moderationNote: "Explicit different physical venue must retain precedence over account identity.",
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /model venue does not resolve/i,
+  );
+  assert.equal(conflictingRepairEvent.venue, "");
+  assert.equal(repairEvents.pop(), conflictingRepairEvent);
+
   const venueRepairResult = await repairTrustedV2EventVenue._handler(repairCtx, {
     id: repairEvent._id,
     expectedStatus: "approved",

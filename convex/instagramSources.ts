@@ -324,12 +324,16 @@ export const getIngestionContextsByHandles = query({
         if (normalizedVenues.length > 1) {
           throw new Error(`Multiple venues resolve to normalized Instagram handle ${handle}.`);
         }
-        const legacyExactVenue = normalizedVenues[0]
-          ? null
+        const legacyExactVenues = normalizedVenues[0]
+          ? []
           : await ctx.db
               .query("venues")
               .withIndex("by_instagramHandle", (q) => q.eq("instagramHandle", handle))
-              .first();
+              .take(2);
+        if (legacyExactVenues.length > 1) {
+          throw new Error(`Multiple legacy venues resolve to Instagram handle ${handle}.`);
+        }
+        const legacyExactVenue = legacyExactVenues[0] ?? null;
         const indexedVenue = normalizedVenues[0] ?? legacyExactVenue;
         const linkedVenue =
           !indexedVenue && source?.venueId ? await ctx.db.get(source.venueId) : null;
@@ -589,6 +593,7 @@ export const backfillFromVenues = mutation({
     examined: v.number(),
     inserted: v.number(),
     reconciled: v.number(),
+    ambiguous: v.number(),
     alreadyPresent: v.number(),
     proposals: v.array(
       v.object({
@@ -608,6 +613,7 @@ export const backfillFromVenues = mutation({
     let examined = 0;
     let inserted = 0;
     let reconciled = 0;
+    let ambiguous = 0;
     let alreadyPresent = 0;
     const proposals: Array<{
       action: "insert" | "reconcile";
@@ -620,6 +626,27 @@ export const backfillFromVenues = mutation({
         const handle = normalizeInstagramHandle(rawHandle);
         if (!handle) continue;
         examined += 1;
+        const normalizedHandleVenues = await ctx.db
+          .query("venues")
+          .withIndex("by_normalizedInstagramHandle", (q) =>
+            q.eq("normalizedInstagramHandle", handle),
+          )
+          .take(2);
+        const legacyExactHandleVenues = normalizedHandleVenues[0]
+          ? []
+          : await ctx.db
+              .query("venues")
+              .withIndex("by_instagramHandle", (q) =>
+                q.eq("instagramHandle", rawHandle),
+              )
+              .take(2);
+        const exactHandleVenues = normalizedHandleVenues[0]
+          ? normalizedHandleVenues
+          : legacyExactHandleVenues;
+        if (exactHandleVenues.length !== 1 || exactHandleVenues[0]._id !== venue._id) {
+          ambiguous += 1;
+          continue;
+        }
         const existing = await ctx.db
           .query("instagramSources")
           .withIndex("by_handle", (q) => q.eq("handle", handle))
@@ -685,6 +712,7 @@ export const backfillFromVenues = mutation({
       examined,
       inserted,
       reconciled,
+      ambiguous,
       alreadyPresent,
       proposals: proposals.slice(0, 100),
       isDone: page.isDone,

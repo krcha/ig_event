@@ -43,6 +43,7 @@ const totals = {
   examined: 0,
   inserted: 0,
   reconciled: 0,
+  ambiguous: 0,
   alreadyPresent: 0,
   proposed: 0,
   proposedReconciliations: 0,
@@ -65,6 +66,7 @@ while (true) {
   totals.examined += page.examined ?? 0;
   totals.inserted += page.inserted ?? 0;
   totals.reconciled += page.reconciled ?? 0;
+  totals.ambiguous += page.ambiguous ?? 0;
   totals.alreadyPresent += page.alreadyPresent ?? 0;
   totals.proposed += page.proposals?.length ?? 0;
   totals.proposedReconciliations +=
