@@ -4338,6 +4338,20 @@ export const coalesceApprovedNightlifeLineupOccurrences = mutation({
       );
       const expectedVersion = expectedVersionByEventId.get(String(event._id));
       const sourceHandle = normalizeHandle(link?.sourceHandle ?? "");
+      const expectedOccurrenceMatches =
+        sourceOccurrenceRepresentativeMatchesExpected(event, expectedOccurrence) ||
+        Boolean(
+          expectedOccurrence &&
+            expectedOccurrence.venue === "" &&
+            sourceOccurrenceRepresentativeMatchesExpected(event, {
+              ...expectedOccurrence,
+              // Legacy receipts could preserve the extraction-time empty venue
+              // even after a later, source-backed venue canonicalization updated
+              // both the event and its immutable normalized snapshot. The cohort
+              // checks above already prove one exact nonempty venue for every row.
+              venue: event.venue,
+            }),
+        );
       if (
         !link ||
         !expectedVersion ||
@@ -4350,7 +4364,7 @@ export const coalesceApprovedNightlifeLineupOccurrences = mutation({
         normalizeInstagramPostUrl(link.instagramPostUrl ?? "") !== commonPostUrl ||
         !expectedOccurrence ||
         satisfiedOccurrence?.eventId !== event._id ||
-        !sourceOccurrenceRepresentativeMatchesExpected(event, expectedOccurrence)
+        !expectedOccurrenceMatches
       ) {
         throw new Error(`Nightlife lineup occurrence link precondition failed: ${event._id}.`);
       }

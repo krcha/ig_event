@@ -942,7 +942,7 @@ const lineupExpectedOccurrences = legacyLineupEvents.map((event) => ({
   artists: event.artists,
 }));
 
-function makeLineupState() {
+function makeLineupState(options = {}) {
   return makeDb({
     events: legacyLineupEvents,
     links: legacyLineupEvents.map((event, index) => ({
@@ -963,7 +963,8 @@ function makeLineupState() {
         sourceIdentity: lineupSourceIdentity,
         sourceFingerprint: lineupOldFingerprint,
         expectedKeys: lineupOccurrenceKeys,
-        expectedOccurrences: lineupExpectedOccurrences,
+        expectedOccurrences:
+          options.receiptExpectedOccurrences ?? lineupExpectedOccurrences,
         satisfiedKeys: lineupOccurrenceKeys,
         satisfiedOccurrences: legacyLineupEvents.map((event) => ({
           key: event.sourceOccurrenceKey,
@@ -1159,6 +1160,98 @@ await assert.rejects(
   /link precondition failed/i,
 );
 assert.deepEqual(snapshotLineupState(staleLinkState), staleLinkBefore);
+
+const conflictingVenueReceiptState = makeLineupState({
+  receiptExpectedOccurrences: lineupExpectedOccurrences.map((occurrence, index) => ({
+    ...occurrence,
+    venue: index === 0 ? "Different Venue" : occurrence.venue,
+  })),
+});
+const conflictingVenueReceiptBefore = snapshotLineupState(conflictingVenueReceiptState);
+await assert.rejects(
+  () =>
+    coalesceApprovedNightlifeLineupOccurrences._handler(
+      serviceCtx(conflictingVenueReceiptState),
+      validLineupArgs(),
+    ),
+  /link precondition failed/i,
+  "A nonblank conflicting receipt venue must remain fail-closed.",
+);
+assert.deepEqual(
+  snapshotLineupState(conflictingVenueReceiptState),
+  conflictingVenueReceiptBefore,
+);
+
+for (const nonemptyVenue of ["   ", "---"]) {
+  const malformedVenueReceiptState = makeLineupState({
+    receiptExpectedOccurrences: lineupExpectedOccurrences.map((occurrence) => ({
+      ...occurrence,
+      venue: nonemptyVenue,
+    })),
+  });
+  const malformedVenueReceiptBefore = snapshotLineupState(malformedVenueReceiptState);
+  await assert.rejects(
+    () =>
+      coalesceApprovedNightlifeLineupOccurrences._handler(
+        serviceCtx(malformedVenueReceiptState),
+        validLineupArgs(),
+      ),
+    /link precondition failed/i,
+    "Only the exact legacy empty string may use the canonical venue fallback.",
+  );
+  assert.deepEqual(
+    snapshotLineupState(malformedVenueReceiptState),
+    malformedVenueReceiptBefore,
+  );
+}
+
+const tamperedVenueCohortState = makeLineupState({
+  receiptExpectedOccurrences: lineupExpectedOccurrences.map((occurrence) => ({
+    ...occurrence,
+    venue: "",
+  })),
+});
+tamperedVenueCohortState.tables.events.set(lineupEventIds[1], {
+  ...tamperedVenueCohortState.tables.events.get(lineupEventIds[1]),
+  venue: "Different Venue",
+});
+const tamperedVenueCohortBefore = snapshotLineupState(tamperedVenueCohortState);
+await assert.rejects(
+  () =>
+    coalesceApprovedNightlifeLineupOccurrences._handler(
+      serviceCtx(tamperedVenueCohortState),
+      validLineupArgs(),
+    ),
+  /rows do not share one exact source occurrence/i,
+  "A blank legacy receipt must not bypass the exact common-venue cohort proof.",
+);
+assert.deepEqual(snapshotLineupState(tamperedVenueCohortState), tamperedVenueCohortBefore);
+
+const blankLegacyVenueReceiptState = makeLineupState({
+  receiptExpectedOccurrences: lineupExpectedOccurrences.map((occurrence) => ({
+    ...occurrence,
+    venue: "",
+  })),
+});
+const blankLegacyVenueMergeResult =
+  await coalesceApprovedNightlifeLineupOccurrences._handler(
+    serviceCtx(blankLegacyVenueReceiptState),
+    validLineupArgs(),
+  );
+assert.equal(blankLegacyVenueMergeResult.deletedDuplicateCount, 2);
+assert.deepEqual([...blankLegacyVenueReceiptState.tables.events.keys()], [
+  lineupEventIds[0],
+]);
+assert.equal(
+  blankLegacyVenueReceiptState.tables.events.get(lineupEventIds[0]).venue,
+  "Para klub Beograd",
+);
+assert.equal(
+  blankLegacyVenueReceiptState.tables.instagramSourceOccurrenceReceipts.get(
+    "lineup-receipt",
+  ).expectedOccurrences[0].venue,
+  "Para klub Beograd",
+);
 
 const successfulLineupState = makeLineupState();
 const lineupMergeResult = await coalesceApprovedNightlifeLineupOccurrences._handler(
