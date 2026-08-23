@@ -9631,27 +9631,27 @@ export function prepareEventsForInsert(
               independentPostTextEvidence,
             ),
         );
-        const trustedSingleOccurrenceVenueGrounded = Boolean(
+        const trustedVenueAccountFallback = Boolean(
           trustedVenueSource &&
-            splitEventCandidates.length === 1 &&
-            canonicalRowVenue &&
-            normalizeString(canonicalRowVenue) === normalizeString(normalizedVenue) &&
-            (
-              venueValueAppearsInEventEvidence(
-                configuredVenueName,
-                independentPostTextEvidence,
-              ) ||
-              venueValueAppearsInEventEvidence(
-                normalizedSourceHandle,
-                independentPostTextEvidence,
-              )
-            ),
+            normalizedVenue &&
+            (sourceRole === "venue" ||
+              (splitEventCandidates.length === 1 &&
+                canonicalRowVenue &&
+                normalizeString(canonicalRowVenue) === normalizeString(normalizedVenue) &&
+                (venueValueAppearsInEventEvidence(
+                  configuredVenueName,
+                  independentPostTextEvidence,
+                ) ||
+                  venueValueAppearsInEventEvidence(
+                    normalizedSourceHandle,
+                    independentPostTextEvidence,
+                  )))),
         );
         const variantVenueRaw = usesStructuredEvidence
           ? rowVenueGrounded || singleOccurrencePostVenueGrounded
             ? rowVenue
             : sharedVenueValue ||
-              (trustedSingleOccurrenceVenueGrounded ? normalizedVenue : "")
+              (trustedVenueAccountFallback ? normalizedVenue : "")
           : normalizedVenue;
         const variantVenue = variantVenueRaw
           ? canonicalizeVenueName(variantVenueRaw, canonicalVenueNamesByHandle) ?? variantVenueRaw

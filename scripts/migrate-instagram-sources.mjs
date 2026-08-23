@@ -39,7 +39,15 @@ if (!convexUrl || !serviceSecret) {
 }
 
 const client = new ConvexHttpClient(convexUrl);
-const totals = { examined: 0, inserted: 0, alreadyPresent: 0, proposed: 0, pages: 0 };
+const totals = {
+  examined: 0,
+  inserted: 0,
+  reconciled: 0,
+  alreadyPresent: 0,
+  proposed: 0,
+  proposedReconciliations: 0,
+  pages: 0,
+};
 const sample = [];
 const seenCursors = new Set();
 let cursor = null;
@@ -56,8 +64,11 @@ while (true) {
   totals.pages += 1;
   totals.examined += page.examined ?? 0;
   totals.inserted += page.inserted ?? 0;
+  totals.reconciled += page.reconciled ?? 0;
   totals.alreadyPresent += page.alreadyPresent ?? 0;
   totals.proposed += page.proposals?.length ?? 0;
+  totals.proposedReconciliations +=
+    page.proposals?.filter((proposal) => proposal.action === "reconcile").length ?? 0;
   for (const proposal of page.proposals ?? []) {
     if (sample.length < 25) sample.push(proposal);
   }
@@ -72,7 +83,7 @@ console.log(
       ...totals,
       sample,
       note: apply
-        ? "Legacy venue-backed Instagram sources were migrated idempotently."
+        ? "Legacy venue-backed Instagram sources were inserted or reconciled idempotently."
         : "No rows were changed. Re-run with --apply after reviewing this output.",
     },
     null,

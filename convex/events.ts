@@ -2745,6 +2745,11 @@ export const repairTrustedV2EventVenue = mutation({
       .withIndex("by_handle", (q) => q.eq("handle", sourceHandle))
       .take(2);
     const source = sourceRows.length === 1 ? sourceRows[0] : null;
+    const exactCanonicalVenueSource = Boolean(
+      source?.active &&
+        source.role === "venue" &&
+        source.venueId === canonicalVenue._id,
+    );
     if (
       !source ||
       !source.active ||
@@ -2762,8 +2767,9 @@ export const repairTrustedV2EventVenue = mutation({
       canonicalVenueNamesByHandle,
     );
     if (
-      !rawVenue ||
-      normalizeHandle(rawVenueCanonicalization?.handle ?? "") !== sourceHandle
+      !exactCanonicalVenueSource &&
+      (!rawVenue ||
+        normalizeHandle(rawVenueCanonicalization?.handle ?? "") !== sourceHandle)
     ) {
       throw new Error("Persisted model venue does not resolve to the source's canonical venue.");
     }

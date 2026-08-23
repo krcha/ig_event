@@ -427,7 +427,7 @@ try {
     _id: "source-boundary-v2",
     _creationTime: now,
     handle: "boundary_venue",
-    role: "unknown",
+    role: "venue",
     venueId: repairVenue._id,
     active: true,
     discoveredAt: now,
@@ -437,7 +437,7 @@ try {
   };
   const repairCurrentFields = {
     ...makeNormalizedFields("poster", "poster"),
-    rawVenue: extractionFixture.venue,
+    rawVenue: "",
     normalizedVenue: "",
     trustedVenueSource: true,
   };

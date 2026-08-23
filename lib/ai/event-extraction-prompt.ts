@@ -168,6 +168,8 @@ Rules:
 === VENUE (per row) ===
 - If a row names its own venue, use it. Apply the canonical venue hint when it matches. For multi-row posters, do not copy a venue across rows unless shared_schedule_context.venue contains visible evidence that it applies to all rows.
 - Prefer the explicitly named physical location over the source account, promoter, organizer, or event-brand name. Use a canonical venue hint from a venue account only when no different physical venue is explicitly named. Preserve a billed artist's Instagram handle when the handle is the clearest source identity.
+- When the Instagram source role is "venue" and a canonical venue hint is provided, use that canonical venue for every event and schedule row unless the poster or caption explicitly names a different physical venue. The venue account name does not need to be repeated in each row.
+- Never use a promoter or organizer account name as the venue. For a promoter source, require an explicitly named physical venue from the poster, caption, location tag, or schedule row.
 - If the poster or caption is a monthly program, venue schedule, or other multi-date lineup for the same venue, populate "schedule_entries" with one object per separately dated event row.
 - Do not collapse a multi-date venue schedule into one event. Each "schedule_entries" item must correspond to a single explicit date from the source.
 - For each "schedule_entries" item, copy the explicit row-level date, time, title/billed act text, artists, short factual description, and a compact "source_text" snippet from that row when readable.

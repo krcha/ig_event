@@ -50,6 +50,7 @@ import {
   listRecentFullScrapeAttemptMetadata,
 } from "../convex/ingestionJobs.ts";
 import {
+  backfillFromVenues,
   getIngestionContextsByHandles,
   listActiveSourceHandlesPage,
   listActiveSourcesPage,
@@ -1022,6 +1023,47 @@ try {
   assert.equal(typeof drainedSourceHandles[0], "string");
 
   const targetedContextQueries = [];
+  const targetedSources = new Map([
+    [
+      "source.0",
+      {
+        _id: "source-context-0",
+        handle: "source.0",
+        role: "unknown",
+        active: true,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+    [
+      "conflicting.source",
+      {
+        _id: "source-context-conflict",
+        handle: "conflicting.source",
+        role: "unknown",
+        venueId: "different-venue",
+        active: true,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+    [
+      "inactive.source",
+      {
+        _id: "source-context-inactive",
+        handle: "inactive.source",
+        role: "unknown",
+        active: false,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+  ]);
+  const targetedVenues = new Map([
+    ["source.0", ["venue-context-0", "Source Zero"]],
+    ["conflicting.source", ["venue-context-conflict", "Conflicting Venue"]],
+    ["inactive.source", ["venue-context-inactive", "Inactive Venue"]],
+  ]);
   const targetedContextDb = {
     query(table) {
       return {
@@ -1037,28 +1079,22 @@ try {
           targetedContextQueries.push({ table, indexName, matchedValue });
           return {
             async unique() {
-              return table === "instagramSources" && matchedValue === "source.0"
-                ? {
-                    _id: "source-context-0",
-                    handle: "source.0",
-                    role: "venue",
-                    active: true,
-                    createdAt: 1,
-                    updatedAt: 1,
-                  }
+              return table === "instagramSources"
+                ? targetedSources.get(matchedValue) ?? null
                 : null;
             },
             async take(limit) {
               assert.equal(limit, 2);
+              const venue = targetedVenues.get(matchedValue);
               return table === "venues" &&
                 indexName === "by_normalizedInstagramHandle" &&
-                matchedValue === "source.0"
+                venue
                 ? [
                     {
-                      _id: "venue-context-0",
-                      name: "Source Zero",
-                      instagramHandle: "source.0",
-                      normalizedInstagramHandle: "source.0",
+                      _id: venue[0],
+                      name: venue[1],
+                      instagramHandle: matchedValue,
+                      normalizedInstagramHandle: matchedValue,
                       scrapeActive: true,
                       publicStatus: "published",
                     },
@@ -1078,19 +1114,245 @@ try {
   };
   const targetedContexts = await getIngestionContextsByHandles._handler(
     { auth: { getUserIdentity: async () => null }, db: targetedContextDb },
-    { handles: ["source.0"], serviceSecret: "qa-cooldown-secret" },
+    {
+      handles: ["source.0", "conflicting.source", "inactive.source"],
+      serviceSecret: "qa-cooldown-secret",
+    },
   );
   assert.deepEqual(targetedContexts, [
     { handle: "source.0", role: "venue", canonicalVenueName: "Source Zero" },
+    { handle: "conflicting.source", role: "unknown", canonicalVenueName: undefined },
+    { handle: "inactive.source", role: "unknown", canonicalVenueName: undefined },
   ]);
-  assert.deepEqual(
-    targetedContextQueries.map(({ table, indexName }) => [table, indexName]),
-    [
-      ["instagramSources", "by_handle"],
-      ["venues", "by_normalizedInstagramHandle"],
-    ],
-    "one ingestion step should resolve only its current source and venue",
+  assert.equal(
+    targetedContexts[0]?.role,
+    "venue",
+    "An unclassified active source must inherit venue identity from an exact published handle mapping.",
   );
+  assert.deepEqual(
+    Object.fromEntries(
+      targetedContextQueries.map(({ table, indexName, matchedValue }) => [
+        `${table}:${matchedValue}`,
+        indexName,
+      ]),
+    ),
+    Object.fromEntries(
+      ["source.0", "conflicting.source", "inactive.source"].flatMap((handle) => [
+        [`instagramSources:${handle}`, "by_handle"],
+        [`venues:${handle}`, "by_normalizedInstagramHandle"],
+      ]),
+    ),
+    "one ingestion step should resolve only its requested sources and venues",
+  );
+
+  function createSourceVenueReconciliationDb(venueRows, sourceRows) {
+    const sources = new Map(sourceRows.map((row) => [row.handle, { ...row }]));
+    const patches = [];
+    const inserts = [];
+    return {
+      sources,
+      patches,
+      inserts,
+      async patch(id, patch) {
+        const source = [...sources.values()].find((row) => row._id === id);
+        assert.ok(source, `missing reconciliation source ${id}`);
+        Object.assign(source, patch);
+        patches.push({ id, patch: { ...patch } });
+      },
+      async insert(table, row) {
+        assert.equal(table, "instagramSources");
+        const inserted = { _id: `inserted-${inserts.length}`, ...row };
+        sources.set(inserted.handle, inserted);
+        inserts.push(inserted);
+        return inserted._id;
+      },
+      query(table) {
+        if (table === "venues") {
+          return {
+            async paginate() {
+              return {
+                page: venueRows.map((row) => ({ ...row })),
+                isDone: true,
+                continueCursor: "done",
+              };
+            },
+          };
+        }
+        assert.equal(table, "instagramSources");
+        return {
+          withIndex(indexName, apply) {
+            assert.equal(indexName, "by_handle");
+            let handle = "";
+            const q = {
+              eq(field, value) {
+                assert.equal(field, "handle");
+                handle = value;
+                return q;
+              },
+            };
+            apply(q);
+            return {
+              async unique() {
+                return sources.get(handle) ?? null;
+              },
+            };
+          },
+        };
+      },
+    };
+  }
+
+  const reconciliationFutureUpdatedAt = Date.now() + 60_000;
+  const reconciliationVenues = [
+    ["venue-unknown", "unknown.source"],
+    ["venue-unlinked", "unlinked.venue"],
+    ["venue-promoter", "explicit.promoter"],
+    ["venue-inactive", "inactive.source"],
+    ["venue-conflict", "conflicting.source"],
+    ["venue-complete", "complete.venue"],
+    ["venue-same-link", "same.link"],
+    ["venue-hidden", "hidden.source", "hidden"],
+    ["venue-new", "new.source"],
+  ].map(([id, handle, publicStatus = "published"]) => ({
+    _id: id,
+    name: `Canonical ${handle}`,
+    instagramHandle: handle,
+    normalizedInstagramHandle: handle,
+    publicStatus,
+    scrapeActive: true,
+  }));
+  const reconciliationSources = [
+    {
+      _id: "source-unknown",
+      handle: "unknown.source",
+      role: "unknown",
+      active: true,
+      updatedAt: reconciliationFutureUpdatedAt,
+    },
+    {
+      _id: "source-unlinked",
+      handle: "unlinked.venue",
+      role: "venue",
+      active: true,
+      updatedAt: 2,
+    },
+    {
+      _id: "source-promoter",
+      handle: "explicit.promoter",
+      role: "promoter",
+      active: true,
+      updatedAt: 3,
+    },
+    {
+      _id: "source-inactive",
+      handle: "inactive.source",
+      role: "unknown",
+      active: false,
+      updatedAt: 4,
+    },
+    {
+      _id: "source-conflict",
+      handle: "conflicting.source",
+      role: "unknown",
+      venueId: "some-other-venue",
+      active: true,
+      updatedAt: 5,
+    },
+    {
+      _id: "source-complete",
+      handle: "complete.venue",
+      role: "venue",
+      venueId: "venue-complete",
+      active: true,
+      updatedAt: 6,
+    },
+    {
+      _id: "source-same-link",
+      handle: "same.link",
+      role: "unknown",
+      venueId: "venue-same-link",
+      active: true,
+      updatedAt: 7,
+    },
+    {
+      _id: "source-hidden",
+      handle: "hidden.source",
+      role: "unknown",
+      active: true,
+      updatedAt: 8,
+    },
+  ];
+  const reconciliationDryRunDb = createSourceVenueReconciliationDb(
+    reconciliationVenues,
+    reconciliationSources,
+  );
+  const reconciliationDryRun = await backfillFromVenues._handler(
+    { auth: { getUserIdentity: async () => null }, db: reconciliationDryRunDb },
+    {
+      paginationOpts: { numItems: 100, cursor: null },
+      dryRun: true,
+      serviceSecret: "qa-cooldown-secret",
+    },
+  );
+  assert.deepEqual(
+    {
+      inserted: reconciliationDryRun.inserted,
+      reconciled: reconciliationDryRun.reconciled,
+      alreadyPresent: reconciliationDryRun.alreadyPresent,
+      actions: reconciliationDryRun.proposals.map((proposal) => proposal.action),
+    },
+    {
+      inserted: 0,
+      reconciled: 0,
+      alreadyPresent: 5,
+      actions: ["reconcile", "reconcile", "reconcile", "insert"],
+    },
+  );
+  assert.equal(reconciliationDryRunDb.patches.length, 0);
+  assert.equal(reconciliationDryRunDb.inserts.length, 0);
+
+  const reconciliationApplyDb = createSourceVenueReconciliationDb(
+    reconciliationVenues,
+    reconciliationSources,
+  );
+  const reconciliationApply = await backfillFromVenues._handler(
+    { auth: { getUserIdentity: async () => null }, db: reconciliationApplyDb },
+    {
+      paginationOpts: { numItems: 100, cursor: null },
+      dryRun: false,
+      serviceSecret: "qa-cooldown-secret",
+    },
+  );
+  assert.equal(reconciliationApply.reconciled, 3);
+  assert.equal(reconciliationApply.inserted, 1);
+  assert.equal(reconciliationApply.alreadyPresent, 5);
+  assert.deepEqual(
+    {
+      role: reconciliationApplyDb.sources.get("unknown.source")?.role,
+      venueId: reconciliationApplyDb.sources.get("unknown.source")?.venueId,
+      updatedAt: reconciliationApplyDb.sources.get("unknown.source")?.updatedAt,
+    },
+    {
+      role: "venue",
+      venueId: "venue-unknown",
+      updatedAt: reconciliationFutureUpdatedAt + 1,
+    },
+    "reconciliation must persist the exact venue mapping and advance a future updatedAt monotonically",
+  );
+  assert.equal(
+    reconciliationApplyDb.sources.get("unlinked.venue")?.venueId,
+    "venue-unlinked",
+  );
+  assert.equal(reconciliationApplyDb.sources.get("same.link")?.role, "venue");
+  assert.equal(reconciliationApplyDb.sources.get("explicit.promoter")?.role, "promoter");
+  assert.equal(reconciliationApplyDb.sources.get("inactive.source")?.role, "unknown");
+  assert.equal(
+    reconciliationApplyDb.sources.get("conflicting.source")?.venueId,
+    "some-other-venue",
+  );
+  assert.equal(reconciliationApplyDb.sources.get("hidden.source")?.role, "unknown");
+  assert.equal(reconciliationApplyDb.sources.get("new.source")?.venueId, "venue-new");
+
   await assert.rejects(
     getIngestionContextsByHandles._handler(
       { auth: { getUserIdentity: async () => null }, db: targetedContextDb },

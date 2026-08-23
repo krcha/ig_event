@@ -452,6 +452,14 @@ function runPromptQa() {
   assert.match(userPrompt, /Instagram location tag: KC Grad/);
   assert.match(userPrompt, /Canonical venue hint: KC Grad/);
   assert.match(userPrompt, /Instagram source role: venue/);
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /use that canonical venue for every event and schedule row/i,
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /Never use a promoter or organizer account name as the venue/i,
+  );
   assert.match(userPrompt, /Instagram source\/account name: KC Grad/);
   assert.match(userPrompt, /Instagram alt text:/);
   assert.match(userPrompt, /schedule_entries/i);

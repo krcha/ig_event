@@ -28,6 +28,30 @@ function roleForLegacyVenue(venue: Doc<"venues">): InstagramSourceRole {
   return venue.publicStatus === "published" ? "venue" : "unknown";
 }
 
+function effectiveIngestionRole(
+  source: Doc<"instagramSources"> | null,
+  exactHandleVenue: Doc<"venues"> | null,
+): InstagramSourceRole {
+  if (source) {
+    if (!source.active) return "unknown";
+    // Following discovery initially creates an `unknown` source. When that
+    // exact handle already owns a published canonical venue, the venue record
+    // is stronger identity evidence than the unclassified placeholder. An
+    // explicit promoter classification must always retain precedence.
+    if (
+      source.role === "unknown" &&
+      exactHandleVenue &&
+      roleForLegacyVenue(exactHandleVenue) === "venue"
+    ) {
+      return "venue";
+    }
+    return source.role;
+  }
+  return exactHandleVenue?.scrapeActive === true
+    ? roleForLegacyVenue(exactHandleVenue)
+    : "unknown";
+}
+
 function toSourceView(source: Doc<"instagramSources">, venue?: Doc<"venues"> | null) {
   return {
     _id: source._id as string | undefined,
@@ -309,17 +333,21 @@ export const getIngestionContextsByHandles = query({
         const indexedVenue = normalizedVenues[0] ?? legacyExactVenue;
         const linkedVenue =
           !indexedVenue && source?.venueId ? await ctx.db.get(source.venueId) : null;
+        const sourceLinkConflictsWithIndexedVenue = Boolean(
+          indexedVenue &&
+            source?.venueId !== undefined &&
+            source.venueId !== indexedVenue._id,
+        );
         const handleVenue =
-          indexedVenue ??
-          (linkedVenue && normalizeInstagramHandle(linkedVenue.instagramHandle) === handle
-            ? linkedVenue
-            : null);
-        const activeLegacyVenue = handleVenue?.scrapeActive === true ? handleVenue : null;
-        const role = source?.active
-          ? source.role
-          : activeLegacyVenue
-            ? roleForLegacyVenue(activeLegacyVenue)
-            : "unknown";
+          source && !source.active
+            ? null
+            : sourceLinkConflictsWithIndexedVenue
+              ? null
+              : indexedVenue ??
+                (linkedVenue && normalizeInstagramHandle(linkedVenue.instagramHandle) === handle
+                  ? linkedVenue
+                  : null);
+        const role = effectiveIngestionRole(source, handleVenue);
         return {
           handle,
           role,
@@ -556,14 +584,33 @@ export const backfillFromVenues = mutation({
     dryRun: v.boolean(),
     serviceSecret: v.optional(v.string()),
   },
+  returns: v.object({
+    dryRun: v.boolean(),
+    examined: v.number(),
+    inserted: v.number(),
+    reconciled: v.number(),
+    alreadyPresent: v.number(),
+    proposals: v.array(
+      v.object({
+        action: v.union(v.literal("insert"), v.literal("reconcile")),
+        handle: v.string(),
+        role: sourceRoleValidator,
+        venueId: v.optional(v.id("venues")),
+      }),
+    ),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const page = await ctx.db.query("venues").paginate(args.paginationOpts);
     const now = Date.now();
     let examined = 0;
     let inserted = 0;
+    let reconciled = 0;
     let alreadyPresent = 0;
     const proposals: Array<{
+      action: "insert" | "reconcile";
       handle: string;
       role: InstagramSourceRole;
       venueId?: Id<"venues">;
@@ -578,11 +625,40 @@ export const backfillFromVenues = mutation({
           .withIndex("by_handle", (q) => q.eq("handle", handle))
           .unique();
         if (existing) {
+          const venueIsPublished = roleForLegacyVenue(venue) === "venue";
+          const linkedToDifferentVenue =
+            existing.venueId !== undefined && existing.venueId !== venue._id;
+          const needsVenueRole = existing.role === "unknown";
+          const needsVenueLink = existing.venueId === undefined;
+          const canReconcile =
+            venueIsPublished &&
+            existing.active &&
+            !linkedToDifferentVenue &&
+            (existing.role === "unknown" || existing.role === "venue") &&
+            (needsVenueRole || needsVenueLink);
+          if (canReconcile) {
+            proposals.push({
+              action: "reconcile",
+              handle,
+              role: "venue",
+              venueId: venue._id,
+            });
+            if (!args.dryRun) {
+              await ctx.db.patch(existing._id, {
+                role: "venue",
+                venueId: venue._id,
+                updatedAt: Math.max(now, existing.updatedAt + 1),
+              });
+              reconciled += 1;
+            }
+            continue;
+          }
           alreadyPresent += 1;
           continue;
         }
         const role = roleForLegacyVenue(venue);
         const proposal = {
+          action: "insert" as const,
           handle,
           role,
           ...(role === "venue" ? { venueId: venue._id } : {}),
@@ -590,7 +666,9 @@ export const backfillFromVenues = mutation({
         proposals.push(proposal);
         if (!args.dryRun) {
           await ctx.db.insert("instagramSources", {
-            ...proposal,
+            handle,
+            role,
+            ...(role === "venue" ? { venueId: venue._id } : {}),
             active: venue.scrapeActive === true,
             discoveredAt: now,
             activatedAt: now,
@@ -606,6 +684,7 @@ export const backfillFromVenues = mutation({
       dryRun: args.dryRun,
       examined,
       inserted,
+      reconciled,
       alreadyPresent,
       proposals: proposals.slice(0, 100),
       isDone: page.isDone,

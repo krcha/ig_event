@@ -161,6 +161,127 @@ if (unknownRoleSourceEvent?.kind === "ok") {
   );
 }
 
+// A venue account's exact canonical mapping is shared context for every row
+// in one structured schedule. The same mapping is account identity only for a
+// promoter, so it must not leak into otherwise venue-less schedule rows.
+const canonicalMultiRowCaption = [
+  "Opening week schedule",
+  "10.09.2026 — ALPHA",
+  "11.09.2026 — BETA",
+].join("\n");
+const canonicalMultiRowPost = makePost({
+  caption: canonicalMultiRowCaption,
+  username: "multirow.source",
+  handle: "multirow.source",
+  postId: "canonical-multi-row-post",
+  instagramPostUrl: "https://www.instagram.com/p/canonical-multi-row-post/",
+});
+const canonicalMultiRowExtraction = makeExtraction({
+  extraction_contract_version: "event_evidence_v2",
+  venue: "",
+  category: "live music",
+  source_caption: canonicalMultiRowCaption,
+  schedule_entries: [
+    {
+      date: "10.09.2026",
+      time: "",
+      venue: "",
+      title: "ALPHA",
+      artists: ["ALPHA"],
+      description: "Opening-week concert with ALPHA.",
+      source_text: "10.09.2026 — ALPHA",
+      date_evidence: {
+        exact_text: "10.09.2026",
+        source: "poster",
+        is_relative: false,
+        resolved_date: "2026-09-10",
+      },
+      time_evidence: {
+        status: "not_stated",
+        exact_text: "",
+        source: "unknown",
+      },
+    },
+    {
+      date: "11.09.2026",
+      time: "",
+      venue: "",
+      title: "BETA",
+      artists: ["BETA"],
+      description: "Opening-week concert with BETA.",
+      source_text: "11.09.2026 — BETA",
+      date_evidence: {
+        exact_text: "11.09.2026",
+        source: "poster",
+        is_relative: false,
+        resolved_date: "2026-09-11",
+      },
+      time_evidence: {
+        status: "not_stated",
+        exact_text: "",
+        source: "unknown",
+      },
+    },
+  ],
+});
+assert.ok(
+  canonicalMultiRowExtraction.schedule_entries.every((entry) => !entry.venue),
+  "the fixture must not repeat the canonical venue in its schedule rows",
+);
+
+const canonicalMultiRowMappings = {
+  "multirow.source": "Canonical Multirow Venue",
+};
+const venueRoleMultiRowResults = prepareEventsForInsert(
+  canonicalMultiRowPost,
+  canonicalMultiRowExtraction,
+  IMAGE_URL,
+  canonicalMultiRowMappings,
+  {},
+  canonicalMultiRowMappings,
+  {
+    eventDateFilterNow: NOW,
+    sourceRolesByHandle: { "multirow.source": "venue" },
+  },
+).filter((result) => result.kind === "ok");
+assert.deepEqual(
+  venueRoleMultiRowResults.map((result) => [
+    result.event.title,
+    result.event.date,
+    result.event.venue,
+  ]),
+  [
+    ["ALPHA", "2026-09-10", "Canonical Multirow Venue"],
+    ["BETA", "2026-09-11", "Canonical Multirow Venue"],
+  ],
+  "a venue-role source must assign its exact canonical venue to every structured schedule row",
+);
+
+const promoterRoleMultiRowResults = prepareEventsForInsert(
+  canonicalMultiRowPost,
+  canonicalMultiRowExtraction,
+  IMAGE_URL,
+  canonicalMultiRowMappings,
+  {},
+  canonicalMultiRowMappings,
+  {
+    eventDateFilterNow: NOW,
+    sourceRolesByHandle: { "multirow.source": "promoter" },
+  },
+).filter((result) => result.kind === "ok");
+assert.deepEqual(
+  promoterRoleMultiRowResults.map((result) => [
+    result.event.title,
+    result.event.date,
+    result.event.venue,
+  ]),
+  [
+    ["ALPHA", "2026-09-10", ""],
+    ["BETA", "2026-09-11", ""],
+  ],
+  "an otherwise identical promoter post must not inherit the promoter account as its venue",
+);
+
 const mixedDownloadSummary = createEmptyIngestionSummary(["venue"]).handles[0];
 let mixedDownloadAttempts = 0;
 await withoutConsoleNoise(() =>
