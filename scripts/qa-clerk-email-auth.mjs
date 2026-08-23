@@ -41,6 +41,21 @@ requireIncludes(authCardPath, authCard, "getSafeRedirectPath", "same-origin post
 requireIncludes(authCardPath, authCard, "signIn.create", "manual email/password sign-in call");
 requireIncludes(authCardPath, authCard, "identifier: signInEmail.trim()", "email identifier submission");
 requireIncludes(authCardPath, authCard, "setSignInActive({ session:", "manual sign-in session activation");
+requireIncludes(
+  authCardPath,
+  authCard,
+  'strategy: "reset_password_email_code"',
+  "Clerk email-code password recovery",
+);
+requireIncludes(authCardPath, authCard, "attemptFirstFactor", "password recovery code verification");
+requireIncludes(authCardPath, authCard, "signIn.resetPassword", "verified password reset submission");
+requireIncludes(
+  authCardPath,
+  authCard,
+  "signOutOfOtherSessions: true",
+  "password reset session revocation",
+);
+requireIncludes(authCardPath, authCard, "Forgot password?", "password recovery entry point");
 requireIncludes(authCardPath, authCard, 'name="email"', "manual email input");
 requireIncludes(authCardPath, authCard, 'type="email"', "email input type");
 requireIncludes(authCardPath, authCard, 'type="password"', "manual password input");

@@ -7,6 +7,7 @@ import { type FormEvent, useEffect, useState } from "react";
 const AUTH_COMPLETE_REDIRECT_PATH = "/";
 
 type AuthMode = "sign-in" | "sign-up";
+type SignInView = "password" | "reset-code" | "reset-email" | "reset-password";
 
 type EmailAuthCardProps = {
   mode: AuthMode;
@@ -63,6 +64,10 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
   const [signInPassword, setSignInPassword] = useState("");
   const [signInError, setSignInError] = useState<string | null>(null);
   const [isSignInSubmitting, setIsSignInSubmitting] = useState(false);
+  const [signInView, setSignInView] = useState("password" as SignInView);
+  const [passwordResetCode, setPasswordResetCode] = useState("");
+  const [passwordResetPassword, setPasswordResetPassword] = useState("");
+  const [passwordResetPasswordConfirmation, setPasswordResetPasswordConfirmation] = useState("");
   const [manualSignUpEmail, setManualSignUpEmail] = useState("");
   const [manualSignUpUsername, setManualSignUpUsername] = useState("");
   const [manualSignUpPassword, setManualSignUpPassword] = useState("");
@@ -108,6 +113,107 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
     } catch (caughtError) {
       setSignInError(
         caughtError instanceof Error ? caughtError.message : "Could not sign in with those credentials.",
+      );
+    } finally {
+      setIsSignInSubmitting(false);
+    }
+  }
+
+  async function startPasswordReset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (mode !== "sign-in" || !isSignInLoaded || !signIn) {
+      return;
+    }
+
+    setIsSignInSubmitting(true);
+    setSignInError(null);
+
+    try {
+      const result = await signIn.create({
+        identifier: signInEmail.trim(),
+        strategy: "reset_password_email_code",
+      });
+
+      if (result.status === "needs_first_factor") {
+        setSignInView("reset-code");
+        return;
+      }
+
+      setSignInError("Could not start password recovery. Please try again.");
+    } catch (caughtError) {
+      setSignInError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Could not send the password recovery code.",
+      );
+    } finally {
+      setIsSignInSubmitting(false);
+    }
+  }
+
+  async function verifyPasswordResetCode(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (mode !== "sign-in" || !isSignInLoaded || !signIn) {
+      return;
+    }
+
+    setIsSignInSubmitting(true);
+    setSignInError(null);
+
+    try {
+      const result = await signIn.attemptFirstFactor({
+        code: passwordResetCode.trim(),
+        strategy: "reset_password_email_code",
+      });
+
+      if (result.status === "needs_new_password") {
+        setSignInView("reset-password");
+        return;
+      }
+
+      setSignInError("Could not verify that recovery code. Please try again.");
+    } catch (caughtError) {
+      setSignInError(
+        caughtError instanceof Error ? caughtError.message : "Could not verify that recovery code.",
+      );
+    } finally {
+      setIsSignInSubmitting(false);
+    }
+  }
+
+  async function completePasswordReset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (mode !== "sign-in" || !isSignInLoaded || !signIn || !setSignInActive) {
+      return;
+    }
+
+    if (passwordResetPassword !== passwordResetPasswordConfirmation) {
+      setSignInError("The new passwords do not match.");
+      return;
+    }
+
+    setIsSignInSubmitting(true);
+    setSignInError(null);
+
+    try {
+      const result = await signIn.resetPassword({
+        password: passwordResetPassword,
+        signOutOfOtherSessions: true,
+      });
+
+      if (result.status === "complete" && result.createdSessionId) {
+        await setSignInActive({ session: result.createdSessionId });
+        window.location.assign(authCompleteRedirectPath);
+        return;
+      }
+
+      setSignInError("Could not complete password recovery. Please try again.");
+    } catch (caughtError) {
+      setSignInError(
+        caughtError instanceof Error ? caughtError.message : "Could not set the new password.",
       );
     } finally {
       setIsSignInSubmitting(false);
@@ -192,46 +298,166 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
           </div>
 
           {mode === "sign-in" ? (
-            <form className="flex flex-col gap-3" onSubmit={startManualSignIn}>
-              <label className="flex flex-col gap-1.5 text-left text-sm font-medium text-foreground">
-                Email
-                <input
-                  autoComplete="email"
-                  className="rounded-2xl border border-border bg-background px-3 py-2 text-foreground outline-none transition focus:border-primary"
-                  disabled={!isSignInLoaded || isSignInSubmitting}
-                  name="email"
-                  onChange={(event) => setSignInEmail(event.target.value)}
-                  required
-                  type="email"
-                  value={signInEmail}
-                />
-              </label>
-              <label className="flex flex-col gap-1.5 text-left text-sm font-medium text-foreground">
-                Password
-                <input
-                  autoComplete="current-password"
-                  className="rounded-2xl border border-border bg-background px-3 py-2 text-foreground outline-none transition focus:border-primary"
-                  disabled={!isSignInLoaded || isSignInSubmitting}
-                  name="password"
-                  onChange={(event) => setSignInPassword(event.target.value)}
-                  required
-                  type="password"
-                  value={signInPassword}
-                />
-              </label>
-              <button
-                className="inline-flex min-h-12 w-full items-center justify-center rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow-[0_20px_44px_-24px_rgba(14,116,144,0.85)] transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={!isSignInLoaded || isSignInSubmitting}
-                type="submit"
-              >
-                {isSignInSubmitting ? "Signing in…" : "Sign in"}
-              </button>
+            <div className="flex flex-col gap-3">
+              {signInView === "password" ? (
+                <form className="flex flex-col gap-3" onSubmit={startManualSignIn}>
+                  <label className="flex flex-col gap-1.5 text-left text-sm font-medium text-foreground">
+                    Email
+                    <input
+                      autoComplete="email"
+                      className="rounded-2xl border border-border bg-background px-3 py-2 text-foreground outline-none transition focus:border-primary"
+                      disabled={!isSignInLoaded || isSignInSubmitting}
+                      name="email"
+                      onChange={(event) => setSignInEmail(event.target.value)}
+                      required
+                      type="email"
+                      value={signInEmail}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1.5 text-left text-sm font-medium text-foreground">
+                    Password
+                    <input
+                      autoComplete="current-password"
+                      className="rounded-2xl border border-border bg-background px-3 py-2 text-foreground outline-none transition focus:border-primary"
+                      disabled={!isSignInLoaded || isSignInSubmitting}
+                      name="password"
+                      onChange={(event) => setSignInPassword(event.target.value)}
+                      required
+                      type="password"
+                      value={signInPassword}
+                    />
+                  </label>
+                  <button
+                    className="inline-flex min-h-12 w-full items-center justify-center rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow-[0_20px_44px_-24px_rgba(14,116,144,0.85)] transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!isSignInLoaded || isSignInSubmitting}
+                    type="submit"
+                  >
+                    {isSignInSubmitting ? "Signing in…" : "Sign in"}
+                  </button>
+                  <button
+                    className="text-sm font-semibold text-primary hover:text-primary/85 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!isSignInLoaded || isSignInSubmitting}
+                    onClick={() => {
+                      setSignInError(null);
+                      setSignInView("reset-email");
+                    }}
+                    type="button"
+                  >
+                    Forgot password?
+                  </button>
+                </form>
+              ) : signInView === "reset-email" ? (
+                <form className="flex flex-col gap-3" onSubmit={startPasswordReset}>
+                  <p className="text-sm leading-6 text-muted-foreground">
+                    Enter the account email. Clerk will send a one-time recovery code.
+                  </p>
+                  <label className="flex flex-col gap-1.5 text-left text-sm font-medium text-foreground">
+                    Email
+                    <input
+                      autoComplete="email"
+                      className="rounded-2xl border border-border bg-background px-3 py-2 text-foreground outline-none transition focus:border-primary"
+                      disabled={!isSignInLoaded || isSignInSubmitting}
+                      name="email"
+                      onChange={(event) => setSignInEmail(event.target.value)}
+                      required
+                      type="email"
+                      value={signInEmail}
+                    />
+                  </label>
+                  <button
+                    className="inline-flex min-h-12 w-full items-center justify-center rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow-[0_20px_44px_-24px_rgba(14,116,144,0.85)] transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!isSignInLoaded || isSignInSubmitting}
+                    type="submit"
+                  >
+                    {isSignInSubmitting ? "Sending…" : "Send recovery code"}
+                  </button>
+                  <button
+                    className="text-sm font-semibold text-primary hover:text-primary/85 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={isSignInSubmitting}
+                    onClick={() => {
+                      setSignInError(null);
+                      setSignInView("password");
+                    }}
+                    type="button"
+                  >
+                    Back to sign in
+                  </button>
+                </form>
+              ) : signInView === "reset-code" ? (
+                <form className="flex flex-col gap-3" onSubmit={verifyPasswordResetCode}>
+                  <p className="text-sm leading-6 text-muted-foreground">
+                    Enter the recovery code sent to the account email.
+                  </p>
+                  <label className="flex flex-col gap-1.5 text-left text-sm font-medium text-foreground">
+                    Recovery code
+                    <input
+                      autoComplete="one-time-code"
+                      className="rounded-2xl border border-border bg-background px-3 py-2 text-foreground outline-none transition focus:border-primary"
+                      disabled={!isSignInLoaded || isSignInSubmitting}
+                      inputMode="numeric"
+                      name="code"
+                      onChange={(event) => setPasswordResetCode(event.target.value)}
+                      required
+                      type="text"
+                      value={passwordResetCode}
+                    />
+                  </label>
+                  <button
+                    className="inline-flex min-h-12 w-full items-center justify-center rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow-[0_20px_44px_-24px_rgba(14,116,144,0.85)] transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!isSignInLoaded || isSignInSubmitting}
+                    type="submit"
+                  >
+                    {isSignInSubmitting ? "Verifying…" : "Verify recovery code"}
+                  </button>
+                </form>
+              ) : (
+                <form className="flex flex-col gap-3" onSubmit={completePasswordReset}>
+                  <p className="text-sm leading-6 text-muted-foreground">
+                    Choose a new, unique password. Other active sessions will be signed out.
+                  </p>
+                  <label className="flex flex-col gap-1.5 text-left text-sm font-medium text-foreground">
+                    New password
+                    <input
+                      autoComplete="new-password"
+                      className="rounded-2xl border border-border bg-background px-3 py-2 text-foreground outline-none transition focus:border-primary"
+                      disabled={!isSignInLoaded || isSignInSubmitting}
+                      name="new-password"
+                      onChange={(event) => setPasswordResetPassword(event.target.value)}
+                      required
+                      type="password"
+                      value={passwordResetPassword}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1.5 text-left text-sm font-medium text-foreground">
+                    Confirm new password
+                    <input
+                      autoComplete="new-password"
+                      className="rounded-2xl border border-border bg-background px-3 py-2 text-foreground outline-none transition focus:border-primary"
+                      disabled={!isSignInLoaded || isSignInSubmitting}
+                      name="confirm-password"
+                      onChange={(event) =>
+                        setPasswordResetPasswordConfirmation(event.target.value)
+                      }
+                      required
+                      type="password"
+                      value={passwordResetPasswordConfirmation}
+                    />
+                  </label>
+                  <button
+                    className="inline-flex min-h-12 w-full items-center justify-center rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow-[0_20px_44px_-24px_rgba(14,116,144,0.85)] transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!isSignInLoaded || isSignInSubmitting}
+                    type="submit"
+                  >
+                    {isSignInSubmitting ? "Updating…" : "Set new password"}
+                  </button>
+                </form>
+              )}
               {signInError ? (
                 <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                   {signInError}
                 </p>
               ) : null}
-            </form>
+            </div>
         ) : isManualSignUpVerifying ? (
           <form className="mt-4 flex flex-col gap-3" onSubmit={verifyManualSignUp}>
             <label className="flex flex-col gap-1.5 text-left text-sm font-medium text-foreground">
