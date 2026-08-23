@@ -588,24 +588,6 @@ export const backfillFromVenues = mutation({
     dryRun: v.boolean(),
     serviceSecret: v.optional(v.string()),
   },
-  returns: v.object({
-    dryRun: v.boolean(),
-    examined: v.number(),
-    inserted: v.number(),
-    reconciled: v.number(),
-    ambiguous: v.number(),
-    alreadyPresent: v.number(),
-    proposals: v.array(
-      v.object({
-        action: v.union(v.literal("insert"), v.literal("reconcile")),
-        handle: v.string(),
-        role: sourceRoleValidator,
-        venueId: v.optional(v.id("venues")),
-      }),
-    ),
-    isDone: v.boolean(),
-    continueCursor: v.string(),
-  }),
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const page = await ctx.db.query("venues").paginate(args.paginationOpts);
