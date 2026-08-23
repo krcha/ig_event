@@ -24,11 +24,13 @@ import {
   assertExpectedEventStatus,
   assertExpectedEventUpdatedAt,
   HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION,
+  HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION,
   hasCompleteSourceGroundingAttestation,
   hasEventEvidenceV2AutoApproval,
   hasHumanReviewedLegacySourceAttestation,
   hasHumanReviewedLegacySourcePolicyMarker,
   hasHumanReviewableLegacySourceAttestation,
+  hasHumanReviewableStructuredSourceAttestation,
   nextEventUpdatedAt,
   assertServiceCreateEventPolicy,
   assertServiceUpdateEventPolicy,
@@ -299,7 +301,10 @@ type ServiceSourceCandidateFields = ApprovalCandidateFields & {
 async function assertPersistedServiceSourcePolicy(
   ctx: MutationCtx,
   candidate: ServiceSourceCandidateFields,
-  options: { allowHumanReviewedLegacy?: boolean } = {},
+  options: {
+    allowHumanReviewedLegacy?: boolean;
+    allowHumanReviewedStructured?: boolean;
+  } = {},
 ): Promise<void> {
   const structuredEvidence = hasEventEvidenceV2AutoApproval(
     candidate.normalizedFieldsJson,
@@ -308,9 +313,15 @@ async function assertPersistedServiceSourcePolicy(
   const humanReviewedLegacy =
     options.allowHumanReviewedLegacy === true &&
     hasHumanReviewableLegacySourceAttestation(candidate.normalizedFieldsJson, candidate);
+  const humanReviewedStructured =
+    options.allowHumanReviewedStructured === true &&
+    hasHumanReviewableStructuredSourceAttestation(
+      candidate.normalizedFieldsJson,
+      candidate,
+    );
   let structuredSourceHandle = "";
   let structuredExtractionMode = "";
-  if (structuredEvidence || humanReviewedLegacy) {
+  if (structuredEvidence || humanReviewedLegacy || humanReviewedStructured) {
     try {
       const fields = JSON.parse(candidate.normalizedFieldsJson ?? "{}") as Record<string, unknown>;
       structuredSourceHandle =
@@ -353,7 +364,7 @@ async function assertPersistedServiceSourcePolicy(
   ) {
     throw new Error("Service approval source does not match the persisted Instagram post.");
   }
-  if (structuredEvidence) {
+  if (structuredEvidence || humanReviewedStructured) {
     const posterAssets =
       structuredExtractionMode === "poster"
         ? await ctx.db
@@ -419,6 +430,8 @@ async function assertHumanApprovalSourcePolicy(
   normalizedFieldsJson?: string;
   humanReviewedLegacySourcePolicyVersion?:
     typeof HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION;
+  humanReviewedStructuredSourcePolicyVersion?:
+    typeof HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION;
 }> {
   const completeMachineAttestation = hasCompleteSourceGroundingAttestation(
     candidate.normalizedFieldsJson,
@@ -428,31 +441,55 @@ async function assertHumanApprovalSourcePolicy(
     candidate.normalizedFieldsJson,
     candidate,
   );
-  if (!completeMachineAttestation && !humanReviewableLegacy) {
+  const humanReviewableStructured = hasHumanReviewableStructuredSourceAttestation(
+    candidate.normalizedFieldsJson,
+    candidate,
+  );
+  if (
+    !completeMachineAttestation &&
+    !humanReviewableLegacy &&
+    !humanReviewableStructured
+  ) {
     throw new Error(
       "Human approval requires complete canonical Instagram source grounding for the final public fields.",
     );
   }
-  if (humanReviewableLegacy && (moderationNote?.trim().length ?? 0) < 20) {
-    throw new Error("Legacy human approval requires a substantive moderation note.");
+  if (
+    (humanReviewableLegacy || humanReviewableStructured) &&
+    (moderationNote?.trim().length ?? 0) < 20
+  ) {
+    throw new Error("Human approval requires a substantive moderation note.");
   }
   await assertPersistedServiceSourcePolicy(ctx, candidate, {
     allowHumanReviewedLegacy: humanReviewableLegacy,
+    allowHumanReviewedStructured: humanReviewableStructured,
   });
-  if (!humanReviewableLegacy) {
+  if (!humanReviewableLegacy && !humanReviewableStructured) {
     return {};
   }
   const normalizedFields = JSON.parse(candidate.normalizedFieldsJson ?? "{}") as Record<
     string,
     unknown
   >;
+  const marker: {
+    humanReviewedLegacySourcePolicyVersion?:
+      typeof HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION;
+    humanReviewedStructuredSourcePolicyVersion?:
+      typeof HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION;
+  } = humanReviewableStructured
+    ? {
+        humanReviewedStructuredSourcePolicyVersion:
+          HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION,
+      }
+    : {
+        humanReviewedLegacySourcePolicyVersion:
+          HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION,
+      };
   return {
-    humanReviewedLegacySourcePolicyVersion:
-      HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION,
+    ...marker,
     normalizedFieldsJson: JSON.stringify({
       ...normalizedFields,
-      humanReviewedLegacySourcePolicyVersion:
-        HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION,
+      ...marker,
     }),
   };
 }
@@ -3594,6 +3631,7 @@ export const setEventStatus = mutation({
     moderationNote: v.optional(v.string()),
     expectedUpdatedAt: v.optional(v.number()),
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
     const identity = await requireAdminIdentity(ctx);
     const existingEvent = await ctx.db.get(args.id);
@@ -3630,6 +3668,7 @@ export const setEventStatus = mutation({
       note: args.moderationNote,
       patch: { status: args.status },
     });
+    return null;
   },
 });
 
@@ -3645,6 +3684,10 @@ export const setEventStatuses = mutation({
     moderationNote: v.optional(v.string()),
     approveAsDistinctSameVenueDateBatch: v.optional(v.boolean()),
   },
+  returns: v.object({
+    updatedCount: v.number(),
+    skippedCount: v.number(),
+  }),
   handler: async (ctx, args) => {
     const identity = await requireAdminIdentity(ctx);
     const now = Date.now();
@@ -3682,6 +3725,8 @@ export const setEventStatuses = mutation({
           normalizedFieldsJson?: string;
           humanReviewedLegacySourcePolicyVersion?:
             typeof HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION;
+          humanReviewedStructuredSourcePolicyVersion?:
+            typeof HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION;
         };
       }
     >();

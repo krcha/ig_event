@@ -100,8 +100,8 @@ function parseTimeToken(
   const hasAm = /a\.?m\.?/i.test(lower);
   const hasPm = /p\.?m\.?/i.test(lower);
   const hasExplicitTimeMarker =
-    /[:.,h]/i.test(lower) ||
-    /(?:časova|casova|čas|cas|sati|sata|sat|hours?|hrs?|a\.?m\.?|p\.?m\.?)\b/iu.test(
+    /[:.,hч]/iu.test(lower) ||
+    /(?:часова|час|časova|casova|čas|cas|sati|sata|sat|hours?|hrs?|a\.?m\.?|p\.?m\.?)\b/iu.test(
       lower,
     );
   if (!hasExplicitTimeMarker && !options.allowBareHour) {
@@ -109,7 +109,8 @@ function parseTimeToken(
   }
 
   const normalized = lower
-    .replace(/(?:časova|casova|čas|cas|sati|sata|sat|hours?|hrs?)/giu, "h")
+    .replace(/(?:часова|час|časova|casova|čas|cas|sati|sata|sat|hours?|hrs?)/giu, "h")
+    .replace(/ч/giu, "h")
     .replace(/(?:a\.?m\.?|p\.?m\.?)\b/gi, "")
     .replace(/\s+/g, "")
     .replace(/,/g, ":")
@@ -135,8 +136,8 @@ function parseTimeToken(
 function timeTokenHasExplicitMarker(value: string): boolean {
   const lower = value.trim().toLocaleLowerCase();
   return (
-    /[:.,h]/i.test(lower) ||
-    /(?:časova|casova|čas|cas|sati|sata|sat|hours?|hrs?|a\.?m\.?|p\.?m\.?)\b/iu.test(
+    /[:.,hч]/iu.test(lower) ||
+    /(?:часова|час|časova|casova|čas|cas|sati|sata|sat|hours?|hrs?|a\.?m\.?|p\.?m\.?)\b/iu.test(
       lower,
     )
   );
@@ -163,8 +164,8 @@ function parseCleanTimeRange(value: string): Pick<NormalizedEventTime, "endLabel
   return { startLabel, endLabel };
 }
 
-const EVENT_TIME_WORD_SUFFIX = String.raw`(?:h|časova|casova|čas|cas|sati|sata|sat|hrs?|hours?|a\.?m\.?|p\.?m\.?)`;
-const EVENT_TIME_TOKEN_PATTERN = String.raw`(?:[01]?\d|2[0-3])(?:\s*(?:[:.,h])\s*[0-5]\d)?\s*${EVENT_TIME_WORD_SUFFIX}?`;
+const EVENT_TIME_WORD_SUFFIX = String.raw`(?:h|ч|часова|час|časova|casova|čas|cas|sati|sata|sat|hrs?|hours?|a\.?m\.?|p\.?m\.?)`;
+const EVENT_TIME_TOKEN_PATTERN = String.raw`(?:[01]?\d|2[0-3])(?:\s*(?:[:.,hч])\s*[0-5]\d)?\s*${EVENT_TIME_WORD_SUFFIX}?`;
 const EVENT_TIME_RANGE_CONNECTOR_PATTERN = String.raw`(?:-|–|—|/|\bto\b|\bdo\b)`;
 const EVENT_TIME_CONTEXT_PATTERN = String.raw`(?:početak|pocetak|počinje|pocinje|kreće|krece|start(?:s|ing)?|begin(?:s|ning)?|doors(?:\s+open)?|vrata|kapije|program|nastup|svirka|show|from|od|at|u)`;
 const DATE_MONTH_WORD_AFTER_TIME_RE = /^\s*\.\s*(?:do\b|jan(?:uar)?\b|januar[au]?\b|feb(?:ruar)?\b|februar[au]?\b|mar(?:t|ch)?\b|marta\b|apr(?:il)?\b|aprila\b|maj(?:a)?\b|jun(?:e|a|i)?\b|jul(?:y|a|i)?\b|avg(?:ust)?(?:a)?\b|aug(?:ust)?\b|sep(?:t|tember)?(?:a)?\b|okt(?:obar|obra)?\b|oct(?:ober)?\b|nov(?:embar|embra|ember)?\b|dec(?:embar|embra|ember)?\b|\d)/iu;

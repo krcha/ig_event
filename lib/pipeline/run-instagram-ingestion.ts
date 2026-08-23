@@ -2324,7 +2324,7 @@ const SOURCE_GROUNDING_LABELED_CLOCK_PATTERN =
 function stripDoorOpeningClockValues(value: string): string {
   return value.replace(
     new RegExp(
-      String.raw`\b(?:vrata(?:\s+se)?\s+otvaraju|doors?\s+open(?:s)?)[^\n.!?]{0,40}?(?:u|at)?\s*${SOURCE_GROUNDING_LABELED_CLOCK_PATTERN}\b`,
+      String.raw`\b(?:vrata(?:\s+se)?\s+otvaraju|doors?(?:\s+open(?:s)?)?)\s*(?::|[-–—])?[^\n.!?]{0,24}?(?:u|at)?\s*${SOURCE_GROUNDING_LABELED_CLOCK_PATTERN}\b`,
       "giu",
     ),
     " ",
@@ -5843,7 +5843,7 @@ function collectRelativeWeekdayMatches(text: string): RelativeWeekdayMatch[] {
   }
 
   const nextWeekdayPattern = new RegExp(
-    String.raw`${RELATIVE_TEXT_LEFT_BOUNDARY}(?:next|sledece|sljedece|naredne|narednog|narednu|iduce|следеће|следеце|сљедеће|сљедеце|наредне|наредног|наредну|идуће|идуце)\s+(${RELATIVE_WEEKDAY_ALIAS_PATTERN})${RELATIVE_TEXT_RIGHT_BOUNDARY}`,
+    String.raw`${RELATIVE_TEXT_LEFT_BOUNDARY}(?:next|sledeci|sledece|sledeceg|sljedeci|sljedece|sljedeceg|naredne|narednog|narednu|iduce|следећи|следеће|следећег|следеце|сљедећи|сљедеће|сљедећег|сљедеце|наредне|наредног|наредну|идуће|идуце)\s+(${RELATIVE_WEEKDAY_ALIAS_PATTERN})${RELATIVE_TEXT_RIGHT_BOUNDARY}`,
     "giu",
   );
   for (const match of foldedText.matchAll(nextWeekdayPattern)) {
@@ -8776,11 +8776,15 @@ function isVerifiedTimeEvidence(options: {
   }
 
   const startEvidence = stripDoorOpeningClockValues(evidenceText);
+  const normalizedEvidenceTime = normalizeEventTime(startEvidence);
+  const normalizedResolvedTime = normalizeEventTime(options.resolvedStartTime);
   return (
     Boolean(options.resolvedStartTime) &&
     evidenceIsBound &&
     startEvidence === evidenceText &&
-    extractEventTimeFromText(startEvidence) === options.resolvedStartTime
+    normalizedEvidenceTime.startLabel === normalizedResolvedTime.startLabel &&
+    (!normalizedResolvedTime.endLabel ||
+      normalizedEvidenceTime.endLabel === normalizedResolvedTime.endLabel)
   );
 }
 
@@ -9059,6 +9063,7 @@ function isVerifiedEventIdentityEvidence(options: {
 const MINOR_TITLE_CONNECTOR_TOKENS = new Set([
   "a",
   "an",
+  "and",
   "i",
   "je",
   "koja",

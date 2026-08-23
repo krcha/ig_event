@@ -23,12 +23,28 @@ export type EventEvidenceConflictContext = {
 const MINOR_TITLE_CONNECTOR_TOKENS = new Set([
   "a",
   "an",
+  "and",
   "i",
   "je",
   "koja",
   "koje",
   "koji",
   "the",
+]);
+
+const MONTH_NUMBER_BY_NAME = new Map<string, number>([
+  ["januar", 1], ["januara", 1], ["january", 1],
+  ["februar", 2], ["februara", 2], ["february", 2],
+  ["mart", 3], ["marta", 3], ["march", 3],
+  ["april", 4], ["aprila", 4],
+  ["maj", 5], ["maja", 5], ["may", 5],
+  ["jun", 6], ["juna", 6], ["june", 6],
+  ["jul", 7], ["jula", 7], ["july", 7],
+  ["avgust", 8], ["avgusta", 8], ["august", 8],
+  ["septembar", 9], ["septembra", 9], ["september", 9],
+  ["oktobar", 10], ["oktobra", 10], ["october", 10],
+  ["novembar", 11], ["novembra", 11], ["november", 11],
+  ["decembar", 12], ["decembra", 12], ["december", 12],
 ]);
 
 const WEEKDAY_TOKENS = [
@@ -182,6 +198,24 @@ function explicitDatesMentioned(value: string, resolvedDate: string): string[] {
     if (!year) continue;
     if (year.length === 2) year = `20${year}`;
     matches.add(`${year}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`);
+  }
+  const comparable = comparableText(value);
+  for (const match of comparable.matchAll(
+    /\b(\d{1,2})(?:st|nd|rd|th)?\.?\s+([\p{L}]+)(?:\s+(\d{2,4}))?\b/gu,
+  )) {
+    const month = MONTH_NUMBER_BY_NAME.get(match[2]);
+    let year = match[3] ?? resolvedYear;
+    if (!month || !year) continue;
+    if (year.length === 2) year = `20${year}`;
+    const day = Number.parseInt(match[1], 10);
+    const candidate = new Date(Date.UTC(Number.parseInt(year, 10), month - 1, day));
+    if (
+      candidate.getUTCFullYear() === Number.parseInt(year, 10) &&
+      candidate.getUTCMonth() === month - 1 &&
+      candidate.getUTCDate() === day
+    ) {
+      matches.add(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
+    }
   }
   return [...matches];
 }

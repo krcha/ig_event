@@ -140,13 +140,14 @@ Rules:
 
 === EACH ROW IS INDEPENDENT ===
 - Every field in a row must come from THAT row's own text/region. NEVER copy a date, time, venue, title, or artist from one row into another.
+- When a poster row abbreviates a date (for example "11. BG BANDA") and the caption contains one uniquely matching full row (for example "11.09 — BG BANDA"), use the caption's complete date phrase as that row's date_evidence. Match by the same title/act; never borrow a date from a different row.
 - A poster-wide venue or common start time may carry across rows only when visible caption/poster/alt-text wording clearly says it applies to every row. Record that exact wording in "shared_schedule_context"; otherwise keep the row field empty.
 - "source_text": copy the exact snippet (date + act/title, or date + the qualifying row-local venue/event-kind evidence, plus optional time) you read that row from. If you cannot quote that exact row, do not emit the schedule entry.
 
 === DATES (per row) — "DD.MM" IS A DATE, NEVER A TIME ===
 - European/Serbian dates are day.month: "19.06" / "19.06." / "19/06" = 19 June. Put this in "date".
 - Daily date ranges such as "svake večeri od 11. do 17. juna", "od 11. do 17. juna", "11.06-17.06", or "from 11 to 17 June" mean one event occurrence on every date in that range. Prefer separate "schedule_entries" rows, one per date; if you cannot enumerate them, put the full supported range in "date" rather than only the first date.
-- Serbian/English relative dates are date evidence, not missing dates. Resolve them against the Instagram post timestamp: "danas"/"večeras"/"today"/"tonight", "sutra"/"tomorrow", "prekosutra"/"day after tomorrow", "u četvrtak"/"on Thursday", "ove nedelje"/"this week" + weekday, "ovog petka"/"this Friday", "sledeće subote"/"sljedeće subote"/"next Saturday". If the same named event/act is listed for multiple weekdays (for example "PETAK / SUBOTA | 21h"), return one occurrence per weekday/date.
+- Serbian/English relative dates are date evidence, not missing dates. Resolve them against the Instagram post timestamp: "danas"/"večeras"/"today"/"tonight", "sutra"/"tomorrow", "prekosutra"/"day after tomorrow", "u četvrtak"/"on Thursday", "ove nedelje"/"this week" + weekday, "ovog petka"/"this Friday", "sledeći petak"/"sledećeg petka", "sledeće subote"/"sljedeće subote"/"next Saturday". If the same named event/act is listed for multiple weekdays (for example "PETAK / SUBOTA | 21h"), return one occurrence per weekday/date.
 - For every emitted event or schedule row, copy the exact date phrase into "date_evidence.exact_text", label where it appeared, say whether it is relative, and put the final resolved ISO calendar date (YYYY-MM-DD) in "resolved_date". Never invent a date phrase.
 - A schedule row with no event title or billed act may still be emitted only when THAT SAME ROW contains (1) an exact readable date and (2) either a specific physical venue name or a clear event-kind phrase such as concert, matinee, exhibition, screening, performance, workshop, live music, jam session, svirka, projekcija, izložba, or radionica. Keep "title" empty and "artists" []; copy the complete qualifying row into "source_text". Omit every other unnamed row. Never use the venue, account, handle, hashtag, date, or event-kind phrase as the title.
 - Include the year if shown; otherwise infer it from the post timestamp (events are at/after the post date) and write "DD.MM.YYYY" when confident, else "DD.MM".
@@ -161,10 +162,12 @@ Rules:
 
 === TITLES (per row) — ONLY SOURCE-GROUNDED TITLES ===
 - Use the act/event name billed for that row, exactly: "Zalazak", "Sreda na Kućici", "Los Tres", "Mladost", "Ludost". If a row bills only an artist/handle, use that as the title.
+- If a row bills multiple artists, a title made only from those exact billed names is valid even when the source joins them with "and"/"i" and the normalized title uses commas. Do not reject it merely because punctuation or the connector differs.
 - Normally emit a dated row only when its act/event title is explicitly readable. The only exception is the narrow unnamed-row rule above: exact row date plus row-local physical venue or clear event-kind evidence, with empty "title" and empty "artists". Never use the venue, organizer, account, handle, date, event-kind phrase, or a guessed familiar artist as a last-resort row title.
 
 === VENUE (per row) ===
 - If a row names its own venue, use it. Apply the canonical venue hint when it matches. For multi-row posters, do not copy a venue across rows unless shared_schedule_context.venue contains visible evidence that it applies to all rows.
+- Prefer the explicitly named physical location over the source account, promoter, organizer, or event-brand name. Use a canonical venue hint from a venue account only when no different physical venue is explicitly named. Preserve a billed artist's Instagram handle when the handle is the clearest source identity.
 - If the poster or caption is a monthly program, venue schedule, or other multi-date lineup for the same venue, populate "schedule_entries" with one object per separately dated event row.
 - Do not collapse a multi-date venue schedule into one event. Each "schedule_entries" item must correspond to a single explicit date from the source.
 - For each "schedule_entries" item, copy the explicit row-level date, time, title/billed act text, artists, short factual description, and a compact "source_text" snippet from that row when readable.

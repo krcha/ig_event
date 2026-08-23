@@ -3,10 +3,12 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { isCaptionSourceCoherentWithEvent } from "../lib/events/event-source-approval";
 import {
   HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION,
+  HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION,
   hasCompleteSourceGroundedAutoApproval,
   hasCompleteSourceGroundingAttestation,
   hasEventEvidenceV2AutoApproval,
   hasHumanReviewedLegacySourceAttestation,
+  hasHumanReviewedStructuredSourceAttestation,
   hasTrustedSourceEventAnnouncementAutoApproval,
 } from "../lib/events/event-update-precondition";
 import { normalizeInstagramPostUrl } from "../lib/images/apify-images";
@@ -88,9 +90,17 @@ export async function isCanonicallyGroundedApprovedEvent(
     typeof event.moderationNote === "string" &&
     event.moderationNote.trim().length >= 20 &&
     hasHumanReviewedLegacySourceAttestation(event.normalizedFieldsJson, event);
+  const humanReviewedStructuredAuthorized =
+    hasHumanReviewMetadata &&
+    event.humanReviewedStructuredSourcePolicyVersion ===
+      HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION &&
+    typeof event.moderationNote === "string" &&
+    event.moderationNote.trim().length >= 20 &&
+    hasHumanReviewedStructuredSourceAttestation(event.normalizedFieldsJson, event);
   const humanAuthorized =
     hasHumanReviewMetadata &&
     (humanReviewedLegacyAuthorized ||
+      humanReviewedStructuredAuthorized ||
       hasCompleteSourceGroundingAttestation(event.normalizedFieldsJson, {
         title: event.title,
         date: event.date,
@@ -161,7 +171,7 @@ export async function isCanonicallyGroundedApprovedEvent(
     return false;
   }
 
-  if (structuredEvidenceAuthorized) {
+  if (structuredEvidenceAuthorized || humanReviewedStructuredAuthorized) {
     const posterAssets =
       fields.extractionMode === "poster"
         ? await ctx.db

@@ -144,7 +144,8 @@ export function specificVenueValueAppearsInUnnamedEventEvidence(
 export function sourceEvidenceNamesSupportedUnnamedEventKind(
   evidence: string,
 ): boolean {
-  return /\b(?:concert|exhibition|izlo[zž]b[aeiu]?|jam\s+session|live\s+(?:music|show)|matin[eé]e?|opening|otvaranj[aeu]?|performance|performans[aeu]?|projekcij[aeu]?|screening|show|svirk[aeu]?|workshop|radionic[aeu]?)\b/iu.test(
-    evidence,
+  const normalizedEvidence = toSearchableText(evidence);
+  return /\b(?:concert|koncert|exhibition|izlozb[aeiu]?|jam\s+session|live\s+(?:music|show)|uzivo\s+muzik[aeu]?|matin[eé]e?|opening|otvaranj[aeu]?|performance|performans[aeu]?|projekcij[aeu]?|screening|show|svirk[aeu]?|workshop|radionic[aeu]?|party|parti|zurk[aeiu]?|disko|disco\s+night|music\s+night)\b/iu.test(
+    normalizedEvidence,
   );
 }

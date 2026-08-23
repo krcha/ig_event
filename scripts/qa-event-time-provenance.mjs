@@ -38,6 +38,8 @@ for (const [text, expected] of [
   ["Tickets from 10 to 20 dollars but event starts at 21h", "21:00"],
   ["Open: 9h-17h, concert starts at 21h", "21:00"],
   ["Happy hour from 5 to 8 but show starts at 21h", "21:00"],
+  ["Уживо музика од 19ч.", "19:00"],
+  ["17-00h", "17:00-00:00"],
 ]) {
   assert.equal(extractEventTimeEvidenceFromText(text)?.time, expected, `time evidence: ${text}`);
 }

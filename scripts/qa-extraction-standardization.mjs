@@ -5079,6 +5079,19 @@ function runSerbianRelativeDateQa() {
     }
   }
 
+  assertRelativeDateCase({
+    caption: "Sledeći petak stiže Mega Band.",
+    expectedDates: [weekdayIsoDateFrom(baseMondayIsoDate, 5, "next")],
+    label: "masculine next-weekday adjective: sledeći petak",
+    postedAt,
+  });
+  assertRelativeDateCase({
+    caption: "Trodnevni program počinje sledećeg petka.",
+    expectedDates: [weekdayIsoDateFrom(baseMondayIsoDate, 5, "next")],
+    label: "genitive next-weekday adjective: sledećeg petka",
+    postedAt,
+  });
+
   for (const { caption, offsetDays, reason } of [
     { caption: "Danas slušamo QA DJ-a od 21h.", offsetDays: 0, reason: "relative_day_from_post_timestamp" },
     { caption: "Večeras slušamo QA DJ-a od 21h.", offsetDays: 0, reason: "relative_day_from_post_timestamp" },
@@ -5173,6 +5186,8 @@ function runDescriptionStartTimeQa() {
     ["22h - 05h", "22:00-05:00"],
     ["start at 10pm", "22:00"],
     ["doors open 8:30 pm", "20:30"],
+    ["Уживо музика од 19ч.", "19:00"],
+    ["17-00h", "17:00-00:00"],
   ]) {
     assert.equal(extractEventTimeFromText(text), expected, `time text: ${text}`);
   }
@@ -5943,6 +5958,7 @@ function runAtomicDuplicateStatusPreconditionQa() {
     "Open Air Summer Season Closing",
     "Every Thursday Night",
     "Docile Bodies",
+    "I Bog stvori trans",
   ]) {
     assert.equal(
       isSensibleEventTitleForApproval({ title, venue: "QA Venue" }),

@@ -1,6 +1,8 @@
 const DATE_OR_TIME_FRAGMENT = /^(?:\p{L}+\s+)?\d{1,2}(?:[./-]\d{1,2})?(?:[./-]\d{2,4})?(?:\s*(?:h|č|casova|hours?))?$/iu;
 const ADDRESS_FRAGMENT = /^(?:(?:ulica|bulevar|trg|avenija|street|road)\b[\p{L}\p{N}.'’ -]*\d{1,4}[a-z]?|[\p{L}.'’ -]+\s+\d{1,4}[a-z]?\s+\d{1,2}(?:st|nd|rd|th)\s+(?:floor|sprat))$/iu;
-const BROKEN_SENTENCE_PREFIX = /^(?:i|a|ali|pa|te|koji|koja|koje|and|but)\s+/iu;
+const BROKEN_SENTENCE_PREFIX = /^(?:a|ali|pa|te|koji|koja|koje|and|but)\s+/iu;
+const BROKEN_SERBIAN_CONTINUATION =
+  /^i\s+(?:njegov|njena|njihov|onda|potom|zatim)\b/iu;
 const GENERIC_ONLY_TITLE = /^(?:event|dogadjaj|događaj|program|schedule|raspored|premijera|premiere|naredna igranja|final|finale|party|concert|koncert|live music|muzika|subota|petak|saturday|friday)$/iu;
 const GENERIC_HOURS_TITLE = /^(?:opening|working|business|venue)?\s*hours?$|^radno\s+vreme$/iu;
 const MENU_PROMOTION_TITLE = /^(?:special|specials|promo|promotion|ponuda)\b.*\b(?:pizzas?|pice?|burgers?|koktels?|cocktails?|food|hrana|menu)\b/iu;
@@ -37,7 +39,11 @@ export function isSensibleEventTitleForApproval(options: {
   if (DATE_OR_TIME_FRAGMENT.test(title) || ADDRESS_FRAGMENT.test(title)) {
     return false;
   }
-  if (BROKEN_SENTENCE_PREFIX.test(title) || GENERIC_ONLY_TITLE.test(title)) {
+  if (
+    BROKEN_SENTENCE_PREFIX.test(title) ||
+    BROKEN_SERBIAN_CONTINUATION.test(title) ||
+    GENERIC_ONLY_TITLE.test(title)
+  ) {
     return false;
   }
   if (

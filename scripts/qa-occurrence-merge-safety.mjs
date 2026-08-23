@@ -382,6 +382,27 @@ assert.equal(
   "Missing venue alone must not conflate unrelated same-time events.",
 );
 
+assert.equal(
+  classifyApprovalOccurrenceRelation({
+    candidate: { title: "SAZVEŽĐE PSA", artists: [] },
+    existing: { title: "Bioskopska premijera", artists: [] },
+    sameVenue: true,
+    sameSource: false,
+  }),
+  "proven_distinct",
+  "Strong disjoint titles at one venue/date must remain separate events.",
+);
+assert.equal(
+  classifyApprovalOccurrenceRelation({
+    candidate: { title: "MAGAZIN", artists: [] },
+    existing: { title: "KONCERT GRUPE MAGAZIN U BEOGRADU", artists: [] },
+    sameVenue: true,
+    sameSource: false,
+  }),
+  "proven_duplicate",
+  "A distinctive contained title at one venue/date must resolve as a duplicate.",
+);
+
 const emptyVenueFixture = emptyVenueOccurrenceFixture();
 const emptyVenueCreateState = makeDb({
   events: [],

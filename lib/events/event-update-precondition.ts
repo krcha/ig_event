@@ -41,6 +41,7 @@ type EventApprovalFields = Record<string, unknown> & {
   dateEvidenceResolvedDate?: unknown;
   sourceConflictFields?: unknown;
   humanReviewedLegacySourcePolicyVersion?: unknown;
+  humanReviewedStructuredSourcePolicyVersion?: unknown;
 };
 
 type EventWritePatch = EventApprovalFields & {
@@ -52,6 +53,7 @@ const SOURCE_GROUNDED_AUTO_APPROVE_RULE = "source_grounded_core_event_fields";
 const TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_RULE = "trusted_source_event_announcement";
 const EVENT_EVIDENCE_V2_AUTO_APPROVE_RULE = "event_evidence_v2";
 export const HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION = 1;
+export const HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION = 1;
 const TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_MIN_CONFIDENCE = 0.65;
 const APPROVED_MODERATION_SIGNALS = new Set([
   "missing_image",
@@ -642,6 +644,86 @@ export function hasHumanReviewedLegacySourcePolicyMarker(
   return (
     fields?.humanReviewedLegacySourcePolicyVersion ===
     HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION
+  );
+}
+
+function hasStructuredHumanSourceAttestation(
+  normalizedFieldsJson: string | undefined,
+  eventFields: EventApprovalFields | undefined,
+  requireFutureDate: boolean,
+): boolean {
+  const fields = parseNormalizedFields(normalizedFieldsJson);
+  if (!fields || !eventFields) return false;
+  const rawExtraction = parseNormalizedFields(
+    typeof eventFields.rawExtractionJson === "string"
+      ? eventFields.rawExtractionJson
+      : undefined,
+  );
+  const publicTitle = normalizeComparableOptionalText(eventFields.title);
+  const publicDate = normalizeComparableOptionalText(eventFields.date);
+  const publicTime = normalizeComparableOptionalText(eventFields.time);
+  const publicVenue = normalizeComparableOptionalText(eventFields.venue);
+  const publicArtists = normalizeComparableArtists(eventFields.artists ?? []);
+  const normalizedArtists = normalizeComparableArtists(fields.artists);
+  const pendingReasons = fields.moderationPendingReasons;
+  return (
+    fields.extractionContractVersion === "event_evidence_v2" &&
+    rawExtraction?.extraction_contract_version === "event_evidence_v2" &&
+    rawExtraction?.is_event === true &&
+    fields.extractionIsEvent === true &&
+    fields.sourceGroundingVersion === 5 &&
+    fields.sourceGroundingEvidence === "persisted_openai_event_evidence_v2" &&
+    fields.normalizedIsValid === true &&
+    fields.dateSuspiciousYear === false &&
+    Array.isArray(pendingReasons) &&
+    pendingReasons.length > 0 &&
+    publicTitle.length > 0 &&
+    publicDate.length > 0 &&
+    (!requireFutureDate || isFutureIsoDate(publicDate)) &&
+    isSensibleEventTitleForApproval({ title: publicTitle, venue: publicVenue }) &&
+    normalizeComparableOptionalText(fields.title) === publicTitle &&
+    normalizeComparableOptionalText(fields.normalizedDate) === publicDate &&
+    normalizeComparableOptionalText(fields.time) === publicTime &&
+    normalizeComparableOptionalText(fields.normalizedVenue) === publicVenue &&
+    publicArtists !== null &&
+    normalizedArtists !== null &&
+    arraysEqual(normalizedArtists, publicArtists) &&
+    normalizeComparableOptionalText(fields.sourceGroundingSourceCaption) ===
+      normalizeComparableOptionalText(eventFields.sourceCaption) &&
+    normalizeComparableOptionalText(fields.sourceGroundingInstagramPostId) ===
+      normalizeComparableOptionalText(eventFields.instagramPostId) &&
+    normalizeComparableOptionalText(fields.sourceGroundingInstagramPostUrl) ===
+      normalizeComparableOptionalText(eventFields.instagramPostUrl) &&
+    normalizeComparableHandle(fields.sourceGroundingInstagramHandle) !== null &&
+    typeof fields.sourceOccurrenceKey === "string" &&
+    fields.sourceOccurrenceKey.trim().length > 0 &&
+    typeof fields.sourceOccurrenceSourceFingerprint === "string" &&
+    fields.sourceOccurrenceSourceFingerprint.trim().length > 0
+  );
+}
+
+export function hasHumanReviewableStructuredSourceAttestation(
+  normalizedFieldsJson: string | undefined,
+  eventFields?: EventApprovalFields,
+): boolean {
+  return hasStructuredHumanSourceAttestation(
+    normalizedFieldsJson,
+    eventFields,
+    true,
+  );
+}
+
+export function hasHumanReviewedStructuredSourceAttestation(
+  normalizedFieldsJson: string | undefined,
+  eventFields?: EventApprovalFields,
+): boolean {
+  const fields = parseNormalizedFields(normalizedFieldsJson);
+  return (
+    eventFields?.humanReviewedStructuredSourcePolicyVersion ===
+      HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION &&
+    fields?.humanReviewedStructuredSourcePolicyVersion ===
+      HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION &&
+    hasStructuredHumanSourceAttestation(normalizedFieldsJson, eventFields, false)
   );
 }
 

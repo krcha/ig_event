@@ -1699,6 +1699,47 @@ function runSemanticNormalizationQa() {
     );
   });
 
+  runCase("matching numeric date overrides a wrong poster weekday", () => {
+    const context = {
+      artists: [],
+      dateEvidenceVerified: true,
+      resolvedDate: "2026-08-26",
+      selectedTitle: "NIGHT OLIVER DRAGOJEVIĆ",
+      selectedVenue: "Shootiranje",
+      singleOccurrenceSource: true,
+      sourceAccountName: "Shootiranje",
+      sourceAccountRole: "venue",
+      sourceCaption: "Sreda 26.08. NIGHT OLIVER DRAGOJEVIĆ od 19:30",
+      venueEvidenceVerified: true,
+    };
+    assert.equal(
+      eventEvidenceConflictIsBenign(
+        {
+          field: "date",
+          poster_value: "THURSDAY 26. AUGUST",
+          caption_value: "Sreda 26.08.",
+          reason: "Weekday words disagree.",
+        },
+        context,
+      ),
+      true,
+      "The shared numeric date is authoritative over a poster weekday typo.",
+    );
+    assert.equal(
+      eventEvidenceConflictIsBenign(
+        {
+          field: "date",
+          poster_value: "THURSDAY 27. AUGUST",
+          caption_value: "Sreda 26.08.",
+          reason: "Numeric dates disagree.",
+        },
+        context,
+      ),
+      false,
+      "Different numeric dates must remain a material conflict.",
+    );
+  });
+
   runCase("promoter account cannot override a caption-grounded physical venue", () => {
     const date = isoDateDaysFromNow(17);
     const dateText = ddmmyyyy(date);

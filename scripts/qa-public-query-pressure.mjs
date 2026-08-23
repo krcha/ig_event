@@ -432,6 +432,7 @@ for (const privateField of [
   "reviewedAt",
   "reviewedBy",
   "humanReviewedLegacySourcePolicyVersion",
+  "humanReviewedStructuredSourcePolicyVersion",
   "sourceOccurrenceKey",
   "reasoningNotes",
   "postAltText",

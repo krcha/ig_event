@@ -8,7 +8,9 @@ import { isCanonicallyGroundedApprovedEvent } from "../convex/publicEventGroundi
 import {
   hasCompleteSourceGroundingAttestation,
   hasHumanReviewedLegacySourceAttestation,
+  hasHumanReviewedStructuredSourceAttestation,
   hasHumanReviewableLegacySourceAttestation,
+  hasHumanReviewableStructuredSourceAttestation,
 } from "../lib/events/event-update-precondition.ts";
 
 process.env.ADMIN_CLERK_USER_IDS = "qa-owner";
@@ -101,6 +103,16 @@ function makeCtx(initialEvents) {
         instagramPostUrl: item.instagramPostUrl,
         caption: item.sourceCaption,
         postedAt: item.sourcePostedAt,
+        ...(item.rawExtractionJson
+          ? {
+              analysisResultJson: item.rawExtractionJson,
+              analysisRevision: 1,
+              sourceRevision: 1,
+              analysisContractVersion: "event_evidence_v2",
+              analysisIsEvent: true,
+              analysisModel: "gpt-5-mini-2025-08-07",
+            }
+          : {}),
       },
     ]),
   );
@@ -464,6 +476,85 @@ assert.equal(
   ),
   false,
   "Structured v2 rows must remain on the exact v2 evidence path.",
+);
+
+const structuredRawExtractionJson = JSON.stringify({
+  extraction_contract_version: "event_evidence_v2",
+  is_event: true,
+});
+const structuredHumanEvent = event("structured-human", {
+  title: "I Bog stvori trans",
+  date: futureDate,
+  time: "20:00",
+  venue: "Baza Kulturnih Zbivanja",
+  artists: ["Simiona Rakića"],
+  rawExtractionJson: structuredRawExtractionJson,
+});
+structuredHumanEvent.normalizedFieldsJson = JSON.stringify({
+  extractionContractVersion: "event_evidence_v2",
+  extractionIsEvent: true,
+  sourceGroundingVersion: 5,
+  sourceGroundingEvidence: "persisted_openai_event_evidence_v2",
+  sourceGroundingSourceCaption: structuredHumanEvent.sourceCaption,
+  sourceGroundingInstagramPostId: structuredHumanEvent.instagramPostId,
+  sourceGroundingInstagramPostUrl: structuredHumanEvent.instagramPostUrl,
+  sourceGroundingInstagramHandle: structuredHumanEvent.venueInstagramHandle,
+  sourceOccurrenceKey: structuredHumanEvent.sourceOccurrenceKey,
+  sourceOccurrenceSourceFingerprint: "instagram-source-v2:qa",
+  title: structuredHumanEvent.title,
+  normalizedDate: structuredHumanEvent.date,
+  time: structuredHumanEvent.time,
+  normalizedVenue: structuredHumanEvent.venue,
+  artists: structuredHumanEvent.artists,
+  normalizedIsValid: true,
+  dateSuspiciousYear: false,
+  moderationPendingReasons: ["requires_human_approval", "unusable_event_title"],
+});
+assert.equal(
+  hasHumanReviewableStructuredSourceAttestation(
+    structuredHumanEvent.normalizedFieldsJson,
+    structuredHumanEvent,
+  ),
+  true,
+  "A current, exact v2 source row must be eligible for explicit human review.",
+);
+const structuredHumanApproval = await moderate([structuredHumanEvent], {
+  ids: ["structured-human"],
+  status: "approved",
+});
+assert.deepEqual(structuredHumanApproval.result, { updatedCount: 1, skippedCount: 0 });
+const approvedStructuredHuman = structuredHumanApproval.events.get("structured-human");
+assert.equal(approvedStructuredHuman.status, "approved");
+assert.equal(
+  approvedStructuredHuman.humanReviewedStructuredSourcePolicyVersion,
+  1,
+  "Structured human approval must persist its durable schema marker.",
+);
+assert.equal(
+  hasHumanReviewedStructuredSourceAttestation(
+    approvedStructuredHuman.normalizedFieldsJson,
+    approvedStructuredHuman,
+  ),
+  true,
+  "Structured human approval must bind the marker to the exact public fields.",
+);
+assert.equal(
+  await isCanonicallyGroundedApprovedEvent(
+    structuredHumanApproval.ctx,
+    approvedStructuredHuman,
+  ),
+  true,
+  "Human-reviewed v2 evidence must remain bound to the persisted GPT source revision.",
+);
+structuredHumanApproval.posts.get("qa_venue:post-structured-human").analysisResultJson =
+  "{\"extraction_contract_version\":\"event_evidence_v2\",\"is_event\":false}";
+assert.equal(
+  await isCanonicallyGroundedApprovedEvent(
+    structuredHumanApproval.ctx,
+    approvedStructuredHuman,
+  ),
+  false,
+  "A reviewed v2 event must fail closed if the persisted analysis revision changes.",
 );
 
 const outsideConflict = event("outside", {
