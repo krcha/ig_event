@@ -322,6 +322,21 @@ function runPromptQa() {
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /A lineup member or DJ set inside one occurrence is not a separate event/i,
+    "Prompt must consolidate performer slots inside one real occurrence.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /one overall event window.*ONE schedule entry/is,
+    "Prompt must bind a consolidated lineup to its overall event window.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /except that a consolidated one-event running order may include its performer-slot times/i,
+    "Prompt must permit factual slot times only in a consolidated running order.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
     /ONE POST OFTEN CONTAINS MANY EVENTS/i,
     "Prompt must explicitly treat posts as possibly multi-event.",
   );

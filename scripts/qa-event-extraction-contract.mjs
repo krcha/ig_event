@@ -6,6 +6,11 @@ import {
   parseExtractedEventData,
 } from "../lib/ai/extract-event-data.ts";
 import { TBD_EVENT_TIME } from "../lib/events/event-time.ts";
+import { venueValueAppearsInEventEvidence } from "../lib/events/unnamed-schedule-fallback.ts";
+import {
+  buildNightlifeLineupCoalescingPlan,
+  titleContainsOnlyBilledArtists,
+} from "../lib/events/nightlife-lineup-coalescing.ts";
 import {
   eventArtistHandleAliasMatches,
   eventEvidenceConflictIsBenign,
@@ -2712,6 +2717,320 @@ function runSemanticNormalizationQa() {
       assert.deepEqual(result.event.artists, []);
       assert.notEqual(result.event.description, "Top-level description must not leak.");
     }
+  });
+
+  runCase("one overall nightlife window coalesces consecutive DJ slots", () => {
+    const date = isoDateDaysFromNow(2);
+    const dateText = ddmmyyyy(date);
+    const post = makePost({
+      caption: "Male izmene i nova imena u klubu.",
+      postId: "qa-para-lineup-timetable",
+      postedAt: semanticQaNow.toISOString(),
+      username: "para_klub",
+    });
+    const dateEvidence = {
+      exact_text: dateText,
+      source: "poster",
+      is_relative: false,
+      resolved_date: date,
+    };
+    const slot = (time, title, artists) => ({
+      date: dateText,
+      time,
+      venue: "Para klub Beograd",
+      title,
+      artists,
+      description: `${title} DJ set.`,
+      source_text: `${time.replace("-", " - ")} - ${title}`,
+      date_evidence: dateEvidence,
+      time_evidence: {
+        status: "start_time_stated",
+        exact_text: time,
+        source: "poster",
+      },
+    });
+    const extracted = makeEventExtraction({
+      caption: post.caption,
+      date: "",
+      dateEvidenceText: "",
+      postUrl: post.instagramPostUrl,
+      title: "",
+      titleEvidenceText: "Anshi b2b Cvayn, Madji, Vagabond",
+      titleEvidenceSource: "poster",
+      time: "",
+      venue: "Para klub Beograd",
+      artists: [],
+      artistEvidenceText: "Anshi b2b Cvayn, Madji, Vagabond",
+      artistEvidenceSource: "poster",
+      description: "Three DJ sets featuring Anshi b2b Cvayn, Madji and Vagabond.",
+      shared_schedule_context: {
+        venue: {
+          applies_to_all: true,
+          value: "Para klub Beograd",
+          evidence: "para (logo/header) on poster",
+          source: "poster",
+        },
+        time: {
+          applies_to_all: true,
+          value: "14:00 - 22:00",
+          evidence: `${dateText} 14:00 - 22:00`,
+          source: "poster",
+        },
+      },
+      schedule_entries: [
+        slot("14:00-17:00", "Anshi b2b Cvayn", ["Anshi", "Cvayn"]),
+        slot("17:00-19:30", "Madji", ["Madji"]),
+        slot("19:30-22:00", "Vagabond", ["Vagabond"]),
+      ],
+    });
+    const prepared = assertSingleOk(
+      prepare(post, extracted, {
+        selectedImageUrl: "https://cdn.example.com/para-lineup.jpg",
+        canonicalVenueNamesByHandle: { para_klub: "Para klub Beograd" },
+        configuredVenueNamesByHandle: { para_klub: "Para klub Beograd" },
+        sourceRolesByHandle: { para_klub: "venue" },
+      }),
+      "Para lineup timetable",
+    );
+    assert.equal(
+      prepared.event.status,
+      "approved",
+      `Para lineup timetable should auto-approve: ${JSON.stringify(
+        prepared.normalizedFields.moderationPendingReasons,
+      )}`,
+    );
+    assert.deepEqual(
+      {
+        artists: prepared.event.artists,
+        description: prepared.event.description,
+        status: prepared.event.status,
+        time: prepared.event.time,
+        title: prepared.event.title,
+        venue: prepared.event.venue,
+      },
+      {
+        artists: ["Anshi", "Cvayn", "Madji", "Vagabond"],
+        description:
+          "14:00–17:00 Anshi b2b Cvayn; 17:00–19:30 Madji; 19:30–22:00 Vagabond.",
+        status: "approved",
+        time: "14:00-22:00",
+        title: "Anshi b2b Cvayn, Madji & Vagabond",
+        venue: "Para klub Beograd",
+      },
+    );
+    assert.equal(prepared.normalizedFields.lineupScheduleCoalesced, true);
+    assert.equal(prepared.normalizedFields.lineupScheduleCoalescingPolicyVersion, 1);
+    assert.equal(prepared.normalizedFields.lineupScheduleSourceRowCount, 3);
+    assert.equal(prepared.normalizedFields.multiEventSplitCount, 3);
+    assert.equal(prepared.normalizedFields.splitEventTotal, 1);
+    assert.equal(prepared.normalizedFields.identityEvidenceVerified, true);
+    assert.equal(prepared.normalizedFields.structuredEvidenceVerified, true);
+
+    const distinctShows = parseExtractedEventData({
+      ...structuredClone(extracted),
+      schedule_entries: [
+        slot("14:00-17:00", "Sunset Party", ["Anshi"]),
+        slot("17:00-22:00", "Red Hot Matine", ["Madji"]),
+      ],
+    });
+    assert.equal(
+      prepare(post, distinctShows, {
+        selectedImageUrl: "https://cdn.example.com/distinct-shows.jpg",
+        canonicalVenueNamesByHandle: { para_klub: "Para klub Beograd" },
+        configuredVenueNamesByHandle: { para_klub: "Para klub Beograd" },
+        sourceRolesByHandle: { para_klub: "venue" },
+      }).length,
+      2,
+      "independently named shows must remain separate even when their windows are contiguous",
+    );
+
+    const differentRooms = parseExtractedEventData({
+      ...structuredClone(extracted),
+      shared_schedule_context: {
+        ...structuredClone(extracted.shared_schedule_context),
+        venue: {
+          applies_to_all: false,
+          value: "",
+          evidence: "",
+          source: "unknown",
+        },
+      },
+      schedule_entries: [
+        {
+          ...slot("14:00-17:00", "Anshi", ["Anshi"]),
+          source_text: "14:00 - 17:00 - Anshi - Para klub Beograd",
+        },
+        {
+          ...slot("17:00-22:00", "Madji", ["Madji"]),
+          venue: "Para Back Room",
+          source_text: "17:00 - 22:00 - Madji - Para Back Room",
+        },
+      ],
+    });
+    const differentRoomResults = prepare(post, differentRooms, {
+        selectedImageUrl: "https://cdn.example.com/different-rooms.jpg",
+        sourceRolesByHandle: { para_klub: "promoter" },
+      });
+    assert.equal(
+      differentRoomResults.length,
+      2,
+      "different physical rooms must never be collapsed into one lineup event",
+    );
+    assert.deepEqual(
+      differentRoomResults.map((result) => ({
+        kind: result.kind,
+        venue: result.kind === "ok" ? result.event.venue : null,
+      })),
+      [
+        { kind: "ok", venue: "Para klub Beograd" },
+        { kind: "ok", venue: "Para Back Room" },
+      ],
+    );
+
+    const planCandidate = (id, title, artists, time, sourceText = `${time} ${title}`) => ({
+      id,
+      title,
+      date,
+      time,
+      venue: "Para klub Beograd",
+      artists,
+      sourceText,
+      source: "poster",
+      timeEvidenceText: time,
+      timeEvidenceVerified: true,
+    });
+    const buildPlan = (candidates) =>
+      buildNightlifeLineupCoalescingPlan({
+        eventType: "nightlife",
+        candidates,
+        sourceConflictCount: 0,
+        sharedTime: { value: "14:00-22:00", verified: true },
+      });
+    assert.equal(
+      buildPlan([
+        planCandidate("a", "Anshi", ["Anshi"], ""),
+        planCandidate("b", "Madji", ["Madji"], ""),
+      ]),
+      null,
+      "untimed same-date artist rows are not enough to prove one occurrence",
+    );
+    assert.equal(
+      buildPlan([
+        planCandidate("a", "Anshi", ["Anshi"], "22:00"),
+        planCandidate("b", "Madji", ["Madji"], "22:00"),
+      ]),
+      null,
+      "a repeated start time is not enough to prove one occurrence",
+    );
+    assert.equal(
+      buildPlan([
+        planCandidate("a", "Anshi", ["Anshi"], "14:00-17:00", "Anshi"),
+        planCandidate("b", "Madji", ["Madji"], "17:00-22:00", "Madji"),
+      ]),
+      null,
+      "modeled slot times must be present in each exact row source snippet",
+    );
+    assert.equal(
+      buildPlan([
+        planCandidate("a", "Anshi", ["Anshi"], "14:00-17:00"),
+        planCandidate("b", "Madji", ["Madji"], "18:00-22:00"),
+      ]),
+      null,
+      "a gap between independently timed sets must not be silently merged",
+    );
+    assert.equal(
+      titleContainsOnlyBilledArtists("Live Aid", ["Aid"]),
+      false,
+      "the word Live is identity-bearing and must not be stripped from titles",
+    );
+  });
+
+  runCase("Red Bara is a strict inflection of the Red Bar venue name", () => {
+    assert.equal(venueValueAppearsInEventEvidence("RED BAR", "sprat Red Bara"), true);
+    assert.equal(venueValueAppearsInEventEvidence("RED BAR", "Blue Bara"), false);
+    assert.equal(venueValueAppearsInEventEvidence("RED BAR", "Red Star Bara"), false);
+    assert.equal(venueValueAppearsInEventEvidence("bar", "Red Bara"), false);
+
+    const date = isoDateDaysFromNow(2);
+    const dateText = ddmmyyyy(date);
+    const caption = [
+      "Sutra se penjemo na prvi sprat Red Bara, gde vas od 15h čeka Red Hot Matine i Kaizen za pultom.",
+      `${dateText} | od 15h`,
+      "Kaizen",
+      "sprat Red Bara",
+    ].join("\n");
+    const post = makePost({
+      caption,
+      postId: "qa-red-bar-inflection",
+      postedAt: semanticQaNow.toISOString(),
+      username: "redbar_beograd",
+    });
+    const sourceLine = `${dateText} | od 15h\nKaizen\nsprat Red Bara`;
+    const extracted = makeEventExtraction({
+      caption,
+      date: dateText,
+      dateEvidenceText: dateText,
+      postUrl: post.instagramPostUrl,
+      title: "Red Hot Matine",
+      titleEvidenceText: "Red Hot Matine",
+      time: "15:00",
+      timeEvidence: {
+        status: "start_time_stated",
+        exact_text: "od 15h",
+        source: "caption",
+      },
+      venue: "RED BAR",
+      artists: ["Kaizen"],
+      artistEvidenceText: "Kaizen",
+      description: "Matine sa Kaizen za pultom.",
+      shared_schedule_context: {
+        venue: {
+          applies_to_all: true,
+          value: "RED BAR",
+          evidence: "sprat Red Bara",
+          source: "caption",
+        },
+        time: {
+          applies_to_all: true,
+          value: "15:00",
+          evidence: "od 15h",
+          source: "caption",
+        },
+      },
+      schedule_entries: [
+        {
+          date: dateText,
+          time: "15:00",
+          venue: "RED BAR",
+          title: "Red Hot Matine",
+          artists: ["Kaizen"],
+          description: "Matine sa Kaizen za pultom.",
+          source_text: sourceLine,
+          date_evidence: {
+            exact_text: dateText,
+            source: "caption",
+            is_relative: false,
+            resolved_date: date,
+          },
+          time_evidence: {
+            status: "start_time_stated",
+            exact_text: "od 15h",
+            source: "caption",
+          },
+        },
+      ],
+    });
+    const prepared = assertSingleOk(
+      prepare(post, extracted, {
+        canonicalVenueNamesByHandle: { redbar_beograd: "RED BAR" },
+        configuredVenueNamesByHandle: { redbar_beograd: "RED BAR" },
+        sourceRolesByHandle: { redbar_beograd: "promoter" },
+      }),
+      "Red Bar inflection",
+    );
+    assert.equal(prepared.event.venue, "RED BAR");
+    assert.equal(prepared.event.status, "approved");
+    assert.equal(prepared.normalizedFields.venueEvidenceVerified, true);
   });
 
   if (failures.length > 0) {

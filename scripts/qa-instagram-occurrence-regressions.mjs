@@ -413,6 +413,102 @@ assert.equal(
   }),
   "a single structured row must retain the legacy single-event occurrence namespace",
 );
+
+const paraPost = makePost({
+  caption: "Male izmene i nova imena u klubu.",
+  username: "para_klub",
+  handle: "para_klub",
+  postId: "3968476210920527048",
+  instagramPostUrl: "https://www.instagram.com/p/DcS3BaDgZTI/",
+  postedAt: "2026-08-21T08:02:52.000Z",
+});
+const paraDateEvidence = {
+  exact_text: "August 23rd 2026",
+  source: "poster",
+  is_relative: false,
+  resolved_date: "2026-08-23",
+};
+const paraSlot = (time, title, artists) => ({
+  date: "23.08.2026",
+  time,
+  venue: "Para klub Beograd",
+  title,
+  artists,
+  description: `${title} DJ set.`,
+  source_text: `${time.replace("-", " - ")} - ${title}`,
+  date_evidence: paraDateEvidence,
+  time_evidence: {
+    status: "start_time_stated",
+    exact_text: time.replace("-", " - "),
+    source: "poster",
+  },
+});
+const paraResults = prepareEventsForInsert(
+  paraPost,
+  makeExtraction({
+    extraction_contract_version: "event_evidence_v2",
+    title: "",
+    date: "",
+    time: "",
+    venue: "Para klub Beograd",
+    artists: [],
+    category: "nightlife",
+    description: "Three DJ sets featuring Anshi b2b Cvayn, Madji and Vagabond.",
+    source_caption: paraPost.caption,
+    source_url: paraPost.instagramPostUrl,
+    date_evidence: {
+      exact_text: "",
+      source: "unknown",
+      is_relative: false,
+      resolved_date: "",
+    },
+    time_evidence: {
+      status: "not_stated",
+      exact_text: "",
+      source: "unknown",
+    },
+    shared_schedule_context: {
+      venue: {
+        applies_to_all: true,
+        value: "Para klub Beograd",
+        evidence: "para (logo/header) on poster",
+        source: "poster",
+      },
+      time: {
+        applies_to_all: true,
+        value: "14:00 - 22:00",
+        evidence: "August 23rd 2026 14:00 - 22:00",
+        source: "poster",
+      },
+    },
+    schedule_entries: [
+      paraSlot("14:00-17:00", "Anshi b2b Cvayn", ["Anshi", "Cvayn"]),
+      paraSlot("17:00-19:30", "Madji", ["Madji"]),
+      paraSlot("19:30-22:00", "Vagabond", ["Vagabond"]),
+    ],
+  }),
+  IMAGE_URL,
+  { para_klub: "Para klub Beograd" },
+  {},
+  { para_klub: "Para klub Beograd" },
+  { eventDateFilterNow: NOW, sourceRolesByHandle: { para_klub: "venue" } },
+);
+const boundParaResults = bindSourceOccurrenceMetadata(paraPost, paraResults);
+assert.equal(boundParaResults.length, 1, "one Para timetable must persist as one occurrence");
+const boundPara = boundParaResults[0];
+assert.equal(boundPara?.kind, "ok");
+if (boundPara?.kind === "ok") {
+  assert.equal(boundPara.normalizedFields.lineupScheduleCoalesced, true);
+  assert.equal(boundPara.normalizedFields.sourceOccurrenceExpectedCount, 1);
+  assert.deepEqual(boundPara.normalizedFields.sourceOccurrenceExpectedKeys, [
+    "instagram-occurrence-v2:eaf3d009c0b0a02ba0a17b16a94b7cac7dd32b487045cfecbe8adc031c67083d",
+  ]);
+  assert.equal(
+    boundPara.event.sourceOccurrenceKey,
+    "instagram-occurrence-v2:eaf3d009c0b0a02ba0a17b16a94b7cac7dd32b487045cfecbe8adc031c67083d",
+    "the aggregate must retain the live first-slot occurrence identity",
+  );
+}
 assert.equal(fromResults[0]?.kind, "ok");
 if (fromResults[0]?.kind === "ok") {
   assert.deepEqual(
@@ -1490,8 +1586,8 @@ const ingestionSource = readFileSync(
 );
 assert.match(
   ingestionSource,
-  /SOURCE_OCCURRENCE_EXTRACTION_PROTOCOL_VERSION\s*=\s*"2026-08-11-event-evidence-v2"/,
-  "the protocol fingerprint must invalidate receipts produced by the old split policy",
+  /SOURCE_OCCURRENCE_EXTRACTION_PROTOCOL_VERSION\s*=\s*\n\s*"2026-08-23-event-evidence-v2-lineup-occurrence-v1"/,
+  "the protocol fingerprint must invalidate receipts produced by the per-slot lineup policy",
 );
 
 console.log("Instagram occurrence regression QA passed.");

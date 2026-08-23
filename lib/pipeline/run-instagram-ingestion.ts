@@ -93,6 +93,12 @@ import { isSensibleEventTitleForApproval } from "@/lib/events/event-title-approv
 import { isCaptionSourceCoherentWithEvent } from "@/lib/events/event-source-approval";
 import { sourceOccurrenceRepresentativeMatchesExpected } from "@/lib/events/source-occurrence-representation";
 import {
+  buildNightlifeLineupCoalescingPlan,
+  NIGHTLIFE_LINEUP_COALESCING_POLICY_VERSION,
+  titleContainsOnlyBilledArtists,
+  type NightlifeLineupSource,
+} from "@/lib/events/nightlife-lineup-coalescing";
+import {
   conflictExplicitlyIdentifiesArtistHandleAlias,
   partitionEventEvidenceSourceConflicts,
   type EventEvidenceSourceConflict,
@@ -530,6 +536,43 @@ type SplitEventCandidate = {
   occurrencePlanUnverified?: boolean;
   titleSource?: SplitEventCandidateSource | "unnamed_schedule_fallback";
   titleUsedFallback?: boolean;
+};
+
+type EventVariant = {
+  title: string;
+  titleSource: string;
+  titleUsedFallback: boolean;
+  titleDerivedFromContext: boolean;
+  titleContextCandidate: string | null;
+  rawDate: string;
+  dateNormalization: DateNormalization;
+  dateEvidence: ExtractedEventData["date_evidence"];
+  time: string;
+  rawTime: string;
+  timeEvidence: ExtractedEventData["time_evidence"];
+  timeProvenance: EventTimeProvenance;
+  consistencyIssues: EventConsistencyIssue[];
+  artists: string[];
+  artistsWereSanitized: boolean;
+  description?: string;
+  venue: string;
+  venueEvidenceValue: string;
+  splitSource: SplitEventCandidateSource | null;
+  splitSourceLine: string | null;
+  occurrencePlanUnverified: boolean;
+  lineupScheduleCoalesced?: boolean;
+  lineupScheduleTimingMode?: "shared_identical" | "shared_timetable" | "untimed_lineup";
+  lineupSourceEvidence?: Array<{
+    text: string;
+    source: NightlifeLineupSource;
+  }>;
+  lineupSlots?: Array<{
+    title: string;
+    time: string;
+    artists: string[];
+    sourceText: string;
+    source: NightlifeLineupSource;
+  }>;
 };
 
 type PrepareEventResult =
@@ -4389,6 +4432,137 @@ function buildSplitEventDescription(
   return `${eventLabel} with ${normalizedArtists.join(", ")}${venueSuffix}.`;
 }
 
+function coalesceNightlifeLineupEventVariants(options: {
+  variants: EventVariant[];
+  extracted: ExtractedEventData;
+  verifiedSharedTime: boolean;
+  post: InstagramScrapedPost;
+  hasPoster: boolean;
+}): EventVariant[] {
+  if (
+    normalizeString(options.extracted.extraction_contract_version) !== "event_evidence_v2" ||
+    canonicalizeEventType(options.extracted.category) !== "nightlife" ||
+    options.variants.length < 2
+  ) {
+    return options.variants;
+  }
+
+  const groups = new Map<string, Array<{ index: number; variant: EventVariant }>>();
+  for (const [index, variant] of options.variants.entries()) {
+    const date = variant.dateNormalization.isoDate ?? "";
+    const venue = toSearchableText(variant.venue);
+    const key = `${date}\u0000${venue}`;
+    const group = groups.get(key) ?? [];
+    group.push({ index, variant });
+    groups.set(key, group);
+  }
+
+  const replacementByIndex = new Map<number, EventVariant>();
+  const consumedIndexes = new Set<number>();
+  for (const group of groups.values()) {
+    const plan = buildNightlifeLineupCoalescingPlan({
+      eventType: "nightlife",
+      sourceConflictCount: options.extracted.source_conflicts.length,
+      sharedTime: {
+        value: normalizeString(options.extracted.shared_schedule_context.time.value),
+        verified: options.verifiedSharedTime,
+      },
+      candidates: group.map(({ index, variant }) => ({
+        id: String(index),
+        title: variant.title,
+        date: variant.dateNormalization.isoDate ?? "",
+        time: variant.time,
+        venue: variant.venue,
+        artists: variant.artists,
+        sourceText: variant.splitSourceLine ?? "",
+        source: variant.timeEvidence.source,
+        timeEvidenceText: variant.timeEvidence.exact_text,
+        timeEvidenceVerified: isVerifiedTimeEvidence({
+          evidence: variant.timeEvidence,
+          resolvedStartTime: variant.time || null,
+          post: options.post,
+          hasPoster: options.hasPoster,
+        }),
+      })),
+    });
+    if (!plan) continue;
+
+    const ordered = plan.candidateIds.map((id) => group.find(({ index }) => String(index) === id)!);
+    const first = ordered[0]?.variant;
+    if (!first) continue;
+    const usesSharedTimetable = plan.timingMode === "shared_timetable";
+    const sharedTimeSource = options.extracted.shared_schedule_context.time.source;
+    const sharedTimeEvidence = normalizeString(
+      options.extracted.shared_schedule_context.time.evidence,
+    );
+    const coalesced: EventVariant = {
+      ...first,
+      title: plan.title,
+      titleSource: first.splitSource ?? first.titleSource,
+      titleUsedFallback: false,
+      titleDerivedFromContext: false,
+      titleContextCandidate: null,
+      time: plan.time,
+      rawTime: usesSharedTimetable
+        ? normalizeString(options.extracted.shared_schedule_context.time.value)
+        : first.rawTime,
+      timeEvidence: usesSharedTimetable
+        ? {
+            status: "start_time_stated",
+            exact_text: normalizeString(
+              options.extracted.shared_schedule_context.time.value,
+            ),
+            source: sharedTimeSource,
+          }
+        : first.timeEvidence,
+      timeProvenance: usesSharedTimetable
+        ? {
+            confidence: 0.95,
+            evidenceText: sharedTimeEvidence,
+            source:
+              sharedTimeSource === "alt_text"
+                ? "alt_text"
+                : sharedTimeSource === "caption"
+                  ? "caption"
+                  : "poster",
+            status: "confirmed",
+          }
+        : first.timeProvenance,
+      consistencyIssues: [
+        ...new Set(ordered.flatMap(({ variant }) => variant.consistencyIssues)),
+      ],
+      artists: plan.artists,
+      artistsWereSanitized: ordered.some(
+        ({ variant }) => variant.artistsWereSanitized,
+      ),
+      description: plan.description,
+      splitSourceLine: usesSharedTimetable
+        ? [sharedTimeEvidence, ...plan.sourceTexts].filter(Boolean).join("\n")
+        : first.splitSourceLine,
+      occurrencePlanUnverified: ordered.some(
+        ({ variant }) => variant.occurrencePlanUnverified,
+      ),
+      lineupScheduleCoalesced: true,
+      lineupScheduleTimingMode: plan.timingMode,
+      lineupSourceEvidence: plan.slots.map((slot) => ({
+        text: slot.sourceText,
+        source: slot.source,
+      })),
+      lineupSlots: plan.slots,
+    };
+    const firstIndex = Math.min(...ordered.map(({ index }) => index));
+    replacementByIndex.set(firstIndex, coalesced);
+    for (const { index } of ordered) consumedIndexes.add(index);
+  }
+
+  if (consumedIndexes.size === 0) return options.variants;
+  return options.variants.flatMap((variant, index) => {
+    const replacement = replacementByIndex.get(index);
+    if (replacement) return [replacement];
+    return consumedIndexes.has(index) ? [] : [variant];
+  });
+}
+
 function repairDescriptionForArtistFallback(options: {
   description: string;
   previousTitle: string;
@@ -6767,7 +6941,8 @@ function shouldReprocessExistingSourcePosts(): boolean {
   return normalizeString(process.env.INGESTION_REPROCESS_EXISTING_SOURCE_POSTS).toLowerCase() === "true";
 }
 
-const SOURCE_OCCURRENCE_EXTRACTION_PROTOCOL_VERSION = "2026-08-11-event-evidence-v2";
+const SOURCE_OCCURRENCE_EXTRACTION_PROTOCOL_VERSION =
+  "2026-08-23-event-evidence-v2-lineup-occurrence-v1";
 
 function buildSourceOccurrenceFingerprint(post: InstagramScrapedPost): string {
   const digest = createHash("sha256")
@@ -8900,6 +9075,10 @@ function isVerifiedEventIdentityEvidence(options: {
   splitEvidenceSource: EventDateEvidenceSource;
   post: InstagramScrapedPost;
   hasPoster: boolean;
+  lineupSourceEvidence?: Array<{
+    text: string;
+    source: NightlifeLineupSource;
+  }>;
 }): boolean {
   const supportsTitle = (text: string): boolean => {
     return titleIdentityAppearsInText(text, options.title);
@@ -8915,6 +9094,22 @@ function isVerifiedEventIdentityEvidence(options: {
       hasPoster: options.hasPoster,
     });
   };
+
+  if (options.lineupSourceEvidence && options.lineupSourceEvidence.length >= 2) {
+    const boundLineupEvidence = options.lineupSourceEvidence.filter((item) =>
+      isBoundEvidence(item.text, item.source),
+    );
+    return (
+      boundLineupEvidence.length === options.lineupSourceEvidence.length &&
+      titleContainsOnlyBilledArtists(options.title, options.artists) &&
+      options.artists.length > 0 &&
+      options.artists.every((artist) =>
+        boundLineupEvidence.some((item) =>
+          artistIdentityAppearsInText(item.text, artist),
+        ),
+      )
+    );
+  }
 
   const titleSnippets = options.extracted.field_confirmation.title.evidence_snippets;
   const artistConfirmation = options.extracted.field_confirmation.artists;
@@ -9607,7 +9802,7 @@ export function prepareEventsForInsert(
   const sharedTimeValue = verifiedSharedTime
     ? normalizeString(extracted.shared_schedule_context.time.value)
     : "";
-  const eventVariants = usesSplitEventCandidates
+  const rawEventVariants: EventVariant[] = usesSplitEventCandidates
     ? splitEventCandidates.map((entry) => {
         const variantArtists =
           entry.titleUsedFallback || (entry.artistsWereSanitized && entry.artists.length === 0)
@@ -9806,11 +10001,20 @@ export function prepareEventsForInsert(
         splitSourceLine: null,
         occurrencePlanUnverified: false,
       }));
+  const eventVariants = coalesceNightlifeLineupEventVariants({
+    variants: rawEventVariants,
+    extracted,
+    verifiedSharedTime,
+    post,
+    hasPoster: hasPosterEvidence,
+  });
 
   const preparedEvents: PrepareEventResult[] = [];
   const exactSingleOccurrenceSource =
     eventVariants.length === 1 &&
-    (!usesStructuredEvidence || extracted.schedule_entries.length <= 1);
+    (!usesStructuredEvidence ||
+      extracted.schedule_entries.length <= 1 ||
+      eventVariants[0]?.lineupScheduleCoalesced === true);
   // A structured poster event is created before the exact stored asset URL is
   // returned to this process. Leave its public image empty until the
   // checksum-bound media action attaches that exact storage ID/URL.
@@ -9898,6 +10102,7 @@ export function prepareEventsForInsert(
       splitEvidenceSource: variant.dateEvidence.source,
       post,
       hasPoster: hasPosterEvidence,
+      lineupSourceEvidence: variant.lineupSourceEvidence,
     });
     const venueEvidenceVerified = isVerifiedEventVenueEvidence({
       venue: variant.venue,
@@ -10048,6 +10253,17 @@ export function prepareEventsForInsert(
         usesSplitEventCandidates && splitEventCandidates.length > 1
           ? splitEventCandidates.length
           : 1,
+      ...(variant.lineupScheduleCoalesced
+        ? {
+            lineupScheduleCoalesced: true,
+            lineupScheduleCoalescingPolicyVersion:
+              NIGHTLIFE_LINEUP_COALESCING_POLICY_VERSION,
+            lineupScheduleTimingMode: variant.lineupScheduleTimingMode,
+            lineupScheduleSourceRowCount: variant.lineupSlots?.length ?? 0,
+            lineupScheduleSourceEvidence: variant.lineupSourceEvidence ?? [],
+            lineupScheduleSlots: variant.lineupSlots ?? [],
+          }
+        : {}),
       sourceOccurrencePlanUnverified: variant.occurrencePlanUnverified,
       splitEventIndex: index + 1,
       splitEventTotal: eventVariants.length,

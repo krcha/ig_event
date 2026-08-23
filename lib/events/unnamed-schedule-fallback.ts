@@ -30,6 +30,12 @@ const GENERIC_SHARED_VENUE_TOKENS = new Set([
   "venue",
 ]);
 
+const SERBIAN_FINAL_VENUE_TOKEN_FORMS: Record<string, ReadonlySet<string>> = {
+  bar: new Set(["bar", "bara", "barom", "baru"]),
+  klub: new Set(["klub", "kluba", "klubom", "klubu"]),
+  pub: new Set(["pub", "puba", "pubom", "pubu"]),
+};
+
 function normalizeDisplayText(value: string | null | undefined): string {
   return String(value ?? "").normalize("NFKC").trim().replace(/\s+/gu, " ");
 }
@@ -85,6 +91,28 @@ export function venueValueAppearsInEventEvidence(
     ),
   );
   if (containsExactTokenPhrase) return true;
+
+  // Short multi-token names such as "Red Bar" otherwise lose every useful
+  // token below: "red" is short and "bar" is generic. Accept only a
+  // contiguous phrase whose distinctive prefix is exact and whose final
+  // generic venue-kind token has a known Serbian case ending. This keeps
+  // nearby names such as "Red Star Bara" from matching "Red Bar".
+  const finalValueToken = valueTokens.at(-1) ?? "";
+  const finalTokenForms = SERBIAN_FINAL_VENUE_TOKEN_FORMS[finalValueToken];
+  const hasDistinctiveExactPrefix = valueTokens
+    .slice(0, -1)
+    .some((token) => !GENERIC_SHARED_VENUE_TOKENS.has(token));
+  if (valueTokens.length >= 2 && finalTokenForms && hasDistinctiveExactPrefix) {
+    const containsInflectedTokenPhrase = evidenceTokens.some((_, startIndex) =>
+      valueTokens.every((token, offset) => {
+        const observed = evidenceTokens[startIndex + offset];
+        return offset === valueTokens.length - 1
+          ? finalTokenForms.has(observed ?? "")
+          : observed === token;
+      }),
+    );
+    if (containsInflectedTokenPhrase) return true;
+  }
 
   const expectedTokens = valueTokens.filter(
     (token) => token.length >= 4 && !GENERIC_SHARED_VENUE_TOKENS.has(token),

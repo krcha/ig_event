@@ -132,14 +132,16 @@ Rules:
 - If the venue is clearly a theatre, cinema, gallery, or museum and the post is its program, prefer "arts & culture" even with a sparse caption.
 - Do not default Serbian-language posts to "event".
 - Keep "description" to one short factual sentence or phrase based only on details supported by the caption or flyer.
-- Do not include date, time, price, venue, address, hashtags, emojis, calls to action, or marketing language in "description".
+- Do not include date, time, price, venue, address, hashtags, emojis, calls to action, or marketing language in "description", except that a consolidated one-event running order may include its performer-slot times.
 === ONE POST OFTEN CONTAINS MANY EVENTS — CAPTURE THEM ALL ===
-- Weekly/monthly venue lineups list several events on different dates (sometimes several on one date). Treat every post as possibly multi-event.
-- Put EACH distinct dated event in "schedule_entries" — one entry per (date + act) row. Read the poster image AND the caption; they usually repeat the lineup, so reconcile them row by row.
-- Keep high recall only among rows that are actually legible in the source. Never collapse or merge readable rows. Omit a row whose exact date cannot be read. If its billed act/title is absent, emit it only under the narrow unnamed-row rule below.
+- Weekly/monthly venue lineups list several real event occurrences on different dates (sometimes several on one date). Treat every post as possibly multi-event.
+- Put EACH distinct real-world event occurrence in "schedule_entries". A lineup member or DJ set inside one occurrence is not a separate event.
+- When one date + one physical venue + one overall event window heads a running order of consecutive performer/DJ slots, return ONE schedule entry for the whole occurrence: use the overall window as "time", combine every explicitly billed name in "artists", and keep a compact running order in "description". Use an explicit parent event title when present; otherwise use only the billed lineup names as the title.
+- Separate same-date rows only when the source establishes independent occurrences, such as different event/program titles, non-overlapping event windows rather than performer sub-slots, different rooms/stages/venues, or separate admission/ticketing.
+- Keep high recall only among rows that are actually legible in the source. Preserve every readable billed name when consolidating a lineup. Omit a real occurrence whose exact date cannot be read. If its billed act/title is absent, emit it only under the narrow unnamed-row rule below.
 
-=== EACH ROW IS INDEPENDENT ===
-- Every field in a row must come from THAT row's own text/region. NEVER copy a date, time, venue, title, or artist from one row into another.
+=== EACH EVENT OCCURRENCE IS INDEPENDENT ===
+- Every field in an occurrence must come from that occurrence's own text/region. NEVER copy a date, time, venue, title, or artist from a different occurrence. Consecutive lineup slots under one explicit occurrence header belong to that one occurrence and may be consolidated as described above.
 - When a poster row abbreviates a date (for example "11. BG BANDA") and the caption contains one uniquely matching full row (for example "11.09 — BG BANDA"), use the caption's complete date phrase as that row's date_evidence. Match by the same title/act; never borrow a date from a different row.
 - A poster-wide venue or common start time may carry across rows only when visible caption/poster/alt-text wording clearly says it applies to every row. Record that exact wording in "shared_schedule_context"; otherwise keep the row field empty.
 - "source_text": copy the exact snippet (date + act/title, or date + the qualifying row-local venue/event-kind evidence, plus optional time) you read that row from. If you cannot quote that exact row, do not emit the schedule entry.
@@ -170,9 +172,9 @@ Rules:
 - Prefer the explicitly named physical location over the source account, promoter, organizer, or event-brand name. Use a canonical venue hint from a venue account only when no different physical venue is explicitly named. Preserve a billed artist's Instagram handle when the handle is the clearest source identity.
 - When the Instagram source role is "venue" and a canonical venue hint is provided, use that canonical venue for every event and schedule row unless the poster or caption explicitly names a different physical venue. The venue account name does not need to be repeated in each row.
 - Never use a promoter or organizer account name as the venue. For a promoter source, require an explicitly named physical venue from the poster, caption, location tag, or schedule row.
-- If the poster or caption is a monthly program, venue schedule, or other multi-date lineup for the same venue, populate "schedule_entries" with one object per separately dated event row.
+- If the poster or caption is a monthly program, venue schedule, or other multi-date lineup for the same venue, populate "schedule_entries" with one object per separately dated real event occurrence.
 - Do not collapse a multi-date venue schedule into one event. Each "schedule_entries" item must correspond to a single explicit date from the source.
-- For each "schedule_entries" item, copy the explicit row-level date, time, title/billed act text, artists, short factual description, and a compact "source_text" snippet from that row when readable.
+- For each "schedule_entries" item, copy the explicit occurrence date, overall event time, title/billed act text, artists, short factual description, and a compact "source_text" snippet when readable. For one-event running orders, do not emit one item per performer slot.
 - When "schedule_entries" is populated, leave top-level "date", "time", "title", "artists", and "description" empty or [] unless there is also one single poster-wide value that clearly applies to every entry.
 - If date is unclear, return empty string for date.
 - If venue is unclear, return empty string for venue.

@@ -1,14 +1,20 @@
 import assert from "node:assert/strict";
 
 import {
+  coalesceApprovedNightlifeLineupOccurrences,
   createEvent,
   getInstagramSourceOccurrenceReceipt,
   mergeApprovedEvents,
   recordInstagramSourceOccurrenceSatisfaction,
 } from "../convex/events.ts";
 import { classifyApprovalOccurrenceRelation } from "../lib/events/approval-occurrence-conflict.ts";
+import {
+  bindSourceOccurrenceMetadata,
+  prepareEventsForInsert,
+} from "../lib/pipeline/run-instagram-ingestion.ts";
 
 process.env.ADMIN_CLERK_USER_IDS = "qa-merge-admin";
+process.env.CRON_SECRET = "qa-lineup-service-secret";
 
 function approvedEvent(id, overrides = {}) {
   return {
@@ -38,6 +44,9 @@ function makeDb({
   receipts = [],
   scrapedPosts = [],
   venues = [],
+  mediaAssets = [],
+  savedEvents = [],
+  userSavedEvents = [],
 }) {
   const tables = {
     events: new Map(eventRows.map((row) => [row._id, structuredClone(row)])),
@@ -47,8 +56,11 @@ function makeDb({
     ),
     scrapedPosts: new Map(scrapedPosts.map((row) => [row._id, structuredClone(row)])),
     venues: new Map(venues.map((row) => [row._id, structuredClone(row)])),
-    userSavedEvents: new Map(),
-    savedEvents: new Map(),
+    mediaAssets: new Map(mediaAssets.map((row) => [row._id, structuredClone(row)])),
+    userSavedEvents: new Map(
+      userSavedEvents.map((row) => [row._id, structuredClone(row)]),
+    ),
+    savedEvents: new Map(savedEvents.map((row) => [row._id, structuredClone(row)])),
     eventAuditLog: new Map(),
   };
   const insertCounters = new Map();
@@ -721,6 +733,538 @@ assert.deepEqual(
   [vrtoglavicaKeys.chillout, vrtoglavicaKeys.infected],
 );
 
+const lineupImageUrl = "https://example.com/para-lineup-poster.jpg";
+const lineupStorageId = "storage-para-lineup-poster";
+const lineupPost = {
+  caption: "Male izmene i nova imena u klubu.",
+  altText: null,
+  locationName: null,
+  username: "para_klub",
+  handle: "para_klub",
+  postId: "3968476210920527048",
+  instagramPostUrl: "https://www.instagram.com/p/DcS3BaDgZTI/",
+  postedAt: "2026-08-21T08:02:52.000Z",
+  imageUrl: lineupImageUrl,
+  imageUrls: [lineupImageUrl],
+  postType: "image",
+};
+const lineupDateEvidence = {
+  exact_text: "August 23rd 2026",
+  source: "poster",
+  is_relative: false,
+  resolved_date: "2026-08-23",
+};
+const lineupSlot = (time, title, artists) => ({
+  date: "23.08.2026",
+  time,
+  venue: "Para klub Beograd",
+  title,
+  artists,
+  description: `${title} DJ set.`,
+  source_text: `${time.replace("-", " - ")} - ${title}`,
+  date_evidence: lineupDateEvidence,
+  time_evidence: {
+    status: "start_time_stated",
+    exact_text: time.replace("-", " - "),
+    source: "poster",
+  },
+});
+const lineupSlots = [
+  lineupSlot("14:00-17:00", "Anshi b2b Cvayn", ["Anshi", "Cvayn"]),
+  lineupSlot("17:00-19:30", "Madji", ["Madji"]),
+  lineupSlot("19:30-22:00", "Vagabond", ["Vagabond"]),
+];
+const lineupExtraction = {
+  extraction_contract_version: "event_evidence_v2",
+  is_event: true,
+  non_event_reason: "",
+  title: "",
+  date: "",
+  time: "",
+  venue: "Para klub Beograd",
+  city: "Belgrade",
+  country: "Serbia",
+  price: "",
+  currency: "RSD",
+  artists: [],
+  category: "nightlife",
+  description: "Three DJ sets featuring Anshi b2b Cvayn, Madji and Vagabond.",
+  confidence: 0.95,
+  reasoning_notes: "",
+  source_caption: lineupPost.caption,
+  source_url: lineupPost.instagramPostUrl,
+  date_evidence: {
+    exact_text: "",
+    source: "unknown",
+    is_relative: false,
+    resolved_date: "",
+  },
+  time_evidence: {
+    status: "not_stated",
+    exact_text: "",
+    source: "unknown",
+  },
+  source_conflicts: [],
+  shared_schedule_context: {
+    venue: {
+      applies_to_all: true,
+      value: "Para klub Beograd",
+      evidence: "para (logo/header) on poster",
+      source: "poster",
+    },
+    time: {
+      applies_to_all: true,
+      value: "14:00 - 22:00",
+      evidence: "August 23rd 2026 14:00 - 22:00",
+      source: "poster",
+    },
+  },
+  schedule_entries: lineupSlots,
+  field_confirmation: Object.fromEntries(
+    [
+      "title",
+      "location",
+      "location_name",
+      "price",
+      "start_time",
+      "short_description",
+      "artists",
+    ].map((key) => [
+      key,
+      {
+        confidence: 0.95,
+        found_in: ["poster"],
+        evidence: key,
+        evidence_snippets: [{ source: "poster", text: key }],
+        notes: "",
+      },
+    ]),
+  ),
+};
+const preparedLineupResults = bindSourceOccurrenceMetadata(
+  lineupPost,
+  prepareEventsForInsert(
+    lineupPost,
+    lineupExtraction,
+    lineupImageUrl,
+    { para_klub: "Para klub Beograd" },
+    {},
+    { para_klub: "Para klub Beograd" },
+    {
+      eventDateFilterNow: new Date("2026-08-22T12:00:00.000Z"),
+      sourceRolesByHandle: { para_klub: "venue" },
+    },
+  ),
+);
+assert.equal(preparedLineupResults.length, 1);
+const preparedLineup = preparedLineupResults[0];
+assert.equal(preparedLineup?.kind, "ok");
+if (!preparedLineup || preparedLineup.kind !== "ok") {
+  throw new Error("The Para timetable fixture must produce one aggregate event.");
+}
+assert.equal(preparedLineup.event.status, "approved");
+assert.equal(preparedLineup.normalizedFields.lineupScheduleCoalesced, true);
+
+const lineupSourceIdentity = "instagram-source-identity-v1:qa-para-lineup";
+const lineupOldFingerprint = "instagram-source-v2:qa-para-lineup-old";
+const lineupNextFingerprint =
+  preparedLineup.normalizedFields.sourceOccurrenceSourceFingerprint;
+const lineupPrimaryKey = preparedLineup.event.sourceOccurrenceKey;
+assert.equal(typeof lineupNextFingerprint, "string");
+assert.equal(typeof lineupPrimaryKey, "string");
+assert.notEqual(lineupNextFingerprint, lineupOldFingerprint);
+const lineupOccurrenceKeys = [
+  lineupPrimaryKey,
+  "instagram-occurrence-v2:qa-para-madji",
+  "instagram-occurrence-v2:qa-para-vagabond",
+];
+const lineupEventIds = ["lineup-anshi", "lineup-madji", "lineup-vagabond"];
+const lineupLinkIds = ["lineup-link-anshi", "lineup-link-madji", "lineup-link-vagabond"];
+
+function legacyLineupNormalizedFields(slot, index) {
+  const fields = structuredClone(preparedLineup.normalizedFields);
+  delete fields.lineupScheduleCoalesced;
+  delete fields.lineupScheduleCoalescingPolicyVersion;
+  delete fields.lineupScheduleTimingMode;
+  delete fields.lineupScheduleSourceRowCount;
+  delete fields.lineupScheduleSourceEvidence;
+  delete fields.lineupScheduleSlots;
+  return {
+    ...fields,
+    title: slot.title,
+    normalizedDate: "2026-08-23",
+    time: slot.time,
+    normalizedVenue: slot.venue,
+    artists: slot.artists,
+    description: slot.description,
+    multiEventSplitDetected: true,
+    multiEventSplitCount: 3,
+    splitEventIndex: index + 1,
+    splitEventTotal: 3,
+    splitSourceLine: slot.source_text,
+    rowSourceText: slot.source_text,
+    sourceOccurrenceKey: lineupOccurrenceKeys[index],
+    sourceOccurrenceSourceFingerprint: lineupOldFingerprint,
+    sourceOccurrenceExpectedCount: 3,
+    sourceOccurrenceExpectedKeys: lineupOccurrenceKeys,
+    sourceOccurrenceDeferredChildCount: 0,
+  };
+}
+
+const legacyLineupFields = lineupSlots.map(legacyLineupNormalizedFields);
+const legacyLineupEvents = lineupSlots.map((slot, index) => ({
+  ...preparedLineup.event,
+  _id: lineupEventIds[index],
+  _creationTime: index + 1,
+  title: slot.title,
+  time: slot.time,
+  timeSource: "poster",
+  timeEvidenceText: slot.time_evidence.exact_text,
+  timeConfidence: 0.95,
+  timeStatus: "confirmed",
+  timeEvidenceKind: "start_time_stated",
+  artists: slot.artists,
+  description: slot.description,
+  imageUrl: lineupImageUrl,
+  imageStorageId: lineupStorageId,
+  sourceOccurrenceKey: lineupOccurrenceKeys[index],
+  normalizedFieldsJson: JSON.stringify(legacyLineupFields[index]),
+  status: "approved",
+  createdAt: 100 + index,
+  updatedAt: 200 + index,
+}));
+const lineupExpectedOccurrences = legacyLineupEvents.map((event) => ({
+  key: event.sourceOccurrenceKey,
+  date: event.date,
+  time: event.time,
+  venue: event.venue,
+  title: event.title,
+  artists: event.artists,
+}));
+
+function makeLineupState() {
+  return makeDb({
+    events: legacyLineupEvents,
+    links: legacyLineupEvents.map((event, index) => ({
+      _id: lineupLinkIds[index],
+      eventId: event._id,
+      sourceIdentity: lineupSourceIdentity,
+      sourceFingerprint: lineupOldFingerprint,
+      sourceOccurrenceKey: event.sourceOccurrenceKey,
+      instagramPostId: lineupPost.postId,
+      instagramPostUrl: lineupPost.instagramPostUrl,
+      sourceHandle: lineupPost.handle,
+      linkedAt: 300 + index,
+      updatedAt: 400 + index,
+    })),
+    receipts: [
+      {
+        _id: "lineup-receipt",
+        sourceIdentity: lineupSourceIdentity,
+        sourceFingerprint: lineupOldFingerprint,
+        expectedKeys: lineupOccurrenceKeys,
+        expectedOccurrences: lineupExpectedOccurrences,
+        satisfiedKeys: lineupOccurrenceKeys,
+        satisfiedOccurrences: legacyLineupEvents.map((event) => ({
+          key: event.sourceOccurrenceKey,
+          eventId: event._id,
+        })),
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        createdAt: 500,
+        updatedAt: 501,
+      },
+    ],
+    scrapedPosts: [
+      {
+        _id: "lineup-scraped-post",
+        ...lineupPost,
+        imageStorageId: lineupStorageId,
+        analysisResultJson: preparedLineup.event.rawExtractionJson,
+        analysisRevision: 1,
+        analysisContractVersion: "event_evidence_v2",
+        analysisIsEvent: true,
+        analysisModel: "gpt-5-mini-2026-08-01",
+        analysisImageSourceUrl: lineupImageUrl,
+        analysisImageChecksumSha256: "a".repeat(64),
+        sourceRevision: 1,
+      },
+    ],
+    mediaAssets: [
+      {
+        _id: "lineup-media-asset",
+        sourceKey: `instagram-post:${lineupPost.postId}`,
+        sourceKind: "instagram_post",
+        instagramPostId: lineupPost.postId,
+        normalizedInstagramPostUrl: lineupPost.instagramPostUrl,
+        storageId: lineupStorageId,
+        url: lineupImageUrl,
+        upstreamUrl: lineupImageUrl,
+        mimeType: "image/jpeg",
+        byteLength: 1234,
+        checksumSha256: "a".repeat(64),
+        createdAt: 1,
+        updatedAt: 1,
+        lastAttachedAt: 1,
+      },
+    ],
+    userSavedEvents: [
+      {
+        _id: "legacy-save-primary",
+        userId: "legacy-user-dedupe",
+        eventId: lineupEventIds[0],
+        savedAt: 1,
+      },
+      {
+        _id: "legacy-save-dedupe",
+        userId: "legacy-user-dedupe",
+        eventId: lineupEventIds[1],
+        savedAt: 2,
+      },
+      {
+        _id: "legacy-save-move",
+        userId: "legacy-user-move",
+        eventId: lineupEventIds[2],
+        savedAt: 3,
+      },
+    ],
+    savedEvents: [
+      {
+        _id: "save-primary",
+        userId: "clerk-user-dedupe",
+        eventId: lineupEventIds[0],
+        createdAt: 1,
+      },
+      {
+        _id: "save-dedupe",
+        userId: "clerk-user-dedupe",
+        eventId: lineupEventIds[1],
+        createdAt: 2,
+      },
+      {
+        _id: "save-move",
+        userId: "clerk-user-move",
+        eventId: lineupEventIds[2],
+        createdAt: 3,
+      },
+    ],
+  });
+}
+
+function lineupCandidateVersion(eventIndex) {
+  return {
+    id: lineupEventIds[eventIndex],
+    expectedUpdatedAt: legacyLineupEvents[eventIndex].updatedAt,
+    expectedNormalizedFieldsJson: legacyLineupEvents[eventIndex].normalizedFieldsJson,
+    expectedSourceLinkId: lineupLinkIds[eventIndex],
+    expectedSourceLinkUpdatedAt: 400 + eventIndex,
+  };
+}
+
+function validLineupArgs() {
+  return {
+    primary: lineupCandidateVersion(0),
+    duplicates: [lineupCandidateVersion(1), lineupCandidateVersion(2)],
+    expectedSourceIdentity: lineupSourceIdentity,
+    expectedSourceFingerprint: lineupOldFingerprint,
+    expectedOccurrenceKeys: lineupOccurrenceKeys,
+    expectedReceiptId: "lineup-receipt",
+    expectedReceiptUpdatedAt: 501,
+    patch: {
+      title: preparedLineup.event.title,
+      time: preparedLineup.event.time,
+      timeSource: preparedLineup.event.timeSource,
+      timeEvidenceText: preparedLineup.event.timeEvidenceText,
+      timeConfidence: preparedLineup.event.timeConfidence,
+      timeStatus: preparedLineup.event.timeStatus,
+      timeEvidenceKind: preparedLineup.event.timeEvidenceKind,
+      artists: preparedLineup.event.artists,
+      description: preparedLineup.event.description,
+      normalizedFieldsJson: preparedLineup.event.normalizedFieldsJson,
+      sourceOccurrenceKey: preparedLineup.event.sourceOccurrenceKey,
+      sourceFingerprint: lineupNextFingerprint,
+    },
+    moderationNote:
+      "Reviewed source timetable: consolidate the three consecutive Para Klub DJ slots.",
+    serviceSecret: process.env.CRON_SECRET,
+  };
+}
+
+function serviceCtx(state) {
+  return {
+    auth: { getUserIdentity: async () => null },
+    db: state.db,
+  };
+}
+
+function snapshotLineupState(state) {
+  return structuredClone(
+    Object.fromEntries(
+      Object.entries(state.tables).map(([table, rows]) => [table, [...rows.values()]]),
+    ),
+  );
+}
+
+const adminLineupState = makeLineupState();
+await assert.rejects(
+  () =>
+    coalesceApprovedNightlifeLineupOccurrences._handler(adminCtx(adminLineupState), {
+      ...validLineupArgs(),
+      serviceSecret: "wrong-secret",
+    }),
+  /requires service authentication/i,
+  "An administrator must not bypass the service-only migration boundary.",
+);
+
+const nonFirstPrimaryState = makeLineupState();
+const nonFirstPrimaryArgs = validLineupArgs();
+await assert.rejects(
+  () =>
+    coalesceApprovedNightlifeLineupOccurrences._handler(
+      serviceCtx(nonFirstPrimaryState),
+      {
+        ...nonFirstPrimaryArgs,
+        primary: lineupCandidateVersion(1),
+        duplicates: [lineupCandidateVersion(0), lineupCandidateVersion(2)],
+      },
+    ),
+  /patch does not match the verified timetable plan/i,
+  "Only the chronologically first source slot may be retained as the canonical row.",
+);
+
+const staleReceiptState = makeLineupState();
+const staleReceiptBefore = snapshotLineupState(staleReceiptState);
+await assert.rejects(
+  () =>
+    coalesceApprovedNightlifeLineupOccurrences._handler(
+      serviceCtx(staleReceiptState),
+      { ...validLineupArgs(), expectedReceiptUpdatedAt: 502 },
+    ),
+  /receipt precondition failed/i,
+);
+assert.deepEqual(snapshotLineupState(staleReceiptState), staleReceiptBefore);
+
+const staleLinkState = makeLineupState();
+const staleLinkBefore = snapshotLineupState(staleLinkState);
+const staleLinkArgs = validLineupArgs();
+await assert.rejects(
+  () =>
+    coalesceApprovedNightlifeLineupOccurrences._handler(serviceCtx(staleLinkState), {
+      ...staleLinkArgs,
+      primary: {
+        ...staleLinkArgs.primary,
+        expectedSourceLinkUpdatedAt: staleLinkArgs.primary.expectedSourceLinkUpdatedAt + 1,
+      },
+    }),
+  /link precondition failed/i,
+);
+assert.deepEqual(snapshotLineupState(staleLinkState), staleLinkBefore);
+
+const successfulLineupState = makeLineupState();
+const lineupMergeResult = await coalesceApprovedNightlifeLineupOccurrences._handler(
+  serviceCtx(successfulLineupState),
+  validLineupArgs(),
+);
+assert.deepEqual(
+  {
+    primaryId: lineupMergeResult.primaryId,
+    deletedDuplicateCount: lineupMergeResult.deletedDuplicateCount,
+    movedSaveCount: lineupMergeResult.movedSaveCount,
+    dedupedSaveCount: lineupMergeResult.dedupedSaveCount,
+  },
+  {
+    primaryId: lineupEventIds[0],
+    deletedDuplicateCount: 2,
+    movedSaveCount: 2,
+    dedupedSaveCount: 2,
+  },
+);
+assert.deepEqual([...successfulLineupState.tables.events.keys()], [lineupEventIds[0]]);
+assert.deepEqual(
+  {
+    title: successfulLineupState.tables.events.get(lineupEventIds[0]).title,
+    time: successfulLineupState.tables.events.get(lineupEventIds[0]).time,
+    artists: successfulLineupState.tables.events.get(lineupEventIds[0]).artists,
+    description: successfulLineupState.tables.events.get(lineupEventIds[0]).description,
+    sourceOccurrenceKey:
+      successfulLineupState.tables.events.get(lineupEventIds[0]).sourceOccurrenceKey,
+  },
+  {
+    title: "Anshi b2b Cvayn, Madji & Vagabond",
+    time: "14:00-22:00",
+    artists: ["Anshi", "Cvayn", "Madji", "Vagabond"],
+    description:
+      "14:00–17:00 Anshi b2b Cvayn; 17:00–19:30 Madji; 19:30–22:00 Vagabond.",
+    sourceOccurrenceKey: lineupPrimaryKey,
+  },
+);
+assert.deepEqual(
+  [...successfulLineupState.tables.instagramEventSources.values()].map((link) => ({
+    eventId: link.eventId,
+    key: link.sourceOccurrenceKey,
+    fingerprint: link.sourceFingerprint,
+  })),
+  [
+    {
+      eventId: lineupEventIds[0],
+      key: lineupPrimaryKey,
+      fingerprint: lineupNextFingerprint,
+    },
+  ],
+);
+const contractedLineupReceipt =
+  successfulLineupState.tables.instagramSourceOccurrenceReceipts.get("lineup-receipt");
+assert.equal(contractedLineupReceipt.sourceFingerprint, lineupNextFingerprint);
+assert.deepEqual(contractedLineupReceipt.expectedKeys, [lineupPrimaryKey]);
+assert.deepEqual(contractedLineupReceipt.satisfiedKeys, [lineupPrimaryKey]);
+assert.deepEqual(contractedLineupReceipt.satisfiedOccurrences, [
+  { key: lineupPrimaryKey, eventId: lineupEventIds[0] },
+]);
+assert.deepEqual(
+  [...successfulLineupState.tables.userSavedEvents.values()].map((save) => [
+    save.userId,
+    save.eventId,
+  ]),
+  [
+    ["legacy-user-dedupe", lineupEventIds[0]],
+    ["legacy-user-move", lineupEventIds[0]],
+  ],
+);
+assert.deepEqual(
+  [...successfulLineupState.tables.savedEvents.values()].map((save) => [
+    save.userId,
+    save.eventId,
+  ]),
+  [
+    ["clerk-user-dedupe", lineupEventIds[0]],
+    ["clerk-user-move", lineupEventIds[0]],
+  ],
+);
+assert.deepEqual(
+  [...successfulLineupState.tables.eventAuditLog.values()].map((entry) => ({
+    eventId: entry.eventId,
+    action: entry.action,
+    actor: entry.actor,
+  })),
+  [
+    {
+      eventId: lineupEventIds[1],
+      action: "lineup_occurrence_folded",
+      actor: "service:cron",
+    },
+    {
+      eventId: lineupEventIds[2],
+      action: "lineup_occurrence_folded",
+      actor: "service:cron",
+    },
+    {
+      eventId: lineupEventIds[0],
+      action: "lineup_occurrences_coalesced",
+      actor: "service:cron",
+    },
+  ],
+);
+
 console.log(
-  "Occurrence merge safety QA passed: distinct rows survive, duplicate ledgers rewire, empty-venue receipts persist, and unknown-venue approvals fail closed.",
+  "Occurrence merge safety QA passed: distinct rows survive, duplicate ledgers rewire, lineup receipts contract atomically, saves are preserved, and stale provenance fails closed.",
 );
