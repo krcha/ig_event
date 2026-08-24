@@ -76,6 +76,8 @@ type EventsResponse = {
   status: EventStatus;
   events: ModerationEvent[];
   duplicateContextEvents?: ModerationEvent[];
+  duplicateContextDegraded?: boolean;
+  duplicateContextTruncated?: boolean;
   error?: string;
 };
 
@@ -843,6 +845,10 @@ export function ModerationDashboard() {
   const [limit, setLimit] = useState("100");
   const [events, setEvents] = useState<ModerationEvent[]>([]);
   const [duplicateContextEvents, setDuplicateContextEvents] = useState<ModerationEvent[]>([]);
+  const [isDuplicateContextDegraded, setIsDuplicateContextDegraded] =
+    useState(false);
+  const [isDuplicateContextTruncated, setIsDuplicateContextTruncated] =
+    useState(false);
   const [masterReview, setMasterReview] = useState<MasterReviewResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isMasterReviewLoading, setIsMasterReviewLoading] = useState(false);
@@ -863,6 +869,8 @@ export function ModerationDashboard() {
   const fetchEvents = useCallback(async () => {
     setIsLoading(true);
     setError(null);
+    setIsDuplicateContextDegraded(false);
+    setIsDuplicateContextTruncated(false);
     try {
       const response = await fetch(
         `/api/admin/events?status=${status}&limit=${limit}&duplicateContext=1`,
@@ -876,6 +884,8 @@ export function ModerationDashboard() {
       }
       setEvents(payload.events);
       setDuplicateContextEvents(payload.duplicateContextEvents ?? payload.events);
+      setIsDuplicateContextDegraded(payload.duplicateContextDegraded === true);
+      setIsDuplicateContextTruncated(payload.duplicateContextTruncated === true);
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
@@ -884,6 +894,8 @@ export function ModerationDashboard() {
       );
       setEvents([]);
       setDuplicateContextEvents([]);
+      setIsDuplicateContextDegraded(false);
+      setIsDuplicateContextTruncated(false);
     } finally {
       setIsLoading(false);
     }
@@ -1702,6 +1714,13 @@ export function ModerationDashboard() {
       ) : null}
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {isDuplicateContextDegraded ? (
+        <p className="text-sm text-amber-700">
+          {isDuplicateContextTruncated
+            ? "The review queue is loaded, but approved duplicate comparison reached its safety limit. Check busy dates manually before approving."
+            : "The review queue is loaded, but duplicate comparison is temporarily limited to the visible events."}
+        </p>
+      ) : null}
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading moderation queue...</p>
       ) : null}

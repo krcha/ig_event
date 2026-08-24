@@ -12,11 +12,13 @@ import {
   shouldAutoApproveConfidenceScore,
 } from "../lib/utils/confidence.ts";
 import {
+  buildCanonicalVenueAliasesByHandle,
   buildCanonicalVenueNamesByHandle,
   canonicalizeVenueName,
   canonicalizeVenueNameDetailed,
   normalizeExtractedArtists,
   normalizeExtractedDescription,
+  normalizeVenueAliases,
   normalizeVenueFromEvidence,
   toSearchableText,
 } from "../lib/pipeline/venue-normalization.ts";
@@ -484,7 +486,7 @@ function runPromptQa() {
 }
 
 function runVenueQa() {
-  const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle([
+  const canonicalVenues = [
     { name: "Drugstore", instagramHandle: "drugstore_beograd" },
     { name: "Zappa Baza", instagramHandle: "zappabaza" },
     { name: "Kulturni centar GRAD", instagramHandle: "kcgrad" },
@@ -497,8 +499,15 @@ function runVenueQa() {
     { name: "Muzej Jugoslavije", instagramHandle: "muzej_jugoslavije" },
     { name: "Кафе Шупа", instagramHandle: "kafesupa" },
     { name: "Muzej grada Beograda", instagramHandle: "muzejgradabeograda" },
+    {
+      name: "Novi Bioskop Zvezda",
+      instagramHandle: "novi_bioskop_zvezda",
+      aliases: ["New Cinema Zvezda"],
+    },
     { name: "ica", instagramHandle: "icketa" },
-  ]);
+  ];
+  const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle(canonicalVenues);
+  const canonicalVenueAliasesByHandle = buildCanonicalVenueAliasesByHandle(canonicalVenues);
   const venueNameOverridesByHandle = {
     kcgrad: "KC Grad",
     silosibeograd: "Silosi",
@@ -593,6 +602,103 @@ function runVenueQa() {
   });
   assert.equal(detailedAlias?.reason, "alias");
   assert.equal(detailedAlias?.handle, "nulapet_0.5");
+
+  const renamedVenueAlias = canonicalizeVenueNameDetailed(
+    "New Cinema Zvezda",
+    canonicalVenueNamesByHandle,
+    { canonicalVenueAliasesByHandle },
+  );
+  assert.deepEqual(renamedVenueAlias, {
+    venue: "Novi Bioskop Zvezda",
+    reason: "alias",
+    handle: "novi_bioskop_zvezda",
+    matchedVenue: "New Cinema Zvezda",
+    matchedAlias: "New Cinema Zvezda",
+  });
+
+  const renamedVenueFromModel = normalizeVenueFromEvidence({
+    handle: "random_promoter",
+    rawModelVenue: "New Cinema Zvezda",
+    locationName: "",
+    canonicalVenueNamesByHandle,
+    canonicalVenueAliasesByHandle,
+  });
+  assert.equal(renamedVenueFromModel.venue, "Novi Bioskop Zvezda");
+  assert.equal(renamedVenueFromModel.source, "model");
+
+  assert.equal(
+    canonicalizeVenueName(
+      "Shared Hall",
+      { "venue.one": "Venue One", "venue.two": "Venue Two" },
+      {
+        canonicalVenueAliasesByHandle: {
+          "venue.one": ["Shared Hall"],
+          "venue.two": ["Shared Hall"],
+        },
+      },
+    ),
+    null,
+    "Ambiguous aliases must fail closed instead of using insertion order.",
+  );
+  assert.deepEqual(
+    normalizeVenueAliases([" New Cinema   Zvezda ", "new cinema zvezda"]),
+    ["New Cinema Zvezda"],
+  );
+
+  const promoterAliasDate = isoDateDaysFromNow(8);
+  const promoterAliasCaption = [
+    "QA Promoter Screening",
+    promoterAliasDate,
+    "21:00",
+    "New Cinema Zvezda",
+  ].join(" | ");
+  const [promoterAliasPrepared] = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: promoterAliasCaption,
+      imageUrl: "https://images.example.com/promoter-alias.jpg",
+      imageUrls: ["https://images.example.com/promoter-alias.jpg"],
+      postType: "image",
+      username: "qa_promoter_source",
+    }),
+    makeExtractedEvent({
+      title: "QA Promoter Screening",
+      date: promoterAliasDate,
+      venue: "New Cinema Zvezda",
+      source_caption: promoterAliasCaption,
+      date_evidence: {
+        exact_text: promoterAliasDate,
+        source: "caption",
+        is_relative: false,
+        resolved_date: promoterAliasDate,
+      },
+      field_confirmation: {
+        ...makeFieldConfirmation(0.95),
+        location_name: {
+          confidence: 0.95,
+          found_in: ["caption"],
+          evidence: "New Cinema Zvezda",
+          evidence_snippets: [
+            { source: "caption", text: "New Cinema Zvezda" },
+          ],
+          notes: "Exact learned venue alias in a promoter caption.",
+        },
+      },
+    }),
+    "https://images.example.com/promoter-alias.jpg",
+    canonicalVenueNamesByHandle,
+    {},
+    {},
+    {
+      canonicalVenueAliasesByHandle,
+      sourceRolesByHandle: { qa_promoter_source: "promoter" },
+    },
+  );
+  assert.equal(promoterAliasPrepared.kind, "ok");
+  assert.equal(
+    promoterAliasPrepared.event.venue,
+    "Novi Bioskop Zvezda",
+    "A promoter post must resolve a learned alias from the global venue directory.",
+  );
   assert.equal(toSearchableText("šupa"), "supa");
   assert.equal(toSearchableText("шупа"), "supa");
   assert.equal(toSearchableText("ʙᴇʟɢʀᴀᴅᴇ ᴋɪᴛᴄʜᴇɴ ᴘᴀʀᴛʏ"), "belgrade kitchen party");

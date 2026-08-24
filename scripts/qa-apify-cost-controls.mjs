@@ -700,8 +700,8 @@ assert.match(
 );
 assert.match(
   instagramSourcesSource,
-  /listLegacyVenueSourcesPage[\s\S]{0,500}by_scrapeActive[\s\S]{0,160}\.paginate\(args\.paginationOpts\)/,
-  "legacy venue sources must be paginated",
+  /listLegacyVenueSourcesPage[\s\S]{0,600}query\("venues"\)\.paginate\(args\.paginationOpts\)[\s\S]{0,220}filter\(isVenueScrapeActive\)/,
+  "legacy venue sources must paginate all lifecycle shapes and apply effective scrape activation",
 );
 assert.match(
   instagramSourcesSource,
@@ -710,8 +710,8 @@ assert.match(
 );
 assert.match(
   instagramSourcesSource,
-  /listLegacyVenueHandlesPage[\s\S]{0,500}by_scrapeActive[\s\S]{0,180}\.paginate\(args\.paginationOpts\)/,
-  "new-job legacy discovery must use a compact handle-only page",
+  /listLegacyVenueHandlesPage[\s\S]{0,600}query\("venues"\)\.paginate\(args\.paginationOpts\)[\s\S]{0,220}filter\(isVenueScrapeActive\)/,
+  "new-job legacy discovery must use effective lifecycle on a compact handle-only page",
 );
 const compatibilityActivePageSource = instagramSourcesSource.slice(
   instagramSourcesSource.indexOf("export const listActiveSourcesPage"),
@@ -733,6 +733,16 @@ assert.match(
   ingestionRunnerSource,
   /ingestion\.sources\.context_load_failed[\s\S]{0,300}throw error/,
   "full-scrape context lookup failures must abort before paid provider transport",
+);
+assert.match(
+  ingestionRunnerSource,
+  /loadIngestionVenueContextForHandles[\s\S]{0,1800}loadCanonicalVenueMapsByHandle\([\s\S]{0,120}client,[\s\S]{0,120}serviceSecret/,
+  "full-scrape normalization must combine targeted source roles with the global canonical venue and alias directory",
+);
+assert.match(
+  ingestionRunnerSource,
+  /ingestion\.venues\.canonical_directory_load_failed[\s\S]{0,300}throw error/,
+  "full-scrape normalization must fail closed when the global venue alias directory is unavailable",
 );
 assert.match(venuesSource, /normalizedInstagramHandle: instagramHandle/);
 assert.match(venuesSource, /applyInstagramHandleNormalizationBatch/);
@@ -1060,7 +1070,14 @@ try {
     ],
   ]);
   const targetedVenues = new Map([
-    ["source.0", ["venue-context-0", "Source Zero"]],
+    [
+      "source.0",
+      [
+        "venue-context-0",
+        "Source Zero",
+        { aliases: ["Source Zero Hall"], isActive: true },
+      ],
+    ],
     ["conflicting.source", ["venue-context-conflict", "Conflicting Venue"]],
     ["inactive.source", ["venue-context-inactive", "Inactive Venue"]],
   ]);
@@ -1112,14 +1129,17 @@ try {
                 indexName === "by_normalizedInstagramHandle" &&
                 venue
               ) {
+                const lifecycleFields = venue[2] ?? {
+                  scrapeActive: true,
+                  publicStatus: "published",
+                };
                 return [
                   {
                     _id: venue[0],
                     name: venue[1],
                     instagramHandle: matchedValue,
                     normalizedInstagramHandle: matchedValue,
-                    scrapeActive: true,
-                    publicStatus: "published",
+                    ...lifecycleFields,
                   },
                 ];
               }
@@ -1147,14 +1167,29 @@ try {
     },
   );
   assert.deepEqual(targetedContexts, [
-    { handle: "source.0", role: "venue", canonicalVenueName: "Source Zero" },
-    { handle: "conflicting.source", role: "unknown", canonicalVenueName: undefined },
-    { handle: "inactive.source", role: "unknown", canonicalVenueName: undefined },
+    {
+      handle: "source.0",
+      role: "venue",
+      canonicalVenueName: "Source Zero",
+      canonicalVenueAliases: ["Source Zero Hall"],
+    },
+    {
+      handle: "conflicting.source",
+      role: "unknown",
+      canonicalVenueName: undefined,
+      canonicalVenueAliases: [],
+    },
+    {
+      handle: "inactive.source",
+      role: "unknown",
+      canonicalVenueName: undefined,
+      canonicalVenueAliases: [],
+    },
   ]);
   assert.equal(
     targetedContexts[0]?.role,
     "venue",
-    "An unclassified active source must inherit venue identity from an exact published handle mapping.",
+    "An unclassified active source must inherit venue identity from an exact effectively published legacy mapping.",
   );
   assert.deepEqual(
     Object.fromEntries(
@@ -1286,6 +1321,12 @@ try {
     publicStatus,
     scrapeActive: true,
   }));
+  const legacyLifecycleReconciliationVenue = reconciliationVenues.find(
+    (venue) => venue._id === "venue-unknown",
+  );
+  delete legacyLifecycleReconciliationVenue.publicStatus;
+  delete legacyLifecycleReconciliationVenue.scrapeActive;
+  legacyLifecycleReconciliationVenue.isActive = true;
   const reconciliationSources = [
     {
       _id: "source-unknown",
@@ -1557,6 +1598,7 @@ try {
       handle: "canonical.handle",
       role: "venue",
       canonicalVenueName: "Rolling Canonical Venue",
+      canonicalVenueAliases: [],
     },
   ]);
 
@@ -1603,6 +1645,7 @@ try {
       handle: "legacy.handle",
       role: "venue",
       canonicalVenueName: "Legacy Mixed Case Venue",
+      canonicalVenueAliases: [],
     },
   ]);
   await assert.rejects(
@@ -1723,14 +1766,16 @@ try {
     _id: `venue-${String(index).padStart(4, "0")}`,
     name: `Venue ${index}`,
     instagramHandle: `legacy.${index}`,
-    scrapeActive: true,
-    publicStatus: "published",
+    ...(index === 0
+      ? { isActive: true }
+      : { scrapeActive: true, publicStatus: "published" }),
   }));
   const drainedLegacySources = await drainHandler(
     listLegacyVenueSourcesPage._handler,
     createPagedDb({ venues: legacyVenueRows }),
   );
   assert.equal(drainedLegacySources.length, 311, "legacy venue sources must also drain every page");
+  assert.equal(drainedLegacySources[0]?.role, "venue");
   const drainedLegacyHandles = await drainHandler(
     listLegacyVenueHandlesPage._handler,
     createPagedDb({ venues: legacyVenueRows }),

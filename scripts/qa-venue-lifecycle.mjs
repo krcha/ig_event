@@ -178,6 +178,7 @@ const schemaSource = readFileSync("convex/schema.ts", "utf8");
 const venuesSource = readFileSync("convex/venues.ts", "utf8");
 const usersSource = readFileSync("convex/users.ts", "utf8");
 const eventsSource = readFileSync("convex/events.ts", "utf8");
+const instagramSourcesSource = readFileSync("convex/instagramSources.ts", "utf8");
 const eventDetailSource = readFileSync("app/(main)/events/[eventId]/page.tsx", "utf8");
 const publicEventsSource = readFileSync("lib/events/public-events.ts", "utf8");
 const adminRouteSource = readFileSync("app/api/admin/venues/route.ts", "utf8");
@@ -188,6 +189,15 @@ const placeIdResolverSource = readFileSync("scripts/resolve-venue-place-ids.mjs"
 for (const field of ["scrapeActive", "publicStatus"]) {
   assert.ok(schemaSource.includes(field), `Venue schema should include ${field}.`);
 }
+assert.match(schemaSource, /aliases:\s*v\.optional\(v\.array\(v\.string\(\)\)\)/);
+assert.match(venuesSource, /normalizeVenueAliases/);
+assert.match(adminRouteSource, /aliases/);
+assert.match(adminUiSource, /aliasesText/);
+assert.match(
+  instagramSourcesSource,
+  /function roleForLegacyVenue[\s\S]*?isVenuePublic\(venue\)/,
+  "Legacy venue source roles must honor effective publication state.",
+);
 assert.match(schemaSource, /venueAuditLog:\s*defineTable/);
 assert.match(schemaSource, /beforeJson:\s*v\.string\(\)/);
 assert.match(schemaSource, /afterJson:\s*v\.string\(\)/);

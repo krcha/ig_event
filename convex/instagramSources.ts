@@ -9,6 +9,10 @@ import {
   selectSourcesFairly,
   type InstagramSourceRole,
 } from "../lib/pipeline/instagram-ingestion-durability";
+import {
+  isVenuePublic,
+  isVenueScrapeActive,
+} from "../lib/venues/venue-lifecycle";
 
 const sourceRoleValidator = v.union(
   v.literal("venue"),
@@ -25,7 +29,7 @@ const followingAccountValidator = v.object({
 });
 
 function roleForLegacyVenue(venue: Doc<"venues">): InstagramSourceRole {
-  return venue.publicStatus === "published" ? "venue" : "unknown";
+  return isVenuePublic(venue) ? "venue" : "unknown";
 }
 
 function effectiveIngestionRole(
@@ -47,7 +51,7 @@ function effectiveIngestionRole(
     }
     return source.role;
   }
-  return exactHandleVenue?.scrapeActive === true
+  return exactHandleVenue && isVenueScrapeActive(exactHandleVenue)
     ? roleForLegacyVenue(exactHandleVenue)
     : "unknown";
 }
@@ -92,11 +96,28 @@ export const listActive = query({
       );
     }
     const sourcesByHandle = new Map(explicitSources.map((source) => [source.handle, source]));
-    const legacyVenues = await ctx.db
-      .query("venues")
-      .withIndex("by_scrapeActive", (q) => q.eq("scrapeActive", true))
-      .take(limit + 1);
-    if (legacyVenues.length > limit) {
+    const [explicitScrapeVenues, legacyActiveVenues] = await Promise.all([
+      ctx.db
+        .query("venues")
+        .withIndex("by_scrapeActive", (q) => q.eq("scrapeActive", true))
+        .take(limit + 1),
+      ctx.db
+        .query("venues")
+        .withIndex("by_isActive", (q) => q.eq("isActive", true))
+        .take(limit + 1),
+    ]);
+    const legacyVenues = [
+      ...new Map(
+        [...explicitScrapeVenues, ...legacyActiveVenues]
+          .filter(isVenueScrapeActive)
+          .map((venue) => [venue._id, venue]),
+      ).values(),
+    ];
+    if (
+      explicitScrapeVenues.length > limit ||
+      legacyActiveVenues.length > limit ||
+      legacyVenues.length > limit
+    ) {
       throw new Error(
         `Legacy venue-source query exceeded its fail-closed limit of ${limit}; use paginated source queries.`,
       );
@@ -189,13 +210,10 @@ export const listLegacyVenueSourcesPage = query({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const result = await ctx.db
-      .query("venues")
-      .withIndex("by_scrapeActive", (q) => q.eq("scrapeActive", true))
-      .paginate(args.paginationOpts);
+    const result = await ctx.db.query("venues").paginate(args.paginationOpts);
     return {
       ...result,
-      page: result.page.flatMap((venue) => {
+      page: result.page.filter(isVenueScrapeActive).flatMap((venue) => {
         const handle = normalizeInstagramHandle(venue.instagramHandle);
         if (!handle) return [];
         const role = roleForLegacyVenue(venue);
@@ -229,13 +247,11 @@ export const listLegacyVenueHandlesPage = query({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const result = await ctx.db
-      .query("venues")
-      .withIndex("by_scrapeActive", (q) => q.eq("scrapeActive", true))
-      .paginate(args.paginationOpts);
+    const result = await ctx.db.query("venues").paginate(args.paginationOpts);
     return {
       ...result,
       page: result.page
+        .filter(isVenueScrapeActive)
         .map((venue) => normalizeInstagramHandle(venue.instagramHandle))
         .filter(Boolean),
     };
@@ -356,6 +372,7 @@ export const getIngestionContextsByHandles = query({
           handle,
           role,
           canonicalVenueName: handleVenue?.name,
+          canonicalVenueAliases: handleVenue?.aliases ?? [],
         };
       }),
     );
@@ -678,10 +695,10 @@ export const backfillFromVenues = mutation({
             handle,
             role,
             ...(role === "venue" ? { venueId: venue._id } : {}),
-            active: venue.scrapeActive === true,
+            active: isVenueScrapeActive(venue),
             discoveredAt: now,
             activatedAt: now,
-            ...(venue.scrapeActive === true ? {} : { deactivatedAt: now }),
+            ...(isVenueScrapeActive(venue) ? {} : { deactivatedAt: now }),
             createdAt: now,
             updatedAt: now,
           });

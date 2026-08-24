@@ -4,6 +4,7 @@ import type { FunctionReference } from "convex/server";
 export type OperationalVenueRecord = {
   name: string;
   instagramHandle: string;
+  aliases?: string[];
 };
 
 type OperationalVenuePage = {

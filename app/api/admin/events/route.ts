@@ -3,6 +3,11 @@ import { NextResponse } from "next/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
 import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
 import type { EventTimeSource, EventTimeStatus } from "@/lib/events/event-time";
+import {
+  getModerationDuplicateContextDates,
+  loadModerationDuplicateContextWithFallback,
+  mergeModerationDuplicateContextEvents,
+} from "@/lib/events/moderation-duplicate-context";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 
 type EventStatus = "pending" | "approved" | "rejected";
@@ -13,8 +18,8 @@ type EventListQuery = {
   limit?: number;
 };
 
-type EventListAllQuery = {
-  limit?: number;
+type ModerationDuplicateContextQuery = {
+  dates: string[];
 };
 
 type UpdatePromotionRequestBody = {
@@ -59,10 +64,32 @@ type EventRecord = {
   updatedAt: number;
 };
 
+type ModerationDuplicateContextRecord = {
+  _id: string;
+  title: string;
+  date: string;
+  time?: string;
+  venue: string;
+  normalizedVenueIdentity?: string;
+  normalizedVenueInstagramHandle?: string;
+  artists: string[];
+  description?: string;
+  eventType: string;
+  sourceCaption?: string;
+  status: EventStatus;
+  createdAt: number;
+  updatedAt: number;
+};
+
+type ModerationDuplicateContextResult = {
+  events: ModerationDuplicateContextRecord[];
+  truncated: boolean;
+};
+
 const listByStatusQuery =
   "events:listByStatus" as unknown as FunctionReference<"query">;
-const listEventsQuery =
-  "events:listEvents" as unknown as FunctionReference<"query">;
+const listModerationDuplicateContextByDatesQuery =
+  "events:listModerationDuplicateContextByDates" as unknown as FunctionReference<"query">;
 const updateEventMutation =
   "events:updateEvent" as unknown as FunctionReference<"mutation">;
 
@@ -96,6 +123,54 @@ function mapEventRecord(event: EventRecord) {
       reviewedAt: event.reviewedAt ?? null,
       reviewedBy: event.reviewedBy ?? null,
       moderationNote: event.moderationNote ?? null,
+    },
+    createdAt: event.createdAt,
+    updatedAt: event.updatedAt,
+  };
+}
+
+function mapModerationDuplicateContextRecord(
+  event: ModerationDuplicateContextRecord,
+) {
+  const normalizedFieldsJson = JSON.stringify({
+    normalizedDate: event.date,
+    ...(event.normalizedVenueIdentity
+      ? { normalizedVenue: event.normalizedVenueIdentity }
+      : {}),
+    ...(event.normalizedVenueInstagramHandle
+      ? { locationName: event.normalizedVenueInstagramHandle }
+      : {}),
+  });
+
+  return {
+    id: event._id,
+    title: event.title,
+    date: event.date,
+    time: event.time ?? null,
+    timeSource: "unknown" as const,
+    timeEvidenceText: null,
+    timeConfidence: 0,
+    timeStatus: "unknown" as const,
+    venue: event.venue,
+    artists: event.artists,
+    description: event.description ?? null,
+    imageUrl: null,
+    instagramPostUrl: null,
+    ticketPrice: null,
+    eventType: canonicalizeEventType(event.eventType),
+    sourceCaption: event.sourceCaption ?? null,
+    sourcePostedAt: null,
+    rawExtractionJson: null,
+    normalizedFieldsJson,
+    promotionTier: null,
+    promotionStart: null,
+    promotionEnd: null,
+    promotionPriority: null,
+    moderation: {
+      status: event.status,
+      reviewedAt: null,
+      reviewedBy: null,
+      moderationNote: null,
     },
     createdAt: event.createdAt,
     updatedAt: event.updatedAt,
@@ -162,17 +237,50 @@ export async function GET(request: Request) {
       status,
       limit,
     } satisfies EventListQuery)) as EventRecord[];
-    const duplicateContextLimit = Math.max(limit * 3, 300);
-    const duplicateContextEvents = includeDuplicateContext
-      ? ((await convex.query(listEventsQuery, {
-          limit: Math.min(duplicateContextLimit, 600),
-        } satisfies EventListAllQuery)) as EventRecord[])
-      : [];
+    const mappedEvents = events.map(mapEventRecord);
+    const duplicateContextDates = getModerationDuplicateContextDates(events);
+    const duplicateContext = await loadModerationDuplicateContextWithFallback({
+      baseEvents: mappedEvents,
+      includeDuplicateContext,
+      loadContext: async () => {
+        if (duplicateContextDates.length === 0) {
+          return { events: [], truncated: false };
+        }
+
+        const context = (await convex.query(
+          listModerationDuplicateContextByDatesQuery,
+          {
+            dates: duplicateContextDates,
+          } satisfies ModerationDuplicateContextQuery,
+        )) as ModerationDuplicateContextResult;
+        return {
+          events: mergeModerationDuplicateContextEvents(
+            mappedEvents,
+            context.events.map(mapModerationDuplicateContextRecord),
+          ),
+          truncated: context.truncated,
+        };
+      },
+      onLoadError: (error) => {
+        console.error(
+          JSON.stringify({
+            level: "error",
+            event: "moderation_duplicate_context_degraded",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Unknown moderation duplicate-context error.",
+          }),
+        );
+      },
+    });
 
     return NextResponse.json({
       status,
-      events: events.map(mapEventRecord),
-      duplicateContextEvents: duplicateContextEvents.map(mapEventRecord),
+      events: mappedEvents,
+      duplicateContextEvents: duplicateContext.duplicateContextEvents,
+      duplicateContextDegraded: duplicateContext.degraded,
+      duplicateContextTruncated: duplicateContext.truncated,
     });
   } catch (error) {
     return NextResponse.json(

@@ -12,6 +12,7 @@ type Venue = {
   id: string;
   name: string;
   instagramHandle: string;
+  aliases: string[];
   category: string;
   location: string | null;
   hoursSource: "google" | "manual" | "none" | "osm" | null;
@@ -46,6 +47,7 @@ type VenueImportResponse = {
 type VenueFormState = {
   name: string;
   instagramHandle: string;
+  aliasesText: string;
   category: string;
   location: string;
   manualOpeningHours: string;
@@ -60,6 +62,7 @@ type VenueSortMode = "name" | "updated_desc" | "handle";
 const EMPTY_FORM: VenueFormState = {
   name: "",
   instagramHandle: "",
+  aliasesText: "",
   category: DEFAULT_VENUE_CATEGORY,
   location: "",
   manualOpeningHours: "",
@@ -91,6 +94,13 @@ function VenueCategorySelect({
 
 function normalizeHandleInput(value: string): string {
   return value.replace(/^@+/, "").trim().toLowerCase();
+}
+
+function parseAliasInput(value: string): string[] {
+  return value
+    .split(/\r?\n/u)
+    .map((alias) => alias.trim())
+    .filter(Boolean);
 }
 
 function formatDateTime(value: number): string {
@@ -188,6 +198,7 @@ export function VenueManager() {
         body: JSON.stringify({
           name: createForm.name.trim(),
           instagramHandle: normalizeHandleInput(createForm.instagramHandle),
+          aliases: parseAliasInput(createForm.aliasesText),
           category: createForm.category.trim(),
           location: createForm.location.trim() || undefined,
           scrapeActive: createForm.scrapeActive,
@@ -252,6 +263,7 @@ export function VenueManager() {
     setEditForm({
       name: venue.name,
       instagramHandle: venue.instagramHandle,
+      aliasesText: venue.aliases.join("\n"),
       category: venue.category,
       location: venue.location ?? "",
       manualOpeningHours: getManualOpeningHoursInput(venue),
@@ -277,6 +289,7 @@ export function VenueManager() {
           patch: {
             name: editForm.name.trim(),
             instagramHandle: normalizeHandleInput(editForm.instagramHandle),
+            aliases: parseAliasInput(editForm.aliasesText),
             category: editForm.category.trim(),
             location: editForm.location.trim() || undefined,
             scrapeActive: editForm.scrapeActive,
@@ -415,6 +428,7 @@ export function VenueManager() {
         [
           venue.name,
           venue.instagramHandle,
+          ...venue.aliases,
           venue.category,
           venue.location ?? "",
           venue.hoursSource ?? "",
@@ -506,6 +520,17 @@ export function VenueManager() {
               }
               placeholder="Location (optional)"
               value={createForm.location}
+            />
+            <textarea
+              className="min-h-24 rounded-xl border border-input bg-background px-3 py-2 text-sm md:col-span-2"
+              onChange={(event) =>
+                setCreateForm((current) => ({
+                  ...current,
+                  aliasesText: event.target.value,
+                }))
+              }
+              placeholder="Venue aliases, one per line (for example: New Cinema Zvezda)"
+              value={createForm.aliasesText}
             />
             <label className="flex items-center gap-2 rounded-xl border border-input px-3 py-2 text-sm">
               <input
@@ -714,6 +739,17 @@ export function VenueManager() {
                         placeholder="Location"
                         value={editForm.location}
                       />
+                      <textarea
+                        className="min-h-24 rounded-xl border border-input bg-background px-3 py-2 text-sm md:col-span-2"
+                        onChange={(event) =>
+                          setEditForm((current) => ({
+                            ...current,
+                            aliasesText: event.target.value,
+                          }))
+                        }
+                        placeholder="Venue aliases, one per line"
+                        value={editForm.aliasesText}
+                      />
                       <input
                         className="rounded-xl border border-input bg-background px-3 py-2 text-sm md:col-span-2"
                         onChange={(event) =>
@@ -800,6 +836,9 @@ export function VenueManager() {
                       </div>
                       <div className="space-y-1 text-sm text-muted-foreground">
                         <p>@{venue.instagramHandle}</p>
+                        {venue.aliases.length > 0 ? (
+                          <p>Aliases: {venue.aliases.join(", ")}</p>
+                        ) : null}
                         {venue.location ? <p>{venue.location}</p> : null}
                         {formatOptionalDateTime(venue.hoursFetchedAt) ? (
                           <p>Hours checked {formatOptionalDateTime(venue.hoursFetchedAt)}</p>

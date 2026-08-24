@@ -2,7 +2,13 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
-import { normalizeHandle, toSearchableText } from "../lib/pipeline/venue-normalization";
+import {
+  MAX_VENUE_ALIASES,
+  normalizeHandle,
+  normalizeVenueAliases,
+  normalizeVenueComparableText,
+  toSearchableText,
+} from "../lib/pipeline/venue-normalization";
 import { canonicalizeVenueCategory } from "../lib/taxonomy/venue-types";
 import {
   buildVenueLifecycleMigrationPlan,
@@ -40,6 +46,7 @@ const normalizedInstagramHandleMigrationRow = v.object({
 });
 const MAX_INSTAGRAM_HANDLE_NORMALIZATION_PAGE_SIZE = 200;
 const MAX_INSTAGRAM_HANDLE_NORMALIZATION_BATCH_SIZE = 25;
+const MAX_VENUES_FOR_ALIAS_VALIDATION = 2_000;
 
 const venueHoursPatch = {
   hoursSource: v.optional(venueHoursSource),
@@ -63,6 +70,55 @@ function normalizeLimit(
   }
 
   return Math.max(1, Math.min(maxValue, Math.trunc(value as number)));
+}
+
+async function assertVenueAliasesUnambiguous(
+  ctx: MutationCtx,
+  options: {
+    aliases: string[];
+    name: string;
+    venueId?: Id<"venues">;
+  },
+): Promise<void> {
+  const proposedAliasKeys = new Set(
+    options.aliases.map(normalizeVenueComparableText).filter(Boolean),
+  );
+  const canonicalNameKey = normalizeVenueComparableText(options.name);
+
+  const venues = await ctx.db.query("venues").take(MAX_VENUES_FOR_ALIAS_VALIDATION + 1);
+  if (venues.length > MAX_VENUES_FOR_ALIAS_VALIDATION) {
+    throw new Error("Venue alias validation exceeded its bounded venue limit.");
+  }
+
+  for (const venue of venues) {
+    if (options.venueId !== undefined && venue._id === options.venueId) {
+      continue;
+    }
+    const conflictingValues = [venue.name, ...(venue.aliases ?? [])];
+    const conflictingValue = conflictingValues.find((value) =>
+      proposedAliasKeys.has(normalizeVenueComparableText(value)),
+    );
+    if (conflictingValue) {
+      throw new Error(
+        `Venue alias ${JSON.stringify(conflictingValue)} is already assigned to ${venue.name}.`,
+      );
+    }
+    const conflictingAlias = (venue.aliases ?? []).find(
+      (alias) => normalizeVenueComparableText(alias) === canonicalNameKey,
+    );
+    if (conflictingAlias) {
+      throw new Error(
+        `Venue name ${JSON.stringify(options.name)} conflicts with an alias assigned to ${venue.name}.`,
+      );
+    }
+  }
+
+  if (canonicalNameKey && proposedAliasKeys.has(canonicalNameKey)) {
+    throw new Error("A venue alias cannot duplicate its canonical name.");
+  }
+  if (options.aliases.length > MAX_VENUE_ALIASES) {
+    throw new Error(`A venue can have at most ${MAX_VENUE_ALIASES} aliases.`);
+  }
 }
 
 function compareVenueEvents(
@@ -358,6 +414,7 @@ export const listVenueIngestionFieldsPaginated = query({
       page: result.page.map((venue) => ({
         name: venue.name,
         instagramHandle: venue.instagramHandle,
+        aliases: venue.aliases ?? [],
       })),
     };
   },
@@ -376,6 +433,7 @@ export const listActiveVenueIngestionFieldsPaginated = query({
       page: result.page.filter(isVenueScrapeActive).map((venue) => ({
         name: venue.name,
         instagramHandle: venue.instagramHandle,
+        aliases: venue.aliases ?? [],
       })),
     };
   },
@@ -541,6 +599,7 @@ export const createVenue = mutation({
   args: {
     name: v.string(),
     instagramHandle: v.string(),
+    aliases: v.optional(v.array(v.string())),
     instagramFollowerCount: v.optional(v.number()),
     instagramFollowerCountUpdatedAt: v.optional(v.number()),
     category: v.string(),
@@ -588,9 +647,15 @@ export const createVenue = mutation({
     if (existingVenue) {
       return existingVenue._id;
     }
+    const aliases = normalizeVenueAliases(venueArgs.aliases ?? []);
+    await assertVenueAliasesUnambiguous(ctx, {
+      aliases,
+      name: venueArgs.name,
+    });
     const now = Date.now();
     const venueId = await ctx.db.insert("venues", {
       ...venueArgs,
+      aliases,
       instagramHandle,
       normalizedInstagramHandle: instagramHandle,
       category: canonicalizeVenueCategory(venueArgs.category),
@@ -619,6 +684,7 @@ export const updateVenue = mutation({
     patch: v.object({
       name: v.optional(v.string()),
       instagramHandle: v.optional(v.string()),
+      aliases: v.optional(v.array(v.string())),
       instagramFollowerCount: v.optional(v.number()),
       instagramFollowerCountUpdatedAt: v.optional(v.number()),
       category: v.optional(v.string()),
@@ -651,6 +717,10 @@ export const updateVenue = mutation({
 
     const now = Math.max(Date.now(), existing.updatedAt + 1);
     const { isActive: legacyActive, ...rawExplicitPatch } = args.patch;
+    const aliases =
+      rawExplicitPatch.aliases === undefined
+        ? undefined
+        : normalizeVenueAliases(rawExplicitPatch.aliases);
     let instagramHandle: string | undefined;
     if (rawExplicitPatch.instagramHandle !== undefined) {
       const normalizedInstagramHandle = normalizeHandle(rawExplicitPatch.instagramHandle);
@@ -675,10 +745,18 @@ export const updateVenue = mutation({
     }
     const explicitPatch = {
       ...rawExplicitPatch,
+      ...(aliases !== undefined ? { aliases } : {}),
       ...(instagramHandle !== undefined
         ? { instagramHandle, normalizedInstagramHandle: instagramHandle }
         : {}),
     };
+    if (explicitPatch.name !== undefined || explicitPatch.aliases !== undefined) {
+      await assertVenueAliasesUnambiguous(ctx, {
+        aliases: explicitPatch.aliases ?? existing.aliases ?? [],
+        name: explicitPatch.name ?? existing.name,
+        venueId: args.id,
+      });
+    }
     const patch = {
       ...explicitPatch,
       ...(legacyActive !== undefined && explicitPatch.scrapeActive === undefined

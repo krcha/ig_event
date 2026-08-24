@@ -412,11 +412,14 @@ try {
   );
   assert.equal(exactPosterGrounding.posterQueries, 1);
 
+  const repairCanonicalVenueName = "Novi Bioskop Zvezda";
+  const repairLegacyVenueAlias = "New Cinema Zvezda";
   const repairVenue = {
     _id: "venue-boundary-v2",
     _creationTime: now,
-    name: extractionFixture.venue,
+    name: repairCanonicalVenueName,
     instagramHandle: "boundary_venue",
+    aliases: [repairLegacyVenueAlias],
     category: "music",
     publicStatus: "published",
     scrapeActive: true,
@@ -437,13 +440,13 @@ try {
   };
   const repairCurrentFields = {
     ...makeNormalizedFields("poster", "poster"),
-    rawVenue: "",
+    rawVenue: repairLegacyVenueAlias,
     normalizedVenue: "",
     trustedVenueSource: true,
   };
   const repairNextFields = {
     ...repairCurrentFields,
-    normalizedVenue: extractionFixture.venue,
+    normalizedVenue: repairCanonicalVenueName,
   };
   const repairEvent = {
     ...posterEvent,
@@ -524,7 +527,7 @@ try {
   };
   const conflictingRepairNextFields = {
     ...conflictingRepairCurrentFields,
-    normalizedVenue: extractionFixture.venue,
+    normalizedVenue: repairCanonicalVenueName,
   };
   const conflictingRepairEvent = {
     ...posterEvent,
@@ -539,7 +542,7 @@ try {
       expectedStatus: "approved",
       expectedUpdatedAt: conflictingRepairEvent.updatedAt,
       expectedNormalizedFieldsJson: conflictingRepairEvent.normalizedFieldsJson,
-      nextVenue: extractionFixture.venue,
+      nextVenue: repairCanonicalVenueName,
       nextNormalizedFieldsJson: JSON.stringify(conflictingRepairNextFields),
       moderationNote: "Explicit different physical venue must retain precedence over account identity.",
       serviceSecret: process.env.CRON_SECRET,
@@ -554,25 +557,25 @@ try {
     expectedStatus: "approved",
     expectedUpdatedAt: repairEvent.updatedAt,
     expectedNormalizedFieldsJson: repairEvent.normalizedFieldsJson,
-    nextVenue: extractionFixture.venue,
+    nextVenue: repairCanonicalVenueName,
     nextNormalizedFieldsJson: JSON.stringify(repairNextFields),
     moderationNote: "Exact trusted source venue restored after v2 normalization loss.",
     serviceSecret: process.env.CRON_SECRET,
   });
   assert.equal(venueRepairResult.updated, true);
-  assert.equal(repairEvent.venue, extractionFixture.venue);
+  assert.equal(repairEvent.venue, repairCanonicalVenueName);
   assert.equal(repairEvent.venueId, repairVenue._id);
   assert.equal(repairEvent.venueInstagramHandle, repairVenue.instagramHandle);
   assert.equal(
     JSON.parse(repairEvent.normalizedFieldsJson).normalizedVenue,
-    extractionFixture.venue,
+    repairCanonicalVenueName,
   );
   assert.equal(repairAudits.length, 1);
   assert.equal(repairAudits[0].action, "trusted_v2_venue_repaired");
 
   const unsafeRepairFields = {
     ...repairCurrentFields,
-    normalizedVenue: extractionFixture.venue,
+    normalizedVenue: repairCanonicalVenueName,
     title: "Changed during venue repair",
   };
   const unsafeRepairEvent = {
@@ -588,7 +591,7 @@ try {
       expectedStatus: "approved",
       expectedUpdatedAt: unsafeRepairEvent.updatedAt,
       expectedNormalizedFieldsJson: unsafeRepairEvent.normalizedFieldsJson,
-      nextVenue: extractionFixture.venue,
+      nextVenue: repairCanonicalVenueName,
       nextNormalizedFieldsJson: JSON.stringify(unsafeRepairFields),
       moderationNote: "Attempted unsafe venue repair must fail without any mutation.",
       serviceSecret: process.env.CRON_SECRET,

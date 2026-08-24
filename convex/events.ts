@@ -12,6 +12,7 @@ import {
 import { normalizeEventTimeWritePatch } from "../lib/events/event-time-write";
 import { isSensibleEventTitleForApproval } from "../lib/events/event-title-approval";
 import { classifyApprovalOccurrenceRelation } from "../lib/events/approval-occurrence-conflict";
+import { MAX_MODERATION_DUPLICATE_CONTEXT_DATES } from "../lib/events/moderation-duplicate-context";
 import { isCaptionSourceCoherentWithEvent } from "../lib/events/event-source-approval";
 import { sourceOccurrenceRepresentativeMatchesExpected } from "../lib/events/source-occurrence-representation";
 import { buildNormalizedEventVenueIdentity } from "../lib/events/event-venue-identity";
@@ -41,6 +42,7 @@ import {
   assertServiceUpdateEventPolicy,
 } from "../lib/events/event-update-precondition";
 import {
+  buildCanonicalVenueAliasesByHandle,
   buildCanonicalVenueNamesByHandle,
   canonicalizeVenueNameDetailed,
   normalizeHandle,
@@ -59,6 +61,26 @@ const eventStatus = v.union(
   v.literal("approved"),
   v.literal("rejected"),
 );
+const moderationDuplicateContextEvent = v.object({
+  _id: v.id("events"),
+  title: v.string(),
+  date: v.string(),
+  time: v.optional(v.string()),
+  venue: v.string(),
+  normalizedVenueIdentity: v.optional(v.string()),
+  normalizedVenueInstagramHandle: v.optional(v.string()),
+  artists: v.array(v.string()),
+  description: v.optional(v.string()),
+  eventType: v.string(),
+  sourceCaption: v.optional(v.string()),
+  status: eventStatus,
+  createdAt: v.number(),
+  updatedAt: v.number(),
+});
+const moderationDuplicateContextResult = v.object({
+  events: v.array(moderationDuplicateContextEvent),
+  truncated: v.boolean(),
+});
 const promotionTier = v.union(v.literal("featured"), v.literal("promoted"));
 const sourceProcessingFence = v.object({
   handle: v.string(),
@@ -223,6 +245,17 @@ const MAX_SOURCE_GROUNDING_REPROCESS_BATCH_SIZE = 100;
 const MAX_EVENT_EVIDENCE_POLICY_REPROCESS_BATCH_SIZE = 16;
 const MAX_APPROVAL_DATE_COHORT_SIZE = 500;
 const MAX_EVENTS_GET_MANY_BY_IDS = 100;
+const MAX_MODERATION_DUPLICATE_CONTEXT_EVENTS = 100;
+const MAX_MODERATION_DUPLICATE_CONTEXT_EVENTS_PER_DATE = 8;
+const MODERATION_DUPLICATE_CONTEXT_DATE_BATCH_SIZE = 4;
+const MODERATION_DUPLICATE_CONTEXT_TITLE_LENGTH = 300;
+const MODERATION_DUPLICATE_CONTEXT_TIME_LENGTH = 32;
+const MODERATION_DUPLICATE_CONTEXT_VENUE_LENGTH = 300;
+const MODERATION_DUPLICATE_CONTEXT_ARTIST_COUNT = 100;
+const MODERATION_DUPLICATE_CONTEXT_ARTIST_LENGTH = 200;
+const MODERATION_DUPLICATE_CONTEXT_DESCRIPTION_LENGTH = 1_000;
+const MODERATION_DUPLICATE_CONTEXT_EVENT_TYPE_LENGTH = 100;
+const MODERATION_DUPLICATE_CONTEXT_CAPTION_LENGTH = 2_000;
 const SOURCE_GROUNDING_REPROCESS_SOURCE_REASONS = new Set([
   "caption_source_event_mismatch",
   "unverified_core_event_source",
@@ -1254,6 +1287,143 @@ export const listEvents = query({
     await requireAdminIdentity(ctx);
     const limit = args.limit ?? 100;
     return ctx.db.query("events").order("desc").take(limit);
+  },
+});
+
+function projectModerationDuplicateContextEvent(event: Doc<"events">) {
+  return {
+    _id: event._id,
+    title: event.title.slice(0, MODERATION_DUPLICATE_CONTEXT_TITLE_LENGTH),
+    date: event.date,
+    ...(event.time
+      ? { time: event.time.slice(0, MODERATION_DUPLICATE_CONTEXT_TIME_LENGTH) }
+      : {}),
+    venue: event.venue.slice(0, MODERATION_DUPLICATE_CONTEXT_VENUE_LENGTH),
+    ...(event.normalizedVenueIdentity
+      ? {
+          normalizedVenueIdentity: event.normalizedVenueIdentity.slice(
+            0,
+            MODERATION_DUPLICATE_CONTEXT_VENUE_LENGTH,
+          ),
+        }
+      : {}),
+    ...(event.normalizedVenueInstagramHandle
+      ? {
+          normalizedVenueInstagramHandle: event.normalizedVenueInstagramHandle.slice(
+            0,
+            MODERATION_DUPLICATE_CONTEXT_VENUE_LENGTH,
+          ),
+        }
+      : {}),
+    artists: event.artists
+      .slice(0, MODERATION_DUPLICATE_CONTEXT_ARTIST_COUNT)
+      .map((artist) => artist.slice(0, MODERATION_DUPLICATE_CONTEXT_ARTIST_LENGTH)),
+    ...(event.description
+      ? {
+          description: event.description.slice(
+            0,
+            MODERATION_DUPLICATE_CONTEXT_DESCRIPTION_LENGTH,
+          ),
+        }
+      : {}),
+    eventType: event.eventType.slice(0, MODERATION_DUPLICATE_CONTEXT_EVENT_TYPE_LENGTH),
+    ...(event.sourceCaption
+      ? {
+          sourceCaption: event.sourceCaption.slice(
+            0,
+            MODERATION_DUPLICATE_CONTEXT_CAPTION_LENGTH,
+          ),
+        }
+      : {}),
+    status: event.status,
+    createdAt: event.createdAt,
+    updatedAt: event.updatedAt,
+  };
+}
+
+export const listModerationDuplicateContextByDates = query({
+  args: {
+    dates: v.array(v.string()),
+  },
+  returns: moderationDuplicateContextResult,
+  handler: async (ctx, args) => {
+    await requireAdminIdentity(ctx);
+    if (args.dates.length > MAX_MODERATION_DUPLICATE_CONTEXT_DATES) {
+      throw new Error(
+        `Moderation duplicate context accepts at most ${MAX_MODERATION_DUPLICATE_CONTEXT_DATES} dates.`,
+      );
+    }
+
+    const dates: string[] = [];
+    const seenDates = new Set<string>();
+    for (const candidate of args.dates) {
+      const date = candidate.trim();
+      if (dateKeyToUtcMs(date) === null) {
+        throw new Error("Moderation duplicate context dates must use valid YYYY-MM-DD values.");
+      }
+      if (!seenDates.has(date)) {
+        seenDates.add(date);
+        dates.push(date);
+      }
+    }
+
+    const contextEvents: ReturnType<typeof projectModerationDuplicateContextEvent>[] = [];
+    let truncated = false;
+    let start = 0;
+    for (
+      ;
+      start < dates.length && contextEvents.length < MAX_MODERATION_DUPLICATE_CONTEXT_EVENTS;
+    ) {
+      const remainingCapacity =
+        MAX_MODERATION_DUPLICATE_CONTEXT_EVENTS - contextEvents.length;
+      const dateBatchSize = Math.min(
+        MODERATION_DUPLICATE_CONTEXT_DATE_BATCH_SIZE,
+        Math.ceil(
+          remainingCapacity / MAX_MODERATION_DUPLICATE_CONTEXT_EVENTS_PER_DATE,
+        ),
+      );
+      const dateBatch = dates.slice(
+        start,
+        start + dateBatchSize,
+      );
+      start += dateBatch.length;
+      const eventBatches = await Promise.all(
+        dateBatch.map((date) =>
+          // Pending rows already come from the requested moderation page. The
+          // extra context is reserved for approved conflicts so a busy date's
+          // pending traffic cannot crowd out the duplicate that matters.
+          ctx.db
+            .query("events")
+            .withIndex("by_status_date", (q) =>
+              q.eq("status", "approved").eq("date", date),
+            )
+            .order("desc")
+            .take(MAX_MODERATION_DUPLICATE_CONTEXT_EVENTS_PER_DATE + 1),
+        ),
+      );
+
+      for (const eventBatch of eventBatches) {
+        if (eventBatch.length > MAX_MODERATION_DUPLICATE_CONTEXT_EVENTS_PER_DATE) {
+          truncated = true;
+        }
+        for (const event of eventBatch.slice(
+          0,
+          MAX_MODERATION_DUPLICATE_CONTEXT_EVENTS_PER_DATE,
+        )) {
+          if (contextEvents.length >= MAX_MODERATION_DUPLICATE_CONTEXT_EVENTS) {
+            truncated = true;
+            break;
+          }
+          contextEvents.push(projectModerationDuplicateContextEvent(event));
+        }
+      }
+    }
+
+    if (start < dates.length) {
+      truncated = true;
+    }
+
+    return { events: contextEvents, truncated };
   },
 });
 
@@ -2873,11 +3043,13 @@ export const repairTrustedV2EventVenue = mutation({
     }
 
     const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle(publicVenues);
+    const canonicalVenueAliasesByHandle = buildCanonicalVenueAliasesByHandle(publicVenues);
     const rawVenue =
       typeof currentFields.rawVenue === "string" ? currentFields.rawVenue.trim() : "";
     const rawVenueCanonicalization = canonicalizeVenueNameDetailed(
       rawVenue,
       canonicalVenueNamesByHandle,
+      { canonicalVenueAliasesByHandle },
     );
     if (
       (!rawVenue && !exactCanonicalVenueSource) ||

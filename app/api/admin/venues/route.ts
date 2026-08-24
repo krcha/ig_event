@@ -2,6 +2,7 @@ import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
 import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
+import { normalizeVenueAliases } from "@/lib/pipeline/venue-normalization";
 import { canonicalizeVenueCategory } from "@/lib/taxonomy/venue-types";
 import {
   createEmptyVenueHoursJson,
@@ -14,6 +15,7 @@ type VenueRecord = {
   _id: string;
   name: string;
   instagramHandle: string;
+  aliases?: string[];
   instagramFollowerCount?: number;
   instagramFollowerCountUpdatedAt?: number;
   category: string;
@@ -40,6 +42,7 @@ type VenueRecord = {
 type CreateVenueBody = {
   name?: string;
   instagramHandle?: string;
+  aliases?: string[];
   instagramFollowerCount?: number;
   instagramFollowerCountUpdatedAt?: number;
   category?: string;
@@ -57,6 +60,7 @@ type UpdateVenueBody = {
   patch?: {
     name?: string;
     instagramHandle?: string;
+    aliases?: string[];
     instagramFollowerCount?: number;
     instagramFollowerCountUpdatedAt?: number;
     category?: string;
@@ -94,6 +98,16 @@ function isVenuePublicStatus(
   return typeof value === "string" && VENUE_PUBLIC_STATUSES.has(value);
 }
 
+function parseVenueAliases(value: unknown): string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value) || value.some((alias) => typeof alias !== "string")) {
+    throw new Error("aliases must be an array of strings.");
+  }
+  return normalizeVenueAliases(value);
+}
+
 function createClearVenueHoursPatch(now = Date.now()) {
   const generatedAt = new Date(now).toISOString();
   return {
@@ -128,6 +142,7 @@ export async function GET() {
         id: venue._id,
         name: venue.name,
         instagramHandle: venue.instagramHandle,
+        aliases: venue.aliases ?? [],
         instagramFollowerCount: venue.instagramFollowerCount ?? null,
         instagramFollowerCountUpdatedAt: venue.instagramFollowerCountUpdatedAt ?? null,
         category: canonicalizeVenueCategory(venue.category),
@@ -177,6 +192,15 @@ export async function POST(request: Request) {
   const name = body.name?.trim();
   const instagramHandle = body.instagramHandle?.trim();
   const category = canonicalizeVenueCategory(body.category);
+  let aliases: string[] | undefined;
+  try {
+    aliases = parseVenueAliases(body.aliases);
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Invalid venue aliases." },
+      { status: 400 },
+    );
+  }
 
   if (!name || !instagramHandle) {
     return NextResponse.json(
@@ -196,6 +220,7 @@ export async function POST(request: Request) {
     const id = await convex.mutation(createVenueMutation, {
       name,
       instagramHandle,
+      ...(aliases !== undefined ? { aliases } : {}),
       ...(typeof body.instagramFollowerCount === "number"
         ? { instagramFollowerCount: body.instagramFollowerCount }
         : {}),
@@ -255,6 +280,16 @@ export async function PATCH(request: Request) {
     );
   }
 
+  let aliases: string[] | undefined;
+  try {
+    aliases = parseVenueAliases(body.patch.aliases);
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Invalid venue aliases." },
+      { status: 400 },
+    );
+  }
+
   const manualOpeningHours = body.patch.manualOpeningHours?.trim();
   let hoursPatch:
     | ReturnType<typeof createClearVenueHoursPatch>
@@ -285,6 +320,7 @@ export async function PATCH(request: Request) {
       ...(body.patch.instagramHandle !== undefined
         ? { instagramHandle: body.patch.instagramHandle }
         : {}),
+      ...(aliases !== undefined ? { aliases } : {}),
       ...(typeof body.patch.instagramFollowerCount === "number"
         ? { instagramFollowerCount: body.patch.instagramFollowerCount }
         : {}),

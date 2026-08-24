@@ -280,6 +280,7 @@ export default defineSchema({
     name: v.string(),
     instagramHandle: v.string(),
     normalizedInstagramHandle: v.optional(v.string()),
+    aliases: v.optional(v.array(v.string())),
     instagramFollowerCount: v.optional(v.number()),
     instagramFollowerCountUpdatedAt: v.optional(v.number()),
     category: v.string(),

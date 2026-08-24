@@ -54,6 +54,7 @@ assert.match(
 for (const functionName of [
   "getEvent",
   "listEvents",
+  "listModerationDuplicateContextByDates",
   "setEventStatus",
   "setEventStatuses",
   "deleteApprovedEvent",

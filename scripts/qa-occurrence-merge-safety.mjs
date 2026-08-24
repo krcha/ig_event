@@ -16,6 +16,12 @@ import {
 process.env.ADMIN_CLERK_USER_IDS = "qa-merge-admin";
 process.env.CRON_SECRET = "qa-lineup-service-secret";
 
+// Keep the dated event-evidence fixtures deterministic. `isFutureIsoDate` intentionally
+// treats same-day events as eligible, so this suite must not start failing as wall time
+// moves past the fixture dates.
+const QA_NOW_MS = new Date("2026-08-22T12:00:00.000Z").getTime();
+Date.now = () => QA_NOW_MS;
+
 function approvedEvent(id, overrides = {}) {
   return {
     _id: id,

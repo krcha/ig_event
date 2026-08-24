@@ -1,6 +1,7 @@
 export type CanonicalVenueRecord = {
   name: string;
   instagramHandle: string;
+  aliases?: string[];
 };
 
 export type VenueSource = "handle_map" | "location_name" | "model" | null;
@@ -14,7 +15,11 @@ export type VenueNormalization = {
 };
 
 type CanonicalVenueMap = Record<string, string>;
+export type CanonicalVenueAliasesByHandle = Record<string, string[]>;
 type StaticVenueMap = Record<string, string>;
+
+export const MAX_VENUE_ALIASES = 20;
+export const MAX_VENUE_ALIAS_LENGTH = 120;
 
 export type VenueCanonicalizationReason =
   | "preferred"
@@ -36,6 +41,7 @@ type NormalizeVenueInput = {
   rawModelVenue: string;
   locationName?: string | null;
   canonicalVenueNamesByHandle: CanonicalVenueMap;
+  canonicalVenueAliasesByHandle?: CanonicalVenueAliasesByHandle;
   handleVenueNamesByHandle?: CanonicalVenueMap;
   staticVenueByHandle?: StaticVenueMap;
   allowCanonicalHandleFallback?: boolean;
@@ -312,9 +318,57 @@ export function normalizeVenueComparableText(value: string): string {
     .trim();
 }
 
+export function normalizeVenueAliases(values: string[]): string[] {
+  if (values.length > MAX_VENUE_ALIASES) {
+    throw new Error(`A venue can have at most ${MAX_VENUE_ALIASES} aliases.`);
+  }
+
+  const aliases: string[] = [];
+  const seen = new Set<string>();
+  for (const rawValue of values) {
+    const alias = rawValue.normalize("NFKC").replace(/\s+/gu, " ").trim();
+    if (!alias) {
+      throw new Error("Venue aliases cannot be empty.");
+    }
+    if (alias.length > MAX_VENUE_ALIAS_LENGTH) {
+      throw new Error(
+        `Venue aliases cannot exceed ${MAX_VENUE_ALIAS_LENGTH} characters.`,
+      );
+    }
+    const key = normalizeVenueComparableText(alias);
+    if (!key) {
+      throw new Error("Venue aliases must contain letters or numbers.");
+    }
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    aliases.push(alias);
+  }
+  return aliases;
+}
+
+export function buildCanonicalVenueAliasesByHandle(
+  venues: CanonicalVenueRecord[],
+): CanonicalVenueAliasesByHandle {
+  const aliasesByHandle: CanonicalVenueAliasesByHandle = {};
+  for (const venue of venues) {
+    const normalizedHandle = normalizeHandle(venue.instagramHandle);
+    if (!normalizedHandle) {
+      continue;
+    }
+    const aliases = normalizeVenueAliases(venue.aliases ?? []);
+    if (aliases.length > 0) {
+      aliasesByHandle[normalizedHandle] = aliases;
+    }
+  }
+  return aliasesByHandle;
+}
+
 type VenueNameEntry = {
   name: string;
   handle: string | null;
+  matchedAlias?: string;
 };
 
 function getPreferredVenueNameForHandle(
@@ -336,17 +390,22 @@ function buildCanonicalVenueEntries(
   canonicalVenueNamesByHandle: CanonicalVenueMap,
   staticVenueByHandle: StaticVenueMap,
   handleVenueNamesByHandle: CanonicalVenueMap,
+  canonicalVenueAliasesByHandle: CanonicalVenueAliasesByHandle,
 ): VenueNameEntry[] {
   const entries: VenueNameEntry[] = [];
   const seen = new Set<string>();
-  const addEntry = (name: string, handle: string | null) => {
+  const addEntry = (name: string, handle: string | null, matchedAlias?: string) => {
     const normalizedName = normalizeString(name);
     const key = `${normalizeHandle(handle ?? "")}:${normalizeVenueComparableText(normalizedName)}`;
     if (!normalizedName || !key || seen.has(key)) {
       return;
     }
     seen.add(key);
-    entries.push({ name: normalizedName, handle: handle ? normalizeHandle(handle) : null });
+    entries.push({
+      name: normalizedName,
+      handle: handle ? normalizeHandle(handle) : null,
+      ...(matchedAlias ? { matchedAlias } : {}),
+    });
   };
 
   for (const [handle, name] of Object.entries(staticVenueByHandle)) {
@@ -357,6 +416,27 @@ function buildCanonicalVenueEntries(
   }
   for (const [handle, name] of Object.entries(handleVenueNamesByHandle)) {
     addEntry(name, handle);
+  }
+  for (const [handle, aliases] of Object.entries(canonicalVenueAliasesByHandle)) {
+    for (const alias of aliases) {
+      addEntry(alias, handle, alias);
+    }
+  }
+  for (const rule of VENUE_ALIAS_RULES) {
+    const canonicalHandle = normalizeHandle(rule.canonicalHandle);
+    if (
+      !getPreferredVenueNameForHandle(
+        canonicalHandle,
+        canonicalVenueNamesByHandle,
+        staticVenueByHandle,
+        handleVenueNamesByHandle,
+      )
+    ) {
+      continue;
+    }
+    for (const alias of rule.aliases) {
+      addEntry(alias, canonicalHandle, alias);
+    }
   }
 
   return entries;
@@ -401,6 +481,19 @@ function getDisplayVenueNameForEntry(
   );
 }
 
+function findUniqueVenueEntry(entries: VenueNameEntry[]): VenueNameEntry | null {
+  const uniqueEntries = new Map<string, VenueNameEntry>();
+  for (const entry of entries) {
+    const key = entry.handle
+      ? `handle:${normalizeHandle(entry.handle)}`
+      : `name:${normalizeVenueComparableText(entry.name)}`;
+    if (!uniqueEntries.has(key)) {
+      uniqueEntries.set(key, entry);
+    }
+  }
+  return uniqueEntries.size === 1 ? [...uniqueEntries.values()][0] : null;
+}
+
 function findEntryByVenueName(
   name: string,
   entries: VenueNameEntry[],
@@ -410,30 +503,9 @@ function findEntryByVenueName(
     return null;
   }
 
-  return entries.find((entry) => normalizeVenueComparableText(entry.name) === normalizedName) ?? null;
-}
-
-function findVenueAliasRule(candidate: string): {
-  alias: string;
-  canonicalHandle: string;
-} | null {
-  const normalizedCandidate = normalizeVenueComparableText(candidate);
-  if (!normalizedCandidate) {
-    return null;
-  }
-
-  for (const rule of VENUE_ALIAS_RULES) {
-    for (const alias of rule.aliases) {
-      if (normalizeVenueComparableText(alias) === normalizedCandidate) {
-        return {
-          alias,
-          canonicalHandle: normalizeHandle(rule.canonicalHandle),
-        };
-      }
-    }
-  }
-
-  return null;
+  return findUniqueVenueEntry(
+    entries.filter((entry) => normalizeVenueComparableText(entry.name) === normalizedName),
+  );
 }
 
 function buildCanonicalizationResult(
@@ -465,6 +537,7 @@ export function canonicalizeVenueNameDetailed(
     preferredVenue?: string | null;
     staticVenueByHandle?: StaticVenueMap;
     handleVenueNamesByHandle?: CanonicalVenueMap;
+    canonicalVenueAliasesByHandle?: CanonicalVenueAliasesByHandle;
   },
 ): VenueCanonicalizationResult | null {
   const normalizedCandidate = normalizeVenueComparableText(candidate);
@@ -475,10 +548,12 @@ export function canonicalizeVenueNameDetailed(
   const preferredVenue = options?.preferredVenue ?? null;
   const staticVenueByHandle = options?.staticVenueByHandle ?? {};
   const handleVenueNamesByHandle = options?.handleVenueNamesByHandle ?? {};
+  const canonicalVenueAliasesByHandle = options?.canonicalVenueAliasesByHandle ?? {};
   const canonicalVenueEntries = buildCanonicalVenueEntries(
     canonicalVenueNamesByHandle,
     staticVenueByHandle,
     handleVenueNamesByHandle,
+    canonicalVenueAliasesByHandle,
   );
 
   if (preferredVenue && areVenueNamesCompatible(candidate, preferredVenue)) {
@@ -517,40 +592,22 @@ export function canonicalizeVenueNameDetailed(
     );
   }
 
-  const aliasRule = findVenueAliasRule(candidate);
-  if (aliasRule) {
-    const aliasVenue = getPreferredVenueNameForHandle(
-      aliasRule.canonicalHandle,
-      canonicalVenueNamesByHandle,
-      staticVenueByHandle,
-      handleVenueNamesByHandle,
-    );
-    if (aliasVenue) {
-      return buildCanonicalizationResult(
-        {
-          name: aliasVenue,
-          handle: aliasRule.canonicalHandle,
-        },
-        "alias",
-        canonicalVenueNamesByHandle,
-        staticVenueByHandle,
-        handleVenueNamesByHandle,
-        aliasRule.alias,
-      );
-    }
-  }
-
-  const exactMatch = canonicalVenueEntries.find(
+  const exactMatches = canonicalVenueEntries.filter(
     (entry) => normalizeVenueComparableText(entry.name) === normalizedCandidate,
   );
+  const exactMatch = findUniqueVenueEntry(exactMatches);
   if (exactMatch) {
     return buildCanonicalizationResult(
       exactMatch,
-      "exact",
+      exactMatch.matchedAlias ? "alias" : "exact",
       canonicalVenueNamesByHandle,
       staticVenueByHandle,
       handleVenueNamesByHandle,
+      exactMatch.matchedAlias,
     );
+  }
+  if (exactMatches.length > 0) {
+    return null;
   }
 
   const candidateTokenCount = normalizedCandidate.split(" ").filter(Boolean).length;
@@ -558,8 +615,11 @@ export function canonicalizeVenueNameDetailed(
     return null;
   }
 
-  const compatibleMatch =
-    canonicalVenueEntries.find((entry) => areVenueNamesCompatible(candidate, entry.name)) ?? null;
+  const compatibleMatch = findUniqueVenueEntry(
+    canonicalVenueEntries.filter(
+      (entry) => !entry.matchedAlias && areVenueNamesCompatible(candidate, entry.name),
+    ),
+  );
   return compatibleMatch
     ? buildCanonicalizationResult(
         compatibleMatch,
@@ -578,6 +638,7 @@ export function canonicalizeVenueName(
     preferredVenue?: string | null;
     staticVenueByHandle?: StaticVenueMap;
     handleVenueNamesByHandle?: CanonicalVenueMap;
+    canonicalVenueAliasesByHandle?: CanonicalVenueAliasesByHandle;
   },
 ): string | null {
   return canonicalizeVenueNameDetailed(candidate, canonicalVenueNamesByHandle, options)?.venue ?? null;
@@ -669,6 +730,7 @@ export function normalizeVenueFromEvidence(
 ): VenueNormalization {
   const staticVenueByHandle = input.staticVenueByHandle ?? {};
   const handleVenueNamesByHandle = input.handleVenueNamesByHandle ?? {};
+  const canonicalVenueAliasesByHandle = input.canonicalVenueAliasesByHandle ?? {};
   const allowCanonicalHandleFallback = input.allowCanonicalHandleFallback !== false;
   const hardMappedVenue = allowCanonicalHandleFallback
     ? getConfiguredVenueNameForHandle(input.handle, handleVenueNamesByHandle, {}) ?? ""
@@ -689,6 +751,7 @@ export function normalizeVenueFromEvidence(
         preferredVenue: mappedVenue || null,
         staticVenueByHandle,
         handleVenueNamesByHandle,
+        canonicalVenueAliasesByHandle,
       }) ?? hardMappedVenue;
     return {
       venue: canonicalHardMappedVenue,
@@ -706,6 +769,7 @@ export function normalizeVenueFromEvidence(
         preferredVenue: mappedVenue || null,
         staticVenueByHandle,
         handleVenueNamesByHandle,
+        canonicalVenueAliasesByHandle,
       }) ?? explicitVenue.venue;
     return {
       venue: canonicalExplicitVenue,
