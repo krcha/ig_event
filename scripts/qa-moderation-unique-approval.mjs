@@ -4,6 +4,11 @@ import {
   approveUniquePendingEvents,
   classifyPendingModerationUniqueness,
 } from "../convex/events.ts";
+import {
+  DEFAULT_MODERATION_VISIBLE_LIMIT,
+  MODERATION_QUEUE_FETCH_LIMIT,
+  selectVisibleModerationEvents,
+} from "../lib/events/moderation-view.ts";
 
 process.env.ADMIN_CLERK_USER_IDS = "qa-owner";
 
@@ -11,6 +16,30 @@ const FUTURE_DATE = "2035-01-15";
 const AS_OF_MS = Date.parse("2035-01-01T12:00:00.000Z");
 const MODERATION_NOTE =
   "QA reviewed the persisted Instagram evidence and exact same-date cohort.";
+
+const moderationViewFixture = Array.from(
+  { length: MODERATION_QUEUE_FETCH_LIMIT },
+  (_, index) => ({ id: index + 1, unique: index % 3 === 0 }),
+);
+for (const expectedLimit of [25, 50, 100, 200]) {
+  const visible = selectVisibleModerationEvents(
+    moderationViewFixture,
+    String(expectedLimit),
+  );
+  assert.equal(visible.length, expectedLimit);
+  assert.equal(visible.at(-1)?.id, expectedLimit);
+}
+assert.equal(
+  selectVisibleModerationEvents(moderationViewFixture, "invalid").length,
+  DEFAULT_MODERATION_VISIBLE_LIMIT,
+);
+assert.equal(selectVisibleModerationEvents(moderationViewFixture, 500).length, 200);
+assert.equal(selectVisibleModerationEvents(moderationViewFixture, 0).length, 1);
+assert.equal(
+  moderationViewFixture.filter((event) => event.unique).length,
+  67,
+  "Full-queue action candidates must remain independent of the visible subset.",
+);
 
 function read(path) {
   return readFileSync(path, "utf8");
@@ -879,6 +908,56 @@ assert.match(approvalRouteSource, /item\.expectedUpdatedAt !== expectedVersionBy
 // The dashboard may display local duplicate context, but unique_pending and its
 // bulk action must trust only the server disposition/version contract.
 assert.match(dashboardSource, /unique_pending/);
+assert.match(dashboardSource, /MODERATION_QUEUE_FETCH_LIMIT/);
+assert.match(
+  dashboardSource,
+  /limit=\$\{MODERATION_QUEUE_FETCH_LIMIT\}/,
+  "The selected visible item count must not truncate the server-verified queue load.",
+);
+assert.doesNotMatch(
+  dashboardSource,
+  /limit=\$\{visibleLimit\}/,
+  "The visible item count is a presentation limit, not a queue-read limit.",
+);
+assert.match(
+  dashboardSource,
+  /const visibleEvents = useMemo\([\s\S]*selectVisibleModerationEvents\(filteredEvents, visibleLimit\)/,
+);
+assert.match(dashboardSource, /visibleEvents\.map\(\(event\) =>/);
+assert.match(dashboardSource, /Showing \{visibleEvents\.length\} of \{filteredEvents\.length\}/);
+assert.match(
+  dashboardSource,
+  /Filters still show the selected number[\s\S]*only unique bulk approval is disabled/,
+);
+assert.match(dashboardSource, /const fetchRequestGenerationRef = useRef\(0\)/);
+assert.match(dashboardSource, /new AbortController\(\)/);
+assert.match(dashboardSource, /signal: requestController\.signal/);
+assert.match(
+  dashboardSource,
+  /fetchRequestGenerationRef\.current === requestGeneration/,
+);
+assert.match(dashboardSource, /const \[hasLoadedQueue, setHasLoadedQueue\] = useState\(false\)/);
+assert.match(
+  dashboardSource,
+  /setIsLoading\(true\);[\s\S]{0,200}setHasLoadedQueue\(false\);[\s\S]{0,300}setEvents\(\[\]\)/,
+);
+assert.match(dashboardSource, /setHasLoadedQueue\(true\)/);
+assert.match(
+  dashboardSource,
+  /!isLoading && hasLoadedQueue && !eventListComplete/,
+);
+assert.match(
+  dashboardSource,
+  /More than \$\{MODERATION_QUEUE_FETCH_LIMIT\} \$\{status\} records exist/,
+);
+assert.match(dashboardSource, /limited to the safely loaded records/);
+const uniqueCandidateSource = section(
+  dashboardSource,
+  "const uniquePendingEvents",
+  "const visibleEvents",
+);
+assert.match(uniqueCandidateSource, /decoratedEvents\.filter/);
+assert.doesNotMatch(uniqueCandidateSource, /visibleEvents/);
 assert.match(
   dashboardSource,
   /pendingUniqueness\?\.disposition\s*!?={2,3}\s*"unique"/,

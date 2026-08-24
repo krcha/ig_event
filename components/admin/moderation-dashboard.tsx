@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EventTimeProvenanceText } from "@/components/events/event-time-provenance-text";
 import type { EventTimeSource, EventTimeStatus } from "@/lib/events/event-time";
 import { getModerationQueuePriorityScore } from "@/lib/events/moderation-queue";
@@ -16,6 +16,11 @@ import {
   normalizeConfidencePayload,
   normalizeConfidenceScore,
 } from "@/lib/utils/confidence";
+import {
+  DEFAULT_MODERATION_VISIBLE_LIMIT,
+  MODERATION_QUEUE_FETCH_LIMIT,
+  selectVisibleModerationEvents,
+} from "@/lib/events/moderation-view";
 
 type EventStatus = "pending" | "approved" | "rejected";
 type PromotionTier = "featured" | "promoted";
@@ -872,7 +877,9 @@ function PromotionControls({
 
 export function ModerationDashboard() {
   const [status, setStatus] = useState<EventStatus>("pending");
-  const [limit, setLimit] = useState("200");
+  const [visibleLimit, setVisibleLimit] = useState(
+    String(DEFAULT_MODERATION_VISIBLE_LIMIT),
+  );
   const [events, setEvents] = useState<ModerationEvent[]>([]);
   const [eventListComplete, setEventListComplete] = useState(false);
   const [pendingUniquenessComplete, setPendingUniquenessComplete] =
@@ -882,6 +889,7 @@ export function ModerationDashboard() {
     useState(false);
   const [isDuplicateContextTruncated, setIsDuplicateContextTruncated] =
     useState(false);
+  const [hasLoadedQueue, setHasLoadedQueue] = useState(false);
   const [masterReview, setMasterReview] = useState<MasterReviewResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isMasterReviewLoading, setIsMasterReviewLoading] = useState(false);
@@ -898,6 +906,8 @@ export function ModerationDashboard() {
   const [uniqueApprovalResult, setUniqueApprovalResult] = useState<string | null>(
     null,
   );
+  const fetchRequestGenerationRef = useRef(0);
+  const fetchAbortControllerRef = useRef<AbortController | null>(null);
 
   const emptyStateLabel = useMemo(() => {
     if (status === "pending") return "No pending events for moderation.";
@@ -906,21 +916,37 @@ export function ModerationDashboard() {
   }, [status]);
 
   const fetchEvents = useCallback(async () => {
+    const requestGeneration = fetchRequestGenerationRef.current + 1;
+    fetchRequestGenerationRef.current = requestGeneration;
+    fetchAbortControllerRef.current?.abort();
+    const requestController = new AbortController();
+    fetchAbortControllerRef.current = requestController;
+    const isCurrentRequest = () =>
+      fetchRequestGenerationRef.current === requestGeneration &&
+      !requestController.signal.aborted;
+
     setIsLoading(true);
+    setHasLoadedQueue(false);
     setError(null);
     setUniqueApprovalResult(null);
+    setEvents([]);
     setEventListComplete(false);
     setPendingUniquenessComplete(false);
+    setDuplicateContextEvents([]);
     setIsDuplicateContextDegraded(false);
     setIsDuplicateContextTruncated(false);
     try {
       const response = await fetch(
-        `/api/admin/events?status=${status}&limit=${limit}&duplicateContext=1`,
+        `/api/admin/events?status=${status}&limit=${MODERATION_QUEUE_FETCH_LIMIT}&duplicateContext=1`,
         {
           cache: "no-store",
+          signal: requestController.signal,
         },
       );
       const payload = (await response.json()) as EventsResponse;
+      if (!isCurrentRequest()) {
+        return;
+      }
       if (!response.ok) {
         throw new Error(payload.error ?? "Failed to load moderation events.");
       }
@@ -932,25 +958,36 @@ export function ModerationDashboard() {
       setDuplicateContextEvents(payload.duplicateContextEvents ?? payload.events);
       setIsDuplicateContextDegraded(payload.duplicateContextDegraded === true);
       setIsDuplicateContextTruncated(payload.duplicateContextTruncated === true);
+      setHasLoadedQueue(true);
     } catch (caughtError) {
+      if (!isCurrentRequest()) {
+        return;
+      }
       setError(
         caughtError instanceof Error
           ? caughtError.message
           : "Unknown moderation load error.",
       );
       setEvents([]);
+      setHasLoadedQueue(false);
       setEventListComplete(false);
       setPendingUniquenessComplete(false);
       setDuplicateContextEvents([]);
       setIsDuplicateContextDegraded(false);
       setIsDuplicateContextTruncated(false);
     } finally {
-      setIsLoading(false);
+      if (isCurrentRequest()) {
+        fetchAbortControllerRef.current = null;
+        setIsLoading(false);
+      }
     }
-  }, [limit, status]);
+  }, [status]);
 
   useEffect(() => {
     void fetchEvents();
+    return () => {
+      fetchAbortControllerRef.current?.abort();
+    };
   }, [fetchEvents]);
 
   useEffect(() => {
@@ -1166,6 +1203,10 @@ export function ModerationDashboard() {
       ),
     [decoratedEvents],
   );
+
+  const visibleEvents = useMemo(() => {
+    return selectVisibleModerationEvents(filteredEvents, visibleLimit);
+  }, [filteredEvents, visibleLimit]);
 
   const isAnyActionInFlight = actionInFlightFor !== null;
 
@@ -1449,7 +1490,8 @@ export function ModerationDashboard() {
   const stats = useMemo(
     () => ({
       loaded: decoratedEvents.length,
-      visible: filteredEvents.length,
+      matching: filteredEvents.length,
+      visible: visibleEvents.length,
       uniquePending: uniquePendingEvents.length,
       issues: decoratedEvents.filter((event) => event.hasIssues).length,
       duplicates: decoratedEvents.filter((event) => event.suspectedDuplicateCount > 0).length,
@@ -1457,15 +1499,21 @@ export function ModerationDashboard() {
       fallbackTitle: decoratedEvents.filter((event) => event.titleUsedFallback).length,
       missingImage: decoratedEvents.filter((event) => event.missingImage).length,
     }),
-    [decoratedEvents, filteredEvents.length, uniquePendingEvents.length],
+    [
+      decoratedEvents,
+      filteredEvents.length,
+      uniquePendingEvents.length,
+      visibleEvents.length,
+    ],
   );
 
   return (
     <section className="space-y-5 rounded-3xl border border-border bg-card p-5">
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-8">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-9">
         {[
           ["Loaded", stats.loaded],
-          ["Visible", stats.visible],
+          ["Matching filter", stats.matching],
+          ["Showing", stats.visible],
           ["Unique pending", stats.uniquePending],
           ["Needs attention", stats.issues],
           ["Suspected duplicates", stats.duplicates],
@@ -1580,8 +1628,8 @@ export function ModerationDashboard() {
             aria-label="Moderation page size"
             className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
             disabled={isAnyActionInFlight}
-            onChange={(event) => setLimit(event.target.value)}
-            value={limit}
+            onChange={(event) => setVisibleLimit(event.target.value)}
+            value={visibleLimit}
           >
             <option value="25">25 items</option>
             <option value="50">50 items</option>
@@ -1589,6 +1637,13 @@ export function ModerationDashboard() {
             <option value="200">200 items</option>
           </select>
         </div>
+
+        {!isLoading && hasLoadedQueue ? (
+          <p className="text-sm text-muted-foreground">
+            Showing {visibleEvents.length} of {filteredEvents.length} events matching
+            the current filters from {decoratedEvents.length} safely loaded records.
+          </p>
+        ) : null}
 
         {status === "pending" ? (
           <div className="grid gap-3 rounded-2xl border border-border bg-card p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
@@ -1855,38 +1910,49 @@ export function ModerationDashboard() {
       {uniqueApprovalResult ? (
         <p className="text-sm text-emerald-700">{uniqueApprovalResult}</p>
       ) : null}
-      {status === "pending" &&
-      !isLoading &&
-      (!eventListComplete || !pendingUniquenessComplete) ? (
+      {!isLoading && hasLoadedQueue && !eventListComplete ? (
         <p className="text-sm text-amber-700">
-          {!eventListComplete
-            ? "The complete pending queue is larger than the current safe load. Unique bulk approval is disabled."
-            : "Server uniqueness verification is incomplete. The queue remains readable, but unique bulk approval is disabled."}
+          {status === "pending"
+            ? `More than ${MODERATION_QUEUE_FETCH_LIMIT} pending records exist. Filters still show the selected number from the safely loaded records; only unique bulk approval is disabled.`
+            : `More than ${MODERATION_QUEUE_FETCH_LIMIT} ${status} records exist. Filters show the selected number from the safely loaded records; additional records were not searched.`}
+        </p>
+      ) : status === "pending" &&
+        !isLoading &&
+        hasLoadedQueue &&
+        !pendingUniquenessComplete ? (
+        <p className="text-sm text-amber-700">
+          Server uniqueness verification is incomplete. Filters and the queue remain
+          available; only unique bulk approval is disabled.
         </p>
       ) : null}
       {isDuplicateContextDegraded ? (
         <p className="text-sm text-amber-700">
           {isDuplicateContextTruncated
             ? "The review queue is loaded, but approved duplicate comparison reached its safety limit. Check busy dates manually before approving."
-            : "The review queue is loaded, but duplicate comparison is temporarily limited to the visible events."}
+            : "The review queue is loaded, but duplicate comparison is temporarily limited to the safely loaded records."}
         </p>
       ) : null}
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading moderation queue...</p>
       ) : null}
 
-      {!isLoading && decoratedEvents.length === 0 ? (
+      {!isLoading && hasLoadedQueue && decoratedEvents.length === 0 ? (
         <p className="text-sm text-muted-foreground">{emptyStateLabel}</p>
       ) : null}
 
-      {!isLoading && decoratedEvents.length > 0 && filteredEvents.length === 0 ? (
+      {!isLoading &&
+      hasLoadedQueue &&
+      decoratedEvents.length > 0 &&
+      filteredEvents.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No events match the current moderation filters.
+          {eventListComplete
+            ? "No events match the current moderation filters."
+            : `No events among the ${decoratedEvents.length} safely loaded records match these filters; more records were not loaded.`}
         </p>
       ) : null}
 
       <div className="space-y-3">
-        {filteredEvents.map((event) => {
+        {visibleEvents.map((event) => {
           const suspectedDuplicates = event.suspectedDuplicateIds
             .map((duplicateId) => decoratedEventById.get(duplicateId))
             .filter((duplicate): duplicate is DecoratedEvent => Boolean(duplicate))
