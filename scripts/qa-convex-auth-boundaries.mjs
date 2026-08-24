@@ -55,6 +55,8 @@ for (const functionName of [
   "getEvent",
   "listEvents",
   "listModerationDuplicateContextByDates",
+  "classifyPendingModerationUniqueness",
+  "approveUniquePendingEvents",
   "setEventStatus",
   "setEventStatuses",
   "deleteApprovedEvent",

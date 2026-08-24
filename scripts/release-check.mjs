@@ -20,6 +20,7 @@ const checks = [
   { script: "qa:event-time-provenance", timeoutMs: 60_000 },
   { script: "qa:moderation-queue", timeoutMs: 60_000 },
   { script: "qa:moderation-dashboard-data", timeoutMs: 60_000 },
+  { script: "qa:moderation-unique-approval", timeoutMs: 60_000 },
   { script: "qa:moderation-distinct-batch", timeoutMs: 60_000 },
   { script: "qa:event-version-preconditions", timeoutMs: 60_000 },
   { script: "qa:instagram-occurrences", timeoutMs: 60_000 },

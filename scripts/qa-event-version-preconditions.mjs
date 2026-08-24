@@ -393,11 +393,24 @@ assert.match(moderationRouteSource, /isVersionConflict\(error\) \? 409 : 500/);
 const promotionRouteSource = readFileSync("app/api/admin/events/route.ts", "utf8");
 assert.match(promotionRouteSource, /expectedUpdatedAt: body\.expectedUpdatedAt/);
 assert.match(promotionRouteSource, /isVersionConflict\(error\) \? 409 : 500/);
+const uniqueApprovalRouteSource = readFileSync(
+  "app/api/admin/events/approve-unique/route.ts",
+  "utf8",
+);
+assert.match(uniqueApprovalRouteSource, /expectedUpdatedAt: item\.expectedUpdatedAt/);
+assert.match(uniqueApprovalRouteSource, /Number\.isSafeInteger\(item\.expectedUpdatedAt\)/);
+assert.match(uniqueApprovalRouteSource, /isVersionConflict\(error\)[\s\S]*\? 409/);
 const dashboardSource = readFileSync("components/admin/moderation-dashboard.tsx", "utf8");
 assert.match(dashboardSource, /expectedUpdatedAt: reviewedEvent\.updatedAt/g);
-assert.match(dashboardSource, /expectedVersions,/);
 assert.match(dashboardSource, /Approval note \(required; describe the source evidence and duplicate check\)/);
-assert.match(dashboardSource, /Bulk approval requires a note of at least 20 characters/);
+assert.match(
+  dashboardSource,
+  /event\.pendingUniqueness\.expectedUpdatedAt === event\.updatedAt/,
+);
+assert.match(
+  dashboardSource,
+  /eventId: event\.id,\s*expectedUpdatedAt: event\.updatedAt/,
+);
 assert.match(dashboardSource, /expectedPrimaryUpdatedAt: primaryEvent\.updatedAt/);
 assert.match(dashboardSource, /expectedDuplicateVersions:/);
 assert.match(dashboardSource, /response\.status === 409/g);

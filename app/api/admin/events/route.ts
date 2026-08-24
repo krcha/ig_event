@@ -13,9 +13,39 @@ import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 type EventStatus = "pending" | "approved" | "rejected";
 type PromotionTier = "featured" | "promoted";
 
-type EventListQuery = {
+type EventListPaginatedQuery = {
   status: EventStatus;
-  limit?: number;
+  paginationOpts: {
+    cursor: string | null;
+    numItems: number;
+  };
+};
+
+type EventListPaginatedResult = {
+  continueCursor: string;
+  isDone: boolean;
+  page: EventRecord[];
+  pageStatus?: string;
+};
+
+type PendingUniquenessDisposition =
+  | "unique"
+  | "duplicate"
+  | "ambiguous"
+  | "ineligible"
+  | "indeterminate";
+
+type PendingUniquenessItem = {
+  id: string;
+  expectedUpdatedAt: number;
+  disposition: PendingUniquenessDisposition;
+  reason: string;
+  conflictIds: string[];
+};
+
+type PendingUniquenessResult = {
+  complete: boolean;
+  items: PendingUniquenessItem[];
 };
 
 type ModerationDuplicateContextQuery = {
@@ -86,8 +116,14 @@ type ModerationDuplicateContextResult = {
   truncated: boolean;
 };
 
-const listByStatusQuery =
-  "events:listByStatus" as unknown as FunctionReference<"query">;
+const MODERATION_PAGE_SIZE = 25;
+const MAX_MODERATION_EVENTS = 200;
+const MAX_PENDING_UNIQUENESS_ITEMS = 10;
+
+const listByStatusPaginatedQuery =
+  "events:listByStatusPaginated" as unknown as FunctionReference<"query">;
+const classifyPendingModerationUniquenessQuery =
+  "events:classifyPendingModerationUniqueness" as unknown as FunctionReference<"query">;
 const listModerationDuplicateContextByDatesQuery =
   "events:listModerationDuplicateContextByDates" as unknown as FunctionReference<"query">;
 const updateEventMutation =
@@ -126,6 +162,31 @@ function mapEventRecord(event: EventRecord) {
     },
     createdAt: event.createdAt,
     updatedAt: event.updatedAt,
+  };
+}
+
+function isPendingUniquenessDisposition(
+  value: unknown,
+): value is PendingUniquenessDisposition {
+  return (
+    value === "unique" ||
+    value === "duplicate" ||
+    value === "ambiguous" ||
+    value === "ineligible" ||
+    value === "indeterminate"
+  );
+}
+
+function makeIndeterminateUniqueness(
+  event: EventRecord,
+  reason: string,
+): PendingUniquenessItem {
+  return {
+    id: event._id,
+    expectedUpdatedAt: event.updatedAt,
+    disposition: "indeterminate",
+    reason,
+    conflictIds: [],
   };
 }
 
@@ -174,6 +235,7 @@ function mapModerationDuplicateContextRecord(
     },
     createdAt: event.createdAt,
     updatedAt: event.updatedAt,
+    pendingUniqueness: null,
   };
 }
 
@@ -228,16 +290,151 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const status = parseStatus(searchParams.get("status"));
   const limitParam = Number(searchParams.get("limit") ?? 50);
-  const limit = Number.isFinite(limitParam) ? Math.max(1, Math.min(200, limitParam)) : 50;
+  const limit = Number.isFinite(limitParam)
+    ? Math.max(1, Math.min(MAX_MODERATION_EVENTS, limitParam))
+    : 50;
   const includeDuplicateContext = searchParams.get("duplicateContext") === "1";
 
   try {
     const convex = await createAuthenticatedConvexHttpClient();
-    const events = (await convex.query(listByStatusQuery, {
-      status,
-      limit,
-    } satisfies EventListQuery)) as EventRecord[];
-    const mappedEvents = events.map(mapEventRecord);
+    const events: EventRecord[] = [];
+    let cursor: string | null = null;
+    let eventListComplete = false;
+
+    for (
+      let pageNumber = 0;
+      pageNumber < Math.ceil(MAX_MODERATION_EVENTS / MODERATION_PAGE_SIZE) &&
+      events.length < limit;
+      pageNumber += 1
+    ) {
+      const pageSize = Math.min(MODERATION_PAGE_SIZE, limit - events.length);
+      const pageResult = (await convex.query(listByStatusPaginatedQuery, {
+        status,
+        paginationOpts: {
+          cursor,
+          numItems: pageSize,
+        },
+      } satisfies EventListPaginatedQuery)) as EventListPaginatedResult;
+
+      if (pageResult.pageStatus === "SplitRequired") {
+        throw new Error(
+          "Moderation pagination requires a split; refusing a partial queue read.",
+        );
+      }
+      if (!Array.isArray(pageResult.page) || pageResult.page.length > pageSize) {
+        throw new Error("Moderation pagination returned an invalid page.");
+      }
+
+      events.push(...pageResult.page);
+      if (pageResult.isDone) {
+        eventListComplete = true;
+        break;
+      }
+      if (!pageResult.continueCursor || pageResult.continueCursor === cursor) {
+        throw new Error("Moderation pagination cursor stalled.");
+      }
+      cursor = pageResult.continueCursor;
+    }
+
+    const pendingUniquenessById = new Map<string, PendingUniquenessItem>();
+    let pendingUniquenessComplete = status === "pending" && eventListComplete;
+    if (status === "pending") {
+      const classificationAsOfMs = Date.now();
+      for (
+        let index = 0;
+        index < events.length;
+        index += MAX_PENDING_UNIQUENESS_ITEMS
+      ) {
+        const eventChunk = events.slice(
+          index,
+          index + MAX_PENDING_UNIQUENESS_ITEMS,
+        );
+        const requestedVersionById = new Map(
+          eventChunk.map((event) => [event._id, event.updatedAt] as const),
+        );
+        let classification: PendingUniquenessResult;
+        try {
+          classification = (await convex.query(
+            classifyPendingModerationUniquenessQuery,
+            {
+              items: eventChunk.map((event) => ({
+                id: event._id,
+                expectedUpdatedAt: event.updatedAt,
+              })),
+              asOfMs: classificationAsOfMs,
+            },
+          )) as PendingUniquenessResult;
+        } catch (error) {
+          pendingUniquenessComplete = false;
+          console.error(
+            JSON.stringify({
+              level: "error",
+              event: "moderation_uniqueness_classification_degraded",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Unknown moderation uniqueness classification error.",
+            }),
+          );
+          for (const event of eventChunk) {
+            pendingUniquenessById.set(
+              event._id,
+              makeIndeterminateUniqueness(
+                event,
+                "The server could not verify this event's uniqueness.",
+              ),
+            );
+          }
+          continue;
+        }
+
+        if (!classification.complete || !Array.isArray(classification.items)) {
+          pendingUniquenessComplete = false;
+        }
+
+        const seenClassificationIds = new Set<string>();
+        for (const item of classification.items ?? []) {
+          const expectedUpdatedAt = requestedVersionById.get(item.id);
+          if (
+            expectedUpdatedAt === undefined ||
+            seenClassificationIds.has(item.id) ||
+            item.expectedUpdatedAt !== expectedUpdatedAt ||
+            !isPendingUniquenessDisposition(item.disposition) ||
+            !Array.isArray(item.conflictIds)
+          ) {
+            pendingUniquenessComplete = false;
+            continue;
+          }
+          seenClassificationIds.add(item.id);
+          pendingUniquenessById.set(item.id, item);
+        }
+
+        for (const event of eventChunk) {
+          if (!seenClassificationIds.has(event._id)) {
+            pendingUniquenessComplete = false;
+            pendingUniquenessById.set(
+              event._id,
+              makeIndeterminateUniqueness(
+                event,
+                "The server did not return an exact uniqueness classification.",
+              ),
+            );
+          }
+        }
+      }
+    }
+
+    const mappedEvents = events.map((event) => ({
+      ...mapEventRecord(event),
+      pendingUniqueness:
+        status === "pending"
+          ? (pendingUniquenessById.get(event._id) ??
+            makeIndeterminateUniqueness(
+              event,
+              "The event was not classified for unique approval.",
+            ))
+          : null,
+    }));
     const duplicateContextDates = getModerationDuplicateContextDates(events);
     const duplicateContext = await loadModerationDuplicateContextWithFallback({
       baseEvents: mappedEvents,
@@ -278,6 +475,8 @@ export async function GET(request: Request) {
     return NextResponse.json({
       status,
       events: mappedEvents,
+      eventListComplete,
+      pendingUniquenessComplete,
       duplicateContextEvents: duplicateContext.duplicateContextEvents,
       duplicateContextDegraded: duplicateContext.degraded,
       duplicateContextTruncated: duplicateContext.truncated,

@@ -29,6 +29,7 @@ type ModerationSortMode =
   | "confidence_asc";
 type ModerationFilterMode =
   | "all"
+  | "unique_pending"
   | "issues"
   | "suspected_duplicates"
   | "suspicious_year"
@@ -37,6 +38,21 @@ type ModerationFilterMode =
   | "missing_image"
   | "missing_time";
 type ConfidenceFilterMode = "all" | "high" | "medium" | "low" | "missing";
+
+type PendingUniquenessDisposition =
+  | "unique"
+  | "duplicate"
+  | "ambiguous"
+  | "ineligible"
+  | "indeterminate";
+
+type PendingUniqueness = {
+  id: string;
+  expectedUpdatedAt: number;
+  disposition: PendingUniquenessDisposition;
+  reason: string;
+  conflictIds: string[];
+};
 
 type ModerationEvent = {
   id: string;
@@ -68,6 +84,7 @@ type ModerationEvent = {
     reviewedBy: string | null;
     moderationNote: string | null;
   };
+  pendingUniqueness: PendingUniqueness | null;
   createdAt: number;
   updatedAt: number;
 };
@@ -75,9 +92,19 @@ type ModerationEvent = {
 type EventsResponse = {
   status: EventStatus;
   events: ModerationEvent[];
+  eventListComplete?: boolean;
+  pendingUniquenessComplete?: boolean;
   duplicateContextEvents?: ModerationEvent[];
   duplicateContextDegraded?: boolean;
   duplicateContextTruncated?: boolean;
+  error?: string;
+};
+
+type UniqueApprovalResponse = {
+  ok?: boolean;
+  complete?: boolean;
+  approvedIds?: string[];
+  skipped?: PendingUniqueness[];
   error?: string;
 };
 
@@ -190,7 +217,10 @@ type DecoratedEvent = ModerationEvent & {
 };
 
 const STATUS_OPTIONS: EventStatus[] = ["pending", "approved", "rejected"];
-const BULK_APPROVE_ACTION_ID = "__bulk_approve__";
+const UNIQUE_BULK_APPROVE_ACTION_ID = "__unique_bulk_approve__";
+const UNIQUE_APPROVAL_CHUNK_SIZE = 10;
+const DEFAULT_UNIQUE_APPROVAL_NOTE =
+  "Approved after server verification of source evidence, event date, venue identity, and same-date uniqueness.";
 const SERBIAN_CYRILLIC_TO_LATIN: Record<string, string> = {
   а: "a",
   б: "b",
@@ -842,8 +872,11 @@ function PromotionControls({
 
 export function ModerationDashboard() {
   const [status, setStatus] = useState<EventStatus>("pending");
-  const [limit, setLimit] = useState("100");
+  const [limit, setLimit] = useState("200");
   const [events, setEvents] = useState<ModerationEvent[]>([]);
+  const [eventListComplete, setEventListComplete] = useState(false);
+  const [pendingUniquenessComplete, setPendingUniquenessComplete] =
+    useState(false);
   const [duplicateContextEvents, setDuplicateContextEvents] = useState<ModerationEvent[]>([]);
   const [isDuplicateContextDegraded, setIsDuplicateContextDegraded] =
     useState(false);
@@ -859,6 +892,12 @@ export function ModerationDashboard() {
   const [filterMode, setFilterMode] = useState<ModerationFilterMode>("all");
   const [confidenceFilter, setConfidenceFilter] =
     useState<ConfidenceFilterMode>("all");
+  const [uniqueApprovalNote, setUniqueApprovalNote] = useState(
+    DEFAULT_UNIQUE_APPROVAL_NOTE,
+  );
+  const [uniqueApprovalResult, setUniqueApprovalResult] = useState<string | null>(
+    null,
+  );
 
   const emptyStateLabel = useMemo(() => {
     if (status === "pending") return "No pending events for moderation.";
@@ -869,6 +908,9 @@ export function ModerationDashboard() {
   const fetchEvents = useCallback(async () => {
     setIsLoading(true);
     setError(null);
+    setUniqueApprovalResult(null);
+    setEventListComplete(false);
+    setPendingUniquenessComplete(false);
     setIsDuplicateContextDegraded(false);
     setIsDuplicateContextTruncated(false);
     try {
@@ -883,6 +925,10 @@ export function ModerationDashboard() {
         throw new Error(payload.error ?? "Failed to load moderation events.");
       }
       setEvents(payload.events);
+      setEventListComplete(payload.eventListComplete === true);
+      setPendingUniquenessComplete(
+        status === "pending" && payload.pendingUniquenessComplete === true,
+      );
       setDuplicateContextEvents(payload.duplicateContextEvents ?? payload.events);
       setIsDuplicateContextDegraded(payload.duplicateContextDegraded === true);
       setIsDuplicateContextTruncated(payload.duplicateContextTruncated === true);
@@ -893,6 +939,8 @@ export function ModerationDashboard() {
           : "Unknown moderation load error.",
       );
       setEvents([]);
+      setEventListComplete(false);
+      setPendingUniquenessComplete(false);
       setDuplicateContextEvents([]);
       setIsDuplicateContextDegraded(false);
       setIsDuplicateContextTruncated(false);
@@ -911,6 +959,12 @@ export function ModerationDashboard() {
       setIsMasterReviewLoading(false);
     }
   }, [status]);
+
+  useEffect(() => {
+    if (status !== "pending" && filterMode === "unique_pending") {
+      setFilterMode("all");
+    }
+  }, [filterMode, status]);
 
   async function updateStatus(eventId: string, nextStatus: "approved" | "rejected") {
     const moderationNote =
@@ -1011,6 +1065,12 @@ export function ModerationDashboard() {
       if (query && !event.searchText.includes(query)) {
         return false;
       }
+      if (
+        filterMode === "unique_pending" &&
+        event.pendingUniqueness?.disposition !== "unique"
+      ) {
+        return false;
+      }
       if (filterMode === "issues" && !event.hasIssues) {
         return false;
       }
@@ -1096,69 +1156,113 @@ export function ModerationDashboard() {
     return next;
   }, [confidenceFilter, decoratedEvents, filterMode, searchQuery, sortMode]);
 
-  const visiblePendingEventIds = useMemo(
+  const uniquePendingEvents = useMemo(
     () =>
-      filteredEvents
-        .filter((event) => event.moderation.status === "pending")
-        .map((event) => event.id),
-    [filteredEvents],
+      decoratedEvents.filter(
+        (event) =>
+          event.moderation.status === "pending" &&
+          event.pendingUniqueness?.disposition === "unique" &&
+          event.pendingUniqueness.expectedUpdatedAt === event.updatedAt,
+      ),
+    [decoratedEvents],
   );
 
   const isAnyActionInFlight = actionInFlightFor !== null;
 
-  async function approveVisibleEvents() {
-    if (visiblePendingEventIds.length === 0) {
+  async function approveUniquePendingEvents() {
+    if (uniquePendingEvents.length === 0) {
+      return;
+    }
+    if (!eventListComplete || !pendingUniquenessComplete) {
+      setError(
+        "Unique approval is disabled because the server has not verified the complete pending queue.",
+      );
+      return;
+    }
+    const moderationNote = uniqueApprovalNote.trim();
+    if (moderationNote.length < 20 || moderationNote.length > 1_000) {
+      setError("Unique approval requires a note of 20-1000 characters.");
       return;
     }
 
     const confirmed = window.confirm(
-      `Approve ${visiblePendingEventIds.length} visible pending event${
-        visiblePendingEventIds.length === 1 ? "" : "s"
-      }?`,
+      `Approve all ${uniquePendingEvents.length} server-verified unique pending event${
+        uniquePendingEvents.length === 1 ? "" : "s"
+      }? Duplicate, ambiguous, expired, ineligible, and indeterminate records will remain pending.`,
     );
     if (!confirmed) {
       return;
     }
-    const moderationNote = window.prompt(
-      "Approval note for this reviewed batch (required; at least 20 characters):",
-      "",
-    )?.trim();
-    if (!moderationNote || moderationNote.length < 20) {
-      setError("Bulk approval requires a note of at least 20 characters.");
-      return;
-    }
 
-    setActionInFlightFor(BULK_APPROVE_ACTION_ID);
+    setActionInFlightFor(UNIQUE_BULK_APPROVE_ACTION_ID);
     setError(null);
+    setUniqueApprovalResult(null);
+    let approvedCount = 0;
+    let skippedCount = 0;
 
     try {
-      const expectedVersions = filteredEvents
-        .filter((event) => visiblePendingEventIds.includes(event.id))
-        .map((event) => ({ eventId: event.id, expectedUpdatedAt: event.updatedAt }));
-      const response = await fetch("/api/admin/events/moderate", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          eventIds: visiblePendingEventIds,
-          expectedVersions,
-          status: "approved",
-          moderationNote,
-        }),
-      });
-      const payload = (await response.json()) as { error?: string };
-      if (!response.ok) {
-        if (response.status === 409) {
-          await fetchEvents();
+      for (
+        let index = 0;
+        index < uniquePendingEvents.length;
+        index += UNIQUE_APPROVAL_CHUNK_SIZE
+      ) {
+        const eventChunk = uniquePendingEvents.slice(
+          index,
+          index + UNIQUE_APPROVAL_CHUNK_SIZE,
+        );
+        const response = await fetch("/api/admin/events/approve-unique", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            items: eventChunk.map((event) => ({
+              eventId: event.id,
+              expectedUpdatedAt: event.updatedAt,
+            })),
+            moderationNote,
+          }),
+        });
+        const payload = (await response.json()) as UniqueApprovalResponse;
+        const requestedIds = new Set(eventChunk.map((event) => event.id));
+        const responseIds = [
+          ...(Array.isArray(payload.approvedIds) ? payload.approvedIds : []),
+          ...(Array.isArray(payload.skipped)
+            ? payload.skipped.map((item) => item.id)
+            : []),
+        ];
+        if (
+          !response.ok ||
+          payload.complete !== true ||
+          !Array.isArray(payload.approvedIds) ||
+          !Array.isArray(payload.skipped) ||
+          responseIds.length !== eventChunk.length ||
+          new Set(responseIds).size !== responseIds.length ||
+          responseIds.some((id) => !requestedIds.has(id))
+        ) {
+          throw new Error(
+            payload.error ??
+              `Unique approval stopped after ${approvedCount} approved event${
+                approvedCount === 1 ? "" : "s"
+              }.`,
+          );
         }
-        throw new Error(payload.error ?? "Failed to approve visible events.");
+        approvedCount += payload.approvedIds?.length ?? 0;
+        skippedCount += payload.skipped?.length ?? 0;
       }
 
       await fetchEvents();
+      setUniqueApprovalResult(
+        `Approved ${approvedCount} server-verified unique event${
+          approvedCount === 1 ? "" : "s"
+        }; ${skippedCount} changed or no longer eligible and remained pending.`,
+      );
     } catch (caughtError) {
+      await fetchEvents();
       setError(
         caughtError instanceof Error
-          ? caughtError.message
-          : "Unknown bulk approval error.",
+          ? `${caughtError.message} At least ${approvedCount} approval${
+              approvedCount === 1 ? " was" : "s were"
+            } confirmed before the stop; the refreshed queue is authoritative and reconciles any in-flight chunk.`
+          : "Unknown unique approval error; the queue has been refreshed.",
       );
     } finally {
       setActionInFlightFor(null);
@@ -1346,21 +1450,23 @@ export function ModerationDashboard() {
     () => ({
       loaded: decoratedEvents.length,
       visible: filteredEvents.length,
+      uniquePending: uniquePendingEvents.length,
       issues: decoratedEvents.filter((event) => event.hasIssues).length,
       duplicates: decoratedEvents.filter((event) => event.suspectedDuplicateCount > 0).length,
       suspiciousYear: decoratedEvents.filter((event) => event.hasSuspiciousYear).length,
       fallbackTitle: decoratedEvents.filter((event) => event.titleUsedFallback).length,
       missingImage: decoratedEvents.filter((event) => event.missingImage).length,
     }),
-    [decoratedEvents, filteredEvents.length],
+    [decoratedEvents, filteredEvents.length, uniquePendingEvents.length],
   );
 
   return (
     <section className="space-y-5 rounded-3xl border border-border bg-card p-5">
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-8">
         {[
           ["Loaded", stats.loaded],
           ["Visible", stats.visible],
+          ["Unique pending", stats.uniquePending],
           ["Needs attention", stats.issues],
           ["Suspected duplicates", stats.duplicates],
           ["Suspicious year", stats.suspiciousYear],
@@ -1384,16 +1490,6 @@ export function ModerationDashboard() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            {status === "pending" ? (
-              <button
-                className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={isAnyActionInFlight || visiblePendingEventIds.length === 0}
-                onClick={() => void approveVisibleEvents()}
-                type="button"
-              >
-                Approve visible ({visiblePendingEventIds.length})
-              </button>
-            ) : null}
             <button
               className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
               disabled={isAnyActionInFlight}
@@ -1412,7 +1508,8 @@ export function ModerationDashboard() {
                 status === option
                   ? "bg-primary text-primary-foreground"
                   : "border border-border bg-background text-foreground"
-              }`}
+              } disabled:cursor-not-allowed disabled:opacity-60`}
+              disabled={isAnyActionInFlight}
               key={option}
               onClick={() => setStatus(option)}
               type="button"
@@ -1426,6 +1523,7 @@ export function ModerationDashboard() {
           <input
             aria-label="Search moderation events"
             className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
+            disabled={isAnyActionInFlight}
             onChange={(event) => setSearchQuery(event.target.value)}
             placeholder="Search title, venue, artist, caption, or description"
             value={searchQuery}
@@ -1433,10 +1531,14 @@ export function ModerationDashboard() {
           <select
             aria-label="Moderation issue filter"
             className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
+            disabled={isAnyActionInFlight}
             onChange={(event) => setFilterMode(event.target.value as ModerationFilterMode)}
             value={filterMode}
           >
             <option value="all">All events</option>
+            {status === "pending" ? (
+              <option value="unique_pending">Unique pending (server verified)</option>
+            ) : null}
             <option value="issues">Needs attention</option>
             <option value="suspected_duplicates">Suspected duplicates</option>
             <option value="suspicious_year">Suspicious year</option>
@@ -1448,6 +1550,7 @@ export function ModerationDashboard() {
           <select
             aria-label="Confidence filter"
             className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
+            disabled={isAnyActionInFlight}
             onChange={(event) =>
               setConfidenceFilter(event.target.value as ConfidenceFilterMode)
             }
@@ -1462,6 +1565,7 @@ export function ModerationDashboard() {
           <select
             aria-label="Sort moderation events"
             className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
+            disabled={isAnyActionInFlight}
             onChange={(event) => setSortMode(event.target.value as ModerationSortMode)}
             value={sortMode}
           >
@@ -1475,6 +1579,7 @@ export function ModerationDashboard() {
           <select
             aria-label="Moderation page size"
             className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
+            disabled={isAnyActionInFlight}
             onChange={(event) => setLimit(event.target.value)}
             value={limit}
           >
@@ -1484,6 +1589,39 @@ export function ModerationDashboard() {
             <option value="200">200 items</option>
           </select>
         </div>
+
+        {status === "pending" ? (
+          <div className="grid gap-3 rounded-2xl border border-border bg-card p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+            <label className="space-y-1 text-sm font-medium">
+              Unique-approval audit note
+              <textarea
+                aria-label="Unique approval moderation note"
+                className="min-h-20 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm font-normal"
+                disabled={isAnyActionInFlight}
+                maxLength={1_000}
+                onChange={(event) => setUniqueApprovalNote(event.target.value)}
+                value={uniqueApprovalNote}
+              />
+            </label>
+            <button
+              className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={
+                isAnyActionInFlight ||
+                isLoading ||
+                !eventListComplete ||
+                !pendingUniquenessComplete ||
+                uniquePendingEvents.length === 0 ||
+                uniqueApprovalNote.trim().length < 20
+              }
+              onClick={() => void approveUniquePendingEvents()}
+              type="button"
+            >
+              {actionInFlightFor === UNIQUE_BULK_APPROVE_ACTION_ID
+                ? "Approving verified unique events..."
+                : `Approve all unique pending (${uniquePendingEvents.length})`}
+            </button>
+          </div>
+        ) : null}
       </section>
 
       {status === "approved" ? (
@@ -1714,6 +1852,18 @@ export function ModerationDashboard() {
       ) : null}
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {uniqueApprovalResult ? (
+        <p className="text-sm text-emerald-700">{uniqueApprovalResult}</p>
+      ) : null}
+      {status === "pending" &&
+      !isLoading &&
+      (!eventListComplete || !pendingUniquenessComplete) ? (
+        <p className="text-sm text-amber-700">
+          {!eventListComplete
+            ? "The complete pending queue is larger than the current safe load. Unique bulk approval is disabled."
+            : "Server uniqueness verification is incomplete. The queue remains readable, but unique bulk approval is disabled."}
+        </p>
+      ) : null}
       {isDuplicateContextDegraded ? (
         <p className="text-sm text-amber-700">
           {isDuplicateContextTruncated
@@ -1787,6 +1937,21 @@ export function ModerationDashboard() {
                       <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                         {event.eventType}
                       </span>
+                      {event.moderation.status === "pending" &&
+                      event.pendingUniqueness ? (
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide ${
+                            event.pendingUniqueness.disposition === "unique"
+                              ? "bg-emerald-100 text-emerald-800"
+                              : "bg-slate-200 text-slate-700"
+                          }`}
+                          title={event.pendingUniqueness.reason}
+                        >
+                          {event.pendingUniqueness.disposition === "unique"
+                            ? "Server verified unique"
+                            : event.pendingUniqueness.disposition}
+                        </span>
+                      ) : null}
                       {event.promotionTier ? (
                         <span className="rounded-full bg-primary/15 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-primary">
                           {event.promotionTier}

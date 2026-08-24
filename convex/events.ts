@@ -14,6 +14,7 @@ import { isSensibleEventTitleForApproval } from "../lib/events/event-title-appro
 import { classifyApprovalOccurrenceRelation } from "../lib/events/approval-occurrence-conflict";
 import { MAX_MODERATION_DUPLICATE_CONTEXT_DATES } from "../lib/events/moderation-duplicate-context";
 import { isCaptionSourceCoherentWithEvent } from "../lib/events/event-source-approval";
+import { getBelgradeDayKey } from "../lib/pipeline/belgrade-day-key";
 import { sourceOccurrenceRepresentativeMatchesExpected } from "../lib/events/source-occurrence-representation";
 import { buildNormalizedEventVenueIdentity } from "../lib/events/event-venue-identity";
 import { buildUnnamedScheduleFallbackTitle } from "../lib/events/unnamed-schedule-fallback";
@@ -80,6 +81,46 @@ const moderationDuplicateContextEvent = v.object({
 const moderationDuplicateContextResult = v.object({
   events: v.array(moderationDuplicateContextEvent),
   truncated: v.boolean(),
+});
+const pendingModerationUniquenessReviewItem = v.object({
+  id: v.id("events"),
+  expectedUpdatedAt: v.number(),
+});
+const pendingModerationUniquenessDisposition = v.union(
+  v.literal("unique"),
+  v.literal("duplicate"),
+  v.literal("ambiguous"),
+  v.literal("ineligible"),
+  v.literal("indeterminate"),
+);
+const pendingModerationUniquenessReason = v.union(
+  v.literal("unique_no_conflict"),
+  v.literal("duplicate_same_occurrence"),
+  v.literal("ambiguous_same_date_occurrence"),
+  v.literal("ineligible_title"),
+  v.literal("ineligible_invalid_date"),
+  v.literal("ineligible_expired_event"),
+  v.literal("ineligible_source_policy"),
+  v.literal("indeterminate_venue_limit"),
+  v.literal("indeterminate_pending_cohort_limit"),
+  v.literal("indeterminate_approved_cohort_limit"),
+  v.literal("indeterminate_batch_incomplete"),
+);
+const pendingModerationUniquenessClassification = v.object({
+  id: v.id("events"),
+  expectedUpdatedAt: v.number(),
+  disposition: pendingModerationUniquenessDisposition,
+  reason: pendingModerationUniquenessReason,
+  conflictIds: v.array(v.id("events")),
+});
+const pendingModerationUniquenessResult = v.object({
+  complete: v.boolean(),
+  items: v.array(pendingModerationUniquenessClassification),
+});
+const approveUniquePendingEventsResult = v.object({
+  complete: v.boolean(),
+  approvedIds: v.array(v.id("events")),
+  skipped: v.array(pendingModerationUniquenessClassification),
 });
 const promotionTier = v.union(v.literal("featured"), v.literal("promoted"));
 const sourceProcessingFence = v.object({
@@ -245,6 +286,11 @@ const MAX_SOURCE_GROUNDING_REPROCESS_BATCH_SIZE = 100;
 const MAX_EVENT_EVIDENCE_POLICY_REPROCESS_BATCH_SIZE = 16;
 const MAX_APPROVAL_DATE_COHORT_SIZE = 500;
 const MAX_EVENTS_GET_MANY_BY_IDS = 100;
+const MAX_PENDING_MODERATION_UNIQUENESS_ITEMS = 10;
+const MAX_PENDING_MODERATION_UNIQUENESS_VENUES = 2_000;
+const MAX_PENDING_MODERATION_UNIQUENESS_DATE_COHORT_SIZE = 100;
+const PENDING_MODERATION_UNIQUENESS_PREVIEW_NOTE =
+  "Server preview of unique pending approval.";
 const MAX_MODERATION_DUPLICATE_CONTEXT_EVENTS = 100;
 const MAX_MODERATION_DUPLICATE_CONTEXT_EVENTS_PER_DATE = 8;
 const MODERATION_DUPLICATE_CONTEXT_DATE_BATCH_SIZE = 4;
@@ -366,8 +412,19 @@ type ServiceSourceCandidateFields = ApprovalCandidateFields & {
   rawExtractionJson?: string;
 };
 
+type PendingModerationUniquenessReviewItem = Infer<
+  typeof pendingModerationUniquenessReviewItem
+>;
+type PendingModerationUniquenessClassification = Infer<
+  typeof pendingModerationUniquenessClassification
+>;
+type PreparedHumanApprovalCandidate = {
+  candidate: Doc<"events"> & VenueDenormalizedFields;
+  venuePatch: Partial<Doc<"events">> & VenueDenormalizedFields & { venue?: string };
+};
+
 async function assertPersistedServiceSourcePolicy(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   candidate: ServiceSourceCandidateFields,
   options: {
     allowHumanReviewedLegacy?: boolean;
@@ -491,7 +548,7 @@ async function assertPersistedServiceSourcePolicy(
 }
 
 async function assertHumanApprovalSourcePolicy(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   candidate: ServiceSourceCandidateFields & { imageUrl?: string },
   moderationNote: string | undefined,
 ): Promise<{
@@ -702,6 +759,9 @@ function resolveVenueDenormalizedFieldsFromPublicVenues(
   const canonicalization = canonicalizeVenueNameDetailed(
     rawVenueName,
     canonicalVenueNamesByHandle,
+    {
+      canonicalVenueAliasesByHandle: buildCanonicalVenueAliasesByHandle(venues),
+    },
   );
   const canonicalHandle = canonicalization?.handle
     ? normalizeHandle(canonicalization.handle)
@@ -737,6 +797,167 @@ function resolveVenueDenormalizedFieldsFromPublicVenues(
   };
 }
 
+type PendingModerationVenueResolver = {
+  canonicalVenueNamesByHandle: ReturnType<typeof buildCanonicalVenueNamesByHandle>;
+  canonicalVenueAliasesByHandle: ReturnType<typeof buildCanonicalVenueAliasesByHandle>;
+  venueById: Map<Id<"venues">, Doc<"venues">>;
+  venueByHandle: Map<string, Doc<"venues"> | null>;
+  venueByLookup: Map<string, Doc<"venues"> | null>;
+  resolvedByLookup: Map<
+    string,
+    { venueFields: VenueDenormalizedFields; canonicalVenueName?: string }
+  >;
+};
+
+function addUniqueVenueLookup(
+  lookup: Map<string, Doc<"venues"> | null>,
+  key: string,
+  venue: Doc<"venues">,
+): void {
+  if (!key) return;
+  const existing = lookup.get(key);
+  if (existing === undefined) {
+    lookup.set(key, venue);
+    return;
+  }
+  if (existing && existing._id !== venue._id) {
+    lookup.set(key, null);
+  }
+}
+
+function buildPendingModerationVenueResolver(
+  venues: Doc<"venues">[],
+): PendingModerationVenueResolver {
+  const venueById = new Map<Id<"venues">, Doc<"venues">>();
+  const venueByHandle = new Map<string, Doc<"venues"> | null>();
+  const venueByLookup = new Map<string, Doc<"venues"> | null>();
+  for (const venue of venues) {
+    venueById.set(venue._id, venue);
+    const handle = normalizeHandle(venue.instagramHandle);
+    addUniqueVenueLookup(venueByHandle, handle, venue);
+    addUniqueVenueLookup(venueByLookup, normalizeLookup(venue.name), venue);
+    addUniqueVenueLookup(venueByLookup, normalizeLookup(handle), venue);
+    for (const alias of venue.aliases ?? []) {
+      addUniqueVenueLookup(venueByLookup, normalizeLookup(alias), venue);
+    }
+  }
+  return {
+    canonicalVenueNamesByHandle: buildCanonicalVenueNamesByHandle(venues),
+    canonicalVenueAliasesByHandle: buildCanonicalVenueAliasesByHandle(venues),
+    venueById,
+    venueByHandle,
+    venueByLookup,
+    resolvedByLookup: new Map(),
+  };
+}
+
+function resolveVenueForPendingModeration(
+  resolver: PendingModerationVenueResolver,
+  venueName: string,
+): { venueFields: VenueDenormalizedFields; canonicalVenueName?: string } {
+  const lookupName = normalizeLookup(venueName);
+  if (!lookupName) {
+    return { venueFields: CLEARED_VENUE_DENORMALIZED_FIELDS };
+  }
+  const cached = resolver.resolvedByLookup.get(lookupName);
+  if (cached) return cached;
+
+  let matchedVenue: Doc<"venues"> | null | undefined;
+  if (resolver.venueByLookup.has(lookupName)) {
+    matchedVenue = resolver.venueByLookup.get(lookupName);
+  } else {
+    const canonicalization = canonicalizeVenueNameDetailed(
+      venueName,
+      resolver.canonicalVenueNamesByHandle,
+      {
+        canonicalVenueAliasesByHandle: resolver.canonicalVenueAliasesByHandle,
+      },
+    );
+    const canonicalHandle = canonicalization?.handle
+      ? normalizeHandle(canonicalization.handle)
+      : "";
+    const canonicalLookup = normalizeLookup(canonicalization?.venue ?? venueName);
+    matchedVenue = canonicalHandle
+      ? resolver.venueByHandle.get(canonicalHandle)
+      : resolver.venueByLookup.get(canonicalLookup);
+  }
+
+  const resolved = matchedVenue
+    ? {
+        venueFields: {
+          ...CLEARED_VENUE_DENORMALIZED_FIELDS,
+          ...buildNormalizedEventVenueIdentity({
+            venue: matchedVenue.name,
+            venueInstagramHandle: matchedVenue.instagramHandle,
+          }),
+          venueCategory: matchedVenue.category,
+          venueId: matchedVenue._id,
+          venueInstagramHandle: matchedVenue.instagramHandle,
+          ...(matchedVenue.latitude !== undefined
+            ? { venueLatitude: matchedVenue.latitude }
+            : {}),
+          ...(matchedVenue.location ? { venueLocation: matchedVenue.location } : {}),
+          ...(matchedVenue.longitude !== undefined
+            ? { venueLongitude: matchedVenue.longitude }
+            : {}),
+        },
+        canonicalVenueName: matchedVenue.name,
+      }
+    : {
+        venueFields: {
+          ...CLEARED_VENUE_DENORMALIZED_FIELDS,
+          normalizedVenueIdentity: lookupName,
+        },
+      };
+  resolver.resolvedByLookup.set(lookupName, resolved);
+  return resolved;
+}
+
+function prepareHumanApprovalCandidateFromVenueResolver(
+  event: Doc<"events">,
+  resolver: PendingModerationVenueResolver,
+): PreparedHumanApprovalCandidate {
+  const existingVenue =
+    (event.venueId ? resolver.venueById.get(event.venueId) : undefined) ??
+    (event.venueInstagramHandle
+      ? resolver.venueByHandle.get(normalizeHandle(event.venueInstagramHandle))
+      : undefined);
+  const { venueFields, canonicalVenueName } = existingVenue
+    ? {
+        venueFields: {
+          ...CLEARED_VENUE_DENORMALIZED_FIELDS,
+          ...buildNormalizedEventVenueIdentity({
+            venue: existingVenue.name,
+            venueInstagramHandle: existingVenue.instagramHandle,
+          }),
+          venueCategory: existingVenue.category,
+          venueId: existingVenue._id,
+          venueInstagramHandle: existingVenue.instagramHandle,
+          ...(existingVenue.latitude !== undefined
+            ? { venueLatitude: existingVenue.latitude }
+            : {}),
+          ...(existingVenue.location
+            ? { venueLocation: existingVenue.location }
+            : {}),
+          ...(existingVenue.longitude !== undefined
+            ? { venueLongitude: existingVenue.longitude }
+            : {}),
+        },
+        canonicalVenueName: existingVenue.name,
+      }
+    : resolveVenueForPendingModeration(resolver, event.venue);
+  const venuePatch = {
+    ...venueFields,
+    ...(canonicalVenueName && canonicalVenueName !== event.venue
+      ? { venue: canonicalVenueName }
+      : {}),
+  };
+  return {
+    candidate: { ...event, ...venuePatch },
+    venuePatch,
+  };
+}
+
 async function resolveVenueDenormalizedFields(
   ctx: QueryCtx | MutationCtx,
   venueName: string | undefined,
@@ -748,10 +969,7 @@ async function resolveVenueDenormalizedFields(
 async function prepareHumanApprovalCandidate(
   ctx: MutationCtx,
   event: Doc<"events">,
-): Promise<{
-  candidate: Doc<"events"> & VenueDenormalizedFields;
-  venuePatch: Partial<Doc<"events">> & VenueDenormalizedFields;
-}> {
+): Promise<PreparedHumanApprovalCandidate> {
   const venues = (await ctx.db.query("venues").collect()).filter(isVenuePublic);
   const venueFields = resolveVenueDenormalizedFieldsFromPublicVenues(venues, event.venue);
   const definedVenueFields = Object.fromEntries(
@@ -803,9 +1021,9 @@ function rebindStructuredHumanReviewToCanonicalVenue(
 }
 
 async function assertHumanApprovalWithCanonicalVenueFallback(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   sourceEvent: Doc<"events">,
-  prepared: Awaited<ReturnType<typeof prepareHumanApprovalCandidate>>,
+  prepared: PreparedHumanApprovalCandidate,
   moderationNote: string | undefined,
 ) {
   try {
@@ -834,6 +1052,371 @@ async function assertHumanApprovalWithCanonicalVenueFallback(
     sourceHumanReviewPatch,
     prepared.venuePatch,
   );
+}
+
+type PendingModerationDateCohort = {
+  pending: Doc<"events">[];
+  approved: Doc<"events">[];
+  pendingTruncated: boolean;
+  approvedTruncated: boolean;
+};
+
+type PendingModerationUniquenessBuild = {
+  result: Infer<typeof pendingModerationUniquenessResult>;
+  reviewedEvents: Map<Id<"events">, Doc<"events">>;
+  approvals: Map<
+    Id<"events">,
+    {
+      prepared: PreparedHumanApprovalCandidate;
+      humanReviewPatch: Awaited<
+        ReturnType<typeof assertHumanApprovalWithCanonicalVenueFallback>
+      >;
+    }
+  >;
+};
+
+const HUMAN_APPROVAL_INELIGIBLE_MESSAGES = new Set([
+  "Human approval requires complete canonical Instagram source grounding for the final public fields.",
+  "Human approval requires a substantive moderation note.",
+  "Service approval requires a persisted Instagram source post.",
+  "Service approval source does not match the persisted Instagram post.",
+  "Service approval requires current persisted GPT-5 mini event evidence bound to the exact source revision.",
+  "Service approval source does not independently ground the final public event fields.",
+]);
+
+function isExpectedHumanApprovalIneligibility(error: unknown): boolean {
+  return error instanceof Error && HUMAN_APPROVAL_INELIGIBLE_MESSAGES.has(error.message);
+}
+
+function assertPendingModerationUniquenessReviewItems(
+  items: PendingModerationUniquenessReviewItem[],
+): void {
+  if (
+    items.length < 1 ||
+    items.length > MAX_PENDING_MODERATION_UNIQUENESS_ITEMS
+  ) {
+    throw new Error(
+      `Unique pending review requires 1-${MAX_PENDING_MODERATION_UNIQUENESS_ITEMS} exact event versions.`,
+    );
+  }
+  const ids = new Set<Id<"events">>();
+  for (const item of items) {
+    if (!Number.isSafeInteger(item.expectedUpdatedAt)) {
+      throw new Error("Unique pending review expectedUpdatedAt values must be safe integers.");
+    }
+    if (ids.has(item.id)) {
+      throw new Error("Unique pending review event IDs must be unique.");
+    }
+    ids.add(item.id);
+  }
+}
+
+async function loadExactPendingModerationReviewEvents(
+  ctx: QueryCtx | MutationCtx,
+  items: PendingModerationUniquenessReviewItem[],
+): Promise<Map<Id<"events">, Doc<"events">>> {
+  assertPendingModerationUniquenessReviewItems(items);
+  const events = await Promise.all(items.map((item) => ctx.db.get(item.id)));
+  const reviewedEvents = new Map<Id<"events">, Doc<"events">>();
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    const event = events[index];
+    if (!event || event.status !== "pending") {
+      throw new Error(
+        `Event changed since the reviewed version: ${item.id} is missing or no longer pending.`,
+      );
+    }
+    if (event.updatedAt !== item.expectedUpdatedAt) {
+      throw new Error(
+        `Event changed since the reviewed version: ${item.id} expected updatedAt ${item.expectedUpdatedAt}, found ${event.updatedAt}.`,
+      );
+    }
+    reviewedEvents.set(item.id, event);
+  }
+  return reviewedEvents;
+}
+
+async function loadPendingModerationPublicVenues(
+  ctx: QueryCtx | MutationCtx,
+): Promise<{ venues: Doc<"venues">[]; truncated: boolean }> {
+  const venues = await ctx.db
+    .query("venues")
+    .take(MAX_PENDING_MODERATION_UNIQUENESS_VENUES + 1);
+  return {
+    venues: venues
+      .slice(0, MAX_PENDING_MODERATION_UNIQUENESS_VENUES)
+      .filter(isVenuePublic),
+    truncated: venues.length > MAX_PENDING_MODERATION_UNIQUENESS_VENUES,
+  };
+}
+
+async function loadPendingModerationDateCohorts(
+  ctx: QueryCtx | MutationCtx,
+  dates: string[],
+): Promise<Map<string, PendingModerationDateCohort>> {
+  const cohorts = new Map<string, PendingModerationDateCohort>();
+  for (const date of dates) {
+    const [pending, approved] = await Promise.all([
+      ctx.db
+        .query("events")
+        .withIndex("by_status_date", (q) =>
+          q.eq("status", "pending").eq("date", date),
+        )
+        .take(MAX_PENDING_MODERATION_UNIQUENESS_DATE_COHORT_SIZE + 1),
+      ctx.db
+        .query("events")
+        .withIndex("by_status_date", (q) =>
+          q.eq("status", "approved").eq("date", date),
+        )
+        .take(MAX_PENDING_MODERATION_UNIQUENESS_DATE_COHORT_SIZE + 1),
+    ]);
+    cohorts.set(date, {
+      pending: pending.slice(0, MAX_PENDING_MODERATION_UNIQUENESS_DATE_COHORT_SIZE),
+      approved: approved.slice(0, MAX_PENDING_MODERATION_UNIQUENESS_DATE_COHORT_SIZE),
+      pendingTruncated:
+        pending.length > MAX_PENDING_MODERATION_UNIQUENESS_DATE_COHORT_SIZE,
+      approvedTruncated:
+        approved.length > MAX_PENDING_MODERATION_UNIQUENESS_DATE_COHORT_SIZE,
+    });
+  }
+  return cohorts;
+}
+
+function buildPendingModerationUniquenessClassification(
+  item: PendingModerationUniquenessReviewItem,
+  disposition: PendingModerationUniquenessClassification["disposition"],
+  reason: PendingModerationUniquenessClassification["reason"],
+  conflictIds: Id<"events">[] = [],
+): PendingModerationUniquenessClassification {
+  return {
+    id: item.id,
+    expectedUpdatedAt: item.expectedUpdatedAt,
+    disposition,
+    reason,
+    conflictIds: [...new Set(conflictIds)].sort((left, right) =>
+      String(left).localeCompare(String(right)),
+    ),
+  };
+}
+
+function getPendingModerationDateIneligibilityReason(
+  event: Doc<"events">,
+  currentBelgradeDay: string,
+): "ineligible_invalid_date" | "ineligible_expired_event" | null {
+  if (dateKeyToUtcMs(event.date) === null) {
+    return "ineligible_invalid_date";
+  }
+  return event.date < currentBelgradeDay ? "ineligible_expired_event" : null;
+}
+
+async function buildPendingModerationUniquenessReview(
+  ctx: QueryCtx | MutationCtx,
+  options: {
+    items: PendingModerationUniquenessReviewItem[];
+    asOfMs: number;
+    moderationNote: string;
+  },
+): Promise<PendingModerationUniquenessBuild> {
+  if (!Number.isSafeInteger(options.asOfMs) || options.asOfMs < 0) {
+    throw new Error("Unique pending review asOfMs must be a non-negative safe integer.");
+  }
+  const reviewedEvents = await loadExactPendingModerationReviewEvents(
+    ctx,
+    options.items,
+  );
+  const currentBelgradeDay = getBelgradeDayKey(options.asOfMs);
+  const publicVenues = await loadPendingModerationPublicVenues(ctx);
+  const approvals = new Map<
+    Id<"events">,
+    {
+      prepared: PreparedHumanApprovalCandidate;
+      humanReviewPatch: Awaited<
+        ReturnType<typeof assertHumanApprovalWithCanonicalVenueFallback>
+      >;
+    }
+  >();
+
+  if (publicVenues.truncated) {
+    const items = options.items.map((item) => {
+      const event = reviewedEvents.get(item.id);
+      if (!event) throw new Error("Reviewed pending event disappeared during classification.");
+      const dateReason = getPendingModerationDateIneligibilityReason(
+        event,
+        currentBelgradeDay,
+      );
+      if (dateReason) {
+        return buildPendingModerationUniquenessClassification(
+          item,
+          "ineligible",
+          dateReason,
+        );
+      }
+      if (!isSensibleEventTitleForApproval(event)) {
+        return buildPendingModerationUniquenessClassification(
+          item,
+          "ineligible",
+          "ineligible_title",
+        );
+      }
+      return buildPendingModerationUniquenessClassification(
+        item,
+        "indeterminate",
+        "indeterminate_venue_limit",
+      );
+    });
+    return {
+      result: { complete: false, items },
+      reviewedEvents,
+      approvals,
+    };
+  }
+
+  const dates = [
+    ...new Set(
+      options.items.map((item) => {
+        const event = reviewedEvents.get(item.id);
+        if (!event) throw new Error("Reviewed pending event disappeared during classification.");
+        return event.date;
+      }),
+    ),
+  ];
+  const cohorts = await loadPendingModerationDateCohorts(ctx, dates);
+  const venueResolver = buildPendingModerationVenueResolver(publicVenues.venues);
+  const preparedById = new Map<Id<"events">, PreparedHumanApprovalCandidate>();
+  const prepare = (event: Doc<"events">) => {
+    const cached = preparedById.get(event._id);
+    if (cached) return cached;
+    const prepared = prepareHumanApprovalCandidateFromVenueResolver(
+      event,
+      venueResolver,
+    );
+    preparedById.set(event._id, prepared);
+    return prepared;
+  };
+
+  const classifications: PendingModerationUniquenessClassification[] = [];
+  for (const item of options.items) {
+    const event = reviewedEvents.get(item.id);
+    if (!event) throw new Error("Reviewed pending event disappeared during classification.");
+    const dateReason = getPendingModerationDateIneligibilityReason(
+      event,
+      currentBelgradeDay,
+    );
+    if (dateReason) {
+      classifications.push(
+        buildPendingModerationUniquenessClassification(
+          item,
+          "ineligible",
+          dateReason,
+        ),
+      );
+      continue;
+    }
+    const prepared = prepare(event);
+    if (!isSensibleEventTitleForApproval(prepared.candidate)) {
+      classifications.push(
+        buildPendingModerationUniquenessClassification(
+          item,
+          "ineligible",
+          "ineligible_title",
+        ),
+      );
+      continue;
+    }
+
+    const cohort = cohorts.get(event.date);
+    if (!cohort || cohort.pendingTruncated) {
+      classifications.push(
+        buildPendingModerationUniquenessClassification(
+          item,
+          "indeterminate",
+          "indeterminate_pending_cohort_limit",
+        ),
+      );
+      continue;
+    }
+    if (cohort.approvedTruncated) {
+      classifications.push(
+        buildPendingModerationUniquenessClassification(
+          item,
+          "indeterminate",
+          "indeterminate_approved_cohort_limit",
+        ),
+      );
+      continue;
+    }
+
+    const duplicateIds: Id<"events">[] = [];
+    const ambiguousIds: Id<"events">[] = [];
+    for (const other of [...cohort.pending, ...cohort.approved]) {
+      if (other._id === event._id) continue;
+      const relation = classifyApprovalCandidates(
+        prepared.candidate,
+        prepare(other).candidate,
+      );
+      if (relation === "proven_duplicate") duplicateIds.push(other._id);
+      if (relation === "ambiguous") ambiguousIds.push(other._id);
+    }
+    if (duplicateIds.length > 0) {
+      classifications.push(
+        buildPendingModerationUniquenessClassification(
+          item,
+          "duplicate",
+          "duplicate_same_occurrence",
+          duplicateIds,
+        ),
+      );
+      continue;
+    }
+    if (ambiguousIds.length > 0) {
+      classifications.push(
+        buildPendingModerationUniquenessClassification(
+          item,
+          "ambiguous",
+          "ambiguous_same_date_occurrence",
+          ambiguousIds,
+        ),
+      );
+      continue;
+    }
+
+    try {
+      const humanReviewPatch = await assertHumanApprovalWithCanonicalVenueFallback(
+        ctx,
+        event,
+        prepared,
+        options.moderationNote,
+      );
+      approvals.set(item.id, { prepared, humanReviewPatch });
+      classifications.push(
+        buildPendingModerationUniquenessClassification(
+          item,
+          "unique",
+          "unique_no_conflict",
+        ),
+      );
+    } catch (error) {
+      if (!isExpectedHumanApprovalIneligibility(error)) throw error;
+      classifications.push(
+        buildPendingModerationUniquenessClassification(
+          item,
+          "ineligible",
+          "ineligible_source_policy",
+        ),
+      );
+    }
+  }
+
+  return {
+    result: {
+      complete: classifications.every(
+        (item) => item.disposition !== "indeterminate",
+      ),
+      items: classifications,
+    },
+    reviewedEvents,
+    approvals,
+  };
 }
 
 async function loadPublicVenueIdsForEvents(
@@ -1424,6 +2007,23 @@ export const listModerationDuplicateContextByDates = query({
     }
 
     return { events: contextEvents, truncated };
+  },
+});
+
+export const classifyPendingModerationUniqueness = query({
+  args: {
+    items: v.array(pendingModerationUniquenessReviewItem),
+    asOfMs: v.number(),
+  },
+  returns: pendingModerationUniquenessResult,
+  handler: async (ctx, args) => {
+    await requireAdminIdentity(ctx);
+    const review = await buildPendingModerationUniquenessReview(ctx, {
+      items: args.items,
+      asOfMs: args.asOfMs,
+      moderationNote: PENDING_MODERATION_UNIQUENESS_PREVIEW_NOTE,
+    });
+    return review.result;
   },
 });
 
@@ -3978,6 +4578,80 @@ export const rollbackEventEvidencePolicyBatch = mutation({
       { actor: authorization.actor, kind: "service" },
       "rollback",
     );
+  },
+});
+
+export const approveUniquePendingEvents = mutation({
+  args: {
+    items: v.array(pendingModerationUniquenessReviewItem),
+    moderationNote: v.string(),
+  },
+  returns: approveUniquePendingEventsResult,
+  handler: async (ctx, args) => {
+    const identity = await requireAdminIdentity(ctx);
+    const moderationNote = args.moderationNote.trim();
+    if (moderationNote.length < 20 || moderationNote.length > 1_000) {
+      throw new Error(
+        "Unique pending approval requires a moderation note of 20-1000 characters.",
+      );
+    }
+
+    const now = Date.now();
+    const review = await buildPendingModerationUniquenessReview(ctx, {
+      items: args.items,
+      asOfMs: now,
+      moderationNote,
+    });
+    if (!review.result.complete) {
+      return {
+        complete: false,
+        approvedIds: [],
+        skipped: review.result.items.map((item) =>
+          item.disposition === "unique"
+            ? {
+                ...item,
+                disposition: "indeterminate" as const,
+                reason: "indeterminate_batch_incomplete" as const,
+                conflictIds: [],
+              }
+            : item,
+        ),
+      };
+    }
+
+    const approvedIds: Id<"events">[] = [];
+    const skipped = review.result.items.filter(
+      (item) => item.disposition !== "unique",
+    );
+    for (const item of review.result.items) {
+      if (item.disposition !== "unique") continue;
+      const event = review.reviewedEvents.get(item.id);
+      const approval = review.approvals.get(item.id);
+      if (!event || !approval) {
+        throw new Error("Unique pending approval preparation is incomplete.");
+      }
+      await ctx.db.patch(item.id, {
+        ...approval.prepared.venuePatch,
+        ...approval.humanReviewPatch,
+        status: "approved",
+        reviewedAt: now,
+        reviewedBy: identity.subject,
+        moderationNote,
+        updatedAt: nextEventUpdatedAt(event.updatedAt, now),
+      });
+      await writeEventAuditLog(ctx, item.id, "approved", {
+        actor: identity.subject,
+        note: moderationNote,
+        patch: { status: "approved", policy: "unique_pending" },
+      });
+      approvedIds.push(item.id);
+    }
+
+    return {
+      complete: true,
+      approvedIds,
+      skipped,
+    };
   },
 });
 
