@@ -5,6 +5,7 @@ export type OperationalVenueRecord = {
   name: string;
   instagramHandle: string;
   aliases?: string[];
+  location?: string;
 };
 
 type OperationalVenuePage = {

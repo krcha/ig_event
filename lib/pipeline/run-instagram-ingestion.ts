@@ -13,6 +13,7 @@ import {
 import { EVENT_EXTRACTION_ANALYSIS_PROTOCOL } from "@/lib/ai/openai-analysis-protocol";
 import {
   buildCanonicalVenueAliasesByHandle,
+  buildCanonicalVenueLocationsByHandle,
   buildCanonicalVenueNamesByHandle,
   canonicalizeVenueName,
   getConfiguredVenueNameForHandle,
@@ -20,6 +21,7 @@ import {
   normalizeExtractedArtists,
   normalizeExtractedDescription,
   normalizeHandle,
+  normalizeVenueComparableText,
   normalizeVenueFromEvidence,
   toSearchableText,
   type CanonicalVenueAliasesByHandle,
@@ -266,6 +268,7 @@ export type ExistingEventImportSummary = {
 type IngestionVenueContext = {
   canonicalVenueNamesByHandle: Record<string, string>;
   canonicalVenueAliasesByHandle: CanonicalVenueAliasesByHandle;
+  canonicalVenueLocationsByHandle: Record<string, string>;
   venueNameOverridesByHandle: Record<string, string>;
   configuredVenueNamesByHandle: Record<string, string>;
   sourceRolesByHandle: Record<string, "venue" | "promoter" | "unknown">;
@@ -1424,6 +1427,7 @@ async function loadCanonicalVenueMapsByHandle(
 ): Promise<{
   canonicalVenueNamesByHandle: Record<string, string>;
   canonicalVenueAliasesByHandle: CanonicalVenueAliasesByHandle;
+  canonicalVenueLocationsByHandle: Record<string, string>;
 }> {
   const venues = await loadOperationalVenueRecords({
     client,
@@ -1433,6 +1437,7 @@ async function loadCanonicalVenueMapsByHandle(
   return {
     canonicalVenueNamesByHandle: buildCanonicalVenueNamesByHandle(venues),
     canonicalVenueAliasesByHandle: buildCanonicalVenueAliasesByHandle(venues),
+    canonicalVenueLocationsByHandle: buildCanonicalVenueLocationsByHandle(venues),
   };
 }
 
@@ -4964,6 +4969,7 @@ async function loadIngestionVenueContextForHandles(
   const {
     canonicalVenueNamesByHandle,
     canonicalVenueAliasesByHandle,
+    canonicalVenueLocationsByHandle,
   } = canonicalVenueDirectory;
   const sourceRolesByHandle = Object.fromEntries(
     contexts.map((context) => [normalizeHandle(context.handle), context.role]),
@@ -4971,6 +4977,7 @@ async function loadIngestionVenueContextForHandles(
   return {
     canonicalVenueNamesByHandle,
     canonicalVenueAliasesByHandle,
+    canonicalVenueLocationsByHandle,
     venueNameOverridesByHandle,
     configuredVenueNamesByHandle: buildConfiguredVenueNamesByHandle(
       canonicalVenueNamesByHandle,
@@ -4987,12 +4994,17 @@ async function loadIngestionVenueContext(
 ): Promise<IngestionVenueContext> {
   let canonicalVenueNamesByHandle: Record<string, string> = {};
   let canonicalVenueAliasesByHandle: CanonicalVenueAliasesByHandle = {};
+  let canonicalVenueLocationsByHandle: Record<string, string> = {};
   let venueNameOverridesByHandle: Record<string, string> = {};
   let configuredVenueNamesByHandle: Record<string, string> = {};
   let sourceRolesByHandle: Record<string, "venue" | "promoter" | "unknown"> = {};
 
   try {
-    ({ canonicalVenueNamesByHandle, canonicalVenueAliasesByHandle } =
+    ({
+      canonicalVenueNamesByHandle,
+      canonicalVenueAliasesByHandle,
+      canonicalVenueLocationsByHandle,
+    } =
       await loadCanonicalVenueMapsByHandle(
         client,
         serviceSecret,
@@ -5041,6 +5053,7 @@ async function loadIngestionVenueContext(
   return {
     canonicalVenueNamesByHandle,
     canonicalVenueAliasesByHandle,
+    canonicalVenueLocationsByHandle,
     venueNameOverridesByHandle,
     configuredVenueNamesByHandle,
     sourceRolesByHandle,
@@ -9381,6 +9394,7 @@ export function prepareEventsForInsert(
     preserveExplicitDateEvidenceRelativeFlag?: boolean;
     sourceRolesByHandle?: Record<string, "venue" | "promoter" | "unknown">;
     canonicalVenueAliasesByHandle?: CanonicalVenueAliasesByHandle;
+    canonicalVenueLocationsByHandle?: Record<string, string>;
   } = {},
 ): PrepareEventResult[] {
   const extractionContractVersion = normalizeString(extracted.extraction_contract_version);
@@ -9422,6 +9436,7 @@ export function prepareEventsForInsert(
   const ticketPrice = normalizeTicketPrice(price, currency);
   const confidence = normalizeConfidenceScore(extracted.confidence);
   const canonicalVenueAliasesByHandle = options.canonicalVenueAliasesByHandle ?? {};
+  const canonicalVenueLocationsByHandle = options.canonicalVenueLocationsByHandle ?? {};
   const venueNormalization = normalizeVenue(
     post,
     extracted.venue,
@@ -9435,6 +9450,8 @@ export function prepareEventsForInsert(
   const normalizedSourceHandle = normalizeHandle(post.username);
   const sourceRole = options.sourceRolesByHandle?.[normalizedSourceHandle];
   const configuredVenueName = canonicalVenueNamesByHandle[normalizedSourceHandle];
+  const configuredVenueLocation =
+    canonicalVenueLocationsByHandle[normalizedSourceHandle] ?? "";
   const configuredSourceName =
     configuredVenueNamesByHandle[normalizedSourceHandle] ?? configuredVenueName ?? "";
   const rawModelVenue = normalizeString(extracted.venue);
@@ -9443,6 +9460,21 @@ export function prepareEventsForInsert(
         canonicalVenueAliasesByHandle,
       }) ?? rawModelVenue
     : "";
+  const rawModelVenueMatchesConfiguredVenue =
+    !normalizedRawModelVenue ||
+    normalizeVenueComparableText(normalizedRawModelVenue) ===
+      normalizeVenueComparableText(configuredVenueName ?? "");
+  const rawModelVenueMatchesConfiguredLocation = Boolean(
+    rawModelVenue &&
+      configuredVenueLocation &&
+      normalizeVenueComparableText(rawModelVenue) ===
+        normalizeVenueComparableText(configuredVenueLocation),
+  );
+  const exactCanonicalVenueSource = Boolean(
+    configuredVenueName &&
+      normalizeVenueComparableText(normalizedVenue) ===
+        normalizeVenueComparableText(configuredVenueName),
+  );
   // Only an explicitly configured venue account can use this relaxed
   // publication path. Promoters and unknown accounts must keep the stricter
   // source-grounding rules because their posts can advertise another venue.
@@ -9451,11 +9483,9 @@ export function prepareEventsForInsert(
     // canonical handle mapping is sufficient. Promoter accounts are never
     // trusted as the venue for this relaxed path.
     (sourceRole === "venue" || sourceRole === "unknown") &&
-    Boolean(configuredVenueName) &&
-    (!normalizedRawModelVenue ||
-      normalizeString(normalizedRawModelVenue) === normalizeString(configuredVenueName)) &&
-    normalizeString(normalizedVenue) ===
-      normalizeString(configuredVenueName);
+    exactCanonicalVenueSource &&
+    (rawModelVenueMatchesConfiguredVenue ||
+      (sourceRole === "venue" && rawModelVenueMatchesConfiguredLocation));
   const titleNormalization = normalizeEventTitle(
     post,
     extracted,
@@ -9589,16 +9619,28 @@ export function prepareEventsForInsert(
       trustedVenueSource: false,
       sharedVenueVerified: false,
     });
-  const effectiveNormalizedVenue = topLevelVenueEvidenceVerified
-    ? normalizedVenue
-    : explicitModelVenueEvidenceVerified
-      ? normalizedRawModelVenue
-      : "";
-  const effectiveVenueSource = topLevelVenueEvidenceVerified
-    ? venueNormalization.source
-    : explicitModelVenueEvidenceVerified
-      ? "model"
-      : "unsupported_model_venue_cleared";
+  const verifiedNamedModelVenueConflict = Boolean(
+    sourceRole === "venue" &&
+      exactCanonicalVenueSource &&
+      normalizedRawModelVenue &&
+      !rawModelVenueMatchesConfiguredVenue &&
+      !rawModelVenueMatchesConfiguredLocation &&
+      explicitModelVenueEvidenceVerified,
+  );
+  const effectiveNormalizedVenue = verifiedNamedModelVenueConflict
+    ? normalizedRawModelVenue
+    : topLevelVenueEvidenceVerified
+      ? normalizedVenue
+      : explicitModelVenueEvidenceVerified
+        ? normalizedRawModelVenue
+        : "";
+  const effectiveVenueSource = verifiedNamedModelVenueConflict
+    ? "model"
+    : topLevelVenueEvidenceVerified
+      ? venueNormalization.source
+      : explicitModelVenueEvidenceVerified
+        ? "model"
+        : "unsupported_model_venue_cleared";
   const allowMissingImageForModeration =
     isCaptionOnlyVideo || usesStructuredEvidence;
   const normalizedFieldsCommon: Record<string, unknown> = {
@@ -9614,6 +9656,8 @@ export function prepareEventsForInsert(
     rawVenue: normalizeString(extracted.venue),
     normalizedVenue: effectiveNormalizedVenue,
     venueSource: effectiveVenueSource,
+    canonicalVenueLocation: configuredVenueLocation || null,
+    rawVenueMatchesCanonicalLocation: rawModelVenueMatchesConfiguredLocation,
     venueEvidenceVerified:
       topLevelVenueEvidenceVerified || explicitModelVenueEvidenceVerified,
     locationName: venueNormalization.rawLocationName,
@@ -9845,6 +9889,14 @@ export function prepareEventsForInsert(
   const sharedVenueValue = verifiedSharedVenue
     ? normalizeString(extracted.shared_schedule_context.venue.value)
     : "";
+  const sharedVenueMatchesConfiguredLocation = Boolean(
+    sourceRole === "venue" &&
+      trustedVenueSource &&
+      sharedVenueValue &&
+      configuredVenueLocation &&
+      normalizeVenueComparableText(sharedVenueValue) ===
+        normalizeVenueComparableText(configuredVenueLocation),
+  );
   const sharedTimeValue = verifiedSharedTime
     ? normalizeString(extracted.shared_schedule_context.time.value)
     : "";
@@ -9860,6 +9912,14 @@ export function prepareEventsForInsert(
         const rowVenueGrounded = Boolean(
           rowVenue &&
             venueValueAppearsInEventEvidence(rowVenue, entry.sourceLine),
+        );
+        const rowVenueMatchesConfiguredLocation = Boolean(
+          sourceRole === "venue" &&
+            trustedVenueSource &&
+            rowVenue &&
+            configuredVenueLocation &&
+            normalizeVenueComparableText(rowVenue) ===
+              normalizeVenueComparableText(configuredVenueLocation),
         );
         const canonicalRowVenue = rowVenue
           ? canonicalizeVenueName(rowVenue, canonicalVenueNamesByHandle, {
@@ -9892,8 +9952,12 @@ export function prepareEventsForInsert(
         );
         const variantVenueRaw = usesStructuredEvidence
           ? rowVenueGrounded || singleOccurrencePostVenueGrounded
-            ? rowVenue
-            : sharedVenueValue ||
+            ? rowVenueMatchesConfiguredLocation
+              ? normalizedVenue
+              : rowVenue
+            : sharedVenueMatchesConfiguredLocation
+              ? normalizedVenue
+              : sharedVenueValue ||
               (trustedVenueAccountFallback ? normalizedVenue : "")
           : normalizedVenue;
         const variantVenue = variantVenueRaw
@@ -10074,6 +10138,25 @@ export function prepareEventsForInsert(
 
   for (const [index, variant] of eventVariants.entries()) {
     const date = variant.dateNormalization.isoDate;
+    const variantRawVenue =
+      normalizeString(variant.venueEvidenceValue) || rawModelVenue;
+    const variantRawVenueMatchesConfiguredLocation = Boolean(
+      variantRawVenue &&
+        configuredVenueLocation &&
+        normalizeVenueComparableText(variantRawVenue) ===
+          normalizeVenueComparableText(configuredVenueLocation),
+    );
+    const variantTrustedVenueSource = Boolean(
+      trustedVenueSource &&
+        configuredVenueName &&
+        normalizeVenueComparableText(variant.venue) ===
+          normalizeVenueComparableText(configuredVenueName),
+    );
+    const variantVenueSource = variantTrustedVenueSource
+      ? "handle_map"
+      : variant.venue && variantRawVenue
+        ? "model"
+        : effectiveVenueSource;
     const eventConsistency = checkEventConsistency({
       isoDate: date,
       rawDateText: variant.rawDate,
@@ -10162,7 +10245,7 @@ export function prepareEventsForInsert(
       splitEvidenceSource: variant.dateEvidence.source,
       post,
       hasPoster: hasPosterEvidence,
-      trustedVenueSource,
+      trustedVenueSource: variantTrustedVenueSource,
       sharedVenueVerified: verifiedSharedVenue,
     });
     const sourceConflictPartition = partitionEventEvidenceSourceConflicts(
@@ -10246,7 +10329,7 @@ export function prepareEventsForInsert(
       sourceGroundingDateVerified: sourceGrounding.dateVerified,
       sourceGroundingIdentityContextVerified: sourceGrounding.identityContextVerified,
       approvalCaptionSourceCoherent,
-      trustedVenueSource,
+      trustedVenueSource: variantTrustedVenueSource,
       structuredEvidenceVerified,
       autoApprovalBlockers,
     });
@@ -10277,7 +10360,11 @@ export function prepareEventsForInsert(
       venueEvidenceVerified,
       structuredEvidenceVerified,
       sourceConflictFields,
+      rawVenue: variantRawVenue,
+      rawVenueMatchesCanonicalLocation:
+        variantRawVenueMatchesConfiguredLocation,
       normalizedVenue: variant.venue,
+      venueSource: variantVenueSource,
       title: variant.title,
       titleSource: variant.titleSource,
       titleUsedFallback: variant.titleUsedFallback,
@@ -10335,7 +10422,7 @@ export function prepareEventsForInsert(
       approvalTitleSensible,
       approvalCaptionSourceCoherent,
       sourceGroundingVerified: sourceGrounding.verified,
-      trustedVenueSource,
+      trustedVenueSource: variantTrustedVenueSource,
       sourceGroundingTitleVerified: sourceGrounding.titleVerified,
       sourceGroundingDateVerified: sourceGrounding.dateVerified,
       sourceGroundingIdentityVerified: sourceGrounding.identityVerified,
@@ -10505,6 +10592,7 @@ type ProcessIngestionPostOptions = {
   summary: HandleSummary;
   canonicalVenueNamesByHandle: Record<string, string>;
   canonicalVenueAliasesByHandle?: CanonicalVenueAliasesByHandle;
+  canonicalVenueLocationsByHandle?: Record<string, string>;
   venueNameOverridesByHandle: Record<string, string>;
   configuredVenueNamesByHandle: Record<string, string>;
   sourceRolesByHandle?: Record<string, "venue" | "promoter" | "unknown">;
@@ -10570,6 +10658,7 @@ async function processIngestionPost(
     summary,
     canonicalVenueNamesByHandle,
     canonicalVenueAliasesByHandle = {},
+    canonicalVenueLocationsByHandle = {},
     venueNameOverridesByHandle,
     configuredVenueNamesByHandle,
     sourceRolesByHandle = {},
@@ -11192,6 +11281,7 @@ async function processIngestionPost(
         sourceRolesByHandle,
         eventDateFilterNow,
         canonicalVenueAliasesByHandle,
+        canonicalVenueLocationsByHandle,
       },
     );
     preparedResults = bindSourceOccurrenceMetadata(post, preparedResults);
@@ -11982,6 +12072,7 @@ async function processLoadedPostsForHandle(
     seenSourceKeys,
     canonicalVenueNamesByHandle,
     canonicalVenueAliasesByHandle,
+    canonicalVenueLocationsByHandle,
     venueNameOverridesByHandle,
     configuredVenueNamesByHandle,
     sourceRolesByHandle,
@@ -12175,6 +12266,7 @@ async function processLoadedPostsForHandle(
         summary,
         canonicalVenueNamesByHandle,
         canonicalVenueAliasesByHandle,
+        canonicalVenueLocationsByHandle,
         venueNameOverridesByHandle,
         configuredVenueNamesByHandle,
         sourceRolesByHandle,
@@ -12444,6 +12536,7 @@ async function processSavedBacklogBeforeFreshFetch(options: {
   daysBack?: number;
   canonicalVenueNamesByHandle: Record<string, string>;
   canonicalVenueAliasesByHandle: CanonicalVenueAliasesByHandle;
+  canonicalVenueLocationsByHandle: Record<string, string>;
   venueNameOverridesByHandle: Record<string, string>;
   configuredVenueNamesByHandle: Record<string, string>;
   sourceRolesByHandle: Record<string, "venue" | "promoter" | "unknown">;
@@ -12466,6 +12559,7 @@ async function processSavedBacklogBeforeFreshFetch(options: {
       workOwner: options.workOwner,
       canonicalVenueNamesByHandle: options.canonicalVenueNamesByHandle,
       canonicalVenueAliasesByHandle: options.canonicalVenueAliasesByHandle,
+      canonicalVenueLocationsByHandle: options.canonicalVenueLocationsByHandle,
       venueNameOverridesByHandle: options.venueNameOverridesByHandle,
       configuredVenueNamesByHandle: options.configuredVenueNamesByHandle,
       sourceRolesByHandle: options.sourceRolesByHandle,
@@ -12526,6 +12620,7 @@ async function runInstagramIngestionFullScrapeBatchStep(
         daysBack: options.daysBack,
         canonicalVenueNamesByHandle: options.canonicalVenueNamesByHandle,
         canonicalVenueAliasesByHandle: options.canonicalVenueAliasesByHandle,
+        canonicalVenueLocationsByHandle: options.canonicalVenueLocationsByHandle,
         venueNameOverridesByHandle: options.venueNameOverridesByHandle,
         configuredVenueNamesByHandle: options.configuredVenueNamesByHandle,
         sourceRolesByHandle: options.sourceRolesByHandle,
@@ -12569,6 +12664,7 @@ async function runInstagramIngestionFullScrapeBatchStep(
           workOwner: options.workOwner,
           canonicalVenueNamesByHandle: options.canonicalVenueNamesByHandle,
           canonicalVenueAliasesByHandle: options.canonicalVenueAliasesByHandle,
+          canonicalVenueLocationsByHandle: options.canonicalVenueLocationsByHandle,
           venueNameOverridesByHandle: options.venueNameOverridesByHandle,
           configuredVenueNamesByHandle: options.configuredVenueNamesByHandle,
           sourceRolesByHandle: options.sourceRolesByHandle,
@@ -12622,6 +12718,7 @@ export async function runInstagramIngestionBatchStep(
   const {
     canonicalVenueNamesByHandle,
     canonicalVenueAliasesByHandle,
+    canonicalVenueLocationsByHandle,
     venueNameOverridesByHandle,
     configuredVenueNamesByHandle,
     sourceRolesByHandle,
@@ -12638,6 +12735,7 @@ export async function runInstagramIngestionBatchStep(
       client,
       canonicalVenueNamesByHandle,
       canonicalVenueAliasesByHandle,
+      canonicalVenueLocationsByHandle,
       venueNameOverridesByHandle,
       configuredVenueNamesByHandle,
       sourceRolesByHandle,
@@ -12757,6 +12855,7 @@ export async function runInstagramIngestionBatchStep(
       seenSourceKeys: seenForHandle,
       canonicalVenueNamesByHandle,
       canonicalVenueAliasesByHandle,
+      canonicalVenueLocationsByHandle,
       venueNameOverridesByHandle,
       configuredVenueNamesByHandle,
       sourceRolesByHandle,

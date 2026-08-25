@@ -2,6 +2,7 @@ export type CanonicalVenueRecord = {
   name: string;
   instagramHandle: string;
   aliases?: string[];
+  location?: string | null;
 };
 
 export type VenueSource = "handle_map" | "location_name" | "model" | null;
@@ -363,6 +364,21 @@ export function buildCanonicalVenueAliasesByHandle(
     }
   }
   return aliasesByHandle;
+}
+
+export function buildCanonicalVenueLocationsByHandle(
+  venues: CanonicalVenueRecord[],
+): Record<string, string> {
+  const locationsByHandle: Record<string, string> = {};
+  for (const venue of venues) {
+    const normalizedHandle = normalizeHandle(venue.instagramHandle);
+    const normalizedLocation = normalizeString(venue.location);
+    if (!normalizedHandle || !normalizedLocation) {
+      continue;
+    }
+    locationsByHandle[normalizedHandle] = normalizedLocation;
+  }
+  return locationsByHandle;
 }
 
 type VenueNameEntry = {

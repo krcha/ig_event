@@ -13,6 +13,7 @@ import {
 } from "../lib/utils/confidence.ts";
 import {
   buildCanonicalVenueAliasesByHandle,
+  buildCanonicalVenueLocationsByHandle,
   buildCanonicalVenueNamesByHandle,
   canonicalizeVenueName,
   canonicalizeVenueNameDetailed,
@@ -505,9 +506,17 @@ function runVenueQa() {
       aliases: ["New Cinema Zvezda"],
     },
     { name: "ica", instagramHandle: "icketa" },
+    {
+      name: "La Variete",
+      instagramHandle: "lavariete.belgrade",
+      location: "Francuska 6",
+    },
   ];
   const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle(canonicalVenues);
   const canonicalVenueAliasesByHandle = buildCanonicalVenueAliasesByHandle(canonicalVenues);
+  const canonicalVenueLocationsByHandle =
+    buildCanonicalVenueLocationsByHandle(canonicalVenues);
+  assert.equal(canonicalVenueLocationsByHandle["lavariete.belgrade"], "Francuska 6");
   const venueNameOverridesByHandle = {
     kcgrad: "KC Grad",
     silosibeograd: "Silosi",
@@ -9898,11 +9907,270 @@ function runTrustedSourceAnnouncementModerationQa() {
   );
 }
 
+function runVenueAccountCanonicalLocationQa() {
+  const eventDate = isoDateDaysFromNow(9);
+  const canonicalVenueNamesByHandle = {
+    "lavariete.belgrade": "La Variete",
+    kcgrad: "KC Grad",
+  };
+  const canonicalVenueLocationsByHandle = {
+    "lavariete.belgrade": "Francuska 6",
+    kcgrad: "Braće Krsmanović 4",
+  };
+  const makePrepared = ({ rawVenue, sourceRole }) => {
+    const caption = `QA La Variete Night ${eventDate} 21:00. Vidimo se u ${rawVenue}.`;
+    const postId = `qa-la-variete-${sourceRole}-${rawVenue}`;
+    const postUrl = `https://www.instagram.com/p/${encodeURIComponent(postId)}/`;
+    const post = makeInstagramPost({
+      caption,
+      imageUrl: "https://images.example.com/la-variete-night.jpg",
+      imageUrls: ["https://images.example.com/la-variete-night.jpg"],
+      instagramPostUrl: postUrl,
+      postId,
+      postType: "image",
+      username: "lavariete.belgrade",
+    });
+    const locationEvidence = {
+      confidence: 0.95,
+      found_in: ["caption"],
+      evidence: rawVenue,
+      evidence_snippets: [{ source: "caption", text: rawVenue }],
+      notes: "Exact caption location evidence.",
+    };
+    const extracted = makeExtractedEvent({
+      extraction_contract_version: "event_evidence_v2",
+      title: "QA La Variete Night",
+      date: eventDate,
+      time: "21:00",
+      venue: rawVenue,
+      artists: [],
+      source_caption: caption,
+      source_url: postUrl,
+      date_evidence: {
+        exact_text: eventDate,
+        source: "caption",
+        is_relative: false,
+        resolved_date: eventDate,
+      },
+      time_evidence: {
+        status: "start_time_stated",
+        exact_text: "21:00",
+        source: "caption",
+      },
+      field_confirmation: {
+        ...makeFieldConfirmation(0.95),
+        title: {
+          confidence: 0.95,
+          found_in: ["caption"],
+          evidence: "QA La Variete Night",
+          evidence_snippets: [
+            { source: "caption", text: "QA La Variete Night" },
+          ],
+          notes: "Exact caption title.",
+        },
+        location: locationEvidence,
+        location_name: locationEvidence,
+      },
+    });
+    const [prepared] = prepareEventsForInsert(
+      post,
+      extracted,
+      "https://images.example.com/la-variete-night.jpg",
+      canonicalVenueNamesByHandle,
+      {},
+      canonicalVenueNamesByHandle,
+      {
+        canonicalVenueLocationsByHandle,
+        eventDateFilterNow: new Date(QA_NOW_ISO),
+        sourceRolesByHandle: { "lavariete.belgrade": sourceRole },
+      },
+    );
+    assert.equal(prepared.kind, "ok", JSON.stringify(prepared));
+    return prepared;
+  };
+
+  const canonicalAddress = makePrepared({
+    rawVenue: "Francuska 6",
+    sourceRole: "venue",
+  });
+  assert.equal(canonicalAddress.event.venue, "La Variete");
+  assert.equal(canonicalAddress.normalizedFields.normalizedVenue, "La Variete");
+  assert.equal(canonicalAddress.normalizedFields.venueSource, "handle_map");
+  assert.equal(canonicalAddress.normalizedFields.rawVenue, "Francuska 6");
+  assert.equal(canonicalAddress.normalizedFields.canonicalVenueLocation, "Francuska 6");
+  assert.equal(canonicalAddress.normalizedFields.rawVenueMatchesCanonicalLocation, true);
+  assert.equal(canonicalAddress.normalizedFields.trustedVenueSource, true);
+  assert.equal(canonicalAddress.event.status, "approved", JSON.stringify(canonicalAddress));
+
+  const promoterAddress = makePrepared({
+    rawVenue: "Francuska 6",
+    sourceRole: "promoter",
+  });
+  assert.equal(promoterAddress.event.venue, "Francuska 6");
+  assert.equal(promoterAddress.normalizedFields.normalizedVenue, "Francuska 6");
+  assert.equal(promoterAddress.normalizedFields.trustedVenueSource, false);
+
+  const namedOffsiteVenue = makePrepared({
+    rawVenue: "KC Grad",
+    sourceRole: "venue",
+  });
+  assert.equal(namedOffsiteVenue.event.venue, "KC Grad");
+  assert.equal(namedOffsiteVenue.normalizedFields.normalizedVenue, "KC Grad");
+  assert.equal(namedOffsiteVenue.normalizedFields.venueSource, "model");
+  assert.equal(namedOffsiteVenue.normalizedFields.rawVenueMatchesCanonicalLocation, false);
+  assert.equal(namedOffsiteVenue.normalizedFields.trustedVenueSource, false);
+
+  const makeStructuredPrepared = ({ rawVenue, sourceRole, useSharedVenue = false }) => {
+    const title = "QA La Variete Schedule";
+    const sourceLine = `${title} ${eventDate} 21:00 ${rawVenue}`;
+    const postId = `qa-la-variete-schedule-${sourceRole}-${useSharedVenue ? "shared" : "row"}-${rawVenue}`;
+    const postUrl = `https://www.instagram.com/p/${encodeURIComponent(postId)}/`;
+    const post = makeInstagramPost({
+      caption: sourceLine,
+      imageUrl: "https://images.example.com/la-variete-schedule.jpg",
+      imageUrls: ["https://images.example.com/la-variete-schedule.jpg"],
+      instagramPostUrl: postUrl,
+      postId,
+      postType: "image",
+      username: "lavariete.belgrade",
+    });
+    const extracted = makeExtractedEvent({
+      extraction_contract_version: "event_evidence_v2",
+      title: "",
+      date: "",
+      time: "",
+      venue: "",
+      artists: [],
+      description: "",
+      source_caption: sourceLine,
+      source_url: postUrl,
+      date_evidence: {
+        exact_text: "",
+        source: "unknown",
+        is_relative: false,
+        resolved_date: "",
+      },
+      time_evidence: {
+        status: "not_stated",
+        exact_text: "",
+        source: "unknown",
+      },
+      shared_schedule_context: {
+        venue: {
+          applies_to_all: useSharedVenue,
+          value: useSharedVenue ? rawVenue : "",
+          evidence: useSharedVenue ? rawVenue : "",
+          source: useSharedVenue ? "caption" : "unknown",
+        },
+        time: {
+          applies_to_all: false,
+          value: "",
+          evidence: "",
+          source: "unknown",
+        },
+      },
+      schedule_entries: [
+        {
+          date: eventDate,
+          time: "21:00",
+          venue: useSharedVenue ? "" : rawVenue,
+          title,
+          artists: [],
+          description: `${title} at ${rawVenue}.`,
+          source_text: sourceLine,
+          date_evidence: {
+            exact_text: eventDate,
+            source: "caption",
+            is_relative: false,
+            resolved_date: eventDate,
+          },
+          time_evidence: {
+            status: "start_time_stated",
+            exact_text: "21:00",
+            source: "caption",
+          },
+        },
+      ],
+    });
+    const [prepared] = prepareEventsForInsert(
+      post,
+      extracted,
+      "https://images.example.com/la-variete-schedule.jpg",
+      canonicalVenueNamesByHandle,
+      {},
+      canonicalVenueNamesByHandle,
+      {
+        canonicalVenueLocationsByHandle,
+        eventDateFilterNow: new Date(QA_NOW_ISO),
+        sourceRolesByHandle: { "lavariete.belgrade": sourceRole },
+      },
+    );
+    assert.equal(prepared.kind, "ok", JSON.stringify(prepared));
+    return prepared;
+  };
+
+  for (const useSharedVenue of [false, true]) {
+    const scheduleAddress = makeStructuredPrepared({
+      rawVenue: "Francuska 6",
+      sourceRole: "venue",
+      useSharedVenue,
+    });
+    assert.equal(scheduleAddress.event.venue, "La Variete");
+    assert.equal(scheduleAddress.normalizedFields.rawVenue, "Francuska 6");
+    assert.equal(
+      scheduleAddress.normalizedFields.rawVenueMatchesCanonicalLocation,
+      true,
+    );
+    assert.equal(scheduleAddress.normalizedFields.venueSource, "handle_map");
+    assert.equal(scheduleAddress.normalizedFields.trustedVenueSource, true);
+    assert.equal(scheduleAddress.event.status, "approved", JSON.stringify(scheduleAddress));
+  }
+
+  const schedulePromoterAddress = makeStructuredPrepared({
+    rawVenue: "Francuska 6",
+    sourceRole: "promoter",
+  });
+  assert.equal(schedulePromoterAddress.event.venue, "Francuska 6");
+  assert.equal(schedulePromoterAddress.normalizedFields.rawVenue, "Francuska 6");
+  assert.equal(schedulePromoterAddress.normalizedFields.trustedVenueSource, false);
+  assert.equal(schedulePromoterAddress.normalizedFields.venueSource, "model");
+
+  for (const useSharedVenue of [false, true]) {
+    const scheduleUnknownAddress = makeStructuredPrepared({
+      rawVenue: "Francuska 6",
+      sourceRole: "unknown",
+      useSharedVenue,
+    });
+    assert.equal(scheduleUnknownAddress.event.venue, "Francuska 6");
+    assert.equal(scheduleUnknownAddress.normalizedFields.rawVenue, "Francuska 6");
+    assert.equal(
+      scheduleUnknownAddress.normalizedFields.rawVenueMatchesCanonicalLocation,
+      true,
+    );
+    assert.equal(scheduleUnknownAddress.normalizedFields.venueSource, "model");
+    assert.equal(scheduleUnknownAddress.normalizedFields.trustedVenueSource, false);
+  }
+
+  const scheduleNamedOffsiteVenue = makeStructuredPrepared({
+    rawVenue: "KC Grad",
+    sourceRole: "venue",
+  });
+  assert.equal(scheduleNamedOffsiteVenue.event.venue, "KC Grad");
+  assert.equal(scheduleNamedOffsiteVenue.normalizedFields.rawVenue, "KC Grad");
+  assert.equal(
+    scheduleNamedOffsiteVenue.normalizedFields.rawVenueMatchesCanonicalLocation,
+    false,
+  );
+  assert.equal(scheduleNamedOffsiteVenue.normalizedFields.venueSource, "model");
+  assert.equal(scheduleNamedOffsiteVenue.normalizedFields.trustedVenueSource, false);
+}
+
 runPromptQa();
 runVenueQa();
 runArtistAndDescriptionQa();
 runConfidenceQa();
 runTrustedSourceAnnouncementModerationQa();
+runVenueAccountCanonicalLocationQa();
 runVideoModerationQa();
 runUnverifiedPosterScheduleModerationQa();
 runHashtagOnlyScheduleIdentityQa();

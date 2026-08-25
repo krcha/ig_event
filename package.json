@@ -20,6 +20,7 @@
     "qa:definitive-output-recovery": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-definitive-output-recovery.mjs",
     "qa:definitive-output-recovery-executor": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-definitive-output-recovery-executor.mjs",
     "qa:event-evidence-v2-durability": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-event-evidence-v2-durability.mjs",
+    "qa:approved-legacy-venue-repair": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-approved-legacy-venue-repair.mjs",
     "qa:event-time-provenance": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-event-time-provenance.mjs",
     "qa:moderation-queue": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-moderation-queue.mjs",
     "qa:moderation-dashboard-data": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-moderation-dashboard-data-path.mjs",

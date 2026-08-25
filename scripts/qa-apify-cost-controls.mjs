@@ -1982,7 +1982,7 @@ const operationalRecords = await loadOperationalVenueRecords({
       if (operationalPageCalls === 1) {
         assert.equal(args.paginationOpts.cursor, null);
         return {
-          page: [{ name: "Venue One", instagramHandle: "venue.one" }],
+          page: [{ name: "Venue One", instagramHandle: "venue.one", location: "Address One" }],
           isDone: false,
           continueCursor: "cursor-1",
         };
@@ -2003,6 +2003,11 @@ assert.deepEqual(operationalRecords.map((venue) => venue.instagramHandle), [
   "venue.one",
   "venue.two",
 ]);
+assert.equal(
+  operationalRecords[0]?.location,
+  "Address One",
+  "operational venue loading must preserve canonical location evidence",
+);
 
 let splitPageCalls = 0;
 const splitOperationalRecords = await loadOperationalVenueRecords({

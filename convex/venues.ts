@@ -415,6 +415,7 @@ export const listVenueIngestionFieldsPaginated = query({
         name: venue.name,
         instagramHandle: venue.instagramHandle,
         aliases: venue.aliases ?? [],
+        location: venue.location,
       })),
     };
   },
@@ -434,6 +435,7 @@ export const listActiveVenueIngestionFieldsPaginated = query({
         name: venue.name,
         instagramHandle: venue.instagramHandle,
         aliases: venue.aliases ?? [],
+        location: venue.location,
       })),
     };
   },
