@@ -5698,9 +5698,14 @@ export const coalesceApprovedCrossPostPromotionOccurrences = mutation({
         link.instagramPostId !== event.instagramPostId ||
         normalizeInstagramPostUrl(link.instagramPostUrl ?? "") !==
           normalizeInstagramPostUrl(event.instagramPostUrl ?? "") ||
-        !normalizeHandle(link.sourceHandle ?? "") ||
-        normalizeHandle(link.sourceHandle ?? "") !==
-          normalizeHandle(normalizedString(fields.sourceGroundingInstagramHandle))
+        !normalizeHandle(
+          normalizedString(fields.sourceGroundingInstagramHandle),
+        ) ||
+        (link.sourceHandle !== undefined &&
+          normalizeHandle(link.sourceHandle) !==
+            normalizeHandle(
+              normalizedString(fields.sourceGroundingInstagramHandle),
+            ))
       ) {
         throw new Error(`Cross-post promotion source-link precondition failed: ${version.id}.`);
       }
@@ -5756,7 +5761,9 @@ export const coalesceApprovedCrossPostPromotionOccurrences = mutation({
     const plan = buildCrossPostPromotionCoalescingPlan({
       candidates: prepared.map(({ event, fields, link }) => ({
         id: String(event._id),
-        sourceHandle: link.sourceHandle ?? "",
+        sourceHandle:
+          link.sourceHandle ??
+          normalizedString(fields.sourceGroundingInstagramHandle),
         sourceIdentity: link.sourceIdentity,
         sourceOccurrenceKey: link.sourceOccurrenceKey,
         instagramPostId: event.instagramPostId ?? "",

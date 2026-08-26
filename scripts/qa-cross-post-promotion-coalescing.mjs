@@ -602,6 +602,43 @@ await assert.rejects(
   "A missing canonical persisted source must block the retained public event.",
 );
 
+const legacyMissingHandleState = makeDb();
+for (const link of legacyMissingHandleState.links) {
+  delete link.sourceHandle;
+  const storedLink = legacyMissingHandleState.tables.instagramEventSources.get(
+    link._id,
+  );
+  delete storedLink.sourceHandle;
+}
+const legacyLinksBefore = structuredClone([
+  ...legacyMissingHandleState.tables.instagramEventSources.values(),
+]);
+const legacyResult = await coalesceApprovedCrossPostPromotionOccurrences._handler(
+  serviceCtx(legacyMissingHandleState),
+  validArgs(legacyMissingHandleState),
+);
+assert.equal(legacyResult.primaryId, arianaRows[0].id);
+assert.deepEqual(
+  [...legacyMissingHandleState.tables.instagramEventSources.values()],
+  legacyLinksBefore,
+  "Legacy links may omit sourceHandle only when immutable source grounding supplies it, and the mutation must not rewrite lineage.",
+);
+
+const mismatchedHandleState = makeDb();
+mismatchedHandleState.links[0].sourceHandle = "different.promoter";
+mismatchedHandleState.tables.instagramEventSources.get(
+  mismatchedHandleState.links[0]._id,
+).sourceHandle = "different.promoter";
+await assert.rejects(
+  () =>
+    coalesceApprovedCrossPostPromotionOccurrences._handler(
+      serviceCtx(mismatchedHandleState),
+      validArgs(mismatchedHandleState),
+    ),
+  /source-link precondition failed/i,
+  "A present sourceHandle that conflicts with immutable source grounding must remain blocked.",
+);
+
 const state = makeDb();
 const contextArgs = {
   operationId: validArgs(state).operationId,
