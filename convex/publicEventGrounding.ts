@@ -19,12 +19,9 @@ import {
   readCrossPostCampaignAggregateAttestation,
   type CrossPostCampaignAggregateAttestation,
 } from "../lib/events/cross-post-campaign-aggregate-attestation";
+import { exactJsonValue } from "../lib/events/exact-json-value";
 
 const MAX_CROSS_POST_CAMPAIGN_AUDIT_ROWS = 100;
-
-function exactJsonValue(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
 
 function normalizeAggregateArtist(value: string): string {
   return value

@@ -23,12 +23,44 @@ import {
   buildCrossPostPromotionCoalescingPlan,
   deriveExclusiveHashtagCrossPostCampaignIdentity,
 } from "../lib/events/cross-post-promotion-coalescing.ts";
+import { exactJsonValue } from "../lib/events/exact-json-value.ts";
 
 process.env.CRON_SECRET = "qa-cross-post-promotion-secret";
 process.env.ADMIN_CLERK_USER_IDS = "qa-merge-admin";
 
 const QA_NOW_MS = new Date("2026-08-25T12:00:00.000Z").getTime();
 Date.now = () => QA_NOW_MS;
+
+function canonicalizeJsonObjectKeyOrder(value) {
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeJsonObjectKeyOrder);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicalizeJsonObjectKeyOrder(value[key])]),
+    );
+  }
+  return value;
+}
+
+assert.equal(
+  exactJsonValue(
+    { beta: [{ key: "same", eventId: "event-1" }], alpha: 1 },
+    { alpha: 1, beta: [{ eventId: "event-1", key: "same" }] },
+  ),
+  true,
+  "Exact JSON equality must ignore object member order at every depth.",
+);
+assert.equal(
+  exactJsonValue(
+    { beta: [{ key: "same", eventId: "event-1" }], alpha: 1 },
+    { alpha: 1, beta: [{ eventId: "event-2", key: "same" }] },
+  ),
+  false,
+  "Exact JSON equality must still reject a changed scalar value.",
+);
 
 const venue = {
   _id: "venue-kc-grad",
@@ -409,6 +441,17 @@ function serviceCtx(state) {
   };
 }
 
+function canonicalizePersistedCrossPostSourceRows(state) {
+  for (const table of [
+    "instagramEventSources",
+    "instagramSourceOccurrenceReceipts",
+  ]) {
+    for (const [id, row] of state.tables[table]) {
+      state.tables[table].set(id, canonicalizeJsonObjectKeyOrder(row));
+    }
+  }
+}
+
 function candidateVersion(state, index) {
   const event = state.events[index];
   const link = state.links[index];
@@ -526,6 +569,7 @@ async function makeLegacyMarkerOnlyAggregateState(options = {}) {
       patchJson: JSON.stringify(patch),
     });
   }
+  canonicalizePersistedCrossPostSourceRows(legacyState);
   return legacyState;
 }
 
@@ -742,6 +786,38 @@ for (const originalReceipt of aggregateMismatchState.receipts) {
   assert.deepEqual(live.satisfiedKeys, originalReceipt.expectedKeys);
   assert.equal(live.satisfiedOccurrences[0]?.eventId, arianaRows[0].id);
 }
+
+const canonicalPersistenceState = makeDb();
+await coalesceApprovedCrossPostPromotionOccurrences._handler(
+  serviceCtx(canonicalPersistenceState),
+  validArgs(canonicalPersistenceState),
+);
+canonicalizePersistedCrossPostSourceRows(canonicalPersistenceState);
+const canonicalPersistencePrimary =
+  canonicalPersistenceState.tables.events.get(arianaRows[0].id);
+assert.equal(
+  await isCanonicallyGroundedApprovedEvent(
+    serviceCtx(canonicalPersistenceState),
+    canonicalPersistencePrimary,
+  ),
+  true,
+  "Convex object-key canonicalization must not invalidate an exact aggregate audit.",
+);
+assert.equal(
+  (
+    await getCrossPostPromotionCoalescingContext._handler(
+      serviceCtx(canonicalPersistenceState),
+      {
+        operationId: validArgs(canonicalPersistenceState).operationId,
+        eventIds: arianaRows.map((row) => row.id),
+        targetVenueId: venue._id,
+        serviceSecret: process.env.CRON_SECRET,
+      },
+    )
+  ).state,
+  "already_coalesced",
+  "Stored key order must not invalidate an exact completed coalescing state.",
+);
 
 const missingPrimarySourceState = makeDb();
 missingPrimarySourceState.tables.scrapedPosts.delete("ariana-scraped-post-0");

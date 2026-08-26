@@ -39,6 +39,7 @@ import {
   readCrossPostCampaignAggregateAttestation,
   type CrossPostCampaignAggregateAttestation,
 } from "../lib/events/cross-post-campaign-aggregate-attestation";
+import { exactJsonValue } from "../lib/events/exact-json-value";
 import {
   buildApprovedEventAutoCleanupGroups,
   type ApprovedEventDuplicateRecord,
@@ -5476,10 +5477,6 @@ type LegacyCrossPostPromotionMigrationProof = {
   sourceEventsBefore: Doc<"events">[];
 };
 
-function exactCrossPostJson(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
 function readLegacyCrossPostApprovedEventBefore(value: unknown): Doc<"events"> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const event = value as Partial<Doc<"events">>;
@@ -5622,8 +5619,8 @@ async function proveLegacyCrossPostPromotionMigration(
       primary.event,
       primaryEventBefore,
     ) ||
-    !exactCrossPostJson(primaryAudit.sourceLinkBefore, primary.link) ||
-    !exactCrossPostJson(primaryAudit.receiptBefore, primary.receipt) ||
+    !exactJsonValue(primaryAudit.sourceLinkBefore, primary.link) ||
+    !exactJsonValue(primaryAudit.receiptBefore, primary.receipt) ||
     primaryAudit.canonicalVenueName !== targetVenue.name ||
     normalizeHandle(normalizedString(primaryAudit.canonicalVenueHandle)) !==
       normalizeHandle(targetVenue.instagramHandle) ||
@@ -5696,8 +5693,8 @@ async function proveLegacyCrossPostPromotionMigration(
       audit.variantUpdatedAt !== item.event.updatedAt ||
       !eventBefore ||
       !legacyCrossPostSourceEvidenceRemainsExact(item.event, eventBefore) ||
-      !exactCrossPostJson(audit.sourceLinkBefore, item.link) ||
-      !exactCrossPostJson(audit.receiptAfter, item.receipt) ||
+      !exactJsonValue(audit.sourceLinkBefore, item.link) ||
+      !exactJsonValue(audit.receiptAfter, item.receipt) ||
       !crossPostReceiptHasExactSingleBinding(item.receipt, item.link) ||
       !exactCrossPostReceiptSemanticsEqual(
         expectedOccurrence,
@@ -6401,7 +6398,7 @@ export const coalesceApprovedCrossPostPromotionOccurrences = mutation({
         Object.entries(basePublicPatch).some(
           ([field, value]) =>
             field !== "moderationNote" &&
-            !exactCrossPostJson(
+            !exactJsonValue(
               primaryEvent[field as keyof Doc<"events">],
               value,
             ),
