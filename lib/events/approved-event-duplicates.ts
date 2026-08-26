@@ -96,6 +96,9 @@ export type ApprovedEventDuplicateRecord = {
   sourceCaption: string | null;
   sourcePostedAt: string | null;
   normalizedFieldsJson: string | null;
+  sourceOccurrenceKey?: string | null;
+  venueId?: string | null;
+  venueInstagramHandle?: string | null;
   createdAt: number;
   updatedAt: number;
 };
@@ -582,6 +585,9 @@ function toApprovedEventRecord(event: DecoratedDuplicateEvent): ApprovedEventDup
     sourceCaption: event.sourceCaption,
     sourcePostedAt: event.sourcePostedAt,
     normalizedFieldsJson: event.normalizedFieldsJson,
+    sourceOccurrenceKey: event.sourceOccurrenceKey ?? null,
+    venueId: event.venueId ?? null,
+    venueInstagramHandle: event.venueInstagramHandle ?? null,
     createdAt: event.createdAt,
     updatedAt: event.updatedAt,
   };

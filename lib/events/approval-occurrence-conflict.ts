@@ -15,7 +15,9 @@ export type ApprovalOccurrenceRelation =
   | "proven_distinct"
   | "ambiguous";
 
-function normalizedOccurrenceKey(candidate: ApprovalOccurrenceCandidate): string | null {
+export function getNormalizedApprovalOccurrenceKey(
+  candidate: ApprovalOccurrenceCandidate,
+): string | null {
   const direct = candidate.sourceOccurrenceKey?.trim();
   if (direct) return direct;
   if (!candidate.normalizedFieldsJson) return null;
@@ -128,8 +130,8 @@ export function classifyApprovalOccurrenceRelation(options: {
   const { candidate, existing, sameVenue, sameSource, unknownVenue = false } = options;
   if (!sameVenue && !sameSource && !unknownVenue) return "unrelated";
 
-  const candidateKey = normalizedOccurrenceKey(candidate);
-  const existingKey = normalizedOccurrenceKey(existing);
+  const candidateKey = getNormalizedApprovalOccurrenceKey(candidate);
+  const existingKey = getNormalizedApprovalOccurrenceKey(existing);
   if (candidateKey && existingKey) {
     if (candidateKey === existingKey) return "proven_duplicate";
     if (sameSource) return "proven_distinct";

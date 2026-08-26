@@ -109,6 +109,19 @@ assert.match(
   /scrapedPostId: processingFence\.scrapedPostId/g,
   "every scraped-post processing fence write must retain the exact durable ID",
 );
+assert.doesNotMatch(
+  ingestionPipeline.slice(
+    ingestionPipeline.indexOf("export async function processSavedScrapedPostForDurableReceipt"),
+    ingestionPipeline.indexOf("async function processSavedBacklogBeforeFreshFetch"),
+  ),
+  /runApprovedDuplicateCleanupForIngestion\(/,
+  "one saved-post receipt must not launch a full approved-event cleanup",
+);
+assert.match(
+  route,
+  /runCompletionCleanupOrDefer\(state, false\)/,
+  "a completed no-claim probe must retry cleanup after a lost final response",
+);
 
 const transpiledRoute = ts.transpileModule(route, {
   compilerOptions: {
@@ -120,6 +133,7 @@ const transpiledRoute = ts.transpileModule(route, {
 }).outputText;
 
 const claimProcessingReference = "durableIngestionRuns:claimNextProcessingReceipt";
+const completeProcessingReference = "durableIngestionRuns:completeProcessingReceipt";
 const claimFetchReference = "durableIngestionRuns:executeNext";
 const releaseProcessingReference = "durableIngestionRuns:releaseProcessingReceiptForRetry";
 const markProviderAttemptReference = "durableIngestionRuns:markReceiptProviderAttemptStarted";
@@ -132,6 +146,19 @@ const processingClaimFixture = {
   scrapedPostSourceRevision: 7,
   processingAttemptCount: 1,
   providerAttemptCount: 1,
+};
+
+const successfulCleanupSummary = {
+  approvedCount: 0,
+  finalApprovedCount: 0,
+  scannedEventCount: 0,
+  duplicateGroupCount: 0,
+  mergedGroupCount: 0,
+  mergedDuplicateCount: 0,
+  remainingGroupCount: 0,
+  failedCount: 0,
+  failures: [],
+  passes: 1,
 };
 
 function loadRouteWithMocks({
@@ -148,6 +175,9 @@ function loadRouteWithMocks({
   },
   persist = async () => {
     throw new Error("unexpected persistence call in processing-route QA");
+  },
+  cleanup = async () => {
+    throw new Error("unexpected approved cleanup in processing-route QA");
   },
 }) {
   const convex = { mutation, query };
@@ -182,6 +212,7 @@ function loadRouteWithMocks({
       {
         persistScrapedPostsForHandle: persist,
         processSavedScrapedPostForDurableReceipt: processSavedPost,
+        runApprovedDuplicateCleanupForCompletedDurableRun: cleanup,
       },
     ],
     ["@/lib/scraper/instagram-scraper", { scrapeInstagramAccount: scrape }],
@@ -212,6 +243,116 @@ function loadRouteWithMocks({
     filename: "app/api/cron/durable-ingestion/execute/route.ts",
   });
   return routeModule.exports.POST;
+}
+
+{
+  let cleanupCalls = 0;
+  const POST = loadRouteWithMocks({
+    mutation: async (reference) => {
+      if (reference === claimProcessingReference) return processingClaimFixture;
+      if (reference === completeProcessingReference) {
+        return {
+          complete: true,
+          status: "fetched",
+          processingOutcome: "receipt_complete",
+        };
+      }
+      throw new Error(`Unexpected mutation in completed-run cleanup test: ${reference}`);
+    },
+    processSavedPost: async () => ({
+      state: "terminal",
+      outcome: "receipt_complete",
+      transportAttempted: false,
+    }),
+    cleanup: async () => {
+      cleanupCalls += 1;
+      return successfulCleanupSummary;
+    },
+  });
+  const response = await executeRequest(POST);
+  assert.equal(response.status, 200);
+  assert.equal(cleanupCalls, 1, "the final durable receipt must trigger one cleanup");
+}
+
+{
+  let cleanupCalls = 0;
+  let releaseCalls = 0;
+  const POST = loadRouteWithMocks({
+    mutation: async (reference) => {
+      if (reference === claimProcessingReference) {
+        return cleanupCalls === 0 ? processingClaimFixture : null;
+      }
+      if (reference === completeProcessingReference) {
+        return {
+          complete: true,
+          status: "fetched",
+          processingOutcome: "receipt_complete",
+        };
+      }
+      if (reference === claimFetchReference) return null;
+      if (reference === releaseProcessingReference) {
+        releaseCalls += 1;
+        throw new Error("completed receipt must never be released after cleanup failure");
+      }
+      throw new Error(`Unexpected mutation in cleanup retry test: ${reference}`);
+    },
+    query: async () => ({ complete: true, status: "completed" }),
+    processSavedPost: async () => ({
+      state: "terminal",
+      outcome: "receipt_complete",
+      transportAttempted: false,
+    }),
+    cleanup: async () => {
+      cleanupCalls += 1;
+      return cleanupCalls === 1
+        ? { ...successfulCleanupSummary, error: "temporary cleanup transport failure" }
+        : successfulCleanupSummary;
+    },
+  });
+
+  const failedCompletionResponse = await executeRequest(POST);
+  assert.equal(failedCompletionResponse.status, 202);
+  assert.deepEqual(await failedCompletionResponse.json(), {
+    claimed: true,
+    complete: false,
+    retryDeferred: true,
+    durableStateUnknown: false,
+    error: "approved_duplicate_cleanup_deferred",
+  });
+  assert.equal(releaseCalls, 0, "cleanup failure must not release a completed receipt");
+
+  const recoveredProbeResponse = await executeRequest(POST);
+  assert.equal(recoveredProbeResponse.status, 200);
+  assert.deepEqual(await recoveredProbeResponse.json(), {
+    claimed: false,
+    complete: true,
+    status: "completed",
+  });
+  assert.equal(cleanupCalls, 2, "the completed no-claim probe must retry failed cleanup");
+  assert.equal(releaseCalls, 0);
+}
+
+{
+  let cleanupCalls = 0;
+  const POST = loadRouteWithMocks({
+    mutation: async (reference) => {
+      if (reference === claimProcessingReference || reference === claimFetchReference) return null;
+      throw new Error(`Unexpected mutation in non-complete probe test: ${reference}`);
+    },
+    query: async () => ({ complete: false, status: "running" }),
+    cleanup: async () => {
+      cleanupCalls += 1;
+      return successfulCleanupSummary;
+    },
+  });
+  const response = await executeRequest(POST);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    claimed: false,
+    complete: false,
+    status: "running",
+  });
+  assert.equal(cleanupCalls, 0, "a non-complete probe must not launch cleanup");
 }
 
 function executeRequest(POST, queryString = "?runId=run-1&workerSlot=0", authorized = true) {

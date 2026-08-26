@@ -53,6 +53,7 @@ import {
 } from "@/lib/utils/confidence";
 import {
   runApprovedEventAutoMerge,
+  runApprovedEventAutoMergeOnceForCompletedRun,
   type ApprovedEventAutoMergeSummary,
 } from "@/lib/events/approved-event-automerge";
 import { classifyApprovalOccurrenceRelation } from "@/lib/events/approval-occurrence-conflict";
@@ -4852,6 +4853,22 @@ async function runApprovedDuplicateCleanupForIngestion(
   }
 }
 
+/**
+ * Durable ingestion processes one saved post per executor request. Cleanup is
+ * therefore owned by the single request that completes the frozen run, not by
+ * every terminal post/handle request.
+ */
+export async function runApprovedDuplicateCleanupForCompletedDurableRun(options: {
+  client: ConvexHttpClient;
+  runId: string;
+  serviceSecret: string;
+}): Promise<ApprovedEventAutoMergeSummary> {
+  return runApprovedEventAutoMergeOnceForCompletedRun(options.client, {
+    runId: options.runId,
+    serviceSecret: options.serviceSecret,
+  });
+}
+
 async function loadAllActiveInstagramSourceHandles(
   client: ConvexHttpClient,
   serviceSecret: string,
@@ -6859,6 +6876,10 @@ function normalizeVenue(
     handle: post.username,
     rawModelVenue,
     locationName: post.locationName,
+    immutableEvidenceTexts: [
+      post.caption,
+      extractPostAltTextEvidence(post.altText),
+    ],
     canonicalVenueNamesByHandle,
     canonicalVenueAliasesByHandle,
     // This map is keyed by the exact configured source handle. It is not a
@@ -9052,8 +9073,10 @@ function isVerifiedEventVenueEvidence(options: {
   hasPoster: boolean;
   trustedVenueSource: boolean;
   sharedVenueVerified: boolean;
+  canonicalHandleEvidenceVerified?: boolean;
 }): boolean {
   if (!normalizeString(options.venue)) return true;
+  if (options.canonicalHandleEvidenceVerified) return true;
   if (options.trustedVenueSource) return true;
 
   const evidenceValues = [options.venue, options.rawEvidenceValue]
@@ -9603,6 +9626,8 @@ export function prepareEventsForInsert(
       hasPoster: Boolean(selectedImageUrl),
       trustedVenueSource,
       sharedVenueVerified: false,
+      canonicalHandleEvidenceVerified:
+        venueNormalization.source === "evidence_handle",
     });
   const explicitModelVenueEvidenceVerified =
     usesStructuredEvidence &&
@@ -9656,6 +9681,7 @@ export function prepareEventsForInsert(
     rawVenue: normalizeString(extracted.venue),
     normalizedVenue: effectiveNormalizedVenue,
     venueSource: effectiveVenueSource,
+    canonicalVenueEvidenceHandle: venueNormalization.evidenceHandle ?? null,
     canonicalVenueLocation: configuredVenueLocation || null,
     rawVenueMatchesCanonicalLocation: rawModelVenueMatchesConfiguredLocation,
     venueEvidenceVerified:
@@ -9958,7 +9984,8 @@ export function prepareEventsForInsert(
             : sharedVenueMatchesConfiguredLocation
               ? normalizedVenue
               : sharedVenueValue ||
-              (trustedVenueAccountFallback ? normalizedVenue : "")
+                (venueNormalization.source === "evidence_handle" ? normalizedVenue : "") ||
+                (trustedVenueAccountFallback ? normalizedVenue : "")
           : normalizedVenue;
         const variantVenue = variantVenueRaw
           ? canonicalizeVenueName(variantVenueRaw, canonicalVenueNamesByHandle, {
@@ -10152,11 +10179,19 @@ export function prepareEventsForInsert(
         normalizeVenueComparableText(variant.venue) ===
           normalizeVenueComparableText(configuredVenueName),
     );
+    const variantUsesCanonicalHandleEvidence = Boolean(
+      venueNormalization.source === "evidence_handle" &&
+        venueNormalization.venue &&
+        normalizeVenueComparableText(variant.venue) ===
+          normalizeVenueComparableText(venueNormalization.venue),
+    );
     const variantVenueSource = variantTrustedVenueSource
       ? "handle_map"
-      : variant.venue && variantRawVenue
-        ? "model"
-        : effectiveVenueSource;
+      : variantUsesCanonicalHandleEvidence
+        ? "evidence_handle"
+        : variant.venue && variantRawVenue
+          ? "model"
+          : effectiveVenueSource;
     const eventConsistency = checkEventConsistency({
       isoDate: date,
       rawDateText: variant.rawDate,
@@ -10247,6 +10282,7 @@ export function prepareEventsForInsert(
       hasPoster: hasPosterEvidence,
       trustedVenueSource: variantTrustedVenueSource,
       sharedVenueVerified: verifiedSharedVenue,
+      canonicalHandleEvidenceVerified: variantUsesCanonicalHandleEvidence,
     });
     const sourceConflictPartition = partitionEventEvidenceSourceConflicts(
       extracted.source_conflicts,
@@ -10721,7 +10757,7 @@ async function processIngestionPost(
       ? normalizeString(cachedAnalysisImageChecksumSha256).toLocaleLowerCase()
       : null;
   let imageDataUrl: string | null = null;
-  let imageDataUrls: string[] = [];
+  const imageDataUrls: string[] = [];
   const durableRecoveryMediaCandidates =
     cachedExtractionMode === "poster" && selectedImageUrl
       ? deduplicateMediaUrls([selectedImageUrl, ...durableMediaCandidates], 16)
@@ -12430,11 +12466,6 @@ export async function processSavedScrapedPostForDurableReceipt(options: {
   const summary = createEmptyIngestionSummary([options.handle]);
   const handleSummary = getOrCreateHandleSummary(summary, options.handle);
   if (isDurableSavedPostTerminal(initial)) {
-    await runApprovedDuplicateCleanupForIngestion(client, summary, {
-      mode: "saved_posts",
-      handles: [options.handle],
-      serviceSecret,
-    });
     return {
       state: "terminal",
       outcome: initial.processingOutcome ?? "receipt_complete",
@@ -12489,11 +12520,6 @@ export async function processSavedScrapedPostForDurableReceipt(options: {
     };
   }
   if (isDurableSavedPostTerminal(refreshed)) {
-    await runApprovedDuplicateCleanupForIngestion(client, summary, {
-      mode: "saved_posts",
-      handles: [options.handle],
-      serviceSecret,
-    });
     return {
       state: "terminal",
       outcome: refreshed.processingOutcome ?? "receipt_complete",

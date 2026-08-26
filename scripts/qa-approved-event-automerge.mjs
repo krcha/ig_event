@@ -4,6 +4,11 @@ import {
   filterUpcomingApprovedEventsForDuplicateCleanup,
 } from "../lib/events/approved-event-duplicates.ts";
 import {
+  assertApprovedEventAutoMergeCompleted,
+  buildApprovedEventAutoMergeGroups,
+  classifyApprovedEventAutoMergePair,
+  isApprovedEventAutoMergePairEligible,
+  runApprovedEventAutoMergeOnceForCompletedRun,
   runApprovedEventAutoMerge,
   simulateApprovedEventAutoMerge,
 } from "../lib/events/approved-event-automerge.ts";
@@ -287,6 +292,147 @@ const fixtureEvents = [
   tavanScheduleEntry,
 ];
 
+const strictPrimary = createEvent({
+  id: "strict-primary",
+  title: "Strict Proven Night",
+  date: createFixtureDate(3),
+  time: "22:00",
+  venue: "Strict Venue",
+  artists: ["Strict Artist", "Second Artist"],
+  description: "Strict Proven Night at Strict Venue.",
+  instagramPostUrl: "https://www.instagram.com/p/strict-primary/",
+  instagramPostId: "strict-primary-post",
+  normalizedFieldsJson: createNormalizedFields(createFixtureDate(3), {
+    title: "Strict Proven Night",
+    time: "22:00",
+    normalizedVenue: "Strict Venue",
+    artists: ["Strict Artist", "Second Artist"],
+  }),
+  updatedAt: 70,
+});
+
+const strictDuplicate = createEvent({
+  ...strictPrimary,
+  id: "strict-duplicate",
+  artists: ["Second Artist", "Strict Artist"],
+  instagramPostUrl: "https://www.instagram.com/p/strict-duplicate/",
+  instagramPostId: "strict-duplicate-post",
+  normalizedFieldsJson: createNormalizedFields(createFixtureDate(3), {
+    title: "Strict Proven Night",
+    time: "22:00",
+    normalizedVenue: "Strict Venue",
+    artists: ["Second Artist", "Strict Artist"],
+  }),
+  updatedAt: 60,
+});
+
+const fuzzyTitleDuplicate = createEvent({
+  ...strictPrimary,
+  id: "fuzzy-title-duplicate",
+  title: "Strict Proven Night Extended",
+  instagramPostUrl: "https://www.instagram.com/p/fuzzy-title-duplicate/",
+  instagramPostId: "fuzzy-title-duplicate-post",
+  normalizedFieldsJson: createNormalizedFields(createFixtureDate(3), {
+    title: "Strict Proven Night Extended",
+    time: "22:00",
+    normalizedVenue: "Strict Venue",
+    artists: ["Strict Artist", "Second Artist"],
+  }),
+  updatedAt: 55,
+});
+
+const artistMismatchDuplicate = createEvent({
+  ...strictPrimary,
+  id: "artist-mismatch-duplicate",
+  artists: ["Other Artist"],
+  instagramPostUrl: "https://www.instagram.com/p/artist-mismatch-duplicate/",
+  instagramPostId: "artist-mismatch-duplicate-post",
+  normalizedFieldsJson: createNormalizedFields(createFixtureDate(3), {
+    title: "Strict Proven Night",
+    time: "22:00",
+    normalizedVenue: "Strict Venue",
+    artists: ["Other Artist"],
+  }),
+  updatedAt: 54,
+});
+
+const distinctChildPrimary = createEvent({
+  id: "distinct-child-primary",
+  title: "Two-stage schedule",
+  date: createFixtureDate(4),
+  time: "20:00",
+  venue: "Schedule Venue",
+  instagramPostUrl: "https://www.instagram.com/p/same-schedule-post/",
+  instagramPostId: "same-schedule-post-id",
+  sourceOccurrenceKey: "schedule-child-1",
+  normalizedFieldsJson: createNormalizedFields(createFixtureDate(4), {
+    title: "Two-stage schedule",
+    time: "20:00",
+    normalizedVenue: "Schedule Venue",
+    artists: [],
+  }),
+  updatedAt: 50,
+});
+
+const distinctChild = createEvent({
+  ...distinctChildPrimary,
+  id: "distinct-child-duplicate",
+  sourceOccurrenceKey: "schedule-child-2",
+  updatedAt: 40,
+});
+
+const missingTimePrimary = createEvent({
+  id: "missing-time-primary",
+  title: "Repeated Performance",
+  date: createFixtureDate(5),
+  time: null,
+  venue: "Repeat Venue",
+  artists: ["Repeat Artist"],
+  instagramPostUrl: "https://www.instagram.com/p/missing-time-primary/",
+  instagramPostId: "missing-time-primary-post",
+  normalizedFieldsJson: createNormalizedFields(createFixtureDate(5), {
+    title: "Repeated Performance",
+    normalizedVenue: "Repeat Venue",
+    artists: ["Repeat Artist"],
+  }),
+  updatedAt: 30,
+});
+
+const missingTimeDuplicate = createEvent({
+  ...missingTimePrimary,
+  id: "missing-time-duplicate",
+  instagramPostUrl: "https://www.instagram.com/p/missing-time-duplicate/",
+  instagramPostId: "missing-time-duplicate-post",
+  updatedAt: 29,
+});
+
+const oneSidedTimeDuplicate = createEvent({
+  ...missingTimePrimary,
+  id: "one-sided-time-duplicate",
+  time: "20:00",
+  instagramPostUrl: "https://www.instagram.com/p/one-sided-time-duplicate/",
+  instagramPostId: "one-sided-time-duplicate-post",
+  normalizedFieldsJson: createNormalizedFields(createFixtureDate(5), {
+    title: "Repeated Performance",
+    time: "20:00",
+    normalizedVenue: "Repeat Venue",
+    artists: ["Repeat Artist"],
+  }),
+  updatedAt: 28,
+});
+
+const sameKeyMissingTimeDuplicate = createEvent({
+  ...missingTimePrimary,
+  id: "same-key-missing-time-duplicate",
+  sourceOccurrenceKey: "same-immutable-child",
+  instagramPostUrl: "https://www.instagram.com/p/same-key-missing-time-duplicate/",
+  instagramPostId: "same-key-missing-time-duplicate-post",
+});
+const sameKeyMissingTimePrimary = {
+  ...missingTimePrimary,
+  sourceOccurrenceKey: "same-immutable-child",
+};
+
 const staleSameheadsTakeover = createEvent({
   ...sameheadsTakeover,
   id: "stale_sameheads_takeover",
@@ -353,13 +499,157 @@ const summary = simulateApprovedEventAutoMerge(fixtureEvents);
 
 assert.equal(summary.approvedCount, 8);
 assert.equal(summary.scannedEventCount, 8);
-assert.equal(summary.mergedGroupCount, 3);
-assert.equal(summary.mergedDuplicateCount, 3);
+assert.equal(summary.mergedGroupCount, 0);
+assert.equal(summary.mergedDuplicateCount, 0);
 assert.equal(summary.remainingGroupCount, 0);
-assert.equal(summary.finalApprovedCount, 5);
+assert.equal(summary.finalApprovedCount, 8);
 assert.equal(summary.failedCount, 0);
-assert.equal(summary.passes, 2);
-assert(summary.duplicateGroupCount >= 3);
+assert.equal(summary.passes, 1);
+assert.equal(summary.duplicateGroupCount, 0);
+
+const strictGroups = buildApprovedEventAutoMergeGroups([
+  ...fixtureEvents,
+  strictPrimary,
+  strictDuplicate,
+  fuzzyTitleDuplicate,
+  artistMismatchDuplicate,
+  distinctChildPrimary,
+  distinctChild,
+]);
+const strictGroupedIdSets = buildGroupedIdSets(strictGroups);
+assert(
+  hasExactGroup(strictGroupedIdSets, [strictPrimary.id, strictDuplicate.id]),
+  "Expected the unattended cleanup contract to keep a pair the mutation can prove is duplicate.",
+);
+assert(
+  !hasGroupedPair(strictGroupedIdSets, sameheadsPrimary.id, sameheadsTakeover.id),
+  "Expected broad Sameheads evidence to remain review-only when the mutation classifies it as ambiguous.",
+);
+assert(
+  !hasGroupedPair(strictGroupedIdSets, distinctChildPrimary.id, distinctChild.id),
+  "Expected distinct occurrence keys from one multi-event source post to remain separate.",
+);
+assert.equal(
+  classifyApprovedEventAutoMergePair(distinctChildPrimary, distinctChild),
+  "proven_distinct",
+);
+assert.equal(
+  classifyApprovedEventAutoMergePair(strictPrimary, fuzzyTitleDuplicate),
+  "proven_duplicate",
+  "The broader occurrence classifier should demonstrate the fuzzy-title replay risk.",
+);
+assert.equal(
+  isApprovedEventAutoMergePairEligible(strictPrimary, fuzzyTitleDuplicate),
+  false,
+  "A fuzzy title must not survive the immutable receipt-binding boundary.",
+);
+assert.equal(
+  classifyApprovedEventAutoMergePair(strictPrimary, artistMismatchDuplicate),
+  "proven_duplicate",
+  "A same-title pair should demonstrate the artist-binding replay risk.",
+);
+assert.equal(
+  isApprovedEventAutoMergePairEligible(strictPrimary, artistMismatchDuplicate),
+  false,
+  "A different immutable artist set must block unattended deletion.",
+);
+assert.equal(
+  isApprovedEventAutoMergePairEligible(strictPrimary, strictDuplicate),
+  true,
+  "Exact immutable title/date/time/venue/artist bindings must remain eligible.",
+);
+assert(
+  !hasGroupedPair(strictGroupedIdSets, strictPrimary.id, fuzzyTitleDuplicate.id),
+  "Expected fuzzy-title receipt bindings to stay outside strict groups.",
+);
+assert(
+  !hasGroupedPair(strictGroupedIdSets, strictPrimary.id, artistMismatchDuplicate.id),
+  "Expected artist-mismatched receipt bindings to stay outside strict groups.",
+);
+assert.equal(
+  classifyApprovedEventAutoMergePair(missingTimePrimary, missingTimeDuplicate),
+  "proven_duplicate",
+  "The broad classifier should demonstrate the unknown-time repeated-show risk.",
+);
+assert.equal(
+  isApprovedEventAutoMergePairEligible(missingTimePrimary, missingTimeDuplicate),
+  false,
+  "Distinct-post candidates with two missing times must fail closed.",
+);
+assert.equal(
+  classifyApprovedEventAutoMergePair(missingTimePrimary, oneSidedTimeDuplicate),
+  "proven_duplicate",
+);
+assert.equal(
+  isApprovedEventAutoMergePairEligible(missingTimePrimary, oneSidedTimeDuplicate),
+  false,
+  "One-sided immutable time evidence must fail closed.",
+);
+assert.equal(
+  isApprovedEventAutoMergePairEligible(
+    sameKeyMissingTimePrimary,
+    sameKeyMissingTimeDuplicate,
+  ),
+  true,
+  "An exact source occurrence key may safely prove one missing-time child.",
+);
+
+let strictMutationCalls = 0;
+let strictRunnerEvents = [strictPrimary, strictDuplicate].map((event) => ({
+  ...event,
+  _id: event.id,
+  status: "approved",
+}));
+const strictRunnerSummary = await runApprovedEventAutoMerge({
+  async query(_query, args) {
+    assert.equal(args.status, "approved");
+    return {
+      page: strictRunnerEvents,
+      isDone: true,
+      continueCursor: "",
+    };
+  },
+  async mutation(_mutation, args) {
+    strictMutationCalls += 1;
+    assert.equal(args.primaryId, strictPrimary.id);
+    assert.deepEqual(args.duplicateIds, [strictDuplicate.id]);
+    assert.equal(args.expectedPrimaryUpdatedAt, strictPrimary.updatedAt);
+    assert.deepEqual(args.expectedDuplicateVersions, [
+      { id: strictDuplicate.id, expectedUpdatedAt: strictDuplicate.updatedAt },
+    ]);
+    strictRunnerEvents = strictRunnerEvents.filter(
+      (event) => event._id !== strictDuplicate.id,
+    );
+    return { primaryId: strictPrimary.id, deletedDuplicateCount: 1 };
+  },
+});
+assert.equal(strictMutationCalls, 1);
+assert.equal(strictRunnerSummary.mergedGroupCount, 1);
+assert.equal(strictRunnerSummary.mergedDuplicateCount, 1);
+assert.equal(strictRunnerSummary.failedCount, 0);
+
+let ambiguousMutationCalls = 0;
+const ambiguousRunnerEvents = [sameheadsPrimary, sameheadsTakeover].map((event) => ({
+  ...event,
+  _id: event.id,
+  status: "approved",
+}));
+const ambiguousRunnerSummary = await runApprovedEventAutoMerge({
+  async query() {
+    return {
+      page: ambiguousRunnerEvents,
+      isDone: true,
+      continueCursor: "",
+    };
+  },
+  async mutation() {
+    ambiguousMutationCalls += 1;
+    throw new Error("Ambiguous broad cleanup candidates must never reach mutation.");
+  },
+});
+assert.equal(ambiguousMutationCalls, 0);
+assert.equal(ambiguousRunnerSummary.duplicateGroupCount, 0);
+assert.equal(ambiguousRunnerSummary.failedCount, 0);
 
 let paginatedQueryCalls = 0;
 const paginatedSourceEvents = Array.from({ length: 25 }, (_, index) => ({
@@ -409,6 +699,82 @@ assert.equal(paginatedQueryCalls, 3);
 assert.equal(paginatedSummary.approvedCount, 25);
 assert.equal(paginatedSummary.failedCount, 0);
 
+assert.throws(
+  () =>
+    assertApprovedEventAutoMergeCompleted({
+      ...paginatedSummary,
+      error: "cleanup transport failed",
+    }),
+  /cleanup transport failed/,
+);
+assert.throws(
+  () =>
+    assertApprovedEventAutoMergeCompleted({
+      ...paginatedSummary,
+      failedCount: 1,
+      failures: [
+        { primaryEventId: "primary", duplicateEventIds: ["duplicate"], error: "stale" },
+      ],
+    }),
+  /failed for 1 merge group/,
+);
+
+let oncePerRunQueryCalls = 0;
+const oncePerRunClient = {
+  async query() {
+    oncePerRunQueryCalls += 1;
+    return { page: [], isDone: true, continueCursor: "" };
+  },
+  async mutation() {
+    throw new Error("An empty completed run must not mutate approved events.");
+  },
+};
+const [firstCompletedCleanup, concurrentCompletedCleanup] = await Promise.all([
+  runApprovedEventAutoMergeOnceForCompletedRun(oncePerRunClient, {
+    runId: "qa-completed-run-singleflight",
+  }),
+  runApprovedEventAutoMergeOnceForCompletedRun(oncePerRunClient, {
+    runId: "qa-completed-run-singleflight",
+  }),
+]);
+const replayedCompletedCleanup = await runApprovedEventAutoMergeOnceForCompletedRun(
+  oncePerRunClient,
+  { runId: "qa-completed-run-singleflight" },
+);
+assert.equal(oncePerRunQueryCalls, 1, "normal completion cleanup must run once per process");
+assert.equal(firstCompletedCleanup.failedCount, 0);
+assert.equal(concurrentCompletedCleanup.failedCount, 0);
+assert.equal(replayedCompletedCleanup.failedCount, 0);
+
+let retryableCleanupQueryCalls = 0;
+const retryableCleanupClient = {
+  async query() {
+    retryableCleanupQueryCalls += 1;
+    if (retryableCleanupQueryCalls === 1) {
+      throw new Error("temporary completed-run cleanup failure");
+    }
+    return { page: [], isDone: true, continueCursor: "" };
+  },
+  async mutation() {
+    throw new Error("An empty completed run must not mutate approved events.");
+  },
+};
+await assert.rejects(
+  () =>
+    runApprovedEventAutoMergeOnceForCompletedRun(retryableCleanupClient, {
+      runId: "qa-completed-run-retry",
+    }),
+  /temporary completed-run cleanup failure/,
+);
+await runApprovedEventAutoMergeOnceForCompletedRun(retryableCleanupClient, {
+  runId: "qa-completed-run-retry",
+});
+assert.equal(
+  retryableCleanupQueryCalls,
+  2,
+  "failed completion cleanup must remain retryable instead of entering the success cache",
+);
+
 console.log(
-  "QA passed: approved-event automerge uses future fixtures, collapses known duplicate groups, and leaves unrelated same-night entries separate.",
+  "QA passed: approved-event automerge only mutates pairwise-proven groups and keeps broad or distinct-occurrence candidates out of unattended cleanup.",
 );

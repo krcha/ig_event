@@ -18,6 +18,9 @@ assert.match(route, /export const maxDuration = 1_200/);
 assert.match(route, /MAX_OPENAI_TRANSPORT_ATTEMPTS = 3/);
 assert.match(route, /claimLegacyDefinitiveOutputRecoveryReceipt/);
 assert.match(route, /processSavedScrapedPostForDurableReceipt/);
+assert.match(route, /durableIngestionRuns:probeRun/);
+assert.match(route, /if \(completion\.complete\)[\s\S]*cleanupRunIfComplete/);
+assert.match(route, /state: "terminal_readback"[\s\S]*cleanupRunIfComplete/);
 assert.doesNotMatch(route, /scrapeInstagramAccount|instagram-scraper|executeNext|markReceiptProviderAttemptStarted|persistScrapedPostsForHandle/i);
 assert.doesNotMatch(route, /\bapify\b/i);
 assert.ok(
@@ -38,7 +41,20 @@ const claimReference =
   "durableIngestionRuns:claimLegacyDefinitiveOutputRecoveryReceipt";
 const completeReference = "durableIngestionRuns:completeProcessingReceipt";
 const releaseReference = "durableIngestionRuns:releaseProcessingReceiptForRetry";
+const probeReference = "durableIngestionRuns:probeRun";
 const receiptIds = [...LEGACY_DEFINITIVE_OUTPUT_RECOVERY_INITIAL_RECEIPT_IDS];
+const successfulCleanupSummary = {
+  approvedCount: 0,
+  finalApprovedCount: 0,
+  scannedEventCount: 0,
+  duplicateGroupCount: 0,
+  mergedGroupCount: 0,
+  mergedDuplicateCount: 0,
+  remainingGroupCount: 0,
+  failedCount: 0,
+  failures: [],
+  passes: 1,
+};
 
 function claimFor(receiptId) {
   const ordinal = receiptIds.indexOf(receiptId);
@@ -58,9 +74,13 @@ function claimFor(receiptId) {
 function loadRouteWithMocks({
   authorized = true,
   mutation,
+  query = async () => ({ complete: true, status: "completed" }),
   processSavedPost,
+  cleanup = async () => {
+    throw new Error("unexpected approved cleanup in recovery QA");
+  },
 }) {
-  const convex = { mutation };
+  const convex = { mutation, query };
   const mocks = new Map([
     ["node:crypto", { randomUUID: () => "qa-recovery-batch" }],
     [
@@ -111,7 +131,10 @@ function loadRouteWithMocks({
     ],
     [
       "@/lib/pipeline/run-instagram-ingestion",
-      { processSavedScrapedPostForDurableReceipt: processSavedPost },
+      {
+        processSavedScrapedPostForDurableReceipt: processSavedPost,
+        runApprovedDuplicateCleanupForCompletedDurableRun: cleanup,
+      },
     ],
   ]);
   const routeModule = { exports: {} };
@@ -204,6 +227,8 @@ function execute(POST, overrides = {}, authorized = true) {
 // claim receives the full immutable selection and the server-side SHA fence.
 {
   let processCalls = 0;
+  let completionCalls = 0;
+  let cleanupCalls = 0;
   const POST = loadRouteWithMocks({
     mutation: async (reference, args) => {
       if (reference === claimReference) {
@@ -212,7 +237,12 @@ function execute(POST, overrides = {}, authorized = true) {
         return claimFor(args.receiptId);
       }
       if (reference === completeReference) {
-        return { status: "fetched", processingOutcome: "receipt_complete" };
+        completionCalls += 1;
+        return {
+          complete: completionCalls === receiptIds.length,
+          status: "fetched",
+          processingOutcome: "receipt_complete",
+        };
       }
       throw new Error(`Unexpected three-row mutation: ${reference}`);
     },
@@ -220,6 +250,10 @@ function execute(POST, overrides = {}, authorized = true) {
       processCalls += 1;
       options.onOpenAiTransportStarted();
       return { state: "terminal", outcome: "receipt_complete", transportAttempted: true };
+    },
+    cleanup: async () => {
+      cleanupCalls += 1;
+      return successfulCleanupSummary;
     },
   });
   const response = await execute(POST);
@@ -230,6 +264,7 @@ function execute(POST, overrides = {}, authorized = true) {
   assert.equal(body.processedCount, 3);
   assert.equal(body.stopped, false);
   assert.equal(processCalls, 3);
+  assert.equal(cleanupCalls, 1, "the completed recovery run must launch one cleanup");
 }
 
 // A helper regression attempting a second transport for one target is stopped
@@ -290,13 +325,21 @@ function execute(POST, overrides = {}, authorized = true) {
 }
 
 // A terminal completion that committed but lost its acknowledgement is proven
-// through the idempotent release readback and does not repeat transport.
+// through the idempotent release readback. Failed cleanup stays retryable and
+// an already-terminal retry probes the run without repeating transport.
 {
   let completionCalls = 0;
+  let cleanupCalls = 0;
+  let processCalls = 0;
+  let probeCalls = 0;
   let releaseCalls = 0;
   const POST = loadRouteWithMocks({
     mutation: async (reference, args) => {
-      if (reference === claimReference) return claimFor(args.receiptId);
+      if (reference === claimReference) {
+        return cleanupCalls === 0
+          ? claimFor(args.receiptId)
+          : { ...claimFor(args.receiptId), claimed: false, state: "already_terminal" };
+      }
       if (reference === completeReference) {
         completionCalls += 1;
         throw new Error("completion acknowledgement unavailable");
@@ -307,18 +350,40 @@ function execute(POST, overrides = {}, authorized = true) {
       }
       throw new Error(`Unexpected completion-readback mutation: ${reference}`);
     },
+    query: async (reference) => {
+      assert.equal(reference, probeReference);
+      probeCalls += 1;
+      return { complete: true, status: "completed" };
+    },
     processSavedPost: async (options) => {
+      processCalls += 1;
       options.onOpenAiTransportStarted();
       return { state: "terminal", outcome: "receipt_complete", transportAttempted: true };
     },
+    cleanup: async () => {
+      cleanupCalls += 1;
+      return cleanupCalls === 1
+        ? { ...successfulCleanupSummary, failedCount: 1 }
+        : successfulCleanupSummary;
+    },
   });
-  const response = await execute(POST, { receiptIds: [receiptIds[0]] });
-  assert.equal(response.status, 200);
-  const body = await response.json();
-  assert.equal(body.transportAttemptCount, 1);
-  assert.equal(body.results[0].state, "terminal_readback");
+  const failedCleanupResponse = await execute(POST, { receiptIds: [receiptIds[0]] });
+  assert.equal(failedCleanupResponse.status, 202);
+  const failedCleanupBody = await failedCleanupResponse.json();
+  assert.equal(failedCleanupBody.transportAttemptCount, 1);
+  assert.equal(failedCleanupBody.results[0].state, "terminal_readback");
+  assert.equal(failedCleanupBody.stopReason, "approved_cleanup_deferred");
+
+  const retryResponse = await execute(POST, { receiptIds: [receiptIds[0]] });
+  assert.equal(retryResponse.status, 200);
+  const retryBody = await retryResponse.json();
+  assert.equal(retryBody.transportAttemptCount, 0);
+  assert.equal(retryBody.results[0].state, "already_terminal");
   assert.equal(completionCalls, 1);
   assert.equal(releaseCalls, 1);
+  assert.equal(processCalls, 1, "already-terminal cleanup retry must not repeat transport");
+  assert.equal(probeCalls, 2, "terminal readback and retry must both prove run completion");
+  assert.equal(cleanupCalls, 2, "already-terminal retry must retry failed cleanup");
 }
 
 // A claimed row with exact cached v2 analysis runs materialization but starts
@@ -363,6 +428,7 @@ function execute(POST, overrides = {}, authorized = true) {
       processCalls += 1;
       throw new Error("terminal readback must not process");
     },
+    cleanup: async () => successfulCleanupSummary,
   });
   const response = await execute(POST, { receiptIds: [receiptIds[0]] });
   assert.equal(response.status, 200);

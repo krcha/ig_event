@@ -5,7 +5,12 @@ export type CanonicalVenueRecord = {
   location?: string | null;
 };
 
-export type VenueSource = "handle_map" | "location_name" | "model" | null;
+export type VenueSource =
+  | "evidence_handle"
+  | "handle_map"
+  | "location_name"
+  | "model"
+  | null;
 
 export type VenueNormalization = {
   venue: string | null;
@@ -13,6 +18,7 @@ export type VenueNormalization = {
   wasFallback: boolean;
   rawModelVenue: string;
   rawLocationName: string;
+  evidenceHandle?: string;
 };
 
 type CanonicalVenueMap = Record<string, string>;
@@ -41,6 +47,7 @@ type NormalizeVenueInput = {
   handle: string;
   rawModelVenue: string;
   locationName?: string | null;
+  immutableEvidenceTexts?: Array<string | null | undefined>;
   canonicalVenueNamesByHandle: CanonicalVenueMap;
   canonicalVenueAliasesByHandle?: CanonicalVenueAliasesByHandle;
   handleVenueNamesByHandle?: CanonicalVenueMap;
@@ -148,6 +155,7 @@ const VENUE_ALIAS_RULES: Array<{
   {
     aliases: [
       "KC Grad",
+      "KC Gradu",
       "K C Grad",
       "Kulturni centar Grad",
       "Kulturni Centar GRAD",
@@ -741,6 +749,166 @@ function pickExplicitVenueCandidate(
   return null;
 }
 
+const LOCATIVE_NEGATION_WORDS = new Set([
+  "arent",
+  "dont",
+  "isnt",
+  "ne",
+  "necemo",
+  "never",
+  "nije",
+  "nikako",
+  "nismo",
+  "nisu",
+  "no",
+  "not",
+  "wasnt",
+  "wont",
+]);
+
+const VIDIMO_SE_TIME_WORDS = new Set([
+  "around",
+  "at",
+  "cetvrtak",
+  "danas",
+  "friday",
+  "from",
+  "h",
+  "monday",
+  "nedelja",
+  "nocas",
+  "od",
+  "oko",
+  "ponedeljak",
+  "petak",
+  "sati",
+  "sreda",
+  "subota",
+  "sutra",
+  "saturday",
+  "sunday",
+  "thursday",
+  "today",
+  "tomorrow",
+  "tonight",
+  "tuesday",
+  "u",
+  "utorak",
+  "veceras",
+  "wednesday",
+]);
+
+function getImmediateEvidenceClause(value: string): string {
+  let clauseStart = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index] ?? "";
+    const periodWithinNumber =
+      character === "." &&
+      /\d/u.test(value[index - 1] ?? "") &&
+      /\d/u.test(value[index + 1] ?? "");
+    if (!periodWithinNumber && /[.!?;,\n\r—–]/u.test(character)) {
+      clauseStart = index + 1;
+    }
+  }
+
+  return value.slice(clauseStart);
+}
+
+function hasRecentLocativeNegation(value: string): boolean {
+  const words = toSearchableText(value.replace(/[’']/gu, ""))
+    .split(" ")
+    .filter(Boolean)
+    .slice(-4);
+  return words.some((word) => LOCATIVE_NEGATION_WORDS.has(word));
+}
+
+function isTightlyBoundVidimoSeTail(value: string): boolean {
+  const words = toSearchableText(value).split(" ").filter(Boolean);
+  return words.every(
+    (word) => VIDIMO_SE_TIME_WORDS.has(word) || /^\d{1,4}h?$/u.test(word),
+  );
+}
+
+function hasImmediateLocativeHandleContext(evidence: string, mentionStart: number): boolean {
+  const contextStart = Math.max(0, mentionStart - 96);
+  const clause = getImmediateEvidenceClause(evidence.slice(contextStart, mentionStart));
+  const pinMatch = /📍\s*$/u.exec(clause);
+  if (pinMatch) {
+    return !hasRecentLocativeNegation(clause.slice(0, pinMatch.index));
+  }
+
+  const directCueMatch =
+    /\b(?:at|in|u|na|kod|venue|location|lokacija|mesto)\s*(?::|-)?\s*$/iu.exec(clause);
+  if (directCueMatch) {
+    return !hasRecentLocativeNegation(clause.slice(0, directCueMatch.index));
+  }
+
+  const vidimoSeMatch = /\bvidimo\s+se\b(.*)$/iu.exec(clause);
+  if (!vidimoSeMatch || hasRecentLocativeNegation(clause.slice(0, vidimoSeMatch.index))) {
+    return false;
+  }
+
+  return isTightlyBoundVidimoSeTail(vidimoSeMatch[1] ?? "");
+}
+
+function findUniqueCanonicalVenueHandleMention(
+  evidenceTexts: Array<string | null | undefined>,
+  postingHandle: string,
+  canonicalVenueNamesByHandle: CanonicalVenueMap,
+  staticVenueByHandle: StaticVenueMap,
+  handleVenueNamesByHandle: CanonicalVenueMap,
+):
+  | { kind: "none" }
+  | { kind: "ambiguous" }
+  | { kind: "unique"; handle: string; venue: string; locative: boolean } {
+  const normalizedPostingHandle = normalizeHandle(postingHandle);
+  const matchedHandles = new Set<string>();
+  const locativeHandles = new Set<string>();
+  const exactHandlePattern =
+    /(?:^|[^\p{L}\p{N}._])[@#]([a-z0-9_]+(?:\.[a-z0-9_]+)*)/giu;
+
+  for (const rawEvidence of evidenceTexts) {
+    const evidence = normalizeString(rawEvidence);
+    if (!evidence) continue;
+
+    for (const match of evidence.matchAll(exactHandlePattern)) {
+      const handle = normalizeHandle(match[1] ?? "");
+      if (!handle || handle === normalizedPostingHandle) continue;
+      if (
+        !getPreferredVenueNameForHandle(
+          handle,
+          canonicalVenueNamesByHandle,
+          staticVenueByHandle,
+          handleVenueNamesByHandle,
+        )
+      ) {
+        continue;
+      }
+      matchedHandles.add(handle);
+      const rawMatch = match[0] ?? "";
+      const sigilOffset = Math.max(rawMatch.indexOf("@"), rawMatch.indexOf("#"));
+      const mentionStart = (match.index ?? 0) + Math.max(0, sigilOffset);
+      if (hasImmediateLocativeHandleContext(evidence, mentionStart)) {
+        locativeHandles.add(handle);
+      }
+    }
+  }
+
+  if (matchedHandles.size === 0) return { kind: "none" };
+  if (matchedHandles.size > 1) return { kind: "ambiguous" };
+  const handle = [...matchedHandles][0];
+  const venue = getPreferredVenueNameForHandle(
+    handle,
+    canonicalVenueNamesByHandle,
+    staticVenueByHandle,
+    handleVenueNamesByHandle,
+  );
+  return venue
+    ? { kind: "unique", handle, venue, locative: locativeHandles.has(handle) }
+    : { kind: "none" };
+}
+
 export function normalizeVenueFromEvidence(
   input: NormalizeVenueInput,
 ): VenueNormalization {
@@ -760,6 +928,31 @@ export function normalizeVenueFromEvidence(
     : "";
   const locationName = trimWrappedPunctuation(normalizeString(input.locationName));
   const modelVenue = trimWrappedPunctuation(normalizeString(input.rawModelVenue));
+  const canonicalHandleMention = findUniqueCanonicalVenueHandleMention(
+    input.immutableEvidenceTexts ?? [],
+    input.handle,
+    input.canonicalVenueNamesByHandle,
+    staticVenueByHandle,
+    handleVenueNamesByHandle,
+  );
+
+  // A uniquely named canonical venue is authoritative for promoters and
+  // unknown sources. A configured physical venue account retains precedence
+  // over a casual tag, unless the immutable text explicitly places the event
+  // at the tagged venue (for example, "at @kcgrad" or "vidimo se @kcgrad").
+  if (
+    canonicalHandleMention.kind === "unique" &&
+    (!hardMappedVenue || canonicalHandleMention.locative)
+  ) {
+    return {
+      venue: canonicalHandleMention.venue,
+      source: "evidence_handle",
+      wasFallback: false,
+      rawModelVenue: modelVenue,
+      rawLocationName: locationName,
+      evidenceHandle: canonicalHandleMention.handle,
+    };
+  }
 
   if (hardMappedVenue) {
     const canonicalHardMappedVenue =

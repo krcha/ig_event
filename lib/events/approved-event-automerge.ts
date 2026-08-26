@@ -1,10 +1,21 @@
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import {
+  classifyApprovalOccurrenceRelation,
+  getNormalizedApprovalOccurrenceKey,
+  type ApprovalOccurrenceRelation,
+} from "./approval-occurrence-conflict.ts";
+import {
   buildApprovedEventAutoCleanupGroups,
   filterUpcomingApprovedEventsForDuplicateCleanup,
+  type ApprovedEventAutoCleanupGroup,
   type ApprovedEventDuplicateRecord,
 } from "./approved-event-duplicates.ts";
+import { toSearchableText } from "../pipeline/venue-normalization.ts";
+import {
+  immutableSourceOccurrenceBindingsHaveEqualReliableTime,
+  immutableSourceOccurrenceBindingsMatch,
+} from "./source-occurrence-representation.ts";
 
 type EventStatus = "pending" | "approved" | "rejected";
 
@@ -24,6 +35,9 @@ type ApprovedEventSourceRecord = {
   sourceCaption?: string;
   sourcePostedAt?: string;
   normalizedFieldsJson?: string;
+  sourceOccurrenceKey?: string;
+  venueId?: string;
+  venueInstagramHandle?: string;
   status?: EventStatus;
   createdAt: number;
   updatedAt: number;
@@ -56,6 +70,12 @@ const mergeApprovedEventsMutation =
 
 const DEFAULT_AUTO_MERGE_APPROVED_LIMIT = 5_000;
 const DEFAULT_AUTO_MERGE_MAX_PASSES = 5;
+const COMPLETED_RUN_CLEANUP_CACHE_LIMIT = 128;
+const completedRunCleanupSuccesses = new Map<string, ApprovedEventAutoMergeSummary>();
+const completedRunCleanupInFlight = new Map<
+  string,
+  Promise<ApprovedEventAutoMergeSummary>
+>();
 
 function mapApprovedEventRecord(
   event: ApprovedEventSourceRecord,
@@ -76,9 +96,160 @@ function mapApprovedEventRecord(
     sourceCaption: event.sourceCaption ?? null,
     sourcePostedAt: event.sourcePostedAt ?? null,
     normalizedFieldsJson: event.normalizedFieldsJson ?? null,
+    sourceOccurrenceKey: event.sourceOccurrenceKey ?? null,
+    venueId: event.venueId ?? null,
+    venueInstagramHandle: event.venueInstagramHandle ?? null,
     createdAt: event.createdAt,
     updatedAt: event.updatedAt,
   };
+}
+
+function normalizeHandle(value: string | null | undefined): string {
+  return value?.trim().replace(/^@+/, "").toLowerCase() ?? "";
+}
+
+function normalizeLookup(value: string | null | undefined): string {
+  return toSearchableText(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function approvedEventsShareVenue(
+  left: ApprovedEventDuplicateRecord,
+  right: ApprovedEventDuplicateRecord,
+): boolean {
+  const leftVenueId = left.venueId?.trim() ?? "";
+  const rightVenueId = right.venueId?.trim() ?? "";
+  const leftHandle = normalizeHandle(left.venueInstagramHandle);
+  const rightHandle = normalizeHandle(right.venueInstagramHandle);
+  const leftVenue = normalizeLookup(left.venue);
+  const rightVenue = normalizeLookup(right.venue);
+  return (
+    (Boolean(leftVenueId) && leftVenueId === rightVenueId) ||
+    (Boolean(leftHandle) && leftHandle === rightHandle) ||
+    (Boolean(leftVenue) && leftVenue === rightVenue)
+  );
+}
+
+function approvedEventHasKnownVenue(event: ApprovedEventDuplicateRecord): boolean {
+  return Boolean(
+    event.venueId?.trim() ||
+      normalizeHandle(event.venueInstagramHandle) ||
+      normalizeLookup(event.venue),
+  );
+}
+
+function approvedEventsShareSource(
+  left: ApprovedEventDuplicateRecord,
+  right: ApprovedEventDuplicateRecord,
+): boolean {
+  const leftPostId = left.instagramPostId?.trim() ?? "";
+  const rightPostId = right.instagramPostId?.trim() ?? "";
+  const leftPostUrl = normalizeLookup(left.instagramPostUrl);
+  const rightPostUrl = normalizeLookup(right.instagramPostUrl);
+  return (
+    (Boolean(leftPostId) && leftPostId === rightPostId) ||
+    (Boolean(leftPostUrl) && leftPostUrl === rightPostUrl)
+  );
+}
+
+/**
+ * Mirrors the pairwise occurrence boundary enforced by
+ * events:mergeApprovedEvents. The broader cleanup heuristic is intentionally
+ * retained for public projection and human review, but unattended mutation
+ * may only receive pairs the mutation itself can prove are duplicates.
+ */
+export function classifyApprovedEventAutoMergePair(
+  left: ApprovedEventDuplicateRecord,
+  right: ApprovedEventDuplicateRecord,
+): ApprovalOccurrenceRelation {
+  if (left.date !== right.date) {
+    return "unrelated";
+  }
+  return classifyApprovalOccurrenceRelation({
+    candidate: left,
+    existing: right,
+    sameVenue: approvedEventsShareVenue(left, right),
+    sameSource: approvedEventsShareSource(left, right),
+    unknownVenue:
+      !approvedEventHasKnownVenue(left) || !approvedEventHasKnownVenue(right),
+  });
+}
+
+export function isApprovedEventAutoMergePairEligible(
+  left: ApprovedEventDuplicateRecord,
+  right: ApprovedEventDuplicateRecord,
+): boolean {
+  const leftOccurrenceKey = getNormalizedApprovalOccurrenceKey(left);
+  const rightOccurrenceKey = getNormalizedApprovalOccurrenceKey(right);
+  const exactSameOccurrenceKey = Boolean(
+    leftOccurrenceKey && leftOccurrenceKey === rightOccurrenceKey,
+  );
+  return (
+    classifyApprovedEventAutoMergePair(left, right) === "proven_duplicate" &&
+    immutableSourceOccurrenceBindingsMatch(left, right) &&
+    (exactSameOccurrenceKey ||
+      immutableSourceOccurrenceBindingsHaveEqualReliableTime(left, right))
+  );
+}
+
+function buildStrictGroup(
+  groupId: string,
+  events: ApprovedEventDuplicateRecord[],
+): ApprovedEventAutoCleanupGroup {
+  const [primaryEvent, ...duplicateEvents] = events;
+  return {
+    groupId,
+    primaryEventId: primaryEvent.id,
+    duplicateEventIds: duplicateEvents.map((event) => event.id),
+    primaryEvent,
+    duplicateEvents,
+    matchReasonsByEventId: Object.fromEntries(
+      duplicateEvents.map((event) => [
+        event.id,
+        ["strict occurrence contract: proven duplicate"],
+      ]),
+    ),
+  };
+}
+
+/**
+ * Partition broad cleanup candidates into pairwise-proven cliques. This keeps
+ * unattended cleanup fail-closed and prevents a broad heuristic dry-run from
+ * proposing a mutation that mergeApprovedEvents must reject.
+ */
+export function buildApprovedEventAutoMergeGroups(
+  events: ApprovedEventDuplicateRecord[],
+): ApprovedEventAutoCleanupGroup[] {
+  const broadGroups = buildApprovedEventAutoCleanupGroups(events);
+  const strictGroups: ApprovedEventAutoCleanupGroup[] = [];
+
+  for (const broadGroup of broadGroups) {
+    let remaining = [broadGroup.primaryEvent, ...broadGroup.duplicateEvents];
+    while (remaining.length > 1) {
+      const primary = remaining[0];
+      const members = [primary];
+      const deferred: ApprovedEventDuplicateRecord[] = [];
+
+      for (const candidate of remaining.slice(1)) {
+        const pairwiseProven = members.every(
+          (member) => isApprovedEventAutoMergePairEligible(member, candidate),
+        );
+        if (pairwiseProven) {
+          members.push(candidate);
+        } else {
+          deferred.push(candidate);
+        }
+      }
+
+      if (members.length > 1) {
+        strictGroups.push(
+          buildStrictGroup(`auto_merge_${strictGroups.length + 1}`, members),
+        );
+      }
+      remaining = deferred;
+    }
+  }
+
+  return strictGroups;
 }
 
 function buildCleanupGroupsForApprovedEvents(
@@ -86,7 +257,7 @@ function buildCleanupGroupsForApprovedEvents(
 ) {
   const duplicateRecords = events.map(mapApprovedEventRecord);
   const upcomingEvents = filterUpcomingApprovedEventsForDuplicateCleanup(duplicateRecords);
-  const cleanupGroups = buildApprovedEventAutoCleanupGroups(upcomingEvents);
+  const cleanupGroups = buildApprovedEventAutoMergeGroups(upcomingEvents);
 
   return {
     scannedEventCount: upcomingEvents.length,
@@ -110,7 +281,7 @@ export function simulateApprovedEventAutoMerge(
 
   for (let pass = 1; pass <= maxPasses; pass += 1) {
     const upcomingEvents = filterUpcomingApprovedEventsForDuplicateCleanup(currentEvents);
-    const cleanupGroups = buildApprovedEventAutoCleanupGroups(upcomingEvents);
+    const cleanupGroups = buildApprovedEventAutoMergeGroups(upcomingEvents);
 
     passes = pass;
     if (pass === 1) {
@@ -130,7 +301,7 @@ export function simulateApprovedEventAutoMerge(
     mergedDuplicateCount += [...duplicateIds].length;
   }
 
-  const remainingGroupCount = buildApprovedEventAutoCleanupGroups(
+  const remainingGroupCount = buildApprovedEventAutoMergeGroups(
     filterUpcomingApprovedEventsForDuplicateCleanup(currentEvents),
   ).length;
 
@@ -288,4 +459,72 @@ export async function runApprovedEventAutoMerge(
     failures,
     passes,
   };
+}
+
+export function assertApprovedEventAutoMergeCompleted(
+  summary: ApprovedEventAutoMergeSummary,
+): void {
+  if (summary.error) {
+    throw new Error(`Approved-event cleanup failed: ${summary.error}`);
+  }
+  if (summary.failedCount > 0) {
+    throw new Error(
+      `Approved-event cleanup failed for ${summary.failedCount} merge group(s).`,
+    );
+  }
+  if (summary.remainingGroupCount > 0) {
+    throw new Error(
+      `Approved-event cleanup left ${summary.remainingGroupCount} eligible merge group(s).`,
+    );
+  }
+}
+
+function rememberCompletedRunCleanup(
+  runId: string,
+  summary: ApprovedEventAutoMergeSummary,
+): void {
+  completedRunCleanupSuccesses.set(runId, summary);
+  while (completedRunCleanupSuccesses.size > COMPLETED_RUN_CLEANUP_CACHE_LIMIT) {
+    const oldestRunId = completedRunCleanupSuccesses.keys().next().value;
+    if (typeof oldestRunId !== "string") break;
+    completedRunCleanupSuccesses.delete(oldestRunId);
+  }
+}
+
+/**
+ * Process-local single-flight plus success memory keeps the six fixed lanes
+ * from repeating a normal completion cleanup. A crash clears the memory, so a
+ * completed-run probe retries the idempotent, version-fenced cleanup instead
+ * of permanently skipping it.
+ */
+export async function runApprovedEventAutoMergeOnceForCompletedRun(
+  convex: ConvexHttpClient,
+  options: {
+    runId: string;
+    limit?: number;
+    maxPasses?: number;
+    serviceSecret?: string;
+  },
+): Promise<ApprovedEventAutoMergeSummary> {
+  const runId = options.runId.trim();
+  if (!runId) {
+    throw new Error("Completed-run approved cleanup requires a durable run ID.");
+  }
+  const completed = completedRunCleanupSuccesses.get(runId);
+  if (completed) return completed;
+  const inFlight = completedRunCleanupInFlight.get(runId);
+  if (inFlight) return inFlight;
+
+  const cleanup = (async () => {
+    const summary = await runApprovedEventAutoMerge(convex, options);
+    assertApprovedEventAutoMergeCompleted(summary);
+    rememberCompletedRunCleanup(runId, summary);
+    return summary;
+  })();
+  completedRunCleanupInFlight.set(runId, cleanup);
+  try {
+    return await cleanup;
+  } finally {
+    completedRunCleanupInFlight.delete(runId);
+  }
 }

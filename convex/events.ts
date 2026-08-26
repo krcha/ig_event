@@ -24,6 +24,10 @@ import {
   type NightlifeLineupSource,
 } from "../lib/events/nightlife-lineup-coalescing";
 import {
+  buildCrossPostPromotionCoalescingPlan,
+  CROSS_POST_PROMOTION_COALESCING_POLICY_VERSION,
+} from "../lib/events/cross-post-promotion-coalescing";
+import {
   buildApprovedEventAutoCleanupGroups,
   type ApprovedEventDuplicateRecord,
 } from "../lib/events/approved-event-duplicates";
@@ -288,6 +292,47 @@ const nightlifeLineupCoalescingResult = v.object({
   movedSaveCount: v.number(),
   dedupedSaveCount: v.number(),
 });
+const crossPostPromotionCandidateVersion = v.object({
+  id: v.id("events"),
+  expectedUpdatedAt: v.number(),
+  expectedNormalizedFieldsJson: v.string(),
+  expectedSourceLinkId: v.id("instagramEventSources"),
+  expectedSourceLinkUpdatedAt: v.number(),
+  expectedSourceIdentity: v.string(),
+  expectedSourceFingerprint: v.string(),
+  expectedOccurrenceKey: v.string(),
+  expectedReceiptId: v.id("instagramSourceOccurrenceReceipts"),
+  expectedReceiptUpdatedAt: v.number(),
+});
+const crossPostPromotionCoalescingResult = v.object({
+  operationId: v.string(),
+  primaryId: v.id("events"),
+  primaryUpdatedAt: v.number(),
+  foldedVariantIds: v.array(v.id("events")),
+  variantUpdatedAts: v.array(
+    v.object({ id: v.id("events"), updatedAt: v.number() }),
+  ),
+  variantReceiptUpdatedAts: v.array(
+    v.object({
+      eventId: v.id("events"),
+      receiptId: v.id("instagramSourceOccurrenceReceipts"),
+      updatedAt: v.number(),
+    }),
+  ),
+  movedSaveCount: v.number(),
+  dedupedSaveCount: v.number(),
+});
+const crossPostPromotionCoalescingContextResult = v.object({
+  state: v.union(v.literal("ready"), v.literal("already_coalesced")),
+  targetVenue: v.any(),
+  candidates: v.array(
+    v.object({
+      event: v.any(),
+      sourceLink: v.any(),
+      receipt: v.any(),
+    }),
+  ),
+});
 const MAX_SOURCE_GROUNDING_REPROCESS_BATCH_SIZE = 100;
 const MAX_EVENT_EVIDENCE_POLICY_REPROCESS_BATCH_SIZE = 16;
 const MAX_APPROVAL_DATE_COHORT_SIZE = 500;
@@ -323,6 +368,8 @@ const MAX_PUBLIC_EVENT_WINDOW_DAYS = 400;
 const MAX_PUBLIC_CALENDAR_WINDOW_DAYS = 45;
 const PUBLIC_DUPLICATE_DATE_COHORT_LIMIT = 25;
 const MAX_LINEUP_COALESCING_SAVES_PER_EVENT = 1_000;
+const MAX_CROSS_POST_PROMOTION_SAVES_PER_EVENT = 100;
+const MAX_CROSS_POST_PROMOTION_AUDIT_JSON_BYTES = 600_000;
 
 function buildPublicPaginationOptions(options: { cursor: string | null; numItems: number }) {
   const requested = Number.isFinite(options.numItems) ? Math.trunc(options.numItems) : 1;
@@ -1859,6 +1906,43 @@ async function reassignInstagramOccurrenceReferences(
       satisfiedOccurrences,
       updatedAt: nextEventUpdatedAt(receipt.updatedAt),
     });
+  }
+}
+
+async function assertInstagramOccurrenceReferencesCanBeReassigned(
+  ctx: MutationCtx,
+  fromEventId: Id<"events">,
+  toEvent: Doc<"events">,
+): Promise<void> {
+  if (fromEventId === toEvent._id) return;
+  const sourceLinks = await ctx.db
+    .query("instagramEventSources")
+    .withIndex("by_event", (q) => q.eq("eventId", fromEventId))
+    .collect();
+
+  for (const sourceLink of sourceLinks) {
+    const receipt = await ctx.db
+      .query("instagramSourceOccurrenceReceipts")
+      .withIndex("by_sourceIdentity", (q) => q.eq("sourceIdentity", sourceLink.sourceIdentity))
+      .unique();
+    if (!receipt) continue;
+
+    for (const occurrence of receipt.satisfiedOccurrences) {
+      if (occurrence.eventId !== fromEventId) continue;
+      const expectedOccurrence = receipt.expectedOccurrences?.find(
+        (expected) => expected.key === occurrence.key,
+      );
+      if (
+        !sourceOccurrenceRepresentativeMatchesExpected(
+          toEvent,
+          expectedOccurrence,
+        )
+      ) {
+        throw new Error(
+          "Approved-event merge cannot preserve an Instagram occurrence receipt.",
+        );
+      }
+    }
   }
 }
 
@@ -5221,6 +5305,699 @@ function exactStringSetEquals(left: string[], right: string[]): boolean {
   );
 }
 
+type CrossPostReceiptExpectedOccurrence = {
+  key: string;
+  date: string;
+  time?: string;
+  venue: string;
+  title: string;
+  artists: string[];
+};
+
+function exactCrossPostReceiptSemanticsEqual(
+  left: CrossPostReceiptExpectedOccurrence | undefined,
+  right: CrossPostReceiptExpectedOccurrence | undefined,
+): boolean {
+  return Boolean(
+    left &&
+      right &&
+      left.date === right.date &&
+      left.time === right.time &&
+      left.venue === right.venue &&
+      left.title === right.title &&
+      left.artists.length === right.artists.length &&
+      left.artists.every((artist, index) => artist === right.artists[index]),
+  );
+}
+
+function crossPostReceiptHasExactSingleBinding(
+  receipt: Doc<"instagramSourceOccurrenceReceipts">,
+  sourceLink: Doc<"instagramEventSources">,
+): boolean {
+  return (
+    receipt.sourceIdentity === sourceLink.sourceIdentity &&
+    receipt.sourceFingerprint === sourceLink.sourceFingerprint &&
+    receipt.expectedKeys.length === 1 &&
+    receipt.expectedKeys[0] === sourceLink.sourceOccurrenceKey &&
+    receipt.expectedOccurrences?.length === 1 &&
+    receipt.expectedOccurrences[0]?.key === sourceLink.sourceOccurrenceKey &&
+    receipt.satisfiedKeys.length === 1 &&
+    receipt.satisfiedKeys[0] === sourceLink.sourceOccurrenceKey &&
+    receipt.satisfiedOccurrences.length === 1 &&
+    receipt.satisfiedOccurrences[0]?.key === sourceLink.sourceOccurrenceKey &&
+    receipt.deferredChildCount === 0 &&
+    receipt.deferredChildKeys.length === 0
+  );
+}
+
+function assertCrossPostPromotionAuditPayload(payload: unknown): void {
+  if (
+    new TextEncoder().encode(JSON.stringify(payload)).byteLength >
+    MAX_CROSS_POST_PROMOTION_AUDIT_JSON_BYTES
+  ) {
+    throw new Error("Cross-post promotion rollback payload exceeds the safe audit bound.");
+  }
+}
+
+function buildCrossPostPromotionModerationMarker(
+  role: "primary" | "variant",
+  operationId: string,
+): string {
+  return (
+    `[cross_post_campaign_${role}:v${CROSS_POST_PROMOTION_COALESCING_POLICY_VERSION}] ` +
+    `${operationId} - `
+  );
+}
+
+/**
+ * Returns the exact bounded rows needed to construct a coalescing mutation.
+ * Operators can call it again after an uncertain response: the same operation
+ * then reports already_coalesced instead of encouraging a second mutation.
+ */
+export const getCrossPostPromotionCoalescingContext = query({
+  args: {
+    operationId: v.string(),
+    eventIds: v.array(v.id("events")),
+    targetVenueId: v.id("venues"),
+    serviceSecret: v.string(),
+  },
+  returns: crossPostPromotionCoalescingContextResult,
+  handler: async (ctx, args) => {
+    const authorization = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    if (authorization.kind !== "service") {
+      throw new Error("Cross-post promotion context requires service authentication.");
+    }
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{15,159}$/.test(args.operationId) ||
+      args.eventIds.length < 2 ||
+      args.eventIds.length > 8 ||
+      new Set(args.eventIds.map(String)).size !== args.eventIds.length
+    ) {
+      throw new Error("Cross-post promotion context arguments are invalid.");
+    }
+    const targetVenue = await ctx.db.get(args.targetVenueId);
+    if (!targetVenue) {
+      throw new Error("Cross-post promotion context target venue is missing.");
+    }
+    const candidates: Array<{
+      event: Doc<"events">;
+      sourceLink: Doc<"instagramEventSources">;
+      receipt: Doc<"instagramSourceOccurrenceReceipts">;
+    }> = [];
+    for (const eventId of args.eventIds) {
+      const event = await ctx.db.get(eventId);
+      if (!event) {
+        throw new Error(`Cross-post promotion context event is missing: ${eventId}.`);
+      }
+      const sourceLinks = await ctx.db
+        .query("instagramEventSources")
+        .withIndex("by_event", (q) => q.eq("eventId", eventId))
+        .take(2);
+      const sourceLink = sourceLinks.length === 1 ? sourceLinks[0] : null;
+      const receipts = sourceLink
+        ? await ctx.db
+            .query("instagramSourceOccurrenceReceipts")
+            .withIndex("by_sourceIdentity", (q) =>
+              q.eq("sourceIdentity", sourceLink.sourceIdentity),
+            )
+            .take(2)
+        : [];
+      const receipt = receipts.length === 1 ? receipts[0] : null;
+      if (
+        !sourceLink ||
+        !receipt ||
+        sourceLink.eventId !== event._id ||
+        sourceLink.sourceOccurrenceKey !== event.sourceOccurrenceKey ||
+        sourceLink.instagramPostId !== event.instagramPostId ||
+        normalizeInstagramPostUrl(sourceLink.instagramPostUrl ?? "") !==
+          normalizeInstagramPostUrl(event.instagramPostUrl ?? "") ||
+        receipt.sourceIdentity !== sourceLink.sourceIdentity ||
+        receipt.sourceFingerprint !== sourceLink.sourceFingerprint
+      ) {
+        throw new Error(
+          `Cross-post promotion context requires one exact link and receipt: ${eventId}.`,
+        );
+      }
+      candidates.push({ event, sourceLink, receipt });
+    }
+
+    const primaryMarker = buildCrossPostPromotionModerationMarker(
+      "primary",
+      args.operationId,
+    );
+    const variantMarker = buildCrossPostPromotionModerationMarker(
+      "variant",
+      args.operationId,
+    );
+    const primaryCandidate = candidates[0]!;
+    const primaryExpectedOccurrence = primaryCandidate.receipt.expectedOccurrences?.[0];
+    const primaryPubliclyGrounded = await isCanonicallyGroundedApprovedEvent(
+      ctx,
+      primaryCandidate.event,
+    );
+    const ready = primaryPubliclyGrounded && candidates.every(({ event, sourceLink, receipt }) => {
+      const expectedOccurrence = receipt.expectedOccurrences?.[0];
+      return (
+        event.status === "approved" &&
+        crossPostReceiptHasExactSingleBinding(receipt, sourceLink) &&
+        receipt.satisfiedOccurrences[0]?.eventId === event._id &&
+        sourceOccurrenceRepresentativeMatchesExpected(event, expectedOccurrence)
+      );
+    });
+    const exactReceiptAfterState =
+      crossPostReceiptHasExactSingleBinding(
+        primaryCandidate.receipt,
+        primaryCandidate.sourceLink,
+      ) &&
+      primaryCandidate.receipt.satisfiedOccurrences[0]?.eventId ===
+        primaryCandidate.event._id &&
+      sourceOccurrenceRepresentativeMatchesExpected(
+        primaryCandidate.event,
+        primaryExpectedOccurrence,
+      ) &&
+      candidates.slice(1).every(({ event, sourceLink, receipt }) => {
+        const expectedOccurrence = receipt.expectedOccurrences?.[0];
+        return (
+          sourceLink.eventId === event._id &&
+          crossPostReceiptHasExactSingleBinding(receipt, sourceLink) &&
+          exactCrossPostReceiptSemanticsEqual(
+            expectedOccurrence,
+            primaryExpectedOccurrence,
+          ) &&
+          receipt.satisfiedOccurrences[0]?.eventId === primaryCandidate.event._id &&
+          sourceOccurrenceRepresentativeMatchesExpected(
+            primaryCandidate.event,
+            expectedOccurrence,
+          )
+        );
+      });
+    const exactTargetAfterState =
+      primaryCandidate.event.venueId === targetVenue._id &&
+      primaryCandidate.event.venue === targetVenue.name &&
+      normalizeHandle(primaryCandidate.event.venueInstagramHandle ?? "") ===
+        normalizeHandle(targetVenue.instagramHandle);
+    let exactPrimaryAudit = false;
+    if (candidates[0]?.event.moderationNote?.startsWith(primaryMarker) === true) {
+      const auditRows = await ctx.db
+        .query("eventAuditLog")
+        .withIndex("by_event", (q) => q.eq("eventId", args.eventIds[0]!))
+        .take(101);
+      if (auditRows.length > 100) {
+        throw new Error("Cross-post promotion after-state audit exceeds the safe bound.");
+      }
+      exactPrimaryAudit = auditRows.some((audit) => {
+        if (audit.action !== "cross_post_campaign_coalesced" || !audit.patchJson) {
+          return false;
+        }
+        try {
+          const patch = JSON.parse(audit.patchJson) as Record<string, unknown>;
+          const foldedVariantIds = Array.isArray(patch.foldedVariantIds)
+            ? patch.foldedVariantIds
+            : [];
+          const variantReceiptUpdatedAts = Array.isArray(
+            patch.variantReceiptUpdatedAts,
+          )
+            ? patch.variantReceiptUpdatedAts
+            : [];
+          const auditedTargetVenue =
+            patch.targetVenue &&
+            typeof patch.targetVenue === "object" &&
+            !Array.isArray(patch.targetVenue)
+              ? (patch.targetVenue as Record<string, unknown>)
+              : null;
+          return (
+            patch.operationId === args.operationId &&
+            patch.policyVersion === CROSS_POST_PROMOTION_COALESCING_POLICY_VERSION &&
+            patch.canonicalVenueName === targetVenue.name &&
+            normalizeHandle(normalizedString(patch.canonicalVenueHandle)) ===
+              normalizeHandle(targetVenue.instagramHandle) &&
+            auditedTargetVenue?._id === targetVenue._id &&
+            auditedTargetVenue.updatedAt === targetVenue.updatedAt &&
+            foldedVariantIds.length === candidates.length - 1 &&
+            foldedVariantIds.every(
+              (eventId, index) => eventId === candidates[index + 1]?.event._id,
+            ) &&
+            variantReceiptUpdatedAts.length === candidates.length - 1 &&
+            variantReceiptUpdatedAts.every((value, index) => {
+              if (!value || typeof value !== "object" || Array.isArray(value)) {
+                return false;
+              }
+              const transition = value as Record<string, unknown>;
+              const candidate = candidates[index + 1];
+              return (
+                transition.eventId === candidate?.event._id &&
+                transition.receiptId === candidate?.receipt._id &&
+                transition.updatedAt === candidate?.receipt.updatedAt
+              );
+            })
+          );
+        } catch {
+          return false;
+        }
+      });
+    }
+    const alreadyCoalesced =
+      exactPrimaryAudit &&
+      exactReceiptAfterState &&
+      exactTargetAfterState &&
+      primaryPubliclyGrounded &&
+      candidates[0]?.event.status === "approved" &&
+      candidates[0]?.event.moderationNote?.startsWith(primaryMarker) === true &&
+      candidates
+        .slice(1)
+        .every(
+          ({ event }) =>
+            event.status === "rejected" &&
+            event.moderationNote?.startsWith(variantMarker) === true,
+        );
+    if (!ready && !alreadyCoalesced) {
+      throw new Error("Cross-post promotion context is neither ready nor an exact after-state.");
+    }
+    return {
+      state: alreadyCoalesced ? ("already_coalesced" as const) : ("ready" as const),
+      targetVenue,
+      candidates,
+    };
+  },
+});
+
+/**
+ * Folds separate promotional posts by one Instagram author into one approved
+ * occurrence without pretending that their source occurrences are identical.
+ *
+ * Every post-specific source link and immutable source-evidence snapshot stays
+ * attached to its original row. Campaign variants are rejected in place, while
+ * their receipts are rebound semantically to the approved primary so exact
+ * replay still observes a fully satisfied source. Receipt changes and original
+ * evidence are rollback-audited. This is deliberately separate from the generic
+ * merge and single-post lineup fold.
+ */
+export const coalesceApprovedCrossPostPromotionOccurrences = mutation({
+  args: {
+    operationId: v.string(),
+    primary: crossPostPromotionCandidateVersion,
+    duplicates: v.array(crossPostPromotionCandidateVersion),
+    targetVenueId: v.id("venues"),
+    expectedTargetVenueUpdatedAt: v.number(),
+    sharedEvidenceAnchors: v.array(v.string()),
+    moderationNote: v.string(),
+    serviceSecret: v.string(),
+  },
+  returns: crossPostPromotionCoalescingResult,
+  handler: async (ctx, args) => {
+    const authorization = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    if (authorization.kind !== "service") {
+      throw new Error("Cross-post promotion coalescing requires service authentication.");
+    }
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{15,159}$/.test(args.operationId) ||
+      args.moderationNote.trim().length < 24 ||
+      args.moderationNote.trim().length > 1_000 ||
+      args.duplicates.length < 1 ||
+      args.duplicates.length > 7 ||
+      args.sharedEvidenceAnchors.length < 2 ||
+      args.sharedEvidenceAnchors.length > 6 ||
+      !Number.isSafeInteger(args.expectedTargetVenueUpdatedAt)
+    ) {
+      throw new Error("Cross-post promotion coalescing arguments are invalid.");
+    }
+
+    const versions = [args.primary, ...args.duplicates];
+    const eventIds = versions.map((item) => String(item.id));
+    const expectedLinkIds = versions.map((item) => String(item.expectedSourceLinkId));
+    const expectedReceiptIds = versions.map((item) => String(item.expectedReceiptId));
+    if (
+      new Set(eventIds).size !== eventIds.length ||
+      new Set(expectedLinkIds).size !== expectedLinkIds.length ||
+      new Set(expectedReceiptIds).size !== expectedReceiptIds.length
+    ) {
+      throw new Error(
+        "Cross-post promotion coalescing requires unique events, links, and receipts.",
+      );
+    }
+
+    const targetVenue = await ctx.db.get(args.targetVenueId);
+    if (
+      !targetVenue ||
+      targetVenue.updatedAt !== args.expectedTargetVenueUpdatedAt ||
+      !isVenuePublic(targetVenue) ||
+      !targetVenue.name.trim() ||
+      !normalizeHandle(targetVenue.instagramHandle)
+    ) {
+      throw new Error("Cross-post promotion target venue precondition failed.");
+    }
+
+    const prepared: Array<{
+      event: Doc<"events">;
+      fields: Record<string, unknown>;
+      link: Doc<"instagramEventSources">;
+      receipt: Doc<"instagramSourceOccurrenceReceipts">;
+      savedEvents: Doc<"savedEvents">[];
+      userSavedEvents: Doc<"userSavedEvents">[];
+    }> = [];
+    for (const version of versions) {
+      if (
+        !Number.isSafeInteger(version.expectedUpdatedAt) ||
+        !Number.isSafeInteger(version.expectedSourceLinkUpdatedAt) ||
+        !Number.isSafeInteger(version.expectedReceiptUpdatedAt) ||
+        !version.expectedSourceIdentity.trim() ||
+        !version.expectedSourceFingerprint.trim() ||
+        !version.expectedOccurrenceKey.trim()
+      ) {
+        throw new Error("Cross-post promotion version precondition is invalid.");
+      }
+      const event = await ctx.db.get(version.id);
+      if (
+        !event ||
+        event.status !== "approved" ||
+        event.updatedAt !== version.expectedUpdatedAt ||
+        event.normalizedFieldsJson !== version.expectedNormalizedFieldsJson ||
+        event.sourceOccurrenceKey !== version.expectedOccurrenceKey ||
+        !event.instagramPostId ||
+        !normalizeInstagramPostUrl(event.instagramPostUrl ?? "") ||
+        !event.sourceCaption
+      ) {
+        throw new Error(`Cross-post promotion event precondition failed: ${version.id}.`);
+      }
+      const fields = parseNightlifeLineupJsonRecord(
+        event.normalizedFieldsJson,
+        `Cross-post promotion normalized fields ${event._id}`,
+      );
+      const links = await ctx.db
+        .query("instagramEventSources")
+        .withIndex("by_event", (q) => q.eq("eventId", event._id))
+        .take(2);
+      const link = links.length === 1 ? links[0] : null;
+      if (
+        !link ||
+        link._id !== version.expectedSourceLinkId ||
+        link.updatedAt !== version.expectedSourceLinkUpdatedAt ||
+        link.sourceIdentity !== version.expectedSourceIdentity ||
+        link.sourceFingerprint !== version.expectedSourceFingerprint ||
+        link.sourceOccurrenceKey !== version.expectedOccurrenceKey ||
+        link.instagramPostId !== event.instagramPostId ||
+        normalizeInstagramPostUrl(link.instagramPostUrl ?? "") !==
+          normalizeInstagramPostUrl(event.instagramPostUrl ?? "") ||
+        !normalizeHandle(link.sourceHandle ?? "") ||
+        normalizeHandle(link.sourceHandle ?? "") !==
+          normalizeHandle(normalizedString(fields.sourceGroundingInstagramHandle))
+      ) {
+        throw new Error(`Cross-post promotion source-link precondition failed: ${version.id}.`);
+      }
+
+      const receipts = await ctx.db
+        .query("instagramSourceOccurrenceReceipts")
+        .withIndex("by_sourceIdentity", (q) =>
+          q.eq("sourceIdentity", version.expectedSourceIdentity),
+        )
+        .take(2);
+      const receipt = receipts.length === 1 ? receipts[0] : null;
+      const expectedOccurrence = receipt?.expectedOccurrences?.[0];
+      if (
+        !receipt ||
+        receipt._id !== version.expectedReceiptId ||
+        receipt.updatedAt !== version.expectedReceiptUpdatedAt ||
+        receipt.sourceFingerprint !== version.expectedSourceFingerprint ||
+        receipt.deferredChildCount !== 0 ||
+        receipt.deferredChildKeys.length !== 0 ||
+        receipt.expectedKeys.length !== 1 ||
+        receipt.expectedKeys[0] !== version.expectedOccurrenceKey ||
+        receipt.expectedOccurrences?.length !== 1 ||
+        expectedOccurrence?.key !== version.expectedOccurrenceKey ||
+        receipt.satisfiedKeys.length !== 1 ||
+        receipt.satisfiedKeys[0] !== version.expectedOccurrenceKey ||
+        receipt.satisfiedOccurrences.length !== 1 ||
+        receipt.satisfiedOccurrences[0]?.key !== version.expectedOccurrenceKey ||
+        receipt.satisfiedOccurrences[0]?.eventId !== event._id ||
+        !sourceOccurrenceRepresentativeMatchesExpected(event, expectedOccurrence)
+      ) {
+        throw new Error(`Cross-post promotion receipt precondition failed: ${version.id}.`);
+      }
+
+      const [savedEvents, userSavedEvents] = await Promise.all([
+        ctx.db
+          .query("savedEvents")
+          .withIndex("by_event", (q) => q.eq("eventId", event._id))
+          .take(MAX_CROSS_POST_PROMOTION_SAVES_PER_EVENT + 1),
+        ctx.db
+          .query("userSavedEvents")
+          .withIndex("by_event", (q) => q.eq("eventId", event._id))
+          .take(MAX_CROSS_POST_PROMOTION_SAVES_PER_EVENT + 1),
+      ]);
+      if (
+        savedEvents.length > MAX_CROSS_POST_PROMOTION_SAVES_PER_EVENT ||
+        userSavedEvents.length > MAX_CROSS_POST_PROMOTION_SAVES_PER_EVENT
+      ) {
+        throw new Error(`Cross-post promotion save cohort exceeds the safe bound: ${event._id}.`);
+      }
+      prepared.push({ event, fields, link, receipt, savedEvents, userSavedEvents });
+    }
+
+    const plan = buildCrossPostPromotionCoalescingPlan({
+      candidates: prepared.map(({ event, fields, link }) => ({
+        id: String(event._id),
+        sourceHandle: link.sourceHandle ?? "",
+        sourceIdentity: link.sourceIdentity,
+        sourceOccurrenceKey: link.sourceOccurrenceKey,
+        instagramPostId: event.instagramPostId ?? "",
+        instagramPostUrl: normalizeInstagramPostUrl(event.instagramPostUrl ?? ""),
+        title: event.title,
+        date: event.date,
+        time: event.time,
+        timeStatus: event.timeStatus,
+        timeEvidenceKind: event.timeEvidenceKind,
+        timeConfidence: event.timeConfidence,
+        dateEvidenceVerified: fields.dateEvidenceVerified === true,
+        timeEvidenceVerified: fields.timeEvidenceVerified === true,
+        venueEvidenceText: event.sourceCaption ?? "",
+        eventType: canonicalizeEventType(event.eventType),
+        sourceConflictFields: event.sourceConflictFields ?? [],
+        artists: event.artists,
+        description: event.description,
+        ticketPrice: event.ticketPrice,
+        imageUrl: event.imageUrl,
+        imageStorageId: event.imageStorageId ? String(event.imageStorageId) : undefined,
+      })),
+      canonicalVenueName: targetVenue.name,
+      canonicalVenueHandle: targetVenue.instagramHandle,
+      sharedAnchors: args.sharedEvidenceAnchors,
+    });
+    if (
+      !plan ||
+      plan.policyVersion !== CROSS_POST_PROMOTION_COALESCING_POLICY_VERSION ||
+      plan.primaryId !== String(args.primary.id) ||
+      !exactStringSetEquals(plan.duplicateIds, args.duplicates.map((item) => String(item.id)))
+    ) {
+      throw new Error("Cross-post promotion occurrence proof failed.");
+    }
+
+    const primaryEvent = prepared[0]!.event;
+    if (
+      !sourceOccurrenceRepresentativeMatchesExpected(primaryEvent, {
+        key: primaryEvent.sourceOccurrenceKey!,
+        date: plan.date,
+        time: plan.time,
+        venue: targetVenue.name,
+        title: primaryEvent.title,
+        artists: plan.artists,
+      })
+    ) {
+      throw new Error(
+        "Cross-post promotion aggregate must match the primary immutable snapshot.",
+      );
+    }
+    const targetVenueFields = {
+      ...CLEARED_VENUE_DENORMALIZED_FIELDS,
+      ...buildNormalizedEventVenueIdentity({
+        venue: targetVenue.name,
+        venueInstagramHandle: targetVenue.instagramHandle,
+      }),
+      venueCategory: targetVenue.category,
+      venueId: targetVenue._id,
+      venueInstagramHandle: targetVenue.instagramHandle,
+      ...(targetVenue.latitude !== undefined
+        ? { venueLatitude: targetVenue.latitude }
+        : {}),
+      ...(targetVenue.location ? { venueLocation: targetVenue.location } : {}),
+      ...(targetVenue.longitude !== undefined
+        ? { venueLongitude: targetVenue.longitude }
+        : {}),
+    };
+    const publicPatch = {
+      venue: targetVenue.name,
+      ...targetVenueFields,
+      artists: plan.artists,
+      ...(plan.description ? { description: plan.description } : {}),
+      ...(plan.ticketPrice ? { ticketPrice: plan.ticketPrice } : {}),
+      moderationNote: args.moderationNote.trim(),
+    };
+    const prospectivePrimary = { ...primaryEvent, ...publicPatch };
+    await assertApprovalCandidatePolicy(
+      ctx,
+      prospectivePrimary,
+      versions.map((item) => item.id),
+    );
+    if (!(await isCanonicallyGroundedApprovedEvent(ctx, prospectivePrimary))) {
+      throw new Error(
+        "Cross-post promotion primary would not remain publicly source-grounded.",
+      );
+    }
+
+    const primaryExpectedOccurrence = prepared[0]!.receipt.expectedOccurrences?.[0];
+    if (!primaryExpectedOccurrence) {
+      throw new Error("Cross-post promotion primary receipt binding is missing.");
+    }
+    const now = Date.now();
+    const variantReceiptTransitions = prepared.slice(1).map((item) => {
+      const nextExpectedOccurrence = {
+        key: item.link.sourceOccurrenceKey,
+        date: primaryExpectedOccurrence.date,
+        ...(primaryExpectedOccurrence.time !== undefined
+          ? { time: primaryExpectedOccurrence.time }
+          : {}),
+        venue: primaryExpectedOccurrence.venue,
+        title: primaryExpectedOccurrence.title,
+        artists: [...primaryExpectedOccurrence.artists],
+      };
+      if (
+        !sourceOccurrenceRepresentativeMatchesExpected(
+          prospectivePrimary,
+          nextExpectedOccurrence,
+        )
+      ) {
+        throw new Error(
+          `Cross-post promotion primary cannot satisfy variant receipt: ${item.event._id}.`,
+        );
+      }
+      const nextSatisfiedOccurrences = [
+        { key: item.link.sourceOccurrenceKey, eventId: primaryEvent._id },
+      ];
+      const receiptUpdatedAt = nextEventUpdatedAt(item.receipt.updatedAt, now);
+      return {
+        eventId: item.event._id,
+        receiptId: item.receipt._id,
+        updatedAt: receiptUpdatedAt,
+        expectedOccurrences: [nextExpectedOccurrence],
+        satisfiedOccurrences: nextSatisfiedOccurrences,
+        receiptAfter: {
+          ...item.receipt,
+          expectedOccurrences: [nextExpectedOccurrence],
+          satisfiedOccurrences: nextSatisfiedOccurrences,
+          updatedAt: receiptUpdatedAt,
+        },
+      };
+    });
+
+    const primaryRollback = {
+      policyVersion: CROSS_POST_PROMOTION_COALESCING_POLICY_VERSION,
+      operationId: args.operationId,
+      eventBefore: primaryEvent,
+      sourceLinkBefore: prepared[0]!.link,
+      receiptBefore: prepared[0]!.receipt,
+      targetVenue,
+    };
+    assertCrossPostPromotionAuditPayload(primaryRollback);
+    const duplicateRollbacks = prepared.slice(1).map((item, index) => {
+      const rollback = {
+        policyVersion: CROSS_POST_PROMOTION_COALESCING_POLICY_VERSION,
+        operationId: args.operationId,
+        primaryId: primaryEvent._id,
+        eventBefore: item.event,
+        sourceLinkBefore: item.link,
+        receiptBefore: item.receipt,
+        receiptAfter: variantReceiptTransitions[index]!.receiptAfter,
+        savedEventsBefore: item.savedEvents,
+        userSavedEventsBefore: item.userSavedEvents,
+      };
+      assertCrossPostPromotionAuditPayload(rollback);
+      return rollback;
+    });
+
+    const primaryUpdatedAt = nextEventUpdatedAt(primaryEvent.updatedAt, now);
+    const primaryModerationNote =
+      buildCrossPostPromotionModerationMarker("primary", args.operationId) +
+      args.moderationNote.trim();
+    await ctx.db.patch(primaryEvent._id, {
+      ...publicPatch,
+      reviewedAt: now,
+      reviewedBy: authorization.actor,
+      moderationNote: primaryModerationNote,
+      updatedAt: primaryUpdatedAt,
+    });
+
+    let movedSaveCount = 0;
+    let dedupedSaveCount = 0;
+    const variantRows = prepared.slice(1);
+    const variantUpdatedAts: Array<{ id: Id<"events">; updatedAt: number }> = [];
+    const variantReceiptUpdatedAts = variantReceiptTransitions.map(
+      ({ eventId, receiptId, updatedAt }) => ({ eventId, receiptId, updatedAt }),
+    );
+    const variantModerationNote =
+      buildCrossPostPromotionModerationMarker("variant", args.operationId) +
+      args.moderationNote.trim();
+    for (let index = 0; index < variantRows.length; index += 1) {
+      const item = variantRows[index]!;
+      const receiptTransition = variantReceiptTransitions[index]!;
+      const saveResult = await reassignSavedEventReferences(
+        ctx,
+        item.event._id,
+        primaryEvent._id,
+      );
+      movedSaveCount += saveResult.movedCount;
+      dedupedSaveCount += saveResult.dedupedCount;
+      const variantUpdatedAt = nextEventUpdatedAt(item.event.updatedAt, now);
+      await ctx.db.patch(item.event._id, {
+        status: "rejected",
+        reviewedAt: now,
+        reviewedBy: authorization.actor,
+        moderationNote: variantModerationNote,
+        updatedAt: variantUpdatedAt,
+      });
+      await ctx.db.patch(item.receipt._id, {
+        expectedOccurrences: receiptTransition.expectedOccurrences,
+        satisfiedOccurrences: receiptTransition.satisfiedOccurrences,
+        updatedAt: receiptTransition.updatedAt,
+      });
+      variantUpdatedAts.push({ id: item.event._id, updatedAt: variantUpdatedAt });
+      await writeEventAuditLog(ctx, item.event._id, "cross_post_campaign_variant_rejected", {
+        actor: authorization.actor,
+        note: args.moderationNote.trim(),
+        patch: {
+          ...duplicateRollbacks[index],
+          marker: "cross_post_campaign_variant",
+          variantUpdatedAt,
+        },
+      });
+    }
+    await writeEventAuditLog(ctx, primaryEvent._id, "cross_post_campaign_coalesced", {
+      actor: authorization.actor,
+      note: args.moderationNote.trim(),
+      patch: {
+        ...primaryRollback,
+        foldedVariantIds: variantRows.map((item) => item.event._id),
+        sharedEvidenceAnchors: plan.sharedAnchors,
+        canonicalVenueName: plan.canonicalVenueName,
+        canonicalVenueHandle: plan.canonicalVenueHandle,
+        variantUpdatedAts,
+        variantReceiptUpdatedAts,
+        movedSaveCount,
+        dedupedSaveCount,
+      },
+    });
+
+    return {
+      operationId: args.operationId,
+      primaryId: primaryEvent._id,
+      primaryUpdatedAt,
+      foldedVariantIds: variantRows.map((item) => item.event._id),
+      variantUpdatedAts,
+      variantReceiptUpdatedAts,
+      movedSaveCount,
+      dedupedSaveCount,
+    };
+  },
+});
+
 /**
  * Consolidates a fully attested one-night DJ timetable that an older
  * extraction protocol persisted as one event per performer slot.
@@ -5866,7 +6643,7 @@ export const mergeApprovedEvents = mutation({
       duplicateEvents.push(duplicateEvent);
     }
 
-    let effectivePrimaryEvent: ApprovalCandidateFields = primaryEvent;
+    let effectivePrimaryEvent: Doc<"events"> = primaryEvent;
     if (Object.keys(args.patch).length > 0) {
       assertPublicEventImageWrite(args.patch.imageUrl, args.patch.imageStorageId);
       const venueFields =
@@ -5938,6 +6715,14 @@ export const mergeApprovedEvents = mutation({
       "proven_duplicate",
       "Approved-event merge requires every pair to be a proven duplicate occurrence.",
     );
+
+    for (const duplicateEvent of duplicateEvents) {
+      await assertInstagramOccurrenceReferencesCanBeReassigned(
+        ctx,
+        duplicateEvent._id,
+        effectivePrimaryEvent,
+      );
+    }
 
     for (const duplicateId of duplicateIds) {
       await reassignSavedEventReferences(ctx, duplicateId, args.primaryId);

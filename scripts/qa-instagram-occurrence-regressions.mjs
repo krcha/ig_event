@@ -523,7 +523,7 @@ if (fromResults[0]?.kind === "ok") {
       title: "FRØM THURSDAYS",
       date: "2026-07-30",
       time: "21:00-03:00",
-      venue: "frǾm",
+      venue: "Klub 20/44",
       splitSource: "poster_schedule",
     },
   );

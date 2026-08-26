@@ -16,7 +16,10 @@ import {
   isDurableSavedPostRevisionMismatch,
   isTransientSavedPostProcessingError,
 } from "@/lib/pipeline/durable-ingestion-execute";
-import { processSavedScrapedPostForDurableReceipt } from "@/lib/pipeline/run-instagram-ingestion";
+import {
+  processSavedScrapedPostForDurableReceipt,
+  runApprovedDuplicateCleanupForCompletedDurableRun,
+} from "@/lib/pipeline/run-instagram-ingestion";
 
 export const dynamic = "force-dynamic";
 // Three selected posts can each spend up to 120s in OpenAI after bounded
@@ -37,6 +40,8 @@ const completeProcessing =
   "durableIngestionRuns:completeProcessingReceipt" as unknown as FunctionReference<"mutation">;
 const releaseProcessing =
   "durableIngestionRuns:releaseProcessingReceiptForRetry" as unknown as FunctionReference<"mutation">;
+const probeRun =
+  "durableIngestionRuns:probeRun" as unknown as FunctionReference<"query">;
 
 type ExactRecoveryClaim = {
   claimed: boolean;
@@ -156,6 +161,74 @@ export async function POST(request: Request) {
       { status: 202 },
     );
 
+  const approvedCleanupDeferredResponse = (
+    receiptId: string,
+    runId: string,
+    error: unknown,
+  ) => {
+    console.error(JSON.stringify({
+      level: "error",
+      event: "durable_ingestion.recovery.approved_cleanup.deferred",
+      runId,
+      receiptId,
+      error:
+        error instanceof Error
+          ? error.message.slice(0, 512)
+          : "unknown cleanup failure",
+    }));
+    return NextResponse.json({
+      selectedCount: selection.receiptIds.length,
+      processedCount: results.length,
+      transportAttemptCount,
+      maxTransportAttemptCount: MAX_OPENAI_TRANSPORT_ATTEMPTS,
+      stopped: true,
+      stopReason: "approved_cleanup_deferred",
+      results,
+    }, { status: 202 });
+  };
+
+  const cleanupRunIfComplete = async (options: {
+    receiptId: string;
+    runId: string;
+    knownComplete?: boolean;
+  }) => {
+    try {
+      const complete =
+        options.knownComplete === true
+          ? true
+          : Boolean(
+              ((await convex.query(probeRun, {
+                runId: options.runId,
+                serviceSecret,
+              })) as { complete?: boolean } | null)?.complete,
+            );
+      if (!complete) return null;
+      const cleanupSummary =
+        await runApprovedDuplicateCleanupForCompletedDurableRun({
+          client: convex,
+          runId: options.runId,
+          serviceSecret,
+        });
+      if (
+        cleanupSummary.error ||
+        cleanupSummary.failedCount > 0 ||
+        cleanupSummary.remainingGroupCount > 0
+      ) {
+        throw new Error(
+          cleanupSummary.error ??
+            `Approved cleanup incomplete: failed=${cleanupSummary.failedCount};remaining=${cleanupSummary.remainingGroupCount}.`,
+        );
+      }
+      return null;
+    } catch (error) {
+      return approvedCleanupDeferredResponse(
+        options.receiptId,
+        options.runId,
+        error,
+      );
+    }
+  };
+
   for (let ordinal = 0; ordinal < selection.receiptIds.length; ordinal += 1) {
     const receiptId = selection.receiptIds[ordinal];
     const workerId = `${batchOwner}:${ordinal}`.slice(0, 200);
@@ -196,6 +269,11 @@ export async function POST(request: Request) {
           results,
         }, { status: 202 });
       }
+      const cleanupDeferred = await cleanupRunIfComplete({
+        receiptId,
+        runId: claim.runId,
+      });
+      if (cleanupDeferred) return cleanupDeferred;
       continue;
     }
 
@@ -274,7 +352,11 @@ export async function POST(request: Request) {
           workerId,
           detail: `saved_post:${claim.scrapedPostId};${processingResult.outcome}`,
           serviceSecret,
-        })) as { status: "fetched" | "failed"; processingOutcome: string };
+        })) as {
+          complete: boolean;
+          status: "fetched" | "failed";
+          processingOutcome: string;
+        };
         results.push({
           receiptId,
           state: "terminal",
@@ -282,6 +364,14 @@ export async function POST(request: Request) {
           processingOutcome: completion.processingOutcome,
           transportAttempted: targetTransportAttempted,
         });
+        if (completion.complete) {
+          const cleanupDeferred = await cleanupRunIfComplete({
+            receiptId,
+            runId: claim.runId,
+            knownComplete: true,
+          });
+          if (cleanupDeferred) return cleanupDeferred;
+        }
         continue;
       } catch (completionError) {
         // Read back through the idempotent release boundary. If completion
@@ -302,6 +392,11 @@ export async function POST(request: Request) {
               status: released.status,
               transportAttempted: targetTransportAttempted,
             });
+            const cleanupDeferred = await cleanupRunIfComplete({
+              receiptId,
+              runId: claim.runId,
+            });
+            if (cleanupDeferred) return cleanupDeferred;
             continue;
           }
           results.push({

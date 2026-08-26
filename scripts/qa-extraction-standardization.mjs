@@ -581,9 +581,117 @@ function runVenueQa() {
   assert.equal(promoterCannotBecomeVenueFromPostingHandle.venue, null);
   assert.equal(promoterCannotBecomeVenueFromPostingHandle.source, null);
 
+  const legacyPromoterVenueMap = {
+    ...venueNameOverridesByHandle,
+    "1by1.party": "JEDNA PO JEDNA",
+  };
+  const canonicalAtHandleVenue = normalizeVenueFromEvidence({
+    handle: "1by1.party",
+    rawModelVenue: "JEDNA PO JEDNA",
+    locationName: "",
+    immutableEvidenceTexts: [
+      "Organizuje @1by1.party; vidimo se sutra od 20h @kcgrad",
+    ],
+    canonicalVenueNamesByHandle,
+    handleVenueNamesByHandle: legacyPromoterVenueMap,
+    staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+  });
+  assert.equal(canonicalAtHandleVenue.venue, "KC Grad");
+  assert.equal(canonicalAtHandleVenue.source, "evidence_handle");
+  assert.equal(canonicalAtHandleVenue.evidenceHandle, "kcgrad");
+
+  for (const evidence of ["at @kcgrad", "vidimo se @kcgrad", "venue @kcgrad"]) {
+    const immediateLocativeHandleVenue = normalizeVenueFromEvidence({
+      handle: "silosibeograd",
+      rawModelVenue: "Silosi",
+      locationName: "",
+      immutableEvidenceTexts: [evidence],
+      canonicalVenueNamesByHandle,
+      handleVenueNamesByHandle: venueNameOverridesByHandle,
+      staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+    });
+    assert.equal(
+      immediateLocativeHandleVenue.venue,
+      "KC Grad",
+      `Expected immediate locative evidence '${evidence}' to override the posting venue.`,
+    );
+    assert.equal(immediateLocativeHandleVenue.source, "evidence_handle");
+  }
+
+  const canonicalHashtagVenue = normalizeVenueFromEvidence({
+    handle: "1by1.party",
+    rawModelVenue: "JEDNA PO JEDNA",
+    locationName: "",
+    immutableEvidenceTexts: ["Poster: #kcgrad"],
+    canonicalVenueNamesByHandle,
+    handleVenueNamesByHandle: { kcgrad: "KC Grad" },
+    staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+  });
+  assert.equal(canonicalHashtagVenue.venue, "KC Grad");
+  assert.equal(canonicalHashtagVenue.source, "evidence_handle");
+
+  const ambiguousCanonicalHandles = normalizeVenueFromEvidence({
+    handle: "1by1.party",
+    rawModelVenue: "KC Grad",
+    locationName: "KC Grad",
+    immutableEvidenceTexts: ["Program: @kcgrad i @silosibeograd"],
+    canonicalVenueNamesByHandle,
+    handleVenueNamesByHandle: legacyPromoterVenueMap,
+    staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+    allowCanonicalHandleFallback: false,
+  });
+  assert.equal(
+    ambiguousCanonicalHandles.venue,
+    "KC Grad",
+    "Ambiguous handle tags must fall through to consistent explicit venue evidence.",
+  );
+  assert.equal(ambiguousCanonicalHandles.source, "location_name");
+
+  const venueAccountCasualCollaboratorTag = normalizeVenueFromEvidence({
+    handle: "kcgrad",
+    rawModelVenue: "KC Grad",
+    locationName: "",
+    immutableEvidenceTexts: ["Hvala @silosibeograd na podršci programu."],
+    canonicalVenueNamesByHandle,
+    handleVenueNamesByHandle: { kcgrad: "KC Grad" },
+    staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+  });
+  assert.equal(
+    venueAccountCasualCollaboratorTag.venue,
+    "KC Grad",
+    "A casual tag must not override the configured physical venue account.",
+  );
+  assert.equal(venueAccountCasualCollaboratorTag.source, "handle_map");
+
+  for (const evidence of [
+    "Not at @silosibeograd",
+    "Nije u @silosibeograd",
+    "Ne u @silosibeograd",
+    "Vidimo se u KC Gradu, hvala @silosibeograd na podršci",
+    "Vidimo se u KC Gradu hvala @silosibeograd na podršci",
+    "Venue KC Grad @silosibeograd",
+  ]) {
+    const nonLocativeTaggedVenue = normalizeVenueFromEvidence({
+      handle: "kcgrad",
+      rawModelVenue: "KC Grad",
+      locationName: "",
+      immutableEvidenceTexts: [evidence],
+      canonicalVenueNamesByHandle,
+      handleVenueNamesByHandle: venueNameOverridesByHandle,
+      staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+    });
+    assert.equal(
+      nonLocativeTaggedVenue.venue,
+      "KC Grad",
+      `Expected '${evidence}' not to override the configured physical venue.`,
+    );
+    assert.equal(nonLocativeTaggedVenue.source, "handle_map");
+  }
+
   const aliasCases = [
     ["Kulturni centar GRAD", "KC Grad"],
     ["KC Grad", "KC Grad"],
+    ["KC Gradu", "KC Grad"],
     ["Silosi Beograd ••••IIII Dom kulture", "Silosi"],
     ["Medonosni vrt Silosa", "Silosi"],
     ["Kvaka 22", "Kvaka 22"],
@@ -708,6 +816,97 @@ function runVenueQa() {
     "Novi Bioskop Zvezda",
     "A promoter post must resolve a learned alias from the global venue directory.",
   );
+
+  const canonicalHandleEventDate = isoDateDaysFromNow(9);
+  const canonicalHandleCaption = [
+    "Ariana Grande theme party",
+    canonicalHandleEventDate,
+    "20:00",
+    "Lokacija je označena na posteru",
+  ].join(" | ");
+  const sourceMappedCanonicalVenues = {
+    ...canonicalVenueNamesByHandle,
+    "1by1.party": "JEDNA PO JEDNA",
+  };
+  const sourceConfiguredVenueNames = {
+    ...sourceMappedCanonicalVenues,
+    ...legacyPromoterVenueMap,
+  };
+  const [canonicalHandlePrepared] = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: canonicalHandleCaption,
+      altText: "Poster text: venue @kcgrad",
+      postId: "qa-canonical-venue-handle",
+      instagramPostUrl:
+        "https://www.instagram.com/p/qa-canonical-venue-handle/",
+      username: "1by1.party",
+    }),
+    makeExtractedEvent({
+      extraction_contract_version: "event_evidence_v2",
+      title: "Ariana Grande theme party",
+      date: canonicalHandleEventDate,
+      time: "20:00",
+      venue: "JEDNA PO JEDNA",
+      artists: [],
+      source_caption: canonicalHandleCaption,
+      source_url:
+        "https://www.instagram.com/p/qa-canonical-venue-handle/",
+      date_evidence: {
+        exact_text: canonicalHandleEventDate,
+        source: "caption",
+        is_relative: false,
+        resolved_date: canonicalHandleEventDate,
+      },
+      time_evidence: {
+        status: "start_time_stated",
+        exact_text: "20:00",
+        source: "caption",
+      },
+      field_confirmation: {
+        ...makeFieldConfirmation(0.95),
+        title: {
+          confidence: 0.95,
+          found_in: ["caption"],
+          evidence: "Ariana Grande theme party",
+          evidence_snippets: [
+            { source: "caption", text: "Ariana Grande theme party" },
+          ],
+          notes: "Exact caption title.",
+        },
+        location: {
+          confidence: 0.95,
+          found_in: ["alt_text"],
+          evidence: "@kcgrad",
+          evidence_snippets: [{ source: "alt_text", text: "@kcgrad" }],
+          notes: "Exact canonical venue handle in immutable alt text.",
+        },
+        location_name: {
+          confidence: 0.95,
+          found_in: ["alt_text"],
+          evidence: "@kcgrad",
+          evidence_snippets: [{ source: "alt_text", text: "@kcgrad" }],
+          notes: "Exact canonical venue handle in immutable alt text.",
+        },
+      },
+    }),
+    null,
+    sourceMappedCanonicalVenues,
+    {},
+    sourceConfiguredVenueNames,
+    {
+      canonicalVenueAliasesByHandle,
+      eventDateFilterNow: new Date(QA_NOW_ISO),
+      // This deliberately models the bad legacy classification. Immutable
+      // @kcgrad evidence must still outrank the posting-account venue map.
+      sourceRolesByHandle: { "1by1.party": "venue" },
+    },
+  );
+  assert.equal(canonicalHandlePrepared.kind, "ok", JSON.stringify(canonicalHandlePrepared));
+  assert.equal(canonicalHandlePrepared.event.venue, "KC Grad");
+  assert.equal(canonicalHandlePrepared.normalizedFields.venueSource, "evidence_handle");
+  assert.equal(canonicalHandlePrepared.normalizedFields.canonicalVenueEvidenceHandle, "kcgrad");
+  assert.equal(canonicalHandlePrepared.normalizedFields.venueEvidenceVerified, true);
+  assert.equal(canonicalHandlePrepared.normalizedFields.trustedVenueSource, false);
   assert.equal(toSearchableText("šupa"), "supa");
   assert.equal(toSearchableText("шупа"), "supa");
   assert.equal(toSearchableText("ʙᴇʟɢʀᴀᴅᴇ ᴋɪᴛᴄʜᴇɴ ᴘᴀʀᴛʏ"), "belgrade kitchen party");

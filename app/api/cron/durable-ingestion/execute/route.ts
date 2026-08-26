@@ -6,6 +6,7 @@ import { createConvexHttpClient, requireServiceSecret } from "@/lib/convex/serve
 import {
   persistScrapedPostsForHandle,
   processSavedScrapedPostForDurableReceipt,
+  runApprovedDuplicateCleanupForCompletedDurableRun,
 } from "@/lib/pipeline/run-instagram-ingestion";
 import { scrapeInstagramAccount } from "@/lib/scraper/instagram-scraper";
 import {
@@ -46,6 +47,25 @@ function deferredExecutorResponse(
   }, { status: 202 });
 }
 
+function deferredApprovedCleanupResponse(
+  error: unknown,
+  context: { runId: string; workerSlot: number; claimed: boolean },
+) {
+  console.error(JSON.stringify({
+    level: "error",
+    event: "durable_ingestion.approved_cleanup.deferred",
+    ...context,
+    error: error instanceof Error ? error.message.slice(0, 512) : "unknown cleanup failure",
+  }));
+  return NextResponse.json({
+    claimed: context.claimed,
+    complete: false,
+    retryDeferred: true,
+    durableStateUnknown: false,
+    error: "approved_duplicate_cleanup_deferred",
+  }, { status: 202 });
+}
+
 /** One receipt per request. The VPS starts one worker per fixed lane. */
 export async function POST(request: Request) {
   if (!isAuthorizedCronRequestHeader(request.headers.get("authorization"))) {
@@ -61,6 +81,43 @@ export async function POST(request: Request) {
   const serviceSecret = requireServiceSecret();
   const convex = createConvexHttpClient();
   const workerId = `vps:${randomUUID()}`;
+  const runCompletionCleanup = async (completion: unknown) => {
+    if (
+      !completion ||
+      typeof completion !== "object" ||
+      (completion as { complete?: unknown }).complete !== true
+    ) {
+      return null;
+    }
+    // Fixed lane 0 owns the completion side effect. Other lanes may exit once
+    // the run is terminal; lane 0 remains supervised until cleanup succeeds.
+    if (workerSlot !== 0) return null;
+    try {
+      const summary = await runApprovedDuplicateCleanupForCompletedDurableRun({
+        client: convex,
+        runId,
+        serviceSecret,
+      });
+      if (summary.error || summary.failedCount > 0 || summary.remainingGroupCount > 0) {
+        throw new Error(
+          summary.error ??
+            `Approved cleanup incomplete: failed=${summary.failedCount};remaining=${summary.remainingGroupCount}.`,
+        );
+      }
+      return null;
+    } catch (error) {
+      return error;
+    }
+  };
+  const runCompletionCleanupOrDefer = async (
+    completion: unknown,
+    claimed: boolean,
+  ) => {
+    const cleanupError = await runCompletionCleanup(completion);
+    return cleanupError
+      ? deferredApprovedCleanupResponse(cleanupError, { runId, workerSlot, claimed })
+      : null;
+  };
 
   // Convex elects fixed slot 0 as the one global AI consumer before reading
   // shared queue state. The other five requests remain fetch-capable without
@@ -99,7 +156,13 @@ export async function POST(request: Request) {
           workerId,
           detail: `saved_post:${processingClaim.scrapedPostId};${processingResult.outcome}`,
           serviceSecret,
-        }) as { status: "fetched" | "failed"; processingOutcome: string };
+        }) as {
+          complete: boolean;
+          status: "fetched" | "failed";
+          processingOutcome: string;
+        };
+        const cleanupDeferred = await runCompletionCleanupOrDefer(completion, true);
+        if (cleanupDeferred) return cleanupDeferred;
         return NextResponse.json({
           claimed: true,
           work: "processing",
@@ -198,6 +261,8 @@ export async function POST(request: Request) {
     } catch (error) {
       return deferredExecutorResponse(error, { runId, workerSlot, workerId, claimed: false });
     }
+    const cleanupDeferred = await runCompletionCleanupOrDefer(state, false);
+    if (cleanupDeferred) return cleanupDeferred;
     return NextResponse.json({
       claimed: false,
       complete: state?.complete ?? true,
@@ -211,7 +276,7 @@ export async function POST(request: Request) {
       // Apify may have charged before the process crashed, but no durable
       // post-persistence receipt exists. Do not re-fetch and do not pretend a
       // post was saved; surface the exact uncertainty for operator recovery.
-      await convex.mutation(complete, {
+      const completion = await convex.mutation(complete, {
         runId,
         receiptId: claimed.receiptId,
         workerId,
@@ -219,10 +284,12 @@ export async function POST(request: Request) {
         detail: "provider_attempt_persistence_unconfirmed",
         serviceSecret,
       });
+      const cleanupDeferred = await runCompletionCleanupOrDefer(completion, true);
+      if (cleanupDeferred) return cleanupDeferred;
       return NextResponse.json({ claimed: true, handle: claimed.handle, outcome: "deferred" });
     }
     if (alreadyFetched && claimed.providerResultStatus === "no_post") {
-      await convex.mutation(complete, {
+      const completion = await convex.mutation(complete, {
         runId,
         receiptId: claimed.receiptId,
         workerId,
@@ -230,6 +297,8 @@ export async function POST(request: Request) {
         detail: "persisted_provider_no_post",
         serviceSecret,
       });
+      const cleanupDeferred = await runCompletionCleanupOrDefer(completion, true);
+      if (cleanupDeferred) return cleanupDeferred;
       return NextResponse.json({ claimed: true, handle: claimed.handle, outcome: "no_post" });
     }
     if (alreadyFetched && claimed.providerResultStatus === "persisted") {
@@ -261,7 +330,7 @@ export async function POST(request: Request) {
         serviceSecret,
       }) as { started: boolean; reason?: string };
       if (!providerAttempt.started) {
-        await convex.mutation(complete, {
+        const completion = await convex.mutation(complete, {
           runId,
           receiptId: claimed.receiptId,
           workerId,
@@ -269,6 +338,8 @@ export async function POST(request: Request) {
           detail: providerAttempt.reason ?? "budget_exhausted",
           serviceSecret,
         });
+        const cleanupDeferred = await runCompletionCleanupOrDefer(completion, true);
+        if (cleanupDeferred) return cleanupDeferred;
         return NextResponse.json({ claimed: true, handle: claimed.handle, outcome: "deferred" });
       }
       // The controller owns the provider reservation and eight-slot semaphore.
@@ -327,7 +398,15 @@ export async function POST(request: Request) {
       }, { status: 202 });
     }
     const result = { outcome: "no_post" as const, detail: "provider_completed_without_post" };
-    await convex.mutation(complete, { runId, receiptId: claimed.receiptId, workerId, ...result, serviceSecret });
+    const completion = await convex.mutation(complete, {
+      runId,
+      receiptId: claimed.receiptId,
+      workerId,
+      ...result,
+      serviceSecret,
+    });
+    const cleanupDeferred = await runCompletionCleanupOrDefer(completion, true);
+    if (cleanupDeferred) return cleanupDeferred;
     return NextResponse.json({ claimed: true, handle: claimed.handle, outcome: result.outcome });
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown execution failure";

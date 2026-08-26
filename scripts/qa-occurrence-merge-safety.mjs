@@ -292,6 +292,81 @@ assert.deepEqual(
   [{ key: "shared-occurrence", eventId: "duplicate-primary" }],
 );
 
+const incompatibleReceiptState = makeDb({
+  events: [
+    approvedEvent("receipt-primary"),
+    approvedEvent("receipt-fuzzy-duplicate", {
+      title: "Canonical concert extended",
+      updatedAt: 11,
+    }),
+  ],
+  links: [
+    {
+      _id: "source-link-fuzzy-duplicate",
+      eventId: "receipt-fuzzy-duplicate",
+      sourceIdentity: "instagram:occurrence_venue:fuzzy-post",
+      sourceFingerprint: "fingerprint-fuzzy",
+      sourceOccurrenceKey: "shared-occurrence",
+      instagramPostId: "shared-post",
+      instagramPostUrl: "https://www.instagram.com/p/shared-post/",
+      sourceHandle: "occurrence_venue",
+      linkedAt: 1,
+      updatedAt: 1,
+    },
+  ],
+  receipts: [
+    {
+      _id: "receipt-fuzzy",
+      sourceIdentity: "instagram:occurrence_venue:fuzzy-post",
+      sourceFingerprint: "fingerprint-fuzzy",
+      expectedKeys: ["shared-occurrence"],
+      expectedOccurrences: [
+        {
+          key: "shared-occurrence",
+          date: "2026-08-07",
+          time: "20:00",
+          venue: "Occurrence Venue",
+          title: "Canonical concert extended",
+          artists: ["Canonical Artist"],
+        },
+      ],
+      satisfiedKeys: ["shared-occurrence"],
+      deferredChildCount: 0,
+      deferredChildKeys: [],
+      satisfiedOccurrences: [
+        { key: "shared-occurrence", eventId: "receipt-fuzzy-duplicate" },
+      ],
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ],
+});
+await assert.rejects(
+  mergeApprovedEvents._handler(adminCtx(incompatibleReceiptState), {
+    primaryId: "receipt-primary",
+    duplicateIds: ["receipt-fuzzy-duplicate"],
+    patch: {},
+  }),
+  /cannot preserve an Instagram occurrence receipt/i,
+  "A fuzzy duplicate must not be deleted when its receipt cannot bind to the primary.",
+);
+assert.equal(
+  incompatibleReceiptState.tables.events.has("receipt-fuzzy-duplicate"),
+  true,
+);
+assert.equal(
+  incompatibleReceiptState.tables.instagramEventSources.get(
+    "source-link-fuzzy-duplicate",
+  ).eventId,
+  "receipt-fuzzy-duplicate",
+);
+assert.deepEqual(
+  incompatibleReceiptState.tables.instagramSourceOccurrenceReceipts.get(
+    "receipt-fuzzy",
+  ).satisfiedOccurrences,
+  [{ key: "shared-occurrence", eventId: "receipt-fuzzy-duplicate" }],
+);
+
 const dateEvidenceMergeState = makeDb({
   events: [
     approvedEvent("date-evidence-primary", {

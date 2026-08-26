@@ -1,3 +1,5 @@
+import { getEventTimeSortMinutes } from "./event-time.ts";
+
 export type ExpectedSourceOccurrence = {
   key: string;
   date: string;
@@ -22,6 +24,15 @@ type SemanticOccurrenceBinding = Pick<
   ExpectedSourceOccurrence,
   "date" | "time" | "venue" | "title" | "artists"
 >;
+
+export type ImmutableSourceOccurrenceBindingCandidate = {
+  title: string;
+  date: string;
+  time?: string | null;
+  venue: string;
+  artists: string[];
+  normalizedFieldsJson?: string | null;
+};
 
 function normalizeBindingText(value: string | undefined): string {
   return (value ?? "")
@@ -95,6 +106,53 @@ function readPersistedBindingSnapshot(
     venue,
     artists,
   };
+}
+
+/**
+ * Automatic deletion may only rely on the immutable extraction snapshot, not
+ * mutable public fields. Missing or malformed snapshots therefore fail
+ * closed, even when a broader duplicate classifier finds strong similarity.
+ */
+export function immutableSourceOccurrenceBindingsMatch(
+  left: ImmutableSourceOccurrenceBindingCandidate,
+  right: ImmutableSourceOccurrenceBindingCandidate,
+): boolean {
+  const leftBinding = readPersistedBindingSnapshot(
+    parseNormalizedFields(left.normalizedFieldsJson ?? undefined),
+  );
+  const rightBinding = readPersistedBindingSnapshot(
+    parseNormalizedFields(right.normalizedFieldsJson ?? undefined),
+  );
+  if (!leftBinding || !rightBinding) {
+    return false;
+  }
+
+  const leftArtists = normalizeArtists(leftBinding.artists);
+  const rightArtists = normalizeArtists(rightBinding.artists);
+  return (
+    leftBinding.date === rightBinding.date &&
+    normalizeBindingText(leftBinding.time) === normalizeBindingText(rightBinding.time) &&
+    normalizeBindingText(leftBinding.venue) === normalizeBindingText(rightBinding.venue) &&
+    normalizeBindingText(leftBinding.title) === normalizeBindingText(rightBinding.title) &&
+    leftArtists.length === rightArtists.length &&
+    leftArtists.every((artist, index) => artist === rightArtists[index])
+  );
+}
+
+export function immutableSourceOccurrenceBindingsHaveEqualReliableTime(
+  left: ImmutableSourceOccurrenceBindingCandidate,
+  right: ImmutableSourceOccurrenceBindingCandidate,
+): boolean {
+  const leftBinding = readPersistedBindingSnapshot(
+    parseNormalizedFields(left.normalizedFieldsJson ?? undefined),
+  );
+  const rightBinding = readPersistedBindingSnapshot(
+    parseNormalizedFields(right.normalizedFieldsJson ?? undefined),
+  );
+  if (!leftBinding || !rightBinding) return false;
+  const leftMinutes = getEventTimeSortMinutes(leftBinding.time);
+  const rightMinutes = getEventTimeSortMinutes(rightBinding.time);
+  return leftMinutes !== null && rightMinutes !== null && leftMinutes === rightMinutes;
 }
 
 /**
