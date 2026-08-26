@@ -9,6 +9,7 @@ import {
 } from "../lib/images/media-source-identity";
 import { isAllowedRemoteImageUrl } from "../lib/images/remote-image-policy";
 import { nextEventUpdatedAt } from "../lib/events/event-update-precondition";
+import { isCrossPostCampaignLineageEvent } from "../lib/events/cross-post-campaign-aggregate-attestation";
 import { isCanonicallyGroundedApprovedEvent } from "./publicEventGrounding";
 
 const sourceIdentityArgs = {
@@ -227,14 +228,32 @@ async function attachAssetToSourceRecords(
   if (events.length === 0 && posts.length === 0) {
     throw new Error("No event or scraped-post record matches the Instagram source identity.");
   }
+  const eventNeedsPatch = (event: Doc<"events">) =>
+    event.imageStorageId !== attachment.storageId ||
+    event.imageUrl !== attachment.url ||
+    Boolean(
+      normalized.normalizedInstagramPostUrl &&
+        event.normalizedInstagramPostUrl !== normalized.normalizedInstagramPostUrl,
+    );
+  const postNeedsPatch = (post: Doc<"scrapedPosts">) =>
+    post.imageStorageId !== attachment.storageId ||
+    post.imageUrl !== attachment.url ||
+    Boolean(
+      normalized.normalizedInstagramPostUrl &&
+        post.normalizedInstagramPostUrl !== normalized.normalizedInstagramPostUrl,
+    );
+  if (
+    events.some(isCrossPostCampaignLineageEvent) &&
+    (events.some(eventNeedsPatch) || posts.some(postNeedsPatch))
+  ) {
+    throw new Error(
+      "Campaign lineage media may only change through a dedicated re-attestation operation.",
+    );
+  }
 
   let attachedEventCount = 0;
   for (const event of events) {
-    const needsPatch =
-      event.imageStorageId !== attachment.storageId ||
-      event.imageUrl !== attachment.url ||
-      (normalized.normalizedInstagramPostUrl &&
-        event.normalizedInstagramPostUrl !== normalized.normalizedInstagramPostUrl);
+    const needsPatch = eventNeedsPatch(event);
     if (!needsPatch) continue;
     const patch = {
       imageStorageId: attachment.storageId,
@@ -263,11 +282,7 @@ async function attachAssetToSourceRecords(
 
   let attachedScrapedPostCount = 0;
   for (const post of posts) {
-    const needsPatch =
-      post.imageStorageId !== attachment.storageId ||
-      post.imageUrl !== attachment.url ||
-      (normalized.normalizedInstagramPostUrl &&
-        post.normalizedInstagramPostUrl !== normalized.normalizedInstagramPostUrl);
+    const needsPatch = postNeedsPatch(post);
     if (!needsPatch) continue;
     await ctx.db.patch(post._id, {
       imageStorageId: attachment.storageId,
@@ -463,6 +478,15 @@ export const removeMissingAsset = internalMutation({
       ? await ctx.db.get(args.processingFence.scrapedPostId)
       : null;
     const posts = exactPost ? [exactPost] : identityPosts;
+    if (
+      events.some(isCrossPostCampaignLineageEvent) &&
+      (events.some((event) => event.imageStorageId === args.expectedStorageId) ||
+        posts.some((post) => post.imageStorageId === args.expectedStorageId))
+    ) {
+      throw new Error(
+        "Campaign lineage media may only change through a dedicated re-attestation operation.",
+      );
+    }
     for (const event of events) {
       if (event.imageStorageId !== args.expectedStorageId) continue;
       await ctx.db.patch(event._id, {

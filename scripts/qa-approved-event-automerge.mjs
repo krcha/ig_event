@@ -558,6 +558,24 @@ assert.equal(
   true,
   "Exact immutable title/date/time/venue/artist bindings must remain eligible.",
 );
+const aggregateDuplicate = {
+  ...strictDuplicate,
+  id: "campaign-aggregate-duplicate",
+  normalizedFieldsJson: JSON.stringify({
+    ...JSON.parse(strictDuplicate.normalizedFieldsJson),
+    crossPostCampaignAggregateAttestation: { malformedButReserved: true },
+  }),
+};
+assert.equal(
+  isApprovedEventAutoMergePairEligible(strictPrimary, aggregateDuplicate),
+  false,
+  "Generic cleanup must never delete or absorb a campaign aggregate without its receipt-aware path.",
+);
+assert.equal(
+  isApprovedEventAutoMergePairEligible(aggregateDuplicate, strictPrimary),
+  false,
+  "Campaign aggregates must be excluded regardless of which row quality ordering chooses as primary.",
+);
 assert(
   !hasGroupedPair(strictGroupedIdSets, strictPrimary.id, fuzzyTitleDuplicate.id),
   "Expected fuzzy-title receipt bindings to stay outside strict groups.",

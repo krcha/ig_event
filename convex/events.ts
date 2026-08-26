@@ -25,8 +25,20 @@ import {
 } from "../lib/events/nightlife-lineup-coalescing";
 import {
   buildCrossPostPromotionCoalescingPlan,
+  captionsHaveExactCampaignHashtagAnchors,
   CROSS_POST_PROMOTION_COALESCING_POLICY_VERSION,
+  deriveAutomaticCrossPostCampaignIdentity,
+  deriveExclusiveHashtagCrossPostCampaignIdentity,
+  hasAutomaticCrossPostCanonicalVenueEvidence,
+  MAX_AUTOMATIC_CROSS_POST_SOURCE_HISTORY,
 } from "../lib/events/cross-post-promotion-coalescing";
+import {
+  CROSS_POST_CAMPAIGN_AGGREGATE_ATTESTATION_FIELD,
+  hasCrossPostCampaignAggregateAttestationField,
+  isCrossPostCampaignLineageEvent,
+  readCrossPostCampaignAggregateAttestation,
+  type CrossPostCampaignAggregateAttestation,
+} from "../lib/events/cross-post-campaign-aggregate-attestation";
 import {
   buildApprovedEventAutoCleanupGroups,
   type ApprovedEventDuplicateRecord,
@@ -323,7 +335,11 @@ const crossPostPromotionCoalescingResult = v.object({
   dedupedSaveCount: v.number(),
 });
 const crossPostPromotionCoalescingContextResult = v.object({
-  state: v.union(v.literal("ready"), v.literal("already_coalesced")),
+  state: v.union(
+    v.literal("ready"),
+    v.literal("legacy_migration_ready"),
+    v.literal("already_coalesced"),
+  ),
   targetVenue: v.any(),
   candidates: v.array(
     v.object({
@@ -362,6 +378,7 @@ const SOURCE_GROUNDING_REPROCESS_REMOVABLE_REASONS = new Set([
   "requires_human_approval",
 ]);
 const DEFAULT_EXPIRED_EVENT_DELETE_BATCH_SIZE = 100;
+const EVENT_RETENTION_CURSOR_KEY = "expired-events-v1";
 const DISCOVER_ORGANIC_SCAN_LIMIT = 120;
 const PUBLIC_EVENT_PAGE_SIZE = 50;
 const MAX_PUBLIC_EVENT_WINDOW_DAYS = 400;
@@ -1629,6 +1646,7 @@ async function projectLegacyCompatiblePublicEventPage(
 ) {
   const visibility = await Promise.all(
     events.map((event) =>
+      hasCrossPostCampaignAggregateAttestationField(event.normalizedFieldsJson) ||
       usesEventEvidenceV2(event) ||
       event.humanReviewedLegacySourcePolicyVersion ===
         HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION ||
@@ -2347,6 +2365,11 @@ export const backfillEventVenueIdentityBatch = mutation({
     const publicVenuesById = new Map(publicVenues.map((venue) => [venue._id, venue]));
 
     for (const event of result.page) {
+      // Campaign rows are version-fenced by their aggregate attestation/audit.
+      // A generic backfill must not silently invalidate that proof.
+      if (isCrossPostCampaignLineageEvent(event)) {
+        continue;
+      }
       const linkedVenue = event.venueId ? publicVenuesById.get(event.venueId) : undefined;
       const resolved = linkedVenue
         ? resolveVenueDenormalizedFieldsFromPublicVenues([linkedVenue], linkedVenue.name)
@@ -2964,6 +2987,7 @@ async function upsertInstagramEventSourceLink(
   satisfiedKey: string,
   representativeEvent: Doc<"events">,
   supersededKey?: string,
+  options: { rejectMaterialCampaignChange?: boolean } = {},
 ): Promise<void> {
   const existingTarget = await ctx.db
     .query("instagramEventSources")
@@ -2991,7 +3015,6 @@ async function upsertInstagramEventSourceLink(
     throw new Error("Superseded Instagram occurrence source is linked to another event.");
   }
 
-  const now = Date.now();
   const patch = {
     eventId: representativeEvent._id,
     sourceIdentity: plan.sourceIdentity,
@@ -3003,22 +3026,45 @@ async function upsertInstagramEventSourceLink(
     ...(representativeEvent.instagramPostUrl
       ? { instagramPostUrl: representativeEvent.instagramPostUrl }
       : {}),
-    updatedAt: now,
   };
+  const targetNeedsPatch = Boolean(
+    existingTarget &&
+      Object.entries(patch).some(
+        ([key, value]) =>
+          JSON.stringify(existingTarget[key as keyof typeof existingTarget]) !==
+          JSON.stringify(value),
+      ),
+  );
+  const supersededNeedsDelete = Boolean(
+    supersededLink && supersededLink._id !== existingTarget?._id,
+  );
+  if (
+    options.rejectMaterialCampaignChange &&
+    ((!existingTarget && !supersededLink) || targetNeedsPatch || supersededNeedsDelete)
+  ) {
+    throw new Error(
+      "Campaign source links may only change through a dedicated re-attestation operation.",
+    );
+  }
+  if (existingTarget && !targetNeedsPatch && !supersededNeedsDelete) {
+    return;
+  }
+  const now = Date.now();
+  const versionedPatch = { ...patch, updatedAt: now };
 
   if (existingTarget) {
-    await ctx.db.patch(existingTarget._id, patch);
+    await ctx.db.patch(existingTarget._id, versionedPatch);
     if (supersededLink && supersededLink._id !== existingTarget._id) {
       await ctx.db.delete(supersededLink._id);
     }
     return;
   }
   if (supersededLink) {
-    await ctx.db.patch(supersededLink._id, patch);
+    await ctx.db.patch(supersededLink._id, versionedPatch);
     return;
   }
   await ctx.db.insert("instagramEventSources", {
-    ...patch,
+    ...versionedPatch,
     linkedAt: now,
   });
 }
@@ -3184,7 +3230,7 @@ async function recordSourceOccurrenceSatisfaction(
     ]),
   ].filter((key) => !resolvedObservedChildKeys.has(key));
   const deferredChildCount = deferredChildKeys.length;
-  await ctx.db.patch(existing._id, {
+  const receiptPatch = {
     sourceFingerprint: plan.sourceFingerprint,
     expectedKeys,
     expectedOccurrences,
@@ -3192,14 +3238,39 @@ async function recordSourceOccurrenceSatisfaction(
     deferredChildCount,
     deferredChildKeys,
     satisfiedOccurrences,
-    updatedAt: now,
-  });
+  };
+  const receiptNeedsPatch = Object.entries(receiptPatch).some(
+    ([key, value]) =>
+      JSON.stringify(existing[key as keyof typeof existing]) !== JSON.stringify(value),
+  );
+  const aggregateBound = await isReceiptBoundToCrossPostCampaign(ctx, existing);
+  if (receiptNeedsPatch && aggregateBound) {
+    throw new Error(
+      "Campaign occurrence receipts may only change through a dedicated re-attestation operation.",
+    );
+  }
+  if (receiptNeedsPatch) {
+    await ctx.db.patch(existing._id, { ...receiptPatch, updatedAt: now });
+  }
   await upsertInstagramEventSourceLink(
     ctx,
     plan,
     satisfiedKey,
     representativeEvent,
     supersededKey,
+    { rejectMaterialCampaignChange: aggregateBound },
+  );
+}
+
+async function isReceiptBoundToCrossPostCampaign(
+  ctx: MutationCtx,
+  receipt: Doc<"instagramSourceOccurrenceReceipts">,
+): Promise<boolean> {
+  const satisfiedRepresentatives = await Promise.all(
+    receipt.satisfiedOccurrences.map((occurrence) => ctx.db.get(occurrence.eventId)),
+  );
+  return satisfiedRepresentatives.some(
+    (event) => event !== null && isCrossPostCampaignLineageEvent(event),
   );
 }
 
@@ -3235,6 +3306,11 @@ async function reconcileExistingSourceOccurrenceReceipt(
       updatedAt: now,
     });
     return true;
+  }
+  if (await isReceiptBoundToCrossPostCampaign(ctx, existing)) {
+    throw new Error(
+      "Campaign occurrence receipts may only change through a dedicated re-attestation operation.",
+    );
   }
   if (
     existing.sourceFingerprint !== plan.sourceFingerprint &&
@@ -3559,6 +3635,11 @@ export const updateSourceOccurrenceExpectedCount = mutation({
       normalizedFields.sourceOccurrenceSourceFingerprint === args.nextSourceFingerprint
     ) {
       return { updated: false };
+    }
+    if (isCrossPostCampaignLineageEvent(existingEvent)) {
+      throw new Error(
+        "Campaign occurrence completeness may only change through a dedicated re-attestation operation.",
+      );
     }
     if (
       normalizedFields.sourceOccurrenceExpectedCount !== args.expectedCurrentCount ||
@@ -4153,7 +4234,6 @@ async function applyEventUpdate(
   assertExpectedEventStatus(existingEvent.status, args.expectedStatus);
   assertExpectedEventUpdatedAt(existingEvent.updatedAt, args.expectedUpdatedAt);
 
-  const updatedAt = nextEventUpdatedAt(existingEvent.updatedAt);
   const { clearTicketPrice, ...eventPatch } = args.patch;
   if (clearTicketPrice && eventPatch.ticketPrice !== undefined) {
     throw new Error("ticketPrice and clearTicketPrice cannot be used together.");
@@ -4189,6 +4269,20 @@ async function applyEventUpdate(
       ? { eventType: canonicalizeEventType(eventPatch.eventType) }
       : {}),
   };
+  const materialChange = Object.entries(patch).some(
+    ([key, value]) =>
+      JSON.stringify(existingEvent[key as keyof typeof existingEvent]) !==
+      JSON.stringify(value),
+  );
+  if (isCrossPostCampaignLineageEvent(existingEvent)) {
+    if (materialChange) {
+      throw new Error(
+        "Campaign lineage events may only change through a dedicated re-attestation operation.",
+      );
+    }
+    return { updatedAt: existingEvent.updatedAt };
+  }
+  const updatedAt = nextEventUpdatedAt(existingEvent.updatedAt);
   const effectiveEvent = { ...existingEvent, ...patch };
   if (authorization.kind === "service") {
     const structuredEvidenceApproval = hasEventEvidenceV2AutoApproval(
@@ -5369,6 +5463,260 @@ function buildCrossPostPromotionModerationMarker(
   );
 }
 
+type PreparedCrossPostPromotionCandidate = {
+  event: Doc<"events">;
+  fields: Record<string, unknown>;
+  link: Doc<"instagramEventSources">;
+  receipt: Doc<"instagramSourceOccurrenceReceipts">;
+  savedEvents: Doc<"savedEvents">[];
+  userSavedEvents: Doc<"userSavedEvents">[];
+};
+
+type LegacyCrossPostPromotionMigrationProof = {
+  sourceEventsBefore: Doc<"events">[];
+};
+
+function exactCrossPostJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function readLegacyCrossPostApprovedEventBefore(value: unknown): Doc<"events"> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const event = value as Partial<Doc<"events">>;
+  return typeof event._id === "string" &&
+      typeof event._creationTime === "number" &&
+      typeof event.updatedAt === "number" &&
+      typeof event.normalizedFieldsJson === "string" &&
+      event.status === "approved"
+    ? (event as Doc<"events">)
+    : null;
+}
+
+function legacyCrossPostSourceEvidenceRemainsExact(
+  current: Doc<"events">,
+  before: Doc<"events">,
+): boolean {
+  return (
+    current.normalizedFieldsJson === before.normalizedFieldsJson &&
+    current.title === before.title &&
+    current.date === before.date &&
+    current.time === before.time &&
+    current.instagramPostId === before.instagramPostId &&
+    current.instagramPostUrl === before.instagramPostUrl &&
+    current.sourceCaption === before.sourceCaption &&
+    current.sourcePostedAt === before.sourcePostedAt &&
+    current.rawExtractionJson === before.rawExtractionJson &&
+    current.imageUrl === before.imageUrl &&
+    current.imageStorageId === before.imageStorageId &&
+    current.sourceOccurrenceKey === before.sourceOccurrenceKey
+  );
+}
+
+async function loadExactCrossPostAuditPatchForOperation(
+  ctx: QueryCtx | MutationCtx,
+  eventId: Id<"events">,
+  action: string,
+  operationId: string,
+): Promise<Record<string, unknown> | null> {
+  const rows = await ctx.db
+    .query("eventAuditLog")
+    .withIndex("by_event", (q) => q.eq("eventId", eventId))
+    .take(101);
+  if (rows.length > 100) return null;
+  const matches: Record<string, unknown>[] = [];
+  for (const row of rows) {
+    if (row.action !== action || !row.patchJson) continue;
+    try {
+      const patch = JSON.parse(row.patchJson) as unknown;
+      if (
+        patch &&
+        typeof patch === "object" &&
+        !Array.isArray(patch) &&
+        (patch as Record<string, unknown>).operationId === operationId
+      ) {
+        matches.push(patch as Record<string, unknown>);
+      }
+    } catch {
+      return null;
+    }
+  }
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+async function proveLegacyCrossPostPromotionMigration(
+  ctx: QueryCtx | MutationCtx,
+  args: {
+    legacyOperationId: string;
+    targetVenue: Doc<"venues">;
+    prepared: PreparedCrossPostPromotionCandidate[];
+    sharedEvidenceAnchors?: string[];
+  },
+): Promise<LegacyCrossPostPromotionMigrationProof | null> {
+  const { legacyOperationId, targetVenue, prepared } = args;
+  if (
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{15,159}$/.test(legacyOperationId) ||
+    prepared.length < 2 ||
+    prepared.length > 8
+  ) {
+    return null;
+  }
+  const primary = prepared[0]!;
+  const variants = prepared.slice(1);
+  const primaryMarker = buildCrossPostPromotionModerationMarker(
+    "primary",
+    legacyOperationId,
+  );
+  const variantMarker = buildCrossPostPromotionModerationMarker(
+    "variant",
+    legacyOperationId,
+  );
+  if (
+    primary.event.status !== "approved" ||
+    !primary.event.moderationNote?.startsWith(primaryMarker) ||
+    hasCrossPostCampaignAggregateAttestationField(
+      primary.event.normalizedFieldsJson,
+    ) ||
+    variants.some(
+      ({ event }) =>
+        event.status !== "rejected" ||
+        !event.moderationNote?.startsWith(variantMarker) ||
+        hasCrossPostCampaignAggregateAttestationField(event.normalizedFieldsJson),
+    )
+  ) {
+    return null;
+  }
+
+  const primaryAudit = await loadExactCrossPostAuditPatchForOperation(
+    ctx,
+    primary.event._id,
+    "cross_post_campaign_coalesced",
+    legacyOperationId,
+  );
+  const primaryEventBefore = readLegacyCrossPostApprovedEventBefore(
+    primaryAudit?.eventBefore,
+  );
+  const foldedVariantIds = Array.isArray(primaryAudit?.foldedVariantIds)
+    ? primaryAudit.foldedVariantIds
+    : [];
+  const variantUpdatedAts = Array.isArray(primaryAudit?.variantUpdatedAts)
+    ? primaryAudit.variantUpdatedAts
+    : [];
+  const variantReceiptUpdatedAts = Array.isArray(
+    primaryAudit?.variantReceiptUpdatedAts,
+  )
+    ? primaryAudit.variantReceiptUpdatedAts
+    : [];
+  const auditedTargetVenue =
+    primaryAudit?.targetVenue &&
+    typeof primaryAudit.targetVenue === "object" &&
+    !Array.isArray(primaryAudit.targetVenue)
+      ? (primaryAudit.targetVenue as Record<string, unknown>)
+      : null;
+  if (
+    !primaryAudit ||
+    primaryAudit.policyVersion !== CROSS_POST_PROMOTION_COALESCING_POLICY_VERSION ||
+    primaryAudit.sourceGroundingVerifiedAtCoalescing === true ||
+    primaryAudit.aggregateAttestation !== undefined ||
+    !primaryEventBefore ||
+    !legacyCrossPostSourceEvidenceRemainsExact(
+      primary.event,
+      primaryEventBefore,
+    ) ||
+    !exactCrossPostJson(primaryAudit.sourceLinkBefore, primary.link) ||
+    !exactCrossPostJson(primaryAudit.receiptBefore, primary.receipt) ||
+    primaryAudit.canonicalVenueName !== targetVenue.name ||
+    normalizeHandle(normalizedString(primaryAudit.canonicalVenueHandle)) !==
+      normalizeHandle(targetVenue.instagramHandle) ||
+    auditedTargetVenue?._id !== targetVenue._id ||
+    auditedTargetVenue.updatedAt !== targetVenue.updatedAt ||
+    foldedVariantIds.length !== variants.length ||
+    !foldedVariantIds.every(
+      (eventId, index) => eventId === variants[index]?.event._id,
+    ) ||
+    variantUpdatedAts.length !== variants.length ||
+    !variantUpdatedAts.every((value, index) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+      const transition = value as Record<string, unknown>;
+      return (
+        transition.id === variants[index]?.event._id &&
+        transition.updatedAt === variants[index]?.event.updatedAt
+      );
+    }) ||
+    variantReceiptUpdatedAts.length !== variants.length ||
+    !variantReceiptUpdatedAts.every((value, index) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+      const transition = value as Record<string, unknown>;
+      return (
+        transition.eventId === variants[index]?.event._id &&
+        transition.receiptId === variants[index]?.receipt._id &&
+        transition.updatedAt === variants[index]?.receipt.updatedAt
+      );
+    }) ||
+    (args.sharedEvidenceAnchors !== undefined &&
+      (!Array.isArray(primaryAudit.sharedEvidenceAnchors) ||
+        primaryAudit.sharedEvidenceAnchors.some(
+          (value) => typeof value !== "string",
+        ) ||
+        !exactStringSetEquals(
+          primaryAudit.sharedEvidenceAnchors as string[],
+          args.sharedEvidenceAnchors,
+        ))) ||
+    !(await isCanonicallyGroundedApprovedEvent(ctx, primaryEventBefore))
+  ) {
+    return null;
+  }
+
+  const sourceEventsBefore = [primaryEventBefore];
+  const primaryExpectedOccurrence = primary.receipt.expectedOccurrences?.[0];
+  if (
+    !crossPostReceiptHasExactSingleBinding(primary.receipt, primary.link) ||
+    primary.receipt.satisfiedOccurrences[0]?.eventId !== primary.event._id ||
+    !sourceOccurrenceRepresentativeMatchesExpected(
+      primary.event,
+      primaryExpectedOccurrence,
+    )
+  ) {
+    return null;
+  }
+  for (let index = 0; index < variants.length; index += 1) {
+    const item = variants[index]!;
+    const audit = await loadExactCrossPostAuditPatchForOperation(
+      ctx,
+      item.event._id,
+      "cross_post_campaign_variant_rejected",
+      legacyOperationId,
+    );
+    const eventBefore = readLegacyCrossPostApprovedEventBefore(audit?.eventBefore);
+    const expectedOccurrence = item.receipt.expectedOccurrences?.[0];
+    if (
+      !audit ||
+      audit.policyVersion !== CROSS_POST_PROMOTION_COALESCING_POLICY_VERSION ||
+      audit.sourceGroundingVerifiedAtCoalescing === true ||
+      audit.primaryId !== primary.event._id ||
+      audit.variantUpdatedAt !== item.event.updatedAt ||
+      !eventBefore ||
+      !legacyCrossPostSourceEvidenceRemainsExact(item.event, eventBefore) ||
+      !exactCrossPostJson(audit.sourceLinkBefore, item.link) ||
+      !exactCrossPostJson(audit.receiptAfter, item.receipt) ||
+      !crossPostReceiptHasExactSingleBinding(item.receipt, item.link) ||
+      !exactCrossPostReceiptSemanticsEqual(
+        expectedOccurrence,
+        primaryExpectedOccurrence,
+      ) ||
+      item.receipt.satisfiedOccurrences[0]?.eventId !== primary.event._id ||
+      !sourceOccurrenceRepresentativeMatchesExpected(
+        primary.event,
+        expectedOccurrence,
+      ) ||
+      !(await isCanonicallyGroundedApprovedEvent(ctx, eventBefore))
+    ) {
+      return null;
+    }
+    sourceEventsBefore.push(eventBefore);
+  }
+  return { sourceEventsBefore };
+}
+
 /**
  * Returns the exact bounded rows needed to construct a coalescing mutation.
  * Operators can call it again after an uncertain response: the same operation
@@ -5377,6 +5725,7 @@ function buildCrossPostPromotionModerationMarker(
 export const getCrossPostPromotionCoalescingContext = query({
   args: {
     operationId: v.string(),
+    legacyMigrationOperationId: v.optional(v.string()),
     eventIds: v.array(v.id("events")),
     targetVenueId: v.id("venues"),
     serviceSecret: v.string(),
@@ -5387,8 +5736,16 @@ export const getCrossPostPromotionCoalescingContext = query({
     if (authorization.kind !== "service") {
       throw new Error("Cross-post promotion context requires service authentication.");
     }
+    const legacyMigrationOperationId =
+      args.legacyMigrationOperationId?.trim();
     if (
       !/^[A-Za-z0-9][A-Za-z0-9._:-]{15,159}$/.test(args.operationId) ||
+      (legacyMigrationOperationId !== undefined &&
+        (!/^[A-Za-z0-9][A-Za-z0-9._:-]{15,159}$/.test(
+          legacyMigrationOperationId,
+        ) ||
+          legacyMigrationOperationId === args.operationId ||
+          !args.operationId.startsWith("auto-cross-post-v1:"))) ||
       args.eventIds.length < 2 ||
       args.eventIds.length > 8 ||
       new Set(args.eventIds.map(String)).size !== args.eventIds.length
@@ -5451,11 +5808,10 @@ export const getCrossPostPromotionCoalescingContext = query({
     );
     const primaryCandidate = candidates[0]!;
     const primaryExpectedOccurrence = primaryCandidate.receipt.expectedOccurrences?.[0];
-    const primaryPubliclyGrounded = await isCanonicallyGroundedApprovedEvent(
-      ctx,
-      primaryCandidate.event,
+    const publiclyGrounded = await Promise.all(
+      candidates.map(({ event }) => isCanonicallyGroundedApprovedEvent(ctx, event)),
     );
-    const ready = primaryPubliclyGrounded && candidates.every(({ event, sourceLink, receipt }) => {
+    const ready = publiclyGrounded.every(Boolean) && candidates.every(({ event, sourceLink, receipt }) => {
       const expectedOccurrence = receipt.expectedOccurrences?.[0];
       return (
         event.status === "approved" &&
@@ -5560,7 +5916,7 @@ export const getCrossPostPromotionCoalescingContext = query({
       exactPrimaryAudit &&
       exactReceiptAfterState &&
       exactTargetAfterState &&
-      primaryPubliclyGrounded &&
+      publiclyGrounded[0] === true &&
       candidates[0]?.event.status === "approved" &&
       candidates[0]?.event.moderationNote?.startsWith(primaryMarker) === true &&
       candidates
@@ -5570,11 +5926,65 @@ export const getCrossPostPromotionCoalescingContext = query({
             event.status === "rejected" &&
             event.moderationNote?.startsWith(variantMarker) === true,
         );
-    if (!ready && !alreadyCoalesced) {
+    const completedAttestation = readCrossPostCampaignAggregateAttestation(
+      primaryCandidate.event.normalizedFieldsJson,
+    );
+    const alreadyMigrated = Boolean(
+      completedAttestation?.operationId === args.operationId &&
+        completedAttestation.legacyOperationId &&
+        completedAttestation.primaryEventId === primaryCandidate.event._id &&
+        completedAttestation.targetVenueId === targetVenue._id &&
+        completedAttestation.sources.length === candidates.length &&
+        completedAttestation.sources.every(
+          (source, index) => source.eventId === candidates[index]?.event._id,
+        ) &&
+        exactReceiptAfterState &&
+        exactTargetAfterState &&
+        publiclyGrounded[0] === true &&
+        primaryCandidate.event.status === "approved" &&
+        primaryCandidate.event.moderationNote?.startsWith(
+          buildCrossPostPromotionModerationMarker(
+            "primary",
+            completedAttestation.legacyOperationId,
+          ),
+        ) === true &&
+        candidates.slice(1).every(
+          ({ event }) =>
+            event.status === "rejected" &&
+            event.moderationNote?.startsWith(
+              buildCrossPostPromotionModerationMarker(
+                "variant",
+                completedAttestation.legacyOperationId!,
+              ),
+            ) === true,
+        ),
+    );
+    const legacyMigrationProof = args.legacyMigrationOperationId
+      ? await proveLegacyCrossPostPromotionMigration(ctx, {
+          legacyOperationId: args.legacyMigrationOperationId,
+          targetVenue,
+          prepared: candidates.map(({ event, sourceLink, receipt }) => ({
+            event,
+            fields: parseNightlifeLineupJsonRecord(
+              event.normalizedFieldsJson ?? "{}",
+              `Legacy cross-post migration normalized fields ${event._id}`,
+            ),
+            link: sourceLink,
+            receipt,
+            savedEvents: [],
+            userSavedEvents: [],
+          })),
+        })
+      : null;
+    if (!ready && !alreadyCoalesced && !alreadyMigrated && !legacyMigrationProof) {
       throw new Error("Cross-post promotion context is neither ready nor an exact after-state.");
     }
     return {
-      state: alreadyCoalesced ? ("already_coalesced" as const) : ("ready" as const),
+      state: alreadyCoalesced || alreadyMigrated
+        ? ("already_coalesced" as const)
+        : legacyMigrationProof
+          ? ("legacy_migration_ready" as const)
+          : ("ready" as const),
       targetVenue,
       candidates,
     };
@@ -5595,11 +6005,13 @@ export const getCrossPostPromotionCoalescingContext = query({
 export const coalesceApprovedCrossPostPromotionOccurrences = mutation({
   args: {
     operationId: v.string(),
+    legacyMigrationOperationId: v.optional(v.string()),
     primary: crossPostPromotionCandidateVersion,
     duplicates: v.array(crossPostPromotionCandidateVersion),
     targetVenueId: v.id("venues"),
     expectedTargetVenueUpdatedAt: v.number(),
     sharedEvidenceAnchors: v.array(v.string()),
+    automaticCampaignIdentity: v.optional(v.string()),
     moderationNote: v.string(),
     serviceSecret: v.string(),
   },
@@ -5609,8 +6021,17 @@ export const coalesceApprovedCrossPostPromotionOccurrences = mutation({
     if (authorization.kind !== "service") {
       throw new Error("Cross-post promotion coalescing requires service authentication.");
     }
+    const legacyMigrationOperationId =
+      args.legacyMigrationOperationId?.trim();
     if (
       !/^[A-Za-z0-9][A-Za-z0-9._:-]{15,159}$/.test(args.operationId) ||
+      (legacyMigrationOperationId !== undefined &&
+        (!/^[A-Za-z0-9][A-Za-z0-9._:-]{15,159}$/.test(
+          legacyMigrationOperationId,
+        ) ||
+          legacyMigrationOperationId === args.operationId ||
+          !args.operationId.startsWith("auto-cross-post-v1:") ||
+          !args.automaticCampaignIdentity?.trim())) ||
       args.moderationNote.trim().length < 24 ||
       args.moderationNote.trim().length > 1_000 ||
       args.duplicates.length < 1 ||
@@ -5647,15 +6068,11 @@ export const coalesceApprovedCrossPostPromotionOccurrences = mutation({
       throw new Error("Cross-post promotion target venue precondition failed.");
     }
 
-    const prepared: Array<{
-      event: Doc<"events">;
-      fields: Record<string, unknown>;
-      link: Doc<"instagramEventSources">;
-      receipt: Doc<"instagramSourceOccurrenceReceipts">;
-      savedEvents: Doc<"savedEvents">[];
-      userSavedEvents: Doc<"userSavedEvents">[];
-    }> = [];
-    for (const version of versions) {
+    const prepared: PreparedCrossPostPromotionCandidate[] = [];
+    for (let versionIndex = 0; versionIndex < versions.length; versionIndex += 1) {
+      const version = versions[versionIndex]!;
+      const legacyMigrationVariant =
+        legacyMigrationOperationId !== undefined && versionIndex > 0;
       if (
         !Number.isSafeInteger(version.expectedUpdatedAt) ||
         !Number.isSafeInteger(version.expectedSourceLinkUpdatedAt) ||
@@ -5669,7 +6086,8 @@ export const coalesceApprovedCrossPostPromotionOccurrences = mutation({
       const event = await ctx.db.get(version.id);
       if (
         !event ||
-        event.status !== "approved" ||
+        (event.status !== "approved" &&
+          !(legacyMigrationVariant && event.status === "rejected")) ||
         event.updatedAt !== version.expectedUpdatedAt ||
         event.normalizedFieldsJson !== version.expectedNormalizedFieldsJson ||
         event.sourceOccurrenceKey !== version.expectedOccurrenceKey ||
@@ -5733,8 +6151,10 @@ export const coalesceApprovedCrossPostPromotionOccurrences = mutation({
         receipt.satisfiedKeys[0] !== version.expectedOccurrenceKey ||
         receipt.satisfiedOccurrences.length !== 1 ||
         receipt.satisfiedOccurrences[0]?.key !== version.expectedOccurrenceKey ||
-        receipt.satisfiedOccurrences[0]?.eventId !== event._id ||
-        !sourceOccurrenceRepresentativeMatchesExpected(event, expectedOccurrence)
+        receipt.satisfiedOccurrences[0]?.eventId !==
+          (legacyMigrationVariant ? args.primary.id : event._id) ||
+        (!legacyMigrationVariant &&
+          !sourceOccurrenceRepresentativeMatchesExpected(event, expectedOccurrence))
       ) {
         throw new Error(`Cross-post promotion receipt precondition failed: ${version.id}.`);
       }
@@ -5756,6 +6176,137 @@ export const coalesceApprovedCrossPostPromotionOccurrences = mutation({
         throw new Error(`Cross-post promotion save cohort exceeds the safe bound: ${event._id}.`);
       }
       prepared.push({ event, fields, link, receipt, savedEvents, userSavedEvents });
+    }
+    const primaryHasAggregateField = hasCrossPostCampaignAggregateAttestationField(
+      prepared[0]!.event.normalizedFieldsJson,
+    );
+    const previousAggregateAttestation = readCrossPostCampaignAggregateAttestation(
+      prepared[0]!.event.normalizedFieldsJson,
+    );
+    const legacyMigrationProof = legacyMigrationOperationId
+      ? await proveLegacyCrossPostPromotionMigration(ctx, {
+          legacyOperationId: legacyMigrationOperationId,
+          targetVenue,
+          prepared,
+          sharedEvidenceAnchors: args.sharedEvidenceAnchors,
+        })
+      : null;
+    if (
+      (legacyMigrationOperationId !== undefined && !legacyMigrationProof) ||
+      (primaryHasAggregateField && !previousAggregateAttestation) ||
+      prepared.slice(1).some(({ event }) =>
+        hasCrossPostCampaignAggregateAttestationField(event.normalizedFieldsJson),
+      ) ||
+      (!legacyMigrationProof &&
+        !(await Promise.all(
+          prepared.map(({ event }) => isCanonicallyGroundedApprovedEvent(ctx, event)),
+        )).every(Boolean))
+    ) {
+      throw new Error(
+        "Cross-post promotion candidates must be individually source-grounded with at most one valid primary aggregate.",
+      );
+    }
+
+    const automaticCampaignIdentity = args.automaticCampaignIdentity?.trim();
+    const automaticOperation = args.operationId.startsWith("auto-cross-post-v1:");
+    const candidateCaptions = prepared.map(({ event }) => event.sourceCaption ?? "");
+    const sharedSourceHandle = normalizeHandle(
+      prepared[0]!.link.sourceHandle ??
+        normalizedString(
+          prepared[0]!.fields.sourceGroundingInstagramHandle,
+        ),
+    );
+    if (
+      (automaticOperation || automaticCampaignIdentity !== undefined) &&
+      !legacyMigrationProof &&
+      prepared.some(({ event, fields, link }) => {
+        const sourceHandle =
+          link.sourceHandle ??
+          normalizedString(fields.sourceGroundingInstagramHandle);
+        return !hasAutomaticCrossPostCanonicalVenueEvidence({
+          evidenceText: event.sourceCaption ?? "",
+          sourceHandle,
+          targetVenueId: String(targetVenue._id),
+          canonicalVenueName: targetVenue.name,
+          canonicalVenueHandle: targetVenue.instagramHandle,
+          currentVenueId: event.venueId ? String(event.venueId) : undefined,
+          currentVenueName: event.venue,
+          currentVenueHandle: event.venueInstagramHandle,
+        });
+      })
+    ) {
+      throw new Error(
+        "Automatic cross-post promotion canonical venue evidence is insufficient.",
+      );
+    }
+    let derivedAutomaticCampaignIdentity =
+      deriveAutomaticCrossPostCampaignIdentity(candidateCaptions);
+    if (
+      (automaticOperation || automaticCampaignIdentity !== undefined) &&
+      !derivedAutomaticCampaignIdentity
+    ) {
+      const sourceHistory = await ctx.db
+        .query("scrapedPosts")
+        .withIndex("by_handle_postedAtMs", (q) => q.eq("handle", sharedSourceHandle))
+        .order("desc")
+        .take(MAX_AUTOMATIC_CROSS_POST_SOURCE_HISTORY + 1);
+      const candidatePostIds = previousAggregateAttestation
+        ? [
+            ...previousAggregateAttestation.campaignPostIds,
+            ...prepared.slice(1).map(({ event }) => event.instagramPostId ?? ""),
+          ]
+        : prepared.map(({ event }) => event.instagramPostId ?? "");
+      derivedAutomaticCampaignIdentity =
+        deriveExclusiveHashtagCrossPostCampaignIdentity({
+        sourceHandle: sharedSourceHandle,
+        targetVenueId: String(targetVenue._id),
+        date: prepared[0]!.event.date,
+        time: prepared[0]!.event.time ?? "",
+        eventType: canonicalizeEventType(prepared[0]!.event.eventType),
+        anchors: args.sharedEvidenceAnchors,
+        candidatePostIds,
+        historyPosts: sourceHistory
+          .slice(0, MAX_AUTOMATIC_CROSS_POST_SOURCE_HISTORY)
+          .map((post) => ({
+            handle: post.handle,
+            postId: post.postId,
+            caption: post.caption,
+            postedAt: post.postedAt,
+          })),
+        historyComplete:
+          sourceHistory.length <= MAX_AUTOMATIC_CROSS_POST_SOURCE_HISTORY,
+      });
+    }
+    if (
+      (automaticOperation || automaticCampaignIdentity !== undefined) &&
+      (!automaticCampaignIdentity ||
+        automaticCampaignIdentity !== derivedAutomaticCampaignIdentity ||
+        !captionsHaveExactCampaignHashtagAnchors(
+          prepared.map(({ event }) => event.sourceCaption ?? ""),
+          args.sharedEvidenceAnchors,
+        ))
+    ) {
+      throw new Error(
+        "Automatic cross-post promotion coalescing requires one exact shared ticket/event URL or one bounded source-exclusive hashtag campaign.",
+      );
+    }
+    if (
+      previousAggregateAttestation &&
+      (previousAggregateAttestation.primaryEventId !== String(prepared[0]!.event._id) ||
+        previousAggregateAttestation.targetVenueId !== String(targetVenue._id) ||
+        !previousAggregateAttestation.automaticCampaignIdentity ||
+        previousAggregateAttestation.automaticCampaignIdentity !==
+          automaticCampaignIdentity ||
+        !exactStringSetEquals(
+          previousAggregateAttestation.campaignAnchors,
+          args.sharedEvidenceAnchors,
+        ) ||
+        previousAggregateAttestation.totalSourceCount + prepared.length - 1 > 8 ||
+        previousAggregateAttestation.lineageDepth >= 7)
+    ) {
+      throw new Error(
+        "Cross-post promotion append does not match the bounded existing campaign attestation.",
+      );
     }
 
     const plan = buildCrossPostPromotionCoalescingPlan({
@@ -5799,6 +6350,10 @@ export const coalesceApprovedCrossPostPromotionOccurrences = mutation({
     }
 
     const primaryEvent = prepared[0]!.event;
+    const primaryExpectedOccurrence = prepared[0]!.receipt.expectedOccurrences?.[0];
+    if (!primaryExpectedOccurrence) {
+      throw new Error("Cross-post promotion primary receipt binding is missing.");
+    }
     if (
       !sourceOccurrenceRepresentativeMatchesExpected(primaryEvent, {
         key: primaryEvent.sourceOccurrenceKey!,
@@ -5806,11 +6361,13 @@ export const coalesceApprovedCrossPostPromotionOccurrences = mutation({
         time: plan.time,
         venue: targetVenue.name,
         title: primaryEvent.title,
-        artists: plan.artists,
+        artists: previousAggregateAttestation
+          ? primaryExpectedOccurrence.artists
+          : primaryEvent.artists,
       })
     ) {
       throw new Error(
-        "Cross-post promotion aggregate must match the primary immutable snapshot.",
+        "Cross-post promotion primary occurrence must match its immutable snapshot.",
       );
     }
     const targetVenueFields = {
@@ -5830,7 +6387,7 @@ export const coalesceApprovedCrossPostPromotionOccurrences = mutation({
         ? { venueLongitude: targetVenue.longitude }
         : {}),
     };
-    const publicPatch = {
+    const basePublicPatch = {
       venue: targetVenue.name,
       ...targetVenueFields,
       artists: plan.artists,
@@ -5838,24 +6395,40 @@ export const coalesceApprovedCrossPostPromotionOccurrences = mutation({
       ...(plan.ticketPrice ? { ticketPrice: plan.ticketPrice } : {}),
       moderationNote: args.moderationNote.trim(),
     };
-    const prospectivePrimary = { ...primaryEvent, ...publicPatch };
+    if (
+      legacyMigrationProof &&
+      (!primaryEvent.moderationNote ||
+        Object.entries(basePublicPatch).some(
+          ([field, value]) =>
+            field !== "moderationNote" &&
+            !exactCrossPostJson(
+              primaryEvent[field as keyof Doc<"events">],
+              value,
+            ),
+        ))
+    ) {
+      throw new Error(
+        "Legacy cross-post migration requires the exact existing public binding.",
+      );
+    }
+    const prospectivePrimary = { ...primaryEvent, ...basePublicPatch };
     await assertApprovalCandidatePolicy(
       ctx,
       prospectivePrimary,
       versions.map((item) => item.id),
     );
-    if (!(await isCanonicallyGroundedApprovedEvent(ctx, prospectivePrimary))) {
-      throw new Error(
-        "Cross-post promotion primary would not remain publicly source-grounded.",
-      );
-    }
-
-    const primaryExpectedOccurrence = prepared[0]!.receipt.expectedOccurrences?.[0];
-    if (!primaryExpectedOccurrence) {
-      throw new Error("Cross-post promotion primary receipt binding is missing.");
-    }
     const now = Date.now();
     const variantReceiptTransitions = prepared.slice(1).map((item) => {
+      if (legacyMigrationProof) {
+        return {
+          eventId: item.event._id,
+          receiptId: item.receipt._id,
+          updatedAt: item.receipt.updatedAt,
+          expectedOccurrences: item.receipt.expectedOccurrences!,
+          satisfiedOccurrences: item.receipt.satisfiedOccurrences,
+          receiptAfter: item.receipt,
+        };
+      }
       const nextExpectedOccurrence = {
         key: item.link.sourceOccurrenceKey,
         date: primaryExpectedOccurrence.date,
@@ -5894,11 +6467,86 @@ export const coalesceApprovedCrossPostPromotionOccurrences = mutation({
         },
       };
     });
+    const primaryUpdatedAt = nextEventUpdatedAt(primaryEvent.updatedAt, now);
+    const variantEventUpdatedAts = prepared
+      .slice(1)
+      .map((item) =>
+        legacyMigrationProof
+          ? item.event.updatedAt
+          : nextEventUpdatedAt(item.event.updatedAt, now),
+      );
+    const aggregateAttestation: CrossPostCampaignAggregateAttestation = {
+      policyVersion: CROSS_POST_PROMOTION_COALESCING_POLICY_VERSION,
+      operationId: args.operationId,
+      primaryEventId: String(primaryEvent._id),
+      targetVenueId: String(targetVenue._id),
+      lineageDepth: previousAggregateAttestation
+        ? previousAggregateAttestation.lineageDepth + 1
+        : 1,
+      totalSourceCount: previousAggregateAttestation
+        ? previousAggregateAttestation.totalSourceCount + prepared.length - 1
+        : prepared.length,
+      campaignAnchors: [...plan.sharedAnchors],
+      campaignPostIds: previousAggregateAttestation
+        ? [
+            ...previousAggregateAttestation.campaignPostIds,
+            ...prepared
+              .slice(1)
+              .map(({ event }) => event.instagramPostId!),
+          ]
+        : prepared.map(({ event }) => event.instagramPostId!),
+      ...(automaticCampaignIdentity
+        ? { automaticCampaignIdentity }
+        : {}),
+      ...(legacyMigrationOperationId
+        ? { legacyOperationId: legacyMigrationOperationId }
+        : {}),
+      publicBinding: {
+        title: primaryEvent.title,
+        date: plan.date,
+        time: plan.time,
+        venue: targetVenue.name,
+        artists: [...plan.artists],
+      },
+      sources: prepared.map((item, index) => ({
+        eventId: String(item.event._id),
+        eventUpdatedAt:
+          index === 0 ? primaryUpdatedAt : variantEventUpdatedAts[index - 1]!,
+        sourceLinkId: String(item.link._id),
+        sourceLinkUpdatedAt: item.link.updatedAt,
+        receiptId: String(item.receipt._id),
+        receiptUpdatedAt:
+          index === 0
+            ? item.receipt.updatedAt
+            : variantReceiptTransitions[index - 1]!.updatedAt,
+        sourceIdentity: item.link.sourceIdentity,
+        sourceFingerprint: item.link.sourceFingerprint,
+        sourceOccurrenceKey: item.link.sourceOccurrenceKey,
+        instagramPostId: item.link.instagramPostId!,
+        instagramPostUrl: normalizeInstagramPostUrl(item.link.instagramPostUrl)!,
+        sourceHandle: normalizeHandle(
+          item.link.sourceHandle ??
+            normalizedString(item.fields.sourceGroundingInstagramHandle),
+        ),
+      })),
+    };
+    const primaryNormalizedFieldsJson = JSON.stringify({
+      ...prepared[0]!.fields,
+      [CROSS_POST_CAMPAIGN_AGGREGATE_ATTESTATION_FIELD]: aggregateAttestation,
+    });
+    const publicPatch = {
+      ...basePublicPatch,
+      normalizedFieldsJson: primaryNormalizedFieldsJson,
+    };
 
     const primaryRollback = {
       policyVersion: CROSS_POST_PROMOTION_COALESCING_POLICY_VERSION,
       operationId: args.operationId,
+      sourceGroundingVerifiedAtCoalescing: true,
       eventBefore: primaryEvent,
+      ...(legacyMigrationProof
+        ? { legacyMigrationOperationId }
+        : {}),
       sourceLinkBefore: prepared[0]!.link,
       receiptBefore: prepared[0]!.receipt,
       targetVenue,
@@ -5908,8 +6556,13 @@ export const coalesceApprovedCrossPostPromotionOccurrences = mutation({
       const rollback = {
         policyVersion: CROSS_POST_PROMOTION_COALESCING_POLICY_VERSION,
         operationId: args.operationId,
+        sourceGroundingVerifiedAtCoalescing: true,
         primaryId: primaryEvent._id,
-        eventBefore: item.event,
+        eventBefore:
+          legacyMigrationProof?.sourceEventsBefore[index + 1] ?? item.event,
+        ...(legacyMigrationProof
+          ? { legacyMigrationEventBefore: item.event }
+          : {}),
         sourceLinkBefore: item.link,
         receiptBefore: item.receipt,
         receiptAfter: variantReceiptTransitions[index]!.receiptAfter,
@@ -5920,17 +6573,26 @@ export const coalesceApprovedCrossPostPromotionOccurrences = mutation({
       return rollback;
     });
 
-    const primaryUpdatedAt = nextEventUpdatedAt(primaryEvent.updatedAt, now);
     const primaryModerationNote =
-      buildCrossPostPromotionModerationMarker("primary", args.operationId) +
-      args.moderationNote.trim();
-    await ctx.db.patch(primaryEvent._id, {
-      ...publicPatch,
-      reviewedAt: now,
-      reviewedBy: authorization.actor,
-      moderationNote: primaryModerationNote,
-      updatedAt: primaryUpdatedAt,
-    });
+      legacyMigrationProof
+        ? primaryEvent.moderationNote!
+        : buildCrossPostPromotionModerationMarker("primary", args.operationId) +
+          args.moderationNote.trim();
+    await ctx.db.patch(
+      primaryEvent._id,
+      legacyMigrationProof
+        ? {
+            normalizedFieldsJson: primaryNormalizedFieldsJson,
+            updatedAt: primaryUpdatedAt,
+          }
+        : {
+            ...publicPatch,
+            reviewedAt: now,
+            reviewedBy: authorization.actor,
+            moderationNote: primaryModerationNote,
+            updatedAt: primaryUpdatedAt,
+          },
+    );
 
     let movedSaveCount = 0;
     let dedupedSaveCount = 0;
@@ -5940,43 +6602,52 @@ export const coalesceApprovedCrossPostPromotionOccurrences = mutation({
       ({ eventId, receiptId, updatedAt }) => ({ eventId, receiptId, updatedAt }),
     );
     const variantModerationNote =
-      buildCrossPostPromotionModerationMarker("variant", args.operationId) +
-      args.moderationNote.trim();
+      legacyMigrationProof
+        ? variantRows[0]?.event.moderationNote ?? ""
+        : buildCrossPostPromotionModerationMarker("variant", args.operationId) +
+          args.moderationNote.trim();
     for (let index = 0; index < variantRows.length; index += 1) {
       const item = variantRows[index]!;
       const receiptTransition = variantReceiptTransitions[index]!;
-      const saveResult = await reassignSavedEventReferences(
-        ctx,
-        item.event._id,
-        primaryEvent._id,
-      );
-      movedSaveCount += saveResult.movedCount;
-      dedupedSaveCount += saveResult.dedupedCount;
-      const variantUpdatedAt = nextEventUpdatedAt(item.event.updatedAt, now);
-      await ctx.db.patch(item.event._id, {
-        status: "rejected",
-        reviewedAt: now,
-        reviewedBy: authorization.actor,
-        moderationNote: variantModerationNote,
-        updatedAt: variantUpdatedAt,
-      });
-      await ctx.db.patch(item.receipt._id, {
-        expectedOccurrences: receiptTransition.expectedOccurrences,
-        satisfiedOccurrences: receiptTransition.satisfiedOccurrences,
-        updatedAt: receiptTransition.updatedAt,
-      });
+      const variantUpdatedAt = variantEventUpdatedAts[index]!;
+      if (!legacyMigrationProof) {
+        const saveResult = await reassignSavedEventReferences(
+          ctx,
+          item.event._id,
+          primaryEvent._id,
+        );
+        movedSaveCount += saveResult.movedCount;
+        dedupedSaveCount += saveResult.dedupedCount;
+        await ctx.db.patch(item.event._id, {
+          status: "rejected",
+          reviewedAt: now,
+          reviewedBy: authorization.actor,
+          moderationNote: variantModerationNote,
+          updatedAt: variantUpdatedAt,
+        });
+        await ctx.db.patch(item.receipt._id, {
+          expectedOccurrences: receiptTransition.expectedOccurrences,
+          satisfiedOccurrences: receiptTransition.satisfiedOccurrences,
+          updatedAt: receiptTransition.updatedAt,
+        });
+      }
       variantUpdatedAts.push({ id: item.event._id, updatedAt: variantUpdatedAt });
-      await writeEventAuditLog(ctx, item.event._id, "cross_post_campaign_variant_rejected", {
+      await writeEventAuditLog(ctx, item.event._id, legacyMigrationProof
+        ? "cross_post_campaign_attestation_migrated"
+        : "cross_post_campaign_variant_rejected", {
         actor: authorization.actor,
         note: args.moderationNote.trim(),
         patch: {
           ...duplicateRollbacks[index],
+          ...(legacyMigrationProof ? { aggregateAttestation } : {}),
           marker: "cross_post_campaign_variant",
           variantUpdatedAt,
         },
       });
     }
-    await writeEventAuditLog(ctx, primaryEvent._id, "cross_post_campaign_coalesced", {
+    await writeEventAuditLog(ctx, primaryEvent._id, legacyMigrationProof
+      ? "cross_post_campaign_attestation_migrated"
+      : "cross_post_campaign_coalesced", {
       actor: authorization.actor,
       note: args.moderationNote.trim(),
       patch: {
@@ -5985,12 +6656,22 @@ export const coalesceApprovedCrossPostPromotionOccurrences = mutation({
         sharedEvidenceAnchors: plan.sharedAnchors,
         canonicalVenueName: plan.canonicalVenueName,
         canonicalVenueHandle: plan.canonicalVenueHandle,
+        aggregateAttestation,
         variantUpdatedAts,
         variantReceiptUpdatedAts,
         movedSaveCount,
         dedupedSaveCount,
       },
     });
+    const finalizedPrimary = await ctx.db.get(primaryEvent._id);
+    if (
+      !finalizedPrimary ||
+      !(await isCanonicallyGroundedApprovedEvent(ctx, finalizedPrimary))
+    ) {
+      throw new Error(
+        "Cross-post promotion aggregate failed its final public grounding proof.",
+      );
+    }
 
     return {
       operationId: args.operationId,
@@ -6555,6 +7236,11 @@ export const deleteApprovedEvent = mutation({
     if (existingEvent.status !== "approved") {
       throw new Error("Only approved events can be removed.");
     }
+    if (isCrossPostCampaignLineageEvent(existingEvent)) {
+      throw new Error(
+        "Campaign aggregates are retained with their audited source lineage and cannot be hard-deleted.",
+      );
+    }
     assertExpectedEventUpdatedAt(existingEvent.updatedAt, args.expectedUpdatedAt);
 
     await deleteEventWithSavedReferences(ctx, args.id);
@@ -6648,6 +7334,15 @@ export const mergeApprovedEvents = mutation({
         expectedDuplicateVersionById?.get(String(duplicateId)),
       );
       duplicateEvents.push(duplicateEvent);
+    }
+    if (
+      [primaryEvent, ...duplicateEvents].some((event) =>
+        isCrossPostCampaignLineageEvent(event),
+      )
+    ) {
+      throw new Error(
+        "Campaign aggregates require their dedicated receipt-aware coalescing path.",
+      );
     }
 
     let effectivePrimaryEvent: Doc<"events"> = primaryEvent;
@@ -6757,6 +7452,8 @@ export const deleteExpiredEvents = internalMutation({
   args: {
     batchSize: v.optional(v.number()),
     beforeDate: v.optional(v.string()),
+    beforeDateCursor: v.optional(v.union(v.string(), v.null())),
+    beforeDateScanComplete: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const batchSize = normalizeExpiredEventDeleteBatchSize(args.batchSize);
@@ -6765,34 +7462,87 @@ export const deleteExpiredEvents = internalMutation({
     if (args.beforeDate !== undefined && dateKeyToUtcMs(explicitBeforeDate ?? "") === null) {
       throw new Error("beforeDate must be a valid YYYY-MM-DD date.");
     }
-    const cutoff = explicitBeforeDate
+    const calculatedCutoff = explicitBeforeDate
       ? { isoDate: explicitBeforeDate, minutesSinceMidnight: 0 }
       : getEventExpiryCutoff(new Date(), timeZone);
     const shouldDeleteSameDayExpiredEvents = explicitBeforeDate === undefined;
-    const eventsBeforeCutoffDate = await ctx.db
-      .query("events")
-      .withIndex("by_date", (q) => q.lt("date", cutoff.isoDate))
-      .take(batchSize);
+    const persistedCursor = shouldDeleteSameDayExpiredEvents
+      ? await ctx.db
+          .query("eventRetentionCursors")
+          .withIndex("by_key", (q) => q.eq("key", EVENT_RETENTION_CURSOR_KEY))
+          .unique()
+      : null;
+    if (
+      persistedCursor &&
+      (dateKeyToUtcMs(persistedCursor.cutoffDate) === null ||
+        !Number.isSafeInteger(persistedCursor.cutoffMinutesSinceMidnight) ||
+        persistedCursor.cutoffMinutesSinceMidnight < 0 ||
+        persistedCursor.cutoffMinutesSinceMidnight >= 24 * 60)
+    ) {
+      throw new Error("Persisted expired-event retention cursor is invalid.");
+    }
+    const cutoff = persistedCursor
+      ? {
+          isoDate: persistedCursor.cutoffDate,
+          minutesSinceMidnight: persistedCursor.cutoffMinutesSinceMidnight,
+        }
+      : calculatedCutoff;
+    const beforeDateScanWasComplete =
+      persistedCursor?.beforeDateScanComplete ??
+      (args.beforeDateScanComplete === true);
+    const effectiveBeforeDateCursor =
+      persistedCursor?.beforeDateCursor ?? args.beforeDateCursor ?? null;
+    const beforeDatePage = beforeDateScanWasComplete
+      ? null
+      : await ctx.db
+          .query("events")
+          .withIndex("by_date", (q) => q.lt("date", cutoff.isoDate))
+          .paginate({
+            cursor: effectiveBeforeDateCursor,
+            numItems: batchSize,
+          });
+    const eventsBeforeCutoffDate = beforeDatePage?.page ?? [];
+    const retainedCampaignEventsBeforeCutoff = eventsBeforeCutoffDate.filter(
+      isCrossPostCampaignLineageEvent,
+    );
+    const deletionCandidatesBeforeCutoff = eventsBeforeCutoffDate.filter(
+      (event) => !isCrossPostCampaignLineageEvent(event),
+    );
+    const deletableEventsBeforeCutoff = deletionCandidatesBeforeCutoff;
 
     const deletedEventIds: Id<"events">[] = [];
     let deletedSavedEventCount = 0;
 
-    for (const event of eventsBeforeCutoffDate) {
+    for (const event of deletableEventsBeforeCutoff) {
       deletedSavedEventCount += await deleteEventWithSavedReferences(ctx, event._id);
       deletedEventIds.push(event._id);
+    }
+
+    const beforeDateScanComplete =
+      beforeDateScanWasComplete || beforeDatePage?.isDone === true;
+    const beforeDateCursor = beforeDateScanComplete
+      ? null
+      : beforeDatePage?.continueCursor ?? null;
+    if (!beforeDateScanComplete && !beforeDateCursor) {
+      throw new Error("Expired-event retention pagination did not advance.");
     }
 
     const remainingSlots = batchSize - deletedEventIds.length;
     let skippedSameDayEventCount = 0;
     let sameDayExpiredEventCount = 0;
 
-    if (shouldDeleteSameDayExpiredEvents && remainingSlots > 0) {
+    if (
+      beforeDateScanComplete &&
+      shouldDeleteSameDayExpiredEvents &&
+      remainingSlots > 0
+    ) {
       const eventsOnCutoffDate = await ctx.db
         .query("events")
         .withIndex("by_date", (q) => q.eq("date", cutoff.isoDate))
         .collect();
       const sameDayExpiredEvents = eventsOnCutoffDate.filter((event) =>
-        isEventExpiredAtCutoff(event, cutoff),
+        isEventExpiredAtCutoff(event, cutoff) &&
+        !isCrossPostCampaignLineageEvent(event),
       );
 
       sameDayExpiredEventCount = sameDayExpiredEvents.length;
@@ -6804,6 +7554,34 @@ export const deleteExpiredEvents = internalMutation({
       }
     }
 
+    const hasMore =
+      !beforeDateScanComplete ||
+      (shouldDeleteSameDayExpiredEvents &&
+        (remainingSlots === 0 || skippedSameDayEventCount > 0));
+    if (shouldDeleteSameDayExpiredEvents) {
+      if (hasMore) {
+        const now = Date.now();
+        const cursorState = {
+          key: EVENT_RETENTION_CURSOR_KEY,
+          cutoffDate: cutoff.isoDate,
+          cutoffMinutesSinceMidnight: cutoff.minutesSinceMidnight,
+          ...(beforeDateCursor ? { beforeDateCursor } : {}),
+          beforeDateScanComplete,
+          updatedAt: now,
+        };
+        if (persistedCursor) {
+          await ctx.db.patch(persistedCursor._id, cursorState);
+        } else {
+          await ctx.db.insert("eventRetentionCursors", {
+            ...cursorState,
+            createdAt: now,
+          });
+        }
+      } else if (persistedCursor) {
+        await ctx.db.delete(persistedCursor._id);
+      }
+    }
+
     return {
       deletedEventCount: deletedEventIds.length,
       deletedEventIds,
@@ -6811,9 +7589,10 @@ export const deleteExpiredEvents = internalMutation({
       cutoffDate: cutoff.isoDate,
       cutoffTime: formatMinutesSinceMidnight(cutoff.minutesSinceMidnight),
       timeZone,
-      hasMore:
-        eventsBeforeCutoffDate.length === batchSize ||
-        (shouldDeleteSameDayExpiredEvents && skippedSameDayEventCount > 0),
+      hasMore,
+      beforeDateCursor,
+      beforeDateScanComplete,
+      retainedCampaignEventCount: retainedCampaignEventsBeforeCutoff.length,
       skippedSameDayEventCount,
       sameDayExpiredEventCount,
     };

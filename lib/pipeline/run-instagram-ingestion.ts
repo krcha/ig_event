@@ -4863,10 +4863,17 @@ export async function runApprovedDuplicateCleanupForCompletedDurableRun(options:
   runId: string;
   serviceSecret: string;
 }): Promise<ApprovedEventAutoMergeSummary> {
-  return runApprovedEventAutoMergeOnceForCompletedRun(options.client, {
+  const summary = await runApprovedEventAutoMergeOnceForCompletedRun(options.client, {
     runId: options.runId,
     serviceSecret: options.serviceSecret,
   });
+  if (summary.crossPostCampaignCoalescing) {
+    logInfo("ingestion.cross_post_campaigns.auto_coalesced", {
+      runId: options.runId,
+      ...summary.crossPostCampaignCoalescing,
+    });
+  }
+  return summary;
 }
 
 async function loadAllActiveInstagramSourceHandles(

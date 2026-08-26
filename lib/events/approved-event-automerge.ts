@@ -16,6 +16,12 @@ import {
   immutableSourceOccurrenceBindingsHaveEqualReliableTime,
   immutableSourceOccurrenceBindingsMatch,
 } from "./source-occurrence-representation.ts";
+import {
+  assertApprovedCrossPostCampaignAutoCoalescingCompleted,
+  runApprovedCrossPostCampaignAutoCoalescing,
+  type ApprovedCrossPostCampaignAutoCoalesceSummary,
+} from "./approved-cross-post-campaign-automerge";
+import { isCrossPostCampaignLineageEvent } from "./cross-post-campaign-aggregate-attestation";
 
 type EventStatus = "pending" | "approved" | "rejected";
 
@@ -60,6 +66,7 @@ export type ApprovedEventAutoMergeSummary = {
   failedCount: number;
   failures: ApprovedEventAutoMergeFailure[];
   passes: number;
+  crossPostCampaignCoalescing?: ApprovedCrossPostCampaignAutoCoalesceSummary;
   error?: string;
 };
 
@@ -178,6 +185,12 @@ export function isApprovedEventAutoMergePairEligible(
   left: ApprovedEventDuplicateRecord,
   right: ApprovedEventDuplicateRecord,
 ): boolean {
+  if (
+    isCrossPostCampaignLineageEvent(left) ||
+    isCrossPostCampaignLineageEvent(right)
+  ) {
+    return false;
+  }
   const leftOccurrenceKey = getNormalizedApprovalOccurrenceKey(left);
   const rightOccurrenceKey = getNormalizedApprovalOccurrenceKey(right);
   const exactSameOccurrenceKey = Boolean(
@@ -477,6 +490,11 @@ export function assertApprovedEventAutoMergeCompleted(
       `Approved-event cleanup left ${summary.remainingGroupCount} eligible merge group(s).`,
     );
   }
+  if (summary.crossPostCampaignCoalescing) {
+    assertApprovedCrossPostCampaignAutoCoalescingCompleted(
+      summary.crossPostCampaignCoalescing,
+    );
+  }
 }
 
 function rememberCompletedRunCleanup(
@@ -516,7 +534,17 @@ export async function runApprovedEventAutoMergeOnceForCompletedRun(
   if (inFlight) return inFlight;
 
   const cleanup = (async () => {
-    const summary = await runApprovedEventAutoMerge(convex, options);
+    const strictSummary = await runApprovedEventAutoMerge(convex, options);
+    assertApprovedEventAutoMergeCompleted(strictSummary);
+    const summary = options.serviceSecret
+      ? {
+          ...strictSummary,
+          crossPostCampaignCoalescing:
+            await runApprovedCrossPostCampaignAutoCoalescing(convex, {
+              serviceSecret: options.serviceSecret,
+            }),
+        }
+      : strictSummary;
     assertApprovedEventAutoMergeCompleted(summary);
     rememberCompletedRunCleanup(runId, summary);
     return summary;

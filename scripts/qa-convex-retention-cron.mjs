@@ -155,12 +155,19 @@ function makeStrictCutoffCtx() {
                 },
               });
               return {
-                async take(limit) {
+                async paginate({ cursor, numItems }) {
                   assert.equal(table, "events");
                   assert.equal(constraint?.kind, "lt");
-                  return [...events.values()]
-                    .filter((event) => event.date < constraint.value)
-                    .slice(0, limit);
+                  const matching = [...events.values()].filter(
+                    (event) => event.date < constraint.value,
+                  );
+                  const start = cursor ? Number(cursor) : 0;
+                  const end = Math.min(matching.length, start + numItems);
+                  return {
+                    page: matching.slice(start, end),
+                    isDone: end >= matching.length,
+                    continueCursor: end >= matching.length ? "" : String(end),
+                  };
                 },
                 async collect() {
                   const records = table === "savedEvents" ? saved : legacySaved;
@@ -211,5 +218,116 @@ await assert.rejects(
   /valid YYYY-MM-DD date/,
 );
 assert.deepEqual(invalidCutoff.deleted, []);
+
+function makeLineageStarvationCtx() {
+  const events = new Map();
+  const retentionCursors = new Map();
+  for (let index = 0; index < 500; index += 1) {
+    const id = `retained-campaign-${String(index).padStart(3, "0")}`;
+    events.set(id, {
+      _id: id,
+      date: "2026-07-24",
+      time: "20:00",
+      moderationNote: `[cross_post_campaign_variant:v1] qa-retained-${index}`,
+    });
+  }
+  events.set("ordinary-expired-after-retained-page", {
+    _id: "ordinary-expired-after-retained-page",
+    date: "2026-07-25",
+    time: "20:00",
+  });
+  const deleted = [];
+  const rows = (table) =>
+    table === "events"
+      ? [...events.values()]
+      : table === "eventRetentionCursors"
+        ? [...retentionCursors.values()]
+        : [];
+  const queryResult = (table, filter = () => true) => ({
+    async paginate({ cursor, numItems }) {
+      const matching = rows(table).filter(filter);
+      const start = cursor ? Number(cursor) : 0;
+      const end = Math.min(matching.length, start + numItems);
+      return {
+        page: matching.slice(start, end),
+        isDone: end >= matching.length,
+        continueCursor: end >= matching.length ? "" : String(end),
+      };
+    },
+    async collect() {
+      return rows(table).filter(filter);
+    },
+    async unique() {
+      const matching = rows(table).filter(filter);
+      if (matching.length > 1) throw new Error("Expected one retention cursor.");
+      return matching[0] ?? null;
+    },
+  });
+  return {
+    events,
+    deleted,
+    ctx: {
+      db: {
+        query(table) {
+          return {
+            withIndex(_index, configure) {
+              let filter = () => true;
+              const builder = {
+                eq(field, value) {
+                  filter = (row) => row[field] === value;
+                  return builder;
+                },
+                lt(field, value) {
+                  filter = (row) => row[field] < value;
+                  return builder;
+                },
+              };
+              configure(builder);
+              return queryResult(table, filter);
+            },
+          };
+        },
+        async delete(id) {
+          deleted.push(id);
+          if (!events.delete(id)) retentionCursors.delete(id);
+        },
+        async insert(table, value) {
+          assert.equal(table, "eventRetentionCursors");
+          const id = "retention-cursor-state";
+          retentionCursors.set(id, { _id: id, ...structuredClone(value) });
+          return id;
+        },
+        async patch(id, patch) {
+          assert.ok(retentionCursors.has(id));
+          retentionCursors.set(id, {
+            ...retentionCursors.get(id),
+            ...structuredClone(patch),
+          });
+        },
+      },
+    },
+  };
+}
+
+const lineageStarvation = makeLineageStarvationCtx();
+const retainedPage = await deleteExpiredEvents._handler(lineageStarvation.ctx, {
+  batchSize: 500,
+});
+assert.equal(retainedPage.deletedEventCount, 0);
+assert.equal(retainedPage.retainedCampaignEventCount, 500);
+assert.equal(retainedPage.beforeDateScanComplete, false);
+assert.equal(retainedPage.hasMore, true);
+assert.ok(retainedPage.beforeDateCursor);
+const ordinaryPage = await deleteExpiredEvents._handler(lineageStarvation.ctx, {
+  batchSize: 500,
+});
+assert.equal(ordinaryPage.deletedEventCount, 1);
+assert.equal(ordinaryPage.beforeDateScanComplete, true);
+assert.equal(ordinaryPage.hasMore, false);
+assert.deepEqual(lineageStarvation.deleted, [
+  "ordinary-expired-after-retained-page",
+  "retention-cursor-state",
+]);
+assert.equal(lineageStarvation.events.size, 500);
 
 console.log("Convex retention cron QA passed.");

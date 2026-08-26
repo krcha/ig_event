@@ -134,6 +134,16 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
 
+  eventRetentionCursors: defineTable({
+    key: v.string(),
+    cutoffDate: v.string(),
+    cutoffMinutesSinceMidnight: v.number(),
+    beforeDateCursor: v.optional(v.string()),
+    beforeDateScanComplete: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
+
   ingestionDailyBudgets: defineTable({
     key: v.string(),
     provider: v.string(),

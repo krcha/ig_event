@@ -21,6 +21,9 @@ type DeleteExpiredEventsResult = {
   hasMore: boolean;
   skippedSameDayEventCount: number;
   sameDayExpiredEventCount: number;
+  retainedCampaignEventCount: number;
+  beforeDateCursor: string | null;
+  beforeDateScanComplete: boolean;
 };
 
 type DeleteExpiredEventsUntilDoneResult = {
@@ -43,7 +46,12 @@ const deleteExpiredEventsMutation = (internal as unknown as {
     deleteExpiredEvents: FunctionReference<
       "mutation",
       "internal",
-      { batchSize?: number; beforeDate?: string },
+      {
+        batchSize?: number;
+        beforeDate?: string;
+        beforeDateCursor?: string | null;
+        beforeDateScanComplete?: boolean;
+      },
       DeleteExpiredEventsResult
     >;
   };
@@ -143,11 +151,15 @@ export const deleteExpiredEventsUntilDone = internalAction({
     let timeZone: string | null = null;
     let skippedSameDayEventCount = 0;
     let sameDayExpiredEventCount = 0;
+    let beforeDateCursor: string | null = null;
+    let beforeDateScanComplete = false;
 
     for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
       const result: DeleteExpiredEventsResult = await ctx.runMutation(deleteExpiredEventsMutation, {
         batchSize,
         beforeDate: args.beforeDate,
+        beforeDateCursor,
+        beforeDateScanComplete,
       });
 
       batchesRun += 1;
@@ -159,6 +171,8 @@ export const deleteExpiredEventsUntilDone = internalAction({
       timeZone = result.timeZone;
       skippedSameDayEventCount += result.skippedSameDayEventCount;
       sameDayExpiredEventCount += result.sameDayExpiredEventCount;
+      beforeDateCursor = result.beforeDateCursor;
+      beforeDateScanComplete = result.beforeDateScanComplete;
 
       if (!result.hasMore) {
         break;
