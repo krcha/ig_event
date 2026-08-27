@@ -1738,8 +1738,12 @@ async function assertOperationPreimage(client, serviceSecret, operation) {
     throw new Error(`Unknown event operation kind ${operation.kind}.`);
   }
   for (const [key, context] of contexts) {
+    const expectedPreimage =
+      operation.kind === "reviewed_venue_repair"
+        ? operation.before
+        : operation.before[key];
     assert(
-      exactJson(contextProjection(context), operation.before[key]),
+      exactJson(contextProjection(context), expectedPreimage),
       `${operation.key} ${key} preimage changed after plan review.`,
     );
   }

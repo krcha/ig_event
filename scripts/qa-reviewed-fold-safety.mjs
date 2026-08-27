@@ -1413,6 +1413,10 @@ async function qaSourceContracts() {
     ),
     "utf8",
   );
+  const operatorSource = await readFile(
+    new URL("./apply-reviewed-poster-venue-learning.mjs", import.meta.url),
+    "utf8",
+  );
 
   for (const exportName of [
     "foldReviewedStructuredPromotionVariant",
@@ -1477,6 +1481,16 @@ async function qaSourceContracts() {
   assert.match(
     eventsSource,
     /Campaign aggregates are retained with their audited source lineage and cannot be hard-deleted\./u,
+  );
+  assert.match(
+    operatorSource,
+    /operation\.kind === "reviewed_venue_repair"\s*\? operation\.before\s*: operation\.before\[key\]/u,
+    "Reviewed venue repairs must compare the live full correction context with the full planned preimage.",
+  );
+  assert.match(
+    operatorSource,
+    /exactJson\(contextProjection\(context\), expectedPreimage\)/u,
+    "Reviewed event-operation admission must use the kind-aware expected preimage.",
   );
 }
 
