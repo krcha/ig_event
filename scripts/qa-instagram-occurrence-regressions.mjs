@@ -62,6 +62,15 @@ function makePost(overrides = {}) {
   };
 }
 
+function makeCaptionOnlyVideoPost(post) {
+  return {
+    ...post,
+    imageUrl: null,
+    imageUrls: [],
+    postType: "video",
+  };
+}
+
 function makeExtraction(overrides = {}) {
   return {
     extraction_contract_version: "legacy_qa_fixture_v1",
@@ -844,7 +853,7 @@ await withoutConsoleNoise(() =>
       },
     },
     handle: "common.belgrade",
-    post: { ...commonPost, postType: "video" },
+    post: makeCaptionOnlyVideoPost(commonPost),
     summary: persistenceSummary,
     canonicalVenueNamesByHandle: { "common.belgrade": "COMMON | Белград | Мероприятия" },
     venueNameOverridesByHandle: {},
@@ -1092,7 +1101,7 @@ for (const recurrenceMarker of [
           },
         },
         handle: "common.belgrade",
-        post: { ...syntaxPost, postType: "video" },
+        post: makeCaptionOnlyVideoPost(syntaxPost),
         summary: syntaxPersistenceSummary,
         canonicalVenueNamesByHandle: {
           "common.belgrade": "COMMON | Белград | Мероприятия",
@@ -1212,7 +1221,7 @@ await withoutConsoleNoise(() =>
       },
     },
     handle: "common.belgrade",
-    post: { ...midweekBoundaryPost, postType: "video" },
+    post: makeCaptionOnlyVideoPost(midweekBoundaryPost),
     summary: midweekPersistenceSummary,
     canonicalVenueNamesByHandle: {
       "common.belgrade": "COMMON | Белград | Мероприятия",
@@ -1292,7 +1301,7 @@ for (const suspiciousRecurrenceMarker of [
           },
         },
         handle: "common.belgrade",
-        post: { ...suspiciousPost, postType: "video" },
+        post: makeCaptionOnlyVideoPost(suspiciousPost),
         summary: suspiciousSummary,
         canonicalVenueNamesByHandle: {
           "common.belgrade": "COMMON | Белград | Мероприятия",
@@ -1408,12 +1417,7 @@ await withoutConsoleNoise(() =>
       },
     },
     handle: "common.belgrade",
-    post: {
-      ...missingLanePost,
-      postType: "video",
-      imageUrl: null,
-      imageUrls: [],
-    },
+    post: makeCaptionOnlyVideoPost(missingLanePost),
     summary: rejectedCoverageSummary,
     canonicalVenueNamesByHandle: { "common.belgrade": "COMMON | Белград | Мероприятия" },
     venueNameOverridesByHandle: {},
@@ -1496,7 +1500,7 @@ await withoutConsoleNoise(() =>
       },
     },
     handle: "common.belgrade",
-    post: { ...groundedCommonPost, postType: "video" },
+    post: makeCaptionOnlyVideoPost(groundedCommonPost),
     summary: swappedPersistenceSummary,
     canonicalVenueNamesByHandle: { "common.belgrade": "COMMON | Белград | Мероприятия" },
     venueNameOverridesByHandle: {},
