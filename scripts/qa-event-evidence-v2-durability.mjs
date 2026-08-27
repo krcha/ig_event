@@ -654,6 +654,7 @@ try {
     updatedAt: now,
   };
   const reviewedAudits = [];
+  const reviewedApprovedDatePeers = [];
   const reviewedCtx = {
     auth: { getUserIdentity: async () => null },
     db: {
@@ -682,7 +683,7 @@ try {
               const criteria = indexCriteria(configure);
               return {
                 async take(limit) {
-                  return [reviewedEvent]
+                  return [reviewedEvent, ...reviewedApprovedDatePeers]
                     .filter((event) => event.date === criteria.date)
                     .slice(0, limit);
                 },
@@ -726,23 +727,75 @@ try {
   const originalReviewedTitle = reviewedEvent.title;
   const originalReviewedTime = reviewedEvent.time;
   const originalReviewedArtists = structuredClone(reviewedEvent.artists);
+  const reviewedAmbiguousPeer = {
+    _id: "reviewed-ambiguous-peer",
+    status: "approved",
+    title: "Afterparty",
+    date: reviewedEvent.date,
+    time: "TBD",
+    venue: repairVenue.name,
+    venueId: repairVenue._id,
+    venueInstagramHandle: repairVenue.instagramHandle,
+    artists: [],
+    updatedAt: now + 1,
+  };
+  reviewedApprovedDatePeers.push(reviewedAmbiguousPeer);
+  const venueOnlyArgs = {
+    id: reviewedEvent._id,
+    expectedUpdatedAt: reviewedEvent.updatedAt,
+    expectedNormalizedFieldsJson: reviewedEvent.normalizedFieldsJson,
+    expectedSourceLinkId: reviewedSourceLink._id,
+    expectedSourceLinkUpdatedAt: reviewedSourceLink.updatedAt,
+    expectedReceiptId: reviewedReceipt._id,
+    expectedReceiptUpdatedAt: reviewedReceipt.updatedAt,
+    nextVenue: repairVenue.name,
+    targetVenueId: repairVenue._id,
+    expectedTargetVenueUpdatedAt: repairVenue.updatedAt,
+    expectedTargetVenueHandle: repairVenue.instagramHandle,
+    venueEvidence: "Exact reviewed Instagram profile and poster venue name.",
+    moderationNote: "Human-reviewed venue-only correction with exact source evidence.",
+    serviceSecret: process.env.CRON_SECRET,
+  };
+  const reviewedProvenDuplicatePeer = {
+    ...reviewedAmbiguousPeer,
+    _id: "reviewed-proven-duplicate-peer",
+    title: "Boundary QA Concert Afterparty",
+    updatedAt: now + 2,
+  };
+  reviewedApprovedDatePeers.push(reviewedProvenDuplicatePeer);
+  await assert.rejects(
+    repairReviewedStructuredEventVenue._handler(reviewedCtx, {
+      ...venueOnlyArgs,
+      expectedAmbiguousApprovedEventVersions: [
+        {
+          id: reviewedProvenDuplicatePeer._id,
+          updatedAt: reviewedProvenDuplicatePeer.updatedAt,
+        },
+      ],
+    }),
+    /approved event already exists/u,
+  );
+  reviewedApprovedDatePeers.pop();
+  await assert.rejects(
+    repairReviewedStructuredEventVenue._handler(reviewedCtx, venueOnlyArgs),
+    /same-day occurrence is ambiguous/u,
+  );
+  await assert.rejects(
+    repairReviewedStructuredEventVenue._handler(reviewedCtx, {
+      ...venueOnlyArgs,
+      expectedAmbiguousApprovedEventVersions: [
+        { id: reviewedAmbiguousPeer._id, updatedAt: reviewedAmbiguousPeer.updatedAt - 1 },
+      ],
+    }),
+    /reviewed ambiguous approved event changed/u,
+  );
   const venueOnlyResult = await repairReviewedStructuredEventVenue._handler(
     reviewedCtx,
     {
-      id: reviewedEvent._id,
-      expectedUpdatedAt: reviewedEvent.updatedAt,
-      expectedNormalizedFieldsJson: reviewedEvent.normalizedFieldsJson,
-      expectedSourceLinkId: reviewedSourceLink._id,
-      expectedSourceLinkUpdatedAt: reviewedSourceLink.updatedAt,
-      expectedReceiptId: reviewedReceipt._id,
-      expectedReceiptUpdatedAt: reviewedReceipt.updatedAt,
-      nextVenue: repairVenue.name,
-      targetVenueId: repairVenue._id,
-      expectedTargetVenueUpdatedAt: repairVenue.updatedAt,
-      expectedTargetVenueHandle: repairVenue.instagramHandle,
-      venueEvidence: "Exact reviewed Instagram profile and poster venue name.",
-      moderationNote: "Human-reviewed venue-only correction with exact source evidence.",
-      serviceSecret: process.env.CRON_SECRET,
+      ...venueOnlyArgs,
+      expectedAmbiguousApprovedEventVersions: [
+        { id: reviewedAmbiguousPeer._id, updatedAt: reviewedAmbiguousPeer.updatedAt },
+      ],
     },
   );
   assert.equal(venueOnlyResult.updated, true);
@@ -754,6 +807,7 @@ try {
   assert.equal(reviewedEvent.timeSource, posterEvent.timeSource);
   assert.equal(reviewedReceipt.expectedOccurrences[0].venue, repairVenue.name);
   assert.equal(reviewedAudits[0].action, "reviewed_structured_venue_corrected");
+  reviewedApprovedDatePeers.length = 0;
 
   const reviewedResult = await repairReviewedStructuredEventEvidence._handler(
     reviewedCtx,

@@ -22,7 +22,7 @@ const EVENT_PLAN_SCHEMA =
   "event-zeka-reviewed-venue-dedupe-event-plan-v1";
 const RESULT_SCHEMA = "event-zeka-reviewed-venue-dedupe-result-v1";
 const TARGET_SET_VERSION =
-  "event-zeka-reviewed-venue-dedupe-learning-2026-08-27:v1";
+  "event-zeka-reviewed-venue-dedupe-learning-2026-08-27:v2";
 const MAX_PLAN_BYTES = 8 * 1024 * 1024;
 const HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const READ_QUERY_MAX_ATTEMPTS = 3;
@@ -32,9 +32,9 @@ const TRANSIENT_QUERY_ERROR_PATTERN =
 const DETERMINISTIC_QUERY_ERROR_PATTERN =
   /\b(?:argumentvalidationerror|convexerror|unauthorized|forbidden|permission denied|uncaught (?:error|typeerror|rangeerror|referenceerror)|invalid (?:argument|value|id|cursor)|does not match|changed after plan review)\b/iu;
 const CONFIG_CONFIRMATION =
-  "APPLY_EVENT_ZEKA_REVIEWED_VENUE_DEDUPE_CONFIG_2026_08_27_V1";
+  "APPLY_EVENT_ZEKA_REVIEWED_VENUE_DEDUPE_CONFIG_2026_08_27_V2";
 const EVENT_CONFIRMATION =
-  "APPLY_EVENT_ZEKA_REVIEWED_VENUE_DEDUPE_EVENTS_2026_08_27_V1";
+  "APPLY_EVENT_ZEKA_REVIEWED_VENUE_DEDUPE_EVENTS_2026_08_27_V2";
 const VENUE_REPAIR_NOTE =
   "Human-reviewed venue correction: immutable Instagram/poster evidence identifies the physical venue; all sibling source-receipt occurrences remain unchanged.";
 
@@ -148,6 +148,16 @@ const VENUE_REPAIR_GROUPS = Object.freeze([
     venueHandle: "freestylerbelgrade_official",
     sourceHandle: "kaif.belgrad",
     ids: ["j5750ewadw545vyf167cxwr5398d8242"],
+    expectedAmbiguousApprovedEvents: [
+      {
+        id: "j572s3nx1hepy3j4stfd488d318d095m",
+        title: "TO ME RADI",
+        date: "2026-08-28",
+        time: "TBD",
+        venueId: "k177scs2zpr0a6cpg33argkzmd897mav",
+        instagramPostUrl: "https://www.instagram.com/p/DcWgamVjHFi/",
+      },
+    ],
     evidence:
       "The reviewed @freestylerbelgrade_official source and event evidence identify Freestyler.",
   },
@@ -941,6 +951,31 @@ async function buildVenueRepairOperation(
     venue: venue.name,
     evidence: group.evidence,
   };
+  const expectedAmbiguousApprovedEvents = group.expectedAmbiguousApprovedEvents ?? [];
+  const ambiguousEvents = expectedAmbiguousApprovedEvents.length
+    ? await loadEventsByIds(
+        client,
+        serviceSecret,
+        expectedAmbiguousApprovedEvents.map((row) => row.id),
+        true,
+      )
+    : new Map();
+  const expectedAmbiguousApprovedEventVersions =
+    expectedAmbiguousApprovedEvents.map((expected) => {
+      const ambiguous = ambiguousEvents.get(expected.id);
+      assert(
+        ambiguous &&
+          ambiguous.status === "approved" &&
+          ambiguous.title === expected.title &&
+          ambiguous.date === expected.date &&
+          (ambiguous.time ?? null) === expected.time &&
+          ambiguous.venueId === expected.venueId &&
+          ambiguous.instagramPostUrl === expected.instagramPostUrl &&
+          Number.isSafeInteger(ambiguous.updatedAt),
+        `Event ${id} reviewed ambiguity ${expected.id} changed or is missing.`,
+      );
+      return { id: ambiguous._id, updatedAt: ambiguous.updatedAt };
+    });
   return {
     kind: "reviewed_venue_repair",
     key: `event-venue:${id}`,
@@ -968,6 +1003,7 @@ async function buildVenueRepairOperation(
         expectedTargetVenueHandle: normalizeHandle(venue.instagramHandle),
         venueEvidence: group.evidence,
         moderationNote: VENUE_REPAIR_NOTE,
+        expectedAmbiguousApprovedEventVersions,
       },
     },
   };
@@ -1760,6 +1796,26 @@ function validateVenueRepairOperation(operation, group, id) {
     exactJson(operation.after.marker, expectedMarker),
     `Event repair ${id} marker is invalid.`,
   );
+  const expectedAmbiguityIds = (group.expectedAmbiguousApprovedEvents ?? [])
+    .map((row) => row.id)
+    .sort();
+  const ambiguousVersions =
+    operation.mutation?.args?.expectedAmbiguousApprovedEventVersions;
+  assert(
+    Array.isArray(ambiguousVersions) &&
+      ambiguousVersions.every(
+        (row) =>
+          row &&
+          typeof row === "object" &&
+          typeof row.id === "string" &&
+          Number.isSafeInteger(row.updatedAt),
+      ) &&
+      exactJson(
+        ambiguousVersions.map((row) => row.id).sort(),
+        expectedAmbiguityIds,
+      ),
+    `Event repair ${id} reviewed ambiguity versions are invalid.`,
+  );
   const expectedArgs = {
     id,
     expectedUpdatedAt: operation.before.event.updatedAt,
@@ -1774,6 +1830,7 @@ function validateVenueRepairOperation(operation, group, id) {
     expectedTargetVenueHandle: group.venueHandle,
     venueEvidence: group.evidence,
     moderationNote: VENUE_REPAIR_NOTE,
+    expectedAmbiguousApprovedEventVersions: ambiguousVersions,
   };
   assert(
     operation.mutation.functionName === API.venueRepair &&

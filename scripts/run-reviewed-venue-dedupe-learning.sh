@@ -30,9 +30,9 @@ readonly PLAN_ENVELOPE_SCHEMA=event-zeka-reviewed-venue-dedupe-plan-envelope-v1
 readonly CONFIG_PLAN_SCHEMA=event-zeka-reviewed-venue-dedupe-config-plan-v1
 readonly EVENT_PLAN_SCHEMA=event-zeka-reviewed-venue-dedupe-event-plan-v1
 readonly RESULT_SCHEMA=event-zeka-reviewed-venue-dedupe-result-v1
-readonly TARGET_SET_VERSION=event-zeka-reviewed-venue-dedupe-learning-2026-08-27:v1
-readonly CONFIG_CONFIRMATION=APPLY_EVENT_ZEKA_REVIEWED_VENUE_DEDUPE_CONFIG_2026_08_27_V1
-readonly EVENT_CONFIRMATION=APPLY_EVENT_ZEKA_REVIEWED_VENUE_DEDUPE_EVENTS_2026_08_27_V1
+readonly TARGET_SET_VERSION=event-zeka-reviewed-venue-dedupe-learning-2026-08-27:v2
+readonly CONFIG_CONFIRMATION=APPLY_EVENT_ZEKA_REVIEWED_VENUE_DEDUPE_CONFIG_2026_08_27_V2
+readonly EVENT_CONFIRMATION=APPLY_EVENT_ZEKA_REVIEWED_VENUE_DEDUPE_EVENTS_2026_08_27_V2
 readonly INGESTION_LOCK=/run/lock/ig-event-durable-daily.lock
 readonly FOLLOWING_LOCK=/run/lock/ig-event-discover-following.lock
 
@@ -361,7 +361,7 @@ schema = {
 count = {"config": 12, "events": 7}[phase]
 if not isinstance(plan, dict) or plan.get("phase") != phase or plan.get("schemaVersion") != schema:
     raise SystemExit("invalid plan phase/schema")
-if plan.get("targetSetVersion") != "event-zeka-reviewed-venue-dedupe-learning-2026-08-27:v1":
+if plan.get("targetSetVersion") != "event-zeka-reviewed-venue-dedupe-learning-2026-08-27:v2":
     raise SystemExit("invalid plan target version")
 operations = plan.get("operations")
 if not isinstance(operations, list) or len(operations) != count:

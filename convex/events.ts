@@ -761,6 +761,12 @@ async function assertApprovalCandidatePolicy(
   ctx: MutationCtx,
   candidate: ApprovalCandidateFields,
   excludeEventIds: Id<"events">[] = [],
+  options: {
+    expectedAmbiguousApprovedEventVersions?: Array<{
+      id: Id<"events">;
+      updatedAt: number;
+    }>;
+  } = {},
 ): Promise<void> {
   if (!isSensibleEventTitleForApproval(candidate)) {
     throw new Error("Event title is not suitable for approval.");
@@ -779,6 +785,22 @@ async function assertApprovalCandidatePolicy(
   const candidatePostUrl = normalizeLookup(candidate.instagramPostUrl ?? "");
   const candidatePostId = candidate.instagramPostId?.trim() ?? "";
   const excluded = new Set(excludeEventIds);
+  const expectedAmbiguousVersions =
+    options.expectedAmbiguousApprovedEventVersions ?? [];
+  if (
+    expectedAmbiguousVersions.length > 8 ||
+    new Set(expectedAmbiguousVersions.map((row) => row.id)).size !==
+      expectedAmbiguousVersions.length ||
+    expectedAmbiguousVersions.some(
+      (row) => !Number.isSafeInteger(row.updatedAt) || excluded.has(row.id),
+    )
+  ) {
+    throw new Error("Reviewed ambiguous occurrence versions are invalid.");
+  }
+  const expectedAmbiguousById = new Map(
+    expectedAmbiguousVersions.map((row) => [row.id, row.updatedAt] as const),
+  );
+  const matchedAmbiguousIds = new Set<Id<"events">>();
   let ambiguousConflict = false;
   for (const event of sameDateEvents) {
     if (excluded.has(event._id)) {
@@ -809,8 +831,19 @@ async function assertApprovalCandidatePolicy(
       throw new Error("An approved event already exists for this canonical occurrence.");
     }
     if (relation === "ambiguous") {
-      ambiguousConflict = true;
+      const expectedUpdatedAt = expectedAmbiguousById.get(event._id);
+      if (expectedUpdatedAt === undefined) {
+        ambiguousConflict = true;
+      } else if (event.updatedAt !== expectedUpdatedAt) {
+        throw new Error("A reviewed ambiguous approved event changed before correction.");
+      } else {
+        matchedAmbiguousIds.add(event._id);
+      }
     }
+  }
+
+  if (matchedAmbiguousIds.size !== expectedAmbiguousById.size) {
+    throw new Error("The reviewed ambiguous approved event set changed before correction.");
   }
 
   if (ambiguousConflict) {
@@ -4450,6 +4483,14 @@ export const repairReviewedStructuredEventVenue = mutation({
     expectedTargetVenueHandle: v.optional(v.string()),
     venueEvidence: v.string(),
     moderationNote: v.string(),
+    expectedAmbiguousApprovedEventVersions: v.optional(
+      v.array(
+        v.object({
+          id: v.id("events"),
+          updatedAt: v.number(),
+        }),
+      ),
+    ),
     serviceSecret: v.string(),
   },
   returns: reviewedStructuredEvidenceCorrectionResult,
@@ -4583,7 +4624,10 @@ export const repairReviewedStructuredEventVenue = mutation({
     await assertPersistedServiceSourcePolicy(ctx, effectiveEvent, {
       allowHumanReviewedStructured: true,
     });
-    await assertApprovalCandidatePolicy(ctx, effectiveEvent, [event._id]);
+    await assertApprovalCandidatePolicy(ctx, effectiveEvent, [event._id], {
+      expectedAmbiguousApprovedEventVersions:
+        args.expectedAmbiguousApprovedEventVersions,
+    });
     if (!(await isCanonicallyGroundedApprovedEvent(ctx, effectiveEvent))) {
       throw new Error("Reviewed structured venue correction would not remain publicly grounded.");
     }
