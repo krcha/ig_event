@@ -28,6 +28,12 @@ const followingAccountValidator = v.object({
   rawId: v.optional(v.string()),
 });
 
+function normalizeObservedDisplayName(value: string | undefined): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.normalize("NFKC").replace(/\s+/g, " ").trim();
+  return normalized ? normalized.slice(0, 200) : undefined;
+}
+
 function roleForLegacyVenue(venue: Doc<"venues">): InstagramSourceRole {
   return isVenuePublic(venue) ? "venue" : "unknown";
 }
@@ -60,6 +66,8 @@ function toSourceView(source: Doc<"instagramSources">, venue?: Doc<"venues"> | n
   return {
     _id: source._id as string | undefined,
     handle: source.handle,
+    observedDisplayName: source.observedDisplayName,
+    observedDisplayNameUpdatedAt: source.observedDisplayNameUpdatedAt,
     role: source.role,
     venueId: source.venueId,
     venueName: source.role === "venue" ? venue?.name : undefined,
@@ -139,6 +147,8 @@ export const listActive = query({
         views.push({
           _id: undefined,
           handle,
+          observedDisplayName: undefined,
+          observedDisplayNameUpdatedAt: undefined,
           role,
           venueId: role === "venue" ? venue._id : undefined,
           venueName: role === "venue" ? venue.name : undefined,
@@ -220,6 +230,8 @@ export const listLegacyVenueSourcesPage = query({
         return [{
           _id: undefined,
           handle,
+          observedDisplayName: undefined,
+          observedDisplayNameUpdatedAt: undefined,
           role,
           venueId: role === "venue" ? venue._id : undefined,
           venueName: role === "venue" ? venue.name : undefined,
@@ -373,6 +385,12 @@ export const getIngestionContextsByHandles = query({
           role,
           canonicalVenueName: handleVenue?.name,
           canonicalVenueAliases: handleVenue?.aliases ?? [],
+          ...(source?.observedDisplayName
+            ? {
+                observedDisplayName: source.observedDisplayName,
+                observedDisplayNameUpdatedAt: source.observedDisplayNameUpdatedAt,
+              }
+            : {}),
         };
       }),
     );
@@ -409,9 +427,24 @@ export const syncFollowingSnapshot = mutation({
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const now = Date.now();
     const sourceHandle = normalizeInstagramHandle(args.sourceHandle);
-    const handles = [
-      ...new Set(args.accounts.map((account) => normalizeInstagramHandle(account.handle)).filter(Boolean)),
-    ];
+    const accountsByHandle = new Map<
+      string,
+      { observedDisplayName?: string }
+    >();
+    for (const account of args.accounts) {
+      const handle = normalizeInstagramHandle(account.handle);
+      if (!handle) continue;
+      const observedDisplayName = normalizeObservedDisplayName(account.displayName);
+      const existing = accountsByHandle.get(handle);
+      if (!existing) {
+        accountsByHandle.set(handle, {
+          ...(observedDisplayName ? { observedDisplayName } : {}),
+        });
+      } else if (!existing.observedDisplayName && observedDisplayName) {
+        accountsByHandle.set(handle, { observedDisplayName });
+      }
+    }
+    const handles = [...accountsByHandle.keys()];
     const validItemCount = handles.length;
     const complete =
       args.snapshotComplete &&
@@ -433,6 +466,7 @@ export const syncFollowingSnapshot = mutation({
     // durable source snapshot until a complete weekly reconciliation succeeds.
     if (complete) {
       for (const handle of handles) {
+        const observedDisplayName = accountsByHandle.get(handle)?.observedDisplayName;
         const existing = await ctx.db
           .query("instagramSources")
           .withIndex("by_handle", (q) => q.eq("handle", handle))
@@ -443,6 +477,12 @@ export const syncFollowingSnapshot = mutation({
             active: true,
             ...(reactivated ? { activatedAt: now, deactivatedAt: undefined } : {}),
             lastSeenFollowingAt: now,
+            ...(observedDisplayName
+              ? {
+                  observedDisplayName,
+                  observedDisplayNameUpdatedAt: now,
+                }
+              : {}),
             updatedAt: now,
           });
           if (reactivated) activatedCount += 1;
@@ -450,6 +490,12 @@ export const syncFollowingSnapshot = mutation({
         } else {
           await ctx.db.insert("instagramSources", {
             handle,
+            ...(observedDisplayName
+              ? {
+                  observedDisplayName,
+                  observedDisplayNameUpdatedAt: now,
+                }
+              : {}),
             role: "unknown",
             active: true,
             discoveredAt: now,

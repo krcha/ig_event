@@ -2,6 +2,10 @@ import { CROSS_POST_PROMOTION_COALESCING_POLICY_VERSION } from "./cross-post-pro
 
 export const CROSS_POST_CAMPAIGN_AGGREGATE_ATTESTATION_FIELD =
   "crossPostCampaignAggregateAttestation";
+export const REVIEWED_PROMOTION_VARIANT_FOLD_FIELD =
+  "reviewedPromotionVariantFold";
+export const REVIEWED_SAME_SOURCE_CONTINUATION_FOLD_FIELD =
+  "reviewedSameSourceContinuationFold";
 
 export type CrossPostCampaignAggregateBinding = {
   title: string;
@@ -225,10 +229,28 @@ export function isCrossPostCampaignLineageEvent(event: {
   normalizedFieldsJson?: string | null;
   moderationNote?: string | null;
 }): boolean {
+  let hasReviewedOccurrenceFold = false;
+  try {
+    const parsed = JSON.parse(event.normalizedFieldsJson ?? "null") as unknown;
+    hasReviewedOccurrenceFold = Boolean(
+      parsed &&
+        typeof parsed === "object" &&
+        !Array.isArray(parsed) &&
+        [
+          REVIEWED_PROMOTION_VARIANT_FOLD_FIELD,
+          REVIEWED_SAME_SOURCE_CONTINUATION_FOLD_FIELD,
+        ].some((field) => Object.hasOwn(parsed as Record<string, unknown>, field)),
+    );
+  } catch {
+    hasReviewedOccurrenceFold = false;
+  }
   return (
     hasCrossPostCampaignAggregateAttestationField(event.normalizedFieldsJson) ||
+    hasReviewedOccurrenceFold ||
     event.moderationNote?.startsWith("[cross_post_campaign_variant:") === true ||
-    event.moderationNote?.startsWith("[cross_post_campaign_primary:") === true
+    event.moderationNote?.startsWith("[cross_post_campaign_primary:") === true ||
+    event.moderationNote?.startsWith("[reviewed_promotion_variant:") === true ||
+    event.moderationNote?.startsWith("[reviewed_same_source_continuation:") === true
   );
 }
 

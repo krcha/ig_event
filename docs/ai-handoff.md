@@ -288,14 +288,23 @@ calls the job POST route, the job will not keep advancing.
    field confirmation.
 3. `prepareEventsForInsert` normalizes venue, title, date, artists, description,
    price, confidence, split schedules, and date ranges.
-4. Events more than `MAX_EVENT_DAYS_AHEAD` ahead, events in the past, missing
+4. Poster stills and captions are complementary evidence. Reels/videos use a
+   durable still when one exists; caption-only mode is reserved for posts with
+   no usable still. Explicit physical-venue text beats promoter or ticket-brand
+   identity, followed source display names are retained as extraction context,
+   and an exact street address is the final venue fallback.
+5. A later act introduced as a continuation of the same night (for example,
+   "after midnight ... takes over") is lineup evidence for the starting event,
+   not a second occurrence. The earliest supported start and stable artist
+   union are retained; independently dated/ticketed/located events stay split.
+6. Events more than `MAX_EVENT_DAYS_AHEAD` ahead, events in the past, missing
    dates, missing venues, and invalid events are skipped.
-5. Confidence is normalized in `lib/utils/confidence.ts`.
-6. Auto-approval is conservative: `AUTO_APPROVE_CONFIDENCE_THRESHOLD` is `0.9`,
+7. Confidence is normalized in `lib/utils/confidence.ts`.
+8. Auto-approval is conservative: `AUTO_APPROVE_CONFIDENCE_THRESHOLD` is `0.9`,
    and the code uses a strict greater-than comparison.
-7. Missing image and suspected duplicate penalties can reduce moderation
+9. Missing image and suspected duplicate penalties can reduce moderation
    confidence.
-8. Auto-approved events are inserted as `approved`; all others are inserted as
+10. Auto-approved events are inserted as `approved`; all others are inserted as
    `pending`.
 
 ### Duplicate Handling During Ingestion

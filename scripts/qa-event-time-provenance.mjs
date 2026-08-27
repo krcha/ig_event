@@ -27,6 +27,7 @@ for (const [text, expected] of [
   ["Music from 9 to 17", "09:00-17:00"],
   ["Event at 9", "09:00"],
   ["22h - 05h", "22:00-05:00"],
+  ["19H - 01H", "19:00-01:00"],
   ["Ulaz od 18 godina, početak u 21h", "21:00"],
   ["Popust 20% pre 22h, početak u 21h", "21:00"],
   ["Radno vreme do 17, koncert počinje u 21h", "21:00"],

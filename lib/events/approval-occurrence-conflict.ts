@@ -5,6 +5,7 @@ export type ApprovalOccurrenceCandidate = {
   title: string;
   time?: string | null;
   artists?: string[] | null;
+  sourceAccountHandle?: string | null;
   sourceOccurrenceKey?: string | null;
   normalizedFieldsJson?: string | null;
 };
@@ -43,6 +44,114 @@ function comparableIdentity(candidate: ApprovalOccurrenceCandidate): {
         .filter(Boolean),
     ),
   };
+}
+
+function normalizeSourceAccountHandle(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.normalize("NFKC").trim().replace(/^@+/u, "").toLowerCase();
+  return /^[a-z0-9._]{1,30}$/u.test(normalized) ? normalized : null;
+}
+
+function getNormalizedSourceAccountHandle(
+  candidate: ApprovalOccurrenceCandidate,
+): string | null {
+  const direct = normalizeSourceAccountHandle(candidate.sourceAccountHandle);
+  if (direct) return direct;
+  if (!candidate.normalizedFieldsJson) return null;
+  try {
+    const parsed = JSON.parse(candidate.normalizedFieldsJson) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return normalizeSourceAccountHandle(
+      (parsed as Record<string, unknown>).sourceGroundingInstagramHandle,
+    );
+  } catch {
+    return null;
+  }
+}
+
+const GENERIC_TEASER_TITLES = new Set([
+  "announcement",
+  "coming soon",
+  "najava",
+  "new chapter",
+  "save the date",
+  "teaser",
+  "uskoro",
+]);
+
+const GENERIC_SEQUENCE_PREFIXES = new Set([
+  "chapter",
+  "deo",
+  "dio",
+  "edition",
+  "episode",
+  "epizoda",
+  "izdanje",
+  "part",
+  "poglavlje",
+  "season",
+  "sezona",
+  "vol",
+  "volume",
+]);
+
+const GENERIC_SEQUENCE_QUALIFIERS = new Set([
+  "eight",
+  "eighth",
+  "five",
+  "fifth",
+  "four",
+  "fourth",
+  "nine",
+  "ninth",
+  "one",
+  "second",
+  "seven",
+  "seventh",
+  "six",
+  "sixth",
+  "ten",
+  "tenth",
+  "third",
+  "three",
+  "two",
+]);
+
+function isGenericTeaserTitle(title: string): boolean {
+  const normalized = toSearchableText(title);
+  if (!normalized) return false;
+  if (GENERIC_TEASER_TITLES.has(normalized)) return true;
+
+  const tokens = normalized.split(/\s+/u);
+  const [prefix, ...qualifiers] = tokens;
+  if (!prefix || !GENERIC_SEQUENCE_PREFIXES.has(prefix) || qualifiers.length > 2) {
+    return false;
+  }
+  return qualifiers.every(
+    (token) =>
+      /^\d{1,3}$/u.test(token) ||
+      /^[ivxlcdm]{1,8}$/u.test(token) ||
+      GENERIC_SEQUENCE_QUALIFIERS.has(token),
+  );
+}
+
+function isWeakGenericTeaser(
+  candidate: ApprovalOccurrenceCandidate,
+  identity: ReturnType<typeof comparableIdentity>,
+  minutes: number | null,
+): boolean {
+  return (
+    minutes === null &&
+    identity.artists.size === 0 &&
+    isGenericTeaserTitle(candidate.title)
+  );
+}
+
+function hasStrongerOccurrenceEvidence(
+  identity: ReturnType<typeof comparableIdentity>,
+  minutes: number | null,
+): boolean {
+  return minutes !== null || identity.artists.size > 0;
 }
 
 const NON_DISTINCTIVE_TITLE_TOKENS = new Set([
@@ -139,6 +248,34 @@ export function classifyApprovalOccurrenceRelation(options: {
 
   const candidateMinutes = getEventTimeSortMinutes(candidate.time);
   const existingMinutes = getEventTimeSortMinutes(existing.time);
+  const candidateIdentity = comparableIdentity(candidate);
+  const existingIdentity = comparableIdentity(existing);
+  const candidateSourceAccountHandle = getNormalizedSourceAccountHandle(candidate);
+  const existingSourceAccountHandle = getNormalizedSourceAccountHandle(existing);
+  const sameSourceAccount = Boolean(
+    candidateSourceAccountHandle &&
+      candidateSourceAccountHandle === existingSourceAccountHandle,
+  );
+
+  // A venue or promoter account can publish an evidence-empty teaser before a richer
+  // lineup post. Distinct post/occurrence keys do not prove that a generic
+  // "Chapter four" row is a separate event. Hold the pair for coalescing or
+  // review when the date (the caller's cohort), physical venue, and normalized
+  // source account all agree and only one side carries meaningful time/artist
+  // evidence. This stays deliberately narrower than the general title logic so
+  // two independently named events at the same venue can still be distinct.
+  if (
+    sameVenue &&
+    !sameSource &&
+    sameSourceAccount &&
+    ((isWeakGenericTeaser(candidate, candidateIdentity, candidateMinutes) &&
+      hasStrongerOccurrenceEvidence(existingIdentity, existingMinutes)) ||
+      (isWeakGenericTeaser(existing, existingIdentity, existingMinutes) &&
+        hasStrongerOccurrenceEvidence(candidateIdentity, candidateMinutes)))
+  ) {
+    return "ambiguous";
+  }
+
   if (
     candidateMinutes !== null &&
     existingMinutes !== null &&
@@ -147,8 +284,6 @@ export function classifyApprovalOccurrenceRelation(options: {
     return "proven_distinct";
   }
 
-  const candidateIdentity = comparableIdentity(candidate);
-  const existingIdentity = comparableIdentity(existing);
   const sameTitle =
     Boolean(candidateIdentity.title) && candidateIdentity.title === existingIdentity.title;
   const sameNamedOccurrence = titlesNameSameOccurrence(

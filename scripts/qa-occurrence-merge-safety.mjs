@@ -496,6 +496,82 @@ assert.equal(
   "A distinctive contained title at one venue/date must resolve as a duplicate.",
 );
 
+const weakInfuseChapter = {
+  title: "Chapter four",
+  time: "TBD",
+  artists: [],
+  sourceOccurrenceKey: "instagram-occurrence-v2:infuse-chapter-four",
+  normalizedFieldsJson: JSON.stringify({
+    sourceGroundingInstagramHandle: " @INFUSE.RS ",
+  }),
+};
+const strongInfuseSkiStazaLineup = {
+  title: "Eelke Kleijn, Gorber & Despic",
+  time: "19:00-01:00",
+  artists: ["@eelkekleijn", "Gorber", "Despic"],
+  sourceOccurrenceKey: "instagram-occurrence-v2:infuse-ski-staza-lineup",
+  normalizedFieldsJson: JSON.stringify({
+    sourceGroundingInstagramHandle: "infuse.rs",
+  }),
+};
+const infuseWeakTeaserCollision = {
+  candidate: weakInfuseChapter,
+  existing: strongInfuseSkiStazaLineup,
+  sameVenue: true,
+  sameSource: false,
+};
+assert.equal(
+  classifyApprovalOccurrenceRelation(infuseWeakTeaserCollision),
+  "ambiguous",
+  "A same-account Chapter teaser must not be proven distinct from the richer Ski Staza lineup post.",
+);
+assert.equal(
+  classifyApprovalOccurrenceRelation({
+    ...infuseWeakTeaserCollision,
+    candidate: strongInfuseSkiStazaLineup,
+    existing: weakInfuseChapter,
+  }),
+  "ambiguous",
+  "The same-account weak-teaser collision must be symmetric so ingestion order cannot auto-approve it.",
+);
+assert.equal(
+  classifyApprovalOccurrenceRelation({
+    ...infuseWeakTeaserCollision,
+    existing: {
+      ...strongInfuseSkiStazaLineup,
+      title: "Ski Stazi",
+      time: "TBD",
+      artists: ["@eelkekleijn"],
+    },
+  }),
+  "ambiguous",
+  "A partial pre-correction lineup still carries stronger artist evidence than an empty Chapter teaser.",
+);
+assert.equal(
+  classifyApprovalOccurrenceRelation({
+    ...infuseWeakTeaserCollision,
+    existing: {
+      ...strongInfuseSkiStazaLineup,
+      normalizedFieldsJson: JSON.stringify({
+        sourceGroundingInstagramHandle: "different.promoter",
+      }),
+    },
+  }),
+  "proven_distinct",
+  "A generic teaser from a different source account must not create a cross-post collision.",
+);
+assert.equal(
+  classifyApprovalOccurrenceRelation({
+    ...infuseWeakTeaserCollision,
+    candidate: {
+      ...weakInfuseChapter,
+      title: "Gallery Exhibition",
+    },
+  }),
+  "proven_distinct",
+  "An independently named untimed event must remain distinct from a lineup at the same venue.",
+);
+
 const emptyVenueFixture = emptyVenueOccurrenceFixture();
 const emptyVenueCreateState = makeDb({
   events: [],

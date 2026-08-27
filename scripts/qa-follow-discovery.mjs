@@ -14,7 +14,11 @@ import {
   runFollowDiscoveryWorkflow,
 } from "../lib/pipeline/follow-discovery.ts";
 import { isCompleteFollowingSnapshot } from "../lib/pipeline/instagram-ingestion-durability.ts";
-import { syncFollowingSnapshot } from "../convex/instagramSources.ts";
+import {
+  getByHandle,
+  getIngestionContextsByHandles,
+  syncFollowingSnapshot,
+} from "../convex/instagramSources.ts";
 
 const vercelConfig = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8"));
 const composeSource = readFileSync(new URL("../docker-compose.yml", import.meta.url), "utf8");
@@ -246,10 +250,18 @@ process.env.CRON_SECRET = "qa-follow-secret";
 try {
   const tables = {
     instagramSources: [
-      { _id: "source-a", handle: "source.a", role: "unknown", active: true },
+      {
+        _id: "source-a",
+        handle: "source.a",
+        observedDisplayName: "Source A Before Partial",
+        observedDisplayNameUpdatedAt: 123,
+        role: "unknown",
+        active: true,
+      },
       { _id: "source-gone", handle: "source.gone", role: "venue", active: true },
     ],
     instagramFollowingSyncState: [],
+    venues: [],
   };
   let nextId = 1;
   const ctx = {
@@ -269,6 +281,10 @@ try {
             return builder;
           },
           collect: async () => tables[tableName].filter((row) => predicates.every((fn) => fn(row))),
+          take: async (limit) =>
+            tables[tableName]
+              .filter((row) => predicates.every((fn) => fn(row)))
+              .slice(0, limit),
           unique: async () => {
             const rows = tables[tableName].filter((row) => predicates.every((fn) => fn(row)));
             assert.ok(rows.length <= 1, `Expected unique ${tableName} query.`);
@@ -299,7 +315,10 @@ try {
 
   const partial = await syncFollowingSnapshot._handler(ctx, {
     ...baseArgs,
-    accounts: [{ handle: "source.a" }, { handle: "source.new" }],
+    accounts: [
+      { handle: "source.a", displayName: "Partial Source A" },
+      { handle: "source.new", displayName: "Partial New Source" },
+    ],
     snapshotComplete: true,
     rawItemCount: 2,
     malformedItemCount: 0,
@@ -312,10 +331,23 @@ try {
     undefined,
     "a partial snapshot must not add or activate sources",
   );
+  assert.equal(
+    tables.instagramSources.find((row) => row.handle === "source.a").observedDisplayName,
+    "Source A Before Partial",
+    "a partial snapshot must not refresh observed profile names",
+  );
+  assert.equal(
+    tables.instagramSources.find((row) => row.handle === "source.a")
+      .observedDisplayNameUpdatedAt,
+    123,
+  );
 
   const complete = await syncFollowingSnapshot._handler(ctx, {
     ...baseArgs,
-    accounts: [{ handle: "source.a" }, { handle: "source.new" }],
+    accounts: [
+      { handle: "source.a", displayName: "  Source   A   Live  " },
+      { handle: "source.new", displayName: "  Source   New  " },
+    ],
     snapshotComplete: true,
     rawItemCount: 2,
     malformedItemCount: 0,
@@ -325,10 +357,37 @@ try {
   assert.equal(complete.deactivatedCount, 1);
   assert.equal(tables.instagramSources.find((row) => row.handle === "source.new").active, true);
   assert.equal(tables.instagramSources.find((row) => row.handle === "source.gone").active, false);
+  const refreshedSource = tables.instagramSources.find((row) => row.handle === "source.a");
+  assert.equal(refreshedSource.observedDisplayName, "Source A Live");
+  assert.equal(typeof refreshedSource.observedDisplayNameUpdatedAt, "number");
+  const discoveredSource = tables.instagramSources.find((row) => row.handle === "source.new");
+  assert.equal(discoveredSource.observedDisplayName, "Source New");
+  assert.equal(typeof discoveredSource.observedDisplayNameUpdatedAt, "number");
+
+  const sourceView = await getByHandle._handler(ctx, {
+    handle: "source.a",
+    serviceSecret: "qa-follow-secret",
+  });
+  assert.equal(sourceView.observedDisplayName, "Source A Live");
+  assert.equal(sourceView.observedDisplayNameUpdatedAt, refreshedSource.observedDisplayNameUpdatedAt);
+
+  const ingestionContexts = await getIngestionContextsByHandles._handler(ctx, {
+    handles: ["source.a"],
+    serviceSecret: "qa-follow-secret",
+  });
+  assert.equal(ingestionContexts[0].observedDisplayName, "Source A Live");
+  assert.equal(
+    ingestionContexts[0].observedDisplayNameUpdatedAt,
+    refreshedSource.observedDisplayNameUpdatedAt,
+  );
 
   const reactivated = await syncFollowingSnapshot._handler(ctx, {
     ...baseArgs,
-    accounts: [{ handle: "source.a" }, { handle: "source.new" }, { handle: "source.gone" }],
+    accounts: [
+      { handle: "source.a", displayName: "   " },
+      { handle: "source.new" },
+      { handle: "source.gone" },
+    ],
     snapshotComplete: true,
     rawItemCount: 3,
     malformedItemCount: 0,
@@ -338,6 +397,11 @@ try {
   const restored = tables.instagramSources.find((row) => row.handle === "source.gone");
   assert.equal(restored.active, true);
   assert.equal(typeof restored.lastSeenFollowingAt, "number");
+  assert.equal(
+    tables.instagramSources.find((row) => row.handle === "source.a").observedDisplayName,
+    "Source A Live",
+    "a blank display name must not clear the last complete observed value",
+  );
 } finally {
   if (previousCronSecret === undefined) delete process.env.CRON_SECRET;
   else process.env.CRON_SECRET = previousCronSecret;

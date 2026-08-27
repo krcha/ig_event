@@ -29,6 +29,7 @@
     "qa:event-version-preconditions": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-event-version-preconditions.mjs",
     "qa:instagram-occurrences": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-instagram-occurrence-regressions.mjs",
     "qa:occurrence-merge-safety": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-occurrence-merge-safety.mjs",
+    "qa:reviewed-fold-safety": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-reviewed-fold-safety.mjs",
     "qa:cross-post-promotion-coalescing": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-cross-post-promotion-coalescing.mjs",
     "qa:cross-post-campaign-automerge": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-approved-cross-post-campaign-automerge.mjs",
     "qa:ingestion-triage": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-ingestion-run-triage.mjs",

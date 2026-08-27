@@ -26,6 +26,7 @@ const checks = [
   { script: "qa:event-version-preconditions", timeoutMs: 60_000 },
   { script: "qa:instagram-occurrences", timeoutMs: 60_000 },
   { script: "qa:occurrence-merge-safety", timeoutMs: 60_000 },
+  { script: "qa:reviewed-fold-safety", timeoutMs: 60_000 },
   { script: "qa:cross-post-promotion-coalescing", timeoutMs: 60_000 },
   { script: "qa:cross-post-campaign-automerge", timeoutMs: 60_000 },
   { script: "qa:ingestion-triage", timeoutMs: 60_000 },

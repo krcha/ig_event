@@ -335,6 +335,11 @@ function runPromptQa() {
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /continuous same-night sequence.*after midnight.*earliest explicit event\/segment start/is,
+    "Prompt must keep a later after-midnight act inside the same event without inventing its handoff time.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
     /except that a consolidated one-event running order may include its performer-slot times/i,
     "Prompt must permit factual slot times only in a consolidated running order.",
   );
@@ -484,6 +489,36 @@ function runPromptQa() {
   assert.match(EVENT_EXTRACTION_SYSTEM_PROMPT, /promoter-role account name identifies the organizer/i);
   assert.match(EVENT_EXTRACTION_SYSTEM_PROMPT, /Preserve an explicitly billed Instagram artist handle/i);
   assert.match(EVENT_EXTRACTION_SYSTEM_PROMPT, /minor connector-word difference/i);
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /poster and caption as complementary primary evidence/i,
+    "Prompt must combine non-conflicting caption and poster evidence without a caption-first bias.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /physical venue always beats.*promoter.*ticket brand/i,
+    "Prompt must prefer a printed physical venue over promoter and ticketing identities.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /na Ski Stazi.*Ski Staza.*not an event title/i,
+    "Prompt must normalize Serbian locative venue evidence instead of turning it into a title.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /exact street address.*last-resort venue label/i,
+    "Prompt must retain an exact occurrence address when no venue name is available.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /Preserve the full legible lineup/i,
+    "Prompt must keep every readable performer from a single-event poster.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /"19H - 01H" → "19:00-01:00"/i,
+    "Prompt must show how to normalize the reported cross-midnight poster range.",
+  );
 }
 
 function runVenueQa() {

@@ -7,20 +7,29 @@ export type InstagramIngestionMediaSelection = {
   selectedImageUrl: string | null;
 };
 
-export function isCaptionOnlyInstagramVideo(postType: string | null | undefined): boolean {
+export function isCaptionOnlyInstagramVideo(
+  postType: string | null | undefined,
+  usableStillUrl: string | null = null,
+): boolean {
   const normalized = postType?.trim().toLowerCase() ?? "";
-  return normalized.includes("video") || normalized.includes("reel");
+  const isVideo = normalized.includes("video") || normalized.includes("reel");
+  return isVideo && !usableStillUrl?.trim();
 }
 
 export function resolveInstagramIngestionMediaSelection(
   post: InstagramScrapedPost,
 ): InstagramIngestionMediaSelection {
   const durableMediaCandidate = resolveBestImageUrl(post);
-  const captionOnlyVideo = isCaptionOnlyInstagramVideo(post.postType);
+  const captionOnlyVideo = isCaptionOnlyInstagramVideo(
+    post.postType,
+    durableMediaCandidate,
+  );
+  const extractionMode =
+    captionOnlyVideo || !durableMediaCandidate ? "caption_only" : "poster";
 
   return {
     durableMediaCandidate,
-    extractionMode: captionOnlyVideo ? "caption_only" : "poster",
-    selectedImageUrl: captionOnlyVideo ? null : durableMediaCandidate,
+    extractionMode,
+    selectedImageUrl: durableMediaCandidate,
   };
 }

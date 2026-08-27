@@ -101,6 +101,7 @@ import {
   buildNightlifeLineupCoalescingPlan,
   NIGHTLIFE_LINEUP_COALESCING_POLICY_VERSION,
   titleContainsOnlyBilledArtists,
+  type NightlifeLineupCoalescingPlan,
   type NightlifeLineupSource,
 } from "@/lib/events/nightlife-lineup-coalescing";
 import {
@@ -272,6 +273,7 @@ type IngestionVenueContext = {
   canonicalVenueLocationsByHandle: Record<string, string>;
   venueNameOverridesByHandle: Record<string, string>;
   configuredVenueNamesByHandle: Record<string, string>;
+  sourceDisplayNamesByHandle: Record<string, string>;
   sourceRolesByHandle: Record<string, "venue" | "promoter" | "unknown">;
 };
 
@@ -361,6 +363,8 @@ type InstagramIngestionSourceContext = {
   role: "venue" | "promoter" | "unknown";
   canonicalVenueName?: string;
   canonicalVenueAliases?: string[];
+  observedDisplayName?: string;
+  observedDisplayNameUpdatedAt?: number;
 };
 const ACTIVE_SOURCE_PAGE_SIZE = 200;
 const MAX_ACTIVE_SOURCE_PAGES = 10_000;
@@ -569,7 +573,7 @@ type EventVariant = {
   splitSourceLine: string | null;
   occurrencePlanUnverified: boolean;
   lineupScheduleCoalesced?: boolean;
-  lineupScheduleTimingMode?: "shared_identical" | "shared_timetable" | "untimed_lineup";
+  lineupScheduleTimingMode?: NightlifeLineupCoalescingPlan["timingMode"];
   lineupSourceEvidence?: Array<{
     text: string;
     source: NightlifeLineupSource;
@@ -4479,6 +4483,38 @@ function coalesceNightlifeLineupEventVariants(options: {
 
   const replacementByIndex = new Map<number, EventVariant>();
   const consumedIndexes = new Set<number>();
+  const resolveLineupSource = (variant: EventVariant): NightlifeLineupSource => {
+    const sourceText = normalizeString(variant.splitSourceLine);
+    if (
+      sourceText &&
+      extractionEvidenceAppearsInPersistedSource({
+        evidenceText: sourceText,
+        source: "caption",
+        post: options.post,
+        hasPoster: options.hasPoster,
+      })
+    ) {
+      return "caption";
+    }
+    if (
+      sourceText &&
+      extractionEvidenceAppearsInPersistedSource({
+        evidenceText: sourceText,
+        source: "alt_text",
+        post: options.post,
+        hasPoster: options.hasPoster,
+      })
+    ) {
+      return "alt_text";
+    }
+    return variant.splitSource === "caption_schedule"
+      ? "caption"
+      : variant.splitSource === "poster_schedule"
+        ? "poster"
+        : variant.splitSource === "alt_text_schedule"
+          ? "alt_text"
+          : variant.timeEvidence.source;
+  };
   for (const group of groups.values()) {
     const plan = buildNightlifeLineupCoalescingPlan({
       eventType: "nightlife",
@@ -4495,7 +4531,10 @@ function coalesceNightlifeLineupEventVariants(options: {
         venue: variant.venue,
         artists: variant.artists,
         sourceText: variant.splitSourceLine ?? "",
-        source: variant.timeEvidence.source,
+        source: resolveLineupSource(variant),
+        sourcePostIdentity:
+          normalizeString(options.post.postId) ||
+          normalizeString(options.post.instagramPostUrl),
         timeEvidenceText: variant.timeEvidence.exact_text,
         timeEvidenceVerified: isVerifiedTimeEvidence({
           evidence: variant.timeEvidence,
@@ -4503,6 +4542,7 @@ function coalesceNightlifeLineupEventVariants(options: {
           post: options.post,
           hasPoster: options.hasPoster,
         }),
+        timeEvidenceKind: variant.timeEvidence.status,
       })),
     });
     if (!plan) continue;
@@ -4998,6 +5038,13 @@ async function loadIngestionVenueContextForHandles(
   const sourceRolesByHandle = Object.fromEntries(
     contexts.map((context) => [normalizeHandle(context.handle), context.role]),
   );
+  const sourceDisplayNamesByHandle = Object.fromEntries(
+    contexts.flatMap((context) => {
+      const handle = normalizeHandle(context.handle);
+      const displayName = normalizeString(context.observedDisplayName);
+      return handle && displayName ? [[handle, displayName] as const] : [];
+    }),
+  );
   return {
     canonicalVenueNamesByHandle,
     canonicalVenueAliasesByHandle,
@@ -5008,6 +5055,7 @@ async function loadIngestionVenueContextForHandles(
       venueNameOverridesByHandle,
       sourceRolesByHandle,
     ),
+    sourceDisplayNamesByHandle,
     sourceRolesByHandle,
   };
 }
@@ -5021,6 +5069,7 @@ async function loadIngestionVenueContext(
   let canonicalVenueLocationsByHandle: Record<string, string> = {};
   let venueNameOverridesByHandle: Record<string, string> = {};
   let configuredVenueNamesByHandle: Record<string, string> = {};
+  let sourceDisplayNamesByHandle: Record<string, string> = {};
   let sourceRolesByHandle: Record<string, "venue" | "promoter" | "unknown"> = {};
 
   try {
@@ -5047,6 +5096,13 @@ async function loadIngestionVenueContext(
             (entry): entry is readonly [string, "venue" | "promoter" | "unknown"] =>
               Boolean(entry[0] && entry[1]),
           ),
+      );
+      sourceDisplayNamesByHandle = Object.fromEntries(
+        sources.flatMap((source) => {
+          const handle = normalizeHandle(source.handle);
+          const displayName = normalizeString(source.observedDisplayName);
+          return handle && displayName ? [[handle, displayName] as const] : [];
+        }),
       );
     } catch (error) {
       logError("ingestion.sources.load_failed", {
@@ -5080,6 +5136,7 @@ async function loadIngestionVenueContext(
     canonicalVenueLocationsByHandle,
     venueNameOverridesByHandle,
     configuredVenueNamesByHandle,
+    sourceDisplayNamesByHandle,
     sourceRolesByHandle,
   };
 }
@@ -9162,6 +9219,7 @@ function isVerifiedEventIdentityEvidence(options: {
     text: string;
     source: NightlifeLineupSource;
   }>;
+  lineupTimingMode?: NightlifeLineupCoalescingPlan["timingMode"];
 }): boolean {
   const supportsTitle = (text: string): boolean => {
     return titleIdentityAppearsInText(text, options.title);
@@ -9182,9 +9240,13 @@ function isVerifiedEventIdentityEvidence(options: {
     const boundLineupEvidence = options.lineupSourceEvidence.filter((item) =>
       isBoundEvidence(item.text, item.source),
     );
+    const afterMidnightContinuation =
+      options.lineupTimingMode === "after_midnight_continuation";
     return (
       boundLineupEvidence.length === options.lineupSourceEvidence.length &&
-      titleContainsOnlyBilledArtists(options.title, options.artists) &&
+      (afterMidnightContinuation
+        ? supportsTitle(boundLineupEvidence[0]?.text ?? "")
+        : titleContainsOnlyBilledArtists(options.title, options.artists)) &&
       options.artists.length > 0 &&
       options.artists.every((artist) =>
         boundLineupEvidence.some((item) =>
@@ -10278,6 +10340,7 @@ export function prepareEventsForInsert(
       post,
       hasPoster: hasPosterEvidence,
       lineupSourceEvidence: variant.lineupSourceEvidence,
+      lineupTimingMode: variant.lineupScheduleTimingMode,
     });
     const venueEvidenceVerified = isVerifiedEventVenueEvidence({
       venue: variant.venue,
@@ -10638,6 +10701,7 @@ type ProcessIngestionPostOptions = {
   canonicalVenueLocationsByHandle?: Record<string, string>;
   venueNameOverridesByHandle: Record<string, string>;
   configuredVenueNamesByHandle: Record<string, string>;
+  sourceDisplayNamesByHandle?: Record<string, string>;
   sourceRolesByHandle?: Record<string, "venue" | "promoter" | "unknown">;
   serviceSecret: string;
   processingFence: SourceProcessingFence;
@@ -10690,6 +10754,37 @@ function classifyExistingApprovedOccurrence(
 export const classifyExistingApprovedOccurrenceForTesting =
   classifyExistingApprovedOccurrence;
 
+function resolveInstagramSourceExtractionContext(options: {
+  sourceHandle: string;
+  configuredVenueNamesByHandle: Record<string, string>;
+  sourceDisplayNamesByHandle?: Record<string, string>;
+  sourceRolesByHandle?: Record<string, "venue" | "promoter" | "unknown">;
+}): {
+  canonicalVenueName: string | null;
+  instagramSourceName: string | null;
+  sourceRole: "venue" | "promoter" | "unknown";
+} {
+  const normalizedSourceHandle = normalizeHandle(options.sourceHandle);
+  const sourceRole = options.sourceRolesByHandle?.[normalizedSourceHandle] ?? "unknown";
+  const configuredSourceName =
+    getConfiguredVenueNameForHandle(
+      options.sourceHandle,
+      options.configuredVenueNamesByHandle,
+      STATIC_VENUE_BY_HANDLE,
+    ) || null;
+  const observedDisplayName = normalizeString(
+    options.sourceDisplayNamesByHandle?.[normalizedSourceHandle],
+  );
+  return {
+    canonicalVenueName: sourceRole === "promoter" ? null : configuredSourceName,
+    instagramSourceName: configuredSourceName || observedDisplayName || null,
+    sourceRole,
+  };
+}
+
+export const resolveInstagramSourceExtractionContextForTesting =
+  resolveInstagramSourceExtractionContext;
+
 async function processIngestionPost(
   options: ProcessIngestionPostOptions,
   dependencies: ProcessIngestionPostDependencies = DEFAULT_PROCESS_INGESTION_POST_DEPENDENCIES,
@@ -10704,6 +10799,7 @@ async function processIngestionPost(
     canonicalVenueLocationsByHandle = {},
     venueNameOverridesByHandle,
     configuredVenueNamesByHandle,
+    sourceDisplayNamesByHandle = {},
     sourceRolesByHandle = {},
     serviceSecret,
     processingFence,
@@ -10715,14 +10811,16 @@ async function processIngestionPost(
     eventDateFilterNow,
   } = options;
   const postContext = getPostContext(handle, post);
-  const sourceRole = sourceRolesByHandle[normalizeHandle(post.username)] ?? "unknown";
-  const configuredSourceName =
-    getConfiguredVenueNameForHandle(
-      post.username,
-      configuredVenueNamesByHandle,
-      STATIC_VENUE_BY_HANDLE,
-    ) || null;
-  const canonicalVenueName = sourceRole === "promoter" ? null : configuredSourceName;
+  const {
+    canonicalVenueName,
+    instagramSourceName,
+    sourceRole,
+  } = resolveInstagramSourceExtractionContext({
+    sourceHandle: post.username,
+    configuredVenueNamesByHandle,
+    sourceDisplayNamesByHandle,
+    sourceRolesByHandle,
+  });
   const canUseCaptionOnlyExtraction = buildPostTextEvidence(post).length > 0;
   const mediaSelection = resolveInstagramIngestionMediaSelection(post);
   const hasCurrentEventEvidenceCache =
@@ -11123,7 +11221,7 @@ async function processIngestionPost(
       instagramLocationName: post.locationName,
       canonicalVenueName,
       instagramSourceRole: sourceRole,
-      instagramSourceName: configuredSourceName,
+      instagramSourceName,
       extractionMode,
       ...(providerExecution
         ? {
@@ -12118,6 +12216,7 @@ async function processLoadedPostsForHandle(
     canonicalVenueLocationsByHandle,
     venueNameOverridesByHandle,
     configuredVenueNamesByHandle,
+    sourceDisplayNamesByHandle,
     sourceRolesByHandle,
     serviceSecret,
     workOwner,
@@ -12312,6 +12411,7 @@ async function processLoadedPostsForHandle(
         canonicalVenueLocationsByHandle,
         venueNameOverridesByHandle,
         configuredVenueNamesByHandle,
+        sourceDisplayNamesByHandle,
         sourceRolesByHandle,
         serviceSecret,
         processingFence,
@@ -12572,6 +12672,7 @@ async function processSavedBacklogBeforeFreshFetch(options: {
   canonicalVenueLocationsByHandle: Record<string, string>;
   venueNameOverridesByHandle: Record<string, string>;
   configuredVenueNamesByHandle: Record<string, string>;
+  sourceDisplayNamesByHandle: Record<string, string>;
   sourceRolesByHandle: Record<string, "venue" | "promoter" | "unknown">;
 }): Promise<boolean> {
   const savedPosts = await loadSavedScrapedPostsForHandle(
@@ -12595,6 +12696,7 @@ async function processSavedBacklogBeforeFreshFetch(options: {
       canonicalVenueLocationsByHandle: options.canonicalVenueLocationsByHandle,
       venueNameOverridesByHandle: options.venueNameOverridesByHandle,
       configuredVenueNamesByHandle: options.configuredVenueNamesByHandle,
+      sourceDisplayNamesByHandle: options.sourceDisplayNamesByHandle,
       sourceRolesByHandle: options.sourceRolesByHandle,
     });
   }
@@ -12656,6 +12758,7 @@ async function runInstagramIngestionFullScrapeBatchStep(
         canonicalVenueLocationsByHandle: options.canonicalVenueLocationsByHandle,
         venueNameOverridesByHandle: options.venueNameOverridesByHandle,
         configuredVenueNamesByHandle: options.configuredVenueNamesByHandle,
+        sourceDisplayNamesByHandle: options.sourceDisplayNamesByHandle,
         sourceRolesByHandle: options.sourceRolesByHandle,
       });
       if (readyForFetch) {
@@ -12700,6 +12803,7 @@ async function runInstagramIngestionFullScrapeBatchStep(
           canonicalVenueLocationsByHandle: options.canonicalVenueLocationsByHandle,
           venueNameOverridesByHandle: options.venueNameOverridesByHandle,
           configuredVenueNamesByHandle: options.configuredVenueNamesByHandle,
+          sourceDisplayNamesByHandle: options.sourceDisplayNamesByHandle,
           sourceRolesByHandle: options.sourceRolesByHandle,
         });
       }
@@ -12754,6 +12858,7 @@ export async function runInstagramIngestionBatchStep(
     canonicalVenueLocationsByHandle,
     venueNameOverridesByHandle,
     configuredVenueNamesByHandle,
+    sourceDisplayNamesByHandle,
     sourceRolesByHandle,
   } = venueContext;
   const batchSize = normalizeBatchSize(options.batchSize);
@@ -12771,6 +12876,7 @@ export async function runInstagramIngestionBatchStep(
       canonicalVenueLocationsByHandle,
       venueNameOverridesByHandle,
       configuredVenueNamesByHandle,
+      sourceDisplayNamesByHandle,
       sourceRolesByHandle,
       batchSize,
       mode,
@@ -12891,6 +12997,7 @@ export async function runInstagramIngestionBatchStep(
       canonicalVenueLocationsByHandle,
       venueNameOverridesByHandle,
       configuredVenueNamesByHandle,
+      sourceDisplayNamesByHandle,
       sourceRolesByHandle,
       serviceSecret,
       workOwner,

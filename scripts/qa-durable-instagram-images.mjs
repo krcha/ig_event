@@ -185,9 +185,35 @@ await assert.rejects(
     imageUrls: [INSTAGRAM_IMAGE],
     postType: "Video",
   });
-  assert.equal(video.extractionMode, "caption_only");
-  assert.equal(video.selectedImageUrl, null);
+  assert.equal(video.extractionMode, "poster");
+  assert.equal(video.selectedImageUrl, INSTAGRAM_IMAGE);
   assert.equal(video.durableMediaCandidate, INSTAGRAM_IMAGE);
+}
+{
+  const reel = resolveInstagramIngestionMediaSelection({
+    postId: "reel-with-thumbnail-1",
+    username: "qa",
+    instagramPostUrl: POST_URL,
+    imageUrl: INSTAGRAM_IMAGE,
+    imageUrls: [INSTAGRAM_IMAGE],
+    postType: "ReelVideo",
+  });
+  assert.equal(reel.extractionMode, "poster");
+  assert.equal(reel.selectedImageUrl, INSTAGRAM_IMAGE);
+  assert.equal(reel.durableMediaCandidate, INSTAGRAM_IMAGE);
+}
+{
+  const videoWithoutStill = resolveInstagramIngestionMediaSelection({
+    postId: "video-without-thumbnail-1",
+    username: "qa",
+    instagramPostUrl: POST_URL,
+    imageUrl: null,
+    imageUrls: [],
+    postType: "Video",
+  });
+  assert.equal(videoWithoutStill.extractionMode, "caption_only");
+  assert.equal(videoWithoutStill.selectedImageUrl, null);
+  assert.equal(videoWithoutStill.durableMediaCandidate, null);
 }
 assert.equal(getNonExpiringPublicEventImageUrl(INSTAGRAM_IMAGE), undefined);
 assert.equal(getNonExpiringPublicEventImageUrl(APIFY_IMAGE), APIFY_IMAGE);

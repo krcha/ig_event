@@ -13,6 +13,8 @@ import {
   createEvent,
   listPublicCalendarEventsWindowPaginated,
   listPublicEventsWindow,
+  repairReviewedStructuredEventEvidence,
+  repairReviewedStructuredEventVenue,
   repairTrustedV2EventVenue,
   recordInstagramSourceOccurrenceSatisfaction,
 } from "../convex/events.ts";
@@ -599,6 +601,204 @@ try {
     /may only change normalizedVenue/i,
   );
   assert.equal(unsafeRepairEvent.venue, "");
+
+  const reviewedOccurrenceKey = "instagram-occurrence-v2:reviewed-correction";
+  const reviewedSourceIdentity = "instagram-source-identity-v1:BOUNDARYV2";
+  const reviewedSourceFingerprint = "instagram-source-v2:reviewed-correction";
+  const reviewedFields = {
+    ...makeNormalizedFields("poster", "poster"),
+    sourceOccurrenceKey: reviewedOccurrenceKey,
+    sourceOccurrenceSourceFingerprint: reviewedSourceFingerprint,
+    sourceOccurrenceExpectedCount: 1,
+    sourceOccurrenceExpectedKeys: [reviewedOccurrenceKey],
+    sourceOccurrenceDeferredChildCount: 0,
+  };
+  const reviewedEvent = {
+    ...posterEvent,
+    _id: "event-reviewed-structured-correction",
+    sourceOccurrenceKey: reviewedOccurrenceKey,
+    normalizedFieldsJson: JSON.stringify(reviewedFields),
+  };
+  const reviewedSourceLink = {
+    _id: "source-link-reviewed-correction",
+    eventId: reviewedEvent._id,
+    sourceIdentity: reviewedSourceIdentity,
+    sourceFingerprint: reviewedSourceFingerprint,
+    sourceOccurrenceKey: reviewedOccurrenceKey,
+    instagramPostId: reviewedEvent.instagramPostId,
+    instagramPostUrl: reviewedEvent.instagramPostUrl,
+    sourceHandle: "boundary_venue",
+    linkedAt: now,
+    updatedAt: now,
+  };
+  const reviewedReceipt = {
+    _id: "receipt-reviewed-correction",
+    sourceIdentity: reviewedSourceIdentity,
+    sourceFingerprint: reviewedSourceFingerprint,
+    expectedKeys: [reviewedOccurrenceKey],
+    expectedOccurrences: [
+      {
+        key: reviewedOccurrenceKey,
+        date: reviewedEvent.date,
+        time: reviewedEvent.time,
+        venue: reviewedEvent.venue,
+        title: reviewedEvent.title,
+        artists: reviewedEvent.artists,
+      },
+    ],
+    satisfiedKeys: [reviewedOccurrenceKey],
+    satisfiedOccurrences: [{ key: reviewedOccurrenceKey, eventId: reviewedEvent._id }],
+    deferredChildCount: 0,
+    deferredChildKeys: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+  const reviewedAudits = [];
+  const reviewedCtx = {
+    auth: { getUserIdentity: async () => null },
+    db: {
+      async get(id) {
+        if (id === reviewedEvent._id) return reviewedEvent;
+        if (id === repairVenue._id) return repairVenue;
+        if (id === reviewedReceipt._id) return reviewedReceipt;
+        if (id === reviewedSourceLink._id) return reviewedSourceLink;
+        return null;
+      },
+      async patch(id, patch) {
+        if (id === reviewedEvent._id) Object.assign(reviewedEvent, structuredClone(patch));
+        else if (id === reviewedReceipt._id) Object.assign(reviewedReceipt, structuredClone(patch));
+        else throw new Error(`Unexpected reviewed correction patch ${id}`);
+      },
+      async insert(table, value) {
+        assert.equal(table, "eventAuditLog");
+        const id = `reviewed-correction-audit-${reviewedAudits.length + 1}`;
+        reviewedAudits.push({ _id: id, ...structuredClone(value) });
+        return id;
+      },
+      query(table) {
+        if (table === "events") {
+          return {
+            withIndex(_index, configure) {
+              const criteria = indexCriteria(configure);
+              return {
+                async take(limit) {
+                  return [reviewedEvent]
+                    .filter((event) => event.date === criteria.date)
+                    .slice(0, limit);
+                },
+              };
+            },
+          };
+        }
+        return {
+          withIndex(_index, configure) {
+            const criteria = indexCriteria(configure);
+            const records =
+              table === "instagramEventSources"
+                ? [reviewedSourceLink]
+                : table === "instagramSourceOccurrenceReceipts"
+                  ? [reviewedReceipt]
+                  : table === "scrapedPosts"
+                    ? [posterPost]
+                    : table === "mediaAssets"
+                      ? [makePosterAsset()]
+                      : [];
+            const matches = records.filter((record) =>
+              Object.entries(criteria).every(
+                ([field, value]) => record[field] === value,
+              ),
+            );
+            return {
+              async take(limit) {
+                return matches.slice(0, limit);
+              },
+              async unique() {
+                if (matches.length > 1) throw new Error("Expected unique QA row.");
+                return matches[0] ?? null;
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+  const originalReviewedVenue = reviewedEvent.venue;
+  const originalReviewedTitle = reviewedEvent.title;
+  const originalReviewedTime = reviewedEvent.time;
+  const originalReviewedArtists = structuredClone(reviewedEvent.artists);
+  const venueOnlyResult = await repairReviewedStructuredEventVenue._handler(
+    reviewedCtx,
+    {
+      id: reviewedEvent._id,
+      expectedUpdatedAt: reviewedEvent.updatedAt,
+      expectedNormalizedFieldsJson: reviewedEvent.normalizedFieldsJson,
+      expectedSourceLinkId: reviewedSourceLink._id,
+      expectedSourceLinkUpdatedAt: reviewedSourceLink.updatedAt,
+      expectedReceiptId: reviewedReceipt._id,
+      expectedReceiptUpdatedAt: reviewedReceipt.updatedAt,
+      nextVenue: repairVenue.name,
+      targetVenueId: repairVenue._id,
+      expectedTargetVenueUpdatedAt: repairVenue.updatedAt,
+      expectedTargetVenueHandle: repairVenue.instagramHandle,
+      venueEvidence: "Exact reviewed Instagram profile and poster venue name.",
+      moderationNote: "Human-reviewed venue-only correction with exact source evidence.",
+      serviceSecret: process.env.CRON_SECRET,
+    },
+  );
+  assert.equal(venueOnlyResult.updated, true);
+  assert.equal(originalReviewedVenue !== repairVenue.name, true);
+  assert.equal(reviewedEvent.venue, repairVenue.name);
+  assert.equal(reviewedEvent.title, originalReviewedTitle);
+  assert.equal(reviewedEvent.time, originalReviewedTime);
+  assert.deepEqual(reviewedEvent.artists, originalReviewedArtists);
+  assert.equal(reviewedEvent.timeSource, posterEvent.timeSource);
+  assert.equal(reviewedReceipt.expectedOccurrences[0].venue, repairVenue.name);
+  assert.equal(reviewedAudits[0].action, "reviewed_structured_venue_corrected");
+
+  const reviewedResult = await repairReviewedStructuredEventEvidence._handler(
+    reviewedCtx,
+    {
+      id: reviewedEvent._id,
+      expectedUpdatedAt: reviewedEvent.updatedAt,
+      expectedNormalizedFieldsJson: reviewedEvent.normalizedFieldsJson,
+      expectedSourceLinkId: reviewedSourceLink._id,
+      expectedSourceLinkUpdatedAt: reviewedSourceLink.updatedAt,
+      expectedReceiptId: reviewedReceipt._id,
+      expectedReceiptUpdatedAt: reviewedReceipt.updatedAt,
+      nextTitle: "Boundary Artist & Guest",
+      nextTime: "21:00-01:00",
+      nextVenue: repairVenue.name,
+      targetVenueId: repairVenue._id,
+      expectedTargetVenueUpdatedAt: repairVenue.updatedAt,
+      expectedTargetVenueHandle: repairVenue.instagramHandle,
+      nextArtists: ["Boundary Artist", "Guest Artist"],
+      nextDescription: "Boundary Artist and Guest Artist perform.",
+      posterVenueEvidence: "NOVI BIOSKOP ZVEZDA",
+      posterTimeEvidence: "21H - 01H",
+      posterArtistEvidence: ["BOUNDARY ARTIST", "GUEST ARTIST"],
+      moderationNote: "Human-reviewed poster correction with exact venue, time, and lineup evidence.",
+      serviceSecret: process.env.CRON_SECRET,
+    },
+  );
+  assert.equal(reviewedResult.updated, true);
+  assert.equal(reviewedEvent.status, "approved");
+  assert.equal(reviewedEvent.title, "Boundary Artist & Guest");
+  assert.equal(reviewedEvent.time, "21:00-01:00");
+  assert.equal(reviewedEvent.timeSource, "poster");
+  assert.equal(reviewedEvent.venue, repairVenue.name);
+  assert.equal(reviewedEvent.venueId, repairVenue._id);
+  assert.deepEqual(reviewedEvent.artists, ["Boundary Artist", "Guest Artist"]);
+  assert.equal(reviewedEvent.humanReviewedStructuredSourcePolicyVersion, 1);
+  assert.deepEqual(reviewedReceipt.expectedOccurrences[0], {
+    key: reviewedOccurrenceKey,
+    date: reviewedEvent.date,
+    time: "21:00-01:00",
+    venue: repairVenue.name,
+    title: "Boundary Artist & Guest",
+    artists: ["Boundary Artist", "Guest Artist"],
+  });
+  assert.equal(reviewedAudits.length, 2);
+  assert.equal(reviewedAudits[1].action, "reviewed_structured_evidence_corrected");
 
   for (const [label, persistedPost, assets] of [
     ["missing media asset", posterPost, []],

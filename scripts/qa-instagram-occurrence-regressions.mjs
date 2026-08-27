@@ -1408,7 +1408,12 @@ await withoutConsoleNoise(() =>
       },
     },
     handle: "common.belgrade",
-    post: { ...missingLanePost, postType: "video" },
+    post: {
+      ...missingLanePost,
+      postType: "video",
+      imageUrl: null,
+      imageUrls: [],
+    },
     summary: rejectedCoverageSummary,
     canonicalVenueNamesByHandle: { "common.belgrade": "COMMON | Белград | Мероприятия" },
     venueNameOverridesByHandle: {},

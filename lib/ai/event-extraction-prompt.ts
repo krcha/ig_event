@@ -20,7 +20,8 @@ Prioritize exact OCR-style text extraction over paraphrase.
 Preserve artist names and prices exactly as written when readable.
 Standardize venue names to a canonical display name when the evidence clearly points to the same place.
 Never hallucinate unreadable or missing text.
-Use the caption as primary context, then refine/fill from the image and Instagram metadata.
+Read the poster and caption as complementary primary evidence. Use each source to fill fields the other omits; do not assume the caption outranks clearly readable poster text.
+Poster layout, headings, and grouped schedule text can establish which venue, overall time window, and billed artists belong to one occurrence, while the caption can add or clarify those fields.
 If no image is provided, use only the caption, alt text, location tag, and canonical venue hint.
 If the image is a lifestyle photo, crowd photo, venue photo, food photo, or other scene with no legible event text, and the caption does not explicitly name an event and date, return empty event fields, [] schedule_entries, and low confidence.
 Never infer a lineup from people, faces, clothing, cars, venue identity, posting history, or general visual context. Do not use remembered artist names or schedules.
@@ -103,12 +104,13 @@ Rules:
 - Use the flyer/poster, caption, Instagram location tag, account role, and canonical venue hint together to identify the venue.
 - Treat the account role as authoritative context. A venue-role account may supply its canonical physical venue when no source evidence names another place. A promoter-role account name identifies the organizer, never the physical venue.
 - The Instagram handle is strong identity context for the account and can help resolve abbreviations or partial venue references, but it is not sufficient on its own to invent unsupported facts.
-- "venue" must be a standardized venue display name only. Do not include the city, country, address, neighborhood, room name, or Instagram handle in the venue field.
+- "venue" should normally be a standardized venue display name for a physical venue. Do not append the city, country, neighborhood, room name, or Instagram handle. When no physical venue name can be established but an exact street address clearly locates the occurrence, use that exact address alone as the last-resort venue label rather than inventing a name.
 - If a canonical venue hint is provided and the caption, poster, or location tag clearly refer to that same place, return the canonical venue hint as "venue" even when the source uses abbreviations, stylized casing, transliteration, or a partial variant.
 - If the source clearly names a different venue than the canonical venue hint, ignore the hint and return the source venue instead.
-- Do not return a promoter, organizer, collective, sponsor, or ticketing account as "venue" unless the source clearly shows that it is also the physical venue.
+- Do not return a promoter, organizer, collective, sponsor, ticket seller, or ticketing account/domain as "venue" unless the source clearly shows that it is also the physical venue. An explicitly printed physical venue always beats a promoter, organizer, event brand, or ticket brand.
 - Venue evidence priority is: an explicit venue in the event row; an explicit physical venue in the poster or caption; the Instagram location tag; then a canonical venue hint, which is a fallback only for a venue-role or unclassified account. For a promoter-role account, return the explicit physical venue and never fall back to the promoter account name.
 - If the only location evidence is generic text such as Belgrade, Serbia, club, nightclub, or event space, return empty string for "venue".
+- Normalize grammatical case when the physical venue identity is unambiguous. For example, Serbian locative "na Ski Stazi" or "Ski Stazi" identifies venue "Ski Staza"; it is venue evidence, not an event title.
 - Prefer a non-empty "title" only when an explicit event/program/act name is clearly written in the caption or flyer.
 - For film screenings, plays, books, exhibitions, and similar cultural programs, an explicitly quoted work name (for example “Battle Royale” (2000)) is the event title; never use the surrounding date/time/location phrase as the title.
 - Prefer the parent event/program name over poster subsection labels. If the flyer says something like "Aktivnosti", "Program", "Lineup", "Radionice", or another section heading, and the caption/flyer also names the actual event, return the actual event name as "title".
@@ -120,6 +122,7 @@ Rules:
 - Exclude section headings, organizer names, venue names, sponsor names, ticket links, hashtags, and generic labels like "lineup" or "special guests" when no specific names are given.
 - A hashtag is discovery/marketing metadata, never an artist, billed act, schedule-row title, or event title unless the same identity is separately and explicitly billed outside the hashtag in caption or poster text.
 - Deduplicate artists and keep their readable stage names in source order when possible.
+- Preserve the full legible lineup. When one poster presents one dated occurrence and bills several performers (including smaller supporting names), include every readable billed name in that occurrence's artists array instead of keeping only the headliner.
 - Preserve an explicitly billed Instagram artist handle exactly with its leading @. When a poster display name and one caption handle clearly identify the same billed act (for example NENI and @ne_nije), keep the handle once instead of returning both spellings, and do not report that harmless alias as a conflict.
 - "category" must be exactly one of: ${CANONICAL_EVENT_TYPE_PROMPT_LIST}.
 - Choose the closest real type. Use "event" ONLY when none of the five clearly fit — never just because the subtype is uncertain.
@@ -137,6 +140,7 @@ Rules:
 - Weekly/monthly venue lineups list several real event occurrences on different dates (sometimes several on one date). Treat every post as possibly multi-event.
 - Put EACH distinct real-world event occurrence in "schedule_entries". A lineup member or DJ set inside one occurrence is not a separate event.
 - When one date + one physical venue + one overall event window heads a running order of consecutive performer/DJ slots, return ONE schedule entry for the whole occurrence: use the overall window as "time", combine every explicitly billed name in "artists", and keep a compact running order in "description". Use an explicit parent event title when present; otherwise use only the billed lineup names as the title.
+- Treat a continuous same-night sequence as ONE occurrence even when the caption introduces a later act with phrases such as "after midnight", "then", "takes over", or "nastavlja". Use the earliest explicit event/segment start as the occurrence start, preserve later acts in the artists list and description, and never invent an exact handoff time. A different calendar date, physical venue, separately ticketed event, or explicit independent event heading is still a separate occurrence.
 - Separate same-date rows only when the source establishes independent occurrences, such as different event/program titles, non-overlapping event windows rather than performer sub-slots, different rooms/stages/venues, or separate admission/ticketing.
 - Keep high recall only among rows that are actually legible in the source. Preserve every readable billed name when consolidating a lineup. Omit a real occurrence whose exact date cannot be read. If its billed act/title is absent, emit it only under the narrow unnamed-row rule below.
 
@@ -156,7 +160,7 @@ Rules:
 - If a row shows a weekday beside its date they must agree (sreda=Wed, petak=Fri, subota=Sat, nedelja=Sun, …; EN WED/FRI/SAT/SUN). If they disagree, trust the numeric date.
 
 === TIMES (per row) — CLOCK TIME ONLY ===
-- "time" is a clock time, normalized 24h: "22h" → "22:00"; "18h-22h" → "18:00-22:00"; "22h -05h" → "22:00-05:00"; "20:00" stays.
+- "time" is a clock time, normalized 24h: "22h" → "22:00"; "18h-22h" → "18:00-22:00"; "19H - 01H" → "19:00-01:00"; "22h -05h" → "22:00-05:00"; "20:00" stays.
 - Start-time cue phrases count as time evidence: "od 9", "početak 21h"/"pocetak 21h", "počinje u 21", "u 20.30", "22:30", "start at 10pm". Normalize them into "time" and do not leave them only in "description".
 - "doors open" / "vrata se otvaraju" is logistics, not the event start. If it is the only clock, leave "time" empty and use time_evidence.status="doors_open_only". Never publish a doors-open clock as the start time.
 - Use time_evidence.status="not_stated" when no start time appears. In that case set exact_text="" and source="unknown" because absence has no source snippet. Use "unreadable" when a start-time value is visibly present but cannot be read, and "start_time_stated" only for a readable event start. Copy exact evidence when readable.
@@ -169,7 +173,7 @@ Rules:
 
 === VENUE (per row) ===
 - If a row names its own venue, use it. Apply the canonical venue hint when it matches. For multi-row posters, do not copy a venue across rows unless shared_schedule_context.venue contains visible evidence that it applies to all rows.
-- Prefer the explicitly named physical location over the source account, promoter, organizer, or event-brand name. Use a canonical venue hint from a venue account only when no different physical venue is explicitly named. Preserve a billed artist's Instagram handle when the handle is the clearest source identity.
+- Prefer the explicitly named physical location over the source account, promoter, organizer, event-brand, sponsor, ticket seller, or ticket-domain name. For example, poster text "KOŠUTNJAK SKI STAZA" is venue "Ski Staza" even when the posting account or ticket URL says INFUSE. Use a canonical venue hint from a venue account only when no different physical venue is explicitly named. Preserve a billed artist's Instagram handle when the handle is the clearest source identity.
 - When the Instagram source role is "venue" and a canonical venue hint is provided, use that canonical venue for every event and schedule row unless the poster or caption explicitly names a different physical venue. The venue account name does not need to be repeated in each row.
 - Never use a promoter or organizer account name as the venue. For a promoter source, require an explicitly named physical venue from the poster, caption, location tag, or schedule row.
 - If the poster or caption is a monthly program, venue schedule, or other multi-date lineup for the same venue, populate "schedule_entries" with one object per separately dated real event occurrence.
@@ -177,10 +181,11 @@ Rules:
 - For each "schedule_entries" item, copy the explicit occurrence date, overall event time, title/billed act text, artists, short factual description, and a compact "source_text" snippet when readable. For one-event running orders, do not emit one item per performer slot.
 - When "schedule_entries" is populated, leave top-level "date", "time", "title", "artists", and "description" empty or [] unless there is also one single poster-wide value that clearly applies to every entry.
 - If date is unclear, return empty string for date.
-- If venue is unclear, return empty string for venue.
+- If a venue name is unclear but an exact street address is explicitly tied to the occurrence (for example "Višnjićeva 7"), use that exact address as the venue label. If neither a physical venue name nor an exact occurrence address is supported, return empty string for venue.
 - If month/day is visible but year is missing, infer year from Instagram post timestamp only when confidence is high.
 - If inferred date appears implausible relative to post timestamp, return empty date.
 - Compare poster and caption claims for date, start time, venue, title, and artists. Put every material disagreement in "source_conflicts" with both values and a short reason. Do not silently choose one source when they truly conflict; downstream moderation will keep the event pending.
+- A field present in only the poster or only the caption is complementary evidence, not a conflict. Merge non-conflicting poster and caption details for the same occurrence, including the poster's full lineup and overall time range.
 - Do not report a conflict for casing, punctuation, diacritics, a minor connector-word difference, or another wording variation that clearly names the same event (for example “Predstava koja nema ime” and “Predstava nema ime”).
 - Relative and absolute date wording is not a conflict when both resolve to the same event-local calendar date. A generic introductory “today”/“večeras” is not a separate event-date claim when the same caption contains a more specific named weekday/date for the occurrence and that specific date agrees with the poster.
 - A promoter/organizer account name is not a competing venue claim. When the source explicitly names a physical venue, use that venue and do not report its difference from the promoter identity as a venue conflict.

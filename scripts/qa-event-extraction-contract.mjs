@@ -9,6 +9,7 @@ import { TBD_EVENT_TIME } from "../lib/events/event-time.ts";
 import { venueValueAppearsInEventEvidence } from "../lib/events/unnamed-schedule-fallback.ts";
 import {
   buildNightlifeLineupCoalescingPlan,
+  explicitlyStatesAfterMidnightTakeover,
   titleContainsOnlyBilledArtists,
 } from "../lib/events/nightlife-lineup-coalescing.ts";
 import {
@@ -23,6 +24,7 @@ import {
   classifyExistingApprovedOccurrenceForTesting,
   normalizeEventDate,
   prepareEventsForInsert,
+  resolveInstagramSourceExtractionContextForTesting,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
 
 function confirmation(evidence, source = "caption") {
@@ -370,6 +372,58 @@ function assertSingleOk(results, label) {
   assert.equal(results[0]?.kind, "ok", `${label}: expected an event result.`);
   return results[0];
 }
+
+const observedUnknownSourceContext =
+  resolveInstagramSourceExtractionContextForTesting({
+    sourceHandle: "_azbuka",
+    configuredVenueNamesByHandle: {},
+    sourceDisplayNamesByHandle: { _azbuka: "Azbuka / Restaurant & Bar" },
+    sourceRolesByHandle: { _azbuka: "unknown" },
+  });
+assert.deepEqual(observedUnknownSourceContext, {
+  canonicalVenueName: null,
+  instagramSourceName: "Azbuka / Restaurant & Bar",
+  sourceRole: "unknown",
+});
+
+const unconfiguredVenueRoleSourceContext =
+  resolveInstagramSourceExtractionContextForTesting({
+    sourceHandle: "vera.belgrade",
+    configuredVenueNamesByHandle: {},
+    sourceDisplayNamesByHandle: { "vera.belgrade": "Vera Belgrade" },
+    sourceRolesByHandle: { "vera.belgrade": "venue" },
+  });
+assert.deepEqual(unconfiguredVenueRoleSourceContext, {
+  canonicalVenueName: null,
+  instagramSourceName: "Vera Belgrade",
+  sourceRole: "venue",
+});
+
+const observedPromoterSourceContext =
+  resolveInstagramSourceExtractionContextForTesting({
+    sourceHandle: "infuse.rs",
+    configuredVenueNamesByHandle: {},
+    sourceDisplayNamesByHandle: { "infuse.rs": "INFUSE" },
+    sourceRolesByHandle: { "infuse.rs": "promoter" },
+  });
+assert.deepEqual(observedPromoterSourceContext, {
+  canonicalVenueName: null,
+  instagramSourceName: "INFUSE",
+  sourceRole: "promoter",
+});
+
+const configuredVenueSourceContext =
+  resolveInstagramSourceExtractionContextForTesting({
+    sourceHandle: "_azbuka",
+    configuredVenueNamesByHandle: { _azbuka: "Azbuka" },
+    sourceDisplayNamesByHandle: { _azbuka: "Azbuka / Restaurant & Bar" },
+    sourceRolesByHandle: { _azbuka: "venue" },
+  });
+assert.deepEqual(configuredVenueSourceContext, {
+  canonicalVenueName: "Azbuka",
+  instagramSourceName: "Azbuka",
+  sourceRole: "venue",
+});
 
 function runSemanticNormalizationQa() {
   const failures = [];
@@ -2819,7 +2873,7 @@ function runSemanticNormalizationQa() {
       },
     );
     assert.equal(prepared.normalizedFields.lineupScheduleCoalesced, true);
-    assert.equal(prepared.normalizedFields.lineupScheduleCoalescingPolicyVersion, 1);
+    assert.equal(prepared.normalizedFields.lineupScheduleCoalescingPolicyVersion, 2);
     assert.equal(prepared.normalizedFields.lineupScheduleSourceRowCount, 3);
     assert.equal(prepared.normalizedFields.multiEventSplitCount, 3);
     assert.equal(prepared.normalizedFields.splitEventTotal, 1);
@@ -2942,6 +2996,314 @@ function runSemanticNormalizationQa() {
       titleContainsOnlyBilledArtists("Live Aid", ["Aid"]),
       false,
       "the word Live is identity-bearing and must not be stripped from titles",
+    );
+  });
+
+  runCase("an explicit after-midnight takeover stays inside the named nightlife event", () => {
+    const date = isoDateDaysFromNow(2);
+    const dateText = ddmmyyyy(date);
+    const venue = "Ben Akiba";
+    const primarySourceText =
+      "Saturday begins with Disco Retro Party from 8 PM, where DJ Munja & DJ File bring timeless classics back to the dancefloor.";
+    const continuationSourceText =
+      "After midnight, Malina takes over, carrying the night into a new chapter.";
+    const directCandidate = ({
+      id,
+      title,
+      artists,
+      time,
+      sourceText,
+      timeEvidenceKind,
+      source = "caption",
+    }) => ({
+      id,
+      title,
+      date,
+      time,
+      venue,
+      artists,
+      sourceText,
+      source,
+      sourcePostIdentity: "qa-ben-after-midnight-continuation",
+      timeEvidenceText: time ? "from 8 PM" : "",
+      timeEvidenceVerified: true,
+      timeEvidenceKind,
+    });
+    const primary = directCandidate({
+      id: "disco",
+      title: "DISCO",
+      artists: ["DJ Munja", "DJ File"],
+      time: "20:00",
+      sourceText: primarySourceText,
+      timeEvidenceKind: "start_time_stated",
+    });
+    const continuation = directCandidate({
+      id: "malina",
+      title: "Malina",
+      artists: ["Malina"],
+      time: "",
+      sourceText: continuationSourceText,
+      timeEvidenceKind: "not_stated",
+    });
+    const buildPlan = (candidates, sourceConflictCount = 0) =>
+      buildNightlifeLineupCoalescingPlan({
+        eventType: "nightlife",
+        candidates,
+        sourceConflictCount,
+        sharedTime: { value: "", verified: false },
+      });
+    assert.deepEqual(buildPlan([primary, continuation]), {
+      candidateIds: ["disco", "malina"],
+      title: "DISCO",
+      date,
+      time: "20:00",
+      venue,
+      artists: ["DJ Munja", "DJ File", "Malina"],
+      description: "Lineup: DJ Munja, DJ File & Malina; Malina takes over after midnight.",
+      sourceTexts: [primarySourceText, continuationSourceText],
+      slots: [
+        {
+          title: "DISCO",
+          time: "20:00",
+          artists: ["DJ Munja", "DJ File"],
+          sourceText: primarySourceText,
+          source: "caption",
+        },
+        {
+          title: "Malina",
+          time: "",
+          artists: ["Malina"],
+          sourceText: continuationSourceText,
+          source: "caption",
+        },
+      ],
+      timingMode: "after_midnight_continuation",
+    });
+    for (const sourceText of [
+      "After midnight Malina takes over the booth",
+      "Nakon ponoći Malina preuzima pult",
+      "Posle ponoći pult preuzima Malina",
+      "Иза поноћи Малина преузима пулт",
+    ]) {
+      assert.equal(
+        explicitlyStatesAfterMidnightTakeover(sourceText),
+        true,
+        `Expected a strong takeover phrase: ${sourceText}`,
+      );
+    }
+    for (const sourceText of [
+      "After Midnight Party with Malina",
+      "Malina takes over at 23h",
+      "Malina takes over before midnight; after midnight the party continues",
+      "Posle ponoći nastupa Malina",
+      "Malina preuzima pult u 23h",
+    ]) {
+      assert.equal(
+        explicitlyStatesAfterMidnightTakeover(sourceText),
+        false,
+        `A partial continuation hint must not be sufficient: ${sourceText}`,
+      );
+    }
+    assert.equal(
+      buildPlan([
+        primary,
+        { ...continuation, sourceText: `${dateText} / MALINA AFTER MIDNIGHT` },
+      ]),
+      null,
+      "an ordinary after-midnight performer row without takeover language stays separate",
+    );
+    assert.equal(
+      buildPlan([
+        primary,
+        { ...continuation, title: "Malina Showcase" },
+      ]),
+      null,
+      "an independently named show stays separate even when its copy says takes over",
+    );
+    assert.equal(
+      buildPlan([
+        primary,
+        {
+          ...continuation,
+          time: "23:00",
+          timeEvidenceText: "23H",
+          timeEvidenceKind: "start_time_stated",
+        },
+      ]),
+      null,
+      "two independently timed same-date rows stay separate",
+    );
+    assert.equal(
+      buildPlan([{ ...primary, time: "20:30" }, continuation]),
+      null,
+      "a source start of 8 PM cannot prove a modeled 20:30 start",
+    );
+    assert.equal(
+      buildPlan([{ ...primary, timeEvidenceVerified: false }, continuation]),
+      null,
+      "an unverified primary start cannot anchor a continuation fold",
+    );
+    assert.equal(
+      buildPlan([{ ...primary, source: "poster" }, continuation]),
+      null,
+      "cross-source rows cannot manufacture a takeover continuation",
+    );
+    assert.equal(
+      buildPlan([
+        primary,
+        { ...continuation, sourcePostIdentity: "another-instagram-post" },
+      ]),
+      null,
+      "cross-post rows cannot manufacture a takeover continuation",
+    );
+    assert.equal(
+      buildPlan([primary, continuation], 1),
+      null,
+      "source conflicts block deterministic continuation folding",
+    );
+
+    const post = makePost({
+      caption: ["BEN AKIBA", dateText, primarySourceText, continuationSourceText].join("\n"),
+      postId: "qa-ben-after-midnight-continuation",
+      postType: "video",
+      postedAt: semanticQaNow.toISOString(),
+      username: "benakiba",
+    });
+    const dateEvidence = {
+      exact_text: dateText,
+      source: "caption",
+      is_relative: false,
+      resolved_date: date,
+    };
+    const primaryEntry = {
+      date: dateText,
+      time: "20:00",
+      venue,
+      title: "DISCO",
+      artists: ["DJ Munja", "DJ File"],
+      description: "DISCO with DJ Munja and DJ File.",
+      source_text: primarySourceText,
+      date_evidence: dateEvidence,
+      time_evidence: {
+        status: "start_time_stated",
+        exact_text: "from 8 PM",
+        source: "caption",
+      },
+    };
+    const continuationEntry = {
+      date: dateText,
+      time: "",
+      venue,
+      title: "Malina",
+      artists: ["Malina"],
+      description: "Malina takes over after midnight.",
+      source_text: continuationSourceText,
+      date_evidence: dateEvidence,
+      time_evidence: {
+        status: "not_stated",
+        exact_text: "",
+        source: "unknown",
+      },
+    };
+    const extracted = makeEventExtraction({
+      caption: post.caption,
+      date: "",
+      dateEvidenceText: "",
+      postUrl: post.instagramPostUrl,
+      title: "DISCO",
+      titleEvidenceSource: "caption",
+      titleEvidenceText: "DISCO",
+      time: "",
+      venue,
+      artists: ["DJ Munja", "DJ File", "Malina"],
+      artistEvidenceSource: "caption",
+      artistEvidenceText: "DJ MUNJA / DJ FILE / MALINA",
+      description: "DISCO with DJ Munja, DJ File and Malina.",
+      date_evidence: {
+        exact_text: "",
+        source: "unknown",
+        is_relative: false,
+        resolved_date: "",
+      },
+      time_evidence: {
+        status: "not_stated",
+        exact_text: "",
+        source: "unknown",
+      },
+      shared_schedule_context: {
+        venue: {
+          applies_to_all: true,
+          value: venue,
+          evidence: "BEN AKIBA",
+          source: "caption",
+        },
+        time: {
+          applies_to_all: false,
+          value: "",
+          evidence: "",
+          source: "unknown",
+        },
+      },
+      schedule_entries: [primaryEntry, continuationEntry],
+    });
+    const prepareOptions = {
+      canonicalVenueNamesByHandle: { benakiba: venue },
+      configuredVenueNamesByHandle: { benakiba: venue },
+      sourceRolesByHandle: { benakiba: "venue" },
+    };
+    const prepared = assertSingleOk(
+      prepare(post, extracted, prepareOptions),
+      "Ben Akiba after-midnight continuation",
+    );
+    assert.deepEqual(
+      {
+        title: prepared.event.title,
+        time: prepared.event.time,
+        venue: prepared.event.venue,
+        artists: prepared.event.artists,
+        description: prepared.event.description,
+        status: prepared.event.status,
+      },
+      {
+        title: "DISCO",
+        time: "20:00",
+        venue,
+        artists: ["DJ Munja", "DJ File", "Malina"],
+        description: "Lineup: DJ Munja, DJ File & Malina; Malina takes over after midnight.",
+        status: "approved",
+      },
+    );
+    assert.equal(prepared.normalizedFields.lineupScheduleCoalesced, true);
+    assert.equal(
+      prepared.normalizedFields.lineupScheduleTimingMode,
+      "after_midnight_continuation",
+    );
+    assert.deepEqual(prepared.normalizedFields.lineupScheduleSourceEvidence, [
+      { text: primarySourceText, source: "caption" },
+      { text: continuationSourceText, source: "caption" },
+    ]);
+    assert.equal(prepared.normalizedFields.lineupScheduleCoalescingPolicyVersion, 2);
+    assert.equal(prepared.normalizedFields.lineupScheduleSourceRowCount, 2);
+    assert.equal(prepared.normalizedFields.multiEventSplitCount, 2);
+    assert.equal(prepared.normalizedFields.splitEventTotal, 1);
+    assert.equal(prepared.normalizedFields.identityEvidenceVerified, true);
+    assert.equal(prepared.normalizedFields.timeEvidenceVerified, true);
+    assert.equal(prepared.normalizedFields.structuredEvidenceVerified, true);
+
+    const ordinarySameNight = parseExtractedEventData({
+      ...structuredClone(extracted),
+      schedule_entries: [
+        primaryEntry,
+        {
+          ...continuationEntry,
+          source_text: `${dateText} / BEN AKIBA / MALINA AFTER MIDNIGHT`,
+        },
+      ],
+    });
+    assert.equal(
+      prepare(post, ordinarySameNight, prepareOptions).length,
+      2,
+      "ordinary same-date rows without explicit takeover language remain separate",
     );
   });
 

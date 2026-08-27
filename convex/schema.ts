@@ -83,6 +83,8 @@ const venuePublicStatus = v.union(
 export default defineSchema({
   instagramSources: defineTable({
     handle: v.string(),
+    observedDisplayName: v.optional(v.string()),
+    observedDisplayNameUpdatedAt: v.optional(v.number()),
     role: v.union(v.literal("venue"), v.literal("promoter"), v.literal("unknown")),
     venueId: v.optional(v.id("venues")),
     active: v.boolean(),
