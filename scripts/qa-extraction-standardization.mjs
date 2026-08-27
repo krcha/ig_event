@@ -529,6 +529,14 @@ function runVenueQa() {
     { name: "Silosi Beograd ••••IIII Dom kulture", instagramHandle: "silosibeograd" },
     { name: "Art space in Belgrade, Serbia", instagramHandle: "kvaka22_catch22" },
     { name: "Chillton - Чилтон", instagramHandle: "chillton_chillton" },
+    { name: "Chillton Bašta", instagramHandle: "chillton_bashta" },
+    { name: "Dub Gastro Pub", instagramHandle: "dubgastropub" },
+    {
+      name: "Klub Studenata Tehnike KST",
+      instagramHandle: "klubstudenatatehnike",
+    },
+    { name: "Freestyler", instagramHandle: "freestylerbelgrade_official" },
+    { name: "Kolarac", instagramHandle: "kolarac_art_bioskop" },
     { name: "Sinnerman Jazz Club", instagramHandle: "sinnermanjazzclub" },
     { name: "Beton Club & Event Center", instagramHandle: "betonbelgrade" },
     { name: "Nula pet _0.5", instagramHandle: "nulapet_0.5" },
@@ -557,6 +565,11 @@ function runVenueQa() {
     silosibeograd: "Silosi",
     kvaka22_catch22: "Kvaka 22",
     chillton_chillton: "Chillton",
+    chillton_bashta: "Chillton Bašta",
+    dubgastropub: "Dub Gastro Pub",
+    klubstudenatatehnike: "Klub Studenata Tehnike KST",
+    freestylerbelgrade_official: "Freestyler",
+    kolarac_art_bioskop: "Kolarac",
     sinnermanjazzclub: "Sinnerman Jazz Club",
     betonbelgrade: "Beton",
     "nulapet_0.5": "Nula Pet",
@@ -603,6 +616,26 @@ function runVenueQa() {
   });
   assert.equal(canonicalFromOverride.venue, "KC Grad");
   assert.equal(canonicalFromOverride.source, "handle_map");
+
+  for (const [handle, expectedVenue] of [
+    ["chillton_chillton", "Chillton"],
+    ["chillton_bashta", "Chillton Bašta"],
+    ["dubgastropub", "Dub Gastro Pub"],
+    ["klubstudenatatehnike", "Klub Studenata Tehnike KST"],
+    ["freestylerbelgrade_official", "Freestyler"],
+    ["kolarac_art_bioskop", "Kolarac"],
+  ]) {
+    const requestedHandleMapping = normalizeVenueFromEvidence({
+      handle,
+      rawModelVenue: "",
+      locationName: "",
+      canonicalVenueNamesByHandle,
+      handleVenueNamesByHandle: venueNameOverridesByHandle,
+      staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+    });
+    assert.equal(requestedHandleMapping.venue, expectedVenue);
+    assert.equal(requestedHandleMapping.source, "handle_map");
+  }
 
   const promoterCannotBecomeVenueFromPostingHandle = normalizeVenueFromEvidence({
     handle: "kcgrad",
@@ -731,11 +764,17 @@ function runVenueQa() {
     ["Medonosni vrt Silosa", "Silosi"],
     ["Kvaka 22", "Kvaka 22"],
     ["Chillton", "Chillton"],
+    ["Chillton Bashta", "Chillton Bašta"],
+    ["Dub Gastro", "Dub Gastro Pub"],
+    ["KST", "Klub Studenata Tehnike KST"],
+    ["Freestyler Belgrade", "Freestyler"],
+    ["Art bioskop Kolarac", "Kolarac"],
     ["SinnerMan", "Sinnerman Jazz Club"],
     ["Beton Club", "Beton"],
     ["Pab 0,5", "Nula Pet"],
     ["Bašta Paba Nula Pet", "Nula Pet"],
     ["Amphitheater in front of the Museum of Yugoslav History", "Muzej Jugoslavije"],
+    ["Museum of Yugoslavia", "Muzej Jugoslavije"],
     ["Šupa", "Кафе Шупа"],
     ["шупа", "Кафе Шупа"],
     ["Kafe Šupa", "Кафе Шупа"],
@@ -777,6 +816,181 @@ function runVenueQa() {
   });
   assert.equal(renamedVenueFromModel.venue, "Novi Bioskop Zvezda");
   assert.equal(renamedVenueFromModel.source, "model");
+
+  const exactCanonicalNameEvidence = normalizeVenueFromEvidence({
+    handle: "qa_promoter_source",
+    rawModelVenue: "",
+    locationName: "",
+    immutableEvidenceTexts: ["Subota, 20h — Muzej Jugoslavije"],
+    canonicalVenueNamesByHandle,
+    canonicalVenueAliasesByHandle,
+    handleVenueNamesByHandle: venueNameOverridesByHandle,
+    staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+    allowCanonicalHandleFallback: false,
+  });
+  assert.equal(exactCanonicalNameEvidence.venue, "Muzej Jugoslavije");
+  assert.equal(exactCanonicalNameEvidence.source, "evidence_name");
+
+  for (const [evidence, expectedVenue] of [
+    ["Poster venue: Freestyler", "Freestyler"],
+    ["Lokacija: Art bioskop Kolarac", "Kolarac"],
+  ]) {
+    const requestedNameEvidence = normalizeVenueFromEvidence({
+      handle: "qa_promoter_source",
+      rawModelVenue: "",
+      locationName: "",
+      immutableEvidenceTexts: [evidence],
+      canonicalVenueNamesByHandle,
+      canonicalVenueAliasesByHandle,
+      handleVenueNamesByHandle: venueNameOverridesByHandle,
+      staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+      allowCanonicalHandleFallback: false,
+    });
+    assert.equal(requestedNameEvidence.venue, expectedVenue);
+    assert.equal(requestedNameEvidence.source, "evidence_name");
+  }
+
+  const exactAliasEvidence = normalizeVenueFromEvidence({
+    handle: "qa_promoter_source",
+    rawModelVenue: "",
+    locationName: "",
+    immutableEvidenceTexts: ["Večeras u KST od 21h"],
+    canonicalVenueNamesByHandle,
+    canonicalVenueAliasesByHandle,
+    handleVenueNamesByHandle: venueNameOverridesByHandle,
+    staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+    allowCanonicalHandleFallback: false,
+  });
+  assert.equal(exactAliasEvidence.venue, "Klub Studenata Tehnike KST");
+  assert.equal(exactAliasEvidence.source, "evidence_name");
+
+  const shortAliasWithoutVenueContextRejected = normalizeVenueFromEvidence({
+    handle: "qa_promoter_source",
+    rawModelVenue: "",
+    locationName: "",
+    immutableEvidenceTexts: ["KST predstavlja novi singl večeras"],
+    canonicalVenueNamesByHandle,
+    canonicalVenueAliasesByHandle,
+    handleVenueNamesByHandle: venueNameOverridesByHandle,
+    staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+    allowCanonicalHandleFallback: false,
+  });
+  assert.equal(shortAliasWithoutVenueContextRejected.venue, null);
+  assert.equal(shortAliasWithoutVenueContextRejected.source, null);
+
+  const exactNamePrecedesPostingHandleFallback = normalizeVenueFromEvidence({
+    handle: "freestylerbelgrade_official",
+    rawModelVenue: "",
+    locationName: "",
+    immutableEvidenceTexts: ["Lokacija: Dub Gastro Pub"],
+    canonicalVenueNamesByHandle,
+    canonicalVenueAliasesByHandle,
+    staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+  });
+  assert.equal(exactNamePrecedesPostingHandleFallback.venue, "Dub Gastro Pub");
+  assert.equal(exactNamePrecedesPostingHandleFallback.source, "evidence_name");
+
+  const specificNestedVenueName = normalizeVenueFromEvidence({
+    handle: "qa_promoter_source",
+    rawModelVenue: "",
+    locationName: "",
+    immutableEvidenceTexts: ["Program je u Chillton Bašti."],
+    canonicalVenueNamesByHandle,
+    canonicalVenueAliasesByHandle,
+    handleVenueNamesByHandle: venueNameOverridesByHandle,
+    staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+    allowCanonicalHandleFallback: false,
+  });
+  assert.equal(specificNestedVenueName.venue, "Chillton Bašta");
+  assert.equal(specificNestedVenueName.source, "evidence_name");
+
+  const explicitVenuePrecedesImmutableNameEvidence = normalizeVenueFromEvidence({
+    handle: "qa_promoter_source",
+    rawModelVenue: "Muzej Jugoslavije",
+    locationName: "",
+    immutableEvidenceTexts: ["Afterparty: Dub Gastro Pub"],
+    canonicalVenueNamesByHandle,
+    canonicalVenueAliasesByHandle,
+    handleVenueNamesByHandle: venueNameOverridesByHandle,
+    staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+    allowCanonicalHandleFallback: false,
+  });
+  assert.equal(
+    explicitVenuePrecedesImmutableNameEvidence.venue,
+    "Muzej Jugoslavije",
+  );
+  assert.equal(explicitVenuePrecedesImmutableNameEvidence.source, "model");
+
+  const fuzzyPostingProfileNameRejected = normalizeVenueFromEvidence({
+    handle: "dubgastropub_events",
+    rawModelVenue: "",
+    locationName: "",
+    immutableEvidenceTexts: [],
+    canonicalVenueNamesByHandle,
+    canonicalVenueAliasesByHandle,
+    handleVenueNamesByHandle: venueNameOverridesByHandle,
+    staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+    allowCanonicalHandleFallback: false,
+  });
+  assert.equal(fuzzyPostingProfileNameRejected.venue, null);
+  assert.equal(fuzzyPostingProfileNameRejected.source, null);
+
+  const nonCanonicalProfileMentionRejected = normalizeVenueFromEvidence({
+    handle: "qa_promoter_source",
+    rawModelVenue: "",
+    locationName: "",
+    immutableEvidenceTexts: [
+      "Follow @freestyler and https://instagram.com/freestyler for updates",
+    ],
+    canonicalVenueNamesByHandle,
+    canonicalVenueAliasesByHandle,
+    handleVenueNamesByHandle: venueNameOverridesByHandle,
+    staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+    allowCanonicalHandleFallback: false,
+  });
+  assert.equal(nonCanonicalProfileMentionRejected.venue, null);
+  assert.equal(nonCanonicalProfileMentionRejected.source, null);
+
+  const ambiguousNameEvidence = normalizeVenueFromEvidence({
+    handle: "qa_promoter_source",
+    rawModelVenue: "",
+    locationName: "",
+    immutableEvidenceTexts: ["Shared Hall"],
+    canonicalVenueNamesByHandle: {
+      "venue.one": "Venue One",
+      "venue.two": "Venue Two",
+    },
+    canonicalVenueAliasesByHandle: {
+      "venue.one": ["Shared Hall"],
+      "venue.two": ["Shared Hall"],
+    },
+    allowCanonicalHandleFallback: false,
+  });
+  assert.equal(ambiguousNameEvidence.venue, null);
+  assert.equal(ambiguousNameEvidence.source, null);
+
+  for (const evidence of [
+    "Dub Gastro Pub / Freestyler",
+    "Chillton Bašta program; afterparty at Chillton",
+  ]) {
+    const multipleVenueNamesRejected = normalizeVenueFromEvidence({
+      handle: "qa_promoter_source",
+      rawModelVenue: "",
+      locationName: "",
+      immutableEvidenceTexts: [evidence],
+      canonicalVenueNamesByHandle,
+      canonicalVenueAliasesByHandle,
+      handleVenueNamesByHandle: venueNameOverridesByHandle,
+      staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+      allowCanonicalHandleFallback: false,
+    });
+    assert.equal(
+      multipleVenueNamesRejected.venue,
+      null,
+      `Expected multi-venue evidence '${evidence}' to fail closed.`,
+    );
+    assert.equal(multipleVenueNamesRejected.source, null);
+  }
 
   assert.equal(
     canonicalizeVenueName(
@@ -850,6 +1064,182 @@ function runVenueQa() {
     promoterAliasPrepared.event.venue,
     "Novi Bioskop Zvezda",
     "A promoter post must resolve a learned alias from the global venue directory.",
+  );
+
+  const promoterHeadingDate = isoDateDaysFromNow(9);
+  const promoterHeadingCaption = `FREESTYLER WINTER STAGE / ${promoterHeadingDate} / 23:00`;
+  const [promoterHeadingPrepared] = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: promoterHeadingCaption,
+      imageUrl: "https://images.example.com/freestyler-heading.jpg",
+      imageUrls: ["https://images.example.com/freestyler-heading.jpg"],
+      postType: "image",
+      username: "qa_promoter_source",
+    }),
+    makeExtractedEvent({
+      extraction_contract_version: "event_evidence_v2",
+      title: "FREESTYLER WINTER STAGE",
+      date: promoterHeadingDate,
+      time: "23:00",
+      venue: "",
+      source_caption: promoterHeadingCaption,
+      date_evidence: {
+        exact_text: promoterHeadingDate,
+        source: "caption",
+        is_relative: false,
+        resolved_date: promoterHeadingDate,
+      },
+      time_evidence: {
+        status: "start_time_stated",
+        exact_text: "23:00",
+        source: "caption",
+      },
+      field_confirmation: {
+        ...makeFieldConfirmation(0.95),
+        location_name: {
+          confidence: 0,
+          found_in: [],
+          evidence: "",
+          evidence_snippets: [],
+          notes: "Model omitted the embedded venue name.",
+        },
+      },
+    }),
+    "https://images.example.com/freestyler-heading.jpg",
+    canonicalVenueNamesByHandle,
+    venueNameOverridesByHandle,
+    venueNameOverridesByHandle,
+    {
+      canonicalVenueAliasesByHandle,
+      sourceRolesByHandle: { qa_promoter_source: "promoter" },
+    },
+  );
+  assert.equal(promoterHeadingPrepared.kind, "ok");
+  assert.equal(promoterHeadingPrepared.event.venue, "Freestyler");
+  assert.equal(
+    JSON.parse(promoterHeadingPrepared.event.normalizedFieldsJson).venueSource,
+    "evidence_name",
+    "Exact immutable venue-name evidence must survive the downstream grounding gate.",
+  );
+
+  const splitVenueDates = [10, 11, 12].map(isoDateDaysFromNow);
+  const splitVenueLines = [
+    `${splitVenueDates[0]} 21:00 FIRST EVENT — Freestyler`,
+    `${splitVenueDates[1]} 22:00 SECOND EVENT — u @dubgastropub`,
+    `${splitVenueDates[2]} 20:00 THIRD EVENT`,
+  ];
+  const splitVenueCaption = splitVenueLines.join("\n");
+  const splitVenuePrepared = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: splitVenueCaption,
+      imageUrl: "https://images.example.com/split-row-venues.jpg",
+      imageUrls: ["https://images.example.com/split-row-venues.jpg"],
+      postId: "qa-split-row-venue-evidence",
+      instagramPostUrl:
+        "https://www.instagram.com/p/qa-split-row-venue-evidence/",
+      postType: "image",
+      username: "qa_promoter_source",
+    }),
+    makeExtractedEvent({
+      extraction_contract_version: "event_evidence_v2",
+      title: "",
+      date: "",
+      time: "",
+      venue: "",
+      artists: [],
+      description: "",
+      source_caption: splitVenueCaption,
+      source_url:
+        "https://www.instagram.com/p/qa-split-row-venue-evidence/",
+      date_evidence: {
+        exact_text: "",
+        source: "unknown",
+        is_relative: false,
+        resolved_date: "",
+      },
+      time_evidence: {
+        status: "not_stated",
+        exact_text: "",
+        source: "unknown",
+      },
+      shared_schedule_context: {
+        venue: {
+          applies_to_all: false,
+          value: "",
+          evidence: "",
+          source: "unknown",
+        },
+        time: {
+          applies_to_all: false,
+          value: "",
+          evidence: "",
+          source: "unknown",
+        },
+      },
+      schedule_entries: splitVenueLines.map((sourceText, index) => ({
+        date: splitVenueDates[index],
+        time: ["21:00", "22:00", "20:00"][index],
+        venue: "",
+        title: ["FIRST EVENT", "SECOND EVENT", "THIRD EVENT"][index],
+        artists: [],
+        description: `Schedule row ${index + 1}.`,
+        source_text: sourceText,
+        date_evidence: {
+          exact_text: splitVenueDates[index],
+          source: "caption",
+          is_relative: false,
+          resolved_date: splitVenueDates[index],
+        },
+        time_evidence: {
+          status: "start_time_stated",
+          exact_text: ["21:00", "22:00", "20:00"][index],
+          source: "caption",
+        },
+      })),
+      field_confirmation: {
+        ...makeFieldConfirmation(0.95),
+        location_name: {
+          confidence: 0,
+          found_in: [],
+          evidence: "",
+          evidence_snippets: [],
+          notes: "Venue evidence is occurrence-local.",
+        },
+      },
+    }),
+    "https://images.example.com/split-row-venues.jpg",
+    canonicalVenueNamesByHandle,
+    venueNameOverridesByHandle,
+    venueNameOverridesByHandle,
+    {
+      canonicalVenueAliasesByHandle,
+      sourceRolesByHandle: { qa_promoter_source: "promoter" },
+    },
+  );
+  assert.equal(splitVenuePrepared.length, 3);
+  const [nameVenueRow, handleVenueRow, noVenueRow] = splitVenuePrepared;
+  for (const row of splitVenuePrepared) assert.equal(row.kind, "ok");
+  assert.equal(nameVenueRow.event.venue, "Freestyler");
+  assert.equal(nameVenueRow.normalizedFields.venueSource, "evidence_name");
+  assert.equal(nameVenueRow.normalizedFields.venueEvidenceVerified, true);
+  assert.equal(handleVenueRow.event.venue, "Dub Gastro Pub");
+  assert.equal(handleVenueRow.normalizedFields.venueSource, "evidence_handle");
+  assert.equal(
+    handleVenueRow.normalizedFields.canonicalVenueEvidenceHandle,
+    "dubgastropub",
+  );
+  assert.equal(handleVenueRow.normalizedFields.venueEvidenceVerified, true);
+  assert.equal(
+    noVenueRow.event.venue,
+    "",
+    "A canonical venue mentioned by another schedule row must not propagate.",
+  );
+  assert.equal(noVenueRow.normalizedFields.canonicalVenueEvidenceHandle, null);
+  assert.equal(noVenueRow.event.status, "pending");
+  assert.ok(
+    noVenueRow.normalizedFields.moderationPendingReasons.includes(
+      "unscoped_canonical_venue_evidence",
+    ),
   );
 
   const canonicalHandleEventDate = isoDateDaysFromNow(9);

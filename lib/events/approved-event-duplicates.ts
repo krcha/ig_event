@@ -145,6 +145,8 @@ type DecoratedDuplicateEvent = ApprovedEventDuplicateRecord & {
   duplicateVenueText: string;
   duplicateVenueCandidates: string[];
   duplicateContextTexts: string[];
+  duplicateRowContextTexts: string[];
+  duplicateTitleOnlyText: string;
   duplicateTitleText: string;
   duplicateArtistText: string;
   duplicateDescriptionText: string;
@@ -326,6 +328,12 @@ function decorateEventForDuplicateCleanup(
   const titleUsedFallback = readBooleanField(normalizedFields, "titleUsedFallback");
   const titleDerivedFromContext = readBooleanField(normalizedFields, "titleDerivedFromContext");
   const multiEventSplitCount = readNumberField(normalizedFields, "multiEventSplitCount") ?? 0;
+  const multiEventSplitDetected =
+    readBooleanField(normalizedFields, "multiEventSplitDetected") || multiEventSplitCount > 1;
+  const rowSourceText =
+    readStringField(normalizedFields, "rowSourceText") ??
+    readStringField(normalizedFields, "splitSourceLine");
+  const duplicateRowContextTexts = collectComparableTextValues([rowSourceText]);
   const duplicateVenueCandidates = collectComparableTextValues([
     event.venue,
     readStringField(normalizedFields, "normalizedVenue"),
@@ -333,29 +341,36 @@ function decorateEventForDuplicateCleanup(
     readStringField(normalizedFields, "rawVenue"),
   ]);
   const duplicateMentionHandles = collectInstagramHandles([
-    event.sourceCaption,
-    event.description,
+    ...(multiEventSplitDetected ? [rowSourceText] : [event.sourceCaption, event.description]),
     ...event.artists,
-    readStringField(normalizedFields, "sourceCaptionFromModel"),
-    readStringField(normalizedFields, "description"),
-    readStringField(normalizedFields, "reasoningNotes"),
+    ...(multiEventSplitDetected
+      ? []
+      : [
+          readStringField(normalizedFields, "sourceCaptionFromModel"),
+          readStringField(normalizedFields, "description"),
+          readStringField(normalizedFields, "reasoningNotes"),
+        ]),
   ]);
   const duplicateContextTexts = collectComparableTextValues([
     event.title,
     event.venue,
-    event.description,
-    event.sourceCaption,
     ...event.artists,
     readStringField(normalizedFields, "rawTitle"),
     readStringField(normalizedFields, "titleContextCandidate"),
     readStringField(normalizedFields, "normalizedVenue"),
     readStringField(normalizedFields, "locationName"),
     readStringField(normalizedFields, "rawVenue"),
-    readStringField(normalizedFields, "description"),
-    readStringField(normalizedFields, "sourceCaptionFromModel"),
-    readStringField(normalizedFields, "postAltText"),
-    readStringField(normalizedFields, "splitSourceLine"),
-    readStringField(normalizedFields, "reasoningNotes"),
+    ...(multiEventSplitDetected
+      ? [rowSourceText]
+      : [
+          event.description,
+          event.sourceCaption,
+          readStringField(normalizedFields, "description"),
+          readStringField(normalizedFields, "sourceCaptionFromModel"),
+          readStringField(normalizedFields, "postAltText"),
+          readStringField(normalizedFields, "splitSourceLine"),
+          readStringField(normalizedFields, "reasoningNotes"),
+        ]),
   ]);
   const duplicateEntityCandidates = collectComparableIdentityValues(
     [
@@ -380,12 +395,16 @@ function decorateEventForDuplicateCleanup(
     ),
     duplicateVenueCandidates,
     duplicateContextTexts,
+    duplicateRowContextTexts,
+    duplicateTitleOnlyText: normalizeComparisonText(event.title),
     duplicateTitleText: normalizeComparisonText(
       [event.title, event.artists.join(" ")].join(" "),
     ),
     duplicateArtistText: normalizeComparisonText(event.artists.join(" ")),
     duplicateDescriptionText: normalizeComparisonText(
-      [event.description ?? "", event.sourceCaption ?? ""].join(" "),
+      multiEventSplitDetected
+        ? rowSourceText ?? ""
+        : [event.description ?? "", event.sourceCaption ?? ""].join(" "),
     ),
     duplicateTitleFamilySlug: buildTitleFamilySlug(event.title),
     duplicateEntityCandidates,
@@ -393,8 +412,7 @@ function decorateEventForDuplicateCleanup(
     normalizedInstagramUrl: normalizeInstagramUrl(event.instagramPostUrl),
     titleUsedFallback,
     titleDerivedFromContext,
-    multiEventSplitDetected:
-      readBooleanField(normalizedFields, "multiEventSplitDetected") || multiEventSplitCount > 1,
+    multiEventSplitDetected,
     multiEventSplitCount,
     splitEventIndex: readNumberField(normalizedFields, "splitEventIndex"),
     qualityScore: scoreApprovedEventQuality(
@@ -403,6 +421,76 @@ function decorateEventForDuplicateCleanup(
       titleUsedFallback || titleDerivedFromContext,
     ),
   };
+}
+
+function areFromSameInstagramPost(
+  left: DecoratedDuplicateEvent,
+  right: DecoratedDuplicateEvent,
+): boolean {
+  const sameInstagramPostById = Boolean(
+    left.instagramPostId &&
+      right.instagramPostId &&
+      left.instagramPostId === right.instagramPostId,
+  );
+  const sameInstagramPostByUrl = Boolean(
+    left.normalizedInstagramUrl &&
+      right.normalizedInstagramUrl &&
+      left.normalizedInstagramUrl === right.normalizedInstagramUrl,
+  );
+
+  return sameInstagramPostById || sameInstagramPostByUrl;
+}
+
+function hasVerifiedDuplicateTime(event: DecoratedDuplicateEvent): boolean {
+  return Boolean(event.time) && readBooleanField(event.normalizedFields, "timeEvidenceVerified");
+}
+
+function hasCrossPostMultiEventOccurrenceIdentity(
+  left: DecoratedDuplicateEvent,
+  right: DecoratedDuplicateEvent,
+): boolean {
+  if (
+    (left.multiEventSplitDetected && left.duplicateRowContextTexts.length === 0) ||
+    (right.multiEventSplitDetected && right.duplicateRowContextTexts.length === 0)
+  ) {
+    return false;
+  }
+
+  const hasUnreliableTitle =
+    left.titleUsedFallback ||
+    right.titleUsedFallback ||
+    left.titleDerivedFromContext ||
+    right.titleDerivedFromContext;
+  const reliableTitleMatch =
+    !hasUnreliableTitle &&
+    (areCompatibleTitleFamilySlugs(
+      left.duplicateTitleFamilySlug,
+      right.duplicateTitleFamilySlug,
+    ) ||
+      areSimilarDuplicateTexts(left.duplicateTitleOnlyText, right.duplicateTitleOnlyText));
+  if (reliableTitleMatch) {
+    return true;
+  }
+
+  const artistMatch = areSimilarDuplicateTexts(
+    left.duplicateArtistText,
+    right.duplicateArtistText,
+  );
+  if (!artistMatch) {
+    return false;
+  }
+
+  const leftOccurrenceContext = left.multiEventSplitDetected
+    ? left.duplicateRowContextTexts
+    : left.duplicateContextTexts;
+  const rightOccurrenceContext = right.multiEventSplitDetected
+    ? right.duplicateRowContextTexts
+    : right.duplicateContextTexts;
+
+  return (
+    hasContextCandidateSupport(leftOccurrenceContext, right.duplicateEntityCandidates) &&
+    hasContextCandidateSupport(rightOccurrenceContext, left.duplicateEntityCandidates)
+  );
 }
 
 function areDistinctMultiEventScheduleRows(
@@ -416,6 +504,7 @@ function areDistinctMultiEventScheduleRows(
     return false;
   }
   if (
+    areFromSameInstagramPost(left, right) &&
     left.splitEventIndex !== null &&
     right.splitEventIndex !== null &&
     left.splitEventIndex !== right.splitEventIndex
@@ -451,17 +540,8 @@ function buildDuplicateMatchReasons(
     hasContextCandidateSupport(left.duplicateContextTexts, right.duplicateEntityCandidates) ||
     hasContextCandidateSupport(right.duplicateContextTexts, left.duplicateEntityCandidates);
 
-  const sameInstagramPostById =
-    left.instagramPostId &&
-    right.instagramPostId &&
-    left.instagramPostId === right.instagramPostId;
-  const sameInstagramPostByUrl =
-    left.normalizedInstagramUrl &&
-    right.normalizedInstagramUrl &&
-    left.normalizedInstagramUrl === right.normalizedInstagramUrl;
-
   if (
-    (sameInstagramPostById || sameInstagramPostByUrl) &&
+    areFromSameInstagramPost(left, right) &&
     !areDistinctMultiEventScheduleRows(left, right)
   ) {
     reasons.push("same Instagram post");
@@ -527,6 +607,22 @@ function areAutoCleanupDuplicateEvents(
 
   if (areDistinctMultiEventScheduleRows(left, right)) {
     return false;
+  }
+
+  const isCrossPostMultiEventComparison =
+    !areFromSameInstagramPost(left, right) &&
+    (left.multiEventSplitDetected || right.multiEventSplitDetected);
+  if (isCrossPostMultiEventComparison) {
+    if (
+      hasVerifiedDuplicateTime(left) &&
+      hasVerifiedDuplicateTime(right) &&
+      !timeMatches
+    ) {
+      return false;
+    }
+    if (!hasCrossPostMultiEventOccurrenceIdentity(left, right)) {
+      return false;
+    }
   }
 
   const matchReasons = buildDuplicateMatchReasons(left, right);

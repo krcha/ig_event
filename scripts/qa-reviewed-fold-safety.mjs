@@ -8,12 +8,22 @@ import { sourceOccurrenceRepresentativeMatchesExpected } from "../lib/events/sou
 
 const {
   deleteApprovedEvent,
+  foldReviewedCrossPostScheduleDuplicate,
   foldReviewedStructuredPromotionVariant,
   foldReviewedStructuredSameSourceContinuation,
+  getReviewedCrossPostScheduleFoldContext,
   mergeApprovedEvents,
   updateEvent,
 } = eventFunctions;
 
+assert.ok(
+  foldReviewedCrossPostScheduleDuplicate?._handler,
+  "The reviewed cross-post schedule fold mutation must be exported.",
+);
+assert.ok(
+  getReviewedCrossPostScheduleFoldContext?._handler,
+  "The reviewed cross-post schedule fold context query must be exported.",
+);
 assert.ok(
   foldReviewedStructuredPromotionVariant?._handler,
   "The reviewed promotion-variant fold mutation must be exported.",
@@ -1404,6 +1414,430 @@ async function qaBenAdversarialCases() {
   }
 }
 
+function reviewedScheduleFoldFixture() {
+  const date = "2026-09-05";
+  const handle = "kolarac_art_bioskop";
+  const sourceIdentity = "instagram-source-identity-v1:kolarac-weekly";
+  const sourceFingerprint = `instagram-source-v2:${"7".repeat(64)}`;
+  const keys = {
+    prior: `instagram-occurrence-v2:${"1".repeat(64)}`,
+    hobotnica: `instagram-occurrence-v2:${"2".repeat(64)}`,
+    later: `instagram-occurrence-v2:${"3".repeat(64)}`,
+  };
+  const primaryCaption = [
+    "REPERTOAR LETNJEG BIOSKOPA",
+    "Petak 4.9. 20:30 DRUGI FILM",
+    "Subota 5.9. 20:30 HOBOTNICA",
+    "Nedelja 6.9. 20:30 TREĆI FILM",
+    "Ulaznice su dostupne na Biletarnici Kolarca.",
+  ].join("\n");
+  const raw = rawExtraction([
+    {
+      title: "DRUGI FILM",
+      date: "2026-09-04",
+      time: "20:30",
+      venue: "LETNJI BIOSKOP NA TERASI KOLARCA",
+      artists: [],
+      source_text: "Petak 4.9. 20:30 DRUGI FILM",
+    },
+    {
+      title: "HOBOTNICA",
+      date,
+      time: "20:30",
+      venue: "LETNJI BIOSKOP NA TERASI KOLARCA",
+      artists: [],
+      source_text: "Subota 5.9. 20:30 HOBOTNICA",
+    },
+    {
+      title: "TREĆI FILM",
+      date: "2026-09-06",
+      time: "20:30",
+      venue: "LETNJI BIOSKOP NA TERASI KOLARCA",
+      artists: [],
+      source_text: "Nedelja 6.9. 20:30 TREĆI FILM",
+    },
+  ]);
+  const venue = {
+    _id: "venue-kolarac",
+    _creationTime: 1,
+    name: "Kolarac",
+    instagramHandle: "kolarac_kolarceva_zaduzbina",
+    normalizedInstagramHandle: "kolarac_kolarceva_zaduzbina",
+    category: "arts & culture",
+    publicStatus: "published",
+    scrapeActive: true,
+    createdAt: 1,
+    updatedAt: 4_000,
+  };
+  const common = {
+    venue: "LETNJI BIOSKOP NA TERASI KOLARCA",
+    artists: [],
+    handle,
+    postId: "KOLARACWEEKLY",
+    caption: primaryCaption,
+    postedAt: "2026-08-28T08:00:00.000Z",
+    sourceFingerprint,
+    expectedKeys: Object.values(keys),
+    raw,
+  };
+  const prior = eventRow({
+    ...common,
+    id: "j57-kolarac-prior",
+    title: "DRUGI FILM",
+    date: "2026-09-04",
+    time: "20:30",
+    description: "A different screening.",
+    occurrenceKey: keys.prior,
+    updatedAt: 4_100,
+    splitSourceLine: "Petak 4.9. 20:30 DRUGI FILM",
+  });
+  const primary = eventRow({
+    ...common,
+    id: "j573-hobotnica-primary",
+    title: "HOBOTNICA",
+    date,
+    time: "20:30",
+    description: "Film screening: HOBOTNICA.",
+    occurrenceKey: keys.hobotnica,
+    updatedAt: 4_200,
+    splitSourceLine: "Subota 5.9. 20:30 HOBOTNICA",
+  });
+  const later = eventRow({
+    ...common,
+    id: "j57-kolarac-later",
+    title: "TREĆI FILM",
+    date: "2026-09-06",
+    time: "20:30",
+    description: "Another different screening.",
+    occurrenceKey: keys.later,
+    updatedAt: 4_300,
+    splitSourceLine: "Nedelja 6.9. 20:30 TREĆI FILM",
+  });
+  for (const [index, event] of [prior, primary, later].entries()) {
+    const fields = JSON.parse(event.normalizedFieldsJson);
+    fields.multiEventSplitDetected = true;
+    fields.multiEventSplitCount = 3;
+    fields.splitEventIndex = index + 1;
+    fields.splitEventTotal = 3;
+    event.normalizedFieldsJson = JSON.stringify(fields);
+  }
+  const duplicate = eventRow({
+    id: "j57c-hobotnica-legacy",
+    title: "HOBOTNICA (Hobotnica)",
+    date,
+    time: "20:30",
+    venue: "Kolarac",
+    venueId: venue._id,
+    venueHandle: venue.instagramHandle,
+    artists: [],
+    description: "Documentary screening lasting 64 minutes.",
+    handle: "beldocsfest",
+    postId: "BELDOCSLETO",
+    caption: [
+      "BELDOCS LETO na terasi Art bioskopa Kolarac",
+      "4.9. DRUGI PROGRAM",
+      "5.9. 20:30 HOBOTNICA (Hobotnica) | 64 min",
+      "6.9. ČETVRTI PROGRAM",
+    ].join("\n"),
+    postedAt: "2026-08-01T08:00:00.000Z",
+    occurrenceKey: `instagram-occurrence-v2:${"4".repeat(64)}`,
+    sourceFingerprint: `instagram-source-v2:${"8".repeat(64)}`,
+    expectedKeys: [],
+    raw: rawExtraction([]),
+    updatedAt: 4_400,
+    splitSourceLine: "5.9. 20:30 HOBOTNICA (Hobotnica) | 64 min",
+  });
+  const duplicateFields = JSON.parse(duplicate.normalizedFieldsJson);
+  duplicateFields.multiEventSplitDetected = true;
+  duplicateFields.multiEventSplitCount = 3;
+  duplicateFields.splitEventIndex = 3;
+  duplicateFields.splitEventTotal = 3;
+  delete duplicateFields.sourceOccurrenceKey;
+  delete duplicateFields.sourceOccurrenceSourceFingerprint;
+  delete duplicateFields.sourceOccurrenceExpectedKeys;
+  delete duplicateFields.sourceOccurrenceExpectedCount;
+  duplicate.normalizedFieldsJson = JSON.stringify(duplicateFields);
+  delete duplicate.sourceOccurrenceKey;
+
+  const links = [prior, primary, later].map((event, index) =>
+    sourceLink({
+      id: `kolarac-link-${index}`,
+      event,
+      sourceIdentity,
+      sourceFingerprint,
+      handle,
+      updatedAt: 4_500 + index,
+    }),
+  );
+  const receipt = receiptRow({
+    id: "kolarac-receipt",
+    sourceIdentity,
+    sourceFingerprint,
+    events: [prior, primary, later],
+    updatedAt: 4_600,
+  });
+  const harness = makeHarness({
+    events: [prior, primary, later, duplicate],
+    instagramEventSources: links,
+    instagramSourceOccurrenceReceipts: [receipt],
+    scrapedPosts: [
+      persistedPost({
+        id: "kolarac-post",
+        handle,
+        postId: primary.instagramPostId,
+        caption: primary.sourceCaption,
+        postedAt: primary.sourcePostedAt,
+        raw,
+      }),
+    ],
+    venues: [venue],
+    savedEvents: [
+      { _id: "hobotnica-primary-save", userId: "same", eventId: primary._id, createdAt: 1 },
+      { _id: "hobotnica-deduped-save", userId: "same", eventId: duplicate._id, createdAt: 2 },
+      { _id: "hobotnica-moved-save", userId: "moved", eventId: duplicate._id, createdAt: 3 },
+    ],
+    userSavedEvents: [],
+  });
+  return {
+    harness,
+    venue,
+    prior,
+    primary,
+    later,
+    duplicate,
+    primaryLink: links[1],
+    receipt,
+    keys,
+  };
+}
+
+function reviewedScheduleFoldArgs(fixture) {
+  return {
+    operationId: "reviewed-schedule-fold:hobotnica-2026-09-05",
+    primaryId: fixture.primary._id,
+    expectedPrimaryUpdatedAt: fixture.primary.updatedAt,
+    expectedPrimaryNormalizedFieldsJson: fixture.primary.normalizedFieldsJson,
+    expectedPrimarySourceLinkId: fixture.primaryLink._id,
+    expectedPrimarySourceLinkUpdatedAt: fixture.primaryLink.updatedAt,
+    expectedPrimaryReceiptId: fixture.receipt._id,
+    expectedPrimaryReceiptUpdatedAt: fixture.receipt.updatedAt,
+    duplicateId: fixture.duplicate._id,
+    expectedDuplicateUpdatedAt: fixture.duplicate.updatedAt,
+    expectedDuplicateNormalizedFieldsJson: fixture.duplicate.normalizedFieldsJson,
+    expectedDuplicateSourceVersions: [],
+    targetVenueId: fixture.venue._id,
+    expectedTargetVenueUpdatedAt: fixture.venue.updatedAt,
+    expectedTargetVenueHandle: fixture.venue.instagramHandle,
+    occurrenceAnchors: ["HOBOTNICA"],
+    primaryVenueEvidence: "Biletarnici Kolarca",
+    duplicateVenueEvidence: "Art bioskopa Kolarac",
+    nextTitle: "HOBOTNICA",
+    nextTime: "20:30",
+    nextVenue: "Kolarac",
+    nextArtists: [],
+    nextDescription:
+      "Documentary screening at Kolarac, lasting 64 minutes. Tickets cost 400 RSD.",
+    timeEvidenceText: "20:30 HOBOTNICA",
+    moderationNote:
+      "Human-reviewed cross-post schedule row fold with exact local row evidence.",
+    serviceSecret: process.env.CRON_SECRET,
+  };
+}
+
+async function qaReviewedCrossPostScheduleFold() {
+  const fixture = reviewedScheduleFoldFixture();
+  const operationId = reviewedScheduleFoldArgs(fixture).operationId;
+  const beforeContext = await getReviewedCrossPostScheduleFoldContext._handler(
+    fixture.harness.serviceCtx,
+    {
+      operationId,
+      primaryId: fixture.primary._id,
+      duplicateId: fixture.duplicate._id,
+      serviceSecret: process.env.CRON_SECRET,
+    },
+  );
+  assert.equal(beforeContext.primarySources.length, 1);
+  assert.equal(beforeContext.primarySources[0].receipt._id, fixture.receipt._id);
+  assert.equal(beforeContext.duplicateSources.length, 0);
+  assert.equal(beforeContext.primaryAudits.length, 0);
+  assert.equal(beforeContext.duplicateAudits.length, 0);
+  const immutableSiblingExpected = fixture.receipt.expectedOccurrences
+    .filter(({ key }) => key !== fixture.keys.hobotnica)
+    .map(clone);
+  const immutableSiblingSatisfied = fixture.receipt.satisfiedOccurrences
+    .filter(({ key }) => key !== fixture.keys.hobotnica)
+    .map(clone);
+  const immutableLinks = clone([...fixture.harness.tables.instagramEventSources.values()]);
+
+  const result = await invokeAtomically(
+    foldReviewedCrossPostScheduleDuplicate,
+    fixture.harness,
+    reviewedScheduleFoldArgs(fixture),
+  );
+  assert.equal(result.primaryId, fixture.primary._id);
+  assert.equal(result.duplicateId, fixture.duplicate._id);
+  assert.equal(result.movedSaveCount, 1);
+  assert.equal(result.dedupedSaveCount, 1);
+
+  const finalPrimary = fixture.harness.tables.events.get(fixture.primary._id);
+  const finalDuplicate = fixture.harness.tables.events.get(fixture.duplicate._id);
+  assert.equal(finalPrimary.status, "approved");
+  assert.equal(finalPrimary.title, "HOBOTNICA");
+  assert.equal(finalPrimary.time, "20:30");
+  assert.equal(finalPrimary.venue, "Kolarac");
+  assert.equal(finalPrimary.venueId, fixture.venue._id);
+  assert.deepEqual(finalPrimary.artists, []);
+  assert.equal(finalDuplicate.status, "rejected");
+  assert.match(finalDuplicate.moderationNote, /^\[reviewed_cross_post_schedule_duplicate:v1\]/u);
+  assert.deepEqual(
+    [...fixture.harness.tables.instagramEventSources.values()],
+    immutableLinks,
+    "Schedule folding must not rewrite unrelated source links.",
+  );
+
+  const finalReceipt = assertReceiptComplete(fixture.harness, fixture.receipt._id);
+  assert.deepEqual(
+    finalReceipt.expectedOccurrences.filter(({ key }) => key !== fixture.keys.hobotnica),
+    immutableSiblingExpected,
+  );
+  assert.deepEqual(
+    finalReceipt.satisfiedOccurrences.filter(({ key }) => key !== fixture.keys.hobotnica),
+    immutableSiblingSatisfied,
+  );
+  assert.equal(
+    finalReceipt.satisfiedOccurrences.find(({ key }) => key === fixture.keys.hobotnica).eventId,
+    fixture.primary._id,
+  );
+  assert.equal(
+    finalReceipt.expectedOccurrences.find(({ key }) => key === fixture.keys.hobotnica).venue,
+    "Kolarac",
+  );
+  getOnlyAudit(fixture.harness, fixture.primary._id, "reviewed_cross_post_schedule_folded");
+  getOnlyAudit(
+    fixture.harness,
+    fixture.duplicate._id,
+    "reviewed_cross_post_schedule_duplicate_rejected",
+  );
+  const afterContext = await getReviewedCrossPostScheduleFoldContext._handler(
+    fixture.harness.serviceCtx,
+    {
+      operationId,
+      primaryId: fixture.primary._id,
+      duplicateId: fixture.duplicate._id,
+      serviceSecret: process.env.CRON_SECRET,
+    },
+  );
+  assert.equal(afterContext.primary.status, "approved");
+  assert.equal(afterContext.duplicate.status, "rejected");
+  assert.equal(afterContext.primaryAudits.length, 1);
+  assert.equal(afterContext.duplicateAudits.length, 1);
+}
+
+async function qaReviewedCrossPostScheduleAdversarialCases() {
+  const cases = [
+    {
+      label: "overlapping broad caption with a different row",
+      mutate: (fixture) => {
+        const duplicate = fixture.harness.tables.events.get(fixture.duplicate._id);
+        const fields = JSON.parse(duplicate.normalizedFieldsJson);
+        fields.rowSourceText = "5.9. 20:30 DRUGI PROGRAM";
+        fields.splitSourceLine = fields.rowSourceText;
+        duplicate.normalizedFieldsJson = JSON.stringify(fields);
+        fixture.duplicate.normalizedFieldsJson = duplicate.normalizedFieldsJson;
+      },
+      error: /row-local|evidence/iu,
+    },
+    {
+      label: "different verified time",
+      mutate: (fixture) => {
+        const duplicate = fixture.harness.tables.events.get(fixture.duplicate._id);
+        duplicate.time = "21:00";
+        const fields = JSON.parse(duplicate.normalizedFieldsJson);
+        fields.time = "21:00";
+        duplicate.normalizedFieldsJson = JSON.stringify(fields);
+        fixture.duplicate.normalizedFieldsJson = duplicate.normalizedFieldsJson;
+      },
+      error: /identity|time|exact/iu,
+    },
+    {
+      label: "event time matches but duplicate row carries a different clock",
+      mutate: (fixture) => {
+        const duplicate = fixture.harness.tables.events.get(fixture.duplicate._id);
+        const fields = JSON.parse(duplicate.normalizedFieldsJson);
+        fields.rowSourceText = "5.9. 21:00 HOBOTNICA (Hobotnica) | 64 min";
+        fields.splitSourceLine = fields.rowSourceText;
+        duplicate.normalizedFieldsJson = JSON.stringify(fields);
+        fixture.duplicate.normalizedFieldsJson = duplicate.normalizedFieldsJson;
+      },
+      error: /row-local|evidence/iu,
+    },
+    {
+      label: "same Instagram post",
+      mutate: (fixture) => {
+        const duplicate = fixture.harness.tables.events.get(fixture.duplicate._id);
+        duplicate.instagramPostId = fixture.primary.instagramPostId;
+        duplicate.instagramPostUrl = fixture.primary.instagramPostUrl;
+      },
+      error: /distinct Instagram posts/iu,
+    },
+    {
+      label: "matching Instagram post ID with a conflicting URL",
+      mutate: (fixture) => {
+        const duplicate = fixture.harness.tables.events.get(fixture.duplicate._id);
+        duplicate.instagramPostId = fixture.primary.instagramPostId;
+      },
+      error: /distinct Instagram posts/iu,
+    },
+    {
+      label: "matching Instagram post URL with a conflicting ID",
+      mutate: (fixture) => {
+        const duplicate = fixture.harness.tables.events.get(fixture.duplicate._id);
+        duplicate.instagramPostUrl = fixture.primary.instagramPostUrl;
+      },
+      error: /distinct Instagram posts/iu,
+    },
+    {
+      label: "new duplicate source link after review",
+      mutate: (fixture) => {
+        fixture.harness.tables.instagramEventSources.set("unexpected-legacy-link", {
+          _id: "unexpected-legacy-link",
+          _creationTime: 1,
+          eventId: fixture.duplicate._id,
+          sourceIdentity: "instagram-source-identity-v1:legacy",
+          sourceFingerprint: `instagram-source-v2:${"9".repeat(64)}`,
+          sourceOccurrenceKey: `instagram-occurrence-v2:${"9".repeat(64)}`,
+          linkedAt: 1,
+          updatedAt: 1,
+        });
+      },
+      error: /source links changed/iu,
+    },
+    {
+      label: "changed canonical venue revision",
+      mutate: (fixture) => {
+        fixture.harness.tables.venues.get(fixture.venue._id).updatedAt += 1;
+      },
+      error: /target venue|exact|public/iu,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const fixture = reviewedScheduleFoldFixture();
+    testCase.mutate(fixture);
+    const before = fixture.harness.snapshot();
+    await assert.rejects(
+      invokeAtomically(
+        foldReviewedCrossPostScheduleDuplicate,
+        fixture.harness,
+        reviewedScheduleFoldArgs(fixture),
+      ),
+      testCase.error,
+      testCase.label,
+    );
+    assert.deepEqual(fixture.harness.snapshot(), before, `${testCase.label} must be atomic.`);
+  }
+}
+
 async function qaSourceContracts() {
   const eventsSource = await readFile(new URL("../convex/events.ts", import.meta.url), "utf8");
   const lineageSource = await readFile(
@@ -1419,6 +1853,7 @@ async function qaSourceContracts() {
   );
 
   for (const exportName of [
+    "foldReviewedCrossPostScheduleDuplicate",
     "foldReviewedStructuredPromotionVariant",
     "foldReviewedStructuredSameSourceContinuation",
   ]) {
@@ -1570,6 +2005,8 @@ async function qaSourceContracts() {
 
 try {
   await qaSourceContracts();
+  await qaReviewedCrossPostScheduleAdversarialCases();
+  await qaReviewedCrossPostScheduleFold();
   await qaSkiAdversarialCases();
   await qaSkiFold();
   await qaBenAdversarialCases();

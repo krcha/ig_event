@@ -569,6 +569,8 @@ type EventVariant = {
   description?: string;
   venue: string;
   venueEvidenceValue: string;
+  canonicalVenueEvidenceSource: "evidence_handle" | "evidence_name" | null;
+  canonicalVenueEvidenceHandle: string | null;
   splitSource: SplitEventCandidateSource | null;
   splitSourceLine: string | null;
   occurrencePlanUnverified: boolean;
@@ -9539,6 +9541,11 @@ export function prepareEventsForInsert(
     options.sourceRolesByHandle,
   );
   const normalizedVenue = venueNormalization.venue ?? "";
+  const canonicalVenueEvidenceSource =
+    venueNormalization.source === "evidence_handle" ||
+    venueNormalization.source === "evidence_name"
+      ? venueNormalization.source
+      : null;
   const normalizedSourceHandle = normalizeHandle(post.username);
   const sourceRole = options.sourceRolesByHandle?.[normalizedSourceHandle];
   const configuredVenueName = canonicalVenueNamesByHandle[normalizedSourceHandle];
@@ -9696,7 +9703,7 @@ export function prepareEventsForInsert(
       trustedVenueSource,
       sharedVenueVerified: false,
       canonicalHandleEvidenceVerified:
-        venueNormalization.source === "evidence_handle",
+        canonicalVenueEvidenceSource !== null,
     });
   const explicitModelVenueEvidenceVerified =
     usesStructuredEvidence &&
@@ -10021,6 +10028,42 @@ export function prepareEventsForInsert(
               canonicalVenueAliasesByHandle,
             }) ?? rowVenue
           : "";
+        const rowEvidenceSource: EventDateEvidenceSource =
+          entry.source === "caption_schedule"
+            ? "caption"
+            : entry.source === "alt_text_schedule"
+              ? "alt_text"
+              : "poster";
+        const rowCanonicalVenueNormalization = normalizeVenueFromEvidence({
+          handle: post.username,
+          rawModelVenue: "",
+          locationName: "",
+          immutableEvidenceTexts: [entry.sourceLine],
+          canonicalVenueNamesByHandle,
+          canonicalVenueAliasesByHandle,
+          handleVenueNamesByHandle:
+            sourceRole === "promoter" ? {} : configuredVenueNamesByHandle,
+          staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
+          allowCanonicalHandleFallback: false,
+        });
+        const rowCanonicalVenueEvidenceSource =
+          rowCanonicalVenueNormalization.source === "evidence_handle" ||
+          rowCanonicalVenueNormalization.source === "evidence_name"
+            ? rowCanonicalVenueNormalization.source
+            : null;
+        const rowCanonicalVenueEvidenceBound = Boolean(
+          rowCanonicalVenueEvidenceSource &&
+            rowCanonicalVenueNormalization.venue &&
+            extractionEvidenceAppearsInPersistedSource({
+              evidenceText: entry.sourceLine,
+              source: rowEvidenceSource,
+              post,
+              hasPoster: hasPosterEvidence,
+            }),
+        );
+        const rowCanonicalVenue = rowCanonicalVenueEvidenceBound
+          ? rowCanonicalVenueNormalization.venue ?? ""
+          : "";
         const singleOccurrencePostVenueGrounded = Boolean(
           splitEventCandidates.length === 1 &&
             rowVenue &&
@@ -10029,6 +10072,21 @@ export function prepareEventsForInsert(
               independentPostTextEvidence,
             ),
         );
+        const rowVenueIsDirect = rowVenueGrounded || singleOccurrencePostVenueGrounded;
+        const scopedRowCanonicalVenue =
+          rowVenueIsDirect || sharedVenueValue ? "" : rowCanonicalVenue;
+        const singleSplitCanonicalVenueEvidenceSource =
+          splitEventCandidates.length === 1 && !rowVenueIsDirect
+            ? canonicalVenueEvidenceSource
+            : null;
+        const variantCanonicalVenueEvidenceSource = scopedRowCanonicalVenue
+          ? rowCanonicalVenueEvidenceSource
+          : singleSplitCanonicalVenueEvidenceSource;
+        const variantCanonicalVenueEvidenceHandle = scopedRowCanonicalVenue
+          ? rowCanonicalVenueNormalization.evidenceHandle ?? null
+          : singleSplitCanonicalVenueEvidenceSource === "evidence_handle"
+            ? venueNormalization.evidenceHandle ?? null
+            : null;
         const trustedVenueAccountFallback = Boolean(
           trustedVenueSource &&
             normalizedVenue &&
@@ -10046,14 +10104,15 @@ export function prepareEventsForInsert(
                   )))),
         );
         const variantVenueRaw = usesStructuredEvidence
-          ? rowVenueGrounded || singleOccurrencePostVenueGrounded
+          ? rowVenueIsDirect
             ? rowVenueMatchesConfiguredLocation
               ? normalizedVenue
               : rowVenue
             : sharedVenueMatchesConfiguredLocation
               ? normalizedVenue
               : sharedVenueValue ||
-                (venueNormalization.source === "evidence_handle" ? normalizedVenue : "") ||
+                scopedRowCanonicalVenue ||
+                (singleSplitCanonicalVenueEvidenceSource ? normalizedVenue : "") ||
                 (trustedVenueAccountFallback ? normalizedVenue : "")
           : normalizedVenue;
         const variantVenue = variantVenueRaw
@@ -10164,11 +10223,9 @@ export function prepareEventsForInsert(
           description: variantDescription,
           venue: variantVenue,
           venueEvidenceValue:
-            rowVenueGrounded || sharedVenueValue
-              ? rowVenueGrounded
-                ? rowVenue
-                : sharedVenueValue
-              : "",
+            rowVenueIsDirect ? rowVenue : sharedVenueValue || scopedRowCanonicalVenue,
+          canonicalVenueEvidenceSource: variantCanonicalVenueEvidenceSource,
+          canonicalVenueEvidenceHandle: variantCanonicalVenueEvidenceHandle,
           splitSource: entry.source,
           splitSourceLine: entry.sourceLine,
           occurrencePlanUnverified: entry.occurrencePlanUnverified ?? false,
@@ -10207,6 +10264,11 @@ export function prepareEventsForInsert(
         description: baseDescription,
         venue: effectiveNormalizedVenue,
         venueEvidenceValue: rawModelVenue,
+        canonicalVenueEvidenceSource,
+        canonicalVenueEvidenceHandle:
+          canonicalVenueEvidenceSource === "evidence_handle"
+            ? venueNormalization.evidenceHandle ?? null
+            : null,
         splitSource: null,
         splitSourceLine: null,
         occurrencePlanUnverified: false,
@@ -10248,16 +10310,14 @@ export function prepareEventsForInsert(
         normalizeVenueComparableText(variant.venue) ===
           normalizeVenueComparableText(configuredVenueName),
     );
-    const variantUsesCanonicalHandleEvidence = Boolean(
-      venueNormalization.source === "evidence_handle" &&
-        venueNormalization.venue &&
-        normalizeVenueComparableText(variant.venue) ===
-          normalizeVenueComparableText(venueNormalization.venue),
+    const variantUsesCanonicalVenueEvidence = Boolean(
+      variant.canonicalVenueEvidenceSource &&
+        variant.venue,
     );
     const variantVenueSource = variantTrustedVenueSource
       ? "handle_map"
-      : variantUsesCanonicalHandleEvidence
-        ? "evidence_handle"
+      : variantUsesCanonicalVenueEvidence
+        ? variant.canonicalVenueEvidenceSource
         : variant.venue && variantRawVenue
           ? "model"
           : effectiveVenueSource;
@@ -10352,7 +10412,7 @@ export function prepareEventsForInsert(
       hasPoster: hasPosterEvidence,
       trustedVenueSource: variantTrustedVenueSource,
       sharedVenueVerified: verifiedSharedVenue,
-      canonicalHandleEvidenceVerified: variantUsesCanonicalHandleEvidence,
+      canonicalHandleEvidenceVerified: variantUsesCanonicalVenueEvidence,
     });
     const sourceConflictPartition = partitionEventEvidenceSourceConflicts(
       extracted.source_conflicts,
@@ -10404,6 +10464,13 @@ export function prepareEventsForInsert(
         : []),
       ...(usesStructuredEvidence && !venueEvidenceVerified
         ? ["invalid_venue_evidence"]
+        : []),
+      ...(usesStructuredEvidence &&
+      splitEventCandidates.length > 1 &&
+      canonicalVenueEvidenceSource &&
+      !verifiedSharedVenue &&
+      !variant.venue
+        ? ["unscoped_canonical_venue_evidence"]
         : []),
       ...(usesStructuredEvidence && !timeEvidenceVerified
         ? ["invalid_time_evidence"]
@@ -10471,6 +10538,7 @@ export function prepareEventsForInsert(
         variantRawVenueMatchesConfiguredLocation,
       normalizedVenue: variant.venue,
       venueSource: variantVenueSource,
+      canonicalVenueEvidenceHandle: variant.canonicalVenueEvidenceHandle,
       title: variant.title,
       titleSource: variant.titleSource,
       titleUsedFallback: variant.titleUsedFallback,

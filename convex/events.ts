@@ -41,6 +41,10 @@ import {
 } from "../lib/events/cross-post-campaign-aggregate-attestation";
 import { exactJsonValue } from "../lib/events/exact-json-value";
 import {
+  areCompatibleTitleFamilySlugs,
+  buildTitleFamilySlug,
+} from "../lib/events/deduplication-shared";
+import {
   buildApprovedEventAutoCleanupGroups,
   type ApprovedEventDuplicateRecord,
 } from "../lib/events/approved-event-duplicates";
@@ -4640,6 +4644,663 @@ export const repairReviewedStructuredEventVenue = mutation({
       },
     });
     return { updated: true, updatedAt, receiptUpdatedAt, status: "approved" as const };
+  },
+});
+
+const REVIEWED_CROSS_POST_SCHEDULE_FOLD_POLICY_VERSION = 1;
+const MAX_REVIEWED_CROSS_POST_SOURCE_LINKS = 8;
+const MAX_REVIEWED_CROSS_POST_SAVES = 100;
+const MAX_REVIEWED_CROSS_POST_AUDITS = 100;
+
+const reviewedCrossPostSourceVersion = v.object({
+  id: v.id("instagramEventSources"),
+  updatedAt: v.number(),
+});
+
+const reviewedCrossPostScheduleFoldResult = v.object({
+  operationId: v.string(),
+  primaryId: v.id("events"),
+  primaryUpdatedAt: v.number(),
+  primaryReceiptUpdatedAt: v.number(),
+  duplicateId: v.id("events"),
+  duplicateUpdatedAt: v.number(),
+  movedSaveCount: v.number(),
+  dedupedSaveCount: v.number(),
+});
+
+function parseReviewedCrossPostFields(
+  value: string | undefined,
+  label: string,
+): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value ?? "null") as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error();
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    throw new Error(`${label} normalized evidence is invalid.`);
+  }
+}
+
+function readReviewedCrossPostRow(fields: Record<string, unknown>): string {
+  for (const key of ["rowSourceText", "splitSourceLine"]) {
+    const value = fields[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.normalize("NFKC").replace(/\s+/gu, " ").trim();
+    }
+  }
+  return "";
+}
+
+function normalizedReviewedCrossPostSourceVersions(
+  values: Array<{
+    id?: Id<"instagramEventSources">;
+    _id?: Id<"instagramEventSources">;
+    updatedAt: number;
+  }>,
+) {
+  return values
+    .map((value) => {
+      const id = value.id ?? value._id;
+      if (!id) {
+        throw new Error("Reviewed cross-post source version is missing its ID.");
+      }
+      return { id, updatedAt: value.updatedAt };
+    })
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+}
+
+async function getReviewedCrossPostScheduleFoldContextState(
+  ctx: QueryCtx | MutationCtx,
+  args: {
+    operationId: string;
+    primaryId: Id<"events">;
+    duplicateId: Id<"events">;
+  },
+) {
+  const [primary, duplicate] = await Promise.all([
+    ctx.db.get(args.primaryId),
+    ctx.db.get(args.duplicateId),
+  ]);
+  const loadSourceContexts = async (eventId: Id<"events">) => {
+    const links = await ctx.db
+      .query("instagramEventSources")
+      .withIndex("by_event", (q) => q.eq("eventId", eventId))
+      .take(MAX_REVIEWED_CROSS_POST_SOURCE_LINKS + 1);
+    if (links.length > MAX_REVIEWED_CROSS_POST_SOURCE_LINKS) {
+      throw new Error("Reviewed cross-post schedule source-link bound exceeded.");
+    }
+    return Promise.all(
+      links.map(async (link) => {
+        const receipts = await ctx.db
+          .query("instagramSourceOccurrenceReceipts")
+          .withIndex("by_sourceIdentity", (q) =>
+            q.eq("sourceIdentity", link.sourceIdentity),
+          )
+          .take(2);
+        if (receipts.length > 1) {
+          throw new Error("Reviewed cross-post schedule receipt is ambiguous.");
+        }
+        return { link, receipt: receipts[0] ?? null };
+      }),
+    );
+  };
+  const loadSaveState = async (eventId: Id<"events">) => {
+    const [savedEvents, userSavedEvents] = await Promise.all([
+      ctx.db
+        .query("savedEvents")
+        .withIndex("by_event", (q) => q.eq("eventId", eventId))
+        .take(MAX_REVIEWED_CROSS_POST_SAVES + 1),
+      ctx.db
+        .query("userSavedEvents")
+        .withIndex("by_event", (q) => q.eq("eventId", eventId))
+        .take(MAX_REVIEWED_CROSS_POST_SAVES + 1),
+    ]);
+    if (
+      savedEvents.length > MAX_REVIEWED_CROSS_POST_SAVES ||
+      userSavedEvents.length > MAX_REVIEWED_CROSS_POST_SAVES
+    ) {
+      throw new Error("Reviewed cross-post schedule save bound exceeded.");
+    }
+    return { savedEvents, userSavedEvents };
+  };
+  const loadAudits = async (eventId: Id<"events">) => {
+    const rows = await ctx.db
+      .query("eventAuditLog")
+      .withIndex("by_event", (q) => q.eq("eventId", eventId))
+      .take(MAX_REVIEWED_CROSS_POST_AUDITS + 1);
+    if (rows.length > MAX_REVIEWED_CROSS_POST_AUDITS) {
+      throw new Error("Reviewed cross-post schedule audit bound exceeded.");
+    }
+    return rows.filter((row) => {
+      if (
+        !new Set([
+          "reviewed_cross_post_schedule_folded",
+          "reviewed_cross_post_schedule_duplicate_rejected",
+        ]).has(row.action) ||
+        !row.patchJson
+      ) {
+        return false;
+      }
+      try {
+        const patch = JSON.parse(row.patchJson) as Record<string, unknown>;
+        return patch.operationId === args.operationId;
+      } catch {
+        return false;
+      }
+    });
+  };
+
+  const [primarySources, duplicateSources, primarySaves, duplicateSaves, primaryAudits, duplicateAudits] =
+    await Promise.all([
+      loadSourceContexts(args.primaryId),
+      loadSourceContexts(args.duplicateId),
+      loadSaveState(args.primaryId),
+      loadSaveState(args.duplicateId),
+      loadAudits(args.primaryId),
+      loadAudits(args.duplicateId),
+    ]);
+  return {
+    primary,
+    duplicate,
+    primarySources,
+    duplicateSources,
+    primarySaves,
+    duplicateSaves,
+    primaryAudits,
+    duplicateAudits,
+  };
+}
+
+/**
+ * Returns the complete bounded before/after state for one human-reviewed
+ * cross-post schedule-row fold. The operator uses this for immutable planning,
+ * optimistic preconditions, and lost-acknowledgement recovery.
+ */
+export const getReviewedCrossPostScheduleFoldContext = query({
+  args: {
+    operationId: v.string(),
+    primaryId: v.id("events"),
+    duplicateId: v.id("events"),
+    serviceSecret: v.string(),
+  },
+  returns: v.any(),
+  handler: async (ctx, args) => {
+    const authorization = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    if (authorization.kind !== "service") {
+      throw new Error("Reviewed cross-post schedule context requires service authentication.");
+    }
+    return getReviewedCrossPostScheduleFoldContextState(ctx, args);
+  },
+});
+
+/**
+ * Folds one exact row from a multi-event Instagram schedule into a reviewed
+ * cross-post representative. Only the representative's own receipt occurrence
+ * is re-attested; every sibling row and every duplicate-source receipt remains
+ * untouched. The redundant event is rejected in place so its evidence and
+ * audit history are retained.
+ */
+export const foldReviewedCrossPostScheduleDuplicate = mutation({
+  args: {
+    operationId: v.string(),
+    primaryId: v.id("events"),
+    expectedPrimaryUpdatedAt: v.number(),
+    expectedPrimaryNormalizedFieldsJson: v.string(),
+    expectedPrimarySourceLinkId: v.id("instagramEventSources"),
+    expectedPrimarySourceLinkUpdatedAt: v.number(),
+    expectedPrimaryReceiptId: v.id("instagramSourceOccurrenceReceipts"),
+    expectedPrimaryReceiptUpdatedAt: v.number(),
+    duplicateId: v.id("events"),
+    expectedDuplicateUpdatedAt: v.number(),
+    expectedDuplicateNormalizedFieldsJson: v.string(),
+    expectedDuplicateSourceVersions: v.array(reviewedCrossPostSourceVersion),
+    targetVenueId: v.id("venues"),
+    expectedTargetVenueUpdatedAt: v.number(),
+    expectedTargetVenueHandle: v.string(),
+    occurrenceAnchors: v.array(v.string()),
+    primaryVenueEvidence: v.string(),
+    duplicateVenueEvidence: v.string(),
+    nextTitle: v.string(),
+    nextTime: v.string(),
+    nextVenue: v.string(),
+    nextArtists: v.array(v.string()),
+    nextDescription: v.string(),
+    timeEvidenceText: v.string(),
+    moderationNote: v.string(),
+    serviceSecret: v.string(),
+  },
+  returns: reviewedCrossPostScheduleFoldResult,
+  handler: async (ctx, args) => {
+    const authorization = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    if (authorization.kind !== "service") {
+      throw new Error("Reviewed cross-post schedule folding requires service authentication.");
+    }
+    const operationId = args.operationId.trim();
+    const moderationNote = args.moderationNote.normalize("NFKC").replace(/\s+/gu, " ").trim();
+    const occurrenceAnchors = args.occurrenceAnchors.map((value) =>
+      value.normalize("NFKC").replace(/\s+/gu, " ").trim(),
+    );
+    const primaryVenueEvidence = args.primaryVenueEvidence.normalize("NFKC").replace(/\s+/gu, " ").trim();
+    const duplicateVenueEvidence = args.duplicateVenueEvidence.normalize("NFKC").replace(/\s+/gu, " ").trim();
+    const nextTitle = args.nextTitle.normalize("NFKC").replace(/\s+/gu, " ").trim();
+    const nextTime = args.nextTime.normalize("NFKC").replace(/\s+/gu, " ").trim();
+    const nextVenue = args.nextVenue.normalize("NFKC").replace(/\s+/gu, " ").trim();
+    const nextArtists = args.nextArtists.map((artist) =>
+      artist.normalize("NFKC").replace(/\s+/gu, " ").trim(),
+    );
+    const nextDescription = args.nextDescription.normalize("NFKC").replace(/\s+/gu, " ").trim();
+    const timeEvidenceText = args.timeEvidenceText.normalize("NFKC").replace(/\s+/gu, " ").trim();
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{15,159}$/u.test(operationId) ||
+      args.primaryId === args.duplicateId ||
+      moderationNote.length < 24 ||
+      occurrenceAnchors.length < 1 ||
+      occurrenceAnchors.length > 4 ||
+      occurrenceAnchors.some((value) => !value) ||
+      new Set(occurrenceAnchors.map(normalizeLookup)).size !== occurrenceAnchors.length ||
+      !primaryVenueEvidence ||
+      !duplicateVenueEvidence ||
+      !nextTitle ||
+      !nextTime ||
+      nextTime === "TBD" ||
+      !nextVenue ||
+      nextArtists.some((artist) => !artist) ||
+      new Set(nextArtists).size !== nextArtists.length ||
+      !nextDescription ||
+      !timeEvidenceText ||
+      nextTitle !== args.nextTitle ||
+      nextTime !== args.nextTime ||
+      nextVenue !== args.nextVenue ||
+      nextDescription !== args.nextDescription ||
+      timeEvidenceText !== args.timeEvidenceText ||
+      nextArtists.some((artist, index) => artist !== args.nextArtists[index]) ||
+      args.expectedDuplicateSourceVersions.length > MAX_REVIEWED_CROSS_POST_SOURCE_LINKS
+    ) {
+      throw new Error("Reviewed cross-post schedule folding arguments are invalid.");
+    }
+    for (const value of [
+      args.expectedPrimaryUpdatedAt,
+      args.expectedPrimarySourceLinkUpdatedAt,
+      args.expectedPrimaryReceiptUpdatedAt,
+      args.expectedDuplicateUpdatedAt,
+      args.expectedTargetVenueUpdatedAt,
+      ...args.expectedDuplicateSourceVersions.map((version) => version.updatedAt),
+    ]) {
+      if (!Number.isSafeInteger(value)) {
+        throw new Error("Reviewed cross-post schedule folding requires safe optimistic revisions.");
+      }
+    }
+    if (
+      new Set(args.expectedDuplicateSourceVersions.map((version) => String(version.id))).size !==
+      args.expectedDuplicateSourceVersions.length
+    ) {
+      throw new Error("Reviewed cross-post duplicate source versions are ambiguous.");
+    }
+
+    const primary = await ctx.db.get(args.primaryId);
+    const duplicate = await ctx.db.get(args.duplicateId);
+    if (
+      !primary ||
+      !duplicate ||
+      primary.status !== "approved" ||
+      duplicate.status !== "approved" ||
+      isCrossPostCampaignLineageEvent(primary) ||
+      isCrossPostCampaignLineageEvent(duplicate) ||
+      primary.updatedAt !== args.expectedPrimaryUpdatedAt ||
+      duplicate.updatedAt !== args.expectedDuplicateUpdatedAt ||
+      primary.normalizedFieldsJson !== args.expectedPrimaryNormalizedFieldsJson ||
+      duplicate.normalizedFieldsJson !== args.expectedDuplicateNormalizedFieldsJson
+    ) {
+      throw new Error("Reviewed cross-post schedule event precondition failed.");
+    }
+    const primaryPostId = primary.instagramPostId?.trim() ?? "";
+    const duplicatePostId = duplicate.instagramPostId?.trim() ?? "";
+    const primaryPostUrl = normalizeInstagramPostUrl(primary.instagramPostUrl ?? "");
+    const duplicatePostUrl = normalizeInstagramPostUrl(duplicate.instagramPostUrl ?? "");
+    const matchingPostIds = Boolean(
+      primaryPostId && duplicatePostId && primaryPostId === duplicatePostId,
+    );
+    const matchingPostUrls = Boolean(
+      primaryPostUrl && duplicatePostUrl && primaryPostUrl === duplicatePostUrl,
+    );
+    const distinctPostIds = Boolean(
+      primaryPostId && duplicatePostId && primaryPostId !== duplicatePostId,
+    );
+    const distinctPostUrls = Boolean(
+      primaryPostUrl && duplicatePostUrl && primaryPostUrl !== duplicatePostUrl,
+    );
+    if (
+      matchingPostIds ||
+      matchingPostUrls ||
+      (!distinctPostIds && !distinctPostUrls)
+    ) {
+      throw new Error("Reviewed cross-post schedule folding requires two distinct Instagram posts.");
+    }
+    if (
+      primary.date !== duplicate.date ||
+      !primary.time ||
+      !duplicate.time ||
+      primary.time === "TBD" ||
+      duplicate.time === "TBD" ||
+      primary.time !== duplicate.time ||
+      primary.time !== nextTime ||
+      !areCompatibleTitleFamilySlugs(
+        buildTitleFamilySlug(primary.title),
+        buildTitleFamilySlug(duplicate.title),
+      ) ||
+      !areCompatibleTitleFamilySlugs(
+        buildTitleFamilySlug(primary.title),
+        buildTitleFamilySlug(nextTitle),
+      ) ||
+      !exactJsonValue(primary.artists, duplicate.artists) ||
+      !exactJsonValue(primary.artists, nextArtists)
+    ) {
+      throw new Error("Reviewed cross-post schedule occurrence identity is not exact.");
+    }
+
+    const primaryFields = parseReviewedCrossPostFields(
+      primary.normalizedFieldsJson,
+      "Primary",
+    );
+    const duplicateFields = parseReviewedCrossPostFields(
+      duplicate.normalizedFieldsJson,
+      "Duplicate",
+    );
+    const primaryRow = readReviewedCrossPostRow(primaryFields);
+    const duplicateRow = readReviewedCrossPostRow(duplicateFields);
+    const normalizedPrimaryRow = normalizeLookup(primaryRow);
+    const normalizedDuplicateRow = normalizeLookup(duplicateRow);
+    const normalizedNextTime = normalizeLookup(nextTime);
+    const normalizedTimeEvidenceText = normalizeLookup(timeEvidenceText);
+    if (
+      primaryFields.multiEventSplitDetected !== true ||
+      duplicateFields.multiEventSplitDetected !== true ||
+      !primaryRow ||
+      !duplicateRow ||
+      occurrenceAnchors.some((anchor) => {
+        const normalizedAnchor = normalizeLookup(anchor);
+        return (
+          !normalizedAnchor ||
+          !normalizedPrimaryRow.includes(normalizedAnchor) ||
+          !normalizedDuplicateRow.includes(normalizedAnchor)
+        );
+      }) ||
+      !normalizedNextTime ||
+      !normalizedPrimaryRow.includes(normalizedNextTime) ||
+      !normalizedDuplicateRow.includes(normalizedNextTime) ||
+      !normalizedTimeEvidenceText ||
+      !normalizedPrimaryRow.includes(normalizedTimeEvidenceText) ||
+      !normalizeLookup(primary.sourceCaption ?? "").includes(normalizeLookup(primaryVenueEvidence)) ||
+      !normalizeLookup(duplicate.sourceCaption ?? "").includes(normalizeLookup(duplicateVenueEvidence))
+    ) {
+      throw new Error("Reviewed cross-post schedule row-local evidence is incomplete.");
+    }
+
+    const duplicateSourceLinks = await ctx.db
+      .query("instagramEventSources")
+      .withIndex("by_event", (q) => q.eq("eventId", duplicate._id))
+      .take(MAX_REVIEWED_CROSS_POST_SOURCE_LINKS + 1);
+    if (
+      duplicateSourceLinks.length > MAX_REVIEWED_CROSS_POST_SOURCE_LINKS ||
+      !exactJsonValue(
+        normalizedReviewedCrossPostSourceVersions(duplicateSourceLinks),
+        normalizedReviewedCrossPostSourceVersions(args.expectedDuplicateSourceVersions),
+      )
+    ) {
+      throw new Error("Reviewed cross-post duplicate source links changed after review.");
+    }
+
+    const { currentFields, sourceLink, receipt, occurrenceIndex } =
+      await loadReviewedStructuredCorrectionContext(ctx, primary, {
+        expectedSourceLinkId: args.expectedPrimarySourceLinkId,
+        expectedSourceLinkUpdatedAt: args.expectedPrimarySourceLinkUpdatedAt,
+        expectedReceiptId: args.expectedPrimaryReceiptId,
+        expectedReceiptUpdatedAt: args.expectedPrimaryReceiptUpdatedAt,
+      });
+    if (
+      receipt.satisfiedOccurrences.some(
+        (occurrence) => occurrence.eventId === duplicate._id,
+      )
+    ) {
+      throw new Error("Reviewed cross-post duplicate already represents a primary receipt sibling.");
+    }
+
+    const targetVenue = await ctx.db.get(args.targetVenueId);
+    if (
+      !targetVenue ||
+      targetVenue.updatedAt !== args.expectedTargetVenueUpdatedAt ||
+      normalizeHandle(targetVenue.instagramHandle) !==
+        normalizeHandle(args.expectedTargetVenueHandle) ||
+      !isVenuePublic(targetVenue) ||
+      targetVenue.name !== nextVenue
+    ) {
+      throw new Error("Reviewed cross-post schedule target venue is not exact and public.");
+    }
+    const venueFields = resolveVenueDenormalizedFieldsFromPublicVenues(
+      [targetVenue],
+      nextVenue,
+    );
+    if (venueFields.venueId !== targetVenue._id) {
+      throw new Error("Reviewed cross-post schedule target venue did not resolve exactly.");
+    }
+
+    const reviewedAt = Date.now();
+    const marker = {
+      policyVersion: REVIEWED_CROSS_POST_SCHEDULE_FOLD_POLICY_VERSION,
+      operationId,
+      reviewedAt,
+      reviewedBy: authorization.actor,
+      primaryEventId: primary._id,
+      duplicateEventId: duplicate._id,
+      primarySourceIdentity: sourceLink.sourceIdentity,
+      primarySourceOccurrenceKey: sourceLink.sourceOccurrenceKey,
+      occurrenceAnchors,
+      primaryRowSourceText: primaryRow,
+      duplicateRowSourceText: duplicateRow,
+      primaryVenueEvidence,
+      duplicateVenueEvidence,
+      targetVenueId: targetVenue._id,
+    };
+    const currentPendingReasons = Array.isArray(currentFields.moderationPendingReasons)
+      ? currentFields.moderationPendingReasons.map(String)
+      : [];
+    const currentSignals = Array.isArray(currentFields.moderationSignals)
+      ? currentFields.moderationSignals.map(String)
+      : [];
+    const nextPrimaryFields = {
+      ...currentFields,
+      title: nextTitle,
+      time: nextTime,
+      normalizedVenue: nextVenue,
+      artists: nextArtists,
+      description: nextDescription,
+      timeSource: "schedule_entry",
+      timeEvidenceText,
+      timeConfidence: 0.99,
+      timeStatus: "confirmed",
+      timeEvidenceKind: "start_time_stated",
+      moderationAutoApproved: false,
+      moderationAutoApproveRule: null,
+      moderationPendingReasons: [
+        ...new Set([...currentPendingReasons, "requires_human_approval"]),
+      ],
+      moderationSignals: [
+        ...new Set([...currentSignals, "requires_human_approval"]),
+      ],
+      humanReviewedStructuredSourcePolicyVersion:
+        HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION,
+      reviewedCrossPostScheduleFold: marker,
+    };
+    const nextPrimaryNormalizedFieldsJson = JSON.stringify(nextPrimaryFields);
+    const timePatch = normalizeEventTimeWritePatch({
+      time: nextTime,
+      timeSource: "schedule_entry",
+      timeEvidenceText,
+      timeConfidence: 0.99,
+      timeStatus: "confirmed",
+      timeEvidenceKind: "start_time_stated",
+    });
+    const primaryModerationNote =
+      `[reviewed_cross_post_schedule_primary:v${REVIEWED_CROSS_POST_SCHEDULE_FOLD_POLICY_VERSION}] ` +
+      `${operationId} - ${moderationNote}`;
+    const duplicateModerationNote =
+      `[reviewed_cross_post_schedule_duplicate:v${REVIEWED_CROSS_POST_SCHEDULE_FOLD_POLICY_VERSION}] ` +
+      `${operationId} - ${moderationNote}`;
+    const effectivePrimary: Doc<"events"> = {
+      ...primary,
+      ...timePatch,
+      ...venueFields,
+      title: nextTitle,
+      venue: nextVenue,
+      artists: nextArtists,
+      description: nextDescription,
+      normalizedFieldsJson: nextPrimaryNormalizedFieldsJson,
+      humanReviewedStructuredSourcePolicyVersion:
+        HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION,
+      reviewedAt,
+      reviewedBy: authorization.actor,
+      moderationNote: primaryModerationNote,
+    };
+    if (
+      !isSensibleEventTitleForApproval(effectivePrimary) ||
+      !hasHumanReviewableStructuredSourceAttestation(
+        nextPrimaryNormalizedFieldsJson,
+        effectivePrimary,
+      )
+    ) {
+      throw new Error("Reviewed cross-post schedule fold did not bind the representative.");
+    }
+    await assertPersistedServiceSourcePolicy(ctx, effectivePrimary, {
+      allowHumanReviewedStructured: true,
+    });
+    await assertApprovalCandidatePolicy(ctx, effectivePrimary, [primary._id, duplicate._id]);
+    if (!(await isCanonicallyGroundedApprovedEvent(ctx, effectivePrimary))) {
+      throw new Error("Reviewed cross-post schedule representative is not publicly grounded.");
+    }
+
+    const nextExpectedOccurrences = receipt.expectedOccurrences.map((occurrence, index) =>
+      index === occurrenceIndex
+        ? {
+            ...occurrence,
+            date: effectivePrimary.date,
+            time: effectivePrimary.time,
+            venue: effectivePrimary.venue,
+            title: effectivePrimary.title,
+            artists: effectivePrimary.artists,
+          }
+        : occurrence,
+    );
+    for (const satisfied of receipt.satisfiedOccurrences) {
+      const matchingExpected = nextExpectedOccurrences.filter(
+        (occurrence) => occurrence.key === satisfied.key,
+      );
+      const representative =
+        satisfied.eventId === primary._id
+          ? effectivePrimary
+          : await ctx.db.get(satisfied.eventId);
+      if (
+        matchingExpected.length !== 1 ||
+        !sourceOccurrenceRepresentativeMatchesExpected(
+          representative,
+          matchingExpected[0],
+        )
+      ) {
+        throw new Error("Reviewed cross-post schedule fold would alter a sibling receipt row.");
+      }
+    }
+
+    const duplicateNextFields = {
+      ...duplicateFields,
+      reviewedCrossPostScheduleDuplicate: marker,
+    };
+    const primaryUpdatedAt = nextEventUpdatedAt(primary.updatedAt, reviewedAt);
+    const duplicateUpdatedAt = nextEventUpdatedAt(duplicate.updatedAt, reviewedAt);
+    const primaryReceiptUpdatedAt = nextEventUpdatedAt(receipt.updatedAt, reviewedAt);
+    await ctx.db.patch(primary._id, {
+      ...timePatch,
+      ...venueFields,
+      title: nextTitle,
+      venue: nextVenue,
+      artists: nextArtists,
+      description: nextDescription,
+      normalizedFieldsJson: nextPrimaryNormalizedFieldsJson,
+      humanReviewedStructuredSourcePolicyVersion:
+        HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION,
+      reviewedAt,
+      reviewedBy: authorization.actor,
+      moderationNote: primaryModerationNote,
+      updatedAt: primaryUpdatedAt,
+    });
+    await ctx.db.patch(receipt._id, {
+      expectedOccurrences: nextExpectedOccurrences,
+      updatedAt: primaryReceiptUpdatedAt,
+    });
+    await ctx.db.patch(duplicate._id, {
+      status: "rejected",
+      normalizedFieldsJson: JSON.stringify(duplicateNextFields),
+      reviewedAt,
+      reviewedBy: authorization.actor,
+      moderationNote: duplicateModerationNote,
+      updatedAt: duplicateUpdatedAt,
+    });
+    const saveResult = await reassignSavedEventReferences(
+      ctx,
+      duplicate._id,
+      primary._id,
+    );
+    await writeEventAuditLog(ctx, primary._id, "reviewed_cross_post_schedule_folded", {
+      actor: authorization.actor,
+      note: moderationNote,
+      patch: {
+        ...marker,
+        previous: {
+          title: primary.title,
+          time: primary.time ?? null,
+          venue: primary.venue,
+          artists: primary.artists,
+          description: primary.description ?? null,
+        },
+        next: {
+          title: nextTitle,
+          time: nextTime,
+          venue: nextVenue,
+          artists: nextArtists,
+          description: nextDescription,
+        },
+        primaryReceiptId: receipt._id,
+        primaryReceiptBeforeUpdatedAt: receipt.updatedAt,
+        primaryReceiptAfterUpdatedAt: primaryReceiptUpdatedAt,
+        movedSaveCount: saveResult.movedCount,
+        dedupedSaveCount: saveResult.dedupedCount,
+      },
+    });
+    await writeEventAuditLog(
+      ctx,
+      duplicate._id,
+      "reviewed_cross_post_schedule_duplicate_rejected",
+      {
+        actor: authorization.actor,
+        note: moderationNote,
+        patch: {
+          ...marker,
+          duplicateSourceVersions: normalizedReviewedCrossPostSourceVersions(
+            duplicateSourceLinks,
+          ),
+        },
+      },
+    );
+    return {
+      operationId,
+      primaryId: primary._id,
+      primaryUpdatedAt,
+      primaryReceiptUpdatedAt,
+      duplicateId: duplicate._id,
+      duplicateUpdatedAt,
+      movedSaveCount: saveResult.movedCount,
+      dedupedSaveCount: saveResult.dedupedCount,
+    };
   },
 });
 

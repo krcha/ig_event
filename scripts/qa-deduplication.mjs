@@ -539,6 +539,7 @@ const kucicaZalazak = createEvent({
     splitEventIndex: 1,
     splitEventTotal: 2,
     splitSourceLine: "18h - 22h ZALAZAK NA KUCICI 18.03 WED",
+    rowSourceText: "18h - 22h ZALAZAK NA KUCICI 18.03 WED",
     sourceCaptionFromModel:
       "Wednesday Afterwork | 18.03 - Zalazak by @danijelcehranov\nWednesday Night | 18.03 - @discogirl.bg @posle.rs",
   }),
@@ -565,9 +566,223 @@ const kucicaSreda = createEvent({
     splitEventIndex: 2,
     splitEventTotal: 2,
     splitSourceLine: "22h - 05h SREDA NA KUCICI 18.03 WED",
+    rowSourceText: "22h - 05h SREDA NA KUCICI 18.03 WED",
     sourceCaptionFromModel:
       "Wednesday Afterwork | 18.03 - Zalazak by @danijelcehranov\nWednesday Night | 18.03 - @discogirl.bg @posle.rs",
   }),
+});
+
+const hobotnicaProgramListing = createEvent({
+  id: "hobotnica_program_listing",
+  title: "HOBOTNICA (Hobotnica)",
+  date: "2099-08-27",
+  time: "20:30",
+  venue: "Kolarac",
+  description: "Beldocs summer program at Kolarac.",
+  sourceCaption:
+    "Beldocs summer program: 18. avgust / FILM A; 21. avgust / FILM B; 27. avgust / HOBOTNICA.",
+  instagramPostUrl: "https://www.instagram.com/p/HOBOTNICA_PROGRAM/",
+  instagramPostId: "hobotnica_program_post",
+  normalizedFieldsJson: JSON.stringify({
+    normalizedDate: "2099-08-27",
+    normalizedVenue: "Kolarac",
+    rawVenue: "Kolarac",
+    titleUsedFallback: false,
+    multiEventSplitDetected: true,
+    multiEventSplitCount: 8,
+    splitEventIndex: 8,
+    splitEventTotal: 8,
+    splitSourceLine: "27. avgust | 20.30 / HOBOTNICA | 64'",
+    rowSourceText: "27. avgust | 20.30 / HOBOTNICA | 64'",
+    timeEvidenceVerified: true,
+  }),
+});
+
+const hobotnicaAnnouncement = createEvent({
+  id: "hobotnica_announcement",
+  title: "HOBOTNICA",
+  date: "2099-08-27",
+  time: "20:30",
+  venue: "Kolarac",
+  description: "Hobotnica screens at Kolarac.",
+  sourceCaption:
+    "Three screenings this week: FILM C, HOBOTNICA, and FILM D at Kolarac.",
+  instagramPostUrl: "https://www.instagram.com/p/HOBOTNICA_ANNOUNCEMENT/",
+  instagramPostId: "hobotnica_announcement_post",
+  normalizedFieldsJson: JSON.stringify({
+    normalizedDate: "2099-08-27",
+    normalizedVenue: "Kolarac",
+    rawVenue: "Kolarac",
+    titleUsedFallback: false,
+    multiEventSplitDetected: true,
+    multiEventSplitCount: 3,
+    splitEventIndex: 2,
+    splitEventTotal: 3,
+    splitSourceLine: "20:30 — HOBOTNICA — Kolarac",
+    rowSourceText: "20:30 — HOBOTNICA — Kolarac",
+    timeEvidenceVerified: true,
+  }),
+});
+
+function createOverlappingProgramRow({
+  id,
+  title,
+  postId,
+  postUrl,
+  sourceCaption,
+  splitEventIndex,
+  rowSourceText,
+}) {
+  return createEvent({
+    id,
+    title,
+    date: "2099-09-01",
+    time: "19:00",
+    venue: "Program Hall",
+    description: sourceCaption,
+    sourceCaption,
+    instagramPostUrl: postUrl,
+    instagramPostId: postId,
+    normalizedFieldsJson: JSON.stringify({
+      normalizedDate: "2099-09-01",
+      normalizedVenue: "Program Hall",
+      rawVenue: "Program Hall",
+      titleUsedFallback: false,
+      multiEventSplitDetected: true,
+      multiEventSplitCount: 2,
+      splitEventIndex,
+      splitEventTotal: 2,
+      splitSourceLine: rowSourceText,
+      rowSourceText,
+      timeEvidenceVerified: true,
+    }),
+  });
+}
+
+const overlappingXyCaption =
+  "Tonight at Program Hall: XAVIER at 19:00, followed by YARA at 19:00.";
+const overlappingXzCaption =
+  "Tonight at Program Hall: XAVIER at 19:00, followed by ZORA at 19:00.";
+const overlappingProgramXFromXy = createOverlappingProgramRow({
+  id: "overlapping_program_x_xy",
+  title: "XAVIER",
+  postId: "overlapping_xy_post",
+  postUrl: "https://www.instagram.com/p/OVERLAPPING_XY/",
+  sourceCaption: overlappingXyCaption,
+  splitEventIndex: 1,
+  rowSourceText: "19:00 — XAVIER",
+});
+const overlappingProgramY = createOverlappingProgramRow({
+  id: "overlapping_program_y",
+  title: "YARA",
+  postId: "overlapping_xy_post",
+  postUrl: "https://www.instagram.com/p/OVERLAPPING_XY/",
+  sourceCaption: overlappingXyCaption,
+  splitEventIndex: 2,
+  rowSourceText: "19:00 — YARA",
+});
+const overlappingProgramXFromXz = createOverlappingProgramRow({
+  id: "overlapping_program_x_xz",
+  title: "XAVIER",
+  postId: "overlapping_xz_post",
+  postUrl: "https://www.instagram.com/p/OVERLAPPING_XZ/",
+  sourceCaption: overlappingXzCaption,
+  splitEventIndex: 1,
+  rowSourceText: "19:00 — XAVIER",
+});
+const overlappingProgramZ = createOverlappingProgramRow({
+  id: "overlapping_program_z",
+  title: "ZORA",
+  postId: "overlapping_xz_post",
+  postUrl: "https://www.instagram.com/p/OVERLAPPING_XZ/",
+  sourceCaption: overlappingXzCaption,
+  splitEventIndex: 2,
+  rowSourceText: "19:00 — ZORA",
+});
+
+const missingRowEvidence = createEvent({
+  id: "missing_row_evidence",
+  title: "NOCTURNE SIGNAL",
+  date: "2099-09-02",
+  time: "21:00",
+  venue: "Evidence Hall",
+  sourceCaption: "NOCTURNE SIGNAL and another program entry at Evidence Hall.",
+  instagramPostUrl: "https://www.instagram.com/p/MISSING_ROW_EVIDENCE/",
+  instagramPostId: "missing_row_evidence_post",
+  normalizedFieldsJson: JSON.stringify({
+    normalizedDate: "2099-09-02",
+    normalizedVenue: "Evidence Hall",
+    rawVenue: "Evidence Hall",
+    titleUsedFallback: false,
+    multiEventSplitDetected: true,
+    multiEventSplitCount: 2,
+    splitEventIndex: 1,
+    splitEventTotal: 2,
+    timeEvidenceVerified: true,
+  }),
+});
+
+const presentRowEvidence = createEvent({
+  id: "present_row_evidence",
+  title: "NOCTURNE SIGNAL",
+  date: "2099-09-02",
+  time: "21:00",
+  venue: "Evidence Hall",
+  sourceCaption: "NOCTURNE SIGNAL and a different program entry at Evidence Hall.",
+  instagramPostUrl: "https://www.instagram.com/p/PRESENT_ROW_EVIDENCE/",
+  instagramPostId: "present_row_evidence_post",
+  normalizedFieldsJson: JSON.stringify({
+    normalizedDate: "2099-09-02",
+    normalizedVenue: "Evidence Hall",
+    rawVenue: "Evidence Hall",
+    titleUsedFallback: false,
+    multiEventSplitDetected: true,
+    multiEventSplitCount: 2,
+    splitEventIndex: 1,
+    splitEventTotal: 2,
+    splitSourceLine: "21:00 — NOCTURNE SIGNAL",
+    rowSourceText: "21:00 — NOCTURNE SIGNAL",
+    timeEvidenceVerified: true,
+  }),
+});
+
+function createVerifiedTimeProgramRow({ id, time, postId }) {
+  const rowSourceText = `${time} — MIDNIGHT SIGNAL`;
+  return createEvent({
+    id,
+    title: "MIDNIGHT SIGNAL",
+    date: "2099-09-03",
+    time,
+    venue: "Clock Hall",
+    sourceCaption: `MIDNIGHT SIGNAL at ${time}, plus another Clock Hall event.`,
+    instagramPostUrl: `https://www.instagram.com/p/${postId}/`,
+    instagramPostId: postId,
+    normalizedFieldsJson: JSON.stringify({
+      normalizedDate: "2099-09-03",
+      normalizedVenue: "Clock Hall",
+      rawVenue: "Clock Hall",
+      titleUsedFallback: false,
+      multiEventSplitDetected: true,
+      multiEventSplitCount: 2,
+      splitEventIndex: 1,
+      splitEventTotal: 2,
+      splitSourceLine: rowSourceText,
+      rowSourceText,
+      timeStatus: "confirmed",
+      timeEvidenceVerified: true,
+    }),
+  });
+}
+
+const verifiedTimeAtEight = createVerifiedTimeProgramRow({
+  id: "verified_time_at_eight",
+  time: "20:00",
+  postId: "verified_time_eight_post",
+});
+const verifiedTimeAtTen = createVerifiedTimeProgramRow({
+  id: "verified_time_at_ten",
+  time: "22:00",
+  postId: "verified_time_ten_post",
 });
 
 const groups = buildApprovedEventAutoCleanupGroups([
@@ -593,6 +808,16 @@ const groups = buildApprovedEventAutoCleanupGroups([
   tavanScheduleEntry,
   kucicaZalazak,
   kucicaSreda,
+  hobotnicaProgramListing,
+  hobotnicaAnnouncement,
+  overlappingProgramXFromXy,
+  overlappingProgramY,
+  overlappingProgramXFromXz,
+  overlappingProgramZ,
+  missingRowEvidence,
+  presentRowEvidence,
+  verifiedTimeAtEight,
+  verifiedTimeAtTen,
 ]);
 
 const groupedIdSets = groups.map(
@@ -682,6 +907,49 @@ assert(
   "Expected two distinct same-post Kucica schedule rows on the same date to remain visible.",
 );
 
+assert(
+  groupedIdSets.some(
+    (ids) =>
+      ids.has(hobotnicaProgramListing.id) &&
+      ids.has(hobotnicaAnnouncement.id) &&
+      ids.size === 2,
+  ),
+  "Expected HOBOTNICA title variants from different posts to match even when their row indexes differ.",
+);
+
+assert(
+  groupedIdSets.some(
+    (ids) =>
+      ids.has(overlappingProgramXFromXy.id) &&
+      ids.has(overlappingProgramXFromXz.id) &&
+      ids.size === 2,
+  ),
+  "Expected the shared X occurrence from overlapping X+Y and X+Z programs to match.",
+);
+
+assert(
+  !groupedIdSets.some(
+    (ids) =>
+      ids.has(overlappingProgramY.id) ||
+      ids.has(overlappingProgramZ.id),
+  ),
+  "Expected Y and Z to stay distinct despite their full captions both mentioning X.",
+);
+
+assert(
+  !groupedIdSets.some(
+    (ids) => ids.has(missingRowEvidence.id) || ids.has(presentRowEvidence.id),
+  ),
+  "Expected cross-post multi-event comparison to fail closed when row-local evidence is missing.",
+);
+
+assert(
+  !groupedIdSets.some(
+    (ids) => ids.has(verifiedTimeAtEight.id) || ids.has(verifiedTimeAtTen.id),
+  ),
+  "Expected different verified start times to block a cross-post multi-event match.",
+);
+
 const illusionsGroup = groups.find((group) =>
   [group.primaryEventId, ...group.duplicateEventIds].includes(illusionsPress.id),
 );
@@ -696,5 +964,5 @@ assert(
 );
 
 console.log(
-  "QA passed: duplicate cleanup groups catch schedule duplicates, venue variants, acronym aliases, and embedded event titles without collapsing unrelated same-night entries.",
+  "QA passed: duplicate cleanup groups use occurrence-local evidence across multi-event posts while preserving distinct schedule rows and verified time conflicts.",
 );

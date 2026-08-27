@@ -7,6 +7,7 @@ export type CanonicalVenueRecord = {
 
 export type VenueSource =
   | "evidence_handle"
+  | "evidence_name"
   | "handle_map"
   | "location_name"
   | "model"
@@ -190,6 +191,50 @@ const VENUE_ALIAS_RULES: Array<{
   },
   {
     aliases: [
+      "Chillton Bašta",
+      "Chillton Bašti",
+      "Chillton Bashta",
+      "Chillton Bashti",
+      "Čilton Bašta",
+      "Čilton Bašti",
+    ],
+    canonicalHandle: "chillton_bashta",
+  },
+  {
+    aliases: [
+      "Dub Gastro Pub",
+      "Dub Gastro",
+    ],
+    canonicalHandle: "dubgastropub",
+  },
+  {
+    aliases: [
+      "Klub Studenata Tehnike KST",
+      "Klub Studenata Tehnike",
+      "KST Beograd",
+      "KST",
+    ],
+    canonicalHandle: "klubstudenatatehnike",
+  },
+  {
+    aliases: [
+      "Freestyler",
+      "Freestyler Belgrade",
+      "Splav Freestyler",
+    ],
+    canonicalHandle: "freestylerbelgrade_official",
+  },
+  {
+    aliases: [
+      "Kolarac",
+      "Art bioskop Kolarac",
+      "Kolarac Art Bioskop",
+      "Bioskop Kolarac",
+    ],
+    canonicalHandle: "kolarac_art_bioskop",
+  },
+  {
+    aliases: [
       "Sinnerman",
       "SinnerMan",
       "Sinnerman Jazz",
@@ -225,6 +270,7 @@ const VENUE_ALIAS_RULES: Array<{
       "Amphitheater in front of the Museum of Yugoslav History",
       "Muzej istorije Jugoslavije",
       "Museum of Yugoslav History",
+      "Museum of Yugoslavia",
     ],
     canonicalHandle: "muzej_jugoslavije",
   },
@@ -909,6 +955,149 @@ function findUniqueCanonicalVenueHandleMention(
     : { kind: "none" };
 }
 
+type VenueNameEvidenceMatch = {
+  entry: VenueNameEntry;
+  evidenceIndex: number;
+  startToken: number;
+  endToken: number;
+};
+
+function stripProfileReferencesFromVenueNameEvidence(value: string): string {
+  return value
+    .replace(/\b(?:https?:\/\/|www\.)\S+/giu, " ")
+    .replace(
+      /(^|[^\p{L}\p{N}._])[@#][\p{L}\p{N}._]+/gu,
+      "$1",
+    );
+}
+
+function findExactTokenPhraseStarts(
+  evidenceTokens: string[],
+  venueTokens: string[],
+): number[] {
+  if (venueTokens.length === 0 || venueTokens.length > evidenceTokens.length) {
+    return [];
+  }
+
+  const starts: number[] = [];
+  const lastStart = evidenceTokens.length - venueTokens.length;
+  for (let start = 0; start <= lastStart; start += 1) {
+    if (
+      venueTokens.every(
+        (token, offset) => evidenceTokens[start + offset] === token,
+      )
+    ) {
+      starts.push(start);
+    }
+  }
+  return starts;
+}
+
+function hasShortVenueNameContext(
+  evidenceTokens: string[],
+  startToken: number,
+  venueTokens: string[],
+): boolean {
+  const compactName = venueTokens.join("");
+  if (venueTokens.length !== 1 || compactName.length > 4) {
+    return true;
+  }
+  const nearbyPrefix = evidenceTokens.slice(Math.max(0, startToken - 2), startToken);
+  return nearbyPrefix.some((token) =>
+    new Set([
+      "at",
+      "basta",
+      "club",
+      "klub",
+      "location",
+      "lokacija",
+      "na",
+      "u",
+      "venue",
+    ]).has(token),
+  );
+}
+
+function findUniqueCanonicalVenueNameMention(
+  evidenceTexts: Array<string | null | undefined>,
+  canonicalVenueNamesByHandle: CanonicalVenueMap,
+  staticVenueByHandle: StaticVenueMap,
+  handleVenueNamesByHandle: CanonicalVenueMap,
+  canonicalVenueAliasesByHandle: CanonicalVenueAliasesByHandle,
+):
+  | { kind: "none" }
+  | { kind: "ambiguous" }
+  | { kind: "unique"; venue: string } {
+  const entries = buildCanonicalVenueEntries(
+    canonicalVenueNamesByHandle,
+    staticVenueByHandle,
+    handleVenueNamesByHandle,
+    canonicalVenueAliasesByHandle,
+  );
+  const matches: VenueNameEvidenceMatch[] = [];
+
+  for (const [evidenceIndex, rawEvidence] of evidenceTexts.entries()) {
+    const evidence = stripProfileReferencesFromVenueNameEvidence(
+      normalizeString(rawEvidence),
+    );
+    const evidenceTokens = toSearchableText(evidence).split(" ").filter(Boolean);
+    if (evidenceTokens.length === 0) continue;
+
+    for (const entry of entries) {
+      const normalizedName = toSearchableText(entry.name);
+      const compactName = normalizedName.replace(/\s+/gu, "");
+      if (compactName.length < 3 || !/[a-z]/u.test(compactName)) {
+        continue;
+      }
+      const venueTokens = normalizedName.split(" ").filter(Boolean);
+      for (const startToken of findExactTokenPhraseStarts(
+        evidenceTokens,
+        venueTokens,
+      )) {
+        if (!hasShortVenueNameContext(evidenceTokens, startToken, venueTokens)) {
+          continue;
+        }
+        matches.push({
+          entry,
+          evidenceIndex,
+          startToken,
+          endToken: startToken + venueTokens.length,
+        });
+      }
+    }
+  }
+
+  if (matches.length === 0) return { kind: "none" };
+
+  // Prefer the longest exact phrase at a given occurrence. This lets a precise
+  // name such as "Chillton Bašta" win over the separately configured
+  // "Chillton" alias, while a second standalone "Chillton" occurrence still
+  // makes the evidence ambiguous and therefore fails closed.
+  const unshadowedMatches = matches.filter((match) =>
+    !matches.some(
+      (other) =>
+        other.evidenceIndex === match.evidenceIndex &&
+        other.startToken <= match.startToken &&
+        other.endToken >= match.endToken &&
+        other.endToken - other.startToken > match.endToken - match.startToken,
+    ),
+  );
+  const uniqueEntry = findUniqueVenueEntry(
+    unshadowedMatches.map((match) => match.entry),
+  );
+  if (!uniqueEntry) return { kind: "ambiguous" };
+
+  return {
+    kind: "unique",
+    venue: getDisplayVenueNameForEntry(
+      uniqueEntry,
+      canonicalVenueNamesByHandle,
+      staticVenueByHandle,
+      handleVenueNamesByHandle,
+    ),
+  };
+}
+
 export function normalizeVenueFromEvidence(
   input: NormalizeVenueInput,
 ): VenueNormalization {
@@ -984,6 +1173,23 @@ export function normalizeVenueFromEvidence(
       venue: canonicalExplicitVenue,
       source: explicitVenue.source,
       wasFallback: explicitVenue.wasFallback,
+      rawModelVenue: modelVenue,
+      rawLocationName: locationName,
+    };
+  }
+
+  const canonicalNameMention = findUniqueCanonicalVenueNameMention(
+    input.immutableEvidenceTexts ?? [],
+    input.canonicalVenueNamesByHandle,
+    staticVenueByHandle,
+    handleVenueNamesByHandle,
+    canonicalVenueAliasesByHandle,
+  );
+  if (canonicalNameMention.kind === "unique") {
+    return {
+      venue: canonicalNameMention.venue,
+      source: "evidence_name",
+      wasFallback: false,
       rawModelVenue: modelVenue,
       rawLocationName: locationName,
     };
