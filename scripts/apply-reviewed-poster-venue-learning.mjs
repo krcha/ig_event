@@ -27,6 +27,12 @@ const INVENTORY_PAGE_SIZE = 200;
 const MAX_INVENTORY_PAGES = 64;
 const MAX_PLAN_BYTES = 8 * 1024 * 1024;
 const HASH_PATTERN = /^[a-f0-9]{64}$/u;
+const READ_QUERY_MAX_ATTEMPTS = 3;
+const READ_QUERY_RETRY_BASE_DELAY_MS = 150;
+const TRANSIENT_QUERY_ERROR_PATTERN =
+  /\b(?:server error|terminated|network(?: error)?|socket(?: hang up)?|fetch (?:failed|error)|timeout|timed out|aborterror|aborted|connection (?:closed|reset|refused|terminated)|temporarily unavailable|service unavailable|gateway timeout|too many requests|rate limit(?:ed)?|econnreset|econnrefused|ehostunreach|enetunreach|enotfound|eai_again|etimedout|epipe|und_err_[a-z_]+)\b/iu;
+const DETERMINISTIC_QUERY_ERROR_PATTERN =
+  /\b(?:argumentvalidationerror|convexerror|unauthorized|forbidden|permission denied|uncaught (?:error|typeerror|rangeerror|referenceerror)|invalid (?:argument|value|id|cursor)|does not match|changed after plan review)\b/iu;
 const CONFIG_CONFIRMATION = "APPLY_EVENT_ZEKA_REVIEWED_CONFIG_2026_08_27";
 const EVENT_CONFIRMATION = "APPLY_EVENT_ZEKA_REVIEWED_EVENTS_2026_08_27";
 const REVIEWED_VENUE_NOTE =
@@ -346,6 +352,57 @@ function exactJson(left, right) {
   return canonicalJson(left) === canonicalJson(right);
 }
 
+function queryErrorText(error) {
+  const parts = [];
+  let current = error;
+  for (let depth = 0; current && depth < 4; depth += 1) {
+    if (typeof current === "string") {
+      parts.push(current);
+      break;
+    }
+    if (typeof current !== "object") {
+      parts.push(String(current));
+      break;
+    }
+    for (const field of ["name", "code", "message"]) {
+      if (typeof current[field] === "string") parts.push(current[field]);
+    }
+    current = current.cause;
+  }
+  return parts.join(" ");
+}
+
+function isTransientQueryError(error) {
+  const text = queryErrorText(error);
+  if (!text || DETERMINISTIC_QUERY_ERROR_PATTERN.test(text)) return false;
+  return TRANSIENT_QUERY_ERROR_PATTERN.test(text);
+}
+
+function waitForRetry(delayMs) {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function queryWithTransientRetry(client, functionName, args) {
+  let lastError;
+  for (let attempt = 1; attempt <= READ_QUERY_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await client.query(functionName, args);
+    } catch (error) {
+      lastError = error;
+      if (
+        attempt >= READ_QUERY_MAX_ATTEMPTS ||
+        !isTransientQueryError(error)
+      ) {
+        throw error;
+      }
+      await waitForRetry(
+        READ_QUERY_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1),
+      );
+    }
+  }
+  throw lastError;
+}
+
 function normalizeText(value) {
   return String(value ?? "")
     .normalize("NFKC")
@@ -624,7 +681,9 @@ function planEnvelope(plan) {
 }
 
 async function loadVenues(client, serviceSecret) {
-  const venues = await client.query(API.venues, { serviceSecret });
+  const venues = await queryWithTransientRetry(client, API.venues, {
+    serviceSecret,
+  });
   return new Map(venues.map((venue) => [venue._id, venue]));
 }
 
@@ -633,7 +692,7 @@ async function loadSources(client, serviceSecret) {
     await Promise.all(
       SOURCE_SPECS.map(async (spec) => [
         spec.handle,
-        await client.query(API.sourceByHandle, {
+        await queryWithTransientRetry(client, API.sourceByHandle, {
           handle: spec.handle,
           serviceSecret,
         }),
@@ -866,7 +925,7 @@ async function applyConfigOperation(client, serviceSecret, operation) {
     return { key: operation.key, result: "applied" };
   }
   if (operation.kind === "source_config") {
-    const current = await client.query(API.sourceByHandle, {
+    const current = await queryWithTransientRetry(client, API.sourceByHandle, {
       handle: operation.before.handle,
       serviceSecret,
     });
@@ -882,7 +941,7 @@ async function applyConfigOperation(client, serviceSecret, operation) {
       ...operation.mutation.args,
       serviceSecret,
     });
-    const after = await client.query(API.sourceByHandle, {
+    const after = await queryWithTransientRetry(client, API.sourceByHandle, {
       handle: operation.before.handle,
       serviceSecret,
     });
@@ -897,7 +956,7 @@ async function applyConfigOperation(client, serviceSecret, operation) {
 
 async function loadEventsByIds(client, serviceSecret, ids) {
   const uniqueIds = [...new Set(ids)];
-  const events = await client.query(API.eventsByIds, {
+  const events = await queryWithTransientRetry(client, API.eventsByIds, {
     ids: uniqueIds,
     serviceSecret,
   });
@@ -962,11 +1021,15 @@ async function loadReviewedApprovedInventory(client, serviceSecret) {
       pageCount < MAX_INVENTORY_PAGES,
       "Approved-event inventory exceeded its page cap.",
     );
-    const page = await client.query(API.eventsByStatusPaginated, {
-      status: "approved",
-      paginationOpts: { numItems: INVENTORY_PAGE_SIZE, cursor },
-      serviceSecret,
-    });
+    const page = await queryWithTransientRetry(
+      client,
+      API.eventsByStatusPaginated,
+      {
+        status: "approved",
+        paginationOpts: { numItems: INVENTORY_PAGE_SIZE, cursor },
+        serviceSecret,
+      },
+    );
     pageCount += 1;
     assert(
       page && Array.isArray(page.page) && typeof page.isDone === "boolean",
@@ -1034,7 +1097,7 @@ function inventoryAttestation(inventory) {
 }
 
 async function correctionContext(client, serviceSecret, id) {
-  const context = await client.query(API.correctionContext, {
+  const context = await queryWithTransientRetry(client, API.correctionContext, {
     id,
     serviceSecret,
   });
@@ -1582,7 +1645,7 @@ function markerMatches(event, expected) {
 }
 
 async function receiptMatches(client, serviceSecret, expected) {
-  const receipt = await client.query(API.receipt, {
+  const receipt = await queryWithTransientRetry(client, API.receipt, {
     sourceIdentity: expected.sourceIdentity,
     serviceSecret,
   });

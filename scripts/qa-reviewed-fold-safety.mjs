@@ -1492,6 +1492,80 @@ async function qaSourceContracts() {
     /exactJson\(contextProjection\(context\), expectedPreimage\)/u,
     "Reviewed event-operation admission must use the kind-aware expected preimage.",
   );
+
+  const queryRetryStart = operatorSource.indexOf(
+    "const READ_QUERY_MAX_ATTEMPTS",
+  );
+  const queryRetryEnd = operatorSource.indexOf(
+    "function normalizeText",
+    queryRetryStart,
+  );
+  assert.ok(
+    queryRetryStart >= 0 && queryRetryEnd > queryRetryStart,
+    "The reviewed operator must retain one bounded read-query retry boundary.",
+  );
+  const queryRetrySource = operatorSource.slice(
+    queryRetryStart,
+    queryRetryEnd,
+  );
+  assert.equal(
+    (operatorSource.match(/client\.query\(/gu) ?? []).length,
+    1,
+    "Every Convex query must pass through the centralized retry helper.",
+  );
+  assert.equal(
+    (operatorSource.match(/\bqueryWithTransientRetry\(/gu) ?? []).length,
+    9,
+    "The retry helper must cover all eight reviewed-operator query sites.",
+  );
+  assert.match(queryRetrySource, /READ_QUERY_MAX_ATTEMPTS = 3/u);
+  assert.match(queryRetrySource, /READ_QUERY_RETRY_BASE_DELAY_MS = 150/u);
+  for (const transientSignal of [
+    "server error",
+    "terminated",
+    "network",
+    "socket",
+    "fetch",
+    "timeout",
+    "aborterror",
+    "aborted",
+  ]) {
+    assert.match(
+      queryRetrySource,
+      new RegExp(transientSignal, "iu"),
+      `Missing transient query signal ${transientSignal}.`,
+    );
+  }
+  assert.match(
+    queryRetrySource,
+    /if \(!text \|\| DETERMINISTIC_QUERY_ERROR_PATTERN\.test\(text\)\) return false;\s*return TRANSIENT_QUERY_ERROR_PATTERN\.test\(text\);/u,
+    "Deterministic Convex application errors must always dominate transient-looking text.",
+  );
+  assert.match(
+    queryRetrySource,
+    /attempt >= READ_QUERY_MAX_ATTEMPTS/u,
+    "Read-query retries must stop at the exact attempt cap.",
+  );
+  assert.match(
+    queryRetrySource,
+    /READ_QUERY_RETRY_BASE_DELAY_MS \* 2 \*\* \(attempt - 1\)/u,
+    "Read-query retries must retain short bounded backoff.",
+  );
+  assert.doesNotMatch(
+    queryRetrySource,
+    /client\.mutation\(/u,
+    "The read-query retry helper must never invoke mutations.",
+  );
+  assert.equal(
+    (operatorSource.match(/client\.mutation\(/gu) ?? []).length,
+    3,
+    "The three reviewed mutation sites must remain direct and single-shot.",
+  );
+  assert.doesNotMatch(
+    operatorSource,
+    /(?:retry\w*mutation|mutation\w*retry)/iu,
+    "Reviewed mutations must never acquire retry semantics.",
+  );
 }
 
 try {
