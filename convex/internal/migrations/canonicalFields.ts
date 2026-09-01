@@ -1,3 +1,4 @@
+import type { Doc } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
 import { buildEventOccurrenceIndexPatch } from "../../sourceOccurrences";
 import {
@@ -12,6 +13,71 @@ import {
   type EventDomainMigrationBatchArgs,
   type EventDomainMigrationBatchCounts,
 } from "./eventDomainShared";
+
+const LEGACY_INSTAGRAM_PROFILE_SNAPSHOT_CUTOFF_MS = Date.UTC(
+  2026,
+  7,
+  1,
+);
+const LEGACY_INSTAGRAM_PROFILE_SNAPSHOT_REASON =
+  "legacy_instagram_profile_snapshot";
+const LEGACY_INSTAGRAM_PROFILE_SNAPSHOT_KEYS = [
+  "_creationTime",
+  "_id",
+  "blocksPaidFetch",
+  "createdAt",
+  "handle",
+  "imageUrls",
+  "instagramPostUrl",
+  "lastProcessedAt",
+  "postId",
+  "processingAttempts",
+  "processingOutcome",
+  "processingStatus",
+  "sourceKey",
+  "updatedAt",
+  "username",
+] as const;
+
+/**
+ * Before canonical post-only admission, one retired discovery path persisted
+ * bare Instagram profile responses in scrapedPosts. They contain no post
+ * media, caption, timestamp, or shortcode and were already terminally
+ * classified as non-events. Keep those historical rows untouched and
+ * auditable; every other malformed source URL remains a blocking mismatch.
+ */
+function isLegacyInstagramProfileSnapshot(
+  sourceDocument: Doc<"scrapedPosts">,
+): boolean {
+  const keys = Object.keys(sourceDocument).sort();
+  const expectedKeys = [...LEGACY_INSTAGRAM_PROFILE_SNAPSHOT_KEYS].sort();
+  if (
+    keys.length !== expectedKeys.length ||
+    keys.some((key, index) => key !== expectedKeys[index])
+  ) {
+    return false;
+  }
+
+  const handle = sourceDocument.handle;
+  return (
+    /^[a-z0-9._]{1,30}$/u.test(handle) &&
+    sourceDocument.username === handle &&
+    /^\d{1,32}$/u.test(sourceDocument.postId) &&
+    sourceDocument.instagramPostUrl ===
+      `https://www.instagram.com/${handle}` &&
+    sourceDocument.sourceKey === `${handle}:${sourceDocument.postId}` &&
+    Array.isArray(sourceDocument.imageUrls) &&
+    sourceDocument.imageUrls.length === 0 &&
+    sourceDocument.blocksPaidFetch === false &&
+    sourceDocument.processingStatus === "completed" &&
+    sourceDocument.processingOutcome === "terminal_no_event" &&
+    sourceDocument.processingAttempts === 1 &&
+    Number.isFinite(sourceDocument.createdAt) &&
+    sourceDocument.createdAt < LEGACY_INSTAGRAM_PROFILE_SNAPSHOT_CUTOFF_MS &&
+    Number.isFinite(sourceDocument.updatedAt) &&
+    Number.isFinite(sourceDocument.lastProcessedAt)
+  );
+}
 
 /** Backfills immutable canonical URL identity on saved Instagram documents. */
 export async function backfillSourceDocumentCanonicalUrlsBatchHandler(
@@ -29,14 +95,21 @@ export async function backfillSourceDocumentCanonicalUrlsBatchHandler(
   const counts: EventDomainMigrationBatchCounts = {
     mismatchCount: 0,
     scannedCount: page.page.length,
+    skippedCount: 0,
     updatedCount: 0,
   };
+  let legacyInstagramProfileSnapshotCount = 0;
   for (const sourceDocument of page.page) {
     const canonical = canonicalizeSourceUrl(
       "instagram",
       sourceDocument.instagramPostUrl,
     );
     if (!canonical.ok) {
+      if (isLegacyInstagramProfileSnapshot(sourceDocument)) {
+        counts.skippedCount! += 1;
+        legacyInstagramProfileSnapshotCount += 1;
+        continue;
+      }
       counts.mismatchCount += 1;
       continue;
     }
@@ -56,12 +129,20 @@ export async function backfillSourceDocumentCanonicalUrlsBatchHandler(
     counts,
     ctx,
     cursor: page.continueCursor,
+    detailJson: JSON.stringify({
+      legacyProfileSnapshotPolicy:
+        "exact-pre-2026-08-instagram-profile-snapshot-v1",
+    }),
     dryRun,
     inputCursor: args.cursor ?? null,
     isDone: page.isDone,
     key: "source-document-canonical-url-v1",
     phase: "canonical_source_urls",
     restart: args.restart ?? false,
+    skipReasonCounts: {
+      [LEGACY_INSTAGRAM_PROFILE_SNAPSHOT_REASON]:
+        legacyInstagramProfileSnapshotCount,
+    },
   });
   return {
     ...counts,

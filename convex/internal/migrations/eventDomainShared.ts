@@ -60,6 +60,7 @@ export async function recordEventDomainMigrationProgress(options: {
   key: string;
   phase: string;
   restart: boolean;
+  skipReasonCounts?: Readonly<Record<string, number>>;
   topologyEpoch?: number;
 }): Promise<void> {
   if (options.dryRun) return;
@@ -144,6 +145,54 @@ export async function recordEventDomainMigrationProgress(options: {
   const nextQuarantinedLineageMarkerCount =
     previousQuarantinedLineageMarkerCount +
     (options.counts.quarantinedLineageMarkerCount ?? 0);
+  const previousSkipReasonCounts: Record<string, number> = {};
+  if (existing && !options.restart && existing.skipReasonCountsJson) {
+    const parsed = JSON.parse(existing.skipReasonCountsJson) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      for (const [reason, count] of Object.entries(parsed)) {
+        if (
+          typeof count !== "number" ||
+          !Number.isSafeInteger(count) ||
+          count < 0
+        ) {
+          throw new Error("Migration skip-reason state is invalid.");
+        }
+        previousSkipReasonCounts[reason] = count;
+      }
+    } else {
+      throw new Error("Migration skip-reason state is invalid.");
+    }
+  }
+  const batchSkipReasonCounts = options.skipReasonCounts ?? {
+    audited_lineage_requires_reattestation:
+      options.counts.quarantinedLineageMarkerCount ?? 0,
+  };
+  let classifiedBatchSkipCount = 0;
+  for (const [reason, count] of Object.entries(batchSkipReasonCounts)) {
+    if (
+      !reason.trim() ||
+      !Number.isSafeInteger(count) ||
+      count < 0
+    ) {
+      throw new Error("Migration batch skip-reason counts are invalid.");
+    }
+    classifiedBatchSkipCount += count;
+    previousSkipReasonCounts[reason] =
+      (previousSkipReasonCounts[reason] ?? 0) + count;
+  }
+  if (
+    options.skipReasonCounts !== undefined &&
+    classifiedBatchSkipCount !== batchSkippedCount
+  ) {
+    throw new Error(
+      "Migration batch skip-reason counts must classify every skipped row.",
+    );
+  }
+  const nextSkipReasonCounts = Object.fromEntries(
+    Object.entries(previousSkipReasonCounts).sort(([left], [right]) =>
+      left.localeCompare(right),
+    ),
+  );
   const values = {
     attempt: existing ? (existing.attempt ?? 1) + (options.restart ? 1 : 0) : 1,
     ...(options.detailJson ? { auditDetailsJson: options.detailJson } : {}),
@@ -158,9 +207,7 @@ export async function recordEventDomainMigrationProgress(options: {
     quarantinedLineageMarkerCount: nextQuarantinedLineageMarkerCount,
     scannedCount: previousScannedCount + options.counts.scannedCount,
     skippedCount: nextSkippedCount,
-    skipReasonCountsJson: JSON.stringify({
-      audited_lineage_requires_reattestation: nextQuarantinedLineageMarkerCount,
-    }),
+    skipReasonCountsJson: JSON.stringify(nextSkipReasonCounts),
     ...(options.topologyEpoch !== undefined
       ? { topologyEpoch: options.topologyEpoch }
       : {}),

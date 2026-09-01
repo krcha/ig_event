@@ -592,6 +592,131 @@ function makeCanonicalPayloadMigrationState() {
   });
 }
 
+function legacyInstagramProfileSnapshotFixture(overrides = {}) {
+  const handle = overrides.handle ?? "legacy_profile";
+  const postId = overrides.postId ?? "123456789";
+  return {
+    _creationTime: 1_783_144_930_135,
+    _id: overrides._id ?? "legacy_profile_snapshot",
+    blocksPaidFetch: false,
+    createdAt: 1_783_144_930_135,
+    handle,
+    imageUrls: [],
+    instagramPostUrl: `https://www.instagram.com/${handle}`,
+    lastProcessedAt: 1_784_353_696_274,
+    postId,
+    processingAttempts: 1,
+    processingOutcome: "terminal_no_event",
+    processingStatus: "completed",
+    sourceKey: `${handle}:${postId}`,
+    updatedAt: 1_784_353_696_274,
+    username: handle,
+    ...overrides,
+  };
+}
+
+{
+  const firstLegacySnapshot = legacyInstagramProfileSnapshotFixture({
+    _id: "legacy_profile_snapshot_1",
+  });
+  const secondLegacySnapshot = legacyInstagramProfileSnapshotFixture({
+    _id: "legacy_profile_snapshot_2",
+    handle: "legacy.profile.two",
+    instagramPostUrl: "https://www.instagram.com/legacy.profile.two",
+    postId: "987654321",
+    sourceKey: "legacy.profile.two:987654321",
+    username: "legacy.profile.two",
+  });
+  const state = makeDb({
+    scrapedPosts: [firstLegacySnapshot, secondLegacySnapshot],
+  });
+  const dryRun = await backfillSourceDocumentCanonicalUrlsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 1 },
+  );
+  assert.equal(dryRun.mismatchCount, 0);
+  assert.equal(dryRun.skippedCount, 1);
+  assert.equal(dryRun.updatedCount, 0);
+  assert.equal(state.tables.eventDomainMigrationState.size, 0);
+
+  const firstPage = await backfillSourceDocumentCanonicalUrlsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 1 },
+  );
+  assert.equal(firstPage.isDone, false);
+  assert.equal(firstPage.skippedCount, 1);
+  const secondPage = await backfillSourceDocumentCanonicalUrlsBatch._handler(
+    { db: state.db },
+    { cursor: firstPage.continueCursor, dryRun: false, limit: 1 },
+  );
+  assert.equal(secondPage.isDone, true);
+  assert.equal(secondPage.skippedCount, 1);
+  const progress = [
+    ...state.tables.eventDomainMigrationState.values(),
+  ][0];
+  assert.ok(progress.completedAt);
+  assert.equal(progress.mismatchCount, 0);
+  assert.equal(progress.scannedCount, 2);
+  assert.equal(progress.skippedCount, 2);
+  assert.deepEqual(JSON.parse(progress.skipReasonCountsJson), {
+    legacy_instagram_profile_snapshot: 2,
+  });
+  assert.deepEqual(JSON.parse(progress.auditDetailsJson), {
+    legacyProfileSnapshotPolicy:
+      "exact-pre-2026-08-instagram-profile-snapshot-v1",
+  });
+  assert.deepEqual(
+    state.tables.scrapedPosts.get(firstLegacySnapshot._id),
+    firstLegacySnapshot,
+    "Legacy profile snapshots must remain byte-for-byte unchanged.",
+  );
+  await backfillSourceDocumentCanonicalUrlsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25, restart: true },
+  );
+  const restartedProgress = [
+    ...state.tables.eventDomainMigrationState.values(),
+  ][0];
+  assert.equal(restartedProgress.attempt, 2);
+  assert.equal(restartedProgress.skippedCount, 2);
+  assert.deepEqual(JSON.parse(restartedProgress.skipReasonCountsJson), {
+    legacy_instagram_profile_snapshot: 2,
+  });
+}
+
+{
+  const state = makeDb({
+    scrapedPosts: [
+      legacyInstagramProfileSnapshotFixture({
+        _id: "exact_legacy_profile_snapshot",
+      }),
+      legacyInstagramProfileSnapshotFixture({
+        _id: "profile_with_post_evidence",
+        caption: "Real post evidence must never be silently quarantined.",
+      }),
+      legacyInstagramProfileSnapshotFixture({
+        _id: "profile_after_legacy_cutoff",
+        createdAt: Date.UTC(2026, 7, 2),
+      }),
+      {
+        _id: "ordinary_malformed_source",
+        handle: "qa",
+        imageUrls: [],
+        instagramPostUrl: "not-an-instagram-url",
+        postId: "Malformed",
+        username: "qa",
+      },
+    ],
+  });
+  const result = await backfillSourceDocumentCanonicalUrlsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(result.mismatchCount, 3);
+  assert.equal(result.skippedCount, 1);
+  assert.equal(result.updatedCount, 0);
+}
+
 {
   const ordinaryExpected = {
     artists: ["Ordinary Artist"],

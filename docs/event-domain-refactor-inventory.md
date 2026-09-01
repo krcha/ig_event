@@ -177,6 +177,15 @@ those facades from regaining database, authentication, or async implementation.
 All migrations are bounded and resumable. Dry-run or preview phases do not
 authorize a cutover. Legacy tables and fields are not deleted by these flows.
 
+The canonical source-document migration has one non-destructive historical
+exception: an exact pre-August-2026 record shape for bare Instagram profile
+snapshots that the retired discovery path had already classified as terminal
+non-events. Those rows are retained unchanged and counted under
+`legacy_instagram_profile_snapshot`. Any profile-shaped row with post evidence,
+any row after the fixed cutoff, and every other malformed URL remains a
+blocking mismatch. Current scraped-post writes require the central canonical
+Instagram post URL policy, so the exception cannot admit new profile rows.
+
 ## Production operator driver
 
 `scripts/event-domain-rollout-operator.mjs` is the only packaged driver for
