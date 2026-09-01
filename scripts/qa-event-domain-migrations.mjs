@@ -80,6 +80,7 @@ for (const row of trackedVenueOverrideRows) {
 
 const TABLE_NAMES = [
   "eventDomainMigrationState",
+  "eventAuditLog",
   "events",
   "favoriteVenues",
   "instagramEventSources",
@@ -131,6 +132,9 @@ function makeDb(initial = {}) {
         if (table.has(id)) return table.get(id);
       }
       return null;
+    },
+    normalizeId(table, id) {
+      return typeof id === "string" && tables[table]?.has(id) ? id : null;
     },
     async insert(table, value) {
       const id = `${table}_${nextId++}`;
@@ -1258,6 +1262,201 @@ function makeCanonicalPayloadMigrationState() {
 }
 
 {
+  const primaryId = "reviewed_fold_primary";
+  const variantId = "reviewed_fold_variant";
+  const operationId = "reviewed-poster-venue-qa:freestyler-fold";
+  const primaryExpected = {
+    artists: ["KNEZ"],
+    date: "2026-09-20",
+    key: "reviewed-primary-occurrence",
+    time: "23:00",
+    title: "KNEZ LIVE",
+    venue: "Freestyler",
+  };
+  const variantExpected = {
+    ...primaryExpected,
+    key: "reviewed-variant-occurrence",
+  };
+  const primaryLink = {
+    _id: "reviewed_primary_link",
+    eventId: primaryId,
+    instagramPostId: "ReviewedPrimary",
+    instagramPostUrl: "https://www.instagram.com/p/ReviewedPrimary/",
+    sourceFingerprint: "reviewed-primary-fingerprint",
+    sourceHandle: "freestylerbelgrade_official",
+    sourceIdentity: "reviewed-primary-source",
+    sourceOccurrenceKey: primaryExpected.key,
+    updatedAt: 200,
+  };
+  const variantLink = {
+    _id: "reviewed_variant_link",
+    eventId: variantId,
+    instagramPostId: "ReviewedVariant",
+    instagramPostUrl: "https://www.instagram.com/p/ReviewedVariant/",
+    sourceFingerprint: "reviewed-variant-fingerprint",
+    sourceHandle: "freestylerbelgrade_official",
+    sourceIdentity: "reviewed-variant-source",
+    sourceOccurrenceKey: variantExpected.key,
+    updatedAt: 200,
+  };
+  const primaryReceipt = {
+    _id: "reviewed_primary_receipt",
+    deferredChildCount: 0,
+    deferredChildKeys: [],
+    expectedKeys: [primaryExpected.key],
+    expectedOccurrences: [primaryExpected],
+    satisfiedKeys: [primaryExpected.key],
+    satisfiedOccurrences: [{ eventId: primaryId, key: primaryExpected.key }],
+    sourceFingerprint: primaryLink.sourceFingerprint,
+    sourceIdentity: primaryLink.sourceIdentity,
+    updatedAt: 200,
+  };
+  const variantReceipt = {
+    _id: "reviewed_variant_receipt",
+    deferredChildCount: 0,
+    deferredChildKeys: [],
+    expectedKeys: [variantExpected.key],
+    expectedOccurrences: [variantExpected],
+    satisfiedKeys: [variantExpected.key],
+    satisfiedOccurrences: [{ eventId: primaryId, key: variantExpected.key }],
+    sourceFingerprint: variantLink.sourceFingerprint,
+    sourceIdentity: variantLink.sourceIdentity,
+    updatedAt: 200,
+  };
+  const primary = {
+    _id: primaryId,
+    artists: primaryExpected.artists,
+    date: primaryExpected.date,
+    eventType: "nightlife",
+    normalizedFieldsJson: JSON.stringify({
+      artists: primaryExpected.artists,
+      normalizedDate: primaryExpected.date,
+      normalizedVenue: primaryExpected.venue,
+      reviewedPromotionVariantFold: {
+        operationId,
+        policyVersion: 1,
+        primaryEventId: primaryId,
+        targetVenueId: "reviewed_freestyler_venue",
+        variantEventId: variantId,
+      },
+      time: primaryExpected.time,
+      title: primaryExpected.title,
+    }),
+    status: "approved",
+    time: primaryExpected.time,
+    title: primaryExpected.title,
+    updatedAt: 200,
+    venue: primaryExpected.venue,
+    venueId: "reviewed_freestyler_venue",
+  };
+  const variantBefore = {
+    _id: variantId,
+    artists: ["KNEZ"],
+    date: primaryExpected.date,
+    eventType: "nightlife",
+    normalizedFieldsJson: JSON.stringify({
+      artists: ["KNEZ"],
+      normalizedDate: primaryExpected.date,
+      normalizedVenue: "",
+      time: "TBD",
+      title: "KNEZ teaser",
+    }),
+    status: "approved",
+    time: "TBD",
+    title: "KNEZ teaser",
+    updatedAt: 190,
+    venue: "",
+  };
+  const variant = {
+    ...variantBefore,
+    moderationNote: `[reviewed_promotion_variant:v1] ${operationId} - exact reviewed fold`,
+    status: "rejected",
+    updatedAt: 200,
+  };
+  const makeReviewedFoldState = (variantReceiptOverride = variantReceipt) =>
+    makeDb({
+      eventAuditLog: [
+        {
+          _id: "reviewed_primary_audit",
+          action: "reviewed_promotion_variant_folded",
+          eventId: primaryId,
+          patchJson: JSON.stringify({
+            eventAfter: {
+              artists: primary.artists,
+              date: primary.date,
+              description: primary.description,
+              time: primary.time,
+              title: primary.title,
+              updatedAt: primary.updatedAt,
+              venue: primary.venue,
+            },
+            operationId,
+            policyVersion: 1,
+            targetVenueId: primary.venueId,
+            variantId,
+          }),
+        },
+        {
+          _id: "reviewed_variant_audit",
+          action: "reviewed_promotion_variant_rejected",
+          eventId: variantId,
+          patchJson: JSON.stringify({
+            eventBefore: variantBefore,
+            operationId,
+            policyVersion: 1,
+            primaryId,
+            receiptAfter: variantReceipt,
+            sourceLinkBefore: variantLink,
+            variantUpdatedAt: variant.updatedAt,
+          }),
+        },
+      ],
+      eventDomainMigrationState: [
+        {
+          _id: "venue_identity_ready_for_reviewed_fold",
+          completedAt: 1,
+          errorCount: 0,
+          isDone: true,
+          key: "venue-identities-v1",
+          mismatchCount: 0,
+          phase: "venue_identities",
+          scannedCount: 1,
+          updatedAt: 1,
+          updatedCount: 1,
+        },
+      ],
+      events: [primary, variant],
+      instagramEventSources: [primaryLink, variantLink],
+      instagramSourceOccurrenceReceipts: [
+        primaryReceipt,
+        variantReceiptOverride,
+      ],
+    });
+  const state = makeReviewedFoldState();
+  const result = await backfillEventVenueBindingsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(result.mismatchCount, 0);
+  assert.equal(result.quarantinedLineageMarkerCount, 0);
+  assert.equal(result.skippedCount, 0);
+  assert.equal(result.unchangedCount, 2);
+
+  const conflicting = makeReviewedFoldState({
+    ...variantReceipt,
+    satisfiedOccurrences: [
+      { eventId: variantId, key: variantExpected.key },
+    ],
+  });
+  const conflictingResult = await backfillEventVenueBindingsBatch._handler(
+    { db: conflicting.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(conflictingResult.quarantinedLineageMarkerCount, 2);
+  assert.equal(conflictingResult.skippedCount, 2);
+}
+
+{
   const state = makeDb({
     eventDomainMigrationState: [cleanVenueCompatibilitySeedAuditState()],
     venues: [
@@ -1813,6 +2012,7 @@ function legacyInstagramProfileSnapshotFixture(overrides = {}) {
         date: "2026-09-20",
         eventType: "nightlife",
         normalizedFieldsJson: JSON.stringify({
+          artists: ["Audited Artist"],
           extractionContractVersion: "event_evidence_v2",
           fieldConfirmation: {
             location_name: {
@@ -1822,6 +2022,8 @@ function legacyInstagramProfileSnapshotFixture(overrides = {}) {
             },
           },
           rawVenue: "Club Drugstore",
+          normalizedDate: "2026-09-20",
+          normalizedVenue: "",
           sharedScheduleContext: {
             venue: {
               applies_to_all: true,
@@ -1830,13 +2032,57 @@ function legacyInstagramProfileSnapshotFixture(overrides = {}) {
               value: "Club Drugstore",
             },
           },
+          time: "23:00",
+          title: "Audited Legacy Venue Event",
           venueEvidenceVerified: true,
         }),
+        sourceOccurrenceKey: "audited-legacy-occurrence",
         status: "approved",
         time: "23:00",
         title: "Audited Legacy Venue Event",
         updatedAt: 92,
         venue: "",
+      },
+    ],
+    instagramEventSources: [
+      {
+        _id: "audited_legacy_source_link",
+        eventId: "event_audited_legacy_blank_venue",
+        instagramPostId: "AuditedLegacyPost",
+        instagramPostUrl: "https://www.instagram.com/p/AuditedLegacyPost/",
+        sourceFingerprint: "audited-legacy-fingerprint",
+        sourceHandle: "clubdrugstore",
+        sourceIdentity: "audited-legacy-source",
+        sourceOccurrenceKey: "audited-legacy-occurrence",
+        updatedAt: 92,
+      },
+    ],
+    instagramSourceOccurrenceReceipts: [
+      {
+        _id: "audited_legacy_receipt",
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        expectedKeys: ["audited-legacy-occurrence"],
+        expectedOccurrences: [
+          {
+            artists: ["Audited Artist"],
+            date: "2026-09-20",
+            key: "audited-legacy-occurrence",
+            time: "23:00",
+            title: "Audited Legacy Venue Event",
+            venue: "",
+          },
+        ],
+        satisfiedKeys: ["audited-legacy-occurrence"],
+        satisfiedOccurrences: [
+          {
+            eventId: "event_audited_legacy_blank_venue",
+            key: "audited-legacy-occurrence",
+          },
+        ],
+        sourceFingerprint: "audited-legacy-fingerprint",
+        sourceIdentity: "audited-legacy-source",
+        updatedAt: 92,
       },
     ],
     venueIdentities: [
@@ -1858,7 +2104,7 @@ function legacyInstagramProfileSnapshotFixture(overrides = {}) {
         category: "club",
         instagramHandle: "clubdrugstore",
         name: "Drugstore",
-        publicStatus: "published",
+        publicStatus: "pending",
         scrapeActive: true,
       },
     ],
@@ -1886,6 +2132,22 @@ function legacyInstagramProfileSnapshotFixture(overrides = {}) {
   assert.equal(event.venueInstagramHandle, "clubdrugstore");
   assert.equal(event.normalizedVenueIdentity, "drugstore");
   assert.equal(event.occurrenceVenueIdentity, "id:venue_club_drugstore");
+  const normalizedFields = JSON.parse(event.normalizedFieldsJson);
+  assert.equal(normalizedFields.normalizedVenue, "Drugstore");
+  assert.equal(normalizedFields.rawVenue, "Club Drugstore");
+  assert.deepEqual(normalizedFields.auditedLegacyVenueCanonicalization, {
+    policyVersion: 1,
+    sourcePolicy: "verified_event_evidence_v2",
+    targetVenueId: "venue_club_drugstore",
+  });
+  const receipt = state.tables.instagramSourceOccurrenceReceipts.get(
+    "audited_legacy_receipt",
+  );
+  assert.equal(receipt.expectedOccurrences[0].venue, "Drugstore");
+  assert.ok(
+    receipt.updatedAt > 92,
+    "Audited legacy venue migration must re-attest its receipt atomically.",
+  );
   assert.equal(
     event.updatedAt,
     92,

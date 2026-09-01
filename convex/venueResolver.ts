@@ -14,7 +14,10 @@ import {
   normalizeHandle,
   normalizeVenueComparableText,
 } from "../lib/domain/venues/normalization";
-import { isVenuePublic } from "../lib/venues/venue-lifecycle";
+import {
+  getEffectiveVenueLifecycle,
+  isVenuePublic,
+} from "../lib/venues/venue-lifecycle";
 import { requireAdminOrServiceSecret } from "./authz";
 
 // Keep the aggregate service snapshot at a conservative application-level
@@ -95,8 +98,14 @@ export type ConvexVenueResolution = {
 export function buildConvexVenueSnapshot(
   venues: readonly Doc<"venues">[],
   identities: readonly Doc<"venueIdentities">[] = [],
+  options: { includePending?: boolean } = {},
 ): ConvexVenueSnapshot {
-  const publicVenues = venues.filter(isVenuePublic);
+  const publicVenues = venues.filter(
+    (venue) =>
+      isVenuePublic(venue) ||
+      (options.includePending === true &&
+        getEffectiveVenueLifecycle(venue).publicStatus === "pending"),
+  );
   const venueById = new Map(publicVenues.map((venue) => [venue._id, venue]));
   const identityRecords: VenueIdentityRecord[] = identities.map((identity) => ({
     active: identity.active,
@@ -357,6 +366,7 @@ async function venueIdentityMigrationReady(
 export async function resolveVenueForWrite(
   ctx: QueryCtx | MutationCtx,
   venueName: string | undefined,
+  options: { includePending?: boolean } = {},
 ): Promise<ConvexVenueResolution> {
   const rawVenueName = venueName?.trim() ?? "";
   if (!rawVenueName) return resolveVenueFromSnapshot(buildConvexVenueSnapshot([]), rawVenueName);
@@ -373,10 +383,14 @@ export async function resolveVenueForWrite(
   if (venueIds.length > 0) {
     const venueRows = await Promise.all(venueIds.map((venueId) => ctx.db.get(venueId)));
     const publicVenues = venueRows.filter(
-      (venue): venue is Doc<"venues"> => venue !== null && isVenuePublic(venue),
+      (venue): venue is Doc<"venues"> =>
+        venue !== null &&
+        (isVenuePublic(venue) ||
+          (options.includePending === true &&
+            getEffectiveVenueLifecycle(venue).publicStatus === "pending")),
     );
     const resolved = resolveVenueFromSnapshot(
-      buildConvexVenueSnapshot(publicVenues, identities),
+      buildConvexVenueSnapshot(publicVenues, identities, options),
       rawVenueName,
     );
     return { ...resolved, lookupMode: "indexed_identity" };

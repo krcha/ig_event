@@ -8,7 +8,9 @@ import {
   type ConvexVenueResolution,
 } from "../../venueResolver";
 import { DomainError } from "../../../lib/domain/errors";
+import { exactJsonValue } from "../../../lib/events/exact-json-value";
 import { isCrossPostCampaignLineageEvent } from "../../../lib/events/cross-post-campaign-aggregate-attestation";
+import { sourceOccurrenceRepresentativeMatchesExpected } from "../../../lib/events/source-occurrence-representation";
 import { loadVerifiedCampaignLineageForSourceEvent } from "../campaignLineageReattestationProof";
 import { markSourceOccurrenceTopologyMutation } from "../sourceOccurrenceTopologyEpoch";
 import {
@@ -21,6 +23,7 @@ import {
 } from "./eventDomainShared";
 
 const MIN_AUDITED_LEGACY_VENUE_CONFIDENCE = 0.8;
+const MAX_REVIEWED_FOLD_AUDIT_ROWS = 100;
 
 function readObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -98,7 +101,9 @@ async function resolveAuditedLegacyVenueClaim(
   const claims = readAuditedLegacyVenueClaims(event);
   if (claims.length === 0) return null;
   const resolutions = await Promise.all(
-    claims.map((claim) => resolveVenueForWrite(ctx, claim)),
+    claims.map((claim) =>
+      resolveVenueForWrite(ctx, claim, { includePending: true }),
+    ),
   );
   if (
     resolutions.some(
@@ -116,6 +121,366 @@ async function resolveAuditedLegacyVenueClaim(
     resolved.map((resolution) => resolution.venueFields.venueId),
   );
   return venueIds.size === 1 ? (resolved[0] ?? null) : null;
+}
+
+function buildAuditedLegacyNormalizedFields(
+  event: Doc<"events">,
+  resolution: ConvexVenueResolution,
+): string | null {
+  if (!resolution.canonicalVenueName || !resolution.venueFields.venueId) {
+    return null;
+  }
+  let fields: Record<string, unknown> | null = null;
+  try {
+    fields = readObject(JSON.parse(event.normalizedFieldsJson ?? "null"));
+  } catch {
+    return null;
+  }
+  if (!fields) return null;
+  return JSON.stringify({
+    ...fields,
+    normalizedVenue: resolution.canonicalVenueName,
+    auditedLegacyVenueCanonicalization: {
+      policyVersion: 1,
+      sourcePolicy: "verified_event_evidence_v2",
+      targetVenueId: resolution.venueFields.venueId,
+    },
+  });
+}
+
+type ReviewedRejectedFoldMarker = {
+  action:
+    | "reviewed_promotion_variant_rejected"
+    | "reviewed_same_source_continuation_rejected";
+  operationId: string;
+  updatedAtField: "variantUpdatedAt" | "continuationUpdatedAt";
+};
+
+function readReviewedRejectedFoldMarker(
+  moderationNote: string | undefined,
+): ReviewedRejectedFoldMarker | null {
+  const match = moderationNote?.match(
+    /^\[(reviewed_promotion_variant|reviewed_same_source_continuation):v1\] ([A-Za-z0-9][A-Za-z0-9._:-]{15,159}) - /u,
+  );
+  if (!match) return null;
+  return match[1] === "reviewed_promotion_variant"
+    ? {
+        action: "reviewed_promotion_variant_rejected",
+        operationId: match[2]!,
+        updatedAtField: "variantUpdatedAt",
+      }
+    : {
+        action: "reviewed_same_source_continuation_rejected",
+        operationId: match[2]!,
+        updatedAtField: "continuationUpdatedAt",
+      };
+}
+
+function rejectedFoldEvidenceRemainsExact(
+  current: Doc<"events">,
+  before: Record<string, unknown>,
+): boolean {
+  const immutableFields = [
+    "_creationTime",
+    "_id",
+    "artists",
+    "canonicalSourceUrl",
+    "date",
+    "description",
+    "eventType",
+    "imageStorageId",
+    "imageUrl",
+    "instagramPostId",
+    "instagramPostUrl",
+    "normalizedFieldsJson",
+    "normalizedVenueIdentity",
+    "normalizedVenueInstagramHandle",
+    "rawExtractionJson",
+    "sourceCaption",
+    "sourceOccurrenceKey",
+    "sourcePostedAt",
+    "time",
+    "title",
+    "venue",
+    "venueId",
+    "venueInstagramHandle",
+  ] as const;
+  return (
+    before.status === "approved" &&
+    immutableFields.every((field) => exactJsonValue(current[field], before[field]))
+  );
+}
+
+function reviewedFoldLinkMatchesAudit(
+  current: Doc<"instagramEventSources">,
+  before: unknown,
+): boolean {
+  const audited = readObject(before);
+  if (!audited) return false;
+  const comparable = { ...current } as Record<string, unknown>;
+  for (const additiveField of [
+    "canonicalSourceUrl",
+    "sourceOccurrenceId",
+  ] as const) {
+    if (!Object.hasOwn(audited, additiveField)) delete comparable[additiveField];
+  }
+  return exactJsonValue(comparable, audited);
+}
+
+async function hasVerifiedRejectedReviewedFold(
+  ctx: MutationCtx,
+  event: Doc<"events">,
+  expectedPrimaryId?: string,
+): Promise<boolean> {
+  if (event.status !== "rejected") return false;
+  const marker = readReviewedRejectedFoldMarker(event.moderationNote);
+  if (!marker) return false;
+  const auditRows = await ctx.db
+    .query("eventAuditLog")
+    .withIndex("by_event", (q) => q.eq("eventId", event._id))
+    .take(MAX_REVIEWED_FOLD_AUDIT_ROWS + 1);
+  if (auditRows.length > MAX_REVIEWED_FOLD_AUDIT_ROWS) return false;
+  const matchingAudits = auditRows.filter(
+    (audit) => audit.action === marker.action && audit.patchJson,
+  );
+  if (matchingAudits.length !== 1) return false;
+  let patch: Record<string, unknown> | null = null;
+  try {
+    patch = readObject(JSON.parse(matchingAudits[0]!.patchJson!));
+  } catch {
+    return false;
+  }
+  const eventBefore = readObject(patch?.eventBefore);
+  const primaryId = patch?.primaryId;
+  if (
+    !patch ||
+    patch.operationId !== marker.operationId ||
+    patch.policyVersion !== 1 ||
+    patch[marker.updatedAtField] !== event.updatedAt ||
+    typeof primaryId !== "string" ||
+    (expectedPrimaryId !== undefined && primaryId !== expectedPrimaryId) ||
+    !eventBefore ||
+    !rejectedFoldEvidenceRemainsExact(event, eventBefore)
+  ) {
+    return false;
+  }
+  const links = await ctx.db
+    .query("instagramEventSources")
+    .withIndex("by_event", (q) => q.eq("eventId", event._id))
+    .take(2);
+  const link = links.length === 1 ? links[0]! : null;
+  if (!link || !reviewedFoldLinkMatchesAudit(link, patch.sourceLinkBefore)) {
+    return false;
+  }
+  const receiptRows = await ctx.db
+    .query("instagramSourceOccurrenceReceipts")
+    .withIndex("by_sourceIdentity", (q) =>
+      q.eq("sourceIdentity", link.sourceIdentity),
+    )
+    .take(2);
+  const receipt = receiptRows.length === 1 ? receiptRows[0]! : null;
+  const expected = receipt?.expectedOccurrences?.filter(
+    (occurrence) => occurrence.key === link.sourceOccurrenceKey,
+  );
+  const satisfied = receipt?.satisfiedOccurrences.filter(
+    (occurrence) => occurrence.key === link.sourceOccurrenceKey,
+  );
+  const normalizedPrimaryId = ctx.db.normalizeId("events", primaryId);
+  if (!normalizedPrimaryId) return false;
+  const primary = await ctx.db.get(normalizedPrimaryId);
+  if (
+    !receipt ||
+    !exactJsonValue(receipt, patch.receiptAfter) ||
+    expected?.length !== 1 ||
+    satisfied?.length !== 1 ||
+    satisfied[0]!.eventId !== primaryId ||
+    !primary ||
+    primary.status !== "approved" ||
+    !sourceOccurrenceRepresentativeMatchesExpected(primary, expected[0])
+  ) {
+    return false;
+  }
+  const occurrences = await ctx.db
+    .query("sourceOccurrences")
+    .withIndex("by_source_occurrence", (q) =>
+      q
+        .eq("sourceIdentity", link.sourceIdentity)
+        .eq("sourceOccurrenceKey", link.sourceOccurrenceKey),
+    )
+    .take(2);
+  return (
+    occurrences.length === 0 ||
+    (occurrences.length === 1 &&
+      occurrences[0]!.canonicalEventId === primaryId &&
+      occurrences[0]!.state === "satisfied")
+  );
+}
+
+function approvedReviewedFoldEventAfterMatches(
+  event: Doc<"events">,
+  eventAfter: unknown,
+): boolean {
+  const audited = readObject(eventAfter);
+  return Boolean(
+    audited &&
+      [
+        "artists",
+        "date",
+        "description",
+        "time",
+        "title",
+        "updatedAt",
+        "venue",
+      ].every((field) =>
+        exactJsonValue(
+          event[field as keyof Doc<"events">],
+          audited[field],
+        ),
+      ),
+  );
+}
+
+async function hasVerifiedApprovedReviewedFold(
+  ctx: MutationCtx,
+  event: Doc<"events">,
+): Promise<boolean> {
+  if (event.status !== "approved" || !event.normalizedFieldsJson) return false;
+  let fields: Record<string, unknown> | null = null;
+  try {
+    fields = readObject(JSON.parse(event.normalizedFieldsJson));
+  } catch {
+    return false;
+  }
+  if (!fields) return false;
+  const promotion = readObject(fields.reviewedPromotionVariantFold);
+  const continuation = readObject(fields.reviewedSameSourceContinuationFold);
+  let action: string;
+  let counterpartId: string;
+  let expectedPrimaryId: string;
+  let operationId: string;
+  let targetVenueId: string;
+  let auditIdentityMatches: (patch: Record<string, unknown>) => boolean;
+  if (promotion) {
+    if (
+      promotion.policyVersion !== 1 ||
+      promotion.primaryEventId !== event._id ||
+      typeof promotion.variantEventId !== "string" ||
+      typeof promotion.operationId !== "string" ||
+      typeof promotion.targetVenueId !== "string"
+    ) {
+      return false;
+    }
+    action = "reviewed_promotion_variant_folded";
+    counterpartId = promotion.variantEventId;
+    expectedPrimaryId = event._id;
+    operationId = promotion.operationId;
+    targetVenueId = promotion.targetVenueId;
+    auditIdentityMatches = (patch) =>
+      patch.variantId === counterpartId && patch.targetVenueId === targetVenueId;
+  } else if (continuation) {
+    const role = continuation.role;
+    if (
+      continuation.policyVersion !== 1 ||
+      (role !== "primary" && role !== "independent") ||
+      typeof continuation.primaryEventId !== "string" ||
+      typeof continuation.independentEventId !== "string" ||
+      typeof continuation.continuationEventId !== "string" ||
+      typeof continuation.operationId !== "string" ||
+      typeof continuation.targetVenueId !== "string" ||
+      (role === "primary" && continuation.primaryEventId !== event._id) ||
+      (role === "independent" && continuation.independentEventId !== event._id)
+    ) {
+      return false;
+    }
+    action =
+      role === "primary"
+        ? "reviewed_same_source_continuation_folded"
+        : "reviewed_same_source_independent_corrected";
+    counterpartId = continuation.continuationEventId;
+    expectedPrimaryId = continuation.primaryEventId;
+    operationId = continuation.operationId;
+    targetVenueId = continuation.targetVenueId;
+    auditIdentityMatches = (patch) =>
+      role === "primary"
+        ? patch.continuationId === counterpartId &&
+          patch.independentId === continuation.independentEventId
+        : true;
+  } else {
+    return false;
+  }
+  if (event.venueId !== targetVenueId) return false;
+  const auditRows = await ctx.db
+    .query("eventAuditLog")
+    .withIndex("by_event", (q) => q.eq("eventId", event._id))
+    .take(MAX_REVIEWED_FOLD_AUDIT_ROWS + 1);
+  if (auditRows.length > MAX_REVIEWED_FOLD_AUDIT_ROWS) return false;
+  const matchingPatches: Record<string, unknown>[] = [];
+  for (const audit of auditRows) {
+    if (audit.action !== action || !audit.patchJson) continue;
+    try {
+      const patch = readObject(JSON.parse(audit.patchJson));
+      if (patch?.operationId === operationId) matchingPatches.push(patch);
+    } catch {
+      return false;
+    }
+  }
+  const auditPatch = matchingPatches.length === 1 ? matchingPatches[0]! : null;
+  if (
+    !auditPatch ||
+    auditPatch.policyVersion !== 1 ||
+    !auditIdentityMatches(auditPatch) ||
+    !approvedReviewedFoldEventAfterMatches(event, auditPatch.eventAfter)
+  ) {
+    return false;
+  }
+  const normalizedCounterpartId = ctx.db.normalizeId("events", counterpartId);
+  if (!normalizedCounterpartId) return false;
+  const counterpart = await ctx.db.get(normalizedCounterpartId);
+  if (
+    !counterpart ||
+    !(await hasVerifiedRejectedReviewedFold(
+      ctx,
+      counterpart,
+      expectedPrimaryId,
+    ))
+  ) {
+    return false;
+  }
+  const links = await ctx.db
+    .query("instagramEventSources")
+    .withIndex("by_event", (q) => q.eq("eventId", event._id))
+    .take(2);
+  const link = links.length === 1 ? links[0]! : null;
+  if (!link) return false;
+  const receiptRows = await ctx.db
+    .query("instagramSourceOccurrenceReceipts")
+    .withIndex("by_sourceIdentity", (q) =>
+      q.eq("sourceIdentity", link.sourceIdentity),
+    )
+    .take(2);
+  const receipt = receiptRows.length === 1 ? receiptRows[0]! : null;
+  const expected = receipt?.expectedOccurrences?.filter(
+    (occurrence) => occurrence.key === link.sourceOccurrenceKey,
+  );
+  const satisfied = receipt?.satisfiedOccurrences.filter(
+    (occurrence) => occurrence.key === link.sourceOccurrenceKey,
+  );
+  return Boolean(
+    receipt &&
+      expected?.length === 1 &&
+      satisfied?.length === 1 &&
+      satisfied[0]!.eventId === event._id &&
+      sourceOccurrenceRepresentativeMatchesExpected(event, expected[0]),
+  );
+}
+
+async function hasVerifiedReviewedFold(
+  ctx: MutationCtx,
+  event: Doc<"events">,
+): Promise<boolean> {
+  return event.status === "rejected"
+    ? hasVerifiedRejectedReviewedFold(ctx, event)
+    : hasVerifiedApprovedReviewedFold(ctx, event);
 }
 
 /**
@@ -165,6 +530,10 @@ export async function backfillEventVenueBindingsBatchHandler(
         counts.unchangedCount! += 1;
         continue;
       }
+      if (await hasVerifiedReviewedFold(ctx, event)) {
+        counts.unchangedCount! += 1;
+        continue;
+      }
       counts.skippedCount! += 1;
       counts.quarantinedLineageMarkerCount! += 1;
       continue;
@@ -178,6 +547,9 @@ export async function backfillEventVenueBindingsBatchHandler(
       (rawVenueClaim
         ? await resolveVenueForWrite(ctx, rawVenueClaim)
         : null);
+    const auditedLegacyNormalizedFields = auditedLegacyResolution
+      ? buildAuditedLegacyNormalizedFields(event, auditedLegacyResolution)
+      : null;
     // A nonempty legacy venue claim does not become invalid merely because the
     // canonical directory has not learned it yet. Unresolved venue identity is
     // a first-class state throughout occurrence construction and
@@ -209,11 +581,17 @@ export async function backfillEventVenueBindingsBatchHandler(
       ...(auditedLegacyResolution?.canonicalVenueName
         ? { venue: auditedLegacyResolution.canonicalVenueName }
         : {}),
+      ...(auditedLegacyNormalizedFields
+        ? { normalizedFieldsJson: auditedLegacyNormalizedFields }
+        : {}),
     };
     const patch = {
       ...resolution.venueFields,
       ...(auditedLegacyResolution?.canonicalVenueName
         ? { venue: auditedLegacyResolution.canonicalVenueName }
+        : {}),
+      ...(auditedLegacyNormalizedFields
+        ? { normalizedFieldsJson: auditedLegacyNormalizedFields }
         : {}),
       ...buildEventOccurrenceIndexPatch(effectiveEvent),
     };
