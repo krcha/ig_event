@@ -25,7 +25,12 @@ const rows = [
   { id: "hidden-4", visible: false },
   { id: "event-d", visible: true },
 ];
-const loadRawPage = makeArrayLoader(rows);
+let rawPageLoadCount = 0;
+const arrayLoader = makeArrayLoader(rows);
+const loadRawPage = async (options) => {
+  rawPageLoadCount += 1;
+  return arrayLoader(options);
+};
 const projectVisible = async (page) => page.filter((row) => row.visible);
 
 const first = await paginateVisibleRows({
@@ -34,9 +39,11 @@ const first = await paginateVisibleRows({
   numItems: 3,
   projectVisible,
 });
-assert.deepEqual(first.page.map((row) => row.id), ["event-a", "event-b", "event-c"]);
-assert.equal(first.continueCursor, "6");
+assert.deepEqual(first.page.map((row) => row.id), ["event-a"]);
+assert.equal(first.continueCursor, "3");
 assert.equal(first.isDone, false);
+assert.equal(first.rawPageCount, 1);
+assert.equal(rawPageLoadCount, 1, "one Convex function may run only one paginated query");
 
 const second = await paginateVisibleRows({
   cursor: first.continueCursor,
@@ -44,13 +51,23 @@ const second = await paginateVisibleRows({
   numItems: 3,
   projectVisible,
 });
-assert.deepEqual(second.page.map((row) => row.id), ["event-d"]);
-assert.equal(second.continueCursor, "8");
-assert.equal(second.isDone, true);
+assert.deepEqual(second.page.map((row) => row.id), ["event-b", "event-c"]);
+assert.equal(second.continueCursor, "6");
+assert.equal(second.isDone, false);
+
+const third = await paginateVisibleRows({
+  cursor: second.continueCursor,
+  loadRawPage,
+  numItems: 3,
+  projectVisible,
+});
+assert.deepEqual(third.page.map((row) => row.id), ["event-d"]);
+assert.equal(third.continueCursor, "8");
+assert.equal(third.isDone, true);
 assert.deepEqual(
-  [...first.page, ...second.page].map((row) => row.id),
+  [...first.page, ...second.page, ...third.page].map((row) => row.id),
   ["event-a", "event-b", "event-c", "event-d"],
-  "Visible pagination must not skip or duplicate rows hidden between cursors.",
+  "Short visible pages must not skip or duplicate rows hidden between cursors.",
 );
 
 const scanBoundRows = [
@@ -59,26 +76,24 @@ const scanBoundRows = [
   { id: "hidden-c", visible: false },
   { id: "visible-after-bound", visible: true },
 ];
-const boundedFirst = await paginateVisibleRows({
+const shortFirst = await paginateVisibleRows({
   cursor: null,
   loadRawPage: makeArrayLoader(scanBoundRows),
-  maxRawPages: 2,
   numItems: 1,
   projectVisible,
 });
-assert.deepEqual(boundedFirst.page, []);
-assert.equal(boundedFirst.continueCursor, "2");
-assert.equal(boundedFirst.isDone, false);
-assert.equal(boundedFirst.scanLimitReached, true);
-const boundedSecond = await paginateVisibleRows({
-  cursor: boundedFirst.continueCursor,
+assert.deepEqual(shortFirst.page, []);
+assert.equal(shortFirst.continueCursor, "1");
+assert.equal(shortFirst.isDone, false);
+assert.equal(shortFirst.scanLimitReached, false);
+const shortSecond = await paginateVisibleRows({
+  cursor: shortFirst.continueCursor,
   loadRawPage: makeArrayLoader(scanBoundRows),
-  maxRawPages: 2,
-  numItems: 1,
+  numItems: 3,
   projectVisible,
 });
-assert.deepEqual(boundedSecond.page.map((row) => row.id), ["visible-after-bound"]);
-assert.equal(boundedSecond.isDone, true);
+assert.deepEqual(shortSecond.page.map((row) => row.id), ["visible-after-bound"]);
+assert.equal(shortSecond.isDone, true);
 
 await assert.rejects(
   paginateVisibleRows({

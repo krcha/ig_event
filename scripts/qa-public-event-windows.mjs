@@ -34,7 +34,7 @@ assert.match(
 assert.match(
   publicReadsSource,
   /paginateVisibleRows\(/,
-  "Public event windows should fill visible pages instead of filtering after one raw page.",
+  "Public event windows should project one cursor-safe raw page at a time.",
 );
 assert.match(
   venuesSource,

@@ -247,12 +247,12 @@ assert.match(
 assert.match(
   publicReadsSource,
   /export async function listPublicEventsWindowHandler[\s\S]*?return paginatePublicationRows\(\{[\s\S]*?loadApprovedWindowRawPage\(ctx, readMode, \{[\s\S]*?beforeDate: args\.beforeDate,[\s\S]*?projectVisible:/,
-  "The full public window should fill a bounded visible page from indexed raw pages without unbounded collection.",
+  "The full public window should project one bounded indexed raw page without unbounded collection.",
 );
 assert.match(
   publicReadsSource,
   /export async function listPublicCalendarEventsWindowPaginatedHandler[\s\S]*?return paginatePublicationRows\(\{[\s\S]*?numItems: PUBLIC_EVENT_PAGE_SIZE,[\s\S]*?loadApprovedWindowRawPage\(ctx, readMode, \{[\s\S]*?beforeDate: args\.beforeDate,[\s\S]*?projectVisible:/,
-  "The compact calendar window should use the same bounded visible-pagination adapter.",
+  "The compact calendar window should use the same single-read pagination adapter.",
 );
 
 assert.match(

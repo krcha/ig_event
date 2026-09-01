@@ -11,14 +11,12 @@ export type VisibleCursorPage<T> = RawCursorPage<T> & {
   scanLimitReached: boolean;
 };
 
-const DEFAULT_MAX_RAW_PAGES = 8;
-
 /**
- * Fills one visible page without advancing past a row that was not examined.
- * Filtering remains a compatibility step until publication state is fully
- * materialized and backfilled. Reads are bounded by `maxRawPages`; hitting the
- * bound returns a short non-terminal page whose cursor resumes exactly after
- * the last examined raw row.
+ * Projects exactly one raw database page into one visible page. Convex permits
+ * only one paginated database query in a query or mutation execution, so a
+ * compatibility filter may return a short non-terminal page. Callers must
+ * continue from `continueCursor` until `isDone` instead of trying to fill the
+ * page with another paginated read in the same execution.
  */
 export async function paginateVisibleRows<TRaw, TVisible>(options: {
   cursor: string | null;
@@ -26,54 +24,36 @@ export async function paginateVisibleRows<TRaw, TVisible>(options: {
     cursor: string | null;
     numItems: number;
   }) => Promise<RawCursorPage<TRaw>>;
-  maxRawPages?: number;
   numItems: number;
   projectVisible: (rows: TRaw[]) => Promise<TVisible[]>;
 }): Promise<VisibleCursorPage<TVisible>> {
   const requested = Math.max(1, Math.trunc(options.numItems));
-  const maxRawPages = Math.max(
-    1,
-    Math.trunc(options.maxRawPages ?? DEFAULT_MAX_RAW_PAGES),
-  );
-  const visibleRows: TVisible[] = [];
-  let cursor = options.cursor;
-  let continueCursor = options.cursor ?? "";
-  let isDone = false;
-  let rawPageCount = 0;
-
-  while (visibleRows.length < requested && !isDone && rawPageCount < maxRawPages) {
-    const previousCursor = cursor;
-    const rawPage = await options.loadRawPage({
-      cursor,
-      numItems: requested - visibleRows.length,
-    });
-    rawPageCount += 1;
-
-    const projected = await options.projectVisible(rawPage.page);
-    if (projected.length > rawPage.page.length) {
-      throw new DomainError(
-        "RECONCILIATION_CONFLICT",
-        "Publication projection cannot create more rows than it examines.",
-      );
-    }
-    visibleRows.push(...projected);
-    continueCursor = rawPage.continueCursor;
-    isDone = rawPage.isDone;
-
-    if (!isDone && rawPage.continueCursor === (previousCursor ?? "")) {
-      throw new DomainError(
-        "RECONCILIATION_CONFLICT",
-        "Publication pagination cursor did not advance.",
-      );
-    }
-    cursor = rawPage.continueCursor || null;
+  const rawPage = await options.loadRawPage({
+    cursor: options.cursor,
+    numItems: requested,
+  });
+  const visibleRows = await options.projectVisible(rawPage.page);
+  if (visibleRows.length > rawPage.page.length) {
+    throw new DomainError(
+      "RECONCILIATION_CONFLICT",
+      "Publication projection cannot create more rows than it examines.",
+    );
+  }
+  if (
+    !rawPage.isDone &&
+    rawPage.continueCursor === (options.cursor ?? "")
+  ) {
+    throw new DomainError(
+      "RECONCILIATION_CONFLICT",
+      "Publication pagination cursor did not advance.",
+    );
   }
 
   return {
-    continueCursor,
-    isDone,
+    continueCursor: rawPage.continueCursor,
+    isDone: rawPage.isDone,
     page: visibleRows,
-    rawPageCount,
-    scanLimitReached: !isDone && rawPageCount >= maxRawPages,
+    rawPageCount: 1,
+    scanLimitReached: false,
   };
 }

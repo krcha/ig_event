@@ -134,7 +134,7 @@ assert.doesNotMatch(
 assert.match(
   publicEventsWindowSource,
   /const pagination = buildPublicPaginationOptions\(args\.paginationOpts\);[\s\S]*paginatePublicationRows\(/,
-  "The compatibility events window must rebuild fixed server-owned pagination options and fill visible rows.",
+  "The compatibility events window must rebuild fixed server-owned pagination options and project one page.",
 );
 assert.match(
   publicEventsWindowSource,
@@ -175,7 +175,7 @@ assert.match(
 assert.match(
   calendarQuerySource,
   /paginatePublicationRows\(\{[\s\S]*numItems: PUBLIC_EVENT_PAGE_SIZE/,
-  "Compact calendar reads must fill a fixed server-owned visible page size.",
+  "Compact calendar reads must use a fixed server-owned raw page size.",
 );
 assert.match(
   calendarQuerySource,
