@@ -1187,6 +1187,33 @@ assert.equal(
   true,
   "An aggregate backed by audit-pinned legacy links must use the immutable source handle without rewriting those links.",
 );
+const legacyMissingHandleReattestation =
+  await reattestCampaignLineageBatch._handler(
+    serviceCtx(legacyMissingHandleState),
+    { cursor: null, dryRun: false, limit: 16 },
+  );
+assert.equal(legacyMissingHandleReattestation.quarantinedCount, 0);
+assert.equal(legacyMissingHandleReattestation.reattestedCount, 1);
+const legacyMissingHandleVenueCoverage =
+  await backfillEventVenueBindingsBatch._handler(
+    serviceCtx(legacyMissingHandleState),
+    { cursor: null, dryRun: false, limit: 16 },
+  );
+assert.equal(legacyMissingHandleVenueCoverage.skippedCount, 0);
+assert.equal(
+  legacyMissingHandleVenueCoverage.quarantinedLineageMarkerCount,
+  0,
+);
+assert.equal(
+  legacyMissingHandleVenueCoverage.unchangedCount,
+  arianaRows.length,
+);
+assert.ok(
+  [...legacyMissingHandleState.tables.instagramEventSources.values()].every(
+    (link) => link.sourceHandle === undefined,
+  ),
+  "Versioned lineage proof must preserve omitted legacy link handles and use the immutable audited handle.",
+);
 const legacyLinkBeforeMismatch = structuredClone(
   legacyMissingHandleState.tables.instagramEventSources.get("ariana-link-1"),
 );
@@ -1201,6 +1228,17 @@ assert.equal(
   ),
   false,
   "A present legacy-link handle that conflicts with the audited immutable source must hide the aggregate.",
+);
+const conflictingLegacyHandleCoverage =
+  await backfillEventVenueBindingsBatch._handler(
+    serviceCtx(legacyMissingHandleState),
+    { cursor: null, dryRun: false, limit: 16, restart: true },
+  );
+assert.equal(conflictingLegacyHandleCoverage.skippedCount, arianaRows.length);
+assert.equal(
+  conflictingLegacyHandleCoverage.quarantinedLineageMarkerCount,
+  arianaRows.length,
+  "An explicit legacy-link handle conflict must remain quarantined.",
 );
 const mismatchedHandleState = makeDb();
 mismatchedHandleState.links[0].sourceHandle = "different.promoter";

@@ -248,6 +248,18 @@ export async function loadVerifiedCampaignLineageReattestation(
       ctx.db.get(linkId),
       ctx.db.get(receiptId),
     ]);
+    const eventBeforeFields = eventBefore
+      ? parseObject(eventBefore.normalizedFieldsJson)
+      : null;
+    const auditedSourceHandle = normalizeHandle(
+      typeof eventBeforeFields?.sourceGroundingInstagramHandle === "string"
+        ? eventBeforeFields.sourceGroundingInstagramHandle
+        : "",
+    );
+    const linkedSourceHandle = normalizeHandle(link?.sourceHandle ?? "");
+    const effectiveSourceHandle =
+      linkedSourceHandle ||
+      (link?.sourceHandle === undefined ? auditedSourceHandle : "");
     if (
       !audit ||
       audit.sourceGroundingVerifiedAtCoalescing !== true ||
@@ -271,8 +283,7 @@ export async function loadVerifiedCampaignLineageReattestation(
       link.sourceFingerprint !== currentSource.sourceFingerprint ||
       link.sourceOccurrenceKey !== currentSource.sourceOccurrenceKey ||
       link.instagramPostId !== currentSource.instagramPostId ||
-      normalizeHandle(link.sourceHandle ?? "") !==
-        normalizeHandle(currentSource.sourceHandle) ||
+      effectiveSourceHandle !== normalizeHandle(currentSource.sourceHandle) ||
       !linkMatchesAdditiveReattestation(
         link,
         audit.sourceLinkBefore,
