@@ -2506,6 +2506,20 @@ function legacyInstagramProfileSnapshotFixture(overrides = {}) {
     92,
     "Audited legacy venue migration must preserve event version.",
   );
+  const readback = await backfillEventVenueBindingsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(
+    readback.mismatchCount,
+    0,
+    "A pending canonical venue must remain resolvable during migration readback.",
+  );
+  assert.equal(
+    readback.updatedCount,
+    0,
+    "A second venue-binding pass must be idempotent for pending canonical venues.",
+  );
 }
 
 {

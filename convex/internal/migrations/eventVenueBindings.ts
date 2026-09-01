@@ -797,7 +797,9 @@ export async function backfillEventVenueBindingsBatchHandler(
     const resolution =
       auditedLegacyResolution?.resolution ??
       (rawVenueClaim
-        ? await resolveVenueForWrite(ctx, rawVenueClaim)
+        ? await resolveVenueForWrite(ctx, rawVenueClaim, {
+            includePending: true,
+          })
         : null);
     const auditedLegacyNormalizedFields = auditedLegacyResolution
       ? buildAuditedLegacyNormalizedFields(event, auditedLegacyResolution)
