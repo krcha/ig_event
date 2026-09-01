@@ -1790,6 +1790,166 @@ function legacyInstagramProfileSnapshotFixture(overrides = {}) {
 }
 
 {
+  const state = makeDb({
+    eventDomainMigrationState: [
+      {
+        _id: "venue_identity_ready_for_audited_legacy_claim",
+        completedAt: 1,
+        cursor: "1",
+        errorCount: 0,
+        isDone: true,
+        key: "venue-identities-v1",
+        mismatchCount: 0,
+        phase: "venue_identities",
+        scannedCount: 1,
+        updatedAt: 1,
+        updatedCount: 1,
+      },
+    ],
+    events: [
+      {
+        _id: "event_audited_legacy_blank_venue",
+        artists: ["Audited Artist"],
+        date: "2026-09-20",
+        eventType: "nightlife",
+        normalizedFieldsJson: JSON.stringify({
+          extractionContractVersion: "event_evidence_v2",
+          fieldConfirmation: {
+            location_name: {
+              confidence: 0.95,
+              evidence: "@clubdrugstore",
+              found_in: ["caption", "canonical_hint"],
+            },
+          },
+          rawVenue: "Club Drugstore",
+          sharedScheduleContext: {
+            venue: {
+              applies_to_all: true,
+              evidence: "@clubdrugstore",
+              source: "caption",
+              value: "Club Drugstore",
+            },
+          },
+          venueEvidenceVerified: true,
+        }),
+        status: "approved",
+        time: "23:00",
+        title: "Audited Legacy Venue Event",
+        updatedAt: 92,
+        venue: "",
+      },
+    ],
+    venueIdentities: [
+      {
+        _id: "club_drugstore_provider_identity",
+        active: true,
+        kind: "provider_account",
+        normalizedValue: "clubdrugstore",
+        provider: "instagram",
+        rawValue: "clubdrugstore",
+        source: "venue_record",
+        venueId: "venue_club_drugstore",
+      },
+    ],
+    venues: [
+      {
+        _id: "venue_club_drugstore",
+        aliases: ["Club Drugstore"],
+        category: "club",
+        instagramHandle: "clubdrugstore",
+        name: "Drugstore",
+        publicStatus: "published",
+        scrapeActive: true,
+      },
+    ],
+  });
+  const dryRun = await backfillEventVenueBindingsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(dryRun.mismatchCount, 0);
+  assert.equal(dryRun.updatedCount, 1);
+  assert.equal(
+    state.tables.events.get("event_audited_legacy_blank_venue").venue,
+    "",
+    "Audited legacy venue dry-run must remain read-only.",
+  );
+  const applied = await backfillEventVenueBindingsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(applied.mismatchCount, 0);
+  assert.equal(applied.updatedCount, 1);
+  const event = state.tables.events.get("event_audited_legacy_blank_venue");
+  assert.equal(event.venue, "Drugstore");
+  assert.equal(event.venueId, "venue_club_drugstore");
+  assert.equal(event.venueInstagramHandle, "clubdrugstore");
+  assert.equal(event.normalizedVenueIdentity, "drugstore");
+  assert.equal(event.occurrenceVenueIdentity, "id:venue_club_drugstore");
+  assert.equal(
+    event.updatedAt,
+    92,
+    "Audited legacy venue migration must preserve event version.",
+  );
+}
+
+{
+  const state = makeDb({
+    eventDomainMigrationState: [
+      {
+        _id: "venue_identity_ready_for_unverified_legacy_claim",
+        completedAt: 1,
+        cursor: "1",
+        errorCount: 0,
+        isDone: true,
+        key: "venue-identities-v1",
+        mismatchCount: 0,
+        phase: "venue_identities",
+        scannedCount: 1,
+        updatedAt: 1,
+        updatedCount: 1,
+      },
+    ],
+    events: [
+      {
+        _id: "event_unverified_legacy_blank_venue",
+        artists: [],
+        date: "2026-09-20",
+        eventType: "nightlife",
+        normalizedFieldsJson: JSON.stringify({
+          extractionContractVersion: "event_evidence_v2",
+          fieldConfirmation: {
+            location_name: {
+              confidence: 0.95,
+              evidence: "@clubdrugstore",
+              found_in: ["caption"],
+            },
+          },
+          rawVenue: "Club Drugstore",
+          venueEvidenceVerified: false,
+        }),
+        status: "pending",
+        time: "TBD",
+        title: "Unverified Legacy Venue Event",
+        updatedAt: 93,
+        venue: "",
+      },
+    ],
+  });
+  const result = await backfillEventVenueBindingsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(result.mismatchCount, 1);
+  assert.equal(result.updatedCount, 0);
+  assert.equal(
+    state.tables.events.get("event_unverified_legacy_blank_venue").venue,
+    "",
+    "Unverified legacy venue evidence must remain fail-closed.",
+  );
+}
+
+{
   const alreadyNormalized = {
     _id: "event_unresolved_unchanged",
     artists: ["Independent Artist"],

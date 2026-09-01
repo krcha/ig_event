@@ -3,7 +3,10 @@ import type { MutationCtx } from "../../_generated/server";
 import { refreshEventPublicationStates } from "../../publicationPolicy";
 import { sourceOccurrenceProvenanceRepository } from "../../repositories/sourceOccurrenceProvenance";
 import { buildEventOccurrenceIndexPatch } from "../../sourceOccurrences";
-import { resolveVenueForWrite } from "../../venueResolver";
+import {
+  resolveVenueForWrite,
+  type ConvexVenueResolution,
+} from "../../venueResolver";
 import { DomainError } from "../../../lib/domain/errors";
 import { isCrossPostCampaignLineageEvent } from "../../../lib/events/cross-post-campaign-aggregate-attestation";
 import { loadVerifiedCampaignLineageForSourceEvent } from "../campaignLineageReattestationProof";
@@ -16,6 +19,104 @@ import {
   type EventDomainMigrationBatchArgs,
   type EventDomainMigrationBatchCounts,
 } from "./eventDomainShared";
+
+const MIN_AUDITED_LEGACY_VENUE_CONFIDENCE = 0.8;
+
+function readObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readAuditedLegacyVenueClaims(event: Doc<"events">): string[] {
+  if (
+    event.venue.trim() ||
+    event.venueInstagramHandle ||
+    event.venueId ||
+    !event.normalizedFieldsJson
+  ) {
+    return [];
+  }
+  let fields: Record<string, unknown> | null = null;
+  try {
+    fields = readObject(JSON.parse(event.normalizedFieldsJson));
+  } catch {
+    return [];
+  }
+  if (
+    !fields ||
+    fields.extractionContractVersion !== "event_evidence_v2" ||
+    fields.venueEvidenceVerified !== true
+  ) {
+    return [];
+  }
+  const fieldConfirmation = readObject(fields.fieldConfirmation);
+  const locationConfirmation = readObject(fieldConfirmation?.location_name);
+  const locationConfidence = locationConfirmation?.confidence;
+  const foundIn = Array.isArray(locationConfirmation?.found_in)
+    ? locationConfirmation.found_in.filter(
+        (source): source is string => typeof source === "string",
+      )
+    : [];
+  if (
+    typeof locationConfidence !== "number" ||
+    !Number.isFinite(locationConfidence) ||
+    locationConfidence < MIN_AUDITED_LEGACY_VENUE_CONFIDENCE ||
+    !foundIn.some((source) => source === "poster" || source === "caption")
+  ) {
+    return [];
+  }
+  const sharedSchedule = readObject(fields.sharedScheduleContext);
+  const sharedVenue = readObject(sharedSchedule?.venue);
+  const sharedVenueClaim =
+    sharedVenue?.applies_to_all === true &&
+    (sharedVenue.source === "poster" || sharedVenue.source === "caption") &&
+    typeof sharedVenue.evidence === "string" &&
+    sharedVenue.evidence.trim()
+      ? sharedVenue.value
+      : undefined;
+  return [
+    fields.rawVenue,
+    sharedVenueClaim,
+    locationConfirmation?.evidence,
+  ].filter(
+    (claim, index, all): claim is string =>
+      typeof claim === "string" &&
+      Boolean(claim.trim()) &&
+      all.findIndex(
+        (candidate) =>
+          typeof candidate === "string" &&
+          candidate.trim() === claim.trim(),
+      ) === index,
+  );
+}
+
+async function resolveAuditedLegacyVenueClaim(
+  ctx: MutationCtx,
+  event: Doc<"events">,
+): Promise<ConvexVenueResolution | null> {
+  const claims = readAuditedLegacyVenueClaims(event);
+  if (claims.length === 0) return null;
+  const resolutions = await Promise.all(
+    claims.map((claim) => resolveVenueForWrite(ctx, claim)),
+  );
+  if (
+    resolutions.some(
+      (resolution) => resolution.resolution.status === "ambiguous",
+    )
+  ) {
+    return null;
+  }
+  const resolved = resolutions.filter(
+    (resolution) =>
+      resolution.resolution.status === "resolved" &&
+      resolution.venueFields.venueId,
+  );
+  const venueIds = new Set(
+    resolved.map((resolution) => resolution.venueFields.venueId),
+  );
+  return venueIds.size === 1 ? (resolved[0] ?? null) : null;
+}
 
 /**
  * Attests legacy event venue text after identity claims are complete. Exact
@@ -57,32 +158,26 @@ export async function backfillEventVenueBindingsBatchHandler(
         campaignProof &&
         event.venueId === campaignProof.currentAttestation.targetVenueId
       ) {
-        const resolution = await resolveVenueForWrite(
-          ctx,
-          event.venueInstagramHandle ?? event.venue,
-        );
-        const effectiveEvent: Doc<"events"> = {
-          ...event,
-          ...resolution.venueFields,
-        };
-        if (
-          resolution.resolution.status === "resolved" &&
-          resolution.venueFields.venueId === event.venueId &&
-          !eventDomainMigrationPatchDiffers(event, {
-            ...resolution.venueFields,
-            ...buildEventOccurrenceIndexPatch(effectiveEvent),
-          })
-        ) {
-          counts.unchangedCount! += 1;
-          continue;
-        }
+        // The receipt-fenced campaign proof binds every source event to the
+        // canonical target venue ID. Rejected source variants intentionally
+        // retain their source-specific venue text as immutable evidence, so a
+        // textual denormalization difference is not a binding mismatch.
+        counts.unchangedCount! += 1;
+        continue;
       }
       counts.skippedCount! += 1;
       counts.quarantinedLineageMarkerCount! += 1;
       continue;
     }
     const rawVenueClaim = (event.venueInstagramHandle ?? event.venue).trim();
-    const resolution = await resolveVenueForWrite(ctx, rawVenueClaim);
+    const auditedLegacyResolution = rawVenueClaim
+      ? null
+      : await resolveAuditedLegacyVenueClaim(ctx, event);
+    const resolution =
+      auditedLegacyResolution ??
+      (rawVenueClaim
+        ? await resolveVenueForWrite(ctx, rawVenueClaim)
+        : null);
     // A nonempty legacy venue claim does not become invalid merely because the
     // canonical directory has not learned it yet. Unresolved venue identity is
     // a first-class state throughout occurrence construction and
@@ -93,11 +188,12 @@ export async function backfillEventVenueBindingsBatchHandler(
     // or an already-bound event that no longer resolves also stays a mismatch:
     // this migration must never erase a canonical venue binding by inference.
     const explicitUnresolvedClaim =
-      resolution.resolution.status === "unresolved" &&
+      resolution?.resolution.status === "unresolved" &&
       rawVenueClaim.length > 0 &&
       Boolean(resolution.venueFields.normalizedVenueIdentity) &&
       event.venueId === undefined;
     if (
+      !resolution ||
       resolution.resolution.status === "ambiguous" ||
       (resolution.resolution.status === "resolved" &&
         !resolution.venueFields.venueId) ||
@@ -110,9 +206,15 @@ export async function backfillEventVenueBindingsBatchHandler(
     const effectiveEvent: Doc<"events"> = {
       ...event,
       ...resolution.venueFields,
+      ...(auditedLegacyResolution?.canonicalVenueName
+        ? { venue: auditedLegacyResolution.canonicalVenueName }
+        : {}),
     };
     const patch = {
       ...resolution.venueFields,
+      ...(auditedLegacyResolution?.canonicalVenueName
+        ? { venue: auditedLegacyResolution.canonicalVenueName }
+        : {}),
       ...buildEventOccurrenceIndexPatch(effectiveEvent),
     };
     if (!eventDomainMigrationPatchDiffers(event, patch)) {
