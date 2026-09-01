@@ -55,6 +55,7 @@ import type * as internal_migrations_eventDomain from "../internal/migrations/ev
 import type * as internal_migrations_eventDomainShared from "../internal/migrations/eventDomainShared.js";
 import type * as internal_migrations_eventVenueBindings from "../internal/migrations/eventVenueBindings.js";
 import type * as internal_migrations_publication from "../internal/migrations/publication.js";
+import type * as internal_migrations_reviewedKolaracVenueConsolidation from "../internal/migrations/reviewedKolaracVenueConsolidation.js";
 import type * as internal_migrations_savedEvents from "../internal/migrations/savedEvents.js";
 import type * as internal_migrations_sourceOccurrenceBackfill from "../internal/migrations/sourceOccurrenceBackfill.js";
 import type * as internal_migrations_sourceOccurrenceCanonicalPayload from "../internal/migrations/sourceOccurrenceCanonicalPayload.js";
@@ -155,6 +156,7 @@ declare const fullApi: ApiFromModules<{
   "internal/migrations/eventDomainShared": typeof internal_migrations_eventDomainShared;
   "internal/migrations/eventVenueBindings": typeof internal_migrations_eventVenueBindings;
   "internal/migrations/publication": typeof internal_migrations_publication;
+  "internal/migrations/reviewedKolaracVenueConsolidation": typeof internal_migrations_reviewedKolaracVenueConsolidation;
   "internal/migrations/savedEvents": typeof internal_migrations_savedEvents;
   "internal/migrations/sourceOccurrenceBackfill": typeof internal_migrations_sourceOccurrenceBackfill;
   "internal/migrations/sourceOccurrenceCanonicalPayload": typeof internal_migrations_sourceOccurrenceCanonicalPayload;
