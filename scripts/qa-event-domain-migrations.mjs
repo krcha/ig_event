@@ -1610,6 +1610,32 @@ function makeCanonicalPayloadMigrationState() {
 
 {
   const state = makeCanonicalPayloadMigrationState();
+  state.tables.instagramEventSources.delete("payload_link");
+  state.tables.sourceOccurrences.delete("payload_occurrence");
+  const historical = await canonicalizeLegacySourceIdentitiesBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(historical.mismatchCount, 0);
+  assert.equal(historical.updatedCount, 0);
+  assert.equal(
+    historical.unchangedCount,
+    1,
+    "A historical receipt with no live link, occurrence, or admission requires no identity rewrite.",
+  );
+
+  const dangling = makeCanonicalPayloadMigrationState();
+  dangling.tables.instagramEventSources.delete("payload_link");
+  const blocked = await canonicalizeLegacySourceIdentitiesBatch._handler(
+    { db: dangling.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(blocked.mismatchCount, 1);
+  assert.equal(blocked.unchangedCount, 0);
+}
+
+{
+  const state = makeCanonicalPayloadMigrationState();
   state.tables.sourceOccurrences.delete("payload_occurrence");
   const link = state.tables.instagramEventSources.get("payload_link");
   delete link.sourceOccurrenceId;

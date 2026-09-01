@@ -60,8 +60,32 @@ async function assessSourceIdentityGroup(
       q.eq("sourceIdentity", receipt.sourceIdentity),
     )
     .take(MAX_SOURCE_OCCURRENCE_KEYS_PER_SOURCE + 1);
+  if (links.length === 0) {
+    const [danglingOccurrences, activeAdmissions] = await Promise.all([
+      ctx.db
+        .query("sourceOccurrences")
+        .withIndex("by_source_occurrence", (q) =>
+          q.eq("sourceIdentity", receipt.sourceIdentity),
+        )
+        .take(1),
+      ctx.db
+        .query("legacySourceOccurrenceAdmissions")
+        .withIndex("by_source_occurrence", (q) =>
+          q
+            .eq("migrationKey", LEGACY_SOURCE_OCCURRENCE_ADMISSION_KEY)
+            .eq("sourceIdentity", receipt.sourceIdentity),
+        )
+        .take(1),
+    ]);
+    // Historical receipts remain after their event/source links are retired.
+    // They are outside the live identity graph and require no rewrite. A
+    // dangling occurrence or admission is active lineage and still fails
+    // closed rather than being silently treated as historical.
+    return danglingOccurrences.length === 0 && activeAdmissions.length === 0
+      ? { kind: "unchanged" }
+      : { kind: "invalid" };
+  }
   if (
-    links.length === 0 ||
     links.length > MAX_SOURCE_OCCURRENCE_KEYS_PER_SOURCE ||
     new Set(links.map((link) => link.sourceOccurrenceKey)).size !== links.length
   ) {
