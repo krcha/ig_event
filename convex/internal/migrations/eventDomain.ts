@@ -8,19 +8,15 @@ import {
 import { backfillEventVenueBindingsBatchHandler } from "./eventVenueBindings";
 import {
   consolidateReviewedKolaracVenueHandler,
-  REVIEWED_KOLARAC_VENUE_CONSOLIDATION_KEY,
 } from "./reviewedKolaracVenueConsolidation";
 import {
   addReviewedOfficialVenueDirectoryEntriesHandler,
-  REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS_KEY,
 } from "./reviewedOfficialVenueDirectoryAdditions";
 import {
   correctReviewedMrakSourceOccurrenceHandler,
-  REVIEWED_MRAK_OCCURRENCE_CORRECTION_KEY,
 } from "./reviewedMrakOccurrenceCorrection";
 import {
   rewireReviewedMadlenianumDuplicateHandler,
-  REVIEWED_MADLENIANUM_DUPLICATE_REWIRE_KEY,
 } from "./reviewedMadlenianumDuplicateRewire";
 import {
   eventDomainMigrationBatchArgs,
@@ -29,10 +25,10 @@ import {
 import { backfillSourceOccurrencesBatchHandler } from "./sourceOccurrenceBackfill";
 import { backfillSourceOccurrenceCanonicalPayloadsBatchHandler } from "./sourceOccurrenceCanonicalPayload";
 import { auditSourceOccurrenceReceiptTopologyBatchHandler } from "./sourceOccurrenceTopologyAudit";
+import { admitLegacySourceOccurrencesBatchHandler } from "./legacySourceOccurrenceAdmission";
 import {
   auditVenueCompatibilitySeedsHandler,
   backfillVenueIdentitiesBatchHandler,
-  VENUE_COMPATIBILITY_SEED_AUDIT_KEY,
 } from "./venueIdentity";
 
 // Stable registrations only; all migration implementations stay in cohesive modules.
@@ -99,6 +95,11 @@ export const backfillSourceOccurrencesBatch = internalMutation({
   returns: eventDomainMigrationBatchResult,
   handler: backfillSourceOccurrencesBatchHandler,
 });
+export const admitLegacySourceOccurrencesBatch = internalMutation({
+  args: eventDomainMigrationBatchArgs,
+  returns: eventDomainMigrationBatchResult,
+  handler: admitLegacySourceOccurrencesBatchHandler,
+});
 export const backfillSourceOccurrenceCanonicalPayloadsBatch = internalMutation({
   args: eventDomainMigrationBatchArgs,
   returns: eventDomainMigrationBatchResult,
@@ -110,10 +111,8 @@ export const auditSourceOccurrenceReceiptTopologyBatch = internalMutation({
   handler: auditSourceOccurrenceReceiptTopologyBatchHandler,
 });
 
-export {
-  REVIEWED_KOLARAC_VENUE_CONSOLIDATION_KEY,
-  REVIEWED_MADLENIANUM_DUPLICATE_REWIRE_KEY,
-  REVIEWED_MRAK_OCCURRENCE_CORRECTION_KEY,
-  REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS_KEY,
-  VENUE_COMPATIBILITY_SEED_AUDIT_KEY,
-};
+export { REVIEWED_KOLARAC_VENUE_CONSOLIDATION_KEY } from "./reviewedKolaracVenueConsolidation";
+export { REVIEWED_MADLENIANUM_DUPLICATE_REWIRE_KEY } from "./reviewedMadlenianumDuplicateRewire";
+export { REVIEWED_MRAK_OCCURRENCE_CORRECTION_KEY } from "./reviewedMrakOccurrenceCorrection";
+export { REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS_KEY } from "./reviewedOfficialVenueDirectoryAdditions";
+export { VENUE_COMPATIBILITY_SEED_AUDIT_KEY } from "./venueIdentity";

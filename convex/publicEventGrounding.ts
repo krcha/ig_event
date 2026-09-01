@@ -22,6 +22,7 @@ import {
 import { exactJsonValue } from "../lib/events/exact-json-value";
 import { canonicalizeSourceUrl } from "../lib/domain/source-url";
 import { loadVerifiedCampaignLineageReattestation } from "./internal/campaignLineageReattestationProof";
+import { hasVerifiedLegacySourceOccurrenceAdmissionForEvent } from "./internal/legacySourceOccurrenceAdmissionProof";
 
 const MAX_CROSS_POST_CAMPAIGN_AUDIT_ROWS = 100;
 
@@ -372,6 +373,9 @@ async function isCanonicallyGroundedApprovedEventInternal(
         aggregateProofPath,
       )
     : false;
+  const legacyOccurrenceAdmissionAuthorized = aggregateAttestation
+    ? false
+    : await hasVerifiedLegacySourceOccurrenceAdmissionForEvent(ctx, event);
   if (
     Object.hasOwn(fields, CROSS_POST_CAMPAIGN_AGGREGATE_ATTESTATION_FIELD) &&
     !crossPostAggregateAuthorized
@@ -455,16 +459,16 @@ async function isCanonicallyGroundedApprovedEventInternal(
     !trustedSourceAuthorized &&
     !structuredEvidenceAuthorized &&
     !humanAuthorized &&
-    !crossPostAggregateAuthorized
+    !crossPostAggregateAuthorized &&
+    !legacyOccurrenceAdmissionAuthorized
   ) {
     return false;
   }
 
-  if (crossPostAggregateAuthorized) {
-    // Every source event was canonically checked in the same service-only
-    // transaction that wrote the immutable audit snapshots above. Instagram
-    // may later edit its mutable post row; that must not erase an already
-    // audited occurrence or its receipt lineage.
+  if (crossPostAggregateAuthorized || legacyOccurrenceAdmissionAuthorized) {
+    // The dedicated service-only migration bound the event, source document,
+    // compatibility receipt, and link into a drift-sensitive audit proof.
+    // Later mutable provider state must not erase that reviewed lineage.
     return true;
   }
 

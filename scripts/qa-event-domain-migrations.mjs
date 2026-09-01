@@ -11,6 +11,7 @@ import {
   backfillSourceDocumentCanonicalUrlsBatch,
   backfillSourceOccurrenceCanonicalPayloadsBatch,
   backfillSourceOccurrencesBatch,
+  admitLegacySourceOccurrencesBatch,
   backfillVenueIdentitiesBatch,
   consolidateReviewedKolaracVenue,
   correctReviewedMrakSourceOccurrence,
@@ -90,6 +91,7 @@ const TABLE_NAMES = [
   "instagramEventSources",
   "instagramSources",
   "instagramSourceOccurrenceReceipts",
+  "legacySourceOccurrenceAdmissions",
   "mediaAssets",
   "scrapedPosts",
   "sourceOccurrences",
@@ -154,6 +156,12 @@ function makeDb(initial = {}) {
         if (!table.has(id)) continue;
         table.set(id, { ...table.get(id), ...structuredClone(patch) });
         return;
+      }
+      throw new Error(`Missing row ${id}.`);
+    },
+    async delete(id) {
+      for (const table of Object.values(tables)) {
+        if (table.delete(id)) return;
       }
       throw new Error(`Missing row ${id}.`);
     },
@@ -1533,6 +1541,96 @@ function makeCanonicalPayloadMigrationState() {
     [...conflictState.tables.eventDomainMigrationState.values()][0].completedAt,
     undefined,
     "An ordinary venue-record owner must block a conflicting compatibility seed before writes.",
+  );
+}
+
+{
+  const state = makeCanonicalPayloadMigrationState();
+  state.tables.sourceOccurrences.delete("payload_occurrence");
+  const link = state.tables.instagramEventSources.get("payload_link");
+  delete link.sourceOccurrenceId;
+  const source = state.tables.scrapedPosts.get("payload_document");
+  source.processingStatus = "retryable_failure";
+  const eventBefore = structuredClone(state.tables.events.get("payload_event"));
+  const receiptBefore = structuredClone(
+    state.tables.instagramSourceOccurrenceReceipts.get("payload_receipt"),
+  );
+  const dryRun = await admitLegacySourceOccurrencesBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(dryRun.mismatchCount, 0);
+  assert.equal(dryRun.updatedCount, 1);
+  assert.equal(state.tables.legacySourceOccurrenceAdmissions.size, 0);
+  assert.deepEqual(state.tables.events.get("payload_event"), eventBefore);
+  assert.deepEqual(
+    state.tables.instagramSourceOccurrenceReceipts.get("payload_receipt"),
+    receiptBefore,
+  );
+
+  const applied = await admitLegacySourceOccurrencesBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(applied.mismatchCount, 0);
+  assert.equal(applied.updatedCount, 1);
+  assert.equal(state.tables.legacySourceOccurrenceAdmissions.size, 1);
+  const admissionProgress = [
+    ...state.tables.eventDomainMigrationState.values(),
+  ][0];
+  assert.equal(
+    admissionProgress.key,
+    "legacy-source-occurrence-admission-v1",
+  );
+  assert.ok(admissionProgress.completedAt);
+
+  state.tables.eventDomainMigrationState.clear();
+  const backfill = await backfillSourceOccurrencesBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(backfill.mismatchCount, 0);
+  assert.equal(backfill.updatedCount, 1);
+  assert.equal(state.tables.sourceOccurrences.size, 1);
+  assert.ok(
+    state.tables.instagramEventSources.get("payload_link").sourceOccurrenceId,
+  );
+
+  state.tables.eventDomainMigrationState.clear();
+  const payload =
+    await backfillSourceOccurrenceCanonicalPayloadsBatch._handler(
+      { db: state.db },
+      { cursor: null, dryRun: false, limit: 25 },
+    );
+  assert.equal(payload.mismatchCount, 0);
+  assert.equal(payload.updatedCount, 1);
+  assert.equal(
+    state.tables.legacySourceOccurrenceAdmissions.size,
+    1,
+    "Derived occurrence and receipt fields must not invalidate the admission proof.",
+  );
+}
+
+{
+  const state = makeCanonicalPayloadMigrationState();
+  state.tables.events.delete("payload_event");
+  const result = await admitLegacySourceOccurrencesBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(result.mismatchCount, 0);
+  assert.equal(result.updatedCount, 1);
+  assert.equal(state.tables.instagramEventSources.size, 0);
+  assert.equal(state.tables.sourceOccurrences.size, 0);
+  const receipt = state.tables.instagramSourceOccurrenceReceipts.get(
+    "payload_receipt",
+  );
+  assert.deepEqual(receipt.satisfiedKeys, []);
+  assert.deepEqual(receipt.satisfiedOccurrences, []);
+  assert.deepEqual(
+    receipt.expectedKeys,
+    ["payload-attestation-occurrence"],
+    "Retirement preserves the historical expected plan while removing its stale satisfaction.",
   );
 }
 

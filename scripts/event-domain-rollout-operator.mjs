@@ -117,6 +117,14 @@ const EVENT_DOMAIN_STEPS = [
   },
   {
     workflow: "occurrences",
+    key: "legacy-source-occurrence-admission-v1",
+    functionName:
+      "internal/migrations/eventDomain:admitLegacySourceOccurrencesBatch",
+    kind: "event_domain_page",
+    limit: 50,
+  },
+  {
+    workflow: "occurrences",
     key: "source-occurrences-generic-v2",
     functionName:
       "internal/migrations/eventDomain:backfillSourceOccurrencesBatch",
@@ -1267,6 +1275,7 @@ async function runExplicitCursorPages(context, options) {
       postApply: options.postApply,
       requireNoSkipped:
         options.step.key === "event-venue-bindings-v1" ||
+        options.step.key === "legacy-source-occurrence-admission-v1" ||
         options.step.key === "source-occurrences-generic-v2" ||
         options.step.key === "source-occurrence-canonical-payload-v1" ||
         options.step.key === "source-occurrence-receipt-topology-v1",

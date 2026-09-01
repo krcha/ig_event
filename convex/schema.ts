@@ -287,6 +287,7 @@ export default defineSchema({
     normalizedFieldsJson: v.optional(v.string()),
     humanReviewedLegacySourcePolicyVersion: v.optional(v.literal(1)),
     humanReviewedStructuredSourcePolicyVersion: v.optional(v.literal(1)),
+    legacySourceOccurrenceAdmissionPolicyVersion: v.optional(v.literal(1)),
     sourceOccurrenceKey: v.optional(v.string()),
     occurrenceSignatureVersion: v.optional(v.number()),
     occurrenceSignatureHash: v.optional(v.string()),
@@ -1064,6 +1065,24 @@ export default defineSchema({
   })
     .index("by_migration_event", ["migrationKey", "eventId"])
     .index("by_outcome_updatedAt", ["outcome", "updatedAt"]),
+  legacySourceOccurrenceAdmissions: defineTable({
+    migrationKey: v.literal("legacy-source-occurrence-admission-v1"),
+    eventId: v.id("events"),
+    sourceLinkId: v.id("instagramEventSources"),
+    receiptId: v.id("instagramSourceOccurrenceReceipts"),
+    sourceDocumentId: v.id("scrapedPosts"),
+    sourceIdentity: v.string(),
+    sourceOccurrenceKey: v.string(),
+    evidenceDigestSha256: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_source_occurrence", [
+      "migrationKey",
+      "sourceIdentity",
+      "sourceOccurrenceKey",
+    ])
+    .index("by_event", ["migrationKey", "eventId"]),
   venueAuditLog: defineTable({
     venueId: v.id("venues"),
     action: v.string(),

@@ -16,6 +16,7 @@ import { isCrossPostCampaignLineageEvent } from "../../../lib/events/cross-post-
 import { sourceOccurrenceRepresentativeMatchesExpected } from "../../../lib/events/source-occurrence-representation";
 import { normalizeHandle } from "../../../lib/pipeline/venue-normalization";
 import { loadVerifiedCampaignLineageForSourceEvent } from "../campaignLineageReattestationProof";
+import { loadVerifiedLegacySourceOccurrenceAdmission } from "../legacySourceOccurrenceAdmissionProof";
 import {
   assertExistingSourceOccurrenceReceiptWithinBounds,
   assertSourceOccurrencePlanWithinBounds,
@@ -204,18 +205,32 @@ export async function backfillSourceOccurrencesBatchHandler(
     const currentExtractionBound = sourceDocument
       ? await hasCurrentSourceExtractionBinding(ctx, event, sourceDocument)
       : false;
+    const currentBindingStrict = Boolean(
+      sourceDocument &&
+        sourceDocument.processingStatus === "completed" &&
+        sourceDocument.analysisRevision === sourceRevision &&
+        sourceDocument.analysisResultJson &&
+        currentExtractionBound &&
+        receipt.sourceFingerprint === link.sourceFingerprint &&
+        attestedSourceFingerprint === link.sourceFingerprint &&
+        expectedOccurrence &&
+        satisfied.length === 1 &&
+        satisfied[0]?.eventId === event._id &&
+        sourceOccurrenceRepresentativeMatchesExpected(event, expectedOccurrence),
+    );
+    const legacyAdmission =
+      !currentBindingStrict && sourceDocument && expectedOccurrence
+        ? await loadVerifiedLegacySourceOccurrenceAdmission(ctx, {
+            event,
+            link,
+            receipt,
+            sourceDocument,
+          })
+        : null;
     if (
       !sourceDocument ||
-      sourceDocument.processingStatus !== "completed" ||
-      sourceDocument.analysisRevision !== sourceRevision ||
-      !sourceDocument.analysisResultJson ||
-      !currentExtractionBound ||
-      receipt.sourceFingerprint !== link.sourceFingerprint ||
-      attestedSourceFingerprint !== link.sourceFingerprint ||
       !expectedOccurrence ||
-      satisfied.length !== 1 ||
-      satisfied[0]?.eventId !== event._id ||
-      !sourceOccurrenceRepresentativeMatchesExpected(event, expectedOccurrence)
+      (!currentBindingStrict && !legacyAdmission)
     ) {
       counts.mismatchCount += 1;
       continue;

@@ -39,6 +39,7 @@ const orderedMigrationKeys = [
   "venue-identities-v1",
   "campaign-lineage-reattestation-v1",
   "event-venue-bindings-v1",
+  "legacy-source-occurrence-admission-v1",
   "source-occurrences-generic-v2",
   "source-occurrence-canonical-payload-v1",
   "source-occurrence-receipt-topology-v1",
@@ -262,6 +263,8 @@ const migrationByFunction = {
     "media-canonical-url-v1",
   "internal/migrations/eventDomain:backfillCanonicalEventFieldsBatch":
     "canonical-event-domain-fields-v1",
+  "internal/migrations/eventDomain:admitLegacySourceOccurrencesBatch":
+    "legacy-source-occurrence-admission-v1",
   "internal/migrations/eventDomain:backfillSourceOccurrencesBatch":
     "source-occurrences-generic-v2",
   "internal/migrations/eventDomain:backfillSourceOccurrenceCanonicalPayloadsBatch":
@@ -610,6 +613,7 @@ try {
         .filter((call) => call.command === "run")
         .map((call) => call.functionName),
       [
+        "internal/migrations/eventDomain:admitLegacySourceOccurrencesBatch",
         "internal/migrations/eventDomain:backfillSourceOccurrencesBatch",
         "internal/migrations/eventDomain:backfillSourceOccurrenceCanonicalPayloadsBatch",
         "internal/migrations/eventDomain:auditSourceOccurrenceReceiptTopologyBatch",

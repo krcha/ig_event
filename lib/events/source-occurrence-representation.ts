@@ -20,7 +20,7 @@ export type SourceOccurrenceRepresentative = {
   normalizedFieldsJson?: string;
 };
 
-type SemanticOccurrenceBinding = Pick<
+export type SemanticOccurrenceBinding = Pick<
   ExpectedSourceOccurrence,
   "date" | "time" | "venue" | "title" | "artists"
 >;
@@ -78,7 +78,7 @@ function parseNormalizedFields(value: string | undefined): Record<string, unknow
   }
 }
 
-function readPersistedBindingSnapshot(
+export function readPersistedSourceOccurrenceBinding(
   normalizedFields: Record<string, unknown> | null,
 ): SemanticOccurrenceBinding | null {
   if (!normalizedFields) {
@@ -117,10 +117,10 @@ export function immutableSourceOccurrenceBindingsMatch(
   left: ImmutableSourceOccurrenceBindingCandidate,
   right: ImmutableSourceOccurrenceBindingCandidate,
 ): boolean {
-  const leftBinding = readPersistedBindingSnapshot(
+  const leftBinding = readPersistedSourceOccurrenceBinding(
     parseNormalizedFields(left.normalizedFieldsJson ?? undefined),
   );
-  const rightBinding = readPersistedBindingSnapshot(
+  const rightBinding = readPersistedSourceOccurrenceBinding(
     parseNormalizedFields(right.normalizedFieldsJson ?? undefined),
   );
   if (!leftBinding || !rightBinding) {
@@ -143,10 +143,10 @@ export function immutableSourceOccurrenceBindingsHaveEqualReliableTime(
   left: ImmutableSourceOccurrenceBindingCandidate,
   right: ImmutableSourceOccurrenceBindingCandidate,
 ): boolean {
-  const leftBinding = readPersistedBindingSnapshot(
+  const leftBinding = readPersistedSourceOccurrenceBinding(
     parseNormalizedFields(left.normalizedFieldsJson ?? undefined),
   );
-  const rightBinding = readPersistedBindingSnapshot(
+  const rightBinding = readPersistedSourceOccurrenceBinding(
     parseNormalizedFields(right.normalizedFieldsJson ?? undefined),
   );
   if (!leftBinding || !rightBinding) return false;
@@ -175,7 +175,7 @@ export function sourceOccurrenceRepresentativeMatchesExpected(
   ) {
     return false;
   }
-  const snapshot = readPersistedBindingSnapshot(normalizedFields);
+  const snapshot = readPersistedSourceOccurrenceBinding(normalizedFields);
   if (snapshot) {
     // Date-range keys are intentionally date-based; a later normalization may
     // improve the displayed time without changing which date child this is.

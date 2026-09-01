@@ -14,6 +14,7 @@ import { normalizeInstagramPostUrl } from "../../../lib/images/apify-images";
 import { normalizeHandle } from "../../../lib/pipeline/venue-normalization";
 import { buildEventOccurrenceIndexPatch } from "../../sourceOccurrences";
 import { receiptExpectedMatchesOccurrenceFacts } from "../reconciliationReceiptFacts";
+import { loadVerifiedLegacySourceOccurrenceAdmission } from "../legacySourceOccurrenceAdmissionProof";
 import {
   assertExistingSourceOccurrenceReceiptWithinBounds,
 } from "../sourceOccurrenceReceipts";
@@ -33,13 +34,14 @@ export const SOURCE_OCCURRENCE_CANONICAL_PAYLOAD_MIGRATION_KEY =
   "source-occurrence-canonical-payload-v1" as const;
 
 type AttestationFailure = {
-  kind: "mismatch" | "quarantined";
+  kind: "mismatch" | "quarantined" | "unchanged";
   reason: string;
 };
 
 type AttestedPayload = {
   canonicalEventJson: string;
   expectedOccurrenceIndex: number;
+  factsJson: string;
   receipt: Doc<"instagramSourceOccurrenceReceipts">;
 };
 
@@ -184,7 +186,9 @@ async function attestOccurrencePayload(
   occurrence: Doc<"sourceOccurrences">,
 ): Promise<AttestedPayload | AttestationFailure> {
   if (occurrence.state !== "satisfied" || !occurrence.canonicalEventId) {
-    return { kind: "mismatch", reason: "occurrence_not_satisfied" };
+    return occurrence.state === "satisfied"
+      ? { kind: "mismatch", reason: "satisfied_occurrence_missing_canonical" }
+      : { kind: "unchanged", reason: "non_satisfied_occurrence" };
   }
   const [event, sourceDocument, links, receipts] = await Promise.all([
     ctx.db.get(occurrence.canonicalEventId),
@@ -231,12 +235,18 @@ async function attestOccurrencePayload(
     (item) => item.key === occurrence.sourceOccurrenceKey,
   );
   const structuredFacts = parseStructuredFactsJson(occurrence.factsJson);
+  const legacyAdmission = await loadVerifiedLegacySourceOccurrenceAdmission(
+    ctx,
+    { event, link, receipt, sourceDocument },
+  );
   if (
     !expected ||
     expectedOccurrenceIndex < 0 ||
-    expected.factsJson !== occurrence.factsJson ||
-    !structuredFacts ||
-    structuredFacts.policy.approvalDisposition !== event.status ||
+    (expected.factsJson !== occurrence.factsJson &&
+      !(legacyAdmission && expected.factsJson === undefined)) ||
+    (!structuredFacts && !legacyAdmission) ||
+    (structuredFacts &&
+      structuredFacts.policy.approvalDisposition !== event.status) ||
     satisfactions.length !== 1 ||
     satisfactions[0]!.eventId !== event._id ||
     receipt.sourceFingerprint !== occurrence.sourceFingerprint ||
@@ -255,11 +265,12 @@ async function attestOccurrencePayload(
     !sourceOccurrenceRepresentativeMatchesExpected(event, expected) ||
     !receiptExpectedMatchesOccurrenceFacts(expected, occurrence) ||
     !eventHasExactOccurrenceSignature(event, occurrence) ||
-    !canonicalEventMatchesImmutableSource({
+    (!canonicalEventMatchesImmutableSource({
       event,
       occurrence,
       sourceDocument,
-    })
+    }) &&
+      !legacyAdmission)
   ) {
     return { kind: "mismatch", reason: "attested_binding_drifted" };
   }
@@ -281,7 +292,11 @@ async function attestOccurrencePayload(
   ) {
     return { kind: "mismatch", reason: "existing_payload_conflicted" };
   }
-  const nextExpected = { ...expected, canonicalEventJson };
+  const nextExpected = {
+    ...expected,
+    canonicalEventJson,
+    factsJson: occurrence.factsJson,
+  };
   const nextExpectedOccurrences = [...receipt.expectedOccurrences!];
   nextExpectedOccurrences[expectedOccurrenceIndex] = nextExpected;
   if (
@@ -293,7 +308,12 @@ async function attestOccurrencePayload(
   ) {
     return { kind: "mismatch", reason: "canonical_payload_exceeds_bounds" };
   }
-  return { canonicalEventJson, expectedOccurrenceIndex, receipt };
+  return {
+    canonicalEventJson,
+    expectedOccurrenceIndex,
+    factsJson: occurrence.factsJson,
+    receipt,
+  };
 }
 
 /**
@@ -329,7 +349,9 @@ export async function backfillSourceOccurrenceCanonicalPayloadsBatchHandler(
     if ("kind" in attestation) {
       reasonCounts[attestation.reason] =
         (reasonCounts[attestation.reason] ?? 0) + 1;
-      if (attestation.kind === "quarantined") {
+      if (attestation.kind === "unchanged") {
+        counts.unchangedCount! += 1;
+      } else if (attestation.kind === "quarantined") {
         counts.skippedCount! += 1;
         counts.quarantinedLineageMarkerCount! += 1;
       } else {
@@ -343,7 +365,8 @@ export async function backfillSourceOccurrenceCanonicalPayloadsBatchHandler(
     const occurrenceNeedsPatch =
       occurrence.canonicalEventJson !== attestation.canonicalEventJson;
     const receiptNeedsPatch =
-      expected.canonicalEventJson !== attestation.canonicalEventJson;
+      expected.canonicalEventJson !== attestation.canonicalEventJson ||
+      expected.factsJson !== attestation.factsJson;
     if (!occurrenceNeedsPatch && !receiptNeedsPatch) {
       counts.unchangedCount! += 1;
       continue;
@@ -364,6 +387,7 @@ export async function backfillSourceOccurrenceCanonicalPayloadsBatchHandler(
       expectedOccurrences[attestation.expectedOccurrenceIndex] = {
         ...expected,
         canonicalEventJson: attestation.canonicalEventJson,
+        factsJson: attestation.factsJson,
       };
       await ctx.db.patch(attestation.receipt._id, {
         expectedOccurrences,
