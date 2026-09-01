@@ -1593,6 +1593,23 @@ function makeCanonicalPayloadMigrationState() {
 
 {
   const state = makeCanonicalPayloadMigrationState();
+  state.tables.events.get("payload_event").moderationNote =
+    "[cross_post_campaign_variant:v2] audited canonical fixture";
+  const result = await canonicalizeLegacySourceIdentitiesBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(result.mismatchCount, 0);
+  assert.equal(result.updatedCount, 0);
+  assert.equal(
+    result.unchangedCount,
+    1,
+    "An already-canonical audited campaign group is outside the repair path and must remain unchanged.",
+  );
+}
+
+{
+  const state = makeCanonicalPayloadMigrationState();
   state.tables.sourceOccurrences.delete("payload_occurrence");
   const link = state.tables.instagramEventSources.get("payload_link");
   delete link.sourceOccurrenceId;

@@ -77,6 +77,10 @@ async function assessSourceIdentityGroup(
     "instagram",
     canonicalSource.value,
   );
+  // This migration owns only source-identity canonicalization. Existing
+  // canonical groups, including audited campaign groups, require no write and
+  // must not be rejected by repair-only lineage constraints below.
+  if (receipt.sourceIdentity === canonicalIdentity) return { kind: "unchanged" };
   const events = await Promise.all(links.map((link) => ctx.db.get(link.eventId)));
   if (
     links.some(
@@ -89,7 +93,6 @@ async function assessSourceIdentityGroup(
   ) {
     return { kind: "invalid" };
   }
-  if (receipt.sourceIdentity === canonicalIdentity) return { kind: "unchanged" };
   const [destinationReceipts, destinationLinks, destinationOccurrences, oldOccurrences, oldAdmissions] =
     await Promise.all([
       ctx.db
