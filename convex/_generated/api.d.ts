@@ -49,11 +49,13 @@ import type * as internal_eventRepairs_reviewedStructuredCorrections from "../in
 import type * as internal_eventRepairs_sourceGroundingReprocess from "../internal/eventRepairs/sourceGroundingReprocess.js";
 import type * as internal_eventRepairs_trustedV2VenueRepair from "../internal/eventRepairs/trustedV2VenueRepair.js";
 import type * as internal_eventVenueBindingCoverage from "../internal/eventVenueBindingCoverage.js";
+import type * as internal_legacySourceOccurrenceAdmissionProof from "../internal/legacySourceOccurrenceAdmissionProof.js";
 import type * as internal_migrations_campaignLineage from "../internal/migrations/campaignLineage.js";
 import type * as internal_migrations_canonicalFields from "../internal/migrations/canonicalFields.js";
 import type * as internal_migrations_eventDomain from "../internal/migrations/eventDomain.js";
 import type * as internal_migrations_eventDomainShared from "../internal/migrations/eventDomainShared.js";
 import type * as internal_migrations_eventVenueBindings from "../internal/migrations/eventVenueBindings.js";
+import type * as internal_migrations_legacySourceOccurrenceAdmission from "../internal/migrations/legacySourceOccurrenceAdmission.js";
 import type * as internal_migrations_publication from "../internal/migrations/publication.js";
 import type * as internal_migrations_reviewedKolaracVenueConsolidation from "../internal/migrations/reviewedKolaracVenueConsolidation.js";
 import type * as internal_migrations_reviewedMadlenianumDuplicateRewire from "../internal/migrations/reviewedMadlenianumDuplicateRewire.js";
@@ -153,11 +155,13 @@ declare const fullApi: ApiFromModules<{
   "internal/eventRepairs/sourceGroundingReprocess": typeof internal_eventRepairs_sourceGroundingReprocess;
   "internal/eventRepairs/trustedV2VenueRepair": typeof internal_eventRepairs_trustedV2VenueRepair;
   "internal/eventVenueBindingCoverage": typeof internal_eventVenueBindingCoverage;
+  "internal/legacySourceOccurrenceAdmissionProof": typeof internal_legacySourceOccurrenceAdmissionProof;
   "internal/migrations/campaignLineage": typeof internal_migrations_campaignLineage;
   "internal/migrations/canonicalFields": typeof internal_migrations_canonicalFields;
   "internal/migrations/eventDomain": typeof internal_migrations_eventDomain;
   "internal/migrations/eventDomainShared": typeof internal_migrations_eventDomainShared;
   "internal/migrations/eventVenueBindings": typeof internal_migrations_eventVenueBindings;
+  "internal/migrations/legacySourceOccurrenceAdmission": typeof internal_migrations_legacySourceOccurrenceAdmission;
   "internal/migrations/publication": typeof internal_migrations_publication;
   "internal/migrations/reviewedKolaracVenueConsolidation": typeof internal_migrations_reviewedKolaracVenueConsolidation;
   "internal/migrations/reviewedMadlenianumDuplicateRewire": typeof internal_migrations_reviewedMadlenianumDuplicateRewire;
