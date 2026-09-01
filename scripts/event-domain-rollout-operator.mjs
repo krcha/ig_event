@@ -93,6 +93,14 @@ const EVENT_DOMAIN_STEPS = [
   },
   {
     workflow: "venues",
+    key: "reviewed-mrak-source-occurrence-correction-v1",
+    functionName:
+      "internal/migrations/eventDomain:correctReviewedMrakSourceOccurrence",
+    kind: "event_domain_page",
+    limit: 1,
+  },
+  {
+    workflow: "venues",
     key: "event-venue-bindings-v1",
     functionName:
       "internal/migrations/eventDomain:backfillEventVenueBindingsBatch",

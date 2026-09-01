@@ -16,6 +16,10 @@ import {
   REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS_KEY,
 } from "./reviewedOfficialVenueDirectoryAdditions";
 import {
+  correctReviewedMrakSourceOccurrenceHandler,
+  REVIEWED_MRAK_OCCURRENCE_CORRECTION_KEY,
+} from "./reviewedMrakOccurrenceCorrection";
+import {
   eventDomainMigrationBatchArgs,
   eventDomainMigrationBatchResult,
 } from "./eventDomainShared";
@@ -28,23 +32,17 @@ import {
   VENUE_COMPATIBILITY_SEED_AUDIT_KEY,
 } from "./venueIdentity";
 
-/**
- * Stable registered API facade. Migration implementations live in cohesive
- * modules so source identity, venue identity/bindings, source occurrences, and
- * topology auditing cannot grow into one replacement god module again.
- */
+// Stable registrations only; all migration implementations stay in cohesive modules.
 export const backfillSourceDocumentCanonicalUrlsBatch = internalMutation({
   args: eventDomainMigrationBatchArgs,
   returns: eventDomainMigrationBatchResult,
   handler: backfillSourceDocumentCanonicalUrlsBatchHandler,
 });
-
 export const backfillMediaCanonicalUrlsBatch = internalMutation({
   args: eventDomainMigrationBatchArgs,
   returns: eventDomainMigrationBatchResult,
   handler: backfillMediaCanonicalUrlsBatchHandler,
 });
-
 export const backfillCanonicalEventFieldsBatch = internalMutation({
   args: eventDomainMigrationBatchArgs,
   returns: eventDomainMigrationBatchResult,
@@ -61,6 +59,12 @@ export const addReviewedOfficialVenueDirectoryEntries = internalMutation({
   args: eventDomainMigrationBatchArgs,
   returns: eventDomainMigrationBatchResult,
   handler: addReviewedOfficialVenueDirectoryEntriesHandler,
+});
+
+export const correctReviewedMrakSourceOccurrence = internalMutation({
+  args: eventDomainMigrationBatchArgs,
+  returns: eventDomainMigrationBatchResult,
+  handler: correctReviewedMrakSourceOccurrenceHandler,
 });
 
 export const auditVenueCompatibilitySeeds = internalMutation({
@@ -109,6 +113,7 @@ export const auditSourceOccurrenceReceiptTopologyBatch = internalMutation({
 
 export {
   REVIEWED_KOLARAC_VENUE_CONSOLIDATION_KEY,
+  REVIEWED_MRAK_OCCURRENCE_CORRECTION_KEY,
   REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS_KEY,
   VENUE_COMPATIBILITY_SEED_AUDIT_KEY,
 };

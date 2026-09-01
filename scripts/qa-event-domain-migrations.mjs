@@ -13,8 +13,10 @@ import {
   backfillSourceOccurrencesBatch,
   backfillVenueIdentitiesBatch,
   consolidateReviewedKolaracVenue,
+  correctReviewedMrakSourceOccurrence,
   auditSourceOccurrenceReceiptTopologyBatch,
   REVIEWED_KOLARAC_VENUE_CONSOLIDATION_KEY,
+  REVIEWED_MRAK_OCCURRENCE_CORRECTION_KEY,
   REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS_KEY,
   VENUE_COMPATIBILITY_SEED_AUDIT_KEY,
 } from "../convex/internal/migrations/eventDomain.ts";
@@ -714,6 +716,160 @@ function makeCanonicalPayloadMigrationState() {
 }
 
 {
+  const eventId = "j57ev5k2p036j2g69zjv16a7th8cxac9";
+  const sourceIdentity = "instagram-source-identity-v1:DcQ1OaZDLOP";
+  const sourceOccurrenceKey =
+    "instagram-occurrence-v2:470cd78d69181c6163754826bb4dff5535a2c274675c0cb5fa0acc134e370e3a";
+  const makeReviewedMrakState = (expectedTitle = "Lirikadare") =>
+    makeDb({
+      events: [
+        {
+          _creationTime: 1,
+          _id: eventId,
+          artists: ["Cerqeta"],
+          createdAt: 1,
+          date: "2026-09-04",
+          description: "Black Room set",
+          eventType: "nightlife",
+          normalizedFieldsJson: JSON.stringify({
+            artists: ["Cerqeta"],
+            extractionContractVersion: "event_evidence_v2",
+            rowSourceText: "BLACK ROOM\n@cerqeta",
+            sourceOccurrenceAmbiguousProvenance: true,
+            sourceOccurrenceKey,
+            splitEventIndex: 5,
+            splitSourceLine: "BLACK ROOM\n@cerqeta",
+            title: "Cerqeta",
+            venueEvidenceVerified: true,
+          }),
+          rawExtractionJson: JSON.stringify({
+            schedule_entries: [
+              {
+                artists: ["@lirikadare"],
+                date: "04.09.2026",
+                source_text: "BLACK ROOM\n@lirikadare",
+                time: "",
+                title: "@lirikadare",
+                venue: "Club Drugstore",
+              },
+            ],
+          }),
+          sourceOccurrenceKey,
+          status: "approved",
+          time: "TBD",
+          title: "Cerqeta",
+          updatedAt: 1_787_599_918_040,
+          venue: "",
+        },
+      ],
+      instagramEventSources: [
+        {
+          _id: "kx7dsz84qr55zyz89daen71ayd8cwd3b",
+          eventId,
+          sourceFingerprint: "qa-mrak-source-fingerprint",
+          sourceIdentity,
+          sourceOccurrenceKey,
+          updatedAt: 10,
+        },
+      ],
+      instagramSourceOccurrenceReceipts: [
+        {
+          _id: "mh73hxccz95prkpvdhnh6t04dd8cws2r",
+          deferredChildCount: 0,
+          deferredChildKeys: [],
+          expectedKeys: [sourceOccurrenceKey],
+          expectedOccurrences: [
+            {
+              artists: ["Lirikadare"],
+              date: "2026-09-04",
+              key: sourceOccurrenceKey,
+              time: "TBD",
+              title: expectedTitle,
+              venue: "",
+            },
+          ],
+          satisfiedKeys: [sourceOccurrenceKey],
+          satisfiedOccurrences: [{ eventId, key: sourceOccurrenceKey }],
+          sourceFingerprint: "qa-mrak-source-fingerprint",
+          sourceIdentity,
+          updatedAt: 10,
+        },
+      ],
+    });
+
+  const state = makeReviewedMrakState();
+  const eventBefore = structuredClone(state.tables.events.get(eventId));
+  const receiptBefore = structuredClone(
+    state.tables.instagramSourceOccurrenceReceipts.get(
+      "mh73hxccz95prkpvdhnh6t04dd8cws2r",
+    ),
+  );
+  const dryRun = await correctReviewedMrakSourceOccurrence._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 1 },
+  );
+  assert.equal(dryRun.mismatchCount, 0);
+  assert.equal(dryRun.updatedCount, 1);
+  assert.deepEqual(state.tables.events.get(eventId), eventBefore);
+  assert.equal(state.tables.eventAuditLog.size, 0);
+  assert.equal(state.tables.eventDomainMigrationState.size, 0);
+
+  const applied = await correctReviewedMrakSourceOccurrence._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 1 },
+  );
+  assert.equal(applied.mismatchCount, 0);
+  assert.equal(applied.updatedCount, 1);
+  const corrected = state.tables.events.get(eventId);
+  assert.equal(corrected.title, "Lirikadare");
+  assert.deepEqual(corrected.artists, ["Lirikadare"]);
+  assert.ok(corrected.updatedAt > eventBefore.updatedAt);
+  const fields = JSON.parse(corrected.normalizedFieldsJson);
+  assert.equal(fields.title, "Lirikadare");
+  assert.deepEqual(fields.artists, ["Lirikadare"]);
+  assert.equal(fields.rowSourceText, "BLACK ROOM\n@lirikadare");
+  assert.deepEqual(fields.reviewedSourceOccurrenceCorrection, {
+    fromTitle: "Cerqeta",
+    operationId: REVIEWED_MRAK_OCCURRENCE_CORRECTION_KEY,
+    policyVersion: 1,
+    sourceOccurrenceKey,
+    toTitle: "Lirikadare",
+  });
+  assert.deepEqual(
+    state.tables.instagramSourceOccurrenceReceipts.get(
+      "mh73hxccz95prkpvdhnh6t04dd8cws2r",
+    ),
+    receiptBefore,
+    "The reviewed correction must make the event fit its existing receipt without rewriting the receipt.",
+  );
+  assert.equal(state.tables.eventAuditLog.size, 1);
+  const progress = [...state.tables.eventDomainMigrationState.values()].find(
+    (row) => row.key === REVIEWED_MRAK_OCCURRENCE_CORRECTION_KEY,
+  );
+  assert.equal(progress.mismatchCount, 0);
+  assert.ok(progress.completedAt);
+
+  const verified = await correctReviewedMrakSourceOccurrence._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 1 },
+  );
+  assert.equal(verified.mismatchCount, 0);
+  assert.equal(verified.updatedCount, 0);
+  assert.equal(verified.unchangedCount, 1);
+
+  const blocked = makeReviewedMrakState("Unexpected Artist");
+  const blockedBefore = structuredClone(blocked.tables.events.get(eventId));
+  const blockedResult = await correctReviewedMrakSourceOccurrence._handler(
+    { db: blocked.db },
+    { cursor: null, dryRun: false, limit: 1 },
+  );
+  assert.ok(blockedResult.mismatchCount > 0);
+  assert.equal(blockedResult.updatedCount, 0);
+  assert.deepEqual(blocked.tables.events.get(eventId), blockedBefore);
+  assert.equal(blocked.tables.eventAuditLog.size, 0);
+}
+
+{
   const state = makeDb();
   const dryRun = await addReviewedOfficialVenueDirectoryEntries._handler(
     { db: state.db },
@@ -1354,6 +1510,7 @@ function makeCanonicalPayloadMigrationState() {
     artists: ["KNEZ"],
     date: primaryExpected.date,
     eventType: "nightlife",
+    instagramPostUrl: variantLink.instagramPostUrl,
     normalizedFieldsJson: JSON.stringify({
       artists: ["KNEZ"],
       normalizedDate: primaryExpected.date,
@@ -1369,7 +1526,9 @@ function makeCanonicalPayloadMigrationState() {
   };
   const variant = {
     ...variantBefore,
+    canonicalSourceUrl: variantLink.instagramPostUrl,
     moderationNote: `[reviewed_promotion_variant:v1] ${operationId} - exact reviewed fold`,
+    normalizedInstagramPostUrl: variantLink.instagramPostUrl,
     status: "rejected",
     updatedAt: 200,
   };

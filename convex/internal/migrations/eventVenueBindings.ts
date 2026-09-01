@@ -11,6 +11,7 @@ import { DomainError } from "../../../lib/domain/errors";
 import { exactJsonValue } from "../../../lib/events/exact-json-value";
 import { isCrossPostCampaignLineageEvent } from "../../../lib/events/cross-post-campaign-aggregate-attestation";
 import { sourceOccurrenceRepresentativeMatchesExpected } from "../../../lib/events/source-occurrence-representation";
+import { canonicalizeSourceUrlOrEmpty } from "../../../lib/domain/source-url";
 import { loadVerifiedCampaignLineageForSourceEvent } from "../campaignLineageReattestationProof";
 import { markSourceOccurrenceTopologyMutation } from "../sourceOccurrenceTopologyEpoch";
 import {
@@ -184,7 +185,6 @@ function rejectedFoldEvidenceRemainsExact(
     "_creationTime",
     "_id",
     "artists",
-    "canonicalSourceUrl",
     "date",
     "description",
     "eventType",
@@ -207,7 +207,33 @@ function rejectedFoldEvidenceRemainsExact(
   ] as const;
   return (
     before.status === "approved" &&
+    reviewedFoldCanonicalSourceFieldsRemainExact(current, before) &&
     immutableFields.every((field) => exactJsonValue(current[field], before[field]))
+  );
+}
+
+function reviewedFoldCanonicalSourceFieldsRemainExact(
+  current: Doc<"events">,
+  before: Record<string, unknown>,
+): boolean {
+  const canonicalSourceUrl = canonicalizeSourceUrlOrEmpty(
+    "instagram",
+    typeof before.instagramPostUrl === "string"
+      ? before.instagramPostUrl
+      : current.instagramPostUrl,
+  );
+  return ["canonicalSourceUrl", "normalizedInstagramPostUrl"].every(
+    (field) => {
+      if (Object.hasOwn(before, field)) {
+        return exactJsonValue(
+          current[field as keyof Doc<"events">],
+          before[field],
+        );
+      }
+      const value = current[field as keyof Doc<"events">];
+      return value === undefined ||
+        (Boolean(canonicalSourceUrl) && value === canonicalSourceUrl);
+    },
   );
 }
 
