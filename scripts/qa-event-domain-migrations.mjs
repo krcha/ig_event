@@ -2946,6 +2946,127 @@ function legacyInstagramProfileSnapshotFixture(overrides = {}) {
 }
 
 {
+  const sourceOccurrenceKey = "verified-absent-venue-occurrence";
+  const sourceFingerprint = "verified-absent-venue-fingerprint";
+  const sourceIdentity = "verified-absent-venue-source";
+  const rowSourceText = "BEOGRAD 28.08\nVERIFIED EVENT";
+  const event = {
+    _id: "event_verified_absent_venue",
+    artists: [],
+    date: "2026-09-24",
+    eventType: "nightlife",
+    normalizedFieldsJson: JSON.stringify({
+      extractionContractVersion: "event_evidence_v2",
+      fieldConfirmation: {
+        location_name: { confidence: 0, evidence: "", found_in: [] },
+      },
+      normalizedVenue: "",
+      rawVenue: "",
+      rowSourceText,
+      sharedScheduleContext: {
+        venue: {
+          applies_to_all: false,
+          evidence: "",
+          source: "unknown",
+          value: "",
+        },
+      },
+      sourceOccurrenceSourceFingerprint: sourceFingerprint,
+      venueEvidenceVerified: true,
+    }),
+    rawExtractionJson: JSON.stringify({
+      extraction_contract_version: "event_evidence_v2",
+      is_event: true,
+      schedule_entries: [{ source_text: rowSourceText, venue: "" }],
+      venue: "",
+    }),
+    sourceOccurrenceKey,
+    status: "approved",
+    time: "TBD",
+    title: "Verified Event Without A Stated Venue",
+    updatedAt: 95,
+    venue: "",
+  };
+  Object.assign(event, buildEventOccurrenceIndexPatch(event));
+  const expected = {
+    artists: event.artists,
+    date: event.date,
+    key: sourceOccurrenceKey,
+    time: event.time,
+    title: event.title,
+    venue: "",
+  };
+  const makeVerifiedAbsentVenueState = (expectedVenue = "") =>
+    makeDb({
+      eventDomainMigrationState: [
+        {
+          _id: "venue_identity_ready_for_verified_absent_venue",
+          completedAt: 1,
+          cursor: "1",
+          errorCount: 0,
+          isDone: true,
+          key: "venue-identities-v1",
+          mismatchCount: 0,
+          phase: "venue_identities",
+          scannedCount: 1,
+          updatedAt: 1,
+          updatedCount: 1,
+        },
+      ],
+      events: [event],
+      instagramEventSources: [
+        {
+          _id: "verified_absent_venue_link",
+          eventId: event._id,
+          instagramPostId: "VerifiedAbsentVenue",
+          instagramPostUrl:
+            "https://www.instagram.com/p/VerifiedAbsentVenue/",
+          sourceFingerprint,
+          sourceIdentity,
+          sourceOccurrenceKey,
+          updatedAt: 95,
+        },
+      ],
+      instagramSourceOccurrenceReceipts: [
+        {
+          _id: "verified_absent_venue_receipt",
+          deferredChildCount: 0,
+          deferredChildKeys: [],
+          expectedKeys: [sourceOccurrenceKey],
+          expectedOccurrences: [{ ...expected, venue: expectedVenue }],
+          satisfiedKeys: [sourceOccurrenceKey],
+          satisfiedOccurrences: [{ eventId: event._id, key: sourceOccurrenceKey }],
+          sourceFingerprint,
+          sourceIdentity,
+          updatedAt: 95,
+        },
+      ],
+    });
+  const state = makeVerifiedAbsentVenueState();
+  const result = await backfillEventVenueBindingsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(result.mismatchCount, 0);
+  assert.equal(result.unchangedCount, 1);
+  assert.equal(result.updatedCount, 0);
+  assert.ok(
+    [...state.tables.eventDomainMigrationState.values()].find(
+      (row) => row.key === "event-venue-bindings-v1",
+    )?.completedAt,
+    "A receipt-fenced unknown venue must complete without inventing a venue.",
+  );
+
+  const conflicting = makeVerifiedAbsentVenueState("Invented Venue");
+  const conflictingResult = await backfillEventVenueBindingsBatch._handler(
+    { db: conflicting.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(conflictingResult.mismatchCount, 1);
+  assert.equal(conflictingResult.unchangedCount, 0);
+}
+
+{
   const state = makeDb({
     eventDomainMigrationState: [
       {

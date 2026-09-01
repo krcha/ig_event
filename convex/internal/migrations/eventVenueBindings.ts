@@ -76,6 +76,91 @@ function readExactScheduleEntryVenue(
   return typeof venue === "string" && venue.trim() ? venue.trim() : null;
 }
 
+async function hasVerifiedAbsentVenueEvidence(
+  ctx: MutationCtx,
+  event: Doc<"events">,
+): Promise<boolean> {
+  const fields = parseNormalizedFields(event);
+  const fieldConfirmation = readObject(fields?.fieldConfirmation);
+  const locationConfirmation = readObject(fieldConfirmation?.location_name);
+  const sharedSchedule = readObject(fields?.sharedScheduleContext);
+  const sharedVenue = readObject(sharedSchedule?.venue);
+  let raw: Record<string, unknown> | null = null;
+  try {
+    raw = readObject(JSON.parse(event.rawExtractionJson ?? "null"));
+  } catch {
+    return false;
+  }
+  const rowSourceText = fields?.rowSourceText;
+  const matchingEntries = Array.isArray(raw?.schedule_entries)
+    ? raw.schedule_entries
+        .map(readObject)
+        .filter((entry) => entry?.source_text === rowSourceText)
+    : [];
+  if (
+    !fields ||
+    event.venue.trim() ||
+    event.venueInstagramHandle ||
+    event.venueId ||
+    event.normalizedVenueIdentity ||
+    event.occurrenceVenueIdentity !== "unknown-venue" ||
+    fields.extractionContractVersion !== "event_evidence_v2" ||
+    fields.venueEvidenceVerified !== true ||
+    fields.rawVenue !== "" ||
+    fields.normalizedVenue !== "" ||
+    locationConfirmation?.confidence !== 0 ||
+    locationConfirmation.evidence !== "" ||
+    !exactJsonValue(locationConfirmation.found_in, []) ||
+    sharedVenue?.applies_to_all !== false ||
+    sharedVenue.value !== "" ||
+    sharedVenue.evidence !== "" ||
+    sharedVenue.source !== "unknown" ||
+    typeof rowSourceText !== "string" ||
+    !rowSourceText.trim() ||
+    raw?.extraction_contract_version !== "event_evidence_v2" ||
+    raw.is_event !== true ||
+    raw.venue !== "" ||
+    matchingEntries.length !== 1 ||
+    matchingEntries[0]?.venue !== ""
+  ) {
+    return false;
+  }
+  const links = await ctx.db
+    .query("instagramEventSources")
+    .withIndex("by_event", (q) => q.eq("eventId", event._id))
+    .take(2);
+  const link = links.length === 1 ? links[0]! : null;
+  if (
+    !link ||
+    link.sourceOccurrenceKey !== event.sourceOccurrenceKey ||
+    fields.sourceOccurrenceSourceFingerprint !== link.sourceFingerprint
+  ) {
+    return false;
+  }
+  const receipts = await ctx.db
+    .query("instagramSourceOccurrenceReceipts")
+    .withIndex("by_sourceIdentity", (q) =>
+      q.eq("sourceIdentity", link.sourceIdentity),
+    )
+    .take(2);
+  const receipt = receipts.length === 1 ? receipts[0]! : null;
+  const expected = receipt?.expectedOccurrences?.filter(
+    (occurrence) => occurrence.key === link.sourceOccurrenceKey,
+  );
+  const satisfied = receipt?.satisfiedOccurrences.filter(
+    (occurrence) => occurrence.key === link.sourceOccurrenceKey,
+  );
+  return Boolean(
+    receipt &&
+      receipt.sourceFingerprint === link.sourceFingerprint &&
+      expected?.length === 1 &&
+      expected[0]!.venue === "" &&
+      sourceOccurrenceRepresentativeMatchesExpected(event, expected[0]) &&
+      satisfied?.length === 1 &&
+      satisfied[0]!.eventId === event._id,
+  );
+}
+
 function readAuditedLegacyVenueClaims(
   event: Doc<"events">,
   fields: Record<string, unknown>,
@@ -723,9 +808,18 @@ export async function backfillEventVenueBindingsBatchHandler(
     // reconciliation; this migration must normalize and attest that state
     // instead of requiring every historical event to acquire a guessed venue
     // record. Ambiguity remains a hard mismatch, as does the impossible shape
-    // of a "resolved" result without its canonical venue ID. A missing claim
-    // or an already-bound event that no longer resolves also stays a mismatch:
-    // this migration must never erase a canonical venue binding by inference.
+    // of a "resolved" result without its canonical venue ID. A receipt-fenced
+    // event-evidence-v2 extraction that explicitly attests no venue is the one
+    // valid missing-claim state: it retains the domain's unknown-venue identity
+    // rather than inventing a place. Every other missing claim, or an already-
+    // bound event that no longer resolves, remains a mismatch.
+    if (
+      !resolution &&
+      (await hasVerifiedAbsentVenueEvidence(ctx, event))
+    ) {
+      counts.unchangedCount! += 1;
+      continue;
+    }
     const explicitUnresolvedClaim =
       resolution?.resolution.status === "unresolved" &&
       (rawVenueClaim.length > 0 || Boolean(auditedLegacyResolution)) &&
