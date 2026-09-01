@@ -54,6 +54,14 @@ const EVENT_DOMAIN_STEPS = [
   },
   {
     workflow: "venues",
+    key: "reviewed-kolarac-venue-consolidation-v1",
+    functionName:
+      "internal/migrations/eventDomain:consolidateReviewedKolaracVenue",
+    kind: "event_domain_page",
+    limit: 1,
+  },
+  {
+    workflow: "venues",
     key: "venue-compatibility-seed-audit-v1",
     functionName:
       "internal/migrations/eventDomain:auditVenueCompatibilitySeeds",
@@ -1335,11 +1343,11 @@ async function previewEventDomainStep(context, step, postApply = false) {
 async function applyEventDomainStep(context, step) {
   const rows = await convexData(context, "eventDomainMigrationState");
   const state = uniqueState(rows, step.key, "eventDomainMigrationState");
-  if (isCleanEventDomainState(state)) {
+  const restart = context.options.restartKeys.has(step.key);
+  if (isCleanEventDomainState(state) && !restart) {
     addGate(context, { key: step.key, status: "already_clean" });
     return;
   }
-  const restart = context.options.restartKeys.has(step.key);
   if (state?.isDone && !restart) {
     throw new OperatorError(
       "E_RESTART_REQUIRED",

@@ -107,7 +107,7 @@ export const LEGACY_VENUE_ALIAS_SEEDS: readonly LegacyVenueAliasSeed[] = [
       "Kolarac Art Bioskop",
       "Bioskop Kolarac",
     ],
-    canonicalHandle: "kolarac_art_bioskop",
+    canonicalHandle: "kolarac_kolarceva_zaduzbina",
   },
   {
     aliases: [

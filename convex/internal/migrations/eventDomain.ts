@@ -8,6 +8,10 @@ import {
 } from "./canonicalFields";
 import { backfillEventVenueBindingsBatchHandler } from "./eventVenueBindings";
 import {
+  consolidateReviewedKolaracVenueHandler,
+  REVIEWED_KOLARAC_VENUE_CONSOLIDATION_KEY,
+} from "./reviewedKolaracVenueConsolidation";
+import {
   eventDomainMigrationBatchArgs,
   eventDomainMigrationBatchResult,
 } from "./eventDomainShared";
@@ -41,6 +45,12 @@ export const backfillCanonicalEventFieldsBatch = internalMutation({
   args: eventDomainMigrationBatchArgs,
   returns: eventDomainMigrationBatchResult,
   handler: backfillCanonicalEventFieldsBatchHandler,
+});
+
+export const consolidateReviewedKolaracVenue = internalMutation({
+  args: eventDomainMigrationBatchArgs,
+  returns: eventDomainMigrationBatchResult,
+  handler: consolidateReviewedKolaracVenueHandler,
 });
 
 export const auditVenueCompatibilitySeeds = internalMutation({
@@ -87,4 +97,7 @@ export const auditSourceOccurrenceReceiptTopologyBatch = internalMutation({
   handler: auditSourceOccurrenceReceiptTopologyBatchHandler,
 });
 
-export { VENUE_COMPATIBILITY_SEED_AUDIT_KEY };
+export {
+  REVIEWED_KOLARAC_VENUE_CONSOLIDATION_KEY,
+  VENUE_COMPATIBILITY_SEED_AUDIT_KEY,
+};

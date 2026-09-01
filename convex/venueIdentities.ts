@@ -104,7 +104,7 @@ async function assertProviderAccountAvailable(
   }
 }
 
-async function upsertClaim(
+export async function upsertClaim(
   ctx: MutationCtx,
   venueId: Id<"venues">,
   claim: VenueIdentityClaim,
@@ -355,15 +355,6 @@ export const upsertIdentity = mutation({
       throw new DomainError(
         "RECONCILIATION_CONFLICT",
         "Canonical venue names are managed by the venue record; update the venue instead.",
-      );
-    }
-    if (
-      args.kind === "provider_account" &&
-      normalizedValue !== normalizeHandle(venue.instagramHandle)
-    ) {
-      throw new DomainError(
-        "RECONCILIATION_CONFLICT",
-        "A manual provider identity must match the venue's current provider account.",
       );
     }
     return upsertClaim(

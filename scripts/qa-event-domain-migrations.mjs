@@ -11,7 +11,9 @@ import {
   backfillSourceOccurrenceCanonicalPayloadsBatch,
   backfillSourceOccurrencesBatch,
   backfillVenueIdentitiesBatch,
+  consolidateReviewedKolaracVenue,
   auditSourceOccurrenceReceiptTopologyBatch,
+  REVIEWED_KOLARAC_VENUE_CONSOLIDATION_KEY,
   VENUE_COMPATIBILITY_SEED_AUDIT_KEY,
 } from "../convex/internal/migrations/eventDomain.ts";
 import { buildEventOccurrenceIndexPatch } from "../convex/sourceOccurrences.ts";
@@ -42,6 +44,9 @@ const compatibilitySeedByHandle = new Map(
     seed,
   ]),
 );
+const canonicalSeedHandleByLegacySourceHandle = new Map([
+  ["kolarac_art_bioskop", "kolarac_kolarceva_zaduzbina"],
+]);
 for (const row of trackedVenueOverrideRows) {
   const handle = normalizeHandle(row.ig_handle ?? "");
   const venueName = String(row.venue_name ?? "").trim();
@@ -49,10 +54,12 @@ for (const row of trackedVenueOverrideRows) {
     handle && venueName,
     "Tracked venue override rows must be complete.",
   );
-  const seed = compatibilitySeedByHandle.get(handle);
+  const canonicalSeedHandle =
+    canonicalSeedHandleByLegacySourceHandle.get(handle) ?? handle;
+  const seed = compatibilitySeedByHandle.get(canonicalSeedHandle);
   assert.ok(
     seed,
-    `Tracked venue override @${handle} must have a migration compatibility seed.`,
+    `Tracked venue override @${handle} must map to canonical compatibility seed @${canonicalSeedHandle}.`,
   );
   assert.ok(
     seed.aliases.some(
@@ -67,12 +74,15 @@ for (const row of trackedVenueOverrideRows) {
 const TABLE_NAMES = [
   "eventDomainMigrationState",
   "events",
+  "favoriteVenues",
   "instagramEventSources",
+  "instagramSources",
   "instagramSourceOccurrenceReceipts",
   "mediaAssets",
   "scrapedPosts",
   "sourceOccurrences",
   "sourceOccurrenceTopologyEpoch",
+  "venueAuditLog",
   "venueIdentities",
   "venues",
 ];
@@ -82,7 +92,16 @@ function makeDb(initial = {}) {
     TABLE_NAMES.map((table) => [
       table,
       new Map(
-        (initial[table] ?? []).map((row) => [row._id, structuredClone(row)]),
+        (initial[table] ?? []).map((row) => [
+          row._id,
+          structuredClone(
+            table === "venues" &&
+              row.isActive === undefined &&
+              row.publicStatus === undefined
+              ? { ...row, isActive: true }
+              : row,
+          ),
+        ]),
       ),
     ]),
   );
@@ -231,6 +250,97 @@ function cleanVenueCompatibilitySeedAuditState() {
     updatedAt: 1,
     updatedCount: 0,
   };
+}
+
+function makeReviewedKolaracConsolidationState(overrides = {}) {
+  const canonicalVenue = {
+    _id: "venue_kolarac_canonical",
+    aliases: [
+      "Art bioskop Kolarac",
+      "Kolarčeva zadužbina",
+      "Ilija M. Kolarac Endowment",
+    ],
+    category: "venue",
+    instagramHandle: "kolarac_kolarceva_zaduzbina",
+    isActive: true,
+    name: "Kolarac",
+    normalizedInstagramHandle: "kolarac_kolarceva_zaduzbina",
+    publicStatus: "published",
+    scrapeActive: true,
+    updatedAt: 100,
+    ...overrides.canonicalVenue,
+  };
+  const legacyVenue = {
+    _id: "venue_kolarac_legacy",
+    category: "venue",
+    instagramHandle: "kolarac_art_bioskop",
+    isActive: true,
+    name: "KolaracArtBioskop",
+    normalizedInstagramHandle: "kolarac_art_bioskop",
+    updatedAt: 90,
+    ...overrides.legacyVenue,
+  };
+  const canonicalSource = {
+    _id: "instagram_source_kolarac_canonical",
+    active: true,
+    handle: "kolarac_kolarceva_zaduzbina",
+    role: "venue",
+    updatedAt: 100,
+    venueId: canonicalVenue._id,
+    ...overrides.canonicalSource,
+  };
+  const legacySource = {
+    _id: "instagram_source_kolarac_legacy",
+    active: true,
+    handle: "kolarac_art_bioskop",
+    role: "venue",
+    updatedAt: 90,
+    venueId: legacyVenue._id,
+    ...overrides.legacySource,
+  };
+  return makeDb({
+    events: overrides.events ?? [],
+    favoriteVenues: overrides.favoriteVenues ?? [],
+    instagramSources: [
+      canonicalSource,
+      legacySource,
+      ...(overrides.additionalInstagramSources ?? []),
+    ],
+    sourceOccurrences: overrides.sourceOccurrences ?? [],
+    venueIdentities: [
+      {
+        _id: "legacy_kolarac_name_identity",
+        active: true,
+        kind: "canonical_name",
+        normalizedValue: "kolaracartbioskop",
+        rawValue: "KolaracArtBioskop",
+        source: "venue_record",
+        venueId: legacyVenue._id,
+      },
+      {
+        _id: "legacy_kolarac_provider_identity",
+        active: true,
+        kind: "provider_account",
+        normalizedValue: "kolarac_art_bioskop",
+        provider: "instagram",
+        rawValue: "kolarac_art_bioskop",
+        source: "venue_record",
+        venueId: legacyVenue._id,
+      },
+      {
+        _id: "canonical_kolarac_provider_identity",
+        active: true,
+        kind: "provider_account",
+        normalizedValue: "kolarac_kolarceva_zaduzbina",
+        provider: "instagram",
+        rawValue: "kolarac_kolarceva_zaduzbina",
+        source: "venue_record",
+        venueId: canonicalVenue._id,
+      },
+      ...(overrides.additionalVenueIdentities ?? []),
+    ],
+    venues: [canonicalVenue, legacyVenue],
+  });
 }
 
 function makeCanonicalPayloadMigrationState() {
@@ -424,6 +534,175 @@ function makeCanonicalPayloadMigrationState() {
 }
 
 {
+  const state = makeReviewedKolaracConsolidationState();
+  const legacyVenueBefore = structuredClone(
+    state.tables.venues.get("venue_kolarac_legacy"),
+  );
+  const legacySourceBefore = structuredClone(
+    state.tables.instagramSources.get("instagram_source_kolarac_legacy"),
+  );
+  const dryRun = await consolidateReviewedKolaracVenue._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 1 },
+  );
+  assert.equal(dryRun.mismatchCount, 0);
+  assert.equal(dryRun.updatedCount, 7);
+  assert.deepEqual(
+    state.tables.venues.get("venue_kolarac_legacy"),
+    legacyVenueBefore,
+  );
+  assert.deepEqual(
+    state.tables.instagramSources.get("instagram_source_kolarac_legacy"),
+    legacySourceBefore,
+  );
+  assert.equal(state.tables.venueAuditLog.size, 0);
+  assert.equal(state.tables.eventDomainMigrationState.size, 0);
+
+  const applied = await consolidateReviewedKolaracVenue._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 1 },
+  );
+  assert.equal(applied.mismatchCount, 0);
+  assert.equal(applied.updatedCount, 7);
+  assert.deepEqual(
+    {
+      isActive: state.tables.venues.get("venue_kolarac_legacy").isActive,
+      publicStatus:
+        state.tables.venues.get("venue_kolarac_legacy").publicStatus,
+      scrapeActive:
+        state.tables.venues.get("venue_kolarac_legacy").scrapeActive,
+    },
+    { isActive: false, publicStatus: "hidden", scrapeActive: false },
+  );
+  assert.equal(
+    state.tables.instagramSources.get("instagram_source_kolarac_legacy")
+      .venueId,
+    "venue_kolarac_canonical",
+  );
+  assert.ok(
+    [...state.tables.venueIdentities.values()]
+      .filter((identity) => identity.venueId === "venue_kolarac_legacy")
+      .every((identity) => identity.active === false),
+  );
+  assert.deepEqual(
+    [...state.tables.venueIdentities.values()]
+      .filter(
+        (identity) =>
+          identity.venueId === "venue_kolarac_canonical" &&
+          identity.kind === "provider_account" &&
+          identity.normalizedValue === "kolarac_art_bioskop",
+      )
+      .map((identity) => ({
+        active: identity.active,
+        provider: identity.provider,
+        rawValue: identity.rawValue,
+        source: identity.source,
+      })),
+    [
+      {
+        active: true,
+        provider: "instagram",
+        rawValue: "kolarac_art_bioskop",
+        source: "manual",
+      },
+    ],
+  );
+  assert.equal(state.tables.venueAuditLog.size, 2);
+  const progress = [...state.tables.eventDomainMigrationState.values()][0];
+  assert.equal(progress.key, REVIEWED_KOLARAC_VENUE_CONSOLIDATION_KEY);
+  assert.equal(progress.mismatchCount, 0);
+  assert.ok(progress.completedAt);
+
+  const verified = await consolidateReviewedKolaracVenue._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 1 },
+  );
+  assert.equal(verified.mismatchCount, 0);
+  assert.equal(verified.updatedCount, 0);
+  assert.equal(verified.unchangedCount, 1);
+  assert.equal(
+    state.tables.venueAuditLog.size,
+    2,
+    "Post-apply verification must not duplicate immutable audit evidence.",
+  );
+}
+
+{
+  const blockedFixtures = [
+    {
+      label: "event reference",
+      overrides: {
+        events: [{ _id: "legacy_event", venueId: "venue_kolarac_legacy" }],
+      },
+    },
+    {
+      label: "source-occurrence reference",
+      overrides: {
+        sourceOccurrences: [
+          { _id: "legacy_occurrence", venueId: "venue_kolarac_legacy" },
+        ],
+      },
+    },
+    {
+      label: "favorite-venue reference",
+      overrides: {
+        favoriteVenues: [
+          { _id: "legacy_favorite", venueId: "venue_kolarac_legacy" },
+        ],
+      },
+    },
+    {
+      label: "unexpected InstagramSource reference",
+      overrides: {
+        additionalInstagramSources: [
+          {
+            _id: "unexpected_legacy_source_reference",
+            active: false,
+            handle: "unrelated_source",
+            role: "unknown",
+            venueId: "venue_kolarac_legacy",
+          },
+        ],
+      },
+    },
+    {
+      label: "reviewed canonical name drift",
+      overrides: { canonicalVenue: { name: "Unexpected Kolarac Name" } },
+    },
+  ];
+  for (const fixture of blockedFixtures) {
+    const state = makeReviewedKolaracConsolidationState(fixture.overrides);
+    const legacyBefore = structuredClone(
+      state.tables.venues.get("venue_kolarac_legacy"),
+    );
+    const sourceBefore = structuredClone(
+      state.tables.instagramSources.get("instagram_source_kolarac_legacy"),
+    );
+    const result = await consolidateReviewedKolaracVenue._handler(
+      { db: state.db },
+      { cursor: null, dryRun: false, limit: 1 },
+    );
+    assert.ok(
+      result.mismatchCount > 0,
+      `${fixture.label} must fail the reviewed consolidation closed.`,
+    );
+    assert.equal(result.updatedCount, 0);
+    assert.deepEqual(
+      state.tables.venues.get("venue_kolarac_legacy"),
+      legacyBefore,
+    );
+    assert.deepEqual(
+      state.tables.instagramSources.get("instagram_source_kolarac_legacy"),
+      sourceBefore,
+    );
+    assert.equal(state.tables.venueAuditLog.size, 0);
+    const progress = [...state.tables.eventDomainMigrationState.values()][0];
+    assert.equal(progress.completedAt, undefined);
+    assert.ok(progress.mismatchCount > 0);
+  }
+}
+
+{
   const seedVenues = LEGACY_VENUE_ALIAS_SEEDS.map((seed, index) => ({
     _id: `seed_venue_${index}`,
     aliases: [],
@@ -469,6 +748,30 @@ function makeCanonicalPayloadMigrationState() {
     [...missingState.tables.eventDomainMigrationState.values()][0].completedAt,
     undefined,
     "A missing compatibility-seed target must keep the migration gate closed.",
+  );
+
+  const conflictState = makeDb({
+    venues: [
+      ...seedVenues,
+      {
+        _id: "ordinary_conflicting_venue",
+        aliases: [],
+        instagramHandle: "ordinary_conflicting_venue",
+        isActive: true,
+        name: LEGACY_VENUE_ALIAS_SEEDS[0].aliases[0],
+      },
+    ],
+  });
+  const conflict = await auditVenueCompatibilitySeeds._handler(
+    { db: conflictState.db },
+    { dryRun: false },
+  );
+  assert.equal(conflict.issueCount, 1);
+  assert.match(conflict.issuesJson, /ordinary_claim_conflict/u);
+  assert.equal(
+    [...conflictState.tables.eventDomainMigrationState.values()][0].completedAt,
+    undefined,
+    "An ordinary venue-record owner must block a conflicting compatibility seed before writes.",
   );
 }
 
@@ -556,6 +859,35 @@ function makeCanonicalPayloadMigrationState() {
   const progress = [...state.tables.eventDomainMigrationState.values()][0];
   assert.equal(progress.completedAt, undefined);
   assert.match(progress.auditDetailsJson, /attested_binding_drifted/u);
+}
+
+{
+  const state = makeDb({
+    eventDomainMigrationState: [cleanVenueCompatibilitySeedAuditState()],
+    venues: [
+      {
+        _id: "venue_hidden_duplicate",
+        aliases: ["Retired Alias"],
+        instagramHandle: "retired_venue",
+        isActive: false,
+        name: "Retired Venue",
+        publicStatus: "hidden",
+        scrapeActive: false,
+      },
+    ],
+  });
+  const result = await backfillVenueIdentitiesBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(result.mismatchCount, 0);
+  assert.equal(result.scannedCount, 1);
+  assert.equal(result.updatedCount, 0);
+  assert.equal(
+    state.tables.venueIdentities.size,
+    0,
+    "Hidden duplicate venues must not be reactivated by the identity backfill.",
+  );
 }
 
 {

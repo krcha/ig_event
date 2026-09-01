@@ -33,6 +33,7 @@ const orderedMigrationKeys = [
   "source-document-canonical-url-v1",
   "media-canonical-url-v1",
   "canonical-event-domain-fields-v1",
+  "reviewed-kolarac-venue-consolidation-v1",
   "venue-compatibility-seed-audit-v1",
   "venue-identities-v1",
   "campaign-lineage-reattestation-v1",
@@ -612,6 +613,58 @@ try {
         "internal/migrations/eventDomain:backfillSourceOccurrenceCanonicalPayloadsBatch",
         "internal/migrations/eventDomain:auditSourceOccurrenceReceiptTopologyBatch",
       ],
+    );
+  }
+
+  {
+    const restartKey = "source-document-canonical-url-v1";
+    setFakeState({
+      ...emptyFakeState(),
+      eventStates: {
+        [restartKey]: {
+          completedAt: 20,
+          cursor: "",
+          errorCount: 0,
+          isDone: true,
+          key: restartKey,
+          mismatchCount: 0,
+          phase: "complete",
+          scannedCount: 2,
+          updatedAt: 20,
+          updatedCount: 2,
+        },
+      },
+    });
+    const receiptDir = makeReceiptDir("explicit-clean-restart");
+    const result = runOperator("apply", receiptDir, [
+      "--workflow",
+      "canonical",
+      "--restart-key",
+      restartKey,
+      "--confirm",
+      "APPLY_EVENT_DOMAIN_ROLLOUT",
+    ]);
+    assert.equal(result.status, 0, result.stderr);
+    const restartedCalls = readCalls().filter(
+      (call) =>
+        call.command === "run" &&
+        call.functionName ===
+          "internal/migrations/eventDomain:backfillSourceDocumentCanonicalUrlsBatch",
+    );
+    assert.equal(restartedCalls.length, 3);
+    assert.equal(
+      restartedCalls.some(
+        (call) => call.payload.dryRun === false && call.payload.restart === true,
+      ),
+      true,
+      "An explicit allowed restart must re-apply a clean migration state.",
+    );
+    const receipt = JSON.parse(
+      readFileSync(receiptFiles(receiptDir)[0], "utf8"),
+    );
+    assert.equal(
+      receipt.gates.find((gate) => gate.key === restartKey)?.status,
+      "clean",
     );
   }
 

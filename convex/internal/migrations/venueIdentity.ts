@@ -6,6 +6,7 @@ import {
   normalizeHandle,
   normalizeVenueComparableText,
 } from "../../../lib/pipeline/venue-normalization";
+import { isVenuePublic } from "../../../lib/venues/venue-lifecycle";
 import {
   assertCleanCompletedEventDomainMigration,
   normalizeEventDomainMigrationBatchSize,
@@ -15,6 +16,7 @@ import {
 } from "./eventDomainShared";
 
 const MAX_IDENTITIES_PER_KIND = 50;
+const MAX_VENUE_COMPATIBILITY_AUDIT_RECORDS = 2_000;
 
 export const VENUE_COMPATIBILITY_SEED_AUDIT_KEY =
   "venue-compatibility-seed-audit-v1";
@@ -22,7 +24,12 @@ export const VENUE_COMPATIBILITY_SEED_AUDIT_KEY =
 type VenueCompatibilitySeedAuditIssue = {
   canonicalHandle: string;
   candidateVenueIds: string[];
-  reason: "ambiguous_target" | "duplicate_alias_claim" | "missing_target";
+  reason:
+    | "ambiguous_target"
+    | "directory_over_bound"
+    | "duplicate_alias_claim"
+    | "missing_target"
+    | "ordinary_claim_conflict";
   value?: string;
 };
 
@@ -78,6 +85,26 @@ export async function auditVenueCompatibilitySeedsHandler(
   const dryRun = args.dryRun ?? true;
   const issues: VenueCompatibilitySeedAuditIssue[] = [];
   const aliasOwners = new Map<string, Set<string>>();
+  const venueRows = await ctx.db
+    .query("venues")
+    .take(MAX_VENUE_COMPATIBILITY_AUDIT_RECORDS + 1);
+  if (venueRows.length > MAX_VENUE_COMPATIBILITY_AUDIT_RECORDS) {
+    issues.push({
+      candidateVenueIds: [],
+      canonicalHandle: "*",
+      reason: "directory_over_bound",
+    });
+  }
+  const ordinaryClaimOwners = new Map<string, Set<string>>();
+  for (const venue of venueRows.slice(0, MAX_VENUE_COMPATIBILITY_AUDIT_RECORDS)) {
+    if (!isVenuePublic(venue)) continue;
+    for (const claim of buildVenueIdentityClaims(venue)) {
+      if (claim.kind === "provider_account") continue;
+      const owners = ordinaryClaimOwners.get(claim.normalizedValue) ?? new Set<string>();
+      owners.add(String(venue._id));
+      ordinaryClaimOwners.set(claim.normalizedValue, owners);
+    }
+  }
   for (const seed of LEGACY_VENUE_ALIAS_SEEDS) {
     const canonicalHandle = normalizeHandle(seed.canonicalHandle);
     const candidates = await loadVenueCandidatesForCompatibilitySeed(
@@ -103,6 +130,22 @@ export async function auditVenueCompatibilitySeedsHandler(
       const owners = aliasOwners.get(normalizedAlias) ?? new Set<string>();
       owners.add(canonicalHandle);
       aliasOwners.set(normalizedAlias, owners);
+      if (candidates.length === 1) {
+        const targetId = String(candidates[0]._id);
+        const conflictingVenueIds = [
+          ...(ordinaryClaimOwners.get(normalizedAlias) ?? []),
+        ]
+          .filter((venueId) => venueId !== targetId)
+          .sort();
+        if (conflictingVenueIds.length > 0) {
+          issues.push({
+            candidateVenueIds: conflictingVenueIds,
+            canonicalHandle,
+            reason: "ordinary_claim_conflict",
+            value: normalizedAlias,
+          });
+        }
+      }
     }
   }
   for (const [value, owners] of aliasOwners) {
@@ -185,6 +228,7 @@ export async function backfillVenueIdentitiesBatchHandler(
     updatedCount: 0,
   };
   for (const venue of page.page) {
+    if (!isVenuePublic(venue)) continue;
     let venueUnsafe = false;
     const byKind = new Map<
       Doc<"venueIdentities">["kind"],

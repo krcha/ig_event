@@ -107,19 +107,23 @@ await assert.rejects(
   (error) =>
     error instanceof DomainError && error.code === "RECONCILIATION_CONFLICT",
 );
-await assert.rejects(
-  upsertIdentity._handler(
-    { auth: { getUserIdentity: async () => null }, db },
-    {
-      kind: "provider_account",
-      rawValue: "disconnected_provider",
-      serviceSecret: process.env.CRON_SECRET,
-      venueId: venue._id,
-    },
-  ),
-  (error) =>
-    error instanceof DomainError && error.code === "RECONCILIATION_CONFLICT",
-  "Manual provider identities must stay connected to the current venue account.",
+await upsertIdentity._handler(
+  { auth: { getUserIdentity: async () => null }, db },
+  {
+    kind: "provider_account",
+    rawValue: "venue_one_programme",
+    serviceSecret: process.env.CRON_SECRET,
+    venueId: venue._id,
+  },
+);
+assert.equal(
+  [...db.identities.values()].find(
+    (identity) =>
+      identity.kind === "provider_account" &&
+      identity.rawValue === "venue_one_programme",
+  ).source,
+  "manual",
+  "An explicitly reviewed secondary provider account must become durable venue identity data.",
 );
 await upsertIdentity._handler(
   { auth: { getUserIdentity: async () => null }, db },
