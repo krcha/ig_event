@@ -163,10 +163,12 @@ those facades from regaining database, authentication, or async implementation.
 | `source-document-canonical-url-v1`          | Bounded canonical URL backfill with mismatch/error accounting                                                           | Not run                                               |
 | `media-canonical-url-v1`                    | Bounded durable-media canonicalization                                                                                  | Not run                                               |
 | `canonical-event-domain-fields-v1`          | Occurrence signature/index and publication fields                                                                       | Not run                                               |
+| `reviewed-kolarac-venue-consolidation-v1`   | Exact reviewed Kolarac canonical/legacy consolidation with source reassignment and immutable audit evidence            | Not run                                               |
+| `reviewed-official-venue-directory-additions-v1` | Atomic addition of two exact official canonical venues and identities without Instagram-source enrollment         | Not run                                               |
 | `venue-compatibility-seed-audit-v1`         | Proves exactly one durable venue target per compatibility seed and rejects duplicate claims                             | Not run                                               |
 | `venue-identities-v1`                       | Indexed canonical names, aliases, historical aliases, and provider accounts                                             | Not run                                               |
 | `campaign-lineage-reattestation-v1`         | Dry-run-capable, bounded, resumable, idempotent proof against immutable source evidence; insufficient rows quarantine   | Not run                                               |
-| `event-venue-bindings-v1`                   | Canonical venue binding with ordinary and verified-campaign evidence paths                                              | Not run                                               |
+| `event-venue-bindings-v1`                   | Canonical venue binding or explicit normalized unresolved identity, with ambiguity fail-closed and provenance re-attested | Not run                                               |
 | `source-occurrences-generic-v2`             | First-class occurrences from legacy links/receipts with campaign proof support                                          | Not run                                               |
 | `source-occurrence-canonical-payload-v1`    | Canonical materialization payload attestation/backfill for exact create/update counterfactual verification               | Not run                                               |
 | `source-occurrence-receipt-topology-v1`     | Epoch-fenced complete reverse-discoverability audit; destructive topology operations fail closed                        | Not run                                               |
@@ -368,9 +370,14 @@ identities, not as application branches.
 1. Deploy additive schema/code with reconciliation apply and all read/write
    cutovers disabled.
 2. Backfill and audit canonical source/media URLs and canonical event fields.
-3. Run the venue compatibility seed audit, venue identity migration, campaign
-   lineage re-attestation, and event venue binding migration; quarantine rather
-   than guess when evidence is insufficient.
+3. Run the reviewed Kolarac consolidation, the reviewed official venue
+   directory additions, the venue compatibility seed audit, venue identity
+   migration, campaign lineage re-attestation, and event venue binding
+   migration, in that order. The official venue migration publishes canonical
+   directory records but leaves `scrapeActive` false and does not enroll paid
+   Instagram sources. Bind exact identities, preserve normalized unresolved
+   claims, and quarantine ambiguity rather than guess when evidence is
+   insufficient.
 4. Backfill first-class source occurrences, attest/backfill canonical event
    payloads, then complete a stable epoch-fenced receipt-topology audit.
 5. Backfill/audit saved events, review and enable canonical reads, observe,

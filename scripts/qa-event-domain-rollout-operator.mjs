@@ -34,6 +34,7 @@ const orderedMigrationKeys = [
   "media-canonical-url-v1",
   "canonical-event-domain-fields-v1",
   "reviewed-kolarac-venue-consolidation-v1",
+  "reviewed-official-venue-directory-additions-v1",
   "venue-compatibility-seed-audit-v1",
   "venue-identities-v1",
   "campaign-lineage-reattestation-v1",

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { parse } from "csv-parse/sync";
 
 import {
+  addReviewedOfficialVenueDirectoryEntries,
   auditVenueCompatibilitySeeds,
   backfillCanonicalEventFieldsBatch,
   backfillEventVenueBindingsBatch,
@@ -14,6 +15,7 @@ import {
   consolidateReviewedKolaracVenue,
   auditSourceOccurrenceReceiptTopologyBatch,
   REVIEWED_KOLARAC_VENUE_CONSOLIDATION_KEY,
+  REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS_KEY,
   VENUE_COMPATIBILITY_SEED_AUDIT_KEY,
 } from "../convex/internal/migrations/eventDomain.ts";
 import { buildEventOccurrenceIndexPatch } from "../convex/sourceOccurrences.ts";
@@ -27,7 +29,12 @@ import {
   normalizeVenueComparableText,
 } from "../lib/domain/venues/normalization.ts";
 import { isCompleteReceiptTopologyCoverage } from "../convex/internal/receiptTopologyCoverage.ts";
+import { isCompleteEventVenueBindingCoverage } from "../convex/internal/eventVenueBindingCoverage.ts";
 import { markSourceOccurrenceTopologyMutation } from "../convex/internal/sourceOccurrenceTopologyEpoch.ts";
+import {
+  buildConvexVenueSnapshot,
+  resolveVenueFromSnapshot,
+} from "../convex/venueResolver.ts";
 
 const trackedVenueOverrideRows = parse(
   readFileSync("data/venue-name-overrides.csv", "utf8"),
@@ -703,6 +710,395 @@ function makeCanonicalPayloadMigrationState() {
 }
 
 {
+  const state = makeDb();
+  const dryRun = await addReviewedOfficialVenueDirectoryEntries._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 2 },
+  );
+  assert.deepEqual(
+    {
+      mismatchCount: dryRun.mismatchCount,
+      scannedCount: dryRun.scannedCount,
+      unchangedCount: dryRun.unchangedCount,
+      updatedCount: dryRun.updatedCount,
+    },
+    {
+      mismatchCount: 0,
+      scannedCount: 2,
+      unchangedCount: 0,
+      updatedCount: 15,
+    },
+  );
+  assert.equal(state.tables.venues.size, 0);
+  assert.equal(state.tables.venueIdentities.size, 0);
+  assert.equal(state.tables.venueAuditLog.size, 0);
+  assert.equal(state.tables.instagramSources.size, 0);
+  assert.equal(state.tables.eventDomainMigrationState.size, 0);
+
+  const applied = await addReviewedOfficialVenueDirectoryEntries._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 2 },
+  );
+  assert.equal(applied.mismatchCount, 0);
+  assert.equal(applied.updatedCount, 15);
+  assert.equal(state.tables.venues.size, 2);
+  assert.equal(state.tables.venueIdentities.size, 11);
+  assert.equal(state.tables.venueAuditLog.size, 2);
+  assert.equal(
+    state.tables.instagramSources.size,
+    0,
+    "A reviewed canonical venue addition must not enroll a paid ingestion source.",
+  );
+
+  const venuesByHandle = new Map(
+    [...state.tables.venues.values()].map((venue) => [
+      venue.instagramHandle,
+      venue,
+    ]),
+  );
+  assert.deepEqual(
+    {
+      aliases: venuesByHandle.get("vinarijazvonkobogdan").aliases,
+      category: venuesByHandle.get("vinarijazvonkobogdan").category,
+      location: venuesByHandle.get("vinarijazvonkobogdan").location,
+      name: venuesByHandle.get("vinarijazvonkobogdan").name,
+      publicStatus:
+        venuesByHandle.get("vinarijazvonkobogdan").publicStatus,
+      scrapeActive:
+        venuesByHandle.get("vinarijazvonkobogdan").scrapeActive,
+    },
+    {
+      aliases: [
+        "Vinarija Zvonko Bogdan Palić",
+        "Vinarije Zvonko Bogdan",
+        "Vinariji Zvonko Bogdan",
+      ],
+      category: "venue",
+      location: "Kanjiški put 45, Palić",
+      name: "Vinarija Zvonko Bogdan",
+      publicStatus: "published",
+      scrapeActive: false,
+    },
+  );
+  assert.deepEqual(
+    {
+      aliases: venuesByHandle.get("belgrade_botanical_garden").aliases,
+      category: venuesByHandle.get("belgrade_botanical_garden").category,
+      location: venuesByHandle.get("belgrade_botanical_garden").location,
+      name: venuesByHandle.get("belgrade_botanical_garden").name,
+      publicStatus:
+        venuesByHandle.get("belgrade_botanical_garden").publicStatus,
+      scrapeActive:
+        venuesByHandle.get("belgrade_botanical_garden").scrapeActive,
+    },
+    {
+      aliases: [
+        "Botanical Garden Jevremovac",
+        "Jevremovac Botanical Garden",
+        "Botaničkoj bašti Jevremovac",
+        "Jevremovac",
+      ],
+      category: "venue",
+      location: "Takovska 43, Beograd",
+      name: "Botanička bašta Jevremovac",
+      publicStatus: "published",
+      scrapeActive: false,
+    },
+  );
+  assert.ok(
+    !venuesByHandle
+      .get("belgrade_botanical_garden")
+      .aliases.some(
+        (alias) =>
+          normalizeVenueComparableText(alias) ===
+          normalizeVenueComparableText("Botanička Bašta"),
+      ),
+    "The generic Botanical Garden alias must not be claimed globally.",
+  );
+  for (const venue of venuesByHandle.values()) {
+    const identities = [...state.tables.venueIdentities.values()].filter(
+      (identity) => identity.venueId === venue._id,
+    );
+    assert.ok(identities.every((identity) => identity.active === true));
+    assert.ok(
+      identities.every((identity) => identity.source === "venue_record"),
+    );
+    assert.equal(
+      identities.filter((identity) => identity.kind === "provider_account")
+        .length,
+      1,
+    );
+  }
+  const venueSnapshot = buildConvexVenueSnapshot(
+    [...state.tables.venues.values()],
+    [...state.tables.venueIdentities.values()],
+  );
+  for (const [variant, expectedHandle] of [
+    ["Vinarija Zvonko Bogdan Palic", "vinarijazvonkobogdan"],
+    ["Botanička bašta “Jevremovac”", "belgrade_botanical_garden"],
+    ["Botanicka basta Jevremovac", "belgrade_botanical_garden"],
+  ]) {
+    const resolution = resolveVenueFromSnapshot(venueSnapshot, variant);
+    assert.equal(
+      resolution.resolution.status,
+      "resolved",
+      `${variant} must resolve through universal normalization without a redundant alias.`,
+    );
+    assert.equal(
+      resolution.venueFields.venueInstagramHandle,
+      expectedHandle,
+    );
+  }
+  const progress = [...state.tables.eventDomainMigrationState.values()][0];
+  assert.equal(
+    progress.key,
+    REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS_KEY,
+  );
+  assert.equal(progress.attempt, 1);
+  assert.equal(progress.mismatchCount, 0);
+  assert.ok(progress.completedAt);
+  assert.deepEqual(JSON.parse(progress.auditDetailsJson), {
+    handles: ["vinarijazvonkobogdan", "belgrade_botanical_garden"],
+    issues: [],
+    state: "post_apply",
+  });
+
+  const verified = await addReviewedOfficialVenueDirectoryEntries._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 2 },
+  );
+  assert.deepEqual(
+    {
+      mismatchCount: verified.mismatchCount,
+      unchangedCount: verified.unchangedCount,
+      updatedCount: verified.updatedCount,
+    },
+    { mismatchCount: 0, unchangedCount: 2, updatedCount: 0 },
+  );
+  assert.equal(state.tables.venueAuditLog.size, 2);
+
+  const restarted = await addReviewedOfficialVenueDirectoryEntries._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 2, restart: true },
+  );
+  assert.deepEqual(
+    {
+      mismatchCount: restarted.mismatchCount,
+      unchangedCount: restarted.unchangedCount,
+      updatedCount: restarted.updatedCount,
+    },
+    { mismatchCount: 0, unchangedCount: 2, updatedCount: 0 },
+  );
+  assert.equal(state.tables.venues.size, 2);
+  assert.equal(state.tables.venueIdentities.size, 11);
+  assert.equal(state.tables.venueAuditLog.size, 2);
+  assert.equal(
+    [...state.tables.eventDomainMigrationState.values()][0].attempt,
+    2,
+  );
+}
+
+{
+  const conflictFixtures = [
+    {
+      label: "provider identity owned by another venue",
+      initial: {
+        venueIdentities: [
+          {
+            _id: "conflicting_official_handle_identity",
+            active: true,
+            kind: "provider_account",
+            normalizedValue: "vinarijazvonkobogdan",
+            provider: "instagram",
+            rawValue: "vinarijazvonkobogdan",
+            source: "manual",
+            venueId: "unrelated_venue",
+          },
+        ],
+        venues: [
+          {
+            _id: "unrelated_venue",
+            aliases: [],
+            instagramHandle: "unrelated_venue",
+            name: "Unrelated Venue",
+            normalizedInstagramHandle: "unrelated_venue",
+          },
+        ],
+      },
+    },
+    {
+      label: "precise name alias owned by another venue",
+      initial: {
+        venues: [
+          {
+            _id: "conflicting_name_venue",
+            aliases: ["Jevremovac"],
+            instagramHandle: "different_botanical_account",
+            name: "Different Venue",
+            normalizedInstagramHandle: "different_botanical_account",
+          },
+        ],
+      },
+    },
+    {
+      label: "precise name identity owned under another identity kind",
+      initial: {
+        venueIdentities: [
+          {
+            _id: "conflicting_cross_kind_name_identity",
+            active: true,
+            kind: "historical_alias",
+            normalizedValue: "jevremovac",
+            rawValue: "Jevremovac",
+            source: "manual",
+            venueId: "cross_kind_owner",
+          },
+        ],
+        venues: [
+          {
+            _id: "cross_kind_owner",
+            aliases: [],
+            instagramHandle: "cross_kind_owner",
+            name: "Cross-kind Owner",
+            normalizedInstagramHandle: "cross_kind_owner",
+          },
+        ],
+      },
+    },
+    {
+      label: "precise name claim owned as a provider account",
+      initial: {
+        venueIdentities: [
+          {
+            _id: "conflicting_provider_for_name_claim",
+            active: true,
+            kind: "provider_account",
+            normalizedValue: "jevremovac",
+            provider: "instagram",
+            rawValue: "jevremovac",
+            source: "manual",
+            venueId: "provider_name_owner",
+          },
+        ],
+        venues: [
+          {
+            _id: "provider_name_owner",
+            aliases: [],
+            instagramHandle: "provider_name_owner",
+            name: "Provider Name Owner",
+            normalizedInstagramHandle: "provider_name_owner",
+          },
+        ],
+      },
+    },
+    {
+      label: "official provider handle owned as a name identity",
+      initial: {
+        venueIdentities: [
+          {
+            _id: "conflicting_name_for_provider_claim",
+            active: true,
+            kind: "historical_alias",
+            normalizedValue: "vinarijazvonkobogdan",
+            rawValue: "vinarijazvonkobogdan",
+            source: "manual",
+            venueId: "name_provider_owner",
+          },
+        ],
+        venues: [
+          {
+            _id: "name_provider_owner",
+            aliases: [],
+            instagramHandle: "name_provider_owner",
+            name: "Name Provider Owner",
+            normalizedInstagramHandle: "name_provider_owner",
+          },
+        ],
+      },
+    },
+    {
+      label: "reviewed handle has more than one venue row",
+      initial: {
+        venues: [
+          {
+            _id: "duplicate_handle_1",
+            aliases: [],
+            instagramHandle: "belgrade_botanical_garden",
+            name: "First Duplicate",
+            normalizedInstagramHandle: "belgrade_botanical_garden",
+          },
+          {
+            _id: "duplicate_handle_2",
+            aliases: [],
+            instagramHandle: "@belgrade_botanical_garden",
+            name: "Second Duplicate",
+            normalizedInstagramHandle: "belgrade_botanical_garden",
+          },
+        ],
+      },
+    },
+  ];
+  for (const fixture of conflictFixtures) {
+    const state = makeDb(fixture.initial);
+    const venueSnapshot = structuredClone([...state.tables.venues.values()]);
+    const identitySnapshot = structuredClone([
+      ...state.tables.venueIdentities.values(),
+    ]);
+    const result = await addReviewedOfficialVenueDirectoryEntries._handler(
+      { db: state.db },
+      { cursor: null, dryRun: false, limit: 2 },
+    );
+    assert.ok(
+      result.mismatchCount > 0,
+      `${fixture.label} must block the reviewed migration.`,
+    );
+    assert.equal(result.updatedCount, 0);
+    assert.deepEqual([...state.tables.venues.values()], venueSnapshot);
+    assert.deepEqual(
+      [...state.tables.venueIdentities.values()],
+      identitySnapshot,
+    );
+    assert.equal(state.tables.venueAuditLog.size, 0);
+    const progress = [...state.tables.eventDomainMigrationState.values()][0];
+    assert.equal(progress.completedAt, undefined);
+    assert.ok(progress.mismatchCount > 0);
+  }
+}
+
+{
+  const state = makeDb();
+  await addReviewedOfficialVenueDirectoryEntries._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 2 },
+  );
+  state.tables.eventDomainMigrationState.clear();
+  const winery = [...state.tables.venues.values()].find(
+    (venue) => venue.instagramHandle === "vinarijazvonkobogdan",
+  );
+  state.tables.venues.delete(winery._id);
+  for (const identity of [...state.tables.venueIdentities.values()]) {
+    if (identity.venueId === winery._id) {
+      state.tables.venueIdentities.delete(identity._id);
+    }
+  }
+  for (const audit of [...state.tables.venueAuditLog.values()]) {
+    if (audit.venueId === winery._id) state.tables.venueAuditLog.delete(audit._id);
+  }
+  const venueCountBefore = state.tables.venues.size;
+  const result = await addReviewedOfficialVenueDirectoryEntries._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 2 },
+  );
+  assert.ok(result.mismatchCount > 0);
+  assert.equal(result.updatedCount, 0);
+  assert.equal(
+    state.tables.venues.size,
+    venueCountBefore,
+    "Mixed pre/post state must not partially recreate a reviewed venue.",
+  );
+}
+
+{
   const seedVenues = LEGACY_VENUE_ALIAS_SEEDS.map((seed, index) => ({
     _id: `seed_venue_${index}`,
     aliases: [],
@@ -1244,6 +1640,78 @@ function legacyInstagramProfileSnapshotFixture(overrides = {}) {
   const state = makeDb({
     eventDomainMigrationState: [
       {
+        _id: "venue_identity_ready_for_invalid_unresolved",
+        completedAt: 1,
+        cursor: "2",
+        errorCount: 0,
+        isDone: true,
+        key: "venue-identities-v1",
+        mismatchCount: 0,
+        phase: "venue_identities",
+        scannedCount: 2,
+        updatedAt: 1,
+        updatedCount: 2,
+      },
+    ],
+    events: [
+      {
+        _id: "event_empty_unresolved_venue",
+        artists: [],
+        date: "2026-09-23",
+        eventType: "event",
+        status: "pending",
+        title: "Missing Venue Claim",
+        updatedAt: 94,
+        venue: "",
+      },
+      {
+        _id: "event_bound_but_unresolved_venue",
+        artists: [],
+        date: "2026-09-24",
+        eventType: "event",
+        normalizedVenueIdentity: "legacy bound hall",
+        status: "approved",
+        title: "Bound Venue Must Survive",
+        updatedAt: 95,
+        venue: "Legacy Bound Hall",
+        venueId: "bound_venue_without_identity",
+      },
+    ],
+    venues: [
+      {
+        _id: "bound_venue_without_identity",
+        aliases: [],
+        category: "venue",
+        instagramHandle: "bound_venue_without_identity",
+        name: "Bound Venue Without Identity",
+        publicStatus: "published",
+        scrapeActive: false,
+      },
+    ],
+  });
+  const before = structuredClone([...state.tables.events.values()]);
+  const result = await backfillEventVenueBindingsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(result.mismatchCount, 2);
+  assert.equal(result.updatedCount, 0);
+  assert.deepEqual(
+    [...state.tables.events.values()],
+    before,
+    "An empty unresolved claim or stale resolver state must never clear an existing canonical venue binding.",
+  );
+  const progress = [...state.tables.eventDomainMigrationState.values()].find(
+    (row) => row.key === "event-venue-bindings-v1",
+  );
+  assert.equal(progress.completedAt, undefined);
+  assert.equal(isCompleteEventVenueBindingCoverage(progress), false);
+}
+
+{
+  const state = makeDb({
+    eventDomainMigrationState: [
+      {
         _id: "venue_identity_ready",
         completedAt: 1,
         cursor: "1",
@@ -1319,6 +1787,352 @@ function legacyInstagramProfileSnapshotFixture(overrides = {}) {
     (row) => row.key === "event-venue-bindings-v1",
   );
   assert.ok(progress?.completedAt);
+}
+
+{
+  const alreadyNormalized = {
+    _id: "event_unresolved_unchanged",
+    artists: ["Independent Artist"],
+    date: "2026-09-21",
+    eventType: "concert",
+    normalizedVenueIdentity: "independent garden",
+    status: "pending",
+    time: "20:00",
+    title: "Independent Garden Event",
+    updatedAt: 92,
+    venue: "Independent Garden",
+  };
+  const state = makeDb({
+    eventDomainMigrationState: [
+      {
+        _id: "venue_identity_ready_for_unresolved",
+        completedAt: 1,
+        cursor: "1",
+        errorCount: 0,
+        isDone: true,
+        key: "venue-identities-v1",
+        mismatchCount: 0,
+        phase: "venue_identities",
+        scannedCount: 1,
+        updatedAt: 1,
+        updatedCount: 1,
+      },
+    ],
+    events: [
+      {
+        ...alreadyNormalized,
+        ...buildEventOccurrenceIndexPatch(alreadyNormalized),
+      },
+      {
+        _id: "event_unresolved_needs_normalization",
+        artists: [],
+        date: "2026-09-22",
+        eventType: "nightlife",
+        status: "approved",
+        time: "TBD",
+        title: "Unknown Directory Venue Event",
+        updatedAt: 93,
+        venue: "Unknown Directory Venue",
+      },
+    ],
+  });
+  const dryRun = await backfillEventVenueBindingsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(dryRun.mismatchCount, 0);
+  assert.equal(dryRun.unchangedCount, 1);
+  assert.equal(dryRun.updatedCount, 1);
+  assert.equal(
+    state.tables.events.get("event_unresolved_needs_normalization")
+      .normalizedVenueIdentity,
+    undefined,
+    "Unresolved venue dry-run must remain read-only.",
+  );
+
+  const applied = await backfillEventVenueBindingsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(applied.mismatchCount, 0);
+  assert.equal(applied.updatedCount, 1);
+  const normalized = state.tables.events.get(
+    "event_unresolved_needs_normalization",
+  );
+  assert.equal(normalized.venueId, undefined);
+  assert.equal(
+    normalized.normalizedVenueIdentity,
+    "unknown directory venue",
+  );
+  assert.equal(
+    normalized.occurrenceVenueIdentity,
+    "name:unknown directory venue",
+  );
+  const progress = [...state.tables.eventDomainMigrationState.values()].find(
+    (row) => row.key === "event-venue-bindings-v1",
+  );
+  assert.ok(
+    progress?.completedAt,
+    "Explicit unresolved venue coverage must complete cleanly without inventing a venue record.",
+  );
+  assert.equal(
+    isCompleteEventVenueBindingCoverage(progress),
+    true,
+    "Explicit unresolved rows must count as audited zero-exception coverage.",
+  );
+
+  const verified = await backfillEventVenueBindingsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(verified.mismatchCount, 0);
+  assert.equal(verified.unchangedCount, 2);
+  assert.equal(verified.updatedCount, 0);
+
+  const restarted = await backfillEventVenueBindingsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25, restart: true },
+  );
+  assert.equal(restarted.mismatchCount, 0);
+  assert.equal(restarted.unchangedCount, 2);
+  assert.equal(restarted.updatedCount, 0);
+  const restartedProgress = [...state.tables.eventDomainMigrationState.values()].find(
+    (row) => row.key === "event-venue-bindings-v1",
+  );
+  assert.equal(restartedProgress.attempt, 2);
+  assert.ok(restartedProgress.completedAt);
+  assert.equal(isCompleteEventVenueBindingCoverage(restartedProgress), true);
+
+  for (const unsafePatch of [
+    { mismatchCount: 1 },
+    { errorCount: 1 },
+    { skippedCount: 1 },
+    { quarantinedLineageMarkerCount: 1 },
+  ]) {
+    assert.equal(
+      isCompleteEventVenueBindingCoverage({
+        ...restartedProgress,
+        ...unsafePatch,
+      }),
+      false,
+      "Publication/reconciliation readiness must remain fail-closed for unresolved migration exceptions.",
+    );
+  }
+}
+
+{
+  const state = makeDb({
+    eventDomainMigrationState: [
+      {
+        _id: "venue_identity_ready_for_ambiguity",
+        completedAt: 1,
+        cursor: "2",
+        errorCount: 0,
+        isDone: true,
+        key: "venue-identities-v1",
+        mismatchCount: 0,
+        phase: "venue_identities",
+        scannedCount: 2,
+        updatedAt: 1,
+        updatedCount: 2,
+      },
+    ],
+    events: [
+      {
+        _id: "event_ambiguous_venue",
+        artists: [],
+        date: "2026-09-23",
+        eventType: "event",
+        status: "pending",
+        title: "Ambiguous Venue Event",
+        updatedAt: 94,
+        venue: "Shared Hall",
+      },
+    ],
+    venueIdentities: [
+      {
+        _id: "shared_hall_alias_a",
+        active: true,
+        kind: "alias",
+        normalizedValue: "shared hall",
+        rawValue: "Shared Hall",
+        source: "venue_record",
+        venueId: "shared_hall_a",
+      },
+      {
+        _id: "shared_hall_alias_b",
+        active: true,
+        kind: "alias",
+        normalizedValue: "shared hall",
+        rawValue: "Shared Hall",
+        source: "venue_record",
+        venueId: "shared_hall_b",
+      },
+    ],
+    venues: [
+      {
+        _id: "shared_hall_a",
+        category: "club",
+        instagramHandle: "shared_hall_a",
+        name: "Shared Hall A",
+        publicStatus: "published",
+        scrapeActive: true,
+      },
+      {
+        _id: "shared_hall_b",
+        category: "club",
+        instagramHandle: "shared_hall_b",
+        name: "Shared Hall B",
+        publicStatus: "published",
+        scrapeActive: true,
+      },
+    ],
+  });
+  const result = await backfillEventVenueBindingsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(result.mismatchCount, 1);
+  assert.equal(result.updatedCount, 0);
+  assert.equal(
+    state.tables.events.get("event_ambiguous_venue").venueId,
+    undefined,
+    "Ambiguous venue ownership must remain fail-closed.",
+  );
+}
+
+{
+  const expected = {
+    artists: ["Proven Artist"],
+    date: "2026-09-24",
+    key: "unresolved-provenance-key",
+    time: "21:00",
+    title: "Unresolved Provenance Event",
+    venue: "Evidence Garden",
+  };
+  const state = makeDb({
+    eventDomainMigrationState: [
+      {
+        _id: "venue_identity_ready_for_unresolved_provenance",
+        completedAt: 1,
+        cursor: "1",
+        errorCount: 0,
+        isDone: true,
+        key: "venue-identities-v1",
+        mismatchCount: 0,
+        phase: "venue_identities",
+        scannedCount: 1,
+        updatedAt: 1,
+        updatedCount: 1,
+      },
+    ],
+    events: [
+      {
+        _id: "event_unresolved_provenance",
+        artists: expected.artists,
+        date: expected.date,
+        eventType: "concert",
+        sourceOccurrenceKey: expected.key,
+        status: "approved",
+        time: expected.time,
+        title: expected.title,
+        updatedAt: 95,
+        venue: expected.venue,
+      },
+    ],
+    instagramEventSources: [
+      {
+        _id: "unresolved_provenance_link",
+        eventId: "event_unresolved_provenance",
+        sourceFingerprint: "unresolved-provenance-fingerprint",
+        sourceIdentity: "unresolved-provenance-source",
+        sourceOccurrenceId: "unresolved_provenance_occurrence",
+        sourceOccurrenceKey: expected.key,
+        updatedAt: 1,
+      },
+    ],
+    instagramSourceOccurrenceReceipts: [
+      {
+        _id: "unresolved_provenance_receipt",
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        expectedKeys: [expected.key],
+        expectedOccurrences: [expected],
+        satisfiedKeys: [expected.key],
+        satisfiedOccurrences: [
+          { eventId: "event_unresolved_provenance", key: expected.key },
+        ],
+        sourceFingerprint: "unresolved-provenance-fingerprint",
+        sourceIdentity: "unresolved-provenance-source",
+        updatedAt: 1,
+      },
+    ],
+    sourceOccurrences: [
+      {
+        _id: "unresolved_provenance_occurrence",
+        canonicalEventId: "event_unresolved_provenance",
+        occurrenceArtistFingerprint: "proven artist",
+        occurrenceDateKey: expected.date,
+        occurrenceEventType: "concert",
+        occurrenceSignatureHash: "stale-unresolved-signature",
+        occurrenceSignatureVersion: 1,
+        occurrenceTimeIdentity: "21:00",
+        occurrenceTitleFamily: "unresolvedprovenanceevent",
+        occurrenceVenueIdentity: "name:evidence garden",
+        sourceFingerprint: "unresolved-provenance-fingerprint",
+        sourceIdentity: "unresolved-provenance-source",
+        sourceOccurrenceKey: expected.key,
+        state: "satisfied",
+        updatedAt: 1,
+        venueResolutionStatus: "unresolved",
+      },
+    ],
+  });
+  const dryRun = await backfillEventVenueBindingsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(dryRun.mismatchCount, 0);
+  assert.equal(dryRun.updatedCount, 1);
+  assert.equal(
+    state.tables.sourceOccurrences.get("unresolved_provenance_occurrence")
+      .occurrenceSignatureHash,
+    "stale-unresolved-signature",
+    "Unresolved provenance dry-run must not mutate its occurrence.",
+  );
+
+  const applied = await backfillEventVenueBindingsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(applied.mismatchCount, 0);
+  assert.equal(applied.updatedCount, 1);
+  const event = state.tables.events.get("event_unresolved_provenance");
+  const occurrence = state.tables.sourceOccurrences.get(
+    "unresolved_provenance_occurrence",
+  );
+  const receipt = state.tables.instagramSourceOccurrenceReceipts.get(
+    "unresolved_provenance_receipt",
+  );
+  assert.equal(event.normalizedVenueIdentity, "evidence garden");
+  assert.equal(event.venueId, undefined);
+  assert.equal(
+    event.updatedAt,
+    95,
+    "Derived venue migration must preserve event version.",
+  );
+  assert.equal(occurrence.canonicalEventId, event._id);
+  assert.equal(occurrence.venueId, undefined);
+  assert.equal(occurrence.venueResolutionStatus, "unresolved");
+  assert.equal(occurrence.occurrenceVenueIdentity, "name:evidence garden");
+  assert.notEqual(
+    occurrence.occurrenceSignatureHash,
+    "stale-unresolved-signature",
+  );
+  assert.deepEqual(receipt.expectedOccurrences, [expected]);
+  const topology = topologyEpochSnapshot(state);
+  assert.ok(Number.isSafeInteger(topology?.currentEpoch));
+  assert.equal(topology.currentEpoch, topology.verifiedEpoch);
 }
 
 {

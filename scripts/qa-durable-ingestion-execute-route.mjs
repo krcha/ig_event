@@ -123,6 +123,16 @@ assert.match(
   /runCompletionCleanupOrDefer\(state, false\)/,
   "a completed no-claim probe must retry cleanup after a lost final response",
 );
+assert.match(
+  route,
+  /completionState\.mode === "canary"/,
+  "an exact canary must skip the global approved-catalog cleanup",
+);
+assert.match(
+  route,
+  /`vps:\$\{runId\}:\$\{workerSlot\}:\$\{randomUUID\(\)\}`/,
+  "the OpenAI attempt owner must be attributable to the exact durable run",
+);
 
 const transpiledRoute = ts.transpileModule(route, {
   compilerOptions: {
@@ -265,6 +275,7 @@ function loadRouteWithMocks({
       outcome: "receipt_complete",
       transportAttempted: false,
     }),
+    query: async () => ({ complete: true, status: "completed", mode: "daily" }),
     cleanup: async () => {
       cleanupCalls += 1;
       return successfulCleanupSummary;
@@ -297,7 +308,7 @@ function loadRouteWithMocks({
       }
       throw new Error(`Unexpected mutation in cleanup retry test: ${reference}`);
     },
-    query: async () => ({ complete: true, status: "completed" }),
+    query: async () => ({ complete: true, status: "completed", mode: "daily" }),
     processSavedPost: async () => ({
       state: "terminal",
       outcome: "receipt_complete",
@@ -331,6 +342,59 @@ function loadRouteWithMocks({
   });
   assert.equal(cleanupCalls, 2, "the completed no-claim probe must retry failed cleanup");
   assert.equal(releaseCalls, 0);
+}
+
+{
+  let cleanupCalls = 0;
+  const POST = loadRouteWithMocks({
+    mutation: async (reference) => {
+      if (reference === claimProcessingReference) return processingClaimFixture;
+      if (reference === completeProcessingReference) {
+        return {
+          complete: true,
+          status: "fetched",
+          processingOutcome: "receipt_complete",
+        };
+      }
+      throw new Error(`Unexpected mutation in completed-canary cleanup test: ${reference}`);
+    },
+    query: async () => ({ complete: true, status: "completed", mode: "canary" }),
+    processSavedPost: async () => ({
+      state: "terminal",
+      outcome: "receipt_complete",
+      transportAttempted: false,
+    }),
+    cleanup: async () => {
+      cleanupCalls += 1;
+      return successfulCleanupSummary;
+    },
+  });
+  const response = await executeRequest(POST);
+  assert.equal(response.status, 200);
+  assert.equal(cleanupCalls, 0, "a completed canary must not mutate the global approved catalog");
+}
+
+{
+  let cleanupCalls = 0;
+  const POST = loadRouteWithMocks({
+    mutation: async (reference) => {
+      if (reference === claimProcessingReference || reference === claimFetchReference) return null;
+      throw new Error(`Unexpected mutation in completed-canary probe test: ${reference}`);
+    },
+    query: async () => ({ complete: true, status: "completed", mode: "canary" }),
+    cleanup: async () => {
+      cleanupCalls += 1;
+      return successfulCleanupSummary;
+    },
+  });
+  const response = await executeRequest(POST);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    claimed: false,
+    complete: true,
+    status: "completed",
+  });
+  assert.equal(cleanupCalls, 0, "a completed canary probe must not launch global cleanup");
 }
 
 {

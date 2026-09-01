@@ -80,7 +80,10 @@ export async function POST(request: Request) {
   }
   const serviceSecret = requireServiceSecret();
   const convex = createConvexHttpClient();
-  const workerId = `vps:${randomUUID()}`;
+  // The owner is persisted with every OpenAI attempt. Binding it to this
+  // durable run lets authenticated accounting distinguish work performed by
+  // this run from a concurrent or previously cached analysis of the same post.
+  const workerId = `vps:${runId}:${workerSlot}:${randomUUID()}`;
   const runCompletionCleanup = async (completion: unknown) => {
     if (
       !completion ||
@@ -93,6 +96,23 @@ export async function POST(request: Request) {
     // the run is terminal; lane 0 remains supervised until cleanup succeeds.
     if (workerSlot !== 0) return null;
     try {
+      const completionState =
+        typeof (completion as { mode?: unknown }).mode === "string"
+          ? (completion as { complete: true; mode: string })
+          : (await convex.query(probe, { runId, serviceSecret })) as {
+                complete?: boolean;
+                mode?: string;
+              } | null;
+      if (!completionState || completionState.complete !== true) {
+        throw new Error("Completed durable run could not be re-probed before cleanup.");
+      }
+      // A 16-profile canary is allowed to mutate only artifacts attributable
+      // to its frozen receipts. The global approved-catalog merge remains a
+      // required completion side effect for catch-up and daily production runs.
+      if (completionState.mode === "canary") return null;
+      if (completionState.mode !== "catch_up" && completionState.mode !== "daily") {
+        throw new Error("Completed durable run has an unsupported cleanup mode.");
+      }
       const summary = await runApprovedDuplicateCleanupForCompletedDurableRun({
         client: convex,
         runId,

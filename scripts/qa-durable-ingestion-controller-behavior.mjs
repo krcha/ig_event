@@ -21,6 +21,7 @@ const {
   linkPersistedReceiptPostForRecovery,
   abortInactiveRun,
   abortOnlyInactiveCatchUpRun,
+  getCanaryDeploymentIdentity,
   getCanaryAccounting,
 } = await import("../convex/durableIngestionRuns.ts");
 const { createEvent } = await import("../convex/events.ts");
@@ -111,6 +112,18 @@ class MemoryDb {
 
 function ctx(db) {
   return { db, auth: { getUserIdentity: async () => null } };
+}
+
+{
+  const deploymentIdentity = await getCanaryDeploymentIdentity._handler(ctx(new MemoryDb()), {
+    serviceSecret: process.env.CRON_SECRET,
+  });
+  assert.deepEqual(deploymentIdentity, {
+    identity: "event-zeka-canary-protocol-v4-9be74ac5d7a04bd079c36d59b491cc8f",
+    cleanupScope: "receipt_only",
+    servesOutcomeDetail: true,
+    analysisAttribution: "run_owner_and_source_revision",
+  });
 }
 
 async function queue(db, mode, handles, { resumeDaily = false } = {}) {
@@ -1188,7 +1201,11 @@ for (const boundary of ["no_post", "unconfirmed"]) {
   await startProviderAttempt(db, runId, claimed.receiptId, "accounting-fetch");
   const scrapedPostId = await insertSavedPost(db, claimed.handle);
   await db.patch(scrapedPostId, {
+    analysisAttemptRevision: 1,
     analysisAttemptStartedAt: run.createdAt + 1,
+    analysisAttemptOwner: `vps:${runId}:0:00000000-0000-4000-8000-000000000000`,
+    analysisRevision: 1,
+    analysisResultJson: "{}",
     analysisCompletedAt: run.createdAt + 2,
     analysisModel: "gpt-5-mini-2025-08-07",
     analysisInputTokens: 1_200,
@@ -1212,6 +1229,49 @@ for (const boundary of ["no_post", "unconfirmed"]) {
   assert.equal(accounting.attributedOutputTokens, 300);
   assert.equal(accounting.attributedReasoningTokens, 180);
   assert.equal(accounting.attributedTotalTokens, 1_500);
+  assert.match(
+    accounting.rows.find((row) => row.receiptId === claimed.receiptId)?.analysisAttemptOwner ?? "",
+    new RegExp(`^vps:${runId}:0:`),
+    "canary accounting must expose the exact run-bound OpenAI attempt owner",
+  );
+  assert.equal(
+    accounting.rows.find((row) => row.receiptId === claimed.receiptId)?.outcomeDetail,
+    "saved_post_processing_pending",
+    "canary accounting must serve the authoritative durable receipt reason",
+  );
+}
+
+// A fresh timestamp alone is not run provenance: accounting must reject an
+// analysis owned by another execution, even when it completes after this run
+// was queued and is linked to this run's saved post.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "canary", handles.slice(0, 16));
+  const run = await db.get(runId);
+  const claimed = await claim(db, runId, "foreign-accounting-fetch");
+  await startProviderAttempt(db, runId, claimed.receiptId, "foreign-accounting-fetch");
+  const scrapedPostId = await insertSavedPost(db, claimed.handle);
+  await db.patch(scrapedPostId, {
+    analysisAttemptRevision: 1,
+    analysisAttemptStartedAt: run.createdAt + 1,
+    analysisAttemptOwner: "admin:unrelated-analysis",
+    analysisRevision: 1,
+    analysisResultJson: "{}",
+    analysisCompletedAt: run.createdAt + 2,
+    analysisModel: "gpt-5-mini-2025-08-07",
+    analysisInputTokens: 1_200,
+    analysisOutputTokens: 300,
+    analysisReasoningTokens: 180,
+    analysisTotalTokens: 1_500,
+  });
+  await markPersisted(db, runId, claimed.receiptId, "foreign-accounting-fetch", scrapedPostId);
+  const accounting = await getCanaryAccounting._handler(ctx(db), {
+    runId,
+    serviceSecret: process.env.CRON_SECRET,
+  });
+  assert.equal(accounting.openAiAttemptsStartedDuringRun, 0);
+  assert.equal(accounting.openAiAnalysesCompletedDuringRun, 0);
+  assert.equal(accounting.attributedTotalTokens, 0);
 }
 
 // Catch-up is one all-profile snapshot with no time cutoff/checkpoint.  Daily

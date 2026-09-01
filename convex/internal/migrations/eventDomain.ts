@@ -12,6 +12,10 @@ import {
   REVIEWED_KOLARAC_VENUE_CONSOLIDATION_KEY,
 } from "./reviewedKolaracVenueConsolidation";
 import {
+  addReviewedOfficialVenueDirectoryEntriesHandler,
+  REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS_KEY,
+} from "./reviewedOfficialVenueDirectoryAdditions";
+import {
   eventDomainMigrationBatchArgs,
   eventDomainMigrationBatchResult,
 } from "./eventDomainShared";
@@ -51,6 +55,12 @@ export const consolidateReviewedKolaracVenue = internalMutation({
   args: eventDomainMigrationBatchArgs,
   returns: eventDomainMigrationBatchResult,
   handler: consolidateReviewedKolaracVenueHandler,
+});
+
+export const addReviewedOfficialVenueDirectoryEntries = internalMutation({
+  args: eventDomainMigrationBatchArgs,
+  returns: eventDomainMigrationBatchResult,
+  handler: addReviewedOfficialVenueDirectoryEntriesHandler,
 });
 
 export const auditVenueCompatibilitySeeds = internalMutation({
@@ -99,5 +109,6 @@ export const auditSourceOccurrenceReceiptTopologyBatch = internalMutation({
 
 export {
   REVIEWED_KOLARAC_VENUE_CONSOLIDATION_KEY,
+  REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS_KEY,
   VENUE_COMPATIBILITY_SEED_AUDIT_KEY,
 };

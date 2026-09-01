@@ -133,9 +133,9 @@ assert.deepEqual(
 );
 assert.ok(result.fingerprint.startsWith("venue-snapshot-v1:"));
 assert.ok(
-  fixture.reads[0].limit === 2_001 &&
+  fixture.reads[0].limit === 4_001 &&
     fixture.reads.slice(1).every((read, index, reads) =>
-      read.limit <= (index === 0 ? 1_999 : reads[index - 1].limit),
+      read.limit <= (index === 0 ? 3_999 : reads[index - 1].limit),
     ),
   "Identity partitions must share the aggregate budget left after venue rows.",
 );
@@ -168,7 +168,7 @@ assert.deepEqual(requestedArgs, { serviceSecret: "qa-service-secret" });
 assert.deepEqual(loaded, result);
 
 const venueOverflow = makeCtx({
-  venues: Array.from({ length: 2_001 }, (_, index) => venue(`overflow-${index}`)),
+  venues: Array.from({ length: 4_001 }, (_, index) => venue(`overflow-${index}`)),
   identities: [],
 });
 await assert.rejects(
@@ -181,7 +181,7 @@ await assert.rejects(
 
 const identityOverflow = makeCtx({
   venues: [publicVenue],
-  identities: Array.from({ length: 2_001 }, (_, index) =>
+  identities: Array.from({ length: 4_001 }, (_, index) =>
     identity(`overflow-identity-${index}`, publicVenue._id, "alias", `Alias ${index}`),
   ),
 });
@@ -196,16 +196,16 @@ await assert.rejects(
 const aggregateIdentityOverflow = makeCtx({
   venues: [publicVenue],
   identities: [
-    ...Array.from({ length: 500 }, (_, index) =>
+    ...Array.from({ length: 1_000 }, (_, index) =>
       identity(`canonical-${index}`, publicVenue._id, "canonical_name", `Canonical ${index}`),
     ),
-    ...Array.from({ length: 500 }, (_, index) =>
+    ...Array.from({ length: 1_000 }, (_, index) =>
       identity(`alias-${index}`, publicVenue._id, "alias", `Alias ${index}`),
     ),
-    ...Array.from({ length: 500 }, (_, index) =>
+    ...Array.from({ length: 1_000 }, (_, index) =>
       identity(`history-${index}`, publicVenue._id, "historical_alias", `History ${index}`),
     ),
-    ...Array.from({ length: 500 }, (_, index) =>
+    ...Array.from({ length: 1_000 }, (_, index) =>
       identity(`provider-${index}`, publicVenue._id, "provider_account", `Provider ${index}`),
     ),
   ],
@@ -221,7 +221,7 @@ assert.deepEqual(
   aggregateIdentityOverflow.reads
     .filter((read) => read.table === "venueIdentities")
     .map((read) => read.limit),
-  [2_000, 1_500, 1_000, 500],
+  [4_000, 3_000, 2_000, 1_000],
   "Each identity partition must receive only the remaining aggregate budget plus one sentinel.",
 );
 

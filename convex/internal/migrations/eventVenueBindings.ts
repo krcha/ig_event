@@ -18,10 +18,12 @@ import {
 } from "./eventDomainShared";
 
 /**
- * Binds legacy event venue text to canonical venue IDs after identity claims
- * are complete. Existing source provenance is re-attested through the same
- * receipt-fenced adapter used by moderation; campaign lineage stays in its
- * dedicated quarantine.
+ * Attests legacy event venue text after identity claims are complete. Exact
+ * claims bind to canonical venue IDs; unknown claims retain an explicit,
+ * normalized unresolved identity; ambiguous claims fail closed. Existing
+ * source provenance is re-attested through the same receipt-fenced adapter
+ * used by moderation, while campaign lineage stays in its dedicated
+ * quarantine.
  */
 export async function backfillEventVenueBindingsBatchHandler(
   ctx: MutationCtx,
@@ -79,13 +81,28 @@ export async function backfillEventVenueBindingsBatchHandler(
       counts.quarantinedLineageMarkerCount! += 1;
       continue;
     }
-    const resolution = await resolveVenueForWrite(
-      ctx,
-      event.venueInstagramHandle ?? event.venue,
-    );
+    const rawVenueClaim = (event.venueInstagramHandle ?? event.venue).trim();
+    const resolution = await resolveVenueForWrite(ctx, rawVenueClaim);
+    // A nonempty legacy venue claim does not become invalid merely because the
+    // canonical directory has not learned it yet. Unresolved venue identity is
+    // a first-class state throughout occurrence construction and
+    // reconciliation; this migration must normalize and attest that state
+    // instead of requiring every historical event to acquire a guessed venue
+    // record. Ambiguity remains a hard mismatch, as does the impossible shape
+    // of a "resolved" result without its canonical venue ID. A missing claim
+    // or an already-bound event that no longer resolves also stays a mismatch:
+    // this migration must never erase a canonical venue binding by inference.
+    const explicitUnresolvedClaim =
+      resolution.resolution.status === "unresolved" &&
+      rawVenueClaim.length > 0 &&
+      Boolean(resolution.venueFields.normalizedVenueIdentity) &&
+      event.venueId === undefined;
     if (
-      resolution.resolution.status !== "resolved" ||
-      !resolution.venueFields.venueId
+      resolution.resolution.status === "ambiguous" ||
+      (resolution.resolution.status === "resolved" &&
+        !resolution.venueFields.venueId) ||
+      (resolution.resolution.status === "unresolved" &&
+        !explicitUnresolvedClaim)
     ) {
       counts.mismatchCount += 1;
       continue;

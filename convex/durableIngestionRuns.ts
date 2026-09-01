@@ -163,6 +163,8 @@ async function getLinkedReceiptScrapedPost(ctx: { db: any }, receipt: any) {
 }
 
 type RunMode = "canary" | "catch_up" | "daily";
+const CANARY_DEPLOYMENT_IDENTITY =
+  "event-zeka-canary-protocol-v4-9be74ac5d7a04bd079c36d59b491cc8f";
 
 function normalizeHandle(value: string): string {
   return value.trim().replace(/^@+/, "").toLowerCase();
@@ -828,6 +830,30 @@ export const probeRun = query({
 });
 
 /**
+ * Authenticated deployment fence for the host-owned paid canary operator.
+ * Changing the canary protocol, accounting contract, or cleanup boundary
+ * requires rotating this identity and re-pinning the production operator.
+ */
+export const getCanaryDeploymentIdentity = query({
+  args: { serviceSecret: v.optional(v.string()) },
+  returns: v.object({
+    identity: v.literal(CANARY_DEPLOYMENT_IDENTITY),
+    cleanupScope: v.literal("receipt_only"),
+    servesOutcomeDetail: v.literal(true),
+    analysisAttribution: v.literal("run_owner_and_source_revision"),
+  }),
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    return {
+      identity: CANARY_DEPLOYMENT_IDENTITY as typeof CANARY_DEPLOYMENT_IDENTITY,
+      cleanupScope: "receipt_only" as const,
+      servesOutcomeDetail: true as const,
+      analysisAttribution: "run_owner_and_source_revision" as const,
+    };
+  },
+});
+
+/**
  * Authenticated, read-only ledger used to prove a paid canary stayed inside
  * its provider-attempt and token budget. Token totals include only analyses
  * completed after this run was created; older cached analyses remain visible
@@ -869,14 +895,34 @@ export const getCanaryAccounting = query({
     let attributedTotalTokens = 0;
     let openAiAttemptsStartedDuringRun = 0;
     let openAiAnalysesCompletedDuringRun = 0;
+    const analysisOwnerPrefix = `vps:${run._id}:`;
     const rows = receipts.map((receipt, index) => {
       const post = linkedPosts[index];
+      const attemptOwner = post?.analysisAttemptOwner;
+      const ownerSuffix = typeof attemptOwner === "string" && attemptOwner.startsWith(analysisOwnerPrefix)
+        ? attemptOwner.slice(analysisOwnerPrefix.length)
+        : "";
+      const ownerMatchesRun =
+        /^[0-5]:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+          ownerSuffix,
+        );
+      const receiptRevision = receipt.scrapedPostSourceRevision;
+      const attemptStartedAt = post?.analysisAttemptStartedAt;
+      const analysisCompletedAt = post?.analysisCompletedAt;
       const attemptStartedDuringRun =
-        typeof post?.analysisAttemptStartedAt === "number" &&
-        post.analysisAttemptStartedAt >= run.createdAt;
+        ownerMatchesRun &&
+        typeof receiptRevision === "number" &&
+        post?.analysisAttemptRevision === receiptRevision &&
+        typeof attemptStartedAt === "number" &&
+        attemptStartedAt >= run.createdAt;
       const analysisCompletedDuringRun =
-        typeof post?.analysisCompletedAt === "number" &&
-        post.analysisCompletedAt >= run.createdAt;
+        attemptStartedDuringRun &&
+        post?.analysisRevision === receiptRevision &&
+        typeof post.analysisResultJson === "string" &&
+        post.analysisResultJson.length > 0 &&
+        typeof analysisCompletedAt === "number" &&
+        typeof attemptStartedAt === "number" &&
+        analysisCompletedAt >= attemptStartedAt;
       if (attemptStartedDuringRun) openAiAttemptsStartedDuringRun += 1;
       if (analysisCompletedDuringRun) {
         openAiAnalysesCompletedDuringRun += 1;
@@ -892,9 +938,13 @@ export const getCanaryAccounting = query({
         providerAttemptCount: receipt.providerAttemptCount ?? 0,
         providerResultStatus: receipt.providerResultStatus ?? null,
         chargedMicros: receipt.chargedMicros ?? 0,
+        outcomeDetail: receipt.outcomeDetail ?? null,
         scrapedPostId: receipt.scrapedPostId ?? null,
         scrapedPostSourceRevision: receipt.scrapedPostSourceRevision ?? null,
         processingOutcome: post?.processingOutcome ?? null,
+        analysisAttemptOwner: post?.analysisAttemptOwner ?? null,
+        analysisAttemptRevision: post?.analysisAttemptRevision ?? null,
+        analysisRevision: post?.analysisRevision ?? null,
         analysisModel: post?.analysisModel ?? null,
         analysisAttemptStartedAt: post?.analysisAttemptStartedAt ?? null,
         analysisCompletedAt: post?.analysisCompletedAt ?? null,

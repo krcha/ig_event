@@ -17,7 +17,11 @@ import {
 import { isVenuePublic } from "../lib/venues/venue-lifecycle";
 import { requireAdminOrServiceSecret } from "./authz";
 
-export const MAX_VENUE_RESOLVER_SNAPSHOT_RECORDS = 2_000;
+// Keep the aggregate service snapshot at a conservative application-level
+// record bound below Convex transaction scan/byte limits, while leaving enough
+// room for venue discovery to add canonical-name and provider-account
+// identities without immediately exhausting the directory.
+export const MAX_VENUE_RESOLVER_SNAPSHOT_RECORDS = 4_000;
 const MAX_INDEXED_IDENTITY_MATCHES = 8;
 const VENUE_RESOLVER_SNAPSHOT_SCHEMA_VERSION = "venue-resolver-snapshot-v1" as const;
 

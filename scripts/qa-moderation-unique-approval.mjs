@@ -608,7 +608,7 @@ assert.deepEqual(persistedVenueResult.items[0].conflictIds, [
 const venueLimitTarget = event("venue-limit-target");
 const venueLimitFixture = makeCtx({
   events: [venueLimitTarget],
-  venues: Array.from({ length: 2_001 }, (_, index) => makeVenue(index)),
+  venues: Array.from({ length: 4_001 }, (_, index) => makeVenue(index)),
 });
 const venueLimitResult = await classify(venueLimitFixture, [
   reviewedItem(venueLimitTarget),
@@ -617,7 +617,7 @@ assert.equal(venueLimitResult.complete, false);
 assert.equal(venueLimitResult.items[0].reason, "indeterminate_venue_limit");
 assert.ok(
   venueLimitFixture.reads.some(
-    (item) => item.table === "venues" && item.limit === 2_001,
+    (item) => item.table === "venues" && item.limit === 4_001,
   ),
 );
 
@@ -626,7 +626,7 @@ const identityLimitVenue = makeVenue("identity-limit");
 const identityLimitFixture = makeCtx({
   events: [identityLimitTarget],
   venues: [identityLimitVenue],
-  venueIdentities: Array.from({ length: 2_001 }, (_, index) => ({
+  venueIdentities: Array.from({ length: 4_000 }, (_, index) => ({
     _id: `identity-limit-${index}`,
     _creationTime: index,
     active: true,
@@ -649,7 +649,7 @@ assert.ok(
     (item) =>
       item.table === "venueIdentities" &&
       item.indexName === "by_active_kind" &&
-      item.limit === 2_000,
+      item.limit === 4_000,
     ),
 );
 
@@ -775,7 +775,7 @@ try {
   // A safety-limit result for any item makes the whole mutation no-write.
   const incompleteFixture = makeCtx({
     events: [venueLimitTarget],
-    venues: Array.from({ length: 2_001 }, (_, index) => makeVenue(index)),
+    venues: Array.from({ length: 4_001 }, (_, index) => makeVenue(index)),
   });
   const incompleteApproval = await approveUniquePendingEvents._handler(
     incompleteFixture.ctx,

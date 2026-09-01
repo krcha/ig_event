@@ -62,6 +62,14 @@ const EVENT_DOMAIN_STEPS = [
   },
   {
     workflow: "venues",
+    key: "reviewed-official-venue-directory-additions-v1",
+    functionName:
+      "internal/migrations/eventDomain:addReviewedOfficialVenueDirectoryEntries",
+    kind: "event_domain_page",
+    limit: 2,
+  },
+  {
+    workflow: "venues",
     key: "venue-compatibility-seed-audit-v1",
     functionName:
       "internal/migrations/eventDomain:auditVenueCompatibilitySeeds",
