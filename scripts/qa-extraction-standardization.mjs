@@ -1351,6 +1351,8 @@ function runVenueQa() {
   assert.equal(toSearchableText("šupa"), "supa");
   assert.equal(toSearchableText("шупа"), "supa");
   assert.equal(toSearchableText("ʙᴇʟɢʀᴀᴅᴇ ᴋɪᴛᴄʜᴇɴ ᴘᴀʀᴛʏ"), "belgrade kitchen party");
+  assert.equal(toSearchableText("𝗦𝗠𝗣"), "smp");
+  assert.equal(toSearchableText("ǫ Ǫ"), "q q");
 
   const muzejGradaPost = normalizeVenueFromEvidence({
     handle: "muzejgradabeograda",

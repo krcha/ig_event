@@ -1834,6 +1834,17 @@ function legacyInstagramProfileSnapshotFixture(overrides = {}) {
         updatedAt: 93,
         venue: "Unknown Directory Venue",
       },
+      {
+        _id: "event_styled_unresolved_needs_normalization",
+        artists: [],
+        date: "2026-09-23",
+        eventType: "event",
+        status: "rejected",
+        time: "TBD",
+        title: "Styled Unknown Directory Venue Event",
+        updatedAt: 94,
+        venue: "𝗦𝗠𝗣",
+      },
     ],
   });
   const dryRun = await backfillEventVenueBindingsBatch._handler(
@@ -1842,7 +1853,7 @@ function legacyInstagramProfileSnapshotFixture(overrides = {}) {
   );
   assert.equal(dryRun.mismatchCount, 0);
   assert.equal(dryRun.unchangedCount, 1);
-  assert.equal(dryRun.updatedCount, 1);
+  assert.equal(dryRun.updatedCount, 2);
   assert.equal(
     state.tables.events.get("event_unresolved_needs_normalization")
       .normalizedVenueIdentity,
@@ -1855,7 +1866,7 @@ function legacyInstagramProfileSnapshotFixture(overrides = {}) {
     { cursor: null, dryRun: false, limit: 25 },
   );
   assert.equal(applied.mismatchCount, 0);
-  assert.equal(applied.updatedCount, 1);
+  assert.equal(applied.updatedCount, 2);
   const normalized = state.tables.events.get(
     "event_unresolved_needs_normalization",
   );
@@ -1868,6 +1879,12 @@ function legacyInstagramProfileSnapshotFixture(overrides = {}) {
     normalized.occurrenceVenueIdentity,
     "name:unknown directory venue",
   );
+  const styledNormalized = state.tables.events.get(
+    "event_styled_unresolved_needs_normalization",
+  );
+  assert.equal(styledNormalized.venueId, undefined);
+  assert.equal(styledNormalized.normalizedVenueIdentity, "smp");
+  assert.equal(styledNormalized.occurrenceVenueIdentity, "name:smp");
   const progress = [...state.tables.eventDomainMigrationState.values()].find(
     (row) => row.key === "event-venue-bindings-v1",
   );
@@ -1886,7 +1903,7 @@ function legacyInstagramProfileSnapshotFixture(overrides = {}) {
     { cursor: null, dryRun: true, limit: 25 },
   );
   assert.equal(verified.mismatchCount, 0);
-  assert.equal(verified.unchangedCount, 2);
+  assert.equal(verified.unchangedCount, 3);
   assert.equal(verified.updatedCount, 0);
 
   const restarted = await backfillEventVenueBindingsBatch._handler(
@@ -1894,7 +1911,7 @@ function legacyInstagramProfileSnapshotFixture(overrides = {}) {
     { cursor: null, dryRun: false, limit: 25, restart: true },
   );
   assert.equal(restarted.mismatchCount, 0);
-  assert.equal(restarted.unchangedCount, 2);
+  assert.equal(restarted.unchangedCount, 3);
   assert.equal(restarted.updatedCount, 0);
   const restartedProgress = [...state.tables.eventDomainMigrationState.values()].find(
     (row) => row.key === "event-venue-bindings-v1",

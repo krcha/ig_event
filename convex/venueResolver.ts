@@ -13,7 +13,7 @@ import { buildNormalizedEventVenueIdentity } from "../lib/events/event-venue-ide
 import {
   normalizeHandle,
   normalizeVenueComparableText,
-} from "../lib/pipeline/venue-normalization";
+} from "../lib/domain/venues/normalization";
 import { isVenuePublic } from "../lib/venues/venue-lifecycle";
 import { requireAdminOrServiceSecret } from "./authz";
 

@@ -185,6 +185,7 @@ export function buildCanonicalVenueNamesByHandle(
 
 export function toSearchableText(value: string): string {
   return value
+    .normalize("NFKC")
     .toLowerCase()
     .replace(/[ᴀʙᴄᴅᴇɢʜɪᴊᴋʟᴍɴᴏᴘǫʀꜱᴛᴜᴠᴡʏᴢ]/g, (character) => {
       return STYLED_LATIN_TO_ASCII[character] ?? character;
