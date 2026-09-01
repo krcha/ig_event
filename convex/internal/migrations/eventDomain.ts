@@ -1,5 +1,4 @@
 import { v } from "convex/values";
-
 import { internalMutation } from "../../_generated/server";
 import {
   backfillCanonicalEventFieldsBatchHandler,
@@ -19,6 +18,10 @@ import {
   correctReviewedMrakSourceOccurrenceHandler,
   REVIEWED_MRAK_OCCURRENCE_CORRECTION_KEY,
 } from "./reviewedMrakOccurrenceCorrection";
+import {
+  rewireReviewedMadlenianumDuplicateHandler,
+  REVIEWED_MADLENIANUM_DUPLICATE_REWIRE_KEY,
+} from "./reviewedMadlenianumDuplicateRewire";
 import {
   eventDomainMigrationBatchArgs,
   eventDomainMigrationBatchResult,
@@ -48,25 +51,26 @@ export const backfillCanonicalEventFieldsBatch = internalMutation({
   returns: eventDomainMigrationBatchResult,
   handler: backfillCanonicalEventFieldsBatchHandler,
 });
-
 export const consolidateReviewedKolaracVenue = internalMutation({
   args: eventDomainMigrationBatchArgs,
   returns: eventDomainMigrationBatchResult,
   handler: consolidateReviewedKolaracVenueHandler,
 });
-
 export const addReviewedOfficialVenueDirectoryEntries = internalMutation({
   args: eventDomainMigrationBatchArgs,
   returns: eventDomainMigrationBatchResult,
   handler: addReviewedOfficialVenueDirectoryEntriesHandler,
 });
-
 export const correctReviewedMrakSourceOccurrence = internalMutation({
   args: eventDomainMigrationBatchArgs,
   returns: eventDomainMigrationBatchResult,
   handler: correctReviewedMrakSourceOccurrenceHandler,
 });
-
+export const rewireReviewedMadlenianumDuplicate = internalMutation({
+  args: eventDomainMigrationBatchArgs,
+  returns: eventDomainMigrationBatchResult,
+  handler: rewireReviewedMadlenianumDuplicateHandler,
+});
 export const auditVenueCompatibilitySeeds = internalMutation({
   args: {
     dryRun: v.optional(v.boolean()),
@@ -80,31 +84,26 @@ export const auditVenueCompatibilitySeeds = internalMutation({
   }),
   handler: auditVenueCompatibilitySeedsHandler,
 });
-
 export const backfillVenueIdentitiesBatch = internalMutation({
   args: eventDomainMigrationBatchArgs,
   returns: eventDomainMigrationBatchResult,
   handler: backfillVenueIdentitiesBatchHandler,
 });
-
 export const backfillEventVenueBindingsBatch = internalMutation({
   args: eventDomainMigrationBatchArgs,
   returns: eventDomainMigrationBatchResult,
   handler: backfillEventVenueBindingsBatchHandler,
 });
-
 export const backfillSourceOccurrencesBatch = internalMutation({
   args: eventDomainMigrationBatchArgs,
   returns: eventDomainMigrationBatchResult,
   handler: backfillSourceOccurrencesBatchHandler,
 });
-
 export const backfillSourceOccurrenceCanonicalPayloadsBatch = internalMutation({
   args: eventDomainMigrationBatchArgs,
   returns: eventDomainMigrationBatchResult,
   handler: backfillSourceOccurrenceCanonicalPayloadsBatchHandler,
 });
-
 export const auditSourceOccurrenceReceiptTopologyBatch = internalMutation({
   args: eventDomainMigrationBatchArgs,
   returns: eventDomainMigrationBatchResult,
@@ -113,6 +112,7 @@ export const auditSourceOccurrenceReceiptTopologyBatch = internalMutation({
 
 export {
   REVIEWED_KOLARAC_VENUE_CONSOLIDATION_KEY,
+  REVIEWED_MADLENIANUM_DUPLICATE_REWIRE_KEY,
   REVIEWED_MRAK_OCCURRENCE_CORRECTION_KEY,
   REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS_KEY,
   VENUE_COMPATIBILITY_SEED_AUDIT_KEY,

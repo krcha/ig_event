@@ -56,6 +56,7 @@ import type * as internal_migrations_eventDomainShared from "../internal/migrati
 import type * as internal_migrations_eventVenueBindings from "../internal/migrations/eventVenueBindings.js";
 import type * as internal_migrations_publication from "../internal/migrations/publication.js";
 import type * as internal_migrations_reviewedKolaracVenueConsolidation from "../internal/migrations/reviewedKolaracVenueConsolidation.js";
+import type * as internal_migrations_reviewedMadlenianumDuplicateRewire from "../internal/migrations/reviewedMadlenianumDuplicateRewire.js";
 import type * as internal_migrations_reviewedMrakOccurrenceCorrection from "../internal/migrations/reviewedMrakOccurrenceCorrection.js";
 import type * as internal_migrations_reviewedOfficialVenueDirectoryAdditions from "../internal/migrations/reviewedOfficialVenueDirectoryAdditions.js";
 import type * as internal_migrations_savedEvents from "../internal/migrations/savedEvents.js";
@@ -159,6 +160,7 @@ declare const fullApi: ApiFromModules<{
   "internal/migrations/eventVenueBindings": typeof internal_migrations_eventVenueBindings;
   "internal/migrations/publication": typeof internal_migrations_publication;
   "internal/migrations/reviewedKolaracVenueConsolidation": typeof internal_migrations_reviewedKolaracVenueConsolidation;
+  "internal/migrations/reviewedMadlenianumDuplicateRewire": typeof internal_migrations_reviewedMadlenianumDuplicateRewire;
   "internal/migrations/reviewedMrakOccurrenceCorrection": typeof internal_migrations_reviewedMrakOccurrenceCorrection;
   "internal/migrations/reviewedOfficialVenueDirectoryAdditions": typeof internal_migrations_reviewedOfficialVenueDirectoryAdditions;
   "internal/migrations/savedEvents": typeof internal_migrations_savedEvents;

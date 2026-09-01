@@ -14,8 +14,10 @@ import {
   backfillVenueIdentitiesBatch,
   consolidateReviewedKolaracVenue,
   correctReviewedMrakSourceOccurrence,
+  rewireReviewedMadlenianumDuplicate,
   auditSourceOccurrenceReceiptTopologyBatch,
   REVIEWED_KOLARAC_VENUE_CONSOLIDATION_KEY,
+  REVIEWED_MADLENIANUM_DUPLICATE_REWIRE_KEY,
   REVIEWED_MRAK_OCCURRENCE_CORRECTION_KEY,
   REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS_KEY,
   VENUE_COMPATIBILITY_SEED_AUDIT_KEY,
@@ -866,6 +868,172 @@ function makeCanonicalPayloadMigrationState() {
   assert.ok(blockedResult.mismatchCount > 0);
   assert.equal(blockedResult.updatedCount, 0);
   assert.deepEqual(blocked.tables.events.get(eventId), blockedBefore);
+  assert.equal(blocked.tables.eventAuditLog.size, 0);
+}
+
+{
+  const duplicateId = "j57dmmvenvj30pjy915j4dktn98cy8p5";
+  const primaryId = "j57bvxmxagvee6c0psbkxm7w958b36gm";
+  const sourceIdentity = "instagram-source-identity-v1:DcS7mUtoz-f";
+  const sourceFingerprint =
+    "instagram-source-v2:3a7c28ce01cb303467f0579069bbb477b911ac824c1b515ee47645abb0ff18c2";
+  const sourceOccurrenceKey =
+    "instagram-occurrence-v2:2da97c0656be2ce4a42fd5b15e32c95ac8cad1cbdd098ee70785c0aad54173e6";
+  const targetTitle = "„JA, EMA – Ljubavni život Eme Bovari";
+  const rowSourceText =
+    "„JA, EMA – Ljubavni život Eme Bovari“ | Premijera: 29. septembar";
+  const makeState = ({ primaryVenue = "Opera & Theater Madlenianum" } = {}) =>
+    makeDb({
+      events: [
+        {
+          _id: primaryId,
+          artists: ["Tatjana Mandić Rigonat"],
+          date: "2026-09-29",
+          eventType: "arts & culture",
+          normalizedFieldsJson: JSON.stringify({
+            artists: [],
+            normalizedDate: "2026-09-29",
+            normalizedVenue: primaryVenue,
+            time: "TBD",
+            title: "Ja, Ema – Ljubavni život Eme Bovari",
+          }),
+          normalizedVenueIdentity: "opera theater madlenianum",
+          normalizedVenueInstagramHandle: "madlenianum",
+          status: "approved",
+          time: "TBD",
+          title: "Ja, Ema – Ljubavni život Eme Bovari",
+          updatedAt: 1_786_428_709_942,
+          venue: primaryVenue,
+          venueCategory: "venue",
+          venueId: "k177cby57143wkhs02n0q9d6rn896fff",
+          venueInstagramHandle: "madlenianum",
+        },
+        {
+          _id: duplicateId,
+          artists: [],
+          date: "2026-09-29",
+          eventType: "arts & culture",
+          moderationNote: `Rejected as same_event_reannouncement of approved event ${primaryId}; exact date, time, source venue, and reviewed title identity match.`,
+          normalizedFieldsJson: JSON.stringify({
+            extractionContractVersion: "event_evidence_v2",
+            normalizedDate: "2026-09-29",
+            normalizedVenue: "",
+            rowSourceText,
+            sourceGroundingInstagramHandle: "madlenianum",
+            time: "TBD",
+            title: targetTitle,
+            trustedVenueSource: true,
+            venueEvidenceVerified: true,
+            venueSource: "handle_map",
+          }),
+          rawExtractionJson: JSON.stringify({
+            schedule_entries: [
+              {
+                source_text: rowSourceText,
+                venue: "Opera & Theater Madlenianum",
+              },
+            ],
+          }),
+          sourceOccurrenceKey,
+          status: "rejected",
+          time: "TBD",
+          title: targetTitle,
+          updatedAt: 1_787_416_214_788,
+          venue: "",
+        },
+      ],
+      instagramEventSources: [
+        {
+          _id: "kx705hv9w29yqhg01d0cnvt7r18cyva6",
+          eventId: duplicateId,
+          sourceFingerprint,
+          sourceIdentity,
+          sourceOccurrenceKey,
+          updatedAt: 1,
+        },
+      ],
+      instagramSourceOccurrenceReceipts: [
+        {
+          _id: "mh76wgeqyrak03jsqr0z82fb698cy4qb",
+          deferredChildCount: 0,
+          deferredChildKeys: [],
+          expectedKeys: [sourceOccurrenceKey],
+          expectedOccurrences: [
+            {
+              artists: [],
+              date: "2026-09-29",
+              key: sourceOccurrenceKey,
+              time: "TBD",
+              title: targetTitle,
+              venue: "",
+            },
+          ],
+          satisfiedKeys: [sourceOccurrenceKey],
+          satisfiedOccurrences: [{ eventId: duplicateId, key: sourceOccurrenceKey }],
+          sourceFingerprint,
+          sourceIdentity,
+          updatedAt: 1,
+        },
+      ],
+    });
+
+  const state = makeState();
+  const before = structuredClone(state.tables.events.get(duplicateId));
+  const dryRun = await rewireReviewedMadlenianumDuplicate._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 1 },
+  );
+  assert.equal(dryRun.mismatchCount, 0);
+  assert.equal(dryRun.updatedCount, 1);
+  assert.deepEqual(state.tables.events.get(duplicateId), before);
+
+  const applied = await rewireReviewedMadlenianumDuplicate._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 1 },
+  );
+  assert.equal(applied.mismatchCount, 0);
+  assert.equal(applied.updatedCount, 1);
+  const duplicate = state.tables.events.get(duplicateId);
+  assert.equal(duplicate.venue, "Opera & Theater Madlenianum");
+  assert.equal(duplicate.venueId, "k177cby57143wkhs02n0q9d6rn896fff");
+  assert.equal(duplicate.updatedAt, 1_787_416_214_788);
+  const fields = JSON.parse(duplicate.normalizedFieldsJson);
+  assert.deepEqual(fields.reviewedDuplicateVenueRewire, {
+    operationId: REVIEWED_MADLENIANUM_DUPLICATE_REWIRE_KEY,
+    policyVersion: 1,
+    primaryEventId: primaryId,
+    targetVenueId: "k177cby57143wkhs02n0q9d6rn896fff",
+  });
+  assert.equal(
+    state.tables.instagramEventSources.get(
+      "kx705hv9w29yqhg01d0cnvt7r18cyva6",
+    ).eventId,
+    primaryId,
+  );
+  const receipt = state.tables.instagramSourceOccurrenceReceipts.get(
+    "mh76wgeqyrak03jsqr0z82fb698cy4qb",
+  );
+  assert.equal(receipt.expectedOccurrences[0].venue, "Opera & Theater Madlenianum");
+  assert.equal(receipt.satisfiedOccurrences[0].eventId, primaryId);
+  assert.equal(state.tables.eventAuditLog.size, 2);
+
+  const verified = await rewireReviewedMadlenianumDuplicate._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 1 },
+  );
+  assert.equal(verified.mismatchCount, 0);
+  assert.equal(verified.unchangedCount, 1);
+  assert.equal(verified.updatedCount, 0);
+
+  const blocked = makeState({ primaryVenue: "Drifted Venue" });
+  const blockedBefore = structuredClone(blocked.tables.events.get(duplicateId));
+  const blockedResult = await rewireReviewedMadlenianumDuplicate._handler(
+    { db: blocked.db },
+    { cursor: null, dryRun: false, limit: 1 },
+  );
+  assert.ok(blockedResult.mismatchCount > 0);
+  assert.equal(blockedResult.updatedCount, 0);
+  assert.deepEqual(blocked.tables.events.get(duplicateId), blockedBefore);
   assert.equal(blocked.tables.eventAuditLog.size, 0);
 }
 
@@ -2311,6 +2479,239 @@ function legacyInstagramProfileSnapshotFixture(overrides = {}) {
     event.updatedAt,
     92,
     "Audited legacy venue migration must preserve event version.",
+  );
+}
+
+{
+  const venueIdentityState = {
+    _id: "venue_identity_ready_for_precedence",
+    completedAt: 1,
+    cursor: "2",
+    errorCount: 0,
+    isDone: true,
+    key: "venue-identities-v1",
+    mismatchCount: 0,
+    phase: "venue_identities",
+    scannedCount: 2,
+    updatedAt: 1,
+    updatedCount: 2,
+  };
+  const state = makeDb({
+    eventDomainMigrationState: [venueIdentityState],
+    events: [
+      {
+        _id: "event_explicit_schedule_beats_promoter",
+        artists: ["Salsa Calle"],
+        date: "2026-09-26",
+        eventType: "nightlife",
+        normalizedFieldsJson: JSON.stringify({
+          artists: ["Salsa Calle"],
+          extractionContractVersion: "event_evidence_v2",
+          normalizedDate: "2026-09-26",
+          normalizedVenue: "",
+          rowSourceText: "Salsa Calle @ Don Marko Cuba",
+          sourceGroundingInstagramHandle: "gastrobar.kaldrma",
+          time: "21:00",
+          title: "Salsa Calle",
+          trustedVenueSource: true,
+          venueEvidenceVerified: true,
+          venueSource: "handle_map",
+        }),
+        rawExtractionJson: JSON.stringify({
+          schedule_entries: [
+            {
+              source_text: "Salsa Calle @ Don Marko Cuba",
+              venue: "Don Marko Cuba",
+            },
+          ],
+        }),
+        sourceOccurrenceKey: "salsa-calle-occurrence",
+        status: "approved",
+        time: "21:00",
+        title: "Salsa Calle",
+        updatedAt: 96,
+        venue: "",
+      },
+      {
+        _id: "event_trusted_venue_account_fallback",
+        artists: [],
+        date: "2026-09-27",
+        eventType: "nightlife",
+        normalizedFieldsJson: JSON.stringify({
+          artists: [],
+          extractionContractVersion: "event_evidence_v2",
+          fieldConfirmation: {
+            location_name: {
+              confidence: 0.4,
+              evidence: "Gavrila Principa 7",
+              found_in: ["caption"],
+            },
+          },
+          normalizedDate: "2026-09-27",
+          normalizedVenue: "",
+          sourceGroundingInstagramHandle: "shootiranje",
+          time: "23:00",
+          title: "Night Oliver Dragojević",
+          trustedVenueSource: true,
+          venueEvidenceVerified: true,
+          venueSource: "handle_map",
+        }),
+        rawExtractionJson: JSON.stringify({ schedule_entries: [] }),
+        sourceOccurrenceKey: "shootiranje-occurrence",
+        status: "approved",
+        time: "23:00",
+        title: "Night Oliver Dragojević",
+        updatedAt: 97,
+        venue: "",
+      },
+    ],
+    instagramEventSources: [
+      {
+        _id: "salsa_source_link",
+        eventId: "event_explicit_schedule_beats_promoter",
+        sourceFingerprint: "salsa-fingerprint",
+        sourceIdentity: "salsa-source",
+        sourceOccurrenceKey: "salsa-calle-occurrence",
+        updatedAt: 1,
+      },
+      {
+        _id: "shootiranje_source_link",
+        eventId: "event_trusted_venue_account_fallback",
+        sourceFingerprint: "shootiranje-fingerprint",
+        sourceIdentity: "shootiranje-source",
+        sourceOccurrenceKey: "shootiranje-occurrence",
+        updatedAt: 1,
+      },
+    ],
+    instagramSourceOccurrenceReceipts: [
+      {
+        _id: "salsa_receipt",
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        expectedKeys: ["salsa-calle-occurrence"],
+        expectedOccurrences: [
+          {
+            artists: ["Salsa Calle"],
+            date: "2026-09-26",
+            key: "salsa-calle-occurrence",
+            time: "21:00",
+            title: "Salsa Calle",
+            venue: "",
+          },
+        ],
+        satisfiedKeys: ["salsa-calle-occurrence"],
+        satisfiedOccurrences: [
+          {
+            eventId: "event_explicit_schedule_beats_promoter",
+            key: "salsa-calle-occurrence",
+          },
+        ],
+        sourceFingerprint: "salsa-fingerprint",
+        sourceIdentity: "salsa-source",
+        updatedAt: 1,
+      },
+      {
+        _id: "shootiranje_receipt",
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        expectedKeys: ["shootiranje-occurrence"],
+        expectedOccurrences: [
+          {
+            artists: [],
+            date: "2026-09-27",
+            key: "shootiranje-occurrence",
+            time: "23:00",
+            title: "Night Oliver Dragojević",
+            venue: "",
+          },
+        ],
+        satisfiedKeys: ["shootiranje-occurrence"],
+        satisfiedOccurrences: [
+          {
+            eventId: "event_trusted_venue_account_fallback",
+            key: "shootiranje-occurrence",
+          },
+        ],
+        sourceFingerprint: "shootiranje-fingerprint",
+        sourceIdentity: "shootiranje-source",
+        updatedAt: 1,
+      },
+    ],
+    venueIdentities: [
+      {
+        _id: "gastro_provider_identity",
+        active: true,
+        kind: "provider_account",
+        normalizedValue: "gastrobar.kaldrma",
+        provider: "instagram",
+        rawValue: "gastrobar.kaldrma",
+        source: "venue_record",
+        venueId: "venue_gastro",
+      },
+      {
+        _id: "shootiranje_provider_identity",
+        active: true,
+        kind: "provider_account",
+        normalizedValue: "shootiranje",
+        provider: "instagram",
+        rawValue: "shootiranje",
+        source: "venue_record",
+        venueId: "venue_shootiranje",
+      },
+    ],
+    venues: [
+      {
+        _id: "venue_gastro",
+        aliases: [],
+        category: "bar",
+        instagramHandle: "gastrobar.kaldrma",
+        name: "Gastro Bar Kaldrma",
+        publicStatus: "published",
+        scrapeActive: true,
+      },
+      {
+        _id: "venue_shootiranje",
+        aliases: [],
+        category: "club",
+        instagramHandle: "shootiranje",
+        name: "Shootiranje",
+        publicStatus: "published",
+        scrapeActive: true,
+      },
+    ],
+  });
+  const applied = await backfillEventVenueBindingsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(applied.mismatchCount, 0);
+  assert.equal(applied.updatedCount, 2);
+  const explicit = state.tables.events.get(
+    "event_explicit_schedule_beats_promoter",
+  );
+  assert.equal(explicit.venue, "Don Marko Cuba");
+  assert.equal(explicit.venueId, undefined);
+  assert.equal(explicit.normalizedVenueIdentity, "don marko cuba");
+  assert.equal(
+    JSON.parse(explicit.normalizedFieldsJson).auditedLegacyVenueNormalization
+      .sourcePolicy,
+    "exact_schedule_entry_event_evidence_v2",
+    "An exact row-bound physical venue must beat the promoter account.",
+  );
+  assert.equal(
+    state.tables.instagramSourceOccurrenceReceipts.get("salsa_receipt")
+      .expectedOccurrences[0].venue,
+    "Don Marko Cuba",
+  );
+  const fallback = state.tables.events.get(
+    "event_trusted_venue_account_fallback",
+  );
+  assert.equal(fallback.venue, "Shootiranje");
+  assert.equal(fallback.venueId, "venue_shootiranje");
+  assert.equal(
+    JSON.parse(fallback.normalizedFieldsJson)
+      .auditedLegacyVenueCanonicalization.sourcePolicy,
+    "trusted_venue_account_provider_identity",
   );
 }
 

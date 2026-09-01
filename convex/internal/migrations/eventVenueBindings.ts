@@ -12,6 +12,7 @@ import { exactJsonValue } from "../../../lib/events/exact-json-value";
 import { isCrossPostCampaignLineageEvent } from "../../../lib/events/cross-post-campaign-aggregate-attestation";
 import { sourceOccurrenceRepresentativeMatchesExpected } from "../../../lib/events/source-occurrence-representation";
 import { canonicalizeSourceUrlOrEmpty } from "../../../lib/domain/source-url";
+import { normalizeHandle } from "../../../lib/domain/venues/normalization";
 import { loadVerifiedCampaignLineageForSourceEvent } from "../campaignLineageReattestationProof";
 import { markSourceOccurrenceTopologyMutation } from "../sourceOccurrenceTopologyEpoch";
 import {
@@ -32,23 +33,61 @@ function readObject(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function readAuditedLegacyVenueClaims(event: Doc<"events">): string[] {
+type AuditedLegacyVenueResolution = {
+  displayVenue: string;
+  resolution: ConvexVenueResolution;
+  sourcePolicy:
+    | "exact_schedule_entry_event_evidence_v2"
+    | "trusted_venue_account_provider_identity"
+    | "verified_event_evidence_v2";
+};
+
+function parseNormalizedFields(
+  event: Doc<"events">,
+): Record<string, unknown> | null {
+  if (!event.normalizedFieldsJson) return null;
+  try {
+    return readObject(JSON.parse(event.normalizedFieldsJson));
+  } catch {
+    return null;
+  }
+}
+
+function readExactScheduleEntryVenue(
+  event: Doc<"events">,
+  fields: Record<string, unknown>,
+): string | null {
+  const rowSourceText = fields.rowSourceText;
+  if (typeof rowSourceText !== "string" || !rowSourceText.trim()) return null;
+  let raw: Record<string, unknown> | null = null;
+  try {
+    raw = readObject(JSON.parse(event.rawExtractionJson ?? "null"));
+  } catch {
+    return null;
+  }
+  const entries = Array.isArray(raw?.schedule_entries)
+    ? raw.schedule_entries.map(readObject).filter(Boolean)
+    : [];
+  const matchingEntries = entries.filter(
+    (entry) => entry?.source_text === rowSourceText,
+  );
+  if (matchingEntries.length !== 1) return null;
+  const venue = matchingEntries[0]?.venue;
+  return typeof venue === "string" && venue.trim() ? venue.trim() : null;
+}
+
+function readAuditedLegacyVenueClaims(
+  event: Doc<"events">,
+  fields: Record<string, unknown>,
+): string[] {
   if (
     event.venue.trim() ||
     event.venueInstagramHandle ||
-    event.venueId ||
-    !event.normalizedFieldsJson
+    event.venueId
   ) {
     return [];
   }
-  let fields: Record<string, unknown> | null = null;
-  try {
-    fields = readObject(JSON.parse(event.normalizedFieldsJson));
-  } catch {
-    return [];
-  }
   if (
-    !fields ||
     fields.extractionContractVersion !== "event_evidence_v2" ||
     fields.venueEvidenceVerified !== true
   ) {
@@ -98,9 +137,66 @@ function readAuditedLegacyVenueClaims(event: Doc<"events">): string[] {
 async function resolveAuditedLegacyVenueClaim(
   ctx: MutationCtx,
   event: Doc<"events">,
-): Promise<ConvexVenueResolution | null> {
-  const claims = readAuditedLegacyVenueClaims(event);
-  if (claims.length === 0) return null;
+): Promise<AuditedLegacyVenueResolution | null> {
+  const fields = parseNormalizedFields(event);
+  if (
+    !fields ||
+    event.venue.trim() ||
+    event.venueInstagramHandle ||
+    event.venueId ||
+    fields.extractionContractVersion !== "event_evidence_v2" ||
+    fields.venueEvidenceVerified !== true
+  ) {
+    return null;
+  }
+
+  // A row-bound schedule entry is the strongest persisted physical-place
+  // claim. It deliberately wins over the posting account because promoters
+  // frequently advertise events at a different venue.
+  const exactScheduleVenue = readExactScheduleEntryVenue(event, fields);
+  if (exactScheduleVenue) {
+    const resolution = await resolveVenueForWrite(ctx, exactScheduleVenue, {
+      includePending: true,
+    });
+    if (resolution.resolution.status === "ambiguous") return null;
+    return {
+      displayVenue: resolution.canonicalVenueName ?? exactScheduleVenue,
+      resolution,
+      sourcePolicy: "exact_schedule_entry_event_evidence_v2",
+    };
+  }
+
+  const claims = readAuditedLegacyVenueClaims(event, fields);
+  if (claims.length === 0) {
+    const sourceHandle =
+      typeof fields.sourceGroundingInstagramHandle === "string"
+        ? normalizeHandle(fields.sourceGroundingInstagramHandle)
+        : "";
+    if (
+      fields.trustedVenueSource !== true ||
+      fields.venueSource !== "handle_map" ||
+      !sourceHandle
+    ) {
+      return null;
+    }
+    const resolution = await resolveVenueForWrite(ctx, sourceHandle, {
+      includePending: true,
+    });
+    if (
+      resolution.resolution.status !== "resolved" ||
+      !resolution.venueFields.venueId ||
+      !resolution.canonicalVenueName ||
+      normalizeHandle(resolution.venueFields.venueInstagramHandle ?? "") !==
+        sourceHandle
+    ) {
+      return null;
+    }
+    return {
+      displayVenue: resolution.canonicalVenueName,
+      resolution,
+      sourcePolicy: "trusted_venue_account_provider_identity",
+    };
+  }
   const resolutions = await Promise.all(
     claims.map((claim) =>
       resolveVenueForWrite(ctx, claim, { includePending: true }),
@@ -121,16 +217,40 @@ async function resolveAuditedLegacyVenueClaim(
   const venueIds = new Set(
     resolved.map((resolution) => resolution.venueFields.venueId),
   );
-  return venueIds.size === 1 ? (resolved[0] ?? null) : null;
+  if (venueIds.size === 1 && resolved[0]?.canonicalVenueName) {
+    return {
+      displayVenue: resolved[0].canonicalVenueName,
+      resolution: resolved[0],
+      sourcePolicy: "verified_event_evidence_v2",
+    };
+  }
+  const unresolved = resolutions.filter(
+    (resolution) => resolution.resolution.status === "unresolved",
+  );
+  const normalizedIdentities = new Set(
+    unresolved
+      .map((resolution) => resolution.venueFields.normalizedVenueIdentity)
+      .filter(Boolean),
+  );
+  if (
+    resolved.length === 0 &&
+    unresolved.length === resolutions.length &&
+    normalizedIdentities.size === 1
+  ) {
+    return {
+      displayVenue: claims[0]!.trim(),
+      resolution: unresolved[0]!,
+      sourcePolicy: "verified_event_evidence_v2",
+    };
+  }
+  return null;
 }
 
 function buildAuditedLegacyNormalizedFields(
   event: Doc<"events">,
-  resolution: ConvexVenueResolution,
+  audited: AuditedLegacyVenueResolution,
 ): string | null {
-  if (!resolution.canonicalVenueName || !resolution.venueFields.venueId) {
-    return null;
-  }
+  const { displayVenue, resolution, sourcePolicy } = audited;
   let fields: Record<string, unknown> | null = null;
   try {
     fields = readObject(JSON.parse(event.normalizedFieldsJson ?? "null"));
@@ -140,12 +260,23 @@ function buildAuditedLegacyNormalizedFields(
   if (!fields) return null;
   return JSON.stringify({
     ...fields,
-    normalizedVenue: resolution.canonicalVenueName,
-    auditedLegacyVenueCanonicalization: {
-      policyVersion: 1,
-      sourcePolicy: "verified_event_evidence_v2",
-      targetVenueId: resolution.venueFields.venueId,
-    },
+    normalizedVenue: displayVenue,
+    ...(resolution.venueFields.venueId
+      ? {
+          auditedLegacyVenueCanonicalization: {
+            policyVersion: 1,
+            sourcePolicy,
+            targetVenueId: resolution.venueFields.venueId,
+          },
+        }
+      : {
+          auditedLegacyVenueNormalization: {
+            normalizedVenueIdentity:
+              resolution.venueFields.normalizedVenueIdentity,
+            policyVersion: 1,
+            sourcePolicy,
+          },
+        }),
   });
 }
 
@@ -569,7 +700,7 @@ export async function backfillEventVenueBindingsBatchHandler(
       ? null
       : await resolveAuditedLegacyVenueClaim(ctx, event);
     const resolution =
-      auditedLegacyResolution ??
+      auditedLegacyResolution?.resolution ??
       (rawVenueClaim
         ? await resolveVenueForWrite(ctx, rawVenueClaim)
         : null);
@@ -587,7 +718,7 @@ export async function backfillEventVenueBindingsBatchHandler(
     // this migration must never erase a canonical venue binding by inference.
     const explicitUnresolvedClaim =
       resolution?.resolution.status === "unresolved" &&
-      rawVenueClaim.length > 0 &&
+      (rawVenueClaim.length > 0 || Boolean(auditedLegacyResolution)) &&
       Boolean(resolution.venueFields.normalizedVenueIdentity) &&
       event.venueId === undefined;
     if (
@@ -604,8 +735,8 @@ export async function backfillEventVenueBindingsBatchHandler(
     const effectiveEvent: Doc<"events"> = {
       ...event,
       ...resolution.venueFields,
-      ...(auditedLegacyResolution?.canonicalVenueName
-        ? { venue: auditedLegacyResolution.canonicalVenueName }
+      ...(auditedLegacyResolution
+        ? { venue: auditedLegacyResolution.displayVenue }
         : {}),
       ...(auditedLegacyNormalizedFields
         ? { normalizedFieldsJson: auditedLegacyNormalizedFields }
@@ -613,8 +744,8 @@ export async function backfillEventVenueBindingsBatchHandler(
     };
     const patch = {
       ...resolution.venueFields,
-      ...(auditedLegacyResolution?.canonicalVenueName
-        ? { venue: auditedLegacyResolution.canonicalVenueName }
+      ...(auditedLegacyResolution
+        ? { venue: auditedLegacyResolution.displayVenue }
         : {}),
       ...(auditedLegacyNormalizedFields
         ? { normalizedFieldsJson: auditedLegacyNormalizedFields }

@@ -93,6 +93,14 @@ const EVENT_DOMAIN_STEPS = [
   },
   {
     workflow: "venues",
+    key: "reviewed-madlenianum-duplicate-source-rewire-v1",
+    functionName:
+      "internal/migrations/eventDomain:rewireReviewedMadlenianumDuplicate",
+    kind: "event_domain_page",
+    limit: 1,
+  },
+  {
+    workflow: "venues",
     key: "reviewed-mrak-source-occurrence-correction-v1",
     functionName:
       "internal/migrations/eventDomain:correctReviewedMrakSourceOccurrence",
