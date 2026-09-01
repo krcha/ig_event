@@ -33,7 +33,11 @@ export function isSensibleEventTitleForApproval(options: {
   if (!normalizedTitle || normalizedTitle.length < 3) {
     return false;
   }
-  if (normalizedVenue && normalizedTitle === normalizedVenue) {
+  if (
+    normalizedVenue &&
+    (normalizedTitle === normalizedVenue ||
+      normalizedTitle.replace(/\s+/g, "") === normalizedVenue.replace(/\s+/g, ""))
+  ) {
     return false;
   }
   if (DATE_OR_TIME_FRAGMENT.test(title) || ADDRESS_FRAGMENT.test(title)) {

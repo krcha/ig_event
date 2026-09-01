@@ -6,6 +6,7 @@ function read(path) {
 }
 
 const eventsSource = read("convex/events.ts");
+const publicReadsSource = read("convex/eventDomain/publicReads.ts");
 const venuesSource = read("convex/venues.ts");
 const publicEventsSource = read("lib/events/public-events.ts");
 const publicVenuePagesSource = read("lib/venues/public-venue-pages.ts");
@@ -26,9 +27,14 @@ assert.match(
   "Convex should expose bounded public event windows.",
 );
 assert.match(
-  eventsSource,
-  /\.eq\("status", "approved"\)\.gte\("date", args\.fromDate\)\.lt\("date", args\.beforeDate\)/,
+  publicReadsSource,
+  /\.eq\("status", "approved"\)[\s\S]*\.gte\("date", options\.fromDate\)[\s\S]*\.lt\("date", options\.beforeDate\)/,
   "Public event windows should use the status/date index with both bounds.",
+);
+assert.match(
+  publicReadsSource,
+  /paginateVisibleRows\(/,
+  "Public event windows should fill visible pages instead of filtering after one raw page.",
 );
 assert.match(
   venuesSource,
@@ -119,10 +125,21 @@ assert.ok(
   packageJson.scripts["qa:public-event-windows"]?.includes("qa-public-event-windows.mjs"),
   "package.json should expose qa:public-event-windows.",
 );
+assert.ok(
+  packageJson.scripts["qa:public-pagination-integrity"]?.includes(
+    "qa-public-pagination-integrity.mjs",
+  ),
+  "package.json should expose behavioral visible-pagination QA.",
+);
 assert.match(
   releaseCheckSource,
   /qa:public-event-windows/,
   "Release gate should include public event window QA.",
+);
+assert.match(
+  releaseCheckSource,
+  /qa:public-pagination-integrity/,
+  "Release gate should include public pagination integrity QA.",
 );
 
 console.log("Public event window QA passed.");

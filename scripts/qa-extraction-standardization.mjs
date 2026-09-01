@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { LEGACY_VENUE_ALIAS_SEEDS } from "../lib/config/legacy-venue-alias-seeds.ts";
 import {
   EVENT_EXTRACTION_SYSTEM_PROMPT,
   buildEventExtractionUserPrompt,
@@ -83,6 +84,8 @@ import {
   updateEventAndRecordInstagramSourceOccurrenceSatisfaction,
 } from "../convex/events.ts";
 import { recordProcessingResult } from "../convex/scrapedPosts.ts";
+import { adaptInstagramScrapedPostToSourceDocument } from "../lib/domain/source-documents.ts";
+import { buildInstagramSourceOccurrenceFingerprint } from "../lib/domain/occurrences/source-fingerprint.ts";
 
 const STATIC_VENUE_BY_HANDLE = {
   "20_44.nightclub": "Klub 20/44",
@@ -501,7 +504,7 @@ function runPromptQa() {
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
-    /na Ski Stazi.*Ski Staza.*not an event title/i,
+    /locative ending.*Stazi.*Staza.*not an event title/i,
     "Prompt must normalize Serbian locative venue evidence instead of turning it into a title.",
   );
   assert.match(
@@ -522,6 +525,9 @@ function runPromptQa() {
 }
 
 function runVenueQa() {
+  // Model the post-migration resolver directory: compatibility seeds are
+  // persisted as durable venue identities before runtime stops consulting the
+  // seed file directly.
   const canonicalVenues = [
     { name: "Drugstore", instagramHandle: "drugstore_beograd" },
     { name: "Zappa Baza", instagramHandle: "zappabaza" },
@@ -554,7 +560,15 @@ function runVenueQa() {
       instagramHandle: "lavariete.belgrade",
       location: "Francuska 6",
     },
-  ];
+  ].map((venue) => {
+    const seed = LEGACY_VENUE_ALIAS_SEEDS.find(
+      (candidate) => candidate.canonicalHandle === venue.instagramHandle,
+    );
+    return {
+      ...venue,
+      aliases: [...new Set([...(venue.aliases ?? []), ...(seed?.aliases ?? [])])],
+    };
+  });
   const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle(canonicalVenues);
   const canonicalVenueAliasesByHandle = buildCanonicalVenueAliasesByHandle(canonicalVenues);
   const canonicalVenueLocationsByHandle =
@@ -783,12 +797,14 @@ function runVenueQa() {
   ];
   for (const [input, expected] of aliasCases) {
     const resolved = canonicalizeVenueName(input, canonicalVenueNamesByHandle, {
+      canonicalVenueAliasesByHandle,
       handleVenueNamesByHandle: venueNameOverridesByHandle,
     });
     assert.equal(resolved, expected, `Expected venue alias '${input}' to resolve.`);
   }
 
   const detailedAlias = canonicalizeVenueNameDetailed("Pab 0,5", canonicalVenueNamesByHandle, {
+    canonicalVenueAliasesByHandle,
     handleVenueNamesByHandle: venueNameOverridesByHandle,
   });
   assert.equal(detailedAlias?.reason, "alias");
@@ -1340,6 +1356,7 @@ function runVenueQa() {
     handle: "muzejgradabeograda",
     rawModelVenue: "Спомен-музеј Иве Андрића",
     locationName: "",
+    canonicalVenueAliasesByHandle,
     canonicalVenueNamesByHandle,
     handleVenueNamesByHandle: venueNameOverridesByHandle,
     staticVenueByHandle: STATIC_VENUE_BY_HANDLE,
@@ -1348,6 +1365,7 @@ function runVenueQa() {
   assert.notEqual(muzejGradaPost.venue, "ica");
 
   const andricVenue = canonicalizeVenueNameDetailed("Спомен-музеј Иве Андрића", canonicalVenueNamesByHandle, {
+    canonicalVenueAliasesByHandle,
     handleVenueNamesByHandle: venueNameOverridesByHandle,
   });
   assert.equal(andricVenue?.reason, "alias");
@@ -1594,6 +1612,11 @@ function runVideoModerationQa() {
       STATIC_VENUE_BY_HANDLE,
       {},
       {},
+      {
+        canonicalVenueAliasesByHandle: {
+          kcgrad: ["KC Grad", "KC Gradu"],
+        },
+      },
     ),
   );
   const fallbackTitleCoreFieldsNormalized = readPreparedNormalizedFields(fallbackTitleCoreFields);
@@ -7094,7 +7117,20 @@ async function runServiceApprovalMutationBoundaryQa() {
                 publicStatus: "published",
               },
             ],
+            take: async (limit) => [
+              {
+                _id: "qa-venue-id",
+                name: "Grounded Handler Venue",
+                instagramHandle: "qa_venue",
+                category: "nightlife",
+                publicStatus: "published",
+              },
+            ].slice(0, limit),
           }
+        : table === "venueIdentities"
+          ? {
+              withIndex: () => ({ take: async () => [] }),
+            }
         : table === "scrapedPosts"
           ? {
               withIndex: () => ({
@@ -7240,6 +7276,7 @@ async function runServiceApprovalMutationBoundaryQa() {
     );
     assert.equal(inserted, false);
 
+    patched = false;
     await assert.rejects(
       () =>
         updateEvent._handler(ctx, {
@@ -7601,6 +7638,7 @@ async function runServiceApprovalMutationBoundaryQa() {
     ];
     existingVenue = "@qa_venue";
     existingVenueInstagramHandle = undefined;
+    patched = false;
     await assert.rejects(
       () =>
         setEventStatus._handler(ctx, {
@@ -7708,6 +7746,10 @@ async function runHardMappedVenueAuthorityMutationBoundaryQa() {
   const ctx = {
     auth: { getUserIdentity: async () => null },
     db: {
+      get: async (id) =>
+        id === "qa-hard-mapped-event" && insertedEvent
+          ? { _id: id, ...insertedEvent }
+          : null,
       insert: async (table, value) => {
         if (table === "events") {
           insertedEvent = value;
@@ -7715,20 +7757,39 @@ async function runHardMappedVenueAuthorityMutationBoundaryQa() {
         }
         return "qa-hard-mapped-audit";
       },
+      patch: async (id, patch) => {
+        if (id !== "qa-hard-mapped-event" || !insertedEvent) {
+          throw new Error(`Unexpected hard-mapped event patch ${id}`);
+        }
+        insertedEvent = { ...insertedEvent, ...structuredClone(patch) };
+      },
       query: (table) =>
         table === "venues"
-          ? {
-              collect: async () => [
+        ? {
+            collect: async () => [
                 {
                   _id: "qa-kcgrad-venue",
                   name: "KC Grad",
                   instagramHandle: "kcgrad",
                   category: "culture",
-                  publicStatus: "published",
-                },
-              ],
+                publicStatus: "published",
+              },
+            ],
+            take: async (limit) => [
+              {
+                _id: "qa-kcgrad-venue",
+                name: "KC Grad",
+                instagramHandle: "kcgrad",
+                category: "culture",
+                publicStatus: "published",
+              },
+            ].slice(0, limit),
+          }
+        : table === "venueIdentities"
+          ? {
+              withIndex: () => ({ take: async () => [] }),
             }
-          : {
+        : {
               withIndex: () => ({
                 collect: async () => [],
                 first: async () => null,
@@ -7775,6 +7836,21 @@ async function withoutConsoleInfoAndError(callback) {
   }
 }
 
+function ingestionQueryResult(reference, candidates = []) {
+  return reference === "sourceOccurrences:listCandidatesForNormalizedOccurrence"
+    ? {
+        candidates,
+        complete: true,
+        limit: 25,
+        venueResolutionStatus: candidates.length > 0 ? "resolved" : "unresolved",
+      }
+    : candidates;
+}
+
+function emptyIngestionQueryResult(reference) {
+  return ingestionQueryResult(reference);
+}
+
 async function runDistinctOccurrencePersistenceQa() {
   assert.equal(areEventTimesCompatibleForTesting("19.30", "19:30"), true);
   assert.equal(areEventTimesCompatibleForTesting("21h30", "21:30"), true);
@@ -7819,8 +7895,11 @@ async function runDistinctOccurrencePersistenceQa() {
   const inserted = [];
   const updated = [];
   const client = {
-    query: async () => [],
-    mutation: async (_reference, args) => {
+    query: async (reference) => emptyIngestionQueryResult(reference),
+    mutation: async (reference, args) => {
+      if (reference === "reconciliationIngress:reconcileIngestionPlan") {
+        return { authority: "legacy", outcomes: [] };
+      }
       if ("id" in args) {
         updated.push(args);
         return { updatedAt: 1000 + updated.length };
@@ -8205,11 +8284,23 @@ async function runDistinctOccurrencePersistenceQa() {
         query: async (reference) =>
           reference === "events:getInstagramSourceOccurrenceReceipt"
             ? processCollisionReceipt
-            : [
-                processExistingChillout,
-                processExistingInfected,
-                processWrongBodies,
-              ],
+            : reference ===
+                "sourceOccurrences:listCandidatesForNormalizedOccurrence"
+              ? {
+                  candidates: [
+                    processExistingChillout,
+                    processExistingInfected,
+                    processWrongBodies,
+                  ],
+                  complete: true,
+                  limit: 25,
+                  venueResolutionStatus: "resolved",
+                }
+              : [
+                  processExistingChillout,
+                  processExistingInfected,
+                  processWrongBodies,
+                ],
         mutation: async (reference, args) => {
           processCollisionMutations.push({ reference, args });
           return { recorded: true };
@@ -8427,21 +8518,79 @@ async function runDistinctOccurrencePersistenceQa() {
   const atomicEvents = [];
   const atomicReceipts = [];
   const atomicSourceLinks = [];
+  const atomicSourceOccurrences = [];
+  const atomicScrapedPosts = [];
+  const atomicTopologyEpochs = [{
+    _id: "qa-atomic-source-occurrence-topology-epoch",
+    key: "source-occurrence-topology-v1",
+    currentEpoch: 0,
+    verifiedEpoch: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  }];
   const atomicAuditLogs = [];
-  const atomicProcessingFence = {
-    handle: "qa-atomic-handle",
-    postId: "qa-atomic-post",
-    instagramPostUrl: "https://www.instagram.com/p/QAATOMIC/",
-    owner: "qa-atomic-owner",
-    sourceRevision: 1,
+  const createAtomicSourceFixture = ({
+    altText = null,
+    caption = "",
+    externalId,
+    handle = "qa-atomic-handle",
+    locationName = null,
+  }) => {
+    const owner = `qa-atomic-owner-${externalId}`;
+    const row = {
+      _id: `qa-atomic-scraped-post-${atomicScrapedPosts.length + 1}`,
+      altText,
+      caption,
+      createdAt: Date.now(),
+      handle,
+      imageUrls: [],
+      instagramPostUrl: `https://www.instagram.com/p/${externalId}/`,
+      locationName,
+      postId: externalId,
+      processingAttempts: 1,
+      processingLeaseExpiresAt: Date.now() + 60_000,
+      processingLeaseOwner: owner,
+      processingStatus: "processing",
+      sourceRevision: 1,
+      updatedAt: Date.now(),
+      username: handle,
+    };
+    atomicScrapedPosts.push(row);
+    const snapshot = () => ({
+      processingFence: {
+        handle: row.handle,
+        scrapedPostId: row._id,
+        postId: row.postId,
+        instagramPostUrl: row.instagramPostUrl,
+        owner,
+        sourceRevision: row.sourceRevision,
+      },
+      sourceFingerprint: buildInstagramSourceOccurrenceFingerprint(row),
+      sourceIdentity: adaptInstagramScrapedPostToSourceDocument(row).sourceIdentity,
+    });
+    return {
+      advanceEvidence(evidence) {
+        Object.assign(row, evidence, {
+          processingLeaseExpiresAt: Date.now() + 60_000,
+          sourceRevision: row.sourceRevision + 1,
+          updatedAt: Date.now(),
+        });
+        return snapshot();
+      },
+      row,
+      snapshot,
+    };
   };
-  const atomicScrapedPost = {
-    _id: "qa-atomic-scraped-post",
-    ...atomicProcessingFence,
-    processingStatus: "processing",
-    processingLeaseOwner: atomicProcessingFence.owner,
-    processingLeaseExpiresAt: Date.now() + 60_000,
-  };
+  const initialAtomicSourceFixture = createAtomicSourceFixture({
+    altText: post.altText,
+    caption: post.caption,
+    externalId: "qa-distinct-occurrence-persistence",
+    handle: "tickets.rs",
+    locationName: post.locationName,
+  });
+  const initialAtomicSource = initialAtomicSourceFixture.snapshot();
+  const atomicProcessingFence = initialAtomicSource.processingFence;
+  const atomicScrapedPost = initialAtomicSourceFixture.row;
   const missingAtomicEventIds = new Set();
   const atomicCtx = {
     auth: { getUserIdentity: async () => null },
@@ -8458,15 +8607,56 @@ async function runDistinctOccurrencePersistenceQa() {
                 publicStatus: "published",
               },
             ],
+            take: async (limit) => [
+              {
+                _id: "qa-atomic-lozionica-venue",
+                name: "Ložionica",
+                instagramHandle: "tickets.rs",
+                category: "live music",
+                publicStatus: "published",
+              },
+            ].slice(0, limit),
+          };
+        }
+        if (table === "venueIdentities") {
+          return {
+            withIndex: () => ({ take: async () => [] }),
+          };
+        }
+        if (table === "eventDomainMigrationState") {
+          return {
+            withIndex: () => ({ take: async () => [] }),
+          };
+        }
+        if (table === "sourceOccurrenceTopologyEpoch") {
+          return {
+            withIndex: (_indexName, configure) => {
+              let key = null;
+              const indexBuilder = {
+                eq: (field, value) => {
+                  if (field === "key") key = value;
+                  return indexBuilder;
+                },
+              };
+              configure(indexBuilder);
+              return {
+                take: async (limit) =>
+                  atomicTopologyEpochs
+                    .filter((row) => row.key === key)
+                    .slice(0, limit),
+              };
+            },
           };
         }
         if (table === "scrapedPosts") {
           return {
             withIndex: (_indexName, configure) => {
+              let handle = null;
               let postId = null;
               let instagramPostUrl = null;
               const indexBuilder = {
                 eq: (field, value) => {
+                  if (field === "handle") handle = value;
                   if (field === "postId") postId = value;
                   if (field === "instagramPostUrl") instagramPostUrl = value;
                   return indexBuilder;
@@ -8474,11 +8664,16 @@ async function runDistinctOccurrencePersistenceQa() {
               };
               configure(indexBuilder);
               return {
-                take: async () =>
-                  postId === atomicScrapedPost.postId ||
-                  instagramPostUrl === atomicScrapedPost.instagramPostUrl
-                    ? [atomicScrapedPost]
-                    : [],
+                take: async (limit) =>
+                  atomicScrapedPosts
+                    .filter(
+                      (source) =>
+                        (!handle || source.handle === handle) &&
+                        ((!postId && !instagramPostUrl) ||
+                          postId === source.postId ||
+                          instagramPostUrl === source.instagramPostUrl),
+                    )
+                    .slice(0, limit),
               };
             },
           };
@@ -8514,11 +8709,37 @@ async function runDistinctOccurrencePersistenceQa() {
                 },
               };
               configure(indexBuilder);
+              const matchingLinks = () =>
+                atomicSourceLinks.filter((link) =>
+                  Object.entries(filters).every(([field, value]) => link[field] === value),
+                );
               return {
-                unique: async () =>
-                  atomicSourceLinks.find((link) =>
-                    Object.entries(filters).every(([field, value]) => link[field] === value),
-                  ) ?? null,
+                take: async (limit) => matchingLinks().slice(0, limit),
+                unique: async () => matchingLinks()[0] ?? null,
+              };
+            },
+          };
+        }
+        if (table === "sourceOccurrences") {
+          return {
+            withIndex: (_indexName, configure) => {
+              const filters = {};
+              const indexBuilder = {
+                eq: (field, value) => {
+                  filters[field] = value;
+                  return indexBuilder;
+                },
+              };
+              configure(indexBuilder);
+              const matchingOccurrences = () =>
+                atomicSourceOccurrences.filter((occurrence) =>
+                  Object.entries(filters).every(
+                    ([field, value]) => occurrence[field] === value,
+                  ),
+                );
+              return {
+                take: async (limit) => matchingOccurrences().slice(0, limit),
+                unique: async () => matchingOccurrences()[0] ?? null,
               };
             },
           };
@@ -8545,13 +8766,28 @@ async function runDistinctOccurrencePersistenceQa() {
       get: async (id) =>
         missingAtomicEventIds.has(id)
           ? null
-          : atomicEvents.find((event) => event._id === id) ?? null,
+          : atomicEvents.find((event) => event._id === id) ??
+            atomicScrapedPosts.find((source) => source._id === id) ??
+            null,
+      delete: async (id) => {
+        for (const rows of [atomicSourceLinks, atomicSourceOccurrences]) {
+          const index = rows.findIndex((row) => row._id === id);
+          if (index >= 0) {
+            rows.splice(index, 1);
+            return;
+          }
+        }
+        throw new Error(`Missing QA row ${id}`);
+      },
       patch: async (id, patch) => {
         const record =
           atomicEvents.find((candidate) => candidate._id === id) ??
           atomicReceipts.find((candidate) => candidate._id === id) ??
           atomicSourceLinks.find((candidate) => candidate._id === id) ??
-          (atomicScrapedPost._id === id ? atomicScrapedPost : null);
+          atomicSourceOccurrences.find((candidate) => candidate._id === id) ??
+          atomicTopologyEpochs.find((candidate) => candidate._id === id) ??
+          atomicScrapedPosts.find((candidate) => candidate._id === id) ??
+          null;
         assert.ok(record);
         Object.assign(record, patch);
       },
@@ -8580,6 +8816,22 @@ async function runDistinctOccurrencePersistenceQa() {
           atomicSourceLinks.push(sourceLink);
           return sourceLink._id;
         }
+        if (table === "sourceOccurrences") {
+          const sourceOccurrence = {
+            _id: `qa-atomic-source-occurrence-${atomicSourceOccurrences.length + 1}`,
+            ...value,
+          };
+          atomicSourceOccurrences.push(sourceOccurrence);
+          return sourceOccurrence._id;
+        }
+        if (table === "sourceOccurrenceTopologyEpoch") {
+          const topologyEpoch = {
+            _id: `qa-atomic-topology-epoch-${atomicTopologyEpochs.length + 1}`,
+            ...value,
+          };
+          atomicTopologyEpochs.push(topologyEpoch);
+          return topologyEpoch._id;
+        }
         atomicAuditLogs.push(value);
         return `qa-atomic-audit-${atomicAuditLogs.length}`;
       },
@@ -8591,6 +8843,14 @@ async function runDistinctOccurrencePersistenceQa() {
     processingFence: _capturedProcessingFence,
     ...atomicEventArgs
   } = inserted[0];
+  assert.equal(
+    atomicEventArgs.sourceOccurrencePlan.sourceIdentity,
+    initialAtomicSource.sourceIdentity,
+  );
+  assert.equal(
+    atomicEventArgs.sourceOccurrencePlan.sourceFingerprint,
+    initialAtomicSource.sourceFingerprint,
+  );
   try {
     const firstAtomicCreate = await createEvent._handler(atomicCtx, {
       ...atomicEventArgs,
@@ -8704,8 +8964,12 @@ async function runDistinctOccurrencePersistenceQa() {
     );
     missingAtomicEventIds.delete(atomicEvents[0]._id);
 
-    const deferredSourceIdentity = "instagram-source-identity-v1:qa-deferred-receipt";
-    const deferredFingerprint = "instagram-source-v1:qa-deferred-fingerprint";
+    const deferredSource = createAtomicSourceFixture({
+      caption: "QA deferred receipt source evidence",
+      externalId: "QADEFERREDRECEIPT",
+    }).snapshot();
+    const deferredSourceIdentity = deferredSource.sourceIdentity;
+    const deferredFingerprint = deferredSource.sourceFingerprint;
     const deferredFirstKey = `instagram-occurrence-v2:${"a".repeat(64)}`;
     const deferredSecondKey = `instagram-occurrence-v2:${"b".repeat(64)}`;
     const deferredFirstChildKey = "instagram-source-child-v1:qa-deferred-first";
@@ -8721,7 +8985,7 @@ async function runDistinctOccurrencePersistenceQa() {
       },
       satisfiedKey: deferredFirstKey,
       representativeEventId: atomicEvents[0]._id,
-      processingFence: atomicProcessingFence,
+      processingFence: deferredSource.processingFence,
       serviceSecret: atomicServiceSecret,
     });
     assert.equal(atomicReceipts[1].deferredChildCount, 1);
@@ -8738,7 +9002,7 @@ async function runDistinctOccurrencePersistenceQa() {
       },
       satisfiedKey: deferredFirstKey,
       representativeEventId: atomicEvents[0]._id,
-      processingFence: atomicProcessingFence,
+      processingFence: deferredSource.processingFence,
       serviceSecret: atomicServiceSecret,
     });
     assert.equal(
@@ -8761,7 +9025,7 @@ async function runDistinctOccurrencePersistenceQa() {
       },
       satisfiedKey: deferredSecondKey,
       representativeEventId: deferredSecondRepresentativeEventId,
-      processingFence: atomicProcessingFence,
+      processingFence: deferredSource.processingFence,
       serviceSecret: atomicServiceSecret,
     });
     assert.equal(atomicReceipts[1].deferredChildCount, 0);
@@ -8783,7 +9047,7 @@ async function runDistinctOccurrencePersistenceQa() {
         },
         satisfiedKey: `instagram-occurrence-v2:${"c".repeat(64)}`,
         representativeEventId: deferredSecondRepresentativeEventId,
-        processingFence: atomicProcessingFence,
+        processingFence: deferredSource.processingFence,
       serviceSecret: atomicServiceSecret,
       }),
       /distinct representative events/i,
@@ -8800,7 +9064,7 @@ async function runDistinctOccurrencePersistenceQa() {
       },
       satisfiedKey: deferredSecondKey,
       representativeEventId: deferredSecondRepresentativeEventId,
-      processingFence: atomicProcessingFence,
+      processingFence: deferredSource.processingFence,
       serviceSecret: atomicServiceSecret,
     });
     assert.deepEqual(
@@ -8814,32 +9078,37 @@ async function runDistinctOccurrencePersistenceQa() {
         sourceIdentity: deferredSourceIdentity,
         sourceFingerprint: deferredFingerprint,
         expectedKeys: [],
+        expectedOccurrences: [],
         deferredChildCount: 0,
         deferredChildKeys: [],
         observedChildKeys: [deferredSecondChildKey],
         confirmedPastKeys: [deferredSecondKey],
       },
-      processingFence: atomicProcessingFence,
+      processingFence: deferredSource.processingFence,
       serviceSecret: atomicServiceSecret,
     });
     assert.deepEqual(atomicReceipts[1].expectedKeys, []);
     assert.deepEqual(atomicReceipts[1].satisfiedKeys, []);
     assert.deepEqual(atomicReceipts[1].satisfiedOccurrences, []);
 
-    const deferredOnlySourceIdentity =
-      "instagram-source-identity-v1:qa-deferred-only";
+    const deferredOnlySource = createAtomicSourceFixture({
+      caption: "QA deferred receipt source evidence",
+      externalId: "QADEFERREDONLY",
+    }).snapshot();
+    const deferredOnlySourceIdentity = deferredOnlySource.sourceIdentity;
     const deferredOnlyChildKey =
       "instagram-source-child-v1:qa-deferred-only-child";
     await reconcileInstagramSourceOccurrenceReceipt._handler(atomicCtx, {
       plan: {
         sourceIdentity: deferredOnlySourceIdentity,
-        sourceFingerprint: deferredFingerprint,
+        sourceFingerprint: deferredOnlySource.sourceFingerprint,
         expectedKeys: [],
+        expectedOccurrences: [],
         deferredChildCount: 1,
         deferredChildKeys: [deferredOnlyChildKey],
         observedChildKeys: [deferredOnlyChildKey],
       },
-      processingFence: atomicProcessingFence,
+      processingFence: deferredOnlySource.processingFence,
       serviceSecret: atomicServiceSecret,
     });
     const deferredOnlyReceipt = atomicReceipts.find(
@@ -8849,51 +9118,83 @@ async function runDistinctOccurrencePersistenceQa() {
     assert.deepEqual(deferredOnlyReceipt.deferredChildKeys, [deferredOnlyChildKey]);
     assert.equal(deferredOnlyReceipt.deferredChildCount, 1);
 
-    const staleSourceIdentity = "instagram-source-identity-v1:qa-stale-worker";
+    const staleSourceFixture = createAtomicSourceFixture({
+      caption: "QA stale generation one",
+      externalId: "QASTALEWORKER",
+    });
+    const staleSourceGenerationOne = staleSourceFixture.snapshot();
+    const staleSourceIdentity = staleSourceGenerationOne.sourceIdentity;
     const staleKey = `instagram-occurrence-v2:${"d".repeat(64)}`;
+    const staleExpectedOccurrences = [
+      {
+        key: staleKey,
+        date: atomicEvents[0].date,
+        ...(atomicEvents[0].time ? { time: atomicEvents[0].time } : {}),
+        venue: atomicEvents[0].venue,
+        title: atomicEvents[0].title,
+        artists: atomicEvents[0].artists,
+      },
+    ];
     await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
       plan: {
         sourceIdentity: staleSourceIdentity,
-        sourceFingerprint: "instagram-source-v1:f1",
+        sourceFingerprint: staleSourceGenerationOne.sourceFingerprint,
         expectedKeys: [staleKey],
+        expectedOccurrences: staleExpectedOccurrences,
         deferredChildCount: 0,
         deferredChildKeys: [],
         observedChildKeys: ["instagram-source-child-v1:qa-stale"],
       },
       satisfiedKey: staleKey,
       representativeEventId: atomicEvents[0]._id,
-      processingFence: atomicProcessingFence,
+      processingFence: staleSourceGenerationOne.processingFence,
       serviceSecret: atomicServiceSecret,
     });
+    const staleSourceGenerationTwo = staleSourceFixture.advanceEvidence({
+      caption: "QA stale generation two",
+    });
+    assert.notEqual(
+      staleSourceGenerationTwo.sourceFingerprint,
+      staleSourceGenerationOne.sourceFingerprint,
+    );
     await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
       plan: {
         sourceIdentity: staleSourceIdentity,
-        sourceFingerprint: "instagram-source-v1:f2",
-        previousSourceFingerprint: "instagram-source-v1:f1",
+        sourceFingerprint: staleSourceGenerationTwo.sourceFingerprint,
+        previousSourceFingerprint: staleSourceGenerationOne.sourceFingerprint,
         expectedKeys: [staleKey],
+        expectedOccurrences: staleExpectedOccurrences,
         deferredChildCount: 0,
         deferredChildKeys: [],
         observedChildKeys: ["instagram-source-child-v1:qa-stale"],
       },
       satisfiedKey: staleKey,
       representativeEventId: atomicEvents[0]._id,
-      processingFence: atomicProcessingFence,
+      processingFence: staleSourceGenerationTwo.processingFence,
       serviceSecret: atomicServiceSecret,
     });
+    const staleSourceRollback = staleSourceFixture.advanceEvidence({
+      caption: "QA stale generation one",
+    });
+    assert.equal(
+      staleSourceRollback.sourceFingerprint,
+      staleSourceGenerationOne.sourceFingerprint,
+    );
     await assert.rejects(
       recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
         plan: {
           sourceIdentity: staleSourceIdentity,
-          sourceFingerprint: "instagram-source-v1:f1",
-          previousSourceFingerprint: "instagram-source-v1:f1",
+          sourceFingerprint: staleSourceRollback.sourceFingerprint,
+          previousSourceFingerprint: staleSourceGenerationOne.sourceFingerprint,
           expectedKeys: [staleKey],
+          expectedOccurrences: staleExpectedOccurrences,
           deferredChildCount: 0,
           deferredChildKeys: [],
           observedChildKeys: ["instagram-source-child-v1:qa-stale"],
         },
         satisfiedKey: staleKey,
         representativeEventId: atomicEvents[0]._id,
-        processingFence: atomicProcessingFence,
+        processingFence: staleSourceRollback.processingFence,
       serviceSecret: atomicServiceSecret,
       }),
       /receipt plan is stale/i,
@@ -8901,7 +9202,7 @@ async function runDistinctOccurrencePersistenceQa() {
     assert.equal(
       atomicReceipts.find((receipt) => receipt.sourceIdentity === staleSourceIdentity)
         .sourceFingerprint,
-      "instagram-source-v1:f2",
+      staleSourceGenerationTwo.sourceFingerprint,
     );
     const descriptionBeforeStaleAtomicUpdate = atomicEvents[0].description;
     await assert.rejects(
@@ -8911,15 +9212,16 @@ async function runDistinctOccurrencePersistenceQa() {
         expectedStatus: atomicEvents[0].status,
         plan: {
           sourceIdentity: staleSourceIdentity,
-          sourceFingerprint: "instagram-source-v1:f1",
-          previousSourceFingerprint: "instagram-source-v1:f1",
+          sourceFingerprint: staleSourceRollback.sourceFingerprint,
+          previousSourceFingerprint: staleSourceGenerationOne.sourceFingerprint,
           expectedKeys: [staleKey],
+          expectedOccurrences: staleExpectedOccurrences,
           deferredChildCount: 0,
           deferredChildKeys: [],
           observedChildKeys: ["instagram-source-child-v1:qa-stale"],
         },
         satisfiedKey: staleKey,
-        processingFence: atomicProcessingFence,
+        processingFence: staleSourceRollback.processingFence,
       serviceSecret: atomicServiceSecret,
       }),
       /receipt plan is stale/i,
@@ -8930,14 +9232,18 @@ async function runDistinctOccurrencePersistenceQa() {
       "A stale receipt generation must reject before any public event repair commits.",
     );
 
-    const retainedGenerationSourceIdentity =
-      "instagram-source-identity-v1:qa-generation-retention";
+    const retainedGenerationSourceFixture = createAtomicSourceFixture({
+      caption: "QA retained generation one",
+      externalId: "QAGENERATIONRETENTION",
+    });
+    const retainedGenerationOne = retainedGenerationSourceFixture.snapshot();
+    const retainedGenerationSourceIdentity = retainedGenerationOne.sourceIdentity;
     const retainedGenerationKey = `instagram-occurrence-v2:${"2".repeat(64)}`;
     const omittedGenerationSiblingKey = `instagram-occurrence-v2:${"3".repeat(64)}`;
     await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
       plan: {
         sourceIdentity: retainedGenerationSourceIdentity,
-        sourceFingerprint: "instagram-source-v2:retention-f1",
+        sourceFingerprint: retainedGenerationOne.sourceFingerprint,
         expectedKeys: [retainedGenerationKey, omittedGenerationSiblingKey],
         deferredChildCount: 0,
         deferredChildKeys: [],
@@ -8948,14 +9254,18 @@ async function runDistinctOccurrencePersistenceQa() {
       },
       satisfiedKey: retainedGenerationKey,
       representativeEventId: atomicEvents[0]._id,
-      processingFence: atomicProcessingFence,
+      processingFence: retainedGenerationOne.processingFence,
       serviceSecret: atomicServiceSecret,
     });
+    const retainedGenerationTwo =
+      retainedGenerationSourceFixture.advanceEvidence({
+        caption: "QA retained generation two",
+      });
     await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
       plan: {
         sourceIdentity: retainedGenerationSourceIdentity,
-        sourceFingerprint: "instagram-source-v2:retention-f2",
-        previousSourceFingerprint: "instagram-source-v2:retention-f1",
+        sourceFingerprint: retainedGenerationTwo.sourceFingerprint,
+        previousSourceFingerprint: retainedGenerationOne.sourceFingerprint,
         expectedKeys: [retainedGenerationKey],
         deferredChildCount: 0,
         deferredChildKeys: [],
@@ -8963,7 +9273,7 @@ async function runDistinctOccurrencePersistenceQa() {
       },
       satisfiedKey: retainedGenerationKey,
       representativeEventId: atomicEvents[0]._id,
-      processingFence: atomicProcessingFence,
+      processingFence: retainedGenerationTwo.processingFence,
       serviceSecret: atomicServiceSecret,
     });
     const retainedGenerationReceipt = atomicReceipts.find(
@@ -8975,14 +9285,19 @@ async function runDistinctOccurrencePersistenceQa() {
       "A changed source fingerprint must not erase an unresolved prior-generation child merely because the latest extraction omitted it.",
     );
 
-    const migratedSourceIdentity = "instagram-source-identity-v1:qa-key-migration";
+    const migratedSourceFixture = createAtomicSourceFixture({
+      caption: "QA key migration generation one",
+      externalId: "QAKEYMIGRATION",
+    });
+    const migratedGenerationOne = migratedSourceFixture.snapshot();
+    const migratedSourceIdentity = migratedGenerationOne.sourceIdentity;
     const migratedOldKey = `instagram-occurrence-v2:${"e".repeat(64)}`;
     const migratedNewKey = `instagram-occurrence-v2:${"f".repeat(64)}`;
     const migratedSiblingKey = `instagram-occurrence-v2:${"1".repeat(64)}`;
     await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
       plan: {
         sourceIdentity: migratedSourceIdentity,
-        sourceFingerprint: "instagram-source-v2:migration-f1",
+        sourceFingerprint: migratedGenerationOne.sourceFingerprint,
         expectedKeys: [migratedOldKey],
         deferredChildCount: 0,
         deferredChildKeys: [],
@@ -8990,8 +9305,11 @@ async function runDistinctOccurrencePersistenceQa() {
       },
       satisfiedKey: migratedOldKey,
       representativeEventId: atomicEvents[0]._id,
-      processingFence: atomicProcessingFence,
+      processingFence: migratedGenerationOne.processingFence,
       serviceSecret: atomicServiceSecret,
+    });
+    const migratedGenerationTwo = migratedSourceFixture.advanceEvidence({
+      caption: "QA key migration generation two",
     });
     await updateEventAndRecordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
       id: atomicEvents[0]._id,
@@ -8999,9 +9317,17 @@ async function runDistinctOccurrencePersistenceQa() {
       expectedStatus: atomicEvents[0].status,
       plan: {
         sourceIdentity: migratedSourceIdentity,
-        sourceFingerprint: "instagram-source-v2:migration-f2",
-        previousSourceFingerprint: "instagram-source-v2:migration-f1",
+        sourceFingerprint: migratedGenerationTwo.sourceFingerprint,
+        previousSourceFingerprint: migratedGenerationOne.sourceFingerprint,
         expectedKeys: [migratedNewKey, migratedSiblingKey],
+        expectedOccurrences: [migratedNewKey, migratedSiblingKey].map((key) => ({
+          key,
+          date: atomicEvents[0].date,
+          ...(atomicEvents[0].time ? { time: atomicEvents[0].time } : {}),
+          venue: atomicEvents[0].venue,
+          title: atomicEvents[0].title,
+          artists: atomicEvents[0].artists,
+        })),
         deferredChildCount: 0,
         deferredChildKeys: [],
         observedChildKeys: [
@@ -9011,7 +9337,7 @@ async function runDistinctOccurrencePersistenceQa() {
       },
       satisfiedKey: migratedNewKey,
       supersededKey: migratedOldKey,
-      processingFence: atomicProcessingFence,
+      processingFence: migratedGenerationTwo.processingFence,
       serviceSecret: atomicServiceSecret,
     });
     const migratedReceipt = atomicReceipts.find(
@@ -9034,8 +9360,8 @@ async function runDistinctOccurrencePersistenceQa() {
     await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
       plan: {
         sourceIdentity: migratedSourceIdentity,
-        sourceFingerprint: "instagram-source-v2:migration-f2",
-        previousSourceFingerprint: "instagram-source-v2:migration-f1",
+        sourceFingerprint: migratedGenerationTwo.sourceFingerprint,
+        previousSourceFingerprint: migratedGenerationOne.sourceFingerprint,
         expectedKeys: [migratedNewKey, migratedSiblingKey],
         deferredChildCount: 0,
         deferredChildKeys: [],
@@ -9046,7 +9372,7 @@ async function runDistinctOccurrencePersistenceQa() {
       },
       satisfiedKey: migratedSiblingKey,
       representativeEventId: migratedSiblingEventId,
-      processingFence: atomicProcessingFence,
+      processingFence: migratedGenerationTwo.processingFence,
       serviceSecret: atomicServiceSecret,
     });
     assert.deepEqual(
@@ -9056,8 +9382,8 @@ async function runDistinctOccurrencePersistenceQa() {
     await recordInstagramSourceOccurrenceSatisfaction._handler(atomicCtx, {
       plan: {
         sourceIdentity: migratedSourceIdentity,
-        sourceFingerprint: "instagram-source-v2:migration-f2",
-        previousSourceFingerprint: "instagram-source-v2:migration-f1",
+        sourceFingerprint: migratedGenerationTwo.sourceFingerprint,
+        previousSourceFingerprint: migratedGenerationOne.sourceFingerprint,
         expectedKeys: [migratedNewKey, migratedSiblingKey],
         deferredChildCount: 0,
         deferredChildKeys: [],
@@ -9068,7 +9394,7 @@ async function runDistinctOccurrencePersistenceQa() {
       },
       satisfiedKey: migratedNewKey,
       representativeEventId: atomicEvents[0]._id,
-      processingFence: atomicProcessingFence,
+      processingFence: migratedGenerationTwo.processingFence,
       serviceSecret: atomicServiceSecret,
     });
     assert.deepEqual(
@@ -9153,8 +9479,11 @@ async function runDistinctOccurrencePersistenceQa() {
   await withoutConsoleInfo(() =>
     processIngestionPostWithExtractionForTesting({
       client: {
-        query: async () => [],
-        mutation: async (_reference, args) => {
+        query: async (reference) => emptyIngestionQueryResult(reference),
+        mutation: async (reference, args) => {
+          if (reference === "reconciliationIngress:reconcileIngestionPlan") {
+            return { authority: "legacy", outcomes: [] };
+          }
           assert.equal("id" in args, false);
           atomicRaceCreates.push(args);
           return args.time === "19:00"
@@ -9192,8 +9521,12 @@ async function runDistinctOccurrencePersistenceQa() {
   const retryUpdated = [];
   const retryReceipts = [];
   const retryClient = {
-    query: async () => [existingFirstOccurrence],
-    mutation: async (_reference, args) => {
+    query: async (reference) =>
+      ingestionQueryResult(reference, [existingFirstOccurrence]),
+    mutation: async (reference, args) => {
+      if (reference === "reconciliationIngress:reconcileIngestionPlan") {
+        return { authority: "legacy", outcomes: [] };
+      }
       if ("representativeEventId" in args) {
         retryReceipts.push(args);
         return { recorded: true };
@@ -9249,8 +9582,12 @@ async function runDistinctOccurrencePersistenceQa() {
   await withoutConsoleInfo(() =>
     processIngestionPostWithExtractionForTesting({
       client: {
-        query: async () => [legacyFirstOccurrence],
-        mutation: async (_reference, args) => {
+        query: async (reference) =>
+          ingestionQueryResult(reference, [legacyFirstOccurrence]),
+        mutation: async (reference, args) => {
+          if (reference === "reconciliationIngress:reconcileIngestionPlan") {
+            return { authority: "legacy", outcomes: [] };
+          }
           if ("representativeEventId" in args) {
             return { recorded: true };
           }
@@ -9287,8 +9624,12 @@ async function runDistinctOccurrencePersistenceQa() {
   await withoutConsoleInfo(() =>
     processIngestionPostWithExtractionForTesting({
       client: {
-        query: async () => completeExistingOccurrences,
-        mutation: async (_reference, args) => {
+        query: async (reference) =>
+          ingestionQueryResult(reference, completeExistingOccurrences),
+        mutation: async (reference, args) => {
+          if (reference === "reconciliationIngress:reconcileIngestionPlan") {
+            return { authority: "legacy", outcomes: [] };
+          }
           completeMutations.push(args);
           return "qa-unexpected-complete-mutation";
         },
@@ -9336,8 +9677,11 @@ async function runDistinctOccurrencePersistenceQa() {
   await withoutConsoleInfo(() =>
     processIngestionPostWithExtractionForTesting({
       client: {
-        query: async () => [],
-        mutation: async (_reference, args) => {
+        query: async (reference) => emptyIngestionQueryResult(reference),
+        mutation: async (reference, args) => {
+          if (reference === "reconciliationIngress:reconcileIngestionPlan") {
+            return { authority: "legacy", outcomes: [] };
+          }
           mixedInserted.push({ ...args, updatedAt: 1000 });
           return {
             eventId: "qa-mixed-eligible-occurrence",
@@ -9394,8 +9738,12 @@ async function runDistinctOccurrencePersistenceQa() {
   await withoutConsoleInfo(() =>
     processIngestionPostWithExtractionForTesting({
       client: {
-        query: async () => [staleMixedExisting],
-        mutation: async (_reference, args) => {
+        query: async (reference) =>
+          ingestionQueryResult(reference, [staleMixedExisting]),
+        mutation: async (reference, args) => {
+          if (reference === "reconciliationIngress:reconcileIngestionPlan") {
+            return { authority: "legacy", outcomes: [] };
+          }
           if ("representativeEventId" in args) {
             return { recorded: true };
           }
@@ -9469,8 +9817,12 @@ async function runDistinctOccurrencePersistenceQa() {
   await withoutConsoleInfo(() =>
     processIngestionPostWithExtractionForTesting({
       client: {
-        query: async () => [guardedExisting],
-        mutation: async (_reference, args) => {
+        query: async (reference) =>
+          ingestionQueryResult(reference, [guardedExisting]),
+        mutation: async (reference, args) => {
+          if (reference === "reconciliationIngress:reconcileIngestionPlan") {
+            return { authority: "legacy", outcomes: [] };
+          }
           if ("representativeEventId" in args) {
             return { recorded: true };
           }
@@ -9515,8 +9867,12 @@ async function runDistinctOccurrencePersistenceQa() {
   await withoutConsoleInfo(() =>
     processIngestionPostWithExtractionForTesting({
       client: {
-        query: async () => [guardedExisting],
-        mutation: async (_reference, args) => {
+        query: async (reference) =>
+          ingestionQueryResult(reference, [guardedExisting]),
+        mutation: async (reference, args) => {
+          if (reference === "reconciliationIngress:reconcileIngestionPlan") {
+            return { authority: "legacy", outcomes: [] };
+          }
           if ("representativeEventId" in args) {
             return { recorded: true };
           }
@@ -9552,8 +9908,12 @@ async function runDistinctOccurrencePersistenceQa() {
   await withoutConsoleInfo(() =>
     processIngestionPostWithExtractionForTesting({
       client: {
-        query: async () => [staleMixedExisting],
-        mutation: async (_reference, args) => {
+        query: async (reference) =>
+          ingestionQueryResult(reference, [staleMixedExisting]),
+        mutation: async (reference, args) => {
+          if (reference === "reconciliationIngress:reconcileIngestionPlan") {
+            return { authority: "legacy", outcomes: [] };
+          }
           mixedRetryMutations.push(args);
           return "qa-unexpected-mixed-retry-mutation";
         },
@@ -9607,8 +9967,11 @@ async function runDistinctOccurrencePersistenceQa() {
   await withoutConsoleInfoAndError(() =>
     processIngestionPostWithExtractionForTesting({
       client: {
-        query: async () => [],
-        mutation: async (_reference, args) => {
+        query: async (reference) => emptyIngestionQueryResult(reference),
+        mutation: async (reference, args) => {
+          if (reference === "reconciliationIngress:reconcileIngestionPlan") {
+            return { authority: "legacy", outcomes: [] };
+          }
           if (rangeInitialCreates.length > 0) {
             throw new Error("qa simulated second date insert failure");
           }
@@ -9667,8 +10030,12 @@ async function runDistinctOccurrencePersistenceQa() {
   await withoutConsoleInfo(() =>
     processIngestionPostWithExtractionForTesting({
       client: {
-        query: async () => [rangeFirstExisting],
-        mutation: async (_reference, args) => {
+        query: async (reference) =>
+          ingestionQueryResult(reference, [rangeFirstExisting]),
+        mutation: async (reference, args) => {
+          if (reference === "reconciliationIngress:reconcileIngestionPlan") {
+            return { authority: "legacy", outcomes: [] };
+          }
           if ("representativeEventId" in args) {
             return { recorded: true };
           }
@@ -9704,8 +10071,12 @@ async function runDistinctOccurrencePersistenceQa() {
   await withoutConsoleInfo(() =>
     processIngestionPostWithExtractionForTesting({
       client: {
-        query: async () => rangeCompleteEvents,
-        mutation: async (_reference, args) => {
+        query: async (reference) =>
+          ingestionQueryResult(reference, rangeCompleteEvents),
+        mutation: async (reference, args) => {
+          if (reference === "reconciliationIngress:reconcileIngestionPlan") {
+            return { authority: "legacy", outcomes: [] };
+          }
           rangeCompleteMutations.push(args);
           return "qa-unexpected-range-complete-mutation";
         },
@@ -9736,8 +10107,16 @@ async function runDistinctOccurrencePersistenceQa() {
   await withoutConsoleInfo(() =>
     processIngestionPostWithExtractionForTesting({
       client: {
-        query: async (_reference, args) => ("date" in args ? [semanticExisting] : []),
-        mutation: async (_reference, args) => {
+        query: async (reference, args) =>
+          reference === "sourceOccurrences:listCandidatesForNormalizedOccurrence"
+            ? ingestionQueryResult(reference, [semanticExisting])
+            : "date" in args
+              ? [semanticExisting]
+              : [],
+        mutation: async (reference, args) => {
+          if (reference === "reconciliationIngress:reconcileIngestionPlan") {
+            return { authority: "legacy", outcomes: [] };
+          }
           if ("representativeEventId" in args) {
             semanticReceipts.push(args);
             return { recorded: true };
@@ -9793,7 +10172,7 @@ async function runDistinctOccurrencePersistenceQa() {
   await withoutConsoleInfo(() =>
     processIngestionPostWithExtractionForTesting({
       client: {
-        query: async (_reference, args) =>
+        query: async (reference, args) =>
           "sourceIdentity" in args
             ? {
                 ...completedSemanticPlan,
@@ -9802,7 +10181,7 @@ async function runDistinctOccurrencePersistenceQa() {
                   (key, index) => ({ key, eventId: `qa-semantic-representative-${index}` }),
                 ),
               }
-            : [
+            : ingestionQueryResult(reference, [
                 {
                   ...semanticExisting,
                   imageStorageId: undefined,
@@ -9812,8 +10191,11 @@ async function runDistinctOccurrencePersistenceQa() {
                     sourceGroundingVerified: true,
                   }),
                 },
-              ],
-        mutation: async (_reference, args) => {
+              ]),
+        mutation: async (reference, args) => {
+          if (reference === "reconciliationIngress:reconcileIngestionPlan") {
+            return { authority: "legacy", outcomes: [] };
+          }
           semanticReplayMutations.push(args);
           return "qa-unexpected-semantic-replay-mutation";
         },
@@ -9849,7 +10231,7 @@ async function runDistinctOccurrencePersistenceQa() {
     await withoutConsoleInfo(() =>
       processIngestionPostWithExtractionForTesting({
         client: {
-          query: async (_reference, args) =>
+          query: async (reference, args) =>
             "sourceIdentity" in args
               ? {
                   ...completedSemanticPlan,
@@ -9860,8 +10242,11 @@ async function runDistinctOccurrencePersistenceQa() {
                       eventId: index === 0 ? semanticExisting._id : `qa-force-event-${index}`,
                     })),
                 }
-              : [semanticExisting],
-          mutation: async (_reference, args) => {
+              : ingestionQueryResult(reference, [semanticExisting]),
+          mutation: async (reference, args) => {
+            if (reference === "reconciliationIngress:reconcileIngestionPlan") {
+              return { authority: "legacy", outcomes: [] };
+            }
             forcedReplayMutations.push(args);
             return "id" in args
               ? { updatedAt: semanticExisting.updatedAt + forcedReplayMutations.length }
@@ -9903,9 +10288,16 @@ async function runDistinctOccurrencePersistenceQa() {
   await withoutConsoleInfo(() =>
     processIngestionPostWithExtractionForTesting({
       client: {
-        query: async (_reference, args) =>
-          "sourceIdentity" in args ? null : "date" in args ? [failedRepairExisting] : [],
-        mutation: async (_reference, args) => {
+        query: async (reference, args) =>
+          "sourceIdentity" in args
+            ? null
+            : "date" in args
+              ? ingestionQueryResult(reference, [failedRepairExisting])
+              : [],
+        mutation: async (reference, args) => {
+          if (reference === "reconciliationIngress:reconcileIngestionPlan") {
+            return { authority: "legacy", outcomes: [] };
+          }
           if ("representativeEventId" in args) {
             failedRepairReceipts.push(args);
             return { recorded: true };
@@ -9938,6 +10330,27 @@ async function runApprovedMergeBoundaryQa() {
   const previousAdminUserIds = process.env.ADMIN_CLERK_USER_IDS;
   const adminUserId = "qa-merge-admin";
   process.env.ADMIN_CLERK_USER_IDS = adminUserId;
+  const cleanReceiptTopologyAuditState = {
+    _id: "qa-merge-receipt-topology-audit",
+    key: "source-occurrence-receipt-topology-v1",
+    phase: "receipt_topology_audit",
+    isDone: true,
+    scannedCount: 0,
+    updatedCount: 0,
+    mismatchCount: 0,
+    unchangedCount: 0,
+    errorCount: 0,
+    skippedCount: 0,
+    quarantinedLineageMarkerCount: 0,
+    topologyEpoch: 0,
+    completedAt: 1,
+  };
+  const cleanSourceOccurrenceTopologyEpoch = {
+    _id: "qa-merge-source-occurrence-topology-epoch",
+    key: "source-occurrence-topology-v1",
+    currentEpoch: 0,
+    verifiedEpoch: 0,
+  };
   const primary = {
     _id: "qa-primary",
     title: "Primary Event",
@@ -9947,12 +10360,22 @@ async function runApprovedMergeBoundaryQa() {
     venueId: "venue-one",
     artists: [],
     eventType: "nightlife",
+    canonicalSourceUrl: "https://www.instagram.com/p/QaMergePrimary/",
+    instagramPostUrl: "https://www.instagram.com/p/QaMergePrimary/",
     status: "approved",
   };
-  const duplicate = { ...primary, _id: "qa-duplicate", title: "Primary Event duplicate" };
+  const duplicate = {
+    ...primary,
+    _id: "qa-duplicate",
+    canonicalSourceUrl: "https://www.instagram.com/p/QaMergeDuplicate/",
+    instagramPostUrl: "https://www.instagram.com/p/QaMergeDuplicate/",
+    title: "Primary Event duplicate",
+  };
   const conflict = {
     ...primary,
     _id: "qa-conflict",
+    canonicalSourceUrl: "https://www.instagram.com/p/QaMergeConflict/",
+    instagramPostUrl: "https://www.instagram.com/p/QaMergeConflict/",
     title: "Other Event",
     venue: "Venue Two",
     venueId: "venue-two",
@@ -9974,8 +10397,8 @@ async function runApprovedMergeBoundaryQa() {
       },
       query: (table) =>
         table === "venues"
-          ? {
-              collect: async () => [
+        ? {
+            collect: async () => [
                 {
                   _id: "venue-one",
                   name: "Venue One",
@@ -9988,11 +10411,69 @@ async function runApprovedMergeBoundaryQa() {
                   name: "Venue Two",
                   instagramHandle: "venue_two",
                   category: "nightlife",
-                  publicStatus: "published",
-                },
-              ],
+                publicStatus: "published",
+              },
+            ],
+            take: async (limit) => [
+              {
+                _id: "venue-one",
+                name: "Venue One",
+                instagramHandle: "venue_one",
+                category: "nightlife",
+                publicStatus: "published",
+              },
+              {
+                _id: "venue-two",
+                name: "Venue Two",
+                instagramHandle: "venue_two",
+                category: "nightlife",
+                publicStatus: "published",
+              },
+            ].slice(0, limit),
+          }
+        : table === "venueIdentities"
+          ? {
+              withIndex: () => ({ take: async () => [] }),
             }
-          : {
+        : table === "eventDomainMigrationState"
+          ? {
+              withIndex: (_indexName, configure) => {
+                let key = null;
+                const indexBuilder = {
+                  eq: (field, value) => {
+                    if (field === "key") key = value;
+                    return indexBuilder;
+                  },
+                };
+                configure(indexBuilder);
+                return {
+                  take: async (limit) =>
+                    key === cleanReceiptTopologyAuditState.key
+                      ? [cleanReceiptTopologyAuditState].slice(0, limit)
+                      : [],
+                };
+              },
+            }
+        : table === "sourceOccurrenceTopologyEpoch"
+          ? {
+              withIndex: (_indexName, configure) => {
+                let key = null;
+                const indexBuilder = {
+                  eq: (field, value) => {
+                    if (field === "key") key = value;
+                    return indexBuilder;
+                  },
+                };
+                configure(indexBuilder);
+                return {
+                  take: async (limit) =>
+                    key === cleanSourceOccurrenceTopologyEpoch.key
+                      ? [cleanSourceOccurrenceTopologyEpoch].slice(0, limit)
+                      : [],
+                };
+              },
+            }
+        : {
               withIndex: () => ({
                 collect: async () => [primary, duplicate, conflict],
                 take: async (limit) => [primary, duplicate, conflict].slice(0, limit),
@@ -10259,7 +10740,23 @@ async function runTransactionalSourceGroundingReprocessQa() {
       const changedKeys = Object.keys(current).filter(
         (key) => JSON.stringify(current[key]) !== JSON.stringify(previous[key]),
       );
-      assert.deepEqual(changedKeys.sort(), ["normalizedFieldsJson", "status", "updatedAt"]);
+      assert.deepEqual(changedKeys.sort(), [
+        "normalizedFieldsJson",
+        "occurrenceArtistFingerprint",
+        "occurrenceDateKey",
+        "occurrenceEventType",
+        "occurrenceSignatureHash",
+        "occurrenceSignatureVersion",
+        "occurrenceTimeIdentity",
+        "occurrenceTitleFamily",
+        "occurrenceVenueIdentity",
+        "publicationEvaluatedAt",
+        "publicationPolicyVersion",
+        "publicationReason",
+        "publicationState",
+        "status",
+        "updatedAt",
+      ]);
       assert.equal(current.status, "approved");
       assert.equal(current.normalizedFieldsJson, source.nextNormalizedFieldsJson);
     }

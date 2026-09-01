@@ -5,7 +5,8 @@ import { v } from "convex/values";
 import { isVenuePublic } from "../lib/venues/venue-lifecycle";
 import { isAdminSubject, requireViewerIdentity } from "./authz";
 import { projectPublicEvent } from "./publicEventProjection";
-import { isCanonicallyGroundedApprovedEvent } from "./publicEventGrounding";
+import { isEventPubliclyVisible } from "./publicationPolicy";
+import { savedEventRepository } from "./repositories/savedEvents";
 
 type ViewerLibraryUser = {
   clerkId: string;
@@ -105,42 +106,26 @@ async function loadPublicVenueIdsForSavedEvents(
 }
 
 const MAX_USER_LIBRARY_REFERENCES = 100;
+const MAX_USER_LIBRARY_REFERENCE_SCAN = 500;
 
 async function loadLibraryForUser(ctx: QueryCtx, userId: string) {
   const userRecord = await ctx.db
     .query("users")
     .withIndex("by_clerkId", (q) => q.eq("clerkId", userId))
     .unique();
-  const [savedRefs, legacySavedRefs, favoriteRefs] = await Promise.all([
-    ctx.db
-      .query("savedEvents")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .order("desc")
-      .take(MAX_USER_LIBRARY_REFERENCES),
-    userRecord
-      ? ctx.db
-          .query("userSavedEvents")
-          .withIndex("by_user", (q) => q.eq("userId", userRecord._id))
-          .order("desc")
-          .take(MAX_USER_LIBRARY_REFERENCES)
-      : Promise.resolve([]),
+  const [savedReferenceList, favoriteRefs] = await Promise.all([
+    savedEventRepository.listForSubject(ctx, {
+      legacyUserId: userRecord?._id ?? null,
+      limit: MAX_USER_LIBRARY_REFERENCE_SCAN,
+      subject: userId,
+    }),
     ctx.db
       .query("favoriteVenues")
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .order("desc")
       .take(MAX_USER_LIBRARY_REFERENCES),
   ]);
-  const savedEventIds = [
-    ...savedRefs.map((ref) => ({ eventId: ref.eventId, savedAt: ref.createdAt })),
-    ...legacySavedRefs.map((ref) => ({ eventId: ref.eventId, savedAt: ref.savedAt })),
-  ]
-    .sort((left, right) => right.savedAt - left.savedAt)
-    .filter(
-      (item, index, items) =>
-        items.findIndex((candidate) => candidate.eventId === item.eventId) === index,
-    )
-    .slice(0, MAX_USER_LIBRARY_REFERENCES)
-    .map((item) => item.eventId);
+  const savedEventIds = savedReferenceList.references.map((item) => item.eventId);
   const approvedSavedEventCandidates = (
     await Promise.all(savedEventIds.map((eventId) => ctx.db.get(eventId)))
   )
@@ -148,11 +133,15 @@ async function loadLibraryForUser(ctx: QueryCtx, userId: string) {
     .filter((event) => event.status === "approved");
   const savedEventGrounding = await Promise.all(
     approvedSavedEventCandidates.map((event) =>
-      isCanonicallyGroundedApprovedEvent(ctx, event),
+      isEventPubliclyVisible(ctx, event),
     ),
   );
-  const approvedSavedEvents = approvedSavedEventCandidates.filter(
+  const allApprovedSavedEvents = approvedSavedEventCandidates.filter(
     (_, index) => savedEventGrounding[index],
+  );
+  const approvedSavedEvents = allApprovedSavedEvents.slice(
+    0,
+    MAX_USER_LIBRARY_REFERENCES,
   );
   const publicVenueIds = await loadPublicVenueIdsForSavedEvents(ctx, approvedSavedEvents);
   const savedEvents = approvedSavedEvents.map((event) =>
@@ -170,6 +159,10 @@ async function loadLibraryForUser(ctx: QueryCtx, userId: string) {
   return {
     savedEventIds: savedEvents.map((event) => event._id),
     savedEvents,
+    savedEventReferenceScanLimitReached: savedReferenceList.scanLimitReached,
+    savedEventsTruncated:
+      savedReferenceList.truncated ||
+      allApprovedSavedEvents.length > MAX_USER_LIBRARY_REFERENCES,
     favoriteVenueIds: favoriteVenues.map((venue) => venue._id),
     favoriteVenues,
   };
@@ -218,6 +211,9 @@ export const listSavedEvents = query({
     return {
       savedEventIds: library.savedEventIds,
       savedEvents: library.savedEvents,
+      savedEventReferenceScanLimitReached:
+        library.savedEventReferenceScanLimitReached,
+      savedEventsTruncated: library.savedEventsTruncated,
     };
   },
 });
@@ -247,64 +243,24 @@ async function toggleSavedEventForUser(
   userId: string,
   eventId: Id<"events">,
   saved?: boolean,
+  legacyUserId?: Id<"users">,
 ) {
-  const [existing, userRecord] = await Promise.all([
-    ctx.db
-      .query("savedEvents")
-      .withIndex("by_user_event", (q) =>
-        q.eq("userId", userId).eq("eventId", eventId),
-      )
-      .unique(),
-    ctx.db
-      .query("users")
-      .withIndex("by_clerkId", (q) => q.eq("clerkId", userId))
-      .unique(),
-  ]);
-  const legacyExisting = userRecord
-    ? await ctx.db
-        .query("userSavedEvents")
-        .withIndex("by_user_event", (q) =>
-          q.eq("userId", userRecord._id).eq("eventId", eventId),
-        )
-        .unique()
-    : null;
-
-  const event = await ctx.db.get(eventId);
-  const shouldSave = saved ?? !(existing || legacyExisting);
-
-  if (!shouldSave) {
-    if (existing) await ctx.db.delete(existing._id);
-    if (legacyExisting) await ctx.db.delete(legacyExisting._id);
-    return { eventId, saved: false };
-  }
-
-  if (
-    !event ||
-    event.status !== "approved" ||
-    !(await isCanonicallyGroundedApprovedEvent(ctx, event))
-  ) {
-    throw new Error("Approved event not found.");
-  }
-
-  if (existing) {
-    if (legacyExisting) await ctx.db.delete(legacyExisting._id);
-    return {
-      createdAt: existing.createdAt,
-      eventId,
-      saved: true,
-      savedEventId: existing._id,
-    };
-  }
-
-  const createdAt = legacyExisting?.savedAt ?? Date.now();
-  const savedEventId = await ctx.db.insert("savedEvents", {
-    userId,
+  return savedEventRepository.transitionForSubject(ctx, {
+    ensureCanSave: async () => {
+      const event = await ctx.db.get(eventId);
+      if (
+        !event ||
+        event.status !== "approved" ||
+        !(await isEventPubliclyVisible(ctx, event))
+      ) {
+        throw new Error("Approved event not found.");
+      }
+    },
     eventId,
-    createdAt,
+    ...(legacyUserId ? { legacyUserId } : {}),
+    saved,
+    subject: userId,
   });
-  if (legacyExisting) await ctx.db.delete(legacyExisting._id);
-
-  return { createdAt, eventId, saved: true, savedEventId };
 }
 
 export const toggleMySavedEvent = mutation({
@@ -314,8 +270,14 @@ export const toggleMySavedEvent = mutation({
   },
   handler: async (ctx, args) => {
     const identity = await requireViewerIdentity(ctx);
-    await upsertViewerRecord(ctx, identity);
-    return toggleSavedEventForUser(ctx, identity.subject, args.eventId, args.saved);
+    const legacyUserId = await upsertViewerRecord(ctx, identity);
+    return toggleSavedEventForUser(
+      ctx,
+      identity.subject,
+      args.eventId,
+      args.saved,
+      legacyUserId,
+    );
   },
 });
 
@@ -416,30 +378,22 @@ export const saveEvent = mutation({
     if (!user || (user as ViewerLibraryUser).clerkId !== identity.subject) {
       throw new Error("Cannot save for another user.");
     }
-    const event = await ctx.db.get(args.eventId);
-    if (
-    !event ||
-    event.status !== "approved" ||
-    !(await isCanonicallyGroundedApprovedEvent(ctx, event))
-  ) {
-      throw new Error("Approved event not found.");
-    }
-
-    const existing = await ctx.db
-      .query("userSavedEvents")
-      .withIndex("by_user", (q) => q.eq("userId", args.userId))
-      .filter((q) => q.eq(q.field("eventId"), args.eventId))
-      .first();
-
-    if (existing) {
-      return existing._id;
-    }
-
-    return ctx.db.insert("userSavedEvents", {
-      userId: args.userId,
+    const result = await savedEventRepository.dualWriteForLegacyAdapter(ctx, {
+      ensureCanSave: async () => {
+        const event = await ctx.db.get(args.eventId);
+        if (
+          !event ||
+          event.status !== "approved" ||
+          !(await isEventPubliclyVisible(ctx, event))
+        ) {
+          throw new Error("Approved event not found.");
+        }
+      },
       eventId: args.eventId,
-      savedAt: Date.now(),
+      legacyUserId: args.userId,
+      subject: identity.subject,
     });
+    return result.legacySavedEventId;
   },
 });
 
@@ -452,14 +406,12 @@ export const unsaveEvent = mutation({
       throw new Error("Cannot unsave for another user.");
     }
 
-    const existing = await ctx.db
-      .query("userSavedEvents")
-      .withIndex("by_user", (q) => q.eq("userId", args.userId))
-      .filter((q) => q.eq(q.field("eventId"), args.eventId))
-      .first();
-
-    if (existing) {
-      await ctx.db.delete(existing._id);
-    }
+    await toggleSavedEventForUser(
+      ctx,
+      identity.subject,
+      args.eventId,
+      false,
+      args.userId,
+    );
   },
 });

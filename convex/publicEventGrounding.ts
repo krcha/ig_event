@@ -20,6 +20,8 @@ import {
   type CrossPostCampaignAggregateAttestation,
 } from "../lib/events/cross-post-campaign-aggregate-attestation";
 import { exactJsonValue } from "../lib/events/exact-json-value";
+import { canonicalizeSourceUrl } from "../lib/domain/source-url";
+import { loadVerifiedCampaignLineageReattestation } from "./internal/campaignLineageReattestationProof";
 
 const MAX_CROSS_POST_CAMPAIGN_AUDIT_ROWS = 100;
 
@@ -174,10 +176,15 @@ async function isAuditBackedCrossPostCampaignAggregate(
       : "cross_post_campaign_coalesced",
     attestation.operationId,
   );
+  const versionedReattestation = primaryAudit
+    ? await loadVerifiedCampaignLineageReattestation(ctx, event, attestation)
+    : null;
+  const auditedAttestation =
+    versionedReattestation?.originalAttestation ?? attestation;
   if (
     !primaryAudit ||
     primaryAudit.policyVersion !== attestation.policyVersion ||
-    !exactJsonValue(primaryAudit.aggregateAttestation, attestation)
+    !exactJsonValue(primaryAudit.aggregateAttestation, auditedAttestation)
   ) {
     return false;
   }
@@ -186,6 +193,7 @@ async function isAuditBackedCrossPostCampaignAggregate(
   const sourceHandles = new Set<string>();
   for (let index = 0; index < attestation.sources.length; index += 1) {
     const source = attestation.sources[index]!;
+    const auditedSource = auditedAttestation.sources[index]!;
     const primary = index === 0;
     const sourceEventId = ctx.db.normalizeId("events", source.eventId);
     const sourceLinkId = ctx.db.normalizeId(
@@ -216,6 +224,14 @@ async function isAuditBackedCrossPostCampaignAggregate(
     const sourceLink = await ctx.db.get(sourceLinkId);
     const receipt = await ctx.db.get(receiptId);
     const expectedReceiptAfter = primary ? audit?.receiptBefore : audit?.receiptAfter;
+    const canonicalLinkedSource = canonicalizeSourceUrl(
+      "instagram",
+      sourceLink?.instagramPostUrl,
+    );
+    const canonicalAttestedSource = canonicalizeSourceUrl(
+      "instagram",
+      source.instagramPostUrl,
+    );
     const nestedAggregateAttestation = eventBefore
       ? readCrossPostCampaignAggregateAttestation(eventBefore.normalizedFieldsJson)
       : null;
@@ -233,7 +249,7 @@ async function isAuditBackedCrossPostCampaignAggregate(
       !audit ||
       audit.sourceGroundingVerifiedAtCoalescing !== true ||
       (legacyMigration &&
-        !exactJsonValue(audit.aggregateAttestation, attestation)) ||
+        !exactJsonValue(audit.aggregateAttestation, auditedAttestation)) ||
       !eventBefore ||
       eventBefore._id !== source.eventId ||
       !currentEvent ||
@@ -252,9 +268,16 @@ async function isAuditBackedCrossPostCampaignAggregate(
       sourceLink.sourceFingerprint !== source.sourceFingerprint ||
       sourceLink.sourceOccurrenceKey !== source.sourceOccurrenceKey ||
       sourceLink.instagramPostId !== source.instagramPostId ||
-      normalizeInstagramPostUrl(sourceLink.instagramPostUrl) !== source.instagramPostUrl ||
+      !canonicalLinkedSource.ok ||
+      !canonicalAttestedSource.ok ||
+      canonicalLinkedSource.value.canonicalUrl !==
+        canonicalAttestedSource.value.canonicalUrl ||
       effectiveSourceHandle !== normalizeHandle(source.sourceHandle) ||
-      !exactJsonValue(audit.sourceLinkBefore, sourceLink) ||
+      (!versionedReattestation &&
+        !exactJsonValue(audit.sourceLinkBefore, sourceLink)) ||
+      (versionedReattestation &&
+        (auditedSource.sourceLinkId !== source.sourceLinkId ||
+          !versionedReattestation.sourceLinkIds.has(source.sourceLinkId))) ||
       !receipt ||
       receipt._id !== source.receiptId ||
       receipt.updatedAt !== source.receiptUpdatedAt ||
@@ -472,9 +495,13 @@ async function isCanonicallyGroundedApprovedEventInternal(
   const normalizeSourceCaption = (value: string | undefined) =>
     value?.normalize("NFKC").replace(/\s+/gu, " ").trim() ?? "";
   const persistedCaption = normalizeSourceCaption(persistedPost.caption);
-  const persistedUrl = normalizeInstagramPostUrl(persistedPost.instagramPostUrl);
-  const eventUrl = normalizeInstagramPostUrl(event.instagramPostUrl);
-  const groundedUrl = normalizeInstagramPostUrl(
+  const persistedCanonical = canonicalizeSourceUrl(
+    "instagram",
+    persistedPost.instagramPostUrl,
+  );
+  const eventCanonical = canonicalizeSourceUrl("instagram", event.instagramPostUrl);
+  const groundedCanonical = canonicalizeSourceUrl(
+    "instagram",
     readString(fields.sourceGroundingInstagramPostUrl) ?? undefined,
   );
   if (
@@ -483,10 +510,11 @@ async function isCanonicallyGroundedApprovedEventInternal(
       persistedCaption ||
     persistedPost.postId !== postId ||
     readString(fields.sourceGroundingInstagramPostId) !== postId ||
-    !persistedUrl ||
-    !persistedUrl.startsWith("https://www.instagram.com/") ||
-    persistedUrl !== eventUrl ||
-    persistedUrl !== groundedUrl ||
+    !persistedCanonical.ok ||
+    !eventCanonical.ok ||
+    !groundedCanonical.ok ||
+    persistedCanonical.value.canonicalUrl !== eventCanonical.value.canonicalUrl ||
+    persistedCanonical.value.canonicalUrl !== groundedCanonical.value.canonicalUrl ||
     !persistedPost.postedAt ||
     persistedPost.postedAt !== event.sourcePostedAt
   ) {

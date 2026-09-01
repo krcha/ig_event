@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   coalesceApprovedNightlifeLineupOccurrences,
   createEvent,
+  deleteApprovedEvent,
   getInstagramSourceOccurrenceReceipt,
   mergeApprovedEvents,
   recordInstagramSourceOccurrenceSatisfaction,
@@ -12,6 +13,7 @@ import {
   bindSourceOccurrenceMetadata,
   prepareEventsForInsert,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
+import { markSourceOccurrenceTopologyMutation } from "../convex/internal/sourceOccurrenceTopologyEpoch.ts";
 
 process.env.ADMIN_CLERK_USER_IDS = "qa-merge-admin";
 process.env.CRON_SECRET = "qa-lineup-service-secret";
@@ -53,6 +55,30 @@ function makeDb({
   mediaAssets = [],
   savedEvents = [],
   userSavedEvents = [],
+  sourceOccurrences = [],
+  migrationStates = [{
+    _id: "receipt-topology-coverage",
+    key: "source-occurrence-receipt-topology-v1",
+    phase: "receipt_topology_audit",
+    isDone: true,
+    scannedCount: 0,
+    updatedCount: 0,
+    mismatchCount: 0,
+    unchangedCount: 0,
+    skippedCount: 0,
+    errorCount: 0,
+    quarantinedLineageMarkerCount: 0,
+    topologyEpoch: 0,
+    completedAt: 1,
+  }],
+  topologyEpochs = [{
+    _id: "source-occurrence-topology-epoch",
+    key: "source-occurrence-topology-v1",
+    currentEpoch: 0,
+    verifiedEpoch: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  }],
 }) {
   const tables = {
     events: new Map(eventRows.map((row) => [row._id, structuredClone(row)])),
@@ -67,6 +93,15 @@ function makeDb({
       userSavedEvents.map((row) => [row._id, structuredClone(row)]),
     ),
     savedEvents: new Map(savedEvents.map((row) => [row._id, structuredClone(row)])),
+    sourceOccurrences: new Map(
+      sourceOccurrences.map((row) => [row._id, structuredClone(row)]),
+    ),
+    eventDomainMigrationState: new Map(
+      migrationStates.map((row) => [row._id, structuredClone(row)]),
+    ),
+    sourceOccurrenceTopologyEpoch: new Map(
+      topologyEpochs.map((row) => [row._id, structuredClone(row)]),
+    ),
     eventAuditLog: new Map(),
   };
   const insertCounters = new Map();
@@ -141,6 +176,15 @@ function makeDb({
   };
 }
 
+function snapshotTables(state) {
+  return Object.fromEntries(
+    Object.entries(state.tables).map(([table, rows]) => [
+      table,
+      [...rows.entries()].map(([id, row]) => [id, structuredClone(row)]),
+    ]),
+  );
+}
+
 function adminCtx(state) {
   return {
     auth: { getUserIdentity: async () => ({ subject: "qa-merge-admin" }) },
@@ -208,6 +252,162 @@ function emptyVenueOccurrenceFixture(overrides = {}) {
   };
   return { event, key, plan, post, processingFence };
 }
+
+const receiptOnlyExpected = {
+  artists: ["Canonical Artist"],
+  date: "2026-08-07",
+  key: "shared-occurrence",
+  time: "20:00",
+  title: "Canonical concert",
+  venue: "Occurrence Venue",
+};
+const receiptOnlyMergeState = makeDb({
+  events: [
+    approvedEvent("receipt-only-primary"),
+    approvedEvent("receipt-only-duplicate", { updatedAt: 11 }),
+  ],
+  migrationStates: [],
+  receipts: [{
+    _id: "receipt-only-merge-receipt",
+    sourceIdentity: "receipt-only-merge-source",
+    sourceFingerprint: "receipt-only-merge-fingerprint",
+    expectedKeys: [receiptOnlyExpected.key],
+    expectedOccurrences: [receiptOnlyExpected],
+    satisfiedKeys: [receiptOnlyExpected.key],
+    deferredChildCount: 0,
+    deferredChildKeys: [],
+    satisfiedOccurrences: [{
+      key: receiptOnlyExpected.key,
+      eventId: "receipt-only-duplicate",
+    }],
+    createdAt: 1,
+    updatedAt: 1,
+  }],
+});
+const receiptOnlyMergeBefore = snapshotTables(receiptOnlyMergeState);
+await assert.rejects(
+  mergeApprovedEvents._handler(adminCtx(receiptOnlyMergeState), {
+    primaryId: "receipt-only-primary",
+    duplicateIds: ["receipt-only-duplicate"],
+    patch: {},
+  }),
+  /receipt-topology-v1 proves complete zero-exception/i,
+);
+assert.deepEqual(
+  snapshotTables(receiptOnlyMergeState),
+  receiptOnlyMergeBefore,
+  "A receipt-only merge must fail before any event, receipt, save, or audit write.",
+);
+
+const receiptOnlyDeleteState = makeDb({
+  events: [approvedEvent("receipt-only-delete")],
+  migrationStates: [],
+  receipts: [{
+    _id: "receipt-only-delete-receipt",
+    sourceIdentity: "receipt-only-delete-source",
+    sourceFingerprint: "receipt-only-delete-fingerprint",
+    expectedKeys: [receiptOnlyExpected.key],
+    expectedOccurrences: [receiptOnlyExpected],
+    satisfiedKeys: [receiptOnlyExpected.key],
+    deferredChildCount: 0,
+    deferredChildKeys: [],
+    satisfiedOccurrences: [{
+      key: receiptOnlyExpected.key,
+      eventId: "receipt-only-delete",
+    }],
+    createdAt: 1,
+    updatedAt: 1,
+  }],
+});
+const receiptOnlyDeleteBefore = snapshotTables(receiptOnlyDeleteState);
+await assert.rejects(
+  deleteApprovedEvent._handler(adminCtx(receiptOnlyDeleteState), {
+    id: "receipt-only-delete",
+  }),
+  /receipt-topology-v1 proves complete zero-exception/i,
+);
+assert.deepEqual(
+  snapshotTables(receiptOnlyDeleteState),
+  receiptOnlyDeleteBefore,
+  "A receipt-only delete must fail before any event, receipt, save, or audit write.",
+);
+
+const staleAuditedMergeState = makeDb({
+  events: [
+    approvedEvent("stale-audit-primary"),
+    approvedEvent("stale-audit-duplicate", { updatedAt: 11 }),
+  ],
+  receipts: [{
+    _id: "post-audit-receipt-only-row",
+    sourceIdentity: "post-audit-receipt-only-source",
+    sourceFingerprint: "post-audit-receipt-only-fingerprint",
+    expectedKeys: [receiptOnlyExpected.key],
+    expectedOccurrences: [receiptOnlyExpected],
+    satisfiedKeys: [receiptOnlyExpected.key],
+    deferredChildCount: 0,
+    deferredChildKeys: [],
+    satisfiedOccurrences: [{
+      key: receiptOnlyExpected.key,
+      eventId: "stale-audit-duplicate",
+    }],
+    createdAt: 2,
+    updatedAt: 2,
+  }],
+});
+await markSourceOccurrenceTopologyMutation(
+  { db: staleAuditedMergeState.db },
+  { verified: false },
+);
+const staleAuditedMergeBefore = snapshotTables(staleAuditedMergeState);
+await assert.rejects(
+  mergeApprovedEvents._handler(adminCtx(staleAuditedMergeState), {
+    primaryId: "stale-audit-primary",
+    duplicateIds: ["stale-audit-duplicate"],
+    patch: {},
+  }),
+  /receipt-topology-v1 proves complete zero-exception/i,
+);
+assert.deepEqual(
+  snapshotTables(staleAuditedMergeState),
+  staleAuditedMergeBefore,
+  "A post-audit dirty receipt mutation must block merge before any additional write.",
+);
+
+const staleAuditedDeleteState = makeDb({
+  events: [approvedEvent("stale-audit-delete")],
+  receipts: [{
+    _id: "post-audit-delete-receipt-only-row",
+    sourceIdentity: "post-audit-delete-receipt-only-source",
+    sourceFingerprint: "post-audit-delete-receipt-only-fingerprint",
+    expectedKeys: [receiptOnlyExpected.key],
+    expectedOccurrences: [receiptOnlyExpected],
+    satisfiedKeys: [receiptOnlyExpected.key],
+    deferredChildCount: 0,
+    deferredChildKeys: [],
+    satisfiedOccurrences: [{
+      key: receiptOnlyExpected.key,
+      eventId: "stale-audit-delete",
+    }],
+    createdAt: 2,
+    updatedAt: 2,
+  }],
+});
+await markSourceOccurrenceTopologyMutation(
+  { db: staleAuditedDeleteState.db },
+  { verified: false },
+);
+const staleAuditedDeleteBefore = snapshotTables(staleAuditedDeleteState);
+await assert.rejects(
+  deleteApprovedEvent._handler(adminCtx(staleAuditedDeleteState), {
+    id: "stale-audit-delete",
+  }),
+  /receipt-topology-v1 proves complete zero-exception/i,
+);
+assert.deepEqual(
+  snapshotTables(staleAuditedDeleteState),
+  staleAuditedDeleteBefore,
+  "A post-audit dirty receipt mutation must block delete before any additional write.",
+);
 
 const distinctState = makeDb({
   events: [
@@ -347,7 +547,7 @@ await assert.rejects(
     duplicateIds: ["receipt-fuzzy-duplicate"],
     patch: {},
   }),
-  /cannot preserve an Instagram occurrence receipt/i,
+  /cannot preserve (?:a legacy source occurrence|an Instagram occurrence receipt)/i,
   "A fuzzy duplicate must not be deleted when its receipt cannot bind to the primary.",
 );
 assert.equal(
@@ -585,6 +785,11 @@ const emptyVenueCreate = await createEvent._handler(adminCtx(emptyVenueCreateSta
 });
 assert.equal(emptyVenueCreate.created, true);
 assert.equal(
+  emptyVenueCreateState.tables.sourceOccurrences.size,
+  1,
+  "Atomic event creation must dual-write one first-class source occurrence.",
+);
+assert.equal(
   emptyVenueCreateState.tables.events.get(emptyVenueCreate.eventId).venue,
   "",
   "The real Convex create handler must persist the intentional empty venue.",
@@ -649,7 +854,7 @@ for (const [label, planPatch] of invalidPlanCases) {
         representativeEventId: emptyVenueCreate.eventId,
         processingFence: emptyVenueFixture.processingFence,
       }),
-    /Source occurrence receipt plan is invalid/,
+    /Source occurrence (?:receipt plan is invalid|synchronization plan (?:exceeds its hard bounds|is internally inconsistent))/,
     `Allowing an empty venue must retain the ${label} receipt check.`,
   );
 }

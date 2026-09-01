@@ -309,6 +309,13 @@ class QueryBuilder {
   async take(count) {
     return this.rows.slice(0, count).map((row) => structuredClone(row));
   }
+
+  async unique() {
+    if (this.rows.length > 1) {
+      throw new Error("Mock unique query returned more than one row.");
+    }
+    return this.rows[0] ? structuredClone(this.rows[0]) : null;
+  }
 }
 
 function createTransactionalHarness(initial = readyFixture()) {
@@ -1218,7 +1225,7 @@ try {
           reprocessPendingEventEvidencePolicyBatch,
           applyArgs(before),
         ),
-      /(?:occurrence precondition failed|complete unique occurrence receipt)/i,
+      /(?:occurrence precondition failed|complete unique occurrence receipt|source occurrence receipt is internally inconsistent)/i,
     );
     assert.deepEqual(binding.snapshot(), before);
   }
@@ -1271,7 +1278,28 @@ try {
   assert.deepEqual(appliedTarget.artists, ["@qa_artist"]);
   assert.deepEqual(appliedTarget.sourceConflictFields, []);
   assert.equal(appliedTarget.venueId, "venue-physical-hall");
-  assert.deepEqual(appliedSibling, originalSibling);
+  const appliedSiblingSourceState = structuredClone(appliedSibling);
+  for (const derivedField of [
+    "occurrenceArtistFingerprint",
+    "occurrenceDateKey",
+    "occurrenceEventType",
+    "occurrenceSignatureHash",
+    "occurrenceSignatureVersion",
+    "occurrenceTimeIdentity",
+    "occurrenceTitleFamily",
+    "occurrenceVenueIdentity",
+    "publicationEvaluatedAt",
+    "publicationPolicyVersion",
+    "publicationReason",
+    "publicationState",
+  ]) {
+    delete appliedSiblingSourceState[derivedField];
+  }
+  assert.deepEqual(
+    appliedSiblingSourceState,
+    originalSibling,
+    "Replay may refresh sibling derived indexes, but must preserve its source event state.",
+  );
   assert.deepEqual(
     appliedReceipt.expectedOccurrences.find((item) => item.key === TARGET_KEY),
     expectedOccurrence(appliedTarget),
@@ -1504,6 +1532,10 @@ const eventsSource = readFileSync(
   new URL("../convex/events.ts", import.meta.url),
   "utf8",
 );
+const evidencePolicySource = readFileSync(
+  new URL("../convex/internal/eventRepairs/evidencePolicy.ts", import.meta.url),
+  "utf8",
+);
 const runnerSource = readFileSync(
   new URL("./reprocess-pending-event-evidence-policy.mjs", import.meta.url),
   "utf8",
@@ -1513,12 +1545,12 @@ const transitionArgsSource = eventsSource.match(
 )?.[1];
 assert.ok(transitionArgsSource, "The replay transition validator must exist.");
 assert.match(transitionArgsSource, /serviceSecret:\s*v\.string\(\)/);
-assert.match(eventsSource, /MAX_EVENT_EVIDENCE_POLICY_REPROCESS_BATCH_SIZE = 16/);
-assert.match(eventsSource, /authorization\.kind !== "service"/);
+assert.match(evidencePolicySource, /MAX_EVENT_EVIDENCE_POLICY_REPROCESS_BATCH_SIZE = 16/);
+assert.match(evidencePolicySource, /authorization\.kind !== "service"/);
 assert.match(eventsSource, /returns: eventEvidencePolicyTransitionResult/);
-assert.match(eventsSource, /withIndex\("by_sourceIdentity"/);
-assert.match(eventsSource, /withIndex\("by_event"/);
-assert.match(eventsSource, /Event-evidence policy rollback refused for a saved event/);
+assert.match(evidencePolicySource, /withIndex\("by_sourceIdentity"/);
+assert.match(evidencePolicySource, /withIndex\("by_event"/);
+assert.match(evidencePolicySource, /Event-evidence policy rollback refused for a saved event/);
 
 const parseArgsMatch = runnerSource.match(
   /(function parseArgs\(argv\) \{[\s\S]*?\n\})\n\nfunction parseRecord/,

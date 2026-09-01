@@ -5,9 +5,34 @@ function read(path) {
   return readFileSync(path, "utf8");
 }
 
+function exportedHandler(source, handlerName) {
+  const start = source.indexOf(`export async function ${handlerName}`);
+  assert.notEqual(start, -1, `Missing exported handler: ${handlerName}`);
+  const end = source.indexOf("\nexport ", start + 1);
+  return source.slice(start, end === -1 ? source.length : end);
+}
+
+function exportedFacade(source, functionName) {
+  const start = source.indexOf(`export const ${functionName}`);
+  assert.notEqual(start, -1, `Missing exported facade: ${functionName}`);
+  const end = source.indexOf("\nexport const ", start + 1);
+  return source.slice(start, end === -1 ? source.length : end);
+}
+
 const authConfigSource = read("convex/auth.config.ts");
 const authzSource = read("convex/authz.ts");
 const eventsSource = read("convex/events.ts");
+const compatibilityReadsSource = read("convex/eventDomain/compatibilityReads.ts");
+const eventCreationSource = read("convex/eventDomain/eventCreation.ts");
+const eventUpdatesSource = read("convex/eventDomain/eventUpdates.ts");
+const lifecycleCommandsSource = read("convex/eventDomain/lifecycleCommands.ts");
+const moderationCommandsSource = read("convex/eventDomain/moderationCommands.ts");
+const moderationReadsSource = read("convex/eventDomain/moderationReads.ts");
+const publicReadsSource = read("convex/eventDomain/publicReads.ts");
+const sourceGroundingReprocessSource = read(
+  "convex/internal/eventRepairs/sourceGroundingReprocess.ts",
+);
+const eventContractsSource = read("convex/eventDomain/contracts.ts");
 const mediaAssetsSource = read("convex/mediaAssets.ts");
 const usersSource = read("convex/users.ts");
 const venuesSource = read("convex/venues.ts");
@@ -51,32 +76,76 @@ assert.match(
   "Service-secret checks should use CRON_SECRET in Convex.",
 );
 
-for (const functionName of [
-  "getEvent",
-  "listEvents",
-  "listModerationDuplicateContextByDates",
-  "classifyPendingModerationUniqueness",
-  "approveUniquePendingEvents",
-  "setEventStatus",
-  "setEventStatuses",
-  "deleteApprovedEvent",
+for (const [functionName, handlerName, implementationSource] of [
+  ["getEvent", "getEventHandler", compatibilityReadsSource],
+  ["listEvents", "listEventsHandler", compatibilityReadsSource],
+  [
+    "listModerationDuplicateContextByDates",
+    "listModerationDuplicateContextByDatesHandler",
+    moderationReadsSource,
+  ],
+  [
+    "classifyPendingModerationUniqueness",
+    "classifyPendingModerationUniquenessHandler",
+    moderationReadsSource,
+  ],
+  [
+    "approveUniquePendingEvents",
+    "approveUniquePendingEventsHandler",
+    moderationCommandsSource,
+  ],
+  ["setEventStatus", "setEventStatusHandler", moderationCommandsSource],
+  ["setEventStatuses", "setEventStatusesHandler", moderationCommandsSource],
+  ["deleteApprovedEvent", "deleteApprovedEventHandler", lifecycleCommandsSource],
 ]) {
-  const pattern = new RegExp(`export const ${functionName} = [\\s\\S]*?requireAdminIdentity`);
-  assert.match(eventsSource, pattern, `${functionName} should require Convex admin identity.`);
+  assert.match(
+    exportedFacade(eventsSource, functionName),
+    new RegExp(`handler: ${handlerName}`),
+    `${functionName} should bind its reviewed domain handler.`,
+  );
+  assert.match(
+    exportedHandler(implementationSource, handlerName),
+    /requireAdminIdentity/,
+    `${functionName} should require Convex admin identity.`,
+  );
 }
 
-for (const functionName of [
-  "createEvent",
-  "updateEvent",
-  "reprocessPendingSourceGroundingBatch",
-  "listByStatus",
-  "listByStatusPaginated",
-  "listByDate",
-  "getByInstagramPostId",
-  "getByInstagramPostUrl",
+for (const [functionName, handlerName, implementationSource] of [
+  ["createEvent", "createEventHandler", eventCreationSource],
+  ["updateEvent", "updateEventHandler", eventUpdatesSource],
+  [
+    "reprocessPendingSourceGroundingBatch",
+    "reprocessPendingSourceGroundingBatchHandler",
+    sourceGroundingReprocessSource,
+  ],
+  ["listByStatus", "listByStatusHandler", compatibilityReadsSource],
+  [
+    "listByStatusPaginated",
+    "listByStatusPaginatedHandler",
+    compatibilityReadsSource,
+  ],
+  ["listByDate", "listByDateHandler", compatibilityReadsSource],
+  [
+    "getByInstagramPostId",
+    "getByInstagramPostIdHandler",
+    compatibilityReadsSource,
+  ],
+  [
+    "getByInstagramPostUrl",
+    "getByInstagramPostUrlHandler",
+    compatibilityReadsSource,
+  ],
 ]) {
-  const pattern = new RegExp(`export const ${functionName} = [\\s\\S]*?requireAdminOrServiceSecret`);
-  assert.match(eventsSource, pattern, `${functionName} should require admin or service secret.`);
+  assert.match(
+    exportedFacade(eventsSource, functionName),
+    new RegExp(`handler: ${handlerName}`),
+    `${functionName} should bind its reviewed domain handler.`,
+  );
+  assert.match(
+    exportedHandler(implementationSource, handlerName),
+    /requireAdminOrServiceSecret/,
+    `${functionName} should require admin or service secret.`,
+  );
 }
 
 const reprocessMutationSource = eventsSource.match(
@@ -89,12 +158,12 @@ assert.match(
   "Source-grounding reprocessing must require an explicit service secret.",
 );
 assert.match(
-  reprocessMutationSource,
+  sourceGroundingReprocessSource,
   /kind !== "service"/,
   "Source-grounding reprocessing must reject authenticated admin fallback.",
 );
 assert.match(
-  eventsSource,
+  eventContractsSource,
   /const sourceGroundingReprocessItem = v\.object\(\{\s*id: v\.id\("events"\),\s*expectedUpdatedAt: v\.number\(\),\s*expectedNormalizedFieldsJson: v\.string\(\),\s*nextNormalizedFieldsJson: v\.string\(\),\s*\}\);/,
   "The reprocessing payload must contain only the event ID and exact attestation preconditions.",
 );
@@ -106,7 +175,12 @@ assert.doesNotMatch(
 
 assert.match(
   eventsSource,
-  /export const getPublicApprovedEvent = query[\s\S]*event\.status !== "approved"/,
+  /export const getPublicApprovedEvent = query[\s\S]*handler: getPublicApprovedEventHandler/,
+  "Public event detail query should bind the approved-only domain handler.",
+);
+assert.match(
+  publicReadsSource,
+  /export async function getPublicApprovedEventHandler[\s\S]*event\.status !== "approved"/,
   "Public event detail query should return only approved events.",
 );
 assert.match(
@@ -126,8 +200,13 @@ assert.match(
 );
 assert.match(
   mediaAssetsSource,
-  /export const getPublicEventImageSource = query[\s\S]*event\.status !== "approved"/,
-  "Public event image-source query should return media only for approved events.",
+  /import \{[\s\S]*?isEventPubliclyVisible,[\s\S]*?\} from "\.\/publicationPolicy";/,
+  "Public event image authorization should use the shared publication policy.",
+);
+assert.match(
+  mediaAssetsSource,
+  /export const getPublicEventImageSource = query\([\s\S]*?const event = await ctx\.db\.get\(eventId\);[\s\S]*?!\(await isEventPubliclyVisible\(ctx, event\)\)[\s\S]*?eventExists: false/,
+  "Public event image-source query should fail closed unless the event passes live publication visibility.",
 );
 
 for (const functionName of [

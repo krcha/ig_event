@@ -174,6 +174,7 @@ const sitemap = read("app/sitemap.ts");
 const sitemapData = read("lib/seo/sitemap-data.ts");
 const nextConfig = read("next.config.mjs");
 const convexEvents = read("convex/events.ts");
+const convexPublicReads = read("convex/eventDomain/publicReads.ts");
 const convexVenues = read("convex/venues.ts");
 
 assert.match(convexVenues, /DEFAULT_PUBLIC_VENUE_DIRECTORY_LIMIT = 2000/);
@@ -265,7 +266,11 @@ assert.equal((nextConfig.match(/permanent: true/g) ?? []).length >= 4, true);
 assert.ok(nextConfig.includes("htmlLimitedBots: /.*/"));
 assert.match(
   convexEvents,
-  /getPublicApprovedEvent = query[\s\S]*args: \{ id: v\.string\(\) \}[\s\S]*normalizeId\("events", args\.id\)/,
+  /getPublicApprovedEvent = query[\s\S]*args: \{ id: v\.string\(\) \}[\s\S]*handler: getPublicApprovedEventHandler/,
+);
+assert.match(
+  convexPublicReads,
+  /getPublicApprovedEventHandler[\s\S]*normalizeId\("events", args\.id\)/,
 );
 assert.match(
   convexVenues,

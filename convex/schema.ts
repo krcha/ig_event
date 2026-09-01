@@ -79,13 +79,46 @@ const venuePublicStatus = v.union(
   v.literal("published"),
   v.literal("hidden"),
 );
+const publicationState = v.union(
+  v.literal("publishable"),
+  v.literal("hidden"),
+  v.literal("pending_verification"),
+);
+const venueIdentityKind = v.union(
+  v.literal("canonical_name"),
+  v.literal("alias"),
+  v.literal("historical_alias"),
+  v.literal("provider_account"),
+);
+const sourceOccurrenceState = v.union(
+  v.literal("expected"),
+  v.literal("deferred"),
+  v.literal("satisfied"),
+  v.literal("superseded"),
+);
+const reconciliationLegacyOutcome = v.union(
+  v.literal("attach"),
+  v.literal("create"),
+  v.literal("update"),
+);
+const reconciliationVerifiedOperationKind = v.union(
+  v.literal("create"),
+  v.literal("attach"),
+  v.literal("update"),
+  v.literal("merge"),
+  v.literal("coalesce"),
+);
 
 export default defineSchema({
   instagramSources: defineTable({
     handle: v.string(),
     observedDisplayName: v.optional(v.string()),
     observedDisplayNameUpdatedAt: v.optional(v.number()),
-    role: v.union(v.literal("venue"), v.literal("promoter"), v.literal("unknown")),
+    role: v.union(
+      v.literal("venue"),
+      v.literal("promoter"),
+      v.literal("unknown"),
+    ),
     venueId: v.optional(v.id("venues")),
     active: v.boolean(),
     discoveredAt: v.number(),
@@ -142,6 +175,16 @@ export default defineSchema({
     cutoffMinutesSinceMidnight: v.number(),
     beforeDateCursor: v.optional(v.string()),
     beforeDateScanComplete: v.boolean(),
+    sameDayCursor: v.optional(v.string()),
+    sameDayScanComplete: v.optional(v.boolean()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
+
+  scrapedPostRetentionCursors: defineTable({
+    key: v.string(),
+    cutoffUpdatedAt: v.number(),
+    cursor: v.string(),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
@@ -173,7 +216,11 @@ export default defineSchema({
     releasedMicros: v.optional(v.number()),
     requestStartedAt: v.optional(v.number()),
     requestBoundaryVersion: v.optional(v.number()),
-    status: v.union(v.literal("active"), v.literal("reconciled"), v.literal("released")),
+    status: v.union(
+      v.literal("active"),
+      v.literal("reconciled"),
+      v.literal("released"),
+    ),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -188,6 +235,8 @@ export default defineSchema({
     sourceOccurrenceKey: v.string(),
     instagramPostId: v.optional(v.string()),
     instagramPostUrl: v.optional(v.string()),
+    canonicalSourceUrl: v.optional(v.string()),
+    sourceOccurrenceId: v.optional(v.id("sourceOccurrences")),
     sourceHandle: v.optional(v.string()),
     linkedAt: v.number(),
     updatedAt: v.number(),
@@ -195,7 +244,9 @@ export default defineSchema({
     .index("by_event", ["eventId"])
     .index("by_source_occurrence", ["sourceIdentity", "sourceOccurrenceKey"])
     .index("by_post_id", ["instagramPostId"])
-    .index("by_post_url", ["instagramPostUrl"]),
+    .index("by_post_url", ["instagramPostUrl"])
+    .index("by_canonical_source_url", ["canonicalSourceUrl"])
+    .index("by_source_occurrence_id", ["sourceOccurrenceId"]),
 
   events: defineTable({
     title: v.string(),
@@ -226,6 +277,7 @@ export default defineSchema({
     imageStorageId: v.optional(v.id("_storage")),
     instagramPostUrl: v.optional(v.string()),
     normalizedInstagramPostUrl: v.optional(v.string()),
+    canonicalSourceUrl: v.optional(v.string()),
     instagramPostId: v.optional(v.string()),
     ticketPrice: v.optional(v.string()),
     eventType: v.string(),
@@ -236,7 +288,21 @@ export default defineSchema({
     humanReviewedLegacySourcePolicyVersion: v.optional(v.literal(1)),
     humanReviewedStructuredSourcePolicyVersion: v.optional(v.literal(1)),
     sourceOccurrenceKey: v.optional(v.string()),
-    promotionTier: v.optional(v.union(v.literal("featured"), v.literal("promoted"))),
+    occurrenceSignatureVersion: v.optional(v.number()),
+    occurrenceSignatureHash: v.optional(v.string()),
+    occurrenceDateKey: v.optional(v.string()),
+    occurrenceVenueIdentity: v.optional(v.string()),
+    occurrenceTimeIdentity: v.optional(v.string()),
+    occurrenceTitleFamily: v.optional(v.string()),
+    occurrenceArtistFingerprint: v.optional(v.string()),
+    occurrenceEventType: v.optional(v.string()),
+    publicationState: v.optional(publicationState),
+    publicationReason: v.optional(v.string()),
+    publicationPolicyVersion: v.optional(v.number()),
+    publicationEvaluatedAt: v.optional(v.number()),
+    promotionTier: v.optional(
+      v.union(v.literal("featured"), v.literal("promoted")),
+    ),
     promotionStart: v.optional(v.string()),
     promotionEnd: v.optional(v.string()),
     promotionPriority: v.optional(v.number()),
@@ -250,14 +316,43 @@ export default defineSchema({
     .index("by_date", ["date"])
     .index("by_status", ["status"])
     .index("by_status_date", ["status", "date"])
-    .index("by_normalizedVenueHandle_status_date", ["normalizedVenueInstagramHandle", "status", "date"])
-    .index("by_normalizedVenueIdentity_status_date", ["normalizedVenueIdentity", "status", "date"])
+    .index("by_normalizedVenueHandle_status_date", [
+      "normalizedVenueInstagramHandle",
+      "status",
+      "date",
+    ])
+    .index("by_normalizedVenueIdentity_status_date", [
+      "normalizedVenueIdentity",
+      "status",
+      "date",
+    ])
     .index("by_image_storage_id", ["imageStorageId"])
     .index("by_status_promotionTier", ["status", "promotionTier"])
+    .index("by_publicationState_promotionTier", [
+      "publicationState",
+      "promotionTier",
+    ])
     .index("by_instagramPostId", ["instagramPostId"])
     .index("by_instagramPostUrl", ["instagramPostUrl"])
     .index("by_normalizedInstagramPostUrl", ["normalizedInstagramPostUrl"])
+    .index("by_canonicalSourceUrl", ["canonicalSourceUrl"])
     .index("by_sourceOccurrenceKey", ["sourceOccurrenceKey"])
+    .index("by_occurrenceSignatureHash", [
+      "occurrenceSignatureVersion",
+      "occurrenceSignatureHash",
+    ])
+    .index("by_occurrenceDateVenue", [
+      "occurrenceSignatureVersion",
+      "occurrenceDateKey",
+      "occurrenceVenueIdentity",
+    ])
+    .index("by_occurrenceDateTitle", [
+      "occurrenceSignatureVersion",
+      "occurrenceDateKey",
+      "occurrenceTitleFamily",
+    ])
+    .index("by_publicationState_date", ["publicationState", "date"])
+    .index("by_updatedAt", ["updatedAt"])
     .index("by_venueId", ["venueId"])
     .index("by_venueId_status_date", ["venueId", "status", "date"]),
   instagramSourceOccurrenceReceipts: defineTable({
@@ -273,6 +368,8 @@ export default defineSchema({
           venue: v.string(),
           title: v.string(),
           artists: v.array(v.string()),
+          factsJson: v.optional(v.string()),
+          canonicalEventJson: v.optional(v.string()),
         }),
       ),
     ),
@@ -288,6 +385,63 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_sourceIdentity", ["sourceIdentity"]),
+  sourceOccurrences: defineTable({
+    provider: v.literal("instagram"),
+    sourceDocumentId: v.id("scrapedPosts"),
+    sourceIdentity: v.string(),
+    canonicalSourceUrl: v.string(),
+    sourceFingerprint: v.string(),
+    sourceRevision: v.number(),
+    sourceOccurrenceKey: v.string(),
+    occurrenceOrdinal: v.number(),
+    factsJson: v.string(),
+    canonicalEventJson: v.optional(v.string()),
+    normalizedOccurrenceJson: v.optional(v.string()),
+    venueResolutionStatus: v.union(
+      v.literal("resolved"),
+      v.literal("ambiguous"),
+      v.literal("unresolved"),
+    ),
+    venueId: v.optional(v.id("venues")),
+    canonicalEventId: v.optional(v.id("events")),
+    state: sourceOccurrenceState,
+    occurrenceSignatureVersion: v.number(),
+    occurrenceSignatureHash: v.string(),
+    occurrenceDateKey: v.string(),
+    occurrenceVenueIdentity: v.string(),
+    occurrenceTimeIdentity: v.string(),
+    occurrenceTitleFamily: v.string(),
+    occurrenceArtistFingerprint: v.string(),
+    occurrenceEventType: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_document_occurrence", [
+      "sourceDocumentId",
+      "sourceOccurrenceKey",
+    ])
+    .index("by_source_occurrence", ["sourceIdentity", "sourceOccurrenceKey"])
+    .index("by_canonical_source_occurrence", [
+      "canonicalSourceUrl",
+      "sourceOccurrenceKey",
+    ])
+    .index("by_canonical_event", ["canonicalEventId"])
+    .index("by_venue", ["venueId"])
+    .index("by_signature_hash", [
+      "occurrenceSignatureVersion",
+      "occurrenceSignatureHash",
+    ])
+    .index("by_date_venue", [
+      "occurrenceSignatureVersion",
+      "occurrenceDateKey",
+      "occurrenceVenueIdentity",
+    ])
+    .index("by_date_title", [
+      "occurrenceSignatureVersion",
+      "occurrenceDateKey",
+      "occurrenceTitleFamily",
+    ])
+    .index("by_state_updatedAt", ["state", "updatedAt"]),
   venues: defineTable({
     name: v.string(),
     instagramHandle: v.string(),
@@ -328,9 +482,31 @@ export default defineSchema({
   })
     .index("by_instagramHandle", ["instagramHandle"])
     .index("by_normalizedInstagramHandle", ["normalizedInstagramHandle"])
+    .index("by_updatedAt", ["updatedAt"])
     .index("by_isActive", ["isActive"])
     .index("by_scrapeActive", ["scrapeActive"])
     .index("by_publicStatus", ["publicStatus"]),
+  venueIdentities: defineTable({
+    venueId: v.id("venues"),
+    kind: venueIdentityKind,
+    provider: v.optional(v.literal("instagram")),
+    rawValue: v.string(),
+    normalizedValue: v.string(),
+    active: v.boolean(),
+    source: v.union(
+      v.literal("venue_record"),
+      v.literal("manual"),
+      v.literal("migration"),
+      v.literal("observed_source"),
+    ),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_kind_normalized", ["kind", "normalizedValue"])
+    .index("by_provider_normalized", ["provider", "normalizedValue"])
+    .index("by_venue_kind", ["venueId", "kind"])
+    .index("by_updatedAt", ["updatedAt"])
+    .index("by_active_kind", ["active", "kind"]),
   users: defineTable({
     clerkId: v.string(),
     email: v.optional(v.string()),
@@ -344,6 +520,7 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_user", ["userId"])
+    .index("by_user_createdAt", ["userId", "createdAt"])
     .index("by_event", ["eventId"])
     .index("by_user_event", ["userId", "eventId"]),
   favoriteVenues: defineTable({
@@ -360,6 +537,7 @@ export default defineSchema({
     savedAt: v.number(),
   })
     .index("by_user", ["userId"])
+    .index("by_user_savedAt", ["userId", "savedAt"])
     .index("by_event", ["eventId"])
     .index("by_user_event", ["userId", "eventId"]),
   scrapedPosts: defineTable({
@@ -375,6 +553,7 @@ export default defineSchema({
     locationName: v.optional(v.string()),
     instagramPostUrl: v.string(),
     normalizedInstagramPostUrl: v.optional(v.string()),
+    canonicalSourceUrl: v.optional(v.string()),
     postedAt: v.optional(v.string()),
     sourceKey: v.optional(v.string()),
     sourceRevision: v.optional(v.number()),
@@ -416,7 +595,9 @@ export default defineSchema({
     analysisDefinitiveOutputFailureProtocol: v.optional(v.string()),
     analysisDefinitiveOutputFailureAttemptStartedAt: v.optional(v.number()),
     analysisDefinitiveOutputFailureOwner: v.optional(v.string()),
-    analysisDefinitiveOutputFailureKind: v.optional(openAiDefinitiveOutputFailureKind),
+    analysisDefinitiveOutputFailureKind: v.optional(
+      openAiDefinitiveOutputFailureKind,
+    ),
     analysisDefinitiveOutputFailureMessage: v.optional(v.string()),
     analysisDefinitiveOutputFailureAt: v.optional(v.number()),
     analysisDefinitiveOutputFailureModel: v.optional(v.string()),
@@ -446,6 +627,7 @@ export default defineSchema({
     .index("by_postId", ["postId"])
     .index("by_instagramPostUrl", ["instagramPostUrl"])
     .index("by_normalizedInstagramPostUrl", ["normalizedInstagramPostUrl"])
+    .index("by_canonicalSourceUrl", ["canonicalSourceUrl"])
     .index("by_blocksPaidFetch", ["blocksPaidFetch"])
     .index("by_handle_blocksPaidFetch", ["handle", "blocksPaidFetch"])
     .index("by_updatedAt", ["updatedAt"]),
@@ -486,7 +668,9 @@ export default defineSchema({
     leaseBudgetDayKey: v.optional(v.string()),
     leaseReservationId: v.optional(v.string()),
     leaseReservedMicros: v.optional(v.number()),
-    leaseWindowStatus: v.optional(v.union(v.literal("active"), v.literal("saturated"))),
+    leaseWindowStatus: v.optional(
+      v.union(v.literal("active"), v.literal("saturated")),
+    ),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
@@ -505,6 +689,7 @@ export default defineSchema({
     sourceKind: v.literal("instagram_post"),
     instagramPostId: v.optional(v.string()),
     normalizedInstagramPostUrl: v.optional(v.string()),
+    canonicalSourceUrl: v.optional(v.string()),
     storageId: v.id("_storage"),
     url: v.string(),
     upstreamUrl: v.string(),
@@ -518,6 +703,7 @@ export default defineSchema({
     .index("by_sourceKey", ["sourceKey"])
     .index("by_instagramPostId", ["instagramPostId"])
     .index("by_normalizedInstagramPostUrl", ["normalizedInstagramPostUrl"])
+    .index("by_canonicalSourceUrl", ["canonicalSourceUrl"])
     .index("by_updatedAt", ["updatedAt"]),
   ingestionJobs: defineTable({
     source: v.string(),
@@ -633,7 +819,9 @@ export default defineSchema({
     // This is written only after the fetched provider result has crossed the
     // durable scraped-post boundary. A charge alone is never evidence that a
     // post can safely be processed or reported as fetched after a crash.
-    providerResultStatus: v.optional(v.union(v.literal("persisted"), v.literal("no_post"))),
+    providerResultStatus: v.optional(
+      v.union(v.literal("persisted"), v.literal("no_post")),
+    ),
     persistedPostCount: v.optional(v.number()),
     // The single post selected by the durable fetch is tied to this receipt.
     // These fields remain optional so already-live receipts survive rollout.
@@ -659,11 +847,33 @@ export default defineSchema({
     .index("by_run_handle", ["runId", "handle"])
     .index("by_run_status", ["runId", "status"])
     .index("by_run_status_executionSlot", ["runId", "status", "executionSlot"])
-    .index("by_run_status_executionSlot_retryNotBeforeAt", ["runId", "status", "executionSlot", "retryNotBeforeAt"])
-    .index("by_run_status_executionSlot_leaseExpiresAt", ["runId", "status", "executionSlot", "leaseExpiresAt"])
-    .index("by_run_status_retryNotBeforeAt", ["runId", "status", "retryNotBeforeAt"])
-    .index("by_run_status_leaseExpiresAt", ["runId", "status", "leaseExpiresAt"])
-    .index("by_run_status_providerResultStatus", ["runId", "status", "providerResultStatus"])
+    .index("by_run_status_executionSlot_retryNotBeforeAt", [
+      "runId",
+      "status",
+      "executionSlot",
+      "retryNotBeforeAt",
+    ])
+    .index("by_run_status_executionSlot_leaseExpiresAt", [
+      "runId",
+      "status",
+      "executionSlot",
+      "leaseExpiresAt",
+    ])
+    .index("by_run_status_retryNotBeforeAt", [
+      "runId",
+      "status",
+      "retryNotBeforeAt",
+    ])
+    .index("by_run_status_leaseExpiresAt", [
+      "runId",
+      "status",
+      "leaseExpiresAt",
+    ])
+    .index("by_run_status_providerResultStatus", [
+      "runId",
+      "status",
+      "providerResultStatus",
+    ])
     .index("by_chunk_status", ["chunkId", "status"]),
   eventAuditLog: defineTable({
     eventId: v.id("events"),
@@ -675,6 +885,185 @@ export default defineSchema({
   })
     .index("by_event", ["eventId"])
     .index("by_createdAt", ["createdAt"]),
+  reconciliationAudits: defineTable({
+    sourceOccurrenceId: v.optional(v.id("sourceOccurrences")),
+    canonicalEventId: v.optional(v.id("events")),
+    candidateEventIds: v.array(v.id("events")),
+    mode: v.union(
+      v.literal("shadow"),
+      v.literal("applied"),
+      v.literal("rejected"),
+    ),
+    strategy: v.string(),
+    relation: v.string(),
+    action: v.string(),
+    policyVersion: v.number(),
+    decisionJson: v.string(),
+    planJson: v.string(),
+    legacyOutcome: v.optional(reconciliationLegacyOutcome),
+    shadowMatches: v.optional(v.boolean()),
+    shadowComparisonBasis: v.optional(v.literal("post_write_counterfactual")),
+    shadowComparisonStatus: v.optional(
+      v.union(
+        v.literal("match"),
+        v.literal("mismatch"),
+        v.literal("indeterminate"),
+      ),
+    ),
+    shadowComparisonReason: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_source_occurrence_createdAt", [
+      "sourceOccurrenceId",
+      "createdAt",
+    ])
+    .index("by_canonical_event_createdAt", ["canonicalEventId", "createdAt"])
+    .index("by_mode_createdAt", ["mode", "createdAt"]),
+  reconciliationRolloutState: defineTable({
+    key: v.string(),
+    policyVersion: v.number(),
+    coverageStartAt: v.number(),
+    coverageEndAt: v.number(),
+    expectedOccurrenceCount: v.number(),
+    comparedCount: v.number(),
+    matchedCount: v.number(),
+    mismatchCount: v.number(),
+    indeterminateCount: v.number(),
+    errorCount: v.number(),
+    evidenceDigestSha256: v.string(),
+    operatorEnabled: v.boolean(),
+    ingestionApplyEnabled: v.optional(v.boolean()),
+    reviewedBy: v.string(),
+    note: v.string(),
+    verificationKind: v.union(
+      v.literal("operator_report_v1"),
+      v.literal("server_full_outcome_v1"),
+    ),
+    verificationPhase: v.optional(
+      v.union(
+        v.literal("scanning"),
+        v.literal("blocked"),
+        v.literal("ready_for_review"),
+        v.literal("enabled"),
+      ),
+    ),
+    verificationRunId: v.optional(v.string()),
+    verificationCursor: v.optional(v.string()),
+    verificationStartedAt: v.optional(v.number()),
+    verificationTopologyEpoch: v.optional(v.number()),
+    verifiedOperationKinds: v.optional(
+      v.array(reconciliationVerifiedOperationKind),
+    ),
+    verifiedConsolidationEvidenceCount: v.optional(v.number()),
+    reviewedAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
+  savedEventMigrationState: defineTable({
+    key: v.string(),
+    phase: v.union(
+      v.literal("backfill"),
+      v.literal("canonical_audit"),
+      v.literal("blocked"),
+      v.literal("ready_for_review"),
+      v.literal("cutover_enabled"),
+    ),
+    cursor: v.optional(v.string()),
+    isDone: v.boolean(),
+    scannedCount: v.number(),
+    insertedCount: v.number(),
+    alreadyCanonicalCount: v.number(),
+    duplicateLegacyRowCount: v.number(),
+    missingUserCount: v.number(),
+    conflictCount: v.number(),
+    timestampMismatchCount: v.number(),
+    mismatchCount: v.number(),
+    canonicalAuditCursor: v.optional(v.string()),
+    canonicalAuditDone: v.optional(v.boolean()),
+    canonicalScannedCount: v.optional(v.number()),
+    canonicalUniqueRowCount: v.optional(v.number()),
+    canonicalDuplicateRowCount: v.optional(v.number()),
+    readCutoverEnabled: v.optional(v.boolean()),
+    writeCutoverEnabled: v.optional(v.boolean()),
+    cutoverGeneration: v.optional(v.number()),
+    cutoverEnabled: v.boolean(),
+    reviewedBy: v.optional(v.string()),
+    reviewNote: v.optional(v.string()),
+    reviewedAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
+  publicationMigrationState: defineTable({
+    key: v.literal("materialized-publication-v1"),
+    policyVersion: v.number(),
+    phase: v.union(
+      v.literal("backfill"),
+      v.literal("audit"),
+      v.literal("blocked"),
+      v.literal("ready_for_review"),
+      v.literal("cutover_enabled"),
+    ),
+    backfillCursor: v.optional(v.string()),
+    backfillDone: v.boolean(),
+    scannedCount: v.number(),
+    updatedCount: v.number(),
+    mismatchCount: v.number(),
+    auditCursor: v.optional(v.string()),
+    auditStartedAt: v.optional(v.number()),
+    sourceTopologyEpoch: v.optional(v.number()),
+    auditDone: v.boolean(),
+    auditScannedCount: v.number(),
+    auditDriftCount: v.number(),
+    readCutoverEnabled: v.boolean(),
+    reviewedBy: v.optional(v.string()),
+    reviewNote: v.optional(v.string()),
+    reviewedAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
+  eventDomainMigrationState: defineTable({
+    key: v.string(),
+    phase: v.string(),
+    cursor: v.optional(v.string()),
+    attempt: v.optional(v.number()),
+    isDone: v.optional(v.boolean()),
+    scannedCount: v.number(),
+    updatedCount: v.number(),
+    mismatchCount: v.number(),
+    unchangedCount: v.optional(v.number()),
+    skippedCount: v.optional(v.number()),
+    errorCount: v.optional(v.number()),
+    auditDetailsJson: v.optional(v.string()),
+    quarantinedLineageMarkerCount: v.optional(v.number()),
+    skipReasonCountsJson: v.optional(v.string()),
+    topologyEpoch: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
+  sourceOccurrenceTopologyEpoch: defineTable({
+    key: v.literal("source-occurrence-topology-v1"),
+    currentEpoch: v.number(),
+    verifiedEpoch: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
+  campaignLineageReattestations: defineTable({
+    migrationKey: v.literal("campaign-lineage-reattestation-v1"),
+    eventId: v.id("events"),
+    attestationOperationId: v.string(),
+    outcome: v.union(v.literal("reattested"), v.literal("quarantined")),
+    sourceCount: v.number(),
+    evidenceDigest: v.string(),
+    reason: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_migration_event", ["migrationKey", "eventId"])
+    .index("by_outcome_updatedAt", ["outcome", "updatedAt"]),
   venueAuditLog: defineTable({
     venueId: v.id("venues"),
     action: v.string(),

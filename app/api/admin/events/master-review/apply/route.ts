@@ -24,6 +24,7 @@ type RequestBody = {
 
 const mergeApprovedEventsMutation =
   "events:mergeApprovedEvents" as unknown as FunctionReference<"mutation">;
+const MAX_GENERIC_MERGE_DUPLICATES = 16;
 
 function isVersionConflict(error: unknown): boolean {
   return error instanceof Error && /reviewed version|expectedUpdatedAt/iu.test(error.message);
@@ -89,6 +90,14 @@ export async function POST(request: Request) {
   if (duplicateEventIds.length === 0) {
     return NextResponse.json(
       { error: "At least one duplicateEventId is required." },
+      { status: 400 },
+    );
+  }
+  if (duplicateEventIds.length > MAX_GENERIC_MERGE_DUPLICATES) {
+    return NextResponse.json(
+      {
+        error: `Select at most ${MAX_GENERIC_MERGE_DUPLICATES} duplicate events per merge.`,
+      },
       { status: 400 },
     );
   }

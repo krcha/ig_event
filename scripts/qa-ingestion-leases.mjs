@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { readIngestionArchitectureSource } from "./qa-support/ingestion-architecture-source.mjs";
 
 function read(path) {
   return readFileSync(path, "utf8");
@@ -8,7 +9,7 @@ function read(path) {
 const schemaSource = read("convex/schema.ts");
 const ingestionJobsSource = read("convex/ingestionJobs.ts");
 const scrapedPostsSource = read("convex/scrapedPosts.ts");
-const pipelineSource = read("lib/pipeline/run-instagram-ingestion.ts");
+const pipelineSource = readIngestionArchitectureSource();
 const resumptionHelperSource = read("lib/pipeline/cron-ingestion-resumption.ts");
 const cronIngestSource = read("app/api/cron/ingest-venues/route.ts");
 const adminJobRouteSource = read("app/api/admin/scrape/jobs/[jobId]/route.ts");

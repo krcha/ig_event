@@ -10,6 +10,7 @@ import {
 import { normalizeEventTimeWritePatch } from "../lib/events/event-time-write.ts";
 import { getNightlifeDefaultDateKey } from "../lib/events/nightlife-date.ts";
 import { buildDuplicateUpdatePatch } from "../lib/pipeline/run-instagram-ingestion.ts";
+import { readIngestionArchitectureSource } from "./qa-support/ingestion-architecture-source.mjs";
 
 const exactEvidence = extractEventTimeEvidenceFromText("Poster line: POČETAK   21H tonight");
 assert.deepEqual(exactEvidence, {
@@ -488,7 +489,15 @@ assert.equal(
 
 const schemaSource = readFileSync("convex/schema.ts", "utf8");
 const eventsSource = readFileSync("convex/events.ts", "utf8");
-const ingestionSource = readFileSync("lib/pipeline/run-instagram-ingestion.ts", "utf8");
+const eventUpdatesSource = readFileSync(
+  "convex/eventDomain/eventUpdates.ts",
+  "utf8",
+);
+const lifecycleCommandsSource = readFileSync(
+  "convex/eventDomain/lifecycleCommands.ts",
+  "utf8",
+);
+const ingestionSource = readIngestionArchitectureSource();
 const publicEventsSource = readFileSync("lib/events/public-events.ts", "utf8");
 const adminApiSource = readFileSync("app/api/admin/events/route.ts", "utf8");
 const moderationSource = readFileSync("components/admin/moderation-dashboard.tsx", "utf8");
@@ -504,15 +513,20 @@ for (const field of ["timeSource", "timeEvidenceText", "timeConfidence", "timeSt
   assert.ok(adminApiSource.includes(field), `Moderation API should include ${field}.`);
   assert.ok(moderationSource.includes(field), `Moderation UI should consume ${field}.`);
 }
-assert.ok(eventsSource.includes("normalizeEventTimeWritePatch"));
+assert.ok(eventUpdatesSource.includes("normalizeEventTimeWritePatch"));
 assert.match(
-  eventsSource,
-  /async function applyEventUpdate[\s\S]*?normalizeEventTimeWritePatch\(eventPatch\)/,
+  eventUpdatesSource,
+  /export async function applyEventUpdate[\s\S]*?normalizeEventTimeWritePatch\(eventPatch\)/,
   "The shared update handler must normalize time and semantic-kind provenance atomically.",
 );
 assert.match(
   eventsSource,
-  /export const mergeApprovedEvents[\s\S]*?normalizeEventTimeWritePatch\(timeAndPublicFieldPatch\)/,
+  /export const mergeApprovedEvents[\s\S]*?handler: mergeApprovedEventsHandler/,
+  "The approved-event merge facade must bind the reviewed lifecycle handler.",
+);
+assert.match(
+  lifecycleCommandsSource,
+  /export async function mergeApprovedEventsHandler[\s\S]*?normalizeEventTimeWritePatch\(timeAndPublicFieldPatch\)/,
   "Approved-event merges must normalize time and semantic-kind provenance atomically.",
 );
 assert.match(

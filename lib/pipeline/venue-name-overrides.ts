@@ -3,6 +3,15 @@ import path from "node:path";
 import { parse } from "csv-parse/sync";
 import { normalizeHandle } from "@/lib/pipeline/venue-normalization";
 
+/**
+ * MIGRATION / OPERATOR COMPATIBILITY ONLY.
+ *
+ * Steady-state ingestion and public reads resolve venue names from durable
+ * `venues` + `venueIdentities` snapshots. This loader remains for reviewed
+ * repair/reprocessing tools until the production identity migration and its
+ * CSV-to-seed equivalence audit are complete.
+ */
+
 const VENUE_NAME_OVERRIDES_CSV_PATH = path.join(
   process.cwd(),
   "data",

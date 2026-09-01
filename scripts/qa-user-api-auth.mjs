@@ -443,6 +443,13 @@ for (const routeCase of routeCases) {
           };
           apply(builder);
           return {
+            async take(limit) {
+              return [...tables[table].values()]
+                .filter((row) =>
+                  Object.entries(filters).every(([field, value]) => row[field] === value),
+                )
+                .slice(0, limit);
+            },
             async unique() {
               return [...tables[table].values()].find((row) =>
                 Object.entries(filters).every(([field, value]) => row[field] === value),

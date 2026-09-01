@@ -1,3 +1,5 @@
+import { canonicalizeSourceUrl } from "../domain/source-url.ts";
+
 export const APIFY_IMAGE_HOSTNAME = "images.apifyusercontent.com";
 
 function getHostname(value: string | null | undefined): string | null {
@@ -48,21 +50,10 @@ export function normalizeInstagramPostUrl(value: string | null | undefined): str
   if (!raw) {
     return "";
   }
-
-  try {
-    const url = new URL(raw);
-    const hostname = url.hostname.toLowerCase();
-    if (hostname !== "instagram.com" && !hostname.endsWith(".instagram.com")) {
-      return raw;
-    }
-
-    const parts = url.pathname.split("/").filter(Boolean);
-    if (parts.length >= 2) {
-      return `https://www.instagram.com/${parts[0]}/${parts[1]}/`;
-    }
-  } catch {
-    return raw;
-  }
-
-  return raw;
+  const canonical = canonicalizeSourceUrl("instagram", raw);
+  // Compatibility callers historically retain malformed/non-Instagram input
+  // so equality checks fail against valid evidence instead of collapsing two
+  // invalid values to an empty identity. Valid provider identity is owned only
+  // by `lib/domain/source-url`.
+  return canonical.ok ? canonical.value.canonicalUrl : raw;
 }

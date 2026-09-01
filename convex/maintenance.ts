@@ -24,6 +24,8 @@ type DeleteExpiredEventsResult = {
   retainedCampaignEventCount: number;
   beforeDateCursor: string | null;
   beforeDateScanComplete: boolean;
+  sameDayCursor: string | null;
+  sameDayScanComplete: boolean;
 };
 
 type DeleteExpiredEventsUntilDoneResult = {
@@ -51,6 +53,8 @@ const deleteExpiredEventsMutation = (internal as unknown as {
         beforeDate?: string;
         beforeDateCursor?: string | null;
         beforeDateScanComplete?: boolean;
+        sameDayCursor?: string | null;
+        sameDayScanComplete?: boolean;
       },
       DeleteExpiredEventsResult
     >;
@@ -69,6 +73,20 @@ type DeleteByUpdatedAtMutation = FunctionReference<
   DeleteByUpdatedAtResult
 >;
 
+type DeleteScrapedPostsResult = DeleteByUpdatedAtResult & {
+  continueCursor: string;
+  cutoffUpdatedAt: number;
+  retainedReferencedCount: number;
+  scannedCount: number;
+};
+
+type DeleteScrapedPostsMutation = FunctionReference<
+  "mutation",
+  "internal",
+  { cutoffUpdatedAt: number; cursor?: string | null; limit?: number },
+  DeleteScrapedPostsResult
+>;
+
 type CleanupIngestionArtifactsUntilDoneResult = {
   batchSize: number;
   maxBatches: number;
@@ -82,9 +100,9 @@ type CleanupIngestionArtifactsUntilDoneResult = {
   scrapedPostCutoffUpdatedAt: number;
 };
 
-const deleteOldScrapedPostsMutation: DeleteByUpdatedAtMutation = (internal as unknown as {
+const deleteOldScrapedPostsMutation: DeleteScrapedPostsMutation = (internal as unknown as {
   scrapedPosts: {
-    deleteOlderThan: DeleteByUpdatedAtMutation;
+    deleteOlderThan: DeleteScrapedPostsMutation;
   };
 }).scrapedPosts.deleteOlderThan;
 
@@ -153,6 +171,8 @@ export const deleteExpiredEventsUntilDone = internalAction({
     let sameDayExpiredEventCount = 0;
     let beforeDateCursor: string | null = null;
     let beforeDateScanComplete = false;
+    let sameDayCursor: string | null = null;
+    let sameDayScanComplete = false;
 
     for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
       const result: DeleteExpiredEventsResult = await ctx.runMutation(deleteExpiredEventsMutation, {
@@ -160,6 +180,8 @@ export const deleteExpiredEventsUntilDone = internalAction({
         beforeDate: args.beforeDate,
         beforeDateCursor,
         beforeDateScanComplete,
+        sameDayCursor,
+        sameDayScanComplete,
       });
 
       batchesRun += 1;
@@ -173,6 +195,8 @@ export const deleteExpiredEventsUntilDone = internalAction({
       sameDayExpiredEventCount += result.sameDayExpiredEventCount;
       beforeDateCursor = result.beforeDateCursor;
       beforeDateScanComplete = result.beforeDateScanComplete;
+      sameDayCursor = result.sameDayCursor;
+      sameDayScanComplete = result.sameDayScanComplete;
 
       if (!result.hasMore) {
         break;
@@ -201,37 +225,58 @@ export const cleanupIngestionArtifactsUntilDone = internalAction({
     batchSize: v.optional(v.number()),
     maxBatches: v.optional(v.number()),
   },
+  returns: v.object({
+    batchSize: v.number(),
+    maxBatches: v.number(),
+    batchesRun: v.number(),
+    deletedIngestionJobCount: v.number(),
+    deletedScrapedPostCount: v.number(),
+    hasMore: v.boolean(),
+    ingestionJobsHaveMore: v.boolean(),
+    scrapedPostsHaveMore: v.boolean(),
+    jobCutoffUpdatedAt: v.number(),
+    scrapedPostCutoffUpdatedAt: v.number(),
+  }),
   handler: async (ctx, args): Promise<CleanupIngestionArtifactsUntilDoneResult> => {
-    const batchSize = normalizeBatchSize(args.batchSize ?? DEFAULT_INGESTION_ARTIFACT_CLEANUP_BATCH_SIZE);
+    const batchSize = normalizeBatchSize(
+      args.batchSize ?? DEFAULT_INGESTION_ARTIFACT_CLEANUP_BATCH_SIZE,
+    );
     const maxBatches = normalizeMaxBatches(
       args.maxBatches ?? DEFAULT_INGESTION_ARTIFACT_CLEANUP_MAX_BATCHES,
     );
     const now = Date.now();
     const jobCutoffUpdatedAt = now - INGESTION_JOB_RETENTION_MS;
-    const scrapedPostCutoffUpdatedAt = now - SCRAPED_POST_RETENTION_MS;
+    const requestedScrapedPostCutoffUpdatedAt = now - SCRAPED_POST_RETENTION_MS;
+    let scrapedPostCutoffUpdatedAt = requestedScrapedPostCutoffUpdatedAt;
     let deletedIngestionJobCount = 0;
     let deletedScrapedPostCount = 0;
     let ingestionJobsHaveMore = false;
     let scrapedPostsHaveMore = false;
+    let scrapedPostCursor: string | null = null;
     let batchesRun = 0;
 
     for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
-      const [jobResult, scrapedPostResult] = await Promise.all([
-        ctx.runMutation(deleteOldIngestionJobsMutation, {
-          cutoffUpdatedAt: jobCutoffUpdatedAt,
-          limit: batchSize,
-        }),
-        ctx.runMutation(deleteOldScrapedPostsMutation, {
-          cutoffUpdatedAt: scrapedPostCutoffUpdatedAt,
-          limit: batchSize,
-        }),
-      ]);
+      const results: [DeleteByUpdatedAtResult, DeleteScrapedPostsResult] =
+        await Promise.all([
+          ctx.runMutation(deleteOldIngestionJobsMutation, {
+            cutoffUpdatedAt: jobCutoffUpdatedAt,
+            limit: batchSize,
+          }),
+          ctx.runMutation(deleteOldScrapedPostsMutation, {
+            cutoffUpdatedAt: scrapedPostCutoffUpdatedAt,
+            cursor: scrapedPostCursor,
+            limit: batchSize,
+          }),
+        ]);
+      const [jobResult, scrapedPostResult] = results;
 
       batchesRun += 1;
       deletedIngestionJobCount += jobResult.deletedCount;
       deletedScrapedPostCount += scrapedPostResult.deletedCount;
       ingestionJobsHaveMore = jobResult.hasMore;
       scrapedPostsHaveMore = scrapedPostResult.hasMore;
+      scrapedPostCursor = scrapedPostResult.continueCursor;
+      scrapedPostCutoffUpdatedAt = scrapedPostResult.cutoffUpdatedAt;
 
       if (!ingestionJobsHaveMore && !scrapedPostsHaveMore) {
         break;

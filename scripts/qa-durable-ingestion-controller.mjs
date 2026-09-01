@@ -17,6 +17,7 @@ import {
   durableControlsFor,
   selectDeterministicCanary,
 } from "../lib/pipeline/durable-ingestion-controller.ts";
+import { readIngestionArchitectureSource } from "./qa-support/ingestion-architecture-source.mjs";
 
 const controller = readFileSync("convex/durableIngestionRuns.ts", "utf8");
 const schema = readFileSync("convex/schema.ts", "utf8");
@@ -26,7 +27,7 @@ const dailyRoute = readFileSync("app/api/cron/durable-ingestion/daily/route.ts",
 const dailyLauncher = readFileSync("scripts/ig-event-durable-daily-runner", "utf8");
 const dailyService = readFileSync("ops/systemd/ig-event-durable-daily.service", "utf8");
 const dailyTimer = readFileSync("ops/systemd/ig-event-durable-daily.timer", "utf8");
-const ingestionPipeline = readFileSync("lib/pipeline/run-instagram-ingestion.ts", "utf8");
+const ingestionPipeline = readIngestionArchitectureSource();
 
 const handles = Array.from({ length: 632 }, (_, index) => `venue_${String(index).padStart(3, "0")}`);
 const canary = selectDeterministicCanary(handles);

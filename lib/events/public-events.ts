@@ -25,7 +25,6 @@ import {
   normalizeHandle,
   toSearchableText,
 } from "@/lib/pipeline/venue-normalization";
-import { loadVenueNameOverridesByHandle } from "@/lib/pipeline/venue-name-overrides";
 import { chunkPublicVenueIds } from "@/lib/events/public-venue-batching";
 import { buildPublicCalendarDateWindows } from "@/lib/events/public-calendar-windows";
 import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
@@ -97,6 +96,7 @@ export type PublicEvent = {
 
 type VenueRecord = {
   _id: string;
+  aliases?: string[];
   name: string;
   instagramHandle: string;
   category?: string | null;
@@ -123,7 +123,6 @@ type PublicEventsCacheEntry = {
 type VenueLookup = {
   canonicalVenueNamesByHandle: Record<string, string>;
   publicVenueIds: Set<string>;
-  venueNameOverridesByHandle: Record<string, string>;
   venuesByHandle: Map<string, VenueRecord>;
   venuesByName: Map<string, VenueRecord>;
 };
@@ -221,17 +220,11 @@ function buildVenuesByHandle(venues: VenueRecord[]): Map<string, VenueRecord> {
   return venuesByHandle;
 }
 
-function buildVenuesByName(
-  venues: VenueRecord[],
-  venueNameOverridesByHandle: Record<string, string>,
-): Map<string, VenueRecord> {
+function buildVenuesByName(venues: VenueRecord[]): Map<string, VenueRecord> {
   const venuesByName = new Map<string, VenueRecord>();
 
   for (const venue of venues) {
-    for (const name of [
-      venue.name,
-      venueNameOverridesByHandle[normalizeHandle(venue.instagramHandle)],
-    ]) {
+    for (const name of [venue.name, ...(venue.aliases ?? [])]) {
       const key = normalizeVenueLookupKey(name ?? "");
       if (key && !venuesByName.has(key)) {
         venuesByName.set(key, venue);
@@ -302,21 +295,14 @@ async function loadVenueLookup(
     .map((event) => createVenueRecordFromEvent(event, publicVenueIds))
     .filter((venue): venue is VenueRecord => venue !== null);
   const lookupVenues = [...activeVenues, ...venues, ...denormalizedVenues];
-  let venueNameOverridesByHandle: Record<string, string> = {};
-  try {
-    venueNameOverridesByHandle = await loadVenueNameOverridesByHandle();
-  } catch {
-    venueNameOverridesByHandle = {};
-  }
   const canonicalVenueNamesByHandle = buildCanonicalVenueNamesByHandle(
     lookupVenues.filter((venue) => venue.instagramHandle),
   );
   return {
     canonicalVenueNamesByHandle,
     publicVenueIds,
-    venueNameOverridesByHandle,
     venuesByHandle: buildVenuesByHandle(lookupVenues),
-    venuesByName: buildVenuesByName(lookupVenues, venueNameOverridesByHandle),
+    venuesByName: buildVenuesByName(lookupVenues),
   };
 }
 
@@ -378,9 +364,6 @@ function normalizePublicEvent(
   const canonicalVenueName = canonicalizeVenueName(
     publicEvent.venue,
     venueLookup.canonicalVenueNamesByHandle,
-    {
-      handleVenueNamesByHandle: venueLookup.venueNameOverridesByHandle,
-    },
   );
   const venue = hasNonPublicLinkedVenue
     ? undefined

@@ -25,6 +25,7 @@ import {
   parseManifestText,
   runRepair,
 } from "./repair-durable-instagram-images.mjs";
+import { readIngestionArchitectureSource } from "./qa-support/ingestion-architecture-source.mjs";
 
 const APIFY_IMAGE = "https://images.apifyusercontent.com/example/poster.webp";
 const INSTAGRAM_IMAGE = "https://instagram.fna.fbcdn.net/example/poster.jpg";
@@ -329,10 +330,11 @@ assert.throws(() => parseArgs(["--manifest", "x.json", "--limit", "1x"]), /Expec
   assert.equal(applied.results[0].checksumSha256.length, 64);
 }
 
-const ingestionSource = read("lib/pipeline/run-instagram-ingestion.ts");
+const ingestionSource = readIngestionArchitectureSource();
 const mediaActionSource = read("convex/mediaActions.ts");
 const mediaAssetSource = read("convex/mediaAssets.ts");
 const eventsConvexSource = read("convex/events.ts");
+const eventUpdatesSource = read("convex/eventDomain/eventUpdates.ts");
 const schemaSource = read("convex/schema.ts");
 const routeSource = read("app/api/discover/images/[eventId]/route.ts");
 const eventPageSource = read("app/(main)/events/[eventId]/page.tsx");
@@ -351,12 +353,27 @@ assert.match(mediaActionSource, /computeSha256Hex/);
 assert.match(mediaActionSource, /ctx\.storage\.delete\(provisionalStorageId\)/);
 assert.match(mediaAssetSource, /event\.imageStorageId !== attachment\.storageId/);
 assert.match(mediaAssetSource, /imageStorageId: attachment\.storageId,[\s\S]*imageUrl: attachment\.url/);
+assert.match(
+  mediaAssetSource,
+  /events\.map\(\(event\) => event\._id\)[\s\S]*refreshEventPublicationStates/,
+  "Media attachment/removal must refresh every bounded event matched by the source identity.",
+);
+assert.match(
+  mediaAssetSource,
+  /isEventPubliclyVisible\(ctx, event\)/,
+  "Public image reads must honor the materialized publication gate.",
+);
 assert.match(mediaAssetSource, /assertCoherentPersistedSourceIdentity/);
 assert.match(mediaAssetSource, /matchingPosts, matchingEvents/);
 assert.match(mediaAssetSource, /withIndex\("by_image_storage_id"/);
 assert.match(mediaAssetSource, /ctx\.storage\.delete\(asset\.storageId\)/);
-assert.match(eventsConvexSource, /const nextImageStorageId =/);
-assert.match(eventsConvexSource, /imageStorageId: nextImageStorageId/);
+assert.match(
+  eventsConvexSource,
+  /export const updateEvent = mutation[\s\S]*handler: updateEventHandler/,
+  "The event facade must bind the reviewed update handler.",
+);
+assert.match(eventUpdatesSource, /const nextImageStorageId =/);
+assert.match(eventUpdatesSource, /imageStorageId: nextImageStorageId/);
 assert.match(ingestionSource, /getNonExpiringPublicEventImageUrl\(selectedImageUrl\)/);
 assert.match(ingestionSource, /hasDurableMediaAttachmentTarget && durableMediaCandidate/);
 assert.match(ingestionSource, /isExistingEventEligibleForDurableMediaRetry/);

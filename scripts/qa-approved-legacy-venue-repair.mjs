@@ -13,6 +13,7 @@ const venueId = "qa-la-variete";
 const sourceId = "qa-la-variete-source";
 const scrapedPostId = "qa-la-variete-post";
 const sourceLinkId = "qa-la-variete-link";
+const sourceOccurrenceId = "qa-la-variete-source-occurrence";
 const receiptId = "qa-la-variete-receipt";
 const sourceHandle = "lavariete.belgrade";
 const sourceIdentity = "instagram-source-identity-v1:qa-la-variete";
@@ -133,6 +134,7 @@ function makeFixture(overrides = {}) {
     sourceFingerprint,
     sourceIdentity,
     sourceOccurrenceKey,
+    sourceOccurrenceId,
     updatedAt: 1_900,
   };
   const expectedOccurrence = {
@@ -157,12 +159,34 @@ function makeFixture(overrides = {}) {
     sourceIdentity,
     updatedAt: 1_900,
   };
+  const sourceOccurrence = {
+    _id: sourceOccurrenceId,
+    _creationTime: 1,
+    canonicalEventId: eventId,
+    createdAt: 1_900,
+    factsJson: JSON.stringify(expectedOccurrence),
+    normalizedOccurrenceJson: JSON.stringify({
+      ...expectedOccurrence,
+      eventType: event.eventType,
+      venueId: null,
+    }),
+    sourceFingerprint,
+    sourceIdentity,
+    sourceOccurrenceKey,
+    state: "satisfied",
+    updatedAt: 1_900,
+    venueResolutionStatus: "unresolved",
+  };
   return {
     event: { ...event, ...(overrides.event ?? {}) },
     receipt: { ...receipt, ...(overrides.receipt ?? {}) },
     scrapedPost: { ...scrapedPost, ...(overrides.scrapedPost ?? {}) },
     source: { ...source, ...(overrides.source ?? {}) },
     sourceLink: { ...sourceLink, ...(overrides.sourceLink ?? {}) },
+    sourceOccurrence: {
+      ...sourceOccurrence,
+      ...(overrides.sourceOccurrence ?? {}),
+    },
     venue: { ...venue, ...(overrides.venue ?? {}) },
   };
 }
@@ -181,8 +205,19 @@ function readIndexCriteria(configure) {
 
 function makeHarness(overrides = {}) {
   const fixture = makeFixture(overrides);
+  const topologyEpoch = {
+    _id: "qa-approved-legacy-topology-epoch",
+    key: "source-occurrence-topology-v1",
+    currentEpoch: 0,
+    verifiedEpoch: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  };
   const records = new Map(
-    Object.values(fixture).map((record) => [record._id, structuredClone(record)]),
+    [...Object.values(fixture), topologyEpoch].map((record) => [
+      record._id,
+      structuredClone(record),
+    ]),
   );
   const audits = [];
   const patches = [];
@@ -192,6 +227,8 @@ function makeHarness(overrides = {}) {
     instagramSourceOccurrenceReceipts: [fixture.receipt],
     instagramSources: [fixture.source],
     scrapedPosts: [fixture.scrapedPost],
+    sourceOccurrences: [fixture.sourceOccurrence],
+    sourceOccurrenceTopologyEpoch: [topologyEpoch],
   };
   const ctx = {
     auth: { getUserIdentity: async () => null },
@@ -289,6 +326,7 @@ assert.deepEqual(result, {
 });
 const repairedEvent = success.records.get(eventId);
 const repairedReceipt = success.records.get(receiptId);
+const repairedSourceOccurrence = success.records.get(sourceOccurrenceId);
 assert.equal(repairedEvent.venue, "La Variete");
 assert.equal(repairedEvent.venueId, venueId);
 assert.equal(repairedEvent.venueInstagramHandle, sourceHandle);
@@ -300,6 +338,12 @@ assert.equal(repairedFields.canonicalVenueLocation, "Francuska 6");
 assert.equal(repairedFields.rawVenueMatchesCanonicalLocation, true);
 assert.equal(repairedFields.manualVenueCanonicalizationVersion, 1);
 assert.equal(repairedReceipt.expectedOccurrences[0].venue, "La Variete");
+assert.equal(
+  JSON.parse(repairedSourceOccurrence.normalizedOccurrenceJson).venue,
+  "La Variete",
+);
+assert.equal(repairedSourceOccurrence.venueId, venueId);
+assert.equal(repairedSourceOccurrence.venueResolutionStatus, "resolved");
 assert.deepEqual(repairedReceipt.satisfiedOccurrences, [
   { eventId, key: sourceOccurrenceKey },
 ]);
@@ -314,9 +358,14 @@ assert.equal(await isCanonicallyGroundedApprovedEvent(success.ctx, repairedEvent
 assert.equal(success.audits.length, 1);
 assert.equal(success.audits[0].action, "approved_legacy_venue_repaired");
 assert.deepEqual(
-  success.patches.map((patch) => patch.id),
-  [eventId, receiptId],
-  "The repair must update only the event and its exact occurrence receipt.",
+  [...new Set(success.patches.map((patch) => patch.id))].sort(),
+  [
+    eventId,
+    receiptId,
+    sourceOccurrenceId,
+    "qa-approved-legacy-topology-epoch",
+  ].sort(),
+  "The repair must update only the event, its exact provenance, and the topology verification frontier.",
 );
 
 for (const [label, overrides, expectedError] of [
@@ -339,6 +388,15 @@ for (const [label, overrides, expectedError] of [
     "changed source link",
     { sourceLink: { sourceFingerprint: `instagram-source-v2:${"c".repeat(64)}` } },
     /event source link changed/iu,
+  ],
+  [
+    "non-post source link URL",
+    {
+      sourceLink: {
+        instagramPostUrl: "https://www.instagram.com/lavariete.belgrade/",
+      },
+    },
+    /canonical Instagram post URL/iu,
   ],
 ]) {
   const harness = makeHarness(overrides);

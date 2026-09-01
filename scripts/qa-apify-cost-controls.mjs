@@ -36,6 +36,7 @@ import {
   createInitialIngestionBatchState,
   markFreshFetchNotAttempted,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
+import { readIngestionArchitectureSource } from "./qa-support/ingestion-architecture-source.mjs";
 import { loadOperationalVenueRecords } from "../lib/pipeline/operational-venues.ts";
 import {
   MAX_CRON_INGESTION_JOB_HANDLES,
@@ -543,10 +544,7 @@ const convexSchemaSource = readFileSync(
   new URL("../convex/schema.ts", import.meta.url),
   "utf8",
 );
-const ingestionRunnerSource = readFileSync(
-  new URL("../lib/pipeline/run-instagram-ingestion.ts", import.meta.url),
-  "utf8",
-);
+const ingestionRunnerSource = readIngestionArchitectureSource();
 const extractionSource = readFileSync(
   new URL("../lib/ai/extract-event-data.ts", import.meta.url),
   "utf8",
@@ -690,27 +688,27 @@ assert.doesNotMatch(
 );
 assert.match(
   instagramSourcesSource,
-  /listFreshFetchAttemptMetadataPage[\s\S]{0,700}by_active_lastFetchAttemptAt[\s\S]{0,240}\.paginate\(args\.paginationOpts\)/,
-  "active cooldown reads must be indexed and explicitly paginated",
+  /listFreshFetchAttemptMetadataPage[\s\S]{0,700}by_active_lastFetchAttemptAt[\s\S]{0,360}clampQueryPaginationOptions/,
+  "active cooldown reads must be indexed, paginated, and request-bounded",
 );
 assert.match(
   instagramSourcesSource,
-  /listActiveSourcesPage[\s\S]{0,500}by_active[\s\S]{0,160}\.paginate\(args\.paginationOpts\)/,
-  "active explicit sources must be paginated",
+  /listActiveSourcesPage[\s\S]{0,500}by_active[\s\S]{0,300}clampQueryPaginationOptions/,
+  "active explicit sources must be paginated and request-bounded",
 );
 assert.match(
   instagramSourcesSource,
-  /listLegacyVenueSourcesPage[\s\S]{0,600}query\("venues"\)\.paginate\(args\.paginationOpts\)[\s\S]{0,220}filter\(isVenueScrapeActive\)/,
+  /listLegacyVenueSourcesPage[\s\S]{0,700}query\("venues"\)[\s\S]{0,240}clampQueryPaginationOptions[\s\S]{0,300}filter\(isVenueScrapeActive\)/,
   "legacy venue sources must paginate all lifecycle shapes and apply effective scrape activation",
 );
 assert.match(
   instagramSourcesSource,
-  /listActiveSourceHandlesPage[\s\S]{0,500}by_active[\s\S]{0,180}\.paginate\(args\.paginationOpts\)[\s\S]{0,180}source\.handle/,
+  /listActiveSourceHandlesPage[\s\S]{0,500}by_active[\s\S]{0,300}clampQueryPaginationOptions[\s\S]{0,220}source\.handle/,
   "new-job source discovery must use a compact handle-only active-source page",
 );
 assert.match(
   instagramSourcesSource,
-  /listLegacyVenueHandlesPage[\s\S]{0,600}query\("venues"\)\.paginate\(args\.paginationOpts\)[\s\S]{0,220}filter\(isVenueScrapeActive\)/,
+  /listLegacyVenueHandlesPage[\s\S]{0,700}query\("venues"\)[\s\S]{0,240}clampQueryPaginationOptions[\s\S]{0,300}filter\(isVenueScrapeActive\)/,
   "new-job legacy discovery must use effective lifecycle on a compact handle-only page",
 );
 const compatibilityActivePageSource = instagramSourcesSource.slice(
@@ -755,8 +753,8 @@ assert.match(venueHandleMigrationSource, /verificationUpdatesRemaining/);
 assert.match(venueHandleMigrationSource, /verifiedIdempotent: true/);
 assert.match(
   ingestionJobsSource,
-  /listJobsForRepairPage[\s\S]{0,600}by_createdAt[\s\S]{0,180}\.paginate\(args\.paginationOpts\)/,
-  "maintenance repair must use its own complete paginated job query",
+  /listJobsForRepairPage[\s\S]{0,600}by_createdAt[\s\S]{0,300}clampQueryPaginationOptions/,
+  "maintenance repair must use its own complete request-bounded paginated job query",
 );
 assert.match(instagramSourcesSource, /\.take\(limit \+ 1\)/);
 assert.match(

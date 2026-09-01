@@ -2,6 +2,7 @@ import {
   normalizeHandle,
   toSearchableText,
 } from "../pipeline/venue-normalization.ts";
+import { canonicalizeSourceUrl } from "../domain/source-url.ts";
 
 const GENERIC_TITLE_TOKENS = new Set([
   "party",
@@ -99,12 +100,11 @@ export function normalizeInstagramUrl(value: string | null | undefined): string 
   if (!value) {
     return "";
   }
-
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[?#].*$/, "")
-    .replace(/\/+$/, "");
+  const canonical = canonicalizeSourceUrl("instagram", value);
+  if (canonical.ok) return canonical.value.canonicalUrl;
+  // Legacy duplicate fixtures include malformed values. Preserve their old
+  // comparison behavior without making it a competing source-URL authority.
+  return value.trim().toLowerCase().replace(/[?#].*$/, "").replace(/\/+$/, "");
 }
 
 function isLikelyHandleString(value: string): boolean {

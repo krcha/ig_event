@@ -110,6 +110,7 @@ assert.deepEqual(
 );
 
 const eventsSource = read("convex/events.ts");
+const moderationReadsSource = read("convex/eventDomain/moderationReads.ts");
 const routeSource = read("app/api/admin/events/route.ts");
 const dashboardSource = read("components/admin/moderation-dashboard.tsx");
 const authQaSource = read("scripts/qa-convex-auth-boundaries.mjs");
@@ -117,9 +118,9 @@ const packageJson = JSON.parse(read("package.json"));
 const releaseCheckSource = read("scripts/release-check.mjs");
 
 const projectionSource = section(
-  eventsSource,
+  moderationReadsSource,
   "function projectModerationDuplicateContextEvent",
-  "export const listModerationDuplicateContextByDates",
+  "export async function listModerationDuplicateContextByDatesHandler",
 );
 for (const heavyField of [
   "rawExtractionJson",
@@ -136,13 +137,22 @@ for (const heavyField of [
 assert.match(projectionSource, /MODERATION_DUPLICATE_CONTEXT_CAPTION_LENGTH/);
 assert.match(projectionSource, /MODERATION_DUPLICATE_CONTEXT_DESCRIPTION_LENGTH/);
 
-const querySource = section(
+const queryFacadeSource = section(
   eventsSource,
   "export const listModerationDuplicateContextByDates",
   "export const getPublicApprovedEvent",
 );
-assert.match(querySource, /args:\s*\{\s*dates: v\.array\(v\.string\(\)\)/);
-assert.match(querySource, /returns: moderationDuplicateContextResult/);
+assert.match(queryFacadeSource, /args:\s*\{\s*dates: v\.array\(v\.string\(\)\)/);
+assert.match(queryFacadeSource, /returns: moderationDuplicateContextResult/);
+assert.match(
+  queryFacadeSource,
+  /handler: listModerationDuplicateContextByDatesHandler/,
+);
+const querySource = section(
+  moderationReadsSource,
+  "export async function listModerationDuplicateContextByDatesHandler",
+  "export async function classifyPendingModerationUniquenessHandler",
+);
 assert.match(querySource, /await requireAdminIdentity\(ctx\)/);
 assert.match(querySource, /args\.dates\.length > MAX_MODERATION_DUPLICATE_CONTEXT_DATES/);
 assert.match(
@@ -166,17 +176,17 @@ assert.match(
 );
 assert.doesNotMatch(querySource, /\.collect\(\)/);
 assert.match(
-  eventsSource,
+  moderationReadsSource,
   /const MAX_MODERATION_DUPLICATE_CONTEXT_EVENTS = 100;/,
   "Duplicate-context output must remain capped at the known-safe 100 rows.",
 );
 assert.match(
-  eventsSource,
+  moderationReadsSource,
   /const MAX_MODERATION_DUPLICATE_CONTEXT_EVENTS_PER_DATE = 8;/,
   "Each date query must read no more than eight event documents.",
 );
 assert.match(
-  eventsSource,
+  moderationReadsSource,
   /const MODERATION_DUPLICATE_CONTEXT_DATE_BATCH_SIZE = 4;/,
   "Date reads must use small batches so the global row cap is checked frequently.",
 );

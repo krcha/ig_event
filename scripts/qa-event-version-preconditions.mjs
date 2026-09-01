@@ -12,6 +12,7 @@ import {
   assertExpectedEventUpdatedAt,
   nextEventUpdatedAt,
 } from "../lib/events/event-update-precondition.ts";
+import { readIngestionArchitectureSource } from "./qa-support/ingestion-architecture-source.mjs";
 
 process.env.ADMIN_CLERK_USER_IDS = "qa-owner";
 
@@ -34,9 +35,32 @@ function event(id, overrides = {}) {
   };
 }
 
-function makeCtx(initialEvent) {
+function makeCtx(initialEvent, options = {}) {
   const initialEvents = Array.isArray(initialEvent) ? initialEvent : [initialEvent];
   const events = new Map(initialEvents.map((item) => [item._id, structuredClone(item)]));
+  const sourceLinks = new Map(
+    (options.sourceBoundEventIds ?? []).map((eventId) => [
+      `source-link-${eventId}`,
+      {
+        _id: `source-link-${eventId}`,
+        eventId,
+      },
+    ]),
+  );
+  const sourceOccurrences = new Map();
+  const topologyEpochs = new Map([
+    [
+      "source-occurrence-topology-epoch",
+      {
+        _id: "source-occurrence-topology-epoch",
+        key: "source-occurrence-topology-v1",
+        currentEpoch: 10,
+        verifiedEpoch: 10,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+  ]);
   const audits = [];
   const patches = [];
   return {
@@ -47,25 +71,65 @@ function makeCtx(initialEvent) {
         },
       },
       db: {
+        query(table) {
+          const filters = {};
+          const tableRows =
+            table === "instagramEventSources"
+              ? sourceLinks
+              : table === "sourceOccurrences"
+                ? sourceOccurrences
+                : table === "sourceOccurrenceTopologyEpoch"
+                  ? topologyEpochs
+                  : new Map();
+          const chain = {
+            withIndex(_index, configure) {
+              const builder = {
+                eq(field, value) {
+                  filters[field] = value;
+                  return builder;
+                },
+              };
+              configure(builder);
+              return chain;
+            },
+            async take(limit) {
+              return [...tableRows.values()]
+                .filter((row) =>
+                  Object.entries(filters).every(
+                    ([field, value]) => row[field] === value,
+                  ),
+                )
+                .slice(0, limit);
+            },
+          };
+          return chain;
+        },
         async get(id) {
-          return events.get(id) ?? null;
+          return events.get(id) ?? topologyEpochs.get(id) ?? null;
         },
         async patch(id, patch) {
-          const current = events.get(id);
-          if (!current) throw new Error(`missing event ${id}`);
+          const target = events.has(id) ? events : topologyEpochs;
+          const current = target.get(id);
+          if (!current) throw new Error(`missing record ${id}`);
           patches.push({ id, patch: structuredClone(patch) });
-          events.set(id, { ...current, ...patch });
+          target.set(id, { ...current, ...patch });
         },
         async insert(table, value) {
-          assert.equal(table, "eventAuditLog");
-          audits.push(structuredClone(value));
-          return `audit-${audits.length}`;
+          if (table === "eventAuditLog") {
+            audits.push(structuredClone(value));
+            return `audit-${audits.length}`;
+          }
+          assert.equal(table, "sourceOccurrenceTopologyEpoch");
+          const id = `topology-epoch-${topologyEpochs.size + 1}`;
+          topologyEpochs.set(id, { _id: id, ...structuredClone(value) });
+          return id;
         },
       },
     },
     events,
     audits,
     patches,
+    topologyEpochs,
   };
 }
 
@@ -80,17 +144,26 @@ function makeMediaCtx(initialEvent, initialAsset) {
         query(table) {
           if (table === "events") {
             return {
-              withIndex: () => ({ collect: async () => [...events.values()] }),
+              withIndex: () => ({
+                take: async (limit) => [...events.values()].slice(0, limit),
+              }),
             };
           }
           if (table === "scrapedPosts") {
             return {
-              withIndex: () => ({ collect: async () => [] }),
+              withIndex: () => ({ take: async () => [] }),
             };
           }
           if (table === "mediaAssets") {
             return {
-              withIndex: () => ({ first: async () => [...assets.values()][0] ?? null }),
+              withIndex: () => ({
+                take: async (limit) => [...assets.values()].slice(0, limit),
+              }),
+            };
+          }
+          if (table === "sourceOccurrences") {
+            return {
+              withIndex: () => ({ take: async () => [] }),
             };
           }
           throw new Error(`unexpected table ${table}`);
@@ -264,8 +337,32 @@ await setEventStatus._handler(statusMatch.ctx, {
 });
 assert.equal(statusMatch.events.get("status-match").status, "rejected");
 assert.ok(statusMatch.events.get("status-match").updatedAt > 100);
-assert.equal(statusMatch.patches.length, 1);
+assert.ok(
+  statusMatch.patches.length >= 1,
+  "Status mutation may also refresh materialized derived state in the same transaction.",
+);
 assert.equal(statusMatch.audits.length, 1);
+
+const sourceBoundStatus = makeCtx(event("status-source-bound"), {
+  sourceBoundEventIds: ["status-source-bound"],
+});
+await setEventStatus._handler(sourceBoundStatus.ctx, {
+  id: "status-source-bound",
+  status: "rejected",
+  reviewedBy: "QA owner",
+  moderationNote: "source-bound rejection must invalidate topology",
+  expectedUpdatedAt: 100,
+});
+const sourceBoundStatusEpoch = sourceBoundStatus.topologyEpochs.get(
+  "source-occurrence-topology-epoch",
+);
+assert.equal(sourceBoundStatus.events.get("status-source-bound").status, "rejected");
+assert.ok(sourceBoundStatusEpoch.currentEpoch > 10);
+assert.equal(
+  sourceBoundStatusEpoch.verifiedEpoch,
+  10,
+  "Rejecting a source-bound event must not preserve the verified topology frontier.",
+);
 
 const statusStale = makeCtx(event("status-stale"));
 await assert.rejects(
@@ -295,6 +392,29 @@ await setEventStatuses._handler(bulkMatch.ctx, {
 assert.equal(bulkMatch.events.get("bulk-a").status, "rejected");
 assert.equal(bulkMatch.events.get("bulk-b").status, "rejected");
 assert.equal(bulkMatch.audits.length, 2);
+
+const sourceBoundBulk = makeCtx(
+  [event("bulk-source-bound"), event("bulk-unbound", { updatedAt: 200 })],
+  { sourceBoundEventIds: ["bulk-source-bound"] },
+);
+await setEventStatuses._handler(sourceBoundBulk.ctx, {
+  ids: ["bulk-source-bound", "bulk-unbound"],
+  expectedVersions: [
+    { id: "bulk-source-bound", expectedUpdatedAt: 100 },
+    { id: "bulk-unbound", expectedUpdatedAt: 200 },
+  ],
+  status: "rejected",
+  reviewedBy: "QA owner",
+});
+const sourceBoundBulkEpoch = sourceBoundBulk.topologyEpochs.get(
+  "source-occurrence-topology-epoch",
+);
+assert.ok(sourceBoundBulkEpoch.currentEpoch > 10);
+assert.equal(
+  sourceBoundBulkEpoch.verifiedEpoch,
+  10,
+  "A batch containing any source-bound rejection must dirty the topology epoch.",
+);
 
 const bulkStale = makeCtx([event("bulk-stale-a"), event("bulk-stale-b", { updatedAt: 200 })]);
 await assert.rejects(
@@ -383,7 +503,7 @@ await setEventStatus._handler(statusWithoutVersion.ctx, {
 });
 assert.equal(statusWithoutVersion.events.get("status-legacy").status, "rejected");
 
-const ingestionSource = readFileSync("lib/pipeline/run-instagram-ingestion.ts", "utf8");
+const ingestionSource = readIngestionArchitectureSource();
 assert.match(ingestionSource, /expectedUpdatedAt: existingMatch\.existingEvent\.updatedAt/g);
 assert.match(ingestionSource, /updatedAt: persistedUpdate\.updatedAt/);
 const moderationRouteSource = readFileSync("app/api/admin/events/moderate/route.ts", "utf8");

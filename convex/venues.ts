@@ -20,12 +20,26 @@ import {
   type VenuePublicStatus,
 } from "../lib/venues/venue-lifecycle";
 import { requireAdminIdentity, requireAdminOrServiceSecret } from "./authz";
-import { isCanonicallyGroundedApprovedEvent } from "./publicEventGrounding";
+import {
+  isEventPubliclyVisible,
+  scheduleVenuePublicationRefresh,
+} from "./publicationPolicy";
+import {
+  deactivateVenueIdentities,
+  syncVenueRecordIdentities,
+} from "./venueIdentities";
+import {
+  assertOperationPaginationOptions,
+  clampQueryPaginationOptions,
+} from "./internal/requestBounds";
+import { assertCompleteEventVenueBindingCoverage } from "./internal/eventVenueBindingCoverage";
 
 const DEFAULT_PUBLIC_VENUE_EVENT_LIMIT = 12;
 const MAX_PUBLIC_VENUE_EVENT_LIMIT = 50;
 const DEFAULT_PUBLIC_VENUE_DIRECTORY_LIMIT = 2000;
 const MAX_PUBLIC_VENUE_DIRECTORY_LIMIT = 2000;
+const MAX_VENUE_LIFECYCLE_MIGRATION_PAGE_SIZE = 100;
+const MAX_VENUE_INGESTION_QUERY_PAGE_SIZE = 100;
 
 const venueHoursSource = v.union(
   v.literal("osm"),
@@ -38,6 +52,29 @@ const venuePublicStatus = v.union(
   v.literal("published"),
   v.literal("hidden"),
 );
+const venueLifecycleRollbackValues = v.object({
+  isActive: v.union(v.boolean(), v.null()),
+  publicStatus: v.union(venuePublicStatus, v.null()),
+  scrapeActive: v.union(v.boolean(), v.null()),
+});
+const venueLifecycleRollbackRecord = v.object({
+  id: v.id("venues"),
+  instagramHandle: v.union(v.string(), v.null()),
+  rollback: venueLifecycleRollbackValues,
+});
+const venueLifecycleCounts = v.object({
+  alreadyExplicit: v.number(),
+  legacyActiveFalse: v.number(),
+  legacyActiveMissing: v.number(),
+  legacyActiveTrue: v.number(),
+  needsMigration: v.number(),
+  scanned: v.number(),
+  targetHidden: v.number(),
+  targetPending: v.number(),
+  targetPublished: v.number(),
+  targetScrapeActive: v.number(),
+  targetScrapePaused: v.number(),
+});
 
 const normalizedInstagramHandleMigrationRow = v.object({
   id: v.id("venues"),
@@ -213,7 +250,7 @@ async function loadBoundedVenueEventCards(
   const legacy = [...handleMatches, ...identityMatches].filter((event) => !event.venueId);
   const merged = mergeUniqueEvents([...linked, ...legacy]);
   const grounding = await Promise.all(
-    merged.map((event) => isCanonicallyGroundedApprovedEvent(ctx, event)),
+    merged.map((event) => isEventPubliclyVisible(ctx, event)),
   );
   const grounded = merged.filter((_, index) => grounding[index]);
   grounded.sort(isHistory ? compareVenueEventsDesc : compareVenueEvents);
@@ -238,12 +275,20 @@ async function collectScrapeActiveVenues(ctx: QueryCtx): Promise<Doc<"venues">[]
     ctx.db
       .query("venues")
       .withIndex("by_scrapeActive", (q) => q.eq("scrapeActive", true))
-      .collect(),
+      .take(MAX_PUBLIC_VENUE_DIRECTORY_LIMIT + 1),
     ctx.db
       .query("venues")
       .withIndex("by_isActive", (q) => q.eq("isActive", true))
-      .collect(),
+      .take(MAX_PUBLIC_VENUE_DIRECTORY_LIMIT + 1),
   ]);
+  if (
+    explicit.length > MAX_PUBLIC_VENUE_DIRECTORY_LIMIT ||
+    legacy.length > MAX_PUBLIC_VENUE_DIRECTORY_LIMIT
+  ) {
+    throw new Error(
+      "Scrape-active venue compatibility result exceeds its safe bound; use the paginated ingestion query.",
+    );
+  }
   return mergeUniqueVenues([...explicit, ...legacy]).filter(isVenueScrapeActive);
 }
 
@@ -306,6 +351,7 @@ async function insertVenueLifecycleAudit(
 function toPublicVenue(venue: Doc<"venues">) {
   return {
     _id: venue._id,
+    aliases: venue.aliases ?? [],
     category: venue.category,
     googlePlaceId: venue.googlePlaceId,
     hoursError: venue.hoursError,
@@ -371,7 +417,15 @@ export const listVenues = query({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const venues = await ctx.db.query("venues").order("asc").collect();
+    const venues = await ctx.db
+      .query("venues")
+      .order("asc")
+      .take(MAX_PUBLIC_VENUE_DIRECTORY_LIMIT + 1);
+    if (venues.length > MAX_PUBLIC_VENUE_DIRECTORY_LIMIT) {
+      throw new Error(
+        "Venue compatibility list exceeds its safe bound; use listVenueIngestionFieldsPaginated.",
+      );
+    }
     return venues.map((venue) => ({
       ...venue,
       ...getEffectiveVenueLifecycle(venue),
@@ -408,7 +462,14 @@ export const listVenueIngestionFieldsPaginated = query({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const result = await ctx.db.query("venues").paginate(args.paginationOpts);
+    const result = await ctx.db
+      .query("venues")
+      .paginate(
+        clampQueryPaginationOptions(
+          args.paginationOpts,
+          MAX_VENUE_INGESTION_QUERY_PAGE_SIZE,
+        ),
+      );
     return {
       ...result,
       page: result.page.map((venue) => ({
@@ -428,7 +489,14 @@ export const listActiveVenueIngestionFieldsPaginated = query({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const result = await ctx.db.query("venues").paginate(args.paginationOpts);
+    const result = await ctx.db
+      .query("venues")
+      .paginate(
+        clampQueryPaginationOptions(
+          args.paginationOpts,
+          MAX_VENUE_INGESTION_QUERY_PAGE_SIZE,
+        ),
+      );
     return {
       ...result,
       page: result.page.filter(isVenueScrapeActive).map((venue) => ({
@@ -464,6 +532,7 @@ export const listPublicVenueFieldsByIds = query({
         ? [
             {
               _id: venue._id,
+              aliases: venue.aliases ?? [],
               category: venue.category,
               hoursJson: venue.hoursJson,
               hoursSource: venue.hoursSource,
@@ -637,15 +706,27 @@ export const createVenue = mutation({
     if (!instagramHandle) {
       throw new Error("Venue Instagram handle is required.");
     }
-    const indexedVenue = await ctx.db
-      .query("venues")
-      .withIndex("by_instagramHandle", (q) => q.eq("instagramHandle", instagramHandle))
-      .first();
-    const existingVenue =
-      indexedVenue ??
-      (await ctx.db.query("venues").collect()).find(
-        (venue) => normalizeHandle(venue.instagramHandle) === instagramHandle,
-      );
+    const [exactRows, normalizedRows] = await Promise.all([
+      ctx.db
+        .query("venues")
+        .withIndex("by_instagramHandle", (q) =>
+          q.eq("instagramHandle", instagramHandle),
+        )
+        .take(2),
+      ctx.db
+        .query("venues")
+        .withIndex("by_normalizedInstagramHandle", (q) =>
+          q.eq("normalizedInstagramHandle", instagramHandle),
+        )
+        .take(2),
+    ]);
+    const existingVenues = new Map(
+      [...exactRows, ...normalizedRows].map((venue) => [venue._id, venue]),
+    );
+    if (existingVenues.size > 1) {
+      throw new Error("Multiple venues share that normalized Instagram handle.");
+    }
+    const existingVenue = [...existingVenues.values()][0];
     if (existingVenue) {
       return existingVenue._id;
     }
@@ -675,6 +756,9 @@ export const createVenue = mutation({
       note: auditNote,
       venueId,
     });
+    const createdVenue = await ctx.db.get(venueId);
+    if (!createdVenue) throw new Error("Created venue could not be reloaded.");
+    await syncVenueRecordIdentities(ctx, createdVenue);
     return venueId;
   },
 });
@@ -730,18 +814,26 @@ export const updateVenue = mutation({
         throw new Error("Venue Instagram handle is required.");
       }
       instagramHandle = normalizedInstagramHandle;
-      const indexedVenue = await ctx.db
-        .query("venues")
-        .withIndex("by_instagramHandle", (q) =>
-          q.eq("instagramHandle", normalizedInstagramHandle),
-        )
-        .first();
-      const equivalentVenue =
-        indexedVenue ??
-        (await ctx.db.query("venues").collect()).find(
-          (venue) => normalizeHandle(venue.instagramHandle) === normalizedInstagramHandle,
-        );
-      if (equivalentVenue && equivalentVenue._id !== args.id) {
+      const [exactRows, normalizedRows] = await Promise.all([
+        ctx.db
+          .query("venues")
+          .withIndex("by_instagramHandle", (q) =>
+            q.eq("instagramHandle", normalizedInstagramHandle),
+          )
+          .take(2),
+        ctx.db
+          .query("venues")
+          .withIndex("by_normalizedInstagramHandle", (q) =>
+            q.eq("normalizedInstagramHandle", normalizedInstagramHandle),
+          )
+          .take(2),
+      ]);
+      const equivalentVenues = new Map(
+        [...exactRows, ...normalizedRows].map((venue) => [venue._id, venue]),
+      );
+      if (
+        [...equivalentVenues.values()].some((venue) => venue._id !== args.id)
+      ) {
         throw new Error("A venue with that normalized Instagram handle already exists.");
       }
     }
@@ -771,9 +863,73 @@ export const updateVenue = mutation({
         ? { category: canonicalizeVenueCategory(explicitPatch.category) }
         : {}),
     };
+    const denormalizedFields = [
+      "name",
+      "instagramHandle",
+      "category",
+      "location",
+      "latitude",
+      "longitude",
+    ] as const;
+    const changesDenormalizedIdentity = denormalizedFields.some(
+      (field) =>
+        Object.prototype.hasOwnProperty.call(patch, field) &&
+        patch[field] !== existing[field],
+    );
+    if (changesDenormalizedIdentity) {
+      const existingHandle = normalizeHandle(existing.instagramHandle);
+      const [linkedEvents, linkedOccurrences, legacyHandleEvents, legacyIdentityEvents] =
+        await Promise.all([
+          ctx.db
+            .query("events")
+            .withIndex("by_venueId", (q) => q.eq("venueId", existing._id))
+            .take(1),
+          ctx.db
+            .query("sourceOccurrences")
+            .withIndex("by_venue", (q) => q.eq("venueId", existing._id))
+            .take(1),
+          existingHandle
+            ? ctx.db
+                .query("events")
+                .withIndex("by_normalizedVenueHandle_status_date", (q) =>
+                  q.eq("normalizedVenueInstagramHandle", existingHandle),
+                )
+                .take(1)
+            : Promise.resolve([]),
+          existingHandle
+            ? ctx.db
+                .query("events")
+                .withIndex("by_normalizedVenueIdentity_status_date", (q) =>
+                  q.eq("normalizedVenueIdentity", `instagram:${existingHandle}`),
+                )
+                .take(1)
+            : Promise.resolve([]),
+        ]);
+      if (
+        linkedEvents.length > 0 ||
+        linkedOccurrences.length > 0 ||
+        legacyHandleEvents.length > 0 ||
+        legacyIdentityEvents.length > 0
+      ) {
+        throw new Error(
+          "Referenced venue identity/public fields require a bounded venue-rebind migration; no venue was changed.",
+        );
+      }
+    }
     const before = lifecycleAuditSnapshot(existing);
     const after = lifecycleAuditSnapshot({ ...existing, ...patch });
+    if (
+      before.effectivePublicStatus === "published" &&
+      after.effectivePublicStatus !== "published"
+    ) {
+      await assertCompleteEventVenueBindingCoverage(ctx);
+    }
     await ctx.db.patch(args.id, { ...patch, updatedAt: now });
+    await syncVenueRecordIdentities(ctx, {
+      ...existing,
+      ...patch,
+      updatedAt: now,
+    });
 
     if (
       (explicitPatch.scrapeActive !== undefined || legacyActive !== undefined) &&
@@ -802,6 +958,7 @@ export const updateVenue = mutation({
         note: args.auditNote,
         venueId: args.id,
       });
+      await scheduleVenuePublicationRefresh(ctx, args.id);
     }
     return { updated: true, updatedAt: now };
   },
@@ -814,16 +971,12 @@ export const listInstagramHandleNormalizationPage = query({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    if (
-      !Number.isInteger(args.paginationOpts.numItems) ||
-      args.paginationOpts.numItems < 1 ||
-      args.paginationOpts.numItems > MAX_INSTAGRAM_HANDLE_NORMALIZATION_PAGE_SIZE
-    ) {
-      throw new Error(
-        `Venue handle normalization pages must contain 1 to ${MAX_INSTAGRAM_HANDLE_NORMALIZATION_PAGE_SIZE} rows.`,
-      );
-    }
-    const result = await ctx.db.query("venues").paginate(args.paginationOpts);
+    const paginationOpts = assertOperationPaginationOptions(
+      args.paginationOpts,
+      MAX_INSTAGRAM_HANDLE_NORMALIZATION_PAGE_SIZE,
+      "Venue handle normalization pages",
+    );
+    const result = await ctx.db.query("venues").paginate(paginationOpts);
     return {
       ...result,
       page: result.page.map((venue) => ({
@@ -972,22 +1125,46 @@ export const listVenueAuditLog = query({
 
 export const previewVenueLifecycleMigration = query({
   args: {
+    paginationOpts: paginationOptsValidator,
     serviceSecret: v.optional(v.string()),
   },
+  returns: v.object({
+    counts: venueLifecycleCounts,
+    continueCursor: v.string(),
+    isDone: v.boolean(),
+    rollbackManifest: v.array(venueLifecycleRollbackRecord),
+    rollbackMapping: v.object({
+      afterIndependentEdits: v.string(),
+      beforeIndependentEdits: v.string(),
+    }),
+    sampleChangesJson: v.string(),
+  }),
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const venues = await ctx.db.query("venues").collect();
-    const plan = buildVenueLifecycleMigrationPlan(venues);
+    const paginationOpts = assertOperationPaginationOptions(
+      args.paginationOpts,
+      MAX_VENUE_LIFECYCLE_MIGRATION_PAGE_SIZE,
+      "Venue lifecycle preview page",
+    );
+    const page = await ctx.db
+      .query("venues")
+      .order("asc")
+      .paginate(paginationOpts);
+    const plan = buildVenueLifecycleMigrationPlan(page.page);
     return {
       counts: plan.counts,
-      sampleChanges: plan.changes.slice(0, 20),
-      rollbackManifest: buildVenueLifecycleRollbackManifest(plan.changes),
+      continueCursor: page.continueCursor,
+      isDone: page.isDone,
+      rollbackManifest: buildVenueLifecycleRollbackManifest(plan.changes).map(
+        (record) => ({ ...record, id: record.id as Id<"venues"> }),
+      ),
       rollbackMapping: {
         beforeIndependentEdits:
           "restore each isActive, scrapeActive, and publicStatus field from its rollback value; null means remove only that field, otherwise set the exact value",
         afterIndependentEdits:
           "restore the referenced Convex backup; one legacy boolean cannot preserve independent states",
       },
+      sampleChangesJson: JSON.stringify(plan.changes.slice(0, 20)),
     };
   },
 });
@@ -995,10 +1172,15 @@ export const previewVenueLifecycleMigration = query({
 export const applyVenueLifecycleMigrationBatch = mutation({
   args: {
     backupReference: v.string(),
-    expectedRollbackManifestJson: v.string(),
-    limit: v.optional(v.number()),
+    rollbackManifest: v.array(venueLifecycleRollbackRecord),
     serviceSecret: v.optional(v.string()),
   },
+  returns: v.object({
+    applied: v.number(),
+    appliedIds: v.array(v.id("venues")),
+    backupReference: v.string(),
+    beforeCounts: venueLifecycleCounts,
+  }),
   handler: async (ctx, args) => {
     const authorization = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     const backupReference = args.backupReference.trim();
@@ -1006,28 +1188,57 @@ export const applyVenueLifecycleMigrationBatch = mutation({
       throw new Error("A non-empty backupReference is required.");
     }
 
-    const limit = normalizeLimit(args.limit, 50, 100);
-    const venues = await ctx.db.query("venues").collect();
-    const plan = buildVenueLifecycleMigrationPlan(venues);
-    const currentRollbackManifestJson = JSON.stringify(
-      buildVenueLifecycleRollbackManifest(plan.changes),
-    );
-    if (args.expectedRollbackManifestJson !== currentRollbackManifestJson) {
+    if (
+      args.rollbackManifest.length < 1 ||
+      args.rollbackManifest.length > MAX_VENUE_LIFECYCLE_MIGRATION_PAGE_SIZE
+    ) {
       throw new Error(
-        "Venue lifecycle state changed after rollback-manifest review; export and review a fresh manifest before applying.",
+        `Venue lifecycle apply requires 1-${MAX_VENUE_LIFECYCLE_MIGRATION_PAGE_SIZE} reviewed rollback records.`,
+      );
+    }
+    const uniqueIds = new Set(args.rollbackManifest.map((record) => record.id));
+    if (uniqueIds.size !== args.rollbackManifest.length) {
+      throw new Error("Venue lifecycle rollback records must have unique venue IDs.");
+    }
+    const loaded = await Promise.all(
+      args.rollbackManifest.map((record) => ctx.db.get(record.id)),
+    );
+    if (loaded.some((venue) => !venue)) {
+      throw new Error("A reviewed venue no longer exists.");
+    }
+    const venues = loaded.filter((venue): venue is Doc<"venues"> => Boolean(venue));
+    const plan = buildVenueLifecycleMigrationPlan(venues);
+    if (
+      plan.changes.length !== args.rollbackManifest.length ||
+      JSON.stringify(buildVenueLifecycleRollbackManifest(plan.changes)) !==
+        JSON.stringify(args.rollbackManifest)
+    ) {
+      throw new Error(
+        "Venue lifecycle state changed after rollback-manifest review; export and review a fresh paginated manifest before applying.",
       );
     }
     const venueById = new Map(venues.map((venue) => [venue._id, venue] as const));
-    const batch = plan.changes.slice(0, limit);
-    const now = Date.now();
+    if (
+      plan.changes.some((change) => {
+        const venue = venueById.get(change.id as Id<"venues">);
+        return Boolean(
+          venue &&
+            isVenuePublic(venue) &&
+            !isVenuePublic({ ...venue, ...change.apply }),
+        );
+      })
+    ) {
+      await assertCompleteEventVenueBindingCoverage(ctx);
+    }
     let applied = 0;
     const appliedIds: Id<"venues">[] = [];
 
-    for (const change of batch) {
+    for (const change of plan.changes) {
       const venue = venueById.get(change.id as Id<"venues">);
       if (!venue || getEffectiveVenueLifecycle(venue).source === "explicit") {
-        continue;
+        throw new Error("Reviewed venue lifecycle row is no longer eligible.");
       }
+      const now = Math.max(Date.now(), venue.updatedAt + 1);
       const before = lifecycleAuditSnapshot(venue);
       const after = lifecycleAuditSnapshot({ ...venue, ...change.apply });
       await ctx.db.patch(venue._id, {
@@ -1044,6 +1255,9 @@ export const applyVenueLifecycleMigrationBatch = mutation({
         note: `backup=${backupReference}; rollback=${JSON.stringify(change.rollback)}`,
         venueId: venue._id,
       });
+      if (before.effectivePublicStatus !== after.effectivePublicStatus) {
+        await scheduleVenuePublicationRefresh(ctx, venue._id);
+      }
       applied += 1;
       appliedIds.push(venue._id);
     }
@@ -1053,7 +1267,6 @@ export const applyVenueLifecycleMigrationBatch = mutation({
       appliedIds,
       backupReference,
       beforeCounts: plan.counts,
-      remaining: Math.max(0, plan.counts.needsMigration - applied),
     };
   },
 });
@@ -1073,16 +1286,31 @@ export const patchVenueHours = mutation({
 export const removeVenue = mutation({
   args: { id: v.id("venues") },
   handler: async (ctx, args) => {
-    await requireAdminIdentity(ctx);
-    const favoriteRefs = await ctx.db
-      .query("favoriteVenues")
-      .withIndex("by_venue", (q) => q.eq("venueId", args.id))
-      .collect();
-
-    for (const favoriteRef of favoriteRefs) {
-      await ctx.db.delete(favoriteRef._id);
+    const identity = await requireAdminIdentity(ctx);
+    const venue = await ctx.db.get(args.id);
+    if (!venue) return;
+    if (isVenuePublic(venue)) {
+      await assertCompleteEventVenueBindingCoverage(ctx);
     }
-
-    await ctx.db.delete(args.id);
+    const now = Math.max(Date.now(), venue.updatedAt + 1);
+    const before = lifecycleAuditSnapshot(venue);
+    const lifecyclePatch = {
+      isActive: false,
+      publicStatus: "hidden" as const,
+      scrapeActive: false,
+      updatedAt: now,
+    };
+    await ctx.db.patch(args.id, lifecyclePatch);
+    await deactivateVenueIdentities(ctx, args.id);
+    await scheduleVenuePublicationRefresh(ctx, args.id);
+    await insertVenueLifecycleAudit(ctx, {
+      action: "venue.lifecycle.soft_removed",
+      actor: identity.subject,
+      before,
+      after: lifecycleAuditSnapshot({ ...venue, ...lifecyclePatch }),
+      createdAt: now,
+      note: "Venue retained to preserve event, source, and favorite references.",
+      venueId: venue._id,
+    });
   },
 });

@@ -11,6 +11,7 @@ import {
   sanitizeVenueLinkedPublicEventFields,
   VENUE_LINKED_PUBLIC_EVENT_FIELDS,
 } from "../lib/events/public-event-venue-fields.ts";
+import { isCompleteEventVenueBindingCoverage } from "../convex/internal/eventVenueBindingCoverage.ts";
 
 const stateMatrix = [
   {
@@ -70,6 +71,36 @@ for (const fixture of stateMatrix) {
   assert.equal(effective.publicStatus, fixture.publicStatus, fixture.label);
   assert.equal(isVenueScrapeActive(fixture.input), fixture.scrapeActive, fixture.label);
   assert.equal(isVenuePublic(fixture.input), fixture.public, fixture.label);
+}
+
+const completeVenueBindingState = {
+  key: "event-venue-bindings-v1",
+  isDone: true,
+  completedAt: 10,
+  mismatchCount: 0,
+  errorCount: 0,
+  skippedCount: 0,
+  quarantinedLineageMarkerCount: 0,
+  scannedCount: 3,
+  updatedCount: 2,
+  unchangedCount: 1,
+};
+assert.equal(isCompleteEventVenueBindingCoverage(completeVenueBindingState), true);
+for (const unsafePatch of [
+  { skippedCount: 1 },
+  { quarantinedLineageMarkerCount: 1 },
+  { mismatchCount: 1 },
+  { scannedCount: 4 },
+  { isDone: false },
+]) {
+  assert.equal(
+    isCompleteEventVenueBindingCoverage({
+      ...completeVenueBindingState,
+      ...unsafePatch,
+    }),
+    false,
+    "Venue hiding must remain gated until every historical event binding is accounted for.",
+  );
 }
 
 const venueLeakageEvent = {
@@ -178,6 +209,10 @@ const schemaSource = readFileSync("convex/schema.ts", "utf8");
 const venuesSource = readFileSync("convex/venues.ts", "utf8");
 const usersSource = readFileSync("convex/users.ts", "utf8");
 const eventsSource = readFileSync("convex/events.ts", "utf8");
+const publicEventReadsSource = readFileSync(
+  "convex/eventDomain/publicReads.ts",
+  "utf8",
+);
 const instagramSourcesSource = readFileSync("convex/instagramSources.ts", "utf8");
 const eventDetailSource = readFileSync("app/(main)/events/[eventId]/page.tsx", "utf8");
 const publicEventsSource = readFileSync("lib/events/public-events.ts", "utf8");
@@ -222,10 +257,14 @@ assert.match(eventDetailSource, /event\.venueId = venue\?\._id/);
 assert.match(publicEventsSource, /publicVenueIds/);
 assert.match(publicEventsSource, /publicVenueIds\.has\(event\.venueId/);
 assert.match(
-  eventsSource,
-  /export const getDiscoverFeed[\s\S]*?loadPublicVenueIdsForEvents[\s\S]*?projectGroup/,
+  publicEventReadsSource,
+  /export async function getDiscoverFeedHandler[\s\S]*?loadPublicVenueIdsForEvents[\s\S]*?projectGroup/,
 );
-assert.match(eventsSource, /new Set\(events\.map/);
+assert.match(eventsSource, /handler: getDiscoverFeedHandler/);
+assert.match(
+  publicEventReadsSource,
+  /const venueIds = \[[\s\S]*?new Set\([\s\S]*?events[\s\S]*?\.map\(\(event\) => event\.venueId\)/,
+);
 assert.match(usersSource, /new Set\([\s\S]*?events[\s\S]*?event\.venueId/);
 
 for (const value of ["scrapeActive", "publicStatus", "Scraping", "Publication"]) {
@@ -233,6 +272,7 @@ for (const value of ["scrapeActive", "publicStatus", "Scraping", "Publication"])
 }
 assert.match(venuesSource, /venue\.scrape_activation\.changed/);
 assert.match(venuesSource, /venue\.public_status\.changed/);
+assert.match(venuesSource, /assertCompleteEventVenueBindingCoverage/);
 assert.match(venuesSource, /beforeJson/);
 assert.match(venuesSource, /afterJson/);
 
@@ -242,10 +282,13 @@ assert.match(migrationSource, /--confirm/);
 assert.match(migrationSource, /APPLY_VENUE_LIFECYCLE/);
 assert.match(migrationSource, /rollbackManifest/);
 assert.match(migrationSource, /readFileSync\(options\.rollbackManifestPath/);
-assert.match(migrationSource, /expectedRollbackManifestJson/);
+assert.match(
+  migrationSource,
+  /JSON\.stringify\(reviewedRollbackManifest\) !== JSON\.stringify\(preview\.rollbackManifest\)/,
+);
 assert.match(
   venuesSource,
-  /args\.expectedRollbackManifestJson !== currentRollbackManifestJson/,
+  /JSON\.stringify\(buildVenueLifecycleRollbackManifest\(plan\.changes\)\) !==[\s\S]*JSON\.stringify\(args\.rollbackManifest\)/,
 );
 assert.match(placeIdResolverSource, /isVenueScrapeActive\(venue\)/);
 assert.doesNotMatch(placeIdResolverSource, /venue\.isActive\s*!==\s*false/);

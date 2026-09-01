@@ -8,6 +8,8 @@ const DEFAULT_STATUSES = ["approved", "pending"];
 const DEFAULT_APPROVED_WINDOW_DAYS_BACK = 90;
 const DEFAULT_APPROVED_WINDOW_DAYS_FORWARD = 730;
 const DEFAULT_PENDING_LIMIT = 500;
+const EVENT_DATE_WINDOW_PAGE_SIZE = 100;
+const MAX_EVENT_DATE_WINDOW_PAGES = 1_000;
 const SCAN_SCRIPT = "scripts/audit-event-quality.mjs";
 
 function usage() {
@@ -701,14 +703,35 @@ async function loadEventsForStatus(client, serviceArgs, options, status) {
   const seen = new Map();
   for (let from = options.fromDate; from < options.beforeDate;) {
     const before = addIsoMonths(from, 1) < options.beforeDate ? addIsoMonths(from, 1) : options.beforeDate;
-    const events = await client.query(api.events.listByStatusDateWindow, {
-      status,
-      fromDate: from,
-      beforeDate: before,
-      ...serviceArgs,
-    });
-    for (const event of events) {
-      seen.set(event._id, event);
+    let cursor = null;
+    let complete = false;
+    for (let pageIndex = 0; pageIndex < MAX_EVENT_DATE_WINDOW_PAGES; pageIndex += 1) {
+      const result = await client.query(api.events.listByStatusDateWindowPaginated, {
+        status,
+        fromDate: from,
+        beforeDate: before,
+        paginationOpts: { cursor, numItems: EVENT_DATE_WINDOW_PAGE_SIZE },
+        ...serviceArgs,
+      });
+      if (!Array.isArray(result.page) || result.page.length > EVENT_DATE_WINDOW_PAGE_SIZE) {
+        throw new Error(`Invalid event audit page for ${from} through ${before}.`);
+      }
+      for (const event of result.page) {
+        seen.set(event._id, event);
+      }
+      if (result.isDone) {
+        complete = true;
+        break;
+      }
+      if (!result.continueCursor || result.continueCursor === cursor) {
+        throw new Error(`Event audit pagination stalled for ${from} through ${before}.`);
+      }
+      cursor = result.continueCursor;
+    }
+    if (!complete) {
+      throw new Error(
+        `Event audit exceeded ${MAX_EVENT_DATE_WINDOW_PAGES} pages for ${from} through ${before}.`,
+      );
     }
     from = before;
   }

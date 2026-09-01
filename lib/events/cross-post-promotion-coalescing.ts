@@ -21,6 +21,7 @@ const GENERIC_PROMOTION_ANCHORS = new Set([
   "caption",
   "club",
   "concert",
+  "culture",
   "electronicmusic",
   "datum",
   "dodjite",
@@ -30,7 +31,6 @@ const GENERIC_PROMOTION_ANCHORS = new Set([
   "friday",
   "grad",
   "instagram",
-  "kcgradculture",
   "klub",
   "live",
   "music",
@@ -67,6 +67,17 @@ const GENERIC_PROMOTION_ANCHORS = new Set([
   "zurka",
   "zurku",
 ]);
+
+const GENERIC_PROMOTION_COMPOUND_SUFFIXES = ["culture", "program"] as const;
+
+function isGenericPromotionAnchor(anchor: string): boolean {
+  return (
+    GENERIC_PROMOTION_ANCHORS.has(anchor) ||
+    GENERIC_PROMOTION_COMPOUND_SUFFIXES.some(
+      (suffix) => anchor.length > suffix.length + 2 && anchor.endsWith(suffix),
+    )
+  );
+}
 
 export type CrossPostPromotionCandidate = {
   id: string;
@@ -149,7 +160,10 @@ function normalizedUnique(values: string[]): string[] {
   return result;
 }
 
-function hasExactSocialHandleMention(evidenceText: string, canonicalHandle: string): boolean {
+function hasExactSocialHandleMention(
+  evidenceText: string,
+  canonicalHandle: string,
+): boolean {
   const handle = normalizeHandle(canonicalHandle);
   if (!handle) return false;
   const exactHandlePattern =
@@ -159,10 +173,16 @@ function hasExactSocialHandleMention(evidenceText: string, canonicalHandle: stri
   );
 }
 
-function hasCanonicalNameTokenSequence(evidenceText: string, canonicalName: string): boolean {
-  const evidenceTokens = normalizeWords(evidenceText).split(" ").filter(Boolean);
+function hasCanonicalNameTokenSequence(
+  evidenceText: string,
+  canonicalName: string,
+): boolean {
+  const evidenceTokens = normalizeWords(evidenceText)
+    .split(" ")
+    .filter(Boolean);
   const nameTokens = normalizeWords(canonicalName).split(" ").filter(Boolean);
-  if (nameTokens.length === 0 || evidenceTokens.length < nameTokens.length) return false;
+  if (nameTokens.length === 0 || evidenceTokens.length < nameTokens.length)
+    return false;
   const grammaticalSuffixes = ["u", "a", "om", "em", "ima", "ovima"];
 
   return evidenceTokens.some((_, start) =>
@@ -172,7 +192,9 @@ function hasCanonicalNameTokenSequence(evidenceText: string, canonicalName: stri
       return (
         offset === nameTokens.length - 1 &&
         nameToken.length >= 4 &&
-        grammaticalSuffixes.some((suffix) => evidenceToken === `${nameToken}${suffix}`)
+        grammaticalSuffixes.some(
+          (suffix) => evidenceToken === `${nameToken}${suffix}`,
+        )
       );
     }),
   );
@@ -182,9 +204,12 @@ function hasLocativeCanonicalNameTokenSequence(
   evidenceText: string,
   canonicalName: string,
 ): boolean {
-  const evidenceTokens = normalizeWords(evidenceText).split(" ").filter(Boolean);
+  const evidenceTokens = normalizeWords(evidenceText)
+    .split(" ")
+    .filter(Boolean);
   const nameTokens = normalizeWords(canonicalName).split(" ").filter(Boolean);
-  if (nameTokens.length === 0 || evidenceTokens.length < nameTokens.length) return false;
+  if (nameTokens.length === 0 || evidenceTokens.length < nameTokens.length)
+    return false;
   const grammaticalSuffixes = ["u", "a", "om", "em", "ima", "ovima"];
   const locativeTokens = new Set([
     "at",
@@ -205,7 +230,9 @@ function hasLocativeCanonicalNameTokenSequence(
       return (
         offset === nameTokens.length - 1 &&
         nameToken.length >= 4 &&
-        grammaticalSuffixes.some((suffix) => evidenceToken === `${nameToken}${suffix}`)
+        grammaticalSuffixes.some(
+          (suffix) => evidenceToken === `${nameToken}${suffix}`,
+        )
       );
     });
     if (!exactName) return false;
@@ -252,7 +279,9 @@ function hasLocativeSocialHandleMention(
       nearby.some(
         (token, index) => token === "vidimo" && nearby[index + 1] === "se",
       ) ||
-      evidenceText.slice(Math.max(0, mentionIndex - 24), mentionIndex).includes("📍")
+      evidenceText
+        .slice(Math.max(0, mentionIndex - 24), mentionIndex)
+        .includes("📍")
     ) {
       return true;
     }
@@ -260,7 +289,10 @@ function hasLocativeSocialHandleMention(
   return false;
 }
 
-function hasExactEvidenceToken(evidenceText: string, expectedCompactToken: string): boolean {
+function hasExactEvidenceToken(
+  evidenceText: string,
+  expectedCompactToken: string,
+): boolean {
   return normalizeWords(evidenceText)
     .split(" ")
     .filter(Boolean)
@@ -368,7 +400,9 @@ function normalizeExplicitOccurrenceUrl(rawValue: string): string | null {
 
 function explicitOccurrenceUrls(evidenceText: string): Set<string> {
   const urls = new Set<string>();
-  for (const match of evidenceText.normalize("NFKC").matchAll(/https:\/\/[^\s<>]+/giu)) {
+  for (const match of evidenceText
+    .normalize("NFKC")
+    .matchAll(/https:\/\/[^\s<>]+/giu)) {
     const normalized = normalizeExplicitOccurrenceUrl(match[0] ?? "");
     if (normalized) urls.add(normalized);
   }
@@ -437,7 +471,7 @@ export function deriveExclusiveHashtagCrossPostCampaignIdentity(args: {
       (anchor) =>
         anchor.length < MIN_DISTINCTIVE_ANCHOR_LENGTH ||
         !/\p{L}/u.test(anchor) ||
-        GENERIC_PROMOTION_ANCHORS.has(anchor) ||
+        isGenericPromotionAnchor(anchor) ||
         anchor === compact(sourceHandle),
     ) ||
     candidatePostIds.length < MIN_EXCLUSIVE_HASHTAG_CAMPAIGN_POSTS ||
@@ -470,7 +504,9 @@ export function deriveExclusiveHashtagCrossPostCampaignIdentity(args: {
     .sort();
   if (
     matchingPostIds.length !== candidatePostIds.length ||
-    !matchingPostIds.every((postId, index) => postId === candidatePostIds[index])
+    !matchingPostIds.every(
+      (postId, index) => postId === candidatePostIds[index],
+    )
   ) {
     return null;
   }
@@ -533,10 +569,10 @@ function hasCanonicalVenueEvidence(
   const name = compact(canonicalVenueName);
   return Boolean(
     normalizeWords(evidenceText) &&
-      ((handle.length >= MIN_DISTINCTIVE_ANCHOR_LENGTH &&
-        hasExactSocialHandleMention(evidenceText, canonicalVenueHandle)) ||
-        (name.length >= MIN_DISTINCTIVE_ANCHOR_LENGTH &&
-          hasCanonicalNameTokenSequence(evidenceText, canonicalVenueName))),
+    ((handle.length >= MIN_DISTINCTIVE_ANCHOR_LENGTH &&
+      hasExactSocialHandleMention(evidenceText, canonicalVenueHandle)) ||
+      (name.length >= MIN_DISTINCTIVE_ANCHOR_LENGTH &&
+        hasCanonicalNameTokenSequence(evidenceText, canonicalVenueName))),
   );
 }
 
@@ -577,8 +613,14 @@ export function hasAutomaticCrossPostCanonicalVenueEvidence(args: {
   const currentVenueHandle = normalizeHandle(args.currentVenueHandle ?? "");
   const currentVenueId = args.currentVenueId?.normalize("NFKC").trim() ?? "";
   const canonicalVenueName = args.canonicalVenueName.normalize("NFKC").trim();
-  const currentVenueName = args.currentVenueName?.normalize("NFKC").trim() ?? "";
-  if (!targetVenueId || !sourceHandle || !canonicalVenueHandle || !canonicalVenueName) {
+  const currentVenueName =
+    args.currentVenueName?.normalize("NFKC").trim() ?? "";
+  if (
+    !targetVenueId ||
+    !sourceHandle ||
+    !canonicalVenueHandle ||
+    !canonicalVenueName
+  ) {
     return false;
   }
 
@@ -594,7 +636,10 @@ export function hasAutomaticCrossPostCanonicalVenueEvidence(args: {
   if (exactPersistedTargetBinding) return hasAnyExactEvidence;
 
   if (
-    hasLocativeCanonicalNameTokenSequence(args.evidenceText, canonicalVenueName) ||
+    hasLocativeCanonicalNameTokenSequence(
+      args.evidenceText,
+      canonicalVenueName,
+    ) ||
     hasLocativeSocialHandleMention(args.evidenceText, canonicalVenueHandle)
   ) {
     return true;
@@ -626,7 +671,7 @@ function normalizeSharedAnchors(
       (anchor) =>
         anchor.length < MIN_DISTINCTIVE_ANCHOR_LENGTH ||
         !/\p{L}/u.test(anchor) ||
-        GENERIC_PROMOTION_ANCHORS.has(anchor) ||
+        isGenericPromotionAnchor(anchor) ||
         excluded.has(anchor),
     )
   ) {
@@ -665,23 +710,25 @@ export function deriveCrossPostPromotionSharedEvidenceAnchors(options: {
     ...normalizeWords(options.canonicalVenueName).split(" ").map(compact),
     ...normalizeWords(options.canonicalVenueHandle).split(" ").map(compact),
   ]);
-  const captionTokenSets = options.captions.map(
-    (caption) => {
-      const hashtagTokens = exactHashtagTokens(caption);
-      return new Set(
-        [...hashtagTokens].filter(
-          (token) =>
-            token.length >= MIN_DISTINCTIVE_ANCHOR_LENGTH &&
-            /\p{L}/u.test(token) &&
-            !GENERIC_PROMOTION_ANCHORS.has(token) &&
-            !excluded.has(token),
-        ),
-      );
-    },
-  );
+  const captionTokenSets = options.captions.map((caption) => {
+    const hashtagTokens = exactHashtagTokens(caption);
+    return new Set(
+      [...hashtagTokens].filter(
+        (token) =>
+          token.length >= MIN_DISTINCTIVE_ANCHOR_LENGTH &&
+          /\p{L}/u.test(token) &&
+          !isGenericPromotionAnchor(token) &&
+          !excluded.has(token),
+      ),
+    );
+  });
   const shared = [...captionTokenSets[0]!]
-    .filter((token) => captionTokenSets.slice(1).every((tokens) => tokens.has(token)))
-    .sort((left, right) => right.length - left.length || left.localeCompare(right))
+    .filter((token) =>
+      captionTokenSets.slice(1).every((tokens) => tokens.has(token)),
+    )
+    .sort(
+      (left, right) => right.length - left.length || left.localeCompare(right),
+    )
     .slice(0, 6);
   return normalizeSharedAnchors(
     shared,
@@ -691,15 +738,19 @@ export function deriveCrossPostPromotionSharedEvidenceAnchors(options: {
   );
 }
 
-function chooseDescription(candidates: CrossPostPromotionCandidate[]): string | undefined {
+function chooseDescription(
+  candidates: CrossPostPromotionCandidate[],
+): string | undefined {
   return candidates
     .map((candidate, index) => ({
       index,
       value: candidate.description?.normalize("NFKC").trim() ?? "",
     }))
     .filter((item) => item.value.length > 0)
-    .sort((left, right) => right.value.length - left.value.length || left.index - right.index)[0]
-    ?.value;
+    .sort(
+      (left, right) =>
+        right.value.length - left.value.length || left.index - right.index,
+    )[0]?.value;
 }
 
 /**
@@ -727,7 +778,9 @@ export function buildCrossPostPromotionCoalescingPlan(options: {
 
   const primary = candidates[0];
   const sourceHandle = normalizeHandle(primary.sourceHandle);
-  const canonicalVenueName = options.canonicalVenueName.normalize("NFKC").trim();
+  const canonicalVenueName = options.canonicalVenueName
+    .normalize("NFKC")
+    .trim();
   const canonicalVenueHandle = normalizeHandle(options.canonicalVenueHandle);
   const time = primary.time?.trim() ?? "";
   const eventType = normalizeWords(primary.eventType);
@@ -749,13 +802,28 @@ export function buildCrossPostPromotionCoalescingPlan(options: {
     return null;
   }
 
-  const uniqueFields: Array<keyof Pick<
-    CrossPostPromotionCandidate,
-    "id" | "sourceIdentity" | "sourceOccurrenceKey" | "instagramPostId" | "instagramPostUrl"
-  >> = ["id", "sourceIdentity", "sourceOccurrenceKey", "instagramPostId", "instagramPostUrl"];
+  const uniqueFields: Array<
+    keyof Pick<
+      CrossPostPromotionCandidate,
+      | "id"
+      | "sourceIdentity"
+      | "sourceOccurrenceKey"
+      | "instagramPostId"
+      | "instagramPostUrl"
+    >
+  > = [
+    "id",
+    "sourceIdentity",
+    "sourceOccurrenceKey",
+    "instagramPostId",
+    "instagramPostUrl",
+  ];
   for (const field of uniqueFields) {
     const values = candidates.map((candidate) => candidate[field].trim());
-    if (values.some((value) => !value) || new Set(values).size !== values.length) {
+    if (
+      values.some((value) => !value) ||
+      new Set(values).size !== values.length
+    ) {
       return null;
     }
   }
@@ -795,13 +863,18 @@ export function buildCrossPostPromotionCoalescingPlan(options: {
     return null;
   }
 
-  const artists = normalizedUnique(candidates.flatMap((candidate) => candidate.artists));
+  const artists = normalizedUnique(
+    candidates.flatMap((candidate) => candidate.artists),
+  );
   const preferredImage = options.preferredImageCandidateId
-    ? candidates.find((candidate) => candidate.id === options.preferredImageCandidateId)
+    ? candidates.find(
+        (candidate) => candidate.id === options.preferredImageCandidateId,
+      )
     : undefined;
   if (
     options.preferredImageCandidateId &&
-    (!preferredImage?.imageUrl?.trim() || !preferredImage.imageStorageId?.trim())
+    (!preferredImage?.imageUrl?.trim() ||
+      !preferredImage.imageStorageId?.trim())
   ) {
     return null;
   }

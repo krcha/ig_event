@@ -24,6 +24,12 @@ import {
   deriveExclusiveHashtagCrossPostCampaignIdentity,
 } from "../lib/events/cross-post-promotion-coalescing.ts";
 import { exactJsonValue } from "../lib/events/exact-json-value.ts";
+import { buildInstagramSourceOccurrenceFingerprint } from "../lib/domain/occurrences/source-fingerprint.ts";
+import { reattestCampaignLineageBatch } from "../convex/internal/migrations/campaignLineage.ts";
+import {
+  backfillEventVenueBindingsBatch,
+  backfillSourceOccurrencesBatch,
+} from "../convex/internal/migrations/eventDomain.ts";
 
 process.env.CRON_SECRET = "qa-cross-post-promotion-secret";
 process.env.ADMIN_CLERK_USER_IDS = "qa-merge-admin";
@@ -237,6 +243,8 @@ function buildLink(event, row, index) {
     sourceOccurrenceKey: event.sourceOccurrenceKey,
     instagramPostId: event.instagramPostId,
     instagramPostUrl: event.instagramPostUrl,
+    canonicalSourceUrl: event.instagramPostUrl,
+    sourceOccurrenceId: `ariana-source-occurrence-${index}`,
     sourceHandle: "1by1.party",
     linkedAt: 50 + index,
     updatedAt: 100 + index,
@@ -272,6 +280,25 @@ function makeDb() {
   const events = arianaRows.map(buildEvent);
   const links = events.map((event, index) => buildLink(event, arianaRows[index], index));
   const receipts = events.map((event, index) => buildReceipt(event, links[index], index));
+  const sourceOccurrences = events.map((event, index) => ({
+    _id: `ariana-source-occurrence-${index}`,
+    _creationTime: 1,
+    provider: "instagram",
+    sourceDocumentId: `ariana-scraped-post-${index}`,
+    sourceIdentity: links[index].sourceIdentity,
+    canonicalSourceUrl: event.instagramPostUrl,
+    sourceFingerprint: links[index].sourceFingerprint,
+    sourceRevision: 1,
+    sourceOccurrenceKey: event.sourceOccurrenceKey,
+    occurrenceOrdinal: 0,
+    factsJson: "{}",
+    normalizedOccurrenceJson: "{}",
+    venueResolutionStatus: "resolved",
+    canonicalEventId: event._id,
+    state: "satisfied",
+    createdAt: 1,
+    updatedAt: 1,
+  }));
   const tables = {
     events: new Map(events.map((row) => [row._id, structuredClone(row)])),
     instagramEventSources: new Map(links.map((row) => [row._id, structuredClone(row)])),
@@ -329,9 +356,80 @@ function makeDb() {
         { _id: "legacy-move", userId: "legacy-move", eventId: events[4]._id, savedAt: 3 },
       ],
     ]),
+    sourceOccurrences: new Map(
+      sourceOccurrences.map((row) => [row._id, structuredClone(row)]),
+    ),
+    sourceOccurrenceTopologyEpoch: new Map([
+      [
+        "cross-post-source-occurrence-topology-epoch",
+        {
+          _id: "cross-post-source-occurrence-topology-epoch",
+          key: "source-occurrence-topology-v1",
+          currentEpoch: 0,
+          verifiedEpoch: 0,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+    ]),
     eventAuditLog: new Map(),
+    campaignLineageReattestations: new Map(),
+    eventDomainMigrationState: new Map([
+      [
+        "venue-identities-v1",
+        {
+          _id: "venue-identities-v1",
+          _creationTime: 1,
+          completedAt: 1,
+          createdAt: 1,
+          errorCount: 0,
+          isDone: true,
+          key: "venue-identities-v1",
+          mismatchCount: 0,
+          phase: "venue_identities",
+          scannedCount: 1,
+          updatedAt: 1,
+          updatedCount: 1,
+        },
+      ],
+    ]),
+    venueIdentities: new Map([
+      [
+        "kc-grad-canonical-identity",
+        {
+          _id: "kc-grad-canonical-identity",
+          _creationTime: 1,
+          active: true,
+          createdAt: 1,
+          kind: "canonical_name",
+          normalizedValue: "kc grad",
+          rawValue: "KC Grad",
+          source: "venue_record",
+          updatedAt: 1,
+          venueId: venue._id,
+        },
+      ],
+      [
+        "kc-grad-provider-identity",
+        {
+          _id: "kc-grad-provider-identity",
+          _creationTime: 1,
+          active: true,
+          createdAt: 1,
+          kind: "provider_account",
+          normalizedValue: "kcgrad",
+          provider: "instagram",
+          rawValue: "kcgrad",
+          source: "venue_record",
+          updatedAt: 1,
+          venueId: venue._id,
+        },
+      ],
+    ]),
   };
   let auditCounter = 0;
+  let sourceOccurrenceCounter = 0;
+  let migrationCounter = 0;
   const rows = (table) => [...(tables[table]?.values() ?? [])];
   const result = (table, filters = []) => {
     const matches = () =>
@@ -420,6 +518,29 @@ function makeDb() {
         throw new Error(`Missing row ${id}.`);
       },
       async insert(table, value) {
+        if (table === "sourceOccurrences") {
+          sourceOccurrenceCounter += 1;
+          const id = `cross-post-source-occurrence-${sourceOccurrenceCounter}`;
+          tables.sourceOccurrences.set(id, {
+            _id: id,
+            _creationTime: Date.now(),
+            ...structuredClone(value),
+          });
+          return id;
+        }
+        if (
+          table === "campaignLineageReattestations" ||
+          table === "eventDomainMigrationState"
+        ) {
+          migrationCounter += 1;
+          const id = `${table}-${migrationCounter}`;
+          tables[table].set(id, {
+            _id: id,
+            _creationTime: Date.now(),
+            ...structuredClone(value),
+          });
+          return id;
+        }
         assert.equal(table, "eventAuditLog");
         auditCounter += 1;
         const id = `cross-post-audit-${auditCounter}`;
@@ -1349,22 +1470,26 @@ const primaryReplayFence = {
 };
 const exactPrimaryReceiptBeforeReplay = structuredClone(primaryReceiptForReplay);
 const exactPrimaryLinkBeforeReplay = structuredClone(primaryLinkForReplay);
-await recordInstagramSourceOccurrenceSatisfaction._handler(serviceCtx(state), {
-  plan: primaryReplayPlan,
-  satisfiedKey: primaryLinkForReplay.sourceOccurrenceKey,
-  representativeEventId: canonicalEvent._id,
-  processingFence: primaryReplayFence,
-  serviceSecret: process.env.CRON_SECRET,
-});
+await assert.rejects(
+  () =>
+    recordInstagramSourceOccurrenceSatisfaction._handler(serviceCtx(state), {
+      plan: primaryReplayPlan,
+      satisfiedKey: primaryLinkForReplay.sourceOccurrenceKey,
+      representativeEventId: canonicalEvent._id,
+      processingFence: primaryReplayFence,
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+  /dedicated re-attestation operation/i,
+);
 assert.deepEqual(
   state.tables.instagramSourceOccurrenceReceipts.get(primaryReceiptForReplay._id),
   exactPrimaryReceiptBeforeReplay,
-  "Exact source replay must not bump an attested receipt version.",
+  "Campaign source replay must be rejected before bumping an attested receipt version.",
 );
 assert.deepEqual(
   state.tables.instagramEventSources.get(primaryLinkForReplay._id),
   exactPrimaryLinkBeforeReplay,
-  "Exact source replay must not bump an attested source-link version.",
+  "Campaign source replay must be rejected before bumping an attested source-link version.",
 );
 await assert.rejects(
   () =>
@@ -1398,12 +1523,19 @@ Object.assign(variantPostForReconcile, {
 const exactVariantReceiptBeforeReconcile = structuredClone(
   variantReceiptForReconcile,
 );
+const currentVariantSourceFingerprint =
+  buildInstagramSourceOccurrenceFingerprint({
+    altText: variantPostForReconcile.altText,
+    caption: variantPostForReconcile.caption,
+    locationName: variantPostForReconcile.locationName,
+  });
 await assert.rejects(
   () =>
     reconcileInstagramSourceOccurrenceReceipt._handler(serviceCtx(state), {
       plan: {
         sourceIdentity: variantReceiptForReconcile.sourceIdentity,
-        sourceFingerprint: variantReceiptForReconcile.sourceFingerprint,
+        previousSourceFingerprint: variantReceiptForReconcile.sourceFingerprint,
+        sourceFingerprint: currentVariantSourceFingerprint,
         expectedKeys: [],
         expectedOccurrences: [],
         deferredChildCount: 0,
@@ -1487,15 +1619,15 @@ state.tables.scrapedPosts.delete(completenessPost._id);
 const lineageVersionsBeforeBackfill = new Map(
   [...state.tables.events.values()].map((event) => [event._id, event.updatedAt]),
 );
-const backfillResult = await backfillEventVenueIdentityBatch._handler(
-  serviceCtx(state),
-  {
-    cursor: null,
-    limit: 100,
-    serviceSecret: process.env.CRON_SECRET,
-  },
+await assert.rejects(
+  () =>
+    backfillEventVenueIdentityBatch._handler(serviceCtx(state), {
+      cursor: null,
+      limit: 100,
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+  /unsafe compatibility backfill is retired/i,
 );
-assert.equal(backfillResult.updated, 0);
 assert.deepEqual(
   new Map(
     [...state.tables.events.values()].map((event) => [event._id, event.updatedAt]),
@@ -1755,6 +1887,62 @@ for (const audit of audits) {
     );
   }
 }
+
+const reattested = await reattestCampaignLineageBatch._handler(
+  serviceCtx(state),
+  { cursor: null, dryRun: false, limit: 16 },
+);
+assert.equal(reattested.quarantinedCount, 0);
+assert.equal(reattested.reattestedCount, 1);
+const reattestedPrimary = state.tables.events.get(arianaRows[0].id);
+assert.equal(
+  await isCanonicallyGroundedApprovedEvent(serviceCtx(state), reattestedPrimary),
+  true,
+  "An approved audited campaign must remain canonically grounded after first-class lineage re-attestation.",
+);
+assert.equal(
+  reattestedPrimary.publicationState,
+  "publishable",
+  "The proof must exist before publication refresh so re-attestation cannot hide the campaign.",
+);
+assert.ok(
+  [...state.tables.sourceOccurrences.values()].every(
+    (occurrence) =>
+      Number.isSafeInteger(occurrence.occurrenceOrdinal) &&
+      occurrence.canonicalEventId === arianaRows[0].id,
+  ),
+  "Every campaign source must retain its exact expected-occurrence ordinal and canonical representative.",
+);
+const campaignVenueCoverage = await backfillEventVenueBindingsBatch._handler(
+  serviceCtx(state),
+  { cursor: null, dryRun: false, limit: 16 },
+);
+assert.equal(campaignVenueCoverage.skippedCount, 0);
+assert.equal(campaignVenueCoverage.quarantinedLineageMarkerCount, 0);
+assert.equal(campaignVenueCoverage.unchangedCount, arianaRows.length);
+const campaignOccurrenceCoverage = await backfillSourceOccurrencesBatch._handler(
+  serviceCtx(state),
+  { cursor: null, dryRun: false, limit: 16 },
+);
+assert.equal(campaignOccurrenceCoverage.skippedCount, 0);
+assert.equal(campaignOccurrenceCoverage.quarantinedLineageMarkerCount, 0);
+assert.equal(campaignOccurrenceCoverage.unchangedCount, arianaRows.length);
+assert.ok(
+  [...state.tables.eventDomainMigrationState.values()]
+    .filter((row) =>
+      ["event-venue-bindings-v1", "source-occurrences-generic-v2"].includes(
+        row.key,
+      ),
+    )
+    .every(
+      (row) =>
+        row.isDone === true &&
+        row.completedAt !== undefined &&
+        row.mismatchCount === 0 &&
+        (row.skippedCount ?? 0) === 0,
+    ),
+  "A verified campaign must complete the generic venue/occurrence readiness gates instead of remaining permanently quarantined.",
+);
 
 {
   const appendState = makeDb();

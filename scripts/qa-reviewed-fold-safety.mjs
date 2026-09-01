@@ -83,11 +83,26 @@ function makeHarness(seed) {
     "userSavedEvents",
     "eventAuditLog",
     "eventRetentionCursors",
+    "sourceOccurrenceTopologyEpoch",
   ];
   const tables = Object.fromEntries(
     tableNames.map((table) => [
       table,
-      new Map((seed[table] ?? []).map((row) => [row._id, clone(row)])),
+      new Map(
+        (
+          seed[table] ??
+          (table === "sourceOccurrenceTopologyEpoch"
+            ? [{
+                _id: "qa-source-occurrence-topology-epoch",
+                key: "source-occurrence-topology-v1",
+                currentEpoch: 0,
+                verifiedEpoch: 0,
+                createdAt: 1,
+                updatedAt: 1,
+              }]
+            : [])
+        ).map((row) => [row._id, clone(row)]),
+      ),
     ]),
   );
   const operations = [];
@@ -1840,6 +1855,23 @@ async function qaReviewedCrossPostScheduleAdversarialCases() {
 
 async function qaSourceContracts() {
   const eventsSource = await readFile(new URL("../convex/events.ts", import.meta.url), "utf8");
+  const protectedDomainSource = (
+    await Promise.all(
+      [
+        "../convex/eventDomain/eventUpdates.ts",
+        "../convex/eventDomain/lifecycleCommands.ts",
+        "../convex/eventDomain/sourceOccurrenceCompatibility.ts",
+        "../convex/internal/eventRepairs/reviewedContinuationFold.ts",
+        "../convex/internal/eventRepairs/reviewedPromotionFold.ts",
+        "../convex/internal/eventRepairs/reviewedScheduleFold.ts",
+        "../convex/internal/eventRepairs/reviewedStructuredCorrections.ts",
+      ].map((filePath) => readFile(new URL(filePath, import.meta.url), "utf8")),
+    )
+  ).join("\n");
+  const receiptSource = await readFile(
+    new URL("../convex/internal/sourceOccurrenceReceipts.ts", import.meta.url),
+    "utf8",
+  );
   const lineageSource = await readFile(
     new URL(
       "../lib/events/cross-post-campaign-aggregate-attestation.ts",
@@ -1900,21 +1932,22 @@ async function qaSourceContracts() {
   assert.match(lineageSource, /\[reviewed_promotion_variant:/u);
   assert.match(lineageSource, /\[reviewed_same_source_continuation:/u);
 
-  const lineageGuardUses = eventsSource.match(/isCrossPostCampaignLineageEvent\(/gu) ?? [];
+  const lineageGuardUses =
+    protectedDomainSource.match(/isCrossPostCampaignLineageEvent\(/gu) ?? [];
   assert.ok(
     lineageGuardUses.length >= 8,
     "Reviewed-fold lineage must stay protected across generic update/delete/merge/backfill/receipt paths.",
   );
   assert.match(
-    eventsSource,
+    receiptSource,
     /Campaign occurrence receipts may only change through a dedicated re-attestation operation\./u,
   );
   assert.match(
-    eventsSource,
+    protectedDomainSource,
     /Campaign lineage events may only change through a dedicated re-attestation operation\./u,
   );
   assert.match(
-    eventsSource,
+    protectedDomainSource,
     /Campaign aggregates are retained with their audited source lineage and cannot be hard-deleted\./u,
   );
   assert.match(

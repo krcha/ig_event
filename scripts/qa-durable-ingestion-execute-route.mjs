@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import ts from "typescript";
+import { readIngestionArchitectureSource } from "./qa-support/ingestion-architecture-source.mjs";
 
 process.env.CRON_SECRET = "qa-durable-execute-route-secret";
 
@@ -43,7 +44,7 @@ assert.equal(
 );
 
 const route = await readFile("app/api/cron/durable-ingestion/execute/route.ts", "utf8");
-const ingestionPipeline = await readFile("lib/pipeline/run-instagram-ingestion.ts", "utf8");
+const ingestionPipeline = readIngestionArchitectureSource();
 const processingClaimOffset = route.indexOf("convex.mutation(claimProcessing");
 const fetchClaimOffset = route.indexOf("convex.mutation(claim,");
 const providerCallOffset = route.indexOf("scrapeInstagramAccount({");

@@ -17,6 +17,7 @@ export type EventEvidenceConflictContext = {
   sourceAccountName: string;
   sourceAccountRole: "venue" | "promoter" | "unknown" | undefined;
   sourceCaption: string;
+  sourcePostedAt?: string;
   venueEvidenceVerified: boolean;
 };
 
@@ -72,10 +73,46 @@ function compactIdentity(value: unknown): string {
   return comparableText(value).replace(/[^\p{L}\p{N}]+/gu, "");
 }
 
-// These are reviewed billing aliases, not a fuzzy-name heuristic. Prefix
-// matching is unsafe here because unrelated artists commonly extend short
-// names by one or two characters (for example ABBA/@abbath).
-const REVIEWED_ARTIST_HANDLE_ALIAS_KEYS = new Set(["neni\u0000nenije"]);
+function artistHandleSegments(value: string): string[] {
+  return value
+    .trim()
+    .replace(/^@/u, "")
+    .split(/[._-]+/u)
+    .map(compactIdentity)
+    .filter(Boolean);
+}
+
+function isConcatenatedHandleSegmentPrefix(
+  display: string,
+  segments: readonly string[],
+  segmentIndex = 0,
+  displayOffset = 0,
+): boolean {
+  if (segmentIndex >= segments.length) return displayOffset === display.length;
+  const segment = segments[segmentIndex];
+  const minimumLength = Math.min(2, segment.length);
+  const minimumRemainingLength = segments
+    .slice(segmentIndex + 1)
+    .reduce((total, value) => total + Math.min(2, value.length), 0);
+  const maximumLength = Math.min(
+    segment.length,
+    display.length - displayOffset - minimumRemainingLength,
+  );
+  for (let length = minimumLength; length <= maximumLength; length += 1) {
+    if (
+      display.startsWith(segment.slice(0, length), displayOffset) &&
+      isConcatenatedHandleSegmentPrefix(
+        display,
+        segments,
+        segmentIndex + 1,
+        displayOffset + length,
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function comparableTitleTokens(value: unknown): string[] {
   return comparableText(value)
@@ -101,8 +138,11 @@ export function eventArtistHandleAliasMatches(left: string, right: string): bool
   const displayComparable = compactIdentity(leftIsHandle ? right : left);
   if (!handleComparable || !displayComparable) return false;
   if (handleComparable === displayComparable) return true;
-  return REVIEWED_ARTIST_HANDLE_ALIAS_KEYS.has(
-    `${displayComparable}\u0000${handleComparable}`,
+  const handleSegments = artistHandleSegments(leftIsHandle ? left : right);
+  return (
+    displayComparable.length >= 4 &&
+    handleSegments.length >= 2 &&
+    isConcatenatedHandleSegmentPrefix(displayComparable, handleSegments)
   );
 }
 
@@ -227,6 +267,28 @@ function textNamesResolvedDate(value: string, resolvedDate: string): boolean {
   return weekday !== null && weekdaysMentioned(value).includes(weekday);
 }
 
+function sourceWasPostedOnResolvedBelgradeDate(
+  sourcePostedAt: string | undefined,
+  resolvedDate: string,
+): boolean {
+  if (!sourcePostedAt || !/^\d{4}-\d{2}-\d{2}$/u.test(resolvedDate)) {
+    return false;
+  }
+  const timestamp = Date.parse(sourcePostedAt);
+  if (!Number.isFinite(timestamp)) return false;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone: "Europe/Belgrade",
+    year: "numeric",
+  }).formatToParts(new Date(timestamp));
+  const byType = new Map(parts.map((part) => [part.type, part.value]));
+  const year = byType.get("year");
+  const month = byType.get("month");
+  const day = byType.get("day");
+  return Boolean(year && month && day && `${year}-${month}-${day}` === resolvedDate);
+}
+
 function dateConflictIsBenign(
   conflict: EventEvidenceSourceConflict,
   context: EventEvidenceConflictContext,
@@ -246,7 +308,12 @@ function dateConflictIsBenign(
   const specificValue = values[genericIndex === 0 ? 1 : 0];
   return (
     textNamesResolvedDate(specificValue, context.resolvedDate) &&
-    textNamesResolvedDate(context.sourceCaption, context.resolvedDate)
+    (textNamesResolvedDate(context.sourceCaption, context.resolvedDate) ||
+      (genericRelativeDayPattern.test(comparableText(context.sourceCaption)) &&
+        sourceWasPostedOnResolvedBelgradeDate(
+          context.sourcePostedAt,
+          context.resolvedDate,
+        )))
   );
 }
 

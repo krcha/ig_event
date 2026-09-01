@@ -1,0 +1,90 @@
+import { v } from "convex/values";
+
+import { internalMutation } from "../../_generated/server";
+import {
+  backfillCanonicalEventFieldsBatchHandler,
+  backfillMediaCanonicalUrlsBatchHandler,
+  backfillSourceDocumentCanonicalUrlsBatchHandler,
+} from "./canonicalFields";
+import { backfillEventVenueBindingsBatchHandler } from "./eventVenueBindings";
+import {
+  eventDomainMigrationBatchArgs,
+  eventDomainMigrationBatchResult,
+} from "./eventDomainShared";
+import { backfillSourceOccurrencesBatchHandler } from "./sourceOccurrenceBackfill";
+import { backfillSourceOccurrenceCanonicalPayloadsBatchHandler } from "./sourceOccurrenceCanonicalPayload";
+import { auditSourceOccurrenceReceiptTopologyBatchHandler } from "./sourceOccurrenceTopologyAudit";
+import {
+  auditVenueCompatibilitySeedsHandler,
+  backfillVenueIdentitiesBatchHandler,
+  VENUE_COMPATIBILITY_SEED_AUDIT_KEY,
+} from "./venueIdentity";
+
+/**
+ * Stable registered API facade. Migration implementations live in cohesive
+ * modules so source identity, venue identity/bindings, source occurrences, and
+ * topology auditing cannot grow into one replacement god module again.
+ */
+export const backfillSourceDocumentCanonicalUrlsBatch = internalMutation({
+  args: eventDomainMigrationBatchArgs,
+  returns: eventDomainMigrationBatchResult,
+  handler: backfillSourceDocumentCanonicalUrlsBatchHandler,
+});
+
+export const backfillMediaCanonicalUrlsBatch = internalMutation({
+  args: eventDomainMigrationBatchArgs,
+  returns: eventDomainMigrationBatchResult,
+  handler: backfillMediaCanonicalUrlsBatchHandler,
+});
+
+export const backfillCanonicalEventFieldsBatch = internalMutation({
+  args: eventDomainMigrationBatchArgs,
+  returns: eventDomainMigrationBatchResult,
+  handler: backfillCanonicalEventFieldsBatchHandler,
+});
+
+export const auditVenueCompatibilitySeeds = internalMutation({
+  args: {
+    dryRun: v.optional(v.boolean()),
+    restart: v.optional(v.boolean()),
+  },
+  returns: v.object({
+    dryRun: v.boolean(),
+    issueCount: v.number(),
+    issuesJson: v.string(),
+    scannedCount: v.number(),
+  }),
+  handler: auditVenueCompatibilitySeedsHandler,
+});
+
+export const backfillVenueIdentitiesBatch = internalMutation({
+  args: eventDomainMigrationBatchArgs,
+  returns: eventDomainMigrationBatchResult,
+  handler: backfillVenueIdentitiesBatchHandler,
+});
+
+export const backfillEventVenueBindingsBatch = internalMutation({
+  args: eventDomainMigrationBatchArgs,
+  returns: eventDomainMigrationBatchResult,
+  handler: backfillEventVenueBindingsBatchHandler,
+});
+
+export const backfillSourceOccurrencesBatch = internalMutation({
+  args: eventDomainMigrationBatchArgs,
+  returns: eventDomainMigrationBatchResult,
+  handler: backfillSourceOccurrencesBatchHandler,
+});
+
+export const backfillSourceOccurrenceCanonicalPayloadsBatch = internalMutation({
+  args: eventDomainMigrationBatchArgs,
+  returns: eventDomainMigrationBatchResult,
+  handler: backfillSourceOccurrenceCanonicalPayloadsBatchHandler,
+});
+
+export const auditSourceOccurrenceReceiptTopologyBatch = internalMutation({
+  args: eventDomainMigrationBatchArgs,
+  returns: eventDomainMigrationBatchResult,
+  handler: auditSourceOccurrenceReceiptTopologyBatchHandler,
+});
+
+export { VENUE_COMPATIBILITY_SEED_AUDIT_KEY };

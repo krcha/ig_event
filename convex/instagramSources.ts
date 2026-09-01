@@ -13,12 +13,20 @@ import {
   isVenuePublic,
   isVenueScrapeActive,
 } from "../lib/venues/venue-lifecycle";
+import {
+  assertOperationPaginationOptions,
+  clampQueryPaginationOptions,
+} from "./internal/requestBounds";
 
 const sourceRoleValidator = v.union(
   v.literal("venue"),
   v.literal("promoter"),
   v.literal("unknown"),
 );
+const MAX_FOLLOWING_SNAPSHOT_ACCOUNTS = 2_000;
+const MAX_FOLLOWING_ACTIVE_SOURCE_SWEEP = 2_000;
+const MAX_INSTAGRAM_SOURCE_QUERY_PAGE_SIZE = 200;
+const MAX_INSTAGRAM_SOURCE_BACKFILL_PAGE_SIZE = 100;
 
 const followingAccountValidator = v.object({
   handle: v.string(),
@@ -186,7 +194,12 @@ export const listActiveSourcesPage = query({
     const result = await ctx.db
       .query("instagramSources")
       .withIndex("by_active", (q) => q.eq("active", true))
-      .paginate(args.paginationOpts);
+      .paginate(
+        clampQueryPaginationOptions(
+          args.paginationOpts,
+          MAX_INSTAGRAM_SOURCE_QUERY_PAGE_SIZE,
+        ),
+      );
     // This compatibility surface intentionally omits venue joins. Callers that
     // need venue context must use the bounded handle-targeted query below rather
     // than multiplying one document read per source on every pagination pass.
@@ -205,7 +218,12 @@ export const listActiveSourceHandlesPage = query({
     const result = await ctx.db
       .query("instagramSources")
       .withIndex("by_active", (q) => q.eq("active", true))
-      .paginate(args.paginationOpts);
+      .paginate(
+        clampQueryPaginationOptions(
+          args.paginationOpts,
+          MAX_INSTAGRAM_SOURCE_QUERY_PAGE_SIZE,
+        ),
+      );
     return {
       ...result,
       page: result.page.map((source) => source.handle),
@@ -220,7 +238,14 @@ export const listLegacyVenueSourcesPage = query({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const result = await ctx.db.query("venues").paginate(args.paginationOpts);
+    const result = await ctx.db
+      .query("venues")
+      .paginate(
+        clampQueryPaginationOptions(
+          args.paginationOpts,
+          MAX_INSTAGRAM_SOURCE_QUERY_PAGE_SIZE,
+        ),
+      );
     return {
       ...result,
       page: result.page.filter(isVenueScrapeActive).flatMap((venue) => {
@@ -259,7 +284,14 @@ export const listLegacyVenueHandlesPage = query({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const result = await ctx.db.query("venues").paginate(args.paginationOpts);
+    const result = await ctx.db
+      .query("venues")
+      .paginate(
+        clampQueryPaginationOptions(
+          args.paginationOpts,
+          MAX_INSTAGRAM_SOURCE_QUERY_PAGE_SIZE,
+        ),
+      );
     return {
       ...result,
       page: result.page
@@ -284,7 +316,12 @@ export const listFreshFetchAttemptMetadataPage = query({
         q.eq("active", true).gte("lastFetchAttemptAt", args.minAttemptAt),
       )
       .order("desc")
-      .paginate(args.paginationOpts);
+      .paginate(
+        clampQueryPaginationOptions(
+          args.paginationOpts,
+          MAX_INSTAGRAM_SOURCE_QUERY_PAGE_SIZE,
+        ),
+      );
     return {
       ...result,
       page: result.page.map((source) => ({
@@ -425,6 +462,11 @@ export const syncFollowingSnapshot = mutation({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    if (args.accounts.length > MAX_FOLLOWING_SNAPSHOT_ACCOUNTS) {
+      throw new Error(
+        `Following snapshots support at most ${MAX_FOLLOWING_SNAPSHOT_ACCOUNTS} accounts.`,
+      );
+    }
     const now = Date.now();
     const sourceHandle = normalizeInstagramHandle(args.sourceHandle);
     const accountsByHandle = new Map<
@@ -465,6 +507,15 @@ export const syncFollowingSnapshot = mutation({
     // alter the active source set: daily ingestion continues from its existing
     // durable source snapshot until a complete weekly reconciliation succeeds.
     if (complete) {
+      const activeSources = await ctx.db
+        .query("instagramSources")
+        .withIndex("by_active", (q) => q.eq("active", true))
+        .take(MAX_FOLLOWING_ACTIVE_SOURCE_SWEEP + 1);
+      if (activeSources.length > MAX_FOLLOWING_ACTIVE_SOURCE_SWEEP) {
+        throw new Error(
+          `Following reconciliation active-source sweep exceeds its safe bound of ${MAX_FOLLOWING_ACTIVE_SOURCE_SWEEP}; no snapshot changes were committed.`,
+        );
+      }
       for (const handle of handles) {
         const observedDisplayName = accountsByHandle.get(handle)?.observedDisplayName;
         const existing = await ctx.db
@@ -509,10 +560,6 @@ export const syncFollowingSnapshot = mutation({
           activatedHandles.push(handle);
         }
       }
-      const activeSources = await ctx.db
-        .query("instagramSources")
-        .withIndex("by_active", (q) => q.eq("active", true))
-        .collect();
       for (const source of activeSources) {
         if (presentHandles.has(source.handle)) continue;
         await ctx.db.patch(source._id, {
@@ -653,7 +700,12 @@ export const backfillFromVenues = mutation({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const page = await ctx.db.query("venues").paginate(args.paginationOpts);
+    const paginationOpts = assertOperationPaginationOptions(
+      args.paginationOpts,
+      MAX_INSTAGRAM_SOURCE_BACKFILL_PAGE_SIZE,
+      "Instagram-source backfill page",
+    );
+    const page = await ctx.db.query("venues").paginate(paginationOpts);
     const now = Date.now();
     let examined = 0;
     let inserted = 0;

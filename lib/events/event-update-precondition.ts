@@ -145,6 +145,10 @@ function getEffectiveEventEvidenceV2Conflicts(
     sourceAccountRole,
     sourceCaption:
       typeof eventFields.sourceCaption === "string" ? eventFields.sourceCaption : "",
+    sourcePostedAt:
+      typeof eventFields.sourcePostedAt === "string"
+        ? eventFields.sourcePostedAt
+        : undefined,
     venueEvidenceVerified: fields.venueEvidenceVerified === true,
   });
   if (

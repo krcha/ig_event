@@ -140,6 +140,9 @@ function makeCtx(initialEvents, initialVenues = []) {
       async collect() {
         return rows();
       },
+      async take(limit) {
+        return rows().slice(0, limit);
+      },
       withIndex(_name, applyIndex) {
         const filters = [];
         const chain = {

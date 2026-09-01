@@ -64,6 +64,34 @@ assert.equal(
   "An approved legacy event exposed by the public calendar must retain a working detail page.",
 );
 
+const materializedPendingLegacy = {
+  ...ungrounded,
+  _id: "event-materialized-pending",
+  publicationPolicyVersion: 1,
+  publicationReason: "derived_state_refresh_deferred",
+  publicationState: "pending_verification",
+};
+const materializedPendingCtx = {
+  db: {
+    normalizeId(table, id) {
+      return table === "events" && id === materializedPendingLegacy._id ? id : null;
+    },
+    async get(id) {
+      return id === materializedPendingLegacy._id ? materializedPendingLegacy : null;
+    },
+    query() {
+      throw new Error("A non-publishable materialized row must fail before grounding reads.");
+    },
+  },
+};
+assert.equal(
+  await getPublicApprovedEvent._handler(materializedPendingCtx, {
+    id: materializedPendingLegacy._id,
+  }),
+  null,
+  "Approved status must not bypass a current pending publication decision.",
+);
+
 const ungroundedEvidenceV2 = {
   ...ungrounded,
   _id: "event-ungrounded-evidence-v2",
@@ -150,16 +178,29 @@ const discoverCtx = {
       return null;
     },
     query(table) {
+      if (
+        table === "publicationMigrationState" ||
+        table === "sourceOccurrenceTopologyEpoch"
+      ) {
+        return {
+          withIndex(_index, configure) {
+            configure(indexBuilder());
+            return { async take() { return []; } };
+          },
+        };
+      }
       assert.equal(table, "events");
       return {
         withIndex(index, configure) {
           configure(indexBuilder());
           return {
             async collect() {
-              return index === "by_status_promotionTier" ? [ungrounded] : [];
+              return index === "by_status_promotionTier"
+                ? [materializedPendingLegacy]
+                : [];
             },
             async take() {
-              return index === "by_status_date" ? [ungrounded] : [];
+              return index === "by_status_date" ? [materializedPendingLegacy] : [];
             },
           };
         },

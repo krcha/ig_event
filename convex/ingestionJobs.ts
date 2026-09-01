@@ -8,6 +8,14 @@ import {
   assertIngestionJobPayloadWithinBounds,
   truncateIngestionError,
 } from "../lib/pipeline/ingestion-job-safety";
+import {
+  clampQueryPaginationOptions,
+  resolveOperationLimit,
+} from "./internal/requestBounds";
+
+const MAX_INGESTION_JOB_QUERY_PAGE_SIZE = 100;
+const DEFAULT_INGESTION_JOB_RETENTION_BATCH_SIZE = 100;
+const MAX_INGESTION_JOB_RETENTION_BATCH_SIZE = 500;
 
 const ingestionJobStatus = v.union(
   v.literal("queued"),
@@ -78,7 +86,12 @@ export const listJobsForRepairPage = query({
       .query("ingestionJobs")
       .withIndex("by_createdAt", (q) => q.gte("createdAt", args.minCreatedAt))
       .order("desc")
-      .paginate(args.paginationOpts);
+      .paginate(
+        clampQueryPaginationOptions(
+          args.paginationOpts,
+          MAX_INGESTION_JOB_QUERY_PAGE_SIZE,
+        ),
+      );
     return {
       ...result,
       page: result.page.map((job) => ({
@@ -506,7 +519,11 @@ export const deleteTerminalOlderThan = internalMutation({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const limit = Math.max(1, Math.min(500, Math.trunc(args.limit ?? 100)));
+    const limit = resolveOperationLimit(args.limit, {
+      defaultValue: DEFAULT_INGESTION_JOB_RETENTION_BATCH_SIZE,
+      label: "Ingestion-job retention batch size",
+      maxValue: MAX_INGESTION_JOB_RETENTION_BATCH_SIZE,
+    });
     const completed = await ctx.db
       .query("ingestionJobs")
       .withIndex("by_status_updatedAt", (q) =>

@@ -144,7 +144,13 @@ function makeVenue(index) {
   };
 }
 
-function makeCtx({ events: eventRows, venues = [], sourceEvents = eventRows, authenticated = true }) {
+function makeCtx({
+  events: eventRows,
+  venues = [],
+  venueIdentities = [],
+  sourceEvents = eventRows,
+  authenticated = true,
+}) {
   const events = new Map(eventRows.map((row) => [row._id, structuredClone(row)]));
   const scrapedPosts = sourceEvents.map(scrapedPostFor);
   const patches = [];
@@ -163,6 +169,13 @@ function makeCtx({ events: eventRows, venues = [], sourceEvents = eventRows, aut
       );
     }
     if (table === "mediaAssets") return [];
+    if (table === "instagramEventSources") return [];
+    if (table === "sourceOccurrences") return [];
+    if (table === "venueIdentities") {
+      return venueIdentities.filter((row) =>
+        Object.entries(filters).every(([key, value]) => row[key] === value),
+      );
+    }
     throw new Error(`Unexpected indexed QA table ${table}:${indexName}`);
   }
 
@@ -480,6 +493,86 @@ const aliasResult = await classify(aliasFixture, [reviewedItem(aliasTarget)]);
 assert.equal(aliasResult.items[0].disposition, "duplicate");
 assert.deepEqual(aliasResult.items[0].conflictIds, [aliasApproved._id]);
 
+const identityOnlyTarget = event("identity-only-target", {
+  title: "Historical Identity Exhibition",
+  venue: "Former Science Hall",
+});
+const identityOnlyApproved = event("identity-only-approved", {
+  title: identityOnlyTarget.title,
+  venue: learnedVenue.name,
+  status: "approved",
+});
+const identityOnlyFixture = makeCtx({
+  events: [identityOnlyTarget, identityOnlyApproved],
+  venues: [{ ...learnedVenue, aliases: [] }],
+  venueIdentities: [
+    {
+      _id: "venue-identity-historical",
+      _creationTime: 1,
+      active: true,
+      kind: "historical_alias",
+      rawValue: "Former Science Hall",
+      normalizedValue: "former science hall",
+      source: "manual",
+      venueId: learnedVenue._id,
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ],
+  sourceEvents: [identityOnlyTarget],
+});
+const identityOnlyResult = await classify(identityOnlyFixture, [
+  reviewedItem(identityOnlyTarget),
+]);
+assert.equal(
+  identityOnlyResult.items[0].disposition,
+  "duplicate",
+  "Unique moderation must resolve first-class historical identities, not only venue aliases.",
+);
+assert.deepEqual(identityOnlyResult.items[0].conflictIds, [identityOnlyApproved._id]);
+
+const providerIdentityTarget = event("provider-identity-target", {
+  title: "Provider Identity Exhibition",
+  venue: "Unmatched promoter wording",
+  venueInstagramHandle: "former_museum",
+});
+const providerIdentityApproved = event("provider-identity-approved", {
+  title: providerIdentityTarget.title,
+  venue: learnedVenue.name,
+  status: "approved",
+});
+const providerIdentityFixture = makeCtx({
+  events: [providerIdentityTarget, providerIdentityApproved],
+  venues: [{ ...learnedVenue, aliases: [] }],
+  venueIdentities: [
+    {
+      _id: "venue-identity-provider",
+      _creationTime: 1,
+      active: true,
+      kind: "provider_account",
+      provider: "instagram",
+      rawValue: "former_museum",
+      normalizedValue: "former_museum",
+      source: "manual",
+      venueId: learnedVenue._id,
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ],
+  sourceEvents: [providerIdentityTarget],
+});
+const providerIdentityResult = await classify(providerIdentityFixture, [
+  reviewedItem(providerIdentityTarget),
+]);
+assert.equal(
+  providerIdentityResult.items[0].disposition,
+  "duplicate",
+  "Unique moderation must resolve persisted secondary provider-account identities.",
+);
+assert.deepEqual(providerIdentityResult.items[0].conflictIds, [
+  providerIdentityApproved._id,
+]);
+
 const persistedVenueTarget = event("persisted-venue-target", {
   title: "Canonical Identity Showcase",
   venue: "Promoter wording not present in aliases",
@@ -526,6 +619,38 @@ assert.ok(
   venueLimitFixture.reads.some(
     (item) => item.table === "venues" && item.limit === 2_001,
   ),
+);
+
+const identityLimitTarget = event("identity-limit-target");
+const identityLimitVenue = makeVenue("identity-limit");
+const identityLimitFixture = makeCtx({
+  events: [identityLimitTarget],
+  venues: [identityLimitVenue],
+  venueIdentities: Array.from({ length: 2_001 }, (_, index) => ({
+    _id: `identity-limit-${index}`,
+    _creationTime: index,
+    active: true,
+    kind: "alias",
+    rawValue: `Identity alias ${index}`,
+    normalizedValue: `identity alias ${index}`,
+    source: "manual",
+    venueId: identityLimitVenue._id,
+    createdAt: 1,
+    updatedAt: 1,
+  })),
+});
+const identityLimitResult = await classify(identityLimitFixture, [
+  reviewedItem(identityLimitTarget),
+]);
+assert.equal(identityLimitResult.complete, false);
+assert.equal(identityLimitResult.items[0].reason, "indeterminate_venue_limit");
+assert.ok(
+  identityLimitFixture.reads.some(
+    (item) =>
+      item.table === "venueIdentities" &&
+      item.indexName === "by_active_kind" &&
+      item.limit === 2_000,
+    ),
 );
 
 const pendingLimitTarget = event("pending-limit-target");
@@ -752,7 +877,11 @@ try {
   assert.deepEqual(uniqueApproval.approvedIds, [uniqueEvent._id]);
   assert.deepEqual(uniqueApproval.skipped, []);
   assert.equal(uniqueFixture.events.get(uniqueEvent._id).status, "approved");
-  assert.equal(uniqueFixture.patches.length, 1);
+  assert.equal(
+    uniqueFixture.patches.length,
+    2,
+    "Approval must persist moderation and refresh the derived publication state.",
+  );
   assert.equal(uniqueFixture.audits.length, 1);
   assert.equal(uniqueFixture.audits[0].eventId, uniqueEvent._id);
   assert.equal(uniqueFixture.audits[0].action, "approved");
@@ -767,6 +896,14 @@ try {
 }
 
 const eventsSource = read("convex/events.ts");
+const moderationContractsSource = read("convex/eventDomain/contracts.ts");
+const moderationCommandsSource = read(
+  "convex/eventDomain/moderationCommands.ts",
+);
+const moderationReadsSource = read("convex/eventDomain/moderationReads.ts");
+const moderationUniquenessSource = read(
+  "convex/eventDomain/moderationUniqueness.ts",
+);
 const adminRouteSource = read("app/api/admin/events/route.ts");
 const approvalRouteSource = read("app/api/admin/events/approve-unique/route.ts");
 const dashboardSource = read("components/admin/moderation-dashboard.tsx");
@@ -775,9 +912,9 @@ const packageJson = JSON.parse(read("package.json"));
 const releaseCheckSource = read("scripts/release-check.mjs");
 
 const validatorSource = section(
-  eventsSource,
-  "const pendingModerationUniquenessReviewItem",
-  "const promotionTier",
+  moderationContractsSource,
+  "export const pendingModerationUniquenessReviewItem",
+  "export const promotionTier",
 );
 assert.match(
   validatorSource,
@@ -822,25 +959,29 @@ assert.match(
   /args:\s*\{\s*items: v\.array\(pendingModerationUniquenessReviewItem\),\s*asOfMs: v\.number\(\)/,
 );
 assert.match(classifierSource, /returns: pendingModerationUniquenessResult/);
-assert.match(classifierSource, /await requireAdminIdentity\(ctx\)/);
-assert.match(classifierSource, /asOfMs: args\.asOfMs/);
-assert.doesNotMatch(
+assert.match(
   classifierSource,
+  /handler: classifyPendingModerationUniquenessHandler/,
+);
+assert.match(moderationReadsSource, /await requireAdminIdentity\(ctx\)/);
+assert.match(moderationReadsSource, /asOfMs: args\.asOfMs/);
+assert.doesNotMatch(
+  moderationReadsSource,
   /Date\.now\(\)/,
   "The query clock must be provided explicitly by the caller.",
 );
 
-const helperSource = section(
-  eventsSource,
-  "function assertPendingModerationUniquenessReviewItems",
-  "async function loadPublicVenueIdsForEvents",
-);
+const helperSource = moderationUniquenessSource;
 assert.match(helperSource, /MAX_PENDING_MODERATION_UNIQUENESS_ITEMS/);
 assert.match(helperSource, /Number\.isSafeInteger\(item\.expectedUpdatedAt\)/);
 assert.match(helperSource, /Promise\.all\(items\.map\(\(item\) => ctx\.db\.get\(item\.id\)\)\)/);
 assert.match(helperSource, /getBelgradeDayKey\(options\.asOfMs\)/);
 assert.match(helperSource, /event\.date < currentBelgradeDay/);
-assert.match(helperSource, /take\(MAX_PENDING_MODERATION_UNIQUENESS_VENUES \+ 1\)/);
+assert.match(
+  helperSource,
+  /await loadBoundedPublicVenueResolverRows\(ctx\)/,
+  "Moderation must use the same aggregate-bounded venue directory as ingestion.",
+);
 assert.match(
   helperSource,
   /withIndex\("by_status_date", \(q\) =>[\s\S]*?take\(MAX_PENDING_MODERATION_UNIQUENESS_DATE_COHORT_SIZE \+ 1\)/,
@@ -860,9 +1001,13 @@ assert.match(
   /args:\s*\{\s*items: v\.array\(pendingModerationUniquenessReviewItem\),\s*moderationNote: v\.string\(\)/,
 );
 assert.match(approvalMutationSource, /returns: approveUniquePendingEventsResult/);
-assert.match(approvalMutationSource, /await requireAdminIdentity\(ctx\)/);
-assert.match(approvalMutationSource, /review\.result\.complete/);
-assert.match(approvalMutationSource, /writeEventAuditLog/);
+assert.match(
+  approvalMutationSource,
+  /handler: approveUniquePendingEventsHandler/,
+);
+assert.match(moderationCommandsSource, /await requireAdminIdentity\(ctx\)/);
+assert.match(moderationCommandsSource, /review\.result\.complete/);
+assert.match(moderationCommandsSource, /writeEventAuditLog/);
 
 // The admin GET route paginates at <=25 up to a hard 200, classifies in <=10,
 // forwards one explicit clock, and degrades classifier failures into a visible

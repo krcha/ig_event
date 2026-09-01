@@ -477,7 +477,15 @@ try {
       },
       query(table) {
         if (table === "venues") {
-          return { collect: async () => [repairVenue] };
+          return {
+            collect: async () => [repairVenue],
+            take: async (limit) => [repairVenue].slice(0, limit),
+          };
+        }
+        if (table === "venueIdentities") {
+          return {
+            withIndex: () => ({ take: async () => [] }),
+          };
         }
         if (table === "events") {
           return {
@@ -655,6 +663,14 @@ try {
   };
   const reviewedAudits = [];
   const reviewedApprovedDatePeers = [];
+  const reviewedTopologyEpoch = {
+    _id: "reviewed-correction-topology-epoch",
+    key: "source-occurrence-topology-v1",
+    currentEpoch: 0,
+    verifiedEpoch: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  };
   const reviewedCtx = {
     auth: { getUserIdentity: async () => null },
     db: {
@@ -663,11 +679,15 @@ try {
         if (id === repairVenue._id) return repairVenue;
         if (id === reviewedReceipt._id) return reviewedReceipt;
         if (id === reviewedSourceLink._id) return reviewedSourceLink;
+        if (id === reviewedTopologyEpoch._id) return reviewedTopologyEpoch;
         return null;
       },
       async patch(id, patch) {
         if (id === reviewedEvent._id) Object.assign(reviewedEvent, structuredClone(patch));
         else if (id === reviewedReceipt._id) Object.assign(reviewedReceipt, structuredClone(patch));
+        else if (id === reviewedTopologyEpoch._id) {
+          Object.assign(reviewedTopologyEpoch, structuredClone(patch));
+        }
         else throw new Error(`Unexpected reviewed correction patch ${id}`);
       },
       async insert(table, value) {
@@ -703,6 +723,8 @@ try {
                     ? [posterPost]
                     : table === "mediaAssets"
                       ? [makePosterAsset()]
+                      : table === "sourceOccurrenceTopologyEpoch"
+                        ? [reviewedTopologyEpoch]
                       : [];
             const matches = records.filter((record) =>
               Object.entries(criteria).every(
@@ -977,6 +999,10 @@ try {
                 async take(limit) {
                   if (table === "scrapedPosts") return [persistedPost].slice(0, limit);
                   if (table === "mediaAssets") return assets.slice(0, limit);
+                  if (table === "venueIdentities") return [];
+                  if (table === "eventDomainMigrationState") return [];
+                  if (table === "publicationMigrationState") return [];
+                  if (table === "sourceOccurrenceTopologyEpoch") return [];
                   throw new Error(`Unexpected public grounding table ${table}`);
                 },
               };
@@ -1080,6 +1106,13 @@ try {
           }
           if ("instagramPostUrl" in args) {
             return (options.sourceMatches ?? []).map((match) => match.existingEvent);
+          }
+          if ("artists" in args && "limit" in args) {
+            return {
+              candidates: [],
+              complete: true,
+              venueResolutionStatus: "unresolved",
+            };
           }
           if ("date" in args) return [];
           if ("id" in args) {
@@ -1260,7 +1293,7 @@ try {
   );
   if (rotatedCachedPosterClient.creates.length !== 1) {
     unresolvedBoundaryDefects.push(
-      `rotated cached poster with an exact durable asset created ${rotatedCachedPosterClient.creates.length} events instead of continuing without OpenAI/refetch`,
+      `rotated cached poster with an exact durable asset created ${rotatedCachedPosterClient.creates.length} events instead of continuing without OpenAI/refetch (${JSON.stringify({ errors: rotatedCachedPosterSummary.errors, queries: rotatedCachedPosterClient.queries })})`,
     );
   }
   if (
@@ -1596,7 +1629,7 @@ try {
   );
   if (cachedCaptionClient.creates.length !== 1) {
     unresolvedBoundaryDefects.push(
-      `cached caption-only analysis + recovered image created ${cachedCaptionClient.creates.length} events instead of preserving caption provenance and continuing`,
+      `cached caption-only analysis + recovered image created ${cachedCaptionClient.creates.length} events instead of preserving caption provenance and continuing (${JSON.stringify({ errors: cachedCaptionSummary.errors, queries: cachedCaptionClient.queries })})`,
     );
   } else {
     const createdFields = JSON.parse(
@@ -1831,6 +1864,15 @@ try {
     events: [],
     receipts: [],
     sourceLinks: [],
+    sourceOccurrences: [],
+    topologyEpochs: [{
+      _id: "missing-venue-topology-epoch",
+      key: "source-occurrence-topology-v1",
+      currentEpoch: 0,
+      verifiedEpoch: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    }],
     audits: [],
   };
   const missingVenueCtx = {
@@ -1849,6 +1891,8 @@ try {
           ...missingVenueState.events,
           ...missingVenueState.receipts,
           ...missingVenueState.sourceLinks,
+          ...missingVenueState.sourceOccurrences,
+          ...missingVenueState.topologyEpochs,
           ...missingVenueState.mediaAssets,
         ].find((item) => item._id === id);
         if (!record) throw new Error(`Unexpected missing-venue patch ${id}`);
@@ -1859,6 +1903,8 @@ try {
           events: missingVenueState.events,
           instagramSourceOccurrenceReceipts: missingVenueState.receipts,
           instagramEventSources: missingVenueState.sourceLinks,
+          sourceOccurrences: missingVenueState.sourceOccurrences,
+          sourceOccurrenceTopologyEpoch: missingVenueState.topologyEpochs,
           eventAuditLog: missingVenueState.audits,
         };
         const target = targets[table];
@@ -1869,12 +1915,14 @@ try {
       },
       query(table) {
         if (table === "venues") {
-          return { collect: async () => [] };
+          return { collect: async () => [], take: async () => [] };
         }
         return {
           withIndex(_index, configure) {
             const criteria = indexCriteria(configure);
             const matching = () => {
+              if (table === "eventDomainMigrationState") return [];
+              if (table === "venueIdentities") return [];
               if (table === "scrapedPosts") return missingVenueState.posts;
               if (table === "events") return missingVenueState.events;
               if (table === "instagramSourceOccurrenceReceipts") {
@@ -1882,6 +1930,12 @@ try {
               }
               if (table === "instagramEventSources") {
                 return missingVenueState.sourceLinks;
+              }
+              if (table === "sourceOccurrences") {
+                return missingVenueState.sourceOccurrences;
+              }
+              if (table === "sourceOccurrenceTopologyEpoch") {
+                return missingVenueState.topologyEpochs;
               }
               if (table === "mediaAssets") return missingVenueState.mediaAssets;
               throw new Error(`Unexpected missing-venue table ${table}`);
@@ -2077,7 +2131,7 @@ try {
     processingLeaseOwner: processingFence.owner,
     processingLeaseExpiresAt: now + 60_000,
   };
-  const representativeEvent = {
+  let representativeEvent = {
     _id: "event-occurrence",
     title: extractionFixture.title,
     date: eventDate,
@@ -2118,47 +2172,121 @@ try {
     sourceFingerprint: oldFingerprint,
     sourceOccurrenceKey: oldOccurrenceKey,
   };
+  let sourceOccurrences = [];
+  let occurrenceTopologyEpoch = {
+    _id: "occurrence-topology-epoch",
+    key: "source-occurrence-topology-v1",
+    currentEpoch: 0,
+    verifiedEpoch: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  };
   const occurrenceCtx = {
     auth: { getUserIdentity: async () => null },
     db: {
       async get(id) {
         if (id === sourceFenceRecord._id) return sourceFenceRecord;
         if (id === representativeEvent._id) return representativeEvent;
+        if (id === occurrenceTopologyEpoch._id) return occurrenceTopologyEpoch;
         return null;
       },
       async patch(id, patch) {
+        if (id === representativeEvent._id) {
+          representativeEvent = { ...representativeEvent, ...structuredClone(patch) };
+          return;
+        }
         if (id === receipt._id) {
           receipt = { ...receipt, ...structuredClone(patch) };
           return;
         }
-        if (id === sourceLink._id) {
+        if (sourceLink && id === sourceLink._id) {
           sourceLink = { ...sourceLink, ...structuredClone(patch) };
+          return;
+        }
+        const sourceOccurrence = sourceOccurrences.find((item) => item._id === id);
+        if (sourceOccurrence) {
+          Object.assign(sourceOccurrence, structuredClone(patch));
+          return;
+        }
+        if (id === occurrenceTopologyEpoch._id) {
+          occurrenceTopologyEpoch = {
+            ...occurrenceTopologyEpoch,
+            ...structuredClone(patch),
+          };
           return;
         }
         throw new Error(`Unexpected occurrence patch ${id}`);
       },
-      async insert(table) {
+      async insert(table, value) {
+        if (table === "sourceOccurrences") {
+          const sourceOccurrence = {
+            _id: `source-occurrence-${sourceOccurrences.length + 1}`,
+            ...structuredClone(value),
+          };
+          sourceOccurrences.push(sourceOccurrence);
+          return sourceOccurrence._id;
+        }
+        if (table === "instagramEventSources") {
+          sourceLink = {
+            _id: "source-link-occurrence-rebound",
+            ...structuredClone(value),
+          };
+          return sourceLink._id;
+        }
         throw new Error(`Unexpected occurrence insert into ${table}`);
       },
       async delete(id) {
+        if (sourceLink && id === sourceLink._id) {
+          sourceLink = null;
+          return;
+        }
         throw new Error(`Unexpected occurrence delete ${id}`);
       },
       query(table) {
         return {
+          async take() {
+            if (table === "venues") return [];
+            throw new Error(`Unexpected direct occurrence table ${table}`);
+          },
           withIndex(_index, configure) {
             const criteria = indexCriteria(configure);
+            const matchingRecords = () => {
+              if (table === "eventDomainMigrationState") return [];
+              if (table === "venueIdentities") return [];
+              if (table === "instagramSourceOccurrenceReceipts") {
+                return criteria.sourceIdentity === receipt.sourceIdentity ? [receipt] : [];
+              }
+              if (table === "instagramEventSources") {
+                return sourceLink &&
+                  criteria.sourceIdentity === sourceLink.sourceIdentity &&
+                  criteria.sourceOccurrenceKey === sourceLink.sourceOccurrenceKey
+                  ? [sourceLink]
+                  : [];
+              }
+              if (table === "sourceOccurrences") {
+                return sourceOccurrences.filter((item) =>
+                  Object.entries(criteria).every(
+                    ([field, value]) => item[field] === value,
+                  ),
+                );
+              }
+              if (table === "sourceOccurrenceTopologyEpoch") {
+                return criteria.key === occurrenceTopologyEpoch.key
+                  ? [occurrenceTopologyEpoch]
+                  : [];
+              }
+              throw new Error(`Unexpected occurrence table ${table}`);
+            };
             return {
+              async take(limit) {
+                return matchingRecords().slice(0, limit);
+              },
               async unique() {
-                if (table === "instagramSourceOccurrenceReceipts") {
-                  return criteria.sourceIdentity === receipt.sourceIdentity ? receipt : null;
+                const matches = matchingRecords();
+                if (matches.length > 1) {
+                  throw new Error("Expected unique occurrence QA record.");
                 }
-                if (table === "instagramEventSources") {
-                  return criteria.sourceIdentity === sourceLink.sourceIdentity &&
-                    criteria.sourceOccurrenceKey === sourceLink.sourceOccurrenceKey
-                    ? sourceLink
-                    : null;
-                }
-                throw new Error(`Unexpected occurrence table ${table}`);
+                return matches[0] ?? null;
               },
             };
           },

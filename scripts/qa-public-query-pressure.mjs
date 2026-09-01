@@ -20,13 +20,19 @@ function read(path) {
 function section(source, start, end) {
   const startIndex = source.indexOf(start);
   assert.notEqual(startIndex, -1, `Missing section start: ${start}`);
-  const endIndex = end ? source.indexOf(end, startIndex + start.length) : source.length;
+  const endIndex = end
+    ? source.indexOf(end, startIndex + start.length)
+    : source.length;
   assert.notEqual(endIndex, -1, `Missing section end: ${end}`);
   return source.slice(startIndex, endIndex);
 }
 
 const schemaSource = read("convex/schema.ts");
 const eventsSource = read("convex/events.ts");
+const publicReadsSource = read("convex/eventDomain/publicReads.ts");
+const eventVenueBindingMigrationSource = read(
+  "convex/internal/migrations/eventVenueBindings.ts",
+);
 const venuesSource = read("convex/venues.ts");
 const publicEventsSource = read("lib/events/public-events.ts");
 const publicVenuePagesSource = read("lib/venues/public-venue-pages.ts");
@@ -40,16 +46,23 @@ const packageJson = JSON.parse(read("package.json"));
 const releaseCheckSource = read("scripts/release-check.mjs");
 const projectionPath = "convex/publicEventProjection.ts";
 
-for (const indexDefinition of [
-  '.index("by_normalizedVenueHandle_status_date", ["normalizedVenueInstagramHandle", "status", "date"])',
-  '.index("by_normalizedVenueIdentity_status_date", ["normalizedVenueIdentity", "status", "date"])',
+for (const [indexName, firstField] of [
+  ["by_normalizedVenueHandle_status_date", "normalizedVenueInstagramHandle"],
+  ["by_normalizedVenueIdentity_status_date", "normalizedVenueIdentity"],
 ]) {
-  assert.ok(
-    schemaSource.includes(indexDefinition),
-    `Legacy venue matching requires normalized identity index: ${indexDefinition}`,
+  assert.match(
+    schemaSource,
+    new RegExp(
+      `\\.index\\("${indexName}", \\[\\s*"${firstField}",\\s*"status",\\s*"date",?\\s*\\]\\)`,
+      "u",
+    ),
+    `Legacy venue matching requires normalized identity index: ${indexName}`,
   );
 }
-for (const fieldName of ["normalizedVenueIdentity", "normalizedVenueInstagramHandle"]) {
+for (const fieldName of [
+  "normalizedVenueIdentity",
+  "normalizedVenueInstagramHandle",
+]) {
   assert.match(
     schemaSource,
     new RegExp(`${fieldName}: v\\.optional\\(v\\.string\\(\\)\\)`),
@@ -58,13 +71,18 @@ for (const fieldName of ["normalizedVenueIdentity", "normalizedVenueInstagramHan
 }
 assert.match(
   eventsSource,
-  /backfillEventVenueIdentityBatch[\s\S]*resolveVenueDenormalizedFieldsFromPublicVenues/,
-  "The authenticated backfill must use the same canonical venue resolver as production writes.",
+  /backfillEventVenueIdentityBatch[\s\S]*unsafe compatibility backfill is retired/,
+  "The legacy event venue backfill must fail closed.",
+);
+assert.match(
+  eventVenueBindingMigrationSource,
+  /backfillEventVenueBindingsBatchHandler[\s\S]*rebindCanonicalVenue[\s\S]*event-venue-bindings-v1/,
+  "The tracked venue binding migration must re-attest occurrence provenance.",
 );
 assert.match(
   read("scripts/backfill-event-venue-identity.mjs"),
-  /verificationPass[\s\S]*verificationPass\.updated !== 0/,
-  "The venue identity migration must finish with a zero-update idempotence pass.",
+  /is retired because it could change an event without atomically re-attesting/,
+  "The obsolete operator script must explain why it is retired.",
 );
 
 const venueCardsSource = section(
@@ -99,8 +117,8 @@ assert.match(
 );
 
 const publicEventsWindowSource = section(
-  eventsSource,
-  "export const listPublicEventsWindow",
+  publicReadsSource,
+  "export async function listPublicEventsWindowHandler",
   "function toPublicCalendarEvent",
 );
 assert.match(
@@ -115,27 +133,37 @@ assert.doesNotMatch(
 );
 assert.match(
   publicEventsWindowSource,
-  /paginate\(buildPublicPaginationOptions\(args\.paginationOpts\)\)/,
-  "The compatibility events window must rebuild fixed server-owned pagination options.",
+  /const pagination = buildPublicPaginationOptions\(args\.paginationOpts\);[\s\S]*paginatePublicationRows\(/,
+  "The compatibility events window must rebuild fixed server-owned pagination options and fill visible rows.",
 );
 assert.match(
   publicEventsWindowSource,
-  /projectLegacyCompatiblePublicEventPage\(ctx, result\.page\)/,
-  "The public list must revalidate structured-v2 rows while preserving approved legacy rows.",
+  /projectVisible: \(events\) =>\s*projectLegacyCompatiblePublicEventPage\(ctx, events\)/,
+  "The public list must revalidate each bounded raw page while preserving approved legacy rows.",
+);
+assert.match(
+  publicEventsWindowSource,
+  /loadApprovedWindowRawPage\(ctx, readMode, \{[\s\S]*cursor,[\s\S]*numItems/,
+  "The visible-row paginator must control each bounded raw database read.",
 );
 
 const calendarQuerySource = section(
+  publicReadsSource,
+  "export async function listPublicCalendarEventsWindowPaginatedHandler",
+  "export async function listApprovedUpcomingByDatePaginatedHandler",
+);
+const calendarQueryFacadeSource = section(
   eventsSource,
   "export const listPublicCalendarEventsWindowPaginated",
   "export const listApprovedUpcomingByDatePaginated",
 );
 assert.match(
-  eventsSource,
+  publicReadsSource,
   /const PUBLIC_EVENT_PAGE_SIZE = 50;/,
   "Public event pages must stay below the production isolate timeout threshold.",
 );
 assert.match(
-  calendarQuerySource,
+  calendarQueryFacadeSource,
   /cursor: v\.optional\(v\.union\(v\.string\(\), v\.null\(\)\)\)/,
   "The compact calendar API must expose only the supported cursor.",
 );
@@ -146,15 +174,18 @@ assert.match(
 );
 assert.match(
   calendarQuerySource,
-  /\.paginate\(\{[\s\S]*numItems: PUBLIC_EVENT_PAGE_SIZE/,
-  "Compact calendar reads must construct a fixed server-owned page size.",
+  /paginatePublicationRows\(\{[\s\S]*numItems: PUBLIC_EVENT_PAGE_SIZE/,
+  "Compact calendar reads must fill a fixed server-owned visible page size.",
 );
 assert.match(
   calendarQuerySource,
-  /projectLegacyCompatiblePublicEventPage\(ctx, result\.page\)/,
-  "The public calendar must revalidate structured-v2 rows while preserving approved legacy rows.",
+  /projectLegacyCompatiblePublicEventPage\(ctx, events\)/,
+  "The public calendar must revalidate each bounded raw page while preserving approved legacy rows.",
 );
-assert.doesNotMatch(calendarQuerySource, /paginationOptsValidator|args\.paginationOpts|\.collect\(\)/);
+assert.doesNotMatch(
+  calendarQuerySource,
+  /paginationOptsValidator|args\.paginationOpts|\.collect\(\)/,
+);
 assert.doesNotMatch(
   eventsSource,
   /export const listPublicCalendarEventsWindow = query/,
@@ -177,7 +208,10 @@ assert.doesNotMatch(
   /Promise\.all\(\[[\s\S]*listPublicActiveVenueFieldsQuery[\s\S]*listPublicVenueFieldsByIdsQuery/,
   "Public venue enrichment batches must not run alongside the full active directory query.",
 );
-const venueIdFixture = Array.from({ length: 205 }, (_, index) => `venue-${index}`);
+const venueIdFixture = Array.from(
+  { length: 205 },
+  (_, index) => `venue-${index}`,
+);
 const venueIdBatches = chunkPublicVenueIds(venueIdFixture);
 assert.deepEqual(
   venueIdBatches.map((batch) => batch.length),
@@ -204,9 +238,15 @@ assert.match(
   /events:listPublicCalendarEventsWindowPaginated/,
   "The daily carousel must migrate off the old compatibility endpoint.",
 );
-assert.doesNotMatch(carouselRouteSource, /events:listPublicCalendarEventsWindow"/);
+assert.doesNotMatch(
+  carouselRouteSource,
+  /events:listPublicCalendarEventsWindow"/,
+);
 assert.equal(MAX_PUBLIC_CALENDAR_WINDOW_DAYS, 45);
-const sitemapCalendarWindows = buildPublicCalendarDateWindows("2026-07-29", "2027-07-31");
+const sitemapCalendarWindows = buildPublicCalendarDateWindows(
+  "2026-07-29",
+  "2027-07-31",
+);
 assert.equal(sitemapCalendarWindows.length, 9);
 assert.deepEqual(sitemapCalendarWindows[0], {
   fromDate: "2026-07-29",
@@ -243,19 +283,37 @@ assert.match(
 assert.doesNotMatch(reprocessSource, /events:listPublicCalendarEventsWindow"/);
 
 const maintenanceUpcomingSource = section(
+  publicReadsSource,
+  "export async function listApprovedUpcomingByDatePaginatedHandler",
+  "function isPromotionActive",
+);
+const maintenanceUpcomingFacadeSource = section(
   eventsSource,
   "export const listApprovedUpcomingByDatePaginated",
-  "function readDateParts",
+  "export const getDiscoverFeed",
 );
 assert.match(maintenanceUpcomingSource, /requireAdminOrServiceSecret/);
-assert.match(maintenanceUpcomingSource, /serviceSecret: v\.optional\(v\.string\(\)\)/);
+assert.match(
+  maintenanceUpcomingFacadeSource,
+  /serviceSecret: v\.optional\(v\.string\(\)\)/,
+);
 assert.match(reclassifySource, /CRON_SECRET/);
 assert.match(reclassifySource, /serviceSecret/);
 
+const duplicateClassificationSource = section(
+  publicReadsSource,
+  "export async function getPublicDuplicateEventIds",
+  "/**\n * Single public-window storage boundary.",
+);
 assert.match(
-  eventsSource,
-  /buildApprovedEventAutoCleanupGroups[\s\S]*projectDeduplicatedPublicEventPage/,
-  "Duplicate classification must use private normalized inputs before public projection.",
+  duplicateClassificationSource,
+  /buildApprovedEventAutoCleanupGroups\(\s*cohort\.map\(toApprovedEventDuplicateRecord\),?\s*\)/,
+  "Duplicate classification must use private event records before public projection.",
+);
+assert.doesNotMatch(
+  duplicateClassificationSource,
+  /projectPublicEvent|projectCanonicallyGroundedPublicEventPage/,
+  "Duplicate classification must not consume already-projected public records.",
 );
 assert.doesNotMatch(
   publicEventsSource,
@@ -325,6 +383,7 @@ const singletonPrimary = {
   sourceCaption: singletonCaption,
   sourcePostedAt: singletonPostedAt,
   venueInstagramHandle: "qa_venue",
+  venueId: "venue-singleton",
   status: "approved",
   time: "TBD",
   title: "Grounded Handler Event",
@@ -366,6 +425,11 @@ const singletonPostsById = new Map(
 );
 const singletonCtx = {
   db: {
+    async get(id) {
+      return id === "venue-singleton"
+        ? { _id: id, publicStatus: "published", scrapeActive: true }
+        : null;
+    },
     query(table) {
       if (table === "scrapedPosts") {
         const criteria = {};
@@ -416,14 +480,21 @@ const singletonHiddenIds = await getPublicDuplicateEventIds(singletonCtx, [
   singletonDuplicate,
 ]);
 Date.now = originalSingletonDateNow;
-assert.equal(singletonCohortReads, 1, "A singleton raw page must load its same-date cohort.");
+assert.equal(
+  singletonCohortReads,
+  1,
+  "A singleton raw page must load its same-date cohort.",
+);
 assert.equal(
   singletonHiddenIds.has(singletonDuplicate._id),
   true,
   "A duplicate on a singleton final page must remain suppressed before projection.",
 );
 
-assert.ok(existsSync(projectionPath), "Public event responses must use an explicit projection module.");
+assert.ok(
+  existsSync(projectionPath),
+  "Public event responses must use an explicit projection module.",
+);
 const projectionSource = read(projectionPath);
 for (const privateField of [
   "rawExtractionJson",
@@ -475,7 +546,10 @@ const projectedFixture = projectPublicEvent(
 );
 const serializedProjection = JSON.stringify(projectedFixture);
 for (const marker of privateMarkers) {
-  assert.ok(!serializedProjection.includes(marker), `Public projection leaked nested marker: ${marker}`);
+  assert.ok(
+    !serializedProjection.includes(marker),
+    `Public projection leaked nested marker: ${marker}`,
+  );
 }
 assert.ok(serializedProjection.includes("Intentionally public caption"));
 
@@ -483,11 +557,16 @@ const normalizedHandleFixture = buildNormalizedEventVenueIdentity({
   venue: "  KC GRAD!  ",
   venueInstagramHandle: "@MiXeD.Handle",
 });
-assert.equal(normalizedHandleFixture.normalizedVenueInstagramHandle, "mixed.handle");
+assert.equal(
+  normalizedHandleFixture.normalizedVenueInstagramHandle,
+  "mixed.handle",
+);
 assert.equal(normalizedHandleFixture.normalizedVenueIdentity, "kc grad");
 assert.equal(
-  buildNormalizedEventVenueIdentity({ venue: "ŠKC Novi Beograd" }).normalizedVenueIdentity,
-  buildNormalizedEventVenueIdentity({ venue: "SKC Novi Beograd" }).normalizedVenueIdentity,
+  buildNormalizedEventVenueIdentity({ venue: "ŠKC Novi Beograd" })
+    .normalizedVenueIdentity,
+  buildNormalizedEventVenueIdentity({ venue: "SKC Novi Beograd" })
+    .normalizedVenueIdentity,
   "Normalized venue identity must preserve transliterated legacy matching.",
 );
 
@@ -523,7 +602,9 @@ assert.doesNotMatch(
 );
 
 assert.ok(
-  packageJson.scripts["qa:public-query-pressure"]?.includes("qa-public-query-pressure.mjs"),
+  packageJson.scripts["qa:public-query-pressure"]?.includes(
+    "qa-public-query-pressure.mjs",
+  ),
   "package.json must expose the public query-pressure regression gate.",
 );
 assert.match(
@@ -532,4 +613,6 @@ assert.match(
   "The full release gate must run the public query-pressure regression.",
 );
 
-console.log("Public query-pressure QA passed: public reads are server-bounded, normalized, projected, and non-redundant.");
+console.log(
+  "Public query-pressure QA passed: public reads are server-bounded, normalized, projected, and non-redundant.",
+);

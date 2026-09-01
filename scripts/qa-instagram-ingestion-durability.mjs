@@ -21,6 +21,10 @@ import {
   recordPaidFetchWindowSaturation,
   recordPaidFetchWindowSuccess,
   releasePaidFetchLease,
+  MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_EVENTS,
+  MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_REFERENCE_READS,
+  MAX_SCRAPED_POST_UPSERT_BATCH_SIZE,
+  SOURCE_REVISION_PUBLICATION_INVALIDATION_REASON,
   upsertManyByHandle,
 } from "../convex/scrapedPosts.ts";
 import { createEvent } from "../convex/events.ts";
@@ -32,6 +36,7 @@ import {
   resolveFailedMediaAttemptPolicy,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
 import { RemoteMediaHttpError } from "../lib/ai/prepare-image-for-openai.ts";
+import { readIngestionArchitectureSource } from "./qa-support/ingestion-architecture-source.mjs";
 
 const startedAt = Date.parse("2026-07-27T10:00:00.000Z");
 assert.equal(
@@ -233,13 +238,24 @@ assert.deepEqual(
   ["continued", "old-deferred", "fresh"],
 );
 
-const runnerSource = readFileSync(
-  new URL("../lib/pipeline/run-instagram-ingestion.ts", import.meta.url),
+const freshFetchSource = readFileSync(
+  new URL("../lib/pipeline/ingestion/fresh-fetch.ts", import.meta.url),
   "utf8",
 );
-const freshFetchBlock = runnerSource.slice(
-  runnerSource.indexOf("const rawItemCount = getInstagramScrapeRawItemCount(posts)"),
-  runnerSource.indexOf("const fetchedSourceKeys", runnerSource.indexOf("const rawItemCount = getInstagramScrapeRawItemCount(posts)")),
+const freshFetchPersistenceStart = freshFetchSource.indexOf(
+  "const rawItemCount = sourceBatch.rawDocumentCount",
+);
+const freshFetchPersistenceEnd = freshFetchSource.indexOf(
+  "const fetchedSourceIdentities",
+  freshFetchPersistenceStart,
+);
+assert.ok(
+  freshFetchPersistenceStart >= 0 && freshFetchPersistenceEnd > freshFetchPersistenceStart,
+  "The provider SourceDocument boundary and its durability window must remain inspectable.",
+);
+const freshFetchBlock = freshFetchSource.slice(
+  freshFetchPersistenceStart,
+  freshFetchPersistenceEnd,
 );
 assert.ok(
   freshFetchBlock.indexOf("await persistScrapedPostsForHandle") <
@@ -248,10 +264,11 @@ assert.ok(
 );
 assert.match(freshFetchBlock, /if \(saturated\)[\s\S]*recordPaidFetchWindowSaturationMutation[\s\S]*else[\s\S]*recordPaidFetchWindowSuccessMutation/);
 assert.match(
-  runnerSource,
+  readIngestionArchitectureSource(),
   /hasTerminalPermanentFailure[\s\S]*\? "terminal_permanent_failure"/,
   "explicit permanent media failures must be recorded as terminal instead of replaying forever",
 );
+const runnerSource = readIngestionArchitectureSource();
 
 function createDb(initialTables) {
   const tables = Object.fromEntries(
@@ -821,6 +838,24 @@ try {
     ],
   });
   const mediaRefreshCtx = { auth: { getUserIdentity: async () => null }, db: mediaRefreshDb };
+  await assert.rejects(
+    upsertManyByHandle._handler(mediaRefreshCtx, {
+      handle: "source.media",
+      posts: Array.from(
+        { length: MAX_SCRAPED_POST_UPSERT_BATCH_SIZE + 1 },
+        (_, index) => ({
+          handle: "source.media",
+          imageUrls: [],
+          instagramPostUrl: `https://www.instagram.com/p/batch-${index}/`,
+          postId: `batch-${index}`,
+          username: "source.media",
+        }),
+      ),
+      serviceSecret: "qa-durability-secret",
+    }),
+    /upsert batch exceeds the safe limit/i,
+    "A direct caller cannot bypass the established 25-post persistence batch.",
+  );
   await upsertManyByHandle._handler(mediaRefreshCtx, {
     handle: "source.media",
     posts: [
@@ -934,6 +969,327 @@ try {
     mediaRefreshTables.scrapedPosts[0].sourceRevision,
     5,
     "rejected source-identity drift must leave the durable revision unchanged",
+  );
+
+  const makeGroundedEvent = ({
+    campaign = false,
+    handle,
+    id,
+    postId,
+  }) => ({
+    _id: id,
+    artists: [],
+    canonicalSourceUrl: `https://www.instagram.com/p/${postId}/`,
+    createdAt: 1,
+    date: "2026-08-29",
+    eventType: "music",
+    instagramPostId: postId,
+    instagramPostUrl: `https://www.instagram.com/p/${postId}/`,
+    ...(campaign
+      ? { moderationNote: "[cross_post_campaign_primary:v1] reviewed" }
+      : {}),
+    normalizedFieldsJson: JSON.stringify({
+      sourceGroundingInstagramHandle: handle,
+    }),
+    normalizedInstagramPostUrl: `https://www.instagram.com/p/${postId}/`,
+    publicationPolicyVersion: 1,
+    publicationReason: "grounded",
+    publicationState: "publishable",
+    status: "approved",
+    title: id,
+    updatedAt: 1,
+    venue: "QA Venue",
+  });
+  const directPost = {
+    _id: "source-revision-direct-post",
+    altText: "Old alt text",
+    blocksPaidFetch: false,
+    caption: "Old caption",
+    createdAt: 1,
+    handle: "source.revision.direct",
+    imageUrls: [],
+    instagramPostUrl: "https://www.instagram.com/p/revision-direct/",
+    postId: "revision-direct",
+    postedAt: "2026-08-20T18:00:00.000Z",
+    processingOutcome: "receipt_complete",
+    processingStatus: "completed",
+    sourceRevision: 3,
+    updatedAt: 1,
+    username: "source.revision.direct",
+  };
+  const directEvent = makeGroundedEvent({
+    handle: directPost.handle,
+    id: "source-revision-direct-event",
+    postId: directPost.postId,
+  });
+  const campaignEvent = makeGroundedEvent({
+    campaign: true,
+    handle: directPost.handle,
+    id: "source-revision-campaign-event",
+    postId: directPost.postId,
+  });
+  const { db: directDb, tables: directTables } = createDb({
+    events: [directEvent, campaignEvent],
+    scrapedPosts: [directPost],
+  });
+  const directCtx = { auth: { getUserIdentity: async () => null }, db: directDb };
+  await upsertManyByHandle._handler(directCtx, {
+    handle: directPost.handle,
+    posts: [{
+      altText: directPost.altText,
+      caption: "Edited caption",
+      handle: directPost.handle,
+      imageUrls: [],
+      instagramPostUrl: directPost.instagramPostUrl,
+      postId: directPost.postId,
+      postedAt: directPost.postedAt,
+      username: directPost.username,
+    }],
+    serviceSecret: "qa-durability-secret",
+  });
+  assert.equal(directTables.scrapedPosts[0].sourceRevision, 4);
+  assert.equal(directTables.events[0].publicationState, "pending_verification");
+  assert.equal(
+    directTables.events[0].publicationReason,
+    SOURCE_REVISION_PUBLICATION_INVALIDATION_REASON,
+    "A direct-event-only legacy grounding must be hidden when its source revision advances.",
+  );
+  assert.equal(
+    directTables.events[1].publicationState,
+    "publishable",
+    "Audited campaign grounding is immutable and must ignore mutable scraped-post edits.",
+  );
+  directTables.events[0].publicationState = "publishable";
+  directTables.events[0].publicationReason = "grounded-again";
+  await upsertManyByHandle._handler(directCtx, {
+    handle: directPost.handle,
+    posts: [{
+      altText: directPost.altText,
+      caption: "Edited caption",
+      handle: directPost.handle,
+      imageUrls: [],
+      instagramPostUrl: directPost.instagramPostUrl,
+      postId: directPost.postId,
+      postedAt: directPost.postedAt,
+      username: directPost.username,
+    }],
+    serviceSecret: "qa-durability-secret",
+  });
+  assert.equal(directTables.scrapedPosts[0].sourceRevision, 4);
+  assert.equal(
+    directTables.events[0].publicationState,
+    "publishable",
+    "An unchanged scrape must not invalidate linked event publication.",
+  );
+
+  const provenancePost = {
+    ...directPost,
+    _id: "source-revision-provenance-post",
+    handle: "source.revision.provenance",
+    instagramPostUrl: "https://www.instagram.com/p/revision-provenance/",
+    postId: "revision-provenance",
+    sourceRevision: 7,
+    username: "source.revision.provenance",
+  };
+  const provenanceEvents = [
+    "source-revision-occurrence-event",
+    "source-revision-link-event",
+    "source-revision-receipt-event",
+  ].map((id) => ({
+    _id: id,
+    artists: [],
+    createdAt: 1,
+    date: "2026-08-29",
+    eventType: "music",
+    publicationPolicyVersion: 1,
+    publicationReason: "grounded",
+    publicationState: "publishable",
+    status: "approved",
+    title: id,
+    updatedAt: 1,
+    venue: "QA Venue",
+  }));
+  const provenanceSourceIdentity = "instagram:source.revision.provenance:revision-provenance";
+  const { db: provenanceDb, tables: provenanceTables } = createDb({
+    events: provenanceEvents,
+    instagramEventSources: [{
+      _id: "source-revision-link",
+      canonicalSourceUrl: provenancePost.instagramPostUrl,
+      eventId: provenanceEvents[1]._id,
+      instagramPostId: provenancePost.postId,
+      instagramPostUrl: provenancePost.instagramPostUrl,
+      linkedAt: 1,
+      sourceFingerprint: "source-revision-fingerprint",
+      sourceHandle: provenancePost.handle,
+      sourceIdentity: provenanceSourceIdentity,
+      sourceOccurrenceKey: "source-revision-key",
+      updatedAt: 1,
+    }],
+    instagramSourceOccurrenceReceipts: [{
+      _id: "source-revision-receipt",
+      createdAt: 1,
+      deferredChildCount: 0,
+      deferredChildKeys: [],
+      expectedKeys: ["source-revision-key"],
+      expectedOccurrences: [{
+        artists: [],
+        date: "2026-08-29",
+        key: "source-revision-key",
+        title: "Receipt representative",
+        venue: "QA Venue",
+      }],
+      satisfiedKeys: ["source-revision-key"],
+      satisfiedOccurrences: [{
+        eventId: provenanceEvents[2]._id,
+        key: "source-revision-key",
+      }],
+      sourceFingerprint: "source-revision-fingerprint",
+      sourceIdentity: provenanceSourceIdentity,
+      updatedAt: 1,
+    }],
+    scrapedPosts: [provenancePost],
+    sourceOccurrences: [{
+      _id: "source-revision-occurrence",
+      canonicalEventId: provenanceEvents[0]._id,
+      sourceDocumentId: provenancePost._id,
+      sourceIdentity: provenanceSourceIdentity,
+    }],
+  });
+  await upsertManyByHandle._handler(
+    { auth: { getUserIdentity: async () => null }, db: provenanceDb },
+    {
+      handle: provenancePost.handle,
+      posts: [{
+        caption: "Edited provenance caption",
+        handle: provenancePost.handle,
+        imageUrls: [],
+        instagramPostUrl: provenancePost.instagramPostUrl,
+        postId: provenancePost.postId,
+        postedAt: provenancePost.postedAt,
+        username: provenancePost.username,
+      }],
+      serviceSecret: "qa-durability-secret",
+    },
+  );
+  assert.deepEqual(
+    provenanceTables.events.map((event) => event.publicationState),
+    ["pending_verification", "pending_verification", "pending_verification"],
+    "Occurrence, provenance-link, and receipt representatives must all fail closed together.",
+  );
+
+  const overflowPosts = [0, 1].map((index) => ({
+    ...directPost,
+    _id: `source-revision-overflow-post-${index}`,
+    caption: `Old overflow caption ${index}`,
+    handle: "source.revision.overflow",
+    instagramPostUrl: `https://www.instagram.com/p/revision-overflow-${index}/`,
+    postId: `revision-overflow-${index}`,
+    username: "source.revision.overflow",
+  }));
+  const overflowEvents = overflowPosts.flatMap((post, postIndex) =>
+    Array.from(
+      { length: MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_EVENTS / 2 + 1 },
+      (_, eventIndex) =>
+        makeGroundedEvent({
+          handle: post.handle,
+          id: `source-revision-overflow-event-${postIndex}-${eventIndex}`,
+          postId: post.postId,
+        }),
+    ),
+  );
+  const { db: overflowDb, tables: overflowTables } = createDb({
+    events: overflowEvents,
+    scrapedPosts: overflowPosts,
+  });
+  await assert.rejects(
+    upsertManyByHandle._handler(
+      { auth: { getUserIdentity: async () => null }, db: overflowDb },
+      {
+        handle: overflowPosts[0].handle,
+        posts: overflowPosts.map((post, index) => ({
+          caption: `Edited overflow caption ${index}`,
+          handle: post.handle,
+          imageUrls: [],
+          instagramPostUrl: post.instagramPostUrl,
+          postId: post.postId,
+          postedAt: post.postedAt,
+          username: post.username,
+        })),
+        serviceSecret: "qa-durability-secret",
+      },
+    ),
+    /event union exceeds its hard bound/i,
+    "The invalidation event cap must apply across the complete multi-post mutation.",
+  );
+  assert.deepEqual(
+    overflowTables.scrapedPosts.map((post) => [post.caption, post.sourceRevision]),
+    overflowPosts.map((post) => [post.caption, post.sourceRevision]),
+    "Union overflow must fail before any scraped-post revision is written.",
+  );
+  assert.equal(
+    overflowTables.events.every((event) => event.publicationState === "publishable"),
+    true,
+    "Union overflow must fail before any event publication state is patched.",
+  );
+
+  const readBudgetPostCount = 5;
+  const readBudgetRowsPerPost = 60;
+  assert.ok(
+    readBudgetPostCount * readBudgetRowsPerPost * 4 >
+      MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_REFERENCE_READS,
+  );
+  const readBudgetPosts = Array.from(
+    { length: readBudgetPostCount },
+    (_, index) => ({
+      ...directPost,
+      _id: `source-revision-read-budget-post-${index}`,
+      caption: `Old read-budget caption ${index}`,
+      handle: "source.revision.readbudget",
+      instagramPostUrl: `https://www.instagram.com/p/revision-read-budget-${index}/`,
+      postId: `revision-read-budget-${index}`,
+      username: "source.revision.readbudget",
+    }),
+  );
+  const readBudgetEvents = readBudgetPosts.flatMap((post, postIndex) =>
+    Array.from({ length: readBudgetRowsPerPost }, (_, eventIndex) =>
+      makeGroundedEvent({
+        // These corrupt/colliding rows occupy every event lookup surface but
+        // fail the in-memory source-handle identity check and never grow the
+        // unique event union.
+        handle: "unrelated.source",
+        id: `source-revision-read-budget-event-${postIndex}-${eventIndex}`,
+        postId: post.postId,
+      }),
+    ),
+  );
+  const { db: readBudgetDb, tables: readBudgetTables } = createDb({
+    events: readBudgetEvents,
+    scrapedPosts: readBudgetPosts,
+  });
+  await assert.rejects(
+    upsertManyByHandle._handler(
+      { auth: { getUserIdentity: async () => null }, db: readBudgetDb },
+      {
+        handle: readBudgetPosts[0].handle,
+        posts: readBudgetPosts.map((post, index) => ({
+          caption: `Edited read-budget caption ${index}`,
+          handle: post.handle,
+          imageUrls: [],
+          instagramPostUrl: post.instagramPostUrl,
+          postId: post.postId,
+          postedAt: post.postedAt,
+          username: post.username,
+        })),
+        serviceSecret: "qa-durability-secret",
+      },
+    ),
+    /reference read budget was exceeded/i,
+    "Filtered collisions must not bypass the aggregate bounded-read budget.",
+  );
+  assert.deepEqual(
+    readBudgetTables.scrapedPosts.map((post) => [post.caption, post.sourceRevision]),
+    readBudgetPosts.map((post) => [post.caption, post.sourceRevision]),
+    "Read-budget overflow must fail before any source revision write.",
   );
 
   const { db: analysisDb, tables: analysisTables } = createDb({

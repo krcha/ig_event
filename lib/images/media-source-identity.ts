@@ -1,4 +1,4 @@
-import { normalizeInstagramPostUrl } from "@/lib/images/apify-images";
+import { canonicalizeSourceUrl } from "@/lib/domain/source-url";
 
 export type InstagramMediaSourceIdentity = {
   postId?: string | null;
@@ -6,6 +6,7 @@ export type InstagramMediaSourceIdentity = {
 };
 
 export type NormalizedInstagramMediaSourceIdentity = {
+  canonicalSourceUrl: string;
   postId: string;
   normalizedInstagramPostUrl: string;
   sourceKey: string;
@@ -16,28 +17,24 @@ export function normalizeInstagramMediaSourceIdentity(
 ): NormalizedInstagramMediaSourceIdentity {
   const postId = identity.postId?.trim() ?? "";
   const rawInstagramPostUrl = identity.instagramPostUrl?.trim() ?? "";
-  if (rawInstagramPostUrl) {
-    let hostname: string;
-    try {
-      hostname = new URL(rawInstagramPostUrl).hostname.toLowerCase();
-    } catch {
-      throw new Error("Instagram media persistence requires a valid Instagram post URL.");
-    }
-    if (hostname !== "instagram.com" && !hostname.endsWith(".instagram.com")) {
-      throw new Error("Instagram media persistence requires an Instagram post URL.");
-    }
+  const canonical = rawInstagramPostUrl
+    ? canonicalizeSourceUrl("instagram", rawInstagramPostUrl)
+    : null;
+  if (canonical && !canonical.ok) {
+    throw new Error("Instagram media persistence requires a canonical Instagram post URL.");
   }
-  const normalizedInstagramPostUrl = normalizeInstagramPostUrl(identity.instagramPostUrl);
-  if (!postId && !normalizedInstagramPostUrl) {
+  const canonicalSourceUrl = canonical?.ok ? canonical.value.canonicalUrl : "";
+  if (!postId && !canonicalSourceUrl) {
     throw new Error("Instagram media persistence requires a post ID or Instagram post URL.");
   }
 
   return {
+    canonicalSourceUrl,
     postId,
-    normalizedInstagramPostUrl,
+    normalizedInstagramPostUrl: canonicalSourceUrl,
     sourceKey: postId
       ? `instagram-post:${postId}`
-      : `instagram-url:${normalizedInstagramPostUrl}`,
+      : `instagram-url:${canonicalSourceUrl}`,
   };
 }
 

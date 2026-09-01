@@ -933,6 +933,62 @@ function runSemanticNormalizationQa() {
     );
   });
 
+  runCase("today-only caption agrees with a Saturday poster on the posting day", () => {
+    const saturday = new Date(semanticQaNow);
+    const daysUntilSaturday = (6 - saturday.getUTCDay() + 7) % 7 || 7;
+    saturday.setUTCDate(saturday.getUTCDate() + daysUntilSaturday);
+    const eventDate = saturday.toISOString().slice(0, 10);
+    const post = makePost({
+      caption: "Today: ACID HOUSE at QA Semantic Venue.",
+      postId: "qa-benign-today-only-saturday",
+      postedAt: `${eventDate}T08:00:00.000Z`,
+    });
+    const extracted = makeEventExtraction({
+      caption: post.caption,
+      date: eventDate,
+      dateEvidenceText: "SUBOTA",
+      postUrl: post.instagramPostUrl,
+      title: "ACID HOUSE",
+      titleEvidenceSource: "poster",
+      date_evidence: {
+        exact_text: "SUBOTA",
+        source: "poster",
+        is_relative: true,
+        resolved_date: eventDate,
+      },
+      source_conflicts: [
+        {
+          field: "date",
+          poster_value: "Saturday",
+          caption_value: "Today",
+          reason: "Poster says Saturday while the caption says Today.",
+        },
+      ],
+    });
+    const prepared = assertSingleOk(
+      prepare(post, extracted, {
+        selectedImageUrl: "https://cdn.example.com/acid-house-today.jpg",
+      }),
+      "today-only caption on Saturday",
+    );
+    assert.equal(prepared.event.date, eventDate);
+    assert.equal(prepared.event.status, "approved");
+    assert.deepEqual(prepared.event.sourceConflictFields, []);
+
+    const postedDayBefore = assertSingleOk(
+      prepare(
+        { ...post, postedAt: `${addIsoDays(eventDate, -1)}T08:00:00.000Z` },
+        extracted,
+        {
+          selectedImageUrl: "https://cdn.example.com/acid-house-today.jpg",
+        },
+      ),
+      "today-only caption before Saturday",
+    );
+    assert.equal(postedDayBefore.event.status, "pending");
+    assert.deepEqual(postedDayBefore.event.sourceConflictFields, ["date"]);
+  });
+
   runCase("minor title wording is benign but a different title is material", () => {
     const date = isoDateDaysFromNow(15);
     const dateText = ddmmyyyy(date);

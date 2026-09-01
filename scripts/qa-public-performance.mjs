@@ -20,6 +20,7 @@ const appPageSource = read("app/page.tsx");
 const browsePageSource = read("app/(main)/events-browse-page.tsx");
 const publicEventsSource = read("lib/events/public-events.ts");
 const convexEventsSource = read("convex/events.ts");
+const publicReadsSource = read("convex/eventDomain/publicReads.ts");
 const mobileMonthDayStripSource = read("components/calendar/mobile-month-day-strip.tsx");
 const venuesPageSource = read("app/(main)/venues/page.tsx");
 const venuePaginationSource = read("lib/venues/public-venue-directory-pagination.ts");
@@ -239,9 +240,19 @@ assert.match(
   "Convex public event windows should require an explicit upper date bound.",
 );
 assert.match(
-  convexEventsSource,
-  /\.eq\("status", "approved"\)\.gte\("date", args\.fromDate\)\.lt\("date", args\.beforeDate\)/,
+  publicReadsSource,
+  /async function loadApprovedWindowRawPage[\s\S]*?\.withIndex\("by_status_date"[\s\S]*?\.eq\("status", "approved"\)\.gte\("date", options\.fromDate\)[\s\S]*?options\.beforeDate[\s\S]*?approved\.lt\("date", options\.beforeDate\)[\s\S]*?\.paginate\(pagination\)/,
   "Convex public event windows should apply both lower and upper date bounds through the status/date index.",
+);
+assert.match(
+  publicReadsSource,
+  /export async function listPublicEventsWindowHandler[\s\S]*?return paginatePublicationRows\(\{[\s\S]*?loadApprovedWindowRawPage\(ctx, readMode, \{[\s\S]*?beforeDate: args\.beforeDate,[\s\S]*?projectVisible:/,
+  "The full public window should fill a bounded visible page from indexed raw pages without unbounded collection.",
+);
+assert.match(
+  publicReadsSource,
+  /export async function listPublicCalendarEventsWindowPaginatedHandler[\s\S]*?return paginatePublicationRows\(\{[\s\S]*?numItems: PUBLIC_EVENT_PAGE_SIZE,[\s\S]*?loadApprovedWindowRawPage\(ctx, readMode, \{[\s\S]*?beforeDate: args\.beforeDate,[\s\S]*?projectVisible:/,
+  "The compact calendar window should use the same bounded visible-pagination adapter.",
 );
 
 assert.match(
@@ -265,22 +276,22 @@ assertDoesNotInclude(
   "Public event loaders should not keep the unused load-all-then-slice page helper.",
 );
 assert.match(
-  convexEventsSource,
+  publicReadsSource,
   /const eventsByDate = new Map<string, Doc<"events">\[\]>\(\);/,
   "Duplicate cleanup should bucket internal events by date before public projection.",
 );
 assert.match(
-  convexEventsSource,
+  publicReadsSource,
   /buildApprovedEventAutoCleanupGroups\([\s\S]*cohort\.map\(toApprovedEventDuplicateRecord\)/,
   "Duplicate cleanup must use private classification inputs before public projection.",
 );
 assert.match(
-  convexEventsSource,
+  publicReadsSource,
   /const PUBLIC_DUPLICATE_DATE_COHORT_LIMIT = 25;/,
   "Duplicate cleanup should cap pairwise matching for high-volume public days.",
 );
 assert.match(
-  convexEventsSource,
+  publicReadsSource,
   /\.take\(PUBLIC_DUPLICATE_DATE_COHORT_LIMIT \+ 1\)/,
   "Boundary-date duplicate cohorts must be bounded at the indexed database read.",
 );

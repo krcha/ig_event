@@ -92,11 +92,11 @@ export function venueValueAppearsInEventEvidence(
   );
   if (containsExactTokenPhrase) return true;
 
-  // Short multi-token names such as "Red Bar" otherwise lose every useful
-  // token below: "red" is short and "bar" is generic. Accept only a
+  // Short multi-token venue names can otherwise lose every useful token when
+  // the distinctive prefix is short and the final token is generic. Accept only a
   // contiguous phrase whose distinctive prefix is exact and whose final
   // generic venue-kind token has a known Serbian case ending. This keeps
-  // nearby names such as "Red Star Bara" from matching "Red Bar".
+  // longer nearby name from matching the shorter venue.
   const finalValueToken = valueTokens.at(-1) ?? "";
   const finalTokenForms = SERBIAN_FINAL_VENUE_TOKEN_FORMS[finalValueToken];
   const hasDistinctiveExactPrefix = valueTokens

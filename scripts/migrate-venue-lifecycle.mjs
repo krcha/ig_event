@@ -66,6 +66,38 @@ function parseArgs(argv) {
   return { apply, backupReference, confirm, dryRun, limit, rollbackManifestPath };
 }
 
+function addCounts(total, page) {
+  for (const [key, value] of Object.entries(page)) {
+    total[key] = (total[key] ?? 0) + value;
+  }
+  return total;
+}
+
+async function loadCompletePreview(client, serviceSecret) {
+  let cursor = null;
+  const counts = {};
+  const rollbackManifest = [];
+  const sampleChanges = [];
+  let rollbackMapping = null;
+  do {
+    const page = await client.query(api.venues.previewVenueLifecycleMigration, {
+      paginationOpts: { cursor, numItems: 100 },
+      serviceSecret,
+    });
+    addCounts(counts, page.counts);
+    rollbackManifest.push(...page.rollbackManifest);
+    if (sampleChanges.length < 20) {
+      sampleChanges.push(
+        ...JSON.parse(page.sampleChangesJson).slice(0, 20 - sampleChanges.length),
+      );
+    }
+    rollbackMapping ??= page.rollbackMapping;
+    cursor = page.continueCursor;
+    if (page.isDone) break;
+  } while (true);
+  return { counts, rollbackManifest, rollbackMapping, sampleChanges };
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL?.trim();
@@ -102,9 +134,7 @@ async function main() {
   }
 
   const client = new ConvexHttpClient(convexUrl);
-  const preview = await client.query(api.venues.previewVenueLifecycleMigration, {
-    serviceSecret,
-  });
+  const preview = await loadCompletePreview(client, serviceSecret);
   console.log(JSON.stringify({ dryRun: options.dryRun, ...preview }, null, 2));
   if (options.rollbackManifestPath && options.dryRun) {
     writeFileSync(
@@ -124,31 +154,29 @@ async function main() {
   }
   if (preview.counts.needsMigration === 0) return;
 
-  let remaining = preview.counts.needsMigration;
   let appliedTotal = 0;
-  let remainingRollbackManifest = reviewedRollbackManifest;
-  while (remaining > 0) {
+  for (
+    let offset = 0;
+    offset < reviewedRollbackManifest.length;
+    offset += options.limit
+  ) {
+    const rollbackManifest = reviewedRollbackManifest.slice(
+      offset,
+      offset + options.limit,
+    );
     const result = await client.mutation(api.venues.applyVenueLifecycleMigrationBatch, {
       backupReference: options.backupReference,
-      expectedRollbackManifestJson: JSON.stringify(remainingRollbackManifest),
-      limit: options.limit,
+      rollbackManifest,
       serviceSecret,
     });
     appliedTotal += result.applied;
-    remaining = result.remaining;
-    const appliedIds = new Set(result.appliedIds);
-    remainingRollbackManifest = remainingRollbackManifest.filter(
-      (record) => !appliedIds.has(record.id),
-    );
     console.log(JSON.stringify({ appliedTotal, ...result }, null, 2));
-    if (result.applied === 0 && remaining > 0) {
-      throw new Error("Migration made no progress; stop and inspect before retrying.");
+    if (result.applied !== rollbackManifest.length) {
+      throw new Error("Migration did not apply the complete reviewed batch; stop and inspect.");
     }
   }
 
-  const finalPreview = await client.query(api.venues.previewVenueLifecycleMigration, {
-    serviceSecret,
-  });
+  const finalPreview = await loadCompletePreview(client, serviceSecret);
   console.log(JSON.stringify({ appliedTotal, dryRun: false, final: finalPreview }, null, 2));
 }
 

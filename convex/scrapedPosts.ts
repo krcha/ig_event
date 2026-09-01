@@ -1,11 +1,28 @@
 import type { Doc, Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import { requireAdminOrServiceSecret } from "./authz";
 import { normalizeInstagramPostUrl } from "../lib/images/apify-images";
+import {
+  canonicalizeSourceUrl,
+  canonicalizeSourceUrlOrEmpty,
+} from "../lib/domain/source-url";
 import { normalizeHandle } from "../lib/pipeline/venue-normalization";
 import { OPENAI_DEFINITIVE_OUTPUT_FAILURE_KINDS } from "../lib/ai/openai-analysis-protocol";
+import { PUBLICATION_POLICY_VERSION } from "../lib/domain/publication/policy";
+import { isCrossPostCampaignLineageEvent } from "../lib/events/cross-post-campaign-aggregate-attestation";
+import {
+  assertExistingSourceOccurrenceReceiptWithinBounds,
+  MAX_SOURCE_OCCURRENCE_KEYS_PER_SOURCE,
+} from "./internal/sourceOccurrenceReceipts";
+import {
+  assertOperationBatchLength,
+  assertOperationPaginationOptions,
+  clampQueryPaginationOptions,
+  resolveOperationLimit,
+} from "./internal/requestBounds";
 import {
   DEFAULT_APIFY_DAILY_BUDGET_USD,
   DEFAULT_APIFY_MAX_CHARGE_PER_HANDLE_USD,
@@ -19,6 +36,20 @@ import {
 
 const DEFAULT_PUBLIC_RECENT_POST_LIMIT = 6;
 const MAX_PUBLIC_RECENT_POST_LIMIT = 12;
+const MAX_SCRAPED_POST_COMPATIBILITY_LIST_SIZE = 1_000;
+const MAX_SCRAPED_POST_BACKLOG_SCAN_SIZE = 5_000;
+const MAX_SCRAPED_POST_PAGE_SIZE = 100;
+const MAX_SCRAPED_POST_GET_MANY_SIZE = 100;
+const MAX_PAID_FETCH_MIGRATION_BATCH_SIZE = 100;
+const DEFAULT_SCRAPED_POST_RETENTION_BATCH_SIZE = 100;
+const MAX_SCRAPED_POST_RETENTION_BATCH_SIZE = 500;
+export const MAX_SCRAPED_POST_UPSERT_BATCH_SIZE = 25;
+export const MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_EVENTS =
+  MAX_SOURCE_OCCURRENCE_KEYS_PER_SOURCE;
+export const MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_REFERENCE_READS =
+  1_024;
+export const SOURCE_REVISION_PUBLICATION_INVALIDATION_REASON =
+  "source_document_revision_changed";
 const MIN_PROCESSING_RETRY_DELAY_MS = 15 * 60_000;
 const MAX_PROCESSING_RETRY_DELAY_MS = 6 * 60 * 60_000;
 const processingStatusValidator = v.union(
@@ -90,11 +121,308 @@ function stringArraysEqual(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+function readEventSourceHandle(event: Doc<"events">): string {
+  let attestedHandle = "";
+  try {
+    const fields = event.normalizedFieldsJson
+      ? (JSON.parse(event.normalizedFieldsJson) as unknown)
+      : null;
+    if (fields && typeof fields === "object" && !Array.isArray(fields)) {
+      const value = (fields as Record<string, unknown>)
+        .sourceGroundingInstagramHandle;
+      if (typeof value === "string") attestedHandle = value;
+    }
+  } catch {
+    attestedHandle = "";
+  }
+  return normalizeHandle(attestedHandle || event.venueInstagramHandle || "");
+}
+
+function eventMatchesScrapedPostIdentity(
+  event: Doc<"events">,
+  post: Doc<"scrapedPosts">,
+): boolean {
+  const sourceHandle = normalizeHandle(post.handle);
+  const sourceCanonicalUrl =
+    canonicalizeSourceUrlOrEmpty("instagram", post.canonicalSourceUrl) ||
+    canonicalizeSourceUrlOrEmpty("instagram", post.instagramPostUrl);
+  if (
+    !sourceHandle ||
+    !sourceCanonicalUrl ||
+    event.instagramPostId?.trim() !== post.postId ||
+    readEventSourceHandle(event) !== sourceHandle
+  ) {
+    return false;
+  }
+  return [
+    event.canonicalSourceUrl,
+    event.normalizedInstagramPostUrl,
+    event.instagramPostUrl,
+  ].some(
+    (value) =>
+      canonicalizeSourceUrlOrEmpty("instagram", value) === sourceCanonicalUrl,
+  );
+}
+
+function sourceLinkMatchesScrapedPostIdentity(
+  link: Doc<"instagramEventSources">,
+  post: Doc<"scrapedPosts">,
+): boolean {
+  const sourceHandle = normalizeHandle(post.handle);
+  const sourceCanonicalUrl =
+    canonicalizeSourceUrlOrEmpty("instagram", post.canonicalSourceUrl) ||
+    canonicalizeSourceUrlOrEmpty("instagram", post.instagramPostUrl);
+  const linkCanonicalUrl =
+    canonicalizeSourceUrlOrEmpty("instagram", link.canonicalSourceUrl) ||
+    canonicalizeSourceUrlOrEmpty("instagram", link.instagramPostUrl);
+  const handleMatches =
+    !link.sourceHandle || normalizeHandle(link.sourceHandle) === sourceHandle;
+  return Boolean(
+    handleMatches &&
+      ((link.instagramPostId && link.instagramPostId === post.postId) ||
+        (sourceCanonicalUrl && linkCanonicalUrl === sourceCanonicalUrl)),
+  );
+}
+
+function assertBoundedInvalidationRead(
+  label: string,
+  rows: readonly unknown[],
+): void {
+  if (rows.length > MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_EVENTS) {
+    throw new Error(
+      `${label} exceeds the bounded source-revision publication invalidation limit.`,
+    );
+  }
+}
+
+/**
+ * Resolves every canonical representative whose public grounding depends on a
+ * source document before that document advances revision. All reads and the
+ * event-ID union are hard bounded across the complete upsert mutation.
+ */
+async function preflightSourceRevisionPublicationInvalidation(
+  ctx: MutationCtx,
+  sourceDocuments: readonly Doc<"scrapedPosts">[],
+): Promise<Doc<"events">[]> {
+  if (sourceDocuments.length === 0) return [];
+
+  const eventIds = new Set<Id<"events">>();
+  const eventDocuments = new Map<Id<"events">, Doc<"events">>();
+  const sourceIdentities = new Set<string>();
+  let referenceReadCount = 0;
+  const addReferenceReads = (count: number) => {
+    referenceReadCount += count;
+    if (
+      referenceReadCount >
+      MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_REFERENCE_READS
+    ) {
+      throw new Error(
+        "Source-revision publication invalidation reference read budget was exceeded.",
+      );
+    }
+  };
+  const addEventId = (eventId: Id<"events">) => {
+    eventIds.add(eventId);
+    if (eventIds.size > MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_EVENTS) {
+      throw new Error(
+        "Source-revision publication invalidation event union exceeds its hard bound.",
+      );
+    }
+  };
+  const addSourceIdentity = (sourceIdentity: string) => {
+    if (!sourceIdentity.trim()) {
+      throw new Error("Source-revision publication invalidation found an empty source identity.");
+    }
+    sourceIdentities.add(sourceIdentity);
+    if (
+      sourceIdentities.size >
+      MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_EVENTS
+    ) {
+      throw new Error(
+        "Source-revision publication invalidation identity union exceeds its hard bound.",
+      );
+    }
+  };
+
+  for (const sourceDocument of sourceDocuments) {
+    const canonicalSourceUrl =
+      canonicalizeSourceUrlOrEmpty(
+        "instagram",
+        sourceDocument.canonicalSourceUrl,
+      ) ||
+      canonicalizeSourceUrlOrEmpty(
+        "instagram",
+        sourceDocument.instagramPostUrl,
+      );
+    const normalizedInstagramPostUrl = normalizeInstagramPostUrl(
+      sourceDocument.instagramPostUrl,
+    );
+    const [
+      occurrences,
+      linksByPostId,
+      linksByPostUrl,
+      linksByCanonicalUrl,
+      eventsByPostId,
+      eventsByPostUrl,
+      eventsByNormalizedUrl,
+      eventsByCanonicalUrl,
+    ] = await Promise.all([
+      ctx.db
+        .query("sourceOccurrences")
+        .withIndex("by_document_occurrence", (q) =>
+          q.eq("sourceDocumentId", sourceDocument._id),
+        )
+        .take(MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_EVENTS + 1),
+      ctx.db
+        .query("instagramEventSources")
+        .withIndex("by_post_id", (q) =>
+          q.eq("instagramPostId", sourceDocument.postId),
+        )
+        .take(MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_EVENTS + 1),
+      ctx.db
+        .query("instagramEventSources")
+        .withIndex("by_post_url", (q) =>
+          q.eq("instagramPostUrl", sourceDocument.instagramPostUrl),
+        )
+        .take(MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_EVENTS + 1),
+      canonicalSourceUrl
+        ? ctx.db
+            .query("instagramEventSources")
+            .withIndex("by_canonical_source_url", (q) =>
+              q.eq("canonicalSourceUrl", canonicalSourceUrl),
+            )
+            .take(MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_EVENTS + 1)
+        : Promise.resolve([]),
+      ctx.db
+        .query("events")
+        .withIndex("by_instagramPostId", (q) =>
+          q.eq("instagramPostId", sourceDocument.postId),
+        )
+        .take(MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_EVENTS + 1),
+      ctx.db
+        .query("events")
+        .withIndex("by_instagramPostUrl", (q) =>
+          q.eq("instagramPostUrl", sourceDocument.instagramPostUrl),
+        )
+        .take(MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_EVENTS + 1),
+      normalizedInstagramPostUrl
+        ? ctx.db
+            .query("events")
+            .withIndex("by_normalizedInstagramPostUrl", (q) =>
+              q.eq("normalizedInstagramPostUrl", normalizedInstagramPostUrl),
+            )
+            .take(MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_EVENTS + 1)
+        : Promise.resolve([]),
+      canonicalSourceUrl
+        ? ctx.db
+            .query("events")
+            .withIndex("by_canonicalSourceUrl", (q) =>
+              q.eq("canonicalSourceUrl", canonicalSourceUrl),
+            )
+            .take(MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_EVENTS + 1)
+        : Promise.resolve([]),
+    ]);
+
+    for (const [label, rows] of [
+      ["Source occurrence set", occurrences],
+      ["Post-ID provenance set", linksByPostId],
+      ["Post-URL provenance set", linksByPostUrl],
+      ["Canonical-URL provenance set", linksByCanonicalUrl],
+      ["Post-ID event set", eventsByPostId],
+      ["Post-URL event set", eventsByPostUrl],
+      ["Normalized-URL event set", eventsByNormalizedUrl],
+      ["Canonical-URL event set", eventsByCanonicalUrl],
+    ] as const) {
+      assertBoundedInvalidationRead(label, rows);
+      addReferenceReads(rows.length);
+    }
+
+    for (const occurrence of occurrences) {
+      addSourceIdentity(occurrence.sourceIdentity);
+      if (occurrence.canonicalEventId) addEventId(occurrence.canonicalEventId);
+    }
+    const links = [
+      ...new Map(
+        [...linksByPostId, ...linksByPostUrl, ...linksByCanonicalUrl].map(
+          (link) => [link._id, link] as const,
+        ),
+      ).values(),
+    ];
+    for (const link of links) {
+      if (!sourceLinkMatchesScrapedPostIdentity(link, sourceDocument)) continue;
+      addSourceIdentity(link.sourceIdentity);
+      addEventId(link.eventId);
+    }
+    const directEvents = [
+      ...new Map(
+        [
+          ...eventsByPostId,
+          ...eventsByPostUrl,
+          ...eventsByNormalizedUrl,
+          ...eventsByCanonicalUrl,
+        ].map((event) => [event._id, event] as const),
+      ).values(),
+    ];
+    for (const event of directEvents) {
+      if (!eventMatchesScrapedPostIdentity(event, sourceDocument)) continue;
+      eventDocuments.set(event._id, event);
+      addEventId(event._id);
+    }
+  }
+
+  for (const sourceIdentity of sourceIdentities) {
+    const receipts = await ctx.db
+      .query("instagramSourceOccurrenceReceipts")
+      .withIndex("by_sourceIdentity", (q) => q.eq("sourceIdentity", sourceIdentity))
+      .take(2);
+    addReferenceReads(receipts.length);
+    if (receipts.length > 1) {
+      throw new Error(
+        "Source-revision publication invalidation found duplicate occurrence receipts.",
+      );
+    }
+    const receipt = receipts[0];
+    if (!receipt) continue;
+    assertExistingSourceOccurrenceReceiptWithinBounds(receipt);
+    for (const satisfaction of receipt.satisfiedOccurrences) {
+      addEventId(satisfaction.eventId);
+    }
+  }
+
+  const missingEventIds = [...eventIds].filter(
+    (eventId) => !eventDocuments.has(eventId),
+  );
+  addReferenceReads(missingEventIds.length);
+  const loadedEvents = await Promise.all(
+    missingEventIds.map((eventId) => ctx.db.get(eventId)),
+  );
+  for (const event of loadedEvents) {
+    if (event) eventDocuments.set(event._id, event);
+  }
+  return [...eventIds]
+    .map((eventId) => eventDocuments.get(eventId))
+    .filter(
+      (event): event is Doc<"events"> =>
+        Boolean(
+          event &&
+            event.status === "approved" &&
+            !isCrossPostCampaignLineageEvent(event),
+        ),
+    );
+}
+
 function normalizePublicRecentPostLimit(value: number | undefined): number {
   if (!Number.isFinite(value)) {
     return DEFAULT_PUBLIC_RECENT_POST_LIMIT;
   }
   return Math.max(1, Math.min(MAX_PUBLIC_RECENT_POST_LIMIT, Math.trunc(value as number)));
+}
+
+function buildScrapedPostPaginationOptions(options: {
+  cursor: string | null;
+  numItems: number;
+}) {
+  return clampQueryPaginationOptions(options, MAX_SCRAPED_POST_PAGE_SIZE);
 }
 
 export const listByHandle = query({
@@ -104,10 +432,16 @@ export const listByHandle = query({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    return ctx.db
+    const posts = await ctx.db
       .query("scrapedPosts")
       .withIndex("by_handle", (q) => q.eq("handle", args.handle))
-      .collect();
+      .take(MAX_SCRAPED_POST_COMPATIBILITY_LIST_SIZE + 1);
+    if (posts.length > MAX_SCRAPED_POST_COMPATIBILITY_LIST_SIZE) {
+      throw new Error(
+        `Scraped-post compatibility list exceeds its safe bound of ${MAX_SCRAPED_POST_COMPATIBILITY_LIST_SIZE}; use listByHandlePaginated.`,
+      );
+    }
+    return posts;
   },
 });
 
@@ -180,7 +514,7 @@ export const listByHandlePaginated = query({
       .query("scrapedPosts")
       .withIndex("by_handle_postedAtMs", (q) => q.eq("handle", args.handle))
       .order("desc")
-      .paginate(args.paginationOpts);
+      .paginate(buildScrapedPostPaginationOptions(args.paginationOpts));
   },
 });
 
@@ -194,7 +528,7 @@ export const listAllHandlesPaginated = query({
     const result = await ctx.db
       .query("scrapedPosts")
       .withIndex("by_handle")
-      .paginate(args.paginationOpts);
+      .paginate(buildScrapedPostPaginationOptions(args.paginationOpts));
     return {
       ...result,
       page: result.page.map((post) => post.handle),
@@ -209,7 +543,15 @@ export const getManyByIds = query({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    if (args.ids.length > MAX_SCRAPED_POST_GET_MANY_SIZE) {
+      throw new Error(
+        `Scraped-post ID reads support at most ${MAX_SCRAPED_POST_GET_MANY_SIZE} IDs.`,
+      );
+    }
     const uniqueIds = [...new Set(args.ids)];
+    if (uniqueIds.length !== args.ids.length) {
+      throw new Error("Scraped-post ID reads require unique IDs.");
+    }
     const posts = [];
     for (const id of uniqueIds) {
       const post = await ctx.db.get(id);
@@ -262,6 +604,10 @@ export const getManyByHandleAndPostRefs = query({
             )
             .first();
           const normalizedInstagramPostUrl = normalizeInstagramPostUrl(ref.instagramPostUrl);
+          const canonicalSourceUrl = canonicalizeSourceUrlOrEmpty(
+            "instagram",
+            ref.instagramPostUrl,
+          );
           const matchedPost =
             byPostUrl ??
             (normalizedInstagramPostUrl
@@ -269,6 +615,14 @@ export const getManyByHandleAndPostRefs = query({
                   .query("scrapedPosts")
                   .withIndex("by_normalizedInstagramPostUrl", (q) =>
                     q.eq("normalizedInstagramPostUrl", normalizedInstagramPostUrl),
+                  )
+                  .first()
+              : null) ??
+            (canonicalSourceUrl
+              ? await ctx.db
+                  .query("scrapedPosts")
+                  .withIndex("by_canonicalSourceUrl", (q) =>
+                    q.eq("canonicalSourceUrl", canonicalSourceUrl),
                   )
                   .first()
               : null);
@@ -340,6 +694,11 @@ export const upsertManyByHandle = mutation({
   ),
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    if (args.posts.length > MAX_SCRAPED_POST_UPSERT_BATCH_SIZE) {
+      throw new Error(
+        `Scraped-post upsert batch exceeds the safe limit of ${MAX_SCRAPED_POST_UPSERT_BATCH_SIZE}.`,
+      );
+    }
     const normalizedHandle = normalizeHandle(args.handle);
     if (
       !normalizedHandle ||
@@ -359,11 +718,36 @@ export const upsertManyByHandle = mutation({
     const activePaidFetchOwner =
       (paidFetchControl?.leaseExpiresAt ?? 0) > now ? paidFetchControl?.leaseOwner : undefined;
     const suppliedFetchOwner = args.fetchLeaseOwner?.trim().slice(0, 200);
-    const persistedPosts: Array<{
+    type PersistedPostResult = {
       scrapedPostId: Id<"scrapedPosts">;
       postId: string;
       sourceRevision: number;
-    }> = [];
+    };
+    const persistedPosts: PersistedPostResult[] = [];
+    const preparedWrites: Array<() => Promise<PersistedPostResult>> = [];
+    const revisionChangedSourceDocuments: Doc<"scrapedPosts">[] = [];
+    const batchPostIds = new Set<string>();
+    const batchUrlIdentities = new Set<string>();
+    for (const post of args.posts) {
+      const canonicalSource = canonicalizeSourceUrl(
+        "instagram",
+        post.instagramPostUrl,
+      );
+      if (!canonicalSource.ok) {
+        throw new Error(
+          "New scraped-post writes require a canonical Instagram post URL.",
+        );
+      }
+      const urlIdentity = canonicalSource.value.canonicalUrl;
+      if (
+        batchPostIds.has(post.postId) ||
+        (urlIdentity && batchUrlIdentities.has(urlIdentity))
+      ) {
+        throw new Error("Scraped-post upsert batch contains a duplicate durable identity.");
+      }
+      batchPostIds.add(post.postId);
+      if (urlIdentity) batchUrlIdentities.add(urlIdentity);
+    }
     if (activePaidFetchOwner) {
       if (
         suppliedFetchOwner !== activePaidFetchOwner ||
@@ -397,7 +781,17 @@ export const upsertManyByHandle = mutation({
       }
       const existingByUrl = existingByPostId[0] ?? existingUrlMatches[0];
 
-      const normalizedInstagramPostUrl = normalizeInstagramPostUrl(post.instagramPostUrl);
+      const canonicalSource = canonicalizeSourceUrl(
+        "instagram",
+        post.instagramPostUrl,
+      );
+      if (!canonicalSource.ok) {
+        throw new Error(
+          "New scraped-post writes require a canonical Instagram post URL.",
+        );
+      }
+      const canonicalSourceUrl = canonicalSource.value.canonicalUrl;
+      const normalizedInstagramPostUrl = canonicalSourceUrl;
       const existingByNormalizedUrl =
         existingByPostId[0] || existingByUrl || !normalizedInstagramPostUrl
           ? []
@@ -413,14 +807,33 @@ export const upsertManyByHandle = mutation({
         );
       }
 
-      const existing = existingByUrl ?? existingByNormalizedUrl[0];
+      const existingByCanonicalUrl =
+        existingByPostId[0] ||
+        existingByUrl ||
+        existingByNormalizedUrl[0] ||
+        !canonicalSourceUrl
+          ? []
+          : await ctx.db
+              .query("scrapedPosts")
+              .withIndex("by_canonicalSourceUrl", (q) =>
+                q.eq("canonicalSourceUrl", canonicalSourceUrl),
+              )
+              .take(2);
+      if (existingByCanonicalUrl.length > 1) {
+        throw new Error(
+          `Duplicate durable scraped-post identity for canonical URL ${canonicalSourceUrl}.`,
+        );
+      }
+
+      const existing =
+        existingByUrl ?? existingByNormalizedUrl[0] ?? existingByCanonicalUrl[0];
       if (
         existing &&
         (normalizeHandle(existing.handle) !== normalizedHandle ||
           normalizeHandle(existing.username) !== normalizedHandle ||
           existing.postId !== post.postId ||
-          normalizeInstagramPostUrl(existing.instagramPostUrl) !==
-            normalizedInstagramPostUrl)
+          canonicalizeSourceUrlOrEmpty("instagram", existing.instagramPostUrl) !==
+            canonicalSourceUrl)
       ) {
         throw new Error(
           "Scraped-post durable identity cannot change its post ID or normalized Instagram URL.",
@@ -452,6 +865,7 @@ export const upsertManyByHandle = mutation({
         handle: effectiveHandle,
         sourceKey: getSourceKey({ ...post, handle: effectiveHandle }),
         normalizedInstagramPostUrl,
+        ...(canonicalSourceUrl ? { canonicalSourceUrl } : {}),
         updatedAt: now,
       };
 
@@ -475,7 +889,7 @@ export const upsertManyByHandle = mutation({
         const sourceRevision = shouldResetProcessing
           ? (existing.sourceRevision ?? 1) + 1
           : (existing.sourceRevision ?? 1);
-        await ctx.db.patch(existing._id, {
+        const patch = {
           ...nextRecord,
           sourceRevision,
           blocksPaidFetch: shouldResetProcessing ? true : (existing.blocksPaidFetch ?? true),
@@ -526,23 +940,48 @@ export const upsertManyByHandle = mutation({
                 processingLeaseExpiresAt: undefined,
               }
             : {}),
-        });
-        persistedPosts.push({
-          scrapedPostId: existing._id,
-          postId: post.postId,
-          sourceRevision,
+        };
+        if (shouldResetProcessing) {
+          revisionChangedSourceDocuments.push(existing);
+        }
+        preparedWrites.push(async () => {
+          await ctx.db.patch(existing._id, patch);
+          return {
+            scrapedPostId: existing._id,
+            postId: post.postId,
+            sourceRevision,
+          };
         });
       } else {
-        const scrapedPostId = await ctx.db.insert("scrapedPosts", {
-          ...nextRecord,
-          sourceRevision: 1,
-          blocksPaidFetch: true,
-          processingStatus: "pending",
-          processingAttempts: 0,
-          createdAt: now,
+        preparedWrites.push(async () => {
+          const scrapedPostId = await ctx.db.insert("scrapedPosts", {
+            ...nextRecord,
+            sourceRevision: 1,
+            blocksPaidFetch: true,
+            processingStatus: "pending",
+            processingAttempts: 0,
+            createdAt: now,
+          });
+          return { scrapedPostId, postId: post.postId, sourceRevision: 1 };
         });
-        persistedPosts.push({ scrapedPostId, postId: post.postId, sourceRevision: 1 });
       }
+    }
+
+    const eventsToInvalidate =
+      await preflightSourceRevisionPublicationInvalidation(
+        ctx,
+        revisionChangedSourceDocuments,
+      );
+    for (const event of eventsToInvalidate) {
+      await ctx.db.patch(event._id, {
+        publicationEvaluatedAt: now,
+        publicationPolicyVersion: PUBLICATION_POLICY_VERSION,
+        publicationReason: SOURCE_REVISION_PUBLICATION_INVALIDATION_REASON,
+        publicationState: "pending_verification",
+      });
+    }
+    for (const write of preparedWrites) {
+      persistedPosts.push(await write());
     }
     return persistedPosts;
   },
@@ -1110,7 +1549,12 @@ export const getBacklogStateByHandle = query({
     const posts = await ctx.db
       .query("scrapedPosts")
       .withIndex("by_handle", (q) => q.eq("handle", args.handle))
-      .collect();
+      .take(MAX_SCRAPED_POST_BACKLOG_SCAN_SIZE + 1);
+    if (posts.length > MAX_SCRAPED_POST_BACKLOG_SCAN_SIZE) {
+      throw new Error(
+        `Scraped-post backlog exceeds its safe exact-count bound of ${MAX_SCRAPED_POST_BACKLOG_SCAN_SIZE}; process paginated backlog pages before retrying.`,
+      );
+    }
     const now = Date.now();
     let actionable = 0;
     let busy = 0;
@@ -1236,7 +1680,12 @@ export const listPaidFetchMigrationPage = query({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    const result = await ctx.db.query("scrapedPosts").paginate(args.paginationOpts);
+    const paginationOpts = assertOperationPaginationOptions(
+      args.paginationOpts,
+      MAX_PAID_FETCH_MIGRATION_BATCH_SIZE,
+      "Paid-fetch migration page",
+    );
+    const result = await ctx.db.query("scrapedPosts").paginate(paginationOpts);
     return {
       ...result,
       page: result.page.map((post) => ({
@@ -1254,8 +1703,13 @@ export const backfillPaidFetchFlags = mutation({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    assertOperationBatchLength(args.ids.length, {
+      allowEmpty: true,
+      label: "Paid-fetch flag backfill batch",
+      maxItems: MAX_PAID_FETCH_MIGRATION_BATCH_SIZE,
+    });
     let updated = 0;
-    for (const id of [...new Set(args.ids)].slice(0, 100)) {
+    for (const id of [...new Set(args.ids)]) {
       const post = await ctx.db.get(id);
       if (!post || post.blocksPaidFetch !== undefined) continue;
       const isTerminal =
@@ -1282,6 +1736,11 @@ export const reconcilePaidFetchFlags = mutation({
   },
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    assertOperationBatchLength(args.ids.length, {
+      allowEmpty: true,
+      label: "Paid-fetch flag reconciliation batch",
+      maxItems: MAX_PAID_FETCH_MIGRATION_BATCH_SIZE,
+    });
     const now = Date.now();
     let scanned = 0;
     let releasedTerminal = 0;
@@ -1289,7 +1748,7 @@ export const reconcilePaidFetchFlags = mutation({
     let releasedOutOfHorizon = 0;
     let releasedExpiredLease = 0;
 
-    for (const id of [...new Set(args.ids)].slice(0, 100)) {
+    for (const id of [...new Set(args.ids)]) {
       const post = await ctx.db.get(id);
       if (!post || post.blocksPaidFetch !== true) continue;
       scanned += 1;
@@ -2348,28 +2807,145 @@ export const recordProcessingResult = mutation({
   },
 });
 
+const SCRAPED_POST_RETENTION_CURSOR_KEY = "scraped-post-retention-v1";
+
 export const deleteOlderThan = internalMutation({
   args: {
     cutoffUpdatedAt: v.number(),
+    cursor: v.optional(v.union(v.string(), v.null())),
     limit: v.optional(v.number()),
   },
+  returns: v.object({
+    continueCursor: v.string(),
+    cutoffUpdatedAt: v.number(),
+    deletedCount: v.number(),
+    deletedIds: v.array(v.id("scrapedPosts")),
+    hasMore: v.boolean(),
+    retainedReferencedCount: v.number(),
+    scannedCount: v.number(),
+  }),
   handler: async (ctx, args) => {
-    const limit = Math.max(1, Math.min(500, Math.trunc(args.limit ?? 100)));
-    const posts = await ctx.db
+    if (!Number.isSafeInteger(args.cutoffUpdatedAt)) {
+      throw new Error("Scraped-post retention cutoff must be a safe integer timestamp.");
+    }
+    const limit = resolveOperationLimit(args.limit, {
+      defaultValue: DEFAULT_SCRAPED_POST_RETENTION_BATCH_SIZE,
+      label: "Scraped-post retention batch size",
+      maxValue: MAX_SCRAPED_POST_RETENTION_BATCH_SIZE,
+    });
+    const persistedCursor = await ctx.db
+      .query("scrapedPostRetentionCursors")
+      .withIndex("by_key", (q) => q.eq("key", SCRAPED_POST_RETENTION_CURSOR_KEY))
+      .unique();
+    if (
+      persistedCursor &&
+      (!Number.isSafeInteger(persistedCursor.cutoffUpdatedAt) || !persistedCursor.cursor)
+    ) {
+      throw new Error("Persisted scraped-post retention cursor is invalid.");
+    }
+    const cutoffUpdatedAt = persistedCursor?.cutoffUpdatedAt ?? args.cutoffUpdatedAt;
+    const cursor = persistedCursor?.cursor ?? args.cursor ?? null;
+    const page = await ctx.db
       .query("scrapedPosts")
-      .withIndex("by_updatedAt", (q) => q.lt("updatedAt", args.cutoffUpdatedAt))
-      .take(limit);
+      .withIndex("by_updatedAt", (q) => q.lt("updatedAt", cutoffUpdatedAt))
+      .paginate({ cursor, numItems: limit });
     const deletedIds: Id<"scrapedPosts">[] = [];
+    let retainedReferencedCount = 0;
 
-    for (const post of posts) {
+    for (const post of page.page) {
+      const canonicalSourceUrl = canonicalizeSourceUrlOrEmpty(
+        "instagram",
+        post.instagramPostUrl,
+      );
+      const persistedCanonicalSourceUrl = post.canonicalSourceUrl
+        ? canonicalizeSourceUrlOrEmpty("instagram", post.canonicalSourceUrl)
+        : canonicalSourceUrl;
+      if (
+        !canonicalSourceUrl ||
+        !persistedCanonicalSourceUrl ||
+        persistedCanonicalSourceUrl !== canonicalSourceUrl
+      ) {
+        // Retention is destructive. A malformed or contradictory source URL
+        // cannot prove that no canonical provenance link exists, so preserve
+        // the source document until its identity has been repaired.
+        retainedReferencedCount += 1;
+        continue;
+      }
+
+      const [
+        firstClassOccurrence,
+        legacyPostIdLink,
+        legacyPostUrlLink,
+        legacyCanonicalSourceUrlLink,
+      ] =
+        await Promise.all([
+          ctx.db
+            .query("sourceOccurrences")
+            .withIndex("by_document_occurrence", (q) =>
+              q.eq("sourceDocumentId", post._id),
+            )
+            .take(1),
+          ctx.db
+            .query("instagramEventSources")
+            .withIndex("by_post_id", (q) => q.eq("instagramPostId", post.postId))
+            .take(1),
+          ctx.db
+            .query("instagramEventSources")
+            .withIndex("by_post_url", (q) =>
+              q.eq("instagramPostUrl", post.instagramPostUrl),
+            )
+            .take(1),
+          ctx.db
+            .query("instagramEventSources")
+            .withIndex("by_canonical_source_url", (q) =>
+              q.eq("canonicalSourceUrl", canonicalSourceUrl),
+            )
+            .take(1),
+        ]);
+      if (
+        firstClassOccurrence.length > 0 ||
+        legacyPostIdLink.length > 0 ||
+        legacyPostUrlLink.length > 0 ||
+        legacyCanonicalSourceUrlLink.length > 0
+      ) {
+        retainedReferencedCount += 1;
+        continue;
+      }
       await ctx.db.delete(post._id);
       deletedIds.push(post._id);
     }
 
+    if (!page.isDone) {
+      if (!page.continueCursor) {
+        throw new Error("Scraped-post retention pagination did not advance.");
+      }
+      const now = Date.now();
+      const nextCursorState = {
+        key: SCRAPED_POST_RETENTION_CURSOR_KEY,
+        cutoffUpdatedAt,
+        cursor: page.continueCursor,
+        updatedAt: now,
+      };
+      if (persistedCursor) {
+        await ctx.db.patch(persistedCursor._id, nextCursorState);
+      } else {
+        await ctx.db.insert("scrapedPostRetentionCursors", {
+          ...nextCursorState,
+          createdAt: now,
+        });
+      }
+    } else if (persistedCursor) {
+      await ctx.db.delete(persistedCursor._id);
+    }
+
     return {
+      continueCursor: page.continueCursor,
+      cutoffUpdatedAt,
       deletedCount: deletedIds.length,
       deletedIds,
-      hasMore: posts.length === limit,
+      hasMore: !page.isDone,
+      retainedReferencedCount,
+      scannedCount: page.page.length,
     };
   },
 });

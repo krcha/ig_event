@@ -45,6 +45,17 @@ async function withoutConsoleNoise(callback) {
   }
 }
 
+function emptyIngestionQueryResult(reference) {
+  return reference === "sourceOccurrences:listCandidatesForNormalizedOccurrence"
+    ? {
+        candidates: [],
+        complete: true,
+        limit: 25,
+        venueResolutionStatus: "unresolved",
+      }
+    : [];
+}
+
 function makePost(overrides = {}) {
   return {
     caption: "",
@@ -104,23 +115,39 @@ function makeExtraction(overrides = {}) {
     },
     source_conflicts: [],
     shared_schedule_context: {
-      venue: { applies_to_all: false, value: "", evidence: "", source: "unknown" },
-      time: { applies_to_all: false, value: "", evidence: "", source: "unknown" },
+      venue: {
+        applies_to_all: false,
+        value: "",
+        evidence: "",
+        source: "unknown",
+      },
+      time: {
+        applies_to_all: false,
+        value: "",
+        evidence: "",
+        source: "unknown",
+      },
     },
     schedule_entries: [],
     field_confirmation: Object.fromEntries(
-      ["title", "location", "location_name", "price", "start_time", "short_description", "artists"].map(
-        (key) => [
-          key,
-          {
-            confidence: 0.95,
-            found_in: ["poster"],
-            evidence: key,
-            evidence_snippets: [{ source: "poster", text: key }],
-            notes: "",
-          },
-        ],
-      ),
+      [
+        "title",
+        "location",
+        "location_name",
+        "price",
+        "start_time",
+        "short_description",
+        "artists",
+      ].map((key) => [
+        key,
+        {
+          confidence: 0.95,
+          found_in: ["poster"],
+          evidence: key,
+          evidence_snippets: [{ source: "poster", text: key }],
+          notes: "",
+        },
+      ]),
     ),
     ...overrides,
   };
@@ -295,7 +322,10 @@ const mixedDownloadSummary = createEmptyIngestionSummary(["venue"]).handles[0];
 let mixedDownloadAttempts = 0;
 await withoutConsoleNoise(() =>
   processIngestionPostWithExtractionForTesting({
-    client: { query: async () => [], mutation: async () => ({}) },
+    client: {
+      query: async (reference) => emptyIngestionQueryResult(reference),
+      mutation: async () => ({}),
+    },
     handle: "venue",
     post: makePost({
       imageUrl: "https://example.com/expired.jpg",
@@ -314,8 +344,13 @@ await withoutConsoleNoise(() =>
     dependencies: {
       downloadImage: async (url) => {
         mixedDownloadAttempts += 1;
-        if (url.includes("expired")) throw new RemoteMediaHttpError(403, "Forbidden");
-        return { imageBuffer: Buffer.from("current"), contentType: "image/jpeg", sourceUrl: url };
+        if (url.includes("expired"))
+          throw new RemoteMediaHttpError(403, "Forbidden");
+        return {
+          imageBuffer: Buffer.from("current"),
+          contentType: "image/jpeg",
+          sourceUrl: url,
+        };
       },
       normalizeToJpeg: async (imageBuffer) => ({
         imageBuffer,
@@ -330,7 +365,8 @@ assert.equal(mixedDownloadSummary.failedDownloads, 0);
 assert.equal(mixedDownloadSummary.permanentMediaDownloadFailures, 0);
 assert.equal(mixedDownloadSummary.errors.length, 0);
 
-const mixedPersistenceSummary = createEmptyIngestionSummary(["venue"]).handles[0];
+const mixedPersistenceSummary = createEmptyIngestionSummary(["venue"])
+  .handles[0];
 let mixedPersistenceAttempts = 0;
 const mixedPersistenceSucceeded = await withoutConsoleNoise(() =>
   persistInstagramMediaCandidates({
@@ -338,17 +374,27 @@ const mixedPersistenceSucceeded = await withoutConsoleNoise(() =>
       action: async () => {
         mixedPersistenceAttempts += 1;
         if (mixedPersistenceAttempts === 1) {
-          throw new Error("REMOTE_MEDIA_HTTP_STATUS=403; Remote image fetch failed.");
+          throw new Error(
+            "REMOTE_MEDIA_HTTP_STATUS=403; Remote image fetch failed.",
+          );
         }
         return {};
       },
     },
     handle: "venue",
     post: makePost(),
-    processingFence: { handle: "venue", postId: "qa-post", owner: "qa", sourceRevision: 1 },
+    processingFence: {
+      handle: "venue",
+      postId: "qa-post",
+      owner: "qa",
+      sourceRevision: 1,
+    },
     serviceSecret: "qa-secret",
     summary: mixedPersistenceSummary,
-    upstreamUrls: ["https://example.com/expired.jpg", "https://example.com/current.jpg"],
+    upstreamUrls: [
+      "https://example.com/expired.jpg",
+      "https://example.com/current.jpg",
+    ],
   }),
 );
 assert.equal(mixedPersistenceSucceeded, true);
@@ -402,13 +448,42 @@ const fromResults = prepareEventsForInsert(
   { from_sound: "frǾm" },
   {},
   { from_sound: "frǾm" },
-  { eventDateFilterNow: NOW, sourceRolesByHandle: { from_sound: "promoter" } },
+  {
+    eventDateFilterNow: NOW,
+    sourceRolesByHandle: { from_sound: "promoter" },
+    venueResolverSnapshot: {
+      venues: [
+        {
+          aliases: ["frǾm"],
+          id: "venue-klub-20-44",
+          instagramHandle: "20_44.nightclub",
+          name: "Klub 20/44",
+        },
+      ],
+      identities: [
+        {
+          active: true,
+          kind: "historical_alias",
+          value: "frǾm",
+          venueId: "venue-klub-20-44",
+        },
+      ],
+    },
+  },
 );
-assert.equal(fromResults.length, 1, "single-date structured FRØM child must replace helpers");
+assert.equal(
+  fromResults.length,
+  1,
+  "single-date structured FRØM child must replace helpers",
+);
 const boundFromResults = bindSourceOccurrenceMetadata(fromPost, fromResults);
-assert.equal(boundFromResults[0]?.normalizedFields.multiEventSplitDetected, false);
+assert.equal(
+  boundFromResults[0]?.normalizedFields.multiEventSplitDetected,
+  false,
+);
 assert.equal(boundFromResults[0]?.normalizedFields.multiEventSplitCount, 1);
-const fromOccurrenceKey = boundFromResults[0]?.normalizedFields.sourceOccurrenceKey;
+const fromOccurrenceKey =
+  boundFromResults[0]?.normalizedFields.sourceOccurrenceKey;
 assert.equal(
   typeof fromOccurrenceKey,
   "string",
@@ -503,7 +578,11 @@ const paraResults = prepareEventsForInsert(
   { eventDateFilterNow: NOW, sourceRolesByHandle: { para_klub: "venue" } },
 );
 const boundParaResults = bindSourceOccurrenceMetadata(paraPost, paraResults);
-assert.equal(boundParaResults.length, 1, "one Para timetable must persist as one occurrence");
+assert.equal(
+  boundParaResults.length,
+  1,
+  "one Para timetable must persist as one occurrence",
+);
 const boundPara = boundParaResults[0];
 assert.equal(boundPara?.kind, "ok");
 if (boundPara?.kind === "ok") {
@@ -567,7 +646,8 @@ if (fromPrepared?.kind === "ok") {
       normalizedFieldsJson: JSON.stringify({
         multiEventSplitDetected: true,
         multiEventSplitCount: 2,
-        splitSourceLine: "Every Thursday we are gathering and dancing in the garden!",
+        splitSourceLine:
+          "Every Thursday we are gathering and dancing in the garden!",
       }),
     },
   ].map((existingEvent) => ({ existingEvent, matchedBy: "post_id" }));
@@ -762,23 +842,39 @@ const commonResults = prepareEventsForInsert(
   { "common.belgrade": "COMMON | Белград | Мероприятия" },
   {},
   { "common.belgrade": "COMMON | Белград | Мероприятия" },
-  { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+  {
+    eventDateFilterNow: NOW,
+    sourceRolesByHandle: { "common.belgrade": "venue" },
+  },
 );
 const commonOk = commonResults.filter((result) => result.kind === "ok");
 const commonDeferred = commonResults.filter(
   (result) => result.kind === "skip" && result.reason === "far_future",
 );
-assert.equal(commonResults.length, 26, "weekly plan should preserve every bounded occurrence");
+assert.equal(
+  commonResults.length,
+  26,
+  "weekly plan should preserve every bounded occurrence",
+);
 assert.equal(commonOk.length, 25);
-assert.equal(commonDeferred.length, 1, "bounded far-future child must remain deferred");
-const boundCommonResults = bindSourceOccurrenceMetadata(commonPost, commonResults);
+assert.equal(
+  commonDeferred.length,
+  1,
+  "bounded far-future child must remain deferred",
+);
+const boundCommonResults = bindSourceOccurrenceMetadata(
+  commonPost,
+  commonResults,
+);
 assert.ok(
   boundCommonResults.every(
     (result) => result.normalizedFields.sourceOccurrencePlanUnverified === true,
   ),
   "model-only recurrence plans must remain explicitly unverified",
 );
-const firstBoundCommon = boundCommonResults.find((result) => result.kind === "ok");
+const firstBoundCommon = boundCommonResults.find(
+  (result) => result.kind === "ok",
+);
 assert.ok(firstBoundCommon && firstBoundCommon.kind === "ok");
 if (firstBoundCommon?.kind === "ok") {
   const expectedOccurrence = {
@@ -831,14 +927,18 @@ if (firstBoundCommon?.kind === "ok") {
   );
 }
 
-const persistenceSummary = createEmptyIngestionSummary(["common.belgrade"]).handles[0];
+const persistenceSummary = createEmptyIngestionSummary(["common.belgrade"])
+  .handles[0];
 const persistedCommonEvents = [];
 const persistenceUpdates = [];
 await withoutConsoleNoise(() =>
   processIngestionPostWithExtractionForTesting({
     client: {
-      query: async () => [],
+      query: async (reference) => emptyIngestionQueryResult(reference),
       mutation: async (_reference, args) => {
+        if ("plan" in args && "processingFence" in args) {
+          return { authority: "legacy", outcomes: [] };
+        }
         if ("representativeEventId" in args) return { recorded: true };
         if ("id" in args) {
           persistenceUpdates.push(args);
@@ -855,9 +955,13 @@ await withoutConsoleNoise(() =>
     handle: "common.belgrade",
     post: makeCaptionOnlyVideoPost(commonPost),
     summary: persistenceSummary,
-    canonicalVenueNamesByHandle: { "common.belgrade": "COMMON | Белград | Мероприятия" },
+    canonicalVenueNamesByHandle: {
+      "common.belgrade": "COMMON | Белград | Мероприятия",
+    },
     venueNameOverridesByHandle: {},
-    configuredVenueNamesByHandle: { "common.belgrade": "COMMON | Белград | Мероприятия" },
+    configuredVenueNamesByHandle: {
+      "common.belgrade": "COMMON | Белград | Мероприятия",
+    },
     serviceSecret: "qa",
     eventDateFilterNow: NOW,
     extracted: commonExtraction,
@@ -868,7 +972,11 @@ assert.equal(
   25,
   "the real persistence loop must create every currently eligible recurring child",
 );
-assert.equal(persistenceUpdates.length, 0, "a later recurring child must not overwrite a sibling");
+assert.equal(
+  persistenceUpdates.length,
+  0,
+  "a later recurring child must not overwrite a sibling",
+);
 assert.equal(
   new Set(persistedCommonEvents.map((event) => event.sourceOccurrenceKey)).size,
   25,
@@ -876,7 +984,9 @@ assert.equal(
 );
 assert.ok(
   persistedCommonEvents.every(
-    (event) => JSON.parse(event.normalizedFieldsJson).sourceOccurrencePlanUnverified === true,
+    (event) =>
+      JSON.parse(event.normalizedFieldsJson).sourceOccurrencePlanUnverified ===
+      true,
   ),
   "the persistence loop must preserve the fail-closed model-only recurrence marker",
 );
@@ -885,20 +995,31 @@ assert.equal(persistenceSummary.insertedEvents, 25);
 const commonOccurrenceKeys = boundCommonResults.map(
   (result) => result.normalizedFields.sourceOccurrenceKey,
 );
-assert.equal(new Set(commonOccurrenceKeys).size, 26, "every recurrence needs a unique key");
-assert.ok(commonOccurrenceKeys.every((key) => typeof key === "string" && key.length > 0));
+assert.equal(
+  new Set(commonOccurrenceKeys).size,
+  26,
+  "every recurrence needs a unique key",
+);
+assert.ok(
+  commonOccurrenceKeys.every(
+    (key) => typeof key === "string" && key.length > 0,
+  ),
+);
 assert.ok(
   boundCommonResults
     .filter((result) => result.kind === "ok")
     .every(
-      (result) => result.normalizedFields.sourceOccurrenceDeferredChildCount === 1,
+      (result) =>
+        result.normalizedFields.sourceOccurrenceDeferredChildCount === 1,
     ),
   "the exact receipt plan must retain the one deferred child",
 );
 assert.deepEqual(
-  commonOk.slice(0, 4).map((result) =>
-    result.kind === "ok" ? [result.event.date, result.event.time] : null,
-  ),
+  commonOk
+    .slice(0, 4)
+    .map((result) =>
+      result.kind === "ok" ? [result.event.date, result.event.time] : null,
+    ),
   [
     ["2026-08-03", "14:00"],
     ["2026-08-05", "19:00"],
@@ -909,15 +1030,13 @@ assert.deepEqual(
 assert.ok(
   commonResults.every(
     (result) =>
-      (result.kind === "ok" ? result.event.date : result.normalizedFields.normalizedDate) !==
-      "2026-07-29",
+      (result.kind === "ok"
+        ? result.event.date
+        : result.normalizedFields.normalizedDate) !== "2026-07-29",
   ),
   "a recurring schedule must not invent a pre-start Wednesday",
 );
-assert.equal(
-  commonDeferred[0]?.normalizedFields.normalizedDate,
-  "2026-10-28",
-);
+assert.equal(commonDeferred[0]?.normalizedFields.normalizedDate, "2026-10-28");
 
 const modelDriftExtraction = {
   ...commonExtraction,
@@ -937,7 +1056,10 @@ const modelDriftResults = prepareEventsForInsert(
   { "common.belgrade": "COMMON | Белград | Мероприятия" },
   {},
   { "common.belgrade": "COMMON | Белград | Мероприятия" },
-  { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+  {
+    eventDateFilterNow: NOW,
+    sourceRolesByHandle: { "common.belgrade": "venue" },
+  },
 );
 assert.equal(
   modelDriftResults.find((result) => result.kind === "ok")?.event.date,
@@ -969,7 +1091,10 @@ const boundaryResults = prepareEventsForInsert(
   { "common.belgrade": "COMMON | Белград | Мероприятия" },
   {},
   { "common.belgrade": "COMMON | Белград | Мероприятия" },
-  { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+  {
+    eventDateFilterNow: NOW,
+    sourceRolesByHandle: { "common.belgrade": "venue" },
+  },
 );
 assert.deepEqual(
   boundaryResults
@@ -985,8 +1110,9 @@ assert.deepEqual(
 assert.ok(
   boundaryResults.every(
     (result) =>
-      (result.kind === "ok" ? result.event.date : result.normalizedFields.normalizedDate) !==
-      "2026-08-01",
+      (result.kind === "ok"
+        ? result.event.date
+        : result.normalizedFields.normalizedDate) !== "2026-08-01",
   ),
   "the recurrence boundary itself must not become an event without a matching lane",
 );
@@ -1002,11 +1128,15 @@ const groundedCommonResults = prepareEventsForInsert(
   { "common.belgrade": "COMMON | Белград | Мероприятия" },
   {},
   { "common.belgrade": "COMMON | Белград | Мероприятия" },
-  { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+  {
+    eventDateFilterNow: NOW,
+    sourceRolesByHandle: { "common.belgrade": "venue" },
+  },
 );
 assert.ok(
   groundedCommonResults.every(
-    (result) => result.normalizedFields.sourceOccurrencePlanUnverified === false,
+    (result) =>
+      result.normalizedFields.sourceOccurrencePlanUnverified === false,
   ),
   "an exact captured recurrence start and coherent weekday/time lanes should ground the plan",
 );
@@ -1024,8 +1154,9 @@ assert.deepEqual(
 assert.ok(
   groundedCommonResults.every(
     (result) =>
-      (result.kind === "ok" ? result.event.date : result.normalizedFields.normalizedDate) !==
-      "2026-08-01",
+      (result.kind === "ok"
+        ? result.event.date
+        : result.normalizedFields.normalizedDate) !== "2026-08-01",
   ),
   "grounding must not reinterpret the recurrence start boundary as an occurrence",
 );
@@ -1049,13 +1180,13 @@ for (const recurrenceMarker of [
   };
   const syntaxExtraction = {
     ...boundaryExtraction,
-    schedule_entries: boundaryExtraction.schedule_entries.map((entry, index) => ({
-      ...entry,
-      source_text:
-        index === 0
-          ? `${recurrenceMarker}\nMONDAY 14:00`
-          : "WEDNESDAY 19:00",
-    })),
+    schedule_entries: boundaryExtraction.schedule_entries.map(
+      (entry, index) => ({
+        ...entry,
+        source_text:
+          index === 0 ? `${recurrenceMarker}\nMONDAY 14:00` : "WEDNESDAY 19:00",
+      }),
+    ),
   };
   const syntaxResults = prepareEventsForInsert(
     syntaxPost,
@@ -1064,32 +1195,46 @@ for (const recurrenceMarker of [
     { "common.belgrade": "COMMON | Белград | Мероприятия" },
     {},
     { "common.belgrade": "COMMON | Белград | Мероприятия" },
-    { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+    {
+      eventDateFilterNow: NOW,
+      sourceRolesByHandle: { "common.belgrade": "venue" },
+    },
   );
-  assert.equal(syntaxResults.length, 26, `${recurrenceMarker} must preserve the bounded plan`);
+  assert.equal(
+    syntaxResults.length,
+    26,
+    `${recurrenceMarker} must preserve the bounded plan`,
+  );
   assert.ok(
     syntaxResults.every(
-      (result) => result.normalizedFields.sourceOccurrencePlanUnverified === false,
+      (result) =>
+        result.normalizedFields.sourceOccurrencePlanUnverified === false,
     ),
     `${recurrenceMarker} must use coherent source lanes rather than bypass recurrence checks`,
   );
   assert.ok(
     syntaxResults.every(
       (result) =>
-        (result.kind === "ok" ? result.event.date : result.normalizedFields.normalizedDate) !==
-        "2026-08-01",
+        (result.kind === "ok"
+          ? result.event.date
+          : result.normalizedFields.normalizedDate) !== "2026-08-01",
     ),
     `${recurrenceMarker} must not fabricate the recurrence boundary as an event`,
   );
 
   if (recurrenceMarker.startsWith("Weekly:")) {
-    const syntaxPersistenceSummary = createEmptyIngestionSummary(["common.belgrade"]).handles[0];
+    const syntaxPersistenceSummary = createEmptyIngestionSummary([
+      "common.belgrade",
+    ]).handles[0];
     const persistedSyntaxEvents = [];
     await withoutConsoleNoise(() =>
       processIngestionPostWithExtractionForTesting({
         client: {
-          query: async () => [],
+          query: async (reference) => emptyIngestionQueryResult(reference),
           mutation: async (_reference, args) => {
+            if ("plan" in args && "processingFence" in args) {
+              return { authority: "legacy", outcomes: [] };
+            }
             if ("representativeEventId" in args) return { recorded: true };
             if ("id" in args) return { updatedAt: 1000 };
             persistedSyntaxEvents.push(args);
@@ -1179,9 +1324,14 @@ const midweekBoundaryResults = prepareEventsForInsert(
   { "common.belgrade": "COMMON | Белград | Мероприятия" },
   {},
   { "common.belgrade": "COMMON | Белград | Мероприятия" },
-  { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+  {
+    eventDateFilterNow: NOW,
+    sourceRolesByHandle: { "common.belgrade": "venue" },
+  },
 );
-const midweekBoundaryOk = midweekBoundaryResults.filter((result) => result.kind === "ok");
+const midweekBoundaryOk = midweekBoundaryResults.filter(
+  (result) => result.kind === "ok",
+);
 assert.equal(midweekBoundaryResults.length, 26);
 assert.equal(midweekBoundaryOk.length, 26);
 assert.ok(
@@ -1189,9 +1339,10 @@ assert.ok(
   "a Wednesday recurrence boundary must never become an occurrence",
 );
 assert.equal(
-  midweekBoundaryOk.filter((result) =>
-    result.event.date.endsWith("-08-03") ||
-    new Date(`${result.event.date}T00:00:00Z`).getUTCDay() === 1,
+  midweekBoundaryOk.filter(
+    (result) =>
+      result.event.date.endsWith("-08-03") ||
+      new Date(`${result.event.date}T00:00:00Z`).getUTCDay() === 1,
   ).length,
   13,
   "every Monday lane must survive generated-date normalization",
@@ -1203,13 +1354,18 @@ assert.equal(
   13,
   "every Friday lane must survive generated-date normalization",
 );
-const midweekPersistenceSummary = createEmptyIngestionSummary(["common.belgrade"]).handles[0];
+const midweekPersistenceSummary = createEmptyIngestionSummary([
+  "common.belgrade",
+]).handles[0];
 const persistedMidweekEvents = [];
 await withoutConsoleNoise(() =>
   processIngestionPostWithExtractionForTesting({
     client: {
-      query: async () => [],
+      query: async (reference) => emptyIngestionQueryResult(reference),
       mutation: async (_reference, args) => {
+        if ("plan" in args && "processingFence" in args) {
+          return { authority: "legacy", outcomes: [] };
+        }
         if ("representativeEventId" in args) return { recorded: true };
         if ("id" in args) return { updatedAt: 1000 };
         persistedMidweekEvents.push(args);
@@ -1258,15 +1414,17 @@ for (const suspiciousRecurrenceMarker of [
   };
   const suspiciousExtraction = {
     ...boundaryExtraction,
-    schedule_entries: boundaryExtraction.schedule_entries.map((entry, index) => ({
-      ...entry,
-      source_text:
-        index === 0
-          ? suspiciousRecurrenceMarker.includes("schedule begins")
-            ? "WEEKLY FROM 01.08.26\nMONDAY 14:00"
-            : `${suspiciousRecurrenceMarker}\nMONDAY 14:00`
-          : "WEDNESDAY 19:00",
-    })),
+    schedule_entries: boundaryExtraction.schedule_entries.map(
+      (entry, index) => ({
+        ...entry,
+        source_text:
+          index === 0
+            ? suspiciousRecurrenceMarker.includes("schedule begins")
+              ? "WEEKLY FROM 01.08.26\nMONDAY 14:00"
+              : `${suspiciousRecurrenceMarker}\nMONDAY 14:00`
+            : "WEDNESDAY 19:00",
+      }),
+    ),
   };
   const suspiciousResults = prepareEventsForInsert(
     suspiciousPost,
@@ -1275,7 +1433,10 @@ for (const suspiciousRecurrenceMarker of [
     { "common.belgrade": "COMMON | Белград | Мероприятия" },
     {},
     { "common.belgrade": "COMMON | Белград | Мероприятия" },
-    { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+    {
+      eventDateFilterNow: NOW,
+      sourceRolesByHandle: { "common.belgrade": "venue" },
+    },
   );
   assert.ok(
     suspiciousResults.every((result) => result.kind !== "ok"),
@@ -1283,18 +1444,20 @@ for (const suspiciousRecurrenceMarker of [
   );
   assert.ok(
     suspiciousResults.every(
-      (result) => result.normalizedFields.rejectedRecurringModelSchedule === true,
+      (result) =>
+        result.normalizedFields.rejectedRecurringModelSchedule === true,
     ),
     `${suspiciousRecurrenceMarker} must remain auditable as a rejected recurrence`,
   );
 
   if (suspiciousRecurrenceMarker.includes("schedule begins")) {
-    const suspiciousSummary = createEmptyIngestionSummary(["common.belgrade"]).handles[0];
+    const suspiciousSummary = createEmptyIngestionSummary(["common.belgrade"])
+      .handles[0];
     let suspiciousMutationCalls = 0;
     await withoutConsoleNoise(() =>
       processIngestionPostWithExtractionForTesting({
         client: {
-          query: async () => [],
+          query: async (reference) => emptyIngestionQueryResult(reference),
           mutation: async () => {
             suspiciousMutationCalls += 1;
             return "unexpected-recurrence-suspicion-mutation";
@@ -1345,9 +1508,15 @@ const swappedLaneResults = prepareEventsForInsert(
   { "common.belgrade": "COMMON | Белград | Мероприятия" },
   {},
   { "common.belgrade": "COMMON | Белград | Мероприятия" },
-  { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+  {
+    eventDateFilterNow: NOW,
+    sourceRolesByHandle: { "common.belgrade": "venue" },
+  },
 );
-assert.ok(swappedLaneResults.length > 0, "the model lane-swap fixture must emit review candidates");
+assert.ok(
+  swappedLaneResults.length > 0,
+  "the model lane-swap fixture must emit review candidates",
+);
 assert.ok(
   swappedLaneResults.every(
     (result) => result.normalizedFields.sourceOccurrencePlanUnverified === true,
@@ -1357,14 +1526,16 @@ assert.ok(
 assert.ok(
   swappedLaneResults.every(
     (result) =>
-      (result.kind === "ok" ? result.event.date : result.normalizedFields.normalizedDate) !==
-      "2026-08-01",
+      (result.kind === "ok"
+        ? result.event.date
+        : result.normalizedFields.normalizedDate) !== "2026-08-01",
   ),
   "a swapped-lane proposal must not revive the non-event recurrence boundary",
 );
-const firstSwappedLane = bindSourceOccurrenceMetadata(groundedCommonPost, swappedLaneResults).find(
-  (result) => result.kind === "ok",
-);
+const firstSwappedLane = bindSourceOccurrenceMetadata(
+  groundedCommonPost,
+  swappedLaneResults,
+).find((result) => result.kind === "ok");
 assert.ok(firstSwappedLane && firstSwappedLane.kind === "ok");
 if (firstSwappedLane?.kind === "ok") {
   assert.equal(
@@ -1392,7 +1563,10 @@ const missingLaneResults = prepareEventsForInsert(
   { "common.belgrade": "COMMON | Белград | Мероприятия" },
   {},
   { "common.belgrade": "COMMON | Белград | Мероприятия" },
-  { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+  {
+    eventDateFilterNow: NOW,
+    sourceRolesByHandle: { "common.belgrade": "venue" },
+  },
 );
 assert.equal(
   missingLaneResults.filter((result) => result.kind === "ok").length,
@@ -1405,12 +1579,13 @@ assert.ok(
   ),
   "a source-lane omission must remain auditable instead of disappearing from the receipt plan",
 );
-const rejectedCoverageSummary = createEmptyIngestionSummary(["common.belgrade"]).handles[0];
+const rejectedCoverageSummary = createEmptyIngestionSummary(["common.belgrade"])
+  .handles[0];
 let rejectedCoverageMutationCount = 0;
 await withoutConsoleNoise(() =>
   processIngestionPostWithExtractionForTesting({
     client: {
-      query: async () => [],
+      query: async (reference) => emptyIngestionQueryResult(reference),
       mutation: async () => {
         rejectedCoverageMutationCount += 1;
         return null;
@@ -1419,9 +1594,13 @@ await withoutConsoleNoise(() =>
     handle: "common.belgrade",
     post: makeCaptionOnlyVideoPost(missingLanePost),
     summary: rejectedCoverageSummary,
-    canonicalVenueNamesByHandle: { "common.belgrade": "COMMON | Белград | Мероприятия" },
+    canonicalVenueNamesByHandle: {
+      "common.belgrade": "COMMON | Белград | Мероприятия",
+    },
     venueNameOverridesByHandle: {},
-    configuredVenueNamesByHandle: { "common.belgrade": "COMMON | Белград | Мероприятия" },
+    configuredVenueNamesByHandle: {
+      "common.belgrade": "COMMON | Белград | Мероприятия",
+    },
     serviceSecret: "qa",
     eventDateFilterNow: NOW,
     extracted: boundaryExtraction,
@@ -1435,7 +1614,10 @@ assert.equal(
   0,
   "a rejected lane-coverage plan must not reconcile an empty receipt or write events",
 );
-assert.match(rejectedCoverageSummary.errors[0] ?? "", /Recurring schedule rejected/u);
+assert.match(
+  rejectedCoverageSummary.errors[0] ?? "",
+  /Recurring schedule rejected/u,
+);
 
 const ambiguousLanePost = {
   ...commonPost,
@@ -1462,7 +1644,10 @@ const ambiguousLaneResults = prepareEventsForInsert(
   { "common.belgrade": "COMMON | Белград | Мероприятия" },
   {},
   { "common.belgrade": "COMMON | Белград | Мероприятия" },
-  { eventDateFilterNow: NOW, sourceRolesByHandle: { "common.belgrade": "venue" } },
+  {
+    eventDateFilterNow: NOW,
+    sourceRolesByHandle: { "common.belgrade": "venue" },
+  },
 );
 assert.equal(
   ambiguousLaneResults.filter((result) => result.kind === "ok").length,
@@ -1475,20 +1660,27 @@ assert.ok(
   ),
 );
 const ambiguousLaneDates = ambiguousLaneResults.map((result) =>
-  result.kind === "ok" ? [result.event.date, result.event.time, result.event.title] : [result.kind, result.normalizedFields.normalizedDate],
+  result.kind === "ok"
+    ? [result.event.date, result.event.time, result.event.title]
+    : [result.kind, result.normalizedFields.normalizedDate],
 );
 assert.ok(
   ambiguousLaneDates.every(([date]) => date !== "2026-08-01"),
   `an ambiguous multi-weekday lane must be rejected rather than fabricating its boundary: ${JSON.stringify(ambiguousLaneDates)}`,
 );
 
-const swappedPersistenceSummary = createEmptyIngestionSummary(["common.belgrade"]).handles[0];
+const swappedPersistenceSummary = createEmptyIngestionSummary([
+  "common.belgrade",
+]).handles[0];
 const persistedSwappedLaneEvents = [];
 await withoutConsoleNoise(() =>
   processIngestionPostWithExtractionForTesting({
     client: {
-      query: async () => [],
+      query: async (reference) => emptyIngestionQueryResult(reference),
       mutation: async (_reference, args) => {
+        if ("plan" in args && "processingFence" in args) {
+          return { authority: "legacy", outcomes: [] };
+        }
         if ("representativeEventId" in args) return { recorded: true };
         if ("id" in args) return { updatedAt: 1000 };
         persistedSwappedLaneEvents.push(args);
@@ -1502,9 +1694,13 @@ await withoutConsoleNoise(() =>
     handle: "common.belgrade",
     post: makeCaptionOnlyVideoPost(groundedCommonPost),
     summary: swappedPersistenceSummary,
-    canonicalVenueNamesByHandle: { "common.belgrade": "COMMON | Белград | Мероприятия" },
+    canonicalVenueNamesByHandle: {
+      "common.belgrade": "COMMON | Белград | Мероприятия",
+    },
     venueNameOverridesByHandle: {},
-    configuredVenueNamesByHandle: { "common.belgrade": "COMMON | Белград | Мероприятия" },
+    configuredVenueNamesByHandle: {
+      "common.belgrade": "COMMON | Белград | Мероприятия",
+    },
     serviceSecret: "qa",
     eventDateFilterNow: NOW,
     extracted: swappedLaneExtraction,
@@ -1513,25 +1709,32 @@ await withoutConsoleNoise(() =>
 assert.ok(persistedSwappedLaneEvents.length > 0);
 assert.ok(
   persistedSwappedLaneEvents.every(
-    (event) => JSON.parse(event.normalizedFieldsJson).sourceOccurrencePlanUnverified === true,
+    (event) =>
+      JSON.parse(event.normalizedFieldsJson).sourceOccurrencePlanUnverified ===
+      true,
   ),
   "the real persistence loop must preserve the swapped-lane unverified marker",
 );
 
 const persistedSwappedLane = persistedSwappedLaneEvents[0];
-const persistedSwappedExpected = persistedSwappedLane.sourceOccurrencePlan.expectedOccurrences.find(
-  (item) => item.key === persistedSwappedLane.sourceOccurrenceKey,
-);
+const persistedSwappedExpected =
+  persistedSwappedLane.sourceOccurrencePlan.expectedOccurrences.find(
+    (item) => item.key === persistedSwappedLane.sourceOccurrenceKey,
+  );
 assert.ok(persistedSwappedExpected);
 const persistedSwappedEventId = "qa-swapped-lane-event";
 const persistedSwappedReceipt = {
   _id: "qa-swapped-lane-receipt",
   sourceIdentity: persistedSwappedLane.sourceOccurrencePlan.sourceIdentity,
-  sourceFingerprint: persistedSwappedLane.sourceOccurrencePlan.sourceFingerprint,
+  sourceFingerprint:
+    persistedSwappedLane.sourceOccurrencePlan.sourceFingerprint,
   expectedKeys: persistedSwappedLane.sourceOccurrencePlan.expectedKeys,
-  expectedOccurrences: persistedSwappedLane.sourceOccurrencePlan.expectedOccurrences,
-  deferredChildCount: persistedSwappedLane.sourceOccurrencePlan.deferredChildCount,
-  deferredChildKeys: persistedSwappedLane.sourceOccurrencePlan.deferredChildKeys,
+  expectedOccurrences:
+    persistedSwappedLane.sourceOccurrencePlan.expectedOccurrences,
+  deferredChildCount:
+    persistedSwappedLane.sourceOccurrencePlan.deferredChildCount,
+  deferredChildKeys:
+    persistedSwappedLane.sourceOccurrencePlan.deferredChildKeys,
   satisfiedKeys: [persistedSwappedLane.sourceOccurrenceKey],
   satisfiedOccurrences: [
     {
@@ -1589,12 +1792,15 @@ try {
   else process.env.CRON_SECRET = previousCronSecret;
 }
 
-const ingestionSource = readFileSync(
-  new URL("../lib/pipeline/run-instagram-ingestion.ts", import.meta.url),
+const occurrencePlanningSource = readFileSync(
+  new URL(
+    "../lib/domain/occurrences/source-fingerprint.ts",
+    import.meta.url,
+  ),
   "utf8",
 );
 assert.match(
-  ingestionSource,
+  occurrencePlanningSource,
   /SOURCE_OCCURRENCE_EXTRACTION_PROTOCOL_VERSION\s*=\s*\n\s*"2026-08-23-event-evidence-v2-lineup-occurrence-v1"/,
   "the protocol fingerprint must invalidate receipts produced by the per-slot lineup policy",
 );

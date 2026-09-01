@@ -1,0 +1,1494 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { parse } from "csv-parse/sync";
+
+import {
+  auditVenueCompatibilitySeeds,
+  backfillCanonicalEventFieldsBatch,
+  backfillEventVenueBindingsBatch,
+  backfillMediaCanonicalUrlsBatch,
+  backfillSourceDocumentCanonicalUrlsBatch,
+  backfillSourceOccurrenceCanonicalPayloadsBatch,
+  backfillSourceOccurrencesBatch,
+  backfillVenueIdentitiesBatch,
+  auditSourceOccurrenceReceiptTopologyBatch,
+  VENUE_COMPATIBILITY_SEED_AUDIT_KEY,
+} from "../convex/internal/migrations/eventDomain.ts";
+import { buildEventOccurrenceIndexPatch } from "../convex/sourceOccurrences.ts";
+import { parseCanonicalEventPayload } from "../lib/domain/occurrences/canonical-event-payload.ts";
+import { serializeStructuredFacts } from "../lib/domain/occurrences/facts.ts";
+import { buildInstagramSourceOccurrenceFingerprint } from "../lib/domain/occurrences/source-fingerprint.ts";
+import { buildSourceDocumentIdentity } from "../lib/domain/source-documents.ts";
+import { LEGACY_VENUE_ALIAS_SEEDS } from "../lib/config/legacy-venue-alias-seeds.ts";
+import {
+  normalizeHandle,
+  normalizeVenueComparableText,
+} from "../lib/domain/venues/normalization.ts";
+import { isCompleteReceiptTopologyCoverage } from "../convex/internal/receiptTopologyCoverage.ts";
+import { markSourceOccurrenceTopologyMutation } from "../convex/internal/sourceOccurrenceTopologyEpoch.ts";
+
+const trackedVenueOverrideRows = parse(
+  readFileSync("data/venue-name-overrides.csv", "utf8"),
+  {
+    bom: true,
+    columns: true,
+    skip_empty_lines: true,
+    trim: true,
+  },
+);
+const compatibilitySeedByHandle = new Map(
+  LEGACY_VENUE_ALIAS_SEEDS.map((seed) => [
+    normalizeHandle(seed.canonicalHandle),
+    seed,
+  ]),
+);
+for (const row of trackedVenueOverrideRows) {
+  const handle = normalizeHandle(row.ig_handle ?? "");
+  const venueName = String(row.venue_name ?? "").trim();
+  assert.ok(
+    handle && venueName,
+    "Tracked venue override rows must be complete.",
+  );
+  const seed = compatibilitySeedByHandle.get(handle);
+  assert.ok(
+    seed,
+    `Tracked venue override @${handle} must have a migration compatibility seed.`,
+  );
+  assert.ok(
+    seed.aliases.some(
+      (alias) =>
+        normalizeVenueComparableText(alias) ===
+        normalizeVenueComparableText(venueName),
+    ),
+    `Tracked venue override @${handle}=${venueName} must be represented by a matching compatibility alias.`,
+  );
+}
+
+const TABLE_NAMES = [
+  "eventDomainMigrationState",
+  "events",
+  "instagramEventSources",
+  "instagramSourceOccurrenceReceipts",
+  "mediaAssets",
+  "scrapedPosts",
+  "sourceOccurrences",
+  "sourceOccurrenceTopologyEpoch",
+  "venueIdentities",
+  "venues",
+];
+
+function makeDb(initial = {}) {
+  const tables = Object.fromEntries(
+    TABLE_NAMES.map((table) => [
+      table,
+      new Map(
+        (initial[table] ?? []).map((row) => [row._id, structuredClone(row)]),
+      ),
+    ]),
+  );
+  let nextId = 1;
+
+  function rowsFor(table, filters, direction) {
+    const rows = [...tables[table].values()].filter((row) =>
+      Object.entries(filters).every(([field, value]) => row[field] === value),
+    );
+    rows.sort((left, right) => {
+      const comparison = String(left._id).localeCompare(String(right._id));
+      return direction === "desc" ? -comparison : comparison;
+    });
+    return rows;
+  }
+
+  const db = {
+    async get(id) {
+      for (const table of Object.values(tables)) {
+        if (table.has(id)) return table.get(id);
+      }
+      return null;
+    },
+    async insert(table, value) {
+      const id = `${table}_${nextId++}`;
+      tables[table].set(id, {
+        _creationTime: 10_000 + nextId,
+        _id: id,
+        ...structuredClone(value),
+      });
+      return id;
+    },
+    async patch(id, patch) {
+      for (const table of Object.values(tables)) {
+        if (!table.has(id)) continue;
+        table.set(id, { ...table.get(id), ...structuredClone(patch) });
+        return;
+      }
+      throw new Error(`Missing row ${id}.`);
+    },
+    query(table) {
+      const filters = {};
+      let direction = "asc";
+      const chain = {
+        withIndex(_index, apply) {
+          const builder = {
+            eq(field, value) {
+              filters[field] = value;
+              return builder;
+            },
+          };
+          apply(builder);
+          return chain;
+        },
+        order(nextDirection) {
+          direction = nextDirection;
+          return chain;
+        },
+        async paginate({ cursor, numItems }) {
+          const offset = cursor ? Number.parseInt(cursor, 10) : 0;
+          const rows = rowsFor(table, filters, direction);
+          const page = rows.slice(offset, offset + numItems);
+          const nextOffset = offset + page.length;
+          return {
+            continueCursor: String(nextOffset),
+            isDone: nextOffset >= rows.length,
+            page,
+          };
+        },
+        async take(limit) {
+          return rowsFor(table, filters, direction).slice(0, limit);
+        },
+        async unique() {
+          const rows = rowsFor(table, filters, direction);
+          if (rows.length > 1)
+            throw new Error("Unique query returned multiple rows.");
+          return rows[0] ?? null;
+        },
+      };
+      return chain;
+    },
+  };
+  return { db, tables };
+}
+
+function topologyEpochSnapshot(state) {
+  const rows = [...state.tables.sourceOccurrenceTopologyEpoch.values()];
+  if (rows.length !== 1) return null;
+  return {
+    currentEpoch: rows[0].currentEpoch,
+    verifiedEpoch: rows[0].verifiedEpoch,
+  };
+}
+
+async function assertAdditiveIdempotentMigration(options) {
+  const initialProgressCount =
+    options.state.tables.eventDomainMigrationState.size;
+  const dryRun = await options.mutation._handler(
+    { db: options.state.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(dryRun.updatedCount, options.expectedUpdates);
+  assert.equal(
+    options.state.tables.eventDomainMigrationState.size,
+    initialProgressCount,
+    `${options.label}: dry-run must not write progress.`,
+  );
+  options.assertDryRun?.();
+
+  const applied = await options.mutation._handler(
+    { db: options.state.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(applied.updatedCount, options.expectedUpdates);
+  assert.equal(applied.isDone, true);
+  assert.equal(
+    options.state.tables.eventDomainMigrationState.size,
+    initialProgressCount + 1,
+  );
+  options.assertApplied();
+
+  const verified = await options.mutation._handler(
+    { db: options.state.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(
+    verified.updatedCount,
+    0,
+    `${options.label}: rerun must be idempotent.`,
+  );
+}
+
+function cleanVenueCompatibilitySeedAuditState() {
+  return {
+    _id: "venue_compatibility_seed_audit_ready",
+    completedAt: 1,
+    createdAt: 1,
+    cursor: String(LEGACY_VENUE_ALIAS_SEEDS.length),
+    errorCount: 0,
+    isDone: true,
+    key: VENUE_COMPATIBILITY_SEED_AUDIT_KEY,
+    mismatchCount: 0,
+    phase: "compatibility_seed_target_audit",
+    scannedCount: LEGACY_VENUE_ALIAS_SEEDS.length,
+    skipReasonCountsJson: "[]",
+    updatedAt: 1,
+    updatedCount: 0,
+  };
+}
+
+function makeCanonicalPayloadMigrationState() {
+  const canonicalSourceUrl =
+    "https://www.instagram.com/p/PayloadAttestationPost/";
+  const sourceIdentity = buildSourceDocumentIdentity(
+    "instagram",
+    "PayloadAttestationPost",
+  );
+  const sourceFingerprint = buildInstagramSourceOccurrenceFingerprint({
+    altText: "QA poster alt text",
+    caption: "QA caption",
+    locationName: "QA Venue",
+  });
+  const occurrenceKey = "payload-attestation-occurrence";
+  const factsJson = serializeStructuredFacts({
+    artistClaims: ["QA Artist"],
+    eventTypeClaim: "concert",
+    evidence: [
+      { exactText: "QA Event", field: "title", source: "poster" },
+    ],
+    localDate: "2026-09-24",
+    policy: {
+      approvalDisposition: "approved",
+      autoApproveRule: "qa_exact_source",
+      pendingReasons: [],
+      signals: ["poster_title", "poster_date", "resolved_venue"],
+      structuredEvidenceVerified: true,
+    },
+    startTime: "21:00",
+    timeRelation: "exact",
+    titleClaim: "QA Event",
+    venueClaim: "QA Venue",
+    venueHandleClaim: "qa_venue",
+  });
+  const expected = {
+    artists: ["QA Artist"],
+    date: "2026-09-24",
+    factsJson,
+    key: occurrenceKey,
+    time: "21:00",
+    title: "QA Event",
+    venue: "QA Venue",
+  };
+  const normalizedFieldsJson = JSON.stringify({
+    artists: expected.artists,
+    normalizedDate: expected.date,
+    normalizedVenue: expected.venue,
+    sourceGroundingInstagramHandle: "qa_venue",
+    sourceOccurrenceSourceFingerprint: sourceFingerprint,
+    time: expected.time,
+    title: expected.title,
+  });
+  const rawExtractionJson = JSON.stringify({
+    contract_version: "event_evidence_v2",
+    is_event: true,
+  });
+  const event = {
+    _id: "payload_event",
+    artists: expected.artists,
+    canonicalSourceUrl,
+    createdAt: 100,
+    date: expected.date,
+    dateEvidenceIsRelative: false,
+    dateEvidenceResolvedDate: expected.date,
+    dateEvidenceSource: "poster",
+    dateEvidenceText: "24 SEP",
+    description: "Exact QA description",
+    eventType: "concert",
+    imageStorageId: "payload_storage",
+    imageUrl: "https://eventzeka.example/payload.jpg",
+    instagramPostId: "PayloadAttestationPost",
+    instagramPostUrl: canonicalSourceUrl,
+    normalizedFieldsJson,
+    normalizedInstagramPostUrl: canonicalSourceUrl,
+    normalizedVenueIdentity: "qa venue",
+    normalizedVenueInstagramHandle: "qa_venue",
+    occurrenceArtistFingerprint: "",
+    rawExtractionJson,
+    sourceCaption: "QA caption",
+    sourceConflictFields: [],
+    sourceOccurrenceKey: occurrenceKey,
+    sourcePostedAt: "2026-09-01T10:00:00.000Z",
+    status: "approved",
+    ticketPrice: "1200 RSD",
+    time: expected.time,
+    timeConfidence: 1,
+    timeEvidenceKind: "start_time_stated",
+    timeEvidenceText: "21H",
+    timeSource: "poster",
+    timeStatus: "confirmed",
+    title: expected.title,
+    updatedAt: 100,
+    venue: expected.venue,
+    venueId: "payload_venue",
+  };
+  const signature = buildEventOccurrenceIndexPatch(event);
+  Object.assign(event, signature);
+  return makeDb({
+    events: [event],
+    instagramEventSources: [
+      {
+        _id: "payload_link",
+        canonicalSourceUrl,
+        eventId: event._id,
+        instagramPostId: "PayloadAttestationPost",
+        instagramPostUrl: canonicalSourceUrl,
+        linkedAt: 100,
+        sourceFingerprint,
+        sourceHandle: "qa_venue",
+        sourceIdentity,
+        sourceOccurrenceId: "payload_occurrence",
+        sourceOccurrenceKey: occurrenceKey,
+        updatedAt: 100,
+      },
+    ],
+    instagramSourceOccurrenceReceipts: [
+      {
+        _id: "payload_receipt",
+        createdAt: 100,
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        expectedKeys: [occurrenceKey],
+        expectedOccurrences: [expected],
+        satisfiedKeys: [occurrenceKey],
+        satisfiedOccurrences: [{ eventId: event._id, key: occurrenceKey }],
+        sourceFingerprint,
+        sourceIdentity,
+        updatedAt: 100,
+      },
+    ],
+    scrapedPosts: [
+      {
+        _id: "payload_document",
+        altText: "QA poster alt text",
+        analysisResultJson: rawExtractionJson,
+        analysisRevision: 2,
+        caption: "QA caption",
+        handle: "qa_venue",
+        imageStorageId: "payload_storage",
+        imageUrl: "https://eventzeka.example/payload.jpg",
+        imageUrls: ["https://eventzeka.example/payload.jpg"],
+        instagramPostUrl: canonicalSourceUrl,
+        locationName: "QA Venue",
+        postId: "PayloadAttestationPost",
+        postedAt: "2026-09-01T10:00:00.000Z",
+        processingStatus: "completed",
+        sourceRevision: 2,
+        username: "qa_venue",
+      },
+    ],
+    sourceOccurrences: [
+      {
+        _id: "payload_occurrence",
+        ...signature,
+        canonicalEventId: event._id,
+        canonicalSourceUrl,
+        createdAt: 100,
+        factsJson,
+        normalizedOccurrenceJson: JSON.stringify({
+          artists: expected.artists,
+          date: expected.date,
+          eventType: event.eventType,
+          time: expected.time,
+          title: expected.title,
+          venue: expected.venue,
+          venueId: event.venueId,
+        }),
+        occurrenceOrdinal: 0,
+        provider: "instagram",
+        sourceDocumentId: "payload_document",
+        sourceFingerprint,
+        sourceIdentity,
+        sourceOccurrenceKey: occurrenceKey,
+        sourceRevision: 2,
+        state: "satisfied",
+        updatedAt: 100,
+        venueId: event.venueId,
+        venueResolutionStatus: "resolved",
+      },
+    ],
+    venues: [
+      {
+        _id: event.venueId,
+        aliases: [],
+        instagramHandle: "qa_venue",
+        name: expected.venue,
+      },
+    ],
+  });
+}
+
+{
+  const seedVenues = LEGACY_VENUE_ALIAS_SEEDS.map((seed, index) => ({
+    _id: `seed_venue_${index}`,
+    aliases: [],
+    instagramHandle: seed.canonicalHandle,
+    name: `Seed venue ${index}`,
+    normalizedInstagramHandle: seed.canonicalHandle,
+  }));
+  const state = makeDb({ venues: seedVenues });
+  const dryRun = await auditVenueCompatibilitySeeds._handler(
+    { db: state.db },
+    { dryRun: true },
+  );
+  assert.equal(dryRun.scannedCount, LEGACY_VENUE_ALIAS_SEEDS.length);
+  assert.equal(dryRun.issueCount, 0);
+  assert.equal(state.tables.eventDomainMigrationState.size, 0);
+  const applied = await auditVenueCompatibilitySeeds._handler(
+    { db: state.db },
+    { dryRun: false },
+  );
+  assert.equal(applied.issueCount, 0);
+  const auditState = [...state.tables.eventDomainMigrationState.values()][0];
+  assert.equal(auditState.key, VENUE_COMPATIBILITY_SEED_AUDIT_KEY);
+  assert.equal(auditState.auditDetailsJson, "[]");
+  assert.ok(auditState.completedAt);
+  await auditVenueCompatibilitySeeds._handler(
+    { db: state.db },
+    { dryRun: false },
+  );
+  assert.equal(
+    state.tables.eventDomainMigrationState.size,
+    1,
+    "A stable seed audit rerun must be idempotent.",
+  );
+
+  const missingState = makeDb({ venues: seedVenues.slice(1) });
+  const missing = await auditVenueCompatibilitySeeds._handler(
+    { db: missingState.db },
+    { dryRun: false },
+  );
+  assert.equal(missing.issueCount, 1);
+  assert.match(missing.issuesJson, /missing_target/u);
+  assert.equal(
+    [...missingState.tables.eventDomainMigrationState.values()][0].completedAt,
+    undefined,
+    "A missing compatibility-seed target must keep the migration gate closed.",
+  );
+}
+
+{
+  const state = makeCanonicalPayloadMigrationState();
+  const occurrenceBefore = structuredClone(
+    state.tables.sourceOccurrences.get("payload_occurrence"),
+  );
+  const receiptBefore = structuredClone(
+    state.tables.instagramSourceOccurrenceReceipts.get("payload_receipt"),
+  );
+  await assertAdditiveIdempotentMigration({
+    assertApplied() {
+      const occurrence = state.tables.sourceOccurrences.get(
+        "payload_occurrence",
+      );
+      const receipt = state.tables.instagramSourceOccurrenceReceipts.get(
+        "payload_receipt",
+      );
+      const occurrencePayload = parseCanonicalEventPayload(
+        occurrence.canonicalEventJson,
+      );
+      assert.ok(occurrencePayload);
+      assert.equal(occurrencePayload.requestedStatus, "approved");
+      assert.equal(occurrencePayload.description, "Exact QA description");
+      assert.equal(occurrencePayload.ticketPrice, "1200 RSD");
+      assert.equal(occurrencePayload.timeSource, "poster");
+      assert.equal(
+        receipt.expectedOccurrences[0].canonicalEventJson,
+        occurrence.canonicalEventJson,
+        "Occurrence and compatibility receipt must receive one exact payload atomically.",
+      );
+      assert.ok(occurrence.updatedAt > occurrenceBefore.updatedAt);
+      assert.ok(receipt.updatedAt > receiptBefore.updatedAt);
+      const topologyRows = [
+        ...state.tables.sourceOccurrenceTopologyEpoch.values(),
+      ];
+      assert.equal(topologyRows.length, 1);
+      assert.ok(
+        topologyRows[0].currentEpoch > topologyRows[0].verifiedEpoch,
+        "Payload materialization must dirty the topology epoch until the successor full audit.",
+      );
+      const progress = [
+        ...state.tables.eventDomainMigrationState.values(),
+      ][0];
+      assert.equal(
+        progress.key,
+        "source-occurrence-canonical-payload-v1",
+      );
+      assert.ok(progress.completedAt);
+    },
+    assertDryRun() {
+      assert.deepEqual(
+        state.tables.sourceOccurrences.get("payload_occurrence"),
+        occurrenceBefore,
+      );
+      assert.deepEqual(
+        state.tables.instagramSourceOccurrenceReceipts.get("payload_receipt"),
+        receiptBefore,
+      );
+    },
+    expectedUpdates: 1,
+    label: "source-occurrence canonical payload",
+    mutation: backfillSourceOccurrenceCanonicalPayloadsBatch,
+    state,
+  });
+}
+
+{
+  const state = makeCanonicalPayloadMigrationState();
+  state.tables.scrapedPosts.get("payload_document").analysisResultJson =
+    JSON.stringify({ contract_version: "event_evidence_v2", is_event: false });
+  const result = await backfillSourceOccurrenceCanonicalPayloadsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(result.updatedCount, 0);
+  assert.equal(result.mismatchCount, 1);
+  assert.equal(
+    state.tables.sourceOccurrences.get("payload_occurrence")
+      .canonicalEventJson,
+    undefined,
+    "Drifted immutable extraction bytes must not be blessed into a canonical payload.",
+  );
+  const progress = [...state.tables.eventDomainMigrationState.values()][0];
+  assert.equal(progress.completedAt, undefined);
+  assert.match(progress.auditDetailsJson, /attested_binding_drifted/u);
+}
+
+{
+  const state = makeDb({
+    scrapedPosts: [
+      {
+        _id: "post_1",
+        handle: "qa_venue",
+        imageUrls: [],
+        instagramPostUrl:
+          "https://instagram.com/reel/CanonicalPost1/?utm_source=qa",
+        postId: "CanonicalPost1",
+        username: "qa_venue",
+      },
+    ],
+  });
+  await assertAdditiveIdempotentMigration({
+    assertApplied() {
+      assert.equal(
+        state.tables.scrapedPosts.get("post_1").canonicalSourceUrl,
+        "https://www.instagram.com/p/CanonicalPost1/",
+      );
+    },
+    assertDryRun() {
+      assert.equal(
+        state.tables.scrapedPosts.get("post_1").canonicalSourceUrl,
+        undefined,
+      );
+    },
+    expectedUpdates: 1,
+    label: "source URL",
+    mutation: backfillSourceDocumentCanonicalUrlsBatch,
+    state,
+  });
+}
+
+{
+  const ordinaryExpected = {
+    artists: ["Ordinary Artist"],
+    date: "2026-09-12",
+    key: "ordinary-occurrence-key",
+    time: "20:00",
+    title: "Ordinary Event",
+    venue: "Ordinary Venue",
+  };
+  const campaignLink = {
+    _id: "campaign_source_link",
+    eventId: "campaign_event",
+    instagramPostId: "CampaignPost",
+    instagramPostUrl: "https://www.instagram.com/p/CampaignPost/",
+    sourceFingerprint: "campaign-fingerprint",
+    sourceHandle: "campaign_venue",
+    sourceIdentity: "campaign-source-identity",
+    sourceOccurrenceKey: "campaign-occurrence-key",
+    updatedAt: 44,
+  };
+  const state = makeDb({
+    events: [
+      {
+        _id: "ordinary_event",
+        artists: ordinaryExpected.artists,
+        date: ordinaryExpected.date,
+        eventType: "concert",
+        normalizedFieldsJson: JSON.stringify({
+          sourceOccurrenceSourceFingerprint: "ordinary-fingerprint",
+        }),
+        rawExtractionJson: JSON.stringify({ is_event: true }),
+        sourceOccurrenceKey: ordinaryExpected.key,
+        status: "approved",
+        time: ordinaryExpected.time,
+        title: ordinaryExpected.title,
+        updatedAt: 33,
+        venue: ordinaryExpected.venue,
+      },
+      {
+        _id: "campaign_event",
+        artists: ["Campaign Artist"],
+        date: "2026-09-12",
+        eventType: "nightlife",
+        moderationNote: "[cross_post_campaign_variant:v2] audited fixture",
+        sourceOccurrenceKey: campaignLink.sourceOccurrenceKey,
+        status: "rejected",
+        time: "22:00",
+        title: "Campaign Variant",
+        updatedAt: 44,
+        venue: "Campaign Venue",
+      },
+    ],
+    instagramEventSources: [
+      {
+        _id: "ordinary_source_link",
+        eventId: "ordinary_event",
+        instagramPostId: "OrdinaryPost",
+        instagramPostUrl: "https://www.instagram.com/p/OrdinaryPost/",
+        sourceFingerprint: "ordinary-fingerprint",
+        sourceHandle: "ordinary_venue",
+        sourceIdentity: "ordinary-source-identity",
+        sourceOccurrenceKey: ordinaryExpected.key,
+        updatedAt: 33,
+      },
+      campaignLink,
+    ],
+    instagramSourceOccurrenceReceipts: [
+      {
+        _id: "ordinary_receipt",
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        expectedKeys: [ordinaryExpected.key],
+        expectedOccurrences: [ordinaryExpected],
+        satisfiedKeys: [ordinaryExpected.key],
+        satisfiedOccurrences: [
+          { eventId: "ordinary_event", key: ordinaryExpected.key },
+        ],
+        sourceFingerprint: "ordinary-fingerprint",
+        sourceIdentity: "ordinary-source-identity",
+      },
+    ],
+    scrapedPosts: [
+      {
+        _id: "ordinary_document",
+        handle: "ordinary_venue",
+        imageUrls: [],
+        instagramPostUrl: "https://www.instagram.com/p/OrdinaryPost/",
+        postId: "OrdinaryPost",
+        processingStatus: "completed",
+        sourceRevision: 1,
+        analysisRevision: 1,
+        analysisResultJson: JSON.stringify({ is_event: true }),
+        username: "ordinary_venue",
+      },
+    ],
+  });
+  const campaignLinkBefore = structuredClone(
+    state.tables.instagramEventSources.get(campaignLink._id),
+  );
+  const result = await backfillSourceOccurrencesBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(result.scannedCount, 2);
+  assert.equal(result.updatedCount, 1);
+  assert.equal(result.skippedCount, 1);
+  assert.equal(result.quarantinedLineageMarkerCount, 1);
+  assert.equal(result.mismatchCount, 0);
+  assert.deepEqual(
+    state.tables.instagramEventSources.get(campaignLink._id),
+    campaignLinkBefore,
+    "Generic occurrence migration must leave audited lineage links byte-for-byte unchanged.",
+  );
+  const progress = [...state.tables.eventDomainMigrationState.values()][0];
+  assert.equal(progress.key, "source-occurrences-generic-v2");
+  assert.equal(progress.skippedCount, 1);
+  assert.equal(progress.quarantinedLineageMarkerCount, 1);
+  assert.ok(
+    progress.completedAt,
+    "Intentional lineage quarantine must not block scoped v2 readiness.",
+  );
+}
+
+{
+  const state = makeDb({
+    mediaAssets: [
+      {
+        _id: "media_1",
+        normalizedInstagramPostUrl:
+          "https://www.instagram.com/tv/CanonicalPost2/",
+      },
+    ],
+  });
+  await assertAdditiveIdempotentMigration({
+    assertApplied() {
+      assert.equal(
+        state.tables.mediaAssets.get("media_1").canonicalSourceUrl,
+        "https://www.instagram.com/p/CanonicalPost2/",
+      );
+    },
+    expectedUpdates: 1,
+    label: "media URL",
+    mutation: backfillMediaCanonicalUrlsBatch,
+    state,
+  });
+}
+
+{
+  const existingAliases = Array.from({ length: 50 }, (_, index) => ({
+    _id: `capped_alias_${index}`,
+    active: true,
+    kind: "alias",
+    normalizedValue: `existing alias ${index}`,
+    rawValue: `Existing Alias ${index}`,
+    source: "migration",
+    venueId: "venue_cap",
+  }));
+  const state = makeDb({
+    eventDomainMigrationState: [cleanVenueCompatibilitySeedAuditState()],
+    venueIdentities: existingAliases,
+    venues: [
+      {
+        _id: "venue_cap",
+        aliases: [
+          ...Array.from(
+            { length: 49 },
+            (_, index) => `Existing Alias ${index}`,
+          ),
+          "New Alias A",
+          "New Alias B",
+        ],
+        instagramHandle: "",
+        name: "Capacity Venue",
+      },
+    ],
+  });
+  const result = await backfillVenueIdentitiesBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(result.mismatchCount, 1);
+  assert.equal(result.updatedCount, 0);
+  assert.equal(state.tables.venueIdentities.size, 50);
+  assert.ok(
+    [...state.tables.venueIdentities.values()].every(
+      (identity) => identity.source === "migration",
+    ),
+    "Venue identity overflow must be detected before any insert or source promotion.",
+  );
+}
+
+{
+  const state = makeDb({
+    eventDomainMigrationState: [
+      {
+        _id: "venue_identity_ready",
+        completedAt: 1,
+        cursor: "1",
+        errorCount: 0,
+        isDone: true,
+        key: "venue-identities-v1",
+        mismatchCount: 0,
+        phase: "venue_identities",
+        scannedCount: 1,
+        updatedAt: 1,
+        updatedCount: 1,
+      },
+    ],
+    events: [
+      {
+        _id: "event_venue_binding",
+        artists: ["Bound Artist"],
+        date: "2026-09-15",
+        eventType: "concert",
+        status: "pending",
+        time: "20:00",
+        title: "Bound Venue Event",
+        updatedAt: 91,
+        venue: "QA Hall",
+      },
+    ],
+    venueIdentities: [
+      {
+        _id: "venue_alias_identity",
+        active: true,
+        kind: "alias",
+        normalizedValue: "qa hall",
+        rawValue: "QA Hall",
+        source: "venue_record",
+        venueId: "venue_binding_target",
+      },
+    ],
+    venues: [
+      {
+        _id: "venue_binding_target",
+        aliases: ["QA Hall"],
+        category: "club",
+        instagramHandle: "qa_venue",
+        name: "QA Venue",
+        publicStatus: "published",
+        scrapeActive: true,
+      },
+    ],
+  });
+  const dryRun = await backfillEventVenueBindingsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(dryRun.updatedCount, 1);
+  assert.equal(
+    state.tables.events.get("event_venue_binding").venueId,
+    undefined,
+  );
+  const applied = await backfillEventVenueBindingsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(applied.updatedCount, 1);
+  const event = state.tables.events.get("event_venue_binding");
+  assert.equal(event.venueId, "venue_binding_target");
+  assert.equal(event.occurrenceVenueIdentity, "id:venue_binding_target");
+  assert.equal(
+    event.updatedAt,
+    91,
+    "Venue binding migration must preserve event version.",
+  );
+  const progress = [...state.tables.eventDomainMigrationState.values()].find(
+    (row) => row.key === "event-venue-bindings-v1",
+  );
+  assert.ok(progress?.completedAt);
+}
+
+{
+  const expectedOccurrence = {
+    artists: ["Stale Artist"],
+    date: "2026-09-14",
+    key: "stale-occurrence-key",
+    time: "20:00",
+    title: "Stale Poster Event",
+    venue: "Stale Venue",
+  };
+  const state = makeDb({
+    events: [
+      {
+        _id: "stale_event",
+        artists: expectedOccurrence.artists,
+        date: expectedOccurrence.date,
+        eventType: "concert",
+        normalizedFieldsJson: JSON.stringify({
+          sourceOccurrenceSourceFingerprint: "same-caption-fingerprint",
+        }),
+        rawExtractionJson: JSON.stringify({ poster_version: 1 }),
+        sourceOccurrenceKey: expectedOccurrence.key,
+        status: "approved",
+        time: expectedOccurrence.time,
+        title: expectedOccurrence.title,
+        updatedAt: 1,
+        venue: expectedOccurrence.venue,
+      },
+    ],
+    instagramEventSources: [
+      {
+        _id: "stale_link",
+        eventId: "stale_event",
+        instagramPostId: "StalePost",
+        instagramPostUrl: "https://www.instagram.com/p/StalePost/",
+        sourceFingerprint: "same-caption-fingerprint",
+        sourceIdentity: "stale-source-identity",
+        sourceOccurrenceKey: expectedOccurrence.key,
+        updatedAt: 1,
+      },
+    ],
+    instagramSourceOccurrenceReceipts: [
+      {
+        _id: "stale_receipt",
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        expectedKeys: [expectedOccurrence.key],
+        expectedOccurrences: [expectedOccurrence],
+        satisfiedKeys: [expectedOccurrence.key],
+        satisfiedOccurrences: [
+          { eventId: "stale_event", key: expectedOccurrence.key },
+        ],
+        sourceFingerprint: "same-caption-fingerprint",
+        sourceIdentity: "stale-source-identity",
+      },
+    ],
+    scrapedPosts: [
+      {
+        _id: "stale_document",
+        analysisResultJson: JSON.stringify({ poster_version: 2 }),
+        analysisRevision: 2,
+        handle: "stale_venue",
+        imageUrls: [],
+        instagramPostUrl: "https://www.instagram.com/p/StalePost/",
+        postId: "StalePost",
+        processingStatus: "completed",
+        sourceRevision: 2,
+        username: "stale_venue",
+      },
+    ],
+  });
+  const result = await backfillSourceOccurrencesBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(result.updatedCount, 0);
+  assert.equal(result.mismatchCount, 1);
+  assert.equal(state.tables.sourceOccurrences.size, 0);
+  const progress = [...state.tables.eventDomainMigrationState.values()][0];
+  assert.equal(
+    progress.completedAt,
+    undefined,
+    "A current source revision with different extraction bytes must block readiness.",
+  );
+}
+
+{
+  const state = makeDb({
+    events: [
+      {
+        _id: "event_1",
+        artists: ["QA Artist"],
+        date: "2026-09-10",
+        eventType: "concert",
+        normalizedFieldsJson: JSON.stringify({
+          sourceOccurrenceSourceFingerprint: "fingerprint-1",
+        }),
+        rawExtractionJson: JSON.stringify({ is_event: true }),
+        instagramPostUrl: "https://www.instagram.com/reels/CanonicalPost3/",
+        status: "pending",
+        time: "20:00",
+        title: "QA Event",
+        updatedAt: 77,
+        venue: "QA Venue",
+      },
+    ],
+  });
+  await assertAdditiveIdempotentMigration({
+    assertApplied() {
+      const event = state.tables.events.get("event_1");
+      assert.equal(
+        event.canonicalSourceUrl,
+        "https://www.instagram.com/p/CanonicalPost3/",
+      );
+      assert.equal(event.occurrenceSignatureVersion, 1);
+      assert.equal(event.publicationState, "hidden");
+      assert.equal(
+        event.updatedAt,
+        77,
+        "Derived-field migration must preserve event version.",
+      );
+    },
+    expectedUpdates: 1,
+    label: "canonical event fields",
+    mutation: backfillCanonicalEventFieldsBatch,
+    state,
+  });
+}
+
+{
+  const state = makeDb({
+    eventDomainMigrationState: [cleanVenueCompatibilitySeedAuditState()],
+    venues: [
+      {
+        _id: "venue_1",
+        aliases: ["QA Hall", "QA Hall"],
+        instagramHandle: "@qa_hall",
+        name: "QA Venue",
+      },
+    ],
+  });
+  await assertAdditiveIdempotentMigration({
+    assertApplied() {
+      const identities = [...state.tables.venueIdentities.values()];
+      assert.deepEqual(
+        identities
+          .map((identity) => [identity.kind, identity.normalizedValue])
+          .sort(),
+        [
+          ["alias", "qa hall"],
+          ["canonical_name", "qa venue"],
+          ["provider_account", "qa_hall"],
+        ],
+      );
+    },
+    expectedUpdates: 3,
+    label: "venue identities",
+    mutation: backfillVenueIdentitiesBatch,
+    state,
+  });
+}
+
+{
+  const state = makeDb({
+    eventDomainMigrationState: [cleanVenueCompatibilitySeedAuditState()],
+    venues: [
+      {
+        _id: "venue_legacy_seed",
+        aliases: [],
+        instagramHandle: "@freestylerbelgrade_official",
+        name: "Freestyler Club",
+      },
+    ],
+  });
+  await assertAdditiveIdempotentMigration({
+    assertApplied() {
+      const identities = [...state.tables.venueIdentities.values()];
+      const compatibilityAliases = Object.fromEntries(
+        identities
+          .filter((identity) => identity.kind === "alias")
+          .map((identity) => [identity.normalizedValue, identity.source]),
+      );
+      assert.deepEqual(compatibilityAliases, {
+        freestyler: "manual",
+        "freestyler belgrade": "manual",
+        "splav freestyler": "manual",
+      });
+      assert.equal(
+        identities.find((identity) => identity.kind === "canonical_name")
+          ?.source,
+        "venue_record",
+      );
+      assert.equal(
+        identities.find((identity) => identity.kind === "provider_account")
+          ?.source,
+        "venue_record",
+      );
+    },
+    expectedUpdates: 5,
+    label: "legacy compatibility venue aliases",
+    mutation: backfillVenueIdentitiesBatch,
+    state,
+  });
+}
+
+{
+  const expectedOccurrence = {
+    artists: ["QA Artist"],
+    date: "2026-09-11",
+    key: "occurrence-key-1",
+    time: "21:00",
+    title: "QA Occurrence",
+    venue: "QA Venue",
+  };
+  const state = makeDb({
+    events: [
+      {
+        _id: "event_source_1",
+        artists: expectedOccurrence.artists,
+        date: expectedOccurrence.date,
+        eventType: "concert",
+        normalizedFieldsJson: JSON.stringify({
+          sourceOccurrenceSourceFingerprint: "fingerprint-1",
+        }),
+        rawExtractionJson: JSON.stringify({ is_event: true }),
+        sourceOccurrenceKey: expectedOccurrence.key,
+        status: "pending",
+        time: expectedOccurrence.time,
+        title: expectedOccurrence.title,
+        updatedAt: 88,
+        venue: expectedOccurrence.venue,
+      },
+    ],
+    instagramEventSources: [
+      {
+        _id: "source_link_1",
+        eventId: "event_source_1",
+        instagramPostId: "CanonicalPost4",
+        instagramPostUrl: "https://www.instagram.com/p/CanonicalPost4/",
+        sourceFingerprint: "fingerprint-1",
+        sourceHandle: "qa_venue",
+        sourceIdentity: "source-identity-1",
+        sourceOccurrenceKey: expectedOccurrence.key,
+        updatedAt: 99,
+      },
+    ],
+    instagramSourceOccurrenceReceipts: [
+      {
+        _id: "receipt_1",
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        expectedKeys: [expectedOccurrence.key],
+        expectedOccurrences: [expectedOccurrence],
+        satisfiedKeys: [expectedOccurrence.key],
+        satisfiedOccurrences: [
+          { eventId: "event_source_1", key: expectedOccurrence.key },
+        ],
+        sourceFingerprint: "fingerprint-1",
+        sourceIdentity: "source-identity-1",
+      },
+    ],
+    scrapedPosts: [
+      {
+        _id: "source_document_1",
+        handle: "qa_venue",
+        imageUrls: [],
+        instagramPostUrl: "https://www.instagram.com/reel/CanonicalPost4/",
+        postId: "CanonicalPost4",
+        processingStatus: "completed",
+        sourceRevision: 3,
+        analysisRevision: 3,
+        analysisResultJson: JSON.stringify({ is_event: true }),
+        username: "qa_venue",
+      },
+    ],
+  });
+  await assertAdditiveIdempotentMigration({
+    assertApplied() {
+      const link = state.tables.instagramEventSources.get("source_link_1");
+      assert.equal(
+        link.canonicalSourceUrl,
+        "https://www.instagram.com/p/CanonicalPost4/",
+      );
+      assert.ok(link.sourceOccurrenceId);
+      assert.equal(
+        link.updatedAt,
+        99,
+        "Additive provenance backfill must preserve link version.",
+      );
+      const occurrence = state.tables.sourceOccurrences.get(
+        link.sourceOccurrenceId,
+      );
+      assert.equal(occurrence.canonicalEventId, "event_source_1");
+      assert.equal(occurrence.sourceRevision, 3);
+      assert.equal(occurrence.state, "satisfied");
+    },
+    expectedUpdates: 1,
+    label: "source occurrences",
+    mutation: backfillSourceOccurrencesBatch,
+    state,
+  });
+  const migratedOccurrence = [...state.tables.sourceOccurrences.values()][0];
+  state.tables.sourceOccurrences.set("source_occurrence_duplicate", {
+    ...structuredClone(migratedOccurrence),
+    _id: "source_occurrence_duplicate",
+  });
+  const duplicateVerification = await backfillSourceOccurrencesBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(duplicateVerification.updatedCount, 0);
+  assert.equal(
+    duplicateVerification.mismatchCount,
+    1,
+    "Duplicate first-class source identities must be reported as a row mismatch, not abort the migration batch.",
+  );
+}
+
+{
+  const state = makeDb({
+    scrapedPosts: [
+      {
+        _id: "cursor_post_1",
+        handle: "qa",
+        imageUrls: [],
+        instagramPostUrl: "https://instagram.com/p/CursorOne/",
+        postId: "CursorOne",
+        username: "qa",
+      },
+      {
+        _id: "cursor_post_2",
+        handle: "qa",
+        imageUrls: [],
+        instagramPostUrl: "https://instagram.com/p/CursorTwo/",
+        postId: "CursorTwo",
+        username: "qa",
+      },
+    ],
+  });
+  const first = await backfillSourceDocumentCanonicalUrlsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 1 },
+  );
+  assert.equal(first.isDone, false);
+  await assert.rejects(
+    backfillSourceDocumentCanonicalUrlsBatch._handler(
+      { db: state.db },
+      { cursor: "9", dryRun: false, limit: 1 },
+    ),
+    /cursor does not match/i,
+    "Apply retries must continue from the exact committed cursor.",
+  );
+  const second = await backfillSourceDocumentCanonicalUrlsBatch._handler(
+    { db: state.db },
+    { cursor: first.continueCursor, dryRun: false, limit: 1 },
+  );
+  assert.equal(second.isDone, true);
+  const completedState = [
+    ...state.tables.eventDomainMigrationState.values(),
+  ][0];
+  assert.equal(completedState.scannedCount, 2);
+  assert.ok(completedState.completedAt);
+  await assert.rejects(
+    backfillSourceDocumentCanonicalUrlsBatch._handler(
+      { db: state.db },
+      { cursor: null, dryRun: false, limit: 2 },
+    ),
+    /already finished/i,
+  );
+  await backfillSourceDocumentCanonicalUrlsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 2, restart: true },
+  );
+  const restartedState = [
+    ...state.tables.eventDomainMigrationState.values(),
+  ][0];
+  assert.equal(restartedState.attempt, 2);
+  assert.equal(restartedState.mismatchCount, 0);
+  assert.equal(restartedState.scannedCount, 2);
+}
+
+{
+  const state = makeDb({
+    scrapedPosts: [
+      {
+        _id: "repairable_post",
+        handle: "qa",
+        imageUrls: [],
+        instagramPostUrl: "not-an-instagram-url",
+        postId: "Repairable",
+        username: "qa",
+      },
+    ],
+  });
+  await backfillSourceDocumentCanonicalUrlsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 1 },
+  );
+  let progress = [...state.tables.eventDomainMigrationState.values()][0];
+  assert.equal(progress.isDone, true);
+  assert.equal(progress.completedAt, undefined);
+  assert.equal(progress.mismatchCount, 1);
+  state.tables.scrapedPosts.get("repairable_post").instagramPostUrl =
+    "https://instagram.com/reel/Repairable/";
+  await backfillSourceDocumentCanonicalUrlsBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 1, restart: true },
+  );
+  progress = [...state.tables.eventDomainMigrationState.values()][0];
+  assert.equal(progress.attempt, 2);
+  assert.equal(progress.mismatchCount, 0);
+  assert.ok(
+    progress.completedAt,
+    "A clean restarted verification run must unlock readiness.",
+  );
+}
+
+{
+  const expected = {
+    artists: ["Topology Artist"],
+    date: "2026-09-20",
+    key: "topology-key",
+    time: "21:00",
+    title: "Topology Event",
+    venue: "Topology Venue",
+  };
+  const state = makeDb({
+    events: [
+      {
+        _id: "topology-event",
+        ...expected,
+        eventType: "concert",
+        sourceOccurrenceKey: expected.key,
+        status: "approved",
+      },
+    ],
+    instagramEventSources: [
+      {
+        _id: "topology-link",
+        eventId: "topology-event",
+        sourceFingerprint: "topology-fingerprint",
+        sourceIdentity: "topology-source",
+        sourceOccurrenceId: "topology-occurrence",
+        sourceOccurrenceKey: expected.key,
+      },
+    ],
+    instagramSourceOccurrenceReceipts: [
+      {
+        _id: "topology-receipt",
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        expectedKeys: [expected.key],
+        expectedOccurrences: [expected],
+        satisfiedKeys: [expected.key],
+        satisfiedOccurrences: [
+          { eventId: "topology-event", key: expected.key },
+        ],
+        sourceFingerprint: "topology-fingerprint",
+        sourceIdentity: "topology-source",
+      },
+    ],
+    sourceOccurrences: [
+      {
+        _id: "topology-occurrence",
+        canonicalEventId: "topology-event",
+        sourceFingerprint: "topology-fingerprint",
+        sourceIdentity: "topology-source",
+        sourceOccurrenceKey: expected.key,
+        state: "satisfied",
+      },
+    ],
+  });
+  const dryRun = await auditSourceOccurrenceReceiptTopologyBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(dryRun.mismatchCount, 0);
+  assert.equal(dryRun.unchangedCount, 1);
+  assert.equal(state.tables.eventDomainMigrationState.size, 0);
+
+  await auditSourceOccurrenceReceiptTopologyBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  const progress = [...state.tables.eventDomainMigrationState.values()][0];
+  assert.equal(
+    isCompleteReceiptTopologyCoverage(progress, topologyEpochSnapshot(state)),
+    true,
+  );
+  await markSourceOccurrenceTopologyMutation(
+    { db: state.db },
+    { verified: true },
+  );
+  assert.equal(
+    isCompleteReceiptTopologyCoverage(progress, topologyEpochSnapshot(state)),
+    true,
+    "A locally proven topology mutation must carry the verified invariant forward.",
+  );
+}
+
+{
+  const expected = {
+    artists: ["Receipt-only Artist"],
+    date: "2026-09-21",
+    key: "receipt-only-key",
+    time: "22:00",
+    title: "Receipt-only Event",
+    venue: "Receipt-only Venue",
+  };
+  const state = makeDb({
+    events: [
+      {
+        _id: "receipt-only-event",
+        ...expected,
+        eventType: "concert",
+        sourceOccurrenceKey: expected.key,
+        status: "approved",
+      },
+    ],
+    instagramSourceOccurrenceReceipts: [
+      {
+        _id: "receipt-only-receipt",
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        expectedKeys: [expected.key],
+        expectedOccurrences: [expected],
+        satisfiedKeys: [expected.key],
+        satisfiedOccurrences: [
+          { eventId: "receipt-only-event", key: expected.key },
+        ],
+        sourceFingerprint: "receipt-only-fingerprint",
+        sourceIdentity: "receipt-only-source",
+      },
+    ],
+  });
+  const result = await auditSourceOccurrenceReceiptTopologyBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(result.mismatchCount, 1);
+  const progress = [...state.tables.eventDomainMigrationState.values()][0];
+  assert.equal(progress.completedAt, undefined);
+  assert.equal(
+    isCompleteReceiptTopologyCoverage(progress, topologyEpochSnapshot(state)),
+    false,
+  );
+  assert.equal(state.tables.events.has("receipt-only-event"), true);
+  assert.equal(state.tables.instagramSourceOccurrenceReceipts.size, 1);
+}
+
+{
+  const receipts = Array.from({ length: 5 }, (_, index) => ({
+    _id: `bounded-audit-receipt-${index}`,
+    deferredChildCount: 0,
+    deferredChildKeys: [],
+    expectedKeys: [],
+    expectedOccurrences: [],
+    satisfiedKeys: [],
+    satisfiedOccurrences: [],
+    sourceFingerprint: `bounded-audit-fingerprint-${index}`,
+    sourceIdentity: `bounded-audit-source-${index}`,
+  }));
+  const state = makeDb({ instagramSourceOccurrenceReceipts: receipts });
+  const first = await auditSourceOccurrenceReceiptTopologyBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 50 },
+  );
+  assert.equal(
+    first.scannedCount,
+    4,
+    "Receipt audits must retain their dedicated read cap.",
+  );
+  assert.equal(first.isDone, false);
+  const second = await auditSourceOccurrenceReceiptTopologyBatch._handler(
+    { db: state.db },
+    { cursor: first.continueCursor, dryRun: false, limit: 50 },
+  );
+  assert.equal(second.scannedCount, 1);
+  assert.equal(second.isDone, true);
+  const progress = [...state.tables.eventDomainMigrationState.values()][0];
+  assert.equal(progress.scannedCount, 5);
+  assert.equal(
+    isCompleteReceiptTopologyCoverage(progress, topologyEpochSnapshot(state)),
+    true,
+  );
+}
+
+{
+  const receipts = Array.from({ length: 5 }, (_, index) => ({
+    _id: `epoch-fenced-audit-receipt-${index}`,
+    deferredChildCount: 0,
+    deferredChildKeys: [],
+    expectedKeys: [],
+    expectedOccurrences: [],
+    satisfiedKeys: [],
+    satisfiedOccurrences: [],
+    sourceFingerprint: `epoch-fenced-audit-fingerprint-${index}`,
+    sourceIdentity: `epoch-fenced-audit-source-${index}`,
+  }));
+  const state = makeDb({ instagramSourceOccurrenceReceipts: receipts });
+  const first = await auditSourceOccurrenceReceiptTopologyBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 4 },
+  );
+  assert.equal(first.isDone, false);
+  const progressBefore = structuredClone(
+    [...state.tables.eventDomainMigrationState.values()][0],
+  );
+  await markSourceOccurrenceTopologyMutation(
+    { db: state.db },
+    { verified: false },
+  );
+  await assert.rejects(
+    auditSourceOccurrenceReceiptTopologyBatch._handler(
+      { db: state.db },
+      { cursor: first.continueCursor, dryRun: false, limit: 4 },
+    ),
+    /changed without verification.*restart/i,
+  );
+  assert.deepEqual(
+    [...state.tables.eventDomainMigrationState.values()][0],
+    progressBefore,
+    "A dirty epoch must reject resume before audit progress changes.",
+  );
+}
+
+console.log(
+  "Event-domain migration QA passed (dry-run, fenced resume/restart, apply, progress, and idempotency).",
+);

@@ -10,7 +10,14 @@ import {
 import { isAllowedRemoteImageUrl } from "../lib/images/remote-image-policy";
 import { nextEventUpdatedAt } from "../lib/events/event-update-precondition";
 import { isCrossPostCampaignLineageEvent } from "../lib/events/cross-post-campaign-aggregate-attestation";
-import { isCanonicallyGroundedApprovedEvent } from "./publicEventGrounding";
+import {
+  isEventPubliclyVisible,
+  refreshEventPublicationStates,
+} from "./publicationPolicy";
+import { assertOperationPaginationOptions } from "./internal/requestBounds";
+
+const MAX_MEDIA_SOURCE_MATCHES = 25;
+const MAX_ORPHANED_MEDIA_CLEANUP_PAGE_SIZE = 500;
 
 const sourceIdentityArgs = {
   postId: v.optional(v.string()),
@@ -39,6 +46,28 @@ type SourceIdentity = {
   postId?: string;
   instagramPostUrl?: string;
 };
+
+async function boundedIdentityRows<T>(
+  rowsPromise: Promise<T[]>,
+  label: string,
+): Promise<T[]> {
+  const rows = await rowsPromise;
+  if (rows.length > MAX_MEDIA_SOURCE_MATCHES) {
+    throw new Error(`${label} exceeds the bounded source-identity limit.`);
+  }
+  return rows;
+}
+
+async function uniqueIdentityRow<T>(
+  rowsPromise: Promise<T[]>,
+  label: string,
+): Promise<T | null> {
+  const rows = await rowsPromise;
+  if (rows.length > 1) {
+    throw new Error(`${label} is ambiguous.`);
+  }
+  return rows[0] ?? null;
+}
 
 async function assertCoherentPersistedSourceIdentity(
   ctx: QueryCtx | MutationCtx,
@@ -84,25 +113,48 @@ async function findAssetByIdentity(
 ): Promise<Doc<"mediaAssets"> | null> {
   const normalized = normalizeInstagramMediaSourceIdentity(identity);
   if (normalized.postId) {
-    const byPostId = await ctx.db
-      .query("mediaAssets")
-      .withIndex("by_instagramPostId", (q) => q.eq("instagramPostId", normalized.postId))
-      .first();
+    const byPostId = await uniqueIdentityRow(
+      ctx.db
+        .query("mediaAssets")
+        .withIndex("by_instagramPostId", (q) =>
+          q.eq("instagramPostId", normalized.postId),
+        )
+        .take(2),
+      "Instagram post media asset",
+    );
     if (byPostId) return byPostId;
   }
   if (normalized.normalizedInstagramPostUrl) {
-    const byPostUrl = await ctx.db
-      .query("mediaAssets")
-      .withIndex("by_normalizedInstagramPostUrl", (q) =>
-        q.eq("normalizedInstagramPostUrl", normalized.normalizedInstagramPostUrl),
-      )
-      .first();
+    const byPostUrl = await uniqueIdentityRow(
+      ctx.db
+        .query("mediaAssets")
+        .withIndex("by_normalizedInstagramPostUrl", (q) =>
+          q.eq("normalizedInstagramPostUrl", normalized.normalizedInstagramPostUrl),
+        )
+        .take(2),
+      "Normalized Instagram URL media asset",
+    );
     if (byPostUrl) return byPostUrl;
   }
-  return ctx.db
-    .query("mediaAssets")
-    .withIndex("by_sourceKey", (q) => q.eq("sourceKey", normalized.sourceKey))
-    .first();
+  if (normalized.canonicalSourceUrl) {
+    const byCanonicalSourceUrl = await uniqueIdentityRow(
+      ctx.db
+        .query("mediaAssets")
+        .withIndex("by_canonicalSourceUrl", (q) =>
+          q.eq("canonicalSourceUrl", normalized.canonicalSourceUrl),
+        )
+        .take(2),
+      "Canonical Instagram URL media asset",
+    );
+    if (byCanonicalSourceUrl) return byCanonicalSourceUrl;
+  }
+  return uniqueIdentityRow(
+    ctx.db
+      .query("mediaAssets")
+      .withIndex("by_sourceKey", (q) => q.eq("sourceKey", normalized.sourceKey))
+      .take(2),
+    "Media source key",
+  );
 }
 
 async function collectEventsByIdentity(
@@ -112,28 +164,52 @@ async function collectEventsByIdentity(
   const normalized = normalizeInstagramMediaSourceIdentity(identity);
   const events = new Map<string, Doc<"events">>();
   if (normalized.postId) {
-    for (const event of await ctx.db
-      .query("events")
-      .withIndex("by_instagramPostId", (q) => q.eq("instagramPostId", normalized.postId))
-      .collect()) {
+    for (const event of await boundedIdentityRows(
+      ctx.db
+        .query("events")
+        .withIndex("by_instagramPostId", (q) =>
+          q.eq("instagramPostId", normalized.postId),
+        )
+        .take(MAX_MEDIA_SOURCE_MATCHES + 1),
+      "Instagram post event matches",
+    )) {
       events.set(event._id, event);
     }
   }
   if (normalized.normalizedInstagramPostUrl) {
-    for (const event of await ctx.db
-      .query("events")
-      .withIndex("by_normalizedInstagramPostUrl", (q) =>
-        q.eq("normalizedInstagramPostUrl", normalized.normalizedInstagramPostUrl),
-      )
-      .collect()) {
+    for (const event of await boundedIdentityRows(
+      ctx.db
+        .query("events")
+        .withIndex("by_normalizedInstagramPostUrl", (q) =>
+          q.eq("normalizedInstagramPostUrl", normalized.normalizedInstagramPostUrl),
+        )
+        .take(MAX_MEDIA_SOURCE_MATCHES + 1),
+      "Normalized Instagram URL event matches",
+    )) {
       events.set(event._id, event);
     }
-    for (const event of await ctx.db
-      .query("events")
-      .withIndex("by_instagramPostUrl", (q) =>
-        q.eq("instagramPostUrl", normalized.normalizedInstagramPostUrl),
-      )
-      .collect()) {
+    for (const event of await boundedIdentityRows(
+      ctx.db
+        .query("events")
+        .withIndex("by_instagramPostUrl", (q) =>
+          q.eq("instagramPostUrl", normalized.normalizedInstagramPostUrl),
+        )
+        .take(MAX_MEDIA_SOURCE_MATCHES + 1),
+      "Legacy Instagram URL event matches",
+    )) {
+      events.set(event._id, event);
+    }
+  }
+  if (normalized.canonicalSourceUrl) {
+    for (const event of await boundedIdentityRows(
+      ctx.db
+        .query("events")
+        .withIndex("by_canonicalSourceUrl", (q) =>
+          q.eq("canonicalSourceUrl", normalized.canonicalSourceUrl),
+        )
+        .take(MAX_MEDIA_SOURCE_MATCHES + 1),
+      "Canonical Instagram URL event matches",
+    )) {
       events.set(event._id, event);
     }
   }
@@ -147,28 +223,50 @@ async function collectScrapedPostsByIdentity(
   const normalized = normalizeInstagramMediaSourceIdentity(identity);
   const posts = new Map<string, Doc<"scrapedPosts">>();
   if (normalized.postId) {
-    for (const post of await ctx.db
-      .query("scrapedPosts")
-      .withIndex("by_postId", (q) => q.eq("postId", normalized.postId))
-      .collect()) {
+    for (const post of await boundedIdentityRows(
+      ctx.db
+        .query("scrapedPosts")
+        .withIndex("by_postId", (q) => q.eq("postId", normalized.postId))
+        .take(MAX_MEDIA_SOURCE_MATCHES + 1),
+      "Instagram post source-document matches",
+    )) {
       posts.set(post._id, post);
     }
   }
   if (normalized.normalizedInstagramPostUrl) {
-    for (const post of await ctx.db
-      .query("scrapedPosts")
-      .withIndex("by_normalizedInstagramPostUrl", (q) =>
-        q.eq("normalizedInstagramPostUrl", normalized.normalizedInstagramPostUrl),
-      )
-      .collect()) {
+    for (const post of await boundedIdentityRows(
+      ctx.db
+        .query("scrapedPosts")
+        .withIndex("by_normalizedInstagramPostUrl", (q) =>
+          q.eq("normalizedInstagramPostUrl", normalized.normalizedInstagramPostUrl),
+        )
+        .take(MAX_MEDIA_SOURCE_MATCHES + 1),
+      "Normalized Instagram URL source-document matches",
+    )) {
       posts.set(post._id, post);
     }
-    for (const post of await ctx.db
-      .query("scrapedPosts")
-      .withIndex("by_instagramPostUrl", (q) =>
-        q.eq("instagramPostUrl", normalized.normalizedInstagramPostUrl),
-      )
-      .collect()) {
+    for (const post of await boundedIdentityRows(
+      ctx.db
+        .query("scrapedPosts")
+        .withIndex("by_instagramPostUrl", (q) =>
+          q.eq("instagramPostUrl", normalized.normalizedInstagramPostUrl),
+        )
+        .take(MAX_MEDIA_SOURCE_MATCHES + 1),
+      "Legacy Instagram URL source-document matches",
+    )) {
+      posts.set(post._id, post);
+    }
+  }
+  if (normalized.canonicalSourceUrl) {
+    for (const post of await boundedIdentityRows(
+      ctx.db
+        .query("scrapedPosts")
+        .withIndex("by_canonicalSourceUrl", (q) =>
+          q.eq("canonicalSourceUrl", normalized.canonicalSourceUrl),
+        )
+        .take(MAX_MEDIA_SOURCE_MATCHES + 1),
+      "Canonical Instagram URL source-document matches",
+    )) {
       posts.set(post._id, post);
     }
   }
@@ -234,6 +332,10 @@ async function attachAssetToSourceRecords(
     Boolean(
       normalized.normalizedInstagramPostUrl &&
         event.normalizedInstagramPostUrl !== normalized.normalizedInstagramPostUrl,
+    ) ||
+    Boolean(
+      normalized.canonicalSourceUrl &&
+        event.canonicalSourceUrl !== normalized.canonicalSourceUrl,
     );
   const postNeedsPatch = (post: Doc<"scrapedPosts">) =>
     post.imageStorageId !== attachment.storageId ||
@@ -241,6 +343,10 @@ async function attachAssetToSourceRecords(
     Boolean(
       normalized.normalizedInstagramPostUrl &&
         post.normalizedInstagramPostUrl !== normalized.normalizedInstagramPostUrl,
+    ) ||
+    Boolean(
+      normalized.canonicalSourceUrl &&
+        post.canonicalSourceUrl !== normalized.canonicalSourceUrl,
     );
   if (
     events.some(isCrossPostCampaignLineageEvent) &&
@@ -260,6 +366,9 @@ async function attachAssetToSourceRecords(
       imageUrl: attachment.url,
       ...(normalized.normalizedInstagramPostUrl
         ? { normalizedInstagramPostUrl: normalized.normalizedInstagramPostUrl }
+        : {}),
+      ...(normalized.canonicalSourceUrl
+        ? { canonicalSourceUrl: normalized.canonicalSourceUrl }
         : {}),
       updatedAt: nextEventUpdatedAt(event.updatedAt),
     };
@@ -290,9 +399,23 @@ async function attachAssetToSourceRecords(
       ...(normalized.normalizedInstagramPostUrl
         ? { normalizedInstagramPostUrl: normalized.normalizedInstagramPostUrl }
         : {}),
+      ...(normalized.canonicalSourceUrl
+        ? { canonicalSourceUrl: normalized.canonicalSourceUrl }
+        : {}),
       updatedAt: Date.now(),
     });
     attachedScrapedPostCount += 1;
+  }
+
+  // Media/source fields participate in canonical grounding. Refresh every
+  // bounded event matched by this source identity after event, post and asset
+  // writes are visible. A poster-v2 event may intentionally have no event-side
+  // image fields, so a source-post-only attachment can still change eligibility.
+  if (events.length > 0) {
+    await refreshEventPublicationStates(
+      ctx,
+      events.map((event) => event._id),
+    );
   }
 
   return { attachedEventCount, attachedScrapedPostCount };
@@ -331,6 +454,9 @@ export const claimAndAttach = internalMutation({
       ...(normalized.postId ? { instagramPostId: normalized.postId } : {}),
       ...(normalized.normalizedInstagramPostUrl
         ? { normalizedInstagramPostUrl: normalized.normalizedInstagramPostUrl }
+        : {}),
+      ...(normalized.canonicalSourceUrl
+        ? { canonicalSourceUrl: normalized.canonicalSourceUrl }
         : {}),
       storageId: args.storageId,
       url: args.url,
@@ -516,6 +642,12 @@ export const removeMissingAsset = internalMutation({
       }
     }
     await ctx.db.delete(asset._id);
+    if (events.length > 0) {
+      await refreshEventPublicationStates(
+        ctx,
+        events.map((event) => event._id),
+      );
+    }
     return true;
   },
 });
@@ -526,10 +658,15 @@ export const deleteOrphanedPage = internalMutation({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
+    const paginationOpts = assertOperationPaginationOptions(
+      args.paginationOpts,
+      MAX_ORPHANED_MEDIA_CLEANUP_PAGE_SIZE,
+      "Orphaned-media cleanup page",
+    );
     const page = await ctx.db
       .query("mediaAssets")
       .withIndex("by_updatedAt", (q) => q.lt("updatedAt", args.cutoffUpdatedAt))
-      .paginate(args.paginationOpts);
+      .paginate(paginationOpts);
     let deletedAssetCount = 0;
     let deletedStorageObjectCount = 0;
 
@@ -576,8 +713,7 @@ export const getPublicEventImageSource = query({
     const event = await ctx.db.get(eventId);
     if (
       !event ||
-      event.status !== "approved" ||
-      !(await isCanonicallyGroundedApprovedEvent(ctx, event))
+      !(await isEventPubliclyVisible(ctx, event))
     ) {
       return { eventExists: false as const, kind: "none" as const };
     }
