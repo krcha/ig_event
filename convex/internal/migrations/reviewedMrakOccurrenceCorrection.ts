@@ -103,6 +103,43 @@ function reviewedMarkerIsExact(fields: Record<string, unknown>): boolean {
   );
 }
 
+function reviewedVenueStateIsExact(
+  event: Doc<"events">,
+  expected: NonNullable<
+    Doc<"instagramSourceOccurrenceReceipts">["expectedOccurrences"]
+  >[number],
+  fields: Record<string, unknown>,
+): boolean {
+  if (!expected.venue) return event.venue === "";
+  if (event.venue !== expected.venue || fields.normalizedVenue !== expected.venue) {
+    return false;
+  }
+  const normalization = readObject(fields.auditedLegacyVenueNormalization);
+  if (
+    normalization?.policyVersion === 1 &&
+    normalization.sourcePolicy ===
+      "exact_schedule_entry_event_evidence_v2" &&
+    typeof normalization.normalizedVenueIdentity === "string" &&
+    normalization.normalizedVenueIdentity === event.normalizedVenueIdentity &&
+    event.occurrenceVenueIdentity ===
+      `name:${normalization.normalizedVenueIdentity}`
+  ) {
+    return true;
+  }
+  const canonicalization = readObject(
+    fields.auditedLegacyVenueCanonicalization,
+  );
+  return Boolean(
+    canonicalization?.policyVersion === 1 &&
+      canonicalization.sourcePolicy ===
+        "exact_schedule_entry_event_evidence_v2" &&
+      typeof canonicalization.targetVenueId === "string" &&
+      canonicalization.targetVenueId === event.venueId &&
+      event.occurrenceVenueIdentity ===
+        `id:${canonicalization.targetVenueId}`,
+  );
+}
+
 function auditMatchesPostApply(
   event: Doc<"events">,
   audit: Doc<"eventAuditLog">,
@@ -111,6 +148,10 @@ function auditMatchesPostApply(
   const patch = parseObject(audit.patchJson);
   const before = readObject(patch?.eventBefore);
   const after = readObject(patch?.eventAfter);
+  const afterFields =
+    typeof after?.normalizedFieldsJson === "string"
+      ? parseObject(after.normalizedFieldsJson)
+      : null;
   return Boolean(
     patch &&
       patch.operationId === REVIEWED_MRAK_OCCURRENCE_CORRECTION_KEY &&
@@ -123,7 +164,13 @@ function auditMatchesPostApply(
       after?.updatedAt === event.updatedAt &&
       after?.title === TARGET_TITLE &&
       exactStringArray(after?.artists, [TARGET_TITLE]) &&
-      after?.normalizedFieldsJson === event.normalizedFieldsJson,
+      afterFields &&
+      afterFields.title === TARGET_TITLE &&
+      exactStringArray(afterFields.artists, [TARGET_TITLE]) &&
+      afterFields.splitEventIndex === 4 &&
+      afterFields.rowSourceText === TARGET_SOURCE_ROW &&
+      afterFields.splitSourceLine === TARGET_SOURCE_ROW &&
+      reviewedMarkerIsExact(afterFields),
   );
 }
 
@@ -193,7 +240,6 @@ async function inspectReviewedMrakCorrection(
     !exactJsonValue(expected.artists, [TARGET_TITLE]) ||
     expected.date !== "2026-09-04" ||
     expected.time !== "TBD" ||
-    expected.venue !== "" ||
     satisfiedMatches?.length !== 1 ||
     satisfiedMatches[0]!.eventId !== targetId
   ) {
@@ -258,6 +304,7 @@ async function inspectReviewedMrakCorrection(
       fields.rowSourceText === TARGET_SOURCE_ROW &&
       fields.splitSourceLine === TARGET_SOURCE_ROW &&
       reviewedMarkerIsExact(fields) &&
+      reviewedVenueStateIsExact(event, expected, fields) &&
       sourceOccurrenceRepresentativeMatchesExpected(event, expected) &&
       auditMatchesPostApply(event, matchingAudits[0]!),
   );

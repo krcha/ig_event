@@ -859,6 +859,43 @@ function makeCanonicalPayloadMigrationState() {
   assert.equal(verified.updatedCount, 0);
   assert.equal(verified.unchangedCount, 1);
 
+  const venueNormalizedFields = JSON.stringify({
+    ...fields,
+    auditedLegacyVenueNormalization: {
+      normalizedVenueIdentity: "club drugstore",
+      policyVersion: 1,
+      sourcePolicy: "exact_schedule_entry_event_evidence_v2",
+    },
+    normalizedVenue: "Club Drugstore",
+  });
+  state.tables.events.set(eventId, {
+    ...corrected,
+    normalizedFieldsJson: venueNormalizedFields,
+    normalizedVenueIdentity: "club drugstore",
+    occurrenceVenueIdentity: "name:club drugstore",
+    venue: "Club Drugstore",
+  });
+  state.tables.instagramSourceOccurrenceReceipts.set(
+    "mh73hxccz95prkpvdhnh6t04dd8cws2r",
+    {
+      ...receiptBefore,
+      expectedOccurrences: receiptBefore.expectedOccurrences.map(
+        (occurrence) =>
+          occurrence.key === sourceOccurrenceKey
+            ? { ...occurrence, venue: "Club Drugstore" }
+            : occurrence,
+      ),
+    },
+  );
+  const verifiedAfterVenueNormalization =
+    await correctReviewedMrakSourceOccurrence._handler(
+      { db: state.db },
+      { cursor: null, dryRun: true, limit: 1 },
+    );
+  assert.equal(verifiedAfterVenueNormalization.mismatchCount, 0);
+  assert.equal(verifiedAfterVenueNormalization.updatedCount, 0);
+  assert.equal(verifiedAfterVenueNormalization.unchangedCount, 1);
+
   const blocked = makeReviewedMrakState("Unexpected Artist");
   const blockedBefore = structuredClone(blocked.tables.events.get(eventId));
   const blockedResult = await correctReviewedMrakSourceOccurrence._handler(
