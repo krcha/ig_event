@@ -515,7 +515,7 @@ async function hasVerifiedApprovedReviewedFold(
   let counterpartId: string;
   let expectedPrimaryId: string;
   let operationId: string;
-  let targetVenueId: string;
+  let targetVenueId: string | null;
   let auditIdentityMatches: (patch: Record<string, unknown>) => boolean;
   if (promotion) {
     if (
@@ -523,7 +523,8 @@ async function hasVerifiedApprovedReviewedFold(
       promotion.primaryEventId !== event._id ||
       typeof promotion.variantEventId !== "string" ||
       typeof promotion.operationId !== "string" ||
-      typeof promotion.targetVenueId !== "string"
+      (promotion.targetVenueId !== null &&
+        typeof promotion.targetVenueId !== "string")
     ) {
       return false;
     }
@@ -533,7 +534,10 @@ async function hasVerifiedApprovedReviewedFold(
     operationId = promotion.operationId;
     targetVenueId = promotion.targetVenueId;
     auditIdentityMatches = (patch) =>
-      patch.variantId === counterpartId && patch.targetVenueId === targetVenueId;
+      patch.variantId === counterpartId &&
+      (targetVenueId === null
+        ? patch.targetVenueId === undefined || patch.targetVenueId === null
+        : patch.targetVenueId === targetVenueId);
   } else if (continuation) {
     const role = continuation.role;
     if (
@@ -565,7 +569,13 @@ async function hasVerifiedApprovedReviewedFold(
   } else {
     return false;
   }
-  if (event.venueId !== targetVenueId) return false;
+  if (
+    targetVenueId === null
+      ? event.venueId !== undefined
+      : event.venueId !== targetVenueId
+  ) {
+    return false;
+  }
   const auditRows = await ctx.db
     .query("eventAuditLog")
     .withIndex("by_event", (q) => q.eq("eventId", event._id))

@@ -1769,6 +1769,32 @@ function makeCanonicalPayloadMigrationState() {
   assert.equal(result.skippedCount, 0);
   assert.equal(result.unchangedCount, 2);
 
+  const unresolvedVenue = makeReviewedFoldState();
+  const unresolvedPrimary =
+    unresolvedVenue.tables.events.get(primaryId);
+  delete unresolvedPrimary.venueId;
+  const unresolvedFields = JSON.parse(
+    unresolvedPrimary.normalizedFieldsJson,
+  );
+  unresolvedFields.reviewedPromotionVariantFold.targetVenueId = null;
+  unresolvedPrimary.normalizedFieldsJson = JSON.stringify(unresolvedFields);
+  const unresolvedPrimaryAudit =
+    unresolvedVenue.tables.eventAuditLog.get("reviewed_primary_audit");
+  const unresolvedPrimaryPatch = JSON.parse(
+    unresolvedPrimaryAudit.patchJson,
+  );
+  delete unresolvedPrimaryPatch.targetVenueId;
+  unresolvedPrimaryAudit.patchJson = JSON.stringify(unresolvedPrimaryPatch);
+  const unresolvedResult =
+    await backfillEventVenueBindingsBatch._handler(
+      { db: unresolvedVenue.db },
+      { cursor: null, dryRun: true, limit: 25 },
+    );
+  assert.equal(unresolvedResult.mismatchCount, 0);
+  assert.equal(unresolvedResult.quarantinedLineageMarkerCount, 0);
+  assert.equal(unresolvedResult.skippedCount, 0);
+  assert.equal(unresolvedResult.unchangedCount, 2);
+
   const conflicting = makeReviewedFoldState({
     ...variantReceipt,
     satisfiedOccurrences: [
