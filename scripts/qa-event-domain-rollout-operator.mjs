@@ -187,9 +187,13 @@ if (command === "data") {
             : []
           : table === "reconciliationRolloutState"
             ? state.reconciliationState
-              ? [state.reconciliationState]
+            ? [state.reconciliationState]
               : []
             : [];
+  if (scenario === "empty_table_stderr" && rows.length === 0) {
+    process.stderr.write("There are no documents in this table.\n");
+    process.exit(0);
+  }
   emit(rows);
   process.exit(0);
 }
@@ -899,6 +903,26 @@ try {
     assert.equal(state.operatorEnabled, false);
     assert.equal(state.ingestionApplyEnabled, false);
     assert.equal(state.verificationPhase, "blocked");
+  }
+
+  {
+    setFakeState();
+    const receiptDir = makeReceiptDir("status-empty-cli-table");
+    const result = runOperator("status", receiptDir, [], {
+      FAKE_CONVEX_SCENARIO: "empty_table_stderr",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const receipt = JSON.parse(
+      readFileSync(receiptFiles(receiptDir)[0], "utf8"),
+    );
+    const emptyDataCommands = receipt.commands.filter(
+      (command) =>
+        command.operation.startsWith("data:") &&
+        command.stderr === "There are no documents in this table.",
+    );
+    assert.equal(emptyDataCommands.length, 5);
+    assert.ok(emptyDataCommands.every((command) => command.status === "complete"));
+    assert.ok(emptyDataCommands.every((command) => command.result.length === 0));
   }
 
   {

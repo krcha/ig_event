@@ -1071,7 +1071,11 @@ async function recordCommand(context, operation, args, parseLabel) {
       { stderr: result.stderr.trim().slice(0, 2_000) },
     );
   }
-  const parsed = parseJsonOutput(result.stdout, parseLabel);
+  const emptyDataTable =
+    args[0] === "data" &&
+    result.stdout.trim() === "" &&
+    result.stderr.trim() === "There are no documents in this table.";
+  const parsed = emptyDataTable ? [] : parseJsonOutput(result.stdout, parseLabel);
   command.status = "complete";
   command.result = parsed;
   await writeReceipt(context);
