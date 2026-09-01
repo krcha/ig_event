@@ -117,6 +117,14 @@ const EVENT_DOMAIN_STEPS = [
   },
   {
     workflow: "occurrences",
+    key: "legacy-source-identity-canonicalization-v1",
+    functionName:
+      "internal/migrations/eventDomain:canonicalizeLegacySourceIdentitiesBatch",
+    kind: "event_domain_page",
+    limit: 50,
+  },
+  {
+    workflow: "occurrences",
     key: "legacy-source-occurrence-admission-v1",
     functionName:
       "internal/migrations/eventDomain:admitLegacySourceOccurrencesBatch",

@@ -12,7 +12,7 @@ import {
   canonicalizeSourceUrl,
   canonicalizeSourceUrlOrEmpty,
 } from "../../../lib/domain/source-url";
-import { isCrossPostCampaignLineageEvent } from "../../../lib/events/cross-post-campaign-aggregate-attestation";
+import { isCrossPostCampaignAttestationEvent } from "../../../lib/events/cross-post-campaign-aggregate-attestation";
 import { sourceOccurrenceRepresentativeMatchesExpected } from "../../../lib/events/source-occurrence-representation";
 import { normalizeHandle } from "../../../lib/pipeline/venue-normalization";
 import { loadVerifiedCampaignLineageForSourceEvent } from "../campaignLineageReattestationProof";
@@ -158,7 +158,7 @@ export async function backfillSourceOccurrencesBatchHandler(
       counts.mismatchCount += 1;
       continue;
     }
-    if (isCrossPostCampaignLineageEvent(event)) {
+    if (isCrossPostCampaignAttestationEvent(event)) {
       const campaignProof = await loadVerifiedCampaignLineageForSourceEvent(
         ctx,
         event,

@@ -3,7 +3,7 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { canonicalizeSourceUrl } from "../../lib/domain/source-url";
 import { buildSourceDocumentIdentity } from "../../lib/domain/source-documents";
 import { sha256Hex } from "../../lib/domain/reconciliation/evidence-digest";
-import { isCrossPostCampaignLineageEvent } from "../../lib/events/cross-post-campaign-aggregate-attestation";
+import { isCrossPostCampaignAttestationEvent } from "../../lib/events/cross-post-campaign-aggregate-attestation";
 import { sourceOccurrenceRepresentativeMatchesExpected } from "../../lib/events/source-occurrence-representation";
 import { normalizeHandle } from "../../lib/pipeline/venue-normalization";
 import { assertExistingSourceOccurrenceReceiptWithinBounds } from "./sourceOccurrenceReceipts";
@@ -189,7 +189,7 @@ export async function loadVerifiedLegacySourceOccurrenceAdmission(
   if (
     (event.status !== "approved" && event.status !== "pending") ||
     event.legacySourceOccurrenceAdmissionPolicyVersion !== 1 ||
-    isCrossPostCampaignLineageEvent(event) ||
+    isCrossPostCampaignAttestationEvent(event) ||
     link.eventId !== event._id ||
     link.sourceIdentity !== receipt.sourceIdentity ||
     link.sourceFingerprint !== receipt.sourceFingerprint ||

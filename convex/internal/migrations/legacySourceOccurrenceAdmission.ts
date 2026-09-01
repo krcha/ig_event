@@ -1,6 +1,11 @@
 import type { Doc } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
-import { isCrossPostCampaignLineageEvent } from "../../../lib/events/cross-post-campaign-aggregate-attestation";
+import { canonicalizeSourceUrl } from "../../../lib/domain/source-url";
+import { buildSourceDocumentIdentity } from "../../../lib/domain/source-documents";
+import {
+  isCrossPostCampaignAttestationEvent,
+  isCrossPostCampaignLineageEvent,
+} from "../../../lib/events/cross-post-campaign-aggregate-attestation";
 import {
   readPersistedSourceOccurrenceBinding,
   sourceOccurrenceRepresentativeMatchesExpected,
@@ -13,14 +18,212 @@ import {
   LEGACY_SOURCE_OCCURRENCE_ADMISSION_KEY,
   loadVerifiedLegacySourceOccurrenceAdmission,
 } from "../legacySourceOccurrenceAdmissionProof";
-import { assertExistingSourceOccurrenceReceiptWithinBounds } from "../sourceOccurrenceReceipts";
+import {
+  assertExistingSourceOccurrenceReceiptWithinBounds,
+  MAX_SOURCE_OCCURRENCE_KEYS_PER_SOURCE,
+} from "../sourceOccurrenceReceipts";
 import { markSourceOccurrenceTopologyMutation } from "../sourceOccurrenceTopologyEpoch";
+import { loadVerifiedRejectedReviewedFoldPrimary } from "./eventVenueBindings";
 import {
   normalizeEventDomainMigrationBatchSize,
   recordEventDomainMigrationProgress,
   type EventDomainMigrationBatchArgs,
   type EventDomainMigrationBatchCounts,
 } from "./eventDomainShared";
+
+export const LEGACY_SOURCE_IDENTITY_CANONICALIZATION_KEY =
+  "legacy-source-identity-canonicalization-v1" as const;
+
+type SourceIdentityGroupAssessment =
+  | { kind: "invalid" }
+  | { kind: "unchanged" }
+  | {
+      canonicalIdentity: string;
+      kind: "repair";
+      links: Doc<"instagramEventSources">[];
+      occurrences: Doc<"sourceOccurrences">[];
+      receipt: Doc<"instagramSourceOccurrenceReceipts">;
+    };
+
+async function assessSourceIdentityGroup(
+  ctx: MutationCtx,
+  receipt: Doc<"instagramSourceOccurrenceReceipts">,
+): Promise<SourceIdentityGroupAssessment> {
+  try {
+    assertExistingSourceOccurrenceReceiptWithinBounds(receipt);
+  } catch {
+    return { kind: "invalid" };
+  }
+  const links = await ctx.db
+    .query("instagramEventSources")
+    .withIndex("by_source_occurrence", (q) =>
+      q.eq("sourceIdentity", receipt.sourceIdentity),
+    )
+    .take(MAX_SOURCE_OCCURRENCE_KEYS_PER_SOURCE + 1);
+  if (
+    links.length === 0 ||
+    links.length > MAX_SOURCE_OCCURRENCE_KEYS_PER_SOURCE ||
+    new Set(links.map((link) => link.sourceOccurrenceKey)).size !== links.length
+  ) {
+    return { kind: "invalid" };
+  }
+  const reference = links[0]!;
+  const sourceDocument = await findLegacyAdmissionSourceDocument(ctx, reference);
+  const canonicalSource = sourceDocument
+    ? canonicalizeSourceUrl("instagram", sourceDocument.instagramPostUrl)
+    : null;
+  if (!sourceDocument || !canonicalSource?.ok) return { kind: "invalid" };
+  const canonicalIdentity = buildSourceDocumentIdentity(
+    "instagram",
+    canonicalSource.value,
+  );
+  const events = await Promise.all(links.map((link) => ctx.db.get(link.eventId)));
+  if (
+    links.some(
+      (link) =>
+        link.instagramPostId !== reference.instagramPostId ||
+        link.instagramPostUrl !== reference.instagramPostUrl ||
+        link.sourceFingerprint !== receipt.sourceFingerprint,
+    ) ||
+    events.some((event) => event && isCrossPostCampaignLineageEvent(event))
+  ) {
+    return { kind: "invalid" };
+  }
+  if (receipt.sourceIdentity === canonicalIdentity) return { kind: "unchanged" };
+  const [destinationReceipts, destinationLinks, destinationOccurrences, oldOccurrences, oldAdmissions] =
+    await Promise.all([
+      ctx.db
+        .query("instagramSourceOccurrenceReceipts")
+        .withIndex("by_sourceIdentity", (q) =>
+          q.eq("sourceIdentity", canonicalIdentity),
+        )
+        .take(1),
+      ctx.db
+        .query("instagramEventSources")
+        .withIndex("by_source_occurrence", (q) =>
+          q.eq("sourceIdentity", canonicalIdentity),
+        )
+        .take(1),
+      ctx.db
+        .query("sourceOccurrences")
+        .withIndex("by_source_occurrence", (q) =>
+          q.eq("sourceIdentity", canonicalIdentity),
+        )
+        .take(1),
+      ctx.db
+        .query("sourceOccurrences")
+        .withIndex("by_source_occurrence", (q) =>
+          q.eq("sourceIdentity", receipt.sourceIdentity),
+        )
+        .take(MAX_SOURCE_OCCURRENCE_KEYS_PER_SOURCE + 1),
+      ctx.db
+        .query("legacySourceOccurrenceAdmissions")
+        .withIndex("by_source_occurrence", (q) =>
+          q
+            .eq("migrationKey", LEGACY_SOURCE_OCCURRENCE_ADMISSION_KEY)
+            .eq("sourceIdentity", receipt.sourceIdentity),
+        )
+        .take(1),
+    ]);
+  const linkKeys = new Set(links.map((link) => link.sourceOccurrenceKey));
+  if (
+    destinationReceipts.length > 0 ||
+    destinationLinks.length > 0 ||
+    destinationOccurrences.length > 0 ||
+    oldAdmissions.length > 0 ||
+    oldOccurrences.length > MAX_SOURCE_OCCURRENCE_KEYS_PER_SOURCE ||
+    oldOccurrences.some(
+      (occurrence) => !linkKeys.has(occurrence.sourceOccurrenceKey),
+    )
+  ) {
+    return { kind: "invalid" };
+  }
+  return {
+    canonicalIdentity,
+    kind: "repair",
+    links,
+    occurrences: oldOccurrences,
+    receipt,
+  };
+}
+
+/** Canonicalizes a whole pre-occurrence receipt/link identity group only when
+ * one exact source document proves the destination and no destination rows or
+ * audited lineage can be displaced. */
+export async function canonicalizeLegacySourceIdentitiesBatchHandler(
+  ctx: MutationCtx,
+  args: EventDomainMigrationBatchArgs,
+) {
+  const dryRun = args.dryRun ?? true;
+  const page = await ctx.db
+    .query("instagramSourceOccurrenceReceipts")
+    .order("asc")
+    .paginate({
+      cursor: args.cursor ?? null,
+      numItems: normalizeEventDomainMigrationBatchSize(args.limit),
+    });
+  const counts: EventDomainMigrationBatchCounts = {
+    errorCount: 0,
+    mismatchCount: 0,
+    scannedCount: page.page.length,
+    skippedCount: 0,
+    unchangedCount: 0,
+    updatedCount: 0,
+  };
+  let topologyMutated = false;
+  for (const receipt of page.page) {
+    const assessment = await assessSourceIdentityGroup(ctx, receipt);
+    if (assessment.kind === "invalid") {
+      counts.mismatchCount += 1;
+      continue;
+    }
+    if (assessment.kind === "unchanged") {
+      counts.unchangedCount! += 1;
+      continue;
+    }
+    counts.updatedCount += 1;
+    if (!dryRun) {
+      const now = Date.now();
+      await ctx.db.patch(assessment.receipt._id, {
+        sourceIdentity: assessment.canonicalIdentity,
+        updatedAt: Math.max(now, assessment.receipt.updatedAt + 1),
+      });
+      for (const link of assessment.links) {
+        await ctx.db.patch(link._id, {
+          sourceIdentity: assessment.canonicalIdentity,
+          updatedAt: Math.max(now, link.updatedAt + 1),
+        });
+      }
+      for (const occurrence of assessment.occurrences) {
+        await ctx.db.patch(occurrence._id, {
+          sourceIdentity: assessment.canonicalIdentity,
+          updatedAt: Math.max(now, occurrence.updatedAt + 1),
+        });
+      }
+      topologyMutated = true;
+    }
+  }
+  if (!dryRun && topologyMutated) {
+    await markSourceOccurrenceTopologyMutation(ctx, { verified: false });
+  }
+  await recordEventDomainMigrationProgress({
+    counts,
+    ctx,
+    cursor: page.continueCursor,
+    dryRun,
+    inputCursor: args.cursor ?? null,
+    isDone: page.isDone,
+    key: LEGACY_SOURCE_IDENTITY_CANONICALIZATION_KEY,
+    phase: "legacy_source_identity_canonicalization",
+    restart: args.restart ?? false,
+  });
+  return {
+    ...counts,
+    continueCursor: page.continueCursor,
+    dryRun,
+    isDone: page.isDone,
+  };
+}
 
 type PreparedAdmission = {
   event: Doc<"events">;
@@ -143,6 +346,31 @@ async function prepareAdmission(
   };
   return repairedReceipt
     ? { event: attestedEvent, link, receipt: repairedReceipt, sourceDocument }
+    : null;
+}
+
+async function prepareReviewedFoldRewire(
+  ctx: MutationCtx,
+  rejectedEvent: Doc<"events">,
+  link: Doc<"instagramEventSources">,
+): Promise<{
+  prepared: PreparedAdmission;
+  primary: Doc<"events">;
+  rejectedEventId: Doc<"events">["_id"];
+} | null> {
+  const primary = await loadVerifiedRejectedReviewedFoldPrimary(
+    ctx,
+    rejectedEvent,
+  );
+  if (!primary) return null;
+  const rewiredLink = {
+    ...link,
+    eventId: primary._id,
+    updatedAt: link.updatedAt + 1,
+  };
+  const prepared = await prepareAdmission(ctx, primary, rewiredLink);
+  return prepared
+    ? { prepared, primary, rejectedEventId: rejectedEvent._id }
     : null;
 }
 
@@ -286,7 +514,60 @@ export async function admitLegacySourceOccurrencesBatchHandler(
   let topologyMutated = false;
   for (const link of page.page) {
     const event = await ctx.db.get(link.eventId);
-    if (event && isCrossPostCampaignLineageEvent(event)) {
+    if (
+      event?.status === "rejected" &&
+      !isCrossPostCampaignAttestationEvent(event)
+    ) {
+      const reviewedFold = await prepareReviewedFoldRewire(ctx, event, link);
+      if (reviewedFold) {
+        counts.updatedCount += 1;
+        if (!dryRun) {
+          const currentReceipt = await ctx.db.get(
+            reviewedFold.prepared.receipt._id,
+          );
+          if (!currentReceipt) {
+            throw new Error("Reviewed-fold receipt disappeared after validation.");
+          }
+          const receiptNeedsRepair =
+            JSON.stringify(currentReceipt.expectedOccurrences) !==
+            JSON.stringify(reviewedFold.prepared.receipt.expectedOccurrences);
+          if (receiptNeedsRepair) {
+            await ctx.db.patch(currentReceipt._id, {
+              expectedOccurrences:
+                reviewedFold.prepared.receipt.expectedOccurrences,
+              updatedAt: Math.max(Date.now(), currentReceipt.updatedAt + 1),
+            });
+          }
+          await ctx.db.patch(link._id, {
+            eventId: reviewedFold.primary._id,
+            updatedAt: reviewedFold.prepared.link.updatedAt,
+          });
+          if (
+            reviewedFold.primary
+              .legacySourceOccurrenceAdmissionPolicyVersion !== 1
+          ) {
+            await ctx.db.patch(reviewedFold.primary._id, {
+              legacySourceOccurrenceAdmissionPolicyVersion: 1,
+            });
+          }
+          await upsertAdmission(ctx, reviewedFold.prepared);
+          await ctx.db.insert("eventAuditLog", {
+            action: "legacy_reviewed_fold_source_rewired",
+            actor: LEGACY_SOURCE_OCCURRENCE_ADMISSION_KEY,
+            createdAt: Date.now(),
+            eventId: reviewedFold.primary._id,
+            patchJson: JSON.stringify({
+              rejectedEventId: reviewedFold.rejectedEventId,
+              sourceLinkId: link._id,
+              sourceOccurrenceKey: link.sourceOccurrenceKey,
+            }),
+          });
+          topologyMutated = true;
+        }
+        continue;
+      }
+    }
+    if (event && isCrossPostCampaignAttestationEvent(event)) {
       const campaign = await loadVerifiedCampaignLineageForSourceEvent(
         ctx,
         event,

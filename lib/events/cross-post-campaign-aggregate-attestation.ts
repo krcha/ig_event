@@ -254,6 +254,20 @@ export function isCrossPostCampaignLineageEvent(event: {
   );
 }
 
+/** True only for the dedicated cross-post campaign proof protocol. Reviewed
+ * promotion/continuation folds have their own audited transition proof and
+ * must not be routed through the campaign re-attestation verifier. */
+export function isCrossPostCampaignAttestationEvent(event: {
+  normalizedFieldsJson?: string | null;
+  moderationNote?: string | null;
+}): boolean {
+  return (
+    hasCrossPostCampaignAggregateAttestationField(event.normalizedFieldsJson) ||
+    event.moderationNote?.startsWith("[cross_post_campaign_variant:") === true ||
+    event.moderationNote?.startsWith("[cross_post_campaign_primary:") === true
+  );
+}
+
 function exactArtistsEqual(left: string[], right: string[]): boolean {
   return (
     left.length === right.length &&

@@ -469,28 +469,28 @@ function reviewedFoldLinkMatchesAudit(
   return exactJsonValue(comparable, audited);
 }
 
-async function hasVerifiedRejectedReviewedFold(
+export async function loadVerifiedRejectedReviewedFoldPrimary(
   ctx: MutationCtx,
   event: Doc<"events">,
   expectedPrimaryId?: string,
-): Promise<boolean> {
-  if (event.status !== "rejected") return false;
+): Promise<Doc<"events"> | null> {
+  if (event.status !== "rejected") return null;
   const marker = readReviewedRejectedFoldMarker(event.moderationNote);
-  if (!marker) return false;
+  if (!marker) return null;
   const auditRows = await ctx.db
     .query("eventAuditLog")
     .withIndex("by_event", (q) => q.eq("eventId", event._id))
     .take(MAX_REVIEWED_FOLD_AUDIT_ROWS + 1);
-  if (auditRows.length > MAX_REVIEWED_FOLD_AUDIT_ROWS) return false;
+  if (auditRows.length > MAX_REVIEWED_FOLD_AUDIT_ROWS) return null;
   const matchingAudits = auditRows.filter(
     (audit) => audit.action === marker.action && audit.patchJson,
   );
-  if (matchingAudits.length !== 1) return false;
+  if (matchingAudits.length !== 1) return null;
   let patch: Record<string, unknown> | null = null;
   try {
     patch = readObject(JSON.parse(matchingAudits[0]!.patchJson!));
   } catch {
-    return false;
+    return null;
   }
   const eventBefore = readObject(patch?.eventBefore);
   const primaryId = patch?.primaryId;
@@ -504,7 +504,7 @@ async function hasVerifiedRejectedReviewedFold(
     !eventBefore ||
     !rejectedFoldEvidenceRemainsExact(event, eventBefore)
   ) {
-    return false;
+    return null;
   }
   const links = await ctx.db
     .query("instagramEventSources")
@@ -512,7 +512,7 @@ async function hasVerifiedRejectedReviewedFold(
     .take(2);
   const link = links.length === 1 ? links[0]! : null;
   if (!link || !reviewedFoldLinkMatchesAudit(link, patch.sourceLinkBefore)) {
-    return false;
+    return null;
   }
   const receiptRows = await ctx.db
     .query("instagramSourceOccurrenceReceipts")
@@ -528,7 +528,7 @@ async function hasVerifiedRejectedReviewedFold(
     (occurrence) => occurrence.key === link.sourceOccurrenceKey,
   );
   const normalizedPrimaryId = ctx.db.normalizeId("events", primaryId);
-  if (!normalizedPrimaryId) return false;
+  if (!normalizedPrimaryId) return null;
   const primary = await ctx.db.get(normalizedPrimaryId);
   if (
     !receipt ||
@@ -540,7 +540,7 @@ async function hasVerifiedRejectedReviewedFold(
     primary.status !== "approved" ||
     !sourceOccurrenceRepresentativeMatchesExpected(primary, expected[0])
   ) {
-    return false;
+    return null;
   }
   const occurrences = await ctx.db
     .query("sourceOccurrences")
@@ -555,7 +555,9 @@ async function hasVerifiedRejectedReviewedFold(
     (occurrences.length === 1 &&
       occurrences[0]!.canonicalEventId === primaryId &&
       occurrences[0]!.state === "satisfied")
-  );
+  )
+    ? primary
+    : null;
 }
 
 function approvedReviewedFoldEventAfterMatches(
@@ -690,7 +692,7 @@ async function hasVerifiedApprovedReviewedFold(
   const counterpart = await ctx.db.get(normalizedCounterpartId);
   if (
     !counterpart ||
-    !(await hasVerifiedRejectedReviewedFold(
+    !(await loadVerifiedRejectedReviewedFoldPrimary(
       ctx,
       counterpart,
       expectedPrimaryId,
@@ -731,7 +733,7 @@ async function hasVerifiedReviewedFold(
   event: Doc<"events">,
 ): Promise<boolean> {
   return event.status === "rejected"
-    ? hasVerifiedRejectedReviewedFold(ctx, event)
+    ? Boolean(await loadVerifiedRejectedReviewedFoldPrimary(ctx, event))
     : hasVerifiedApprovedReviewedFold(ctx, event);
 }
 

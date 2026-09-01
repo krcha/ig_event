@@ -82,6 +82,7 @@ const completedMigrationState = [
   "canonical-event-domain-fields-v1",
   "venue-identities-v1",
   "event-venue-bindings-v1",
+  "legacy-source-identity-canonicalization-v1",
   "legacy-source-occurrence-admission-v1",
   "source-occurrences-generic-v2",
   "source-occurrence-canonical-payload-v1",
@@ -1719,7 +1720,7 @@ await assert.rejects(
   (error) =>
     error instanceof DomainError &&
     error.code === "RECONCILIATION_PLAN_INVALID" &&
-    error.details?.incompleteMigrations?.length === 6,
+    error.details?.incompleteMigrations?.length === 7,
   "Apply must fail closed until every required migration is complete.",
 );
 

@@ -8,7 +8,7 @@ import {
 import { parseStructuredFactsJson } from "../../../lib/domain/occurrences/facts";
 import { buildInstagramSourceOccurrenceFingerprint } from "../../../lib/domain/occurrences/source-fingerprint";
 import { adaptInstagramScrapedPostToSourceDocument } from "../../../lib/domain/source-documents";
-import { isCrossPostCampaignLineageEvent } from "../../../lib/events/cross-post-campaign-aggregate-attestation";
+import { isCrossPostCampaignAttestationEvent } from "../../../lib/events/cross-post-campaign-aggregate-attestation";
 import { sourceOccurrenceRepresentativeMatchesExpected } from "../../../lib/events/source-occurrence-representation";
 import { normalizeInstagramPostUrl } from "../../../lib/images/apify-images";
 import { normalizeHandle } from "../../../lib/pipeline/venue-normalization";
@@ -211,7 +211,7 @@ async function attestOccurrencePayload(
   if (!event || !sourceDocument) {
     return { kind: "mismatch", reason: "canonical_or_source_missing" };
   }
-  if (isCrossPostCampaignLineageEvent(event)) {
+  if (isCrossPostCampaignAttestationEvent(event)) {
     return {
       kind: "quarantined",
       reason: "audited_lineage_requires_reattestation",

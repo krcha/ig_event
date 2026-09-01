@@ -5,6 +5,7 @@ export const REQUIRED_RECONCILIATION_MIGRATIONS = [
   "canonical-event-domain-fields-v1",
   "venue-identities-v1",
   "event-venue-bindings-v1",
+  "legacy-source-identity-canonicalization-v1",
   "legacy-source-occurrence-admission-v1",
   "source-occurrences-generic-v2",
   "source-occurrence-canonical-payload-v1",

@@ -25,7 +25,7 @@ import {
 import { backfillSourceOccurrencesBatchHandler } from "./sourceOccurrenceBackfill";
 import { backfillSourceOccurrenceCanonicalPayloadsBatchHandler } from "./sourceOccurrenceCanonicalPayload";
 import { auditSourceOccurrenceReceiptTopologyBatchHandler } from "./sourceOccurrenceTopologyAudit";
-import { admitLegacySourceOccurrencesBatchHandler } from "./legacySourceOccurrenceAdmission";
+import { admitLegacySourceOccurrencesBatchHandler, canonicalizeLegacySourceIdentitiesBatchHandler } from "./legacySourceOccurrenceAdmission";
 import {
   auditVenueCompatibilitySeedsHandler,
   backfillVenueIdentitiesBatchHandler,
@@ -100,6 +100,7 @@ export const admitLegacySourceOccurrencesBatch = internalMutation({
   returns: eventDomainMigrationBatchResult,
   handler: admitLegacySourceOccurrencesBatchHandler,
 });
+export const canonicalizeLegacySourceIdentitiesBatch = internalMutation({ args: eventDomainMigrationBatchArgs, returns: eventDomainMigrationBatchResult, handler: canonicalizeLegacySourceIdentitiesBatchHandler });
 export const backfillSourceOccurrenceCanonicalPayloadsBatch = internalMutation({
   args: eventDomainMigrationBatchArgs,
   returns: eventDomainMigrationBatchResult,

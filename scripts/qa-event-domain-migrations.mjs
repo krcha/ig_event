@@ -12,6 +12,7 @@ import {
   backfillSourceOccurrenceCanonicalPayloadsBatch,
   backfillSourceOccurrencesBatch,
   admitLegacySourceOccurrencesBatch,
+  canonicalizeLegacySourceIdentitiesBatch,
   backfillVenueIdentitiesBatch,
   consolidateReviewedKolaracVenue,
   correctReviewedMrakSourceOccurrence,
@@ -1546,6 +1547,52 @@ function makeCanonicalPayloadMigrationState() {
 
 {
   const state = makeCanonicalPayloadMigrationState();
+  const legacyIdentity = "instagram-source-identity-v1:WrongLegacyShortcode";
+  state.tables.instagramEventSources.get("payload_link").sourceIdentity =
+    legacyIdentity;
+  state.tables.instagramSourceOccurrenceReceipts.get(
+    "payload_receipt",
+  ).sourceIdentity = legacyIdentity;
+  state.tables.sourceOccurrences.get("payload_occurrence").sourceIdentity =
+    legacyIdentity;
+  const dryRun = await canonicalizeLegacySourceIdentitiesBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(dryRun.mismatchCount, 0);
+  assert.equal(dryRun.updatedCount, 1);
+  assert.equal(
+    state.tables.instagramEventSources.get("payload_link").sourceIdentity,
+    legacyIdentity,
+    "Identity canonicalization dry-run must not mutate the legacy group.",
+  );
+  const applied = await canonicalizeLegacySourceIdentitiesBatch._handler(
+    { db: state.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(applied.mismatchCount, 0);
+  assert.equal(applied.updatedCount, 1);
+  const canonicalIdentity = buildSourceDocumentIdentity(
+    "instagram",
+    "PayloadAttestationPost",
+  );
+  assert.equal(
+    state.tables.instagramEventSources.get("payload_link").sourceIdentity,
+    canonicalIdentity,
+  );
+  assert.equal(
+    state.tables.instagramSourceOccurrenceReceipts.get("payload_receipt")
+      .sourceIdentity,
+    canonicalIdentity,
+  );
+  assert.equal(
+    state.tables.sourceOccurrences.get("payload_occurrence").sourceIdentity,
+    canonicalIdentity,
+  );
+}
+
+{
+  const state = makeCanonicalPayloadMigrationState();
   state.tables.sourceOccurrences.delete("payload_occurrence");
   const link = state.tables.instagramEventSources.get("payload_link");
   delete link.sourceOccurrenceId;
@@ -1743,7 +1790,10 @@ function makeCanonicalPayloadMigrationState() {
     instagramPostUrl: "https://www.instagram.com/p/ReviewedPrimary/",
     sourceFingerprint: "reviewed-primary-fingerprint",
     sourceHandle: "freestylerbelgrade_official",
-    sourceIdentity: "reviewed-primary-source",
+    sourceIdentity: buildSourceDocumentIdentity(
+      "instagram",
+      "ReviewedPrimary",
+    ),
     sourceOccurrenceKey: primaryExpected.key,
     updatedAt: 200,
   };
@@ -1754,7 +1804,10 @@ function makeCanonicalPayloadMigrationState() {
     instagramPostUrl: "https://www.instagram.com/p/ReviewedVariant/",
     sourceFingerprint: "reviewed-variant-fingerprint",
     sourceHandle: "freestylerbelgrade_official",
-    sourceIdentity: "reviewed-variant-source",
+    sourceIdentity: buildSourceDocumentIdentity(
+      "instagram",
+      "ReviewedVariant",
+    ),
     sourceOccurrenceKey: variantExpected.key,
     updatedAt: 200,
   };
@@ -1893,6 +1946,24 @@ function makeCanonicalPayloadMigrationState() {
         primaryReceipt,
         variantReceiptOverride,
       ],
+      scrapedPosts: [
+        {
+          _id: "reviewed_primary_document",
+          handle: "freestylerbelgrade_official",
+          imageUrls: [],
+          instagramPostUrl: primaryLink.instagramPostUrl,
+          postId: primaryLink.instagramPostId,
+          username: "freestylerbelgrade_official",
+        },
+        {
+          _id: "reviewed_variant_document",
+          handle: "freestylerbelgrade_official",
+          imageUrls: [],
+          instagramPostUrl: variantLink.instagramPostUrl,
+          postId: variantLink.instagramPostId,
+          username: "freestylerbelgrade_official",
+        },
+      ],
     });
   const state = makeReviewedFoldState();
   const result = await backfillEventVenueBindingsBatch._handler(
@@ -1942,6 +2013,38 @@ function makeCanonicalPayloadMigrationState() {
   );
   assert.equal(conflictingResult.quarantinedLineageMarkerCount, 2);
   assert.equal(conflictingResult.skippedCount, 2);
+
+  const admissionState = makeReviewedFoldState();
+  const admissionDryRun = await admitLegacySourceOccurrencesBatch._handler(
+    { db: admissionState.db },
+    { cursor: null, dryRun: true, limit: 25 },
+  );
+  assert.equal(admissionDryRun.mismatchCount, 0);
+  assert.equal(admissionDryRun.updatedCount, 2);
+  const admissionApply = await admitLegacySourceOccurrencesBatch._handler(
+    { db: admissionState.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(admissionApply.mismatchCount, 0);
+  assert.equal(admissionApply.updatedCount, 2);
+  assert.equal(
+    admissionState.tables.instagramEventSources.get("reviewed_variant_link")
+      .eventId,
+    primaryId,
+    "A verified rejected fold source must be rewired to its audited primary.",
+  );
+  assert.equal(
+    admissionState.tables.legacySourceOccurrenceAdmissions.size,
+    2,
+  );
+  admissionState.tables.eventDomainMigrationState.clear();
+  const occurrenceBackfill = await backfillSourceOccurrencesBatch._handler(
+    { db: admissionState.db },
+    { cursor: null, dryRun: false, limit: 25 },
+  );
+  assert.equal(occurrenceBackfill.mismatchCount, 0);
+  assert.equal(occurrenceBackfill.updatedCount, 2);
+  assert.equal(admissionState.tables.sourceOccurrences.size, 2);
 }
 
 {
