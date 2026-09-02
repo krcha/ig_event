@@ -1169,7 +1169,11 @@ assert.match(fullApprovalRouteSource, /createConvexHttpClient\(\)/);
 assert.doesNotMatch(fullApprovalRouteSource, /createAuthenticatedConvexHttpClient/);
 assert.match(fullApprovalRouteSource, /const PENDING_QUEUE_PAGE_SIZE = 25/);
 assert.match(fullApprovalRouteSource, /const MAX_PENDING_QUEUE_ITEMS = 1_000/);
-assert.match(fullApprovalRouteSource, /const UNIQUE_APPROVAL_CHUNK_SIZE = 10/);
+assert.match(
+  fullApprovalRouteSource,
+  /const MAX_UNIQUENESS_CLASSIFICATION_CHUNK_SIZE = 10/,
+);
+assert.match(fullApprovalRouteSource, /const UNIQUE_APPROVAL_CHUNK_SIZE = 5/);
 assert.match(fullApprovalRouteSource, /minConfidence\?: number/);
 assert.match(
   fullApprovalRouteSource,
@@ -1180,6 +1184,11 @@ assert.match(fullApprovalRouteSource, /minimumConfidence > 1/);
 assert.match(fullApprovalRouteSource, /const confidenceEligibleVersions =/);
 assert.match(fullApprovalRouteSource, /event\.confidenceScore >= minimumConfidence/);
 assert.match(fullApprovalRouteSource, /buildSameDateModerationBatches\(/);
+assert.match(fullApprovalRouteSource, /classificationChunks\.shift\(\)/);
+assert.match(fullApprovalRouteSource, /if \(chunk\.length === 1\)/);
+assert.match(fullApprovalRouteSource, /Math\.ceil\(chunk\.length \/ 2\)/);
+assert.match(fullApprovalRouteSource, /classificationChunks\.unshift\(/);
+assert.match(fullApprovalRouteSource, /classificationSplitCount \+= 1/);
 assert.match(fullApprovalRouteSource, /events:listByStatusPaginated/);
 assert.match(fullApprovalRouteSource, /events:classifyPendingModerationUniqueness/);
 assert.match(fullApprovalRouteSource, /events:approveUniquePendingEvents/);

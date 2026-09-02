@@ -55,7 +55,8 @@ type ApprovalResult = {
 
 const PENDING_QUEUE_PAGE_SIZE = 25;
 const MAX_PENDING_QUEUE_ITEMS = 1_000;
-const UNIQUE_APPROVAL_CHUNK_SIZE = 10;
+const MAX_UNIQUENESS_CLASSIFICATION_CHUNK_SIZE = 10;
+const UNIQUE_APPROVAL_CHUNK_SIZE = 5;
 const MIN_MODERATION_NOTE_LENGTH = 20;
 const MAX_MODERATION_NOTE_LENGTH = 1_000;
 
@@ -316,6 +317,7 @@ export async function POST(request: Request) {
   let skippedDuringApprovalCount = 0;
   let confidenceEligibleCount = 0;
   let belowConfidenceCount = 0;
+  let classificationSplitCount = 0;
 
   try {
     const serviceSecret = requireServiceSecret();
@@ -386,23 +388,41 @@ export async function POST(request: Request) {
     const classifications: PendingUniquenessItem[] = [];
     const classificationChunks = buildSameDateModerationBatches(
       confidenceEligibleVersions,
-      UNIQUE_APPROVAL_CHUNK_SIZE,
+      MAX_UNIQUENESS_CLASSIFICATION_CHUNK_SIZE,
     );
-    for (const chunk of classificationChunks) {
+    while (classificationChunks.length > 0) {
+      const chunk = classificationChunks.shift();
+      if (!chunk) {
+        throw new Error("Pending uniqueness classification queue is invalid.");
+      }
       const expectedVersionById = new Map(
         chunk.map((event) => [event._id, event.updatedAt] as const),
       );
-      const rawClassification = await convex.query(
-        classifyPendingModerationUniquenessQuery,
-        {
-          items: chunk.map((event) => ({
-            id: event._id,
-            expectedUpdatedAt: event.updatedAt,
-          })),
-          asOfMs: classificationAsOfMs,
-          serviceSecret,
-        },
-      );
+      let rawClassification: unknown;
+      try {
+        rawClassification = await convex.query(
+          classifyPendingModerationUniquenessQuery,
+          {
+            items: chunk.map((event) => ({
+              id: event._id,
+              expectedUpdatedAt: event.updatedAt,
+            })),
+            asOfMs: classificationAsOfMs,
+            serviceSecret,
+          },
+        );
+      } catch (error) {
+        if (chunk.length === 1) {
+          throw error;
+        }
+        const midpoint = Math.ceil(chunk.length / 2);
+        classificationChunks.unshift(
+          chunk.slice(0, midpoint),
+          chunk.slice(midpoint),
+        );
+        classificationSplitCount += 1;
+        continue;
+      }
       const classification = validateUniquenessResult(
         rawClassification,
         expectedVersionById,
@@ -464,6 +484,7 @@ export async function POST(request: Request) {
       minimumConfidence: minimumConfidence ?? null,
       confidenceEligibleCount,
       belowConfidenceCount,
+      classificationSplitCount,
       dispositionCounts,
       approvedCount,
       skippedDuringApprovalCount,
@@ -480,6 +501,7 @@ export async function POST(request: Request) {
         minimumConfidence: minimumConfidence ?? null,
         confidenceEligibleCount,
         belowConfidenceCount,
+        classificationSplitCount,
         approvedCount,
         skippedDuringApprovalCount,
       },
