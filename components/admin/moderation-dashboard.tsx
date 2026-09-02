@@ -232,6 +232,10 @@ type DecoratedEvent = ModerationEvent & {
 
 const STATUS_OPTIONS: EventStatus[] = ["pending", "approved", "rejected"];
 const UNIQUE_BULK_APPROVE_ACTION_ID = "__unique_bulk_approve__";
+const UNIQUE_BULK_APPROVAL_MIN_CONFIDENCE =
+  CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
+const UNIQUE_BULK_APPROVAL_CONFIDENCE_LABEL =
+  `${UNIQUE_BULK_APPROVAL_MIN_CONFIDENCE.toFixed(2)}+`;
 const DEFAULT_UNIQUE_APPROVAL_NOTE =
   "Approved after server verification of source evidence, event date, venue identity, and same-date uniqueness.";
 const SERBIAN_CYRILLIC_TO_LATIN: Record<string, string> = {
@@ -1146,7 +1150,10 @@ export function ModerationDashboard() {
       }
       if (
         confidenceFilter === "high" &&
-        !(event.confidenceScore !== null && event.confidenceScore >= 0.9)
+        !(
+          event.confidenceScore !== null &&
+          event.confidenceScore >= UNIQUE_BULK_APPROVAL_MIN_CONFIDENCE
+        )
       ) {
         return false;
       }
@@ -1155,7 +1162,7 @@ export function ModerationDashboard() {
         !(
           event.confidenceScore !== null &&
           event.confidenceScore >= 0.7 &&
-          event.confidenceScore < 0.9
+          event.confidenceScore < UNIQUE_BULK_APPROVAL_MIN_CONFIDENCE
         )
       ) {
         return false;
@@ -1235,16 +1242,17 @@ export function ModerationDashboard() {
 
     if (confidenceFilter !== "all" && confidenceFilter !== "high") {
       setError(
-        "Complete-queue bulk approval supports all confidence levels or the exact 0.90+ threshold.",
+        `Complete-queue bulk approval supports all confidence levels or the exact ${UNIQUE_BULK_APPROVAL_CONFIDENCE_LABEL} threshold.`,
       );
       return;
     }
 
-    const minimumConfidence = confidenceFilter === "high" ? 0.9 : null;
+    const minimumConfidence =
+      confidenceFilter === "high" ? UNIQUE_BULK_APPROVAL_MIN_CONFIDENCE : null;
 
     const confirmed = window.confirm(
       minimumConfidence !== null
-        ? "Scan the complete pending queue and approve every server-verified unique event with final confidence 0.90 or higher? Lower-confidence, duplicate, ambiguous, expired, ineligible, and indeterminate records will remain pending."
+        ? `Scan the complete pending queue and approve every server-verified unique event with final confidence ${UNIQUE_BULK_APPROVAL_MIN_CONFIDENCE.toFixed(2)} or higher? Lower-confidence, duplicate, ambiguous, expired, ineligible, and indeterminate records will remain pending.`
         : eventListComplete && pendingUniquenessComplete
         ? `Approve all ${uniquePendingEvents.length} server-verified unique pending event${
             uniquePendingEvents.length === 1 ? "" : "s"
@@ -1302,7 +1310,9 @@ export function ModerationDashboard() {
       await fetchEvents();
       setUniqueApprovalResult(
         `Reviewed ${reviewedCount} pending records; ${confidenceEligibleCount} met${
-          minimumConfidence === null ? " the confidence scope" : " confidence 0.90+"
+          minimumConfidence === null
+            ? " the confidence scope"
+            : ` confidence ${UNIQUE_BULK_APPROVAL_CONFIDENCE_LABEL}`
         } and ${belowConfidenceCount} did not. Approved ${approvedCount} server-verified unique event${
           approvedCount === 1 ? "" : "s"
         }. ${dispositionCounts.duplicate} duplicate, ${
@@ -1620,8 +1630,10 @@ export function ModerationDashboard() {
             value={confidenceFilter}
           >
             <option value="all">All confidence</option>
-            <option value="high">High confidence (0.90+)</option>
-            <option value="medium">Medium confidence (0.70-0.89)</option>
+            <option value="high">
+              High confidence ({UNIQUE_BULK_APPROVAL_CONFIDENCE_LABEL})
+            </option>
+            <option value="medium">Medium confidence (0.70-0.79)</option>
             <option value="low">Low confidence (&lt; 0.70)</option>
             <option value="missing">Missing confidence</option>
           </select>
@@ -1691,7 +1703,7 @@ export function ModerationDashboard() {
               {actionInFlightFor === UNIQUE_BULK_APPROVE_ACTION_ID
                 ? "Approving verified unique events..."
                 : confidenceFilter === "high"
-                  ? "Approve unique pending (0.90+)"
+                  ? `Approve unique pending (${UNIQUE_BULK_APPROVAL_CONFIDENCE_LABEL})`
                 : eventListComplete && pendingUniquenessComplete
                   ? `Approve all unique pending (${uniquePendingEvents.length})`
                   : "Approve all eligible unique pending"}

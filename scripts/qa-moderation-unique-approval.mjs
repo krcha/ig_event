@@ -1299,7 +1299,12 @@ assert.doesNotMatch(
 );
 assert.match(dashboardSource, /\/api\/admin\/events\/approve-unique-all/);
 assert.match(dashboardSource, /minConfidence: minimumConfidence/);
-assert.match(dashboardSource, /Approve unique pending \(0\.90\+\)/);
+assert.match(
+  dashboardSource,
+  /UNIQUE_BULK_APPROVAL_MIN_CONFIDENCE\s*=\s*\n?\s*CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD/,
+);
+assert.match(dashboardSource, /UNIQUE_BULK_APPROVAL_CONFIDENCE_LABEL/);
+assert.match(dashboardSource, /Medium confidence \(0\.70-0\.79\)/);
 assert.match(
   dashboardSource,
   /Duplicate, ambiguous, expired, ineligible, and indeterminate records will remain pending/,

@@ -300,8 +300,10 @@ calls the job POST route, the job will not keep advancing.
 6. Events more than `MAX_EVENT_DAYS_AHEAD` ahead, events in the past, missing
    dates, missing venues, and invalid events are skipped.
 7. Confidence is normalized in `lib/utils/confidence.ts`.
-8. Auto-approval is conservative: `AUTO_APPROVE_CONFIDENCE_THRESHOLD` is `0.9`,
-   and the code uses a strict greater-than comparison.
+8. Auto-approval remains evidence-gated: the legacy strict
+   `AUTO_APPROVE_CONFIDENCE_THRESHOLD` is `0.8`, the source-grounded core-event
+   rule accepts `0.8` or higher, and duplicate/evidence blockers still prevent
+   publication regardless of confidence.
 9. Missing image and suspected duplicate penalties can reduce moderation
    confidence.
 10. Auto-approved events are inserted as `approved`; all others are inserted as

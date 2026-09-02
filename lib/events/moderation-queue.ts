@@ -27,7 +27,7 @@ export function getModerationQueuePriorityScore(
     score += 25;
   } else if (event.confidenceScore < 0.7) {
     score += 30;
-  } else if (event.confidenceScore < 0.9) {
+  } else if (event.confidenceScore < 0.8) {
     score += 10;
   }
   if (event.missingImage && !event.allowMissingImage) {

@@ -1440,10 +1440,10 @@ function runConfidenceQa() {
     shouldAutoApproveConfidenceScore(AUTO_APPROVE_CONFIDENCE_THRESHOLD),
     false,
   );
-  assert.equal(AUTO_APPROVE_CONFIDENCE_THRESHOLD, 0.9);
+  assert.equal(AUTO_APPROVE_CONFIDENCE_THRESHOLD, 0.8);
   assert.equal(CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD, 0.8);
-  assert.equal(shouldAutoApproveConfidenceScore(0.89), false);
-  assert.equal(shouldAutoApproveConfidenceScore(0.91), true);
+  assert.equal(shouldAutoApproveConfidenceScore(0.79), false);
+  assert.equal(shouldAutoApproveConfidenceScore(0.81), true);
 }
 
 function assertSingleOkPreparedEvent(results) {
