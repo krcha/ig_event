@@ -150,6 +150,7 @@ export const classifyPendingModerationUniqueness = query({
   args: {
     items: v.array(pendingModerationUniquenessReviewItem),
     asOfMs: v.number(),
+    serviceSecret: v.optional(v.string()),
   },
   returns: pendingModerationUniquenessResult,
   handler: classifyPendingModerationUniquenessHandler,
@@ -746,6 +747,8 @@ export const approveUniquePendingEvents = mutation({
   args: {
     items: v.array(pendingModerationUniquenessReviewItem),
     moderationNote: v.string(),
+    reviewedBy: v.optional(v.string()),
+    serviceSecret: v.optional(v.string()),
   },
   returns: approveUniquePendingEventsResult,
   handler: approveUniquePendingEventsHandler,

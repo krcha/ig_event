@@ -1,7 +1,7 @@
 import type { Doc } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { MAX_MODERATION_DUPLICATE_CONTEXT_DATES } from "../../lib/events/moderation-duplicate-context";
-import { requireAdminIdentity } from "../authz";
+import { requireAdminIdentity, requireAdminOrServiceSecret } from "../authz";
 import {
   buildPendingModerationUniquenessReview,
   type PendingModerationUniquenessReviewItem,
@@ -159,9 +159,13 @@ export async function listModerationDuplicateContextByDatesHandler(
 
 export async function classifyPendingModerationUniquenessHandler(
   ctx: QueryCtx,
-  args: { items: PendingModerationUniquenessReviewItem[]; asOfMs: number },
+  args: {
+    items: PendingModerationUniquenessReviewItem[];
+    asOfMs: number;
+    serviceSecret?: string;
+  },
 ) {
-  await requireAdminIdentity(ctx);
+  await requireAdminOrServiceSecret(ctx, args.serviceSecret);
   const review = await buildPendingModerationUniquenessReview(ctx, {
     items: args.items,
     asOfMs: args.asOfMs,

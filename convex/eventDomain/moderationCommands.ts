@@ -12,7 +12,11 @@ import {
   HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION,
   HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION,
 } from "../../lib/events/event-update-precondition";
-import { requireAdminIdentity } from "../authz";
+import {
+  isAdminSubject,
+  requireAdminIdentity,
+  requireAdminOrServiceSecret,
+} from "../authz";
 import { markSourceOccurrenceTopologyMutation } from "../internal/sourceOccurrenceTopologyEpoch";
 import { buildEventOccurrenceIndexPatch } from "../sourceOccurrences";
 import {
@@ -40,9 +44,25 @@ export async function approveUniquePendingEventsHandler(
   args: {
     items: PendingModerationUniquenessReviewItem[];
     moderationNote: string;
+    reviewedBy?: string;
+    serviceSecret?: string;
   },
 ) {
-  const identity = await requireAdminIdentity(ctx);
+  const access = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+  const reviewedBy =
+    access.kind === "service" ? args.reviewedBy?.trim() : access.actor;
+  if (!reviewedBy || !isAdminSubject(reviewedBy)) {
+    throw new Error(
+      "Service-authorized unique approval requires a reviewed admin identity.",
+    );
+  }
+  if (
+    access.kind === "admin" &&
+    args.reviewedBy !== undefined &&
+    args.reviewedBy.trim() !== access.actor
+  ) {
+    throw new Error("Reviewed admin identity does not match the caller.");
+  }
   const decision = unwrapModerationResult(
     prepareModerationDecision({
       kind: "human",
@@ -110,7 +130,7 @@ export async function approveUniquePendingEventsHandler(
       applyModerationDecision(validatedDecision, {
         currentUpdatedAt: event.updatedAt,
         now,
-        reviewedBy: identity.subject,
+        reviewedBy,
       }),
     );
     const provenanceRebind = await rebindHumanApprovalVenueProvenance(
@@ -129,7 +149,7 @@ export async function approveUniquePendingEventsHandler(
     });
     await refreshCanonicalEventDerivedStates(ctx, affectedRepresentativeIds);
     await writeEventAuditLog(ctx, item.id, "approved", {
-      actor: identity.subject,
+      actor: reviewedBy,
       note: moderationNote,
       patch: {
         status: "approved",

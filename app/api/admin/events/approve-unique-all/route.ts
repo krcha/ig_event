@@ -1,7 +1,10 @@
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
-import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
+import {
+  createConvexHttpClient,
+  requireServiceSecret,
+} from "@/lib/convex/server";
 import { getPersistedModerationConfidenceScore } from "@/lib/events/moderation-confidence";
 import { buildSameDateModerationBatches } from "@/lib/events/moderation-uniqueness-batches";
 
@@ -271,6 +274,10 @@ export async function POST(request: Request) {
   if (!adminAccess.ok) {
     return adminAccess.response;
   }
+  const reviewedBy = adminAccess.userId;
+  if (!reviewedBy) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   let body: ApprovalRequestBody;
   try {
@@ -311,7 +318,8 @@ export async function POST(request: Request) {
   let belowConfidenceCount = 0;
 
   try {
-    const convex = await createAuthenticatedConvexHttpClient();
+    const serviceSecret = requireServiceSecret();
+    const convex = createConvexHttpClient();
     const pendingVersions: PendingEventVersion[] = [];
     const seenPendingIds = new Set<string>();
     let cursor: string | null = null;
@@ -324,6 +332,7 @@ export async function POST(request: Request) {
     ) {
       const rawPage = await convex.query(listByStatusPaginatedQuery, {
         status: "pending",
+        serviceSecret,
         paginationOpts: {
           cursor,
           numItems: PENDING_QUEUE_PAGE_SIZE,
@@ -391,6 +400,7 @@ export async function POST(request: Request) {
             expectedUpdatedAt: event.updatedAt,
           })),
           asOfMs: classificationAsOfMs,
+          serviceSecret,
         },
       );
       const classification = validateUniquenessResult(
@@ -433,6 +443,8 @@ export async function POST(request: Request) {
             expectedUpdatedAt: item.expectedUpdatedAt,
           })),
           moderationNote,
+          reviewedBy,
+          serviceSecret,
         },
       );
       const approval = validateApprovalResult(rawApproval, expectedVersionById);

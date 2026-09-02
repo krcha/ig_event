@@ -84,16 +84,6 @@ for (const [functionName, handlerName, implementationSource] of [
     "listModerationDuplicateContextByDatesHandler",
     moderationReadsSource,
   ],
-  [
-    "classifyPendingModerationUniqueness",
-    "classifyPendingModerationUniquenessHandler",
-    moderationReadsSource,
-  ],
-  [
-    "approveUniquePendingEvents",
-    "approveUniquePendingEventsHandler",
-    moderationCommandsSource,
-  ],
   ["setEventStatus", "setEventStatusHandler", moderationCommandsSource],
   ["setEventStatuses", "setEventStatusesHandler", moderationCommandsSource],
   ["deleteApprovedEvent", "deleteApprovedEventHandler", lifecycleCommandsSource],
@@ -123,6 +113,16 @@ for (const [functionName, handlerName, implementationSource] of [
     "listByStatusPaginated",
     "listByStatusPaginatedHandler",
     compatibilityReadsSource,
+  ],
+  [
+    "classifyPendingModerationUniqueness",
+    "classifyPendingModerationUniquenessHandler",
+    moderationReadsSource,
+  ],
+  [
+    "approveUniquePendingEvents",
+    "approveUniquePendingEventsHandler",
+    moderationCommandsSource,
   ],
   ["listByDate", "listByDateHandler", compatibilityReadsSource],
   [

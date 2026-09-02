@@ -13,6 +13,7 @@ import { buildSameDateModerationBatches } from "../lib/events/moderation-uniquen
 import { getPersistedModerationConfidenceScore } from "../lib/events/moderation-confidence.ts";
 
 process.env.ADMIN_CLERK_USER_IDS = "qa-owner";
+process.env.CRON_SECRET = "qa-service-secret";
 
 const FUTURE_DATE = "2035-01-15";
 const AS_OF_MS = Date.parse("2035-01-01T12:00:00.000Z");
@@ -325,6 +326,51 @@ await assert.rejects(
 );
 assert.equal(unauthorized.patches.length, 0);
 assert.equal(unauthorized.audits.length, 0);
+
+// The long-running Next.js operation authenticates the admin once, then uses
+// the server-only service credential so a short-lived OIDC token cannot expire
+// midway through bounded classification or publication. The reviewed admin
+// remains the recorded human actor.
+const serviceEvent = event("service-authorized");
+const serviceFixture = makeCtx({
+  events: [serviceEvent],
+  authenticated: false,
+});
+const serviceClassification =
+  await classifyPendingModerationUniqueness._handler(serviceFixture.ctx, {
+    items: [reviewedItem(serviceEvent)],
+    asOfMs: AS_OF_MS,
+    serviceSecret: "qa-service-secret",
+  });
+assert.equal(serviceClassification.items[0].disposition, "unique");
+const serviceApproval = await approveUniquePendingEvents._handler(
+  serviceFixture.ctx,
+  {
+    items: [reviewedItem(serviceEvent)],
+    moderationNote: MODERATION_NOTE,
+    reviewedBy: "qa-owner",
+    serviceSecret: "qa-service-secret",
+  },
+);
+assert.deepEqual(serviceApproval.approvedIds, [serviceEvent._id]);
+assert.equal(serviceFixture.events.get(serviceEvent._id).reviewedBy, "qa-owner");
+assert.equal(serviceFixture.audits[0].actor, "qa-owner");
+
+const forgedServiceFixture = makeCtx({
+  events: [event("forged-service-actor")],
+  authenticated: false,
+});
+await assert.rejects(
+  approveUniquePendingEvents._handler(forgedServiceFixture.ctx, {
+    items: [reviewedItem(forgedServiceFixture.events.values().next().value)],
+    moderationNote: MODERATION_NOTE,
+    reviewedBy: "not-an-admin",
+    serviceSecret: "qa-service-secret",
+  }),
+  /reviewed admin identity/iu,
+);
+assert.equal(forgedServiceFixture.patches.length, 0);
+assert.equal(forgedServiceFixture.audits.length, 0);
 
 // The classifier uses the caller's explicit clock, so a row can deterministically
 // become ineligible without consulting wall-clock time inside the query.
@@ -1013,14 +1059,17 @@ const classifierSource = section(
 assert.match(classifierSource, /= query\(\{/);
 assert.match(
   classifierSource,
-  /args:\s*\{\s*items: v\.array\(pendingModerationUniquenessReviewItem\),\s*asOfMs: v\.number\(\)/,
+  /args:\s*\{\s*items: v\.array\(pendingModerationUniquenessReviewItem\),\s*asOfMs: v\.number\(\),\s*serviceSecret: v\.optional\(v\.string\(\)\)/,
 );
 assert.match(classifierSource, /returns: pendingModerationUniquenessResult/);
 assert.match(
   classifierSource,
   /handler: classifyPendingModerationUniquenessHandler/,
 );
-assert.match(moderationReadsSource, /await requireAdminIdentity\(ctx\)/);
+assert.match(
+  moderationReadsSource,
+  /await requireAdminOrServiceSecret\(ctx, args\.serviceSecret\)/,
+);
 assert.match(moderationReadsSource, /asOfMs: args\.asOfMs/);
 assert.doesNotMatch(
   moderationReadsSource,
@@ -1055,14 +1104,18 @@ const approvalMutationSource = section(
 assert.match(approvalMutationSource, /= mutation\(\{/);
 assert.match(
   approvalMutationSource,
-  /args:\s*\{\s*items: v\.array\(pendingModerationUniquenessReviewItem\),\s*moderationNote: v\.string\(\)/,
+  /args:\s*\{\s*items: v\.array\(pendingModerationUniquenessReviewItem\),\s*moderationNote: v\.string\(\),\s*reviewedBy: v\.optional\(v\.string\(\)\),\s*serviceSecret: v\.optional\(v\.string\(\)\)/,
 );
 assert.match(approvalMutationSource, /returns: approveUniquePendingEventsResult/);
 assert.match(
   approvalMutationSource,
   /handler: approveUniquePendingEventsHandler/,
 );
-assert.match(moderationCommandsSource, /await requireAdminIdentity\(ctx\)/);
+assert.match(
+  moderationCommandsSource,
+  /await requireAdminOrServiceSecret\(ctx, args\.serviceSecret\)/,
+);
+assert.match(moderationCommandsSource, /isAdminSubject\(reviewedBy\)/);
 assert.match(moderationCommandsSource, /review\.result\.complete/);
 assert.match(moderationCommandsSource, /writeEventAuditLog/);
 
@@ -1111,7 +1164,9 @@ assert.match(approvalRouteSource, /item\.expectedUpdatedAt !== expectedVersionBy
 // pending snapshot, classifies every exact version before the first mutation,
 // and reuses the same <=10 item authoritative mutation for publication.
 assert.match(fullApprovalRouteSource, /requireAdminApiAccess\(\)/);
-assert.match(fullApprovalRouteSource, /createAuthenticatedConvexHttpClient\(\)/);
+assert.match(fullApprovalRouteSource, /requireServiceSecret\(\)/);
+assert.match(fullApprovalRouteSource, /createConvexHttpClient\(\)/);
+assert.doesNotMatch(fullApprovalRouteSource, /createAuthenticatedConvexHttpClient/);
 assert.match(fullApprovalRouteSource, /const PENDING_QUEUE_PAGE_SIZE = 25/);
 assert.match(fullApprovalRouteSource, /const MAX_PENDING_QUEUE_ITEMS = 1_000/);
 assert.match(fullApprovalRouteSource, /const UNIQUE_APPROVAL_CHUNK_SIZE = 10/);
@@ -1128,6 +1183,8 @@ assert.match(fullApprovalRouteSource, /buildSameDateModerationBatches\(/);
 assert.match(fullApprovalRouteSource, /events:listByStatusPaginated/);
 assert.match(fullApprovalRouteSource, /events:classifyPendingModerationUniqueness/);
 assert.match(fullApprovalRouteSource, /events:approveUniquePendingEvents/);
+assert.match(fullApprovalRouteSource, /serviceSecret,/);
+assert.match(fullApprovalRouteSource, /reviewedBy,/);
 assert.match(fullApprovalRouteSource, /page\.pageStatus === "SplitRequired"/);
 assert.match(fullApprovalRouteSource, /page\.continueCursor === cursor/);
 assert.match(fullApprovalRouteSource, /if \(!queueComplete\)/);
