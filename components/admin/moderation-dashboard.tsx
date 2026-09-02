@@ -108,8 +108,10 @@ type EventsResponse = {
 type UniqueApprovalResponse = {
   ok?: boolean;
   complete?: boolean;
-  approvedIds?: string[];
-  skipped?: PendingUniqueness[];
+  reviewedCount?: number;
+  approvedCount?: number;
+  skippedDuringApprovalCount?: number;
+  dispositionCounts?: Record<PendingUniquenessDisposition, number>;
   error?: string;
 };
 
@@ -223,7 +225,6 @@ type DecoratedEvent = ModerationEvent & {
 
 const STATUS_OPTIONS: EventStatus[] = ["pending", "approved", "rejected"];
 const UNIQUE_BULK_APPROVE_ACTION_ID = "__unique_bulk_approve__";
-const UNIQUE_APPROVAL_CHUNK_SIZE = 10;
 const DEFAULT_UNIQUE_APPROVAL_NOTE =
   "Approved after server verification of source evidence, event date, venue identity, and same-date uniqueness.";
 const SERBIAN_CYRILLIC_TO_LATIN: Record<string, string> = {
@@ -1211,13 +1212,11 @@ export function ModerationDashboard() {
   const isAnyActionInFlight = actionInFlightFor !== null;
 
   async function approveUniquePendingEvents() {
-    if (uniquePendingEvents.length === 0) {
-      return;
-    }
-    if (!eventListComplete || !pendingUniquenessComplete) {
-      setError(
-        "Unique approval is disabled because the server has not verified the complete pending queue.",
-      );
+    if (
+      eventListComplete &&
+      pendingUniquenessComplete &&
+      uniquePendingEvents.length === 0
+    ) {
       return;
     }
     const moderationNote = uniqueApprovalNote.trim();
@@ -1227,9 +1226,11 @@ export function ModerationDashboard() {
     }
 
     const confirmed = window.confirm(
-      `Approve all ${uniquePendingEvents.length} server-verified unique pending event${
-        uniquePendingEvents.length === 1 ? "" : "s"
-      }? Duplicate, ambiguous, expired, ineligible, and indeterminate records will remain pending.`,
+      eventListComplete && pendingUniquenessComplete
+        ? `Approve all ${uniquePendingEvents.length} server-verified unique pending event${
+            uniquePendingEvents.length === 1 ? "" : "s"
+          }? Duplicate, ambiguous, expired, ineligible, and indeterminate records will remain pending.`
+        : "Scan the complete pending queue and approve every server-verified unique event? Duplicate, ambiguous, expired, ineligible, and indeterminate records will remain pending.",
     );
     if (!confirmed) {
       return;
@@ -1238,71 +1239,44 @@ export function ModerationDashboard() {
     setActionInFlightFor(UNIQUE_BULK_APPROVE_ACTION_ID);
     setError(null);
     setUniqueApprovalResult(null);
-    let approvedCount = 0;
-    let skippedCount = 0;
 
     try {
-      for (
-        let index = 0;
-        index < uniquePendingEvents.length;
-        index += UNIQUE_APPROVAL_CHUNK_SIZE
+      const response = await fetch("/api/admin/events/approve-unique-all", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ moderationNote }),
+      });
+      const payload = (await response.json()) as UniqueApprovalResponse;
+      if (
+        !response.ok ||
+        payload.complete !== true ||
+        !Number.isSafeInteger(payload.reviewedCount) ||
+        !Number.isSafeInteger(payload.approvedCount) ||
+        !Number.isSafeInteger(payload.skippedDuringApprovalCount) ||
+        !payload.dispositionCounts
       ) {
-        const eventChunk = uniquePendingEvents.slice(
-          index,
-          index + UNIQUE_APPROVAL_CHUNK_SIZE,
+        throw new Error(
+          payload.error ?? "Complete unique pending approval did not finish.",
         );
-        const response = await fetch("/api/admin/events/approve-unique", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            items: eventChunk.map((event) => ({
-              eventId: event.id,
-              expectedUpdatedAt: event.updatedAt,
-            })),
-            moderationNote,
-          }),
-        });
-        const payload = (await response.json()) as UniqueApprovalResponse;
-        const requestedIds = new Set(eventChunk.map((event) => event.id));
-        const responseIds = [
-          ...(Array.isArray(payload.approvedIds) ? payload.approvedIds : []),
-          ...(Array.isArray(payload.skipped)
-            ? payload.skipped.map((item) => item.id)
-            : []),
-        ];
-        if (
-          !response.ok ||
-          payload.complete !== true ||
-          !Array.isArray(payload.approvedIds) ||
-          !Array.isArray(payload.skipped) ||
-          responseIds.length !== eventChunk.length ||
-          new Set(responseIds).size !== responseIds.length ||
-          responseIds.some((id) => !requestedIds.has(id))
-        ) {
-          throw new Error(
-            payload.error ??
-              `Unique approval stopped after ${approvedCount} approved event${
-                approvedCount === 1 ? "" : "s"
-              }.`,
-          );
-        }
-        approvedCount += payload.approvedIds?.length ?? 0;
-        skippedCount += payload.skipped?.length ?? 0;
       }
 
       await fetchEvents();
       setUniqueApprovalResult(
-        `Approved ${approvedCount} server-verified unique event${
-          approvedCount === 1 ? "" : "s"
-        }; ${skippedCount} changed or no longer eligible and remained pending.`,
+        `Reviewed ${payload.reviewedCount} pending records and approved ${payload.approvedCount} server-verified unique event${
+          payload.approvedCount === 1 ? "" : "s"
+        }. ${payload.dispositionCounts.duplicate} duplicate, ${
+          payload.dispositionCounts.ambiguous
+        } ambiguous, ${payload.dispositionCounts.ineligible} ineligible, and ${
+          payload.dispositionCounts.indeterminate
+        } indeterminate records remained pending; ${
+          payload.skippedDuringApprovalCount
+        } changed during final approval and also remained pending.`,
       );
     } catch (caughtError) {
       await fetchEvents();
       setError(
         caughtError instanceof Error
-          ? `${caughtError.message} At least ${approvedCount} approval${
-              approvedCount === 1 ? " was" : "s were"
-            } confirmed before the stop; the refreshed queue is authoritative and reconciles any in-flight chunk.`
+          ? `${caughtError.message} The refreshed queue is authoritative and reconciles any confirmed in-flight chunk.`
           : "Unknown unique approval error; the queue has been refreshed.",
       );
     } finally {
@@ -1663,9 +1637,10 @@ export function ModerationDashboard() {
               disabled={
                 isAnyActionInFlight ||
                 isLoading ||
-                !eventListComplete ||
-                !pendingUniquenessComplete ||
-                uniquePendingEvents.length === 0 ||
+                !hasLoadedQueue ||
+                (eventListComplete &&
+                  pendingUniquenessComplete &&
+                  uniquePendingEvents.length === 0) ||
                 uniqueApprovalNote.trim().length < 20
               }
               onClick={() => void approveUniquePendingEvents()}
@@ -1673,7 +1648,9 @@ export function ModerationDashboard() {
             >
               {actionInFlightFor === UNIQUE_BULK_APPROVE_ACTION_ID
                 ? "Approving verified unique events..."
-                : `Approve all unique pending (${uniquePendingEvents.length})`}
+                : eventListComplete && pendingUniquenessComplete
+                  ? `Approve all unique pending (${uniquePendingEvents.length})`
+                  : "Approve all eligible unique pending"}
             </button>
           </div>
         ) : null}
@@ -1913,7 +1890,7 @@ export function ModerationDashboard() {
       {!isLoading && hasLoadedQueue && !eventListComplete ? (
         <p className="text-sm text-amber-700">
           {status === "pending"
-            ? `More than ${MODERATION_QUEUE_FETCH_LIMIT} pending records exist. Filters still show the selected number from the safely loaded records; only unique bulk approval is disabled.`
+            ? `More than ${MODERATION_QUEUE_FETCH_LIMIT} pending records exist. Filters still show the selected number from the safely loaded records. Unique bulk approval performs a separate complete, bounded server scan before any event is published.`
             : `More than ${MODERATION_QUEUE_FETCH_LIMIT} ${status} records exist. Filters show the selected number from the safely loaded records; additional records were not searched.`}
         </p>
       ) : status === "pending" &&
@@ -1922,7 +1899,7 @@ export function ModerationDashboard() {
         !pendingUniquenessComplete ? (
         <p className="text-sm text-amber-700">
           Server uniqueness verification is incomplete. Filters and the queue remain
-          available; only unique bulk approval is disabled.
+          available; full-queue approval reruns verification before publishing.
         </p>
       ) : null}
       {isDuplicateContextDegraded ? (

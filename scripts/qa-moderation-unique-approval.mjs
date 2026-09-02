@@ -906,6 +906,9 @@ const moderationUniquenessSource = read(
 );
 const adminRouteSource = read("app/api/admin/events/route.ts");
 const approvalRouteSource = read("app/api/admin/events/approve-unique/route.ts");
+const fullApprovalRouteSource = read(
+  "app/api/admin/events/approve-unique-all/route.ts",
+);
 const dashboardSource = read("components/admin/moderation-dashboard.tsx");
 const authQaSource = read("scripts/qa-convex-auth-boundaries.mjs");
 const packageJson = JSON.parse(read("package.json"));
@@ -1050,6 +1053,39 @@ assert.match(approvalRouteSource, /approvedIds\.length \+ skipped\.length !== ex
 assert.match(approvalRouteSource, /approvedIds\.some\(\(id\) => skippedIds\.has\(id\)\)/);
 assert.match(approvalRouteSource, /item\.expectedUpdatedAt !== expectedVersionById\.get\(item\.id\)/);
 
+// The full-queue route keeps Clerk admin identity, freezes a bounded complete
+// pending snapshot, classifies every exact version before the first mutation,
+// and reuses the same <=10 item authoritative mutation for publication.
+assert.match(fullApprovalRouteSource, /requireAdminApiAccess\(\)/);
+assert.match(fullApprovalRouteSource, /createAuthenticatedConvexHttpClient\(\)/);
+assert.match(fullApprovalRouteSource, /const PENDING_QUEUE_PAGE_SIZE = 25/);
+assert.match(fullApprovalRouteSource, /const MAX_PENDING_QUEUE_ITEMS = 1_000/);
+assert.match(fullApprovalRouteSource, /const UNIQUE_APPROVAL_CHUNK_SIZE = 10/);
+assert.match(fullApprovalRouteSource, /events:listByStatusPaginated/);
+assert.match(fullApprovalRouteSource, /events:classifyPendingModerationUniqueness/);
+assert.match(fullApprovalRouteSource, /events:approveUniquePendingEvents/);
+assert.match(fullApprovalRouteSource, /page\.pageStatus === "SplitRequired"/);
+assert.match(fullApprovalRouteSource, /page\.continueCursor === cursor/);
+assert.match(fullApprovalRouteSource, /if \(!queueComplete\)/);
+assert.match(fullApprovalRouteSource, /const classificationAsOfMs = Date\.now\(\)/);
+assert.match(fullApprovalRouteSource, /classification\.complete/);
+assert.match(fullApprovalRouteSource, /const uniqueItems = classifications\.filter/);
+assert.match(fullApprovalRouteSource, /item\.disposition === "unique"/);
+assert.match(fullApprovalRouteSource, /validateApprovalResult/);
+assert.doesNotMatch(fullApprovalRouteSource, /\.collect\(\)/);
+const fullClassificationIndex = fullApprovalRouteSource.indexOf(
+  "const classifications: PendingUniquenessItem[]",
+);
+const fullUniqueItemsIndex = fullApprovalRouteSource.indexOf(
+  "const uniqueItems = classifications.filter",
+);
+const fullApprovalMutationIndex = fullApprovalRouteSource.indexOf(
+  "await convex.mutation",
+);
+assert.ok(fullClassificationIndex >= 0);
+assert.ok(fullUniqueItemsIndex > fullClassificationIndex);
+assert.ok(fullApprovalMutationIndex > fullUniqueItemsIndex);
+
 // The dashboard may display local duplicate context, but unique_pending and its
 // bulk action must trust only the server disposition/version contract.
 assert.match(dashboardSource, /unique_pending/);
@@ -1072,7 +1108,7 @@ assert.match(dashboardSource, /visibleEvents\.map\(\(event\) =>/);
 assert.match(dashboardSource, /Showing \{visibleEvents\.length\} of \{filteredEvents\.length\}/);
 assert.match(
   dashboardSource,
-  /Filters still show the selected number[\s\S]*only unique bulk approval is disabled/,
+  /Filters still show the selected number[\s\S]*complete, bounded server scan/,
 );
 assert.match(dashboardSource, /const fetchRequestGenerationRef = useRef\(0\)/);
 assert.match(dashboardSource, /new AbortController\(\)/);
@@ -1131,24 +1167,21 @@ assert.doesNotMatch(
   /duplicateConfidence|duplicateGroup|buildModerationDuplicateGroups|similarity/iu,
   "unique_pending must not recreate a client-authoritative uniqueness decision.",
 );
-assert.match(dashboardSource, /\/api\/admin\/events\/approve-unique/);
-assert.match(dashboardSource, /MAX_UNIQUE_APPROVAL_ITEMS|UNIQUE_APPROVAL_CHUNK_SIZE/);
-assert.match(dashboardSource, /\.slice\([\s\S]{0,100}(?:MAX_UNIQUE_APPROVAL_ITEMS|UNIQUE_APPROVAL_CHUNK_SIZE)/);
+assert.match(dashboardSource, /\/api\/admin\/events\/approve-unique-all/);
 assert.match(
   dashboardSource,
-  /eventId: event\.id,\s*expectedUpdatedAt: event\.updatedAt/,
+  /Duplicate, ambiguous, expired, ineligible, and indeterminate records will remain pending/,
 );
-assert.match(
+assert.doesNotMatch(
   dashboardSource,
-  /!eventListComplete|eventListComplete === false/,
-  "Unique approval must be disabled when the event list is incomplete.",
+  /disabled=\{[\s\S]{0,300}!eventListComplete/,
+  "An incomplete display window must not disable the separate full-queue scan.",
 );
-assert.match(
+assert.doesNotMatch(
   dashboardSource,
-  /!pendingUniquenessComplete|pendingUniquenessComplete === false/,
-  "Unique approval must be disabled when server classification is incomplete.",
+  /disabled=\{[\s\S]{0,300}!pendingUniquenessComplete/,
+  "A degraded display classification must not disable a fresh full-queue scan.",
 );
-assert.match(dashboardSource, /responseIds\.length !== eventChunk\.length/);
 assert.match(dashboardSource, /refreshed queue is authoritative/);
 
 assert.match(authQaSource, /classifyPendingModerationUniqueness/);

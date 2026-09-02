@@ -520,16 +520,29 @@ const uniqueApprovalRouteSource = readFileSync(
 assert.match(uniqueApprovalRouteSource, /expectedUpdatedAt: item\.expectedUpdatedAt/);
 assert.match(uniqueApprovalRouteSource, /Number\.isSafeInteger\(item\.expectedUpdatedAt\)/);
 assert.match(uniqueApprovalRouteSource, /isVersionConflict\(error\)[\s\S]*\? 409/);
+const fullUniqueApprovalRouteSource = readFileSync(
+  "app/api/admin/events/approve-unique-all/route.ts",
+  "utf8",
+);
+assert.match(fullUniqueApprovalRouteSource, /_id: event\._id,\s*updatedAt: event\.updatedAt/);
+assert.match(
+  fullUniqueApprovalRouteSource,
+  /id: event\._id,\s*expectedUpdatedAt: event\.updatedAt/,
+);
+assert.match(
+  fullUniqueApprovalRouteSource,
+  /id: item\.id,\s*expectedUpdatedAt: item\.expectedUpdatedAt/,
+);
+assert.match(
+  fullUniqueApprovalRouteSource,
+  /item\.expectedUpdatedAt !== expectedVersionById\.get\(item\.id\)/,
+);
 const dashboardSource = readFileSync("components/admin/moderation-dashboard.tsx", "utf8");
 assert.match(dashboardSource, /expectedUpdatedAt: reviewedEvent\.updatedAt/g);
 assert.match(dashboardSource, /Approval note \(required; describe the source evidence and duplicate check\)/);
 assert.match(
   dashboardSource,
   /event\.pendingUniqueness\.expectedUpdatedAt === event\.updatedAt/,
-);
-assert.match(
-  dashboardSource,
-  /eventId: event\.id,\s*expectedUpdatedAt: event\.updatedAt/,
 );
 assert.match(dashboardSource, /expectedPrimaryUpdatedAt: primaryEvent\.updatedAt/);
 assert.match(dashboardSource, /expectedDuplicateVersions:/);
