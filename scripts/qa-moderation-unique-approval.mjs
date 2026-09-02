@@ -1116,6 +1116,10 @@ assert.match(fullApprovalRouteSource, /const PENDING_QUEUE_PAGE_SIZE = 25/);
 assert.match(fullApprovalRouteSource, /const MAX_PENDING_QUEUE_ITEMS = 1_000/);
 assert.match(fullApprovalRouteSource, /const UNIQUE_APPROVAL_CHUNK_SIZE = 10/);
 assert.match(fullApprovalRouteSource, /minConfidence\?: number/);
+assert.match(
+  fullApprovalRouteSource,
+  /result\.pageStatus !== undefined &&\s*result\.pageStatus !== null/,
+);
 assert.match(fullApprovalRouteSource, /minimumConfidence < 0/);
 assert.match(fullApprovalRouteSource, /minimumConfidence > 1/);
 assert.match(fullApprovalRouteSource, /const confidenceEligibleVersions =/);

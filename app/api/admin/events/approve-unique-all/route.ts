@@ -21,7 +21,7 @@ type PendingEventPage = {
   continueCursor: string;
   isDone: boolean;
   page: PendingEventVersion[];
-  pageStatus?: string;
+  pageStatus?: string | null;
 };
 
 type PendingUniquenessDisposition =
@@ -102,7 +102,9 @@ function validatePendingEventPage(
     typeof result.isDone !== "boolean" ||
     !Array.isArray(result.page) ||
     result.page.length > pageSize ||
-    (result.pageStatus !== undefined && typeof result.pageStatus !== "string")
+    (result.pageStatus !== undefined &&
+      result.pageStatus !== null &&
+      typeof result.pageStatus !== "string")
   ) {
     throw new Error("Invalid pending event page response.");
   }
@@ -151,7 +153,7 @@ function validatePendingEventPage(
     continueCursor: result.continueCursor,
     isDone: result.isDone,
     page,
-    pageStatus: result.pageStatus,
+    pageStatus: result.pageStatus as string | null | undefined,
   };
 }
 
