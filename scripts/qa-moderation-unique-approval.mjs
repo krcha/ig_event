@@ -10,6 +10,7 @@ import {
   selectVisibleModerationEvents,
 } from "../lib/events/moderation-view.ts";
 import { buildSameDateModerationBatches } from "../lib/events/moderation-uniqueness-batches.ts";
+import { getPersistedModerationConfidenceScore } from "../lib/events/moderation-confidence.ts";
 
 process.env.ADMIN_CLERK_USER_IDS = "qa-owner";
 
@@ -17,6 +18,39 @@ const FUTURE_DATE = "2035-01-15";
 const AS_OF_MS = Date.parse("2035-01-01T12:00:00.000Z");
 const MODERATION_NOTE =
   "QA reviewed the persisted Instagram evidence and exact same-date cohort.";
+
+assert.equal(
+  getPersistedModerationConfidenceScore({
+    normalizedFields: { confidence: 0.9, moderationAllowMissingImage: true },
+    rawExtraction: null,
+    hasImage: false,
+  }),
+  0.9,
+);
+assert.equal(
+  getPersistedModerationConfidenceScore({
+    normalizedFields: { confidence: 0.95 },
+    rawExtraction: null,
+    hasImage: false,
+  }),
+  0.75,
+);
+assert.equal(
+  getPersistedModerationConfidenceScore({
+    normalizedFields: null,
+    rawExtraction: { confidence: 90 },
+    hasImage: true,
+  }),
+  0.9,
+);
+assert.equal(
+  getPersistedModerationConfidenceScore({
+    normalizedFields: null,
+    rawExtraction: null,
+    hasImage: true,
+  }),
+  null,
+);
 
 const moderationViewFixture = Array.from(
   { length: MODERATION_QUEUE_FETCH_LIMIT },
@@ -1081,6 +1115,11 @@ assert.match(fullApprovalRouteSource, /createAuthenticatedConvexHttpClient\(\)/)
 assert.match(fullApprovalRouteSource, /const PENDING_QUEUE_PAGE_SIZE = 25/);
 assert.match(fullApprovalRouteSource, /const MAX_PENDING_QUEUE_ITEMS = 1_000/);
 assert.match(fullApprovalRouteSource, /const UNIQUE_APPROVAL_CHUNK_SIZE = 10/);
+assert.match(fullApprovalRouteSource, /minConfidence\?: number/);
+assert.match(fullApprovalRouteSource, /minimumConfidence < 0/);
+assert.match(fullApprovalRouteSource, /minimumConfidence > 1/);
+assert.match(fullApprovalRouteSource, /const confidenceEligibleVersions =/);
+assert.match(fullApprovalRouteSource, /event\.confidenceScore >= minimumConfidence/);
 assert.match(fullApprovalRouteSource, /buildSameDateModerationBatches\(/);
 assert.match(fullApprovalRouteSource, /events:listByStatusPaginated/);
 assert.match(fullApprovalRouteSource, /events:classifyPendingModerationUniqueness/);
@@ -1189,6 +1228,8 @@ assert.doesNotMatch(
   "unique_pending must not recreate a client-authoritative uniqueness decision.",
 );
 assert.match(dashboardSource, /\/api\/admin\/events\/approve-unique-all/);
+assert.match(dashboardSource, /minConfidence: minimumConfidence/);
+assert.match(dashboardSource, /Approve unique pending \(0\.90\+\)/);
 assert.match(
   dashboardSource,
   /Duplicate, ambiguous, expired, ineligible, and indeterminate records will remain pending/,

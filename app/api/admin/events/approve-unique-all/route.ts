@@ -2,9 +2,11 @@ import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
 import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
+import { getPersistedModerationConfidenceScore } from "@/lib/events/moderation-confidence";
 import { buildSameDateModerationBatches } from "@/lib/events/moderation-uniqueness-batches";
 
 type ApprovalRequestBody = {
+  minConfidence?: number;
   moderationNote?: string;
 };
 
@@ -12,6 +14,7 @@ type PendingEventVersion = {
   _id: string;
   date: string;
   updatedAt: number;
+  confidenceScore: number | null;
 };
 
 type PendingEventPage = {
@@ -60,6 +63,20 @@ const classifyPendingModerationUniquenessQuery =
 const approveUniquePendingEventsMutation =
   "events:approveUniquePendingEvents" as unknown as FunctionReference<"mutation">;
 
+function parseJsonObject(value: string | null | undefined): Record<string, unknown> | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function isPendingUniquenessDisposition(
   value: unknown,
 ): value is PendingUniquenessDisposition {
@@ -100,7 +117,16 @@ function validatePendingEventPage(
       event._id.length === 0 ||
       typeof event.date !== "string" ||
       !/^\d{4}-\d{2}-\d{2}$/.test(event.date) ||
-      !Number.isSafeInteger(event.updatedAt)
+      !Number.isSafeInteger(event.updatedAt) ||
+      (event.normalizedFieldsJson !== undefined &&
+        event.normalizedFieldsJson !== null &&
+        typeof event.normalizedFieldsJson !== "string") ||
+      (event.rawExtractionJson !== undefined &&
+        event.rawExtractionJson !== null &&
+        typeof event.rawExtractionJson !== "string") ||
+      (event.imageUrl !== undefined &&
+        event.imageUrl !== null &&
+        typeof event.imageUrl !== "string")
     ) {
       throw new Error("Invalid pending event version response.");
     }
@@ -108,6 +134,16 @@ function validatePendingEventPage(
       _id: event._id,
       date: event.date,
       updatedAt: event.updatedAt as number,
+      confidenceScore: getPersistedModerationConfidenceScore({
+        normalizedFields: parseJsonObject(
+          event.normalizedFieldsJson as string | null | undefined,
+        ),
+        rawExtraction: parseJsonObject(
+          event.rawExtractionJson as string | null | undefined,
+        ),
+        hasImage:
+          typeof event.imageUrl === "string" && event.imageUrl.length > 0,
+      }),
     };
   });
 
@@ -252,9 +288,25 @@ export async function POST(request: Request) {
     );
   }
 
+  const minimumConfidence = body.minConfidence;
+  if (
+    minimumConfidence !== undefined &&
+    (typeof minimumConfidence !== "number" ||
+      !Number.isFinite(minimumConfidence) ||
+      minimumConfidence < 0 ||
+      minimumConfidence > 1)
+  ) {
+    return NextResponse.json(
+      { error: "Minimum confidence must be a number from 0 through 1." },
+      { status: 400 },
+    );
+  }
+
   let reviewedCount = 0;
   let approvedCount = 0;
   let skippedDuringApprovalCount = 0;
+  let confidenceEligibleCount = 0;
+  let belowConfidenceCount = 0;
 
   try {
     const convex = await createAuthenticatedConvexHttpClient();
@@ -308,11 +360,21 @@ export async function POST(request: Request) {
       );
     }
     reviewedCount = pendingVersions.length;
+    const confidenceEligibleVersions =
+      minimumConfidence === undefined
+        ? pendingVersions
+        : pendingVersions.filter(
+            (event) =>
+              event.confidenceScore !== null &&
+              event.confidenceScore >= minimumConfidence,
+          );
+    confidenceEligibleCount = confidenceEligibleVersions.length;
+    belowConfidenceCount = reviewedCount - confidenceEligibleCount;
 
     const classificationAsOfMs = Date.now();
     const classifications: PendingUniquenessItem[] = [];
     const classificationChunks = buildSameDateModerationBatches(
-      pendingVersions,
+      confidenceEligibleVersions,
       UNIQUE_APPROVAL_CHUNK_SIZE,
     );
     for (const chunk of classificationChunks) {
@@ -385,6 +447,9 @@ export async function POST(request: Request) {
       ok: true,
       complete: true,
       reviewedCount,
+      minimumConfidence: minimumConfidence ?? null,
+      confidenceEligibleCount,
+      belowConfidenceCount,
       dispositionCounts,
       approvedCount,
       skippedDuringApprovalCount,
@@ -398,6 +463,9 @@ export async function POST(request: Request) {
             : "Failed to approve the complete unique pending queue.",
         complete: false,
         reviewedCount,
+        minimumConfidence: minimumConfidence ?? null,
+        confidenceEligibleCount,
+        belowConfidenceCount,
         approvedCount,
         skippedDuringApprovalCount,
       },

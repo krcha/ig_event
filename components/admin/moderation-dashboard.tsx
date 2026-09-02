@@ -5,6 +5,10 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EventTimeProvenanceText } from "@/components/events/event-time-provenance-text";
 import type { EventTimeSource, EventTimeStatus } from "@/lib/events/event-time";
+import {
+  getPersistedBaseConfidenceScore,
+  getPersistedModerationConfidenceScore,
+} from "@/lib/events/moderation-confidence";
 import { getModerationQueuePriorityScore } from "@/lib/events/moderation-queue";
 import {
   AUTO_APPROVE_CONFIDENCE_THRESHOLD,
@@ -109,6 +113,9 @@ type UniqueApprovalResponse = {
   ok?: boolean;
   complete?: boolean;
   reviewedCount?: number;
+  minimumConfidence?: number | null;
+  confidenceEligibleCount?: number;
+  belowConfidenceCount?: number;
   approvedCount?: number;
   skippedDuringApprovalCount?: number;
   dispositionCounts?: Record<PendingUniquenessDisposition, number>;
@@ -691,15 +698,16 @@ function buildFieldConfirmationRows(
 function decorateEvent(event: ModerationEvent): DecoratedEvent {
   const normalizedFields = parseJsonObject(event.normalizedFieldsJson);
   const rawExtraction = parseJsonObject(event.rawExtractionJson);
-  const baseConfidenceScore =
-    normalizeConfidenceScore(readNumberOrStringField(normalizedFields, "confidence")) ??
-    normalizeConfidenceScore(readNumberOrStringField(rawExtraction, "confidence"));
+  const baseConfidenceScore = getPersistedBaseConfidenceScore({
+    normalizedFields,
+    rawExtraction,
+  });
   const missingImage = !event.imageUrl;
   const allowMissingImage = readBooleanField(normalizedFields, "moderationAllowMissingImage");
-  const confidenceScore = calculateModerationConfidenceScore(baseConfidenceScore, {
-    hasSuspectedDuplicates: false,
-    missingImage,
-    allowMissingImage,
+  const confidenceScore = getPersistedModerationConfidenceScore({
+    normalizedFields,
+    rawExtraction,
+    hasImage: !missingImage,
   });
   const hasSuspiciousYear = readBooleanField(normalizedFields, "dateSuspiciousYear");
   const titleUsedFallback = readBooleanField(normalizedFields, "titleUsedFallback");
@@ -1225,8 +1233,19 @@ export function ModerationDashboard() {
       return;
     }
 
+    if (confidenceFilter !== "all" && confidenceFilter !== "high") {
+      setError(
+        "Complete-queue bulk approval supports all confidence levels or the exact 0.90+ threshold.",
+      );
+      return;
+    }
+
+    const minimumConfidence = confidenceFilter === "high" ? 0.9 : null;
+
     const confirmed = window.confirm(
-      eventListComplete && pendingUniquenessComplete
+      minimumConfidence !== null
+        ? "Scan the complete pending queue and approve every server-verified unique event with final confidence 0.90 or higher? Lower-confidence, duplicate, ambiguous, expired, ineligible, and indeterminate records will remain pending."
+        : eventListComplete && pendingUniquenessComplete
         ? `Approve all ${uniquePendingEvents.length} server-verified unique pending event${
             uniquePendingEvents.length === 1 ? "" : "s"
           }? Duplicate, ambiguous, expired, ineligible, and indeterminate records will remain pending.`
@@ -1244,13 +1263,18 @@ export function ModerationDashboard() {
       const response = await fetch("/api/admin/events/approve-unique-all", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ moderationNote }),
+        body: JSON.stringify({
+          moderationNote,
+          ...(minimumConfidence === null ? {} : { minConfidence: minimumConfidence }),
+        }),
       });
       const payload = (await response.json()) as UniqueApprovalResponse;
       if (
         !response.ok ||
         payload.complete !== true ||
         !Number.isSafeInteger(payload.reviewedCount) ||
+        !Number.isSafeInteger(payload.confidenceEligibleCount) ||
+        !Number.isSafeInteger(payload.belowConfidenceCount) ||
         !Number.isSafeInteger(payload.approvedCount) ||
         !Number.isSafeInteger(payload.skippedDuringApprovalCount) ||
         !payload.dispositionCounts
@@ -1259,17 +1283,34 @@ export function ModerationDashboard() {
           payload.error ?? "Complete unique pending approval did not finish.",
         );
       }
+      const reviewedCount = payload.reviewedCount as number;
+      const confidenceEligibleCount = payload.confidenceEligibleCount as number;
+      const belowConfidenceCount = payload.belowConfidenceCount as number;
+      const approvedCount = payload.approvedCount as number;
+      const skippedDuringApprovalCount = payload.skippedDuringApprovalCount as number;
+      const dispositionCounts = payload.dispositionCounts as Record<
+        PendingUniquenessDisposition,
+        number
+      >;
+      if (
+        payload.minimumConfidence !== minimumConfidence ||
+        confidenceEligibleCount + belowConfidenceCount !== reviewedCount
+      ) {
+        throw new Error("Complete unique pending approval returned the wrong confidence scope.");
+      }
 
       await fetchEvents();
       setUniqueApprovalResult(
-        `Reviewed ${payload.reviewedCount} pending records and approved ${payload.approvedCount} server-verified unique event${
-          payload.approvedCount === 1 ? "" : "s"
-        }. ${payload.dispositionCounts.duplicate} duplicate, ${
-          payload.dispositionCounts.ambiguous
-        } ambiguous, ${payload.dispositionCounts.ineligible} ineligible, and ${
-          payload.dispositionCounts.indeterminate
+        `Reviewed ${reviewedCount} pending records; ${confidenceEligibleCount} met${
+          minimumConfidence === null ? " the confidence scope" : " confidence 0.90+"
+        } and ${belowConfidenceCount} did not. Approved ${approvedCount} server-verified unique event${
+          approvedCount === 1 ? "" : "s"
+        }. ${dispositionCounts.duplicate} duplicate, ${
+          dispositionCounts.ambiguous
+        } ambiguous, ${dispositionCounts.ineligible} ineligible, and ${
+          dispositionCounts.indeterminate
         } indeterminate records remained pending; ${
-          payload.skippedDuringApprovalCount
+          skippedDuringApprovalCount
         } changed during final approval and also remained pending.`,
       );
     } catch (caughtError) {
@@ -1641,6 +1682,7 @@ export function ModerationDashboard() {
                 (eventListComplete &&
                   pendingUniquenessComplete &&
                   uniquePendingEvents.length === 0) ||
+                (confidenceFilter !== "all" && confidenceFilter !== "high") ||
                 uniqueApprovalNote.trim().length < 20
               }
               onClick={() => void approveUniquePendingEvents()}
@@ -1648,6 +1690,8 @@ export function ModerationDashboard() {
             >
               {actionInFlightFor === UNIQUE_BULK_APPROVE_ACTION_ID
                 ? "Approving verified unique events..."
+                : confidenceFilter === "high"
+                  ? "Approve unique pending (0.90+)"
                 : eventListComplete && pendingUniquenessComplete
                   ? `Approve all unique pending (${uniquePendingEvents.length})`
                   : "Approve all eligible unique pending"}
