@@ -524,7 +524,10 @@ const fullUniqueApprovalRouteSource = readFileSync(
   "app/api/admin/events/approve-unique-all/route.ts",
   "utf8",
 );
-assert.match(fullUniqueApprovalRouteSource, /_id: event\._id,\s*updatedAt: event\.updatedAt/);
+assert.match(
+  fullUniqueApprovalRouteSource,
+  /_id: event\._id,\s*date: event\.date,\s*updatedAt: event\.updatedAt/,
+);
 assert.match(
   fullUniqueApprovalRouteSource,
   /id: event\._id,\s*expectedUpdatedAt: event\.updatedAt/,

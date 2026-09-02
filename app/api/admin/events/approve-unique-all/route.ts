@@ -2,6 +2,7 @@ import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
 import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
+import { buildSameDateModerationBatches } from "@/lib/events/moderation-uniqueness-batches";
 
 type ApprovalRequestBody = {
   moderationNote?: string;
@@ -9,6 +10,7 @@ type ApprovalRequestBody = {
 
 type PendingEventVersion = {
   _id: string;
+  date: string;
   updatedAt: number;
 };
 
@@ -96,12 +98,15 @@ function validatePendingEventPage(
     if (
       typeof event._id !== "string" ||
       event._id.length === 0 ||
+      typeof event.date !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(event.date) ||
       !Number.isSafeInteger(event.updatedAt)
     ) {
       throw new Error("Invalid pending event version response.");
     }
     return {
       _id: event._id,
+      date: event.date,
       updatedAt: event.updatedAt as number,
     };
   });
@@ -306,15 +311,11 @@ export async function POST(request: Request) {
 
     const classificationAsOfMs = Date.now();
     const classifications: PendingUniquenessItem[] = [];
-    for (
-      let index = 0;
-      index < pendingVersions.length;
-      index += UNIQUE_APPROVAL_CHUNK_SIZE
-    ) {
-      const chunk = pendingVersions.slice(
-        index,
-        index + UNIQUE_APPROVAL_CHUNK_SIZE,
-      );
+    const classificationChunks = buildSameDateModerationBatches(
+      pendingVersions,
+      UNIQUE_APPROVAL_CHUNK_SIZE,
+    );
+    for (const chunk of classificationChunks) {
       const expectedVersionById = new Map(
         chunk.map((event) => [event._id, event.updatedAt] as const),
       );

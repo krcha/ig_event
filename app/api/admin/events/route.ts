@@ -8,6 +8,7 @@ import {
   loadModerationDuplicateContextWithFallback,
   mergeModerationDuplicateContextEvents,
 } from "@/lib/events/moderation-duplicate-context";
+import { buildSameDateModerationBatches } from "@/lib/events/moderation-uniqueness-batches";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 
 type EventStatus = "pending" | "approved" | "rejected";
@@ -340,15 +341,11 @@ export async function GET(request: Request) {
     let pendingUniquenessComplete = status === "pending" && eventListComplete;
     if (status === "pending") {
       const classificationAsOfMs = Date.now();
-      for (
-        let index = 0;
-        index < events.length;
-        index += MAX_PENDING_UNIQUENESS_ITEMS
-      ) {
-        const eventChunk = events.slice(
-          index,
-          index + MAX_PENDING_UNIQUENESS_ITEMS,
-        );
+      const eventChunks = buildSameDateModerationBatches(
+        events,
+        MAX_PENDING_UNIQUENESS_ITEMS,
+      );
+      for (const eventChunk of eventChunks) {
         const requestedVersionById = new Map(
           eventChunk.map((event) => [event._id, event.updatedAt] as const),
         );

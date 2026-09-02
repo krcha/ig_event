@@ -9,6 +9,7 @@ import {
   MODERATION_QUEUE_FETCH_LIMIT,
   selectVisibleModerationEvents,
 } from "../lib/events/moderation-view.ts";
+import { buildSameDateModerationBatches } from "../lib/events/moderation-uniqueness-batches.ts";
 
 process.env.ADMIN_CLERK_USER_IDS = "qa-owner";
 
@@ -40,6 +41,25 @@ assert.equal(
   67,
   "Full-queue action candidates must remain independent of the visible subset.",
 );
+
+const dateBoundBatches = buildSameDateModerationBatches(
+  [
+    { id: "late-a", date: "2035-01-03" },
+    { id: "early-a", date: "2035-01-01" },
+    { id: "middle", date: "2035-01-02" },
+    { id: "early-b", date: "2035-01-01" },
+    { id: "early-c", date: "2035-01-01" },
+  ],
+  2,
+);
+assert.deepEqual(
+  dateBoundBatches.map((batch) => batch.map((item) => item.id)),
+  [["early-a", "early-b"], ["early-c"], ["middle"], ["late-a"]],
+);
+for (const batch of dateBoundBatches) {
+  assert.ok(batch.length <= 2);
+  assert.equal(new Set(batch.map((item) => item.date)).size, 1);
+}
 
 function read(path) {
   return readFileSync(path, "utf8");
@@ -1027,7 +1047,7 @@ assert.match(
 );
 assert.match(adminRouteSource, /numItems: pageSize/);
 assert.match(adminRouteSource, /const MAX_PENDING_UNIQUENESS_ITEMS = 10/);
-assert.match(adminRouteSource, /index \+= MAX_PENDING_UNIQUENESS_ITEMS/);
+assert.match(adminRouteSource, /buildSameDateModerationBatches\(/);
 assert.match(adminRouteSource, /asOfMs:/);
 const classificationRouteSource = section(
   adminRouteSource,
@@ -1061,6 +1081,7 @@ assert.match(fullApprovalRouteSource, /createAuthenticatedConvexHttpClient\(\)/)
 assert.match(fullApprovalRouteSource, /const PENDING_QUEUE_PAGE_SIZE = 25/);
 assert.match(fullApprovalRouteSource, /const MAX_PENDING_QUEUE_ITEMS = 1_000/);
 assert.match(fullApprovalRouteSource, /const UNIQUE_APPROVAL_CHUNK_SIZE = 10/);
+assert.match(fullApprovalRouteSource, /buildSameDateModerationBatches\(/);
 assert.match(fullApprovalRouteSource, /events:listByStatusPaginated/);
 assert.match(fullApprovalRouteSource, /events:classifyPendingModerationUniqueness/);
 assert.match(fullApprovalRouteSource, /events:approveUniquePendingEvents/);
