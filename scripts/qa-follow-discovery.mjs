@@ -198,6 +198,17 @@ const venuesSource = readFileSync(
 assert.match(routeSource, /isAuthorizedCronRequestHeader/);
 assert.match(routeSource, /scrapeInstagramFollowingAccountsDetailed/);
 assert.match(routeSource, /instagramSources:syncFollowingSnapshot/);
+assert.match(
+  routeSource,
+  /const serviceSecret = requireServiceSecret\(\)/,
+  "following discovery must use the same CRON_SECRET contract as Convex authorization",
+);
+assert.match(routeSource, /const client = createConvexHttpClient\(\)/);
+assert.doesNotMatch(
+  routeSource,
+  /CONVEX_INGEST_SECRET/,
+  "following discovery must not use the unrelated Convex deploy/ingest credential",
+);
 assert.doesNotMatch(
   routeSource,
   /runInstagramIngestion/,

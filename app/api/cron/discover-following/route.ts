@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
+import { createConvexHttpClient, requireServiceSecret } from "@/lib/convex/server";
 import { isAuthorizedCronRequestHeader } from "@/lib/pipeline/cron-ingestion-config";
 import {
   buildApifyFollowingScrapeRequest,
   getFollowDiscoveryConfig,
   scrapeInstagramFollowingAccountsDetailed,
 } from "@/lib/pipeline/follow-discovery";
-import { getRequiredEnv } from "@/lib/utils/env";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -28,8 +27,8 @@ async function runFollowingSynchronization(request: NextRequest) {
 
   const startedAt = Date.now();
   const config = getFollowDiscoveryConfig();
-  const serviceSecret = getRequiredEnv("CONVEX_INGEST_SECRET");
-  const client = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
+  const serviceSecret = requireServiceSecret();
+  const client = createConvexHttpClient();
   const scrapeRequest = buildApifyFollowingScrapeRequest(config);
 
   try {

@@ -29,6 +29,17 @@ const dailyService = readFileSync("ops/systemd/ig-event-durable-daily.service", 
 const dailyTimer = readFileSync("ops/systemd/ig-event-durable-daily.timer", "utf8");
 const ingestionPipeline = readIngestionArchitectureSource();
 
+assert.match(
+  launcher,
+  /read -r child_pid 2>\/dev\/null < "\$pid_file"/,
+  "worker cleanup must silence a concurrently removed PID file",
+);
+assert.doesNotMatch(
+  launcher,
+  /read -r child_pid < "\$pid_file" 2>\/dev\/null/,
+  "input redirection must not emit a missing PID-file warning before stderr is silenced",
+);
+
 const handles = Array.from({ length: 632 }, (_, index) => `venue_${String(index).padStart(3, "0")}`);
 const canary = selectDeterministicCanary(handles);
 assert.equal(canary.length, DURABLE_INGESTION_CANARY_SIZE);

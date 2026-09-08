@@ -174,7 +174,7 @@ terminate_workers() {
   printf 'stop\n' > "$STOP_FILE"
   for slot in {0..5}; do
     pid_file="${START_GATE}.${slot}.pid"
-    if IFS= read -r child_pid < "$pid_file" 2>/dev/null; then
+    if IFS= read -r child_pid 2>/dev/null < "$pid_file"; then
       [[ "$child_pid" =~ ^[0-9]+$ ]] && kill "$child_pid" 2>/dev/null || true
     fi
   done
