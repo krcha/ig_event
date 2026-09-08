@@ -1167,7 +1167,7 @@ assert.match(fullApprovalRouteSource, /requireAdminApiAccess\(\)/);
 assert.match(fullApprovalRouteSource, /requireServiceSecret\(\)/);
 assert.match(fullApprovalRouteSource, /createConvexHttpClient\(\)/);
 assert.doesNotMatch(fullApprovalRouteSource, /createAuthenticatedConvexHttpClient/);
-assert.match(fullApprovalRouteSource, /const PENDING_QUEUE_PAGE_SIZE = 25/);
+assert.match(fullApprovalRouteSource, /const PENDING_QUEUE_PAGE_SIZE = 10/);
 assert.match(fullApprovalRouteSource, /const MAX_PENDING_QUEUE_ITEMS = 1_000/);
 assert.match(
   fullApprovalRouteSource,

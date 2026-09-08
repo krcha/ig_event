@@ -53,7 +53,9 @@ type ApprovalResult = {
   skipped: PendingUniquenessItem[];
 };
 
-const PENDING_QUEUE_PAGE_SIZE = 25;
+// Pending rows include persisted extraction evidence and can be large. Keep each
+// server-side Convex response comfortably below the production proxy body limit.
+const PENDING_QUEUE_PAGE_SIZE = 10;
 const MAX_PENDING_QUEUE_ITEMS = 1_000;
 const MAX_UNIQUENESS_CLASSIFICATION_CHUNK_SIZE = 10;
 const UNIQUE_APPROVAL_CHUNK_SIZE = 5;
