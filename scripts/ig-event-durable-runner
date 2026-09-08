@@ -2,7 +2,11 @@
 # Starts exactly six fixed-lane receipt executors for one durable run.
 set -Eeuo pipefail
 ENV_FILE="${IG_EVENT_CRON_ENV:-/etc/ig_event/cron.env}"
-RUN_ID="${1:?usage: ig-event-durable-runner RUN_ID}"
+if [[ "$#" -ne 1 || ! "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$ ]]; then
+  echo "usage: ig-event-durable-runner RUN_ID" >&2
+  exit 64
+fi
+RUN_ID="$1"
 . "$ENV_FILE"
 : "${APP_ORIGIN:?missing APP_ORIGIN}" "${CRON_SECRET:?missing CRON_SECRET}"
 EXECUTOR_ORIGIN="${IG_EVENT_DURABLE_EXECUTOR_ORIGIN:-$APP_ORIGIN}"

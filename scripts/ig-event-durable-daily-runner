@@ -57,7 +57,10 @@ for ((drained_run_count = 0; drained_run_count < MAX_DRAINED_RUNS; drained_run_c
   run_id="$(printf '%s' "$response" | sed -nE 's/.*"runId":"([^"]+)".*/\1/p')"
   execute_required="$(printf '%s' "$response" | sed -nE 's/.*"executeRequired":(true|false).*/\1/p')"
   follow_up_required="$(printf '%s' "$response" | sed -nE 's/.*"followUpRequired":(true|false).*/\1/p')"
-  [[ -n "$run_id" ]] || { echo "daily durable queue did not return a run id" >&2; exit 1; }
+  [[ "$run_id" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$ ]] || {
+    echo "daily durable queue did not return a valid run id" >&2
+    exit 1
+  }
   [[ "$execute_required" == "true" || "$execute_required" == "false" ]] || {
     echo "daily durable queue returned an invalid execution decision" >&2
     exit 1

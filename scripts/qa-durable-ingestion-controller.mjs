@@ -148,6 +148,11 @@ assert.match(controller, /Selected profiles exceed this run's frozen budget/);
 assert.match(controller, /markReceiptProviderAttemptStarted/);
 assert.match(executor, /complete: state\?\.complete/, "workers must distinguish completion from a busy lease after restart");
 assert.match(launcher, /for slot in \{0\.\.5\}/);
+assert.match(
+  launcher,
+  /\[\[ "\$#" -ne 1 \|\| ! "\$1" =~ \^\[A-Za-z0-9\]/,
+  "runner must reject missing, option-like, or malformed run ids before network access",
+);
 assert.match(launcher, /pids=\(\)/, "runner must track every worker PID");
 assert.match(launcher, /for pid in "\$\{pids\[@\]\}"/, "runner must wait for every worker");
 assert.match(
@@ -189,6 +194,11 @@ assert.match(dailyLauncher, /durable-ingestion\/daily/);
 assert.match(dailyLauncher, /ig-event-durable-runner/);
 assert.match(dailyLauncher, /follow_up_required/);
 assert.match(dailyLauncher, /MAX_DRAINED_RUNS/);
+assert.match(
+  dailyLauncher,
+  /"\$run_id" =~ \^\[A-Za-z0-9\]/,
+  "daily launcher must validate a returned run id before invoking workers",
+);
 assert.doesNotMatch(dailyLauncher, /ingest-venues/, "daily durable launcher must not use the legacy fan-out route");
 assert.match(dailyLauncher, /curl --disable --config "\$config_file"/);
 assert.doesNotMatch(dailyLauncher, /curl[^\n]*Authorization/, "daily launcher must keep the bearer token out of curl argv");
@@ -358,6 +368,18 @@ function runDurableRunnerFixture(mode, expectedStatus) {
     rmSync(fixtureRoot, { force: true, recursive: true });
   }
 }
+
+const invalidRunnerInvocation = spawnSync(
+  "bash",
+  ["scripts/ig-event-durable-runner", "--help"],
+  {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    timeout: 2_000,
+  },
+);
+assert.equal(invalidRunnerInvocation.status, 64);
+assert.match(invalidRunnerInvocation.stderr, /usage: ig-event-durable-runner RUN_ID/);
 
 runDurableRunnerFixture("http_502", 0);
 runDurableRunnerFixture("timeout", 0);
