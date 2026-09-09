@@ -37,6 +37,7 @@ export async function processSavedScrapedPostForDurableReceipt(options: {
   workOwner: string;
   serviceSecret?: string;
   onOpenAiTransportStarted?: () => void;
+  requireCachedCanonicalApprovedDuplicate?: boolean;
 }): Promise<DurableSavedPostProcessingResult> {
   const client = getConvexClient();
   const serviceSecret = getConfiguredServiceSecret(options.serviceSecret);
@@ -87,6 +88,8 @@ export async function processSavedScrapedPostForDurableReceipt(options: {
       workOwner: options.workOwner,
       scrapedPostId: options.scrapedPostId,
       expectedSourceRevision: options.expectedSourceRevision,
+      requireCachedCanonicalApprovedDuplicate:
+        options.requireCachedCanonicalApprovedDuplicate,
       onOpenAiTransportStarted: () => {
         options.onOpenAiTransportStarted?.();
         transportAttempted = true;

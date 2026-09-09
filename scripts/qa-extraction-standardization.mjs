@@ -7076,6 +7076,11 @@ async function runServiceApprovalMutationBoundaryQa() {
   let lastPatch = null;
   let lastAudit = null;
   let sameDateEvents = [];
+  let strictExistingSourceReceipt = null;
+  let strictExistingSourceEvent = null;
+  let strictExistingSourceOccurrence = null;
+  let strictExistingLegacyOccurrenceLink = null;
+  let strictExistingLegacyOccurrenceLinkIndex = null;
   let existingVenue = groundedPublicFields.venue;
   let existingVenueInstagramHandle = "qa_venue";
   let persistedSourcePost = {
@@ -7148,14 +7153,67 @@ async function runServiceApprovalMutationBoundaryQa() {
                 take: async (limit) => (persistedSourcePost && limit > 0 ? [persistedSourcePost] : []),
               }),
             }
-          : {
-              withIndex: () => ({
-                collect: async () => sameDateEvents,
-                first: async () => null,
-                take: async (limit) => sameDateEvents.slice(0, limit),
-                unique: async () => null,
-              }),
-            },
+          : table === "events"
+            ? {
+                withIndex: (indexName) => {
+                  const rows =
+                    indexName === "by_status_date"
+                      ? sameDateEvents
+                      : [
+                            "by_instagramPostId",
+                            "by_instagramPostUrl",
+                            "by_normalizedInstagramPostUrl",
+                            "by_canonicalSourceUrl",
+                          ].includes(indexName) && strictExistingSourceEvent
+                        ? [strictExistingSourceEvent]
+                        : [];
+                  return {
+                    collect: async () => rows,
+                    first: async () => rows[0] ?? null,
+                    take: async (limit) => rows.slice(0, limit),
+                    unique: async () =>
+                      rows.length === 1 ? rows[0] : null,
+                  };
+                },
+              }
+            : table === "instagramSourceOccurrenceReceipts"
+              ? {
+                  withIndex: () => ({
+                    take: async (limit) =>
+                      strictExistingSourceReceipt && limit > 0
+                        ? [strictExistingSourceReceipt]
+                        : [],
+                    unique: async () => strictExistingSourceReceipt,
+                  }),
+                }
+              : table === "sourceOccurrences"
+                ? {
+                    withIndex: () => ({
+                      take: async (limit) =>
+                        strictExistingSourceOccurrence && limit > 0
+                          ? [strictExistingSourceOccurrence]
+                          : [],
+                    }),
+                  }
+                : table === "instagramEventSources"
+                  ? {
+                      withIndex: (indexName) => ({
+                        take: async (limit) =>
+                          strictExistingLegacyOccurrenceLink &&
+                          indexName === strictExistingLegacyOccurrenceLinkIndex &&
+                          limit > 0
+                            ? [strictExistingLegacyOccurrenceLink]
+                            : [],
+                      }),
+                    }
+                  : {
+                      withIndex: () => ({
+                        collect: async () => [],
+                        first: async () => null,
+                        take: async () => [],
+                        unique: async () => null,
+                      }),
+                    },
   };
   const ctx = {
     auth: { getUserIdentity: async () => ({ subject: adminUserId }) },
@@ -7555,9 +7613,13 @@ async function runServiceApprovalMutationBoundaryQa() {
       owner: persistedSourcePost.processingLeaseOwner,
       sourceRevision: persistedSourcePost.sourceRevision,
     };
+    const canonicalDuplicateSourceDocument =
+      adaptInstagramScrapedPostToSourceDocument(persistedSourcePost);
     const canonicalDuplicateSourceOccurrencePlan = {
-      sourceIdentity: "instagram-source-identity-v1:qa-canonical-duplicate",
-      sourceFingerprint: "instagram-source-v2:qa-canonical-duplicate",
+      sourceIdentity: canonicalDuplicateSourceDocument.sourceIdentity,
+      sourceFingerprint: buildInstagramSourceOccurrenceFingerprint(
+        persistedSourcePost,
+      ),
       expectedKeys: [canonicalDuplicateOccurrenceKey],
       expectedOccurrences: [
         {
@@ -7581,6 +7643,7 @@ async function runServiceApprovalMutationBoundaryQa() {
       sourceOccurrencePlan: canonicalDuplicateSourceOccurrencePlan,
       processingFence: canonicalDuplicateProcessingFence,
       returnCreateDisposition: true,
+      requireCanonicalApprovedDuplicate: true,
       serviceSecret,
     });
     assert.deepEqual(canonicalDuplicateDisposition, {
@@ -7593,6 +7656,165 @@ async function runServiceApprovalMutationBoundaryQa() {
       inserted,
       false,
       "A service replay of one uniquely proven approved occurrence must not insert another event.",
+    );
+    for (const [label, expectedOccurrencePatch] of [
+      ["title", { title: "Different Source Occurrence" }],
+      ["date", { date: "2026-07-31" }],
+      ["time", { time: "23:59" }],
+      ["venue", { venue: "Different Source Venue" }],
+      ["artists", { artists: ["Different Source Artist"] }],
+    ]) {
+      await assert.rejects(
+        () =>
+          createEvent._handler(ctx, {
+            ...groundedPublicFields,
+            sourceOccurrenceKey: canonicalDuplicateOccurrenceKey,
+            sourceOccurrencePlan: {
+              ...canonicalDuplicateSourceOccurrencePlan,
+              expectedOccurrences: [
+                {
+                  ...canonicalDuplicateSourceOccurrencePlan
+                    .expectedOccurrences[0],
+                  ...expectedOccurrencePatch,
+                },
+              ],
+            },
+            processingFence: canonicalDuplicateProcessingFence,
+            returnCreateDisposition: true,
+            requireCanonicalApprovedDuplicate: true,
+            serviceSecret,
+          }),
+        /does not represent its exact source occurrence/i,
+        `Canonical-duplicate-only creation must reject a mismatched ${label} in the expected occurrence.`,
+      );
+    }
+    for (const [label, planPatch] of [
+      [
+        "source identity",
+        {
+          sourceIdentity:
+            "instagram-source-identity-v1:qa-unrelated-source",
+        },
+      ],
+      [
+        "source fingerprint",
+        {
+          sourceFingerprint:
+            "instagram-source-v2:qa-unrelated-fingerprint",
+        },
+      ],
+    ]) {
+      await assert.rejects(
+        () =>
+          createEvent._handler(ctx, {
+            ...groundedPublicFields,
+            sourceOccurrenceKey: canonicalDuplicateOccurrenceKey,
+            sourceOccurrencePlan: {
+              ...canonicalDuplicateSourceOccurrencePlan,
+              ...planPatch,
+            },
+            processingFence: canonicalDuplicateProcessingFence,
+            returnCreateDisposition: true,
+            requireCanonicalApprovedDuplicate: true,
+            serviceSecret,
+          }),
+        /identity or fingerprint does not match the fenced source document/i,
+        `Canonical-duplicate-only creation must reject a mismatched ${label}.`,
+      );
+    }
+    strictExistingSourceReceipt = { _id: "qa-existing-source-receipt" };
+    await assert.rejects(
+      () =>
+        createEvent._handler(ctx, {
+          ...groundedPublicFields,
+          sourceOccurrenceKey: canonicalDuplicateOccurrenceKey,
+          sourceOccurrencePlan: canonicalDuplicateSourceOccurrencePlan,
+          processingFence: canonicalDuplicateProcessingFence,
+          returnCreateDisposition: true,
+          requireCanonicalApprovedDuplicate: true,
+          serviceSecret,
+        }),
+      /requires an unbound source document with no occurrence receipt/i,
+      "Canonical-duplicate-only creation must reject an existing source-occurrence receipt.",
+    );
+    strictExistingSourceReceipt = null;
+    strictExistingSourceOccurrence = { _id: "qa-existing-source-occurrence" };
+    await assert.rejects(
+      () =>
+        createEvent._handler(ctx, {
+          ...groundedPublicFields,
+          sourceOccurrenceKey: canonicalDuplicateOccurrenceKey,
+          sourceOccurrencePlan: canonicalDuplicateSourceOccurrencePlan,
+          processingFence: canonicalDuplicateProcessingFence,
+          returnCreateDisposition: true,
+          requireCanonicalApprovedDuplicate: true,
+          serviceSecret,
+        }),
+      /requires an unbound source document with no occurrence receipt/i,
+      "Canonical-duplicate-only creation must reject an existing first-class source occurrence.",
+    );
+    strictExistingSourceOccurrence = null;
+    strictExistingLegacyOccurrenceLink = {
+      _id: "qa-existing-legacy-source-link",
+      sourceIdentity: "instagram-source-identity-v1:qa-legacy-drift",
+    };
+    for (const legacyIdentifierIndex of [
+      "by_post_id",
+      "by_post_url",
+      "by_canonical_source_url",
+    ]) {
+      strictExistingLegacyOccurrenceLinkIndex = legacyIdentifierIndex;
+      await assert.rejects(
+        () =>
+          createEvent._handler(ctx, {
+            ...groundedPublicFields,
+            sourceOccurrenceKey: canonicalDuplicateOccurrenceKey,
+            sourceOccurrencePlan: canonicalDuplicateSourceOccurrencePlan,
+            processingFence: canonicalDuplicateProcessingFence,
+            returnCreateDisposition: true,
+            requireCanonicalApprovedDuplicate: true,
+            serviceSecret,
+          }),
+        /requires an unbound source document with no occurrence receipt/i,
+        `Canonical-duplicate-only creation must reject a legacy source link found only through ${legacyIdentifierIndex}.`,
+      );
+    }
+    strictExistingLegacyOccurrenceLink = null;
+    strictExistingLegacyOccurrenceLinkIndex = null;
+    strictExistingSourceEvent = { _id: "qa-existing-source-bound-event" };
+    await assert.rejects(
+      () =>
+        createEvent._handler(ctx, {
+          ...groundedPublicFields,
+          sourceOccurrenceKey: canonicalDuplicateOccurrenceKey,
+          sourceOccurrencePlan: canonicalDuplicateSourceOccurrencePlan,
+          processingFence: canonicalDuplicateProcessingFence,
+          returnCreateDisposition: true,
+          requireCanonicalApprovedDuplicate: true,
+          serviceSecret,
+        }),
+      /requires an unbound source document with no occurrence receipt/i,
+      "Canonical-duplicate-only creation must reject an event already bound to the fenced source.",
+    );
+    strictExistingSourceEvent = null;
+    await assert.rejects(
+      () =>
+        createEvent._handler(ctx, {
+          ...groundedPublicFields,
+          sourceOccurrenceKey: canonicalDuplicateOccurrenceKey,
+          sourceOccurrencePlan: {
+            ...canonicalDuplicateSourceOccurrencePlan,
+            observedChildKeys: [
+              "instagram-source-child-v1:qa-canonical-duplicate-mismatch",
+            ],
+          },
+          processingFence: canonicalDuplicateProcessingFence,
+          returnCreateDisposition: true,
+          requireCanonicalApprovedDuplicate: true,
+          serviceSecret,
+        }),
+      /requires service authentication, one exact approved occurrence/i,
+      "Canonical-duplicate-only creation must bind its sole observed child to the exact occurrence key.",
     );
     const secondCanonicalDuplicateOccurrenceKey =
       "instagram-occurrence-v2:qa-canonical-duplicate-sibling";
@@ -7622,9 +7844,10 @@ async function runServiceApprovalMutationBoundaryQa() {
           },
           processingFence: canonicalDuplicateProcessingFence,
           returnCreateDisposition: true,
+          requireCanonicalApprovedDuplicate: true,
           serviceSecret,
         }),
-      /approved event already exists for this canonical occurrence/i,
+      /requires service authentication, one exact approved occurrence/i,
       "A multi-occurrence source must not terminalize the whole post through the single-occurrence duplicate bridge.",
     );
     await assert.rejects(
@@ -7645,9 +7868,10 @@ async function runServiceApprovalMutationBoundaryQa() {
           },
           processingFence: canonicalDuplicateProcessingFence,
           returnCreateDisposition: true,
+          requireCanonicalApprovedDuplicate: true,
           serviceSecret,
         }),
-      /approved event already exists for this canonical occurrence/i,
+      /requires service authentication, one exact approved occurrence/i,
       "A source with a deferred sibling must remain retryable instead of being terminalized as one duplicate.",
     );
     await assert.rejects(
@@ -7710,6 +7934,26 @@ async function runServiceApprovalMutationBoundaryQa() {
       "A unique duplicate plus an ambiguous peer must remain fail-closed.",
     );
     sameDateEvents = [];
+    inserted = false;
+    await assert.rejects(
+      () =>
+        createEvent._handler(ctx, {
+          ...groundedPublicFields,
+          sourceOccurrenceKey: canonicalDuplicateOccurrenceKey,
+          sourceOccurrencePlan: canonicalDuplicateSourceOccurrencePlan,
+          processingFence: canonicalDuplicateProcessingFence,
+          returnCreateDisposition: true,
+          requireCanonicalApprovedDuplicate: true,
+          serviceSecret,
+        }),
+      /did not find one uniquely proven approved event/i,
+      "Canonical-duplicate-only creation must reject a unique candidate instead of inserting it.",
+    );
+    assert.equal(
+      inserted,
+      false,
+      "Canonical-duplicate-only creation must perform no event insert when its duplicate proof is absent.",
+    );
 
     patched = false;
     await assert.doesNotReject(() =>

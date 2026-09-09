@@ -374,6 +374,7 @@ export const createEvent = mutation({
     promotionPriority: v.optional(v.number()),
     status: v.optional(eventStatus),
     returnCreateDisposition: v.optional(v.boolean()),
+    requireCanonicalApprovedDuplicate: v.optional(v.boolean()),
     serviceSecret: v.optional(v.string()),
   },
   handler: createEventHandler,

@@ -5,6 +5,7 @@ import {
   EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
   LEGACY_EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
   OPENAI_DEFINITIVE_OUTPUT_FAILURE_KINDS,
+  PREVIOUS_EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
 } from "../lib/ai/openai-analysis-protocol";
 import {
   getLegacyDefinitiveOutputRecoveryFailureAt,
@@ -1707,7 +1708,9 @@ function hasUsableCurrentEventEvidence(post: any, sourceRevision: number): boole
   if (
     post.analysisRevision !== sourceRevision ||
     post.analysisAttemptRevision !== sourceRevision ||
-    post.analysisAttemptProtocol !== EVENT_EXTRACTION_ANALYSIS_PROTOCOL ||
+    (post.analysisAttemptProtocol !== EVENT_EXTRACTION_ANALYSIS_PROTOCOL &&
+      post.analysisAttemptProtocol !==
+        PREVIOUS_EVENT_EXTRACTION_ANALYSIS_PROTOCOL) ||
     post.analysisContractVersion !== "event_evidence_v2" ||
     !Number.isFinite(post.analysisCompletedAt) ||
     typeof post.analysisModel !== "string" ||
@@ -2451,6 +2454,7 @@ export const requeueDefinitiveOutputFailure = mutation({
     expectedSourceRevision: v.number(),
     failedAttemptProtocol: v.union(
       v.literal(EVENT_EXTRACTION_ANALYSIS_PROTOCOL),
+      v.literal(PREVIOUS_EVENT_EXTRACTION_ANALYSIS_PROTOCOL),
       v.literal(LEGACY_EVENT_EXTRACTION_ANALYSIS_PROTOCOL),
     ),
     recoveryProtocol: v.literal(DEFINITIVE_OUTPUT_RECOVERY_PROTOCOL),
@@ -2491,7 +2495,11 @@ export const requeueDefinitiveOutputFailure = mutation({
         );
       }
     } else {
-      if (args.failedAttemptProtocol !== EVENT_EXTRACTION_ANALYSIS_PROTOCOL) {
+      if (
+        args.failedAttemptProtocol !== EVENT_EXTRACTION_ANALYSIS_PROTOCOL &&
+        args.failedAttemptProtocol !==
+          PREVIOUS_EVENT_EXTRACTION_ANALYSIS_PROTOCOL
+      ) {
         throw new Error("Definitive-output recovery protocol fence mismatch.");
       }
       if (args.legacyManifestVersion !== undefined) {

@@ -11,6 +11,7 @@ import {
   DEFINITIVE_OUTPUT_RECOVERY_PROTOCOL,
   EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
   LEGACY_EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
+  PREVIOUS_EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
 } from "../lib/ai/openai-analysis-protocol.ts";
 import {
   LEGACY_DEFINITIVE_OUTPUT_RECOVERY_ALLOWLIST,
@@ -172,12 +173,16 @@ async function captureExtractionError(payload, status = 200) {
 }
 
 try {
-  assert.equal(OPENAI_EXTRACTION_MAX_OUTPUT_TOKENS, 8_192);
+  assert.equal(OPENAI_EXTRACTION_MAX_OUTPUT_TOKENS, 16_384);
   assert.notEqual(
     EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
     LEGACY_EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
   );
-  assert.match(EVENT_EXTRACTION_ANALYSIS_PROTOCOL, /compact_medium.*8192/i);
+  assert.match(EVENT_EXTRACTION_ANALYSIS_PROTOCOL, /compact_medium.*16384.*v2/i);
+  assert.match(
+    PREVIOUS_EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
+    /compact_medium.*8192.*v1/i,
+  );
 
   const incomplete = await captureExtractionError({
     status: "incomplete",
@@ -274,7 +279,7 @@ try {
   const compactResult = await extractEventDataFromInstagramPost(extractionOptions);
   assert.equal(compactResult.source_caption, extractionOptions.caption);
   assert.equal(compactResult.source_url, extractionOptions.instagramPostUrl);
-  assert.equal(compactRequest.max_output_tokens, 8_192);
+  assert.equal(compactRequest.max_output_tokens, 16_384);
   assert.equal(compactRequest.reasoning.effort, "medium");
   assert.equal(compactRequest.text.verbosity, "low");
   const compactSchema = compactRequest.text.format.schema;
@@ -678,6 +683,30 @@ assert.deepEqual(
   },
   stateAfterFirstRequeue,
   "A replay of the same recovery generation must be read-only.",
+);
+
+const previousProtocolRecoveryDb = new MemoryDb(
+  recoverySeed({
+    analysisAttemptProtocol: PREVIOUS_EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
+    analysisDefinitiveOutputFailureProtocol:
+      PREVIOUS_EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
+  }),
+);
+assert.deepEqual(
+  await requeueDefinitiveOutputFailure._handler(
+    ctx(previousProtocolRecoveryDb),
+    {
+      ...requeueArgs,
+      failedAttemptProtocol: PREVIOUS_EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
+    },
+  ),
+  { requeued: true, reason: "requeued" },
+  "A fully attested 8,192-token failure must remain recoverable after the 16,384-token protocol deploys.",
+);
+assert.equal(
+  previousProtocolRecoveryDb.row("scrapedPosts", livePost._id)
+    .analysisDefinitiveOutputRecoveryFromProtocol,
+  PREVIOUS_EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
 );
 
 const failedRunSeed = recoverySeed({}, {}, {

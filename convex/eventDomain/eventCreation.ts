@@ -1,6 +1,7 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { normalizeEventTimeWritePatch } from "../../lib/events/event-time-write";
+import { adaptInstagramScrapedPostToSourceDocument } from "../../lib/domain/source-documents";
 import {
   assertServiceCreateEventPolicy,
   hasEventEvidenceV2AutoApproval,
@@ -10,8 +11,10 @@ import { PUBLICATION_POLICY_VERSION } from "../../lib/domain/publication/policy"
 import { canonicalizeEventType } from "../../lib/taxonomy/venue-types";
 import { requireAdminOrServiceSecret } from "../authz";
 import {
+  assertSourceOccurrencePlanMatchesSourceDocument,
   assertSourceOccurrencePlanWithinBounds,
   assertSourceProcessingFence,
+  eventRepresentsExpectedOccurrence,
   recordSourceOccurrenceSatisfaction,
   type SourceOccurrencePlan,
 } from "../internal/sourceOccurrenceReceipts";
@@ -55,8 +58,152 @@ function isExactSingleOccurrencePlan(
       plan.expectedOccurrences[0]?.key === sourceOccurrenceKey &&
       plan.deferredChildCount === 0 &&
       plan.deferredChildKeys.length === 0 &&
-      plan.observedChildKeys.length === 1,
+      plan.observedChildKeys.length === 1 &&
+      plan.observedChildKeys[0] === sourceOccurrenceKey,
   );
+}
+
+async function assertCanonicalDuplicateRepairSourceUnbound(
+  ctx: MutationCtx,
+  plan: SourceOccurrencePlan,
+  sourceDocument: Doc<"scrapedPosts">,
+): Promise<void> {
+  const canonicalSource =
+    adaptInstagramScrapedPostToSourceDocument(sourceDocument);
+  const postIds = [
+    ...new Set(
+      [sourceDocument.postId.trim(), canonicalSource.providerDocumentId]
+        .filter(Boolean),
+    ),
+  ];
+  const postUrls = [
+    ...new Set(
+      [
+        sourceDocument.instagramPostUrl.trim(),
+        canonicalSource.canonicalSource.canonicalUrl,
+      ].filter(Boolean),
+    ),
+  ];
+  const canonicalPostUrl = canonicalSource.canonicalSource.canonicalUrl;
+  const [
+    receipts,
+    sourceOccurrences,
+    sourceOccurrencesByDocument,
+    sourceOccurrencesByCanonicalUrl,
+    legacyOccurrenceLinks,
+    legacyLinksByPostId,
+    legacyLinksByPostUrl,
+    legacyLinksByCanonicalUrl,
+    eventsByPostId,
+    eventsByLegacyUrl,
+    eventsByNormalizedUrl,
+    eventsByCanonicalUrl,
+  ] = await Promise.all([
+    ctx.db
+      .query("instagramSourceOccurrenceReceipts")
+      .withIndex("by_sourceIdentity", (q) =>
+        q.eq("sourceIdentity", plan.sourceIdentity),
+      )
+      .take(1),
+    ctx.db
+      .query("sourceOccurrences")
+      .withIndex("by_source_occurrence", (q) =>
+        q.eq("sourceIdentity", plan.sourceIdentity),
+      )
+      .take(1),
+    ctx.db
+      .query("sourceOccurrences")
+      .withIndex("by_document_occurrence", (q) =>
+        q.eq("sourceDocumentId", sourceDocument._id),
+      )
+      .take(1),
+    ctx.db
+      .query("sourceOccurrences")
+      .withIndex("by_canonical_source_occurrence", (q) =>
+        q.eq("canonicalSourceUrl", canonicalPostUrl),
+      )
+      .take(1),
+    ctx.db
+      .query("instagramEventSources")
+      .withIndex("by_source_occurrence", (q) =>
+        q.eq("sourceIdentity", plan.sourceIdentity),
+      )
+      .take(1),
+    Promise.all(
+      postIds.map((postId) =>
+        ctx.db
+          .query("instagramEventSources")
+          .withIndex("by_post_id", (q) => q.eq("instagramPostId", postId))
+          .take(1),
+      ),
+    ),
+    Promise.all(
+      postUrls.map((postUrl) =>
+        ctx.db
+          .query("instagramEventSources")
+          .withIndex("by_post_url", (q) =>
+            q.eq("instagramPostUrl", postUrl),
+          )
+          .take(1),
+      ),
+    ),
+    ctx.db
+      .query("instagramEventSources")
+      .withIndex("by_canonical_source_url", (q) =>
+        q.eq("canonicalSourceUrl", canonicalPostUrl),
+      )
+      .take(1),
+    Promise.all(
+      postIds.map((postId) =>
+        ctx.db
+          .query("events")
+          .withIndex("by_instagramPostId", (q) =>
+            q.eq("instagramPostId", postId),
+          )
+          .take(1),
+      ),
+    ),
+    Promise.all(
+      postUrls.map((postUrl) =>
+        ctx.db
+          .query("events")
+          .withIndex("by_instagramPostUrl", (q) =>
+            q.eq("instagramPostUrl", postUrl),
+          )
+          .take(1),
+      ),
+    ),
+    ctx.db
+      .query("events")
+      .withIndex("by_normalizedInstagramPostUrl", (q) =>
+        q.eq("normalizedInstagramPostUrl", canonicalPostUrl),
+      )
+      .take(1),
+    ctx.db
+      .query("events")
+      .withIndex("by_canonicalSourceUrl", (q) =>
+        q.eq("canonicalSourceUrl", canonicalPostUrl),
+      )
+      .take(1),
+  ]);
+  if (
+    receipts.length > 0 ||
+    sourceOccurrences.length > 0 ||
+    sourceOccurrencesByDocument.length > 0 ||
+    sourceOccurrencesByCanonicalUrl.length > 0 ||
+    legacyOccurrenceLinks.length > 0 ||
+    legacyLinksByPostId.some((rows) => rows.length > 0) ||
+    legacyLinksByPostUrl.some((rows) => rows.length > 0) ||
+    legacyLinksByCanonicalUrl.length > 0 ||
+    eventsByPostId.some((rows) => rows.length > 0) ||
+    eventsByLegacyUrl.some((rows) => rows.length > 0) ||
+    eventsByNormalizedUrl.length > 0 ||
+    eventsByCanonicalUrl.length > 0
+  ) {
+    throw new Error(
+      "Canonical-duplicate-only creation requires an unbound source document with no occurrence receipt.",
+    );
+  }
 }
 
 export async function createEventHandler(
@@ -97,6 +244,7 @@ export async function createEventHandler(
     promotionPriority?: number;
     status?: "pending" | "approved" | "rejected";
     returnCreateDisposition?: boolean;
+    requireCanonicalApprovedDuplicate?: boolean;
     serviceSecret?: string;
   },
 ) {
@@ -107,6 +255,7 @@ export async function createEventHandler(
   const {
     serviceSecret: _serviceSecret,
     returnCreateDisposition,
+    requireCanonicalApprovedDuplicate,
     sourceOccurrencePlan: occurrencePlan,
     processingFence,
     ...eventArgs
@@ -122,6 +271,53 @@ export async function createEventHandler(
   if (occurrencePlan) {
     assertSourceOccurrencePlanWithinBounds(occurrencePlan);
   }
+  if (
+    requireCanonicalApprovedDuplicate === true &&
+    (kind !== "service" ||
+      returnCreateDisposition !== true ||
+      !processingFence ||
+      eventArgs.status !== "approved" ||
+      !isExactSingleOccurrencePlan(
+        occurrencePlan,
+        eventArgs.sourceOccurrenceKey,
+      ))
+  ) {
+    throw new Error(
+      "Canonical-duplicate-only creation requires service authentication, one exact approved occurrence, and a current processing fence.",
+    );
+  }
+  if (requireCanonicalApprovedDuplicate === true) {
+    const strictPlan = occurrencePlan as SourceOccurrencePlan;
+    const strictSourceDocument = sourceDocument as Doc<"scrapedPosts">;
+    assertSourceOccurrencePlanMatchesSourceDocument(
+      strictPlan,
+      strictSourceDocument,
+    );
+    if (
+      !eventRepresentsExpectedOccurrence(
+        {
+          title: eventArgs.title,
+          date: eventArgs.date,
+          time: eventArgs.time,
+          venue: eventArgs.venue,
+          artists: eventArgs.artists,
+          status: eventArgs.status ?? "pending",
+          sourceOccurrenceKey: eventArgs.sourceOccurrenceKey,
+          normalizedFieldsJson: eventArgs.normalizedFieldsJson,
+        },
+        strictPlan.expectedOccurrences[0],
+      )
+    ) {
+      throw new Error(
+        "Canonical-duplicate-only candidate does not represent its exact source occurrence.",
+      );
+    }
+    await assertCanonicalDuplicateRepairSourceUnbound(
+      ctx,
+      strictPlan,
+      strictSourceDocument,
+    );
+  }
   if (eventArgs.sourceOccurrenceKey) {
     const existingOccurrence = await ctx.db
       .query("events")
@@ -130,6 +326,11 @@ export async function createEventHandler(
       )
       .unique();
     if (existingOccurrence) {
+      if (requireCanonicalApprovedDuplicate === true) {
+        throw new Error(
+          "Canonical-duplicate-only creation cannot reuse an existing source occurrence.",
+        );
+      }
       if (occurrencePlan && eventArgs.sourceOccurrenceKey) {
         const satisfaction = await recordSourceOccurrenceSatisfaction(
           ctx,
@@ -212,6 +413,11 @@ export async function createEventHandler(
         updatedAt: existingApprovedDuplicate.updatedAt,
         disposition: "canonical_approved_duplicate" as const,
       };
+    }
+    if (requireCanonicalApprovedDuplicate === true) {
+      throw new Error(
+        "Canonical-duplicate-only creation did not find one uniquely proven approved event.",
+      );
     }
   }
   const normalizedEventArgs = normalizeEventTimeWritePatch(eventArgs);

@@ -31,6 +31,7 @@ export async function processLoadedPostsForHandle(
     scrapedPostId,
     expectedSourceRevision,
     onOpenAiTransportStarted,
+    requireCachedCanonicalApprovedDuplicate,
   } = options;
 
   for (const rawPost of posts) {
@@ -232,6 +233,7 @@ export async function processLoadedPostsForHandle(
         cachedAnalysisImageChecksumSha256: claim.analysisImageChecksumSha256,
         providerExecution,
         onOpenAiTransportStarted,
+        requireCachedCanonicalApprovedDuplicate,
       });
     } catch (error) {
       await client.mutation(

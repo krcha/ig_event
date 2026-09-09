@@ -419,6 +419,275 @@ assert.equal(canonicalDuplicateSummary.skippedDuplicates, 1);
 assert.equal(canonicalDuplicateSummary.terminalCanonicalDuplicates, 1);
 assert.equal(canonicalDuplicateSummary.failedExtractions, 0);
 
+const cachedPosterCanonicalDuplicateCaption =
+  "Cached Poster Duplicate 10.09.2026 at 20:00 at Venue";
+const cachedPosterCanonicalDuplicateExtraction = makeExtraction({
+  extraction_contract_version: "event_evidence_v2",
+  title: "Cached Poster Duplicate",
+  date: "10.09.2026",
+  time: "20:00",
+  venue: "Venue",
+  source_caption: cachedPosterCanonicalDuplicateCaption,
+  date_evidence: {
+    exact_text: "10.09.2026",
+    source: "poster",
+    is_relative: false,
+    resolved_date: "2026-09-10",
+  },
+  time_evidence: {
+    status: "start_time_stated",
+    exact_text: "20:00",
+    source: "poster",
+  },
+  field_confirmation: {
+    title: {
+      confidence: 0.99,
+      found_in: ["poster"],
+      evidence: "Cached Poster Duplicate",
+      evidence_snippets: [
+        { source: "poster", text: "Cached Poster Duplicate" },
+      ],
+      notes: "",
+    },
+    location: {
+      confidence: 0.99,
+      found_in: ["poster"],
+      evidence: "Belgrade",
+      evidence_snippets: [{ source: "poster", text: "Belgrade" }],
+      notes: "",
+    },
+    location_name: {
+      confidence: 0.99,
+      found_in: ["poster"],
+      evidence: "Venue",
+      evidence_snippets: [{ source: "poster", text: "Venue" }],
+      notes: "",
+    },
+    price: {
+      confidence: 0.99,
+      found_in: ["poster"],
+      evidence: "",
+      evidence_snippets: [],
+      notes: "",
+    },
+    start_time: {
+      confidence: 0.99,
+      found_in: ["poster"],
+      evidence: "20:00",
+      evidence_snippets: [{ source: "poster", text: "20:00" }],
+      notes: "",
+    },
+    short_description: {
+      confidence: 0.99,
+      found_in: ["poster"],
+      evidence: "Cached Poster Duplicate",
+      evidence_snippets: [
+        { source: "poster", text: "Cached Poster Duplicate" },
+      ],
+      notes: "",
+    },
+    artists: {
+      confidence: 0.99,
+      found_in: ["poster"],
+      evidence: "",
+      evidence_snippets: [],
+      notes: "",
+    },
+  },
+});
+function makeCachedPosterCanonicalDuplicateClient() {
+  const state = {
+    actions: [],
+    createArgs: [],
+    reconciliationCalls: 0,
+  };
+  return {
+    state,
+    client: {
+      query: async (reference) => emptyIngestionQueryResult(reference),
+      mutation: async (reference, args) => {
+        if (reference === "reconciliationIngress:reconcileIngestionPlan") {
+          state.reconciliationCalls += 1;
+          return { authority: "legacy", outcomes: [] };
+        }
+        if (reference === "events:createEvent") {
+          state.createArgs.push(structuredClone(args));
+          return {
+            eventId: "qa-existing-approved-cached-poster-event",
+            created: false,
+            updatedAt: 456,
+            disposition: "canonical_approved_duplicate",
+          };
+        }
+        return {};
+      },
+      action: async (_reference, args) => {
+        state.actions.push(structuredClone(args));
+        return { persisted: true };
+      },
+    },
+  };
+}
+function cachedPosterCanonicalDuplicateOptions(client, summary, strictMode) {
+  return {
+    client,
+    handle: "venue",
+    post: makePost({ caption: cachedPosterCanonicalDuplicateCaption }),
+    summary,
+    canonicalVenueNamesByHandle: { venue: "Venue" },
+    venueNameOverridesByHandle: {},
+    configuredVenueNamesByHandle: { venue: "Venue" },
+    sourceRolesByHandle: { venue: "venue" },
+    serviceSecret: "qa-secret",
+    cachedAnalysisJson: JSON.stringify(
+      cachedPosterCanonicalDuplicateExtraction,
+    ),
+    cachedAnalysisContractVersion: "event_evidence_v2",
+    cachedAnalysisImageSourceUrl: IMAGE_URL,
+    cachedAnalysisImageChecksumSha256: "a".repeat(64),
+    providerExecution: {
+      claim: async () => {
+        throw new Error("A valid cached repair must not claim OpenAI.");
+      },
+      block: async () => {},
+      release: async () => {},
+    },
+    requireCachedCanonicalApprovedDuplicate: strictMode,
+    extracted: cachedPosterCanonicalDuplicateExtraction,
+    eventDateFilterNow: NOW,
+  };
+}
+
+const strictCachedDuplicateClient = makeCachedPosterCanonicalDuplicateClient();
+const strictCachedDuplicateSummary = createEmptyIngestionSummary(["venue"])
+  .handles[0];
+await withoutConsoleNoise(() =>
+  processIngestionPostWithExtractionForTesting(
+    cachedPosterCanonicalDuplicateOptions(
+      strictCachedDuplicateClient.client,
+      strictCachedDuplicateSummary,
+      true,
+    ),
+  ),
+);
+assert.equal(
+  strictCachedDuplicateClient.state.actions.length,
+  0,
+  "The strict cached canonical-duplicate repair must perform no media action.",
+);
+assert.equal(
+  strictCachedDuplicateClient.state.reconciliationCalls,
+  0,
+  "The strict repair must not enter a reconciliation writer before its atomic duplicate proof.",
+);
+assert.equal(
+  strictCachedDuplicateClient.state.createArgs.length,
+  1,
+  JSON.stringify(strictCachedDuplicateSummary),
+);
+assert.equal(
+  strictCachedDuplicateClient.state.createArgs[0]
+    .requireCanonicalApprovedDuplicate,
+  true,
+);
+assert.equal(strictCachedDuplicateSummary.insertedEvents, 0);
+assert.equal(strictCachedDuplicateSummary.skippedDuplicates, 1);
+assert.equal(strictCachedDuplicateSummary.terminalCanonicalDuplicates, 1);
+assert.equal(strictCachedDuplicateSummary.failedExtractions, 0);
+
+const normalCachedDuplicateClient = makeCachedPosterCanonicalDuplicateClient();
+const normalCachedDuplicateSummary = createEmptyIngestionSummary(["venue"])
+  .handles[0];
+await withoutConsoleNoise(() =>
+  processIngestionPostWithExtractionForTesting(
+    cachedPosterCanonicalDuplicateOptions(
+      normalCachedDuplicateClient.client,
+      normalCachedDuplicateSummary,
+      false,
+    ),
+  ),
+);
+assert.ok(
+  normalCachedDuplicateClient.state.actions.length > 0,
+  "The default path must retain its existing cached-poster media persistence behavior.",
+);
+assert.equal(normalCachedDuplicateClient.state.reconciliationCalls, 1);
+assert.equal(
+  normalCachedDuplicateClient.state.createArgs[0]
+    .requireCanonicalApprovedDuplicate,
+  undefined,
+  "The duplicate-only server guard must remain default-off for normal ingestion.",
+);
+
+const invalidStrictCacheClient = makeCachedPosterCanonicalDuplicateClient();
+const invalidStrictCacheSummary = createEmptyIngestionSummary(["venue"])
+  .handles[0];
+const invalidStrictCacheOptions = cachedPosterCanonicalDuplicateOptions(
+  invalidStrictCacheClient.client,
+  invalidStrictCacheSummary,
+  true,
+);
+invalidStrictCacheOptions.cachedAnalysisJson = "{invalid-json";
+await withoutConsoleNoise(() =>
+  processIngestionPostWithExtractionForTesting(invalidStrictCacheOptions),
+);
+assert.equal(invalidStrictCacheClient.state.actions.length, 0);
+assert.equal(invalidStrictCacheClient.state.createArgs.length, 0);
+assert.equal(invalidStrictCacheClient.state.reconciliationCalls, 0);
+assert.equal(invalidStrictCacheSummary.failedExtractions, 1);
+assert.match(
+  invalidStrictCacheSummary.errors.join("\n"),
+  /requires one valid current poster-bound event-evidence cache/i,
+);
+
+const sourceBoundStrictClient = makeCachedPosterCanonicalDuplicateClient();
+sourceBoundStrictClient.client.query = async (reference) =>
+  reference === "events:listByInstagramPostId"
+    ? [{ _id: "qa-existing-source-bound-event" }]
+    : emptyIngestionQueryResult(reference);
+const sourceBoundStrictSummary = createEmptyIngestionSummary(["venue"])
+  .handles[0];
+await withoutConsoleNoise(() =>
+  processIngestionPostWithExtractionForTesting(
+    cachedPosterCanonicalDuplicateOptions(
+      sourceBoundStrictClient.client,
+      sourceBoundStrictSummary,
+      true,
+    ),
+  ),
+);
+assert.equal(sourceBoundStrictClient.state.actions.length, 0);
+assert.equal(sourceBoundStrictClient.state.createArgs.length, 0);
+assert.equal(sourceBoundStrictClient.state.reconciliationCalls, 0);
+assert.match(
+  sourceBoundStrictSummary.errors.join("\n"),
+  /requires an unbound source identity/i,
+);
+
+const receiptedStrictClient = makeCachedPosterCanonicalDuplicateClient();
+receiptedStrictClient.client.query = async (reference) =>
+  reference === "events:getInstagramSourceOccurrenceReceipt"
+    ? { sourceIdentity: "instagram-source-identity-v1:qa-existing-receipt" }
+    : emptyIngestionQueryResult(reference);
+const receiptedStrictSummary = createEmptyIngestionSummary(["venue"])
+  .handles[0];
+await withoutConsoleNoise(() =>
+  processIngestionPostWithExtractionForTesting(
+    cachedPosterCanonicalDuplicateOptions(
+      receiptedStrictClient.client,
+      receiptedStrictSummary,
+      true,
+    ),
+  ),
+);
+assert.equal(receiptedStrictClient.state.actions.length, 0);
+assert.equal(receiptedStrictClient.state.createArgs.length, 0);
+assert.equal(receiptedStrictClient.state.reconciliationCalls, 0);
+assert.match(
+  receiptedStrictSummary.errors.join("\n"),
+  /requires no existing source-occurrence receipt/i,
+);
+
 const mixedPersistenceSummary = createEmptyIngestionSummary(["venue"])
   .handles[0];
 let mixedPersistenceAttempts = 0;

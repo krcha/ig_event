@@ -576,6 +576,13 @@ export type ProcessIngestionPostOptions = {
   cachedAnalysisImageChecksumSha256?: string;
   providerExecution?: ProviderExecutionControl;
   onOpenAiTransportStarted?: () => void;
+  /**
+   * Recovery-only fail-closed mode. A caller may reuse one current poster
+   * cache only to prove that the prepared occurrence is already represented
+   * by exactly one approved canonical event. The mode performs no media
+   * persistence and the server refuses to create or update an event.
+   */
+  requireCachedCanonicalApprovedDuplicate?: boolean;
   eventDateFilterNow?: Date;
 };
 
@@ -596,6 +603,7 @@ export type ProcessLoadedPostsForHandleOptions = {
   scrapedPostId?: string;
   expectedSourceRevision?: number;
   onOpenAiTransportStarted?: () => void;
+  requireCachedCanonicalApprovedDuplicate?: boolean;
 } & IngestionVenueContext;
 
 export type DurableSavedPostProcessingResult =

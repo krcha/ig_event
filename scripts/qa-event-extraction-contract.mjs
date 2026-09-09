@@ -3513,7 +3513,7 @@ try {
 
   const request = requestBodies[0];
   assert.equal(request.model, "qa-openai-vision-model");
-  assert.equal(request.max_output_tokens, 8192);
+  assert.equal(request.max_output_tokens, 16384);
   assert.equal(request.reasoning.effort, "medium");
   assert.equal(request.text.verbosity, "low");
   assert.equal(request.text.format.type, "json_schema");

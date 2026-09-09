@@ -12,10 +12,11 @@ import type { OpenAiDefinitiveOutputFailureKind } from "./openai-analysis-protoc
 // transport ambiguity caused by aborting a healthy provider response.
 export const OPENAI_REQUEST_TIMEOUT_MS = 120_000;
 // The evidence-v2 schema includes per-row evidence for multi-event posters.
-// Production responses reached the former 4,096-token cap and were returned
-// as definitive `incomplete` responses, so reserve enough output for the
-// bounded schedule schema without relaxing any parsing or approval rules.
-export const OPENAI_EXTRACTION_MAX_OUTPUT_TOKENS = 8_192;
+// Production multi-event posters reached both the former 4,096- and
+// 8,192-token caps and were returned as definitive `incomplete` responses, so
+// reserve enough output for the bounded schedule schema without relaxing any
+// parsing or approval rules.
+export const OPENAI_EXTRACTION_MAX_OUTPUT_TOKENS = 16_384;
 
 export class OpenAiProviderBlockedError extends Error {
   readonly status: number;

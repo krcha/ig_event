@@ -10,12 +10,12 @@ import { getEventDateFilterContext } from "@/lib/pipeline/ingestion/parsing-date
 import { classifyExistingApprovedOccurrence } from "@/lib/pipeline/ingestion/post-processing-policy";
 import { getErrorMessage, logError, logInfo } from "@/lib/pipeline/ingestion/runtime";
 import { normalizeString, parseJsonRecord, readJsonNumber, readJsonString, readJsonStringArray } from "@/lib/pipeline/ingestion/values";
+import { persistCachedCanonicalApprovedDuplicateForRepair } from "@/lib/pipeline/ingestion/cached-canonical-duplicate-repair";
 import type { StructuredFactExtractionResult } from "@/lib/pipeline/ingestion/structured-fact-contracts";
 import {
   applyPreparedOccurrenceMetadataToStructuredFacts,
   buildStructuredFactOccurrencePlan,
 } from "@/lib/pipeline/ingestion/structured-fact-occurrence";
-
 type PersistStructuredFactOccurrencesInput = {
   analyzedPosterPersisted: boolean;
   client: ProcessIngestionPostOptions["client"];
@@ -29,6 +29,7 @@ type PersistStructuredFactOccurrencesInput = {
   preparedResults: PrepareEventResult[];
   processingFence: ProcessIngestionPostOptions["processingFence"];
   recoveringIncompleteSourceOccurrenceSet: boolean;
+  requireCanonicalApprovedDuplicateNoMedia: boolean;
   selectedImageChecksumSha256: string | null;
   selectedImageUrl: string | null;
   serviceSecret: string;
@@ -36,7 +37,6 @@ type PersistStructuredFactOccurrencesInput = {
   structuredFacts: readonly StructuredFactExtractionResult[];
   summary: ProcessIngestionPostOptions["summary"];
 };
-
 type GenericIngestionOutcome = {
   action: "attach" | "create" | "manual_review" | "update";
   applied: boolean;
@@ -55,7 +55,8 @@ export async function persistStructuredFactOccurrences(input: PersistStructuredF
   const {
     analyzedPosterPersisted, client, durableMediaCandidates, existingSourceMatches: sourceIdentityMatches,
     extracted, extractionMode, handle, post, postContext, processingFence,
-    recoveringIncompleteSourceOccurrenceSet, selectedImageChecksumSha256, selectedImageUrl,
+    recoveringIncompleteSourceOccurrenceSet, requireCanonicalApprovedDuplicateNoMedia,
+    selectedImageChecksumSha256, selectedImageUrl,
     serviceSecret, sourceReceipt, summary,
   } = input;
   let preparedResults = input.preparedResults;
@@ -66,7 +67,7 @@ export async function persistStructuredFactOccurrences(input: PersistStructuredF
       prepared.normalizedFields.extractionContractVersion === "event_evidence_v2" &&
       prepared.normalizedFields.extractionMode === "poster",
   );
-  if (requiresDurableAnalyzedPoster && !analyzedPosterPersisted) {
+  if (requiresDurableAnalyzedPoster && !analyzedPosterPersisted && !requireCanonicalApprovedDuplicateNoMedia) {
     if (!selectedImageUrl || !selectedImageChecksumSha256) {
       summary.failedImagePersistence += 1;
       summary.errors.push(
@@ -130,6 +131,13 @@ export async function persistStructuredFactOccurrences(input: PersistStructuredF
     cutoverPlan.previousSourceFingerprint =
       sourceReceipt?.sourceFingerprint ?? null;
     cutoverPlan.confirmedPastKeys = [...safelyOmittedPastOccurrenceKeys];
+  }
+  if (requireCanonicalApprovedDuplicateNoMedia) {
+    await persistCachedCanonicalApprovedDuplicateForRepair({
+      client, extracted, extractionMode, postContext, preparedResults, processingFence, serviceSecret,
+      sourceOccurrencePlan: cutoverPlan, summary,
+    });
+    return;
   }
   let genericIngestion: GenericIngestionResult;
   try {

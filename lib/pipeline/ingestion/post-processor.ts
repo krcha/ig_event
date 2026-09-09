@@ -46,6 +46,7 @@ export async function processIngestionPost(
     cachedAnalysisImageSourceUrl,
     cachedAnalysisImageChecksumSha256,
     providerExecution,
+    requireCachedCanonicalApprovedDuplicate = false,
     eventDateFilterNow,
   } = options;
   const postContext = getPostContext(handle, post);
@@ -83,6 +84,39 @@ export async function processIngestionPost(
         : "caption_only"
       : null;
   let extractionMode = cachedExtractionMode ?? mediaSelection.extractionMode;
+  const parseCachedExtraction = (): ExtractedEventData | null => {
+    if (!cachedAnalysisJson) return null;
+    try {
+      return normalizeConfidencePayload(
+        parseExtractedEventData(JSON.parse(cachedAnalysisJson)),
+      );
+    } catch (error) {
+      logError("ingestion.openai.cached_analysis_invalid", {
+        step: "extract_event" satisfies IngestionStep,
+        ...postContext,
+        extractionMode,
+        error: getErrorMessage(error),
+      });
+      return null;
+    }
+  };
+  let cachedExtracted = requireCachedCanonicalApprovedDuplicate
+    ? parseCachedExtraction()
+    : null;
+  if (
+    requireCachedCanonicalApprovedDuplicate &&
+    (cachedExtractionMode !== "poster" ||
+      !cachedExtracted ||
+      cachedExtracted.extraction_contract_version !== "event_evidence_v2")
+  ) {
+    summary.failedExtractions += 1;
+    summary.failed_extractions += 1;
+    summary.failed_extraction += 1;
+    summary.errors.push(
+      "Canonical-duplicate cache repair requires one valid current poster-bound event-evidence cache.",
+    );
+    return;
+  }
   const durableMediaCandidate = mediaSelection.durableMediaCandidate;
   const durableMediaCandidates = deduplicateMediaUrls(
     [durableMediaCandidate, ...(post.imageUrls ?? []), post.imageUrl],
@@ -127,6 +161,19 @@ export async function processIngestionPost(
     return;
   }
 
+  if (
+    requireCachedCanonicalApprovedDuplicate &&
+    sourceIdentityMatches.length > 0
+  ) {
+    summary.failedExtractions += 1;
+    summary.failed_extractions += 1;
+    summary.failed_extraction += 1;
+    summary.errors.push(
+      "Canonical-duplicate cache repair requires an unbound source identity.",
+    );
+    return;
+  }
+
   let recoveringIncompleteSourceOccurrenceSet =
     hasIncompleteSourceOccurrenceSet(sourceIdentityMatches, post);
 
@@ -142,6 +189,15 @@ export async function processIngestionPost(
       !Array.isArray(queriedSourceReceipt)
     ) {
       sourceReceipt = queriedSourceReceipt as SourceOccurrenceReceipt;
+    }
+    if (requireCachedCanonicalApprovedDuplicate && sourceReceipt) {
+      summary.failedExtractions += 1;
+      summary.failed_extractions += 1;
+      summary.failed_extraction += 1;
+      summary.errors.push(
+        "Canonical-duplicate cache repair requires no existing source-occurrence receipt.",
+      );
+      return;
     }
     if (
       isCompleteSourceOccurrenceReceipt(queriedSourceReceipt, post) &&
@@ -407,20 +463,10 @@ export async function processIngestionPost(
   }
 
   let extracted: ExtractedEventData;
-  let cachedExtracted: ExtractedEventData | null = null;
-  if (cachedAnalysisJson) {
-    try {
-      cachedExtracted = normalizeConfidencePayload(
-        parseExtractedEventData(JSON.parse(cachedAnalysisJson)),
-      );
-    } catch (error) {
-      logError("ingestion.openai.cached_analysis_invalid", {
-        step: "extract_event" satisfies IngestionStep,
-        ...postContext,
-        extractionMode,
-        error: getErrorMessage(error),
-      });
-    }
+  if (!requireCachedCanonicalApprovedDuplicate) {
+    // Keep normal ingestion's historical ordering: source-duplicate exits do
+    // not parse or otherwise inspect a cache they never need to consume.
+    cachedExtracted = parseCachedExtraction();
   }
   if (cachedExtracted) {
     extracted = cachedExtracted;
@@ -628,7 +674,13 @@ export async function processIngestionPost(
   }
 
   let analyzedPosterPersisted = false;
-  if (providerExecution && extracted.is_event && selectedImageUrl && selectedImageChecksumSha256) {
+  if (
+    !requireCachedCanonicalApprovedDuplicate &&
+    providerExecution &&
+    extracted.is_event &&
+    selectedImageUrl &&
+    selectedImageChecksumSha256
+  ) {
     analyzedPosterPersisted = await persistInstagramMediaCandidates({
       client,
       handle,
@@ -697,6 +749,8 @@ export async function processIngestionPost(
     preparedResults,
     processingFence,
     recoveringIncompleteSourceOccurrenceSet,
+    requireCanonicalApprovedDuplicateNoMedia:
+      requireCachedCanonicalApprovedDuplicate,
     selectedImageChecksumSha256,
     selectedImageUrl,
     serviceSecret,
