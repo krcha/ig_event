@@ -215,6 +215,16 @@ assert.doesNotMatch(
   "following discovery must not start post scraping; durable ingestion owns that separately",
 );
 assert.match(routeSource, /bootstrapDeferred: synchronization\.activatedHandles\.length/);
+assert.match(
+  routeSource,
+  /if \(!synchronization\.complete\)[\s\S]*?success: false[\s\S]*?status: 502/,
+  "an incomplete provider snapshot must fail the scheduler-visible HTTP request",
+);
+assert.match(
+  routeSource,
+  /instagram\.following\.snapshot_incomplete/,
+  "an incomplete provider snapshot must emit a distinct operational event",
+);
 assert.match(venuesSource, /listVenueIngestionFieldsPaginated/);
 assert.match(venuesSource, /listActiveVenueIngestionFieldsPaginated/);
 assert.match(
@@ -412,6 +422,50 @@ try {
     tables.instagramSources.find((row) => row.handle === "source.a").observedDisplayName,
     "Source A Live",
     "a blank display name must not clear the last complete observed value",
+  );
+
+  const completedState = tables.instagramFollowingSyncState.find(
+    (row) => row.sourceHandle === "eventzeka",
+  );
+  assert.equal(completedState.status, "completed");
+  assert.equal(completedState.snapshotComplete, true);
+  assert.equal(typeof completedState.lastCompleteSyncAt, "number");
+  const lastCompleteSyncAt = completedState.lastCompleteSyncAt;
+  const sourceStateBeforeEmptySnapshot = tables.instagramSources.map((row) => ({
+    handle: row.handle,
+    active: row.active,
+    observedDisplayName: row.observedDisplayName,
+  }));
+
+  const empty = await syncFollowingSnapshot._handler(ctx, {
+    ...baseArgs,
+    accounts: [],
+    snapshotComplete: false,
+    rawItemCount: 0,
+    malformedItemCount: 0,
+    maxItems: 10,
+  });
+  assert.equal(empty.complete, false);
+  assert.deepEqual(
+    tables.instagramSources.map((row) => ({
+      handle: row.handle,
+      active: row.active,
+      observedDisplayName: row.observedDisplayName,
+    })),
+    sourceStateBeforeEmptySnapshot,
+    "an empty provider snapshot must not change the active source registry",
+  );
+  const emptyState = tables.instagramFollowingSyncState.find(
+    (row) => row.sourceHandle === "eventzeka",
+  );
+  assert.equal(emptyState.status, "partial");
+  assert.equal(emptyState.snapshotComplete, false);
+  assert.equal(emptyState.rawItemCount, 0);
+  assert.equal(emptyState.validItemCount, 0);
+  assert.equal(
+    emptyState.lastCompleteSyncAt,
+    lastCompleteSyncAt,
+    "an empty snapshot must retain the last complete synchronization watermark",
   );
 } finally {
   if (previousCronSecret === undefined) delete process.env.CRON_SECRET;

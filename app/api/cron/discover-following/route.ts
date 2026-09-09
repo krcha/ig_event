@@ -65,7 +65,7 @@ async function runFollowingSynchronization(request: NextRequest) {
       activatedHandles: string[];
     };
 
-    return NextResponse.json({
+    const responseBody = {
       success: true,
       sourceHandle: config.sourceHandle,
       actorId: config.actorId,
@@ -98,7 +98,30 @@ async function runFollowingSynchronization(request: NextRequest) {
         ingestionResultsLimit: config.ingestionResultsLimit,
         ingestionDaysBack: config.ingestionDaysBack,
       },
-    });
+    };
+
+    if (!synchronization.complete) {
+      const error =
+        "The Instagram following provider returned an incomplete snapshot; active sources were preserved.";
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "instagram.following.snapshot_incomplete",
+          sourceHandle: config.sourceHandle,
+          rawItemCount: scrape.rawItemCount,
+          validItemCount: synchronization.validItemCount,
+          malformedItemCount: scrape.malformedItemCount,
+          duplicateItemCount: scrape.duplicateItemCount,
+          capped: synchronization.capped,
+        }),
+      );
+      return NextResponse.json(
+        { ...responseBody, success: false, error },
+        { status: 502 },
+      );
+    }
+
+    return NextResponse.json(responseBody);
   } catch (error) {
     const message = getErrorMessage(error);
     try {
