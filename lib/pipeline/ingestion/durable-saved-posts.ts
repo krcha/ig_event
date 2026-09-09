@@ -13,6 +13,7 @@ import { loadIngestionVenueContextForHandles } from "@/lib/pipeline/ingestion/ve
 export const DURABLE_TERMINAL_SAVED_POST_OUTCOMES = new Set([
   "terminal_no_event",
   "terminal_permanent_failure",
+  "terminal_canonical_duplicate",
   "receipt_complete",
 ]);
 

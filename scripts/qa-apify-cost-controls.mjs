@@ -590,7 +590,7 @@ assert.match(
 );
 assert.match(
   ingestionRunnerSource,
-  /record\.processingStatus === "completed"[\s\S]{0,320}\["terminal_no_event", "terminal_permanent_failure", "receipt_complete"\]\.includes/,
+  /record\.processingStatus === "completed"[\s\S]{0,380}\["terminal_no_event", "terminal_permanent_failure", "terminal_canonical_duplicate", "receipt_complete"\]\.includes/,
   "saved-post replay may skip only explicit terminal rows or circuit-delayed retries",
 );
 assert.match(

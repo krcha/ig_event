@@ -7079,22 +7079,30 @@ async function runServiceApprovalMutationBoundaryQa() {
   let existingVenue = groundedPublicFields.venue;
   let existingVenueInstagramHandle = "qa_venue";
   let persistedSourcePost = {
+    _id: "qa-handler-boundary-source",
     handle: "qa_venue",
     username: "qa_venue",
     postId: instagramPostId,
     instagramPostUrl,
     caption: sourceCaption,
     postedAt: "2026-07-01T12:00:00.000Z",
+    processingStatus: "processing",
+    processingLeaseOwner: "qa-handler-boundary-owner",
+    processingLeaseExpiresAt: Date.now() + 60_000,
+    sourceRevision: 1,
   };
   const fakeDb = {
-    get: async () => ({
-      _id: "qa-existing-event",
-      ...groundedPublicFields,
-      venue: existingVenue,
-      venueInstagramHandle: existingVenueInstagramHandle,
-      status: "pending",
-      updatedAt: 1,
-    }),
+    get: async (id) =>
+      id === persistedSourcePost._id
+        ? persistedSourcePost
+        : {
+            _id: "qa-existing-event",
+            ...groundedPublicFields,
+            venue: existingVenue,
+            venueInstagramHandle: existingVenueInstagramHandle,
+            status: "pending",
+            updatedAt: 1,
+          },
     insert: async (table, value) => {
       if (table === "eventAuditLog") {
         lastAudit = value;
@@ -7145,6 +7153,7 @@ async function runServiceApprovalMutationBoundaryQa() {
                 collect: async () => sameDateEvents,
                 first: async () => null,
                 take: async (limit) => sameDateEvents.slice(0, limit),
+                unique: async () => null,
               }),
             },
   };
@@ -7526,6 +7535,181 @@ async function runServiceApprovalMutationBoundaryQa() {
       }),
     );
     assert.equal(inserted, true, "A fully bound unique service create should write.");
+
+    const approvedCanonicalDuplicate = {
+      _id: "qa-approved-canonical-duplicate",
+      ...groundedPublicFields,
+      instagramPostId: "qa-older-canonical-source",
+      instagramPostUrl:
+        "https://www.instagram.com/p/qa-older-canonical-source/",
+      status: "approved",
+      updatedAt: 91,
+    };
+    const canonicalDuplicateOccurrenceKey =
+      "instagram-occurrence-v2:qa-canonical-duplicate";
+    const canonicalDuplicateProcessingFence = {
+      scrapedPostId: persistedSourcePost._id,
+      handle: persistedSourcePost.handle,
+      postId: persistedSourcePost.postId,
+      instagramPostUrl: persistedSourcePost.instagramPostUrl,
+      owner: persistedSourcePost.processingLeaseOwner,
+      sourceRevision: persistedSourcePost.sourceRevision,
+    };
+    const canonicalDuplicateSourceOccurrencePlan = {
+      sourceIdentity: "instagram-source-identity-v1:qa-canonical-duplicate",
+      sourceFingerprint: "instagram-source-v2:qa-canonical-duplicate",
+      expectedKeys: [canonicalDuplicateOccurrenceKey],
+      expectedOccurrences: [
+        {
+          key: canonicalDuplicateOccurrenceKey,
+          date: groundedPublicFields.date,
+          time: groundedPublicFields.time,
+          venue: groundedPublicFields.venue,
+          title: groundedPublicFields.title,
+          artists: groundedPublicFields.artists,
+        },
+      ],
+      deferredChildCount: 0,
+      deferredChildKeys: [],
+      observedChildKeys: [canonicalDuplicateOccurrenceKey],
+    };
+    sameDateEvents = [approvedCanonicalDuplicate];
+    inserted = false;
+    const canonicalDuplicateDisposition = await createEvent._handler(ctx, {
+      ...groundedPublicFields,
+      sourceOccurrenceKey: canonicalDuplicateOccurrenceKey,
+      sourceOccurrencePlan: canonicalDuplicateSourceOccurrencePlan,
+      processingFence: canonicalDuplicateProcessingFence,
+      returnCreateDisposition: true,
+      serviceSecret,
+    });
+    assert.deepEqual(canonicalDuplicateDisposition, {
+      eventId: approvedCanonicalDuplicate._id,
+      created: false,
+      updatedAt: approvedCanonicalDuplicate.updatedAt,
+      disposition: "canonical_approved_duplicate",
+    });
+    assert.equal(
+      inserted,
+      false,
+      "A service replay of one uniquely proven approved occurrence must not insert another event.",
+    );
+    const secondCanonicalDuplicateOccurrenceKey =
+      "instagram-occurrence-v2:qa-canonical-duplicate-sibling";
+    await assert.rejects(
+      () =>
+        createEvent._handler(ctx, {
+          ...groundedPublicFields,
+          sourceOccurrenceKey: canonicalDuplicateOccurrenceKey,
+          sourceOccurrencePlan: {
+            ...canonicalDuplicateSourceOccurrencePlan,
+            expectedKeys: [
+              canonicalDuplicateOccurrenceKey,
+              secondCanonicalDuplicateOccurrenceKey,
+            ],
+            expectedOccurrences: [
+              ...canonicalDuplicateSourceOccurrencePlan.expectedOccurrences,
+              {
+                ...canonicalDuplicateSourceOccurrencePlan.expectedOccurrences[0],
+                key: secondCanonicalDuplicateOccurrenceKey,
+                title: "Canonical Duplicate Sibling",
+              },
+            ],
+            observedChildKeys: [
+              "instagram-source-child-v1:qa-canonical-duplicate-a",
+              "instagram-source-child-v1:qa-canonical-duplicate-b",
+            ],
+          },
+          processingFence: canonicalDuplicateProcessingFence,
+          returnCreateDisposition: true,
+          serviceSecret,
+        }),
+      /approved event already exists for this canonical occurrence/i,
+      "A multi-occurrence source must not terminalize the whole post through the single-occurrence duplicate bridge.",
+    );
+    await assert.rejects(
+      () =>
+        createEvent._handler(ctx, {
+          ...groundedPublicFields,
+          sourceOccurrenceKey: canonicalDuplicateOccurrenceKey,
+          sourceOccurrencePlan: {
+            ...canonicalDuplicateSourceOccurrencePlan,
+            deferredChildCount: 1,
+            deferredChildKeys: [
+              "instagram-source-child-v1:qa-canonical-duplicate-deferred",
+            ],
+            observedChildKeys: [
+              "instagram-source-child-v1:qa-canonical-duplicate-current",
+              "instagram-source-child-v1:qa-canonical-duplicate-deferred",
+            ],
+          },
+          processingFence: canonicalDuplicateProcessingFence,
+          returnCreateDisposition: true,
+          serviceSecret,
+        }),
+      /approved event already exists for this canonical occurrence/i,
+      "A source with a deferred sibling must remain retryable instead of being terminalized as one duplicate.",
+    );
+    await assert.rejects(
+      () =>
+        createEvent._handler(ctx, {
+          ...groundedPublicFields,
+          sourceOccurrenceKey: canonicalDuplicateOccurrenceKey,
+          sourceOccurrencePlan: canonicalDuplicateSourceOccurrencePlan,
+          processingFence: canonicalDuplicateProcessingFence,
+          returnCreateDisposition: true,
+        }),
+      /approved event already exists for this canonical occurrence/i,
+      "An administrator must retain the existing duplicate rejection semantics.",
+    );
+    sameDateEvents = [
+      approvedCanonicalDuplicate,
+      {
+        ...approvedCanonicalDuplicate,
+        _id: "qa-second-approved-canonical-duplicate",
+        updatedAt: 92,
+      },
+    ];
+    await assert.rejects(
+      () =>
+        createEvent._handler(ctx, {
+          ...groundedPublicFields,
+          sourceOccurrenceKey: canonicalDuplicateOccurrenceKey,
+          sourceOccurrencePlan: canonicalDuplicateSourceOccurrencePlan,
+          processingFence: canonicalDuplicateProcessingFence,
+          returnCreateDisposition: true,
+          serviceSecret,
+        }),
+      /multiple approved events already represent this canonical occurrence/i,
+      "A service replay must fail closed instead of choosing between multiple approved duplicates.",
+    );
+    sameDateEvents = [
+      approvedCanonicalDuplicate,
+      {
+        ...approvedCanonicalDuplicate,
+        _id: "qa-ambiguous-approved-peer",
+        title: "Other Approved Event",
+        artists: [],
+        instagramPostId: "qa-ambiguous-approved-peer",
+        instagramPostUrl:
+          "https://www.instagram.com/p/qa-ambiguous-approved-peer/",
+        updatedAt: 93,
+      },
+    ];
+    await assert.rejects(
+      () =>
+        createEvent._handler(ctx, {
+          ...groundedPublicFields,
+          sourceOccurrenceKey: canonicalDuplicateOccurrenceKey,
+          sourceOccurrencePlan: canonicalDuplicateSourceOccurrencePlan,
+          processingFence: canonicalDuplicateProcessingFence,
+          returnCreateDisposition: true,
+          serviceSecret,
+        }),
+      /same-day occurrence is ambiguous/i,
+      "A unique duplicate plus an ambiguous peer must remain fail-closed.",
+    );
+    sameDateEvents = [];
 
     patched = false;
     await assert.doesNotReject(() =>

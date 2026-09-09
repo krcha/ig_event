@@ -34,6 +34,7 @@ import {
   isPermanentRemoteMediaFailure,
   resolvePaidFetchLeaseAfterBacklogMaintenance,
   resolveFailedMediaAttemptPolicy,
+  resolveSavedPostProcessingOutcomeForTesting,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
 import { RemoteMediaHttpError } from "../lib/ai/prepare-image-for-openai.ts";
 import { readIngestionArchitectureSource } from "./qa-support/ingestion-architecture-source.mjs";
@@ -70,11 +71,14 @@ const baseSavedPostCompletion = {
   eventActivityCountAfter: 0,
   terminalNoEventSkipCountBefore: 0,
   terminalNoEventSkipCountAfter: 1,
+  terminalCanonicalDuplicateCountBefore: 0,
+  terminalCanonicalDuplicateCountAfter: 0,
 };
 assert.deepEqual(
   classifySavedPostCompletionForTesting(baseSavedPostCompletion),
   {
     hasTerminalNoEventOutcome: true,
+    hasTerminalCanonicalDuplicateOutcome: false,
     hasMissingReceiptAfterEvent: false,
     hasRetryableFailure: false,
   },
@@ -88,6 +92,7 @@ assert.deepEqual(
   }),
   {
     hasTerminalNoEventOutcome: true,
+    hasTerminalCanonicalDuplicateOutcome: false,
     hasMissingReceiptAfterEvent: false,
     hasRetryableFailure: false,
   },
@@ -100,6 +105,7 @@ assert.deepEqual(
   }),
   {
     hasTerminalNoEventOutcome: false,
+    hasTerminalCanonicalDuplicateOutcome: false,
     hasMissingReceiptAfterEvent: false,
     hasRetryableFailure: true,
   },
@@ -112,10 +118,57 @@ assert.deepEqual(
   }),
   {
     hasTerminalNoEventOutcome: false,
+    hasTerminalCanonicalDuplicateOutcome: false,
     hasMissingReceiptAfterEvent: false,
     hasRetryableFailure: true,
   },
   "an extraction or persistence failure must not be hidden by a simultaneous skip",
+);
+assert.deepEqual(
+  classifySavedPostCompletionForTesting({
+    ...baseSavedPostCompletion,
+    receiptState: "absent",
+    eventActivityCountAfter: 1,
+    terminalNoEventSkipCountAfter: 0,
+    terminalCanonicalDuplicateCountAfter: 1,
+  }),
+  {
+    hasTerminalNoEventOutcome: false,
+    hasTerminalCanonicalDuplicateOutcome: true,
+    hasMissingReceiptAfterEvent: false,
+    hasRetryableFailure: false,
+  },
+  "a uniquely proven canonical duplicate must terminalize explicitly without forging a source-occurrence receipt",
+);
+assert.deepEqual(
+  classifySavedPostCompletionForTesting({
+    ...baseSavedPostCompletion,
+    receiptState: "incomplete",
+    eventActivityCountAfter: 1,
+    terminalNoEventSkipCountAfter: 0,
+    terminalCanonicalDuplicateCountAfter: 1,
+  }),
+  {
+    hasTerminalNoEventOutcome: false,
+    hasTerminalCanonicalDuplicateOutcome: false,
+    hasMissingReceiptAfterEvent: false,
+    hasRetryableFailure: true,
+  },
+  "a canonical duplicate inside an incomplete multi-occurrence receipt must remain retryable",
+);
+assert.equal(
+  resolveSavedPostProcessingOutcomeForTesting({
+    hasTerminalPermanentFailure: false,
+    hasRetryableFailure: false,
+    receiptInspectionFailed: false,
+    receiptState: "absent",
+    hasMissingReceiptAfterEvent: false,
+    hasProcessingFailure: false,
+    hasTerminalCanonicalDuplicateOutcome: true,
+    hasTerminalNoEventOutcome: false,
+  }),
+  "terminal_canonical_duplicate",
+  "the processing-result write must preserve the explicit canonical-duplicate terminal outcome",
 );
 assert.equal(
   resolveFailedMediaAttemptPolicy({
@@ -265,10 +318,15 @@ assert.ok(
 assert.match(freshFetchBlock, /if \(saturated\)[\s\S]*recordPaidFetchWindowSaturationMutation[\s\S]*else[\s\S]*recordPaidFetchWindowSuccessMutation/);
 assert.match(
   readIngestionArchitectureSource(),
-  /hasTerminalPermanentFailure[\s\S]*\? "terminal_permanent_failure"/,
+  /if \(input\.hasTerminalPermanentFailure\) return "terminal_permanent_failure"/,
   "explicit permanent media failures must be recorded as terminal instead of replaying forever",
 );
 const runnerSource = readIngestionArchitectureSource();
+assert.match(
+  runnerSource,
+  /if \(input\.hasTerminalCanonicalDuplicateOutcome\)[\s\S]{0,120}return "terminal_canonical_duplicate"/,
+  "a uniquely proven canonical duplicate must select its explicit terminal outcome before the legacy zero-event fallback",
+);
 
 function createDb(initialTables) {
   const tables = Object.fromEntries(

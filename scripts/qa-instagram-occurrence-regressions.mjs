@@ -365,6 +365,60 @@ assert.equal(mixedDownloadSummary.failedDownloads, 0);
 assert.equal(mixedDownloadSummary.permanentMediaDownloadFailures, 0);
 assert.equal(mixedDownloadSummary.errors.length, 0);
 
+const canonicalDuplicateSummary = createEmptyIngestionSummary(["venue"])
+  .handles[0];
+let canonicalDuplicateCreateCalls = 0;
+const canonicalDuplicateCaption =
+  "Canonical Duplicate Event 10.09.2026 at 20:00 at Venue";
+await withoutConsoleNoise(() =>
+  processIngestionPostWithExtractionForTesting({
+    client: {
+      query: async (reference) => emptyIngestionQueryResult(reference),
+      mutation: async (reference) => {
+        if (reference === "reconciliationIngress:reconcileIngestionPlan") {
+          return { authority: "legacy", outcomes: [] };
+        }
+        if (reference === "events:createEvent") {
+          canonicalDuplicateCreateCalls += 1;
+          return {
+            eventId: "qa-existing-approved-canonical-event",
+            created: false,
+            updatedAt: 123,
+            disposition: "canonical_approved_duplicate",
+          };
+        }
+        return {};
+      },
+    },
+    handle: "venue",
+    post: makeCaptionOnlyVideoPost(
+      makePost({
+        caption: canonicalDuplicateCaption,
+        imageUrl: null,
+        imageUrls: [],
+      }),
+    ),
+    summary: canonicalDuplicateSummary,
+    canonicalVenueNamesByHandle: { venue: "Venue" },
+    venueNameOverridesByHandle: {},
+    configuredVenueNamesByHandle: { venue: "Venue" },
+    serviceSecret: "qa-secret",
+    extracted: makeExtraction({
+      title: "Canonical Duplicate Event",
+      date: "10.09.2026",
+      time: "20:00",
+      venue: "Venue",
+      source_caption: canonicalDuplicateCaption,
+    }),
+    eventDateFilterNow: NOW,
+  }),
+);
+assert.equal(canonicalDuplicateCreateCalls, 1);
+assert.equal(canonicalDuplicateSummary.insertedEvents, 0);
+assert.equal(canonicalDuplicateSummary.skippedDuplicates, 1);
+assert.equal(canonicalDuplicateSummary.terminalCanonicalDuplicates, 1);
+assert.equal(canonicalDuplicateSummary.failedExtractions, 0);
+
 const mixedPersistenceSummary = createEmptyIngestionSummary(["venue"])
   .handles[0];
 let mixedPersistenceAttempts = 0;
@@ -1793,10 +1847,7 @@ try {
 }
 
 const occurrencePlanningSource = readFileSync(
-  new URL(
-    "../lib/domain/occurrences/source-fingerprint.ts",
-    import.meta.url,
-  ),
+  new URL("../lib/domain/occurrences/source-fingerprint.ts", import.meta.url),
   "utf8",
 );
 assert.match(

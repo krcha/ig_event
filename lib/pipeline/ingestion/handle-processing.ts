@@ -5,7 +5,7 @@ import { blockProviderMutation, claimProviderLeaseMutation, claimScrapedPostProc
 import { getCurrentSourceOccurrenceReceiptState } from "@/lib/pipeline/ingestion/existing-source-policy";
 import { getPostContext } from "@/lib/pipeline/ingestion/media-durability";
 import { processIngestionPost } from "@/lib/pipeline/ingestion/post-processor";
-import { classifySavedPostCompletionForTesting, getRetryableProcessingFailureCount, getTerminalNoEventSkipCount } from "@/lib/pipeline/ingestion/reporting";
+import { classifySavedPostCompletionForTesting, getRetryableProcessingFailureCount, getTerminalNoEventSkipCount, resolveSavedPostProcessingOutcomeForTesting } from "@/lib/pipeline/ingestion/reporting";
 import { getErrorMessage, logError, withServiceSecret } from "@/lib/pipeline/ingestion/runtime";
 import { getSourceIdentityKey, normalizeScrapedPost } from "@/lib/pipeline/ingestion/source-documents";
 
@@ -204,6 +204,8 @@ export async function processLoadedPostsForHandle(
 
     const retryableFailureCountBefore = getRetryableProcessingFailureCount(summary);
     const terminalNoEventSkipCountBefore = getTerminalNoEventSkipCount(summary);
+    const terminalCanonicalDuplicateCountBefore =
+      summary.terminalCanonicalDuplicates ?? 0;
     const terminalPermanentFailureCountBefore =
       summary.terminalPermanentExtractionFailures ?? 0;
     const eventActivityCountBefore =
@@ -272,6 +274,7 @@ export async function processLoadedPostsForHandle(
       summary.insertedEvents + summary.skippedDuplicates + summary.updated_duplicates_bad_data;
     const {
       hasTerminalNoEventOutcome,
+      hasTerminalCanonicalDuplicateOutcome,
       hasMissingReceiptAfterEvent,
       hasRetryableFailure,
     } = classifySavedPostCompletionForTesting({
@@ -283,6 +286,9 @@ export async function processLoadedPostsForHandle(
       eventActivityCountAfter,
       terminalNoEventSkipCountBefore,
       terminalNoEventSkipCountAfter: getTerminalNoEventSkipCount(summary),
+      terminalCanonicalDuplicateCountBefore,
+      terminalCanonicalDuplicateCountAfter:
+        summary.terminalCanonicalDuplicates ?? 0,
     });
     await client.mutation(
       recordScrapedPostProcessingResultMutation,
@@ -295,23 +301,16 @@ export async function processLoadedPostsForHandle(
           status: hasRetryableFailure ? "retryable_failure" : "completed",
           owner: workOwner,
           sourceRevision: processingFence.sourceRevision,
-          outcome: hasTerminalPermanentFailure
-            ? "terminal_permanent_failure"
-            : hasRetryableFailure
-            ? receiptInspectionFailed
-              ? "receipt_inspection_failed"
-              : receiptState === "incomplete"
-                ? "incomplete_occurrence_receipt"
-                : hasMissingReceiptAfterEvent
-                  ? "missing_occurrence_receipt"
-                  : hasProcessingFailure
-                    ? "processing_failed"
-                    : "unclassified_retryable"
-            : receiptState === "complete"
-              ? "receipt_complete"
-            : hasTerminalNoEventOutcome
-              ? "terminal_no_event"
-              : "unclassified_retryable",
+          outcome: resolveSavedPostProcessingOutcomeForTesting({
+            hasTerminalPermanentFailure,
+            hasRetryableFailure,
+            receiptInspectionFailed,
+            receiptState,
+            hasMissingReceiptAfterEvent,
+            hasProcessingFailure,
+            hasTerminalCanonicalDuplicateOutcome,
+            hasTerminalNoEventOutcome,
+          }),
           ...(hasRetryableFailure
             ? { error: summary.errors[summary.errors.length - 1] ?? "Processing failed." }
             : {}),

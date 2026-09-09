@@ -40,6 +40,7 @@ export type HandleSummary = {
   skippedDuplicates: number;
   skipped_duplicates: number;
   skipped_duplicates_clean: number;
+  terminalCanonicalDuplicates?: number;
   skippedNoImage: number;
   skipped_missing_date: number;
   skipped_missing_venue: number;
@@ -514,6 +515,8 @@ export type SavedPostCompletionClassificationInput = {
   eventActivityCountAfter: number;
   terminalNoEventSkipCountBefore: number;
   terminalNoEventSkipCountAfter: number;
+  terminalCanonicalDuplicateCountBefore: number;
+  terminalCanonicalDuplicateCountAfter: number;
 };
 
 export type EventTimeEvidenceSource =

@@ -15,7 +15,7 @@ export { normalizeEventDate } from "@/lib/pipeline/ingestion/parsing-date";
 export { evaluateCoreEventSourceGrounding, getNonEventAutoApprovalBlockers, getPosterScheduleAutoApprovalBlockers, isNonEventClosureNotice } from "@/lib/pipeline/ingestion/parsing-source-evidence";
 export { classifyExistingApprovedOccurrenceForTesting, resolveInstagramSourceExtractionContextForTesting } from "@/lib/pipeline/ingestion/post-processing-policy";
 export { processIngestionPostWithExtractionForTesting } from "@/lib/pipeline/ingestion/post-processor";
-export { classifySavedPostCompletionForTesting, createEmptyIngestionSummary, createInitialIngestionBatchState, getRetryableProcessingFailureCount, markFreshFetchNotAttempted, runApprovedDuplicateCleanupForCompletedDurableRun } from "@/lib/pipeline/ingestion/reporting";
+export { classifySavedPostCompletionForTesting, createEmptyIngestionSummary, createInitialIngestionBatchState, getRetryableProcessingFailureCount, markFreshFetchNotAttempted, resolveSavedPostProcessingOutcomeForTesting, runApprovedDuplicateCleanupForCompletedDurableRun } from "@/lib/pipeline/ingestion/reporting";
 export { persistScrapedPostsForHandle } from "@/lib/pipeline/ingestion/source-documents";
 export { getActiveVenueHandles, importRecentApifyRunPostsToSavedPosts, importUpcomingEventsToSavedPosts } from "@/lib/pipeline/ingestion/source-imports";
 export {

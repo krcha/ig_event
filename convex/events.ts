@@ -662,7 +662,17 @@ export const repairApprovedLegacyEventVenueAndOccurrence = mutation({
       ctx,
       args,
       {
-        assertApprovalCandidatePolicy,
+        assertApprovalCandidatePolicy: async (
+          approvalCtx,
+          candidate,
+          excludeEventIds,
+        ) => {
+          await assertApprovalCandidatePolicy(
+            approvalCtx,
+            candidate,
+            excludeEventIds,
+          );
+        },
         rebindCanonicalVenue: (repairCtx, currentEvent, nextEvent) =>
           sourceOccurrenceProvenanceRepository.rebindCanonicalVenue(
             repairCtx,

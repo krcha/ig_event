@@ -777,7 +777,12 @@ export async function persistStructuredFactOccurrences(input: PersistStructuredF
           returnCreateDisposition: true,
           serviceSecret,
         },
-      )) as string | { eventId: string; created: boolean; updatedAt?: number };
+      )) as string | {
+        eventId: string;
+        created: boolean;
+        updatedAt?: number;
+        disposition?: "canonical_approved_duplicate";
+      };
       const insertedId =
         typeof createResult === "string" ? createResult : createResult.eventId;
       const wasCreated =
@@ -798,6 +803,13 @@ export async function persistStructuredFactOccurrences(input: PersistStructuredF
         hasDurableMediaAttachmentTarget = true;
       }
       if (!wasCreated) {
+        const isTerminalCanonicalDuplicate =
+          typeof createResult !== "string" &&
+          createResult.disposition === "canonical_approved_duplicate";
+        if (isTerminalCanonicalDuplicate) {
+          summary.terminalCanonicalDuplicates =
+            (summary.terminalCanonicalDuplicates ?? 0) + 1;
+        }
         summary.skippedDuplicates += 1;
         summary.skipped_duplicates += 1;
         summary.skipped_duplicates_clean += 1;
@@ -815,6 +827,10 @@ export async function persistStructuredFactOccurrences(input: PersistStructuredF
           extractionMode,
           selectedImageUrl,
           existingEventId: insertedId,
+          disposition:
+            typeof createResult === "string"
+              ? undefined
+              : createResult.disposition,
           sourceOccurrenceKey: prepared.event.sourceOccurrenceKey,
           normalizedFields: prepared.normalizedFields,
         });

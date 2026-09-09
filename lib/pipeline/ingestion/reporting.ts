@@ -84,6 +84,7 @@ export function classifySavedPostCompletionForTesting(
   input: SavedPostCompletionClassificationInput,
 ): {
   hasTerminalNoEventOutcome: boolean;
+  hasTerminalCanonicalDuplicateOutcome: boolean;
   hasMissingReceiptAfterEvent: boolean;
   hasRetryableFailure: boolean;
 } {
@@ -93,12 +94,21 @@ export function classifySavedPostCompletionForTesting(
     !input.receiptInspectionFailed &&
     input.eventActivityCountAfter === input.eventActivityCountBefore &&
     input.terminalNoEventSkipCountAfter > input.terminalNoEventSkipCountBefore;
+  const hasTerminalCanonicalDuplicateOutcome =
+    !input.hasTerminalPermanentFailure &&
+    !input.hasProcessingFailure &&
+    !input.receiptInspectionFailed &&
+    input.receiptState === "absent" &&
+    input.terminalCanonicalDuplicateCountAfter >
+      input.terminalCanonicalDuplicateCountBefore;
   const hasMissingReceiptAfterEvent =
+    !hasTerminalCanonicalDuplicateOutcome &&
     input.receiptState === "absent" &&
     input.eventActivityCountAfter > input.eventActivityCountBefore;
   const hasRetryableFailure =
     !input.hasTerminalPermanentFailure &&
     !hasTerminalNoEventOutcome &&
+    !hasTerminalCanonicalDuplicateOutcome &&
     (input.hasProcessingFailure ||
       input.receiptInspectionFailed ||
       input.receiptState === "incomplete" ||
@@ -106,9 +116,36 @@ export function classifySavedPostCompletionForTesting(
       input.receiptState === "absent");
   return {
     hasTerminalNoEventOutcome,
+    hasTerminalCanonicalDuplicateOutcome,
     hasMissingReceiptAfterEvent,
     hasRetryableFailure,
   };
+}
+
+export function resolveSavedPostProcessingOutcomeForTesting(input: {
+  hasTerminalPermanentFailure: boolean;
+  hasRetryableFailure: boolean;
+  receiptInspectionFailed: boolean;
+  receiptState: "absent" | "complete" | "incomplete";
+  hasMissingReceiptAfterEvent: boolean;
+  hasProcessingFailure: boolean;
+  hasTerminalCanonicalDuplicateOutcome: boolean;
+  hasTerminalNoEventOutcome: boolean;
+}): string {
+  if (input.hasTerminalPermanentFailure) return "terminal_permanent_failure";
+  if (input.hasRetryableFailure) {
+    if (input.receiptInspectionFailed) return "receipt_inspection_failed";
+    if (input.receiptState === "incomplete") return "incomplete_occurrence_receipt";
+    if (input.hasMissingReceiptAfterEvent) return "missing_occurrence_receipt";
+    if (input.hasProcessingFailure) return "processing_failed";
+    return "unclassified_retryable";
+  }
+  if (input.hasTerminalCanonicalDuplicateOutcome) {
+    return "terminal_canonical_duplicate";
+  }
+  if (input.receiptState === "complete") return "receipt_complete";
+  if (input.hasTerminalNoEventOutcome) return "terminal_no_event";
+  return "unclassified_retryable";
 }
 
 export function getOrCreateHandleSummary(summary: IngestionSummary, handle: string): HandleSummary {

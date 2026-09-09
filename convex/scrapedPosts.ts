@@ -1046,7 +1046,7 @@ export const claimProcessing = mutation({
     }
     if (
       existing.processingStatus === "completed" &&
-      ["terminal_no_event", "terminal_permanent_failure", "receipt_complete"].includes(existing.processingOutcome ?? "")
+      ["terminal_no_event", "terminal_permanent_failure", "terminal_canonical_duplicate", "receipt_complete"].includes(existing.processingOutcome ?? "")
     ) {
       return { claimed: false, reason: "terminal" as const };
     }
@@ -1561,7 +1561,7 @@ export const getBacklogStateByHandle = query({
     for (const post of posts) {
       if (
         post.processingStatus === "completed" &&
-        ["terminal_no_event", "terminal_permanent_failure", "receipt_complete"].includes(post.processingOutcome ?? "")
+        ["terminal_no_event", "terminal_permanent_failure", "terminal_canonical_duplicate", "receipt_complete"].includes(post.processingOutcome ?? "")
       ) {
         continue;
       }
@@ -1714,7 +1714,7 @@ export const backfillPaidFetchFlags = mutation({
       if (!post || post.blocksPaidFetch !== undefined) continue;
       const isTerminal =
         post.processingStatus === "completed" &&
-        ["terminal_no_event", "terminal_permanent_failure", "receipt_complete"].includes(post.processingOutcome ?? "");
+        ["terminal_no_event", "terminal_permanent_failure", "terminal_canonical_duplicate", "receipt_complete"].includes(post.processingOutcome ?? "");
       const isRetryable = post.processingStatus === "retryable_failure";
       await ctx.db.patch(id, {
         blocksPaidFetch: !isTerminal && !isRetryable,
@@ -1754,7 +1754,7 @@ export const reconcilePaidFetchFlags = mutation({
       scanned += 1;
       const isTerminal =
         post.processingStatus === "completed" &&
-        ["terminal_no_event", "terminal_permanent_failure", "receipt_complete"].includes(
+        ["terminal_no_event", "terminal_permanent_failure", "terminal_canonical_duplicate", "receipt_complete"].includes(
           post.processingOutcome ?? "",
         );
       if (isTerminal) {
@@ -1898,7 +1898,7 @@ export const claimPaidFetchLease = mutation({
     while (blocker && reconciledBlockers < 100) {
       const isTerminal =
         blocker.processingStatus === "completed" &&
-        ["terminal_no_event", "terminal_permanent_failure", "receipt_complete"].includes(
+        ["terminal_no_event", "terminal_permanent_failure", "terminal_canonical_duplicate", "receipt_complete"].includes(
           blocker.processingOutcome ?? "",
         );
       const isRetryable = blocker.processingStatus === "retryable_failure";
@@ -2784,7 +2784,7 @@ export const recordProcessingResult = mutation({
     }
     const isExplicitTerminal =
       args.status === "completed" &&
-      ["terminal_no_event", "terminal_permanent_failure", "receipt_complete"].includes(args.outcome);
+      ["terminal_no_event", "terminal_permanent_failure", "terminal_canonical_duplicate", "receipt_complete"].includes(args.outcome);
     if (args.status === "completed" && !isExplicitTerminal) {
       throw new Error("Completed scraped-post processing requires an explicit terminal outcome.");
     }

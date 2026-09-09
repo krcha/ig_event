@@ -64,6 +64,7 @@ const outcomeValidator = v.union(
 const terminalScrapedPostOutcomes = new Set([
   "terminal_no_event",
   "terminal_permanent_failure",
+  "terminal_canonical_duplicate",
   "receipt_complete",
 ]);
 

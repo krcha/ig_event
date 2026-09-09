@@ -357,12 +357,13 @@ export async function assertApprovalCandidatePolicy(
   candidate: ApprovalCandidateFields,
   excludeEventIds: Id<"events">[] = [],
   options: {
+    returnUniqueApprovedDuplicate?: boolean;
     expectedAmbiguousApprovedEventVersions?: Array<{
       id: Id<"events">;
       updatedAt: number;
     }>;
   } = {},
-): Promise<void> {
+): Promise<{ eventId: Id<"events">; updatedAt: number } | null> {
   if (!isSensibleEventTitleForApproval(candidate)) {
     throw new DomainError(
       "MODERATION_INELIGIBLE",
@@ -398,6 +399,10 @@ export async function assertApprovalCandidatePolicy(
     expectedAmbiguousVersions.map((row) => [row.id, row.updatedAt] as const),
   );
   const matchedAmbiguousIds = new Set<Id<"events">>();
+  const provenDuplicateEvents: Array<{
+    eventId: Id<"events">;
+    updatedAt: number;
+  }> = [];
   let ambiguousConflict = false;
   for (const event of sameDateEvents) {
     if (excluded.has(event._id)) continue;
@@ -425,6 +430,13 @@ export async function assertApprovalCandidatePolicy(
         !approvalCandidateHasKnownVenue(event),
     });
     if (relation === "proven_duplicate") {
+      if (options.returnUniqueApprovedDuplicate) {
+        provenDuplicateEvents.push({
+          eventId: event._id,
+          updatedAt: event.updatedAt,
+        });
+        continue;
+      }
       throw new DomainError(
         "EVENT_DUPLICATE",
         "An approved event already exists for this canonical occurrence.",
@@ -445,10 +457,17 @@ export async function assertApprovalCandidatePolicy(
       "The reviewed ambiguous approved event set changed before correction.",
     );
   }
+  if (provenDuplicateEvents.length > 1) {
+    throw new DomainError(
+      "EVENT_AMBIGUOUS",
+      "Multiple approved events already represent this canonical occurrence.",
+    );
+  }
   if (ambiguousConflict) {
     throw new DomainError(
       "EVENT_AMBIGUOUS",
       "This same-day occurrence is ambiguous against an approved event and cannot be auto-approved.",
     );
   }
+  return provenDuplicateEvents[0] ?? null;
 }

@@ -83,7 +83,7 @@ export async function loadSavedScrapedPostsForHandle(
       (record) =>
         !(
           record.processingStatus === "completed" &&
-          ["terminal_no_event", "terminal_permanent_failure", "receipt_complete"].includes(
+          ["terminal_no_event", "terminal_permanent_failure", "terminal_canonical_duplicate", "receipt_complete"].includes(
             record.processingOutcome ?? "",
           )
         ) &&
@@ -143,7 +143,7 @@ export async function loadSavedScrapedPostPageForHandle(options: {
     }
     if (
       record.processingStatus === "completed" &&
-      ["terminal_no_event", "terminal_permanent_failure", "receipt_complete"].includes(
+      ["terminal_no_event", "terminal_permanent_failure", "terminal_canonical_duplicate", "receipt_complete"].includes(
         record.processingOutcome ?? "",
       )
     ) {

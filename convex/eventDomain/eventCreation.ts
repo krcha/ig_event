@@ -10,6 +10,7 @@ import { PUBLICATION_POLICY_VERSION } from "../../lib/domain/publication/policy"
 import { canonicalizeEventType } from "../../lib/taxonomy/venue-types";
 import { requireAdminOrServiceSecret } from "../authz";
 import {
+  assertSourceOccurrencePlanWithinBounds,
   assertSourceProcessingFence,
   recordSourceOccurrenceSatisfaction,
   type SourceOccurrencePlan,
@@ -40,6 +41,23 @@ type EventTimeEvidenceKind =
   | "unreadable"
   | "doors_open_only";
 type EventDateEvidenceSource = "caption" | "poster" | "alt_text" | "unknown";
+
+function isExactSingleOccurrencePlan(
+  plan: SourceOccurrencePlan | undefined,
+  sourceOccurrenceKey: string | undefined,
+): boolean {
+  return Boolean(
+    plan &&
+      sourceOccurrenceKey &&
+      plan.expectedKeys.length === 1 &&
+      plan.expectedKeys[0] === sourceOccurrenceKey &&
+      plan.expectedOccurrences.length === 1 &&
+      plan.expectedOccurrences[0]?.key === sourceOccurrenceKey &&
+      plan.deferredChildCount === 0 &&
+      plan.deferredChildKeys.length === 0 &&
+      plan.observedChildKeys.length === 1,
+  );
+}
 
 export async function createEventHandler(
   ctx: MutationCtx,
@@ -100,6 +118,9 @@ export async function createEventHandler(
     throw new Error(
       "Source occurrence event creation requires a current processing fence.",
     );
+  }
+  if (occurrencePlan) {
+    assertSourceOccurrencePlanWithinBounds(occurrencePlan);
   }
   if (eventArgs.sourceOccurrenceKey) {
     const existingOccurrence = await ctx.db
@@ -169,7 +190,29 @@ export async function createEventHandler(
   const now = Date.now();
   assertPublicEventImageWrite(eventArgs.imageUrl, eventArgs.imageStorageId);
   if (eventArgs.status === "approved") {
-    await assertApprovalCandidatePolicy(ctx, { ...eventArgs, ...venueFields });
+    const existingApprovedDuplicate = await assertApprovalCandidatePolicy(
+      ctx,
+      { ...eventArgs, ...venueFields },
+      [],
+      {
+        returnUniqueApprovedDuplicate:
+          kind === "service" &&
+          returnCreateDisposition === true &&
+          processingFence !== undefined &&
+          isExactSingleOccurrencePlan(
+            occurrencePlan,
+            eventArgs.sourceOccurrenceKey,
+          ),
+      },
+    );
+    if (existingApprovedDuplicate) {
+      return {
+        eventId: existingApprovedDuplicate.eventId,
+        created: false,
+        updatedAt: existingApprovedDuplicate.updatedAt,
+        disposition: "canonical_approved_duplicate" as const,
+      };
+    }
   }
   const normalizedEventArgs = normalizeEventTimeWritePatch(eventArgs);
   const canonicalEventType = canonicalizeEventType(eventArgs.eventType);
