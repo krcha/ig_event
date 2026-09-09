@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { getDocumentSize } from "convex/values";
 import {
   buildApifyInstagramScrapeRequest,
+  getInstagramScrapeRawItemCount,
   mapApifyItemToInstagramPost,
   scrapeInstagramAccount,
   selectLatestOriginalNonPinnedPost,
@@ -218,6 +219,105 @@ try {
   console.info = originalApifyBoundaryConsoleInfo;
   if (previousApifyToken === undefined) delete process.env.APIFY_API_TOKEN;
   else process.env.APIFY_API_TOKEN = previousApifyToken;
+}
+
+const previousProfileOwnerFilterToken = process.env.APIFY_API_TOKEN;
+const originalProfileOwnerFilterFetch = globalThis.fetch;
+const originalProfileOwnerFilterDateNow = Date.now;
+const originalProfileOwnerFilterConsoleInfo = console.info;
+process.env.APIFY_API_TOKEN = "qa-profile-owner-filter-token";
+Date.now = () => Date.parse("2026-09-09T09:00:00.000Z");
+console.info = () => {};
+globalThis.fetch = async (_url, init) => {
+  const input = JSON.parse(String(init?.body ?? "{}"));
+  const target = input.username?.[0];
+  const fixtures = {
+    "https://www.instagram.com/qa_target/": [
+      {
+        id: "foreign-newer",
+        url: "https://www.instagram.com/p/foreign-newer/",
+        username: "foreign_collaborator",
+        timestamp: "2026-09-09T08:30:00.000Z",
+        coauthorProducers: [{ username: "qa_target" }],
+      },
+      {
+        id: "exact-owner-older",
+        url: "https://www.instagram.com/p/exact-owner-older/",
+        username: "QA_TARGET",
+        timestamp: "2026-09-09T08:00:00.000Z",
+      },
+    ],
+    "https://www.instagram.com/qa_foreign_only/": [
+      {
+        id: "foreign-only",
+        url: "https://www.instagram.com/p/foreign-only/",
+        ownerUsername: "foreign_collaborator",
+        timestamp: "2026-09-09T08:45:00.000Z",
+        coauthorProducers: [{ username: "qa_foreign_only" }],
+      },
+    ],
+    "https://www.instagram.com/p/direct-foreign-owner/": [
+      {
+        id: "direct-foreign-owner",
+        url: "https://www.instagram.com/p/direct-foreign-owner/",
+        ownerUsername: "original_poster",
+        timestamp: "2026-09-09T08:50:00.000Z",
+      },
+    ],
+  };
+  return new Response(JSON.stringify(fixtures[target] ?? []), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+};
+try {
+  const exactOwnerPosts = await scrapeInstagramAccount({
+    handle: "qa_target",
+    resultsLimit: 4,
+    daysBack: 1,
+    pinnedPostPolicy: "include_recent",
+  });
+  assert.deepEqual(
+    exactOwnerPosts.map((post) => [post.postId, post.username]),
+    [["exact-owner-older", "QA_TARGET"]],
+    "a newer foreign/collaboration row must not displace an exact profile-owner post",
+  );
+  assert.equal(
+    getInstagramScrapeRawItemCount(exactOwnerPosts),
+    2,
+    "owner filtering must retain the truthful raw provider item count",
+  );
+
+  const foreignOnlyPosts = await scrapeInstagramAccount({
+    handle: "qa_foreign_only",
+    resultsLimit: 4,
+    daysBack: 1,
+    pinnedPostPolicy: "include_recent",
+  });
+  assert.deepEqual(
+    foreignOnlyPosts,
+    [],
+    "a profile response containing only foreign owners must produce no persistable post",
+  );
+  assert.equal(getInstagramScrapeRawItemCount(foreignOnlyPosts), 1);
+
+  const directPost = await scrapeInstagramAccount({
+    handle: "https://www.instagram.com/p/direct-foreign-owner/",
+    resultsLimit: 1,
+    daysBack: 1,
+    pinnedPostPolicy: "include_recent",
+  });
+  assert.deepEqual(
+    directPost.map((post) => [post.postId, post.username]),
+    [["direct-foreign-owner", "original_poster"]],
+    "an explicit post URL must retain its provider-attested owner",
+  );
+} finally {
+  globalThis.fetch = originalProfileOwnerFilterFetch;
+  Date.now = originalProfileOwnerFilterDateNow;
+  console.info = originalProfileOwnerFilterConsoleInfo;
+  if (previousProfileOwnerFilterToken === undefined) delete process.env.APIFY_API_TOKEN;
+  else process.env.APIFY_API_TOKEN = previousProfileOwnerFilterToken;
 }
 
 const persistedSnapshotJob = {

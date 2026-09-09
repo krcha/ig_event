@@ -7,10 +7,11 @@ import { type InstagramScrapedPost } from "@/lib/scraper/instagram-scraper";
 import type { RecurringModelScheduleContext, RecurringScheduleLane, RepeatedAnnouncementContextKind, RepeatedSingleEventCaptionDisposition, SplitEventCandidate } from "@/lib/pipeline/ingestion/contracts";
 import { MAX_EVENT_DAYS_AHEAD, addDaysToIsoDate, collectDateCandidates, escapeRegExp, normalizeEventDate } from "@/lib/pipeline/ingestion/parsing-date";
 import { cleanSplitCaptionEntryText, extractPostAltTextEvidence, isLikelyCaptionContextTitle, stripSplitEntryDateText } from "@/lib/pipeline/ingestion/parsing-event-text";
-import { buildSplitEventSourceLine, containsNonHashtagIdentity, containsNormalizedTokenSequence, extractSplitEntryTime, getSearchableTokens, hasMultipleResolvedSplitDates, identityVariantsOverlap, isHashtagOnlySourceIdentity, parseSplitCaptionEntryArtists, sanitizeSplitEventIdentity, stripSplitEntryTime } from "@/lib/pipeline/ingestion/parsing-source-evidence";
+import { buildSplitEventSourceLine, containsNonHashtagIdentity, containsNormalizedTokenSequence, extractSplitEntryTime, getSearchableTokens, hasAffirmativeReturnPerformanceAnnouncementEvidence, hasExplicitBilledIdentityEvidence, hasMultipleResolvedSplitDates, identityVariantsOverlap, isHashtagOnlySourceIdentity, isNonBillingEvidenceClause, parseSplitCaptionEntryArtists, sanitizeSplitEventIdentity, splitLogicalEvidenceClauses, stripSplitEntryTime } from "@/lib/pipeline/ingestion/parsing-source-evidence";
 import { resolveEventTimeFromExtractionAndEvidence } from "@/lib/pipeline/ingestion/parsing-time";
 import { parsePostedAt } from "@/lib/pipeline/ingestion/source-documents";
 import { normalizeString } from "@/lib/pipeline/ingestion/values";
+import { normalizeConfidenceScore } from "@/lib/utils/confidence";
 
 export const RECURRING_SCHEDULE_START_PATTERN =
   /(?:weekly|every\s+week|svake\s+(?:nedelje|sedmice)|svakog\s+tjedna|nedeljno|tjedno|недељно|еженедельно)\s*[\p{P}\p{S}]{0,3}\s*(?:(?:starting|beginning|starts?|begins?)\s*[\p{P}\p{S}]{0,3}\s*(?:(?:from|on)\s*[\p{P}\p{S}]{0,3}\s*)?|(?:from|on|od|с)\s*[\p{P}\p{S}]{0,3}\s*)((?:0?[1-9]|[12]\d|3[01])[./-](?:0?[1-9]|1[0-2])[./-](?:\d{2}|\d{4}))/iu;
@@ -158,6 +159,91 @@ export function listRecurringScheduleDates(
   return dates;
 }
 
+const SINGLE_OCCURRENCE_COMPLEMENTARY_IDENTITY_MIN_CONFIDENCE = 0.9;
+
+function collectSingleOccurrenceComplementaryIdentities(options: {
+  extracted: ExtractedEventData;
+  hasRecurringExpansion: boolean;
+  post: InstagramScrapedPost;
+  rawTitle: string;
+  rawArtists: string[];
+}): { title: string; artists: string[] } {
+  if (
+    options.extracted.extraction_contract_version !== "event_evidence_v2" ||
+    options.extracted.schedule_entries.length !== 1 ||
+    options.hasRecurringExpansion ||
+    options.extracted.source_conflicts.some((conflict) =>
+      conflict.field === "title" || conflict.field === "artists"
+    )
+  ) {
+    return { title: "", artists: [] };
+  }
+
+  const isAttestedByPersistedPostText = (
+    identity: string,
+    confirmation: ExtractedEventData["field_confirmation"]["title" | "artists"],
+  ): boolean => {
+    const confidence = normalizeConfidenceScore(confirmation.confidence);
+    if (
+      confidence === null ||
+      confidence < SINGLE_OCCURRENCE_COMPLEMENTARY_IDENTITY_MIN_CONFIDENCE
+    ) {
+      return false;
+    }
+
+    const foundIn = new Set(
+      confirmation.found_in.map((source) => normalizeString(source).toLowerCase()),
+    );
+    return confirmation.evidence_snippets.some((snippet) => {
+      if (snippet.source !== "caption" && snippet.source !== "alt_text") {
+        return false;
+      }
+      if (!foundIn.has(snippet.source)) {
+        return false;
+      }
+      const persistedSource = snippet.source === "caption"
+        ? options.post.caption
+        : options.post.altText;
+      const normalizedSnippet = toSearchableText(snippet.text);
+      const boundIdentityClause = normalizeString(persistedSource)
+        .split(/\r?\n/u)
+        .flatMap((line) => splitLogicalEvidenceClauses(line))
+        .map((clause) => normalizeString(clause))
+        .find((clause) =>
+          toSearchableText(clause).includes(normalizedSnippet) &&
+          containsNonHashtagIdentity(clause, identity) &&
+          !isNonBillingEvidenceClause(clause) &&
+          (hasExplicitBilledIdentityEvidence(identity, clause) ||
+            hasAffirmativeReturnPerformanceAnnouncementEvidence(identity, clause))
+        );
+      return Boolean(
+        normalizedSnippet &&
+          persistedSource &&
+          boundIdentityClause &&
+          containsNonHashtagIdentity(snippet.text, identity) &&
+          !isNonBillingEvidenceClause(snippet.text),
+      );
+    });
+  };
+
+  return {
+    title:
+      options.rawTitle &&
+      isAttestedByPersistedPostText(
+        options.rawTitle,
+        options.extracted.field_confirmation.title,
+      )
+        ? options.rawTitle
+        : "",
+    artists: options.rawArtists.filter((artist) =>
+      isAttestedByPersistedPostText(
+        artist,
+        options.extracted.field_confirmation.artists,
+      ),
+    ),
+  };
+}
+
 export function extractModelSplitEventCandidates(
   post: InstagramScrapedPost,
   extracted: ExtractedEventData,
@@ -220,11 +306,22 @@ export function extractModelSplitEventCandidates(
         description,
       ]);
     const sourceBillingEvidence = explicitSourceLine ? [explicitSourceLine] : [];
+    const rawArtists = normalizeExtractedArtists(scheduleEntry.artists);
+    const independentlyGroundedIdentities =
+      collectSingleOccurrenceComplementaryIdentities({
+        extracted,
+        hasRecurringExpansion: Boolean(recurringContext),
+        post,
+        rawTitle: rawModelTitle,
+        rawArtists,
+      });
     const identity = sanitizeSplitEventIdentity({
       rawTitle: rawModelTitle,
-      rawArtists: normalizeExtractedArtists(scheduleEntry.artists),
+      rawArtists,
       post,
       additionalEvidence: sourceBillingEvidence,
+      independentlyGroundedTitle: independentlyGroundedIdentities.title,
+      independentlyGroundedArtists: independentlyGroundedIdentities.artists,
       artistAliasConflicts: extracted.source_conflicts,
     });
     const rawTitle = identity.title;

@@ -1013,10 +1013,21 @@ export async function scrapeInstagramAccount(
   } finally {
     clearTimeout(abortTimer);
   }
+  const expectedProfileOwner = normalizeHandle(target.fallbackUsername);
   const scrapedPosts = rawItems
     .map((item) => mapApifyItemToInstagramPost(item, target.fallbackUsername || target.label))
     .filter((item): item is InstagramScrapedPost => {
       if (!item) {
+        return false;
+      }
+      // Profile scrapes can contain collaboration rows whose durable owner is
+      // another account. Never let a newer foreign row win
+      // selection and then be persisted under the requested profile. Direct
+      // post targets intentionally have no fallback owner and remain unchanged.
+      if (
+        expectedProfileOwner &&
+        normalizeHandle(item.username) !== expectedProfileOwner
+      ) {
         return false;
       }
       return !item.postedAt || parsePostedAtTimestamp(item.postedAt) >= cutoff;

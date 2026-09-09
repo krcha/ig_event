@@ -108,7 +108,24 @@ assert.deepEqual(parsedCachedExtraction._openaiUsage, extractionFixture._openaiU
 assert.equal(
   JSON.stringify(parsedCachedExtraction),
   serializedExtraction,
-  "Parsing a durable v2 cache must preserve _openaiUsage and byte-equivalent JSON reserialization.",
+  "The canonical v2 fixture must preserve _openaiUsage and its existing schema order.",
+);
+const {
+  _openaiUsage: reorderedUsage,
+  field_confirmation: reorderedFieldConfirmation,
+  ...reorderedExtractionFields
+} = extractionFixture;
+const reorderedSerializedExtraction = JSON.stringify({
+  ...reorderedExtractionFields,
+  field_confirmation: reorderedFieldConfirmation,
+  _openaiUsage: reorderedUsage,
+});
+assert.notEqual(
+  JSON.stringify(
+    parseExtractedEventData(JSON.parse(reorderedSerializedExtraction)),
+  ),
+  reorderedSerializedExtraction,
+  "The regression fixture must prove that valid persisted JSON can change byte order when parsed.",
 );
 
 function indexCriteria(configure) {
@@ -1247,6 +1264,24 @@ try {
   ]).handles[0];
   const rotatedCurrentPosterUrl =
     "https://scontent.cdninstagram.com/re-signed-cached-poster.jpg";
+  const {
+    _openaiUsage: rotatedCachedUsage,
+    field_confirmation: rotatedCachedFieldConfirmation,
+    ...rotatedCachedFields
+  } = cachedPosterExtraction;
+  const rotatedCachedAnalysisJson = JSON.stringify({
+    ...rotatedCachedFields,
+    source_url: "https://www.instagram.com/p/ROTATEDCACHEDPOSTER/",
+    field_confirmation: rotatedCachedFieldConfirmation,
+    _openaiUsage: rotatedCachedUsage,
+  });
+  assert.notEqual(
+    JSON.stringify(
+      parseExtractedEventData(JSON.parse(rotatedCachedAnalysisJson)),
+    ),
+    rotatedCachedAnalysisJson,
+    "The cached-poster retry fixture must exercise byte-changing parser order.",
+  );
   await withoutIngestionConsole(() =>
     processIngestionPostWithExtractionForTesting({
       client: rotatedCachedPosterClient.client,
@@ -1269,10 +1304,7 @@ try {
       configuredVenueNamesByHandle: {},
       sourceRolesByHandle: { rotated_cached_poster_boundary: "unknown" },
       serviceSecret: process.env.CRON_SECRET,
-      cachedAnalysisJson: JSON.stringify({
-        ...cachedPosterExtraction,
-        source_url: "https://www.instagram.com/p/ROTATEDCACHEDPOSTER/",
-      }),
+      cachedAnalysisJson: rotatedCachedAnalysisJson,
       cachedAnalysisContractVersion: "event_evidence_v2",
       cachedAnalysisImageSourceUrl: cachedPosterUrl,
       cachedAnalysisImageChecksumSha256: "c".repeat(64),
@@ -1296,6 +1328,11 @@ try {
       `rotated cached poster with an exact durable asset created ${rotatedCachedPosterClient.creates.length} events instead of continuing without OpenAI/refetch (${JSON.stringify({ errors: rotatedCachedPosterSummary.errors, queries: rotatedCachedPosterClient.queries })})`,
     );
   }
+  assert.equal(
+    rotatedCachedPosterClient.creates[0]?.rawExtractionJson,
+    rotatedCachedAnalysisJson,
+    "A cached retry must carry the exact persisted analysis bytes through event creation.",
+  );
   if (
     JSON.stringify(rotatedCachedPosterClient.actions.slice(0, 2).map((args) => args.upstreamUrl)) !==
     JSON.stringify([cachedPosterUrl, rotatedCurrentPosterUrl])

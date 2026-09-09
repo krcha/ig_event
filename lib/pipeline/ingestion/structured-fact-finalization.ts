@@ -50,6 +50,7 @@ type FinalizeStructuredFactVariantsInput = {
   normalizedFieldsCommon: Record<string, unknown>;
   post: InstagramScrapedPost;
   postTextEvidence: string;
+  rawExtractionJson: string;
   rawModelVenue: string;
   selectedImageUrl: string | null;
   sourceRole?: "venue" | "promoter" | "unknown";
@@ -82,6 +83,7 @@ export function finalizeStructuredFactVariants({
   normalizedFieldsCommon,
   post,
   postTextEvidence,
+  rawExtractionJson,
   rawModelVenue,
   selectedImageUrl,
   sourceRole,
@@ -591,7 +593,7 @@ export function finalizeStructuredFactVariants({
         instagramPostId: post.postId,
         ...(post.caption ? { caption: post.caption } : {}),
         ...(post.postedAt ? { postedAt: post.postedAt } : {}),
-        rawExtractionJson: JSON.stringify(extracted),
+        rawExtractionJson,
       },
     });
   }

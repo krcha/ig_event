@@ -66,6 +66,7 @@ export function produceStructuredFactsForInsert(
     canonicalVenueAliasesByHandle?: CanonicalVenueAliasesByHandle;
     canonicalVenueLocationsByHandle?: Record<string, string>;
     venueResolverSnapshot?: IngestionVenueResolverSnapshotInput;
+    rawExtractionJson?: string;
   } = {},
 ): StructuredFactExtractionResult[] {
   const extractionContractVersion = normalizeString(extracted.extraction_contract_version);
@@ -611,6 +612,10 @@ export function produceStructuredFactsForInsert(
     normalizedFieldsCommon,
     post,
     postTextEvidence,
+    rawExtractionJson:
+      options.rawExtractionJson === undefined
+        ? JSON.stringify(extracted)
+        : options.rawExtractionJson,
     rawModelVenue,
     selectedImageUrl,
     sourceRole,

@@ -463,6 +463,7 @@ export async function processIngestionPost(
   }
 
   let extracted: ExtractedEventData;
+  let persistedAnalysisResultJson: string;
   if (!requireCachedCanonicalApprovedDuplicate) {
     // Keep normal ingestion's historical ordering: source-duplicate exits do
     // not parse or otherwise inspect a cache they never need to consume.
@@ -470,6 +471,14 @@ export async function processIngestionPost(
   }
   if (cachedExtracted) {
     extracted = cachedExtracted;
+    if (!cachedAnalysisJson) {
+      throw new Error("A parsed cached analysis must retain its persisted JSON bytes.");
+    }
+    // The persisted analysis document is the provenance authority. Parsing a
+    // valid cache through Zod can reorder object keys, so reserializing it here
+    // would produce semantically identical but byte-different evidence and
+    // make the Convex approval boundary reject an otherwise exact retry.
+    persistedAnalysisResultJson = cachedAnalysisJson;
   } else {
     let providerLeaseHeld = false;
     let providerBlockPersisted = false;
@@ -543,6 +552,7 @@ export async function processIngestionPost(
         : {}),
     });
     extracted = normalizeConfidencePayload(extracted);
+    persistedAnalysisResultJson = JSON.stringify(extracted);
     if (providerExecution) {
       await client.mutation(
         recordScrapedPostOpenAiAnalysisMutation,
@@ -554,7 +564,7 @@ export async function processIngestionPost(
             instagramPostUrl: processingFence.instagramPostUrl,
             owner: processingFence.owner,
             sourceRevision: processingFence.sourceRevision,
-            resultJson: JSON.stringify(extracted),
+            resultJson: persistedAnalysisResultJson,
             imageSourceUrl: selectedImageUrl ?? undefined,
             imageChecksumSha256: selectedImageChecksumSha256 ?? undefined,
             model: extracted._openaiUsage?.model,
@@ -717,6 +727,7 @@ export async function processIngestionPost(
           canonicalVenueAliasesByHandle,
           canonicalVenueLocationsByHandle,
           venueResolverSnapshot,
+          rawExtractionJson: persistedAnalysisResultJson,
         },
       ),
     );

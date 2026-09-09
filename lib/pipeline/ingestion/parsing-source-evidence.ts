@@ -957,6 +957,56 @@ export function isNonBillingEvidenceClause(value: string): boolean {
   );
 }
 
+const RETURN_PERFORMANCE_ANNOUNCEMENT_TOKENS = new Set([
+  "concert",
+  "koncert",
+  "live",
+  "music",
+  "muzika",
+  "nastup",
+  "nastupa",
+  "party",
+  "svirka",
+  "svirke",
+  "vece",
+]);
+
+export function hasAffirmativeReturnPerformanceAnnouncementEvidence(
+  value: string,
+  evidence: string,
+): boolean {
+  const text = stripHashtagTokens(evidence);
+  if (!text) {
+    return false;
+  }
+
+  return text
+    .split(/[\r\n!?;]+/u)
+    .flatMap((line) => splitLogicalEvidenceClauses(line))
+    .map((clause) => normalizeString(clause))
+    .filter(Boolean)
+    .some((clause) => {
+      if (isNonBillingEvidenceClause(clause)) {
+        return false;
+      }
+      const tokens = getSearchableTokens(clause);
+      if (!findIdentityTokenMatch(tokens, value)) {
+        return false;
+      }
+      const hasReturnCue = tokens.some((token, index) =>
+        (token === "jos" &&
+          tokens[index + 1] === "jednom" &&
+          tokens[index + 2] === "kod" &&
+          tokens[index + 3] === "nas") ||
+        ((token === "ponovo" || token === "opet") &&
+          tokens[index + 1] === "kod" &&
+          tokens[index + 2] === "nas")
+      );
+      return hasReturnCue &&
+        tokens.some((token) => RETURN_PERFORMANCE_ANNOUNCEMENT_TOKENS.has(token));
+    });
+}
+
 export function stripNonBillingIdentityClauses(value: string): string {
   return splitLogicalEvidenceClauses(value)
     .map((clause) => normalizeString(clause))
@@ -1039,6 +1089,10 @@ export function sanitizeSplitEventIdentity(options: {
   rawArtists: string[];
   post: InstagramScrapedPost;
   additionalEvidence?: string[];
+  /** Caller-attested against persisted, non-hashtag post evidence. */
+  independentlyGroundedTitle?: string;
+  /** Caller-attested per artist against persisted, non-hashtag post evidence. */
+  independentlyGroundedArtists?: string[];
   artistAliasConflicts?: EventEvidenceSourceConflict[];
 }): { title: string; artists: string[]; artistsWereSanitized: boolean } {
   const billableRawTitle = stripNonBillingIdentityClauses(options.rawTitle);
@@ -1057,20 +1111,37 @@ export function sanitizeSplitEventIdentity(options: {
   const originalArtists = titleClausesWereSanitized
     ? artistCandidates.filter((artist) => containsNormalizedTokenSequence(billableRawTitle, artist))
     : artistCandidates;
-  const validArtists = originalArtists.filter((artist) =>
-    !isHashtagOnlySourceIdentity(
-      artist,
-      options.post,
-      options.additionalEvidence ?? [],
-      "additional",
-    ),
+  const independentlyGroundedArtists = new Set(
+    (options.independentlyGroundedArtists ?? [])
+      .map((identity) => toSearchableText(identity))
+      .filter(Boolean),
   );
-  const guardedTitle = !groundedRawTitle || isHashtagOnlySourceIdentity(
-    groundedRawTitle,
-    options.post,
-    options.additionalEvidence ?? [],
-    "additional",
-  )
+  const isIndependentlyGroundedArtist = (identity: string): boolean =>
+    independentlyGroundedArtists.has(toSearchableText(identity));
+  const independentlyGroundedTitle = toSearchableText(
+    options.independentlyGroundedTitle ?? "",
+  );
+  const titleIsIndependentlyGrounded = Boolean(
+    groundedRawTitle &&
+      toSearchableText(groundedRawTitle) === independentlyGroundedTitle,
+  );
+  const validArtists = originalArtists.filter((artist) =>
+    isIndependentlyGroundedArtist(artist) ||
+      !isHashtagOnlySourceIdentity(
+        artist,
+        options.post,
+        options.additionalEvidence ?? [],
+        "additional",
+      ),
+  );
+  const guardedTitle = !groundedRawTitle ||
+    (!titleIsIndependentlyGrounded &&
+      isHashtagOnlySourceIdentity(
+        groundedRawTitle,
+        options.post,
+        options.additionalEvidence ?? [],
+        "additional",
+      ))
     ? ""
     : groundedRawTitle;
   const artistsWereSanitized =
@@ -1082,7 +1153,9 @@ export function sanitizeSplitEventIdentity(options: {
     artistCandidates.every((artist) => containsNormalizedTokenSequence(guardedTitle, artist));
   return {
     title:
-      artistsWereSanitized && titleListsEveryExtractedArtist
+      artistsWereSanitized &&
+      titleListsEveryExtractedArtist &&
+      !titleIsIndependentlyGrounded
         ? formatArtistTitleList(validArtists)
         : guardedTitle,
     artists: validArtists,

@@ -42,6 +42,7 @@ import {
   processIngestionPostWithExtractionForTesting,
   reconcileAmbiguousOccurrenceKeysWithExistingEventsForTesting,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
+import { extractModelSplitEventCandidates } from "../lib/pipeline/ingestion/parsing-schedule.ts";
 import {
   extractEventTimeFromText,
   TBD_EVENT_TIME,
@@ -430,6 +431,21 @@ function runPromptQa() {
     EVENT_EXTRACTION_SYSTEM_PROMPT,
     /If you cannot quote that exact row, do not emit the schedule entry/i,
     "Prompt must prohibit unquotable schedule rows.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /exactly ONE non-recurring real event occurrence.*merge complementary evidence.*poster.*date\/time\/venue.*caption.*title or artist/is,
+    "Prompt must merge complementary poster and caption evidence for one occurrence.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /O Bato.*muzika Brazila.*još jednom kod nas.*narrative listening.*inspiration.*hashtag-only/is,
+    "Prompt must distinguish affirmative return-performance announcements from narrative mentions.",
+  );
+  assert.match(
+    EVENT_EXTRACTION_SYSTEM_PROMPT,
+    /Never use this rule for a recurring schedule or to carry an identity across two or more schedule rows/i,
+    "Prompt must keep complementary identity evidence isolated from recurring and multi-row schedules.",
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
@@ -4048,6 +4064,327 @@ function runHashtagOnlyScheduleIdentityQa() {
   const billedFields = readPreparedNormalizedFields(billed);
   assert.notEqual(billedFields.titleSource, "unnamed_schedule_fallback");
   assert.equal(billedFields.titleUsedFallback, false);
+}
+
+function runSingleOccurrenceComplementaryIdentityQa() {
+  const firstDate = nextIsoDateForWeekday(5, 7);
+  const secondDate = addIsoDays(firstDate, 1);
+  const firstDateLabel = ddmmForIsoDate(firstDate);
+  const secondDateLabel = ddmmForIsoDate(secondDate);
+  const venue = "Tennis Club Senjak";
+  const scheduleVenue = "TK Senjak";
+  const identitySnippet =
+    "Sjajni O Bato i predivna muzika Brazila jos jednom kod nas!";
+  const caption = [
+    "#BrazilNight #OBato #TKSENJAK",
+    identitySnippet,
+    "Verovatno je ovo poslednje brazilsko vece u ovoj sezoni u TK Senjak zato nemojte propustiti!",
+    "Ulaz 500 din.",
+  ].join("\n");
+  const exactIdentityEvidence = "O Bato";
+  const post = makeInstagramPost({
+    caption,
+    postType: "image",
+    username: "teniskiklubsenjak",
+  });
+  const highConfidenceCaptionConfirmation = {
+    confidence: 0.95,
+    found_in: ["caption"],
+    evidence: exactIdentityEvidence,
+    evidence_snippets: [{ source: "caption", text: exactIdentityEvidence }],
+    notes: "Exact caption identity evidence.",
+  };
+  const unconfirmedArtists = {
+    confidence: 0,
+    found_in: [],
+    evidence: "",
+    evidence_snippets: [],
+    notes: "No independently confirmed artist evidence.",
+  };
+  const makeScheduleEntry = ({
+    date = firstDate,
+    dateLabel = firstDateLabel,
+    title = "O Bato",
+    artists = ["O Bato"],
+    sourceText = `PETAK ${dateLabel} 20.30H TK SENJAK`,
+  } = {}) => ({
+    date,
+    time: "20:30",
+    venue: scheduleVenue,
+    title,
+    artists,
+    description: "Live music at Tennis Club Senjak.",
+    source_text: sourceText,
+    date_evidence: {
+      exact_text: dateLabel,
+      source: "poster",
+      is_relative: false,
+      resolved_date: date,
+    },
+    time_evidence: {
+      status: "start_time_stated",
+      exact_text: "20.30H",
+      source: "poster",
+    },
+  });
+  const makeSingleOccurrenceExtraction = (overrides = {}) =>
+    makeExtractedEvent({
+      extraction_contract_version: "event_evidence_v2",
+      title: "",
+      date: "",
+      time: "",
+      venue: "",
+      artists: [],
+      description: "",
+      source_caption: caption,
+      schedule_entries: [makeScheduleEntry()],
+      field_confirmation: {
+        ...makeFieldConfirmation(0.95),
+        title: highConfidenceCaptionConfirmation,
+        artists: highConfidenceCaptionConfirmation,
+      },
+      ...overrides,
+    });
+
+  const complementaryExtraction = makeSingleOccurrenceExtraction();
+  const [complementaryCandidate] = extractModelSplitEventCandidates(
+    post,
+    complementaryExtraction,
+    "live music",
+    venue,
+  );
+  assert.ok(complementaryCandidate);
+  assert.equal(complementaryCandidate.lineTitle, "O Bato");
+  assert.deepEqual(complementaryCandidate.artists, ["O Bato"]);
+  assert.equal(complementaryCandidate.artistsWereSanitized, false);
+  assert.equal(complementaryCandidate.titleUsedFallback, undefined);
+  assert.equal(
+    complementaryCandidate.sourceLine,
+    `PETAK ${firstDateLabel} 20.30H TK SENJAK`,
+    "Complementary identity grounding must not synthesize or rewrite the exact poster row.",
+  );
+
+  const [complementaryPrepared] = prepareEventsForInsert(
+    post,
+    complementaryExtraction,
+    "https://cdn.example.com/o-bato-tk-senjak.jpg",
+    { teniskiklubsenjak: venue },
+    {},
+    { teniskiklubsenjak: venue },
+    {
+      eventDateFilterNow: new Date(QA_NOW_ISO),
+      canonicalVenueAliasesByHandle: {
+        teniskiklubsenjak: [scheduleVenue],
+      },
+      sourceRolesByHandle: { teniskiklubsenjak: "venue" },
+    },
+  );
+  assert.equal(complementaryPrepared.kind, "ok", JSON.stringify(complementaryPrepared));
+  assert.equal(complementaryPrepared.event.title, "O Bato");
+  assert.deepEqual(complementaryPrepared.event.artists, ["O Bato"]);
+  assert.equal(complementaryPrepared.normalizedFields.identityEvidenceVerified, true);
+  assert.equal(complementaryPrepared.normalizedFields.structuredEvidenceVerified, true);
+  assert.equal(complementaryPrepared.event.status, "approved");
+
+  const [titleOnlyConfirmedCandidate] = extractModelSplitEventCandidates(
+    post,
+    makeSingleOccurrenceExtraction({
+      field_confirmation: {
+        ...makeFieldConfirmation(0.95),
+        title: highConfidenceCaptionConfirmation,
+        artists: unconfirmedArtists,
+      },
+    }),
+    "live music",
+    venue,
+  );
+  assert.ok(titleOnlyConfirmedCandidate);
+  assert.equal(titleOnlyConfirmedCandidate.lineTitle, "O Bato");
+  assert.deepEqual(titleOnlyConfirmedCandidate.artists, []);
+  assert.equal(titleOnlyConfirmedCandidate.artistsWereSanitized, true);
+
+  for (const narrativeCaption of [
+    "U petak slušamo O Bato. #OBato",
+    "Inspired by O Bato. #OBato",
+  ]) {
+    const narrativePost = makeInstagramPost({
+      caption: narrativeCaption,
+      postType: "image",
+      username: "teniskiklubsenjak",
+    });
+    const [narrativeCandidate] = extractModelSplitEventCandidates(
+      narrativePost,
+      makeSingleOccurrenceExtraction({ source_caption: narrativeCaption }),
+      "live music",
+      venue,
+    );
+    assert.ok(narrativeCandidate);
+    assert.equal(narrativeCandidate.titleUsedFallback, true);
+    assert.deepEqual(narrativeCandidate.artists, []);
+    assert.notEqual(narrativeCandidate.lineTitle, "O Bato");
+  }
+
+  const hashtagOnlyPost = makeInstagramPost({
+    caption: "#OBato",
+    postType: "image",
+    username: "teniskiklubsenjak",
+  });
+  const [unboundEvidenceCandidate] = extractModelSplitEventCandidates(
+    hashtagOnlyPost,
+    makeSingleOccurrenceExtraction({ source_caption: "#OBato" }),
+    "live music",
+    venue,
+  );
+  assert.ok(unboundEvidenceCandidate);
+  assert.equal(unboundEvidenceCandidate.titleUsedFallback, true);
+  assert.deepEqual(unboundEvidenceCandidate.artists, []);
+  assert.notEqual(unboundEvidenceCandidate.lineTitle, "O Bato");
+
+  const compactHashtagIdentity = "OBato";
+  const compactHashtagConfirmation = {
+    confidence: 0.95,
+    found_in: ["caption"],
+    evidence: compactHashtagIdentity,
+    evidence_snippets: [{ source: "caption", text: compactHashtagIdentity }],
+    notes: "A fabricated short snippet must not strip the source hashtag marker.",
+  };
+  const [normalizedHashtagCollisionCandidate] = extractModelSplitEventCandidates(
+    hashtagOnlyPost,
+    makeSingleOccurrenceExtraction({
+      source_caption: "#OBato",
+      schedule_entries: [
+        makeScheduleEntry({
+          title: compactHashtagIdentity,
+          artists: [compactHashtagIdentity],
+        }),
+      ],
+      field_confirmation: {
+        ...makeFieldConfirmation(0.95),
+        title: compactHashtagConfirmation,
+        artists: compactHashtagConfirmation,
+      },
+    }),
+    "live music",
+    venue,
+  );
+  assert.ok(normalizedHashtagCollisionCandidate);
+  assert.equal(normalizedHashtagCollisionCandidate.titleUsedFallback, true);
+  assert.deepEqual(normalizedHashtagCollisionCandidate.artists, []);
+  assert.notEqual(normalizedHashtagCollisionCandidate.lineTitle, compactHashtagIdentity);
+
+  const recurringStartDate = nextIsoDateForWeekday(5, 14);
+  const [recurringYear, recurringMonth, recurringDay] = recurringStartDate.split("-");
+  const recurringStartLabel = `${Number(recurringDay)}.${recurringMonth}.${recurringYear.slice(2)}`;
+  const recurringSourceText = [
+    `WEEKLY FROM ${recurringStartLabel}`,
+    "FRIDAY 20:30",
+  ].join("\n");
+  const recurringCaption = [
+    recurringSourceText,
+    identitySnippet,
+    "#OBato",
+  ].join("\n");
+  const recurringPost = makeInstagramPost({
+    caption: recurringCaption,
+    postType: "image",
+    username: "teniskiklubsenjak",
+  });
+  const recurringCandidates = extractModelSplitEventCandidates(
+    recurringPost,
+    makeSingleOccurrenceExtraction({
+      source_caption: recurringCaption,
+      schedule_entries: [
+        makeScheduleEntry({
+          date: recurringStartDate,
+          dateLabel: recurringStartLabel,
+          sourceText: recurringSourceText,
+        }),
+      ],
+    }),
+    "live music",
+    venue,
+  );
+  assert.ok(recurringCandidates.length > 1);
+  for (const candidate of recurringCandidates) {
+    assert.equal(candidate.titleUsedFallback, true);
+    assert.deepEqual(candidate.artists, []);
+    assert.notEqual(candidate.lineTitle, "O Bato");
+  }
+
+  const creditSnippet = "Photo: O Bato";
+  const creditPost = makeInstagramPost({
+    caption: `${creditSnippet} #OBato`,
+    postType: "image",
+    username: "teniskiklubsenjak",
+  });
+  const creditConfirmation = {
+    confidence: 0.95,
+    found_in: ["caption"],
+    evidence: exactIdentityEvidence,
+    evidence_snippets: [{ source: "caption", text: exactIdentityEvidence }],
+    notes: "Incorrect model attribution fixture.",
+  };
+  const [creditCandidate] = extractModelSplitEventCandidates(
+    creditPost,
+    makeSingleOccurrenceExtraction({
+      source_caption: creditPost.caption,
+      field_confirmation: {
+        ...makeFieldConfirmation(0.95),
+        title: creditConfirmation,
+        artists: creditConfirmation,
+      },
+    }),
+    "live music",
+    venue,
+  );
+  assert.ok(creditCandidate);
+  assert.equal(creditCandidate.titleUsedFallback, true);
+  assert.deepEqual(creditCandidate.artists, []);
+
+  const multiCaption = [
+    "Sjajni O Bato i Drugi Bend nastupaju ovog vikenda.",
+    "#OBato #DrugiBend",
+  ].join("\n");
+  const multiPost = makeInstagramPost({
+    caption: multiCaption,
+    postType: "image",
+    username: "teniskiklubsenjak",
+  });
+  const multiConfirmation = {
+    confidence: 0.95,
+    found_in: ["caption"],
+    evidence: multiCaption.split("\n")[0],
+    evidence_snippets: [{ source: "caption", text: multiCaption.split("\n")[0] }],
+    notes: "Post-level identity evidence must not cross schedule rows.",
+  };
+  const multiCandidates = extractModelSplitEventCandidates(
+    multiPost,
+    makeSingleOccurrenceExtraction({
+      source_caption: multiCaption,
+      schedule_entries: [
+        makeScheduleEntry(),
+        makeScheduleEntry({
+          date: secondDate,
+          dateLabel: secondDateLabel,
+          title: "Drugi Bend",
+          artists: ["Drugi Bend"],
+        }),
+      ],
+      field_confirmation: {
+        ...makeFieldConfirmation(0.95),
+        title: multiConfirmation,
+        artists: multiConfirmation,
+      },
+    }),
+    "live music",
+    venue,
+  );
+  assert.equal(multiCandidates.length, 2);
+  for (const candidate of multiCandidates) {
+    assert.equal(candidate.titleUsedFallback, true);
+    assert.deepEqual(candidate.artists, []);
+    assert.ok(!["O Bato", "Drugi Bend"].includes(candidate.lineTitle));
+  }
 }
 
 function runSourceGroundingAdversarialQa() {
@@ -11725,6 +12062,7 @@ runVenueAccountCanonicalLocationQa();
 runVideoModerationQa();
 runUnverifiedPosterScheduleModerationQa();
 runHashtagOnlyScheduleIdentityQa();
+runSingleOccurrenceComplementaryIdentityQa();
 runSourceGroundingAdversarialQa();
 runMaintenancePromotionGroundingQa();
 runHallucinatedPhotoScheduleGroundingQa();
