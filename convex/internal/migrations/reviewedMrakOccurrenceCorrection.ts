@@ -1,6 +1,7 @@
 import type { Doc } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
 import { writeEventAuditLog } from "../../eventDomain/persistence";
+import { refreshEventPublicationStates } from "../../publicationPolicy";
 import { markSourceOccurrenceTopologyMutation } from "../sourceOccurrenceTopologyEpoch";
 import { buildEventOccurrenceIndexPatch } from "../../sourceOccurrences";
 import { exactJsonValue } from "../../../lib/events/exact-json-value";
@@ -417,6 +418,7 @@ export async function correctReviewedMrakSourceOccurrenceHandler(
         },
       },
     );
+    await refreshEventPublicationStates(ctx, [inspection.event._id]);
     await markSourceOccurrenceTopologyMutation(ctx, { verified: true });
   }
   await recordEventDomainMigrationProgress({

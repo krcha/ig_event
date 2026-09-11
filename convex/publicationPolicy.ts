@@ -62,6 +62,20 @@ export async function evaluateEventPublication(
       moderationStatus: event.status,
     });
   }
+  if (
+    !event.venueId &&
+    (await hasCompleteEventVenueBindingCoverage(ctx))
+  ) {
+    // After the zero-exception binding migration, an approved event cannot
+    // become materialized-public through mutable legacy name/handle aliases.
+    // A canonical venue binding must be written first and will refresh this
+    // decision in the same mutation.
+    return evaluatePublicationEligibility({
+      canonicalSourceGroundingVerified: false,
+      moderationStatus: event.status,
+      venueResolutionStatus: "unresolved",
+    });
+  }
   const attachedOccurrences = await ctx.db
     .query("sourceOccurrences")
     .withIndex("by_canonical_event", (q) => q.eq("canonicalEventId", event._id))

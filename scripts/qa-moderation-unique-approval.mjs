@@ -224,6 +224,7 @@ function makeCtx({
       );
     }
     if (table === "mediaAssets") return [];
+    if (table === "eventDomainMigrationState") return [];
     if (table === "instagramEventSources") return [];
     if (table === "sourceOccurrences") return [];
     if (table === "venueIdentities") {

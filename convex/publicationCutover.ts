@@ -1,6 +1,7 @@
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { PUBLICATION_POLICY_VERSION } from "../lib/domain/publication/policy";
+import { hasCompleteEventVenueBindingCoverage } from "./internal/eventVenueBindingCoverage";
 import { readSourceOccurrenceTopologyEpoch } from "./internal/sourceOccurrenceTopologyEpoch";
 
 export const PUBLICATION_MIGRATION_STATE_KEY =
@@ -59,17 +60,26 @@ export function isPublicationMigrationStateEquivalent(
 }
 
 /**
- * The indexed path is enabled only by one clean, explicitly reviewed state and
- * the exact source-topology frontier that was audited. Any topology drift
- * immediately falls back to the visibility-safe compatibility paginator.
+ * The indexed path is enabled only by one clean, explicitly reviewed state.
+ * Proven-safe topology writers may advance both topology epochs after the
+ * audit; any unverified gap or regression behind the audited frontier falls
+ * back to the visibility-safe compatibility paginator. Once the venue-binding
+ * migration proves zero-exception coverage, venue/identity writes are safe for
+ * materialized reads: linked venue lifecycle is rechecked at projection time,
+ * while identity changes cannot rebind a canonical event implicitly. Legacy
+ * topology rows without unverified-history metadata may match only the exact
+ * topology epoch covered by the publication audit.
  */
 export async function resolvePublicationReadMode(
   ctx: ReadContext,
 ): Promise<PublicationReadMode> {
-  const [state, topologyEpoch] = await Promise.all([
+  const [state, topologyEpoch, completeVenueBindingCoverage] = await Promise.all([
     loadPublicationMigrationState(ctx),
     readSourceOccurrenceTopologyEpoch(ctx),
+    hasCompleteEventVenueBindingCoverage(ctx),
   ]);
+  const auditedTopologyEpoch = state?.sourceTopologyEpoch;
+  const auditStartedAt = state?.auditStartedAt;
   if (
     !state ||
     !state.readCutoverEnabled ||
@@ -78,12 +88,19 @@ export async function resolvePublicationReadMode(
     state.reviewedAt === undefined ||
     !state.reviewedBy?.trim() ||
     !state.reviewNote?.trim() ||
-    state.sourceTopologyEpoch === undefined ||
-    state.auditStartedAt === undefined ||
+    typeof auditedTopologyEpoch !== "number" ||
+    !Number.isSafeInteger(auditedTopologyEpoch) ||
+    auditedTopologyEpoch < 0 ||
+    typeof auditStartedAt !== "number" ||
+    !Number.isFinite(auditStartedAt) ||
+    auditStartedAt < 0 ||
     !topologyEpoch ||
     topologyEpoch.currentEpoch !== topologyEpoch.verifiedEpoch ||
-    topologyEpoch.currentEpoch !== state.sourceTopologyEpoch ||
-    (await hasPublicationDependencyWriteSince(ctx, state.auditStartedAt))
+    topologyEpoch.currentEpoch < auditedTopologyEpoch ||
+    (topologyEpoch.lastUnverifiedEpoch === undefined
+      ? topologyEpoch.currentEpoch !== auditedTopologyEpoch
+      : topologyEpoch.lastUnverifiedEpoch > auditedTopologyEpoch) ||
+    !completeVenueBindingCoverage
   ) {
     return "compatibility";
   }

@@ -1049,6 +1049,7 @@ export default defineSchema({
     key: v.literal("source-occurrence-topology-v1"),
     currentEpoch: v.number(),
     verifiedEpoch: v.number(),
+    lastUnverifiedEpoch: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_key", ["key"]),

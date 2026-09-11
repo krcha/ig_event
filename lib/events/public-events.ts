@@ -349,6 +349,26 @@ function prunePublicEventsCache(now = Date.now()): void {
   }
 }
 
+function cachePendingPublicEventsLoad(
+  cacheKey: string,
+  promise: Promise<PublicEvent[]>,
+  now: number,
+): void {
+  publicEventsCache.set(cacheKey, {
+    expiresAt: Number.POSITIVE_INFINITY,
+    promise,
+  });
+  void promise.then(
+    () => {
+      const current = publicEventsCache.get(cacheKey);
+      if (current?.promise === promise) {
+        current.expiresAt = Date.now() + PUBLIC_EVENTS_CACHE_TTL_MS;
+      }
+    },
+    () => undefined,
+  );
+  prunePublicEventsCache(now);
+}
 
 function normalizePublicEvent(
   event: PublicEvent,
@@ -559,11 +579,7 @@ function getCachedPublicCalendarEventsWindow(
     throw error;
   });
 
-  publicEventsCache.set(cacheKey, {
-    expiresAt: now + PUBLIC_EVENTS_CACHE_TTL_MS,
-    promise,
-  });
-  prunePublicEventsCache(now);
+  cachePendingPublicEventsLoad(cacheKey, promise, now);
 
   return promise;
 }
@@ -700,11 +716,7 @@ function getCachedApprovedUpcomingEvents(
     throw error;
   });
 
-  publicEventsCache.set(cacheKey, {
-    expiresAt: now + PUBLIC_EVENTS_CACHE_TTL_MS,
-    promise,
-  });
-  prunePublicEventsCache(now);
+  cachePendingPublicEventsLoad(cacheKey, promise, now);
 
   return promise;
 }

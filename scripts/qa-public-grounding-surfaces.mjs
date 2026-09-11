@@ -180,7 +180,8 @@ const discoverCtx = {
     query(table) {
       if (
         table === "publicationMigrationState" ||
-        table === "sourceOccurrenceTopologyEpoch"
+        table === "sourceOccurrenceTopologyEpoch" ||
+        table === "eventDomainMigrationState"
       ) {
         return {
           withIndex(_index, configure) {

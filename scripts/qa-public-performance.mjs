@@ -251,8 +251,8 @@ assert.match(
 );
 assert.match(
   publicReadsSource,
-  /export async function listPublicCalendarEventsWindowPaginatedHandler[\s\S]*?return paginatePublicationRows\(\{[\s\S]*?numItems: PUBLIC_EVENT_PAGE_SIZE,[\s\S]*?loadApprovedWindowRawPage\(ctx, readMode, \{[\s\S]*?beforeDate: args\.beforeDate,[\s\S]*?projectVisible:/,
-  "The compact calendar window should use the same single-read pagination adapter.",
+  /export async function listPublicCalendarEventsWindowPaginatedHandler[\s\S]*?return paginatePublicationRows\(\{[\s\S]*?readMode === "materialized"[\s\S]*?MATERIALIZED_PUBLIC_CALENDAR_PAGE_SIZE[\s\S]*?PUBLIC_EVENT_PAGE_SIZE,[\s\S]*?loadApprovedWindowRawPage\(ctx, readMode, \{[\s\S]*?beforeDate: args\.beforeDate,[\s\S]*?projectVisible:/,
+  "The compact calendar window should use the same single-read pagination adapter with bounded mode-specific pages.",
 );
 
 assert.match(
@@ -269,6 +269,22 @@ assert.match(
   publicEventsSource,
   /while \(publicEventsCache\.size > PUBLIC_EVENTS_CACHE_MAX_ENTRIES\)/,
   "Public event cache should prune oldest entries when it exceeds the maximum size.",
+);
+assert.match(
+  publicEventsSource,
+  /function cachePendingPublicEventsLoad\([\s\S]*expiresAt: Number\.POSITIVE_INFINITY,[\s\S]*current\.expiresAt = Date\.now\(\) \+ PUBLIC_EVENTS_CACHE_TTL_MS;/,
+  "Slow public loads should stay coalesced while pending and start their TTL only after settling.",
+);
+assert.doesNotMatch(
+  publicEventsSource,
+  /expiresAt: now \+ PUBLIC_EVENTS_CACHE_TTL_MS/,
+  "A cold public load must not expire from the cache before the load itself completes.",
+);
+assert.equal(
+  (publicEventsSource.match(/cachePendingPublicEventsLoad\(cacheKey, promise, now\);/g) ?? [])
+    .length,
+  2,
+  "Both full-window and compact-calendar loaders should use settlement-based cache expiry.",
 );
 assertDoesNotInclude(
   publicEventsSource,

@@ -1,6 +1,7 @@
 import type { Doc } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
 import { writeEventAuditLog } from "../../eventDomain/persistence";
+import { refreshEventPublicationStates } from "../../publicationPolicy";
 import { buildEventOccurrenceIndexPatch } from "../../sourceOccurrences";
 import { exactJsonValue } from "../../../lib/events/exact-json-value";
 import { sourceOccurrenceRepresentativeMatchesExpected } from "../../../lib/events/source-occurrence-representation";
@@ -391,6 +392,10 @@ export async function rewireReviewedMadlenianumDuplicateHandler(
       actor: REVIEWED_MADLENIANUM_DUPLICATE_REWIRE_KEY,
       patch: auditPatch,
     });
+    await refreshEventPublicationStates(ctx, [
+      inspection.duplicate._id,
+      primaryId,
+    ]);
     await markSourceOccurrenceTopologyMutation(ctx, { verified: true });
   }
   await recordEventDomainMigrationProgress({

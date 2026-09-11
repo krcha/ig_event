@@ -22,12 +22,18 @@ import {
   resolvePublicationReadMode,
   type PublicationReadMode,
 } from "../publicationCutover";
+import { PUBLICATION_POLICY_VERSION } from "../../lib/domain/publication/policy";
 
 // Live publication validation can touch persisted source evidence, venue
 // identities, and occurrence lineage for every raw row. Keep each public UDF
 // comfortably below the isolate CPU budget even when the compatibility path
 // is active after a verified topology change.
 const PUBLIC_EVENT_PAGE_SIZE = 10;
+// A reviewed materialized cutover has already proved policy equivalence and a
+// verified source-topology frontier. Its compact calendar page can therefore
+// amortize HTTP/query overhead without repeating the compatibility path's
+// per-event source-evidence reads. Linked venue lifecycle remains a live gate.
+const MATERIALIZED_PUBLIC_CALENDAR_PAGE_SIZE = 50;
 const MAX_PUBLIC_EVENT_WINDOW_DAYS = 400;
 const MAX_PUBLIC_CALENDAR_WINDOW_DAYS = 45;
 const PUBLIC_DUPLICATE_DATE_COHORT_LIMIT = 25;
@@ -262,6 +268,34 @@ async function projectLegacyCompatiblePublicEventPage(
   );
 }
 
+async function projectMaterializedPublicEventPage(
+  ctx: QueryCtx,
+  events: Doc<"events">[],
+) {
+  const currentPublishableEvents = events.filter(
+    (event) =>
+      event.status === "approved" &&
+      event.publicationPolicyVersion === PUBLICATION_POLICY_VERSION &&
+      event.publicationState === "publishable" &&
+      event.publicationReason === "canonical_source_grounding_verified",
+  );
+  const publicVenueIds = await loadPublicVenueIdsForEvents(
+    ctx,
+    currentPublishableEvents,
+  );
+  return currentPublishableEvents
+    .filter(
+      (event) =>
+        event.venueId !== undefined && publicVenueIds.has(event.venueId),
+    )
+    .map((event) =>
+      projectPublicEvent(
+        event,
+        event.venueId !== undefined && publicVenueIds.has(event.venueId),
+      ),
+    );
+}
+
 function toApprovedEventDuplicateRecord(
   event: Doc<"events">,
 ): ApprovedEventDuplicateRecord {
@@ -482,7 +516,10 @@ export async function listPublicCalendarEventsWindowPaginatedHandler(
   return paginatePublicationRows({
     cursor: args.cursor ?? null,
     mode: readMode,
-    numItems: PUBLIC_EVENT_PAGE_SIZE,
+    numItems:
+      readMode === "materialized"
+        ? MATERIALIZED_PUBLIC_CALENDAR_PAGE_SIZE
+        : PUBLIC_EVENT_PAGE_SIZE,
     loadRawPage: ({ cursor, numItems }) =>
       loadApprovedWindowRawPage(ctx, readMode, {
         beforeDate: args.beforeDate,
@@ -491,9 +528,10 @@ export async function listPublicCalendarEventsWindowPaginatedHandler(
         numItems,
       }),
     projectVisible: async (events) =>
-      (await projectLegacyCompatiblePublicEventPage(ctx, events)).map(
-        toPublicCalendarEvent,
-      ),
+      (await (readMode === "materialized"
+        ? projectMaterializedPublicEventPage(ctx, events)
+        : projectLegacyCompatiblePublicEventPage(ctx, events)
+      )).map(toPublicCalendarEvent),
   });
 }
 

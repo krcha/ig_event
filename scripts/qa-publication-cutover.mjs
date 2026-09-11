@@ -10,6 +10,10 @@ import {
   resolvePublicationReadMode,
 } from "../convex/publicationCutover.ts";
 import {
+  finalizeSourceOccurrenceTopologyAudit,
+  markSourceOccurrenceTopologyMutation,
+} from "../convex/internal/sourceOccurrenceTopologyEpoch.ts";
+import {
   decodePublicationCursor,
   encodePublicationCursor,
 } from "../lib/domain/publication/cursor.ts";
@@ -33,6 +37,25 @@ function makeDb() {
       ],
     ]),
     publicationMigrationState: new Map(),
+    eventDomainMigrationState: new Map([
+      [
+        "venue-binding-coverage",
+        {
+          _creationTime: 1,
+          _id: "venue-binding-coverage",
+          completedAt: 1,
+          errorCount: 0,
+          isDone: true,
+          key: "event-venue-bindings-v1",
+          mismatchCount: 0,
+          quarantinedLineageMarkerCount: 0,
+          scannedCount: 1,
+          skippedCount: 0,
+          unchangedCount: 1,
+          updatedCount: 0,
+        },
+      ],
+    ]),
     venueIdentities: new Map(),
     venues: new Map(),
     sourceOccurrenceTopologyEpoch: new Map([
@@ -189,18 +212,113 @@ assert.equal(
   "raw-page-1",
 );
 
-await state.db.patch("topology", { currentEpoch: 8 });
+await state.db.patch("topology", { currentEpoch: 6, verifiedEpoch: 6 });
 assert.equal(
   await resolvePublicationReadMode({ db: state.db }),
   "compatibility",
-  "Any source-topology drift must fail back to the live visibility path.",
+  "A topology frontier behind the reviewed audit must fail closed.",
+);
+await state.db.patch("topology", { currentEpoch: 7, verifiedEpoch: 7 });
+await state.db.patch("topology", { currentEpoch: 8, verifiedEpoch: 8 });
+assert.equal(
+  await resolvePublicationReadMode({ db: state.db }),
+  "compatibility",
+  "A legacy topology row without unverified-history metadata must not advance beyond the publication audit.",
+);
+await state.db.patch("topology", { currentEpoch: 7, verifiedEpoch: 7 });
+const legacyVerifiedTopology = await markSourceOccurrenceTopologyMutation(
+  { db: state.db },
+  { verified: true },
+);
+assert.equal(legacyVerifiedTopology.currentEpoch, legacyVerifiedTopology.verifiedEpoch);
+assert.equal(
+  legacyVerifiedTopology.lastUnverifiedEpoch,
+  7,
+  "The first verified write to a legacy topology row must preserve a conservative history frontier.",
+);
+assert.equal(
+  await resolvePublicationReadMode({ db: state.db }),
+  "materialized",
+  "A proven-safe topology writer must preserve the reviewed materialized read mode.",
+);
+
+const dirtyTopology = await markSourceOccurrenceTopologyMutation(
+  { db: state.db },
+  { verified: false },
+);
+assert.equal(dirtyTopology.lastUnverifiedEpoch, dirtyTopology.currentEpoch);
+assert.equal(
+  await resolvePublicationReadMode({ db: state.db }),
+  "compatibility",
+  "An unverified topology writer must invalidate the reviewed materialized read mode.",
 );
 assert.throws(
   () => decodePublicationCursor(materializedPageCursor, "compatibility"),
   /restart from the first page/iu,
   "A topology fallback must never feed a materialized-index cursor to the compatibility index.",
 );
-await state.db.patch("topology", { currentEpoch: 7 });
+const recertifiedTopology = await finalizeSourceOccurrenceTopologyAudit(
+  { db: state.db },
+  { auditEpoch: dirtyTopology.currentEpoch },
+);
+assert.equal(recertifiedTopology.currentEpoch, recertifiedTopology.verifiedEpoch);
+assert.equal(
+  recertifiedTopology.lastUnverifiedEpoch,
+  dirtyTopology.currentEpoch,
+  "A topology-only audit must retain the last unverified mutation frontier.",
+);
+assert.equal(
+  await resolvePublicationReadMode({ db: state.db }),
+  "compatibility",
+  "A topology-only audit must not launder publication rows invalidated after the publication audit.",
+);
+
+migrationState = [...state.tables.publicationMigrationState.values()][0];
+await reviewMaterializedPublicationReadCutover._handler(
+  { db: state.db },
+  {
+    enable: false,
+    expectedStateUpdatedAt: migrationState.updatedAt,
+    note: "QA publication re-audit after unverified topology",
+    reviewedBy: "qa-operator",
+  },
+);
+const refreshedPublicationAudit =
+  await auditMaterializedPublicationBatch._handler(
+    { db: state.db },
+    { limit: 10, restartCompleted: true },
+  );
+assert.equal(refreshedPublicationAudit.phase, "ready_for_review");
+migrationState = [...state.tables.publicationMigrationState.values()][0];
+await reviewMaterializedPublicationReadCutover._handler(
+  { db: state.db },
+  {
+    enable: true,
+    expectedStateUpdatedAt: migrationState.updatedAt,
+    note: "QA fresh publication audit absorbs unverified frontier",
+    reviewedBy: "qa-operator",
+  },
+);
+assert.equal(
+  await resolvePublicationReadMode({ db: state.db }),
+  "materialized",
+  "A fresh clean publication audit may absorb a previously unverified topology frontier.",
+);
+const inducedTopology = await markSourceOccurrenceTopologyMutation(
+  { db: state.db },
+  { verified: true },
+);
+assert.equal(inducedTopology.currentEpoch, inducedTopology.verifiedEpoch);
+assert.equal(
+  inducedTopology.lastUnverifiedEpoch,
+  dirtyTopology.currentEpoch,
+  "Verified writers must preserve the monotonic last-unverified frontier.",
+);
+assert.equal(
+  await resolvePublicationReadMode({ db: state.db }),
+  "materialized",
+  "A same-transaction publication-preserving writer may advance beyond the clean audit.",
+);
 
 state.tables.venueIdentities.set("identity_after_audit", {
   _creationTime: 2,
@@ -214,6 +332,21 @@ state.tables.venueIdentities.set("identity_after_audit", {
   updatedAt: Date.now() + 1,
   venueId: "venue_qa",
 });
+assert.equal(
+  await resolvePublicationReadMode({ db: state.db }),
+  "materialized",
+  "Identity-only writes cannot invalidate bound-event publication after complete venue-binding coverage.",
+);
+migrationState = [...state.tables.publicationMigrationState.values()][0];
+await reviewMaterializedPublicationReadCutover._handler(
+  { db: state.db },
+  {
+    enable: false,
+    expectedStateUpdatedAt: migrationState.updatedAt,
+    note: "QA dependency-drift cutover review",
+    reviewedBy: "qa-operator",
+  },
+);
 migrationState = [...state.tables.publicationMigrationState.values()][0];
 await assert.rejects(
   reviewMaterializedPublicationReadCutover._handler(
@@ -228,7 +361,45 @@ await assert.rejects(
   /not clean/iu,
   "Venue-identity writes after the audit frontier must block cutover.",
 );
-state.tables.venueIdentities.clear();
+await state.db.patch("identity_after_audit", { updatedAt: 1 });
+const postDependencyPublicationAudit =
+  await auditMaterializedPublicationBatch._handler(
+    { db: state.db },
+    { limit: 10, restartCompleted: true },
+  );
+assert.equal(postDependencyPublicationAudit.phase, "ready_for_review");
+await state.db.patch("venue-binding-coverage", { isDone: false });
+assert.equal(
+  await resolvePublicationReadMode({ db: state.db }),
+  "compatibility",
+  "Materialized reads must require complete venue-binding coverage.",
+);
+migrationState = [...state.tables.publicationMigrationState.values()][0];
+await assert.rejects(
+  reviewMaterializedPublicationReadCutover._handler(
+    { db: state.db },
+    {
+      enable: true,
+      expectedStateUpdatedAt: migrationState.updatedAt,
+      note: "QA incomplete venue-binding coverage must fail",
+      reviewedBy: "qa-operator",
+    },
+  ),
+  /not clean/iu,
+  "Incomplete venue-binding coverage must block cutover enablement.",
+);
+await state.db.patch("venue-binding-coverage", { isDone: true });
+
+migrationState = [...state.tables.publicationMigrationState.values()][0];
+await reviewMaterializedPublicationReadCutover._handler(
+  { db: state.db },
+  {
+    enable: true,
+    expectedStateUpdatedAt: migrationState.updatedAt,
+    note: "QA restored venue-binding coverage",
+    reviewedBy: "qa-operator",
+  },
+);
 
 migrationState = [...state.tables.publicationMigrationState.values()][0];
 const disabled = await reviewMaterializedPublicationReadCutover._handler(
@@ -264,6 +435,29 @@ await assert.rejects(
   ),
   /not clean/iu,
 );
+
+{
+  const legacyTopologyAudit = makeDb();
+  await legacyTopologyAudit.db.patch("topology", {
+    currentEpoch: 8,
+    verifiedEpoch: 7,
+  });
+  const certified = await finalizeSourceOccurrenceTopologyAudit(
+    { db: legacyTopologyAudit.db },
+    { auditEpoch: 8 },
+  );
+  assert.equal(certified.currentEpoch, certified.verifiedEpoch);
+  assert.equal(
+    certified.lastUnverifiedEpoch,
+    8,
+    "A topology audit must persist a conservative history frontier on legacy rows.",
+  );
+  assert.equal(
+    legacyTopologyAudit.tables.sourceOccurrenceTopologyEpoch.get("topology")
+      .lastUnverifiedEpoch,
+    8,
+  );
+}
 
 {
   const corrupted = makeDb();
@@ -318,5 +512,5 @@ assert.match(publicReadsSource, /decodePublicationCursor/u);
 assert.match(publicReadsSource, /encodePublicationCursor/u);
 
 console.log(
-  "Publication cutover QA passed (dry-run backfill, stable audit, explicit indexed-read review, topology fallback, rollback, and drift blocking).",
+  "Publication cutover QA passed (dry-run backfill, stable audit, explicit indexed-read review, monotonic unverified frontier, verified topology induction, venue coverage, rollback, and drift blocking).",
 );

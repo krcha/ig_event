@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 
-import { getPublicDuplicateEventIds } from "../convex/events.ts";
+import {
+  getPublicDuplicateEventIds,
+  listPublicCalendarEventsWindowPaginated,
+} from "../convex/events.ts";
 import { projectPublicEvent } from "../convex/publicEventProjection.ts";
 import { buildNormalizedEventVenueIdentity } from "../lib/events/event-venue-identity.ts";
 import {
@@ -160,7 +163,12 @@ const calendarQueryFacadeSource = section(
 assert.match(
   publicReadsSource,
   /const PUBLIC_EVENT_PAGE_SIZE = 10;/,
-  "Public event pages must stay below the production isolate timeout threshold.",
+  "Compatibility public event pages must stay below the production isolate timeout threshold.",
+);
+assert.match(
+  publicReadsSource,
+  /const MATERIALIZED_PUBLIC_CALENDAR_PAGE_SIZE = 50;/,
+  "A reviewed materialized calendar read should amortize request overhead with a bounded page.",
 );
 assert.match(
   calendarQueryFacadeSource,
@@ -174,13 +182,13 @@ assert.match(
 );
 assert.match(
   calendarQuerySource,
-  /paginatePublicationRows\(\{[\s\S]*numItems: PUBLIC_EVENT_PAGE_SIZE/,
-  "Compact calendar reads must use a fixed server-owned raw page size.",
+  /readMode === "materialized"[\s\S]*MATERIALIZED_PUBLIC_CALENDAR_PAGE_SIZE[\s\S]*PUBLIC_EVENT_PAGE_SIZE/,
+  "Compact calendar reads must choose a fixed server-owned page size for each trusted read mode.",
 );
 assert.match(
   calendarQuerySource,
-  /projectLegacyCompatiblePublicEventPage\(ctx, events\)/,
-  "The public calendar must revalidate each bounded raw page while preserving approved legacy rows.",
+  /readMode === "materialized"[\s\S]*projectMaterializedPublicEventPage\(ctx, events\)[\s\S]*projectLegacyCompatiblePublicEventPage\(ctx, events\)/,
+  "The calendar must use the audited materialized projection only after cutover and retain live compatibility validation for rollback.",
 );
 assert.doesNotMatch(
   calendarQuerySource,
@@ -190,6 +198,174 @@ assert.doesNotMatch(
   eventsSource,
   /export const listPublicCalendarEventsWindow = query/,
   "The pressure-prone non-paginated calendar compatibility endpoint must be retired.",
+);
+
+const materializedCalendarEvent = {
+  _creationTime: 1,
+  _id: "event-materialized-calendar",
+  artists: ["QA Artist"],
+  createdAt: 1,
+  date: "2026-09-12",
+  eventType: "music",
+  publicationPolicyVersion: 1,
+  publicationReason: "canonical_source_grounding_verified",
+  publicationState: "publishable",
+  status: "approved",
+  title: "Materialized calendar event",
+  updatedAt: 1,
+  venue: "QA Venue",
+  venueId: "venue-public",
+};
+const staleMaterializedCalendarEvent = {
+  ...materializedCalendarEvent,
+  _id: "event-stale-materialized-calendar",
+  publicationPolicyVersion: 0,
+};
+const privateVenueMaterializedCalendarEvent = {
+  ...materializedCalendarEvent,
+  _id: "event-private-venue-materialized-calendar",
+  venueId: "venue-private",
+};
+const unboundMaterializedCalendarEvent = {
+  ...materializedCalendarEvent,
+  _id: "event-unbound-materialized-calendar",
+  venueId: undefined,
+};
+let materializedCalendarPageSize = null;
+const materializedMigrationState = {
+  auditDone: true,
+  auditDriftCount: 0,
+  auditScannedCount: 2,
+  auditStartedAt: 100,
+  backfillDone: true,
+  completedAt: 200,
+  key: "materialized-publication-v1",
+  mismatchCount: 0,
+  phase: "cutover_enabled",
+  policyVersion: 1,
+  readCutoverEnabled: true,
+  reviewedAt: 201,
+  reviewedBy: "qa-operator",
+  reviewNote: "QA materialized calendar performance review",
+  scannedCount: 2,
+  sourceTopologyEpoch: 7,
+};
+const materializedTopologyEpoch = {
+  currentEpoch: 7,
+  key: "source-occurrence-topology-v1",
+  verifiedEpoch: 7,
+};
+const materializedVenueBindingState = {
+  completedAt: 100,
+  errorCount: 0,
+  isDone: true,
+  key: "event-venue-bindings-v1",
+  mismatchCount: 0,
+  quarantinedLineageMarkerCount: 0,
+  scannedCount: 2,
+  skippedCount: 0,
+  unchangedCount: 2,
+  updatedCount: 0,
+};
+function materializedIndexBuilder() {
+  const builder = {
+    eq() {
+      return builder;
+    },
+    gte() {
+      return builder;
+    },
+    lt() {
+      return builder;
+    },
+  };
+  return builder;
+}
+const materializedCalendarCtx = {
+  db: {
+    async get(id) {
+      if (id === "venue-public") {
+        return {
+          _id: "venue-public",
+          publicStatus: "published",
+          scrapeActive: true,
+        };
+      }
+      if (id === "venue-private") {
+        return {
+          _id: "venue-private",
+          publicStatus: "hidden",
+          scrapeActive: true,
+        };
+      }
+      throw new Error(`Unexpected materialized related-document read: ${id}`);
+    },
+    query(table) {
+      const chain = {
+        withIndex(index, configure) {
+          configure(materializedIndexBuilder());
+          if (table === "events") {
+            assert.equal(index, "by_publicationState_date");
+          }
+          return chain;
+        },
+        async first() {
+          throw new Error(
+            `Complete venue binding must bypass dependency frontier scan: ${table}`,
+          );
+        },
+        async paginate({ cursor, numItems }) {
+          assert.equal(table, "events");
+          assert.equal(cursor, null);
+          materializedCalendarPageSize = numItems;
+          return {
+            continueCursor: "4",
+            isDone: true,
+            page: [
+              materializedCalendarEvent,
+              staleMaterializedCalendarEvent,
+              privateVenueMaterializedCalendarEvent,
+              unboundMaterializedCalendarEvent,
+            ],
+          };
+        },
+        async take(limit) {
+          assert.equal(limit, 2);
+          if (table === "publicationMigrationState") {
+            return [materializedMigrationState];
+          }
+          if (table === "sourceOccurrenceTopologyEpoch") {
+            return [materializedTopologyEpoch];
+          }
+          if (table === "eventDomainMigrationState") {
+            return [materializedVenueBindingState];
+          }
+          throw new Error(`Materialized calendar unexpectedly queried ${table}.`);
+        },
+      };
+      return chain;
+    },
+  },
+};
+const materializedCalendarPage =
+  await listPublicCalendarEventsWindowPaginated._handler(
+    materializedCalendarCtx,
+    {
+      beforeDate: "2026-10-01",
+      cursor: null,
+      fromDate: "2026-09-01",
+    },
+  );
+assert.equal(materializedCalendarPageSize, 50);
+assert.deepEqual(
+  materializedCalendarPage.page.map((event) => event._id),
+  [materializedCalendarEvent._id],
+  "Materialized calendar reads must reject stale policy, private-venue, and unbound rows without live source-evidence reads.",
+);
+assert.match(
+  materializedCalendarPage.continueCursor,
+  /^event-zeka-publication-cursor-v1:materialized:/,
+  "Materialized calendar cursors must remain isolated from compatibility cursors.",
 );
 
 assert.match(

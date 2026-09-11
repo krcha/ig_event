@@ -30,7 +30,7 @@ export function isCompleteEventVenueBindingCoverage(
 }
 
 export async function hasCompleteEventVenueBindingCoverage(
-  ctx: QueryCtx | MutationCtx,
+  ctx: Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">,
 ): Promise<boolean> {
   const rows = await ctx.db
     .query("eventDomainMigrationState")

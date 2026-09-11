@@ -13,6 +13,7 @@ import {
   isPublicationMigrationStateEquivalent,
   loadPublicationMigrationState,
 } from "../../publicationCutover";
+import { hasCompleteEventVenueBindingCoverage } from "../eventVenueBindingCoverage";
 import { readSourceOccurrenceTopologyEpoch } from "../sourceOccurrenceTopologyEpoch";
 
 const DEFAULT_BATCH_SIZE = 32;
@@ -334,10 +335,14 @@ export const reviewMaterializedPublicationReadCutover = internalMutation({
     if (!state || state.updatedAt !== args.expectedStateUpdatedAt) {
       throw new Error("Publication migration state changed before cutover review.");
     }
-    const topology = await readSourceOccurrenceTopologyEpoch(ctx);
-    const dependencyDrift = state?.auditStartedAt === undefined
-      ? true
-      : await hasPublicationDependencyWriteSince(ctx, state.auditStartedAt);
+    const [topology, completeVenueBindingCoverage, dependencyDrift] =
+      await Promise.all([
+        readSourceOccurrenceTopologyEpoch(ctx),
+        hasCompleteEventVenueBindingCoverage(ctx),
+        state.auditStartedAt === undefined
+          ? Promise.resolve(true)
+          : hasPublicationDependencyWriteSince(ctx, state.auditStartedAt),
+      ]);
     if (
       args.enable &&
       (!isPublicationMigrationStateEquivalent(state) ||
@@ -345,6 +350,7 @@ export const reviewMaterializedPublicationReadCutover = internalMutation({
         !topology ||
         topology.currentEpoch !== topology.verifiedEpoch ||
         topology.currentEpoch !== state.sourceTopologyEpoch ||
+        !completeVenueBindingCoverage ||
         dependencyDrift)
     ) {
       throw new Error("Publication materialization is not clean for indexed read cutover.");

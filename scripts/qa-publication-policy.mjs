@@ -67,6 +67,17 @@ assert.equal(
 );
 
 function makePublicationDb() {
+  const venues = new Map([
+    [
+      "venue-qa",
+      {
+        _id: "venue-qa",
+        name: "QA Venue",
+        publicStatus: "published",
+        scrapeActive: true,
+      },
+    ],
+  ]);
   const events = new Map(
     ["event-a", "event-b"].map((id) => [
       id,
@@ -79,6 +90,7 @@ function makePublicationDb() {
         title: id,
         updatedAt: 1,
         venue: "QA Venue",
+        venueId: "venue-qa",
       },
     ]),
   );
@@ -106,7 +118,7 @@ function makePublicationDb() {
   ]);
   const db = {
     async get(id) {
-      return events.get(id) ?? sourceOccurrences.get(id) ?? null;
+      return events.get(id) ?? sourceOccurrences.get(id) ?? venues.get(id) ?? null;
     },
     async patch(id, patch) {
       const table = events.has(id) ? events : sourceOccurrences;
@@ -137,7 +149,7 @@ function makePublicationDb() {
       return chain;
     },
   };
-  return { db, events, sourceOccurrences };
+  return { db, events, sourceOccurrences, venues };
 }
 
 function makeLegacyVenueRefreshContext() {
@@ -303,6 +315,60 @@ function makeLegacyVenueRefreshContext() {
     allSuperseded.reason,
     "occurrence_incomplete",
     "An all-superseded first-class attachment set must not fall back to legacy publication.",
+  );
+}
+
+{
+  const completeBindingState = {
+    completedAt: 1,
+    errorCount: 0,
+    isDone: true,
+    key: "event-venue-bindings-v1",
+    mismatchCount: 0,
+    quarantinedLineageMarkerCount: 0,
+    scannedCount: 1,
+    skippedCount: 0,
+    unchangedCount: 1,
+    updatedCount: 0,
+  };
+  const unboundDecision = await evaluateEventPublication(
+    {
+      db: {
+        query(table) {
+          assert.equal(table, "eventDomainMigrationState");
+          const chain = {
+            withIndex(_index, apply) {
+              const builder = {
+                eq() {
+                  return builder;
+                },
+              };
+              apply(builder);
+              return chain;
+            },
+            async take() {
+              return [completeBindingState];
+            },
+          };
+          return chain;
+        },
+      },
+    },
+    {
+      _id: "event-unbound-after-coverage",
+      artists: [],
+      date: "2026-09-07",
+      eventType: "culture",
+      status: "approved",
+      title: "Unbound event",
+      updatedAt: 1,
+      venue: "Mutable legacy alias",
+    },
+  );
+  assert.equal(
+    unboundDecision.reason,
+    "venue_unresolved",
+    "Complete venue-binding coverage must keep a later unbound event out of materialized publication.",
   );
 }
 

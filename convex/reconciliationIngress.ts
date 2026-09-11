@@ -16,6 +16,7 @@ import {
   reconciliationIngestionApplyIsEnabled,
 } from "./internal/reconciliationRollout";
 import { executeSourceOccurrenceHandler } from "./internal/reconciliationSourceExecutor";
+import { refreshEventPublicationStates } from "./publicationPolicy";
 
 const genericIngestionAction = v.union(
   v.literal("attach"),
@@ -94,10 +95,14 @@ export const reconcileIngestionPlan = mutation({
     );
 
     if (args.plan.expectedKeys.length === 0) {
-      await reconcileSourceOccurrenceReceiptAndSync(
+      const reconciliation = await reconcileSourceOccurrenceReceiptAndSync(
         ctx,
         args.plan,
         sourceDocument,
+      );
+      await refreshEventPublicationStates(
+        ctx,
+        reconciliation.affectedRepresentativeEventIds,
       );
       return { authority: "reconciliation" as const, outcomes: [] };
     }
