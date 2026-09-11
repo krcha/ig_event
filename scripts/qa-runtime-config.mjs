@@ -86,6 +86,11 @@ assert.match(
   /traefik\.http\.routers\.ig-event-convex\.rule=Host\(`\$\{CONVEX_TRAEFIK_HOST:-convex-events\.ineedtofeedmyrabbit\.com\}`\)/,
   "self-hosted Convex should expose the browser-facing production hostname through Traefik.",
 );
+assert.match(
+  dockerComposeSelfHostedConvexSource,
+  /ISOLATE_ANALYZE_USER_TIMEOUT_SECONDS:\s*\$\{CONVEX_ISOLATE_ANALYZE_USER_TIMEOUT_SECONDS:-60\}/,
+  "self-hosted Convex should allow the reviewed production module set enough bounded analysis time to deploy.",
+);
 
 assert.match(
   envUtilsSource,
