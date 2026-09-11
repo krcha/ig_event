@@ -361,6 +361,72 @@ if (migrationKey) {
   process.exit(0);
 }
 
+if (
+  functionName ===
+  "internal/migrations/publication:backfillMaterializedPublicationBatch"
+) {
+  const alreadyBackfilled = state.publicationState?.backfillDone === true;
+  if (!payload.dryRun) {
+    state.publicationState = {
+      auditDone: false,
+      auditDriftCount: 0,
+      auditScannedCount: 0,
+      backfillDone: true,
+      createdAt: state.publicationState?.createdAt ?? 200,
+      key: "materialized-publication-v1",
+      mismatchCount: 0,
+      phase: "audit",
+      policyVersion: 1,
+      readCutoverEnabled: false,
+      scannedCount: 1,
+      updatedAt: 201,
+      updatedCount: 1,
+    };
+    save();
+  }
+  emit({
+    continueCursor: "",
+    dryRun: payload.dryRun,
+    isDone: true,
+    mismatchCount: 0,
+    phase: payload.dryRun ? "backfill" : "audit",
+    scannedCount: 1,
+    updatedCount: payload.dryRun && alreadyBackfilled ? 0 : 1,
+  });
+  process.exit(0);
+}
+
+if (
+  functionName ===
+  "internal/migrations/publication:auditMaterializedPublicationBatch"
+) {
+  if (!state.publicationState?.backfillDone) {
+    process.stderr.write("fake publication audit requires a backfill\n");
+    process.exit(18);
+  }
+  state.publicationState = {
+    ...state.publicationState,
+    auditDone: true,
+    auditDriftCount: 0,
+    auditScannedCount: state.publicationState.scannedCount,
+    auditStartedAt: 202,
+    completedAt: 203,
+    phase: "ready_for_review",
+    sourceTopologyEpoch: 1,
+    updatedAt: 203,
+  };
+  save();
+  emit({
+    auditDriftCount: 0,
+    auditScannedCount: state.publicationState.auditScannedCount,
+    continueCursor: "",
+    isDone: true,
+    phase: "ready_for_review",
+    sourceTopologyEpoch: 1,
+  });
+  process.exit(0);
+}
+
 if (functionName === "reconciliation:verifyReconciliationRolloutBatch") {
   const first = !state.reconciliationState;
   const now = first ? 100 : 101;
@@ -632,6 +698,49 @@ try {
         "internal/migrations/eventDomain:backfillSourceOccurrenceCanonicalPayloadsBatch",
         "internal/migrations/eventDomain:auditSourceOccurrenceReceiptTopologyBatch",
       ],
+    );
+  }
+
+  {
+    setFakeState();
+    const receiptDir = makeReceiptDir("publication-bounded-batches");
+    const result = runOperator("apply", receiptDir, [
+      "--workflow",
+      "publication",
+      "--confirm",
+      "APPLY_EVENT_DOMAIN_ROLLOUT",
+    ]);
+    assert.equal(result.status, 0, result.stderr);
+    const publicationCalls = readCalls().filter(
+      (call) =>
+        call.command === "run" &&
+        (call.functionName ===
+          "internal/migrations/publication:backfillMaterializedPublicationBatch" ||
+          call.functionName ===
+            "internal/migrations/publication:auditMaterializedPublicationBatch"),
+    );
+    assert.equal(publicationCalls.length, 4);
+    assert.ok(
+      publicationCalls.every((call) => call.payload.limit === 32),
+      "Every publication preview, apply, audit, and post-apply check must use bounded batches.",
+    );
+    assert.equal(
+      publicationCalls.filter((call) => call.payload.dryRun === true).length,
+      2,
+    );
+    const publicationState = JSON.parse(
+      readFileSync(stateFile, "utf8"),
+    ).publicationState;
+    assert.equal(publicationState.phase, "ready_for_review");
+    assert.equal(publicationState.auditDriftCount, 0);
+    assert.equal(publicationState.readCutoverEnabled, false);
+    const receipt = JSON.parse(
+      readFileSync(receiptFiles(receiptDir)[0], "utf8"),
+    );
+    assert.equal(receipt.status, "complete");
+    assert.equal(
+      receipt.gates.at(-1).status,
+      "ready_for_review",
     );
   }
 
