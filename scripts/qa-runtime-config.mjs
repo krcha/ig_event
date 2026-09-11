@@ -167,6 +167,26 @@ assert.match(
   "Release gate should include runtime config QA.",
 );
 assert.match(
+  releaseCheckSource,
+  /RELEASE_CHECK_TIMEOUT_MULTIPLIER/,
+  "Release gates should support a bounded slow-host timeout multiplier.",
+);
+assert.match(
+  releaseCheckSource,
+  /MAX_TIMEOUT_MULTIPLIER = 10/,
+  "The slow-host timeout multiplier must have a hard upper bound.",
+);
+assert.match(
+  releaseCheckSource,
+  /Number\.isInteger\(parsedMultiplier\)[\s\S]*parsedMultiplier >= 1[\s\S]*parsedMultiplier <= MAX_TIMEOUT_MULTIPLIER/,
+  "The slow-host timeout multiplier must accept only bounded positive integers.",
+);
+assert.match(
+  releaseCheckSource,
+  /defaultTimeoutMs \* timeoutMultiplier/,
+  "The slow-host setting should scale each gate's existing timeout rather than replacing its relative bound.",
+);
+assert.match(
   packageJson.scripts.start,
   /next start --keepAliveTimeout 120000/,
   "Next keep-alive must outlive the reverse proxy's 90-second idle connection pool.",

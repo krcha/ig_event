@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import process from "node:process";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+const MAX_TIMEOUT_MULTIPLIER = 10;
 
 const checks = [
   { script: "qa:repo-hygiene", timeoutMs: 30_000 },
@@ -96,10 +97,31 @@ const checks = [
 
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 
+function readTimeoutMultiplier() {
+  const rawMultiplier = process.env.RELEASE_CHECK_TIMEOUT_MULTIPLIER;
+  if (!rawMultiplier) return 1;
+
+  const parsedMultiplier = Number(rawMultiplier);
+  if (
+    Number.isInteger(parsedMultiplier) &&
+    parsedMultiplier >= 1 &&
+    parsedMultiplier <= MAX_TIMEOUT_MULTIPLIER
+  ) {
+    return parsedMultiplier;
+  }
+
+  console.warn(
+    `Ignoring invalid RELEASE_CHECK_TIMEOUT_MULTIPLIER=${JSON.stringify(rawMultiplier)}.`,
+  );
+  return 1;
+}
+
+const timeoutMultiplier = readTimeoutMultiplier();
+
 function readTimeoutMs(defaultTimeoutMs) {
   const rawTimeout = process.env.RELEASE_CHECK_TIMEOUT_MS;
   if (!rawTimeout) {
-    return defaultTimeoutMs;
+    return defaultTimeoutMs * timeoutMultiplier;
   }
 
   const parsedTimeout = Number.parseInt(rawTimeout, 10);
@@ -110,7 +132,7 @@ function readTimeoutMs(defaultTimeoutMs) {
   console.warn(
     `Ignoring invalid RELEASE_CHECK_TIMEOUT_MS=${JSON.stringify(rawTimeout)}.`,
   );
-  return defaultTimeoutMs;
+  return defaultTimeoutMs * timeoutMultiplier;
 }
 
 function formatDuration(ms) {
