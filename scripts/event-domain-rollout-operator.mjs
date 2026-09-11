@@ -26,6 +26,10 @@ const STATE_TABLE_LIMIT = 200;
 const REQUIRED_RECONCILIATION_OPERATIONS = ["attach", "create", "update"];
 const EXPECTED_PUBLICATION_POLICY_VERSION = 1;
 const EXPECTED_RECONCILIATION_POLICY_VERSION = 1;
+// Publication evaluation performs bounded but non-trivial provenance reads.
+// Production-scale datasets can exhaust the Convex isolate budget at the
+// server maximum of 64, so the operator deliberately stays below it.
+const PUBLICATION_MIGRATION_BATCH_SIZE = 32;
 
 const EVENT_DOMAIN_STEPS = [
   {
@@ -1622,7 +1626,7 @@ async function previewPublication(context, postApply = false) {
     const result = await convexRun(
       context,
       "internal/migrations/publication:backfillMaterializedPublicationBatch",
-      { cursor, dryRun: true, limit: 64 },
+      { cursor, dryRun: true, limit: PUBLICATION_MIGRATION_BATCH_SIZE },
     );
     assertRequiredZero(result.mismatchCount, "publication.mismatchCount");
     if (postApply) {
@@ -1670,7 +1674,7 @@ async function applyPublication(context) {
         "internal/migrations/publication:backfillMaterializedPublicationBatch",
         {
           dryRun: false,
-          limit: 64,
+          limit: PUBLICATION_MIGRATION_BATCH_SIZE,
           ...(restart && page === 0 ? { restartCompleted: true } : {}),
         },
       );
@@ -1696,7 +1700,7 @@ async function applyPublication(context) {
         context,
         "internal/migrations/publication:auditMaterializedPublicationBatch",
         {
-          limit: 64,
+          limit: PUBLICATION_MIGRATION_BATCH_SIZE,
           ...(restart && page === 0 && state.auditDone
             ? { restartCompleted: true }
             : {}),

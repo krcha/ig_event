@@ -23,7 +23,11 @@ import {
   type PublicationReadMode,
 } from "../publicationCutover";
 
-const PUBLIC_EVENT_PAGE_SIZE = 50;
+// Live publication validation can touch persisted source evidence, venue
+// identities, and occurrence lineage for every raw row. Keep each public UDF
+// comfortably below the isolate CPU budget even when the compatibility path
+// is active after a verified topology change.
+const PUBLIC_EVENT_PAGE_SIZE = 10;
 const MAX_PUBLIC_EVENT_WINDOW_DAYS = 400;
 const MAX_PUBLIC_CALENDAR_WINDOW_DAYS = 45;
 const PUBLIC_DUPLICATE_DATE_COHORT_LIMIT = 25;

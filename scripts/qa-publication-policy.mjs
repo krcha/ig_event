@@ -398,6 +398,35 @@ function makeLegacyVenueRefreshContext() {
     },
   });
 
+  let rejectedRowReadCount = 0;
+  const rejectedMaterializedContext = {
+    db: {
+      async get() {
+        rejectedRowReadCount += 1;
+        throw new Error("A materialized non-public row must not load related documents.");
+      },
+      query() {
+        rejectedRowReadCount += 1;
+        throw new Error("A materialized non-public row must not query related tables.");
+      },
+    },
+  };
+  assert.equal(
+    await isEventPubliclyVisible(rejectedMaterializedContext, {
+      ...baseEvent,
+      publicationReason: "canonical_source_grounding_missing",
+      publicationState: "pending_verification",
+      venueId: hiddenVenue._id,
+    }),
+    false,
+    "A current materialized non-public decision must reject before venue or provenance reads.",
+  );
+  assert.equal(
+    rejectedRowReadCount,
+    0,
+    "Rejected materialized rows must consume zero related-document reads.",
+  );
+
   assert.equal(
     await isEventPubliclyVisible(
       makeVisibilityCtx([]),

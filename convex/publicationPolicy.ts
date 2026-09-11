@@ -175,6 +175,18 @@ export async function isEventPubliclyVisible(
   options: { allowNeverMigratedApproved?: boolean } = {},
 ): Promise<boolean> {
   if (event.status !== "approved") return false;
+  const hasMaterializedDecision =
+    event.publicationPolicyVersion !== undefined ||
+    event.publicationState !== undefined;
+  if (
+    hasMaterializedDecision &&
+    (event.publicationPolicyVersion !== PUBLICATION_POLICY_VERSION ||
+      event.publicationState !== "publishable")
+  ) {
+    // This is the authoritative result for a materialized non-public row. Do
+    // not spend venue and source-grounding reads proving the same rejection.
+    return false;
+  }
   if (event.venueId) {
     const venue = await ctx.db.get(event.venueId);
     if (!venue || !isVenuePublic(venue)) return false;
@@ -230,16 +242,7 @@ export async function isEventPubliclyVisible(
       return false;
     }
   }
-  const hasMaterializedDecision =
-    event.publicationPolicyVersion !== undefined ||
-    event.publicationState !== undefined;
   if (hasMaterializedDecision) {
-    if (
-      event.publicationPolicyVersion !== PUBLICATION_POLICY_VERSION ||
-      event.publicationState !== "publishable"
-    ) {
-      return false;
-    }
     return isCanonicallyGroundedApprovedEvent(ctx, event);
   }
   return options.allowNeverMigratedApproved === true

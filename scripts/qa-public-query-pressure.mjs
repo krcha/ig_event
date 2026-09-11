@@ -159,7 +159,7 @@ const calendarQueryFacadeSource = section(
 );
 assert.match(
   publicReadsSource,
-  /const PUBLIC_EVENT_PAGE_SIZE = 50;/,
+  /const PUBLIC_EVENT_PAGE_SIZE = 10;/,
   "Public event pages must stay below the production isolate timeout threshold.",
 );
 assert.match(

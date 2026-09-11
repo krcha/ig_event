@@ -75,6 +75,16 @@ assert.match(
   reconciliationTypesSource,
   /RECONCILIATION_POLICY_VERSION\s*=\s*1\s+as const/u,
 );
+assert.match(
+  operatorSource,
+  /const PUBLICATION_MIGRATION_BATCH_SIZE = 32;/u,
+  "Publication rollout batches must remain below the production isolate timeout threshold.",
+);
+assert.doesNotMatch(
+  operatorSource,
+  /(?:backfillMaterializedPublicationBatch|auditMaterializedPublicationBatch)[\s\S]{0,180}limit:\s*64/u,
+  "Publication rollout must not use the Convex server maximum as its operational batch size.",
+);
 
 const qaRoot = mkdtempSync(join(tmpdir(), "event-zeka-rollout-operator-"));
 const targetUrl = "http://127.0.0.1:3210";
