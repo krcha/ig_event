@@ -1,6 +1,6 @@
 # AI Handoff Guide
 
-Last reviewed: 2026-06-05
+Last reviewed: 2026-09-12
 
 This guide is for an AI agent that arrives with only a GitHub link and needs to
 be productive without guessing. Treat it as a map of the current repo, not a
@@ -35,6 +35,18 @@ Known current follow-up:
   repository hygiene guard and includes `next build`.
 - Treat any build failure or timeout as a normal release blocker before handoff
   or production rollout.
+- Source-content revisions with retained satisfied siblings must not partially
+  rewrite a receipt-wide fingerprint after publication reads or complete
+  receipt-topology audit coverage is established. The shared satisfaction helper
+  refuses that write before receipt/link/occurrence changes; combined mutation
+  failures remain retryable, not clean duplicate successes. New, unchanged,
+  single-child, and explicitly retired-sibling paths remain supported.
+- This guard is containment, not atomic multi-child re-attestation. A revised
+  multi-event source can remain incomplete/pending verification until all retained
+  children are re-attested together. Epoch-integrity QA exercises real registered
+  mutation handlers with explicitly synthetic transaction staging; it is not a
+  live Convex engine rollback test. Do not claim deployed readiness from local
+  QA alone, or advance verified epochs to hide an unverified gap.
 
 ## First 15 Minutes From A GitHub Link
 

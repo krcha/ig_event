@@ -1,12 +1,14 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { buildInstagramSourceOccurrenceFingerprint } from "../../lib/domain/occurrences/source-fingerprint";
 import { adaptInstagramScrapedPostToSourceDocument } from "../../lib/domain/source-documents";
 import { isCrossPostCampaignLineageEvent } from "../../lib/events/cross-post-campaign-aggregate-attestation";
 import { markSourceOccurrenceTopologyMutation } from "./sourceOccurrenceTopologyEpoch";
 import { sourceOccurrenceRepresentativeMatchesExpected } from "../../lib/events/source-occurrence-representation";
 import { syncSourceOccurrencePlan } from "../sourceOccurrences";
+import { loadPublicationMigrationState } from "../publicationCutover";
+import { hasCompleteReceiptTopologyCoverage } from "./receiptTopologyCoverage";
 import {
   assertSourceOccurrenceSyncPlanWithinBounds,
   isSourceOccurrenceBoundedString,
@@ -820,6 +822,20 @@ export async function recordSourceOccurrenceSatisfaction(
     )
   ) {
     throw new Error("Distinct source occurrences require distinct representative events.");
+  }
+  if (!topologyEpochVerified) {
+    const [publicationState, completeReceiptTopologyCoverage] = await Promise.all([
+      loadPublicationMigrationState(ctx),
+      hasCompleteReceiptTopologyCoverage(ctx),
+    ]);
+    if (publicationState?.readCutoverEnabled || completeReceiptTopologyCoverage) {
+      // Established audit authority cannot be invalidated by a partial source
+      // revision. The caller must re-attest all retained children atomically;
+      // throwing also rolls back earlier event writes in combined mutations.
+      throw new ConvexError(
+        "Revised multi-occurrence sources require complete re-attestation before changing verified publication topology.",
+      );
+    }
   }
   const satisfiedOccurrences = [
     ...retainedOccurrences,
