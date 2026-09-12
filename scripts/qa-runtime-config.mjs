@@ -78,8 +78,13 @@ assert.match(
 );
 assert.match(
   dockerComposeSelfHostedConvexSource,
-  /healthcheck:[\s\S]*?start_period:\s*5m/,
+  /healthcheck:[\s\S]*?start_period:\s*15m/,
   "self-hosted Convex should keep fast startup probes active across slow VPS cold starts.",
+);
+assert.match(
+  dockerComposeSelfHostedConvexSource,
+  /healthcheck:[\s\S]*?interval:\s*30s/,
+  "self-hosted Convex should continue bounded frequent health probes after the startup window rather than waiting two hours.",
 );
 assert.match(
   dockerComposeSelfHostedConvexSource,

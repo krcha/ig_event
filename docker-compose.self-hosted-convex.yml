@@ -55,13 +55,13 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3210/version"]
-      interval: 2h
+      interval: 30s
       timeout: 5s
       retries: 6
-      # Cold starts can exceed 20 seconds on the production VPS. Keep the
-      # fast startup probe active long enough to register the backend healthy
-      # before Docker falls back to the two-hour steady-state interval.
-      start_period: 5m
+      # CPU/storage contention can delay cold starts beyond five minutes.
+      # Keep fast startup probes active for 15 minutes, then poll every 30s
+      # so a late listener cannot miss a multi-hour health-check interval.
+      start_period: 15m
       start_interval: 5s
 
   convex-dashboard:
