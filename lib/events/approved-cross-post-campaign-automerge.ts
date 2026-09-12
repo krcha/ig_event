@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import type { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
+import { ConvexError } from "convex/values";
 import { getBelgradeDayKey } from "../pipeline/belgrade-day-key";
 import { canonicalizeEventType } from "../taxonomy/venue-types";
 import {
   buildCrossPostPromotionCoalescingPlan,
+  CROSS_POST_VERIFIED_TOPOLOGY_COALESCING_REFUSAL,
   deriveAutomaticCrossPostCampaignIdentity,
   deriveExclusiveHashtagCrossPostCampaignIdentity,
   deriveCrossPostPromotionSharedEvidenceAnchors,
@@ -522,8 +524,21 @@ function scannedCohortHasAutomaticCampaignProof(
   );
 }
 
+function coalescingErrorMessage(error: unknown): string {
+  // With production redaction, the HTTP SDK preserves application-error data
+  // separately from its generic message. Trust only our exact public refusal,
+  // never arbitrary error.data strings or objects from another failure.
+  if (
+    error instanceof ConvexError &&
+    error.data === CROSS_POST_VERIFIED_TOPOLOGY_COALESCING_REFUSAL
+  ) {
+    return CROSS_POST_VERIFIED_TOPOLOGY_COALESCING_REFUSAL;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
 function isSafetyRefusal(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = coalescingErrorMessage(error);
   return /arguments are invalid|requires one exact|neither ready|precondition failed|occurrence proof failed|must be individually source-grounded|primary occurrence must match|cannot satisfy variant receipt|canonical occurrence|is ambiguous/i.test(
     message,
   );
@@ -635,7 +650,7 @@ async function runCohort(
       if (isSafetyRefusal(error)) {
         return {
           state: "skipped",
-          reason: error instanceof Error ? error.message : "context safety refusal",
+          reason: coalescingErrorMessage(error),
         };
       }
       throw error;
@@ -733,10 +748,7 @@ async function runCohort(
   if (isSafetyRefusal(lastMutationError)) {
     return {
       state: "skipped",
-      reason:
-        lastMutationError instanceof Error
-          ? lastMutationError.message
-          : "mutation safety refusal",
+      reason: coalescingErrorMessage(lastMutationError),
     };
   }
   throw lastMutationError instanceof Error

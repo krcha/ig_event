@@ -1,9 +1,11 @@
+import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import {
   buildCrossPostPromotionCoalescingPlan,
   captionsHaveExactCampaignHashtagAnchors,
   CROSS_POST_PROMOTION_COALESCING_POLICY_VERSION,
+  CROSS_POST_VERIFIED_TOPOLOGY_COALESCING_REFUSAL,
   deriveAutomaticCrossPostCampaignIdentity,
   deriveExclusiveHashtagCrossPostCampaignIdentity,
   hasAutomaticCrossPostCanonicalVenueEvidence,
@@ -24,9 +26,11 @@ import { normalizeHandle } from "../../lib/pipeline/venue-normalization";
 import { canonicalizeEventType } from "../../lib/taxonomy/venue-types";
 import { isVenuePublic } from "../../lib/venues/venue-lifecycle";
 import { requireAdminOrServiceSecret } from "../authz";
+import { hasCompleteReceiptTopologyCoverage } from "../internal/receiptTopologyCoverage";
 import { assertExistingSourceOccurrenceReceiptWithinBounds } from "../internal/sourceOccurrenceReceipts";
 import { markSourceOccurrenceTopologyMutation } from "../internal/sourceOccurrenceTopologyEpoch";
 import { isCanonicallyGroundedApprovedEvent } from "../publicEventGrounding";
+import { loadPublicationMigrationState } from "../publicationCutover";
 import {
   SavedEventRepositoryConflict,
   savedEventRepository,
@@ -747,6 +751,21 @@ export async function coalesceApprovedCrossPostPromotionOccurrencesHandler(
     throw new Error(
       "Cross-post promotion coalescing requires unique events, links, and receipts.",
     );
+  }
+
+  // This compatibility coalescer keeps immutable aggregate source-link
+  // snapshots on rejected variants and detaches their normalized occurrences.
+  // Refreshing publication alone cannot prove that changed receipt topology.
+  // Do not invalidate an established verified frontier (or an enabled public
+  // cutover) until coalescing can re-attest that complete lineage atomically.
+  // Expose only this fixed, non-sensitive application-error data: production
+  // redacts ordinary Error messages, and callers must still report a skip.
+  const [publicationState, completeReceiptTopologyCoverage] = await Promise.all([
+    loadPublicationMigrationState(ctx),
+    hasCompleteReceiptTopologyCoverage(ctx),
+  ]);
+  if (publicationState?.readCutoverEnabled || completeReceiptTopologyCoverage) {
+    throw new ConvexError(CROSS_POST_VERIFIED_TOPOLOGY_COALESCING_REFUSAL);
   }
 
   const targetVenue = await ctx.db.get(args.targetVenueId);

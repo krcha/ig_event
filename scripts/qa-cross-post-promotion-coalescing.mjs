@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { ConvexError } from "convex/values";
 
 import {
   backfillEventVenueIdentityBatch,
@@ -21,6 +22,7 @@ import {
 import { isCanonicallyGroundedApprovedEvent } from "../convex/publicEventGrounding.ts";
 import {
   buildCrossPostPromotionCoalescingPlan,
+  CROSS_POST_VERIFIED_TOPOLOGY_COALESCING_REFUSAL,
   deriveExclusiveHashtagCrossPostCampaignIdentity,
 } from "../lib/events/cross-post-promotion-coalescing.ts";
 import { exactJsonValue } from "../lib/events/exact-json-value.ts";
@@ -372,6 +374,7 @@ function makeDb() {
         },
       ],
     ]),
+    publicationMigrationState: new Map(),
     eventAuditLog: new Map(),
     campaignLineageReattestations: new Map(),
     eventDomainMigrationState: new Map([
@@ -626,6 +629,71 @@ function validArgs(state) {
       "Reviewed five posts from one promoter: same Ariana party, KC Grad, date, and start time.",
     serviceSecret: process.env.CRON_SECRET,
   };
+}
+
+for (const protectedState of [
+  "publication_cutover",
+  "publication_cutover_with_dirty_topology",
+  "verified_receipt_topology",
+  "verified_receipt_topology_without_publication_state",
+]) {
+  const protectedCampaign = makeDb();
+  if (protectedState.startsWith("publication_cutover")) {
+    protectedCampaign.tables.publicationMigrationState.set("publication", {
+      _id: "publication",
+      key: "materialized-publication-v1",
+      readCutoverEnabled: true,
+    });
+    if (protectedState.endsWith("dirty_topology")) {
+      const topology = protectedCampaign.tables.sourceOccurrenceTopologyEpoch.get(
+        "cross-post-source-occurrence-topology-epoch",
+      );
+      topology.currentEpoch = 1;
+      topology.lastUnverifiedEpoch = 1;
+    }
+  } else {
+    protectedCampaign.tables.eventDomainMigrationState.set("receipt-topology", {
+      _id: "receipt-topology",
+      key: "source-occurrence-receipt-topology-v1",
+      phase: "receipt_topology_audit",
+      isDone: true,
+      completedAt: 1,
+      topologyEpoch: 0,
+      mismatchCount: 0,
+      updatedCount: 0,
+      scannedCount: 5,
+      unchangedCount: 5,
+    });
+    if (protectedState === "verified_receipt_topology") {
+      protectedCampaign.tables.publicationMigrationState.set("publication", {
+        _id: "publication",
+        key: "materialized-publication-v1",
+        readCutoverEnabled: false,
+      });
+    }
+  }
+  const before = structuredClone(protectedCampaign.tables);
+  let attemptedWrites = 0;
+  for (const method of ["patch", "delete", "insert"]) {
+    protectedCampaign.db[method] = async () => {
+      attemptedWrites += 1;
+      throw new Error("Protected campaign must refuse before any write.");
+    };
+  }
+  await assert.rejects(
+    coalesceApprovedCrossPostPromotionOccurrences._handler(
+      serviceCtx(protectedCampaign),
+      validArgs(protectedCampaign),
+    ),
+    (error) => {
+      assert.ok(error instanceof ConvexError);
+      assert.equal(error.data, CROSS_POST_VERIFIED_TOPOLOGY_COALESCING_REFUSAL);
+      return true;
+    },
+    protectedState,
+  );
+  assert.equal(attemptedWrites, 0, protectedState);
+  assert.deepEqual(protectedCampaign.tables, before, protectedState);
 }
 
 function exclusiveCampaignIdentity(state, eventIds) {
@@ -2320,5 +2388,5 @@ assert.ok(
 }
 
 console.log(
-  "Cross-post promotion coalescing QA passed: the five Ariana/KC Grad promos leave one approved event, source links retain post-specific evidence lineage, every receipt remains live-satisfied by the primary, rollback data is exact, saves survive, and stale versions/time/venue/theme/anchor conflicts fail closed.",
+  "Cross-post promotion coalescing QA passed: verified receipt topology or enabled publication cutover refuses before any write; legacy five-post coalescing retains exact evidence, live receipts, rollback data, and saves; stale or conflicting proofs fail closed.",
 );

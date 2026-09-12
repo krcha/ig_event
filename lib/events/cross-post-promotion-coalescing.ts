@@ -1,4 +1,6 @@
 export const CROSS_POST_PROMOTION_COALESCING_POLICY_VERSION = 1;
+export const CROSS_POST_VERIFIED_TOPOLOGY_COALESCING_REFUSAL =
+  "Cross-post promotion coalescing precondition failed: verified source topology or publication cutover requires dedicated atomic lineage re-attestation; campaign cohort skipped.";
 
 const MAX_CANDIDATE_COUNT = 8;
 export const MAX_AUTOMATIC_CROSS_POST_SOURCE_HISTORY = 512;

@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { ConvexHttpClient } from "convex/browser";
+import { ConvexError } from "convex/values";
 import {
   buildApprovedCrossPostCampaignCohorts,
   runApprovedCrossPostCampaignAutoCoalescing,
 } from "../lib/events/approved-cross-post-campaign-automerge.ts";
 import {
   deriveAutomaticCrossPostCampaignIdentity,
+  CROSS_POST_VERIFIED_TOPOLOGY_COALESCING_REFUSAL,
   deriveExclusiveHashtagCrossPostCampaignIdentity,
   deriveCrossPostPromotionSharedEvidenceAnchors,
 } from "../lib/events/cross-post-promotion-coalescing.ts";
@@ -426,6 +429,12 @@ function clientFor(events, options = {}) {
         calls.mutation += 1;
         calls.mutationArgs.push(structuredClone(args));
         assert.equal(args.serviceSecret, serviceSecret);
+        if (options.verifiedTopologySafetyRefusal) {
+          throw serializedVerifiedTopologyRefusal;
+        }
+        if (options.mutationError) {
+          throw options.mutationError;
+        }
         if (options.uncertainFirstMutation && calls.mutation === 1) {
           contextState = "already_coalesced";
           throw new Error("response lost after committed mutation");
@@ -436,6 +445,52 @@ function clientFor(events, options = {}) {
     },
   };
 }
+
+async function serializedMutationError(errorData) {
+  let fetchCalls = 0;
+  const redactedMessage = "[Request ID: qa-redacted] Server Error";
+  const actualSdkClient = new ConvexHttpClient("http://127.0.0.1:3210", {
+    logger: false,
+    fetch: async (url) => {
+      fetchCalls += 1;
+      assert.equal(url, "http://127.0.0.1:3210/api/mutation");
+      return new Response(
+        JSON.stringify({
+          status: "error",
+          errorMessage: redactedMessage,
+          ...(errorData === undefined ? {} : { errorData }),
+          logLines: [],
+        }),
+        { status: 560, headers: { "Content-Type": "application/json" } },
+      );
+    },
+  });
+  let received;
+  try {
+    await actualSdkClient.mutation(
+      "events:coalesceApprovedCrossPostPromotionOccurrences",
+      {},
+    );
+  } catch (error) {
+    received = error;
+  }
+  assert.equal(fetchCalls, 1);
+  assert.ok(received instanceof Error);
+  assert.equal(received.message, redactedMessage);
+  return received;
+}
+
+// Exercise the installed HTTP SDK, not a naked Error mock: production keeps
+// the safe ConvexError data but redacts the .message used by the old caller.
+const serializedVerifiedTopologyRefusal = await serializedMutationError(
+  CROSS_POST_VERIFIED_TOPOLOGY_COALESCING_REFUSAL,
+);
+assert.ok(serializedVerifiedTopologyRefusal instanceof ConvexError);
+assert.equal(
+  serializedVerifiedTopologyRefusal.data,
+  CROSS_POST_VERIFIED_TOPOLOGY_COALESCING_REFUSAL,
+);
+assert.doesNotMatch(serializedVerifiedTopologyRefusal.message, /precondition failed/);
 
 const positive = clientFor(positiveEvents);
 const positiveSummary = await runApprovedCrossPostCampaignAutoCoalescing(
@@ -460,6 +515,44 @@ assert.deepEqual(
   ["event-1", "event-2"],
 );
 assert.match(positive.calls.mutationArgs[0].operationId, /^auto-cross-post-v1:[a-f0-9]{40}$/);
+
+const protectedTopology = clientFor(positiveEvents, {
+  verifiedTopologySafetyRefusal: true,
+});
+const protectedTopologySummary = await runApprovedCrossPostCampaignAutoCoalescing(
+  protectedTopology.client,
+  { serviceSecret },
+);
+assert.equal(protectedTopologySummary.coalescedGroupCount, 0);
+assert.equal(protectedTopologySummary.foldedVariantCount, 0);
+assert.equal(protectedTopologySummary.failedCount, 0);
+assert.equal(protectedTopologySummary.error, undefined);
+assert.equal(protectedTopologySummary.skippedGroupCount, 1);
+assert.match(
+  protectedTopologySummary.skipped[0]?.reason,
+  /dedicated atomic lineage re-attestation; campaign cohort skipped/,
+);
+
+for (const untrustedErrorData of [
+  undefined,
+  "Unrelated application failure containing precondition failed and private data",
+  { message: CROSS_POST_VERIFIED_TOPOLOGY_COALESCING_REFUSAL },
+]) {
+  const genericFailure = clientFor(positiveEvents, {
+    mutationError: await serializedMutationError(untrustedErrorData),
+  });
+  const genericFailureSummary = await runApprovedCrossPostCampaignAutoCoalescing(
+    genericFailure.client,
+    { serviceSecret },
+  );
+  assert.equal(genericFailureSummary.failedCount, 1);
+  assert.equal(genericFailureSummary.skippedGroupCount, 0);
+  assert.equal(genericFailureSummary.coalescedGroupCount, 0);
+  assert.equal(
+    genericFailureSummary.failures[0]?.error,
+    "[Request ID: qa-redacted] Server Error",
+  );
+}
 
 const exactLiveMixedVenueClient = clientFor(exactLiveMixedVenueEvents);
 const exactLiveMixedVenueSummary =
@@ -714,6 +807,34 @@ assert.equal(
   );
 }
 
+{
+  const integration = clientFor(positiveEvents, {
+    verifiedTopologySafetyRefusal: true,
+  });
+  const baseQuery = integration.client.query.bind(integration.client);
+  let approvedListCalls = 0;
+  integration.client.query = async (reference, args) => {
+    if (reference === "events:listByStatusPaginated") {
+      approvedListCalls += 1;
+      if (approvedListCalls === 1) {
+        return { page: [], isDone: true, continueCursor: "" };
+      }
+    }
+    return baseQuery(reference, args);
+  };
+  const completed = await runApprovedEventAutoMergeOnceForCompletedRun(
+    integration.client,
+    {
+      runId: "qa-completed-run-protected-cross-post-campaign",
+      serviceSecret,
+    },
+  );
+  assert.equal(completed.crossPostCampaignCoalescing?.skippedGroupCount, 1);
+  assert.equal(completed.crossPostCampaignCoalescing?.failedCount, 0);
+  assert.equal(completed.crossPostCampaignCoalescing?.coalescedGroupCount, 0);
+  assert.equal(approvedListCalls, 2);
+}
+
 console.log(
-  "Approved cross-post campaign automerge QA passed: completed-run cohorts require exact source/venue/date/reliable-time identity plus two deterministic shared campaign hashtags, distinct artists aggregate through the existing mutation, uncertain responses read back idempotently, and different themes or shared boilerplate remain public as separate events.",
+  "Approved cross-post campaign automerge QA passed: exact legacy campaign proofs coalesce idempotently; verified-topology safety refusals become skipped cohorts without failing completed-run cleanup; different themes or shared boilerplate remain separate events.",
 );
