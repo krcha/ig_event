@@ -324,7 +324,9 @@ export function produceStructuredFactsForInsert(
         ? "model"
         : "unsupported_model_venue_cleared";
   const allowMissingImageForModeration =
-    isCaptionOnlyVideo || usesStructuredEvidence;
+    isCaptionOnlyVideo ||
+    usesStructuredEvidence ||
+    (missingImage && Boolean(normalizeString(post.caption)));
   const normalizedFieldsCommon: Record<string, unknown> = {
     extractionContractVersion,
     extractionIsEvent: extracted.is_event,

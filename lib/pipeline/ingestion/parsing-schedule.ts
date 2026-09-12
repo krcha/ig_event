@@ -11,7 +11,6 @@ import { buildSplitEventSourceLine, containsNonHashtagIdentity, containsNormaliz
 import { resolveEventTimeFromExtractionAndEvidence } from "@/lib/pipeline/ingestion/parsing-time";
 import { parsePostedAt } from "@/lib/pipeline/ingestion/source-documents";
 import { normalizeString } from "@/lib/pipeline/ingestion/values";
-import { normalizeConfidenceScore } from "@/lib/utils/confidence";
 
 export const RECURRING_SCHEDULE_START_PATTERN =
   /(?:weekly|every\s+week|svake\s+(?:nedelje|sedmice)|svakog\s+tjedna|nedeljno|tjedno|недељно|еженедельно)\s*[\p{P}\p{S}]{0,3}\s*(?:(?:starting|beginning|starts?|begins?)\s*[\p{P}\p{S}]{0,3}\s*(?:(?:from|on)\s*[\p{P}\p{S}]{0,3}\s*)?|(?:from|on|od|с)\s*[\p{P}\p{S}]{0,3}\s*)((?:0?[1-9]|[12]\d|3[01])[./-](?:0?[1-9]|1[0-2])[./-](?:\d{2}|\d{4}))/iu;
@@ -159,8 +158,6 @@ export function listRecurringScheduleDates(
   return dates;
 }
 
-const SINGLE_OCCURRENCE_COMPLEMENTARY_IDENTITY_MIN_CONFIDENCE = 0.9;
-
 function collectSingleOccurrenceComplementaryIdentities(options: {
   extracted: ExtractedEventData;
   hasRecurringExpansion: boolean;
@@ -183,14 +180,7 @@ function collectSingleOccurrenceComplementaryIdentities(options: {
     identity: string,
     confirmation: ExtractedEventData["field_confirmation"]["title" | "artists"],
   ): boolean => {
-    const confidence = normalizeConfidenceScore(confirmation.confidence);
-    if (
-      confidence === null ||
-      confidence < SINGLE_OCCURRENCE_COMPLEMENTARY_IDENTITY_MIN_CONFIDENCE
-    ) {
-      return false;
-    }
-
+    // A score does not override an exact billed identity in the persisted text.
     const foundIn = new Set(
       confirmation.found_in.map((source) => normalizeString(source).toLowerCase()),
     );

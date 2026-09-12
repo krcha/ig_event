@@ -26,12 +26,13 @@ Goal: Make "Get New Events" a dependable operator action.
 
 ### 2. Moderation Quality
 
-Goal: Prevent weak extractions from reaching the public calendar.
+Goal: Publish genuine unique events and exclude non-events and duplicates.
 
-- Use a conservative auto-approval threshold until production confidence data proves otherwise.
+- Use source confirmation rather than a confidence threshold for auto-approval.
 - Keep UI labels aligned with auto-approval policy.
 - Keep duplicate suspicion, missing media, suspicious years, and fallback titles visible.
-- Prefer pending review for uncertain events.
+- Resolve missing dates, material source contradictions and duplicate ambiguity;
+  low scores and missing optional details alone should not force review.
 
 ### 3. Approved Event Deduplication
 
@@ -75,7 +76,7 @@ Goal: Move Convex off Convex Cloud without rewriting the data layer.
 ## Immediate Stabilization Sprint
 
 1. Fix `qa:automerge` so fixtures use future dates relative to the run date.
-2. Restore a conservative auto-approval threshold or explicitly redesign the low-confidence policy.
+2. Apply the source-confirmed, score-independent approval policy and verify it in production.
 3. Respect queued ingestion `batchSize` for full-scrape job steps.
 4. Re-run focused QA scripts and document any local tooling hangs.
 5. Review the admin scraper dashboard copy against actual ingestion behavior.
@@ -85,7 +86,8 @@ Goal: Move Convex off Convex Cloud without rewriting the data layer.
 Completed in this pass:
 
 - Added deterministic approved-event automerge QA with future-relative fixtures.
-- Restored the conservative auto-approval policy and covered it in extraction QA.
+- Earlier conservative approval policy is superseded by the user's 2026-09-13
+  source-confirmed, score-independent policy, covered in extraction and moderation QA.
 - Made queued full-scrape job steps respect the configured batch size.
 - Updated admin scraper and duplicate-merge copy to match current behavior.
 - Made production admin routes fail closed when Clerk is not configured.
@@ -127,6 +129,7 @@ Known follow-up:
 
 ## Decision Log
 
-- Default stance: favor false negatives over false positives for public event publishing.
+- User decision on 2026-09-13: favor publishing genuine unique events, regardless
+  of confidence score; retain source, non-event and duplicate validation.
 - Auto-merge approved duplicates only when date, venue, and identity evidence are strong.
-- Keep AI confidence thresholds conservative until there is enough production data to calibrate.
+- Keep confidence visible as information, without using it as an approval cutoff.

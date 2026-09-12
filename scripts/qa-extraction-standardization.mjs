@@ -43,6 +43,7 @@ import {
   reconcileAmbiguousOccurrenceKeysWithExistingEventsForTesting,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
 import { extractModelSplitEventCandidates } from "../lib/pipeline/ingestion/parsing-schedule.ts";
+import { isVerifiedEventIdentityEvidence } from "../lib/pipeline/ingestion/structured-fact-verification.ts";
 import {
   extractEventTimeFromText,
   TBD_EVENT_TIME,
@@ -1595,8 +1596,9 @@ function runVideoModerationQa() {
   );
   assert.equal(
     highConfidenceDateMissingTimeFields.moderationCoreEventAutoApproveThreshold,
-    CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
+    null,
   );
+  assert.equal(highConfidenceDateMissingTimeFields.moderationConfidenceRole, "informational");
   assert.deepEqual(highConfidenceDateMissingTimeFields.moderationPendingReasons, []);
   assert.equal(highConfidenceDateMissingTimeFields.sourceGroundingTimeVerified, null);
   assert.equal(highConfidenceDateMissingTimeFields.sourceGroundingRowVerified, true);
@@ -1675,14 +1677,66 @@ function runVideoModerationQa() {
     ),
   );
   const lowCoreConfidenceFields = readPreparedNormalizedFields(lowCoreConfidence);
-  assert.equal(lowCoreConfidence.event.status, "pending");
+  assert.equal(lowCoreConfidence.event.status, "approved");
   assert.equal(lowCoreConfidence.event.time, TBD_EVENT_TIME);
-  assert.deepEqual(lowCoreConfidenceFields.moderationPendingReasons, [
-    "requires_human_approval",
-    "below_auto_approve_threshold",
-  ]);
+  assert.deepEqual(lowCoreConfidenceFields.moderationPendingReasons, []);
   assert.ok(lowCoreConfidenceFields.moderationSignals.includes("time_tbd"));
   assert.ok(!lowCoreConfidenceFields.moderationSignals.includes("missing_time"));
+
+  for (const confidence of [0.2, null]) {
+    const sourceDate = isoDateDaysFromNow(7);
+    const sourceCaption = `${ddmmForIsoDate(sourceDate)} Friday Event with DJ KAXX u Spratu.`;
+    const extracted = makeExtractedEvent({
+      title: "Friday Event",
+      date: sourceDate,
+      time: "",
+      venue: "Sprat",
+      artists: ["KAXX"],
+      confidence,
+      field_confirmation: makeFieldConfirmation(0.2),
+    });
+    const captionConfirmed = assertSingleOkPreparedEvent(prepareEventsForInsert(
+      makeInstagramPost({ caption: sourceCaption, postType: "image", username: "sprat_bar" }),
+      extracted,
+      null,
+      {},
+      {},
+      {},
+    ));
+    const fields = readPreparedNormalizedFields(captionConfirmed);
+    assert.equal(captionConfirmed.event.status, "approved");
+    assert.equal(captionConfirmed.event.imageUrl, undefined);
+    assert.equal(fields.moderationConfidenceScore, confidence);
+    assert.equal(fields.moderationAllowMissingImage, true);
+    assert.deepEqual(fields.moderationPendingReasons, []);
+    assert.doesNotThrow(() => assertServiceCreateEventPolicy(
+      captionConfirmed.event.status,
+      captionConfirmed.event.normalizedFieldsJson,
+      captionConfirmed.event,
+    ));
+
+    const unrelatedCaption = assertSingleOkPreparedEvent(prepareEventsForInsert(
+      makeInstagramPost({ caption: "Enjoy our drinks on the terrace.", postType: "image", username: "sprat_bar" }),
+      extracted,
+      null,
+      {},
+      {},
+      {},
+    ));
+    assert.equal(unrelatedCaption.event.status, "pending");
+    assert.ok(readPreparedNormalizedFields(unrelatedCaption).moderationPendingReasons.includes("unverified_core_event_source"));
+
+    const [nonEvent] = prepareEventsForInsert(
+      makeInstagramPost({ caption: "Closed for vacation.", postType: "image", username: "sprat_bar" }),
+      { ...extracted, is_event: false, non_event_reason: "Closure notice" },
+      null,
+      {},
+      {},
+      {},
+    );
+    assert.equal(nonEvent.kind, "skip");
+    assert.equal(nonEvent.normalizedFields.extractionIsEvent, false);
+  }
 
   const sparseVenueVideo = assertSingleOkPreparedEvent(
     prepareEventsForInsert(
@@ -4185,6 +4239,101 @@ function runSingleOccurrenceComplementaryIdentityQa() {
   assert.equal(complementaryPrepared.normalizedFields.identityEvidenceVerified, true);
   assert.equal(complementaryPrepared.normalizedFields.structuredEvidenceVerified, true);
   assert.equal(complementaryPrepared.event.status, "approved");
+
+  for (const source of ["caption", "alt_text"]) {
+    const lowConfidenceConfirmation = {
+      ...highConfidenceCaptionConfirmation,
+      confidence: 0.2,
+      found_in: [source],
+      evidence_snippets: [{ source, text: exactIdentityEvidence }],
+    };
+    const lowConfidencePost = {
+      ...post,
+      caption: source === "caption" ? caption : "",
+      altText: source === "alt_text" ? caption : "",
+    };
+    const lowConfidenceExtraction = makeSingleOccurrenceExtraction({
+      source_caption: lowConfidencePost.caption,
+      field_confirmation: {
+        ...makeFieldConfirmation(0.2),
+        title: lowConfidenceConfirmation,
+        artists: lowConfidenceConfirmation,
+      },
+    });
+    const [groundedCandidate] = extractModelSplitEventCandidates(
+      lowConfidencePost,
+      lowConfidenceExtraction,
+      "live music",
+      venue,
+    );
+    assert.equal(groundedCandidate.lineTitle, "O Bato");
+    assert.deepEqual(groundedCandidate.artists, ["O Bato"]);
+    assert.equal(groundedCandidate.artistsWereSanitized, false);
+    assert.equal(groundedCandidate.sourceLine, complementaryCandidate.sourceLine);
+
+    const unrelatedPost = {
+      ...lowConfidencePost,
+      caption: source === "caption" ? "DJ Other Artist nastupa kod nas. #OBato" : "",
+      altText: source === "alt_text" ? "DJ Other Artist nastupa kod nas. #OBato" : "",
+    };
+    const [unrelatedCandidate] = extractModelSplitEventCandidates(
+      unrelatedPost,
+      lowConfidenceExtraction,
+      "live music",
+      venue,
+    );
+    assert.equal(unrelatedCandidate.titleUsedFallback, true);
+    assert.deepEqual(unrelatedCandidate.artists, []);
+    assert.notEqual(unrelatedCandidate.lineTitle, "O Bato");
+
+    const title = "QA Concert";
+    const sourceText = `${title}. DJ O Bato nastupa kod nas.`;
+    const supplementalPost = {
+      ...post,
+      caption: source === "caption" ? sourceText : "",
+      altText: source === "alt_text" ? sourceText : "",
+    };
+    const supplementalOptions = {
+      title,
+      titleUsedFallback: false,
+      artists: ["O Bato"],
+      venue,
+      splitSourceLine: null,
+      singleScheduleEntrySource: true,
+      splitEvidenceSource: source,
+      post: supplementalPost,
+      hasPoster: false,
+      extracted: makeSingleOccurrenceExtraction({
+        field_confirmation: {
+          ...makeFieldConfirmation(0.2),
+          title: {
+            ...lowConfidenceConfirmation,
+            evidence: title,
+            evidence_snippets: [{ source, text: title }],
+          },
+          artists: {
+            ...lowConfidenceConfirmation,
+            evidence: "",
+            evidence_snippets: [],
+          },
+        },
+      }),
+    };
+    assert.equal(isVerifiedEventIdentityEvidence(supplementalOptions), true);
+    assert.equal(isVerifiedEventIdentityEvidence({
+      ...supplementalOptions,
+      post: {
+        ...supplementalPost,
+        caption: source === "caption" ? `${title}. DJ Other Artist.` : "",
+        altText: source === "alt_text" ? `${title}. DJ Other Artist.` : "",
+      },
+    }), false, "A low score cannot authorize an artist absent from the saved source.");
+    assert.equal(isVerifiedEventIdentityEvidence({
+      ...supplementalOptions,
+      singleScheduleEntrySource: false,
+      splitSourceLine: title,
+    }), false, "Post-level artist evidence must not leak into unrelated schedule rows.");
+  }
 
   const [titleOnlyConfirmedCandidate] = extractModelSplitEventCandidates(
     post,

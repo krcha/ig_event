@@ -1,8 +1,4 @@
-import {
-  CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
-  EVENT_EVIDENCE_V2_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
-  calculateModerationConfidenceScore,
-} from "../../utils/confidence";
+import { calculateModerationConfidenceScore } from "../../utils/confidence";
 import {
   DomainError,
   type DomainResult,
@@ -75,13 +71,13 @@ function prepareAutomatedModerationDecision(
   );
   const autoApprovalBlockers = [...new Set(options.autoApprovalBlockers ?? [])];
   const timeTbdApplies = options.missingTime && options.hasDate;
+  // Confidence describes extraction quality, not whether a source-confirmed
+  // event deserves publication. Event/source and duplicate blockers decide.
   const structuredEvidenceApproval =
     options.structuredEvidenceVerified &&
     autoApprovalBlockers.length === 0 &&
     options.hasDate &&
-    !options.suspiciousYear &&
-    confidenceScore !== null &&
-    confidenceScore >= EVENT_EVIDENCE_V2_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
+    !options.suspiciousYear;
   const strictSourceGroundedApproval =
     options.sourceGroundingVerified &&
     autoApprovalBlockers.length === 0 &&
@@ -90,8 +86,6 @@ function prepareAutomatedModerationDecision(
     !options.titleUsedFallback &&
     !options.suspiciousYear &&
     (options.dateConfidence === "high" || options.dateConfidence === "medium") &&
-    confidenceScore !== null &&
-    confidenceScore >= CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD &&
     (!options.missingImage || options.allowMissingImage);
   const trustedSourceOnlyBlockers = new Set([
     UNVERIFIED_CORE_EVENT_SOURCE_REASON,
@@ -110,9 +104,7 @@ function prepareAutomatedModerationDecision(
     options.sourceGroundingDateVerified &&
     options.sourceGroundingIdentityContextVerified &&
     options.approvalCaptionSourceCoherent &&
-    (options.dateConfidence === "high" || options.dateConfidence === "medium") &&
-    confidenceScore !== null &&
-    confidenceScore >= TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_MIN_CONFIDENCE;
+    (options.dateConfidence === "high" || options.dateConfidence === "medium");
   const autoApproved =
     structuredEvidenceApproval ||
     strictSourceGroundedApproval ||
@@ -141,11 +133,6 @@ function prepareAutomatedModerationDecision(
     : [
         HUMAN_REVIEW_REQUIRED_REASON,
         ...autoApprovalBlockers,
-        ...(confidenceScore === null ? ["missing_confidence"] : []),
-        ...(confidenceScore !== null &&
-        confidenceScore < CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD
-          ? ["below_auto_approve_threshold"]
-          : []),
         ...(options.missingImage && !options.allowMissingImage
           ? ["missing_image"]
           : []),

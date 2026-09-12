@@ -992,6 +992,28 @@ try {
     status: "approved",
     policy: "unique_pending",
   });
+
+  // A low or absent model score cannot exclude an otherwise source-confirmed
+  // unique event. Exercise the registered approval mutation, including its audit.
+  for (const confidence of [0, 0.2, 0.79, null]) {
+    const candidate = event(
+      `unique-confidence-${confidence === null ? "missing" : confidence * 100}`,
+    );
+    const fields = JSON.parse(candidate.normalizedFieldsJson);
+    if (confidence !== null) fields.confidence = confidence;
+    candidate.normalizedFieldsJson = JSON.stringify(fields);
+    const fixture = makeCtx({ events: [candidate] });
+    const approval = await approveUniquePendingEvents._handler(fixture.ctx, {
+      items: [reviewedItem(candidate)],
+      moderationNote: MODERATION_NOTE,
+    });
+    assert.equal(approval.complete, true);
+    assert.deepEqual(approval.approvedIds, [candidate._id], JSON.stringify(approval));
+    assert.deepEqual(approval.skipped, []);
+    assert.equal(fixture.events.get(candidate._id).status, "approved");
+    assert.equal(fixture.audits.length, 1);
+    assert.equal(fixture.audits[0].action, "approved");
+  }
 } finally {
   Date.now = originalDateNow;
 }
@@ -1183,6 +1205,11 @@ assert.match(
 assert.match(fullApprovalRouteSource, /minimumConfidence < 0/);
 assert.match(fullApprovalRouteSource, /minimumConfidence > 1/);
 assert.match(fullApprovalRouteSource, /const confidenceEligibleVersions =/);
+assert.match(
+  fullApprovalRouteSource,
+  /minimumConfidence === undefined\s*\? pendingVersions/,
+  "Omitting the optional confidence filter must classify every pending score, including missing scores.",
+);
 assert.match(fullApprovalRouteSource, /event\.confidenceScore >= minimumConfidence/);
 assert.match(fullApprovalRouteSource, /buildSameDateModerationBatches\(/);
 assert.match(fullApprovalRouteSource, /classificationChunks\.shift\(\)/);
@@ -1270,6 +1297,11 @@ const uniqueCandidateSource = section(
 );
 assert.match(uniqueCandidateSource, /decoratedEvents\.filter/);
 assert.doesNotMatch(uniqueCandidateSource, /visibleEvents/);
+assert.doesNotMatch(
+  uniqueCandidateSource,
+  /confidenceScore|CONFIDENCE/,
+  "Default unique approval candidates must not depend on a confidence score.",
+);
 assert.match(
   dashboardSource,
   /pendingUniqueness\?\.disposition\s*!?={2,3}\s*"unique"/,
@@ -1302,9 +1334,24 @@ assert.match(dashboardSource, /\/api\/admin\/events\/approve-unique-all/);
 assert.match(dashboardSource, /minConfidence: minimumConfidence/);
 assert.match(
   dashboardSource,
-  /UNIQUE_BULK_APPROVAL_MIN_CONFIDENCE\s*=\s*\n?\s*CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD/,
+  /useState<ConfidenceFilterMode>\("all"\)/,
 );
-assert.match(dashboardSource, /UNIQUE_BULK_APPROVAL_CONFIDENCE_LABEL/);
+assert.match(dashboardSource, /const HIGH_CONFIDENCE_FILTER_MIN = 0\.8/);
+assert.match(
+  dashboardSource,
+  /confidenceFilter === "high" \? HIGH_CONFIDENCE_FILTER_MIN : null/,
+);
+assert.match(
+  dashboardSource,
+  /minimumConfidence === null \? \{\} : \{ minConfidence: minimumConfidence \}/,
+);
+assert.doesNotMatch(
+  dashboardSource,
+  /AUTO_APPROVE_CONFIDENCE_THRESHOLD|Auto-approve strict/,
+  "Optional confidence filters must not be presented as automatic approval thresholds.",
+);
+assert.match(dashboardSource, /HIGH_CONFIDENCE_FILTER_LABEL/);
+assert.match(dashboardSource, /confidence\s+is informational/);
 assert.match(dashboardSource, /Medium confidence \(0\.70-0\.79\)/);
 assert.match(
   dashboardSource,

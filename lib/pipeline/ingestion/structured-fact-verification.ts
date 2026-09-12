@@ -4,7 +4,6 @@ import { type NightlifeLineupCoalescingPlan, type NightlifeLineupSource, titleCo
 import { sourceEvidenceNamesSupportedUnnamedEventKind, specificVenueValueAppearsInUnnamedEventEvidence, venueValueAppearsInEventEvidence } from "@/lib/events/unnamed-schedule-fallback";
 import { normalizeExtractedArtists, toSearchableText } from "@/lib/pipeline/venue-normalization";
 import { type InstagramScrapedPost } from "@/lib/scraper/instagram-scraper";
-import { normalizeConfidenceScore } from "@/lib/utils/confidence";
 import type { EventDateEvidenceSource } from "@/lib/pipeline/ingestion/contracts";
 import { expandNormalizedDateRange, hasExplicitDateText, normalizeEventDate } from "@/lib/pipeline/ingestion/parsing-date";
 import { normalizeArtistDisplayName } from "@/lib/pipeline/ingestion/parsing-event-text";
@@ -397,17 +396,12 @@ export function isVerifiedEventIdentityEvidence(options: {
   }
   const boundTitleEvidence = boundEvidence.some((snippet) => supportsTitle(snippet.text));
   if (!boundTitleEvidence) return false;
-  const artistConfirmationConfidence = normalizeConfidenceScore(artistConfirmation.confidence);
   const supplementalArtistEvidence = mayUsePostLevelIdentityEvidence ? [
-    ...(artistConfirmationConfidence !== null &&
-    artistConfirmationConfidence >= 0.7 &&
-    artistConfirmation.found_in.some((source) => source.toLowerCase() === "caption") &&
+    ...(artistConfirmation.found_in.some((source) => source.toLowerCase() === "caption") &&
     normalizeString(options.post.caption)
       ? [normalizeString(options.post.caption)]
       : []),
-    ...(artistConfirmationConfidence !== null &&
-    artistConfirmationConfidence >= 0.7 &&
-    artistConfirmation.found_in.some((source) => source.toLowerCase() === "alt_text") &&
+    ...(artistConfirmation.found_in.some((source) => source.toLowerCase() === "alt_text") &&
     normalizeString(options.post.altText)
       ? [normalizeString(options.post.altText)]
       : []),

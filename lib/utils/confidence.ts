@@ -1,5 +1,7 @@
 export const DUPLICATE_CONFIDENCE_MULTIPLIER = 0.5;
 export const MISSING_IMAGE_CONFIDENCE_PENALTY = 0.2;
+// Historical score helpers retained for old repair scripts. Current automated
+// moderation and service admission use source evidence, with no score cutoff.
 export const AUTO_APPROVE_CONFIDENCE_THRESHOLD = 0.8;
 export const CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD = 0.8;
 // The evidence-v2 contract requires an explicit event decision, exact date

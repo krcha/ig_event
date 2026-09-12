@@ -11,8 +11,6 @@ import {
 } from "@/lib/events/moderation-confidence";
 import { getModerationQueuePriorityScore } from "@/lib/events/moderation-queue";
 import {
-  AUTO_APPROVE_CONFIDENCE_THRESHOLD,
-  CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
   calculateModerationConfidenceScore,
   DUPLICATE_CONFIDENCE_MULTIPLIER,
   formatConfidenceScore,
@@ -232,10 +230,10 @@ type DecoratedEvent = ModerationEvent & {
 
 const STATUS_OPTIONS: EventStatus[] = ["pending", "approved", "rejected"];
 const UNIQUE_BULK_APPROVE_ACTION_ID = "__unique_bulk_approve__";
-const UNIQUE_BULK_APPROVAL_MIN_CONFIDENCE =
-  CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD;
-const UNIQUE_BULK_APPROVAL_CONFIDENCE_LABEL =
-  `${UNIQUE_BULK_APPROVAL_MIN_CONFIDENCE.toFixed(2)}+`;
+// Optional display/approval filter; confidence never limits the default action.
+const HIGH_CONFIDENCE_FILTER_MIN = 0.8;
+const HIGH_CONFIDENCE_FILTER_LABEL =
+  `${HIGH_CONFIDENCE_FILTER_MIN.toFixed(2)}+`;
 const DEFAULT_UNIQUE_APPROVAL_NOTE =
   "Approved after server verification of source evidence, event date, venue identity, and same-date uniqueness.";
 const SERBIAN_CYRILLIC_TO_LATIN: Record<string, string> = {
@@ -1152,7 +1150,7 @@ export function ModerationDashboard() {
         confidenceFilter === "high" &&
         !(
           event.confidenceScore !== null &&
-          event.confidenceScore >= UNIQUE_BULK_APPROVAL_MIN_CONFIDENCE
+          event.confidenceScore >= HIGH_CONFIDENCE_FILTER_MIN
         )
       ) {
         return false;
@@ -1162,7 +1160,7 @@ export function ModerationDashboard() {
         !(
           event.confidenceScore !== null &&
           event.confidenceScore >= 0.7 &&
-          event.confidenceScore < UNIQUE_BULK_APPROVAL_MIN_CONFIDENCE
+          event.confidenceScore < HIGH_CONFIDENCE_FILTER_MIN
         )
       ) {
         return false;
@@ -1242,17 +1240,17 @@ export function ModerationDashboard() {
 
     if (confidenceFilter !== "all" && confidenceFilter !== "high") {
       setError(
-        `Complete-queue bulk approval supports all confidence levels or the exact ${UNIQUE_BULK_APPROVAL_CONFIDENCE_LABEL} threshold.`,
+        `Complete-queue bulk approval supports all confidence levels or the optional ${HIGH_CONFIDENCE_FILTER_LABEL} filter.`,
       );
       return;
     }
 
     const minimumConfidence =
-      confidenceFilter === "high" ? UNIQUE_BULK_APPROVAL_MIN_CONFIDENCE : null;
+      confidenceFilter === "high" ? HIGH_CONFIDENCE_FILTER_MIN : null;
 
     const confirmed = window.confirm(
       minimumConfidence !== null
-        ? `Scan the complete pending queue and approve every server-verified unique event with final confidence ${UNIQUE_BULK_APPROVAL_MIN_CONFIDENCE.toFixed(2)} or higher? Lower-confidence, duplicate, ambiguous, expired, ineligible, and indeterminate records will remain pending.`
+        ? `Scan the complete pending queue and approve every server-verified unique event with final confidence ${HIGH_CONFIDENCE_FILTER_MIN.toFixed(2)} or higher? Lower-confidence, duplicate, ambiguous, expired, ineligible, and indeterminate records will remain pending.`
         : eventListComplete && pendingUniquenessComplete
         ? `Approve all ${uniquePendingEvents.length} server-verified unique pending event${
             uniquePendingEvents.length === 1 ? "" : "s"
@@ -1309,11 +1307,11 @@ export function ModerationDashboard() {
 
       await fetchEvents();
       setUniqueApprovalResult(
-        `Reviewed ${reviewedCount} pending records; ${confidenceEligibleCount} met${
+        `Reviewed ${reviewedCount} pending records. ${
           minimumConfidence === null
-            ? " the confidence scope"
-            : ` confidence ${UNIQUE_BULK_APPROVAL_CONFIDENCE_LABEL}`
-        } and ${belowConfidenceCount} did not. Approved ${approvedCount} server-verified unique event${
+            ? "Confidence did not limit approval."
+            : `${confidenceEligibleCount} met the selected confidence ${HIGH_CONFIDENCE_FILTER_LABEL} filter and ${belowConfidenceCount} did not.`
+        } Approved ${approvedCount} server-verified unique event${
           approvedCount === 1 ? "" : "s"
         }. ${dispositionCounts.duplicate} duplicate, ${
           dispositionCounts.ambiguous
@@ -1631,7 +1629,7 @@ export function ModerationDashboard() {
           >
             <option value="all">All confidence</option>
             <option value="high">
-              High confidence ({UNIQUE_BULK_APPROVAL_CONFIDENCE_LABEL})
+              High confidence ({HIGH_CONFIDENCE_FILTER_LABEL})
             </option>
             <option value="medium">Medium confidence (0.70-0.79)</option>
             <option value="low">Low confidence (&lt; 0.70)</option>
@@ -1703,11 +1701,15 @@ export function ModerationDashboard() {
               {actionInFlightFor === UNIQUE_BULK_APPROVE_ACTION_ID
                 ? "Approving verified unique events..."
                 : confidenceFilter === "high"
-                  ? `Approve unique pending (${UNIQUE_BULK_APPROVAL_CONFIDENCE_LABEL})`
+                  ? `Approve unique pending (${HIGH_CONFIDENCE_FILTER_LABEL})`
                 : eventListComplete && pendingUniquenessComplete
                   ? `Approve all unique pending (${uniquePendingEvents.length})`
                   : "Approve all eligible unique pending"}
             </button>
+            <p className="text-sm text-muted-foreground lg:col-span-2">
+              Source-confirmed unique events are eligible at every confidence score,
+              including missing scores. Confidence filters are optional.
+            </p>
           </div>
         ) : null}
       </section>
@@ -2274,7 +2276,8 @@ export function ModerationDashboard() {
                           </p>
                         ) : null}
                         <p className="text-xs text-muted-foreground">
-                          Auto-approve strict {`>${AUTO_APPROVE_CONFIDENCE_THRESHOLD.toFixed(2)}`}; core fields {`>=${CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD.toFixed(2)}`}
+                          Auto-approval: source-confirmed unique events; confidence
+                          is informational.
                         </p>
                         <p className="mt-2 text-sm font-medium">
                           Final {formatConfidenceScore(event.confidenceScore) ?? "(none)"}

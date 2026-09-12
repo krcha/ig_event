@@ -21,10 +21,14 @@ The product is a Belgrade nightlife event aggregator. The core promise is a
 trustworthy public calendar fed by Instagram venue activity and controlled by a
 small admin workflow.
 
-Default product stance:
+Product stance (updated by the user on 2026-09-13):
 
-- Favor false negatives over false positives for public event publishing.
-- Keep uncertain AI extractions pending for human review.
+- Automatically approve genuine, unique events supported by their source.
+- Confidence scores describe extraction quality; they must not independently
+  block approval. Missing optional details and harmless identity variants do not
+  make a real event invalid. Exclude non-events and duplicates.
+- Require an actual calendar date and source-bound occurrence; unresolved source
+  contradictions or duplicate ambiguity need resolution, not invented facts.
 - Keep duplicate merges conservative.
 - Keep operator UX explicit about approved, pending, quota-blocked, and
   automerge outcomes.

@@ -16,20 +16,31 @@ The core product promise is:
 
 - Scrape Instagram posts from configured venues or pasted handles.
 - Extract structured event data from posters, captions, and post metadata.
-- Store events as pending unless confidence is very high.
+- Automatically approve source-confirmed unique events regardless of confidence.
 - Give admins enough context to approve, reject, repair, and dedupe events.
 - Publish only approved upcoming events on public list and calendar pages.
 
 Current priorities from `DEVELOPMENT_PLAN.md`:
 
 - Keep ingestion reliable under route/runtime limits.
-- Keep moderation conservative; automation should accelerate review, not hide
-  uncertainty.
+- Keep non-events and duplicates out while approving genuine events; confidence
+  is informational and missing optional details should not force manual review.
 - Merge approved duplicates without losing saved-event references.
 - Make operator-facing run summaries explain what happened.
 - Keep deterministic QA green before shipping.
 
 Known current follow-up:
+
+- User policy on 2026-09-13 removes aggregate confidence cutoffs from automatic
+  approval and matching backend admission. Low or missing scores are informational;
+  source evidence, real dates, duplicate checks and write-version checks still
+  apply. Exact caption evidence is not discarded solely for a low field score.
+  The dashboard's optional confidence filter does not change approval policy.
+  Full local release QA passes, but this policy is not yet deployed. A fresh
+  2026-09-13 check still finds production on `7017d0b`, with daily ingestion
+  scheduled for 09:00 Europe/Belgrade. Disk now has about 2.53 GB available;
+  yesterday's space observation is stale. The separate production recovery still
+  needs fresh validation before rolling out the current frontend and backend.
 
 - `npm run qa:release` is the intended deterministic gate. It starts with the
   repository hygiene guard and includes `next build`.
@@ -525,8 +536,9 @@ Secrets:
    least add an operator path to resume stale queued/running jobs.
 4. Improve run observability by surfacing Apify/OpenAI quota errors, skipped
    reasons, and duplicate cleanup results in one compact admin summary.
-5. Keep auto-approval conservative until there is real production confidence
-   data. Any threshold change should update `qa:extraction`.
+5. Keep automatic approval independent of confidence scores. Genuine unique
+   events supported by their source should publish; cover event/non-event,
+   duplicate and source-integrity behavior in `qa:extraction`.
 6. Extend duplicate QA before touching `approved-event-duplicates.ts` or
    ingestion duplicate matching. Include saved-event reference behavior when
    testing merge mutations.

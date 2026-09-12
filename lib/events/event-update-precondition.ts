@@ -2,10 +2,6 @@ import { TBD_EVENT_TIME } from "./event-time.ts";
 import { isSensibleEventTitleForApproval } from "./event-title-approval.ts";
 import { isCaptionSourceCoherentWithEvent } from "./event-source-approval.ts";
 import {
-  CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
-  EVENT_EVIDENCE_V2_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
-} from "../utils/confidence.ts";
-import {
   partitionEventEvidenceSourceConflicts,
   type EventEvidenceSourceConflict,
 } from "./event-evidence-conflict-policy.ts";
@@ -54,11 +50,11 @@ const TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_RULE = "trusted_source_event_announcemen
 const EVENT_EVIDENCE_V2_AUTO_APPROVE_RULE = "event_evidence_v2";
 export const HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION = 1;
 export const HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION = 1;
-const TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_MIN_CONFIDENCE = 0.65;
 const APPROVED_MODERATION_SIGNALS = new Set([
   "missing_image",
   "missing_image_allowed",
   "time_tbd",
+  "low_confidence",
 ]);
 
 function parseNormalizedFields(value: string | undefined): Record<string, unknown> | null {
@@ -384,7 +380,6 @@ export function hasEventEvidenceV2AutoApproval(
   if (!fields || !eventFields) return false;
   const pendingReasons = fields.moderationPendingReasons;
   const conflicts = getEffectiveEventEvidenceV2Conflicts(fields, eventFields);
-  const confidence = fields.moderationConfidenceScore;
   const date = normalizeComparableOptionalText(eventFields.date);
   return (
     fields.extractionContractVersion === "event_evidence_v2" &&
@@ -412,9 +407,6 @@ export function hasEventEvidenceV2AutoApproval(
     fields.moderationAutoApproveRule === EVENT_EVIDENCE_V2_AUTO_APPROVE_RULE &&
     Array.isArray(pendingReasons) &&
     pendingReasons.length === 0 &&
-    typeof confidence === "number" &&
-    Number.isFinite(confidence) &&
-    confidence >= EVENT_EVIDENCE_V2_AUTO_APPROVE_CONFIDENCE_THRESHOLD &&
     isFutureIsoDate(date) &&
     isSensibleEventTitleForApproval({
       title: normalizeComparableOptionalText(eventFields.title),
@@ -742,7 +734,6 @@ export function hasCompleteSourceGroundedAutoApproval(
 
   const pendingReasons = fields.moderationPendingReasons;
   const moderationSignals = fields.moderationSignals;
-  const confidenceScore = fields.moderationConfidenceScore;
   const signalValues = Array.isArray(moderationSignals)
     ? moderationSignals.map((signal) => String(signal))
     : null;
@@ -765,10 +756,7 @@ export function hasCompleteSourceGroundedAutoApproval(
         signalValues.includes("missing_image_allowed")
       : missingImage === false &&
         !signalValues.includes("missing_image") &&
-        !signalValues.includes("missing_image_allowed")) &&
-    typeof confidenceScore === "number" &&
-    Number.isFinite(confidenceScore) &&
-    confidenceScore >= CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD
+        !signalValues.includes("missing_image_allowed"))
   );
 }
 
@@ -806,7 +794,6 @@ export function hasTrustedSourceEventAnnouncementAutoApproval(
   const attestedCaption = normalizeComparableText(fields.sourceGroundingSourceCaption);
   const attestedPostId = normalizeComparableText(fields.sourceGroundingInstagramPostId);
   const attestedPostUrl = normalizeComparableText(fields.sourceGroundingInstagramPostUrl);
-  const confidence = fields.moderationConfidenceScore;
   const permittedSignals = new Set([
     "missing_image",
     "missing_image_allowed",
@@ -814,6 +801,7 @@ export function hasTrustedSourceEventAnnouncementAutoApproval(
     "unverified_core_event_source",
     "caption_source_event_mismatch",
     "unverified_occurrence_plan",
+    "low_confidence",
   ]);
 
   return (
@@ -827,9 +815,6 @@ export function hasTrustedSourceEventAnnouncementAutoApproval(
     fields.sourceGroundingDateVerified === true &&
     fields.sourceGroundingIdentityContextVerified === true &&
     (fields.dateConfidence === "high" || fields.dateConfidence === "medium") &&
-    typeof confidence === "number" &&
-    Number.isFinite(confidence) &&
-    confidence >= TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_MIN_CONFIDENCE &&
     pendingReasons !== null &&
     pendingReasons.length === 0 &&
     signals !== null &&

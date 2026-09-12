@@ -1,7 +1,6 @@
 import type { ExtractedEventData } from "@/lib/ai/extract-event-data";
 import {
   prepareModerationDecision,
-  TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_MIN_CONFIDENCE,
   unwrapModerationResult,
 } from "@/lib/domain/moderation/index";
 import { partitionEventEvidenceSourceConflicts } from "@/lib/events/event-evidence-conflict-policy";
@@ -20,15 +19,10 @@ import { buildExtractionScorecard, buildSkippedExtractionScorecard } from "@/lib
 import type { getEventDateFilterContext } from "@/lib/pipeline/ingestion/parsing-date";
 import { evaluateCoreEventSourceGrounding, getNonEventAutoApprovalBlockers } from "@/lib/pipeline/ingestion/parsing-source-evidence";
 import type { StructuredFactExtractionResult } from "@/lib/pipeline/ingestion/structured-fact-contracts";
-import { CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE } from "@/lib/pipeline/ingestion/structured-fact-policy";
 import { isVerifiedDateEvidence, isVerifiedEventIdentityEvidence, isVerifiedEventVenueEvidence, isVerifiedTimeEvidence } from "@/lib/pipeline/ingestion/structured-fact-verification";
 import { normalizeString } from "@/lib/pipeline/ingestion/values";
 import { normalizeVenueComparableText } from "@/lib/pipeline/venue-normalization";
 import type { InstagramScrapedPost } from "@/lib/scraper/instagram-scraper";
-import {
-  AUTO_APPROVE_CONFIDENCE_THRESHOLD,
-  CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
-} from "@/lib/utils/confidence";
 
 type FinalizeStructuredFactVariantsInput = {
   allowMissingImageForModeration: boolean;
@@ -393,11 +387,12 @@ export function finalizeStructuredFactVariants({
       expandedDateIndex: index + 1,
       expandedDateTotal: eventVariants.length,
       moderationConfidenceScore: moderationDecision.confidenceScore,
-      moderationAutoApproveThreshold: AUTO_APPROVE_CONFIDENCE_THRESHOLD,
-      moderationCoreEventAutoApproveThreshold: CORE_EVENT_AUTO_APPROVE_CONFIDENCE_THRESHOLD,
-      moderationCaptionOnlyVideoMinConfidence: CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE,
-      moderationTrustedSourceEventAnnouncementMinConfidence:
-        TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_MIN_CONFIDENCE,
+      moderationPolicyVersion: moderationDecision.policyVersion,
+      moderationConfidenceRole: "informational",
+      moderationAutoApproveThreshold: null,
+      moderationCoreEventAutoApproveThreshold: null,
+      moderationCaptionOnlyVideoMinConfidence: null,
+      moderationTrustedSourceEventAnnouncementMinConfidence: null,
       sourceGroundingVersion: usesStructuredEvidence ? 5 : 4,
       sourceGroundingEvidence: usesStructuredEvidence
         ? "persisted_openai_event_evidence_v2"

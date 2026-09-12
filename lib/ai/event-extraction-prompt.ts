@@ -95,6 +95,7 @@ Rules:
 - In each field_confirmation use at most two short found_in labels, at most one exact evidence_snippet, evidence no longer than 160 characters, and notes no longer than 80 characters. Do not repeat the same source fragment across evidence, evidence_snippets, and notes.
 - Do not invent facts.
 - Set "is_event" to true only when the post clearly announces or schedules a real event occurrence. A missing time, price, or venue does not make a clear dated event invalid.
+- Prioritize finding every genuine event. Confidence describes uncertainty in individual details; it is not an approval threshold. Do not classify a real dated event as a non-event because the caption is short, an artist spelling varies, the venue uses an Instagram alias, or optional details are absent. Keep supported details and leave unknown details empty.
 - Set "is_event" to false for closures, recaps/past-event memories, menus or ordinary offers, giveaways/contests, cancellations without a replacement occurrence, and posts too unclear to establish an event. Give one short factual "non_event_reason"; do not rely only on empty event fields.
 - When "is_event" is true, "non_event_reason" must be empty. When false, return empty event fields, [] schedule_entries, and low confidence.
 - Do not confuse "ne radimo rezervacije" / no-reservations text with a closure notice when the post otherwise describes an event.
