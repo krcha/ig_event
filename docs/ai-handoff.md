@@ -47,6 +47,20 @@ Known current follow-up:
   mutation handlers with explicitly synthetic transaction staging; it is not a
   live Convex engine rollback test. Do not claim deployed readiness from local
   QA alone, or advance verified epochs to hide an unverified gap.
+- Cutover preview/status must not construct apply-only review metadata.
+  Both fresh and resumed receipt initialization previously hashed an absent note
+  before any CLI command. The parser correctly forbids apply review flags in
+  nonapply modes. Keep those fences intact; do not supply dummy notes or relax
+  authorization to make previews run; resume must still reject unexpected review
+  metadata. `qa:event-domain-nonapply-receipts` covers
+  the actual parser/initializer/writer for all nine cutover workflow families,
+  with synthetic private files and zero service calls, not a live rollout.
+- Production recovery remains incomplete as of 12 September 17:38 UTC. The
+  failed V11 preview was rolled back to parent `7017d0b`, with the full installed
+  module map/ABI and all migration state preserved. Public reads remain on the
+  compatibility path. Its new snapshot and backend export copy are protected;
+  another fresh-backup deployment needs more disk space or separately authorized
+  verified offload. A failed gate cannot authorize success-only cleanup.
 
 ## First 15 Minutes From A GitHub Link
 

@@ -38,6 +38,7 @@
     "qa:source-occurrence-topology-writer-boundary": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-source-occurrence-topology-writer-boundary.mjs",
     "qa:event-domain-migrations": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-event-domain-migrations.mjs",
     "qa:event-domain-rollout-operator": "node scripts/qa-event-domain-rollout-operator.mjs",
+    "qa:event-domain-nonapply-receipts": "node scripts/qa-event-domain-nonapply-receipts.mjs",
     "qa:campaign-lineage-reattestation": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-campaign-lineage-reattestation.mjs",
     "qa:venue-resolver-parity": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-venue-resolver-parity.mjs",
     "qa:venue-resolver-snapshot": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-venue-resolver-snapshot.mjs",

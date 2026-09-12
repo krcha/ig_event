@@ -962,7 +962,7 @@ async function initializeReceipt(
     }
     const previous = JSON.parse(await readFile(options.resume, "utf8"));
     const restartKeys = [...options.restartKeys].sort();
-    const review = CUTOVER_CONFIRMATIONS[options.workflow]
+    const review = options.mode === "apply" && CUTOVER_CONFIRMATIONS[options.workflow]
       ? {
           expectedStateUpdatedAt: options.expectedStateUpdatedAt,
           expectedEvidenceDigest:
@@ -1033,7 +1033,7 @@ async function initializeReceipt(
         restartKeys: [...options.restartKeys].sort(),
         timeoutMs: options.timeoutMs,
       },
-      ...(CUTOVER_CONFIRMATIONS[options.workflow]
+      ...(options.mode === "apply" && CUTOVER_CONFIRMATIONS[options.workflow]
         ? {
             review: {
               expectedStateUpdatedAt: options.expectedStateUpdatedAt,

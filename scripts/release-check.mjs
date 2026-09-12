@@ -36,6 +36,7 @@ const checks = [
   { script: "qa:source-occurrence-topology-writer-boundary", timeoutMs: 60_000 },
   { script: "qa:event-domain-migrations", timeoutMs: 60_000 },
   { script: "qa:event-domain-rollout-operator", timeoutMs: 60_000 },
+  { script: "qa:event-domain-nonapply-receipts", timeoutMs: 60_000 },
   { script: "qa:campaign-lineage-reattestation", timeoutMs: 60_000 },
   { script: "qa:venue-resolver-parity", timeoutMs: 60_000 },
   { script: "qa:venue-resolver-snapshot", timeoutMs: 60_000 },
