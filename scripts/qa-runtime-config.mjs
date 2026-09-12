@@ -96,6 +96,11 @@ assert.match(
   /DATABASE_UDF_USER_TIMEOUT_SECONDS:\s*\$\{CONVEX_DATABASE_UDF_USER_TIMEOUT_SECONDS:-5\}/,
   "self-hosted Convex should allow the reviewed API specification and bounded production queries enough user CPU time.",
 );
+assert.match(
+  dockerComposeSelfHostedConvexSource,
+  /DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS:\s*\$\{CONVEX_DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS:-60\}/,
+  "self-hosted Convex should allow bounded database/system work enough time under the measured production CPU contention.",
+);
 
 assert.match(
   envUtilsSource,
