@@ -31,6 +31,16 @@ Current priorities from `DEVELOPMENT_PLAN.md`:
 
 Known current follow-up:
 
+- Source eligibility uses the same 07:00 Europe/Belgrade nightlife date as
+  public browsing. The previous night's source-confirmed events remain eligible
+  after midnight until that cutoff. Strict date parsing, source binding, venue
+  visibility, publication state and duplicate checks still apply. The registered
+  detail-handler regression covers midnight, the cutoff, and both DST changes.
+- Admin pages must render on each request. Their layout explicitly forces
+  dynamic rendering so a build without Clerk/admin environment cannot cache an
+  unauthorized static 404. Runtime authentication and the existing allowlist
+  remain mandatory. Verify the built admin routes are absent from the prerender
+  manifest and verify the authorized browser session after deployment.
 - Human approval of an alias-resolved venue rebinds provenance against the same
   validated normalized source fields that approval persists. Unique, single, and
   batch approval retain the original receipt/source proof, version checks, and
@@ -74,18 +84,28 @@ Known current follow-up:
   metadata. `qa:event-domain-nonapply-receipts` covers
   the actual parser/initializer/writer for all nine cutover workflow families,
   with synthetic private files and zero service calls, not a live rollout.
-- Operational recovery remains incomplete as of 2026-09-16. The latest observed
-  daily run is September 14: 657 terminal handle receipts, including four failed
-  saved posts. No September 15 run was found; Convex logged database/disk-full
-  errors at 08:10-08:12 Europe/Belgrade before the 09:00 schedule, and activity
-  resumed after the evening reboot. The exact scheduled service response is
-  unavailable. Only about 273 MB was free during the fresh check. Restore disk
-  headroom before further deployment or recovery writes, then re-read current
-  posts and pending events instead of applying stale September 13 manifests.
-  The two V11 backup copies remain protected. Verified Mac copies of the V12
-  and V13 backups are prepared, but their proposed server-copy cleanup still
-  awaits explicit approval. Local operational handoff files retain the paths
-  and checksums. A failed gate cannot authorize success-only cleanup.
+- Operational recovery remained incomplete before this release on 2026-09-16.
+  The latest observed daily run was September 14: 657 terminal handle receipts,
+  including four failed saved posts. No September 15 run was found; Convex logged
+  database/disk-full errors before its 09:00 schedule. The exact scheduled
+  service response is unavailable. The user subsequently authorized obsolete
+  Event Zeka backup/image cleanup: 57 exact backup/archive files and the old web
+  container were removed, reclaiming 6.50 GB. This explicitly included the old
+  V11 copies. Live database/media, production images, dependencies, other apps
+  and historical audit receipts were preserved. The initial cleanup left one
+  verified V13 server export; a fresh September 16 storage-inclusive backup now
+  contains 2,028 events and 1,649 storage files. Local operational records retain
+  exact backup paths, hashes and deletion receipts. Recheck current backup and
+  disk state before writing; never reuse a historical deleted-file manifest.
+- The next observed timer was September 16 at 09:00 Europe/Belgrade, enabled
+  and waiting. The daily loader selected 657 distinct handles (636 current sources plus
+  21 additional legacy venue handles); no active
+  ingestion/provider lease, pending daily snapshot or OpenAI circuit block was
+  found. The next daily admission creates a fresh current-day run; it does not
+  backfill the missing September 15 run. A configured timer and healthy service
+  do not certify that all source posts will process successfully. Re-read current
+  failed posts and pending events before bounded recovery; the old September 12
+  and 13 repair manifests are stale. No completed audit/backfill should be replayed.
 
 ## First 15 Minutes From A GitHub Link
 

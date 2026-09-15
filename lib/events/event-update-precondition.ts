@@ -1,4 +1,5 @@
 import { TBD_EVENT_TIME } from "./event-time.ts";
+import { getNightlifeDefaultDateKey } from "./nightlife-date.ts";
 import { isSensibleEventTitleForApproval } from "./event-title-approval.ts";
 import { isCaptionSourceCoherentWithEvent } from "./event-source-approval.ts";
 import {
@@ -204,14 +205,9 @@ function isFutureIsoDate(value: string): boolean {
   ) {
     return false;
   }
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Europe/Belgrade",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date(Date.now()));
-  const today = `${parts.find((part) => part.type === "year")?.value}-${parts.find((part) => part.type === "month")?.value}-${parts.find((part) => part.type === "day")?.value}`;
-  return value >= today;
+  // Public browsing keeps the previous night's events until 07:00 Belgrade.
+  // Approval and live source grounding must use that same business date.
+  return value >= getNightlifeDefaultDateKey(new Date(Date.now()));
 }
 
 function normalizeComparableArtists(value: unknown): string[] | null {
@@ -764,8 +760,9 @@ export function hasCompleteSourceGroundedAutoApproval(
  * Practical publication path for announcements posted by a configured venue
  * account. It deliberately relaxes exhaustive caption coherence, but only
  * after the pipeline has bound the public event to that exact trusted source,
- * an explicit future date, and a sensible non-fallback title. The Convex
- * duplicate/ambiguity policy still runs separately at every write.
+ * an explicit current or future nightlife date, and a sensible non-fallback
+ * title. The Convex duplicate/ambiguity policy still runs separately at every
+ * write.
  */
 export function hasTrustedSourceEventAnnouncementAutoApproval(
   normalizedFieldsJson: string | undefined,

@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
@@ -74,6 +74,32 @@ assert(
   adminLayoutSource.includes("canAccessAdminSurface"),
   "app/(dashboard)/admin/layout.tsx must enforce the admin page allowlist.",
 );
+assert(
+  /export const dynamic = ["']force-dynamic["'];/.test(adminLayoutSource),
+  "Admin pages must evaluate authentication per request, even when build-time auth configuration is absent.",
+);
+
+const prerenderManifestPath = path.join(rootDir, ".next/prerender-manifest.json");
+if (existsSync(prerenderManifestPath)) {
+  const manifest = JSON.parse(readSource(prerenderManifestPath));
+  const appPaths = JSON.parse(
+    readSource(path.join(rootDir, ".next/server/app-paths-manifest.json")),
+  );
+  for (const route of ["/admin", "/admin/scraper", "/admin/venues"]) {
+    assert(
+      `/(dashboard)${route}/page` in appPaths,
+      `The build must contain the ${route} page.`,
+    );
+    assert(
+      !(route in manifest.routes) && !manifest.notFoundRoutes.includes(route),
+      `${route} must not ship a prerendered page or cached build-time 404.`,
+    );
+    assert(
+      !existsSync(path.join(rootDir, `.next/server/app${route}.html`)),
+      `${route} must render its auth guard at request time.`,
+    );
+  }
+}
 
 console.log(
   `Admin auth QA passed for ${adminRouteFiles.length} admin API routes and the admin layout.`,

@@ -6,8 +6,12 @@ import {
   assertServiceUpdateEventPolicy,
   hasCompleteSourceGroundedAutoApproval,
   hasEventEvidenceV2AutoApproval,
+  hasHumanReviewableLegacySourceAttestation,
+  hasHumanReviewableStructuredSourceAttestation,
   hasTrustedSourceEventAnnouncementAutoApproval,
 } from "../lib/events/event-update-precondition.ts";
+import { getNightlifeDefaultDateKey } from "../lib/events/nightlife-date.ts";
+import { getPublicApprovedEvent } from "../convex/events.ts";
 import {
   MODERATION_POLICY_VERSION,
   applyModerationDecision,
@@ -369,6 +373,166 @@ for (const path of automaticPaths) {
   }
 }
 assert.equal(automated({ baseConfidenceScore: 1 }).targetStatus, "pending");
+
+// The calendar intentionally keeps the previous night until 07:00 Belgrade.
+// Recheck both admission and the actual detail handler across that boundary:
+// an event must not become ungrounded merely because calendar midnight passed.
+function nightlifeFixture(path, date) {
+  const dateText = date.split("-").reverse().join(".");
+  const caption = `Koncert Open Air Festival ${dateText} at 20:00 at QA Trusted Venue`;
+  const row = {
+    ...publicEvent,
+    _id: "qa-nightlife-event",
+    _creationTime: 1,
+    createdAt: 1,
+    updatedAt: 1,
+    status: "approved",
+    venueId: "qa-nightlife-venue",
+    timeConfidence: 0.9,
+    date,
+    dateEvidenceText: dateText,
+    dateEvidenceResolvedDate: date,
+    sourceCaption: caption,
+    sourcePostedAt: "2026-01-01T12:00:00.000Z",
+    rawExtractionJson: JSON.stringify({
+      extraction_contract_version: "event_evidence_v2",
+      is_event: true,
+    }),
+    publicationPolicyVersion: 1,
+    publicationState: "publishable",
+    publicationReason: "canonical_source_grounding_verified",
+  };
+  const decision = automated(path.preparation);
+  row.normalizedFieldsJson = JSON.stringify({
+    ...sourceFields,
+    ...path.fields,
+    normalizedDate: date,
+    dateEvidenceText: dateText,
+    dateEvidenceResolvedDate: date,
+    timeConfidence: row.timeConfidence,
+    sourceGroundingSourceCaption: caption,
+    sourceOccurrenceKey: "qa-nightlife-occurrence",
+    sourceOccurrenceSourceFingerprint: "qa-nightlife-source-fingerprint",
+    moderationAutoApproved: true,
+    moderationAutoApproveRule: decision.autoApproveRule,
+    moderationPendingReasons: decision.pendingReasons,
+    moderationSignals: decision.signals,
+  });
+  return row;
+}
+
+function nightlifeDetailContext(event, { changedCaption = false, hiddenVenue = false } = {}) {
+  const venue = {
+    _id: event.venueId,
+    name: event.venue,
+    isActive: true,
+    publicStatus: hiddenVenue ? "hidden" : "published",
+  };
+  const source = {
+    handle: event.venueInstagramHandle,
+    username: event.venueInstagramHandle,
+    postId: event.instagramPostId,
+    instagramPostUrl: event.instagramPostUrl,
+    caption: changedCaption ? "A different source announcement." : event.sourceCaption,
+    postedAt: event.sourcePostedAt,
+    sourceRevision: 1,
+    analysisRevision: 1,
+    analysisContractVersion: "event_evidence_v2",
+    analysisIsEvent: true,
+    analysisModel: "gpt-5-mini",
+    analysisResultJson: event.rawExtractionJson,
+  };
+  return {
+    db: {
+      normalizeId(table, id) {
+        return table === "events" && id === event._id ? id : null;
+      },
+      async get(id) {
+        if (id === event._id) return event;
+        if (id === venue._id) return venue;
+        return null;
+      },
+      query(table) {
+        assert.equal(table, "scrapedPosts");
+        return {
+          withIndex(index, configure) {
+            assert.equal(index, "by_handle_postId");
+            const filters = {};
+            const builder = { eq(key, value) { filters[key] = value; return builder; } };
+            configure(builder);
+            assert.deepEqual(filters, { handle: source.handle, postId: source.postId });
+            return { async take(limit) { assert.equal(limit, 2); return [source]; } };
+          },
+        };
+      },
+    },
+  };
+}
+
+const nightlifeClocks = [
+  ["2026-09-15T23:59:00+02:00", "2026-09-15"],
+  ["2026-09-16T00:00:00+02:00", "2026-09-15"],
+  ["2026-09-16T06:59:00+02:00", "2026-09-15"],
+  ["2026-09-16T07:00:00+02:00", "2026-09-16"],
+  ["2026-03-29T01:59:00+01:00", "2026-03-28"],
+  ["2026-03-29T03:00:00+02:00", "2026-03-28"],
+  ["2026-03-29T06:59:00+02:00", "2026-03-28"],
+  ["2026-03-29T07:00:00+02:00", "2026-03-29"],
+  ["2026-10-25T02:30:00+02:00", "2026-10-24"],
+  ["2026-10-25T02:30:00+01:00", "2026-10-24"],
+  ["2026-10-25T06:59:00+01:00", "2026-10-24"],
+  ["2026-10-25T07:00:00+01:00", "2026-10-25"],
+];
+let nightlifeChecks = 0;
+const originalNow = Date.now;
+try {
+  for (const [clock, businessDate] of nightlifeClocks) {
+    Date.now = () => Date.parse(clock);
+    assert.equal(getNightlifeDefaultDateKey(new Date(Date.now())), businessDate);
+    const previousDate = new Date(`${businessDate}T12:00:00Z`);
+    previousDate.setUTCDate(previousDate.getUTCDate() - 1);
+    for (const path of automaticPaths.filter((path) => path.rule !== "source_grounded_core_event_fields")) {
+      for (const [date, expected] of [
+        [businessDate, true],
+        [previousDate.toISOString().slice(0, 10), false],
+        ["2026-02-30", false],
+      ]) {
+        const row = nightlifeFixture(path, date);
+        const label = `${path.rule}, date=${date}, clock=${clock}`;
+        assert.equal(path.accepts(row.normalizedFieldsJson, row), expected, label);
+        const create = () => assertServiceCreateEventPolicy("approved", row.normalizedFieldsJson, row);
+        const update = () => assertServiceUpdateEventPolicy(
+          "pending", { status: "approved", normalizedFieldsJson: row.normalizedFieldsJson }, row,
+        );
+        if (expected) { assert.doesNotThrow(create, label); assert.doesNotThrow(update, label); }
+        else { assert.throws(create, undefined, label); assert.throws(update, undefined, label); }
+        const detail = await getPublicApprovedEvent._handler(nightlifeDetailContext(row), { id: row._id });
+        assert.equal(detail?._id ?? null, expected ? row._id : null, label);
+
+        const humanFields = { ...JSON.parse(row.normalizedFieldsJson), moderationPendingReasons: ["requires_human_approval"] };
+        const structured = path.rule === "event_evidence_v2";
+        const humanRow = structured ? row : { ...row, rawExtractionJson: "{}" };
+        assert.equal(
+          (structured ? hasHumanReviewableStructuredSourceAttestation : hasHumanReviewableLegacySourceAttestation)(
+            JSON.stringify(humanFields), humanRow,
+          ),
+          expected,
+          `${label}: human admission uses the same business date`,
+        );
+        nightlifeChecks += 1;
+      }
+      const valid = nightlifeFixture(path, businessDate);
+      assert.equal(path.accepts(valid.normalizedFieldsJson, { ...valid, title: "Invented Concert" }), false);
+      for (const options of [{ changedCaption: true }, { hiddenVenue: true }]) {
+        assert.equal(await getPublicApprovedEvent._handler(nightlifeDetailContext(valid, options), { id: valid._id }), null);
+      }
+      const blocked = { ...valid, publicationState: "pending_verification" };
+      assert.equal(await getPublicApprovedEvent._handler(nightlifeDetailContext(blocked), { id: blocked._id }), null);
+    }
+  }
+} finally {
+  Date.now = originalNow;
+}
 assert.equal(
   automated({
     baseConfidenceScore: 1,
@@ -424,5 +588,5 @@ assert.match(pipelineSource, /prepareModerationDecision\(/u);
 assert.doesNotMatch(pipelineSource, /function buildModerationDecision\(/u);
 
 console.log(
-  `QA passed: shared human moderation; ${scoreIndependentApprovals} score-independent approvals across all three automatic paths and service write boundaries; ${blockedEventChecks} non-event, duplicate, and material-conflict holds.`,
+  `QA passed: shared human moderation; ${scoreIndependentApprovals} score-independent approvals across all three automatic paths and service write boundaries; ${blockedEventChecks} non-event, duplicate, and material-conflict holds; ${nightlifeChecks} nightlife-date admission/detail checks across midnight, 07:00 and both DST transitions.`,
 );
