@@ -1,6 +1,6 @@
 # AI Handoff Guide
 
-Last reviewed: 2026-09-12
+Last reviewed: 2026-09-16
 
 This guide is for an AI agent that arrives with only a GitHub link and needs to
 be productive without guessing. Treat it as a map of the current repo, not a
@@ -31,16 +31,24 @@ Current priorities from `DEVELOPMENT_PLAN.md`:
 
 Known current follow-up:
 
+- Human approval of an alias-resolved venue rebinds provenance against the same
+  validated normalized source fields that approval persists. Unique, single, and
+  batch approval retain the original receipt/source proof, version checks, and
+  authorization. `qa:moderation-distinct-batch` covers linked-receipt approval,
+  public visibility, and zero-write rejection of stale or mismatched sources.
+  This follow-up has not yet been deployed; observed production remains at
+  `03044e0`.
+
 - User policy on 2026-09-13 removes aggregate confidence cutoffs from automatic
   approval and matching backend admission. Low or missing scores are informational;
   source evidence, real dates, duplicate checks and write-version checks still
   apply. Exact caption evidence is not discarded solely for a low field score.
   The dashboard's optional confidence filter does not change approval policy.
-  Full local release QA passes, but this policy is not yet deployed. A fresh
-  2026-09-13 check still finds production on `7017d0b`, with daily ingestion
-  scheduled for 09:00 Europe/Belgrade. Disk now has about 2.53 GB available;
-  yesterday's space observation is stale. The separate production recovery still
-  needs fresh validation before rolling out the current frontend and backend.
+  Release `03044e0` deployed successfully on 2026-09-13 with matching frontend
+  and Convex functions. A fresh 2026-09-16 check verified the public build asset,
+  health/readiness responses, and all 204 installed Convex module hashes against
+  that release. The existing 1,896-event audit was preserved with zero drift,
+  and materialized publication reads were enabled without replaying the audit.
 
 - `npm run qa:release` is the intended deterministic gate. It starts with the
   repository hygiene guard and includes `next build`.
@@ -66,12 +74,18 @@ Known current follow-up:
   metadata. `qa:event-domain-nonapply-receipts` covers
   the actual parser/initializer/writer for all nine cutover workflow families,
   with synthetic private files and zero service calls, not a live rollout.
-- Production recovery remains incomplete as of 12 September 17:38 UTC. The
-  failed V11 preview was rolled back to parent `7017d0b`, with the full installed
-  module map/ABI and all migration state preserved. Public reads remain on the
-  compatibility path. Its new snapshot and backend export copy are protected;
-  another fresh-backup deployment needs more disk space or separately authorized
-  verified offload. A failed gate cannot authorize success-only cleanup.
+- Operational recovery remains incomplete as of 2026-09-16. The latest observed
+  daily run is September 14: 657 terminal handle receipts, including four failed
+  saved posts. No September 15 run was found; Convex logged database/disk-full
+  errors at 08:10-08:12 Europe/Belgrade before the 09:00 schedule, and activity
+  resumed after the evening reboot. The exact scheduled service response is
+  unavailable. Only about 273 MB was free during the fresh check. Restore disk
+  headroom before further deployment or recovery writes, then re-read current
+  posts and pending events instead of applying stale September 13 manifests.
+  The two V11 backup copies remain protected. Verified Mac copies of the V12
+  and V13 backups are prepared, but their proposed server-copy cleanup still
+  awaits explicit approval. Local operational handoff files retain the paths
+  and checksums. A failed gate cannot authorize success-only cleanup.
 
 ## First 15 Minutes From A GitHub Link
 

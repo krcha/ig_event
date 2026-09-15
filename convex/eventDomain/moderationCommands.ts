@@ -137,6 +137,7 @@ export async function approveUniquePendingEventsHandler(
       ctx,
       event,
       approval.prepared,
+      approval.humanReviewPatch,
     );
     const affectedRepresentativeIds =
       provenanceRebind.affectedRepresentativeIds;
@@ -228,6 +229,7 @@ export async function setEventStatusHandler(
       ctx,
       existingEvent,
       prepared,
+      humanReviewPatch,
     );
     affectedRepresentativeIds = provenanceRebind.affectedRepresentativeIds;
     topologyMutated = provenanceRebind.topologyMutated;
@@ -411,6 +413,7 @@ export async function setEventStatusesHandler(
           ctx,
           existingEvent,
           prepared,
+          prepared.humanReviewPatch,
         );
         affectedRepresentativeIds = provenanceRebind.affectedRepresentativeIds;
         topologyMutated ||= provenanceRebind.topologyMutated;

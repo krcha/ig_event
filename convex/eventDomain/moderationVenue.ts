@@ -225,8 +225,16 @@ export async function rebindHumanApprovalVenueProvenance(
   ctx: MutationCtx,
   event: Doc<"events">,
   prepared: PreparedHumanApprovalCandidate,
+  humanReviewPatch: Awaited<
+    ReturnType<typeof assertHumanApprovalWithCanonicalVenueFallback>
+  >,
 ): Promise<SourceOccurrenceVenueRebindResult> {
-  return rebindCanonicalVenueProvenance(ctx, event, prepared.candidate);
+  // Prove the next receipt against the reviewed source binding that approval
+  // will persist, while retaining the original event for the current proof.
+  return rebindCanonicalVenueProvenance(ctx, event, {
+    ...prepared.candidate,
+    ...humanReviewPatch,
+  });
 }
 
 export async function eventRejectionInvalidatesVerifiedReceiptTopology(

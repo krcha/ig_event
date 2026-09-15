@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import {
+  approveUniquePendingEvents,
   getPublicApprovedEvent,
   listPublicEventsWindow,
+  setEventStatus,
   setEventStatuses,
 } from "../convex/events.ts";
 import { isCanonicallyGroundedApprovedEvent } from "../convex/publicEventGrounding.ts";
+import { buildEventOccurrenceIndexPatch } from "../convex/sourceOccurrences.ts";
+import { sourceOccurrenceRepresentativeMatchesExpected } from "../lib/events/source-occurrence-representation.ts";
 import {
   hasCompleteSourceGroundingAttestation,
   hasHumanReviewedLegacySourceAttestation,
@@ -91,7 +95,7 @@ function event(id, overrides = {}) {
   };
 }
 
-function makeCtx(initialEvents, initialVenues = []) {
+function makeCtx(initialEvents, initialVenues = [], initialProvenance = {}) {
   const events = new Map(initialEvents.map((item) => [item._id, structuredClone(item)]));
   const venues = new Map(initialVenues.map((item) => [item._id, structuredClone(item)]));
   const posts = new Map(
@@ -118,6 +122,17 @@ function makeCtx(initialEvents, initialVenues = []) {
     ]),
   );
   const audits = [];
+  const provenance = new Map(
+    Object.entries(initialProvenance).map(([table, rows]) => [
+      table,
+      new Map(rows.map((row) => [row._id, structuredClone(row)])),
+    ]),
+  );
+  const writes = [];
+  const findRow = (id) =>
+    events.get(id) ?? venues.get(id) ??
+    [...posts.values()].find((row) => row._id === id) ??
+    [...provenance.values()].map((rows) => rows.get(id)).find(Boolean) ?? null;
   const filterRows = (rows, filters) =>
     rows.filter((row) =>
       filters.every(({ field, operator, value }) => {
@@ -135,7 +150,7 @@ function makeCtx(initialEvents, initialVenues = []) {
           ? [...posts.values()]
           : table === "venues"
             ? [...venues.values()]
-          : [];
+          : [...(provenance.get(table)?.values() ?? [])];
     return {
       async collect() {
         return rows();
@@ -159,13 +174,18 @@ function makeCtx(initialEvents, initialVenues = []) {
             return chain;
           },
         };
-        applyIndex(chain);
+        if (applyIndex) applyIndex(chain);
         return {
           async collect() {
             return filterRows(rows(), filters);
           },
           async first() {
             return filterRows(rows(), filters)[0] ?? null;
+          },
+          async unique() {
+            const matches = filterRows(rows(), filters);
+            assert.ok(matches.length <= 1);
+            return structuredClone(matches[0] ?? null);
           },
           async take(limit) {
             return filterRows(rows(), filters).slice(0, limit);
@@ -193,13 +213,17 @@ function makeCtx(initialEvents, initialVenues = []) {
           return table === "events" && events.has(id) ? id : null;
         },
         async get(id) {
-          return events.get(id) ?? null;
+          return structuredClone(findRow(id));
         },
         query,
         async patch(id, patch) {
-          const current = events.get(id);
-          if (!current) throw new Error(`missing event ${id}`);
-          events.set(id, { ...current, ...patch });
+          const current = findRow(id);
+          if (!current) throw new Error(`missing row ${id}`);
+          writes.push({ id, patch: structuredClone(patch) });
+          for (const [key, value] of Object.entries(patch)) {
+            if (value === undefined) delete current[key];
+            else current[key] = structuredClone(value);
+          }
         },
         async insert(table, value) {
           assert.equal(table, "eventAuditLog");
@@ -212,6 +236,8 @@ function makeCtx(initialEvents, initialVenues = []) {
     venues,
     posts,
     audits,
+    provenance,
+    writes,
   };
 }
 
@@ -642,6 +668,124 @@ assert.equal(
   true,
   "A reviewed handle-mapped venue must remain publicly grounded after canonicalization.",
 );
+
+function receiptBoundAliasFixture() {
+  const item = structuredClone(canonicalizedStructuredHumanEvent);
+  const expected = {
+    key: item.sourceOccurrenceKey,
+    title: item.title,
+    artists: item.artists,
+    date: item.date,
+    time: item.time,
+    venue: item.venue,
+  };
+  const sourceIdentity = "qa-alias-source";
+  const sourceFingerprint = JSON.parse(item.normalizedFieldsJson)
+    .sourceOccurrenceSourceFingerprint;
+  const state = makeCtx(
+    [item],
+    [{ ...canonicalVenue, aliases: [item.venue] }],
+    {
+      instagramEventSources: [{
+        _id: "alias-link", _creationTime: 1, eventId: item._id,
+        sourceIdentity, sourceFingerprint, sourceOccurrenceKey: expected.key,
+        sourceOccurrenceId: "alias-occurrence", linkedAt: 1, updatedAt: 1,
+      }],
+      instagramSourceOccurrenceReceipts: [{
+        _id: "alias-receipt", _creationTime: 1, sourceIdentity, sourceFingerprint,
+        expectedKeys: [expected.key], expectedOccurrences: [expected],
+        satisfiedKeys: [expected.key],
+        satisfiedOccurrences: [{ key: expected.key, eventId: item._id }],
+        deferredChildCount: 0, deferredChildKeys: [], createdAt: 1, updatedAt: 1,
+      }],
+      sourceOccurrences: [{
+        _id: "alias-occurrence", _creationTime: 1, provider: "instagram",
+        sourceDocumentId: "alias-post", sourceIdentity, sourceFingerprint,
+        sourceRevision: 1, canonicalSourceUrl: item.instagramPostUrl,
+        sourceOccurrenceKey: expected.key, occurrenceOrdinal: 1,
+        factsJson: JSON.stringify(expected),
+        normalizedOccurrenceJson: JSON.stringify(expected),
+        canonicalEventId: item._id, state: "satisfied",
+        venueResolutionStatus: "unresolved", createdAt: 1, updatedAt: 1,
+        ...buildEventOccurrenceIndexPatch(item),
+      }],
+      sourceOccurrenceTopologyEpoch: [{
+        _id: "alias-epoch", _creationTime: 1,
+        key: "source-occurrence-topology-v1", currentEpoch: 7, verifiedEpoch: 7,
+        lastUnverifiedEpoch: 7, createdAt: 1, updatedAt: 1,
+      }],
+    },
+  );
+  state.posts.get(`${item.venueInstagramHandle}:${item.instagramPostId}`)._id =
+    "alias-post";
+  return { ...state, item, expected };
+}
+
+async function approveReceiptBoundAlias(state, entryPoint, version = 1) {
+  const common = { reviewedBy: "qa-owner", moderationNote: "Reviewed source-bound venue alias and exact occurrence." };
+  if (entryPoint === "unique") {
+    return approveUniquePendingEvents._handler(state.ctx, {
+      ...common, items: [{ id: state.item._id, expectedUpdatedAt: version }],
+    });
+  }
+  if (entryPoint === "single") {
+    return setEventStatus._handler(state.ctx, {
+      ...common, id: state.item._id, status: "approved", expectedUpdatedAt: version,
+    });
+  }
+  return setEventStatuses._handler(state.ctx, {
+    ...common, ids: [state.item._id], status: "approved",
+    expectedVersions: [{ id: state.item._id, expectedUpdatedAt: version }],
+  });
+}
+
+for (const entryPoint of ["unique", "single", "batch"]) {
+  const state = receiptBoundAliasFixture();
+  const originalFields = JSON.parse(state.item.normalizedFieldsJson);
+  const originalSource = structuredClone([...state.posts.values()][0]);
+  await approveReceiptBoundAlias(state, entryPoint);
+  const approved = state.events.get(state.item._id);
+  assert.equal(approved.status, "approved", `${entryPoint}: alias approval must complete`);
+  assert.equal(approved.venueId, canonicalVenue._id);
+  assert.equal(approved.venue, canonicalVenue.name);
+  assert.deepEqual(JSON.parse(approved.normalizedFieldsJson), {
+    ...originalFields,
+    normalizedVenue: canonicalVenue.name,
+    humanReviewedStructuredSourcePolicyVersion: 1,
+    humanReviewedVenueCanonicalizationPolicyVersion: 1,
+  });
+  const receipt = state.provenance.get("instagramSourceOccurrenceReceipts").get("alias-receipt");
+  assert.deepEqual(receipt.expectedOccurrences, [{ ...state.expected, venue: canonicalVenue.name }]);
+  assert.equal(sourceOccurrenceRepresentativeMatchesExpected(approved, receipt.expectedOccurrences[0]), true);
+  const occurrence = state.provenance.get("sourceOccurrences").get("alias-occurrence");
+  assert.equal(occurrence.venueId, canonicalVenue._id);
+  assert.equal(occurrence.canonicalEventId, approved._id);
+  assert.equal(occurrence.state, "satisfied");
+  assert.equal(occurrence.sourceFingerprint, receipt.sourceFingerprint);
+  assert.deepEqual([...state.posts.values()][0], originalSource);
+  assert.equal(approved.publicationState, "publishable");
+  assert.equal(approved.publicationReason, "canonical_source_grounding_verified");
+  const topology = state.provenance.get("sourceOccurrenceTopologyEpoch").get("alias-epoch");
+  assert.ok(topology.currentEpoch > 7);
+  assert.equal(topology.currentEpoch, topology.verifiedEpoch);
+  assert.equal(topology.lastUnverifiedEpoch, 7);
+  assert.equal(state.audits.length, 1);
+  assert.equal((await getPublicApprovedEvent._handler(state.ctx, { id: approved._id }))?._id, approved._id);
+
+  const stale = receiptBoundAliasFixture();
+  await assert.rejects(() => approveReceiptBoundAlias(stale, entryPoint, 0));
+  assert.equal(stale.writes.length, 0, `${entryPoint}: stale review must not rebind provenance`);
+  assert.equal(stale.audits.length, 0);
+
+  const conflicting = receiptBoundAliasFixture();
+  conflicting.provenance.get("instagramSourceOccurrenceReceipts").get("alias-receipt").sourceFingerprint = "different-source";
+  await assert.rejects(
+    () => approveReceiptBoundAlias(conflicting, entryPoint),
+    /exact source link and satisfied receipt/u,
+  );
+  assert.equal(conflicting.writes.length, 0, `${entryPoint}: old receipt proof must remain mandatory`);
+  assert.equal(conflicting.audits.length, 0);
+}
 
 const outsideConflict = event("outside", {
   title: "Already approved outside event",
