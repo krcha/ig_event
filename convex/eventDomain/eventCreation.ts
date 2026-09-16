@@ -2,6 +2,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { normalizeEventTimeWritePatch } from "../../lib/events/event-time-write";
 import { adaptInstagramScrapedPostToSourceDocument } from "../../lib/domain/source-documents";
+import { sha256Hex } from "../../lib/domain/reconciliation/evidence-digest";
 import {
   assertServiceCreateEventPolicy,
   hasEventEvidenceV2AutoApproval,
@@ -48,10 +49,12 @@ type EventDateEvidenceSource = "caption" | "poster" | "alt_text" | "unknown";
 function isExactSingleOccurrencePlan(
   plan: SourceOccurrencePlan | undefined,
   sourceOccurrenceKey: string | undefined,
+  fencedSourceIdentity: string | undefined,
 ): boolean {
   return Boolean(
     plan &&
       sourceOccurrenceKey &&
+      fencedSourceIdentity &&
       plan.expectedKeys.length === 1 &&
       plan.expectedKeys[0] === sourceOccurrenceKey &&
       plan.expectedOccurrences.length === 1 &&
@@ -59,7 +62,14 @@ function isExactSingleOccurrencePlan(
       plan.deferredChildCount === 0 &&
       plan.deferredChildKeys.length === 0 &&
       plan.observedChildKeys.length === 1 &&
-      plan.observedChildKeys[0] === sourceOccurrenceKey,
+      // The planner tracks an ordinary single source child separately from
+      // its occurrence. Schedule children deliberately remain outside this
+      // bridge, even if only one schedule occurrence survived preparation.
+      plan.observedChildKeys[0] ===
+        `instagram-source-child-v1:${sha256Hex(JSON.stringify({
+          sourceIdentity: fencedSourceIdentity,
+          identity: { kind: "single" },
+        }))}`,
   );
 }
 
@@ -271,22 +281,27 @@ export async function createEventHandler(
   if (occurrencePlan) {
     assertSourceOccurrencePlanWithinBounds(occurrencePlan);
   }
+  const canReturnCanonicalApprovedDuplicate =
+    kind === "service" &&
+    returnCreateDisposition === true &&
+    processingFence !== undefined &&
+    eventArgs.status === "approved" &&
+    isExactSingleOccurrencePlan(
+      occurrencePlan,
+      eventArgs.sourceOccurrenceKey,
+      sourceDocument
+        ? adaptInstagramScrapedPostToSourceDocument(sourceDocument).sourceIdentity
+        : undefined,
+    );
   if (
     requireCanonicalApprovedDuplicate === true &&
-    (kind !== "service" ||
-      returnCreateDisposition !== true ||
-      !processingFence ||
-      eventArgs.status !== "approved" ||
-      !isExactSingleOccurrencePlan(
-        occurrencePlan,
-        eventArgs.sourceOccurrenceKey,
-      ))
+    !canReturnCanonicalApprovedDuplicate
   ) {
     throw new Error(
       "Canonical-duplicate-only creation requires service authentication, one exact approved occurrence, and a current processing fence.",
     );
   }
-  if (requireCanonicalApprovedDuplicate === true) {
+  if (canReturnCanonicalApprovedDuplicate) {
     const strictPlan = occurrencePlan as SourceOccurrencePlan;
     const strictSourceDocument = sourceDocument as Doc<"scrapedPosts">;
     assertSourceOccurrencePlanMatchesSourceDocument(
@@ -312,11 +327,13 @@ export async function createEventHandler(
         "Canonical-duplicate-only candidate does not represent its exact source occurrence.",
       );
     }
-    await assertCanonicalDuplicateRepairSourceUnbound(
-      ctx,
-      strictPlan,
-      strictSourceDocument,
-    );
+    if (requireCanonicalApprovedDuplicate === true) {
+      await assertCanonicalDuplicateRepairSourceUnbound(
+        ctx,
+        strictPlan,
+        strictSourceDocument,
+      );
+    }
   }
   if (eventArgs.sourceOccurrenceKey) {
     const existingOccurrence = await ctx.db
@@ -396,14 +413,7 @@ export async function createEventHandler(
       { ...eventArgs, ...venueFields },
       [],
       {
-        returnUniqueApprovedDuplicate:
-          kind === "service" &&
-          returnCreateDisposition === true &&
-          processingFence !== undefined &&
-          isExactSingleOccurrencePlan(
-            occurrencePlan,
-            eventArgs.sourceOccurrenceKey,
-          ),
+        returnUniqueApprovedDuplicate: canReturnCanonicalApprovedDuplicate,
       },
     );
     if (existingApprovedDuplicate) {

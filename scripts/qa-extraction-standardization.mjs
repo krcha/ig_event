@@ -88,6 +88,8 @@ import {
 import { recordProcessingResult } from "../convex/scrapedPosts.ts";
 import { adaptInstagramScrapedPostToSourceDocument } from "../lib/domain/source-documents.ts";
 import { buildInstagramSourceOccurrenceFingerprint } from "../lib/domain/occurrences/source-fingerprint.ts";
+import { buildSourceOccurrencePlan } from "../lib/pipeline/source-occurrence-planning.ts";
+import { mapSavedScrapedPostToInstagramPost } from "../lib/pipeline/ingestion/source-documents.ts";
 
 const STATIC_VENUE_BY_HANDLE = {
   "20_44.nightclub": "Klub 20/44",
@@ -8089,8 +8091,30 @@ async function runServiceApprovalMutationBoundaryQa() {
       status: "approved",
       updatedAt: 91,
     };
+    const canonicalDuplicatePost =
+      mapSavedScrapedPostToInstagramPost(persistedSourcePost);
+    const canonicalDuplicatePrepared = bindSourceOccurrenceMetadata(
+      canonicalDuplicatePost,
+      [{
+        kind: "ok",
+        event: groundedPublicFields,
+        normalizedFields: JSON.parse(groundedPublicFields.normalizedFieldsJson),
+      }],
+    );
+    const canonicalDuplicateSourceOccurrencePlan = buildSourceOccurrencePlan(
+      canonicalDuplicatePost,
+      canonicalDuplicatePrepared,
+    );
+    assert.ok(canonicalDuplicateSourceOccurrencePlan);
     const canonicalDuplicateOccurrenceKey =
-      "instagram-occurrence-v2:qa-canonical-duplicate";
+      canonicalDuplicatePrepared[0].event.sourceOccurrenceKey;
+    assert.equal(canonicalDuplicateSourceOccurrencePlan.expectedKeys.length, 1);
+    assert.match(canonicalDuplicateSourceOccurrencePlan.observedChildKeys[0], /^instagram-source-child-v1:/);
+    assert.notEqual(
+      canonicalDuplicateSourceOccurrencePlan.observedChildKeys[0],
+      canonicalDuplicateOccurrenceKey,
+      "The actual planner uses separate identities for a source child and its occurrence.",
+    );
     const canonicalDuplicateProcessingFence = {
       scrapedPostId: persistedSourcePost._id,
       handle: persistedSourcePost.handle,
@@ -8098,28 +8122,6 @@ async function runServiceApprovalMutationBoundaryQa() {
       instagramPostUrl: persistedSourcePost.instagramPostUrl,
       owner: persistedSourcePost.processingLeaseOwner,
       sourceRevision: persistedSourcePost.sourceRevision,
-    };
-    const canonicalDuplicateSourceDocument =
-      adaptInstagramScrapedPostToSourceDocument(persistedSourcePost);
-    const canonicalDuplicateSourceOccurrencePlan = {
-      sourceIdentity: canonicalDuplicateSourceDocument.sourceIdentity,
-      sourceFingerprint: buildInstagramSourceOccurrenceFingerprint(
-        persistedSourcePost,
-      ),
-      expectedKeys: [canonicalDuplicateOccurrenceKey],
-      expectedOccurrences: [
-        {
-          key: canonicalDuplicateOccurrenceKey,
-          date: groundedPublicFields.date,
-          time: groundedPublicFields.time,
-          venue: groundedPublicFields.venue,
-          title: groundedPublicFields.title,
-          artists: groundedPublicFields.artists,
-        },
-      ],
-      deferredChildCount: 0,
-      deferredChildKeys: [],
-      observedChildKeys: [canonicalDuplicateOccurrenceKey],
     };
     sameDateEvents = [approvedCanonicalDuplicate];
     inserted = false;
@@ -8143,6 +8145,71 @@ async function runServiceApprovalMutationBoundaryQa() {
       false,
       "A service replay of one uniquely proven approved occurrence must not insert another event.",
     );
+    const wrongSourcePost = {
+      ...canonicalDuplicatePost,
+      postId: "qa-other-canonical-source-child",
+      instagramPostUrl: "https://www.instagram.com/p/qa-other-canonical-source-child/",
+    };
+    const wrongSourcePlan = buildSourceOccurrencePlan(
+      wrongSourcePost,
+      bindSourceOccurrenceMetadata(wrongSourcePost, [{
+        kind: "ok",
+        event: groundedPublicFields,
+        normalizedFields: JSON.parse(groundedPublicFields.normalizedFieldsJson),
+      }]),
+    );
+    const scheduleChildPlan = buildSourceOccurrencePlan(
+      canonicalDuplicatePost,
+      bindSourceOccurrenceMetadata(canonicalDuplicatePost, [{
+        kind: "ok",
+        event: groundedPublicFields,
+        normalizedFields: {
+          ...JSON.parse(groundedPublicFields.normalizedFieldsJson),
+          multiEventSplitDetected: true,
+          multiEventSplitCount: 2,
+          splitEventIndex: 0,
+        },
+      }]),
+    );
+    assert.ok(wrongSourcePlan);
+    assert.ok(scheduleChildPlan);
+    for (const strictRepair of [false, true]) {
+      const args = {
+        ...groundedPublicFields,
+        sourceOccurrenceKey: canonicalDuplicateOccurrenceKey,
+        sourceOccurrencePlan: canonicalDuplicateSourceOccurrencePlan,
+        processingFence: canonicalDuplicateProcessingFence,
+        returnCreateDisposition: true,
+        ...(strictRepair ? { requireCanonicalApprovedDuplicate: true } : {}),
+        serviceSecret,
+      };
+      const beforeWrites = { inserted, patched, lastPatch, lastAudit };
+      assert.deepEqual(await createEvent._handler(ctx, args), canonicalDuplicateDisposition);
+      for (const [label, patch, message] of [
+        ["stale revision", { processingFence: { ...canonicalDuplicateProcessingFence, sourceRevision: 0 } }, /processing fence is stale/i],
+        ["wrong lease owner", { processingFence: { ...canonicalDuplicateProcessingFence, owner: "qa-stale-owner" } }, /processing fence is stale/i],
+        ["wrong source child", { sourceOccurrencePlan: { ...canonicalDuplicateSourceOccurrencePlan, observedChildKeys: wrongSourcePlan.observedChildKeys } }, /one exact approved occurrence|approved event already exists/i],
+        ["one surviving schedule child", { sourceOccurrenceKey: scheduleChildPlan.expectedKeys[0], sourceOccurrencePlan: scheduleChildPlan }, /one exact approved occurrence|approved event already exists/i],
+        ["wrong source identity", { sourceOccurrencePlan: { ...canonicalDuplicateSourceOccurrencePlan, sourceIdentity: wrongSourcePlan.sourceIdentity } }, /identity or fingerprint does not match/i],
+        ["stale source fingerprint", { sourceOccurrencePlan: { ...canonicalDuplicateSourceOccurrencePlan, sourceFingerprint: "instagram-source-v2:stale-source-evidence" } }, /identity or fingerprint does not match/i],
+        ["different expected candidate", { sourceOccurrencePlan: { ...canonicalDuplicateSourceOccurrencePlan, expectedOccurrences: [{ ...canonicalDuplicateSourceOccurrencePlan.expectedOccurrences[0], title: "Different Candidate" }] } }, /does not represent its exact source occurrence/i],
+      ]) {
+        await assert.rejects(
+          () => createEvent._handler(ctx, { ...args, ...patch }),
+          message,
+          `${strictRepair ? "Repair" : "Normal ingestion"} duplicate admission must reject ${label}.`,
+        );
+      }
+      const currentSourcePost = persistedSourcePost;
+      persistedSourcePost = { ...currentSourcePost, processingLeaseExpiresAt: Date.now() - 1 };
+      await assert.rejects(() => createEvent._handler(ctx, args), /processing fence is stale/i);
+      persistedSourcePost = currentSourcePost;
+      assert.deepEqual(
+        { inserted, patched, lastPatch, lastAudit },
+        beforeWrites,
+        "Duplicate dispositions and rejected stale proofs must perform no event, receipt, source-link or audit write.",
+      );
+    }
     for (const [label, expectedOccurrencePatch] of [
       ["title", { title: "Different Source Occurrence" }],
       ["date", { date: "2026-07-31" }],
@@ -8300,7 +8367,7 @@ async function runServiceApprovalMutationBoundaryQa() {
           serviceSecret,
         }),
       /requires service authentication, one exact approved occurrence/i,
-      "Canonical-duplicate-only creation must bind its sole observed child to the exact occurrence key.",
+      "Canonical-duplicate-only creation must bind its sole observed child to the fenced ordinary-single source.",
     );
     const secondCanonicalDuplicateOccurrenceKey =
       "instagram-occurrence-v2:qa-canonical-duplicate-sibling";

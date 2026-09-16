@@ -31,6 +31,12 @@ Current priorities from `DEVELOPMENT_PLAN.md`:
 
 Known current follow-up:
 
+- Single-event duplicate admission treats source-child keys and occurrence keys
+  as separate identifiers. A verified ordinary single-event child may resolve
+  to one existing approved canonical event without inserting a duplicate. Source
+  identity/fingerprint, exact candidate binding, revision/processing fences and
+  duplicate ambiguity checks remain required. Schedule children remain outside
+  this bridge. The existing strict cached recovery lane cannot insert events.
 - Source eligibility uses the same 07:00 Europe/Belgrade nightlife date as
   public browsing. The previous night's source-confirmed events remain eligible
   after midnight until that cutoff. Strict date parsing, source binding, venue
@@ -46,8 +52,8 @@ Known current follow-up:
   batch approval retain the original receipt/source proof, version checks, and
   authorization. `qa:moderation-distinct-batch` covers linked-receipt approval,
   public visibility, and zero-write rejection of stale or mismatched sources.
-  This follow-up has not yet been deployed; observed production remains at
-  `03044e0`.
+  Recheck deployment using the matching frontend release and installed Convex
+  bundle hashes. GitHub HEAD alone is not a production completion receipt.
 
 - User policy on 2026-09-13 removes aggregate confidence cutoffs from automatic
   approval and matching backend admission. Low or missing scores are informational;
@@ -98,9 +104,9 @@ Known current follow-up:
   exact backup paths, hashes and deletion receipts. Recheck current backup and
   disk state before writing; never reuse a historical deleted-file manifest.
 - The next observed timer was September 16 at 09:00 Europe/Belgrade, enabled
-  and waiting. The daily loader selected 657 distinct handles (636 current sources plus
-  21 additional legacy venue handles); no active
-  ingestion/provider lease, pending daily snapshot or OpenAI circuit block was
+  and waiting. The daily loader selected 657 distinct handles (636 current
+  sources plus 21 additional legacy venue handles); no active ingestion/provider
+  lease, pending daily snapshot or OpenAI circuit block was
   found. The next daily admission creates a fresh current-day run; it does not
   backfill the missing September 15 run. A configured timer and healthy service
   do not certify that all source posts will process successfully. Re-read current
