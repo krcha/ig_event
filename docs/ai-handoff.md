@@ -43,6 +43,10 @@ Known current follow-up:
   checks the complete pending queue independently of display filters. A ready row
   uses the same server-verification endpoint with its exact revision and a default
   audit note; custom notes are optional. Unverified rows retain source review.
+  Bulk approval uses an in-page confirmation with explicit Confirm and Cancel;
+  its synchronous submission guard prevents double clicks from sending a second
+  request. HTML or expired-session responses produce clear recovery guidance,
+  and an unsuccessful queue refresh must not be described as authoritative.
 - Clock evidence verification accepts source-bound overnight ranges and labeled
   event starts, while keeping door-opening times separate. It verifies each
   schedule row independently and preserves unresolved end times and conflicts.

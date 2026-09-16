@@ -1317,7 +1317,12 @@ assert.match(dashboardSource, /\/api\/admin\/events\/approve-unique-all/);
 const bulkUiSource = section(dashboardSource, "async function approveUniquePendingEvents()", "async function approveReadyEvent");
 assert.doesNotMatch(bulkUiSource, /minConfidence:|confidenceFilter|visibleEvents|filteredEvents/);
 assert.match(bulkUiSource, /buildVerifiedApprovalNote\(uniqueApprovalNote\)/);
-assert.match(bulkUiSource, /outside the current view and filters/);
+assert.doesNotMatch(bulkUiSource, /window\.confirm/);
+assert.match(dashboardSource, /outside the current view and filters/);
+assert.match(dashboardSource, /onClick=\{requestUniquePendingApproval\}/);
+assert.match(dashboardSource, /onClick=\{cancelUniquePendingApproval\}/);
+assert.match(dashboardSource, /onClick=\{\(\) => void approveUniquePendingEvents\(\)\}[\s\S]{0,100}Confirm approval/);
+assert.match(dashboardSource, /actionInFlightFor !== null \|\| isUniqueApprovalConfirmationOpen/);
 assert.match(dashboardSource, /Approve ready events/);
 assert.match(dashboardSource, /Add an approval note \(optional\)/);
 assert.match(dashboardSource, /Advanced filters and diagnostics/);
@@ -1350,7 +1355,137 @@ assert.doesNotMatch(
   /disabled=\{[\s\S]{0,300}!pendingUniquenessComplete/,
   "A degraded display classification must not disable a fresh full-queue scan.",
 );
-assert.match(dashboardSource, /refreshed queue is authoritative/);
+assert.match(bulkUiSource, /const refreshed = await fetchEvents\(\)/);
+assert.doesNotMatch(dashboardSource, /refreshed queue is authoritative/);
+
+const responseReaderSource = ts.transpileModule(section(
+  dashboardSource, "async function readModerationResponse", "export function ModerationDashboard",
+), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const readModerationResponse = new Function(`${responseReaderSource}\nreturn readModerationResponse;`)();
+const jsonResponse = (body, status = 200) => new Response(JSON.stringify(body), {
+  status, headers: { "content-type": "application/json" },
+});
+const queueLoaderSource = ts.transpileModule(section(
+  dashboardSource, "const fetchEvents = useCallback", "  useEffect(() => {\n    void fetchEvents();",
+), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+for (const [response, expected] of [
+  [jsonResponse({ events: [], eventListComplete: true, pendingUniquenessComplete: true }), true],
+  [new Response("<!DOCTYPE html>", { status: 404, headers: { "content-type": "text/html" } }), false],
+  [new Response("<!DOCTYPE html>", { headers: { "content-type": "application/json" } }), false],
+  [{ redirected: true }, false],
+  [jsonResponse({ events: null }), false],
+]) {
+  const states = {};
+  const setters = Object.fromEntries([
+    "setIsLoading", "setHasLoadedQueue", "setError", "setUniqueApprovalResult", "setEvents",
+    "setEventListComplete", "setPendingUniquenessComplete", "setDuplicateContextEvents",
+    "setIsDuplicateContextDegraded", "setIsDuplicateContextTruncated",
+  ].map((key) => [key, (value) => { states[key] = value; }]));
+  const context = {
+    ...setters, useCallback: (callback) => callback, status: "pending", MODERATION_QUEUE_FETCH_LIMIT,
+    fetchRequestGenerationRef: { current: 0 }, fetchAbortControllerRef: { current: null },
+    readModerationResponse, fetch: async () => response,
+  };
+  const loader = new Function(...Object.keys(context), `${queueLoaderSource}\nreturn fetchEvents;`)(...Object.values(context));
+  assert.equal(await loader(), expected, "The actual queue loader must report whether it loaded usable current data.");
+  assert.equal(states.setHasLoadedQueue, expected);
+  if (!expected) assert.doesNotMatch(states.setError, /DOCTYPE|Unexpected token|not valid JSON/);
+}
+const bulkHandlersSource = ts.transpileModule(section(
+  dashboardSource, "function requestUniquePendingApproval", "async function approveReadyEvent",
+), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const completeBulkResult = {
+  complete: true, reviewedCount: 10, confidenceEligibleCount: 10, belowConfidenceCount: 0,
+  approvedCount: 2, skippedDuringApprovalCount: 0, minimumConfidence: null,
+  dispositionCounts: { unique: 2, duplicate: 3, ambiguous: 1, ineligible: 3, indeterminate: 1 },
+};
+function makeBulkHandlers({ response, throwTransport = false, refreshSucceeds = true, waitForTransport } = {}) {
+  const calls = [];
+  const states = { error: null, success: null, action: null, confirmation: false, refreshes: 0 };
+  const phase = { current: "idle" };
+  const context = {
+    uniqueApprovalPhaseRef: phase, isAnyActionInFlight: false, actionInFlightFor: null,
+    isLoading: false, hasLoadedQueue: true, status: "pending",
+    // Zero ready rows in a truncated view must still permit the separate scan.
+    eventListComplete: false, pendingUniquenessComplete: false, uniquePendingEvents: [],
+    uniqueApprovalNote: "", UNIQUE_BULK_APPROVE_ACTION_ID: "bulk",
+    buildVerifiedApprovalNote, readModerationResponse,
+    setIsUniqueApprovalConfirmationOpen: (value) => { states.confirmation = value; },
+    setActionInFlightFor: (value) => { states.action = value; },
+    setError: (value) => { states.error = value; },
+    setUniqueApprovalResult: (value) => { states.success = value; },
+    fetchEvents: async () => { states.refreshes++; states.error = null; states.success = null; return refreshSucceeds; },
+    fetch: async (url, options) => {
+      calls.push({ url, method: options.method, redirect: options.redirect, body: JSON.parse(options.body) });
+      if (waitForTransport) await waitForTransport;
+      if (throwTransport) throw new TypeError("Failed to fetch");
+      return response ?? jsonResponse(completeBulkResult);
+    },
+  };
+  const handlers = new Function(...Object.keys(context), `${bulkHandlersSource}\nreturn {
+    request: requestUniquePendingApproval, cancel: cancelUniquePendingApproval, confirm: approveUniquePendingEvents,
+  };`)(...Object.values(context));
+  return { ...handlers, calls, states, phase };
+}
+const cancelledBulk = makeBulkHandlers();
+await cancelledBulk.confirm();
+cancelledBulk.request();
+cancelledBulk.request();
+assert.equal(cancelledBulk.states.confirmation, true);
+assert.equal(cancelledBulk.calls.length, 0, "Opening inline confirmation must not send a POST.");
+cancelledBulk.cancel();
+await cancelledBulk.confirm();
+assert.equal(cancelledBulk.calls.length, 0, "Cancel plus a stale confirm callback must not send a POST.");
+assert.equal(cancelledBulk.states.confirmation, false);
+
+let releaseBulkTransport;
+const repeatedBulk = makeBulkHandlers({ waitForTransport: new Promise((resolve) => { releaseBulkTransport = resolve; }) });
+repeatedBulk.request();
+const firstBulk = repeatedBulk.confirm();
+await repeatedBulk.confirm();
+repeatedBulk.cancel();
+repeatedBulk.request();
+assert.equal(repeatedBulk.phase.current, "submitting");
+assert.equal(repeatedBulk.calls.length, 1, "Repeated clicks before React renders must send exactly one POST.");
+releaseBulkTransport();
+await firstBulk;
+await repeatedBulk.confirm();
+assert.deepEqual(repeatedBulk.calls, [{
+  url: "/api/admin/events/approve-unique-all", method: "POST", redirect: "manual",
+  body: { moderationNote: buildVerifiedApprovalNote("") },
+}]);
+assert.equal(repeatedBulk.states.refreshes, 1);
+assert.equal(repeatedBulk.states.error, null);
+assert.match(repeatedBulk.states.success, /Approved 2 server-verified unique events/);
+assert.equal(repeatedBulk.phase.current, "idle");
+
+for (const refreshSucceeds of [true, false]) {
+  for (const response of [
+    new Response("<!DOCTYPE html><html>Sign in</html>", { status: 404, headers: { "content-type": "text/html" } }),
+    new Response("<!DOCTYPE html><html>Sign in</html>", { status: 200, headers: { "content-type": "text/html" } }),
+    new Response("<!DOCTYPE html>", { status: 200, headers: { "content-type": "application/json" } }),
+    { redirected: true }, { type: "opaqueredirect" },
+  ]) {
+    const run = makeBulkHandlers({ response, refreshSucceeds });
+    run.request(); await run.confirm(); await run.confirm();
+    assert.equal(run.calls.length, 1);
+    assert.match(run.states.error, /Approval could not be confirmed/);
+    assert.match(run.states.error, /sign in again if needed/i);
+    assert.doesNotMatch(run.states.error, /DOCTYPE|Unexpected token|not valid JSON|no approvals/i);
+    assert.equal(run.states.error.includes("The queue was refreshed."), refreshSucceeds);
+    assert.equal(run.states.error.includes("The queue could not be refreshed."), !refreshSucceeds);
+    assert.equal(run.states.success, null);
+  }
+}
+const lostBulk = makeBulkHandlers({ throwTransport: true, refreshSucceeds: false });
+lostBulk.request(); await lostBulk.confirm(); await lostBulk.confirm();
+assert.equal(lostBulk.calls.length, 1);
+assert.match(lostBulk.states.error, /Approval could not be confirmed/);
+assert.doesNotMatch(lostBulk.states.error, /Failed to fetch|queue was refreshed/);
+const completedWithoutRefresh = makeBulkHandlers({ refreshSucceeds: false });
+completedWithoutRefresh.request(); await completedWithoutRefresh.confirm();
+assert.match(completedWithoutRefresh.states.success, /Approved 2/);
+assert.match(completedWithoutRefresh.states.error, /Approval completed, but the queue could not be refreshed/);
 
 // Run the actual component's ready-row handler against a fake transport. This
 // verifies request identity/version, refresh after uncertain writes, and no
@@ -1363,27 +1498,26 @@ const readyRow = {
   moderation: { status: "pending" },
   pendingUniqueness: { id: "ready-event", expectedUpdatedAt: 123, disposition: "unique", reason: "unique_same_date_cohort" },
 };
-async function runReadyHandler({ event = readyRow, note = "", result, throwTransport = false } = {}) {
+async function runReadyHandler({ event = readyRow, note = "", result, response, throwTransport = false, refreshSucceeds = true, phase = "idle" } = {}) {
   const calls = [];
   const states = { error: null, success: null, action: null, refreshes: 0 };
   const handler = new Function(
     "getModerationReviewDecision", "buildVerifiedApprovalNote", "uniqueApprovalNote",
     "fetch", "fetchEvents", "setActionInFlightFor", "setError", "setUniqueApprovalResult",
+    "uniqueApprovalPhaseRef", "isAnyActionInFlight", "readModerationResponse",
     `${readyHandlerSource}\nreturn approveReadyEvent;`,
   )(
     getModerationReviewDecision, buildVerifiedApprovalNote, note,
     async (url, options) => {
       calls.push({ url, method: options.method, body: JSON.parse(options.body) });
       if (throwTransport) throw new Error("Lost acknowledgement");
-      return {
-        ok: true,
-        json: async () => result ?? { complete: true, approvedIds: [readyRow.id], skipped: [] },
-      };
+      return response ?? jsonResponse(result ?? { complete: true, approvedIds: [readyRow.id], skipped: [] });
     },
-    async () => { states.refreshes++; states.error = null; states.success = null; },
+    async () => { states.refreshes++; states.error = null; states.success = null; return refreshSucceeds; },
     (value) => { states.action = value; },
     (value) => { states.error = value; },
     (value) => { states.success = value; },
+    { current: phase }, false, readModerationResponse,
   );
   await handler(event);
   return { calls, states };
@@ -1400,6 +1534,10 @@ for (const confidenceScore of [null, 0, 0.2, 0.8, 0.95]) {
   assert.equal(states.action, null);
 }
 assert.equal((await runReadyHandler({ note: "Checked poster." })).calls[0].body.moderationNote, buildVerifiedApprovalNote("Checked poster."));
+for (const phase of ["confirming", "submitting"]) {
+  assert.equal((await runReadyHandler({ phase })).calls.length, 0,
+    "A ready-row action must not race bulk confirmation or submission.");
+}
 for (const event of [
   { ...readyRow, updatedAt: 124 }, { ...readyRow, pendingUniqueness: null },
   { ...readyRow, pendingUniqueness: { ...readyRow.pendingUniqueness, disposition: "duplicate" } },
@@ -1430,6 +1568,16 @@ for (const options of [
   assert.equal(states.success, null);
   assert.equal(states.refreshes, 1, "Refresh state after a failed or uncertain response.");
   assert.equal(states.action, null);
+}
+for (const response of [
+  new Response("<!DOCTYPE html>", { status: 404, headers: { "content-type": "text/html" } }),
+  { type: "opaqueredirect" },
+]) {
+  const { calls, states } = await runReadyHandler({ response, refreshSucceeds: false });
+  assert.equal(calls.length, 1);
+  assert.match(states.error, /Approval could not be confirmed/);
+  assert.match(states.error, /queue could not be refreshed/);
+  assert.doesNotMatch(states.error, /DOCTYPE|Unexpected token|queue was refreshed/);
 }
 const manualUiSource = section(dashboardSource, "async function updateStatus", "async function copyText");
 assert.match(manualUiSource, /window\.prompt/);

@@ -887,6 +887,20 @@ function PromotionControls({
   );
 }
 
+async function readModerationResponse<T>(response: Response, failureMessage: string): Promise<T> {
+  if (
+    response.redirected || response.type === "opaqueredirect" ||
+    !response.headers.get("content-type")?.toLowerCase().includes("application/json")
+  ) {
+    throw new Error(failureMessage);
+  }
+  try {
+    return await response.json() as T;
+  } catch {
+    throw new Error(failureMessage);
+  }
+}
+
 export function ModerationDashboard() {
   const [status, setStatus] = useState<EventStatus>("pending");
   const [visibleLimit, setVisibleLimit] = useState(
@@ -917,6 +931,8 @@ export function ModerationDashboard() {
   const [uniqueApprovalResult, setUniqueApprovalResult] = useState<string | null>(
     null,
   );
+  const [isUniqueApprovalConfirmationOpen, setIsUniqueApprovalConfirmationOpen] = useState(false);
+  const uniqueApprovalPhaseRef = useRef<"idle" | "confirming" | "submitting">("idle");
   const fetchRequestGenerationRef = useRef(0);
   const fetchAbortControllerRef = useRef<AbortController | null>(null);
 
@@ -954,11 +970,14 @@ export function ModerationDashboard() {
           signal: requestController.signal,
         },
       );
-      const payload = (await response.json()) as EventsResponse;
+      const payload = await readModerationResponse<EventsResponse>(
+        response,
+        "The moderation queue could not be loaded. Refresh the queue; sign in again if needed.",
+      );
       if (!isCurrentRequest()) {
-        return;
+        return false;
       }
-      if (!response.ok) {
+      if (!response.ok || !Array.isArray(payload.events)) {
         throw new Error(payload.error ?? "Failed to load moderation events.");
       }
       setEvents(payload.events);
@@ -970,14 +989,15 @@ export function ModerationDashboard() {
       setIsDuplicateContextDegraded(payload.duplicateContextDegraded === true);
       setIsDuplicateContextTruncated(payload.duplicateContextTruncated === true);
       setHasLoadedQueue(true);
+      return true;
     } catch (caughtError) {
       if (!isCurrentRequest()) {
-        return;
+        return false;
       }
       setError(
-        caughtError instanceof Error
+        caughtError instanceof Error && !(caughtError instanceof TypeError)
           ? caughtError.message
-          : "Unknown moderation load error.",
+          : "The moderation queue could not be loaded. Refresh the queue; sign in again if needed.",
       );
       setEvents([]);
       setHasLoadedQueue(false);
@@ -986,6 +1006,7 @@ export function ModerationDashboard() {
       setDuplicateContextEvents([]);
       setIsDuplicateContextDegraded(false);
       setIsDuplicateContextTruncated(false);
+      return false;
     } finally {
       if (isCurrentRequest()) {
         fetchAbortControllerRef.current = null;
@@ -1221,9 +1242,26 @@ export function ModerationDashboard() {
     return selectVisibleModerationEvents(filteredEvents, visibleLimit);
   }, [filteredEvents, visibleLimit]);
 
-  const isAnyActionInFlight = actionInFlightFor !== null;
+  const isAnyActionInFlight = actionInFlightFor !== null || isUniqueApprovalConfirmationOpen;
+
+  function requestUniquePendingApproval() {
+    if (uniqueApprovalPhaseRef.current !== "idle" || isAnyActionInFlight || isLoading ||
+        !hasLoadedQueue || status !== "pending") return;
+    uniqueApprovalPhaseRef.current = "confirming";
+    setIsUniqueApprovalConfirmationOpen(true);
+    setError(null);
+    setUniqueApprovalResult(null);
+  }
+
+  function cancelUniquePendingApproval() {
+    if (uniqueApprovalPhaseRef.current !== "confirming") return;
+    uniqueApprovalPhaseRef.current = "idle";
+    setIsUniqueApprovalConfirmationOpen(false);
+  }
 
   async function approveUniquePendingEvents() {
+    if (uniqueApprovalPhaseRef.current !== "confirming" || actionInFlightFor !== null ||
+        isLoading || !hasLoadedQueue || status !== "pending") return;
     if (
       eventListComplete &&
       pendingUniquenessComplete &&
@@ -1239,13 +1277,10 @@ export function ModerationDashboard() {
 
     const minimumConfidence = null;
 
-    const confirmed = window.confirm(
-      "Check all pending records and approve source-confirmed, unique events, including those outside the current view and filters? Duplicate, ambiguous, expired, ineligible, and indeterminate records will remain pending.",
-    );
-    if (!confirmed) {
-      return;
-    }
-
+    // Claim the action synchronously: React state alone cannot fence two clicks
+    // handled before the disabled state is rendered.
+    uniqueApprovalPhaseRef.current = "submitting";
+    setIsUniqueApprovalConfirmationOpen(false);
     setActionInFlightFor(UNIQUE_BULK_APPROVE_ACTION_ID);
     setError(null);
     setUniqueApprovalResult(null);
@@ -1253,12 +1288,16 @@ export function ModerationDashboard() {
     try {
       const response = await fetch("/api/admin/events/approve-unique-all", {
         method: "POST",
+        redirect: "manual",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           moderationNote,
         }),
       });
-      const payload = (await response.json()) as UniqueApprovalResponse;
+      const payload = await readModerationResponse<UniqueApprovalResponse>(
+        response,
+        "Approval could not be confirmed. Refresh the queue; sign in again if needed.",
+      );
       if (
         !response.ok ||
         payload.complete !== true ||
@@ -1289,7 +1328,7 @@ export function ModerationDashboard() {
         throw new Error("Complete unique pending approval returned the wrong confidence scope.");
       }
 
-      await fetchEvents();
+      const refreshed = await fetchEvents();
       setUniqueApprovalResult(
         `Reviewed ${reviewedCount} pending records. Confidence did not limit approval. Approved ${approvedCount} server-verified unique event${
           approvedCount === 1 ? "" : "s"
@@ -1301,20 +1340,30 @@ export function ModerationDashboard() {
           skippedDuringApprovalCount
         } changed during final approval and also remained pending.`,
       );
+      if (!refreshed) {
+        setError("Approval completed, but the queue could not be refreshed. Sign in again if needed, then refresh before approving more events.");
+      }
     } catch (caughtError) {
-      await fetchEvents();
+      const refreshed = await fetchEvents();
+      const failureMessage = caughtError instanceof Error &&
+        !(caughtError instanceof TypeError) && !(caughtError instanceof SyntaxError)
+        ? caughtError.message
+        : "Approval could not be confirmed. Refresh the queue; sign in again if needed.";
       setError(
-        caughtError instanceof Error
-          ? `${caughtError.message} The refreshed queue is authoritative and reconciles any confirmed in-flight chunk.`
-          : "Unknown unique approval error; the queue has been refreshed.",
+        `${failureMessage} ${refreshed
+          ? "The queue was refreshed. Review its current state before trying again."
+          : "The queue could not be refreshed. Sign in again if needed, then refresh it before approving."}`,
       );
     } finally {
+      uniqueApprovalPhaseRef.current = "idle";
       setActionInFlightFor(null);
     }
   }
 
   async function approveReadyEvent(event: ModerationEvent) {
+    if (uniqueApprovalPhaseRef.current !== "idle" || isAnyActionInFlight) return;
     if (getModerationReviewDecision(event).group !== "ready") return;
+    uniqueApprovalPhaseRef.current = "submitting";
     setActionInFlightFor(event.id);
     setError(null);
     setUniqueApprovalResult(null);
@@ -1323,16 +1372,17 @@ export function ModerationDashboard() {
     try {
       const response = await fetch("/api/admin/events/approve-unique", {
         method: "POST",
+        redirect: "manual",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           items: [{ eventId: event.id, expectedUpdatedAt: event.updatedAt }],
           moderationNote: buildVerifiedApprovalNote(uniqueApprovalNote),
         }),
       });
-      const payload = (await response.json()) as {
+      const payload = await readModerationResponse<{
         error?: string; complete?: boolean; approvedIds?: string[];
         skipped?: Array<{ id: string; expectedUpdatedAt: number; disposition: string; reason: string }>;
-      };
+      }>(response, "Approval could not be confirmed. Refresh the queue; sign in again if needed.");
       if (!response.ok || payload.complete !== true) {
         throw new Error(payload.error ?? "The server could not verify this approval.");
       }
@@ -1345,11 +1395,21 @@ export function ModerationDashboard() {
         throw new Error("The approval response did not match the reviewed event.");
       }
     } catch (caughtError) {
-      failureMessage = caughtError instanceof Error ? caughtError.message : "Approval could not be confirmed. The queue has been refreshed.";
+      failureMessage = caughtError instanceof Error &&
+        !(caughtError instanceof TypeError) && !(caughtError instanceof SyntaxError)
+        ? caughtError.message
+        : "Approval could not be confirmed. Refresh the queue; sign in again if needed.";
     } finally {
-      await fetchEvents();
+      const refreshed = await fetchEvents();
       if (successMessage) setUniqueApprovalResult(successMessage);
-      if (failureMessage) setError(failureMessage);
+      if (failureMessage) {
+        setError(`${failureMessage} ${refreshed
+          ? "The queue was refreshed. Review its current state before trying again."
+          : "The queue could not be refreshed. Sign in again if needed, then refresh it before approving."}`);
+      } else if (!refreshed) {
+        setError("Approval completed, but the queue could not be refreshed. Sign in again if needed, then refresh before approving more events.");
+      }
+      uniqueApprovalPhaseRef.current = "idle";
       setActionInFlightFor(null);
     }
   }
@@ -1621,7 +1681,7 @@ export function ModerationDashboard() {
                 className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={isAnyActionInFlight || isLoading || !hasLoadedQueue ||
                   (eventListComplete && pendingUniquenessComplete && uniquePendingEvents.length === 0)}
-                onClick={() => void approveUniquePendingEvents()}
+                onClick={requestUniquePendingApproval}
                 type="button"
               >
                 {actionInFlightFor === UNIQUE_BULK_APPROVE_ACTION_ID ? "Checking and approving..." : "Approve ready events"}
@@ -1630,6 +1690,24 @@ export function ModerationDashboard() {
                 Checks all pending records, including those outside this view and its filters.
                 Only source-confirmed, unique events are approved. Confidence scores do not limit this action.
               </p>
+              {isUniqueApprovalConfirmationOpen ? (
+                <div aria-labelledby="unique-approval-confirmation-title" className="space-y-3 rounded-xl border border-primary/40 bg-primary/5 p-3" role="group">
+                  <p className="text-sm font-medium" id="unique-approval-confirmation-title">Approve ready events across the pending queue?</p>
+                  <p className="text-sm text-muted-foreground">
+                    This includes events outside the current view and filters. Duplicate, ambiguous, expired, ineligible, and indeterminate records will remain pending.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60"
+                      disabled={actionInFlightFor !== null} onClick={() => void approveUniquePendingEvents()} type="button">
+                      Confirm approval
+                    </button>
+                    <button className="rounded-xl border border-border px-4 py-2 text-sm font-medium disabled:opacity-60"
+                      disabled={actionInFlightFor !== null} onClick={cancelUniquePendingApproval} type="button">
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               <details className="text-sm">
                 <summary className="cursor-pointer font-medium">Add an approval note (optional)</summary>
                 <label className="mt-3 block space-y-2">
