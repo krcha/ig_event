@@ -7,6 +7,7 @@ import {
   hasCompleteSourceGroundedAutoApproval,
   hasCompleteSourceGroundingAttestation,
   hasEventEvidenceV2AutoApproval,
+  hasExplicitNonEventEvidence,
   hasHumanReviewedLegacySourceAttestation,
   hasHumanReviewedStructuredSourceAttestation,
   hasTrustedSourceEventAnnouncementAutoApproval,
@@ -359,7 +360,12 @@ async function isCanonicallyGroundedApprovedEventInternal(
   event: Doc<"events">,
   aggregateProofPath: Set<string>,
 ): Promise<boolean> {
-  if (event.status !== "approved") return false;
+  if (
+    event.status !== "approved" ||
+    hasExplicitNonEventEvidence(event.normalizedFieldsJson, event)
+  ) {
+    return false;
+  }
   const fields = parseObject(event.normalizedFieldsJson);
   if (!fields) return false;
   const aggregateAttestation = readCrossPostCampaignAggregateAttestation(

@@ -9,6 +9,7 @@ import {
   HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION,
   hasCompleteSourceGroundingAttestation,
   hasEventEvidenceV2AutoApproval,
+  hasExplicitNonEventEvidence,
   hasHumanReviewableLegacySourceAttestation,
   hasHumanReviewableStructuredSourceAttestation,
 } from "../../lib/events/event-update-precondition";
@@ -41,6 +42,7 @@ export type ApprovalCandidateFields = {
   artists?: string[];
   sourceOccurrenceKey?: string;
   normalizedFieldsJson?: string;
+  rawExtractionJson?: string;
   timeEvidenceKind?:
     | "start_time_stated"
     | "not_stated"
@@ -224,10 +226,9 @@ export async function assertHumanApprovalSourcePolicy(
     candidate.normalizedFieldsJson,
     candidate,
   );
-  const humanReviewableLegacy = hasHumanReviewableLegacySourceAttestation(
-    candidate.normalizedFieldsJson,
-    candidate,
-  );
+  const humanReviewableLegacy =
+    !completeMachineAttestation &&
+    hasHumanReviewableLegacySourceAttestation(candidate.normalizedFieldsJson, candidate);
   const humanReviewableStructured =
     hasHumanReviewableStructuredSourceAttestation(
       candidate.normalizedFieldsJson,
@@ -364,6 +365,12 @@ export async function assertApprovalCandidatePolicy(
     }>;
   } = {},
 ): Promise<{ eventId: Id<"events">; updatedAt: number } | null> {
+  if (hasExplicitNonEventEvidence(candidate.normalizedFieldsJson, candidate)) {
+    throw new DomainError(
+      "MODERATION_INELIGIBLE",
+      "Explicit non-events cannot be approved.",
+    );
+  }
   if (!isSensibleEventTitleForApproval(candidate)) {
     throw new DomainError(
       "MODERATION_INELIGIBLE",

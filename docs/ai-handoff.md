@@ -31,6 +31,23 @@ Current priorities from `DEVELOPMENT_PLAN.md`:
 
 Known current follow-up:
 
+- The September 16 approval simplification uses moderation policy version 3.
+  Verified event/date/venue evidence can approve despite missing artwork or a low
+  date-confidence label; confidence stays informational and unstated times stay
+  TBD. Duplicate ambiguity, material source conflicts, real dates and exact source
+  binding still govern admission. Explicit non-event evidence in normalized or raw
+  extraction blocks every approval path, including admin create/update and public
+  grounding. Rejected rows require a deliberate return to pending before approval.
+- The admin queue opens with Ready to approve, with Needs review, Duplicates and
+  All pending views. Counts describe the loaded records. The main approval action
+  checks the complete pending queue independently of display filters. A ready row
+  uses the same server-verification endpoint with its exact revision and a default
+  audit note; custom notes are optional. Unverified rows retain source review.
+- Clock evidence verification accepts source-bound overnight ranges and labeled
+  event starts, while keeping door-opening times separate. It verifies each
+  schedule row independently and preserves unresolved end times and conflicts.
+  This release changes rules for subsequent processing; it does not bulk reprocess
+  historical sources or approve the existing queue as a deployment side effect.
 - Request-scoped authenticated Convex clients renew Clerk template tokens before
   each transport when expiry is near. Long moderation reads can outlive a token;
   reusing one initial JWT caused classification and duplicate-context reads to

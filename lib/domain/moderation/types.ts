@@ -1,4 +1,4 @@
-export const MODERATION_POLICY_VERSION = 2 as const;
+export const MODERATION_POLICY_VERSION = 3 as const;
 
 export type ModerationStatus = "pending" | "approved" | "rejected";
 

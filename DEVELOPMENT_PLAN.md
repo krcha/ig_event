@@ -105,8 +105,8 @@ Known follow-up:
 ### Milestone A: Trustworthy Calendar
 
 - Public `/events` and `/calendar` show only approved upcoming events.
-- Auto-approved events have high confidence and clear extraction evidence.
-- Low-confidence and missing-media entries stay in moderation.
+- Auto-approved events have verified source evidence and no duplicate or material conflict.
+- Low confidence, missing artwork and an unstated time are optional details; unresolved source facts stay in moderation.
 
 ### Milestone B: Reliable Ingestion Operations
 

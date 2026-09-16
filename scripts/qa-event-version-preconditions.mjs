@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+  createEvent,
   deleteApprovedEvent,
   mergeApprovedEvents,
   setEventStatus,
   setEventStatuses,
   updateEvent,
 } from "../convex/events.ts";
+import { isCanonicallyGroundedApprovedEvent } from "../convex/publicEventGrounding.ts";
+import { getModerationReviewDecision } from "../lib/events/moderation-view.ts";
 import { claimAndAttach, removeMissingAsset } from "../convex/mediaAssets.ts";
 import {
   assertExpectedEventUpdatedAt,
@@ -48,6 +51,7 @@ function makeCtx(initialEvent, options = {}) {
     ]),
   );
   const sourceOccurrences = new Map();
+  const scrapedPosts = new Map((options.scrapedPosts ?? []).map((row) => [row._id, row]));
   const topologyEpochs = new Map([
     [
       "source-occurrence-topology-epoch",
@@ -74,10 +78,14 @@ function makeCtx(initialEvent, options = {}) {
         query(table) {
           const filters = {};
           const tableRows =
-            table === "instagramEventSources"
+            table === "events"
+              ? events
+              : table === "instagramEventSources"
               ? sourceLinks
               : table === "sourceOccurrences"
                 ? sourceOccurrences
+                : table === "scrapedPosts"
+                  ? scrapedPosts
                 : table === "sourceOccurrenceTopologyEpoch"
                   ? topologyEpochs
                   : new Map();
@@ -327,6 +335,102 @@ await assert.rejects(
 assert.equal(updateInvalid.patches.length, 0);
 assert.equal(updateInvalid.audits.length, 0);
 
+for (const status of ["rejected", "approved"]) {
+  const sample = makeCtx(event(`approval-${status}`, { status }));
+  await assert.rejects(updateEvent._handler(sample.ctx, {
+    id: `approval-${status}`, patch: { status: "approved" },
+    expectedStatus: status, expectedUpdatedAt: 100,
+  }), /Only pending events can be approved/i);
+  assert.equal(sample.patches.length, 0);
+  assert.equal(sample.audits.length, 0);
+}
+const reopened = makeCtx(event("deliberate-reopen", { status: "rejected" }));
+await updateEvent._handler(reopened.ctx, {
+  id: "deliberate-reopen", patch: { status: "pending" },
+  expectedStatus: "rejected", expectedUpdatedAt: 100,
+});
+assert.equal(reopened.events.get("deliberate-reopen").status, "pending");
+assert.equal(reopened.patches.length, 1, "An explicit version-fenced reopen remains available.");
+
+const negativeEvidence = [
+  { normalizedFieldsJson: JSON.stringify({ extractionIsEvent: false }) },
+  { normalizedFieldsJson: JSON.stringify({ extractionNonEventReason: "closure_notice" }) },
+  { rawExtractionJson: JSON.stringify({ is_event: false }) },
+  { rawExtractionJson: JSON.stringify({ is_event: true, non_event_reason: "closure_notice" }) },
+  { normalizedFieldsJson: JSON.stringify({ moderationPendingReasons: ["non_event_closure_notice"] }) },
+  { normalizedFieldsJson: JSON.stringify({ moderationSignals: ["non_event_closure_notice"] }) },
+];
+for (const [index, evidence] of negativeEvidence.entries()) {
+  const id = `non-event-${index}`;
+  for (const existingNegative of [true, false]) {
+    const sample = makeCtx(event(id, existingNegative ? evidence : {}));
+    await assert.rejects(updateEvent._handler(sample.ctx, {
+      id, expectedUpdatedAt: 100, expectedStatus: "pending",
+      patch: { status: "approved", ...(existingNegative ? { normalizedFieldsJson: "{}", rawExtractionJson: "{}" } : evidence) },
+    }), /Explicit non-events cannot be approved/i);
+    assert.equal(sample.patches.length, 0, "Approval cannot erase or introduce negative evidence and write in the same transaction.");
+    assert.equal(sample.audits.length, 0);
+  }
+  const create = makeCtx([]);
+  await assert.rejects(createEvent._handler(create.ctx, {
+    title: "Jazz Quartet", date: "2035-01-15", venue: "QA Venue",
+    artists: [], eventType: "music", status: "approved", ...evidence,
+  }), /Explicit non-events cannot be approved/i);
+  assert.equal(create.events.size, 0);
+  assert.equal(create.patches.length, 0);
+  assert.equal(create.audits.length, 0);
+  assert.equal(await isCanonicallyGroundedApprovedEvent({
+    db: { query() { throw new Error("Explicit non-event must stop before source reads."); } },
+  }, event(id, { status: "approved", ...evidence })), false);
+}
+
+const humanId = "human-source-empty-reasons";
+const humanSource = {
+  _id: "human-source-post", handle: "qa_venue", username: "qa_venue",
+  postId: "HumanEvidence", instagramPostUrl: "https://www.instagram.com/p/HumanEvidence/",
+  caption: "Jazz Quartet 15 January 2035 at QA Venue", postedAt: "2035-01-01T12:00:00.000Z",
+};
+const humanFields = {
+  sourceGroundingVersion: 3, sourceGroundingEvidence: "instagram_caption",
+  sourceGroundingSourceKind: "caption", normalizedIsValid: true,
+  titleUsedFallback: false, dateSuspiciousYear: false, moderationPendingReasons: [],
+  title: "Jazz Quartet", normalizedDate: "2035-01-15", time: "TBD",
+  sourceGroundingSourceCaption: humanSource.caption,
+  sourceGroundingInstagramPostId: humanSource.postId,
+  sourceGroundingInstagramPostUrl: humanSource.instagramPostUrl,
+  sourceGroundingInstagramHandle: humanSource.handle,
+};
+const humanEvent = event(humanId, {
+  title: humanFields.title, date: humanFields.normalizedDate, time: humanFields.time,
+  artists: [], venueInstagramHandle: "qa_venue", sourceCaption: humanSource.caption,
+  sourcePostedAt: humanSource.postedAt, instagramPostId: humanSource.postId,
+  instagramPostUrl: humanSource.instagramPostUrl, normalizedFieldsJson: JSON.stringify(humanFields),
+});
+const humanApproval = makeCtx(humanEvent, { scrapedPosts: [humanSource] });
+await setEventStatus._handler(humanApproval.ctx, {
+  id: humanId, status: "approved", expectedUpdatedAt: 100,
+  moderationNote: "Reviewed the exact persisted source and its unique dated performance.",
+});
+assert.equal(humanApproval.events.get(humanId).status, "approved", "Empty derived reasons must not block a source-bound human approval.");
+const changedHumanSource = makeCtx(humanEvent, { scrapedPosts: [{ ...humanSource, caption: "Different source announcement" }] });
+await assert.rejects(setEventStatus._handler(changedHumanSource.ctx, {
+  id: humanId, status: "approved", expectedUpdatedAt: 100,
+  moderationNote: "Reviewed the exact persisted source and its unique dated performance.",
+}), /source does not match the persisted/i);
+assert.equal(changedHumanSource.patches.length, 0);
+assert.equal(changedHumanSource.audits.length, 0);
+
+const duplicateCreate = makeCtx(event("existing-performance", {
+  title: "Jazz Quartet", date: "2035-01-15", status: "approved",
+}));
+await assert.rejects(createEvent._handler(duplicateCreate.ctx, {
+  title: "Jazz Quartet", date: "2035-01-15", venue: "QA Venue",
+  artists: [], eventType: "music", status: "approved",
+}), /approved event already exists/i);
+assert.equal(duplicateCreate.events.size, 1);
+assert.equal(duplicateCreate.patches.length, 0);
+assert.equal(duplicateCreate.audits.length, 0);
+
 const statusMatch = makeCtx(event("status-match"));
 await setEventStatus._handler(statusMatch.ctx, {
   id: "status-match",
@@ -543,10 +647,10 @@ assert.match(
 const dashboardSource = readFileSync("components/admin/moderation-dashboard.tsx", "utf8");
 assert.match(dashboardSource, /expectedUpdatedAt: reviewedEvent\.updatedAt/g);
 assert.match(dashboardSource, /Approval note \(required; describe the source evidence and duplicate check\)/);
-assert.match(
-  dashboardSource,
-  /event\.pendingUniqueness\.expectedUpdatedAt === event\.updatedAt/,
-);
+assert.equal(getModerationReviewDecision({
+  id: "qa-stale-review", updatedAt: 101, moderation: { status: "pending" },
+  pendingUniqueness: { id: "qa-stale-review", expectedUpdatedAt: 100, disposition: "unique", reason: "unique_no_conflict" },
+}).group, "needs_review", "A stale uniqueness classification must never enable approval.");
 assert.match(dashboardSource, /expectedPrimaryUpdatedAt: primaryEvent\.updatedAt/);
 assert.match(dashboardSource, /expectedDuplicateVersions:/);
 assert.match(dashboardSource, /response\.status === 409/g);

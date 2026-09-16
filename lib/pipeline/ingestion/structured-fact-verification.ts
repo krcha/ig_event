@@ -1,5 +1,5 @@
 import { type ExtractedEventData } from "@/lib/ai/extract-event-data";
-import { extractEventTimeFromText, normalizeEventTime } from "@/lib/events/event-time";
+import { extractEventTimeEvidenceFromText, extractEventTimeFromText, normalizeEventTime } from "@/lib/events/event-time";
 import { type NightlifeLineupCoalescingPlan, type NightlifeLineupSource, titleContainsOnlyBilledArtists } from "@/lib/events/nightlife-lineup-coalescing";
 import { sourceEvidenceNamesSupportedUnnamedEventKind, specificVenueValueAppearsInUnnamedEventEvidence, venueValueAppearsInEventEvidence } from "@/lib/events/unnamed-schedule-fallback";
 import { normalizeExtractedArtists, toSearchableText } from "@/lib/pipeline/venue-normalization";
@@ -69,11 +69,40 @@ export function isVerifiedDateEvidence(options: {
   );
 }
 
+function readSourceClockEvidence(value: string, allowBareHourRange: boolean): ReturnType<typeof normalizeEventTime> | null {
+  // Markerless ranges need a distinct verified poster date before they can be
+  // interpreted as clocks. A typed model time alone cannot disambiguate a date.
+  const clockRange = value.trim().match(
+    /^([01]?\d|2[0-3])\s*h?\s*[-–—]\s*([01]?\d|2[0-4])\s*h?$/iu,
+  );
+  if (clockRange && (allowBareHourRange || /h/iu.test(value))) {
+    const start = clockRange[1].padStart(2, "0");
+    const end = String(Number(clockRange[2]) % 24).padStart(2, "0");
+    return normalizeEventTime(`${start}:00-${end}:00`);
+  }
+
+  const withoutDoors = stripDoorOpeningClockValues(value).replace(
+    /(^|[;\n])\s*ulaz(?:\s+(?:je\s+)?omogu[cć]en)?\s+(?:od|u)\s+(?:[01]?\d|2[0-3])(?::[0-5]\d|\s*h)\s*(?=$|[;\n])/giu,
+    "$1",
+  );
+  const extracted = extractEventTimeEvidenceFromText(withoutDoors);
+  if (!extracted) return null;
+
+  // A quote containing multiple performance clocks cannot prove which one is
+  // this occurrence. A single range is returned as one matched clock snippet.
+  const offset = withoutDoors.indexOf(extracted.evidence);
+  if (offset < 0) return null;
+  const remaining = withoutDoors.slice(0, offset) + withoutDoors.slice(offset + extracted.evidence.length);
+  if (extractEventTimeFromText(remaining)) return null;
+  return normalizeEventTime(extracted.time);
+}
+
 export function isVerifiedTimeEvidence(options: {
   evidence: ExtractedEventData["time_evidence"];
   resolvedStartTime: string | null;
   post: InstagramScrapedPost;
   hasPoster: boolean;
+  verifiedDateEvidence?: ExtractedEventData["date_evidence"];
 }): boolean {
   const evidenceText = normalizeString(options.evidence.exact_text);
   const evidenceIsBound =
@@ -105,16 +134,23 @@ export function isVerifiedTimeEvidence(options: {
     );
   }
 
-  const startEvidence = stripDoorOpeningClockValues(evidenceText);
-  const normalizedEvidenceTime = normalizeEventTime(startEvidence);
+  const verifiedDate = options.verifiedDateEvidence;
+  const allowBareHourRange = Boolean(
+    options.evidence.source === "poster" &&
+      verifiedDate?.resolved_date &&
+      normalizeString(verifiedDate.exact_text) &&
+      !toSearchableText(verifiedDate.exact_text).includes(toSearchableText(evidenceText)) &&
+      normalizeEventDate(evidenceText, null, options.post.postedAt).isoDate?.slice(5) !== verifiedDate.resolved_date.slice(5),
+  );
+  const normalizedEvidenceTime = readSourceClockEvidence(evidenceText, allowBareHourRange);
   const normalizedResolvedTime = normalizeEventTime(options.resolvedStartTime);
   return (
     Boolean(options.resolvedStartTime) &&
     evidenceIsBound &&
-    startEvidence === evidenceText &&
-    normalizedEvidenceTime.startLabel === normalizedResolvedTime.startLabel &&
+    Boolean(normalizedResolvedTime.startLabel) &&
+    normalizedEvidenceTime?.startLabel === normalizedResolvedTime.startLabel &&
     (!normalizedResolvedTime.endLabel ||
-      normalizedEvidenceTime.endLabel === normalizedResolvedTime.endLabel)
+      normalizedEvidenceTime?.endLabel === normalizedResolvedTime.endLabel)
   );
 }
 

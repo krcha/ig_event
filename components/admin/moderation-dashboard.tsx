@@ -21,6 +21,9 @@ import {
 import {
   DEFAULT_MODERATION_VISIBLE_LIMIT,
   MODERATION_QUEUE_FETCH_LIMIT,
+  VERIFIED_APPROVAL_NOTE,
+  buildVerifiedApprovalNote,
+  getModerationReviewDecision,
   selectVisibleModerationEvents,
 } from "@/lib/events/moderation-view";
 
@@ -230,12 +233,10 @@ type DecoratedEvent = ModerationEvent & {
 
 const STATUS_OPTIONS: EventStatus[] = ["pending", "approved", "rejected"];
 const UNIQUE_BULK_APPROVE_ACTION_ID = "__unique_bulk_approve__";
-// Optional display/approval filter; confidence never limits the default action.
+// Display filters never change the scope of verified approval.
 const HIGH_CONFIDENCE_FILTER_MIN = 0.8;
 const HIGH_CONFIDENCE_FILTER_LABEL =
   `${HIGH_CONFIDENCE_FILTER_MIN.toFixed(2)}+`;
-const DEFAULT_UNIQUE_APPROVAL_NOTE =
-  "Approved after server verification of source evidence, event date, venue identity, and same-date uniqueness.";
 const SERBIAN_CYRILLIC_TO_LATIN: Record<string, string> = {
   а: "a",
   б: "b",
@@ -907,13 +908,12 @@ export function ModerationDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [actionInFlightFor, setActionInFlightFor] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [sortMode, setSortMode] = useState<ModerationSortMode>("queue_priority");
+  const [sortMode, setSortMode] = useState<ModerationSortMode>("event_date");
+  const [reviewView, setReviewView] = useState<"ready" | "needs_review" | "duplicates" | "all">("ready");
   const [filterMode, setFilterMode] = useState<ModerationFilterMode>("all");
   const [confidenceFilter, setConfidenceFilter] =
     useState<ConfidenceFilterMode>("all");
-  const [uniqueApprovalNote, setUniqueApprovalNote] = useState(
-    DEFAULT_UNIQUE_APPROVAL_NOTE,
-  );
+  const [uniqueApprovalNote, setUniqueApprovalNote] = useState("");
   const [uniqueApprovalResult, setUniqueApprovalResult] = useState<string | null>(
     null,
   );
@@ -1110,12 +1110,14 @@ export function ModerationDashboard() {
   const filteredEvents = useMemo(() => {
     const query = normalizeSearchText(searchQuery);
     const next = decoratedEvents.filter((event) => {
+      if (status === "pending" && reviewView !== "all" &&
+          getModerationReviewDecision(event).group !== reviewView) return false;
       if (query && !event.searchText.includes(query)) {
         return false;
       }
       if (
         filterMode === "unique_pending" &&
-        event.pendingUniqueness?.disposition !== "unique"
+        getModerationReviewDecision(event).group !== "ready"
       ) {
         return false;
       }
@@ -1205,15 +1207,12 @@ export function ModerationDashboard() {
     });
 
     return next;
-  }, [confidenceFilter, decoratedEvents, filterMode, searchQuery, sortMode]);
+  }, [confidenceFilter, decoratedEvents, filterMode, reviewView, searchQuery, sortMode, status]);
 
   const uniquePendingEvents = useMemo(
     () =>
       decoratedEvents.filter(
-        (event) =>
-          event.moderation.status === "pending" &&
-          event.pendingUniqueness?.disposition === "unique" &&
-          event.pendingUniqueness.expectedUpdatedAt === event.updatedAt,
+        (event) => getModerationReviewDecision(event).group === "ready",
       ),
     [decoratedEvents],
   );
@@ -1232,30 +1231,16 @@ export function ModerationDashboard() {
     ) {
       return;
     }
-    const moderationNote = uniqueApprovalNote.trim();
+    const moderationNote = buildVerifiedApprovalNote(uniqueApprovalNote);
     if (moderationNote.length < 20 || moderationNote.length > 1_000) {
       setError("Unique approval requires a note of 20-1000 characters.");
       return;
     }
 
-    if (confidenceFilter !== "all" && confidenceFilter !== "high") {
-      setError(
-        `Complete-queue bulk approval supports all confidence levels or the optional ${HIGH_CONFIDENCE_FILTER_LABEL} filter.`,
-      );
-      return;
-    }
-
-    const minimumConfidence =
-      confidenceFilter === "high" ? HIGH_CONFIDENCE_FILTER_MIN : null;
+    const minimumConfidence = null;
 
     const confirmed = window.confirm(
-      minimumConfidence !== null
-        ? `Scan the complete pending queue and approve every server-verified unique event with final confidence ${HIGH_CONFIDENCE_FILTER_MIN.toFixed(2)} or higher? Lower-confidence, duplicate, ambiguous, expired, ineligible, and indeterminate records will remain pending.`
-        : eventListComplete && pendingUniquenessComplete
-        ? `Approve all ${uniquePendingEvents.length} server-verified unique pending event${
-            uniquePendingEvents.length === 1 ? "" : "s"
-          }? Duplicate, ambiguous, expired, ineligible, and indeterminate records will remain pending.`
-        : "Scan the complete pending queue and approve every server-verified unique event? Duplicate, ambiguous, expired, ineligible, and indeterminate records will remain pending.",
+      "Check all pending records and approve source-confirmed, unique events, including those outside the current view and filters? Duplicate, ambiguous, expired, ineligible, and indeterminate records will remain pending.",
     );
     if (!confirmed) {
       return;
@@ -1271,7 +1256,6 @@ export function ModerationDashboard() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           moderationNote,
-          ...(minimumConfidence === null ? {} : { minConfidence: minimumConfidence }),
         }),
       });
       const payload = (await response.json()) as UniqueApprovalResponse;
@@ -1307,11 +1291,7 @@ export function ModerationDashboard() {
 
       await fetchEvents();
       setUniqueApprovalResult(
-        `Reviewed ${reviewedCount} pending records. ${
-          minimumConfidence === null
-            ? "Confidence did not limit approval."
-            : `${confidenceEligibleCount} met the selected confidence ${HIGH_CONFIDENCE_FILTER_LABEL} filter and ${belowConfidenceCount} did not.`
-        } Approved ${approvedCount} server-verified unique event${
+        `Reviewed ${reviewedCount} pending records. Confidence did not limit approval. Approved ${approvedCount} server-verified unique event${
           approvedCount === 1 ? "" : "s"
         }. ${dispositionCounts.duplicate} duplicate, ${
           dispositionCounts.ambiguous
@@ -1329,6 +1309,47 @@ export function ModerationDashboard() {
           : "Unknown unique approval error; the queue has been refreshed.",
       );
     } finally {
+      setActionInFlightFor(null);
+    }
+  }
+
+  async function approveReadyEvent(event: ModerationEvent) {
+    if (getModerationReviewDecision(event).group !== "ready") return;
+    setActionInFlightFor(event.id);
+    setError(null);
+    setUniqueApprovalResult(null);
+    let successMessage: string | null = null;
+    let failureMessage: string | null = null;
+    try {
+      const response = await fetch("/api/admin/events/approve-unique", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          items: [{ eventId: event.id, expectedUpdatedAt: event.updatedAt }],
+          moderationNote: buildVerifiedApprovalNote(uniqueApprovalNote),
+        }),
+      });
+      const payload = (await response.json()) as {
+        error?: string; complete?: boolean; approvedIds?: string[];
+        skipped?: Array<{ id: string; expectedUpdatedAt: number; disposition: string; reason: string }>;
+      };
+      if (!response.ok || payload.complete !== true) {
+        throw new Error(payload.error ?? "The server could not verify this approval.");
+      }
+      if (payload.approvedIds?.length === 1 && payload.approvedIds[0] === event.id && payload.skipped?.length === 0) {
+        successMessage = `Approved ${event.title}.`;
+      } else if (payload.approvedIds?.length === 0 && payload.skipped?.length === 1 &&
+                 payload.skipped[0].id === event.id && payload.skipped[0].expectedUpdatedAt === event.updatedAt) {
+        failureMessage = `Not approved. ${getModerationReviewDecision({ ...event, pendingUniqueness: payload.skipped[0] }).reason}`;
+      } else {
+        throw new Error("The approval response did not match the reviewed event.");
+      }
+    } catch (caughtError) {
+      failureMessage = caughtError instanceof Error ? caughtError.message : "Approval could not be confirmed. The queue has been refreshed.";
+    } finally {
+      await fetchEvents();
+      if (successMessage) setUniqueApprovalResult(successMessage);
+      if (failureMessage) setError(failureMessage);
       setActionInFlightFor(null);
     }
   }
@@ -1516,6 +1537,8 @@ export function ModerationDashboard() {
       matching: filteredEvents.length,
       visible: visibleEvents.length,
       uniquePending: uniquePendingEvents.length,
+      needsReview: decoratedEvents.filter((event) => getModerationReviewDecision(event).group === "needs_review").length,
+      confirmedDuplicates: decoratedEvents.filter((event) => getModerationReviewDecision(event).group === "duplicates").length,
       issues: decoratedEvents.filter((event) => event.hasIssues).length,
       duplicates: decoratedEvents.filter((event) => event.suspectedDuplicateCount > 0).length,
       suspiciousYear: decoratedEvents.filter((event) => event.hasSuspiciousYear).length,
@@ -1532,32 +1555,12 @@ export function ModerationDashboard() {
 
   return (
     <section className="space-y-5 rounded-3xl border border-border bg-card p-5">
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-9">
-        {[
-          ["Loaded", stats.loaded],
-          ["Matching filter", stats.matching],
-          ["Showing", stats.visible],
-          ["Unique pending", stats.uniquePending],
-          ["Needs attention", stats.issues],
-          ["Suspected duplicates", stats.duplicates],
-          ["Suspicious year", stats.suspiciousYear],
-          ["Fallback title", stats.fallbackTitle],
-          ["Missing image", stats.missingImage],
-        ].map(([label, value]) => (
-          <div className="rounded-2xl border border-border bg-background/80 p-4" key={label}>
-            <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">{label}</p>
-            <p className="mt-2 text-3xl font-semibold">{value}</p>
-          </div>
-        ))}
-      </div>
-
       <section className="space-y-4 rounded-2xl border border-border bg-background/70 p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <h2 className="text-lg font-semibold">Review queue</h2>
             <p className="text-sm text-muted-foreground">
-              Filter the queue by confidence, suspected duplicates, missing media,
-              and event date issues.
+              Approve source-confirmed events, or review the evidence where a decision is still needed.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -1590,15 +1593,76 @@ export function ModerationDashboard() {
           ))}
         </div>
 
-        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_200px_200px_200px_160px]">
+        {status === "pending" ? (
+          <>
+            <div aria-label="Pending review views" className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              {([
+                ["ready", "Ready to approve", stats.uniquePending],
+                ["needs_review", "Needs review", stats.needsReview],
+                ["duplicates", "Duplicates", stats.confirmedDuplicates],
+                ["all", "All pending", stats.loaded],
+              ] as const).map(([value, label, count]) => (
+                <button
+                  aria-pressed={reviewView === value}
+                  className={`rounded-2xl border p-3 text-left ${reviewView === value ? "border-primary bg-primary/10" : "border-border bg-background"}`}
+                  disabled={isAnyActionInFlight}
+                  key={value}
+                  onClick={() => setReviewView(value)}
+                  type="button"
+                >
+                  <span className="block text-sm font-medium">{label}</span>
+                  <span className="text-2xl font-semibold">{isLoading || !hasLoadedQueue ? "—" : count}</span>
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">Counts cover the loaded records. Similar listings and incomplete evidence stay available for review.</p>
+            <div className="space-y-3 rounded-2xl border border-border bg-card p-4">
+              <button
+                className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isAnyActionInFlight || isLoading || !hasLoadedQueue ||
+                  (eventListComplete && pendingUniquenessComplete && uniquePendingEvents.length === 0)}
+                onClick={() => void approveUniquePendingEvents()}
+                type="button"
+              >
+                {actionInFlightFor === UNIQUE_BULK_APPROVE_ACTION_ID ? "Checking and approving..." : "Approve ready events"}
+              </button>
+              <p className="text-sm text-muted-foreground">
+                Checks all pending records, including those outside this view and its filters.
+                Only source-confirmed, unique events are approved. Confidence scores do not limit this action.
+              </p>
+              <details className="text-sm">
+                <summary className="cursor-pointer font-medium">Add an approval note (optional)</summary>
+                <label className="mt-3 block space-y-2">
+                  <span className="text-muted-foreground">The source and duplicate checks are recorded automatically.</span>
+                  <textarea
+                    aria-label="Unique approval moderation note"
+                    className="min-h-20 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm"
+                    disabled={isAnyActionInFlight}
+                    maxLength={800}
+                    onChange={(event) => setUniqueApprovalNote(event.target.value)}
+                    placeholder={VERIFIED_APPROVAL_NOTE}
+                    value={uniqueApprovalNote}
+                  />
+                </label>
+              </details>
+            </div>
+          </>
+        ) : null}
+
+        <div>
           <input
             aria-label="Search moderation events"
-            className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
+            className="w-full rounded-xl border border-input bg-background px-3 py-2 text-sm"
             disabled={isAnyActionInFlight}
             onChange={(event) => setSearchQuery(event.target.value)}
             placeholder="Search title, venue, artist, caption, or description"
             value={searchQuery}
           />
+        </div>
+        <details className="rounded-2xl border border-border p-3">
+          <summary className="cursor-pointer text-sm font-medium">Advanced filters and diagnostics</summary>
+          <p className="my-3 text-sm text-muted-foreground">These filters affect the displayed records only.</p>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <select
             aria-label="Moderation issue filter"
             className="rounded-xl border border-input bg-background px-3 py-2 text-sm"
@@ -1611,7 +1675,7 @@ export function ModerationDashboard() {
               <option value="unique_pending">Unique pending (server verified)</option>
             ) : null}
             <option value="issues">Needs attention</option>
-            <option value="suspected_duplicates">Suspected duplicates</option>
+            <option value="suspected_duplicates">Similar listings</option>
             <option value="suspicious_year">Suspicious year</option>
             <option value="low_confidence">Low confidence</option>
             <option value="fallback_title">Fallback title</option>
@@ -1661,7 +1725,14 @@ export function ModerationDashboard() {
             <option value="100">100 items</option>
             <option value="200">200 items</option>
           </select>
-        </div>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground">
+            <span>Similar listings: {stats.duplicates}</span>
+            <span>Date issues: {stats.suspiciousYear}</span>
+            <span>Fallback titles: {stats.fallbackTitle}</span>
+            <span>Missing images: {stats.missingImage}</span>
+          </div>
+        </details>
 
         {!isLoading && hasLoadedQueue ? (
           <p className="text-sm text-muted-foreground">
@@ -1670,48 +1741,6 @@ export function ModerationDashboard() {
           </p>
         ) : null}
 
-        {status === "pending" ? (
-          <div className="grid gap-3 rounded-2xl border border-border bg-card p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-            <label className="space-y-1 text-sm font-medium">
-              Unique-approval audit note
-              <textarea
-                aria-label="Unique approval moderation note"
-                className="min-h-20 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm font-normal"
-                disabled={isAnyActionInFlight}
-                maxLength={1_000}
-                onChange={(event) => setUniqueApprovalNote(event.target.value)}
-                value={uniqueApprovalNote}
-              />
-            </label>
-            <button
-              className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={
-                isAnyActionInFlight ||
-                isLoading ||
-                !hasLoadedQueue ||
-                (eventListComplete &&
-                  pendingUniquenessComplete &&
-                  uniquePendingEvents.length === 0) ||
-                (confidenceFilter !== "all" && confidenceFilter !== "high") ||
-                uniqueApprovalNote.trim().length < 20
-              }
-              onClick={() => void approveUniquePendingEvents()}
-              type="button"
-            >
-              {actionInFlightFor === UNIQUE_BULK_APPROVE_ACTION_ID
-                ? "Approving verified unique events..."
-                : confidenceFilter === "high"
-                  ? `Approve unique pending (${HIGH_CONFIDENCE_FILTER_LABEL})`
-                : eventListComplete && pendingUniquenessComplete
-                  ? `Approve all unique pending (${uniquePendingEvents.length})`
-                  : "Approve all eligible unique pending"}
-            </button>
-            <p className="text-sm text-muted-foreground lg:col-span-2">
-              Source-confirmed unique events are eligible at every confidence score,
-              including missing scores. Confidence filters are optional.
-            </p>
-          </div>
-        ) : null}
       </section>
 
       {status === "approved" ? (
@@ -1988,6 +2017,8 @@ export function ModerationDashboard() {
 
       <div className="space-y-3">
         {visibleEvents.map((event) => {
+          const reviewDecision = getModerationReviewDecision(event);
+          const isReadyToApprove = reviewDecision.group === "ready";
           const suspectedDuplicates = event.suspectedDuplicateIds
             .map((duplicateId) => decoratedEventById.get(duplicateId))
             .filter((duplicate): duplicate is DecoratedEvent => Boolean(duplicate))
@@ -2038,19 +2069,15 @@ export function ModerationDashboard() {
                       <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                         {event.eventType}
                       </span>
-                      {event.moderation.status === "pending" &&
-                      event.pendingUniqueness ? (
+                      {event.moderation.status === "pending" ? (
                         <span
                           className={`rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide ${
-                            event.pendingUniqueness.disposition === "unique"
+                            isReadyToApprove
                               ? "bg-emerald-100 text-emerald-800"
                               : "bg-slate-200 text-slate-700"
                           }`}
-                          title={event.pendingUniqueness.reason}
                         >
-                          {event.pendingUniqueness.disposition === "unique"
-                            ? "Server verified unique"
-                            : event.pendingUniqueness.disposition}
+                          {reviewDecision.label}
                         </span>
                       ) : null}
                       {event.promotionTier ? (
@@ -2059,46 +2086,6 @@ export function ModerationDashboard() {
                           {event.promotionPriority !== null
                             ? ` #${event.promotionPriority}`
                             : ""}
-                        </span>
-                      ) : null}
-                      {event.hasSuspiciousYear ? (
-                        <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-amber-800">
-                          Suspicious year
-                        </span>
-                      ) : null}
-                      {event.confidenceScore !== null && event.confidenceScore < 0.7 ? (
-                        <span className="rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-rose-800">
-                          Low confidence
-                        </span>
-                      ) : null}
-                      {event.suspectedDuplicateCount > 0 ? (
-                        <span className="rounded-full bg-orange-100 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-orange-800">
-                          Suspected duplicates {event.suspectedDuplicateCount}
-                        </span>
-                      ) : null}
-                      {event.hasResolvedDuplicate ? (
-                        <span className="rounded-full bg-rose-200 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-rose-900">
-                          Reviewed duplicate conflict
-                        </span>
-                      ) : null}
-                      {event.titleUsedFallback ? (
-                        <span className="rounded-full bg-sky-100 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-sky-800">
-                          Fallback title
-                        </span>
-                      ) : null}
-                      {event.missingTime ? (
-                        <span className="rounded-full bg-slate-200 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-slate-700">
-                          Missing time
-                        </span>
-                      ) : null}
-                      {event.allowMissingImage ? (
-                        <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-emerald-800">
-                          Video image optional
-                        </span>
-                      ) : null}
-                      {event.queuePriorityScore > 0 ? (
-                        <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                          Priority {event.queuePriorityScore}
                         </span>
                       ) : null}
                     </div>
@@ -2110,6 +2097,11 @@ export function ModerationDashboard() {
                         {" · "}
                         {event.venue}
                       </p>
+                      {event.moderation.status === "pending" ? (
+                        <p className={`mt-1 text-sm ${isReadyToApprove ? "text-emerald-700" : "text-muted-foreground"}`}>
+                          {reviewDecision.reason}
+                        </p>
+                      ) : null}
                       <EventTimeProvenanceText
                         className="mt-1 max-w-2xl"
                         time={event.time}
@@ -2128,7 +2120,7 @@ export function ModerationDashboard() {
 
                   <div className="text-sm text-muted-foreground xl:text-right">
                     <p>
-                      Confidence{" "}
+                      Confidence (informational){" "}
                       <span className="font-medium text-foreground">
                         {formatConfidenceScore(event.confidenceScore) ?? "(none)"}
                       </span>
@@ -2149,19 +2141,22 @@ export function ModerationDashboard() {
                 ) : null}
 
                 {suspectedDuplicates.length > 0 ? (
-                  <div className="rounded-2xl border border-orange-200 bg-orange-50/70 p-3">
-                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-orange-800">
-                      Suspected duplicates
+                  <details className="rounded-2xl border border-border p-3">
+                    <summary className="cursor-pointer text-sm font-medium">
+                      Compare similar listings ({suspectedDuplicates.length})
+                    </summary>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Text similarity is a review aid. The server checks whether listings represent the same event before approval.
                     </p>
                     <div className="mt-2 space-y-2">
                       {suspectedDuplicates.map((duplicate) => (
                         <div
-                          className="flex flex-col gap-1 text-sm text-orange-950 lg:flex-row lg:items-center lg:justify-between"
+                          className="flex flex-col gap-1 text-sm lg:flex-row lg:items-center lg:justify-between"
                           key={duplicate.id}
                         >
                           <div>
                             <p className="font-medium">{duplicate.title}</p>
-                            <p className="text-xs text-orange-900/80">
+                            <p className="text-xs text-muted-foreground">
                               {duplicate.date}
                               {duplicate.time ? ` at ${duplicate.time}` : ""}
                               {" · "}
@@ -2170,25 +2165,32 @@ export function ModerationDashboard() {
                               {duplicate.moderation.status}
                             </p>
                           </div>
-                          <Link
-                            className="rounded-lg border border-orange-300 px-2.5 py-1 text-xs font-medium"
-                            href={`/events/${duplicate.id}`}
-                          >
-                            Open
-                          </Link>
+                          {duplicate.moderation.status === "approved" ? (
+                            <Link
+                              className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium"
+                              href={`/events/${duplicate.id}`}
+                            >
+                              Open published event
+                            </Link>
+                          ) : duplicate.instagramPostUrl ? (
+                            <a className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium"
+                              href={duplicate.instagramPostUrl} rel="noreferrer" target="_blank">
+                              Open source
+                            </a>
+                          ) : null}
                         </div>
                       ))}
                     </div>
-                  </div>
+                  </details>
                 ) : null}
 
                 <div className="flex flex-wrap gap-2 text-sm">
-                  <Link
+                  {event.moderation.status === "approved" ? <Link
                     className="rounded-xl border border-border px-3 py-2 font-medium"
                     href={`/events/${event.id}`}
                   >
-                    Open details
-                  </Link>
+                    Open published event
+                  </Link> : null}
                   {event.instagramPostUrl ? (
                     <a
                       className="rounded-xl border border-border px-3 py-2 font-medium"
@@ -2218,8 +2220,17 @@ export function ModerationDashboard() {
                 </div>
 
                 <details className="rounded-2xl border border-border p-3 text-sm">
-                  <summary className="cursor-pointer font-medium">Admin details</summary>
+                  <summary className="cursor-pointer font-medium">Source evidence and advanced details</summary>
                   <div className="mt-4 space-y-4">
+                    <p className="text-xs text-muted-foreground">
+                      Diagnostics: priority {event.queuePriorityScore}; similar listings {event.suspectedDuplicateCount};
+                      {event.hasResolvedDuplicate ? " reviewed listing nearby;" : ""}
+                      {event.hasSuspiciousYear ? " suspicious year;" : ""}
+                      {event.titleUsedFallback ? " fallback title;" : ""}
+                      {event.missingTime ? " time not supplied;" : ""}
+                      {event.allowMissingImage ? " video image optional;" : ""}
+                      {event.pendingUniqueness ? ` server result: ${event.pendingUniqueness.reason}.` : " server verification unavailable."}
+                    </p>
                     <div className="grid gap-3 lg:grid-cols-4">
                       <div className="rounded-xl border border-border p-3">
                         <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
@@ -2414,14 +2425,16 @@ export function ModerationDashboard() {
 
                 {status === "pending" ? (
                   <div className="flex flex-wrap gap-2">
-                    <button
+                    {reviewDecision.group !== "duplicates" ? <button
                       className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
                       disabled={isAnyActionInFlight}
-                      onClick={() => void updateStatus(event.id, "approved")}
+                      onClick={() => void (isReadyToApprove
+                        ? approveReadyEvent(event)
+                        : updateStatus(event.id, "approved"))}
                       type="button"
                     >
-                      Approve
-                    </button>
+                      {isReadyToApprove ? "Approve" : "Review and approve"}
+                    </button> : null}
                     <button
                       className="rounded-xl border border-destructive px-4 py-2 text-sm font-medium text-destructive disabled:cursor-not-allowed disabled:opacity-60"
                       disabled={isAnyActionInFlight}

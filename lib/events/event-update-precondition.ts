@@ -72,6 +72,36 @@ function parseNormalizedFields(value: string | undefined): Record<string, unknow
   }
 }
 
+/** Explicit negative source evidence must survive every approval entry point. */
+export function hasExplicitNonEventEvidence(
+  normalizedFieldsJson: string | undefined,
+  eventFields?: EventApprovalFields,
+): boolean {
+  const fields = parseNormalizedFields(normalizedFieldsJson);
+  const raw = parseNormalizedFields(
+    typeof eventFields?.rawExtractionJson === "string"
+      ? eventFields.rawExtractionJson
+      : undefined,
+  );
+  return [fields, raw].some((record) => {
+    if (!record) return false;
+    return (
+      record.is_event === false ||
+      record.extractionIsEvent === false ||
+      [record.non_event_reason, record.extractionNonEventReason].some(
+        (reason) => typeof reason === "string" && reason.trim().length > 0,
+      ) ||
+      [record.moderationPendingReasons, record.moderationSignals].some(
+        (reasons) =>
+          Array.isArray(reasons) &&
+          reasons.some(
+            (reason) => typeof reason === "string" && /^non_event(?:_|$)/u.test(reason),
+          ),
+      )
+    );
+  });
+}
+
 function arraysContainSameJsonValues(left: unknown[], right: unknown[]): boolean {
   if (left.length !== right.length) return false;
   const leftValues = left.map((value) => JSON.stringify(value)).sort();
@@ -373,7 +403,9 @@ export function hasEventEvidenceV2AutoApproval(
   eventFields?: EventApprovalFields,
 ): boolean {
   const fields = parseNormalizedFields(normalizedFieldsJson);
-  if (!fields || !eventFields) return false;
+  if (!fields || !eventFields || hasExplicitNonEventEvidence(normalizedFieldsJson, eventFields)) {
+    return false;
+  }
   const pendingReasons = fields.moderationPendingReasons;
   const conflicts = getEffectiveEventEvidenceV2Conflicts(fields, eventFields);
   const date = normalizeComparableOptionalText(eventFields.date);
@@ -516,7 +548,7 @@ export function hasCompleteSourceGroundingAttestation(
   eventFields?: EventApprovalFields,
 ): boolean {
   const fields = parseNormalizedFields(normalizedFieldsJson);
-  if (!fields) {
+  if (!fields || hasExplicitNonEventEvidence(normalizedFieldsJson, eventFields)) {
     return false;
   }
 
@@ -545,7 +577,6 @@ export function hasCompleteSourceGroundingAttestation(
     fields.normalizedIsValid === true &&
     fields.titleUsedFallback === false &&
     fields.dateSuspiciousYear === false &&
-    (fields.dateConfidence === "high" || fields.dateConfidence === "medium") &&
     (missingImage === false ||
       (missingImage === true && fields.moderationAllowMissingImage === true)) &&
     hasBoundPublicFields(fields, eventFields)
@@ -573,9 +604,10 @@ function hasLegacyHumanSourceAttestation(
   requireFutureDate: boolean,
 ): boolean {
   const fields = parseNormalizedFields(normalizedFieldsJson);
-  if (!fields || !eventFields) return false;
+  if (!fields || !eventFields || hasExplicitNonEventEvidence(normalizedFieldsJson, eventFields)) {
+    return false;
+  }
   const sourceGroundingVersion = fields.sourceGroundingVersion;
-  const pendingReasons = fields.moderationPendingReasons;
   const conflicts = Array.isArray(eventFields.sourceConflictFields)
     ? eventFields.sourceConflictFields
     : [];
@@ -595,8 +627,6 @@ function hasLegacyHumanSourceAttestation(
     fields.normalizedIsValid === true &&
     fields.titleUsedFallback === false &&
     fields.dateSuspiciousYear === false &&
-    Array.isArray(pendingReasons) &&
-    pendingReasons.includes("requires_human_approval") &&
     conflicts.length === 0 &&
     publicTitle.length > 0 &&
     publicDate.length > 0 &&
@@ -645,7 +675,9 @@ function hasStructuredHumanSourceAttestation(
   requireFutureDate: boolean,
 ): boolean {
   const fields = parseNormalizedFields(normalizedFieldsJson);
-  if (!fields || !eventFields) return false;
+  if (!fields || !eventFields || hasExplicitNonEventEvidence(normalizedFieldsJson, eventFields)) {
+    return false;
+  }
   const rawExtraction = parseNormalizedFields(
     typeof eventFields.rawExtractionJson === "string"
       ? eventFields.rawExtractionJson
@@ -657,7 +689,6 @@ function hasStructuredHumanSourceAttestation(
   const publicVenue = normalizeComparableOptionalText(eventFields.venue);
   const publicArtists = normalizeComparableArtists(eventFields.artists ?? []);
   const normalizedArtists = normalizeComparableArtists(fields.artists);
-  const pendingReasons = fields.moderationPendingReasons;
   return (
     fields.extractionContractVersion === "event_evidence_v2" &&
     rawExtraction?.extraction_contract_version === "event_evidence_v2" &&
@@ -667,8 +698,6 @@ function hasStructuredHumanSourceAttestation(
     fields.sourceGroundingEvidence === "persisted_openai_event_evidence_v2" &&
     fields.normalizedIsValid === true &&
     fields.dateSuspiciousYear === false &&
-    Array.isArray(pendingReasons) &&
-    pendingReasons.length > 0 &&
     publicTitle.length > 0 &&
     publicDate.length > 0 &&
     (!requireFutureDate || isFutureIsoDate(publicDate)) &&
@@ -769,7 +798,9 @@ export function hasTrustedSourceEventAnnouncementAutoApproval(
   eventFields?: EventApprovalFields,
 ): boolean {
   const fields = parseNormalizedFields(normalizedFieldsJson);
-  if (!fields || !eventFields) return false;
+  if (!fields || !eventFields || hasExplicitNonEventEvidence(normalizedFieldsJson, eventFields)) {
+    return false;
+  }
 
   const pendingReasons = Array.isArray(fields.moderationPendingReasons)
     ? fields.moderationPendingReasons.map(String)
@@ -811,7 +842,6 @@ export function hasTrustedSourceEventAnnouncementAutoApproval(
     fields.sourceGroundingTitleVerified === true &&
     fields.sourceGroundingDateVerified === true &&
     fields.sourceGroundingIdentityContextVerified === true &&
-    (fields.dateConfidence === "high" || fields.dateConfidence === "medium") &&
     pendingReasons !== null &&
     pendingReasons.length === 0 &&
     signals !== null &&

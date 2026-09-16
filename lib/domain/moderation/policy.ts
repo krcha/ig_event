@@ -17,7 +17,6 @@ import {
   type ModerationValidationContext,
 } from "./types";
 
-export const TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_MIN_CONFIDENCE = 0.65;
 export const UNVERIFIED_CORE_EVENT_SOURCE_REASON = "unverified_core_event_source";
 export const HUMAN_REVIEW_REQUIRED_REASON = "requires_human_approval";
 export const NON_EVENT_CLOSURE_NOTICE_REASON = "non_event_closure_notice";
@@ -61,14 +60,6 @@ function prepareHumanModerationDecision(
 function prepareAutomatedModerationDecision(
   options: AutomatedModerationPreparation,
 ): DomainResult<AutomatedModerationDecision> {
-  const confidenceScore = calculateModerationConfidenceScore(
-    options.baseConfidenceScore,
-    {
-      hasSuspectedDuplicates: false,
-      missingImage: options.missingImage,
-      allowMissingImage: options.allowMissingImage,
-    },
-  );
   const autoApprovalBlockers = [...new Set(options.autoApprovalBlockers ?? [])];
   const timeTbdApplies = options.missingTime && options.hasDate;
   // Confidence describes extraction quality, not whether a source-confirmed
@@ -84,9 +75,7 @@ function prepareAutomatedModerationDecision(
     options.hasDate &&
     options.hasVenue &&
     !options.titleUsedFallback &&
-    !options.suspiciousYear &&
-    (options.dateConfidence === "high" || options.dateConfidence === "medium") &&
-    (!options.missingImage || options.allowMissingImage);
+    !options.suspiciousYear;
   const trustedSourceOnlyBlockers = new Set([
     UNVERIFIED_CORE_EVENT_SOURCE_REASON,
     "unverified_occurrence_plan",
@@ -103,12 +92,23 @@ function prepareAutomatedModerationDecision(
     options.sourceGroundingTitleVerified &&
     options.sourceGroundingDateVerified &&
     options.sourceGroundingIdentityContextVerified &&
-    options.approvalCaptionSourceCoherent &&
-    (options.dateConfidence === "high" || options.dateConfidence === "medium");
+    options.approvalCaptionSourceCoherent;
   const autoApproved =
     structuredEvidenceApproval ||
     strictSourceGroundedApproval ||
     trustedSourceAnnouncementApproval;
+  // Once the event itself is proven, missing artwork is an optional detail.
+  // Keep the persisted permission and signals consistent with that decision.
+  const allowMissingImage =
+    options.allowMissingImage || (options.missingImage && autoApproved);
+  const confidenceScore = calculateModerationConfidenceScore(
+    options.baseConfidenceScore,
+    {
+      hasSuspectedDuplicates: false,
+      missingImage: options.missingImage,
+      allowMissingImage,
+    },
+  );
   const autoApproveRule = structuredEvidenceApproval
     ? "event_evidence_v2"
     : strictSourceGroundedApproval
@@ -119,7 +119,7 @@ function prepareAutomatedModerationDecision(
   const signals = [
     ...(!autoApproved ? [HUMAN_REVIEW_REQUIRED_REASON] : []),
     ...(options.missingImage ? ["missing_image"] : []),
-    ...(options.allowMissingImage ? ["missing_image_allowed"] : []),
+    ...(allowMissingImage ? ["missing_image_allowed"] : []),
     ...(options.titleUsedFallback ? ["fallback_title"] : []),
     ...(timeTbdApplies ? ["time_tbd"] : []),
     ...(options.suspiciousYear ? ["suspicious_year"] : []),
@@ -133,11 +133,9 @@ function prepareAutomatedModerationDecision(
     : [
         HUMAN_REVIEW_REQUIRED_REASON,
         ...autoApprovalBlockers,
-        ...(options.missingImage && !options.allowMissingImage
-          ? ["missing_image"]
-          : []),
+        ...(!options.hasDate ? ["missing_date"] : []),
+        ...(!options.hasVenue ? ["missing_venue"] : []),
         ...(options.suspiciousYear ? ["suspicious_year"] : []),
-        ...(options.dateConfidence === "low" ? ["low_date_confidence"] : []),
       ];
 
   return domainSuccess({
@@ -150,7 +148,7 @@ function prepareAutomatedModerationDecision(
     autoApproveRule,
     pendingReasons,
     signals,
-    allowMissingImage: options.allowMissingImage,
+    allowMissingImage,
     policyVersion: MODERATION_POLICY_VERSION,
   });
 }

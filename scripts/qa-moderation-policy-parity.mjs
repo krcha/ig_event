@@ -209,8 +209,10 @@ const missingEvidence = automated({
 assert.equal(missingEvidence.targetStatus, "pending");
 assert.ok(!missingEvidence.pendingReasons.includes("missing_confidence"));
 assert.ok(!missingEvidence.pendingReasons.includes("below_auto_approve_threshold"));
-assert.ok(missingEvidence.pendingReasons.includes("low_date_confidence"));
+assert.ok(!missingEvidence.pendingReasons.includes("low_date_confidence"));
 assert.ok(missingEvidence.signals.includes("time_tbd"));
+assert.ok(automated({ hasDate: false }).pendingReasons.includes("missing_date"));
+assert.ok(automated({ hasVenue: false }).pendingReasons.includes("missing_venue"));
 
 // Exercise the real preparation output at the service create/update boundary:
 // a low aggregate score is information, not a second publication veto.
@@ -374,6 +376,71 @@ for (const path of automaticPaths) {
 }
 assert.equal(automated({ baseConfidenceScore: 1 }).targetStatus, "pending");
 
+// Optional artwork, a confidence label, or an unstated time must not veto
+// source-confirmed events. The final source evidence still has to agree.
+let optionalDetailChecks = 0;
+for (const path of automaticPaths) {
+  for (const dateConfidence of ["low", null, undefined]) {
+    for (const missingTime of [false, true]) {
+      const label = `${path.rule}, dateConfidence=${dateConfidence}, missingTime=${missingTime}`;
+      const caption = missingTime ? sourceCaption.replace(" at 20:00", "") : sourceCaption;
+      const event = {
+        ...publicEvent,
+        imageUrl: undefined,
+        sourceCaption: caption,
+        ...(missingTime ? {
+          time: "TBD", timeSource: "unknown", timeEvidenceText: "",
+          timeConfidence: 0, timeStatus: "unknown", timeEvidenceKind: "not_stated",
+        } : {}),
+      };
+      const decision = automated({
+        ...path.preparation, baseConfidenceScore: 0, dateConfidence,
+        missingImage: true, allowMissingImage: false, missingTime,
+      });
+      assert.equal(decision.targetStatus, "approved", label);
+      assert.equal(decision.allowMissingImage, true, label);
+      assert.deepEqual(decision.pendingReasons, [], label);
+      const fields = {
+        ...sourceFields, ...path.fields, ...event,
+        dateConfidence, missingImage: true,
+        sourceGroundingSourceCaption: caption,
+        sourceGroundingTimeVerified: missingTime ? null : true,
+        moderationAutoApproved: true, moderationAutoApproveRule: decision.autoApproveRule,
+        moderationPendingReasons: decision.pendingReasons, moderationSignals: decision.signals,
+        moderationAllowMissingImage: decision.allowMissingImage,
+      };
+      const json = JSON.stringify(fields);
+      assert.equal(path.accepts(json, event), true, label);
+      assert.doesNotThrow(() => assertServiceCreateEventPolicy("approved", json, event), label);
+      assert.doesNotThrow(() => assertServiceUpdateEventPolicy(
+        "pending", { status: "approved", normalizedFieldsJson: json }, event,
+      ), label);
+      const invalidDateProof = path.rule === "event_evidence_v2"
+        ? { dateEvidenceVerified: false }
+        : { sourceGroundingDateVerified: false };
+      assert.equal(path.accepts(JSON.stringify({ ...fields, ...invalidDateProof }), event), false,
+        `${label}: actual date proof remains required`);
+      for (const negative of [
+        { extractionIsEvent: false }, { is_event: false },
+        { extractionNonEventReason: "closure notice" }, { non_event_reason: "venue advertisement" },
+        { moderationSignals: [...decision.signals, "non_event_closure_notice"] },
+      ]) {
+        assert.equal(path.accepts(JSON.stringify({ ...fields, ...negative }), event), false,
+          `${label}: explicit non-event evidence cannot be overridden`);
+      }
+      assert.equal(path.accepts(json, { ...event, rawExtractionJson: '{"is_event":false}' }), false,
+        `${label}: raw non-event evidence remains authoritative`);
+      if (path.rule === "source_grounded_core_event_fields") {
+        assert.equal(path.accepts(JSON.stringify({ ...fields, moderationAllowMissingImage: false }), event), false);
+        assert.equal(path.accepts(JSON.stringify({ ...fields,
+          moderationSignals: decision.signals.filter((signal) => signal !== "missing_image_allowed"),
+        }), event), false);
+      }
+      optionalDetailChecks += 1;
+    }
+  }
+}
+
 // The calendar intentionally keeps the previous night until 07:00 Belgrade.
 // Recheck both admission and the actual detail handler across that boundary:
 // an event must not become ungrounded merely because calendar midnight passed.
@@ -519,6 +586,13 @@ try {
           expected,
           `${label}: human admission uses the same business date`,
         );
+        for (const reasons of [[], undefined]) {
+          assert.equal(
+            (structured ? hasHumanReviewableStructuredSourceAttestation : hasHumanReviewableLegacySourceAttestation)(
+              JSON.stringify({ ...humanFields, moderationPendingReasons: reasons }), humanRow,
+            ), expected, `${label}: derived pending reasons do not replace source proof`,
+          );
+        }
         nightlifeChecks += 1;
       }
       const valid = nightlifeFixture(path, businessDate);
@@ -588,5 +662,5 @@ assert.match(pipelineSource, /prepareModerationDecision\(/u);
 assert.doesNotMatch(pipelineSource, /function buildModerationDecision\(/u);
 
 console.log(
-  `QA passed: shared human moderation; ${scoreIndependentApprovals} score-independent approvals across all three automatic paths and service write boundaries; ${blockedEventChecks} non-event, duplicate, and material-conflict holds; ${nightlifeChecks} nightlife-date admission/detail checks across midnight, 07:00 and both DST transitions.`,
+  `QA passed: shared human moderation; ${scoreIndependentApprovals} score-independent approvals; ${optionalDetailChecks} optional-detail approvals with negative evidence checks across all three paths and service write boundaries; ${blockedEventChecks} non-event, duplicate, and material-conflict holds; ${nightlifeChecks} nightlife-date admission/detail checks across midnight, 07:00 and both DST transitions.`,
 );

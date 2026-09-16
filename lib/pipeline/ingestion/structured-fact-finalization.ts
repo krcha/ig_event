@@ -246,6 +246,7 @@ export function finalizeStructuredFactVariants({
       resolvedStartTime: eventConsistency.sanitizedTime ?? null,
       post,
       hasPoster: Boolean(selectedImageUrl),
+      verifiedDateEvidence: dateEvidenceVerified ? variant.dateEvidence : undefined,
     });
     const structuredEvidenceVerified =
       usesStructuredEvidence &&

@@ -43,7 +43,7 @@ import {
   reconcileAmbiguousOccurrenceKeysWithExistingEventsForTesting,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
 import { extractModelSplitEventCandidates } from "../lib/pipeline/ingestion/parsing-schedule.ts";
-import { isVerifiedEventIdentityEvidence } from "../lib/pipeline/ingestion/structured-fact-verification.ts";
+import { isVerifiedEventIdentityEvidence, isVerifiedTimeEvidence } from "../lib/pipeline/ingestion/structured-fact-verification.ts";
 import {
   extractEventTimeFromText,
   TBD_EVENT_TIME,
@@ -12269,6 +12269,110 @@ function runVenueAccountCanonicalLocationQa() {
   assert.equal(scheduleNamedOffsiteVenue.normalizedFields.trustedVenueSource, false);
 }
 
+function runSourceBoundTimeEvidenceFormattingQa() {
+  const date = isoDateDaysFromNow(9);
+  const imageUrl = "https://images.example.com/qa-time-evidence.jpg";
+  const prepare = ({ evidenceText, time, source = "caption", status = "start_time_stated", captionText = evidenceText, conflicts = [] }) => {
+    const title = "Source Clock Concert";
+    const caption = `${title} ${date} at QA Venue.\n${captionText}`;
+    const evidence = { status, exact_text: evidenceText, source };
+    const extracted = makeExtractedEvent({
+      extraction_contract_version: "event_evidence_v2",
+      title,
+      date,
+      time,
+      artists: [],
+      source_caption: caption,
+      time_evidence: evidence,
+      date_evidence: { exact_text: date, source: "caption", is_relative: false, resolved_date: date },
+      source_conflicts: conflicts,
+      field_confirmation: {
+        ...makeFieldConfirmation(),
+        title: { confidence: 0.95, found_in: ["caption"], evidence: title, evidence_snippets: [{ source: "caption", text: title }], notes: "Exact title." },
+      },
+      schedule_entries: [{
+        title, date, time, artists: [], venue: "QA Venue", description: "A live concert.",
+        source_text: `${title} ${date} at QA Venue.`,
+        date_evidence: { exact_text: date, source: "caption", is_relative: false, resolved_date: date },
+        time_evidence: evidence,
+      }],
+    });
+    return assertSingleOkPreparedEvent(prepareEventsForInsert(
+      makeInstagramPost({ caption, imageUrl, imageUrls: [imageUrl], postType: "image", locationName: "QA Venue" }),
+      extracted, imageUrl, {}, {}, {}, { eventDateFilterNow: new Date(QA_NOW_ISO) },
+    ));
+  };
+
+  for (const [evidenceText, time, source] of [
+    ["22-03", "22:00-03:00", "poster"],
+    ["22-7", "22:00-07:00", "poster"],
+    ["23-09h", "23:00-09:00", "caption"],
+    ["22h - LJETNO KINO", "22:00", "caption"],
+    ["Koncert počinje u 22:00", "22:00", "caption"],
+    ["Ulaz omogućen od 20:30; Koncert počinje u 22:00", "22:00", "caption"],
+    ["Doors open 20:30; Concert starts 22:00", "22:00", "caption"],
+    ["18H do 24H", "18:00", "caption"],
+  ]) {
+    const prepared = prepare({ evidenceText, time, source });
+    assert.equal(prepared.event.status, "approved", `Source-backed clock format ${evidenceText}: ${JSON.stringify(prepared.normalizedFields.moderationPendingReasons)}`);
+    assert.equal(prepared.event.time, time, "Time verification must not rewrite the source occurrence.");
+    assert.equal(prepared.normalizedFields.timeEvidenceVerified, true);
+  }
+
+  const missing = prepare({ evidenceText: "", time: "", status: "not_stated", source: "unknown" });
+  assert.equal(missing.event.status, "approved", "Missing optional time must not block a genuine event.");
+  assert.equal(missing.event.time, TBD_EVENT_TIME);
+
+  for (const [evidenceText, time, captionText] of [
+    ["22-7", "23:00-07:00", "22-7"],
+    ["22-7", "22:00-06:00", "22-7"],
+    ["START 23:00", "23:00-09:00", "START 23:00"],
+    ["22h - LJETNO KINO", "22:00", "No clock was posted."],
+    ["Doors open 20:30", "20:30", "Doors open 20:30"],
+    ["Ulaz omogućen od 20:30; Koncert počinje u 22:00", "20:30", "Ulaz omogućen od 20:30; Koncert počinje u 22:00"],
+    ["19.09", "19:09", "19.09"],
+    ["19-09", "19:00-09:00", "Concert on 19-09. No time stated."],
+    ["22-7", "22:00-07:00", "Concert on 22-7. No time stated."],
+    ["22-03", "22:00-03:00", "Concert on 22-03. No time stated."],
+    ["8-0 PM", "20:00-00:00", "8-0 PM"],
+    ["First act 20:00; Second act 22:00", "20:00", "First act 20:00; Second act 22:00"],
+    ["Radno vreme od 11 do 23", "11:00-23:00", "Radno vreme od 11 do 23"],
+  ]) {
+    assert.equal(isVerifiedTimeEvidence({
+      evidence: { status: "start_time_stated", exact_text: evidenceText, source: "caption" },
+      resolvedStartTime: time,
+      post: makeInstagramPost({ caption: captionText }),
+      hasPoster: true,
+    }), false, `Reject unsupported or ambiguous time: ${evidenceText} -> ${time}`);
+  }
+
+  for (const dateEvidence of [
+    undefined,
+    { exact_text: "22-03", source: "poster", resolved_date: "2026-03-22", is_relative: false },
+    { exact_text: "22 March 2026", source: "poster", resolved_date: "2026-03-22", is_relative: false },
+    { exact_text: "22 March 2027", source: "poster", resolved_date: "2027-03-22", is_relative: false },
+  ]) {
+    assert.equal(isVerifiedTimeEvidence({
+      evidence: { status: "start_time_stated", exact_text: "22-03", source: "poster" },
+      resolvedStartTime: "22:00-03:00",
+      post: makeInstagramPost({ postedAt: "2026-03-20T12:00:00Z" }),
+      hasPoster: true,
+      verifiedDateEvidence: dateEvidence,
+    }), false, "A markerless poster quote needs distinct verified date evidence, not the date interpreted as a clock.");
+  }
+
+  const dateOnlyCaption = prepare({ evidenceText: "22-03", time: "22:00-03:00", captionText: "Concert on 22-03. No time stated." });
+  assert.equal(dateOnlyCaption.event.status, "pending", "Even a separate valid event date must not turn a markerless caption date into a clock.");
+
+  const conflicting = prepare({
+    evidenceText: "22h - LJETNO KINO", time: "22:00",
+    conflicts: [{ field: "start_time", poster_value: "22:00", caption_value: "21:00", notes: "Unresolved start-time conflict." }],
+  });
+  assert.equal(conflicting.event.status, "pending");
+  assert.ok(conflicting.normalizedFields.moderationPendingReasons.includes("poster_caption_conflict"));
+}
+
+runSourceBoundTimeEvidenceFormattingQa();
 runPromptQa();
 runVenueQa();
 runArtistAndDescriptionQa();

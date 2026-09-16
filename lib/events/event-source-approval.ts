@@ -60,8 +60,23 @@ function stripDoorOpeningClocks(value: string): string {
   return value.replace(DOOR_CLOCK_PATTERN, " ");
 }
 
+function stripFullNumericDates(value: string): string {
+  // A full calendar date cannot prove a start clock (or contradict TBD).
+  // Keep bare dotted pairs and short years: those can still be clock notation.
+  return value.replace(
+    /(^|[^\p{L}\d.])(\d{1,2})\.(\d{1,2})\.(\d{4})(?=$|[^\p{L}\d])/gu,
+    (match, prefix: string, day: string, month: string, year: string) => {
+      const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+      return date.getUTCFullYear() === Number(year) &&
+        date.getUTCMonth() === Number(month) - 1 && date.getUTCDate() === Number(day)
+        ? `${prefix} `
+        : match;
+    },
+  );
+}
+
 function hasExplicitTime(segment: string, eventTime: unknown): boolean {
-  const withoutDoorClocks = stripDoorOpeningClocks(segment);
+  const withoutDoorClocks = stripFullNumericDates(stripDoorOpeningClocks(segment));
   if (typeof eventTime !== "string" || !eventTime.trim() || eventTime.trim().toUpperCase() === "TBD") {
     return !EVENT_CLOCK_PATTERN.test(withoutDoorClocks);
   }

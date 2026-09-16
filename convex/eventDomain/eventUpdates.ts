@@ -8,6 +8,7 @@ import {
   assertExpectedEventUpdatedAt,
   assertServiceUpdateEventPolicy,
   hasEventEvidenceV2AutoApproval,
+  hasExplicitNonEventEvidence,
   nextEventUpdatedAt,
 } from "../../lib/events/event-update-precondition";
 import { assertPublicEventImageWrite } from "../../lib/images/public-event-image";
@@ -61,6 +62,25 @@ export async function applyEventUpdate(
   }
   assertExpectedEventStatus(existingEvent.status, args.expectedStatus);
   assertExpectedEventUpdatedAt(existingEvent.updatedAt, args.expectedUpdatedAt);
+
+  if (args.patch.status === "approved") {
+    if (existingEvent.status !== "pending") {
+      throw new DomainError(
+        "MODERATION_INVALID_TRANSITION",
+        "Only pending events can be approved.",
+      );
+    }
+    const approvalCandidate = { ...existingEvent, ...args.patch };
+    if (
+      hasExplicitNonEventEvidence(existingEvent.normalizedFieldsJson, existingEvent) ||
+      hasExplicitNonEventEvidence(approvalCandidate.normalizedFieldsJson, approvalCandidate)
+    ) {
+      throw new DomainError(
+        "MODERATION_INELIGIBLE",
+        "Explicit non-events cannot be approved.",
+      );
+    }
+  }
 
   const { clearTicketPrice, ...eventPatch } = args.patch;
   if (clearTicketPrice && eventPatch.ticketPrice !== undefined) {
@@ -224,6 +244,7 @@ export async function applyEventUpdate(
         artists: effectiveEvent.artists,
         sourceOccurrenceKey: effectiveEvent.sourceOccurrenceKey,
         normalizedFieldsJson: effectiveEvent.normalizedFieldsJson,
+        rawExtractionJson: effectiveEvent.rawExtractionJson,
       },
       [args.id],
     );

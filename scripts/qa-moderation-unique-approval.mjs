@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import ts from "typescript";
 import {
   approveUniquePendingEvents,
   classifyPendingModerationUniqueness,
@@ -7,6 +8,8 @@ import {
 import {
   DEFAULT_MODERATION_VISIBLE_LIMIT,
   MODERATION_QUEUE_FETCH_LIMIT,
+  buildVerifiedApprovalNote,
+  getModerationReviewDecision,
   selectVisibleModerationEvents,
 } from "../lib/events/moderation-view.ts";
 import { buildSameDateModerationBatches } from "../lib/events/moderation-uniqueness-batches.ts";
@@ -1302,49 +1305,29 @@ assert.doesNotMatch(
   /confidenceScore|CONFIDENCE/,
   "Default unique approval candidates must not depend on a confidence score.",
 );
-assert.match(
-  dashboardSource,
-  /pendingUniqueness\?\.disposition\s*!?={2,3}\s*"unique"/,
-);
-const serverDispositionIndex = dashboardSource.search(
-  /pendingUniqueness\?\.disposition\s*!?={2,3}\s*"unique"/,
-);
-assert.notEqual(serverDispositionIndex, -1);
-const uniqueBranchStart = dashboardSource.lastIndexOf(
-  'filterMode === "unique_pending"',
-  serverDispositionIndex,
-);
-assert.notEqual(uniqueBranchStart, -1);
-const uniqueBranchEndCandidate = dashboardSource.indexOf(
-  "if (filterMode ===",
-  serverDispositionIndex,
-);
-const uniqueFilterSource = dashboardSource.slice(
-  uniqueBranchStart,
-  uniqueBranchEndCandidate === -1
-    ? serverDispositionIndex + 300
-    : uniqueBranchEndCandidate,
-);
+assert.match(uniqueCandidateSource, /getModerationReviewDecision\(event\)\.group === "ready"/);
+const uniqueFilterSource = section(dashboardSource, 'filterMode === "unique_pending" &&', 'if (filterMode === "issues"');
+assert.match(uniqueFilterSource, /getModerationReviewDecision\(event\)\.group !== "ready"/);
 assert.doesNotMatch(
   uniqueFilterSource,
   /duplicateConfidence|duplicateGroup|buildModerationDuplicateGroups|similarity/iu,
   "unique_pending must not recreate a client-authoritative uniqueness decision.",
 );
 assert.match(dashboardSource, /\/api\/admin\/events\/approve-unique-all/);
-assert.match(dashboardSource, /minConfidence: minimumConfidence/);
+const bulkUiSource = section(dashboardSource, "async function approveUniquePendingEvents()", "async function approveReadyEvent");
+assert.doesNotMatch(bulkUiSource, /minConfidence:|confidenceFilter|visibleEvents|filteredEvents/);
+assert.match(bulkUiSource, /buildVerifiedApprovalNote\(uniqueApprovalNote\)/);
+assert.match(bulkUiSource, /outside the current view and filters/);
+assert.match(dashboardSource, /Approve ready events/);
+assert.match(dashboardSource, /Add an approval note \(optional\)/);
+assert.match(dashboardSource, /Advanced filters and diagnostics/);
+assert.match(dashboardSource, /event\.moderation\.status === "approved" \? <Link[\s\S]{0,200}href=\{`\/events\/\$\{event\.id\}`\}/);
+assert.match(dashboardSource, /duplicate\.moderation\.status === "approved" \? \([\s\S]{0,220}href=\{`\/events\/\$\{duplicate\.id\}`\}/);
 assert.match(
   dashboardSource,
   /useState<ConfidenceFilterMode>\("all"\)/,
 );
 assert.match(dashboardSource, /const HIGH_CONFIDENCE_FILTER_MIN = 0\.8/);
-assert.match(
-  dashboardSource,
-  /confidenceFilter === "high" \? HIGH_CONFIDENCE_FILTER_MIN : null/,
-);
-assert.match(
-  dashboardSource,
-  /minimumConfidence === null \? \{\} : \{ minConfidence: minimumConfidence \}/,
-);
 assert.doesNotMatch(
   dashboardSource,
   /AUTO_APPROVE_CONFIDENCE_THRESHOLD|Auto-approve strict/,
@@ -1368,6 +1351,90 @@ assert.doesNotMatch(
   "A degraded display classification must not disable a fresh full-queue scan.",
 );
 assert.match(dashboardSource, /refreshed queue is authoritative/);
+
+// Run the actual component's ready-row handler against a fake transport. This
+// verifies request identity/version, refresh after uncertain writes, and no
+// prompt or retry without duplicating the implementation in a test helper.
+const readyHandlerSource = ts.transpileModule(section(
+  dashboardSource, "async function approveReadyEvent", "async function removeApprovedEvent",
+), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const readyRow = {
+  id: "ready-event", title: "Source-confirmed show", updatedAt: 123,
+  moderation: { status: "pending" },
+  pendingUniqueness: { id: "ready-event", expectedUpdatedAt: 123, disposition: "unique", reason: "unique_same_date_cohort" },
+};
+async function runReadyHandler({ event = readyRow, note = "", result, throwTransport = false } = {}) {
+  const calls = [];
+  const states = { error: null, success: null, action: null, refreshes: 0 };
+  const handler = new Function(
+    "getModerationReviewDecision", "buildVerifiedApprovalNote", "uniqueApprovalNote",
+    "fetch", "fetchEvents", "setActionInFlightFor", "setError", "setUniqueApprovalResult",
+    `${readyHandlerSource}\nreturn approveReadyEvent;`,
+  )(
+    getModerationReviewDecision, buildVerifiedApprovalNote, note,
+    async (url, options) => {
+      calls.push({ url, method: options.method, body: JSON.parse(options.body) });
+      if (throwTransport) throw new Error("Lost acknowledgement");
+      return {
+        ok: true,
+        json: async () => result ?? { complete: true, approvedIds: [readyRow.id], skipped: [] },
+      };
+    },
+    async () => { states.refreshes++; states.error = null; states.success = null; },
+    (value) => { states.action = value; },
+    (value) => { states.error = value; },
+    (value) => { states.success = value; },
+  );
+  await handler(event);
+  return { calls, states };
+}
+for (const confidenceScore of [null, 0, 0.2, 0.8, 0.95]) {
+  const { calls, states } = await runReadyHandler({ event: { ...readyRow, confidenceScore } });
+  assert.deepEqual(calls, [{
+    url: "/api/admin/events/approve-unique", method: "POST",
+    body: { items: [{ eventId: readyRow.id, expectedUpdatedAt: 123 }], moderationNote: buildVerifiedApprovalNote("") },
+  }]);
+  assert.match(states.success, /Approved Source-confirmed show/);
+  assert.equal(states.error, null);
+  assert.equal(states.refreshes, 1);
+  assert.equal(states.action, null);
+}
+assert.equal((await runReadyHandler({ note: "Checked poster." })).calls[0].body.moderationNote, buildVerifiedApprovalNote("Checked poster."));
+for (const event of [
+  { ...readyRow, updatedAt: 124 }, { ...readyRow, pendingUniqueness: null },
+  { ...readyRow, pendingUniqueness: { ...readyRow.pendingUniqueness, disposition: "duplicate" } },
+]) {
+  assert.equal((await runReadyHandler({ event })).calls.length, 0);
+}
+for (const [disposition, reason] of [
+  ["duplicate", "duplicate_same_occurrence"], ["ambiguous", "ambiguous_same_date_occurrence"],
+  ["ineligible", "ineligible_source_policy"], ["indeterminate", "indeterminate_approved_cohort_limit"],
+]) {
+  const { calls, states } = await runReadyHandler({ result: {
+    complete: true, approvedIds: [],
+    skipped: [{ ...readyRow.pendingUniqueness, disposition, reason }],
+  } });
+  assert.equal(calls.length, 1);
+  assert.match(states.error, /^Not approved\./);
+  assert.equal(states.success, null);
+  assert.equal(states.refreshes, 1);
+}
+for (const options of [
+  { throwTransport: true },
+  { result: { complete: false, approvedIds: [], skipped: [] } },
+  { result: { complete: true, approvedIds: ["other-event"], skipped: [] } },
+]) {
+  const { calls, states } = await runReadyHandler(options);
+  assert.equal(calls.length, 1, "An uncertain mutation must never be retried.");
+  assert.ok(states.error);
+  assert.equal(states.success, null);
+  assert.equal(states.refreshes, 1, "Refresh state after a failed or uncertain response.");
+  assert.equal(states.action, null);
+}
+const manualUiSource = section(dashboardSource, "async function updateStatus", "async function copyText");
+assert.match(manualUiSource, /window\.prompt/);
+assert.match(manualUiSource, /moderationNote\?\.length \?\? 0\) < 20/);
+assert.match(manualUiSource, /\/api\/admin\/events\/moderate/);
 
 assert.match(authQaSource, /classifyPendingModerationUniqueness/);
 assert.match(authQaSource, /approveUniquePendingEvents/);

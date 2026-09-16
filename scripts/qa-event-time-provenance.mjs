@@ -8,9 +8,34 @@ import {
   resolveEventTimeDisplay,
 } from "../lib/events/event-time.ts";
 import { normalizeEventTimeWritePatch } from "../lib/events/event-time-write.ts";
+import { isCaptionSourceCoherentWithEvent } from "../lib/events/event-source-approval.ts";
 import { getNightlifeDefaultDateKey } from "../lib/events/nightlife-date.ts";
 import { buildDuplicateUpdatePatch } from "../lib/pipeline/run-instagram-ingestion.ts";
 import { readIngestionArchitectureSource } from "./qa-support/ingestion-architecture-source.mjs";
+
+const sourceClockFixture = {
+  title: "Open Air Festival", date: "2026-09-23", time: "TBD",
+  venue: "QA Trusted Venue", artists: [], sourcePostedAt: "2026-09-16T12:00:00.000Z",
+  instagramPostId: "qaSourceClock", instagramPostUrl: "https://www.instagram.com/p/qaSourceClock/",
+  sourceInstagramHandle: "qa_venue", venueInstagramHandle: "qa_venue",
+};
+for (const [sourceCaption, time, expected] of [
+  ["Koncert Open Air Festival 23.09.2026 at QA Trusted Venue", "TBD", true],
+  ["Koncert Open Air Festival 23.09.2026. at QA Trusted Venue", "TBD", true],
+  ["Koncert Open Air Festival 23.09.2026 at QA Trusted Venue", "23:09", false],
+  ["Koncert Open Air Festival 23.09.2026 at QA Trusted Venue u 20:30", "TBD", false],
+  ["Koncert Open Air Festival 23.09.2026 at QA Trusted Venue u 20:30", "20:30", true],
+  ["Koncert Open Air Festival 23.09.2026 at QA Trusted Venue u 20:30", "21:30", false],
+  ["Koncert Open Air Festival 23.09.2026 at QA Trusted Venue u 21h", "TBD", false],
+  ["Koncert Open Air Festival 23 September 2026 at QA Trusted Venue 20.30", "TBD", false],
+  ["Koncert Open Air Festival 23 September 2026 at QA Trusted Venue 23.09", "TBD", false],
+  ["Koncert Open Air Festival 23 September 2026 at QA Trusted Venue 23.09.26", "TBD", false],
+  ["Koncert Open Air Festival 23 September 2026 at QA Trusted Venue 23.02.2026h", "TBD", false],
+  ["Koncert Open Air Festival 23 September 2026 at QA Trusted Venue 23.13.2026", "TBD", false],
+]) {
+  assert.equal(isCaptionSourceCoherentWithEvent({ ...sourceClockFixture, sourceCaption, time }), expected,
+    `Caption date/clock separation: ${sourceCaption} -> ${time}`);
+}
 
 const exactEvidence = extractEventTimeEvidenceFromText("Poster line: POČETAK   21H tonight");
 assert.deepEqual(exactEvidence, {
