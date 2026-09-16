@@ -31,6 +31,21 @@ Current priorities from `DEVELOPMENT_PLAN.md`:
 
 Known current follow-up:
 
+- Request-scoped authenticated Convex clients renew Clerk template tokens before
+  each transport when expiry is near. Long moderation reads can outlive a token;
+  reusing one initial JWT caused classification and duplicate-context reads to
+  degrade with Unauthenticated errors. Renewal keeps the same Clerk session,
+  shares concurrent refreshes, and does not retry mutations or use service auth.
+  Verify the complete signed-in review request after deploying this frontend fix.
+- Release `ee141ab` was verified live on September 16 with matching frontend and
+  complete Convex bundle hashes. Its strict cached recovery completed the
+  Onlyclubbing source as a canonical duplicate with no paid transport and no
+  event, source-receipt, publication, topology, migration or budget changes.
+  Historical daily-run receipts were preserved. Three multi-event schedule
+  sources remain held because their immutable source representations differ
+  from existing approved events; do not force those into successful receipts.
+  The next observed daily timer is September 16 at 09:00 Europe/Belgrade for
+  657 configured handles. That scheduled provider run has not happened yet.
 - Single-event duplicate admission treats source-child keys and occurrence keys
   as separate identifiers. A verified ordinary single-event child may resolve
   to one existing approved canonical event without inserting a duplicate. Source

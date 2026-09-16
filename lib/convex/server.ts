@@ -15,12 +15,48 @@ export async function createAuthenticatedConvexHttpClient(): Promise<ConvexHttpC
     throw new Error("Authentication required.");
   }
 
-  const token = await getToken({ template: "convex" });
-  if (!token) {
-    throw new Error("Could not create Convex auth token.");
+  let token: string | null = null;
+  let expiresAt = 0;
+  let refreshing: Promise<string> | undefined;
+  async function currentToken(): Promise<string> {
+    if (token && expiresAt > Date.now() + 10_000) return token;
+    if (!refreshing) {
+      refreshing = (async () => {
+        const nextToken = await getToken({ template: "convex" });
+        if (!nextToken) throw new Error("Could not create Convex auth token.");
+        let nextExpiresAt = 0;
+        try {
+          // This claim only schedules renewal; Convex still verifies the JWT.
+          const claims = JSON.parse(
+            Buffer.from(nextToken.split(".")[1], "base64url").toString("utf8"),
+          );
+          if (typeof claims.exp === "number") nextExpiresAt = claims.exp * 1_000;
+        } catch {
+          // Never include token contents in an error.
+        }
+        if (!Number.isFinite(nextExpiresAt) || nextExpiresAt <= Date.now() + 10_000) {
+          throw new Error("Could not create a fresh Convex auth token.");
+        }
+        token = nextToken;
+        expiresAt = nextExpiresAt;
+        return nextToken;
+      })().finally(() => {
+        refreshing = undefined;
+      });
+    }
+    return refreshing;
   }
 
-  return createConvexHttpClient(token);
+  return new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"), {
+    auth: await currentToken(),
+    fetch: async (input, init) => {
+      // Run at transport time, including after a mutation waits in the SDK queue.
+      const authToken = await currentToken();
+      const headers = new Headers(init?.headers);
+      headers.set("Authorization", `Bearer ${authToken}`);
+      return fetch(input, { ...init, headers });
+    },
+  });
 }
 
 export function getServiceSecret(): string | undefined {
