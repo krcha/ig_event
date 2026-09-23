@@ -520,7 +520,9 @@ export async function deleteExpiredEventsHandler(
   const effectiveSameDayCursor =
     persistedCursor?.sameDayCursor ?? args.sameDayCursor ?? null;
   const sameDayPage =
-    beforeDateScanComplete &&
+    // Convex permits only one paginated query per mutation. Commit the
+    // earlier-date phase transition first, even when its terminal page is empty.
+    beforeDateScanWasComplete &&
     shouldDeleteSameDayExpiredEvents &&
     !sameDayScanWasComplete &&
     remainingSlots > 0
@@ -551,7 +553,7 @@ export async function deleteExpiredEventsHandler(
     ? null
     : (sameDayPage?.continueCursor ?? effectiveSameDayCursor);
   if (
-    beforeDateScanComplete &&
+    beforeDateScanWasComplete &&
     shouldDeleteSameDayExpiredEvents &&
     !sameDayScanComplete &&
     remainingSlots > 0 &&

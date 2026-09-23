@@ -7,6 +7,26 @@ import {
   getEventExpiryCutoff,
 } from "../lib/events/event-retention.ts";
 
+async function runMutation(handler, ctx, args) {
+  let paginatedQueryCount = 0;
+  const wrapQuery = (query) => new Proxy(query, {
+    get(target, property) {
+      const value = target[property];
+      if (typeof value !== "function") return value;
+      return (...parameters) => {
+        if (property === "paginate") {
+          paginatedQueryCount += 1;
+          assert.ok(paginatedQueryCount <= 1,
+            "Convex permits only one paginated query per function invocation.");
+        }
+        const result = value.apply(target, parameters);
+        return property === "withIndex" || property === "order" ? wrapQuery(result) : result;
+      };
+    },
+  });
+  return handler({ ...ctx, db: { ...ctx.db, query: (...parameters) => wrapQuery(ctx.db.query(...parameters)) } }, args);
+}
+
 const cronsSource = readFileSync(new URL("../convex/crons.ts", import.meta.url), "utf8");
 const maintenanceSource = readFileSync(
   new URL("../convex/maintenance.ts", import.meta.url),
@@ -290,7 +310,7 @@ function makeStrictCutoffCtx() {
 }
 
 const strictCutoff = makeStrictCutoffCtx();
-const strictCutoffResult = await deleteExpiredEvents._handler(strictCutoff.ctx, {
+const strictCutoffResult = await runMutation(deleteExpiredEvents._handler, strictCutoff.ctx, {
   batchSize: 500,
   beforeDate: "2026-07-26",
 });
@@ -309,7 +329,7 @@ const expiredReviewedFold = makeStrictCutoffCtx();
 expiredReviewedFold.events.get("event-before").normalizedFieldsJson = JSON.stringify({
   reviewedPromotionVariantFold: { policyVersion: 1, operationId: "historical-reviewed-fold" },
 });
-const reviewedFoldRetirement = await deleteExpiredEvents._handler(expiredReviewedFold.ctx, {
+const reviewedFoldRetirement = await runMutation(deleteExpiredEvents._handler, expiredReviewedFold.ctx, {
   batchSize: 10, beforeDate: "2026-07-26",
 });
 assert.equal(reviewedFoldRetirement.deletedEventCount, 0);
@@ -318,7 +338,7 @@ assert.equal(expiredReviewedFold.events.has("event-before"), true,
 
 const invalidCutoff = makeStrictCutoffCtx();
 await assert.rejects(
-  deleteExpiredEvents._handler(invalidCutoff.ctx, {
+  runMutation(deleteExpiredEvents._handler, invalidCutoff.ctx, {
     batchSize: 500,
     beforeDate: "2026-02-30",
   }),
@@ -427,7 +447,7 @@ function makeLineageStarvationCtx() {
 }
 
 const lineageStarvation = makeLineageStarvationCtx();
-const retainedPage = await deleteExpiredEvents._handler(lineageStarvation.ctx, {
+const retainedPage = await runMutation(deleteExpiredEvents._handler, lineageStarvation.ctx, {
   batchSize: 500,
 });
 assert.equal(retainedPage.deletedEventCount, 0);
@@ -437,18 +457,18 @@ assert.equal(retainedPage.beforeDateScanComplete, false);
 assert.equal(retainedPage.hasMore, true);
 assert.ok(retainedPage.beforeDateCursor);
 for (let index = 1; index < 500; index += 1) {
-  const retainedContinuation = await deleteExpiredEvents._handler(lineageStarvation.ctx, { batchSize: 500 });
+  const retainedContinuation = await runMutation(deleteExpiredEvents._handler, lineageStarvation.ctx, { batchSize: 500 });
   assert.equal(retainedContinuation.deletedEventCount, 0);
   assert.equal(retainedContinuation.retainedCampaignEventCount, 1);
   assert.equal(retainedContinuation.hasMore, true);
 }
-const ordinaryPage = await deleteExpiredEvents._handler(lineageStarvation.ctx, {
+const ordinaryPage = await runMutation(deleteExpiredEvents._handler, lineageStarvation.ctx, {
   batchSize: 500,
 });
 assert.equal(ordinaryPage.deletedEventCount, 1);
 assert.equal(ordinaryPage.beforeDateScanComplete, true);
 assert.equal(ordinaryPage.hasMore, true);
-const completedLineageScan = await deleteExpiredEvents._handler(lineageStarvation.ctx, { batchSize: 500 });
+const completedLineageScan = await runMutation(deleteExpiredEvents._handler, lineageStarvation.ctx, { batchSize: 500 });
 assert.equal(completedLineageScan.hasMore, false);
 assert.deepEqual(lineageStarvation.deleted, [
   "ordinary-expired-after-retained-page",
@@ -619,7 +639,7 @@ function makeScrapedPostRetentionCtx() {
 }
 
 const scrapedPostRetention = makeScrapedPostRetentionCtx();
-const firstScrapedPage = await deleteOldScrapedPosts._handler(scrapedPostRetention.ctx, {
+const firstScrapedPage = await runMutation(deleteOldScrapedPosts._handler, scrapedPostRetention.ctx, {
   cutoffUpdatedAt: 100,
   cursor: null,
   limit: 2,
@@ -636,7 +656,7 @@ assert.equal(
   100,
 );
 
-const retainedOnlyScrapedPage = await deleteOldScrapedPosts._handler(
+const retainedOnlyScrapedPage = await runMutation(deleteOldScrapedPosts._handler,
   scrapedPostRetention.ctx,
   {
     cutoffUpdatedAt: 200,
@@ -659,7 +679,7 @@ assert.notEqual(
   "A fully retained page must still advance the cleanup cursor.",
 );
 
-const finalScrapedPage = await deleteOldScrapedPosts._handler(scrapedPostRetention.ctx, {
+const finalScrapedPage = await runMutation(deleteOldScrapedPosts._handler, scrapedPostRetention.ctx, {
   cutoffUpdatedAt: 200,
   cursor: null,
   limit: 2,
@@ -681,7 +701,7 @@ assert.deepEqual(
   ],
 );
 
-const nextCutoffScrapedPage = await deleteOldScrapedPosts._handler(
+const nextCutoffScrapedPage = await runMutation(deleteOldScrapedPosts._handler,
   scrapedPostRetention.ctx,
   {
     cutoffUpdatedAt: 200,
@@ -738,7 +758,7 @@ canonicalGuardRetention.instagramEventSources.set("link-by-canonical-source-url"
   instagramPostUrl: "https://www.instagram.com/p/DIFFERENT-LINK-URL/",
 });
 
-const canonicalGuardResult = await deleteOldScrapedPosts._handler(
+const canonicalGuardResult = await runMutation(deleteOldScrapedPosts._handler,
   canonicalGuardRetention.ctx,
   {
     cutoffUpdatedAt: 100,
@@ -892,8 +912,58 @@ const currentCutoff = getEventExpiryCutoff(
   new Date(),
   getConfiguredEventTimezone(),
 );
+
+// A full previous page may leave a cursor whose terminal page is empty.
+// Production Convex still counts that empty page as this mutation's one query.
+const emptyFinalEarlierPage = makeSameDayCursorCtx("2026-09-21");
+emptyFinalEarlierPage.retentionCursors.set("resumed-retention-cursor", {
+  _id: "resumed-retention-cursor",
+  key: "expired-events-v1",
+  cutoffDate: "2026-09-21",
+  cutoffMinutesSinceMidnight: 60,
+  beforeDateCursor: JSON.stringify({ date: "2026-09-20", creationTime: 99, id: "previously-deleted" }),
+  beforeDateScanComplete: false,
+  sameDayScanComplete: false,
+  createdAt: 1,
+  updatedAt: 1,
+});
+const resumedTransition = await runMutation(deleteExpiredEvents._handler, emptyFinalEarlierPage.ctx, { batchSize: 1 });
+assert.equal(resumedTransition.deletedEventCount, 0);
+assert.equal(resumedTransition.beforeDateScanComplete, true);
+assert.equal(resumedTransition.sameDayScanComplete, false);
+assert.equal(resumedTransition.sameDayCursor, null);
+assert.equal(resumedTransition.hasMore, true);
+assert.equal(emptyFinalEarlierPage.events.size, 5);
+assert.equal(emptyFinalEarlierPage.retentionCursors.get("resumed-retention-cursor").beforeDateScanComplete, true);
+const resumedSameDay = await runMutation(deleteExpiredEvents._handler, emptyFinalEarlierPage.ctx, { batchSize: 1 });
+assert.equal(resumedSameDay.deletedEventCount, 1);
+assert.equal(resumedSameDay.sameDayExpiredEventCount, 1);
+assert.equal(resumedSameDay.cutoffDate, "2026-09-21");
+assert.equal(resumedSameDay.cutoffTime, "01:00", "Resume must keep the original cutoff pinned.");
+assert.equal(resumedSameDay.hasMore, true);
+
+const explicitEmptyEarlierPage = makeSameDayCursorCtx("2026-09-21");
+const explicitEmptyResult = await runMutation(deleteExpiredEvents._handler, explicitEmptyEarlierPage.ctx, {
+  batchSize: 1, beforeDate: "2026-09-21",
+});
+assert.equal(explicitEmptyResult.hasMore, false, "Explicit beforeDate must not add a same-day phase.");
+assert.equal(explicitEmptyResult.deletedEventCount, 0);
+assert.equal(explicitEmptyEarlierPage.events.size, 5);
+assert.equal(explicitEmptyEarlierPage.retentionCursors.size, 0);
+
 const sameDayRetention = makeSameDayCursorCtx(currentCutoff.isoDate);
-const firstSameDayPage = await deleteExpiredEvents._handler(sameDayRetention.ctx, {
+const initialSameDayTransition = await runMutation(deleteExpiredEvents._handler, sameDayRetention.ctx, {
+  batchSize: 2,
+});
+assert.equal(initialSameDayTransition.beforeDateScanComplete, true);
+assert.equal(initialSameDayTransition.sameDayScanComplete, false);
+assert.equal(initialSameDayTransition.sameDayCursor, null);
+assert.equal(initialSameDayTransition.deletedEventCount, 0,
+  "An empty earlier-date scan must commit its phase transition before paginating the cutoff date.");
+assert.equal(initialSameDayTransition.hasMore, true);
+assert.equal(sameDayRetention.retentionCursors.size, 1);
+assert.equal([...sameDayRetention.retentionCursors.values()][0].beforeDateScanComplete, true);
+const firstSameDayPage = await runMutation(deleteExpiredEvents._handler, sameDayRetention.ctx, {
   batchSize: 2,
 });
 assert.equal(firstSameDayPage.beforeDateScanComplete, true);
@@ -904,7 +974,7 @@ assert.equal(firstSameDayPage.hasMore, true);
 assert.ok(firstSameDayPage.sameDayCursor);
 assert.equal(sameDayRetention.retentionCursors.size, 1);
 
-const secondSameDayPage = await deleteExpiredEvents._handler(sameDayRetention.ctx, {
+const secondSameDayPage = await runMutation(deleteExpiredEvents._handler, sameDayRetention.ctx, {
   batchSize: 2,
 });
 assert.equal(secondSameDayPage.sameDayScanComplete, false);
@@ -914,15 +984,15 @@ assert.equal(secondSameDayPage.retainedCampaignEventCount, 1);
 assert.equal(secondSameDayPage.hasMore, true);
 assert.notEqual(secondSameDayPage.sameDayCursor, firstSameDayPage.sameDayCursor);
 
-const thirdSameDayPage = await deleteExpiredEvents._handler(sameDayRetention.ctx, { batchSize: 2 });
+const thirdSameDayPage = await runMutation(deleteExpiredEvents._handler, sameDayRetention.ctx, { batchSize: 2 });
 assert.equal(thirdSameDayPage.deletedEventCount, 1);
 assert.equal(thirdSameDayPage.hasMore, true);
-const fourthSameDayPage = await deleteExpiredEvents._handler(sameDayRetention.ctx, { batchSize: 2 });
+const fourthSameDayPage = await runMutation(deleteExpiredEvents._handler, sameDayRetention.ctx, { batchSize: 2 });
 assert.equal(fourthSameDayPage.deletedEventCount, 0);
 assert.equal(fourthSameDayPage.retainedCampaignEventCount, 1);
 assert.equal(fourthSameDayPage.hasMore, true);
 
-const finalSameDayPage = await deleteExpiredEvents._handler(sameDayRetention.ctx, {
+const finalSameDayPage = await runMutation(deleteExpiredEvents._handler, sameDayRetention.ctx, {
   batchSize: 2,
 });
 assert.equal(finalSameDayPage.sameDayScanComplete, true);

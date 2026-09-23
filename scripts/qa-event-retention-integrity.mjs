@@ -18,6 +18,26 @@ const tableNames = [
   "venues", "venueIdentities", "legacySourceOccurrenceAdmissions", "mediaAssets",
 ];
 
+async function runMutation(handler, ctx, args) {
+  let paginatedQueryCount = 0;
+  const wrapQuery = (query) => new Proxy(query, {
+    get(target, property) {
+      const value = target[property];
+      if (typeof value !== "function") return value;
+      return (...parameters) => {
+        if (property === "paginate") {
+          paginatedQueryCount += 1;
+          assert.ok(paginatedQueryCount <= 1,
+            "Convex permits only one paginated query per function invocation.");
+        }
+        const result = value.apply(target, parameters);
+        return property === "withIndex" || property === "order" ? wrapQuery(result) : result;
+      };
+    },
+  });
+  return handler({ ...ctx, db: { ...ctx.db, query: (...parameters) => wrapQuery(ctx.db.query(...parameters)) } }, args);
+}
+
 function makeDb(initial = {}) {
   const tables = Object.fromEntries(tableNames.map((name) => [name,
     new Map((initial[name] ?? []).map((row) => [row._id, structuredClone(row)])),
@@ -74,7 +94,7 @@ function makeDb(initial = {}) {
 
 async function audit(ctx) {
   for (let index = 0; index < 10000; index += 1) {
-    const result = await auditRetentionReceiptCoverageBatch._handler(ctx, {});
+    const result = await runMutation(auditRetentionReceiptCoverageBatch._handler, ctx, {});
     if (result.isDone) { assert.equal(result.ready, true); return result; }
   }
   throw new Error("Retention fixture audit did not terminate");
@@ -200,7 +220,7 @@ if (snapshot) {
   let deletedCount = 0; let retainedCount = 0;
   for (let iteration = 0; ; iteration += 1) {
     assert.ok(iteration < tables.events.length + 10, "Snapshot cleanup must advance.");
-    const result = await deleteExpiredEventsHandler(state, { batchSize: 1 });
+    const result = await runMutation(deleteExpiredEventsHandler, state, { batchSize: 1 });
     deletedCount += result.deletedEventCount;
     retainedCount += result.retainedCampaignEventCount;
     if (!result.hasMore) break;
