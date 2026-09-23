@@ -15,9 +15,22 @@ import {
   refreshEventPublicationStates,
 } from "./publicationPolicy";
 import { assertOperationPaginationOptions } from "./internal/requestBounds";
+import { MAX_SOURCE_OCCURRENCE_KEYS_PER_SOURCE } from "./internal/sourceOccurrenceLimits";
+import { assertExistingSourceOccurrenceReceiptWithinBounds } from "./internal/sourceOccurrenceReceipts";
+import { adaptInstagramScrapedPostToSourceDocument } from "../lib/domain/source-documents";
+import { buildInstagramSourceOccurrenceFingerprint } from "../lib/domain/occurrences/source-fingerprint";
+import {
+  canonicalizeSourceUrlOrEmpty,
+  getSourceUrlLookupVariants,
+} from "../lib/domain/source-url";
+import {
+  getEventExpiryCutoff,
+  isEventExpiredAtCutoff,
+} from "../lib/events/event-retention";
 
 const MAX_MEDIA_SOURCE_MATCHES = 25;
-const MAX_ORPHANED_MEDIA_CLEANUP_PAGE_SIZE = 500;
+const MAX_ORPHANED_MEDIA_CLEANUP_PAGE_SIZE = 5;
+const MEDIA_RETENTION_CURSOR_KEY = "orphaned-media-retention-v1";
 
 const sourceIdentityArgs = {
   postId: v.optional(v.string()),
@@ -652,49 +665,301 @@ export const removeMissingAsset = internalMutation({
   },
 });
 
+async function sourceHasEventReference(
+  ctx: MutationCtx,
+  source: { postId?: string; instagramPostUrl?: string },
+): Promise<boolean> {
+  const canonicalSourceUrl = canonicalizeSourceUrlOrEmpty(
+    "instagram",
+    source.instagramPostUrl,
+  );
+  if (!source.postId || !canonicalSourceUrl) return true;
+  const sourceUrls = [...new Set([
+    source.instagramPostUrl as string,
+    ...getSourceUrlLookupVariants("instagram", source.instagramPostUrl),
+  ])];
+  const references = await Promise.all([
+    ctx.db.query("events")
+      .withIndex("by_instagramPostId", (q) => q.eq("instagramPostId", source.postId))
+      .first(),
+    ctx.db.query("events")
+      .withIndex("by_canonicalSourceUrl", (q) => q.eq("canonicalSourceUrl", canonicalSourceUrl))
+      .first(),
+    ctx.db.query("events")
+      .withIndex("by_normalizedInstagramPostUrl", (q) => q.eq("normalizedInstagramPostUrl", canonicalSourceUrl))
+      .first(),
+    ...sourceUrls.map((url) => ctx.db.query("events")
+      .withIndex("by_instagramPostUrl", (q) => q.eq("instagramPostUrl", url))
+      .first()),
+    ctx.db.query("instagramEventSources")
+      .withIndex("by_post_id", (q) => q.eq("instagramPostId", source.postId))
+      .first(),
+    ctx.db.query("instagramEventSources")
+      .withIndex("by_canonical_source_url", (q) => q.eq("canonicalSourceUrl", canonicalSourceUrl))
+      .first(),
+    ...sourceUrls.map((url) => ctx.db.query("instagramEventSources")
+      .withIndex("by_post_url", (q) => q.eq("instagramPostUrl", url))
+      .first()),
+  ]);
+  return references.some(Boolean);
+}
+
+async function hasDrainedCurrentLegacyReceipt(
+  ctx: MutationCtx,
+  post: Doc<"scrapedPosts">,
+): Promise<boolean> {
+  const revision = post.sourceRevision ?? 1;
+  if (!Number.isSafeInteger(revision) || revision < 1 || post.analysisRevision !== revision) return false;
+  const source = adaptInstagramScrapedPostToSourceDocument(post);
+  const receipts = await ctx.db.query("instagramSourceOccurrenceReceipts")
+    .withIndex("by_sourceIdentity", (q) => q.eq("sourceIdentity", source.sourceIdentity))
+    .take(2);
+  if (receipts.length !== 1) return false;
+  const receipt = receipts[0]!;
+  try {
+    assertExistingSourceOccurrenceReceiptWithinBounds(receipt);
+  } catch {
+    return false;
+  }
+  return receipt.sourceFingerprint === buildInstagramSourceOccurrenceFingerprint(post) &&
+    receipt.expectedKeys.length === 0 &&
+    (receipt.expectedOccurrences?.length ?? 0) === 0 &&
+    receipt.satisfiedKeys.length === 0 &&
+    receipt.satisfiedOccurrences.length === 0 &&
+    receipt.deferredChildCount === 0 &&
+    receipt.deferredChildKeys.length === 0;
+}
+
+async function canReleaseRetiredPostMedia(
+  ctx: MutationCtx,
+  post: Doc<"scrapedPosts">,
+  now: number,
+): Promise<boolean> {
+  if (
+    post.processingStatus !== "completed" ||
+    post.blocksPaidFetch === true ||
+    (post.processingLeaseExpiresAt ?? 0) > now ||
+    (post.analysisRevision !== undefined &&
+      post.analysisRevision !== (post.sourceRevision ?? 1)) ||
+    (post.canonicalSourceUrl !== undefined &&
+      canonicalizeSourceUrlOrEmpty("instagram", post.canonicalSourceUrl) !==
+        canonicalizeSourceUrlOrEmpty("instagram", post.instagramPostUrl)) ||
+    (post.normalizedInstagramPostUrl !== undefined &&
+      canonicalizeSourceUrlOrEmpty("instagram", post.normalizedInstagramPostUrl) !==
+        canonicalizeSourceUrlOrEmpty("instagram", post.instagramPostUrl)) ||
+    (await sourceHasEventReference(ctx, post))
+  ) return false;
+
+  const occurrences = await ctx.db.query("sourceOccurrences")
+    .withIndex("by_document_occurrence", (q) => q.eq("sourceDocumentId", post._id))
+    .take(MAX_SOURCE_OCCURRENCE_KEYS_PER_SOURCE + 1);
+  if (occurrences.length > MAX_SOURCE_OCCURRENCE_KEYS_PER_SOURCE) return false;
+  if (occurrences.length === 0) {
+    // A conclusive non-event or fully consumed current legacy plan has no
+    // remaining calendar work. Empty occurrence sets alone are not proof:
+    // legacy receipts must be unique, structurally valid and fingerprint-bound
+    // to the exact analyzed revision. Preserve source/receipt records themselves.
+    if (post.processingOutcome === "terminal_no_event" &&
+      post.analysisIsEvent === false &&
+      post.analysisRevision === (post.sourceRevision ?? 1)) return true;
+    return hasDrainedCurrentLegacyReceipt(ctx, post);
+  }
+  const cutoff = getEventExpiryCutoff(new Date(now));
+  return occurrences.every((occurrence) =>
+    occurrence.state === "superseded" &&
+    occurrence.canonicalEventId === undefined &&
+    occurrence.sourceRevision === (post.sourceRevision ?? 1) &&
+    isEventExpiredAtCutoff({
+      date: occurrence.occurrenceDateKey,
+      time: occurrence.occurrenceTimeIdentity,
+    }, cutoff),
+  );
+}
+
+async function retentionSourcePosts(
+  ctx: MutationCtx,
+  identity: { postId?: string; instagramPostUrl?: string },
+): Promise<Doc<"scrapedPosts">[] | null> {
+  const canonicalSourceUrl = canonicalizeSourceUrlOrEmpty("instagram", identity.instagramPostUrl);
+  if (!identity.postId || !canonicalSourceUrl) return null;
+  const sourceUrls = [...new Set([
+    identity.instagramPostUrl as string,
+    ...getSourceUrlLookupVariants("instagram", identity.instagramPostUrl),
+  ])];
+  const groups = await Promise.all([
+    ctx.db.query("scrapedPosts")
+      .withIndex("by_postId", (q) => q.eq("postId", identity.postId as string))
+      .take(MAX_MEDIA_SOURCE_MATCHES + 1),
+    ctx.db.query("scrapedPosts")
+      .withIndex("by_canonicalSourceUrl", (q) => q.eq("canonicalSourceUrl", canonicalSourceUrl))
+      .take(MAX_MEDIA_SOURCE_MATCHES + 1),
+    ctx.db.query("scrapedPosts")
+      .withIndex("by_normalizedInstagramPostUrl", (q) => q.eq("normalizedInstagramPostUrl", canonicalSourceUrl))
+      .take(MAX_MEDIA_SOURCE_MATCHES + 1),
+    ...sourceUrls.map((url) => ctx.db.query("scrapedPosts")
+      .withIndex("by_instagramPostUrl", (q) => q.eq("instagramPostUrl", url))
+      .take(MAX_MEDIA_SOURCE_MATCHES + 1)),
+  ]);
+  const posts = [...new Map(groups.flat().map((post) => [post._id, post])).values()];
+  return posts.length > MAX_MEDIA_SOURCE_MATCHES ? null : posts;
+}
+
 export const deleteOrphanedPage = internalMutation({
   args: {
     cutoffUpdatedAt: v.number(),
     paginationOpts: paginationOptsValidator,
   },
+  returns: v.object({
+    continueCursor: v.string(),
+    cutoffUpdatedAt: v.number(),
+    deletedAssetCount: v.number(),
+    deletedStorageObjectCount: v.number(),
+    detachedScrapedPostCount: v.number(),
+    retainedAssetCount: v.number(),
+    isDone: v.boolean(),
+    scannedAssetCount: v.number(),
+  }),
   handler: async (ctx, args) => {
     const paginationOpts = assertOperationPaginationOptions(
       args.paginationOpts,
       MAX_ORPHANED_MEDIA_CLEANUP_PAGE_SIZE,
       "Orphaned-media cleanup page",
     );
+    if (!Number.isSafeInteger(args.cutoffUpdatedAt)) {
+      throw new Error("Orphaned-media cutoff must be a safe integer timestamp.");
+    }
+    const persistedCursor = await ctx.db.query("mediaAssetRetentionCursors")
+      .withIndex("by_key", (q) => q.eq("key", MEDIA_RETENTION_CURSOR_KEY))
+      .unique();
+    if (persistedCursor &&
+      (!Number.isSafeInteger(persistedCursor.cutoffUpdatedAt) || !persistedCursor.cursor)) {
+      throw new Error("Persisted orphaned-media retention cursor is invalid.");
+    }
+    const cutoffUpdatedAt = persistedCursor?.cutoffUpdatedAt ?? args.cutoffUpdatedAt;
     const page = await ctx.db
       .query("mediaAssets")
-      .withIndex("by_updatedAt", (q) => q.lt("updatedAt", args.cutoffUpdatedAt))
-      .paginate(paginationOpts);
+      .withIndex("by_updatedAt", (q) => q.lt("updatedAt", cutoffUpdatedAt))
+      .paginate({ ...paginationOpts, cursor: persistedCursor?.cursor ?? paginationOpts.cursor });
     let deletedAssetCount = 0;
     let deletedStorageObjectCount = 0;
+    let detachedScrapedPostCount = 0;
+    let retainedAssetCount = 0;
+    const now = Date.now();
 
     for (const asset of page.page) {
-      const [eventReference, scrapedPostReference] = await Promise.all([
+      const identity = {
+        postId: asset.instagramPostId,
+        instagramPostUrl: canonicalizeSourceUrlOrEmpty(
+          "instagram", asset.canonicalSourceUrl ?? asset.normalizedInstagramPostUrl,
+        ),
+      };
+      if (asset.canonicalSourceUrl && asset.normalizedInstagramPostUrl &&
+        canonicalizeSourceUrlOrEmpty("instagram", asset.canonicalSourceUrl) !==
+          canonicalizeSourceUrlOrEmpty("instagram", asset.normalizedInstagramPostUrl)) {
+        retainedAssetCount += 1;
+        continue;
+      }
+      const [eventReference, sourceReference, referencedPosts] = await Promise.all([
         ctx.db
           .query("events")
           .withIndex("by_image_storage_id", (q) => q.eq("imageStorageId", asset.storageId))
           .first(),
+        sourceHasEventReference(ctx, identity),
         ctx.db
           .query("scrapedPosts")
           .withIndex("by_image_storage_id", (q) => q.eq("imageStorageId", asset.storageId))
-          .first(),
+          .take(MAX_MEDIA_SOURCE_MATCHES + 1),
       ]);
-      if (eventReference || scrapedPostReference) {
+      if (eventReference || sourceReference || referencedPosts.length > MAX_MEDIA_SOURCE_MATCHES) {
+        retainedAssetCount += 1;
         continue;
       }
 
-      await ctx.storage.delete(asset.storageId);
+      const sourceOccurrences = await ctx.db.query("sourceOccurrences")
+        .withIndex("by_canonical_source_occurrence", (q) =>
+          q.eq("canonicalSourceUrl", identity.instagramPostUrl as string))
+        .take(MAX_SOURCE_OCCURRENCE_KEYS_PER_SOURCE + 1);
+      const expiryCutoff = getEventExpiryCutoff(new Date(now));
+      if (sourceOccurrences.length > MAX_SOURCE_OCCURRENCE_KEYS_PER_SOURCE ||
+        sourceOccurrences.some((occurrence) =>
+          occurrence.state !== "superseded" || occurrence.canonicalEventId !== undefined ||
+          !isEventExpiredAtCutoff({
+            date: occurrence.occurrenceDateKey, time: occurrence.occurrenceTimeIdentity,
+          }, expiryCutoff))) {
+        retainedAssetCount += 1;
+        continue;
+      }
+
+      // Also protect a post currently processing this source before an image
+      // attachment has been written. All joins remain bounded and indexed.
+      const identityPosts = await retentionSourcePosts(ctx, identity);
+      if (!identityPosts) {
+        retainedAssetCount += 1;
+        continue;
+      }
+      const posts = [...new Map(
+        [...referencedPosts, ...identityPosts].map((post) => [post._id, post]),
+      ).values()];
+      if (posts.length > MAX_MEDIA_SOURCE_MATCHES) {
+        retainedAssetCount += 1;
+        continue;
+      }
+      let canRelease = true;
+      for (const post of posts) {
+        if (!(await canReleaseRetiredPostMedia(ctx, post, now))) {
+          canRelease = false;
+          break;
+        }
+      }
+      if (!canRelease) {
+        retainedAssetCount += 1;
+        continue;
+      }
+      for (const post of posts) {
+        if (post.imageStorageId !== asset.storageId) continue;
+        // Keep caption, upstream image candidates, immutable analysis and all
+        // source-occurrence tombstones. A missing durable ID must never expose
+        // a dead stored URL or make an unchanged completed post reprocessable.
+        await ctx.db.patch(post._id, {
+          imageStorageId: undefined,
+          imageUrl: undefined,
+        });
+        detachedScrapedPostCount += 1;
+      }
+      const sharedAssets = await ctx.db.query("mediaAssets")
+        .withIndex("by_storageId", (q) => q.eq("storageId", asset.storageId))
+        .take(2);
+      if (sharedAssets.length === 1) {
+        await ctx.storage.delete(asset.storageId);
+        deletedStorageObjectCount += 1;
+      }
       await ctx.db.delete(asset._id);
       deletedAssetCount += 1;
-      deletedStorageObjectCount += 1;
+    }
+
+    if (!page.isDone) {
+      if (!page.continueCursor || page.continueCursor === persistedCursor?.cursor) {
+        throw new Error("Orphaned-media retention pagination did not advance.");
+      }
+      const nextCursor = {
+        key: MEDIA_RETENTION_CURSOR_KEY,
+        cutoffUpdatedAt,
+        cursor: page.continueCursor,
+        updatedAt: now,
+      };
+      if (persistedCursor) await ctx.db.patch(persistedCursor._id, nextCursor);
+      else await ctx.db.insert("mediaAssetRetentionCursors", { ...nextCursor, createdAt: now });
+    } else if (persistedCursor) {
+      await ctx.db.delete(persistedCursor._id);
     }
 
     return {
       continueCursor: page.continueCursor,
+      cutoffUpdatedAt,
       deletedAssetCount,
       deletedStorageObjectCount,
+      detachedScrapedPostCount,
+      retainedAssetCount,
       isDone: page.isDone,
       scannedAssetCount: page.page.length,
     };

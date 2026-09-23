@@ -24,6 +24,7 @@ import { resolveVenueDenormalizedFields } from "./moderationVenue";
 import {
   assertInstagramOccurrenceReferencesCanBeReassigned,
   deleteEventWithSavedReferences,
+  deleteExpiredEventWithSavedReferences,
   normalizeExpiredEventDeleteBatchSize,
   reassignInstagramOccurrenceReferences,
   reassignSavedEventReferences,
@@ -480,23 +481,25 @@ export async function deleteExpiredEventsHandler(
           numItems: batchSize,
         });
   const eventsBeforeCutoffDate = beforeDatePage?.page ?? [];
-  const retainedCampaignEventsBeforeCutoff = eventsBeforeCutoffDate.filter(
-    isCrossPostCampaignLineageEvent,
-  );
-  const deletionCandidatesBeforeCutoff = eventsBeforeCutoffDate.filter(
-    (event) => !isCrossPostCampaignLineageEvent(event),
-  );
-  const deletableEventsBeforeCutoff = deletionCandidatesBeforeCutoff;
-
   const deletedEventIds: Id<"events">[] = [];
+  const deletedEventIdSet = new Set<Id<"events">>();
   let deletedSavedEventCount = 0;
-  let topologyMutated = false;
+  let retainedCampaignEventCount = 0;
 
-  for (const event of deletableEventsBeforeCutoff) {
-    const deletion = await deleteEventWithSavedReferences(ctx, event._id);
+  async function retireExpiredEvent(event: Doc<"events">) {
+    if (deletedEventIdSet.has(event._id)) return;
+    const deletion = await deleteExpiredEventWithSavedReferences(ctx, event, cutoff);
     deletedSavedEventCount += deletion.deletedReferenceCount;
-    topologyMutated ||= deletion.topologyMutated;
-    deletedEventIds.push(event._id);
+    retainedCampaignEventCount += deletion.retainedEventCount;
+    for (const eventId of deletion.deletedEventIds) {
+      if (deletedEventIdSet.has(eventId)) continue;
+      deletedEventIdSet.add(eventId);
+      deletedEventIds.push(eventId);
+    }
+  }
+
+  for (const event of eventsBeforeCutoffDate) {
+    await retireExpiredEvent(event);
   }
 
   const beforeDateScanComplete =
@@ -508,7 +511,7 @@ export async function deleteExpiredEventsHandler(
     throw new Error("Expired-event retention pagination did not advance.");
   }
 
-  const remainingSlots = batchSize - deletedEventIds.length;
+  const remainingSlots = Math.max(0, batchSize - eventsBeforeCutoffDate.length);
   const skippedSameDayEventCount = 0;
   let sameDayExpiredEventCount = 0;
   const sameDayScanWasComplete =
@@ -532,19 +535,14 @@ export async function deleteExpiredEventsHandler(
 
   if (sameDayPage) {
     const sameDayExpiredEvents = sameDayPage.page.filter(
-      (event) =>
-        isEventExpiredAtCutoff(event, cutoff) &&
-        !isCrossPostCampaignLineageEvent(event),
+      (event) => isEventExpiredAtCutoff(event, cutoff),
     );
 
-    sameDayExpiredEventCount = sameDayExpiredEvents.length;
-
+    const beforeSameDayDeletedCount = deletedEventIds.length;
     for (const event of sameDayExpiredEvents) {
-      const deletion = await deleteEventWithSavedReferences(ctx, event._id);
-      deletedSavedEventCount += deletion.deletedReferenceCount;
-      topologyMutated ||= deletion.topologyMutated;
-      deletedEventIds.push(event._id);
+      await retireExpiredEvent(event);
     }
+    sameDayExpiredEventCount = deletedEventIds.length - beforeSameDayDeletedCount;
   }
 
   const sameDayScanComplete =
@@ -593,10 +591,6 @@ export async function deleteExpiredEventsHandler(
     }
   }
 
-  if (topologyMutated) {
-    await markSourceOccurrenceTopologyMutation(ctx, { verified: true });
-  }
-
   return {
     deletedEventCount: deletedEventIds.length,
     deletedEventIds,
@@ -609,7 +603,7 @@ export async function deleteExpiredEventsHandler(
     beforeDateScanComplete,
     sameDayCursor,
     sameDayScanComplete,
-    retainedCampaignEventCount: retainedCampaignEventsBeforeCutoff.length,
+    retainedCampaignEventCount,
     skippedSameDayEventCount,
     sameDayExpiredEventCount,
   };

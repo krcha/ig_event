@@ -476,6 +476,24 @@ for (const operation of ["merge", "delete"]) {
   assertNoWrites(state, "The safe-bound failure must be mutation-free.");
 }
 
+{
+  const occurrence = makeOccurrence({ id: "expiry-bound-source" });
+  const state = makeDb([occurrence]);
+  const topology = await sourceOccurrenceProvenanceRepository.loadAndAssertEventOccurrenceTopology(
+    { db: state.db }, "event_source",
+  );
+  assert.equal(sourceOccurrenceProvenanceRepository.eventTopologyIsExpired(
+    topology, { isoDate: "2026-09-12", minutesSinceMidnight: 21 * 60 },
+  ), false, "A future source start must protect an incorrectly dated public row.");
+  assert.equal(sourceOccurrenceProvenanceRepository.eventTopologyIsExpired(
+    topology, { isoDate: "2026-09-12", minutesSinceMidnight: 22 * 60 },
+  ), true, "The exact source start must satisfy the two-day cutoff once elapsed.");
+  assert.equal(sourceOccurrenceProvenanceRepository.eventTopologyIsExpired(
+    topology, { isoDate: "2026-09-13", minutesSinceMidnight: 0 },
+  ), true);
+  assertNoWrites(state, "Expiry preparation must never mutate provenance.");
+}
+
 console.log(
   "Source-occurrence provenance repository QA passed: coherent topology, legacy semantics, zero-write conflicts, reassign, detach, and bounds are safe.",
 );

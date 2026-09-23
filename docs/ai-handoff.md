@@ -275,7 +275,9 @@ Convex:
 - Stores all event, venue, scraped post, user, saved-event, and ingestion-job
   state.
 - Exposes data operations through queries and mutations in `convex/*.ts`.
-- Runs a weekly internal cron to delete expired events older than the 3-day retention grace period.
+- Runs native Convex cleanup every five minutes for expired events older than
+  two days, every 15 minutes for eligible orphaned media, and hourly for old
+  ingestion artifacts. These jobs are independent of the VPS ingestion timer.
 
 Apify:
 
@@ -476,11 +478,34 @@ calls the job POST route, the job will not keep advancing.
    from the live active count and continues until every eligible handle is
    covered. Each handle scrapes the latest 1 post, runs direct full-scrape
    ingestion, and patches job status.
-5. Convex internal cron `delete expired events` runs weekly Wednesday at 05:00
-   UTC and deletes expired events older than the 3-day retention grace period
-   plus saved-event references in bounded batches until clear or until the
-   safety cap is reached.
+5. Convex internal cron `delete expired events` runs every five minutes and deletes
+   expired events older than two days plus saved-event references. Each action
+   performs at most five one-candidate batches. A verified expired campaign is
+   retired atomically as one group of at most eight event rows; saved references
+   are included in that same bounded transaction. The mutation persists
+   its cutoff and cursor atomically, so interrupted or capped scans resume on
+   the next tick. Inspect `hasMore`, `stoppedReason`, deletion counts and retained
+   counts: a successful bounded action is not proof that every old row is gone.
+   Before deletion, it automatically builds/resumes a separate expiry-only
+   reverse-receipt index, at most 20 four-receipt audit transactions per tick.
+   Both the receipt scan and stale-reference sweep must finish at the exact
+   current source epoch. `audit_pending` and `audit_blocked` are not deletion
+   success. The additive `eventRetentionReceiptReferences` index and
+   `event-retention-reverse-receipts-v1` proof do not replace or certify the
+   strict semantic receipt-topology audit used for reconciliation. Only a
+   validated expiry transaction can advance its own proof; any other topology
+   change forces a new bounded audit. See the operations runbook for catch-up.
 6. Event retention uses `EVENTS_TIMEZONE` and event time when available.
+7. Orphaned media cleanup runs every 15 minutes, at most five five-asset
+   batches per action, with an atomically persisted cursor and cutoff. Its
+   seven-day grace period is separate from event retention. Only unused files
+   can be deleted; active processing and retained event/source evidence remain
+   protected. Source records needed for provenance are preserved even when an
+   obsolete file attachment can safely be retired.
+8. Ingestion artifact cleanup runs hourly at minute 7 UTC in small batches.
+   Terminal jobs retain 30 days and scraped posts retain 90 days; referenced
+   source records remain protected. Native cron execution results and the
+   `retention_cleanup` log record completed work and remaining scan progress.
 
 ## Testing And Verification
 
@@ -557,9 +582,11 @@ Data deletion:
 
 - Approved duplicate merge deletes duplicate event rows after moving saved-event
   references.
-- Event retention deletes expired events and saved references weekly on Wednesday
-  at 05:00 UTC. Check timezone, cutoff behavior, and the maintenance-action
-  safety cap before changing retention logic.
+- Event retention deletes expired events and saved references every five minutes
+  after the two-day grace period. Check timezone, cutoff behavior, retained
+  source/campaign safeguards, and bounded action results before claiming the
+  backlog is clear. Media deletion has a separate seven-day grace period and
+  must preserve files still needed by retained events or active processing.
 
 Date normalization:
 

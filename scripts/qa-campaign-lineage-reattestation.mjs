@@ -6,6 +6,11 @@ import {
 import {
   CROSS_POST_PROMOTION_COALESCING_POLICY_VERSION,
 } from "../lib/events/cross-post-promotion-coalescing.ts";
+import { loadVerifiedCampaignLineageReattestation } from "../convex/internal/campaignLineageReattestationProof.ts";
+import { auditSourceOccurrenceReceiptTopologyBatchHandler } from "../convex/internal/migrations/sourceOccurrenceTopologyAudit.ts";
+import { deleteExpiredEventWithSavedReferences } from "../convex/eventDomain/persistence.ts";
+import { sourceOccurrenceProvenanceRepository } from "../convex/repositories/sourceOccurrenceProvenance.ts";
+import { auditRetentionReceiptCoverageBatch } from "../convex/internal/retentionReceiptCoverage.ts";
 
 const primaryId = "event_primary";
 const venueId = "venue_qa";
@@ -229,6 +234,9 @@ function makeDb(initial) {
   }
 
   const db = {
+    normalizeId(_table, id) {
+      return typeof id === "string" && id.length > 0 ? id : null;
+    },
     async get(id) {
       for (const table of Object.values(tables)) {
         if (table.has(id)) return table.get(id);
@@ -252,7 +260,14 @@ function makeDb(initial) {
       }
       throw new Error(`Missing QA row ${id}.`);
     },
+    async delete(id) {
+      for (const table of Object.values(tables)) {
+        if (table.delete(id)) return;
+      }
+      throw new Error(`Missing QA deletion ${id}.`);
+    },
     query(table) {
+      if (!tables[table]) tables[table] = new Map();
       const filters = {};
       let direction = "asc";
       const chain = {
@@ -284,7 +299,15 @@ function makeDb(initial) {
         async take(limit) {
           return rowsFor(table, filters, direction).slice(0, limit);
         },
-      };
+        async collect() {
+          return rowsFor(table, filters, direction);
+        },
+        async unique() {
+          const rows = rowsFor(table, filters, direction);
+          assert.ok(rows.length <= 1);
+          return rows[0] ?? null;
+        },
+};
       return chain;
     },
   };
@@ -398,6 +421,129 @@ assert.equal(
     .outcome,
   "quarantined",
 );
+
+function makeVerifiedRetentionFixture() {
+  const fixture = makeFixture();
+  fixture.eventAuditLog = [];
+  fixture.savedEvents = [];
+  fixture.userSavedEvents = [];
+  fixture.instagramSourceOccurrenceReceipts[1].expectedOccurrences[0].date = "2026-12-31";
+  const attestation = JSON.parse(fixture.events[0].normalizedFieldsJson)
+    .crossPostCampaignAggregateAttestation;
+  for (let index = 0; index < fixture.events.length; index += 1) {
+    const event = fixture.events[index];
+    const primary = index === 0;
+    event.instagramPostUrl = fixture.instagramEventSources[index].instagramPostUrl;
+    event.status = primary ? "approved" : "rejected";
+    event.moderationNote = `[cross_post_campaign_${primary ? "primary" : "variant"}:v${attestation.policyVersion}] ${operationId} - QA reviewed campaign`;
+    const eventBefore = structuredClone(event);
+    eventBefore.status = "approved";
+    const fieldsBefore = JSON.parse(eventBefore.normalizedFieldsJson);
+    delete fieldsBefore.crossPostCampaignAggregateAttestation;
+    eventBefore.normalizedFieldsJson = JSON.stringify(fieldsBefore);
+    fixture.eventAuditLog.push({
+      _id: `campaign-original-audit-${index}`,
+      _creationTime: index + 1,
+      eventId: event._id,
+      action: primary ? "cross_post_campaign_coalesced" : "cross_post_campaign_variant_rejected",
+      createdAt: 1,
+      patchJson: JSON.stringify({
+        operationId,
+        policyVersion: attestation.policyVersion,
+        aggregateAttestation: attestation,
+        sourceGroundingVerifiedAtCoalescing: true,
+        eventBefore,
+        sourceLinkBefore: fixture.instagramEventSources[index],
+        receiptBefore: fixture.instagramSourceOccurrenceReceipts[index],
+        receiptAfter: fixture.instagramSourceOccurrenceReceipts[index],
+      }),
+    });
+  }
+  return makeDb(fixture);
+}
+
+const retirementState = makeVerifiedRetentionFixture();
+await reattestCampaignLineageBatch._handler(
+  { db: retirementState.db },
+  { dryRun: false, limit: 8 },
+);
+assert.ok(await loadVerifiedCampaignLineageReattestation(
+  { db: retirementState.db },
+  await retirementState.db.get(primaryId),
+), "Retention must start from a real complete versioned campaign proof.");
+const campaignCoverage = await auditSourceOccurrenceReceiptTopologyBatchHandler(
+  { db: retirementState.db },
+  { dryRun: false, limit: 4 },
+);
+assert.equal(campaignCoverage.mismatchCount, 0);
+assert.equal(campaignCoverage.unchangedCount, 2);
+assert.equal(campaignCoverage.isDone, true);
+
+const duplicateReceipt = structuredClone(retirementState.tables.instagramSourceOccurrenceReceipts.get("receipt_b"));
+duplicateReceipt._id = "receipt_b_duplicate";
+duplicateReceipt.expectedOccurrences[1].date = "2026-12-31";
+retirementState.tables.instagramSourceOccurrenceReceipts.set(duplicateReceipt._id, duplicateReceipt);
+const duplicateReceiptCoverage = await auditSourceOccurrenceReceiptTopologyBatchHandler(
+  { db: retirementState.db }, { dryRun: true, limit: 4 },
+);
+assert.equal(duplicateReceiptCoverage.mismatchCount, 2, "Neither duplicate receipt may borrow another receipt's campaign proof.");
+const beforeDuplicateRetirement = structuredClone(Object.fromEntries(Object.entries(retirementState.tables).map(([name, rows]) => [name, [...rows.values()]])));
+await assert.rejects(() => deleteExpiredEventWithSavedReferences(
+  { db: retirementState.db }, retirementState.tables.events.get(primaryId),
+  { isoDate: "2026-09-22", minutesSinceMidnight: 0 },
+), /receipt changed/);
+assert.deepEqual(Object.fromEntries(Object.entries(retirementState.tables).map(([name, rows]) => [name, [...rows.values()]])), beforeDuplicateRetirement, "Duplicate-receipt retirement must fail before every write.");
+retirementState.tables.instagramSourceOccurrenceReceipts.delete(duplicateReceipt._id);
+
+const unexpiredCampaign = await sourceOccurrenceProvenanceRepository.prepareExpiredCampaignRetirement(
+  { db: retirementState.db },
+  await retirementState.db.get(primaryId),
+  { isoDate: expected.date, minutesSinceMidnight: 21 * 60 },
+);
+assert.equal(unexpiredCampaign, null, "A campaign with an unexpired event must remain intact.");
+
+const proofBeforeCorruption = structuredClone([...retirementState.tables.campaignLineageReattestations.values()][0]);
+await retirementState.db.patch(proofBeforeCorruption._id, { evidenceDigest: "0000000000000000" });
+const corruptCoverage = await auditSourceOccurrenceReceiptTopologyBatchHandler(
+  { db: retirementState.db },
+  { dryRun: true, limit: 4 },
+);
+assert.equal(corruptCoverage.mismatchCount, 1, "A campaign marker without its exact verified proof cannot pass the receipt audit.");
+const beforeBlockedDelete = structuredClone([...retirementState.tables.events.values()]);
+const blockedDelete = await deleteExpiredEventWithSavedReferences(
+  { db: retirementState.db },
+  await retirementState.db.get(primaryId),
+  { isoDate: "2026-09-22", minutesSinceMidnight: 0 },
+);
+assert.equal(blockedDelete.retainedEventCount, 1);
+assert.deepEqual([...retirementState.tables.events.values()], beforeBlockedDelete);
+await retirementState.db.patch(proofBeforeCorruption._id, proofBeforeCorruption);
+
+const survivingReceipt = retirementState.tables.instagramSourceOccurrenceReceipts.get("receipt_b");
+// An unsatisfied future sibling is deliberately outside the retired campaign.
+// It must survive unchanged rather than having the entire source receipt erased.
+const expectedSurvivingChild = structuredClone(survivingReceipt.expectedOccurrences[0]);
+assert.equal(expectedSurvivingChild.date, "2026-12-31");
+for (let attempt = 0; ; attempt += 1) {
+  assert.ok(attempt < 10);
+  const coverage = await auditRetentionReceiptCoverageBatch._handler({ db: retirementState.db }, {});
+  if (coverage.isDone) { assert.equal(coverage.ready, true); break; }
+}
+const deletedCampaign = await deleteExpiredEventWithSavedReferences(
+  { db: retirementState.db },
+  await retirementState.db.get("event_variant"),
+  { isoDate: "2026-09-22", minutesSinceMidnight: 0 },
+);
+assert.deepEqual(deletedCampaign.deletedEventIds.sort(), [primaryId, "event_variant"].sort());
+assert.equal(retirementState.tables.events.size, 0);
+assert.equal(retirementState.tables.instagramEventSources.size, 0);
+assert.equal(retirementState.tables.sourceOccurrences.size, 2);
+assert.ok([...retirementState.tables.sourceOccurrences.values()].every((row) =>
+  row.state === "superseded" && row.canonicalEventId === undefined,
+), "Expired campaign source occurrences remain detached tombstones.");
+assert.deepEqual(retirementState.tables.instagramSourceOccurrenceReceipts.get("receipt_b").expectedOccurrences, [expectedSurvivingChild]);
+assert.ok([...retirementState.tables.instagramSourceOccurrenceReceipts.values()].every((row) => row.satisfiedOccurrences.length === 0));
+assert.equal([...retirementState.tables.eventAuditLog.values()].filter((row) => row.action === "expired_campaign_event_deleted").length, 2);
 
 console.log(
   "Campaign-lineage re-attestation QA passed (dry-run, exact evidence materialization, idempotency, semantic repair, verified topology, and quarantine).",

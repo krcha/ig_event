@@ -3,45 +3,42 @@ import { internal } from "./_generated/api";
 
 const crons = cronJobs();
 
-crons.weekly(
+// Each invocation performs a small amount of real work and returns its counts.
+// The underlying mutations persist their cutoff and cursor atomically, so later
+// ticks resume interrupted or capped scans without a long-running action loop.
+crons.interval(
   "delete expired events",
   {
-    dayOfWeek: "wednesday",
-    hourUTC: 5,
-    minuteUTC: 0,
+    minutes: 5,
   },
   internal.maintenance.deleteExpiredEventsUntilDone,
   {
-    batchSize: 500,
-    maxBatches: 20,
+    batchSize: 1,
+    maxBatches: 5,
   },
 );
 
-crons.weekly(
+crons.hourly(
   "cleanup ingestion artifacts",
   {
-    dayOfWeek: "thursday",
-    hourUTC: 5,
-    minuteUTC: 0,
+    minuteUTC: 7,
   },
   internal.maintenance.cleanupIngestionArtifactsUntilDone,
   {
-    batchSize: 100,
-    maxBatches: 10,
+    batchSize: 25,
+    maxBatches: 2,
   },
 );
 
-crons.weekly(
+crons.interval(
   "cleanup orphaned media assets",
   {
-    dayOfWeek: "friday",
-    hourUTC: 5,
-    minuteUTC: 0,
+    minutes: 15,
   },
   internal.maintenance.cleanupOrphanedMediaAssetsUntilDone,
   {
-    batchSize: 100,
-    maxBatches: 100,
+    batchSize: 5,
+    maxBatches: 5,
   },
 );
 

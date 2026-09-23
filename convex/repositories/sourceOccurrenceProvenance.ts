@@ -1,5 +1,5 @@
 import type { Doc, Id } from "../_generated/dataModel";
-import type { DatabaseReader, DatabaseWriter } from "../_generated/server";
+import type { DatabaseReader, DatabaseWriter, MutationCtx } from "../_generated/server";
 import { markSourceOccurrenceTopologyMutation } from "../internal/sourceOccurrenceTopologyEpoch";
 import { DomainError } from "../../lib/domain/errors";
 import {
@@ -14,8 +14,11 @@ import {
 import { isCrossPostCampaignLineageEvent } from "../../lib/events/cross-post-campaign-aggregate-attestation";
 import { assertExistingSourceOccurrenceReceiptWithinBounds } from "../internal/sourceOccurrenceReceipts";
 import { isSourceOccurrenceBoundedString } from "../internal/sourceOccurrenceLimits";
+import { loadVerifiedCampaignLineageForSourceEvent } from "../internal/campaignLineageReattestationProof";
+import { isEventExpiredAtCutoff, type EventExpiryCutoff } from "../../lib/events/event-retention";
 
 export const MAX_SOURCE_OCCURRENCES_PER_EVENT_OPERATION = 64;
+export const MAX_RETENTION_RETAINED_PUBLICATION_CHECKS = 4;
 
 type ReadContext = { db: DatabaseReader };
 type WriteContext = { db: DatabaseWriter };
@@ -26,6 +29,14 @@ export type EventOccurrenceTopology = {
   occurrences: Doc<"sourceOccurrences">[];
   currentOccurrences: Doc<"sourceOccurrences">[];
   receipts: Doc<"instagramSourceOccurrenceReceipts">[];
+};
+
+export type ExpiredEventGroupTopology = {
+  eventIds: Id<"events">[];
+  links: Doc<"instagramEventSources">[];
+  occurrences: Doc<"sourceOccurrences">[];
+  receipts: Doc<"instagramSourceOccurrenceReceipts">[];
+  remainingRepresentativeEventIds: Id<"events">[];
 };
 
 declare const preparedReconciliationTopologyBrand: unique symbol;
@@ -374,6 +385,270 @@ async function loadAndAssertEventOccurrenceTopology(
     currentOccurrences,
     receipts,
   };
+}
+
+/** Expiry is not permission to discard a future source child attached to an
+ * incorrectly dated public row. Check the immutable receipt bindings too. */
+function eventTopologyIsExpired(
+  topology: EventOccurrenceTopology,
+  cutoff: EventExpiryCutoff,
+): boolean {
+  return topology.receipts.every((receipt) =>
+    receipt.satisfiedOccurrences
+      .filter((item) => item.eventId === topology.eventId)
+      .every((item) => {
+        const expected = receipt.expectedOccurrences?.find(
+          (candidate) => candidate.key === item.key,
+        );
+        return expected !== undefined && isEventExpiredAtCutoff(expected, cutoff);
+      }),
+  );
+}
+
+/** An old normalized date cannot override an explicit future date in immutable
+ * facts or saved canonical evidence. Legacy deferred placeholders have no date
+ * claim; their normalized binding and receipt still have to prove expiry. */
+function serializedExpiryEvidenceIsSafe(
+  encoded: string | undefined,
+  cutoff: EventExpiryCutoff,
+  depth = 0,
+): boolean {
+  if (encoded === undefined) return true;
+  if (depth > 1) return false;
+  let value: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(encoded);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    value = parsed as Record<string, unknown>;
+  } catch { return false; }
+  const time = typeof value.time === "string" ? value.time
+    : typeof value.startTime === "string" ? value.startTime : undefined;
+  const dateClaims = [value.date, value.localDate, value.normalizedDate, value.dateEvidenceResolvedDate];
+  const range = value.dateRange;
+  if (range && typeof range === "object" && !Array.isArray(range)) {
+    dateClaims.push((range as Record<string, unknown>).from, (range as Record<string, unknown>).through);
+  }
+  for (const date of dateClaims) {
+    if (date === undefined || date === null) continue;
+    if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+      !isEventExpiredAtCutoff({ date, time }, cutoff)) return false;
+  }
+  if (value.normalizedFieldsJson !== undefined &&
+    (typeof value.normalizedFieldsJson !== "string" || !serializedExpiryEvidenceIsSafe(value.normalizedFieldsJson, cutoff, depth + 1))) return false;
+  return true;
+}
+
+/** The retention-only reverse index supplies every receipt naming this group.
+ * Unlike reconciliation, expiry does not invent missing legacy links or attest
+ * old semantic extraction. It checks all dates and retires only exact refs. */
+async function prepareExpiredEventGroupTopology(
+  ctx: ReadContext,
+  events: readonly Doc<"events">[],
+  completeReceipts: readonly Doc<"instagramSourceOccurrenceReceipts">[],
+  cutoff: EventExpiryCutoff,
+): Promise<ExpiredEventGroupTopology | null> {
+  if (events.length < 1 || events.length > 8 || new Set(events.map((event) => event._id)).size !== events.length) {
+    throwTopologyConflict("Expired-event group exceeds its exact bounded membership.");
+  }
+  if (events.some((event) => !isEventExpiredAtCutoff(event, cutoff))) return null;
+  const eventIds = new Set(events.map((event) => event._id));
+  const receipts = [...new Map(completeReceipts.map((receipt) => [receipt._id, receipt])).values()];
+  if (receipts.length > MAX_SOURCE_OCCURRENCES_PER_EVENT_OPERATION) {
+    throwTopologyConflict("Expired-event group exceeds its receipt bound.");
+  }
+  const links: Doc<"instagramEventSources">[] = [];
+  const occurrences: Doc<"sourceOccurrences">[] = [];
+  for (const event of events) {
+    const eventLinks = await ctx.db.query("instagramEventSources")
+      .withIndex("by_event", (q) => q.eq("eventId", event._id))
+      .take(MAX_SOURCE_OCCURRENCES_PER_EVENT_OPERATION + 1);
+    links.push(...eventLinks);
+    occurrences.push(...await listForCanonicalEvent(ctx, event._id));
+  }
+  if (links.length > MAX_SOURCE_OCCURRENCES_PER_EVENT_OPERATION || occurrences.length > MAX_SOURCE_OCCURRENCES_PER_EVENT_OPERATION) {
+    throwTopologyConflict("Expired-event group exceeds its source-reference bound.");
+  }
+  for (const receipt of receipts) {
+    assertExistingSourceOccurrenceReceiptWithinBounds(receipt);
+    const satisfiedKeys = receipt.satisfiedOccurrences.map((item) => item.key);
+    if (new Set(satisfiedKeys).size !== satisfiedKeys.length) return null;
+    for (const item of receipt.satisfiedOccurrences) {
+      if (!eventIds.has(item.eventId)) continue;
+      const expected = receipt.expectedOccurrences?.filter((row) => row.key === item.key) ?? [];
+      if (expected.length !== 1 || !isEventExpiredAtCutoff(expected[0]!, cutoff) ||
+        !serializedExpiryEvidenceIsSafe(expected[0]!.factsJson, cutoff) ||
+        !serializedExpiryEvidenceIsSafe(expected[0]!.canonicalEventJson, cutoff)) return null;
+    }
+  }
+  for (const link of links) {
+    assertBoundedTopologyCoordinate(link);
+    const matchingReceipts = receipts.filter((receipt) => receipt.sourceIdentity === link.sourceIdentity);
+    if (matchingReceipts.length !== 1) return null;
+    const receipt = matchingReceipts[0]!;
+    const matching = receipt.satisfiedOccurrences.filter((item) => item.key === link.sourceOccurrenceKey);
+    // Do not tear down a legacy link still satisfying a retained event, even
+    // when the public variant happens to have an old date.
+    if (matching.length !== 1 || !eventIds.has(matching[0]!.eventId) || receipt.sourceFingerprint !== link.sourceFingerprint) return null;
+    const exactLinks = await ctx.db.query("instagramEventSources")
+      .withIndex("by_source_occurrence", (q) => q.eq("sourceIdentity", link.sourceIdentity).eq("sourceOccurrenceKey", link.sourceOccurrenceKey))
+      .take(2);
+    if (exactLinks.length !== 1 || exactLinks[0]!._id !== link._id) return null;
+    if (link.sourceOccurrenceId !== undefined && !occurrences.some((row) => row._id === link.sourceOccurrenceId)) return null;
+  }
+  for (const occurrence of occurrences) {
+    const expected = parseExpectedOccurrence(occurrence);
+    if (!expected || !isEventExpiredAtCutoff(expected, cutoff) || !isEventExpiredAtCutoff({ date: occurrence.occurrenceDateKey, time: expected.time }, cutoff)) return null;
+    if (![occurrence.factsJson, occurrence.normalizedOccurrenceJson, occurrence.canonicalEventJson].every((encoded) => serializedExpiryEvidenceIsSafe(encoded, cutoff))) return null;
+    if (occurrence.state === "superseded") continue;
+    const matchingReceipts = receipts.filter((receipt) => receipt.sourceIdentity === occurrence.sourceIdentity);
+    const receipt = matchingReceipts.length === 1 ? matchingReceipts[0] : null;
+    const satisfied = receipt?.satisfiedOccurrences.filter((item) => item.key === occurrence.sourceOccurrenceKey) ?? [];
+    if (occurrence.state !== "satisfied" || !receipt || receipt.sourceFingerprint !== occurrence.sourceFingerprint || satisfied.length !== 1 || satisfied[0]!.eventId !== occurrence.canonicalEventId) return null;
+  }
+  const remainingIds = new Set(receipts.flatMap((receipt) => receipt.satisfiedOccurrences
+    .filter((item) => !eventIds.has(item.eventId)).map((item) => item.eventId)));
+  if (remainingIds.size > MAX_SOURCE_OCCURRENCES_PER_EVENT_OPERATION) return null;
+  // Publication reads all first-class siblings for a source identity. Legacy
+  // gaps can leave a sibling outside receipt arrays, so receipt refs alone do
+  // not close the set of retained representatives whose visibility can change.
+  const sourceIdentities = new Set([
+    ...receipts.map((receipt) => receipt.sourceIdentity),
+    ...occurrences.map((occurrence) => occurrence.sourceIdentity),
+  ]);
+  for (const sourceIdentity of sourceIdentities) {
+    const siblings = await ctx.db.query("sourceOccurrences")
+      .withIndex("by_source_occurrence", (q) => q.eq("sourceIdentity", sourceIdentity))
+      .take(MAX_SOURCE_OCCURRENCES_PER_EVENT_OPERATION + 1);
+    if (siblings.length > MAX_SOURCE_OCCURRENCES_PER_EVENT_OPERATION) return null;
+    for (const sibling of siblings) {
+      if (sibling.canonicalEventId && !eventIds.has(sibling.canonicalEventId)) remainingIds.add(sibling.canonicalEventId);
+    }
+    if (remainingIds.size > MAX_SOURCE_OCCURRENCES_PER_EVENT_OPERATION) return null;
+  }
+  return { eventIds: [...eventIds], receipts, links, occurrences, remainingRepresentativeEventIds: [...remainingIds] };
+}
+
+async function retirePreparedExpiredEventGroup(
+  ctx: WriteContext,
+  topology: ExpiredEventGroupTopology,
+): Promise<{ topologyMutated: boolean; remainingRepresentativeEventIds: Id<"events">[] }> {
+  const eventIds = new Set(topology.eventIds);
+  const remainingIds = new Set<Id<"events">>();
+  let topologyMutated = topology.links.length > 0 || topology.occurrences.length > 0;
+  for (const receipt of topology.receipts) {
+    const removed = new Set(receipt.satisfiedOccurrences.filter((item) => eventIds.has(item.eventId)).map((item) => item.key));
+    if (removed.size === 0) continue;
+    const satisfiedOccurrences = receipt.satisfiedOccurrences.filter((item) => !eventIds.has(item.eventId));
+    for (const item of satisfiedOccurrences) remainingIds.add(item.eventId);
+    const remainingKeys = new Set(satisfiedOccurrences.map((item) => item.key));
+    const deferredChildKeys = receipt.deferredChildKeys.filter((key) => !removed.has(key));
+    await ctx.db.patch(receipt._id, {
+      expectedKeys: receipt.expectedKeys.filter((key) => !removed.has(key)),
+      expectedOccurrences: receipt.expectedOccurrences?.filter((item) => !removed.has(item.key)),
+      satisfiedKeys: receipt.satisfiedKeys.filter((key) => remainingKeys.has(key)),
+      satisfiedOccurrences,
+      deferredChildKeys,
+      deferredChildCount: deferredChildKeys.length,
+      updatedAt: Date.now(),
+    });
+    topologyMutated = true;
+  }
+  if (remainingIds.size > MAX_SOURCE_OCCURRENCES_PER_EVENT_OPERATION) throwTopologyConflict("Expired-event group exceeds its remaining representative bound.");
+  for (const link of topology.links) await ctx.db.delete(link._id);
+  for (const occurrence of topology.occurrences) {
+    await ctx.db.patch(occurrence._id, { canonicalEventId: undefined, state: "superseded", updatedAt: Date.now() });
+  }
+  if (topologyMutated) await markSourceOccurrenceTopologyMutation(ctx, { verified: true });
+  return { topologyMutated, remainingRepresentativeEventIds: [...remainingIds] };
+}
+
+/**
+ * Campaigns intentionally keep source links on rejected variant rows. They
+ * must retire as one complete, already verified group, never by weakening the
+ * ordinary event topology validator. Every group member and represented source
+ * child must be expired; unrelated links/occurrences abort before any write.
+ */
+async function prepareExpiredCampaignRetirement(
+  ctx: MutationCtx,
+  event: Doc<"events">,
+  cutoff: EventExpiryCutoff,
+): Promise<{
+  events: Doc<"events">[];
+  primaryTopology: EventOccurrenceTopology;
+} | null> {
+  const verified = await loadVerifiedCampaignLineageForSourceEvent(ctx, event);
+  if (!verified) return null;
+  const sources = verified.currentAttestation.sources;
+  const events: Doc<"events">[] = [];
+  const links: Doc<"instagramEventSources">[] = [];
+  const occurrences: Doc<"sourceOccurrences">[] = [];
+  const receiptById = new Map<Id<"instagramSourceOccurrenceReceipts">, Doc<"instagramSourceOccurrenceReceipts">>();
+  for (const source of sources) {
+    const sourceEventId = ctx.db.normalizeId("events", source.eventId);
+    const sourceEvent = sourceEventId ? await ctx.db.get(sourceEventId) : null;
+    if (!sourceEvent || sourceEvent.updatedAt !== source.eventUpdatedAt) {
+      throwTopologyConflict("Verified campaign source event changed before expiry retirement.");
+    }
+    if (!isEventExpiredAtCutoff(sourceEvent, cutoff)) return null;
+    events.push(sourceEvent);
+    const [eventLinks, eventOccurrences] = await Promise.all([
+      ctx.db.query("instagramEventSources")
+        .withIndex("by_event", (q) => q.eq("eventId", sourceEvent._id))
+        .take(MAX_SOURCE_OCCURRENCES_PER_EVENT_OPERATION + 1),
+      listForCanonicalEvent(ctx, sourceEvent._id),
+    ]);
+    if (
+      eventLinks.length !== 1 ||
+      eventLinks[0]!._id !== source.sourceLinkId ||
+      !verified.sourceLinkIds.has(String(eventLinks[0]!._id))
+    ) {
+      throwTopologyConflict("Campaign expiry retirement found an unreviewed source link.");
+    }
+    links.push(eventLinks[0]!);
+    occurrences.push(...eventOccurrences);
+    const receiptRows = await ctx.db.query("instagramSourceOccurrenceReceipts")
+      .withIndex("by_sourceIdentity", (q) => q.eq("sourceIdentity", source.sourceIdentity))
+      .take(2);
+    const receipt = receiptRows.length === 1 ? receiptRows[0] : null;
+    if (!receipt || receipt._id !== source.receiptId || receipt.updatedAt !== source.receiptUpdatedAt) {
+      throwTopologyConflict("Verified campaign receipt changed before expiry retirement.");
+    }
+    receiptById.set(receipt._id, receipt);
+  }
+  const currentOccurrences = occurrences.filter((row) => row.state !== "superseded");
+  const occurrenceIds = new Set(links.map((link) => String(link.sourceOccurrenceId)));
+  if (
+    currentOccurrences.length !== sources.length ||
+    currentOccurrences.some((row) =>
+      row.state !== "satisfied" ||
+      row.canonicalEventId !== verified.primaryEventId ||
+      !occurrenceIds.has(String(row._id)),
+    ) ||
+    occurrences.length > MAX_SOURCE_OCCURRENCES_PER_EVENT_OPERATION
+  ) {
+    throwTopologyConflict("Campaign expiry retirement found unreviewed canonical occurrences.");
+  }
+  const primaryTopology: EventOccurrenceTopology = {
+    eventId: verified.primaryEventId,
+    links,
+    occurrences,
+    currentOccurrences,
+    receipts: [...receiptById.values()],
+  };
+  for (const receipt of primaryTopology.receipts) {
+    for (const satisfaction of receipt.satisfiedOccurrences) {
+      if (satisfaction.eventId !== verified.primaryEventId) continue;
+      if (!links.some((link) =>
+        link.sourceIdentity === receipt.sourceIdentity &&
+        link.sourceOccurrenceKey === satisfaction.key,
+      )) {
+        throwTopologyConflict("Campaign expiry retirement found an unreviewed receipt satisfaction.");
+      }
+    }
+  }
+  return eventTopologyIsExpired(primaryTopology, cutoff)
+    ? { events, primaryTopology }
+    : null;
 }
 
 async function assertCanReassignEvent(
@@ -1101,6 +1376,10 @@ async function rebindCanonicalVenue(
 }
 
 export const sourceOccurrenceProvenanceRepository = {
+  eventTopologyIsExpired,
+  prepareExpiredEventGroupTopology,
+  retirePreparedExpiredEventGroup,
+  prepareExpiredCampaignRetirement,
   assertCanReassignEvent,
   assertEventCanBeReassigned,
   assertEventMatchesBoundOccurrences,

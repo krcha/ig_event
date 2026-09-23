@@ -83,6 +83,7 @@ import type * as internal_reconciliationSourceOutcome from "../internal/reconcil
 import type * as internal_reconciliationSourcePersistence from "../internal/reconciliationSourcePersistence.js";
 import type * as internal_reconciliationVerificationInputs from "../internal/reconciliationVerificationInputs.js";
 import type * as internal_requestBounds from "../internal/requestBounds.js";
+import type * as internal_retentionReceiptCoverage from "../internal/retentionReceiptCoverage.js";
 import type * as internal_sourceOccurrenceLimits from "../internal/sourceOccurrenceLimits.js";
 import type * as internal_sourceOccurrenceReceipts from "../internal/sourceOccurrenceReceipts.js";
 import type * as internal_sourceOccurrenceTopologyEpoch from "../internal/sourceOccurrenceTopologyEpoch.js";
@@ -189,6 +190,7 @@ declare const fullApi: ApiFromModules<{
   "internal/reconciliationSourcePersistence": typeof internal_reconciliationSourcePersistence;
   "internal/reconciliationVerificationInputs": typeof internal_reconciliationVerificationInputs;
   "internal/requestBounds": typeof internal_requestBounds;
+  "internal/retentionReceiptCoverage": typeof internal_retentionReceiptCoverage;
   "internal/sourceOccurrenceLimits": typeof internal_sourceOccurrenceLimits;
   "internal/sourceOccurrenceReceipts": typeof internal_sourceOccurrenceReceipts;
   "internal/sourceOccurrenceTopologyEpoch": typeof internal_sourceOccurrenceTopologyEpoch;

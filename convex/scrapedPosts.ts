@@ -8,6 +8,7 @@ import { normalizeInstagramPostUrl } from "../lib/images/apify-images";
 import {
   canonicalizeSourceUrl,
   canonicalizeSourceUrlOrEmpty,
+  getSourceUrlLookupVariants,
 } from "../lib/domain/source-url";
 import { normalizeHandle } from "../lib/pipeline/venue-normalization";
 import { OPENAI_DEFINITIVE_OUTPUT_FAILURE_KINDS } from "../lib/ai/openai-analysis-protocol";
@@ -2853,6 +2854,14 @@ export const deleteOlderThan = internalMutation({
     let retainedReferencedCount = 0;
 
     for (const post of page.page) {
+      if (
+        (post.processingStatus !== undefined && post.processingStatus !== "completed") ||
+        post.blocksPaidFetch === true ||
+        (post.processingLeaseExpiresAt ?? 0) > Date.now()
+      ) {
+        retainedReferencedCount += 1;
+        continue;
+      }
       const canonicalSourceUrl = canonicalizeSourceUrlOrEmpty(
         "instagram",
         post.instagramPostUrl,
@@ -2863,7 +2872,10 @@ export const deleteOlderThan = internalMutation({
       if (
         !canonicalSourceUrl ||
         !persistedCanonicalSourceUrl ||
-        persistedCanonicalSourceUrl !== canonicalSourceUrl
+        persistedCanonicalSourceUrl !== canonicalSourceUrl ||
+        (post.normalizedInstagramPostUrl !== undefined &&
+          canonicalizeSourceUrlOrEmpty("instagram", post.normalizedInstagramPostUrl) !==
+            canonicalSourceUrl)
       ) {
         // Retention is destructive. A malformed or contradictory source URL
         // cannot prove that no canonical provenance link exists, so preserve
@@ -2871,12 +2883,20 @@ export const deleteOlderThan = internalMutation({
         retainedReferencedCount += 1;
         continue;
       }
+      const sourceUrls = [...new Set([
+        post.instagramPostUrl,
+        ...getSourceUrlLookupVariants("instagram", post.instagramPostUrl),
+      ])];
 
       const [
         firstClassOccurrence,
         legacyPostIdLink,
         legacyPostUrlLink,
         legacyCanonicalSourceUrlLink,
+        directPostIdEvent,
+        directPostUrlEvent,
+        directCanonicalSourceEvent,
+        directNormalizedSourceEvent,
       ] =
         await Promise.all([
           ctx.db
@@ -2889,25 +2909,46 @@ export const deleteOlderThan = internalMutation({
             .query("instagramEventSources")
             .withIndex("by_post_id", (q) => q.eq("instagramPostId", post.postId))
             .take(1),
-          ctx.db
+          Promise.all(sourceUrls.map((url) => ctx.db
             .query("instagramEventSources")
-            .withIndex("by_post_url", (q) =>
-              q.eq("instagramPostUrl", post.instagramPostUrl),
-            )
-            .take(1),
+            .withIndex("by_post_url", (q) => q.eq("instagramPostUrl", url))
+            .take(1))).then((groups) => groups.flat()),
           ctx.db
             .query("instagramEventSources")
             .withIndex("by_canonical_source_url", (q) =>
               q.eq("canonicalSourceUrl", canonicalSourceUrl),
             )
             .take(1),
+          ctx.db
+            .query("events")
+            .withIndex("by_instagramPostId", (q) => q.eq("instagramPostId", post.postId))
+            .take(1),
+          Promise.all(sourceUrls.map((url) => ctx.db
+            .query("events")
+            .withIndex("by_instagramPostUrl", (q) => q.eq("instagramPostUrl", url))
+            .take(1))).then((groups) => groups.flat()),
+          ctx.db
+            .query("events")
+            .withIndex("by_canonicalSourceUrl", (q) => q.eq("canonicalSourceUrl", canonicalSourceUrl))
+            .take(1),
+          ctx.db
+            .query("events")
+            .withIndex("by_normalizedInstagramPostUrl", (q) => q.eq("normalizedInstagramPostUrl", canonicalSourceUrl))
+            .take(1),
         ]);
       if (
         firstClassOccurrence.length > 0 ||
         legacyPostIdLink.length > 0 ||
         legacyPostUrlLink.length > 0 ||
-        legacyCanonicalSourceUrlLink.length > 0
+        legacyCanonicalSourceUrlLink.length > 0 ||
+        directPostIdEvent.length > 0 ||
+        directPostUrlEvent.length > 0 ||
+        directCanonicalSourceEvent.length > 0 ||
+        directNormalizedSourceEvent.length > 0
       ) {
+        // Superseded occurrences are deliberate dedupe/replay tombstones.
+        // Keep their source document and immutable evidence; media retention
+        // separately releases only files belonging to fully retired sources.
         retainedReferencedCount += 1;
         continue;
       }

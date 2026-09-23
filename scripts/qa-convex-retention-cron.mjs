@@ -33,8 +33,9 @@ const retentionSource = readFileSync(
 
 const cleanReceiptTopologyAuditState = {
   _id: "qa-retention-receipt-topology-audit",
-  key: "source-occurrence-receipt-topology-v1",
-  phase: "receipt_topology_audit",
+  key: "event-retention-reverse-receipts-v1",
+  phase: "retention_reference_complete",
+  auditDetailsJson: JSON.stringify({ auditGeneration: 1, missingEventReferenceCount: 0, indexedReferenceCount: 0, sweptReferenceCount: 0, mismatchExamples: [] }),
   isDone: true,
   scannedCount: 0,
   updatedCount: 0,
@@ -70,7 +71,7 @@ assert.match(
 assert.match(
   maintenanceSource,
   /export const deleteExpiredEventsUntilDone = internalAction/,
-  "weekly retention cron should call an internal action that loops deletion batches until complete",
+  "retention cron should perform bounded deletion work and return its completion state",
 );
 assert.match(
   maintenanceSource,
@@ -99,35 +100,32 @@ assert.match(
 );
 assert.match(
   maintenanceSource,
-  /DEFAULT_EXPIRED_EVENT_CLEANUP_BATCH_SIZE\s*=\s*500/,
-  "weekly cleanup should use Convex's bounded 500-event batch size for efficiency",
+  /DEFAULT_EXPIRED_EVENT_CLEANUP_BATCH_SIZE\s*=\s*1\s*;/,
+  "event cleanup must bound a transaction to one candidate or its complete campaign",
 );
 assert.match(
   maintenanceSource,
-  /DEFAULT_EXPIRED_EVENT_CLEANUP_MAX_BATCHES\s*=\s*20/,
-  "weekly cleanup should have a runaway safety cap while still covering normal data sizes",
+  /DEFAULT_EXPIRED_EVENT_CLEANUP_MAX_BATCHES\s*=\s*5/,
+  "each cleanup tick must stop after five small batches and resume later",
 );
 
 assert.doesNotMatch(
   cronsSource,
-  /crons\.hourly\(\s*["']delete expired events["']/,
-  "expired-event cleanup must not run hourly anymore",
+  /crons\.weekly\(/,
+  "two-day retention must not wait for a weekly cleanup backlog",
 );
 assert.match(
   cronsSource,
-  /crons\.weekly\(\s*["']delete expired events["']/,
-  "expired-event cleanup should run weekly",
+  /crons\.interval\(\s*["']delete expired events["'][\s\S]*?minutes:\s*5/,
+  "expired-event cleanup should resume every five minutes",
 );
-assert.match(cronsSource, /dayOfWeek:\s*["']wednesday["']/, "cleanup should run every Wednesday");
-assert.match(cronsSource, /hourUTC:\s*5/, "cleanup should run at 05:00 UTC");
-assert.match(cronsSource, /minuteUTC:\s*0/, "cleanup should run exactly at the top of the hour");
 assert.match(
   cronsSource,
   /internal\.maintenance\.deleteExpiredEventsUntilDone/,
   "cron should call the all-batches maintenance action",
 );
-assert.match(cronsSource, /batchSize:\s*500/, "cron should request 500-event deletion batches");
-assert.match(cronsSource, /maxBatches:\s*20/, "cron should cap a single weekly cleanup at 20 batches");
+assert.match(cronsSource, /batchSize:\s*1\s*,/, "event cron should request one-candidate deletion batches");
+assert.match(cronsSource, /maxBatches:\s*5/, "cron should cap a single cleanup at five batches");
 
 assert.match(
   scrapedPostsSource,
@@ -181,8 +179,8 @@ assert.match(
 );
 assert.match(
   cronsSource,
-  /crons\.weekly\(\s*["']cleanup ingestion artifacts["']/,
-  "ingestion artifact cleanup should run on a bounded weekly cron",
+  /crons\.hourly\(\s*["']cleanup ingestion artifacts["']/,
+  "ingestion artifact cleanup should make bounded progress hourly",
 );
 assert.match(
   cronsSource,
@@ -307,6 +305,17 @@ assert.equal(strictCutoff.saved.has("saved-before"), false);
 assert.equal(strictCutoff.saved.has("saved-cutoff"), true);
 assert.deepEqual(strictCutoff.deleted.sort(), ["event-before", "saved-before"]);
 
+const expiredReviewedFold = makeStrictCutoffCtx();
+expiredReviewedFold.events.get("event-before").normalizedFieldsJson = JSON.stringify({
+  reviewedPromotionVariantFold: { policyVersion: 1, operationId: "historical-reviewed-fold" },
+});
+const reviewedFoldRetirement = await deleteExpiredEvents._handler(expiredReviewedFold.ctx, {
+  batchSize: 10, beforeDate: "2026-07-26",
+});
+assert.equal(reviewedFoldRetirement.deletedEventCount, 0);
+assert.equal(expiredReviewedFold.events.has("event-before"), true,
+  "A fold marker without its exact reviewed group must never permit partial lineage deletion.");
+
 const invalidCutoff = makeStrictCutoffCtx();
 await assert.rejects(
   deleteExpiredEvents._handler(invalidCutoff.ctx, {
@@ -422,16 +431,25 @@ const retainedPage = await deleteExpiredEvents._handler(lineageStarvation.ctx, {
   batchSize: 500,
 });
 assert.equal(retainedPage.deletedEventCount, 0);
-assert.equal(retainedPage.retainedCampaignEventCount, 500);
+assert.equal(retainedPage.retainedCampaignEventCount, 1,
+  "Even an oversized operator request must read at most one candidate, which may expand to eight campaign members.");
 assert.equal(retainedPage.beforeDateScanComplete, false);
 assert.equal(retainedPage.hasMore, true);
 assert.ok(retainedPage.beforeDateCursor);
+for (let index = 1; index < 500; index += 1) {
+  const retainedContinuation = await deleteExpiredEvents._handler(lineageStarvation.ctx, { batchSize: 500 });
+  assert.equal(retainedContinuation.deletedEventCount, 0);
+  assert.equal(retainedContinuation.retainedCampaignEventCount, 1);
+  assert.equal(retainedContinuation.hasMore, true);
+}
 const ordinaryPage = await deleteExpiredEvents._handler(lineageStarvation.ctx, {
   batchSize: 500,
 });
 assert.equal(ordinaryPage.deletedEventCount, 1);
 assert.equal(ordinaryPage.beforeDateScanComplete, true);
-assert.equal(ordinaryPage.hasMore, false);
+assert.equal(ordinaryPage.hasMore, true);
+const completedLineageScan = await deleteExpiredEvents._handler(lineageStarvation.ctx, { batchSize: 500 });
+assert.equal(completedLineageScan.hasMore, false);
 assert.deepEqual(lineageStarvation.deleted, [
   "ordinary-expired-after-retained-page",
   "retention-cursor-state",
@@ -890,10 +908,19 @@ const secondSameDayPage = await deleteExpiredEvents._handler(sameDayRetention.ct
   batchSize: 2,
 });
 assert.equal(secondSameDayPage.sameDayScanComplete, false);
-assert.equal(secondSameDayPage.deletedEventCount, 1);
-assert.equal(secondSameDayPage.sameDayExpiredEventCount, 1);
+assert.equal(secondSameDayPage.deletedEventCount, 0);
+assert.equal(secondSameDayPage.sameDayExpiredEventCount, 0);
+assert.equal(secondSameDayPage.retainedCampaignEventCount, 1);
 assert.equal(secondSameDayPage.hasMore, true);
 assert.notEqual(secondSameDayPage.sameDayCursor, firstSameDayPage.sameDayCursor);
+
+const thirdSameDayPage = await deleteExpiredEvents._handler(sameDayRetention.ctx, { batchSize: 2 });
+assert.equal(thirdSameDayPage.deletedEventCount, 1);
+assert.equal(thirdSameDayPage.hasMore, true);
+const fourthSameDayPage = await deleteExpiredEvents._handler(sameDayRetention.ctx, { batchSize: 2 });
+assert.equal(fourthSameDayPage.deletedEventCount, 0);
+assert.equal(fourthSameDayPage.retainedCampaignEventCount, 1);
+assert.equal(fourthSameDayPage.hasMore, true);
 
 const finalSameDayPage = await deleteExpiredEvents._handler(sameDayRetention.ctx, {
   batchSize: 2,

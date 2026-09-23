@@ -297,7 +297,7 @@ try {
       cutoffUpdatedAt: 1,
       paginationOpts: { cursor: null, numItems: 501 },
     },
-    /Orphaned-media cleanup page must contain 1 to 500 rows/iu,
+    /Orphaned-media cleanup page must contain 1 to 5 rows/iu,
   );
 
   await assertRejectsBeforeDatabaseOperation(
@@ -310,7 +310,7 @@ try {
         numItems: 1,
       },
     },
-    /Orphaned-media cleanup page row-read budget must be between 1 and 500/iu,
+    /Orphaned-media cleanup page row-read budget must be between 1 and 5/iu,
   );
 
   {

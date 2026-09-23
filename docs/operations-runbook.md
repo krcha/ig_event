@@ -207,11 +207,59 @@ npx convex import --replace-all --yes --env-file .env.production backups/convex-
 See `docs/self-hosted-convex.md` for DNS, dashboard, backup, upgrade, and
 rollback details.
 
-Convex also has an internal weekly cron in `convex/crons.ts` for deleting
-expired events older than the 3-day retention grace period. It runs Wednesday at
-05:00 UTC and calls a maintenance action that deletes bounded batches until the
-backlog is clear (up to the configured safety cap). That is separate from the
-web app ingestion cron below.
+Convex also has native cleanup jobs in `convex/crons.ts`, separate from the web
+app ingestion cron below. Expired-event cleanup runs every five minutes using a
+two-day retention grace period in `EVENTS_TIMEZONE`. Each action performs at
+most five one-candidate batches, deleting eligible event records and saved-event
+references. One candidate may retire its complete verified expired campaign of
+at most eight event rows atomically; this keeps the saved-reference writes and
+provenance checks bounded. The mutation atomically persists the cutoff and
+cursor so a later tick resumes interrupted or capped work.
+
+Expiry has its own reverse-receipt completeness check. The native action first
+resumes `internal/retentionReceiptCoverage:auditRetentionReceiptCoverageBatch`
+in at most 20 small transactions (four source receipts per transaction, or 100
+small stale index rows during the final sweep). It builds the additive
+`eventRetentionReceiptReferences` index from actual live receipt references.
+Missing historical event IDs are counted as tombstones, not recertified or
+rewritten. Malformed or ambiguous receipts block expiry and record at most eight
+examples in the `event-retention-reverse-receipts-v1` migration-state row.
+`audit_pending` means the next tick continues auditing without deleting events;
+`audit_blocked` requires investigation. Bounded manual catch-up can use
+`auditMaxBatches: 50`; the hard limit is 50, independent of the five deletion
+batches. Do not mistake an audit-only successful action for completed cleanup.
+
+Both audit phases must finish at the same exact source-topology epoch. Any
+ingestion or other topology writer invalidates coverage and starts a fresh
+generation. A validated expiry transaction alone advances its own coverage
+frontier while preserving that generation. This proves reverse discoverability
+for expiry, not semantic source validity: it never completes or weakens the
+separate `source-occurrence-receipt-topology-v1` reconciliation/approval gate.
+Current/future receipt children, unexplained source conflicts, and incomplete
+campaign/fold proofs remain protected by the per-event expiry checks.
+Ordinary multi-date schedules support up to 64 retained sibling representatives:
+expiry preserves their source-completeness decision without rewriting them.
+Special campaign/fold or legacy-admission siblings require explicit before/after
+publication checks, capped at four per transaction; larger special groups are
+retained for review rather than silently exceeding the database read budget.
+
+Orphaned media cleanup runs every 15 minutes in at most five five-asset batches.
+It separately applies a seven-day grace period and persists its scan cursor and
+cutoff. Shared files, retained event/source evidence, and active processing are
+protected; safe retirement of an obsolete media attachment does not delete
+source provenance records. Old ingestion artifacts are checked hourly at minute
+7 UTC. A completed legacy post without first-class occurrences can release its
+media only with a unique, fully drained receipt matching the current analyzed
+revision and exact source fingerprint; ambiguous or still-active plans retain it.
+The ingestion-artifact jobs retain terminal jobs for 30 days and scraped posts
+for 90 days unless source references still require them.
+
+Inspect native cron execution results and the `retention_cleanup` logs for real
+deletion counts, `hasMore`, and `stoppedReason`. `max_batches_reached` means the
+next scheduled tick must continue. A completed scan can also report retained
+records; only a fresh read-only verification of the cutoff proves the calendar
+has no remaining expired events. Do not bypass source-integrity safeguards to
+make a cleanup result appear complete.
 
 ## Docker and VPS Deployment
 
@@ -497,8 +545,9 @@ basic-data result price, 2000 one-post account runs are expected to cost about
 `$3.00`; the aggregate configured worst case is `$20`, plus OpenAI usage and the
 separate following-discovery Actor cap.
 
-The Convex retention cleanup is separate: it is a native Convex cron that runs
-Wednesday 05:00 UTC and is not called by VPS cron.
+Convex retention cleanup is separate and is not called by VPS cron: events
+resume every five minutes, orphaned media every 15 minutes, and ingestion artifacts hourly
+at minute 7 UTC. Deploying `convex/crons.ts` installs these native schedules.
 
 ## QA Commands
 

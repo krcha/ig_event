@@ -181,7 +181,27 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
 
+  // A rebuildable, epoch-fenced reverse index for expiry only. This is not
+  // semantic source-occurrence certification and is never an approval gate.
+  eventRetentionReceiptReferences: defineTable({
+    receiptId: v.id("instagramSourceOccurrenceReceipts"),
+    eventId: v.id("events"),
+    auditGeneration: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_receiptId_eventId", ["receiptId", "eventId"])
+    .index("by_auditGeneration_eventId", ["auditGeneration", "eventId"]),
+
   scrapedPostRetentionCursors: defineTable({
+    key: v.string(),
+    cutoffUpdatedAt: v.number(),
+    cursor: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
+
+  mediaAssetRetentionCursors: defineTable({
     key: v.string(),
     cutoffUpdatedAt: v.number(),
     cursor: v.string(),
@@ -702,6 +722,7 @@ export default defineSchema({
     lastAttachedAt: v.number(),
   })
     .index("by_sourceKey", ["sourceKey"])
+    .index("by_storageId", ["storageId"])
     .index("by_instagramPostId", ["instagramPostId"])
     .index("by_normalizedInstagramPostUrl", ["normalizedInstagramPostUrl"])
     .index("by_canonicalSourceUrl", ["canonicalSourceUrl"])

@@ -1816,7 +1816,8 @@ const retentionResult = await deleteExpiredEvents._handler(serviceCtx(state), {
   beforeDate: "2026-08-27",
 });
 assert.equal(retentionResult.deletedEventCount, 0);
-assert.equal(retentionResult.retainedCampaignEventCount, arianaRows.length);
+assert.equal(retentionResult.retainedCampaignEventCount, 1,
+  "An unverified historical campaign stays protected while each cleanup transaction examines one candidate.");
 assert.deepEqual([...state.tables.events.keys()], arianaRows.map((row) => row.id));
 const genericMergeCandidate = {
   ...structuredClone(canonicalEvent),

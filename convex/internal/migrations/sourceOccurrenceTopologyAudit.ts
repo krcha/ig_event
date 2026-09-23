@@ -1,6 +1,7 @@
 import type { Doc } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
 import { sourceOccurrenceRepresentativeMatchesExpected } from "../../../lib/events/source-occurrence-representation";
+import { loadVerifiedCampaignLineageReattestation } from "../campaignLineageReattestationProof";
 import { RECEIPT_TOPOLOGY_AUDIT_KEY } from "../receiptTopologyCoverage";
 import { assertExistingSourceOccurrenceReceiptWithinBounds } from "../sourceOccurrenceReceipts";
 import {
@@ -71,6 +72,11 @@ async function receiptHasCompleteNormalizedTopology(
     return false;
   }
   if (!receipt.expectedOccurrences) return false;
+  const identityReceipts = await ctx.db
+    .query("instagramSourceOccurrenceReceipts")
+    .withIndex("by_sourceIdentity", (q) => q.eq("sourceIdentity", receipt.sourceIdentity))
+    .take(2);
+  if (identityReceipts.length !== 1 || identityReceipts[0]!._id !== receipt._id) return false;
 
   const expectedByKey = new Map(
     receipt.expectedOccurrences.map((expected) => [expected.key, expected]),
@@ -101,15 +107,38 @@ async function receiptHasCompleteNormalizedTopology(
     const occurrence = occurrences.length === 1 ? occurrences[0] : null;
     if (
       !event ||
-      !sourceOccurrenceRepresentativeMatchesExpected(event, expected) ||
       !link ||
-      link.eventId !== event._id ||
       link.sourceFingerprint !== receipt.sourceFingerprint ||
       !occurrence ||
       occurrence.state !== "satisfied" ||
       occurrence.canonicalEventId !== event._id ||
       occurrence.sourceFingerprint !== receipt.sourceFingerprint ||
       link.sourceOccurrenceId !== occurrence._id
+    ) {
+      return false;
+    }
+    if (
+      link.eventId === event._id &&
+      sourceOccurrenceRepresentativeMatchesExpected(event, expected)
+    ) {
+      continue;
+    }
+    // Reviewed cross-post campaigns deliberately retain the rejected source
+    // event on their compatibility link while its first-class occurrence and
+    // receipt point to the aggregate. That is not an unlinked satisfaction:
+    // accept it only when the existing complete, version-fenced campaign proof
+    // verifies the exact link and representative. A marker alone is no proof.
+    const campaign = await loadVerifiedCampaignLineageReattestation(ctx, event);
+    if (
+      !campaign ||
+      campaign.primaryEventId !== event._id ||
+      !campaign.sourceLinkIds.has(String(link._id)) ||
+      !campaign.currentAttestation.sources.some((source) =>
+        source.receiptId === receipt._id &&
+        source.sourceLinkId === link._id &&
+        source.sourceIdentity === receipt.sourceIdentity &&
+        source.sourceOccurrenceKey === satisfaction.key,
+      )
     ) {
       return false;
     }

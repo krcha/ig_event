@@ -737,6 +737,58 @@ async function hasVerifiedReviewedFold(
     : hasVerifiedApprovedReviewedFold(ctx, event);
 }
 
+/** Retention must remove an already-reviewed fold as one exact group. This
+ * exposes the existing read-only proof; it grants no new merge permission. */
+export async function loadVerifiedReviewedFoldEventGroup(
+  ctx: MutationCtx,
+  event: Doc<"events">,
+): Promise<Doc<"events">[] | null> {
+  let primary = event.status === "rejected"
+    ? await loadVerifiedRejectedReviewedFoldPrimary(ctx, event)
+    : event;
+  if (!primary) return null;
+  let fields = parseNormalizedFields(primary);
+  const initialContinuation = readObject(fields?.reviewedSameSourceContinuationFold);
+  if (initialContinuation?.role === "independent") {
+    const primaryId = typeof initialContinuation.primaryEventId === "string"
+      ? ctx.db.normalizeId("events", initialContinuation.primaryEventId)
+      : null;
+    primary = primaryId ? await ctx.db.get(primaryId) : null;
+    if (!primary) return null;
+    fields = parseNormalizedFields(primary);
+  }
+  if (!(await hasVerifiedApprovedReviewedFold(ctx, primary))) return null;
+  const promotion = readObject(fields?.reviewedPromotionVariantFold);
+  const continuation = readObject(fields?.reviewedSameSourceContinuationFold);
+  const ids = promotion
+    ? [primary._id, promotion.variantEventId]
+    : continuation
+      ? [primary._id, continuation.independentEventId, continuation.continuationEventId]
+      : [];
+  if (ids.length < 2 || new Set(ids).size !== ids.length || !ids.includes(event._id)) return null;
+  const events: Doc<"events">[] = [];
+  for (const id of ids) {
+    const eventId = typeof id === "string" ? ctx.db.normalizeId("events", id) : null;
+    const member = eventId ? await ctx.db.get(eventId) : null;
+    if (!member) return null;
+    if (member.status === "rejected") {
+      const marker = readReviewedRejectedFoldMarker(member.moderationNote);
+      if (marker?.operationId !== (promotion ?? continuation)?.operationId ||
+        !(await loadVerifiedRejectedReviewedFoldPrimary(ctx, member, primary._id))) return null;
+    } else {
+      if (!(await hasVerifiedApprovedReviewedFold(ctx, member))) return null;
+      if (continuation) {
+        const memberContinuation = readObject(parseNormalizedFields(member)?.reviewedSameSourceContinuationFold);
+        if (!memberContinuation || !["operationId", "primaryEventId", "independentEventId", "continuationEventId", "targetVenueId"].every((key) =>
+          exactJsonValue(memberContinuation[key], continuation[key]),
+        )) return null;
+      }
+    }
+    events.push(member);
+  }
+  return events;
+}
+
 /**
  * Attests legacy event venue text after identity claims are complete. Exact
  * claims bind to canonical venue IDs; unknown claims retain an explicit,
