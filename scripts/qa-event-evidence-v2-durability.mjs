@@ -8,7 +8,10 @@ import {
   processIngestionPostWithExtractionForTesting,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
 import { isCanonicallyGroundedApprovedEvent } from "../convex/publicEventGrounding.ts";
-import { hasEventEvidenceV2AutoApproval } from "../lib/events/event-update-precondition.ts";
+import {
+  assertServiceCreateEventPolicy,
+  hasEventEvidenceV2AutoApproval,
+} from "../lib/events/event-update-precondition.ts";
 import {
   isReviewablySourceGroundedApprovedEvent,
   reviewedTitleEvidenceMatchesBoundScheduleRow,
@@ -466,6 +469,73 @@ try {
     "Exact persisted poster storage and checksum evidence must authorize publication.",
   );
   assert.equal(exactPosterGrounding.posterQueries, 1);
+  const realDateNow = Date.now;
+  Date.now = () => Date.parse(`${eventDate}T12:00:00.000Z`) + 7 * 86_400_000;
+  try {
+    assert.equal(
+      hasEventEvidenceV2AutoApproval(posterEvent.normalizedFieldsJson, posterEvent),
+      false,
+      "New approval still rejects an event after its date has passed.",
+    );
+    assert.throws(
+      () => assertServiceCreateEventPolicy(
+        "approved",
+        posterEvent.normalizedFieldsJson,
+        posterEvent,
+      ),
+      /cannot approve an event/,
+      "The service creation gate must keep its future-date requirement.",
+    );
+    assert.equal(
+      hasEventEvidenceV2AutoApproval(
+        posterEvent.normalizedFieldsJson,
+        posterEvent,
+        { requireFutureDate: false },
+      ),
+      true,
+      "An existing event keeps its exact v2 attestation after the date passes.",
+    );
+    assert.equal(
+      await isCanonicallyGroundedApprovedEvent(
+        makeGroundingCtx(posterPost, [makePosterAsset()]).ctx,
+        posterEvent,
+      ),
+      true,
+      "An approved event remains canonically grounded after its date passes.",
+    );
+    assert.equal(
+      await isCanonicallyGroundedApprovedEvent(
+        makeGroundingCtx(posterPost, [makePosterAsset()]).ctx,
+        { ...posterEvent, time: "22:00" },
+      ),
+      false,
+      "Aged-event grounding still rejects changed public event fields.",
+    );
+    assert.equal(
+      await isCanonicallyGroundedApprovedEvent(
+        makeGroundingCtx({ ...posterPost, caption: "Different source caption" }, [makePosterAsset()]).ctx,
+        posterEvent,
+      ),
+      false,
+      "Aged-event grounding still rejects drift in the persisted source.",
+    );
+    const impossibleDate = "2030-02-30";
+    assert.equal(
+      hasEventEvidenceV2AutoApproval(
+        JSON.stringify({
+          ...JSON.parse(posterEvent.normalizedFieldsJson),
+          normalizedDate: impossibleDate,
+          dateEvidenceResolvedDate: impossibleDate,
+        }),
+        { ...posterEvent, date: impossibleDate, dateEvidenceResolvedDate: impossibleDate },
+        { requireFutureDate: false },
+      ),
+      false,
+      "Removing the future-date requirement must still reject invalid calendar dates.",
+    );
+  } finally {
+    Date.now = realDateNow;
+  }
   const pastDate = isoDateDaysFromNow(-3);
   const pastCaption = sourceCaption.replace(eventDate, pastDate);
   const pastExtractionJson = JSON.stringify({
@@ -498,13 +568,17 @@ try {
     analysisResultJson: pastExtractionJson,
   };
   const pastGrounding = makeGroundingCtx(pastPost, [makePosterAsset()]);
-  assert.equal(await isCanonicallyGroundedApprovedEvent(pastGrounding.ctx, pastEvent), false);
+  assert.equal(
+    await isCanonicallyGroundedApprovedEvent(pastGrounding.ctx, pastEvent),
+    true,
+    "An exact persisted approved v2 event remains grounded after its date passes.",
+  );
   assert.equal(await isReviewablySourceGroundedApprovedEvent(
     pastGrounding.ctx,
     pastEvent,
     "service:reviewed-correction-qa",
     "Human-reviewed correction of an aged approved source event.",
-  ), true, "An aged approved event remains repairable only with exact persisted v2 source proof.");
+  ), true, "An aged approved event remains repairable with exact persisted v2 source proof.");
   assert.equal(await isReviewablySourceGroundedApprovedEvent(
     pastGrounding.ctx,
     {

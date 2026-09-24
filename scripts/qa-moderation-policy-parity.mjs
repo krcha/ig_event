@@ -583,7 +583,13 @@ try {
         if (expected) { assert.doesNotThrow(create, label); assert.doesNotThrow(update, label); }
         else { assert.throws(create, undefined, label); assert.throws(update, undefined, label); }
         const detail = await getPublicApprovedEvent._handler(nightlifeDetailContext(row), { id: row._id });
-        assert.equal(detail?._id ?? null, expected ? row._id : null, label);
+        const existingStructuredEventAfterDate =
+          path.rule === "event_evidence_v2" && date === previousDate.toISOString().slice(0, 10);
+        assert.equal(
+          detail?._id ?? null,
+          expected || existingStructuredEventAfterDate ? row._id : null,
+          `${label}: historical v2 publication retains exact source grounding`,
+        );
 
         const humanFields = { ...JSON.parse(row.normalizedFieldsJson), moderationPendingReasons: ["requires_human_approval"] };
         const structured = path.rule === "event_evidence_v2";

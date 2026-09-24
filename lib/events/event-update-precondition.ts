@@ -264,20 +264,21 @@ function normalizeComparableHandle(value: unknown): string | null {
   return normalized ? normalized.replace(/^@/, "").toLowerCase() : null;
 }
 
-function isFutureIsoDate(value: string): boolean {
+function isValidIsoDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
   const [year, month, day] = value.split("-").map(Number);
   const parsed = new Date(Date.UTC(year, month - 1, day));
-  if (
+  return !(
     parsed.getUTCFullYear() !== year ||
     parsed.getUTCMonth() + 1 !== month ||
     parsed.getUTCDate() !== day
-  ) {
-    return false;
-  }
+  );
+}
+
+function isFutureIsoDate(value: string): boolean {
   // Public browsing keeps the previous night's events until 07:00 Belgrade.
-  // Approval and live source grounding must use that same business date.
-  return value >= getNightlifeDefaultDateKey(new Date(Date.now()));
+  // Approval uses that same business date.
+  return isValidIsoDate(value) && value >= getNightlifeDefaultDateKey(new Date(Date.now()));
 }
 
 function normalizeComparableArtists(value: unknown): string[] | null {
@@ -441,6 +442,7 @@ function hasBoundEventEvidenceV2PublicFields(
 export function hasEventEvidenceV2AutoApproval(
   normalizedFieldsJson: string | undefined,
   eventFields?: EventApprovalFields,
+  options: { requireFutureDate?: boolean } = {},
 ): boolean {
   const fields = parseNormalizedFields(normalizedFieldsJson);
   if (!fields || !eventFields || hasExplicitNonEventEvidence(normalizedFieldsJson, eventFields)) {
@@ -475,7 +477,7 @@ export function hasEventEvidenceV2AutoApproval(
     fields.moderationAutoApproveRule === EVENT_EVIDENCE_V2_AUTO_APPROVE_RULE &&
     Array.isArray(pendingReasons) &&
     pendingReasons.length === 0 &&
-    isFutureIsoDate(date) &&
+    (options.requireFutureDate === false ? isValidIsoDate(date) : isFutureIsoDate(date)) &&
     isSensibleEventTitleForApproval({
       title: normalizeComparableOptionalText(eventFields.title),
       venue: normalizeComparableOptionalText(eventFields.venue),

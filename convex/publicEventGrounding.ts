@@ -425,6 +425,7 @@ async function isCanonicallyGroundedApprovedEventInternal(
   const structuredEvidenceAuthorized = hasEventEvidenceV2AutoApproval(
     event.normalizedFieldsJson,
     event,
+    { requireFutureDate: false },
   );
   const automaticUniqueAuthorized =
     hasAutomaticUniqueStructuredSourceAttestation(event.normalizedFieldsJson, event) &&
