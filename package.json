@@ -27,6 +27,7 @@
     "qa:moderation-dashboard-data": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-moderation-dashboard-data-path.mjs",
     "qa:moderation-unique-approval": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-moderation-unique-approval.mjs",
     "qa:automatic-unique-approval": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-automatic-unique-approval.mjs",
+    "qa:revert-false-cinema-autoapprovals": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-revert-false-cinema-autoapprovals.mjs",
     "qa:moderation-distinct-batch": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-moderation-distinct-batch.mjs",
     "qa:moderation-policy-parity": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-moderation-policy-parity.mjs",
     "qa:ingestion-architecture-boundaries": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-ingestion-architecture-boundaries.mjs",

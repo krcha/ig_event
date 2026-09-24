@@ -25,6 +25,7 @@ const checks = [
   { script: "qa:moderation-dashboard-data", timeoutMs: 60_000 },
   { script: "qa:moderation-unique-approval", timeoutMs: 60_000 },
   { script: "qa:automatic-unique-approval", timeoutMs: 60_000 },
+  { script: "qa:revert-false-cinema-autoapprovals", timeoutMs: 60_000 },
   { script: "qa:moderation-distinct-batch", timeoutMs: 60_000 },
   { script: "qa:moderation-policy-parity", timeoutMs: 60_000 },
   { script: "qa:ingestion-architecture-boundaries", timeoutMs: 60_000 },

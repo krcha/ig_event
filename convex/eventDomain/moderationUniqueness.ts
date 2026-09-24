@@ -2,7 +2,10 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { isHumanApprovalIneligibleError } from "../../lib/domain/moderation/index";
 import { isSensibleEventTitleForApproval } from "../../lib/events/event-title-approval";
-import { getEffectiveEventEvidenceV2Conflicts } from "../../lib/events/event-update-precondition";
+import {
+  getEffectiveEventEvidenceV2Conflicts,
+  hasUnverifiedRepeatedTitleCaptionContradiction,
+} from "../../lib/events/event-update-precondition";
 import { getBelgradeDayKey } from "../../lib/pipeline/belgrade-day-key";
 import { loadBoundedPublicVenueResolverRows } from "../venueResolver";
 import {
@@ -15,7 +18,13 @@ import { dateKeyToUtcMs } from "./publicReads";
 import { classifyApprovalCandidates } from "./sourceApproval";
 
 const MAX_PENDING_MODERATION_UNIQUENESS_ITEMS = 10;
-const MAX_PENDING_MODERATION_UNIQUENESS_DATE_COHORT_SIZE = 100;
+const MAX_PENDING_MODERATION_UNIQUENESS_PENDING_DATE_COHORT_SIZE = 100;
+// Allow growing approved cohorts while keeping large event document reads well
+// below the separate approval policy's 500-row hard bound.
+const MAX_PENDING_MODERATION_UNIQUENESS_APPROVED_DATE_COHORT_SIZE = 200;
+// A review can name ten different dates. Reserve the full per-date query bound
+// before reading so even that request cannot exhaust a Convex transaction.
+const MAX_PENDING_MODERATION_UNIQUENESS_COHORT_READS_PER_REVIEW = 500;
 
 export type PendingModerationUniquenessReviewItem = {
   id: Id<"events">;
@@ -126,34 +135,52 @@ async function loadPendingModerationDateCohorts(
   dates: string[],
 ): Promise<Map<string, PendingModerationDateCohort>> {
   const cohorts = new Map<string, PendingModerationDateCohort>();
+  let remainingReadBudget =
+    MAX_PENDING_MODERATION_UNIQUENESS_COHORT_READS_PER_REVIEW;
+  const requiredDateReadBudget =
+    MAX_PENDING_MODERATION_UNIQUENESS_PENDING_DATE_COHORT_SIZE +
+    MAX_PENDING_MODERATION_UNIQUENESS_APPROVED_DATE_COHORT_SIZE +
+    2;
   for (const date of dates) {
+    if (remainingReadBudget < requiredDateReadBudget) {
+      cohorts.set(date, {
+        pending: [],
+        approved: [],
+        pendingTruncated: true,
+        approvedTruncated: true,
+      });
+      continue;
+    }
     const [pending, approved] = await Promise.all([
       ctx.db
         .query("events")
         .withIndex("by_status_date", (q) =>
           q.eq("status", "pending").eq("date", date),
         )
-        .take(MAX_PENDING_MODERATION_UNIQUENESS_DATE_COHORT_SIZE + 1),
+        .take(MAX_PENDING_MODERATION_UNIQUENESS_PENDING_DATE_COHORT_SIZE + 1),
       ctx.db
         .query("events")
         .withIndex("by_status_date", (q) =>
           q.eq("status", "approved").eq("date", date),
         )
-        .take(MAX_PENDING_MODERATION_UNIQUENESS_DATE_COHORT_SIZE + 1),
+        .take(MAX_PENDING_MODERATION_UNIQUENESS_APPROVED_DATE_COHORT_SIZE + 1),
     ]);
+    remainingReadBudget -= pending.length + approved.length;
     cohorts.set(date, {
       pending: pending.slice(
         0,
-        MAX_PENDING_MODERATION_UNIQUENESS_DATE_COHORT_SIZE,
+        MAX_PENDING_MODERATION_UNIQUENESS_PENDING_DATE_COHORT_SIZE,
       ),
       approved: approved.slice(
         0,
-        MAX_PENDING_MODERATION_UNIQUENESS_DATE_COHORT_SIZE,
+        MAX_PENDING_MODERATION_UNIQUENESS_APPROVED_DATE_COHORT_SIZE,
       ),
       pendingTruncated:
-        pending.length > MAX_PENDING_MODERATION_UNIQUENESS_DATE_COHORT_SIZE,
+        pending.length >
+        MAX_PENDING_MODERATION_UNIQUENESS_PENDING_DATE_COHORT_SIZE,
       approvedTruncated:
-        approved.length > MAX_PENDING_MODERATION_UNIQUENESS_DATE_COHORT_SIZE,
+        approved.length >
+        MAX_PENDING_MODERATION_UNIQUENESS_APPROVED_DATE_COHORT_SIZE,
     });
   }
   return cohorts;
@@ -311,6 +338,29 @@ export async function buildPendingModerationUniquenessReview(
       );
       continue;
     }
+    let normalizedFields: Record<string, unknown> | null = null;
+    try {
+      const parsed: unknown = JSON.parse(event.normalizedFieldsJson ?? "null");
+      normalizedFields = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    } catch {
+      normalizedFields = null;
+    }
+    if (hasUnverifiedRepeatedTitleCaptionContradiction(
+      prepared.candidate.title,
+      event.sourceCaption,
+      normalizedFields?.identityEvidenceVerified,
+    )) {
+      classifications.push(
+        buildPendingModerationUniquenessClassification(
+          item,
+          "ineligible",
+          "ineligible_source_policy",
+        ),
+      );
+      continue;
+    }
     const cohort = cohorts.get(event.date);
     if (!cohort || cohort.pendingTruncated) {
       classifications.push(
@@ -365,15 +415,6 @@ export async function buildPendingModerationUniquenessReview(
         ),
       );
       continue;
-    }
-    let normalizedFields: Record<string, unknown> | null = null;
-    try {
-      const parsed: unknown = JSON.parse(event.normalizedFieldsJson ?? "null");
-      normalizedFields = parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : null;
-    } catch {
-      normalizedFields = null;
     }
     if (normalizedFields?.extractionContractVersion === "event_evidence_v2") {
       const materialConflicts = getEffectiveEventEvidenceV2Conflicts(

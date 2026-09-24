@@ -1,4 +1,5 @@
 import { TBD_EVENT_TIME } from "./event-time.ts";
+import { toSearchableText } from "../domain/venues/normalization.ts";
 import { getNightlifeDefaultDateKey } from "./nightlife-date.ts";
 import { isSensibleEventTitleForApproval } from "./event-title-approval.ts";
 import { isCaptionSourceCoherentWithEvent } from "./event-source-approval.ts";
@@ -73,6 +74,41 @@ function parseNormalizedFields(value: string | undefined): Record<string, unknow
   } catch {
     return null;
   }
+}
+
+function containsContiguousTokens(haystack: string[], needle: string[]): boolean {
+  if (needle.length === 0 || needle.length > haystack.length) return false;
+  for (let start = 0; start <= haystack.length - needle.length; start += 1) {
+    if (needle.every((token, index) => haystack[start + index] === token)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** A repeated title word that the caption names only once is evidence of a
+ * source-title mismatch, not a confidence score. Use only when independent
+ * identity verification is absent; a poster can verify a caption variant. */
+export function hasUnverifiedRepeatedTitleCaptionContradiction(
+  title: unknown,
+  sourceCaption: unknown,
+  identityEvidenceVerified: unknown,
+): boolean {
+  if (
+    identityEvidenceVerified === true ||
+    typeof title !== "string" ||
+    typeof sourceCaption !== "string"
+  ) return false;
+  const titleTokens = toSearchableText(title).split(" ").filter(Boolean);
+  if (titleTokens.length < 3 || titleTokens.length > 40) return false;
+  const captionTokens = toSearchableText(sourceCaption).split(" ").filter(Boolean);
+  if (containsContiguousTokens(captionTokens, titleTokens)) return false;
+  for (let index = 1; index < titleTokens.length; index += 1) {
+    if (titleTokens[index] !== titleTokens[index - 1]) continue;
+    const collapsed = titleTokens.filter((_, tokenIndex) => tokenIndex !== index);
+    if (containsContiguousTokens(captionTokens, collapsed)) return true;
+  }
+  return false;
 }
 
 /** Explicit negative source evidence must survive every approval entry point. */
@@ -773,6 +809,11 @@ export function hasAutomaticUniqueStructuredSourceAttestation(
       AUTOMATIC_UNIQUE_APPROVAL_POLICY_VERSION &&
     fields.moderationAutoApproved === true &&
     fields.moderationAutoApproveRule === AUTOMATIC_UNIQUE_APPROVAL_RULE &&
+    !hasUnverifiedRepeatedTitleCaptionContradiction(
+      eventFields.title,
+      eventFields.sourceCaption,
+      fields.identityEvidenceVerified,
+    ) &&
     eventFields.humanReviewedLegacySourcePolicyVersion === undefined &&
     eventFields.humanReviewedStructuredSourcePolicyVersion === undefined &&
     fields.humanReviewedLegacySourcePolicyVersion === undefined &&

@@ -8,7 +8,9 @@ import {
 import {
   hasAutomaticUniqueStructuredSourceAttestation,
   hasHumanReviewableStructuredSourceAttestation,
+  hasUnverifiedRepeatedTitleCaptionContradiction,
 } from "../lib/events/event-update-precondition.ts";
+import { isCanonicallyGroundedApprovedEvent } from "../convex/publicEventGrounding.ts";
 
 const sourceUrl = "https://www.instagram.com/p/QAEXACT1/";
 const event = {
@@ -80,6 +82,69 @@ assert.equal(
   true,
   "Low confidence and noncritical verification flags do not veto exact unique proof.",
 );
+assert.equal(
+  hasUnverifiedRepeatedTitleCaptionContradiction(
+    "Ｉ Ｉ SINOVI",
+    "20:00 I SINOVI — bioskop",
+    false,
+  ),
+  true,
+  "Unicode styling and punctuation must not hide the repeated-token source mismatch.",
+);
+for (const [title, caption, identityVerified] of [
+  ["I I SINOVI", "20:00 I I SINOVI — bioskop", false],
+  ["I I SINOVI", "20:00 SINOVI — bioskop", false],
+  ["I SINOVI", "20:00 I SINOVI — bioskop", false],
+  ["I I SINOVI", "20:00 I SINOVI — bioskop", true],
+]) {
+  assert.equal(
+    hasUnverifiedRepeatedTitleCaptionContradiction(
+      title,
+      caption,
+      identityVerified,
+    ),
+    false,
+  );
+}
+
+const cinemaEvent = {
+  ...event,
+  title: "I I SINOVI",
+  sourceCaption: "20:00 I SINOVI — bioskop",
+};
+const cinemaFields = JSON.stringify({
+  ...fields,
+  title: cinemaEvent.title,
+  sourceGroundingSourceCaption: cinemaEvent.sourceCaption,
+});
+assert.equal(
+  hasHumanReviewableStructuredSourceAttestation(cinemaFields, cinemaEvent),
+  true,
+  "A human can review the conflicting title against its source.",
+);
+assert.equal(
+  hasAutomaticUniqueStructuredSourceAttestation(cinemaFields, cinemaEvent),
+  false,
+  "The repeated title absent from the caption cannot receive machine approval.",
+);
+const publicReadTables = [];
+assert.equal(
+  await isCanonicallyGroundedApprovedEvent({
+    db: {
+      query(table) {
+        publicReadTables.push(table);
+        return { withIndex() { return { async take() { return []; } }; } };
+      },
+    },
+  }, {
+    ...cinemaEvent,
+    status: "approved",
+    normalizedFieldsJson: cinemaFields,
+  }),
+  false,
+  "An old machine approval with the contradicted title must disappear from public reads.",
+);
+assert.equal(publicReadTables.includes("scrapedPosts"), false);
 assert.equal(event.humanReviewedStructuredSourcePolicyVersion, undefined);
 assert.equal(fields.humanReviewedStructuredSourcePolicyVersion, undefined);
 assert.equal(

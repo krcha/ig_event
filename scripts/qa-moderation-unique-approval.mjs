@@ -572,6 +572,25 @@ const ungroundedResult = await classify(ungroundedFixture, [
 assert.equal(ungroundedResult.items[0].disposition, "ineligible");
 assert.equal(ungroundedResult.items[0].reason, "ineligible_source_policy");
 
+const contradictedTitle = event("contradicted-title", {
+  title: "I I SINOVI",
+  sourceCaption: "20:00 I SINOVI — bioskop",
+});
+const contradictedTitleFixture = makeCtx({
+  events: [contradictedTitle],
+  sourceEvents: [contradictedTitle],
+});
+const contradictedTitleResult = await classify(contradictedTitleFixture, [
+  reviewedItem(contradictedTitle),
+]);
+assert.equal(contradictedTitleResult.complete, true);
+assert.equal(contradictedTitleResult.items[0].disposition, "ineligible");
+assert.equal(
+  contradictedTitleResult.items[0].reason,
+  "ineligible_source_policy",
+  "A title contradicted by the exact source caption must not remain a unique approval candidate.",
+);
+
 const learnedVenue = {
   ...makeVenue("learned"),
   _id: "venue-learned",
@@ -794,15 +813,127 @@ const approvedLimitFixture = makeCtx({
 const approvedLimitResult = await classify(approvedLimitFixture, [
   reviewedItem(approvedLimitTarget),
 ]);
-assert.equal(approvedLimitResult.complete, false);
+assert.equal(approvedLimitResult.complete, true);
 assert.equal(
   approvedLimitResult.items[0].reason,
-  "indeterminate_approved_cohort_limit",
+  "unique_no_conflict",
 );
 assert.ok(
-  approvedLimitFixture.reads.filter(
-    (item) => item.indexName === "by_status_date" && item.limit === 101,
-  ).length >= 2,
+  approvedLimitFixture.reads.some(
+    (item) =>
+      item.indexName === "by_status_date" &&
+      item.filters.status === "approved" &&
+      item.limit === 201,
+  ),
+);
+
+// The newly visible tail of an approved cohort must still block a duplicate.
+const approvedTailDuplicate = event("approved-tail-duplicate", {
+  date: approvedLimitTarget.date,
+  title: approvedLimitTarget.title,
+  venue: approvedLimitTarget.venue,
+  status: "approved",
+});
+const approvedTailFixture = makeCtx({
+  events: [approvedLimitTarget, ...approvedLimitRows, approvedTailDuplicate],
+  sourceEvents: [approvedLimitTarget],
+});
+const approvedTailResult = await classify(approvedTailFixture, [
+  reviewedItem(approvedLimitTarget),
+]);
+assert.equal(approvedTailResult.items[0].reason, "duplicate_same_occurrence");
+assert.deepEqual(approvedTailResult.items[0].conflictIds, [
+  approvedTailDuplicate._id,
+]);
+
+const approvedTailAmbiguous = event("approved-tail-ambiguous", {
+  date: approvedLimitTarget.date,
+  title: "Festival",
+  venue: approvedLimitTarget.venue,
+  status: "approved",
+});
+const approvedAmbiguousTailFixture = makeCtx({
+  events: [approvedLimitTarget, ...approvedLimitRows, approvedTailAmbiguous],
+  sourceEvents: [approvedLimitTarget],
+});
+const approvedAmbiguousTailResult = await classify(
+  approvedAmbiguousTailFixture,
+  [reviewedItem(approvedLimitTarget)],
+);
+assert.equal(
+  approvedAmbiguousTailResult.items[0].reason,
+  "ambiguous_same_date_occurrence",
+);
+assert.deepEqual(approvedAmbiguousTailResult.items[0].conflictIds, [
+  approvedTailAmbiguous._id,
+]);
+
+const approvedHardLimitRows = Array.from({ length: 201 }, (_, index) =>
+  event(`approved-hard-limit-${index}`, {
+    date: approvedLimitTarget.date,
+    venue: `Other Venue ${index}`,
+    status: "approved",
+  }),
+);
+const approvedAtLimitFixture = makeCtx({
+  events: [approvedLimitTarget, ...approvedHardLimitRows.slice(0, 200)],
+  sourceEvents: [approvedLimitTarget],
+});
+const approvedAtLimitResult = await classify(approvedAtLimitFixture, [
+  reviewedItem(approvedLimitTarget),
+]);
+assert.equal(approvedAtLimitResult.complete, true);
+assert.equal(approvedAtLimitResult.items[0].reason, "unique_no_conflict");
+
+const approvedHardLimitFixture = makeCtx({
+  events: [approvedLimitTarget, ...approvedHardLimitRows],
+  sourceEvents: [approvedLimitTarget],
+});
+const approvedHardLimitResult = await classify(approvedHardLimitFixture, [
+  reviewedItem(approvedLimitTarget),
+]);
+assert.equal(approvedHardLimitResult.complete, false);
+assert.equal(
+  approvedHardLimitResult.items[0].reason,
+  "indeterminate_approved_cohort_limit",
+);
+
+// A multi-date request is bounded independently of the per-date approved cap.
+const budgetDates = ["2035-01-15", "2035-01-16", "2035-01-17"];
+const budgetTargets = budgetDates.map((date, index) =>
+  event(`cohort-budget-target-${index}`, { date }),
+);
+const budgetApproved = budgetDates.flatMap((date, dateIndex) =>
+  Array.from({ length: 200 }, (_, index) =>
+    event(`cohort-budget-approved-${dateIndex}-${index}`, {
+      date,
+      venue: `Budget Venue ${dateIndex} ${index}`,
+      status: "approved",
+    }),
+  ),
+);
+const budgetFixture = makeCtx({
+  events: [...budgetTargets, ...budgetApproved],
+  sourceEvents: budgetTargets,
+});
+const budgetResult = await classify(
+  budgetFixture,
+  budgetTargets.map((target) => reviewedItem(target)),
+);
+assert.deepEqual(
+  budgetResult.items.map((item) => item.reason),
+  [
+    "unique_no_conflict",
+    "indeterminate_pending_cohort_limit",
+    "indeterminate_pending_cohort_limit",
+  ],
+);
+assert.ok(
+  !budgetFixture.reads.some(
+    (item) =>
+      item.indexName === "by_status_date" &&
+      budgetDates.slice(1).includes(item.filters.date),
+  ),
 );
 
 const originalDateNow = Date.now;
@@ -894,7 +1025,7 @@ try {
 
   for (const [label, fixture, target] of [
     ["pending", pendingLimitFixture, pendingLimitTarget],
-    ["approved", approvedLimitFixture, approvedLimitTarget],
+    ["approved", approvedHardLimitFixture, approvedLimitTarget],
   ]) {
     const incompleteCohortApproval = await approveUniquePendingEvents._handler(
       fixture.ctx,
@@ -1117,8 +1248,13 @@ assert.match(
 );
 assert.match(
   helperSource,
-  /withIndex\("by_status_date", \(q\) =>[\s\S]*?take\(MAX_PENDING_MODERATION_UNIQUENESS_DATE_COHORT_SIZE \+ 1\)/,
+  /withIndex\("by_status_date", \(q\) =>[\s\S]*?take\(MAX_PENDING_MODERATION_UNIQUENESS_PENDING_DATE_COHORT_SIZE \+ 1\)/,
 );
+assert.match(
+  helperSource,
+  /take\(MAX_PENDING_MODERATION_UNIQUENESS_APPROVED_DATE_COHORT_SIZE \+ 1\)/,
+);
+assert.match(helperSource, /remainingReadBudget < requiredDateReadBudget/);
 assert.match(helperSource, /indeterminate_pending_cohort_limit/);
 assert.match(helperSource, /indeterminate_approved_cohort_limit/);
 assert.doesNotMatch(helperSource, /\.collect\(\)/);
