@@ -620,6 +620,107 @@ try {
   assert.equal(tables.ingestionDailyBudgets[0].chargedMicros, 50_000);
   assert.equal(tables.ingestionDailyBudgets[0].reservedMicros, 0);
 
+  const targetedPostUrl = "https://www.instagram.com/p/targeted-direct-post/";
+  const targetedFixture = createDb({
+    instagramPaidFetchControl: [{
+      _id: "targeted-control",
+      key: "apify",
+      backlogIndexReady: true,
+      createdAt: 1,
+      updatedAt: 1,
+    }],
+    instagramSources: [{
+      _id: "targeted-source",
+      handle: "source.direct",
+      role: "venue",
+      active: true,
+      lastSuccessfulFetchThroughAt: checkpointBefore,
+      createdAt: 1,
+      updatedAt: 1,
+    }],
+    scrapedPosts: [{
+      _id: "targeted-post",
+      handle: "source.direct",
+      postId: "targeted-post-id",
+      instagramPostUrl: targetedPostUrl,
+      blocksPaidFetch: false,
+      processingStatus: "completed",
+      processingOutcome: "receipt_complete",
+    }],
+    ingestionCostReservations: [],
+    ingestionDailyBudgets: [],
+    instagramHandleFetchStates: [],
+  });
+  const targetedCtx = { auth: { getUserIdentity: async () => null }, db: targetedFixture.db };
+  const targetedClaim = await claimPaidFetchLease._handler(targetedCtx, {
+    handle: "source.direct",
+    owner: "targeted-owner",
+    requestedResultsLimit: 1,
+    fetchStartedAt: mutationFetchStartedAt,
+    dayKey: "2026-07-28",
+    dailyBudgetUsd: 0.01,
+    maxChargeUsd: 0.01,
+    attemptCooldownMs: 0,
+    ignoreCheckpoint: true,
+    requestBoundaryVersion: 1,
+    serviceSecret: "qa-durability-secret",
+  });
+  assert.equal(targetedClaim.claimed, true);
+  await assert.rejects(
+    releasePaidFetchLease._handler(targetedCtx, {
+      owner: "targeted-owner",
+      requestStarted: true,
+      targetedPostResult: {
+        handle: "source.direct",
+        instagramPostUrl: targetedPostUrl,
+        status: "persisted",
+        scrapedPostId: "targeted-post",
+      },
+      serviceSecret: "qa-durability-secret",
+    }),
+    /durable provider-request receipt/u,
+    "a caller-supplied requestStarted flag is not proof of provider transport",
+  );
+  await markPaidFetchRequestStarted._handler(targetedCtx, {
+    handle: "source.direct",
+    owner: "targeted-owner",
+    serviceSecret: "qa-durability-secret",
+  });
+  await assert.rejects(
+    releasePaidFetchLease._handler(targetedCtx, {
+      owner: "targeted-owner",
+      requestStarted: true,
+      targetedPostResult: {
+        handle: "source.direct",
+        instagramPostUrl: "https://www.instagram.com/p/different-post/",
+        status: "persisted",
+        scrapedPostId: "targeted-post",
+      },
+      serviceSecret: "qa-durability-secret",
+    }),
+    /does not match the saved source document/u,
+    "the targeted completion may only attest its exact persisted source document",
+  );
+  const targetedRelease = await releasePaidFetchLease._handler(targetedCtx, {
+    owner: "targeted-owner",
+    requestStarted: true,
+    targetedPostResult: {
+      handle: "source.direct",
+      instagramPostUrl: targetedPostUrl,
+      status: "persisted",
+      scrapedPostId: "targeted-post",
+    },
+    serviceSecret: "qa-durability-secret",
+  });
+  assert.equal(targetedRelease.chargedMicros, 10_000);
+  assert.equal(targetedFixture.tables.instagramSources[0].lastFetchStatus, "targeted_post_completed");
+  assert.equal(
+    targetedFixture.tables.instagramSources[0].lastSuccessfulFetchThroughAt,
+    checkpointBefore,
+    "an exact-post recovery must not advance the complete-profile checkpoint",
+  );
+  assert.equal(targetedFixture.tables.ingestionDailyBudgets[0].chargedMicros, 10_000);
+
   const createPaidFetchCrashFixture = (handle) => {
     const fixture = createDb({
       instagramPaidFetchControl: [

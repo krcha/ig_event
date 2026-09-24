@@ -2490,6 +2490,12 @@ export const releasePaidFetchLease = mutation({
     owner: v.string(),
     requestStarted: v.optional(v.boolean()),
     actualChargeUsd: v.optional(v.number()),
+    targetedPostResult: v.optional(v.object({
+      handle: v.string(),
+      instagramPostUrl: v.string(),
+      status: v.union(v.literal("persisted"), v.literal("failed")),
+      scrapedPostId: v.optional(v.id("scrapedPosts")),
+    })),
     serviceSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -2503,6 +2509,49 @@ export const releasePaidFetchLease = mutation({
       return { released: false };
     }
     const now = Date.now();
+    const targetedPostResult = args.targetedPostResult;
+    let targetedSource: Doc<"instagramSources"> | null = null;
+    if (targetedPostResult) {
+      if (
+        args.requestStarted !== true ||
+        control.leaseHandle !== targetedPostResult.handle ||
+        control.leaseWindowStatus !== "active" ||
+        (control.leaseExpiresAt ?? 0) <= now ||
+        !control.leaseReservationId
+      ) {
+        throw new Error("Targeted-post completion requires its own active paid-fetch lease.");
+      }
+      targetedSource = await ctx.db
+        .query("instagramSources")
+        .withIndex("by_handle", (q) => q.eq("handle", targetedPostResult.handle))
+        .unique();
+      if (!targetedSource?.active || targetedSource.role !== "venue") {
+        throw new Error("Targeted-post completion requires an active venue source.");
+      }
+      const expectedCanonicalUrl = canonicalizeSourceUrlOrEmpty(
+        "instagram",
+        targetedPostResult.instagramPostUrl,
+      );
+      if (!expectedCanonicalUrl) {
+        throw new Error("Targeted-post completion requires a canonical Instagram URL.");
+      }
+      if (targetedPostResult.status === "persisted") {
+        if (!targetedPostResult.scrapedPostId) {
+          throw new Error("Targeted-post completion requires the exact saved post ID.");
+        }
+        const savedPost = await ctx.db.get(targetedPostResult.scrapedPostId);
+        if (
+          !savedPost ||
+          savedPost.handle !== targetedPostResult.handle ||
+          canonicalizeSourceUrlOrEmpty("instagram", savedPost.instagramPostUrl) !==
+            expectedCanonicalUrl
+        ) {
+          throw new Error("Targeted-post completion does not match the saved source document.");
+        }
+      } else if (targetedPostResult.scrapedPostId) {
+        throw new Error("A failed targeted-post fetch cannot claim a saved post ID.");
+      }
+    }
     let chargedMicros = 0;
     let releasedMicros = 0;
     if (control.leaseReservationId) {
@@ -2512,6 +2561,19 @@ export const releasePaidFetchLease = mutation({
           q.eq("reservationId", control.leaseReservationId as string),
         )
         .unique();
+      if (
+        targetedPostResult &&
+        (
+          !reservation ||
+          reservation.status !== "active" ||
+          reservation.owner !== owner ||
+          reservation.handle !== targetedPostResult.handle ||
+          typeof reservation.requestStartedAt !== "number" ||
+          !Number.isFinite(reservation.requestStartedAt)
+        )
+      ) {
+        throw new Error("Targeted-post completion requires its durable provider-request receipt.");
+      }
       if (reservation?.status === "active") {
         const durableRequestStarted = typeof reservation.requestStartedAt === "number";
         // Boundary-aware callers distinguish the crash-safe marker from actual
@@ -2584,6 +2646,18 @@ export const releasePaidFetchLease = mutation({
       leaseWindowStatus: undefined,
       updatedAt: now,
     });
+    if (targetedPostResult && targetedSource) {
+      await ctx.db.patch(targetedSource._id, {
+        lastFetchCompletedAt: now,
+        lastFetchStatus: targetedPostResult.status === "persisted"
+          ? "targeted_post_completed"
+          : "targeted_post_failed",
+        lastFetchError: targetedPostResult.status === "persisted"
+          ? undefined
+          : "The exact post was not durably persisted.",
+        updatedAt: now,
+      });
+    }
     return { released: true, chargedMicros, releasedMicros };
   },
 });
