@@ -116,6 +116,7 @@ import {
   repairReviewedStructuredEventVenueHandler,
 } from "./eventDomain/reviewedStructuredCorrections";
 import { getReviewedVenueRepairContextHandler } from "./internal/eventRepairs/reviewedVenueRepairContext";
+import { enrichReviewedFabrikaDjNightHandler } from "./internal/eventRepairs/reviewedFabrikaDjNightEnrichment";
 import {
   foldReviewedCrossPostScheduleDuplicateHandler,
   getReviewedCrossPostScheduleFoldContextHandler,
@@ -447,6 +448,35 @@ export const getReviewedVenueRepairContext = query({
   },
   returns: v.any(),
   handler: getReviewedVenueRepairContextHandler,
+});
+
+const reviewedFabrikaSourceVersion = v.object({
+  linkId: v.id("instagramEventSources"),
+  linkUpdatedAt: v.number(),
+  receiptId: v.id("instagramSourceOccurrenceReceipts"),
+  receiptUpdatedAt: v.number(),
+  occurrenceId: v.id("sourceOccurrences"),
+  occurrenceUpdatedAt: v.number(),
+});
+
+export const enrichReviewedFabrikaDjNight = mutation({
+  args: {
+    primaryId: v.id("events"),
+    directId: v.id("events"),
+    expectedPrimaryUpdatedAt: v.number(),
+    expectedDirectUpdatedAt: v.number(),
+    primarySource: reviewedFabrikaSourceVersion,
+    directSource: reviewedFabrikaSourceVersion,
+    moderationNote: v.string(),
+    serviceSecret: v.string(),
+  },
+  returns: v.object({
+    applied: v.boolean(),
+    primaryId: v.id("events"),
+    primaryUpdatedAt: v.number(),
+    directStatus: v.literal("pending"),
+  }),
+  handler: enrichReviewedFabrikaDjNightHandler,
 });
 
 export const repairReviewedStructuredEventEvidence = mutation({
