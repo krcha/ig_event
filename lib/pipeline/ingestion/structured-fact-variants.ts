@@ -6,7 +6,7 @@ import { resolveIngestionVenue } from "@/lib/domain/venues/index";
 import type { DateNormalization, EventDateEvidenceSource, EventVariant, SplitEventCandidate } from "@/lib/pipeline/ingestion/contracts";
 import { coalesceNightlifeLineupEventVariants } from "@/lib/pipeline/ingestion/occurrence-coalescing";
 import { normalizeDateEvidenceForOccurrence } from "@/lib/pipeline/ingestion/parsing-date";
-import { buildMeaningfulEventTitle, extractContextualEventTitleCandidate, isMeaninglessEventTitle, isUsableContextEventTitleCandidate, normalizeContextDerivedTitle } from "@/lib/pipeline/ingestion/parsing-event-text";
+import { buildMeaningfulEventTitle, extractContextualEventTitleCandidate, extractPostAltTextEvidence, isMeaninglessEventTitle, isUsableContextEventTitleCandidate, normalizeContextDerivedTitle } from "@/lib/pipeline/ingestion/parsing-event-text";
 import type { normalizeEventTitle } from "@/lib/pipeline/ingestion/parsing-event-title";
 import { buildSplitEventDescription } from "@/lib/pipeline/ingestion/parsing-schedule";
 import { buildScheduleEntryTimeProvenance, buildTimeProvenance, type resolveEventTimeFromExtractionAndEvidence } from "@/lib/pipeline/ingestion/parsing-time";
@@ -50,6 +50,45 @@ type BuildStructuredFactVariantsInput = {
   venueNormalization: VenueNormalization;
 };
 
+function hasPhysicalVenuePlacement(venue: string, evidence: string): boolean {
+  const venueTokens = toSearchableText(venue).split(" ").filter(Boolean);
+  const evidenceTokens = toSearchableText(evidence).split(" ").filter(Boolean);
+  if (venueTokens.length === 0 || evidenceTokens.length === 0) return false;
+  const placementCues = new Set(["at", "in", "u", "kod", "na", "venue", "lokacija", "location"]);
+  return evidenceTokens.some((token, index) =>
+    placementCues.has(token) &&
+      venueValueAppearsInEventEvidence(
+        venue,
+        evidenceTokens.slice(index + 1, index + venueTokens.length + 3).join(" "),
+      ),
+  );
+}
+
+function venueMentionIsOnlyInRowTitle(
+  venue: string,
+  title: string,
+  sourceLine: string,
+): boolean {
+  const venueText = toSearchableText(venue);
+  const titleText = toSearchableText(title);
+  const sourceText = toSearchableText(sourceLine);
+  if (
+    !venueText ||
+    !titleText ||
+    !sourceText.includes(titleText) ||
+    !venueValueAppearsInEventEvidence(venue, title)
+  ) {
+    return false;
+  }
+
+  // A physical location stated in the title ("Night at Vinyl") is still a
+  // direct venue claim. "Open Vinyl Night" is only the name of the event.
+  if (hasPhysicalVenuePlacement(venue, sourceText)) return false;
+
+  const sourceWithoutTitle = sourceText.replace(titleText, " ");
+  return !venueValueAppearsInEventEvidence(venue, sourceWithoutTitle);
+}
+
 export function buildStructuredFactVariants(input: BuildStructuredFactVariantsInput): {
   eventVariants: EventVariant[];
   verifiedSharedTime: boolean;
@@ -91,6 +130,72 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
   const sharedTimeValue = verifiedSharedTime
     ? normalizeString(extracted.shared_schedule_context.time.value)
     : "";
+  const parentCaption = splitEventCandidates.reduce(
+    (caption, entry) => caption.replace(entry.sourceLine, " "),
+    post.caption ?? "",
+  );
+  const parentText = toSearchableText(parentCaption);
+  const parentLooksLikeSharedProgram = /\b(?:all|every|events?|program|raspored|schedule|doga[dj]aj[iae]?|svi|svak[iae]|sve)\b/u.test(parentText);
+  const sourceAccountNames = [
+    configuredVenueName,
+    ...(ingestionVenueResolver.canonicalVenueAliasesByHandle[normalizedSourceHandle] ?? []),
+  ].filter(Boolean);
+  const accountNamedInParentScope = Boolean(
+    parentLooksLikeSharedProgram &&
+      sourceAccountNames.some((name) => hasPhysicalVenuePlacement(name, parentCaption)),
+  );
+  const parentScopedVenues = usesSplitEventCandidates && usesStructuredEvidence && parentLooksLikeSharedProgram
+    ? [...ingestionVenueResolver.snapshot.venueById.values()].filter((venue) =>
+        [venue.name, ...(venue.aliases ?? [])].some((name) =>
+          hasPhysicalVenuePlacement(name, parentCaption),
+        ),
+      )
+    : [];
+  const parentScopedVenue = parentScopedVenues.length === 1
+    ? parentScopedVenues[0].name
+    : "";
+  const sourcePlacementEvidence = [
+    post.caption ?? "",
+    extractPostAltTextEvidence(post.altText),
+    post.locationName ?? "",
+    ...splitEventCandidates.map((entry) => entry.sourceLine),
+  ].filter(Boolean).join("\n");
+  const locationTagVenue = post.locationName
+    ? resolveIngestionVenue(ingestionVenueResolver, {
+        allowSourceAccountFallback: false,
+        locationName: post.locationName,
+        postingProviderHandle: post.username,
+        sourceRole: "promoter",
+      }).venue ?? ""
+    : "";
+  const hasOffsiteVenuePlacement = usesSplitEventCandidates && usesStructuredEvidence &&
+    sourceRole === "venue" && configuredVenueName
+    ? [...ingestionVenueResolver.snapshot.venueById.values()].some((venue) =>
+        normalizeVenueComparableText(venue.name) !==
+          normalizeVenueComparableText(configuredVenueName) &&
+          (
+            normalizeVenueComparableText(venue.name) ===
+              normalizeVenueComparableText(locationTagVenue) ||
+            [venue.name, ...(venue.aliases ?? [])].some((name) =>
+              hasPhysicalVenuePlacement(name, sourcePlacementEvidence),
+            )
+          ),
+      )
+    : false;
+  const sourceAccountVenue = usesSplitEventCandidates && usesStructuredEvidence &&
+    sourceRole === "venue" && configuredVenueName &&
+    !hasOffsiteVenuePlacement &&
+    (
+      normalizeVenueComparableText(normalizedVenue) ===
+        normalizeVenueComparableText(configuredVenueName) ||
+      accountNamedInParentScope
+    )
+    ? resolveIngestionVenue(ingestionVenueResolver, {
+        postingProviderHandle: post.username,
+        rawVenueClaim: "",
+        sourceRole: "venue",
+      }).venue ?? ""
+    : "";
   const rawEventVariants: EventVariant[] = usesSplitEventCandidates
     ? splitEventCandidates.map((entry) => {
         const variantArtists =
@@ -100,8 +205,14 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
               ? entry.artists
               : extractedArtists;
         const rowVenue = normalizeString(entry.venue);
+        const rowVenueIsTitleOnly = venueMentionIsOnlyInRowTitle(
+          rowVenue,
+          entry.lineTitle,
+          entry.sourceLine,
+        );
         const rowVenueGrounded = Boolean(
           rowVenue &&
+            !rowVenueIsTitleOnly &&
             venueValueAppearsInEventEvidence(rowVenue, entry.sourceLine),
         );
         const rowVenueMatchesConfiguredLocation = Boolean(
@@ -145,6 +256,11 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
         const rowCanonicalVenueEvidenceBound = Boolean(
           rowCanonicalVenueEvidenceSource &&
             rowCanonicalVenueNormalization.venue &&
+            !venueMentionIsOnlyInRowTitle(
+              rowCanonicalVenueNormalization.venue,
+              entry.lineTitle,
+              entry.sourceLine,
+            ) &&
             extractionEvidenceAppearsInPersistedSource({
               evidenceText: entry.sourceLine,
               source: rowEvidenceSource,
@@ -158,6 +274,7 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
         const singleOccurrencePostVenueGrounded = Boolean(
           splitEventCandidates.length === 1 &&
             rowVenue &&
+            !rowVenueIsTitleOnly &&
             venueValueAppearsInEventEvidence(
               rowVenue,
               independentPostTextEvidence,
@@ -167,7 +284,12 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
         const scopedRowCanonicalVenue =
           rowVenueIsDirect || sharedVenueValue ? "" : rowCanonicalVenue;
         const singleSplitCanonicalVenueEvidenceSource =
-          splitEventCandidates.length === 1 && !rowVenueIsDirect
+          splitEventCandidates.length === 1 && !rowVenueIsDirect &&
+            !venueMentionIsOnlyInRowTitle(
+              normalizedVenue,
+              entry.lineTitle,
+              entry.sourceLine,
+            )
             ? canonicalVenueEvidenceSource
             : null;
         const variantCanonicalVenueEvidenceSource = scopedRowCanonicalVenue
@@ -180,6 +302,12 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
             : null;
         const trustedVenueAccountFallback = Boolean(
           trustedVenueSource &&
+            !hasOffsiteVenuePlacement &&
+            !venueMentionIsOnlyInRowTitle(
+              normalizedVenue,
+              entry.lineTitle,
+              entry.sourceLine,
+            ) &&
             normalizedVenue &&
             (sourceRole === "venue" ||
               (splitEventCandidates.length === 1 &&
@@ -203,8 +331,10 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
               ? normalizedVenue
               : sharedVenueValue ||
                 scopedRowCanonicalVenue ||
+                parentScopedVenue ||
                 (singleSplitCanonicalVenueEvidenceSource ? normalizedVenue : "") ||
-                (trustedVenueAccountFallback ? normalizedVenue : "")
+                (trustedVenueAccountFallback ? normalizedVenue : "") ||
+                sourceAccountVenue
           : normalizedVenue;
         const variantVenue = variantVenueRaw
           ? resolveIngestionVenue(ingestionVenueResolver, {
@@ -345,6 +475,14 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
           venue: variantVenue,
           venueEvidenceValue:
             rowVenueIsDirect ? rowVenue : sharedVenueValue || scopedRowCanonicalVenue,
+          venueFromSourceAccountFallback: Boolean(
+            sourceAccountVenue &&
+              variantVenueRaw === sourceAccountVenue &&
+              !rowVenueIsDirect &&
+              !sharedVenueValue &&
+              !scopedRowCanonicalVenue &&
+              !parentScopedVenue,
+          ),
           canonicalVenueEvidenceSource: variantCanonicalVenueEvidenceSource,
           canonicalVenueEvidenceHandle: variantCanonicalVenueEvidenceHandle,
           splitSource: entry.source,

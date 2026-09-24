@@ -9,6 +9,7 @@ import {
 import {
   resolvePublicationReadMode,
 } from "../convex/publicationCutover.ts";
+import { getPublicApprovedEvent } from "../convex/events.ts";
 import {
   finalizeSourceOccurrenceTopologyAudit,
   markSourceOccurrenceTopologyMutation,
@@ -92,6 +93,9 @@ function makeDb() {
   }
 
   const db = {
+    normalizeId(table, id) {
+      return tables[table]?.has(id) ? id : null;
+    },
     async get(id) {
       for (const table of Object.values(tables)) {
         if (table.has(id)) return table.get(id);
@@ -206,6 +210,43 @@ const enabled = await reviewMaterializedPublicationReadCutover._handler(
 assert.equal(enabled.phase, "cutover_enabled");
 assert.equal(enabled.readCutoverEnabled, true);
 assert.equal(await resolvePublicationReadMode({ db: state.db }), "materialized");
+const materializedVenue = {
+  _creationTime: 1,
+  _id: "venue_materialized_detail",
+  name: "Materialized Venue",
+  instagramHandle: "materialized_venue",
+  isActive: true,
+  publicStatus: "published",
+  scrapeActive: true,
+  createdAt: 1,
+  updatedAt: 1,
+};
+const materializedOnlyEvent = {
+  _creationTime: 2,
+  _id: "event_materialized_detail",
+  artists: [],
+  createdAt: 1,
+  date: "2026-09-23",
+  eventType: "culture",
+  normalizedFieldsJson: JSON.stringify({ extractionContractVersion: "event_evidence_v2" }),
+  publicationPolicyVersion: 1,
+  publicationReason: "canonical_source_grounding_verified",
+  publicationState: "publishable",
+  status: "approved",
+  title: "BIOSKOP",
+  updatedAt: 1,
+  venue: materializedVenue.name,
+  venueId: materializedVenue._id,
+};
+state.tables.venues.set(materializedVenue._id, materializedVenue);
+state.tables.events.set(materializedOnlyEvent._id, materializedOnlyEvent);
+assert.equal(
+  (await getPublicApprovedEvent._handler({ db: state.db }, { id: materializedOnlyEvent._id }))?._id,
+  materializedOnlyEvent._id,
+  "A materialized calendar event must have a working detail page during the reviewed cutover.",
+);
+state.tables.events.delete(materializedOnlyEvent._id);
+state.tables.venues.delete(materializedVenue._id);
 const materializedPageCursor = encodePublicationCursor("raw-page-1", "materialized");
 assert.equal(
   decodePublicationCursor(materializedPageCursor, "materialized"),

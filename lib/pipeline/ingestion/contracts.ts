@@ -289,6 +289,7 @@ export type EventVariant = {
   description?: string;
   venue: string;
   venueEvidenceValue: string;
+  venueFromSourceAccountFallback?: boolean;
   canonicalVenueEvidenceSource: "evidence_handle" | "evidence_name" | null;
   canonicalVenueEvidenceHandle: string | null;
   splitSource: SplitEventCandidateSource | null;

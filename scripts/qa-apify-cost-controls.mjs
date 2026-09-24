@@ -18,6 +18,7 @@ import {
   mapApifyItemToInstagramPost,
   scrapeInstagramAccount,
   selectLatestOriginalNonPinnedPost,
+  selectRecentOriginalNonPinnedPosts,
 } from "../lib/scraper/instagram-scraper.ts";
 import {
   classifyOpenAiHttpFailure,
@@ -555,6 +556,22 @@ assert.deepEqual(
   }),
   [],
   "old pins remain excluded from daily/canary selection",
+);
+assert.deepEqual(
+  selectRecentOriginalNonPinnedPosts(
+    [oldPinned, olderOriginal, newestOriginal, freshPinned, undatedOriginal],
+    { pinnedPostPolicy: "include_recent", nowMs: selectionNowMs, limit: 4 },
+  ).map((post) => post.postId),
+  ["fresh-pinned", "newest-original", "older-original"],
+  "a durable multi-post window must retain every dated eligible post in order",
+);
+assert.deepEqual(
+  selectRecentOriginalNonPinnedPosts(
+    [oldPinned, olderOriginal, newestOriginal, freshPinned, undatedOriginal],
+    { pinnedPostPolicy: "exclude_all", nowMs: selectionNowMs, limit: 1 },
+  ).map((post) => post.postId),
+  ["newest-original"],
+  "catch-up must exclude pins and obey the paid result bound",
 );
 const detailedRequest = buildApifyInstagramScrapeRequest({
   actorUsernameInput: "clubdrugstore",

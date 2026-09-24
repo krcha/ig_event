@@ -170,6 +170,23 @@ function applyAgendaVisibility(categories: readonly EventCategoryKind[]) {
       }
     });
 
+    scope.querySelectorAll<HTMLElement>("[data-calendar-venue-group]").forEach((group) => {
+      const visibleGroupCount = Array.from(
+        group.querySelectorAll<HTMLElement>("[data-calendar-event-kind]"),
+      ).filter((row) => !row.hidden).length;
+
+      group.hidden = visibleGroupCount === 0;
+      group.querySelectorAll<HTMLElement>("[data-calendar-venue-group-visible-count]").forEach((target) => {
+        target.textContent = pluralize(visibleGroupCount);
+      });
+    });
+
+    scope.querySelectorAll<HTMLElement>("[data-calendar-venue-groups]").forEach((container) => {
+      container.hidden = !Array.from(
+        container.querySelectorAll<HTMLElement>("[data-calendar-venue-group]"),
+      ).some((group) => !group.hidden);
+    });
+
     scope.querySelectorAll<HTMLElement>("[data-calendar-time-band]").forEach((timeBand) => {
       const visibleTimeBandCount = Array.from(
         timeBand.querySelectorAll<HTMLElement>("[data-calendar-event-kind]"),

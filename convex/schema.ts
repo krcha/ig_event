@@ -846,10 +846,19 @@ export default defineSchema({
       v.union(v.literal("persisted"), v.literal("no_post")),
     ),
     persistedPostCount: v.optional(v.number()),
-    // The single post selected by the durable fetch is tied to this receipt.
-    // These fields remain optional so already-live receipts survive rollout.
+    // The current saved post is tied to this receipt. Protocol 2 retains the
+    // complete bounded fetch window and advances one post at a time under the
+    // existing single AI lease. Fields remain optional for live v1 receipts.
     scrapedPostId: v.optional(v.id("scrapedPosts")),
     scrapedPostSourceRevision: v.optional(v.number()),
+    savedPostLinks: v.optional(v.array(v.object({
+      scrapedPostId: v.id("scrapedPosts"),
+      sourceRevision: v.number(),
+      postId: v.string(),
+      instagramPostUrl: v.string(),
+    }))),
+    processingPostIndex: v.optional(v.number()),
+    processingFailedPostCount: v.optional(v.number()),
     processingAttemptCount: v.optional(v.number()),
     reservedMicros: v.optional(v.number()),
     chargedMicros: v.optional(v.number()),

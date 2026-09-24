@@ -67,6 +67,8 @@ type ScrapeInstagramAccountOptions = {
   noAgeCutoff?: boolean;
   skipPinnedPosts?: boolean;
   pinnedPostPolicy?: InstagramPinnedPostPolicy;
+  /** Durable daily/catch-up runs retain every eligible post in their paid window. */
+  selectAllEligiblePosts?: boolean;
   maxTotalChargeUsd?: number;
   onlyPostsNewerThan?: string;
   abortAtMs?: number;
@@ -764,6 +766,27 @@ export function selectLatestOriginalNonPinnedPost(
   return newest ? [newest] : [];
 }
 
+export function selectRecentOriginalNonPinnedPosts(
+  posts: InstagramScrapedPost[],
+  options: {
+    pinnedPostPolicy?: InstagramPinnedPostPolicy;
+    nowMs?: number;
+    limit: number;
+  },
+): InstagramScrapedPost[] {
+  const pinnedPostPolicy = options.pinnedPostPolicy ?? "exclude_all";
+  const recentPinnedCutoffMs = (options.nowMs ?? Date.now()) - 24 * 60 * 60 * 1_000;
+  return posts
+    .filter((post) => Number.isFinite(parsePostedAtTimestamp(post.postedAt)))
+    .filter((post) =>
+      post.isPinned !== true ||
+      (pinnedPostPolicy === "include_recent" &&
+        parsePostedAtTimestamp(post.postedAt) >= recentPinnedCutoffMs),
+    )
+    .sort((left, right) => parsePostedAtTimestamp(right.postedAt) - parsePostedAtTimestamp(left.postedAt))
+    .slice(0, options.limit);
+}
+
 async function listRecentSucceededActorRuns(
   actorIdForPath: string,
   apiToken: string,
@@ -1050,7 +1073,12 @@ export async function scrapeInstagramAccount(
   // Request a bounded over-fetch so local pinned-post filtering can choose the
   // latest genuine post. The durable caller asks for four; legacy callers keep
   // their explicit result count semantics.
-  const result = options.pinnedPostPolicy
+  const result = options.selectAllEligiblePosts
+    ? selectRecentOriginalNonPinnedPosts(normalizedTopLevelPosts, {
+        pinnedPostPolicy: options.pinnedPostPolicy,
+        limit: resultsLimit,
+      })
+    : options.pinnedPostPolicy
     ? selectLatestOriginalNonPinnedPost(normalizedTopLevelPosts, {
         pinnedPostPolicy: options.pinnedPostPolicy,
       })

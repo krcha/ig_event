@@ -67,8 +67,8 @@ assert.match(
 );
 assert.match(
   route,
-  /outcome: completion\.status/,
-  "the route must report the server-derived permanent-failure or fetched/skip receipt status",
+  /completion\.status === "processing_pending"[\s\S]*processingPending: true[\s\S]*outcome: completion\.status/,
+  "the route must keep a multi-post receipt pending and report only a terminal fetched/failed status",
 );
 assert.doesNotMatch(
   route.slice(processingClaimOffset, fetchClaimOffset),
@@ -82,13 +82,18 @@ assert.match(
 );
 assert.match(
   route,
-  /scrapedPostId: selectedPersistedPost\.scrapedPostId[\s\S]*postId: posts\[0\]\.postId[\s\S]*instagramPostUrl: posts\[0\]\.instagramPostUrl/,
-  "the exact persisted row identity must cross the durable receipt boundary",
+  /savedPostLinks = posts\.map[\s\S]*scrapedPostId: persisted\.scrapedPostId[\s\S]*sourceRevision: persisted\.sourceRevision[\s\S]*postId: post\.postId[\s\S]*instagramPostUrl: post\.instagramPostUrl/,
+  "every fetched post must cross the durable receipt boundary with its exact saved identity",
 );
 assert.match(
   route,
-  /processingProtocolVersion: 1/,
-  "only the new web protocol may hand a running receipt to the AI lane during rolling deployment",
+  /processingProtocolVersion: multiPostProtocol \? 2 : 1/,
+  "daily and catch-up runs must opt into bounded multi-post processing without changing canary accounting",
+);
+assert.match(
+  route,
+  /selectAllEligiblePosts: claimed\.mode === "daily" \|\| claimed\.mode === "catch_up"/,
+  "daily and catch-up fetches must retain the complete eligible paid window",
 );
 assert.doesNotMatch(
   route,
@@ -148,6 +153,7 @@ const completeProcessingReference = "durableIngestionRuns:completeProcessingRece
 const claimFetchReference = "durableIngestionRuns:executeNext";
 const releaseProcessingReference = "durableIngestionRuns:releaseProcessingReceiptForRetry";
 const markProviderAttemptReference = "durableIngestionRuns:markReceiptProviderAttemptStarted";
+const markPostsPersistedReference = "durableIngestionRuns:markReceiptPostsPersisted";
 const retryFetchReference = "durableIngestionRuns:releaseReceiptForRetry";
 
 const processingClaimFixture = {
@@ -545,6 +551,78 @@ async function assertDeferredExecutorResponse(response, claimState, message) {
   assert.equal((await executeRequest(POST, "?workerSlot=0")).status, 400);
   assert.equal((await executeRequest(POST, "?runId=run-1&workerSlot=6")).status, 400);
   assert.equal(mutationCalls, 0);
+}
+
+{
+  let cleanupCalls = 0;
+  const POST = loadRouteWithMocks({
+    mutation: async (reference) => {
+      if (reference === claimProcessingReference) return processingClaimFixture;
+      if (reference === completeProcessingReference) {
+        return { complete: false, status: "processing_pending", processingOutcome: "receipt_complete" };
+      }
+      throw new Error(`Unexpected mutation in multi-post continuation test: ${reference}`);
+    },
+    processSavedPost: async () => ({ state: "terminal", outcome: "receipt_complete" }),
+    cleanup: async () => { cleanupCalls += 1; return successfulCleanupSummary; },
+  });
+  const response = await executeRequest(POST);
+  assert.equal(response.status, 202);
+  assert.equal((await response.json()).processingPending, true);
+  assert.equal(cleanupCalls, 0, "an intermediate child must not trigger run-completion cleanup");
+}
+
+{
+  const providerPosts = Array.from({ length: 3 }, (_, index) => ({
+    postId: `multi-${index}`,
+    instagramPostUrl: `https://www.instagram.com/p/multi-${index}/`,
+  }));
+  let providerCalls = 0;
+  let markerCalls = 0;
+  const POST = loadRouteWithMocks({
+    mutation: async (reference, args) => {
+      if (reference === claimProcessingReference) return null;
+      if (reference === claimFetchReference) return {
+        receiptId: "multi-fetch-receipt",
+        handle: "multi_venue",
+        mode: "daily",
+        controls: {
+          resultsLimit: 4,
+          daysBack: 1,
+          skipPinnedPosts: false,
+          pinnedPostPolicy: "include_recent",
+          costPerProfileMicros: 10_000,
+        },
+        providerAttemptCount: 0,
+      };
+      if (reference === markProviderAttemptReference) return { started: true };
+      if (reference === markPostsPersistedReference) {
+        markerCalls += 1;
+        assert.equal(args.postCount, 3);
+        assert.equal(args.processingProtocolVersion, 2);
+        assert.deepEqual(Array.from(args.savedPostLinks, (link) => link.postId), providerPosts.map((post) => post.postId));
+        assert.deepEqual(Array.from(args.savedPostLinks, (link) => link.sourceRevision), [1, 1, 1]);
+        return { processingPending: true };
+      }
+      throw new Error(`Unexpected mutation in multi-post fetch test: ${reference}`);
+    },
+    scrape: async (request) => {
+      providerCalls += 1;
+      assert.equal(request.selectAllEligiblePosts, true);
+      assert.equal(request.maxTotalChargeUsd, 0.01);
+      return providerPosts;
+    },
+    persist: async (_client, _handle, posts) => posts.map((post, index) => ({
+      scrapedPostId: `saved-${index}`,
+      postId: post.postId,
+      sourceRevision: 1,
+    })),
+  });
+  const response = await executeRequest(POST);
+  assert.equal(response.status, 202);
+  assert.equal((await response.json()).processingPending, true);
+  assert.equal(providerCalls, 1, "three saved posts share one paid provider request");
+  assert.equal(markerCalls, 1, "three identities cross one durable persistence marker");
 }
 
 {

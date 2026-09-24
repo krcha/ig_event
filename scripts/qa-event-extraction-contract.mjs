@@ -2343,6 +2343,189 @@ function runSemanticNormalizationQa() {
     }
   });
 
+  runCase("a schedule title token cannot replace its physical venue", () => {
+    const firstDate = isoDateDaysFromNow(23);
+    const secondDate = isoDateDaysFromNow(24);
+    const firstText = ddmmyyyy(firstDate);
+    const secondText = ddmmyyyy(secondDate);
+    const venueName = "Fabrika Alternativne Kulturne Scene";
+    const sharedVenueEvidence =
+      "Večernji program u Fabrici Alternativne Kulturne Scene će se održavati prema ovom rasporedu. Radnička 5N.";
+    assert.equal(
+      venueValueAppearsInEventEvidence(venueName, sharedVenueEvidence),
+      true,
+      "the source's Serbian locative Fabrici must verify canonical Fabrika",
+    );
+    const vinylRow = `${firstText} — OPEN VINYL NIGHT 21:00`;
+    const schoolRow = `${secondText} — DJ SCHOOL 18:00`;
+    const post = makePost({
+      caption: [sharedVenueEvidence, vinylRow, schoolRow].join("\n"),
+      postId: "qa-title-token-is-not-schedule-venue",
+      username: "faks_beograd",
+    });
+    const makeRow = (date, dateText, title, sourceText, venue) => ({
+      date,
+      time: title === "OPEN VINYL NIGHT" ? "21:00" : "18:00",
+      venue,
+      title,
+      artists: [],
+      description: `${title} at the weekly program.`,
+      source_text: sourceText,
+      date_evidence: {
+        exact_text: dateText,
+        source: "caption",
+        is_relative: false,
+        resolved_date: date,
+      },
+      time_evidence: {
+        status: "start_time_stated",
+        exact_text: title === "OPEN VINYL NIGHT" ? "21:00" : "18:00",
+        source: "caption",
+      },
+    });
+    const extracted = makeEventExtraction({
+      caption: post.caption,
+      date: "",
+      dateEvidenceText: "",
+      postUrl: post.instagramPostUrl,
+      title: "",
+      venue: "Vinyl",
+      date_evidence: {
+        exact_text: "",
+        source: "unknown",
+        is_relative: false,
+        resolved_date: "",
+      },
+      shared_schedule_context: {
+        venue: {
+          applies_to_all: true,
+          value: venueName,
+          evidence: sharedVenueEvidence,
+          source: "caption",
+        },
+        time: emptySharedScheduleContext().time,
+      },
+      schedule_entries: [
+        makeRow(firstDate, firstText, "OPEN VINYL NIGHT", vinylRow, "Vinyl"),
+        makeRow(secondDate, secondText, "DJ SCHOOL", schoolRow, ""),
+      ],
+      field_confirmation: {
+        ...structuredClone(validExtraction.field_confirmation),
+        title: confirmation(""),
+        location: confirmation(""),
+        location_name: confirmation(sharedVenueEvidence),
+        artists: confirmation(""),
+      },
+    });
+    const mappings = {
+      faks_beograd: venueName,
+      qa_vinyl_venue: "Vinyl",
+    };
+    const venueOptions = {
+      canonicalVenueNamesByHandle: mappings,
+      configuredVenueNamesByHandle: { faks_beograd: venueName },
+      sourceRolesByHandle: { faks_beograd: "venue" },
+    };
+    const events = prepare(post, extracted, venueOptions);
+    assert.equal(events.length, 2);
+    for (const result of events) {
+      assert.equal(result.kind, "ok");
+      assert.equal(result.event.venue, venueName);
+      assert.equal(result.event.status, "approved");
+    }
+
+    const omittedSharedContext = structuredClone(extracted);
+    omittedSharedContext.shared_schedule_context = emptySharedScheduleContext();
+    const accountFallback = prepare(
+      post,
+      parseExtractedEventData(omittedSharedContext),
+      venueOptions,
+    );
+    assert.equal(accountFallback.length, 2);
+    for (const result of accountFallback) {
+      assert.equal(result.kind, "ok");
+      assert.equal(result.event.venue, venueName);
+      assert.equal(result.event.status, "approved");
+    }
+
+    const unscopedPost = { ...post, caption: [vinylRow, schoolRow].join("\n") };
+    const unscopedExtraction = structuredClone(omittedSharedContext);
+    unscopedExtraction.source_caption = unscopedPost.caption;
+    const unscopedResults = prepare(
+      unscopedPost,
+      parseExtractedEventData(unscopedExtraction),
+      venueOptions,
+    );
+    assert.equal(unscopedResults.length, 2);
+    assert.ok(
+      unscopedResults.every((result) =>
+        result.kind !== "ok" || result.event.venue !== "Vinyl"),
+      "a title-only token without a physical venue claim must not become a venue",
+    );
+
+    const offsiteCaption = post.caption.replace(
+      vinylRow,
+      `${vinylRow} at Vinyl`,
+    );
+    const offsitePost = { ...post, caption: offsiteCaption };
+    const offsiteExtraction = structuredClone(extracted);
+    offsiteExtraction.source_caption = offsiteCaption;
+    offsiteExtraction.schedule_entries[0].source_text = `${vinylRow} at Vinyl`;
+    const offsiteResults = prepare(
+      offsitePost,
+      parseExtractedEventData(offsiteExtraction),
+      venueOptions,
+    );
+    assert.equal(offsiteResults[0]?.kind, "ok");
+    assert.equal(
+      offsiteResults[0].event.venue,
+      "Vinyl",
+      "a row that explicitly says it is at another venue must keep that venue",
+    );
+
+    const offsiteParentCaption = [
+      "All events at Vinyl",
+      vinylRow,
+      schoolRow,
+    ].join("\n");
+    const offsiteParentPost = { ...post, caption: offsiteParentCaption };
+    const offsiteParentExtraction = structuredClone(omittedSharedContext);
+    offsiteParentExtraction.source_caption = offsiteParentCaption;
+    const offsiteParentResults = prepare(
+      offsiteParentPost,
+      parseExtractedEventData(offsiteParentExtraction),
+      venueOptions,
+    );
+    assert.equal(offsiteParentResults.length, 2);
+    for (const result of offsiteParentResults) {
+      assert.equal(result.kind, "ok");
+      assert.equal(
+        result.event.venue,
+        "Vinyl",
+        "an explicit parent-level offsite venue must override the venue account's home venue",
+      );
+    }
+
+    const promoterPost = { ...post, username: "qa_promoter_source" };
+    const promoterResults = prepare(
+      promoterPost,
+      parseExtractedEventData({
+        ...structuredClone(extracted),
+        source_url: promoterPost.instagramPostUrl,
+      }),
+      {
+        canonicalVenueNamesByHandle: mappings,
+        configuredVenueNamesByHandle: {},
+        sourceRolesByHandle: { qa_promoter_source: "promoter" },
+      },
+    );
+    assert.equal(promoterResults.length, 2);
+    for (const result of promoterResults) {
+      assert.equal(result.kind, "ok");
+      assert.equal(result.event.venue, venueName);
+    }
+  });
+
   runCase("trusted venue account carries its canonical venue across schedule rows", () => {
     const firstDate = isoDateDaysFromNow(23);
     const secondDate = isoDateDaysFromNow(25);

@@ -31,6 +31,7 @@ import { dateKeyToLocalNoonDate, getNightlifeDefaultDateKey } from "@/lib/events
 import { matchesPublicEventNameArtistOrVenue } from "@/lib/events/public-event-search";
 import { HOME_FAQ_ITEMS, buildHomePageStructuredData } from "@/lib/seo/site";
 import { groupCalendarEventsByTimeBand } from "@/lib/events/calendar-time-bands";
+import { groupBusyVenuesForDay } from "@/lib/events/venue-day-grouping";
 
 // Keep the public calendar out of Next.js' persisted route cache. The page data
 // comes from Convex and must reflect completed ingestion runs without manual
@@ -825,7 +826,11 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     mobile?: boolean;
   } = {}) {
     const agendaEvents = selectedDayAgendaEvents;
-    const agendaTimeBandGroups = groupCalendarEventsByTimeBand(agendaEvents);
+    const { groups: venueGroups, individualEvents } = groupBusyVenuesForDay(
+      agendaEvents,
+      (event) => !hiddenDayCategorySet.has(getDayCategory(event)),
+    );
+    const agendaTimeBandGroups = groupCalendarEventsByTimeBand(individualEvents);
     const initialVisibleAgendaEventCount = agendaEvents.filter(
       (event) => !hiddenDayCategorySet.has(getDayCategory(event)),
     ).length;
@@ -883,6 +888,66 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     function renderAgendaCards(isMobile = false) {
       return (
         <>
+          {venueGroups.length > 0 ? (
+            <div className="space-y-1.5" data-calendar-venue-groups="true">
+              {venueGroups.map((group) => (
+                <details
+                  className="group rounded-[0.9rem] border border-primary/25 bg-primary/[0.07] open:border-primary/40"
+                  data-calendar-venue-group="true"
+                  hidden={group.visibleCount === 0}
+                  key={group.key}
+                >
+                  <summary className="flex min-h-14 cursor-pointer list-none items-center gap-3 px-3 py-2 [&::-webkit-details-marker]:hidden">
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold text-foreground">{group.venue}</span>
+                      <span className="block text-[11px] font-medium text-muted-foreground">
+                        <span data-calendar-venue-group-visible-count="true">
+                          {pluralize(group.visibleCount, "event")}
+                        </span>{" "}
+                        · <span lang="sr-Latn-RS">Više događaja</span>
+                      </span>
+                    </span>
+                    <ChevronRight className="h-4 w-4 flex-none text-primary transition-transform group-open:rotate-90" />
+                  </summary>
+                  <ul className="space-y-1 border-t border-primary/15 px-2 py-2">
+                    {group.events.map((event) => {
+                      const eventCategory = getDayCategory(event);
+                      const isHiddenByKind = hiddenDayCategorySet.has(eventCategory);
+                      const tone = getEventTone(event);
+
+                      return (
+                        <li
+                          data-calendar-event-id={event._id}
+                          data-calendar-event-kind={eventCategory}
+                          data-calendar-hidden-by-kind={isHiddenByKind ? "true" : "false"}
+                          data-event-time={event.displayTimeLabel ?? event.time}
+                          data-event-title={event.title}
+                          data-event-tone={tone.name}
+                          data-event-venue={event.venue}
+                          hidden={isHiddenByKind}
+                          key={event._id}
+                        >
+                          <Link
+                            aria-label={getEventAriaLabel(event, tone)}
+                            className="flex min-h-10 items-center gap-2 rounded-[0.7rem] px-2 text-foreground hover:bg-primary/10 hover:text-primary focus-visible:bg-primary/10 focus-visible:outline-none"
+                            data-calendar-event-link="true"
+                            href={`/events/${event._id}`}
+                            prefetch={false}
+                          >
+                            <span className="w-16 flex-none truncate text-xs font-semibold tabular-nums text-muted-foreground">
+                              {getResolvedDisplayTime(event)}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{event.title}</span>
+                            <span className="flex-none text-[10px] font-medium text-muted-foreground">{tone.name}</span>
+                          </Link>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </details>
+              ))}
+            </div>
+          ) : null}
           {agendaTimeBandGroups.map((timeBand) => {
             const initialVisibleTimeBandCount = timeBand.events.filter(
               (event) => !hiddenDayCategorySet.has(getDayCategory(event)),

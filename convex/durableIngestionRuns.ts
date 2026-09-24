@@ -78,8 +78,14 @@ const processingReceiptCompletionValidator = v.object({
   complete: v.boolean(),
   terminalReceiptCount: v.number(),
   selectedHandleCount: v.number(),
-  status: v.union(v.literal("fetched"), v.literal("failed")),
+  status: v.union(v.literal("processing_pending"), v.literal("fetched"), v.literal("failed")),
   processingOutcome: v.string(),
+});
+const savedPostLinkValidator = v.object({
+  scrapedPostId: v.id("scrapedPosts"),
+  sourceRevision: v.number(),
+  postId: v.string(),
+  instagramPostUrl: v.string(),
 });
 const dailyRunAdmissionValidator = v.object({
   runId: v.id("ingestionRuns"),
@@ -161,7 +167,59 @@ function isDedicatedLegacyDefinitiveOutputRecoveryReceipt(
 async function getLinkedReceiptScrapedPost(ctx: { db: any }, receipt: any) {
   if (!receipt.scrapedPostId) return null;
   const linked = await ctx.db.get(receipt.scrapedPostId);
-  return linked?.handle === receipt.handle ? linked : null;
+  if (linked?.handle !== receipt.handle) return null;
+  if (receipt.savedPostLinks) {
+    const index = receipt.processingPostIndex;
+    const expected = Number.isSafeInteger(index) ? receipt.savedPostLinks[index] : null;
+    if (
+      !expected ||
+      expected.scrapedPostId !== linked._id ||
+      expected.sourceRevision !== receipt.scrapedPostSourceRevision ||
+      expected.postId !== linked.postId ||
+      expected.instagramPostUrl !== linked.instagramPostUrl
+    ) return null;
+  }
+  return linked;
+}
+
+function nextSavedPostLink(receipt: Doc<"ingestionRunHandleReceipts">) {
+  if (!receipt.savedPostLinks) return null;
+  const index = receipt.processingPostIndex;
+  if (
+    typeof index !== "number" ||
+    !Number.isSafeInteger(index) ||
+    index < 0 ||
+    receipt.savedPostLinks[index]?.scrapedPostId !== receipt.scrapedPostId ||
+    receipt.savedPostLinks[index]?.sourceRevision !== receipt.scrapedPostSourceRevision
+  ) {
+    throw new Error("Saved-post queue identity is inconsistent with its current receipt link.");
+  }
+  return receipt.savedPostLinks[index + 1] ?? null;
+}
+
+async function advanceSavedPostQueue(
+  ctx: MutationCtx,
+  receipt: Doc<"ingestionRunHandleReceipts">,
+  now: number,
+  failed: boolean,
+  detail: string,
+): Promise<boolean> {
+  const next = nextSavedPostLink(receipt);
+  if (!next) return false;
+  await ctx.db.patch(receipt._id, {
+    status: "processing_pending",
+    scrapedPostId: next.scrapedPostId,
+    scrapedPostSourceRevision: next.sourceRevision,
+    processingPostIndex: receipt.processingPostIndex! + 1,
+    processingFailedPostCount: (receipt.processingFailedPostCount ?? 0) + (failed ? 1 : 0),
+    processingAttemptCount: 0,
+    leaseOwner: undefined,
+    leaseExpiresAt: undefined,
+    retryNotBeforeAt: now,
+    outcomeDetail: detail.slice(0, 256),
+    updatedAt: now,
+  });
+  return true;
 }
 
 type RunMode = "canary" | "catch_up" | "daily";
@@ -1218,6 +1276,7 @@ export const executeNext = mutation({
     return {
       receiptId: receipt._id,
       handle: receipt.handle,
+      mode: run.mode,
       controls: run.controls,
       // Once the provider boundary has been crossed, retries must resume from
       // the persisted post. Re-fetching would double-charge the same profile.
@@ -1294,7 +1353,8 @@ export const markReceiptPostsPersisted = mutation({
     scrapedPostSourceRevision: v.optional(v.number()),
     postId: v.optional(v.string()),
     instagramPostUrl: v.optional(v.string()),
-    processingProtocolVersion: v.optional(v.literal(1)),
+    savedPostLinks: v.optional(v.array(savedPostLinkValidator)),
+    processingProtocolVersion: v.optional(v.union(v.literal(1), v.literal(2))),
     serviceSecret: v.optional(v.string()),
   },
   returns: v.object({
@@ -1314,8 +1374,35 @@ export const markReceiptPostsPersisted = mutation({
       throw new Error("Receipt persistence fence mismatch.");
     }
     const postCount = Math.max(0, Math.trunc(args.postCount));
-    if (postCount > 1) {
-      throw new Error("A durable receipt may persist at most one selected post.");
+    if (postCount > SOURCE_RESULTS_LIMIT) {
+      throw new Error("A durable receipt exceeded its bounded provider post window.");
+    }
+    if (args.processingProtocolVersion !== 2 && postCount > 1) {
+      throw new Error("Legacy durable receipts may persist at most one selected post.");
+    }
+    if (args.processingProtocolVersion === 2) {
+      if (
+        !args.savedPostLinks ||
+        args.savedPostLinks.length !== postCount ||
+        new Set(args.savedPostLinks.map((link) => link.scrapedPostId)).size !== postCount ||
+        new Set(args.savedPostLinks.map((link) => link.postId)).size !== postCount
+      ) {
+        throw new Error("Protocol 2 requires one unique exact saved-post link per provider result.");
+      }
+      for (const link of args.savedPostLinks) {
+        const savedPost = await ctx.db.get(link.scrapedPostId);
+        if (
+          !savedPost ||
+          savedPost.handle !== receipt.handle ||
+          savedPost.postId !== link.postId ||
+          savedPost.instagramPostUrl !== link.instagramPostUrl ||
+          (savedPost.sourceRevision ?? 1) !== link.sourceRevision ||
+          !Number.isSafeInteger(link.sourceRevision) ||
+          link.sourceRevision < 1
+        ) {
+          throw new Error("Protocol 2 saved-post link is missing or changed.");
+        }
+      }
     }
     if (
       args.processingProtocolVersion === 1 &&
@@ -1330,7 +1417,9 @@ export const markReceiptPostsPersisted = mutation({
       );
     }
     let scrapedPost = null;
-    if (postCount === 1 && (args.scrapedPostId || args.postId || args.instagramPostUrl)) {
+    if (args.processingProtocolVersion === 2 && postCount > 0) {
+      scrapedPost = await ctx.db.get(args.savedPostLinks![0].scrapedPostId);
+    } else if (postCount === 1 && (args.scrapedPostId || args.postId || args.instagramPostUrl)) {
       const exactPost = args.scrapedPostId ? await ctx.db.get(args.scrapedPostId) : null;
       if (
         args.scrapedPostId &&
@@ -1370,12 +1459,19 @@ export const markReceiptPostsPersisted = mutation({
     }
     const now = Date.now();
     const processingPending =
-      args.processingProtocolVersion === 1 &&
-      postCount === 1 &&
+      (args.processingProtocolVersion === 1 || args.processingProtocolVersion === 2) &&
+      postCount > 0 &&
       scrapedPost !== null;
     await ctx.db.patch(receipt._id, {
       providerResultStatus: postCount > 0 ? "persisted" : "no_post",
       persistedPostCount: postCount,
+      ...(args.processingProtocolVersion === 2
+        ? {
+            savedPostLinks: args.savedPostLinks,
+            processingPostIndex: postCount > 0 ? 0 : undefined,
+            processingFailedPostCount: 0,
+          }
+        : {}),
       ...(scrapedPost
         ? {
             scrapedPostId: scrapedPost._id,
@@ -1502,16 +1598,19 @@ export const claimNextProcessingReceipt = mutation({
         !isTerminalScrapedPost(post) &&
         (expired.processingAttemptCount ?? 0) >= MAX_PROCESSING_ATTEMPTS
       ) {
-        await ctx.db.patch(expired._id, {
-          status: "failed",
-          terminalAt: now,
-          leaseOwner: undefined,
-          leaseExpiresAt: undefined,
-          outcomeDetail: "processing_lease_expired_retry_limit",
-          updatedAt: now,
-        });
-        await markReceiptChunkTerminal(ctx, expired, now);
-        await finishRunIfTerminal(ctx, run, now);
+        if (!(await advanceSavedPostQueue(ctx, expired, now, true, "processing_lease_expired_retry_limit"))) {
+          await ctx.db.patch(expired._id, {
+            status: "failed",
+            processingFailedPostCount: (expired.processingFailedPostCount ?? 0) + 1,
+            terminalAt: now,
+            leaseOwner: undefined,
+            leaseExpiresAt: undefined,
+            outcomeDetail: "processing_lease_expired_retry_limit",
+            updatedAt: now,
+          });
+          await markReceiptChunkTerminal(ctx, expired, now);
+          await finishRunIfTerminal(ctx, run, now);
+        }
       } else {
         await ctx.db.patch(expired._id, {
           status: "processing_pending",
@@ -2164,8 +2263,12 @@ export const releaseProcessingReceiptForRetry = mutation({
       (receipt.processingAttemptCount ?? 1) - (args.preserveAttempt ? 1 : 0),
     );
     if (!args.preserveAttempt && attemptCount >= MAX_PROCESSING_ATTEMPTS) {
+      if (await advanceSavedPostQueue(ctx, receipt, now, true, args.reason)) {
+        return { terminal: false, status: "processing_pending" as const };
+      }
       await ctx.db.patch(receipt._id, {
         status: "failed",
+        processingFailedPostCount: (receipt.processingFailedPostCount ?? 0) + 1,
         processingAttemptCount: attemptCount,
         terminalAt: now,
         leaseOwner: undefined,
@@ -2230,15 +2333,27 @@ export const completeProcessingReceipt = mutation({
     const detail =
       args.detail?.slice(0, 256) ??
       `saved_post:${scrapedPost._id};${scrapedPost.processingOutcome}`;
+    const currentPostFailed = scrapedPost.processingOutcome === "terminal_permanent_failure";
+    if (await advanceSavedPostQueue(ctx, receipt, now, currentPostFailed, detail)) {
+      const counts = await terminalCountsForRun(ctx, run._id, run.selectedHandleCount);
+      return {
+        complete: false,
+        terminalReceiptCount: counts.terminalReceiptCount,
+        selectedHandleCount: run.selectedHandleCount,
+        status: "processing_pending" as const,
+        processingOutcome: scrapedPost.processingOutcome,
+      };
+    }
     // A processed non-event is a truthful successful skip of a fetched post;
     // a permanent extraction/media failure must remain visible in run failure
     // accounting instead of being flattened into the same receipt status.
     const status =
-      scrapedPost.processingOutcome === "terminal_permanent_failure"
+      currentPostFailed || (receipt.processingFailedPostCount ?? 0) > 0
         ? ("failed" as const)
         : ("fetched" as const);
     await ctx.db.patch(receipt._id, {
       status,
+      processingFailedPostCount: (receipt.processingFailedPostCount ?? 0) + (currentPostFailed ? 1 : 0),
       outcomeDetail: detail,
       terminalAt: now,
       leaseOwner: undefined,

@@ -139,6 +139,16 @@ export function venueValueAppearsInEventEvidence(
         return true;
       }
     }
+    // Serbian locative can soften the final consonant of a -ka/-ga name:
+    // Fabrika -> Fabrici, Knjiga -> Knjizi.
+    if (
+      (expected.endsWith("ka") &&
+        observed === `${expected.slice(0, -2)}ci`) ||
+      (expected.endsWith("ga") &&
+        observed === `${expected.slice(0, -2)}zi`)
+    ) {
+      return true;
+    }
     return (
       expected.length >= 6 &&
       observed.length === expected.length &&

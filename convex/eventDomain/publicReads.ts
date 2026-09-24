@@ -425,6 +425,15 @@ export async function getPublicApprovedEventHandler(
   if (!eventId) return null;
   const event = await ctx.db.get(eventId);
   if (!event || event.status !== "approved") return null;
+  // The calendar uses the reviewed materialized publication read when its
+  // cutover is active. Keep links from that calendar visible on the detail page.
+  if (
+    event.publicationState === "publishable" &&
+    event.publicationPolicyVersion === PUBLICATION_POLICY_VERSION &&
+    (await resolvePublicationReadMode(ctx)) === "materialized"
+  ) {
+    return (await projectMaterializedPublicEventPage(ctx, [event]))[0] ?? null;
+  }
   return (
     (await projectLegacyCompatiblePublicEventPage(ctx, [event]))[0] ?? null
   );

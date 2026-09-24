@@ -178,7 +178,7 @@ export async function POST(request: Request) {
           serviceSecret,
         }) as {
           complete: boolean;
-          status: "fetched" | "failed";
+          status: "processing_pending" | "fetched" | "failed";
           processingOutcome: string;
         };
         const cleanupDeferred = await runCompletionCleanupOrDefer(completion, true);
@@ -187,9 +187,11 @@ export async function POST(request: Request) {
           claimed: true,
           work: "processing",
           handle: processingClaim.handle,
-          outcome: completion.status,
+          ...(completion.status === "processing_pending"
+            ? { processingPending: true }
+            : { outcome: completion.status }),
           processingOutcome: completion.processingOutcome,
-        });
+        }, { status: completion.status === "processing_pending" ? 202 : 200 });
       }
 
       const revisionMismatch = isDurableSavedPostRevisionMismatch(processingResult.reason);
@@ -260,7 +262,7 @@ export async function POST(request: Request) {
   }
 
   let claimed: {
-    receiptId: string; handle: string; controls: { resultsLimit: number; daysBack?: number; noAgeCutoff?: boolean; skipPinnedPosts: boolean; pinnedPostPolicy?: "exclude_all" | "include_recent"; ignoreCheckpoint: boolean; ignoreCooldown: boolean; costPerProfileMicros: number };
+    receiptId: string; handle: string; mode?: "canary" | "catch_up" | "daily"; controls: { resultsLimit: number; daysBack?: number; noAgeCutoff?: boolean; skipPinnedPosts: boolean; pinnedPostPolicy?: "exclude_all" | "include_recent"; ignoreCheckpoint: boolean; ignoreCooldown: boolean; costPerProfileMicros: number };
     providerAttemptCount?: number;
     providerResultStatus?: "persisted" | "no_post";
   } | null;
@@ -374,6 +376,7 @@ export async function POST(request: Request) {
         ...(claimed.controls.pinnedPostPolicy
           ? { pinnedPostPolicy: claimed.controls.pinnedPostPolicy }
           : {}),
+        selectAllEligiblePosts: claimed.mode === "daily" || claimed.mode === "catch_up",
         maxTotalChargeUsd: claimed.controls.costPerProfileMicros / 1_000_000,
       });
       // Controller receipts fence this new path. Omit the legacy global lease
@@ -384,17 +387,26 @@ export async function POST(request: Request) {
         posts,
         serviceSecret,
       );
-      const selectedPersistedPost = posts[0]
-        ? persistedPosts.find((post) => post.postId === posts[0].postId)
-        : undefined;
-      if (posts.length === 1 && !selectedPersistedPost) {
-        throw new Error("Selected provider post did not return an exact durable row identity.");
-      }
+      const savedPostLinks = posts.map((post) => {
+        const persisted = persistedPosts.find((candidate) => candidate.postId === post.postId);
+        if (!persisted?.scrapedPostId || !persisted.sourceRevision) {
+          throw new Error("Selected provider post did not return an exact durable row identity.");
+        }
+        return {
+          scrapedPostId: persisted.scrapedPostId,
+          sourceRevision: persisted.sourceRevision,
+          postId: post.postId,
+          instagramPostUrl: post.instagramPostUrl,
+        };
+      });
+      const selectedPersistedPost = savedPostLinks[0];
+      const multiPostProtocol = claimed.mode === "daily" || claimed.mode === "catch_up";
       await convex.mutation(markPostsPersisted, {
         runId,
         receiptId: claimed.receiptId,
         workerId,
         postCount: posts.length,
+        ...(multiPostProtocol ? { savedPostLinks } : {}),
         ...(selectedPersistedPost?.scrapedPostId
           ? { scrapedPostId: selectedPersistedPost.scrapedPostId }
           : {}),
@@ -405,7 +417,7 @@ export async function POST(request: Request) {
         ...(posts[0]?.instagramPostUrl
           ? { instagramPostUrl: posts[0].instagramPostUrl }
           : {}),
-        processingProtocolVersion: 1,
+        processingProtocolVersion: multiPostProtocol ? 2 : 1,
         serviceSecret,
       });
     }

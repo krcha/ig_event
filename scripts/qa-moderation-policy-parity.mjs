@@ -520,6 +520,15 @@ function nightlifeDetailContext(event, { changedCaption = false, hiddenVenue = f
         return null;
       },
       query(table) {
+        if ([
+          "publicationMigrationState",
+          "sourceOccurrenceTopologyEpoch",
+          "eventDomainMigrationState",
+        ].includes(table)) {
+          // This fixture exercises the compatibility reader without an
+          // operator-reviewed materialized-publication cutover.
+          return { withIndex() { return { async take() { return []; } }; } };
+        }
         assert.equal(table, "scrapedPosts");
         return {
           withIndex(index, configure) {

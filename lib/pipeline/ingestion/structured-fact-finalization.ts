@@ -111,7 +111,7 @@ export function finalizeStructuredFactVariants({
           normalizeVenueComparableText(configuredVenueLocation),
     );
     const variantTrustedVenueSource = Boolean(
-      trustedVenueSource &&
+      (trustedVenueSource || variant.venueFromSourceAccountFallback) &&
         configuredVenueName &&
         normalizeVenueComparableText(variant.venue) ===
           normalizeVenueComparableText(configuredVenueName),

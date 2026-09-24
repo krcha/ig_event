@@ -812,6 +812,123 @@ for (const boundary of ["no_post", "unconfirmed"]) {
   assert.equal((await db.get(runId)).status, "completed");
 }
 
+// A paid daily window may contain several posts from the same venue. Every
+// exact saved identity must be processed in order under one receipt, including
+// after a single child reaches its retry limit.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "daily", ["multi_post_venue"]);
+  const fetched = await claim(db, runId, "multi-fetch");
+  assert.equal(fetched.mode, "daily");
+  await startProviderAttempt(db, runId, fetched.receiptId, "multi-fetch");
+  const postIds = [];
+  for (let index = 0; index < 3; index += 1) {
+    postIds.push(await insertSavedPost(db, fetched.handle, {
+      postId: `multi-post-${index}`,
+      instagramPostUrl: `https://www.instagram.com/p/multi-post-${index}/`,
+    }));
+  }
+  const savedPostLinks = await Promise.all(postIds.map(async (scrapedPostId) => {
+    const post = await db.get(scrapedPostId);
+    return {
+      scrapedPostId,
+      sourceRevision: post.sourceRevision,
+      postId: post.postId,
+      instagramPostUrl: post.instagramPostUrl,
+    };
+  }));
+  await db.patch(postIds[0], {
+    processingStatus: "completed",
+    processingOutcome: "receipt_complete",
+    blocksPaidFetch: false,
+  });
+  await assert.rejects(
+    () => markReceiptPostsPersisted._handler(ctx(db), {
+      runId,
+      receiptId: fetched.receiptId,
+      workerId: "multi-fetch",
+      postCount: 3,
+      savedPostLinks: savedPostLinks.map((link, index) =>
+        index === 1 ? { ...link, sourceRevision: link.sourceRevision + 1 } : link,
+      ),
+      processingProtocolVersion: 2,
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /missing or changed/i,
+    "an unmatched child revision must reject the entire persisted window",
+  );
+  await assert.rejects(
+    () => markReceiptPostsPersisted._handler(ctx(db), {
+      runId,
+      receiptId: fetched.receiptId,
+      workerId: "multi-fetch",
+      postCount: 3,
+      savedPostLinks: savedPostLinks.map((link, index) =>
+        index === 1 ? { ...link, instagramPostUrl: "https://www.instagram.com/p/other-post/" } : link,
+      ),
+      processingProtocolVersion: 2,
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /missing or changed/i,
+    "an unmatched child URL must reject the entire persisted window",
+  );
+  await markReceiptPostsPersisted._handler(ctx(db), {
+    runId,
+    receiptId: fetched.receiptId,
+    workerId: "multi-fetch",
+    postCount: 3,
+    savedPostLinks,
+    processingProtocolVersion: 2,
+    serviceSecret: process.env.CRON_SECRET,
+  });
+  assert.equal((await db.get(fetched.receiptId)).persistedPostCount, 3);
+  assert.equal((await db.get(fetched.receiptId)).providerAttemptCount, 1);
+  assert.equal(await claim(db, runId, "multi-fetch"), null, "saved children must never cause another paid fetch");
+
+  const first = await claimProcessing(db, runId, "multi-ai-0");
+  assert.equal(first.scrapedPostId, postIds[0]);
+  const firstCompletion = await completeProcessingReceipt._handler(ctx(db), {
+    runId, receiptId: fetched.receiptId, workerId: "multi-ai-0", serviceSecret: process.env.CRON_SECRET,
+  });
+  assert.equal(firstCompletion.status, "processing_pending");
+  assert.equal(firstCompletion.complete, false);
+  assert.equal((await db.get(runId)).status !== "completed", true);
+  assert.equal((await db.get(fetched.receiptId)).processingPostIndex, 1);
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const workerId = `multi-ai-retry-${attempt}`;
+    const claimed = await claimProcessing(db, runId, workerId);
+    assert.equal(claimed.scrapedPostId, postIds[1]);
+    const released = await releaseProcessingReceiptForRetry._handler(ctx(db), {
+      runId,
+      receiptId: fetched.receiptId,
+      workerId,
+      reason: "child extraction failed",
+      retryAfterMs: 1_000,
+      serviceSecret: process.env.CRON_SECRET,
+    });
+    assert.deepEqual(released, { terminal: false, status: "processing_pending" });
+    await db.patch(fetched.receiptId, { retryNotBeforeAt: Date.now() - 1 });
+  }
+  assert.equal((await db.get(fetched.receiptId)).processingPostIndex, 2);
+  assert.equal((await db.get(fetched.receiptId)).processingFailedPostCount, 1);
+  await db.patch(postIds[2], { instagramPostUrl: "https://www.instagram.com/p/changed-source/" });
+  assert.equal(await claimProcessing(db, runId, "tampered-link-worker"), null);
+  assert.match((await db.get(fetched.receiptId)).outcomeDetail, /persisted_post_link_invalid_recovery_required/);
+  await db.patch(postIds[2], { instagramPostUrl: savedPostLinks[2].instagramPostUrl });
+  await db.patch(fetched.receiptId, { retryNotBeforeAt: Date.now() - 1 });
+  const third = await claimProcessing(db, runId, "multi-ai-2");
+  assert.equal(third.scrapedPostId, postIds[2]);
+  await db.patch(postIds[2], { processingStatus: "completed", processingOutcome: "receipt_complete" });
+  const lastCompletion = await completeProcessingReceipt._handler(ctx(db), {
+    runId, receiptId: fetched.receiptId, workerId: "multi-ai-2", serviceSecret: process.env.CRON_SECRET,
+  });
+  assert.equal(lastCompletion.status, "failed", "a failed child must remain visible in run accounting");
+  assert.equal(lastCompletion.complete, true);
+  assert.equal((await db.get(fetched.receiptId)).providerAttemptCount, 1);
+  assert.equal((await db.get(runId)).failedReceiptCount, 1);
+}
+
 // If the exact saved post became terminal before the receipt consumer (for
 // example, a prior worker committed the result and crashed before receipt
 // completion), the next consumer performs a valid skip and terminalizes the

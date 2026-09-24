@@ -6,6 +6,7 @@ import {
   getCalendarTimeBandKey,
   groupCalendarEventsByTimeBand,
 } from "../lib/events/calendar-time-bands.ts";
+import { groupBusyVenuesForDay } from "../lib/events/venue-day-grouping.ts";
 
 const expectedBandKeys = [
   "after-midnight",
@@ -14,6 +15,54 @@ const expectedBandKeys = [
   "night",
   "time-not-announced",
 ];
+
+const venueFixtures = [
+  ...Array.from({ length: 3 }, (_, index) => ({
+    date: "2026-09-23",
+    id: `three-${index}`,
+    venue: "Three Events",
+  })),
+  ...Array.from({ length: 4 }, (_, index) => ({
+    date: "2026-09-23",
+    id: `four-${index}`,
+    venue: index === 0 ? "Four  Events" : "four events",
+  })),
+  { date: "2026-09-24", id: "next-day", venue: "four events" },
+];
+const groupedVenues = groupBusyVenuesForDay(venueFixtures);
+assert.deepEqual(
+  groupedVenues.groups.map((group) => group.events.map((event) => event.id)),
+  [["four-0", "four-1", "four-2", "four-3"]],
+  "Four events at one venue on one day should occupy a single expandable entry.",
+);
+assert.deepEqual(
+  groupedVenues.individualEvents.map((event) => event.id),
+  ["three-0", "three-1", "three-2", "next-day"],
+  "Three events and a different day's event should remain individual entries.",
+);
+const filteredVenues = groupBusyVenuesForDay(
+  venueFixtures,
+  (event) => event.id !== "four-3",
+);
+assert.equal(
+  filteredVenues.groups.length,
+  0,
+  "A venue with only three visible events should not stay condensed after category filtering.",
+);
+const venueIdentityFixtures = [
+  { date: "2026-09-23", id: "canonical", venue: "Fabrika AKS", venueId: "venue-1" },
+  { date: "2026-09-23", id: "alias", venue: "Fabrika", venueId: "venue-1" },
+  { date: "2026-09-23", id: "idless", venue: "Fabrika", venueId: undefined },
+  { date: "2026-09-23", id: "fourth", venue: "Fabrika AKS", venueId: "venue-1" },
+  { date: "2026-09-23", id: "other-venue", venue: "Fabrika AKS", venueId: "venue-2" },
+];
+assert.deepEqual(
+  groupBusyVenuesForDay(venueIdentityFixtures).groups.map((group) =>
+    group.events.map((event) => event.id),
+  ),
+  [["canonical", "alias", "idless", "fourth"]],
+  "A canonical venue ID should join name variants without merging another venue with the same name.",
+);
 
 assert.deepEqual(
   CALENDAR_TIME_BANDS.map((band) => band.key),
@@ -187,11 +236,12 @@ const kindToggleSource = readFileSync(
 const groupingStart = calendarSource.indexOf("function renderAgendaCards");
 const groupingEnd = calendarSource.indexOf("if (mobile)", groupingStart);
 const groupingSource = calendarSource.slice(groupingStart, groupingEnd);
+const timeBandSource = groupingSource.slice(groupingSource.indexOf("agendaTimeBandGroups.map"));
 
 assert.ok(
-  calendarSource.includes("groupCalendarEventsByTimeBand(agendaEvents)") &&
+  calendarSource.includes("groupCalendarEventsByTimeBand(individualEvents)") &&
     calendarSource.includes("agendaTimeBandGroups.map"),
-  "The selected-day agenda must render through the deterministic time-band helper.",
+  "Individual events must retain deterministic time-band grouping after busy venues are condensed.",
 );
 assert.ok(
   calendarSource.includes('| "timeStatus"') &&
@@ -212,9 +262,18 @@ assert.ok(
   "Time-band headings must shrink safely without introducing a fixed minimum width at 320px.",
 );
 assert.equal(
-  groupingSource.includes("<details") || groupingSource.includes("line-clamp"),
+  timeBandSource.includes("<details") || timeBandSource.includes("line-clamp"),
   false,
   "Time-band groups must not collapse or truncate matching events by default.",
+);
+assert.ok(
+  groupingSource.includes('data-calendar-venue-group="true"') &&
+    groupingSource.includes("group.events.map") &&
+    groupingSource.includes("Više događaja") &&
+    groupingSource.includes('data-calendar-event-link="true"') &&
+    kindToggleSource.includes('querySelectorAll<HTMLElement>("[data-calendar-venue-group]")') &&
+    kindToggleSource.includes("group.hidden = visibleGroupCount === 0"),
+  "Busy venue disclosures must keep each event reachable and respond to category filters.",
 );
 assert.ok(
   calendarSource.includes("data-calendar-event-id={event._id}") &&
