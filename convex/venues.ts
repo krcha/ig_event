@@ -33,6 +33,10 @@ import {
   clampQueryPaginationOptions,
 } from "./internal/requestBounds";
 import { assertCompleteEventVenueBindingCoverage } from "./internal/eventVenueBindingCoverage";
+import {
+  isReviewablySourceGroundedApprovedEvent,
+  repairReviewedStructuredEventVenueHandler,
+} from "./internal/eventRepairs/reviewedStructuredCorrections";
 
 const DEFAULT_PUBLIC_VENUE_EVENT_LIMIT = 12;
 const MAX_PUBLIC_VENUE_EVENT_LIMIT = 50;
@@ -117,10 +121,10 @@ async function assertVenueAliasesUnambiguous(
     venueId?: Id<"venues">;
   },
 ): Promise<void> {
-  const proposedAliasKeys = new Set(
-    options.aliases.map(normalizeVenueComparableText).filter(Boolean),
-  );
   const canonicalNameKey = normalizeVenueComparableText(options.name);
+  const proposedAliasKeys = new Set(
+    [canonicalNameKey, ...options.aliases.map(normalizeVenueComparableText)].filter(Boolean),
+  );
 
   const venues = await ctx.db.query("venues").take(MAX_VENUES_FOR_ALIAS_VALIDATION + 1);
   if (venues.length > MAX_VENUES_FOR_ALIAS_VALIDATION) {
@@ -961,6 +965,191 @@ export const updateVenue = mutation({
       await scheduleVenuePublicationRefresh(ctx, args.id);
     }
     return { updated: true, updatedAt: now };
+  },
+});
+
+/**
+ * Renames a referenced public venue and its small, exact set of approved
+ * source-attested events in one transaction. Ordinary updateVenue deliberately
+ * rejects referenced identity changes; this reviewed path advances each
+ * compatibility receipt and first-class occurrence with its event.
+ */
+export const renameReferencedVenueWithReviewedEvents = mutation({
+  args: {
+    id: v.id("venues"),
+    expectedUpdatedAt: v.number(),
+    expectedName: v.string(),
+    nextName: v.string(),
+    expectedEvents: v.array(v.object({
+      id: v.id("events"),
+      updatedAt: v.number(),
+      normalizedFieldsJson: v.string(),
+      sourceLinkId: v.id("instagramEventSources"),
+      sourceLinkUpdatedAt: v.number(),
+      receiptId: v.id("instagramSourceOccurrenceReceipts"),
+      receiptUpdatedAt: v.number(),
+    })),
+    venueEvidence: v.string(),
+    auditNote: v.string(),
+    serviceSecret: v.string(),
+  },
+  returns: v.object({
+    renamed: v.boolean(),
+    updatedAt: v.number(),
+    eventCount: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    const authorization = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    if (authorization.kind !== "service") {
+      throw new Error("Referenced venue rename requires service authentication.");
+    }
+    const nextName = args.nextName.normalize("NFKC").replace(/\s+/gu, " ").trim();
+    const auditNote = args.auditNote.normalize("NFKC").replace(/\s+/gu, " ").trim();
+    const venueEvidence = args.venueEvidence.normalize("NFKC").replace(/\s+/gu, " ").trim();
+    if (
+      !nextName || nextName !== args.nextName || nextName === args.expectedName ||
+      !venueEvidence || auditNote.length < 20 ||
+      !Number.isSafeInteger(args.expectedUpdatedAt) ||
+      args.expectedEvents.length < 1 ||
+      args.expectedEvents.length > 12 ||
+      new Set(args.expectedEvents.map((item) => item.id)).size !== args.expectedEvents.length
+    ) {
+      throw new Error("Referenced venue rename requires an exact bounded reviewed plan.");
+    }
+    const venue = await ctx.db.get(args.id);
+    if (
+      !venue ||
+      !isVenuePublic(venue) ||
+      venue.updatedAt !== args.expectedUpdatedAt ||
+      venue.name !== args.expectedName
+    ) {
+      throw new Error("Referenced venue changed after plan review.");
+    }
+    await assertVenueAliasesUnambiguous(ctx, {
+      aliases: venue.aliases ?? [],
+      name: nextName,
+      venueId: venue._id,
+    });
+    const linkedEvents = await ctx.db
+      .query("events")
+      .withIndex("by_venueId", (q) => q.eq("venueId", venue._id))
+      .take(13);
+    const expectedById = new Map(args.expectedEvents.map((item) => [item.id, item]));
+    if (linkedEvents.length !== args.expectedEvents.length) {
+      throw new Error("Referenced venue event set changed after plan review.");
+    }
+    const handle = normalizeHandle(venue.instagramHandle);
+    const legacyHandleEvents = await ctx.db
+      .query("events")
+      .withIndex("by_normalizedVenueHandle_status_date", (q) =>
+        q.eq("normalizedVenueInstagramHandle", handle))
+      .take(13);
+    const legacyIdentityEvents = await ctx.db
+      .query("events")
+      .withIndex("by_normalizedVenueIdentity_status_date", (q) =>
+        q.eq("normalizedVenueIdentity", `instagram:${handle}`))
+      .take(13);
+    if (
+      legacyHandleEvents.length > 12 ||
+      legacyIdentityEvents.length > 12 ||
+      [...legacyHandleEvents, ...legacyIdentityEvents].some((event) =>
+        event.venueId !== venue._id || !expectedById.has(event._id))
+    ) {
+      throw new Error("Referenced venue has an unplanned legacy event binding.");
+    }
+    const boundOccurrences = await ctx.db
+      .query("sourceOccurrences")
+      .withIndex("by_venue", (q) => q.eq("venueId", venue._id))
+      .take(33);
+    if (
+      boundOccurrences.length > 32 ||
+      boundOccurrences.some((occurrence) =>
+        occurrence.state !== "satisfied" ||
+        !occurrence.canonicalEventId ||
+        !expectedById.has(occurrence.canonicalEventId))
+    ) {
+      throw new Error("Referenced venue has an unplanned source occurrence.");
+    }
+    for (const event of linkedEvents) {
+      const expected = expectedById.get(event._id);
+      if (
+        !expected ||
+        event.status !== "approved" ||
+        event.venue !== venue.name ||
+        event.updatedAt !== expected.updatedAt ||
+        event.normalizedFieldsJson !== expected.normalizedFieldsJson ||
+        !Number.isSafeInteger(expected.updatedAt) ||
+        !Number.isSafeInteger(expected.sourceLinkUpdatedAt) ||
+        !Number.isSafeInteger(expected.receiptUpdatedAt) ||
+        !(await isReviewablySourceGroundedApprovedEvent(
+          ctx,
+          event,
+          authorization.actor,
+          auditNote,
+        ))
+      ) {
+        throw new Error("Referenced venue event changed or is not source-grounded.");
+      }
+      const links = await ctx.db
+        .query("instagramEventSources")
+        .withIndex("by_event", (q) => q.eq("eventId", event._id))
+        .take(2);
+      if (
+        links.length !== 1 ||
+        links[0]._id !== expected.sourceLinkId ||
+        links[0].updatedAt !== expected.sourceLinkUpdatedAt
+      ) {
+        throw new Error("Referenced venue source link changed.");
+      }
+      const receipts = await ctx.db
+        .query("instagramSourceOccurrenceReceipts")
+        .withIndex("by_sourceIdentity", (q) =>
+          q.eq("sourceIdentity", links[0].sourceIdentity))
+        .take(2);
+      if (
+        receipts.length !== 1 ||
+        receipts[0]._id !== expected.receiptId ||
+        receipts[0].updatedAt !== expected.receiptUpdatedAt
+      ) {
+        throw new Error("Referenced venue source receipt changed.");
+      }
+    }
+    const updatedAt = Math.max(Date.now(), venue.updatedAt + 1);
+    const renamedVenue = { ...venue, name: nextName, updatedAt };
+    await ctx.db.patch(venue._id, { name: nextName, updatedAt });
+    await syncVenueRecordIdentities(ctx, renamedVenue);
+    for (const expected of [...args.expectedEvents].sort((a, b) =>
+      String(a.id).localeCompare(String(b.id)))) {
+      const receipt = await ctx.db.get(expected.receiptId);
+      if (!receipt) throw new Error("Referenced venue source receipt disappeared.");
+      await repairReviewedStructuredEventVenueHandler(ctx, {
+        id: expected.id,
+        expectedUpdatedAt: expected.updatedAt,
+        expectedNormalizedFieldsJson: expected.normalizedFieldsJson,
+        expectedSourceLinkId: expected.sourceLinkId,
+        expectedSourceLinkUpdatedAt: expected.sourceLinkUpdatedAt,
+        expectedReceiptId: expected.receiptId,
+        expectedReceiptUpdatedAt: receipt.updatedAt,
+        nextVenue: nextName,
+        targetVenueId: venue._id,
+        expectedTargetVenueUpdatedAt: updatedAt,
+        expectedTargetVenueHandle: venue.instagramHandle,
+        venueEvidence,
+        moderationNote: auditNote,
+        preserveExistingModerationNote: true,
+        serviceSecret: args.serviceSecret,
+      });
+    }
+    await ctx.db.insert("venueAuditLog", {
+      venueId: venue._id,
+      action: "venue.reviewed_referenced_name_corrected",
+      actor: authorization.actor,
+      beforeJson: JSON.stringify({ name: venue.name, updatedAt: venue.updatedAt }),
+      afterJson: JSON.stringify({ name: nextName, updatedAt }),
+      note: auditNote,
+      createdAt: Date.now(),
+    });
+    return { renamed: true, updatedAt, eventCount: linkedEvents.length };
   },
 });
 

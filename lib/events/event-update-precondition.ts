@@ -39,6 +39,7 @@ type EventApprovalFields = Record<string, unknown> & {
   sourceConflictFields?: unknown;
   humanReviewedLegacySourcePolicyVersion?: unknown;
   humanReviewedStructuredSourcePolicyVersion?: unknown;
+  automaticUniqueApprovalPolicyVersion?: unknown;
 };
 
 type EventWritePatch = EventApprovalFields & {
@@ -51,6 +52,8 @@ const TRUSTED_SOURCE_EVENT_ANNOUNCEMENT_RULE = "trusted_source_event_announcemen
 const EVENT_EVIDENCE_V2_AUTO_APPROVE_RULE = "event_evidence_v2";
 export const HUMAN_REVIEWED_LEGACY_SOURCE_POLICY_VERSION = 1;
 export const HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION = 1;
+export const AUTOMATIC_UNIQUE_APPROVAL_POLICY_VERSION = 1;
+export const AUTOMATIC_UNIQUE_APPROVAL_RULE = "server_verified_unique_v1";
 const APPROVED_MODERATION_SIGNALS = new Set([
   "missing_image",
   "missing_image_allowed",
@@ -120,7 +123,7 @@ function isEventEvidenceSourceConflict(value: unknown): value is EventEvidenceSo
   );
 }
 
-function getEffectiveEventEvidenceV2Conflicts(
+export function getEffectiveEventEvidenceV2Conflicts(
   fields: Record<string, unknown>,
   eventFields: EventApprovalFields,
 ): unknown[] | null {
@@ -162,6 +165,7 @@ function getEffectiveEventEvidenceV2Conflicts(
   const recomputed = partitionEventEvidenceSourceConflicts(reported, {
     artists,
     dateEvidenceVerified: fields.dateEvidenceVerified === true,
+    identityEvidenceVerified: fields.identityEvidenceVerified === true,
     resolvedDate: typeof eventFields.date === "string" ? eventFields.date : "",
     selectedTitle: typeof eventFields.title === "string" ? eventFields.title : "",
     selectedVenue: typeof eventFields.venue === "string" ? eventFields.venue : "",
@@ -744,6 +748,43 @@ export function hasHumanReviewedStructuredSourceAttestation(
       HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION &&
     fields?.humanReviewedStructuredSourcePolicyVersion ===
       HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION &&
+    hasStructuredHumanSourceAttestation(normalizedFieldsJson, eventFields, false)
+  );
+}
+
+/**
+ * An automatic unique decision is its own source policy. It deliberately uses
+ * the complete persisted v2 field binding accepted for structured moderation,
+ * while the Convex write and public-read boundaries separately prove the live
+ * analysis revision, the full source receipt, and same-date uniqueness. This
+ * marker never represents a human review and confidence is informational.
+ */
+export function hasAutomaticUniqueStructuredSourceAttestation(
+  normalizedFieldsJson: string | undefined,
+  eventFields?: EventApprovalFields,
+): boolean {
+  const fields = parseNormalizedFields(normalizedFieldsJson);
+  if (!fields || !eventFields) return false;
+  const reasons = fields.moderationPendingReasons;
+  return (
+    eventFields.automaticUniqueApprovalPolicyVersion ===
+      AUTOMATIC_UNIQUE_APPROVAL_POLICY_VERSION &&
+    fields.automaticUniqueApprovalPolicyVersion ===
+      AUTOMATIC_UNIQUE_APPROVAL_POLICY_VERSION &&
+    fields.moderationAutoApproved === true &&
+    fields.moderationAutoApproveRule === AUTOMATIC_UNIQUE_APPROVAL_RULE &&
+    eventFields.humanReviewedLegacySourcePolicyVersion === undefined &&
+    eventFields.humanReviewedStructuredSourcePolicyVersion === undefined &&
+    fields.humanReviewedLegacySourcePolicyVersion === undefined &&
+    fields.humanReviewedStructuredSourcePolicyVersion === undefined &&
+    Array.isArray(reasons) &&
+    reasons.length === 0 &&
+    fields.sourceOccurrencePlanUnverified !== true &&
+    (fields.sourceOccurrenceAmbiguousProvenance !== true ||
+      fields.automaticUniqueCollisionProofVersion === 1) &&
+    Array.isArray(eventFields.sourceConflictFields) &&
+    eventFields.sourceConflictFields.length === 0 &&
+    getEffectiveEventEvidenceV2Conflicts(fields, eventFields)?.length === 0 &&
     hasStructuredHumanSourceAttestation(normalizedFieldsJson, eventFields, false)
   );
 }

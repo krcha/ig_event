@@ -111,8 +111,11 @@ import { repairTrustedV2EventVenueHandler } from "./eventDomain/trustedV2VenueRe
 import {
   getReviewedStructuredEvidenceCorrectionContextHandler,
   repairReviewedStructuredEventEvidenceHandler,
+  repairReviewedMultiSourceEventVenueHandler,
+  repairReviewedStructuredEventTitleHandler,
   repairReviewedStructuredEventVenueHandler,
 } from "./eventDomain/reviewedStructuredCorrections";
+import { getReviewedVenueRepairContextHandler } from "./internal/eventRepairs/reviewedVenueRepairContext";
 import {
   foldReviewedCrossPostScheduleDuplicateHandler,
   getReviewedCrossPostScheduleFoldContextHandler,
@@ -437,6 +440,15 @@ export const getReviewedStructuredEvidenceCorrectionContext = query({
   handler: getReviewedStructuredEvidenceCorrectionContextHandler,
 });
 
+export const getReviewedVenueRepairContext = query({
+  args: {
+    id: v.id("events"),
+    serviceSecret: v.string(),
+  },
+  returns: v.any(),
+  handler: getReviewedVenueRepairContextHandler,
+});
+
 export const repairReviewedStructuredEventEvidence = mutation({
   args: {
     id: v.id("events"),
@@ -491,6 +503,52 @@ export const repairReviewedStructuredEventVenue = mutation({
   },
   returns: reviewedStructuredEvidenceCorrectionResult,
   handler: repairReviewedStructuredEventVenueHandler,
+});
+
+export const repairReviewedStructuredEventTitle = mutation({
+  args: {
+    id: v.id("events"),
+    expectedUpdatedAt: v.number(),
+    expectedNormalizedFieldsJson: v.string(),
+    expectedSourceLinkId: v.id("instagramEventSources"),
+    expectedSourceLinkUpdatedAt: v.number(),
+    expectedReceiptId: v.id("instagramSourceOccurrenceReceipts"),
+    expectedReceiptUpdatedAt: v.number(),
+    nextTitle: v.string(),
+    titleEvidence: v.string(),
+    moderationNote: v.string(),
+    serviceSecret: v.string(),
+  },
+  returns: reviewedStructuredEvidenceCorrectionResult,
+  handler: repairReviewedStructuredEventTitleHandler,
+});
+
+export const repairReviewedMultiSourceEventVenue = mutation({
+  args: {
+    id: v.id("events"),
+    expectedUpdatedAt: v.number(),
+    expectedNormalizedFieldsJson: v.string(),
+    expectedSources: v.array(v.object({
+      sourceLinkId: v.id("instagramEventSources"),
+      sourceLinkUpdatedAt: v.number(),
+      receiptId: v.id("instagramSourceOccurrenceReceipts"),
+      receiptUpdatedAt: v.number(),
+    })),
+    nextVenue: v.string(),
+    targetVenueId: v.id("venues"),
+    expectedTargetVenueUpdatedAt: v.number(),
+    expectedTargetVenueHandle: v.string(),
+    venueEvidence: v.string(),
+    moderationNote: v.string(),
+    serviceSecret: v.string(),
+  },
+  returns: v.object({
+    updated: v.boolean(),
+    updatedAt: v.number(),
+    sourceCount: v.number(),
+    status: eventStatus,
+  }),
+  handler: repairReviewedMultiSourceEventVenueHandler,
 });
 const reviewedCrossPostSourceVersion = v.object({
   id: v.id("instagramEventSources"),

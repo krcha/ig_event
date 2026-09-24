@@ -11,10 +11,16 @@ import {
 // deletion/cursor atomicity is covered by the retention and media handler QA.
 const jobs = JSON.parse(crons.export());
 assert.deepEqual(Object.keys(jobs).sort(), [
+  "approve server-verified unique events",
   "cleanup ingestion artifacts",
   "cleanup orphaned media assets",
   "delete expired events",
 ]);
+assert.deepEqual(jobs["approve server-verified unique events"], {
+  name: "internal/automaticUniqueApproval:sweepUntilDone",
+  args: [{ maxPages: 60 }],
+  schedule: { type: "interval", minutes: 1 },
+});
 assert.deepEqual(jobs["delete expired events"], {
   name: "maintenance:deleteExpiredEventsUntilDone",
   args: [{ batchSize: 1, maxBatches: 5 }],

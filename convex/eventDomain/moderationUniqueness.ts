@@ -2,6 +2,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { isHumanApprovalIneligibleError } from "../../lib/domain/moderation/index";
 import { isSensibleEventTitleForApproval } from "../../lib/events/event-title-approval";
+import { getEffectiveEventEvidenceV2Conflicts } from "../../lib/events/event-update-precondition";
 import { getBelgradeDayKey } from "../../lib/pipeline/belgrade-day-key";
 import { loadBoundedPublicVenueResolverRows } from "../venueResolver";
 import {
@@ -38,6 +39,7 @@ export type PendingModerationUniquenessClassification = {
     | "ineligible_invalid_date"
     | "ineligible_expired_event"
     | "ineligible_source_policy"
+    | "ineligible_source_conflict"
     | "indeterminate_venue_limit"
     | "indeterminate_pending_cohort_limit"
     | "indeterminate_approved_cohort_limit"
@@ -363,6 +365,41 @@ export async function buildPendingModerationUniquenessReview(
         ),
       );
       continue;
+    }
+    let normalizedFields: Record<string, unknown> | null = null;
+    try {
+      const parsed: unknown = JSON.parse(event.normalizedFieldsJson ?? "null");
+      normalizedFields = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    } catch {
+      normalizedFields = null;
+    }
+    if (normalizedFields?.extractionContractVersion === "event_evidence_v2") {
+      const materialConflicts = getEffectiveEventEvidenceV2Conflicts(
+        normalizedFields,
+        prepared.candidate,
+      );
+      if (materialConflicts === null) {
+        classifications.push(
+          buildPendingModerationUniquenessClassification(
+            item,
+            "ineligible",
+            "ineligible_source_policy",
+          ),
+        );
+        continue;
+      }
+      if (materialConflicts.length > 0 || (event.sourceConflictFields?.length ?? 0) > 0) {
+        classifications.push(
+          buildPendingModerationUniquenessClassification(
+            item,
+            "ineligible",
+            "ineligible_source_conflict",
+          ),
+        );
+        continue;
+      }
     }
     try {
       const humanReviewPatch =

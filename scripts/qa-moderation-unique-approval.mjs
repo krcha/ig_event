@@ -1066,6 +1066,7 @@ for (const reason of [
   "ineligible_invalid_date",
   "ineligible_expired_event",
   "ineligible_source_policy",
+  "ineligible_source_conflict",
   "indeterminate_venue_limit",
   "indeterminate_pending_cohort_limit",
   "indeterminate_approved_cohort_limit",

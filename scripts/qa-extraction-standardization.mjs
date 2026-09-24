@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { LEGACY_VENUE_ALIAS_SEEDS } from "../lib/config/legacy-venue-alias-seeds.ts";
+import { buildIngestionVenueResolver } from "../lib/domain/venues/index.ts";
 import {
   EVENT_EXTRACTION_SYSTEM_PROMPT,
   buildEventExtractionUserPrompt,
@@ -44,6 +45,8 @@ import {
 } from "../lib/pipeline/run-instagram-ingestion.ts";
 import { extractModelSplitEventCandidates } from "../lib/pipeline/ingestion/parsing-schedule.ts";
 import { isVerifiedEventIdentityEvidence, isVerifiedTimeEvidence } from "../lib/pipeline/ingestion/structured-fact-verification.ts";
+import { normalizeEventTitle } from "../lib/pipeline/ingestion/parsing-event-title.ts";
+import { normalizeVenue } from "../lib/pipeline/ingestion/structured-facts.ts";
 import {
   extractEventTimeFromText,
   TBD_EVENT_TIME,
@@ -730,6 +733,188 @@ function runVenueQa() {
   });
   assert.equal(canonicalHashtagVenue.venue, "KC Grad");
   assert.equal(canonicalHashtagVenue.source, "evidence_handle");
+
+  const namedLocativeHandle = normalizeVenueFromEvidence({
+    handle: "from_sound",
+    rawModelVenue: "frǾm",
+    locationName: "",
+    immutableEvidenceTexts: [
+      "📍 Location:\n🌱 Garden of Club 20/44 @20_44.nightclub\n44 Karađorđeva Street",
+    ],
+    canonicalVenueNamesByHandle: {
+      ...canonicalVenueNamesByHandle,
+      "20_44.nightclub": "Klub 20/44",
+      from_sound: "frǾm",
+    },
+    canonicalVenueAliasesByHandle: {
+      "20_44.nightclub": ["20/44"],
+    },
+    handleVenueNamesByHandle: { from_sound: "frǾm" },
+  });
+  assert.equal(namedLocativeHandle.venue, "Klub 20/44");
+  assert.equal(namedLocativeHandle.source, "evidence_handle");
+
+  const addressBoundDistinctVenue = normalizeVenueFromEvidence({
+    handle: "samousnu_ns",
+    rawModelVenue: "SHOOTIRANJE",
+    locationName: "",
+    immutableEvidenceTexts: [
+      "SAMO U SNU 24.9\n📍SHOOTIRANJE NS/ Ilije ognjenovica 9\n🚀Start/ 20h",
+    ],
+    canonicalVenueNamesByHandle: {
+      shootiranje: "Shootiranje",
+      shootiranje_nbg: "Shootiranje Novi Beograd",
+    },
+  });
+  assert.equal(addressBoundDistinctVenue.venue, "SHOOTIRANJE NS");
+  assert.equal(addressBoundDistinctVenue.source, "location_name");
+  const shootiranjeResolver = buildIngestionVenueResolver({
+    canonicalVenueNamesByHandle: {
+      shootiranje: "Shootiranje",
+      shootiranje_nbg: "Shootiranje Novi Beograd",
+    },
+    venueResolverSnapshot: {
+      identities: [],
+      venues: [
+        { id: "venue-shootiranje", name: "Shootiranje", instagramHandle: "shootiranje" },
+        { id: "venue-shootiranje-nbg", name: "Shootiranje Novi Beograd", instagramHandle: "shootiranje_nbg" },
+      ],
+    },
+  });
+  const shootiranjeSource = normalizeVenue(
+    makeInstagramPost({
+      caption: "SAMO U SNU 24.9\n📍SHOOTIRANJE NS/ Ilije ognjenovica 9",
+      username: "samousnu_ns",
+    }),
+    "SHOOTIRANJE",
+    shootiranjeResolver,
+    { samousnu_ns: "unknown" },
+  );
+  assert.equal(shootiranjeSource.venue, "SHOOTIRANJE NS");
+  assert.equal(shootiranjeSource.source, "location_name");
+
+  const unboundVenueSuffix = normalizeVenueFromEvidence({
+    handle: "samousnu_ns",
+    rawModelVenue: "SHOOTIRANJE",
+    locationName: "",
+    immutableEvidenceTexts: ["📍SHOOTIRANJE NS/ doors at 20h"],
+    canonicalVenueNamesByHandle: { shootiranje: "Shootiranje" },
+  });
+  assert.equal(unboundVenueSuffix.venue, "Shootiranje");
+
+  const cocktailTitle = normalizeEventTitle(
+    makeInstagramPost({
+      caption: "Čekamo vas i ove nedelje veseli u francuskoj 23. (:",
+      username: "spellbeograd",
+    }),
+    makeExtractedEvent({
+      title: "Thursday Night at Something is stirring.",
+      description: "Koktel vece",
+      schedule_entries: [],
+    }),
+    {
+      venue: "Something is stirring.",
+      source: "handle_map",
+      wasFallback: true,
+      rawModelVenue: "Something is stirring.",
+      rawLocationName: "",
+    },
+    { spellbeograd: "Something is stirring." },
+    {},
+    { spellbeograd: "Something is stirring." },
+  );
+  assert.equal(cocktailTitle.title, "Koktel Vece");
+  assert.equal(cocktailTitle.source, "context_derived");
+  const cocktailDate = isoDateDaysFromNow(8);
+  const splitCocktail = prepareEventsForInsert(
+    makeInstagramPost({
+      caption: "Čekamo vas i ove nedelje veseli u francuskoj 23. (:",
+      imageUrl: "https://images.example.com/spell-weekly.jpg",
+      postType: "image",
+      username: "spellbeograd",
+    }),
+    makeExtractedEvent({
+      date: cocktailDate,
+      description: "Koktel vece",
+      title: "",
+      venue: "Something is stirring.",
+      schedule_entries: [
+        {
+          date: cocktailDate,
+          time: "",
+          venue: "Something is stirring.",
+          title: "",
+          artists: [],
+          description: "Koktel vece",
+          source_text: `${cocktailDate} Koktel veče`,
+        },
+      ],
+    }),
+    "https://images.example.com/spell-weekly.jpg",
+    { spellbeograd: "Something is stirring." },
+    {},
+    { spellbeograd: "Something is stirring." },
+    { sourceRolesByHandle: { spellbeograd: "venue" } },
+  );
+  const cocktailRow = splitCocktail.find((result) =>
+    result.kind === "ok" && result.event.date === cocktailDate
+  );
+  assert.equal(cocktailRow?.event.title, "Koktel Vece");
+  assert.equal(
+    JSON.parse(cocktailRow.event.normalizedFieldsJson).titleUsedFallback,
+    false,
+  );
+
+  const brandedPromoterVenues = {
+    "domestik.bg": "ДOMESTIK",
+    "umami.bg": "Umami",
+  };
+  const brandedPromoterResolver = buildIngestionVenueResolver({
+    canonicalVenueNamesByHandle: brandedPromoterVenues,
+    configuredVenueNamesByHandle: brandedPromoterVenues,
+    venueResolverSnapshot: {
+      identities: [],
+      venues: [
+        { id: "venue-domestik", name: "ДOMESTIK", instagramHandle: "domestik.bg" },
+        { id: "venue-umami", name: "Umami", instagramHandle: "umami.bg" },
+      ],
+    },
+  });
+  const brandedPromoterPost = makeInstagramPost({
+    caption: "Vidimo se u petak, 25. Septembra. Mikser. #domestikbg #umami",
+    username: "domestik.bg",
+  });
+  const promoterPhysicalVenue = normalizeVenue(
+    brandedPromoterPost,
+    "ДOMESTIK",
+    brandedPromoterResolver,
+    { "domestik.bg": "promoter" },
+    "UMAMI",
+  );
+  assert.equal(promoterPhysicalVenue.venue, "Umami");
+  assert.equal(promoterPhysicalVenue.source, "evidence_name");
+  assert.equal(
+    normalizeVenue(
+      brandedPromoterPost,
+      "ДOMESTIK",
+      brandedPromoterResolver,
+      { "domestik.bg": "venue" },
+      "UMAMI",
+    ).venue,
+    "ДOMESTIK",
+    "A source role change must be reviewed before a brand hashtag can override its own venue.",
+  );
+  assert.equal(
+    normalizeVenue(
+      { ...brandedPromoterPost, caption: "Mikser #domestikbg" },
+      "ДOMESTIK",
+      brandedPromoterResolver,
+      { "domestik.bg": "promoter" },
+      "UMAMI",
+    ).venue,
+    "ДOMESTIK",
+    "An uncorroborated title cannot become a physical venue claim.",
+  );
 
   const ambiguousCanonicalHandles = normalizeVenueFromEvidence({
     handle: "1by1.party",

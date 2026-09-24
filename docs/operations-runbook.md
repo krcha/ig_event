@@ -261,6 +261,40 @@ records; only a fresh read-only verification of the cutoff proves the calendar
 has no remaining expired events. Do not bypass source-integrity safeguards to
 make a cleanup result appear complete.
 
+## Automatic approval of server-verified unique events
+
+The Convex `approve server-verified unique events` cron runs every minute. It
+scans at most 60 pending event versions per tick, one version per transaction.
+The singleton `automaticUniqueApprovalState` stores its pending-index cursor,
+completed cycle count, scanned count, approved count, and classification error
+count. A completed cycle resets the cursor; a repaired pending event is retried
+on a later cycle. Completed scans pause for three minutes to avoid repeatedly
+reading the unchanged backlog; a newly ingested pending row starts a scan on
+the next tick. Inspect these counters with `convex data` against the exact
+production self-hosted target. An increasing classification error count means
+individual malformed rows need investigation; cron execution failures indicate
+a transaction-level invariant or infrastructure problem.
+
+Approval requires the persisted event-evidence-v2 analysis for the current
+source revision, exact final public-field binding, an unchanged canonical
+venue identity, one complete satisfied source receipt, and a bounded same-date
+classification of `unique`. Confidence is informational. Duplicate, ambiguous,
+indeterminate, expired, non-event, material poster/caption conflict, stale
+source, incomplete receipt, and venue-changing candidates remain pending. The
+planner's collision ordinal is accepted only when distinct analyzed schedule
+rows and one-to-one receipt bindings prove the specific occurrence. The
+worker records a machine policy marker and service audit log; it never writes
+human review markers or a human reviewer. Public grounding rechecks the exact
+machine marker, current source, and local receipt proof, so source drift makes
+the event ineligible for publication until repaired.
+
+The automatic worker changes moderation and derived publication state only.
+It does not rewrite source occurrences or receipts. Venue-changing approvals
+need a separate certified provenance operation. If a row fails read-only
+preflight, the worker leaves it pending, increments the error counter for thrown
+preflight errors, advances to the next cursor position, and retries it on a
+later cycle. Post-write proof failures abort the whole transaction.
+
 ## Docker and VPS Deployment
 
 The repo includes `Dockerfile`, `.dockerignore`, `docker-compose.yml`,

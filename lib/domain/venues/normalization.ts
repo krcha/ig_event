@@ -729,6 +729,7 @@ function isTightlyBoundVidimoSeTail(value: string): boolean {
 function hasImmediateLocativeHandleContext(
   evidence: string,
   mentionStart: number,
+  venueNames: readonly string[],
 ): boolean {
   const contextStart = Math.max(0, mentionStart - 96);
   const clause = getImmediateEvidenceClause(
@@ -745,6 +746,28 @@ function hasImmediateLocativeHandleContext(
     );
   if (directCueMatch) {
     return !hasRecentLocativeNegation(clause.slice(0, directCueMatch.index));
+  }
+
+  // A venue tag commonly follows its printed name on a location line, e.g.
+  // "Garden of Club 20/44 @20_44.nightclub". Require the printed name to
+  // belong to the tagged account: a different printed venue beside an unrelated
+  // handle is a mention, not evidence that the event moves there.
+  const searchableClause = toSearchableText(clause);
+  if (
+    venueNames.some((name) => {
+      const searchableName = toSearchableText(name);
+      if (
+        !searchableName ||
+        !searchableClause.endsWith(` ${searchableName}`)
+      ) {
+        return false;
+      }
+      const prefix = searchableClause.slice(0, -searchableName.length).trim();
+      return /(?:^|\s)(?:garden of(?: (?:club|klub))?|basta(?: (?:kluba|klub))?|club|klub|venue|location|lokacija|mesto|at|in|u|na|kod)$/u.test(prefix) &&
+        !hasRecentLocativeNegation(clause);
+    })
+  ) {
+    return true;
   }
 
   const vidimoSeMatch = /\bvidimo\s+se\b(.*)$/iu.exec(clause);
@@ -764,6 +787,7 @@ function findUniqueCanonicalVenueHandleMention(
   canonicalVenueNamesByHandle: CanonicalVenueMap,
   staticVenueByHandle: StaticVenueMap,
   handleVenueNamesByHandle: CanonicalVenueMap,
+  canonicalVenueAliasesByHandle: CanonicalVenueAliasesByHandle,
 ):
   | { kind: "none" }
   | { kind: "ambiguous" }
@@ -798,7 +822,17 @@ function findUniqueCanonicalVenueHandleMention(
         rawMatch.indexOf("#"),
       );
       const mentionStart = (match.index ?? 0) + Math.max(0, sigilOffset);
-      if (hasImmediateLocativeHandleContext(evidence, mentionStart)) {
+      if (
+        hasImmediateLocativeHandleContext(evidence, mentionStart, [
+          getPreferredVenueNameForHandle(
+            handle,
+            canonicalVenueNamesByHandle,
+            staticVenueByHandle,
+            handleVenueNamesByHandle,
+          ),
+          ...(canonicalVenueAliasesByHandle[handle] ?? []),
+        ])
+      ) {
         locativeHandles.add(handle);
       }
     }
@@ -966,6 +1000,34 @@ function findUniqueCanonicalVenueNameMention(
   };
 }
 
+function findAddressBoundVenueName(
+  evidenceTexts: Array<string | null | undefined>,
+): { kind: "none" | "ambiguous" } | { kind: "unique"; venue: string } {
+  const names = new Map<string, string>();
+  for (const evidence of evidenceTexts) {
+    for (const line of normalizeString(evidence).split(/\r?\n/gu)) {
+      // A pinned "venue / street address" line is a physical-location claim.
+      // Require the slash to separate words, so names such as 20/44 stay intact.
+      const match = /^\s*📍\s*(?:(?:location|lokacija|venue|mesto)\s*:\s*)?(.{3,80}?)\s*\/\s+(.+)$/iu.exec(line);
+      if (!match) continue;
+      const venue = trimWrappedPunctuation(match[1] ?? "");
+      const address = normalizeString(match[2]);
+      if (
+        !venue ||
+        isLowConfidenceVenue(venue) ||
+        !/\p{L}/u.test(address) ||
+        !/(?:^|\s)\d{1,4}\b/u.test(address)
+      ) {
+        continue;
+      }
+      names.set(normalizeVenueComparableText(venue), venue);
+    }
+  }
+  if (names.size === 0) return { kind: "none" };
+  if (names.size > 1) return { kind: "ambiguous" };
+  return { kind: "unique", venue: [...names.values()][0] };
+}
+
 export function normalizeVenueFromEvidence(
   input: NormalizeVenueInput,
 ): VenueNormalization {
@@ -1001,7 +1063,46 @@ export function normalizeVenueFromEvidence(
     input.canonicalVenueNamesByHandle,
     staticVenueByHandle,
     handleVenueNamesByHandle,
+    canonicalVenueAliasesByHandle,
   );
+  const addressBoundVenue = findAddressBoundVenueName(
+    input.immutableEvidenceTexts ?? [],
+  );
+  if (addressBoundVenue.kind === "unique") {
+    const canonical = canonicalizeVenueNameDetailed(
+      addressBoundVenue.venue,
+      input.canonicalVenueNamesByHandle,
+      {
+        staticVenueByHandle,
+        handleVenueNamesByHandle,
+        canonicalVenueAliasesByHandle,
+      },
+    );
+    const venue = canonical && canonical.reason !== "compatible"
+      ? canonical.venue
+      : addressBoundVenue.venue;
+    if (
+      canonicalHandleMention.kind === "unique" &&
+      canonicalHandleMention.locative &&
+      normalizeVenueComparableText(canonicalHandleMention.venue) !==
+        normalizeVenueComparableText(venue)
+    ) {
+      return {
+        venue: null,
+        source: null,
+        wasFallback: true,
+        rawModelVenue: modelVenue,
+        rawLocationName: locationName,
+      };
+    }
+    return {
+      venue,
+      source: "location_name",
+      wasFallback: false,
+      rawModelVenue: modelVenue,
+      rawLocationName: locationName,
+    };
+  }
 
   // A uniquely named canonical venue is authoritative for promoters and
   // unknown sources. A configured physical venue account retains precedence

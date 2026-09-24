@@ -1855,6 +1855,73 @@ function runSemanticNormalizationQa() {
     );
   });
 
+  runCase("cinema release date does not conflict with a dated screening program", () => {
+    const context = {
+      artists: [],
+      dateEvidenceVerified: true,
+      resolvedDate: "2026-09-26",
+      selectedTitle: "OASIS: Don’t Look Back In Anger",
+      selectedVenue: "DKC",
+      singleOccurrenceSource: false,
+      sourceAccountName: "DKC",
+      sourceAccountRole: "venue",
+      sourceCaption:
+        "Filmski program:: DKC → 24 – 30. septembar 18:00 OASIS: Don’t Look Back In Anger",
+      venueEvidenceVerified: true,
+    };
+    const releaseConflict = {
+      field: "date",
+      poster_value: "10. SEPTEMBAR",
+      caption_value: "24 – 30. septembar",
+      reason:
+        "Poster image shows 'U BIOSKOPIMA 10. SEPTEMBAR' while caption lists the DKC program 24–30 Sept.",
+    };
+    assert.equal(eventEvidenceConflictIsBenign(releaseConflict, context), true);
+    assert.equal(
+      eventEvidenceConflictIsBenign(releaseConflict, {
+        ...context,
+        identityEvidenceVerified: false,
+        selectedTitle: "I I SINOVI",
+      }),
+      true,
+      "The release date has a different meaning even when a film title remains unverified.",
+    );
+    assert.equal(
+      eventEvidenceConflictIsBenign(releaseConflict, {
+        ...context,
+        identityEvidenceVerified: false,
+        selectedTitle: "I I SINOVI",
+        sourceCaption: "OASIS: Don’t Look Back In Anger 24 – 30. septembar",
+      }),
+      false,
+      "An unverified title does not waive the explicit film-program context.",
+    );
+    assert.equal(
+      eventEvidenceConflictIsBenign(releaseConflict, {
+        ...context,
+        resolvedDate: "2026-10-01",
+      }),
+      false,
+      "A date outside the source program range is still material.",
+    );
+    assert.equal(
+      eventEvidenceConflictIsBenign(releaseConflict, {
+        ...context,
+        sourceCaption: "Filmski program:: DKC → 24 – 30. septembar, unrelated film",
+      }),
+      false,
+      "The selected work must be named in the source program.",
+    );
+    assert.equal(
+      eventEvidenceConflictIsBenign(
+        { ...releaseConflict, reason: "Poster and caption show different screening dates." },
+        context,
+      ),
+      false,
+      "Different showtime dates without a release marker remain material.",
+    );
+  });
+
   runCase("promoter account cannot override a caption-grounded physical venue", () => {
     const date = isoDateDaysFromNow(17);
     const dateText = ddmmyyyy(date);

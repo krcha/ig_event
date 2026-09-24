@@ -1,4 +1,5 @@
 import { cronJobs } from "convex/server";
+import type { FunctionReference } from "convex/server";
 import { internal } from "./_generated/api";
 
 const crons = cronJobs();
@@ -40,6 +41,22 @@ crons.interval(
     batchSize: 5,
     maxBatches: 5,
   },
+);
+
+// Scan a bounded slice of pending rows on each tick. The mutation rechecks
+// source, full occurrence topology, and same-date uniqueness before a write;
+// the durable cursor eventually revisits rows that were not yet eligible.
+const automaticUniqueSweep =
+  "internal/automaticUniqueApproval:sweepUntilDone" as unknown as FunctionReference<
+    "action",
+    "internal",
+    { maxPages?: number }
+  >;
+crons.interval(
+  "approve server-verified unique events",
+  { minutes: 1 },
+  automaticUniqueSweep,
+  { maxPages: 60 },
 );
 
 export default crons;

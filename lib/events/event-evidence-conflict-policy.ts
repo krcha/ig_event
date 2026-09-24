@@ -10,6 +10,7 @@ export type EventEvidenceSourceConflict = {
 export type EventEvidenceConflictContext = {
   artists: string[];
   dateEvidenceVerified: boolean;
+  identityEvidenceVerified?: boolean;
   resolvedDate: string;
   selectedTitle: string;
   selectedVenue: string;
@@ -289,6 +290,63 @@ function sourceWasPostedOnResolvedBelgradeDate(
   return Boolean(year && month && day && `${year}-${month}-${day}` === resolvedDate);
 }
 
+export function cinemaReleaseDateIsSeparateFromProgramDate(
+  conflict: EventEvidenceSourceConflict,
+  context: EventEvidenceConflictContext,
+): boolean {
+  if (
+    !context.dateEvidenceVerified ||
+    !/^\d{4}-\d{2}-\d{2}$/u.test(context.resolvedDate) ||
+    !/\b(?:u bioskopima|in cinemas|cinema release|theatrical release)\b/iu.test(
+      comparableText(conflict.reason),
+    ) ||
+    (context.identityEvidenceVerified !== false &&
+      !textContainsIdentity(context.sourceCaption, context.selectedTitle))
+  ) {
+    return false;
+  }
+
+  const releaseDates = explicitDatesMentioned(
+    conflict.poster_value,
+    context.resolvedDate,
+  );
+  if (
+    releaseDates.length !== 1 ||
+    releaseDates[0] === context.resolvedDate ||
+    !textContainsIdentity(conflict.reason, conflict.poster_value)
+  ) {
+    return false;
+  }
+
+  const caption = comparableText(context.sourceCaption);
+  const captionClaim = comparableText(conflict.caption_value);
+  if (
+    !captionClaim ||
+    !` ${caption} `.includes(` ${captionClaim} `) ||
+    !/\b(?:filmski program|film program|cinema program|cinema schedule|screening schedule|repertoar)\b/u.test(caption)
+  ) {
+    return false;
+  }
+
+  const range = /\b(\d{1,2})\s*[–—-]\s*(\d{1,2})\.?\s+([\p{L}]+)\b/iu.exec(
+    conflict.caption_value,
+  );
+  if (!range) return false;
+  const month = MONTH_NUMBER_BY_NAME.get(comparableText(range[3]));
+  const startDay = Number(range[1]);
+  const endDay = Number(range[2]);
+  const selectedMonth = Number(context.resolvedDate.slice(5, 7));
+  const selectedDay = Number(context.resolvedDate.slice(8, 10));
+  return Boolean(
+    month &&
+    month === selectedMonth &&
+    startDay >= 1 &&
+    startDay <= selectedDay &&
+    selectedDay <= endDay &&
+    endDay <= 31,
+  );
+}
+
 function dateConflictIsBenign(
   conflict: EventEvidenceSourceConflict,
   context: EventEvidenceConflictContext,
@@ -298,6 +356,9 @@ function dateConflictIsBenign(
     textNamesResolvedDate(conflict.poster_value, context.resolvedDate) &&
     textNamesResolvedDate(conflict.caption_value, context.resolvedDate)
   ) {
+    return true;
+  }
+  if (cinemaReleaseDateIsSeparateFromProgramDate(conflict, context)) {
     return true;
   }
   const genericRelativeDayPattern =

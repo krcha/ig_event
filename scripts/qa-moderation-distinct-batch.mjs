@@ -514,6 +514,7 @@ assert.equal(
 const structuredRawExtractionJson = JSON.stringify({
   extraction_contract_version: "event_evidence_v2",
   is_event: true,
+  source_conflicts: [],
 });
 const structuredHumanEvent = event("structured-human", {
   title: "I Bog stvori trans",
@@ -526,6 +527,14 @@ const structuredHumanEvent = event("structured-human", {
 structuredHumanEvent.normalizedFieldsJson = JSON.stringify({
   extractionContractVersion: "event_evidence_v2",
   extractionIsEvent: true,
+  extractionSourceConflicts: [],
+  extractionSourceConflictCount: 0,
+  sourceConflictResolutionVersion: 1,
+  materialSourceConflicts: [],
+  materialSourceConflictCount: 0,
+  benignSourceConflicts: [],
+  benignSourceConflictCount: 0,
+  sourceAccountRole: "unknown",
   sourceGroundingVersion: 5,
   sourceGroundingEvidence: "persisted_openai_event_evidence_v2",
   sourceGroundingSourceCaption: structuredHumanEvent.sourceCaption,
@@ -602,6 +611,14 @@ const canonicalizedStructuredHumanEvent = event("structured-canonical-venue", {
 canonicalizedStructuredHumanEvent.normalizedFieldsJson = JSON.stringify({
   extractionContractVersion: "event_evidence_v2",
   extractionIsEvent: true,
+  extractionSourceConflicts: [],
+  extractionSourceConflictCount: 0,
+  sourceConflictResolutionVersion: 1,
+  materialSourceConflicts: [],
+  materialSourceConflictCount: 0,
+  benignSourceConflicts: [],
+  benignSourceConflictCount: 0,
+  sourceAccountRole: "unknown",
   sourceGroundingVersion: 5,
   sourceGroundingEvidence: "persisted_openai_event_evidence_v2",
   sourceGroundingSourceCaption: canonicalizedStructuredHumanEvent.sourceCaption,

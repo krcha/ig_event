@@ -49,6 +49,7 @@ const pendingModerationUniquenessReason = v.union(
   v.literal("ineligible_invalid_date"),
   v.literal("ineligible_expired_event"),
   v.literal("ineligible_source_policy"),
+  v.literal("ineligible_source_conflict"),
   v.literal("indeterminate_venue_limit"),
   v.literal("indeterminate_pending_cohort_limit"),
   v.literal("indeterminate_approved_cohort_limit"),

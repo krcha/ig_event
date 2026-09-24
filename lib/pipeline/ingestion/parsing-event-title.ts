@@ -32,11 +32,19 @@ export function normalizeEventTitle(
   const titleAppearsInCaption =
     normalizedRawTitle.length > 0 && normalizedCaption.includes(normalizedRawTitle);
   const weakSectionTitle = isWeakEventTitleSectionHeading(usableRawTitle);
+  const weekdayVenueTemplate = /^(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+night\s+at\s+(.+)$/iu.exec(usableRawTitle);
+  const isUnattestedWeekdayVenueTemplate = Boolean(
+    weekdayVenueTemplate &&
+      toSearchableText(weekdayVenueTemplate[1] ?? "") ===
+        toSearchableText(venue.venue ?? "") &&
+      !titleAppearsInCaption,
+  );
 
   if (
     usableRawTitle &&
     !isMeaninglessEventTitle(usableRawTitle) &&
     !weakSectionTitle &&
+    !isUnattestedWeekdayVenueTemplate &&
     (!isGenericEventTitle(usableRawTitle) || titleAppearsInCaption)
   ) {
     return {

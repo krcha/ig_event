@@ -10,11 +10,16 @@ import {
 import { isCanonicallyGroundedApprovedEvent } from "../convex/publicEventGrounding.ts";
 import { hasEventEvidenceV2AutoApproval } from "../lib/events/event-update-precondition.ts";
 import {
+  isReviewablySourceGroundedApprovedEvent,
+  reviewedTitleEvidenceMatchesBoundScheduleRow,
+} from "../convex/internal/eventRepairs/reviewedStructuredCorrections.ts";
+import {
   createEvent,
   listPublicCalendarEventsWindowPaginated,
   listPublicEventsWindow,
   repairReviewedStructuredEventEvidence,
   repairReviewedStructuredEventVenue,
+  repairReviewedMultiSourceEventVenue,
   repairTrustedV2EventVenue,
   recordInstagramSourceOccurrenceSatisfaction,
 } from "../convex/events.ts";
@@ -101,6 +106,37 @@ const extractionFixture = {
 };
 
 const serializedExtraction = JSON.stringify(extractionFixture);
+const reviewedTitleRows = {
+  schedule_entries: [
+    { date: eventDate, source_text: "Monday Boundary QA Concert" },
+    { date: eventDate, source_text: "Tuesday Neighboring Event" },
+  ],
+};
+const reviewedTitleRowArgs = {
+  currentFields: { splitEventIndex: 1, rowSourceText: "Monday Boundary QA Concert" },
+  rawExtraction: reviewedTitleRows,
+  eventDate,
+  nextTitle: "Boundary QA Concert",
+  titleEvidence: "Monday Boundary QA Concert",
+};
+assert.equal(reviewedTitleEvidenceMatchesBoundScheduleRow(reviewedTitleRowArgs), true);
+assert.equal(reviewedTitleEvidenceMatchesBoundScheduleRow({
+  ...reviewedTitleRowArgs,
+  nextTitle: "Neighboring Event",
+  titleEvidence: "Tuesday Neighboring Event",
+}), false, "A neighboring schedule row cannot prove this event's title.");
+assert.equal(reviewedTitleEvidenceMatchesBoundScheduleRow({
+  ...reviewedTitleRowArgs,
+  currentFields: { splitEventIndex: 2, rowSourceText: "Monday Boundary QA Concert" },
+}), false, "The split row index and persisted row text must agree.");
+assert.equal(reviewedTitleEvidenceMatchesBoundScheduleRow({
+  ...reviewedTitleRowArgs,
+  eventDate: isoDateDaysFromNow(91),
+}), false, "A schedule row for another date cannot prove the event title.");
+assert.equal(reviewedTitleEvidenceMatchesBoundScheduleRow({
+  ...reviewedTitleRowArgs,
+  nextTitle: "Unattested Artist",
+}), false, "The replacement title must occur in the exact schedule row.");
 const parsedCachedExtraction = parseExtractedEventData(
   JSON.parse(serializedExtraction),
 );
@@ -430,6 +466,57 @@ try {
     "Exact persisted poster storage and checksum evidence must authorize publication.",
   );
   assert.equal(exactPosterGrounding.posterQueries, 1);
+  const pastDate = isoDateDaysFromNow(-3);
+  const pastCaption = sourceCaption.replace(eventDate, pastDate);
+  const pastExtractionJson = JSON.stringify({
+    ...extractionFixture,
+    date: pastDate,
+    source_caption: pastCaption,
+    date_evidence: { ...extractionFixture.date_evidence, exact_text: pastDate, resolved_date: pastDate },
+  });
+  const pastEvent = {
+    ...posterEvent,
+    sourceOccurrenceKey: "instagram-occurrence-v2:aged-reviewed-source",
+    date: pastDate,
+    dateEvidenceText: pastDate,
+    dateEvidenceResolvedDate: pastDate,
+    sourceCaption: pastCaption,
+    rawExtractionJson: pastExtractionJson,
+    normalizedFieldsJson: JSON.stringify({
+      ...makeNormalizedFields("poster", "poster"),
+      normalizedDate: pastDate,
+      dateEvidenceText: pastDate,
+      dateEvidenceResolvedDate: pastDate,
+      sourceGroundingSourceCaption: pastCaption,
+      sourceOccurrenceKey: "instagram-occurrence-v2:aged-reviewed-source",
+      sourceOccurrenceSourceFingerprint: "instagram-source-v2:aged-reviewed-source",
+    }),
+  };
+  const pastPost = {
+    ...posterPost,
+    caption: pastCaption,
+    analysisResultJson: pastExtractionJson,
+  };
+  const pastGrounding = makeGroundingCtx(pastPost, [makePosterAsset()]);
+  assert.equal(await isCanonicallyGroundedApprovedEvent(pastGrounding.ctx, pastEvent), false);
+  assert.equal(await isReviewablySourceGroundedApprovedEvent(
+    pastGrounding.ctx,
+    pastEvent,
+    "service:reviewed-correction-qa",
+    "Human-reviewed correction of an aged approved source event.",
+  ), true, "An aged approved event remains repairable only with exact persisted v2 source proof.");
+  assert.equal(await isReviewablySourceGroundedApprovedEvent(
+    pastGrounding.ctx,
+    {
+      ...pastEvent,
+      normalizedFieldsJson: JSON.stringify({
+        ...JSON.parse(pastEvent.normalizedFieldsJson),
+        dateEvidenceResolvedDate: eventDate,
+      }),
+    },
+    "service:reviewed-correction-qa",
+    "Human-reviewed correction of an aged approved source event.",
+  ), false, "A past event with drifted date evidence cannot pass reviewed repair preflight.");
 
   const repairCanonicalVenueName = "Novi Bioskop Zvezda";
   const repairLegacyVenueAlias = "New Cinema Zvezda";
@@ -678,6 +765,17 @@ try {
     createdAt: now,
     updatedAt: now,
   };
+  const reviewedSourceLinks = [reviewedSourceLink];
+  const reviewedReceipts = [reviewedReceipt];
+  const reviewedSourceOccurrences = [];
+  const multiSourceTargetVenue = {
+    ...repairVenue,
+    _id: "venue-multi-source-target",
+    name: "Boundary QA Club",
+    instagramHandle: "boundary_qa_club",
+    normalizedInstagramHandle: "boundary_qa_club",
+    aliases: [],
+  };
   const reviewedAudits = [];
   const reviewedApprovedDatePeers = [];
   const reviewedTopologyEpoch = {
@@ -694,9 +792,19 @@ try {
       async get(id) {
         if (id === reviewedEvent._id) return reviewedEvent;
         if (id === repairVenue._id) return repairVenue;
+        if (id === multiSourceTargetVenue._id) return multiSourceTargetVenue;
         if (id === reviewedReceipt._id) return reviewedReceipt;
         if (id === reviewedSourceLink._id) return reviewedSourceLink;
         if (id === reviewedTopologyEpoch._id) return reviewedTopologyEpoch;
+        if (reviewedReceipts.some((receipt) => receipt._id === id)) {
+          return reviewedReceipts.find((receipt) => receipt._id === id);
+        }
+        if (reviewedSourceLinks.some((link) => link._id === id)) {
+          return reviewedSourceLinks.find((link) => link._id === id);
+        }
+        if (reviewedSourceOccurrences.some((occurrence) => occurrence._id === id)) {
+          return reviewedSourceOccurrences.find((occurrence) => occurrence._id === id);
+        }
         return null;
       },
       async patch(id, patch) {
@@ -704,6 +812,12 @@ try {
         else if (id === reviewedReceipt._id) Object.assign(reviewedReceipt, structuredClone(patch));
         else if (id === reviewedTopologyEpoch._id) {
           Object.assign(reviewedTopologyEpoch, structuredClone(patch));
+        }
+        else if (reviewedReceipts.some((receipt) => receipt._id === id)) {
+          Object.assign(reviewedReceipts.find((receipt) => receipt._id === id), structuredClone(patch));
+        }
+        else if (reviewedSourceOccurrences.some((occurrence) => occurrence._id === id)) {
+          Object.assign(reviewedSourceOccurrences.find((occurrence) => occurrence._id === id), structuredClone(patch));
         }
         else throw new Error(`Unexpected reviewed correction patch ${id}`);
       },
@@ -733,9 +847,11 @@ try {
             const criteria = indexCriteria(configure);
             const records =
               table === "instagramEventSources"
-                ? [reviewedSourceLink]
+                ? reviewedSourceLinks
                 : table === "instagramSourceOccurrenceReceipts"
-                  ? [reviewedReceipt]
+                  ? reviewedReceipts
+                  : table === "sourceOccurrences"
+                    ? reviewedSourceOccurrences
                   : table === "scrapedPosts"
                     ? [posterPost]
                     : table === "mediaAssets"
@@ -892,6 +1008,98 @@ try {
   });
   assert.equal(reviewedAudits.length, 2);
   assert.equal(reviewedAudits[1].action, "reviewed_structured_evidence_corrected");
+
+  const secondaryOccurrenceKey = "instagram-occurrence-v2:reviewed-second-source";
+  const secondarySourceLink = {
+    ...reviewedSourceLink,
+    _id: "source-link-reviewed-second-source",
+    sourceIdentity: "instagram-source-identity-v1:BOUNDARYV2-SECOND",
+    sourceFingerprint: "instagram-source-v2:reviewed-second-source",
+    sourceOccurrenceKey: secondaryOccurrenceKey,
+    sourceOccurrenceId: "occurrence-reviewed-second-source",
+  };
+  const secondaryReceipt = {
+    ...structuredClone(reviewedReceipt),
+    _id: "receipt-reviewed-second-source",
+    sourceIdentity: secondarySourceLink.sourceIdentity,
+    sourceFingerprint: secondarySourceLink.sourceFingerprint,
+    expectedKeys: [secondaryOccurrenceKey],
+    expectedOccurrences: [{
+      ...reviewedReceipt.expectedOccurrences[0],
+      key: secondaryOccurrenceKey,
+    }],
+    satisfiedKeys: [secondaryOccurrenceKey],
+    satisfiedOccurrences: [{ key: secondaryOccurrenceKey, eventId: reviewedEvent._id }],
+  };
+  reviewedSourceLink.sourceOccurrenceId = "occurrence-reviewed-primary-source";
+  reviewedSourceLinks.push(secondarySourceLink);
+  reviewedReceipts.push(secondaryReceipt);
+  for (const [link, expected] of [
+    [reviewedSourceLink, reviewedReceipt.expectedOccurrences[0]],
+    [secondarySourceLink, secondaryReceipt.expectedOccurrences[0]],
+  ]) {
+    reviewedSourceOccurrences.push({
+      _id: link.sourceOccurrenceId,
+      sourceIdentity: link.sourceIdentity,
+      sourceOccurrenceKey: link.sourceOccurrenceKey,
+      sourceFingerprint: link.sourceFingerprint,
+      canonicalEventId: reviewedEvent._id,
+      venueId: reviewedEvent.venueId,
+      venueResolutionStatus: "resolved",
+      state: "satisfied",
+      factsJson: "{}",
+      normalizedOccurrenceJson: JSON.stringify({
+        ...expected,
+        eventType: reviewedEvent.eventType,
+        venueId: reviewedEvent.venueId,
+      }),
+      updatedAt: now,
+    });
+  }
+  const originalReviewNote = reviewedEvent.moderationNote;
+  const multiSourceVenueArgs = {
+    id: reviewedEvent._id,
+    expectedUpdatedAt: reviewedEvent.updatedAt,
+    expectedNormalizedFieldsJson: reviewedEvent.normalizedFieldsJson,
+    expectedSources: reviewedSourceLinks.map((link, index) => ({
+      sourceLinkId: link._id,
+      sourceLinkUpdatedAt: link.updatedAt,
+      receiptId: reviewedReceipts[index]._id,
+      receiptUpdatedAt: reviewedReceipts[index].updatedAt,
+    })),
+    nextVenue: multiSourceTargetVenue.name,
+    targetVenueId: multiSourceTargetVenue._id,
+    expectedTargetVenueUpdatedAt: multiSourceTargetVenue.updatedAt,
+    expectedTargetVenueHandle: multiSourceTargetVenue.instagramHandle,
+    venueEvidence: "Both reviewed source posts name the physical Boundary QA Club.",
+    moderationNote: "Human-reviewed two-source venue correction with exact receipts.",
+    serviceSecret: process.env.CRON_SECRET,
+  };
+  await assert.rejects(
+    repairReviewedMultiSourceEventVenue._handler(reviewedCtx, {
+      ...multiSourceVenueArgs,
+      expectedSources: multiSourceVenueArgs.expectedSources.map((source, index) =>
+        index === 1 ? { ...source, receiptUpdatedAt: source.receiptUpdatedAt - 1 } : source),
+    }),
+    /source receipt changed/u,
+  );
+  assert.equal(reviewedEvent.venue, repairVenue.name);
+  const multiSourceResult = await repairReviewedMultiSourceEventVenue._handler(
+    reviewedCtx,
+    multiSourceVenueArgs,
+  );
+  assert.equal(multiSourceResult.sourceCount, 2);
+  assert.equal(reviewedEvent.venue, multiSourceTargetVenue.name);
+  assert.equal(reviewedEvent.venueId, multiSourceTargetVenue._id);
+  assert.equal(reviewedEvent.moderationNote, originalReviewNote);
+  for (const receipt of reviewedReceipts) {
+    assert.equal(receipt.expectedOccurrences[0].venue, multiSourceTargetVenue.name);
+  }
+  for (const occurrence of reviewedSourceOccurrences) {
+    assert.equal(occurrence.venueId, multiSourceTargetVenue._id);
+    assert.equal(JSON.parse(occurrence.normalizedOccurrenceJson).venue, multiSourceTargetVenue.name);
+  }
+  assert.equal(reviewedAudits.at(-1).action, "reviewed_multi_source_venue_corrected");
 
   for (const [label, persistedPost, assets] of [
     ["missing media asset", posterPost, []],

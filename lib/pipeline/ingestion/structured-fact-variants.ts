@@ -6,13 +6,13 @@ import { resolveIngestionVenue } from "@/lib/domain/venues/index";
 import type { DateNormalization, EventDateEvidenceSource, EventVariant, SplitEventCandidate } from "@/lib/pipeline/ingestion/contracts";
 import { coalesceNightlifeLineupEventVariants } from "@/lib/pipeline/ingestion/occurrence-coalescing";
 import { normalizeDateEvidenceForOccurrence } from "@/lib/pipeline/ingestion/parsing-date";
-import { buildMeaningfulEventTitle, isMeaninglessEventTitle } from "@/lib/pipeline/ingestion/parsing-event-text";
+import { buildMeaningfulEventTitle, extractContextualEventTitleCandidate, isMeaninglessEventTitle, isUsableContextEventTitleCandidate, normalizeContextDerivedTitle } from "@/lib/pipeline/ingestion/parsing-event-text";
 import type { normalizeEventTitle } from "@/lib/pipeline/ingestion/parsing-event-title";
 import { buildSplitEventDescription } from "@/lib/pipeline/ingestion/parsing-schedule";
 import { buildScheduleEntryTimeProvenance, buildTimeProvenance, type resolveEventTimeFromExtractionAndEvidence } from "@/lib/pipeline/ingestion/parsing-time";
 import { extractionEvidenceAppearsInPersistedSource, hasVerifiedSharedScheduleContext } from "@/lib/pipeline/ingestion/structured-fact-verification";
 import { normalizeString } from "@/lib/pipeline/ingestion/values";
-import { normalizeVenueComparableText, type VenueNormalization } from "@/lib/pipeline/venue-normalization";
+import { normalizeVenueComparableText, toSearchableText, type VenueNormalization } from "@/lib/pipeline/venue-normalization";
 import type { InstagramScrapedPost } from "@/lib/scraper/instagram-scraper";
 
 type BuildStructuredFactVariantsInput = {
@@ -214,8 +214,33 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
               sourceRole: "promoter",
             }).venue ?? variantVenueRaw
           : "";
+        const rowContextCandidate = entry.titleUsedFallback
+          ? extractContextualEventTitleCandidate(entry.description ?? "")
+          : null;
+        const normalizedRowCandidate = toSearchableText(rowContextCandidate ?? "");
+        const candidateAppearsInExactSourceRow = Boolean(
+          normalizedRowCandidate &&
+          extracted.schedule_entries.some((scheduleEntry) => {
+            const sourceText = toSearchableText(scheduleEntry.source_text);
+            return Boolean(
+              sourceText &&
+              toSearchableText(entry.sourceLine).includes(sourceText) &&
+              sourceText.includes(normalizedRowCandidate)
+            );
+          }),
+        );
+        const sourceBoundRowTitle = rowContextCandidate &&
+          isUsableContextEventTitleCandidate(
+            rowContextCandidate,
+            post,
+            { ...venueNormalization, venue: variantVenue },
+            { ...ingestionVenueResolver.configuredVenueNamesByHandle },
+          ) &&
+          candidateAppearsInExactSourceRow
+            ? normalizeContextDerivedTitle(rowContextCandidate)
+            : "";
         const groundedFallbackTitle = entry.titleUsedFallback
-          ? buildUnnamedScheduleFallbackTitle({
+          ? sourceBoundRowTitle || buildUnnamedScheduleFallbackTitle({
               eventType,
               venue: variantVenue,
               isoDate: entry.normalizedDate.isoDate,
@@ -281,15 +306,17 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
               ? variantTitle
               : baseTitle,
           titleSource: entry.titleUsedFallback
-            ? "unnamed_schedule_fallback"
+            ? sourceBoundRowTitle ? entry.source : "unnamed_schedule_fallback"
             : entry.titleSource ?? (usesSplitScheduleTitle ? entry.source : baseTitleSource),
           titleUsedFallback:
-            entry.titleUsedFallback ??
+            (sourceBoundRowTitle ? false : entry.titleUsedFallback) ??
             (usesSplitScheduleTitle ? false : baseTitleUsedFallback),
           titleDerivedFromContext:
-            usesSplitScheduleTitle ? false : titleNormalization.source === "context_derived",
+            sourceBoundRowTitle ? true :
+              usesSplitScheduleTitle ? false : titleNormalization.source === "context_derived",
           titleContextCandidate:
-            usesSplitScheduleTitle ? null : titleNormalization.contextCandidate,
+            sourceBoundRowTitle ? rowContextCandidate :
+              usesSplitScheduleTitle ? null : titleNormalization.contextCandidate,
           rawDate: entry.rawDate,
           dateNormalization: entry.normalizedDate,
           dateEvidence: variantDateEvidence,

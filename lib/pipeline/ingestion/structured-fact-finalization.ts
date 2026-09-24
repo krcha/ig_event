@@ -223,6 +223,7 @@ export function finalizeStructuredFactVariants({
       {
         resolvedDate: date ?? "",
         dateEvidenceVerified,
+        identityEvidenceVerified,
         selectedTitle: variant.title,
         artists: variant.artists,
         selectedVenue: variant.venue ?? "",

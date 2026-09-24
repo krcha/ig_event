@@ -1,6 +1,6 @@
 import { type ExtractedEventData } from "@/lib/ai/extract-event-data";
 import { buildIngestionVenueResolver, type IngestionVenueResolver, type IngestionVenueResolverSnapshotInput, resolveIngestionVenue } from "@/lib/domain/venues/index";
-import { canonicalizeVenueName, type CanonicalVenueAliasesByHandle, normalizeExtractedArtists, normalizeExtractedDescription, normalizeHandle, normalizeVenueComparableText, type VenueNormalization } from "@/lib/pipeline/venue-normalization";
+import { canonicalizeVenueName, canonicalizeVenueNameDetailed, type CanonicalVenueAliasesByHandle, normalizeExtractedArtists, normalizeExtractedDescription, normalizeHandle, normalizeVenueComparableText, toSearchableText, type VenueNormalization } from "@/lib/pipeline/venue-normalization";
 import { type InstagramScrapedPost } from "@/lib/scraper/instagram-scraper";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 import { normalizeConfidenceScore } from "@/lib/utils/confidence";
@@ -37,10 +37,11 @@ export function normalizeVenue(
   rawModelVenue: string,
   resolver: IngestionVenueResolver,
   sourceRolesByHandle: Record<string, "venue" | "promoter" | "unknown"> = {},
+  rawModelTitle = "",
 ): VenueNormalization {
   const normalizedSourceHandle = normalizeHandle(post.username);
   const sourceRole = sourceRolesByHandle[normalizedSourceHandle];
-  return resolveIngestionVenue(resolver, {
+  const ordinaryResolution = resolveIngestionVenue(resolver, {
     postingProviderHandle: post.username,
     rawVenueClaim: rawModelVenue,
     locationName: post.locationName,
@@ -50,6 +51,53 @@ export function normalizeVenue(
     ],
     sourceRole,
   });
+
+  // A promoter series may have a legacy venue record for its brand. If the
+  // extractor puts that brand in `venue` but names a different canonical
+  // physical venue as the title, require an exact matching source hashtag
+  // before interpreting the title as a venue claim.
+  const ownBrand = resolver.canonicalVenueNamesByHandle[normalizedSourceHandle] ?? "";
+  const titleVenue = sourceRole === "promoter" && ownBrand &&
+    normalizeVenueComparableText(rawModelVenue) === normalizeVenueComparableText(ownBrand)
+      ? canonicalizeVenueNameDetailed(rawModelTitle, resolver.canonicalVenueNamesByHandle, {
+          canonicalVenueAliasesByHandle: resolver.canonicalVenueAliasesByHandle,
+        })
+      : null;
+  const titleVenueName = titleVenue && titleVenue.reason !== "compatible"
+    ? titleVenue.venue
+    : "";
+  const titleHashtag = toSearchableText(rawModelTitle);
+  const hasMatchingVenueHashtag = Boolean(
+    titleHashtag &&
+    [...(post.caption ?? "").matchAll(/(?:^|[^\p{L}\p{N}._])#([\p{L}\p{N}._]+)/gu)]
+      .some((match) => toSearchableText(match[1] ?? "") === titleHashtag),
+  );
+  if (
+    titleVenueName &&
+    normalizeVenueComparableText(titleVenueName) !==
+      normalizeVenueComparableText(ownBrand) &&
+    hasMatchingVenueHashtag
+  ) {
+    const titleResolution = resolveIngestionVenue(resolver, {
+      postingProviderHandle: post.username,
+      rawVenueClaim: titleVenueName,
+      locationName: post.locationName,
+      evidenceTexts: [post.caption, extractPostAltTextEvidence(post.altText)],
+      sourceRole,
+    });
+    if (
+      titleResolution.venue &&
+      normalizeVenueComparableText(titleResolution.venue) ===
+        normalizeVenueComparableText(titleVenueName)
+    ) {
+      return {
+        ...titleResolution,
+        rawModelVenue: rawModelVenue.trim(),
+        source: "evidence_name",
+      };
+    }
+  }
+  return ordinaryResolution;
 }
 
 export function produceStructuredFactsForInsert(
@@ -120,6 +168,7 @@ export function produceStructuredFactsForInsert(
     extracted.venue,
     ingestionVenueResolver,
     options.sourceRolesByHandle,
+    extracted.title,
   );
   const normalizedVenue = venueNormalization.venue ?? "";
   const canonicalVenueEvidenceSource =

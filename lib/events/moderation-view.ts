@@ -39,6 +39,7 @@ export function getModerationReviewDecision(event: {
     ineligible_invalid_date: "Confirm the event date from its source.",
     ineligible_expired_event: "This event has already passed.",
     ineligible_source_policy: "The source details need review.",
+    ineligible_source_conflict: "The poster and caption disagree on an event fact. Resolve the source conflict first.",
   };
   return {
     group: "needs_review",

@@ -59,6 +59,8 @@ export const CONTEXT_EVENT_TITLE_KEYWORDS = new Set([
   "anniversary",
   "matinee",
   "matine",
+  "vece",
+  "evening",
 ]);
 
 
@@ -89,7 +91,7 @@ export const CONTEXT_TITLE_STOP_WORDS = new Set([
 
 
 export const CONTEXT_EVENT_TITLE_REGEX =
-  /([\p{L}\d][\p{L}\d'’.+/&-]*(?:\s+[\p{L}\d][\p{L}\d'’.+/&-]*){0,4}\s+(festival|fest|party|session|night|showcase|weekender|concert|koncert|afterparty|after|takeover|opening|closing|premiere|premijera|birthday|anniversary|matinee|matine))\b/iu;
+  /([\p{L}\d][\p{L}\d'’.+/&-]*(?:\s+[\p{L}\d][\p{L}\d'’.+/&-]*){0,4}\s+(festival|fest|party|session|night|showcase|weekender|concert|koncert|afterparty|after|takeover|opening|closing|premiere|premijera|birthday|anniversary|matinee|matine|ve[čc]e|evening))\b/iu;
 
 export function humanizeHandle(
   handle: string,

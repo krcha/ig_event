@@ -6,6 +6,7 @@ import {
   HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION,
   hasCompleteSourceGroundedAutoApproval,
   hasCompleteSourceGroundingAttestation,
+  hasAutomaticUniqueStructuredSourceAttestation,
   hasEventEvidenceV2AutoApproval,
   hasExplicitNonEventEvidence,
   hasHumanReviewedLegacySourceAttestation,
@@ -24,6 +25,7 @@ import { exactJsonValue } from "../lib/events/exact-json-value";
 import { canonicalizeSourceUrl } from "../lib/domain/source-url";
 import { loadVerifiedCampaignLineageReattestation } from "./internal/campaignLineageReattestationProof";
 import { hasVerifiedLegacySourceOccurrenceAdmissionForEvent } from "./internal/legacySourceOccurrenceAdmissionProof";
+import { hasCompleteAutomaticUniqueSourceProof } from "./internal/automaticUniqueSourceProof";
 
 const MAX_CROSS_POST_CAMPAIGN_AUDIT_ROWS = 100;
 
@@ -424,6 +426,9 @@ async function isCanonicallyGroundedApprovedEventInternal(
     event.normalizedFieldsJson,
     event,
   );
+  const automaticUniqueAuthorized =
+    hasAutomaticUniqueStructuredSourceAttestation(event.normalizedFieldsJson, event) &&
+    await hasCompleteAutomaticUniqueSourceProof(ctx, event);
   const hasHumanReviewMetadata =
     typeof event.reviewedAt === "number" &&
     Number.isFinite(event.reviewedAt) &&
@@ -464,6 +469,7 @@ async function isCanonicallyGroundedApprovedEventInternal(
     !machineAuthorized &&
     !trustedSourceAuthorized &&
     !structuredEvidenceAuthorized &&
+    !automaticUniqueAuthorized &&
     !humanAuthorized &&
     !crossPostAggregateAuthorized &&
     !legacyOccurrenceAdmissionAuthorized
@@ -531,7 +537,7 @@ async function isCanonicallyGroundedApprovedEventInternal(
     return false;
   }
 
-  if (structuredEvidenceAuthorized || humanReviewedStructuredAuthorized) {
+  if (structuredEvidenceAuthorized || humanReviewedStructuredAuthorized || automaticUniqueAuthorized) {
     const posterAssets =
       fields.extractionMode === "poster"
         ? await ctx.db
