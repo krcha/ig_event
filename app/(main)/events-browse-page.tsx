@@ -1181,11 +1181,11 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       <section className="rounded-[1.15rem] border border-border/75 bg-card/72 px-3.5 py-3.5 sm:px-5 sm:py-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div className="max-w-3xl">
-            <p className="section-kicker">Belgrade event calendar</p>
-            <h1 className="mt-1.5 text-2xl font-semibold tracking-[-0.045em] text-foreground sm:text-4xl">
+            <p className="section-kicker hidden sm:block">Belgrade event calendar</p>
+            <h1 className="mt-0 whitespace-nowrap text-[clamp(0.75rem,4.7vw,1.25rem)] font-semibold tracking-[-0.045em] text-foreground sm:mt-1.5 sm:whitespace-normal sm:text-4xl">
               Belgrade events, nightlife & culture
             </h1>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground sm:text-base" lang="sr-Latn-RS">
+            <p className="mt-2 hidden text-sm leading-6 text-muted-foreground sm:block sm:text-base" lang="sr-Latn-RS">
               Šta se dešava u Beogradu danas? Pronađite žurke, koncerte, kvizove i izložbe.
               Izaberite datum i pogledajte gde da izađete večeras ili za vikend.
             </p>
