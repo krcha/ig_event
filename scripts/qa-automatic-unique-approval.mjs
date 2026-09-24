@@ -185,20 +185,39 @@ assert.equal(
   "The policy marker cannot replace the current persisted source document.",
 );
 
+const pastSourceLine = "14.01.2035 Expired Sibling at QA Hall";
+const proofCaption = `${event.sourceCaption}\n${pastSourceLine}`;
+const proofRaw = JSON.stringify({
+  ...JSON.parse(event.rawExtractionJson),
+  schedule_entries: [
+    {
+      date: "15.01.2035", time: event.time, venue: event.venue,
+      title: event.title, artists: event.artists,
+      source_text: event.sourceCaption,
+      date_evidence: { resolved_date: event.date },
+    },
+    {
+      date: "14.01.2035", time: "", venue: event.venue,
+      title: "Expired Sibling", artists: [],
+      source_text: pastSourceLine,
+      date_evidence: { resolved_date: "2035-01-14" },
+    },
+  ],
+});
 const proofSource = {
   _id: "qa-source-1",
   handle: "qa_hall",
   username: "qa_hall",
   postId: event.instagramPostId,
   instagramPostUrl: sourceUrl,
-  caption: event.sourceCaption,
+  caption: proofCaption,
   postedAt: "2035-01-01T12:00:00.000Z",
   sourceRevision: 1,
   analysisRevision: 1,
   analysisContractVersion: "event_evidence_v2",
   analysisIsEvent: true,
   analysisModel: "gpt-5-mini-2025-08-07",
-  analysisResultJson: event.rawExtractionJson,
+  analysisResultJson: proofRaw,
 };
 const proofFingerprint = buildInstagramSourceOccurrenceFingerprint(proofSource);
 const proofSourceIdentity = adaptInstagramScrapedPostToSourceDocument(
@@ -206,12 +225,15 @@ const proofSourceIdentity = adaptInstagramScrapedPostToSourceDocument(
 ).sourceIdentity;
 const proofFields = JSON.stringify({
   ...fields,
+  sourceGroundingSourceCaption: proofCaption,
   sourceOccurrenceSourceFingerprint: proofFingerprint,
 });
 const proofEvent = {
   ...event,
   status: "approved",
+  sourceCaption: proofCaption,
   sourcePostedAt: proofSource.postedAt,
+  rawExtractionJson: proofRaw,
   normalizedFieldsJson: proofFields,
 };
 const ownExpected = {
@@ -227,6 +249,7 @@ const pastExpected = {
   key: "qa-expired-sibling",
   date: "2035-01-14",
   title: "Expired Sibling",
+  time: "TBD",
   artists: [],
 };
 const proofLink = {
@@ -249,10 +272,14 @@ const basePartialReceipt = {
   createdAt: 1,
   updatedAt: 1,
 };
-function proofContext(receipt = basePartialReceipt, source = proofSource) {
+function proofContext(
+  receipt = basePartialReceipt,
+  source = proofSource,
+  representative = proofEvent,
+) {
   return {
     db: {
-      async get(id) { return id === proofEvent._id ? proofEvent : null; },
+      async get(id) { return id === representative._id ? representative : null; },
       query(table) {
         return {
           withIndex(indexName, configure) {
@@ -277,6 +304,52 @@ function proofContext(receipt = basePartialReceipt, source = proofSource) {
 }
 const originalProofNow = Date.now;
 try {
+  Date.now = () => Date.parse("2035-01-15T00:00:00.000Z");
+  assert.equal(
+    await hasCompleteAutomaticUniqueSourceProof(proofContext(), proofEvent),
+    true,
+    "At 01:00 in Belgrade yesterday's missing sibling may be skipped for a later-date event.",
+  );
+  const sameDayRaw = JSON.stringify({
+    ...JSON.parse(proofRaw),
+    schedule_entries: [
+      {
+        ...JSON.parse(proofRaw).schedule_entries[0],
+        date: "14.01.2035",
+        date_evidence: { resolved_date: "2035-01-14" },
+      },
+      JSON.parse(proofRaw).schedule_entries[1],
+    ],
+  });
+  const sameDaySource = { ...proofSource, analysisResultJson: sameDayRaw };
+  const sameDayEvent = {
+    ...proofEvent,
+    date: "2035-01-14",
+    rawExtractionJson: sameDayRaw,
+    normalizedFieldsJson: JSON.stringify({
+      ...JSON.parse(proofFields),
+      normalizedDate: "2035-01-14",
+    }),
+  };
+  const sameDayReceipt = {
+    ...basePartialReceipt,
+    expectedOccurrences: [{ ...ownExpected, date: "2035-01-14" }, pastExpected],
+  };
+  assert.equal(
+    await hasCompleteAutomaticUniqueSourceProof(
+      proofContext(sameDayReceipt, sameDaySource, sameDayEvent),
+      sameDayEvent,
+    ),
+    false,
+    "An already-approved event cannot skip an unsatisfied sibling on its own date overnight.",
+  );
+  assert.equal(
+    await isCanonicallyGroundedApprovedEvent(
+      proofContext(sameDayReceipt, sameDaySource, sameDayEvent),
+      sameDayEvent,
+    ),
+    false,
+  );
   Date.now = () => Date.parse("2035-01-15T12:00:00.000Z");
   assert.equal(
     await hasCompleteAutomaticUniqueSourceProof(proofContext(), proofEvent),
@@ -329,6 +402,39 @@ try {
     }), proofEvent),
     false,
     "Expiry does not relax the exact current source revision check.",
+  );
+  const futureRaw = JSON.stringify({
+    ...JSON.parse(proofRaw),
+    schedule_entries: [
+      JSON.parse(proofRaw).schedule_entries[0],
+      {
+        ...JSON.parse(proofRaw).schedule_entries[1],
+        date: "16.01.2035",
+        date_evidence: { resolved_date: "2035-01-16" },
+      },
+    ],
+  });
+  const futureSource = { ...proofSource, analysisResultJson: futureRaw };
+  const futureEvent = { ...proofEvent, rawExtractionJson: futureRaw };
+  assert.equal(
+    buildInstagramSourceOccurrenceFingerprint(futureSource),
+    proofFingerprint,
+    "A reanalysis can change raw schedule dates without changing the caption fingerprint.",
+  );
+  assert.equal(
+    await hasCompleteAutomaticUniqueSourceProof(
+      proofContext(basePartialReceipt, futureSource),
+      futureEvent,
+    ),
+    false,
+    "An old past receipt date cannot override a current future source schedule row.",
+  );
+  assert.equal(
+    await isCanonicallyGroundedApprovedEvent(
+      proofContext(basePartialReceipt, futureSource),
+      futureEvent,
+    ),
+    false,
   );
 } finally {
   Date.now = originalProofNow;

@@ -3,8 +3,8 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { adaptInstagramScrapedPostToSourceDocument } from "../../lib/domain/source-documents";
 import { buildInstagramSourceOccurrenceFingerprint } from "../../lib/domain/occurrences/source-fingerprint";
 import { sourceOccurrenceRepresentativeMatchesExpected } from "../../lib/events/source-occurrence-representation";
-import { normalizeHandle } from "../../lib/pipeline/venue-normalization";
 import { getBelgradeDayKey } from "../../lib/pipeline/belgrade-day-key";
+import { normalizeHandle, toSearchableText } from "../../lib/pipeline/venue-normalization";
 import { sourceOccurrenceProvenanceRepository } from "../repositories/sourceOccurrenceProvenance";
 
 type ReadCtx = QueryCtx | MutationCtx;
@@ -62,7 +62,86 @@ type CollisionSourceRow = {
   time?: unknown;
   venue?: unknown;
   artists?: unknown;
+  date_evidence?: unknown;
 };
+type ExpectedReceiptBinding = NonNullable<
+  Doc<"instagramSourceOccurrenceReceipts">["expectedOccurrences"]
+>[number];
+
+function normalizedArtists(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.some((artist) => typeof artist !== "string")) {
+    return null;
+  }
+  return value.map((artist: string) => toSearchableText(artist)).sort();
+}
+
+function sourceRowMatchesExpectedBinding(
+  row: CollisionSourceRow,
+  binding: ExpectedReceiptBinding,
+): boolean {
+  if (typeof row.title !== "string" || typeof row.venue !== "string") {
+    return false;
+  }
+  const artists = normalizedArtists(row.artists);
+  const expectedArtists = normalizedArtists(binding.artists);
+  const evidence = row.date_evidence && typeof row.date_evidence === "object" &&
+    !Array.isArray(row.date_evidence)
+    ? row.date_evidence as Record<string, unknown> : null;
+  const expectedTime = comparable(binding.time).toLowerCase();
+  const rawTime = comparable(row.time).toLowerCase();
+  return sourceDateToIso(row.date) === binding.date &&
+    evidence?.resolved_date === binding.date &&
+    toSearchableText(row.title) === toSearchableText(binding.title) &&
+    toSearchableText(row.venue) === toSearchableText(binding.venue) &&
+    artists !== null && expectedArtists !== null &&
+    JSON.stringify(artists) === JSON.stringify(expectedArtists) &&
+    (!expectedTime ||
+      (expectedTime === "tbd" ? !rawTime || rawTime === "tbd" : rawTime === expectedTime));
+}
+
+function skippedPastBindingsMatchCurrentSourceRows(
+  sourceAnalysisJson: string,
+  sourceCaption: string | undefined,
+  sourceAltText: string | undefined,
+  expected: NonNullable<Doc<"instagramSourceOccurrenceReceipts">["expectedOccurrences"]>,
+  missingKeys: ReadonlySet<string>,
+): boolean {
+  let raw: Record<string, unknown> | null = null;
+  try {
+    const parsed: unknown = JSON.parse(sourceAnalysisJson);
+    raw = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown> : null;
+  } catch { return false; }
+  const entries = raw?.schedule_entries;
+  if (!Array.isArray(entries) || entries.length < 2 || entries.length > 64 ||
+    entries.some((entry) => !entry || typeof entry !== "object" || Array.isArray(entry))) {
+    return false;
+  }
+  const rows = entries as CollisionSourceRow[];
+  const sourceTexts = [sourceCaption, sourceAltText]
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => comparable(value).toLocaleLowerCase("sr-Latn"));
+  const matchedRows = new Set<number>();
+  for (const binding of expected.filter((item) => missingKeys.has(item.key))) {
+    const matches = rows
+      .map((row, index) => ({ row, index }))
+      .filter(({ row }) => sourceRowMatchesExpectedBinding(row, binding));
+    if (matches.length !== 1 || matchedRows.has(matches[0]!.index)) return false;
+    const { row, index } = matches[0]!;
+    const sourceLine = comparable(row.source_text).toLocaleLowerCase("sr-Latn");
+    if (
+      !sourceLine ||
+      !sourceTexts.some((text) =>
+        ` ${text} `.includes(` ${sourceLine} `)
+      ) ||
+      expected.some((other) =>
+        other.key !== binding.key && sourceRowMatchesExpectedBinding(row, other)
+      )
+    ) return false;
+    matchedRows.add(index);
+  }
+  return matchedRows.size === missingKeys.size;
+}
 
 /** The planner's coarse key may collide for two distinct poster schedule rows.
  * Only the exact current source row and distinct, satisfied receipt bindings
@@ -151,8 +230,10 @@ export function hasExactSourceCollisionOrdinalProof(
 /**
  * A server-verified unique approval must remain bound to the current source
  * generation and an internally consistent occurrence receipt. An unsatisfied
- * sibling can be ignored only after its exact expected date is past in
- * Belgrade; the current child and any collision-ambiguous receipt still need
+ * sibling can be ignored only after its expected date is past on the
+ * Belgrade calendar and strictly before this event's date, with a distinct
+ * current source row proving its date and identity. The current child and
+ * any collision-ambiguous receipt still need
  * complete proof.
  * Public grounding repeats this proof so later source or topology drift hides
  * the event instead of trusting a stale approval marker.
@@ -249,8 +330,16 @@ export async function hasCompleteAutomaticUniqueSourceProof(
   if (
     (fields.sourceOccurrenceAmbiguousProvenance === true && missing.length > 0) ||
     missing.some((item) =>
-      !isValidPastBelgradeDate(item.date, currentBelgradeDay)
-    )
+      !isValidPastBelgradeDate(item.date, currentBelgradeDay) ||
+      item.date >= event.date
+    ) ||
+    (missing.length > 0 && !skippedPastBindingsMatchCurrentSourceRows(
+      source.analysisResultJson,
+      source.caption,
+      source.altText,
+      expected,
+      new Set(missing.map((item) => item.key)),
+    ))
   ) return false;
 
   for (const binding of expected.filter((item) => satisfiedKeys.has(item.key))) {
