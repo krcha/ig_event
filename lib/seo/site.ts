@@ -1,7 +1,8 @@
 export const SITE_NAME = "Event Zeka";
 export const SITE_ORIGIN = "https://eventzeka.com";
+export const SITE_INSTAGRAM_URL = "https://www.instagram.com/eventzeka/";
 export const SITE_DESCRIPTION =
-  "Find Belgrade events today: nightlife, concerts, DJ nights, exhibitions, theatre, film, festivals, and culture for locals and visitors.";
+  "Dešavanja u Beogradu danas i za vikend: pronađite žurke, koncerte, kvizove i izložbe. Izaberite datum i saznajte gde da izađete.";
 export const BELGRADE_TIME_ZONE = "Europe/Belgrade";
 
 export const HOME_FAQ_ITEMS = [
@@ -301,6 +302,7 @@ export function buildHomePageStructuredData(events: HomeStructuredEvent[] = []) 
         url: SITE_ORIGIN,
         description: SITE_DESCRIPTION,
         inLanguage: ["en-RS", "sr-Latn-RS"],
+        sameAs: [SITE_INSTAGRAM_URL],
         potentialAction: {
           "@type": "SearchAction",
           target: `${SITE_ORIGIN}/?q={search_term_string}`,

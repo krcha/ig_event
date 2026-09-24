@@ -4,7 +4,9 @@ import { isPlausibleConvexPublicId } from "../lib/convex/public-id.ts";
 import {
   SITE_NAME,
   SITE_ORIGIN,
+  SITE_INSTAGRAM_URL,
   buildEventStructuredData,
+  buildHomePageStructuredData,
   buildVenueStructuredData,
   serializeJsonLd,
 } from "../lib/seo/site.ts";
@@ -16,6 +18,7 @@ function read(path) {
 
 assert.equal(SITE_NAME, "Event Zeka");
 assert.equal(SITE_ORIGIN, "https://eventzeka.com");
+assert.deepEqual(buildHomePageStructuredData()["@graph"][0].sameAs, [SITE_INSTAGRAM_URL]);
 assert.equal(isPlausibleConvexPublicId("j578mw1v72asdhawga974smym989xcjj"), true);
 assert.equal(isPlausibleConvexPublicId("not-an-id"), false);
 
@@ -195,7 +198,8 @@ assert.ok(rootPage.includes("index: !hasSearchParams"));
 assert.ok(browsePage.includes("Belgrade events, nightlife & culture"));
 assert.equal((browsePage.match(/<h1/g) ?? []).length, 1, "The calendar should expose one H1.");
 assert.ok(browsePage.includes("Događaji u Beogradu"));
-assert.ok(browsePage.includes("Događaji u Beogradu za sve"));
+assert.ok(browsePage.includes("Šta se dešava u Beogradu danas?"));
+assert.ok(!browsePage.includes("Događaji u Beogradu za sve"));
 assert.ok(!browsePage.includes("Događaji u Beogradu za lokalce i posetioce"));
 assert.ok(!browsePage.includes("Tonight&apos;s picks"));
 assert.ok(!browsePage.includes("Belgrade venues"));

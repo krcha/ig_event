@@ -17,10 +17,10 @@ export async function generateMetadata({ searchParams }: RootPageProps): Promise
   const hasSearchParams = Object.values(resolvedSearchParams ?? {}).some((value) =>
     Array.isArray(value) ? value.length > 0 : Boolean(value),
   );
-  const title = "Belgrade Events Today: Nightlife & Culture";
+  const title = "Dešavanja u Beogradu: žurke i koncerti";
 
   return {
-    title,
+    title: `${title} | Event Zeka`,
     description: SITE_DESCRIPTION,
     alternates: {
       canonical: "/",
