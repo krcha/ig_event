@@ -46,8 +46,18 @@ assert.ok(
   "Mobile calendar should expose advanced search through a compact icon button.",
 );
 assert.ok(
-  calendarSource.includes("data-calendar-mobile-filter-button"),
-  "Mobile calendar should expose advanced filters through a compact icon button.",
+  calendarSource.includes('data-calendar-mobile-sort-button="true"') &&
+    calendarSource.includes('aria-label="Sort calendar events"') &&
+    calendarSource.includes('<ArrowUpDown className="h-3.5 w-3.5" />') &&
+    calendarSource.includes('data-calendar-mobile-sort-panel="true"'),
+  "Mobile calendar should expose sorting through a compact sort-arrows button.",
+);
+assert.ok(
+  calendarSource.includes('renderFilterFields("mobile-sort")') &&
+    calendarSource.includes('!isMobileSort ? (') &&
+    calendarSource.includes('(!showFilterFields || isMobileSort) && selectedVenue') &&
+    !calendarSource.includes('renderFilterFields("mobile-filter")'),
+  "Mobile sort popup should omit the venue filter while preserving an existing venue selection.",
 );
 assert.ok(
   calendarSource.includes('data-calendar-sort-select="true"') &&
@@ -80,7 +90,7 @@ assert.ok(
     !calendarSource.includes("All types") &&
     !calendarSource.includes("Weekend only") &&
     !calendarSource.includes("Focus"),
-  "Calendar filter popover should only expose venue/sort/search controls; event Type and Focus filters are removed.",
+  "Calendar controls should expose search, venue, and sorting without the removed Type or Focus filters.",
 );
 assert.ok(
   calendarSource.includes("compareAgendaEventsByTime") &&
@@ -125,7 +135,7 @@ assert.ok(
 );
 assert.ok(
   calendarSource.includes("<AutoApplyFilterForm") &&
-    calendarSource.includes("closeOnApply={isMobileFilter}") &&
+    calendarSource.includes("closeOnApply={isMobileSort}") &&
     autoApplyFilterFormSource.includes('data-calendar-auto-apply-filter-form="true"') &&
     autoApplyFilterFormSource.includes("router.replace") &&
     autoApplyFilterFormSource.includes('searchParams.get("hide")') &&

@@ -1,9 +1,9 @@
 import Link from "next/link";
 import {
+  ArrowUpDown,
   CalendarDays,
   ChevronLeft,
   ChevronRight,
-  Filter,
   ListMusic,
   Search,
   SlidersHorizontal,
@@ -663,7 +663,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
         }
       : null,
   ].filter(Boolean) as Array<{ href: string; key: string; label: string }>;
-  const activeFilterLabels = activeFilterControls.map((control) => control.label);
   const hasActiveFilters = activeFilterControls.length > 0;
   const statCards = [
     {
@@ -720,17 +719,17 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   }
 
   function renderFilterFields(
-    mode: "mobile" | "desktop" | "mobile-search" | "mobile-filter",
+    mode: "desktop" | "mobile-search" | "mobile-sort",
   ) {
     const isDesktop = mode === "desktop";
     const isMobileSearch = mode === "mobile-search";
-    const isMobileFilter = mode === "mobile-filter";
-    const showSearch = !isMobileFilter;
+    const isMobileSort = mode === "mobile-sort";
+    const showSearch = !isMobileSort;
     const showFilterFields = !isMobileSearch;
 
     return (
       <AutoApplyFilterForm
-        closeOnApply={isMobileFilter}
+        closeOnApply={isMobileSort}
         className={cn(
           "grid",
           isDesktop
@@ -746,7 +745,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
         {!showSearch && selectedSearchQuery ? (
           <input name="q" type="hidden" value={selectedSearchQuery} />
         ) : null}
-        {!showFilterFields && selectedVenue ? (
+        {(!showFilterFields || isMobileSort) && selectedVenue ? (
           <input name="venue" type="hidden" value={selectedVenue} />
         ) : null}
         {!showFilterFields && hiddenSort ? <input name="sort" type="hidden" value={hiddenSort} /> : null}
@@ -780,21 +779,23 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
 
         {showFilterFields ? (
           <>
-            <label className="field-label min-w-0">
-              Venue
-              <select
-                className={cn("input-control", !isDesktop && "h-10 rounded-xl")}
-                defaultValue={selectedVenue ?? ""}
-                name="venue"
-              >
-                <option value="">All venues</option>
-                {venues.map((venue) => (
-                  <option key={venue} value={venue}>
-                    {venue}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {!isMobileSort ? (
+              <label className="field-label min-w-0">
+                Venue
+                <select
+                  className={cn("input-control", !isDesktop && "h-10 rounded-xl")}
+                  defaultValue={selectedVenue ?? ""}
+                  name="venue"
+                >
+                  <option value="">All venues</option>
+                  {venues.map((venue) => (
+                    <option key={venue} value={venue}>
+                      {venue}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
 
             <label className="field-label min-w-0">
               Sort
@@ -853,29 +854,18 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
 
           <details className="group relative">
             <summary
-              aria-label="Filter calendar events"
+              aria-label="Sort calendar events"
               className={`${iconButtonClass} cursor-pointer list-none [&::-webkit-details-marker]:hidden`}
-              data-calendar-mobile-filter-button="true"
+              data-calendar-mobile-sort-button="true"
             >
-              <Filter className="h-3.5 w-3.5" />
-              <span className="sr-only">Filters</span>
-              {hasActiveFilters ? (
+              <ArrowUpDown className="h-3.5 w-3.5" />
+              <span className="sr-only">Sort</span>
+              {hiddenSort ? (
                 <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-primary ring-2 ring-background" />
               ) : null}
             </summary>
-            <div className={panelClass}>
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                  Filters
-                </p>
-                {hasActiveFilters ? (
-                  <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
-                    {activeFilterLabels.length} active
-                  </span>
-                ) : null}
-              </div>
-              {renderActiveFilterControls()}
-              {renderFilterFields("mobile-filter")}
+            <div className={panelClass} data-calendar-mobile-sort-panel="true">
+              {renderFilterFields("mobile-sort")}
             </div>
           </details>
         </div>
