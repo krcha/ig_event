@@ -154,7 +154,12 @@ async function assertVenueAliasesUnambiguous(
     }
   }
 
-  if (canonicalNameKey && proposedAliasKeys.has(canonicalNameKey)) {
+  if (
+    canonicalNameKey &&
+    options.aliases.some((alias) =>
+      normalizeVenueComparableText(alias) === canonicalNameKey
+    )
+  ) {
     throw new Error("A venue alias cannot duplicate its canonical name.");
   }
   if (options.aliases.length > MAX_VENUE_ALIASES) {
