@@ -293,6 +293,11 @@ export default defineSchema({
     venueLongitude: v.optional(v.number()),
     artists: v.array(v.string()),
     description: v.optional(v.string()),
+    reviewedSourceUpdate: v.optional(v.object({
+      text: v.string(),
+      sourceUrl: v.string(),
+      sourceEventId: v.id("events"),
+    })),
     imageUrl: v.optional(v.string()),
     imageStorageId: v.optional(v.id("_storage")),
     instagramPostUrl: v.optional(v.string()),

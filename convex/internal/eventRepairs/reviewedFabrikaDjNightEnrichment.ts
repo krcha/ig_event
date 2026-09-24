@@ -26,14 +26,14 @@ export type ReviewedFabrikaSourceVersion = {
   occurrenceUpdatedAt: number;
 };
 
-type SourceContext = {
+export type SourceContext = {
   link: Doc<"instagramEventSources">;
   receipt: Doc<"instagramSourceOccurrenceReceipts">;
   occurrence: Doc<"sourceOccurrences">;
   post: Doc<"scrapedPosts">;
 };
 
-async function loadExactSource(
+export async function loadExactSource(
   ctx: MutationCtx,
   event: Doc<"events">,
   expected: ReviewedFabrikaSourceVersion,

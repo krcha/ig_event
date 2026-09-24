@@ -55,6 +55,7 @@
     "qa:occurrence-merge-safety": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-occurrence-merge-safety.mjs",
     "qa:reviewed-fold-safety": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-reviewed-fold-safety.mjs",
     "qa:reviewed-fabrika-dj-night-enrichment": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-reviewed-fabrika-dj-night-enrichment.mjs",
+    "qa:reviewed-fabrika-program-enrichment": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-reviewed-fabrika-program-enrichment.mjs",
     "qa:cross-post-promotion-coalescing": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-cross-post-promotion-coalescing.mjs",
     "qa:cross-post-campaign-automerge": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-approved-cross-post-campaign-automerge.mjs",
     "qa:ingestion-triage": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-ingestion-run-triage.mjs",

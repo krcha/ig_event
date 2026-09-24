@@ -14,6 +14,7 @@ export function projectPublicEvent(event: Doc<"events">, hasPublicLinkedVenue: b
     dateEvidenceSource: publicEvent.dateEvidenceSource,
     dateEvidenceText: publicEvent.dateEvidenceText,
     description: publicEvent.description,
+    reviewedSourceUpdate: publicEvent.reviewedSourceUpdate,
     eventType: publicEvent.eventType,
     imageStorageId: publicEvent.imageStorageId,
     imageUrl: publicEvent.imageUrl,

@@ -29,6 +29,10 @@ import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
 import { VenueWeeklyHours } from "@/components/venues/venue-weekly-hours";
 import { loadPublicEventDetailData } from "@/lib/events/public-event-detail-data";
 import {
+  getPublicReviewedSourceUpdate,
+  type ReviewedSourceUpdate,
+} from "@/lib/events/reviewed-source-update";
+import {
   buildDiscoverImageUrl,
   hasDiscoverImageSource,
 } from "@/lib/discover/discover-image-source";
@@ -76,6 +80,7 @@ type EventRecord = {
   venueLongitude?: number;
   artists: string[];
   description?: string;
+  reviewedSourceUpdate?: ReviewedSourceUpdate;
   sourceCaption?: string;
   imageUrl?: string;
   imageStorageId?: string;
@@ -368,6 +373,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
   const eventTime =
     event.displayTimeLabel ?? getDisplayEventTime(event.time) ?? UNKNOWN_EVENT_TIME_LABEL;
   const whatToKnowText = event.sourceCaption?.trim() || event.description?.trim() || "";
+  const reviewedSourceUpdate = getPublicReviewedSourceUpdate(event);
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
   const venueHref = event.venueId ? `/venues/${event.venueId}` : null;
   const calendarHref = buildCalendarHref(event);
@@ -462,19 +468,35 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                   </div>
                 </div>
 
-                {whatToKnowText ? (
+                {whatToKnowText || reviewedSourceUpdate ? (
                   <section className="rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3">
                     <p className="text-sm font-semibold text-foreground">What to know</p>
-                    <ReadMoreText
-                      buttonClassName="text-sm leading-6 text-primary hover:text-primary/85"
-                      className="mt-2"
-                      collapsedButtonClassName="bg-[#0d0f16]"
-                      lessLabel="show less"
-                      moreLabel="read more"
-                      paragraphProps={{ "data-event-description": "true" }}
-                      text={whatToKnowText}
-                      textClassName="text-sm leading-6 text-muted-foreground"
-                    />
+                    {reviewedSourceUpdate ? (
+                      <p className="mt-2 text-sm leading-6 text-muted-foreground" data-reviewed-source-update="true">
+                        <span className="font-semibold text-foreground">Update:</span>{" "}
+                        {reviewedSourceUpdate.text}{" "}
+                        <a
+                          className="font-semibold text-primary hover:text-primary/85"
+                          href={reviewedSourceUpdate.sourceUrl}
+                          rel="noopener noreferrer"
+                          target="_blank"
+                        >
+                          View post
+                        </a>
+                      </p>
+                    ) : null}
+                    {whatToKnowText ? (
+                      <ReadMoreText
+                        buttonClassName="text-sm leading-6 text-primary hover:text-primary/85"
+                        className="mt-2"
+                        collapsedButtonClassName="bg-[#0d0f16]"
+                        lessLabel="show less"
+                        moreLabel="read more"
+                        paragraphProps={{ "data-event-description": "true" }}
+                        text={whatToKnowText}
+                        textClassName="text-sm leading-6 text-muted-foreground"
+                      />
+                    ) : null}
                   </section>
                 ) : null}
 

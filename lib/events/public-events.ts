@@ -84,6 +84,11 @@ export type PublicEvent = {
   sourcePostedAt?: string;
   sourceCaption?: string;
   description?: string;
+  reviewedSourceUpdate?: {
+    text: string;
+    sourceUrl: string;
+    sourceEventId: string;
+  };
   imageUrl?: string;
   imageStorageId?: string;
   instagramHandle?: string;

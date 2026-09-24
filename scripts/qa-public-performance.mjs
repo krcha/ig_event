@@ -7,6 +7,7 @@ import {
   paginatePublicVenueDirectory,
 } from "../lib/venues/public-venue-directory-pagination.ts";
 import { loadPublicEventDetailData } from "../lib/events/public-event-detail-data.ts";
+import { getPublicReviewedSourceUpdate } from "../lib/events/reviewed-source-update.ts";
 
 function read(path) {
   return readFileSync(path, "utf8");
@@ -120,6 +121,38 @@ assert.match(
   /const whatToKnowText = event\.sourceCaption\?\.trim\(\) \|\| event\.description\?\.trim\(\) \|\| "";/,
   "Event detail What to know text should prefer the exact scraped Instagram caption over generated descriptions.",
 );
+
+const originalInstagramPostUrl = "https://www.instagram.com/p/Ddi7AbOtCTO/";
+const directInstagramPostUrl = "https://www.instagram.com/p/Ddo4DGsNlYf/";
+const reviewedEvent = {
+  _id: "approved-event",
+  instagramPostUrl: originalInstagramPostUrl,
+  reviewedSourceUpdate: {
+    text: "  Verified lineup\nfrom the venue.  ",
+    sourceUrl: directInstagramPostUrl,
+    sourceEventId: "direct-source-event",
+  },
+};
+assert.deepEqual(getPublicReviewedSourceUpdate(reviewedEvent), {
+  text: "Verified lineup from the venue.",
+  sourceUrl: directInstagramPostUrl,
+});
+for (const invalidUpdate of [
+  { sourceUrl: "javascript:alert(1)" },
+  { sourceUrl: "https://instagram.com.evil.test/p/Ddo4DGsNlYf/" },
+  { sourceUrl: originalInstagramPostUrl },
+  { sourceEventId: reviewedEvent._id },
+  { text: " ".repeat(20) },
+]) {
+  assert.equal(
+    getPublicReviewedSourceUpdate({
+      ...reviewedEvent,
+      reviewedSourceUpdate: { ...reviewedEvent.reviewedSourceUpdate, ...invalidUpdate },
+    }),
+    null,
+    "A reviewed update must have distinct, concise content and a separate Instagram source.",
+  );
+}
 
 assertDoesNotInclude(
   publicEventsSource,
