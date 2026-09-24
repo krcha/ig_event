@@ -173,7 +173,7 @@ function VenueDirectoryCard({
 }) {
   return (
     <article
-      className="rounded-[1rem] border border-border/75 bg-white/[0.025] p-4 transition hover:border-primary/35 hover:bg-white/[0.045]"
+      className="min-w-0 rounded-[1rem] border border-border/75 bg-white/[0.025] p-4 transition hover:border-primary/35 hover:bg-white/[0.045]"
       style={{ containIntrinsicSize: "310px", contentVisibility: "auto" }}
     >
       <div className="flex items-start justify-between gap-3">
@@ -269,17 +269,18 @@ export default async function VenuesPage({ searchParams }: VenuesPageProps) {
       <JsonLd
         data={buildVenueDirectoryStructuredData(visibleVenues, currentPage, firstItemNumber)}
       />
-      <section className="hero-panel px-4 py-6 sm:px-6 lg:px-8">
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+      <section className="hero-panel px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
+        <div className="flex flex-col gap-3 sm:gap-5 lg:flex-row lg:items-end lg:justify-between">
           <div className="min-w-0">
-            <span className="inline-flex h-11 w-11 items-center justify-center rounded-[1rem] bg-primary text-primary-foreground">
+            <span className="hidden h-11 w-11 items-center justify-center rounded-[1rem] bg-primary text-primary-foreground sm:inline-flex">
               <Warehouse className="h-5 w-5" />
             </span>
-            <p className="section-kicker mt-4">Venues</p>
-            <h1 className="mt-2 text-3xl font-semibold leading-tight text-foreground sm:text-5xl">
-              Belgrade venue guide
+            <p className="section-kicker mt-4 hidden sm:block">Venues</p>
+            <h1 className="whitespace-nowrap text-2xl font-semibold leading-tight text-foreground sm:mt-2 sm:whitespace-normal sm:text-5xl">
+              <span className="sm:hidden">Belgrade venues</span>
+              <span className="hidden sm:inline">Belgrade venue guide</span>
             </h1>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
+            <p className="mt-3 hidden max-w-2xl text-sm leading-6 text-muted-foreground sm:block sm:text-base">
               Clubs, bars, galleries, theatres, concert spaces, and late-night rooms for locals and
               visitors. Vodič kroz beogradske klubove i kulturne prostore sa aktuelnim događajima.
             </p>
@@ -352,7 +353,7 @@ export default async function VenuesPage({ searchParams }: VenuesPageProps) {
               Page {currentPage} of {totalPages}
             </p>
           </div>
-          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <section className="grid grid-cols-[minmax(0,1fr)] gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {visibleVenues.map((venue) => (
               <VenueDirectoryCard authEnabled={authEnabled} key={venue._id} venue={venue} />
             ))}

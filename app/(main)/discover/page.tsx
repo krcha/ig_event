@@ -2,14 +2,8 @@ import type { Metadata } from "next";
 import {
   type DiscoverDateTab,
   DiscoverFeed,
-  type DiscoverFeedEvent,
 } from "@/components/discover/discover-feed";
-import {
-  loadPublicCalendarEventsWindow,
-  type PublicEvent,
-} from "@/lib/events/public-events";
-import { enrichDiscoverEventsWithApifyPosts } from "@/lib/discover/apify-posts";
-import { getDiscoverDisplayImageUrl } from "@/lib/discover/discover-image-source";
+import { loadDiscoverEventsPage } from "@/lib/discover/feed-page";
 import {
   addDaysToDateKey,
   getNightlifeDefaultDateKey,
@@ -25,8 +19,6 @@ type DiscoverPageProps = {
     page?: string | string[];
   }>;
 };
-
-const DISCOVER_PAGE_SIZE = 9;
 
 export async function generateMetadata({ searchParams }: DiscoverPageProps): Promise<Metadata> {
   const resolvedSearchParams = await searchParams;
@@ -74,63 +66,6 @@ export async function generateMetadata({ searchParams }: DiscoverPageProps): Pro
   };
 }
 
-function mapPublicEvent(event: PublicEvent): DiscoverFeedEvent {
-  const imageUrl = getDiscoverDisplayImageUrl(event, null);
-  return {
-    _id: event._id,
-    artists: event.artists,
-    date: event.date,
-    eventType: event.eventType,
-    ...(imageUrl ? { imageUrl } : {}),
-    ...(event.imageStorageId ? { imageStorageId: event.imageStorageId } : {}),
-    ...(event.instagramHandle ? { instagramHandle: event.instagramHandle } : {}),
-    ...(event.instagramPostId ? { instagramPostId: event.instagramPostId } : {}),
-    ...(event.instagramPostUrl ? { instagramPostUrl: event.instagramPostUrl } : {}),
-    ...(event.sourceCaption ? { sourceCaption: event.sourceCaption } : {}),
-    ...(event.sourcePostedAt ? { sourcePostedAt: event.sourcePostedAt } : {}),
-    ...(event.ticketPrice ? { ticketPrice: event.ticketPrice } : {}),
-    ...(event.time ? { time: event.time } : {}),
-    title: event.title,
-    venue: event.venue,
-    ...(event.venueId ? { venueId: event.venueId } : {}),
-  };
-}
-
-async function loadDiscoverEvents(date: string, requestedPage: number): Promise<{
-  currentPage: number;
-  error?: string;
-  events: DiscoverFeedEvent[];
-  firstEventNumber: number;
-  lastEventNumber: number;
-  totalEvents: number;
-  totalPages: number;
-}> {
-  const beforeDate = addDaysToDateKey(date, 1);
-  const result = await loadPublicCalendarEventsWindow({
-    beforeDate,
-    fromDate: date,
-  });
-
-  const matchingEvents = result.events
-    .filter((event) => event.date === date)
-    .map(mapPublicEvent);
-  const totalEvents = matchingEvents.length;
-  const totalPages = Math.max(1, Math.ceil(totalEvents / DISCOVER_PAGE_SIZE));
-  const currentPage = Math.min(requestedPage, totalPages);
-  const startIndex = (currentPage - 1) * DISCOVER_PAGE_SIZE;
-  const pageEvents = matchingEvents.slice(startIndex, startIndex + DISCOVER_PAGE_SIZE);
-
-  return {
-    currentPage,
-    ...(result.error ? { error: result.error } : {}),
-    events: await enrichDiscoverEventsWithApifyPosts(pageEvents),
-    firstEventNumber: pageEvents.length > 0 ? startIndex + 1 : 0,
-    lastEventNumber: startIndex + pageEvents.length,
-    totalEvents,
-    totalPages,
-  };
-}
-
 function formatDiscoverSubline(dateKey: string): string {
   const date = parseDateKeyToUtcNoon(dateKey);
   if (!date) {
@@ -156,7 +91,10 @@ function normalizeRequestedDate(
 ): string {
   const candidate = Array.isArray(value) ? value[0] : value;
   const allowedDates = getDateTabDates(today);
-  return candidate && allowedDates.includes(candidate) && parseDateKeyToUtcNoon(candidate)
+  // Keep an open tab's old date available after the 07:00 nightlife-day rollover.
+  return candidate &&
+    (allowedDates.includes(candidate) || candidate === addDaysToDateKey(today, -2)) &&
+    parseDateKeyToUtcNoon(candidate)
     ? candidate
     : today;
 }
@@ -173,7 +111,7 @@ function buildDiscoverPageHref(options: {
   today: string;
 }): string {
   const query = new URLSearchParams();
-  if (options.date !== options.today) {
+  if (options.date !== options.today || options.page > 1) {
     query.set("date", options.date);
   }
   if (options.page > 1) {
@@ -185,11 +123,17 @@ function buildDiscoverPageHref(options: {
 
 function buildDateTabs(today: string, selectedDate: string): DiscoverDateTab[] {
   const [yesterday, current, tomorrow] = getDateTabDates(today);
-  const tabs = [
-    { label: "Yesterday", date: yesterday },
-    { label: "Today", date: current },
-    { label: "Tomorrow", date: tomorrow },
-  ];
+  const tabs = selectedDate === addDaysToDateKey(today, -2)
+    ? [
+        { label: "Selected", date: selectedDate },
+        { label: "Yesterday", date: yesterday },
+        { label: "Today", date: current },
+      ]
+    : [
+        { label: "Yesterday", date: yesterday },
+        { label: "Today", date: current },
+        { label: "Tomorrow", date: tomorrow },
+      ];
 
   return tabs.map((tab) => ({
     active: tab.date === selectedDate,
@@ -223,9 +167,10 @@ export default async function DiscoverPage({ searchParams }: DiscoverPageProps) 
     events,
     firstEventNumber,
     lastEventNumber,
+    revision,
     totalEvents,
     totalPages,
-  } = await loadDiscoverEvents(selectedDate, requestedPage);
+  } = await loadDiscoverEventsPage(selectedDate, requestedPage);
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
   return (
@@ -234,6 +179,9 @@ export default async function DiscoverPage({ searchParams }: DiscoverPageProps) 
       dateTabs={buildDateTabs(today, selectedDate)}
       error={error}
       events={events}
+      key={`${selectedDate}:${currentPage}:${revision}`}
+      revision={revision}
+      selectedDate={selectedDate}
       pagination={{
         currentPage,
         firstEventNumber,

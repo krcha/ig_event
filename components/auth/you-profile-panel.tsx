@@ -69,15 +69,16 @@ function SignInPromptCard() {
     <section className="hero-panel px-4 py-5 sm:px-6 sm:py-7">
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.42fr)] lg:items-center">
         <div className="space-y-3">
-          <span className="app-chip border-primary/25 bg-primary/[0.1] text-primary">
+          <span className="app-chip hidden border-primary/25 bg-primary/[0.1] text-primary sm:inline-flex">
             <Sparkles className="h-3.5 w-3.5" />
             Your nights
           </span>
           <div className="space-y-2">
-            <h1 className="text-2xl font-semibold tracking-[-0.045em] sm:text-4xl">
-              Sign in when you want to save.
+            <h1 className="whitespace-nowrap text-2xl font-semibold tracking-[-0.045em] sm:whitespace-normal sm:text-4xl">
+              <span className="sm:hidden">Sign in to save</span>
+              <span className="hidden sm:inline">Sign in when you want to save.</span>
             </h1>
-            <p className="max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
+            <p className="hidden max-w-2xl text-sm leading-6 text-muted-foreground sm:block sm:text-base">
               Browsing stays open to everyone. Use your account for saved events, follows, and
               personal planning features.
             </p>

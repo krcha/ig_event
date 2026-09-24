@@ -32,6 +32,8 @@ function assertDoesNotInclude(source, value, message) {
 }
 
 const discoverPageSource = read("app/(main)/discover/page.tsx");
+const discoverPageLoaderSource = read("lib/discover/feed-page.ts");
+const discoverPostsRouteSource = read("app/api/discover/posts/route.ts");
 const discoverErrorSource = read("app/(main)/discover/error.tsx");
 const discoverFeedSource = read("components/discover/discover-feed.tsx");
 const discoverImageSourceSource = read("lib/discover/discover-image-source.ts");
@@ -116,12 +118,12 @@ assert.equal(
 );
 
 assertIncludes(
-  discoverPageSource,
+  discoverPageLoaderSource,
   "enrichDiscoverEventsWithApifyPosts",
-  "Discover page should enrich events from stored Apify scraped posts before rendering.",
+  "Discover batches should enrich events from stored Apify scraped posts before rendering.",
 );
 assertIncludes(
-  discoverPageSource,
+  discoverPageLoaderSource,
   "loadPublicCalendarEventsWindow",
   "Discover should use the lean public calendar window query so high-volume nights do not break the tab.",
 );
@@ -131,19 +133,69 @@ assertIncludes(
   "Discover should use the nightlife business date so 00:00-06:59 defaults to the previous night.",
 );
 assertIncludes(
-  discoverPageSource,
-  "const DISCOVER_PAGE_SIZE = 9",
-  "Discover should render a small first batch instead of hydrating a high-volume night at once.",
+  discoverPageLoaderSource,
+  "DISCOVER_PAGE_SIZE = 9",
+  "Discover should load a small batch instead of hydrating a high-volume night at once.",
+);
+assertIncludes(
+  discoverPageLoaderSource,
+  "result.events.slice(startIndex, startIndex + DISCOVER_PAGE_SIZE)",
+  "Discover should slice each requested batch before Apify post enrichment.",
+);
+assertIncludes(
+  discoverPageLoaderSource,
+  "getDayRevision(result.events) !== revision",
+  "Discover should reject a changed day ordering rather than skip newly approved posts.",
 );
 assertIncludes(
   discoverPageSource,
-  "matchingEvents.slice(startIndex, startIndex + DISCOVER_PAGE_SIZE)",
-  "Discover should slice the requested batch before Apify post enrichment.",
+  "candidate === addDaysToDateKey(today, -2)",
+  "Discover should keep the selected day stable after the nightlife-day rollover.",
+);
+assertIncludes(
+  discoverPageSource,
+  '{ label: "Selected", date: selectedDate }',
+  "Discover should keep the older selected day visible in the date tabs after rollover.",
 );
 assertIncludes(
   discoverFeedSource,
-  'data-discover-pagination="bounded"',
-  "Discover should expose bounded previous/more controls for incremental loading.",
+  'data-discover-pagination="infinite"',
+  "Discover should expose a sentinel for incremental loading.",
+);
+assertIncludes(
+  discoverFeedSource,
+  "new IntersectionObserver",
+  "Discover should fetch the next batch as the reader approaches the end of the feed.",
+);
+assertIncludes(
+  discoverFeedSource,
+  "new Set(previous.map((event) => event._id))",
+  "Discover should deduplicate events when the approved day changes between batches.",
+);
+assertIncludes(
+  discoverFeedSource,
+  'fetch(`/api/discover/posts?${query}`',
+  "Discover should request later posts without reloading the page.",
+);
+assertIncludes(
+  discoverPostsRouteSource,
+  "isPlausibleConvexPublicId(after)",
+  "Discover batch requests should validate the cursor before querying.",
+);
+assertIncludes(
+  discoverPostsRouteSource,
+  "batch.cursorMissing || batch.feedChanged",
+  "Discover should signal that the reader must restart when the day changes.",
+);
+assertIncludes(
+  discoverFeedSource,
+  "Reload this day",
+  "Discover should provide a working restart action after a changed feed response.",
+);
+assertIncludes(
+  discoverPostsRouteSource,
+  '"Cache-Control": "no-store, max-age=0"',
+  "Discover batches should avoid stale browser and proxy caches.",
 );
 assertIncludes(
   discoverFeedSource,
@@ -151,19 +203,24 @@ assertIncludes(
   "Discover cards should skip off-screen rendering work.",
 );
 assertIncludes(
+  discoverFeedSource,
+  'loading="lazy"',
+  "Discover should lazy-load off-screen post images.",
+);
+assertIncludes(
   discoverErrorSource,
   'href="/discover"',
   "Discover should provide a clean document reload when a client route error occurs.",
 );
 assertIncludes(
-  discoverPageSource,
+  discoverPageLoaderSource,
   "instagramPostId",
-  "Discover page should carry Instagram post IDs for scraped-post matching.",
+  "Discover batches should carry Instagram post IDs for scraped-post matching.",
 );
 assertDoesNotInclude(
-  discoverPageSource,
+  discoverPageLoaderSource,
   "description: event.description",
-  "Discover page should not pass generated event descriptions as post captions.",
+  "Discover batches should not pass generated event descriptions as post captions.",
 );
 
 assertIncludes(

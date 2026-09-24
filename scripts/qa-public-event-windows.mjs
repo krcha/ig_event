@@ -12,7 +12,7 @@ const publicEventsSource = read("lib/events/public-events.ts");
 const publicVenuePagesSource = read("lib/venues/public-venue-pages.ts");
 const eventDetailSource = read("app/(main)/events/[eventId]/page.tsx");
 const savedPageSource = read("app/(main)/saved/page.tsx");
-const discoverPageSource = read("app/(main)/discover/page.tsx");
+const discoverPageLoaderSource = read("lib/discover/feed-page.ts");
 const packageJson = JSON.parse(read("package.json"));
 const releaseCheckSource = read("scripts/release-check.mjs");
 
@@ -117,8 +117,8 @@ assert.match(
   "Saved page should use an explicit 90-day public event window.",
 );
 assert.match(
-  discoverPageSource,
-  /beforeDate,\s*[\s\S]*fromDate: date/,
+  discoverPageLoaderSource,
+  /beforeDate: addDaysToDateKey\(date, 1\),\s*fromDate: date/,
   "Discover should load an explicitly bounded one-day event window.",
 );
 assert.ok(

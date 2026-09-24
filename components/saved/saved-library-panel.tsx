@@ -328,15 +328,16 @@ function SignInPromptCard() {
     <section className="hero-panel px-4 py-5 sm:px-6 sm:py-7">
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(15rem,0.36fr)] lg:items-center">
         <div className="space-y-3">
-          <span className="app-chip border-primary/25 bg-primary/[0.1] text-primary">
+          <span className="app-chip hidden border-primary/25 bg-primary/[0.1] text-primary sm:inline-flex">
             <Bookmark className="h-3.5 w-3.5" />
             Saved
           </span>
           <div className="space-y-2">
-            <h1 className="text-2xl font-semibold tracking-[-0.045em] sm:text-4xl">
-              Sign in to keep your plans.
+            <h1 className="whitespace-nowrap text-2xl font-semibold tracking-[-0.045em] sm:whitespace-normal sm:text-4xl">
+              <span className="sm:hidden">Save your plans</span>
+              <span className="hidden sm:inline">Sign in to keep your plans.</span>
             </h1>
-            <p className="max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
+            <p className="hidden max-w-2xl text-sm leading-6 text-muted-foreground sm:block sm:text-base">
               Browsing stays open. Saved events and favourite places appear here once you use a
               real Clerk account.
             </p>
@@ -581,14 +582,15 @@ export function SavedLibraryPanel({
       <header className="hero-panel px-4 py-4 sm:px-6 sm:py-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <span className="app-chip border-primary/25 bg-primary/[0.1] text-primary">
+            <span className="app-chip hidden border-primary/25 bg-primary/[0.1] text-primary sm:inline-flex">
               <Bookmark className="h-3.5 w-3.5" />
               Saved
             </span>
-            <h1 className="mt-3 text-2xl font-semibold tracking-[-0.045em] sm:text-4xl">
-              Your kept events and places
+            <h1 className="whitespace-nowrap text-2xl font-semibold tracking-[-0.045em] sm:mt-3 sm:whitespace-normal sm:text-4xl">
+              <span className="sm:hidden">Saved</span>
+              <span className="hidden sm:inline">Your kept events and places</span>
             </h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+            <p className="mt-2 hidden max-w-2xl text-sm leading-6 text-muted-foreground sm:block">
               Compact list of the events you bookmarked and venues you followed.
             </p>
           </div>

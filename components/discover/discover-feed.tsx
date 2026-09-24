@@ -1,5 +1,8 @@
+"use client";
+
 import Image from "next/image";
 import Link from "next/link";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ExternalLink, Instagram, Search, Sparkles } from "lucide-react";
 import {
   EventCategoryPill,
@@ -53,7 +56,16 @@ type DiscoverFeedProps = {
   error?: string;
   events: DiscoverFeedEvent[];
   pagination: DiscoverPagination;
+  revision: string;
+  selectedDate: string;
   subline: string;
+};
+
+type DiscoverBatchResponse = {
+  date?: string;
+  events?: DiscoverFeedEvent[];
+  hasMore?: boolean;
+  nextCursor?: string | null;
 };
 
 function getResolvedTime(event: DiscoverFeedEvent): {
@@ -205,6 +217,7 @@ function DiscoverPost({
             alt={event.title}
             className="object-cover"
             fill
+            loading="lazy"
             sizes="(max-width: 768px) 100vw, (max-width: 1280px) 50vw, 33vw"
             src={imageUrl}
             unoptimized
@@ -314,9 +327,86 @@ export function DiscoverFeed({
   error,
   events,
   pagination,
+  revision,
+  selectedDate,
   subline,
 }: DiscoverFeedProps) {
-  const hasEvents = events.length > 0;
+  const [visibleEvents, setVisibleEvents] = useState(events);
+  const [nextCursor, setNextCursor] = useState<string | null>(events.at(-1)?._id ?? null);
+  const [hasMore, setHasMore] = useState(Boolean(pagination.nextHref && events.length > 0));
+  const [nextPage, setNextPage] = useState(pagination.currentPage + 1);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<{ message: string; reload: boolean } | null>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const inFlight = useRef(false);
+  const hasEvents = visibleEvents.length > 0;
+  const fallbackHref = `/discover?date=${encodeURIComponent(selectedDate)}&page=${nextPage}`;
+  const reloadHref = `/discover?date=${encodeURIComponent(selectedDate)}`;
+
+  const loadMore = useCallback(async () => {
+    if (!hasMore || !nextCursor || inFlight.current) {
+      return;
+    }
+
+    inFlight.current = true;
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const query = new URLSearchParams({ date: selectedDate, after: nextCursor, revision });
+      const response = await fetch(`/api/discover/posts?${query}`, { cache: "no-store" });
+      const batch = (await response.json()) as DiscoverBatchResponse;
+      if (!response.ok) {
+        if (response.status === 409) {
+          setLoadError({ message: "The feed changed. Reload this day to continue.", reload: true });
+          return;
+        }
+        throw new Error("Could not load more posts.");
+      }
+      if (
+        batch.date !== selectedDate ||
+        !Array.isArray(batch.events) ||
+        typeof batch.hasMore !== "boolean" ||
+        (batch.hasMore && batch.events.length === 0) ||
+        (batch.hasMore && (!batch.nextCursor || batch.nextCursor === nextCursor))
+      ) {
+        throw new Error("Could not load more posts.");
+      }
+
+      const incomingEvents = batch.events;
+      setVisibleEvents((previous) => {
+        const seen = new Set(previous.map((event) => event._id));
+        return [...previous, ...incomingEvents.filter((event) => !seen.has(event._id))];
+      });
+      setNextCursor(batch.nextCursor ?? null);
+      setHasMore(batch.hasMore);
+      setNextPage((page) => page + 1);
+    } catch (caught) {
+      setLoadError({
+        message: caught instanceof Error ? caught.message : "Could not load more posts.",
+        reload: false,
+      });
+    } finally {
+      inFlight.current = false;
+      setLoading(false);
+    }
+  }, [hasMore, nextCursor, revision, selectedDate]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel || !hasMore || loadError || typeof IntersectionObserver === "undefined") {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) {
+          void loadMore();
+        }
+      },
+      { rootMargin: "600px 0px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, loadError, loadMore]);
 
   return (
     <main className="app-page app-page-wide gap-3 sm:gap-4" data-discover-feed="instagram-scroll">
@@ -324,23 +414,23 @@ export function DiscoverFeed({
         <header className="mx-auto w-full max-w-[38rem] px-1 py-1 sm:px-0 lg:max-w-none">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="section-kicker">Belgrade feed</p>
-              <h1 className="mt-2 text-3xl font-semibold leading-none tracking-tight text-foreground sm:text-5xl">
+              <p className="section-kicker hidden sm:block">Belgrade feed</p>
+              <h1 className="whitespace-nowrap text-[clamp(1.25rem,6vw,1.875rem)] font-semibold leading-none tracking-tight text-foreground sm:mt-2 sm:whitespace-normal sm:text-5xl">
                 Discover Belgrade
               </h1>
               <p className="mt-2 text-sm font-medium text-muted-foreground">{subline}</p>
-              <p className="mt-1.5 max-w-xl text-sm leading-6 text-muted-foreground">
+              <p className="mt-1.5 hidden max-w-xl text-sm leading-6 text-muted-foreground sm:block">
                 Tonight&apos;s approved nightlife, concerts, DJ sets, and culture picks for locals and visitors.
               </p>
             </div>
             <div className="flex flex-none items-center gap-2">
-              <a
+              <Link
                 aria-label="Search events"
                 className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.05] text-muted-foreground ring-1 ring-white/[0.08] hover:bg-primary/[0.16] hover:text-primary"
                 href="/"
               >
                 <Search className="h-4 w-4" />
-              </a>
+              </Link>
             </div>
           </div>
           <nav
@@ -372,34 +462,41 @@ export function DiscoverFeed({
           className="grid gap-3 sm:gap-4 lg:grid-cols-2 2xl:grid-cols-3"
           data-discover-post-grid="true"
         >
-          {events.map((event) => (
+          {visibleEvents.map((event) => (
             <DiscoverPost authEnabled={authEnabled} event={event} key={event._id} />
           ))}
         </section>
-        {hasEvents && pagination.totalPages > 1 ? (
-          <nav
-            aria-label="Discover feed pages"
-            className="mx-auto flex w-full max-w-[38rem] items-center justify-between gap-3 rounded-[1rem] border border-border/75 bg-card/70 px-3 py-2.5 lg:max-w-none"
-            data-discover-pagination="bounded"
+        {hasMore ? (
+          <div
+            className="mx-auto flex w-full max-w-[38rem] flex-col items-center gap-2 py-3 lg:max-w-none"
+            data-discover-pagination="infinite"
+            ref={sentinelRef}
           >
-            {pagination.previousHref ? (
-              <a className="button-secondary min-h-10 px-4 py-0" href={pagination.previousHref}>
-                Previous
-              </a>
+            {loading ? (
+              <p aria-live="polite" className="text-xs text-muted-foreground">Loading more posts…</p>
+            ) : loadError ? (
+              <div className="flex flex-col items-center gap-2 text-center">
+                <p aria-live="polite" className="text-xs text-muted-foreground">{loadError.message}</p>
+                {loadError.reload ? (
+                  <a className="button-secondary min-h-10 px-4 py-0" href={reloadHref}>Reload this day</a>
+                ) : (
+                  <>
+                    <button className="button-secondary min-h-10 px-4 py-0" onClick={() => void loadMore()} type="button">
+                      Retry
+                    </button>
+                    <a className="text-xs text-primary underline" href={fallbackHref}>Open next page</a>
+                  </>
+                )}
+              </div>
             ) : (
-              <span />
-            )}
-            <span className="text-center text-xs font-medium text-muted-foreground">
-              {pagination.firstEventNumber}–{pagination.lastEventNumber} of {pagination.totalEvents}
-            </span>
-            {pagination.nextHref ? (
-              <a className="button-primary min-h-10 px-4 py-0" href={pagination.nextHref}>
+              <a className="button-secondary min-h-10 px-4 py-0" href={fallbackHref}>
                 More picks
               </a>
-            ) : (
-              <span />
             )}
-          </nav>
+          </div>
+        ) : null}
+        {pagination.previousHref ? (
+          <a className="sr-only focus:not-sr-only" href={pagination.previousHref}>Previous page</a>
         ) : null}
         {!hasEvents || error ? <EmptyDiscoverState error={error} /> : null}
       </div>

@@ -339,7 +339,7 @@ const schemaSource = read("convex/schema.ts");
 const routeSource = read("app/api/discover/images/[eventId]/route.ts");
 const eventPageSource = read("app/(main)/events/[eventId]/page.tsx");
 const venuePageSource = read("app/(main)/venues/[venueId]/page.tsx");
-const discoverPageSource = read("app/(main)/discover/page.tsx");
+const discoverPageLoaderSource = read("lib/discover/feed-page.ts");
 const discoverFeedSource = read("components/discover/discover-feed.tsx");
 const dashboardSource = read("components/admin/scraper-dashboard.tsx");
 const moderationDashboardSource = read("components/admin/moderation-dashboard.tsx");
@@ -393,7 +393,7 @@ assert.match(moderationDashboardSource, /src=\{event\.imageUrl\}[\s\S]*unoptimiz
 assert.match(schemaSource, /\.index\("by_image_storage_id", \["imageStorageId"\]\)/);
 assert.match(maintenanceSource, /cleanupOrphanedMediaAssetsUntilDone/);
 assert.match(cronsSource, /"cleanup orphaned media assets"/);
-for (const source of [eventPageSource, venuePageSource, discoverPageSource]) {
+for (const source of [eventPageSource, venuePageSource, discoverPageLoaderSource]) {
   assert.match(source, /buildDiscoverImageUrl|getDiscoverDisplayImageUrl/);
 }
 assert.match(eventPageSource, /className="object-contain"/);
