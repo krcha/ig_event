@@ -11,6 +11,8 @@ import {
   hasUnverifiedRepeatedTitleCaptionContradiction,
 } from "../lib/events/event-update-precondition.ts";
 import { isCanonicallyGroundedApprovedEvent } from "../convex/publicEventGrounding.ts";
+import { adaptInstagramScrapedPostToSourceDocument } from "../lib/domain/source-documents.ts";
+import { buildInstagramSourceOccurrenceFingerprint } from "../lib/domain/occurrences/source-fingerprint.ts";
 
 const sourceUrl = "https://www.instagram.com/p/QAEXACT1/";
 const event = {
@@ -182,6 +184,155 @@ assert.equal(
   false,
   "The policy marker cannot replace the current persisted source document.",
 );
+
+const proofSource = {
+  _id: "qa-source-1",
+  handle: "qa_hall",
+  username: "qa_hall",
+  postId: event.instagramPostId,
+  instagramPostUrl: sourceUrl,
+  caption: event.sourceCaption,
+  postedAt: "2035-01-01T12:00:00.000Z",
+  sourceRevision: 1,
+  analysisRevision: 1,
+  analysisContractVersion: "event_evidence_v2",
+  analysisIsEvent: true,
+  analysisModel: "gpt-5-mini-2025-08-07",
+  analysisResultJson: event.rawExtractionJson,
+};
+const proofFingerprint = buildInstagramSourceOccurrenceFingerprint(proofSource);
+const proofSourceIdentity = adaptInstagramScrapedPostToSourceDocument(
+  proofSource,
+).sourceIdentity;
+const proofFields = JSON.stringify({
+  ...fields,
+  sourceOccurrenceSourceFingerprint: proofFingerprint,
+});
+const proofEvent = {
+  ...event,
+  status: "approved",
+  sourcePostedAt: proofSource.postedAt,
+  normalizedFieldsJson: proofFields,
+};
+const ownExpected = {
+  key: event.sourceOccurrenceKey,
+  date: event.date,
+  time: event.time,
+  title: event.title,
+  venue: event.venue,
+  artists: event.artists,
+};
+const pastExpected = {
+  ...ownExpected,
+  key: "qa-expired-sibling",
+  date: "2035-01-14",
+  title: "Expired Sibling",
+  artists: [],
+};
+const proofLink = {
+  _id: "qa-link-1",
+  eventId: proofEvent._id,
+  sourceIdentity: proofSourceIdentity,
+  sourceFingerprint: proofFingerprint,
+  sourceOccurrenceKey: event.sourceOccurrenceKey,
+};
+const basePartialReceipt = {
+  _id: "qa-receipt-1",
+  sourceIdentity: proofSourceIdentity,
+  sourceFingerprint: proofFingerprint,
+  expectedKeys: [ownExpected.key, pastExpected.key],
+  expectedOccurrences: [ownExpected, pastExpected],
+  satisfiedKeys: [ownExpected.key],
+  satisfiedOccurrences: [{ key: ownExpected.key, eventId: proofEvent._id }],
+  deferredChildCount: 0,
+  deferredChildKeys: [],
+  createdAt: 1,
+  updatedAt: 1,
+};
+function proofContext(receipt = basePartialReceipt, source = proofSource) {
+  return {
+    db: {
+      async get(id) { return id === proofEvent._id ? proofEvent : null; },
+      query(table) {
+        return {
+          withIndex(indexName, configure) {
+            const filters = {};
+            const q = { eq(key, value) { filters[key] = value; return q; } };
+            configure(q);
+            const rows = table === "scrapedPosts" ? [source]
+              : table === "instagramSourceOccurrenceReceipts" ? [receipt]
+                : table === "instagramEventSources" ? [proofLink] : [];
+            return {
+              async take(limit) {
+                return rows.filter((row) =>
+                  Object.entries(filters).every(([key, value]) => row[key] === value)
+                ).slice(0, limit);
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+}
+const originalProofNow = Date.now;
+try {
+  Date.now = () => Date.parse("2035-01-15T12:00:00.000Z");
+  assert.equal(
+    await hasCompleteAutomaticUniqueSourceProof(proofContext(), proofEvent),
+    true,
+    "Only an exact past-dated unsatisfied sibling may be omitted from a current source receipt.",
+  );
+  assert.equal(
+    await isCanonicallyGroundedApprovedEvent(proofContext(), proofEvent),
+    true,
+    "Public grounding must accept the same bounded past-sibling proof.",
+  );
+  for (const missingDate of ["2035-01-15", "2035-01-16", "2035-02-30", "bad-date"]) {
+    const receipt = {
+      ...basePartialReceipt,
+      expectedOccurrences: [ownExpected, { ...pastExpected, date: missingDate }],
+    };
+    assert.equal(
+      await hasCompleteAutomaticUniqueSourceProof(proofContext(receipt), proofEvent),
+      false,
+      `An unsatisfied ${missingDate} sibling must block machine approval.`,
+    );
+    assert.equal(await isCanonicallyGroundedApprovedEvent(proofContext(receipt), proofEvent), false);
+  }
+  const malformedReceipts = [
+    { ...basePartialReceipt, expectedKeys: [ownExpected.key, pastExpected.key, pastExpected.key] },
+    { ...basePartialReceipt, satisfiedKeys: [ownExpected.key, ownExpected.key] },
+    { ...basePartialReceipt, satisfiedOccurrences: [
+      ...basePartialReceipt.satisfiedOccurrences,
+      basePartialReceipt.satisfiedOccurrences[0],
+    ] },
+  ];
+  for (const receipt of malformedReceipts) {
+    assert.equal(await hasCompleteAutomaticUniqueSourceProof(proofContext(receipt), proofEvent), false);
+  }
+  assert.equal(
+    await hasCompleteAutomaticUniqueSourceProof(proofContext(), {
+      ...proofEvent,
+      normalizedFieldsJson: JSON.stringify({
+        ...JSON.parse(proofFields),
+        sourceOccurrenceAmbiguousProvenance: true,
+      }),
+    }),
+    false,
+    "Collision-ambiguous provenance still requires a fully satisfied receipt.",
+  );
+  assert.equal(
+    await hasCompleteAutomaticUniqueSourceProof(proofContext(basePartialReceipt, {
+      ...proofSource,
+      analysisResultJson: "stale analysis",
+    }), proofEvent),
+    false,
+    "Expiry does not relax the exact current source revision check.",
+  );
+} finally {
+  Date.now = originalProofNow;
+}
 
 const collisionFields = {
   ...fields,

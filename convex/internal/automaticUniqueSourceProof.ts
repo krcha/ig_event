@@ -4,6 +4,7 @@ import { adaptInstagramScrapedPostToSourceDocument } from "../../lib/domain/sour
 import { buildInstagramSourceOccurrenceFingerprint } from "../../lib/domain/occurrences/source-fingerprint";
 import { sourceOccurrenceRepresentativeMatchesExpected } from "../../lib/events/source-occurrence-representation";
 import { normalizeHandle } from "../../lib/pipeline/venue-normalization";
+import { getBelgradeDayKey } from "../../lib/pipeline/belgrade-day-key";
 import { sourceOccurrenceProvenanceRepository } from "../repositories/sourceOccurrenceProvenance";
 
 type ReadCtx = QueryCtx | MutationCtx;
@@ -41,6 +42,17 @@ function sourceDateToIso(value: unknown): string | null {
     date.getUTCDate() !== day
   ) return null;
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function isValidPastBelgradeDate(value: string, currentBelgradeDay: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(value) || value >= currentBelgradeDay) {
+    return false;
+  }
+  const [year, month, day] = value.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() + 1 === month &&
+    parsed.getUTCDate() === day;
 }
 
 type CollisionSourceRow = {
@@ -138,7 +150,10 @@ export function hasExactSourceCollisionOrdinalProof(
 
 /**
  * A server-verified unique approval must remain bound to the current source
- * generation and a fully satisfied, internally consistent occurrence receipt.
+ * generation and an internally consistent occurrence receipt. An unsatisfied
+ * sibling can be ignored only after its exact expected date is past in
+ * Belgrade; the current child and any collision-ambiguous receipt still need
+ * complete proof.
  * Public grounding repeats this proof so later source or topology drift hides
  * the event instead of trusting a stale approval marker.
  */
@@ -212,18 +227,33 @@ export async function hasCompleteAutomaticUniqueSourceProof(
   const receipt = receipts[0]!;
   const expected = receipt.expectedOccurrences ?? [];
   const expectedKeys = new Set(receipt.expectedKeys);
+  const satisfiedKeys = new Set(receipt.satisfiedKeys);
   if (
     receipt.deferredChildCount !== 0 ||
     receipt.deferredChildKeys.length !== 0 ||
     expected.length === 0 ||
     expected.length !== expectedKeys.size ||
-    receipt.satisfiedKeys.length !== expectedKeys.size ||
-    receipt.satisfiedOccurrences.length !== expectedKeys.size ||
+    expected.some((item) => !expectedKeys.has(item.key)) ||
+    satisfiedKeys.size !== receipt.satisfiedKeys.length ||
+    receipt.satisfiedOccurrences.length !== satisfiedKeys.size ||
     receipt.satisfiedKeys.some((key) => !expectedKeys.has(key)) ||
-    receipt.satisfiedOccurrences.some((item) => !expectedKeys.has(item.key))
+    receipt.satisfiedOccurrences.some((item) =>
+      !expectedKeys.has(item.key) || !satisfiedKeys.has(item.key)
+    )
   ) return false;
 
-  for (const binding of expected) {
+  const missing = expected.filter((item) => !satisfiedKeys.has(item.key));
+  const currentBelgradeDay = missing.length > 0
+    ? getBelgradeDayKey(Date.now())
+    : "";
+  if (
+    (fields.sourceOccurrenceAmbiguousProvenance === true && missing.length > 0) ||
+    missing.some((item) =>
+      !isValidPastBelgradeDate(item.date, currentBelgradeDay)
+    )
+  ) return false;
+
+  for (const binding of expected.filter((item) => satisfiedKeys.has(item.key))) {
     const satisfactions = receipt.satisfiedOccurrences.filter(
       (item) => item.key === binding.key,
     );
