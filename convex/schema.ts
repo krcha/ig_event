@@ -597,6 +597,15 @@ export default defineSchema({
     analysisAttemptOwner: v.optional(v.string()),
     analysisAttemptProtocol: v.optional(v.string()),
     analysisAttemptBudgetDayKey: v.optional(v.string()),
+    // One reviewed HTTP 400 request was rejected before analysis. Preserve
+    // its exact saved attempt and the operator-observed error on requeue.
+    analysisRejectedRequestRecoveryAt: v.optional(v.number()),
+    analysisRejectedRequestRecoveryError: v.optional(v.string()),
+    analysisRejectedRequestRecoveryAttemptStartedAt: v.optional(v.number()),
+    analysisRejectedRequestRecoveryAttemptOwner: v.optional(v.string()),
+    analysisRejectedRequestRecoveryAttemptProtocol: v.optional(v.string()),
+    analysisRejectedRequestRecoveryBudgetDayKey: v.optional(v.string()),
+    analysisRejectedRequestRecoveryEvidenceSha256: v.optional(v.string()),
     analysisRevision: v.optional(v.number()),
     analysisResultJson: v.optional(v.string()),
     analysisCompletedAt: v.optional(v.number()),

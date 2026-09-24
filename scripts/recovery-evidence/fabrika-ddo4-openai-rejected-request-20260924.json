@@ -1,0 +1,13 @@
+{
+  "code": "unsupported_parameter",
+  "errorType": "invalid_request_error",
+  "httpStatus": 400,
+  "message": "Unsupported parameter: 'reasoning.effort' is not supported with this model.",
+  "model": "gpt-4.1-mini",
+  "operation": "direct-post recovery Docker run, 2026-09-24 UTC",
+  "parameter": "reasoning.effort",
+  "postUrl": "https://www.instagram.com/p/Ddo4DGsNlYf/",
+  "provider": "OpenAI",
+  "savedPostId": "jn79z8b64q8jkt89a5frcthjg58f0bd8",
+  "source": "Observed ingestion.openai.extraction.failed line in direct operator stdout; production saved-post processingError was not persisted."
+}

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   DEFAULT_INGESTION_FETCH_PAGE_SIZE,
@@ -20,6 +21,7 @@ import {
   recordProcessingResult,
   recordPaidFetchWindowSaturation,
   recordPaidFetchWindowSuccess,
+  requeueReviewedFabrikaRejectedOpenAiRequest,
   releasePaidFetchLease,
   MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_EVENTS,
   MAX_SOURCE_REVISION_PUBLICATION_INVALIDATION_REFERENCE_READS,
@@ -27,6 +29,7 @@ import {
   SOURCE_REVISION_PUBLICATION_INVALIDATION_REASON,
   upsertManyByHandle,
 } from "../convex/scrapedPosts.ts";
+import { EVENT_EXTRACTION_ANALYSIS_PROTOCOL } from "../lib/ai/openai-analysis-protocol.ts";
 import { createEvent } from "../convex/events.ts";
 import { refreshAndAttach } from "../convex/mediaAssets.ts";
 import {
@@ -1742,6 +1745,110 @@ try {
   assert.equal(reconcileTables.scrapedPosts.find((post) => post._id === "active").blocksPaidFetch, true);
   assert.equal(reconcileTables.scrapedPosts.find((post) => post._id === "recent").blocksPaidFetch, true);
   assert.equal(reconcileTables.scrapedPosts.find((post) => post._id === "expired").processingStatus, "retryable_failure");
+
+  const reviewedError =
+    'OpenAI extraction failed: 400 Bad Request - {"error":{"message":"Unsupported parameter: \'reasoning.effort\' is not supported with this model.","type":"invalid_request_error","param":"reasoning.effort","code":"unsupported_parameter"}}';
+  const operatorEvidence = readFileSync(
+    new URL("./recovery-evidence/fabrika-ddo4-openai-rejected-request-20260924.json", import.meta.url),
+  );
+  const operatorEvidenceSha256 = createHash("sha256").update(operatorEvidence).digest("hex");
+  assert.equal(operatorEvidenceSha256, "2d9e751127d249ad115c1c18b7ca6c96771b0e963199e607d89a91d1f7292cd2");
+  const operatorEvidenceRecord = JSON.parse(operatorEvidence.toString("utf8"));
+  assert.equal(operatorEvidenceRecord.savedPostId, "jn79z8b64q8jkt89a5frcthjg58f0bd8");
+  assert.equal(operatorEvidenceRecord.httpStatus, 400);
+  assert.equal(operatorEvidenceRecord.code, "unsupported_parameter");
+  assert.equal(operatorEvidenceRecord.parameter, "reasoning.effort");
+  assert.equal(operatorEvidenceRecord.model, "gpt-4.1-mini");
+  const reviewedSource = {
+    _id: "jn79z8b64q8jkt89a5frcthjg58f0bd8",
+    handle: "faks_beograd",
+    username: "faks_beograd",
+    postId: "provider-post-id",
+    instagramPostUrl: "https://www.instagram.com/p/Ddo4DGsNlYf/",
+    canonicalSourceUrl: "https://www.instagram.com/p/Ddo4DGsNlYf/",
+    caption: "Thursday DJ Night",
+    imageUrls: ["https://example.com/poster.jpg"],
+    sourceRevision: 1,
+    blocksPaidFetch: false,
+    processingStatus: "completed",
+    processingOutcome: "terminal_permanent_failure",
+    processingAttempts: 1,
+    analysisAttemptRevision: 1,
+    analysisAttemptStartedAt: 1_000,
+    analysisAttemptOwner: "reviewed-first-owner",
+    analysisAttemptProtocol: EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
+    analysisAttemptBudgetDayKey: "2026-09-24",
+    createdAt: 100,
+    updatedAt: 1_100,
+  };
+  const makeReviewedContext = (overrides = {}) => {
+    const state = createDb({
+      scrapedPosts: [{ ...reviewedSource, ...overrides }],
+      ingestionDailyBudgets: [{ _id: "openai-budget", chargedMicros: 1 }],
+      instagramSources: [{ _id: "fabrika-source", handle: "faks_beograd", lastSuccessfulFetchThroughAt: 500 }],
+    });
+    return { ...state, ctx: { auth: { getUserIdentity: async () => null }, db: state.db } };
+  };
+  const recoveryArgs = {
+    scrapedPostId: reviewedSource._id,
+    expectedSourceRevision: 1,
+    expectedUpdatedAt: reviewedSource.updatedAt,
+    expectedAnalysisAttemptStartedAt: reviewedSource.analysisAttemptStartedAt,
+    expectedAnalysisAttemptOwner: reviewedSource.analysisAttemptOwner,
+    expectedPostId: reviewedSource.postId,
+    operatorEvidenceSha256,
+    serviceSecret: "qa-durability-secret",
+  };
+  const recoveryState = makeReviewedContext();
+  assert.deepEqual(
+    await requeueReviewedFabrikaRejectedOpenAiRequest._handler(recoveryState.ctx, recoveryArgs),
+    { requeued: true, sourceRevision: 1 },
+  );
+  const recovered = recoveryState.tables.scrapedPosts[0];
+  assert.equal(recovered.processingStatus, "pending");
+  assert.equal(recovered.blocksPaidFetch, true);
+  assert.equal(recovered.processingError, undefined);
+  assert.equal(recovered.analysisAttemptRevision, undefined);
+  assert.equal(recovered.analysisRejectedRequestRecoveryError, reviewedError);
+  assert.equal(recovered.analysisRejectedRequestRecoveryAttemptStartedAt, 1_000);
+  assert.equal(recovered.analysisRejectedRequestRecoveryAttemptOwner, "reviewed-first-owner");
+  assert.equal(recovered.analysisRejectedRequestRecoveryAttemptProtocol, EVENT_EXTRACTION_ANALYSIS_PROTOCOL);
+  assert.equal(recovered.analysisRejectedRequestRecoveryEvidenceSha256, recoveryArgs.operatorEvidenceSha256);
+  assert.equal(recovered.sourceRevision, reviewedSource.sourceRevision);
+  assert.equal(recovered.caption, reviewedSource.caption);
+  assert.deepEqual(recovered.imageUrls, reviewedSource.imageUrls);
+  assert.equal(recoveryState.tables.ingestionDailyBudgets[0].chargedMicros, 1);
+  assert.equal(recoveryState.tables.instagramSources[0].lastSuccessfulFetchThroughAt, 500);
+  await assert.rejects(
+    requeueReviewedFabrikaRejectedOpenAiRequest._handler(recoveryState.ctx, {
+      ...recoveryArgs,
+      expectedUpdatedAt: recovered.updatedAt,
+    }),
+    /not the exact reviewed rejected-request failure/i,
+    "The reviewed request may be requeued only once.",
+  );
+  for (const [overrides, args, error] of [
+    [{}, { serviceSecret: "incorrect" }, /explicit service secret/i],
+    [{}, { scrapedPostId: "other-post" }, /bound to one reviewed Fabrika post ID/i],
+    [{}, { operatorEvidenceSha256: "0".repeat(64) }, /evidence digest changed/i],
+    [{}, { expectedAnalysisAttemptOwner: "wrong-owner" }, /not the exact reviewed rejected-request failure/i],
+    [{}, { expectedSourceRevision: 2 }, /identity or revision changed/i],
+    [{ processingError: reviewedError }, {}, /not the exact reviewed rejected-request failure/i],
+    [{ processingAttempts: 2 }, {}, /not the exact reviewed rejected-request failure/i],
+    [{ processingOutcome: "openai_transport_ambiguous" }, {}, /not the exact reviewed rejected-request failure/i],
+    [{ analysisResultJson: "{}", analysisRevision: 1 }, {}, /not the exact reviewed rejected-request failure/i],
+    [{ analysisDefinitiveOutputFailureRevision: 1 }, {}, /not the exact reviewed rejected-request failure/i],
+  ]) {
+    const state = makeReviewedContext(overrides);
+    await assert.rejects(
+      requeueReviewedFabrikaRejectedOpenAiRequest._handler(state.ctx, {
+        ...recoveryArgs,
+        ...args,
+      }),
+      error,
+    );
+    assert.equal(state.tables.scrapedPosts[0].processingStatus, overrides.processingStatus ?? "completed");
+  }
 
   const scrapedPostsSource = readFileSync(
     new URL("../convex/scrapedPosts.ts", import.meta.url),

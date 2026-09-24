@@ -247,6 +247,12 @@ async function main() {
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL?.trim().replace(/\/$/u, "");
   const serviceSecret = process.env.CRON_SECRET?.trim();
   assert(convexUrl === CONVEX_URL && serviceSecret, "Production Convex URL or CRON_SECRET is missing or differs from the reviewed target.");
+  if (apply) {
+    assert(
+      process.env.OPENAI_VISION_MODEL?.trim() === "gpt-5-mini",
+      "The exact-post operator requires OPENAI_VISION_MODEL=gpt-5-mini before processing.",
+    );
+  }
   const client = new ConvexHttpClient(CONVEX_URL);
   const before = await loadPlan(client, serviceSecret);
   if (!apply) {

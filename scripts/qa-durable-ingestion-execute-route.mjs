@@ -95,6 +95,11 @@ assert.match(
   /selectAllEligiblePosts: claimed\.mode === "daily" \|\| claimed\.mode === "catch_up"/,
   "daily and catch-up fetches must retain the complete eligible paid window",
 );
+assert.match(
+  route,
+  /getInstagramScrapeRawItemCount\(posts\)/,
+  "the executor must detect raw provider-window saturation before local filtering",
+);
 assert.doesNotMatch(
   route,
   /runInstagramIngestion\(/,
@@ -193,6 +198,7 @@ function loadRouteWithMocks({
   persist = async () => {
     throw new Error("unexpected persistence call in processing-route QA");
   },
+  logger = console,
   cleanup = async () => {
     throw new Error("unexpected approved cleanup in processing-route QA");
   },
@@ -232,7 +238,10 @@ function loadRouteWithMocks({
         runApprovedDuplicateCleanupForCompletedDurableRun: cleanup,
       },
     ],
-    ["@/lib/scraper/instagram-scraper", { scrapeInstagramAccount: scrape }],
+    ["@/lib/scraper/instagram-scraper", {
+      scrapeInstagramAccount: scrape,
+      getInstagramScrapeRawItemCount: (posts) => posts.rawItemCount ?? posts.length,
+    }],
     [
       "@/lib/pipeline/durable-ingestion-execute",
       {
@@ -247,7 +256,7 @@ function loadRouteWithMocks({
     URL,
     Request,
     Response,
-    console,
+    console: logger,
     exports: routeModule.exports,
     module: routeModule,
     require(specifier) {
@@ -577,9 +586,12 @@ async function assertDeferredExecutorResponse(response, claimState, message) {
     postId: `multi-${index}`,
     instagramPostUrl: `https://www.instagram.com/p/multi-${index}/`,
   }));
+  Object.defineProperty(providerPosts, "rawItemCount", { value: 6 });
   let providerCalls = 0;
   let markerCalls = 0;
+  const warnings = [];
   const POST = loadRouteWithMocks({
+    logger: { ...console, warn: (message) => warnings.push(JSON.parse(message)) },
     mutation: async (reference, args) => {
       if (reference === claimProcessingReference) return null;
       if (reference === claimFetchReference) return {
@@ -587,7 +599,7 @@ async function assertDeferredExecutorResponse(response, claimState, message) {
         handle: "multi_venue",
         mode: "daily",
         controls: {
-          resultsLimit: 4,
+          resultsLimit: 6,
           daysBack: 1,
           skipPinnedPosts: false,
           pinnedPostPolicy: "include_recent",
@@ -609,6 +621,7 @@ async function assertDeferredExecutorResponse(response, claimState, message) {
     scrape: async (request) => {
       providerCalls += 1;
       assert.equal(request.selectAllEligiblePosts, true);
+      assert.equal(request.resultsLimit, 6);
       assert.equal(request.maxTotalChargeUsd, 0.01);
       return providerPosts;
     },
@@ -623,6 +636,15 @@ async function assertDeferredExecutorResponse(response, claimState, message) {
   assert.equal((await response.json()).processingPending, true);
   assert.equal(providerCalls, 1, "three saved posts share one paid provider request");
   assert.equal(markerCalls, 1, "three identities cross one durable persistence marker");
+  assert.deepEqual(warnings.map((warning) => ({
+    event: warning.event,
+    rawItemCount: warning.rawItemCount,
+    resultsLimit: warning.resultsLimit,
+  })), [{
+    event: "durable_ingestion.provider_window_saturated",
+    rawItemCount: 6,
+    resultsLimit: 6,
+  }], "a full raw window must emit a visible warning even if local filters retain fewer posts");
 }
 
 {

@@ -8,7 +8,7 @@ import {
   processSavedScrapedPostForDurableReceipt,
   runApprovedDuplicateCleanupForCompletedDurableRun,
 } from "@/lib/pipeline/run-instagram-ingestion";
-import { scrapeInstagramAccount } from "@/lib/scraper/instagram-scraper";
+import { getInstagramScrapeRawItemCount, scrapeInstagramAccount } from "@/lib/scraper/instagram-scraper";
 import {
   isDurableSavedPostRevisionMismatch,
   isTransientSavedPostProcessingError,
@@ -379,6 +379,19 @@ export async function POST(request: Request) {
         selectAllEligiblePosts: claimed.mode === "daily" || claimed.mode === "catch_up",
         maxTotalChargeUsd: claimed.controls.costPerProfileMicros / 1_000_000,
       });
+      const rawItemCount = getInstagramScrapeRawItemCount(posts);
+      if (rawItemCount >= claimed.controls.resultsLimit) {
+        console.warn(JSON.stringify({
+          level: "warn",
+          event: "durable_ingestion.provider_window_saturated",
+          runId,
+          receiptId: claimed.receiptId,
+          handle: claimed.handle,
+          mode: claimed.mode,
+          rawItemCount,
+          resultsLimit: claimed.controls.resultsLimit,
+        }));
+      }
       // Controller receipts fence this new path. Omit the legacy global lease
       // owner so persistence accepts the controller-owned concurrent fetch.
       const persistedPosts = await persistScrapedPostsForHandle(

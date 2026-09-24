@@ -35,7 +35,8 @@ const QUEUE_BUILD_BATCH_SIZE = 32;
 const MAX_CONCURRENCY = 6;
 // Actor-side pinned filtering is advisory. Fetch this bounded window, then
 // choose the newest dated non-pinned item locally in the web executor.
-const SOURCE_RESULTS_LIMIT = 4;
+const CANARY_SOURCE_RESULTS_LIMIT = 4;
+const SOURCE_RESULTS_LIMIT = 6;
 const COST_PER_PROFILE_MICROS = 10_000;
 const LEASE_MS = 10 * 60 * 1000;
 const MAX_ATTEMPTS = 3;
@@ -263,7 +264,7 @@ function assertExecutionSlot(value: number | undefined, fallbackKey: string): nu
 function controlsFor(mode: RunMode) {
   if (mode === "canary") {
     return {
-      resultsLimit: SOURCE_RESULTS_LIMIT,
+      resultsLimit: CANARY_SOURCE_RESULTS_LIMIT,
       daysBack: 1,
       // Keep fresh pins in the bounded actor output; selection below the actor
       // only admits pins that are genuinely <=24h old for canary/daily runs.
@@ -1373,8 +1374,12 @@ export const markReceiptPostsPersisted = mutation({
     ) {
       throw new Error("Receipt persistence fence mismatch.");
     }
+    const run = await ctx.db.get(args.runId);
+    if (!run) {
+      throw new Error("Durable ingestion run is missing.");
+    }
     const postCount = Math.max(0, Math.trunc(args.postCount));
-    if (postCount > SOURCE_RESULTS_LIMIT) {
+    if (postCount > run.controls.resultsLimit) {
       throw new Error("A durable receipt exceeded its bounded provider post window.");
     }
     if (args.processingProtocolVersion !== 2 && postCount > 1) {

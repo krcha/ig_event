@@ -47,10 +47,19 @@ assert.equal(new Set(canary).size, DURABLE_INGESTION_CANARY_SIZE);
 assert.deepEqual(canary, selectDeterministicCanary([...handles].reverse()));
 
 assert.equal(durableControlsFor("canary").budgetMicros, 160_000);
+assert.equal(durableControlsFor("canary").resultsLimit, 4);
+assert.equal(durableControlsFor("daily").resultsLimit, 6);
+assert.equal(durableControlsFor("catch_up").resultsLimit, 6);
+assert.equal(durableControlsFor("daily").costPerProfileMicros, 10_000);
+assert.equal(durableControlsFor("catch_up").costPerProfileMicros, 10_000);
 assert.equal(durableControlsFor("daily").daysBack, 1);
 assert.equal(durableControlsFor("catch_up").daysBack, undefined);
 assert.equal(durableControlsFor("catch_up").budgetMicros, DURABLE_INGESTION_FULL_PROFILE_BUDGET_MICROS);
 assert.ok(632 * durableControlsFor("catch_up").costPerProfileMicros <= durableControlsFor("catch_up").budgetMicros);
+assert.match(controller, /const CANARY_SOURCE_RESULTS_LIMIT = 4;/);
+assert.match(controller, /const SOURCE_RESULTS_LIMIT = 6;/);
+assert.match(controller, /postCount > run\.controls\.resultsLimit/,
+  "persisted post count must respect each run's frozen provider window");
 
 for (const required of ["terminalReceiptCount", "lease_expired_requeued", "Another durable ingestion run is already active", "concurrency"]) {
   assert.match(controller, new RegExp(required), `controller must retain ${required}`);

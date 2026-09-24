@@ -255,6 +255,59 @@ async function linkPersistedPost(db, runId, receiptId, scrapedPostId) {
 
 const handles = Array.from({ length: 632 }, (_, index) => `venue_${String(index).padStart(3, "0")}`);
 
+// Future daily runs may retain six distinct eligible posts from one paid
+// profile fetch. Each run's frozen provider limit remains the persistence cap.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "daily", ["six_post_venue"]);
+  assert.equal((await db.get(runId)).controls.resultsLimit, 6);
+  const fetched = await claim(db, runId, "six-post-worker");
+  await startProviderAttempt(db, runId, fetched.receiptId, "six-post-worker");
+  const savedPostLinks = [];
+  for (let index = 0; index < 6; index += 1) {
+    const postId = `six-post-${index}`;
+    const instagramPostUrl = `https://www.instagram.com/p/${postId}/`;
+    const scrapedPostId = await insertSavedPost(db, fetched.handle, {
+      postId,
+      instagramPostUrl,
+    });
+    savedPostLinks.push({ scrapedPostId, sourceRevision: 1, postId, instagramPostUrl });
+  }
+  await markReceiptPostsPersisted._handler(ctx(db), {
+    runId,
+    receiptId: fetched.receiptId,
+    workerId: "six-post-worker",
+    postCount: 6,
+    savedPostLinks,
+    processingProtocolVersion: 2,
+    serviceSecret: process.env.CRON_SECRET,
+  });
+  const persisted = await db.get(fetched.receiptId);
+  assert.equal(persisted.persistedPostCount, 6);
+  assert.equal(persisted.savedPostLinks.length, 6);
+  assert.equal(persisted.status, "processing_pending");
+}
+
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "canary", handles.slice(0, 16));
+  assert.equal((await db.get(runId)).controls.resultsLimit, 4);
+  const fetched = await claim(db, runId, "canary-window-worker");
+  await startProviderAttempt(db, runId, fetched.receiptId, "canary-window-worker");
+  await assert.rejects(
+    markReceiptPostsPersisted._handler(ctx(db), {
+      runId,
+      receiptId: fetched.receiptId,
+      workerId: "canary-window-worker",
+      postCount: 5,
+      processingProtocolVersion: 2,
+      savedPostLinks: [],
+      serviceSecret: process.env.CRON_SECRET,
+    }),
+    /exceeded its bounded provider post window/i,
+  );
+}
+
 // A large snapshot is created as a durable parent first, then materialized in
 // small idempotent transactions. A crash between batches neither creates a
 // second run nor permits an executor to make a provider call early.

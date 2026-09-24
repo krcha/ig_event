@@ -6,9 +6,11 @@ export const DURABLE_INGESTION_CONCURRENCY = 6;
 /**
  * Apify's pinned-post switch is not reliable enough to select the newest
  * genuine post. Over-fetch a small bounded window and filter locally before
- * persisting. Only the selected non-pinned post enters AI processing.
+ * persisting. Canary processes one selected post; daily and catch-up process
+ * every eligible post returned within their six-result window.
  */
-export const DURABLE_INGESTION_SOURCE_RESULTS_LIMIT = 4;
+export const DURABLE_INGESTION_CANARY_SOURCE_RESULTS_LIMIT = 4;
+export const DURABLE_INGESTION_SOURCE_RESULTS_LIMIT = 6;
 export const DURABLE_INGESTION_COST_PER_PROFILE_MICROS = 10_000;
 export const DURABLE_INGESTION_CANARY_SIZE = 16;
 export const DURABLE_INGESTION_FULL_PROFILE_BUDGET_MICROS = 7_000_000;
@@ -17,7 +19,7 @@ export type DurableIngestionMode = "canary" | "catch_up" | "daily";
 export type DurablePinnedPostPolicy = "exclude_all" | "include_recent";
 
 export type DurableIngestionControls = {
-  resultsLimit: 4;
+  resultsLimit: 4 | 6;
   daysBack?: 1;
   skipPinnedPosts: boolean;
   pinnedPostPolicy: DurablePinnedPostPolicy;
@@ -31,7 +33,7 @@ export type DurableIngestionControls = {
 export function durableControlsFor(mode: DurableIngestionMode): DurableIngestionControls {
   if (mode === "canary") {
     return {
-      resultsLimit: DURABLE_INGESTION_SOURCE_RESULTS_LIMIT,
+      resultsLimit: DURABLE_INGESTION_CANARY_SOURCE_RESULTS_LIMIT,
       daysBack: 1,
       // Local policy decides whether a fresh pin is eligible, so do not ask
       // the actor to hide it before we can inspect its original post date.

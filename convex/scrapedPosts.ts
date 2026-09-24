@@ -11,7 +11,10 @@ import {
   getSourceUrlLookupVariants,
 } from "../lib/domain/source-url";
 import { normalizeHandle } from "../lib/pipeline/venue-normalization";
-import { OPENAI_DEFINITIVE_OUTPUT_FAILURE_KINDS } from "../lib/ai/openai-analysis-protocol";
+import {
+  EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
+  OPENAI_DEFINITIVE_OUTPUT_FAILURE_KINDS,
+} from "../lib/ai/openai-analysis-protocol";
 import { PUBLICATION_POLICY_VERSION } from "../lib/domain/publication/policy";
 import { isCrossPostCampaignLineageEvent } from "../lib/events/cross-post-campaign-aggregate-attestation";
 import {
@@ -1027,6 +1030,117 @@ async function resolveScrapedPostForProcessingFence(ctx: { db: any }, args: any)
       : null)
   );
 }
+
+const REVIEWED_FABRIKA_REJECTED_POST_ID =
+  "jn79z8b64q8jkt89a5frcthjg58f0bd8";
+const REVIEWED_FABRIKA_REJECTED_POST_URL =
+  "https://www.instagram.com/p/Ddo4DGsNlYf/";
+// Observed in the exact direct operator's stdout. The saved row did not retain
+// this HTTP body, so the mutation also requires the current row to have no
+// persisted processing error; this is an operator-reviewed, one-post recovery.
+const REVIEWED_FABRIKA_REJECTED_REQUEST_ERROR =
+  'OpenAI extraction failed: 400 Bad Request - {"error":{"message":"Unsupported parameter: \'reasoning.effort\' is not supported with this model.","type":"invalid_request_error","param":"reasoning.effort","code":"unsupported_parameter"}}';
+const REVIEWED_FABRIKA_REJECTED_REQUEST_EVIDENCE_SHA256 =
+  "2d9e751127d249ad115c1c18b7ca6c96771b0e963199e607d89a91d1f7292cd2";
+
+/**
+ * The reviewed Fabrika post received a definite HTTP 400 for a model/request
+ * mismatch. Requeue only that exact saved row once, retaining the rejected
+ * attempt and operator evidence for audit without changing source or budgets.
+ */
+export const requeueReviewedFabrikaRejectedOpenAiRequest = mutation({
+  args: {
+    scrapedPostId: v.id("scrapedPosts"),
+    expectedSourceRevision: v.number(),
+    expectedUpdatedAt: v.number(),
+    expectedAnalysisAttemptStartedAt: v.number(),
+    expectedAnalysisAttemptOwner: v.string(),
+    expectedPostId: v.string(),
+    operatorEvidenceSha256: v.string(),
+    serviceSecret: v.string(),
+  },
+  returns: v.object({ requeued: v.boolean(), sourceRevision: v.number() }),
+  handler: async (ctx, args) => {
+    const configuredSecret = process.env.CRON_SECRET?.trim();
+    if (!configuredSecret || args.serviceSecret !== configuredSecret) {
+      throw new Error("An explicit service secret is required for this recovery.");
+    }
+    if (args.scrapedPostId !== REVIEWED_FABRIKA_REJECTED_POST_ID) {
+      throw new Error("This recovery is bound to one reviewed Fabrika post ID.");
+    }
+    if (args.operatorEvidenceSha256 !== REVIEWED_FABRIKA_REJECTED_REQUEST_EVIDENCE_SHA256) {
+      throw new Error("Reviewed operator evidence digest changed.");
+    }
+    const post = await ctx.db.get(args.scrapedPostId);
+    if (!post) throw new Error("The reviewed Fabrika saved post is missing.");
+    const sourceRevision = post.sourceRevision ?? 1;
+    if (
+      post.handle !== "faks_beograd" ||
+      post.username !== "faks_beograd" ||
+      post.postId !== args.expectedPostId ||
+      canonicalizeSourceUrlOrEmpty("instagram", post.instagramPostUrl) !==
+        REVIEWED_FABRIKA_REJECTED_POST_URL ||
+      canonicalizeSourceUrlOrEmpty("instagram", post.canonicalSourceUrl) !==
+        REVIEWED_FABRIKA_REJECTED_POST_URL ||
+      sourceRevision !== args.expectedSourceRevision ||
+      post.updatedAt !== args.expectedUpdatedAt
+    ) {
+      throw new Error("Reviewed Fabrika source identity or revision changed.");
+    }
+    if (
+      post.processingStatus !== "completed" ||
+      post.processingOutcome !== "terminal_permanent_failure" ||
+      post.processingAttempts !== 1 ||
+      post.processingError !== undefined ||
+      post.analysisRejectedRequestRecoveryAt !== undefined ||
+      post.analysisRejectedRequestRecoveryEvidenceSha256 !== undefined ||
+      post.analysisAttemptRevision !== sourceRevision ||
+      post.analysisAttemptStartedAt !== args.expectedAnalysisAttemptStartedAt ||
+      !Number.isSafeInteger(post.analysisAttemptStartedAt) ||
+      !post.analysisAttemptOwner ||
+      post.analysisAttemptOwner !== args.expectedAnalysisAttemptOwner ||
+      post.analysisAttemptProtocol !== EVENT_EXTRACTION_ANALYSIS_PROTOCOL ||
+      !post.analysisAttemptBudgetDayKey ||
+      post.analysisRevision !== undefined ||
+      post.analysisResultJson !== undefined ||
+      post.analysisDefinitiveOutputFailureRevision !== undefined ||
+      post.analysisDefinitiveOutputRecoveryRevision !== undefined ||
+      post.processingLeaseOwner !== undefined ||
+      (post.processingLeaseExpiresAt ?? 0) > Date.now()
+    ) {
+      throw new Error("The saved post is not the exact reviewed rejected-request failure.");
+    }
+    const now = Date.now();
+    await ctx.db.patch(post._id, {
+      analysisRejectedRequestRecoveryAt: now,
+      analysisRejectedRequestRecoveryError:
+        REVIEWED_FABRIKA_REJECTED_REQUEST_ERROR,
+      analysisRejectedRequestRecoveryAttemptStartedAt:
+        post.analysisAttemptStartedAt,
+      analysisRejectedRequestRecoveryAttemptOwner: post.analysisAttemptOwner,
+      analysisRejectedRequestRecoveryAttemptProtocol:
+        post.analysisAttemptProtocol,
+      analysisRejectedRequestRecoveryBudgetDayKey:
+        post.analysisAttemptBudgetDayKey,
+      analysisRejectedRequestRecoveryEvidenceSha256:
+        REVIEWED_FABRIKA_REJECTED_REQUEST_EVIDENCE_SHA256,
+      analysisAttemptRevision: undefined,
+      analysisAttemptStartedAt: undefined,
+      analysisAttemptOwner: undefined,
+      analysisAttemptProtocol: undefined,
+      analysisAttemptBudgetDayKey: undefined,
+      processingStatus: "pending",
+      processingOutcome: undefined,
+      processingError: undefined,
+      processingRetryAt: undefined,
+      processingLeaseOwner: undefined,
+      processingLeaseExpiresAt: undefined,
+      blocksPaidFetch: true,
+      updatedAt: now,
+    });
+    return { requeued: true, sourceRevision };
+  },
+});
 
 export const claimProcessing = mutation({
   args: {
