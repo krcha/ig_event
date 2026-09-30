@@ -4,8 +4,9 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
 // Frozen from six failed, persisted Sep 29 receipts. All seven saved posts
-// with valid, current event-evidence caches are version-fenced, but Teatar
-// and Mama Shelter remain held; at most five posts can be processed. The
+// with valid, current event-evidence caches are version-fenced. Teatar,
+// Mama Shelter, and both Lozionica posts remain held; only three independent
+// venue handles can be processed. The
 // uncached ligapub.bg post is excluded. This operator never calls Apify,
 // opens a fetch receipt, scans a backlog, or sends content to OpenAI.
 export const RUN_ID = "n170c5ea1c5ag0etc57qzc4ry58fa87v";
@@ -21,8 +22,20 @@ export const TARGETS = Object.freeze([
 ]);
 export const TEATAR_SAVED_POST_ID = "jn786s2hg3jnpv2dcxddawke6d8fb0g0";
 export const MAMA_SAVED_POST_ID = "jn73f64qpe02zz0vgtgbafb15d8fbay2";
+export const LOZIONICA_DUPLICATE_SAVED_POST_ID = "jn71mp4gk42gh76c9tkgz4ee858fbq5d";
+export const LOZIONICA_SHARED_RECEIPT_SAVED_POST_ID = "jn785zgz3frh7ckm21bmdqqnf98fa1mj";
 export const MAMA_SEMANTIC_CONFLICT =
   "Source-occurrence key is occupied by a different semantic representative; manual repair is required.";
+export const LOZIONICA_DUPLICATE_ERROR = "[Request ID: 662d09f90f8b4010] Server Error";
+export const LOZIONICA_SHARED_RECEIPT_ERROR = "[Request ID: c27f3db079a75839] Server Error";
+export const LOZIONICA_DUPLICATE_RETRY_AT = 1790745091286;
+export const LOZIONICA_SHARED_RECEIPT_RETRY_AT = 1790678693502;
+export const PROCESS_SAVED_POST_IDS = Object.freeze([
+  "jn74gyvscj6j9frhyafnbp1bd58fb6z1", // dardanelislavija
+  "jn71pmqjyd9jynk2vxddmrbw4x8fbjys", // cajgerbar
+  "jn71vbf4qmfqb25hemnfe9bwj98faa9w", // bitefteatar
+]);
+const PROCESS_SAVED_POST_ID_SET = new Set(PROCESS_SAVED_POST_IDS);
 
 const TERMINAL_OUTCOMES = new Set([
   "terminal_no_event",
@@ -169,6 +182,19 @@ export function buildPlanForPosts(run, posts, parseExtractedEventData, now = Dat
       } else {
         disposition = "held_retry_cooldown";
       }
+    } else if (target.savedPostId === LOZIONICA_DUPLICATE_SAVED_POST_ID ||
+      target.savedPostId === LOZIONICA_SHARED_RECEIPT_SAVED_POST_ID) {
+      const duplicate = target.savedPostId === LOZIONICA_DUPLICATE_SAVED_POST_ID;
+      assert(
+        state.processingStatus === "retryable_failure" &&
+        state.processingOutcome === target.outcome &&
+        state.updatedAt === target.updatedAt &&
+        post.processingError === (duplicate ? LOZIONICA_DUPLICATE_ERROR : LOZIONICA_SHARED_RECEIPT_ERROR) &&
+        state.processingRetryAt === (duplicate ? LOZIONICA_DUPLICATE_RETRY_AT : LOZIONICA_SHARED_RECEIPT_RETRY_AT) &&
+        state.processingLeaseExpiresAt === null,
+        `Frozen Lozionica processing state changed: ${target.savedPostId}. Review a fresh snapshot.`,
+      );
+      disposition = duplicate ? "held_duplicate_policy_error" : "held_shared_receipt_collision";
     } else if (state.processingStatus === "completed" && TERMINAL_OUTCOMES.has(state.processingOutcome)) {
       disposition = "already_terminal";
     } else {
@@ -182,15 +208,22 @@ export function buildPlanForPosts(run, posts, parseExtractedEventData, now = Dat
         `Saved-post lease remains active: ${target.savedPostId}.`);
       assert((state.processingRetryAt ?? 0) <= now,
         `Saved-post retry cooldown remains active: ${target.savedPostId}.`);
+      assert(PROCESS_SAVED_POST_ID_SET.has(target.savedPostId),
+        `Saved post is outside the three independent handles: ${target.savedPostId}.`);
       disposition = "process_saved_post";
     }
     return { receiptId: target.receiptId, disposition, ...state };
   });
   const plan = {
-    schemaVersion: 4,
+    schemaVersion: 5,
     runId: RUN_ID,
     convexUrl: CONVEX_URL,
-    heldPostIds: [TEATAR_SAVED_POST_ID, MAMA_SAVED_POST_ID],
+    heldPostIds: [
+      TEATAR_SAVED_POST_ID,
+      MAMA_SAVED_POST_ID,
+      LOZIONICA_DUPLICATE_SAVED_POST_ID,
+      LOZIONICA_SHARED_RECEIPT_SAVED_POST_ID,
+    ],
     openAiTransportAllowed: false,
     rows,
   };
@@ -259,15 +292,27 @@ async function main() {
     assert(current && JSON.stringify(compactPost(current)) === JSON.stringify(expectedState),
       `Saved-post version fence changed before processing ${row.savedPostId}.`);
     validateCachedAnalysis(current, row, parseExtractedEventData);
-    if (row.disposition === "held_retry_cooldown" || row.disposition === "held_semantic_conflict") {
+    if (row.disposition.startsWith("held_")) {
       assert(
         (row.savedPostId === TEATAR_SAVED_POST_ID && row.disposition === "held_retry_cooldown") ||
         (row.savedPostId === MAMA_SAVED_POST_ID && row.disposition === "held_semantic_conflict" &&
-          current.processingError === MAMA_SEMANTIC_CONFLICT),
+          current.processingError === MAMA_SEMANTIC_CONFLICT) ||
+        (row.savedPostId === LOZIONICA_DUPLICATE_SAVED_POST_ID &&
+          row.disposition === "held_duplicate_policy_error" &&
+          current.processingError === LOZIONICA_DUPLICATE_ERROR &&
+          current.processingRetryAt === LOZIONICA_DUPLICATE_RETRY_AT &&
+          current.processingLeaseExpiresAt == null) ||
+        (row.savedPostId === LOZIONICA_SHARED_RECEIPT_SAVED_POST_ID &&
+          row.disposition === "held_shared_receipt_collision" &&
+          current.processingError === LOZIONICA_SHARED_RECEIPT_ERROR &&
+          current.processingRetryAt === LOZIONICA_SHARED_RECEIPT_RETRY_AT &&
+          current.processingLeaseExpiresAt == null),
         "A held saved post changed before apply.",
       );
-      assert((current.processingRetryAt ?? 0) > Date.now(),
-        `Held saved-post retry cooldown ended: ${row.savedPostId}.`);
+      if (row.disposition === "held_retry_cooldown" || row.disposition === "held_semantic_conflict") {
+        assert((current.processingRetryAt ?? 0) > Date.now(),
+          `Held saved-post retry cooldown ended: ${row.savedPostId}.`);
+      }
       results.push({ savedPostId: row.savedPostId, state: row.disposition });
       continue;
     }
@@ -275,6 +320,8 @@ async function main() {
       results.push({ savedPostId: row.savedPostId, state: "already_terminal" });
       continue;
     }
+    assert(row.disposition === "process_saved_post" && PROCESS_SAVED_POST_ID_SET.has(row.savedPostId),
+      `Saved post is outside the three independent handles: ${row.savedPostId}.`);
     let blockedOpenAiTransport = false;
     const result = await processSavedScrapedPostForDurableReceipt({
       handle: row.handle,

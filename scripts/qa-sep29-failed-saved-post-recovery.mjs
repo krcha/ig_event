@@ -12,6 +12,13 @@ import {
   TEATAR_SAVED_POST_ID,
   MAMA_SAVED_POST_ID,
   MAMA_SEMANTIC_CONFLICT,
+  LOZIONICA_DUPLICATE_SAVED_POST_ID,
+  LOZIONICA_SHARED_RECEIPT_SAVED_POST_ID,
+  LOZIONICA_DUPLICATE_ERROR,
+  LOZIONICA_SHARED_RECEIPT_ERROR,
+  LOZIONICA_DUPLICATE_RETRY_AT,
+  LOZIONICA_SHARED_RECEIPT_RETRY_AT,
+  PROCESS_SAVED_POST_IDS,
 } from "./recover-sep29-failed-saved-posts.mjs";
 
 const NOW = 1790740000000;
@@ -50,6 +57,12 @@ const posts = TARGETS.map((target) => ({
   ...(target.savedPostId === MAMA_SAVED_POST_ID
     ? { processingRetryAt: 1790744480744, processingError: MAMA_SEMANTIC_CONFLICT }
     : {}),
+  ...(target.savedPostId === LOZIONICA_DUPLICATE_SAVED_POST_ID
+    ? { processingRetryAt: LOZIONICA_DUPLICATE_RETRY_AT, processingError: LOZIONICA_DUPLICATE_ERROR }
+    : {}),
+  ...(target.savedPostId === LOZIONICA_SHARED_RECEIPT_SAVED_POST_ID
+    ? { processingRetryAt: LOZIONICA_SHARED_RECEIPT_RETRY_AT, processingError: LOZIONICA_SHARED_RECEIPT_ERROR }
+    : {}),
 }));
 const parseCachedAnalysis = (value) => {
   assert.equal(value.extraction_contract_version, "event_evidence_v2");
@@ -65,6 +78,9 @@ assert.equal(new Set(TARGETS.map((target) => target.receiptId)).size, 6);
 assert.ok(TARGETS.every((target) => target.handle !== "ligapub.bg"));
 assert.equal(TARGETS[0].savedPostId, TEATAR_SAVED_POST_ID);
 assert.equal(TARGETS[1].savedPostId, MAMA_SAVED_POST_ID);
+assert.equal(TARGETS[2].savedPostId, LOZIONICA_DUPLICATE_SAVED_POST_ID);
+assert.equal(TARGETS[3].savedPostId, LOZIONICA_SHARED_RECEIPT_SAVED_POST_ID);
+assert.deepEqual(PROCESS_SAVED_POST_IDS, TARGETS.slice(4).map((target) => target.savedPostId));
 assert.deepEqual(parseArgs([]), { apply: false, expectedHash: null });
 assert.throws(() => parseArgs(["--apply"]), /Preview first/u);
 assert.throws(() => parseArgs(["--unexpected"]), /Preview first/u);
@@ -82,10 +98,21 @@ assert.equal(envWithoutKey.OPENAI_API_KEY, undefined);
 
 const baseline = planFor(run, posts);
 assert.match(baseline.planSha256, /^[0-9a-f]{64}$/u);
-assert.equal(baseline.plan.rows.filter((row) => row.disposition === "process_saved_post").length, 5);
+assert.equal(baseline.plan.rows.filter((row) => row.disposition === "process_saved_post").length, 3);
+assert.deepEqual(
+  baseline.plan.rows.filter((row) => row.disposition === "process_saved_post").map((row) => row.savedPostId),
+  PROCESS_SAVED_POST_IDS,
+);
 assert.equal(baseline.plan.rows[0].disposition, "held_retry_cooldown");
 assert.equal(baseline.plan.rows[1].disposition, "held_semantic_conflict");
-assert.deepEqual(baseline.plan.heldPostIds, [TEATAR_SAVED_POST_ID, MAMA_SAVED_POST_ID]);
+assert.equal(baseline.plan.rows[2].disposition, "held_duplicate_policy_error");
+assert.equal(baseline.plan.rows[3].disposition, "held_shared_receipt_collision");
+assert.deepEqual(baseline.plan.heldPostIds, [
+  TEATAR_SAVED_POST_ID,
+  MAMA_SAVED_POST_ID,
+  LOZIONICA_DUPLICATE_SAVED_POST_ID,
+  LOZIONICA_SHARED_RECEIPT_SAVED_POST_ID,
+]);
 assert.equal(baseline.plan.openAiTransportAllowed, false);
 assert.ok(!JSON.stringify(baseline.plan).includes("This must never"));
 assert.ok(!JSON.stringify(baseline.plan).includes("https://example.com/poster.jpg"));
@@ -103,12 +130,12 @@ function changed(index, patch) {
   return posts.map((post, postIndex) => postIndex === index ? { ...post, ...patch } : post);
 }
 
-const terminalPlan = planFor(run, changed(2, {
+const terminalPlan = planFor(run, changed(4, {
   processingStatus: "completed",
   processingOutcome: "receipt_complete",
-  updatedAt: posts[2].updatedAt + 1,
+  updatedAt: posts[4].updatedAt + 1,
 }));
-assert.equal(terminalPlan.plan.rows[2].disposition, "already_terminal");
+assert.equal(terminalPlan.plan.rows[4].disposition, "already_terminal");
 assert.notEqual(terminalPlan.planSha256, baseline.planSha256);
 
 assert.throws(() => planFor(run, changed(0, { sourceRevision: 2 })), /identity or source revision changed/u);
@@ -124,12 +151,20 @@ assert.throws(() => planFor(run, changed(1, { processingRetryAt: NOW - 1 })), /r
 assert.throws(() => planFor(run, changed(0, { processingRetryAt: NOW - 1 })), /retry cooldown is not active/u);
 assert.notEqual(planFor(run, changed(1, { processingRetryAt: posts[1].processingRetryAt + 1 })).planSha256, baseline.planSha256);
 assert.notEqual(planFor(run, changed(0, { processingError: "Teatar held for cooldown." })).planSha256, baseline.planSha256);
+assert.throws(() => planFor(run, changed(2, { processingStatus: "completed" })), /Frozen Lozionica processing state changed/u);
+assert.throws(() => planFor(run, changed(2, { processingError: "different error" })), /Frozen Lozionica processing state changed/u);
+assert.throws(() => planFor(run, changed(2, { processingRetryAt: LOZIONICA_DUPLICATE_RETRY_AT + 1 })), /Frozen Lozionica processing state changed/u);
+assert.throws(() => planFor(run, changed(2, { processingLeaseExpiresAt: NOW - 1 })), /Frozen Lozionica processing state changed/u);
+assert.throws(() => planFor(run, changed(3, { processingStatus: "completed" })), /Frozen Lozionica processing state changed/u);
+assert.throws(() => planFor(run, changed(3, { processingError: "different error" })), /Frozen Lozionica processing state changed/u);
+assert.throws(() => planFor(run, changed(3, { processingRetryAt: LOZIONICA_SHARED_RECEIPT_RETRY_AT + 1 })), /Frozen Lozionica processing state changed/u);
+assert.throws(() => planFor(run, changed(3, { updatedAt: posts[3].updatedAt + 1 })), /Frozen Lozionica processing state changed/u);
 assert.throws(() => planFor(run, changed(0, { analysisAttemptRevision: null })), /lacks valid current cached analysis/u);
 assert.throws(() => planFor(run, changed(0, { analysisResultJson: "not-json" })), /fails the production event-evidence parser/u);
 assert.throws(() => planFor(run, changed(0, { analysisResultJson: JSON.stringify({ extraction_contract_version: "event_evidence_v2", is_event: false }) })), /fails the production event-evidence parser/u);
 assert.throws(() => buildPlanForPosts(run, changed(0, { analysisResultJson: JSON.stringify({ extraction_contract_version: "event_evidence_v2", is_event: false }) }), (value) => value), /not an event-evidence-v2 event/u);
 assert.throws(() => planFor(run, changed(0, { analysisImageChecksumSha256: null })), /lacks valid current cached analysis/u);
-assert.throws(() => planFor(run, changed(2, { processingRetryAt: NOW + 60_000 })), /retry cooldown remains active/u);
+assert.throws(() => planFor(run, changed(4, { processingRetryAt: NOW + 60_000 })), /retry cooldown remains active/u);
 assert.throws(() => planFor(run, posts.slice(1)), /exact saved-post ID is missing/u);
 assert.throws(() => planFor({ ...run, status: "running" }, posts), /not completed and idle/u);
 
