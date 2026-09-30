@@ -1,5 +1,8 @@
-import type { Id } from "../../_generated/dataModel";
+import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
+import { buildInstagramSourceOccurrenceFingerprint } from "../../../lib/domain/occurrences/source-fingerprint";
+import { adaptInstagramScrapedPostToSourceDocument } from "../../../lib/domain/source-documents";
+import { canonicalizeSourceUrlOrEmpty } from "../../../lib/domain/source-url";
 import {
   assertExpectedEventUpdatedAt,
   hasAutomaticUniqueStructuredSourceAttestation,
@@ -101,6 +104,77 @@ export function sourceBoundEmptyV2VenueClaimsForTesting(
     return null;
   }
 
+  return [...new Set(claims)];
+}
+
+/** A secondary post has its own durable source identity and analysis. The
+ * canonical event link's display post URL may still name the primary post, so
+ * its sourceIdentity and fingerprint are the authorities for this proof. */
+export function currentSecondarySourceVenueClaimsForTesting(
+  post: Doc<"scrapedPosts">,
+  link: Pick<Doc<"instagramEventSources">, "sourceIdentity" | "sourceFingerprint">,
+  sourceHandle: string,
+): string[] | null {
+  if (
+    normalizeHandle(post.handle) !== sourceHandle ||
+    normalizeHandle(post.username) !== sourceHandle ||
+    !post.postId?.trim() ||
+    !post.canonicalSourceUrl ||
+    post.analysisRevision !== (post.sourceRevision ?? 1) ||
+    post.analysisContractVersion !== "event_evidence_v2" ||
+    post.analysisIsEvent !== true ||
+    !post.analysisModel?.startsWith("gpt-5-mini") ||
+    !post.analysisResultJson ||
+    buildInstagramSourceOccurrenceFingerprint(post) !== link.sourceFingerprint
+  ) return null;
+
+  try {
+    if (
+      adaptInstagramScrapedPostToSourceDocument(post).sourceIdentity !==
+        link.sourceIdentity ||
+      requireCanonicalInstagramPostUrl(
+        post.instagramPostUrl,
+        "Source-bound venue repair secondary post",
+      ) !== post.canonicalSourceUrl
+    ) return null;
+  } catch {
+    return null;
+  }
+
+  const raw = parseObjectJson(post.analysisResultJson);
+  const conflicts = raw?.source_conflicts;
+  const entries = raw?.schedule_entries;
+  const shared = readObject(raw?.shared_schedule_context);
+  const sharedVenue = readObject(shared?.venue);
+  const topLevelVenue = stringClaim(raw?.venue);
+  if (
+    !raw ||
+    raw.extraction_contract_version !== "event_evidence_v2" ||
+    raw.is_event !== true ||
+    canonicalizeSourceUrlOrEmpty(
+      "instagram",
+      typeof raw.source_url === "string" ? raw.source_url : undefined,
+    ) !== post.canonicalSourceUrl ||
+    normalizeSourceCaption(
+      typeof raw.source_caption === "string" ? raw.source_caption : undefined,
+    ) !== normalizeSourceCaption(post.caption) ||
+    !topLevelVenue ||
+    !Array.isArray(conflicts) ||
+    conflicts.some((item) => readObject(item)?.field === "venue") ||
+    !sharedVenue ||
+    !Array.isArray(entries) ||
+    entries.length < 1 ||
+    entries.length > 64
+  ) return null;
+
+  const claims = [topLevelVenue];
+  const sharedClaim = stringClaim(sharedVenue.value);
+  if (sharedClaim) claims.push(sharedClaim);
+  for (const entry of entries) {
+    const venue = stringClaim(readObject(entry)?.venue);
+    if (!venue) return null;
+    claims.push(venue);
+  }
   return [...new Set(claims)];
 }
 
@@ -261,19 +335,91 @@ export async function repairSourceBoundEmptyV2VenueHandler(
 
   const topology = await sourceOccurrenceProvenanceRepository
     .loadAndAssertEventOccurrenceTopology(ctx, event._id);
-  const link = topology.links.length === 1 ? topology.links[0] : null;
+  const links = topology.links;
+  const primaryLinks = links.filter((link) =>
+    link.instagramPostId === postId &&
+    canonicalizeSourceUrlOrEmpty("instagram", link.instagramPostUrl) ===
+      eventPostUrl &&
+    (!link.sourceHandle || normalizeHandle(link.sourceHandle) === sourceHandle) &&
+    link.sourceOccurrenceKey === event.sourceOccurrenceKey &&
+    link.sourceFingerprint === fields.sourceOccurrenceSourceFingerprint,
+  );
+  const link = primaryLinks.length === 1 ? primaryLinks[0] : null;
   if (
+    links.length < 1 ||
+    links.length > 3 ||
     !link ||
-    link.instagramPostId !== postId ||
     requireCanonicalInstagramPostUrl(
       link.instagramPostUrl,
       "Source-bound venue repair source link",
-    ) !== eventPostUrl ||
-    (link.sourceHandle && normalizeHandle(link.sourceHandle) !== sourceHandle) ||
-    link.sourceOccurrenceKey !== event.sourceOccurrenceKey ||
-    link.sourceFingerprint !== fields.sourceOccurrenceSourceFingerprint
+    ) !== eventPostUrl
   ) {
     throw new Error("Event source link and receipt topology are not exact.");
+  }
+
+  if (links.length > 1) {
+    if (
+      adaptInstagramScrapedPostToSourceDocument(post).sourceIdentity !==
+        link.sourceIdentity ||
+      buildInstagramSourceOccurrenceFingerprint(post) !==
+        link.sourceFingerprint
+    ) {
+      throw new Error("Primary multi-source link no longer matches its current saved post.");
+    }
+    const secondaryClaims: string[] = [];
+    for (const secondary of links) {
+      if (secondary._id === link._id) continue;
+      const identity = secondary.sourceIdentity.match(
+        /^instagram-source-identity-v1:([A-Za-z0-9_-]{1,64})$/u,
+      );
+      if (
+        !identity ||
+        secondary.instagramPostId !== postId ||
+        requireCanonicalInstagramPostUrl(
+          secondary.instagramPostUrl,
+          "Source-bound venue repair secondary link",
+        ) !== eventPostUrl ||
+        (secondary.sourceHandle &&
+          normalizeHandle(secondary.sourceHandle) !== sourceHandle)
+      ) {
+        throw new Error("Secondary source link no longer belongs to the canonical venue event.");
+      }
+      const canonicalSourceUrl = `https://www.instagram.com/p/${identity[1]}/`;
+      const sourcePosts = await ctx.db
+        .query("scrapedPosts")
+        .withIndex("by_canonicalSourceUrl", (q) =>
+          q.eq("canonicalSourceUrl", canonicalSourceUrl),
+        )
+        .take(2);
+      const secondaryPost = sourcePosts.length === 1 ? sourcePosts[0] : null;
+      const claims = secondaryPost
+        ? currentSecondarySourceVenueClaimsForTesting(
+            secondaryPost,
+            secondary,
+            sourceHandle,
+          )
+        : null;
+      if (!claims) {
+        throw new Error("Secondary source post lacks exact current venue evidence.");
+      }
+      secondaryClaims.push(...claims);
+    }
+    const uniqueSecondaryClaims = [...new Set(secondaryClaims)];
+    if (uniqueSecondaryClaims.length > 16) {
+      throw new Error("Secondary source venue claims exceed the safe repair bound.");
+    }
+    const secondaryResolutions = await resolveVenueClaimsForWrite(
+      ctx,
+      uniqueSecondaryClaims,
+    );
+    if (uniqueSecondaryClaims.some((claim) => {
+      const resolved = secondaryResolutions.get(claim);
+      return resolved?.resolution.status !== "resolved" ||
+        resolved.venueFields.venueId !== venue._id ||
+        resolved.canonicalVenueName !== venue.name;
+    })) {
+      throw new Error("A secondary source venue claim is ambiguous or offsite.");
+    }
   }
 
   const normalizedFieldsJson = JSON.stringify({

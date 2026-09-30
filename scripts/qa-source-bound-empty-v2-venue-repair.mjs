@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 
-import { sourceBoundEmptyV2VenueClaimsForTesting } from "../convex/internal/eventRepairs/sourceBoundEmptyV2Venue.ts";
+import { buildInstagramSourceOccurrenceFingerprint } from "../lib/domain/occurrences/source-fingerprint.ts";
+import {
+  currentSecondarySourceVenueClaimsForTesting,
+  sourceBoundEmptyV2VenueClaimsForTesting,
+} from "../convex/internal/eventRepairs/sourceBoundEmptyV2Venue.ts";
 
 const fields = {
   rawVenue: "Baza",
@@ -99,6 +103,123 @@ assert.equal(
   sourceBoundEmptyV2VenueClaimsForTesting({ ...fields, rawVenue: "" }, raw),
   null,
   "The repair requires an explicit persisted raw venue claim.",
+);
+
+const secondaryRaw = {
+  ...raw,
+  source_url: "https://www.instagram.com/p/SECONDARY1/",
+  source_caption: "Two Baza events",
+  schedule_entries: raw.schedule_entries.map((entry) => ({
+    ...entry,
+    venue: "Baza",
+  })),
+};
+const secondaryPost = {
+  handle: "baza",
+  username: "baza",
+  postId: "secondary-123",
+  instagramPostUrl: "https://www.instagram.com/p/SECONDARY1/",
+  canonicalSourceUrl: "https://www.instagram.com/p/SECONDARY1/",
+  caption: "Two Baza events",
+  altText: "",
+  locationName: "",
+  sourceRevision: 1,
+  analysisRevision: 1,
+  analysisContractVersion: "event_evidence_v2",
+  analysisIsEvent: true,
+  analysisModel: "gpt-5-mini",
+  analysisResultJson: JSON.stringify(secondaryRaw),
+};
+const secondaryLink = {
+  sourceIdentity: "instagram-source-identity-v1:SECONDARY1",
+  sourceFingerprint: buildInstagramSourceOccurrenceFingerprint(secondaryPost),
+};
+assert.deepEqual(
+  currentSecondarySourceVenueClaimsForTesting(
+    secondaryPost,
+    secondaryLink,
+    "baza",
+  ),
+  ["Baza"],
+  "A second saved source with current analysis can attest the same venue.",
+);
+assert.equal(
+  currentSecondarySourceVenueClaimsForTesting(
+    secondaryPost,
+    { ...secondaryLink, sourceFingerprint: "stale" },
+    "baza",
+  ),
+  null,
+  "A stale receipt fingerprint cannot authorize venue rebinding.",
+);
+assert.equal(
+  currentSecondarySourceVenueClaimsForTesting(
+    { ...secondaryPost, analysisRevision: 0 },
+    secondaryLink,
+    "baza",
+  ),
+  null,
+  "The secondary GPT analysis must match the current source revision.",
+);
+assert.equal(
+  currentSecondarySourceVenueClaimsForTesting(
+    {
+      ...secondaryPost,
+      analysisResultJson: JSON.stringify({
+        ...secondaryRaw,
+        source_url: "https://www.instagram.com/p/OTHERPOST/",
+      }),
+    },
+    secondaryLink,
+    "baza",
+  ),
+  null,
+  "The analysis must attest its own saved secondary post.",
+);
+assert.equal(
+  currentSecondarySourceVenueClaimsForTesting(
+    { ...secondaryPost, handle: "other_account" },
+    secondaryLink,
+    "baza",
+  ),
+  null,
+  "A different posting account cannot borrow the venue source.",
+);
+assert.equal(
+  currentSecondarySourceVenueClaimsForTesting(
+    {
+      ...secondaryPost,
+      analysisResultJson: JSON.stringify({
+        ...secondaryRaw,
+        schedule_entries: [
+          secondaryRaw.schedule_entries[0],
+          { ...secondaryRaw.schedule_entries[1], venue: "" },
+        ],
+      }),
+    },
+    secondaryLink,
+    "baza",
+  ),
+  null,
+  "Every secondary schedule row needs a physical venue claim.",
+);
+assert.deepEqual(
+  currentSecondarySourceVenueClaimsForTesting(
+    {
+      ...secondaryPost,
+      analysisResultJson: JSON.stringify({
+        ...secondaryRaw,
+        schedule_entries: [
+          secondaryRaw.schedule_entries[0],
+          { ...secondaryRaw.schedule_entries[1], venue: "Another Club" },
+        ],
+      }),
+    },
+    secondaryLink,
+    "baza",
+  ),
+  ["Baza", "Another Club"],
+  "An offsite secondary claim must reach the catalog resolution gate.",
 );
 
 console.log("Source-bound empty v2 venue repair QA passed.");
