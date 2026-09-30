@@ -108,6 +108,7 @@ import {
   mergeApprovedEventsHandler,
 } from "./eventDomain/lifecycleCommands";
 import { repairTrustedV2EventVenueHandler } from "./eventDomain/trustedV2VenueRepair";
+import { repairSourceBoundEmptyV2VenueHandler } from "./internal/eventRepairs/sourceBoundEmptyV2Venue";
 import {
   getReviewedStructuredEvidenceCorrectionContextHandler,
   repairReviewedStructuredEventEvidenceHandler,
@@ -425,6 +426,24 @@ export const repairTrustedV2EventVenue = mutation({
   },
   returns: trustedV2VenueRepairResult,
   handler: repairTrustedV2EventVenueHandler,
+});
+
+/** Repairs Sep 25-29 approved empty-venue v2 rows whose saved post, exact
+ * venue source, matching schedule rows, and receipt still support one public
+ * catalog venue. The handler recomputes the next normalized JSON itself. */
+export const repairSourceBoundEmptyV2Venue = mutation({
+  args: {
+    id: v.id("events"),
+    expectedUpdatedAt: v.number(),
+    expectedNormalizedFieldsJson: v.string(),
+    venueId: v.id("venues"),
+    expectedVenueUpdatedAt: v.number(),
+    expectedSourceUpdatedAt: v.number(),
+    moderationNote: v.string(),
+    serviceSecret: v.string(),
+  },
+  returns: trustedV2VenueRepairResult,
+  handler: repairSourceBoundEmptyV2VenueHandler,
 });
 const reviewedStructuredEvidenceCorrectionResult = v.object({
   updated: v.boolean(),

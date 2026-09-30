@@ -174,8 +174,9 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
         normalizeVenueComparableText(venue.name) !==
           normalizeVenueComparableText(configuredVenueName) &&
           (
-            normalizeVenueComparableText(venue.name) ===
-              normalizeVenueComparableText(locationTagVenue) ||
+            (Boolean(locationTagVenue) &&
+              normalizeVenueComparableText(venue.name) ===
+                normalizeVenueComparableText(locationTagVenue)) ||
             [venue.name, ...(venue.aliases ?? [])].some((name) =>
               hasPhysicalVenuePlacement(name, sourcePlacementEvidence),
             )

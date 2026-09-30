@@ -26,6 +26,9 @@ import {
   prepareEventsForInsert,
   resolveInstagramSourceExtractionContextForTesting,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
+import { buildIngestionVenueResolver } from "../lib/domain/venues/index.ts";
+import { extractSplitEventCandidates } from "../lib/pipeline/ingestion/parsing-schedule.ts";
+import { buildStructuredFactVariants } from "../lib/pipeline/ingestion/structured-fact-variants.ts";
 
 function confirmation(evidence, source = "caption") {
   const exactEvidence = String(evidence ?? "").trim();
@@ -363,6 +366,8 @@ function prepare(post, extracted, options = {}) {
     {
       eventDateFilterNow: semanticQaNow,
       sourceRolesByHandle: options.sourceRolesByHandle ?? {},
+      canonicalVenueAliasesByHandle: options.canonicalVenueAliasesByHandle ?? {},
+      venueResolverSnapshot: options.venueResolverSnapshot,
     },
   );
 }
@@ -2340,6 +2345,194 @@ function runSemanticNormalizationQa() {
       assert.equal(result.kind, "ok");
       assert.equal(result.event.venue, "");
       assert.equal(result.normalizedFields.normalizedVenue, "");
+    }
+  });
+
+  runCase("exact venue-account model claim scopes split schedule rows", () => {
+    const firstDate = isoDateDaysFromNow(23);
+    const secondDate = isoDateDaysFromNow(24);
+    const cases = [
+      {
+        handle: "bazakulturnihzbivanja",
+        venue: "Baza Kulturnih Zbivanja",
+        alias: "Baza",
+        title: "БАЗА ЏЕМ",
+        address: "Beograd, Venizelosova 34a",
+      },
+      {
+        handle: "mamashelterbelgrade",
+        venue: "Mama Shelter Belgrade",
+        alias: "Mama Shelter",
+        title: "DJ NIGHT",
+        address: "Beograd, Kneza Mihaila 54a",
+      },
+    ];
+    for (const [caseIndex, venueCase] of cases.entries()) {
+      const firstLine = `${ddmmyyyy(firstDate)} - ${venueCase.title} - 20h`;
+      const secondLine = `${ddmmyyyy(secondDate)} - MUSIC NIGHT - 21h`;
+      const post = makePost({
+        caption: [firstLine, secondLine, venueCase.address].join("\n"),
+        postId: `qa-exact-venue-account-split-${caseIndex}`,
+        username: venueCase.handle,
+      });
+      const rows = [
+        [firstDate, firstLine, venueCase.title],
+        [secondDate, secondLine, "MUSIC NIGHT"],
+      ].map(([date, sourceText, title]) => ({
+        date,
+        time: "",
+        venue: "",
+        title,
+        artists: [],
+        description: `${title} event.`,
+        source_text: sourceText,
+        date_evidence: {
+          exact_text: ddmmyyyy(date),
+          source: "caption",
+          is_relative: false,
+          resolved_date: date,
+        },
+        time_evidence: {
+          status: "not_stated",
+          exact_text: "",
+          source: "unknown",
+        },
+      }));
+      const extracted = makeEventExtraction({
+        caption: post.caption,
+        date: "",
+        dateEvidenceText: "",
+        postUrl: post.instagramPostUrl,
+        title: "",
+        venue: venueCase.venue,
+        schedule_entries: rows,
+        shared_schedule_context: {
+          venue: {
+            applies_to_all: true,
+            value: venueCase.venue,
+            evidence: venueCase.address,
+            source: "poster",
+          },
+          time: emptySharedScheduleContext().time,
+        },
+      });
+      const resolver = buildIngestionVenueResolver({
+        canonicalVenueNamesByHandle: { [venueCase.handle]: venueCase.venue },
+        canonicalVenueAliasesByHandle: { [venueCase.handle]: [venueCase.alias] },
+        configuredVenueNamesByHandle: { [venueCase.handle]: venueCase.venue },
+        venueResolverSnapshot: {
+          venues: [
+            {
+              id: `qa-source-venue-${caseIndex}`,
+              name: venueCase.venue,
+              aliases: [venueCase.alias],
+              instagramHandle: venueCase.handle,
+            },
+            {
+              id: `qa-offsite-venue-${caseIndex}`,
+              name: "QA Offsite Hall",
+              aliases: [],
+              instagramHandle: `qa_offsite_${caseIndex}`,
+            },
+            {
+              id: `qa-emoji-only-venue-${caseIndex}`,
+              name: "🍊🍺",
+              aliases: [],
+              instagramHandle: `qa_emoji_${caseIndex}`,
+            },
+          ],
+          identities: [{
+            active: true,
+            kind: "provider_account",
+            provider: "instagram",
+            value: venueCase.handle,
+            venueId: `qa-source-venue-${caseIndex}`,
+          }],
+        },
+      });
+      const splitEventCandidates = extractSplitEventCandidates(
+        post, extracted, "nightlife", null,
+      );
+      assert.equal(splitEventCandidates.length, 2);
+      const selectVariants = (sourceRole, candidatePost = post, candidateExtraction = extracted) =>
+        buildStructuredFactVariants({
+          baseDescription: "",
+          baseTitle: "Weekly music program",
+          baseTitleSource: "model",
+          baseTitleUsedFallback: false,
+          candidateDates: [],
+          canonicalVenueEvidenceSource: null,
+          configuredVenueLocation: "",
+          configuredVenueName: venueCase.venue,
+          dateNormalization: normalizeEventDate(
+            ddmmyyyy(firstDate), candidatePost.caption, candidatePost.postedAt,
+          ),
+          effectiveNormalizedVenue: "",
+          eventType: "nightlife",
+          extracted: candidateExtraction,
+          extractedArtists: [],
+          extractedTimeIssues: [],
+          extractedTimeResolution: {},
+          independentPostTextEvidence: candidatePost.caption,
+          ingestionVenueResolver: resolver,
+          normalizedSourceHandle: venueCase.handle,
+          normalizedVenue: venueCase.venue,
+          options: {},
+          post: candidatePost,
+          rawExtractedTime: "",
+          rawModelVenue: venueCase.venue,
+          selectedImageUrl: null,
+          sourceRole,
+          splitEventCandidates: extractSplitEventCandidates(
+            candidatePost, candidateExtraction, "nightlife", null,
+          ),
+          time: "",
+          titleNormalization: { source: "model", contextCandidate: null },
+          trustedVenueSource: false,
+          usesSplitEventCandidates: true,
+          usesStructuredEvidence: true,
+          venueNormalization: { evidenceHandle: null },
+        });
+
+      const venueVariants = selectVariants("venue");
+      assert.equal(venueVariants.verifiedSharedVenue, false);
+      assert.deepEqual(
+        venueVariants.eventVariants.map((variant) => variant.venue),
+        [venueCase.venue, venueCase.venue],
+        "an exact mapped venue account and model claim should fill each unscoped child",
+      );
+      assert.ok(venueVariants.eventVariants.every(
+        (variant) => variant.venueFromSourceAccountFallback === true,
+      ));
+
+      const promoterVariants = selectVariants("promoter");
+      assert.deepEqual(
+        promoterVariants.eventVariants.map((variant) => variant.venue),
+        ["", ""],
+        "the same model claim must not become a promoter account fallback",
+      );
+
+      const offsiteLine = `${firstLine} at QA Offsite Hall`;
+      const offsitePost = {
+        ...post,
+        caption: post.caption.replace(firstLine, offsiteLine),
+      };
+      const offsiteExtraction = parseExtractedEventData({
+        ...structuredClone(extracted),
+        source_caption: offsitePost.caption,
+        schedule_entries: rows.map((row, index) =>
+          index === 0 ? { ...row, source_text: offsiteLine, venue: "QA Offsite Hall" } : row,
+        ),
+      });
+      const offsiteVariants = selectVariants(
+        "venue", offsitePost, offsiteExtraction,
+      );
+      assert.equal(offsiteVariants.eventVariants[0]?.venue, "QA Offsite Hall");
+      assert.notEqual(
+        offsiteVariants.eventVariants[1]?.venue,
+        venueCase.venue,
+        "a schedule with explicit offsite placement must not receive a global home-venue fallback",
+      );
     }
   });
 
