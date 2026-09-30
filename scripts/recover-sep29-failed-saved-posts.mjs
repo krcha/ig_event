@@ -3,9 +3,10 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
-// Frozen from six failed, persisted Sep 29 receipts. Only the seven saved
-// posts with valid, current event-evidence caches are selected. The uncached
-// ligapub.bg post is deliberately excluded. This operator never calls Apify,
+// Frozen from six failed, persisted Sep 29 receipts. All seven saved posts
+// with valid, current event-evidence caches are version-fenced, but Teatar
+// and Mama Shelter remain held; at most five posts can be processed. The
+// uncached ligapub.bg post is excluded. This operator never calls Apify,
 // opens a fetch receipt, scans a backlog, or sends content to OpenAI.
 export const RUN_ID = "n170c5ea1c5ag0etc57qzc4ry58fa87v";
 export const CONVEX_URL = "https://convex-events.ineedtofeedmyrabbit.com";
@@ -19,6 +20,9 @@ export const TARGETS = Object.freeze([
   { receiptId: "mx7a4nj5q48tmsq37ec34k9nnd8fask9", handle: "bitefteatar", savedPostId: "jn71vbf4qmfqb25hemnfe9bwj98faa9w", sourceRevision: 1, postId: "3996085576805257831", postUrl: "https://www.instagram.com/p/Dd08qjxihJn/", outcome: "processing_failed", updatedAt: 1790665829445 },
 ]);
 export const TEATAR_SAVED_POST_ID = "jn786s2hg3jnpv2dcxddawke6d8fb0g0";
+export const MAMA_SAVED_POST_ID = "jn73f64qpe02zz0vgtgbafb15d8fbay2";
+export const MAMA_SEMANTIC_CONFLICT =
+  "Source-occurrence key is occupied by a different semantic representative; manual repair is required.";
 
 const TERMINAL_OUTCOMES = new Set([
   "terminal_no_event",
@@ -50,21 +54,18 @@ export function assertCachedReplayTerminal(result, blockedOpenAiTransport, saved
 
 export function parseArgs(args) {
   const apply = args.includes("--apply");
-  const holdTeatarCooldown = args.includes("--hold-teatar-cooldown");
   const hashIndex = args.indexOf("--expect-plan-sha256");
   const expectedHash = hashIndex < 0 ? null : args[hashIndex + 1];
   assert(
     args.every((arg, index) =>
       arg === "--apply" ||
-      arg === "--hold-teatar-cooldown" ||
       arg === "--expect-plan-sha256" ||
       (index > 0 && args[index - 1] === "--expect-plan-sha256")) &&
-      args.filter((arg) => arg === "--hold-teatar-cooldown").length <= 1 &&
       args.filter((arg) => arg === "--expect-plan-sha256").length <= 1 &&
       (apply ? /^[0-9a-f]{64}$/u.test(expectedHash ?? "") : expectedHash === null),
     "Preview first; apply with --apply --expect-plan-sha256 <preview hash>.",
   );
-  return { apply, expectedHash, holdTeatarCooldown };
+  return { apply, expectedHash };
 }
 
 function compactPost(post) {
@@ -76,6 +77,9 @@ function compactPost(post) {
     postUrl: post.instagramPostUrl,
     processingStatus: post.processingStatus ?? null,
     processingOutcome: post.processingOutcome ?? null,
+    processingErrorSha256: typeof post.processingError === "string"
+      ? crypto.createHash("sha256").update(post.processingError).digest("hex")
+      : null,
     updatedAt: post.updatedAt ?? null,
     processingRetryAt: post.processingRetryAt ?? null,
     processingLeaseExpiresAt: post.processingLeaseExpiresAt ?? null,
@@ -126,7 +130,7 @@ function validateCachedAnalysis(post, target, parseExtractedEventData) {
     `Cached analysis is not an event-evidence-v2 event: ${target.savedPostId}.`);
 }
 
-export function buildPlanForPosts(run, posts, parseExtractedEventData, now = Date.now(), holdTeatarCooldown = false) {
+export function buildPlanForPosts(run, posts, parseExtractedEventData, now = Date.now()) {
   assert(run?.runId === RUN_ID && run.mode === "daily", "The frozen daily run changed.");
   assert(run.status === "completed" && run.complete === true && run.inFlightCount === 0,
     "The frozen daily run is not completed and idle.");
@@ -147,7 +151,25 @@ export function buildPlanForPosts(run, posts, parseExtractedEventData, now = Dat
     );
     validateCachedAnalysis(post, target, parseExtractedEventData);
     let disposition;
-    if (state.processingStatus === "completed" && TERMINAL_OUTCOMES.has(state.processingOutcome)) {
+    if (target.savedPostId === TEATAR_SAVED_POST_ID || target.savedPostId === MAMA_SAVED_POST_ID) {
+      assert(
+        state.processingStatus === "retryable_failure" &&
+        state.processingOutcome === target.outcome &&
+        state.updatedAt === target.updatedAt,
+        `Frozen held-post processing state changed: ${target.savedPostId}. Review a fresh snapshot.`,
+      );
+      assert((state.processingLeaseExpiresAt ?? 0) <= now,
+        `Held saved-post lease remains active: ${target.savedPostId}.`);
+      assert(Number.isFinite(state.processingRetryAt) && state.processingRetryAt > now,
+        `Held saved-post retry cooldown is not active: ${target.savedPostId}.`);
+      if (target.savedPostId === MAMA_SAVED_POST_ID) {
+        assert(post.processingError === MAMA_SEMANTIC_CONFLICT,
+          `Mama Shelter semantic conflict changed: ${target.savedPostId}.`);
+        disposition = "held_semantic_conflict";
+      } else {
+        disposition = "held_retry_cooldown";
+      }
+    } else if (state.processingStatus === "completed" && TERMINAL_OUTCOMES.has(state.processingOutcome)) {
       disposition = "already_terminal";
     } else {
       assert(
@@ -158,23 +180,17 @@ export function buildPlanForPosts(run, posts, parseExtractedEventData, now = Dat
       );
       assert((state.processingLeaseExpiresAt ?? 0) <= now,
         `Saved-post lease remains active: ${target.savedPostId}.`);
-      if (holdTeatarCooldown && target.savedPostId === TEATAR_SAVED_POST_ID) {
-        assert(Number.isFinite(state.processingRetryAt) && state.processingRetryAt > now,
-          `Teatar retry cooldown is not active: ${target.savedPostId}.`);
-        disposition = "held_retry_cooldown";
-      } else {
-        assert((state.processingRetryAt ?? 0) <= now,
-          `Saved-post retry cooldown remains active: ${target.savedPostId}.`);
-        disposition = "process_saved_post";
-      }
+      assert((state.processingRetryAt ?? 0) <= now,
+        `Saved-post retry cooldown remains active: ${target.savedPostId}.`);
+      disposition = "process_saved_post";
     }
     return { receiptId: target.receiptId, disposition, ...state };
   });
   const plan = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     runId: RUN_ID,
     convexUrl: CONVEX_URL,
-    teatarCooldownHeld: holdTeatarCooldown,
+    heldPostIds: [TEATAR_SAVED_POST_ID, MAMA_SAVED_POST_ID],
     openAiTransportAllowed: false,
     rows,
   };
@@ -184,7 +200,7 @@ export function buildPlanForPosts(run, posts, parseExtractedEventData, now = Dat
   };
 }
 
-async function loadPlan(client, serviceSecret, parseExtractedEventData, holdTeatarCooldown) {
+async function loadPlan(client, serviceSecret, parseExtractedEventData) {
   const [run, posts] = await Promise.all([
     client.query("durableIngestionRuns:probeRun", { runId: RUN_ID, serviceSecret }),
     client.query("scrapedPosts:getManyByIds", {
@@ -192,11 +208,11 @@ async function loadPlan(client, serviceSecret, parseExtractedEventData, holdTeat
       serviceSecret,
     }),
   ]);
-  return buildPlanForPosts(run, posts, parseExtractedEventData, Date.now(), holdTeatarCooldown);
+  return buildPlanForPosts(run, posts, parseExtractedEventData);
 }
 
 async function main() {
-  const { apply, expectedHash, holdTeatarCooldown } = parseArgs(process.argv.slice(2));
+  const { apply, expectedHash } = parseArgs(process.argv.slice(2));
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL?.trim().replace(/\/$/u, "");
   const serviceSecret = process.env.CRON_SECRET?.trim();
   assert(convexUrl === CONVEX_URL && serviceSecret,
@@ -204,13 +220,13 @@ async function main() {
   const { ConvexHttpClient } = await import("convex/browser");
   const { parseExtractedEventData } = await import("../lib/ai/extract-event-data.ts");
   const client = new ConvexHttpClient(CONVEX_URL);
-  const before = await loadPlan(client, serviceSecret, parseExtractedEventData, holdTeatarCooldown);
+  const before = await loadPlan(client, serviceSecret, parseExtractedEventData);
   const preview = {
     mode: apply ? "apply_preflight" : "preview",
     runId: RUN_ID,
     selectedPostCount: TARGETS.length,
-    heldCooldownCount: before.plan.rows.filter((row) => row.disposition === "held_retry_cooldown").length,
-    heldSavedPostId: before.plan.rows.find((row) => row.disposition === "held_retry_cooldown")?.savedPostId ?? null,
+    heldCount: before.plan.rows.filter((row) => row.disposition.startsWith("held_")).length,
+    heldSavedPostIds: before.plan.rows.filter((row) => row.disposition.startsWith("held_")).map((row) => row.savedPostId),
     processCount: before.plan.rows.filter((row) => row.disposition === "process_saved_post").length,
     alreadyTerminalCount: before.plan.rows.filter((row) => row.disposition === "already_terminal").length,
     openAiTransportAllowed: false,
@@ -243,10 +259,16 @@ async function main() {
     assert(current && JSON.stringify(compactPost(current)) === JSON.stringify(expectedState),
       `Saved-post version fence changed before processing ${row.savedPostId}.`);
     validateCachedAnalysis(current, row, parseExtractedEventData);
-    if (row.disposition === "held_retry_cooldown") {
-      assert(row.savedPostId === TEATAR_SAVED_POST_ID && (current.processingRetryAt ?? 0) > Date.now(),
-        "The exact Teatar post is no longer on retry cooldown.");
-      results.push({ savedPostId: row.savedPostId, state: "held_retry_cooldown" });
+    if (row.disposition === "held_retry_cooldown" || row.disposition === "held_semantic_conflict") {
+      assert(
+        (row.savedPostId === TEATAR_SAVED_POST_ID && row.disposition === "held_retry_cooldown") ||
+        (row.savedPostId === MAMA_SAVED_POST_ID && row.disposition === "held_semantic_conflict" &&
+          current.processingError === MAMA_SEMANTIC_CONFLICT),
+        "A held saved post changed before apply.",
+      );
+      assert((current.processingRetryAt ?? 0) > Date.now(),
+        `Held saved-post retry cooldown ended: ${row.savedPostId}.`);
+      results.push({ savedPostId: row.savedPostId, state: row.disposition });
       continue;
     }
     if (row.disposition === "already_terminal") {
@@ -279,9 +301,9 @@ async function main() {
   console.log(JSON.stringify({
     mode: "complete",
     selectedPostCount: TARGETS.length,
-    heldCooldownCount: results.filter((result) => result.state === "held_retry_cooldown").length,
-    heldSavedPostId: results.find((result) => result.state === "held_retry_cooldown")?.savedPostId ?? null,
-    processedCount: results.filter((result) => result.state !== "held_retry_cooldown" && result.state !== "already_terminal").length,
+    heldCount: results.filter((result) => result.state.startsWith("held_")).length,
+    heldSavedPostIds: results.filter((result) => result.state.startsWith("held_")).map((result) => result.savedPostId),
+    processedCount: results.filter((result) => result.state === "terminal").length,
     openAiTransportAllowed: false,
     observedOpenAiTransportAttempts: results.filter((result) => result.transportAttempted).length,
     historicalReceiptsUnchanged: true,
