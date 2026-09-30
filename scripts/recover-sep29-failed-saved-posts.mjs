@@ -3,9 +3,10 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
-// Frozen from the seven failed, persisted Sep 29 receipts. Only eight
-// retryable saved posts are selected; the two terminal posts are omitted.
-// This operator never calls Apify, opens a fetch receipt, or scans a backlog.
+// Frozen from six failed, persisted Sep 29 receipts. Only the seven saved
+// posts with valid, current event-evidence caches are selected. The uncached
+// ligapub.bg post is deliberately excluded. This operator never calls Apify,
+// opens a fetch receipt, scans a backlog, or sends content to OpenAI.
 export const RUN_ID = "n170c5ea1c5ag0etc57qzc4ry58fa87v";
 export const CONVEX_URL = "https://convex-events.ineedtofeedmyrabbit.com";
 export const TARGETS = Object.freeze([
@@ -13,7 +14,6 @@ export const TARGETS = Object.freeze([
   { receiptId: "mx7evvafb7kjmh9cm7wdr4ckk58fbw2f", handle: "mamashelterbelgrade", savedPostId: "jn73f64qpe02zz0vgtgbafb15d8fbay2", sourceRevision: 1, postId: "3996189127224728144", postUrl: "https://www.instagram.com/p/Dd1UNanghpQ/", outcome: "incomplete_occurrence_receipt", updatedAt: 1790673191730 },
   { receiptId: "mx7f783yy33weq4fk5pcgqfd0h8fbkx2", handle: "lozionica", savedPostId: "jn71mp4gk42gh76c9tkgz4ee858fbq5d", sourceRevision: 1, postId: "3996268658686036100", postUrl: "https://www.instagram.com/p/Dd1mSwEAgiE/", outcome: "incomplete_occurrence_receipt", updatedAt: 1790668152212 },
   { receiptId: "mx7f783yy33weq4fk5pcgqfd0h8fbkx2", handle: "lozionica", savedPostId: "jn785zgz3frh7ckm21bmdqqnf98fa1mj", sourceRevision: 1, postId: "3996195865995335963", postUrl: "https://www.instagram.com/p/Dd1VveliVkb/", outcome: "incomplete_occurrence_receipt", updatedAt: 1790672342781 },
-  { receiptId: "mx734pxtsqhx79j0tpebng5sxx8fazdn", handle: "ligapub.bg", savedPostId: "jn7faxh4fa4qr358vev4qpz9498fbb56", sourceRevision: 1, postId: "3996302678504807873", postUrl: "https://www.instagram.com/p/Dd1uBzfOJ3B/", outcome: "processing_failed", updatedAt: 1790666388054 },
   { receiptId: "mx7a5tkmcbdtypb7r4zvq8etdx8fb2w8", handle: "dardanelislavija", savedPostId: "jn74gyvscj6j9frhyafnbp1bd58fb6z1", sourceRevision: 1, postId: "3996214545136811185", postUrl: "https://www.instagram.com/p/Dd1Z_S5IPyx/", outcome: "incomplete_occurrence_receipt", updatedAt: 1790671991290 },
   { receiptId: "mx7bkqrvkw4s971rqmxd0w6a7h8faeqh", handle: "cajgerbar", savedPostId: "jn71pmqjyd9jynk2vxddmrbw4x8fbjys", sourceRevision: 1, postId: "3996180129170920173", postUrl: "https://www.instagram.com/p/Dd1SKehtRLt/", outcome: "incomplete_occurrence_receipt", updatedAt: 1790665874473 },
   { receiptId: "mx7a4nj5q48tmsq37ec34k9nnd8fask9", handle: "bitefteatar", savedPostId: "jn71vbf4qmfqb25hemnfe9bwj98faa9w", sourceRevision: 1, postId: "3996085576805257831", postUrl: "https://www.instagram.com/p/Dd08qjxihJn/", outcome: "processing_failed", updatedAt: 1790665829445 },
@@ -25,10 +25,26 @@ const TERMINAL_OUTCOMES = new Set([
   "terminal_canonical_duplicate",
   "receipt_complete",
 ]);
-const MAX_OPENAI_TRANSPORTS = 3;
+const CACHED_ANALYSIS_PROTOCOL =
+  "openai-responses:event-extraction:event_evidence_v2:compact_medium:max_output_tokens_16384:v2";
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+export function blockOpenAiTransport() {
+  throw new Error("OpenAI transport is forbidden for cached-only saved-post recovery.");
+}
+
+export function disableOpenAiCredential(env) {
+  delete env.OPENAI_API_KEY;
+}
+
+export function assertCachedReplayTerminal(result, blockedOpenAiTransport, savedPostId) {
+  assert(!blockedOpenAiTransport && result.transportAttempted === false,
+    `A cached-only replay attempted OpenAI transport for ${savedPostId}.`);
+  assert(result.state === "terminal",
+    `Cached-only replay did not reach a terminal outcome for ${savedPostId}: ${result.reason ?? result.state}.`);
 }
 
 export function parseArgs(args) {
@@ -60,11 +76,52 @@ function compactPost(post) {
     processingLeaseExpiresAt: post.processingLeaseExpiresAt ?? null,
     analysisAttemptRevision: post.analysisAttemptRevision ?? null,
     analysisRevision: post.analysisRevision ?? null,
-    hasAnalysisResult: Boolean(post.analysisResultJson),
+    analysisAttemptProtocol: post.analysisAttemptProtocol ?? null,
+    analysisContractVersion: post.analysisContractVersion ?? null,
+    analysisAttemptStartedAt: post.analysisAttemptStartedAt ?? null,
+    analysisCompletedAt: post.analysisCompletedAt ?? null,
+    analysisAttemptOwnerPresent: Boolean(post.analysisAttemptOwner),
+    analysisModel: post.analysisModel ?? null,
+    analysisIsEvent: post.analysisIsEvent ?? null,
+    analysisResultSha256: typeof post.analysisResultJson === "string"
+      ? crypto.createHash("sha256").update(post.analysisResultJson).digest("hex")
+      : null,
+    analysisImageSourceUrlSha256: typeof post.analysisImageSourceUrl === "string"
+      ? crypto.createHash("sha256").update(post.analysisImageSourceUrl).digest("hex")
+      : null,
+    analysisImageChecksumSha256: post.analysisImageChecksumSha256 ?? null,
   };
 }
 
-export function buildPlanForPosts(run, posts, now = Date.now()) {
+function validateCachedAnalysis(post, target, parseExtractedEventData) {
+  assert(typeof parseExtractedEventData === "function", "The production event-evidence parser is required.");
+  assert(
+    post.analysisAttemptRevision === target.sourceRevision &&
+    post.analysisRevision === target.sourceRevision &&
+    post.analysisAttemptProtocol === CACHED_ANALYSIS_PROTOCOL &&
+    post.analysisContractVersion === "event_evidence_v2" &&
+    Number.isFinite(post.analysisAttemptStartedAt) &&
+    Number.isFinite(post.analysisCompletedAt) &&
+    post.analysisCompletedAt >= post.analysisAttemptStartedAt &&
+    typeof post.analysisAttemptOwner === "string" && post.analysisAttemptOwner.length > 0 &&
+    typeof post.analysisModel === "string" && post.analysisModel.length > 0 &&
+    post.analysisIsEvent === true &&
+    typeof post.analysisResultJson === "string" && post.analysisResultJson.length > 0 &&
+    typeof post.analysisImageSourceUrl === "string" && post.analysisImageSourceUrl.length > 0 &&
+    /^[0-9a-f]{64}$/iu.test(post.analysisImageChecksumSha256 ?? ""),
+    `Saved post lacks valid current cached analysis: ${target.savedPostId}.`,
+  );
+  let parsed;
+  try {
+    parsed = parseExtractedEventData(JSON.parse(post.analysisResultJson));
+  } catch {
+    throw new Error(`Cached analysis fails the production event-evidence parser: ${target.savedPostId}.`);
+  }
+  assert(parsed?.extraction_contract_version === "event_evidence_v2" && parsed.is_event === true,
+    `Cached analysis is not an event-evidence-v2 event: ${target.savedPostId}.`);
+}
+
+export function buildPlanForPosts(run, posts, parseExtractedEventData, now = Date.now()) {
   assert(run?.runId === RUN_ID && run.mode === "daily", "The frozen daily run changed.");
   assert(run.status === "completed" && run.complete === true && run.inFlightCount === 0,
     "The frozen daily run is not completed and idle.");
@@ -83,6 +140,7 @@ export function buildPlanForPosts(run, posts, now = Date.now()) {
       state.postUrl === target.postUrl,
       `Exact saved-post identity or source revision changed: ${target.savedPostId}.`,
     );
+    validateCachedAnalysis(post, target, parseExtractedEventData);
     let disposition;
     if (state.processingStatus === "completed" && TERMINAL_OUTCOMES.has(state.processingOutcome)) {
       disposition = "already_terminal";
@@ -97,23 +155,18 @@ export function buildPlanForPosts(run, posts, now = Date.now()) {
         `Saved-post lease remains active: ${target.savedPostId}.`);
       assert((state.processingRetryAt ?? 0) <= now,
         `Saved-post retry cooldown remains active: ${target.savedPostId}.`);
-      assert(
-        state.analysisAttemptRevision !== target.sourceRevision ||
-        (state.analysisRevision === target.sourceRevision && state.hasAnalysisResult),
-        `OpenAI transport is ambiguous for ${target.savedPostId}; automatic replay is blocked.`,
-      );
       disposition = "process_saved_post";
     }
     return { receiptId: target.receiptId, disposition, ...state };
   });
-  const plan = { schemaVersion: 1, runId: RUN_ID, convexUrl: CONVEX_URL, maxOpenAiTransports: MAX_OPENAI_TRANSPORTS, rows };
+  const plan = { schemaVersion: 2, runId: RUN_ID, convexUrl: CONVEX_URL, openAiTransportAllowed: false, rows };
   return {
     plan,
     planSha256: crypto.createHash("sha256").update(JSON.stringify(plan)).digest("hex"),
   };
 }
 
-async function loadPlan(client, serviceSecret) {
+async function loadPlan(client, serviceSecret, parseExtractedEventData) {
   const [run, posts] = await Promise.all([
     client.query("durableIngestionRuns:probeRun", { runId: RUN_ID, serviceSecret }),
     client.query("scrapedPosts:getManyByIds", {
@@ -121,7 +174,7 @@ async function loadPlan(client, serviceSecret) {
       serviceSecret,
     }),
   ]);
-  return buildPlanForPosts(run, posts);
+  return buildPlanForPosts(run, posts, parseExtractedEventData);
 }
 
 async function main() {
@@ -131,15 +184,16 @@ async function main() {
   assert(convexUrl === CONVEX_URL && serviceSecret,
     "Production Convex URL or CRON_SECRET is missing or differs from the frozen target.");
   const { ConvexHttpClient } = await import("convex/browser");
+  const { parseExtractedEventData } = await import("../lib/ai/extract-event-data.ts");
   const client = new ConvexHttpClient(CONVEX_URL);
-  const before = await loadPlan(client, serviceSecret);
+  const before = await loadPlan(client, serviceSecret, parseExtractedEventData);
   const preview = {
     mode: apply ? "apply_preflight" : "preview",
     runId: RUN_ID,
     selectedPostCount: TARGETS.length,
     processCount: before.plan.rows.filter((row) => row.disposition === "process_saved_post").length,
     alreadyTerminalCount: before.plan.rows.filter((row) => row.disposition === "already_terminal").length,
-    maxOpenAiTransports: MAX_OPENAI_TRANSPORTS,
+    openAiTransportAllowed: false,
     planSha256: before.planSha256,
     rows: before.plan.rows.map(({ receiptId, savedPostId, handle, postUrl, sourceRevision, processingStatus, processingOutcome, disposition, analysisRevision, analysisAttemptRevision }) => ({
       receiptId, savedPostId, handle, postUrl, sourceRevision, processingStatus,
@@ -151,17 +205,19 @@ async function main() {
     return;
   }
   assert(before.planSha256 === expectedHash, "Live plan changed after preview. Run preview again.");
+  // The callback below rejects an OpenAI request immediately before fetch.
+  // Removing the key in this process independently stops an unexpected cache
+  // miss at getRequiredEnv, even if a future call path skips the callback.
+  disableOpenAiCredential(process.env);
   const { processSavedScrapedPostForDurableReceipt } = await import(
     "../lib/pipeline/ingestion/durable-saved-posts.ts"
   );
-  let openAiTransportCount = 0;
   const results = [];
   for (const row of before.plan.rows) {
     if (row.disposition === "already_terminal") {
       results.push({ savedPostId: row.savedPostId, state: "already_terminal" });
       continue;
     }
-    if (openAiTransportCount >= MAX_OPENAI_TRANSPORTS) break;
     const [current] = await client.query("scrapedPosts:getManyByIds", {
       ids: [row.savedPostId], serviceSecret,
     });
@@ -170,7 +226,8 @@ async function main() {
     );
     assert(current && JSON.stringify(compactPost(current)) === JSON.stringify(expectedState),
       `Saved-post version fence changed before processing ${row.savedPostId}.`);
-    let thisPostTransportCount = 0;
+    validateCachedAnalysis(current, row, parseExtractedEventData);
+    let blockedOpenAiTransport = false;
     const result = await processSavedScrapedPostForDurableReceipt({
       handle: row.handle,
       scrapedPostId: row.savedPostId,
@@ -178,10 +235,8 @@ async function main() {
       workOwner: `sep29-saved-recovery:${crypto.randomUUID()}`,
       serviceSecret,
       onOpenAiTransportStarted: () => {
-        assert(thisPostTransportCount === 0, "A saved post attempted a second OpenAI transport.");
-        assert(openAiTransportCount < MAX_OPENAI_TRANSPORTS, "OpenAI transport cap reached.");
-        thisPostTransportCount += 1;
-        openAiTransportCount += 1;
+        blockedOpenAiTransport = true;
+        blockOpenAiTransport();
       },
     });
     results.push({
@@ -193,15 +248,15 @@ async function main() {
       transportAttempted: result.transportAttempted,
     });
     console.log(JSON.stringify({ mode: "progress", result: results.at(-1) }));
-    if (result.state !== "terminal") break;
+    assertCachedReplayTerminal(result, blockedOpenAiTransport, row.savedPostId);
   }
   console.log(JSON.stringify({
     mode: "complete",
     selectedPostCount: TARGETS.length,
     processedCount: results.length,
-    openAiTransportCount,
+    openAiTransportAllowed: false,
     historicalReceiptsUnchanged: true,
-    stopped: results.length < TARGETS.length,
+    stopped: false,
     results,
   }, null, 2));
 }
