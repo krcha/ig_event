@@ -18,6 +18,7 @@ export const TARGETS = Object.freeze([
   { receiptId: "mx7bkqrvkw4s971rqmxd0w6a7h8faeqh", handle: "cajgerbar", savedPostId: "jn71pmqjyd9jynk2vxddmrbw4x8fbjys", sourceRevision: 1, postId: "3996180129170920173", postUrl: "https://www.instagram.com/p/Dd1SKehtRLt/", outcome: "incomplete_occurrence_receipt", updatedAt: 1790665874473 },
   { receiptId: "mx7a4nj5q48tmsq37ec34k9nnd8fask9", handle: "bitefteatar", savedPostId: "jn71vbf4qmfqb25hemnfe9bwj98faa9w", sourceRevision: 1, postId: "3996085576805257831", postUrl: "https://www.instagram.com/p/Dd08qjxihJn/", outcome: "processing_failed", updatedAt: 1790665829445 },
 ]);
+export const TEATAR_SAVED_POST_ID = "jn786s2hg3jnpv2dcxddawke6d8fb0g0";
 
 const TERMINAL_OUTCOMES = new Set([
   "terminal_no_event",
@@ -49,17 +50,21 @@ export function assertCachedReplayTerminal(result, blockedOpenAiTransport, saved
 
 export function parseArgs(args) {
   const apply = args.includes("--apply");
+  const holdTeatarCooldown = args.includes("--hold-teatar-cooldown");
   const hashIndex = args.indexOf("--expect-plan-sha256");
   const expectedHash = hashIndex < 0 ? null : args[hashIndex + 1];
   assert(
     args.every((arg, index) =>
       arg === "--apply" ||
+      arg === "--hold-teatar-cooldown" ||
       arg === "--expect-plan-sha256" ||
       (index > 0 && args[index - 1] === "--expect-plan-sha256")) &&
+      args.filter((arg) => arg === "--hold-teatar-cooldown").length <= 1 &&
+      args.filter((arg) => arg === "--expect-plan-sha256").length <= 1 &&
       (apply ? /^[0-9a-f]{64}$/u.test(expectedHash ?? "") : expectedHash === null),
     "Preview first; apply with --apply --expect-plan-sha256 <preview hash>.",
   );
-  return { apply, expectedHash };
+  return { apply, expectedHash, holdTeatarCooldown };
 }
 
 function compactPost(post) {
@@ -121,7 +126,7 @@ function validateCachedAnalysis(post, target, parseExtractedEventData) {
     `Cached analysis is not an event-evidence-v2 event: ${target.savedPostId}.`);
 }
 
-export function buildPlanForPosts(run, posts, parseExtractedEventData, now = Date.now()) {
+export function buildPlanForPosts(run, posts, parseExtractedEventData, now = Date.now(), holdTeatarCooldown = false) {
   assert(run?.runId === RUN_ID && run.mode === "daily", "The frozen daily run changed.");
   assert(run.status === "completed" && run.complete === true && run.inFlightCount === 0,
     "The frozen daily run is not completed and idle.");
@@ -153,20 +158,33 @@ export function buildPlanForPosts(run, posts, parseExtractedEventData, now = Dat
       );
       assert((state.processingLeaseExpiresAt ?? 0) <= now,
         `Saved-post lease remains active: ${target.savedPostId}.`);
-      assert((state.processingRetryAt ?? 0) <= now,
-        `Saved-post retry cooldown remains active: ${target.savedPostId}.`);
-      disposition = "process_saved_post";
+      if (holdTeatarCooldown && target.savedPostId === TEATAR_SAVED_POST_ID) {
+        assert(Number.isFinite(state.processingRetryAt) && state.processingRetryAt > now,
+          `Teatar retry cooldown is not active: ${target.savedPostId}.`);
+        disposition = "held_retry_cooldown";
+      } else {
+        assert((state.processingRetryAt ?? 0) <= now,
+          `Saved-post retry cooldown remains active: ${target.savedPostId}.`);
+        disposition = "process_saved_post";
+      }
     }
     return { receiptId: target.receiptId, disposition, ...state };
   });
-  const plan = { schemaVersion: 2, runId: RUN_ID, convexUrl: CONVEX_URL, openAiTransportAllowed: false, rows };
+  const plan = {
+    schemaVersion: 3,
+    runId: RUN_ID,
+    convexUrl: CONVEX_URL,
+    teatarCooldownHeld: holdTeatarCooldown,
+    openAiTransportAllowed: false,
+    rows,
+  };
   return {
     plan,
     planSha256: crypto.createHash("sha256").update(JSON.stringify(plan)).digest("hex"),
   };
 }
 
-async function loadPlan(client, serviceSecret, parseExtractedEventData) {
+async function loadPlan(client, serviceSecret, parseExtractedEventData, holdTeatarCooldown) {
   const [run, posts] = await Promise.all([
     client.query("durableIngestionRuns:probeRun", { runId: RUN_ID, serviceSecret }),
     client.query("scrapedPosts:getManyByIds", {
@@ -174,11 +192,11 @@ async function loadPlan(client, serviceSecret, parseExtractedEventData) {
       serviceSecret,
     }),
   ]);
-  return buildPlanForPosts(run, posts, parseExtractedEventData);
+  return buildPlanForPosts(run, posts, parseExtractedEventData, Date.now(), holdTeatarCooldown);
 }
 
 async function main() {
-  const { apply, expectedHash } = parseArgs(process.argv.slice(2));
+  const { apply, expectedHash, holdTeatarCooldown } = parseArgs(process.argv.slice(2));
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL?.trim().replace(/\/$/u, "");
   const serviceSecret = process.env.CRON_SECRET?.trim();
   assert(convexUrl === CONVEX_URL && serviceSecret,
@@ -186,11 +204,13 @@ async function main() {
   const { ConvexHttpClient } = await import("convex/browser");
   const { parseExtractedEventData } = await import("../lib/ai/extract-event-data.ts");
   const client = new ConvexHttpClient(CONVEX_URL);
-  const before = await loadPlan(client, serviceSecret, parseExtractedEventData);
+  const before = await loadPlan(client, serviceSecret, parseExtractedEventData, holdTeatarCooldown);
   const preview = {
     mode: apply ? "apply_preflight" : "preview",
     runId: RUN_ID,
     selectedPostCount: TARGETS.length,
+    heldCooldownCount: before.plan.rows.filter((row) => row.disposition === "held_retry_cooldown").length,
+    heldSavedPostId: before.plan.rows.find((row) => row.disposition === "held_retry_cooldown")?.savedPostId ?? null,
     processCount: before.plan.rows.filter((row) => row.disposition === "process_saved_post").length,
     alreadyTerminalCount: before.plan.rows.filter((row) => row.disposition === "already_terminal").length,
     openAiTransportAllowed: false,
@@ -214,10 +234,6 @@ async function main() {
   );
   const results = [];
   for (const row of before.plan.rows) {
-    if (row.disposition === "already_terminal") {
-      results.push({ savedPostId: row.savedPostId, state: "already_terminal" });
-      continue;
-    }
     const [current] = await client.query("scrapedPosts:getManyByIds", {
       ids: [row.savedPostId], serviceSecret,
     });
@@ -227,6 +243,16 @@ async function main() {
     assert(current && JSON.stringify(compactPost(current)) === JSON.stringify(expectedState),
       `Saved-post version fence changed before processing ${row.savedPostId}.`);
     validateCachedAnalysis(current, row, parseExtractedEventData);
+    if (row.disposition === "held_retry_cooldown") {
+      assert(row.savedPostId === TEATAR_SAVED_POST_ID && (current.processingRetryAt ?? 0) > Date.now(),
+        "The exact Teatar post is no longer on retry cooldown.");
+      results.push({ savedPostId: row.savedPostId, state: "held_retry_cooldown" });
+      continue;
+    }
+    if (row.disposition === "already_terminal") {
+      results.push({ savedPostId: row.savedPostId, state: "already_terminal" });
+      continue;
+    }
     let blockedOpenAiTransport = false;
     const result = await processSavedScrapedPostForDurableReceipt({
       handle: row.handle,
@@ -253,8 +279,11 @@ async function main() {
   console.log(JSON.stringify({
     mode: "complete",
     selectedPostCount: TARGETS.length,
-    processedCount: results.length,
+    heldCooldownCount: results.filter((result) => result.state === "held_retry_cooldown").length,
+    heldSavedPostId: results.find((result) => result.state === "held_retry_cooldown")?.savedPostId ?? null,
+    processedCount: results.filter((result) => result.state !== "held_retry_cooldown" && result.state !== "already_terminal").length,
     openAiTransportAllowed: false,
+    observedOpenAiTransportAttempts: results.filter((result) => result.transportAttempted).length,
     historicalReceiptsUnchanged: true,
     stopped: false,
     results,

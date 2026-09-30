@@ -9,6 +9,7 @@ import {
   parseArgs,
   RUN_ID,
   TARGETS,
+  TEATAR_SAVED_POST_ID,
 } from "./recover-sep29-failed-saved-posts.mjs";
 
 const run = {
@@ -46,15 +47,20 @@ const parseCachedAnalysis = (value) => {
   assert.equal(value.is_event, true);
   return value;
 };
-const planFor = (runState, postRows) => buildPlanForPosts(runState, postRows, parseCachedAnalysis, Date.now());
+const planFor = (runState, postRows, holdTeatarCooldown = false) =>
+  buildPlanForPosts(runState, postRows, parseCachedAnalysis, Date.now(), holdTeatarCooldown);
 
 assert.equal(TARGETS.length, 7);
 assert.equal(new Set(TARGETS.map((target) => target.savedPostId)).size, 7);
 assert.equal(new Set(TARGETS.map((target) => target.receiptId)).size, 6);
 assert.ok(TARGETS.every((target) => target.handle !== "ligapub.bg"));
-assert.deepEqual(parseArgs([]), { apply: false, expectedHash: null });
+assert.equal(TARGETS[0].savedPostId, TEATAR_SAVED_POST_ID);
+assert.deepEqual(parseArgs([]), { apply: false, expectedHash: null, holdTeatarCooldown: false });
+assert.deepEqual(parseArgs(["--hold-teatar-cooldown"]),
+  { apply: false, expectedHash: null, holdTeatarCooldown: true });
 assert.throws(() => parseArgs(["--apply"]), /Preview first/u);
 assert.throws(() => parseArgs(["--unexpected"]), /Preview first/u);
+assert.throws(() => parseArgs(["--hold-teatar-cooldown", "--hold-teatar-cooldown"]), /Preview first/u);
 assert.throws(blockOpenAiTransport, /transport is forbidden/u);
 assert.doesNotThrow(() => assertCachedReplayTerminal({ state: "terminal", transportAttempted: false }, false, "post"));
 assert.throws(() => assertCachedReplayTerminal({ state: "terminal", transportAttempted: false }, true, "post"), /attempted OpenAI transport/u);
@@ -75,8 +81,26 @@ assert.ok(!JSON.stringify(baseline.plan).includes("https://example.com/poster.jp
 assert.equal(planFor(run, [...posts].reverse()).planSha256, baseline.planSha256);
 assert.deepEqual(
   parseArgs(["--apply", "--expect-plan-sha256", baseline.planSha256]),
-  { apply: true, expectedHash: baseline.planSha256 },
+  { apply: true, expectedHash: baseline.planSha256, holdTeatarCooldown: false },
 );
+
+const teatarOnCooldown = posts.map((post, index) => index === 0
+  ? { ...post, processingRetryAt: Date.now() + 6_000_000 }
+  : post);
+assert.throws(() => planFor(run, teatarOnCooldown), /retry cooldown remains active/u);
+const sixPostPlan = planFor(run, teatarOnCooldown, true);
+assert.equal(sixPostPlan.plan.teatarCooldownHeld, true);
+assert.equal(sixPostPlan.plan.rows.length, 7);
+assert.equal(sixPostPlan.plan.rows.filter((row) => row.disposition === "process_saved_post").length, 6);
+assert.deepEqual(sixPostPlan.plan.rows.filter((row) => row.disposition === "held_retry_cooldown")
+  .map((row) => row.savedPostId), [TEATAR_SAVED_POST_ID]);
+assert.notEqual(sixPostPlan.planSha256, baseline.planSha256);
+assert.deepEqual(
+  parseArgs(["--hold-teatar-cooldown", "--apply", "--expect-plan-sha256", sixPostPlan.planSha256]),
+  { apply: true, expectedHash: sixPostPlan.planSha256, holdTeatarCooldown: true },
+);
+assert.throws(() => planFor(run, posts, true), /Teatar retry cooldown is not active/u);
+assert.throws(() => planFor(run, teatarOnCooldown.slice(1), true), /exact saved-post ID is missing/u);
 
 function changed(index, patch) {
   return posts.map((post, postIndex) => postIndex === index ? { ...post, ...patch } : post);
