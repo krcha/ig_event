@@ -5,8 +5,8 @@ import { resolve } from "node:path";
 
 // Frozen from six failed, persisted Sep 29 receipts. All seven saved posts
 // with valid, current event-evidence caches are version-fenced. Teatar,
-// Mama Shelter, and both Lozionica posts remain held; only three independent
-// venue handles can be processed. The
+// Mama Shelter, both Lozionica posts, and Dardaneli remain held; only the
+// independent Cajger Bar and Bitef Teatar handles can be processed. The
 // uncached ligapub.bg post is excluded. This operator never calls Apify,
 // opens a fetch receipt, scans a backlog, or sends content to OpenAI.
 export const RUN_ID = "n170c5ea1c5ag0etc57qzc4ry58fa87v";
@@ -24,14 +24,15 @@ export const TEATAR_SAVED_POST_ID = "jn786s2hg3jnpv2dcxddawke6d8fb0g0";
 export const MAMA_SAVED_POST_ID = "jn73f64qpe02zz0vgtgbafb15d8fbay2";
 export const LOZIONICA_DUPLICATE_SAVED_POST_ID = "jn71mp4gk42gh76c9tkgz4ee858fbq5d";
 export const LOZIONICA_SHARED_RECEIPT_SAVED_POST_ID = "jn785zgz3frh7ckm21bmdqqnf98fa1mj";
+export const DARDANELI_SAVED_POST_ID = "jn74gyvscj6j9frhyafnbp1bd58fb6z1";
 export const MAMA_SEMANTIC_CONFLICT =
   "Source-occurrence key is occupied by a different semantic representative; manual repair is required.";
 export const LOZIONICA_DUPLICATE_ERROR = "[Request ID: 662d09f90f8b4010] Server Error";
 export const LOZIONICA_SHARED_RECEIPT_ERROR = "[Request ID: c27f3db079a75839] Server Error";
 export const LOZIONICA_DUPLICATE_RETRY_AT = 1790745091286;
 export const LOZIONICA_SHARED_RECEIPT_RETRY_AT = 1790678693502;
+export const DARDANELI_RETRY_AT = 1790745928493;
 export const PROCESS_SAVED_POST_IDS = Object.freeze([
-  "jn74gyvscj6j9frhyafnbp1bd58fb6z1", // dardanelislavija
   "jn71pmqjyd9jynk2vxddmrbw4x8fbjys", // cajgerbar
   "jn71vbf4qmfqb25hemnfe9bwj98faa9w", // bitefteatar
 ]);
@@ -195,6 +196,17 @@ export function buildPlanForPosts(run, posts, parseExtractedEventData, now = Dat
         `Frozen Lozionica processing state changed: ${target.savedPostId}. Review a fresh snapshot.`,
       );
       disposition = duplicate ? "held_duplicate_policy_error" : "held_shared_receipt_collision";
+    } else if (target.savedPostId === DARDANELI_SAVED_POST_ID) {
+      assert(
+        state.processingStatus === "retryable_failure" &&
+        state.processingOutcome === target.outcome &&
+        state.updatedAt === target.updatedAt &&
+        post.processingError === MAMA_SEMANTIC_CONFLICT &&
+        state.processingRetryAt === DARDANELI_RETRY_AT &&
+        state.processingLeaseExpiresAt === null,
+        `Frozen Dardaneli semantic-conflict state changed: ${target.savedPostId}. Review a fresh snapshot.`,
+      );
+      disposition = "held_semantic_representative_conflict";
     } else if (state.processingStatus === "completed" && TERMINAL_OUTCOMES.has(state.processingOutcome)) {
       disposition = "already_terminal";
     } else {
@@ -209,13 +221,13 @@ export function buildPlanForPosts(run, posts, parseExtractedEventData, now = Dat
       assert((state.processingRetryAt ?? 0) <= now,
         `Saved-post retry cooldown remains active: ${target.savedPostId}.`);
       assert(PROCESS_SAVED_POST_ID_SET.has(target.savedPostId),
-        `Saved post is outside the three independent handles: ${target.savedPostId}.`);
+        `Saved post is outside the two independent handles: ${target.savedPostId}.`);
       disposition = "process_saved_post";
     }
     return { receiptId: target.receiptId, disposition, ...state };
   });
   const plan = {
-    schemaVersion: 5,
+    schemaVersion: 6,
     runId: RUN_ID,
     convexUrl: CONVEX_URL,
     heldPostIds: [
@@ -223,6 +235,7 @@ export function buildPlanForPosts(run, posts, parseExtractedEventData, now = Dat
       MAMA_SAVED_POST_ID,
       LOZIONICA_DUPLICATE_SAVED_POST_ID,
       LOZIONICA_SHARED_RECEIPT_SAVED_POST_ID,
+      DARDANELI_SAVED_POST_ID,
     ],
     openAiTransportAllowed: false,
     rows,
@@ -306,6 +319,11 @@ async function main() {
           row.disposition === "held_shared_receipt_collision" &&
           current.processingError === LOZIONICA_SHARED_RECEIPT_ERROR &&
           current.processingRetryAt === LOZIONICA_SHARED_RECEIPT_RETRY_AT &&
+          current.processingLeaseExpiresAt == null) ||
+        (row.savedPostId === DARDANELI_SAVED_POST_ID &&
+          row.disposition === "held_semantic_representative_conflict" &&
+          current.processingError === MAMA_SEMANTIC_CONFLICT &&
+          current.processingRetryAt === DARDANELI_RETRY_AT &&
           current.processingLeaseExpiresAt == null),
         "A held saved post changed before apply.",
       );
@@ -321,7 +339,7 @@ async function main() {
       continue;
     }
     assert(row.disposition === "process_saved_post" && PROCESS_SAVED_POST_ID_SET.has(row.savedPostId),
-      `Saved post is outside the three independent handles: ${row.savedPostId}.`);
+      `Saved post is outside the two independent handles: ${row.savedPostId}.`);
     let blockedOpenAiTransport = false;
     const result = await processSavedScrapedPostForDurableReceipt({
       handle: row.handle,
