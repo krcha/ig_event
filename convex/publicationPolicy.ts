@@ -20,8 +20,10 @@ const MAX_SOURCE_IDENTITIES_PER_EVENT = 12;
 const MAX_SOURCE_OCCURRENCES_PER_IDENTITY = 64;
 const MAX_PUBLICATION_OCCURRENCE_READ_BUDGET = 96;
 export const MAX_PUBLICATION_REFRESH_EVENTS = 64;
-const MAX_INLINE_PUBLICATION_REFRESH_EVENTS = 16;
-const VENUE_PUBLICATION_REFRESH_PAGE_SIZE = 16;
+// Multi-occurrence receipts make each evaluation reread sibling occurrences
+// and representatives. Keep one mutation well below Convex's 16 MiB read cap.
+const MAX_INLINE_PUBLICATION_REFRESH_EVENTS = 4;
+const VENUE_PUBLICATION_REFRESH_PAGE_SIZE = 4;
 const MAX_LEGACY_EVENT_VENUE_IDENTITY_MATCHES = 8;
 const refreshVenuePublicationPageMutation =
   "publicationPolicy:refreshVenuePublicationPage" as unknown as FunctionReference<

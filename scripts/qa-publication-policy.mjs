@@ -4,6 +4,7 @@ import { evaluatePublicationEligibility } from "../lib/domain/publication/policy
 import {
   evaluateEventPublication,
   isEventPubliclyVisible,
+  refreshEventPublicationBatch,
   refreshEventPublicationStates,
   refreshVenuePublicationPage,
 } from "../convex/publicationPolicy.ts";
@@ -202,7 +203,9 @@ function makeLegacyVenueRefreshContext() {
           apply(builder);
           return chain;
         },
-        async paginate() {
+        async paginate(options) {
+          assert.ok(options.numItems <= 4,
+            "Venue publication refresh pages must stay below the read-byte budget.");
           const rows = table === "events" ? [...events.values()] : [];
           return {
             continueCursor: "done",
@@ -316,6 +319,80 @@ function makeLegacyVenueRefreshContext() {
     "occurrence_incomplete",
     "An all-superseded first-class attachment set must not fall back to legacy publication.",
   );
+}
+
+{
+  const state = makePublicationDb();
+  const sourceIdentity = "large-schedule-source";
+  const eventIds = [];
+  for (let index = 0; index < 15; index += 1) {
+    const eventId = `large-schedule-event-${index}`;
+    const occurrenceId = `large-schedule-occurrence-${index}`;
+    state.events.set(eventId, {
+      ...state.events.get("event-a"),
+      _id: eventId,
+      description: "e".repeat(27_000),
+      title: eventId,
+    });
+    state.sourceOccurrences.set(occurrenceId, {
+      ...state.sourceOccurrences.get("occurrence-a"),
+      _id: occurrenceId,
+      canonicalEventId: eventId,
+      factsJson: "o".repeat(70_000),
+      sourceIdentity,
+    });
+    eventIds.push(eventId);
+  }
+
+  const readLimitBytes = 16 * 1024 * 1024;
+  let readBytes = 0;
+  const countRead = (value) => {
+    readBytes += Buffer.byteLength(JSON.stringify(value));
+    assert.ok(readBytes < readLimitBytes,
+      "A publication refresh transaction exceeded the Convex read-byte budget.");
+    return value;
+  };
+  const get = state.db.get.bind(state.db);
+  const query = state.db.query.bind(state.db);
+  state.db.get = async (id) => countRead(await get(id));
+  state.db.query = (table) => {
+    const request = query(table);
+    const take = request.take.bind(request);
+    request.take = async (limit) => countRead(await take(limit));
+    return request;
+  };
+  const scheduled = [];
+  const ctx = {
+    db: state.db,
+    scheduler: {
+      async runAfter(_delay, _reference, args) {
+        scheduled.push(structuredClone(args));
+      },
+    },
+  };
+
+  await refreshEventPublicationStates(ctx, eventIds);
+  assert.equal(scheduled.length, 1,
+    "A fifteen-child source receipt must defer publication evaluation.");
+  assert.ok(eventIds.every((id) =>
+    state.events.get(id).publicationState === "pending_verification" &&
+    state.events.get(id).publicationReason === "derived_state_refresh_deferred"),
+  "Deferred representatives must fail closed before scheduling.");
+  assert.ok(readBytes < readLimitBytes);
+
+  let batches = 0;
+  while (scheduled.length > 0) {
+    readBytes = 0;
+    const result = await refreshEventPublicationBatch._handler(ctx, scheduled.shift());
+    batches += 1;
+    assert.ok(result.refreshedCount <= 4,
+      "Scheduled refresh must use a bounded publication batch.");
+    assert.ok(readBytes < readLimitBytes);
+  }
+  assert.equal(batches, 4);
+  assert.ok(eventIds.every((id) =>
+    state.events.get(id).publicationReason !== "derived_state_refresh_deferred"),
+  "Every representative must eventually leave the deferred state.");
 }
 
 {
