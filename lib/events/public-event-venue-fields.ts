@@ -1,4 +1,5 @@
 export const VENUE_LINKED_PUBLIC_EVENT_FIELDS = [
+  "venueAliases",
   "venueCategory",
   "venueHours",
   "venueId",
@@ -9,6 +10,7 @@ export const VENUE_LINKED_PUBLIC_EVENT_FIELDS = [
 ] as const;
 
 export type VenueLinkedPublicEventFields = {
+  venueAliases?: unknown;
   venueCategory?: unknown;
   venueHours?: unknown;
   venueId?: string;
@@ -17,6 +19,34 @@ export type VenueLinkedPublicEventFields = {
   venueLocation?: unknown;
   venueLongitude?: unknown;
 };
+
+type PublicVenueDisplayFields = {
+  _id: string;
+  aliases?: string[];
+  location?: string | null;
+  name: string;
+};
+
+/** Curated venue labels are read projections; source-bound event fields stay stored as received. */
+export function projectPublicEventVenueDisplay<
+  T extends { venue: string; venueId?: string },
+>(event: T, venue: PublicVenueDisplayFields | undefined): T & {
+  venueAliases?: string[];
+  venueLocation?: string;
+} {
+  if (!venue || (event.venueId && event.venueId !== venue._id)) {
+    return event;
+  }
+
+  return {
+    ...event,
+    venue: venue.name,
+    venueAliases: [...new Set([event.venue, ...(venue.aliases ?? [])])].filter(
+      (name) => Boolean(name.trim()) && name !== venue.name,
+    ),
+    ...(venue.location ? { venueLocation: venue.location } : {}),
+  };
+}
 
 /**
  * Remove venue-owned denormalized data when an event points at a venue that is

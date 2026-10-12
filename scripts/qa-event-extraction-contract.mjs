@@ -160,6 +160,9 @@ assert.equal(
 );
 
 const semanticQaNow = new Date();
+assert.equal(parsedMissingTimeEvidence._extractionPolicyVersion, undefined, "Older caches must not gain the new interpretation policy");
+assert.equal(parseExtractedEventData({ ...validExtraction, _extractionPolicyVersion: "event_quality_v1" })._extractionPolicyVersion, "event_quality_v1");
+assert.throws(() => parseExtractedEventData({ ...validExtraction, _extractionPolicyVersion: "unknown-policy" }), "A complete otherwise-valid payload must reject an unknown interpretation policy");
 
 function isoDateDaysFromNow(offsetDays) {
   const date = new Date(semanticQaNow);

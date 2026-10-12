@@ -15,6 +15,7 @@ import { isHashtagOnlySourceIdentity } from "@/lib/pipeline/ingestion/parsing-so
 import { normalizeTicketPrice, resolveEventTimeFromExtractionAndEvidence } from "@/lib/pipeline/ingestion/parsing-time";
 import { isVerifiedEventVenueEvidence } from "@/lib/pipeline/ingestion/structured-fact-verification";
 import { normalizeString } from "@/lib/pipeline/ingestion/values";
+import { findPositiveLocativeVenueHandleEvidence } from "@/lib/domain/venues/normalization";
 import type { StructuredFactExtractionResult } from "@/lib/pipeline/ingestion/structured-fact-contracts";
 import { prepareStructuredFactsForPersistence } from "@/lib/pipeline/ingestion/structured-fact-persistence";
 import { finalizeStructuredFactVariants } from "@/lib/pipeline/ingestion/structured-fact-finalization";
@@ -38,6 +39,7 @@ export function normalizeVenue(
   resolver: IngestionVenueResolver,
   sourceRolesByHandle: Record<string, "venue" | "promoter" | "unknown"> = {},
   rawModelTitle = "",
+  options: { allowOwnLocativeVenueEvidence?: boolean } = {},
 ): VenueNormalization {
   const normalizedSourceHandle = normalizeHandle(post.username);
   const sourceRole = sourceRolesByHandle[normalizedSourceHandle];
@@ -57,6 +59,39 @@ export function normalizeVenue(
   // physical venue as the title, require an exact matching source hashtag
   // before interpreting the title as a venue claim.
   const ownBrand = resolver.canonicalVenueNamesByHandle[normalizedSourceHandle] ?? "";
+  if (
+    options.allowOwnLocativeVenueEvidence &&
+    sourceRole === "venue" &&
+    ownBrand &&
+    normalizeVenueComparableText(rawModelVenue) === normalizeVenueComparableText(ownBrand)
+  ) {
+    const evidenceTexts = [post.caption ?? "", extractPostAltTextEvidence(post.altText)];
+    const ownVenueNames = [ownBrand, ...(resolver.canonicalVenueAliasesByHandle[normalizedSourceHandle] ?? [])];
+    const ownLocativeEvidence = evidenceTexts.map((evidenceText) =>
+      findPositiveLocativeVenueHandleEvidence({ evidenceText, handle: normalizedSourceHandle, venueNames: ownVenueNames }),
+    ).find((value) => value !== null);
+    const hasOtherLocativeHandle = Object.entries(resolver.canonicalVenueNamesByHandle).some(([handle, name]) =>
+      handle !== normalizedSourceHandle && evidenceTexts.some((evidenceText) =>
+        findPositiveLocativeVenueHandleEvidence({
+          evidenceText,
+          handle,
+          venueNames: [name, ...(resolver.canonicalVenueAliasesByHandle[handle] ?? [])],
+        }),
+      ),
+    );
+    if (ownLocativeEvidence && !hasOtherLocativeHandle) {
+      const locatedOwnVenue = resolveIngestionVenue(resolver, {
+        allowSourceAccountFallback: false,
+        postingProviderHandle: "",
+        rawVenueClaim: ownBrand,
+        evidenceTexts: [ownLocativeEvidence],
+        sourceRole: "promoter",
+      });
+      if (normalizeVenueComparableText(locatedOwnVenue.venue ?? "") === normalizeVenueComparableText(ownBrand)) {
+        return locatedOwnVenue;
+      }
+    }
+  }
   const titleVenue = sourceRole === "promoter" && ownBrand &&
     normalizeVenueComparableText(rawModelVenue) === normalizeVenueComparableText(ownBrand)
       ? canonicalizeVenueNameDetailed(rawModelTitle, resolver.canonicalVenueNamesByHandle, {
@@ -169,6 +204,10 @@ export function produceStructuredFactsForInsert(
     ingestionVenueResolver,
     options.sourceRolesByHandle,
     extracted.title,
+    {
+      allowOwnLocativeVenueEvidence: extracted._extractionPolicyVersion === "event_quality_v1" &&
+        extracted.schedule_entries.length === 1,
+    },
   );
   const normalizedVenue = venueNormalization.venue ?? "";
   const canonicalVenueEvidenceSource =

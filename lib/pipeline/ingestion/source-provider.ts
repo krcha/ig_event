@@ -80,6 +80,8 @@ function adaptFetchedInstagramPostToSourceDocument(
     handle: post.username,
     imageUrl: post.imageUrl ?? undefined,
     imageUrls: post.imageUrls,
+    imageSlides: post.imageSlides,
+    imageSlideCount: post.imageSlideCount,
     instagramPostUrl: post.instagramPostUrl,
     locationName: post.locationName ?? undefined,
     postId: post.postId,
@@ -155,6 +157,12 @@ export function projectInstagramSourceDocumentForCompatibilityParser(
     altText: document.evidence.altText,
     imageUrl: mediaUrls[0] ?? null,
     imageUrls: mediaUrls,
+    ...(document.providerMetadata?.imageSlides === undefined
+      ? {}
+      : { imageSlides: document.providerMetadata.imageSlides }),
+    ...(document.providerMetadata?.imageSlideCount === undefined
+      ? {}
+      : { imageSlideCount: document.providerMetadata.imageSlideCount }),
     postType: document.providerMetadata?.contentType ?? null,
     locationName: document.evidence.locationName,
     instagramPostUrl: document.canonicalSource.canonicalUrl,

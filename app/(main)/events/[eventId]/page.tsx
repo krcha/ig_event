@@ -28,6 +28,7 @@ import { SaveEventButton } from "@/components/events/save-event-button";
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
 import { VenueWeeklyHours } from "@/components/venues/venue-weekly-hours";
 import { loadPublicEventDetailData } from "@/lib/events/public-event-detail-data";
+import { projectPublicEventVenueDisplay } from "@/lib/events/public-event-venue-fields";
 import {
   getPublicReviewedSourceUpdate,
   type ReviewedSourceUpdate,
@@ -100,6 +101,7 @@ type EventRecord = {
 
 type VenueRecord = {
   _id: string;
+  aliases?: string[];
   name: string;
   instagramHandle: string;
   category?: string | null;
@@ -137,11 +139,13 @@ function findVenueForEvent(event: EventRecord, venues: VenueRecord[]): VenueReco
   const venuesByName = new Map<string, VenueRecord>();
   const venuesByHandle = new Map<string, VenueRecord>();
   for (const venue of venues) {
-    const nameKey = normalizeVenueLookupKey(venue.name);
-    const handleKey = normalizeHandle(venue.instagramHandle);
-    if (nameKey && !venuesByName.has(nameKey)) {
-      venuesByName.set(nameKey, venue);
+    for (const name of [venue.name, ...(venue.aliases ?? [])]) {
+      const nameKey = normalizeVenueLookupKey(name);
+      if (nameKey && !venuesByName.has(nameKey)) {
+        venuesByName.set(nameKey, venue);
+      }
     }
+    const handleKey = normalizeHandle(venue.instagramHandle);
     if (handleKey && !venuesByHandle.has(handleKey)) {
       venuesByHandle.set(handleKey, venue);
     }
@@ -205,6 +209,7 @@ const loadEvent = cache(async function loadEvent(eventId: string): Promise<Event
   event.displayTimeSource = displayTime.source;
   event.displayTimeStart = displayTime.startLabel;
   event.venueCategory = venue?.category ?? event.venueCategory ?? undefined;
+  event.venue = projectPublicEventVenueDisplay(event, venue).venue;
   // The public venue query fails closed. Never retain the denormalized ID
   // when the referenced venue is pending or hidden.
   event.venueId = venue?._id;

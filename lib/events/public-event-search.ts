@@ -3,13 +3,14 @@ import { toSearchableText } from "../pipeline/venue-normalization.ts";
 export type PublicEventSearchFields = {
   title: string;
   venue: string;
+  venueAliases?: string[];
   artists: string[];
 };
 
 export function getPublicEventNameArtistVenueSearchText(
   event: PublicEventSearchFields,
 ): string {
-  return [event.title, event.venue, event.artists.join(" ")].join(" ");
+  return [event.title, event.venue, ...(event.venueAliases ?? []), event.artists.join(" ")].join(" ");
 }
 
 export function matchesPublicEventNameArtistOrVenue(

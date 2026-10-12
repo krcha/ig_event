@@ -9,6 +9,7 @@ import {
   type EventTimeDisplaySource,
 } from "@/lib/events/event-time";
 import { getPublicTodayKey } from "@/lib/events/public-date";
+import { projectPublicEventVenueDisplay } from "@/lib/events/public-event-venue-fields";
 import {
   DEFAULT_EVENT_TYPE,
   canonicalizeEventType,
@@ -27,6 +28,7 @@ const listPublicRecentPostsByHandleQuery =
 
 export type PublicVenue = VenueHoursCacheFields & {
   _id: string;
+  aliases?: string[];
   category?: string | null;
   instagramFollowerCount?: number | null;
   instagramFollowerCountUpdatedAt?: number | null;
@@ -120,7 +122,7 @@ function normalizeVenueEvent(event: PublicVenueEvent, venue: PublicVenue): Publi
   });
 
   return {
-    ...event,
+    ...projectPublicEventVenueDisplay(event, venue),
     dayPeriod: displayTime.dayPeriod,
     displayTimeEnd: displayTime.endLabel,
     displayTimeLabel: displayTime.label,

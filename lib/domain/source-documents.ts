@@ -28,6 +28,8 @@ export type SourceDocument = {
   providerMetadata?: Readonly<{
     contentType?: string | null;
     isPinned?: boolean;
+    imageSlides?: Array<{ index: number; imageUrls: string[] }>;
+    imageSlideCount?: number;
   }>;
   sourceIdentity: string;
   sourceRevision: number;
@@ -42,6 +44,8 @@ export type InstagramSourceDocumentRecord = {
   handle: string;
   imageUrl?: string;
   imageUrls?: string[];
+  imageSlides?: Array<{ index: number; imageUrls: string[] }>;
+  imageSlideCount?: number;
   instagramPostUrl: string;
   locationName?: string;
   postId: string;
@@ -126,6 +130,8 @@ export function adaptInstagramScrapedPostToSourceDocument(
     providerMetadata: {
       contentType: record.postType?.trim() || null,
       ...(record.isPinned === undefined ? {} : { isPinned: record.isPinned }),
+      ...(record.imageSlides === undefined ? {} : { imageSlides: record.imageSlides }),
+      ...(record.imageSlideCount === undefined ? {} : { imageSlideCount: record.imageSlideCount }),
     },
     sourceIdentity: buildSourceDocumentIdentity(
       "instagram",

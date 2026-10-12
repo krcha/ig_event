@@ -191,6 +191,9 @@ export function finalizeStructuredFactVariants({
       resolvedDate: date,
       post,
       hasPoster: Boolean(selectedImageUrl),
+      enforceCalendarConsistency: extracted._extractionPolicyVersion === "event_quality_v1",
+      calendarContext: variant.splitSourceLine ??
+        (variant.dateEvidence.source === "caption" ? post.caption : null),
     });
     const identityEvidenceVerified = isVerifiedEventIdentityEvidence({
       extracted,
@@ -198,7 +201,7 @@ export function finalizeStructuredFactVariants({
       artists: variant.artists,
       titleUsedFallback: variant.titleUsedFallback,
       venue: variant.venue,
-      splitSourceLine: variant.splitSourceLine,
+      splitSourceLine: variant.scopedBranchVenueEvidence?.rowQuote ?? variant.splitSourceLine,
       singleScheduleEntrySource: exactSingleOccurrenceSource,
       splitEvidenceSource: variant.dateEvidence.source,
       post,
@@ -217,6 +220,7 @@ export function finalizeStructuredFactVariants({
       trustedVenueSource: variantTrustedVenueSource,
       sharedVenueVerified: verifiedSharedVenue,
       canonicalHandleEvidenceVerified: variantUsesCanonicalVenueEvidence,
+      scopedBranchVenueEvidence: variant.scopedBranchVenueEvidence,
     });
     const sourceConflictPartition = partitionEventEvidenceSourceConflicts(
       extracted.source_conflicts,
@@ -248,6 +252,8 @@ export function finalizeStructuredFactVariants({
       post,
       hasPoster: Boolean(selectedImageUrl),
       verifiedDateEvidence: dateEvidenceVerified ? variant.dateEvidence : undefined,
+      allowSessionClockList: extracted._extractionPolicyVersion === "event_quality_v1" &&
+        usesSplitEventCandidates && ["arts & culture", "learning"].includes(eventType),
     });
     const structuredEvidenceVerified =
       usesStructuredEvidence &&

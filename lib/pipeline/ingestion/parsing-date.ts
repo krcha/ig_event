@@ -1,91 +1,13 @@
 import { type ExtractedEventData } from "@/lib/ai/extract-event-data";
 import type { DateCandidate, DateConfidence, DateNormalization, DateSource, RelativeDayOffsetMatch, RelativeWeekdayMatch, RelativeWeekdayQualifier } from "@/lib/pipeline/ingestion/contracts";
-import { DATE_MONTH_WORD_PATTERN } from "@/lib/pipeline/ingestion/parsing-source-evidence";
+import { DATE_MONTH_WORD_PATTERN, MONTH_ALIASES } from "@/lib/pipeline/ingestion/date-lexicon";
 import { parsePostedAt } from "@/lib/pipeline/ingestion/source-documents";
 import { normalizeString } from "@/lib/pipeline/ingestion/values";
 
 
 export const MAX_EVENT_DAYS_AHEAD = 90;
 
-export const MONTHS: Record<string, number> = {
-  jan: 1,
-  feb: 2,
-  mar: 3,
-  apr: 4,
-  may: 5,
-  jun: 6,
-  jul: 7,
-  aug: 8,
-  sep: 9,
-  oct: 10,
-  nov: 11,
-  dec: 12,
-};
-
-
-export const MONTH_ALIASES: Record<string, number> = {
-  ...MONTHS,
-  january: 1,
-  february: 2,
-  march: 3,
-  april: 4,
-  june: 6,
-  july: 7,
-  august: 8,
-  september: 9,
-  october: 10,
-  november: 11,
-  december: 12,
-  januar: 1,
-  januara: 1,
-  februar: 2,
-  februara: 2,
-  mart: 3,
-  marta: 3,
-  aprila: 4,
-  maj: 5,
-  maja: 5,
-  jun: 6,
-  juna: 6,
-  jul: 7,
-  jula: 7,
-  avg: 8,
-  avgust: 8,
-  avgusta: 8,
-  septembar: 9,
-  septembra: 9,
-  okt: 10,
-  oktobar: 10,
-  oktobra: 10,
-  novembar: 11,
-  novembra: 11,
-  decembar: 12,
-  decembra: 12,
-  јануар: 1,
-  јануара: 1,
-  фебруар: 2,
-  фебруара: 2,
-  март: 3,
-  марта: 3,
-  април: 4,
-  априла: 4,
-  мај: 5,
-  маја: 5,
-  јун: 6,
-  јуна: 6,
-  јул: 7,
-  јула: 7,
-  август: 8,
-  августа: 8,
-  септембар: 9,
-  септембра: 9,
-  октобар: 10,
-  октобра: 10,
-  новембар: 11,
-  новембра: 11,
-  децембар: 12,
-  децембра: 12,
-};
+export { MONTHS, MONTH_ALIASES } from "@/lib/pipeline/ingestion/date-lexicon";
 
 export const RELATIVE_WEEKDAY_ALIASES: Array<{ aliases: string[]; weekday: number }> = [
   {

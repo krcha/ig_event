@@ -17,6 +17,7 @@ export const OPENAI_REQUEST_TIMEOUT_MS = 120_000;
 // reserve enough output for the bounded schedule schema without relaxing any
 // parsing or approval rules.
 export const OPENAI_EXTRACTION_MAX_OUTPUT_TOKENS = 16_384;
+export const EVENT_EXTRACTION_POLICY_VERSION = "event_quality_v1";
 
 export class OpenAiProviderBlockedError extends Error {
   readonly status: number;
@@ -202,6 +203,15 @@ const openAiUsageSchema = z.object({
   totalTokens: z.number().optional(),
 });
 
+const imageCoverageSchema = z.object({
+  version: z.literal(1),
+  knownSlideCount: z.number().int().nonnegative(),
+  analyzedSlideIndexes: z.array(z.number().int().nonnegative()),
+  unanalyzedSlideIndexes: z.array(z.number().int().nonnegative()),
+  complete: z.boolean(),
+  manifestKnown: z.boolean(),
+});
+
 const extractedEventSchema = z
   .object({
     extraction_contract_version: z.literal("event_evidence_v2"),
@@ -234,6 +244,9 @@ const extractedEventSchema = z
     // output has been parsed. Keeping it in the durable parser preserves the
     // exact cached JSON used by the Convex approval attestation.
     _openaiUsage: openAiUsageSchema.optional(),
+    // Wrapper-owned policy marker. Its absence preserves cached v2 semantics.
+    _extractionPolicyVersion: z.literal(EVENT_EXTRACTION_POLICY_VERSION).optional(),
+    _imageCoverage: imageCoverageSchema.optional(),
     field_confirmation: z.object({
       title: extractionFieldConfirmationSchema,
       location: extractionFieldConfirmationSchema,
@@ -271,6 +284,14 @@ export function parseExtractedEventData(value: unknown): ExtractedEventData {
 type ExtractEventDataOptions = {
   imageDataUrl?: string | null;
   imageDataUrls?: string[];
+  imageCoverage?: {
+    version: 1;
+    knownSlideCount: number;
+    analyzedSlideIndexes: number[];
+    unanalyzedSlideIndexes: number[];
+    complete: boolean;
+    manifestKnown: boolean;
+  };
   caption?: string | null;
   altText?: string | null;
   instagramPostUrl: string;
@@ -732,6 +753,8 @@ export async function extractEventDataFromInstagramPost(
       }
       return {
         ...parsed,
+        _extractionPolicyVersion: EVENT_EXTRACTION_POLICY_VERSION,
+        ...(options.imageCoverage ? { _imageCoverage: options.imageCoverage } : {}),
         source_caption: options.caption ?? "",
         source_url: options.instagramPostUrl,
         _openaiUsage: {

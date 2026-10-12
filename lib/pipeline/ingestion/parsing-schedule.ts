@@ -362,7 +362,7 @@ export function extractModelSplitEventCandidates(
         weekdayEvidence: sourceLine,
       });
       const time = consistency.sanitizedTime;
-      const dedupeKey = `${normalizedDate.isoDate ?? occurrenceDate}:${toSearchableText(lineTitle)}:${time ?? ""}`;
+      const dedupeKey = `${normalizedDate.isoDate ?? occurrenceDate}:${toSearchableText(lineTitle)}:${time ?? ""}${extracted._extractionPolicyVersion === "event_quality_v1" ? `:${toSearchableText(scheduleVenue)}` : ""}`;
       if (seenEntries.has(dedupeKey)) {
         continue;
       }

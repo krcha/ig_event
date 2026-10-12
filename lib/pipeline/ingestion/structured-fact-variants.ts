@@ -2,7 +2,7 @@ import type { ExtractedEventData } from "@/lib/ai/extract-event-data";
 import type { EventTimeProvenance } from "@/lib/events/event-time";
 import { buildUnnamedScheduleFallbackTitle, venueValueAppearsInEventEvidence } from "@/lib/events/unnamed-schedule-fallback";
 import type { IngestionVenueResolver } from "@/lib/domain/venues/index";
-import { resolveIngestionVenue } from "@/lib/domain/venues/index";
+import { findPositiveLocativeVenueHandleEvidence, resolveIngestionVenue } from "@/lib/domain/venues/index";
 import type { DateNormalization, EventDateEvidenceSource, EventVariant, SplitEventCandidate } from "@/lib/pipeline/ingestion/contracts";
 import { coalesceNightlifeLineupEventVariants } from "@/lib/pipeline/ingestion/occurrence-coalescing";
 import { normalizeDateEvidenceForOccurrence } from "@/lib/pipeline/ingestion/parsing-date";
@@ -12,6 +12,7 @@ import { buildSplitEventDescription } from "@/lib/pipeline/ingestion/parsing-sch
 import { buildScheduleEntryTimeProvenance, buildTimeProvenance, type resolveEventTimeFromExtractionAndEvidence } from "@/lib/pipeline/ingestion/parsing-time";
 import { extractionEvidenceAppearsInPersistedSource, hasVerifiedSharedScheduleContext } from "@/lib/pipeline/ingestion/structured-fact-verification";
 import { normalizeString } from "@/lib/pipeline/ingestion/values";
+import { findScopedBranchVenueEvidence } from "@/lib/pipeline/ingestion/scoped-branch-venue-evidence";
 import { normalizeVenueComparableText, toSearchableText, type VenueNormalization } from "@/lib/pipeline/venue-normalization";
 import type { InstagramScrapedPost } from "@/lib/scraper/instagram-scraper";
 
@@ -140,6 +141,14 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
     configuredVenueName,
     ...(ingestionVenueResolver.canonicalVenueAliasesByHandle[normalizedSourceHandle] ?? []),
   ].filter(Boolean);
+  const configuredCanonicalVenue = configuredVenueName
+    ? resolveIngestionVenue(ingestionVenueResolver, {
+        allowSourceAccountFallback: false,
+        postingProviderHandle: post.username,
+        rawVenueClaim: configuredVenueName,
+        sourceRole: "promoter",
+      }).venue ?? configuredVenueName
+    : "";
   const accountNamedInParentScope = Boolean(
     parentLooksLikeSharedProgram &&
       sourceAccountNames.some((name) => hasPhysicalVenuePlacement(name, parentCaption)),
@@ -238,7 +247,30 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
             : entry.source === "alt_text_schedule"
               ? "alt_text"
               : "poster";
-        const rowCanonicalVenueNormalization = resolveIngestionVenue(
+        const comparableQuote = (value: string): string => value.normalize("NFKC").replace(/\s+/gu, " ").trim();
+        const hasOtherLocativeRowHandle = extracted._extractionPolicyVersion === "event_quality_v1" &&
+          sourceRole === "venue" && Object.entries(ingestionVenueResolver.canonicalVenueNamesByHandle).some(([handle, name]) =>
+          handle !== normalizedSourceHandle && findPositiveLocativeVenueHandleEvidence({
+            evidenceText: entry.sourceLine,
+            handle,
+            venueNames: [name, ...(ingestionVenueResolver.canonicalVenueAliasesByHandle[handle] ?? [])],
+          }),
+        );
+        const ownLocativeRowEvidence = extracted._extractionPolicyVersion === "event_quality_v1" &&
+          sourceRole === "venue" && configuredVenueName &&
+          !hasOtherLocativeRowHandle &&
+          normalizeVenueComparableText(canonicalRowVenue) === normalizeVenueComparableText(configuredCanonicalVenue) &&
+          Boolean(comparableQuote(entry.sourceLine)) &&
+          [post.caption ?? "", extractPostAltTextEvidence(post.altText)].some((text) =>
+            comparableQuote(text).includes(comparableQuote(entry.sourceLine)),
+          )
+          ? findPositiveLocativeVenueHandleEvidence({
+              evidenceText: entry.sourceLine,
+              handle: normalizedSourceHandle,
+              venueNames: sourceAccountNames,
+            })
+          : null;
+        const ordinaryRowVenueNormalization = resolveIngestionVenue(
           ingestionVenueResolver,
           {
             allowSourceAccountFallback: false,
@@ -249,6 +281,20 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
             sourceRole,
           },
         );
+        const ownLocativeRowVenueNormalization = ownLocativeRowEvidence
+          ? resolveIngestionVenue(ingestionVenueResolver, {
+              allowSourceAccountFallback: false,
+              postingProviderHandle: "",
+              rawVenueClaim: configuredVenueName,
+              locationName: "",
+              evidenceTexts: [ownLocativeRowEvidence],
+              sourceRole: "promoter",
+            })
+          : null;
+        const rowCanonicalVenueNormalization = ownLocativeRowVenueNormalization?.source === "evidence_handle" &&
+          normalizeVenueComparableText(ownLocativeRowVenueNormalization.venue ?? "") === normalizeVenueComparableText(configuredCanonicalVenue)
+          ? ownLocativeRowVenueNormalization
+          : ordinaryRowVenueNormalization;
         const rowCanonicalVenueEvidenceSource =
           rowCanonicalVenueNormalization.source === "evidence_handle" ||
           rowCanonicalVenueNormalization.source === "evidence_name"
@@ -262,12 +308,13 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
               entry.lineTitle,
               entry.sourceLine,
             ) &&
-            extractionEvidenceAppearsInPersistedSource({
-              evidenceText: entry.sourceLine,
-              source: rowEvidenceSource,
-              post,
-              hasPoster: hasPosterEvidence,
-            }),
+            (Boolean(ownLocativeRowEvidence && rowCanonicalVenueNormalization === ownLocativeRowVenueNormalization) ||
+              extractionEvidenceAppearsInPersistedSource({
+                evidenceText: entry.sourceLine,
+                source: rowEvidenceSource,
+                post,
+                hasPoster: hasPosterEvidence,
+              })),
         );
         const rowCanonicalVenue = rowCanonicalVenueEvidenceBound
           ? rowCanonicalVenueNormalization.venue ?? ""
@@ -281,7 +328,20 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
               independentPostTextEvidence,
             ),
         );
-        const rowVenueIsDirect = rowVenueGrounded || singleOccurrencePostVenueGrounded;
+        const scopedBranchSource = entry.dateEvidence?.source;
+        const scopedBranchVenueEvidence = extracted._extractionPolicyVersion === "event_quality_v1" &&
+          (scopedBranchSource === "caption" || scopedBranchSource === "alt_text")
+          ? findScopedBranchVenueEvidence({
+              venue: rowVenue,
+              rowSourceText: entry.sourceLine,
+              rowDateText: entry.dateEvidence?.exact_text ?? "",
+              source: scopedBranchSource,
+              sourceText: scopedBranchSource === "caption" ? post.caption ?? "" : post.altText ?? "",
+              declaredVenues: extracted.schedule_entries.map((row) => row.venue),
+            }) ?? undefined
+          : undefined;
+        const rowVenueIsDirect = rowVenueGrounded || singleOccurrencePostVenueGrounded ||
+          Boolean(scopedBranchVenueEvidence);
         const scopedRowCanonicalVenue =
           rowVenueIsDirect || sharedVenueValue ? "" : rowCanonicalVenue;
         const singleSplitCanonicalVenueEvidenceSource =
@@ -476,6 +536,7 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
           venue: variantVenue,
           venueEvidenceValue:
             rowVenueIsDirect ? rowVenue : sharedVenueValue || scopedRowCanonicalVenue,
+          scopedBranchVenueEvidence,
           venueFromSourceAccountFallback: Boolean(
             sourceAccountVenue &&
               variantVenueRaw === sourceAccountVenue &&

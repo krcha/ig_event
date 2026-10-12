@@ -1,0 +1,1684 @@
+{
+  "version": "instagram_real_posts_2026_10_12_v2",
+  "evaluationNow": "2026-10-01T12:00:00.000Z",
+  "limitations": [
+    "Purposive sample of public retained source posts, not random production accuracy measurement.",
+    "One retained original poster per image-backed post; this corpus does not establish unseen carousel sibling coverage.",
+    "No ingestion or database writes; planned approval is not a real persistence-boundary attestation.",
+    "Single stochastic Luna response per case and variant; repeatability requires a separately named explicit run.",
+    "Expected rules are manually labeled from actual source material, not copied from prior model output."
+  ],
+  "cases": [
+    {
+      "id": "para-october-us-dates",
+      "title": "October heading and Sunday rows resolve American month/day dates",
+      "sourceEventId": "j57dvtdyw6wrtxbq3mtc96crw98ffsda",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "Para klub Beograd",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Para klub Beograd"
+      },
+      "post": {
+        "caption": "\u010cekali smo oktobar.",
+        "altText": null,
+        "locationName": null,
+        "username": "para_klub",
+        "handle": "para_klub",
+        "postId": "3997599922126892691",
+        "instagramPostUrl": "https://www.instagram.com/p/Dd6U_LwgK6T/",
+        "postedAt": "2026-09-30T12:26:10.000Z",
+        "imageUrl": "https://convex-events.ineedtofeedmyrabbit.com/api/storage/f97b4701-103e-4cb4-9ea9-8cff6621b9a4",
+        "imageUrls": [
+          "https://convex-events.ineedtofeedmyrabbit.com/api/storage/f97b4701-103e-4cb4-9ea9-8cff6621b9a4"
+        ],
+        "postType": "image"
+      },
+      "checks": [
+        {
+          "type": "approved_count",
+          "label": "All three open Sunday programs can approve with contextual date evidence",
+          "value": 3
+        },
+        {
+          "type": "has_row",
+          "label": "MRAK is October 11",
+          "match": {
+            "date": "2026-10-11",
+            "titleContains": "mrak"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "ALTEREGO is October 18",
+          "match": {
+            "date": "2026-10-18",
+            "titleContains": "alterego"
+          }
+        },
+        {
+          "type": "no_row",
+          "label": "No November MRAK",
+          "match": {
+            "date": "2026-11-10"
+          }
+        },
+        {
+          "type": "no_row",
+          "label": "Closed Sunday produces no event",
+          "match": {
+            "date": "2026-10-25"
+          }
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "prorock-weekday-repertoire",
+      "title": "Conflicting Saturday date is held and repertoire is not a live lineup",
+      "sourceEventId": "j576381m076gndasqhs1d838yx8fq25m",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "Klub Fest",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Klub Fest"
+      },
+      "post": {
+        "caption": "ProRock \nNajveci pop/rock/Vh1/new wave/synth-pop hitovi 80ih godina\nDuran Duran, Roxette, Laura Branigan, Pet Shop Boys, Human League, David Bowie...\nUlaz 700 dinara\nInfo i rezervacije stolova na 063 700 81 50",
+        "altText": null,
+        "locationName": null,
+        "username": "klubfest",
+        "handle": "klubfest",
+        "postId": "4000697510097181766",
+        "instagramPostUrl": "https://www.instagram.com/p/DeFVTBXIdxG/",
+        "postedAt": "2026-10-04T18:58:54.000Z",
+        "imageUrl": "https://convex-events.ineedtofeedmyrabbit.com/api/storage/373198ac-e2d3-4d31-b1f7-388387c692f5",
+        "imageUrls": [
+          "https://convex-events.ineedtofeedmyrabbit.com/api/storage/373198ac-e2d3-4d31-b1f7-388387c692f5"
+        ],
+        "postType": "image"
+      },
+      "checks": [
+        {
+          "type": "no_approved",
+          "label": "No silently approved contradictory date"
+        },
+        {
+          "type": "raw_conflict",
+          "label": "Weekday conflict remains explicit",
+          "field": "date"
+        },
+        {
+          "type": "no_artist",
+          "label": "Repertoire artists are not performers",
+          "names": [
+            "Madonna",
+            "Duran Duran",
+            "David Bowie",
+            "Roxette",
+            "Pet Shop Boys",
+            "Human League"
+          ]
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "dub-weekly-row-binding",
+      "title": "Dates inherit only their own aligned performer",
+      "sourceEventId": "j579ng04f2ycxfykmwmmf54pxd8f4fxb",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "Dub Gastro Pub",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Dub Gastro Pub"
+      },
+      "post": {
+        "caption": "Sezona svirki po\u010dinje!\n\nVidimo se!",
+        "altText": null,
+        "locationName": null,
+        "username": "dubgastropub",
+        "handle": "dubgastropub",
+        "postId": "3994270666610368170",
+        "instagramPostUrl": "https://www.instagram.com/p/DdugAI8Et6q/",
+        "postedAt": "2026-09-25T22:10:52.000Z",
+        "imageUrl": "https://convex-events.ineedtofeedmyrabbit.com/api/storage/9af069bb-8153-4674-a4de-fc1fa51f73a3",
+        "imageUrls": [
+          "https://convex-events.ineedtofeedmyrabbit.com/api/storage/9af069bb-8153-4674-a4de-fc1fa51f73a3"
+        ],
+        "postType": "image"
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "Ten dated rows in the complete October poster",
+          "value": 10,
+          "allApproved": true
+        },
+        {
+          "type": "has_row",
+          "label": "Oct16 only Arhivatori",
+          "match": {
+            "date": "2026-10-16",
+            "artistContains": "arhivatori",
+            "excludeArtistContains": "ste"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Oct17 only DJ Steva",
+          "match": {
+            "date": "2026-10-17",
+            "artistContains": "ste",
+            "excludeArtistContains": "arhivatori"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Oct23 only Makao",
+          "match": {
+            "date": "2026-10-23",
+            "artistContains": "makao",
+            "excludeArtistContains": "todor"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Oct24 only DJ Todor",
+          "match": {
+            "date": "2026-10-24",
+            "artistContains": "todor",
+            "excludeArtistContains": "makao"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Oct30 only Dzepovi",
+          "match": {
+            "date": "2026-10-30",
+            "artistContains": "dzepovi",
+            "excludeArtistContains": "dj pm"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Oct31 only DJ PM",
+          "match": {
+            "date": "2026-10-31",
+            "artistContains": "dj pm",
+            "excludeArtistContains": "dzepovi"
+          }
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "vrtoglavica-named-room-programs",
+      "title": "Named independent programs in upper and lower rooms remain separate",
+      "sourceEventId": "j577ak8g9vvhr58jxb8s4837598g328n",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "Vrtoglavica",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Klub Vrtoglavica"
+      },
+      "post": {
+        "caption": "@vrtoglavicaklub #vrtoglavicaklub #rockmusic #darkmusic #belgradenightlife #belgradeatnight kudaveceras belgradeclubbing belgradenightout belgradenightclubs gothclub",
+        "altText": null,
+        "locationName": null,
+        "username": "vrtoglavicaklub",
+        "handle": "vrtoglavicaklub",
+        "postId": "4004617504651147980",
+        "instagramPostUrl": "https://www.instagram.com/p/DeTQmcyCvrM/",
+        "postedAt": "2026-10-10T04:47:15.000Z",
+        "imageUrl": "https://convex-events.ineedtofeedmyrabbit.com/api/storage/31d885a1-c974-41bb-b929-90d4073aecf0",
+        "imageUrls": [
+          "https://convex-events.ineedtofeedmyrabbit.com/api/storage/31d885a1-c974-41bb-b929-90d4073aecf0"
+        ],
+        "postType": "image"
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "Ten room programs across both printed weekends",
+          "value": 10,
+          "allApproved": true
+        },
+        {
+          "type": "has_row",
+          "label": "Thursday named program",
+          "match": {
+            "date": "2026-10-15",
+            "titleContains": "cigarettes"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Friday upper program",
+          "match": {
+            "date": "2026-10-16",
+            "titleContains": "shadowplay"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Friday lower program",
+          "match": {
+            "date": "2026-10-16",
+            "titleContains": "zurim"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Saturday upper program",
+          "match": {
+            "date": "2026-10-17",
+            "titleContains": "love catz"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Saturday lower program",
+          "match": {
+            "date": "2026-10-17",
+            "titleContains": "no limit"
+          }
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "museum-branches-independent-sessions",
+      "title": "Separate tour start times and physical collection branches",
+      "sourceEventId": "j570ttxynembe8nkbxh9y19y998fea6a",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "Kuca legata_Beograd",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Kuca legata_Beograd"
+      },
+      "post": {
+        "caption": "Dani evropske ba\u0161tine 2026\n \u201e\u010cuvari nasle\u0111a: Kako ga o\u017eiveti, sa\u010duvati i preoblikovati\u201c (Heritage at Risk: Revive, Resist, Reimagine) \nKu\u0107a legata u\u010destvuje u manifestaciji \u201eDani evropske ba\u0161tine\u201c, posve\u0107enoj promociji zna\u010daja o\u010duvanja i predstavljanja kulturnog nasle\u0111a. Posetioci \u0107e imati priliku da se upoznaju sa vrednim umetni\u010dkim zbirkama Legata Petra Lubarde i Legata Petra Dobrovi\u0107a, kao i njihovim zna\u010dajem za kulturni \u017eivot Beograda.\nUlaz je besplatan tokom trajanja manifestacije.\n \nLegat Petra Lubarde\n\nStru\u010dna vo\u0111enja:\n2. oktobar 2026. u 12 sati. Milo\u0161 Zari\u0107, etnolog-antropolog, kustos Ku\u0107e legata\n3. \u2013 4. oktobar 2026. u 13 i 15 sati. Milo\u0161 Zari\u0107, etnolog-antropolog, kustos Ku\u0107e legata\n6. oktobar 2026. u 12 sati. Dina Pavi\u0107, vi\u0161a kustoskinja Ku\u0107e legata\n9. oktobar 2026. u 12 sati. Milo\u0161 Zari\u0107, etnolog-antropolog, kustos Ku\u0107e legata\n10. \u2013 11. oktobar 2026. u 13 i 15 sati. Dina Pavi\u0107, vi\u0161a kustoskinja Ku\u0107e legata\n \nGalerija Petra Dobrovi\u0107a\nStru\u010dna vo\u0111enja:\n3. oktobar 2026. u 13 i 15 sati. Neda Radoi\u010di\u0107, kustoskinja Ku\u0107e legata\n7. oktobar 2026. u 13 i 15 sati. Danijela Baji\u0107 Obu\u0107ina, vi\u0161a kustoskinja Ku\u0107e legata\n10. oktobar 2026. u 13 i 15 sati. Neda Radoi\u010di\u0107, kustoskinja Ku\u0107e legata\n#danievropskeba\u0161tine #kucalegata",
+        "altText": null,
+        "locationName": null,
+        "username": "kucalegata",
+        "handle": "kucalegata",
+        "postId": "3997620458815845421",
+        "instagramPostUrl": "https://www.instagram.com/p/Dd6ZqCCjXQt/",
+        "postedAt": "2026-09-30T13:05:16.000Z",
+        "imageUrl": "https://convex-events.ineedtofeedmyrabbit.com/api/storage/723f4083-4b46-4709-b44e-2d7aa643f2b1",
+        "imageUrls": [
+          "https://convex-events.ineedtofeedmyrabbit.com/api/storage/723f4083-4b46-4709-b44e-2d7aa643f2b1"
+        ],
+        "postType": "image"
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "All seventeen independently attendable tours",
+          "value": 17
+        },
+        {
+          "type": "approved_count",
+          "label": "All seventeen source-confirmed tours can approve",
+          "value": 17
+        },
+        {
+          "type": "matching_count",
+          "label": "Four tours on October10",
+          "value": 4,
+          "match": {
+            "date": "2026-10-10"
+          }
+        },
+        {
+          "type": "matching_count",
+          "label": "Two tours on October11",
+          "value": 2,
+          "match": {
+            "date": "2026-10-11"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Lubarda Oct10 13",
+          "match": {
+            "date": "2026-10-10",
+            "time": "13:00",
+            "venueContains": "lubard"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Lubarda Oct10 15",
+          "match": {
+            "date": "2026-10-10",
+            "time": "15:00",
+            "venueContains": "lubard"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Lubarda Oct11 13",
+          "match": {
+            "date": "2026-10-11",
+            "time": "13:00",
+            "venueContains": "lubard"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Lubarda Oct11 15",
+          "match": {
+            "date": "2026-10-11",
+            "time": "15:00",
+            "venueContains": "lubard"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Dobrovic Oct10 13",
+          "match": {
+            "date": "2026-10-10",
+            "time": "13:00",
+            "venueContains": "dobrov"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Dobrovic Oct10 15",
+          "match": {
+            "date": "2026-10-10",
+            "time": "15:00",
+            "venueContains": "dobrov"
+          }
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "pejton-food-discount",
+      "title": "Recurring food discount alone is not a calendar activity",
+      "sourceEventId": "j57fzevt1084gsbt12hvx3yd8n8g3bg7",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "Pejton PUB",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Pejton PUB"
+      },
+      "post": {
+        "caption": "\ud83d\udd25 NEDELJA JE ZA DOBRU KLOPU! \ud83e\udd24\ud83c\udf54\n\nDa, dobro si pro\u010ditao/la \u2014 50% POPUSTA NA SVU HRANU! \ud83c\udf2f\ud83c\udf5f\n\nOkupi ekipu, izaberi omiljenu klopu i u\u017eivaj u duplo boljem provodu za pola cene! \ud83d\ude0e\n\n\ud83d\udcc5 SVAKE NEDELJE UZ REZERVACIJU!\n\n\ud83d\udccd Pejton PUB \u2014 Katani\u0107eva 1, Vra\u010dar\n\ud83d\udcde Rezervacije: 065 204 9906\n\n\u26a1 Ne \u010dekaj poslednji trenutak \u2014 rezervi\u0161i sto i po\u010dasti ekipu!\n\nPEJTON PUB \u2014 POLOVINA CENE, PUN STOMAK! \ud83d\udd25\ud83c\udf7b\n\n#PejtonPub #Vra\u010dar #Beograd #50Popusta #DobraKlopa",
+        "altText": null,
+        "locationName": null,
+        "username": "pejtonpub",
+        "handle": "pejtonpub",
+        "postId": "4004894479888950127",
+        "instagramPostUrl": "https://www.instagram.com/p/DeUPk-EtCNv/",
+        "postedAt": "2026-10-10T13:58:01.000Z",
+        "imageUrl": null,
+        "imageUrls": [],
+        "postType": "unknown"
+      },
+      "checks": [
+        {
+          "type": "non_event",
+          "label": "Routine discount excluded"
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "city-roundup-local-binding",
+      "title": "City article never expands a loose weekend into joint shows at the last venue",
+      "sourceEventId": "j577k16d6zwmtx5tctb85qyzfd8d8byc",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "Drugstore Belgrade",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Drugstore Belgrade"
+      },
+      "post": {
+        "caption": "Beograd bi ovog oktobra nakon popunjenog rasporeda za septembar mogao da nastavi u istom ritmu. Na listi izvo\u0111a\u010da koji tokom oktobra sti\u017eu u prestonicu nalaze se @jimi_jules , @dixon_ , @juan.cybotron.atkins , @dvs1hush , kao i komercijalna imena poput @mahmutorhan i DJ dua @mestiza.music . \n\nMesec otvaraju dvodnevni React Festival i \u0161panski duo MESTIZA, koji 2. oktobra sti\u017ee u \u201cOpen Air\u201d Lo\u017eionicu. Dve nedelje kasnije, 16. i 17. oktobra, Beograd \u0107e ugosti u istom vikendu Jimi Jules-a, Dixon-a Mahmut Orhana-a i Juan Atkins-a.\n\nPoseban akcenat treba staviti na nastup Juan Atkins-a u Lo\u017eionici, jednog od originalnih arhitekata Detroit techna i umetnika bez kojeg je gotovo nemogu\u0107e ispri\u010dati istoriju ovog \u017eanra.\n\nZa sam kraj meseca sti\u017ee potpuno druga\u010dija strana elektronske muzike. DVS1 \u0107e 30. oktobra nastupiti u @clubdrugstore , donose\u0107i u Beograd svoj beskompromisni, hipnoti\u010dki techno zvuk.",
+        "altText": null,
+        "locationName": null,
+        "username": "clubdrugstore",
+        "handle": "clubdrugstore",
+        "postId": "3972303242329134982",
+        "instagramPostUrl": "https://www.instagram.com/p/DcgdMCzKReG/",
+        "postedAt": "2026-08-26T14:54:50.000Z",
+        "imageUrl": null,
+        "imageUrls": [],
+        "postType": "unknown"
+      },
+      "checks": [
+        {
+          "type": "has_row",
+          "label": "DVS1 Oct30 Drugstore preserved",
+          "match": {
+            "date": "2026-10-30",
+            "venueContains": "drugstore",
+            "artistContains": "dvs1"
+          }
+        },
+        {
+          "type": "no_row",
+          "label": "Juan not assigned to Drugstore",
+          "match": {
+            "venueContains": "drugstore",
+            "artistContains": "juan"
+          }
+        },
+        {
+          "type": "no_row",
+          "label": "No joint Jimi/Dixon lineup at Drugstore Oct16",
+          "match": {
+            "date": "2026-10-16",
+            "venueContains": "drugstore",
+            "artistContains": "jimi"
+          }
+        },
+        {
+          "type": "no_row",
+          "label": "No joint Jimi/Dixon lineup at Drugstore Oct17",
+          "match": {
+            "date": "2026-10-17",
+            "venueContains": "drugstore",
+            "artistContains": "jimi"
+          }
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "film-release-availability",
+      "title": "General theatrical release date does not invent a screening",
+      "sourceEventId": "j57cdbd98b5qzdyr27ypesdsc58dabw4",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "Mts Dvorana",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Mts Dvorana"
+      },
+      "post": {
+        "caption": "Nakon smrti svog oca (D\u017eo\u0161 Brolin), D\u017eej Gardiner (Ostin Abrams) odlazi na ronjenje uz centralnu obalu Kalifornije u potrazi za njegovim posmrtnim ostacima, ali biva progutan od strane ogromnog kita ka\u0161alota. Zarobljen u njegovoj utrobi sa svega sat vremena kiseonika, D\u017eej shvata da bi te\u0161ko ste\u010dene lekcije koje mu je otac preneo mogle biti klju\u010d za njegov spas.\n\nU DUBINAMA od 15. oktobra u #mtsDvorana.",
+        "altText": null,
+        "locationName": null,
+        "username": "mtsdvorana",
+        "handle": "mtsdvorana",
+        "postId": "3973118929899377723",
+        "instagramPostUrl": "https://www.instagram.com/p/DcjWp3DCFQ7/",
+        "postedAt": "2026-08-27T17:45:08.000Z",
+        "imageUrl": "https://convex-events.ineedtofeedmyrabbit.com/api/storage/bbb533ed-7cb8-4cdb-bf4b-922e0d1cc839",
+        "imageUrls": [
+          "https://convex-events.ineedtofeedmyrabbit.com/api/storage/bbb533ed-7cb8-4cdb-bf4b-922e0d1cc839"
+        ],
+        "postType": "image"
+      },
+      "checks": [
+        {
+          "type": "non_event",
+          "label": "Release-only announcement excluded"
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "clayface-release-availability",
+      "title": "Second release-only control prevents title-specific rule",
+      "sourceEventId": "j579h8yrnh6gqt6jt88etayhyh8d54bq",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "Mts Dvorana",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Mts Dvorana"
+      },
+      "post": {
+        "caption": "Munjeviti uspon Meta Hejgna, momka sa ulica Gotama koji postaje vode\u0107i holivudski glumac, tragi\u010dno se prekida kada ga postupci lokalnog kriminalnog bosa ostave strahovito unaka\u017eenog. Napu\u0161ten od svog tima i bez i\u010dega \u0161to bi mogao da izgubi, Met se podvrgava revolucionarnom tretmanu koji mu \u010dudesno vra\u0107a nekada\u0161nji izgled. Ali isti postupak neo\u010dekivano naru\u0161ava njegovu vezu sa stvarno\u0161\u0107u i pokre\u0107e destruktivni vrtlog opsesije i sveobuhvatne osvete.\n\nCLAYFACE u bioskopu #mtsDvorana od 22. oktobra.",
+        "altText": null,
+        "locationName": null,
+        "username": "mtsdvorana",
+        "handle": "mtsdvorana",
+        "postId": "3970973969327012692",
+        "instagramPostUrl": "https://www.instagram.com/p/Dcbu8k2DztU/",
+        "postedAt": "2026-08-24T18:43:46.000Z",
+        "imageUrl": "https://convex-events.ineedtofeedmyrabbit.com/api/storage/546767fa-85be-4219-a936-fe09daf6e875",
+        "imageUrls": [
+          "https://convex-events.ineedtofeedmyrabbit.com/api/storage/546767fa-85be-4219-a936-fe09daf6e875"
+        ],
+        "postType": "image"
+      },
+      "checks": [
+        {
+          "type": "non_event",
+          "label": "Release-only announcement excluded"
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "bar44-original-program-names",
+      "title": "Source Open Decks and Bar Residents labels survive",
+      "sourceEventId": "j5756kka44h1nwksa55z284jf58fbbs9",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "Bar44",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Bar44"
+      },
+      "post": {
+        "caption": "October is almost here.\n\nLonger nights, deeper sounds and a month of carefully curated music.\n\nHere\u2019s what\u2019s playing at the bar this October \ud83d\ude4c\ud83c\udffb",
+        "altText": null,
+        "locationName": null,
+        "username": "bar44_belgrade",
+        "handle": "bar44_belgrade",
+        "postId": "3996345368601456957",
+        "instagramPostUrl": "https://www.instagram.com/p/Dd13vBvRHE9/",
+        "postedAt": "2026-09-28T19:00:34.000Z",
+        "imageUrl": "https://convex-events.ineedtofeedmyrabbit.com/api/storage/9d062330-aa2c-478f-af51-76988de48b5a",
+        "imageUrls": [
+          "https://convex-events.ineedtofeedmyrabbit.com/api/storage/9d062330-aa2c-478f-af51-76988de48b5a"
+        ],
+        "postType": "image"
+      },
+      "checks": [
+        {
+          "type": "has_row",
+          "label": "Open Decks preserved",
+          "match": {
+            "titleContains": "open decks",
+            "status": "approved"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Bar Residents preserved",
+          "match": {
+            "titleContains": "bar residents",
+            "status": "approved"
+          }
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "swallow-start-versus-doors",
+      "title": "Doors opening time must not masquerade as start evidence",
+      "sourceEventId": "j5793mthrjpkxfhjn814z2ekrs8ff5sx",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "ZAPPA BAZA",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "ZAPPA BAZA"
+      },
+      "post": {
+        "caption": "Finski majstori melanholi\u010dnog doom metala, Swallow the Sun, donose svoju jedinstvenu atmosferu tame i emocije!\n\nPripremite se za ve\u010de ispunjeno te\u0161kim rifovima, dubokim melodijama i hipnoti\u0161u\u0107om energijom koja bri\u0161e granicu izme\u0111u tuge i lepote.\n\n\ud83d\udccd Zappa Baza, 14. oktobar\n\ud83c\udf9f\ufe0f Ulaznice:  https://balkan-promo.com/swallow_the_sun_eng/\n\nStart 20h\nRezervacije na tel.0640108011\n#zappabaza #beograd #livemusic #koncerti",
+        "altText": null,
+        "locationName": null,
+        "username": "zappabaza",
+        "handle": "zappabaza",
+        "postId": "3997572926834696045",
+        "instagramPostUrl": "https://www.instagram.com/p/Dd6O2Wbs19t/",
+        "postedAt": "2026-09-30T11:32:29.000Z",
+        "imageUrl": "https://convex-events.ineedtofeedmyrabbit.com/api/storage/b0924a23-db53-4074-b3c6-eaaa38a69c38",
+        "imageUrls": [
+          "https://convex-events.ineedtofeedmyrabbit.com/api/storage/b0924a23-db53-4074-b3c6-eaaa38a69c38"
+        ],
+        "postType": "image"
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "One concert",
+          "value": 1
+        },
+        {
+          "type": "has_row",
+          "label": "Start remains 20:00",
+          "match": {
+            "date": "2026-10-14",
+            "time": "20:00",
+            "artistContains": "swallow",
+            "status": "approved"
+          }
+        },
+        {
+          "type": "time_provenance",
+          "label": "Clock quote supports actual start",
+          "match": {
+            "date": "2026-10-14",
+            "time": "20:00"
+          },
+          "terms": [
+            "20"
+          ]
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "soundclash-one-party",
+      "title": "Multiple billed DJs and their biographies belong to one party",
+      "sourceEventId": "j57ew9f9sj4ta66e08p6cyf0zh8fftt6",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "Klub UNDER",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Klub UNDER"
+      },
+      "post": {
+        "caption": "U subotu 10.10. nas u klubu Under o\u010dekuje pravi SoundClash!\n\n3 na prvi pogled razli\u010dite ali prili\u010dno povezane muzi\u010dke struje \ngde su za muzi\u010dki program zadu\u017eeni veterani svojih muzi\u010dkih stilova\ni proverene zabave: Skre\u010d Majstor Ljuban, Fokus King i Sofa Kru, sa specijalnim gostima.\n\nFOKUS je producent, DJ i graffiti umetnik iz Zaje\u010dara \nsa sta\u017eom od preko 20 godina. Njegov opus se stilski mo\u017ee kategorizovati u minimalizam, \na \u017eanrovski varira od tropical bass-a, preko dub-a i jungle-a, do hip hopa i drum n bass-a. \nNjegov muzi\u010dki katalog sadr\u017ei 10 LP i preko 30 EP izdanja za vi\u0161e od 20 svetskih izdava\u010dkih ku\u0107a. \nVi\u0161estruki je dobitnik Ambasador nagrada za najbolja regionalna izdanja u oblasti elektronske muzike. \nOsniva\u010d je i stalni \u010dlan zajednice Mahala bounce! \nkoja se bavi alternativnim izdava\u0161tvom i organizacijom doga\u0111aja. \n\nSKRE\u010c MAJSTOR LJUBAN iz Sevojna, dobro poznato ime beogradskoj publici,\nkoji vas svojim skre\u010d bravurama i specifi\u010dnim muzi\u010dkim stilom\nuvek vodi u neo\u010dekivanom pravcu od duhovitog do tvrdog underground zvuka,\nza\u010dinjenog masnim bitovima.\n\nSOFA KRU je ekipa DJ-eva i producenata koja trenutno funkcioni\u0161e\nkao b2b dvojac u sastavu LuckeyZ i MaDaFaktor.\nVi\u0161e od 17 godina aktivno su prisutni na klupskoj sceni,\nposve\u0107eni promociji bass kulture i muzike polomljenog ritma.\nNjihov zvuk prvenstveno po\u010diva na drum and bass-u u svim njegovim formama,\nuz sna\u017ene uticaje jungle-a, reggae-a, hip hop-a i drugih srodnih pravaca.\nPored toga, neretko vas mogu iznenaditi i sa svojim funk, breaks i elektro setovima.\nIza sebe imaju vi\u0161e jako dobro propra\u0107enih muzi\u010dkih izdanja\nizdatih za poznate DnB lejblove i zavidno iskustvo sa svojim nastupima\nkako po klubovima \u0161irom ex Yu regiona tako i na poznatim festivalima.\n\nStart: 22h\nUpad: 500 din.",
+        "altText": null,
+        "locationName": null,
+        "username": "klub.under",
+        "handle": "klub.under",
+        "postId": "3997551762503036764",
+        "instagramPostUrl": "https://www.instagram.com/p/Dd6KCXnOu9c/",
+        "postedAt": "2026-09-30T10:48:51.000Z",
+        "imageUrl": "https://convex-events.ineedtofeedmyrabbit.com/api/storage/94ac319e-4937-4e15-a1b7-3efa5ffecbd9",
+        "imageUrls": [
+          "https://convex-events.ineedtofeedmyrabbit.com/api/storage/94ac319e-4937-4e15-a1b7-3efa5ffecbd9"
+        ],
+        "postType": "image"
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "Single party despite multiple acts",
+          "value": 1,
+          "allApproved": true
+        },
+        {
+          "type": "has_row",
+          "label": "SoundClash identity retained",
+          "match": {
+            "date": "2026-10-10",
+            "titleContains": "soundclash",
+            "time": "22:00"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Fokus remains a participant",
+          "match": {
+            "artistContains": "fokus"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Sofa Kru remains a participant",
+          "match": {
+            "artistContains": "sofa"
+          }
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "oomo-separate-afterparty",
+      "title": "Afterparty venue differs from the main venue mentioned in copy",
+      "sourceEventId": "j577xa2nekhv1spcgj6f0cxpss8g273p",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "KULT",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "KULT"
+      },
+      "post": {
+        "caption": "\u00d8OMO doesn\u2019t end at Hangar.\ud83d\udd7a\ud83c\udffb\n\nTonight, the journey continues at @clubkult for the official \u00d8OMO afterparty. Our beloved duo Branko Vukovi\u0107 & Petar P. take the controls, joined by a special guest \ud83e\udd2b\n\nFor those who aren\u2019t ready to call it a night.\nSee you after.\ud83d\udc9a",
+        "altText": null,
+        "locationName": null,
+        "username": "clubkult",
+        "handle": "clubkult",
+        "postId": "4004766902741141337",
+        "instagramPostUrl": "https://www.instagram.com/p/DeTykemIIdZ/",
+        "postedAt": "2026-10-10T09:46:18.000Z",
+        "imageUrl": "https://convex-events.ineedtofeedmyrabbit.com/api/storage/96ae4c61-4b20-468c-a243-7cad5f5db28f",
+        "imageUrls": [
+          "https://convex-events.ineedtofeedmyrabbit.com/api/storage/96ae4c61-4b20-468c-a243-7cad5f5db28f"
+        ],
+        "postType": "image"
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "One afterparty",
+          "value": 1
+        },
+        {
+          "type": "has_row",
+          "label": "Afterparty occurs at Kult",
+          "match": {
+            "venueContains": "kult",
+            "titleContains": "after"
+          }
+        },
+        {
+          "type": "no_row",
+          "label": "Main Hangar mention is not the afterparty venue",
+          "match": {
+            "venueContains": "hangar"
+          }
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "silosi-two-explicit-days",
+      "title": "Two explicit dated charity markets remain two occurrences",
+      "sourceEventId": "j57dc0s2dfatn07pk35h9fyxah8g3wxv",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "Silosi",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Silosi Beograd \u2022\u2022\u2022\u2022IIII Dom kulture"
+      },
+      "post": {
+        "caption": "\u267b\ufe0f DOBROTVORNA VINTAGE RASPRODAJA U SILOSIMA \ud83d\udc56\ud83c\udf31\n\nVintage moda za zelenu budu\u0107nost!\n\nVidimo se 17. i 18. oktobra u Silosima, gde vintage komadi dobijaju novu priliku, a svaka kupovina doprinosi zelenijoj budu\u0107nosti \ud83d\udc9a\n\nSav prihod od prodaje namenjen je kupovini sadnica za Silose i na\u0161 omiljeni kreativni distrikt Luke Beograd \ud83c\udf33\n\n\ud83d\udccd Silosi Beograd, Silos 1\n\ud83d\udcc5 17. i 18. oktobar\n\ud83d\udd5b 12\u201318 h\n\nDo\u0111i da prona\u0111e\u0161 svoj novi omiljeni komad i zajedno doprinesemo da na\u0161 grad postane zeleniji - ovaj na\u0161 betonski blok sigurno \ud83c\udf3f",
+        "altText": null,
+        "locationName": null,
+        "username": "silosibeograd",
+        "handle": "silosibeograd",
+        "postId": "4004805529136588824",
+        "instagramPostUrl": "https://www.instagram.com/p/DeT7WkOtOgY/",
+        "postedAt": "2026-10-10T11:01:32.000Z",
+        "imageUrl": null,
+        "imageUrls": [],
+        "postType": "unknown"
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "Two explicitly announced dates",
+          "value": 2
+        },
+        {
+          "type": "has_row",
+          "label": "October17 session",
+          "match": {
+            "date": "2026-10-17",
+            "timeStartsWith": "12:00"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "October18 session",
+          "match": {
+            "date": "2026-10-18",
+            "timeStartsWith": "12:00"
+          }
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "puter-ticketing-eligibility",
+      "title": "Curated dining program retains payment eligibility and booking conditions",
+      "sourceEventId": "j57fabxkt6rpxdct5py3enhcgx8farxr",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "PUTER FINE BISTRO",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "PUTER FINE BISTRO"
+      },
+      "post": {
+        "caption": "Puter se ove jeseni pridru\u017euje Priceless Passion Week-u, zajedno sa jo\u0161 \u010detiri beogradska @jre_serbia @jre_jeunesrestaurateurs restorana.\n\nZa ovu priliku, chef Vladimir Popovi\u0107 pripremio je poseban meni koji \u0107e se u Puteru slu\u017eiti od 12. do 18. oktobra.\n\nSedam dana za upoznavanje Putera kroz meni napravljen ba\u0161 za ovu priliku, po ceni od 7.999 RSD po osobi.\n\nRezervacije se vr\u0161e putem Eventlina (link u opisu profila)\n\nEkskluzivno za korisnike @mastercardrs kartica.",
+        "altText": null,
+        "locationName": null,
+        "username": "puterbistro",
+        "handle": "puterbistro",
+        "postId": "3996315566553276901",
+        "instagramPostUrl": "https://www.instagram.com/p/Dd1w9WaxaHl/",
+        "postedAt": "2026-09-28T17:53:23.000Z",
+        "imageUrl": "https://convex-events.ineedtofeedmyrabbit.com/api/storage/d1e4f818-2d68-4c2d-8f30-e83e066efd5e",
+        "imageUrls": [
+          "https://convex-events.ineedtofeedmyrabbit.com/api/storage/d1e4f818-2d68-4c2d-8f30-e83e066efd5e"
+        ],
+        "postType": "image"
+      },
+      "checks": [
+        {
+          "type": "description_contains",
+          "label": "Every compact description preserves Mastercard and Eventlin",
+          "terms": [
+            "mastercard",
+            "eventlin"
+          ],
+          "allRows": true
+        },
+        {
+          "type": "has_row",
+          "label": "Special dining program remains an event",
+          "match": {
+            "venueContains": "puter"
+          }
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "vinyl-common-party-two-floors",
+      "title": "Two floors explicitly marketed as one named party stay one event",
+      "sourceEventId": "j574qgvcg150pgajr89231fxas8g3r68",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "Vinyl",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Vinyl Nightclub Belgrade"
+      },
+      "post": {
+        "caption": "DVA SPRATA JEDNA GU\u017dVA \u2757\ufe0f\n\n\ud83e\udea9 PETAK | 16.10 | 22h - @vlasacevic_andrija x @mikser.mp3 x @noboywhat x @_citakovic_a\n\n\ud83d\udccdVinyl & Tavan Belgrade Nightclub | Bra\u0107e Krsmanovi\u0107 8\n\n\u260e\ufe0f Booking: +381 62 9281 114\n\n\ud83e\udef6\ud83c\udffb GU\u017dVA je susret razli\u010ditih ukusa na istom mestu. Doma\u0107e i strano, staro i novo, disco, pop i house zvuk koji okuplja ljude i stvara onu poznatu beogradsku gu\u017evu, jedan me\u0161ap svega onoga zbog \u010dega se izlazi",
+        "altText": null,
+        "locationName": null,
+        "username": "vinyl.belgrade",
+        "handle": "vinyl.belgrade",
+        "postId": "4005044467577917353",
+        "instagramPostUrl": "https://www.instagram.com/p/DeUxrk_oA-p/",
+        "postedAt": "2026-10-10T18:55:51.000Z",
+        "imageUrl": null,
+        "imageUrls": [],
+        "postType": "unknown"
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "Common party remains one event",
+          "value": 1,
+          "allApproved": true
+        },
+        {
+          "type": "has_row",
+          "label": "Guzva party preserved",
+          "match": {
+            "date": "2026-10-16",
+            "titleContains": "guzva",
+            "time": "22:00"
+          }
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "jugoslovenka-repertoire-ticket-office",
+      "title": "Repertoire and ticket pickup location do not replace performer and venue",
+      "sourceEventId": "j57dd3djwywhpx9zc79zdsxp0n8f6wn6",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "ZAPPA BAZA",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "ZAPPA BAZA"
+      },
+      "post": {
+        "caption": "Jugoslovenka se vra\u0107a u Zappa Baza u subotu 10. OKTOBRA od 22h.\n\nUlaznice su u pretprodaji u Zappa Baru (Kralja Petra 41) po ceni od 600 RSD. Na ulazu na \u017eurku karte \u0107e ko\u0161tati 800 RSD zato ih NABAVITE NA VREME!\n\nOvo je \u017eur svih velikih jugoslovenskih bendova, urbanih muzi\u010dkih pokreta, jedan presek scene nekad i sad na ovim prostorima.\nSpremite grlo za pevanje i noge za plesanje, jer na repertoaru \u0107e biti Dino Dvornik, EKV, Haustor, Denis & Denis, Idoli, Bebi Dol, Partibrejkers, Prljavo Kazali\u0161te, Oliver Mandi\u0107, Zana, Parni Valjak, Bijelo Dugme, \u0110avoli, Bajaga, preko zvezda devedesetih poput E.T., Knez, Tap 011, Nina Badri\u0107, Monteniggers, pa sve do novih snaga kao \u0161to su Nipplepeople, Bu\u010d Kesidi, SevdahBaby, Dubioza Kolektiv, Artan Lili...\nZa DJ pultom Du\u0161ko Milojevi\u0107 a.k.a. Dulex, \u010dovek koji je bio rezident najboljih beogradskih alternativnih klubova kao \u0161to su Akademija, Povetarac, Ben Akiba, Pazi \u0160kola, \u0160trafta, Pop Quart, \u0160lep... i \u010dovek koji ve\u0107 punih 12 godina u Bo\u017eidarcu u okviru Vra\u010dar Festival \"Vra\u010dar Rocks\" serijala organizuje koncerte najboljih regionalnih bendova.\n\nStart 22h\nRezervacije na tel.0640108011\n \n#zappabaza  #beograd #exyurock #exyugoslavia jugoslovenskamuzika",
+        "altText": null,
+        "locationName": null,
+        "username": "zappabaza",
+        "handle": "zappabaza",
+        "postId": "3994850551059931080",
+        "instagramPostUrl": "https://www.instagram.com/p/Ddwj2kas1_I/",
+        "postedAt": "2026-09-26T17:22:02.000Z",
+        "imageUrl": null,
+        "imageUrls": [],
+        "postType": "unknown"
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "One actual DJ party",
+          "value": 1
+        },
+        {
+          "type": "has_row",
+          "label": "Physical event venue is Zappa Baza",
+          "match": {
+            "date": "2026-10-10",
+            "venueContains": "zappa baza",
+            "time": "22:00",
+            "status": "approved"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Actual DJ remains billed",
+          "match": {
+            "artistContains": "dulex",
+            "status": "approved"
+          }
+        },
+        {
+          "type": "no_artist",
+          "label": "Played repertoire is not a live lineup",
+          "names": [
+            "Dino Dvornik",
+            "EKV",
+            "Haustor",
+            "Bijelo Dugme",
+            "Bajaga"
+          ]
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "deca-iz-vode-tribute",
+      "title": "Tribute band and remembered musicians must remain distinct roles",
+      "sourceEventId": "j575yqj52vr9r7s7pss6dnmgsd8f7jyk",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "NOVA ZAPPA BARKA",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "NOVA ZAPPA BARKA"
+      },
+      "post": {
+        "caption": "Udru\u017eenje, bend i projekat \u201eDeca iz vode\u201c pozivaju sve ljubitelje Ekatarine Velike na posebno ve\u010de posve\u0107eno se\u0107anju na Milana Mladenovi\u0107a, Margitu Stefanovi\u0107 Magi, Bojana Pe\u010dara i Ivana Vdovi\u0107a VD-a.\nKoncert \u0107e biti odr\u017ean u subotu, 10. oktobra, od 20 \u010dasova, na Zappa Barci u Beogradu.\n\u201eDeca iz vode\u201c \u0107e ovom prilikom izvesti sve najbolje pesme i najve\u0107e hitove EKV-a, nastoje\u0107i da publici prenesu atmosferu, emociju i magiju muzike koja je obele\u017eila jednu dekadu i ostavila dubok trag na brojne generacije ljubitelja rok muzike.\n\u201eDeca iz vode\u201c ve\u0107 godinama nastupaju pred beogradskom publikom, a njihovi koncerti u Zappa Bazi i Zappa Barci \u010desto su bili rasprodati. U dosada\u0161njem radu podr\u0161ku su im pru\u017eali i nekada\u0161nji \u010dlanovi EKV-a, koji su gostovali na njihovim koncertima, na \u0161ta su vrlo ponosni.\nPosebnu atmosferu ovom koncertu da\u0107e i brojni gosti \u2013 prijatelji i muzi\u010dari sa doma\u0107e scene, koji sa istim \u017earom kao i bend vole da slu\u0161aju i izvode pesme EKV-a, \u010dija imena \u0107e se objaviti pred koncert na stranicama benda.\n\nULAZNICE\nUlaznice su dostupne u pretprodaji:\n\u2022 1.200 din \u2013 TicketVision prodajna mesta\n\u2022 1.200 din \u2013 online preko tickets.rs\n\u2022 1.000 din \u2013 Zappa Bar (Kralja Petra 41)\nNa ulazu u klub:\n\u2022 1.500 din \u2013 Zappa Barka ( Savski kej kod u\u0161\u0107a u blizini Neboj\u0161ine kule).\n\u201eDeca iz vode\u201c vas pozivaju da jo\u0161 jednom zajedno o\u017eivimo muziku koju su Milan, Magi, Bojan, VD i ostali stvarali u EKV-u. Bi\u0107e to posebno ve\u010de za sve one koji su uz EKV odrastali, ali i za nove generacije koje njihovu muziku tek otkrivaju. Vidimo se 10. oktobra u Beogradu. Ljubav \u2764\n\nStart 20h\nRezervacije na tel.0640108011\n#zappabarka #beograd #livemusic #koncerti",
+        "altText": null,
+        "locationName": null,
+        "username": "zappabarka",
+        "handle": "zappabarka",
+        "postId": "3994731893503624134",
+        "instagramPostUrl": "https://www.instagram.com/p/DdwI339NQPG/",
+        "postedAt": "2026-09-26T13:29:46.000Z",
+        "imageUrl": "https://convex-events.ineedtofeedmyrabbit.com/api/storage/560bdda3-3c86-4145-b836-ba9548c90885",
+        "imageUrls": [
+          "https://convex-events.ineedtofeedmyrabbit.com/api/storage/560bdda3-3c86-4145-b836-ba9548c90885"
+        ],
+        "postType": "image"
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "One tribute concert",
+          "value": 1
+        },
+        {
+          "type": "has_row",
+          "label": "Actual tribute band retained",
+          "match": {
+            "date": "2026-10-10",
+            "time": "20:00",
+            "artistContains": "deca iz vode",
+            "status": "approved"
+          }
+        },
+        {
+          "type": "no_artist",
+          "label": "Remembered musicians are not live performers",
+          "names": [
+            "Milan Mladenovic",
+            "Margita",
+            "Bojan Pecar",
+            "Ivan Vdovic"
+          ]
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "zvezda-real-screening",
+      "title": "A specified film screening and discussion remain valid",
+      "sourceEventId": "j57dzvjqks537pe81gk0w96t8n8g3541",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "Novi Bioskop Zvezda",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "New Cinema Zvezda"
+      },
+      "post": {
+        "caption": "Nedelja 11.10.26. u 20h u Zvezdi!\n\n\u201cVetre,pri\u010daj sa mnom\u201d (2025)\n\nPostoje filmovi koji poku\u0161avaju da sa\u010duvaju ono \u0161to smo izgubili. I postoje oni koji nas podse\u0107aju da ljubav, \u010dak i kada nekoga vi\u0161e nema, nastavlja da \u017eivi u nama.U svom dugometra\u017enom prvencu, Stefan \u0110or\u0111evi\u0107 stvara intimnu, poetsku filmsku pri\u010du o majci, porodici, gubitku i poku\u0161aju da se kroz se\u0107anje ponovo prona\u0111e bliskost. Vra\u0107aju\u0107i se svom domu i ljudima koje voli, kamera postaje prostor susreta pro\u0161losti i sada\u0161njosti, tuge i ne\u017enosti, svega izgovorenog i svega \u0161to je ostalo da lebdi u ti\u0161ini.A \u0161ta ako vetar zaista ume da nam odgovori?Pozivamo vas da zajedno pogledamo film Vetre, pri\u010daj sa mnom i prepustimo se pri\u010di koja nas podse\u0107a da se neke veze ne prekidaju \u010dak ni onda kada se \u010dini da je sve ve\u0107 re\u010deno.\n\nNakon projekcije, o\u010dekuje nas i prijateljski razgovor sa rediteljem Stefanom \u0110or\u0111evi\u0107em, u kojem \u0107emo imati priliku da zajedno zavirimo iza pri\u010de ovog posebnog filma.\n\nTitl engleski. Vrata se otvaraju u 19:30h. Vidimo se!",
+        "altText": null,
+        "locationName": null,
+        "username": "novi_bioskop_zvezda",
+        "handle": "novi_bioskop_zvezda",
+        "postId": "4005044648982269968",
+        "instagramPostUrl": "https://www.instagram.com/p/DeUxuN8KtAQ/",
+        "postedAt": "2026-10-10T19:00:23.000Z",
+        "imageUrl": "https://convex-events.ineedtofeedmyrabbit.com/api/storage/8450215d-d978-46e9-8fb3-5fde42cae041",
+        "imageUrls": [
+          "https://convex-events.ineedtofeedmyrabbit.com/api/storage/8450215d-d978-46e9-8fb3-5fde42cae041"
+        ],
+        "postType": "image"
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "One screening with discussion",
+          "value": 1
+        },
+        {
+          "type": "has_row",
+          "label": "Actual screening begins20",
+          "match": {
+            "date": "2026-10-11",
+            "time": "20:00",
+            "titleContains": "vetre",
+            "status": "approved"
+          }
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "ventil-real-film-schedule",
+      "title": "A fully dated film schedule remains independent screenings",
+      "sourceEventId": "j57as7egjnn95m0ce9mytj4yfn8fqpzx",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "Bife Ventil",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Bife Ventil"
+      },
+      "post": {
+        "caption": "Vra\u0107amo se filmovima. Svakog ponedeljka igrani i svakog utorka animirani od 18.30h\nU oktobru:\n\n05.10. Suspiria (1977) Dario Argento\n06.10. Over the Garden Wall (2014) Patrick McHale\n\n12.10. Cure (1997) Kiyoshi Kurosawa\n13.10. Howl's Moving Castle (2004) Hayao Miyazaki\n\n19.10. Sleepy Hollow (1999) Tim Burton\n20.10. Coraline (2009) Henry Selick\n\n26.10. Scary Movie (2000) Keenen Ivory Wayans\n27.10. The Nightmare Before Christmas (1993) Henry Selick",
+        "altText": null,
+        "locationName": null,
+        "username": "bife_ventil",
+        "handle": "bife_ventil",
+        "postId": "4000712271495480410",
+        "instagramPostUrl": "https://www.instagram.com/p/DeFYp0_CMRa/",
+        "postedAt": "2026-10-04T19:28:09.000Z",
+        "imageUrl": "https://convex-events.ineedtofeedmyrabbit.com/api/storage/1ed27a3b-78c7-4de5-bcc9-39e4db4e32cf",
+        "imageUrls": [
+          "https://convex-events.ineedtofeedmyrabbit.com/api/storage/1ed27a3b-78c7-4de5-bcc9-39e4db4e32cf"
+        ],
+        "postType": "image"
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "Eight specified screenings",
+          "value": 8,
+          "allApproved": true
+        },
+        {
+          "type": "has_row",
+          "label": "Cure screening preserved",
+          "match": {
+            "date": "2026-10-12",
+            "time": "18:30",
+            "titleContains": "cure"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "Howl screening preserved",
+          "match": {
+            "date": "2026-10-13",
+            "time": "18:30",
+            "titleContains": "howl"
+          }
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "madlenianum-real-shows-in-discount",
+      "title": "A ticket promotion still contains nine genuine dated performances",
+      "sourceEventId": "j572q3sjarkndsfhfg640n1f7h8f2f6n",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "Opera & Theater Madlenianum",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Opera & Theater Madlenianum"
+      },
+      "post": {
+        "caption": "\ud83c\udfad HAPPY DAY U MADLENIANUMU!\n\nPetak, 25. septembar, rezervisan je za Happy Day!\n\nNova pozori\u0161na sezona donosi nove susrete, omiljene naslove i priliku da ve\u0107 sada isplanirate svoje oktobarske ve\u010deri u Madlenianumu.\n\nSamo sutra, odabrane predstave iz oktobarskog repertoara mo\u017eete pogledati uz popuste do 50%.\nOd opere i baleta, preko drama i komedija, do predstava za najmla\u0111e \u2013 izaberite svoje favorite i obezbedite ulaznice po posebnim Happy Day cenama:\n\n\ud83c\udfad 04.10. IVICA I MARICA\n\ud83c\udfad 05.10. PLU\u0106A \n\ud83c\udfad 06.10. CVR\u010cAK I MRAV \n\ud83c\udfad 09.10. KAZANOVA \n\ud83c\udfad 12.10. VESELA UDOVICA\n\ud83c\udfad 13.10. KARMEN SVITA I BOLERO \n\ud83c\udfad 14.10. FELIKS I DORIS \n\ud83c\udfad 21.10. TVOJE TAJNO ORU\u017dJE PROTIV NEUKROTIVOG CELULITA \n\ud83c\udfad 23.10. STAKLENA MENA\u017dERIJA \n\nUlaznice po Happy Day cenama mo\u017eete obezbediti online na sajtu Madlenianuma, kao i na na\u0161im blagajnama:\n\n\ud83d\udccd Knez Mihailova 42 | 12:00\u201320:00\n\ud83d\udccd Glavna 32 | 09:00\u201316:00\n\ud83d\udcde Informacije: 011 316 27 97 | 011 33 00 111 | 011 21 80 400\n\nIzaberite svoju predstavu, obezbedite svoje mesto i zapo\u010dnite oktobar uz Madlenianum.\nVidimo se u Madlenianumu! \ud83c\udfad",
+        "altText": null,
+        "locationName": null,
+        "username": "madlenianum",
+        "handle": "madlenianum",
+        "postId": "3993813807549553804",
+        "instagramPostUrl": "https://www.instagram.com/p/Dds4H9yCpyM/",
+        "postedAt": "2026-09-25T07:02:11.000Z",
+        "imageUrl": "https://convex-events.ineedtofeedmyrabbit.com/api/storage/ea489a46-977e-4a5e-900e-9bb5403fe270",
+        "imageUrls": [
+          "https://convex-events.ineedtofeedmyrabbit.com/api/storage/ea489a46-977e-4a5e-900e-9bb5403fe270"
+        ],
+        "postType": "image"
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "Nine dated performances retained",
+          "value": 9
+        },
+        {
+          "type": "has_row",
+          "label": "Unusual real show title retained",
+          "match": {
+            "date": "2026-10-21",
+            "titleContains": "celulit"
+          }
+        },
+        {
+          "type": "no_row",
+          "label": "Ticket sale is not an invented performance",
+          "match": {
+            "date": "2026-09-25"
+          }
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "bistro-mixed-weekly-program",
+      "title": "Each row keeps its actual title and DJ versus live-music context",
+      "sourceEventId": "j57dwmzmn98kre1zxejxspptzh8g2812",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "Bistro Mali Pijac",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Bistro Mali Pijac"
+      },
+      "post": {
+        "caption": "Program ove nedelje u Bistro Mali Pijac \ud83e\udd42\n\nUtorak 13.10. - Gypsy Jazz\nSreda 14.10. - Sofija Daci\u0107\n\u010cetvrtak 15.10. - Mi\u0161el Kurina & Orkestar Stevana Vladislava\nPetak 16.10. - Milan & Ika\nSubota 17.10. -  DJ Caki\n\nPo\u010detak u 21h.\nRezervacije: +381 69 777 989\nRezervacije va\u017ee do 21h.\n\n\ud83d\udccd Bistro Mali Pijac, Savamala  #bistromalipijac #beogradnocu #savamala #thisweek #belgradenightlife",
+        "altText": null,
+        "locationName": null,
+        "username": "bistromalipijac",
+        "handle": "bistromalipijac",
+        "postId": "4004918351795360198",
+        "instagramPostUrl": "https://www.instagram.com/p/DeUVAWhNJHG/",
+        "postedAt": "2026-10-10T14:49:46.000Z",
+        "imageUrl": "https://convex-events.ineedtofeedmyrabbit.com/api/storage/7f146307-faf5-474c-88c6-a39c81c8ed92",
+        "imageUrls": [
+          "https://convex-events.ineedtofeedmyrabbit.com/api/storage/7f146307-faf5-474c-88c6-a39c81c8ed92"
+        ],
+        "postType": "image"
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "Five dated programs",
+          "value": 5,
+          "allApproved": true
+        },
+        {
+          "type": "has_row",
+          "label": "Gypsy Jazz remains the title",
+          "match": {
+            "date": "2026-10-13",
+            "titleContains": "gypsy jazz"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "DJ Caki remains a separate Saturday program",
+          "match": {
+            "date": "2026-10-17",
+            "artistContains": "caki"
+          }
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    },
+    {
+      "id": "tour-outside-belgrade",
+      "title": "An explicitly Osijek performance must not publish as a Belgrade venue event",
+      "sourceEventId": "j57dvwmpvhr6046d0m23g34jx98ffqb0",
+      "groundTruthBasis": "Exact retained caption and manually reviewed poster where applicable; original public event values are not labels.",
+      "context": {
+        "canonicalVenueName": "Teatar na brdu",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Teatar na brdu"
+      },
+      "post": {
+        "caption": "Zbog velikog interesovanja publike, otvoren je novi datum! \ud83c\udfad\n\n\"\u0160e\u0107er je sitan, osim kad je kocka\" sti\u017ee u Osijek i 13. oktobra! \u010ceka vas komedija o braku, ljubavi, sva\u0111ama, mirenjima i svim onim situacijama u kojima \u0107ete se lako prepoznati. \n\n\ud83d\udccd Osijek | 13.10.",
+        "altText": null,
+        "locationName": null,
+        "username": "teatarnabrdu",
+        "handle": "teatarnabrdu",
+        "postId": "3997792196098379280",
+        "instagramPostUrl": "https://www.instagram.com/p/Dd7AtI2Rc4Q/",
+        "postedAt": "2026-09-30T18:47:42.000Z",
+        "imageUrl": null,
+        "imageUrls": [],
+        "postType": "unknown"
+      },
+      "checks": [
+        {
+          "type": "no_approved",
+          "label": "Outside-city touring performance cannot approve into Belgrade"
+        }
+      ],
+      "sourceContextBasis": "Read-only production source context snapshot on 2026-10-12."
+    }
+  ],
+  "venueDirectory": [
+    {
+      "handle": "lavariete.belgrade",
+      "name": "La Variete",
+      "aliases": []
+    },
+    {
+      "handle": "flu_beograd",
+      "name": "FAKULTET LIKOVNIH UMETNOSTI U BEOGRADU",
+      "aliases": []
+    },
+    {
+      "handle": "zappabaza",
+      "name": "ZAPPA BAZA",
+      "aliases": []
+    },
+    {
+      "handle": "zappabarka",
+      "name": "NOVA ZAPPA BARKA",
+      "aliases": []
+    },
+    {
+      "handle": "vrtoglavicaklub",
+      "name": "Vrtoglavica",
+      "aliases": []
+    },
+    {
+      "handle": "belgradekitchenparty",
+      "name": "\u0299\u1d07\u029f\u0262\u0280\u1d00\u1d05\u1d07 \u1d0b\u026a\u1d1b\u1d04\u029c\u1d07\u0274 \u1d18\u1d00\u0280\u1d1b\u028f",
+      "aliases": []
+    },
+    {
+      "handle": "klub.under",
+      "name": "Klub UNDER",
+      "aliases": []
+    },
+    {
+      "handle": "kucalegata",
+      "name": "Kuca legata_Beograd",
+      "aliases": []
+    },
+    {
+      "handle": "a.k.c._gnezdo",
+      "name": "AKC Gnezdo",
+      "aliases": []
+    },
+    {
+      "handle": "bitefartcafe",
+      "name": "Novi BitefArtCafe",
+      "aliases": []
+    },
+    {
+      "handle": "dc.loza",
+      "name": "Dc Loza",
+      "aliases": []
+    },
+    {
+      "handle": "prohibicijabar",
+      "name": "PROHIBICIJA pre-club bar",
+      "aliases": []
+    },
+    {
+      "handle": "tavan.belgrade",
+      "name": "Tavan Nightclub Belgrade",
+      "aliases": []
+    },
+    {
+      "handle": "vinyl.belgrade",
+      "name": "Vinyl",
+      "aliases": []
+    },
+    {
+      "handle": "tranzit_bar",
+      "name": "\ud835\udc13\ud835\udc2b\ud835\udc1a\ud835\udc27\ud835\udc33\ud835\udc22\ud835\udc2d Bar",
+      "aliases": []
+    },
+    {
+      "handle": "bazakulturnihzbivanja",
+      "name": "Baza Kulturnih Zbivanja",
+      "aliases": []
+    },
+    {
+      "handle": "gradska_kafana",
+      "name": "GRADSKA KAFANA - OFFICIAL",
+      "aliases": []
+    },
+    {
+      "handle": "le_petit_bistro_blue_center",
+      "name": "Le Petit Bistro Blue Center",
+      "aliases": []
+    },
+    {
+      "handle": "klubstudenatatehnike",
+      "name": "Klub Studenata Tehnike KST",
+      "aliases": [
+        "KST",
+        "Klub Studenata Tehnike",
+        "KST Beograd"
+      ]
+    },
+    {
+      "handle": "galerijanovembar",
+      "name": "Galerija Novembar",
+      "aliases": []
+    },
+    {
+      "handle": "akademija28",
+      "name": "Akademija 28",
+      "aliases": []
+    },
+    {
+      "handle": "mtsdvorana",
+      "name": "Mts Dvorana",
+      "aliases": []
+    },
+    {
+      "handle": "pozoristeterazije",
+      "name": "Pozori\u0161te na Terazijama",
+      "aliases": []
+    },
+    {
+      "handle": "standup_benakiba",
+      "name": "Stand Up Ben Akiba",
+      "aliases": []
+    },
+    {
+      "handle": "kpgteatar",
+      "name": "KPGT",
+      "aliases": []
+    },
+    {
+      "handle": "umami.bg",
+      "name": "Umami",
+      "aliases": []
+    },
+    {
+      "handle": "muzej_jugoslavije",
+      "name": "Muzej Jugoslavije",
+      "aliases": [
+        "Museum of Yugoslavia",
+        "Muzej istorije Jugoslavije",
+        "Park skulptura",
+        "Park skulptura Muzeja Jugoslavije",
+        "Amphitheater in front of the Museum of Yugoslav History"
+      ]
+    },
+    {
+      "handle": "bar44_belgrade",
+      "name": "Bar44",
+      "aliases": []
+    },
+    {
+      "handle": "remiks_belgrade",
+      "name": "Remiks Night Club",
+      "aliases": []
+    },
+    {
+      "handle": "beograd_pub_kviz",
+      "name": "PUB QUIZ HOUSE",
+      "aliases": []
+    },
+    {
+      "handle": "lozionica",
+      "name": "\u041b\u043e\u0436\u0438\u043e\u043d\u0438\u0446\u0430 / Lo\u017eionica",
+      "aliases": [
+        "Lo\u017eionica"
+      ]
+    },
+    {
+      "handle": "klubfest",
+      "name": "Klub Fest",
+      "aliases": []
+    },
+    {
+      "handle": "beogradskimatine",
+      "name": "Beogradski Matine",
+      "aliases": []
+    },
+    {
+      "handle": "domomladinebeograda",
+      "name": "Dom omladine Beograda",
+      "aliases": []
+    },
+    {
+      "handle": "clubkult",
+      "name": "KULT",
+      "aliases": []
+    },
+    {
+      "handle": "nassaubg",
+      "name": "Nassau Bar",
+      "aliases": []
+    },
+    {
+      "handle": "novi_bioskop_zvezda",
+      "name": "Novi Bioskop Zvezda",
+      "aliases": [
+        "New Cinema Zvezda"
+      ]
+    },
+    {
+      "handle": "para_klub",
+      "name": "Para klub Beograd",
+      "aliases": []
+    },
+    {
+      "handle": "pejtonpub",
+      "name": "Pejton PUB",
+      "aliases": []
+    },
+    {
+      "handle": "heartefact_",
+      "name": "Heartefact | Hartefakt",
+      "aliases": []
+    },
+    {
+      "handle": "madlenianum",
+      "name": "Opera & Theater Madlenianum",
+      "aliases": []
+    },
+    {
+      "handle": "puterbistro",
+      "name": "PUTER FINE BISTRO",
+      "aliases": []
+    },
+    {
+      "handle": "kcgrad",
+      "name": "KC Grad",
+      "aliases": []
+    },
+    {
+      "handle": "b3_artspace",
+      "name": "B3 \u2014 Nails and Art",
+      "aliases": []
+    },
+    {
+      "handle": "bife_ventil",
+      "name": "Bife Ventil",
+      "aliases": []
+    },
+    {
+      "handle": "bluzipivobar",
+      "name": "Bluz i Pivo",
+      "aliases": []
+    },
+    {
+      "handle": "berlinmonroe_craftroom",
+      "name": "Berlin Monroe",
+      "aliases": []
+    },
+    {
+      "handle": "telma.bar.restaurant",
+      "name": "Telma Bar&Restaurant",
+      "aliases": []
+    },
+    {
+      "handle": "bitefteatar",
+      "name": "Bitef teatar",
+      "aliases": []
+    },
+    {
+      "handle": "teatarnabrdu",
+      "name": "Teatar na brdu",
+      "aliases": []
+    },
+    {
+      "handle": "bistromalipijac",
+      "name": "Bistro Mali Pijac",
+      "aliases": []
+    },
+    {
+      "handle": "gradskapivnicaterazije",
+      "name": "Gradska Pivnica Terazije",
+      "aliases": []
+    },
+    {
+      "handle": "black_george_belgrade",
+      "name": "Black George",
+      "aliases": []
+    },
+    {
+      "handle": "kissa10.bg",
+      "name": "\ud835\uddde\ud835\udddc\ud835\udde6\ud835\udde6\ud835\uddd4\ud835\udfed\ud835\udfec",
+      "aliases": []
+    },
+    {
+      "handle": "clubdrugstore",
+      "name": "Drugstore Belgrade",
+      "aliases": []
+    },
+    {
+      "handle": "hangarbeograd",
+      "name": "Hangar",
+      "aliases": []
+    },
+    {
+      "handle": "dardanelislavija",
+      "name": "DARDANELI",
+      "aliases": []
+    },
+    {
+      "handle": "bottega.galerija",
+      "name": "Restaurant Bottega",
+      "aliases": []
+    },
+    {
+      "handle": "dubgastropub",
+      "name": "Dub Gastro Pub",
+      "aliases": [
+        "Dub Gastro",
+        "Dub GastroPub"
+      ]
+    },
+    {
+      "handle": "ciglaikrigla",
+      "name": "Cigla & Krigla Pub",
+      "aliases": []
+    },
+    {
+      "handle": "lisabonbar",
+      "name": "Lisabon BAR",
+      "aliases": []
+    },
+    {
+      "handle": "karmakoma_belgrade",
+      "name": "Karmakoma",
+      "aliases": []
+    },
+    {
+      "handle": "jdpbgd",
+      "name": "jdp",
+      "aliases": []
+    },
+    {
+      "handle": "anip_brankokrsmanovic",
+      "name": "AKUD Branko Krsmanovi\u0107",
+      "aliases": []
+    },
+    {
+      "handle": "sakura.belgrade",
+      "name": "Sakura restoran",
+      "aliases": []
+    },
+    {
+      "handle": "nacionalna_klasa_beograd",
+      "name": "NACIONALNA KLASA",
+      "aliases": []
+    },
+    {
+      "handle": "muzej90",
+      "name": "Muzej 90ih",
+      "aliases": []
+    },
+    {
+      "handle": "restoran_polet",
+      "name": "Restoran Polet",
+      "aliases": []
+    },
+    {
+      "handle": "betonbelgrade",
+      "name": "Beton",
+      "aliases": []
+    },
+    {
+      "handle": "silosibeograd",
+      "name": "Silosi",
+      "aliases": []
+    },
+    {
+      "handle": "vecernjascena.radovic",
+      "name": "Ve\u010dernja scena Radovi\u0107",
+      "aliases": []
+    },
+    {
+      "handle": "kolarac_kolarceva_zaduzbina",
+      "name": "Kolarac",
+      "aliases": [
+        "Art bioskop Kolarac",
+        "Kolar\u010deva zadu\u017ebina",
+        "Ilija M. Kolarac Endowment"
+      ]
+    },
+    {
+      "handle": "dorcolplatz",
+      "name": "Dorcol Platz",
+      "aliases": []
+    },
+    {
+      "handle": "central.pub",
+      "name": "Central Pub Belgrade",
+      "aliases": []
+    },
+    {
+      "handle": "beogradski_sajam",
+      "name": "BEOGRADSKI SAJAM",
+      "aliases": []
+    },
+    {
+      "handle": "elizabeth.belgrade",
+      "name": "Elizabeth Bristol",
+      "aliases": []
+    },
+    {
+      "handle": "rockfire_record_shop_belgrade",
+      "name": "RockFire",
+      "aliases": []
+    },
+    {
+      "handle": "1by1.party",
+      "name": "JEDNA PO JEDNA",
+      "aliases": []
+    },
+    {
+      "handle": "teatarodeonofficial",
+      "name": "Teatar Odeon",
+      "aliases": []
+    },
+    {
+      "handle": "dolly.bell.sc",
+      "name": "Dolly Bell Sava Centar",
+      "aliases": []
+    },
+    {
+      "handle": "kafanapavlekorcagin",
+      "name": "Vojin od onih Cuci\u0107a",
+      "aliases": []
+    },
+    {
+      "handle": "etnografskimuzejbeograd",
+      "name": "Etnografski muzej u Beogradu",
+      "aliases": []
+    },
+    {
+      "handle": "dimsam___",
+      "name": "Dim",
+      "aliases": [
+        "dim \u2022 sam"
+      ]
+    }
+  ]
+}

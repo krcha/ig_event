@@ -12,7 +12,10 @@ import {
   type EventTimeSource,
   type EventTimeStatus,
 } from "@/lib/events/event-time";
-import { sanitizeVenueLinkedPublicEventFields } from "@/lib/events/public-event-venue-fields";
+import {
+  projectPublicEventVenueDisplay,
+  sanitizeVenueLinkedPublicEventFields,
+} from "@/lib/events/public-event-venue-fields";
 import { sortPublicEventsByDateVenueTimeTitle } from "@/lib/events/public-event-sort";
 import {
   DEFAULT_EVENT_TYPE,
@@ -64,6 +67,7 @@ export type PublicEvent = {
   displayTimeSource?: EventTimeDisplaySource;
   displayTimeStart?: string;
   venue: string;
+  venueAliases?: string[];
   venueCategory?: string;
   venueHours?: VenueHoursCacheFields;
   venueId?: string;
@@ -128,6 +132,7 @@ type PublicEventsCacheEntry = {
 type VenueLookup = {
   canonicalVenueNamesByHandle: Record<string, string>;
   publicVenueIds: Set<string>;
+  venuesById: Map<string, VenueRecord>;
   venuesByHandle: Map<string, VenueRecord>;
   venuesByName: Map<string, VenueRecord>;
 };
@@ -306,6 +311,7 @@ async function loadVenueLookup(
   return {
     canonicalVenueNamesByHandle,
     publicVenueIds,
+    venuesById: new Map([...activeVenues, ...venues].map((venue) => [venue._id, venue])),
     venuesByHandle: buildVenuesByHandle(lookupVenues),
     venuesByName: buildVenuesByName(lookupVenues),
   };
@@ -392,7 +398,8 @@ function normalizePublicEvent(
   );
   const venue = hasNonPublicLinkedVenue
     ? undefined
-    : venueLookup.venuesByHandle.get(
+    : (publicEvent.venueId ? venueLookup.venuesById.get(publicEvent.venueId) : undefined) ??
+      venueLookup.venuesByHandle.get(
         normalizeHandle(publicEvent.venueInstagramHandle ?? ""),
       ) ??
       venueLookup.venuesByName.get(normalizeVenueLookupKey(publicEvent.venue)) ??
@@ -420,7 +427,7 @@ function normalizePublicEvent(
   });
 
   return {
-    ...publicEvent,
+    ...projectPublicEventVenueDisplay(publicEvent, venue),
     venueId,
     ...(time ? { time } : { time: undefined }),
     timeSource: timeProvenance.source,

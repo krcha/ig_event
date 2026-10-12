@@ -9,6 +9,8 @@ import { expandNormalizedDateRange, hasExplicitDateText, normalizeEventDate } fr
 import { normalizeArtistDisplayName } from "@/lib/pipeline/ingestion/parsing-event-text";
 import { buildSharedScheduleIdentitySegments, collectSharedMonthDateListDates, collectSupportedDates, containsNormalizedTokenSequence, stripDoorOpeningClockValues } from "@/lib/pipeline/ingestion/parsing-source-evidence";
 import { normalizeString } from "@/lib/pipeline/ingestion/values";
+import { sourceCalendarSupportsDate } from "@/lib/pipeline/ingestion/source-calendar-validation";
+import { findScopedBranchVenueEvidence, type ScopedBranchVenueEvidence } from "@/lib/pipeline/ingestion/scoped-branch-venue-evidence";
 
 export function extractionEvidenceAppearsInPersistedSource(options: {
   evidenceText: string;
@@ -33,6 +35,8 @@ export function isVerifiedDateEvidence(options: {
   resolvedDate: string | null;
   post: InstagramScrapedPost;
   hasPoster: boolean;
+  enforceCalendarConsistency?: boolean;
+  calendarContext?: string | null;
 }): boolean {
   const evidenceText = normalizeString(options.evidence.exact_text);
   const evidenceResolvedDate = normalizeString(options.evidence.resolved_date);
@@ -49,8 +53,15 @@ export function isVerifiedDateEvidence(options: {
     options.post.postedAt,
   );
   const resolvesToExpectedDate =
-    independentlyResolved.isoDate === options.resolvedDate ||
-    independentlyExpandedRange?.includes(options.resolvedDate ?? "") === true;
+    options.enforceCalendarConsistency
+      ? sourceCalendarSupportsDate({
+          exactText: evidenceText,
+          context: options.calendarContext,
+          postedAt: options.post.postedAt,
+          resolvedDate: options.resolvedDate ?? "",
+        })
+      : independentlyResolved.isoDate === options.resolvedDate ||
+        independentlyExpandedRange?.includes(options.resolvedDate ?? "") === true;
   const relativeSemanticsCompatible =
     hasExplicitDateText(evidenceText) ||
     options.evidence.is_relative === independentlyRelative;
@@ -103,6 +114,7 @@ export function isVerifiedTimeEvidence(options: {
   post: InstagramScrapedPost;
   hasPoster: boolean;
   verifiedDateEvidence?: ExtractedEventData["date_evidence"];
+  allowSessionClockList?: boolean;
 }): boolean {
   const evidenceText = normalizeString(options.evidence.exact_text);
   const evidenceIsBound =
@@ -144,6 +156,27 @@ export function isVerifiedTimeEvidence(options: {
   );
   const normalizedEvidenceTime = readSourceClockEvidence(evidenceText, allowBareHourRange);
   const normalizedResolvedTime = normalizeEventTime(options.resolvedStartTime);
+  // Independently attendable tours/screenings may state "u 13 i 15 sati".
+  // A selected session must match an explicitly enumerated clock, never an
+  // invented range or an earlier doors clock. Legacy analyses stay unchanged.
+  const sessionList = options.allowSessionClockList && evidenceIsBound &&
+    evidenceText.match(/(?:^|[^\p{L}\p{N}])(?:u|at)\s+((?:[01]?\d|2[0-3])(?::[0-5]\d)?(?:\s*(?:i|and|,)\s*(?:[01]?\d|2[0-3])(?::[0-5]\d)?)+)\s*(?:sati|h|hours?)\b/iu);
+  const sessionClocks = sessionList
+    ? [...sessionList[1].matchAll(/\d{1,2}(?::[0-5]\d)?/gu)].map((match) => {
+        const [hour, minute = "00"] = match[0].split(":");
+        return `${hour.padStart(2, "0")}:${minute}`;
+      })
+    : [];
+  const sessionLabelPrefix = sessionList
+    ? evidenceText.slice(Math.max(0, sessionList.index! - 80), sessionList.index).trim()
+    : "";
+  if (sessionList && /\b(?:doors|vrata|kapije|ulaz|entrance|entry|admission|check[- ]in)(?:\s+(?:open|opening|otvoren[aeo]?|je|su|from|od))*[\s.:\u2013\u2014-]*$/iu.test(sessionLabelPrefix)) {
+    return false;
+  }
+  if (sessionClocks.includes(normalizedResolvedTime.startLabel ?? "") &&
+    !normalizedResolvedTime.endLabel) {
+    return Boolean(options.resolvedStartTime);
+  }
   return (
     Boolean(options.resolvedStartTime) &&
     evidenceIsBound &&
@@ -191,6 +224,7 @@ export function isVerifiedEventVenueEvidence(options: {
   trustedVenueSource: boolean;
   sharedVenueVerified: boolean;
   canonicalHandleEvidenceVerified?: boolean;
+  scopedBranchVenueEvidence?: ScopedBranchVenueEvidence;
 }): boolean {
   if (!normalizeString(options.venue)) return true;
   if (options.canonicalHandleEvidenceVerified) return true;
@@ -231,6 +265,28 @@ export function isVerifiedEventVenueEvidence(options: {
     isBoundEvidence(options.splitSourceLine, options.splitEvidenceSource)
   ) {
     return true;
+  }
+  if (
+    options.extracted._extractionPolicyVersion === "event_quality_v1" &&
+    options.splitSourceLine &&
+    options.scopedBranchVenueEvidence &&
+    options.splitEvidenceSource === options.scopedBranchVenueEvidence.source &&
+    (options.splitEvidenceSource === "caption" || options.splitEvidenceSource === "alt_text")
+  ) {
+    const matchingRows = options.extracted.schedule_entries.filter((row) =>
+      normalizeString(row.source_text) === normalizeString(options.splitSourceLine),
+    );
+    const dateQuotes = [...new Set(matchingRows.map((row) => normalizeString(row.date_evidence.exact_text)))];
+    const scoped = findScopedBranchVenueEvidence({
+      venue: options.rawEvidenceValue || options.venue,
+      rowSourceText: options.splitSourceLine,
+      rowDateText: dateQuotes.length === 1 ? dateQuotes[0] : "",
+      source: options.splitEvidenceSource,
+      sourceText: options.splitEvidenceSource === "caption" ? options.post.caption ?? "" : options.post.altText ?? "",
+      declaredVenues: options.extracted.schedule_entries.map((row) => row.venue),
+    });
+    if (scoped && scoped.heading === options.scopedBranchVenueEvidence.heading &&
+      scoped.rowQuote === options.scopedBranchVenueEvidence.rowQuote) return true;
   }
   if (
     options.sharedVenueVerified &&

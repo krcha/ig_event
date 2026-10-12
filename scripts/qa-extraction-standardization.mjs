@@ -521,17 +521,17 @@ function runPromptQa() {
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
-    /physical venue always beats.*promoter.*ticket brand/i,
+    /Venue evidence priority.*row's explicit physical venue.*Never use a promoter.*ticket domain/is,
     "Prompt must prefer a printed physical venue over promoter and ticketing identities.",
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
-    /locative ending.*Stazi.*Staza.*not an event title/i,
+    /grammatical cases.*Stazi.*Staza.*Neither a venue name.*proves an event title/i,
     "Prompt must normalize Serbian locative venue evidence instead of turning it into a title.",
   );
   assert.match(
     EVENT_EXTRACTION_SYSTEM_PROMPT,
-    /exact street address.*last-resort venue label/i,
+    /only an exact event-location street address is supported, use it/i,
     "Prompt must retain an exact occurrence address when no venue name is available.",
   );
   assert.match(

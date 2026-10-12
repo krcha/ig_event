@@ -24,6 +24,7 @@ import {
 } from "@/lib/discover/discover-image-source";
 import { isPlausibleConvexPublicId } from "@/lib/convex/public-id";
 import { getDisplayEventTime } from "@/lib/events/event-time";
+import { getPublicEventVenueFilterValue } from "@/lib/events/public-event-venue-filter";
 
 import {
   absoluteUrl,
@@ -409,7 +410,9 @@ export default async function VenuePage({ params }: VenuePageProps) {
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
   const instagramHref = venue ? getInstagramHref(venue) : "";
   const eventPosts = buildEventPosts(upcomingEvents, historyEvents);
-  const calendarHref = venue ? `/?venue=${encodeURIComponent(venue.name)}` : "/";
+  const calendarHref = venue
+    ? `/?venue=${encodeURIComponent(getPublicEventVenueFilterValue({ venue: venue.name, venueId: venue._id }))}`
+    : "/";
   const priorityEventId = venue
     ? eventPosts.find((event) => getEventPostImageSrc(event))?._id
     : null;

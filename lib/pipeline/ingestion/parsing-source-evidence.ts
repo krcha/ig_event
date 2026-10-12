@@ -5,13 +5,14 @@ import { extractEventTimeFromText, isTbdEventTime } from "@/lib/events/event-tim
 import { toSearchableText } from "@/lib/pipeline/venue-normalization";
 import { type InstagramScrapedPost } from "@/lib/scraper/instagram-scraper";
 import type { CoreEventSourceGrounding, SplitEventCandidate } from "@/lib/pipeline/ingestion/contracts";
-import { MONTH_ALIASES, collectDateCandidates, normalizeEventDate } from "@/lib/pipeline/ingestion/parsing-date";
+import { collectDateCandidates, normalizeEventDate } from "@/lib/pipeline/ingestion/parsing-date";
+import { DATE_MONTH_WORD_PATTERN, MONTH_ALIASES } from "@/lib/pipeline/ingestion/date-lexicon";
 import { dedupeArtistDisplayNames, extractPostAltTextEvidence, extractQuotedCulturalWorkTitleCandidate, formatArtistTitleList, normalizeArtistDisplayName, titleContainsAlphanumeric } from "@/lib/pipeline/ingestion/parsing-event-text";
 import { parsePostedAt } from "@/lib/pipeline/ingestion/source-documents";
 import { normalizeString } from "@/lib/pipeline/ingestion/values";
 
 
-export const DATE_MONTH_WORD_PATTERN = "[A-Za-zČĆŠĐŽčćšđžА-Яа-яЈј]{3,14}";
+export { DATE_MONTH_WORD_PATTERN } from "@/lib/pipeline/ingestion/date-lexicon";
 
 
 export const SOURCE_GROUNDING_MONTH_PATTERN = Object.keys(MONTH_ALIASES)

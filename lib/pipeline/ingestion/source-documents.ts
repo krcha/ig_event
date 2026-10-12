@@ -50,6 +50,8 @@ export async function persistScrapedPostsForHandle(
             altText: post.altText ?? "",
             ...(post.imageUrl ? { imageUrl: post.imageUrl } : {}),
             imageUrls: post.imageUrls,
+            ...(post.imageSlides ? { imageSlides: post.imageSlides } : {}),
+            ...(post.imageSlideCount === undefined ? {} : { imageSlideCount: post.imageSlideCount }),
             postType: post.postType ?? "",
             locationName: post.locationName ?? "",
             instagramPostUrl: post.instagramPostUrl,
@@ -266,6 +268,13 @@ export function normalizeScrapedPost(post: InstagramScrapedPost): InstagramScrap
     altText: normalizeString(post.altText) || null,
     imageUrl: normalizeString(post.imageUrl) || null,
     imageUrls: normalizedImageUrls,
+    ...(post.imageSlides
+      ? { imageSlides: post.imageSlides.map((slide) => ({
+          index: slide.index,
+          imageUrls: [...new Set(slide.imageUrls.map((url) => normalizeString(url)).filter(Boolean))],
+        })) }
+      : {}),
+    ...(post.imageSlideCount === undefined ? {} : { imageSlideCount: post.imageSlideCount }),
     postType: normalizeString(post.postType).toLowerCase() || null,
     locationName: normalizeString(post.locationName) || null,
     instagramPostUrl: normalizeString(post.instagramPostUrl) || post.instagramPostUrl,

@@ -21,6 +21,11 @@ import { prepareStructuredFactsForPersistence } from "@/lib/pipeline/ingestion/s
 import { persistStructuredFactOccurrences } from "@/lib/pipeline/ingestion/occurrence-persister";
 import type { StructuredFactExtractionResult } from "@/lib/pipeline/ingestion/structured-fact-contracts";
 import { normalizeString } from "@/lib/pipeline/ingestion/values";
+import {
+  buildInstagramImageCoverage,
+  hasKnownUnanalyzedInstagramSlides,
+  parseCachedInstagramImageCoveragePartial,
+} from "@/lib/pipeline/instagram-image-coverage";
 
 export async function processIngestionPost(
   options: ProcessIngestionPostOptions,
@@ -50,6 +55,9 @@ export async function processIngestionPost(
     eventDateFilterNow,
   } = options;
   const postContext = getPostContext(handle, post);
+  if (parseCachedInstagramImageCoveragePartial(cachedAnalysisJson, post, cachedAnalysisImageSourceUrl)) {
+    options.onSourceCoveragePartial?.();
+  }
   const {
     canonicalVenueName,
     instagramSourceName,
@@ -516,6 +524,7 @@ export async function processIngestionPost(
       instagramSourceRole: sourceRole,
       instagramSourceName,
       extractionMode,
+      imageCoverage: buildInstagramImageCoverage(post, selectedImageUrl ? [selectedImageUrl] : []),
       ...(providerExecution
         ? {
             beforeTransport: async () => {
@@ -552,6 +561,13 @@ export async function processIngestionPost(
         : {}),
     });
     extracted = normalizeConfidencePayload(extracted);
+    if (hasKnownUnanalyzedInstagramSlides(extracted)) {
+      options.onSourceCoveragePartial?.();
+      logInfo("ingestion.image.source_coverage_partial", {
+        ...postContext,
+        imageCoverage: extracted._imageCoverage,
+      });
+    }
     persistedAnalysisResultJson = JSON.stringify(extracted);
     if (providerExecution) {
       await client.mutation(

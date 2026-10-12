@@ -12,6 +12,12 @@ import {
 } from "../lib/domain/source-url";
 import { normalizeHandle } from "../lib/pipeline/venue-normalization";
 import {
+  buildInstagramImageCoverage,
+  hasCachedExtractionQualityPolicy,
+  mergeInstagramImageSlideObservations,
+  parseCachedInstagramImageCoveragePartial,
+} from "../lib/pipeline/instagram-image-coverage";
+import {
   EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
   OPENAI_DEFINITIVE_OUTPUT_FAILURE_KINDS,
 } from "../lib/ai/openai-analysis-protocol";
@@ -77,6 +83,8 @@ const scrapedPostRecord = {
   altText: v.optional(v.string()),
   imageUrl: v.optional(v.string()),
   imageUrls: v.array(v.string()),
+  imageSlides: v.optional(v.array(v.object({ index: v.number(), imageUrls: v.array(v.string()) }))),
+  imageSlideCount: v.optional(v.number()),
   postType: v.optional(v.string()),
   locationName: v.optional(v.string()),
   instagramPostUrl: v.string(),
@@ -844,6 +852,20 @@ export const upsertManyByHandle = mutation({
         );
       }
       const rawImageUrl = post.imageUrl?.trim();
+      if (post.imageSlides !== undefined) {
+        if (post.imageSlides.length > 20 || post.imageSlides.some((slide, index) =>
+          slide.index !== index || slide.imageUrls.length > 8 ||
+          slide.imageUrls.some((url) => !url.trim() || url.length > 2_048),
+        )) {
+          throw new Error("Instagram slide manifests require at most 20 ordered slides and 8 alternate URLs of at most 2048 characters per slide.");
+        }
+        const slideCount = post.imageSlideCount ?? post.imageSlides.length;
+        if (!Number.isSafeInteger(slideCount) || slideCount < post.imageSlides.length || slideCount > 10_000) {
+          throw new Error("Instagram declared slide count is invalid.");
+        }
+      } else if (post.imageSlideCount !== undefined) {
+        throw new Error("Instagram slide count requires its ordered manifest.");
+      }
       const imageUrls = [...new Set([rawImageUrl, ...post.imageUrls].filter(Boolean))] as string[];
       const hasDurableImage = Boolean(existing?.imageStorageId && existing.imageUrl);
       const {
@@ -862,6 +884,7 @@ export const upsertManyByHandle = mutation({
       const effectiveHandle = existing?.handle ?? args.handle;
       const nextRecord = {
         ...postWithoutPrimaryImage,
+        ...mergeInstagramImageSlideObservations(existing, post),
         ...(effectivePostedAt && effectivePostedAtMs !== undefined
           ? { postedAt: effectivePostedAt, postedAtMs: effectivePostedAtMs }
           : {}),
@@ -884,8 +907,12 @@ export const upsertManyByHandle = mutation({
           imageUrls,
           existing.imageUrls ?? [],
         );
+        const hasQualityAnalysisCache = existing.analysisRevision === (existing.sourceRevision ?? 1) &&
+          existing.analysisContractVersion === "event_evidence_v2" &&
+          hasCachedExtractionQualityPolicy(existing.analysisResultJson);
         const shouldReprocessForNewMedia =
           hasImageCandidatesChanged &&
+          !hasQualityAnalysisCache &&
           (existing.processingStatus === "retryable_failure" ||
             (existing.processingStatus === "completed" &&
               existing.processingOutcome === "terminal_permanent_failure"));
@@ -893,12 +920,25 @@ export const upsertManyByHandle = mutation({
         const sourceRevision = shouldResetProcessing
           ? (existing.sourceRevision ?? 1) + 1
           : (existing.sourceRevision ?? 1);
+        const sourceMediaPartial = !shouldResetProcessing && hasQualityAnalysisCache &&
+          parseCachedInstagramImageCoveragePartial(existing.analysisResultJson, nextRecord, existing.analysisImageSourceUrl);
         const patch = {
           ...nextRecord,
           sourceRevision,
           blocksPaidFetch: shouldResetProcessing ? true : (existing.blocksPaidFetch ?? true),
           imageUrl: hasDurableImage ? existing.imageUrl : undefined,
           imageStorageId: hasDurableImage ? existing.imageStorageId : undefined,
+          ...(sourceMediaPartial && existing.processingStatus !== "processing"
+            ? {
+                processingStatus: "retryable_failure" as const,
+                processingOutcome: "source_media_partial",
+                processingError: "Source contains known unread carousel slides; extracted occurrences remain separately verified.",
+                processingRetryAt: existing.processingStatus === "retryable_failure" &&
+                  (existing.processingRetryAt ?? 0) > now
+                  ? existing.processingRetryAt : getProcessingRetryAt(now, existing.processingAttempts),
+                blocksPaidFetch: false,
+              }
+            : {}),
           ...(shouldResetProcessing
             ? {
                 processingStatus: "pending" as const,
@@ -1163,6 +1203,20 @@ export const claimProcessing = mutation({
       existing.processingStatus === "completed" &&
       ["terminal_no_event", "terminal_permanent_failure", "terminal_canonical_duplicate", "receipt_complete"].includes(existing.processingOutcome ?? "")
     ) {
+      if (
+        existing.analysisRevision === (existing.sourceRevision ?? 1) &&
+        parseCachedInstagramImageCoveragePartial(existing.analysisResultJson, existing, existing.analysisImageSourceUrl)
+      ) {
+        const retryAt = getProcessingRetryAt(Date.now(), existing.processingAttempts);
+        await ctx.db.patch(existing._id, {
+          processingStatus: "retryable_failure",
+          processingOutcome: "source_media_partial",
+          processingError: "Source contains known unread carousel slides; extracted occurrences remain separately verified.",
+          processingRetryAt: retryAt,
+          blocksPaidFetch: false,
+        });
+        return { claimed: false, reason: "deferred" as const, retryAt };
+      }
       return { claimed: false, reason: "terminal" as const };
     }
     const now = Date.now();
@@ -1275,6 +1329,8 @@ export const claimProcessing = mutation({
         existing.analysisRevision === sourceRevision
           ? existing.analysisImageChecksumSha256
           : undefined,
+      ...(existing.imageSlides ? { imageSlides: existing.imageSlides } : {}),
+      ...(existing.imageSlideCount === undefined ? {} : { imageSlideCount: existing.imageSlideCount }),
     };
   },
 });
@@ -1607,6 +1663,29 @@ export const recordOpenAiAnalysis = mutation({
       )
     ) {
       throw new Error("OpenAI analysis image does not match the current scraped-post source.");
+    }
+    if (
+      result._extractionPolicyVersion === "event_quality_v1" &&
+      existing.imageSlides?.length && result._imageCoverage === undefined
+    ) {
+      throw new Error("Future carousel analysis requires source image coverage diagnostics.");
+    }
+    if (result._imageCoverage !== undefined) {
+      if (result._extractionPolicyVersion !== "event_quality_v1") {
+        throw new Error("Image coverage requires the future extraction-quality policy.");
+      }
+      const expectedCoverage = buildInstagramImageCoverage(existing, imageSourceUrl ? [imageSourceUrl] : []);
+      const coverage = result._imageCoverage as typeof expectedCoverage;
+      if (
+        !coverage || coverage.version !== expectedCoverage.version ||
+        coverage.knownSlideCount !== expectedCoverage.knownSlideCount ||
+        coverage.manifestKnown !== expectedCoverage.manifestKnown ||
+        coverage.complete !== expectedCoverage.complete ||
+        JSON.stringify(coverage.analyzedSlideIndexes) !== JSON.stringify(expectedCoverage.analyzedSlideIndexes) ||
+        JSON.stringify(coverage.unanalyzedSlideIndexes) !== JSON.stringify(expectedCoverage.unanalyzedSlideIndexes)
+      ) {
+        throw new Error("OpenAI image coverage does not match the exact analyzed source and provider slide manifest.");
+      }
     }
     const now = Date.now();
     if (
@@ -2978,14 +3057,22 @@ export const recordProcessingResult = mutation({
       throw new Error("Completed scraped-post processing requires an explicit terminal outcome.");
     }
 
-    const isRetryable = args.status === "retryable_failure";
+    // A satisfied occurrence receipt proves the rows we extracted. It does
+    // not prove that independently announced events on unread slides were seen.
+    // Keep known rows public while preserving a truthful partial source state.
+    const sourceMediaPartial = existing.analysisRevision === args.sourceRevision &&
+      parseCachedInstagramImageCoveragePartial(existing.analysisResultJson, existing, existing.analysisImageSourceUrl);
+    const rejectWholeSourceCompletion = sourceMediaPartial && args.status === "completed";
+    const isRetryable = args.status === "retryable_failure" || rejectWholeSourceCompletion;
     await ctx.db.patch(existing._id, {
-      processingStatus: args.status,
+      processingStatus: rejectWholeSourceCompletion ? "retryable_failure" : args.status,
       // Retryable work remains durable but is circuit-delayed instead of
       // globally deadlocking every subsequent paid source fetch.
       blocksPaidFetch: false,
-      processingOutcome: args.outcome.slice(0, 160),
-      processingError: args.error?.slice(0, 1_000),
+      processingOutcome: rejectWholeSourceCompletion ? "source_media_partial" : args.outcome.slice(0, 160),
+      processingError: rejectWholeSourceCompletion
+        ? "Source contains known unread carousel slides; extracted occurrences remain separately verified."
+        : args.error?.slice(0, 1_000),
       processingLeaseOwner: undefined,
       processingLeaseExpiresAt: undefined,
       processingRetryAt: isRetryable

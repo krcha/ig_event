@@ -8,6 +8,7 @@ import { type NightlifeLineupCoalescingPlan, type NightlifeLineupSource } from "
 import { type CanonicalVenueAliasesByHandle } from "@/lib/pipeline/venue-normalization";
 import { type InstagramScrapedPost } from "@/lib/scraper/instagram-scraper";
 import { ConvexHttpClient } from "convex/browser";
+import type { ScopedBranchVenueEvidence } from "@/lib/pipeline/ingestion/scoped-branch-venue-evidence";
 
 export type RunInstagramIngestionOptions = {
   handles: string[];
@@ -289,6 +290,7 @@ export type EventVariant = {
   description?: string;
   venue: string;
   venueEvidenceValue: string;
+  scopedBranchVenueEvidence?: ScopedBranchVenueEvidence;
   venueFromSourceAccountFallback?: boolean;
   canonicalVenueEvidenceSource: "evidence_handle" | "evidence_name" | null;
   canonicalVenueEvidenceHandle: string | null;
@@ -450,6 +452,8 @@ export type SavedScrapedPostRecord = {
   altText?: string;
   imageUrl?: string;
   imageUrls: string[];
+  imageSlides?: InstagramScrapedPost["imageSlides"];
+  imageSlideCount?: number;
   postType?: string;
   locationName?: string;
   instagramPostUrl: string;
@@ -575,6 +579,7 @@ export type ProcessIngestionPostOptions = {
   cachedAnalysisContractVersion?: string;
   cachedAnalysisImageSourceUrl?: string;
   cachedAnalysisImageChecksumSha256?: string;
+  onSourceCoveragePartial?: () => void;
   providerExecution?: ProviderExecutionControl;
   onOpenAiTransportStarted?: () => void;
   /**

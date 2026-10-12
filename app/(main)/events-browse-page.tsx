@@ -32,6 +32,12 @@ import { matchesPublicEventNameArtistOrVenue } from "@/lib/events/public-event-s
 import { HOME_FAQ_ITEMS, buildHomePageStructuredData } from "@/lib/seo/site";
 import { groupCalendarEventsByTimeBand } from "@/lib/events/calendar-time-bands";
 import { groupBusyVenuesForDay } from "@/lib/events/venue-day-grouping";
+import {
+  buildPublicEventVenueFilterOptions,
+  getPublicEventVenueFilterValue,
+  matchesPublicEventVenueFilter,
+  resolvePublicEventVenueFilter,
+} from "@/lib/events/public-event-venue-filter";
 
 // Keep the public calendar out of Next.js' persisted route cache. The page data
 // comes from Convex and must reflect completed ingestion runs without manual
@@ -325,7 +331,7 @@ function eventMatchesFilters(
   venue: string | undefined,
   query: string | undefined,
 ): boolean {
-  if (venue && event.venue !== venue) {
+  if (!matchesPublicEventVenueFilter(event, venue)) {
     return false;
   }
 
@@ -500,22 +506,27 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const fromDate = monthStartKey;
   const beforeDate = formatDateKey(nextMonthStart);
   const { events, error } = await loadPublicCalendarEventsWindow({ beforeDate, fromDate });
-  const selectedVenue = getSingleValue(resolvedSearchParams?.venue);
+  const venues = buildPublicEventVenueFilterOptions(events);
+  const selectedVenue = resolvePublicEventVenueFilter(
+    getSingleValue(resolvedSearchParams?.venue),
+    venues,
+  );
+  const selectedVenueOption = venues.find((venue) => venue.value === selectedVenue);
+  const selectedVenueLabel = selectedVenueOption?.label ?? (
+    selectedVenue && /^(?:id|name):/u.test(selectedVenue) ? "Selected venue" : selectedVenue
+  );
   const hiddenDayCategories = normalizeHiddenDayCategories(getSingleValue(resolvedSearchParams?.hide));
   const hiddenDayCategorySet = new Set(hiddenDayCategories);
   const selectedSortMode = normalizeAgendaSortMode(getSingleValue(resolvedSearchParams?.sort));
   const selectedSearchQuery = getSingleValue(resolvedSearchParams?.q)?.trim() || undefined;
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
-  const venueNames = new Set<string>();
   const monthDayBuckets = new Map<string, CalendarDayBucket>();
   const activeVenueNames = new Set<string>();
   let totalFilteredEventCount = 0;
   let weekendEventCount = 0;
 
   for (const event of events) {
-    venueNames.add(event.venue);
-
     if (!event.date.startsWith(`${monthParam}-`)) {
       continue;
     }
@@ -535,13 +546,12 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
 
     dayBucket.eventCount += 1;
     totalFilteredEventCount += 1;
-    activeVenueNames.add(event.venue);
+    activeVenueNames.add(getPublicEventVenueFilterValue(event));
     if (eventDate && isWeekendDate(eventDate)) {
       weekendEventCount += 1;
     }
   }
 
-  const venues = Array.from(venueNames).sort((left, right) => left.localeCompare(right));
   const filteredMonthDayKeys = Array.from(monthDayBuckets.entries())
     .filter(([, bucket]) => bucket.eventCount > 0)
     .map(([dayKey]) => dayKey)
@@ -632,7 +642,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     selectedVenue
       ? {
           key: "venue",
-          label: `Venue: ${selectedVenue}`,
+          label: `Venue: ${selectedVenueLabel}`,
           href: `/${buildQueryString({
             ...baseFilters,
             month: monthParam,
@@ -789,9 +799,12 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   name="venue"
                 >
                   <option value="">All venues</option>
+                  {selectedVenue && !selectedVenueOption ? (
+                    <option value={selectedVenue}>{selectedVenueLabel}</option>
+                  ) : null}
                   {venues.map((venue) => (
-                    <option key={venue} value={venue}>
-                      {venue}
+                    <option key={venue.value} value={venue.value}>
+                      {venue.label}
                     </option>
                   ))}
                 </select>

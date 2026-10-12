@@ -59,6 +59,8 @@ export async function processLoadedPostsForHandle(
       analysisContractVersion?: string;
       analysisImageSourceUrl?: string;
       analysisImageChecksumSha256?: string;
+      imageSlides?: Array<{ index: number; imageUrls: string[] }>;
+      imageSlideCount?: number;
     };
     if (!claim.claimed) {
       if (claim.reason === "analysis_attempt_ambiguous") {
@@ -138,7 +140,11 @@ export async function processLoadedPostsForHandle(
     };
 
     try {
-      post = normalizeScrapedPost(post);
+      post = normalizeScrapedPost({
+        ...post,
+        ...(claim.imageSlides ? { imageSlides: claim.imageSlides } : {}),
+        ...(claim.imageSlideCount === undefined ? {} : { imageSlideCount: claim.imageSlideCount }),
+      });
     } catch (error) {
       summary.errors.push(getErrorMessage(error));
       logError("ingestion.post.normalize.failed", {
@@ -211,6 +217,7 @@ export async function processLoadedPostsForHandle(
       summary.terminalPermanentExtractionFailures ?? 0;
     const eventActivityCountBefore =
       summary.insertedEvents + summary.skippedDuplicates + summary.updated_duplicates_bad_data;
+    let hasPartialMediaCoverage = false;
     try {
       await processIngestionPost({
         client,
@@ -234,6 +241,7 @@ export async function processLoadedPostsForHandle(
         providerExecution,
         onOpenAiTransportStarted,
         requireCachedCanonicalApprovedDuplicate,
+        onSourceCoveragePartial: () => { hasPartialMediaCoverage = true; },
       });
     } catch (error) {
       await client.mutation(
@@ -278,7 +286,7 @@ export async function processLoadedPostsForHandle(
       hasTerminalNoEventOutcome,
       hasTerminalCanonicalDuplicateOutcome,
       hasMissingReceiptAfterEvent,
-      hasRetryableFailure,
+      hasRetryableFailure: hasOtherRetryableFailure,
     } = classifySavedPostCompletionForTesting({
       hasTerminalPermanentFailure,
       hasProcessingFailure,
@@ -292,6 +300,10 @@ export async function processLoadedPostsForHandle(
       terminalCanonicalDuplicateCountAfter:
         summary.terminalCanonicalDuplicates ?? 0,
     });
+    const hasRetryableFailure = hasOtherRetryableFailure || hasPartialMediaCoverage;
+    if (hasPartialMediaCoverage) {
+      summary.errors.push("Source contains known unread carousel slides; verified extracted occurrences were preserved.");
+    }
     await client.mutation(
       recordScrapedPostProcessingResultMutation,
       withServiceSecret(
@@ -303,7 +315,7 @@ export async function processLoadedPostsForHandle(
           status: hasRetryableFailure ? "retryable_failure" : "completed",
           owner: workOwner,
           sourceRevision: processingFence.sourceRevision,
-          outcome: resolveSavedPostProcessingOutcomeForTesting({
+          outcome: hasPartialMediaCoverage && !hasOtherRetryableFailure ? "source_media_partial" : resolveSavedPostProcessingOutcomeForTesting({
             hasTerminalPermanentFailure,
             hasRetryableFailure,
             receiptInspectionFailed,

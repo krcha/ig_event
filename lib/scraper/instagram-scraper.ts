@@ -36,6 +36,10 @@ export type InstagramScrapedPost = {
   altText: string | null;
   imageUrl: string | null;
   imageUrls: string[];
+  /** Ordered provider slides; each slide's URLs are alternate representations. */
+  imageSlides?: InstagramImageSlide[];
+  /** Includes provider slides beyond the bounded retained manifest. */
+  imageSlideCount?: number;
   postType: string | null;
   locationName: string | null;
   instagramPostUrl: string;
@@ -47,6 +51,13 @@ export type InstagramScrapedPost = {
    */
   isPinned?: boolean;
 };
+
+export type InstagramImageSlide = {
+  index: number;
+  imageUrls: string[];
+};
+
+export const MAX_RETAINED_INSTAGRAM_IMAGE_SLIDES = 20;
 
 export type InstagramPinnedPostPolicy = "exclude_all" | "include_recent";
 
@@ -108,6 +119,11 @@ type ApifyInstagramImage =
       display_url?: string;
       imageUrl?: string;
       image_url?: string;
+      displayUrlHD?: string;
+      display_url_hd?: string;
+      thumbnailUrl?: string;
+      thumbnail_url?: string;
+      image_versions2?: { candidates?: Array<{ url?: string }> };
     };
 
 type ApifyInstagramItem = {
@@ -142,6 +158,7 @@ type ApifyInstagramItem = {
   image_urls?: string[];
   images?: ApifyInstagramImage[];
   sidecarImages?: ApifyInstagramImage[];
+  childPosts?: ApifyInstagramImage[];
   image_versions2?: {
     candidates?: Array<{ url?: string }>;
   };
@@ -548,7 +565,47 @@ function getImages(item: ApifyInstagramItem): ApifyInstagramImage[] {
   if (Array.isArray(item.sidecarImages) && item.sidecarImages.length > 0) {
     return item.sidecarImages;
   }
+  if (Array.isArray(item.childPosts) && item.childPosts.length > 0) {
+    return item.childPosts;
+  }
   return [];
+}
+
+function collectSlideImageUrls(image: ApifyInstagramImage): string[] {
+  const candidates = typeof image === "string"
+    ? [image]
+    : [
+        image.url, image.displayUrl, image.display_url, image.imageUrl, image.image_url,
+        image.displayUrlHD, image.display_url_hd, image.thumbnailUrl, image.thumbnail_url,
+        ...(image.image_versions2?.candidates ?? []).map((candidate) => candidate.url),
+      ];
+  return [...new Set(candidates.map((candidate) => asHttpUrl(candidate)).filter(
+    (candidate): candidate is string => typeof candidate === "string" && !INSTAGRAM_HOSTNAMES.has(new URL(candidate).hostname),
+  ))].slice(0, 8);
+}
+
+function collectImageSlideManifest(item: ApifyInstagramItem): {
+  imageSlides?: InstagramImageSlide[];
+  imageSlideCount?: number;
+} {
+  const explicitChildren = item.childPosts?.length ? item.childPosts : item.sidecarImages;
+  const slides = explicitChildren?.length
+    ? explicitChildren
+    : resolvePostType(item) === "sidecar" && item.images?.length
+      ? item.images
+      : undefined;
+  if (!slides) {
+    // Flat URLs and image_versions2 can be alternate resolutions. They never
+    // establish a carousel's slide count by themselves.
+    return {};
+  }
+  return {
+    imageSlides: slides.slice(0, MAX_RETAINED_INSTAGRAM_IMAGE_SLIDES).map((slide, index) => ({
+      index,
+      imageUrls: collectSlideImageUrls(slide).filter((url) => url.length <= 2_048),
+    })),
+    imageSlideCount: slides.length,
+  };
 }
 
 function pickImageCandidate(image: ApifyInstagramImage): string | null {
@@ -556,13 +613,9 @@ function pickImageCandidate(image: ApifyInstagramImage): string | null {
     return asHttpUrl(image);
   }
 
-  return (
-    asHttpUrl(image.url) ??
-    asHttpUrl(image.displayUrl) ??
-    asHttpUrl(image.display_url) ??
-    asHttpUrl(image.imageUrl) ??
-    asHttpUrl(image.image_url)
-  );
+  // Preserve the legacy source candidate priority. Additional resolutions live
+  // in the diagnostic manifest without invalidating a saved analysis revision.
+  return collectSlideImageUrls(image)[0] ?? null;
 }
 
 function pickImageFromImagesField(item: ApifyInstagramItem): string | null {
@@ -726,6 +779,7 @@ export function mapApifyItemToInstagramPost(
     altText: normalizeString(item.alt),
     imageUrl: primaryImageUrl,
     imageUrls,
+    ...collectImageSlideManifest(item),
     postType: resolvePostType(item),
     locationName:
       normalizeString(item.locationName) ??

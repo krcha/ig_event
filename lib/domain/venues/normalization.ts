@@ -781,6 +781,24 @@ function hasImmediateLocativeHandleContext(
   return isTightlyBoundVidimoSeTail(vidimoSeMatch[1] ?? "");
 }
 
+export function findPositiveLocativeVenueHandleEvidence(options: {
+  evidenceText: string;
+  handle: string;
+  venueNames: readonly string[];
+}): string | null {
+  const handle = normalizeHandle(options.handle);
+  const pattern = /(?:^|[^\p{L}\p{N}._])@([a-z0-9_]+(?:\.[a-z0-9_]+)*)/giu;
+  for (const match of options.evidenceText.matchAll(pattern)) {
+    if (normalizeHandle(match[1] ?? "") !== handle) continue;
+    const rawMatch = match[0] ?? "";
+    const mentionStart = (match.index ?? 0) + rawMatch.indexOf("@");
+    if (!hasImmediateLocativeHandleContext(options.evidenceText, mentionStart, options.venueNames)) continue;
+    const prefix = getImmediateEvidenceClause(options.evidenceText.slice(Math.max(0, mentionStart - 96), mentionStart));
+    return `${prefix}@${match[1]}`.trim();
+  }
+  return null;
+}
+
 function findUniqueCanonicalVenueHandleMention(
   evidenceTexts: Array<string | null | undefined>,
   postingHandle: string,

@@ -575,6 +575,12 @@ export default defineSchema({
     imageUrl: v.optional(v.string()),
     imageStorageId: v.optional(v.id("_storage")),
     imageUrls: v.array(v.string()),
+    // Acquisition metadata is additive; old analyses/receipts keep their exact bytes.
+    imageSlides: v.optional(v.array(v.object({
+      index: v.number(),
+      imageUrls: v.array(v.string()),
+    }))),
+    imageSlideCount: v.optional(v.number()),
     postedAtMs: v.optional(v.number()),
     postType: v.optional(v.string()),
     locationName: v.optional(v.string()),
