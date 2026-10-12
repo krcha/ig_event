@@ -11,6 +11,7 @@ import {
   writeEventAuditLog,
 } from "../../eventDomain/persistence";
 import { assertExistingSourceOccurrenceReceiptWithinBounds } from "../sourceOccurrenceReceipts";
+import { isSupportedExtractionModel } from "../extractionModel";
 
 const SOURCE_IDENTITY = "instagram-source-identity-v1:Ddli2yVFbp3";
 const SOURCE_HANDLE = "kulturni_centar_beograda";
@@ -72,7 +73,7 @@ async function loadExactSourceAndReceipt(ctx: ReadCtx) {
     source.analysisRevision !== (source.sourceRevision ?? 1) ||
     source.analysisContractVersion !== "event_evidence_v2" ||
     source.analysisIsEvent !== true ||
-    !source.analysisModel?.startsWith("gpt-5-mini") ||
+    !isSupportedExtractionModel(source.analysisModel) ||
     !source.analysisResultJson ||
     !source.caption ||
     !sourceNamesTheOtherFilm(source.caption) ||

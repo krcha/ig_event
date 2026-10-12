@@ -31,6 +31,7 @@ import {
   normalizeSourceCaption,
 } from "../../eventDomain/sourceApproval";
 import { requireCanonicalInstagramPostUrl } from "../../eventDomain/sourceUrlPolicy";
+import { isSupportedExtractionModel } from "../extractionModel";
 
 export async function repairTrustedV2EventVenueHandler(
   ctx: MutationCtx,
@@ -234,7 +235,7 @@ export async function repairTrustedV2EventVenueHandler(
     persisted.analysisRevision !== (persisted.sourceRevision ?? 1) ||
     persisted.analysisContractVersion !== "event_evidence_v2" ||
     persisted.analysisIsEvent !== true ||
-    !persisted.analysisModel?.startsWith("gpt-5-mini")
+    !isSupportedExtractionModel(persisted.analysisModel)
   ) {
     throw new Error(
       "Trusted v2 venue repair requires the current persisted GPT source.",

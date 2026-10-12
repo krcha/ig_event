@@ -6,6 +6,7 @@ import { sourceOccurrenceRepresentativeMatchesExpected } from "../../lib/events/
 import { getBelgradeDayKey } from "../../lib/pipeline/belgrade-day-key";
 import { normalizeHandle, toSearchableText } from "../../lib/pipeline/venue-normalization";
 import { sourceOccurrenceProvenanceRepository } from "../repositories/sourceOccurrenceProvenance";
+import { isSupportedExtractionModel } from "./extractionModel";
 
 type ReadCtx = QueryCtx | MutationCtx;
 
@@ -270,7 +271,7 @@ export async function hasCompleteAutomaticUniqueSourceProof(
     source.analysisRevision !== (source.sourceRevision ?? 1) ||
     source.analysisContractVersion !== "event_evidence_v2" ||
     source.analysisIsEvent !== true ||
-    !source.analysisModel?.startsWith("gpt-5-mini") ||
+    !isSupportedExtractionModel(source.analysisModel) ||
     !event.rawExtractionJson ||
     typeof source.analysisResultJson !== "string" ||
     event.rawExtractionJson !== source.analysisResultJson

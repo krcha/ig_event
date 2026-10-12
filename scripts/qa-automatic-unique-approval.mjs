@@ -13,6 +13,27 @@ import {
 import { isCanonicallyGroundedApprovedEvent } from "../convex/publicEventGrounding.ts";
 import { adaptInstagramScrapedPostToSourceDocument } from "../lib/domain/source-documents.ts";
 import { buildInstagramSourceOccurrenceFingerprint } from "../lib/domain/occurrences/source-fingerprint.ts";
+import { isSupportedExtractionModel } from "../convex/internal/extractionModel.ts";
+
+const supportedExtractionModels = [
+  "gpt-5-mini",
+  "gpt-5-mini-2025-08-07",
+  "gpt-6-luna",
+  "gpt-6-luna-2026-10-01",
+];
+const unsupportedExtractionModels = [
+  undefined, null, "", "gpt-4.1-mini", "gpt-6-sol",
+  "gpt-5-mini-qa", "gpt-5-miniature", "gpt-6-luna-spoofed",
+  "gpt-6-luna-2026-10-01-extra", "gpt-6-luna-2026-02-30",
+  "gpt-6-luna-2026-13-01", "gpt-6-luna-2026-1-01",
+  "gpt-6-luna\n", " gpt-6-luna", "GPT-6-LUNA",
+];
+for (const model of supportedExtractionModels) {
+  assert.equal(isSupportedExtractionModel(model), true, model);
+}
+for (const model of unsupportedExtractionModels) {
+  assert.equal(isSupportedExtractionModel(model), false, String(model));
+}
 
 const sourceUrl = "https://www.instagram.com/p/QAEXACT1/";
 const event = {
@@ -305,6 +326,56 @@ function proofContext(
 const originalProofNow = Date.now;
 try {
   Date.now = () => Date.parse("2035-01-15T00:00:00.000Z");
+  for (const model of supportedExtractionModels) {
+    const source = { ...proofSource, analysisModel: model };
+    assert.equal(
+      await hasCompleteAutomaticUniqueSourceProof(
+        proofContext(basePartialReceipt, source), proofEvent,
+      ),
+      true,
+      `${model} must preserve exact automatic approval evidence.`,
+    );
+    assert.equal(
+      await isCanonicallyGroundedApprovedEvent(
+        proofContext(basePartialReceipt, source), proofEvent,
+      ),
+      true,
+      `${model} must preserve public grounding for exact unique proof.`,
+    );
+  }
+  for (const model of unsupportedExtractionModels) {
+    const source = { ...proofSource, analysisModel: model };
+    assert.equal(
+      await hasCompleteAutomaticUniqueSourceProof(
+        proofContext(basePartialReceipt, source), proofEvent,
+      ),
+      false,
+      `${String(model)} cannot establish automatic approval provenance.`,
+    );
+    assert.equal(
+      await isCanonicallyGroundedApprovedEvent(
+        proofContext(basePartialReceipt, source), proofEvent,
+      ),
+      false,
+      `${String(model)} cannot establish public grounding provenance.`,
+    );
+  }
+  for (const overrides of [
+    { analysisRevision: 0 },
+    { analysisIsEvent: false },
+    { analysisResultJson: "stale analysis" },
+  ]) {
+    assert.equal(
+      await hasCompleteAutomaticUniqueSourceProof(
+        proofContext(basePartialReceipt, {
+          ...proofSource, analysisModel: "gpt-6-luna", ...overrides,
+        }),
+        proofEvent,
+      ),
+      false,
+      "Luna evidence must retain current revision, event, and exact-result checks.",
+    );
+  }
   assert.equal(
     await hasCompleteAutomaticUniqueSourceProof(proofContext(), proofEvent),
     true,

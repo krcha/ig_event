@@ -26,6 +26,7 @@ import { canonicalizeSourceUrl } from "../lib/domain/source-url";
 import { loadVerifiedCampaignLineageReattestation } from "./internal/campaignLineageReattestationProof";
 import { hasVerifiedLegacySourceOccurrenceAdmissionForEvent } from "./internal/legacySourceOccurrenceAdmissionProof";
 import { hasCompleteAutomaticUniqueSourceProof } from "./internal/automaticUniqueSourceProof";
+import { isSupportedExtractionModel } from "./internal/extractionModel";
 
 const MAX_CROSS_POST_CAMPAIGN_AUDIT_ROWS = 100;
 
@@ -555,7 +556,7 @@ async function isCanonicallyGroundedApprovedEventInternal(
         persistedPost.analysisRevision === (persistedPost.sourceRevision ?? 1) &&
         persistedPost.analysisContractVersion === "event_evidence_v2" &&
         persistedPost.analysisIsEvent === true &&
-        persistedPost.analysisModel?.startsWith("gpt-5-mini") &&
+        isSupportedExtractionModel(persistedPost.analysisModel) &&
         (fields.extractionMode !== "poster" ||
           Boolean(
             persistedPost.analysisImageSourceUrl &&

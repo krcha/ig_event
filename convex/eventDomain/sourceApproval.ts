@@ -15,6 +15,7 @@ import {
 } from "../../lib/events/event-update-precondition";
 import { normalizeInstagramPostUrl } from "../../lib/images/apify-images";
 import { canonicalizeSourceUrl } from "../../lib/domain/source-url";
+import { isSupportedExtractionModel } from "../internal/extractionModel";
 import {
   normalizeHandle,
   toSearchableText,
@@ -170,7 +171,7 @@ export async function assertPersistedServiceSourcePolicy(
       persisted.analysisRevision !== (persisted.sourceRevision ?? 1) ||
       persisted.analysisContractVersion !== "event_evidence_v2" ||
       persisted.analysisIsEvent !== true ||
-      !persisted.analysisModel?.startsWith("gpt-5-mini") ||
+      !isSupportedExtractionModel(persisted.analysisModel) ||
       candidate.sourcePostedAt !== persisted.postedAt ||
       (structuredExtractionMode === "poster" &&
         (!persisted.analysisImageSourceUrl ||
@@ -186,7 +187,7 @@ export async function assertPersistedServiceSourcePolicy(
               candidate.imageStorageId !== posterAsset.storageId))))
     ) {
       throw new Error(
-        "Service approval requires current persisted GPT-5 mini event evidence bound to the exact source revision.",
+        "Service approval requires current persisted supported extraction-model event evidence bound to the exact source revision.",
       );
     }
     return;

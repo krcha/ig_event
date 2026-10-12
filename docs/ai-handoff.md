@@ -185,8 +185,10 @@ Important env vars:
 - `ADMIN_CLERK_USER_IDS`: allowlist for admin UI visibility.
 - `OPENAI_API_KEY`: required for extraction and approved-event master review.
 - `OPENAI_VISION_MODEL` and `OPENAI_REVIEW_MODEL`: `.env.example` pins
-  `gpt-5-mini` for extraction and `gpt-4.1-mini` for review; production
+  `gpt-6-luna` for both extraction and review; production
   readiness fails if either is missing.
+  Source approval also accepts previously persisted `gpt-5-mini` extraction
+  results, so a model switch does not invalidate existing events.
 - `APIFY_API_TOKEN`: required for Instagram scraping.
 - `APIFY_INSTAGRAM_ACTOR_ID`: defaults to `apify/instagram-post-scraper`.
 - `CRON_SECRET`: protects scheduled ingestion and is also the Convex service

@@ -31,8 +31,8 @@ for (const envName of [
   "CRON_INGESTION_BATCH_SIZE=64",
   "CRON_INGESTION_RESUMABLE_LOOKBACK_HOURS=168",
   "APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN=0.01",
-  "OPENAI_VISION_MODEL=gpt-5-mini",
-  "OPENAI_REVIEW_MODEL=gpt-4.1-mini",
+  "OPENAI_VISION_MODEL=gpt-6-luna",
+  "OPENAI_REVIEW_MODEL=gpt-6-luna",
 ]) {
   assert.ok(envExample.includes(envName), `.env.example should include ${envName}.`);
   assert.ok(
@@ -53,8 +53,8 @@ for (const composeValue of [
   "CRON_MAX_HANDLES_PER_RUN: ${CRON_MAX_HANDLES_PER_RUN:-2000}",
   "CRON_FULL_SCRAPE_COOLDOWN_HOURS: ${CRON_FULL_SCRAPE_COOLDOWN_HOURS:-23}",
   "APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN: ${APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN:-0.01}",
-  "OPENAI_VISION_MODEL: ${OPENAI_VISION_MODEL:-gpt-5-mini}",
-  "OPENAI_REVIEW_MODEL: ${OPENAI_REVIEW_MODEL:-gpt-4.1-mini}",
+  "OPENAI_VISION_MODEL: ${OPENAI_VISION_MODEL:-gpt-6-luna}",
+  "OPENAI_REVIEW_MODEL: ${OPENAI_REVIEW_MODEL:-gpt-6-luna}",
 ]) {
   assert.ok(dockerComposeSource.includes(composeValue), `docker-compose.yml should include ${composeValue}.`);
 }
@@ -129,8 +129,8 @@ assert.match(
 );
 assert.match(
   envUtilsSource,
-  /name === "OPENAI_VISION_MODEL" \? "gpt-5-mini" : "gpt-4\.1-mini"/,
-  "local OpenAI model fallbacks should keep extraction and review models distinct.",
+  /return "gpt-6-luna";/,
+  "local OpenAI model fallbacks should use Luna for both extraction and review.",
 );
 assert.match(
   extractSource,

@@ -10,6 +10,7 @@ const HUMAN_APPROVAL_INELIGIBLE_MESSAGES = new Set([
   "Service approval requires a persisted Instagram source post.",
   "Service approval source does not match the persisted Instagram post.",
   "Service approval requires current persisted GPT-5 mini event evidence bound to the exact source revision.",
+  "Service approval requires current persisted supported extraction-model event evidence bound to the exact source revision.",
   "Service approval source does not independently ground the final public event fields.",
 ]);
 

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   normalizeApprovedEventMasterReviewPayload,
+  reviewApprovedEventsForMasterReview,
 } from "../lib/ai/review-approved-events.ts";
 
 function makeEvent(id, overrides = {}) {
@@ -181,4 +182,83 @@ assert.equal(mixed.reviewGroups.length, 1);
 assert.equal(mixed.skippedGroups.length, 1);
 assert.equal(mixed.skippedGroups[0].reasonCode, "same_night_different_event");
 
-console.log("QA passed: approved-event master review normalizes actions and skipped groups.");
+const originalFetch = globalThis.fetch;
+const previousOpenAiKey = process.env.OPENAI_API_KEY;
+const previousReviewModel = process.env.OPENAI_REVIEW_MODEL;
+const transportCandidate = makeGroup("candidate_transport", ["transport_a", "transport_b"]);
+const requestBodies = [];
+
+try {
+  process.env.OPENAI_API_KEY = "qa-openai-key";
+  globalThis.fetch = async (input, init) => {
+    assert.equal(input, "https://api.openai.com/v1/responses");
+    assert.equal(init?.method, "POST");
+    requestBodies.push(JSON.parse(String(init?.body)));
+    return Response.json({
+      status: "completed",
+      output: [
+        { type: "reasoning", content: [] },
+        {
+          type: "message",
+          content: [
+            {
+              type: "output_text",
+              text: JSON.stringify(makePayload({
+                skipped_groups: [
+                  {
+                    group_id: transportCandidate.groupId,
+                    reason_code: "different_artists",
+                    reasoning: "The records name different performers.",
+                    candidate_event_ids: transportCandidate.eventIds,
+                  },
+                ],
+              })),
+            },
+          ],
+        },
+      ],
+    });
+  };
+
+  for (const configuredModel of [
+    "gpt-6-luna",
+    "gpt-6-luna-2026-09-22",
+    "gpt-4.1-mini",
+    "qa-custom-review-model",
+  ]) {
+    process.env.OPENAI_REVIEW_MODEL = configuredModel;
+    const result = await reviewApprovedEventsForMasterReview({
+      events: transportCandidate.events,
+      candidateGroups: [transportCandidate],
+    });
+    const request = requestBodies.at(-1);
+    assert.equal(request.model, configuredModel);
+    assert.equal(request.text.format.type, "json_schema");
+    assert.equal(request.text.format.strict, true);
+    assert.equal(request.text.format.name, "approved_events_master_review");
+    if (configuredModel.startsWith("gpt-6-luna")) {
+      assert.deepEqual(request.reasoning, { effort: "none" });
+    } else {
+      assert.equal(Object.hasOwn(request, "reasoning"), false);
+    }
+    assert.equal(result.candidateGroupCount, 1);
+    assert.equal(result.reviewGroups.length, 0);
+    assert.equal(result.skippedGroups[0].reasonCode, "different_artists");
+    assert.deepEqual(result.skippedGroups[0].candidateEventIds, transportCandidate.eventIds);
+  }
+  assert.equal(requestBodies.length, 4);
+} finally {
+  globalThis.fetch = originalFetch;
+  if (previousOpenAiKey === undefined) {
+    delete process.env.OPENAI_API_KEY;
+  } else {
+    process.env.OPENAI_API_KEY = previousOpenAiKey;
+  }
+  if (previousReviewModel === undefined) {
+    delete process.env.OPENAI_REVIEW_MODEL;
+  } else {
+    process.env.OPENAI_REVIEW_MODEL = previousReviewModel;
+  }
+}
+
+console.log("QA passed: approved-event master review preserves actions and model-specific transport.");

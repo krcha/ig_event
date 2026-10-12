@@ -8,6 +8,7 @@ import {
   processIngestionPostWithExtractionForTesting,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
 import { isCanonicallyGroundedApprovedEvent } from "../convex/publicEventGrounding.ts";
+import { assertPersistedServiceSourcePolicy } from "../convex/eventDomain/sourceApproval.ts";
 import {
   assertServiceCreateEventPolicy,
   hasEventEvidenceV2AutoApproval,
@@ -469,6 +470,61 @@ try {
     "Exact persisted poster storage and checksum evidence must authorize publication.",
   );
   assert.equal(exactPosterGrounding.posterQueries, 1);
+  for (const model of [
+    "gpt-5-mini", "gpt-5-mini-2025-08-07",
+    "gpt-6-luna", "gpt-6-luna-2026-10-01",
+  ]) {
+    const grounding = makeGroundingCtx(
+      { ...posterPost, analysisModel: model }, [makePosterAsset()],
+    );
+    await assert.doesNotReject(
+      assertPersistedServiceSourcePolicy(grounding.ctx, posterEvent),
+      `${model} must authorize service approval with exact persisted poster evidence.`,
+    );
+    assert.equal(
+      await isCanonicallyGroundedApprovedEvent(grounding.ctx, posterEvent),
+      true,
+      `${model} must authorize publication with exact persisted poster evidence.`,
+    );
+  }
+  for (const model of [
+    undefined, "gpt-4.1-mini", "gpt-5-mini-spoofed", "gpt-6-luna-spoofed",
+    "gpt-6-luna-2026-02-30", "gpt-6-luna\n",
+  ]) {
+    const grounding = makeGroundingCtx(
+      { ...posterPost, analysisModel: model }, [makePosterAsset()],
+    );
+    await assert.rejects(
+      assertPersistedServiceSourcePolicy(grounding.ctx, posterEvent),
+      /current persisted supported extraction-model event evidence/u,
+      `${String(model)} must not authorize service approval.`,
+    );
+    assert.equal(
+      await isCanonicallyGroundedApprovedEvent(grounding.ctx, posterEvent),
+      false,
+      `${String(model)} must not authorize publication.`,
+    );
+  }
+  for (const overrides of [
+    { analysisRevision: posterPost.sourceRevision - 1 },
+    { analysisIsEvent: false },
+    { analysisResultJson: "stale result" },
+    { analysisImageChecksumSha256: "b".repeat(64) },
+  ]) {
+    const grounding = makeGroundingCtx(
+      { ...posterPost, analysisModel: "gpt-6-luna", ...overrides },
+      [makePosterAsset()],
+    );
+    await assert.rejects(
+      assertPersistedServiceSourcePolicy(grounding.ctx, posterEvent),
+      /current persisted supported extraction-model event evidence/u,
+      "Luna must retain source revision, result, event, and poster checksum guards.",
+    );
+    assert.equal(
+      await isCanonicallyGroundedApprovedEvent(grounding.ctx, posterEvent),
+      false,
+    );
+  }
   const realDateNow = Date.now;
   Date.now = () => Date.parse(`${eventDate}T12:00:00.000Z`) + 7 * 86_400_000;
   try {

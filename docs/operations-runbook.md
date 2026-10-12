@@ -108,8 +108,8 @@ ADMIN_CLERK_USER_IDS=
 OPENAI_API_KEY=
 APIFY_API_TOKEN=
 APIFY_INSTAGRAM_ACTOR_ID=apify/instagram-post-scraper
-OPENAI_VISION_MODEL=gpt-5-mini
-OPENAI_REVIEW_MODEL=gpt-4.1-mini
+OPENAI_VISION_MODEL=gpt-6-luna
+OPENAI_REVIEW_MODEL=gpt-6-luna
 CRON_SECRET=
 EVENTS_TIMEZONE=Europe/Belgrade
 APP_BIND=127.0.0.1
@@ -141,7 +141,7 @@ Notes:
   convenience.
 - `EVENTS_TIMEZONE` controls local event-day handling.
 - `OPENAI_VISION_MODEL` and `OPENAI_REVIEW_MODEL` must be set in production;
-  the defaults are `gpt-5-mini` for extraction and `gpt-4.1-mini` for review.
+  the default is `gpt-6-luna` for both extraction and review.
 - `CLERK_JWT_ISSUER_DOMAIN` must match the Clerk JWT issuer configured for the
   Convex `convex` JWT template.
 - `CONVEX_DEPLOY_KEY` is a deploy-time secret only. Do not put it in the VPS

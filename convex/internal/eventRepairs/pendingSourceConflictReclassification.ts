@@ -11,6 +11,7 @@ import {
 } from "../sourceOccurrenceReceipts";
 import { nextEventUpdatedAt } from "../../../lib/events/event-update-precondition";
 import { preparePendingCinemaSourceConflictReclassification } from "../../../lib/events/pending-source-conflict-reclassification";
+import { isSupportedExtractionModel } from "../extractionModel";
 
 const MAX_RECLASSIFICATION_BATCH_SIZE = 16;
 
@@ -142,7 +143,7 @@ async function loadCandidate(
     source.analysisRevision !== (source.sourceRevision ?? 1) ||
     source.analysisContractVersion !== "event_evidence_v2" ||
     source.analysisIsEvent !== true ||
-    !source.analysisModel?.startsWith("gpt-5-mini") ||
+    !isSupportedExtractionModel(source.analysisModel) ||
     event.rawExtractionJson !== source.analysisResultJson ||
     occurrence.sourceDocumentId !== source._id ||
     occurrence.sourceRevision !== (source.sourceRevision ?? 1) ||

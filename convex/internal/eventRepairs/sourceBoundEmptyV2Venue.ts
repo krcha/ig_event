@@ -28,6 +28,7 @@ import { isCanonicallyGroundedApprovedEvent } from "../../publicEventGrounding";
 import { sourceOccurrenceProvenanceRepository } from "../../repositories/sourceOccurrenceProvenance";
 import { buildEventOccurrenceIndexPatch } from "../../sourceOccurrences";
 import { resolveVenueClaimsForWrite } from "../../venueResolver";
+import { isSupportedExtractionModel } from "../extractionModel";
 
 // Production source evidence established affected cohorts from 25 through 29
 // September 2026, Belgrade time. A later regression needs a fresh audit.
@@ -123,7 +124,7 @@ export function currentSecondarySourceVenueClaimsForTesting(
     post.analysisRevision !== (post.sourceRevision ?? 1) ||
     post.analysisContractVersion !== "event_evidence_v2" ||
     post.analysisIsEvent !== true ||
-    !post.analysisModel?.startsWith("gpt-5-mini") ||
+    !isSupportedExtractionModel(post.analysisModel) ||
     !post.analysisResultJson ||
     buildInstagramSourceOccurrenceFingerprint(post) !== link.sourceFingerprint
   ) return null;
@@ -328,7 +329,7 @@ export async function repairSourceBoundEmptyV2VenueHandler(
     post.analysisRevision !== (post.sourceRevision ?? 1) ||
     post.analysisContractVersion !== "event_evidence_v2" ||
     post.analysisIsEvent !== true ||
-    !post.analysisModel?.startsWith("gpt-5-mini")
+    !isSupportedExtractionModel(post.analysisModel)
   ) {
     throw new Error("Event no longer matches the current saved GPT source analysis.");
   }

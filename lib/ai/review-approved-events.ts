@@ -768,6 +768,11 @@ export async function reviewApprovedEventsForMasterReview(options: {
         },
         body: JSON.stringify({
           model: approvedEventsReviewModel,
+          // Luna defaults to medium reasoning. Keep duplicate review at the
+          // previous non-reasoning model's cost and latency profile.
+          ...(/^gpt-6-luna(?:-\d{4}-\d{2}-\d{2})?$/u.test(approvedEventsReviewModel)
+            ? { reasoning: { effort: "none" } }
+            : {}),
           input: [
             {
               role: "system",
