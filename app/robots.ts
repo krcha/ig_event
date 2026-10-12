@@ -6,7 +6,8 @@ export default function robots(): MetadataRoute.Robots {
     rules: [
       {
         userAgent: "*",
-        allow: "/",
+        // Event posters are public assets used in pages and structured data.
+        allow: ["/", "/api/discover/images/"],
         disallow: [
           "/admin",
           "/admin/",

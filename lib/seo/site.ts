@@ -9,7 +9,7 @@ export const HOME_FAQ_ITEMS = [
   {
     question: "What events can I find on Event Zeka?",
     answer:
-      "Event Zeka covers approved Belgrade nightlife and culture listings, including club nights, concerts, DJ sets, exhibitions, theatre, film, festivals, talks, and workshops.",
+      "Find club nights, concerts, exhibitions, theatre, and other events in Belgrade. Choose a date in the calendar to see what's on.",
   },
   {
     question: "Is Event Zeka useful for tourists visiting Belgrade?",
@@ -137,35 +137,54 @@ export function clipText(value: string | null | undefined, maxLength: number): s
 }
 
 function parseEventTime(value: string | null | undefined): string | null {
-  const match = value?.trim().match(/^(\d{1,2}):(\d{2})/);
+  const match = value
+    ?.trim()
+    .match(/^([01]?\d|2[0-3]):([0-5]\d)(?:\s*[-–—]\s*(?:[01]?\d|2[0-3]):[0-5]\d)?$/);
   if (!match) {
     return null;
   }
 
-  const hour = Number.parseInt(match[1], 10);
-  const minute = Number.parseInt(match[2], 10);
-  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
-    return null;
-  }
-
-  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  return `${match[1].padStart(2, "0")}:${match[2]}`;
 }
 
-function getBelgradeUtcOffset(date: string): string {
-  const reference = new Date(`${date}T12:00:00Z`);
-  if (Number.isNaN(reference.getTime())) {
-    return "+01:00";
+const belgradeDateTimeFormatter = new Intl.DateTimeFormat("en-US", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+  timeZone: BELGRADE_TIME_ZONE,
+  timeZoneName: "longOffset",
+});
+
+function getBelgradeUtcOffsets(date: string, time: string): string[] {
+  const wallClockTimestamp = Date.parse(`${date}T${time}:00Z`);
+  if (!Number.isFinite(wallClockTimestamp)) {
+    return [];
   }
 
-  const offsetPart = new Intl.DateTimeFormat("en-US", {
-    hour: "2-digit",
-    timeZone: BELGRADE_TIME_ZONE,
-    timeZoneName: "longOffset",
-  })
-    .formatToParts(reference)
-    .find((part) => part.type === "timeZoneName")?.value;
-  const match = offsetPart?.match(/^GMT([+-]\d{2}:\d{2})$/);
-  return match?.[1] ?? "+01:00";
+  // Check both sides of a clock change, then round-trip each candidate instant.
+  // An offset sampled at noon can differ from an event earlier that same day.
+  const candidateOffsets = new Set<string>();
+  for (const dayOffset of [-1, 0, 1]) {
+    const offsetPart = belgradeDateTimeFormatter
+      .formatToParts(new Date(wallClockTimestamp + dayOffset * 86_400_000))
+      .find((part) => part.type === "timeZoneName")?.value;
+    const offset = offsetPart?.match(/^GMT([+-]\d{2}:\d{2})$/)?.[1];
+    if (offset) {
+      candidateOffsets.add(offset);
+    }
+  }
+
+  return [...candidateOffsets].filter((offset) => {
+    const candidate = new Date(`${date}T${time}:00${offset}`);
+    const parts = Object.fromEntries(
+      belgradeDateTimeFormatter.formatToParts(candidate).map((part) => [part.type, part.value]),
+    );
+    return `${parts.year}-${parts.month}-${parts.day}` === date &&
+      `${parts.hour}:${parts.minute}` === time;
+  });
 }
 
 export function buildEventStartDate(date: string, time?: string): string {
@@ -174,24 +193,47 @@ export function buildEventStartDate(date: string, time?: string): string {
     return date;
   }
 
-  return `${date}T${normalizedTime}:00${getBelgradeUtcOffset(date)}`;
+  const offsets = getBelgradeUtcOffsets(date, normalizedTime);
+  if (offsets.length === 0) {
+    // A clock in the spring DST gap cannot identify a real event instant.
+    return date;
+  }
+
+  // The repeated autumn hour has two valid offsets. Keep the announced local
+  // clock without selecting a UTC instant that the source did not identify.
+  return `${date}T${normalizedTime}:00${offsets.length === 1 ? offsets[0] : ""}`;
 }
 
 function isExplicitlyFree(ticketPrice: string | null | undefined): boolean {
-  return /\b(free|besplatan|besplatno|slobodan ulaz)\b/i.test(ticketPrice?.trim() ?? "");
+  const normalized = ticketPrice?.replace(/\s+/g, " ").trim().replace(/[.!]+$/, "") ?? "";
+  // A conditional or negated price must not describe the whole event as free.
+  return /^(?:free(?: (?:entry|admission))?|(?:entry|admission)(?: is)? free|besplatan(?: ulaz)?|besplatno|slobodan ulaz|ulaz(?: je)? (?:besplatan|slobodan))$/i.test(normalized);
+}
+
+function getStreetAddress(location: string | null | undefined): string | null {
+  const trimmed = location?.trim();
+  if (
+    !trimmed ||
+    /^(?:belgrade|beograd|београд)(?:,\s*(?:serbia|srbija|србија|rs))?$/iu.test(trimmed)
+  ) {
+    return null;
+  }
+
+  return trimmed;
 }
 
 export function buildEventStructuredData(
   event: EventStructuredDataInput,
 ): EventStructuredData {
   const url = absoluteUrl(`/events/${event._id}`);
+  const streetAddress = getStreetAddress(event.venueLocation);
   const location: EventStructuredData["location"] = {
     "@type": "Place",
     address: {
       "@type": "PostalAddress",
       addressCountry: "RS",
       addressLocality: "Belgrade",
-      ...(event.venueLocation ? { streetAddress: event.venueLocation } : {}),
+      ...(streetAddress ? { streetAddress } : {}),
     },
     ...(typeof event.venueLatitude === "number" && typeof event.venueLongitude === "number"
       ? {
@@ -238,6 +280,7 @@ export function buildVenueStructuredData(
   venue: VenueStructuredDataInput,
 ): VenueStructuredData {
   const locationLabel = venue.location?.trim() || "Belgrade";
+  const streetAddress = getStreetAddress(venue.location);
   const mapsQuery = [venue.name, locationLabel].filter(Boolean).join(" ");
   const instagramUrl =
     venue.instagramProfileUrl?.trim() ||
@@ -253,7 +296,7 @@ export function buildVenueStructuredData(
       addressCountry: "RS",
       addressLocality: "Belgrade",
       ...(venue.neighborhood ? { addressRegion: venue.neighborhood } : {}),
-      ...(venue.location ? { streetAddress: venue.location } : {}),
+      ...(streetAddress ? { streetAddress } : {}),
     },
     areaServed: {
       "@type": "City",

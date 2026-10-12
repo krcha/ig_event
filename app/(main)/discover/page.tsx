@@ -4,6 +4,7 @@ import {
   DiscoverFeed,
 } from "@/components/discover/discover-feed";
 import { loadDiscoverEventsPage } from "@/lib/discover/feed-page";
+import { getDiscoverPageCopy } from "@/lib/discover/page-copy";
 import {
   addDaysToDateKey,
   getNightlifeDefaultDateKey,
@@ -28,9 +29,9 @@ export async function generateMetadata({ searchParams }: DiscoverPageProps): Pro
       : resolvedSearchParams?.date,
   );
   const hasPageFilter = normalizeRequestedPage(resolvedSearchParams?.page) > 1;
-  const title = "Belgrade Events Tonight: Nightlife & Culture Picks";
-  const description =
-    "Discover what to do in Belgrade tonight: approved club nights, concerts, DJ sets, exhibitions, theatre, film, and cultural events.";
+  const today = getNightlifeDefaultDateKey();
+  const selectedDate = normalizeRequestedDate(resolvedSearchParams?.date, today);
+  const { title, description } = getDiscoverPageCopy(selectedDate, today);
 
   return {
     title,
@@ -182,6 +183,7 @@ export default async function DiscoverPage({ searchParams }: DiscoverPageProps) 
       key={`${selectedDate}:${currentPage}:${revision}`}
       revision={revision}
       selectedDate={selectedDate}
+      introduction={getDiscoverPageCopy(selectedDate, today).introduction}
       pagination={{
         currentPage,
         firstEventNumber,

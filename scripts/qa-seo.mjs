@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { isPlausibleConvexPublicId } from "../lib/convex/public-id.ts";
+import { getDiscoverPageCopy } from "../lib/discover/page-copy.ts";
 import {
   SITE_NAME,
   SITE_ORIGIN,
   SITE_INSTAGRAM_URL,
+  buildEventStartDate,
   buildEventStructuredData,
   buildHomePageStructuredData,
   buildVenueStructuredData,
@@ -21,6 +23,62 @@ assert.equal(SITE_ORIGIN, "https://eventzeka.com");
 assert.deepEqual(buildHomePageStructuredData()["@graph"][0].sameAs, [SITE_INSTAGRAM_URL]);
 assert.equal(isPlausibleConvexPublicId("j578mw1v72asdhawga974smym989xcjj"), true);
 assert.equal(isPlausibleConvexPublicId("not-an-id"), false);
+
+for (const [selectedDate, when] of [
+  ["2026-10-12", "tonight"],
+  ["2026-10-13", "tomorrow"],
+  ["2026-10-11", "on October 11, 2026"],
+]) {
+  const copy = getDiscoverPageCopy(selectedDate, "2026-10-12");
+  assert.equal(copy.title, `Belgrade events ${when}`);
+  assert.equal(
+    copy.introduction,
+    `Concerts, club nights, DJ sets, and culture in Belgrade ${when}.`,
+  );
+  assert.ok(copy.description.includes(`in Belgrade ${when}.`));
+  if (selectedDate !== "2026-10-12") {
+    for (const text of Object.values(copy)) {
+      assert.doesNotMatch(text, /tonight/i, "A selected date must not promise tonight's listings.");
+    }
+  }
+}
+
+for (const [date, time, expected] of [
+  ["2026-12-18", "22:30", "2026-12-18T22:30:00+01:00"],
+  ["2026-07-19", "22:30", "2026-07-19T22:30:00+02:00"],
+  ["2026-07-19", "0:00", "2026-07-19T00:00:00+02:00"],
+  ["2026-07-19", "22:30-02:00", "2026-07-19T22:30:00+02:00"],
+  ["2026-03-29", "01:30", "2026-03-29T01:30:00+01:00"],
+  ["2026-03-29", "03:30", "2026-03-29T03:30:00+02:00"],
+  ["2026-10-25", "01:30", "2026-10-25T01:30:00+02:00"],
+  ["2026-10-25", "03:30", "2026-10-25T03:30:00+01:00"],
+  ["2026-10-25", "02:30", "2026-10-25T02:30:00"],
+  ["2026-03-29", "02:30", "2026-03-29"],
+]) {
+  assert.equal(
+    buildEventStartDate(date, time),
+    expected,
+    `The event start must preserve the announced ${date} ${time} Belgrade clock.`,
+  );
+}
+
+for (const time of [
+  undefined,
+  "",
+  "TBD",
+  "Time not announced",
+  "24:00",
+  "22:60",
+  "22:30pm",
+  "22:30 or 23:00",
+  "22:30-25:00",
+]) {
+  assert.equal(
+    buildEventStartDate("2026-07-19", time),
+    "2026-07-19",
+    "Missing, invalid, or unsupported times must not invent a precise start.",
+  );
+}
 
 const eventJsonLd = buildEventStructuredData({
   _id: "event-1",
@@ -78,6 +136,55 @@ assert.equal("offers" in dateOnlyEventJsonLd, false);
 assert.equal("organizer" in dateOnlyEventJsonLd, false);
 assert.equal("performer" in dateOnlyEventJsonLd, false);
 
+for (const ticketPrice of [
+  "Free",
+  "Free admission",
+  "Entry is free.",
+  "Besplatan ulaz",
+  "Besplatno",
+  "Slobodan ulaz",
+  "Ulaz je besplatan!",
+]) {
+  assert.equal(
+    buildEventStructuredData({
+      _id: "event-free",
+      artists: [],
+      date: "2026-07-19",
+      eventType: "Culture",
+      ticketPrice,
+      title: "Free exhibition",
+      venue: "Test Gallery",
+    }).isAccessibleForFree,
+    true,
+    `Explicit free admission should be reflected for '${ticketPrice}'.`,
+  );
+}
+
+for (const ticketPrice of [
+  undefined,
+  "1.200 RSD",
+  "Not free",
+  "Free before midnight, then 500 RSD",
+  "Free for members",
+  "Free drink with ticket",
+  "Besplatan ulaz do 22:00",
+  "Ulaz nije besplatan",
+]) {
+  assert.equal(
+    "isAccessibleForFree" in buildEventStructuredData({
+      _id: "event-ticketed",
+      artists: [],
+      date: "2026-07-19",
+      eventType: "Club",
+      ticketPrice,
+      title: "Test Night",
+      venue: "Test Club",
+    }),
+    false,
+    `Conditional, negated, or unknown price '${ticketPrice}' must not make the whole event free.`,
+  );
+}
+
 const venueJsonLd = buildVenueStructuredData({
   _id: "venue-1",
   category: "Gallery",
@@ -99,6 +206,39 @@ assert.deepEqual(venueJsonLd.address, {
   addressRegion: "Dorcol",
   streetAddress: "Dorcol, Belgrade",
 });
+
+for (const cityOnlyLocation of [
+  undefined,
+  "",
+  "Belgrade",
+  " Beograd ",
+  "Београд",
+  "Belgrade, Serbia",
+]) {
+  const cityOnlyEvent = buildEventStructuredData({
+    _id: "event-city-only",
+    artists: [],
+    date: "2026-07-19",
+    eventType: "Club",
+    title: "Test Night",
+    venue: "Test Club",
+    venueLocation: cityOnlyLocation,
+  });
+  const cityOnlyVenue = buildVenueStructuredData({
+    _id: "venue-city-only",
+    instagramHandle: "testclub",
+    name: "Test Club",
+    location: cityOnlyLocation,
+  });
+  for (const address of [cityOnlyEvent.location.address, cityOnlyVenue.address]) {
+    assert.equal(address.addressLocality, "Belgrade");
+    assert.equal(
+      "streetAddress" in address,
+      false,
+      "A city-only location must not be presented as a street address.",
+    );
+  }
+}
 
 const successfulEventResult = { events: [{ _id: "event-1" }] };
 const successfulVenueResult = { venues: [{ _id: "venue-1" }] };
@@ -234,6 +374,11 @@ for (const [label, source] of [
 }
 
 assert.ok(robots.includes('sitemap: `${SITE_ORIGIN}/sitemap.xml`'));
+assert.match(
+  robots,
+  /allow:\s*\["\/",\s*"\/api\/discover\/images\/"\]/,
+  "Public event posters must remain crawlable within the otherwise blocked API path.",
+);
 for (const path of ["/admin/", "/api/"]) {
   assert.ok(robots.includes(`"${path}"`), `robots should disallow ${path}.`);
 }
