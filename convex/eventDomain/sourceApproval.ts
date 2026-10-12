@@ -16,6 +16,7 @@ import {
 import { normalizeInstagramPostUrl } from "../../lib/images/apify-images";
 import { canonicalizeSourceUrl } from "../../lib/domain/source-url";
 import { isSupportedExtractionModel } from "../internal/extractionModel";
+import { hasCarouselAnalysisMarker, hasPersistedCarouselEventMediaProof } from "../internal/carouselMediaProof";
 import {
   normalizeHandle,
   toSearchableText,
@@ -155,8 +156,9 @@ export async function assertPersistedServiceSourcePolicy(
     );
   }
   if (structuredEvidence || humanReviewedStructured) {
+    const hasCarouselAnalysis = hasCarouselAnalysisMarker(persisted, candidate);
     const posterAssets =
-      structuredExtractionMode === "poster"
+      structuredExtractionMode === "poster" && !hasCarouselAnalysis
         ? await ctx.db
             .query("mediaAssets")
             .withIndex("by_sourceKey", (q) =>
@@ -165,6 +167,9 @@ export async function assertPersistedServiceSourcePolicy(
             .take(2)
         : [];
     const posterAsset = posterAssets.length === 1 ? posterAssets[0] : null;
+    const carouselMediaVerified = hasCarouselAnalysis
+      ? await hasPersistedCarouselEventMediaProof(ctx, persisted, candidate)
+      : false;
     if (
       !candidate.rawExtractionJson ||
       candidate.rawExtractionJson !== persisted.analysisResultJson ||
@@ -173,7 +178,8 @@ export async function assertPersistedServiceSourcePolicy(
       persisted.analysisIsEvent !== true ||
       !isSupportedExtractionModel(persisted.analysisModel) ||
       candidate.sourcePostedAt !== persisted.postedAt ||
-      (structuredExtractionMode === "poster" &&
+      (hasCarouselAnalysis && !carouselMediaVerified) ||
+      (!hasCarouselAnalysis && structuredExtractionMode === "poster" &&
         (!persisted.analysisImageSourceUrl ||
           !persisted.analysisImageChecksumSha256 ||
           !persisted.imageStorageId ||

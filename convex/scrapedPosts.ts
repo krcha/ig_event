@@ -1,9 +1,14 @@
 import type { Doc, Id } from "./_generated/dataModel";
-import type { MutationCtx } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import { requireAdminOrServiceSecret } from "./authz";
+import {
+  assertRecordedCarouselMedia,
+  parseCarouselInputs,
+  retainedCarouselImageValidator,
+} from "./internal/carouselMediaProof";
 import { normalizeInstagramPostUrl } from "../lib/images/apify-images";
 import {
   canonicalizeSourceUrl,
@@ -13,6 +18,7 @@ import {
 import { normalizeHandle } from "../lib/pipeline/venue-normalization";
 import {
   buildInstagramImageCoverage,
+  buildInstagramCarouselImageCoverage,
   hasCachedExtractionQualityPolicy,
   mergeInstagramImageSlideObservations,
   parseCachedInstagramImageCoveragePartial,
@@ -83,7 +89,9 @@ const scrapedPostRecord = {
   altText: v.optional(v.string()),
   imageUrl: v.optional(v.string()),
   imageUrls: v.array(v.string()),
-  imageSlides: v.optional(v.array(v.object({ index: v.number(), imageUrls: v.array(v.string()) }))),
+  imageSlides: v.optional(v.array(v.object({ index: v.number(), imageUrls: v.array(v.string()),
+    mediaType: v.optional(v.union(v.literal("image"), v.literal("video"), v.literal("unknown"))),
+  }))),
   imageSlideCount: v.optional(v.number()),
   postType: v.optional(v.string()),
   locationName: v.optional(v.string()),
@@ -956,6 +964,7 @@ export const upsertManyByHandle = mutation({
                 analysisModel: undefined,
                 analysisImageSourceUrl: undefined,
                 analysisImageChecksumSha256: undefined,
+                analysisCarouselImages: undefined,
                 analysisContractVersion: undefined,
                 analysisIsEvent: undefined,
                 analysisNonEventReason: undefined,
@@ -1031,7 +1040,10 @@ export const upsertManyByHandle = mutation({
   },
 });
 
-async function resolveScrapedPostForProcessingFence(ctx: { db: any }, args: any) {
+async function resolveScrapedPostForProcessingFence(
+  ctx: Pick<MutationCtx | QueryCtx, "db">,
+  args: { handle: string; scrapedPostId?: Id<"scrapedPosts">; postId?: string; instagramPostUrl?: string },
+): Promise<Doc<"scrapedPosts"> | null> {
   if (args.scrapedPostId) {
     const exact = await ctx.db.get(args.scrapedPostId);
     if (
@@ -1048,7 +1060,7 @@ async function resolveScrapedPostForProcessingFence(ctx: { db: any }, args: any)
     ? (
         await ctx.db
           .query("scrapedPosts")
-          .withIndex("by_handle_postId", (q: any) =>
+          .withIndex("by_handle_postId", (q) =>
             q.eq("handle", args.handle).eq("postId", args.postId as string),
           )
           .take(1)
@@ -1060,7 +1072,7 @@ async function resolveScrapedPostForProcessingFence(ctx: { db: any }, args: any)
       ? (
           await ctx.db
             .query("scrapedPosts")
-            .withIndex("by_handle_postUrl", (q: any) =>
+            .withIndex("by_handle_postUrl", (q) =>
               q
                 .eq("handle", args.handle)
                 .eq("instagramPostUrl", args.instagramPostUrl as string),
@@ -1329,6 +1341,8 @@ export const claimProcessing = mutation({
         existing.analysisRevision === sourceRevision
           ? existing.analysisImageChecksumSha256
           : undefined,
+      analysisCarouselImages:
+        existing.analysisRevision === sourceRevision ? existing.analysisCarouselImages : undefined,
       ...(existing.imageSlides ? { imageSlides: existing.imageSlides } : {}),
       ...(existing.imageSlideCount === undefined ? {} : { imageSlideCount: existing.imageSlideCount }),
     };
@@ -1412,6 +1426,7 @@ export const markOpenAiAnalysisAttemptStarted = mutation({
             analysisModel: undefined,
             analysisImageSourceUrl: undefined,
             analysisImageChecksumSha256: undefined,
+            analysisCarouselImages: undefined,
             analysisContractVersion: undefined,
             analysisIsEvent: undefined,
             analysisNonEventReason: undefined,
@@ -1610,6 +1625,7 @@ export const recordOpenAiAnalysis = mutation({
     resultJson: v.string(),
     imageSourceUrl: v.optional(v.string()),
     imageChecksumSha256: v.optional(v.string()),
+    carouselImages: v.optional(v.array(retainedCarouselImageValidator)),
     model: v.optional(v.string()),
     inputTokens: v.optional(v.number()),
     outputTokens: v.optional(v.number()),
@@ -1617,6 +1633,10 @@ export const recordOpenAiAnalysis = mutation({
     totalTokens: v.optional(v.number()),
     serviceSecret: v.optional(v.string()),
   },
+  returns: v.object({
+    recorded: v.boolean(),
+    reason: v.union(v.literal("already_recorded"), v.literal("recorded")),
+  }),
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
     if (args.resultJson.length > 150_000) {
@@ -1656,9 +1676,22 @@ export const recordOpenAiAnalysis = mutation({
     if (Boolean(imageSourceUrl) !== Boolean(imageChecksumSha256)) {
       throw new Error("OpenAI analysis image URL and checksum must be recorded together.");
     }
+    const hasCarouselMarker = result._carouselMedia !== undefined || result._carouselContractVersion !== undefined;
+    const carouselBundle = hasCarouselMarker ? parseCarouselInputs(result) : null;
+    const carouselImages = hasCarouselMarker
+      ? await assertRecordedCarouselMedia(ctx, existing, result, args.carouselImages)
+      : undefined;
+    if (!hasCarouselMarker && args.carouselImages !== undefined) {
+      throw new Error("Carousel receipts require the explicit future carousel analysis contract.");
+    }
+    if (carouselBundle && (!imageSourceUrl || !imageChecksumSha256 ||
+      imageSourceUrl !== carouselBundle.images[0]!.sourceUrl ||
+      imageChecksumSha256 !== carouselBundle.images[0]!.checksumSha256)) {
+      throw new Error("Carousel primary image binding must match its first retained input.");
+    }
     if (
       imageSourceUrl &&
-      ![...(existing.imageUrls ?? []), existing.imageUrl].some(
+      !carouselBundle && ![...(existing.imageUrls ?? []), existing.imageUrl].some(
         (candidate) => candidate?.trim() === imageSourceUrl,
       )
     ) {
@@ -1674,13 +1707,16 @@ export const recordOpenAiAnalysis = mutation({
       if (result._extractionPolicyVersion !== "event_quality_v1") {
         throw new Error("Image coverage requires the future extraction-quality policy.");
       }
-      const expectedCoverage = buildInstagramImageCoverage(existing, imageSourceUrl ? [imageSourceUrl] : []);
+      const expectedCoverage = carouselBundle
+        ? buildInstagramCarouselImageCoverage(existing, carouselBundle.images)
+        : buildInstagramImageCoverage(existing, imageSourceUrl ? [imageSourceUrl] : []);
       const coverage = result._imageCoverage as typeof expectedCoverage;
       if (
         !coverage || coverage.version !== expectedCoverage.version ||
         coverage.knownSlideCount !== expectedCoverage.knownSlideCount ||
         coverage.manifestKnown !== expectedCoverage.manifestKnown ||
         coverage.complete !== expectedCoverage.complete ||
+        JSON.stringify(coverage.videoSlideIndexes ?? []) !== JSON.stringify(expectedCoverage.videoSlideIndexes ?? []) ||
         JSON.stringify(coverage.analyzedSlideIndexes) !== JSON.stringify(expectedCoverage.analyzedSlideIndexes) ||
         JSON.stringify(coverage.unanalyzedSlideIndexes) !== JSON.stringify(expectedCoverage.unanalyzedSlideIndexes)
       ) {
@@ -1720,6 +1756,7 @@ export const recordOpenAiAnalysis = mutation({
       analysisModel: args.model?.slice(0, 160),
       analysisImageSourceUrl: imageSourceUrl,
       analysisImageChecksumSha256: imageChecksumSha256,
+      analysisCarouselImages: carouselImages,
       analysisContractVersion: contractVersion?.slice(0, 80),
       analysisIsEvent: isEvent,
       analysisNonEventReason: nonEventReason,

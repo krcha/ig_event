@@ -7,7 +7,7 @@ import { type InstagramScrapedPost } from "@/lib/scraper/instagram-scraper";
 import type { EventDateEvidenceSource } from "@/lib/pipeline/ingestion/contracts";
 import { expandNormalizedDateRange, hasExplicitDateText, normalizeEventDate } from "@/lib/pipeline/ingestion/parsing-date";
 import { normalizeArtistDisplayName } from "@/lib/pipeline/ingestion/parsing-event-text";
-import { buildSharedScheduleIdentitySegments, collectSharedMonthDateListDates, collectSupportedDates, containsNormalizedTokenSequence, stripDoorOpeningClockValues } from "@/lib/pipeline/ingestion/parsing-source-evidence";
+import { buildSharedScheduleIdentitySegments, collectSharedMonthDateListDates, collectSupportedDates, containsNormalizedTokenSequence, isNonBillingEvidenceClause, stripDoorOpeningClockValues } from "@/lib/pipeline/ingestion/parsing-source-evidence";
 import { normalizeString } from "@/lib/pipeline/ingestion/values";
 import { sourceCalendarSupportsDate } from "@/lib/pipeline/ingestion/source-calendar-validation";
 import { findScopedBranchVenueEvidence, type ScopedBranchVenueEvidence } from "@/lib/pipeline/ingestion/scoped-branch-venue-evidence";
@@ -37,6 +37,7 @@ export function isVerifiedDateEvidence(options: {
   hasPoster: boolean;
   enforceCalendarConsistency?: boolean;
   calendarContext?: string | null;
+  allowBareDayWithMonthHeading?: boolean;
 }): boolean {
   const evidenceText = normalizeString(options.evidence.exact_text);
   const evidenceResolvedDate = normalizeString(options.evidence.resolved_date);
@@ -59,6 +60,7 @@ export function isVerifiedDateEvidence(options: {
           context: options.calendarContext,
           postedAt: options.post.postedAt,
           resolvedDate: options.resolvedDate ?? "",
+          allowBareDayWithMonthHeading: options.allowBareDayWithMonthHeading,
         })
       : independentlyResolved.isoDate === options.resolvedDate ||
         independentlyExpandedRange?.includes(options.resolvedDate ?? "") === true;
@@ -331,7 +333,12 @@ export function isVerifiedEventIdentityEvidence(options: {
   lineupTimingMode?: NightlifeLineupCoalescingPlan["timingMode"];
 }): boolean {
   const supportsTitle = (text: string): boolean => {
-    return titleIdentityAppearsInText(text, options.title);
+    if (titleIdentityAppearsInText(text, options.title)) return true;
+    // Serbian poster typography can print Đ as D. Keep the entire multiword
+    // title bound to this row; this does not rewrite or fuzzy-match identities.
+    return options.extracted._carouselContractVersion === "carousel_evidence_v1" &&
+      comparableTitleTokens(options.title).length >= 3 &&
+      titleIdentityAppearsInText(text.replace(/[đĐ]/gu, "d"), options.title.replace(/[đĐ]/gu, "d"));
   };
   const isBoundEvidence = (text: string, source: string): boolean => {
     if (source !== "caption" && source !== "poster" && source !== "alt_text") {
@@ -486,7 +493,11 @@ export function isVerifiedEventIdentityEvidence(options: {
       (rowNamesVenue || rowNamesEventKind)
     );
   }
-  const boundTitleEvidence = boundEvidence.some((snippet) => supportsTitle(snippet.text));
+  const carouselArtistTitleEvidence = options.extracted._carouselContractVersion === "carousel_evidence_v1" &&
+    options.artists.length > 0 && titleContainsOnlyBilledArtists(options.title, options.artists) &&
+    options.artists.every((artist) => boundEvidence.some((snippet) =>
+      !isNonBillingEvidenceClause(snippet.text) && artistIdentityAppearsInText(snippet.text, artist)));
+  const boundTitleEvidence = carouselArtistTitleEvidence || boundEvidence.some((snippet) => supportsTitle(snippet.text));
   if (!boundTitleEvidence) return false;
   const supplementalArtistEvidence = mayUsePostLevelIdentityEvidence ? [
     ...(artistConfirmation.found_in.some((source) => source.toLowerCase() === "caption") &&

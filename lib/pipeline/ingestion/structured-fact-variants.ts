@@ -220,10 +220,19 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
           entry.lineTitle,
           entry.sourceLine,
         );
+        const carouselRow = extracted._carouselContractVersion === "carousel_evidence_v1" &&
+          extracted._carouselMedia && extracted.schedule_entries.length === 1
+          ? extracted.schedule_entries[0] : null;
+        const carouselPosterVenueGrounded = Boolean(rowVenue && carouselRow && selectedImageUrl &&
+          (carouselRow.poster_evidence ?? []).some((snippet) =>
+            carouselRow.source_slide_indexes?.includes(snippet.slide_index) &&
+            extracted._carouselMedia?.images.some((image) => image.slideIndex === snippet.slide_index) &&
+            !venueMentionIsOnlyInRowTitle(rowVenue, entry.lineTitle, snippet.text) &&
+            venueValueAppearsInEventEvidence(rowVenue, snippet.text)));
         const rowVenueGrounded = Boolean(
           rowVenue &&
-            !rowVenueIsTitleOnly &&
-            venueValueAppearsInEventEvidence(rowVenue, entry.sourceLine),
+            ((!rowVenueIsTitleOnly && venueValueAppearsInEventEvidence(rowVenue, entry.sourceLine)) ||
+              carouselPosterVenueGrounded),
         );
         const rowVenueMatchesConfiguredLocation = Boolean(
           sourceRole === "venue" &&
@@ -353,10 +362,16 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
             )
             ? canonicalVenueEvidenceSource
             : null;
-        const variantCanonicalVenueEvidenceSource = scopedRowCanonicalVenue
+        const carouselVenueDisagreesWithCanonicalEvidence = Boolean(carouselRow && rowVenue &&
+          normalizeVenueComparableText(canonicalRowVenue) !== normalizeVenueComparableText(normalizedVenue));
+        const variantCanonicalVenueEvidenceSource = carouselVenueDisagreesWithCanonicalEvidence
+          ? null
+          : scopedRowCanonicalVenue
           ? rowCanonicalVenueEvidenceSource
           : singleSplitCanonicalVenueEvidenceSource;
-        const variantCanonicalVenueEvidenceHandle = scopedRowCanonicalVenue
+        const variantCanonicalVenueEvidenceHandle = carouselVenueDisagreesWithCanonicalEvidence
+          ? null
+          : scopedRowCanonicalVenue
           ? rowCanonicalVenueNormalization.evidenceHandle ?? null
           : singleSplitCanonicalVenueEvidenceSource === "evidence_handle"
             ? venueNormalization.evidenceHandle ?? null
@@ -384,7 +399,7 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
                   )))),
         );
         const variantVenueRaw = usesStructuredEvidence
-          ? rowVenueIsDirect
+          ? (rowVenueIsDirect || Boolean(carouselRow && rowVenue))
             ? rowVenueMatchesConfiguredLocation
               ? normalizedVenue
               : rowVenue

@@ -322,7 +322,13 @@ function buildSourceOccurrenceKeyFromFields(
     normalizedFields,
     "sourceOccurrenceCollisionOrdinal",
   );
-  const occurrenceIdentity = isDateRangeExpandedNormalizedFields(normalizedFields)
+  const carouselVenue = normalizedFields.extractionCarouselContractVersion === "carousel_evidence_v1"
+    ? toSearchableText(readJsonString(normalizedFields, "carouselPhysicalVenue") ?? "") : "";
+  const occurrenceIdentity = carouselVenue
+    ? `${date}|carousel-venue:${carouselVenue}|row:time:${
+        comparableTime || normalizeString(time).toLowerCase() || "unknown"
+      }${collisionOrdinal === null ? "" : `|collision-ordinal:${collisionOrdinal}`}`
+    : isDateRangeExpandedNormalizedFields(normalizedFields)
     ? `${date}|date-range`
     : isMultiOccurrenceNormalizedFields(normalizedFields)
       ? `${date}|row:time:${

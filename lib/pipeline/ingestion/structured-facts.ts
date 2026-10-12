@@ -20,6 +20,7 @@ import type { StructuredFactExtractionResult } from "@/lib/pipeline/ingestion/st
 import { prepareStructuredFactsForPersistence } from "@/lib/pipeline/ingestion/structured-fact-persistence";
 import { finalizeStructuredFactVariants } from "@/lib/pipeline/ingestion/structured-fact-finalization";
 import { buildStructuredFactVariants } from "@/lib/pipeline/ingestion/structured-fact-variants";
+import { produceCarouselStructuredFacts } from "@/lib/pipeline/ingestion/carousel-structured-facts";
 export { CAPTION_ONLY_VIDEO_AUTO_APPROVE_MIN_CONFIDENCE } from "@/lib/pipeline/ingestion/structured-fact-policy";
 
 export function isVideoPostWithoutSelectedImage(
@@ -136,6 +137,20 @@ export function normalizeVenue(
 }
 
 export function produceStructuredFactsForInsert(
+  ...args: Parameters<typeof produceStructuredFactsForScope>
+): StructuredFactExtractionResult[] {
+  const [post, extracted] = args;
+  if (extracted._carouselContractVersion === "carousel_evidence_v1") {
+    const options = args[6] ?? {};
+    const rawExtractionJson = options.rawExtractionJson ?? JSON.stringify(extracted);
+    return produceCarouselStructuredFacts({ post, extracted, prepare: (scopedPost, scopedExtracted, scopedImageUrl) =>
+      produceStructuredFactsForScope(scopedPost, scopedExtracted, scopedImageUrl,
+        args[3], args[4], args[5], { ...options, rawExtractionJson }) });
+  }
+  return produceStructuredFactsForScope(...args);
+}
+
+function produceStructuredFactsForScope(
   post: InstagramScrapedPost,
   extracted: ExtractedEventData,
   selectedImageUrl: string | null,

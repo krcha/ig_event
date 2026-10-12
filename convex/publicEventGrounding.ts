@@ -27,6 +27,7 @@ import { loadVerifiedCampaignLineageReattestation } from "./internal/campaignLin
 import { hasVerifiedLegacySourceOccurrenceAdmissionForEvent } from "./internal/legacySourceOccurrenceAdmissionProof";
 import { hasCompleteAutomaticUniqueSourceProof } from "./internal/automaticUniqueSourceProof";
 import { isSupportedExtractionModel } from "./internal/extractionModel";
+import { hasCarouselAnalysisMarker, hasPersistedCarouselEventMediaProof } from "./internal/carouselMediaProof";
 
 const MAX_CROSS_POST_CAMPAIGN_AUDIT_ROWS = 100;
 
@@ -540,8 +541,9 @@ async function isCanonicallyGroundedApprovedEventInternal(
   }
 
   if (structuredEvidenceAuthorized || humanReviewedStructuredAuthorized || automaticUniqueAuthorized) {
+    const hasCarouselAnalysis = hasCarouselAnalysisMarker(persistedPost, event);
     const posterAssets =
-      fields.extractionMode === "poster"
+      fields.extractionMode === "poster" && !hasCarouselAnalysis
         ? await ctx.db
             .query("mediaAssets")
             .withIndex("by_sourceKey", (q) =>
@@ -550,6 +552,9 @@ async function isCanonicallyGroundedApprovedEventInternal(
             .take(2)
         : [];
     const posterAsset = posterAssets.length === 1 ? posterAssets[0] : null;
+    const carouselMediaVerified = hasCarouselAnalysis
+      ? await hasPersistedCarouselEventMediaProof(ctx, persistedPost, event)
+      : false;
     return Boolean(
       event.rawExtractionJson &&
         event.rawExtractionJson === persistedPost.analysisResultJson &&
@@ -557,7 +562,7 @@ async function isCanonicallyGroundedApprovedEventInternal(
         persistedPost.analysisContractVersion === "event_evidence_v2" &&
         persistedPost.analysisIsEvent === true &&
         isSupportedExtractionModel(persistedPost.analysisModel) &&
-        (fields.extractionMode !== "poster" ||
+        (hasCarouselAnalysis ? carouselMediaVerified : (fields.extractionMode !== "poster" ||
           Boolean(
             persistedPost.analysisImageSourceUrl &&
               persistedPost.analysisImageChecksumSha256 &&
@@ -568,7 +573,7 @@ async function isCanonicallyGroundedApprovedEventInternal(
               ((event.imageUrl === undefined && event.imageStorageId === undefined) ||
                 (event.imageUrl === posterAsset.url &&
                   event.imageStorageId === posterAsset.storageId)),
-          )),
+          ))),
     );
   }
 

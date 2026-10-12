@@ -1,0 +1,1582 @@
+{
+  "version": "instagram_carousel_evaluation_v1",
+  "evaluationDate": "2026-10-12",
+  "limitations": [
+    "Purposive sample of 12 posts; this does not estimate production accuracy.",
+    "Prospective 2026-10-01 evaluation calendar; no database writes.",
+    "Video thumbnails were examined; video interiors were not examined.",
+    "Original provider outputs and extracted data remain unchanged; only deterministic planning was rescored.",
+    "Core facts measure date, printed start or unknown clock, and physical venue; source anchors distinguish simultaneous sessions.",
+    "One stochastic provider run per case and variant; no repeat sampling or confidence interval."
+  ],
+  "summary": {
+    "baseline": {
+      "variant": "baseline",
+      "model": "gpt-6-luna",
+      "firstSlideOnly": true,
+      "codeDigestSha256": "23434b70ab29c3b45b7ecf4fb9ed0a91720bd4f5ddff04719da262f6efe77cb9",
+      "corpusDigestSha256": "e9e8f42d75619dd79d8503124297a46f1a872d0d32569dc102cb009596e0144d",
+      "venueSnapshotDigestSha256": "21eb97fc1d6332dae77c2e94856622f43b8411e4eacc6e49c94c7aaf8ace0ae9",
+      "evaluationNow": "2026-10-01T12:00:00.000Z",
+      "caseCount": 12,
+      "completedCount": 12,
+      "passedCaseCount": 0,
+      "checkCount": 154,
+      "passedCheckCount": 79,
+      "behaviorCheckCount": 123,
+      "passedBehaviorCheckCount": 74,
+      "passedBehaviorCaseCount": 5,
+      "transportAttempts": 12,
+      "inputTokens": 92608,
+      "outputTokens": 28559,
+      "reasoningTokens": 10939,
+      "cases": [
+        {
+          "id": "club2099-stages",
+          "status": "completed",
+          "durationMs": 29086,
+          "plannedEventCount": 1,
+          "approvedEventCount": 0,
+          "pendingEventCount": 1,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": [
+            "PromoteraccountClub 2099 is not a physical venue",
+            "Caption venue and stage claims conflict with 20/44 cover claims",
+            "Every retained still cover is examined in one joint call"
+          ]
+        },
+        {
+          "id": "dorcol-weekly",
+          "status": "completed",
+          "durationMs": 8332,
+          "plannedEventCount": 0,
+          "approvedEventCount": 0,
+          "pendingEventCount": 0,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": [
+            "Four independent dates preserve the same repeatingtitle",
+            "All dates belong to Kulturni Centar Dorćol",
+            "October 5: one independently scheduled occurrence",
+            "October 6: one independently scheduled occurrence",
+            "October 8: one independently scheduled occurrence",
+            "October 10: one independently scheduled occurrence",
+            "Birthday title remains different from BELEŠKE",
+            "October 8 comes from its own dated poster",
+            "Every image slide is covered by an attested input",
+            "Every retained still cover is examined in one joint call"
+          ]
+        },
+        {
+          "id": "frida-october",
+          "status": "completed",
+          "durationMs": 22662,
+          "plannedEventCount": 4,
+          "approvedEventCount": 0,
+          "pendingEventCount": 4,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": [
+            "Sixteen advertised nights remain one party per date",
+            "October 14: one independently scheduled occurrence",
+            "October 15: one independently scheduled occurrence",
+            "October 16: one independently scheduled occurrence",
+            "October 17: one independently scheduled occurrence",
+            "October 21: one independently scheduled occurrence",
+            "October 22: one independently scheduled occurrence",
+            "October 23: one independently scheduled occurrence",
+            "October 24: one independently scheduled occurrence",
+            "October 28: one independently scheduled occurrence",
+            "October 29: one independently scheduled occurrence",
+            "October 30: one independently scheduled occurrence",
+            "October 31: one independently scheduled occurrence",
+            "October 31 is bound to the final poster",
+            "Every image slide is covered by an attested input",
+            "Every retained still cover is examined in one joint call"
+          ]
+        },
+        {
+          "id": "kissa-october",
+          "status": "completed",
+          "durationMs": 24627,
+          "plannedEventCount": 9,
+          "approvedEventCount": 9,
+          "pendingEventCount": 0,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": [
+            "All 15 dated programs across both posters are separate nights",
+            "October 22: one independently scheduled occurrence",
+            "October 23: one independently scheduled occurrence",
+            "October 24: one independently scheduled occurrence",
+            "October 29: one independently scheduled occurrence",
+            "October 30: one independently scheduled occurrence",
+            "October 31: one independently scheduled occurrence",
+            "DANYA is bound to the second poster",
+            "Every image slide is covered by an attested input",
+            "Every retained still cover is examined in one joint call"
+          ]
+        },
+        {
+          "id": "lete-umami-party",
+          "status": "completed",
+          "durationMs": 17164,
+          "plannedEventCount": 1,
+          "approvedEventCount": 1,
+          "pendingEventCount": 0,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": [
+            "Every retained still cover is examined in one joint call"
+          ]
+        },
+        {
+          "id": "lozionica-weekly",
+          "status": "completed",
+          "durationMs": 31974,
+          "plannedEventCount": 18,
+          "approvedEventCount": 16,
+          "pendingEventCount": 2,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": [
+            "Eighteen separately named programs keep their own dates",
+            "sirene stays onOctober 10 at 17:30",
+            "neizrecene stays onOctober 10 at 20:00",
+            "pohod stays onOctober 10 at 22:00",
+            "ucitelj stays onOctober 11 at 17:30",
+            "17 stays onOctober 11 at 20:00",
+            "zajedno sami stays onOctober 11 at 22:00",
+            "ceger stays onOctober 11 at 18:00",
+            "puskin stays onOctober 14 at 20:00",
+            "aigel stays onOctober 15 at 20:00",
+            "juan atkins stays onOctober 16 at 20:00",
+            "astronaut stays onOctober 16 at 16:30",
+            "nakit stays onOctober 16 at 18:00",
+            "Juan Atkins is bound to the final poster",
+            "Every image slide is covered by an attested input",
+            "Every retained still cover is examined in one joint call"
+          ]
+        },
+        {
+          "id": "museum-exhibition-recap",
+          "status": "completed",
+          "durationMs": 8233,
+          "plannedEventCount": 0,
+          "approvedEventCount": 0,
+          "pendingEventCount": 0,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": [
+            "Every image slide is covered by an attested input",
+            "Every retained still cover is examined in one joint call"
+          ]
+        },
+        {
+          "id": "museum-sessions",
+          "status": "completed",
+          "durationMs": 21204,
+          "plannedEventCount": 3,
+          "approvedEventCount": 0,
+          "pendingEventCount": 3,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": [
+            "Three separately advertised cultural sessions stayseparate",
+            "11 October 13:00 preserves its programtitle",
+            "13:00 is bound to its own dated slide",
+            "11 October 17:00 preserves its programtitle",
+            "17:00 is bound to its own dated slide",
+            "18:00 is bound to its own dated slide",
+            "Every image slide is covered by an attested input",
+            "Every retained still cover is examined in one joint call"
+          ]
+        },
+        {
+          "id": "react-recap",
+          "status": "completed",
+          "durationMs": 7352,
+          "plannedEventCount": 0,
+          "approvedEventCount": 0,
+          "pendingEventCount": 0,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": [
+            "Every retained still cover is examined in one joint call"
+          ]
+        },
+        {
+          "id": "sila-one-concert",
+          "status": "completed",
+          "durationMs": 14286,
+          "plannedEventCount": 1,
+          "approvedEventCount": 1,
+          "pendingEventCount": 0,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": [
+            "Every retained still cover is examined in one joint call"
+          ]
+        },
+        {
+          "id": "sprat-weekly",
+          "status": "completed",
+          "durationMs": 29869,
+          "plannedEventCount": 7,
+          "approvedEventCount": 4,
+          "pendingEventCount": 3,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": [
+            "Seven dated programs preserve Sprat and Zaokret scopes",
+            "ZaokretOctober 8 BiangBiangstart 20:00",
+            "ZaokretOctober 9 DIDIstart 19:00",
+            "ZaokretOctober 10 VibesForGrujastart 19:00",
+            "Every retained still cover is examined in one joint call"
+          ]
+        },
+        {
+          "id": "ventil-film-program",
+          "status": "completed",
+          "durationMs": 20394,
+          "plannedEventCount": 8,
+          "approvedEventCount": 8,
+          "pendingEventCount": 0,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": [
+            "Every image slide is covered by an attested input",
+            "Every retained still cover is examined in one joint call"
+          ]
+        }
+      ]
+    },
+    "candidate": {
+      "variant": "candidate",
+      "model": "gpt-6-luna",
+      "firstSlideOnly": false,
+      "codeDigestSha256": "fae63d2255bbeb560ecc71f0af5fac4f296b27d3b287f1e24e99e345e4b29b6e",
+      "corpusDigestSha256": "e9e8f42d75619dd79d8503124297a46f1a872d0d32569dc102cb009596e0144d",
+      "venueSnapshotDigestSha256": "21eb97fc1d6332dae77c2e94856622f43b8411e4eacc6e49c94c7aaf8ace0ae9",
+      "evaluationNow": "2026-10-01T12:00:00.000Z",
+      "caseCount": 12,
+      "completedCount": 12,
+      "passedCaseCount": 7,
+      "checkCount": 154,
+      "passedCheckCount": 148,
+      "behaviorCheckCount": 123,
+      "passedBehaviorCheckCount": 117,
+      "passedBehaviorCaseCount": 7,
+      "transportAttempts": 12,
+      "inputTokens": 163470,
+      "outputTokens": 40944,
+      "reasoningTokens": 18757,
+      "cases": [
+        {
+          "id": "club2099-stages",
+          "status": "completed",
+          "durationMs": 44471,
+          "plannedEventCount": 1,
+          "approvedEventCount": 0,
+          "pendingEventCount": 1,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": [
+            "PromoteraccountClub 2099 is not a physical venue",
+            "Caption venue and stage claims conflict with 20/44 cover claims"
+          ]
+        },
+        {
+          "id": "dorcol-weekly",
+          "status": "completed",
+          "durationMs": 25430,
+          "plannedEventCount": 4,
+          "approvedEventCount": 4,
+          "pendingEventCount": 0,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": []
+        },
+        {
+          "id": "frida-october",
+          "status": "completed",
+          "durationMs": 35026,
+          "plannedEventCount": 16,
+          "approvedEventCount": 16,
+          "pendingEventCount": 0,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": []
+        },
+        {
+          "id": "kissa-october",
+          "status": "completed",
+          "durationMs": 43155,
+          "plannedEventCount": 15,
+          "approvedEventCount": 14,
+          "pendingEventCount": 1,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": [
+            "All 15 dated programs across both posters are separate nights"
+          ]
+        },
+        {
+          "id": "lete-umami-party",
+          "status": "completed",
+          "durationMs": 20245,
+          "plannedEventCount": 1,
+          "approvedEventCount": 1,
+          "pendingEventCount": 0,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": []
+        },
+        {
+          "id": "lozionica-weekly",
+          "status": "completed",
+          "durationMs": 38485,
+          "plannedEventCount": 18,
+          "approvedEventCount": 17,
+          "pendingEventCount": 1,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": [
+            "Eighteen separately named programs keep their own dates"
+          ]
+        },
+        {
+          "id": "museum-exhibition-recap",
+          "status": "completed",
+          "durationMs": 10101,
+          "plannedEventCount": 0,
+          "approvedEventCount": 0,
+          "pendingEventCount": 0,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": []
+        },
+        {
+          "id": "museum-sessions",
+          "status": "completed",
+          "durationMs": 21984,
+          "plannedEventCount": 3,
+          "approvedEventCount": 1,
+          "pendingEventCount": 2,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": [
+            "Three separately advertised cultural sessions stayseparate"
+          ]
+        },
+        {
+          "id": "react-recap",
+          "status": "completed",
+          "durationMs": 6406,
+          "plannedEventCount": 0,
+          "approvedEventCount": 0,
+          "pendingEventCount": 0,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": []
+        },
+        {
+          "id": "sila-one-concert",
+          "status": "completed",
+          "durationMs": 18064,
+          "plannedEventCount": 1,
+          "approvedEventCount": 1,
+          "pendingEventCount": 0,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": []
+        },
+        {
+          "id": "sprat-weekly",
+          "status": "completed",
+          "durationMs": 35632,
+          "plannedEventCount": 7,
+          "approvedEventCount": 4,
+          "pendingEventCount": 3,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": [
+            "Seven dated programs preserve Sprat and Zaokret scopes"
+          ]
+        },
+        {
+          "id": "ventil-film-program",
+          "status": "completed",
+          "durationMs": 24976,
+          "plannedEventCount": 8,
+          "approvedEventCount": 8,
+          "pendingEventCount": 0,
+          "approvedWithoutVenueCount": 0,
+          "failedChecks": []
+        }
+      ]
+    }
+  },
+  "coreFactMetrics": {
+    "baseline": {
+      "expectedUnambiguousOccurrences": 73,
+      "recoveredRowCount": 51,
+      "coreFactMatchedCount": 36,
+      "approvedCount": 39,
+      "correctCoreFactsApprovedCount": 25,
+      "incorrectApprovedVenueCount": 3,
+      "approvedMissingPrintedStartCount": 11,
+      "approvedWrongExplicitStartCount": 0,
+      "approvedWrongDateCount": 0,
+      "duplicateExactOccurrenceCount": 0,
+      "cases": [
+        {
+          "id": "dorcol-weekly",
+          "expected": 4,
+          "recovered": 0,
+          "coreFactMatched": 0,
+          "approved": 0,
+          "correctCoreFactsApproved": 0,
+          "incorrectApprovedVenue": 0,
+          "approvedMissingPrintedStart": 0,
+          "approvedWrongExplicitStart": 0,
+          "approvedWrongDate": 0,
+          "duplicateExactOccurrence": 0
+        },
+        {
+          "id": "frida-october",
+          "expected": 16,
+          "recovered": 4,
+          "coreFactMatched": 4,
+          "approved": 0,
+          "correctCoreFactsApproved": 0,
+          "incorrectApprovedVenue": 0,
+          "approvedMissingPrintedStart": 0,
+          "approvedWrongExplicitStart": 0,
+          "approvedWrongDate": 0,
+          "duplicateExactOccurrence": 0
+        },
+        {
+          "id": "kissa-october",
+          "expected": 15,
+          "recovered": 9,
+          "coreFactMatched": 9,
+          "approved": 9,
+          "correctCoreFactsApproved": 9,
+          "incorrectApprovedVenue": 0,
+          "approvedMissingPrintedStart": 0,
+          "approvedWrongExplicitStart": 0,
+          "approvedWrongDate": 0,
+          "duplicateExactOccurrence": 0
+        },
+        {
+          "id": "lete-umami-party",
+          "expected": 1,
+          "recovered": 1,
+          "coreFactMatched": 1,
+          "approved": 1,
+          "correctCoreFactsApproved": 1,
+          "incorrectApprovedVenue": 0,
+          "approvedMissingPrintedStart": 0,
+          "approvedWrongExplicitStart": 0,
+          "approvedWrongDate": 0,
+          "duplicateExactOccurrence": 0
+        },
+        {
+          "id": "lozionica-weekly",
+          "expected": 18,
+          "recovered": 18,
+          "coreFactMatched": 6,
+          "approved": 16,
+          "correctCoreFactsApproved": 5,
+          "incorrectApprovedVenue": 0,
+          "approvedMissingPrintedStart": 11,
+          "approvedWrongExplicitStart": 0,
+          "approvedWrongDate": 0,
+          "duplicateExactOccurrence": 0
+        },
+        {
+          "id": "museum-sessions",
+          "expected": 3,
+          "recovered": 3,
+          "coreFactMatched": 3,
+          "approved": 0,
+          "correctCoreFactsApproved": 0,
+          "incorrectApprovedVenue": 0,
+          "approvedMissingPrintedStart": 0,
+          "approvedWrongExplicitStart": 0,
+          "approvedWrongDate": 0,
+          "duplicateExactOccurrence": 0
+        },
+        {
+          "id": "sila-one-concert",
+          "expected": 1,
+          "recovered": 1,
+          "coreFactMatched": 1,
+          "approved": 1,
+          "correctCoreFactsApproved": 1,
+          "incorrectApprovedVenue": 0,
+          "approvedMissingPrintedStart": 0,
+          "approvedWrongExplicitStart": 0,
+          "approvedWrongDate": 0,
+          "duplicateExactOccurrence": 0
+        },
+        {
+          "id": "sprat-weekly",
+          "expected": 7,
+          "recovered": 7,
+          "coreFactMatched": 4,
+          "approved": 4,
+          "correctCoreFactsApproved": 1,
+          "incorrectApprovedVenue": 3,
+          "approvedMissingPrintedStart": 0,
+          "approvedWrongExplicitStart": 0,
+          "approvedWrongDate": 0,
+          "duplicateExactOccurrence": 0
+        },
+        {
+          "id": "ventil-film-program",
+          "expected": 8,
+          "recovered": 8,
+          "coreFactMatched": 8,
+          "approved": 8,
+          "correctCoreFactsApproved": 8,
+          "incorrectApprovedVenue": 0,
+          "approvedMissingPrintedStart": 0,
+          "approvedWrongExplicitStart": 0,
+          "approvedWrongDate": 0,
+          "duplicateExactOccurrence": 0
+        }
+      ],
+      "aggregateDurationSeconds": 235.183,
+      "medianDurationSeconds": 20.799
+    },
+    "candidate": {
+      "expectedUnambiguousOccurrences": 73,
+      "recoveredRowCount": 73,
+      "coreFactMatchedCount": 73,
+      "approvedCount": 66,
+      "correctCoreFactsApprovedCount": 66,
+      "incorrectApprovedVenueCount": 0,
+      "approvedMissingPrintedStartCount": 0,
+      "approvedWrongExplicitStartCount": 0,
+      "approvedWrongDateCount": 0,
+      "duplicateExactOccurrenceCount": 0,
+      "cases": [
+        {
+          "id": "dorcol-weekly",
+          "expected": 4,
+          "recovered": 4,
+          "coreFactMatched": 4,
+          "approved": 4,
+          "correctCoreFactsApproved": 4,
+          "incorrectApprovedVenue": 0,
+          "approvedMissingPrintedStart": 0,
+          "approvedWrongExplicitStart": 0,
+          "approvedWrongDate": 0,
+          "duplicateExactOccurrence": 0
+        },
+        {
+          "id": "frida-october",
+          "expected": 16,
+          "recovered": 16,
+          "coreFactMatched": 16,
+          "approved": 16,
+          "correctCoreFactsApproved": 16,
+          "incorrectApprovedVenue": 0,
+          "approvedMissingPrintedStart": 0,
+          "approvedWrongExplicitStart": 0,
+          "approvedWrongDate": 0,
+          "duplicateExactOccurrence": 0
+        },
+        {
+          "id": "kissa-october",
+          "expected": 15,
+          "recovered": 15,
+          "coreFactMatched": 15,
+          "approved": 14,
+          "correctCoreFactsApproved": 14,
+          "incorrectApprovedVenue": 0,
+          "approvedMissingPrintedStart": 0,
+          "approvedWrongExplicitStart": 0,
+          "approvedWrongDate": 0,
+          "duplicateExactOccurrence": 0
+        },
+        {
+          "id": "lete-umami-party",
+          "expected": 1,
+          "recovered": 1,
+          "coreFactMatched": 1,
+          "approved": 1,
+          "correctCoreFactsApproved": 1,
+          "incorrectApprovedVenue": 0,
+          "approvedMissingPrintedStart": 0,
+          "approvedWrongExplicitStart": 0,
+          "approvedWrongDate": 0,
+          "duplicateExactOccurrence": 0
+        },
+        {
+          "id": "lozionica-weekly",
+          "expected": 18,
+          "recovered": 18,
+          "coreFactMatched": 18,
+          "approved": 17,
+          "correctCoreFactsApproved": 17,
+          "incorrectApprovedVenue": 0,
+          "approvedMissingPrintedStart": 0,
+          "approvedWrongExplicitStart": 0,
+          "approvedWrongDate": 0,
+          "duplicateExactOccurrence": 0
+        },
+        {
+          "id": "museum-sessions",
+          "expected": 3,
+          "recovered": 3,
+          "coreFactMatched": 3,
+          "approved": 1,
+          "correctCoreFactsApproved": 1,
+          "incorrectApprovedVenue": 0,
+          "approvedMissingPrintedStart": 0,
+          "approvedWrongExplicitStart": 0,
+          "approvedWrongDate": 0,
+          "duplicateExactOccurrence": 0
+        },
+        {
+          "id": "sila-one-concert",
+          "expected": 1,
+          "recovered": 1,
+          "coreFactMatched": 1,
+          "approved": 1,
+          "correctCoreFactsApproved": 1,
+          "incorrectApprovedVenue": 0,
+          "approvedMissingPrintedStart": 0,
+          "approvedWrongExplicitStart": 0,
+          "approvedWrongDate": 0,
+          "duplicateExactOccurrence": 0
+        },
+        {
+          "id": "sprat-weekly",
+          "expected": 7,
+          "recovered": 7,
+          "coreFactMatched": 7,
+          "approved": 4,
+          "correctCoreFactsApproved": 4,
+          "incorrectApprovedVenue": 0,
+          "approvedMissingPrintedStart": 0,
+          "approvedWrongExplicitStart": 0,
+          "approvedWrongDate": 0,
+          "duplicateExactOccurrence": 0
+        },
+        {
+          "id": "ventil-film-program",
+          "expected": 8,
+          "recovered": 8,
+          "coreFactMatched": 8,
+          "approved": 8,
+          "correctCoreFactsApproved": 8,
+          "incorrectApprovedVenue": 0,
+          "approvedMissingPrintedStart": 0,
+          "approvedWrongExplicitStart": 0,
+          "approvedWrongDate": 0,
+          "duplicateExactOccurrence": 0
+        }
+      ],
+      "aggregateDurationSeconds": 323.975,
+      "medianDurationSeconds": 25.203
+    }
+  },
+  "independentCoreLabels": {
+    "dorcol-weekly": [
+      {
+        "date": "2026-10-05",
+        "time": "19:30",
+        "venueContains": "dorcol"
+      },
+      {
+        "date": "2026-10-06",
+        "time": "19:30",
+        "venueContains": "dorcol"
+      },
+      {
+        "date": "2026-10-08",
+        "time": "19:30",
+        "venueContains": "dorcol"
+      },
+      {
+        "date": "2026-10-10",
+        "time": "18:00",
+        "venueContains": "dorcol"
+      }
+    ],
+    "frida-october": [
+      {
+        "date": "2026-10-07",
+        "venueContains": "frida",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-08",
+        "venueContains": "frida",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-09",
+        "venueContains": "frida",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-10",
+        "venueContains": "frida",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-14",
+        "venueContains": "frida",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-15",
+        "venueContains": "frida",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-16",
+        "venueContains": "frida",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-17",
+        "venueContains": "frida",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-21",
+        "venueContains": "frida",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-22",
+        "venueContains": "frida",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-23",
+        "venueContains": "frida",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-24",
+        "venueContains": "frida",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-28",
+        "venueContains": "frida",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-29",
+        "venueContains": "frida",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-30",
+        "venueContains": "frida",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-31",
+        "venueContains": "frida",
+        "timeUnknown": true
+      }
+    ],
+    "kissa-october": [
+      {
+        "date": "2026-10-01",
+        "venueContains": "kissa10",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-02",
+        "venueContains": "kissa10",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-03",
+        "venueContains": "kissa10",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-08",
+        "venueContains": "kissa10",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-09",
+        "venueContains": "kissa10",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-10",
+        "venueContains": "kissa10",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-15",
+        "venueContains": "kissa10",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-16",
+        "venueContains": "kissa10",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-17",
+        "venueContains": "kissa10",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-22",
+        "venueContains": "kissa10",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-23",
+        "venueContains": "kissa10",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-24",
+        "venueContains": "kissa10",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-29",
+        "venueContains": "kissa10",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-30",
+        "venueContains": "kissa10",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-31",
+        "venueContains": "kissa10",
+        "timeUnknown": true
+      }
+    ],
+    "lete-umami-party": [
+      {
+        "date": "2026-10-15",
+        "time": "21:00",
+        "venueContains": "umami"
+      }
+    ],
+    "lozionica-weekly": [
+      {
+        "date": "2026-10-10",
+        "time": "17:30",
+        "venueContains": "lozionica",
+        "identityAnchor": "sirene"
+      },
+      {
+        "date": "2026-10-10",
+        "time": "20:00",
+        "venueContains": "lozionica",
+        "identityAnchor": "neizrecene"
+      },
+      {
+        "date": "2026-10-10",
+        "time": "22:00",
+        "venueContains": "lozionica",
+        "identityAnchor": "pohod"
+      },
+      {
+        "date": "2026-10-10",
+        "venueContains": "lozionica",
+        "identityAnchor": "slagalica",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-11",
+        "time": "17:30",
+        "venueContains": "lozionica",
+        "identityAnchor": "ucitelj"
+      },
+      {
+        "date": "2026-10-11",
+        "time": "20:00",
+        "venueContains": "lozionica",
+        "identityAnchor": "17"
+      },
+      {
+        "date": "2026-10-11",
+        "time": "22:00",
+        "venueContains": "lozionica",
+        "identityAnchor": "zajedno sami"
+      },
+      {
+        "date": "2026-10-11",
+        "time": "18:00",
+        "venueContains": "lozionica",
+        "identityAnchor": "ceger"
+      },
+      {
+        "date": "2026-10-12",
+        "venueContains": "lozionica",
+        "identityAnchor": "conversation",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-12",
+        "venueContains": "lozionica",
+        "identityAnchor": "legal insight",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-14",
+        "time": "20:00",
+        "venueContains": "lozionica",
+        "identityAnchor": "puskin"
+      },
+      {
+        "date": "2026-10-14",
+        "venueContains": "lozionica",
+        "identityAnchor": "boot camp",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-15",
+        "time": "20:00",
+        "venueContains": "lozionica",
+        "identityAnchor": "aigel"
+      },
+      {
+        "date": "2026-10-15",
+        "venueContains": "lozionica",
+        "identityAnchor": "3d printing",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-16",
+        "time": "20:00",
+        "venueContains": "lozionica",
+        "identityAnchor": "juan atkins"
+      },
+      {
+        "date": "2026-10-16",
+        "venueContains": "lozionica",
+        "identityAnchor": "boot camp",
+        "timeUnknown": true
+      },
+      {
+        "date": "2026-10-16",
+        "timeStartsWith": "16:30",
+        "venueContains": "lozionica",
+        "identityAnchor": "astronaut"
+      },
+      {
+        "date": "2026-10-16",
+        "time": "18:00",
+        "venueContains": "lozionica",
+        "identityAnchor": "nakit"
+      }
+    ],
+    "museum-sessions": [
+      {
+        "date": "2026-10-11",
+        "time": "13:00",
+        "venueContains": "muzej jugoslavije"
+      },
+      {
+        "date": "2026-10-11",
+        "time": "17:00",
+        "venueContains": "muzej jugoslavije"
+      },
+      {
+        "date": "2026-10-11",
+        "time": "18:00",
+        "venueContains": "muzej jugoslavije"
+      }
+    ],
+    "sila-one-concert": [
+      {
+        "date": "2026-10-23",
+        "time": "19:00",
+        "venueContains": "fest"
+      }
+    ],
+    "sprat-weekly": [
+      {
+        "date": "2026-10-07",
+        "time": "19:00",
+        "venueContains": "sprat",
+        "artistAnchor": "Dea and the Dreams"
+      },
+      {
+        "date": "2026-10-08",
+        "time": "19:00",
+        "venueContains": "sprat",
+        "artistAnchor": "OPPRORIUM"
+      },
+      {
+        "date": "2026-10-09",
+        "time": "19:00",
+        "venueContains": "sprat",
+        "artistAnchor": "SAMALAS"
+      },
+      {
+        "date": "2026-10-10",
+        "time": "20:00",
+        "venueContains": "sprat",
+        "identityAnchor": "DJ SHOOBZ"
+      },
+      {
+        "date": "2026-10-08",
+        "time": "20:00",
+        "venueContains": "zaokret",
+        "identityAnchor": "BIANG BIANG"
+      },
+      {
+        "date": "2026-10-09",
+        "time": "19:00",
+        "venueContains": "zaokret",
+        "identityAnchor": "DIDI"
+      },
+      {
+        "date": "2026-10-10",
+        "time": "19:00",
+        "venueContains": "zaokret",
+        "identityAnchor": "VIBES FOR GRUJA"
+      }
+    ],
+    "ventil-film-program": [
+      {
+        "date": "2026-10-05",
+        "time": "18:30",
+        "venueContains": "ventil"
+      },
+      {
+        "date": "2026-10-06",
+        "time": "18:30",
+        "venueContains": "ventil"
+      },
+      {
+        "date": "2026-10-12",
+        "time": "18:30",
+        "venueContains": "ventil"
+      },
+      {
+        "date": "2026-10-13",
+        "time": "18:30",
+        "venueContains": "ventil"
+      },
+      {
+        "date": "2026-10-19",
+        "time": "18:30",
+        "venueContains": "ventil"
+      },
+      {
+        "date": "2026-10-20",
+        "time": "18:30",
+        "venueContains": "ventil"
+      },
+      {
+        "date": "2026-10-26",
+        "time": "18:30",
+        "venueContains": "ventil"
+      },
+      {
+        "date": "2026-10-27",
+        "time": "18:30",
+        "venueContains": "ventil"
+      }
+    ]
+  },
+  "transportAudit": [
+    {
+      "variant": "baseline",
+      "caseId": "club2099-stages",
+      "submittedImageCount": 1,
+      "sourceIndexes": [
+        0
+      ],
+      "orderedProviderChecksums": [
+        "70207f27e7be52b30e2cbe597b4419ac398f7ef4153c32471a98868dc8a646e2"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": null,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "bc8e788c8d42183ebf80de54ee2249514111aa80589c2a3dd73f4dcd229cab9e"
+    },
+    {
+      "variant": "baseline",
+      "caseId": "dorcol-weekly",
+      "submittedImageCount": 1,
+      "sourceIndexes": [
+        0
+      ],
+      "orderedProviderChecksums": [
+        "3b90c802f8ea09888b340b736be52d53b655ad60146ee9beb2765dde323f6771"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": null,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "d99a7de5b345522c55445d4a596addc2c2c2544c8bb4bb62f092644a0574c964"
+    },
+    {
+      "variant": "baseline",
+      "caseId": "frida-october",
+      "submittedImageCount": 1,
+      "sourceIndexes": [
+        0
+      ],
+      "orderedProviderChecksums": [
+        "5fe567796105da95a565ba62c56a30345c93f6ca80b9ad1f8b7c071865e76861"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": null,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "2b7b7abde65caf419e397d43fb16a7e33f47c7476929f1c55c800b340f4713f3"
+    },
+    {
+      "variant": "baseline",
+      "caseId": "kissa-october",
+      "submittedImageCount": 1,
+      "sourceIndexes": [
+        0
+      ],
+      "orderedProviderChecksums": [
+        "d022cd2ab31e45bd230401002e87aef22fa32a6bf964a549bf581a1c81786572"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": null,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "bb3711bfcf94e98633f1fb5e8623a87b7b73b4c0e24696636c72b9396e283251"
+    },
+    {
+      "variant": "baseline",
+      "caseId": "lete-umami-party",
+      "submittedImageCount": 1,
+      "sourceIndexes": [
+        0
+      ],
+      "orderedProviderChecksums": [
+        "7bc40e85f077810f28a24e12450a2f37833389db62f7c44785ca5f5139bc0886"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": null,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "fd803ebb1514f9b086801efbabad6539d62ca46afb4c372d3a32bd4c7360a474"
+    },
+    {
+      "variant": "baseline",
+      "caseId": "lozionica-weekly",
+      "submittedImageCount": 1,
+      "sourceIndexes": [
+        0
+      ],
+      "orderedProviderChecksums": [
+        "d7921352eac2f4d90258d7af3577078f9351469f66dfc1a112aaf2a589ac10a0"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": null,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "edf75cef5873c77be51e8472f08e6cceb20107409c28bc620ce04d369ea65571"
+    },
+    {
+      "variant": "baseline",
+      "caseId": "museum-exhibition-recap",
+      "submittedImageCount": 1,
+      "sourceIndexes": [
+        0
+      ],
+      "orderedProviderChecksums": [
+        "89713f844141a2848d1a313742756f6215dd178c1af6b9d7e42393b0cfa8b6d8"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": null,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "5d3ea2bcf877e4794ae8df50e1ad5ca58a3339ed6af3d97be59dcf022cf772b6"
+    },
+    {
+      "variant": "baseline",
+      "caseId": "museum-sessions",
+      "submittedImageCount": 1,
+      "sourceIndexes": [
+        0
+      ],
+      "orderedProviderChecksums": [
+        "1b9677d63d506cac1927b410b5a8ac4e9cebad8e2792d8a6ddba34add9911b7d"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": null,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "e97f0af2822900975c15def90318974f9de2d5ee91fceccacce611552ed7f4b1"
+    },
+    {
+      "variant": "baseline",
+      "caseId": "react-recap",
+      "submittedImageCount": 1,
+      "sourceIndexes": [
+        0
+      ],
+      "orderedProviderChecksums": [
+        "d82cca74320a0d874785f5bb263170fb97f6409d3f931e7bd39a6418e61c2b86"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": null,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "e0d573c0cc858c0940824d873c1ad0ecf39f04fa26b1bcd677589c1ea54da26b"
+    },
+    {
+      "variant": "baseline",
+      "caseId": "sila-one-concert",
+      "submittedImageCount": 1,
+      "sourceIndexes": [
+        0
+      ],
+      "orderedProviderChecksums": [
+        "ba49599d9d84e780504affb52ed69de522c66e8c2cc393daa75c7851de4e2ed7"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": null,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "88d1613b2e2089e84fd77bdb750e9c089aa05d77a6757364a87eb1f27df66902"
+    },
+    {
+      "variant": "baseline",
+      "caseId": "sprat-weekly",
+      "submittedImageCount": 1,
+      "sourceIndexes": [
+        0
+      ],
+      "orderedProviderChecksums": [
+        "d3ac6ef9d349cb3e02aab77539a586eabf4d1e885e32dcd55a3e850f10ab775a"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": null,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "6e67256e72726755633c584d42583b3e0e6bfa6e9053469a0ab51a2ff3adc18c"
+    },
+    {
+      "variant": "baseline",
+      "caseId": "ventil-film-program",
+      "submittedImageCount": 1,
+      "sourceIndexes": [
+        0
+      ],
+      "orderedProviderChecksums": [
+        "2c84862e6a976fc991216a47276baa55584096b7bbbed1692a98cec797ca1523"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": null,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "98b6101274bb49a48e6fe7122052b75b71a5a6f79265a04372705522554d986b"
+    },
+    {
+      "variant": "candidate",
+      "caseId": "club2099-stages",
+      "submittedImageCount": 6,
+      "sourceIndexes": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "orderedProviderChecksums": [
+        "70207f27e7be52b30e2cbe597b4419ac398f7ef4153c32471a98868dc8a646e2",
+        "00c61099c23f08e4a5e3e1a89192e2aa7b5f50b82d0ee8b0559b4e8c7348ab64",
+        "0e14f74ad4d6ba614ae43bc5036555039d7e8f8099a54378b9e09bcad8279316",
+        "6710a6e3dd8ac3ff5769b0068f8dfca2d2fff8702881a177db3f55d1f84c5d2e",
+        "2a98fb161929eee21c1a7e55d4af75bd8c2742cfea8a7eeb4a08f91dc06cf468",
+        "ab1755f52d53d6f8612fdc85d35f143192ea142166b7cd73d63333c45f62cb74"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": true,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "d4ebf69f04429e4b198ca8c1cf6dbfda614aef8cabbce1955d0fe8a33e08c753"
+    },
+    {
+      "variant": "candidate",
+      "caseId": "dorcol-weekly",
+      "submittedImageCount": 5,
+      "sourceIndexes": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "orderedProviderChecksums": [
+        "3b90c802f8ea09888b340b736be52d53b655ad60146ee9beb2765dde323f6771",
+        "2f689fb7f4b1d347317b26a42f1bc18462da6da4275ff7735c0b7d687647af40",
+        "bc84c934c8030b0cce265e615847240c7856489c0c2c9e4d387ba4dc67df3aa7",
+        "c7ade58d986e2cd1d87ed7da57ccd3237c73483eca22113420a9d3b182155d5c",
+        "e5568d356df66af95d491e37711c0791bbf0d52b52404a78f42aa46d5cb5ada1"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": true,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "451219b1634660549a08b7fd46655a7d6f2157f3c0569e316d025fe56b979a92"
+    },
+    {
+      "variant": "candidate",
+      "caseId": "frida-october",
+      "submittedImageCount": 4,
+      "sourceIndexes": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "orderedProviderChecksums": [
+        "5fe567796105da95a565ba62c56a30345c93f6ca80b9ad1f8b7c071865e76861",
+        "f1ba3ebe215974d745ff66594962b5f16cdda0fd864c0afae73a1078f3303d4d",
+        "7bb2d513abb799115972b0bcf4e7425c854b4c74396a721e42549d2b14e8ecce",
+        "ef734feffdedc2399d59abc0180a75241c317e5a804cca8ee6678cb882bf7a5f"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": true,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "f368d4e12d5c1cc9ab82d140ba2a7b317079659b57fb31b44473946636e70948"
+    },
+    {
+      "variant": "candidate",
+      "caseId": "kissa-october",
+      "submittedImageCount": 2,
+      "sourceIndexes": [
+        0,
+        1
+      ],
+      "orderedProviderChecksums": [
+        "d022cd2ab31e45bd230401002e87aef22fa32a6bf964a549bf581a1c81786572",
+        "2aa65857487258da3122dbc9b2ddb02286a6fbd9ce6ace92009223678da71f9a"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": true,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "84546f623f7159ca60860aaa95d7739cc3483e36201cb0b0170604b8ea9d4abd"
+    },
+    {
+      "variant": "candidate",
+      "caseId": "lete-umami-party",
+      "submittedImageCount": 2,
+      "sourceIndexes": [
+        0,
+        1
+      ],
+      "orderedProviderChecksums": [
+        "7bc40e85f077810f28a24e12450a2f37833389db62f7c44785ca5f5139bc0886",
+        "636d280ecf2f3d043bad5f7529228bcc572de7f2b06089aade245d228e604665"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": true,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "13b1906358e6d172481c0344a67fb88c4268990eef9b23c9445ac74aaa6282e4"
+    },
+    {
+      "variant": "candidate",
+      "caseId": "lozionica-weekly",
+      "submittedImageCount": 4,
+      "sourceIndexes": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "orderedProviderChecksums": [
+        "d7921352eac2f4d90258d7af3577078f9351469f66dfc1a112aaf2a589ac10a0",
+        "ebb10e7aa8a109462f94aeb5b8e734f0101fc8456497ed817c81cfae1c6533c9",
+        "01efa5db878b4f851b836a7b0a23c9c7c66d050a06c486f0d75b9273eb98d7a4",
+        "ea842d52f78dd0fe91c44aee5c47d51b5bb51f7434be9f9937d23f397fe6c141"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": true,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "51cc2dea262537d59e9fc06952d7a70b329ee3232d9314d79471b85d4e512db4"
+    },
+    {
+      "variant": "candidate",
+      "caseId": "museum-exhibition-recap",
+      "submittedImageCount": 6,
+      "sourceIndexes": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "orderedProviderChecksums": [
+        "89713f844141a2848d1a313742756f6215dd178c1af6b9d7e42393b0cfa8b6d8",
+        "4942b1237f55e9a5fe8bf1178a343d14abdc2fb80a2a0250eb85ea8620e63f99",
+        "c9bd9c05a8d161c7d3e4a35a1089cff4b7bd4723828cde9b46f43fd154de3f71",
+        "b992c5de5b306a86057e613108298b5f770dd132001b737eb69681b3ab075531",
+        "8b4d9b21b9f9c1930ba12cca8e1ff2cd47c8ede88e00376cc94a56cb8c2417f0",
+        "293bbbabea9a9a54bdf37582c7ab042c505c305152625f5c8a0cbeab1ae9710a"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": true,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "a3b1a796d4d8ef835d529402aa0ed3d610af729f9a8a04a224ac30a78905815b"
+    },
+    {
+      "variant": "candidate",
+      "caseId": "museum-sessions",
+      "submittedImageCount": 4,
+      "sourceIndexes": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "orderedProviderChecksums": [
+        "1b9677d63d506cac1927b410b5a8ac4e9cebad8e2792d8a6ddba34add9911b7d",
+        "b39d1a2f618502d0c939ce6f37e6cb3490cabfed0f73391b9d758c4aba7b88cb",
+        "892498b3bb89dc15fc0915799921303e2945da9bbb9728da005f92322ae8f5e4",
+        "8d895693bf919cb2585afd208ab04861ccf68c73aa8d90265d1076c384081164"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": true,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "eafc24387ac5392c13e4fee03344c14be3e7c75a4b489777366171a1593775a8"
+    },
+    {
+      "variant": "candidate",
+      "caseId": "react-recap",
+      "submittedImageCount": 4,
+      "sourceIndexes": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "orderedProviderChecksums": [
+        "d82cca74320a0d874785f5bb263170fb97f6409d3f931e7bd39a6418e61c2b86",
+        "828bc9ea93e9694f7496a6b6976e320b0b92d7297835d6ea7a7c26f7664282d8",
+        "a45c108f11dfdf88f59e2dd8aae698cd1c3e9c54d2f6b3aa3efd118f9605b16a",
+        "694537a8b4d7037a3686ea4210b72c0302eea4a16e721048f25224b43131f1e6"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": true,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "a1d93ecd590c9db2b541d5dd4addaf3793b9534da09c46842717e929cde5e208"
+    },
+    {
+      "variant": "candidate",
+      "caseId": "sila-one-concert",
+      "submittedImageCount": 4,
+      "sourceIndexes": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "orderedProviderChecksums": [
+        "ba49599d9d84e780504affb52ed69de522c66e8c2cc393daa75c7851de4e2ed7",
+        "80c45b4bd2786e071e41a4733c7897be4b6f3c88ec8a2ed523c042d5ecbf01d4",
+        "da4183625f9e650b2efc61015fff980189e51224cfa3ed84b51f8c894e9e3fa1",
+        "01c550b3f36544193288261c47d8f5b94079a20782a38ef944132f9165ee85e1"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": true,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "e92c275dc8cb2d567fef4f3a58cdf7a30091ad902a39aeb08b138c27965a3741"
+    },
+    {
+      "variant": "candidate",
+      "caseId": "sprat-weekly",
+      "submittedImageCount": 2,
+      "sourceIndexes": [
+        0,
+        1
+      ],
+      "orderedProviderChecksums": [
+        "d3ac6ef9d349cb3e02aab77539a586eabf4d1e885e32dcd55a3e850f10ab775a",
+        "852674d714c945b336812c0667776c21b3eba476032b9ce934edb43d0bcf99c9"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": true,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "873066b809ba213357a8de9b91ced2e155c15ff234ace153552c6bc65aa00540"
+    },
+    {
+      "variant": "candidate",
+      "caseId": "ventil-film-program",
+      "submittedImageCount": 5,
+      "sourceIndexes": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "orderedProviderChecksums": [
+        "2c84862e6a976fc991216a47276baa55584096b7bbbed1692a98cec797ca1523",
+        "ee5b26c89d00e5c4afe0db1b6616b31f4d5abdd4da9cdc8c5a3a263ef5a6ff2d",
+        "4de64620aa10efd3ac4c716395c82717b61df24ffd958f099101f9e3c9c80a26",
+        "0cb28ed739226206d7bdaa8e1dbdf8c9f6909f416cbcc351ce50e42dd042765b",
+        "47c9ea2b026dc1921f6e02f394c87a4e36024d53437a172b4899e90ba10fbf42"
+      ],
+      "imageCountAndChecksumsMatch": true,
+      "originalSlideLabelsMatch": true,
+      "oneTransportOnly": true,
+      "httpStatus": 200,
+      "immutableProviderResponse": true,
+      "immutableExtractedObject": true,
+      "providerResponseSha256": "37dc5239ba93638e2950bfbe6ee4bb7aecfd00b000d027534bc0930690a19acd"
+    }
+  ]
+}

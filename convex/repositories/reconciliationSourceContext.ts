@@ -13,6 +13,7 @@ import {
   assertExistingSourceOccurrenceReceiptWithinBounds,
   MAX_SOURCE_OCCURRENCE_KEYS_PER_SOURCE,
 } from "../internal/sourceOccurrenceReceipts";
+import type { RetainedCarouselImage } from "../internal/carouselMediaProof";
 
 const APPLY_LEASE_SKEW_MS = 1_000;
 const MAX_SOURCE_ACCOUNT_IDENTITIES_PER_EVENT = 12;
@@ -39,6 +40,7 @@ export type ReconciliationCanonicalSourceFields = Readonly<{
 export type ReconciliationSourceDocument = SourceDocument & {
   accountIdentity?: string;
   canonicalEventFields: ReconciliationCanonicalSourceFields;
+  carouselImages?: readonly RetainedCarouselImage[];
   processingFence: Readonly<{
     leaseExpiresAt?: number;
     leaseOwner?: string;
@@ -125,6 +127,7 @@ function adaptStoredSourceDocument(
   return {
     ...document,
     ...(accountIdentity ? { accountIdentity } : {}),
+    ...(row.analysisCarouselImages ? { carouselImages: row.analysisCarouselImages } : {}),
     canonicalEventFields: {
       ...(row.imageStorageId ? { imageStorageId: row.imageStorageId } : {}),
       ...((row.imageUrl ?? row.imageUrls[0])
@@ -156,6 +159,26 @@ function adaptStoredSourceDocument(
       externalDocumentUrl: row.instagramPostUrl,
     },
   };
+}
+
+/** The reconciler chooses each future occurrence's poster from independently
+ * recorded inputs. It must not reuse the post-wide legacy cover for siblings. */
+export function projectCanonicalSourceFieldsForOccurrence(
+  source: ReconciliationSourceDocument,
+  normalizedFieldsJson: string | undefined,
+): ReconciliationCanonicalSourceFields {
+  const fields = parseObject(normalizedFieldsJson);
+  const hasCarouselMarker = fields.extractionCarouselContractVersion !== undefined || source.carouselImages !== undefined;
+  if (!hasCarouselMarker) return source.canonicalEventFields;
+  if (fields.extractionCarouselContractVersion !== "carousel_evidence_v1" ||
+    !Number.isSafeInteger(fields.carouselDisplaySlideIndex)) {
+    throw new DomainError("OCCURRENCE_INCOMPLETE", "Carousel occurrence has no exact retained display slide.");
+  }
+  const matches = source.carouselImages?.filter((image) => image.slideIndex === fields.carouselDisplaySlideIndex) ?? [];
+  if (matches.length !== 1) {
+    throw new DomainError("OCCURRENCE_INCOMPLETE", "Carousel occurrence display slide is not uniquely retained.");
+  }
+  return { ...source.canonicalEventFields, imageStorageId: matches[0]!.storageId, imageUrl: matches[0]!.url };
 }
 
 export async function loadReconciliationSourceDocument(

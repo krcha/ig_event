@@ -1,0 +1,1472 @@
+{
+  "version": "instagram_real_carousels_2026_10_12_v1",
+  "evaluationNow": "2026-10-01T12:00:00.000Z",
+  "limitations": [
+    "Purposive sample of12 real Instagram carousels; it does not measure overall production accuracy.",
+    "A fixed prospective planner date of October1 keeps all captured October programs comparable. No production event dates are changed.",
+    "All48 original covers were retained and checksummed:32 images and16 video thumbnails. Video interiors are not analyzed, so their source coverage remains partial.",
+    "One fresh stochastic Luna response per case and variant; repeatability is not estimated.",
+    "No Convex clients or app/database writes. Planned approval does not establish persistence boundary attestation.",
+    "The selected Mama Shelter post returned explicit not_found. Its provider journal records the failure; it is excluded from the12 valid cases.",
+    "Ephemeral signed CDN URLs, image bytes, credentials and provider responses stay outside Git. This fixture contains public captions, Instagram post URLs and manual labels."
+  ],
+  "cases": [
+    {
+      "id": "club2099-stages",
+      "title": "Club2099 stages",
+      "groundTruthBasis": "Manual review of the original caption and every retained source cover, completed before Luna extraction. Video thumbnails support only visible still text; no video content is inferred.",
+      "context": {
+        "canonicalVenueName": "Club 2099",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Club 2099"
+      },
+      "post": {
+        "caption": "DEFINITELY NOT HALLOWEEN PARTY. 🎃❌\n\nwe swear this has nothing to do with costumes, but we are definitely about to have so much fun on 10.10. starting at 22:00. two stages were apparently too modest, so we’re spreading the chaos across THREE stages because more is more, and… it’s fun.\n\nthe timeline of poor decisions:\n💀 @gore.beograd - 22:00-01:30 @jovijah @anja_the_batman with performances by @kate.rina.aaa & @lanita_b.r 🔥😍\n🧟‍♀️ @studio.stajga - 22:00-01:30 @ppavle @slep1m1s\n🔪 20/44 Subdecks 01:30 - 04:00+ [moving the circus here after 01:30 to finish the job] \n\nserving hyperpop, electronic pop, pure cunt energy, and filthy club classics you love.\n\n🗓️ 10.10. // 22:00\n🎫 700 before midnight / after 1200\n(We get all the ticket money before midnight so we would love it if you come before 00:00) 💗",
+        "altText": "Photo by Club 2099 on October 04, 2026.",
+        "locationName": "Belgrade, Serbia",
+        "username": "club.2099",
+        "handle": "club.2099",
+        "postId": "4000592819546550636",
+        "instagramPostUrl": "https://www.instagram.com/p/DeE9fksDPFs/",
+        "postedAt": "2026-10-04T15:30:49.000Z",
+        "imageUrl": null,
+        "imageUrls": [],
+        "postType": "sidecar",
+        "imageSlideCount": 6
+      },
+      "checks": [
+        {
+          "type": "event_count_max",
+          "label": "SixDJ/party cards do not create more thanthreeadvertised venue sessions",
+          "value": 3
+        },
+        {
+          "type": "no_row",
+          "label": "PromoteraccountClub 2099 is not a physical venue",
+          "match": {
+            "venueContains": "club 2099"
+          }
+        },
+        {
+          "type": "raw_conflict",
+          "label": "Caption venue and stage claims conflict with 20/44 cover claims",
+          "field": "venue"
+        },
+        {
+          "type": "unique_occurrences",
+          "label": "No identical date, time, place and title occurrence is duplicated"
+        },
+        {
+          "type": "coverage_complete",
+          "label": "Still covers cannot certify unviewed video interiors",
+          "value": false
+        },
+        {
+          "type": "input_image_count",
+          "label": "Every retained still cover is examined in one joint call",
+          "value": 6
+        }
+      ],
+      "independentEvidence": [
+        "Each video cover advertises10.10,22:00 and20/44 HOUSE; some DJ cards also name Studio Štajga. The caption instead names Gore22:00, Studio Štajga22:00, and20/44 Subdecks after01:30. The conflicting venue claims require an explicit hold and cannot be silently resolved from the source account name."
+      ],
+      "sourceContextBasis": "Read-only production source context and curated venue resolver snapshots on2026-10-12. Accounts absent from the registry use the unknown role."
+    },
+    {
+      "id": "dorcol-weekly",
+      "title": "Dorcol weekly",
+      "groundTruthBasis": "Manual review of the original caption and every retained source cover, completed before Luna extraction. Video thumbnails support only visible still text; no video content is inferred.",
+      "context": {
+        "canonicalVenueName": "Kulturni Centar Dorćol",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Kulturni Centar Dorćol"
+      },
+      "post": {
+        "caption": "Program Kulturnog centra Dorćol☝🏻\n\n🗓️ 05.10 - 11.10",
+        "altText": "Photo by Kulturni Centar Dorćol on October 04, 2026.",
+        "locationName": "Kulturni Centar Dorćol",
+        "username": "kcdorcol",
+        "handle": "kcdorcol",
+        "postId": "4001024754827414532",
+        "instagramPostUrl": "https://www.instagram.com/p/DeGftDxCEwE/",
+        "postedAt": "2026-10-05T05:49:00.000Z",
+        "imageUrl": null,
+        "imageUrls": [],
+        "postType": "sidecar",
+        "imageSlideCount": 5
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "Four independent dates preserve the same repeatingtitle",
+          "value": 4,
+          "allApproved": true
+        },
+        {
+          "type": "all_venues_match",
+          "label": "All dates belong to Kulturni Centar Dorćol",
+          "venueContains": "dorcol"
+        },
+        {
+          "type": "matching_count",
+          "label": "October 5: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-05",
+            "time": "19:30"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 6: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-06",
+            "time": "19:30"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 8: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-08",
+            "time": "19:30"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 10: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-10",
+            "time": "18:00"
+          },
+          "value": 1
+        },
+        {
+          "type": "has_row",
+          "label": "Birthday title remains different from BELEŠKE",
+          "match": {
+            "date": "2026-10-10",
+            "titleContains": "rođendan"
+          }
+        },
+        {
+          "type": "row_slide_binding",
+          "label": "October 8 comes from its own dated poster",
+          "match": {
+            "date": "2026-10-08"
+          },
+          "slideIndex": 3
+        },
+        {
+          "type": "unique_occurrences",
+          "label": "No identical date, time, place and title occurrence is duplicated"
+        },
+        {
+          "type": "coverage_complete",
+          "label": "Every image slide is covered by an attested input",
+          "value": true
+        },
+        {
+          "type": "input_image_count",
+          "label": "Every retained still cover is examined in one joint call",
+          "value": 5
+        }
+      ],
+      "independentEvidence": [
+        "Slide0 is an undated weekly introduction. Slides1/2/3 say BELEŠKE at KULTURNI CENTAR DORĆOL, respectively5/6/8 oktobar u19.30h.",
+        "Slide4 says5.ROĐENDAN Stvaralačkog Eha, KC Dorćol, subota10.10.u18h. The same program title on distinct dates must remain separate."
+      ],
+      "sourceContextBasis": "Read-only production source context and curated venue resolver snapshots on2026-10-12. Accounts absent from the registry use the unknown role."
+    },
+    {
+      "id": "frida-october",
+      "title": "Frida october",
+      "groundTruthBasis": "Manual review of the original caption and every retained source cover, completed before Luna extraction. Video thumbnails support only visible still text; no video content is inferred.",
+      "context": {
+        "canonicalVenueName": "Cantina de Frida",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Cantina de Frida"
+      },
+      "post": {
+        "caption": "Oktobar nam sasvim dobro stoji.\n\nPoznata imena i još jedan mesec muzike u Fridi.\n\nČekamo vas na reci🪭",
+        "altText": "Photo by Cantina de Frida on October 05, 2026.",
+        "locationName": null,
+        "username": "fridarestoran",
+        "handle": "fridarestoran",
+        "postId": "4001289978881421388",
+        "instagramPostUrl": "https://www.instagram.com/p/DeHcAk6jrBM/",
+        "postedAt": "2026-10-05T14:35:57.000Z",
+        "imageUrl": null,
+        "imageUrls": [],
+        "postType": "sidecar",
+        "imageSlideCount": 4
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "Sixteen advertised nights remain one party per date",
+          "value": 16,
+          "allApproved": true
+        },
+        {
+          "type": "all_times_unknown",
+          "label": "No start clock is printed on any monthly poster"
+        },
+        {
+          "type": "all_venues_match",
+          "label": "All nights use the confirmed Frida venue",
+          "venueContains": "frida"
+        },
+        {
+          "type": "matching_count",
+          "label": "October 7: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-07"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 8: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-08"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 9: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-09"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 10: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-10"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 14: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-14"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 15: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-15"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 16: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-16"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 17: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-17"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 21: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-21"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 22: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-22"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 23: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-23"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 24: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-24"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 28: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-28"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 29: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-29"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 30: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-30"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 31: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-31"
+          },
+          "value": 1
+        },
+        {
+          "type": "has_row",
+          "label": "October 9 retainsSLEEPLESS in the shared night",
+          "match": {
+            "date": "2026-10-09",
+            "artistContains": "sleepless"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "October 9 retainssupporting DJ ALES",
+          "match": {
+            "date": "2026-10-09",
+            "artistContains": "ales"
+          }
+        },
+        {
+          "type": "row_slide_binding",
+          "label": "October 31 is bound to the final poster",
+          "match": {
+            "date": "2026-10-31"
+          },
+          "slideIndex": 3
+        },
+        {
+          "type": "unique_occurrences",
+          "label": "No identical date, time, place and title occurrence is duplicated"
+        },
+        {
+          "type": "coverage_complete",
+          "label": "Every image slide is covered by an attested input",
+          "value": true
+        },
+        {
+          "type": "input_image_count",
+          "label": "Every retained still cover is examined in one joint call",
+          "value": 4
+        }
+      ],
+      "independentEvidence": [
+        "All four posters are headed OKTOBAR. Each date and row advertises one night. A supporting DJ beneath a band does not have an independent session clock.",
+        "Slide0 dates7/8/9/10; slide1 dates14/15/16/17; slide2 dates21/22/23/24; slide3 dates28/29/30/31. The source account and caption identify Frida. No start time is stated."
+      ],
+      "sourceContextBasis": "Read-only production source context and curated venue resolver snapshots on2026-10-12. Accounts absent from the registry use the unknown role."
+    },
+    {
+      "id": "kissa-october",
+      "title": "Kissa october",
+      "groundTruthBasis": "Manual review of the original caption and every retained source cover, completed before Luna extraction. Video thumbnails support only visible still text; no video content is inferred.",
+      "context": {
+        "canonicalVenueName": "𝗞𝗜𝗦𝗦𝗔𝟭𝟬",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "KISSA10"
+      },
+      "post": {
+        "caption": "October at KISSA10! 🥷 \n\nSee you 🤍",
+        "altText": "Photo by 𝗞𝗜𝗦𝗦𝗔𝟭𝟬 on October 04, 2026.",
+        "locationName": "Kissa10.bg",
+        "username": "kissa10.bg",
+        "handle": "kissa10.bg",
+        "postId": "4000546007674293431",
+        "instagramPostUrl": "https://www.instagram.com/p/DeEy2XvCIy3/",
+        "postedAt": "2026-10-04T13:57:49.000Z",
+        "imageUrl": null,
+        "imageUrls": [],
+        "postType": "sidecar",
+        "imageSlideCount": 2
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "All 15 dated programs across both posters are separate nights",
+          "value": 15,
+          "allApproved": true
+        },
+        {
+          "type": "all_times_unknown",
+          "label": "No start clock appears on either program poster"
+        },
+        {
+          "type": "all_venues_match",
+          "label": "All programs belong to KISSA 10",
+          "venueContains": "kissa10"
+        },
+        {
+          "type": "matching_count",
+          "label": "October 1: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-01"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 2: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-02"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 3: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-03"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 8: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-08"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 9: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-09"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 10: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-10"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 15: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-15"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 16: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-16"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 17: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-17"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 22: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-22"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 23: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-23"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 24: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-24"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 29: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-29"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 30: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-30"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "October 31: one independently scheduled occurrence",
+          "match": {
+            "date": "2026-10-31"
+          },
+          "value": 1
+        },
+        {
+          "type": "has_row",
+          "label": "The October 3 lineup includes Fire Manager",
+          "match": {
+            "date": "2026-10-03",
+            "artistContains": "fire manager"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "The same October 3 party includes Feels Like Acid",
+          "match": {
+            "date": "2026-10-03",
+            "artistContains": "feels like acid"
+          }
+        },
+        {
+          "type": "row_slide_binding",
+          "label": "DANYA is bound to the second poster",
+          "match": {
+            "date": "2026-10-22"
+          },
+          "slideIndex": 1
+        },
+        {
+          "type": "unique_occurrences",
+          "label": "No identical date, time, place and title occurrence is duplicated"
+        },
+        {
+          "type": "coverage_complete",
+          "label": "Every image slide is covered by an attested input",
+          "value": true
+        },
+        {
+          "type": "input_image_count",
+          "label": "Every retained still cover is examined in one joint call",
+          "value": 2
+        }
+      ],
+      "independentEvidence": [
+        "Slide0 is headed OCTOBER and lists01.10 DJ SUMO3000;02.10 IVA ARIFAJ;03.10 FIRE MANAGER & FEELS LIKE ACID(LIVE);08.10 PTICA;09.10 NENI;10.10 EFFENDI;15.10 ARTEM KOROLEV;16.10 WHITE CITY SOUL;17.10 SARA VELIČKOVSKI.",
+        "Slide1 lists22.10 DANYA;23.10 BURKAKKE(MONTENEGRO);24.10 DANCHA;29.10 OM;30.10 IVHIGH;31.10 DOO. Both posters name KISSA10 and neither states a start clock."
+      ],
+      "sourceContextBasis": "Read-only production source context and curated venue resolver snapshots on2026-10-12. Accounts absent from the registry use the unknown role."
+    },
+    {
+      "id": "lete-umami-party",
+      "title": "Lete umami party",
+      "groundTruthBasis": "Manual review of the original caption and every retained source cover, completed before Luna extraction. Video thumbnails support only visible still text; no video content is inferred.",
+      "context": {
+        "canonicalVenueName": null,
+        "instagramSourceRole": "unknown",
+        "instagramSourceName": "L'ÉTÉ  EVENTS"
+      },
+      "post": {
+        "caption": "Take your honey pill, 'cause the real party is about to start the season! 💊🍯\n\nЧекамо вас на старом месту @umami.bg, у четвртак где ће се спојити инострани и домаћи хитови. Јер Лето се завршило, L'été није.\n\nЧЕТВРТАК • 15.10. • 21h\n\n📍UMAMI Гастрошор\n🎵 @dj.kalouh\n📥+381 69 1612670",
+        "altText": "Photo by L'ÉTÉ  EVENTS on October 10, 2026.",
+        "locationName": "UMAMI",
+        "username": "letepcele",
+        "handle": "letepcele",
+        "postId": "4004793577783504710",
+        "instagramPostUrl": "https://www.instagram.com/p/DeT4opqjS9G/",
+        "postedAt": "2026-10-10T10:36:58.000Z",
+        "imageUrl": null,
+        "imageUrls": [],
+        "postType": "sidecar",
+        "imageSlideCount": 2
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "Repeated flyer video covers are one Double Dose party",
+          "value": 1,
+          "allApproved": true
+        },
+        {
+          "type": "has_row",
+          "label": "One party keepsOctober 15 start 21:00 and Umami",
+          "match": {
+            "date": "2026-10-15",
+            "time": "21:00",
+            "venueContains": "umami"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "DJ Kalouh remains one billed DJ",
+          "match": {
+            "date": "2026-10-15",
+            "artistContains": "kalouh"
+          }
+        },
+        {
+          "type": "unique_occurrences",
+          "label": "No identical date, time, place and title occurrence is duplicated"
+        },
+        {
+          "type": "coverage_complete",
+          "label": "Still covers cannot certify unviewed video interiors",
+          "value": false
+        },
+        {
+          "type": "input_image_count",
+          "label": "Every retained still cover is examined in one joint call",
+          "value": 2
+        }
+      ],
+      "independentEvidence": [
+        "Both video covers repeat the Double Dose flyer: THURSDAY15.10, START21H, DJ KALOUH, UMAMI GASTROŠOR. The caption confirms venue, date and clock. The video interiors were not viewed."
+      ],
+      "sourceContextBasis": "Read-only production source context and curated venue resolver snapshots on2026-10-12. Accounts absent from the registry use the unknown role."
+    },
+    {
+      "id": "lozionica-weekly",
+      "title": "Lozionica weekly",
+      "groundTruthBasis": "Manual review of the original caption and every retained source cover, completed before Luna extraction. Video thumbnails support only visible still text; no video content is inferred.",
+      "context": {
+        "canonicalVenueName": "Ложионица / Ložionica",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Ложионица / Ložionica"
+      },
+      "post": {
+        "caption": "Ove nedelje u Ložionici 👇\n\n✅ 10. oktobar - Film: Škola za sirene @fest_belgrade \n✅ 10. oktobar - Film: Neizrečene stvari @fest_belgrade \n✅ 10. oktobar - Film: Pohod @fest_belgrade\n✅ 10. okrobar - Radionica: Slagalica života - Katarina Lukić \n✅ 11. oktobar - Film: Učitelj @fest_belgrade \n✅ 11. oktobar - Film: 17 @fest_belgrade \n✅ 11. oktobar - Film: Zajedno sami @fest_belgrade \n✅ 11. oktobar - Radionica: Dečiji ceger\n✅ 12. oktobar - Networking: Conversation club @thearc.rs \n✅ 12. oktobar - Edukacija: Legal Insight Series @thearc.rs \n✅ 14. oktobar - Pozorišna predstava: Puškin. Slučaji @glasnost_theatre \n✅ 14. oktobar - Edukacija: The AI Boot Camp @thearc.rs @srpskaitasocijacija \n✅ 15. oktobar - Music: Aigel @aigelband \n✅ 15. oktobar - Edukacija: 3D printing Innovation Lab @thearc.rs \n✅ 16. oktobar - Public Talk & DJ session: Juan Atkins @juan.cybotron.atkins @gradski.kod \n✅ 16. oktobar - Edukacija: The AI Boot Camp @thearc.rs @srpskaitasocijacija \n✅ 16. oktobar - Kako je biti astronaut? Gost: Daniel Tani, astronaut @thearc.rs \n✅ 16. oktobar - Kreativna radionica za decu: Izrada nakita \n\nVidimo se u Ulici Ideja 2. 🚀",
+        "altText": "Photo by Ложионица / Ložionica on October 10, 2026.",
+        "locationName": "Ložionica / Ложионица ",
+        "username": "lozionica",
+        "handle": "lozionica",
+        "postId": "4004799720877852392",
+        "instagramPostUrl": "https://www.instagram.com/p/DeT6CC3ggbo/",
+        "postedAt": "2026-10-10T10:49:11.000Z",
+        "imageUrl": null,
+        "imageUrls": [],
+        "postType": "sidecar",
+        "imageSlideCount": 4
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "Eighteen separately named programs keep their own dates",
+          "value": 18,
+          "allApproved": true
+        },
+        {
+          "type": "all_venues_match",
+          "label": "Venue remains Ložionica with rooms treated as local context",
+          "venueContains": "lozionica"
+        },
+        {
+          "type": "has_row",
+          "label": "sirene stays onOctober 10 at 17:30",
+          "match": {
+            "date": "2026-10-10",
+            "titleContains": "sirene",
+            "time": "17:30"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "neizrecene stays onOctober 10 at 20:00",
+          "match": {
+            "date": "2026-10-10",
+            "titleContains": "neizrecene",
+            "time": "20:00"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "pohod stays onOctober 10 at 22:00",
+          "match": {
+            "date": "2026-10-10",
+            "titleContains": "pohod",
+            "time": "22:00"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "slagalica stays onOctober 10",
+          "match": {
+            "date": "2026-10-10",
+            "titleContains": "slagalica"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "ucitelj stays onOctober 11 at 17:30",
+          "match": {
+            "date": "2026-10-11",
+            "titleContains": "ucitelj",
+            "time": "17:30"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "17 stays onOctober 11 at 20:00",
+          "match": {
+            "date": "2026-10-11",
+            "titleContains": "17",
+            "time": "20:00"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "zajedno sami stays onOctober 11 at 22:00",
+          "match": {
+            "date": "2026-10-11",
+            "titleContains": "zajedno sami",
+            "time": "22:00"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "ceger stays onOctober 11 at 18:00",
+          "match": {
+            "date": "2026-10-11",
+            "titleContains": "ceger",
+            "time": "18:00"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "conversation stays onOctober 12",
+          "match": {
+            "date": "2026-10-12",
+            "titleContains": "conversation"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "legal insight stays onOctober 12",
+          "match": {
+            "date": "2026-10-12",
+            "titleContains": "legal insight"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "puskin stays onOctober 14 at 20:00",
+          "match": {
+            "date": "2026-10-14",
+            "titleContains": "puskin",
+            "time": "20:00"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "boot camp stays onOctober 14",
+          "match": {
+            "date": "2026-10-14",
+            "titleContains": "boot camp"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "aigel stays onOctober 15 at 20:00",
+          "match": {
+            "date": "2026-10-15",
+            "titleContains": "aigel",
+            "time": "20:00"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "3 d printing stays onOctober 15",
+          "match": {
+            "date": "2026-10-15",
+            "titleContains": "3d printing"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "juan atkins stays onOctober 16 at 20:00",
+          "match": {
+            "date": "2026-10-16",
+            "titleContains": "juan atkins",
+            "time": "20:00"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "boot camp stays onOctober 16",
+          "match": {
+            "date": "2026-10-16",
+            "titleContains": "boot camp"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "astronaut stays onOctober 16 at 16:30",
+          "match": {
+            "date": "2026-10-16",
+            "titleContains": "astronaut",
+            "timeStartsWith": "16:30"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "nakit stays onOctober 16 at 18:00",
+          "match": {
+            "date": "2026-10-16",
+            "titleContains": "nakit",
+            "time": "18:00"
+          }
+        },
+        {
+          "type": "matching_count",
+          "label": "Juan Atkins public talk and DJ session are one advertised program",
+          "match": {
+            "date": "2026-10-16",
+            "titleContains": "juan"
+          },
+          "value": 1
+        },
+        {
+          "type": "matching_count",
+          "label": "AI bootcamp repeats on two explicit dates",
+          "match": {
+            "titleContains": "boot camp"
+          },
+          "value": 2
+        },
+        {
+          "type": "no_row",
+          "label": "Untimed October 10 workshop does not inherit a film clock",
+          "match": {
+            "date": "2026-10-10",
+            "titleContains": "slagalica",
+            "time": "17:30"
+          }
+        },
+        {
+          "type": "row_slide_binding",
+          "label": "Juan Atkins is bound to the final poster",
+          "match": {
+            "date": "2026-10-16",
+            "titleContains": "juan"
+          },
+          "slideIndex": 3
+        },
+        {
+          "type": "unique_occurrences",
+          "label": "No identical date, time, place and title occurrence is duplicated"
+        },
+        {
+          "type": "coverage_complete",
+          "label": "Every image slide is covered by an attested input",
+          "value": true
+        },
+        {
+          "type": "input_image_count",
+          "label": "Every retained still cover is examined in one joint call",
+          "value": 4
+        }
+      ],
+      "independentEvidence": [
+        "Slide0 is a10–18.10.2026 program introduction naming LOŽIONICA and Ulica Ideja2, Beograd.",
+        "Slide1 lists10October films at17:30/20:00/22:00 and Slagalica života without a clock;11October films at17:30/20:00/22:00 and Dečiji ceger at18:00.",
+        "Slide2 lists12October Conversation club and Legal Insight Series;14October Puškin.Slučaji at20:00 and AI bootcamp;15October Aigel at20:00 and3D printing Innovation Lab. The educational programs have no stated clocks.",
+        "Slide3 lists16October Juan Atkins at20:00; AI bootcamp without a clock; Daniel Tani at16:30–18:00; Izrada nakita at18:00. The room names describe spaces within Ložionica. All18 programs also appear independently in the caption."
+      ],
+      "sourceContextBasis": "Read-only production source context and curated venue resolver snapshots on2026-10-12. Accounts absent from the registry use the unknown role."
+    },
+    {
+      "id": "museum-exhibition-recap",
+      "title": "Museum exhibition recap",
+      "groundTruthBasis": "Manual review of the original caption and every retained source cover, completed before Luna extraction. Video thumbnails support only visible still text; no video content is inferred.",
+      "context": {
+        "canonicalVenueName": "Muzej grada Beograda",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Muzej grada Beograda"
+      },
+      "post": {
+        "caption": "🏺 „Етнографска збирка Утвар Жељка“ у Завичајном музеју Жарково\nУ Завичајном музеју Жарково отворена је изложба „Етнографска збирка Утвар Жељка“, која публици представља део највеће приватне етнографске збирке у Србији.\nЗбирка, настала током више од две деценије посвећености очувању народне баштине, данас броји чак 7.300 музејских предмета. На изложби можете видети део богатог наслеђа које она чува – народне ношње, накит, ћилиме и друге текстилне предмете, керамичко, метално и дрвено покућство, као и алате старих заната.\n📍 Завичајни музеј Жарково, Аце Јоксимовића 2\n📅 Изложба је отворена до 18. октобра.\nИзложба и пратећи програм део су манифестације Дани европске баштине 2026, а реализују их Музеј града Београда, Градска општина Чукарица и Туристичка организација Чукарица.",
+        "altText": "Photo by Muzej grada Beograda on October 10, 2026.",
+        "locationName": null,
+        "username": "muzejgradabeograda",
+        "handle": "muzejgradabeograda",
+        "postId": "4004956352095059137",
+        "instagramPostUrl": "https://www.instagram.com/p/DeUdpVDkfzB/",
+        "postedAt": "2026-10-10T16:00:23.000Z",
+        "imageUrl": null,
+        "imageUrls": [],
+        "postType": "sidecar",
+        "imageSlideCount": 6
+      },
+      "checks": [
+        {
+          "type": "non_event",
+          "label": "Recap or ongoing availability creates no independently dated event"
+        },
+        {
+          "type": "no_approved",
+          "label": "No artifact photo, video or end date becomes an approved occurrence"
+        },
+        {
+          "type": "no_row",
+          "label": "Exhibition UNTIL October 18 does not become an opening on October 18",
+          "match": {
+            "date": "2026-10-18"
+          }
+        },
+        {
+          "type": "unique_occurrences",
+          "label": "No identical date, time, place and title occurrence is duplicated"
+        },
+        {
+          "type": "coverage_complete",
+          "label": "Every image slide is covered by an attested input",
+          "value": true
+        },
+        {
+          "type": "input_image_count",
+          "label": "Every retained still cover is examined in one joint call",
+          "value": 6
+        }
+      ],
+      "independentEvidence": [
+        "Six photos show exhibited artifacts with no independently dated opening or session. The caption describes the exhibition as already opened and available UNTIL18October. That end date must not become an opening event."
+      ],
+      "sourceContextBasis": "Read-only production source context and curated venue resolver snapshots on2026-10-12. Accounts absent from the registry use the unknown role."
+    },
+    {
+      "id": "museum-sessions",
+      "title": "Museum sessions",
+      "groundTruthBasis": "Manual review of the original caption and every retained source cover, completed before Luna extraction. Video thumbnails support only visible still text; no video content is inferred.",
+      "context": {
+        "canonicalVenueName": "Muzej Jugoslavije",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Muzej Jugoslavije"
+      },
+      "post": {
+        "caption": "Povodom Dana evropske baštine, koji se ove godine održavaju od 1. do 12. oktobra, pozivamo vas da nam se 11. oktobra pridružite na bogatom programu u sklopu izložbe \"Sloboda je za nas san\". \n\nPolazeći od teme ovogodišnjih Dana evropske baštine, \"Čuvari nasleđa: kako ga oživeti, sačuvati i preoblikovati\", program u okviru izložbe \"Sloboda je za nas san\" usmeren je na pitanje kako se lično i kolektivno sećanje može sačuvati i oživeti kroz savremene umetničke prakse. \n\nNa ovaj način, muzejski predmeti i dokumenta dobijaju svoj umetnički produžetak: tekst im daje glas, dok izvođenje otvara prostor za neposrednije, lično i emotivno iskustvo nasleđa. Arhivska svedočanstva o stradanju, otporu, solidarnosti i očuvanju identiteta putem umetnosti postaju živi sadržaj koji se iznova doživljava, tumači i prenosi novim generacijama.\n\n💬 Kako je savremena umetnička praksa (pre)oblikovala samu izložbu \"Sloboda je za nas san\" govorićemo na autorskom vođenju u 13 časova.\n\n📖 U 17 časova održaće se predstavljanje treće, izvedbene sveske izložbe, koja čini tekstualnu okosnicu zvučne intervencije i performansa \"U potpisu, nezaboravljeni\". \n\nSveska je nastala na osnovu autentičnih zapisa, prepiske i svedočenja jugoslovenskih logorašica i logoraša iz Drugog svetskog rata. Razgovoraćemo sa autorima sveske, rediteljem Bojanom Đorđevim i scenaristom Arsenijem Štimcem.\n\n🎭 Za kraj, u 18 časova biće izveden performans \"U potpisu, nezaboravljeni\". Kako su u logorima upravo usmene i izvođačke prakse bile način očuvanja identiteta i zajedništva zatočenih, performansom se tekstovi iz arhiva prevode u čin izvođenja, u kojem izgovorena reč postaje prisustvo. \n\nUlaz na sve programe je slobodan! \n\n🔗 S obzirom na ograničene kapacitete izložbenog prostora, za performans je potrebno da rezervišete mesto putem linka na storiju ili sajtu Muzeja.",
+        "altText": "Photo by Muzej Jugoslavije on October 01, 2026.",
+        "locationName": null,
+        "username": "muzej_jugoslavije",
+        "handle": "muzej_jugoslavije",
+        "postId": "3998382963125029064",
+        "instagramPostUrl": "https://www.instagram.com/p/Dd9HB7hCojI/",
+        "postedAt": "2026-10-01T14:20:14.000Z",
+        "imageUrl": null,
+        "imageUrls": [],
+        "postType": "sidecar",
+        "imageSlideCount": 4
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "Three separately advertised cultural sessions stayseparate",
+          "value": 3,
+          "allApproved": true
+        },
+        {
+          "type": "all_venues_match",
+          "label": "Sessions belong to Muzej Jugoslavije",
+          "venueContains": "muzej jugoslavije"
+        },
+        {
+          "type": "has_row",
+          "label": "11 October 13:00 preserves its programtitle",
+          "match": {
+            "date": "2026-10-11",
+            "time": "13:00",
+            "titleContains": "Sloboda je za nas san"
+          }
+        },
+        {
+          "type": "row_slide_binding",
+          "label": "13:00 is bound to its own dated slide",
+          "match": {
+            "date": "2026-10-11",
+            "time": "13:00"
+          },
+          "slideIndex": 1
+        },
+        {
+          "type": "has_row",
+          "label": "11 October 17:00 preserves its programtitle",
+          "match": {
+            "date": "2026-10-11",
+            "time": "17:00",
+            "titleContains": "sves"
+          }
+        },
+        {
+          "type": "row_slide_binding",
+          "label": "17:00 is bound to its own dated slide",
+          "match": {
+            "date": "2026-10-11",
+            "time": "17:00"
+          },
+          "slideIndex": 2
+        },
+        {
+          "type": "has_row",
+          "label": "11 October 18:00 preserves its programtitle",
+          "match": {
+            "date": "2026-10-11",
+            "time": "18:00",
+            "titleContains": "potpis"
+          }
+        },
+        {
+          "type": "row_slide_binding",
+          "label": "18:00 is bound to its own dated slide",
+          "match": {
+            "date": "2026-10-11",
+            "time": "18:00"
+          },
+          "slideIndex": 3
+        },
+        {
+          "type": "unique_occurrences",
+          "label": "No identical date, time, place and title occurrence is duplicated"
+        },
+        {
+          "type": "coverage_complete",
+          "label": "Every image slide is covered by an attested input",
+          "value": true
+        },
+        {
+          "type": "input_image_count",
+          "label": "Every retained still cover is examined in one joint call",
+          "value": 4
+        }
+      ],
+      "independentEvidence": [
+        "Slide0 says DANI EVROPSKE BAŠTINE U MUZEJU JUGOSLAVIJE. Each following poster says NEDELJA11.OKTOBAR2026.",
+        "Slide1:13:00 AUTORSKO VOĐENJE “SLOBODA JE ZA NAS SAN”. Slide2:17:00 PROMOCIJA IZVEDBENE SVESKE I RAZGOVOR SA AUTORIMA. Slide3:18:00 PERFORMANS “U POTPISU,NEZABORAVLJENI”. The caption confirms all three sessions and free admission."
+      ],
+      "sourceContextBasis": "Read-only production source context and curated venue resolver snapshots on2026-10-12. Accounts absent from the registry use the unknown role."
+    },
+    {
+      "id": "react-recap",
+      "title": "React recap",
+      "groundTruthBasis": "Manual review of the original caption and every retained source cover, completed before Luna extraction. Video thumbnails support only visible still text; no video content is inferred.",
+      "context": {
+        "canonicalVenueName": "Music Reactions",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Music Reactions"
+      },
+      "post": {
+        "caption": "ØTTA - REACT FESTIVAL 2026! \n\nOne week ago, ØTTA closed REACT Festival on the BCCO stage with her unmistakable sound. So good having you with us and ending the festival on such a high note. Already missing those moments! ✨🖤\n\n🎥 @choodica / @veljkofilms",
+        "altText": "Photo by Music Reactions on October 10, 2026.",
+        "locationName": "Luka Beograd - Port of Belgrade",
+        "username": "musicreactions",
+        "handle": "musicreactions",
+        "postId": "4004820760127866413",
+        "instagramPostUrl": "https://www.instagram.com/p/DeT-0NMiAYt/",
+        "postedAt": "2026-10-10T11:30:59.000Z",
+        "imageUrl": null,
+        "imageUrls": [],
+        "postType": "sidecar",
+        "imageSlideCount": 4
+      },
+      "checks": [
+        {
+          "type": "non_event",
+          "label": "Recap or ongoing availability creates no independently dated event"
+        },
+        {
+          "type": "no_approved",
+          "label": "No artifact photo, video or end date becomes an approved occurrence"
+        },
+        {
+          "type": "unique_occurrences",
+          "label": "No identical date, time, place and title occurrence is duplicated"
+        },
+        {
+          "type": "coverage_complete",
+          "label": "Still covers cannot certify unviewed video interiors",
+          "value": false
+        },
+        {
+          "type": "input_image_count",
+          "label": "Every retained still cover is examined in one joint call",
+          "value": 4
+        }
+      ],
+      "independentEvidence": [
+        "The caption explicitly says “One week ago, ØTTA closed REACT Festival” and “Already missing those moments”. All four video covers show performance recaps with no dated future program."
+      ],
+      "sourceContextBasis": "Read-only production source context and curated venue resolver snapshots on2026-10-12. Accounts absent from the registry use the unknown role."
+    },
+    {
+      "id": "sila-one-concert",
+      "title": "Sila one concert",
+      "groundTruthBasis": "Manual review of the original caption and every retained source cover, completed before Luna extraction. Video thumbnails support only visible still text; no video content is inferred.",
+      "context": {
+        "canonicalVenueName": null,
+        "instagramSourceRole": "unknown",
+        "instagramSourceName": "sila"
+      },
+      "post": {
+        "caption": "SAVE THE DATE 🖤\n\nOctober 23, Klub Fest, 19:00\n\nThree bands with absolutely insane energy:\n- VILIS\n- sila\n- Jutro Bez Tebe\n\n🎟️ Tickets: 700 RSD via the link in bio\nAt the door: 1,000 RSD\n\nDon’t miss it! 🔥",
+        "altText": "Photo by sila on October 05, 2026.",
+        "locationName": "Belgrade, Serbia",
+        "username": "her_name_is_sila",
+        "handle": "her_name_is_sila",
+        "postId": "4001259409040271381",
+        "instagramPostUrl": "https://www.instagram.com/p/DeHVDuiCOgV/",
+        "postedAt": "2026-10-05T13:35:13.000Z",
+        "imageUrl": null,
+        "imageUrls": [],
+        "postType": "sidecar",
+        "imageSlideCount": 4
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "Three bands and three video teasers produce only one concert",
+          "value": 1,
+          "allApproved": true
+        },
+        {
+          "type": "has_row",
+          "label": "Concert keepsOctober 23 start 19:00 and physical Klub Fest",
+          "match": {
+            "date": "2026-10-23",
+            "time": "19:00",
+            "venueContains": "fest"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "vilis remains in the shared concert lineup",
+          "match": {
+            "date": "2026-10-23",
+            "artistContains": "vilis"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "sila remains in the shared concert lineup",
+          "match": {
+            "date": "2026-10-23",
+            "artistContains": "sila"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "jutro bez tebe remains in the shared concert lineup",
+          "match": {
+            "date": "2026-10-23",
+            "artistContains": "jutro bez tebe"
+          }
+        },
+        {
+          "type": "unique_occurrences",
+          "label": "No identical date, time, place and title occurrence is duplicated"
+        },
+        {
+          "type": "coverage_complete",
+          "label": "Still covers cannot certify unviewed video interiors",
+          "value": false
+        },
+        {
+          "type": "input_image_count",
+          "label": "Every retained still cover is examined in one joint call",
+          "value": 4
+        }
+      ],
+      "independentEvidence": [
+        "Slide0 says23OCTOBER19:00, VILIS/SILA/JUTRO BEZ TEBE, KLUB FEST, Gradski park2, Zemun. The caption confirms one concert with700RSD presale and1000RSD door tickets. The remaining three slides are undated band video covers."
+      ],
+      "sourceContextBasis": "Read-only production source context and curated venue resolver snapshots on2026-10-12. Accounts absent from the registry use the unknown role."
+    },
+    {
+      "id": "sprat-weekly",
+      "title": "Sprat weekly",
+      "groundTruthBasis": "Manual review of the original caption and every retained source cover, completed before Luna extraction. Video thumbnails support only visible still text; no video content is inferred.",
+      "context": {
+        "canonicalVenueName": "Sprat",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Sprat"
+      },
+      "post": {
+        "caption": "A lot is happening this week!",
+        "altText": "Photo by Sprat on October 06, 2026.",
+        "locationName": "Sprat",
+        "username": "spratbar",
+        "handle": "spratbar",
+        "postId": "4001848712241922348",
+        "instagramPostUrl": "https://www.instagram.com/p/DeJbDN6CMEs/",
+        "postedAt": "2026-10-06T09:06:03.000Z",
+        "imageUrl": null,
+        "imageUrls": [],
+        "postType": "sidecar",
+        "imageSlideCount": 2
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "Seven dated programs preserve Sprat and Zaokret scopes",
+          "value": 7,
+          "allApproved": true
+        },
+        {
+          "type": "has_row",
+          "label": "SpratOctober 7 festivalstart 19:00",
+          "match": {
+            "date": "2026-10-07",
+            "time": "19:00",
+            "venueContains": "sprat"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "SpratOctober 8 concertstart 19:00",
+          "match": {
+            "date": "2026-10-08",
+            "time": "19:00",
+            "venueContains": "sprat"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "SpratOctober 9 festivalstart 19:00",
+          "match": {
+            "date": "2026-10-09",
+            "time": "19:00",
+            "venueContains": "sprat"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "SpratOctober 10 MačjeOkostart 20:00",
+          "match": {
+            "date": "2026-10-10",
+            "time": "20:00",
+            "venueContains": "sprat"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "ZaokretOctober 8 BiangBiangstart 20:00",
+          "match": {
+            "date": "2026-10-08",
+            "time": "20:00",
+            "venueContains": "zaokret"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "ZaokretOctober 9 DIDIstart 19:00",
+          "match": {
+            "date": "2026-10-09",
+            "time": "19:00",
+            "venueContains": "zaokret"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "ZaokretOctober 10 VibesForGrujastart 19:00",
+          "match": {
+            "date": "2026-10-10",
+            "time": "19:00",
+            "venueContains": "zaokret"
+          }
+        },
+        {
+          "type": "unique_occurrences",
+          "label": "No identical date, time, place and title occurrence is duplicated"
+        },
+        {
+          "type": "coverage_complete",
+          "label": "Still covers cannot certify unviewed video interiors",
+          "value": false
+        },
+        {
+          "type": "input_image_count",
+          "label": "Every retained still cover is examined in one joint call",
+          "value": 2
+        }
+      ],
+      "independentEvidence": [
+        "The first video thumbnail has distinct SPRAT and ZAOKRET headings. SPRAT lists7October19h/8October19h/9October19h/10October20h. ZAOKRET lists8October20h/9October19h/10October19h. The second slide is an undated audience photo, which creates no separate event."
+      ],
+      "sourceContextBasis": "Read-only production source context and curated venue resolver snapshots on2026-10-12. Accounts absent from the registry use the unknown role."
+    },
+    {
+      "id": "ventil-film-program",
+      "title": "Ventil film program",
+      "groundTruthBasis": "Manual review of the original caption and every retained source cover, completed before Luna extraction. Video thumbnails support only visible still text; no video content is inferred.",
+      "context": {
+        "canonicalVenueName": "Bife Ventil",
+        "instagramSourceRole": "venue",
+        "instagramSourceName": "Bife Ventil"
+      },
+      "post": {
+        "caption": "Vraćamo se filmovima. Svakog ponedeljka igrani i svakog utorka animirani od 18.30h\nU oktobru:\n\n05.10. Suspiria (1977) Dario Argento\n06.10. Over the Garden Wall (2014) Patrick McHale\n\n12.10. Cure (1997) Kiyoshi Kurosawa\n13.10. Howl's Moving Castle (2004) Hayao Miyazaki\n\n19.10. Sleepy Hollow (1999) Tim Burton\n20.10. Coraline (2009) Henry Selick\n\n26.10. Scary Movie (2000) Keenen Ivory Wayans\n27.10. The Nightmare Before Christmas (1993) Henry Selick",
+        "altText": "Photo by Bife Ventil on October 04, 2026.",
+        "locationName": null,
+        "username": "bife_ventil",
+        "handle": "bife_ventil",
+        "postId": "4000712271495480410",
+        "instagramPostUrl": "https://www.instagram.com/p/DeFYp0_CMRa/",
+        "postedAt": "2026-10-04T19:28:09.000Z",
+        "imageUrl": null,
+        "imageUrls": [],
+        "postType": "sidecar",
+        "imageSlideCount": 5
+      },
+      "checks": [
+        {
+          "type": "event_count",
+          "label": "Eight concrete screenings are not split again by film photos",
+          "value": 8,
+          "allApproved": true
+        },
+        {
+          "type": "all_venues_match",
+          "label": "All films use Bife Ventil",
+          "venueContains": "ventil"
+        },
+        {
+          "type": "has_row",
+          "label": "suspiria stays on its exact caption date at 18:30",
+          "match": {
+            "date": "2026-10-05",
+            "time": "18:30",
+            "titleContains": "suspiria"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "over the garden wall stays on its exact caption date at 18:30",
+          "match": {
+            "date": "2026-10-06",
+            "time": "18:30",
+            "titleContains": "over the garden wall"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "cure stays on its exact caption date at 18:30",
+          "match": {
+            "date": "2026-10-12",
+            "time": "18:30",
+            "titleContains": "cure"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "moving castle stays on its exact caption date at 18:30",
+          "match": {
+            "date": "2026-10-13",
+            "time": "18:30",
+            "titleContains": "moving castle"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "sleepy hollow stays on its exact caption date at 18:30",
+          "match": {
+            "date": "2026-10-19",
+            "time": "18:30",
+            "titleContains": "sleepy hollow"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "coraline stays on its exact caption date at 18:30",
+          "match": {
+            "date": "2026-10-20",
+            "time": "18:30",
+            "titleContains": "coraline"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "scary movie stays on its exact caption date at 18:30",
+          "match": {
+            "date": "2026-10-26",
+            "time": "18:30",
+            "titleContains": "scary movie"
+          }
+        },
+        {
+          "type": "has_row",
+          "label": "nightmare before christmas stays on its exact caption date at 18:30",
+          "match": {
+            "date": "2026-10-27",
+            "time": "18:30",
+            "titleContains": "nightmare before christmas"
+          }
+        },
+        {
+          "type": "no_artist",
+          "label": "Film directors are not billed as live performers",
+          "names": [
+            "Dario Argento",
+            "Patrick McHale",
+            "Kiyoshi Kurosawa",
+            "Hayao Miyazaki",
+            "Tim Burton",
+            "Henry Selick"
+          ]
+        },
+        {
+          "type": "unique_occurrences",
+          "label": "No identical date, time, place and title occurrence is duplicated"
+        },
+        {
+          "type": "coverage_complete",
+          "label": "Every image slide is covered by an attested input",
+          "value": true
+        },
+        {
+          "type": "input_image_count",
+          "label": "Every retained still cover is examined in one joint call",
+          "value": 5
+        }
+      ],
+      "independentEvidence": [
+        "The caption states screenings every Monday and Tuesday at18.30h in October, followed by eight exact date and film rows. Subsequent images show those film titles and stills, without advertising extra screenings."
+      ],
+      "sourceContextBasis": "Read-only production source context and curated venue resolver snapshots on2026-10-12. Accounts absent from the registry use the unknown role."
+    }
+  ]
+}

@@ -15,6 +15,7 @@ import {
 import { isCrossPostCampaignAttestationEvent } from "../../../lib/events/cross-post-campaign-aggregate-attestation";
 import { sourceOccurrenceRepresentativeMatchesExpected } from "../../../lib/events/source-occurrence-representation";
 import { normalizeHandle } from "../../../lib/pipeline/venue-normalization";
+import { hasCarouselAnalysisMarker, hasPersistedCarouselEventMediaProof } from "../carouselMediaProof";
 import { loadVerifiedCampaignLineageForSourceEvent } from "../campaignLineageReattestationProof";
 import { loadVerifiedLegacySourceOccurrenceAdmission } from "../legacySourceOccurrenceAdmissionProof";
 import {
@@ -100,6 +101,9 @@ async function hasCurrentSourceExtractionBinding(
         : {};
   } catch {
     return false;
+  }
+  if (hasCarouselAnalysisMarker(sourceDocument, event)) {
+    return hasPersistedCarouselEventMediaProof(ctx, sourceDocument, event);
   }
   if (normalizedFields.extractionMode !== "poster") return true;
   if (

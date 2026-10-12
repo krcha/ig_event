@@ -7,7 +7,8 @@ const DEFAULT_DAYS_BACK = 10;
 const DEFAULT_APIFY_HISTORY_RUNS_LIMIT = 100;
 const MAX_APIFY_HISTORY_RUNS_LIMIT = 200;
 const DEFAULT_SKIP_PINNED_POSTS = false;
-const DEFAULT_APIFY_DATA_DETAIL_LEVEL = "basicData";
+// The basic package omits childPosts, so it cannot provide carousel siblings.
+const DEFAULT_APIFY_DATA_DETAIL_LEVEL = "detailedData";
 const DEFAULT_APIFY_RUN_TIMEOUT_SECONDS = 120;
 const MIN_APIFY_RUN_TIMEOUT_SECONDS = 30;
 const MAX_APIFY_RUN_TIMEOUT_SECONDS = 300;
@@ -55,6 +56,7 @@ export type InstagramScrapedPost = {
 export type InstagramImageSlide = {
   index: number;
   imageUrls: string[];
+  mediaType?: "image" | "video" | "unknown";
 };
 
 export const MAX_RETAINED_INSTAGRAM_IMAGE_SLIDES = 20;
@@ -114,6 +116,9 @@ type LoadRecentApifyRunPostsOptions = {
 type ApifyInstagramImage =
   | string
   | {
+      type?: string;
+      isVideo?: boolean;
+      is_video?: boolean;
       url?: string;
       displayUrl?: string;
       display_url?: string;
@@ -250,7 +255,7 @@ function normalizeDaysBack(value: number | undefined): number {
 function normalizeApifyDataDetailLevel(
   value: string | undefined,
 ): ApifyDataDetailLevel {
-  return value === "detailedData" ? "detailedData" : DEFAULT_APIFY_DATA_DETAIL_LEVEL;
+  return value === "basicData" || value === "detailedData" ? value : DEFAULT_APIFY_DATA_DETAIL_LEVEL;
 }
 
 function normalizeApifySkipPinnedPosts(value: string | undefined): boolean {
@@ -603,6 +608,9 @@ function collectImageSlideManifest(item: ApifyInstagramItem): {
     imageSlides: slides.slice(0, MAX_RETAINED_INSTAGRAM_IMAGE_SLIDES).map((slide, index) => ({
       index,
       imageUrls: collectSlideImageUrls(slide).filter((url) => url.length <= 2_048),
+      ...(typeof slide === "object" ? { mediaType:
+        slide.isVideo === true || slide.is_video === true || /video|reel/iu.test(slide.type ?? "")
+          ? "video" as const : /image|photo/iu.test(slide.type ?? "") ? "image" as const : "unknown" as const } : {}),
     })),
     imageSlideCount: slides.length,
   };

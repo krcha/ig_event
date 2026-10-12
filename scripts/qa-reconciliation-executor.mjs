@@ -961,6 +961,54 @@ assert.equal(
   "New canonical events must retain the source account used by teaser safety.",
 );
 
+// Future source inputs are separately retained. The actual generic create and
+// update writers must select the occurrence's detail slide instead of the
+// source-wide legacy cover, while preserving unrelated approved events.
+const carouselSourceDocument = {
+  ...sourceDocument,
+  analysisCarouselImages: [0, 1].map((slideIndex) => ({
+    slideIndex, sourceUrl: `https://images.apifyusercontent.com/carousel-${slideIndex}.jpg`,
+    checksumSha256: "a".repeat(64), assetId: `carousel-asset-${slideIndex}`,
+    storageId: `carousel-storage-${slideIndex}`, url: `https://images.example.test/carousel-${slideIndex}.jpg`,
+  })),
+};
+const carouselOccurrence = {
+  ...sourceOccurrence,
+  normalizedOccurrenceJson: JSON.stringify({
+    ...JSON.parse(sourceOccurrence.normalizedOccurrenceJson),
+    extractionCarouselContractVersion: "carousel_evidence_v1",
+    carouselDisplaySlideIndex: 1, carouselSourceSlideIndexes: [1], carouselSourceRowIndexes: [0],
+  }),
+};
+const protectedCarouselNeighbor = { ...candidate, _id: "event-carousel-neighbor", date: "2026-09-01", status: "approved" };
+const carouselCreateDb = makeDb({
+  eventDomainMigrationState: completedMigrationState, events: [protectedCarouselNeighbor],
+  instagramSourceOccurrenceReceipts: [receipt], scrapedPosts: [carouselSourceDocument],
+  sourceOccurrences: [carouselOccurrence], venues: [venue],
+});
+const protectedCarouselBefore = structuredClone(carouselCreateDb.tables.events.get(protectedCarouselNeighbor._id));
+const carouselCreate = await executeSourceOccurrence._handler({ db: carouselCreateDb }, {
+  expectedSourceOccurrenceUpdatedAt: 10, expectedSourceRevision: 3, mode: "apply",
+  processingOwner: "worker-1", sourceOccurrenceId: "occurrence-1",
+});
+assert.equal(carouselCreate.plan.action, "create");
+assert.equal(carouselCreateDb.tables.events.get(carouselCreate.canonicalEventId).imageStorageId, "carousel-storage-1");
+assert.equal(carouselCreateDb.tables.events.get(carouselCreate.canonicalEventId).imageUrl, "https://images.example.test/carousel-1.jpg");
+assert.deepEqual(carouselCreateDb.tables.events.get(protectedCarouselNeighbor._id), protectedCarouselBefore);
+const carouselUpdateDb = makeDb({
+  eventDomainMigrationState: completedMigrationState, events: [candidate, protectedCarouselNeighbor],
+  instagramSourceOccurrenceReceipts: [receipt], scrapedPosts: [carouselSourceDocument],
+  sourceOccurrences: [carouselOccurrence], venues: [venue],
+});
+const carouselUpdate = await executeSourceOccurrence._handler({ db: carouselUpdateDb }, {
+  expectedSourceOccurrenceUpdatedAt: 10, expectedSourceRevision: 3, intent: "moderate", mode: "apply",
+  processingOwner: "worker-1", sourceOccurrenceId: "occurrence-1",
+});
+assert.equal(carouselUpdate.plan.action, "update");
+assert.equal(carouselUpdateDb.tables.events.get("event-1").imageStorageId, "carousel-storage-1");
+assert.equal(carouselUpdateDb.tables.events.get("event-1").imageUrl, "https://images.example.test/carousel-1.jpg");
+assert.deepEqual(carouselUpdateDb.tables.events.get(protectedCarouselNeighbor._id), protectedCarouselBefore);
+
 const teaserSignatureFields = toOccurrenceCandidateIndexFields(
   buildOccurrenceSignature({
     artists: [],

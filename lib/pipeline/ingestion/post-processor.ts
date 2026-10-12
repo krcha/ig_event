@@ -1,5 +1,7 @@
 import { type ExtractedEventData, isOpenAiDefinitiveOutputError, isOpenAiPermanentError, isOpenAiProviderBlockedError, OpenAiProviderBlockedError, parseExtractedEventData } from "@/lib/ai/extract-event-data";
-import { EVENT_EXTRACTION_ANALYSIS_PROTOCOL } from "@/lib/ai/openai-analysis-protocol";
+import { CAROUSEL_EVENT_EXTRACTION_ANALYSIS_PROTOCOL, EVENT_EXTRACTION_ANALYSIS_PROTOCOL } from "@/lib/ai/openai-analysis-protocol";
+import { carouselMediaBindingSchema } from "@/lib/ai/carousel-media-contract";
+import { hasExplicitInstagramCarousel, prepareInstagramCarouselInputs, type RetainedCarouselImage } from "@/lib/pipeline/instagram-carousel-input";
 import { downloadImage, toDataUrl } from "@/lib/ai/prepare-image-for-openai";
 import { getNonExpiringPublicEventImageUrl } from "@/lib/images/public-event-image";
 import { deduplicateMediaUrls, getBudgetDayKey, getOpenAiDailyPostLimit, getOpenAiMaxImagesPerPost } from "@/lib/pipeline/instagram-ingestion-durability";
@@ -10,7 +12,7 @@ import { createHash } from "node:crypto";
 import type { ExistingSourceMatch, IngestionStep, PrepareEventResult, ProcessIngestionPostDependencies, ProcessIngestionPostOptions, SourceProcessingFence } from "@/lib/pipeline/ingestion/contracts";
 import { getInstagramSourceOccurrenceReceiptQuery, markScrapedPostOpenAiAnalysisAttemptStartedMutation, recordScrapedPostOpenAiAnalysisMutation, recordScrapedPostOpenAiDefinitiveOutputFailureMutation, releaseScrapedPostOpenAiAnalysisAttemptMutation } from "@/lib/pipeline/ingestion/convex-bindings";
 import { getPreExtractionSourceDuplicateSkipDecision, hasIncompleteSourceOccurrenceSet, recordSourceDuplicateSkip, shouldReprocessExistingSourcePosts } from "@/lib/pipeline/ingestion/existing-source-policy";
-import { existingEventRequiresExactPosterMediaBinding, getPostContext, isExistingEventEligibleForDurableMediaRetry, isPermanentRemoteMediaFailure, persistInstagramMediaCandidates, resolveFailedMediaAttemptPolicy } from "@/lib/pipeline/ingestion/media-durability";
+import { existingEventRequiresExactPosterMediaBinding, getPostContext, isExistingEventEligibleForDurableMediaRetry, isPermanentRemoteMediaFailure, persistInstagramMediaCandidates, resolveFailedMediaAttemptPolicy, retainInstagramCarouselImage } from "@/lib/pipeline/ingestion/media-durability";
 import { listExistingEventsBySourceIdentity } from "@/lib/pipeline/ingestion/occurrence-matching";
 import { buildPostTextEvidence, extractPostAltTextEvidence } from "@/lib/pipeline/ingestion/parsing-event-text";
 import { DEFAULT_PROCESS_INGESTION_POST_DEPENDENCIES, resolveInstagramSourceExtractionContext } from "@/lib/pipeline/ingestion/post-processing-policy";
@@ -23,6 +25,7 @@ import type { StructuredFactExtractionResult } from "@/lib/pipeline/ingestion/st
 import { normalizeString } from "@/lib/pipeline/ingestion/values";
 import {
   buildInstagramImageCoverage,
+  buildInstagramCarouselImageCoverage,
   hasKnownUnanalyzedInstagramSlides,
   parseCachedInstagramImageCoveragePartial,
 } from "@/lib/pipeline/instagram-image-coverage";
@@ -143,6 +146,7 @@ export async function processIngestionPost(
       : null;
   let imageDataUrl: string | null = null;
   const imageDataUrls: string[] = [];
+  let carouselImages: RetainedCarouselImage[] = [];
   const durableRecoveryMediaCandidates =
     cachedExtractionMode === "poster" && selectedImageUrl
       ? deduplicateMediaUrls([selectedImageUrl, ...durableMediaCandidates], 16)
@@ -307,7 +311,29 @@ export async function processIngestionPost(
     return;
   }
 
-  if (cachedExtractionMode === "poster") {
+  if (!cachedAnalysisJson && hasExplicitInstagramCarousel(post)) {
+    const inputs = await prepareInstagramCarouselInputs({ post, dependencies,
+      retain: (image) => retainInstagramCarouselImage({ client, post, processingFence, serviceSecret, image }) });
+    carouselImages = inputs.images;
+    summary.persistedImages += carouselImages.length;
+    imageDataUrls.push(...inputs.imageDataUrls);
+    for (const failed of inputs.failedSlides) {
+      logError("ingestion.carousel.slide_unavailable", { ...postContext,
+        slideIndex: failed.slideIndex, errors: failed.errors.map(getErrorMessage) });
+    }
+    if (carouselImages.length === 0) {
+      // A missing carousel is retryable; a caption fallback cannot certify its unread posters.
+      summary.failedDownloads += 1;
+      summary.failed_downloads += 1;
+      summary.errors.push("No declared carousel slide could be decoded and independently retained.");
+      options.onSourceCoveragePartial?.();
+      return;
+    }
+    extractionMode = "poster";
+    selectedImageUrl = carouselImages[0].sourceUrl;
+    selectedImageChecksumSha256 = carouselImages[0].checksumSha256;
+    imageDataUrl = imageDataUrls[0];
+  } else if (cachedExtractionMode === "poster") {
     const currentImageUrls = deduplicateMediaUrls(
       [...(post.imageUrls ?? []), post.imageUrl],
       16,
@@ -487,7 +513,23 @@ export async function processIngestionPost(
     // would produce semantically identical but byte-different evidence and
     // make the Convex approval boundary reject an otherwise exact retry.
     persistedAnalysisResultJson = cachedAnalysisJson;
+    const cachedCarousel = carouselMediaBindingSchema.safeParse(extracted._carouselMedia);
+    if (cachedCarousel.success && !requireCachedCanonicalApprovedDuplicate) {
+      try {
+        for (const image of cachedCarousel.data.images) {
+          carouselImages.push(await retainInstagramCarouselImage({ client, post,
+            processingFence, serviceSecret, image }));
+          summary.persistedImages += 1;
+        }
+      } catch (error) {
+        summary.failedImagePersistence += 1;
+        summary.errors.push(`Cached carousel retention failed: ${getErrorMessage(error)}`);
+        return;
+      }
+    }
   } else {
+    const analysisProtocol = carouselImages.length > 0
+      ? CAROUSEL_EVENT_EXTRACTION_ANALYSIS_PROTOCOL : EVENT_EXTRACTION_ANALYSIS_PROTOCOL;
     let providerLeaseHeld = false;
     let providerBlockPersisted = false;
     let analysisAttemptRecorded = false;
@@ -524,7 +566,14 @@ export async function processIngestionPost(
       instagramSourceRole: sourceRole,
       instagramSourceName,
       extractionMode,
-      imageCoverage: buildInstagramImageCoverage(post, selectedImageUrl ? [selectedImageUrl] : []),
+      imageCoverage: carouselImages.length > 0
+        ? buildInstagramCarouselImageCoverage(post, carouselImages)
+        : buildInstagramImageCoverage(post, selectedImageUrl ? [selectedImageUrl] : []),
+      ...(carouselImages.length > 0 ? {
+        carouselImages: carouselImages.map(({ slideIndex, sourceUrl, checksumSha256 }) =>
+          ({ slideIndex, sourceUrl, checksumSha256 })),
+        carouselKnownSlideCount: Math.max(post.imageSlideCount ?? 0, post.imageSlides?.length ?? 0),
+      } : {}),
       ...(providerExecution
         ? {
             beforeTransport: async () => {
@@ -538,7 +587,7 @@ export async function processIngestionPost(
                     instagramPostUrl: processingFence.instagramPostUrl,
                     owner: processingFence.owner,
                     sourceRevision: processingFence.sourceRevision,
-                    protocol: EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
+                    protocol: analysisProtocol,
                     budgetDayKey: getBudgetDayKey(),
                     dailyRequestLimit: getOpenAiDailyPostLimit(),
                   },
@@ -583,6 +632,7 @@ export async function processIngestionPost(
             resultJson: persistedAnalysisResultJson,
             imageSourceUrl: selectedImageUrl ?? undefined,
             imageChecksumSha256: selectedImageChecksumSha256 ?? undefined,
+            ...(carouselImages.length > 0 ? { carouselImages } : {}),
             model: extracted._openaiUsage?.model,
             inputTokens: extracted._openaiUsage?.inputTokens,
             outputTokens: extracted._openaiUsage?.outputTokens,
@@ -615,7 +665,7 @@ export async function processIngestionPost(
               instagramPostUrl: processingFence.instagramPostUrl,
               owner: processingFence.owner,
               sourceRevision: processingFence.sourceRevision,
-              attemptProtocol: EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
+              attemptProtocol: analysisProtocol,
               failureKind: error.kind,
               message: error.message,
               model: error.model,
@@ -699,13 +749,14 @@ export async function processIngestionPost(
   }
   }
 
-  let analyzedPosterPersisted = false;
+  let analyzedPosterPersisted = carouselImages.length > 0;
   if (
     !requireCachedCanonicalApprovedDuplicate &&
     providerExecution &&
     extracted.is_event &&
     selectedImageUrl &&
     selectedImageChecksumSha256
+    && carouselImages.length === 0
   ) {
     analyzedPosterPersisted = await persistInstagramMediaCandidates({
       client,
@@ -728,24 +779,24 @@ export async function processIngestionPost(
   let preparedResults: PrepareEventResult[];
   let structuredFacts: StructuredFactExtractionResult[];
   try {
+    const plannedFacts =
+      produceStructuredFactsForInsert(
+        post, extracted, selectedImageUrl, canonicalVenueNamesByHandle,
+        venueNameOverridesByHandle, configuredVenueNamesByHandle,
+        { sourceRolesByHandle, eventDateFilterNow, canonicalVenueAliasesByHandle,
+          canonicalVenueLocationsByHandle, venueResolverSnapshot,
+          rawExtractionJson: persistedAnalysisResultJson });
+    for (const fact of plannedFacts) {
+      if (fact.kind !== "event" || carouselImages.length === 0) continue;
+      const displayIndex = fact.normalizedFields.carouselDisplaySlideIndex;
+      const image = carouselImages.find((candidate) => candidate.slideIndex === displayIndex);
+      if (!image) throw new Error("Carousel occurrence has no independently retained display slide.");
+      fact.presentation.imageUrl = image.url;
+      fact.presentation.imageStorageId = image.storageId;
+    }
     structuredFacts = bindStructuredFactOccurrenceMetadata(
       post,
-      produceStructuredFactsForInsert(
-        post,
-        extracted,
-        selectedImageUrl,
-        canonicalVenueNamesByHandle,
-        venueNameOverridesByHandle,
-        configuredVenueNamesByHandle,
-        {
-          sourceRolesByHandle,
-          eventDateFilterNow,
-          canonicalVenueAliasesByHandle,
-          canonicalVenueLocationsByHandle,
-          venueResolverSnapshot,
-          rawExtractionJson: persistedAnalysisResultJson,
-        },
-      ),
+      plannedFacts,
     );
     preparedResults = prepareStructuredFactsForPersistence(structuredFacts);
   } catch (error) {

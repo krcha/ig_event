@@ -270,6 +270,7 @@ export function normalizeScrapedPost(post: InstagramScrapedPost): InstagramScrap
     imageUrls: normalizedImageUrls,
     ...(post.imageSlides
       ? { imageSlides: post.imageSlides.map((slide) => ({
+          ...(slide.mediaType === undefined ? {} : { mediaType: slide.mediaType }),
           index: slide.index,
           imageUrls: [...new Set(slide.imageUrls.map((url) => normalizeString(url)).filter(Boolean))],
         })) }

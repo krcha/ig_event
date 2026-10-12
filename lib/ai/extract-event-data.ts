@@ -2,9 +2,17 @@ import { z } from "zod";
 import { getOpenAiModelEnv, getRequiredEnv } from "@/lib/utils/env";
 import {
   buildEventExtractionUserPrompt,
+  CAROUSEL_EVENT_EXTRACTION_SYSTEM_PROMPT,
   EVENT_EXTRACTION_SYSTEM_PROMPT,
 } from "./event-extraction-prompt";
 import type { OpenAiDefinitiveOutputFailureKind } from "./openai-analysis-protocol";
+import {
+  CAROUSEL_EXTRACTION_CONTRACT_VERSION,
+  carouselMediaBindingSchema,
+  MAX_CAROUSEL_EXTRACTION_IMAGES,
+  parseCarouselMediaBinding,
+  type CarouselImageBinding,
+} from "./carousel-media-contract";
 
 // GPT-5 mini structured vision responses can legitimately take longer than
 // 40 seconds on production poster inputs. Keep this comfortably inside the
@@ -156,6 +164,7 @@ const extractionDateEvidenceSchema = z.object({
   source: extractionEvidenceSourceSchema,
   is_relative: z.boolean(),
   resolved_date: z.string(),
+  slide_index: z.number().int().min(0).max(19).nullable().optional(),
 });
 
 const extractionTimeEvidenceSchema = z.object({
@@ -167,6 +176,7 @@ const extractionTimeEvidenceSchema = z.object({
   ]),
   exact_text: z.string(),
   source: extractionEvidenceSourceSchema,
+  slide_index: z.number().int().min(0).max(19).nullable().optional(),
 });
 
 const extractionSourceConflictSchema = z.object({
@@ -181,6 +191,7 @@ const extractionSharedContextSchema = z.object({
   value: z.string(),
   evidence: z.string(),
   source: extractionEvidenceSourceSchema,
+  slide_index: z.number().int().min(0).max(19).nullable().optional(),
 });
 
 const extractedScheduleEntrySchema = z.object({
@@ -193,6 +204,19 @@ const extractedScheduleEntrySchema = z.object({
   source_text: z.string(),
   date_evidence: extractionDateEvidenceSchema,
   time_evidence: extractionTimeEvidenceSchema,
+  source_slide_indexes: z.array(z.number().int().min(0).max(19)).max(20).optional(),
+  poster_evidence: z.array(z.object({
+    slide_index: z.number().int().min(0).max(19),
+    text: z.string().min(1).max(200),
+  })).max(24).optional(),
+  text_evidence: z.array(z.object({
+    source: z.enum(["caption", "alt_text"]),
+    text: z.string().min(1).max(200),
+  })).max(8).optional(),
+  source_conflicts: z.array(extractionSourceConflictSchema).optional(),
+  category: z.string().optional(),
+  price: z.string().optional(),
+  currency: z.string().optional(),
 });
 
 const openAiUsageSchema = z.object({
@@ -208,6 +232,7 @@ const imageCoverageSchema = z.object({
   knownSlideCount: z.number().int().nonnegative(),
   analyzedSlideIndexes: z.array(z.number().int().nonnegative()),
   unanalyzedSlideIndexes: z.array(z.number().int().nonnegative()),
+  videoSlideIndexes: z.array(z.number().int().nonnegative()).optional(),
   complete: z.boolean(),
   manifestKnown: z.boolean(),
 });
@@ -247,6 +272,8 @@ const extractedEventSchema = z
     // Wrapper-owned policy marker. Its absence preserves cached v2 semantics.
     _extractionPolicyVersion: z.literal(EVENT_EXTRACTION_POLICY_VERSION).optional(),
     _imageCoverage: imageCoverageSchema.optional(),
+    _carouselContractVersion: z.literal(CAROUSEL_EXTRACTION_CONTRACT_VERSION).optional(),
+    _carouselMedia: carouselMediaBindingSchema.optional(),
     field_confirmation: z.object({
       title: extractionFieldConfirmationSchema,
       location: extractionFieldConfirmationSchema,
@@ -273,6 +300,66 @@ const extractedEventSchema = z
         message: "An event extraction must leave non_event_reason empty.",
       });
     }
+    if (Boolean(value._carouselContractVersion) !== Boolean(value._carouselMedia)) {
+      context.addIssue({ code: "custom", path: ["_carouselMedia"],
+        message: "Carousel evidence requires the exact caller-owned media binding." });
+    }
+    if (!value._carouselContractVersion || !value._carouselMedia) return;
+    if (value._extractionPolicyVersion !== EVENT_EXTRACTION_POLICY_VERSION) {
+      context.addIssue({ code: "custom", path: ["_extractionPolicyVersion"],
+        message: "Carousel evidence must use the current source-validation policy." });
+    }
+    if (value.is_event !== (value.schedule_entries.length > 0)) {
+      context.addIssue({ code: "custom", path: ["schedule_entries"],
+        message: "Carousel event analyses require occurrence rows; non-events must have none." });
+    }
+    const boundIndexes = new Set(value._carouselMedia.images.map((image) => image.slideIndex));
+    for (const [field, evidence] of [["date_evidence", value.date_evidence],
+      ["time_evidence", value.time_evidence],
+      ["shared_schedule_context.venue", value.shared_schedule_context.venue],
+      ["shared_schedule_context.time", value.shared_schedule_context.time]] as const) {
+      if (evidence.slide_index === undefined || (evidence.source === "poster"
+        ? evidence.slide_index === null || !boundIndexes.has(evidence.slide_index)
+        : evidence.slide_index !== null)) {
+        context.addIssue({ code: "custom", path: [field, "slide_index"],
+          message: "Poster context must identify a submitted slide; other sources use null." });
+      }
+    }
+    if (value.source_conflicts.length > 0) {
+      context.addIssue({ code: "custom", path: ["source_conflicts"],
+        message: "Carousel conflicts must be scoped to the affected occurrence." });
+    }
+    for (const [rowIndex, row] of value.schedule_entries.entries()) {
+      const path = ["schedule_entries", rowIndex];
+      if (!row.source_slide_indexes || !row.poster_evidence || !row.text_evidence || !row.source_conflicts ||
+        row.category === undefined || row.price === undefined || row.currency === undefined) {
+        context.addIssue({ code: "custom", path,
+          message: "Carousel rows require independently scoped fields and evidence." });
+        continue;
+      }
+      const rowIndexes = new Set(row.source_slide_indexes);
+      if (rowIndexes.size !== row.source_slide_indexes.length ||
+        row.source_slide_indexes.some((index) => !boundIndexes.has(index))) {
+        context.addIssue({ code: "custom", path: [...path, "source_slide_indexes"],
+          message: "Every row slide must have been retained and submitted." });
+      }
+      for (const [field, evidence] of [["date_evidence", row.date_evidence],
+        ["time_evidence", row.time_evidence]] as const) {
+        if (evidence.slide_index === undefined ||
+          (evidence.source === "poster"
+            ? evidence.slide_index === null || !rowIndexes.has(evidence.slide_index)
+            : evidence.slide_index !== null)) {
+          context.addIssue({ code: "custom", path: [...path, field, "slide_index"],
+            message: "Poster field evidence must identify its submitted row slide; other sources use null." });
+        }
+      }
+      for (const [evidenceIndex, evidence] of row.poster_evidence.entries()) {
+        if (!rowIndexes.has(evidence.slide_index)) {
+          context.addIssue({ code: "custom", path: [...path, "poster_evidence", evidenceIndex],
+            message: "Poster snippets must belong to this occurrence's submitted slides." });
+        }
+      }
+    }
   });
 
 export type ExtractedEventData = z.infer<typeof extractedEventSchema>;
@@ -284,11 +371,14 @@ export function parseExtractedEventData(value: unknown): ExtractedEventData {
 type ExtractEventDataOptions = {
   imageDataUrl?: string | null;
   imageDataUrls?: string[];
+  carouselImages?: CarouselImageBinding[];
+  carouselKnownSlideCount?: number;
   imageCoverage?: {
     version: 1;
     knownSlideCount: number;
     analyzedSlideIndexes: number[];
     unanalyzedSlideIndexes: number[];
+    videoSlideIndexes?: number[];
     complete: boolean;
     manifestKnown: boolean;
   };
@@ -566,9 +656,76 @@ const extractionJsonSchema = {
   ],
 } as const;
 
+const nullableSlideIndexJsonSchema = {
+  type: ["integer", "null"], minimum: 0, maximum: MAX_CAROUSEL_EXTRACTION_IMAGES - 1,
+} as const;
+const carouselDateEvidenceJsonSchema = {
+  ...extractionDateEvidenceJsonSchema,
+  properties: { ...extractionDateEvidenceJsonSchema.properties, slide_index: nullableSlideIndexJsonSchema },
+  required: [...extractionDateEvidenceJsonSchema.required, "slide_index"],
+} as const;
+const carouselTimeEvidenceJsonSchema = {
+  ...extractionTimeEvidenceJsonSchema,
+  properties: { ...extractionTimeEvidenceJsonSchema.properties, slide_index: nullableSlideIndexJsonSchema },
+  required: [...extractionTimeEvidenceJsonSchema.required, "slide_index"],
+} as const;
+const carouselSharedContextJsonSchema = {
+  ...extractionSharedContextJsonSchema,
+  properties: { ...extractionSharedContextJsonSchema.properties, slide_index: nullableSlideIndexJsonSchema },
+  required: [...extractionSharedContextJsonSchema.required, "slide_index"],
+} as const;
+const carouselExtractionJsonSchema = {
+  ...extractionJsonSchema,
+  properties: {
+    ...extractionJsonSchema.properties,
+    source_conflicts: { ...extractionJsonSchema.properties.source_conflicts, maxItems: 0 },
+    date_evidence: carouselDateEvidenceJsonSchema,
+    time_evidence: carouselTimeEvidenceJsonSchema,
+    shared_schedule_context: {
+      ...extractionJsonSchema.properties.shared_schedule_context,
+      properties: { venue: carouselSharedContextJsonSchema, time: carouselSharedContextJsonSchema },
+    },
+    schedule_entries: {
+      ...extractionJsonSchema.properties.schedule_entries,
+      items: {
+        ...extractionJsonSchema.properties.schedule_entries.items,
+        properties: {
+          ...extractionJsonSchema.properties.schedule_entries.items.properties,
+          date_evidence: carouselDateEvidenceJsonSchema,
+          time_evidence: carouselTimeEvidenceJsonSchema,
+          source_slide_indexes: { type: "array", maxItems: 20,
+            items: { type: "integer", minimum: 0, maximum: 19 } },
+          poster_evidence: { type: "array", maxItems: 24, items: {
+            type: "object", additionalProperties: false,
+            properties: { slide_index: { type: "integer", minimum: 0, maximum: 19 },
+              text: compact200StringJsonSchema }, required: ["slide_index", "text"],
+          } },
+          text_evidence: { type: "array", maxItems: 8, items: {
+            type: "object", additionalProperties: false,
+            properties: { source: { type: "string", enum: ["caption", "alt_text"] },
+              text: compact200StringJsonSchema }, required: ["source", "text"],
+          } },
+          source_conflicts: extractionJsonSchema.properties.source_conflicts,
+          category: extractionJsonSchema.properties.category,
+          price: extractionJsonSchema.properties.price,
+          currency: extractionJsonSchema.properties.currency,
+        },
+        required: [...extractionJsonSchema.properties.schedule_entries.items.required,
+          "source_slide_indexes", "poster_evidence", "text_evidence", "source_conflicts", "category", "price", "currency"],
+      },
+    },
+  },
+} as const;
+
 export async function extractEventDataFromInstagramPost(
   options: ExtractEventDataOptions,
 ): Promise<ExtractedEventData> {
+  const carouselMedia = options.carouselImages === undefined ? undefined : parseCarouselMediaBinding({
+    version: 1, knownSlideCount: options.carouselKnownSlideCount, images: options.carouselImages,
+  });
+  if (carouselMedia && options.imageDataUrls?.length !== carouselMedia.images.length) {
+    throw new OpenAiPermanentError("Each retained carousel image requires exactly one ordered transport image.");
+  }
   const openAiApiKey = getRequiredEnv("OPENAI_API_KEY");
   const openAiVisionModel = getOpenAiModelEnv("OPENAI_VISION_MODEL");
   let lastError: unknown;
@@ -599,15 +756,23 @@ export async function extractEventDataFromInstagramPost(
             instagramSourceName: options.instagramSourceName,
             sourceImageUrl: options.sourceImageUrl,
             extractionMode: options.extractionMode,
+            carouselSlideIndexes: carouselMedia?.images.map((image) => image.slideIndex),
+            carouselKnownSlideCount: carouselMedia?.knownSlideCount,
           }),
         },
       ];
 
-      const imageDataUrls = [
+      const imageDataUrls = carouselMedia ? options.imageDataUrls! : [
         ...(options.imageDataUrls ?? []),
         options.imageDataUrl,
       ].filter((value): value is string => Boolean(value));
-      for (const imageDataUrl of [...new Set(imageDataUrls)]) {
+      const submittedImageDataUrls = carouselMedia ? imageDataUrls : [...new Set(imageDataUrls)];
+      for (const [index, imageDataUrl] of submittedImageDataUrls.entries()) {
+        if (carouselMedia && !imageDataUrl.startsWith("data:image/")) {
+          throw new OpenAiPermanentError("Extraction requires decoded image data for every submitted slide.");
+        }
+        if (carouselMedia) userContent.push({ type: "input_text",
+          text: `SLIDE ${carouselMedia.images[index].slideIndex} (zero-based original carousel index). The next image is this slide only.` });
         userContent.push({
           type: "input_image",
           image_url: imageDataUrl,
@@ -630,7 +795,9 @@ export async function extractEventDataFromInstagramPost(
           input: [
             {
               role: "system",
-              content: [{ type: "input_text", text: EVENT_EXTRACTION_SYSTEM_PROMPT }],
+              content: [{ type: "input_text", text: carouselMedia
+                ? `${EVENT_EXTRACTION_SYSTEM_PROMPT}\n\n${CAROUSEL_EVENT_EXTRACTION_SYSTEM_PROMPT}`
+                : EVENT_EXTRACTION_SYSTEM_PROMPT }],
             },
             {
               role: "user",
@@ -643,7 +810,7 @@ export async function extractEventDataFromInstagramPost(
               type: "json_schema",
               name: "nightlife_event_extraction",
               strict: true,
-              schema: extractionJsonSchema,
+              schema: carouselMedia ? carouselExtractionJsonSchema : extractionJsonSchema,
             },
           },
         }),
@@ -743,7 +910,11 @@ export async function extractEventDataFromInstagramPost(
       }
       let parsed: ExtractedEventData;
       try {
-        parsed = parseExtractedEventData(parsedJson);
+        parsed = parseExtractedEventData(carouselMedia && parsedJson && typeof parsedJson === "object"
+          ? { ...parsedJson, _extractionPolicyVersion: EVENT_EXTRACTION_POLICY_VERSION,
+              _carouselContractVersion: CAROUSEL_EXTRACTION_CONTRACT_VERSION,
+              _carouselMedia: carouselMedia }
+          : parsedJson);
       } catch {
         throw new OpenAiDefinitiveOutputError(
           "invalid_schema",

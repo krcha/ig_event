@@ -22,6 +22,7 @@ import { canonicalizeEventType } from "../../lib/taxonomy/venue-types";
 import { buildEventOccurrenceIndexPatch } from "../sourceOccurrences";
 import {
   projectNormalizedFieldsForSource,
+  projectCanonicalSourceFieldsForOccurrence,
   readSourceAccountIdentityFromNormalizedFields,
   readReconciliationVenueAccountIdentity,
   type ReconciliationProvenanceLink,
@@ -115,7 +116,7 @@ export function canonicalPatchFromSourceOccurrence(
       : {}),
     eventType: normalized.eventType,
     normalizedFieldsJson,
-    ...sourceDocument.canonicalEventFields,
+    ...projectCanonicalSourceFieldsForOccurrence(sourceDocument, normalizedFieldsJson),
     ...storedOccurrenceIndexFields(occurrence),
     sourceOccurrenceKey: occurrence.sourceOccurrenceKey,
     // `undefined` deliberately removes a previously stored optional time. The

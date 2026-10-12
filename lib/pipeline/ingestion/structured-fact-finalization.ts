@@ -21,6 +21,7 @@ import { evaluateCoreEventSourceGrounding, getNonEventAutoApprovalBlockers } fro
 import type { StructuredFactExtractionResult } from "@/lib/pipeline/ingestion/structured-fact-contracts";
 import { isVerifiedDateEvidence, isVerifiedEventIdentityEvidence, isVerifiedEventVenueEvidence, isVerifiedTimeEvidence } from "@/lib/pipeline/ingestion/structured-fact-verification";
 import { normalizeString } from "@/lib/pipeline/ingestion/values";
+import { standaloneSourceMonthHeading } from "@/lib/pipeline/ingestion/source-calendar-validation";
 import { normalizeVenueComparableText } from "@/lib/pipeline/venue-normalization";
 import type { InstagramScrapedPost } from "@/lib/scraper/instagram-scraper";
 
@@ -186,14 +187,30 @@ export function finalizeStructuredFactVariants({
       sourceInstagramHandle: post.username,
       venueInstagramHandle: post.username,
     });
+    const carouselDateRow = extracted._carouselContractVersion === "carousel_evidence_v1" &&
+      extracted._carouselMedia && extracted.schedule_entries.length === 1 &&
+      variant.dateEvidence.source === "poster" && variant.dateEvidence.slide_index !== null &&
+      variant.dateEvidence.slide_index !== undefined
+      ? extracted.schedule_entries[0] : null;
+    const dateSlide = variant.dateEvidence.slide_index;
+    const carouselMonthHeadings = carouselDateRow &&
+      carouselDateRow.source_slide_indexes?.includes(dateSlide!) &&
+      extracted._carouselMedia?.images.some((image) => image.slideIndex === dateSlide)
+      ? (carouselDateRow.poster_evidence ?? []).filter((snippet) =>
+          snippet.slide_index === dateSlide && standaloneSourceMonthHeading(snippet.text))
+          .map((snippet) => snippet.text)
+      : [];
+    const calendarContext = variant.splitSourceLine ??
+      (variant.dateEvidence.source === "caption" ? post.caption : null);
     const dateEvidenceVerified = isVerifiedDateEvidence({
       evidence: variant.dateEvidence,
       resolvedDate: date,
       post,
       hasPoster: Boolean(selectedImageUrl),
       enforceCalendarConsistency: extracted._extractionPolicyVersion === "event_quality_v1",
-      calendarContext: variant.splitSourceLine ??
-        (variant.dateEvidence.source === "caption" ? post.caption : null),
+      calendarContext: carouselMonthHeadings.length
+        ? [calendarContext, ...carouselMonthHeadings].filter(Boolean).join("\n") : calendarContext,
+      allowBareDayWithMonthHeading: carouselMonthHeadings.length > 0,
     });
     const identityEvidenceVerified = isVerifiedEventIdentityEvidence({
       extracted,

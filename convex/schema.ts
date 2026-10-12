@@ -579,6 +579,7 @@ export default defineSchema({
     imageSlides: v.optional(v.array(v.object({
       index: v.number(),
       imageUrls: v.array(v.string()),
+      mediaType: v.optional(v.union(v.literal("image"), v.literal("video"), v.literal("unknown"))),
     }))),
     imageSlideCount: v.optional(v.number()),
     postedAtMs: v.optional(v.number()),
@@ -623,6 +624,16 @@ export default defineSchema({
     analysisModel: v.optional(v.string()),
     analysisImageSourceUrl: v.optional(v.string()),
     analysisImageChecksumSha256: v.optional(v.string()),
+    // Immutable, independently retained inputs for future carousel analyses.
+    // Legacy one-image cache and event documents retain their exact shape.
+    analysisCarouselImages: v.optional(v.array(v.object({
+      slideIndex: v.number(),
+      sourceUrl: v.string(),
+      checksumSha256: v.string(),
+      assetId: v.id("mediaAssets"),
+      storageId: v.id("_storage"),
+      url: v.string(),
+    }))),
     analysisContractVersion: v.optional(v.string()),
     analysisIsEvent: v.optional(v.boolean()),
     analysisNonEventReason: v.optional(v.string()),
@@ -732,6 +743,14 @@ export default defineSchema({
     instagramPostId: v.optional(v.string()),
     normalizedInstagramPostUrl: v.optional(v.string()),
     canonicalSourceUrl: v.optional(v.string()),
+    // Carousel assets use a separate immutable key and never participate in
+    // legacy source-wide image attachment or replacement.
+    carouselSourceDocumentId: v.optional(v.id("scrapedPosts")),
+    carouselSourceRevision: v.optional(v.number()),
+    carouselSlideIndex: v.optional(v.number()),
+    carouselSourceUrl: v.optional(v.string()),
+    carouselCanonicalSourceUrl: v.optional(v.string()),
+    carouselInstagramPostId: v.optional(v.string()),
     storageId: v.id("_storage"),
     url: v.string(),
     upstreamUrl: v.string(),

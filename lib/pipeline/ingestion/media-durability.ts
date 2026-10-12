@@ -3,7 +3,9 @@ import { deduplicateMediaUrls } from "@/lib/pipeline/instagram-ingestion-durabil
 import { type InstagramScrapedPost } from "@/lib/scraper/instagram-scraper";
 import { ConvexHttpClient } from "convex/browser";
 import type { ExistingEventRecord, HandleSummary, IngestionPostContext, SourceProcessingFence } from "@/lib/pipeline/ingestion/contracts";
-import { persistInstagramImageAction } from "@/lib/pipeline/ingestion/convex-bindings";
+import { persistInstagramCarouselImageAction, persistInstagramImageAction } from "@/lib/pipeline/ingestion/convex-bindings";
+import type { CarouselImageBinding } from "@/lib/ai/carousel-media-contract";
+import type { RetainedCarouselImage } from "@/lib/pipeline/instagram-carousel-input";
 import { getErrorMessage, logError, logInfo, withServiceSecret } from "@/lib/pipeline/ingestion/runtime";
 import { extractShortcodeFromPostUrl } from "@/lib/pipeline/ingestion/source-documents";
 import { normalizeString, parseJsonRecord } from "@/lib/pipeline/ingestion/values";
@@ -48,6 +50,7 @@ export function hasDurableMediaEligibleNormalizedFields(
   normalizedFields: Record<string, unknown> | null,
 ): boolean {
   return (
+    normalizedFields?.extractionCarouselContractVersion === undefined &&
     normalizedFields?.normalizedIsValid === true &&
     (normalizedFields.sourceGroundingVerified === true ||
       (normalizedFields.extractionContractVersion === "event_evidence_v2" &&
@@ -126,6 +129,30 @@ export async function persistInstagramMediaCandidate(options: {
     });
     return false;
   }
+}
+
+/** Carousel storage never attaches a sibling to existing source events. */
+export async function retainInstagramCarouselImage(options: {
+  client: ConvexHttpClient;
+  post: InstagramScrapedPost;
+  processingFence: SourceProcessingFence;
+  serviceSecret: string;
+  image: CarouselImageBinding;
+}): Promise<RetainedCarouselImage> {
+  const retained = await options.client.action(persistInstagramCarouselImageAction,
+    withServiceSecret({ postId: options.post.postId,
+      instagramPostUrl: options.post.instagramPostUrl,
+      processingFence: options.processingFence,
+      slideIndex: options.image.slideIndex,
+      upstreamUrl: options.image.sourceUrl,
+      expectedChecksumSha256: options.image.checksumSha256 }, options.serviceSecret)) as {
+        assetId: string; storageId: string; url: string; checksumSha256: string; slideIndex: number;
+      };
+  if (retained.slideIndex !== options.image.slideIndex ||
+    retained.checksumSha256 !== options.image.checksumSha256) {
+    throw new Error("Retained carousel image does not match its analyzed source binding.");
+  }
+  return { ...options.image, assetId: retained.assetId, storageId: retained.storageId, url: retained.url };
 }
 
 export async function persistInstagramMediaCandidates(options: {

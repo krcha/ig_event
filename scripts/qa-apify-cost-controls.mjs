@@ -74,7 +74,9 @@ const request = buildApifyInstagramScrapeRequest({
   daysBack: undefined,
   env: {},
 });
-assert.equal(request.input.dataDetailLevel, "basicData");
+assert.equal(request.input.dataDetailLevel, "detailedData");
+assert.equal(buildApifyInstagramScrapeRequest({ actorUsernameInput: "clubdrugstore",
+  env: { APIFY_DATA_DETAIL_LEVEL: "basicData" } }).input.dataDetailLevel, "basicData");
 assert.equal(request.input.skipPinnedPosts, false);
 assert.equal(request.input.resultsLimit, 3);
 assert.equal(request.input.onlyPostsNewerThan, "10 days");

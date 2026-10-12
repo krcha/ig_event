@@ -48,6 +48,15 @@ function headingMonths(text: string, postDate: Date | null): Set<number> {
   return result;
 }
 
+/** A calendar heading is independent context, never another dated row. */
+export function standaloneSourceMonthHeading(text: string): { month: number; year?: string } | null {
+  const words = Object.keys(MONTH_ALIASES).sort((a, b) => b.length - a.length)
+    .map(escapeRegExp).join("|");
+  const match = text.trim().match(new RegExp(`^(${words})(?:\\s*['\u2019]?\\s*(20\\d{2}|\\d{2}))?$`, "iu"));
+  const month = match ? getMonthNumber(match[1]) : null;
+  return month ? { month, ...(match?.[2] ? { year: match[2] } : {}) } : null;
+}
+
 function attachedWeekdays(text: string, rawDate: string): Set<number> {
   const weekdays = new Set<number>();
   for (const match of text.matchAll(new RegExp(escapeRegExp(rawDate), "gu"))) {
@@ -73,6 +82,7 @@ export function sourceCalendarSupportsDate(options: {
   context?: string | null;
   postedAt: string | null;
   resolvedDate: string;
+  allowBareDayWithMonthHeading?: boolean;
 }): boolean {
   const postDate = parsePostedAt(options.postedAt);
   const context = [options.exactText, options.context].filter(Boolean).join("\n");
@@ -81,6 +91,24 @@ export function sourceCalendarSupportsDate(options: {
   const months = headingMonths(context, postDate);
   const unambiguousMonthFirst = contextDates.some((date) => date.first <= 12 && date.second > 12);
   const unambiguousDayFirst = contextDates.some((date) => date.first > 12 && date.second <= 12);
+
+  // A carousel row may quote only its printed day while the same retained
+  // poster has a separate month heading. Do not infer a month from siblings,
+  // prose, another dated row, or a model's normalized date.
+  if (options.allowBareDayWithMonthHeading && /^\d{1,2}\.?$/u.test(options.exactText.trim())) {
+    const headings = context.split(/\r?\n/u).map(standaloneSourceMonthHeading)
+      .filter((heading): heading is NonNullable<typeof heading> => heading !== null);
+    const headingYears = new Set(headings.map((heading) => heading.year ? normalizeYear(heading.year) : null)
+      .filter((year): year is number => year !== null));
+    if (months.size !== 1 || headingYears.size > 1 || (!postDate && headingYears.size === 0) ||
+      (postDate && [...headingYears].some((year) => Math.abs(year - postDate.getUTCFullYear()) > 1))) return false;
+    const candidate = buildDateWithPossibleYearInference(Number.parseInt(options.exactText, 10),
+      [...months][0]!, headingYears.size ? String([...headingYears][0]) : undefined,
+      postDate, false, "model", options.exactText);
+    if (!candidate || candidate.isoDate !== options.resolvedDate) return false;
+    const weekdays = attachedWeekdays(context, options.exactText.trim());
+    return weekdays.size === 0 || (weekdays.size === 1 && weekdays.has(weekdayOfIsoDate(candidate.isoDate)!));
+  }
 
   const range = expandNormalizedDateRange(options.exactText, options.postedAt);
   if (range?.includes(options.resolvedDate)) {

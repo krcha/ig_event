@@ -28,7 +28,7 @@ export type SourceDocument = {
   providerMetadata?: Readonly<{
     contentType?: string | null;
     isPinned?: boolean;
-    imageSlides?: Array<{ index: number; imageUrls: string[] }>;
+    imageSlides?: Array<{ index: number; imageUrls: string[]; mediaType?: "image" | "video" | "unknown" }>;
     imageSlideCount?: number;
   }>;
   sourceIdentity: string;
@@ -44,7 +44,7 @@ export type InstagramSourceDocumentRecord = {
   handle: string;
   imageUrl?: string;
   imageUrls?: string[];
-  imageSlides?: Array<{ index: number; imageUrls: string[] }>;
+  imageSlides?: Array<{ index: number; imageUrls: string[]; mediaType?: "image" | "video" | "unknown" }>;
   imageSlideCount?: number;
   instagramPostUrl: string;
   locationName?: string;

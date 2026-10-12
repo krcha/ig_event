@@ -12,6 +12,8 @@ export type EventExtractionPromptContext = {
   instagramSourceRole?: "venue" | "promoter" | "unknown";
   instagramSourceName?: string | null;
   extractionMode?: "poster" | "caption_only";
+  carouselSlideIndexes?: number[];
+  carouselKnownSlideCount?: number;
 };
 
 export const EVENT_EXTRACTION_SYSTEM_PROMPT = `
@@ -109,6 +111,18 @@ Rules:
 - Never return markdown, only valid JSON.
 `.trim();
 
+export const CAROUSEL_EVENT_EXTRACTION_SYSTEM_PROMPT = `
+=== ORDERED CAROUSEL EVIDENCE ===
+The caller has retained the exact labelled images. SLIDE numbers are zero-based original source indexes, not the order among a partial subset. Use only the supplied indexes; never claim an unread or missing slide.
+Read all supplied slides jointly before emitting occurrences. One carousel is one source, not one event per image. A cover, detailed flyer, running order, artist portrait/biography and ticket slide may all describe the SAME party. Merge complementary evidence only when the same explicit event identity/date/physical venue establishes that relationship. An artist portrait or biography does not create another event or add unrelated credited people to the lineup.
+A weekly cover repeated on detail slides must yield each actual occurrence once. Repeated copies of the same flyer are duplicates. Different explicit dates, independent sessions, independently named room programs or physical branches stay separate. Never cross-product the dates on a cover with every act on later slides. A common campaign design, venue logo or adjacent slide order alone cannot bind an act to a date.
+Return each genuine occurrence once in schedule_entries, with its own category, price and currency. Unknown admission is empty; never copy one slide's price, restriction or room to unrelated rows. Root source_conflicts must be []; put material disagreements in the affected row's source_conflicts so an ambiguous flyer does not contaminate unrelated rows.
+Carousel occurrence facts are row-owned, including when there is only one occurrence. Leave root title/date/time/venue/price/currency/description empty and root artists=[]; root date/time evidence use empty unknown semantics and slide_index=null. Leave every root field_confirmation confidence=0, found_in=[], evidence="", evidence_snippets=[], notes="". Keep is_event, non_event_reason, overall confidence, category/city/country and any genuinely universal shared context. Do not repeat row facts in root confirmations.
+For every row, source_slide_indexes lists only supplied slides supporting that occurrence. Caption-only rows use []. Poster date/time evidence has slide_index identifying its exact supporting slide; caption/alt_text/unknown use slide_index=null. Empty or unstated time uses unknown and null. Source_text is ONE exact identity/dated row quote, never a fabricated concatenation of fragments from different images. Complementary date, venue or lineup fragments go in poster_evidence as {slide_index,text}: shortest exact readable quotes, at most one quote per distinct support region, no repeated explanations. Each poster_evidence slide_index must be in that row's source_slide_indexes. Caption/alt-text support goes in text_evidence as {source,text}, quoting exact contiguous row-local fragments, including a relevant shared header only when it explicitly covers that row. Preserve every explicitly billed artist, using additional exact lineup fragments when the identity row alone does not contain them. Do not quote an unrelated sibling paragraph or a whole caption for every row.
+Keep shared_schedule_context empty unless a visible heading explicitly applies to ALL emitted occurrences. Poster shared context identifies the supporting slide_index; other sources use null. A cover's time or venue is not a shared fact for unrelated detail programs. Row-local explicit facts always win over a common header.
+If a supplied subset is incomplete, extract only the supplied evidence. Do not invent missing slide contents, and do not treat incomplete coverage as a non-event reason. The caller controls source completion independently.
+`.trim();
+
 export function buildEventExtractionUserPrompt(
   context: EventExtractionPromptContext,
 ): string {
@@ -126,6 +140,10 @@ export function buildEventExtractionUserPrompt(
     `Instagram caption: ${context.instagramCaption ?? "N/A"}`,
     `Instagram alt text: ${context.instagramAltText ?? "N/A"}`,
     `Source image URL: ${context.sourceImageUrl ?? "N/A"}`,
+    ...(context.carouselSlideIndexes ? [
+      `Carousel source declares ${context.carouselKnownSlideCount ?? "unknown"} slides. Supplied zero-based SLIDE indexes: ${context.carouselSlideIndexes.join(", ")}.`,
+      "Extract one joint occurrence plan across these images; retain exact slide-local evidence and collapse repeated depictions of the same event.",
+    ] : []),
     extractionMode === "caption_only"
       ? "No image is provided for this post. Use only the caption, alt text, location tag, and canonical venue hint."
       : "Use poster text + caption together. Instagram alt text can provide useful OCR-like support, but treat it as secondary evidence and do not invent unsupported facts.",

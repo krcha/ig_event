@@ -12,6 +12,9 @@ export const PREVIOUS_EVENT_EXTRACTION_ANALYSIS_PROTOCOL =
 export const EVENT_EXTRACTION_ANALYSIS_PROTOCOL =
   "openai-responses:event-extraction:event_evidence_v2:compact_medium:max_output_tokens_16384:v2" as const;
 
+export const CAROUSEL_EVENT_EXTRACTION_ANALYSIS_PROTOCOL =
+  "openai-responses:event-extraction:carousel_evidence_v1:compact_medium:max_output_tokens_16384:v1" as const;
+
 export const DEFINITIVE_OUTPUT_RECOVERY_PROTOCOL =
   "openai-definitive-output-requeue:v1" as const;
 

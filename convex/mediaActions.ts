@@ -285,3 +285,88 @@ export const persistInstagramImage = action({
     }
   },
 });
+
+type CarouselAsset = {
+  assetId: Id<"mediaAssets">;
+  storageId: Id<"_storage">;
+  url: string;
+  checksumSha256: string;
+  slideIndex: number;
+};
+type CarouselAssetArgs = SourceIdentityArgs & {
+  processingFence: SourceProcessingFence;
+  slideIndex: number;
+  sourceUrl: string;
+  expectedChecksumSha256: string;
+  checkedAt: number;
+};
+const findCarouselImage = "mediaAssets:findCarouselImage" as unknown as FunctionReference<
+  "query", "internal", CarouselAssetArgs, CarouselAsset | null>;
+const claimCarouselImage = "mediaAssets:claimCarouselImage" as unknown as FunctionReference<
+  "mutation", "internal", CarouselAssetArgs & {
+    storageId: Id<"_storage">; url: string; mimeType: string; byteLength: number;
+  }, CarouselAsset>;
+
+/** Retain one exact model input without changing source-wide legacy pictures
+ * or any already published event. Each slide is independently fenced. */
+export const persistInstagramCarouselImage = action({
+  args: {
+    postId: v.optional(v.string()),
+    instagramPostUrl: v.optional(v.string()),
+    processingFence: sourceProcessingFenceValidator,
+    slideIndex: v.number(),
+    upstreamUrl: v.string(),
+    expectedChecksumSha256: v.string(),
+    serviceSecret: v.optional(v.string()),
+  },
+  returns: v.object({
+    assetId: v.id("mediaAssets"), storageId: v.id("_storage"), url: v.string(),
+    checksumSha256: v.string(), slideIndex: v.number(), reused: v.boolean(),
+  }),
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const sourceArgs: CarouselAssetArgs = {
+      ...(args.postId ? { postId: args.postId } : {}),
+      ...(args.instagramPostUrl ? { instagramPostUrl: args.instagramPostUrl } : {}),
+      processingFence: args.processingFence, slideIndex: args.slideIndex,
+      sourceUrl: args.upstreamUrl, expectedChecksumSha256: args.expectedChecksumSha256,
+      checkedAt: Date.now(),
+    };
+    const existing = await ctx.runQuery(findCarouselImage, sourceArgs);
+    if (existing) {
+      if (!(await ctx.storage.getUrl(existing.storageId))) {
+        throw new Error("Immutable retained carousel input is missing from storage.");
+      }
+      return { ...existing, reused: true };
+    }
+    const image = await fetchAllowedRemoteRasterImage(args.upstreamUrl);
+    const checksumSha256 = computeSha256Hex(image.bytes);
+    if (checksumSha256 !== args.expectedChecksumSha256) {
+      throw new Error("Fetched carousel image checksum does not match the exact model input.");
+    }
+    const bytes = new Uint8Array(image.bytes.byteLength);
+    bytes.set(image.bytes);
+    let provisionalStorageId: Id<"_storage"> | null = await ctx.storage.store(
+      new Blob([bytes.buffer], { type: image.contentType }));
+    try {
+      const url = await ctx.storage.getUrl(provisionalStorageId);
+      if (!url) throw new Error("Convex storage did not generate a carousel image URL.");
+      const claimed = await ctx.runMutation(claimCarouselImage, {
+        ...sourceArgs, storageId: provisionalStorageId, url,
+        mimeType: image.contentType, byteLength: image.bytes.byteLength,
+      });
+      const reused = claimed.storageId !== provisionalStorageId;
+      if (reused) {
+        await ctx.storage.delete(provisionalStorageId);
+        if (!(await ctx.storage.getUrl(claimed.storageId))) {
+          throw new Error("Concurrent carousel asset claim selected missing immutable storage.");
+        }
+      }
+      provisionalStorageId = null;
+      return { ...claimed, reused };
+    } catch (error) {
+      if (provisionalStorageId) await ctx.storage.delete(provisionalStorageId).catch(() => undefined);
+      throw error;
+    }
+  },
+});

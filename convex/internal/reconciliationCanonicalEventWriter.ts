@@ -16,6 +16,7 @@ import {
 import {
   projectUnresolvedVenueIdentityFields,
   projectNormalizedFieldsForSource,
+  projectCanonicalSourceFieldsForOccurrence,
   type ReconciliationSourceDocument,
 } from "../repositories/reconciliationSourceContext";
 import { sourceOccurrenceProvenanceRepository } from "../repositories/sourceOccurrenceProvenance";
@@ -80,7 +81,7 @@ async function createSourceOccurrenceCanonicalEvent(options: {
         }
       : {}),
     eventType: normalized.eventType,
-    ...sourceDocument.canonicalEventFields,
+    ...projectCanonicalSourceFieldsForOccurrence(sourceDocument, normalizedFieldsJson),
     normalizedFieldsJson,
     ...(venueFields
       ? venueFields.fields

@@ -27,6 +27,7 @@ import {
   getEventExpiryCutoff,
   isEventExpiredAtCutoff,
 } from "../lib/events/event-retention";
+import { carouselAssetSourceKey, hasCarouselAnalysisMarker } from "./internal/carouselMediaProof";
 
 const MAX_MEDIA_SOURCE_MATCHES = 25;
 const MAX_ORPHANED_MEDIA_CLEANUP_PAGE_SIZE = 5;
@@ -287,9 +288,10 @@ async function collectScrapedPostsByIdentity(
 }
 
 async function assertSourceProcessingFence(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   fence: SourceProcessingFence | undefined,
-): Promise<void> {
+  checkedAt = Date.now(),
+): Promise<Doc<"scrapedPosts"> | undefined> {
   if (!fence) return;
   const exact = fence.scrapedPostId ? await ctx.db.get(fence.scrapedPostId) : null;
   if (
@@ -313,13 +315,118 @@ async function assertSourceProcessingFence(
   if (
     source.processingStatus !== "processing" ||
     source.processingLeaseOwner !== fence.owner ||
-    (source.processingLeaseExpiresAt ?? 0) <= Date.now() ||
+    (source.processingLeaseExpiresAt ?? 0) <= checkedAt ||
     !Number.isSafeInteger(fence.sourceRevision) ||
     (source.sourceRevision ?? 1) !== fence.sourceRevision
   ) {
     throw new Error("Instagram media processing fence is stale.");
   }
+  return source;
 }
+
+const carouselAssetLookupValidator = v.object({
+  assetId: v.id("mediaAssets"),
+  storageId: v.id("_storage"),
+  url: v.string(),
+  checksumSha256: v.string(),
+  slideIndex: v.number(),
+});
+const carouselAssetArgs = {
+  ...sourceIdentityArgs,
+  processingFence: sourceProcessingFenceValidator,
+  slideIndex: v.number(),
+  sourceUrl: v.string(),
+  expectedChecksumSha256: v.string(),
+  checkedAt: v.number(),
+};
+
+async function validateCarouselAssetSource(
+  ctx: QueryCtx | MutationCtx,
+  args: SourceIdentity & {
+    processingFence: SourceProcessingFence;
+    slideIndex: number;
+    sourceUrl: string;
+    expectedChecksumSha256: string;
+  },
+  checkedAt: number,
+): Promise<Doc<"scrapedPosts">> {
+  const post = await assertSourceProcessingFence(ctx, args.processingFence, checkedAt);
+  if (!post || !Number.isSafeInteger(args.slideIndex) || args.slideIndex < 0 || args.slideIndex >= 20 ||
+    !/^[a-f0-9]{64}$/u.test(args.expectedChecksumSha256) || !isAllowedRemoteImageUrl(args.sourceUrl) || args.sourceUrl.length > 2_048) {
+    throw new Error("Carousel image requires an exact bounded slide, checksum, URL and processing fence.");
+  }
+  const requested = normalizeInstagramMediaSourceIdentity(args);
+  const persisted = normalizeInstagramMediaSourceIdentity(post);
+  if ((requested.postId && requested.postId !== persisted.postId) ||
+    (requested.canonicalSourceUrl && requested.canonicalSourceUrl !== persisted.canonicalSourceUrl)) {
+    throw new Error("Carousel image identity does not match its fenced source document.");
+  }
+  const slide = post.imageSlides?.find((candidate) => candidate.index === args.slideIndex);
+  const immutableReceipt = post.analysisRevision === (post.sourceRevision ?? 1) &&
+    post.analysisCarouselImages?.some((image) => image.slideIndex === args.slideIndex &&
+      image.sourceUrl === args.sourceUrl && image.checksumSha256 === args.expectedChecksumSha256);
+  if (!slide?.imageUrls.includes(args.sourceUrl) && !immutableReceipt) {
+    throw new Error("Carousel image URL is not a declared source slide or its immutable cached input.");
+  }
+  return post;
+}
+
+export const findCarouselImage = internalQuery({
+  args: carouselAssetArgs,
+  returns: v.union(carouselAssetLookupValidator, v.null()),
+  handler: async (ctx, args) => {
+    if (!Number.isSafeInteger(args.checkedAt) || args.checkedAt < 0) throw new Error("Carousel input lookup time is invalid.");
+    const post = await validateCarouselAssetSource(ctx, args, args.checkedAt);
+    const asset = await ctx.db.query("mediaAssets")
+      .withIndex("by_sourceKey", (q) => q.eq("sourceKey", carouselAssetSourceKey(
+        post._id, post.sourceRevision ?? 1, args.slideIndex, args.expectedChecksumSha256, args.sourceUrl)))
+      .unique();
+    if (!asset) return null;
+    if (asset.carouselSourceDocumentId !== post._id || asset.carouselSourceRevision !== (post.sourceRevision ?? 1) ||
+      asset.carouselSlideIndex !== args.slideIndex || asset.carouselSourceUrl !== args.sourceUrl ||
+      asset.checksumSha256 !== args.expectedChecksumSha256) throw new Error("Retained carousel input binding is inconsistent.");
+    return { assetId: asset._id, storageId: asset.storageId, url: asset.url,
+      checksumSha256: asset.checksumSha256, slideIndex: args.slideIndex };
+  },
+});
+
+export const claimCarouselImage = internalMutation({
+  args: {
+    ...carouselAssetArgs,
+    storageId: v.id("_storage"),
+    url: v.string(),
+    mimeType: v.string(),
+    byteLength: v.number(),
+  },
+  returns: carouselAssetLookupValidator,
+  handler: async (ctx, args) => {
+    const post = await validateCarouselAssetSource(ctx, args, Date.now());
+    const sourceKey = carouselAssetSourceKey(post._id, post.sourceRevision ?? 1, args.slideIndex, args.expectedChecksumSha256, args.sourceUrl);
+    const existing = await ctx.db.query("mediaAssets").withIndex("by_sourceKey", (q) => q.eq("sourceKey", sourceKey)).unique();
+    if (existing) {
+      if (existing.carouselSourceDocumentId !== post._id || existing.carouselSourceRevision !== (post.sourceRevision ?? 1) ||
+        existing.carouselSlideIndex !== args.slideIndex || existing.carouselSourceUrl !== args.sourceUrl ||
+        existing.checksumSha256 !== args.expectedChecksumSha256) throw new Error("Carousel asset claim found inconsistent immutable input.");
+      return { assetId: existing._id, storageId: existing.storageId, url: existing.url,
+        checksumSha256: existing.checksumSha256, slideIndex: args.slideIndex };
+    }
+    if (!Number.isSafeInteger(args.byteLength) || args.byteLength <= 0 || !args.mimeType.startsWith("image/")) {
+      throw new Error("Carousel image storage metadata is invalid.");
+    }
+    const now = Date.now();
+    const assetId = await ctx.db.insert("mediaAssets", {
+      sourceKey, sourceKind: "instagram_post", carouselSourceDocumentId: post._id,
+      carouselSourceRevision: post.sourceRevision ?? 1, carouselSlideIndex: args.slideIndex,
+      carouselSourceUrl: args.sourceUrl, storageId: args.storageId, url: args.url,
+      carouselCanonicalSourceUrl: canonicalizeSourceUrlOrEmpty("instagram", post.instagramPostUrl),
+      carouselInstagramPostId: post.postId,
+      upstreamUrl: args.sourceUrl, mimeType: args.mimeType, byteLength: args.byteLength,
+      checksumSha256: args.expectedChecksumSha256, createdAt: now, updatedAt: now, lastAttachedAt: now,
+    });
+    return { assetId, storageId: args.storageId, url: args.url,
+      checksumSha256: args.expectedChecksumSha256, slideIndex: args.slideIndex };
+  },
+});
 
 async function attachAssetToSourceRecords(
   ctx: MutationCtx,
@@ -328,15 +435,24 @@ async function attachAssetToSourceRecords(
   actor: string,
 ): Promise<{ attachedEventCount: number; attachedScrapedPostCount: number }> {
   const normalized = normalizeInstagramMediaSourceIdentity(identity);
-  const [events, identityPosts] = await Promise.all([
+  const [matchedEvents, identityPosts] = await Promise.all([
     collectEventsByIdentity(ctx, identity),
     collectScrapedPostsByIdentity(ctx, identity),
   ]);
   const exactPost = identity.processingFence?.scrapedPostId
     ? await ctx.db.get(identity.processingFence.scrapedPostId)
     : null;
-  const posts = exactPost ? [exactPost] : identityPosts;
+  // A legacy source-wide repair must never replace a row's selected slide or
+  // mutate the source-wide fields of an independently attested carousel.
+  const events = matchedEvents.filter((event) =>
+    !hasCarouselAnalysisMarker({ analysisCarouselImages: undefined }, event));
+  const matchedPosts = exactPost ? [exactPost] : identityPosts;
+  const posts = matchedPosts.filter((post) =>
+    !hasCarouselAnalysisMarker(post, { rawExtractionJson: post.analysisResultJson }));
   if (events.length === 0 && posts.length === 0) {
+    if (matchedEvents.length || matchedPosts.length) {
+      throw new Error("Carousel source media requires its independently retained slide bindings.");
+    }
     throw new Error("No event or scraped-post record matches the Instagram source identity.");
   }
   const eventNeedsPatch = (event: Doc<"events">) =>
@@ -529,6 +645,7 @@ export const refreshAndAttach = internalMutation({
     if (!asset || asset.storageId !== args.storageId) {
       throw new Error("Media asset changed before attachment refresh.");
     }
+    if (asset.carouselSourceDocumentId) throw new Error("Carousel inputs cannot be refreshed by legacy image attachment.");
     const now = Date.now();
     await ctx.db.patch(asset._id, { url: args.url, updatedAt: now, lastAttachedAt: now });
     return attachAssetToSourceRecords(
@@ -566,6 +683,7 @@ export const replaceMissingAndAttach = internalMutation({
     if (!asset || asset.storageId !== args.expectedStorageId) {
       throw new Error("Media asset changed before missing storage replacement.");
     }
+    if (asset.carouselSourceDocumentId) throw new Error("Carousel inputs cannot be replaced by legacy image attachment.");
     const now = Date.now();
     await ctx.db.patch(asset._id, {
       storageId: args.storageId,
@@ -609,14 +727,18 @@ export const removeMissingAsset = internalMutation({
     await assertSourceProcessingFence(ctx, args.processingFence);
     const asset = await ctx.db.get(args.assetId);
     if (!asset || asset.storageId !== args.expectedStorageId) return false;
-    const [events, identityPosts] = await Promise.all([
+    if (asset.carouselSourceDocumentId) throw new Error("Carousel inputs cannot be removed by legacy image attachment.");
+    const [matchedEvents, identityPosts] = await Promise.all([
       collectEventsByIdentity(ctx, args),
       collectScrapedPostsByIdentity(ctx, args),
     ]);
     const exactPost = args.processingFence?.scrapedPostId
       ? await ctx.db.get(args.processingFence.scrapedPostId)
       : null;
-    const posts = exactPost ? [exactPost] : identityPosts;
+    const events = matchedEvents.filter((event) =>
+      !hasCarouselAnalysisMarker({ analysisCarouselImages: undefined }, event));
+    const posts = (exactPost ? [exactPost] : identityPosts).filter((post) =>
+      !hasCarouselAnalysisMarker(post, { rawExtractionJson: post.analysisResultJson }));
     if (
       events.some(isCrossPostCampaignLineageEvent) &&
       (events.some((event) => event.imageStorageId === args.expectedStorageId) ||
@@ -848,9 +970,9 @@ export const deleteOrphanedPage = internalMutation({
 
     for (const asset of page.page) {
       const identity = {
-        postId: asset.instagramPostId,
+        postId: asset.carouselInstagramPostId ?? asset.instagramPostId,
         instagramPostUrl: canonicalizeSourceUrlOrEmpty(
-          "instagram", asset.canonicalSourceUrl ?? asset.normalizedInstagramPostUrl,
+          "instagram", asset.carouselCanonicalSourceUrl ?? asset.canonicalSourceUrl ?? asset.normalizedInstagramPostUrl,
         ),
       };
       if (asset.canonicalSourceUrl && asset.normalizedInstagramPostUrl &&
@@ -873,6 +995,17 @@ export const deleteOrphanedPage = internalMutation({
       if (eventReference || sourceReference || referencedPosts.length > MAX_MEDIA_SOURCE_MATCHES) {
         retainedAssetCount += 1;
         continue;
+      }
+
+      // A bundle input can remain referenced even when it is not the selected
+      // event picture. Keep every sibling while its owning source is active,
+      // incomplete, or has non-retired occurrences.
+      if (asset.carouselSourceDocumentId) {
+        const carouselPost = await ctx.db.get(asset.carouselSourceDocumentId);
+        if (carouselPost && !(await canReleaseRetiredPostMedia(ctx, carouselPost, now))) {
+          retainedAssetCount += 1;
+          continue;
+        }
       }
 
       const sourceOccurrences = await ctx.db.query("sourceOccurrences")

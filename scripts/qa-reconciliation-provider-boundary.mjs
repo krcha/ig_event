@@ -84,7 +84,8 @@ for (const source of [executorSource, auditSource]) {
 }
 assert.match(outcomeSource, /ReconciliationSourceDocument/u);
 assert.match(outcomeSource, /ReconciliationProvenanceLink/u);
-assert.match(writerSource, /\.canonicalEventFields/u);
+assert.match(writerSource, /projectCanonicalSourceFieldsForOccurrence/u);
+assert.match(adapterSource, /carouselImages/u);
 assert.doesNotMatch(
   writerSource,
   /sourceDocument\.(?:handle|username|postId|instagramPostUrl|imageUrls)/u,

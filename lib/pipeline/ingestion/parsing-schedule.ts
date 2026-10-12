@@ -296,6 +296,20 @@ export function extractModelSplitEventCandidates(
         description,
       ]);
     const sourceBillingEvidence = explicitSourceLine ? [explicitSourceLine] : [];
+    // These snippets exist only on the wrapper-owned carousel contract. Its
+    // shared planner validates every index against retained input images and
+    // scopes this extraction to one occurrence before reaching this parser.
+    // Preserve complementary lineup text without fabricating a source row.
+    if (extracted._carouselContractVersion === "carousel_evidence_v1" &&
+      extracted._carouselMedia && extracted.schedule_entries.length === 1) {
+      const retainedIndexes = new Set(extracted._carouselMedia.images.map((image) => image.slideIndex));
+      for (const snippet of scheduleEntry.poster_evidence ?? []) {
+        if (retainedIndexes.has(snippet.slide_index) &&
+          scheduleEntry.source_slide_indexes?.includes(snippet.slide_index)) {
+          sourceBillingEvidence.push(snippet.text);
+        }
+      }
+    }
     const rawArtists = normalizeExtractedArtists(scheduleEntry.artists);
     const independentlyGroundedIdentities =
       collectSingleOccurrenceComplementaryIdentities({

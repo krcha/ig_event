@@ -27,6 +27,7 @@ export type StructuredFactEventEvidence = {
 export type StructuredFactPresentation = {
   description?: string;
   imageUrl?: string;
+  imageStorageId?: string;
   ticketPrice?: string;
 };
 

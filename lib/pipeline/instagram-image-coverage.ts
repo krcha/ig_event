@@ -1,4 +1,5 @@
 import type { InstagramImageSlide } from "../scraper/instagram-scraper";
+import { carouselMediaBindingSchema, type CarouselImageBinding } from "../ai/carousel-media-contract";
 
 export type InstagramImageCoverage = {
   version: 1;
@@ -7,6 +8,7 @@ export type InstagramImageCoverage = {
   unanalyzedSlideIndexes: number[];
   complete: boolean;
   manifestKnown: boolean;
+  videoSlideIndexes?: number[];
 };
 
 type ImageSlideObservations = { imageSlides?: InstagramImageSlide[]; imageSlideCount?: number };
@@ -22,6 +24,10 @@ export function mergeInstagramImageSlideObservations(
   const retainedCount = Math.min(20, Math.max(prior.length, next.length));
   const imageSlides = Array.from({ length: retainedCount }, (_, index) => ({
     index,
+    ...((prior[index]?.mediaType === "video" || next[index]?.mediaType === "video")
+      ? { mediaType: "video" as const }
+      : next[index]?.mediaType !== undefined ? { mediaType: next[index].mediaType }
+        : prior[index]?.mediaType !== undefined ? { mediaType: prior[index].mediaType } : {}),
     imageUrls: [...new Set([
       ...(prior[index]?.imageUrls ?? []), ...(next[index]?.imageUrls ?? []),
     ])].slice(0, 8),
@@ -65,6 +71,24 @@ export function buildInstagramImageCoverage(
   };
 }
 
+/** Explicit inputs attest declared indexes independently, including repeated slide URLs. */
+export function buildInstagramCarouselImageCoverage(
+  post: ImageSlideObservations,
+  images: readonly CarouselImageBinding[],
+): InstagramImageCoverage {
+  const slides = post.imageSlides ?? [];
+  const analyzedSlideIndexes = images.filter((image) =>
+    slides.some((slide) => slide.index === image.slideIndex && slide.imageUrls.includes(image.sourceUrl)))
+    .map((image) => image.slideIndex).sort((left, right) => left - right);
+  const knownSlideCount = Math.max(post.imageSlideCount ?? slides.length, slides.length);
+  const videoSlideIndexes = slides.filter((slide) => slide.mediaType === "video").map((slide) => slide.index);
+  return { version: 1, manifestKnown: slides.length > 0, knownSlideCount,
+    analyzedSlideIndexes: [...new Set(analyzedSlideIndexes)],
+    unanalyzedSlideIndexes: slides.filter((slide) => !analyzedSlideIndexes.includes(slide.index)).map((slide) => slide.index),
+    ...(videoSlideIndexes.length > 0 ? { videoSlideIndexes } : {}),
+    complete: knownSlideCount > 0 && knownSlideCount === new Set(analyzedSlideIndexes).size && videoSlideIndexes.length === 0 };
+}
+
 /** Future wrapper-owned diagnostics alone affect source completion, never old cached evidence. */
 export function hasKnownUnanalyzedInstagramSlides(analysis: unknown): boolean {
   if (!analysis || typeof analysis !== "object" || Array.isArray(analysis)) return false;
@@ -74,7 +98,7 @@ export function hasKnownUnanalyzedInstagramSlides(analysis: unknown): boolean {
   return coverage?.version === 1 && coverage.manifestKnown === true && coverage.complete === false &&
     Number.isSafeInteger(coverage.knownSlideCount) && coverage.knownSlideCount > 1 &&
     Array.isArray(coverage.analyzedSlideIndexes) && Array.isArray(coverage.unanalyzedSlideIndexes) &&
-    coverage.knownSlideCount > coverage.analyzedSlideIndexes.length;
+    (coverage.knownSlideCount > coverage.analyzedSlideIndexes.length || (coverage.videoSlideIndexes?.length ?? 0) > 0);
 }
 
 function readCachedQualityAnalysis(resultJson: string | undefined): Record<string, unknown> | null {
@@ -101,6 +125,16 @@ export function parseCachedInstagramImageCoveragePartial(
   const result = readCachedQualityAnalysis(resultJson);
   if (!result) return false;
   if (currentObservations?.imageSlides?.length) {
+    const carousel = carouselMediaBindingSchema.safeParse(result._carouselMedia);
+    if (carousel.success) {
+      // Saved, independently attested inputs remain valid after CDN URL rotation.
+      // New indexes still make an old bundle partial; immutable raw bytes stay intact.
+      const knownSlideCount = Math.max(currentObservations.imageSlideCount ?? 0,
+        currentObservations.imageSlides.length, carousel.data.knownSlideCount);
+      const analyzed = new Set(carousel.data.images.map((image) => image.slideIndex));
+      return knownSlideCount > analyzed.size || currentObservations.imageSlides.some((slide) => slide.mediaType === "video") ||
+        ((result._imageCoverage as InstagramImageCoverage | undefined)?.videoSlideIndexes?.length ?? 0) > 0;
+    }
     return hasKnownUnanalyzedInstagramSlides({
       ...result,
       _imageCoverage: buildInstagramImageCoverage(currentObservations,

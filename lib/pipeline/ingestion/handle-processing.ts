@@ -59,7 +59,7 @@ export async function processLoadedPostsForHandle(
       analysisContractVersion?: string;
       analysisImageSourceUrl?: string;
       analysisImageChecksumSha256?: string;
-      imageSlides?: Array<{ index: number; imageUrls: string[] }>;
+      imageSlides?: Array<{ index: number; imageUrls: string[]; mediaType?: "image" | "video" | "unknown" }>;
       imageSlideCount?: number;
     };
     if (!claim.claimed) {

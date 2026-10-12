@@ -63,6 +63,9 @@ export const updateEventAndRecordInstagramSourceOccurrenceSatisfactionMutation =
 export const persistInstagramImageAction =
   "mediaActions:persistInstagramImage" as unknown as FunctionReference<"action">;
 
+export const persistInstagramCarouselImageAction =
+  "mediaActions:persistInstagramCarouselImage" as unknown as FunctionReference<"action">;
+
 
 export const listScrapedPostsByHandleQuery =
   "scrapedPosts:listByHandle" as unknown as FunctionReference<"query">;
