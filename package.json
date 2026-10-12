@@ -139,7 +139,8 @@
     "qa:framework-compat": "node scripts/qa-framework-compat.mjs",
     "qa:release": "node scripts/release-check.mjs",
     "qa:self-hosted-convex-compose": "docker compose --env-file .env.production.example -f docker-compose.yml -f docker-compose.self-hosted-convex.yml config --quiet",
-    "convex:codegen": "npx convex codegen --typecheck disable"
+    "convex:codegen": "npx convex codegen --typecheck disable",
+    "qa:instaloader": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-instaloader.mjs"
   },
   "dependencies": {
     "@clerk/nextjs": "6.39.5",

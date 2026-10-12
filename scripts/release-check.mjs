@@ -88,6 +88,7 @@ const checks = [
   { script: "qa:brand", timeoutMs: 60_000 },
   { script: "qa:discover-feed", timeoutMs: 60_000 },
   { script: "qa:apify", timeoutMs: 120_000 },
+  { script: "qa:instaloader", timeoutMs: 60_000 },
   { script: "qa:follow-discovery", timeoutMs: 60_000 },
   { script: "qa:ingestion-durability", timeoutMs: 60_000 },
   { script: "qa:social-carousel", timeoutMs: 60_000 },

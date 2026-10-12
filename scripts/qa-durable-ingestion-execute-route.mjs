@@ -185,6 +185,8 @@ const successfulCleanupSummary = {
 
 function loadRouteWithMocks({
   authorized = true,
+  provider = "apify",
+  collectorReady = async () => ({ ready: true, paused: false }),
   mutation,
   query = async () => ({ complete: false, status: "running" }),
   processSavedPost = async () => ({
@@ -241,6 +243,10 @@ function loadRouteWithMocks({
     ["@/lib/scraper/instagram-scraper", {
       scrapeInstagramAccount: scrape,
       getInstagramScrapeRawItemCount: (posts) => posts.rawItemCount ?? posts.length,
+    }],
+    ["@/lib/scraper/instaloader-client", {
+      getInstagramScraperProvider: () => provider,
+      getInstaloaderReadiness: collectorReady,
     }],
     [
       "@/lib/pipeline/durable-ingestion-execute",
@@ -674,6 +680,40 @@ async function assertDeferredExecutorResponse(response, claimState, message) {
   });
   const response = await executeRequest(POST);
   assert.equal(response.status, 503, "the outer thrown-error boundary must preserve deliberate paid-fetch 503 responses");
+}
+
+for (const state of [
+  { ready: false, paused: false },
+  { ready: false, paused: true },
+  null,
+]) {
+  let attempts = 0, crawls = 0, releases = 0;
+  const POST = loadRouteWithMocks({
+    provider: "instaloader",
+    collectorReady: async () => { if (state === null) throw new Error("collector offline"); return state; },
+    mutation: async (reference, args) => {
+      if (reference === claimProcessingReference) return null;
+      if (reference === claimFetchReference) return {
+        receiptId: "receipt-instaloader", handle: "fixture_venue", providerAttemptCount: 0,
+        controls: { resultsLimit: 6, skipPinnedPosts: false, daysBack: 1 },
+      };
+      if (reference === markProviderAttemptReference) { attempts++; return { started: true }; }
+      if (reference === retryFetchReference) {
+        releases++;
+        assert.equal(args.preserveAttempt, true);
+        assert.equal(args.retryAfterMs, state?.paused ? 900_000 : 60_000);
+        return { terminal: false };
+      }
+      throw new Error(`Unexpected readiness mutation: ${reference}`);
+    },
+    scrape: async () => { crawls++; throw new Error("must not crawl"); },
+  });
+  const response = await executeRequest(POST);
+  assert.equal(response.status, 202);
+  assert.equal((await response.json()).work, "collector_wait");
+  assert.equal(attempts, 0, "unready collector must not consume a durable acquisition attempt");
+  assert.equal(crawls, 0);
+  assert.equal(releases, 1);
 }
 
 console.log("durable execute-route lease classification and resilience QA passed");

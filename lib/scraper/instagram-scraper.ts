@@ -1,4 +1,5 @@
 import { getRequiredEnv } from "../utils/env.ts";
+import { fetchInstaloaderItems, getInstagramScraperProvider } from "./instaloader-client.ts";
 
 const DEFAULT_APIFY_ACTOR_ID = "apify/instagram-post-scraper";
 const DEFAULT_RESULTS_LIMIT = 3;
@@ -85,6 +86,10 @@ type ScrapeInstagramAccountOptions = {
   maxTotalChargeUsd?: number;
   onlyPostsNewerThan?: string;
   abortAtMs?: number;
+  /** Stable controller/lease identity for the collector's acquisition journal. */
+  requestId?: string;
+  /** Controller-only: readiness was checked before committing its attempt. */
+  collectorReadinessChecked?: boolean;
   onRequestStarted?: () => void | Promise<void>;
   onTransportInvoked?: () => void;
 };
@@ -120,7 +125,7 @@ type ApifyInstagramImage =
       isVideo?: boolean;
       is_video?: boolean;
       url?: string;
-      displayUrl?: string;
+      displayUrl?: string | null;
       display_url?: string;
       imageUrl?: string;
       image_url?: string;
@@ -147,11 +152,11 @@ type ApifyInstagramItem = {
   code?: string;
   postId?: string | number;
   url?: string;
-  caption?: string | { text?: string };
+  caption?: string | { text?: string } | null;
   captionText?: string;
   caption_text?: string;
-  alt?: string;
-  displayUrl?: string;
+  alt?: string | null;
+  displayUrl?: string | null;
   display_url?: string;
   displayUrlHD?: string;
   display_url_hd?: string;
@@ -176,7 +181,7 @@ type ApifyInstagramItem = {
   owner_username?: string;
   username?: string;
   owner?: { username?: string };
-  locationName?: string;
+  locationName?: string | null;
   location_name?: string;
   location?: { name?: string };
   isPinned?: boolean;
@@ -464,7 +469,7 @@ function buildPostId(item: ApifyInstagramItem): string | null {
   );
 }
 
-function asHttpUrl(candidate: string | undefined): string | null {
+function asHttpUrl(candidate: string | null | undefined): string | null {
   if (!candidate) return null;
   const trimmed = candidate.trim();
   if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
@@ -473,7 +478,7 @@ function asHttpUrl(candidate: string | undefined): string | null {
   return trimmed;
 }
 
-function normalizeString(value: string | undefined): string | null {
+function normalizeString(value: string | null | undefined): string | null {
   if (!value) return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
@@ -716,7 +721,7 @@ function selectPrimaryImageUrl(item: ApifyInstagramItem): string | null {
 
 function collectImageUrls(item: ApifyInstagramItem): string[] {
   const candidates = new Set<string>();
-  const appendCandidate = (candidate: string | undefined) => {
+  const appendCandidate = (candidate: string | null | undefined) => {
     const value = asHttpUrl(candidate);
     if (value) {
       candidates.add(value);
@@ -993,6 +998,36 @@ export async function loadRecentApifyRunPosts(
 export async function scrapeInstagramAccount(
   options: ScrapeInstagramAccountOptions,
 ): Promise<InstagramScrapedPost[]> {
+  if (getInstagramScraperProvider() === "instaloader") {
+    const target = parseInstagramActorTarget(options.handle);
+    const settings = buildApifyInstagramScrapeRequest({
+      actorUsernameInput: target.actorUsernameInput,
+      resultsLimit: options.resultsLimit,
+      daysBack: options.daysBack,
+      onlyPostsNewerThan: options.onlyPostsNewerThan,
+      noAgeCutoff: options.noAgeCutoff,
+      skipPinnedPosts: options.skipPinnedPosts,
+      maxTotalChargeUsd: options.maxTotalChargeUsd,
+    });
+    const configuredBoundaryMs = options.onlyPostsNewerThan ? Date.parse(options.onlyPostsNewerThan) : NaN;
+    const onlyPostsNewerThan = options.noAgeCutoff ? null
+      : Number.isFinite(configuredBoundaryMs) ? new Date(configuredBoundaryMs).toISOString()
+      : new Date(Date.now() - settings.daysBack * 86_400_000).toISOString();
+    const items = await fetchInstaloaderItems({
+      target: target.fallbackUsername || target.actorUsernameInput,
+      resultsLimit: settings.input.resultsLimit,
+      onlyPostsNewerThan,
+      skipPinnedPosts: settings.input.skipPinnedPosts,
+      pinnedPostPolicy: options.pinnedPostPolicy,
+      requestId: options.requestId,
+      collectorReadinessChecked: options.collectorReadinessChecked,
+      abortAtMs: options.abortAtMs,
+      onRequestStarted: options.onRequestStarted,
+      onTransportInvoked: options.onTransportInvoked,
+    });
+    return normalizeInstagramCollection(items, target, options, settings,
+      onlyPostsNewerThan === null ? undefined : Date.parse(onlyPostsNewerThan));
+  }
   const apiToken = getRequiredEnv("APIFY_API_TOKEN");
   const actorId = normalizeConfiguredApifyActorId(
     process.env.APIFY_INSTAGRAM_ACTOR_ID ?? DEFAULT_APIFY_ACTOR_ID,
@@ -1009,8 +1044,6 @@ export async function scrapeInstagramAccount(
     maxTotalChargeUsd: options.maxTotalChargeUsd,
   });
   const { input, runOptions } = requestSettings;
-  const resultsLimit = input.resultsLimit;
-  const cutoff = options.noAgeCutoff ? Number.NEGATIVE_INFINITY : Date.now() - requestSettings.daysBack * 24 * 60 * 60 * 1000;
 
   const query = new URLSearchParams({
     clean: "true",
@@ -1098,6 +1131,20 @@ export async function scrapeInstagramAccount(
   } finally {
     clearTimeout(abortTimer);
   }
+  return normalizeInstagramCollection(rawItems, target, options, requestSettings);
+}
+
+/** Both transports retain the same source identity, owner, date and pin rules. */
+function normalizeInstagramCollection(
+  rawItems: ApifyInstagramItem[],
+  target: ReturnType<typeof parseInstagramActorTarget>,
+  options: ScrapeInstagramAccountOptions,
+  requestSettings: ApifyInstagramScrapeRequest,
+  transportBoundaryMs = Number.NEGATIVE_INFINITY,
+): InstagramScrapedPost[] {
+  const resultsLimit = requestSettings.input.resultsLimit;
+  const cutoff = options.noAgeCutoff ? Number.NEGATIVE_INFINITY
+    : Math.max(Date.now() - requestSettings.daysBack * 86_400_000, transportBoundaryMs);
   const expectedProfileOwner = normalizeHandle(target.fallbackUsername);
   const scrapedPosts = rawItems
     .map((item) => mapApifyItemToInstagramPost(item, target.fallbackUsername || target.label))
