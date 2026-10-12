@@ -32,6 +32,7 @@ import {
 } from "../../eventDomain/sourceApproval";
 import { requireCanonicalInstagramPostUrl } from "../../eventDomain/sourceUrlPolicy";
 import { isSupportedExtractionModel } from "../extractionModel";
+import { assertSourceAccountVenueFallbackPolicy } from "../../eventDomain/sourceAccountVenueFallback";
 
 export async function repairTrustedV2EventVenueHandler(
   ctx: MutationCtx,
@@ -113,9 +114,20 @@ export async function repairTrustedV2EventVenueHandler(
       "Trusted v2 venue repair requires an empty attested venue.",
     );
   }
-  const expectedNextFields = { ...currentFields, normalizedVenue: nextVenue };
+  const useAccountFallback = nextFields.venueAccountFallbackVersion === 1;
+  const expectedNextFields = {
+    ...currentFields,
+    normalizedVenue: nextVenue,
+    ...(useAccountFallback
+      ? {
+          trustedVenueSource: true,
+          venueSource: "handle_map",
+          venueAccountFallbackVersion: 1,
+        }
+      : {}),
+  };
   if (JSON.stringify(expectedNextFields) !== JSON.stringify(nextFields)) {
-    throw new Error("Trusted v2 venue repair may only change normalizedVenue.");
+    throw new Error("Trusted v2 venue repair may only change the normalized venue and verified account fallback fields.");
   }
   if (
     currentFields.extractionContractVersion !== "event_evidence_v2" ||
@@ -123,7 +135,7 @@ export async function repairTrustedV2EventVenueHandler(
     currentFields.sourceGroundingVersion !== 5 ||
     currentFields.sourceGroundingEvidence !==
       "persisted_openai_event_evidence_v2" ||
-    currentFields.trustedVenueSource !== true ||
+    (!useAccountFallback && currentFields.trustedVenueSource !== true) ||
     currentFields.venueEvidenceVerified !== true ||
     (currentFields.extractionMode !== "poster" &&
       currentFields.extractionMode !== "caption_only")
@@ -248,6 +260,9 @@ export async function repairTrustedV2EventVenueHandler(
     venue: canonicalVenue.name,
     normalizedFieldsJson: args.nextNormalizedFieldsJson,
   };
+  if (useAccountFallback) {
+    await assertSourceAccountVenueFallbackPolicy(ctx, effectiveEvent, persisted);
+  }
   if (event.status === "approved") {
     if (
       !hasEventEvidenceV2AutoApproval(

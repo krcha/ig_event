@@ -263,6 +263,19 @@ make a cleanup result appear complete.
 
 ## Automatic approval of server-verified unique events
 
+Instagram event extraction may use the posting account's canonical venue when
+the account is registered as a venue and the event does not name another
+physical venue. Explicit event, schedule-row, and shared venue claims retain
+priority. Promoter and unknown accounts do not receive this fallback.
+
+Fallback events carry `venueAccountFallbackVersion: 1` in their normalized
+evidence. Before service approval, the backend rechecks the current active
+source account, its canonical public venue, the persisted source identity, and
+the selected source-row venue claims. The final event venue, normalized
+evidence, and occurrence plan must agree; a stale mapping or different named
+venue fails approval. This uses saved source and account context without
+inventing a venue quote in the source.
+
 The Convex `approve server-verified unique events` cron runs every minute. It
 scans at most 60 pending event versions per tick, one version per transaction.
 The singleton `automaticUniqueApprovalState` stores its pending-index cursor,

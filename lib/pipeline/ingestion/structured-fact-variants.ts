@@ -10,10 +10,10 @@ import { buildMeaningfulEventTitle, extractContextualEventTitleCandidate, extrac
 import type { normalizeEventTitle } from "@/lib/pipeline/ingestion/parsing-event-title";
 import { buildSplitEventDescription } from "@/lib/pipeline/ingestion/parsing-schedule";
 import { buildScheduleEntryTimeProvenance, buildTimeProvenance, type resolveEventTimeFromExtractionAndEvidence } from "@/lib/pipeline/ingestion/parsing-time";
-import { extractionEvidenceAppearsInPersistedSource, hasVerifiedSharedScheduleContext } from "@/lib/pipeline/ingestion/structured-fact-verification";
+import { extractionEvidenceAppearsInPersistedSource, hasVerifiedSharedScheduleContext, isVerifiedEventVenueEvidence } from "@/lib/pipeline/ingestion/structured-fact-verification";
 import { normalizeString } from "@/lib/pipeline/ingestion/values";
 import { findScopedBranchVenueEvidence } from "@/lib/pipeline/ingestion/scoped-branch-venue-evidence";
-import { normalizeVenueComparableText, toSearchableText, type VenueNormalization } from "@/lib/pipeline/venue-normalization";
+import { canonicalizeVenueNameDetailed, normalizeVenueComparableText, toSearchableText, type VenueNormalization } from "@/lib/pipeline/venue-normalization";
 import type { InstagramScrapedPost } from "@/lib/scraper/instagram-scraper";
 
 type BuildStructuredFactVariantsInput = {
@@ -56,13 +56,13 @@ function hasPhysicalVenuePlacement(venue: string, evidence: string): boolean {
   const evidenceTokens = toSearchableText(evidence).split(" ").filter(Boolean);
   if (venueTokens.length === 0 || evidenceTokens.length === 0) return false;
   const placementCues = new Set(["at", "in", "u", "kod", "na", "venue", "lokacija", "location"]);
-  return evidenceTokens.some((token, index) =>
-    placementCues.has(token) &&
-      venueValueAppearsInEventEvidence(
-        venue,
-        evidenceTokens.slice(index + 1, index + venueTokens.length + 3).join(" "),
-      ),
-  );
+  return evidenceTokens.some((token, index) => {
+    if (!placementCues.has(token)) return false;
+    const nearbyTokens = evidenceTokens.slice(index + 1, index + venueTokens.length + 3);
+    return nearbyTokens.some((_, start) => venueTokens.every((venueToken, offset) =>
+      venueValueAppearsInEventEvidence(venueToken, nearbyTokens[start + offset] ?? ""),
+    ));
+  });
 }
 
 function venueMentionIsOnlyInRowTitle(
@@ -141,6 +141,19 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
     configuredVenueName,
     ...(ingestionVenueResolver.canonicalVenueAliasesByHandle[normalizedSourceHandle] ?? []),
   ].filter(Boolean);
+  const sourceAccountVenueId = ingestionVenueResolver.venueIdByProviderHandle.get(normalizedSourceHandle);
+  const sourceAccountRecord = sourceAccountVenueId
+    ? ingestionVenueResolver.snapshot.venueById.get(sourceAccountVenueId)
+    : undefined;
+  const claimMatchesSourceAccount = (claim: string): boolean => {
+    if (!normalizeString(claim)) return true;
+    if (!sourceAccountRecord) return false;
+    const claimText = normalizeVenueComparableText(claim);
+    return [sourceAccountRecord.name, ...(sourceAccountRecord.aliases ?? []),
+      ...(ingestionVenueResolver.canonicalVenueAliasesByHandle[normalizedSourceHandle] ?? []),
+      normalizedSourceHandle, `@${normalizedSourceHandle}`,
+    ].some((name) => normalizeVenueComparableText(name) === claimText);
+  };
   const configuredCanonicalVenue = configuredVenueName
     ? resolveIngestionVenue(ingestionVenueResolver, {
         allowSourceAccountFallback: false,
@@ -149,10 +162,6 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
         sourceRole: "promoter",
       }).venue ?? configuredVenueName
     : "";
-  const accountNamedInParentScope = Boolean(
-    parentLooksLikeSharedProgram &&
-      sourceAccountNames.some((name) => hasPhysicalVenuePlacement(name, parentCaption)),
-  );
   const parentScopedVenues = usesSplitEventCandidates && usesStructuredEvidence && parentLooksLikeSharedProgram
     ? [...ingestionVenueResolver.snapshot.venueById.values()].filter((venue) =>
         [venue.name, ...(venue.aliases ?? [])].some((name) =>
@@ -192,19 +201,11 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
           ),
       )
     : false;
-  const sourceAccountVenue = usesSplitEventCandidates && usesStructuredEvidence &&
-    sourceRole === "venue" && configuredVenueName &&
-    !hasOffsiteVenuePlacement &&
-    (
-      normalizeVenueComparableText(normalizedVenue) ===
-        normalizeVenueComparableText(configuredVenueName) ||
-      accountNamedInParentScope
-    )
-    ? resolveIngestionVenue(ingestionVenueResolver, {
-        postingProviderHandle: post.username,
-        rawVenueClaim: "",
-        sourceRole: "venue",
-      }).venue ?? ""
+  const sourceAccountVenue = usesStructuredEvidence && sourceRole === "venue" &&
+    sourceAccountRecord && !hasOffsiteVenuePlacement &&
+    claimMatchesSourceAccount(rawModelVenue) &&
+    claimMatchesSourceAccount(normalizeString(extracted.shared_schedule_context.venue.value))
+    ? sourceAccountRecord.name
     : "";
   const rawEventVariants: EventVariant[] = usesSplitEventCandidates
     ? splitEventCandidates.map((entry) => {
@@ -349,8 +350,30 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
               declaredVenues: extracted.schedule_entries.map((row) => row.venue),
             }) ?? undefined
           : undefined;
+        const singleOccurrenceNamedVenueVerified = Boolean(
+          splitEventCandidates.length === 1 && rowVenue && !rowVenueIsTitleOnly &&
+            isVerifiedEventVenueEvidence({
+              venue: rowVenue,
+              rawEvidenceValue: rowVenue,
+              extracted,
+              splitSourceLine: entry.sourceLine,
+              splitEvidenceSource: rowEvidenceSource,
+              post,
+              hasPoster: hasPosterEvidence,
+              trustedVenueSource: false,
+              sharedVenueVerified: false,
+            }),
+        );
         const rowVenueIsDirect = rowVenueGrounded || singleOccurrencePostVenueGrounded ||
-          Boolean(scopedBranchVenueEvidence);
+          singleOccurrenceNamedVenueVerified || Boolean(scopedBranchVenueEvidence);
+        const singleOccurrenceModelVenueVerified = Boolean(
+          splitEventCandidates.length === 1 && !rowVenue && rawModelVenue &&
+            isVerifiedEventVenueEvidence({
+              venue: rawModelVenue, rawEvidenceValue: rawModelVenue, extracted,
+              splitSourceLine: entry.sourceLine, splitEvidenceSource: rowEvidenceSource,
+              post, hasPoster: hasPosterEvidence, trustedVenueSource: false, sharedVenueVerified: false,
+            }),
+        );
         const scopedRowCanonicalVenue =
           rowVenueIsDirect || sharedVenueValue ? "" : rowCanonicalVenue;
         const singleSplitCanonicalVenueEvidenceSource =
@@ -379,6 +402,7 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
         const trustedVenueAccountFallback = Boolean(
           trustedVenueSource &&
             !hasOffsiteVenuePlacement &&
+            claimMatchesSourceAccount(rowVenue) &&
             !venueMentionIsOnlyInRowTitle(
               normalizedVenue,
               entry.lineTitle,
@@ -408,11 +432,19 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
               : sharedVenueValue ||
                 scopedRowCanonicalVenue ||
                 parentScopedVenue ||
+                (singleOccurrenceModelVenueVerified ? rawModelVenue : "") ||
                 (singleSplitCanonicalVenueEvidenceSource ? normalizedVenue : "") ||
                 (trustedVenueAccountFallback ? normalizedVenue : "") ||
-                sourceAccountVenue
+                (claimMatchesSourceAccount(rowVenue) ? sourceAccountVenue : "")
           : normalizedVenue;
-        const variantVenue = variantVenueRaw
+        const variantVenueCanonicalization = variantVenueRaw
+          ? canonicalizeVenueNameDetailed(variantVenueRaw, ingestionVenueResolver.snapshot.canonicalVenueNamesByHandle, {
+              canonicalVenueAliasesByHandle: ingestionVenueResolver.canonicalVenueAliasesByHandle,
+            })
+          : null;
+        const variantVenue = usesStructuredEvidence && variantVenueCanonicalization?.reason === "compatible"
+          ? variantVenueRaw
+          : variantVenueRaw
           ? resolveIngestionVenue(ingestionVenueResolver, {
               allowSourceAccountFallback: false,
               postingProviderHandle: post.username,
@@ -550,7 +582,8 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
           description: variantDescription,
           venue: variantVenue,
           venueEvidenceValue:
-            rowVenueIsDirect ? rowVenue : sharedVenueValue || scopedRowCanonicalVenue,
+            rowVenueIsDirect ? rowVenue : sharedVenueValue || scopedRowCanonicalVenue ||
+              (singleOccurrenceModelVenueVerified ? rawModelVenue : ""),
           scopedBranchVenueEvidence,
           venueFromSourceAccountFallback: Boolean(
             sourceAccountVenue &&
@@ -598,8 +631,12 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
         artists: extractedArtists,
         artistsWereSanitized: false,
         description: baseDescription,
-        venue: effectiveNormalizedVenue,
+        venue: effectiveNormalizedVenue || sourceAccountVenue,
         venueEvidenceValue: rawModelVenue,
+        venueFromSourceAccountFallback: Boolean(sourceAccountVenue &&
+          (!effectiveNormalizedVenue ||
+            (venueNormalization.source === "handle_map" &&
+              normalizeVenueComparableText(effectiveNormalizedVenue) === normalizeVenueComparableText(sourceAccountVenue)))),
         canonicalVenueEvidenceSource,
         canonicalVenueEvidenceHandle:
           canonicalVenueEvidenceSource === "evidence_handle"

@@ -22,7 +22,7 @@ import type { StructuredFactExtractionResult } from "@/lib/pipeline/ingestion/st
 import { isVerifiedDateEvidence, isVerifiedEventIdentityEvidence, isVerifiedEventVenueEvidence, isVerifiedTimeEvidence } from "@/lib/pipeline/ingestion/structured-fact-verification";
 import { normalizeString } from "@/lib/pipeline/ingestion/values";
 import { standaloneSourceMonthHeading } from "@/lib/pipeline/ingestion/source-calendar-validation";
-import { normalizeVenueComparableText } from "@/lib/pipeline/venue-normalization";
+import { normalizeHandle, normalizeVenueComparableText } from "@/lib/pipeline/venue-normalization";
 import type { InstagramScrapedPost } from "@/lib/scraper/instagram-scraper";
 
 type FinalizeStructuredFactVariantsInput = {
@@ -360,6 +360,7 @@ export function finalizeStructuredFactVariants({
         ? { fallbackIdentityPolicyVersion: 1 }
         : {}),
       venueEvidenceVerified,
+      ...(variant.venueFromSourceAccountFallback ? { venueAccountFallbackVersion: 1 } : {}),
       structuredEvidenceVerified,
       sourceConflictFields,
       rawVenue: variantRawVenue,
@@ -552,7 +553,7 @@ export function finalizeStructuredFactVariants({
             source: variant.timeEvidence.source,
           },
           {
-            exactText: variantRawVenue || undefined,
+            exactText: variant.venueFromSourceAccountFallback ? undefined : variantRawVenue || undefined,
             field: "venue",
             source: variantTrustedVenueSource
               ? "source_account"
@@ -572,8 +573,8 @@ export function finalizeStructuredFactVariants({
           : { timeRelation: "unknown" as const }),
         titleClaim: variant.title,
         venueClaim: variant.venue,
-        ...(variant.canonicalVenueEvidenceHandle
-          ? { venueHandleClaim: variant.canonicalVenueEvidenceHandle }
+        ...(variant.canonicalVenueEvidenceHandle || variant.venueFromSourceAccountFallback
+          ? { venueHandleClaim: variant.canonicalVenueEvidenceHandle ?? normalizeHandle(post.username) }
           : {}),
         policy: {
           approvalDisposition: moderationDecision.autoApproved

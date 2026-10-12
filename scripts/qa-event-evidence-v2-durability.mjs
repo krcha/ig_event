@@ -692,11 +692,13 @@ try {
   };
   const repairEvents = [repairEvent];
   const repairAudits = [];
+  let repairPersistedPost = posterPost;
   const repairCtx = {
     auth: { getUserIdentity: async () => null },
     db: {
       async get(id) {
-        return repairEvents.find((event) => event._id === id) ?? null;
+        return repairEvents.find((event) => event._id === id) ??
+          (repairVenue._id === id ? repairVenue : null);
       },
       async patch(id, patch) {
         const event = repairEvents.find((candidate) => candidate._id === id);
@@ -745,7 +747,7 @@ try {
               table === "instagramSources"
                 ? [repairSource]
                 : table === "scrapedPosts"
-                  ? [posterPost]
+                  ? [repairPersistedPost]
                   : table === "mediaAssets"
                     ? [makePosterAsset()]
                     : [];
@@ -840,9 +842,134 @@ try {
       moderationNote: "Attempted unsafe venue repair must fail without any mutation.",
       serviceSecret: process.env.CRON_SECRET,
     }),
-    /may only change normalizedVenue/i,
+    /may only change (?:normalizedVenue|the normalized venue)/i,
   );
   assert.equal(unsafeRepairEvent.venue, "");
+
+  const retainedRepairEvents = repairEvents.splice(0);
+  const originalRepairSource = structuredClone(repairSource);
+  const originalRepairVenue = structuredClone(repairVenue);
+  try {
+    const accountRaw = {
+      ...extractionFixture,
+      venue: "",
+      field_confirmation: {
+        ...extractionFixture.field_confirmation,
+        location_name: {
+          confidence: 0,
+          found_in: [],
+          evidence: "",
+          evidence_snippets: [],
+          notes: "No physical venue stated in the source.",
+        },
+      },
+    };
+    const accountRawJson = JSON.stringify(accountRaw);
+    repairPersistedPost = { ...posterPost, analysisResultJson: accountRawJson };
+    const accountCurrentFields = {
+      ...makeNormalizedFields("poster", "poster"),
+      sourceAccountRole: "venue",
+      rawVenue: "",
+      normalizedVenue: "",
+      trustedVenueSource: false,
+      venueSource: null,
+    };
+    const accountNextFields = {
+      ...accountCurrentFields,
+      normalizedVenue: repairCanonicalVenueName,
+      trustedVenueSource: true,
+      venueSource: "handle_map",
+      venueAccountFallbackVersion: 1,
+    };
+    function accountRepairCandidate(suffix, overrides = {}) {
+      return {
+        ...posterEvent,
+        _id: `event-account-fallback-repair-${suffix}`,
+        venue: "",
+        rawExtractionJson: accountRawJson,
+        normalizedFieldsJson: JSON.stringify(accountCurrentFields),
+        ...overrides,
+      };
+    }
+    function accountRepairArgs(candidate, nextFields = accountNextFields) {
+      return {
+        id: candidate._id,
+        expectedStatus: "approved",
+        expectedUpdatedAt: candidate.updatedAt,
+        expectedNormalizedFieldsJson: candidate.normalizedFieldsJson,
+        nextVenue: repairCanonicalVenueName,
+        nextNormalizedFieldsJson: JSON.stringify(nextFields),
+        moderationNote: "Restore the exact mapped public venue for this current known venue account.",
+        serviceSecret: process.env.CRON_SECRET,
+      };
+    }
+    async function rejectsAccountRepair(candidate, nextFields = accountNextFields) {
+      repairEvents.push(candidate);
+      const before = structuredClone(candidate);
+      const beforeAuditCount = repairAudits.length;
+      await assert.rejects(
+        repairTrustedV2EventVenue._handler(repairCtx, accountRepairArgs(candidate, nextFields)),
+      );
+      assert.deepEqual(candidate, before, "An unsafe account fallback must not patch the event.");
+      assert.equal(repairAudits.length, beforeAuditCount, "Failed fallback must not create a success audit.");
+      assert.equal(repairEvents.pop(), candidate);
+    }
+
+    for (const role of ["promoter", "unknown"]) {
+      repairSource.role = role;
+      await rejectsAccountRepair(accountRepairCandidate(role));
+    }
+    Object.assign(repairSource, originalRepairSource);
+    repairSource.active = false;
+    await rejectsAccountRepair(accountRepairCandidate("inactive"));
+    Object.assign(repairSource, originalRepairSource);
+    for (const publicStatus of ["hidden", "pending"]) {
+      repairVenue.publicStatus = publicStatus;
+      await rejectsAccountRepair(accountRepairCandidate(publicStatus));
+    }
+    Object.assign(repairVenue, originalRepairVenue);
+
+    const explicitOtherFields = { ...accountCurrentFields, rawVenue: "Other Physical Hall" };
+    await rejectsAccountRepair(accountRepairCandidate("offsite", {
+      normalizedFieldsJson: JSON.stringify(explicitOtherFields),
+    }), { ...accountNextFields, rawVenue: explicitOtherFields.rawVenue });
+    await rejectsAccountRepair(accountRepairCandidate("raw-claim-rewrite"), {
+      ...accountNextFields,
+      rawVenue: repairCanonicalVenueName,
+    });
+    await rejectsAccountRepair(accountRepairCandidate("title-rewrite"), {
+      ...accountNextFields,
+      title: "An invented replacement concert",
+    });
+
+    const accountRepairEvent = accountRepairCandidate("exact");
+    const accountEventBefore = structuredClone(accountRepairEvent);
+    repairEvents.push(accountRepairEvent);
+    const accountRepairResult = await repairTrustedV2EventVenue._handler(
+      repairCtx,
+      accountRepairArgs(accountRepairEvent),
+    );
+    assert.equal(accountRepairResult.updated, true);
+    assert.equal(accountRepairEvent.venue, repairCanonicalVenueName);
+    assert.equal(accountRepairEvent.venueId, repairVenue._id);
+    assert.equal(accountRepairEvent.status, "approved");
+    assert.equal(accountRepairEvent.rawExtractionJson, accountEventBefore.rawExtractionJson,
+      "Account repair must preserve the original extraction byte-for-byte.");
+    assert.equal(accountRepairEvent.title, accountEventBefore.title);
+    assert.equal(accountRepairEvent.date, accountEventBefore.date);
+    assert.equal(accountRepairEvent.time, accountEventBefore.time);
+    assert.deepEqual(JSON.parse(accountRepairEvent.normalizedFieldsJson), accountNextFields);
+    assert.equal(
+      await isCanonicallyGroundedApprovedEvent(repairCtx, accountRepairEvent),
+      true,
+      "The exact known account fallback must retain current source grounding.",
+    );
+  } finally {
+    repairEvents.splice(0, repairEvents.length, ...retainedRepairEvents);
+    repairPersistedPost = posterPost;
+    Object.assign(repairSource, originalRepairSource);
+    Object.assign(repairVenue, originalRepairVenue);
+  }
 
   const reviewedOccurrenceKey = "instagram-occurrence-v2:reviewed-correction";
   const reviewedSourceIdentity = "instagram-source-identity-v1:BOUNDARYV2";

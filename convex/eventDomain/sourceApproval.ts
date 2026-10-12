@@ -17,6 +17,7 @@ import { normalizeInstagramPostUrl } from "../../lib/images/apify-images";
 import { canonicalizeSourceUrl } from "../../lib/domain/source-url";
 import { isSupportedExtractionModel } from "../internal/extractionModel";
 import { hasCarouselAnalysisMarker, hasPersistedCarouselEventMediaProof } from "../internal/carouselMediaProof";
+import { assertSourceAccountVenueFallbackPolicy } from "./sourceAccountVenueFallback";
 import {
   normalizeHandle,
   toSearchableText,
@@ -156,6 +157,7 @@ export async function assertPersistedServiceSourcePolicy(
     );
   }
   if (structuredEvidence || humanReviewedStructured) {
+    await assertSourceAccountVenueFallbackPolicy(ctx, candidate, persisted);
     const hasCarouselAnalysis = hasCarouselAnalysisMarker(persisted, candidate);
     const posterAssets =
       structuredExtractionMode === "poster" && !hasCarouselAnalysis

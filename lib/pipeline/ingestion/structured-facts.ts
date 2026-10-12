@@ -1,6 +1,6 @@
 import { type ExtractedEventData } from "@/lib/ai/extract-event-data";
 import { buildIngestionVenueResolver, type IngestionVenueResolver, type IngestionVenueResolverSnapshotInput, resolveIngestionVenue } from "@/lib/domain/venues/index";
-import { canonicalizeVenueName, canonicalizeVenueNameDetailed, type CanonicalVenueAliasesByHandle, normalizeExtractedArtists, normalizeExtractedDescription, normalizeHandle, normalizeVenueComparableText, toSearchableText, type VenueNormalization } from "@/lib/pipeline/venue-normalization";
+import { canonicalizeVenueNameDetailed, type CanonicalVenueAliasesByHandle, normalizeExtractedArtists, normalizeExtractedDescription, normalizeHandle, normalizeVenueComparableText, toSearchableText, type VenueNormalization } from "@/lib/pipeline/venue-normalization";
 import { type InstagramScrapedPost } from "@/lib/scraper/instagram-scraper";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
 import { normalizeConfidenceScore } from "@/lib/utils/confidence";
@@ -40,11 +40,12 @@ export function normalizeVenue(
   resolver: IngestionVenueResolver,
   sourceRolesByHandle: Record<string, "venue" | "promoter" | "unknown"> = {},
   rawModelTitle = "",
-  options: { allowOwnLocativeVenueEvidence?: boolean } = {},
+  options: { allowOwnLocativeVenueEvidence?: boolean; allowSourceAccountFallback?: boolean } = {},
 ): VenueNormalization {
   const normalizedSourceHandle = normalizeHandle(post.username);
   const sourceRole = sourceRolesByHandle[normalizedSourceHandle];
   const ordinaryResolution = resolveIngestionVenue(resolver, {
+    allowSourceAccountFallback: options.allowSourceAccountFallback,
     postingProviderHandle: post.username,
     rawVenueClaim: rawModelVenue,
     locationName: post.locationName,
@@ -220,6 +221,8 @@ function produceStructuredFactsForScope(
     options.sourceRolesByHandle,
     extracted.title,
     {
+      allowSourceAccountFallback: !usesStructuredEvidence ||
+        options.sourceRolesByHandle?.[normalizeHandle(post.username)] === "venue",
       allowOwnLocativeVenueEvidence: extracted._extractionPolicyVersion === "event_quality_v1" &&
         extracted.schedule_entries.length === 1,
     },
@@ -232,17 +235,27 @@ function produceStructuredFactsForScope(
       : null;
   const normalizedSourceHandle = normalizeHandle(post.username);
   const sourceRole = options.sourceRolesByHandle?.[normalizedSourceHandle];
-  const configuredVenueName = canonicalVenueNamesByHandle[normalizedSourceHandle];
+  const sourceAccountVenueId = ingestionVenueResolver.venueIdByProviderHandle.get(normalizedSourceHandle);
+  const sourceAccountVenue = sourceAccountVenueId
+    ? ingestionVenueResolver.snapshot.venueById.get(sourceAccountVenueId)
+    : undefined;
+  const configuredVenueName = sourceAccountVenue?.name ?? canonicalVenueNamesByHandle[normalizedSourceHandle];
   const configuredVenueLocation =
     canonicalVenueLocationsByHandle[normalizedSourceHandle] ?? "";
   const configuredSourceName =
     configuredVenueNamesByHandle[normalizedSourceHandle] ?? configuredVenueName ?? "";
   const rawModelVenue = normalizeString(extracted.venue);
-  const normalizedRawModelVenue = rawModelVenue
-    ? canonicalizeVenueName(rawModelVenue, canonicalVenueNamesByHandle, {
-        canonicalVenueAliasesByHandle,
-      }) ?? rawModelVenue
-    : "";
+  const rawModelVenueCanonicalization = rawModelVenue
+    ? canonicalizeVenueNameDetailed(rawModelVenue, ingestionVenueResolver.snapshot.canonicalVenueNamesByHandle, {
+        canonicalVenueAliasesByHandle: ingestionVenueResolver.canonicalVenueAliasesByHandle,
+      })
+    : null;
+  // A named room or offsite venue is not the account's venue merely because
+  // its name contains the parent venue's name.
+  const normalizedRawModelVenue = rawModelVenueCanonicalization &&
+    rawModelVenueCanonicalization.reason !== "compatible"
+    ? rawModelVenueCanonicalization.venue
+    : rawModelVenue;
   const rawModelVenueMatchesConfiguredVenue =
     !normalizedRawModelVenue ||
     normalizeVenueComparableText(normalizedRawModelVenue) ===
