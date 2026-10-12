@@ -51,6 +51,7 @@ function makeDb({
   links = [],
   receipts = [],
   scrapedPosts = [],
+  instagramSources = [],
   venues = [],
   mediaAssets = [],
   savedEvents = [],
@@ -87,6 +88,7 @@ function makeDb({
       receipts.map((row) => [row._id, structuredClone(row)]),
     ),
     scrapedPosts: new Map(scrapedPosts.map((row) => [row._id, structuredClone(row)])),
+    instagramSources: new Map(instagramSources.map((row) => [row._id, structuredClone(row)])),
     venues: new Map(venues.map((row) => [row._id, structuredClone(row)])),
     mediaAssets: new Map(mediaAssets.map((row) => [row._id, structuredClone(row)])),
     userSavedEvents: new Map(
@@ -1308,6 +1310,21 @@ const lineupExpectedOccurrences = legacyLineupEvents.map((event) => ({
 function makeLineupState(options = {}) {
   return makeDb({
     events: legacyLineupEvents,
+    venues: [{
+      _id: "venue-para-lineup",
+      name: "Para klub Beograd",
+      instagramHandle: lineupPost.handle,
+      category: "nightlife",
+      publicStatus: "published",
+      scrapeActive: true,
+    }],
+    instagramSources: [{
+      _id: "source-para-lineup",
+      handle: lineupPost.handle,
+      role: "venue",
+      venueId: "venue-para-lineup",
+      active: true,
+    }],
     links: legacyLineupEvents.map((event, index) => ({
       _id: lineupLinkIds[index],
       eventId: event._id,
@@ -1642,6 +1659,18 @@ const blankLegacyVenueReceiptState = makeLineupState({
     venue: "",
   })),
 });
+for (const sourcePatch of [{ role: "promoter" }, { role: "unknown" }, { active: false }]) {
+  const staleAccountState = makeLineupState();
+  const account = staleAccountState.tables.instagramSources.get("source-para-lineup");
+  staleAccountState.tables.instagramSources.set(account._id, { ...account, ...sourcePatch });
+  const staleAccountBefore = snapshotTables(staleAccountState);
+  await assert.rejects(
+    () => coalesceApprovedNightlifeLineupOccurrences._handler(serviceCtx(staleAccountState), validLineupArgs()),
+    /venue account fallback requires one active mapped venue account/i,
+    "Coalescing a fallback event must recheck the current account classification before any write.",
+  );
+  assert.deepEqual(snapshotTables(staleAccountState), staleAccountBefore);
+}
 const blankLegacyVenueMergeResult =
   await coalesceApprovedNightlifeLineupOccurrences._handler(
     serviceCtx(blankLegacyVenueReceiptState),

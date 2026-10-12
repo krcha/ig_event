@@ -28,6 +28,7 @@ const checks = [
   { script: "qa:definitive-output-recovery-executor", timeoutMs: 60_000 },
   { script: "qa:event-evidence-v2-durability", timeoutMs: 60_000 },
   { script: "qa:source-bound-empty-v2-venue-repair", timeoutMs: 60_000 },
+  { script: "qa:account-venue-fallback", timeoutMs: 60_000 },
   { script: "qa:sep29-failed-saved-post-recovery", timeoutMs: 60_000 },
   { script: "qa:approved-legacy-venue-repair", timeoutMs: 60_000 },
   { script: "qa:event-time-provenance", timeoutMs: 60_000 },

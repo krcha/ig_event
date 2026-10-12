@@ -5,7 +5,7 @@ import "../convex/events.ts";
 import { EVENT_EXTRACTION_POLICY_VERSION, parseExtractedEventData } from "../lib/ai/extract-event-data.ts";
 import { findScopedBranchVenueEvidence } from "../lib/pipeline/ingestion/scoped-branch-venue-evidence.ts";
 import { isVerifiedEventVenueEvidence } from "../lib/pipeline/ingestion/structured-fact-verification.ts";
-import { normalizeVenue } from "../lib/pipeline/ingestion/structured-facts.ts";
+import { normalizeVenue, produceStructuredFactsForInsert } from "../lib/pipeline/ingestion/structured-facts.ts";
 import { buildIngestionVenueResolver, findPositiveLocativeVenueHandleEvidence } from "../lib/domain/venues/index.ts";
 import {
   bindSourceOccurrenceMetadata,
@@ -386,4 +386,71 @@ assert.deepEqual(
   "Explicit source program names must survive rather than generic weekday fallback titles.",
 );
 
-console.log("QA passed: source-scoped acts, independent room programs, six tour sessions with branch identity, one-party DJ grouping, source titles and distinct occurrence keys.");
+// A musical genre is not placement at a similarly named venue. This reproduces
+// the Greasy Gravy hold without depending on live extraction or paid providers.
+const accountVenue = "Fabrika Alternativne Kulturne Scene";
+const accountPost = makePost({
+  handle: "faks_beograd",
+  sourceUrl: "https://www.instagram.com/p/qa-known-account-fallback/",
+  caption: "Greasy Gravy 14.10.2026. 21:00. Zvuk benda oslanja se na cvrst groove, izrazajan blues i ritmicnost.",
+});
+const accountNames = { faks_beograd: accountVenue, voxbluesclub: "Vox Blues club" };
+function accountFacts({ role = "venue", venue = accountVenue, rowVenue = venue, sharedVenue = "", sourceText = accountPost.caption, snapshot } = {}) {
+  const parsed = extraction([entry({
+    date: "2026-10-14", dateText: "14.10.2026.", time: "21:00", title: "Greasy Gravy",
+    venue: rowVenue, sourceText, source: "caption",
+  })], "live music");
+  parsed.venue = venue;
+  if (sharedVenue) parsed.shared_schedule_context.venue = {
+    applies_to_all: true, value: sharedVenue, evidence: sharedVenue, source: "caption",
+  };
+  return produceStructuredFactsForInsert(
+    { ...accountPost, caption: sourceText }, parsed, IMAGE_URL, accountNames, {}, accountNames,
+    { eventDateFilterNow: NOW, sourceRolesByHandle: { faks_beograd: role }, venueResolverSnapshot: snapshot },
+  );
+}
+for (const venue of ["", accountVenue]) {
+  const [result] = accountFacts({ venue });
+  assert.equal(result.kind, "event");
+  assert.equal(result.facts.venueClaim, accountVenue);
+  assert.equal(result.normalizedFields.normalizedVenue, accountVenue);
+  assert.equal(result.normalizedFields.venueAccountFallbackVersion, 1);
+  assert.equal(result.normalizedFields.sourceAccountRole, "venue");
+  assert.equal(result.normalizedFields.trustedVenueSource, true);
+  assert.equal(result.facts.venueHandleClaim, "faks_beograd");
+  assert.deepEqual(result.facts.evidence.find((proof) => proof.field === "venue"), {
+    exactText: undefined, field: "venue", source: "source_account",
+  }, "Account context must not manufacture a caption or poster quote.");
+}
+for (const role of ["promoter", "unknown"]) {
+  const [result] = accountFacts({ role, venue: "" });
+  assert.equal(result.facts.venueClaim, "", "An account name cannot supply the physical venue for this source role.");
+  assert.equal(result.normalizedFields.venueAccountFallbackVersion, undefined);
+}
+for (const scope of ["row", "shared", "model"]) {
+  const explicitVenue = "Block Bar Radnicki";
+  const sourceText = `${accountPost.caption} At ${explicitVenue}.`;
+  const [result] = accountFacts({
+    venue: scope === "model" ? explicitVenue : "",
+    rowVenue: scope === "row" ? explicitVenue : "",
+    sharedVenue: scope === "shared" ? explicitVenue : "",
+    sourceText,
+  });
+  assert.equal(result.facts.venueClaim, explicitVenue, `Explicit ${scope} venue must survive account fallback.`);
+  assert.equal(result.normalizedFields.venueAccountFallbackVersion, undefined);
+}
+const namedRoom = `Galerija ${accountVenue}`;
+const [room] = accountFacts({ venue: namedRoom, rowVenue: namedRoom, sourceText: `${accountPost.caption} At ${namedRoom}.` });
+assert.equal(room.facts.venueClaim, namedRoom, "A named gallery or room must not collapse to its parent account venue.");
+assert.equal(room.normalizedFields.venueAccountFallbackVersion, undefined);
+const ambiguousAccount = accountFacts({ venue: "", snapshot: {
+  venues: [
+    { id: "faks-a", name: accountVenue, instagramHandle: "faks_beograd" },
+    { id: "faks-b", name: "Other FAKS", instagramHandle: "faks_beograd" },
+  ],
+  identities: [],
+} });
+assert.equal(ambiguousAccount[0].facts.venueClaim, "", "Conflicting account ownership must not choose a venue.");
+assert.equal(ambiguousAccount[0].normalizedFields.venueAccountFallbackVersion, undefined);
+
+console.log("QA passed: source-scoped acts, independent room programs, tour sessions, party grouping, known-account venue fallback and explicit venue precedence.");

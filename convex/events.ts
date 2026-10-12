@@ -409,8 +409,8 @@ export const updateSourceOccurrenceExpectedCount = mutation({
  * reopening a paid fetch or weakening the generic service update policy.
  *
  * The mutation only accepts an empty current venue, an exact optimistic
- * version/JSON snapshot, and a next JSON value whose sole change is the
- * canonical venue already bound to the persisted source handle. Approved
+ * version/JSON snapshot, and the canonical venue bound to the persisted
+ * source handle. Account fallback may also attest its verified provenance. Approved
  * rows must still pass the complete v2 source and duplicate policies.
  */
 export const repairTrustedV2EventVenue = mutation({

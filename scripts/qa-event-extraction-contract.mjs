@@ -3092,12 +3092,16 @@ function runSemanticNormalizationQa() {
         configuredVenueNamesByHandle: {
           madlenianum: "Opera & Theater Madlenianum",
         },
+        canonicalVenueAliasesByHandle: { madlenianum: ["Madlenianum", "Madlenianuma"] },
         sourceRolesByHandle: { madlenianum: "unknown" },
       }),
       "Madlenianum single occurrence",
     );
     assert.equal(madlenianum.event.venue, "Opera & Theater Madlenianum");
     assert.equal(madlenianum.normalizedFields.trustedVenueSource, true);
+    assert.equal(madlenianum.normalizedFields.venueEvidenceVerified, true);
+    assert.equal(madlenianum.normalizedFields.venueAccountFallbackVersion, undefined,
+      "The explicitly named venue is verified from its caption alias, not inferred from an unknown account.");
 
     const delArnoTitle = "Del Arno Band";
     const delArnoSourceLine = `${delArnoTitle} | ${dateText}`;
