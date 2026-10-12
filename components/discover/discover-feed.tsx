@@ -55,6 +55,7 @@ type DiscoverFeedProps = {
   dateTabs: DiscoverDateTab[];
   error?: string;
   events: DiscoverFeedEvent[];
+  introduction: string;
   pagination: DiscoverPagination;
   revision: string;
   selectedDate: string;
@@ -312,10 +313,10 @@ function EmptyDiscoverState({ error }: { error?: string }) {
         <Sparkles className="h-6 w-6" />
       </div>
       <h2 className="mt-4 text-lg font-semibold text-foreground">
-        {error ? "Discover is quiet right now" : "No picks yet"}
+        {error ? "Events could not load" : "No events for this date"}
       </h2>
       <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-        {error ?? "Approved events will appear here as soon as they are ready."}
+        {error ?? "Try another date or browse the calendar."}
       </p>
     </section>
   );
@@ -326,6 +327,7 @@ export function DiscoverFeed({
   dateTabs,
   error,
   events,
+  introduction,
   pagination,
   revision,
   selectedDate,
@@ -420,7 +422,7 @@ export function DiscoverFeed({
               </h1>
               <p className="mt-2 text-sm font-medium text-muted-foreground">{subline}</p>
               <p className="mt-1.5 hidden max-w-xl text-sm leading-6 text-muted-foreground sm:block">
-                Tonight&apos;s approved nightlife, concerts, DJ sets, and culture picks for locals and visitors.
+                {introduction}
               </p>
             </div>
             <div className="flex flex-none items-center gap-2">

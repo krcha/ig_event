@@ -530,12 +530,13 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                   ) : null}
                   {event.instagramPostUrl ? (
                     <a
+                      aria-label={`View post: original Instagram announcement for ${event.title}`}
                       className="button-primary gap-2"
                       href={event.instagramPostUrl}
                       rel="noreferrer"
                       target="_blank"
                     >
-                      Instagram
+                      View post
                       <ExternalLink className="h-4 w-4" />
                     </a>
                   ) : null}
@@ -585,12 +586,13 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
               ) : null}
               {event.instagramPostUrl ? (
                 <a
+                  aria-label={`View post: original Instagram announcement for ${event.title}`}
                   className="button-primary min-h-11 flex-1 gap-2 px-3 py-0"
                   href={event.instagramPostUrl}
                   rel="noreferrer"
                   target="_blank"
                 >
-                  Instagram
+                  View post
                   <ExternalLink className="h-4 w-4" />
                 </a>
               ) : null}

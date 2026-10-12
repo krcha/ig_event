@@ -680,7 +680,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       key: "events",
       label: "Events",
       value: totalFilteredEventCount,
-      caption: "approved this month",
+      caption: "listed this month",
     },
     {
       key: "active-days",
@@ -1323,7 +1323,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   {monthLabel}
                 </h2>
                 <p className="mt-1 max-w-xl text-sm leading-5 text-muted-foreground sm:mt-2 sm:text-base sm:leading-6">
-                  Browse approved Belgrade events by date, venue, or type.
+                  Browse Belgrade events by date, venue, or type.
                 </p>
               </div>
             </div>

@@ -302,7 +302,7 @@ function EventPostTile({
     >
       {imageSrc ? (
         <PublicImage
-          alt=""
+          alt={`${event.title} at ${event.venue} — ${formatPostEventDate(event.date)}`}
           className="object-cover transition duration-300 group-hover:scale-105"
           priority={priority}
           sizes="(max-width: 640px) 33vw, (max-width: 1024px) 30vw, 256px"
@@ -346,8 +346,8 @@ export async function generateMetadata({ params }: VenuePageProps): Promise<Meta
   const location = getLocationLabel(venue);
   const description = clipText(
     upcomingEvents.length > 0
-      ? `${venue.name} in ${location}: ${upcomingEvents.length} upcoming Belgrade event${upcomingEvents.length === 1 ? "" : "s"}, location, Instagram, and venue details.`
-      : `${venue.name} in ${location}: Belgrade venue guide with location, official Instagram, and approved event history.`,
+      ? `Upcoming events at ${venue.name} in ${location}, with venue details and the official Instagram profile.`
+      : `${venue.name} in ${location}: venue details, the official Instagram profile, and past event posts.`,
     160,
   );
   const imageEvent = [...upcomingEvents, ...historyEvents].find((event) =>
