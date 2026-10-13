@@ -38,6 +38,7 @@ export async function processSavedScrapedPostForDurableReceipt(options: {
   serviceSecret?: string;
   onOpenAiTransportStarted?: () => void;
   requireCachedCanonicalApprovedDuplicate?: boolean;
+  requireCachedAnalysisOnly?: boolean;
 }): Promise<DurableSavedPostProcessingResult> {
   const client = getConvexClient();
   const serviceSecret = getConfiguredServiceSecret(options.serviceSecret);
@@ -60,6 +61,11 @@ export async function processSavedScrapedPostForDurableReceipt(options: {
       reason: "Durable saved-post source revision changed; exact recovery is required.",
       transportAttempted,
     };
+  }
+  if (options.requireCachedAnalysisOnly &&
+      (initial.analysisRevision !== options.expectedSourceRevision ||
+       initial.analysisContractVersion !== "event_evidence_v2" || !initial.analysisResultJson)) {
+    return { state: "blocked", reason: "Current saved event analysis is required for automatic recovery.", transportAttempted };
   }
   const summary = createEmptyIngestionSummary([options.handle]);
   const handleSummary = getOrCreateHandleSummary(summary, options.handle);
@@ -90,6 +96,7 @@ export async function processSavedScrapedPostForDurableReceipt(options: {
       expectedSourceRevision: options.expectedSourceRevision,
       requireCachedCanonicalApprovedDuplicate:
         options.requireCachedCanonicalApprovedDuplicate,
+      requireCachedAnalysisOnly: options.requireCachedAnalysisOnly,
       onOpenAiTransportStarted: () => {
         options.onOpenAiTransportStarted?.();
         transportAttempted = true;

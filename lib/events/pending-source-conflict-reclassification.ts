@@ -6,9 +6,10 @@ import {
 } from "./event-evidence-conflict-policy.ts";
 import { HUMAN_REVIEW_REQUIRED_REASON } from "../domain/moderation/policy.ts";
 
-type PendingConflictEvent = {
+export type PendingConflictEvent = {
   artists: string[];
   date: string;
+  time?: string;
   normalizedFieldsJson?: string;
   rawExtractionJson?: string;
   sourceCaption?: string;
@@ -61,8 +62,9 @@ function sameConflictMultiset(left: readonly unknown[], right: readonly unknown[
  * Reclassify a verified cinema release claim without changing extraction or
  * occurrence facts. A separate receipt-fenced mutation persists this patch.
  */
-export function preparePendingCinemaSourceConflictReclassification(
+function preparePendingConflictReclassification(
   event: PendingConflictEvent,
+  mode: "cinema" | "benign",
 ): PendingSourceConflictReclassification {
   if (event.status !== "pending") {
     throw new Error("Only pending events can have source conflicts reclassified.");
@@ -89,12 +91,14 @@ export function preparePendingCinemaSourceConflictReclassification(
     !Array.isArray(event.sourceConflictFields) ||
     !Array.isArray(fields.sourceConflictFields) ||
     !sameConflictMultiset(event.sourceConflictFields, fields.sourceConflictFields) ||
-    !sameConflictMultiset(event.sourceConflictFields, ["date"]) ||
+    (mode === "cinema" ? !sameConflictMultiset(event.sourceConflictFields, ["date"])
+      : !sameConflictMultiset(event.sourceConflictFields, [...new Set(oldMaterial.map((conflict) => conflict.field))])) ||
     fields.extractionIsEvent !== true ||
     raw.is_event !== true ||
     fields.dateEvidenceVerified !== true ||
     fields.timeEvidenceVerified !== true ||
     typeof fields.identityEvidenceVerified !== "boolean" ||
+    (mode === "benign" && fields.identityEvidenceVerified !== true) ||
     fields.venueEvidenceVerified !== true ||
     fields.structuredEvidenceVerified !== false ||
     fields.sourceOccurrencePlanUnverified === true ||
@@ -122,24 +126,10 @@ export function preparePendingCinemaSourceConflictReclassification(
   ) {
     throw new Error("Pending conflict reclassification has no verified source role.");
   }
-  const context: EventEvidenceConflictContext = {
-    artists: event.artists,
-    dateEvidenceVerified: true,
-    identityEvidenceVerified: fields.identityEvidenceVerified === true,
-    resolvedDate: event.date,
-    selectedTitle: event.title,
-    selectedVenue: event.venue,
-    singleOccurrenceSource:
-      fields.splitEventTotal === 1 && fields.multiEventSplitDetected === false,
-    sourceAccountName:
-      typeof fields.sourceAccountName === "string" ? fields.sourceAccountName : "",
-    sourceAccountRole,
-    sourceCaption: event.sourceCaption ?? "",
-    sourcePostedAt: event.sourcePostedAt,
-    venueEvidenceVerified: true,
-  };
+  const context = buildPendingSourceConflictContext(event, fields, raw);
+
   if (
-    !oldMaterial.every((conflict) =>
+    mode === "cinema" && !oldMaterial.every((conflict) =>
       conflict.field === "date" &&
       cinemaReleaseDateIsSeparateFromProgramDate(conflict, context)
     )
@@ -183,5 +173,82 @@ export function preparePendingCinemaSourceConflictReclassification(
     previousMaterialCount: oldMaterial.length,
     nextBenignCount: next.benign.length,
     sourceConflictFields: [],
+  };
+}
+
+export function preparePendingCinemaSourceConflictReclassification(event: PendingConflictEvent): PendingSourceConflictReclassification {
+  return preparePendingConflictReclassification(event, "cinema");
+}
+
+export function preparePendingSourceConflictReclassification(event: PendingConflictEvent): PendingSourceConflictReclassification {
+  return preparePendingConflictReclassification(event, "benign");
+}
+
+export function buildPendingSourceConflictContext(
+  event: { artists?: unknown; date?: unknown; time?: unknown; title?: unknown; venue?: unknown; sourceCaption?: unknown; sourcePostedAt?: unknown; rawExtractionJson?: unknown },
+  fields: Record<string, unknown>, suppliedRaw?: Record<string, unknown>,
+): EventEvidenceConflictContext {
+  let raw = suppliedRaw ?? {};
+  if (!suppliedRaw && typeof event.rawExtractionJson === "string") { try { raw = parseRecord(event.rawExtractionJson); } catch { raw = {}; } }
+  const singleOccurrenceSource = fields.splitEventTotal === 1 && fields.multiEventSplitDetected === false &&
+    (!Array.isArray(raw.schedule_entries) || raw.schedule_entries.length <= 1);
+  const title = typeof event.title === "string" ? event.title : "";
+  const date = typeof event.date === "string" ? event.date : "";
+  const venue = typeof event.venue === "string" ? event.venue : "";
+  const time = typeof event.time === "string" ? event.time : "";
+  const rowText = typeof fields.rowSourceText === "string" ? fields.rowSourceText : typeof fields.splitSourceLine === "string" ? fields.splitSourceLine : "";
+  const posterTexts: string[] = [];
+  const add = (value: unknown) => { if (typeof value === "string" && value.trim() && value.length <= 4096 && posterTexts.length < 64) posterTexts.push(value); };
+  const readEvidence = (record: Record<string, unknown>) => {
+    const timeEvidence = record.time_evidence;
+    if (timeEvidence && typeof timeEvidence === "object" && !Array.isArray(timeEvidence) && (timeEvidence as Record<string, unknown>).source === "poster")
+      add((timeEvidence as Record<string, unknown>).exact_text);
+    if (Array.isArray(record.poster_evidence)) for (const item of record.poster_evidence)
+      if (item && typeof item === "object" && !Array.isArray(item)) add((item as Record<string, unknown>).text);
+  };
+  const rows = Array.isArray(raw.schedule_entries) && raw.schedule_entries.length <= 64 ? raw.schedule_entries : [];
+  const index = Number(fields.splitEventIndex) - 1;
+  const selectedRow = rows[index];
+  if (selectedRow && typeof selectedRow === "object" && !Array.isArray(selectedRow) && Number.isSafeInteger(index) && index >= 0) {
+    const row = selectedRow as Record<string, unknown>;
+    const dateEvidence = row.date_evidence && typeof row.date_evidence === "object" && !Array.isArray(row.date_evidence) ? row.date_evidence as Record<string, unknown> : {};
+    if (row.source_text === rowText && rows.filter((item) => item && typeof item === "object" && (item as Record<string, unknown>).source_text === rowText).length === 1 &&
+        row.title === title && row.venue === venue && dateEvidence.resolved_date === date && row.time === time &&
+        Array.isArray(row.artists) && Array.isArray(event.artists) && row.artists.every((value) => typeof value === "string") &&
+        sameConflictMultiset(row.artists, event.artists)) readEvidence(row);
+  }
+  if (singleOccurrenceSource && rows.length <= 1) {
+    readEvidence(raw);
+    const confirmations = raw.field_confirmation;
+    if (confirmations && typeof confirmations === "object" && !Array.isArray(confirmations))
+      for (const value of Object.values(confirmations as Record<string, unknown>)) {
+        if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+        const snippets = (value as Record<string, unknown>).evidence_snippets;
+        if (Array.isArray(snippets)) for (const snippet of snippets)
+          if (snippet && typeof snippet === "object" && !Array.isArray(snippet) && (snippet as Record<string, unknown>).source === "poster")
+            add((snippet as Record<string, unknown>).text);
+      }
+  }
+  const role = fields.sourceAccountRole;
+  const supplement = fields.focusedSourceConflictReview;
+  if (supplement && typeof supplement === "object" && !Array.isArray(supplement)) {
+    const marker = supplement as Record<string, unknown>;
+    if (marker.policyVersion === 1 && typeof marker.reviewId === "string" && typeof marker.reviewKey === "string" &&
+        typeof marker.contextFingerprint === "string" && Array.isArray(marker.posterTexts) && marker.posterTexts.length <= 64) {
+      for (const value of marker.posterTexts) if (value && typeof value === "object" && !Array.isArray(value)) add((value as Record<string, unknown>).text);
+    }
+  }
+  // Database admission and public grounding independently reload any focused
+  // review marker. The marker alone never establishes persisted source proof.
+  return {
+    artists: Array.isArray(event.artists) ? event.artists.filter((value): value is string => typeof value === "string") : [],
+    dateEvidenceVerified: fields.dateEvidenceVerified === true, identityEvidenceVerified: fields.identityEvidenceVerified === true,
+    resolvedDate: date, selectedTitle: title, selectedVenue: venue, selectedTime: time,
+    timeEvidenceVerified: fields.timeEvidenceVerified === true && fields.time === time, singleOccurrenceSource,
+    sourceAccountName: typeof fields.sourceAccountName === "string" ? fields.sourceAccountName : "",
+    sourceAccountRole: role === "venue" || role === "promoter" || role === "unknown" ? role : undefined,
+    sourceCaption: typeof event.sourceCaption === "string" ? event.sourceCaption : "",
+    sourcePostedAt: typeof event.sourcePostedAt === "string" ? event.sourcePostedAt : undefined,
+    venueEvidenceVerified: fields.venueEvidenceVerified === true, occurrenceSourceText: rowText, sourcePosterTexts: [...new Set(posterTexts)],
   };
 }

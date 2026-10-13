@@ -1,4 +1,5 @@
 import type { Id } from "../_generated/dataModel";
+import { hasPersistedFocusedConflictReviewProof } from "../internal/focusedConflictReviewProof";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { DomainError } from "../../lib/domain/errors";
 import { classifyApprovalOccurrenceRelation } from "../../lib/events/approval-occurrence-conflict";
@@ -61,6 +62,7 @@ export type ApprovalCandidateFields = {
 };
 
 export type ServiceSourceCandidateFields = ApprovalCandidateFields & {
+  _id?: Id<"events">;
   sourceCaption?: string;
   sourcePostedAt?: string;
   rawExtractionJson?: string;
@@ -74,6 +76,9 @@ export async function assertPersistedServiceSourcePolicy(
     allowHumanReviewedStructured?: boolean;
   } = {},
 ): Promise<void> {
+  if (!(await hasPersistedFocusedConflictReviewProof(ctx, { ...candidate, artists: candidate.artists ?? [] }))) {
+    throw new Error("Focused conflict evidence requires its completed current server review.");
+  }
   const structuredEvidence = hasEventEvidenceV2AutoApproval(
     candidate.normalizedFieldsJson,
     candidate,

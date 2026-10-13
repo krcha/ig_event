@@ -301,12 +301,54 @@ human review markers or a human reviewer. Public grounding rechecks the exact
 machine marker, current source, and local receipt proof, so source drift makes
 the event ineligible for publication until repaired.
 
-The automatic worker changes moderation and derived publication state only.
-It does not rewrite source occurrences or receipts. Venue-changing approvals
-need a separate certified provenance operation. If a row fails read-only
-preflight, the worker leaves it pending, increments the error counter for thrown
-preflight errors, advances to the next cursor position, and retries it on a
-later cycle. Post-write proof failures abort the whole transaction.
+The read-only preflight is shared with `automaticApprovalDiagnostics:diagnosePending`.
+The diagnostic query accepts one to five exact pending event versions on one
+date and returns the precise hold reason, source generation, and recovery
+category. Admin rows show the latest matching diagnostic/recovery state from
+`automaticApprovalHolds`; recording this state does not change event versions.
+Human-ready approval remains a separate, weaker policy than machine approval.
+
+After failed preflight, the sweep can repair a uniquely resolved active venue
+account alias through certified provenance rebinding, or reclassify a benign
+source conflict while retaining all public facts and raw extraction bytes.
+Explicit doors-versus-performance timing needs verified occurrence identity,
+date, venue and selected performance time. Schedule evidence must identify the
+same row; ambiguous clocks and actual contradictions remain held. Source,
+receipt, occurrence, and human-review guards are rechecked before writing.
+Repairs produce service audit entries and are approved on a later sweep.
+Post-write proof failures abort the whole transaction.
+
+Cached source recovery and optional focused poster rereads run through the
+authenticated `POST /api/cron/autonomous-moderation` endpoint, one leased source
+per invocation. The Convex `recover automatic moderation evidence` cron calls
+it every five minutes when `AUTONOMOUS_MODERATION_EXECUTOR_ORIGIN` and
+`CRON_SECRET` are set in the Convex environment. Set the origin to the web
+origin, without a path, and use the same secret on both services. The web
+endpoint can also be invoked by the existing authenticated host scheduler.
+Cached recovery uses the ordinary saved-post processing/provenance pipeline
+with current event-evidence-v2 cache required. It cannot fetch Instagram or
+fall back to fresh OpenAI extraction. Stale/malformed analysis, partial unread
+media, terminal failures, and ambiguous prior transports stay held. Recovery
+allows three actual attempts per source generation with a backoff; quota or
+provider deferrals do not consume those attempts.
+
+Focused AI review defaults off. To enable it on the web service, set
+`AUTONOMOUS_MODERATION_AI_ENABLED=true` and optionally
+`AUTONOMOUS_MODERATION_REVIEW_DAILY_LIMIT` (default 20, hard maximum 50).
+Each source generation and review policy gets at most one provider request,
+using retained images verified against their saved checksums. A durable ledger
+reserves both the review allowance and the shared `OPENAI_DAILY_POST_LIMIT`,
+shares the ingestion OpenAI provider lease/circuit, and retains response bytes.
+The maximum response is 4096 tokens. A started request with an unknown result
+is never automatically resent. Completed cache results can be replayed without
+another provider request. Reviewer suggestions that change facts remain held
+for source correction; only exact quoted evidence accepted by deterministic
+conflict rules may reclassify a hold. Approval and public reads independently
+recheck the persisted review, current source, retained media, and public facts.
+
+All lanes preserve human decisions, duplicate ambiguity, source-generation
+fences and existing publication checks. Deployment requires matching web and
+Convex changes; local QA does not activate this worker in production.
 
 ## Docker and VPS Deployment
 

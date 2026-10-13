@@ -8,6 +8,10 @@ Build a reliable event discovery app for Belgrade nightlife that turns Instagram
 
 - Public listings must be accurate enough to trust without manual cross-checking.
 - Automation should accelerate moderation, not silently publish uncertain data.
+- Autonomous moderation repairs only certified source bindings and benign
+  conflicts, retries current saved analysis without provider fallback, and
+  exposes exact hold reasons. Optional poster rereads use durable request and
+  budget fences; public facts and human decisions remain protected.
 - Admin tools should explain what happened in each ingestion run.
 - Ingestion should be resumable and safe under route/runtime time limits.
 - QA must be deterministic across calendar dates and environments.

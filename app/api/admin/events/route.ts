@@ -10,6 +10,7 @@ import {
 } from "@/lib/events/moderation-duplicate-context";
 import { buildSameDateModerationBatches } from "@/lib/events/moderation-uniqueness-batches";
 import { canonicalizeEventType } from "@/lib/taxonomy/venue-types";
+import type { AutomaticApprovalHoldView } from "@/lib/events/automatic-approval-view";
 
 type EventStatus = "pending" | "approved" | "rejected";
 type PromotionTier = "featured" | "promoted";
@@ -129,6 +130,7 @@ const listModerationDuplicateContextByDatesQuery =
   "events:listModerationDuplicateContextByDates" as unknown as FunctionReference<"query">;
 const updateEventMutation =
   "events:updateEvent" as unknown as FunctionReference<"mutation">;
+const getAutomaticHoldsQuery = "autonomousModeration:getHolds" as unknown as FunctionReference<"query">;
 
 function mapEventRecord(event: EventRecord) {
   return {
@@ -237,6 +239,7 @@ function mapModerationDuplicateContextRecord(
     createdAt: event.createdAt,
     updatedAt: event.updatedAt,
     pendingUniqueness: null,
+    automaticApproval: null,
   };
 }
 
@@ -421,8 +424,27 @@ export async function GET(request: Request) {
       }
     }
 
+    const automaticHolds = new Map<string, AutomaticApprovalHoldView>();
+    if (status === "pending") {
+      for (let offset = 0; offset < events.length; offset += 50) {
+        const chunk = events.slice(offset, offset + 50);
+        try {
+          const holds = await convex.query(getAutomaticHoldsQuery, { eventIds: chunk.map((event) => event._id) }) as AutomaticApprovalHoldView[];
+          const versions = new Map(chunk.map((event) => [event._id, event.updatedAt]));
+          if (!Array.isArray(holds)) throw new Error("Automatic diagnostics response was invalid.");
+          for (const hold of holds) {
+            if (versions.get(hold.eventId) === hold.expectedUpdatedAt) automaticHolds.set(hold.eventId, hold);
+          }
+        } catch {
+          // An older backend can still serve moderation while the additive
+          // diagnostic functions are being deployed. Never infer approval.
+          console.warn("Automatic approval diagnostics unavailable for moderation batch.");
+        }
+      }
+    }
     const mappedEvents = events.map((event) => ({
       ...mapEventRecord(event),
+      automaticApproval: automaticHolds.get(event._id) ?? null,
       pendingUniqueness:
         status === "pending"
           ? (pendingUniquenessById.get(event._id) ??
