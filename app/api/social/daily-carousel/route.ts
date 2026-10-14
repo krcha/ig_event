@@ -52,13 +52,14 @@ export async function GET(request: Request) {
     const publishDate = getRequestedDate(request);
     const tomorrow = getNextIsoDate(publishDate);
     const dayAfterTomorrow = getNextIsoDate(tomorrow);
-    const eventDates = [tomorrow, dayAfterTomorrow];
+    const thirdDay = getNextIsoDate(dayAfterTomorrow);
+    const eventDates = [tomorrow, dayAfterTomorrow, thirdDay];
     const convex = new ConvexHttpClient(getRequiredEnv("NEXT_PUBLIC_CONVEX_URL"));
     const events: DailyCarouselEvent[] = [];
     let cursor: string | null = null;
     while (true) {
       const page = (await convex.query(listPublicCalendarEventsWindowQuery, {
-        beforeDate: getNextIsoDate(dayAfterTomorrow),
+        beforeDate: getNextIsoDate(thirdDay),
         cursor,
         fromDate: tomorrow,
       })) as {

@@ -1,0 +1,2 @@
+# Preserve upstream font license bytes and their recorded checksums.
+public/fonts/social/*-OFL.txt -text whitespace=-blank-at-eol

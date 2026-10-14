@@ -96,6 +96,7 @@ const checks = [
   { script: "qa:follow-discovery", timeoutMs: 60_000 },
   { script: "qa:ingestion-durability", timeoutMs: 60_000 },
   { script: "qa:social-carousel", timeoutMs: 60_000 },
+  { script: "qa:n8n-agenda", timeoutMs: 60_000 },
   { script: "qa:convex-auth-boundaries", timeoutMs: 60_000 },
   { script: "qa:source-grounding-reprocess", timeoutMs: 60_000 },
   { script: "qa:event-evidence-policy-reprocess", timeoutMs: 60_000 },
