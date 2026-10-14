@@ -1,6 +1,7 @@
 import "server-only";
 
 import { hasClerkEnv, isProductionRuntime } from "@/lib/utils/env";
+import { getInstagramScraperProvider } from "@/lib/scraper/instaloader-client";
 
 type ReadinessCheck = {
   name: string;
@@ -33,6 +34,15 @@ export function getReadinessStatus() {
     checkEnv("OPENAI_REVIEW_MODEL", production),
     checkEnv("APIFY_API_TOKEN", false),
   ];
+
+  // Configuration readiness is separate from the collector's live Instagram login.
+  try {
+    if (getInstagramScraperProvider() === "instaloader") {
+      checks.push(checkEnv("INSTALOADER_API_URL", true), checkEnv("INSTALOADER_API_TOKEN", true));
+    }
+  } catch {
+    checks.push({ name: "INSTAGRAM_SCRAPER_PROVIDER", ok: false, required: true });
+  }
 
   checks.push({
     name: "CLERK_NEXT_ENV",

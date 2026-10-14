@@ -9,6 +9,7 @@ import {
   runApprovedDuplicateCleanupForCompletedDurableRun,
 } from "@/lib/pipeline/run-instagram-ingestion";
 import { getInstagramScrapeRawItemCount, scrapeInstagramAccount } from "@/lib/scraper/instagram-scraper";
+import { getInstagramScraperProvider, getInstaloaderReadiness } from "@/lib/scraper/instaloader-client";
 import {
   isDurableSavedPostRevisionMismatch,
   isTransientSavedPostProcessingError,
@@ -343,6 +344,25 @@ export async function POST(request: Request) {
       }, { status: 202 });
     }
     if (!alreadyFetched) {
+      // Session/configuration/circuit holds do not consume a crawl attempt.
+      // Once actual acquisition starts, the existing unknown-outcome fence stays.
+      if (getInstagramScraperProvider() === "instaloader") {
+        let ready = false;
+        let paused = false;
+        try { ({ ready, paused } = await getInstaloaderReadiness()); } catch { /* Retry readiness, never crawl blind. */ }
+        if (!ready) {
+          await convex.mutation(retry, {
+            runId,
+            receiptId: claimed.receiptId,
+            workerId,
+            reason: paused ? "instaloader_collector_paused" : "instaloader_collector_not_ready",
+            retryAfterMs: paused ? 15 * 60_000 : 60_000,
+            preserveAttempt: true,
+            serviceSecret,
+          });
+          return NextResponse.json({ claimed: true, handle: claimed.handle, work: "collector_wait" }, { status: 202 });
+        }
+      }
       // This is immediately before the outbound provider call. It consumes the
       // frozen one-cent reservation or charges a retry only if run budget remains.
       const providerAttempt = await convex.mutation(markProviderAttempt, {
@@ -368,6 +388,8 @@ export async function POST(request: Request) {
       // Do not enter the legacy singleton paid-fetch lease here: that old safety
       // layer serializes all accounts and would turn eight workers into one.
       posts = await scrapeInstagramAccount({
+        requestId: `durable:${runId}:${claimed.receiptId}`,
+        collectorReadinessChecked: getInstagramScraperProvider() === "instaloader",
         handle: claimed.handle,
         resultsLimit: claimed.controls.resultsLimit,
         ...(claimed.controls.daysBack === undefined ? {} : { daysBack: claimed.controls.daysBack }),

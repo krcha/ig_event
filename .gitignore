@@ -136,6 +136,10 @@
 /scripts/**/?* [0-9][0-9][0-9].[cm][jt]s
 
 # misc
+.instaloader-session/
+.instaloader-state/
+**/__pycache__/
+*.pyc
 .DS_Store
 *.pem
 
