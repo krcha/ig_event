@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import {
   Bookmark,
   CalendarDays,
+  MapPin,
   ShieldCheck,
   Sparkles,
   Telescope,
@@ -42,8 +43,8 @@ const PUBLIC_TOOLBAR_ITEMS: ToolbarItem[] = [
   },
   {
     href: "/venues",
-    label: "Venues",
-    icon: Warehouse,
+    label: "Map",
+    icon: MapPin,
     match: "prefix",
   },
   {

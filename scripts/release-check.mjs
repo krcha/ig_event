@@ -87,6 +87,7 @@ const checks = [
   { script: "qa:public-grounding-surfaces", timeoutMs: 60_000 },
   { script: "qa:mobile-calendar", timeoutMs: 60_000 },
   { script: "qa:calendar-time-bands", timeoutMs: 60_000 },
+  { script: "qa:event-map", timeoutMs: 60_000 },
   { script: "qa:app-toolbar", timeoutMs: 60_000 },
   { script: "qa:seo", timeoutMs: 60_000 },
   { script: "qa:brand", timeoutMs: 60_000 },

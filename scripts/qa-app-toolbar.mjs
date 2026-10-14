@@ -106,7 +106,7 @@ assert.equal(
   "Mobile top header should not render the old right-side current-tab chip.",
 );
 
-for (const label of ["Events", "Discover", "Venues", "Saved", "You"]) {
+for (const label of ["Events", "Discover", "Map", "Saved", "You"]) {
   assert.equal(
     new RegExp(`>\\s*${escapeRegExp(label)}\\s*<`).test(mobileTopbarSource),
     false,
@@ -117,7 +117,7 @@ for (const label of ["Events", "Discover", "Venues", "Saved", "You"]) {
 assert.equal(
   /\b(pathname|isActivePath|desktopToolbarItems|mobileToolbarItems)\b/.test(mobileTopbarSource),
   false,
-  "Mobile top header markup should be path/tab-independent so it stays identical on Events, Venues, Saved, and You.",
+  "Mobile top header markup should be path/tab-independent so it stays identical on Events, Map, Saved, and You.",
 );
 
 const publicItemsStart = source.indexOf("const PUBLIC_TOOLBAR_ITEMS");
@@ -134,14 +134,14 @@ const publicItemsSource = source.slice(publicItemsStart, adminItemsStart);
 
 assert.deepEqual(
   [...publicItemsSource.matchAll(/\blabel:\s*"([^"]+)"/g)].map(([, label]) => label),
-  ["Events", "Discover", "Venues", "Saved"],
-  "Public navigation tabs should remain exactly Events, Discover, Venues, Saved.",
+  ["Events", "Discover", "Map", "Saved"],
+  "Public navigation tabs should remain exactly Events, Discover, Map, Saved.",
 );
 
 for (const { href, label } of [
   { href: "/", label: "Events" },
   { href: "/discover", label: "Discover" },
-  { href: "/venues", label: "Venues" },
+  { href: "/venues", label: "Map" },
   { href: "/saved", label: "Saved" },
 ]) {
   assert.match(
@@ -152,9 +152,9 @@ for (const { href, label } of [
 }
 
 assert.equal(
-  /href:\s*"\/map"|label:\s*"Map"/.test(publicItemsSource),
+  /href:\s*"\/map"/.test(publicItemsSource),
   false,
-  "Primary navigation should not expose the placeholder Map destination.",
+  "Primary navigation should use /venues for the event map and retain /map only as a compatibility redirect.",
 );
 assert.deepEqual(
   redirects.find(({ source }) => source === "/map"),

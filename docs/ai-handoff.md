@@ -216,6 +216,8 @@ Top-level areas:
   - `/events`: paginated approved event feed with search.
   - `/calendar`: monthly calendar for approved events.
   - `/events/[eventId]`: event detail page.
+  - `/venues`: date-selectable event map with a selected-day event list.
+  - `/venues/directory`: paginated venue guide.
 - `app/(dashboard)`: admin pages.
   - `/admin`: moderation dashboard.
   - `/admin/scraper`: scrape controls and ingestion summaries.

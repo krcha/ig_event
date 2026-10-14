@@ -35,7 +35,8 @@ The source of truth is `convex/schema.ts`.
 - `/events` approved upcoming events.
 - `/events/[eventId]` event detail.
 - `/calendar` monthly browsing.
-- `/venues` public venue directory.
+- `/venues` date-selectable map of approved events and their known venue locations.
+- `/venues/directory` public venue directory.
 - `/map` compatibility redirect to `/venues`.
 - `/api/health` container health check.
 

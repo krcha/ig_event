@@ -1,0 +1,101 @@
+.event-location-map.leaflet-container {
+  background: #111820;
+  font: inherit;
+  outline-offset: -3px;
+}
+
+.event-location-map .leaflet-tile-pane {
+  filter: invert(1) hue-rotate(180deg) brightness(0.8) saturate(0.55);
+}
+
+.event-location-map .leaflet-control-attribution {
+  background: #0b0d12;
+  color: #b4bbc8;
+  font-size: 10px;
+  padding: 3px 7px;
+}
+
+.event-location-map .leaflet-control-attribution a {
+  color: #c7c4ff;
+}
+
+.event-location-map .leaflet-control-zoom {
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
+  box-shadow: 0 6px 20px #0006;
+}
+
+.event-location-map .leaflet-control-zoom a {
+  width: 42px;
+  height: 42px;
+  line-height: 42px;
+  background: #0b0d12;
+  color: #f7f8f8;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.event-location-map .leaflet-control-zoom a:hover,
+.event-location-map .leaflet-control-zoom a:focus-visible {
+  background: #262538;
+  color: #fff;
+}
+
+.event-location-map .leaflet-control-zoom a.leaflet-disabled {
+  background: #11141b;
+  color: #939aa7;
+}
+
+.event-location-map .leaflet-tooltip {
+  background: #0b0d12;
+  color: #f7f8f8;
+  border: 1px solid #8b86fb;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px #0006;
+}
+
+.event-map-pin {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: transparent;
+  border: 0;
+}
+
+.event-map-pin-number {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 2px solid #0b0d12;
+  border-radius: 50%;
+  background: #b5b1ff;
+  color: #080a17;
+  font-size: 14px;
+  font-weight: 800;
+  box-shadow: 0 4px 14px #0008;
+  transition: transform 160ms, background 160ms;
+}
+
+.event-map-pin-dot {
+  width: 6px;
+  height: 6px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: #b5b1ff;
+  box-shadow: 0 1px 5px #0009;
+}
+
+.event-map-pin.is-selected .event-map-pin-number,
+.event-map-pin:hover .event-map-pin-number,
+.event-map-pin:focus-visible .event-map-pin-number {
+  background: #f7f8f8;
+  transform: translateY(-3px) scale(1.12);
+  box-shadow: 0 0 0 4px #8b86fb66, 0 4px 14px #0008;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .event-map-pin-number {
+    transition: none;
+  }
+}

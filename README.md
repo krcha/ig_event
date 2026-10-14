@@ -34,7 +34,8 @@ explicitly replaces them.
 
 - Public event discovery at `/events`
 - Monthly browsing at `/calendar`
-- Public venue directory at `/venues`
+- Day-selectable event map at `/venues`
+- Public venue directory at `/venues/directory`
 - Event details at `/events/[eventId]`
 - Admin moderation at `/admin`
 - Automatic hold diagnostics, certified venue/conflict repairs, cached source
@@ -44,6 +45,11 @@ explicitly replaces them.
 - Venue management at `/admin/venues`
 - Cron ingestion at `/api/cron/ingest-venues`
 - Health check at `/api/health`
+
+The event map uses confirmed venue latitude/longitude. Add both coordinates in
+`/admin/venues` to place a venue on the map; events without coordinates remain
+visible in the day's lineup under "Location not mapped". The map uses the
+existing approved public calendar and Belgrade's nightlife-day rollover.
 
 ## Stack
 

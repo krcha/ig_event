@@ -73,6 +73,7 @@ assert.equal(packageLock.lockfileVersion, 3, "The npm lockfile must stay on lock
 const asyncSearchParamFiles = [
   "app/(main)/events-browse-page.tsx",
   "app/(main)/venues/page.tsx",
+  "app/(main)/venues/directory/page.tsx",
   "app/(main)/discover/page.tsx",
   "app/(main)/events/page.tsx",
   "app/(main)/calendar/page.tsx",

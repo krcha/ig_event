@@ -15,6 +15,8 @@ type Venue = {
   aliases: string[];
   category: string;
   location: string | null;
+  latitude: number | null;
+  longitude: number | null;
   hoursSource: "google" | "manual" | "none" | "osm" | null;
   hoursJson: string | null;
   hoursFetchedAt: number | null;
@@ -50,6 +52,8 @@ type VenueFormState = {
   aliasesText: string;
   category: string;
   location: string;
+  latitude: string;
+  longitude: string;
   manualOpeningHours: string;
   scrapeActive: boolean;
   publicStatus: VenuePublicStatus;
@@ -65,6 +69,8 @@ const EMPTY_FORM: VenueFormState = {
   aliasesText: "",
   category: DEFAULT_VENUE_CATEGORY,
   location: "",
+  latitude: "",
+  longitude: "",
   manualOpeningHours: "",
   scrapeActive: true,
   publicStatus: "pending",
@@ -101,6 +107,82 @@ function parseAliasInput(value: string): string[] {
     .split(/\r?\n/u)
     .map((alias) => alias.trim())
     .filter(Boolean);
+}
+
+function parseVenueCoordinates(form: VenueFormState): {
+  latitude?: number;
+  longitude?: number;
+} {
+  const latitudeText = form.latitude.trim();
+  const longitudeText = form.longitude.trim();
+  if (!latitudeText && !longitudeText) {
+    return {};
+  }
+  if (!latitudeText || !longitudeText) {
+    throw new Error("Enter both latitude and longitude to set a map location.");
+  }
+
+  const latitude = Number(latitudeText);
+  const longitude = Number(longitudeText);
+  if (
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude) ||
+    latitude < -90 ||
+    latitude > 90 ||
+    longitude < -180 ||
+    longitude > 180 ||
+    (latitude === 0 && longitude === 0)
+  ) {
+    throw new Error("Enter valid map coordinates: latitude from -90 to 90 and longitude from -180 to 180. The location cannot be 0, 0.");
+  }
+  return { latitude, longitude };
+}
+
+function VenueCoordinateInputs({
+  form,
+  isEditing = false,
+  onChange,
+}: {
+  form: VenueFormState;
+  isEditing?: boolean;
+  onChange: (field: "latitude" | "longitude", value: string) => void;
+}) {
+  const helpId = isEditing ? "edit-venue-map-location-help" : "create-venue-map-location-help";
+  return (
+    <fieldset className="grid gap-3 md:col-span-2 sm:grid-cols-2">
+      <legend className="mb-2 text-xs font-medium text-muted-foreground">Map location (optional)</legend>
+      <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+        Latitude
+        <input
+          aria-describedby={helpId}
+          className="rounded-xl border border-input bg-background px-3 py-2 text-sm text-foreground"
+          max={90}
+          min={-90}
+          onChange={(event) => onChange("latitude", event.target.value)}
+          step="any"
+          type="number"
+          value={form.latitude}
+        />
+      </label>
+      <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+        Longitude
+        <input
+          aria-describedby={helpId}
+          className="rounded-xl border border-input bg-background px-3 py-2 text-sm text-foreground"
+          max={180}
+          min={-180}
+          onChange={(event) => onChange("longitude", event.target.value)}
+          step="any"
+          type="number"
+          value={form.longitude}
+        />
+      </label>
+      <p className="text-xs text-muted-foreground sm:col-span-2" id={helpId}>
+        Coordinates place this venue on the public event map.
+        {isEditing ? " Leave blank to keep the current map location." : null}
+      </p>
+    </fieldset>
+  );
 }
 
 function formatDateTime(value: number): string {
@@ -192,6 +274,7 @@ export function VenueManager() {
     setIsSubmitting(true);
     setError(null);
     try {
+      const coordinates = parseVenueCoordinates(createForm);
       const response = await fetch("/api/admin/venues", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -201,6 +284,7 @@ export function VenueManager() {
           aliases: parseAliasInput(createForm.aliasesText),
           category: createForm.category.trim(),
           location: createForm.location.trim() || undefined,
+          ...coordinates,
           scrapeActive: createForm.scrapeActive,
           publicStatus: createForm.publicStatus,
         }),
@@ -266,6 +350,8 @@ export function VenueManager() {
       aliasesText: venue.aliases.join("\n"),
       category: venue.category,
       location: venue.location ?? "",
+      latitude: venue.latitude == null ? "" : String(venue.latitude),
+      longitude: venue.longitude == null ? "" : String(venue.longitude),
       manualOpeningHours: getManualOpeningHoursInput(venue),
       scrapeActive: venue.scrapeActive,
       publicStatus: venue.publicStatus,
@@ -281,6 +367,7 @@ export function VenueManager() {
     setBusyVenueId(venueId);
     setError(null);
     try {
+      const coordinates = parseVenueCoordinates(editForm);
       const response = await fetch("/api/admin/venues", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -292,6 +379,7 @@ export function VenueManager() {
             aliases: parseAliasInput(editForm.aliasesText),
             category: editForm.category.trim(),
             location: editForm.location.trim() || undefined,
+            ...coordinates,
             scrapeActive: editForm.scrapeActive,
             publicStatus: editForm.publicStatus,
             ...(editForm.manualOpeningHours.trim()
@@ -521,6 +609,10 @@ export function VenueManager() {
               placeholder="Location (optional)"
               value={createForm.location}
             />
+            <VenueCoordinateInputs
+              form={createForm}
+              onChange={(field, value) => setCreateForm((current) => ({ ...current, [field]: value }))}
+            />
             <textarea
               className="min-h-24 rounded-xl border border-input bg-background px-3 py-2 text-sm md:col-span-2"
               onChange={(event) =>
@@ -738,6 +830,11 @@ export function VenueManager() {
                         }
                         placeholder="Location"
                         value={editForm.location}
+                      />
+                      <VenueCoordinateInputs
+                        form={editForm}
+                        isEditing
+                        onChange={(field, value) => setEditForm((current) => ({ ...current, [field]: value }))}
                       />
                       <textarea
                         className="min-h-24 rounded-xl border border-input bg-background px-3 py-2 text-sm md:col-span-2"

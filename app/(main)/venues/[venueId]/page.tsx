@@ -431,7 +431,7 @@ export default async function VenuePage({ params }: VenuePageProps) {
           <JsonLd
             data={buildBreadcrumbStructuredData([
               { name: "Belgrade events", path: "/" },
-              { name: "Belgrade venues", path: "/venues" },
+              { name: "Belgrade venues", path: "/venues/directory" },
               { name: venue.name, path: `/venues/${venue._id}` },
             ])}
           />
@@ -442,7 +442,7 @@ export default async function VenuePage({ params }: VenuePageProps) {
           <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
             <Link className="hover:text-primary" href="/">Belgrade events</Link>
             <span aria-hidden="true">/</span>
-            <Link className="hover:text-primary" href="/venues">Venues</Link>
+            <Link className="hover:text-primary" href="/venues/directory">Venues</Link>
             <span aria-hidden="true">/</span>
             <span aria-current="page" className="min-w-0 truncate text-foreground">{venue.name}</span>
           </nav>

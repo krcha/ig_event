@@ -305,7 +305,8 @@ const layout = read("app/layout.tsx");
 const rootPage = read("app/page.tsx");
 const browsePage = read("app/(main)/events-browse-page.tsx");
 const eventPage = read("app/(main)/events/[eventId]/page.tsx");
-const venueDirectory = read("app/(main)/venues/page.tsx");
+const eventMap = read("app/(main)/venues/page.tsx");
+const venueDirectory = read("app/(main)/venues/directory/page.tsx");
 const venuePage = read("app/(main)/venues/[venueId]/page.tsx");
 const discoverPage = read("app/(main)/discover/page.tsx");
 const savedPage = read("app/(main)/saved/page.tsx");
@@ -348,6 +349,7 @@ assert.ok(browsePage.includes("buildHomePageStructuredData"));
 for (const [label, source] of [
   ["event detail", eventPage],
   ["venue directory", venueDirectory],
+  ["event map", eventMap],
   ["venue detail", venuePage],
   ["discover", discoverPage],
 ]) {
@@ -409,6 +411,7 @@ assert.ok(sitemapData.includes("limit: 2000"));
 assert.ok(sitemapData.includes("addDaysToDateKey(options.today, 367)"));
 assert.ok(sitemap.includes("/discover"));
 assert.ok(sitemap.includes("/venues"));
+assert.ok(sitemap.includes("/venues/directory"));
 assert.ok(sitemap.includes("/events/${event._id}"));
 assert.ok(sitemap.includes("/venues/${venue._id}"));
 assert.equal((nextConfig.match(/permanent: true/g) ?? []).length >= 4, true);

@@ -1,84 +1,48 @@
 import type { Metadata } from "next";
-import Link from "next/link";
-import { cache } from "react";
+import { Suspense } from "react";
+import { EventCalendarMap } from "@/components/maps/event-calendar-map";
+import { EventMapLoading } from "@/components/maps/event-map-loading";
 import {
-  ArrowRight,
-  ChevronLeft,
-  ChevronRight,
-  Heart,
-  Instagram,
-  MapPin,
-  Search,
-  SlidersHorizontal,
-  Users,
-  Warehouse,
-} from "lucide-react";
-import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
-import { JsonLd } from "@/components/seo/json-ld";
+  enrichEventMapCoordinates,
+  normalizeMapDateKey,
+} from "@/lib/events/event-map";
 import {
-  loadPublicVenueDirectory,
-  type PublicVenueDirectoryItem,
-} from "@/lib/venues/public-venue-pages";
-import {
-  buildPublicVenueDirectoryPageHref,
-  normalizePublicVenueDirectoryPage,
-  paginatePublicVenueDirectory,
-} from "@/lib/venues/public-venue-directory-pagination";
-import {
-  SITE_ORIGIN,
-  buildVenueDirectoryStructuredData,
-} from "@/lib/seo/site";
-import { cn } from "@/lib/utils";
+  addDaysToDateKey,
+  dateKeyToLocalNoonDate,
+  getNightlifeDefaultDateKey,
+} from "@/lib/events/nightlife-date";
+import { loadPublicCalendarEventsWindow } from "@/lib/events/public-events";
+import { SITE_ORIGIN } from "@/lib/seo/site";
+import { loadPublicVenueDirectory } from "@/lib/venues/public-venue-pages";
 
-export const revalidate = 60;
+export const dynamic = "force-dynamic";
 
-const loadVenueDirectory = cache(() => loadPublicVenueDirectory());
-
-type VenuesSearchParams = {
-  category?: string | string[];
-  page?: string | string[];
-  q?: string | string[];
+type MapSearchParams = {
+  date?: string | string[];
 };
 
-type VenuesPageProps = {
-  searchParams?: Promise<VenuesSearchParams>;
+type EventMapPageProps = {
+  searchParams?: Promise<MapSearchParams>;
 };
 
-export async function generateMetadata({ searchParams }: VenuesPageProps): Promise<Metadata> {
+export async function generateMetadata({ searchParams }: EventMapPageProps): Promise<Metadata> {
   const resolvedSearchParams = await searchParams;
-  const requestedPage = normalizePublicVenueDirectoryPage(
-    getSingleValue(resolvedSearchParams?.page),
-  );
-  const hasFilters = Boolean(
-    getSingleValue(resolvedSearchParams?.category)?.trim() ||
-      getSingleValue(resolvedSearchParams?.q)?.trim(),
-  );
-  const { venues } = await loadVenueDirectory();
-  const currentPage = hasFilters
-    ? 1
-    : paginatePublicVenueDirectory(venues, requestedPage).currentPage;
-  const canonicalPath = currentPage > 1 ? `/venues?page=${currentPage}` : "/venues";
-  const title =
-    currentPage > 1
-      ? `Belgrade Venue Guide — Page ${currentPage}`
-      : "Belgrade Venues: Nightlife & Culture Guide";
+  const hasDateFilter = Boolean(resolvedSearchParams?.date);
+  const title = "Belgrade Event Map: Explore Events by Day";
   const description =
-    "Explore Belgrade clubs, bars, concert spaces, galleries, theatres, and cultural venues with upcoming events, locations, and official Instagram links.";
+    "Choose a day and see where Belgrade concerts, club nights, DJ sets, and cultural events are happening. Explore event venues on the map.";
 
   return {
     title,
     description,
-    alternates: {
-      canonical: canonicalPath,
-    },
+    alternates: { canonical: "/venues" },
     openGraph: {
       title: `${title} | Event Zeka`,
       description,
       type: "website",
       locale: "en_RS",
-
       siteName: "Event Zeka",
-      url: new URL(canonicalPath, SITE_ORIGIN).toString(),
+      url: new URL("/venues", SITE_ORIGIN).toString(),
     },
     twitter: {
       card: "summary_large_image",
@@ -86,10 +50,10 @@ export async function generateMetadata({ searchParams }: VenuesPageProps): Promi
       description,
     },
     robots: {
-      index: !hasFilters,
+      index: !hasDateFilter,
       follow: true,
       googleBot: {
-        index: !hasFilters,
+        index: !hasDateFilter,
         follow: true,
         "max-image-preview": "large",
         "max-snippet": -1,
@@ -99,309 +63,58 @@ export async function generateMetadata({ searchParams }: VenuesPageProps): Promi
   };
 }
 
-function getSingleValue(value: string | string[] | undefined): string | undefined {
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-  return value;
-}
-
-function normalizeSearchText(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLocaleLowerCase()
-    .trim();
-}
-
-function formatCompactNumber(value: number | null | undefined): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return "Not captured";
-  }
-
-  return new Intl.NumberFormat("en-US", {
-    compactDisplay: "short",
-    maximumFractionDigits: value >= 1000 ? 1 : 0,
-    notation: "compact",
-  }).format(value);
-}
-
-function getLocationLabel(venue: PublicVenueDirectoryItem): string {
-  return [venue.location, venue.neighborhood].filter(Boolean).join(", ") || "Belgrade";
-}
-
-function venueMatchesQuery(venue: PublicVenueDirectoryItem, query: string): boolean {
-  if (!query) {
-    return true;
-  }
-
-  const haystack = normalizeSearchText(
-    [
-      venue.name,
-      venue.instagramHandle,
-      venue.category,
-      venue.location,
-      venue.neighborhood,
-    ]
-      .filter(Boolean)
-      .join(" "),
-  );
-  return haystack.includes(normalizeSearchText(query));
-}
-
-function filterVenues(
-  venues: PublicVenueDirectoryItem[],
-  options: {
-    category?: string;
-    query?: string;
-  },
-): PublicVenueDirectoryItem[] {
-  return venues.filter((venue) => {
-    if (options.category && venue.category !== options.category) {
-      return false;
-    }
-    return venueMatchesQuery(venue, options.query ?? "");
-  });
-}
-
-function VenueDirectoryCard({
-  authEnabled,
-  venue,
-}: {
-  authEnabled: boolean;
-  venue: PublicVenueDirectoryItem;
-}) {
-  return (
-    <article
-      className="min-w-0 rounded-[1rem] border border-border/75 bg-white/[0.025] p-4 transition hover:border-primary/35 hover:bg-white/[0.045]"
-      style={{ containIntrinsicSize: "310px", contentVisibility: "auto" }}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <Link className="min-w-0" href={`/venues/${venue._id}`} prefetch={false}>
-          <p className="section-kicker">{venue.category || "Venue"}</p>
-          <h2 className="mt-1 line-clamp-2 text-lg font-semibold leading-6 text-foreground">
-            {venue.name}
-          </h2>
-        </Link>
-        {authEnabled ? (
-          <FavoriteVenueButton
-            className="flex-none"
-            venueId={venue._id}
-            venueName={venue.name}
-          />
-        ) : null}
-      </div>
-
-      <div className="mt-4 space-y-2 text-sm leading-5 text-muted-foreground">
-        <p className="flex min-w-0 items-center gap-2">
-          <Instagram className="h-4 w-4 flex-none text-primary" />
-          <span className="truncate">@{venue.instagramHandle}</span>
-        </p>
-        <p className="flex min-w-0 items-center gap-2">
-          <MapPin className="h-4 w-4 flex-none text-primary" />
-          <span className="truncate">{getLocationLabel(venue)}</span>
-        </p>
-      </div>
-
-      <div className="mt-4">
-        <div className="rounded-[0.85rem] border border-border/70 bg-card/70 px-3 py-2">
-          <p className="section-kicker">Followers</p>
-          <p className="mt-1 flex items-center gap-2 text-sm font-semibold text-foreground">
-            <Users className="h-4 w-4 text-primary" />
-            {formatCompactNumber(venue.instagramFollowerCount)}
-          </p>
-        </div>
-      </div>
-
-      <Link
-        className="button-secondary mt-4 min-h-10 w-full gap-2 px-4 py-0"
-        href={`/venues/${venue._id}`}
-        prefetch={false}
-      >
-        Venue page
-        <ArrowRight className="h-4 w-4" />
-      </Link>
-    </article>
-  );
-}
-
-export default async function VenuesPage({ searchParams }: VenuesPageProps) {
+export default async function EventMapPage({ searchParams }: EventMapPageProps) {
   const resolvedSearchParams = await searchParams;
-  const { error, venues } = await loadVenueDirectory();
-  if (error) {
-    throw new Error(`Failed to load public venue directory: ${error}`);
-  }
-
-  const selectedCategory = getSingleValue(resolvedSearchParams?.category)?.trim();
-  const searchQuery = getSingleValue(resolvedSearchParams?.q)?.trim() ?? "";
-  const categories = Array.from(
-    new Set(venues.map((venue) => venue.category).filter((category): category is string => Boolean(category))),
-  ).sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
-  const filteredVenues = filterVenues(venues, {
-    category: selectedCategory,
-    query: searchQuery,
-  });
-  const requestedPage = normalizePublicVenueDirectoryPage(
-    getSingleValue(resolvedSearchParams?.page),
-  );
-  const {
-    currentPage,
-    firstItemNumber,
-    lastItemNumber,
-    pageItems: visibleVenues,
-    totalPages,
-  } = paginatePublicVenueDirectory(filteredVenues, requestedPage);
-  const activeFilterCount = [selectedCategory, searchQuery].filter(Boolean).length;
-  const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
-  const previousPageHref = buildPublicVenueDirectoryPageHref({
-    category: selectedCategory,
-    page: currentPage > 2 ? String(currentPage - 1) : undefined,
-    q: searchQuery || undefined,
-  });
-  const nextPageHref = buildPublicVenueDirectoryPageHref({
-    category: selectedCategory,
-    page: String(currentPage + 1),
-    q: searchQuery || undefined,
-  });
+  const requestedDate = Array.isArray(resolvedSearchParams?.date)
+    ? resolvedSearchParams.date[0]
+    : resolvedSearchParams?.date;
+  const todayDate = getNightlifeDefaultDateKey();
+  const selectedDate = normalizeMapDateKey(requestedDate, todayDate);
 
   return (
-    <main className="app-page gap-4 pb-[calc(7rem+env(safe-area-inset-bottom))] md:pb-9">
-      <JsonLd
-        data={buildVenueDirectoryStructuredData(visibleVenues, currentPage, firstItemNumber)}
-      />
-      <section className="hero-panel px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
-        <div className="flex flex-col gap-3 sm:gap-5 lg:flex-row lg:items-end lg:justify-between">
-          <div className="min-w-0">
-            <span className="hidden h-11 w-11 items-center justify-center rounded-[1rem] bg-primary text-primary-foreground sm:inline-flex">
-              <Warehouse className="h-5 w-5" />
-            </span>
-            <p className="section-kicker mt-4 hidden sm:block">Venues</p>
-            <h1 className="whitespace-nowrap text-2xl font-semibold leading-tight text-foreground sm:mt-2 sm:whitespace-normal sm:text-5xl">
-              <span className="sm:hidden">Belgrade venues</span>
-              <span className="hidden sm:inline">Belgrade venue guide</span>
-            </h1>
-            <p className="mt-3 hidden max-w-2xl text-sm leading-6 text-muted-foreground sm:block sm:text-base">
-              Clubs, bars, galleries, theatres, concert spaces, and late-night rooms for locals and
-              visitors. Vodič kroz beogradske klubove i kulturne prostore sa aktuelnim događajima.
-            </p>
-          </div>
-          <div className="grid w-full grid-cols-2 gap-2 lg:w-auto lg:min-w-80">
-            <div className="rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3">
-              <p className="section-kicker">Venues</p>
-              <p className="mt-1 flex items-center gap-2 text-lg font-semibold text-foreground">
-                <Warehouse className="h-4 w-4 text-primary" />
-                {venues.length}
-              </p>
-            </div>
-            <div className="rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3">
-              <p className="section-kicker">With IG data</p>
-              <p className="mt-1 flex items-center gap-2 text-lg font-semibold text-foreground">
-                <Users className="h-4 w-4 text-primary" />
-                {venues.filter((venue) => typeof venue.instagramFollowerCount === "number").length}
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
+    <Suspense fallback={<EventMapLoading />}>
+      <EventMapResults selectedDate={selectedDate} todayDate={todayDate} />
+    </Suspense>
+  );
+}
 
-      <form className="glass-panel grid gap-3 px-4 py-4 lg:grid-cols-[minmax(0,1fr)_14rem_auto] lg:items-center" action="/venues">
-        <label className="relative min-w-0">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <input
-            className="min-h-11 w-full rounded-[0.9rem] border border-border/75 bg-background/80 py-0 pl-9 pr-3 text-sm text-foreground outline-none focus:border-primary/45"
-            defaultValue={searchQuery}
-            name="q"
-            placeholder="Search venues"
-          />
-        </label>
-        <label className="min-w-0">
-          <select
-            className="min-h-11 w-full rounded-[0.9rem] border border-border/75 bg-background/80 px-3 text-sm text-foreground outline-none focus:border-primary/45"
-            defaultValue={selectedCategory ?? ""}
-            name="category"
-          >
-            <option value="">All categories</option>
-            {categories.map((category) => (
-              <option key={category} value={category}>
-                {category}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button className="button-primary min-h-11 gap-2 px-4 py-0" type="submit">
-          <SlidersHorizontal className="h-4 w-4" />
-          Filter
-        </button>
-      </form>
+async function EventMapResults({ selectedDate, todayDate }: {
+  selectedDate: string;
+  todayDate: string;
+}) {
+  const selectedWeekday = dateKeyToLocalNoonDate(selectedDate).getDay();
+  const fromDate = addDaysToDateKey(selectedDate, -((selectedWeekday + 6) % 7));
+  const beforeDate = addDaysToDateKey(fromDate, 7);
+  const [eventResult, venueResult] = await Promise.all([
+    loadPublicCalendarEventsWindow({ beforeDate, fromDate }),
+    loadPublicVenueDirectory(),
+  ]);
 
-      {activeFilterCount > 0 ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="app-chip bg-card/95">{filteredVenues.length} matches</span>
-          <Link className="app-chip bg-white/[0.04] hover:bg-white/[0.07]" href="/venues">
-            Clear filters
-          </Link>
-        </div>
-      ) : null}
+  if (eventResult.error) {
+    throw new Error(`Failed to load event map: ${eventResult.error}`);
+  }
+  if (venueResult.error) {
+    throw new Error(`Failed to load map venues: ${venueResult.error}`);
+  }
 
-      {filteredVenues.length > 0 ? (
-        <>
-          <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
-            <p aria-live="polite">
-              Showing {firstItemNumber}–{lastItemNumber} of {filteredVenues.length} venues
-            </p>
-            <p>
-              Page {currentPage} of {totalPages}
-            </p>
-          </div>
-          <section className="grid grid-cols-[minmax(0,1fr)] gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {visibleVenues.map((venue) => (
-              <VenueDirectoryCard authEnabled={authEnabled} key={venue._id} venue={venue} />
-            ))}
-          </section>
-          {totalPages > 1 ? (
-            <nav
-              aria-label="Venue directory pages"
-              className="flex items-center justify-between gap-3"
-            >
-              {currentPage > 1 ? (
-                <Link
-                  className="button-secondary min-h-11 gap-2 px-4 py-0"
-                  href={`/venues${previousPageHref}`}
-                  prefetch={false}
-                  rel="prev"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                  Previous
-                </Link>
-              ) : (
-                <span />
-              )}
-              {currentPage < totalPages ? (
-                <Link
-                  className="button-secondary min-h-11 gap-2 px-4 py-0"
-                  href={`/venues${nextPageHref}`}
-                  prefetch={false}
-                  rel="next"
-                >
-                  Next
-                  <ChevronRight className="h-4 w-4" />
-                </Link>
-              ) : null}
-            </nav>
-          ) : null}
-        </>
-      ) : (
-        <section className="rounded-[1rem] border border-dashed border-border/80 bg-white/[0.025] px-4 py-10 text-center">
-          <Heart className="mx-auto h-7 w-7 text-primary" />
-          <h2 className="mt-4 text-lg font-semibold text-foreground">No venues found</h2>
-          <Link
-            className={cn("button-secondary mt-5", activeFilterCount === 0 && "hidden")}
-            href="/venues"
-          >
-            Clear filters
-          </Link>
-        </section>
-      )}
-    </main>
+  const days = Array.from({ length: 7 }, (_, index) => {
+    const date = addDaysToDateKey(fromDate, index);
+    return {
+      date,
+      eventCount: eventResult.events.filter((event) => event.date === date).length,
+    };
+  });
+  const events = enrichEventMapCoordinates(
+    eventResult.events.filter((event) => event.date === selectedDate),
+    venueResult.venues,
+  );
+
+  return (
+    <EventCalendarMap
+      days={days}
+      events={events}
+      selectedDate={selectedDate}
+      todayDate={todayDate}
+    />
   );
 }

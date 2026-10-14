@@ -48,6 +48,11 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       changeFrequency: "daily",
       priority: 0.8,
     },
+    {
+      url: absoluteUrl("/venues/directory"),
+      changeFrequency: "weekly",
+      priority: 0.7,
+    },
   ];
   const eventRoutes: MetadataRoute.Sitemap = eventResult.events.map((event) => ({
     url: absoluteUrl(`/events/${event._id}`),
