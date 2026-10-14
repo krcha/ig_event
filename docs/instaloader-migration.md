@@ -6,6 +6,12 @@ existing events, or historical Apify recovery. The production selector defaults
 to `apify` until required live-post and feed-coverage comparisons are accepted
 and the backend that understands the optional compatibility marker is deployed.
 
+On 2026-10-14 the user requested that Instaloader remain paused after Instagram
+redirected the signed-in browser to a verification/sign-in page. Keep the
+collector stopped with its session and durable state intact. Production
+continues on Apify; do not resume live checks or cut over until the user resumes
+the migration and authentication and coverage checks pass.
+
 ## Accounts and rules
 
 The app remains the only account-list and scheduler authority. The daily loader
@@ -143,10 +149,14 @@ discovery and historical dataset recovery still use their existing Apify paths.
    upstream errors expose only a sanitized diagnostic cause; readiness includes
    the remaining pause interval.
 3. A protected session was verified on the Mac and installed securely on the
-   VPS. One authenticated request returned KISSA's two-image carousel. Do not
-   retry an Instagram password login. Current live evidence covers that KISSA
-   carousel only; four other selected live posts and feed-window behavior are
-   still unverified. The historical Frida request failed, and its public post
+   VPS. Authenticated requests returned KISSA's two-image and Lozionica's
+   four-image carousels with matching identities, captions, dates, venues and
+   ordered child IDs/types. Do not retry an Instagram password login. Three
+   other selected live posts and feed-window behavior are still unverified.
+   KISSA's enrichment passes the narrow compatibility proof; Lozionica's
+   alternate generated alt format fails that proof and retains normal revision
+   invalidation. These comparisons did not write sources or events. The
+   historical Frida request failed, and its public post
    URL was also unavailable in Brave while signed in as the collector account.
    The collector's original generic error does not establish the upstream cause
    or justify changing existing events. Keep the provider selector on Apify
