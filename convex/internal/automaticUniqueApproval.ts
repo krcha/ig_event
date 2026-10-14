@@ -1,22 +1,18 @@
+import { evaluateAutomaticUniqueApproval } from "./automaticUniqueApprovalPreflight";
+import { attemptAutomaticPendingRepair } from "./autonomousModerationRepair";
 import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
 import { internalAction, internalMutation } from "../_generated/server";
 import {
   AUTOMATIC_UNIQUE_APPROVAL_POLICY_VERSION,
   AUTOMATIC_UNIQUE_APPROVAL_RULE,
-  hasAutomaticUniqueStructuredSourceAttestation,
-  hasHumanReviewableStructuredSourceAttestation,
   nextEventUpdatedAt,
 } from "../../lib/events/event-update-precondition";
 import { buildEventOccurrenceIndexPatch } from "../sourceOccurrences";
-import { hasCompleteAutomaticUniqueSourceProof } from "./automaticUniqueSourceProof";
-import { buildPendingModerationUniquenessReview } from "../eventDomain/moderationUniqueness";
 import {
   refreshCanonicalEventDerivedStates,
   writeEventAuditLog,
 } from "../eventDomain/persistence";
-import { assertPersistedServiceSourcePolicy } from "../eventDomain/sourceApproval";
-import { requireCanonicalInstagramPostUrl } from "../eventDomain/sourceUrlPolicy";
 import { isCanonicallyGroundedApprovedEvent } from "../publicEventGrounding";
 
 const STATE_KEY = "automatic-unique-approval-v1" as const;
@@ -25,15 +21,6 @@ const DEFAULT_MAX_PAGES = 60;
 const MAX_PAGES = 300;
 const COMPLETED_CYCLE_COOLDOWN_MS = 3 * 60 * 1_000;
 const SYSTEM_ACTOR = "service:auto-unique";
-const CLASSIFICATION_NOTE =
-  "Automatic source and uniqueness verification; no human moderation is claimed.";
-const VENUE_TOPOLOGY_FIELDS = [
-  "venue",
-  "venueId",
-  "normalizedVenueIdentity",
-  "normalizedVenueInstagramHandle",
-] as const;
-
 const sweepPageReference =
   "internal/automaticUniqueApproval:sweepPage" as unknown as FunctionReference<
     "mutation",
@@ -46,40 +33,6 @@ const sweepPageReference =
       scannedCount: number;
     }
   >;
-
-function buildAutomaticFields(
-  normalizedFieldsJson: string | undefined,
-  canonicalVenue: string,
-): string | null {
-  let fields: Record<string, unknown>;
-  try {
-    const parsed: unknown = JSON.parse(normalizedFieldsJson ?? "null");
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-    fields = parsed as Record<string, unknown>;
-    if (
-      fields.humanReviewedLegacySourcePolicyVersion !== undefined ||
-      fields.humanReviewedStructuredSourcePolicyVersion !== undefined
-    ) return null;
-  } catch {
-    return null;
-  }
-  return JSON.stringify({
-    ...fields,
-    normalizedVenue: canonicalVenue,
-    automaticUniqueApprovalPolicyVersion: AUTOMATIC_UNIQUE_APPROVAL_POLICY_VERSION,
-    ...(fields.sourceOccurrenceAmbiguousProvenance === true
-      ? { automaticUniqueCollisionProofVersion: 1 }
-      : {}),
-    moderationAutoApproved: true,
-    moderationAutoApproveRule: AUTOMATIC_UNIQUE_APPROVAL_RULE,
-    moderationPendingReasons: [],
-    moderationSignals: Array.isArray(fields.moderationSignals)
-      ? fields.moderationSignals.filter(
-          (signal) => signal !== "requires_human_approval",
-        )
-      : [],
-  });
-}
 
 /** One transaction owns a single queue position and one possible approval. */
 export const sweepPage = internalMutation({
@@ -138,69 +91,15 @@ export const sweepPage = internalMutation({
       // Classification and source policy can reject one malformed row. Keep
       // its pending status and advance the durable cursor; a later cycle may
       // retry it after source repair. Writes below remain outside this catch.
-      const preflight = await (async () => {
-        if (
-          event.reviewedAt !== undefined ||
-          event.reviewedBy !== undefined ||
-          event.humanReviewedLegacySourcePolicyVersion !== undefined ||
-          event.humanReviewedStructuredSourcePolicyVersion !== undefined
-        ) return null;
-        const review = await buildPendingModerationUniquenessReview(ctx, {
-          items: [{ id: event._id, expectedUpdatedAt: event.updatedAt }],
-          asOfMs: Date.now(),
-          // This note is only an argument to the read-only classifier. No
-          // human review note or human marker is persisted by this worker.
-          moderationNote: CLASSIFICATION_NOTE,
-        });
-        const item = review.result.items[0];
-        const approved = item?.disposition === "unique"
-          ? review.approvals.get(event._id)
-          : null;
-        if (!approved) return null;
-        const normalizedFieldsJson = buildAutomaticFields(
-          event.normalizedFieldsJson,
-          approved.prepared.candidate.venue,
-        );
-        if (!normalizedFieldsJson) return null;
-        const nextCandidate = {
-          ...approved.prepared.candidate,
-          automaticUniqueApprovalPolicyVersion:
-            AUTOMATIC_UNIQUE_APPROVAL_POLICY_VERSION as 1,
-          normalizedFieldsJson,
-        };
-        // Approval changes only the event's moderation state. A venue identity
-        // change rewrites occurrence topology and needs a separate certified
-        // path; unrelated historical receipts must not block this local proof.
-        if (VENUE_TOPOLOGY_FIELDS.some(
-          (field) => event[field] !== nextCandidate[field],
-        )) return null;
-        if (
-          !hasHumanReviewableStructuredSourceAttestation(
-            nextCandidate.normalizedFieldsJson,
-            nextCandidate,
-          ) ||
-          !hasAutomaticUniqueStructuredSourceAttestation(
-            nextCandidate.normalizedFieldsJson,
-            nextCandidate,
-          ) ||
-          !(await hasCompleteAutomaticUniqueSourceProof(ctx, event))
-        ) return null;
-        requireCanonicalInstagramPostUrl(
-          nextCandidate.instagramPostUrl,
-          `Automatic unique approval ${event._id}`,
-        );
-        await assertPersistedServiceSourcePolicy(ctx, nextCandidate, {
-          allowHumanReviewedStructured: true,
-        });
-        return { approved, nextCandidate };
-      })().catch((error: unknown) => {
-        classificationErrorCount = 1;
-        console.warn("Automatic unique approval skipped malformed candidate", {
-          eventId: event._id,
-          errorType: error instanceof Error ? error.name : "unknown",
-        });
-        return null;
-      });
+      const evaluation = await evaluateAutomaticUniqueApproval(ctx, event);
+      if (evaluation.diagnostic.holdReason === "evaluation_error") classificationErrorCount = 1;
+      const preflight = evaluation.approval;
+      if (!preflight) {
+        console.info("Automatic unique approval held", evaluation.diagnostic);
+        // Certified repair errors roll back the transaction; never swallow
+        // errors after the source/provenance writer has started.
+        await attemptAutomaticPendingRepair(ctx, event, evaluation.diagnostic);
+      }
       if (preflight) {
         const { approved, nextCandidate } = preflight;
         const now = Date.now();

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EventTimeProvenanceText } from "@/components/events/event-time-provenance-text";
 import type { EventTimeSource, EventTimeStatus } from "@/lib/events/event-time";
+import { getAutomaticApprovalExplanation, type AutomaticApprovalHoldView } from "@/lib/events/automatic-approval-view";
 import {
   getPersistedBaseConfidenceScore,
   getPersistedModerationConfidenceScore,
@@ -95,6 +96,7 @@ type ModerationEvent = {
     moderationNote: string | null;
   };
   pendingUniqueness: PendingUniqueness | null;
+  automaticApproval?: AutomaticApprovalHoldView | null;
   createdAt: number;
   updatedAt: number;
 };
@@ -2179,6 +2181,9 @@ export function ModerationDashboard() {
                         <p className={`mt-1 text-sm ${isReadyToApprove ? "text-emerald-700" : "text-muted-foreground"}`}>
                           {reviewDecision.reason}
                         </p>
+                      ) : null}
+                      {event.moderation.status === "pending" && getAutomaticApprovalExplanation(event) ? (
+                        <p className="mt-1 text-sm text-muted-foreground">{getAutomaticApprovalExplanation(event)}</p>
                       ) : null}
                       <EventTimeProvenanceText
                         className="mt-1 max-w-2xl"

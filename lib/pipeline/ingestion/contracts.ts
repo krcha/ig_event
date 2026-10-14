@@ -445,6 +445,9 @@ export type EventImportRecord = {
 };
 
 export type SavedScrapedPostRecord = {
+  analysisRevision?: number;
+  analysisContractVersion?: string;
+  analysisResultJson?: string;
   _id: string;
   handle: string;
   postId: string;
@@ -589,6 +592,8 @@ export type ProcessIngestionPostOptions = {
    * persistence and the server refuses to create or update an event.
    */
   requireCachedCanonicalApprovedDuplicate?: boolean;
+  /** Automatic recovery may consume current saved analysis, never buy another extraction. */
+  requireCachedAnalysisOnly?: boolean;
   eventDateFilterNow?: Date;
 };
 
@@ -610,6 +615,7 @@ export type ProcessLoadedPostsForHandleOptions = {
   expectedSourceRevision?: number;
   onOpenAiTransportStarted?: () => void;
   requireCachedCanonicalApprovedDuplicate?: boolean;
+  requireCachedAnalysisOnly?: boolean;
 } & IngestionVenueContext;
 
 export type DurableSavedPostProcessingResult =

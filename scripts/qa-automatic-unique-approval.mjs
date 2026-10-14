@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 
 import { sweepPage } from "../convex/internal/automaticUniqueApproval.ts";
+import { evaluateAutomaticUniqueApproval } from "../convex/internal/automaticUniqueApprovalPreflight.ts";
+import { diagnosePending } from "../convex/automaticApprovalDiagnostics.ts";
 import {
+  diagnoseCompleteAutomaticUniqueSourceProof,
   hasCompleteAutomaticUniqueSourceProof,
   hasExactSourceCollisionOrdinalProof,
 } from "../convex/internal/automaticUniqueSourceProof.ts";
@@ -584,12 +587,14 @@ function makeSweepContext() {
       date: "2020-01-01", status: "pending", updatedAt: 1,
     }],
   ]);
+  const holds = new Map();
   let state = null;
   let failVenueOnce = true;
   const reads = [];
   function query(table, criteria = {}) {
     const selected = () => {
       const all = table === "events" ? [...rows.values()]
+        : table === "automaticApprovalHolds" ? [...holds.values()]
         : table === "automaticUniqueApprovalState" && state ? [state]
         : [];
       return all.filter((row) => Object.entries(criteria).every(([key, value]) => row[key] === value));
@@ -629,25 +634,33 @@ function makeSweepContext() {
   }
   const ctx = {
     db: {
-      async get(id) { return rows.get(id) ?? (id === state?._id ? state : null); },
+      async get(id) { return rows.get(id) ?? holds.get(id) ?? (id === state?._id ? state : null); },
       query,
       async patch(id, patch) {
-        if (id === state?._id) state = { ...state, ...patch };
+        if (holds.has(id)) holds.set(id, { ...holds.get(id), ...patch });
+        else if (id === state?._id) state = { ...state, ...patch };
         else rows.set(id, { ...rows.get(id), ...patch });
       },
       async insert(table, value) {
+        if (table === "automaticApprovalHolds") {
+          const id = "qa-hold-" + (holds.size + 1);
+          holds.set(id, { _id: id, ...value });
+          return id;
+        }
         assert.equal(table, "automaticUniqueApprovalState");
         state = { _id: "qa-sweep-state", ...value };
         return state._id;
       },
     },
   };
-  return { ctx, reads, rows, get state() { return state; } };
+  return { ctx, reads, rows, holds, get state() { return state; } };
 }
 
 const sweep = makeSweepContext();
 const originalWarn = console.warn;
+const originalInfo = console.info;
 console.warn = () => {};
+console.info = () => {};
 try {
   const first = await sweepPage._handler(sweep.ctx, {});
   assert.equal(first.scannedCount, 1);
@@ -656,6 +669,8 @@ try {
   assert.equal(sweep.state.classificationErrorCount, 1);
   assert.equal(sweep.state.cursor, "pending-newer");
   assert.equal(sweep.rows.get("pending-newer").status, "pending");
+  assert.equal(sweep.rows.get("pending-newer").updatedAt, 1);
+  assert.equal(sweep.holds.get("qa-hold-1").holdReason, "evaluation_error");
 
   // Simulate a concurrent status mutation between pages. The durable cursor
   // still advances to the next older pending row.
@@ -673,6 +688,145 @@ try {
   assert.deepEqual(sweep.reads, ["pending-newer", "pending-older"]);
 } finally {
   console.warn = originalWarn;
+  console.info = originalInfo;
 }
 
-console.log("QA passed: automatic unique approval binds v2 source fields, fails closed, and advances the durable pending cursor.");
+const proofAsOfMs = Date.parse("2035-01-15T12:00:00.000Z");
+const sourceDiagnostic = await diagnoseCompleteAutomaticUniqueSourceProof(proofContext(), proofEvent, proofAsOfMs);
+assert.equal(sourceDiagnostic.reason, "complete");
+assert.equal(sourceDiagnostic.sourcePostId, proofSource._id);
+assert.equal(sourceDiagnostic.sourceRevision, 1);
+assert.deepEqual(sourceDiagnostic.missingOccurrenceKeys, [pastExpected.key]);
+for (const [override, reason] of [
+  [{ analysisRevision: 0 }, "source_analysis_stale"],
+  [{ analysisIsEvent: false }, "source_analysis_non_event"],
+  [{ analysisModel: "gpt-6-sol" }, "source_analysis_model_unsupported"],
+  [{ analysisResultJson: "stale analysis" }, "source_analysis_binding_mismatch"],
+]) {
+  const diagnostic = await diagnoseCompleteAutomaticUniqueSourceProof(proofContext(basePartialReceipt, { ...proofSource, ...override }), proofEvent, proofAsOfMs);
+  assert.equal(diagnostic.complete, false);
+  assert.equal(diagnostic.reason, reason);
+  assert.equal(diagnostic.sourcePostId, proofSource._id);
+}
+const pendingProofEvent = { ...proofEvent, status: "pending", updatedAt: 10 };
+const exactReview = {
+  result: { complete: true, items: [{ id: pendingProofEvent._id, expectedUpdatedAt: 10, disposition: "unique", reason: "unique_no_conflict", conflictIds: [] }] },
+  reviewedEvents: new Map([[pendingProofEvent._id, pendingProofEvent]]),
+  approvals: new Map([[pendingProofEvent._id, { prepared: { candidate: pendingProofEvent, venuePatch: {} }, humanReviewPatch: {} }]]),
+};
+const readyPreflight = await evaluateAutomaticUniqueApproval(proofContext(basePartialReceipt, proofSource, pendingProofEvent), pendingProofEvent, { asOfMs: proofAsOfMs, prebuiltReview: exactReview });
+assert.equal(readyPreflight.diagnostic.eligible, true);
+assert.equal(readyPreflight.diagnostic.holdReason, "eligible");
+assert.equal(readyPreflight.diagnostic.repairCategory, "none");
+assert.ok(readyPreflight.approval);
+assert.equal(pendingProofEvent.status, "pending");
+assert.equal(pendingProofEvent.updatedAt, 10);
+const reviewedPreflight = await evaluateAutomaticUniqueApproval({}, { ...pendingProofEvent, reviewedAt: 1 }, { asOfMs: proofAsOfMs });
+assert.equal(reviewedPreflight.diagnostic.holdReason, "human_reviewed");
+assert.equal(reviewedPreflight.approval, null);
+const conflictReview = { ...exactReview, result: { complete: true, items: [{ ...exactReview.result.items[0], disposition: "ineligible", reason: "ineligible_source_conflict" }] }, approvals: new Map() };
+const conflictPreflight = await evaluateAutomaticUniqueApproval(proofContext(basePartialReceipt, proofSource, pendingProofEvent), pendingProofEvent, { asOfMs: proofAsOfMs, prebuiltReview: conflictReview });
+assert.equal(conflictPreflight.diagnostic.holdReason, "ineligible_source_conflict");
+assert.equal(conflictPreflight.diagnostic.repairCategory, "source_conflict_review");
+assert.equal(conflictPreflight.diagnostic.sourcePostId, proofSource._id);
+assert.equal(conflictPreflight.approval, null);
+const incompletePreflight = await evaluateAutomaticUniqueApproval(proofContext({ ...basePartialReceipt, deferredChildCount: 1, deferredChildKeys: ["qa-deferred"] }, proofSource, pendingProofEvent), pendingProofEvent, { asOfMs: proofAsOfMs, prebuiltReview: exactReview });
+assert.equal(incompletePreflight.diagnostic.holdReason, "source_proof_incomplete");
+assert.equal(incompletePreflight.diagnostic.repairCategory, "occurrence_completion");
+assert.equal(incompletePreflight.approval, null);
+
+process.env.ADMIN_CLERK_USER_IDS = "qa-diagnostic-owner";
+process.env.CRON_SECRET = "qa-diagnostic-secret";
+const diagnosticEvent = { _id: "qa-exact-diagnostic", _creationTime: 1, status: "pending", date: "2020-01-01", updatedAt: 123 };
+let diagnosticReads = 0;
+let diagnosticWrites = 0;
+function diagnosticQuery(table, criteria = {}) {
+  return {
+    withIndex(_name, configure) { const filters = {}; const q = { eq(key, value) { filters[key] = value; return q; } }; configure(q); return diagnosticQuery(table, { ...criteria, ...filters }); },
+    order() { return this; },
+    async take(limit) { diagnosticReads += 1; const rows = table === "events" ? [diagnosticEvent] : []; return rows.filter((row) => Object.entries(criteria).every(([key, value]) => row[key] === value)).slice(0, limit); },
+  };
+}
+const diagnosticCtx = {
+  auth: { async getUserIdentity() { return { subject: "qa-diagnostic-owner" }; } },
+  db: {
+    async get(id) { diagnosticReads += 1; return id === diagnosticEvent._id ? diagnosticEvent : null; }, query: diagnosticQuery,
+    async patch() { diagnosticWrites += 1; throw new Error("Read-only diagnostics wrote a row."); },
+    async insert() { diagnosticWrites += 1; throw new Error("Read-only diagnostics inserted a row."); },
+  },
+};
+const exactDiagnosticArgs = { items: [{ id: diagnosticEvent._id, expectedUpdatedAt: 123 }], asOfMs: proofAsOfMs };
+const exactPendingDiagnostic = await diagnosePending._handler(diagnosticCtx, exactDiagnosticArgs);
+assert.equal(exactPendingDiagnostic.items[0].holdReason, "ineligible_expired_event");
+assert.equal(exactPendingDiagnostic.items[0].eligible, false);
+assert.equal(diagnosticWrites, 0);
+assert.equal(diagnosticEvent.updatedAt, 123);
+const servicePendingDiagnostic = await diagnosePending._handler({ ...diagnosticCtx, auth: { async getUserIdentity() { return null; } } }, { ...exactDiagnosticArgs, serviceSecret: "qa-diagnostic-secret" });
+assert.deepEqual(servicePendingDiagnostic, exactPendingDiagnostic);
+const readsBeforeUnauthorized = diagnosticReads;
+await assert.rejects(() => diagnosePending._handler({ ...diagnosticCtx, auth: { async getUserIdentity() { return null; } } }, exactDiagnosticArgs), /Authentication required/);
+await assert.rejects(() => diagnosePending._handler({ ...diagnosticCtx, auth: { async getUserIdentity() { return { subject: "qa-not-admin" }; } } }, exactDiagnosticArgs), /Admin access required/);
+assert.equal(diagnosticReads, readsBeforeUnauthorized);
+await assert.rejects(() => diagnosePending._handler(diagnosticCtx, { ...exactDiagnosticArgs, items: [{ id: diagnosticEvent._id, expectedUpdatedAt: 122 }] }), /Event changed since/);
+await assert.rejects(() => diagnosePending._handler(diagnosticCtx, { ...exactDiagnosticArgs, items: [exactDiagnosticArgs.items[0], exactDiagnosticArgs.items[0]] }), /unique exact/);
+await assert.rejects(() => diagnosePending._handler(diagnosticCtx, { ...exactDiagnosticArgs, asOfMs: NaN }), /clock/);
+assert.equal(diagnosticWrites, 0);
+
+function makeHappySweepContext() {
+  const pending = { ...proofEvent, status: "pending", updatedAt: 10, normalizedVenueIdentity: "qa hall" };
+  const tables = new Map([
+    ["events", new Map([[pending._id, structuredClone(pending)]])],
+    ["scrapedPosts", new Map([[proofSource._id, structuredClone(proofSource)]])],
+    ["instagramEventSources", new Map([[proofLink._id, structuredClone(proofLink)]])],
+    ["instagramSourceOccurrenceReceipts", new Map([[basePartialReceipt._id, structuredClone(basePartialReceipt)]])],
+  ]);
+  const writes = [];
+  const getTable = (name) => { if (!tables.has(name)) tables.set(name, new Map()); return tables.get(name); };
+  function query(table, criteria = {}) {
+    const selected = () => [...getTable(table).values()].filter((row) => Object.entries(criteria).every(([key, value]) => row[key] === value));
+    return {
+      withIndex(_index, configure) { const filters = {}; const q = { eq(field, value) { filters[field] = value; return q; } }; configure(q); return query(table, { ...criteria, ...filters }); },
+      order() { return this; },
+      async take(limit) { return selected().slice(0, limit); },
+      async paginate({ cursor, numItems }) { assert.equal(cursor, null); assert.equal(numItems, 1); return { page: selected().slice(0, numItems), isDone: true, continueCursor: "", pageStatus: "Done" }; },
+    };
+  }
+  const ctx = { db: {
+    query,
+    async get(id) { for (const rows of tables.values()) if (rows.has(id)) return rows.get(id); return null; },
+    async patch(id, patch) { for (const [table, rows] of tables) if (rows.has(id)) { rows.set(id, { ...rows.get(id), ...structuredClone(patch) }); writes.push({ table, id, patch: structuredClone(patch) }); return; } throw new Error("Unexpected QA patch: " + id); },
+    async insert(table, value) { const id = "qa-happy-" + table + "-" + (getTable(table).size + 1); getTable(table).set(id, { _id: id, _creationTime: Date.now(), ...structuredClone(value) }); writes.push({ table, id, insert: structuredClone(value) }); return id; },
+  } };
+  return { ctx, tables, writes, eventId: pending._id };
+}
+const happySweep = makeHappySweepContext();
+const originalHappyNow = Date.now;
+try {
+  Date.now = () => proofAsOfMs;
+  const observedBeforeApproval = await diagnosePending._handler(happySweep.ctx, { items: [{ id: happySweep.eventId, expectedUpdatedAt: 10 }], asOfMs: proofAsOfMs, serviceSecret: "qa-diagnostic-secret" });
+  assert.equal(observedBeforeApproval.items[0].eligible, true);
+  assert.equal(observedBeforeApproval.items[0].sourceProofReason, "complete");
+  assert.equal(happySweep.writes.length, 0);
+  const result = await sweepPage._handler(happySweep.ctx, {});
+  assert.equal(result.approvedCount, 1);
+  assert.equal(result.scannedCount, 1);
+  assert.equal(result.cycleComplete, true);
+  const approvedEvent = happySweep.tables.get("events").get(happySweep.eventId);
+  assert.equal(approvedEvent.status, "approved");
+  assert.equal(approvedEvent.automaticUniqueApprovalPolicyVersion, 1);
+  assert.ok(approvedEvent.updatedAt > 10);
+  assert.equal(approvedEvent.reviewedAt, undefined);
+  assert.equal(approvedEvent.reviewedBy, undefined);
+  assert.equal(approvedEvent.humanReviewedStructuredSourcePolicyVersion, undefined);
+  assert.equal(approvedEvent.publicationState, "publishable");
+  assert.equal(await isCanonicallyGroundedApprovedEvent(happySweep.ctx, approvedEvent), true);
+  const finalFields = JSON.parse(approvedEvent.normalizedFieldsJson);
+  assert.equal(finalFields.confidence, 0.01);
+  assert.deepEqual(finalFields.moderationPendingReasons, []);
+  assert.equal(happySweep.tables.get("eventAuditLog").size, 1);
+  assert.equal(happySweep.tables.get("automaticUniqueApprovalState").values().next().value.approvedCount, 1);
+  assert.equal(happySweep.tables.get("automaticApprovalHolds")?.size ?? 0, 0);
+  assert.equal(happySweep.writes.some((write) => ["scrapedPosts", "instagramEventSources", "instagramSourceOccurrenceReceipts"].includes(write.table)), false);
+} finally { Date.now = originalHappyNow; }
+
+console.log("QA passed: automatic unique approval diagnostics are read-only, authenticated, exact-versioned, source-grounded, and match the approval sweep.");

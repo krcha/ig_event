@@ -104,6 +104,16 @@ Known current follow-up:
 
 - `npm run qa:release` is the intended deterministic gate. It starts with the
   repository hygiene guard and includes `next build`.
+- Autonomous moderation uses the same read-only automatic approval preflight
+  for diagnostics and the sweep. Repairs record holds separately from event
+  versions, preserve human markers, and retain current source/receipt proof.
+  Cached-only processing cannot fall back to fresh extraction. Focused poster
+  review defaults off and uses a durable source-generation ledger plus the
+  shared OpenAI provider lease and daily allowance. Completed review replay
+  never repeats paid transport; unknown started requests remain held. Enable
+  the web flag and configure the Convex executor origin/secret only after the
+  matching web and backend changes are deployed. Details are in the operations
+  runbook; focused QA is part of the release gate.
 - Treat any build failure or timeout as a normal release blocker before handoff
   or production rollout.
 - Source-content revisions with retained satisfied siblings must not partially

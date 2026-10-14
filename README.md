@@ -37,6 +37,9 @@ explicitly replaces them.
 - Public venue directory at `/venues`
 - Event details at `/events/[eventId]`
 - Admin moderation at `/admin`
+- Automatic hold diagnostics, certified venue/conflict repairs, cached source
+  recovery, and an optional budgeted poster reread worker. See the
+  [operations runbook](docs/operations-runbook.md) for activation and safeguards.
 - Scrape controls and ingestion job status at `/admin/scraper`
 - Venue management at `/admin/venues`
 - Cron ingestion at `/api/cron/ingest-venues`

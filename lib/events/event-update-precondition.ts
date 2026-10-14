@@ -1,3 +1,4 @@
+import { buildPendingSourceConflictContext } from "./pending-source-conflict-reclassification.ts";
 import { TBD_EVENT_TIME } from "./event-time.ts";
 import { toSearchableText } from "../domain/venues/normalization.ts";
 import { getNightlifeDefaultDateKey } from "./nightlife-date.ts";
@@ -198,26 +199,8 @@ export function getEffectiveEventEvidenceV2Conflicts(
   if (artists.length !== (Array.isArray(eventFields.artists) ? eventFields.artists.length : 0)) {
     return null;
   }
-  const recomputed = partitionEventEvidenceSourceConflicts(reported, {
-    artists,
-    dateEvidenceVerified: fields.dateEvidenceVerified === true,
-    identityEvidenceVerified: fields.identityEvidenceVerified === true,
-    resolvedDate: typeof eventFields.date === "string" ? eventFields.date : "",
-    selectedTitle: typeof eventFields.title === "string" ? eventFields.title : "",
-    selectedVenue: typeof eventFields.venue === "string" ? eventFields.venue : "",
-    singleOccurrenceSource:
-      fields.splitEventTotal === 1 && fields.multiEventSplitDetected === false,
-    sourceAccountName:
-      typeof fields.sourceAccountName === "string" ? fields.sourceAccountName : "",
-    sourceAccountRole,
-    sourceCaption:
-      typeof eventFields.sourceCaption === "string" ? eventFields.sourceCaption : "",
-    sourcePostedAt:
-      typeof eventFields.sourcePostedAt === "string"
-        ? eventFields.sourcePostedAt
-        : undefined,
-    venueEvidenceVerified: fields.venueEvidenceVerified === true,
-  });
+  const recomputed = partitionEventEvidenceSourceConflicts(reported, buildPendingSourceConflictContext(eventFields, fields));
+
   if (
     !arraysContainSameJsonValues(material, recomputed.material) ||
     !arraysContainSameJsonValues(benign, recomputed.benign)
