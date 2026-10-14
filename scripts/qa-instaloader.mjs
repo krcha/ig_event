@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import "./qa-instaloader-source-cache.mjs";
 import { readFileSync } from "node:fs";
 import { getInstagramScraperProvider, fetchInstaloaderItems } from "../lib/scraper/instaloader-client.ts";
+import { isInertGeneratedAltEnrichment, sameInstagramSlideAssets } from "../lib/scraper/instagram-accessibility-compatibility.ts";
 import { scrapeInstagramAccount, getInstagramScrapeRawItemCount } from "../lib/scraper/instagram-scraper.ts";
 import { durableControlsFor } from "../lib/pipeline/durable-ingestion-controller.ts";
 
@@ -77,6 +79,91 @@ try {
   assert.equal(calls[0].request.requestId, "durable:fixture:receipt");
   assert.equal(calls[0].init.redirect, "error");
   assert.ok(!calls.some(c => c.url.includes("apify.com")));
+
+  const oldAlt = "Photo by Cafe Alpha on October 04, 2026.";
+  const equivalentAlt = "Photo shared by Cafe Alpha on October 04, 2026 tagging @dj_one, @artist.two, and @photographer_3. May be an image of poster and text.";
+  assert.equal(isInertGeneratedAltEnrichment(oldAlt, equivalentAlt), true);
+  assert.equal(isInertGeneratedAltEnrichment(oldAlt, equivalentAlt.replace("Photo shared by", "Photo by")), true,
+    "both complete observed attribution wrappers are recognized");
+  assert.equal(isInertGeneratedAltEnrichment("Photo by 𝗖𝗮𝗳𝗲 𝗔𝗹𝗽𝗵𝗮 on October 04, 2026.", equivalentAlt), true,
+    "mathematical presentation forms compare by NFKC author text");
+  for (const [previous, incoming] of [
+    [oldAlt, `${equivalentAlt} Doors at 9 PM.`],
+    [oldAlt, equivalentAlt.replace("October 04, 2026", "October 05, 2026")],
+    [oldAlt, equivalentAlt.replace("Cafe Alpha", "Cafe Beta")],
+    [oldAlt, equivalentAlt.replace("poster and text", "poster reading \"doors at 9 PM\"")],
+    [oldAlt, equivalentAlt.replace("@dj_one, @artist.two, and @photographer_3", "@dj_one, @artist.two")],
+    ["Photo by Cafe Alpha on October 04, 2026. Doors at 9 PM.", equivalentAlt],
+    ["Photo by Cafe Alpha on February 30, 2026.", equivalentAlt.replace("October 04, 2026", "February 30, 2026")],
+    [oldAlt, "Photo shared by Cafe Alpha on October 04, 2026 tagging @dj_one. Poster says 8 PM. May be an image."],
+  ]) {
+    assert.equal(isInertGeneratedAltEnrichment(previous, incoming), false,
+      "custom, mismatched or unrecognized accessibility text must not qualify");
+  }
+  assert.equal(isInertGeneratedAltEnrichment(null, equivalentAlt), false);
+  assert.equal(isInertGeneratedAltEnrichment(oldAlt, null), false);
+  assert.equal(isInertGeneratedAltEnrichment(`${oldAlt}${"x".repeat(1_025)}`, equivalentAlt), false,
+    "oversized prior alt text fails closed");
+  assert.equal(isInertGeneratedAltEnrichment(oldAlt, `${equivalentAlt}${"x".repeat(4_096)}`), false,
+    "oversized incoming alt text fails closed");
+  const longAuthor = "A".repeat(257);
+  assert.equal(isInertGeneratedAltEnrichment(
+    `Photo by ${longAuthor} on October 04, 2026.`,
+    `Photo shared by ${longAuthor} on October 04, 2026 tagging @dj_one. May be an image of poster and text.`,
+  ), false, "authors over 256 UTF-16 code units fail closed");
+  assert.equal(isInertGeneratedAltEnrichment(
+    oldAlt,
+    `Photo shared by Cafe Alpha on October 04, 2026 tagging @${"a".repeat(31)}. May be an image of poster and text.`,
+  ), false, "labels over 30 characters fail closed");
+
+  const assetUrl = (host, path, cacheKey, extra = "") =>
+    `https://${host}${path}?ig_cache_key=${cacheKey}${extra}`;
+  const pathA = "/v/t51.82787-15/834500447_17948904960289767_2981624846562425485_n.jpg";
+  const pathB = "/v/t51.82787-15/835748645_17948904945289767_6654409283338105362_n.jpg";
+  const alternateA = Array.from({ length: 8 }, (_, index) => assetUrl(
+    `scontent-fra${index + 1}-1.cdninstagram.com`, pathA, "asset-a", `&variant=${index}`,
+  ));
+  const alternateB = Array.from({ length: 8 }, (_, index) => assetUrl(
+    `scontent-fra${index + 1}-2.cdninstagram.com`, pathB, "asset-b", `&variant=${index}`,
+  ));
+  const oldAssets = { completeCount: 2, slides: [
+    { index: 0, mediaType: "image", imageUrls: [assetUrl("scontent-fra3-1.cdninstagram.com", pathA, "asset-a", "&width=1080")] },
+    { index: 1, mediaType: "image", imageUrls: [assetUrl("scontent-fra3-2.cdninstagram.com", pathB, "asset-b")] },
+  ] };
+  const sameAssets = { completeCount: 2, slides: [
+    { index: 0, mediaType: "image", imageUrls: alternateA },
+    { index: 1, mediaType: "image", imageUrls: alternateB },
+  ] };
+  assert.equal(sameInstagramSlideAssets(oldAssets, sameAssets), true,
+    "one old URL and eight new alternate URLs collapse to matching ordered photo identities");
+  assert.equal(sameInstagramSlideAssets(oldAssets, { ...sameAssets, slides: [
+    { ...sameAssets.slides[1], index: 0 }, { ...sameAssets.slides[0], index: 1 },
+  ] }), false,
+    "changed slide order must fail closed");
+  assert.equal(sameInstagramSlideAssets(oldAssets, { ...sameAssets, completeCount: 3 }), false,
+    "changed provider-declared total count must fail closed");
+  assert.equal(sameInstagramSlideAssets(oldAssets, { ...sameAssets, slides: [sameAssets.slides[0]] }), false,
+    "partial slide manifests must fail closed");
+  assert.equal(sameInstagramSlideAssets(oldAssets, { ...sameAssets, slides: [
+    sameAssets.slides[0], { ...sameAssets.slides[1], mediaType: "video" },
+  ] }), false, "video slides do not qualify as static photo identity");
+  assert.equal(sameInstagramSlideAssets(oldAssets, { ...sameAssets, slides: [
+    sameAssets.slides[0], { ...sameAssets.slides[1], imageUrls: [assetUrl("scontent.cdninstagram.com", pathA, "asset-b")] },
+  ] }), false, "changed asset paths must fail closed");
+  assert.equal(sameInstagramSlideAssets(oldAssets, { ...sameAssets, slides: [
+    sameAssets.slides[0], { ...sameAssets.slides[1], imageUrls: [assetUrl("scontent.cdninstagram.com", pathB, "different-key")] },
+  ] }), false, "contradictory cache keys must fail closed");
+  assert.equal(sameInstagramSlideAssets(oldAssets, { ...sameAssets, slides: [
+    { ...sameAssets.slides[0], imageUrls: [...alternateA.slice(0, 7), assetUrl("scontent.cdninstagram.com", pathB, "asset-b")] },
+    sameAssets.slides[1],
+  ] }), false, "alternate URLs resolving to mixed asset identities must fail closed");
+  assert.equal(sameInstagramSlideAssets(oldAssets, { ...sameAssets, slides: [
+    { ...sameAssets.slides[0], imageUrls: [assetUrl("scontent.cdninstagram.com", pathA.replace("t51.82787-15", "t51.82788-15"), "asset-a")] },
+    sameAssets.slides[1],
+  ] }), false, "unknown Instagram photo version families must fail closed");
+  assert.equal(sameInstagramSlideAssets(oldAssets, { ...sameAssets, slides: [
+    { ...sameAssets.slides[0], imageUrls: [`http://scontent.cdninstagram.com${pathA}?ig_cache_key=asset-a`] }, sameAssets.slides[1],
+  ] }), false, "non-HTTPS or unrecognized assets must fail closed");
 
   useResponse(payload([carousel, second, second]));
   const latest = await scrapeInstagramAccount({ handle: "fixture_venue", ...durableControlsFor("canary") });

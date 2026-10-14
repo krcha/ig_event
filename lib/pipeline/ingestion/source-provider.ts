@@ -88,6 +88,7 @@ function adaptFetchedInstagramPostToSourceDocument(
     postedAt: post.postedAt ?? undefined,
     postType: post.postType ?? undefined,
     isPinned: post.isPinned,
+    metadataProvider: post.metadataProvider,
   });
 }
 
@@ -168,6 +169,8 @@ export function projectInstagramSourceDocumentForCompatibilityParser(
     instagramPostUrl: document.canonicalSource.canonicalUrl,
     postedAt: document.publishedAt,
     username: document.providerAccount,
+    ...(document.providerMetadata?.metadataProvider === "instaloader"
+      ? { metadataProvider: "instaloader" as const } : {}),
     ...(document.providerMetadata?.isPinned === undefined
       ? {}
       : { isPinned: document.providerMetadata.isPinned }),

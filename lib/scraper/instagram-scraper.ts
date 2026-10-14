@@ -47,6 +47,8 @@ export type InstagramScrapedPost = {
   instagramPostUrl: string;
   postedAt: string | null;
   username: string;
+  /** Transient acquisition provenance; never a persisted source fact. */
+  metadataProvider?: "instaloader";
   /**
    * Kept only while selecting the current profile's newest post. Pinned posts
    * are deliberately never persisted into the normal ingestion path.
@@ -1025,8 +1027,10 @@ export async function scrapeInstagramAccount(
       onRequestStarted: options.onRequestStarted,
       onTransportInvoked: options.onTransportInvoked,
     });
-    return normalizeInstagramCollection(items, target, options, settings,
+    const posts = normalizeInstagramCollection(items, target, options, settings,
       onlyPostsNewerThan === null ? undefined : Date.parse(onlyPostsNewerThan));
+    for (const post of posts) post.metadataProvider = "instaloader";
+    return posts;
   }
   const apiToken = getRequiredEnv("APIFY_API_TOKEN");
   const actorId = normalizeConfiguredApifyActorId(
