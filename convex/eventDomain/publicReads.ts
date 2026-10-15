@@ -475,6 +475,7 @@ function toPublicCalendarEvent(event: ReturnType<typeof projectPublicEvent>) {
     _id: event._id,
     artists: event.artists,
     date: event.date,
+    ...(event.description ? { description: event.description } : {}),
     eventType: event.eventType,
     status: event.status,
     title: event.title,

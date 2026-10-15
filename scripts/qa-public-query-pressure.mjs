@@ -6,6 +6,7 @@ import {
   listPublicCalendarEventsWindowPaginated,
 } from "../convex/events.ts";
 import { projectPublicEvent } from "../convex/publicEventProjection.ts";
+import { getEventSessionLabel } from "../lib/events/event-session.ts";
 import { buildNormalizedEventVenueIdentity } from "../lib/events/event-venue-identity.ts";
 import {
   buildPublicCalendarDateWindows,
@@ -206,15 +207,24 @@ const materializedCalendarEvent = {
   artists: ["QA Artist"],
   createdAt: 1,
   date: "2026-09-12",
-  eventType: "music",
+  description: "For ages 5\u20138; led by museum curators and guides.",
+  eventType: "workshop",
   publicationPolicyVersion: 1,
   publicationReason: "canonical_source_grounding_verified",
   publicationState: "publishable",
   status: "approved",
-  title: "Materialized calendar event",
+  title: "Mali vajari boja",
+  time: "12:00-13:30",
+  timeStatus: "confirmed",
   updatedAt: 1,
   venue: "QA Venue",
   venueId: "venue-public",
+};
+const secondMaterializedCalendarSession = {
+  ...materializedCalendarEvent,
+  _id: "event-materialized-calendar-second-session",
+  description: "For ages 9\u201314; led by museum curators and guides.",
+  time: "14:00-15:30",
 };
 const staleMaterializedCalendarEvent = {
   ...materializedCalendarEvent,
@@ -319,10 +329,11 @@ const materializedCalendarCtx = {
           assert.equal(cursor, null);
           materializedCalendarPageSize = numItems;
           return {
-            continueCursor: "4",
+            continueCursor: "5",
             isDone: true,
             page: [
               materializedCalendarEvent,
+              secondMaterializedCalendarSession,
               staleMaterializedCalendarEvent,
               privateVenueMaterializedCalendarEvent,
               unboundMaterializedCalendarEvent,
@@ -359,8 +370,19 @@ const materializedCalendarPage =
 assert.equal(materializedCalendarPageSize, 50);
 assert.deepEqual(
   materializedCalendarPage.page.map((event) => event._id),
-  [materializedCalendarEvent._id],
+  [materializedCalendarEvent._id, secondMaterializedCalendarSession._id],
   "Materialized calendar reads must reject stale policy, private-venue, and unbound rows without live source-evidence reads.",
+);
+assert.deepEqual(
+  materializedCalendarPage.page.map(getEventSessionLabel),
+  ["Ages 5\u20138 \u00b7 12:00\u201313:30", "Ages 9\u201314 \u00b7 14:00\u201315:30"],
+  "The actual bounded calendar DTO used by calendar, map, and Discover must preserve each occurrence's age description and time.",
+);
+assert.deepEqual(
+  [materializedCalendarEvent, secondMaterializedCalendarSession]
+    .map((event) => getEventSessionLabel(projectPublicEvent(event, true))),
+  ["Ages 5\u20138 \u00b7 12:00\u201313:30", "Ages 9\u201314 \u00b7 14:00\u201315:30"],
+  "The shared public projection used by saved events must retain the same occurrence labels.",
 );
 assert.match(
   materializedCalendarPage.continueCursor,
