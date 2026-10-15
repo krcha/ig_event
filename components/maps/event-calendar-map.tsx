@@ -133,7 +133,7 @@ export function EventCalendarMap({ selectedDate, todayDate, days, events }: Even
       <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_400px]">
         <EventLocationMap locations={locations} onSelectLocation={selectFromMap} selectedLocationId={selectedLocationId} />
         <section aria-label={`Events for ${fullDateLabel}`} className="glass-panel min-w-0 overflow-hidden lg:flex lg:max-h-[622px] lg:flex-col">
-          <div className="border-b border-border px-4 py-4">
+          <div className="hidden border-b border-border px-4 py-4 lg:block">
             <p className="section-kicker">The lineup</p>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">Tap a pin or a venue to explore its events.</p>
           </div>
