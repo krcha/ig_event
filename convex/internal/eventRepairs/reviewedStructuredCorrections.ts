@@ -109,6 +109,7 @@ export async function loadReviewedStructuredCorrectionContext(
   ctx: QueryCtx | MutationCtx,
   event: Doc<"events">,
   args: ReviewedStructuredCorrectionVersionArgs,
+  options: { allowUnverifiedPendingTarget?: boolean } = {},
 ): Promise<{
   currentFields: Record<string, unknown>;
   rawExtraction: Record<string, unknown>;
@@ -271,6 +272,8 @@ export async function loadReviewedStructuredCorrectionContext(
       !sourceOccurrenceRepresentativeMatchesExpected(
         representative,
         matchingExpected[0],
+        { allowUnverifiedPending: options.allowUnverifiedPendingTarget === true &&
+          representative?._id === event._id && event.status === "pending" },
       )
     ) {
       throw new Error(

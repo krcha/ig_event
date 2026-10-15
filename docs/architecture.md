@@ -100,6 +100,15 @@ Removing a misread creator or repertoire list requires an explicit service
 review with the exact previous artist list and a substantive evidence note.
 The ordinary repair path still rejects accidental clearing.
 
+A reviewed physical venue change supersedes an old account fallback only after
+the exact canonical venue changes. Its original inference remains in review
+metadata and the audit; same-venue lineup corrections retain the fallback guard.
+Pending performer corrections use a separate service-only transaction fenced
+by the event, source link, receipt, source revision, occurrence and retained
+poster checksum. They update the normalized lineup while preserving raw facts,
+source materialization inputs, incomplete siblings and pending status. Explicit
+review stamps keep automatic approval from undoing a reviewed hold.
+
 Reviewed venue renames require every linked event and source occurrence to be
 accounted for. An unbound expected, deferred or superseded occurrence can be
 acknowledged by its exact stored snapshot and revision; its historical facts,
