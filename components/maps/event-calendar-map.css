@@ -1,0 +1,29 @@
+@media (max-width: 1023px) {
+  .event-calendar-page {
+    position: fixed;
+    top: calc(4.25rem + env(safe-area-inset-top));
+    right: 0.75rem;
+    bottom: calc(5.5rem + env(safe-area-inset-bottom));
+    left: 0.75rem;
+    display: block;
+    width: auto;
+    min-height: 0;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .event-calendar-layout {
+    display: block;
+    height: 100%;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .event-calendar-page {
+    top: 8.5rem;
+    right: 1.25rem;
+    bottom: 1rem;
+    left: 1.25rem;
+  }
+}

@@ -216,7 +216,12 @@ Top-level areas:
   - `/events`: paginated approved event feed with search.
   - `/calendar`: monthly calendar for approved events.
   - `/events/[eventId]`: event detail page.
-  - `/venues`: date-selectable event map with a selected-day event list.
+  - `/map`: date-selectable event map. Mobile opens directly to Belgrade at
+    zoom 14 without page scrolling; pin popups show each event title and a venue
+    link to that event. Desktop retains the selected-day event list.
+  - `/venues`: permanent redirect to `/map?view=calendar`, preserving query
+    parameters including selected dates. The marker avoids older cached
+    `/map`-to-`/venues` permanent redirects; new links use `/map` directly.
   - `/venues/directory`: paginated venue guide.
 - `app/(dashboard)`: admin pages.
   - `/admin`: moderation dashboard.

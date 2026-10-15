@@ -1451,7 +1451,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
               <Link className="button-secondary min-h-10 px-4 py-0" href="/discover">
                 Discover tonight
               </Link>
-              <Link className="button-secondary min-h-10 px-4 py-0" href="/venues">
+              <Link className="button-secondary min-h-10 px-4 py-0" href="/map">
                 Explore venues
               </Link>
             </div>

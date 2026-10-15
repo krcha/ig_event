@@ -305,7 +305,7 @@ const layout = read("app/layout.tsx");
 const rootPage = read("app/page.tsx");
 const browsePage = read("app/(main)/events-browse-page.tsx");
 const eventPage = read("app/(main)/events/[eventId]/page.tsx");
-const eventMap = read("app/(main)/venues/page.tsx");
+const eventMap = read("app/(main)/map/page.tsx");
 const venueDirectory = read("app/(main)/venues/directory/page.tsx");
 const venuePage = read("app/(main)/venues/[venueId]/page.tsx");
 const discoverPage = read("app/(main)/discover/page.tsx");
@@ -363,6 +363,9 @@ assert.ok(venuePage.includes("const loadVenuePage = cache("));
 assert.match(eventPage, /generateMetadata[\s\S]*notFound\(\)/);
 assert.match(venuePage, /generateMetadata[\s\S]*notFound\(\)/);
 assert.ok(venueDirectory.includes("buildVenueDirectoryStructuredData"));
+assert.ok(eventMap.includes('canonical: "/map"'));
+assert.ok(eventMap.includes('new URL("/map", SITE_ORIGIN)'));
+assert.ok(eventMap.includes("index: !hasDateFilter"));
 assert.ok(discoverPage.includes("index: !hasDateFilter"));
 
 for (const [label, source] of [
@@ -410,7 +413,8 @@ assert.ok(sitemap.includes('"seo-sitemap-public-data-v2"'));
 assert.ok(sitemapData.includes("limit: 2000"));
 assert.ok(sitemapData.includes("addDaysToDateKey(options.today, 367)"));
 assert.ok(sitemap.includes("/discover"));
-assert.ok(sitemap.includes("/venues"));
+assert.ok(sitemap.includes('absoluteUrl("/map")'));
+assert.equal(sitemap.includes('absoluteUrl("/venues")'), false, "The redirecting legacy map URL must not appear in the sitemap.");
 assert.ok(sitemap.includes("/venues/directory"));
 assert.ok(sitemap.includes("/events/${event._id}"));
 assert.ok(sitemap.includes("/venues/${venue._id}"));

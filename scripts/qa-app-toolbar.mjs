@@ -141,7 +141,7 @@ assert.deepEqual(
 for (const { href, label } of [
   { href: "/", label: "Events" },
   { href: "/discover", label: "Discover" },
-  { href: "/venues", label: "Map" },
+  { href: "/map", label: "Map" },
   { href: "/saved", label: "Saved" },
 ]) {
   assert.match(
@@ -152,18 +152,28 @@ for (const { href, label } of [
 }
 
 assert.equal(
-  /href:\s*"\/map"/.test(publicItemsSource),
+  /href:\s*"\/venues"/.test(publicItemsSource),
   false,
-  "Primary navigation should use /venues for the event map and retain /map only as a compatibility redirect.",
+  "Primary navigation should use /map and retain /venues only as a compatibility redirect.",
 );
 assert.deepEqual(
-  redirects.find(({ source }) => source === "/map"),
+  redirects.find(({ source }) => source === "/venues"),
   {
-    source: "/map",
-    destination: "/venues",
+    source: "/venues",
+    destination: "/map?view=calendar",
     permanent: true,
   },
-  "Next config should issue a permanent HTTP redirect from /map to /venues.",
+  "The exact legacy /venues route should redirect permanently without swallowing venue directory/detail routes.",
+);
+assert.equal(
+  redirects.some(({ source }) => source === "/map" || source.startsWith("/venues/")),
+  false,
+  "The map must render directly and /venues/* must retain its own routes.",
+);
+assert.match(
+  publicItemsSource,
+  /href:\s*"\/map"[\s\S]*?activePrefixes:\s*\["\/venues"\]/,
+  "Venue directory and detail pages should retain the active Map navigation tab.",
 );
 assert.ok(
   source.includes('aria-label="Global"') && source.includes('aria-label="Mobile navigation"'),

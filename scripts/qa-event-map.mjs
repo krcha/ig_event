@@ -23,7 +23,7 @@ for (const date of [
 ]) {
   assert.equal(normalizeMapDateKey(date, fallbackDate), fallbackDate, `Reject invalid date ${date}.`);
 }
-assert.equal(buildEventMapHref("2026-10-16"), "/venues?date=2026-10-16");
+assert.equal(buildEventMapHref("2026-10-16"), "/map?date=2026-10-16");
 assert.equal(
   new URL(buildEventMapHref("2026-10-16&category=club"), "https://eventzeka.com").searchParams.get("date"),
   "2026-10-16&category=club",

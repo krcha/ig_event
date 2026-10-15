@@ -9,6 +9,7 @@ import { UNKNOWN_EVENT_TIME_LABEL } from "@/lib/events/event-time";
 import { addDaysToDateKey } from "@/lib/events/nightlife-date";
 import type { PublicEvent } from "@/lib/events/public-events";
 import { cn } from "@/lib/utils";
+import "./event-calendar-map.css";
 
 type EventCalendarMapProps = {
   selectedDate: string;
@@ -75,8 +76,9 @@ export function EventCalendarMap({ selectedDate, todayDate, days, events }: Even
   const mappedEventCount = events.length - unmappedEvents.length;
 
   return (
-    <main className="app-page gap-4">
-      <section className="hero-panel px-4 py-5 sm:px-6 sm:py-6">
+    <main className="app-page event-calendar-page gap-4">
+      <h1 className="sr-only lg:hidden">Belgrade event map</h1>
+      <section className="hero-panel hidden px-4 py-5 sm:px-6 sm:py-6 lg:block">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div className="min-w-0">
             <p className="section-kicker flex items-center gap-2"><MapPin aria-hidden="true" className="h-3.5 w-3.5 text-primary" /> Belgrade, day by day</p>
@@ -91,7 +93,7 @@ export function EventCalendarMap({ selectedDate, todayDate, days, events }: Even
         </div>
       </section>
 
-      <section aria-label="Choose an event date" className="glass-panel min-w-0 p-3 sm:p-4">
+      <section aria-label="Choose an event date" className="glass-panel hidden min-w-0 p-3 sm:p-4 lg:block">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Link aria-label="Previous week" className="button-secondary min-h-10 w-10 p-0" href={buildEventMapHref(addDaysToDateKey(selectedDate, -7))} onKeyDown={(event) => preserveDayFocus(event, addDaysToDateKey(selectedDate, -7))} prefetch={false} scroll={false}>
@@ -104,7 +106,7 @@ export function EventCalendarMap({ selectedDate, todayDate, days, events }: Even
           </div>
           <div className="flex items-center gap-2">
             <Link className={cn("button-secondary min-h-10 px-3 py-0 text-xs", selectedDate === todayDate && "border-primary/40 text-primary")} href={buildEventMapHref(todayDate)} onKeyDown={(event) => preserveDayFocus(event, todayDate)} prefetch={false} scroll={false}>Today</Link>
-            <form action="/venues" className="flex items-center gap-2">
+            <form action="/map" className="flex items-center gap-2">
               <label className="sr-only" htmlFor="event-map-date">Choose date</label>
               <input className="min-h-10 min-w-0 max-w-36 rounded-xl border border-border bg-background/80 px-2 text-xs text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary sm:max-w-40" defaultValue={selectedDate} id="event-map-date" key={selectedDate} max={MAP_MAX_DATE} min={MAP_MIN_DATE} name="date" type="date" required />
               <button aria-label="Go to selected date" className="button-secondary min-h-10 w-10 p-0" type="submit"><ArrowRight aria-hidden="true" className="h-4 w-4" /></button>
@@ -125,14 +127,28 @@ export function EventCalendarMap({ selectedDate, todayDate, days, events }: Even
         </nav>
       </section>
 
-      <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+      <div className="hidden flex-wrap items-center justify-between gap-2 px-1 lg:flex">
         <h2 className="text-base font-semibold sm:text-lg">{formatDate(selectedDate, { weekday: "long", day: "numeric", month: "long" })}</h2>
         <p aria-live="polite" className="text-xs text-muted-foreground sm:text-sm">{events.length} {events.length === 1 ? "event" : "events"} <span aria-hidden="true">·</span> {mappedEventCount} mapped</p>
       </div>
 
-      <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_400px]">
-        <EventLocationMap locations={locations} onSelectLocation={selectFromMap} selectedLocationId={selectedLocationId} />
-        <section aria-label={`Events for ${fullDateLabel}`} className="glass-panel min-w-0 overflow-hidden lg:flex lg:max-h-[622px] lg:flex-col">
+      <div className="event-calendar-layout grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_400px]">
+        <div className="relative h-full min-h-0 lg:h-auto">
+          <EventLocationMap locations={locations} onSelectLocation={selectFromMap} selectedLocationId={selectedLocationId} />
+          <section aria-label="Choose a map date" className="absolute inset-x-3 top-3 z-[600] flex items-center gap-2 rounded-2xl border border-border bg-card/95 p-2 shadow-lg lg:hidden">
+            <a aria-label="Previous day" className="button-secondary min-h-10 w-10 flex-none p-0" href={buildEventMapHref(addDaysToDateKey(selectedDate, -1))}>
+              <ChevronLeft aria-hidden="true" className="h-4 w-4" />
+            </a>
+            <form action="/map" className="flex min-w-0 flex-1 items-center gap-2">
+              <label className="sr-only" htmlFor="event-map-mobile-date">Choose date</label>
+              <input className="h-10 min-w-0 flex-1 rounded-xl border border-border bg-background px-2 text-sm text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" defaultValue={selectedDate} id="event-map-mobile-date" key={selectedDate} max={MAP_MAX_DATE} min={MAP_MIN_DATE} name="date" onChange={(event) => { if (event.currentTarget.validity.valid) event.currentTarget.form?.requestSubmit(); }} type="date" required />
+            </form>
+            <a aria-label="Next day" className="button-secondary min-h-10 w-10 flex-none p-0" href={buildEventMapHref(addDaysToDateKey(selectedDate, 1))}>
+              <ChevronRight aria-hidden="true" className="h-4 w-4" />
+            </a>
+          </section>
+        </div>
+        <section aria-label={`Events for ${fullDateLabel}`} className="glass-panel hidden min-w-0 overflow-hidden lg:flex lg:max-h-[622px] lg:flex-col">
           <div className="hidden border-b border-border px-4 py-4 lg:block">
             <p className="section-kicker">The lineup</p>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">Tap a pin or a venue to explore its events.</p>
@@ -172,7 +188,7 @@ export function EventCalendarMap({ selectedDate, todayDate, days, events }: Even
           </div>
         </section>
       </div>
-      <p className="px-1 text-xs leading-5 text-muted-foreground">Dates and times are local to Belgrade. Select a venue pin to see its full lineup.</p>
+      <p className="hidden px-1 text-xs leading-5 text-muted-foreground lg:block">Dates and times are local to Belgrade. Select a venue pin to see its full lineup.</p>
     </main>
   );
 }

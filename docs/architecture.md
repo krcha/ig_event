@@ -35,9 +35,14 @@ The source of truth is `convex/schema.ts`.
 - `/events` approved upcoming events.
 - `/events/[eventId]` event detail.
 - `/calendar` monthly browsing.
-- `/venues` date-selectable map of approved events and their known venue locations.
+- `/map` date-selectable map of approved events and their known venue locations.
+  Mobile opens directly to a viewport-filling Belgrade map at zoom 14, with
+  compact date controls and event-title/venue-link popups. Desktop retains its
+  selected-day event list.
 - `/venues/directory` public venue directory.
-- `/map` compatibility redirect to `/venues`.
+- `/venues` compatibility redirect to `/map?view=calendar`, preserving the
+  original query parameters. The marker bypasses older cached permanent
+  redirects in the opposite direction; new navigation links use clean `/map` URLs.
 - `/api/health` container health check.
 
 ## Admin Surfaces

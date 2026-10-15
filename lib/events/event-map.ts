@@ -52,7 +52,7 @@ export function normalizeMapDateKey(value: string | undefined, fallback: string)
 }
 
 export function buildEventMapHref(date: string): string {
-  return `/venues?${new URLSearchParams({ date }).toString()}`;
+  return `/map?${new URLSearchParams({ date }).toString()}`;
 }
 
 export function enrichEventMapCoordinates(

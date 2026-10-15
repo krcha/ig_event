@@ -306,7 +306,7 @@ export default async function VenueDirectoryPage({ searchParams }: VenuesPagePro
         </div>
       </section>
 
-      <Link className="button-secondary w-fit gap-2" href="/venues" prefetch={false}>
+      <Link className="button-secondary w-fit gap-2" href="/map" prefetch={false}>
         <ChevronLeft className="h-4 w-4" />
         Event map
       </Link>

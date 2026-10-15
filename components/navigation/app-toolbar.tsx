@@ -42,10 +42,11 @@ const PUBLIC_TOOLBAR_ITEMS: ToolbarItem[] = [
     match: "prefix",
   },
   {
-    href: "/venues",
+    href: "/map",
     label: "Map",
     icon: MapPin,
     match: "prefix",
+    activePrefixes: ["/venues"],
   },
   {
     href: "/saved",

@@ -4,18 +4,20 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Expand, LoaderCircle, MapPin } from "lucide-react";
 import type { Map as LeafletMap, Marker } from "leaflet";
 import type { EventMapLocation } from "@/lib/events/event-map";
+import { cn } from "@/lib/utils";
 import "leaflet/dist/leaflet.css";
 import "./event-map.css";
 
 const BELGRADE_CENTER: [number, number] = [44.8125, 20.4612];
 
 type EventLocationMapProps = {
+  className?: string;
   locations: EventMapLocation[];
   selectedLocationId: string | null;
   onSelectLocation: (id: string) => void;
 };
 
-export function EventLocationMap({ locations, selectedLocationId, onSelectLocation }: EventLocationMapProps) {
+export function EventLocationMap({ className, locations, selectedLocationId, onSelectLocation }: EventLocationMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapInstanceId = useId();
   const mapRef = useRef<LeafletMap | null>(null);
@@ -28,6 +30,8 @@ export function EventLocationMap({ locations, selectedLocationId, onSelectLocati
   useEffect(() => {
     let cancelled = false;
     let resizeObserver: ResizeObserver | undefined;
+    let removeViewportListener: (() => void) | undefined;
+    const viewportMarkerCleanup: (() => void)[] = [];
     const markers = markersRef.current;
     const popupButtons = popupButtonsRef.current;
     setStatus("loading");
@@ -37,9 +41,10 @@ export function EventLocationMap({ locations, selectedLocationId, onSelectLocati
       const L = await import("leaflet");
       if (cancelled || !containerRef.current) return;
       const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const desktopViewport = window.matchMedia("(min-width: 1024px)");
       const map = L.map(containerRef.current, {
         center: BELGRADE_CENTER,
-        zoom: 13,
+        zoom: desktopViewport.matches ? 13 : 14,
         scrollWheelZoom: false,
         zoomControl: false,
         zoomAnimation: !reducedMotion,
@@ -74,8 +79,8 @@ export function EventLocationMap({ locations, selectedLocationId, onSelectLocati
         const { location, number } = group[0];
         const shared = group.length > 1;
         const markerLabel = shared
-          ? `${group.length} venues at this location. Choose a venue to show its lineup.`
-          : `${location.name}, ${location.events.length} ${location.events.length === 1 ? "event" : "events"}. Show lineup.`;
+          ? `${group.length} venues at this location. Show events.`
+          : `${location.name}, ${location.events.length} ${location.events.length === 1 ? "event" : "events"}. Show events.`;
         const marker = L.marker([location.latitude, location.longitude], {
           icon: L.divIcon({
             className: shared ? "event-map-pin is-shared" : "event-map-pin",
@@ -94,6 +99,55 @@ export function EventLocationMap({ locations, selectedLocationId, onSelectLocati
         tooltip.textContent = shared ? `${group.length} venues at this location` : location.name;
         marker.bindTooltip(tooltip, { direction: "top", offset: [0, shared ? -50 : -42] });
         const element = marker.getElement();
+
+        const popupContent = document.createElement("div");
+        popupContent.id = `${mapInstanceId}-events-${groupIndex}`;
+        popupContent.setAttribute("role", "dialog");
+        const mobileEvents = document.createElement("div");
+        mobileEvents.className = "event-map-mobile-events";
+        group.forEach((entry) => {
+          entry.location.events.forEach((event) => {
+            const eventRow = document.createElement("article");
+            eventRow.className = "event-map-popup-event";
+            const eventTitle = document.createElement("p");
+            eventTitle.className = "event-map-popup-event-title";
+            eventTitle.textContent = event.title;
+            const eventLink = document.createElement("a");
+            eventLink.className = "event-map-popup-event-venue";
+            eventLink.href = `/events/${encodeURIComponent(event._id)}`;
+            eventLink.textContent = event.venue;
+            eventLink.setAttribute("aria-label", `${event.venue}: open ${event.title}`);
+            eventRow.append(eventTitle, eventLink);
+            mobileEvents.append(eventRow);
+          });
+        });
+        popupContent.append(mobileEvents);
+        const popup = L.popup({
+          className: "event-map-shared-popup event-map-events-popup",
+          minWidth: 210,
+          maxWidth: 280,
+          offset: [0, -42],
+          autoPanPaddingTopLeft: [12, 92],
+          autoPanPaddingBottomRight: [12, 24],
+          autoClose: true,
+          closeOnClick: true,
+        }, marker).setContent(popupContent);
+
+        function activateMarker() {
+          if (desktopViewport.matches && !shared) {
+            onSelectLocation(location.id);
+            return;
+          }
+          if (map.hasLayer(popup)) {
+            map.closePopup(popup);
+            return;
+          }
+          popupContent.setAttribute("aria-label", desktopViewport.matches ? "Choose a venue at this location" : "Events at this location");
+          marker.closeTooltip();
+          popup.setLatLng(marker.getLatLng()).openOn(map);
+        }
+
+        marker.on("click", activateMarker);
         if (element) {
           element.setAttribute("role", "button");
           element.setAttribute("aria-label", markerLabel);
@@ -101,22 +155,18 @@ export function EventLocationMap({ locations, selectedLocationId, onSelectLocati
             if (event.key === " " || event.key === "Enter") {
               event.preventDefault();
               event.stopPropagation();
-              if (shared) marker.openPopup();
-              else onSelectLocation(location.id);
+              activateMarker();
             }
           });
         }
 
         if (shared) {
-          const popupContent = document.createElement("div");
-          popupContent.className = "event-map-shared-venues";
-          popupContent.id = `${mapInstanceId}-shared-${groupIndex}`;
-          popupContent.setAttribute("role", "dialog");
-          popupContent.setAttribute("aria-label", "Choose a venue at this location");
+          const desktopVenues = document.createElement("div");
+          desktopVenues.className = "event-map-shared-venues";
           const heading = document.createElement("p");
           heading.className = "event-map-shared-heading";
           heading.textContent = `${group.length} venues at this location`;
-          popupContent.append(heading);
+          desktopVenues.append(heading);
 
           group.forEach((entry) => {
             const button = document.createElement("button");
@@ -138,51 +188,56 @@ export function EventLocationMap({ locations, selectedLocationId, onSelectLocati
             venueLabel.append(venueName, eventCount);
             button.append(venueNumber, venueLabel);
             button.addEventListener("click", () => {
-              marker.closePopup();
+              map.closePopup(popup);
               onSelectLocation(entry.location.id);
             });
             popupButtons.set(entry.location.id, button);
-            popupContent.append(button);
+            desktopVenues.append(button);
           });
-
-          popupContent.addEventListener("keydown", (event) => {
-            if (event.key === "Escape") {
-              event.preventDefault();
-              event.stopPropagation();
-              marker.closePopup();
-            }
-          });
-          marker.bindPopup(popupContent, {
-            className: "event-map-shared-popup",
-            minWidth: 210,
-            maxWidth: 280,
-            offset: [0, -42],
-            autoPanPaddingTopLeft: [12, 92],
-            autoPanPaddingBottomRight: [12, 24],
-          });
-          element?.setAttribute("aria-haspopup", "dialog");
-          element?.setAttribute("aria-controls", popupContent.id);
-          element?.setAttribute("aria-expanded", "false");
-          marker.on("popupopen", () => {
-            element?.setAttribute("aria-expanded", "true");
+          popupContent.append(desktopVenues);
+        }
+        function updatePopupSemantics() {
+          if (shared || !desktopViewport.matches) {
+            element?.setAttribute("aria-haspopup", "dialog");
+            element?.setAttribute("aria-controls", popupContent.id);
+            element?.setAttribute("aria-expanded", "false");
+          } else {
+            element?.removeAttribute("aria-haspopup");
+            element?.removeAttribute("aria-controls");
+            element?.removeAttribute("aria-expanded");
+          }
+        }
+        updatePopupSemantics();
+        desktopViewport.addEventListener("change", updatePopupSemantics);
+        viewportMarkerCleanup.push(() => desktopViewport.removeEventListener("change", updatePopupSemantics));
+        popupContent.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            map.closePopup(popup);
+          }
+        });
+        marker.on("popupopen", () => {
+          element?.setAttribute("aria-expanded", "true");
+          if (desktopViewport.matches) {
             const selected = group.find((entry) => popupButtons.get(entry.location.id)?.getAttribute("aria-pressed") === "true");
             popupButtons.get((selected ?? group[0]).location.id)?.focus({ preventScroll: true });
-          });
-          marker.on("popupclose", () => {
-            element?.setAttribute("aria-expanded", "false");
-            if (!cancelled && (popupContent.contains(document.activeElement) || document.activeElement === document.body)) {
-              element?.focus({ preventScroll: true });
-            }
-          });
-        } else {
-          marker.on("click", () => onSelectLocation(location.id));
-        }
+          } else {
+            mobileEvents.querySelector<HTMLAnchorElement>("a")?.focus({ preventScroll: true });
+          }
+        });
+        marker.on("popupclose", () => {
+          element?.setAttribute("aria-expanded", "false");
+          if (!cancelled && (popupContent.contains(document.activeElement) || document.activeElement === document.body)) {
+            element?.focus({ preventScroll: true });
+          }
+        });
         group.forEach((entry) => markers.set(entry.location.id, marker));
       });
 
       function fitMap() {
         if (locations.length === 0) {
-          map.setView(BELGRADE_CENTER, 13);
+          map.setView(BELGRADE_CENTER, desktopViewport.matches ? 13 : 14);
         } else {
           map.fitBounds(L.latLngBounds(locations.map((location) => [location.latitude, location.longitude])), {
             paddingTopLeft: [64, 112],
@@ -193,7 +248,18 @@ export function EventLocationMap({ locations, selectedLocationId, onSelectLocati
         }
       }
       fitMapRef.current = fitMap;
-      fitMap();
+      if (desktopViewport.matches) fitMap();
+      else map.setView(BELGRADE_CENTER, 14, { animate: false });
+      const updateViewport = () => {
+        map.closePopup();
+        map.invalidateSize({ pan: false });
+        if (desktopViewport.matches) fitMap();
+        else map.setView(BELGRADE_CENTER, 14, { animate: false });
+      };
+      desktopViewport.addEventListener("change", updateViewport);
+      removeViewportListener = () => {
+        desktopViewport.removeEventListener("change", updateViewport);
+      };
       resizeObserver = new ResizeObserver(() => map.invalidateSize({ pan: false }));
       resizeObserver.observe(containerRef.current);
       setStatus("ready");
@@ -206,6 +272,8 @@ export function EventLocationMap({ locations, selectedLocationId, onSelectLocati
     return () => {
       cancelled = true;
       resizeObserver?.disconnect();
+      removeViewportListener?.();
+      viewportMarkerCleanup.forEach((cleanup) => cleanup());
       markers.clear();
       popupButtons.clear();
       fitMapRef.current = null;
@@ -234,8 +302,8 @@ export function EventLocationMap({ locations, selectedLocationId, onSelectLocati
   }, [selectedLocationId, status]);
 
   return (
-    <div className="event-map-shell relative isolate min-w-0 overflow-hidden rounded-[1.25rem] border border-border">
-      <div aria-label="Event locations in Belgrade. Use arrow keys to pan and plus or minus to zoom." className="event-location-map h-[380px] w-full sm:h-[480px] lg:h-[620px]" ref={containerRef} />
+    <div className={cn("event-map-shell relative isolate h-full min-w-0 overflow-hidden rounded-[1.25rem] border border-border lg:h-auto", className)}>
+      <div aria-label="Event locations in Belgrade. Use arrow keys to pan and plus or minus to zoom." className="event-location-map h-full w-full lg:h-[620px]" ref={containerRef} />
       {status === "loading" || status === "failed" ? (
         <div className="pointer-events-none absolute inset-0 z-[500] flex items-center justify-center bg-card/90 px-6 text-center">
           <div>
@@ -245,11 +313,11 @@ export function EventLocationMap({ locations, selectedLocationId, onSelectLocati
         </div>
       ) : null}
       {status === "ready" ? (
-        <div className="pointer-events-none absolute left-3 right-3 top-3 z-[500] flex items-start justify-between gap-2">
-          <span className="rounded-full border border-border bg-card/95 px-3 py-2 text-xs font-semibold text-foreground shadow-lg">
+        <div className="pointer-events-none absolute left-3 right-3 top-[4.5rem] z-[500] flex items-start justify-end gap-2 lg:top-3 lg:justify-between">
+          <span className="hidden rounded-full border border-border bg-card/95 px-3 py-2 text-xs font-semibold text-foreground shadow-lg lg:inline">
             {locations.length} {locations.length === 1 ? "venue" : "venues"} on the map
           </span>
-          <button className="button-secondary pointer-events-auto min-h-10 gap-2 bg-card/95 px-3 py-0 text-xs shadow-lg" onClick={() => fitMapRef.current?.()} type="button">
+          <button className="button-secondary pointer-events-auto min-h-10 gap-2 bg-card/95 px-3 py-0 text-xs shadow-lg" onClick={() => { mapRef.current?.closePopup(); fitMapRef.current?.(); }} type="button">
             <Expand aria-hidden="true" className="h-4 w-4" />
             Show all
           </button>

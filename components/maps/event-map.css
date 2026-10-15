@@ -123,8 +123,61 @@
 }
 
 .event-map-shared-venues {
+  display: none;
   max-height: 240px;
   overflow-y: auto;
+}
+
+.event-map-mobile-events {
+  display: grid;
+  gap: 12px;
+  max-height: min(300px, 40svh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 14px;
+}
+
+.event-map-popup-event + .event-map-popup-event {
+  border-top: 1px solid #353344;
+  padding-top: 12px;
+}
+
+.event-map-events-popup .leaflet-popup-content p.event-map-popup-event-title {
+  margin: 0 0 5px;
+  color: #f7f8f8;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.event-location-map .event-map-popup-event-venue {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  color: #c7c4ff;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+}
+
+.event-location-map .event-map-popup-event-venue:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid #b5b1ff;
+  outline-offset: 3px;
+}
+
+@media (min-width: 1024px) {
+  .event-map-mobile-events {
+    display: none;
+  }
+
+  .event-map-shared-venues {
+    display: block;
+  }
 }
 
 .event-map-venue-choice {

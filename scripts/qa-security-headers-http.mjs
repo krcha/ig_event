@@ -179,9 +179,16 @@ try {
     assert.match(response.headers.get("cache-control") ?? "", /no-store/);
   }
 
-  const redirect = await fetchWithTimeout("/map?source=security-qa", { redirect: "manual" });
-  assert.equal(redirect.status, 308);
-  assert.equal(redirect.headers.get("location"), "/venues?source=security-qa");
+  for (const query of ["", "?date=2026-10-16&source=security-qa&tag=music&tag=art"]) {
+    const redirect = await fetchWithTimeout(`/venues${query}`, { redirect: "manual" });
+    assert.equal(redirect.status, 308);
+    const destination = new URL(redirect.headers.get("location"), origin);
+    assert.equal(destination.pathname, "/map");
+    assert.equal(destination.searchParams.get("view"), "calendar");
+    for (const [key, value] of new URLSearchParams(query)) {
+      assert.ok(destination.searchParams.getAll(key).includes(value), `${key} must survive the legacy map redirect`);
+    }
+  }
 
   const wwwRedirect = await requestWithHost(
     "/saved?source=security-qa",

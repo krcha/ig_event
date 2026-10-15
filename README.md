@@ -34,7 +34,8 @@ explicitly replaces them.
 
 - Public event discovery at `/events`
 - Monthly browsing at `/calendar`
-- Day-selectable event map at `/venues`
+- Day-selectable event map at `/map`
+- Legacy `/venues` links redirect to `/map` and retain selected dates
 - Public venue directory at `/venues/directory`
 - Event details at `/events/[eventId]`
 - Admin moderation at `/admin`

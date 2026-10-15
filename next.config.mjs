@@ -73,8 +73,9 @@ const nextConfig = {
         permanent: true,
       },
       {
-        source: "/map",
-        destination: "/venues",
+        source: "/venues",
+        // A fresh query key bypasses previously cached /map -> /venues redirects.
+        destination: "/map?view=calendar",
         permanent: true,
       },
       {
