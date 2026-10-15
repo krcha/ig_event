@@ -1117,6 +1117,9 @@ try {
         return id;
       },
       query(table) {
+        if (table === "venues") {
+          return { take: async (limit) => [repairVenue, multiSourceTargetVenue].slice(0, limit) };
+        }
         if (table === "events") {
           return {
             withIndex(_index, configure) {
@@ -1135,7 +1138,9 @@ try {
           withIndex(_index, configure) {
             const criteria = indexCriteria(configure);
             const records =
-              table === "instagramEventSources"
+              table === "instagramSources"
+                ? [repairSource]
+                : table === "instagramEventSources"
                 ? reviewedSourceLinks
                 : table === "instagramSourceOccurrenceReceipts"
                   ? reviewedReceipts
@@ -1297,6 +1302,104 @@ try {
   });
   assert.equal(reviewedAudits.length, 2);
   assert.equal(reviewedAudits[1].action, "reviewed_structured_evidence_corrected");
+
+  const fallbackReviewSnapshot = {
+    event: structuredClone(reviewedEvent), receipt: structuredClone(reviewedReceipt),
+    post: structuredClone(posterPost), epoch: structuredClone(reviewedTopologyEpoch), audits: structuredClone(reviewedAudits),
+  };
+  function restoreFallbackReview() {
+    for (const [record, snapshot] of [
+      [reviewedEvent, fallbackReviewSnapshot.event], [reviewedReceipt, fallbackReviewSnapshot.receipt],
+      [posterPost, fallbackReviewSnapshot.post], [reviewedTopologyEpoch, fallbackReviewSnapshot.epoch],
+    ]) {
+      for (const key of Object.keys(record)) delete record[key];
+      Object.assign(record, structuredClone(snapshot));
+    }
+    reviewedAudits.splice(0, reviewedAudits.length, ...structuredClone(fallbackReviewSnapshot.audits));
+  }
+  function installReviewedAccountFallback() {
+    const raw = JSON.stringify({ ...JSON.parse(reviewedEvent.rawExtractionJson), venue: "" });
+    reviewedEvent.rawExtractionJson = raw;
+    posterPost.analysisResultJson = raw;
+    reviewedEvent.normalizedFieldsJson = JSON.stringify({
+      ...JSON.parse(reviewedEvent.normalizedFieldsJson), rawVenue: "", sourceAccountRole: "venue",
+      venueAccountFallbackVersion: 1, venueSource: "handle_map", trustedVenueSource: true,
+    });
+  }
+  function reviewedFallbackArgs(target) {
+    return {
+      id: reviewedEvent._id, expectedUpdatedAt: reviewedEvent.updatedAt,
+      expectedNormalizedFieldsJson: reviewedEvent.normalizedFieldsJson,
+      expectedSourceLinkId: reviewedSourceLink._id, expectedSourceLinkUpdatedAt: reviewedSourceLink.updatedAt,
+      expectedReceiptId: reviewedReceipt._id, expectedReceiptUpdatedAt: reviewedReceipt.updatedAt,
+      nextVenue: target.name, targetVenueId: target._id, expectedTargetVenueUpdatedAt: target.updatedAt,
+      expectedTargetVenueHandle: target.instagramHandle, nextTitle: reviewedEvent.title,
+      nextTime: reviewedEvent.time, preserveExistingTime: true, nextArtists: [...reviewedEvent.artists],
+      nextDescription: reviewedEvent.description, posterVenueEvidence: target.name,
+      posterTimeEvidence: "", posterArtistEvidence: [...reviewedEvent.artists],
+      venueEvidence: "The exact retained poster identifies this separate physical venue.",
+      moderationNote: "Human-reviewed separate physical venue supersedes the original account inference without changing source or timing.",
+      serviceSecret: process.env.CRON_SECRET,
+    };
+  }
+  function assertReviewedFallbackSuperseded(before, target) {
+    const fields = JSON.parse(reviewedEvent.normalizedFieldsJson);
+    assert.equal(Object.hasOwn(fields, "venueAccountFallbackVersion"), false);
+    assert.equal(fields.venueSource, "human_reviewed");
+    assert.equal(fields.trustedVenueSource, false);
+    const supersession = fields.reviewedVenueAccountFallbackSupersession;
+    assert.deepEqual(supersession.previousFallback, {
+      venueAccountFallbackVersion: 1, normalizedVenue: repairVenue.name, venueSource: "handle_map",
+      trustedVenueSource: true, venueId: repairVenue._id, venueInstagramHandle: repairVenue.instagramHandle,
+    });
+    assert.equal(supersession.venue, target.name);
+    assert.equal(supersession.venueId, target._id);
+    assert.equal(supersession.reviewedBy, reviewedEvent.reviewedBy);
+    assert.equal(supersession.reviewedAt, reviewedEvent.reviewedAt);
+    assert.deepEqual(JSON.parse(reviewedAudits.at(-1).patchJson).reviewedVenueAccountFallbackSupersession, supersession);
+    for (const key of ["rawExtractionJson", "sourceCaption", "instagramPostId", "instagramPostUrl", "sourcePostedAt", "date", "time"]) {
+      assert.equal(reviewedEvent[key], before[key], `Reviewed fallback supersession must preserve ${key}.`);
+    }
+  }
+  try {
+    for (const repair of [repairReviewedStructuredEventEvidence, repairReviewedStructuredEventVenue]) {
+      restoreFallbackReview();
+      installReviewedAccountFallback();
+      const before = structuredClone(reviewedEvent);
+      const args = reviewedFallbackArgs(multiSourceTargetVenue);
+      for (const patch of [{ serviceSecret: "invalid" }, { expectedUpdatedAt: reviewedEvent.updatedAt - 1 },
+        { expectedSourceLinkUpdatedAt: reviewedSourceLink.updatedAt - 1 }, { expectedTargetVenueUpdatedAt: multiSourceTargetVenue.updatedAt - 1 }]) {
+        await assert.rejects(repair._handler(reviewedCtx, { ...args, ...patch }));
+        assert.deepEqual(reviewedEvent, before, "Rejected fallback repairs must not alter any event field.");
+        assert.equal(reviewedAudits.length, fallbackReviewSnapshot.audits.length);
+      }
+      assert.equal((await repair._handler(reviewedCtx, args)).updated, true);
+      assertReviewedFallbackSuperseded(before, multiSourceTargetVenue);
+    }
+    restoreFallbackReview();
+    installReviewedAccountFallback();
+    await repairReviewedStructuredEventEvidence._handler(reviewedCtx, reviewedFallbackArgs(repairVenue));
+    const sameVenueFields = JSON.parse(reviewedEvent.normalizedFieldsJson);
+    assert.equal(sameVenueFields.venueAccountFallbackVersion, 1, "A same-venue lineup review must retain the active fallback policy.");
+    assert.equal(sameVenueFields.reviewedVenueAccountFallbackSupersession, undefined);
+    assert.equal(sameVenueFields.trustedVenueSource, true);
+    const sameVenueBefore = structuredClone(reviewedEvent);
+    repairSource.active = false;
+    try {
+      await assert.rejects(repairReviewedStructuredEventEvidence._handler(reviewedCtx, reviewedFallbackArgs(repairVenue)), /one active mapped venue account/u);
+      assert.deepEqual(reviewedEvent, sameVenueBefore, "A same-venue review must still enforce the live account fallback guard.");
+    } finally {
+      repairSource.active = true;
+    }
+    restoreFallbackReview();
+    installReviewedAccountFallback();
+    reviewedEvent.normalizedFieldsJson = JSON.stringify({ ...JSON.parse(reviewedEvent.normalizedFieldsJson), venueAccountFallbackVersion: 2 });
+    const invalidBefore = structuredClone(reviewedEvent);
+    await assert.rejects(repairReviewedStructuredEventEvidence._handler(reviewedCtx, reviewedFallbackArgs(multiSourceTargetVenue)), /fallback lacks exact persisted source evidence/u);
+    assert.deepEqual(reviewedEvent, invalidBefore, "A reviewed venue change cannot erase an invalid fallback marker.");
+  } finally {
+    restoreFallbackReview();
+  }
 
   const preserveTimeSnapshot = {
     event: structuredClone(reviewedEvent), receipt: structuredClone(reviewedReceipt),
@@ -1776,6 +1879,8 @@ try {
     });
   }
   const originalReviewNote = reviewedEvent.moderationNote;
+  installReviewedAccountFallback();
+  const multiSourceFallbackBefore = structuredClone(reviewedEvent);
   const multiSourceVenueArgs = {
     id: reviewedEvent._id,
     expectedUpdatedAt: reviewedEvent.updatedAt,
@@ -1811,6 +1916,7 @@ try {
   assert.equal(reviewedEvent.venue, multiSourceTargetVenue.name);
   assert.equal(reviewedEvent.venueId, multiSourceTargetVenue._id);
   assert.equal(reviewedEvent.moderationNote, originalReviewNote);
+  assertReviewedFallbackSuperseded(multiSourceFallbackBefore, multiSourceTargetVenue);
   for (const receipt of reviewedReceipts) {
     assert.equal(receipt.expectedOccurrences[0].venue, multiSourceTargetVenue.name);
   }
@@ -1819,6 +1925,7 @@ try {
     assert.equal(JSON.parse(occurrence.normalizedOccurrenceJson).venue, multiSourceTargetVenue.name);
   }
   assert.equal(reviewedAudits.at(-1).action, "reviewed_multi_source_venue_corrected");
+  Object.assign(posterPost, structuredClone(fallbackReviewSnapshot.post));
 
   for (const [label, persistedPost, assets] of [
     ["missing media asset", posterPost, []],

@@ -1,6 +1,49 @@
 import type { Doc, Id } from "../../_generated/dataModel";
 import { normalizeHandle } from "../../../lib/pipeline/venue-normalization";
 
+/** Replace an account inference only after an exact reviewed physical venue change. */
+export function supersedeReviewedAccountVenueFallback(args: {
+  currentFields: Record<string, unknown>;
+  event: Pick<Doc<"events">, "venue" | "venueId" | "venueInstagramHandle">;
+  venueFields: { venueId?: Id<"venues">; venueInstagramHandle?: string };
+  nextVenue: string;
+  reviewedAt: number;
+  actor: string;
+  evidence: string;
+}): { fields: Record<string, unknown>; audit: Record<string, unknown> } {
+  const { currentFields: fields, event, venueFields } = args;
+  const sourceHandle = normalizeHandle(String(fields.sourceGroundingInstagramHandle ?? ""));
+  if (
+    fields.venueAccountFallbackVersion !== 1 ||
+    !event.venueId || !venueFields.venueId || event.venueId === venueFields.venueId ||
+    event.venue === args.nextVenue || fields.normalizedVenue !== event.venue ||
+    fields.sourceAccountRole !== "venue" || fields.trustedVenueSource !== true ||
+    fields.venueSource !== "handle_map" || !sourceHandle ||
+    normalizeHandle(event.venueInstagramHandle ?? "") !== sourceHandle
+  ) return { fields, audit: {} };
+  const supersession = {
+    policyVersion: 1,
+    reviewedAt: args.reviewedAt,
+    reviewedBy: args.actor,
+    previousFallback: {
+      venueAccountFallbackVersion: fields.venueAccountFallbackVersion,
+      normalizedVenue: fields.normalizedVenue,
+      venueSource: fields.venueSource,
+      trustedVenueSource: fields.trustedVenueSource,
+      venueId: event.venueId,
+      venueInstagramHandle: event.venueInstagramHandle ?? null,
+    },
+    venue: args.nextVenue,
+    venueId: venueFields.venueId,
+    venueInstagramHandle: venueFields.venueInstagramHandle ?? null,
+    evidence: args.evidence,
+  };
+  const nextFields: Record<string, unknown> = { ...fields, venueSource: "human_reviewed", trustedVenueSource: false,
+    reviewedVenueAccountFallbackSupersession: supersession };
+  delete nextFields.venueAccountFallbackVersion;
+  return { fields: nextFields, audit: { reviewedVenueAccountFallbackSupersession: supersession } };
+}
+
 /** Compare two explicit calendar dates without inferring an omitted year/day. */
 export function reviewedScheduleDateMatchesEventDate(sourceDate: unknown, eventDate: string): boolean {
   if (typeof sourceDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(eventDate)) return false;

@@ -35,7 +35,7 @@ import {
   assertPersistedServiceSourcePolicy,
 } from "../../eventDomain/sourceApproval";
 import { requireCanonicalInstagramPostUrl } from "../../eventDomain/sourceUrlPolicy";
-import { assertReviewedCaptionVenueCorrection, reviewedTitleEvidenceMatchesBoundScheduleRow } from "./reviewedCaptionEvidence";
+import { assertReviewedCaptionVenueCorrection, reviewedTitleEvidenceMatchesBoundScheduleRow, supersedeReviewedAccountVenueFallback } from "./reviewedCaptionEvidence";
 import { assertReviewedNonPerformerEvidence, type ReviewedNonPerformerEvidence } from "./reviewedNonPerformerEvidence";
 export { reviewedTitleEvidenceMatchesBoundScheduleRow } from "./reviewedCaptionEvidence";
 
@@ -577,8 +577,10 @@ export async function repairReviewedStructuredEventEvidenceHandler(
       venueEvidence: args.captionVenueEvidence,
     },
   };
+  const reviewedFallback = supersedeReviewedAccountVenueFallback({ currentFields, event, venueFields,
+    nextVenue, reviewedAt, actor, evidence: captionMode ? args.captionVenueEvidence! : posterVenueEvidence });
   const nextFields = {
-    ...currentFields,
+    ...reviewedFallback.fields,
     title: nextTitle,
     normalizedVenue: nextVenue,
     artists: nextArtists,
@@ -739,6 +741,7 @@ export async function repairReviewedStructuredEventEvidenceHandler(
         },
         receiptBeforeUpdatedAt: receipt.updatedAt,
         receiptAfterUpdatedAt: receiptUpdatedAt,
+        ...reviewedFallback.audit,
         ...correctionEvidence,
       },
     },
@@ -889,8 +892,10 @@ export async function repairReviewedStructuredEventVenueHandler(
   const persistedModerationNote = args.preserveExistingModerationNote
     ? retainedModerationNote(event.moderationNote, moderationNote)
     : moderationNote;
+  const reviewedFallback = supersedeReviewedAccountVenueFallback({ currentFields, event, venueFields,
+    nextVenue, reviewedAt, actor, evidence: venueEvidence });
   const nextFields = {
-    ...currentFields,
+    ...reviewedFallback.fields,
     normalizedVenue: nextVenue,
     moderationAutoApproved: false,
     moderationAutoApproveRule: null,
@@ -1024,6 +1029,7 @@ export async function repairReviewedStructuredEventVenueHandler(
         venue: nextVenue,
         venueEvidence,
         venueId: venueFields.venueId,
+        ...reviewedFallback.audit,
       },
     },
   );
@@ -1349,8 +1355,10 @@ export async function repairReviewedMultiSourceEventVenueHandler(
   }
   const reviewedAt = Date.now();
   const persistedModerationNote = retainedModerationNote(event.moderationNote, moderationNote);
+  const reviewedFallback = supersedeReviewedAccountVenueFallback({ currentFields, event, venueFields,
+    nextVenue, reviewedAt, actor, evidence: venueEvidence });
   const nextFields = {
-    ...currentFields,
+    ...reviewedFallback.fields,
     normalizedVenue: nextVenue,
     moderationAutoApproved: false,
     moderationAutoApproveRule: null,
@@ -1475,6 +1483,7 @@ export async function repairReviewedMultiSourceEventVenueHandler(
       venueEvidence,
       sourceLinkIds: links.map((link) => link._id),
       expectedSources: args.expectedSources,
+      ...reviewedFallback.audit,
     },
   });
   return { updated: true, updatedAt, sourceCount: links.length, status: "approved" as const };
