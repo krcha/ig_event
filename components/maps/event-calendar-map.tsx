@@ -144,7 +144,7 @@ export function EventCalendarMap({ selectedDate, todayDate, days, events }: Even
                   <span aria-hidden="true" className="flex h-8 w-8 flex-none items-center justify-center rounded-full bg-primary text-sm font-bold text-primary-foreground">{index + 1}</span>
                   <div className="min-w-0 flex-1">
                     <h3 className="text-sm font-semibold leading-5">{location.name}</h3>
-                    <p className="mt-1 text-xs leading-4 text-muted-foreground">{location.address || "Belgrade"}</p>
+                    <p className="mt-1 text-xs leading-4 text-muted-foreground">{location.address || "View location on the map"}</p>
                   </div>
                   <MapPin aria-hidden="true" className="mt-1 h-4 w-4 flex-none text-primary" />
                 </button>

@@ -14,6 +14,7 @@ import {
 import { loadPublicCalendarEventsWindow } from "@/lib/events/public-events";
 import { SITE_ORIGIN } from "@/lib/seo/site";
 import { loadPublicVenueDirectory } from "@/lib/venues/public-venue-pages";
+import reviewedLocations from "@/data/venue-coordinates-2026-10-15.json";
 
 export const dynamic = "force-dynamic";
 
@@ -107,6 +108,7 @@ async function EventMapResults({ selectedDate, todayDate }: {
   const events = enrichEventMapCoordinates(
     eventResult.events.filter((event) => event.date === selectedDate),
     venueResult.venues,
+    reviewedLocations.venues,
   );
 
   return (

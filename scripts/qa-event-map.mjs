@@ -75,6 +75,18 @@ assert.deepEqual(
 );
 assert.equal(enriched[2].venueId, undefined, "An unbound venue name must never guess a branch ID.");
 
+const reviewedLocations = [
+  { id: "branch-one", latitude: 44.82, longitude: 20.47, address: "Verified venue address" },
+  { id: "branch-two", latitude: 44.83, longitude: 20.49, address: "Old point address" },
+  { id: "invalid", latitude: 44.81, longitude: 20.46, address: "Old invalidated point" },
+];
+const withAddresses = enrichEventMapCoordinates(originalEvents, venues, reviewedLocations);
+assert.equal(withAddresses[0].venueLocation, "Verified venue address", "A reviewed address must match the exact current venue ID and coordinate pair.");
+assert.equal(withAddresses[1].venueLocation, originalEvents[1].venueLocation, "A changed longitude must invalidate the prior reviewed address.");
+assert.equal(withAddresses[2].venueLocation, originalEvents[2].venueLocation, "Unbound events must not acquire an address from the reviewed directory.");
+assert.equal(withAddresses[6].venueLocation, originalEvents[6].venueLocation, "Invalid current coordinates must not authorize an old reviewed address.");
+assert.deepEqual(originalEvents, originalSnapshot, "Reviewed address enrichment must not mutate persisted events.");
+
 for (const [latitude, longitude] of [
   [undefined, undefined], [44.8, undefined], [undefined, 20.4], [NaN, 20.4],
   [44.8, Infinity], [91, 20.4], [-91, 20.4], [44.8, 181], [44.8, -181],

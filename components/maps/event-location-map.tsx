@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Expand, LoaderCircle, MapPin } from "lucide-react";
 import type { Map as LeafletMap, Marker } from "leaflet";
 import type { EventMapLocation } from "@/lib/events/event-map";
@@ -17,8 +17,10 @@ type EventLocationMapProps = {
 
 export function EventLocationMap({ locations, selectedLocationId, onSelectLocation }: EventLocationMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const mapInstanceId = useId();
   const mapRef = useRef<LeafletMap | null>(null);
   const markersRef = useRef(new Map<string, Marker>());
+  const popupButtonsRef = useRef(new Map<string, HTMLButtonElement>());
   const fitMapRef = useRef<(() => void) | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "failed">("loading");
   const [tilesUnavailable, setTilesUnavailable] = useState(false);
@@ -27,6 +29,7 @@ export function EventLocationMap({ locations, selectedLocationId, onSelectLocati
     let cancelled = false;
     let resizeObserver: ResizeObserver | undefined;
     const markers = markersRef.current;
+    const popupButtons = popupButtonsRef.current;
     setStatus("loading");
     setTilesUnavailable(false);
 
@@ -59,35 +62,122 @@ export function EventLocationMap({ locations, selectedLocationId, onSelectLocati
       });
       tiles.addTo(map);
 
+      const pointGroups = new Map<string, { location: EventMapLocation; number: number }[]>();
       locations.forEach((location, index) => {
+        const point = JSON.stringify([location.latitude, location.longitude]);
+        const group = pointGroups.get(point) ?? [];
+        group.push({ location, number: index + 1 });
+        pointGroups.set(point, group);
+      });
+
+      [...pointGroups.values()].forEach((group, groupIndex) => {
+        const { location, number } = group[0];
+        const shared = group.length > 1;
+        const markerLabel = shared
+          ? `${group.length} venues at this location. Choose a venue to show its lineup.`
+          : `${location.name}, ${location.events.length} ${location.events.length === 1 ? "event" : "events"}. Show lineup.`;
         const marker = L.marker([location.latitude, location.longitude], {
           icon: L.divIcon({
-            className: "event-map-pin",
-            html: `<span class="event-map-pin-number">${index + 1}</span><span class="event-map-pin-dot"></span>`,
-            iconSize: [40, 48],
-            iconAnchor: [20, 44],
+            className: shared ? "event-map-pin is-shared" : "event-map-pin",
+            html: shared
+              ? `<span class="event-map-pin-number">${group.length}<span class="event-map-pin-caption">venues</span></span><span class="event-map-pin-dot"></span>`
+              : `<span class="event-map-pin-number">${number}</span><span class="event-map-pin-dot"></span>`,
+            iconSize: shared ? [56, 54] : [40, 48],
+            iconAnchor: shared ? [28, 50] : [20, 44],
           }),
-          title: `${location.name}: ${location.events.length} ${location.events.length === 1 ? "event" : "events"}`,
-          alt: location.name,
+          title: markerLabel,
+          alt: shared ? `${group.length} venues` : location.name,
           keyboard: true,
           riseOnHover: true,
         }).addTo(map);
         const tooltip = document.createElement("span");
-        tooltip.textContent = location.name;
-        marker.bindTooltip(tooltip, { direction: "top", offset: [0, -42] });
-        marker.on("click", () => onSelectLocation(location.id));
+        tooltip.textContent = shared ? `${group.length} venues at this location` : location.name;
+        marker.bindTooltip(tooltip, { direction: "top", offset: [0, shared ? -50 : -42] });
         const element = marker.getElement();
         if (element) {
           element.setAttribute("role", "button");
-          element.setAttribute("aria-label", `${location.name}, ${location.events.length} ${location.events.length === 1 ? "event" : "events"}. Show lineup.`);
+          element.setAttribute("aria-label", markerLabel);
           element.addEventListener("keydown", (event) => {
-            if (event.key === " ") {
+            if (event.key === " " || event.key === "Enter") {
               event.preventDefault();
-              onSelectLocation(location.id);
+              event.stopPropagation();
+              if (shared) marker.openPopup();
+              else onSelectLocation(location.id);
             }
           });
         }
-        markers.set(location.id, marker);
+
+        if (shared) {
+          const popupContent = document.createElement("div");
+          popupContent.className = "event-map-shared-venues";
+          popupContent.id = `${mapInstanceId}-shared-${groupIndex}`;
+          popupContent.setAttribute("role", "dialog");
+          popupContent.setAttribute("aria-label", "Choose a venue at this location");
+          const heading = document.createElement("p");
+          heading.className = "event-map-shared-heading";
+          heading.textContent = `${group.length} venues at this location`;
+          popupContent.append(heading);
+
+          group.forEach((entry) => {
+            const button = document.createElement("button");
+            button.className = "event-map-venue-choice";
+            button.type = "button";
+            button.setAttribute("aria-label", `${entry.number}. ${entry.location.name}, ${entry.location.events.length} ${entry.location.events.length === 1 ? "event" : "events"}. Show lineup.`);
+            const venueNumber = document.createElement("span");
+            venueNumber.className = "event-map-venue-number";
+            venueNumber.setAttribute("aria-hidden", "true");
+            venueNumber.textContent = String(entry.number);
+            const venueLabel = document.createElement("span");
+            venueLabel.className = "event-map-venue-label";
+            const venueName = document.createElement("span");
+            venueName.className = "event-map-venue-name";
+            venueName.textContent = entry.location.name;
+            const eventCount = document.createElement("span");
+            eventCount.className = "event-map-venue-count";
+            eventCount.textContent = `${entry.location.events.length} ${entry.location.events.length === 1 ? "event" : "events"}`;
+            venueLabel.append(venueName, eventCount);
+            button.append(venueNumber, venueLabel);
+            button.addEventListener("click", () => {
+              marker.closePopup();
+              onSelectLocation(entry.location.id);
+            });
+            popupButtons.set(entry.location.id, button);
+            popupContent.append(button);
+          });
+
+          popupContent.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              marker.closePopup();
+            }
+          });
+          marker.bindPopup(popupContent, {
+            className: "event-map-shared-popup",
+            minWidth: 210,
+            maxWidth: 280,
+            offset: [0, -42],
+            autoPanPaddingTopLeft: [12, 92],
+            autoPanPaddingBottomRight: [12, 24],
+          });
+          element?.setAttribute("aria-haspopup", "dialog");
+          element?.setAttribute("aria-controls", popupContent.id);
+          element?.setAttribute("aria-expanded", "false");
+          marker.on("popupopen", () => {
+            element?.setAttribute("aria-expanded", "true");
+            const selected = group.find((entry) => popupButtons.get(entry.location.id)?.getAttribute("aria-pressed") === "true");
+            popupButtons.get((selected ?? group[0]).location.id)?.focus({ preventScroll: true });
+          });
+          marker.on("popupclose", () => {
+            element?.setAttribute("aria-expanded", "false");
+            if (!cancelled && (popupContent.contains(document.activeElement) || document.activeElement === document.body)) {
+              element?.focus({ preventScroll: true });
+            }
+          });
+        } else {
+          marker.on("click", () => onSelectLocation(location.id));
+        }
+        group.forEach((entry) => markers.set(entry.location.id, marker));
       });
 
       function fitMap() {
@@ -117,16 +207,18 @@ export function EventLocationMap({ locations, selectedLocationId, onSelectLocati
       cancelled = true;
       resizeObserver?.disconnect();
       markers.clear();
+      popupButtons.clear();
       fitMapRef.current = null;
       mapRef.current?.remove();
       mapRef.current = null;
     };
-  }, [locations, onSelectLocation]);
+  }, [locations, mapInstanceId, onSelectLocation]);
 
   useEffect(() => {
     if (status !== "ready") return;
-    markersRef.current.forEach((marker, id) => {
-      const selected = id === selectedLocationId;
+    const selectedMarker = selectedLocationId ? markersRef.current.get(selectedLocationId) : undefined;
+    new Set(markersRef.current.values()).forEach((marker) => {
+      const selected = marker === selectedMarker;
       marker.getElement()?.classList.toggle("is-selected", selected);
       marker.getElement()?.setAttribute("aria-pressed", String(selected));
       marker.setZIndexOffset(selected ? 1000 : 0);
@@ -135,6 +227,9 @@ export function EventLocationMap({ locations, selectedLocationId, onSelectLocati
           animate: !window.matchMedia("(prefers-reduced-motion: reduce)").matches,
         });
       }
+    });
+    popupButtonsRef.current.forEach((button, id) => {
+      button.setAttribute("aria-pressed", String(id === selectedLocationId));
     });
   }, [selectedLocationId, status]);
 

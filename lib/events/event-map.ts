@@ -58,23 +58,31 @@ export function buildEventMapHref(date: string): string {
 export function enrichEventMapCoordinates(
   events: PublicEvent[],
   venues: readonly Pick<PublicVenueDirectoryItem, "_id" | "latitude" | "longitude">[],
+  reviewedLocations: readonly { id: string; latitude: number; longitude: number; address?: string }[] = [],
 ): PublicEvent[] {
   const venuesById = new Map(venues.map((venue) => [venue._id, venue]));
+  const reviewedById = new Map(reviewedLocations.map((venue) => [venue.id, venue]));
 
   return events.map((event) => {
     const venue = event.venueId ? venuesById.get(event.venueId) : undefined;
-    const coordinates =
-      validCoordinates(venue?.latitude, venue?.longitude) ??
-      validCoordinates(event.venueLatitude, event.venueLongitude);
+    const currentCoordinates = validCoordinates(venue?.latitude, venue?.longitude);
+    const coordinates = currentCoordinates ?? validCoordinates(event.venueLatitude, event.venueLongitude);
 
     if (!coordinates) {
       return event;
     }
 
+    // An address is display evidence for the reviewed point, not an identity
+    // guess. Ignore it if a later operator changes either coordinate.
+    const reviewed = venue && currentCoordinates ? reviewedById.get(venue._id) : undefined;
+    const reviewedAddress = reviewed?.latitude === coordinates.latitude &&
+      reviewed.longitude === coordinates.longitude ? reviewed.address?.trim() : undefined;
+
     return {
       ...event,
       venueLatitude: coordinates.latitude,
       venueLongitude: coordinates.longitude,
+      ...(reviewedAddress ? { venueLocation: reviewedAddress } : {}),
     };
   });
 }
