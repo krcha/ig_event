@@ -8,11 +8,6 @@
  * @module
  */
 
-import type {
-  ApiFromModules,
-  FilterApi,
-  FunctionReference,
-} from "convex/server";
 import type * as authz from "../authz.js";
 import type * as automaticApprovalDiagnostics from "../automaticApprovalDiagnostics.js";
 import type * as autonomousModeration from "../autonomousModeration.js";
@@ -60,11 +55,13 @@ import type * as internal_eventRepairs_evidencePolicy from "../internal/eventRep
 import type * as internal_eventRepairs_pendingBenignSourceConflicts from "../internal/eventRepairs/pendingBenignSourceConflicts.js";
 import type * as internal_eventRepairs_pendingSourceConflictReclassification from "../internal/eventRepairs/pendingSourceConflictReclassification.js";
 import type * as internal_eventRepairs_revertFalseCinemaAutomaticApproval from "../internal/eventRepairs/revertFalseCinemaAutomaticApproval.js";
+import type * as internal_eventRepairs_reviewedCaptionEvidence from "../internal/eventRepairs/reviewedCaptionEvidence.js";
 import type * as internal_eventRepairs_reviewedContinuationFold from "../internal/eventRepairs/reviewedContinuationFold.js";
 import type * as internal_eventRepairs_reviewedFabrikaDjNightEnrichment from "../internal/eventRepairs/reviewedFabrikaDjNightEnrichment.js";
 import type * as internal_eventRepairs_reviewedFabrikaProgramEnrichment from "../internal/eventRepairs/reviewedFabrikaProgramEnrichment.js";
 import type * as internal_eventRepairs_reviewedPromotionFold from "../internal/eventRepairs/reviewedPromotionFold.js";
 import type * as internal_eventRepairs_reviewedScheduleFold from "../internal/eventRepairs/reviewedScheduleFold.js";
+import type * as internal_eventRepairs_reviewedStructuredCaptionCorrection from "../internal/eventRepairs/reviewedStructuredCaptionCorrection.js";
 import type * as internal_eventRepairs_reviewedStructuredCorrections from "../internal/eventRepairs/reviewedStructuredCorrections.js";
 import type * as internal_eventRepairs_reviewedVenueRepairContext from "../internal/eventRepairs/reviewedVenueRepairContext.js";
 import type * as internal_eventRepairs_sourceBoundEmptyV2Venue from "../internal/eventRepairs/sourceBoundEmptyV2Venue.js";
@@ -136,14 +133,12 @@ import type * as venueIdentities from "../venueIdentities.js";
 import type * as venueResolver from "../venueResolver.js";
 import type * as venues from "../venues.js";
 
-/**
- * A utility for referencing Convex functions in your app's API.
- *
- * Usage:
- * ```js
- * const myFunctionReference = api.myModule.myFunction;
- * ```
- */
+import type {
+  ApiFromModules,
+  FilterApi,
+  FunctionReference,
+} from "convex/server";
+
 declare const fullApi: ApiFromModules<{
   authz: typeof authz;
   automaticApprovalDiagnostics: typeof automaticApprovalDiagnostics;
@@ -192,11 +187,13 @@ declare const fullApi: ApiFromModules<{
   "internal/eventRepairs/pendingBenignSourceConflicts": typeof internal_eventRepairs_pendingBenignSourceConflicts;
   "internal/eventRepairs/pendingSourceConflictReclassification": typeof internal_eventRepairs_pendingSourceConflictReclassification;
   "internal/eventRepairs/revertFalseCinemaAutomaticApproval": typeof internal_eventRepairs_revertFalseCinemaAutomaticApproval;
+  "internal/eventRepairs/reviewedCaptionEvidence": typeof internal_eventRepairs_reviewedCaptionEvidence;
   "internal/eventRepairs/reviewedContinuationFold": typeof internal_eventRepairs_reviewedContinuationFold;
   "internal/eventRepairs/reviewedFabrikaDjNightEnrichment": typeof internal_eventRepairs_reviewedFabrikaDjNightEnrichment;
   "internal/eventRepairs/reviewedFabrikaProgramEnrichment": typeof internal_eventRepairs_reviewedFabrikaProgramEnrichment;
   "internal/eventRepairs/reviewedPromotionFold": typeof internal_eventRepairs_reviewedPromotionFold;
   "internal/eventRepairs/reviewedScheduleFold": typeof internal_eventRepairs_reviewedScheduleFold;
+  "internal/eventRepairs/reviewedStructuredCaptionCorrection": typeof internal_eventRepairs_reviewedStructuredCaptionCorrection;
   "internal/eventRepairs/reviewedStructuredCorrections": typeof internal_eventRepairs_reviewedStructuredCorrections;
   "internal/eventRepairs/reviewedVenueRepairContext": typeof internal_eventRepairs_reviewedVenueRepairContext;
   "internal/eventRepairs/sourceBoundEmptyV2Venue": typeof internal_eventRepairs_sourceBoundEmptyV2Venue;
@@ -268,12 +265,31 @@ declare const fullApi: ApiFromModules<{
   venueResolver: typeof venueResolver;
   venues: typeof venues;
 }>;
+
+/**
+ * A utility for referencing Convex functions in your app's public API.
+ *
+ * Usage:
+ * ```js
+ * const myFunctionReference = api.myModule.myFunction;
+ * ```
+ */
 export declare const api: FilterApi<
   typeof fullApi,
   FunctionReference<any, "public">
 >;
+
+/**
+ * A utility for referencing Convex functions in your app's internal API.
+ *
+ * Usage:
+ * ```js
+ * const myFunctionReference = internal.myModule.myFunction;
+ * ```
+ */
 export declare const internal: FilterApi<
   typeof fullApi,
   FunctionReference<any, "internal">
 >;
+
 export declare const components: {};

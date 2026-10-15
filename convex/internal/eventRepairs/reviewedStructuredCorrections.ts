@@ -35,7 +35,7 @@ import {
   assertPersistedServiceSourcePolicy,
 } from "../../eventDomain/sourceApproval";
 import { requireCanonicalInstagramPostUrl } from "../../eventDomain/sourceUrlPolicy";
-import { assertReviewedCaptionVenueCorrection } from "./reviewedCaptionEvidence";
+import { assertReviewedCaptionVenueCorrection, reviewedScheduleDateMatchesEventDate } from "./reviewedCaptionEvidence";
 
 export type ReviewedStructuredCorrectionVersionArgs = {
   expectedSourceLinkId: Id<"instagramEventSources">;
@@ -1042,7 +1042,7 @@ export function reviewedTitleEvidenceMatchesBoundScheduleRow(args: {
   if (!row || typeof row !== "object" || Array.isArray(row)) return false;
   const sourceText = (row as Record<string, unknown>).source_text;
   const sourceDate = (row as Record<string, unknown>).date;
-  if (typeof sourceText !== "string" || sourceDate !== args.eventDate) return false;
+  if (typeof sourceText !== "string" || !reviewedScheduleDateMatchesEventDate(sourceDate, args.eventDate)) return false;
   const normalizeWhitespace = (value: string) =>
     value.normalize("NFKC").replace(/\s+/gu, " ").trim();
   const foldLetters = (value: string) =>

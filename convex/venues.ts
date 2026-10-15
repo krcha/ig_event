@@ -1022,12 +1022,7 @@ export const updateVenue = mutation({
   },
 });
 
-/**
- * Renames a referenced public venue and its small, exact set of approved
- * source-attested events in one transaction. Ordinary updateVenue deliberately
- * rejects referenced identity changes; this reviewed path advances each
- * compatibility receipt and first-class occurrence with its event.
- */
+/** Exact bounded occurrence snapshots for a service-reviewed venue rename. */
 export const getReviewedReferencedVenueRenameOccurrences = query({
   args: { id: v.id("venues"), serviceSecret: v.string() },
   returns: v.array(v.object({
@@ -1062,6 +1057,11 @@ export const getReviewedReferencedVenueRenameOccurrences = query({
   },
 });
 
+/**
+ * Renames a public venue and its exact approved event set in one transaction.
+ * Independently acknowledged unbound source occurrences retain their original
+ * facts and state; each reviewed event advances its receipt and occurrence.
+ */
 export const renameReferencedVenueWithReviewedEvents = mutation({
   args: {
     id: v.id("venues"),

@@ -17,6 +17,7 @@ import {
   isReviewablySourceGroundedApprovedEvent,
   reviewedTitleEvidenceMatchesBoundScheduleRow,
 } from "../convex/internal/eventRepairs/reviewedStructuredCorrections.ts";
+import { reviewedScheduleDateMatchesEventDate } from "../convex/internal/eventRepairs/reviewedCaptionEvidence.ts";
 import {
   createEvent,
   listPublicCalendarEventsWindowPaginated,
@@ -142,6 +143,35 @@ assert.equal(reviewedTitleEvidenceMatchesBoundScheduleRow({
   ...reviewedTitleRowArgs,
   nextTitle: "Unattested Artist",
 }), false, "The replacement title must occur in the exact schedule row.");
+const openingRowText = "Otvaranje kluba VIBE zakazano je za 16. oktobar od 22 \u010dasa";
+const openingTitleArgs = {
+  currentFields: { splitEventIndex: 1, rowSourceText: openingRowText },
+  rawExtraction: { schedule_entries: [{ date: "16.10.2026", source_text: openingRowText }] },
+  eventDate: "2026-10-16",
+  nextTitle: "Otvaranje kluba VIBE",
+  titleEvidence: openingRowText,
+};
+assert.equal(reviewedTitleEvidenceMatchesBoundScheduleRow(openingTitleArgs), true, "An explicit DD.MM.YYYY date must bind the same ISO event date.");
+assert.equal(reviewedTitleEvidenceMatchesBoundScheduleRow({ ...openingTitleArgs, eventDate: "2026-10-17" }), false, "A differently formatted row must not bind another day.");
+for (const [source, event, expected] of [
+  ["2026-10-16", "2026-10-16", true],
+  ["16.10.2026", "2026-10-16", true],
+  ["29.02.2024", "2024-02-29", true],
+  ["16.10.2025", "2026-10-16", false],
+  ["17.10.2026", "2026-10-16", false],
+  ["10/16/2026", "2026-10-16", false],
+  ["16.10.26", "2026-10-16", false],
+  ["16.1.2026", "2026-01-16", false],
+  ["16.10.2026.", "2026-10-16", false],
+  ["29.02.2026", "2026-02-29", false],
+  ["2026-02-29", "2026-02-29", false],
+  ["31.04.2026", "2026-04-31", false],
+  ["00.10.2026", "2026-10-00", false],
+  ["16.13.2026", "2026-13-16", false],
+  [undefined, "2026-10-16", false],
+]) {
+  assert.equal(reviewedScheduleDateMatchesEventDate(source, event), expected, `Compare explicit schedule date ${source} with ${event}.`);
+}
 const parsedCachedExtraction = parseExtractedEventData(
   JSON.parse(serializedExtraction),
 );

@@ -73,6 +73,11 @@ artists can be removed only when the event stays at that venue and an exact
 caption row bills another act without billing the venue name as a performer.
 Other days' caption rows cannot supply that proof.
 
+Reviewed venue renames require every linked event and source occurrence to be
+accounted for. An unbound expected, deferred or superseded occurrence can be
+acknowledged by its exact stored snapshot and revision; its historical facts,
+state and source identity remain unchanged during the rename.
+
 ## Moderation And Deduplication
 
 Admins approve, reject, remove, or bulk-moderate events from `/admin`. Approved
