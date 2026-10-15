@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ArrowRight, CalendarDays, ChevronLeft, ChevronRight, Clock3, MapPin, Navigation, Warehouse } from "lucide-react";
 import { EventLocationMap } from "@/components/maps/event-location-map";
+import { EventSessionLabel } from "@/components/events/event-session-label";
+import { getEventSessionLabel } from "@/lib/events/event-session";
 import { buildEventMapData, buildEventMapHref, MAP_MAX_DATE, MAP_MIN_DATE } from "@/lib/events/event-map";
 import { UNKNOWN_EVENT_TIME_LABEL } from "@/lib/events/event-time";
 import { addDaysToDateKey } from "@/lib/events/nightlife-date";
@@ -37,11 +39,12 @@ function formatDate(date: string, options: Intl.DateTimeFormatOptions): string {
 
 function MapEventRow({ event }: { event: PublicEvent }) {
   return (
-    <Link aria-label={`${event.title} at ${event.venue}, ${event.displayTimeLabel || event.time || UNKNOWN_EVENT_TIME_LABEL}`} className="group flex items-start gap-3 rounded-xl px-3 py-3 hover:bg-white/[0.045] focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" href={`/events/${event._id}`} prefetch={false}>
+    <Link aria-label={`${event.title} at ${event.venue}, ${getEventSessionLabel(event) || event.displayTimeLabel || event.time || UNKNOWN_EVENT_TIME_LABEL}`} className="group flex items-start gap-3 rounded-xl px-3 py-3 hover:bg-white/[0.045] focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" href={`/events/${event._id}`} prefetch={false}>
       <Clock3 aria-hidden="true" className="mt-0.5 h-4 w-4 flex-none text-primary" />
       <div className="min-w-0 flex-1">
         <p className="text-xs font-medium text-muted-foreground">{event.displayTimeLabel || event.time || UNKNOWN_EVENT_TIME_LABEL}</p>
         <h3 className="mt-1 text-sm font-semibold leading-5 text-foreground group-hover:text-primary">{event.title}</h3>
+        <EventSessionLabel event={event} />
         <p className="mt-1 text-xs text-muted-foreground">{[event.eventType, event.ticketPrice].filter(Boolean).join(" · ")}</p>
       </div>
       <ArrowRight aria-hidden="true" className="mt-1 h-4 w-4 flex-none text-muted-foreground group-hover:text-primary" />

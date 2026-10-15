@@ -19,6 +19,8 @@ import { JsonLd } from "@/components/seo/json-ld";
 import { EventKindToggleChips } from "@/components/calendar/event-kind-toggle-chips";
 import { MobileMonthDayStrip } from "@/components/calendar/mobile-month-day-strip";
 import { EventMetaRow, getEventCategoryKind } from "@/components/events/event-meta";
+import { EventSessionLabel } from "@/components/events/event-session-label";
+import { getEventSessionLabel } from "@/lib/events/event-session";
 import { SaveEventButton } from "@/components/events/save-event-button";
 import { cn } from "@/lib/utils";
 import {
@@ -72,6 +74,7 @@ type CalendarEventSummary = Pick<
   PublicEvent,
   | "_id"
   | "title"
+  | "description"
   | "date"
   | "time"
   | "timeStatus"
@@ -231,7 +234,7 @@ function buildQueryString(params: Record<string, string | undefined>): string {
 }
 
 function getEventAriaLabel(event: CalendarEventSummary, tone: EventTone): string {
-  return ["Open " + event.title, event.displayTimeLabel ?? getDisplayEventTime(event.time), event.venue, tone.name]
+  return ["Open " + event.title, getEventSessionLabel(event) ?? event.displayTimeLabel ?? getDisplayEventTime(event.time), event.venue, tone.name]
     .filter(Boolean)
     .join(", ");
 }
@@ -342,6 +345,7 @@ function toCalendarEventSummary(event: PublicEvent): CalendarEventSummary {
   return {
     _id: event._id,
     title: event.title,
+    description: event.description,
     date: event.date,
     time: event.time,
     timeStatus: event.timeStatus,
@@ -950,7 +954,10 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                             <span className="w-16 flex-none truncate text-xs font-semibold tabular-nums text-muted-foreground">
                               {getResolvedDisplayTime(event)}
                             </span>
-                            <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{event.title}</span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-[13px] font-semibold">{event.title}</span>
+                              <EventSessionLabel className="mt-0 text-[11px] leading-4" event={event} />
+                            </span>
                             <span className="flex-none text-[10px] font-medium text-muted-foreground">{tone.name}</span>
                           </Link>
                         </li>
@@ -1063,6 +1070,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                         <h4 className="truncate text-[13px] font-semibold leading-4 tracking-tight text-foreground">
                           {event.title}
                         </h4>
+                        <EventSessionLabel event={event} />
                       </Link>
                       <VenueNameLink
                         className="mt-0.5 block truncate text-[11px] font-medium leading-4 text-muted-foreground"
@@ -1118,6 +1126,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                         <h4 className="text-sm font-semibold leading-5 tracking-tight text-foreground sm:text-[15px]">
                           {event.title}
                         </h4>
+                        <EventSessionLabel event={event} />
                       </Link>
                       <VenueNameLink
                         className="mt-1 block truncate text-xs leading-5 text-muted-foreground"

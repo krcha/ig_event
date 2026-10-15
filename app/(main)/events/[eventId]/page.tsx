@@ -14,6 +14,7 @@ import {
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { EventCategoryPill, EventMetaRow, EventPriceChip } from "@/components/events/event-meta";
+import { EventSessionLabel } from "@/components/events/event-session-label";
 import { EventCalendarBackLink } from "@/components/calendar/calendar-scroll-restoration";
 import { ReadMoreText } from "@/components/ui/read-more-text";
 import { JsonLd } from "@/components/seo/json-ld";
@@ -438,6 +439,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                   <h1 className="text-2xl font-semibold leading-tight tracking-[-0.045em] sm:text-4xl lg:text-5xl">
                     {event.title}
                   </h1>
+                  <EventSessionLabel className="text-sm sm:text-base" event={event} />
                 </div>
 
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">

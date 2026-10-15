@@ -10,7 +10,7 @@ import { buildMeaningfulEventTitle, extractContextualEventTitleCandidate, extrac
 import type { normalizeEventTitle } from "@/lib/pipeline/ingestion/parsing-event-title";
 import { buildSplitEventDescription } from "@/lib/pipeline/ingestion/parsing-schedule";
 import { buildScheduleEntryTimeProvenance, buildTimeProvenance, type resolveEventTimeFromExtractionAndEvidence } from "@/lib/pipeline/ingestion/parsing-time";
-import { extractionEvidenceAppearsInPersistedSource, hasVerifiedSharedScheduleContext, isVerifiedEventVenueEvidence } from "@/lib/pipeline/ingestion/structured-fact-verification";
+import { artistIdentityAppearsInText, extractionEvidenceAppearsInPersistedSource, hasVerifiedSharedScheduleContext, isVerifiedEventVenueEvidence } from "@/lib/pipeline/ingestion/structured-fact-verification";
 import { normalizeString } from "@/lib/pipeline/ingestion/values";
 import { findScopedBranchVenueEvidence } from "@/lib/pipeline/ingestion/scoped-branch-venue-evidence";
 import { canonicalizeVenueNameDetailed, normalizeVenueComparableText, toSearchableText, type VenueNormalization } from "@/lib/pipeline/venue-normalization";
@@ -209,7 +209,7 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
     : "";
   const rawEventVariants: EventVariant[] = usesSplitEventCandidates
     ? splitEventCandidates.map((entry) => {
-        const variantArtists =
+        const extractedVariantArtists =
           entry.titleUsedFallback || (entry.artistsWereSanitized && entry.artists.length === 0)
             ? []
             : entry.artists.length > 0 || usesStructuredEvidence
@@ -452,6 +452,33 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
               sourceRole: "promoter",
             }).venue ?? variantVenueRaw
           : "";
+        const compactIdentity = (value: string): string => toSearchableText(value).replace(/\s/gu, "");
+        const physicalVenueIdentities = new Set(
+          [...sourceAccountNames, normalizedSourceHandle].map(compactIdentity).filter(Boolean),
+        );
+        const captionRowIsBound = Boolean(
+          entry.sourceLine.trim() &&
+          (post.caption ?? "").normalize("NFKC").replace(/\s+/gu, " ").includes(
+            entry.sourceLine.normalize("NFKC").replace(/\s+/gu, " ").trim(),
+          ),
+        );
+        const captionBilledArtists = extractedVariantArtists.filter((artist) =>
+          !physicalVenueIdentities.has(compactIdentity(artist)) &&
+          artistIdentityAppearsInText(entry.sourceLine, artist),
+        );
+        // A row-local caption can distinguish its billed act from the venue
+        // logo that vision placed in the lineup. Never remove a name that
+        // the same caption row actually bills, or borrow another day's act.
+        const variantArtists = extracted._extractionPolicyVersion === "event_quality_v1" &&
+          usesStructuredEvidence && sourceRole === "venue" &&
+          normalizeVenueComparableText(variantVenue) === normalizeVenueComparableText(configuredCanonicalVenue) &&
+          captionRowIsBound && captionBilledArtists.length > 0
+          ? extractedVariantArtists.filter((artist) =>
+              !physicalVenueIdentities.has(compactIdentity(artist)) ||
+              artistIdentityAppearsInText(entry.sourceLine, artist),
+            )
+          : extractedVariantArtists;
+        const venueArtistRemoved = variantArtists.length !== extractedVariantArtists.length;
         const rowContextCandidate = entry.titleUsedFallback
           ? extractContextualEventTitleCandidate(entry.description ?? "")
           : null;
@@ -578,7 +605,7 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
             : buildScheduleEntryTimeProvenance(entry),
           consistencyIssues: entry.consistencyIssues,
           artists: variantArtists,
-          artistsWereSanitized: entry.artistsWereSanitized ?? false,
+          artistsWereSanitized: venueArtistRemoved || (entry.artistsWereSanitized ?? false),
           description: variantDescription,
           venue: variantVenue,
           venueEvidenceValue:

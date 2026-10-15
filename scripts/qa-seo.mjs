@@ -84,6 +84,22 @@ for (const time of [
   );
 }
 
+for (const [description, time, age, endDate] of [
+  ["For ages 5–8; led by Marija Nikolić.", "12:00-13:30", "5-8", "2026-10-17T13:30:00+02:00"],
+  ["For ages 9–14; led by Marija Nikolić.", "14:00-15:30", "9-14", "2026-10-17T15:30:00+02:00"],
+  ["Nightlife event.", "22:00-03:00", undefined, "2026-10-18T03:00:00+02:00"],
+  ["No announced session details.", "TBD", undefined, undefined],
+  ["Two groups: ages 5–8 and ages 9–14.", "14:00", undefined, undefined],
+]) {
+  const session = buildEventStructuredData({
+    _id: "session-qa", title: "Mali vajari boja", artists: [],
+    date: "2026-10-17", eventType: "learning", venue: "Museum",
+    description, time,
+  });
+  assert.equal(session.typicalAgeRange, age, "Age schema must describe this occurrence only.");
+  assert.equal(session.endDate, endDate, "Session end must preserve the announced Belgrade clock.");
+}
+
 const eventJsonLd = buildEventStructuredData({
   _id: "event-1",
   artists: ["DJ Test"],

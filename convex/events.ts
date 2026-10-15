@@ -117,6 +117,7 @@ import {
   repairReviewedStructuredEventVenueHandler,
 } from "./eventDomain/reviewedStructuredCorrections";
 import { getReviewedVenueRepairContextHandler } from "./internal/eventRepairs/reviewedVenueRepairContext";
+import { repairReviewedStructuredEventCaptionVenueHandler } from "./internal/eventRepairs/reviewedStructuredCaptionCorrection";
 import { enrichReviewedFabrikaDjNightHandler } from "./internal/eventRepairs/reviewedFabrikaDjNightEnrichment";
 import { enrichReviewedFabrikaProgramHandler } from "./internal/eventRepairs/reviewedFabrikaProgramEnrichment";
 import {
@@ -547,6 +548,27 @@ export const repairReviewedStructuredEventEvidence = mutation({
   },
   returns: reviewedStructuredEvidenceCorrectionResult,
   handler: repairReviewedStructuredEventEvidenceHandler,
+});
+
+export const repairReviewedStructuredEventCaptionVenue = mutation({
+  args: {
+    id: v.id("events"),
+    expectedUpdatedAt: v.number(),
+    expectedNormalizedFieldsJson: v.string(),
+    expectedSourceLinkId: v.id("instagramEventSources"),
+    expectedSourceLinkUpdatedAt: v.number(),
+    expectedReceiptId: v.id("instagramSourceOccurrenceReceipts"),
+    expectedReceiptUpdatedAt: v.number(),
+    nextVenue: v.string(),
+    targetVenueId: v.id("venues"),
+    expectedTargetVenueUpdatedAt: v.number(),
+    expectedTargetVenueHandle: v.string(),
+    captionVenueEvidence: v.string(),
+    moderationNote: v.string(),
+    serviceSecret: v.string(),
+  },
+  returns: reviewedStructuredEvidenceCorrectionResult,
+  handler: repairReviewedStructuredEventCaptionVenueHandler,
 });
 
 export const repairReviewedStructuredEventVenue = mutation({

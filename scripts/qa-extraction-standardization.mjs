@@ -912,8 +912,8 @@ function runVenueQa() {
       { "domestik.bg": "promoter" },
       "UMAMI",
     ).venue,
-    "ДOMESTIK",
-    "An uncorroborated title cannot become a physical venue claim.",
+    null,
+    "Neither an uncorroborated title nor the promoter's own legacy brand can become the physical venue.",
   );
 
   const ambiguousCanonicalHandles = normalizeVenueFromEvidence({
@@ -12172,7 +12172,8 @@ function runTrustedSourceAnnouncementModerationQa() {
     { qa_trusted_venue: "QA Trusted Venue" },
     { sourceRolesByHandle: { qa_trusted_venue: "promoter" }, eventDateFilterNow: new Date() },
   );
-  assert.equal(promoterResult.kind, "ok");
+  assert.equal(promoterResult.kind, "skip", JSON.stringify(promoterResult));
+  assert.equal(promoterResult.reason, "missing_venue", "A promoter's own brand supplies no physical event location.");
   assert.equal(promoterResult.normalizedFields.trustedVenueSource, false);
 
   const [genericSaveTheDate] = prepareEventsForInsert(

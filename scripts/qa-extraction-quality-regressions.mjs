@@ -453,4 +453,54 @@ const ambiguousAccount = accountFacts({ venue: "", snapshot: {
 assert.equal(ambiguousAccount[0].facts.venueClaim, "", "Conflicting account ownership must not choose a venue.");
 assert.equal(ambiguousAccount[0].normalizedFields.venueAccountFallbackVersion, undefined);
 
+const komitetNames = { komitet_betonhala: "Komitet Beograd", betonbelgrade: "Beton" };
+const komitetPost = makePost({
+  handle: "komitet_betonhala",
+  sourceUrl: "https://www.instagram.com/p/qa-komitet-waterfront-area/",
+  caption: "SUBOTA I 17.10. I 23H\nDance like nobody's watching w/ @rush__band",
+});
+function komitetFacts(sourceText, rowVenue = "Komitet Beograd") {
+  return produceStructuredFactsForInsert(komitetPost, extraction([entry({
+    date: "2026-10-17", dateText: "17. OKTOBAR", time: "23:00", title: "RUSH BEND",
+    artists: ["Rush Bend"], venue: rowVenue, sourceText,
+  })], "live music"), IMAGE_URL, komitetNames, {}, komitetNames, {
+    eventDateFilterNow: NOW, sourceRolesByHandle: { komitet_betonhala: "venue" },
+  });
+}
+const [waterfrontAnnouncement] = komitetFacts("SUBOTA | RUSH BEND | 17. OKTOBAR | 23:00 | BETON HALA · BEOGRAD");
+assert.equal(waterfrontAnnouncement.facts.venueClaim, "Komitet Beograd", "Beton Hala is not proof of an event at the separately named Beton club.");
+assert.equal(waterfrontAnnouncement.normalizedFields.venueAccountFallbackVersion, 1);
+const [offsiteBeton] = komitetFacts("17. OKTOBAR RUSH BEND 23:00 at Beton", "Beton");
+assert.equal(offsiteBeton.facts.venueClaim, "Beton", "An explicit physical venue claim must still override the source account.");
+
+const vjeranNames = { vjeran_pas: "Vjeran Pas" };
+const vjeranPost = makePost({
+  handle: "vjeran_pas",
+  sourceUrl: "https://www.instagram.com/p/qa-vjeran-day-lineup/",
+  caption: "PETAK: @lidsav\nSUBOTA: @nikola.djacic",
+});
+const vjeranRows = [
+  entry({ date: "2026-10-16", title: "@lidsav", artists: ["@lidsav"], venue: "Vjeran Pas", sourceText: "PETAK: @lidsav" }),
+  entry({ date: "2026-10-17", title: "NIKKI", artists: ["Vjeran Pas", "@nikola.djacic"], venue: "Vjeran Pas", sourceText: "SUBOTA: @nikola.djacic" }),
+];
+function vjeranFacts(rows, post = vjeranPost, names = vjeranNames) {
+  return produceStructuredFactsForInsert(post, extraction(rows), IMAGE_URL, names, {}, names, {
+    eventDateFilterNow: NOW, sourceRolesByHandle: { vjeran_pas: "venue" },
+  });
+}
+const vjeran = vjeranFacts(vjeranRows);
+assert.deepEqual(vjeran.map((result) => [result.facts.localDate, result.facts.artistClaims]), [
+  ["2026-10-16", ["@lidsav"]], ["2026-10-17", ["@nikola.djacic"]],
+], "A venue logo cannot become an extra performer, and weekday lineups must remain separate.");
+assert.equal(vjeran[1].normalizedFields.artistsWereSanitized, true);
+const oldDisplayName = { vjeran_pas: "Svašta nam se dogadja" };
+const [oldVenueName] = vjeranFacts([{ ...vjeranRows[1], venue: oldDisplayName.vjeran_pas }], vjeranPost, oldDisplayName);
+assert.deepEqual(oldVenueName.facts.artistClaims, ["@nikola.djacic"], "The authentic venue handle must distinguish its logo even when its observed display name is prose.");
+const [actuallyBilledNamesake] = vjeranFacts([
+  { ...vjeranRows[1], source_text: "SUBOTA: Vjeran Pas + @nikola.djacic" },
+], { ...vjeranPost, caption: "SUBOTA: Vjeran Pas + @nikola.djacic" });
+assert.deepEqual(actuallyBilledNamesake.facts.artistClaims, ["Vjeran Pas", "@nikola.djacic"], "An act explicitly billed in the same caption row must be preserved even when its name matches the venue.");
+const [unboundCaptionRow] = vjeranFacts([{ ...vjeranRows[1], source_text: "NIKKI | VJERAN PAS | 17.10.2026." }]);
+assert.deepEqual(unboundCaptionRow.facts.artistClaims, ["Vjeran Pas", "@nikola.djacic"], "Unrelated or whole-post caption evidence cannot silently rewrite a poster lineup.");
+
 console.log("QA passed: source-scoped acts, independent room programs, tour sessions, party grouping, known-account venue fallback and explicit venue precedence.");

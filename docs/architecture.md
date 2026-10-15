@@ -63,6 +63,16 @@ The source of truth is `convex/schema.ts`.
 6. Insert approved or pending events in Convex.
 7. Merge safe approved duplicates through `lib/events/approved-event-automerge.ts`.
 
+Venue resolution treats an explicitly classified promoter's own account,
+legacy venue name, aliases and location claims as organizer identity. Those
+claims cannot supply the physical event venue, including when its old venue
+record is hidden. Independently named physical venues still resolve normally.
+The locality phrase "Beton Hala" does not by itself identify the club "Beton".
+For current structured extraction, a venue logo incorrectly included among
+artists can be removed only when the event stays at that venue and an exact
+caption row bills another act without billing the venue name as a performer.
+Other days' caption rows cannot supply that proof.
+
 ## Moderation And Deduplication
 
 Admins approve, reject, remove, or bulk-moderate events from `/admin`. Approved

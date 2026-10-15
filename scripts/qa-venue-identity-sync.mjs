@@ -6,6 +6,10 @@ import {
   upsertIdentity,
 } from "../convex/venueIdentities.ts";
 import { DomainError } from "../lib/domain/errors.ts";
+import {
+  assertReviewedVenueRenameOccurrences,
+  getReviewedReferencedVenueRenameOccurrences,
+} from "../convex/venues.ts";
 
 const now = new Date("2026-08-27T18:30:00.000Z").getTime();
 Date.now = () => now;
@@ -346,4 +350,71 @@ await assert.rejects(
   );
 }
 
-console.log("Venue identity synchronization QA passed.");
+{
+  const originalSecret = process.env.CRON_SECRET;
+  process.env.CRON_SECRET = "qa-reviewed-rename-secret";
+  const publicVenue = { ...venue, publicStatus: "published", scrapeActive: true };
+  const satisfied = {
+    _id: "rename-satisfied", _creationTime: 1, updatedAt: 10,
+    venueId: venue._id, canonicalEventId: "reviewed-event", state: "satisfied",
+    factsJson: '{"venueClaim":"Former Hall"}', normalizedOccurrenceJson: '{"venue":"Former Hall"}',
+  };
+  const deferred = {
+    _id: "rename-deferred", _creationTime: 1, updatedAt: 20,
+    venueId: venue._id, state: "deferred", sourceOccurrenceKey: "deferred-row-key",
+    factsJson: '{"venueClaim":"Former Hall","titleClaim":"Future DJ"}',
+    normalizedOccurrenceJson: '{"venue":"Former Hall","title":"Future DJ"}',
+  };
+  const rows = [satisfied, deferred];
+  const renameContext = {
+    auth: { async getUserIdentity() { return null; } },
+    db: {
+      async get(id) { assert.equal(id, venue._id); return publicVenue; },
+      query(table) {
+        assert.equal(table, "sourceOccurrences");
+        return {
+          withIndex(index, configure) {
+            assert.equal(index, "by_venue");
+            assert.deepEqual(criteriaFrom(configure), [["venueId", venue._id]]);
+            return { async take(limit) { return structuredClone(rows.slice(0, limit)); } };
+          },
+        };
+      },
+    },
+  };
+  const before = structuredClone(rows);
+  const plan = await getReviewedReferencedVenueRenameOccurrences._handler(renameContext, {
+    id: venue._id, serviceSecret: process.env.CRON_SECRET,
+  });
+  const acknowledged = plan.filter((row) => row.canonicalEventId === undefined)
+    .map(({ id, updatedAt, snapshotJson }) => ({ id, updatedAt, snapshotJson }));
+  const plannedEvents = new Set(["reviewed-event"]);
+  assert.throws(() => assertReviewedVenueRenameOccurrences(rows, plannedEvents), /unplanned source occurrence/,
+    "Existing rename callers must still reject unreviewed deferred occurrences.");
+  assert.doesNotThrow(() => assertReviewedVenueRenameOccurrences(rows, plannedEvents, acknowledged));
+  assert.deepEqual(rows, before, "Acknowledging an unbound occurrence must preserve all historical facts and state.");
+  for (const patch of [
+    { updatedAt: 21 },
+    { factsJson: '{"venueClaim":"Other Hall"}' },
+    { normalizedOccurrenceJson: '{"title":"Changed DJ"}' },
+    { sourceOccurrenceKey: "changed-key" },
+    { state: "satisfied", canonicalEventId: "foreign-event" },
+    { state: "deferred", canonicalEventId: "foreign-event" },
+  ]) {
+    assert.throws(() => assertReviewedVenueRenameOccurrences(
+      [satisfied, { ...deferred, ...patch }], plannedEvents, acknowledged,
+    ), /unplanned source occurrence/, "Every unbound occurrence byte and revision must match the reviewed snapshot.");
+  }
+  assert.throws(() => assertReviewedVenueRenameOccurrences(rows, plannedEvents, [...acknowledged, ...acknowledged]), /exact safe bound/);
+  assert.throws(() => assertReviewedVenueRenameOccurrences(rows, plannedEvents, [{ ...acknowledged[0], id: "other-row" }]), /unplanned source occurrence/);
+  assert.throws(() => assertReviewedVenueRenameOccurrences([satisfied], plannedEvents, acknowledged), /unplanned source occurrence/);
+  assert.throws(() => assertReviewedVenueRenameOccurrences(Array(33).fill(satisfied), plannedEvents), /exact safe bound/);
+  await assert.rejects(getReviewedReferencedVenueRenameOccurrences._handler(renameContext, {
+    id: venue._id, serviceSecret: "incorrect-secret",
+  }), /Authentication required/);
+  assert.deepEqual(rows, before);
+  if (originalSecret === undefined) delete process.env.CRON_SECRET;
+  else process.env.CRON_SECRET = originalSecret;
+}
+
+console.log("Venue identity synchronization and reviewed rename occurrence QA passed.");

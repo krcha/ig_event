@@ -35,6 +35,7 @@ import {
   assertPersistedServiceSourcePolicy,
 } from "../../eventDomain/sourceApproval";
 import { requireCanonicalInstagramPostUrl } from "../../eventDomain/sourceUrlPolicy";
+import { assertReviewedCaptionVenueCorrection } from "./reviewedCaptionEvidence";
 
 export type ReviewedStructuredCorrectionVersionArgs = {
   expectedSourceLinkId: Id<"instagramEventSources">;
@@ -367,10 +368,12 @@ export async function repairReviewedStructuredEventEvidenceHandler(
     posterVenueEvidence: string;
     posterTimeEvidence: string;
     posterArtistEvidence: string[];
+    captionVenueEvidence?: string;
     moderationNote: string;
     serviceSecret: string;
   },
 ) {
+  const captionMode = args.captionVenueEvidence !== undefined;
   const { actor, kind } = await requireAdminOrServiceSecret(
     ctx,
     args.serviceSecret,
@@ -445,7 +448,7 @@ export async function repairReviewedStructuredEventEvidenceHandler(
     !nextTitle ||
     !nextVenue ||
     !nextTime ||
-    nextArtists.length < 1 ||
+    (!captionMode && nextArtists.length === 0 && event.artists.length > 0) ||
     nextArtists.some((artist) => !artist) ||
     new Set(nextArtists).size !== nextArtists.length ||
     nextTitle !== args.nextTitle ||
@@ -462,12 +465,12 @@ export async function repairReviewedStructuredEventEvidenceHandler(
   const posterArtistEvidence = args.posterArtistEvidence.map((value) =>
     value.normalize("NFKC").trim(),
   );
-  if (
+  if (!captionMode && (
     !posterVenueEvidence ||
     !posterTimeEvidence ||
-    posterArtistEvidence.length < 1 ||
+    (posterArtistEvidence.length === 0) !== (nextArtists.length === 0) ||
     posterArtistEvidence.some((value) => !value)
-  ) {
+  )) {
     throw new Error(
       "Reviewed structured correction requires exact poster evidence.",
     );
@@ -514,7 +517,11 @@ export async function repairReviewedStructuredEventEvidenceHandler(
     }
   }
 
-  const timePatch = normalizeEventTimeWritePatch({
+  if (captionMode) {
+    assertReviewedCaptionVenueCorrection(event, currentFields, args);
+  }
+
+  const timePatch = captionMode ? {} : normalizeEventTimeWritePatch({
     time: nextTime,
     timeSource: "poster",
     timeEvidenceText: posterTimeEvidence,
@@ -535,29 +542,12 @@ export async function repairReviewedStructuredEventEvidenceHandler(
   ];
   const nextSignals = [
     ...new Set([
-      ...currentSignals.filter((signal) => signal !== "time_tbd"),
+      ...currentSignals.filter((signal) => captionMode || signal !== "time_tbd"),
       "requires_human_approval",
     ]),
   ];
   const reviewedAt = Date.now();
-  const nextFields = {
-    ...currentFields,
-    title: nextTitle,
-    time: nextTime,
-    normalizedVenue: nextVenue,
-    artists: nextArtists,
-    description: args.nextDescription,
-    timeSource: "poster",
-    timeEvidenceText: posterTimeEvidence,
-    timeConfidence: 0.99,
-    timeStatus: "confirmed",
-    timeEvidenceKind: "start_time_stated",
-    moderationAutoApproved: false,
-    moderationAutoApproveRule: null,
-    moderationPendingReasons: nextPendingReasons,
-    moderationSignals: nextSignals,
-    humanReviewedStructuredSourcePolicyVersion:
-      HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION,
+  const correctionEvidence = !captionMode ? {
     reviewedPosterCorrection: {
       policyVersion: 1,
       reviewedAt,
@@ -566,6 +556,36 @@ export async function repairReviewedStructuredEventEvidenceHandler(
       timeEvidence: posterTimeEvidence,
       artistEvidence: posterArtistEvidence,
     },
+  } : {
+    reviewedCaptionCorrection: {
+      policyVersion: 1,
+      reviewedAt,
+      reviewedBy: actor,
+      titleEvidence: currentFields.sourceAccountName,
+      venueEvidence: args.captionVenueEvidence,
+    },
+  };
+  const nextFields = {
+    ...currentFields,
+    title: nextTitle,
+    normalizedVenue: nextVenue,
+    artists: nextArtists,
+    ...(!captionMode ? {
+      time: nextTime,
+      description: args.nextDescription,
+      timeSource: "poster",
+      timeEvidenceText: posterTimeEvidence,
+      timeConfidence: 0.99,
+      timeStatus: "confirmed",
+      timeEvidenceKind: "start_time_stated",
+    } : {}),
+    moderationAutoApproved: false,
+    moderationAutoApproveRule: null,
+    moderationPendingReasons: nextPendingReasons,
+    moderationSignals: nextSignals,
+    humanReviewedStructuredSourcePolicyVersion:
+      HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION,
+    ...correctionEvidence,
   };
   const nextNormalizedFieldsJson = JSON.stringify(nextFields);
   const effectiveEvent = {
@@ -574,7 +594,7 @@ export async function repairReviewedStructuredEventEvidenceHandler(
     ...timePatch,
     venue: nextVenue,
     artists: nextArtists,
-    description: args.nextDescription,
+    ...(!captionMode ? { description: args.nextDescription } : {}),
     normalizedFieldsJson: nextNormalizedFieldsJson,
     humanReviewedStructuredSourcePolicyVersion:
       HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION as 1,
@@ -614,7 +634,7 @@ export async function repairReviewedStructuredEventEvidenceHandler(
         ? {
             ...occurrence,
             date: event.date,
-            time: nextTime,
+            ...(!captionMode ? { time: nextTime } : {}),
             venue: nextVenue,
             title: nextTitle,
             artists: nextArtists,
@@ -648,7 +668,7 @@ export async function repairReviewedStructuredEventEvidenceHandler(
     ...timePatch,
     venue: nextVenue,
     artists: nextArtists,
-    description: args.nextDescription,
+    ...(!captionMode ? { description: args.nextDescription } : {}),
     normalizedFieldsJson: nextNormalizedFieldsJson,
     humanReviewedStructuredSourcePolicyVersion:
       HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION,
@@ -677,7 +697,7 @@ export async function repairReviewedStructuredEventEvidenceHandler(
   await writeEventAuditLog(
     ctx,
     event._id,
-    "reviewed_structured_evidence_corrected",
+    captionMode ? "reviewed_structured_caption_venue_corrected" : "reviewed_structured_evidence_corrected",
     {
       actor,
       note: moderationNote,
@@ -693,10 +713,10 @@ export async function repairReviewedStructuredEventEvidenceHandler(
         },
         eventAfter: {
           title: nextTitle,
-          time: nextTime,
+          time: effectiveEvent.time,
           venue: nextVenue,
           artists: nextArtists,
-          description: args.nextDescription,
+          description: effectiveEvent.description,
           updatedAt,
         },
         sourceLink: {
@@ -707,7 +727,7 @@ export async function repairReviewedStructuredEventEvidenceHandler(
         },
         receiptBeforeUpdatedAt: receipt.updatedAt,
         receiptAfterUpdatedAt: receiptUpdatedAt,
-        reviewedPosterCorrection: nextFields.reviewedPosterCorrection,
+        ...correctionEvidence,
       },
     },
   );

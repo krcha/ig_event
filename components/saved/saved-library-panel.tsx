@@ -5,6 +5,7 @@ import { Bookmark, CalendarDays, ChevronRight, Heart, Loader2, Sparkles } from "
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { EventMetaRow } from "@/components/events/event-meta";
+import { EventSessionLabel } from "@/components/events/event-session-label";
 import { SaveEventButton } from "@/components/events/save-event-button";
 import { useUserLibrary } from "@/components/providers/user-library-provider";
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
@@ -20,6 +21,7 @@ import { cn } from "@/lib/utils";
 export type SavedLibraryEvent = {
   _id: string;
   title: string;
+  description?: string;
   date: string;
   time?: string;
   dayPeriod?: EventDayPeriod;
@@ -402,6 +404,7 @@ function EventRow({ event }: { event: SavedLibraryEvent }) {
           >
             {event.title}
           </Link>
+          <EventSessionLabel event={event} />
           <VenueNameLink
             className="mt-0.5 block truncate text-[13px] leading-[18px] text-[#8A8E9E]"
             event={event}

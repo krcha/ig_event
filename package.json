@@ -111,6 +111,7 @@
     "qa:mobile-calendar": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-mobile-calendar-density.mjs",
     "qa:calendar-time-bands": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-calendar-time-bands.mjs",
     "qa:event-map": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-event-map.mjs",
+    "qa:event-sessions": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-event-sessions.mjs",
     "qa:venue-coordinates": "node scripts/qa-venue-coordinates.mjs",
     "qa:app-toolbar": "node scripts/qa-app-toolbar.mjs",
     "qa:seo": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-seo.mjs",

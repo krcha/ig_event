@@ -223,6 +223,85 @@ if (unknown.status === "unresolved") {
   assert.equal(unknown.proposedName, "Unconfigured secret address");
 }
 
+const promoterVenues = [
+  ...venues,
+  {
+    aliases: ["Clubber Magazine"],
+    id: "legacy-promoter-venue",
+    instagramHandle: "theclubber",
+    name: "The Clubber",
+  },
+];
+const promoterSnapshot = buildVenueSnapshot({
+  venues: promoterVenues,
+  identities: [{
+    active: true,
+    kind: "historical_alias",
+    value: "Former Clubber Brand",
+    venueId: "legacy-promoter-venue",
+  }],
+});
+const promoterResolver = buildIngestionVenueResolver({
+  canonicalVenueNamesByHandle: {},
+  venueResolverSnapshot: {
+    identities: [],
+    venues: promoterVenues,
+  },
+});
+for (const claim of ["The Clubber", "@theclubber", "Clubber Magazine", "Former Clubber Brand"]) {
+  const rejected = resolveVenue(promoterSnapshot, {
+    postingProviderHandle: "theclubber",
+    rawVenueClaim: claim,
+    sourceRole: "promoter",
+  });
+  assert.equal(rejected.status, "unresolved", `Promoter identity ${claim} cannot be a venue claim.`);
+  assert.equal(rejected.proposedName, undefined, "A rejected promoter claim cannot return as an unconfigured venue.");
+}
+for (const input of [
+  { locationName: "The Clubber" },
+  { evidenceTexts: ["Venue: The Clubber"] },
+  { evidenceTexts: ["Venue: @theclubber"] },
+  { explicitVenueId: "legacy-promoter-venue" },
+]) {
+  const rejected = resolveVenue(promoterSnapshot, {
+    ...input,
+    postingProviderHandle: "theclubber",
+    sourceRole: "promoter",
+    sourceVenueId: "legacy-promoter-venue",
+  });
+  assert.equal(rejected.status, "unresolved", "Other resolver paths cannot restore a promoter's legacy venue.");
+  assert.equal(rejected.proposedName, undefined);
+}
+const hiddenPromoterClaim = resolveIngestionVenue(ingestionResolver, {
+  postingProviderHandle: "theclubber",
+  rawVenueClaim: "The Clubber",
+  sourceRole: "promoter",
+});
+assert.equal(hiddenPromoterClaim.venue, null, "A removed legacy promoter record must not turn its brand into an unconfigured venue.");
+const rejectedPromoterClaim = resolveIngestionVenue(promoterResolver, {
+  postingProviderHandle: "theclubber",
+  rawVenueClaim: "The Clubber",
+  sourceRole: "promoter",
+});
+assert.equal(rejectedPromoterClaim.venue, null);
+assert.equal(rejectedPromoterClaim.rawModelVenue, "The Clubber", "Retain the original claim for the extraction audit.");
+assert.equal(resolveIngestionVenue(promoterResolver, {
+  postingProviderHandle: "theclubber",
+  rawVenueClaim: "The Clubber",
+  evidenceTexts: ["Vidimo se u @kcgrad"],
+  sourceRole: "promoter",
+}).venue, "KC Grad", "A rejected organizer claim must still allow explicit physical venue evidence.");
+assert.equal(resolveIngestionVenue(promoterResolver, {
+  postingProviderHandle: "theclubber",
+  rawVenueClaim: "Clubber Magazine",
+  locationName: "KC Grad",
+  sourceRole: "promoter",
+}).venue, "KC Grad", "A promoter brand must not conflict with an independent physical location tag.");
+assert.equal(resolveIngestionVenue(promoterResolver, {
+  postingProviderHandle: "theclubber",
+  sourceRole: "venue",
+}).venue, "The Clubber", "The promoter guard must not change ordinary venue account fallback.");
+
 const ambiguousSnapshot = buildVenueSnapshot({
   venues: [
     { aliases: ["Shared Hall"], id: "venue-a", name: "Venue A" },

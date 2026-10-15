@@ -10,14 +10,19 @@ import {
   EventPriceChip,
 } from "@/components/events/event-meta";
 import { SaveEventButton } from "@/components/events/save-event-button";
+import { EventSessionLabel } from "@/components/events/event-session-label";
 import { ReadMoreText } from "@/components/ui/read-more-text";
 import { resolveEventTimeDisplay, type EventDayPeriod } from "@/lib/events/event-time";
+import { getEventSessionLabel } from "@/lib/events/event-session";
 import { cn } from "@/lib/utils";
 
 export type DiscoverFeedEvent = {
   _id: string;
   artists: string[];
   date: string;
+  description?: string;
+  displayTimeLabel?: string;
+  timeStatus?: string;
   eventType: string;
   imageUrl?: string;
   imageStorageId?: string;
@@ -171,6 +176,7 @@ function DiscoverPost({
   const handleLabel = getInstagramHandleLabel(event);
   const instagramCaption = getInstagramCaption(event);
   const imageUrl = getStableImageUrl(event);
+  const sessionLabel = getEventSessionLabel(event);
 
   return (
     <article
@@ -272,6 +278,12 @@ function DiscoverPost({
         </div>
 
         <div className="space-y-1">
+          {sessionLabel ? <div>
+            <Link className="text-sm font-semibold text-foreground hover:text-primary" href={`/events/${event._id}`} prefetch={false}>
+              {event.title}
+            </Link>
+            <EventSessionLabel event={event} />
+          </div> : null}
           {instagramCaption ? (
             <ReadMoreText
               bodyClassName="text-muted-foreground"

@@ -415,12 +415,7 @@ function materializeEvidenceResolution(
   };
 }
 
-/**
- * Universal, side-effect-free venue resolution entrypoint. Database and
- * ingestion adapters build one request-scoped snapshot and pass all claims
- * through this function. Ambiguity is returned as data and never guessed.
- */
-export function resolveVenue(
+function resolveVenueClaims(
   snapshot: VenueSnapshot,
   input: ResolveVenueInput,
 ): VenueResolution {
@@ -518,4 +513,53 @@ export function resolveVenue(
     reason: "unknown",
     status: "unresolved",
   };
+}
+
+/**
+ * Universal, side-effect-free venue resolution entrypoint. A promoter's
+ * legacy venue record is organizer identity, never a physical location.
+ * Ambiguous claims remain unresolved instead of being guessed.
+ */
+export function resolveVenue(
+  snapshot: VenueSnapshot,
+  input: ResolveVenueInput,
+): VenueResolution {
+  const postingHandle = normalizeHandle(input.postingProviderHandle ?? "");
+  if (input.sourceRole !== "promoter" || !postingHandle) {
+    return resolveVenueClaims(snapshot, input);
+  }
+
+  const promoterVenueIds = new Set(
+    candidatesForHandle(snapshot, postingHandle).map((venue) => venue.id),
+  );
+  const isOwnClaim = (value: string | null | undefined): boolean => {
+    if (!value?.trim()) return false;
+    const compactClaim = normalizeVenueComparableText(value).replace(/\s/gu, "");
+    const compactHandle = normalizeVenueComparableText(postingHandle).replace(/\s/gu, "");
+    return compactClaim === compactHandle ||
+      [...candidatesForName(snapshot, value), ...candidatesForHandle(snapshot, value)]
+        .some((venue) => promoterVenueIds.has(venue.id)) ||
+      normalizeVenueComparableText(value) === normalizeVenueComparableText(
+        input.staticVenueByHandle?.[postingHandle] ?? "",
+      );
+  };
+  const resolution = resolveVenueClaims(snapshot, {
+    ...input,
+    rawVenueClaim: isOwnClaim(input.rawVenueClaim) ? "" : input.rawVenueClaim,
+    locationName: isOwnClaim(input.locationName) ? "" : input.locationName,
+  });
+  if (
+    (resolution.status === "resolved" &&
+      (promoterVenueIds.has(resolution.venue.id) || isOwnClaim(resolution.venue.name))) ||
+    (resolution.status === "unresolved" && isOwnClaim(resolution.proposedName))
+  ) {
+    return {
+      candidates: [],
+      confidence: "unknown",
+      evidence: [],
+      reason: "unknown",
+      status: "unresolved",
+    };
+  }
+  return resolution;
 }

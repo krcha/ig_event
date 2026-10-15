@@ -22,6 +22,7 @@ import {
   listPublicCalendarEventsWindowPaginated,
   listPublicEventsWindow,
   repairReviewedStructuredEventEvidence,
+  repairReviewedStructuredEventCaptionVenue,
   repairReviewedStructuredEventVenue,
   repairReviewedMultiSourceEventVenue,
   repairTrustedV2EventVenue,
@@ -1265,6 +1266,205 @@ try {
   });
   assert.equal(reviewedAudits.length, 2);
   assert.equal(reviewedAudits[1].action, "reviewed_structured_evidence_corrected");
+
+  const emptyLineupSnapshot = {
+    event: structuredClone(reviewedEvent),
+    receipt: structuredClone(reviewedReceipt),
+    epoch: structuredClone(reviewedTopologyEpoch),
+    audits: structuredClone(reviewedAudits),
+  };
+  try {
+    const emptyLineupArgs = () => ({
+      id: reviewedEvent._id,
+      expectedUpdatedAt: reviewedEvent.updatedAt,
+      expectedNormalizedFieldsJson: reviewedEvent.normalizedFieldsJson,
+      expectedSourceLinkId: reviewedSourceLink._id,
+      expectedSourceLinkUpdatedAt: reviewedSourceLink.updatedAt,
+      expectedReceiptId: reviewedReceipt._id,
+      expectedReceiptUpdatedAt: reviewedReceipt.updatedAt,
+      nextTitle: "Boundary Grand Opening",
+      nextTime: "22:00",
+      nextVenue: repairVenue.name,
+      targetVenueId: repairVenue._id,
+      expectedTargetVenueUpdatedAt: repairVenue.updatedAt,
+      expectedTargetVenueHandle: repairVenue.instagramHandle,
+      nextArtists: [],
+      nextDescription: "Grand opening at the poster's named venue; no artists announced.",
+      posterVenueEvidence: "NOVI BIOSKOP ZVEZDA",
+      posterTimeEvidence: "22H",
+      posterArtistEvidence: [],
+      moderationNote: "Human-reviewed grand opening poster names the venue and time, with no announced performers.",
+      serviceSecret: process.env.CRON_SECRET,
+    });
+    await assert.rejects(
+      repairReviewedStructuredEventEvidence._handler(reviewedCtx, emptyLineupArgs()),
+      /public fields are not canonical/u,
+      "A poster venue/time repair must not erase an existing named lineup.",
+    );
+    reviewedEvent.artists = [];
+    reviewedEvent.normalizedFieldsJson = JSON.stringify({
+      ...JSON.parse(reviewedEvent.normalizedFieldsJson), artists: [],
+    });
+    reviewedReceipt.expectedOccurrences[0].artists = [];
+    await assert.rejects(
+      repairReviewedStructuredEventEvidence._handler(reviewedCtx, {
+        ...emptyLineupArgs(), posterArtistEvidence: ["UNRELATED ARTIST"],
+      }),
+      /requires exact poster evidence/u,
+      "An empty lineup must not claim poster artist evidence.",
+    );
+    await assert.rejects(
+      repairReviewedStructuredEventEvidence._handler(reviewedCtx, {
+        ...emptyLineupArgs(), nextArtists: ["Unproven Artist"],
+      }),
+      /requires exact poster evidence/u,
+      "Adding a performer still requires artist evidence.",
+    );
+    const emptyLineupResult = await repairReviewedStructuredEventEvidence._handler(reviewedCtx, emptyLineupArgs());
+    assert.equal(emptyLineupResult.updated, true);
+    assert.equal(reviewedEvent.title, "Boundary Grand Opening");
+    assert.equal(reviewedEvent.venueId, repairVenue._id);
+    assert.equal(reviewedEvent.time, "22:00");
+    assert.equal(reviewedEvent.timeStatus, "confirmed");
+    assert.equal(reviewedEvent.timeSource, "poster");
+    assert.deepEqual(reviewedEvent.artists, []);
+    assert.deepEqual(reviewedReceipt.expectedOccurrences[0].artists, []);
+    assert.deepEqual(JSON.parse(reviewedEvent.normalizedFieldsJson).reviewedPosterCorrection.artistEvidence, []);
+    assert.equal(await isCanonicallyGroundedApprovedEvent(reviewedCtx, reviewedEvent), true);
+  } finally {
+    for (const [record, snapshot] of [
+      [reviewedEvent, emptyLineupSnapshot.event],
+      [reviewedReceipt, emptyLineupSnapshot.receipt],
+      [reviewedTopologyEpoch, emptyLineupSnapshot.epoch],
+    ]) {
+      for (const key of Object.keys(record)) delete record[key];
+      Object.assign(record, snapshot);
+    }
+    reviewedAudits.splice(0, reviewedAudits.length, ...emptyLineupSnapshot.audits);
+  }
+
+  const captionReviewSnapshot = {
+    event: structuredClone(reviewedEvent),
+    receipt: structuredClone(reviewedReceipt),
+    post: structuredClone(posterPost),
+    epoch: structuredClone(reviewedTopologyEpoch),
+    audits: structuredClone(reviewedAudits),
+  };
+  try {
+    const captionOnlyCaption = `${sourceCaption} @boundary_venue`;
+    const captionOnlyRaw = JSON.stringify({ ...JSON.parse(rawExtractionJson), source_caption: captionOnlyCaption });
+    const unknownTiming = {
+      time: "TBD",
+      timeSource: "unknown",
+      timeEvidenceText: "",
+      timeConfidence: 0,
+      timeStatus: "unknown",
+      timeEvidenceKind: "not_stated",
+    };
+    const captionFields = {
+      ...JSON.parse(reviewedEvent.normalizedFieldsJson),
+      ...unknownTiming,
+      title: "Wrong event title",
+      normalizedVenue: "Promoter account",
+      artists: [],
+      sourceAccountName: "White City Soul",
+      sourceGroundingSourceCaption: captionOnlyCaption,
+      moderationSignals: ["time_tbd", "requires_human_approval"],
+    };
+    delete captionFields.reviewedPosterCorrection;
+    Object.assign(reviewedEvent, {
+      ...unknownTiming,
+      title: captionFields.title,
+      venue: captionFields.normalizedVenue,
+      venueId: undefined,
+      venueInstagramHandle: undefined,
+      artists: [],
+      description: undefined,
+      sourceCaption: captionOnlyCaption,
+      rawExtractionJson: captionOnlyRaw,
+      normalizedFieldsJson: JSON.stringify(captionFields),
+    });
+    Object.assign(posterPost, { caption: captionOnlyCaption, analysisResultJson: captionOnlyRaw });
+    reviewedReceipt.expectedOccurrences[0] = {
+      ...reviewedReceipt.expectedOccurrences[0],
+      title: reviewedEvent.title,
+      venue: reviewedEvent.venue,
+      time: reviewedEvent.time,
+      artists: [],
+    };
+    const captionArgs = {
+      id: reviewedEvent._id,
+      expectedUpdatedAt: reviewedEvent.updatedAt,
+      expectedNormalizedFieldsJson: reviewedEvent.normalizedFieldsJson,
+      expectedSourceLinkId: reviewedSourceLink._id,
+      expectedSourceLinkUpdatedAt: reviewedSourceLink.updatedAt,
+      expectedReceiptId: reviewedReceipt._id,
+      expectedReceiptUpdatedAt: reviewedReceipt.updatedAt,
+      nextVenue: repairVenue.name,
+      targetVenueId: repairVenue._id,
+      expectedTargetVenueUpdatedAt: repairVenue.updatedAt,
+      expectedTargetVenueHandle: repairVenue.instagramHandle,
+      captionVenueEvidence: "@boundary_venue",
+      moderationNote: "Human-reviewed caption venue and exact source account event title, with unknown time preserved.",
+      serviceSecret: process.env.CRON_SECRET,
+    };
+    await assert.rejects(repairReviewedStructuredEventCaptionVenue._handler(reviewedCtx, {
+      ...captionArgs, serviceSecret: "incorrect-service-secret",
+    }), /Authentication required/u);
+    await assert.rejects(repairReviewedStructuredEventCaptionVenue._handler(reviewedCtx, {
+      ...captionArgs, expectedUpdatedAt: reviewedEvent.updatedAt - 1,
+    }), /changed/u);
+    await assert.rejects(repairReviewedStructuredEventCaptionVenue._handler(reviewedCtx, {
+      ...captionArgs, expectedSourceLinkUpdatedAt: reviewedSourceLink.updatedAt - 1,
+    }), /source link changed/u);
+    await assert.rejects(repairReviewedStructuredEventCaptionVenue._handler(reviewedCtx, {
+      ...captionArgs, expectedReceiptUpdatedAt: reviewedReceipt.updatedAt - 1,
+    }), /receipt changed/u);
+    await assert.rejects(repairReviewedStructuredEventCaptionVenue._handler(reviewedCtx, {
+      ...captionArgs, expectedTargetVenueUpdatedAt: repairVenue.updatedAt - 1,
+    }), /target venue is not exact/u);
+    await assert.rejects(repairReviewedStructuredEventCaptionVenue._handler(reviewedCtx, {
+      ...captionArgs, captionVenueEvidence: "@not_the_caption_venue",
+    }), /exact source account title and caption venue handle/u);
+    assert.equal(reviewedAudits.length, captionReviewSnapshot.audits.length, "Rejected caption repairs must not write an audit or event patch.");
+    const captionResult = await repairReviewedStructuredEventCaptionVenue._handler(reviewedCtx, captionArgs);
+    assert.equal(captionResult.updated, true);
+    assert.equal(reviewedEvent.title, "White City Soul");
+    assert.equal(reviewedEvent.venue, repairVenue.name);
+    assert.equal(reviewedEvent.venueId, repairVenue._id);
+    assert.deepEqual(reviewedEvent.artists, []);
+    assert.equal(reviewedEvent.description, undefined);
+    for (const [key, value] of Object.entries(unknownTiming)) {
+      assert.equal(reviewedEvent[key], value, `Caption venue repair must preserve ${key}.`);
+    }
+    const afterCaptionFields = JSON.parse(reviewedEvent.normalizedFieldsJson);
+    for (const [key, value] of Object.entries(unknownTiming)) {
+      assert.equal(afterCaptionFields[key], value, `Normalized caption correction must preserve ${key}.`);
+    }
+    assert.equal(afterCaptionFields.reviewedPosterCorrection, undefined);
+    assert.equal(afterCaptionFields.reviewedCaptionCorrection.venueEvidence, "@boundary_venue");
+    assert.equal(afterCaptionFields.reviewedCaptionCorrection.titleEvidence, "White City Soul");
+    assert.equal(afterCaptionFields.moderationSignals.includes("time_tbd"), true);
+    assert.equal(reviewedReceipt.expectedOccurrences[0].title, "White City Soul");
+    assert.equal(reviewedReceipt.expectedOccurrences[0].venue, repairVenue.name);
+    assert.equal(reviewedReceipt.expectedOccurrences[0].time, "TBD");
+    assert.deepEqual(reviewedReceipt.expectedOccurrences[0].artists, []);
+    assert.equal(reviewedEvent.sourceCaption, captionOnlyCaption);
+    assert.equal(reviewedEvent.rawExtractionJson, captionOnlyRaw);
+    assert.equal(reviewedAudits.at(-1).action, "reviewed_structured_caption_venue_corrected");
+    assert.equal(await isCanonicallyGroundedApprovedEvent(reviewedCtx, reviewedEvent), true);
+  } finally {
+    for (const [record, snapshot] of [
+      [reviewedEvent, captionReviewSnapshot.event],
+      [reviewedReceipt, captionReviewSnapshot.receipt],
+      [posterPost, captionReviewSnapshot.post],
+      [reviewedTopologyEpoch, captionReviewSnapshot.epoch],
+    ]) {
+      for (const key of Object.keys(record)) delete record[key];
+      Object.assign(record, snapshot);
+    }
+    reviewedAudits.splice(0, reviewedAudits.length, ...captionReviewSnapshot.audits);
+  }
 
   const secondaryOccurrenceKey = "instagram-occurrence-v2:reviewed-second-source";
   const secondarySourceLink = {

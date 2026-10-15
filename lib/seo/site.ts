@@ -1,4 +1,5 @@
 import { getVenueCoordinates } from "../venues/coordinates.ts";
+import { getEventAgeRange } from "../events/event-session.ts";
 
 export const SITE_NAME = "Event Zeka";
 export const SITE_ORIGIN = "https://eventzeka.com";
@@ -86,6 +87,8 @@ type EventStructuredData = {
   name: string;
   performer?: Array<{ "@type": "Person"; name: string }>;
   startDate: string;
+  endDate?: string;
+  typicalAgeRange?: string;
   url: string;
 };
 
@@ -211,6 +214,21 @@ export function buildEventStartDate(date: string, time?: string): string {
   return `${date}T${normalizedTime}:00${offsets.length === 1 ? offsets[0] : ""}`;
 }
 
+function buildEventEndDate(date: string, time?: string): string | null {
+  const range = time?.trim().match(/^([01]?\d|2[0-3]):([0-5]\d)\s*[-–—]\s*([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (!range) return null;
+  const start = Number(range[1]) * 60 + Number(range[2]);
+  const end = Number(range[3]) * 60 + Number(range[4]);
+  if (start === end) return null;
+  const dayTimestamp = Date.parse(`${date}T12:00:00Z`);
+  if (!Number.isFinite(dayTimestamp)) return null;
+  const endDay = end < start
+    ? new Date(dayTimestamp + 86_400_000).toISOString().slice(0, 10)
+    : date;
+  const value = buildEventStartDate(endDay, `${range[3]}:${range[4]}`);
+  return value.includes("T") ? value : null;
+}
+
 function isExplicitlyFree(ticketPrice: string | null | undefined): boolean {
   const normalized = ticketPrice?.replace(/\s+/g, " ").trim().replace(/[.!]+$/, "") ?? "";
   // A conditional or negated price must not describe the whole event as free.
@@ -261,6 +279,8 @@ export function buildEventStructuredData(
     clipText(event.description, 400) ||
     `${event.title} at ${event.venue} in Belgrade on ${event.date}.`;
   const accessibleForFree = isExplicitlyFree(event.ticketPrice);
+  const ageRange = getEventAgeRange(event);
+  const endDate = buildEventEndDate(event.date, event.time);
 
   return {
     "@context": "https://schema.org",
@@ -284,6 +304,8 @@ export function buildEventStructuredData(
         }
       : {}),
     startDate: buildEventStartDate(event.date, event.time),
+    ...(endDate ? { endDate } : {}),
+    ...(ageRange ? { typicalAgeRange: ageRange } : {}),
     url,
   };
 }

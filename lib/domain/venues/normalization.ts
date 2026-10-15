@@ -971,6 +971,14 @@ function findUniqueCanonicalVenueNameMention(
         evidenceTokens,
         venueTokens,
       )) {
+        // Beton Hala names the waterfront area shared by several venues.
+        // Its first word alone cannot relocate a Komitet announcement to Beton.
+        if (
+          normalizedName === "beton" &&
+          evidenceTokens[startToken + venueTokens.length] === "hala"
+        ) {
+          continue;
+        }
         if (
           !hasShortVenueNameContext(evidenceTokens, startToken, venueTokens)
         ) {

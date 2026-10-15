@@ -217,10 +217,15 @@ assertIncludes(
   "instagramPostId",
   "Discover batches should carry Instagram post IDs for scraped-post matching.",
 );
-assertDoesNotInclude(
+assertIncludes(
   discoverPageLoaderSource,
   "description: event.description",
-  "Discover batches should not pass generated event descriptions as post captions.",
+  "Discover batches should carry occurrence descriptions for age/session labels.",
+);
+assertDoesNotInclude(
+  discoverPageLoaderSource,
+  "sourceCaption: event.description",
+  "Occurrence descriptions must never replace the captured Instagram caption.",
 );
 
 assertIncludes(
