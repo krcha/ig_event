@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { buildInstagramSourceOccurrenceFingerprint } from "../lib/domain/occurrences/source-fingerprint.ts";
+import { evaluateAutomaticUniqueApproval } from "../convex/internal/automaticUniqueApprovalPreflight.ts";
+import { prepareSourceOccurrencePlanForReconciliation } from "../convex/internal/sourceOccurrenceReceipts.ts";
+import { sourceOccurrenceProvenanceRepository } from "../convex/repositories/sourceOccurrenceProvenance.ts";
 import {
   getReviewedPendingPerformerCorrectionContextHandler,
   repairReviewedPendingPerformerCorrectionHandler,
@@ -83,10 +86,11 @@ function fixture() {
     insert: async (table, row) => { tables[table].push({ ...structuredClone(row), _id: `${table}-${tables[table].length}` }); return `${table}-new`; },
     query: (table) => ({ withIndex: (_name, callback) => {
       const equals = []; const builder = { eq: (key, value) => { equals.push([key, value]); return builder; } };
+      const matching = () => tables[table].filter((row) => equals.every(([key, value]) => row[key] === value));
       callback(builder); return { take: async (limit) => {
         assert.ok(limit <= 65, "all reads remain bounded");
-        return tables[table].filter((row) => equals.every(([key, value]) => row[key] === value)).slice(0, limit);
-      } };
+        return matching().slice(0, limit);
+      }, unique: async () => { const rows = matching(); assert.ok(rows.length <= 1); return rows[0] ?? null; } };
     } }),
   } };
   const args = { id: events[0]._id, expectedUpdatedAt: events[0].updatedAt,
@@ -151,6 +155,34 @@ try {
   });
   assert.deepEqual(afterContext.event.artists, ["TILESSI"]);
   assert.deepEqual(JSON.parse(afterContext.occurrence.factsJson).artistClaims, ["TLESSI"]);
+  const replayWritesBefore = state.writes.length;
+  const approval = await evaluateAutomaticUniqueApproval({ ...state.ctx, db: {
+    get: () => { throw new Error("Reviewed-event preflight must stop before reading source policy."); },
+    query: () => { throw new Error("Reviewed-event preflight must stop before reading source policy."); },
+  } }, state.events[0]);
+  assert.equal(approval.diagnostic.holdReason, "human_reviewed");
+  assert.equal(approval.diagnostic.eligible, false);
+  assert.equal(approval.approval, null, "manual pending correction cannot be automatically promoted");
+  const oldReceipt = before.instagramSourceOccurrenceReceipts[0];
+  await assert.rejects(prepareSourceOccurrencePlanForReconciliation(state.ctx, {
+    sourceIdentity: oldReceipt.sourceIdentity, sourceFingerprint: oldReceipt.sourceFingerprint,
+    expectedKeys: oldReceipt.expectedKeys, expectedOccurrences: oldReceipt.expectedOccurrences,
+    deferredChildCount: oldReceipt.deferredChildCount, deferredChildKeys: oldReceipt.deferredChildKeys,
+    observedChildKeys: oldReceipt.expectedKeys,
+  }, state.source), /Existing source occurrence generation differs from the generic ingestion plan/u,
+  "same-generation replay of immutable OCR facts cannot overwrite the reviewed TILESSI receipt");
+  const canonicalCandidate = (event) => ({ ...event, normalizedFieldsJson: JSON.stringify({
+    ...JSON.parse(event.normalizedFieldsJson), sourceOccurrencePlanUnverified: false,
+  }) });
+  await sourceOccurrenceProvenanceRepository.assertEventMatchesBoundOccurrences(
+    state.ctx, state.events[0]._id, canonicalCandidate(state.events[0]),
+  );
+  await assert.rejects(sourceOccurrenceProvenanceRepository.assertEventMatchesBoundOccurrences(
+    state.ctx, state.events[0]._id, canonicalCandidate(before.events[0]),
+  ), /Canonical-event merge cannot preserve a first-class source occurrence/u,
+  "the original canonical OCR artist fails the current normalized binding even without the pending-plan flag");
+  assert.equal(state.writes.length, replayWritesBefore, "all replay guards reject before writes");
+  assert.deepEqual(state.events[0].artists, ["TILESSI"]);
   const adminState = fixture();
   process.env.ADMIN_CLERK_USER_IDS = "qa-admin";
   adminState.ctx.auth.getUserIdentity = async () => ({ subject: "qa-admin" });
