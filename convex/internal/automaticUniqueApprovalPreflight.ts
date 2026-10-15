@@ -6,6 +6,7 @@ import { buildPendingModerationUniquenessReview, type PendingModerationUniquenes
 import { assertPersistedServiceSourcePolicy } from "../eventDomain/sourceApproval";
 import { requireCanonicalInstagramPostUrl } from "../eventDomain/sourceUrlPolicy";
 import { AUTOMATIC_UNIQUE_SOURCE_PROOF_REASONS, diagnoseCompleteAutomaticUniqueSourceProof, type AutomaticUniqueSourceProofDiagnostic } from "./automaticUniqueSourceProof";
+import { automaticUniqueVenueEvidenceMatchesCandidate } from "./automaticUniqueVenueEvidence";
 
 const CLASSIFICATION_NOTE = "Automatic source and uniqueness verification; no human moderation is claimed.";
 const VENUE_TOPOLOGY_FIELDS = ["venue", "venueId", "normalizedVenueIdentity", "normalizedVenueInstagramHandle"] as const;
@@ -89,6 +90,7 @@ export async function evaluateAutomaticUniqueApproval(
     if (fields.sourceOccurrencePlanUnverified === true) return hold("source_occurrence_plan_unverified", proof.sourcePostId ? "occurrence_completion" : "none");
     if (!hasAutomaticUniqueStructuredSourceAttestation(normalizedFieldsJson, nextCandidate)) return hold("automatic_source_attestation_invalid", repairCategoryForProof(proof));
     if (!proof.complete) return hold("source_proof_incomplete", repairCategoryForProof(proof));
+    if (!(await automaticUniqueVenueEvidenceMatchesCandidate(ctx, nextCandidate, fields))) return hold("persisted_source_policy_failed");
     try { requireCanonicalInstagramPostUrl(nextCandidate.instagramPostUrl, `Automatic unique approval ${event._id}`); } catch { return hold("source_url_invalid"); }
     try { await assertPersistedServiceSourcePolicy(ctx, nextCandidate, { allowHumanReviewedStructured: true }); } catch { return hold("persisted_source_policy_failed"); }
     return { diagnostic: { ...hold("eligible").diagnostic, eligible: true }, approval: { approved, nextCandidate } };

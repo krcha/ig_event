@@ -108,6 +108,10 @@ by the event, source link, receipt, source revision, occurrence and retained
 poster checksum. They update the normalized lineup while preserving raw facts,
 source materialization inputs, incomplete siblings and pending status. Explicit
 review stamps keep automatic approval from undoing a reviewed hold.
+Automatic approval also re-resolves the selected occurrence's explicit source
+venue before trusting a historical denormalized venue label. A known different
+physical venue or an excluded promoter identity requires source review; an
+ordinary unresolved claim does not add a new approval requirement.
 
 Reviewed venue renames require every linked event and source occurrence to be
 accounted for. An unbound expected, deferred or superseded occurrence can be

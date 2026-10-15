@@ -17,6 +17,8 @@ import { isCanonicallyGroundedApprovedEvent } from "../convex/publicEventGroundi
 import { adaptInstagramScrapedPostToSourceDocument } from "../lib/domain/source-documents.ts";
 import { buildInstagramSourceOccurrenceFingerprint } from "../lib/domain/occurrences/source-fingerprint.ts";
 import { isSupportedExtractionModel } from "../convex/internal/extractionModel.ts";
+import { buildVenueIdentityClaims } from "../lib/domain/venues/venue-resolver.ts";
+import { automaticUniqueSourceVenueClaims } from "../convex/internal/automaticUniqueVenueEvidence.ts";
 
 const supportedExtractionModels = [
   "gpt-5-mini",
@@ -300,10 +302,12 @@ function proofContext(
   receipt = basePartialReceipt,
   source = proofSource,
   representative = proofEvent,
+  directory = null,
+  link = proofLink,
 ) {
   return {
     db: {
-      async get(id) { return id === representative._id ? representative : null; },
+      async get(id) { return id === representative._id ? representative : directory?.venues.find((venue) => venue._id === id) ?? null; },
       query(table) {
         return {
           withIndex(indexName, configure) {
@@ -312,7 +316,10 @@ function proofContext(
             configure(q);
             const rows = table === "scrapedPosts" ? [source]
               : table === "instagramSourceOccurrenceReceipts" ? [receipt]
-                : table === "instagramEventSources" ? [proofLink] : [];
+                : table === "instagramEventSources" ? [link]
+                  : table === "eventDomainMigrationState" && directory ? [{ key: "venue-identities-v1", completedAt: 1, mismatchCount: 0 }]
+                    : table === "venueIdentities" && directory ? directory.identities
+                      : table === "instagramSources" && directory ? directory.sources ?? [] : [];
             return {
               async take(limit) {
                 return rows.filter((row) =>
@@ -721,6 +728,62 @@ assert.equal(readyPreflight.diagnostic.repairCategory, "none");
 assert.ok(readyPreflight.approval);
 assert.equal(pendingProofEvent.status, "pending");
 assert.equal(pendingProofEvent.updatedAt, 10);
+
+// This exact historical label error escaped the queue after its real peer
+// was repaired: the mutable Dolly label still matched itself, while every
+// immutable source venue claim named the distinct Sava Centar concert hall.
+const concertHall = { _id: "sava-centar", name: "Sava Centar", instagramHandle: "sava.centar", publicStatus: "published", category: "venue" };
+const restaurant = { _id: "dolly-bell", name: "Dolly Bell Sava Centar", instagramHandle: "dolly.bell.sc", publicStatus: "published", category: "venue" };
+const directory = { venues: [concertHall, restaurant], identities: [concertHall, restaurant].flatMap((venue) =>
+  buildVenueIdentityClaims(venue).map((claim, index) => ({ ...claim, _id: `${venue._id}-${index}`, venueId: venue._id, active: true }))),
+  sources: [{ handle: "the.clubber", role: "promoter", active: false }] };
+async function venuePreflight(claim, venue, { title = "VELIKI SOLISTIČKI KONCERT MIRE ŠKORIĆ POVODOM 40 GODINA KARIJERE", handle = "tickets.rs", artists = ["MIRA Škorić"], date = "2026-11-19", extraRows = [], globalClaim = claim } = {}) {
+  const sourceRow = `${title} ${date}`;
+  const raw = JSON.stringify({ ...JSON.parse(event.rawExtractionJson), venue: globalClaim,
+    schedule_entries: [{ date, venue: claim, title, artists, source_text: sourceRow,
+      date_evidence: { resolved_date: date } }, ...extraRows] });
+  const saved = { ...proofSource, handle, username: handle, analysisResultJson: raw,
+    caption: `${title} ${date} ${claim}`, postedAt: "2026-10-01T12:00:00.000Z" };
+  const fingerprint = buildInstagramSourceOccurrenceFingerprint(saved);
+  const candidate = { ...pendingProofEvent, title, date, venue: venue.name, venueId: venue._id,
+    venueInstagramHandle: venue.instagramHandle, artists, rawExtractionJson: raw,
+    sourceCaption: saved.caption, sourcePostedAt: saved.postedAt,
+    normalizedFieldsJson: JSON.stringify({ ...fields, title, normalizedDate: date, normalizedVenue: venue.name,
+      rawVenue: claim, rowSourceText: sourceRow, artists, sourceGroundingInstagramHandle: handle,
+      sourceGroundingSourceCaption: saved.caption, sourceOccurrenceSourceFingerprint: fingerprint }) };
+  const expected = { ...ownExpected, date, title, venue: venue.name, artists: candidate.artists };
+  const receipt = { ...basePartialReceipt, sourceFingerprint: fingerprint, expectedKeys: [expected.key],
+    expectedOccurrences: [expected], satisfiedKeys: [expected.key] };
+  const ctx = proofContext(receipt, saved, candidate, directory, { ...proofLink, sourceFingerprint: fingerprint });
+  const review = { ...exactReview, approvals: new Map([[candidate._id, { prepared: { candidate, venuePatch: {} }, humanReviewPatch: {} }]]) };
+  return evaluateAutomaticUniqueApproval(ctx, candidate, { asOfMs: Date.parse("2026-10-15T12:00:00.000Z"), prebuiltReview: review });
+}
+const staleDollyConcert = await venuePreflight("Sava Centar", restaurant);
+assert.equal(staleDollyConcert.diagnostic.holdReason, "persisted_source_policy_failed");
+assert.equal(staleDollyConcert.diagnostic.repairCategory, "none", "a cross-brand venue replacement is not an autonomous alias repair");
+assert.equal(staleDollyConcert.approval, null);
+assert.equal((await venuePreflight("Sava Centar", concertHall)).diagnostic.eligible, true);
+for (const [title, artists, date] of [["Marija Mihajlov, Hedonija Music", ["Marija Mihajlov", "Hedonija Music"], "2026-10-24"], ["Dejan Vrana", ["Dejan Vrana"], "2026-10-23"]]) {
+  assert.equal((await venuePreflight("Dolly Bell Sava Centar", restaurant, { title, artists, date, handle: "dolly.bell.sc" })).diagnostic.eligible, true,
+    "an explicit Dolly restaurant show remains eligible under the same source proof");
+}
+assert.equal((await venuePreflight("Dolly Bell Sava Centar", restaurant, { handle: "other.promoter" })).diagnostic.eligible, true,
+  "posting provider identity does not override an independently named physical venue");
+assert.equal((await venuePreflight("", restaurant, { globalClaim: "" })).diagnostic.eligible, true,
+  "an absent venue claim does not create a new approval requirement");
+assert.equal((await venuePreflight("Unknown cellar", restaurant)).diagnostic.eligible, true,
+  "an unresolved claim retains the existing source policy");
+assert.equal((await venuePreflight("the.clubber", restaurant)).diagnostic.holdReason, "persisted_source_policy_failed",
+  "an explicitly excluded provider identity is not treated as an unknown physical venue, including a paused source");
+assert.equal((await venuePreflight("Dolly Bell Sava Centar", restaurant, { globalClaim: "Sava Centar",
+  extraRows: [{ source_text: "Another day in Sava Centar", venue: "Sava Centar" }] })).diagnostic.eligible, true,
+  "an exact selected-row venue outranks a different global parent or another day's venue");
+assert.deepEqual(automaticUniqueSourceVenueClaims({ rawVenue: "Sava Centar", rowSourceText: "Friday restaurant show" }, {
+  extraction_contract_version: "event_evidence_v2", is_event: true, venue: "Sava Centar", schedule_entries: [
+    { source_text: "Friday restaurant show", venue: "Dolly Bell Sava Centar" },
+    { source_text: "Saturday hall concert", venue: "Sava Centar" },
+  ],
+}), ["Dolly Bell Sava Centar"]);
 const reviewedPreflight = await evaluateAutomaticUniqueApproval({}, { ...pendingProofEvent, reviewedAt: 1 }, { asOfMs: proofAsOfMs });
 assert.equal(reviewedPreflight.diagnostic.holdReason, "human_reviewed");
 assert.equal(reviewedPreflight.approval, null);

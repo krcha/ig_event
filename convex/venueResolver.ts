@@ -91,6 +91,7 @@ export type ConvexVenueSnapshot = {
 
 export type ConvexVenueResolution = {
   canonicalVenueName?: string;
+  excludedVenueClaim?: boolean;
   lookupMode?: "indexed_identity" | "legacy_snapshot";
   resolution: VenueResolution;
   venueFields: VenueDenormalizedFields;
@@ -255,6 +256,9 @@ export function resolveVenueFromSnapshot(
   });
   if (resolution.status !== "resolved") {
     return {
+      ...(resolution.status === "unresolved" &&
+        snapshot.domainSnapshot.excludedVenueClaims.includes(normalizeVenueComparableText(rawVenueName))
+        ? { excludedVenueClaim: true } : {}),
       resolution,
       venueFields: {
         ...CLEARED_VENUE_DENORMALIZED_FIELDS,
