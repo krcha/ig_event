@@ -28,7 +28,10 @@ import { SaveEventButton } from "@/components/events/save-event-button";
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
 import { VenueWeeklyHours } from "@/components/venues/venue-weekly-hours";
 import { loadPublicEventDetailData } from "@/lib/events/public-event-detail-data";
-import { projectPublicEventVenueDisplay } from "@/lib/events/public-event-venue-fields";
+import {
+  projectPublicEventVenueDisplay,
+  sanitizeVenueLinkedPublicEventFields,
+} from "@/lib/events/public-event-venue-fields";
 import {
   getPublicReviewedSourceUpdate,
   type ReviewedSourceUpdate,
@@ -191,7 +194,7 @@ const loadEvent = cache(async function loadEvent(eventId: string): Promise<Event
   }
 
   const venue = event.venueId
-    ? venues[0] ?? findVenueForEvent(event, venues)
+    ? venues.find((candidate) => candidate._id === event.venueId)
     : findVenueForEvent(event, venues);
   const canonicalEventType = canonicalizeEventType(event.eventType);
   const displayTime = resolveEventTimeDisplay({
@@ -209,11 +212,11 @@ const loadEvent = cache(async function loadEvent(eventId: string): Promise<Event
   event.displayTimeSource = displayTime.source;
   event.displayTimeStart = displayTime.startLabel;
   event.venueCategory = venue?.category ?? event.venueCategory ?? undefined;
-  event.venue = projectPublicEventVenueDisplay(event, venue).venue;
+  const publicEvent = projectPublicEventVenueDisplay(event, venue);
   // The public venue query fails closed. Never retain the denormalized ID
   // when the referenced venue is pending or hidden.
-  event.venueId = venue?._id;
-  event.venueHours = venue
+  publicEvent.venueId = venue?._id;
+  publicEvent.venueHours = venue
     ? {
         googlePlaceId: venue.googlePlaceId ?? null,
         hoursError: venue.hoursError ?? null,
@@ -226,7 +229,7 @@ const loadEvent = cache(async function loadEvent(eventId: string): Promise<Event
         osmElementType: venue.osmElementType ?? null,
       }
     : undefined;
-  return event;
+  return sanitizeVenueLinkedPublicEventFields(publicEvent, Boolean(venue));
 });
 
 function formatEventDate(value: string): string {
@@ -469,6 +472,14 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                         />
                       ) : null}
                     </p>
+                    {event.venueLocation ? (
+                      <p
+                        className="pointer-events-none relative z-10 mt-1.5 break-words pl-6 text-xs leading-5 text-muted-foreground"
+                        data-event-venue-address="true"
+                      >
+                        {event.venueLocation}
+                      </p>
+                    ) : null}
                     <EventMetaRow className="pointer-events-none relative z-10 mt-2 pl-6" event={event} />
                   </div>
                 </div>

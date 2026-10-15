@@ -21,7 +21,9 @@ const zappa = {
   aliases: ["Old Zappa Hall"],
   category: "club",
   instagramHandle: "zappa_baza",
+  latitude: 44.8271,
   location: "Bulevar vojvode Bojovica 30",
+  longitude: 20.4519,
   name: "Zappa Baza",
 };
 const barka = {
@@ -29,6 +31,9 @@ const barka = {
   _id: "venue-zappa-barka",
   aliases: [],
   instagramHandle: "zappa_barka",
+  latitude: 44.8338,
+  location: "Usce bb",
+  longitude: 20.4346,
   name: "Zappa Barka",
 };
 const branchOne = {
@@ -36,14 +41,36 @@ const branchOne = {
   _id: "venue-branch-one",
   aliases: [],
   instagramHandle: "same_brand_one",
+  latitude: 44.815,
   location: "First Street 1",
+  longitude: 20.465,
   name: "Same Brand",
 };
 const branchTwo = {
   ...branchOne,
   _id: "venue-branch-two",
   instagramHandle: "same_brand_two",
+  latitude: 44.805,
   location: "Second Street 2",
+  longitude: 20.475,
+};
+const removedLocationVenue = {
+  ...zappa,
+  _id: "venue-removed-location",
+  aliases: [],
+  instagramHandle: "removed_location",
+  latitude: null,
+  location: "  ",
+  longitude: null,
+  name: "Removed Location",
+};
+const partialLocationVenue = {
+  ...removedLocationVenue,
+  _id: "venue-partial-location",
+  instagramHandle: "partial_location",
+  latitude: 44.81,
+  location: "Current Street 3",
+  name: "Partial Location",
 };
 function makeEvent(overrides) {
   return {
@@ -62,6 +89,9 @@ function makeEvent(overrides) {
     venueId: zappa._id,
     // A stale handle must not supersede the exact physical venue binding.
     venueInstagramHandle: barka.instagramHandle,
+    venueLatitude: 45.25,
+    venueLocation: "Old source address 99",
+    venueLongitude: 19.84,
     ...overrides,
   };
 }
@@ -71,6 +101,8 @@ const originalFixtures = [
   makeEvent({ _id: "barka", venue: barka.name, venueId: barka._id }),
   makeEvent({ _id: "branch-one", venue: branchOne.name, venueId: branchOne._id }),
   makeEvent({ _id: "branch-two", venue: branchTwo.name, venueId: branchTwo._id }),
+  makeEvent({ _id: "removed-location", venue: removedLocationVenue.name, venueId: removedLocationVenue._id }),
+  makeEvent({ _id: "partial-location", venue: partialLocationVenue.name, venueId: partialLocationVenue._id }),
   makeEvent({
     _id: "hidden-linked-venue",
     venue: "Public source venue text",
@@ -80,7 +112,8 @@ const originalFixtures = [
   }),
 ];
 let transportEvents = structuredClone(originalFixtures);
-let transportVenues = [zappa, barka, branchOne, branchTwo];
+let transportVenues = [zappa, barka, branchOne, branchTwo, removedLocationVenue, partialLocationVenue];
+const originalVenueFixtures = structuredClone(transportVenues);
 const queries = [];
 const originalQuery = ConvexHttpClient.prototype.query;
 const originalFetch = globalThis.fetch;
@@ -135,10 +168,34 @@ try {
   assert.equal(uppercase.venueId, zappa._id);
   assert.equal(uppercase.instagramHandle, zappa.instagramHandle);
   assert.equal(uppercase.venueLocation, zappa.location);
+  assert.equal(uppercase.venueLatitude, zappa.latitude);
+  assert.equal(uppercase.venueLongitude, zappa.longitude);
+  assert.notEqual(uppercase.venueLocation, originalFixtures[0].venueLocation);
+  assert.notEqual(uppercase.venueLatitude, originalFixtures[0].venueLatitude);
   assert.ok(uppercase.venueAliases.includes("ZAPPA BAZA"));
   assert.ok(uppercase.venueAliases.includes("Old Zappa Hall"));
   assert.equal(uppercase.sourceCaption, originalFixtures[0].sourceCaption);
   assert.deepEqual(transportEvents, originalFixtures, "A read must never rewrite persisted/source fixtures.");
+  assert.deepEqual(transportVenues, originalVenueFixtures, "A read must not mutate the current venue records.");
+  for (const event of events) {
+    const source = originalFixtures.find((candidate) => candidate._id === event._id);
+    for (const field of ["_id", "title", "date", "time", "artists", "status", "sourceCaption", "instagramPostUrl", "createdAt", "updatedAt"]) {
+      assert.deepEqual(event[field], source[field], `A location refresh must preserve ${field}: ${event._id}`);
+    }
+  }
+  for (const branch of [branchOne, branchTwo, barka]) {
+    const branchEvent = events.find((event) => event.venueId === branch._id);
+    assert.equal(branchEvent.venueLocation, branch.location);
+    assert.equal(branchEvent.venueLatitude, branch.latitude, "Shared names and stale handles must not select another branch's coordinates.");
+    assert.equal(branchEvent.venueLongitude, branch.longitude);
+  }
+  for (const eventId of ["removed-location", "partial-location"]) {
+    const event = events.find((candidate) => candidate._id === eventId);
+    assert.equal("venueLatitude" in event, false, "Missing current coordinates must remove stale event coordinates.");
+    assert.equal("venueLongitude" in event, false, "A partial current pair must never mix with old coordinates.");
+  }
+  assert.equal("venueLocation" in events.find((event) => event._id === "removed-location"), false);
+  assert.equal(events.find((event) => event._id === "partial-location").venueLocation, partialLocationVenue.location);
 
   const options = buildPublicEventVenueFilterOptions(events);
   const zappaOptions = options.filter((option) => option.value === `id:${zappa._id}`);
@@ -167,8 +224,21 @@ try {
   assert.equal(hidden.venueId, undefined);
   assert.equal(hidden.venueAliases, undefined);
   assert.equal(hidden.venueLocation, undefined);
+  assert.equal(hidden.venueLatitude, undefined);
+  assert.equal(hidden.venueLongitude, undefined);
   assert.equal(hidden.sourceCaption, originalFixtures.at(-1).sourceCaption);
   assert.deepEqual(projectPublicEventVenueDisplay(originalFixtures[0], barka), originalFixtures[0], "A conflicting venue cannot rename a source-bound event.");
+  for (const [latitude, longitude] of [
+    [undefined, undefined], [44.81, undefined], [undefined, 20.46],
+    [NaN, 20.46], [44.81, Infinity], [91, 20.46], [44.81, -181], [0, 0],
+  ]) {
+    const projected = projectPublicEventVenueDisplay(originalFixtures[0], {
+      ...zappa, latitude, longitude, location: null,
+    });
+    assert.equal("venueLatitude" in projected, false);
+    assert.equal("venueLongitude" in projected, false);
+    assert.equal("venueLocation" in projected, false);
+  }
   const unknown = { venue: "Unlinked Place" };
   assert.equal(matchesPublicEventVenueFilter(unknown, getPublicEventVenueFilterValue(unknown)), true);
   assert.equal(matchesPublicEventVenueFilter(unknown, "UNLINKED PLACE"), true);
@@ -179,6 +249,13 @@ try {
   const venuePage = await loadPublicVenuePage(zappa._id, { today: "2026-10-01" });
   assert.equal(venuePage.error, undefined);
   assert.ok(venuePage.upcomingEvents.every((event) => event.venue === zappa.name && event.venueId === zappa._id));
+  for (const event of venuePage.upcomingEvents) {
+    assert.equal(event.venueLocation, zappa.location);
+    assert.equal(event.venueLatitude, zappa.latitude);
+    assert.equal(event.venueLongitude, zappa.longitude);
+  }
+  assert.deepEqual(transportEvents, originalFixtures);
+  assert.deepEqual(transportVenues, originalVenueFixtures);
 
   const auditFlag = process.argv.indexOf("--audit-directory");
   if (auditFlag !== -1) {

@@ -3,6 +3,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { isPlausibleConvexPublicId } from "../lib/convex/public-id.ts";
 import { getDiscoverPageCopy } from "../lib/discover/page-copy.ts";
 import {
+  projectPublicEventVenueDisplay,
+  sanitizeVenueLinkedPublicEventFields,
+} from "../lib/events/public-event-venue-fields.ts";
+import {
   SITE_NAME,
   SITE_ORIGIN,
   SITE_INSTAGRAM_URL,
@@ -91,12 +95,14 @@ const eventJsonLd = buildEventStructuredData({
   time: "22:30",
   title: "Test Night",
   venue: "Test Club",
+  venueId: "venue-test-club",
   venueLatitude: 44.8176,
   venueLocation: "Cetinjska 15, Belgrade",
   venueLongitude: 20.4633,
 });
 assert.equal(eventJsonLd["@context"], "https://schema.org");
 assert.equal(eventJsonLd["@type"], "Event");
+assert.equal(eventJsonLd["@id"], `${SITE_ORIGIN}/events/event-1#event`);
 assert.equal(eventJsonLd.url, `${SITE_ORIGIN}/events/event-1`);
 assert.equal(eventJsonLd.startDate, "2026-12-18T22:30:00+01:00");
 assert.equal(eventJsonLd.eventAttendanceMode, "https://schema.org/OfflineEventAttendanceMode");
@@ -107,6 +113,8 @@ assert.equal("organizer" in eventJsonLd, false);
 assert.equal("isAccessibleForFree" in eventJsonLd, false);
 assert.deepEqual(eventJsonLd.location, {
   "@type": "Place",
+  "@id": `${SITE_ORIGIN}/venues/venue-test-club#place`,
+  url: `${SITE_ORIGIN}/venues/venue-test-club`,
   address: {
     "@type": "PostalAddress",
     addressCountry: "RS",
@@ -118,6 +126,7 @@ assert.deepEqual(eventJsonLd.location, {
     latitude: 44.8176,
     longitude: 20.4633,
   },
+  hasMap: "https://www.google.com/maps/search/?api=1&query=44.8176,20.4633",
   name: "Test Club",
 });
 
@@ -135,6 +144,9 @@ assert.equal(dateOnlyEventJsonLd.isAccessibleForFree, true);
 assert.equal("offers" in dateOnlyEventJsonLd, false);
 assert.equal("organizer" in dateOnlyEventJsonLd, false);
 assert.equal("performer" in dateOnlyEventJsonLd, false);
+assert.equal("geo" in dateOnlyEventJsonLd.location, false);
+assert.equal("hasMap" in dateOnlyEventJsonLd.location, false);
+assert.equal("@id" in dateOnlyEventJsonLd.location, false, "An unlinked event must not invent a venue identity.");
 
 for (const ticketPrice of [
   "Free",
@@ -197,7 +209,9 @@ const venueJsonLd = buildVenueStructuredData({
   neighborhood: "Dorcol",
 });
 assert.equal(venueJsonLd["@type"], "LocalBusiness");
+assert.equal(venueJsonLd["@id"], `${SITE_ORIGIN}/venues/venue-1#place`);
 assert.equal(venueJsonLd.url, `${SITE_ORIGIN}/venues/venue-1`);
+assert.equal(venueJsonLd.hasMap, "https://www.google.com/maps/search/?api=1&query=44.81,20.46");
 assert.deepEqual(venueJsonLd.sameAs, ["https://www.instagram.com/testgallery/"]);
 assert.deepEqual(venueJsonLd.address, {
   "@type": "PostalAddress",
@@ -206,6 +220,82 @@ assert.deepEqual(venueJsonLd.address, {
   addressRegion: "Dorcol",
   streetAddress: "Dorcol, Belgrade",
 });
+
+const updatedVenue = {
+  _id: "venue-updated-location",
+  instagramHandle: "updated_venue",
+  latitude: 44.8231676,
+  location: "Current Street 22, Beograd",
+  longitude: 20.472113,
+  name: "Current Venue Name",
+};
+const savedSourceEvent = {
+  _id: "event-updated-location",
+  artists: [],
+  date: "2026-10-17",
+  eventType: "Club",
+  sourceCaption: "Exact original source at the old named venue.",
+  instagramPostUrl: "https://www.instagram.com/p/QA_Current_Location/",
+  title: "Announced Event",
+  venue: "Old Venue Name",
+  venueId: updatedVenue._id,
+  venueLatitude: 45.25,
+  venueLocation: "Former Street 99",
+  venueLongitude: 19.84,
+};
+const savedSourceSnapshot = structuredClone(savedSourceEvent);
+const currentEvent = projectPublicEventVenueDisplay(savedSourceEvent, updatedVenue);
+const currentEventJsonLd = buildEventStructuredData(currentEvent);
+const currentVenueJsonLd = buildVenueStructuredData(updatedVenue);
+assert.deepEqual(currentEventJsonLd.location.address, currentVenueJsonLd.address, "Event and venue schema must use the same current address.");
+assert.deepEqual(currentEventJsonLd.location.geo, currentVenueJsonLd.geo, "Event and venue schema must use the same current coordinate pair.");
+assert.equal(currentEventJsonLd.location.address.streetAddress, updatedVenue.location);
+assert.equal(currentEventJsonLd.location.geo.latitude, updatedVenue.latitude);
+assert.equal(currentEventJsonLd.location.geo.longitude, updatedVenue.longitude);
+assert.equal(currentEventJsonLd.location["@id"], currentVenueJsonLd["@id"]);
+assert.equal(currentEventJsonLd.location.url, currentVenueJsonLd.url);
+assert.equal(currentEventJsonLd.location.hasMap, currentVenueJsonLd.hasMap);
+assert.equal(currentEventJsonLd.location.name, updatedVenue.name);
+assert.equal(currentEventJsonLd.startDate, savedSourceEvent.date, "A location refresh must not invent an event start from venue hours.");
+assert.equal(currentEvent.sourceCaption, savedSourceEvent.sourceCaption);
+assert.equal(currentEvent.instagramPostUrl, savedSourceEvent.instagramPostUrl);
+assert.deepEqual(savedSourceEvent, savedSourceSnapshot, "Schema generation and projection must leave stored source fields untouched.");
+
+const hiddenEventJsonLd = buildEventStructuredData(sanitizeVenueLinkedPublicEventFields(savedSourceEvent, false));
+for (const field of ["@id", "url", "hasMap", "geo"]) {
+  assert.equal(field in hiddenEventJsonLd.location, false, `A hidden venue must not expose location ${field}.`);
+}
+assert.equal("streetAddress" in hiddenEventJsonLd.location.address, false);
+
+for (const [latitude, longitude] of [
+  [undefined, undefined], [44.81, undefined], [undefined, 20.46],
+  [null, 20.46], [44.81, null], [NaN, 20.46], [44.81, NaN],
+  [Infinity, 20.46], [44.81, -Infinity], [90.01, 20.46], [-90.01, 20.46],
+  [44.81, 180.01], [44.81, -180.01], [0, 0],
+]) {
+  const invalidEvent = buildEventStructuredData({
+    ...savedSourceEvent,
+    venueLatitude: latitude,
+    venueLongitude: longitude,
+  });
+  const invalidVenue = buildVenueStructuredData({ ...updatedVenue, latitude, longitude });
+  assert.equal("geo" in invalidEvent.location, false, "Invalid or partial coordinates must not produce Event geo.");
+  assert.equal("hasMap" in invalidEvent.location, false);
+  assert.equal("geo" in invalidVenue, false, "Invalid or partial coordinates must not produce venue geo.");
+  assert.equal(invalidVenue.hasMap, `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${updatedVenue.name} ${updatedVenue.location}`)}`);
+  const clearedEvent = projectPublicEventVenueDisplay(savedSourceEvent, {
+    ...updatedVenue, latitude, longitude, location: null,
+  });
+  const clearedJsonLd = buildEventStructuredData(clearedEvent);
+  assert.equal("geo" in clearedJsonLd.location, false, "Removing current coordinates must never restore the old event pair.");
+  assert.equal("streetAddress" in clearedJsonLd.location.address, false, "Removing a current address must never restore the old event address.");
+  assert.doesNotMatch(serializeJsonLd(clearedJsonLd), /Former Street|45\.25|19\.84|NaN|Infinity/);
+}
+
+for (const [latitude, longitude] of [[90, 180], [-90, -180], [0, 20.46], [44.81, 0]]) {
+  const boundaryVenue = buildVenueStructuredData({ ...updatedVenue, latitude, longitude });
+  assert.deepEqual(boundaryVenue.geo, { "@type": "GeoCoordinates", latitude, longitude });
+}
 
 for (const cityOnlyLocation of [
   undefined,

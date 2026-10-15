@@ -25,6 +25,7 @@ import {
 import { isPlausibleConvexPublicId } from "@/lib/convex/public-id";
 import { getDisplayEventTime } from "@/lib/events/event-time";
 import { getPublicEventVenueFilterValue } from "@/lib/events/public-event-venue-filter";
+import { getVenueCoordinates } from "@/lib/venues/coordinates";
 
 import {
   absoluteUrl,
@@ -85,8 +86,9 @@ function getLocationLabel(venue: PublicVenue): string {
 }
 
 function getDirectionsHref(venue: PublicVenue): string {
-  if (typeof venue.latitude === "number" && typeof venue.longitude === "number") {
-    return `https://www.google.com/maps/search/?api=1&query=${venue.latitude},${venue.longitude}`;
+  const coordinates = getVenueCoordinates(venue.latitude, venue.longitude);
+  if (coordinates) {
+    return `https://www.google.com/maps/search/?api=1&query=${coordinates.latitude},${coordinates.longitude}`;
   }
 
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(

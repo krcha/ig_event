@@ -1,3 +1,5 @@
+import { getVenueCoordinates } from "../venues/coordinates.ts";
+
 export const SITE_NAME = "Event Zeka";
 export const SITE_ORIGIN = "https://eventzeka.com";
 export const SITE_INSTAGRAM_URL = "https://www.instagram.com/eventzeka/";
@@ -54,6 +56,7 @@ type VenueStructuredDataInput = {
 
 type EventStructuredData = {
   "@context": "https://schema.org";
+  "@id": string;
   "@type": "Event";
   description: string;
   eventAttendanceMode: "https://schema.org/OfflineEventAttendanceMode";
@@ -64,6 +67,9 @@ type EventStructuredData = {
   keywords: string;
   location: {
     "@type": "Place";
+    "@id"?: string;
+    url?: string;
+    hasMap?: string;
     address: {
       "@type": "PostalAddress";
       addressCountry: "RS";
@@ -85,6 +91,7 @@ type EventStructuredData = {
 
 type VenueStructuredData = {
   "@context": "https://schema.org";
+  "@id": string;
   "@type": "LocalBusiness";
   address: {
     "@type": "PostalAddress";
@@ -227,21 +234,25 @@ export function buildEventStructuredData(
 ): EventStructuredData {
   const url = absoluteUrl(`/events/${event._id}`);
   const streetAddress = getStreetAddress(event.venueLocation);
+  const coordinates = getVenueCoordinates(event.venueLatitude, event.venueLongitude);
+  const venueUrl = event.venueId ? absoluteUrl(`/venues/${event.venueId}`) : null;
   const location: EventStructuredData["location"] = {
     "@type": "Place",
+    ...(venueUrl ? { "@id": `${venueUrl}#place`, url: venueUrl } : {}),
     address: {
       "@type": "PostalAddress",
       addressCountry: "RS",
       addressLocality: "Belgrade",
       ...(streetAddress ? { streetAddress } : {}),
     },
-    ...(typeof event.venueLatitude === "number" && typeof event.venueLongitude === "number"
+    ...(coordinates
       ? {
           geo: {
             "@type": "GeoCoordinates" as const,
-            latitude: event.venueLatitude,
-            longitude: event.venueLongitude,
+            latitude: coordinates.latitude,
+            longitude: coordinates.longitude,
           },
+          hasMap: `https://www.google.com/maps/search/?api=1&query=${coordinates.latitude},${coordinates.longitude}`,
         }
       : {}),
     name: event.venue,
@@ -253,6 +264,7 @@ export function buildEventStructuredData(
 
   return {
     "@context": "https://schema.org",
+    "@id": `${url}#event`,
     "@type": "Event",
     description,
     eventAttendanceMode: "https://schema.org/OfflineEventAttendanceMode",
@@ -282,6 +294,8 @@ export function buildVenueStructuredData(
   const locationLabel = venue.location?.trim() || "Belgrade";
   const streetAddress = getStreetAddress(venue.location);
   const mapsQuery = [venue.name, locationLabel].filter(Boolean).join(" ");
+  const coordinates = getVenueCoordinates(venue.latitude, venue.longitude);
+  const url = absoluteUrl(`/venues/${venue._id}`);
   const instagramUrl =
     venue.instagramProfileUrl?.trim() ||
     (venue.instagramHandle
@@ -290,6 +304,7 @@ export function buildVenueStructuredData(
 
   return {
     "@context": "https://schema.org",
+    "@id": `${url}#place`,
     "@type": "LocalBusiness",
     address: {
       "@type": "PostalAddress",
@@ -303,19 +318,21 @@ export function buildVenueStructuredData(
       name: "Belgrade",
     },
     description: `${venue.name} is ${venue.category ? `a ${venue.category.toLowerCase()} venue` : "an event venue"} in Belgrade. Find upcoming events, location details, and the official Instagram profile on Event Zeka.`,
-    ...(typeof venue.latitude === "number" && typeof venue.longitude === "number"
+    ...(coordinates
       ? {
           geo: {
             "@type": "GeoCoordinates" as const,
-            latitude: venue.latitude,
-            longitude: venue.longitude,
+            latitude: coordinates.latitude,
+            longitude: coordinates.longitude,
           },
         }
       : {}),
-    hasMap: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`,
+    hasMap: coordinates
+      ? `https://www.google.com/maps/search/?api=1&query=${coordinates.latitude},${coordinates.longitude}`
+      : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`,
     name: venue.name,
     ...(instagramUrl ? { sameAs: [instagramUrl] } : {}),
-    url: absoluteUrl(`/venues/${venue._id}`),
+    url,
   };
 }
 

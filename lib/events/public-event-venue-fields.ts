@@ -1,3 +1,5 @@
+import { getVenueCoordinates } from "../venues/coordinates.ts";
+
 export const VENUE_LINKED_PUBLIC_EVENT_FIELDS = [
   "venueAliases",
   "venueCategory",
@@ -23,7 +25,9 @@ export type VenueLinkedPublicEventFields = {
 type PublicVenueDisplayFields = {
   _id: string;
   aliases?: string[];
+  latitude?: number | null;
   location?: string | null;
+  longitude?: number | null;
   name: string;
 };
 
@@ -32,20 +36,38 @@ export function projectPublicEventVenueDisplay<
   T extends { venue: string; venueId?: string },
 >(event: T, venue: PublicVenueDisplayFields | undefined): T & {
   venueAliases?: string[];
+  venueLatitude?: number;
   venueLocation?: string;
+  venueLongitude?: number;
 } {
   if (!venue || (event.venueId && event.venueId !== venue._id)) {
     return event;
   }
 
-  return {
+  const projected = {
     ...event,
     venue: venue.name,
     venueAliases: [...new Set([event.venue, ...(venue.aliases ?? [])])].filter(
       (name) => Boolean(name.trim()) && name !== venue.name,
     ),
-    ...(venue.location ? { venueLocation: venue.location } : {}),
+  } as T & {
+    venueAliases?: string[];
+    venueLatitude?: number;
+    venueLocation?: string;
+    venueLongitude?: number;
   };
+  // A current public venue supersedes old denormalized location fields, even
+  // when an operator has removed its coordinates or address.
+  delete projected.venueLatitude;
+  delete projected.venueLongitude;
+  delete projected.venueLocation;
+  const coordinates = getVenueCoordinates(venue.latitude, venue.longitude);
+  if (coordinates) {
+    projected.venueLatitude = coordinates.latitude;
+    projected.venueLongitude = coordinates.longitude;
+  }
+  if (venue.location?.trim()) projected.venueLocation = venue.location.trim();
+  return projected;
 }
 
 /**
