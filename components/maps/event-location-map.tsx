@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
-import { Expand, LoaderCircle, MapPin } from "lucide-react";
+import { Expand, LoaderCircle, LocateFixed, MapPin } from "lucide-react";
 import type { Map as LeafletMap, Marker } from "leaflet";
 import type { EventMapLocation } from "@/lib/events/event-map";
 import { cn } from "@/lib/utils";
@@ -24,18 +24,24 @@ export function EventLocationMap({ className, locations, selectedLocationId, onS
   const markersRef = useRef(new Map<string, Marker>());
   const popupButtonsRef = useRef(new Map<string, HTMLButtonElement>());
   const fitMapRef = useRef<(() => void) | null>(null);
+  const locateUserRef = useRef<(() => void) | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "failed">("loading");
   const [tilesUnavailable, setTilesUnavailable] = useState(false);
+  const [locationStatus, setLocationStatus] = useState<"idle" | "locating" | "ready" | "error">("idle");
+  const [locationMessage, setLocationMessage] = useState("");
 
   useEffect(() => {
     let cancelled = false;
     let resizeObserver: ResizeObserver | undefined;
     let removeViewportListener: (() => void) | undefined;
+    let locationWatchId: number | undefined;
     const viewportMarkerCleanup: (() => void)[] = [];
     const markers = markersRef.current;
     const popupButtons = popupButtonsRef.current;
     setStatus("loading");
     setTilesUnavailable(false);
+    setLocationStatus("idle");
+    setLocationMessage("");
 
     async function initializeMap() {
       const L = await import("leaflet");
@@ -52,6 +58,77 @@ export function EventLocationMap({ className, locations, selectedLocationId, onS
         markerZoomAnimation: !reducedMotion,
       });
       mapRef.current = map;
+      const locationPane = map.createPane("user-location");
+      locationPane.style.zIndex = "625";
+      locationPane.style.pointerEvents = "none";
+      let userMarker: ReturnType<typeof L.circleMarker> | undefined;
+      let accuracyCircle: ReturnType<typeof L.circle> | undefined;
+      let locationRequest = 0;
+      locateUserRef.current = () => {
+        if (!navigator.geolocation) {
+          setLocationStatus("error");
+          setLocationMessage("Your browser does not support location. Try another browser.");
+          return;
+        }
+        if (locationWatchId !== undefined) navigator.geolocation.clearWatch(locationWatchId);
+        const request = ++locationRequest;
+        let centerOnNextFix = true;
+        setLocationStatus("locating");
+        setLocationMessage("");
+        locationWatchId = navigator.geolocation.watchPosition((position) => {
+          if (cancelled || request !== locationRequest) return;
+          const { latitude, longitude, accuracy } = position.coords;
+          if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !Number.isFinite(accuracy)) return;
+          const point: [number, number] = [latitude, longitude];
+          if (accuracyCircle) {
+            accuracyCircle.setLatLng(point).setRadius(Math.max(accuracy, 0));
+            userMarker?.setLatLng(point);
+          } else {
+            accuracyCircle = L.circle(point, {
+              radius: Math.max(accuracy, 0),
+              pane: "user-location",
+              color: "#60a5fa",
+              weight: 1,
+              fillColor: "#3b82f6",
+              fillOpacity: 0.12,
+              interactive: false,
+            }).addTo(map);
+            userMarker = L.circleMarker(point, {
+              radius: 8,
+              pane: "user-location",
+              className: "event-map-user-location",
+              color: "#ffffff",
+              weight: 3,
+              fillColor: "#3b82f6",
+              fillOpacity: 1,
+              interactive: false,
+            }).addTo(map);
+            userMarker.getElement()?.setAttribute("role", "img");
+            userMarker.getElement()?.setAttribute("aria-label", "Your location");
+          }
+          if (centerOnNextFix) {
+            centerOnNextFix = false;
+            map.closePopup();
+            map.setView(point, 15, { animate: !reducedMotion });
+          }
+          setLocationStatus("ready");
+          setLocationMessage("Your location is shown in blue.");
+        }, (error) => {
+          if (cancelled || request !== locationRequest) return;
+          if (locationWatchId !== undefined) navigator.geolocation.clearWatch(locationWatchId);
+          locationWatchId = undefined;
+          accuracyCircle?.remove();
+          userMarker?.remove();
+          accuracyCircle = undefined;
+          userMarker = undefined;
+          setLocationStatus("error");
+          setLocationMessage(error.code === 1
+            ? "Location is blocked. Allow it in your browser settings and try again."
+            : error.code === 3
+              ? "Finding your location took too long. Try again."
+              : "Your location is unavailable. Check location services and try again.");
+        }, { enableHighAccuracy: true, maximumAge: 30_000, timeout: 20_000 });
+      };
       L.control.zoom({ position: "bottomright" }).addTo(map);
       let loadedTiles = 0;
       const tiles = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -271,6 +348,8 @@ export function EventLocationMap({ className, locations, selectedLocationId, onS
 
     return () => {
       cancelled = true;
+      if (locationWatchId !== undefined) navigator.geolocation.clearWatch(locationWatchId);
+      locateUserRef.current = null;
       resizeObserver?.disconnect();
       removeViewportListener?.();
       viewportMarkerCleanup.forEach((cleanup) => cleanup());
@@ -308,7 +387,7 @@ export function EventLocationMap({ className, locations, selectedLocationId, onS
         <div className="pointer-events-none absolute inset-0 z-[500] flex items-center justify-center bg-card/90 px-6 text-center">
           <div>
             {status === "loading" ? <LoaderCircle aria-hidden="true" className="mx-auto mb-3 h-6 w-6 animate-spin text-primary" /> : <MapPin aria-hidden="true" className="mx-auto mb-3 h-6 w-6 text-primary" />}
-            <p role="status" className="text-sm text-muted-foreground">{status === "loading" ? "Loading Belgrade map..." : "Map unavailable. Browse the events below."}</p>
+            <p role="status" className="text-sm text-muted-foreground">{status === "loading" ? "Loading Belgrade map..." : "Map unavailable. Please reload to try again."}</p>
           </div>
         </div>
       ) : null}
@@ -317,12 +396,21 @@ export function EventLocationMap({ className, locations, selectedLocationId, onS
           <span className="hidden rounded-full border border-border bg-card/95 px-3 py-2 text-xs font-semibold text-foreground shadow-lg lg:inline">
             {locations.length} {locations.length === 1 ? "venue" : "venues"} on the map
           </span>
-          <button className="button-secondary pointer-events-auto min-h-10 gap-2 bg-card/95 px-3 py-0 text-xs shadow-lg" onClick={() => { mapRef.current?.closePopup(); fitMapRef.current?.(); }} type="button">
-            <Expand aria-hidden="true" className="h-4 w-4" />
-            Show all
-          </button>
+          <div className="pointer-events-auto flex gap-2">
+            <button aria-label={locationStatus === "locating" ? "Finding your location" : "Show my location"} aria-busy={locationStatus === "locating"} className="button-secondary min-h-11 gap-2 bg-card/95 px-3 py-0 text-xs shadow-lg disabled:cursor-wait" disabled={locationStatus === "locating"} onClick={() => locateUserRef.current?.()} type="button">
+              {locationStatus === "locating" ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : <LocateFixed aria-hidden="true" className={cn("h-4 w-4", locationStatus === "ready" && "text-blue-400")} />}
+              {locationStatus === "locating" ? "Locating..." : "My location"}
+            </button>
+            <button className="button-secondary min-h-11 gap-2 bg-card/95 px-3 py-0 text-xs shadow-lg" onClick={() => { mapRef.current?.closePopup(); fitMapRef.current?.(); }} type="button">
+              <Expand aria-hidden="true" className="h-4 w-4" />
+              Show all
+            </button>
+          </div>
         </div>
       ) : null}
+      <p role="status" aria-live="polite" className={locationStatus === "error" ? "pointer-events-none absolute bottom-28 left-3 right-14 z-[500] rounded-xl border border-border bg-card/95 px-3 py-2 text-xs text-foreground" : "sr-only"}>
+        {locationStatus === "locating" ? "Finding your location. Allow location access when your browser asks." : locationMessage}
+      </p>
       {tilesUnavailable && status === "ready" ? (
         <p role="status" className="pointer-events-none absolute bottom-14 left-3 right-14 z-[500] rounded-xl border border-border bg-card/95 px-3 py-2 text-xs text-muted-foreground">
           The street map could not load. Venue pins and event details are still available.

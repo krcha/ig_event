@@ -85,7 +85,7 @@ assert.equal(headerMap.get("x-frame-options"), "DENY");
 assert.equal(headerMap.get("referrer-policy"), "strict-origin-when-cross-origin");
 assert.equal(
   headerMap.get("permissions-policy"),
-  "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+  "camera=(), microphone=(), geolocation=(self), payment=(), usb=(), browsing-topics=()",
 );
 assert.ok(headerMap.has("content-security-policy"));
 assert.ok(!headerMap.has("strict-transport-security"));
