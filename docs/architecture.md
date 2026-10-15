@@ -73,6 +73,33 @@ artists can be removed only when the event stays at that venue and an exact
 caption row bills another act without billing the venue name as a performer.
 Other days' caption rows cannot supply that proof.
 
+The resolver also excludes accounts explicitly classified as promoters across
+the complete bounded directory, including paused sources. Their legacy venue
+names cannot survive as unresolved physical venue proposals. A shorter place
+claim cannot expand into an unrelated branded business inside that place: for
+example, "Sava Centar" does not identify "Dolly Bell Sava Centar". Exact names,
+reviewed aliases and ordinary club/bar qualifiers remain supported.
+
+Caption identity evidence is scoped to the selected calendar day when a quote
+contains a multi-day schedule. An act billed on Friday cannot verify Saturday
+merely because both rows occur in the same caption. Explicit common acts and
+separate sessions on the same day remain valid; independently supported poster
+lineups remain available.
+
+Artist identity checks retain the source's role headings. Author, director and
+choreographer credits do not establish an appearance, and symphonic/tribute
+repertoire does not bill the original artists. Separately billed performers
+remain valid. Unsupported identities require review rather than silently
+rewriting the extracted lineup.
+
+Reviewed poster corrections can preserve existing timing explicitly. This mode
+requires the exact current time and an empty replacement time quote, retaining
+all time provenance and receipt timing, including unknown starts. It does not
+turn an unstated start into a confirmed poster time.
+Removing a misread creator or repertoire list requires an explicit service
+review with the exact previous artist list and a substantive evidence note.
+The ordinary repair path still rejects accidental clearing.
+
 Reviewed venue renames require every linked event and source occurrence to be
 accounted for. An unbound expected, deferred or superseded occurrence can be
 acknowledged by its exact stored snapshot and revision; its historical facts,

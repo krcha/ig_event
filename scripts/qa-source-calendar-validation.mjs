@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 // Use the supported entrypoint's import order (date parsing has existing cycles).
 import "../convex/events.ts";
+import { parseExtractedEventData } from "../lib/ai/extract-event-data.ts";
+import { prepareEventsForInsert } from "../lib/pipeline/run-instagram-ingestion.ts";
 import { sourceCalendarSupportsDate } from "../lib/pipeline/ingestion/source-calendar-validation.ts";
 import { isVerifiedDateEvidence, isVerifiedTimeEvidence } from "../lib/pipeline/ingestion/structured-fact-verification.ts";
 
@@ -66,4 +68,64 @@ const entranceText = "Ulaz u 13 i 15 sati";
 assert.equal(isVerifiedTimeEvidence({ ...sessionOptions, resolvedStartTime: "15:00", post: { ...sessionPost, caption: entranceText }, evidence: { ...sessionOptions.evidence, exact_text: entranceText } }), false, "Entrance clocks cannot become performance sessions");
 const freeAdmissionText = "Ulaz besplatan. Stručna vođenja u 13 i 15 sati.";
 assert.equal(isVerifiedTimeEvidence({ ...sessionOptions, resolvedStartTime: "15:00", post: { ...sessionPost, caption: freeAdmissionText }, evidence: { ...sessionOptions.evidence, exact_text: freeAdmissionText } }), true, "Admission terms must not hide an explicitly separate performance clock list");
-console.log(`Source calendar validation passed (${cases.length + 16} date, session, scope, binding and cached-compatibility checks).`);
+
+// Para Klub printed its October Sundays as MM.DD. The legacy row's date used
+// 10.11 while its immutable evidence correctly resolved October 11. Exercise
+// normalization too: independently interpreting that number as November 10
+// must never turn it into an approved future event.
+const paraImage = "https://example.com/qa-para-calendar.jpg";
+const paraPost = {
+  ...post, caption: "Cekali smo oktobar.", username: "para_klub",
+  postId: "qa-para-calendar", instagramPostUrl: "https://www.instagram.com/p/qa-para-calendar/",
+  imageUrl: paraImage, imageUrls: [paraImage],
+};
+const paraRow = (date, printedDate, title, resolvedDate = date, heading = "") => ({
+  date, time: "06:00-22:00", venue: "Para klub Beograd", title, artists: [], description: "",
+  source_text: `${heading}${printedDate} 06:00-22:00 ${title}`,
+  date_evidence: { exact_text: printedDate, source: "poster", is_relative: false, resolved_date: resolvedDate },
+  time_evidence: { status: "start_time_stated", exact_text: "06:00-22:00", source: "poster" },
+});
+function prepareParaSchedule(rows) {
+  const extracted = parseExtractedEventData({
+    extraction_contract_version: "event_evidence_v2", _extractionPolicyVersion: "event_quality_v1",
+    is_event: true, non_event_reason: "", title: "", date: "", time: "", venue: "Para klub Beograd",
+    city: "", country: "", price: "", currency: "", artists: [], category: "nightlife", description: "",
+    confidence: 0.95, reasoning_notes: "Para Klub October Sundays schedule.",
+    source_caption: paraPost.caption, source_url: paraPost.instagramPostUrl,
+    date_evidence: { exact_text: "", source: "unknown", is_relative: false, resolved_date: "" },
+    time_evidence: { status: "not_stated", exact_text: "", source: "unknown" }, source_conflicts: [],
+    shared_schedule_context: {
+      venue: { applies_to_all: true, value: "Para klub Beograd", evidence: "Para klub Beograd", source: "poster" },
+      time: { applies_to_all: false, value: "", evidence: "", source: "unknown" },
+    },
+    schedule_entries: rows,
+    field_confirmation: Object.fromEntries(
+      ["title", "location", "location_name", "price", "start_time", "short_description", "artists"].map(
+        (field) => [field, { confidence: 0, found_in: [], evidence: "", evidence_snippets: [], notes: "" }],
+      ),
+    ),
+  });
+  const venues = { para_klub: "Para klub Beograd" };
+  return prepareEventsForInsert(paraPost, extracted, paraImage, venues, {}, venues, {
+    eventDateFilterNow: new Date("2026-10-01T12:00:00.000Z"), sourceRolesByHandle: { para_klub: "venue" },
+  });
+}
+const [falseFuturePara] = prepareParaSchedule([
+  paraRow("10.11.2026", "Sunday - 10.11.2026.", "MRAK AFTERPARTY", "2026-10-11"),
+]);
+assert.equal(falseFuturePara.kind, "ok");
+assert.equal(falseFuturePara.event.date, "2026-11-10");
+assert.equal(falseFuturePara.event.status, "pending", "An inconsistent source weekday must hold a false future occurrence.");
+assert.equal(falseFuturePara.normalizedFields.dateEvidenceVerified, false);
+assert.ok(falseFuturePara.normalizedFields.moderationPendingReasons.includes("invalid_date_evidence"));
+assert.equal(JSON.parse(falseFuturePara.event.rawExtractionJson).schedule_entries[0].date_evidence.resolved_date, "2026-10-11",
+  "Holding a contradictory normalized occurrence must preserve its immutable original date evidence.");
+const supportedParaDays = prepareParaSchedule([
+  paraRow("2026-10-11", "Sunday - 10.11.2026.", "MRAK AFTERPARTY", "2026-10-11", "OCTOBER26\n"),
+  paraRow("2026-10-18", "Sunday - 10.18.2026.", "ALTEREGO", "2026-10-18", "OCTOBER26\n"),
+]);
+assert.deepEqual(supportedParaDays.map((result) => [result.kind, result.event?.date, result.event?.status]), [
+  ["ok", "2026-10-11", "approved"], ["ok", "2026-10-18", "approved"],
+], "A source-bound month heading with consistent Sunday rows must preserve both genuine dates.");
+
+console.log(`Source calendar validation passed (${cases.length + 23} date, session, scope, binding and cached-compatibility checks).`);

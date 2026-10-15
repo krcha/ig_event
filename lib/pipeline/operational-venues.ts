@@ -31,6 +31,7 @@ const OPERATIONAL_VENUE_PAGE_SIZE = 50;
 const MAX_OPERATIONAL_VENUE_SPLIT_DEPTH = 20;
 
 export type OperationalVenueResolverSnapshot = {
+  excludedVenueClaims?: string[];
   fingerprint: string;
   identities: VenueIdentityRecord[];
   schemaVersion: "venue-resolver-snapshot-v1";

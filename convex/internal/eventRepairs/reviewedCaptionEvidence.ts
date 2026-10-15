@@ -11,6 +11,34 @@ export function reviewedScheduleDateMatchesEventDate(sourceDate: unknown, eventD
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === eventDate;
 }
 
+/** Match a corrected title to the exact persisted row for its calendar day. */
+export function reviewedTitleEvidenceMatchesBoundScheduleRow(args: {
+  currentFields: Record<string, unknown>;
+  rawExtraction: Record<string, unknown>;
+  eventDate: string;
+  nextTitle: string;
+  titleEvidence: string;
+}): boolean {
+  const rowIndex = args.currentFields.splitEventIndex;
+  const scheduleEntries = args.rawExtraction.schedule_entries;
+  const row = Number.isSafeInteger(rowIndex) && Number(rowIndex) >= 1 && Array.isArray(scheduleEntries)
+    ? scheduleEntries[(rowIndex as number) - 1]
+    : null;
+  if (!row || typeof row !== "object" || Array.isArray(row)) return false;
+  const sourceText = (row as Record<string, unknown>).source_text;
+  const sourceDate = (row as Record<string, unknown>).date;
+  if (typeof sourceText !== "string" || !reviewedScheduleDateMatchesEventDate(sourceDate, args.eventDate)) return false;
+  const normalizeWhitespace = (value: string) =>
+    value.normalize("NFKC").replace(/\s+/gu, " ").trim();
+  const foldLetters = (value: string) =>
+    normalizeWhitespace(value).normalize("NFD").replace(/\p{M}/gu, "").toLocaleLowerCase("sr-Latn");
+  return (
+    sourceText === args.currentFields.rowSourceText &&
+    normalizeWhitespace(sourceText) === args.titleEvidence &&
+    foldLetters(sourceText).includes(foldLetters(args.nextTitle))
+  );
+}
+
 export function assertReviewedCaptionVenueCorrection(
   event: Doc<"events">,
   currentFields: Record<string, unknown>,

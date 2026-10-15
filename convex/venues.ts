@@ -1068,6 +1068,7 @@ export const renameReferencedVenueWithReviewedEvents = mutation({
     expectedUpdatedAt: v.number(),
     expectedName: v.string(),
     nextName: v.string(),
+    nextLocation: v.optional(v.string()),
     expectedEvents: v.array(v.object({
       id: v.id("events"),
       updatedAt: v.number(),
@@ -1093,13 +1094,15 @@ export const renameReferencedVenueWithReviewedEvents = mutation({
       throw new Error("Referenced venue rename requires service authentication.");
     }
     const nextName = args.nextName.normalize("NFKC").replace(/\s+/gu, " ").trim();
+    const nextLocation = args.nextLocation?.normalize("NFKC").replace(/\s+/gu, " ").trim();
     const auditNote = args.auditNote.normalize("NFKC").replace(/\s+/gu, " ").trim();
     const venueEvidence = args.venueEvidence.normalize("NFKC").replace(/\s+/gu, " ").trim();
     if (
       !nextName || nextName !== args.nextName || nextName === args.expectedName ||
+      (nextLocation !== undefined && (!nextLocation || nextLocation.length > 300 || nextLocation !== args.nextLocation)) ||
       !venueEvidence || auditNote.length < 20 ||
       !Number.isSafeInteger(args.expectedUpdatedAt) ||
-      args.expectedEvents.length < 1 ||
+      (args.expectedEvents.length === 0 && !args.expectedUnboundOccurrences?.length) ||
       args.expectedEvents.length > 12 ||
       new Set(args.expectedEvents.map((item) => item.id)).size !== args.expectedEvents.length
     ) {
@@ -1200,8 +1203,9 @@ export const renameReferencedVenueWithReviewedEvents = mutation({
       }
     }
     const updatedAt = Math.max(Date.now(), venue.updatedAt + 1);
-    const renamedVenue = { ...venue, name: nextName, updatedAt };
-    await ctx.db.patch(venue._id, { name: nextName, updatedAt });
+    const publicPatch = { name: nextName, ...(nextLocation !== undefined ? { location: nextLocation } : {}) };
+    const renamedVenue = { ...venue, ...publicPatch, updatedAt };
+    await ctx.db.patch(venue._id, { ...publicPatch, updatedAt });
     await syncVenueRecordIdentities(ctx, renamedVenue);
     for (const expected of [...args.expectedEvents].sort((a, b) =>
       String(a.id).localeCompare(String(b.id)))) {
@@ -1229,9 +1233,10 @@ export const renameReferencedVenueWithReviewedEvents = mutation({
       venueId: venue._id,
       action: "venue.reviewed_referenced_name_corrected",
       actor: authorization.actor,
-      beforeJson: JSON.stringify({ name: venue.name, updatedAt: venue.updatedAt }),
+      beforeJson: JSON.stringify({ name: venue.name, location: venue.location ?? null, updatedAt: venue.updatedAt }),
       afterJson: JSON.stringify({
         name: nextName,
+        location: renamedVenue.location ?? null,
         updatedAt,
         preservedUnboundOccurrences: (args.expectedUnboundOccurrences ?? []).map(({ id, updatedAt: revision }) =>
           ({ id, updatedAt: revision })),

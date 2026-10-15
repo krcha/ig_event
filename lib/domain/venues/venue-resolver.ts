@@ -89,6 +89,7 @@ export type VenueSnapshot = {
   canonicalVenueAliasesByHandle: CanonicalVenueAliasesByHandle;
   canonicalVenueNamesByHandle: Record<string, string>;
   fingerprint: string;
+  excludedVenueClaims: readonly string[];
   identityCandidates: ReadonlyMap<string, readonly VenueResolverRecord[]>;
   providerHandleCandidates: ReadonlyMap<string, readonly VenueResolverRecord[]>;
   records: readonly VenueResolverRecord[];
@@ -186,6 +187,7 @@ function stableSnapshotFingerprint(values: readonly string[]): string {
 }
 
 export function buildVenueSnapshot(options: {
+  excludedVenueClaims?: readonly string[];
   identities?: readonly VenueIdentityRecord[];
   venues: readonly VenueResolverRecord[];
 }): VenueSnapshot {
@@ -261,7 +263,11 @@ export function buildVenueSnapshot(options: {
     }
   }
 
+  const excludedVenueClaims = [...new Set(
+    (options.excludedVenueClaims ?? []).map(normalizeVenueComparableText).filter(Boolean),
+  )].sort();
   const fingerprintValues = [
+    ...excludedVenueClaims.map((claim) => `non-venue:${claim}`),
     ...records.flatMap((venue) => [
       `venue:${venue.id}:${venue.name}:${venue.instagramHandle ?? ""}`,
       ...(venue.aliases ?? []).map((alias) => `alias:${venue.id}:${alias}`),
@@ -279,6 +285,7 @@ export function buildVenueSnapshot(options: {
     canonicalVenueAliasesByHandle,
     canonicalVenueNamesByHandle,
     fingerprint: stableSnapshotFingerprint(fingerprintValues),
+    excludedVenueClaims,
     identityCandidates,
     providerHandleCandidates,
     records,
@@ -524,9 +531,27 @@ export function resolveVenue(
   snapshot: VenueSnapshot,
   input: ResolveVenueInput,
 ): VenueResolution {
+  const isExcludedClaim = (value: string | null | undefined): boolean => {
+    if (!value?.trim()) return false;
+    return snapshot.excludedVenueClaims.includes(normalizeVenueComparableText(value)) &&
+      candidatesForName(snapshot, value).length === 0 &&
+      candidatesForHandle(snapshot, value).length === 0;
+  };
+  // Reviewed organizer identities apply to every posting source. Retaining
+  // them separately from the physical directory also blocks unknown model
+  // claims from resurfacing as an unresolved proposed venue name.
+  const filteredInput = {
+    ...input,
+    rawVenueClaim: isExcludedClaim(input.rawVenueClaim) ? "" : input.rawVenueClaim,
+    locationName: isExcludedClaim(input.locationName) ? "" : input.locationName,
+  };
   const postingHandle = normalizeHandle(input.postingProviderHandle ?? "");
   if (input.sourceRole !== "promoter" || !postingHandle) {
-    return resolveVenueClaims(snapshot, input);
+    const resolution = resolveVenueClaims(snapshot, filteredInput);
+    if (resolution.status !== "unresolved" || !isExcludedClaim(resolution.proposedName)) {
+      return resolution;
+    }
+    return { candidates: [], confidence: "unknown", evidence: [], reason: "unknown", status: "unresolved" };
   }
 
   const promoterVenueIds = new Set(
@@ -544,14 +569,15 @@ export function resolveVenue(
       );
   };
   const resolution = resolveVenueClaims(snapshot, {
-    ...input,
-    rawVenueClaim: isOwnClaim(input.rawVenueClaim) ? "" : input.rawVenueClaim,
-    locationName: isOwnClaim(input.locationName) ? "" : input.locationName,
+    ...filteredInput,
+    rawVenueClaim: isOwnClaim(filteredInput.rawVenueClaim) ? "" : filteredInput.rawVenueClaim,
+    locationName: isOwnClaim(filteredInput.locationName) ? "" : filteredInput.locationName,
   });
   if (
     (resolution.status === "resolved" &&
       (promoterVenueIds.has(resolution.venue.id) || isOwnClaim(resolution.venue.name))) ||
-    (resolution.status === "unresolved" && isOwnClaim(resolution.proposedName))
+    (resolution.status === "unresolved" &&
+      (isOwnClaim(resolution.proposedName) || isExcludedClaim(resolution.proposedName)))
   ) {
     return {
       candidates: [],

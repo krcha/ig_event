@@ -9791,6 +9791,18 @@ async function runDistinctOccurrencePersistenceQa() {
             withIndex: () => ({ take: async () => [] }),
           };
         }
+        if (table === "instagramSources") {
+          return {
+            withIndex: (indexName, configure) => {
+              assert.equal(indexName, "by_role_active");
+              const filters = {};
+              const q = { eq: (field, value) => { filters[field] = value; return q; } };
+              configure(q);
+              assert.deepEqual(filters, { role: "promoter" });
+              return { take: async () => [] };
+            },
+          };
+        }
         if (table === "eventDomainMigrationState") {
           return {
             withIndex: () => ({ take: async () => [] }),
@@ -11602,6 +11614,17 @@ async function runApprovedMergeBoundaryQa() {
         : table === "venueIdentities"
           ? {
               withIndex: () => ({ take: async () => [] }),
+            }
+        : table === "instagramSources"
+          ? {
+              withIndex: (indexName, configure) => {
+                assert.equal(indexName, "by_role_active");
+                const filters = {};
+                const q = { eq: (field, value) => { filters[field] = value; return q; } };
+                configure(q);
+                assert.deepEqual(filters, { role: "promoter" });
+                return { take: async () => [] };
+              },
             }
         : table === "eventDomainMigrationState"
           ? {

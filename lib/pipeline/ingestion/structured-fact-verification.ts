@@ -11,6 +11,8 @@ import { buildSharedScheduleIdentitySegments, collectSharedMonthDateListDates, c
 import { normalizeString } from "@/lib/pipeline/ingestion/values";
 import { sourceCalendarSupportsDate } from "@/lib/pipeline/ingestion/source-calendar-validation";
 import { findScopedBranchVenueEvidence, type ScopedBranchVenueEvidence } from "@/lib/pipeline/ingestion/scoped-branch-venue-evidence";
+import { sourceIdentityMatchesSelectedDay } from "@/lib/pipeline/ingestion/day-scoped-identity-evidence";
+import { hasPerformingArtistEvidence } from "@/lib/pipeline/ingestion/performer-credit-evidence";
 
 export function extractionEvidenceAppearsInPersistedSource(options: {
   evidenceText: string;
@@ -331,7 +333,31 @@ export function isVerifiedEventIdentityEvidence(options: {
     source: NightlifeLineupSource;
   }>;
   lineupTimingMode?: NightlifeLineupCoalescingPlan["timingMode"];
+  resolvedDate?: string | null;
 }): boolean {
+  const identityMatchesSourceDay = (source: string, identity: string): boolean => {
+    if (options.extracted._extractionPolicyVersion !== "event_quality_v1" ||
+      !options.resolvedDate || (source !== "caption" && source !== "alt_text")) return true;
+    const sourceText = source === "caption" ? options.post.caption : options.post.altText;
+    return !sourceText || sourceIdentityMatchesSelectedDay({
+      sourceText,
+      selectedDate: options.resolvedDate,
+      postedAt: options.post.postedAt,
+      identity,
+      identityAppearsInText: (block, value) => titleIdentityAppearsInText(block, value) ||
+        artistIdentityAppearsInText(block, value),
+    });
+  };
+  const artistHasPerformanceEvidence = (text: string, source: string, artist: string): boolean => {
+    if (options.extracted._extractionPolicyVersion !== "event_quality_v1") return true;
+    const sourceText = source === "caption" ? options.post.caption :
+      source === "alt_text" ? options.post.altText : null;
+    const context = [options.post.caption, options.splitSourceLine, text].filter(Boolean).join("\n");
+    const hasPerformanceProof = (value: string) => hasPerformingArtistEvidence({
+      text: value, artist, context, identityAppearsInText: artistIdentityAppearsInText,
+    });
+    return hasPerformanceProof(text) && (!sourceText || hasPerformanceProof(sourceText));
+  };
   const supportsTitle = (text: string): boolean => {
     if (titleIdentityAppearsInText(text, options.title)) return true;
     // Serbian poster typography can print Đ as D. Keep the entire multiword
@@ -366,7 +392,9 @@ export function isVerifiedEventIdentityEvidence(options: {
       options.artists.length > 0 &&
       options.artists.every((artist) =>
         boundLineupEvidence.some((item) =>
-          artistIdentityAppearsInText(item.text, artist),
+          artistIdentityAppearsInText(item.text, artist) &&
+            artistHasPerformanceEvidence(item.text, item.source, artist) &&
+            (afterMidnightContinuation || identityMatchesSourceDay(item.source, artist)),
         ),
       )
     );
@@ -496,8 +524,12 @@ export function isVerifiedEventIdentityEvidence(options: {
   const carouselArtistTitleEvidence = options.extracted._carouselContractVersion === "carousel_evidence_v1" &&
     options.artists.length > 0 && titleContainsOnlyBilledArtists(options.title, options.artists) &&
     options.artists.every((artist) => boundEvidence.some((snippet) =>
-      !isNonBillingEvidenceClause(snippet.text) && artistIdentityAppearsInText(snippet.text, artist)));
-  const boundTitleEvidence = carouselArtistTitleEvidence || boundEvidence.some((snippet) => supportsTitle(snippet.text));
+      !isNonBillingEvidenceClause(snippet.text) && artistIdentityAppearsInText(snippet.text, artist) &&
+      artistHasPerformanceEvidence(snippet.text, snippet.source, artist) &&
+      identityMatchesSourceDay(snippet.source, artist)));
+  const boundTitleEvidence = carouselArtistTitleEvidence || boundEvidence.some((snippet) =>
+    supportsTitle(snippet.text) && (sharedMultiDateIdentityVerified ||
+      identityMatchesSourceDay(snippet.source, options.title)));
   if (!boundTitleEvidence) return false;
   const supplementalArtistEvidence = mayUsePostLevelIdentityEvidence ? [
     ...(artistConfirmation.found_in.some((source) => source.toLowerCase() === "caption") &&
@@ -510,8 +542,12 @@ export function isVerifiedEventIdentityEvidence(options: {
       : []),
   ] : [];
   return options.artists.every((artist) =>
-    boundEvidence.some((snippet) => artistIdentityAppearsInText(snippet.text, artist)) ||
-    supplementalArtistEvidence.some((text) => artistIdentityAppearsInText(text, artist)),
+    boundEvidence.some((snippet) => artistIdentityAppearsInText(snippet.text, artist) &&
+      artistHasPerformanceEvidence(snippet.text, snippet.source, artist) &&
+      (sharedMultiDateIdentityVerified || identityMatchesSourceDay(snippet.source, artist))) ||
+    supplementalArtistEvidence.some((text) => artistIdentityAppearsInText(text, artist) &&
+      artistHasPerformanceEvidence(text, text === normalizeString(options.post.caption) ? "caption" : "alt_text", artist) &&
+      identityMatchesSourceDay(text === normalizeString(options.post.caption) ? "caption" : "alt_text", artist)),
   );
 }
 

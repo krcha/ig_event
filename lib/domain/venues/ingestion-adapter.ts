@@ -23,6 +23,7 @@ export type IngestionVenueResolver = {
 };
 
 export type IngestionVenueResolverSnapshotInput = {
+  excludedVenueClaims?: readonly string[];
   identities: readonly VenueIdentityRecord[];
   venues: readonly VenueResolverRecord[];
 };
@@ -206,7 +207,11 @@ export function buildIngestionVenueResolver(
     (record, index, all) =>
       all.findIndex((candidate) => candidate.id === record.id) === index,
   );
-  const snapshot = buildVenueSnapshot({ identities, venues: uniqueRecords });
+  const snapshot = buildVenueSnapshot({
+    excludedVenueClaims: firstClassSnapshot?.excludedVenueClaims,
+    identities,
+    venues: uniqueRecords,
+  });
   const canonicalVenueAliasesByHandle: CanonicalVenueAliasesByHandle = {
     ...snapshot.canonicalVenueAliasesByHandle,
   };

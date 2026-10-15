@@ -363,6 +363,22 @@ function areVenueNamesCompatible(left: string, right: string): boolean {
   return ` ${longer} `.includes(` ${shorter} `);
 }
 
+function canExpandVenueClaim(candidate: string, canonicalName: string): boolean {
+  if (!areVenueNamesCompatible(candidate, canonicalName)) return false;
+  const claim = normalizeVenueComparableText(candidate);
+  const canonical = normalizeVenueComparableText(canonicalName);
+  if (claim.length >= canonical.length) return true;
+  // A parent complex must not resolve to an unrelated business inside it.
+  // Ordinary venue/city qualifiers remain harmless; a missing brand needs
+  // an explicitly configured alias rather than substring compatibility.
+  const qualifiers = new Set([
+    "bar", "beograd", "belgrade", "cafe", "club", "events", "kafe", "klub",
+    "nightclub", "pub", "restaurant", "restoran",
+  ]);
+  return canonical.replace(claim, " ").split(" ").filter(Boolean)
+    .every((token) => qualifiers.has(token));
+}
+
 function getDisplayVenueNameForEntry(
   entry: VenueNameEntry,
   canonicalVenueNamesByHandle: CanonicalVenueMap,
@@ -462,7 +478,7 @@ export function canonicalizeVenueNameDetailed(
     canonicalVenueAliasesByHandle,
   );
 
-  if (preferredVenue && areVenueNamesCompatible(candidate, preferredVenue)) {
+  if (preferredVenue && canExpandVenueClaim(candidate, preferredVenue)) {
     const preferredEntry = findEntryByVenueName(
       preferredVenue,
       canonicalVenueEntries,
@@ -529,7 +545,7 @@ export function canonicalizeVenueNameDetailed(
   const compatibleMatch = findUniqueVenueEntry(
     canonicalVenueEntries.filter(
       (entry) =>
-        !entry.matchedAlias && areVenueNamesCompatible(candidate, entry.name),
+        !entry.matchedAlias && canExpandVenueClaim(candidate, entry.name),
     ),
   );
   return compatibleMatch

@@ -126,7 +126,12 @@ function fixture(options = {}) {
           },
           async take(limit) {
             assert.ok(index, "Every fallback read must use an index.");
-            assert.ok(limit <= 9, "Every fallback identity read must remain bounded.");
+            if (table === "instagramSources" && index === "by_role_active") {
+              assert.equal(criteria.role, "promoter", "The global exclusion read only loads explicit promoter identities.");
+              assert.ok(limit <= 4001, "The promoter directory must use its bounded sentinel read.");
+            } else {
+              assert.ok(limit <= 9, "Every fallback identity read must remain bounded.");
+            }
             queries.push({ table, index, limit });
             return tables[table].filter((row) => Object.entries(criteria)
               .every(([key, value]) => row[key] === value)).slice(0, limit);

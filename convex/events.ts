@@ -542,7 +542,12 @@ export const repairReviewedStructuredEventEvidence = mutation({
     nextDescription: v.string(),
     posterVenueEvidence: v.string(),
     posterTimeEvidence: v.string(),
+    preserveExistingTime: v.optional(v.boolean()),
     posterArtistEvidence: v.array(v.string()),
+    reviewedNonPerformerEvidence: v.optional(v.object({
+      expectedArtists: v.array(v.string()),
+      evidence: v.string(),
+    })),
     moderationNote: v.string(),
     serviceSecret: v.string(),
   },

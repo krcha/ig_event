@@ -381,3 +381,44 @@ for (const marker of [{ reviewedAt: 1 }, { reviewedBy: "human" }, { humanReviewe
   assert.equal(result.outcome, "held"); assert.equal(result.reason, "human_review_preserved"); assert.equal(state.audits.length, 0);
 }
 console.log("Generic source conflict repair QA passed.");
+
+{
+  const sameOccurrenceConflict = { field: "date", poster_value: "17. OKTOBAR", caption_value: "Subota, 10. Oktobar",
+    reason: "Poster and caption give different calendar dates for the same occurrence." };
+  const source = "RIKVERC svi putevi vode\nSubota, 10. Oktobar\nKlub Beton, Beton hala\nStart: 22h";
+  for (const selectedDate of ["2026-10-10", "2026-10-17"]) {
+    const event = eventFixture(), fields = JSON.parse(event.normalizedFieldsJson);
+    Object.assign(event, { title: "RIKVERC svi putevi vode", date: selectedDate, time: "22:00-04:00", venue: "Beton",
+      artists: [], sourceCaption: source, sourceConflictFields: [] });
+    Object.assign(fields, { title: event.title, normalizedDate: event.date, normalizedVenue: event.venue,
+      time: event.time, artists: [], sourceGroundingSourceCaption: source, sourceAccountName: "Rikverc Events",
+      sourceAccountRole: "venue", splitEventTotal: 2, multiEventSplitDetected: true, extractionSourceConflicts: [sameOccurrenceConflict],
+      extractionSourceConflictCount: 1, materialSourceConflicts: [], materialSourceConflictCount: 0,
+      benignSourceConflicts: [sameOccurrenceConflict], benignSourceConflictCount: 1, sourceConflictFields: [] });
+    const conflictingRows = [
+      { date: "2026-10-10", title: event.title, venue: "Klub Beton", artists: [], source_text: "Subota, 10. Oktobar" },
+      { date: "2026-10-17", title: event.title, venue: "Klub Beton", artists: [], source_text: "SUBOTA 17.OKTOBAR" },
+    ];
+    event.rawExtractionJson = JSON.stringify({ is_event: true, source_conflicts: [sameOccurrenceConflict], schedule_entries: conflictingRows });
+    event.normalizedFieldsJson = JSON.stringify(fields);
+    const context = buildPendingSourceConflictContext(event, fields);
+    assert.equal(context.singleOccurrenceSource, false, "The fixture must retain the erroneous model split into two rows.");
+    assert.equal(eventEvidenceConflictIsBenign(sameOccurrenceConflict, context), false,
+      "Two explicit Saturdays a week apart remain a material contradiction despite model row splitting.");
+    assert.equal(getEffectiveEventEvidenceV2Conflicts(fields, event), null,
+      "An old approved record's benign marker must not bypass current source-conflict verification.");
+    assert.throws(() => preparePendingSourceConflictReclassification({ ...event, status: "pending" }), /material conflict|verified cinema|non-cinema/u);
+
+    Object.assign(fields, { extractionSourceConflicts: [], extractionSourceConflictCount: 0,
+      materialSourceConflicts: [], materialSourceConflictCount: 0, benignSourceConflicts: [], benignSourceConflictCount: 0 });
+    event.sourceCaption = fields.sourceGroundingSourceCaption = "Friday 16.10 Artist A; Saturday 17.10 Artist B at QA Club.";
+    event.rawExtractionJson = JSON.stringify({ is_event: true, source_conflicts: [], schedule_entries: [
+      { date: "2026-10-16", title: "Artist A", artists: ["Artist A"], venue: "QA Club", source_text: "Friday 16.10 Artist A" },
+      { date: "2026-10-17", title: "Artist B", artists: ["Artist B"], venue: "QA Club", source_text: "Saturday 17.10 Artist B" },
+    ] });
+    event.normalizedFieldsJson = JSON.stringify(fields);
+    assert.deepEqual(getEffectiveEventEvidenceV2Conflicts(fields, event), [],
+      "A genuine source-announced multi-day lineup without contradictory same-occurrence claims remains unaffected.");
+  }
+}
+console.log("Same-occurrence named-date conflict regression QA passed.");

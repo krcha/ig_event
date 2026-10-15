@@ -35,7 +35,9 @@ import {
   assertPersistedServiceSourcePolicy,
 } from "../../eventDomain/sourceApproval";
 import { requireCanonicalInstagramPostUrl } from "../../eventDomain/sourceUrlPolicy";
-import { assertReviewedCaptionVenueCorrection, reviewedScheduleDateMatchesEventDate } from "./reviewedCaptionEvidence";
+import { assertReviewedCaptionVenueCorrection, reviewedTitleEvidenceMatchesBoundScheduleRow } from "./reviewedCaptionEvidence";
+import { assertReviewedNonPerformerEvidence, type ReviewedNonPerformerEvidence } from "./reviewedNonPerformerEvidence";
+export { reviewedTitleEvidenceMatchesBoundScheduleRow } from "./reviewedCaptionEvidence";
 
 export type ReviewedStructuredCorrectionVersionArgs = {
   expectedSourceLinkId: Id<"instagramEventSources">;
@@ -367,13 +369,16 @@ export async function repairReviewedStructuredEventEvidenceHandler(
     nextDescription: string;
     posterVenueEvidence: string;
     posterTimeEvidence: string;
+    preserveExistingTime?: boolean;
     posterArtistEvidence: string[];
+    reviewedNonPerformerEvidence?: ReviewedNonPerformerEvidence;
     captionVenueEvidence?: string;
     moderationNote: string;
     serviceSecret: string;
   },
 ) {
   const captionMode = args.captionVenueEvidence !== undefined;
+  const preserveTime = captionMode || args.preserveExistingTime === true;
   const { actor, kind } = await requireAdminOrServiceSecret(
     ctx,
     args.serviceSecret,
@@ -448,7 +453,7 @@ export async function repairReviewedStructuredEventEvidenceHandler(
     !nextTitle ||
     !nextVenue ||
     !nextTime ||
-    (!captionMode && nextArtists.length === 0 && event.artists.length > 0) ||
+    (!captionMode && nextArtists.length === 0 && event.artists.length > 0 && args.reviewedNonPerformerEvidence === undefined) ||
     nextArtists.some((artist) => !artist) ||
     new Set(nextArtists).size !== nextArtists.length ||
     nextTitle !== args.nextTitle ||
@@ -462,12 +467,17 @@ export async function repairReviewedStructuredEventEvidenceHandler(
   }
   const posterVenueEvidence = args.posterVenueEvidence.normalize("NFKC").trim();
   const posterTimeEvidence = args.posterTimeEvidence.normalize("NFKC").trim();
+  if (args.preserveExistingTime && (nextTime !== (event.time ?? "TBD") || args.posterTimeEvidence !== "")) {
+    throw new Error("Preserving event time requires its exact existing value and no new poster time evidence.");
+  }
   const posterArtistEvidence = args.posterArtistEvidence.map((value) =>
     value.normalize("NFKC").trim(),
   );
+  const nonPerformerEvidence = assertReviewedNonPerformerEvidence({ review: args.reviewedNonPerformerEvidence,
+    currentArtists: event.artists, nextArtists, posterArtistEvidence, captionMode });
   if (!captionMode && (
     !posterVenueEvidence ||
-    !posterTimeEvidence ||
+    (!preserveTime && !posterTimeEvidence) ||
     (posterArtistEvidence.length === 0) !== (nextArtists.length === 0) ||
     posterArtistEvidence.some((value) => !value)
   )) {
@@ -521,7 +531,7 @@ export async function repairReviewedStructuredEventEvidenceHandler(
     assertReviewedCaptionVenueCorrection(event, currentFields, args);
   }
 
-  const timePatch = captionMode ? {} : normalizeEventTimeWritePatch({
+  const timePatch = preserveTime ? {} : normalizeEventTimeWritePatch({
     time: nextTime,
     timeSource: "poster",
     timeEvidenceText: posterTimeEvidence,
@@ -542,7 +552,7 @@ export async function repairReviewedStructuredEventEvidenceHandler(
   ];
   const nextSignals = [
     ...new Set([
-      ...currentSignals.filter((signal) => captionMode || signal !== "time_tbd"),
+      ...currentSignals.filter((signal) => preserveTime || signal !== "time_tbd"),
       "requires_human_approval",
     ]),
   ];
@@ -554,7 +564,9 @@ export async function repairReviewedStructuredEventEvidenceHandler(
       reviewedBy: actor,
       venueEvidence: posterVenueEvidence,
       timeEvidence: posterTimeEvidence,
+      preservedExistingTime: args.preserveExistingTime === true,
       artistEvidence: posterArtistEvidence,
+      ...(nonPerformerEvidence ? { nonPerformerEvidence } : {}),
     },
   } : {
     reviewedCaptionCorrection: {
@@ -570,9 +582,9 @@ export async function repairReviewedStructuredEventEvidenceHandler(
     title: nextTitle,
     normalizedVenue: nextVenue,
     artists: nextArtists,
-    ...(!captionMode ? {
+    ...(!captionMode ? { description: args.nextDescription } : {}),
+    ...(!preserveTime ? {
       time: nextTime,
-      description: args.nextDescription,
       timeSource: "poster",
       timeEvidenceText: posterTimeEvidence,
       timeConfidence: 0.99,
@@ -634,7 +646,7 @@ export async function repairReviewedStructuredEventEvidenceHandler(
         ? {
             ...occurrence,
             date: event.date,
-            ...(!captionMode ? { time: nextTime } : {}),
+            ...(!preserveTime ? { time: nextTime } : {}),
             venue: nextVenue,
             title: nextTitle,
             artists: nextArtists,
@@ -1023,37 +1035,7 @@ export async function repairReviewedStructuredEventVenueHandler(
   };
 }
 
-/**
- * Corrects a source-attested title without changing the scheduled occurrence.
- * The source link, receipt and first-class occurrence advance together.
- */
-export function reviewedTitleEvidenceMatchesBoundScheduleRow(args: {
-  currentFields: Record<string, unknown>;
-  rawExtraction: Record<string, unknown>;
-  eventDate: string;
-  nextTitle: string;
-  titleEvidence: string;
-}): boolean {
-  const rowIndex = args.currentFields.splitEventIndex;
-  const scheduleEntries = args.rawExtraction.schedule_entries;
-  const row = Number.isSafeInteger(rowIndex) && Number(rowIndex) >= 1 && Array.isArray(scheduleEntries)
-    ? scheduleEntries[(rowIndex as number) - 1]
-    : null;
-  if (!row || typeof row !== "object" || Array.isArray(row)) return false;
-  const sourceText = (row as Record<string, unknown>).source_text;
-  const sourceDate = (row as Record<string, unknown>).date;
-  if (typeof sourceText !== "string" || !reviewedScheduleDateMatchesEventDate(sourceDate, args.eventDate)) return false;
-  const normalizeWhitespace = (value: string) =>
-    value.normalize("NFKC").replace(/\s+/gu, " ").trim();
-  const foldLetters = (value: string) =>
-    normalizeWhitespace(value).normalize("NFD").replace(/\p{M}/gu, "").toLocaleLowerCase("sr-Latn");
-  return (
-    sourceText === args.currentFields.rowSourceText &&
-    normalizeWhitespace(sourceText) === args.titleEvidence &&
-    foldLetters(sourceText).includes(foldLetters(args.nextTitle))
-  );
-}
-
+/** Correct a source-attested title while preserving the bound occurrence. */
 export async function repairReviewedStructuredEventTitleHandler(
   ctx: MutationCtx,
   args: {

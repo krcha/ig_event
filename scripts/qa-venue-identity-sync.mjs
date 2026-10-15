@@ -9,6 +9,7 @@ import { DomainError } from "../lib/domain/errors.ts";
 import {
   assertReviewedVenueRenameOccurrences,
   getReviewedReferencedVenueRenameOccurrences,
+  renameReferencedVenueWithReviewedEvents,
 } from "../convex/venues.ts";
 
 const now = new Date("2026-08-27T18:30:00.000Z").getTime();
@@ -415,6 +416,116 @@ await assert.rejects(
   assert.deepEqual(rows, before);
   if (originalSecret === undefined) delete process.env.CRON_SECRET;
   else process.env.CRON_SECRET = originalSecret;
+}
+
+{
+  const retainedSecret = process.env.CRON_SECRET;
+  process.env.CRON_SECRET = "qa-unbound-only-rename";
+  const state = makeDb();
+  const candidate = { ...venue, name: "Generic Profile Caption", aliases: [],
+    publicStatus: "published", scrapeActive: true, location: "Old Address 1",
+    latitude: 44.81, longitude: 20.46, source: "legacy",
+  };
+  state.venues.set(candidate._id, candidate);
+  const historical = [{ _id: "historical-only", _creationTime: 1, updatedAt: 11,
+    venueId: candidate._id, state: "deferred", sourceOccurrenceKey: "historical-row",
+    factsJson: '{"venueClaim":"Generic Profile Caption"}', normalizedOccurrenceJson: '{"time":"TBD"}',
+  }];
+  const events = [];
+  const audits = [];
+  const writes = [];
+  const context = {
+    auth: { async getUserIdentity() { return null; } },
+    db: {
+      async get(id) { return structuredClone(await state.get(id)); },
+      async patch(id, patch) {
+        writes.push({ id, patch: structuredClone(patch) });
+        if (state.venues.has(id)) Object.assign(state.venues.get(id), structuredClone(patch));
+        else await state.patch(id, patch);
+      },
+      async insert(table, value) {
+        writes.push({ table, value: structuredClone(value) });
+        if (table === "venueAuditLog") { audits.push(structuredClone(value)); return `audit-${audits.length}`; }
+        return state.insert(table, value);
+      },
+      query(table) {
+        if (table === "venueIdentities") return state.query(table);
+        const records = table === "venues" ? [...state.venues.values()]
+          : table === "events" ? events : table === "sourceOccurrences" ? historical : null;
+        assert.ok(records, `Unexpected unbound rename QA table ${table}`);
+        const take = (criteria = []) => ({ async take(limit) {
+          return structuredClone(records.filter((record) =>
+            criteria.every(([field, value]) => record[field] === value)).slice(0, limit));
+        } });
+        return { ...take(), withIndex(_index, configure) { return take(criteriaFrom(configure)); } };
+      },
+    },
+  };
+  const reviewed = await getReviewedReferencedVenueRenameOccurrences._handler(context, {
+    id: candidate._id, serviceSecret: process.env.CRON_SECRET,
+  });
+  const args = {
+    id: candidate._id, expectedUpdatedAt: candidate.updatedAt, expectedName: candidate.name,
+    nextName: "BIFE", nextLocation: "Marsala Birjuzova 2-4, sprat 2, Beograd",
+    expectedEvents: [], expectedUnboundOccurrences: reviewed.map(({ id, updatedAt, snapshotJson }) =>
+      ({ id, updatedAt, snapshotJson })),
+    venueEvidence: "Source profile and caption explicitly identify the venue and full street address.",
+    auditNote: "Reviewed physical venue name and address; retain the exact historical unbound source row unchanged.",
+    serviceSecret: process.env.CRON_SECRET,
+  };
+  const historicalBefore = structuredClone(historical);
+  const candidateBefore = structuredClone(candidate);
+  await assert.rejects(renameReferencedVenueWithReviewedEvents._handler(context, {
+    ...args, expectedUnboundOccurrences: [],
+  }), /exact bounded reviewed plan/u, "A zero-event plan must acknowledge a nonempty historical occurrence set.");
+  for (const nextLocation of ["", "  Street 1", "Street  1", "x".repeat(301)]) {
+    await assert.rejects(renameReferencedVenueWithReviewedEvents._handler(context, { ...args, nextLocation }),
+      /exact bounded reviewed plan/u, "A supplied location must be nonempty, canonical, and bounded.");
+  }
+  await assert.rejects(renameReferencedVenueWithReviewedEvents._handler(context, {
+    ...args, expectedUpdatedAt: candidate.updatedAt - 1,
+  }), /changed after plan review/u);
+  historical[0].factsJson = '{"venueClaim":"Changed source"}';
+  await assert.rejects(renameReferencedVenueWithReviewedEvents._handler(context, args), /unplanned source occurrence/u);
+  Object.assign(historical[0], historicalBefore[0]);
+  for (const patch of [
+    { state: "satisfied", canonicalEventId: "foreign-event" },
+    { state: "deferred", canonicalEventId: "foreign-event" },
+  ]) {
+    Object.assign(historical[0], patch);
+    const foreignPlan = await getReviewedReferencedVenueRenameOccurrences._handler(context, {
+      id: candidate._id, serviceSecret: process.env.CRON_SECRET,
+    });
+    await assert.rejects(renameReferencedVenueWithReviewedEvents._handler(context, {
+      ...args, expectedUnboundOccurrences: foreignPlan.map(({ id, updatedAt, snapshotJson }) => ({ id, updatedAt, snapshotJson })),
+    }), /unplanned source occurrence/u, "An explicitly acknowledged row cannot authorize a foreign canonical event reference.");
+    for (const key of Object.keys(historical[0])) delete historical[0][key];
+    Object.assign(historical[0], structuredClone(historicalBefore[0]));
+  }
+  events.push({ _id: "unplanned-event", venueId: candidate._id });
+  await assert.rejects(renameReferencedVenueWithReviewedEvents._handler(context, args), /event set changed/u);
+  events.splice(0);
+  events.push({ _id: "foreign-legacy-binding", venueId: "other-venue", normalizedVenueInstagramHandle: candidate.instagramHandle });
+  await assert.rejects(renameReferencedVenueWithReviewedEvents._handler(context, args), /unplanned legacy event binding/u);
+  events.splice(0);
+  assert.deepEqual(candidate, candidateBefore);
+  assert.equal(writes.length, 0, "All rejected plans must leave the venue, identities, history, and audits untouched.");
+  const result = await renameReferencedVenueWithReviewedEvents._handler(context, args);
+  assert.equal(result.renamed, true);
+  assert.equal(result.eventCount, 0);
+  assert.equal(candidate.name, args.nextName);
+  assert.equal(candidate.location, args.nextLocation);
+  assert.equal(candidate.latitude, candidateBefore.latitude);
+  assert.equal(candidate.longitude, candidateBefore.longitude);
+  assert.equal(candidate.source, candidateBefore.source);
+  assert.equal(candidate.scrapeActive, candidateBefore.scrapeActive);
+  assert.deepEqual(historical, historicalBefore, "A reviewed unbound-only rename must preserve every historical source field byte for byte.");
+  assert.equal(JSON.parse(audits[0].beforeJson).location, candidateBefore.location);
+  assert.equal(JSON.parse(audits[0].afterJson).location, args.nextLocation);
+  assert.deepEqual(JSON.parse(audits[0].afterJson).preservedUnboundOccurrences,
+    [{ id: historical[0]._id, updatedAt: historical[0].updatedAt }]);
+  if (retainedSecret === undefined) delete process.env.CRON_SECRET;
+  else process.env.CRON_SECRET = retainedSecret;
 }
 
 console.log("Venue identity synchronization and reviewed rename occurrence QA passed.");
