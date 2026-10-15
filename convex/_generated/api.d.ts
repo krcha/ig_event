@@ -45,6 +45,7 @@ import type * as instagramSources from "../instagramSources.js";
 import type * as internal_automaticUniqueApproval from "../internal/automaticUniqueApproval.js";
 import type * as internal_automaticUniqueApprovalPreflight from "../internal/automaticUniqueApprovalPreflight.js";
 import type * as internal_automaticUniqueSourceProof from "../internal/automaticUniqueSourceProof.js";
+import type * as internal_automaticUniqueVenueEvidence from "../internal/automaticUniqueVenueEvidence.js";
 import type * as internal_autonomousModerationExecutor from "../internal/autonomousModerationExecutor.js";
 import type * as internal_autonomousModerationRepair from "../internal/autonomousModerationRepair.js";
 import type * as internal_autonomousVenueRepair from "../internal/autonomousVenueRepair.js";
@@ -179,6 +180,7 @@ declare const fullApi: ApiFromModules<{
   "internal/automaticUniqueApproval": typeof internal_automaticUniqueApproval;
   "internal/automaticUniqueApprovalPreflight": typeof internal_automaticUniqueApprovalPreflight;
   "internal/automaticUniqueSourceProof": typeof internal_automaticUniqueSourceProof;
+  "internal/automaticUniqueVenueEvidence": typeof internal_automaticUniqueVenueEvidence;
   "internal/autonomousModerationExecutor": typeof internal_autonomousModerationExecutor;
   "internal/autonomousModerationRepair": typeof internal_autonomousModerationRepair;
   "internal/autonomousVenueRepair": typeof internal_autonomousVenueRepair;
