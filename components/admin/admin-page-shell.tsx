@@ -8,7 +8,8 @@ type AdminSection = "overview" | "scraper" | "venues";
 
 type AdminPageShellProps = {
   title: string;
-  description: string;
+  description?: string;
+  compact?: boolean;
   active: AdminSection;
   children: ReactNode;
 };
@@ -44,6 +45,45 @@ const NAV_ITEMS: Array<{
 ];
 
 export function AdminPageShell(props: AdminPageShellProps) {
+  if (props.compact) {
+    return (
+      <main className="app-page app-page-wide min-w-0">
+        <header className="space-y-4">
+          <div className="flex items-center justify-between gap-4">
+            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+              {props.title}
+            </h1>
+            <Link
+              className="inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-sm text-muted-foreground hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              href="/events"
+            >
+              <CalendarDays aria-hidden="true" className="h-4 w-4" />
+              View site
+            </Link>
+          </div>
+          <nav aria-label="Admin navigation" className="flex gap-1 border-b border-border pb-3 sm:gap-2">
+            {NAV_ITEMS.map((item) => {
+              const isActive = item.id === props.active;
+              const Icon = item.icon;
+              return (
+                <Link
+                  aria-current={isActive ? "page" : undefined}
+                  className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${isActive ? "bg-primary/12 text-primary" : "text-muted-foreground hover:bg-card hover:text-foreground"}`}
+                  href={item.href}
+                  key={item.id}
+                >
+                  <Icon aria-hidden="true" className="h-4 w-4 shrink-0" />
+                  {item.label}
+                </Link>
+              );
+            })}
+          </nav>
+        </header>
+        {props.children}
+      </main>
+    );
+  }
+
   return (
     <main className="app-page app-page-wide">
       <section className="hero-panel relative">
