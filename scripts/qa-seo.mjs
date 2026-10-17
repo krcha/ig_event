@@ -13,6 +13,7 @@ import {
   buildEventStartDate,
   buildEventStructuredData,
   buildHomePageStructuredData,
+  buildVenueOpeningHoursSpecification,
   buildVenueStructuredData,
   serializeJsonLd,
 } from "../lib/seo/site.ts";
@@ -83,6 +84,119 @@ for (const time of [
     "Missing, invalid, or unsupported times must not invent a precise start.",
   );
 }
+
+for (const date of ["", "2026-02-30", "2025-02-29", "2026-13-01", "2026-00-01", "2026-1-01", "2026-10-17T20:00:00Z"]) {
+  assert.equal(buildEventStartDate(date, "20:00"), null, `Invalid real calendar date '${date}' must not become schema.`);
+  assert.equal(buildEventStructuredData({
+    _id: "invalid-date", artists: [], date, eventType: "Culture", title: "Invalid date", venue: "Gallery", time: "20:00-22:00",
+  }), null, "A page must omit Event schema when its actual occurrence date is invalid.");
+}
+assert.equal(buildEventStartDate("2028-02-29", "20:00"), "2028-02-29T20:00:00+01:00");
+
+for (const [date, time, startDate, endDate] of [
+  ["2026-12-31", "23:00-02:00", "2026-12-31T23:00:00+01:00", "2027-01-01T02:00:00+01:00"],
+  ["2026-03-28", "22:00-03:30", "2026-03-28T22:00:00+01:00", "2026-03-29T03:30:00+02:00"],
+  ["2026-10-24", "22:00-03:30", "2026-10-24T22:00:00+02:00", "2026-10-25T03:30:00+01:00"],
+  ["2026-10-25", "02:15-02:45", "2026-10-25T02:15:00", "2026-10-25T02:45:00"],
+  ["2026-10-25", "02:45-02:15", "2026-10-25T02:45:00", undefined],
+  ["2026-03-29", "02:30-03:30", "2026-03-29", undefined],
+  ["2026-03-29", "01:30-02:30", "2026-03-29T01:30:00+01:00", undefined],
+  ["2026-10-17", "20:00-20:00", "2026-10-17T20:00:00+02:00", undefined],
+]) {
+  const schema = buildEventStructuredData({
+    _id: "schema-date-boundary", artists: [], date, time, eventType: "Club", title: "Clock boundary", venue: "Club",
+  });
+  assert.equal(schema.startDate, startDate);
+  assert.equal(schema.endDate, endDate, "End dates must cross midnight and DST independently without selecting an ambiguous instant.");
+}
+
+const hoursFixture = (weekly, overrides = {}) => ({
+  hoursJson: JSON.stringify({
+    generatedAt: "2026-10-17T10:00:00.000Z", source: "manual", timezone: "Europe/Belgrade", version: 1,
+    weekly, ...overrides,
+  }),
+  hoursSource: "manual",
+  hoursTimezone: "Europe/Belgrade",
+});
+const openingSpecification = (day, opens, closes) => ({
+  "@type": "OpeningHoursSpecification", dayOfWeek: `https://schema.org/${day}`, opens, closes,
+});
+const verifiedVenueHours = hoursFixture([
+  { day: 1, closed: true, windows: [] },
+  { day: 2, closed: false, windows: [
+    { day: 2, start: "12:00", end: "14:00" },
+    { day: 2, start: "20:00", end: "02:00", spansNextDay: true },
+  ] },
+  { day: 3, closed: true, windows: [] },
+  { day: 4, closed: false, windows: [] },
+  { day: 5, closed: false, windows: [{ day: 5, start: "00:00", end: "23:59" }] },
+]);
+const expectedVenueHours = [
+  openingSpecification("Tuesday", "12:00", "14:00"),
+  openingSpecification("Tuesday", "20:00", "02:00"),
+  openingSpecification("Friday", "00:00", "23:59"),
+  openingSpecification("Monday", "00:00", "00:00"),
+];
+assert.deepEqual(buildVenueOpeningHoursSpecification(verifiedVenueHours), expectedVenueHours,
+  "Retain multiple periods, overnight closing, 24h, and explicit closed days without inventing missing days or closing overnight carry.");
+
+assert.deepEqual(buildVenueOpeningHoursSpecification(hoursFixture([
+  { day: 6, closed: false, windows: [{ day: 6, start: "22:00", end: "02:00" }] },
+  { day: 0, closed: true, windows: [] },
+])), [openingSpecification("Saturday", "22:00", "02:00")], "Saturday overnight hours must continue into Sunday without a contradictory closed-day entry.");
+assert.deepEqual(buildVenueOpeningHoursSpecification(hoursFixture([
+  { day: 0, closed: false, windows: [{ day: 0, start: "00:00", end: "00:00", spansNextDay: true }] },
+])), [openingSpecification("Sunday", "00:00", "23:59")], "An all-day zero-to-zero source window must not become Google's closed sentinel.");
+assert.deepEqual(buildVenueOpeningHoursSpecification(hoursFixture([
+  { day: 1, closed: false, windows: [{ day: 1, start: "22:00", end: "22:00", spansNextDay: true }] },
+])), [openingSpecification("Monday", "22:00", "00:00"), openingSpecification("Tuesday", "00:00", "22:00")], "A 24h session beginning late in a day retains both midnight portions.");
+assert.deepEqual(buildVenueOpeningHoursSpecification(hoursFixture([
+  { day: 1, closed: false, windows: [{ day: 1, start: "08:00", end: "10:00", spansNextDay: true }] },
+])), [openingSpecification("Monday", "08:00", "00:00"), openingSpecification("Tuesday", "00:00", "10:00")], "An explicit >24h period must not become a two-hour same-day opening.");
+
+for (const invalidHours of [
+  undefined, {}, { hoursJson: "not-json" },
+  hoursFixture([], { source: "none" }),
+  { ...verifiedVenueHours, hoursSource: "none" },
+  { ...verifiedVenueHours, hoursSource: "google" },
+  hoursFixture([], { timezone: "America/New_York" }),
+  hoursFixture([], { timezone: 123 }),
+  { ...verifiedVenueHours, hoursTimezone: "America/New_York" },
+  hoursFixture([{ day: 1, closed: false, windows: [{ day: 1, start: "24:00", end: "02:00" }] }]),
+  hoursFixture([{ day: 1, closed: true, windows: [{ day: 1, start: "broken", end: "02:00" }] }]),
+]) {
+  assert.deepEqual(buildVenueOpeningHoursSpecification(invalidHours), [], "Unverified, invalid, or foreign-timezone schedules must not be asserted as Belgrade place hours.");
+}
+for (const weekly of [
+  [{ day: 1, closed: false, windows: [{ day: 2, start: "20:00", end: "02:00" }] }],
+  [{ day: 1, closed: true, windows: [{ day: 1, start: "20:00", end: "02:00" }] }],
+  [{ day: 1, closed: true, windows: [] }, { day: 1, closed: false, windows: [{ day: 1, start: "20:00", end: "02:00" }] }],
+]) {
+  assert.deepEqual(buildVenueOpeningHoursSpecification(hoursFixture(weekly)), [], "Conflicting or mismatched weekday records must fail closed.");
+}
+
+for (const [time, timeStatus, expectedStart, expectedEnd] of [
+  [undefined, undefined, "2026-10-17", undefined],
+  ["TBD", "unknown", "2026-10-17", undefined],
+  ["22:00-02:00", "unknown", "2026-10-17", undefined],
+  ["22:00-02:00", "inferred", "2026-10-17", undefined],
+  ["22:00", "confirmed", "2026-10-17T22:00:00+02:00", undefined],
+  ["22:00-02:00", "confirmed", "2026-10-17T22:00:00+02:00", "2026-10-18T02:00:00+02:00"],
+  ["22:00-02:00", undefined, "2026-10-17T22:00:00+02:00", "2026-10-18T02:00:00+02:00"],
+]) {
+  const schema = buildEventStructuredData({
+    _id: "schema-venue-hours", artists: [], date: "2026-10-17", time, timeStatus,
+    eventType: "Club", title: "Announced event", venue: "Club", venueHours: verifiedVenueHours,
+    displayTimeStart: "20:00", displayTimeEnd: "02:00", displayTimeLabel: "20:00–02:00",
+  });
+  assert.equal(schema.startDate, expectedStart, "Venue/presentation hours must never fabricate an Event start.");
+  assert.equal(schema.endDate, expectedEnd, "Only an announced canonical range can produce an Event end.");
+  assert.deepEqual(schema.location.openingHoursSpecification, expectedVenueHours, "Place hours remain attached to the location even when the event start is unknown.");
+  assert.equal("openingHoursSpecification" in schema, false, "Business hours belong to Place, never Event.");
+}
+assert.deepEqual(buildVenueStructuredData({
+  _id: "venue-hours", instagramHandle: "club", name: "Club", ...verifiedVenueHours,
+}).openingHoursSpecification, expectedVenueHours, "Venue LocalBusiness and Event Place must share the same sourced weekly hours.");
 
 for (const [description, time, age, endDate] of [
   ["For ages 5–8; led by Marija Nikolić.", "12:00-13:30", "5-8", "2026-10-17T13:30:00+02:00"],

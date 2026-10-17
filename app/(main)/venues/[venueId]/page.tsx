@@ -12,6 +12,7 @@ import {
   MapPin,
 } from "lucide-react";
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
+import { VenueWeeklyHours } from "@/components/venues/venue-weekly-hours";
 import { JsonLd } from "@/components/seo/json-ld";
 import {
   loadPublicVenuePage,
@@ -503,6 +504,8 @@ export default async function VenuePage({ params }: VenuePageProps) {
                 </div>
               </div>
             </article>
+
+            <VenueWeeklyHours className="max-w-xl" hoursJson={venue.hoursJson} hoursSource={venue.hoursSource} />
 
             <section aria-label={`${venue.name} event posts`} id="posts">
               <div className="flex items-center justify-center border-b border-border/75">

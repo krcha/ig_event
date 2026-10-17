@@ -1,5 +1,9 @@
 import { getVenueCoordinates } from "../venues/coordinates.ts";
 import { getEventAgeRange } from "../events/event-session.ts";
+import {
+  parseVenueHoursJson,
+  type VenueHoursCacheFields,
+} from "../venues/venue-hours-cache.ts";
 
 export const SITE_NAME = "Event Zeka";
 export const SITE_ORIGIN = "https://eventzeka.com";
@@ -35,15 +39,17 @@ type EventStructuredDataInput = {
   imageUrl?: string;
   ticketPrice?: string;
   time?: string;
+  timeStatus?: "confirmed" | "inferred" | "unknown" | null;
   title: string;
   venue: string;
   venueId?: string;
+  venueHours?: VenueHoursCacheFields | null;
   venueLatitude?: number;
   venueLocation?: string;
   venueLongitude?: number;
 };
 
-type VenueStructuredDataInput = {
+type VenueStructuredDataInput = VenueHoursCacheFields & {
   _id: string;
   category?: string | null;
   instagramHandle: string;
@@ -53,6 +59,13 @@ type VenueStructuredDataInput = {
   longitude?: number | null;
   name: string;
   neighborhood?: string | null;
+};
+
+type OpeningHoursSpecification = {
+  "@type": "OpeningHoursSpecification";
+  dayOfWeek: string;
+  opens: string;
+  closes: string;
 };
 
 type EventStructuredData = {
@@ -83,6 +96,7 @@ type EventStructuredData = {
       longitude: number;
     };
     name: string;
+    openingHoursSpecification?: OpeningHoursSpecification[];
   };
   name: string;
   performer?: Array<{ "@type": "Person"; name: string }>;
@@ -115,6 +129,7 @@ type VenueStructuredData = {
   };
   hasMap: string;
   name: string;
+  openingHoursSpecification?: OpeningHoursSpecification[];
   sameAs?: string[];
   url: string;
 };
@@ -146,15 +161,29 @@ export function clipText(value: string | null | undefined, maxLength: number): s
   return `${(lastSpace >= Math.floor(maxLength * 0.7) ? clipped.slice(0, lastSpace) : clipped).trim()}…`;
 }
 
-function parseEventTime(value: string | null | undefined): string | null {
+function parseEventTime(value: string | null | undefined): {
+  start: string;
+  end?: string;
+} | null {
   const match = value
     ?.trim()
-    .match(/^([01]?\d|2[0-3]):([0-5]\d)(?:\s*[-–—]\s*(?:[01]?\d|2[0-3]):[0-5]\d)?$/);
+    .match(/^([01]?\d|2[0-3]):([0-5]\d)(?:\s*[-–—]\s*([01]?\d|2[0-3]):([0-5]\d))?$/);
   if (!match) {
     return null;
   }
 
-  return `${match[1].padStart(2, "0")}:${match[2]}`;
+  return {
+    start: `${match[1].padStart(2, "0")}:${match[2]}`,
+    ...(match[3] ? { end: `${match[3].padStart(2, "0")}:${match[4]}` } : {}),
+  };
+}
+
+function isValidEventDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const timestamp = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value;
 }
 
 const belgradeDateTimeFormatter = new Intl.DateTimeFormat("en-US", {
@@ -197,8 +226,11 @@ function getBelgradeUtcOffsets(date: string, time: string): string[] {
   });
 }
 
-export function buildEventStartDate(date: string, time?: string): string {
-  const normalizedTime = parseEventTime(time);
+export function buildEventStartDate(date: string, time?: string): string | null {
+  if (!isValidEventDate(date)) {
+    return null;
+  }
+  const normalizedTime = parseEventTime(time)?.start;
   if (!normalizedTime) {
     return date;
   }
@@ -215,18 +247,109 @@ export function buildEventStartDate(date: string, time?: string): string {
 }
 
 function buildEventEndDate(date: string, time?: string): string | null {
-  const range = time?.trim().match(/^([01]?\d|2[0-3]):([0-5]\d)\s*[-–—]\s*([01]?\d|2[0-3]):([0-5]\d)$/);
-  if (!range) return null;
-  const start = Number(range[1]) * 60 + Number(range[2]);
-  const end = Number(range[3]) * 60 + Number(range[4]);
+  const range = parseEventTime(time);
+  if (!range?.end || !isValidEventDate(date)) return null;
+  const startDate = buildEventStartDate(date, range.start);
+  if (!startDate?.includes("T")) return null;
+  const start = readClockMinutes(range.start);
+  const end = readClockMinutes(range.end);
   if (start === end) return null;
-  const dayTimestamp = Date.parse(`${date}T12:00:00Z`);
-  if (!Number.isFinite(dayTimestamp)) return null;
+  // During the repeated autumn hour a lower closing clock can refer to the
+  // second occurrence of that hour or to tomorrow. The source does not decide.
+  if (end < start && getBelgradeUtcOffsets(date, range.start).length > 1 &&
+    getBelgradeUtcOffsets(date, range.end).length > 1) return null;
+  const dayTimestamp = Date.parse(`${date}T00:00:00Z`);
   const endDay = end < start
     ? new Date(dayTimestamp + 86_400_000).toISOString().slice(0, 10)
     : date;
-  const value = buildEventStartDate(endDay, `${range[3]}:${range[4]}`);
-  return value.includes("T") ? value : null;
+  const value = buildEventStartDate(endDay, range.end);
+  return value?.includes("T") ? value : null;
+}
+
+function readClockMinutes(value: string): number {
+  const [hour, minute] = value.split(":").map(Number);
+  return hour * 60 + minute;
+}
+
+const SCHEMA_WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/** Publish sourced weekly place hours separately from an event's announced time. */
+export function buildVenueOpeningHoursSpecification(
+  venueHours: VenueHoursCacheFields | null | undefined,
+): OpeningHoursSpecification[] {
+  const hours = parseVenueHoursJson(venueHours?.hoursJson);
+  if (!hours || hours.source === "none" || venueHours?.hoursSource === "none" ||
+    hours.timezone !== BELGRADE_TIME_ZONE ||
+    (venueHours?.hoursSource && venueHours.hoursSource !== hours.source) ||
+    (venueHours?.hoursTimezone && venueHours.hoursTimezone !== BELGRADE_TIME_ZONE)) {
+    return [];
+  }
+  // The shared display parser can discard malformed entries. Do not turn a
+  // partly unreadable source schedule into an assertion of complete hours.
+  const raw = JSON.parse(venueHours!.hoursJson!) as {
+    timezone?: unknown;
+    weekly?: Array<{ closed?: unknown; day?: unknown; windows?: Array<{
+      day?: unknown; start?: unknown; end?: unknown; spansNextDay?: unknown;
+    }> }>;
+  };
+  if (raw.timezone !== BELGRADE_TIME_ZONE || !Array.isArray(raw.weekly) ||
+    raw.weekly.length !== hours.weekly.length ||
+    raw.weekly.some((day, index) =>
+      !day || typeof day.closed !== "boolean" || !Array.isArray(day.windows) ||
+      day.windows.length !== hours.weekly[index].windows.length ||
+      day.windows.some((window) => window?.spansNextDay !== undefined &&
+        typeof window.spansNextDay !== "boolean"))) return [];
+  // A conflicting day can affect the next day's overnight carry too; omit the
+  // whole schedule instead of declaring that next day closed from partial data.
+  if (new Set(hours.weekly.map((day) => day.day)).size !== hours.weekly.length ||
+    hours.weekly.some((day) => day.windows.some((window) => window.day !== day.day) ||
+      (day.closed && day.windows.length > 0))) return [];
+
+  const specifications: OpeningHoursSpecification[] = [];
+  const carryDays = new Set<number>();
+  const closedDays: number[] = [];
+  const append = (day: number, opens: string, closes: string) => {
+    specifications.push({
+      "@type": "OpeningHoursSpecification",
+      dayOfWeek: `https://schema.org/${SCHEMA_WEEKDAYS[day]}`,
+      opens,
+      closes,
+    });
+  };
+  for (const day of hours.weekly) {
+    // Missing days remain unknown, rather than closed.
+    if (day.closed) {
+      closedDays.push(day.day);
+      continue;
+    }
+    for (const window of day.windows) {
+      const start = readClockMinutes(window.start);
+      const end = readClockMinutes(window.end);
+      const overnight = window.spansNextDay === true || end <= start;
+      const nextDay = (day.day + 1) % 7;
+      if (overnight && end > 0) carryDays.add(nextDay);
+      if (start === 0 && end === 0) {
+        // Google's all-day convention avoids the 00:00/00:00 closed sentinel.
+        append(day.day, "00:00", "23:59");
+      } else if (overnight && end >= start) {
+        // Equal clocks or an explicit >24h period cannot be encoded as one
+        // same-day schema range; retain the two portions at midnight.
+        append(day.day, window.start, start === 0 ? "23:59" : "00:00");
+        append(nextDay, "00:00", window.end);
+      } else {
+        // A closing clock before opening is Schema.org's overnight notation.
+        append(day.day, window.start, window.end);
+      }
+    }
+  }
+  for (const day of closedDays) {
+    // Source "closed" can mean no session starts that day. An earlier night's
+    // continuing session must not also be marked as closed for the whole day.
+    if (!carryDays.has(day)) append(day, "00:00", "00:00");
+  }
+  return specifications.filter((entry, index) => specifications.findIndex((candidate) =>
+    candidate.dayOfWeek === entry.dayOfWeek && candidate.opens === entry.opens &&
+    candidate.closes === entry.closes) === index);
 }
 
 function isExplicitlyFree(ticketPrice: string | null | undefined): boolean {
@@ -249,11 +372,19 @@ function getStreetAddress(location: string | null | undefined): string | null {
 
 export function buildEventStructuredData(
   event: EventStructuredDataInput,
-): EventStructuredData {
+): EventStructuredData | null {
+  // A display fallback (venue hours or assumed venue closing) is not an
+  // announcement of this event's start/end. Legacy untagged times stay usable.
+  const announcedTime = event.timeStatus === "unknown" || event.timeStatus === "inferred"
+    ? undefined
+    : event.time;
+  const startDate = buildEventStartDate(event.date, announcedTime);
+  if (!startDate) return null;
   const url = absoluteUrl(`/events/${event._id}`);
   const streetAddress = getStreetAddress(event.venueLocation);
   const coordinates = getVenueCoordinates(event.venueLatitude, event.venueLongitude);
   const venueUrl = event.venueId ? absoluteUrl(`/venues/${event.venueId}`) : null;
+  const openingHoursSpecification = buildVenueOpeningHoursSpecification(event.venueHours);
   const location: EventStructuredData["location"] = {
     "@type": "Place",
     ...(venueUrl ? { "@id": `${venueUrl}#place`, url: venueUrl } : {}),
@@ -274,13 +405,14 @@ export function buildEventStructuredData(
         }
       : {}),
     name: event.venue,
+    ...(openingHoursSpecification.length ? { openingHoursSpecification } : {}),
   };
   const description =
     clipText(event.description, 400) ||
     `${event.title} at ${event.venue} in Belgrade on ${event.date}.`;
   const accessibleForFree = isExplicitlyFree(event.ticketPrice);
   const ageRange = getEventAgeRange(event);
-  const endDate = buildEventEndDate(event.date, event.time);
+  const endDate = buildEventEndDate(event.date, announcedTime);
 
   return {
     "@context": "https://schema.org",
@@ -303,7 +435,7 @@ export function buildEventStructuredData(
           })),
         }
       : {}),
-    startDate: buildEventStartDate(event.date, event.time),
+    startDate,
     ...(endDate ? { endDate } : {}),
     ...(ageRange ? { typicalAgeRange: ageRange } : {}),
     url,
@@ -318,6 +450,7 @@ export function buildVenueStructuredData(
   const mapsQuery = [venue.name, locationLabel].filter(Boolean).join(" ");
   const coordinates = getVenueCoordinates(venue.latitude, venue.longitude);
   const url = absoluteUrl(`/venues/${venue._id}`);
+  const openingHoursSpecification = buildVenueOpeningHoursSpecification(venue);
   const instagramUrl =
     venue.instagramProfileUrl?.trim() ||
     (venue.instagramHandle
@@ -353,6 +486,7 @@ export function buildVenueStructuredData(
       ? `https://www.google.com/maps/search/?api=1&query=${coordinates.latitude},${coordinates.longitude}`
       : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`,
     name: venue.name,
+    ...(openingHoursSpecification.length ? { openingHoursSpecification } : {}),
     ...(instagramUrl ? { sameAs: [instagramUrl] } : {}),
     url,
   };

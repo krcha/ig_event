@@ -1,4 +1,5 @@
 import {
+  BELGRADE_TIMEZONE,
   formatVenueHoursWindow,
   parseVenueHoursJson,
   type VenueHoursSource,
@@ -23,7 +24,8 @@ type VenueWeeklyHoursProps = {
 
 export function VenueWeeklyHours({ className, hoursJson, hoursSource }: VenueWeeklyHoursProps) {
   const parsed = parseVenueHoursJson(hoursJson);
-  if (!parsed || !parsed.weekly.some((day) => day.windows.length > 0)) {
+  if (!parsed || parsed.source === "none" || parsed.timezone !== BELGRADE_TIMEZONE ||
+      !parsed.weekly.some((day) => day.closed || day.windows.length > 0)) {
     return null;
   }
 

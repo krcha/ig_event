@@ -22,6 +22,7 @@ import {
   resolveEventTimeDisplay,
   type EventDayPeriod,
   type EventTimeDisplaySource,
+  type EventTimeStatus,
 } from "@/lib/events/event-time";
 import { resolveEventTimePresentation } from "@/lib/events/event-time-presentation";
 import { SaveEventButton } from "@/components/events/save-event-button";
@@ -65,6 +66,7 @@ type EventRecord = {
   title: string;
   date: string;
   time?: string;
+  timeStatus?: EventTimeStatus | null;
   dayPeriod?: EventDayPeriod;
   displayTimeEnd?: string;
   displayTimeLabel?: string;
@@ -385,16 +387,15 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
     ...(venueHref ? [{ name: event.venue, path: venueHref }] : []),
     { name: event.title, path: `/events/${event._id}` },
   ];
+  const eventSchema = buildEventStructuredData({
+    ...event,
+    description: event.description,
+    imageUrl: buildStableEventImageUrl(event) ?? undefined,
+  });
 
   return (
     <main className="app-page gap-3 pb-[calc(9.5rem+env(safe-area-inset-bottom))] md:pb-9">
-      <JsonLd
-        data={buildEventStructuredData({
-          ...event,
-          description: event.description,
-          imageUrl: buildStableEventImageUrl(event) ?? undefined,
-        })}
-      />
+      {eventSchema ? <JsonLd data={eventSchema} /> : null}
       <JsonLd data={buildBreadcrumbStructuredData(breadcrumbItems)} />
       <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
         <Link className="hover:text-primary" href="/">Belgrade events</Link>
