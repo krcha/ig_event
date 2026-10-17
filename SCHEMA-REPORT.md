@@ -3,10 +3,10 @@
 Audit date: 2026-10-17. Scope: public event detail and venue detail pages,
 especially event timestamps and weekly venue hours.
 
-Status: local implementation and focused SEO QA complete. Production deployment
-and public verification are pending; use the subsequent production receipt for
-deployment evidence. This report does not claim Google Rich Results Test or
-Search Console validation.
+Status: release `4718382` is deployed and publicly verified. See
+[the production receipt](docs/schema-markup-production-2026-10-17.md) for build,
+browser and release evidence. This report does not claim Google Rich Results
+Test or Search Console validation.
 
 ## Detection and findings
 
@@ -56,6 +56,9 @@ Validation completed locally:
 - The generated JSON parses, uses absolute canonical identifiers, includes
   sourced weekly periods and preserves the three expected event timestamp cases.
 - Full release QA and production checks are recorded separately during release.
+- All 122 usable sourced schedules in the 578-profile public catalog produced
+  schema, with 788 OpeningHoursSpecification entries and no usable schedules
+  rejected. Sources: 82 Google, 39 manual, one OpenStreetMap.
 
 ## Data limits
 
