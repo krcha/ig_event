@@ -483,7 +483,19 @@ function formatArtistMeta(event: CalendarEventSummary): string | undefined {
 
 function VenueTimeLabel({ label }: { label: string }) {
   return (
-    <span className="block break-words text-[11px] font-normal leading-4 tabular-nums">{label}</span>
+    <span className="block space-y-1 text-center" data-calendar-venue-hours="true">
+      {label.split(", ").map((window, index) => {
+        const [start, end] = window.split("–");
+        return (
+          <span className="block" key={`${window}-${index}`}>
+            <span className="block text-xs font-normal leading-4 tabular-nums text-foreground">{start}</span>
+            {end ? (
+              <span className="block text-[10px] font-normal leading-3 tabular-nums text-muted-foreground">{end}</span>
+            ) : null}
+          </span>
+        );
+      })}
+    </span>
   );
 }
 
@@ -990,7 +1002,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                             prefetch={false}
                           >
                             <span
-                              className={cn("flex-none text-xs font-semibold tabular-nums text-muted-foreground", timePresentation.kind === "venue_hours" ? "w-20 py-1" : "w-16 truncate")}
+                              className={cn("w-16 flex-none text-xs font-semibold tabular-nums text-muted-foreground", timePresentation.kind === "venue_hours" ? "py-1" : "truncate")}
                               title={timePresentation.label}
                             >
                               {timePresentation.kind === "venue_hours"
@@ -1093,7 +1105,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                     ) : timePresentation.kind === "venue_hours" ? (
                       <Link
                         aria-label={getEventAriaLabel(event, tone)}
-                        className="box-border flex min-h-9 w-20 flex-none flex-col items-center justify-center rounded-[0.72rem] border border-border/65 bg-background/45 px-1 py-1 text-center hover:border-primary/35"
+                        className="box-border flex min-h-9 w-16 flex-none flex-col items-center justify-center rounded-[0.72rem] border border-border/65 bg-background/45 px-1 py-1 text-center hover:border-primary/35"
                         data-calendar-event-link="true"
                         href={`/events/${event._id}`}
                         prefetch={false}
@@ -1157,7 +1169,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 <div className={cn("absolute inset-y-4 left-0 w-1 rounded-r-full", tone.rail)} />
                 <div className="flex items-start gap-2.5 pl-1.5">
                   <div className="flex min-w-0 flex-1 items-start gap-2.5">
-                    <div className={cn("flex-none text-right", timePresentation.kind === "venue_hours" ? "w-20" : "w-14")}>
+                    <div className={cn("flex-none text-right", timePresentation.kind === "venue_hours" ? "w-16" : "w-14")}>
                       {displayEventTime ? (
                         <Link
                           aria-label={getEventAriaLabel(event, tone)}
