@@ -62,6 +62,7 @@ import type * as internal_eventRepairs_reviewedFabrikaDjNightEnrichment from "..
 import type * as internal_eventRepairs_reviewedFabrikaProgramEnrichment from "../internal/eventRepairs/reviewedFabrikaProgramEnrichment.js";
 import type * as internal_eventRepairs_reviewedNonPerformerEvidence from "../internal/eventRepairs/reviewedNonPerformerEvidence.js";
 import type * as internal_eventRepairs_reviewedPendingPerformerCorrection from "../internal/eventRepairs/reviewedPendingPerformerCorrection.js";
+import type * as internal_eventRepairs_reviewedPromoterScheduleFold from "../internal/eventRepairs/reviewedPromoterScheduleFold.js";
 import type * as internal_eventRepairs_reviewedPromotionFold from "../internal/eventRepairs/reviewedPromotionFold.js";
 import type * as internal_eventRepairs_reviewedScheduleFold from "../internal/eventRepairs/reviewedScheduleFold.js";
 import type * as internal_eventRepairs_reviewedStructuredCaptionCorrection from "../internal/eventRepairs/reviewedStructuredCaptionCorrection.js";
@@ -128,6 +129,7 @@ import type * as repositories_reconciliationSourceContext from "../repositories/
 import type * as repositories_savedEvents from "../repositories/savedEvents.js";
 import type * as repositories_sourceOccurrenceProvenance from "../repositories/sourceOccurrenceProvenance.js";
 import type * as revertFalseCinemaAutomaticApproval from "../revertFalseCinemaAutomaticApproval.js";
+import type * as reviewedPromoterScheduleFold from "../reviewedPromoterScheduleFold.js";
 import type * as scrapedPosts from "../scrapedPosts.js";
 import type * as sourceConflictReviews from "../sourceConflictReviews.js";
 import type * as sourceOccurrences from "../sourceOccurrences.js";
@@ -197,6 +199,7 @@ declare const fullApi: ApiFromModules<{
   "internal/eventRepairs/reviewedFabrikaProgramEnrichment": typeof internal_eventRepairs_reviewedFabrikaProgramEnrichment;
   "internal/eventRepairs/reviewedNonPerformerEvidence": typeof internal_eventRepairs_reviewedNonPerformerEvidence;
   "internal/eventRepairs/reviewedPendingPerformerCorrection": typeof internal_eventRepairs_reviewedPendingPerformerCorrection;
+  "internal/eventRepairs/reviewedPromoterScheduleFold": typeof internal_eventRepairs_reviewedPromoterScheduleFold;
   "internal/eventRepairs/reviewedPromotionFold": typeof internal_eventRepairs_reviewedPromotionFold;
   "internal/eventRepairs/reviewedScheduleFold": typeof internal_eventRepairs_reviewedScheduleFold;
   "internal/eventRepairs/reviewedStructuredCaptionCorrection": typeof internal_eventRepairs_reviewedStructuredCaptionCorrection;
@@ -263,6 +266,7 @@ declare const fullApi: ApiFromModules<{
   "repositories/savedEvents": typeof repositories_savedEvents;
   "repositories/sourceOccurrenceProvenance": typeof repositories_sourceOccurrenceProvenance;
   revertFalseCinemaAutomaticApproval: typeof revertFalseCinemaAutomaticApproval;
+  reviewedPromoterScheduleFold: typeof reviewedPromoterScheduleFold;
   scrapedPosts: typeof scrapedPosts;
   sourceConflictReviews: typeof sourceConflictReviews;
   sourceOccurrences: typeof sourceOccurrences;

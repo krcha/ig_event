@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 import * as eventFunctions from "../convex/events.ts";
+import {
+  foldReviewedPromoterScheduleDuplicate,
+  getReviewedPromoterScheduleFoldContext,
+} from "../convex/reviewedPromoterScheduleFold.ts";
 import { isCanonicallyGroundedApprovedEvent } from "../convex/publicEventGrounding.ts";
 import { isCrossPostCampaignLineageEvent } from "../lib/events/cross-post-campaign-aggregate-attestation.ts";
 import { sourceOccurrenceRepresentativeMatchesExpected } from "../lib/events/source-occurrence-representation.ts";
@@ -76,6 +80,8 @@ function makeHarness(seed) {
     "events",
     "instagramEventSources",
     "instagramSourceOccurrenceReceipts",
+    "sourceOccurrences",
+    "instagramSources",
     "scrapedPosts",
     "mediaAssets",
     "venues",
@@ -1853,6 +1859,261 @@ async function qaReviewedCrossPostScheduleAdversarialCases() {
   }
 }
 
+function promoterScheduleFoldFixture() {
+  const venue = { _id: "vinyl-venue", _creationTime: 1, name: "Vinyl",
+    instagramHandle: "vinyl.belgrade", normalizedInstagramHandle: "vinyl.belgrade",
+    category: "nightclub", publicStatus: "published", scrapeActive: true,
+    createdAt: 1, updatedAt: 9_000 };
+  const dates = ["2026-10-16", "2026-10-17", "2026-10-18"];
+  const programTitle = "\u0110IR";
+  const keys = ["a", "b", "c", "d"].map((value) => `instagram-occurrence-v2:${value.repeat(64)}`);
+  const promoterFingerprint = `instagram-source-v2:${"d".repeat(64)}`;
+  const scheduleFingerprint = `instagram-source-v2:${"e".repeat(64)}`;
+  const scheduleRow = `Nedelja 18.10; ${programTitle}`;
+  const scheduleCaptionLine = "Nedelja 18.10 - @djir.bg";
+  const rows = dates.map((date, index) => ({ date, time: "TBD", venue: "Vinyl",
+    title: index === 2 ? programTitle : `Independent program ${index + 1}`,
+    artists: [], source_text: index === 2 ? scheduleRow : `${16 + index}.10 Independent program ${index + 1}` }));
+  const scheduleRaw = rawExtraction(rows);
+  const scheduleCaption = `Vikend u Vinylu\nPetak 16.10 - Independent program 1\nSubota 17.10 - Independent program 2\n${scheduleCaptionLine}`;
+  const primary = eventRow({ id: "dj-program-primary", title: "Knezevic Aleksaa, Kukibeats",
+    date: dates[2], time: "TBD", venue: "DJIR", artists: ["Knezevic Aleksaa", "Kukibeats"],
+    description: "DJIR party with Knezevic Aleksaa and Kukibeats.", handle: "djir.bg",
+    postId: "DJIRPRIMARY", caption: `Napravicemo jedan ${programTitle} do grada ti i ja! #${programTitle} #vinyl`,
+    postedAt: "2026-10-12T10:00:00.000Z", occurrenceKey: keys[3],
+    sourceFingerprint: promoterFingerprint, expectedKeys: [keys[3]],
+    raw: rawExtraction(), updatedAt: 9_100 });
+  primary.normalizedFieldsJson = JSON.stringify({ ...JSON.parse(primary.normalizedFieldsJson), multiEventSplitDetected: false });
+  const scheduleEvents = rows.map((row, index) => {
+    const event = eventRow({ id: `vinyl-weekly-${index}`, title: row.title,
+      date: row.date, time: "TBD", venue: "Vinyl", venueId: venue._id,
+      venueHandle: venue.instagramHandle, artists: [], description: row.title,
+      handle: venue.instagramHandle, postId: "VINYLWEEKLY", caption: scheduleCaption,
+      postedAt: "2026-10-15T10:00:00.000Z", occurrenceKey: keys[index],
+      sourceFingerprint: scheduleFingerprint, expectedKeys: keys.slice(0, 3),
+      raw: scheduleRaw, updatedAt: 9_200 + index, splitSourceLine: row.source_text });
+    event.normalizedFieldsJson = JSON.stringify({ ...JSON.parse(event.normalizedFieldsJson),
+      multiEventSplitDetected: true, multiEventSplitCount: 3, splitEventIndex: index + 1,
+      splitEventTotal: 3 });
+    return event;
+  });
+  const [unsatisfied, sibling, duplicate] = scheduleEvents;
+  Object.assign(sibling, { publicationPolicyVersion: 1, publicationState: "publishable",
+    publicationReason: "canonical_source_grounding_verified" });
+  const primaryLink = sourceLink({ id: "dj-primary-link", event: primary,
+    sourceIdentity: "instagram-source-identity-v1:DJIRPRIMARY", sourceFingerprint: promoterFingerprint,
+    handle: "djir.bg", updatedAt: 9_300 });
+  const scheduleLinks = [sibling, duplicate].map((event, index) => sourceLink({
+    id: `vinyl-link-${index}`, event, sourceIdentity: "instagram-source-identity-v1:VINYLWEEKLY",
+    sourceFingerprint: scheduleFingerprint, handle: venue.instagramHandle, updatedAt: 9_310 + index }));
+  const primaryReceipt = receiptRow({ id: "dj-primary-receipt", sourceIdentity: primaryLink.sourceIdentity,
+    sourceFingerprint: promoterFingerprint, events: [primary], updatedAt: 9_400 });
+  const scheduleReceipt = receiptRow({ id: "vinyl-weekly-receipt", sourceIdentity: scheduleLinks[0].sourceIdentity,
+    sourceFingerprint: scheduleFingerprint, events: scheduleEvents, updatedAt: 9_410 });
+  scheduleReceipt.satisfiedKeys = keys.slice(1, 3);
+  scheduleReceipt.satisfiedOccurrences = [sibling, duplicate].map((event) => ({ key: event.sourceOccurrenceKey, eventId: event._id }));
+  function sourceOccurrence(event, link, ordinal, id, satisfied = true) {
+    const factsJson = JSON.stringify({ artistClaims: event.artists, localDate: event.date,
+      titleClaim: event.title, venueClaim: event.venue, eventTypeClaim: event.eventType,
+      timeRelation: "unknown", evidence: [{ field: "title", source: "caption", exactText: event.title }],
+      policy: { approvalDisposition: "approved", pendingReasons: [], signals: [], structuredEvidenceVerified: true } });
+    const canonicalEventJson = JSON.stringify({ normalizedFieldsJson: event.normalizedFieldsJson,
+      requestedStatus: "approved", sourceConflictFields: [], time: "TBD", timeConfidence: 0,
+      timeSource: "unknown", timeStatus: "unknown", timeEvidenceKind: "unreadable" });
+    const receipt = link.sourceIdentity === primaryLink.sourceIdentity ? primaryReceipt : scheduleReceipt;
+    const expected = receipt.expectedOccurrences.find(({ key }) => key === event.sourceOccurrenceKey);
+    Object.assign(expected, { factsJson, canonicalEventJson });
+    return { _id: id, _creationTime: 1, provider: "instagram", sourceDocumentId: `${link.sourceIdentity}-post`,
+      sourceIdentity: link.sourceIdentity, sourceFingerprint: link.sourceFingerprint,
+      canonicalSourceUrl: event.instagramPostUrl, sourceRevision: 1, sourceOccurrenceKey: event.sourceOccurrenceKey,
+      occurrenceOrdinal: ordinal, factsJson, canonicalEventJson, normalizedOccurrenceJson: JSON.stringify(expectedOccurrence(event)),
+      venueResolutionStatus: "resolved", ...(event.venueId ? { venueId: event.venueId } : {}),
+      ...(satisfied ? { canonicalEventId: event._id } : {}), state: satisfied ? "satisfied" : "expected",
+      occurrenceSignatureVersion: 1, occurrenceSignatureHash: `signature-${id}`, occurrenceDateKey: event.date,
+      occurrenceVenueIdentity: event.venue, occurrenceTimeIdentity: "unknown-time", occurrenceTitleFamily: event.title,
+      occurrenceArtistFingerprint: event.artists.join("+"), occurrenceEventType: event.eventType,
+      createdAt: 1, updatedAt: 9_500 + ordinal };
+  }
+  const primaryOccurrence = sourceOccurrence(primary, primaryLink, 0, "dj-primary-occurrence");
+  const scheduleOccurrences = scheduleEvents.map((event, index) => sourceOccurrence(event,
+    scheduleLinks.find((link) => link.eventId === event._id) ?? scheduleLinks[0], index,
+    `vinyl-occurrence-${index}`, index !== 0));
+  scheduleOccurrences[0].state = "superseded";
+  primaryLink.sourceOccurrenceId = primaryOccurrence._id;
+  scheduleLinks.forEach((link) => { link.sourceOccurrenceId = scheduleOccurrences.find((row) => row.canonicalEventId === link.eventId)._id; });
+  const harness = makeHarness({ events: [primary, sibling, duplicate], venues: [venue],
+    instagramEventSources: [primaryLink, ...scheduleLinks],
+    instagramSourceOccurrenceReceipts: [primaryReceipt, scheduleReceipt],
+    sourceOccurrences: [primaryOccurrence, ...scheduleOccurrences],
+    instagramSources: [{ _id: "djir-source", handle: "djir.bg", role: "venue", active: true, updatedAt: 1 }],
+    scrapedPosts: [primary, duplicate].map((event, index) => persistedPost({
+      id: `${index === 0 ? primaryLink.sourceIdentity : scheduleLinks[1].sourceIdentity}-post`,
+      handle: index === 0 ? "djir.bg" : venue.instagramHandle, postId: event.instagramPostId,
+      caption: event.sourceCaption, postedAt: event.sourcePostedAt, raw: event.rawExtractionJson })),
+    savedEvents: [{ _id: "primary-same-save", userId: "same", eventId: primary._id, createdAt: 1 },
+      { _id: "duplicate-same-save", userId: "same", eventId: duplicate._id, createdAt: 2 },
+      { _id: "duplicate-new-save", userId: "different", eventId: duplicate._id, createdAt: 3 }],
+    userSavedEvents: [{ _id: "duplicate-legacy-save", userId: "legacy", eventId: duplicate._id, createdAt: 4 }] });
+  return { harness, venue, primary, duplicate, sibling, unsatisfied, primaryLink,
+    duplicateLink: scheduleLinks[1], primaryReceipt, scheduleReceipt, primaryOccurrence,
+    duplicateOccurrence: scheduleOccurrences[2], scheduleOccurrences, scheduleRow, scheduleCaptionLine, programTitle };
+}
+
+function promoterScheduleFoldArgs(fixture) {
+  const sourceVersion = (link, receipt, occurrence) => ({ sourceLinkId: link._id,
+    sourceLinkUpdatedAt: link.updatedAt, receiptId: receipt._id, receiptUpdatedAt: receipt.updatedAt,
+    sourceOccurrenceId: occurrence._id, sourceOccurrenceUpdatedAt: occurrence.updatedAt });
+  return { operationId: "reviewed-promoter-fold:djir-2026-10-18", primaryId: fixture.primary._id,
+    expectedPrimaryUpdatedAt: fixture.primary.updatedAt,
+    expectedPrimaryNormalizedFieldsJson: fixture.primary.normalizedFieldsJson,
+    primarySource: sourceVersion(fixture.primaryLink, fixture.primaryReceipt, fixture.primaryOccurrence),
+    duplicateId: fixture.duplicate._id, expectedDuplicateUpdatedAt: fixture.duplicate.updatedAt,
+    expectedDuplicateNormalizedFieldsJson: fixture.duplicate.normalizedFieldsJson,
+    duplicateSource: sourceVersion(fixture.duplicateLink, fixture.scheduleReceipt, fixture.duplicateOccurrence),
+    expectedPrimarySourceHandle: "djir.bg", expectedScheduleSourceHandle: "vinyl.belgrade",
+    targetVenueId: fixture.venue._id, expectedTargetVenueUpdatedAt: fixture.venue.updatedAt,
+    expectedTargetVenueHandle: fixture.venue.instagramHandle, nextVenue: "Vinyl", programTitle: fixture.programTitle,
+    nextTitle: fixture.programTitle, expectedScheduleRow: fixture.scheduleRow,
+    expectedScheduleCaptionLine: fixture.scheduleCaptionLine,
+    nextDescription: "DJIR at Vinyl with Knezevic Aleksaa and Kukibeats.",
+    moderationNote: "Reviewed the promoter caption and the exact Vinyl Sunday schedule row and account mention as the same occurrence.",
+    serviceSecret: process.env.CRON_SECRET };
+}
+
+async function qaReviewedPromoterScheduleFold() {
+  const fixture = promoterScheduleFoldFixture();
+  const { harness } = fixture;
+  const before = harness.snapshot();
+  const contextArgs = { operationId: promoterScheduleFoldArgs(fixture).operationId,
+    primaryId: fixture.primary._id, duplicateId: fixture.duplicate._id,
+    targetVenueId: fixture.venue._id, serviceSecret: process.env.CRON_SECRET };
+  await assert.rejects(getReviewedPromoterScheduleFoldContext._handler(harness.serviceCtx,
+    { ...contextArgs, serviceSecret: "wrong" }), /./u);
+  const context = await getReviewedPromoterScheduleFoldContext._handler(harness.serviceCtx, contextArgs);
+  assert.equal(context.primary.sources[0].occurrence._id, fixture.primaryOccurrence._id);
+  assert.equal(context.duplicate.sources[0].receipt.expectedKeys.length, 3);
+  assert.equal(context.duplicate.sources[0].receipt.satisfiedKeys.length, 2);
+  assert.equal(context.targetVenue._id, fixture.venue._id);
+  for (const event of [fixture.primary, fixture.duplicate, fixture.sibling]) {
+    assert.equal(await isCanonicallyGroundedApprovedEvent(harness.serviceCtx, event), true);
+  }
+  const result = await invokeAtomically(foldReviewedPromoterScheduleDuplicate, harness, promoterScheduleFoldArgs(fixture));
+  assert.equal(result.primaryId, fixture.primary._id);
+  assert.equal(result.duplicateId, fixture.duplicate._id);
+  const primary = harness.tables.events.get(fixture.primary._id);
+  const duplicate = harness.tables.events.get(fixture.duplicate._id);
+  assert.equal(primary.status, "approved");
+  assert.equal(primary.publicationState, "publishable", "The corrected primary must remain publicly discoverable.");
+  assert.equal(primary.title, fixture.programTitle);
+  assert.equal(primary.venue, "Vinyl");
+  assert.equal(primary.venueId, fixture.venue._id);
+  assert.equal(primary.time, "TBD", "A venue profile's generic opening hours cannot become this event's time.");
+  assert.equal(primary.timeSource, "unknown");
+  assert.deepEqual(primary.artists, fixture.primary.artists, "Promoter billing must not be erased by the sparse weekly row.");
+  assert.equal(duplicate.status, "rejected");
+  assert.equal(isCrossPostCampaignLineageEvent(primary), false,
+    "A fold with both complete source bindings uses the ordinary provenance contract.");
+  assert.equal(await isCanonicallyGroundedApprovedEvent(harness.serviceCtx, primary), true);
+  for (const event of [fixture.primary, fixture.duplicate]) {
+    const final = harness.tables.events.get(event._id);
+    for (const field of ["instagramPostId", "instagramPostUrl", "sourceCaption", "sourcePostedAt", "rawExtractionJson", "sourceOccurrenceKey"]) {
+      assert.equal(final[field], event[field], `Immutable event ${field} changed.`);
+    }
+  }
+  const finalSibling = harness.tables.events.get(fixture.sibling._id);
+  for (const [field, value] of Object.entries(fixture.sibling)) {
+    assert.deepEqual(finalSibling[field], value, `Saturday source/public field ${field} must not change.`);
+  }
+  assert.deepEqual(harness.tables.sourceOccurrences.get(fixture.scheduleOccurrences[0]._id), fixture.scheduleOccurrences[0]);
+  assert.deepEqual(harness.tables.sourceOccurrences.get(fixture.scheduleOccurrences[1]._id), fixture.scheduleOccurrences[1]);
+  for (const occurrence of [fixture.primaryOccurrence, fixture.duplicateOccurrence]) {
+    const final = harness.tables.sourceOccurrences.get(occurrence._id);
+    assert.equal(final.canonicalEventId, fixture.primary._id);
+    assert.equal(final.state, "satisfied");
+    assert.equal(final.venueId, fixture.venue._id);
+    for (const field of ["factsJson", "canonicalEventJson", "sourceFingerprint", "sourceRevision", "sourceOccurrenceKey", "canonicalSourceUrl"]) {
+      assert.equal(final[field], occurrence[field], `Observed occurrence ${field} must remain immutable.`);
+    }
+    const expected = JSON.parse(final.normalizedOccurrenceJson);
+    assert.equal(sourceOccurrenceRepresentativeMatchesExpected(primary, expected), true);
+  }
+  for (const [receiptBefore, key] of [[fixture.primaryReceipt, fixture.primary.sourceOccurrenceKey], [fixture.scheduleReceipt, fixture.duplicate.sourceOccurrenceKey]]) {
+    const receipt = assertReceiptComplete(harness, receiptBefore._id);
+    assert.deepEqual(receipt.expectedKeys, receiptBefore.expectedKeys);
+    assert.deepEqual(receipt.satisfiedKeys, receiptBefore.satisfiedKeys);
+    assert.deepEqual(receipt.expectedOccurrences.filter((row) => row.key !== key), receiptBefore.expectedOccurrences.filter((row) => row.key !== key));
+    assert.deepEqual(receipt.satisfiedOccurrences.filter((row) => row.key !== key), receiptBefore.satisfiedOccurrences.filter((row) => row.key !== key));
+    const expected = receipt.expectedOccurrences.find((row) => row.key === key);
+    const original = receiptBefore.expectedOccurrences.find((row) => row.key === key);
+    assert.equal(expected.factsJson, original.factsJson);
+    assert.equal(expected.canonicalEventJson, original.canonicalEventJson);
+    assert.equal(expected.title, fixture.programTitle);
+    assert.equal(expected.venue, "Vinyl");
+    assert.deepEqual(expected.artists, fixture.primary.artists);
+    assert.equal(receipt.satisfiedOccurrences.find((row) => row.key === key).eventId, fixture.primary._id);
+  }
+  assert.equal(harness.tables.instagramSourceOccurrenceReceipts.get(fixture.scheduleReceipt._id).expectedKeys.length, 3);
+  assert.equal(harness.tables.instagramSourceOccurrenceReceipts.get(fixture.scheduleReceipt._id).satisfiedKeys.length, 2);
+  for (const link of [fixture.primaryLink, fixture.duplicateLink]) {
+    const final = harness.tables.instagramEventSources.get(link._id);
+    assert.equal(final.eventId, fixture.primary._id);
+    for (const field of ["sourceIdentity", "sourceFingerprint", "sourceOccurrenceId", "sourceOccurrenceKey", "instagramPostUrl"]) assert.equal(final[field], link[field]);
+  }
+  assert.equal([...harness.tables.savedEvents.values()].filter((row) => row.eventId === fixture.primary._id).length, 2);
+  assert.equal([...harness.tables.userSavedEvents.values()].filter((row) => row.eventId === fixture.primary._id).length, 1);
+  assert.equal([...harness.tables.savedEvents.values()].some((row) => row.eventId === fixture.duplicate._id), false);
+  assert.equal([...harness.tables.userSavedEvents.values()].some((row) => row.eventId === fixture.duplicate._id), false);
+  assert.equal([...harness.tables.eventAuditLog.values()].filter((row) => row.eventId === fixture.primary._id).length > 0, true);
+  const epoch = [...harness.tables.sourceOccurrenceTopologyEpoch.values()][0];
+  assert.equal(epoch.currentEpoch, epoch.verifiedEpoch);
+  assert.ok(harness.operations.length > before.operations.length);
+  const finalContext = await getReviewedPromoterScheduleFoldContext._handler(harness.serviceCtx, contextArgs);
+  assert.equal(finalContext.primary.sources.length, 2);
+  assert.equal(finalContext.duplicate.sources.length, 0);
+  assert.equal(finalContext.primary.audits.length, 1);
+  assert.equal(finalContext.duplicate.audits.length, 1);
+  const after = harness.snapshot();
+  await assert.rejects(invokeAtomically(foldReviewedPromoterScheduleDuplicate, harness, promoterScheduleFoldArgs(fixture)), /precondition|approved|changed|lineage|already/iu);
+  assert.deepEqual(harness.snapshot(), after, "Replayed stale repairs must not change any row.");
+}
+
+async function qaReviewedPromoterScheduleFoldAdversarialCases() {
+  const cases = [
+    ["service authentication", (_f, args) => { args.serviceSecret = "wrong"; }],
+    ...["Primary", "Duplicate"].flatMap((name) => [
+      [`stale ${name} event revision`, (_f, args) => { args[`expected${name}UpdatedAt`] += 1; }],
+      [`stale ${name} normalized evidence`, (_f, args) => { args[`expected${name}NormalizedFieldsJson`] = "{}"; }],
+      ...["sourceLinkUpdatedAt", "receiptUpdatedAt", "sourceOccurrenceUpdatedAt"].map((field) =>
+        [`stale ${name} ${field}`, (_f, args) => { args[`${name.toLowerCase()}Source`][field] += 1; }]),
+    ]),
+    ["wrong physical venue revision", (_f, args) => { args.expectedTargetVenueUpdatedAt += 1; }],
+    ["wrong physical venue identity", (_f, args) => { args.expectedTargetVenueHandle = "other.venue"; }],
+    ["wrong source account", (_f, args) => { args.expectedPrimarySourceHandle = "another.promoter"; }],
+    ["weekly source must own target venue", (_f, args) => { args.expectedScheduleSourceHandle = "unrelated.weekly"; }],
+    ["neighboring weekly row", (_f, args) => { args.expectedScheduleRow = "Subota 17.10; DJIR"; }],
+    ["wrong local caption date", (_f, args) => { args.expectedScheduleCaptionLine = "Subota 17.10 - @djir.bg"; }],
+    ["wrong mentioned promoter", (_f, args) => { args.expectedScheduleCaptionLine = "Nedelja 18.10 - @other.promoter"; }],
+    ["arbitrary replacement title", (_f, args) => { args.nextTitle = "Unrelated Event"; }],
+    ["unrelated claimed program", (_f, args) => { args.programTitle = "Unrelated Event"; }],
+    ["missing review evidence", (_f, args) => { args.moderationNote = ""; }],
+    ["different event dates", (f) => { f.harness.tables.events.get(f.duplicate._id).date = "2026-10-19"; }],
+    ["confirmed time cannot silently become TBD", (f) => { f.harness.tables.events.get(f.primary._id).time = "22:00"; }],
+    ["ungrounded promoter source", (f) => { f.harness.tables.scrapedPosts.clear(); }],
+    ["crossed occurrence binding", (f) => { f.harness.tables.sourceOccurrences.get(f.duplicateOccurrence._id).canonicalEventId = f.primary._id; }],
+    ["ambiguous source receipt", (f) => { const receipt = clone(f.primaryReceipt); receipt._id = "extra-receipt"; f.harness.tables.instagramSourceOccurrenceReceipts.set(receipt._id, receipt); }],
+    ["unretired expired weekly row blocks publication", (f) => { f.harness.tables.sourceOccurrences.get(f.scheduleOccurrences[0]._id).state = "expected"; }, /publication/iu],
+    ["another approved same-date program", (f) => { const other = clone(f.duplicate); other._id = "another-approved-program"; f.harness.tables.events.set(other._id, other); }],
+  ];
+  for (const [label, mutate, error = /./u] of cases) {
+    const fixture = promoterScheduleFoldFixture();
+    const args = promoterScheduleFoldArgs(fixture);
+    mutate(fixture, args);
+    const before = fixture.harness.snapshot();
+    await assert.rejects(invokeAtomically(foldReviewedPromoterScheduleDuplicate, fixture.harness, args), error, label);
+    assert.deepEqual(fixture.harness.snapshot(), before, `${label} must leave the full transaction unchanged.`);
+  }
+}
+
 async function qaSourceContracts() {
   const eventsSource = await readFile(new URL("../convex/events.ts", import.meta.url), "utf8");
   const protectedDomainSource = (
@@ -2044,6 +2305,8 @@ try {
   await qaSkiFold();
   await qaBenAdversarialCases();
   await qaBenFold();
+  await qaReviewedPromoterScheduleFoldAdversarialCases();
+  await qaReviewedPromoterScheduleFold();
   console.log(
     "QA passed: reviewed folds preserve receipt keys, source links, optimistic revisions, grounding, saves, and immutable lineage.",
   );
