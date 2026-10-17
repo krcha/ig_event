@@ -1,0 +1,1269 @@
+{
+  "version": 1,
+  "reviewedAt": "2026-10-17T20:02:19.628539+00:00",
+  "sourceHandle": "eventzeka",
+  "scope": "Add exact missing followed accounts through the existing pending discovery lifecycle; attach one proven current account to an existing venue. This is not a publication or physical-business classification operation.",
+  "followingEvidence": {
+    "checkedAt": "2026-10-17T20:01:32.228659+00:00",
+    "complete": false,
+    "readOnly": true,
+    "sourceHandle": "eventzeka",
+    "sources": {
+      "authenticatedUiObservedDistinct": 501,
+      "authenticatedUiListingObserved": 480,
+      "authenticatedUiAdditionalDistinctSearchResults": 21,
+      "freshApifyRunId": "jhE2Ly64VOh5BgH5F",
+      "freshApifyUniqueCount": 590
+    },
+    "confirmedCurrentUnionCount": 679,
+    "reportedAuthenticatedProfileFollowingCountAfterRefresh": 680,
+    "profileRefreshCheckedAt": "2026-10-17T20:01:11.435Z",
+    "historicalPaddingUsed": false,
+    "oldKnownHandleNotYetConfirmed": [
+      "irishpubcrazyhorse"
+    ],
+    "notes": [
+      "Twenty formerly uncovered handles positively observed through Following search, plus the_three_carrots already in fresh dataset.",
+      "Exact punctuation searches may fail: 20_44 returned20_44.nightclub; berlinmonroe returnedberlinmonroe_craftroom.",
+      "Irish Pub search exact/crazyhorse/crazy/horse/crazy horse had no settled result; irish returned onlythe_three_carrots.",
+      "Continuing actual list enumeration; do not label this679 snapshot complete."
+    ]
+  },
+  "inputHashes": {
+    "verifiedFollowingSha256": "34aeced40f70b7f4e8954a577b62ca14f2014e81ea34b7cbbf4c6300c385b950",
+    "collisionReviewSha256": "66212642710ad94cdc1251929aec246da78bb1ac5be0d71dec65291223cb831a",
+    "collisionResolutionSha256": "447e4c292f986b3ed63ac4a5cc3f456f047a0339894500cf628d3eefa8e03533",
+    "operatorDatasetSha256": "be1af6ce418b95fff55ba9abc7f08366d08bbaf445aa3bdbef711eb7c5a7c5b2"
+  },
+  "counts": {
+    "reviewedExistingVenues": 644,
+    "reviewedExistingSources": 693,
+    "newPendingProfiles": 52,
+    "providerAliases": 1,
+    "heldPotentialDuplicates": 5
+  },
+  "creates": [
+    {
+      "fields": {
+        "name": "BreakFree Bar",
+        "instagramHandle": "breakfree_beograd",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Current owner profile explicitly identifies Break Free Bar in Belgrade and offers cocktails/tea/whisky. Beijing describes founder experience, not current venue city.",
+        "checkedAt": "2026-10-17T19:35:30.864439+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/breakfree_beograd/"
+        ]
+      },
+      "venueId": "k17exv26yxbrqkthk3bpygfc818gf8m6"
+    },
+    {
+      "fields": {
+        "name": "Mr. Stefan Braun",
+        "instagramHandle": "mrstefanbraun_official",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Current owner describes an operating club/new season. Official club contact page names Nemanjina4,9thfloor.",
+        "checkedAt": "2026-10-17T19:35:30.864832+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/mrstefanbraun_official/",
+          "https://www.mrstefanbraun.rs/kontakt"
+        ]
+      },
+      "venueId": "k176gheeveng9yb2pz1cv8a0m58gesnd"
+    },
+    {
+      "fields": {
+        "name": "FEF - Festival Epske Fantastike \ud83d\udde1\ufe0f",
+        "instagramHandle": "festivalepskefantastike",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "event_brand",
+        "geography": "Belgrade",
+        "summary": "Owner explicitly describes fantasy festival25\u201327.09.2026 at @mtsdvorana.",
+        "checkedAt": "2026-10-17T19:35:30.864893+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/festivalepskefantastike/"
+        ]
+      },
+      "venueId": "k175vxj1xwtc4d8s95142qfd858geq0f"
+    },
+    {
+      "fields": {
+        "name": "Aleksandar club Ski staza",
+        "instagramHandle": "ski_staza",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Owner names Aleksandar club Ski staza and publishes visitor hours/phone. Existing public event-directory context identifies the Belgrade Ko\u0161utnjak business.",
+        "checkedAt": "2026-10-17T19:35:31.831354+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/ski_staza/"
+        ]
+      },
+      "venueId": "k1717k1y48s9hr3ayran6x69hs8gfeka"
+    },
+    {
+      "fields": {
+        "name": "\u0426\u0440\u0432\u0435\u043d\u0438\u043b\u043e crew",
+        "instagramHandle": "crvenilo_crew",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "promoter",
+        "geography": "Belgrade",
+        "summary": "Owner explicitly says Chaotic events in Belgrade and announces a DIM event.",
+        "checkedAt": "2026-10-17T19:35:31.957217+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/crvenilo_crew/"
+        ]
+      },
+      "venueId": "k170kzn0yvs5wy5wx17bbzfh3x8genwq"
+    },
+    {
+      "fields": {
+        "name": "Autokomanda11010",
+        "instagramHandle": "autokomanda11010",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Fresh owner bio describes exhibitions on view; current official art-space site explicitly binds @autokomanda11010 and11010Belgrade.",
+        "checkedAt": "2026-10-17T19:35:32.143500+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/autokomanda11010/",
+          "https://www.autokomanda11010.com/"
+        ]
+      },
+      "venueId": "k178h6xw4xc3zptwyrsb8p39498gfm86"
+    },
+    {
+      "fields": {
+        "name": "galerijasanjaj",
+        "instagramHandle": "galerijasanjaj",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Current profile publishes regular gallery hours; fresh official contact page explicitly links exact IG and Dositejeva11.",
+        "checkedAt": "2026-10-17T19:35:32.844295+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/galerijasanjaj/",
+          "https://galerijasanjaj.com/kontakt/"
+        ]
+      },
+      "venueId": "k17carcjx0fhx5fn1g061b7dd58ge4v2"
+    },
+    {
+      "fields": {
+        "name": "Radar Belgrade",
+        "instagramHandle": "radar.belgrade",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "promoter",
+        "geography": "Belgrade",
+        "summary": "Fresh owner bio says Community|Events|Record Label and directly identifies @radar.frequencies as its record label.",
+        "checkedAt": "2026-10-17T19:35:33.154589+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/radar.belgrade/",
+          "https://www.instagram.com/radar.frequencies/"
+        ]
+      },
+      "venueId": "k17cejkf4hz3bnzgx9xka6z2v98gfke0"
+    },
+    {
+      "fields": {
+        "name": "Udru\u017eenje Ring Ring / The Ring Ring Association",
+        "instagramHandle": "ring_ring_association",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "promoter",
+        "geography": "Belgrade",
+        "summary": "Owner explicitly describes a Belgrade association developing music/culture activities.",
+        "checkedAt": "2026-10-17T19:35:33.715789+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/ring_ring_association/"
+        ]
+      },
+      "venueId": "k1710agwhj88dg76esbn6v3htx8gfc11"
+    },
+    {
+      "fields": {
+        "name": "FIJUK BARABA",
+        "instagramHandle": "fijukbaraba",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "unverified",
+        "summary": "Owner advertises rare books/artist editions and regular Thursday\u2013Saturday15\u201320 opening. This supports a visitor-facing bookshop rather than a festival account.",
+        "checkedAt": "2026-10-17T19:35:33.778772+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/fijukbaraba/"
+        ]
+      },
+      "venueId": "k172h4zjbcshx3cszax8b00m7n8gfhwv"
+    },
+    {
+      "fields": {
+        "name": "Kodeks Kafe Bar",
+        "instagramHandle": "kodeks.kafebar",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Current owner explicitly calls it a new cafe/bar and gives Po\u017ee\u0161ka128a,BanovoBrdo.",
+        "checkedAt": "2026-10-17T19:35:34.122242+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/kodeks.kafebar/"
+        ]
+      },
+      "venueId": "k17bj3e1wm4hgmmbk3ptgw2dm58gecr6"
+    },
+    {
+      "fields": {
+        "name": "SULUJ",
+        "instagramHandle": "suluj_galerija",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Current owner explicitly identifies SULUJ exhibition/association space at Terazije26/II.",
+        "checkedAt": "2026-10-17T19:35:34.659138+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/suluj_galerija/"
+        ]
+      },
+      "venueId": "k17apf8m05gtsb6sshevj167xs8get3k"
+    },
+    {
+      "fields": {
+        "name": "Lipov LOUD!",
+        "instagramHandle": "lipovloud",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "performer",
+        "geography": "Belgrade",
+        "summary": "Owner explicitly identifies a band/rockers from LipovLad and Zvezdara.",
+        "checkedAt": "2026-10-17T19:35:34.994751+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/lipovloud/"
+        ]
+      },
+      "venueId": "k172r004rsdkmaabfpxseh7f5s8gevdn"
+    },
+    {
+      "fields": {
+        "name": "Hotbeats Ofc",
+        "instagramHandle": "hotbeats.ofc",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "unknown",
+        "geography": "Belgrade",
+        "summary": "Current owner meta gives360\u00b0roofview,built on sound,@lumierehotelbelgrade,reservations and Terazije4.",
+        "checkedAt": "2026-10-17T19:35:35.656012+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/hotbeats.ofc/"
+        ]
+      },
+      "venueId": "k175rvdjx7b09ja7m05qbfa1098gfb4e"
+    },
+    {
+      "fields": {
+        "name": "Charm Music Serbia",
+        "instagramHandle": "charmmusicserbia",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "promoter",
+        "geography": "Belgrade",
+        "summary": "Owner advertises concerts at HangarStage1 and MTS Dvorana.",
+        "checkedAt": "2026-10-17T19:35:35.966148+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/charmmusicserbia/"
+        ]
+      },
+      "venueId": "k170sw0p428j1xbtmft57pgsc98gfkxn"
+    },
+    {
+      "fields": {
+        "name": "KC Elektropionir",
+        "instagramHandle": "kc_elektropionir",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Current exact owner explicitly describes vinyl store and live rock music venue at Cetinjska15,centralBelgrade.",
+        "checkedAt": "2026-10-17T19:35:36.565105+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/kc_elektropionir/"
+        ]
+      },
+      "venueId": "k17acbmj3wzxhra3s6bkh5vr8s8gftz7"
+    },
+    {
+      "fields": {
+        "name": "CirkoBalkana",
+        "instagramHandle": "cirkobalkana",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "event_brand",
+        "geography": "regional_Zagreb_Belgrade",
+        "summary": "Owner explicitly describes regional contemporary-circus festival in circus tent in Zagreb&Belgrade.",
+        "checkedAt": "2026-10-17T19:35:36.904201+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/cirkobalkana/"
+        ]
+      },
+      "venueId": "k173evg1ejpmh4xbxfy83xgzhn8gf5c3"
+    },
+    {
+      "fields": {
+        "name": "XOT",
+        "instagramHandle": "thatsxot",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "event_brand",
+        "geography": "Belgrade",
+        "summary": "Owner explicitly calls it a new party and announces XALLOWEEN at @ruke.beograd.",
+        "checkedAt": "2026-10-17T19:35:37.516750+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/thatsxot/"
+        ]
+      },
+      "venueId": "k179gh8xmbnhh6bapxr5jg1jbs8gec52"
+    },
+    {
+      "fields": {
+        "name": "Instituto Cervantes Belgrado",
+        "instagramHandle": "institutservantesbeograd",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Owner explicitly offers Belgrade cultural activities/library. Official Cervantes Belgrade description and global branch directory identify \u010cikaLjubina19.",
+        "checkedAt": "2026-10-17T19:35:37.579399+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/institutservantesbeograd/",
+          "https://belgrado.cervantes.es/rs/o_nama_centar_srpski.htm",
+          "https://cervantes.org/es/sobre-nosotros/institucion/sedes-mundo"
+        ]
+      },
+      "venueId": "k17bn57wc93kr1mak27nt1r8cn8gfxew"
+    },
+    {
+      "fields": {
+        "name": "Novo Doba festival",
+        "instagramHandle": "novodobafest",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "event_brand",
+        "geography": "Belgrade",
+        "summary": "Owner explicitly identifies17thfestival of non-aligned comics,dated1\u20134October2026.",
+        "checkedAt": "2026-10-17T19:35:37.871587+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/novodobafest/"
+        ]
+      },
+      "venueId": "k17610vv2wscyy0f4exvtc8b6x8gejfp"
+    },
+    {
+      "fields": {
+        "name": "De\u010diji sajam Srbija",
+        "instagramHandle": "decijisajambeograd",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "event_brand",
+        "geography": "Belgrade",
+        "summary": "Owner explicitly describes free-entry December manifestation at Beograd na vodi.",
+        "checkedAt": "2026-10-17T19:35:38.547816+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/decijisajambeograd/"
+        ]
+      },
+      "venueId": "k1755vty2q1ssvfnj9de9apb3d8gf4y1"
+    },
+    {
+      "fields": {
+        "name": "Dok'n'Ritam Festival",
+        "instagramHandle": "doknritamfest",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "event_brand",
+        "geography": "Belgrade",
+        "summary": "Owner explicitly publishes festival24\u201327.09.2026 with films/books/concerts.",
+        "checkedAt": "2026-10-17T19:35:38.579936+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/doknritamfest/"
+        ]
+      },
+      "venueId": "k1742wgndn1sjrrg472hqd69zn8gefe5"
+    },
+    {
+      "fields": {
+        "name": "Ch\u00e9ri Events",
+        "instagramHandle": "cheri_events_belgrade",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "promoter",
+        "geography": "Belgrade",
+        "summary": "Owner explicitly brings artists/experiences to Lo\u017eionica and cross-links @cheri_belgrade grand opening.",
+        "checkedAt": "2026-10-17T19:35:38.825848+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/cheri_events_belgrade/"
+        ]
+      },
+      "venueId": "k17fb4xe8sn1s1w6g4wp86b92d8ge07q"
+    },
+    {
+      "fields": {
+        "name": "Radio Beograd 2",
+        "instagramHandle": "radio_beograd_2",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "media",
+        "geography": "Belgrade",
+        "summary": "Owner explicitly identifies a culture-and-arts radio programme.",
+        "checkedAt": "2026-10-17T19:35:39.542794+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/radio_beograd_2/"
+        ]
+      },
+      "venueId": "k178as86r38cs755dsx1ggrjs58gftc7"
+    },
+    {
+      "fields": {
+        "name": "ARTE galerija",
+        "instagramHandle": "galerija_arte",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Owner explicitly lists four branch addresses:Svetogorska29,Andri\u0107evvenac12,KraljaMilana48,Terazije39.",
+        "checkedAt": "2026-10-17T19:35:39.572557+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/galerija_arte/"
+        ]
+      },
+      "venueId": "k175y6b69zf27k97j0z4w3jhp58gf33j"
+    },
+    {
+      "fields": {
+        "name": "Giardino teatar",
+        "instagramHandle": "giardino_teatar",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "performer",
+        "geography": "regional",
+        "summary": "Owner promotes productions performed at SNP in NoviSad.",
+        "checkedAt": "2026-10-17T19:35:39.795030+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/giardino_teatar/"
+        ]
+      },
+      "venueId": "k171jpxje8zd463kr3xvahqkdx8gf2bd"
+    },
+    {
+      "fields": {
+        "name": "CZKD Beograd",
+        "instagramHandle": "czkd_bg",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Current owner names CZKDBeograd; official CZKD about/program pages identify physical PaviljonVeljkovi\u0107 at Bir\u010daninova21.",
+        "checkedAt": "2026-10-17T19:35:40.539025+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/czkd_bg/",
+          "https://www.czkd.org/o-nama/"
+        ]
+      },
+      "venueId": "k179r84tkaqvg7x0s3fha8fhrn8gfsz6"
+    },
+    {
+      "fields": {
+        "name": "Lumi\u00e8re Hotel Belgrade",
+        "instagramHandle": "lumierehotelbelgrade",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Current owner identifies HotelLumi\u00e8re; fresh official contact page gives Terazije4 and links exact IG.",
+        "checkedAt": "2026-10-17T19:35:41.047918+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/lumierehotelbelgrade/",
+          "https://lumierehotelbelgrade.com/kontakt/"
+        ]
+      },
+      "venueId": "k172a4nsdy8xbdv85ypza5bv2h8gf5z9"
+    },
+    {
+      "fields": {
+        "name": "OSSSA",
+        "instagramHandle": "osssa.belgrade",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Owner explicitly identifies multidisciplinary art/business/private-event space. Primary event-host Academy ofArts page and current named programme identify OSSSA at BulevarDespotaStefana115.",
+        "checkedAt": "2026-10-17T19:35:41.540600+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/osssa.belgrade/",
+          "https://akademijaumetnosti.edu.rs/shortcodes/post-list/"
+        ]
+      },
+      "venueId": "k17ep276dv0kv79rykyw1w2vh18gfq2x"
+    },
+    {
+      "fields": {
+        "name": "Fields",
+        "instagramHandle": "fields.music",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "event_brand",
+        "geography": "Belgrade",
+        "summary": "Owner explicitly describes an inventive music festival and dated TeorijaStruna/Fields2027 events.",
+        "checkedAt": "2026-10-17T19:35:41.558267+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/fields.music/"
+        ]
+      },
+      "venueId": "k17dmrfz3zqd5nd3dn28pm1mj98ge89j"
+    },
+    {
+      "fields": {
+        "name": "Cveti\u0107 | Pan-Asian Bistro in Belgrad",
+        "instagramHandle": "cvetic.belgrade",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Current owner title identifies a Belgrade Pan-Asian bistro; bio offers brunch,food and Fri/Satkaraoke.",
+        "checkedAt": "2026-10-17T19:35:42.016599+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/cvetic.belgrade/"
+        ]
+      },
+      "venueId": "k17a843dtv5n9q2jkdzwjw4x2d8gf189"
+    },
+    {
+      "fields": {
+        "name": "\u043a\u043e\u0442\u043b\u0430\u0440\u043d\u0438\u0446\u0430",
+        "instagramHandle": "kotlarnica",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "unknown",
+        "geography": "unverified",
+        "summary": "Current exact owner metadata is accessible but bio is empty. Prior announced event destination did not prove an independent permanent venue.",
+        "checkedAt": "2026-10-17T19:35:42.432831+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/kotlarnica/"
+        ]
+      },
+      "venueId": "k1724j1hvp9t93q20zgvvy3s8x8gfemj"
+    },
+    {
+      "fields": {
+        "name": "Centre Culturel de Serbie",
+        "instagramHandle": "centrecultureldeserbie",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "outside_Belgrade_Paris",
+        "summary": "Owner describes Serbian culture in French; accessible official contact page directly links exactIG and names Parisaddress.",
+        "checkedAt": "2026-10-17T19:35:42.497408+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/centrecultureldeserbie/",
+          "https://archive.ccserbie.com/contact.html"
+        ]
+      },
+      "venueId": "k175950js3xxtamd0s26ejcarn8gfp6d"
+    },
+    {
+      "fields": {
+        "name": "Martovski Festival",
+        "instagramHandle": "martovskifestival",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "event_brand",
+        "geography": "Belgrade",
+        "summary": "Owner explicitly names Belgrade documentary/short-film festival at @domomladinebeograda.",
+        "checkedAt": "2026-10-17T19:35:42.980716+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/martovskifestival/"
+        ]
+      },
+      "venueId": "k17bs1fahrmphw11r34w8gdkr58gf6vc"
+    },
+    {
+      "fields": {
+        "name": "2Hot4Stage",
+        "instagramHandle": "2hot4stage",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "promoter",
+        "geography": "Belgrade",
+        "summary": "Current owner explicitly describes a crew; no fixed visitor-space claim.",
+        "checkedAt": "2026-10-17T19:35:43.597163+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/2hot4stage/"
+        ]
+      },
+      "venueId": "k17fqsny3h1r1waq8krj5x9k9h8gfkwt"
+    },
+    {
+      "fields": {
+        "name": "Festival Polja",
+        "instagramHandle": "poljafestival",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "event_brand",
+        "geography": "outside_Belgrade_Sutci_Belanovica",
+        "summary": "Owner explicitly gives festivaldates28\u201330August2026 and \u0160utci(Belanovica).",
+        "checkedAt": "2026-10-17T19:35:43.987441+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/poljafestival/"
+        ]
+      },
+      "venueId": "k175sm7t694rpe7z1b41338p9x8gexkd"
+    },
+    {
+      "fields": {
+        "name": "Beograd ba\u0161ta",
+        "instagramHandle": "beograd_basta",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Current owner explicitly identifies garden on Zvezdara at Bregalni\u010dka5 and providesgardenmapcontext.",
+        "checkedAt": "2026-10-17T19:35:44.616759+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/beograd_basta/"
+        ]
+      },
+      "venueId": "k179kqcpsq2t7d8precs0hcafd8gf02n"
+    },
+    {
+      "fields": {
+        "name": "EDEN EDEN",
+        "instagramHandle": "eden_eden_event_garden",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade_Becmen_Surcin",
+        "summary": "Owner explicitly identifies eventgarden in Be\u010dmen/Beograd/Sur\u010din,adult/children celebrations and Tue\u2013Sun12\u201322.",
+        "checkedAt": "2026-10-17T19:35:44.633838+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/eden_eden_event_garden/"
+        ]
+      },
+      "venueId": "k1704m0f2pf8psgyzzqy38spzd8ge134"
+    },
+    {
+      "fields": {
+        "name": "GORE LOUNGE CLUB",
+        "instagramHandle": "gore.beograd",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Fresh official gore.rs binds exactIG and HOUSE20/44,Kara\u0111or\u0111eva44,secondfloor; ownerbio gives Wed\u2013Sat17\u201301.",
+        "checkedAt": "2026-10-17T19:35:45.209798+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/gore.beograd/",
+          "https://gore.rs/home/"
+        ]
+      },
+      "venueId": "k174xc2r5t3a8e9n9rr7c99a158gf9j8"
+    },
+    {
+      "fields": {
+        "name": "\ud83d\udd30LOVEFEST\u00ae",
+        "instagramHandle": "lovefest.rs",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "event_brand",
+        "geography": "regional_Belgrade_events",
+        "summary": "Current official site links exactIG and sells festival plus different AdaBridge/Jevremovac event destinations; owner bio itself currently empty.",
+        "checkedAt": "2026-10-17T19:35:45.643403+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/lovefest.rs/",
+          "https://lovefest.rs/"
+        ]
+      },
+      "venueId": "k179pyqp2z98vftcxhya2xfzy98geeda"
+    },
+    {
+      "fields": {
+        "name": "Gajba011",
+        "instagramHandle": "gajba011",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "event_brand",
+        "geography": "Belgrade",
+        "summary": "Owner explicitly advertises23October22\u201305party at @tavan.belgrade.",
+        "checkedAt": "2026-10-17T19:35:45.762177+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/gajba011/"
+        ]
+      },
+      "venueId": "k1794tvmbq2zdt0d4bn3qrz2eh8gef3v"
+    },
+    {
+      "fields": {
+        "name": "SKC Beograd",
+        "instagramHandle": "skcbeograd",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Current exact owner explicitly identifies SKCBeograd at KraljaMilana48.",
+        "checkedAt": "2026-10-17T19:35:46.423634+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/skcbeograd/"
+        ]
+      },
+      "venueId": "k17542bbc4dra62yfryyzv6xx98gfp1h"
+    },
+    {
+      "fields": {
+        "name": "Drvoduh Shumski",
+        "instagramHandle": "bambamexperience",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "unknown",
+        "geography": "unverified",
+        "summary": "Current owner metadata names DrvoduhShumski but bio is empty.",
+        "checkedAt": "2026-10-17T19:35:46.655456+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/bambamexperience/"
+        ]
+      },
+      "venueId": "k17748cv783pd41mem4qvns4ch8gecfg"
+    },
+    {
+      "fields": {
+        "name": "Lipa by Isabel Speakeasy",
+        "instagramHandle": "lipa.cockteleria",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "event_brand",
+        "geography": "outside_Belgrade_current_Adriatic_popup",
+        "summary": "Current Lipa bio says younger sister of @isabelspeakeasy and Adriaticpop-up@hoksplit; fresh Isabel reciprocally says older sister ofLipa.",
+        "checkedAt": "2026-10-17T19:35:47.184100+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/lipa.cockteleria/",
+          "https://www.instagram.com/isabelspeakeasy/"
+        ]
+      },
+      "venueId": "k172ka1ehadnynnnfq2g8jty358gfn14"
+    },
+    {
+      "fields": {
+        "name": "Savska terasa Ada",
+        "instagramHandle": "savska_terasa",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Current owner explicitly identifies SavskaTerasaAda at SavskinasipBB,AdaCiganlija with bookingphone.",
+        "checkedAt": "2026-10-17T19:35:47.636748+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/savska_terasa/"
+        ]
+      },
+      "venueId": "k176n89515169vsah406ks41hd8ge60w"
+    },
+    {
+      "fields": {
+        "name": "\u0161ira cocktails & local spirits",
+        "instagramHandle": "sira.cocktailbar",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "unknown",
+        "geography": "Belgrade_unverified",
+        "summary": "Current owner displayname refers to cocktails/localspirits but bio is empty.",
+        "checkedAt": "2026-10-17T19:35:48.092814+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/sira.cocktailbar/"
+        ]
+      },
+      "venueId": "k17bp5zd1qkjhf8y0021vd3p558get6c"
+    },
+    {
+      "fields": {
+        "name": "Radisson Collection Hotel, Old Mill Belgrade",
+        "instagramHandle": "radissoncollectionbelgrade",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Current owner names exactBelgradehotel and in-house@senjak.bistrobar; official Radisson contact/property/brochure confirms this physicalhotel/address.",
+        "checkedAt": "2026-10-17T19:35:48.329378+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/radissoncollectionbelgrade/",
+          "https://www.radissonhotels.com/en-us/hotels/radisson-collection-old-mill-belgrade/contact",
+          "https://media.radissonhotels.net/image/radisson-collection-hotel-old-mill-belgrade/meeting-room/16256-113893-m15493349.pdf"
+        ]
+      },
+      "venueId": "k17320nc79e4kqp3vrwmdjw4rn8ge3m2"
+    },
+    {
+      "fields": {
+        "name": ":null social lab",
+        "instagramHandle": "null.sociallab",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Current exact owner explicitly gives community/cocktails/cassette,Balkanska4Belgrade and Wed/Thu/Sun18\u201300,Fri/Sat18\u201301.",
+        "checkedAt": "2026-10-17T19:35:48.533021+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/null.sociallab/"
+        ]
+      },
+      "venueId": "k179bjdpqt02b9v9g6y1c86v1x8ge8qf"
+    },
+    {
+      "fields": {
+        "name": "UK Parobrod",
+        "instagramHandle": "ukparobrod",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Fresh official ukparobrod.rs directly links exactIG and identifies cultureinstitution at KapetanMi\u0161ina6a,Belgrade.",
+        "checkedAt": "2026-10-17T19:35:49.221137+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/ukparobrod/",
+          "https://ukparobrod.rs/"
+        ]
+      },
+      "venueId": "k1777p9k7y01m5phcxxmm1290n8gfytp"
+    },
+    {
+      "fields": {
+        "name": "Ch\u00e9ri Restaurant & Bar",
+        "instagramHandle": "cheri_belgrade",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "physical_venue",
+        "geography": "Belgrade",
+        "summary": "Current owner describes dining/cocktailbar/DJsets; current primary Lo\u017eionica event explicitly identifies Ch\u00e9ri restaurant opened2Oct2026withincomplex atUlicaideja2.",
+        "checkedAt": "2026-10-17T19:35:49.446167+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/cheri_belgrade/",
+          "https://lozionica.rs/en/svi-dogadjaji/month/?pagename=events&shortcode=a96c91f8"
+        ]
+      },
+      "venueId": "k178w723jay3jk1nfzsaamrpm18gemm2"
+    },
+    {
+      "fields": {
+        "name": "Jazz Jams Belgrade \ud83c\uddf7\ud83c\uddf8",
+        "instagramHandle": "jazzjamsbelgrade",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "event_brand",
+        "geography": "Belgrade",
+        "summary": "Current owner explicitly identifies jazzjamsessions inBelgrade.",
+        "checkedAt": "2026-10-17T19:35:50.062189+00:00",
+        "sourceUrls": [
+          "https://www.instagram.com/jazzjamsbelgrade/"
+        ]
+      },
+      "venueId": "k1789rc9kjf6vtrs3aqa55hmr18gfjz2"
+    },
+    {
+      "fields": {
+        "name": "Blackprotocol",
+        "instagramHandle": "blackprotocol__",
+        "category": "venue",
+        "publicStatus": "pending",
+        "scrapeActive": true
+      },
+      "profileReview": {
+        "role": "unknown",
+        "geography": "unresolved",
+        "summary": "Distinct current followed account with no canonical or provider collision; physical venue unclassified.",
+        "checkedAt": "2026-10-17T19:41:40.630Z",
+        "sourceUrls": [
+          "https://www.instagram.com/blackprotocol__/"
+        ]
+      },
+      "venueId": "k177cwcw3nzrsskh21b5v713cx8geaa9"
+    }
+  ],
+  "providerAliases": [
+    {
+      "instagramHandle": "funkandsoulfrancuska",
+      "existingVenue": {
+        "id": "k172jy9khymdwwmzbrcygea1698bbw92",
+        "name": "Funk and Soul Gastro",
+        "instagramHandle": "funkandsoulgastro",
+        "expectedUpdatedAt": 1792038953738,
+        "publicStatus": "pending",
+        "scrapeActive": true,
+        "isActive": null,
+        "location": "Francuska 6, Beograd 11000",
+        "latitude": 44.8175468,
+        "longitude": 20.4628644,
+        "googlePlaceId": "ChIJ_92qK4d7WkcRajfbkflu-T0"
+      },
+      "reason": "Fresh exact stored GooglePlaceID resolves Funk&SoulGastroPub at Francuska6 and phone+381615006117. Current exact owner @funkandsoulfrancuska explicitly publishes both the SAME full street and SAME bookingphone, while calling @funkandsoulpub its sister. This independently binds the current provider account to the stored branch, rather than relying on similar names or sharedoperator alone.",
+      "sourceUrls": [
+        "https://www.instagram.com/funkandsoulfrancuska/",
+        "https://www.google.com/maps/place/?q=place_id:ChIJ_92qK4d7WkcRajfbkflu-T0&hl=en"
+      ],
+      "accountRenameProven": false
+    }
+  ],
+  "heldPotentialDuplicates": [
+    {
+      "instagramHandle": "baraka_bg",
+      "existingVenue": {
+        "id": "k17fwnykkswrrewnzsg1t421sh897z6b",
+        "name": "BARAKA BA\u0160TA",
+        "instagramHandle": "baraka_basta",
+        "expectedUpdatedAt": 1792038945557,
+        "publicStatus": null,
+        "scrapeActive": null,
+        "isActive": true,
+        "location": "Kara\u0111or\u0111eva 13",
+        "latitude": 44.817984,
+        "longitude": 20.4498684,
+        "googlePlaceId": "ChIJP1iD2E1lWkcRkOt3K7gy8zc"
+      },
+      "reason": "Distinctive Baraka name and Karadjordjeva13 match the stored physical place, but owner site does not link this exact Instagram account: all discovered Instagram anchors point to generic instagram.com. Fresh exact stored Googlefeature has no website/currenthandle. Current ownerbio has no street/phone; third-party directory @baraka_bg binding is corroboration but not stronger primary account affiliation. No stableoldID or oldcanonicalredirect. Keep held.",
+      "sourceUrls": [
+        "https://www.instagram.com/baraka_bg/",
+        "https://baraka.rs/",
+        "https://www.google.com/maps/place/?q=place_id:ChIJP1iD2E1lWkcRkOt3K7gy8zc&hl=en"
+      ]
+    },
+    {
+      "instagramHandle": "dvoristance.bar",
+      "existingVenue": {
+        "id": "k17ehntwb88a0xc5gcbmccrge5896z4j",
+        "name": "Dvori\u0161tance",
+        "instagramHandle": "klubdvoristance",
+        "expectedUpdatedAt": 1792038952478,
+        "publicStatus": null,
+        "scrapeActive": null,
+        "isActive": true,
+        "location": "Cetinjska 15",
+        "latitude": 44.81771579999999,
+        "longitude": 20.465247,
+        "googlePlaceId": "ChIJyW2XSLF6WkcRqBDhhghpUj8"
+      },
+      "reason": "Current owner exact distinctive name and Cetinjska15 strongly identify the same place, but additional provideraffiliation/oldaccount proof was not established in this bounded review. Fresh exact storedGooglefeature still explicitly links the OLD @klubdvoristance and contains no currenthandle. Oldprofile supplies no canonicalmeta/redirect. Avoidduplicatecreate and keep held until account affiliation reviewed.",
+      "sourceUrls": [
+        "https://www.instagram.com/dvoristance.bar/",
+        "https://www.instagram.com/klubdvoristance/",
+        "https://www.google.com/maps/place/?q=place_id:ChIJyW2XSLF6WkcRqBDhhghpUj8&hl=en"
+      ]
+    },
+    {
+      "instagramHandle": "ameliecafe.bg",
+      "existingVenue": {
+        "id": "k173njh5ta6dmpdqexj0k9272x89682d",
+        "name": "Ame\u0301lie Bistro",
+        "instagramHandle": "amelie__cafe",
+        "expectedUpdatedAt": 1792038944290,
+        "publicStatus": null,
+        "scrapeActive": null,
+        "isActive": true,
+        "location": "Topli\u010din venac 6",
+        "latitude": 44.8167742,
+        "longitude": 20.4539544,
+        "googlePlaceId": "ChIJZ3naak1lWkcRNPftZ3zMRlM"
+      },
+      "reason": "Current exact ownerbiography gives centralBelgrade and schedule without street/phone. Fresh stored Googlefeature identifies ToplicinVenac6 and officialfacebook/ameliecafebgd, without linking current@ameliecafe.bg. Legacy account has no canonicalmeta/redirect. Similar brand/identical hours cannot establish alias; keep held.",
+      "sourceUrls": [
+        "https://www.instagram.com/ameliecafe.bg/",
+        "https://www.instagram.com/amelie__cafe/",
+        "https://www.google.com/maps/place/?q=place_id:ChIJZ3naak1lWkcRNPftZ3zMRlM&hl=en",
+        "https://www.facebook.com/ameliecafebgd/"
+      ]
+    },
+    {
+      "instagramHandle": "buducnost.belgrade",
+      "existingVenue": {
+        "id": "k17a09xtek8977pc3bws702jnh897bxg",
+        "name": "budu\u0107nost",
+        "instagramHandle": "buducnost.club",
+        "expectedUpdatedAt": 1792038948793,
+        "publicStatus": null,
+        "scrapeActive": null,
+        "isActive": true,
+        "location": "Bulevar vojvode Bojovi\u0107a 30a",
+        "latitude": 44.8203481,
+        "longitude": 20.4483163,
+        "googlePlaceId": "ChIJJbfHSQBlWkcRtMOP-hNF81I"
+      },
+      "reason": "Current owner name is BuducnostNightclubBelgrade but biography empty. Fresh stored exact Googlefeature still links OLD@buducnost.club and provides BulevarvojvodeBojovica30, while currentaccount affiliation is absent. Legacy profile supplies no canonicalmeta/redirect and no retained oldstableID. Keep held.",
+      "sourceUrls": [
+        "https://www.instagram.com/buducnost.belgrade/",
+        "https://www.instagram.com/buducnost.club/",
+        "https://www.google.com/maps/place/?q=place_id:ChIJJbfHSQBlWkcRtMOP-hNF81I&hl=en"
+      ]
+    },
+    {
+      "instagramHandle": "fomo__festival",
+      "existingVenue": {
+        "id": "k1741jkymanyvww1fhhvsp5een8975cb",
+        "name": "\u0424\u041e\u041c\u041e",
+        "instagramHandle": "fomo__fomo",
+        "expectedUpdatedAt": 1786335011518,
+        "publicStatus": null,
+        "scrapeActive": false,
+        "isActive": true,
+        "location": null,
+        "latitude": null,
+        "longitude": null,
+        "googlePlaceId": null
+      },
+      "reason": "Separate available canonicalprofile URLs establish two currentaccounts, but not two independently managed organizations or a safe exception to existing canonical scrapeActive=false. Festival/party branding is related and no current explicit ownerrelationship or stableIDrename is proven. Preserve pause and keep held; do not infer it is a different entity from separate usernames alone.",
+      "sourceUrls": [
+        "https://www.instagram.com/fomo__festival/",
+        "https://www.instagram.com/fomo__fomo/"
+      ]
+    }
+  ],
+  "preservation": {
+    "existingVenues": "All raw fields unchanged",
+    "existingSources": "All raw fields unchanged; no activation, role or checkpoint reconciliation",
+    "existingIdentities": "All pre-existing claims unchanged",
+    "newSources": "Existing backfill API, only newly inserted pending venue tail; unknown role",
+    "followingSyncState": "Unchanged; incomplete paid provider response is not submitted as complete",
+    "postIngestion": "Not triggered; standard 24-hour ingestion policy retained"
+  },
+  "production": {
+    "completedAt": "2026-10-17T20:08:28.694406+00:00",
+    "datasetSha256": "be1af6ce418b95fff55ba9abc7f08366d08bbaf445aa3bdbef711eb7c5a7c5b2",
+    "followingCount": 679,
+    "createdProfiles": 52,
+    "newSourceRecords": 5,
+    "providerAliasesAdded": 1,
+    "venuesBefore": 644,
+    "venuesAfter": 696,
+    "sourcesBefore": 693,
+    "sourcesAfter": 698,
+    "activeSourcesAfter": 679,
+    "preexistingVenuesAndIdentitiesUnchanged": true,
+    "preexistingSourcesUnchanged": true,
+    "followingSyncStateUnchanged": true,
+    "allReadbacksVerified": true,
+    "backendDeploymentUnchanged": true,
+    "protectedServicesUnchanged": true,
+    "postIngestionTriggered": false,
+    "publicVerification": {
+      "checkedAt": "2026-10-17T20:08:57.056Z",
+      "publicCounts": {
+        "publicProfiles": 578,
+        "missingMapLocation": 193,
+        "missingOpeningHours": 288,
+        "partialOpeningHours": 34,
+        "closedOnlyHours": 0,
+        "expiredCaches": 8,
+        "invalidTimezones": 0,
+        "timezoneMismatches": 0
+      },
+      "knownSchedules": 290,
+      "newPendingProfilesNotPublic": 52,
+      "siteHealthHttpStatus": 200
+    },
+    "newIdentityClaims": 105,
+    "identitiesAfter": 1491,
+    "operatorSha256": "b29828bb07c9950ff932afea3143808d46c35614fb79cd201ee944accdaf90d5"
+  },
+  "finalFollowingVerification": {
+    "checkedAt": "2026-10-17T20:16:18.792163+00:00",
+    "confirmedCurrentCount": 680,
+    "authenticatedProfileFollowingCount": 680,
+    "combinedCurrentSnapshotComplete": true,
+    "all680DirectlyReadFromUi": false,
+    "freshProviderCount": 590,
+    "directUiObservedCount": 593,
+    "intersectionCount": 503,
+    "uiOnlyCount": 90,
+    "providerOnlyCount": 87,
+    "historicalPaddingUsed": false,
+    "finalHandlesSha256": "ab4be558acae7399422660308dcf7b5c7f49d3a4455ddf50fd99213594001c6f",
+    "privateReceiptSha256": "21a6974b8cab9539bd06d9cd768a3718dbc5325ccda75cb9706687663c44f013",
+    "newlyConfirmedExistingHandle": "ljubavnica_bar",
+    "newlyConfirmedExistingVenueId": "k17dqbjstn1wtsxn9mhsj7d2h98gaw8p",
+    "existingLjubavnicaScrapePausePreserved": true,
+    "canonicalHandleMatchesAfter": 674,
+    "providerAliasMatchesAfter": 1,
+    "heldPotentialDuplicates": 5,
+    "unreviewedCurrentProfiles": 0,
+    "profileCountChecks": [
+      {
+        "checkedAt": "2026-10-17T20:01:44.183Z",
+        "method": "Native Brave authenticated owner profile after reload",
+        "count": 680
+      },
+      {
+        "checkedAt": "2026-10-17T20:15:30.955Z",
+        "method": "Native Brave authenticated owner profile after final reload",
+        "count": 680
+      }
+    ]
+  }
+}
