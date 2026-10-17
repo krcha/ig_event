@@ -217,7 +217,7 @@ export function EventLocationMap({ className, locations, selectedLocationId, onS
           minWidth: 210,
           maxWidth: 280,
           offset: [0, -42],
-          autoPanPaddingTopLeft: [12, 92],
+          autoPanPaddingTopLeft: [12, 128],
           autoPanPaddingBottomRight: [12, 24],
           autoClose: true,
           closeOnClick: true,
