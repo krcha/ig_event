@@ -52,6 +52,12 @@ The event map uses confirmed venue latitude/longitude. Add both coordinates in
 visible in the day's lineup under "Location not mapped". The map uses the
 existing approved public calendar and Belgrade's nightlife-day rollover.
 
+Public discovery uses six primary event categories: Clubbing & DJ, Live music,
+Kultura & umetnost, Barovi & social, Radionice & iskustva, and Ostalo & specijalni
+dogadjaji. Each event has one primary category plus source-supported genre and
+activity tags. See [event categories](docs/event-categories.md) for classification
+and compatibility rules.
+
 ## Stack
 
 - Next.js 15 App Router + React 19 + TypeScript
@@ -202,6 +208,7 @@ npm run qa:dedupe
 npm run qa:automerge
 npm run qa:master-review
 npm run qa:extraction
+npm run qa:event-categories
 npm run qa:ingestion-triage
 npm run qa:clerk-email-auth
 npm run qa:release
@@ -211,7 +218,7 @@ npm run convex:codegen
 
 `qa:release` runs the deterministic release gate used by CI: repository hygiene,
 lint, typecheck, `next build`, dedupe QA, automerge QA, extraction QA, venue
-taxonomy QA, public search/sort/mobile QA, Apify cost-control QA,
+taxonomy and event-category QA, public search/sort/mobile QA, Apify cost-control QA,
 follow-discovery QA, Convex retention-cron QA, and Clerk email auth QA.
 
 `npm run build` is a normal release requirement. Treat any build failure or

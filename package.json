@@ -76,6 +76,7 @@
     "qa:cross-post-campaign-automerge": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-approved-cross-post-campaign-automerge.mjs",
     "qa:ingestion-triage": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-ingestion-run-triage.mjs",
     "qa:venue-types": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-venue-type-taxonomy.mjs",
+    "qa:event-categories": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-event-categories.mjs",
     "qa:venue-lifecycle": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-venue-lifecycle.mjs",
     "qa:venue-hours": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-venue-hours.mjs",
     "qa:google-hours": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-google-hours-mapping.mjs",

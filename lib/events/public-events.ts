@@ -18,11 +18,6 @@ import {
 } from "@/lib/events/public-event-venue-fields";
 import { sortPublicEventsByDateVenueTimeTitle } from "@/lib/events/public-event-sort";
 import {
-  DEFAULT_EVENT_TYPE,
-  canonicalizeEventType,
-  eventTypeFromVenueCategory,
-} from "@/lib/taxonomy/venue-types";
-import {
   buildCanonicalVenueNamesByHandle,
   canonicalizeVenueName,
   normalizeHandle,
@@ -391,7 +386,6 @@ function normalizePublicEvent(
     event,
     !hasNonPublicLinkedVenue,
   );
-  const canonicalEventType = canonicalizeEventType(publicEvent.eventType);
   const canonicalVenueName = canonicalizeVenueName(
     publicEvent.venue,
     venueLookup.canonicalVenueNamesByHandle,
@@ -412,12 +406,6 @@ function normalizePublicEvent(
       : isRealVenueId(venue?._id) && venueLookup.publicVenueIds.has(venue._id)
         ? venue._id
         : undefined;
-  const venueCategory = venue?.category ?? undefined;
-  const eventVenueCategory = publicEvent.venueCategory ?? undefined;
-  const eventType =
-    canonicalEventType === DEFAULT_EVENT_TYPE
-      ? eventTypeFromVenueCategory(venueCategory ?? eventVenueCategory)
-      : canonicalEventType;
   const time = getDisplayEventTime(publicEvent.time);
   const timeProvenance = resolveEventTimeProvenance(publicEvent);
   const displayTime = resolveEventTimeDisplay({
@@ -441,7 +429,6 @@ function normalizePublicEvent(
     displayTimeLabel: displayTime.label,
     displayTimeSource: displayTime.source,
     ...(displayTime.startLabel ? { displayTimeStart: displayTime.startLabel } : {}),
-    eventType,
     ...(venue?.instagramHandle || publicEvent.venueInstagramHandle
       ? { instagramHandle: venue?.instagramHandle || publicEvent.venueInstagramHandle }
       : {}),

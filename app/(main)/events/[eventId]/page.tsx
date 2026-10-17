@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
-import { EventCategoryPill, EventMetaRow, EventPriceChip } from "@/components/events/event-meta";
+import { EventCategoryPill, EventMetaRow, EventPriceChip, EventSecondaryTags } from "@/components/events/event-meta";
 import { EventSessionLabel } from "@/components/events/event-session-label";
 import { EventCalendarBackLink } from "@/components/calendar/calendar-scroll-restoration";
 import { ReadMoreText } from "@/components/ui/read-more-text";
@@ -42,11 +42,6 @@ import {
   hasDiscoverImageSource,
 } from "@/lib/discover/discover-image-source";
 import { isPlausibleConvexPublicId } from "@/lib/convex/public-id";
-import {
-  DEFAULT_EVENT_TYPE,
-  canonicalizeEventType,
-  eventTypeFromVenueCategory,
-} from "@/lib/taxonomy/venue-types";
 import {
   buildCanonicalVenueNamesByHandle,
   canonicalizeVenueName,
@@ -197,16 +192,11 @@ const loadEvent = cache(async function loadEvent(eventId: string): Promise<Event
   const venue = event.venueId
     ? venues.find((candidate) => candidate._id === event.venueId)
     : findVenueForEvent(event, venues);
-  const canonicalEventType = canonicalizeEventType(event.eventType);
   const displayTime = resolveEventTimeDisplay({
     date: event.date,
     time: event.time,
     venueHours: venue,
   });
-  event.eventType =
-    canonicalEventType === DEFAULT_EVENT_TYPE
-      ? eventTypeFromVenueCategory(venue?.category ?? event.venueCategory)
-      : canonicalEventType;
   event.dayPeriod = displayTime.dayPeriod;
   event.displayTimeEnd = displayTime.endLabel;
   event.displayTimeLabel = displayTime.label;
@@ -431,6 +421,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
               <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-6 lg:px-7">
                 <div className="flex flex-wrap gap-2">
                   <EventCategoryPill className="text-xs" event={event} />
+                  <EventSecondaryTags className="text-xs" event={event} />
                   <EventPriceChip className="text-xs" value={event.ticketPrice} />
                 </div>
 

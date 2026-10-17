@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useTransition } from "react";
 import { cn } from "@/lib/utils";
+import type { EventPrimaryCategory } from "@/lib/taxonomy/event-categories";
 
 type MobileMonthDay = {
   dayKey: string;
@@ -11,7 +12,7 @@ type MobileMonthDay = {
   weekdayLabel: string;
   dayNumber: number;
   eventCount: number;
-  categoryCounts: Record<"club" | "live" | "culture" | "event", number>;
+  categoryCounts: Record<EventPrimaryCategory, number>;
   isWeekend: boolean;
   isUpcoming: boolean;
   isSelected: boolean;

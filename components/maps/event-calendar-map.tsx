@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import { ArrowRight, CalendarDays, ChevronLeft, ChevronRight, Clock3, MapPin, Navigation, Warehouse } from "lucide-react";
 import { EventLocationMap } from "@/components/maps/event-location-map";
 import { EventSessionLabel } from "@/components/events/event-session-label";
+import { EventMetaRow } from "@/components/events/event-meta";
 import { getEventSessionLabel } from "@/lib/events/event-session";
 import { buildEventMapData, buildEventMapHref, MAP_MAX_DATE, MAP_MIN_DATE } from "@/lib/events/event-map";
 import { UNKNOWN_EVENT_TIME_LABEL } from "@/lib/events/event-time";
@@ -45,7 +46,7 @@ function MapEventRow({ event }: { event: PublicEvent }) {
         <p className="text-xs font-medium text-muted-foreground">{event.displayTimeLabel || event.time || UNKNOWN_EVENT_TIME_LABEL}</p>
         <h3 className="mt-1 text-sm font-semibold leading-5 text-foreground group-hover:text-primary">{event.title}</h3>
         <EventSessionLabel event={event} />
-        <p className="mt-1 text-xs text-muted-foreground">{[event.eventType, event.ticketPrice].filter(Boolean).join(" · ")}</p>
+        <EventMetaRow className="mt-1" event={event} />
       </div>
       <ArrowRight aria-hidden="true" className="mt-1 h-4 w-4 flex-none text-muted-foreground group-hover:text-primary" />
     </Link>

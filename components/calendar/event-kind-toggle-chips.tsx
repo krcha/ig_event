@@ -3,14 +3,12 @@
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
 import { EVENT_CATEGORY_TONES, type EventCategoryKind } from "@/components/events/event-meta";
+import { EVENT_PRIMARY_CATEGORIES } from "@/lib/taxonomy/event-categories";
 import { cn } from "@/lib/utils";
 
 const CATEGORY_CHIPS: Array<{ key: "all" | EventCategoryKind; label: string }> = [
   { key: "all", label: "All" },
-  { key: "club", label: "Club" },
-  { key: "live", label: "Live" },
-  { key: "culture", label: "Culture" },
-  { key: "event", label: "Event" },
+  ...EVENT_PRIMARY_CATEGORIES,
 ];
 const CATEGORY_KEYS = CATEGORY_CHIPS.map((chip) => chip.key).filter(
   (key): key is EventCategoryKind => key !== "all",

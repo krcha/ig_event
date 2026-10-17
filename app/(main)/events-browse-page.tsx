@@ -18,7 +18,8 @@ import { CalendarScrollRestoration } from "@/components/calendar/calendar-scroll
 import { JsonLd } from "@/components/seo/json-ld";
 import { EventKindToggleChips } from "@/components/calendar/event-kind-toggle-chips";
 import { MobileMonthDayStrip } from "@/components/calendar/mobile-month-day-strip";
-import { EventMetaRow, getEventCategoryKind } from "@/components/events/event-meta";
+import { EventMetaRow, getEventCategoryKind, type EventCategoryKind } from "@/components/events/event-meta";
+import { EVENT_PRIMARY_CATEGORIES } from "@/lib/taxonomy/event-categories";
 import { EventSessionLabel } from "@/components/events/event-session-label";
 import { getEventSessionLabel } from "@/lib/events/event-session";
 import { SaveEventButton } from "@/components/events/save-event-button";
@@ -85,6 +86,7 @@ type CalendarEventSummary = Pick<
   | "displayTimeStart"
   | "venue"
   | "venueId"
+  | "venueCategory"
   | "artists"
   | "eventType"
   | "ticketPrice"
@@ -97,9 +99,13 @@ type CalendarEventSummary = Pick<
   | "goingCount"
 >;
 
-const EVENT_TONES: Record<"club" | "live" | "culture" | "event", EventTone> = {
+const EVENT_CATEGORY_LABELS = Object.fromEntries(
+  EVENT_PRIMARY_CATEGORIES.map((category) => [category.key, category.label]),
+) as Record<EventCategoryKind, string>;
+
+const EVENT_TONES: Record<EventCategoryKind, EventTone> = {
   club: {
-    name: "Club",
+    name: EVENT_CATEGORY_LABELS.club,
     chip: "bg-[#8B86FB]/[0.14] text-[#8B86FB] hover:bg-[#8B86FB]/[0.18]",
     dot: "bg-[#8B86FB]",
     rail: "bg-[#8B86FB]",
@@ -107,7 +113,7 @@ const EVENT_TONES: Record<"club" | "live" | "culture" | "event", EventTone> = {
     panel: "from-[#8B86FB]/[0.10] via-card to-card",
   },
   live: {
-    name: "Live",
+    name: EVENT_CATEGORY_LABELS.live,
     chip: "bg-[#FB7185]/[0.14] text-[#FB7185] hover:bg-[#FB7185]/[0.18]",
     dot: "bg-[#FB7185]",
     rail: "bg-[#FB7185]",
@@ -115,15 +121,31 @@ const EVENT_TONES: Record<"club" | "live" | "culture" | "event", EventTone> = {
     panel: "from-[#FB7185]/[0.10] via-card to-card",
   },
   culture: {
-    name: "Culture",
+    name: EVENT_CATEGORY_LABELS.culture,
     chip: "bg-[#FBBF24]/[0.14] text-[#FBBF24] hover:bg-[#FBBF24]/[0.18]",
     dot: "bg-[#FBBF24]",
     rail: "bg-[#FBBF24]",
     badge: "bg-[#FBBF24]/[0.14] text-[#FBBF24]",
     panel: "from-[#FBBF24]/[0.10] via-card to-card",
   },
+  social: {
+    name: EVENT_CATEGORY_LABELS.social,
+    chip: "bg-[#7DD3FC]/[0.14] text-[#7DD3FC] hover:bg-[#7DD3FC]/[0.18]",
+    dot: "bg-[#7DD3FC]",
+    rail: "bg-[#7DD3FC]",
+    badge: "bg-[#7DD3FC]/[0.14] text-[#7DD3FC]",
+    panel: "from-[#7DD3FC]/[0.10] via-card to-card",
+  },
+  experience: {
+    name: EVENT_CATEGORY_LABELS.experience,
+    chip: "bg-[#FB923C]/[0.14] text-[#FB923C] hover:bg-[#FB923C]/[0.18]",
+    dot: "bg-[#FB923C]",
+    rail: "bg-[#FB923C]",
+    badge: "bg-[#FB923C]/[0.14] text-[#FB923C]",
+    panel: "from-[#FB923C]/[0.10] via-card to-card",
+  },
   event: {
-    name: "Event",
+    name: EVENT_CATEGORY_LABELS.event,
     chip: "bg-[#34D399]/[0.14] text-[#34D399] hover:bg-[#34D399]/[0.18]",
     dot: "bg-[#34D399]",
     rail: "bg-[#34D399]",
@@ -134,21 +156,15 @@ const EVENT_TONES: Record<"club" | "live" | "culture" | "event", EventTone> = {
 
 const DAY_CATEGORY_CHIPS = [
   { key: "all", label: "All" },
-  { key: "club", label: "Club" },
-  { key: "live", label: "Live" },
-  { key: "culture", label: "Culture" },
-  { key: "event", label: "Event" },
+  ...EVENT_PRIMARY_CATEGORIES,
 ] as const;
 
 type DayCategory = (typeof DAY_CATEGORY_CHIPS)[number]["key"];
 type AgendaSortMode = "time" | "type" | "venue";
 
-const DAY_CATEGORY_SORT_ORDER: Record<Exclude<DayCategory, "all">, number> = {
-  club: 0,
-  live: 1,
-  culture: 2,
-  event: 3,
-};
+const DAY_CATEGORY_SORT_ORDER = Object.fromEntries(
+  EVENT_PRIMARY_CATEGORIES.map((category, index) => [category.key, index]),
+) as Record<Exclude<DayCategory, "all">, number>;
 
 type ConcreteDayCategory = Exclude<DayCategory, "all">;
 
@@ -356,6 +372,7 @@ function toCalendarEventSummary(event: PublicEvent): CalendarEventSummary {
     displayTimeStart: event.displayTimeStart,
     venue: event.venue,
     venueId: event.venueId,
+    venueCategory: event.venueCategory,
     artists: event.artists,
     eventType: event.eventType,
     ticketPrice: event.ticketPrice,
@@ -369,18 +386,12 @@ function toCalendarEventSummary(event: PublicEvent): CalendarEventSummary {
   };
 }
 
-function getEventTone(event: Pick<CalendarEventSummary, "artists" | "eventType" | "title">): EventTone {
+function getEventTone(event: CalendarEventSummary): EventTone {
   return EVENT_TONES[getEventCategoryKind(event)];
 }
 
-function getDayCategory(event: Pick<CalendarEventSummary, "artists" | "eventType" | "title">): ConcreteDayCategory {
-  const toneName = getEventTone(event).name.toLowerCase();
-
-  if (toneName === "club" || toneName === "live" || toneName === "culture") {
-    return toneName;
-  }
-
-  return "event";
+function getDayCategory(event: CalendarEventSummary): ConcreteDayCategory {
+  return getEventCategoryKind(event);
 }
 
 function getAgendaEventSortMinutes(event: CalendarEventSummary): number {
@@ -438,12 +449,9 @@ function compareAgendaEvents(
 }
 
 function createEmptyDayCategoryCounts(): DayCategoryCounts {
-  return {
-    club: 0,
-    live: 0,
-    culture: 0,
-    event: 0,
-  };
+  return Object.fromEntries(
+    EVENT_PRIMARY_CATEGORIES.map((category) => [category.key, 0]),
+  ) as DayCategoryCounts;
 }
 
 function getCalendarDayBucket(
@@ -958,7 +966,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                               <span className="block truncate text-[13px] font-semibold">{event.title}</span>
                               <EventSessionLabel className="mt-0 text-[11px] leading-4" event={event} />
                             </span>
-                            <span className="flex-none text-[10px] font-medium text-muted-foreground">{tone.name}</span>
+                            <span className="max-w-[40%] truncate text-[10px] font-medium text-muted-foreground">{tone.name}</span>
                           </Link>
                         </li>
                       );

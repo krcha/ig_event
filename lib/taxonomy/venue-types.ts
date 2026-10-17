@@ -261,7 +261,7 @@ const VENUE_CATEGORY_ALIASES: Array<{
   },
 ];
 
-function normalizeTaxonomyText(value: string | null | undefined): string {
+export function normalizeTaxonomyText(value: string | null | undefined): string {
   return (value ?? "")
     .toLowerCase()
     .replace(/[\u0111\u010d\u0107\u017e\u0161]/g, (character) => {

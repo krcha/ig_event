@@ -74,6 +74,7 @@ const checks = [
   { script: "qa:cross-post-campaign-automerge", timeoutMs: 60_000 },
   { script: "qa:ingestion-triage", timeoutMs: 60_000 },
   { script: "qa:venue-types", timeoutMs: 60_000 },
+  { script: "qa:event-categories", timeoutMs: 60_000 },
   { script: "qa:venue-lifecycle", timeoutMs: 60_000 },
   { script: "qa:venue-hours", timeoutMs: 60_000 },
   { script: "qa:google-hours", timeoutMs: 60_000 },

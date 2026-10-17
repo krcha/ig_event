@@ -10,11 +10,6 @@ import {
 } from "@/lib/events/event-time";
 import { getPublicTodayKey } from "@/lib/events/public-date";
 import { projectPublicEventVenueDisplay } from "@/lib/events/public-event-venue-fields";
-import {
-  DEFAULT_EVENT_TYPE,
-  canonicalizeEventType,
-  eventTypeFromVenueCategory,
-} from "@/lib/taxonomy/venue-types";
 import type { VenueHoursCacheFields, VenueHoursSource } from "@/lib/venues/venue-hours-cache";
 
 const DEFAULT_RECENT_INSTAGRAM_POST_LIMIT = 6;
@@ -114,7 +109,6 @@ function venueHoursFromVenue(venue: PublicVenue): VenueHoursCacheFields {
 
 function normalizeVenueEvent(event: PublicVenueEvent, venue: PublicVenue): PublicVenueEvent {
   const venueHours = venueHoursFromVenue(venue);
-  const canonicalEventType = canonicalizeEventType(event.eventType);
   const displayTime = resolveEventTimeDisplay({
     date: event.date,
     time: event.time,
@@ -128,10 +122,6 @@ function normalizeVenueEvent(event: PublicVenueEvent, venue: PublicVenue): Publi
     displayTimeLabel: displayTime.label,
     displayTimeSource: displayTime.source,
     displayTimeStart: displayTime.startLabel,
-    eventType:
-      canonicalEventType === DEFAULT_EVENT_TYPE
-        ? eventTypeFromVenueCategory(venue.category ?? event.venueCategory)
-        : canonicalEventType,
     time: getDisplayEventTime(event.time) ?? undefined,
     venueCategory: venue.category ?? event.venueCategory,
     venueHours,
