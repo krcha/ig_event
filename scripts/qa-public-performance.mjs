@@ -352,13 +352,13 @@ assert.doesNotMatch(
 
 assert.match(
   browsePageSource,
-  /const beforeDate = formatDateKey\(nextMonthStart\);[\s\S]*loadPublicCalendarEventsWindow\(\{ beforeDate, fromDate \}\)/,
-  "Calendar page should request only the selected month date range from the compact public calendar loader.",
+  /const beforeDate = openNowActive \? addDaysToDateKey\(belgradeNow.date, 1\) : formatDateKey\(nextMonthStart\);[\s\S]*loadPublicCalendarEventsWindow\(\{ beforeDate, fromDate \}\)/,
+  "Calendar uses the compact loader with a selected-month bound, or tomorrow for Open now.",
 );
 assert.match(
   browsePageSource,
-  /const fromDate = monthStartKey;/,
-  "Calendar page should load the full selected month so stored past days remain visible.",
+  /const fromDate = openNowActive \? addDaysToDateKey\(belgradeNow.date, -1\) : monthStartKey;/,
+  "Calendar preserves the full selected month; Open now loads yesterday for overnight carry.",
 );
 assertDoesNotInclude(
   browsePageSource,
