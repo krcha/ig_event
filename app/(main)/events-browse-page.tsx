@@ -25,11 +25,10 @@ import { getEventSessionLabel } from "@/lib/events/event-session";
 import { SaveEventButton } from "@/components/events/save-event-button";
 import { cn } from "@/lib/utils";
 import {
-  UNKNOWN_EVENT_TIME_LABEL,
-  getDisplayEventTime,
   getEventTimeSortMinutes,
   normalizeEventTime,
 } from "@/lib/events/event-time";
+import { resolveEventTimePresentation } from "@/lib/events/event-time-presentation";
 import { dateKeyToLocalNoonDate, getNightlifeDefaultDateKey } from "@/lib/events/nightlife-date";
 import { matchesPublicEventNameArtistOrVenue } from "@/lib/events/public-event-search";
 import { HOME_FAQ_ITEMS, buildHomePageStructuredData } from "@/lib/seo/site";
@@ -87,6 +86,7 @@ type CalendarEventSummary = Pick<
   | "venue"
   | "venueId"
   | "venueCategory"
+  | "venueHours"
   | "artists"
   | "eventType"
   | "ticketPrice"
@@ -250,7 +250,9 @@ function buildQueryString(params: Record<string, string | undefined>): string {
 }
 
 function getEventAriaLabel(event: CalendarEventSummary, tone: EventTone): string {
-  return ["Open " + event.title, getEventSessionLabel(event) ?? event.displayTimeLabel ?? getDisplayEventTime(event.time), event.venue, tone.name]
+  const time = resolveEventTimePresentation(event);
+  const timeLabel = time.kind === "venue_hours" ? `Venue hours: ${time.label}` : time.label;
+  return ["Open " + event.title, getEventSessionLabel(event), timeLabel, event.venue, tone.name]
     .filter(Boolean)
     .join(", ");
 }
@@ -373,6 +375,7 @@ function toCalendarEventSummary(event: PublicEvent): CalendarEventSummary {
     venue: event.venue,
     venueId: event.venueId,
     venueCategory: event.venueCategory,
+    venueHours: event.venueHours,
     artists: event.artists,
     eventType: event.eventType,
     ticketPrice: event.ticketPrice,
@@ -475,8 +478,13 @@ function formatArtistMeta(event: CalendarEventSummary): string | undefined {
   return event.artists.length > 0 ? event.artists.slice(0, 3).join(", ") : undefined;
 }
 
-function getResolvedDisplayTime(event: CalendarEventSummary): string | undefined {
-  return event.displayTimeLabel ?? getDisplayEventTime(event.time) ?? UNKNOWN_EVENT_TIME_LABEL;
+function VenueHoursTimeLabel({ label }: { label: string }) {
+  return (
+    <>
+      <span className="block text-[9px] font-medium leading-3 text-muted-foreground">Venue hours</span>
+      <span className="block break-words text-[10px] font-semibold leading-3 tabular-nums">{label}</span>
+    </>
+  );
 }
 
 function getResolvedTimeParts(event: CalendarEventSummary) {
@@ -939,6 +947,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                       const eventCategory = getDayCategory(event);
                       const isHiddenByKind = hiddenDayCategorySet.has(eventCategory);
                       const tone = getEventTone(event);
+                      const timePresentation = resolveEventTimePresentation(event);
 
                       return (
                         <li
@@ -959,8 +968,13 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                             href={`/events/${event._id}`}
                             prefetch={false}
                           >
-                            <span className="w-16 flex-none truncate text-xs font-semibold tabular-nums text-muted-foreground">
-                              {getResolvedDisplayTime(event)}
+                            <span
+                              className={cn("flex-none text-xs font-semibold tabular-nums text-muted-foreground", timePresentation.kind === "venue_hours" ? "w-20 py-1" : "w-16 truncate")}
+                              title={timePresentation.kind === "venue_hours" ? `Venue hours: ${timePresentation.label}` : timePresentation.label}
+                            >
+                              {timePresentation.kind === "venue_hours"
+                                ? <VenueHoursTimeLabel label={timePresentation.label} />
+                                : timePresentation.label}
                             </span>
                             <span className="min-w-0 flex-1">
                               <span className="block truncate text-[13px] font-semibold">{event.title}</span>
@@ -1015,7 +1029,8 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
             const eventCategory = getDayCategory(event);
             const isHiddenByKind = hiddenDayCategorySet.has(eventCategory);
             const eventTime = getResolvedTimeParts(event);
-            const displayEventTime = getResolvedDisplayTime(event);
+            const timePresentation = resolveEventTimePresentation(event);
+            const displayEventTime = timePresentation.label;
             const artistMeta = formatArtistMeta(event);
 
             if (isMobile) {
@@ -1053,6 +1068,17 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                             {eventTime.endLabel}
                           </span>
                         ) : null}
+                      </Link>
+                    ) : timePresentation.kind === "venue_hours" ? (
+                      <Link
+                        aria-label={getEventAriaLabel(event, tone)}
+                        className="box-border flex min-h-9 w-20 flex-none flex-col items-center justify-center rounded-[0.72rem] border border-border/65 bg-background/45 px-1 py-1 text-center hover:border-primary/35"
+                        data-calendar-event-link="true"
+                        href={`/events/${event._id}`}
+                        prefetch={false}
+                        title={`Venue hours: ${timePresentation.label}`}
+                      >
+                        <VenueHoursTimeLabel label={timePresentation.label} />
                       </Link>
                     ) : (
                       <Link
@@ -1110,16 +1136,19 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 <div className={cn("absolute inset-y-4 left-0 w-1 rounded-r-full", tone.rail)} />
                 <div className="flex items-start gap-2.5 pl-1.5">
                   <div className="flex min-w-0 flex-1 items-start gap-2.5">
-                    <div className="w-14 flex-none text-right">
+                    <div className={cn("flex-none text-right", timePresentation.kind === "venue_hours" ? "w-20" : "w-14")}>
                       {displayEventTime ? (
                         <Link
                           aria-label={getEventAriaLabel(event, tone)}
-                          className="block truncate text-sm font-semibold tabular-nums text-foreground hover:text-primary"
+                          className={cn("block text-sm font-semibold tabular-nums text-foreground hover:text-primary", timePresentation.kind !== "venue_hours" && "truncate")}
                           data-calendar-event-link="true"
                           href={`/events/${event._id}`}
                           prefetch={false}
+                          title={timePresentation.kind === "venue_hours" ? `Venue hours: ${displayEventTime}` : displayEventTime}
                         >
-                          {displayEventTime}
+                          {timePresentation.kind === "venue_hours"
+                            ? <VenueHoursTimeLabel label={displayEventTime} />
+                            : displayEventTime}
                         </Link>
                       ) : null}
                     </div>

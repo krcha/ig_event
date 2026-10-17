@@ -8,8 +8,10 @@ import {
 } from "../lib/events/event-time.ts";
 import {
   BELGRADE_TIMEZONE,
+  getVenueHoursWindowsForDate,
   serializeVenueHoursJson,
 } from "../lib/venues/venue-hours-cache.ts";
+import { resolveEventTimePresentation } from "../lib/events/event-time-presentation.ts";
 import {
   createManualVenueHoursPatch,
   fetchVenueHoursPatch,
@@ -216,6 +218,66 @@ assert.equal(
   resolveEventTimeDisplay({ date: WEDNESDAY }).label,
   UNKNOWN_EVENT_TIME_LABEL,
   "Missing event time and missing venue hours should render the unknown fallback.",
+);
+
+{
+  const venueHours = {
+    hoursJson: createHoursJson({
+      closed: false,
+      day: 3,
+      windows: [
+        { day: 3, end: "02:00", spansNextDay: true, start: "20:00" },
+        { day: 3, end: "18:00", start: "10:00" },
+      ],
+    }),
+  };
+  for (const time of [undefined, "", "TBD", "TBA"]) {
+    assert.deepEqual(
+      resolveEventTimePresentation({ date: WEDNESDAY, time, venueHours }),
+      { heading: "Venue hours", kind: "venue_hours", label: "10:00–18:00, 20:00–02:00" },
+      "Missing event time should display every venue window with an explicit venue label.",
+    );
+  }
+  assert.deepEqual(
+    resolveEventTimePresentation({ date: WEDNESDAY, time: "21:00", venueHours }),
+    { heading: "Time", kind: "event", label: "21:00" },
+    "A known event start must win without borrowing the venue closing time.",
+  );
+  assert.deepEqual(
+    resolveEventTimePresentation({ date: WEDNESDAY, time: "21:00-23:30", venueHours }),
+    { heading: "Time", kind: "event", label: "21:00–23:30" },
+  );
+  for (const date of ["2026-06-18", "2026-02-30", "not-a-date"]) {
+    assert.deepEqual(
+      resolveEventTimePresentation({ date, venueHours }),
+      { heading: "Time", kind: "unknown", label: UNKNOWN_EVENT_TIME_LABEL },
+      "Missing weekday hours or invalid dates must not borrow another day's hours.",
+    );
+  }
+  assert.equal(
+    resolveEventTimeDisplay({ date: WEDNESDAY, venueHours }).dayPeriod,
+    "unknown",
+    "Display fallback must leave event-time classification unknown.",
+  );
+}
+
+for (const closed of [false, true]) {
+  const venueHours = { hoursJson: createHoursJson({ closed, day: 3, windows: [] }) };
+  assert.deepEqual(
+    getVenueHoursWindowsForDate(venueHours, WEDNESDAY),
+    { status: closed ? "closed" : "unknown" },
+    "Only explicitly closed weekdays should be labeled closed.",
+  );
+  assert.equal(
+    resolveEventTimePresentation({ date: WEDNESDAY, venueHours }).kind,
+    "unknown",
+    "Closed and empty schedules must not fabricate event hours.",
+  );
+}
+
+assert.deepEqual(
+  getVenueHoursWindowsForDate({ hoursJson: "invalid JSON" }, WEDNESDAY),
+  { status: "unknown" },
 );
 
 const osmHours = normalizeOsmOpeningHours("Mo-Su 20:00-02:00", {

@@ -19,12 +19,11 @@ import { EventCalendarBackLink } from "@/components/calendar/calendar-scroll-res
 import { ReadMoreText } from "@/components/ui/read-more-text";
 import { JsonLd } from "@/components/seo/json-ld";
 import {
-  UNKNOWN_EVENT_TIME_LABEL,
-  getDisplayEventTime,
   resolveEventTimeDisplay,
   type EventDayPeriod,
   type EventTimeDisplaySource,
 } from "@/lib/events/event-time";
+import { resolveEventTimePresentation } from "@/lib/events/event-time-presentation";
 import { SaveEventButton } from "@/components/events/save-event-button";
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
 import { VenueWeeklyHours } from "@/components/venues/venue-weekly-hours";
@@ -369,8 +368,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
   if (!event) {
     notFound();
   }
-  const eventTime =
-    event.displayTimeLabel ?? getDisplayEventTime(event.time) ?? UNKNOWN_EVENT_TIME_LABEL;
+  const eventTime = resolveEventTimePresentation(event);
   const whatToKnowText = event.sourceCaption?.trim() || event.description?.trim() || "";
   const reviewedSourceUpdate = getPublicReviewedSourceUpdate(event);
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
@@ -435,13 +433,11 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
 
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                   <InfoTile icon={CalendarDays} label="Date" value={formatEventDate(event.date)} />
-                  {eventTime ? (
-                    <InfoTile
-                      icon={Clock3}
-                      label="Time"
-                      value={eventTime}
-                    />
-                  ) : null}
+                  <InfoTile
+                    icon={Clock3}
+                    label={eventTime.heading}
+                    value={eventTime.label}
+                  />
                   <div className="relative overflow-hidden rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3 transition hover:border-primary/35 hover:bg-white/[0.045]">
                     {venueHref ? (
                       <Link

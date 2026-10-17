@@ -1,9 +1,12 @@
 # Venue Working Hours Runbook
 
-The public event display already uses venue hours when an event has no explicit
-time: `resolveEventTimeDisplay` falls back to the matched venue's weekly hours,
-and public event loaders attach the venue hours payload. This runbook is about
-populating and refreshing `venues.hoursJson`.
+Public event loaders attach the matched venue's weekly hours. When the event has
+no explicit time, detail and calendar views display that date's venue windows
+under a separate `Venue hours` label. `resolveEventTimePresentation` supplies
+this display context; `resolveEventTimeDisplay` keeps the actual event time
+unknown. Venue opening hours never become event start/end times, structured
+data, sorting keys, or day/night classification. This runbook covers populating
+and refreshing `venues.hoursJson`.
 
 ## Prerequisites
 
@@ -72,7 +75,16 @@ available.
 
 The event detail page renders `VenueWeeklyHours` below the main event panel.
 The component renders nothing when no usable weekly hours exist and shows source
-attribution for Google, OpenStreetMap, or manual hours.
+attribution for Google, OpenStreetMap, or manual hours. Reviewed source links in
+`raw.sourceUrls` or `raw.evidenceUrls` appear as clickable hours sources.
+
+The main detail time tile and calendar rows use venue hours only when the event
+has no usable time. All windows for the event's weekday are shown, including
+overnight closing times. A known event start always wins; a missing event end
+is never filled from the venue closing time. Missing weekdays remain unknown
+(`Not available` in the weekly table), while only explicit closed days say
+`Closed`. Partial source schedules must omit unknown weekdays rather than mark
+them closed.
 
 ## Verification
 
