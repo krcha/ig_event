@@ -921,8 +921,10 @@ export const updateVenue = mutation({
         ? { category: canonicalizeVenueCategory(explicitPatch.category) }
         : {}),
     };
+    // Public event reads project the current curated venue name. Renaming that
+    // label must not rewrite source-bound event facts or require a rebind.
+    // Keep the migration guard for changes to the other stored venue fields.
     const denormalizedFields = [
-      "name",
       "instagramHandle",
       "category",
       "location",

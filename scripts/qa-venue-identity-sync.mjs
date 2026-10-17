@@ -10,6 +10,7 @@ import {
   assertReviewedVenueRenameOccurrences,
   getReviewedReferencedVenueRenameOccurrences,
   renameReferencedVenueWithReviewedEvents,
+  updateVenue,
 } from "../convex/venues.ts";
 
 const now = new Date("2026-08-27T18:30:00.000Z").getTime();
@@ -349,6 +350,202 @@ await assert.rejects(
     before,
     "Historical capacity must be checked before any venue identity write.",
   );
+}
+
+{
+  const originalAdminIds = process.env.ADMIN_CLERK_USER_IDS;
+  const originalSecret = process.env.CRON_SECRET;
+  process.env.ADMIN_CLERK_USER_IDS = "qa-venue-admin";
+  process.env.CRON_SECRET = "qa-admin-venue-display-rename";
+  const nextName = "Jugoslovensko dramsko pozori\u0161te";
+
+  async function makeReferencedRenameContext(subject = null) {
+    const state = makeDb();
+    const candidate = {
+      ...venue,
+      aliases: [],
+      instagramHandle: "jdp",
+      normalizedInstagramHandle: "jdp",
+      name: "jdp",
+      location: "Kralja Milana 50, Beograd",
+      latitude: 44.804,
+      longitude: 20.466,
+      publicStatus: "published",
+      scrapeActive: true,
+    };
+    state.venues.set(candidate._id, candidate);
+    await syncVenueRecordIdentities({ db: state }, candidate);
+    const events = ["approved", "pending", "rejected"].map((status) => ({
+      _id: `rename-event-${status}`,
+      venueId: candidate._id,
+      venue: candidate.name,
+      venueInstagramHandle: candidate.instagramHandle,
+      normalizedVenueInstagramHandle: candidate.instagramHandle,
+      normalizedVenueIdentity: "instagram:jdp",
+      title: `Source title ${status}`,
+      date: "2026-10-18",
+      status,
+      updatedAt: 10,
+    }));
+    const protectedTables = new Map([
+      ["events", events],
+      ["instagramEventSources", events.map((event) => ({
+        _id: `source-${event._id}`,
+        eventId: event._id,
+        sourcePostId: `post-${event._id}`,
+        venueClaim: candidate.name,
+        updatedAt: 20,
+      }))],
+      ["scrapedPosts", events.map((event) => ({
+        _id: `post-${event._id}`,
+        instagramPostId: `instagram-${event._id}`,
+        caption: `${event.title} at jdp`,
+        aiAnalysis: JSON.stringify({ venue: candidate.name, title: event.title }),
+        updatedAt: 25,
+      }))],
+      ["instagramSourceOccurrenceReceipts", events.map((event) => ({
+        _id: `receipt-${event._id}`,
+        sourceIdentity: `instagram-post:${event._id}`,
+        sourceFingerprint: `fingerprint-${event._id}`,
+        expectedKeys: [event._id],
+        expectedOccurrences: [{
+          key: event._id, date: event.date, venue: candidate.name, title: event.title,
+          artists: [], factsJson: JSON.stringify({ venueClaim: candidate.name }),
+        }],
+        satisfiedKeys: [event._id],
+        satisfiedOccurrences: [{ key: event._id, eventId: event._id }],
+        deferredChildCount: 0,
+        deferredChildKeys: [],
+        createdAt: 1,
+        updatedAt: 30,
+      }))],
+      ["sourceOccurrences", [
+        ...events.map((event) => ({
+          _id: `occurrence-${event._id}`,
+          venueId: candidate._id,
+          canonicalEventId: event._id,
+          state: "satisfied",
+          factsJson: JSON.stringify({ venueClaim: candidate.name }),
+          normalizedOccurrenceJson: JSON.stringify({ venue: candidate.name }),
+          updatedAt: 40,
+        })),
+        {
+          _id: "rename-unbound-occurrence",
+          venueId: candidate._id,
+          state: "deferred",
+          factsJson: JSON.stringify({ venueClaim: candidate.name }),
+          updatedAt: 41,
+        },
+      ]],
+    ]);
+    const writes = [];
+    const context = {
+      auth: { async getUserIdentity() { return subject ? { subject } : null; } },
+      db: {
+        async get(id) {
+          return structuredClone(await state.get(id) ??
+            [...protectedTables.values()].flat().find((row) => row._id === id) ?? null);
+        },
+        async patch(id, patch) {
+          assert.ok(state.venues.has(id) || state.identities.has(id),
+            "A display-name edit must never patch event facts, sources, receipts, or occurrences.");
+          writes.push({ id, patch: structuredClone(patch) });
+          if (state.venues.has(id)) Object.assign(state.venues.get(id), structuredClone(patch));
+          else await state.patch(id, patch);
+        },
+        async insert(table, value) {
+          assert.equal(table, "venueIdentities", "A display-name edit may insert only venue identity records.");
+          writes.push({ table, value: structuredClone(value) });
+          return state.insert(table, value);
+        },
+        query(table) {
+          if (table === "venueIdentities") return state.query(table);
+          const records = table === "venues" ? [...state.venues.values()] : protectedTables.get(table);
+          assert.ok(records, `Unexpected display-name rename QA table ${table}`);
+          const take = (criteria = []) => ({ async take(limit) {
+            return structuredClone(records.filter((row) =>
+              criteria.every(([field, value]) => row[field] === value)).slice(0, limit));
+          } });
+          return { ...take(), withIndex(_index, configure) { return take(criteriaFrom(configure)); } };
+        },
+      },
+    };
+    return { state, candidate, protectedTables, writes, context };
+  }
+
+  try {
+    for (const authorization of ["admin", "service"]) {
+      const fixture = await makeReferencedRenameContext(authorization === "admin" ? "qa-venue-admin" : null);
+      const originalVenue = structuredClone(fixture.candidate);
+      const originalFacts = structuredClone(fixture.protectedTables);
+      const result = await updateVenue._handler(fixture.context, {
+        id: fixture.candidate._id,
+        expectedUpdatedAt: originalVenue.updatedAt,
+        patch: { name: nextName },
+        ...(authorization === "service" ? { serviceSecret: process.env.CRON_SECRET } : {}),
+      });
+      assert.equal(result.updated, true);
+      assert.ok(result.updatedAt > originalVenue.updatedAt);
+      assert.deepEqual(fixture.candidate, { ...originalVenue, name: nextName, updatedAt: result.updatedAt },
+        "An admin venue rename must retain the venue ID, handle, location, lifecycle, and all other fields.");
+      assert.deepEqual(fixture.protectedTables, originalFacts,
+        "Renaming a referenced venue must preserve every approved/pending/rejected event and source fact byte for byte.");
+      const identities = [...fixture.state.identities.values()];
+      assert.equal(identities.find((row) => row.kind === "canonical_name" && row.rawValue === "jdp").active, false);
+      assert.equal(identities.find((row) => row.kind === "canonical_name" && row.rawValue === nextName).active, true);
+      assert.equal(identities.find((row) => row.kind === "historical_alias" && row.rawValue === "jdp").active, true,
+        "The former canonical venue name must remain available for historical source resolution.");
+      assert.equal(identities.find((row) => row.kind === "provider_account" && row.rawValue === "jdp").active, true);
+    }
+
+    const denied = await makeReferencedRenameContext();
+    await assert.rejects(updateVenue._handler(denied.context, {
+      id: denied.candidate._id, patch: { name: nextName },
+    }), /Authentication required/u);
+    const unauthorizedAdmin = await makeReferencedRenameContext("qa-non-admin");
+    await assert.rejects(updateVenue._handler(unauthorizedAdmin.context, {
+      id: unauthorizedAdmin.candidate._id, patch: { name: nextName },
+    }), /Admin access required/u);
+    assert.equal(denied.writes.length + unauthorizedAdmin.writes.length, 0,
+      "Unauthenticated and non-admin callers must not write any venue metadata or identities.");
+
+    const guarded = await makeReferencedRenameContext("qa-venue-admin");
+    const guardedBefore = structuredClone(guarded.candidate);
+    for (const physicalPatch of [
+      { instagramHandle: "other_jdp" },
+      { category: "bar" },
+      { location: "Other Street 1" },
+      { latitude: 44.9 },
+      { longitude: 20.5 },
+    ]) {
+      await assert.rejects(updateVenue._handler(guarded.context, {
+        id: guarded.candidate._id, patch: { name: nextName, ...physicalPatch },
+      }), /require a bounded venue-rebind migration/u,
+      "A display-name correction must not authorize changing a referenced venue's physical identity.");
+    }
+    await assert.rejects(updateVenue._handler(guarded.context, {
+      id: guarded.candidate._id, expectedUpdatedAt: guardedBefore.updatedAt - 1, patch: { name: nextName },
+    }), /changed after it was reviewed/u);
+    guarded.state.venues.set("conflicting-venue", {
+      ...guardedBefore,
+      _id: "conflicting-venue",
+      name: "Other Theatre",
+      instagramHandle: "other_theatre",
+      aliases: [nextName],
+    });
+    await assert.rejects(updateVenue._handler(guarded.context, {
+      id: guarded.candidate._id, patch: { name: nextName },
+    }), /already assigned to Other Theatre/u,
+    "A name-only edit must still reject a name claimed as another venue's alias.");
+    assert.deepEqual(guarded.candidate, guardedBefore);
+    assert.equal(guarded.writes.length, 0,
+      "Physical identity conflicts, stale edits, and alias ambiguity must fail before any write.");
+  } finally {
+    if (originalAdminIds === undefined) delete process.env.ADMIN_CLERK_USER_IDS;
+    else process.env.ADMIN_CLERK_USER_IDS = originalAdminIds;
+    if (originalSecret === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = originalSecret;
+  }
 }
 
 {
