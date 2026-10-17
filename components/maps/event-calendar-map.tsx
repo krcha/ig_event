@@ -6,11 +6,13 @@ import { ArrowRight, CalendarDays, ChevronLeft, ChevronRight, Clock3, MapPin, Na
 import { EventLocationMap } from "@/components/maps/event-location-map";
 import { EventSessionLabel } from "@/components/events/event-session-label";
 import { EventMetaRow } from "@/components/events/event-meta";
+import { OpenNowFilter } from "@/components/calendar/open-now-filter";
 import { getEventSessionLabel } from "@/lib/events/event-session";
-import { buildEventMapData, buildEventMapHref, MAP_MAX_DATE, MAP_MIN_DATE } from "@/lib/events/event-map";
-import { UNKNOWN_EVENT_TIME_LABEL } from "@/lib/events/event-time";
+import { buildEventMapData, buildEventMapHref, filterEventMapEvents, MAP_MAX_DATE, MAP_MIN_DATE } from "@/lib/events/event-map";
+import { resolveEventTimePresentation } from "@/lib/events/event-time-presentation";
 import { addDaysToDateKey } from "@/lib/events/nightlife-date";
 import type { PublicEvent } from "@/lib/events/public-events";
+import { getBelgradeNow } from "@/lib/venues/venue-open-now";
 import { cn } from "@/lib/utils";
 import "./event-calendar-map.css";
 
@@ -19,6 +21,8 @@ type EventCalendarMapProps = {
   todayDate: string;
   days: readonly { date: string; eventCount: number }[];
   events: PublicEvent[];
+  initialNow: number;
+  openNowActive: boolean;
 };
 
 const MAP_KEYBOARD_DATE_KEY = "eventzeka-map-keyboard-date";
@@ -39,11 +43,12 @@ function formatDate(date: string, options: Intl.DateTimeFormatOptions): string {
 }
 
 function MapEventRow({ event }: { event: PublicEvent }) {
+  const time = resolveEventTimePresentation(event);
   return (
-    <Link aria-label={`${event.title} at ${event.venue}, ${getEventSessionLabel(event) || event.displayTimeLabel || event.time || UNKNOWN_EVENT_TIME_LABEL}`} className="group flex items-start gap-3 rounded-xl px-3 py-3 hover:bg-white/[0.045] focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" href={`/events/${event._id}`} prefetch={false}>
+    <Link aria-label={`${event.title} at ${event.venue}, ${getEventSessionLabel(event) || time.label}`} className="group flex items-start gap-3 rounded-xl px-3 py-3 hover:bg-white/[0.045] focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" data-event-map-event-id={event._id} href={`/events/${event._id}`} prefetch={false}>
       <Clock3 aria-hidden="true" className="mt-0.5 h-4 w-4 flex-none text-primary" />
       <div className="min-w-0 flex-1">
-        <p className="text-xs font-medium text-muted-foreground">{event.displayTimeLabel || event.time || UNKNOWN_EVENT_TIME_LABEL}</p>
+        <p className={cn("text-xs text-muted-foreground", time.kind === "venue_hours" ? "font-normal" : "font-medium")}>{time.label}</p>
         <h3 className="mt-1 text-sm font-semibold leading-5 text-foreground group-hover:text-primary">{event.title}</h3>
         <EventSessionLabel event={event} />
         <EventMetaRow className="mt-1" event={event} />
@@ -53,8 +58,40 @@ function MapEventRow({ event }: { event: PublicEvent }) {
   );
 }
 
-export function EventCalendarMap({ selectedDate, todayDate, days, events }: EventCalendarMapProps) {
-  const { locations, unmappedEvents } = useMemo(() => buildEventMapData(events), [events]);
+export function EventCalendarMap({ initialNow, openNowActive, selectedDate, todayDate, days, events }: EventCalendarMapProps) {
+  const [now, setNow] = useState(initialNow);
+  useEffect(() => {
+    let timeout: ReturnType<typeof setTimeout>;
+    const update = () => {
+      const currentNow = Date.now();
+      setNow(currentNow);
+      timeout = setTimeout(update, 60_000 - currentNow % 60_000 + 25);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        clearTimeout(timeout);
+        update();
+      }
+    };
+    update();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      clearTimeout(timeout);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [initialNow]);
+  const filterNow = openNowActive ? now : initialNow;
+  const eligibleEventIds = useMemo(() => JSON.stringify(
+    filterEventMapEvents(events, { selectedDate, openNow: openNowActive, now: filterNow }).map((event) => event._id),
+  ), [events, filterNow, openNowActive, selectedDate]);
+  // Keep the map and open popups intact while the clock advances without any
+  // event entering or leaving the current result set.
+  const visibleEvents = useMemo(() => {
+    const ids = new Set<string>(JSON.parse(eligibleEventIds));
+    return events.filter((event) => ids.has(event._id));
+  }, [eligibleEventIds, events]);
+  const { locations, unmappedEvents } = useMemo(() => buildEventMapData(visibleEvents), [visibleEvents]);
+  const openNowHref = buildEventMapHref(getBelgradeNow(now).date, { openNow: !openNowActive });
   const [selection, setSelection] = useState<{ date: string; id: string } | null>(null);
   const selectedLocationId = selection?.date === selectedDate ? selection.id : null;
   const locationCards = useRef(new Map<string, HTMLElement>());
@@ -77,10 +114,10 @@ export function EventCalendarMap({ selectedDate, todayDate, days, events }: Even
     });
   }, [selectedDate]);
   const fullDateLabel = formatDate(selectedDate, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-  const mappedEventCount = events.length - unmappedEvents.length;
+  const mappedEventCount = visibleEvents.length - unmappedEvents.length;
 
   return (
-    <main className="app-page event-calendar-page gap-4">
+    <main className="app-page event-calendar-page gap-4" data-event-map-open-now-active={openNowActive ? "true" : "false"}>
       <h1 className="sr-only lg:hidden">Belgrade event map</h1>
       <section className="hero-panel hidden px-4 py-5 sm:px-6 sm:py-6 lg:block">
         <div className="flex flex-wrap items-end justify-between gap-4">
@@ -120,11 +157,12 @@ export function EventCalendarMap({ selectedDate, todayDate, days, events }: Even
         <nav aria-label="Event days" className="grid grid-cols-7 gap-1.5 sm:gap-2">
           {days.map((day) => {
             const selected = day.date === selectedDate;
+            const eventCount = selected && openNowActive ? visibleEvents.length : day.eventCount;
             return (
-              <Link aria-current={selected ? "date" : undefined} aria-label={`${formatDate(day.date, { weekday: "long", day: "numeric", month: "long" })}, ${day.eventCount} ${day.eventCount === 1 ? "event" : "events"}`} className={cn("flex min-w-0 flex-col items-center rounded-xl border px-1 py-3 text-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary", selected ? "border-primary bg-primary text-primary-foreground" : "border-border bg-white/[0.02] hover:border-primary/40 hover:bg-white/[0.05]")} href={buildEventMapHref(day.date)} key={day.date} onKeyDown={(event) => preserveDayFocus(event, day.date)} prefetch={false} ref={selected ? selectedDayRef : undefined} scroll={false}>
+              <Link aria-current={selected ? "date" : undefined} aria-label={`${formatDate(day.date, { weekday: "long", day: "numeric", month: "long" })}, ${eventCount} ${eventCount === 1 ? "event" : "events"}${selected && openNowActive ? " open now" : ""}${openNowActive ? "; show all events for this day" : ""}`} className={cn("flex min-w-0 flex-col items-center rounded-xl border px-1 py-3 text-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary", selected ? "border-primary bg-primary text-primary-foreground" : "border-border bg-white/[0.02] hover:border-primary/40 hover:bg-white/[0.05]")} href={buildEventMapHref(day.date)} key={day.date} onKeyDown={(event) => preserveDayFocus(event, day.date)} prefetch={false} ref={selected ? selectedDayRef : undefined} scroll={false}>
                 <span className={cn("text-[10px] font-semibold uppercase tracking-wider sm:text-xs", !selected && "text-muted-foreground")}>{formatDate(day.date, { weekday: "short" })}</span>
                 <span className="mt-1 text-xl font-semibold leading-7 sm:text-2xl">{formatDate(day.date, { day: "numeric" })}</span>
-                <span className={cn("mt-1 text-[10px] sm:text-xs", !selected && "text-muted-foreground")}><span className="sm:hidden">{day.eventCount}</span><span className="hidden sm:inline">{day.eventCount} {day.eventCount === 1 ? "event" : "events"}</span></span>
+                <span className={cn("mt-1 text-[10px] sm:text-xs", !selected && "text-muted-foreground")}><span className="sm:hidden">{eventCount}</span><span className="hidden sm:inline">{eventCount} {eventCount === 1 ? "event" : "events"}</span></span>
               </Link>
             );
           })}
@@ -133,7 +171,7 @@ export function EventCalendarMap({ selectedDate, todayDate, days, events }: Even
 
       <div className="hidden flex-wrap items-center justify-between gap-2 px-1 lg:flex">
         <h2 className="text-base font-semibold sm:text-lg">{formatDate(selectedDate, { weekday: "long", day: "numeric", month: "long" })}</h2>
-        <p aria-live="polite" className="text-xs text-muted-foreground sm:text-sm">{events.length} {events.length === 1 ? "event" : "events"} <span aria-hidden="true">·</span> {mappedEventCount} mapped</p>
+        <p aria-live="polite" className="text-xs text-muted-foreground sm:text-sm">{visibleEvents.length} {visibleEvents.length === 1 ? "event" : "events"} <span aria-hidden="true">·</span> {mappedEventCount} mapped</p>
       </div>
 
       <div className="event-calendar-layout grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_400px]">
@@ -151,6 +189,9 @@ export function EventCalendarMap({ selectedDate, todayDate, days, events }: Even
               <ChevronRight aria-hidden="true" className="h-4 w-4" />
             </a>
           </section>
+          <div className="absolute bottom-3 left-3 z-[600] rounded-full border border-border bg-card/95 p-1 shadow-lg lg:bottom-auto lg:top-14">
+            <OpenNowFilter active={openNowActive} href={openNowHref} initialNow={initialNow} />
+          </div>
         </div>
         <section aria-label={`Events for ${fullDateLabel}`} className="glass-panel hidden min-w-0 overflow-hidden lg:flex lg:max-h-[622px] lg:flex-col">
           <div className="hidden border-b border-border px-4 py-4 lg:block">
@@ -181,11 +222,11 @@ export function EventCalendarMap({ selectedDate, todayDate, days, events }: Even
                 {unmappedEvents.map((event) => <div key={event._id}><p className="px-3 pt-2 text-xs font-semibold text-primary">{event.venue || "Venue to be announced"}</p><MapEventRow event={event} /></div>)}
               </div>
             ) : null}
-            {events.length === 0 ? (
+            {visibleEvents.length === 0 ? (
               <div className="px-4 py-10 text-center">
                 <CalendarDays aria-hidden="true" className="mx-auto h-8 w-8 text-primary" />
-                <h3 className="mt-4 text-lg font-semibold">No events listed for this day</h3>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">Try another day to see what&apos;s coming up in Belgrade.</p>
+                <h3 className="mt-4 text-lg font-semibold">{openNowActive ? "No events open now" : "No events listed for this day"}</h3>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">{openNowActive ? "Check back later or choose another day to explore events." : "Try another day to see what's coming up in Belgrade."}</p>
                 <Link className="button-secondary mt-5 min-h-10 gap-2 px-4 py-0 text-sm" href={buildEventMapHref(addDaysToDateKey(selectedDate, 1))} prefetch={false} scroll={false}>Next day <ChevronRight aria-hidden="true" className="h-4 w-4" /></Link>
               </div>
             ) : null}

@@ -1,4 +1,5 @@
-import { getDisplayEventTime, UNKNOWN_EVENT_TIME_LABEL } from "./event-time.ts";
+import { getDisplayEventTime, normalizeEventTime, UNKNOWN_EVENT_TIME_LABEL } from "./event-time.ts";
+import { getVenueClosingForEventStart } from "../venues/venue-open-now.ts";
 import {
   formatVenueHoursWindow,
   getVenueHoursWindowsForDate,
@@ -6,7 +7,9 @@ import {
 } from "../venues/venue-hours-cache.ts";
 
 type EventTimePresentation = {
+  endLabel?: string;
   heading: "Time";
+  inferredEnd?: true;
   kind: "event" | "venue_hours" | "unknown";
   label: string;
 };
@@ -20,6 +23,23 @@ export function resolveEventTimePresentation(options: {
 }): EventTimePresentation {
   const eventTime = getDisplayEventTime(options.time);
   if (eventTime) {
+    const normalized = normalizeEventTime(options.time);
+    const closing = normalized.startLabel && !normalized.endLabel
+      ? getVenueClosingForEventStart({
+          date: options.date,
+          startTime: normalized.startLabel,
+          venueHours: options.venueHours,
+        })
+      : null;
+    if (closing) {
+      return {
+        endLabel: closing.time,
+        heading: "Time",
+        inferredEnd: true,
+        kind: "event",
+        label: `${normalized.startLabel}–${closing.time}`,
+      };
+    }
     return { heading: "Time", kind: "event", label: eventTime };
   }
 

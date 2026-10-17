@@ -151,6 +151,15 @@
   overflow-wrap: anywhere;
 }
 
+.event-map-events-popup .leaflet-popup-content p.event-map-popup-event-time {
+  margin: 0 0 4px;
+  color: #aaa6bc;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
 .event-location-map .event-map-popup-event-venue {
   display: inline-flex;
   align-items: center;

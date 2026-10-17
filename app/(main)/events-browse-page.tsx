@@ -488,15 +488,17 @@ function VenueTimeLabel({ label }: { label: string }) {
 }
 
 function getResolvedTimeParts(event: CalendarEventSummary) {
+  const presentation = resolveEventTimePresentation(event);
   if (event.displayTimeStart) {
     return {
       allDay: false,
-      endLabel: event.displayTimeEnd,
+      endLabel: event.displayTimeEnd ?? presentation.endLabel,
       startLabel: event.displayTimeStart,
     };
   }
 
-  return normalizeEventTime(event.time);
+  const time = normalizeEventTime(event.time);
+  return { ...time, endLabel: time.endLabel ?? presentation.endLabel };
 }
 
 function pluralize(value: number, singular: string, plural = `${singular}s`): string {
@@ -1083,7 +1085,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                           {eventTime.startLabel}
                         </span>
                         {eventTime.endLabel ? (
-                          <span className="block max-w-full truncate text-[10px] font-semibold leading-3 tabular-nums text-muted-foreground">
+                          <span className={cn("block max-w-full truncate text-[10px] leading-3 tabular-nums text-muted-foreground", timePresentation.inferredEnd ? "font-normal" : "font-semibold")}>
                             {eventTime.endLabel}
                           </span>
                         ) : null}

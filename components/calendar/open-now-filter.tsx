@@ -1,9 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useTransition } from "react";
 import { cn } from "@/lib/utils";
-import { getBelgradeNow } from "@/lib/venues/venue-open-now";
 
 type OpenNowFilterProps = {
   active: boolean;
@@ -11,20 +10,20 @@ type OpenNowFilterProps = {
   initialNow: number;
 };
 
-export function OpenNowFilter({ active, href, initialNow }: OpenNowFilterProps) {
+export function OpenNowFilter({ active, href }: OpenNowFilterProps) {
   const router = useRouter();
-  const [now, setNow] = useState(initialNow);
   const [pending, startTransition] = useTransition();
-  const belgradeNow = getBelgradeNow(now);
 
   useEffect(() => {
+    if (!active) {
+      return;
+    }
     let timeout: ReturnType<typeof setTimeout>;
     let stopped = false;
 
     const updateClock = (refreshResults: boolean) => {
       const currentNow = Date.now();
-      setNow(currentNow);
-      if (active && refreshResults && document.visibilityState !== "hidden") {
+      if (refreshResults && document.visibilityState !== "hidden") {
         startTransition(() => router.refresh());
       }
       clearTimeout(timeout);
@@ -51,7 +50,7 @@ export function OpenNowFilter({ active, href, initialNow }: OpenNowFilterProps) 
   return (
     <button
       aria-busy={pending}
-      aria-label={`Open now, Belgrade time ${belgradeNow.time}`}
+      aria-label="Open now"
       aria-pressed={active}
       className={cn(
         "inline-flex min-h-8 flex-none items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium transition hover:opacity-90",
@@ -68,9 +67,6 @@ export function OpenNowFilter({ active, href, initialNow }: OpenNowFilterProps) 
     >
       <span aria-hidden="true" className={cn("size-1.5 rounded-full", active ? "bg-emerald-300" : "bg-current opacity-50")} />
       <span>Open now</span>
-      <time className="font-normal tabular-nums opacity-80" dateTime={`${belgradeNow.date}T${belgradeNow.time}`}>
-        Belgrade {belgradeNow.time}
-      </time>
     </button>
   );
 }

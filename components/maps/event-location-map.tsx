@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Expand, LoaderCircle, LocateFixed, MapPin } from "lucide-react";
 import type { Map as LeafletMap, Marker } from "leaflet";
 import type { EventMapLocation } from "@/lib/events/event-map";
 import { getEventSessionLabel } from "@/lib/events/event-session";
+import { resolveEventTimePresentation } from "@/lib/events/event-time-presentation";
 import { cn } from "@/lib/utils";
 import "leaflet/dist/leaflet.css";
 import "./event-map.css";
@@ -19,6 +20,11 @@ type EventLocationMapProps = {
 };
 
 export function EventLocationMap({ className, locations, selectedLocationId, onSelectLocation }: EventLocationMapProps) {
+  // Server refreshes create new prop objects. Keep Leaflet alive when their
+  // content is unchanged so open popups, the viewport, and location tracking
+  // survive the Open now clock refresh.
+  const locationsSnapshot = JSON.stringify(locations);
+  const mapLocations = useMemo(() => JSON.parse(locationsSnapshot) as EventMapLocation[], [locationsSnapshot]);
   const containerRef = useRef<HTMLDivElement>(null);
   const mapInstanceId = useId();
   const mapRef = useRef<LeafletMap | null>(null);
@@ -146,7 +152,7 @@ export function EventLocationMap({ className, locations, selectedLocationId, onS
       tiles.addTo(map);
 
       const pointGroups = new Map<string, { location: EventMapLocation; number: number }[]>();
-      locations.forEach((location, index) => {
+      mapLocations.forEach((location, index) => {
         const point = JSON.stringify([location.latitude, location.longitude]);
         const group = pointGroups.get(point) ?? [];
         group.push({ location, number: index + 1 });
@@ -185,8 +191,13 @@ export function EventLocationMap({ className, locations, selectedLocationId, onS
         mobileEvents.className = "event-map-mobile-events";
         group.forEach((entry) => {
           entry.location.events.forEach((event) => {
+            const time = resolveEventTimePresentation(event);
             const eventRow = document.createElement("article");
             eventRow.className = "event-map-popup-event";
+            eventRow.dataset.eventMapPopupEventId = event._id;
+            const eventTime = document.createElement("p");
+            eventTime.className = "event-map-popup-event-time";
+            eventTime.textContent = time.label;
             const eventTitle = document.createElement("p");
             eventTitle.className = "event-map-popup-event-title";
             const session = getEventSessionLabel(event);
@@ -195,8 +206,8 @@ export function EventLocationMap({ className, locations, selectedLocationId, onS
             eventLink.className = "event-map-popup-event-venue";
             eventLink.href = `/events/${encodeURIComponent(event._id)}`;
             eventLink.textContent = event.venue;
-            eventLink.setAttribute("aria-label", `${event.venue}: open ${event.title}${session ? `, ${session}` : ""}`);
-            eventRow.append(eventTitle, eventLink);
+            eventLink.setAttribute("aria-label", `${event.venue}: open ${event.title}, ${time.label}${session ? `, ${session}` : ""}`);
+            eventRow.append(eventTime, eventTitle, eventLink);
             mobileEvents.append(eventRow);
           });
         });
@@ -315,10 +326,10 @@ export function EventLocationMap({ className, locations, selectedLocationId, onS
       });
 
       function fitMap() {
-        if (locations.length === 0) {
+        if (mapLocations.length === 0) {
           map.setView(BELGRADE_CENTER, desktopViewport.matches ? 13 : 14);
         } else {
-          map.fitBounds(L.latLngBounds(locations.map((location) => [location.latitude, location.longitude])), {
+          map.fitBounds(L.latLngBounds(mapLocations.map((location) => [location.latitude, location.longitude])), {
             paddingTopLeft: [64, 112],
             paddingBottomRight: [64, 88],
             maxZoom: 15,
@@ -361,7 +372,7 @@ export function EventLocationMap({ className, locations, selectedLocationId, onS
       mapRef.current?.remove();
       mapRef.current = null;
     };
-  }, [locations, mapInstanceId, onSelectLocation]);
+  }, [mapLocations, mapInstanceId, onSelectLocation]);
 
   useEffect(() => {
     if (status !== "ready") return;
@@ -396,7 +407,7 @@ export function EventLocationMap({ className, locations, selectedLocationId, onS
       {status === "ready" ? (
         <div className="pointer-events-none absolute left-3 right-3 top-[4.5rem] z-[500] flex items-start justify-end gap-2 lg:top-3 lg:justify-between">
           <span className="hidden rounded-full border border-border bg-card/95 px-3 py-2 text-xs font-semibold text-foreground shadow-lg lg:inline">
-            {locations.length} {locations.length === 1 ? "venue" : "venues"} on the map
+            {mapLocations.length} {mapLocations.length === 1 ? "venue" : "venues"} on the map
           </span>
           <div className="pointer-events-auto flex gap-2">
             <button aria-label={locationStatus === "locating" ? "Finding your location" : "Show my location"} aria-busy={locationStatus === "locating"} className="button-secondary min-h-11 gap-2 bg-card/95 px-3 py-0 text-xs shadow-lg disabled:cursor-wait" disabled={locationStatus === "locating"} onClick={() => locateUserRef.current?.()} type="button">
@@ -418,7 +429,7 @@ export function EventLocationMap({ className, locations, selectedLocationId, onS
           The street map could not load. Venue pins and event details are still available.
         </p>
       ) : null}
-      {locations.length === 0 && status === "ready" && !tilesUnavailable ? (
+      {mapLocations.length === 0 && status === "ready" && !tilesUnavailable ? (
         <p className="pointer-events-none absolute bottom-14 left-3 z-[500] max-w-[75%] rounded-xl border border-border bg-card/95 px-3 py-2 text-xs text-muted-foreground">
           No mapped locations for this day.
         </p>

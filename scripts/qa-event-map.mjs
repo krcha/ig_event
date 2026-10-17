@@ -6,6 +6,7 @@ import {
   buildEventMapData,
   buildEventMapHref,
   enrichEventMapCoordinates,
+  filterEventMapEvents,
   normalizeMapDateKey,
 } from "../lib/events/event-map.ts";
 
@@ -24,6 +25,7 @@ for (const date of [
   assert.equal(normalizeMapDateKey(date, fallbackDate), fallbackDate, `Reject invalid date ${date}.`);
 }
 assert.equal(buildEventMapHref("2026-10-16"), "/map?date=2026-10-16");
+assert.equal(buildEventMapHref("2026-10-16", { openNow: true }), "/map?date=2026-10-16&open=now");
 assert.equal(
   new URL(buildEventMapHref("2026-10-16&category=club"), "https://eventzeka.com").searchParams.get("date"),
   "2026-10-16&category=club",
@@ -137,5 +139,37 @@ assert.deepEqual(
   "Marker and lineup order must be stable regardless of incoming event order.",
 );
 assert.deepEqual(buildEventMapData([]), { locations: [], unmappedEvents: [] });
+
+const overnightHours = {
+  hoursJson: JSON.stringify({
+    generatedAt: "2026-10-16T12:00:00.000Z",
+    source: "manual",
+    timezone: "Europe/Belgrade",
+    version: 1,
+    weekly: [{ day: 5, closed: false, windows: [{ day: 5, start: "18:00", end: "04:00", spansNextDay: true }] }],
+  }),
+};
+const openNowEvents = [
+  makeEvent({ _id: "ongoing", date: "2026-10-16", time: "22:00", venueHours: overnightHours }),
+  makeEvent({ _id: "ended", date: "2026-10-16", time: "22:00-01:00", venueHours: overnightHours }),
+  makeEvent({ _id: "no-start", date: "2026-10-16", time: "TBD", venueHours: overnightHours }),
+  makeEvent({ _id: "future", date: "2026-10-18", time: "22:00", venueHours: overnightHours }),
+  makeEvent({ _id: "unknown-hours", date: "2026-10-16", time: "TBD" }),
+];
+const openNowOptions = { selectedDate: "2026-10-17", openNow: true, now: Date.parse("2026-10-17T00:00:00Z") };
+const filteredOpenEvents = filterEventMapEvents(openNowEvents, openNowOptions);
+assert.deepEqual(filteredOpenEvents.map((event) => event._id), ["ongoing", "no-start"],
+  "The map must retain an ongoing previous-day event until venue closing, excluding ended/future/unverified events.");
+assert.deepEqual(buildEventMapData(filteredOpenEvents).locations[0].events.map((event) => event._id), ["ongoing", "no-start"],
+  "Pins and popups must use the same filtered event set as the map lineup.");
+assert.deepEqual(filterEventMapEvents(openNowEvents, { ...openNowOptions, now: Date.parse("2026-10-17T02:00:00Z") }), [],
+  "Open now markers must disappear at the exact venue closing boundary.");
+assert.deepEqual(filterEventMapEvents(openNowEvents, { ...openNowOptions, selectedDate: "2026-10-16", openNow: false }),
+  openNowEvents.filter((event) => event.date === "2026-10-16"),
+  "Date browsing must retain its complete lineup when Open now is off.");
+
+const beforeStart = [makeEvent({ _id: "later-tonight", date: "2026-10-16", time: "22:00", venueHours: overnightHours })];
+assert.deepEqual(filterEventMapEvents(beforeStart, { ...openNowOptions, selectedDate: "2026-10-16", now: Date.parse("2026-10-16T18:00:00Z") }), [],
+  "An open venue must not put tonight's event on the Open now map before its announced start.");
 
 console.log("Event map QA passed.");

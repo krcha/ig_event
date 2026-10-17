@@ -1,6 +1,7 @@
 import { getEventTimeSortMinutes } from "./event-time.ts";
 import type { PublicEvent } from "./public-events";
 import type { PublicVenueDirectoryItem } from "../venues/public-venue-pages";
+import { matchesOpenNowEvent } from "../venues/venue-open-now.ts";
 
 export const MAP_MIN_DATE = "2000-01-01";
 export const MAP_MAX_DATE = "2099-12-31";
@@ -51,8 +52,19 @@ export function normalizeMapDateKey(value: string | undefined, fallback: string)
     : fallback;
 }
 
-export function buildEventMapHref(date: string): string {
-  return `/map?${new URLSearchParams({ date }).toString()}`;
+export function buildEventMapHref(date: string, options: { openNow?: boolean } = {}): string {
+  const query = new URLSearchParams({ date });
+  if (options.openNow) query.set("open", "now");
+  return `/map?${query.toString()}`;
+}
+
+export function filterEventMapEvents(
+  events: readonly PublicEvent[],
+  options: { selectedDate: string; openNow: boolean; now: number },
+): PublicEvent[] {
+  return events.filter((event) => options.openNow
+    ? matchesOpenNowEvent(event, options.now)
+    : event.date === options.selectedDate);
 }
 
 export function enrichEventMapCoordinates(

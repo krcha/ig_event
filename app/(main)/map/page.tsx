@@ -14,12 +14,14 @@ import {
 import { loadPublicCalendarEventsWindow } from "@/lib/events/public-events";
 import { SITE_ORIGIN } from "@/lib/seo/site";
 import { loadPublicVenueDirectory } from "@/lib/venues/public-venue-pages";
+import { getBelgradeNow } from "@/lib/venues/venue-open-now";
 import reviewedLocations from "@/data/venue-coordinates-2026-10-15.json";
 
 export const dynamic = "force-dynamic";
 
 type MapSearchParams = {
   date?: string | string[];
+  open?: string | string[];
 };
 
 type EventMapPageProps = {
@@ -28,7 +30,7 @@ type EventMapPageProps = {
 
 export async function generateMetadata({ searchParams }: EventMapPageProps): Promise<Metadata> {
   const resolvedSearchParams = await searchParams;
-  const hasDateFilter = Boolean(resolvedSearchParams?.date);
+  const hasDateFilter = Boolean(resolvedSearchParams?.date || resolvedSearchParams?.open);
   const title = "Belgrade Event Map: Explore Events by Day";
   const description =
     "Choose a day and see where Belgrade concerts, club nights, DJ sets, and cultural events are happening. Explore event venues on the map.";
@@ -66,28 +68,37 @@ export async function generateMetadata({ searchParams }: EventMapPageProps): Pro
 
 export default async function EventMapPage({ searchParams }: EventMapPageProps) {
   const resolvedSearchParams = await searchParams;
+  const initialNow = Date.now();
+  const requestedOpen = Array.isArray(resolvedSearchParams?.open)
+    ? resolvedSearchParams.open[0]
+    : resolvedSearchParams?.open;
+  const openNowActive = requestedOpen === "now";
   const requestedDate = Array.isArray(resolvedSearchParams?.date)
     ? resolvedSearchParams.date[0]
     : resolvedSearchParams?.date;
-  const todayDate = getNightlifeDefaultDateKey();
-  const selectedDate = normalizeMapDateKey(requestedDate, todayDate);
+  const todayDate = openNowActive ? getBelgradeNow(initialNow).date : getNightlifeDefaultDateKey(new Date(initialNow));
+  const selectedDate = openNowActive ? todayDate : normalizeMapDateKey(requestedDate, todayDate);
 
   return (
     <Suspense fallback={<EventMapLoading />}>
-      <EventMapResults selectedDate={selectedDate} todayDate={todayDate} />
+      <EventMapResults initialNow={initialNow} openNowActive={openNowActive} selectedDate={selectedDate} todayDate={todayDate} />
     </Suspense>
   );
 }
 
-async function EventMapResults({ selectedDate, todayDate }: {
+async function EventMapResults({ initialNow, openNowActive, selectedDate, todayDate }: {
+  initialNow: number;
+  openNowActive: boolean;
   selectedDate: string;
   todayDate: string;
 }) {
   const selectedWeekday = dateKeyToLocalNoonDate(selectedDate).getDay();
   const fromDate = addDaysToDateKey(selectedDate, -((selectedWeekday + 6) % 7));
   const beforeDate = addDaysToDateKey(fromDate, 7);
+  const previousDate = addDaysToDateKey(selectedDate, -1);
+  const queryFromDate = openNowActive && previousDate < fromDate ? previousDate : fromDate;
   const [eventResult, venueResult] = await Promise.all([
-    loadPublicCalendarEventsWindow({ beforeDate, fromDate }),
+    loadPublicCalendarEventsWindow({ beforeDate, fromDate: queryFromDate }),
     loadPublicVenueDirectory(),
   ]);
 
@@ -106,7 +117,7 @@ async function EventMapResults({ selectedDate, todayDate }: {
     };
   });
   const events = enrichEventMapCoordinates(
-    eventResult.events.filter((event) => event.date === selectedDate),
+    eventResult.events.filter((event) => event.date === selectedDate || (openNowActive && event.date === previousDate)),
     venueResult.venues,
     reviewedLocations.venues,
   );
@@ -115,6 +126,8 @@ async function EventMapResults({ selectedDate, todayDate }: {
     <EventCalendarMap
       days={days}
       events={events}
+      initialNow={initialNow}
+      openNowActive={openNowActive}
       selectedDate={selectedDate}
       todayDate={todayDate}
     />
