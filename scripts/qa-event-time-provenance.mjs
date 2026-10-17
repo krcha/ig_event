@@ -573,9 +573,9 @@ assert.equal(
 );
 assert.ok(calendarSource.includes("resolveEventTimePresentation"));
 assert.ok(detailSource.includes("resolveEventTimePresentation"));
-assert.ok(calendarSource.includes("Venue hours"), "Calendar fallbacks must be labeled as venue hours.");
-assert.ok(detailSource.includes("label={eventTime.heading}"), "Detail time tile must distinguish venue hours from event time.");
-assert.ok(venueHoursSource.includes("Venue hours"), "Venue hours must be explicitly labeled.");
+assert.ok(calendarSource.includes("font-normal leading-4 tabular-nums"), "Calendar opening-hour fallbacks use regular weight.");
+assert.ok(detailSource.includes('eventTime.kind === "venue_hours" ? "font-normal"'), "Detail opening-hour fallbacks use regular weight.");
+assert.ok(venueHoursSource.includes('>Hours</h3>'), "The weekly schedule has a concise Hours heading.");
 assert.equal(
   publicEventsSource.includes('source: "venue_hours"'),
   false,

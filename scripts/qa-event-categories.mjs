@@ -4,7 +4,9 @@ import {
   EVENT_PRIMARY_CATEGORIES,
   getEventPrimaryCategory,
   getEventTags,
+  getHiddenCategoriesAfterCategoryToggle,
 } from "../lib/taxonomy/event-categories.ts";
+import { buildCalendarFilterUrl } from "../lib/events/calendar-filter-url.ts";
 
 assert.deepEqual(
   EVENT_PRIMARY_CATEGORIES,
@@ -12,14 +14,50 @@ assert.deepEqual(
     { key: "club", label: "Clubbing & DJ" },
     { key: "live", label: "Live music" },
     { key: "culture", label: "Kultura & umetnost" },
-    { key: "social", label: "Barovi & social" },
-    { key: "experience", label: "Radionice & iskustva" },
-    { key: "event", label: "Ostalo & specijalni doga\u0111aji" },
+    { key: "social", label: "Barovi" },
+    { key: "experience", label: "Radionice" },
+    { key: "event", label: "Ostalo" },
   ],
   "Public browsing should have exactly the six agreed primary categories with stable URL keys.",
 );
 
 const categoryKeys = new Set(EVENT_PRIMARY_CATEGORIES.map(({ key }) => key));
+const orderedCategoryKeys = [...categoryKeys];
+
+for (const selected of orderedCategoryKeys) {
+  const hidden = getHiddenCategoriesAfterCategoryToggle([], selected);
+  assert.deepEqual(hidden, orderedCategoryKeys.filter((key) => key !== selected),
+    `Choosing ${selected} from All should show only that category.`);
+  assert.deepEqual(getHiddenCategoriesAfterCategoryToggle(hidden, selected), [],
+    "Clicking the only selected category should reset All.");
+  const added = orderedCategoryKeys.find((key) => key !== selected);
+  const next = getHiddenCategoriesAfterCategoryToggle(hidden, added);
+  assert.deepEqual(next, orderedCategoryKeys.filter((key) => key !== selected && key !== added),
+    "An inactive category should join the current selection.");
+  assert.deepEqual(getHiddenCategoriesAfterCategoryToggle(next, added), hidden,
+    "An active category in a multiple selection should be removable.");
+}
+
+const preservedFilterUrl = new URL(buildCalendarFilterUrl(
+  "/",
+  [["q", " jazz "], ["venue", ""], ["sort", "time"]],
+  "https://eventzeka.com/?hide=club,culture&open=now&upcomingOpenNow=1&month=2026-10&day=2026-10-17&venue=Dim&category=live",
+), "https://eventzeka.com");
+assert.equal(preservedFilterUrl.searchParams.get("upcomingOpenNow"), "1",
+  "Applying another filter should preserve Open now.");
+assert.equal(preservedFilterUrl.searchParams.get("open"), "now",
+  "Applying another filter should preserve the public Open now query.");
+assert.equal(preservedFilterUrl.searchParams.get("hide"), "club,culture",
+  "Applying another filter should preserve the category selection.");
+assert.equal(preservedFilterUrl.searchParams.get("day"), "2026-10-17");
+assert.equal(preservedFilterUrl.searchParams.get("month"), "2026-10");
+assert.equal(preservedFilterUrl.searchParams.get("q"), "jazz");
+assert.equal(preservedFilterUrl.searchParams.get("sort"), "time");
+assert.equal(preservedFilterUrl.searchParams.has("venue"), false,
+  "An explicitly cleared form field should remove its old query value.");
+assert.equal(preservedFilterUrl.searchParams.has("category"), false,
+  "The obsolete include-only category query should not override hide filters.");
+assert.equal(buildCalendarFilterUrl("/", [["q", ""]]), "/");
 
 function makeEvent(overrides = {}) {
   return { eventType: "event", title: "Program", artists: [], ...overrides };
@@ -36,6 +74,12 @@ const categoryFixtures = [
   ["legacy Music alias", { eventType: "Music" }, "live"],
   ["social primary alias", { eventType: "social" }, "social"],
   ["experience primary alias", { eventType: "experience" }, "experience"],
+  ["short bar label", { eventType: "Barovi" }, "social"],
+  ["short workshop label", { eventType: "Radionice" }, "experience"],
+  ["short other label", { eventType: "Ostalo" }, "event"],
+  ["legacy bar label", { eventType: "Barovi & social" }, "social"],
+  ["legacy workshop label", { eventType: "Radionice & iskustva" }, "experience"],
+  ["legacy other label", { eventType: "Ostalo & specijalni doga\u0111aji" }, "event"],
   ["unclassified event", {}, "event"],
   ["concert in a club", { title: "Rock koncert", eventType: "nightlife", venueCategory: "club" }, "live"],
   ["jazz ensemble with explicit live type", { title: "Vladimir \u010cetkar Ensemble", eventType: "live music", venueCategory: "club" }, "live"],

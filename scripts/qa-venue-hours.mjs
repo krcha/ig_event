@@ -234,7 +234,7 @@ assert.equal(
   for (const time of [undefined, "", "TBD", "TBA"]) {
     assert.deepEqual(
       resolveEventTimePresentation({ date: WEDNESDAY, time, venueHours }),
-      { heading: "Venue hours", kind: "venue_hours", label: "10:00–18:00, 20:00–02:00" },
+      { heading: "Time", kind: "venue_hours", label: "10:00–18:00, 20:00–02:00" },
       "Missing event time should display every venue window with an explicit venue label.",
     );
   }

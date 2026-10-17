@@ -8,12 +8,17 @@ tags can describe genres, activities, and explicitly stated free admission.
 | `club` | Clubbing & DJ | Parties, DJ sets, raves, and dance nights |
 | `live` | Live music | Concerts, live bands, solo performers, and tribute concerts |
 | `culture` | Kultura & umetnost | Theatre, stand-up, exhibitions, film, performances, and discussions |
-| `social` | Barovi & social | Social evenings, cocktail gatherings, and after-work events |
-| `experience` | Radionice & iskustva | Workshops, quizzes, tastings, and participatory activities |
-| `event` | Ostalo & specijalni dogadjaji | Sports screenings, openings, generic festivals, and other special events |
+| `social` | Barovi | Social evenings, cocktail gatherings, and after-work events |
+| `experience` | Radionice | Workshops, quizzes, tastings, and participatory activities |
+| `event` | Ostalo | Sports screenings, openings, generic festivals, and other special events |
 
 The application renders Serbian labels with their normal diacritics. Stable
 keys keep existing category URLs and calendar hide filters compatible.
+
+When all categories are enabled, choosing one chip shows only that category.
+Other chips can then be added or removed from that selection. All, or clicking
+the only selected category, restores every category. Other active filters remain
+in the URL while the category selection changes.
 
 ## Format And Tags
 

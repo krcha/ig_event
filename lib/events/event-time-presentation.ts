@@ -6,7 +6,7 @@ import {
 } from "../venues/venue-hours-cache.ts";
 
 type EventTimePresentation = {
-  heading: "Time" | "Venue hours";
+  heading: "Time";
   kind: "event" | "venue_hours" | "unknown";
   label: string;
 };
@@ -26,7 +26,7 @@ export function resolveEventTimePresentation(options: {
   const venueHours = getVenueHoursWindowsForDate(options.venueHours, options.date);
   if (venueHours.status === "open") {
     return {
-      heading: "Venue hours",
+      heading: "Time",
       kind: "venue_hours",
       label: venueHours.windows.map(formatVenueHoursWindow).join(", "),
     };

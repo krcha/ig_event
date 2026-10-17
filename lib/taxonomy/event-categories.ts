@@ -4,12 +4,28 @@ export const EVENT_PRIMARY_CATEGORIES = [
   { key: "club", label: "Clubbing & DJ" },
   { key: "live", label: "Live music" },
   { key: "culture", label: "Kultura & umetnost" },
-  { key: "social", label: "Barovi & social" },
-  { key: "experience", label: "Radionice & iskustva" },
-  { key: "event", label: "Ostalo & specijalni doga\u0111aji" },
+  { key: "social", label: "Barovi" },
+  { key: "experience", label: "Radionice" },
+  { key: "event", label: "Ostalo" },
 ] as const;
 
 export type EventPrimaryCategory = (typeof EVENT_PRIMARY_CATEGORIES)[number]["key"];
+
+export function getHiddenCategoriesAfterCategoryToggle(
+  hiddenCategories: readonly EventPrimaryCategory[],
+  category: EventPrimaryCategory,
+): EventPrimaryCategory[] {
+  const keys = EVENT_PRIMARY_CATEGORIES.map(({ key }) => key);
+  const hidden = new Set(hiddenCategories);
+
+  // Start a focused selection from All, and let its only active chip reset All.
+  if (hidden.size === 0) return keys.filter((key) => key !== category);
+  if (hidden.size === keys.length - 1 && !hidden.has(category)) return [];
+
+  if (hidden.has(category)) hidden.delete(category);
+  else hidden.add(category);
+  return keys.filter((key) => hidden.has(key));
+}
 
 export type EventCategoryInput = {
   eventType: string;

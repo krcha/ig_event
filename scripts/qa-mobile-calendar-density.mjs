@@ -69,10 +69,11 @@ assert.ok(
   "Calendar filters should default to venue name while allowing time or event-type sorting.",
 );
 assert.ok(
-  calendarSource.includes("getNightlifeDefaultDateKey()") &&
+  calendarSource.includes("getNightlifeDefaultDateKey(new Date(now))") &&
+    calendarSource.includes("openNowActive ? belgradeNow.date") &&
     calendarSource.includes("dateKeyToLocalNoonDate(todayKey)") &&
     calendarSource.includes("defaultDayKey"),
-  "Default calendar day should use the nightlife business date, not raw wall-clock today.",
+  "Default calendar keeps the nightlife business date; Open now uses Belgrade's current civil date.",
 );
 assert.equal(
   getNightlifeDefaultDateKey(new Date("2026-07-11T06:59:00+02:00")),
@@ -104,7 +105,8 @@ assert.ok(
     calendarSource.includes('data-calendar-active-filter-chips="true"') &&
     calendarSource.includes('data-calendar-stat-card={stat.key}') &&
     calendarSource.includes('data-calendar-stat-value={stat.key}') &&
-    calendarSource.includes('caption: "upcoming with something on"'),
+    calendarSource.includes('"upcoming with something on"') &&
+    calendarSource.includes('"current Belgrade day"'),
   "Active filters should render removable chips and stat cards should expose updateable count markers; active-day copy should make the upcoming scope explicit.",
 );
 assert.ok(
@@ -138,8 +140,8 @@ assert.ok(
     calendarSource.includes("closeOnApply={isMobileSort}") &&
     autoApplyFilterFormSource.includes('data-calendar-auto-apply-filter-form="true"') &&
     autoApplyFilterFormSource.includes("router.replace") &&
-    autoApplyFilterFormSource.includes('searchParams.get("hide")') &&
-    autoApplyFilterFormSource.includes('params.delete("category")') &&
+    autoApplyFilterFormSource.includes("buildCalendarFilterUrl") &&
+    autoApplyFilterFormSource.includes("window.location.href") &&
     autoApplyFilterFormSource.includes("target instanceof HTMLSelectElement") &&
     autoApplyFilterFormSource.includes('closest("details")') &&
     autoApplyFilterFormSource.includes('removeAttribute("open")') &&

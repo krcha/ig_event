@@ -36,7 +36,7 @@ export function VenueWeeklyHours({ className, hoursJson, hoursSource }: VenueWee
 
   return (
     <section className={cn("rounded-xl border border-border/70 bg-white/[0.02] p-4", className)}>
-      <h3 className="text-sm font-medium text-foreground">Venue hours</h3>
+      <h3 className="text-sm font-medium text-foreground">Hours</h3>
       <dl className="mt-3 space-y-1.5">
         {DISPLAY_ORDER.map((dayIndex) => {
           const day = byDay.get(dayIndex);

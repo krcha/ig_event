@@ -3,7 +3,10 @@
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
 import { EVENT_CATEGORY_TONES, type EventCategoryKind } from "@/components/events/event-meta";
-import { EVENT_PRIMARY_CATEGORIES } from "@/lib/taxonomy/event-categories";
+import {
+  EVENT_PRIMARY_CATEGORIES,
+  getHiddenCategoriesAfterCategoryToggle,
+} from "@/lib/taxonomy/event-categories";
 import { cn } from "@/lib/utils";
 
 const CATEGORY_CHIPS: Array<{ key: "all" | EventCategoryKind; label: string }> = [
@@ -296,9 +299,7 @@ export function EventKindToggleChips({
   }, [hiddenCategories, setHiddenCategoriesAndUrl]);
 
   function toggleCategory(category: EventCategoryKind) {
-    const next = hiddenSet.has(category)
-      ? hiddenCategories.filter((item) => item !== category)
-      : [...hiddenCategories, category];
+    const next = getHiddenCategoriesAfterCategoryToggle(hiddenCategories, category);
     setHiddenCategoriesAndUrl(next);
   }
 

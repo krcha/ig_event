@@ -27,6 +27,7 @@ import { resolveEventTimePresentation } from "@/lib/events/event-time-presentati
 import { SaveEventButton } from "@/components/events/save-event-button";
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
 import { VenueWeeklyHours } from "@/components/venues/venue-weekly-hours";
+import { cn } from "@/lib/utils";
 import { loadPublicEventDetailData } from "@/lib/events/public-event-detail-data";
 import {
   projectPublicEventVenueDisplay,
@@ -318,16 +319,18 @@ function InfoTile({
   icon: Icon,
   label,
   value,
+  valueClassName,
 }: {
   detail?: ReactNode;
   icon: typeof CalendarDays;
   label: string;
   value: string;
+  valueClassName?: string;
 }) {
   return (
     <div className="rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3">
       <p className="section-kicker">{label}</p>
-      <p className="mt-1.5 flex items-start gap-2 text-sm font-semibold leading-5 text-foreground">
+      <p className={cn("mt-1.5 flex items-start gap-2 text-sm font-semibold leading-5 text-foreground", valueClassName)}>
         <Icon className="mt-0.5 h-4 w-4 flex-none text-primary" />
         <span className="min-w-0 break-words">{value}</span>
       </p>
@@ -437,6 +440,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                     icon={Clock3}
                     label={eventTime.heading}
                     value={eventTime.label}
+                    valueClassName={eventTime.kind === "venue_hours" ? "font-normal" : undefined}
                   />
                   <div className="relative overflow-hidden rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3 transition hover:border-primary/35 hover:bg-white/[0.045]">
                     {venueHref ? (

@@ -79,6 +79,7 @@
     "qa:event-categories": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-event-categories.mjs",
     "qa:venue-lifecycle": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-venue-lifecycle.mjs",
     "qa:venue-hours": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-venue-hours.mjs",
+    "qa:venue-open-now": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-venue-open-now.mjs",
     "qa:google-hours": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-google-hours-mapping.mjs",
     "qa:reclassify-dryrun": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/reclassify-event-types.mjs",
     "repair:event-consistency": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/repair-event-consistency.mjs",

@@ -17,6 +17,7 @@ import { AutoApplyFilterForm } from "@/components/calendar/auto-apply-filter-for
 import { CalendarScrollRestoration } from "@/components/calendar/calendar-scroll-restoration";
 import { JsonLd } from "@/components/seo/json-ld";
 import { EventKindToggleChips } from "@/components/calendar/event-kind-toggle-chips";
+import { OpenNowFilter } from "@/components/calendar/open-now-filter";
 import { MobileMonthDayStrip } from "@/components/calendar/mobile-month-day-strip";
 import { EventMetaRow, getEventCategoryKind, type EventCategoryKind } from "@/components/events/event-meta";
 import { EVENT_PRIMARY_CATEGORIES } from "@/lib/taxonomy/event-categories";
@@ -29,7 +30,8 @@ import {
   normalizeEventTime,
 } from "@/lib/events/event-time";
 import { resolveEventTimePresentation } from "@/lib/events/event-time-presentation";
-import { dateKeyToLocalNoonDate, getNightlifeDefaultDateKey } from "@/lib/events/nightlife-date";
+import { addDaysToDateKey, dateKeyToLocalNoonDate, getNightlifeDefaultDateKey } from "@/lib/events/nightlife-date";
+import { getBelgradeNow, matchesOpenNowEvent } from "@/lib/venues/venue-open-now";
 import { matchesPublicEventNameArtistOrVenue } from "@/lib/events/public-event-search";
 import { HOME_FAQ_ITEMS, buildHomePageStructuredData } from "@/lib/seo/site";
 import { groupCalendarEventsByTimeBand } from "@/lib/events/calendar-time-bands";
@@ -55,6 +57,7 @@ type CalendarSearchParams = {
   hide?: string | string[];
   sort?: string | string[];
   q?: string | string[];
+  open?: string | string[];
 };
 
 type CalendarPageProps = {
@@ -251,7 +254,7 @@ function buildQueryString(params: Record<string, string | undefined>): string {
 
 function getEventAriaLabel(event: CalendarEventSummary, tone: EventTone): string {
   const time = resolveEventTimePresentation(event);
-  const timeLabel = time.kind === "venue_hours" ? `Venue hours: ${time.label}` : time.label;
+  const timeLabel = time.label;
   return ["Open " + event.title, getEventSessionLabel(event), timeLabel, event.venue, tone.name]
     .filter(Boolean)
     .join(", ");
@@ -478,12 +481,9 @@ function formatArtistMeta(event: CalendarEventSummary): string | undefined {
   return event.artists.length > 0 ? event.artists.slice(0, 3).join(", ") : undefined;
 }
 
-function VenueHoursTimeLabel({ label }: { label: string }) {
+function VenueTimeLabel({ label }: { label: string }) {
   return (
-    <>
-      <span className="block text-[9px] font-medium leading-3 text-muted-foreground">Venue hours</span>
-      <span className="block break-words text-[10px] font-semibold leading-3 tabular-nums">{label}</span>
-    </>
+    <span className="block break-words text-[11px] font-normal leading-4 tabular-nums">{label}</span>
   );
 }
 
@@ -516,17 +516,23 @@ function isUpcomingCalendarDay(dayKey: string, defaultDayKey: string): boolean {
 
 export default async function CalendarPage({ searchParams }: CalendarPageProps) {
   const resolvedSearchParams = await searchParams;
-  const todayKey = getNightlifeDefaultDateKey();
+  const now = Date.now();
+  const belgradeNow = getBelgradeNow(now);
+  const openNowActive = getSingleValue(resolvedSearchParams?.open) === "now";
+  const todayKey = openNowActive ? belgradeNow.date : getNightlifeDefaultDateKey(new Date(now));
   const today = dateKeyToLocalNoonDate(todayKey);
-  const requestedMonth = getSingleValue(resolvedSearchParams?.month);
+  const requestedMonth = openNowActive ? belgradeNow.month : getSingleValue(resolvedSearchParams?.month);
   const monthStart = parseMonthParam(requestedMonth, today);
   const monthParam = formatMonthParam(monthStart);
   const nextMonthStart = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
   const monthStartKey = formatDateKey(monthStart);
-  const fromDate = monthStartKey;
-  const beforeDate = formatDateKey(nextMonthStart);
-  const { events, error } = await loadPublicCalendarEventsWindow({ beforeDate, fromDate });
-  const venues = buildPublicEventVenueFilterOptions(events);
+  const fromDate = openNowActive ? addDaysToDateKey(belgradeNow.date, -1) : monthStartKey;
+  const beforeDate = openNowActive ? addDaysToDateKey(belgradeNow.date, 1) : formatDateKey(nextMonthStart);
+  const loaded = await loadPublicCalendarEventsWindow({ beforeDate, fromDate });
+  const error = loaded.error;
+  // Keep cached event data independent of the clock; reevaluate openings per request.
+  const events = openNowActive ? loaded.events.filter((event) => matchesOpenNowEvent(event, now)) : loaded.events;
+  const venues = buildPublicEventVenueFilterOptions(loaded.events);
   const selectedVenue = resolvePublicEventVenueFilter(
     getSingleValue(resolvedSearchParams?.venue),
     venues,
@@ -547,7 +553,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   let weekendEventCount = 0;
 
   for (const event of events) {
-    if (!event.date.startsWith(`${monthParam}-`)) {
+    if (!openNowActive && !event.date.startsWith(`${monthParam}-`)) {
       continue;
     }
 
@@ -556,8 +562,9 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     }
 
     const eventCategory = getDayCategory(event);
-    const eventDate = parseNormalizedEventDate(event.date);
-    const dayBucket = getCalendarDayBucket(monthDayBuckets, event.date);
+    const bucketDate = openNowActive ? belgradeNow.date : event.date;
+    const eventDate = parseNormalizedEventDate(bucketDate);
+    const dayBucket = getCalendarDayBucket(monthDayBuckets, bucketDate);
     dayBucket.categoryCounts[eventCategory] += 1;
 
     if (hiddenDayCategorySet.has(eventCategory)) {
@@ -576,7 +583,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     .filter(([, bucket]) => bucket.eventCount > 0)
     .map(([dayKey]) => dayKey)
     .sort();
-  const selectedDayKey = getSelectedDay(
+  const selectedDayKey = openNowActive ? belgradeNow.date : getSelectedDay(
     monthStart,
     getSingleValue(resolvedSearchParams?.day),
     filteredMonthDayKeys,
@@ -586,7 +593,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   let selectedDayEventCount = 0;
 
   for (const event of events) {
-    if (event.date !== selectedDayKey) {
+    if (!openNowActive && event.date !== selectedDayKey) {
       continue;
     }
     if (!eventMatchesFilters(event, selectedVenue, selectedSearchQuery)) {
@@ -623,7 +630,15 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     venue: selectedVenue,
     hide: hiddenCategoriesParam,
     sort: hiddenSort,
+    open: openNowActive ? "now" : undefined,
   };
+  const dateNavigationFilters = { ...baseFilters, open: undefined };
+  const openNowHref = `/${buildQueryString({
+    ...baseFilters,
+    month: openNowActive ? monthParam : belgradeNow.month,
+    day: openNowActive ? selectedDayKey : belgradeNow.date,
+    open: openNowActive ? undefined : "now",
+  })}`;
   const mobileMonthDays = monthDays.map((day) => {
     const dayKey = formatDateKey(day);
     const dayBucket = monthDayBuckets.get(dayKey);
@@ -631,7 +646,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     return {
       dayKey,
       href: `/${buildQueryString({
-        ...baseFilters,
+        ...dateNavigationFilters,
         month: monthParam,
         day: dayKey,
       })}`,
@@ -647,6 +662,9 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     };
   });
   const activeFilterControls = [
+    openNowActive
+      ? { key: "open-now", label: "Open now", href: openNowHref }
+      : null,
     selectedSearchQuery
       ? {
           key: "search",
@@ -700,19 +718,19 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       key: "events",
       label: "Events",
       value: totalFilteredEventCount,
-      caption: "listed this month",
+      caption: openNowActive ? "at places open now" : "listed this month",
     },
     {
       key: "active-days",
       label: "Active days",
       value: activeDayCount,
-      caption: "upcoming with something on",
+      caption: openNowActive ? "current Belgrade day" : "upcoming with something on",
     },
     {
       key: "venues",
       label: "Venues",
       value: activeVenueCount,
-      caption: "across Belgrade",
+      caption: openNowActive ? "open now in Belgrade" : "across Belgrade",
     },
     {
       key: "weekend",
@@ -772,6 +790,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       >
         <input name="month" type="hidden" value={monthParam} />
         <input name="day" type="hidden" value={selectedDayKey} />
+        {openNowActive ? <input name="open" type="hidden" value="now" /> : null}
         {hiddenCategoriesParam ? <input name="hide" type="hidden" value={hiddenCategoriesParam} /> : null}
         {!showSearch && selectedSearchQuery ? (
           <input name="q" type="hidden" value={selectedSearchQuery} />
@@ -970,10 +989,10 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                           >
                             <span
                               className={cn("flex-none text-xs font-semibold tabular-nums text-muted-foreground", timePresentation.kind === "venue_hours" ? "w-20 py-1" : "w-16 truncate")}
-                              title={timePresentation.kind === "venue_hours" ? `Venue hours: ${timePresentation.label}` : timePresentation.label}
+                              title={timePresentation.label}
                             >
                               {timePresentation.kind === "venue_hours"
-                                ? <VenueHoursTimeLabel label={timePresentation.label} />
+                                ? <VenueTimeLabel label={timePresentation.label} />
                                 : timePresentation.label}
                             </span>
                             <span className="min-w-0 flex-1">
@@ -1076,9 +1095,9 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                         data-calendar-event-link="true"
                         href={`/events/${event._id}`}
                         prefetch={false}
-                        title={`Venue hours: ${timePresentation.label}`}
+                        title={timePresentation.label}
                       >
-                        <VenueHoursTimeLabel label={timePresentation.label} />
+                        <VenueTimeLabel label={timePresentation.label} />
                       </Link>
                     ) : (
                       <Link
@@ -1144,10 +1163,10 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                           data-calendar-event-link="true"
                           href={`/events/${event._id}`}
                           prefetch={false}
-                          title={timePresentation.kind === "venue_hours" ? `Venue hours: ${displayEventTime}` : displayEventTime}
+                          title={displayEventTime}
                         >
                           {timePresentation.kind === "venue_hours"
-                            ? <VenueHoursTimeLabel label={displayEventTime} />
+                            ? <VenueTimeLabel label={displayEventTime} />
                             : displayEventTime}
                         </Link>
                       ) : null}
@@ -1224,17 +1243,20 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
           data-calendar-scroll-region="selected-day-agenda"
         >
           <div className="sticky top-[4.25rem] z-20 rounded-[1rem] border border-border/75 bg-background/92 px-2.5 py-1.5 shadow-[0_18px_46px_-34px_rgba(0,0,0,0.9)] backdrop-blur">
-            <h2 className="min-w-0 truncate text-xs font-semibold tracking-tight text-foreground">
-              {formatDisplayDate(selectedDate, {
-                weekday: "short",
-                month: "short",
-                day: "numeric",
-              })}{" "}
-              <span className="text-muted-foreground">·</span>{" "}
-              <span data-calendar-visible-event-count="true">
-                {pluralize(selectedDayEventCount, "event")}
-              </span>
-            </h2>
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="min-w-0 truncate text-xs font-semibold tracking-tight text-foreground">
+                {formatDisplayDate(selectedDate, {
+                  weekday: "short",
+                  month: "short",
+                  day: "numeric",
+                })}{" "}
+                <span className="text-muted-foreground">·</span>{" "}
+                <span data-calendar-visible-event-count="true">
+                  {pluralize(selectedDayEventCount, "event")}
+                </span>
+              </h2>
+              <OpenNowFilter active={openNowActive} href={openNowHref} initialNow={now} />
+            </div>
             {renderCategoryChips({ withActions: true })}
           </div>
 
@@ -1314,7 +1336,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
               aria-label="Previous day"
               className="inline-flex h-9 w-9 flex-none items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
               href={`/${buildQueryString({
-                ...baseFilters,
+                ...dateNavigationFilters,
                 month: formatMonthParam(previousDay),
                 day: previousDayKey,
               })}`}
@@ -1329,7 +1351,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
               aria-label="Next day"
               className="inline-flex h-9 w-9 flex-none items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
               href={`/${buildQueryString({
-                ...baseFilters,
+                ...dateNavigationFilters,
                 month: formatMonthParam(nextDay),
                 day: nextDayKey,
               })}`}
@@ -1342,7 +1364,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
           <Link prefetch={false}
             className="inline-flex h-9 flex-none items-center rounded-full border border-primary/25 bg-primary/10 px-3 text-xs font-semibold text-primary"
             href={`/${buildQueryString({
-              ...baseFilters,
+              ...dateNavigationFilters,
               month: formatMonthParam(today),
               day: todayKey,
             })}`}
@@ -1380,7 +1402,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   aria-label="Previous day"
                   className="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground hover:bg-muted"
                   href={`/${buildQueryString({
-                    ...baseFilters,
+                    ...dateNavigationFilters,
                     month: formatMonthParam(previousDay),
                     day: previousDayKey,
                   })}`}
@@ -1391,7 +1413,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 <Link prefetch={false}
                   className="inline-flex h-10 items-center justify-center rounded-full px-4 text-sm font-semibold text-foreground hover:bg-muted"
                   href={`/${buildQueryString({
-                    ...baseFilters,
+                    ...dateNavigationFilters,
                     month: formatMonthParam(today),
                     day: todayKey,
                   })}`}
@@ -1403,7 +1425,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   aria-label="Next day"
                   className="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground hover:bg-muted"
                   href={`/${buildQueryString({
-                    ...baseFilters,
+                    ...dateNavigationFilters,
                     month: formatMonthParam(nextDay),
                     day: nextDayKey,
                   })}`}

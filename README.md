@@ -53,8 +53,8 @@ visible in the day's lineup under "Location not mapped". The map uses the
 existing approved public calendar and Belgrade's nightlife-day rollover.
 
 Public discovery uses six primary event categories: Clubbing & DJ, Live music,
-Kultura & umetnost, Barovi & social, Radionice & iskustva, and Ostalo & specijalni
-dogadjaji. Each event has one primary category plus source-supported genre and
+Kultura & umetnost, Barovi, Radionice, and Ostalo. Each event has one primary
+category plus source-supported genre and
 activity tags. See [event categories](docs/event-categories.md) for classification
 and compatibility rules.
 

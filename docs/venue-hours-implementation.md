@@ -2,7 +2,7 @@
 
 Public event loaders attach the matched venue's weekly hours. When the event has
 no explicit time, detail and calendar views display that date's venue windows
-under a separate `Venue hours` label. `resolveEventTimePresentation` supplies
+in regular weight, without a separate opening-hours label. `resolveEventTimePresentation` supplies
 this display context; `resolveEventTimeDisplay` keeps the actual event time
 unknown. Venue opening hours never become event start/end times, structured
 data, sorting keys, or day/night classification. This runbook covers populating
@@ -86,6 +86,13 @@ is never filled from the venue closing time. Missing weekdays remain unknown
 `Closed`. Partial source schedules must omit unknown weekdays rather than mark
 them closed.
 
+The calendar's `Open now` control uses `Europe/Belgrade` time and verified venue
+opening windows, not a confirmed performance start. It shows today's program at
+open venues and previous-day rows only during a verified overnight continuation.
+Unknown hours are excluded. Enabling it selects the current Belgrade date;
+explicit date navigation leaves this mode. Categories, search and venue filters
+remain available. Its clock updates each minute, refreshing active results.
+
 ## Verification
 
 Run the focused checks before a Google rollout:
@@ -93,6 +100,7 @@ Run the focused checks before a Google rollout:
 ```bash
 npm run qa:google-hours
 npm run qa:venue-hours
+npm run qa:venue-open-now
 ```
 
 Run the full handoff gate before shipping:
