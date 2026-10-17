@@ -51,3 +51,26 @@ content can distinguish activities that the old types grouped together.
 
 Run `npm run qa:event-categories` for deterministic format and overlapping-tag
 fixtures. This check is included in `npm run qa:release`.
+
+## Production Deployment, 2026-10-17
+
+The categories are live on `https://eventzeka.com/` from code commit `62014b9`.
+This was a web-only release; Convex, ingestion, moderation, and the separate
+social publishing service were retained.
+
+- Main container: `ig-event-web-event-categories-62014b9`.
+- Source: `/root/ig_event-releases/event-categories-62014b9`.
+- Compose: `/root/ig_event-release-artifacts/event-categories-62014b9/production.compose.yml`.
+- Operator endpoint: `http://127.0.0.1:3131`.
+- Required dependency mount: `/root/ig_event-releases/upcoming-role-audit-c38f9d9/node_modules`.
+- Previous main container retained for rollback: `ig-event-web-upcoming-role-audit-c38f9d9`.
+
+Keep the dependency source while this release uses its read-only mount. The new
+main router has priority 1001 and retains the exclusion for `/api/social`.
+
+Local `qa:release` (including the production build and 41 category fixtures) and
+`git diff --check` passed. The Linux release passed lint, typecheck, and build
+with the existing production environment. Private preview checks verified all
+six categories against actual approved events, hide filters, event details,
+health, map, and sign-in. Public verification confirmed the six filter keys,
+health, and all 14 referenced JavaScript assets against the built release.
