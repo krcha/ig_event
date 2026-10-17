@@ -2868,13 +2868,15 @@
       "id": "k17bp4t9435fgrfxkbpjb7ax3h897rjd",
       "name": "Vinyl",
       "instagramHandle": "vinyl.belgrade",
-      "expectedUpdatedAt": 1782214395384.0,
-      "latitude": 44.8085971,
-      "longitude": 20.4583958,
+      "expectedUpdatedAt": 1792024146280,
+      "latitude": 44.813957,
+      "longitude": 20.4502897,
+      "address": "Bra\u0107e Krsmanovi\u0107 8, Beograd 11000",
       "sourceUrls": [
-        "https://www.openstreetmap.org/node/11734875418"
+        "https://maps.app.goo.gl/C2fQdRMxx1yrL6y3A",
+        "https://www.instagram.com/p/DeUxrk_oA-p/"
       ],
-      "matchMethod": "exact_name"
+      "matchMethod": "reviewed_google_maps_and_official_instagram_2026_10_17"
     },
     {
       "id": "k17b8jw1qg917bb7kkz7gp08g1896c2m",

@@ -139,7 +139,7 @@ OPENAI_VISION_MODEL=gpt-6-luna
 OPENAI_REVIEW_MODEL=gpt-6-luna
 CRON_SECRET=
 CRON_RESULTS_LIMIT=3
-CRON_DAYS_BACK=10
+CRON_DAYS_BACK=1
 CRON_INGESTION_MAX_STEPS=20
 CRON_MAX_HANDLES_PER_RUN=2000
 CRON_FULL_SCRAPE_COOLDOWN_HOURS=23
@@ -230,7 +230,9 @@ Ingestion:
 
 1. Admin or cron starts an ingestion job.
 2. Active venues are loaded from Convex.
-3. Apify fetches recent Instagram posts per venue handle.
+3. Apify fetches only the last 24 hours per venue handle, skips pinned posts,
+   and starts with basic data. Details are fetched only for verified fresh posts
+   missing source fields or carousel slides, within the same total cost cap.
 4. OpenAI extracts structured event data from captions/images.
 5. Ingestion auto-approves source-confirmed, unique events without a confidence cutoff. Scores remain informational, including low or missing scores. Evidence may come from a coherent persisted caption or the verified poster/caption extraction contract; the Convex write boundary independently checks the persisted source and exact public event payload. Non-events and proven duplicates are excluded. Missing optional details do not invalidate a real dated event: unknown start time may publish as `TBD`, and unavailable images may use verified caption evidence. Unreadable dates, materially contradictory source evidence, unresolved occurrence/venue identity, and uncertain duplicate matches still need resolution. Moderation status alone does not bypass publication or source-integrity checks.
 6. Approved duplicate automerge runs when ingestion completes.

@@ -705,6 +705,23 @@ Minimum monitoring:
 - OpenAI dashboard for model usage and spend.
 - Clerk dashboard for auth errors and production domain configuration.
 
+Paid Instagram acquisition starts with `basicData`, a strict absolute cutoff
+at most 24 hours old and `skipPinnedPosts=true`. A newer persisted per-handle
+watermark narrows the request. Older `CRON_DAYS_BACK`, manual `daysBack`,
+`noAgeCutoff` and stale detailed-data/pinned-post environment overrides cannot
+widen this paid boundary. Existing dataset imports and saved-source replay are
+the way to process historical data without starting another paid actor.
+
+Details are requested only for fresh owner-verified rows missing required
+fields or complete carousel children. The logical scrape ceiling defaults to
+$0.01 and covers both phases. A settled basic-run receipt must establish the
+remaining allowance before a detailed run starts; at least $0.005 must remain.
+Unknown billing data, insufficient allowance or incomplete carousel details
+fail the scrape without advancing its source checkpoint. Investigate the
+failure and its run receipts before retrying. The shared lease deadline remains
+in force through polling, billing settlement and detailed data reads. See
+`docs/instagram-image-coverage.md` and `npm run qa:apify-recent-media`.
+
 Operational checks:
 
 ```bash

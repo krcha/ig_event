@@ -8,8 +8,9 @@ const DEFAULT_DAYS_BACK = 10;
 const DEFAULT_APIFY_HISTORY_RUNS_LIMIT = 100;
 const MAX_APIFY_HISTORY_RUNS_LIMIT = 200;
 const DEFAULT_SKIP_PINNED_POSTS = false;
-// The basic package omits childPosts, so it cannot provide carousel siblings.
-const DEFAULT_APIFY_DATA_DETAIL_LEVEL = "detailedData";
+const DEFAULT_APIFY_DATA_DETAIL_LEVEL = "basicData";
+const APIFY_RECENT_WINDOW_MS = 24 * 60 * 60 * 1_000;
+const MIN_APIFY_PAID_RUN_CHARGE_USD = 0.005;
 const DEFAULT_APIFY_RUN_TIMEOUT_SECONDS = 120;
 const MIN_APIFY_RUN_TIMEOUT_SECONDS = 30;
 const MAX_APIFY_RUN_TIMEOUT_SECONDS = 300;
@@ -122,6 +123,8 @@ type ApifyInstagramImage =
   | string
   | {
       type?: string;
+      id?: string | number;
+      shortCode?: string;
       isVideo?: boolean;
       is_video?: boolean;
       url?: string;
@@ -169,6 +172,10 @@ type ApifyInstagramItem = {
   images?: ApifyInstagramImage[];
   sidecarImages?: ApifyInstagramImage[];
   childPosts?: ApifyInstagramImage[];
+  carouselMediaCount?: number;
+  carousel_media_count?: number;
+  childPostsCount?: number;
+  imageSlideCount?: number;
   image_versions2?: {
     candidates?: Array<{ url?: string }>;
   };
@@ -199,6 +206,8 @@ type ApifyActorRun = {
   id?: string;
   defaultDatasetId?: string;
   status?: string;
+  finishedAt?: string;
+  usageTotalUsd?: number | null;
 };
 
 export type RecentApifyRunPostsResult = {
@@ -255,12 +264,6 @@ function normalizeDaysBack(value: number | undefined): number {
   }
 
   return Math.min(rounded, 30);
-}
-
-function normalizeApifyDataDetailLevel(
-  value: string | undefined,
-): ApifyDataDetailLevel {
-  return value === "basicData" || value === "detailedData" ? value : DEFAULT_APIFY_DATA_DETAIL_LEVEL;
 }
 
 function normalizeApifySkipPinnedPosts(value: string | undefined): boolean {
@@ -336,26 +339,31 @@ export function buildApifyInstagramScrapeRequest(options: {
   skipPinnedPosts?: boolean;
   maxTotalChargeUsd?: number;
   env?: Record<string, string | undefined>;
+  nowMs?: number;
 }): ApifyInstagramScrapeRequest {
   const env = options.env ?? process.env;
   const resultsLimit = normalizeResultsLimit(options.resultsLimit);
-  const daysBack = normalizeDaysBack(options.daysBack);
   const parsedOnlyPostsNewerThan = options.onlyPostsNewerThan
     ? Date.parse(options.onlyPostsNewerThan)
     : Number.NaN;
-  const onlyPostsNewerThan = options.noAgeCutoff
-    ? "1970-01-01T00:00:00.000Z"
-    : Number.isFinite(parsedOnlyPostsNewerThan)
-    ? new Date(parsedOnlyPostsNewerThan).toISOString()
-    : `${daysBack} day${daysBack === 1 ? "" : "s"}`;
+  // Every paid profile acquisition has a hard 24-hour provider-side boundary.
+  // Historical checkpoints, manual daysBack and catch-up switches may narrow
+  // this window, but must never expand it into a paid backfill.
+  const cutoffMs = Math.max(
+    (options.nowMs ?? Date.now()) - APIFY_RECENT_WINDOW_MS,
+    Number.isFinite(parsedOnlyPostsNewerThan) ? parsedOnlyPostsNewerThan : Number.NEGATIVE_INFINITY,
+  );
+  const onlyPostsNewerThan = new Date(cutoffMs).toISOString();
 
   return {
     input: {
       username: [options.actorUsernameInput],
       resultsLimit,
       onlyPostsNewerThan,
-      skipPinnedPosts: options.skipPinnedPosts ?? normalizeApifySkipPinnedPosts(env.APIFY_SKIP_PINNED_POSTS),
-      dataDetailLevel: normalizeApifyDataDetailLevel(env.APIFY_DATA_DETAIL_LEVEL),
+      // Apify retains recent pins with the date filter and skips older pins.
+      // The caller's local recent-pin policy still decides source admission.
+      skipPinnedPosts: true,
+      dataDetailLevel: DEFAULT_APIFY_DATA_DETAIL_LEVEL,
     },
     runOptions: {
       maxItems: resultsLimit,
@@ -368,7 +376,7 @@ export function buildApifyInstagramScrapeRequest(options: {
       timeout: normalizeApifyRunTimeoutSeconds(env.APIFY_RUN_TIMEOUT_SECONDS),
       memory: normalizeApifyMemoryMbytes(env.APIFY_MEMORY_MBYTES),
     },
-    daysBack,
+    daysBack: 1,
   };
 }
 
@@ -475,7 +483,12 @@ function asHttpUrl(candidate: string | null | undefined): string | null {
   if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
     return null;
   }
-  return trimmed;
+  try {
+    new URL(trimmed);
+    return trimmed;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeString(value: string | null | undefined): string | null {
@@ -671,6 +684,7 @@ function normalizePostType(type: string | undefined): string | null {
     normalized === "sidecar" ||
     normalized === "album" ||
     normalized === "carousel" ||
+    normalized === "carousel_container" ||
     normalized === "graphsidecar"
   ) {
     return "sidecar";
@@ -679,16 +693,16 @@ function normalizePostType(type: string | undefined): string | null {
 }
 
 function resolvePostType(item: ApifyInstagramItem): string | null {
+  const describedTypes = [item.type, item.productType, item.mediaType, item.__typename].map(normalizePostType);
+  const describedType = describedTypes.find(Boolean) ?? null;
+  // Mixed carousels sometimes have isVideo=true for their cover. Their parent
+  // remains a sidecar, otherwise video siblings could disappear from coverage.
+  if (describedTypes.includes("sidecar") || (declaredCarouselCount(item) ?? 0) > 1 ||
+    (item.childPosts?.length ?? 0) > 1 || (item.sidecarImages?.length ?? 0) > 1) return "sidecar";
   if (item.isVideo === true || item.is_video === true) {
     return "video";
   }
-
-  return (
-    normalizePostType(item.type) ??
-    normalizePostType(item.productType) ??
-    normalizePostType(item.mediaType) ??
-    normalizePostType(item.__typename)
-  );
+  return describedType;
 }
 
 function selectPrimaryImageUrl(item: ApifyInstagramItem): string | null {
@@ -755,6 +769,11 @@ function collectImageUrls(item: ApifyInstagramItem): string[] {
       candidates.add(candidate);
     }
   }
+  // Basic image lists can omit video siblings. Keep every explicit child's
+  // preview in the legacy flat URL contract as well as the ordered manifest.
+  for (const entry of item.childPosts ?? item.sidecarImages ?? []) {
+    appendCandidate(pickImageCandidate(entry));
+  }
 
   if (Array.isArray(item.image_versions2?.candidates)) {
     for (const candidate of item.image_versions2.candidates) {
@@ -779,7 +798,8 @@ export function mapApifyItemToInstagramPost(
     return null;
   }
 
-  const postedAt = parsePostDate(item);
+  const parsedPostDate = parsePostDate(item);
+  const postedAt = parsedPostDate && Number.isFinite(parsedPostDate.getTime()) ? parsedPostDate : null;
   const primaryImageUrl = selectPrimaryImageUrl(item);
   const imageUrls = collectImageUrls(item);
   if (primaryImageUrl && !imageUrls.includes(primaryImageUrl)) {
@@ -803,6 +823,133 @@ export function mapApifyItemToInstagramPost(
     username,
     isPinned: isPinnedApifyItem(item),
   };
+}
+
+function declaredCarouselCount(item: ApifyInstagramItem): number | null {
+  const counts = [item.carouselMediaCount, item.carousel_media_count, item.childPostsCount, item.imageSlideCount]
+    .filter((value): value is number => typeof value === "number");
+  if (counts.some((count) => !Number.isInteger(count) || count < 2) || new Set(counts).size > 1) {
+    return Number.NaN;
+  }
+  return counts[0] ?? null;
+}
+
+function verifiedCarouselChildren(item: ApifyInstagramItem): ApifyInstagramImage[] | undefined {
+  if (item.childPosts?.length) return item.childPosts;
+  if (item.sidecarImages?.length) return item.sidecarImages;
+  // A flat photo list alone can omit video siblings. An independent total
+  // count matching every entry makes its full ordered coverage explicit.
+  const count = declaredCarouselCount(item);
+  return count !== null && count === item.images?.length ? item.images : undefined;
+}
+
+/** Require ordered child evidence, or a photo list with a matching total count. */
+export function hasCompleteApifyCarousel(item: ApifyInstagramItem): boolean {
+  const children = verifiedCarouselChildren(item);
+  const count = declaredCarouselCount(item);
+  const childIds = (children ?? []).map((child) => typeof child === "object"
+    ? normalizeIdentifier(child.id) ?? normalizeString(child.shortCode) : null).filter(Boolean);
+  return Boolean(
+    children && children.length >= 2 && children.length <= MAX_RETAINED_INSTAGRAM_IMAGE_SLIDES &&
+    new Set(childIds).size === childIds.length &&
+    (count === null || count === children.length) &&
+    children.every((child) => collectSlideImageUrls(child).some((url) => url.length <= 2_048)),
+  );
+}
+
+function hasCaptionField(item: ApifyInstagramItem): boolean {
+  return item.caption === null || typeof item.caption === "string" ||
+    (typeof item.caption === "object" && typeof item.caption?.text === "string") ||
+    typeof item.captionText === "string" || typeof item.caption_text === "string";
+}
+
+/** Request only fields needed to preserve the ingestion source contract. */
+export function needsApifyPostDetails(item: ApifyInstagramItem): boolean {
+  const type = resolvePostType(item);
+  return !hasCaptionField(item) || !["image", "video", "sidecar"].includes(type ?? "") || !selectPrimaryImageUrl(item) ||
+    (type === "sidecar" && !hasCompleteApifyCarousel(item));
+}
+
+function canonicalInstagramPostCode(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    const [prefix, code] = url.pathname.split("/").filter(Boolean);
+    return INSTAGRAM_HOSTNAMES.has(url.hostname) && INSTAGRAM_POST_PATH_PREFIXES.has(prefix) && code
+      ? code : null;
+  } catch {
+    return null;
+  }
+}
+
+function hasConsistentInstagramPostCode(item: ApifyInstagramItem): boolean {
+  const code = canonicalInstagramPostCode(buildPostUrl(item));
+  return Boolean(code && [item.shortCode, item.shortcode, item.code]
+    .every((candidate) => !candidate || candidate === code));
+}
+
+/** A detail response may enrich a source, never replace its identity or date. */
+export function mergeApifyPostDetails(
+  basic: ApifyInstagramItem,
+  detail: ApifyInstagramItem,
+): ApifyInstagramItem {
+  const basicDate = parsePostDate(basic)?.getTime();
+  const detailDate = parsePostDate(detail)?.getTime();
+  const basicOwner = normalizeHandle(readUsername(basic, "") ?? "");
+  const detailOwner = normalizeHandle(readUsername(detail, "") ?? "");
+  const basicCode = canonicalInstagramPostCode(buildPostUrl(basic));
+  const detailCode = canonicalInstagramPostCode(buildPostUrl(detail));
+  if (
+    detail.error != null || !buildPostId(basic) || buildPostId(basic) !== buildPostId(detail) ||
+    !basicCode || basicCode !== detailCode || !hasConsistentInstagramPostCode(basic) ||
+    !hasConsistentInstagramPostCode(detail) || !basicOwner || basicOwner !== detailOwner ||
+    !Number.isFinite(basicDate) || basicDate !== detailDate
+  ) {
+    throw new Error("Apify post details did not match the fresh source identity, owner and timestamp.");
+  }
+  const basicCount = declaredCarouselCount(basic);
+  const detailCount = declaredCarouselCount(detail);
+  const detailChildren = verifiedCarouselChildren(detail);
+  const basicChildren = verifiedCarouselChildren(basic);
+  if (resolvePostType(basic) === "sidecar" && (
+    resolvePostType(detail) !== "sidecar" || !hasCompleteApifyCarousel(detail) ||
+    (basicCount !== null && basicCount !== detailChildren?.length) ||
+    (detailCount !== null && basicCount !== null && detailCount !== basicCount)
+  )) {
+    throw new Error("Apify carousel details are incomplete; refusing a cover-only source.");
+  }
+  if (basicChildren?.length && detailChildren?.length) {
+    for (let index = 0; index < basicChildren.length; index += 1) {
+      const before = basicChildren[index];
+      const after = detailChildren[index];
+      const beforeId = typeof before === "object" ? normalizeIdentifier(before.id) ?? normalizeString(before.shortCode) : null;
+      const afterId = typeof after === "object" ? normalizeIdentifier(after.id) ?? normalizeString(after.shortCode) : null;
+      if (!after || (beforeId && beforeId !== afterId)) {
+        throw new Error("Apify carousel details changed a known child identity or order.");
+      }
+    }
+  }
+  const merged: ApifyInstagramItem = {
+    ...basic,
+    ...detail,
+    // Source identity and profile pin status belong to the basic acquisition.
+    id: basic.id,
+    pk: basic.pk,
+    postId: basic.postId,
+    shortCode: basic.shortCode,
+    shortcode: basic.shortcode,
+    code: basic.code,
+    url: buildPostUrl(basic) ?? undefined,
+    ownerUsername: basicOwner,
+    timestamp: new Date(basicDate as number).toISOString(),
+    isPinned: isPinnedApifyItem(basic),
+    is_pinned: false,
+    pinned: false,
+  };
+  if (needsApifyPostDetails(merged)) {
+    throw new Error("Apify post details are incomplete; required source fields are still missing.");
+  }
+  return merged;
 }
 
 /**
@@ -884,6 +1031,7 @@ async function listRecentSucceededActorRuns(
 async function loadDatasetItemsForRun(
   datasetId: string,
   apiToken: string,
+  signal?: AbortSignal,
 ): Promise<ApifyInstagramItem[]> {
   const query = new URLSearchParams({
     clean: "true",
@@ -893,6 +1041,7 @@ async function loadDatasetItemsForRun(
   const response = await fetch(endpoint, {
     headers: getApifyHeaders(apiToken),
     cache: "no-store",
+    signal,
   });
 
   if (!response.ok) {
@@ -947,6 +1096,13 @@ export async function loadRecentApifyRunPosts(
 
     for (const datasetItems of datasetItemsBatch) {
       for (const item of datasetItems) {
+        // Basic discovery runs also appear in free history imports. A failed
+        // hydration must never re-enter ingestion as a cover-only source or
+        // shadow a complete older dataset for the same post. History keeps its
+        // full date range; only source completeness is required here.
+        if (!item || typeof item !== "object" || needsApifyPostDetails(item)) {
+          continue;
+        }
         const post = mapApifyItemToInstagramPost(item, "");
         if (!post) {
           continue;
@@ -1009,6 +1165,11 @@ export async function scrapeInstagramAccount(
       skipPinnedPosts: options.skipPinnedPosts,
       maxTotalChargeUsd: options.maxTotalChargeUsd,
     });
+    // The collector keeps its established catch-up and pin behavior. The hard
+    // 24-hour restriction applies only to paid Apify profile acquisitions.
+    settings.daysBack = normalizeDaysBack(options.daysBack);
+    settings.input.skipPinnedPosts = options.skipPinnedPosts ??
+      normalizeApifySkipPinnedPosts(process.env.APIFY_SKIP_PINNED_POSTS);
     const configuredBoundaryMs = options.onlyPostsNewerThan ? Date.parse(options.onlyPostsNewerThan) : NaN;
     const onlyPostsNewerThan = options.noAgeCutoff ? null
       : Number.isFinite(configuredBoundaryMs) ? new Date(configuredBoundaryMs).toISOString()
@@ -1034,6 +1195,11 @@ export async function scrapeInstagramAccount(
   );
   const actorIdForPath = normalizeApifyActorIdForPath(actorId);
   const target = parseInstagramActorTarget(options.handle);
+  // Apify ignores onlyPostsNewerThan for direct post URLs. Freshness must be
+  // established by a profile acquisition before we pay for URL hydration.
+  if (!target.fallbackUsername) {
+    throw new Error("Direct paid Apify post fetches require a verified fresh profile source.");
+  }
   const requestSettings = buildApifyInstagramScrapeRequest({
     actorUsernameInput: target.actorUsernameInput,
     resultsLimit: options.resultsLimit,
@@ -1044,18 +1210,9 @@ export async function scrapeInstagramAccount(
     maxTotalChargeUsd: options.maxTotalChargeUsd,
   });
   const { input, runOptions } = requestSettings;
-
-  const query = new URLSearchParams({
-    clean: "true",
-    maxItems: String(runOptions.maxItems),
-    maxTotalChargeUsd: String(runOptions.maxTotalChargeUsd),
-    timeout: String(runOptions.timeout),
-  });
-  if (runOptions.memory) {
-    query.set("memory", String(runOptions.memory));
+  if (runOptions.maxTotalChargeUsd < MIN_APIFY_PAID_RUN_CHARGE_USD) {
+    throw new Error("Apify logical scrape budget is below the provider's $0.005 minimum run cap.");
   }
-  const endpoint = `https://api.apify.com/v2/acts/${encodeURIComponent(actorIdForPath)}/run-sync-get-dataset-items?${query.toString()}`;
-
   const providerRequestTimeoutMs = (runOptions.timeout + 30) * 1_000;
   const preflightLeaseRemainingMs =
     typeof options.abortAtMs === "number" ? options.abortAtMs - Date.now() : Number.POSITIVE_INFINITY;
@@ -1063,75 +1220,150 @@ export async function scrapeInstagramAccount(
     throw new Error(`Apify scraper lease deadline is too close for ${target.label}.`);
   }
   const abortController = new AbortController();
-  const requestInit: RequestInit = {
-    method: "POST",
-    headers: {
-      ...getApifyHeaders(apiToken),
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(input),
-    cache: "no-store",
-    signal: abortController.signal,
-  };
-
+  // One deadline covers the marker, both paid phases, billing settlement and
+  // storage reads. Hydration cannot reset a nearly expired daily receipt lease.
+  const deadlineMs = Math.min(options.abortAtMs ?? Number.POSITIVE_INFINITY, Date.now() + providerRequestTimeoutMs);
   let abortTimer: ReturnType<typeof setTimeout> | undefined;
-  let response: Response;
-  let rawItems: ApifyInstagramItem[];
   try {
     // The awaited hook commits a crash-safe marker, not proof of provider
     // transport. Re-check the absolute lease deadline after it returns: a slow
     // marker must never reset an expired deadline into a new paid window.
     await options.onRequestStarted?.();
-    const remainingLeaseMs =
-      typeof options.abortAtMs === "number"
-        ? options.abortAtMs - Date.now()
-        : Number.POSITIVE_INFINITY;
-    if (Number.isFinite(remainingLeaseMs) && remainingLeaseMs < 5_000) {
+    const remainingLeaseMs = deadlineMs - Date.now();
+    if (remainingLeaseMs < 5_000) {
       throw new Error(`Apify scraper lease deadline expired before transport for ${target.label}.`);
     }
-    const requestTimeoutMs = Number.isFinite(remainingLeaseMs)
-      ? Math.min(providerRequestTimeoutMs, remainingLeaseMs)
-      : providerRequestTimeoutMs;
     abortTimer = setTimeout(
       () => abortController.abort(new Error("Apify scraper request exceeded its lease-safe deadline.")),
-      requestTimeoutMs,
+      remainingLeaseMs,
     );
     abortTimer.unref?.();
-    console.info(
-      JSON.stringify({
+    const ensureDeadline = (minimumRemainingMs = 0) => {
+      abortController.signal.throwIfAborted();
+      if (deadlineMs - Date.now() < minimumRemainingMs) {
+        throw new Error(`Apify scraper lease deadline expired before transport for ${target.label}.`);
+      }
+    };
+    const readRun = async (runId: string, waitForFinish?: number): Promise<ApifyActorRun> => {
+      ensureDeadline();
+      const query = waitForFinish ? `?waitForFinish=${waitForFinish}` : "";
+      const response = await fetch(`${APIFY_API_BASE_URL}/actor-runs/${encodeURIComponent(runId)}${query}`, {
+        headers: getApifyHeaders(apiToken), cache: "no-store", signal: abortController.signal,
+      });
+      if (!response.ok) throw new Error(`Apify run receipt request failed: ${response.status}.`);
+      const payload = await response.json() as { data?: ApifyActorRun };
+      if (!payload.data || payload.data.id !== runId) throw new Error("Apify returned an invalid run receipt.");
+      return payload.data;
+    };
+    const runPhase = async (phaseInput: ApifyInstagramScrapeRequest["input"], maxTotalChargeUsd: number) => {
+      ensureDeadline(5_000);
+      const query = new URLSearchParams({
+        maxItems: String(phaseInput.username.length > 1 ? phaseInput.username.length : phaseInput.resultsLimit),
+        maxTotalChargeUsd: String(maxTotalChargeUsd),
+        timeout: String(Math.min(runOptions.timeout, Math.max(1, Math.floor((deadlineMs - Date.now()) / 1_000) - 1))),
+        waitForFinish: String(Math.min(60, Math.max(1, Math.floor((deadlineMs - Date.now()) / 1_000) - 1))),
+        restartOnError: "false",
+      });
+      if (runOptions.memory) query.set("memory", String(runOptions.memory));
+      const endpoint = `${APIFY_API_BASE_URL}/acts/${encodeURIComponent(actorIdForPath)}/runs?${query.toString()}`;
+      console.info(JSON.stringify({
         level: "info",
         event: "apify.instagram.request",
         handles: [target.label],
         actorId,
-        username: input.username,
-        resultsLimit: input.resultsLimit,
-        onlyPostsNewerThan: input.onlyPostsNewerThan,
-        skipPinnedPosts: input.skipPinnedPosts,
-        dataDetailLevel: input.dataDetailLevel,
-        maxItems: runOptions.maxItems,
-        maxTotalChargeUsd: runOptions.maxTotalChargeUsd,
-        timeout: runOptions.timeout,
+        ...phaseInput,
+        maxTotalChargeUsd,
+        logicalMaxTotalChargeUsd: runOptions.maxTotalChargeUsd,
+        timeout: Number(query.get("timeout")),
         memory: runOptions.memory ?? null,
-      }),
-    );
-    // No awaited or fallible business work belongs between this process-local
-    // receipt and fetch. A surviving worker can retract the durable marker only
-    // when this callback was never reached; crashes remain fail-closed.
-    options.onTransportInvoked?.();
-    response = await fetch(endpoint, requestInit);
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(
-        `Apify scraper request failed for ${target.label}: ${response.status} ${response.statusText} - ${errorBody}`,
-      );
+      }));
+      const requestInit: RequestInit = {
+        method: "POST",
+        headers: { ...getApifyHeaders(apiToken), "content-type": "application/json" },
+        body: JSON.stringify(phaseInput), cache: "no-store", signal: abortController.signal,
+      };
+      // The durable logical-attempt marker is already committed. Each paid
+      // transport also retains the process-local invocation receipt.
+      options.onTransportInvoked?.();
+      const response = await fetch(endpoint, requestInit);
+      if (!response.ok) {
+        throw new Error(`Apify scraper request failed for ${target.label}: ${response.status} ${response.statusText} - ${await response.text()}`);
+      }
+      let run = (await response.json() as { data?: ApifyActorRun }).data;
+      if (!run?.id) throw new Error("Apify did not return a paid run receipt.");
+      const activeStatuses = new Set(["READY", "RUNNING", "TIMING-OUT", "ABORTING"]);
+      // One paid start only; subsequent calls wait for that same run. The
+      // attempt count and absolute deadline both bound these read-only waits.
+      for (let attempt = 0; activeStatuses.has(run.status ?? "") && attempt < Math.ceil(runOptions.timeout / 60) + 1; attempt += 1) {
+        ensureDeadline();
+        run = await readRun(run.id as string, Math.min(60, Math.max(1, Math.floor((deadlineMs - Date.now()) / 1_000) - 1)));
+      }
+      if (run.status !== "SUCCEEDED" || !run.defaultDatasetId) {
+        throw new Error(`Apify paid run did not succeed: ${run.status ?? "unknown"}.`);
+      }
+      ensureDeadline();
+      const items = await loadDatasetItemsForRun(run.defaultDatasetId, apiToken, abortController.signal);
+      if (!Array.isArray(items)) throw new Error("Apify returned an invalid Instagram dataset.");
+      return { run, items };
+    };
+    const basic = await runPhase(input, runOptions.maxTotalChargeUsd);
+    const cutoffMs = Date.parse(input.onlyPostsNewerThan);
+    const freshItems = basic.items.filter((item) => {
+      if (!item || typeof item !== "object") return false;
+      const dateMs = parsePostDate(item)?.getTime();
+      return item.error == null && Number.isFinite(dateMs) && (dateMs as number) >= cutoffMs &&
+        (dateMs as number) <= Date.now() && hasConsistentInstagramPostCode(item) &&
+        normalizeHandle(readUsername(item, "") ?? "") === normalizeHandle(target.fallbackUsername);
+    });
+    const apifyOptions = { ...options, noAgeCutoff: false };
+    const selected = normalizeInstagramCollection(freshItems, target, apifyOptions, requestSettings, cutoffMs);
+    const selectedKeys = new Set(selected.map((post) => `${post.postId}::${post.instagramPostUrl}`));
+    const candidates = freshItems.filter((item) => selectedKeys.has(`${buildPostId(item)}::${buildPostUrl(item)}`));
+    const uniqueCandidates = [...new Map(candidates.map((item) => [`${buildPostId(item)}::${buildPostUrl(item)}`, item])).values()];
+    const hydrationCandidates = uniqueCandidates.filter(needsApifyPostDetails);
+    let completeItems = uniqueCandidates;
+    if (hydrationCandidates.length > 0) {
+      // Immediate terminal metadata may still have preliminary costs. Apify
+      // documents a 10-second settlement interval before the authenticated
+      // receipt read. Missing/ambiguous costs cannot authorize another charge.
+      const finishedAtMs = basic.run.finishedAt ? Date.parse(basic.run.finishedAt) : Number.NaN;
+      if (!Number.isFinite(finishedAtMs)) throw new Error("Apify billing receipt has no settled completion time; details were not fetched.");
+      const settlementDelayMs = Math.max(0, finishedAtMs + 10_000 - Date.now());
+      ensureDeadline(settlementDelayMs + 5_000);
+      if (settlementDelayMs > 0) {
+        await new Promise<void>((resolve, reject) => {
+          const onAbort = () => { clearTimeout(timer); reject(abortController.signal.reason); };
+          const timer = setTimeout(() => { abortController.signal.removeEventListener("abort", onAbort); resolve(); }, settlementDelayMs);
+          abortController.signal.addEventListener("abort", onAbort, { once: true });
+        });
+      }
+      const settledRun = await readRun(basic.run.id as string);
+      const actualCharge = settledRun.usageTotalUsd;
+      if (settledRun.status !== "SUCCEEDED" || typeof actualCharge !== "number" || !Number.isFinite(actualCharge) || actualCharge < 0) {
+        throw new Error("Apify billing receipt has no verified total charge; details were not fetched.");
+      }
+      // Integer microdollars round the remaining authorization down, never up.
+      const remainingChargeUsd = Math.max(0, Math.floor((runOptions.maxTotalChargeUsd - actualCharge) * 1_000_000 + 0.000001) / 1_000_000);
+      if (remainingChargeUsd < MIN_APIFY_PAID_RUN_CHARGE_USD) {
+        throw new Error("Apify logical scrape budget cannot fund complete post details; refusing an incomplete source.");
+      }
+      const detailUrls = hydrationCandidates.map((item) => {
+        const code = canonicalInstagramPostCode(buildPostUrl(item));
+        if (!code) throw new Error("Apify fresh source has no verified Instagram permalink for details.");
+        return `https://www.instagram.com/p/${code}/`;
+      });
+      const details = await runPhase({ ...input, username: detailUrls, resultsLimit: 1, dataDetailLevel: "detailedData" }, remainingChargeUsd);
+      const hydrated = new Map(hydrationCandidates.map((candidate) => {
+        const matches = details.items.filter((item) => buildPostId(item) === buildPostId(candidate));
+        if (matches.length !== 1) throw new Error("Apify did not return exactly one complete detail result per fresh post.");
+        return [candidate, mergeApifyPostDetails(candidate, matches[0])];
+      }));
+      completeItems = uniqueCandidates.map((candidate) => hydrated.get(candidate) ?? candidate);
     }
-
-    rawItems = (await response.json()) as ApifyInstagramItem[];
+    return normalizeInstagramCollection(completeItems, target, apifyOptions, requestSettings, cutoffMs, basic.items.length);
   } finally {
     clearTimeout(abortTimer);
   }
-  return normalizeInstagramCollection(rawItems, target, options, requestSettings);
 }
 
 /** Both transports retain the same source identity, owner, date and pin rules. */
@@ -1141,6 +1373,7 @@ function normalizeInstagramCollection(
   options: ScrapeInstagramAccountOptions,
   requestSettings: ApifyInstagramScrapeRequest,
   transportBoundaryMs = Number.NEGATIVE_INFINITY,
+  rawItemCount = rawItems.length,
 ): InstagramScrapedPost[] {
   const resultsLimit = requestSettings.input.resultsLimit;
   const cutoff = options.noAgeCutoff ? Number.NEGATIVE_INFINITY
@@ -1195,7 +1428,7 @@ function normalizeInstagramCollection(
     ? selectLatestOriginalNonPinnedPost(normalizedTopLevelPosts)
     : normalizedTopLevelPosts.slice(0, resultsLimit);
   Object.defineProperty(result, INSTAGRAM_SCRAPE_RAW_ITEM_COUNT, {
-    value: rawItems.length,
+    value: rawItemCount,
     enumerable: false,
     configurable: false,
     writable: false,

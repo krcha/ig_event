@@ -305,6 +305,20 @@ Apify:
   `InstagramScrapedPost`.
 - Actor id defaults to `apify/instagram-post-scraper`; legacy actor ids are
   normalized.
+- Paid profile fetching is limited to the last 24 hours, or a newer saved
+  watermark, and always skips pinned posts. Old catch-up/no-age inputs and env
+  overrides cannot expand that paid window. Unverified direct-post URLs cannot
+  start a paid run.
+- Profile discovery uses basic data. Only verified fresh rows missing required
+  source fields or complete carousel children receive details. Identity, owner,
+  timestamp and every carousel slide must match before ingestion proceeds.
+- Basic and detail runs share the original charge ceiling and lease deadline.
+  Details use only the remaining allowance from a settled basic-run receipt;
+  missing billing evidence or incomplete details fail without advancing the
+  source checkpoint. See `docs/instagram-image-coverage.md`.
+- Run-history imports remain age-unrestricted and skip incomplete basic rows
+  before deduplication; a newer cover-only row cannot hide an older complete
+  carousel dataset row.
 
 OpenAI:
 
@@ -397,6 +411,8 @@ calls the job POST route, the job will not keep advancing.
 ### Full Scrape Ingestion
 
 1. `full_scrape` mode calls Apify through `scrapeInstagramAccount`.
+   Paid acquisition clamps broad `daysBack` and older saved watermarks to a
+   maximum 24-hour window.
 2. Fresh posts are persisted into `scrapedPosts` in batches.
 3. Direct full scrape uses limited parallelism when run through
    `runInstagramIngestion`.

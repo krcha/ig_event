@@ -72,14 +72,15 @@ const request = buildApifyInstagramScrapeRequest({
   actorUsernameInput: "clubdrugstore",
   resultsLimit: undefined,
   daysBack: undefined,
+  nowMs: Date.parse("2026-10-17T12:00:00.000Z"),
   env: {},
 });
-assert.equal(request.input.dataDetailLevel, "detailedData");
+assert.equal(request.input.dataDetailLevel, "basicData");
 assert.equal(buildApifyInstagramScrapeRequest({ actorUsernameInput: "clubdrugstore",
   env: { APIFY_DATA_DETAIL_LEVEL: "basicData" } }).input.dataDetailLevel, "basicData");
-assert.equal(request.input.skipPinnedPosts, false);
+assert.equal(request.input.skipPinnedPosts, true);
 assert.equal(request.input.resultsLimit, 3);
-assert.equal(request.input.onlyPostsNewerThan, "10 days");
+assert.equal(request.input.onlyPostsNewerThan, "2026-10-16T12:00:00.000Z");
 assert.equal(request.runOptions.maxItems, 3);
 assert.equal(request.runOptions.timeout, 120);
 assert.equal(request.runOptions.memory, undefined);
@@ -120,11 +121,14 @@ globalThis.fetch = async (_url, init) => {
     false,
     "fetch must never receive a signal that expired while the durable marker was awaited",
   );
-  providerBoundaryFetches += 1;
-  return new Response("[]", {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
+  if (init?.method === "POST") {
+    providerBoundaryFetches += 1;
+    return Response.json({ data: {
+      id: "qa-boundary-run", status: "SUCCEEDED", defaultDatasetId: "qa-boundary-dataset",
+      usageTotalUsd: 0, finishedAt: new Date(Date.now() - 20_000).toISOString(),
+    } });
+  }
+  return Response.json([]);
 };
 try {
   await scrapeInstagramAccount({
@@ -232,14 +236,24 @@ process.env.APIFY_API_TOKEN = "qa-profile-owner-filter-token";
 Date.now = () => Date.parse("2026-09-09T09:00:00.000Z");
 console.info = () => {};
 globalThis.fetch = async (_url, init) => {
+  const parsedUrl = new URL(String(_url));
+  if (init?.method !== "POST") {
+    const target = decodeURIComponent(decodeURIComponent(parsedUrl.pathname.split("/")[3] ?? ""));
+    return Response.json(profileOwnerFixtures[target] ?? []);
+  }
   const input = JSON.parse(String(init?.body ?? "{}"));
   const target = input.username?.[0];
-  const fixtures = {
+  return Response.json({ data: { id: "qa-profile-owner-run", status: "SUCCEEDED",
+    defaultDatasetId: encodeURIComponent(target), usageTotalUsd: 0.002,
+    finishedAt: new Date(Date.now() - 20_000).toISOString() } });
+};
+const profileOwnerFixtures = {
     "https://www.instagram.com/qa_target/": [
       {
         id: "foreign-newer",
         url: "https://www.instagram.com/p/foreign-newer/",
         username: "foreign_collaborator",
+        type: "Image", caption: "", displayUrl: "https://images.apifyusercontent.com/foreign-newer.jpg",
         timestamp: "2026-09-09T08:30:00.000Z",
         coauthorProducers: [{ username: "qa_target" }],
       },
@@ -247,6 +261,7 @@ globalThis.fetch = async (_url, init) => {
         id: "exact-owner-older",
         url: "https://www.instagram.com/p/exact-owner-older/",
         username: "QA_TARGET",
+        type: "Image", caption: "", displayUrl: "https://images.apifyusercontent.com/exact-owner-older.jpg",
         timestamp: "2026-09-09T08:00:00.000Z",
       },
     ],
@@ -255,6 +270,7 @@ globalThis.fetch = async (_url, init) => {
         id: "foreign-only",
         url: "https://www.instagram.com/p/foreign-only/",
         ownerUsername: "foreign_collaborator",
+        type: "Image", caption: "", displayUrl: "https://images.apifyusercontent.com/foreign-only.jpg",
         timestamp: "2026-09-09T08:45:00.000Z",
         coauthorProducers: [{ username: "qa_foreign_only" }],
       },
@@ -264,14 +280,10 @@ globalThis.fetch = async (_url, init) => {
         id: "direct-foreign-owner",
         url: "https://www.instagram.com/p/direct-foreign-owner/",
         ownerUsername: "original_poster",
+        type: "Image", caption: "", displayUrl: "https://images.apifyusercontent.com/direct-foreign-owner.jpg",
         timestamp: "2026-09-09T08:50:00.000Z",
       },
     ],
-  };
-  return new Response(JSON.stringify(fixtures[target] ?? []), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
 };
 try {
   const exactOwnerPosts = await scrapeInstagramAccount({
@@ -304,17 +316,13 @@ try {
   );
   assert.equal(getInstagramScrapeRawItemCount(foreignOnlyPosts), 1);
 
-  const directPost = await scrapeInstagramAccount({
+  await assert.rejects(() => scrapeInstagramAccount({
     handle: "https://www.instagram.com/p/direct-foreign-owner/",
     resultsLimit: 1,
     daysBack: 1,
     pinnedPostPolicy: "include_recent",
-  });
-  assert.deepEqual(
-    directPost.map((post) => [post.postId, post.username]),
-    [["direct-foreign-owner", "original_poster"]],
-    "an explicit post URL must retain its provider-attested owner",
-  );
+  }), /age|recent|verified|24|profile/i,
+  "an arbitrary paid post URL cannot establish its age before starting the actor");
 } finally {
   globalThis.fetch = originalProfileOwnerFilterFetch;
   Date.now = originalProfileOwnerFilterDateNow;
@@ -381,6 +389,7 @@ const persistedHighWaterRequest = buildApifyInstagramScrapeRequest({
   resultsLimit: 1,
   daysBack: 10,
   onlyPostsNewerThan: "2026-07-26T12:34:56.000Z",
+  nowMs: Date.parse("2026-07-27T12:00:00.000Z"),
   env: {},
 });
 assert.equal(
@@ -394,12 +403,13 @@ const invalidHighWaterRequest = buildApifyInstagramScrapeRequest({
   resultsLimit: 1,
   daysBack: 10,
   onlyPostsNewerThan: "not-a-date",
+  nowMs: Date.parse("2026-10-17T12:00:00.000Z"),
   env: {},
 });
 assert.equal(
   invalidHighWaterRequest.input.onlyPostsNewerThan,
-  "10 days",
-  "invalid persisted timestamps must retain the bounded relative fallback",
+  "2026-10-16T12:00:00.000Z",
+  "invalid persisted timestamps must retain the absolute 24-hour fallback",
 );
 
 const originalOpenAiFetch = globalThis.fetch;
@@ -579,6 +589,7 @@ const detailedRequest = buildApifyInstagramScrapeRequest({
   actorUsernameInput: "clubdrugstore",
   resultsLimit: 5,
   daysBack: 30,
+  nowMs: Date.parse("2026-10-17T12:00:00.000Z"),
   env: {
     APIFY_DATA_DETAIL_LEVEL: "detailedData",
     APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN: "0.04",
@@ -587,10 +598,11 @@ const detailedRequest = buildApifyInstagramScrapeRequest({
     APIFY_SKIP_PINNED_POSTS: "true",
   },
 });
-assert.equal(detailedRequest.input.dataDetailLevel, "detailedData");
+assert.equal(detailedRequest.input.dataDetailLevel, "basicData",
+  "stale detailedData configuration must not purchase details for every profile result");
 assert.equal(detailedRequest.input.skipPinnedPosts, true);
 assert.equal(detailedRequest.input.resultsLimit, 5);
-assert.equal(detailedRequest.input.onlyPostsNewerThan, "30 days");
+assert.equal(detailedRequest.input.onlyPostsNewerThan, "2026-10-16T12:00:00.000Z");
 assert.equal(detailedRequest.runOptions.maxTotalChargeUsd, 0.04);
 assert.equal(detailedRequest.runOptions.timeout, 90);
 assert.equal(detailedRequest.runOptions.memory, 8192);

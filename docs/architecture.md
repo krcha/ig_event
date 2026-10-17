@@ -63,6 +63,16 @@ The source of truth is `convex/schema.ts`.
 6. Insert approved or pending events in Convex.
 7. Merge safe approved duplicates through `lib/events/approved-event-automerge.ts`.
 
+Paid Apify acquisition uses a strict 24-hour profile window and skips pinned
+posts. Basic data is sufficient for complete single-image sources and explicit
+carousel manifests. Missing fields or carousel children are enriched only for
+fresh, owner-verified post URLs, with exact identity/date checks and complete
+ordered slide coverage. Discovery and enrichment share one cost ceiling and
+lease deadline; enrichment is authorized by the settled discovery-run charge.
+An incomplete source fails before persistence and checkpoint advancement.
+Saved dataset imports and the optional Instaloader collector keep their existing
+history/catch-up semantics.
+
 Venue resolution treats an explicitly classified promoter's own account,
 legacy venue name, aliases and location claims as organizer identity. Those
 claims cannot supply the physical event venue, including when its old venue
