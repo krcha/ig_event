@@ -27,7 +27,6 @@ for (const [filter, expected] of [
   [{ name: "bircaf\u00e9" }, ["b"]],
   [{ instagram: "@zalpha" }, ["a"]],
   [{ category: "promoter" }, ["c"]],
-  [{ location: "Beta" }, ["b"]],
   [{ mapStatus: "present" }, ["a"]],
   [{ mapStatus: "missing" }, ["b", "d"]],
   [{ mapStatus: "not_applicable" }, ["c"]],
@@ -42,10 +41,13 @@ for (const [filter, expected] of [
   [{ publication: "pending" }, ["c", "d"]],
   [{ scraping: "scraping" }, ["a", "c"]],
   [{ scraping: "paused" }, ["b", "d"]],
-  [{ category: "bar", hours: "google", scraping: "paused", location: "Beta" }, ["b"]],
+  [{ name: "Bircafe", instagram: "xbistro", category: "bar", mapStatus: "missing", hours: "google", publication: "hidden", scraping: "paused" }, ["b"]],
   [{ category: "promoter", mapStatus: "missing" }, []],
+  [{ category: "promoter", mapStatus: "not_applicable", hours: "not_applicable" }, ["c"]],
 ]) assert.deepEqual(ids(filter), expected, `Column filters ${JSON.stringify(filter)}`);
 assert.deepEqual(ids({ scraping: "scraping" }, "Alpha"), ["a"], "global and column filters combine");
+assert.deepEqual(ids({}, "Beta Street"), ["b"], "global search retains physical venue addresses");
+assert.deepEqual(ids({}, "Map missing"), ["d"], "global search retains displayed map status");
 assert.deepEqual(ids({}, "Not applicable"), ["c"], "global search reflects visible promoter state rather than stale physical data");
 assert.deepEqual(ids({}, "Old organizer office"), [], "promoter's historical office is not a physical venue search claim");
 
@@ -86,4 +88,4 @@ assert.equal(row.weeklyHours, "");
 const gaps = buildVenueGapSnapshot([promoter, physical], { now });
 assert.equal(gaps.lists.missingMapLocation.some(({ id }) => id === "c"), false);
 assert.equal(gaps.lists.missingOpeningHours.some(({ id }) => id === "c"), false);
-console.log("Venue table QA passed: seven-column filters and both sort directions, combined search, promoter N/A, safe bulk category, enrichment exclusion and missing-data exports.");
+console.log("Venue table QA passed: seven column filters and sortable columns in both directions, combined search, promoter N/A, safe bulk category, enrichment exclusion and missing-data exports.");

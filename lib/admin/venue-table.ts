@@ -8,14 +8,13 @@ export type VenueTableFilters = {
   name: string;
   instagram: string;
   category: string;
-  location: string;
   mapStatus: "all" | "present" | "missing" | "not_applicable";
   hours: "all" | "known" | "missing" | "google" | "manual" | "osm" | "not_applicable";
   publication: "all" | "pending" | "published" | "hidden";
   scraping: "all" | "scraping" | "paused";
 };
 export const EMPTY_VENUE_TABLE_FILTERS: VenueTableFilters = {
-  name: "", instagram: "", category: "all", location: "", mapStatus: "all", hours: "all", publication: "all", scraping: "all",
+  name: "", instagram: "", category: "all", mapStatus: "all", hours: "all", publication: "all", scraping: "all",
 };
 export const DEFAULT_VENUE_TABLE_SORT: VenueTableSort = { column: "name", direction: "asc" };
 export type VenueTableRow = {
@@ -71,7 +70,6 @@ export function filterAndSortVenues<T extends VenueTableRow>(
     if (filters.name && !contains([venue.name, ...venue.aliases].join(" "), filters.name)) return false;
     if (filters.instagram && !contains(venue.instagramHandle, filters.instagram)) return false;
     if (filters.category !== "all" && venue.category !== filters.category) return false;
-    if (filters.location && !contains(locationLabel(venue), filters.location)) return false;
     if (filters.mapStatus !== "all" && mapState !== filters.mapStatus) return false;
     if (filters.hours === "known" ? hoursState === "missing" || hoursState === "not_applicable" : filters.hours !== "all" && filters.hours !== hoursState) return false;
     if (filters.publication !== "all" && venue.publicStatus !== filters.publication) return false;

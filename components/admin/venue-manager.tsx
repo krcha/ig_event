@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Dialog, DropdownMenu } from "radix-ui";
+import { Dialog, DropdownMenu, Popover, RadioGroup } from "radix-ui";
 import {
   ArrowDown,
   ArrowUp,
-  ArrowUpDown,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
@@ -345,23 +345,70 @@ function VenueDialog({
   );
 }
 
-function VenueColumnSort({
-  column,
+function VenueColumnOptions({
   label,
+  onChange,
+  options,
+  value,
+}: {
+  label: string;
+  onChange: (value: string) => void;
+  options: ReadonlyArray<readonly [string, string]>;
+  value: string;
+}) {
+  return (
+    <RadioGroup.Root aria-label={label} className="max-h-64 space-y-0.5 overflow-y-auto overscroll-contain" onValueChange={onChange} value={value}>
+      {options.map(([optionValue, optionLabel]) => <RadioGroup.Item className="flex min-h-11 w-full items-center justify-between gap-3 rounded-lg px-2 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary" key={optionValue} value={optionValue}><span>{optionLabel}</span><RadioGroup.Indicator><Check aria-hidden="true" className="size-4" /></RadioGroup.Indicator></RadioGroup.Item>)}
+    </RadioGroup.Root>
+  );
+}
+
+function VenueColumnMenu({
+  children,
+  column,
+  disabled,
+  filterActive,
+  label,
+  onClear,
   onSort,
   sort,
 }: {
+  children: ReactNode;
   column: VenueTableColumn;
+  disabled: boolean;
+  filterActive: boolean;
   label: string;
-  onSort: (column: VenueTableColumn) => void;
+  onClear: () => void;
+  onSort: (column: VenueTableColumn, direction: VenueTableSort["direction"]) => void;
   sort: VenueTableSort;
 }) {
+  const [open, setOpen] = useState(false);
   const isActive = sort.column === column;
-  const Icon = isActive ? sort.direction === "asc" ? ArrowUp : ArrowDown : ArrowUpDown;
+  const SortIcon = sort.direction === "asc" ? ArrowUp : ArrowDown;
   return (
-    <button aria-label={`Sort ${label.toLowerCase()} ${isActive && sort.direction === "asc" ? "descending" : "ascending"}`} className={`inline-flex min-h-11 items-center gap-1.5 rounded-md pr-1 text-[11px] font-medium uppercase tracking-[0.08em] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${isActive ? "text-primary" : "text-muted-foreground"}`} onClick={() => onSort(column)} type="button">
-      {label}<Icon aria-hidden="true" className="size-3.5 shrink-0" />
-    </button>
+    <Popover.Root onOpenChange={(nextOpen) => { if (!disabled || !nextOpen) setOpen(nextOpen); }} open={open}>
+      <Popover.Trigger aria-description={filterActive ? "Filter active" : undefined} aria-label={`${label} column options`} className={`inline-flex min-h-11 items-center gap-1.5 rounded-md pr-1 text-[11px] font-medium uppercase tracking-[0.08em] transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 ${isActive || filterActive ? "text-primary" : "text-muted-foreground"}`} disabled={disabled} title={`${label}${filterActive ? " (filtered)" : ""}`}>
+        {label}
+        {filterActive ? <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-primary" /> : null}
+        {isActive ? <SortIcon aria-hidden="true" className="size-3 shrink-0" /> : null}
+        <ChevronDown aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content align="start" aria-label={`${label} column options`} className="z-40 max-h-[var(--radix-popover-content-available-height)] w-64 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-xl border border-border bg-popover p-2 text-sm font-normal normal-case tracking-normal text-popover-foreground shadow-xl outline-none" collisionPadding={12} sideOffset={6}>
+          <div className="pb-1">
+            {(["asc", "desc"] as const).map((direction) => {
+              const Icon = direction === "asc" ? ArrowUp : ArrowDown;
+              const isSelected = isActive && sort.direction === direction;
+              return <button aria-label={`Sort ${label.toLowerCase()} ${direction === "asc" ? "ascending" : "descending"}`} aria-pressed={isSelected} className="flex min-h-11 w-full items-center gap-2 rounded-lg px-2 text-left text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50" disabled={disabled} key={direction} onClick={() => { onSort(column, direction); setOpen(false); }} type="button"><Icon aria-hidden="true" className="size-4 text-muted-foreground" />{direction === "asc" ? "Sort ascending" : "Sort descending"}{isSelected ? <Check aria-hidden="true" className="ml-auto size-4 text-primary" /> : null}</button>;
+            })}
+          </div>
+          <fieldset className="space-y-2 border-t border-border pt-1" disabled={disabled}>
+            {children}
+            {filterActive && (column === "name" || column === "instagram") ? <button aria-label={`Clear ${label.toLowerCase()} filter`} className="min-h-11 px-2 text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={onClear} type="button">Clear filter</button> : null}
+          </fieldset>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }
 
@@ -750,9 +797,31 @@ export function VenueManager() {
     setSelectedVenueIds(new Set());
   }
 
-  function sortColumn(column: VenueTableColumn) {
-    setTableSort((current) => ({ column, direction: current.column === column && current.direction === "asc" ? "desc" : "asc" }));
+  function sortColumn(column: VenueTableColumn, direction: VenueTableSort["direction"]) {
+    setTableSort({ column, direction });
     setPage(1);
+  }
+
+  function columnFilterKey(column: VenueTableColumn): keyof VenueTableFilters {
+    return {
+      name: "name",
+      instagram: "instagram",
+      category: "category",
+      location: "mapStatus",
+      hours: "hours",
+      publication: "publication",
+      scraping: "scraping",
+    }[column] as keyof VenueTableFilters;
+  }
+
+  function columnFilterActive(column: VenueTableColumn): boolean {
+    const key = columnFilterKey(column);
+    return columnFilters[key] !== EMPTY_VENUE_TABLE_FILTERS[key];
+  }
+
+  function clearColumnFilter(column: VenueTableColumn) {
+    const key = columnFilterKey(column);
+    updateColumnFilter(key, EMPTY_VENUE_TABLE_FILTERS[key]);
   }
 
   function columnSortDirection(column: VenueTableColumn): "ascending" | "descending" | undefined {
@@ -825,51 +894,42 @@ export function VenueManager() {
                     <label className="-ml-3 inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center">
                       <input aria-label="Select all venues on this page" checked={allVisibleSelected} className="size-4 accent-primary" disabled={isLoading || isMutating || visibleVenues.length === 0} onChange={toggleVisibleSelection} ref={(node) => { if (node) node.indeterminate = selectedVisibleCount > 0 && !allVisibleSelected; }} type="checkbox" />
                     </label>
-                    <VenueColumnSort column="name" label="Venue" onSort={sortColumn} sort={tableSort} />
+                    <VenueColumnMenu column="name" disabled={isLoading || isMutating} filterActive={columnFilterActive("name")} label="Venue" onClear={() => clearColumnFilter("name")} onSort={sortColumn} sort={tableSort}>
+                      <label className="grid gap-2 p-2 text-xs font-medium text-muted-foreground">Name or alias<input aria-label="Venue name filter" className={INPUT_CLASS} onChange={(event) => updateColumnFilter("name", event.target.value)} placeholder="Search names..." type="search" value={columnFilters.name} /></label>
+                    </VenueColumnMenu>
                   </div>
                 </th>
-                <th aria-sort={columnSortDirection("instagram")} className="px-3 py-1 font-medium" scope="col"><VenueColumnSort column="instagram" label="Instagram" onSort={sortColumn} sort={tableSort} /></th>
-                <th aria-sort={columnSortDirection("category")} className="px-3 py-1 font-medium" scope="col"><VenueColumnSort column="category" label="Type" onSort={sortColumn} sort={tableSort} /></th>
-                <th aria-sort={columnSortDirection("location")} className="w-[19%] min-w-[170px] px-3 py-1 font-medium" scope="col"><VenueColumnSort column="location" label="Location" onSort={sortColumn} sort={tableSort} /></th>
-                <th aria-sort={columnSortDirection("hours")} className="px-3 py-1 font-medium" scope="col"><VenueColumnSort column="hours" label="Hours" onSort={sortColumn} sort={tableSort} /></th>
-                <th aria-sort={columnSortDirection("publication")} className="px-3 py-1 font-medium" scope="col"><VenueColumnSort column="publication" label="Publication" onSort={sortColumn} sort={tableSort} /></th>
-                <th aria-sort={columnSortDirection("scraping")} className="px-3 py-1 font-medium" scope="col"><VenueColumnSort column="scraping" label="Scraping" onSort={sortColumn} sort={tableSort} /></th>
+                <th aria-sort={columnSortDirection("instagram")} className="px-3 py-1 font-medium" scope="col">
+                  <VenueColumnMenu column="instagram" disabled={isLoading || isMutating} filterActive={columnFilterActive("instagram")} label="Instagram" onClear={() => clearColumnFilter("instagram")} onSort={sortColumn} sort={tableSort}>
+                    <label className="grid gap-2 p-2 text-xs font-medium text-muted-foreground">Instagram handle<input aria-label="Instagram filter" autoCapitalize="none" className={INPUT_CLASS} onChange={(event) => updateColumnFilter("instagram", event.target.value)} placeholder="@handle" spellCheck={false} type="search" value={columnFilters.instagram} /></label>
+                  </VenueColumnMenu>
+                </th>
+                <th aria-sort={columnSortDirection("category")} className="px-3 py-1 font-medium" scope="col">
+                  <VenueColumnMenu column="category" disabled={isLoading || isMutating} filterActive={columnFilterActive("category")} label="Type" onClear={() => clearColumnFilter("category")} onSort={sortColumn} sort={tableSort}>
+                    <VenueColumnOptions label="Type filter" onChange={(value) => updateColumnFilter("category", value)} options={[["all", "All types"], ...CANONICAL_VENUE_CATEGORIES.map((category) => [category, category] as const)]} value={columnFilters.category} />
+                  </VenueColumnMenu>
+                </th>
+                <th aria-sort={columnSortDirection("location")} className="w-[19%] min-w-[170px] px-3 py-1 font-medium" scope="col">
+                  <VenueColumnMenu column="location" disabled={isLoading || isMutating} filterActive={columnFilterActive("location")} label="Location" onClear={() => clearColumnFilter("location")} onSort={sortColumn} sort={tableSort}>
+                    <VenueColumnOptions label="Map location filter" onChange={(value) => updateColumnFilter("mapStatus", value as VenueTableFilters["mapStatus"])} options={[["all", "Any map status"], ["present", "On map"], ["missing", "Map missing"], ["not_applicable", "Not applicable"]]} value={columnFilters.mapStatus} />
+                  </VenueColumnMenu>
+                </th>
+                <th aria-sort={columnSortDirection("hours")} className="px-3 py-1 font-medium" scope="col">
+                  <VenueColumnMenu column="hours" disabled={isLoading || isMutating} filterActive={columnFilterActive("hours")} label="Hours" onClear={() => clearColumnFilter("hours")} onSort={sortColumn} sort={tableSort}>
+                    <VenueColumnOptions label="Hours filter" onChange={(value) => updateColumnFilter("hours", value as VenueTableFilters["hours"])} options={[["all", "All hours"], ["known", "Known"], ["missing", "Missing"], ["google", "Google"], ["manual", "Manual"], ["osm", "OpenStreetMap"], ["not_applicable", "Not applicable"]]} value={columnFilters.hours} />
+                  </VenueColumnMenu>
+                </th>
+                <th aria-sort={columnSortDirection("publication")} className="px-3 py-1 font-medium" scope="col">
+                  <VenueColumnMenu column="publication" disabled={isLoading || isMutating} filterActive={columnFilterActive("publication")} label="Publication" onClear={() => clearColumnFilter("publication")} onSort={sortColumn} sort={tableSort}>
+                    <VenueColumnOptions label="Publication filter" onChange={(value) => updateColumnFilter("publication", value as VenueTableFilters["publication"])} options={[["all", "All publication"], ["pending", "Pending"], ["published", "Published"], ["hidden", "Hidden"]]} value={columnFilters.publication} />
+                  </VenueColumnMenu>
+                </th>
+                <th aria-sort={columnSortDirection("scraping")} className="px-3 py-1 font-medium" scope="col">
+                  <VenueColumnMenu column="scraping" disabled={isLoading || isMutating} filterActive={columnFilterActive("scraping")} label="Scraping" onClear={() => clearColumnFilter("scraping")} onSort={sortColumn} sort={tableSort}>
+                    <VenueColumnOptions label="Scraping filter" onChange={(value) => updateColumnFilter("scraping", value as VenueTableFilters["scraping"])} options={[["all", "All scraping"], ["scraping", "Scraping"], ["paused", "Paused"]]} value={columnFilters.scraping} />
+                  </VenueColumnMenu>
+                </th>
                 <th className="z-10 bg-card px-3 py-3 text-right font-medium md:sticky md:right-0" scope="col">Actions</th>
-              </tr>
-              <tr className="border-b border-border bg-card align-top">
-                <td className="sticky left-0 z-10 bg-card px-4 pb-3 pt-2">
-                  <input aria-label="Venue name filter" className={INPUT_CLASS} disabled={isBulkEditing} onChange={(event) => updateColumnFilter("name", event.target.value)} placeholder="Name or alias" type="search" value={columnFilters.name} />
-                </td>
-                <td className="px-3 pb-3 pt-2">
-                  <input aria-label="Instagram filter" autoCapitalize="none" className={`${INPUT_CLASS} min-w-[140px]`} disabled={isBulkEditing} onChange={(event) => updateColumnFilter("instagram", event.target.value)} placeholder="@handle" spellCheck={false} type="search" value={columnFilters.instagram} />
-                </td>
-                <td className="px-3 pb-3 pt-2">
-                  <select aria-label="Type filter" className={`${INPUT_CLASS} min-w-[140px]`} disabled={isBulkEditing} onChange={(event) => updateColumnFilter("category", event.target.value)} value={columnFilters.category}>
-                    <option value="all">All types</option>{CANONICAL_VENUE_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
-                  </select>
-                </td>
-                <td className="space-y-2 px-3 pb-3 pt-2">
-                  <input aria-label="Location text filter" className={INPUT_CLASS} disabled={isBulkEditing} onChange={(event) => updateColumnFilter("location", event.target.value)} placeholder="Address" type="search" value={columnFilters.location} />
-                  <select aria-label="Map location filter" className={INPUT_CLASS} disabled={isBulkEditing} onChange={(event) => updateColumnFilter("mapStatus", event.target.value as VenueTableFilters["mapStatus"])} value={columnFilters.mapStatus}>
-                    <option value="all">Any map status</option><option value="present">On map</option><option value="missing">Map missing</option><option value="not_applicable">Not applicable</option>
-                  </select>
-                </td>
-                <td className="px-3 pb-3 pt-2">
-                  <select aria-label="Hours filter" className={`${INPUT_CLASS} min-w-[150px]`} disabled={isBulkEditing} onChange={(event) => updateColumnFilter("hours", event.target.value as VenueTableFilters["hours"])} value={columnFilters.hours}>
-                    <option value="all">All hours</option><option value="known">Known</option><option value="missing">Missing</option><option value="google">Google</option><option value="manual">Manual</option><option value="osm">OpenStreetMap</option><option value="not_applicable">Not applicable</option>
-                  </select>
-                </td>
-                <td className="px-3 pb-3 pt-2">
-                  <select aria-label="Publication filter" className={`${INPUT_CLASS} min-w-[116px]`} disabled={isBulkEditing} onChange={(event) => updateColumnFilter("publication", event.target.value as VenueTableFilters["publication"])} value={columnFilters.publication}>
-                    <option value="all">All publication</option><option value="pending">Pending</option><option value="published">Published</option><option value="hidden">Hidden</option>
-                  </select>
-                </td>
-                <td className="px-3 pb-3 pt-2">
-                  <select aria-label="Scraping filter" className={`${INPUT_CLASS} min-w-[112px]`} disabled={isBulkEditing} onChange={(event) => updateColumnFilter("scraping", event.target.value as VenueTableFilters["scraping"])} value={columnFilters.scraping}>
-                    <option value="all">All scraping</option><option value="scraping">Scraping</option><option value="paused">Paused</option>
-                  </select>
-                </td>
-                <td className="z-10 bg-card px-3 pb-3 pt-2 md:sticky md:right-0"><span className="sr-only">No action filter</span></td>
               </tr>
             </thead>
             <tbody>
