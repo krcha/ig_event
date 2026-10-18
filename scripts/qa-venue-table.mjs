@@ -24,7 +24,7 @@ const original = structuredClone(venues);
 const ids = (filters = {}, query = "", sort = DEFAULT_VENUE_TABLE_SORT) => filterAndSortVenues(venues, query, { ...EMPTY_VENUE_TABLE_FILTERS, ...filters }, sort).map(({ id }) => id);
 
 for (const [filter, expected] of [
-  [{ name: "bircafé" }, ["b"]],
+  [{ name: "bircaf\u00e9" }, ["b"]],
   [{ instagram: "@zalpha" }, ["a"]],
   [{ category: "promoter" }, ["c"]],
   [{ location: "Beta" }, ["b"]],
