@@ -76,6 +76,7 @@ const checks = [
   { script: "qa:venue-types", timeoutMs: 60_000 },
   { script: "qa:event-categories", timeoutMs: 60_000 },
   { script: "qa:venue-lifecycle", timeoutMs: 60_000 },
+  { script: "qa:venue-bulk-edit", nodeScript: "scripts/qa-venue-bulk-edit.mjs", timeoutMs: 60_000 },
   { script: "qa:venue-hours", timeoutMs: 60_000 },
   { script: "qa:venue-open-now", timeoutMs: 60_000 },
   { script: "qa:google-hours", timeoutMs: 60_000 },
@@ -174,13 +175,15 @@ function formatDuration(ms) {
   return `${Math.round(ms / 1000)}s`;
 }
 
-function runNpmScript(script, timeoutMs) {
+function runNpmScript(script, timeoutMs, nodeScript) {
   return new Promise((resolve) => {
     const startMs = Date.now();
     let timedOut = false;
     let hardKillTimer = null;
 
-    const child = spawn(npmCommand, ["run", script], {
+    const child = spawn(nodeScript ? process.execPath : npmCommand, nodeScript
+      ? ["--import", "./scripts/register-ts-paths.mjs", "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", "--experimental-strip-types", nodeScript]
+      : ["run", script], {
       detached: process.platform !== "win32",
       env: process.env,
       stdio: "inherit",
@@ -202,7 +205,7 @@ function runNpmScript(script, timeoutMs) {
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
       console.error(
-        `\n[timeout] npm run ${script} exceeded ${formatDuration(timeoutMs)}.`,
+        `\n[timeout] ${script} exceeded ${formatDuration(timeoutMs)}.`,
       );
       killChild("SIGTERM");
 
@@ -247,9 +250,9 @@ const failures = [];
 console.log("Running release gates:");
 for (const check of checks) {
   const timeoutMs = readTimeoutMs(check.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  console.log(`\n[run] npm run ${check.script} (timeout ${formatDuration(timeoutMs)})`);
+  console.log(`\n[run] ${check.nodeScript ? `node ${check.nodeScript}` : `npm run ${check.script}`} (timeout ${formatDuration(timeoutMs)})`);
 
-  const result = await runNpmScript(check.script, timeoutMs);
+  const result = await runNpmScript(check.script, timeoutMs, check.nodeScript);
   const elapsed = formatDuration(result.elapsedMs);
 
   if (result.error) {

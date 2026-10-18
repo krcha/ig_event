@@ -21,6 +21,7 @@ import {
   DEFAULT_VENUE_CATEGORY,
 } from "@/lib/taxonomy/venue-types";
 import { parseVenueHoursJson } from "@/lib/venues/venue-hours-cache";
+import { VenueBulkEdit } from "@/components/admin/venue-bulk-edit";
 
 type VenuePublicStatus = "pending" | "published" | "hidden";
 
@@ -368,6 +369,9 @@ export function VenueManager() {
     useState<VenuePublicationFilter>("all");
   const [sortMode, setSortMode] = useState<VenueSortMode>("updated_desc");
   const [page, setPage] = useState(1);
+  const [selectedVenueIds, setSelectedVenueIds] = useState<Set<string>>(new Set());
+  const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
+  const [isBulkEditing, setIsBulkEditing] = useState(false);
   const dialogTriggerRef = useRef<HTMLElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const importFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -390,7 +394,7 @@ export function VenueManager() {
     }
   }
 
-  async function loadVenues() {
+  async function loadVenues(options: { preserveOnError?: boolean } = {}): Promise<boolean> {
     setIsLoading(true);
     setError(null);
     try {
@@ -400,11 +404,13 @@ export function VenueManager() {
         throw new Error(payload.error ?? "Failed to load venues.");
       }
       setVenues(payload.venues);
+      return true;
     } catch (caughtError) {
       setError(
         caughtError instanceof Error ? caughtError.message : "Unknown venue load error.",
       );
-      setVenues([]);
+      if (!options.preserveOnError) setVenues([]);
+      return false;
     } finally {
       setIsLoading(false);
     }
@@ -720,14 +726,38 @@ export function VenueManager() {
   const firstRow = (currentPage - 1) * PAGE_SIZE;
   const visibleVenues = filteredVenues.slice(firstRow, firstRow + PAGE_SIZE);
   const editingVenue = venues.find((venue) => venue.id === editingVenueId);
-  const isMutating = Boolean(busyVenueId) || isSubmitting || isImporting;
+  const isMutating = Boolean(busyVenueId) || isSubmitting || isImporting || isBulkEditing;
   const hasFilters = Boolean(searchQuery) || scrapingFilter !== "all" || publicationFilter !== "all";
+  const selectedVenues = venues.filter((venue) => selectedVenueIds.has(venue.id));
+  const selectedVisibleCount = visibleVenues.filter((venue) => selectedVenueIds.has(venue.id)).length;
+  const allVisibleSelected = visibleVenues.length > 0 && selectedVisibleCount === visibleVenues.length;
+
+  function toggleVenueSelection(venueId: string) {
+    setSelectedVenueIds((current) => {
+      const next = new Set(current);
+      if (next.has(venueId)) next.delete(venueId);
+      else next.add(venueId);
+      return next;
+    });
+  }
+
+  function toggleVisibleSelection() {
+    setSelectedVenueIds((current) => {
+      const next = new Set(current);
+      for (const venue of visibleVenues) {
+        if (allVisibleSelected) next.delete(venue.id);
+        else next.add(venue.id);
+      }
+      return next;
+    });
+  }
 
   function resetFilters() {
     setSearchQuery("");
     setScrapingFilter("all");
     setPublicationFilter("all");
     setPage(1);
+    setSelectedVenueIds(new Set());
   }
 
   return (
@@ -753,11 +783,11 @@ export function VenueManager() {
           <label className="relative col-span-2 block lg:col-span-1">
             <span className="sr-only">Search venues</span>
             <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-3.5 size-4 text-muted-foreground" />
-            <input className={`${INPUT_CLASS} pl-9 pr-10`} onChange={(event) => { setSearchQuery(event.target.value); setPage(1); }} placeholder="Search venues..." ref={searchRef} type="search" value={searchQuery} />
+            <input className={`${INPUT_CLASS} pl-9 pr-10`} disabled={isBulkEditing} onChange={(event) => { setSearchQuery(event.target.value); setPage(1); setSelectedVenueIds(new Set()); }} placeholder="Search venues..." ref={searchRef} type="search" value={searchQuery} />
           </label>
           <label className="grid gap-1">
             <span className="sr-only">Scraping filter</span>
-            <select aria-label="Scraping filter" className={INPUT_CLASS} onChange={(event) => { setScrapingFilter(event.target.value as VenueScrapingFilter); setPage(1); }} value={scrapingFilter}>
+            <select aria-label="Scraping filter" className={INPUT_CLASS} disabled={isBulkEditing} onChange={(event) => { setScrapingFilter(event.target.value as VenueScrapingFilter); setPage(1); setSelectedVenueIds(new Set()); }} value={scrapingFilter}>
               <option value="all">All scraping</option>
               <option value="scraping">Scraping</option>
               <option value="paused">Paused</option>
@@ -765,7 +795,7 @@ export function VenueManager() {
           </label>
           <label className="grid gap-1">
             <span className="sr-only">Publication filter</span>
-            <select aria-label="Publication filter" className={INPUT_CLASS} onChange={(event) => { setPublicationFilter(event.target.value as VenuePublicationFilter); setPage(1); }} value={publicationFilter}>
+            <select aria-label="Publication filter" className={INPUT_CLASS} disabled={isBulkEditing} onChange={(event) => { setPublicationFilter(event.target.value as VenuePublicationFilter); setPage(1); setSelectedVenueIds(new Set()); }} value={publicationFilter}>
               <option value="all">All publication</option>
               <option value="pending">Pending</option>
               <option value="published">Published</option>
@@ -804,12 +834,30 @@ export function VenueManager() {
           </div>
         ) : null}
 
+        {selectedVenueIds.size > 0 ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-primary/20 bg-primary/5 px-4 py-2">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              <p aria-live="polite" className="text-sm font-medium"><span className="tabular-nums">{selectedVenueIds.size}</span> selected</p>
+              {selectedVenueIds.size < filteredVenues.length ? <button className="min-h-11 text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50" disabled={isLoading || isMutating} onClick={() => setSelectedVenueIds(new Set(filteredVenues.map((venue) => venue.id)))} type="button">Select all {filteredVenues.length} matching</button> : null}
+            </div>
+            <div className="flex items-center gap-2">
+              <button className={BUTTON_CLASS} disabled={isLoading || isMutating} onClick={() => setSelectedVenueIds(new Set())} type="button">Clear selection</button>
+              <button className={PRIMARY_BUTTON_CLASS} disabled={isLoading || isMutating || selectedVenues.length === 0} onClick={(event) => { dialogTriggerRef.current = event.currentTarget; setIsBulkEditOpen(true); }} type="button">Edit selected</button>
+            </div>
+          </div>
+        ) : null}
+
         <div aria-busy={isLoading} aria-label="Venues table, scroll horizontally to see all columns" className="overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" role="region" tabIndex={0}>
           <table className="w-full min-w-[1120px] border-collapse text-left text-sm">
             <caption className="sr-only">Venues with Instagram, type, location, hours, publication and scraping controls.</caption>
             <thead>
               <tr className="border-b border-border bg-muted/50 text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
-                <th className="sticky left-0 z-10 w-[240px] min-w-[240px] bg-card px-4 py-3 font-medium" scope="col">Venue</th>
+                <th className="sticky left-0 z-10 w-[240px] min-w-[240px] bg-card px-4 py-1 font-medium" scope="col">
+                  <label className="inline-flex min-h-11 cursor-pointer items-center gap-3">
+                    <input aria-label="Select all venues on this page" checked={allVisibleSelected} className="size-4 accent-primary" disabled={isLoading || isMutating || visibleVenues.length === 0} onChange={toggleVisibleSelection} ref={(node) => { if (node) node.indeterminate = selectedVisibleCount > 0 && !allVisibleSelected; }} type="checkbox" />
+                    Venue
+                  </label>
+                </th>
                 <th className="px-3 py-3 font-medium" scope="col">Instagram</th>
                 <th className="px-3 py-3 font-medium" scope="col">Type</th>
                 <th className="w-[19%] min-w-[170px] px-3 py-3 font-medium" scope="col">Location</th>
@@ -836,10 +884,13 @@ export function VenueManager() {
                 const hasCoordinates = venue.latitude != null && venue.longitude != null && Number.isFinite(venue.latitude) && Number.isFinite(venue.longitude) && Math.abs(venue.latitude) <= 90 && Math.abs(venue.longitude) <= 180 && (venue.latitude !== 0 || venue.longitude !== 0);
                 const hasHours = getVenueHoursLabel(venue) !== "Missing";
                 return (
-                  <tr aria-busy={isBusy} className="group border-b border-border/70 last:border-b-0 hover:bg-muted/35" key={venue.id}>
+                  <tr aria-busy={isBusy} aria-selected={selectedVenueIds.has(venue.id)} className="group border-b border-border/70 last:border-b-0 hover:bg-muted/35 aria-selected:bg-primary/5" key={venue.id}>
                     <th className="sticky left-0 z-[1] bg-card px-4 py-2.5 font-normal group-hover:bg-muted" scope="row">
-                      <p className="max-w-[220px] truncate font-medium text-foreground" title={venue.name}>{venue.name}</p>
-                      {venue.aliases.length ? <p className="mt-1 max-w-[220px] truncate text-xs text-muted-foreground" title={venue.aliases.join(", ")}>{venue.aliases.join(", ")}</p> : null}
+                      <div className="flex items-center gap-1">
+                        <label className="-ml-3 inline-flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center"><input aria-label={`Select ${venue.name}`} checked={selectedVenueIds.has(venue.id)} className="size-4 accent-primary" disabled={isLoading || isMutating} onChange={() => toggleVenueSelection(venue.id)} type="checkbox" /></label>
+                        <div className="min-w-0"><p className="max-w-[180px] truncate font-medium text-foreground" title={venue.name}>{venue.name}</p>
+                          {venue.aliases.length ? <p className="mt-1 max-w-[180px] truncate text-xs text-muted-foreground" title={venue.aliases.join(", ")}>{venue.aliases.join(", ")}</p> : null}</div>
+                      </div>
                     </th>
                     <td className="px-3 py-2.5">
                       <a aria-label={`Open @${venue.instagramHandle} on Instagram`} className="inline-flex min-h-11 max-w-[170px] items-center gap-1.5 text-muted-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" href={`https://www.instagram.com/${venue.instagramHandle}/`} rel="noreferrer" target="_blank" title={`@${venue.instagramHandle}`}>
@@ -908,6 +959,8 @@ export function VenueManager() {
           </nav>
         </footer>
       </div>
+
+      <VenueBulkEdit onBusyChange={setIsBulkEditing} onComplete={async (remainingIds) => { setSelectedVenueIds(new Set(remainingIds)); return loadVenues({ preserveOnError: true }); }} onOpenChange={setIsBulkEditOpen} open={isBulkEditOpen} restoreFocus={restoreDialogFocus} venues={selectedVenues} />
 
       <VenueDialog busy={isSubmitting} onOpenChange={setIsCreateOpen} open={isCreateOpen} restoreFocus={restoreDialogFocus} title="Add venue">
         <form className="flex min-h-0 flex-1 flex-col" onSubmit={(event) => { event.preventDefault(); void createVenue(); }}>
