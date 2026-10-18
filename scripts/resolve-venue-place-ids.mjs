@@ -4,6 +4,7 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api.js";
 import { parseVenueHoursJson } from "../lib/venues/venue-hours-cache.ts";
 import { isVenueScrapeActive } from "../lib/venues/venue-lifecycle.ts";
+import { venueRequiresPhysicalDetails } from "../lib/taxonomy/venue-types.ts";
 
 const TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText";
 const DEFAULT_LIMIT = 25;
@@ -90,7 +91,8 @@ function isEligibleForPlaceIdResolution(venue) {
     venue._id.length > 0 &&
     typeof venue.name === "string" &&
     venue.name.trim().length > 0 &&
-    isVenueScrapeActive(venue)
+    isVenueScrapeActive(venue) &&
+    venueRequiresPhysicalDetails(venue.category)
   );
 }
 

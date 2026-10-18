@@ -19,6 +19,7 @@ import {
   isVenuePublic,
 } from "../lib/venues/venue-lifecycle";
 import { requireAdminOrServiceSecret } from "./authz";
+import { venueRequiresPhysicalDetails } from "../lib/taxonomy/venue-types";
 
 // Keep the aggregate service snapshot at a conservative application-level
 // record bound below Convex transaction scan/byte limits, while leaving enough
@@ -102,14 +103,15 @@ export function buildConvexVenueSnapshot(
   identities: readonly Doc<"venueIdentities">[] = [],
   options: { includePending?: boolean; excludedVenueClaims?: readonly string[] } = {},
 ): ConvexVenueSnapshot {
-  const publicVenues = venues.filter(
+  const roleAwareRows = excludePromoterVenueIdentities(venues, identities, new Set());
+  const publicVenues = roleAwareRows.venues.filter(
     (venue) =>
       isVenuePublic(venue) ||
       (options.includePending === true &&
         getEffectiveVenueLifecycle(venue).publicStatus === "pending"),
   );
   const venueById = new Map(publicVenues.map((venue) => [venue._id, venue]));
-  const identityRecords: VenueIdentityRecord[] = identities.map((identity) => ({
+  const identityRecords: VenueIdentityRecord[] = roleAwareRows.identities.map((identity) => ({
     active: identity.active,
     kind: identity.kind,
     ...(identity.provider ? { provider: identity.provider } : {}),
@@ -118,7 +120,10 @@ export function buildConvexVenueSnapshot(
   }));
   return {
     domainSnapshot: buildVenueSnapshot({
-      excludedVenueClaims: options.excludedVenueClaims,
+      excludedVenueClaims: [
+        ...(options.excludedVenueClaims ?? []),
+        ...roleAwareRows.excludedVenueClaims,
+      ],
       identities: identityRecords,
       venues: publicVenues.map((venue) => ({
         aliases: venue.aliases ?? [],
@@ -159,19 +164,29 @@ function excludePromoterVenueIdentities(
   identities: readonly Doc<"venueIdentities">[],
   promoterHandles: ReadonlySet<string>,
 ) {
+  const excludedHandles = new Set([
+    ...promoterHandles,
+    ...venues
+      .filter((venue) => !venueRequiresPhysicalDetails(venue.category))
+      .map((venue) => normalizeHandle(venue.instagramHandle ?? ""))
+      .filter(Boolean),
+  ]);
   const promoterVenueIds = new Set(venues
-    .filter((venue) => promoterHandles.has(normalizeHandle(venue.instagramHandle ?? "")))
+    .filter((venue) =>
+      !venueRequiresPhysicalDetails(venue.category) ||
+      excludedHandles.has(normalizeHandle(venue.instagramHandle ?? "")),
+    )
     .map((venue) => venue._id));
   return {
     venues: venues.filter((venue) => !promoterVenueIds.has(venue._id)),
     identities: identities.filter((identity) =>
       !promoterVenueIds.has(identity.venueId) &&
-      !(identity.kind === "provider_account" && promoterHandles.has(normalizeHandle(identity.rawValue))),
+      !(identity.kind === "provider_account" && excludedHandles.has(normalizeHandle(identity.rawValue))),
     ),
     excludedVenueClaims: [...new Set([
-      ...promoterHandles,
+      ...excludedHandles,
       ...venues.filter((venue) => promoterVenueIds.has(venue._id))
-        .flatMap((venue) => [venue.name, ...(venue.aliases ?? [])]),
+        .flatMap((venue) => [venue.name, venue.instagramHandle, ...(venue.aliases ?? [])]),
       ...identities.filter((identity) => promoterVenueIds.has(identity.venueId))
         .map((identity) => identity.rawValue),
     ])].sort(),
@@ -196,7 +211,7 @@ export async function loadBoundedPublicVenueResolverRows(
       truncated: true,
       venues: venueRows
         .slice(0, MAX_VENUE_RESOLVER_SNAPSHOT_RECORDS)
-        .filter(isVenuePublic),
+        .filter((venue) => isVenuePublic(venue) && venueRequiresPhysicalDetails(venue.category)),
     };
   }
   const identityKinds = [
@@ -434,15 +449,11 @@ export async function resolveVenueForWrite(
   const venueIds = uniqueVenueIds(identities);
   if (venueIds.length > 0) {
     const venueRows = await Promise.all(venueIds.map((venueId) => ctx.db.get(venueId)));
-    const publicVenues = venueRows.filter(
-      (venue): venue is Doc<"venues"> =>
-        venue !== null &&
-        (isVenuePublic(venue) ||
-          (options.includePending === true &&
-            getEffectiveVenueLifecycle(venue).publicStatus === "pending")),
+    const candidateVenues = venueRows.filter(
+      (venue): venue is Doc<"venues"> => venue !== null,
     );
     const roleAwareRows = excludePromoterVenueIdentities(
-      publicVenues, identities, await loadExplicitPromoterHandles(ctx),
+      candidateVenues, identities, await loadExplicitPromoterHandles(ctx),
     );
     const resolved = resolveVenueFromSnapshot(
       buildConvexVenueSnapshot(roleAwareRows.venues, roleAwareRows.identities, {
@@ -494,18 +505,14 @@ export async function resolveVenueClaimsForWrite(
   const venueRows = await Promise.all(
     venueIds.map((venueId) => ctx.db.get(venueId)),
   );
-  const publicVenueById = new Map(
-    venueRows
-      .filter(
-        (venue): venue is Doc<"venues"> =>
-          venue !== null && isVenuePublic(venue),
-      )
-      .map((venue) => [venue._id, venue]),
-  );
   const roleAwareRows = excludePromoterVenueIdentities(
-    [...publicVenueById.values()], identityBatches.flat(), await loadExplicitPromoterHandles(ctx),
+    venueRows.filter((venue): venue is Doc<"venues"> => venue !== null),
+    identityBatches.flat(),
+    await loadExplicitPromoterHandles(ctx),
   );
-  const physicalVenueById = new Map(roleAwareRows.venues.map((venue) => [venue._id, venue]));
+  const physicalVenueById = new Map(
+    roleAwareRows.venues.filter(isVenuePublic).map((venue) => [venue._id, venue]),
+  );
   const physicalIdentityIds = new Set(roleAwareRows.identities.map((identity) => identity._id));
   const results = new Map<string, ConvexVenueResolution>();
   for (let index = 0; index < claims.length; index += 1) {

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { getVenueCoordinates } from "../lib/venues/coordinates.ts";
 import { parseVenueHoursJson } from "../lib/venues/venue-hours-cache.ts";
+import { venueRequiresPhysicalDetails } from "../lib/taxonomy/venue-types.ts";
 
 const DEFAULT_CONVEX_URL = "https://convex-events.ineedtofeedmyrabbit.com";
 const SITE_URL = "https://eventzeka.com";
@@ -82,8 +83,9 @@ function timezoneStatus(timezone, metadataTimezone) {
 }
 
 export function classifyPublicVenue(venue, now = Date.now()) {
-  const coordinates = getVenueCoordinates(venue.latitude, venue.longitude);
-  const hours = parseVenueHoursJson(venue.hoursJson);
+  const physical = venueRequiresPhysicalDetails(venue.category);
+  const coordinates = physical ? getVenueCoordinates(venue.latitude, venue.longitude) : null;
+  const hours = physical ? parseVenueHoursJson(venue.hoursJson) : null;
   const trustedHours = hours && hours.source !== "none" ? hours : null;
   // Use the same first matching weekday as the public hours display. A known
   // closed day is information, while an empty non-closed day is unknown.
@@ -93,15 +95,15 @@ export function classifyPublicVenue(venue, now = Date.now()) {
   }));
   const knownDays = days.filter(({ value }) => value && (value.closed || value.windows.length > 0));
   const missingDays = days.filter(({ weekday }) => !knownDays.some((day) => day.weekday === weekday));
-  const missingOpeningHours = knownDays.length === 0;
-  const partialOpeningHours = knownDays.length > 0 && knownDays.length < 7;
+  const missingOpeningHours = physical && knownDays.length === 0;
+  const partialOpeningHours = physical && knownDays.length > 0 && knownDays.length < 7;
   const closedOnlyHours = knownDays.length > 0 && knownDays.every(({ value }) => value.closed);
-  const hoursStatus = missingOpeningHours ? "Nedostaje" : partialOpeningHours ? "Nepotpuno" : "Poznato";
-  const timezone = hours?.timezone ?? venue.hoursTimezone ?? "";
-  const fetchedAt = isoTimestamp(venue.hoursFetchedAt);
-  const expiresAt = isoTimestamp(venue.hoursExpiresAt);
+  const hoursStatus = !physical ? "Nije primenljivo" : missingOpeningHours ? "Nedostaje" : partialOpeningHours ? "Nepotpuno" : "Poznato";
+  const timezone = physical ? hours?.timezone ?? venue.hoursTimezone ?? "" : "";
+  const fetchedAt = physical ? isoTimestamp(venue.hoursFetchedAt) : "";
+  const expiresAt = physical ? isoTimestamp(venue.hoursExpiresAt) : "";
   const handle = typeof venue.instagramHandle === "string" ? venue.instagramHandle.replace(/^@+/, "") : "";
-  const googleMapsUrl = venue.googlePlaceId
+  const googleMapsUrl = physical && venue.googlePlaceId
     ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(venue.name)}&query_place_id=${encodeURIComponent(venue.googlePlaceId)}`
     : "";
   const weeklyHours = days.map(({ weekday, value }) => {
@@ -116,25 +118,25 @@ export function classifyPublicVenue(venue, now = Date.now()) {
     name: venue.name,
     instagramUrl: validHttpUrl(venue.instagramProfileUrl) || (handle ? `https://www.instagram.com/${encodeURIComponent(handle)}/` : ""),
     venueUrl: `${SITE_URL}/venues/${encodeURIComponent(venue._id)}`,
-    address: venue.location ?? "",
+    address: physical ? venue.location ?? "" : "",
     category: venue.category ?? "",
-    mapStatus: coordinates ? "Poznata" : "Nedostaje",
+    mapStatus: !physical ? "Nije primenljivo" : coordinates ? "Poznata" : "Nedostaje",
     hoursStatus,
     knownDays: knownDays.map(({ weekday }) => DAY_NAMES[weekday]).join(", "),
-    missingDays: missingDays.map(({ weekday }) => DAY_NAMES[weekday]).join(", "),
-    weeklyHours,
-    hoursSource: hours?.source ?? venue.hoursSource ?? "none",
-    hoursSourceUrls: sourceUrls(hours, venue),
+    missingDays: physical ? missingDays.map(({ weekday }) => DAY_NAMES[weekday]).join(", ") : "",
+    weeklyHours: physical ? weeklyHours : "",
+    hoursSource: physical ? hours?.source ?? venue.hoursSource ?? "none" : "",
+    hoursSourceUrls: physical ? sourceUrls(hours, venue) : "",
     googleMapsUrl,
     hoursTimezone: timezone,
-    timezoneStatus: timezoneStatus(timezone, venue.hoursTimezone),
+    timezoneStatus: physical ? timezoneStatus(timezone, venue.hoursTimezone) : "Nije primenljivo",
     hoursFetchedAt: fetchedAt,
     hoursExpiresAt: expiresAt,
-    hoursCacheStatus: !expiresAt ? "Nema roka" : venue.hoursSource === "manual" ? "Rucno odrzavano" : venue.hoursExpiresAt < now ? "Za osvezavanje" : "U roku",
-    hoursError: venue.hoursError ?? "",
+    hoursCacheStatus: !physical ? "Nije primenljivo" : !expiresAt ? "Nema roka" : venue.hoursSource === "manual" ? "Rucno odrzavano" : venue.hoursExpiresAt < now ? "Za osvezavanje" : "U roku",
+    hoursError: physical ? venue.hoursError ?? "" : "",
     latitude: coordinates?.latitude ?? null,
     longitude: coordinates?.longitude ?? null,
-    missingMapLocation: coordinates === null,
+    missingMapLocation: physical && coordinates === null,
     missingOpeningHours,
     partialOpeningHours,
     closedOnlyHours,
@@ -165,7 +167,7 @@ export function buildVenueGapSnapshot(venues, options) {
     generatedAt: new Date(options.now).toISOString(),
     generatedAtBelgrade: new Intl.DateTimeFormat("sr-Latn-RS", { timeZone: "Europe/Belgrade", dateStyle: "long", timeStyle: "long" }).format(options.now),
     source: { url: `${options.convexUrl}/api/query`, query: "venues:listPublicVenueFields", args: { limit: PUBLIC_DIRECTORY_LIMIT }, siteUrl: SITE_URL },
-    scope: "Svi objavljeni profili u Eventzeka imeniku. Imenik ukljucuje i organizatore, festivale i izvodjace, kojima stalna adresa ili nedeljno radno vreme ne moraju biti primenljivi. Uloge se ne pretpostavljaju iz naziva.",
+    scope: "Objavljeni profili iz Eventzeka imenika. Profili kategorije promoter nemaju obavezu stalne lokacije ili radnog vremena i iskljuceni su iz spiskova nedostajucih podataka. Uloge se ne pretpostavljaju iz naziva.",
     criteria: {
       missingMapLocation: "Nema ispravnog numerickog para geografskih koordinata po istom pravilu kao aplikacija. Sama tekstualna adresa nije lokacija na mapi.",
       missingOpeningHours: "Nema nijednog poznatog dana iz parsiranog rasporeda sa izvorom razlicitim od none. Potvrdjen zatvoren dan jeste poznat podatak.",

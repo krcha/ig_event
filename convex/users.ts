@@ -3,6 +3,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { isVenuePublic } from "../lib/venues/venue-lifecycle";
+import { venueRequiresPhysicalDetails } from "../lib/taxonomy/venue-types";
 import { isAdminSubject, requireViewerIdentity } from "./authz";
 import { projectPublicEvent } from "./publicEventProjection";
 import { isEventPubliclyVisible } from "./publicationPolicy";
@@ -154,7 +155,7 @@ async function loadLibraryForUser(ctx: QueryCtx, userId: string) {
     await Promise.all(favoriteRefs.map((ref) => ctx.db.get(ref.venueId)))
   )
     .filter(notNull)
-    .filter(isVenuePublic);
+    .filter((venue) => isVenuePublic(venue) && venueRequiresPhysicalDetails(venue.category));
 
   return {
     savedEventIds: savedEvents.map((event) => event._id),
@@ -308,9 +309,9 @@ async function toggleFavoriteVenueForUser(
   const shouldFavorite = favorite ?? !existing;
   const venue = await ctx.db.get(venueId);
 
-  // A stale favorite can always be removed, but pending/hidden venues must be
+  // A stale favorite can always be removed, but non-physical/pending/hidden venues must be
   // indistinguishable from missing venues when a public user tries to add one.
-  if (!venue || !isVenuePublic(venue)) {
+  if (!venue || !isVenuePublic(venue) || !venueRequiresPhysicalDetails(venue.category)) {
     if (existing && !shouldFavorite) {
       await ctx.db.delete(existing._id);
       return { favorite: false, venueId };

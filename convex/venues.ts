@@ -9,7 +9,10 @@ import {
   normalizeVenueComparableText,
   toSearchableText,
 } from "../lib/pipeline/venue-normalization";
-import { canonicalizeVenueCategory } from "../lib/taxonomy/venue-types";
+import {
+  canonicalizeVenueCategory,
+  venueRequiresPhysicalDetails,
+} from "../lib/taxonomy/venue-types";
 import {
   buildVenueLifecycleMigrationPlan,
   buildVenueLifecycleRollbackManifest,
@@ -361,7 +364,9 @@ async function collectPublicVenues(ctx: QueryCtx): Promise<Doc<"venues">[]> {
       .withIndex("by_isActive", (q) => q.eq("isActive", true))
       .take(MAX_PUBLIC_VENUE_DIRECTORY_LIMIT),
   ]);
-  return mergeUniqueVenues([...explicit, ...legacy]).filter(isVenuePublic);
+  return mergeUniqueVenues([...explicit, ...legacy]).filter(
+    (venue) => isVenuePublic(venue) && venueRequiresPhysicalDetails(venue.category),
+  );
 }
 
 type LifecycleAuditSnapshot = {
@@ -586,7 +591,7 @@ export const listPublicVenueFieldsByIds = query({
     }
     const venues = await Promise.all(uniqueIds.map((id) => ctx.db.get(id)));
     return venues.flatMap((venue) =>
-      venue && isVenuePublic(venue)
+      venue && isVenuePublic(venue) && venueRequiresPhysicalDetails(venue.category)
         ? [
             {
               _id: venue._id,
@@ -663,7 +668,7 @@ export const getPublicVenuePage = query({
     }
 
     const venue = await ctx.db.get(venueId);
-    if (!venue || !isVenuePublic(venue)) {
+    if (!venue || !isVenuePublic(venue) || !venueRequiresPhysicalDetails(venue.category)) {
       return null;
     }
 
@@ -923,7 +928,9 @@ export const updateVenue = mutation({
     };
     // Public event reads project the current curated venue name. Renaming that
     // label must not rewrite source-bound event facts or require a rebind.
-    // Keep the migration guard for changes to the other stored venue fields.
+    // Classifying an account as a promoter removes it from physical-place
+    // projections without rewriting historical events or source occurrences.
+    // Every other stored physical field still requires the migration guard.
     const denormalizedFields = [
       "instagramHandle",
       "category",
@@ -933,6 +940,7 @@ export const updateVenue = mutation({
     ] as const;
     const changesDenormalizedIdentity = denormalizedFields.some(
       (field) =>
+        !(field === "category" && patch.category === "promoter") &&
         Object.prototype.hasOwnProperty.call(patch, field) &&
         patch[field] !== existing[field],
     );

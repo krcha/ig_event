@@ -48,6 +48,9 @@ export function reviewVenue(current, reviewed) {
   if (!current || current._id !== reviewed.id || current.name !== reviewed.name || current.instagramHandle !== reviewed.instagramHandle) {
     throw new Error(`Reviewed venue identity changed: ${reviewed.id}`);
   }
+  if (current.category === "promoter") {
+    throw new Error(`Promoter profiles do not need map coordinates: ${reviewed.id}`);
+  }
   if (current.publicStatus !== "published" && !(current.publicStatus === undefined && current.isActive === true)) {
     throw new Error(`Venue is no longer published: ${reviewed.id}`);
   }

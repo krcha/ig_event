@@ -811,3 +811,14 @@ Convex. Avoid re-running full ingestion until the rollback is confirmed.
   dashboard publicly without VPN/Tailscale or reverse-proxy auth.
 - Replacing Convex with another database is still a separate migration and not
   part of the self-hosted Convex overlay.
+
+### Promoter profiles
+
+Use the `promoter` venue type for organizer accounts that do not represent a
+fixed physical location. Address, map coordinates and weekly opening hours are
+not applicable; hours enrichment and missing-data reports skip these profiles.
+Changing a profile to promoter preserves its stored source facts and scraping
+activation. Ingestion uses the existing promoter role, and events still require
+their actual host venue rather than the organizer's address or opening hours.
+The venue table supports filtering and sorting each data column; bulk type
+changes use the same classification rules as individual edits.

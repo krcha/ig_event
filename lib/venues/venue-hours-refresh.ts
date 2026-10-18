@@ -6,10 +6,12 @@ import {
   isVenueScrapeActive,
   type VenueLifecycleFields,
 } from "@/lib/venues/venue-lifecycle";
+import { venueRequiresPhysicalDetails } from "@/lib/taxonomy/venue-types";
 
 export type VenueHoursRefreshTarget = VenueHoursCacheFields & VenueLifecycleFields & {
   _id?: string;
   name: string;
+  category?: string | null;
 };
 
 export type ActiveVenueHoursRefreshTarget = VenueHoursRefreshTarget & {
@@ -24,7 +26,8 @@ function isActiveRefreshTarget(
     venue._id.length > 0 &&
     typeof venue.name === "string" &&
     venue.name.trim().length > 0 &&
-    isVenueScrapeActive(venue)
+    isVenueScrapeActive(venue) &&
+    venueRequiresPhysicalDetails(venue.category)
   );
 }
 

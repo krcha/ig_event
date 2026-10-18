@@ -3,6 +3,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Dialog, DropdownMenu } from "radix-ui";
 import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -19,9 +22,19 @@ import {
 import {
   CANONICAL_VENUE_CATEGORIES,
   DEFAULT_VENUE_CATEGORY,
+  venueRequiresPhysicalDetails,
 } from "@/lib/taxonomy/venue-types";
-import { parseVenueHoursJson } from "@/lib/venues/venue-hours-cache";
 import { VenueBulkEdit } from "@/components/admin/venue-bulk-edit";
+import {
+  DEFAULT_VENUE_TABLE_SORT,
+  EMPTY_VENUE_TABLE_FILTERS,
+  filterAndSortVenues,
+  getVenueHoursState,
+  getVenueMapState,
+  type VenueTableColumn,
+  type VenueTableFilters,
+  type VenueTableSort,
+} from "@/lib/admin/venue-table";
 
 type VenuePublicStatus = "pending" | "published" | "hidden";
 
@@ -75,10 +88,6 @@ type VenueFormState = {
   scrapeActive: boolean;
   publicStatus: VenuePublicStatus;
 };
-
-type VenueScrapingFilter = "all" | "scraping" | "paused";
-type VenuePublicationFilter = "all" | VenuePublicStatus;
-type VenueSortMode = "name" | "updated_desc" | "handle";
 
 const PAGE_SIZE = 25;
 const INPUT_CLASS = "min-h-11 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50";
@@ -228,23 +237,13 @@ function getManualOpeningHoursInput(venue: Venue): string {
 }
 
 function getVenueHoursLabel(venue: Venue): string {
-  const hours = parseVenueHoursJson(venue.hoursJson);
-  if (!hours?.weekly.some((day) => day.closed || day.windows.length > 0)) {
-    return "Missing";
-  }
-  if (venue.hoursSource === "manual") {
-    return "Manual";
-  }
-  if (venue.hoursSource === "osm") {
-    return "OpenStreetMap";
-  }
-  if (venue.hoursSource === "none") {
-    return "Missing";
-  }
-  if (venue.hoursSource === "google") {
-    return "Google";
-  }
-  return "Missing";
+  return {
+    manual: "Manual",
+    osm: "OpenStreetMap",
+    google: "Google",
+    missing: "Missing",
+    not_applicable: "Not applicable",
+  }[getVenueHoursState(venue)];
 }
 
 function VenueFormFields({
@@ -256,6 +255,7 @@ function VenueFormFields({
   isEditing?: boolean;
   onChange: (patch: Partial<VenueFormState>) => void;
 }) {
+  const requiresPhysicalDetails = venueRequiresPhysicalDetails(form.category);
   return (
     <div className="grid gap-5 sm:grid-cols-2">
       <label className="grid gap-1.5 text-sm font-medium">
@@ -270,16 +270,20 @@ function VenueFormFields({
         Type
         <VenueCategorySelect onChange={(category) => onChange({ category })} value={form.category} />
       </label>
-      <label className="grid gap-1.5 text-sm font-medium">
-        Address
-        <input className={INPUT_CLASS} onChange={(event) => onChange({ location: event.target.value })} placeholder="Street, city" value={form.location} />
-      </label>
-      <VenueCoordinateInputs form={form} isEditing={isEditing} onChange={(field, value) => onChange({ [field]: value })} />
+      {requiresPhysicalDetails ? (
+        <>
+          <label className="grid gap-1.5 text-sm font-medium">
+            Address
+            <input className={INPUT_CLASS} onChange={(event) => onChange({ location: event.target.value })} placeholder="Street, city" value={form.location} />
+          </label>
+          <VenueCoordinateInputs form={form} isEditing={isEditing} onChange={(field, value) => onChange({ [field]: value })} />
+        </>
+      ) : null}
       <label className="grid gap-1.5 text-sm font-medium sm:col-span-2">
         Aliases
         <textarea className={`${INPUT_CLASS} min-h-20 resize-y`} onChange={(event) => onChange({ aliasesText: event.target.value })} placeholder="One name per line" rows={2} value={form.aliasesText} />
       </label>
-      {isEditing ? (
+      {isEditing && requiresPhysicalDetails ? (
         <label className="grid gap-1.5 text-sm font-medium sm:col-span-2">
           Opening hours
           <input className={`${INPUT_CLASS} font-mono`} onChange={(event) => onChange({ manualOpeningHours: event.target.value })} placeholder="Mo-Su 18:00-02:00" value={form.manualOpeningHours} />
@@ -341,8 +345,24 @@ function VenueDialog({
   );
 }
 
-function searchableText(value: string): string {
-  return value.toLowerCase().trim();
+function VenueColumnSort({
+  column,
+  label,
+  onSort,
+  sort,
+}: {
+  column: VenueTableColumn;
+  label: string;
+  onSort: (column: VenueTableColumn) => void;
+  sort: VenueTableSort;
+}) {
+  const isActive = sort.column === column;
+  const Icon = isActive ? sort.direction === "asc" ? ArrowUp : ArrowDown : ArrowUpDown;
+  return (
+    <button aria-label={`Sort ${label.toLowerCase()} ${isActive && sort.direction === "asc" ? "descending" : "ascending"}`} className={`inline-flex min-h-11 items-center gap-1.5 rounded-md pr-1 text-[11px] font-medium uppercase tracking-[0.08em] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${isActive ? "text-primary" : "text-muted-foreground"}`} onClick={() => onSort(column)} type="button">
+      {label}<Icon aria-hidden="true" className="size-3.5 shrink-0" />
+    </button>
+  );
 }
 
 export function VenueManager() {
@@ -364,10 +384,8 @@ export function VenueManager() {
   const [editForm, setEditForm] = useState<VenueFormState>(EMPTY_FORM);
   const [busyVenueId, setBusyVenueId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [scrapingFilter, setScrapingFilter] = useState<VenueScrapingFilter>("all");
-  const [publicationFilter, setPublicationFilter] =
-    useState<VenuePublicationFilter>("all");
-  const [sortMode, setSortMode] = useState<VenueSortMode>("updated_desc");
+  const [columnFilters, setColumnFilters] = useState<VenueTableFilters>(EMPTY_VENUE_TABLE_FILTERS);
+  const [tableSort, setTableSort] = useState<VenueTableSort>(DEFAULT_VENUE_TABLE_SORT);
   const [page, setPage] = useState(1);
   const [selectedVenueIds, setSelectedVenueIds] = useState<Set<string>>(new Set());
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
@@ -425,7 +443,9 @@ export function VenueManager() {
     setFormError(null);
     setSuccess(null);
     try {
-      const coordinates = parseVenueCoordinates(createForm);
+      const physicalDetails = venueRequiresPhysicalDetails(createForm.category)
+        ? { location: createForm.location.trim() || undefined, ...parseVenueCoordinates(createForm) }
+        : {};
       const response = await fetch("/api/admin/venues", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -434,8 +454,7 @@ export function VenueManager() {
           instagramHandle: normalizeHandleInput(createForm.instagramHandle),
           aliases: parseAliasInput(createForm.aliasesText),
           category: createForm.category.trim(),
-          location: createForm.location.trim() || undefined,
-          ...coordinates,
+          ...physicalDetails,
           scrapeActive: createForm.scrapeActive,
           publicStatus: createForm.publicStatus,
         }),
@@ -528,7 +547,10 @@ export function VenueManager() {
     setFormError(null);
     setSuccess(null);
     try {
-      const coordinates = parseVenueCoordinates(editForm);
+      const requiresPhysicalDetails = venueRequiresPhysicalDetails(editForm.category);
+      const physicalDetails = requiresPhysicalDetails
+        ? { location: editForm.location.trim() || undefined, ...parseVenueCoordinates(editForm) }
+        : {};
       const response = await fetch("/api/admin/venues", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -539,11 +561,10 @@ export function VenueManager() {
             instagramHandle: normalizeHandleInput(editForm.instagramHandle),
             aliases: parseAliasInput(editForm.aliasesText),
             category: editForm.category.trim(),
-            location: editForm.location.trim() || undefined,
-            ...coordinates,
+            ...physicalDetails,
             scrapeActive: editForm.scrapeActive,
             publicStatus: editForm.publicStatus,
-            ...(editForm.manualOpeningHours.trim()
+            ...(requiresPhysicalDetails && editForm.manualOpeningHours.trim()
               ? { manualOpeningHours: editForm.manualOpeningHours.trim() }
               : {}),
           },
@@ -670,46 +691,10 @@ export function VenueManager() {
     }
   }
 
-  const filteredVenues = useMemo(() => {
-    const query = searchableText(searchQuery);
-    const next = venues.filter((venue) => {
-      if (scrapingFilter === "scraping" && !venue.scrapeActive) {
-        return false;
-      }
-      if (scrapingFilter === "paused" && venue.scrapeActive) {
-        return false;
-      }
-      if (publicationFilter !== "all" && venue.publicStatus !== publicationFilter) {
-        return false;
-      }
-      if (!query) {
-        return true;
-      }
-      const haystack = searchableText(
-        [
-          venue.name,
-          venue.instagramHandle,
-          ...venue.aliases,
-          venue.category,
-          venue.location ?? "",
-          venue.hoursSource ?? "",
-        ].join(" "),
-      );
-      return haystack.includes(query);
-    });
-
-    next.sort((left, right) => {
-      if (sortMode === "name") {
-        return left.name.localeCompare(right.name);
-      }
-      if (sortMode === "handle") {
-        return left.instagramHandle.localeCompare(right.instagramHandle);
-      }
-      return right.updatedAt - left.updatedAt;
-    });
-
-    return next;
-  }, [publicationFilter, scrapingFilter, searchQuery, sortMode, venues]);
+  const filteredVenues = useMemo(
+    () => filterAndSortVenues(venues, searchQuery, columnFilters, tableSort),
+    [columnFilters, searchQuery, tableSort, venues],
+  );
 
   const stats = useMemo(
     () => ({
@@ -727,7 +712,7 @@ export function VenueManager() {
   const visibleVenues = filteredVenues.slice(firstRow, firstRow + PAGE_SIZE);
   const editingVenue = venues.find((venue) => venue.id === editingVenueId);
   const isMutating = Boolean(busyVenueId) || isSubmitting || isImporting || isBulkEditing;
-  const hasFilters = Boolean(searchQuery) || scrapingFilter !== "all" || publicationFilter !== "all";
+  const hasFilters = Boolean(searchQuery.trim()) || Object.entries(columnFilters).some(([key, value]) => value !== EMPTY_VENUE_TABLE_FILTERS[key as keyof VenueTableFilters]);
   const selectedVenues = venues.filter((venue) => selectedVenueIds.has(venue.id));
   const selectedVisibleCount = visibleVenues.filter((venue) => selectedVenueIds.has(venue.id)).length;
   const allVisibleSelected = visibleVenues.length > 0 && selectedVisibleCount === visibleVenues.length;
@@ -754,10 +739,24 @@ export function VenueManager() {
 
   function resetFilters() {
     setSearchQuery("");
-    setScrapingFilter("all");
-    setPublicationFilter("all");
+    setColumnFilters({ ...EMPTY_VENUE_TABLE_FILTERS });
     setPage(1);
     setSelectedVenueIds(new Set());
+  }
+
+  function updateColumnFilter<Field extends keyof VenueTableFilters>(field: Field, value: VenueTableFilters[Field]) {
+    setColumnFilters((current) => ({ ...current, [field]: value }));
+    setPage(1);
+    setSelectedVenueIds(new Set());
+  }
+
+  function sortColumn(column: VenueTableColumn) {
+    setTableSort((current) => ({ column, direction: current.column === column && current.direction === "asc" ? "desc" : "asc" }));
+    setPage(1);
+  }
+
+  function columnSortDirection(column: VenueTableColumn): "ascending" | "descending" | undefined {
+    return tableSort.column === column ? tableSort.direction === "asc" ? "ascending" : "descending" : undefined;
   }
 
   return (
@@ -779,38 +778,14 @@ export function VenueManager() {
       </div>
 
       <div className="overflow-hidden rounded-xl border border-border bg-card">
-        <div className="grid grid-cols-2 gap-3 border-b border-border p-4 lg:grid-cols-[minmax(180px,1fr)_145px_150px_175px_44px]">
-          <label className="relative col-span-2 block lg:col-span-1">
+        <div className="flex flex-wrap items-center gap-3 border-b border-border p-4">
+          <label className="relative block min-w-[160px] flex-1">
             <span className="sr-only">Search venues</span>
             <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-3.5 size-4 text-muted-foreground" />
             <input className={`${INPUT_CLASS} pl-9 pr-10`} disabled={isBulkEditing} onChange={(event) => { setSearchQuery(event.target.value); setPage(1); setSelectedVenueIds(new Set()); }} placeholder="Search venues..." ref={searchRef} type="search" value={searchQuery} />
           </label>
-          <label className="grid gap-1">
-            <span className="sr-only">Scraping filter</span>
-            <select aria-label="Scraping filter" className={INPUT_CLASS} disabled={isBulkEditing} onChange={(event) => { setScrapingFilter(event.target.value as VenueScrapingFilter); setPage(1); setSelectedVenueIds(new Set()); }} value={scrapingFilter}>
-              <option value="all">All scraping</option>
-              <option value="scraping">Scraping</option>
-              <option value="paused">Paused</option>
-            </select>
-          </label>
-          <label className="grid gap-1">
-            <span className="sr-only">Publication filter</span>
-            <select aria-label="Publication filter" className={INPUT_CLASS} disabled={isBulkEditing} onChange={(event) => { setPublicationFilter(event.target.value as VenuePublicationFilter); setPage(1); setSelectedVenueIds(new Set()); }} value={publicationFilter}>
-              <option value="all">All publication</option>
-              <option value="pending">Pending</option>
-              <option value="published">Published</option>
-              <option value="hidden">Hidden</option>
-            </select>
-          </label>
-          <label className="grid gap-1">
-            <span className="sr-only">Sort venues</span>
-            <select aria-label="Sort venues" className={INPUT_CLASS} onChange={(event) => { setSortMode(event.target.value as VenueSortMode); setPage(1); }} value={sortMode}>
-              <option value="updated_desc">Recently updated</option>
-              <option value="name">Name A-Z</option>
-              <option value="handle">Handle A-Z</option>
-            </select>
-          </label>
-          <button aria-label="Refresh venues" className={`${BUTTON_CLASS} w-11 justify-self-end px-3`} disabled={isLoading || isMutating} onClick={() => void loadVenues()} title="Refresh venues" type="button">
+          <button className={BUTTON_CLASS} disabled={isBulkEditing || !hasFilters} onClick={resetFilters} type="button">Clear filters</button>
+          <button aria-label="Refresh venues" className={`${BUTTON_CLASS} w-11 px-3`} disabled={isLoading || isMutating} onClick={() => void loadVenues()} title="Refresh venues" type="button">
             <RefreshCw aria-hidden="true" className={`size-4 ${isLoading ? "animate-spin" : ""}`} />
           </button>
         </div>
@@ -827,13 +802,6 @@ export function VenueManager() {
             <button aria-label="Dismiss notification" className={`${BUTTON_CLASS} border-transparent px-3`} onClick={() => setSuccess(null)} type="button"><X aria-hidden="true" className="size-4" /></button>
           </div>
         ) : null}
-        {hasFilters ? (
-          <div className="flex min-h-12 items-center justify-between gap-3 border-b border-border px-4 text-xs text-muted-foreground">
-            <span><strong className="font-medium text-foreground">{stats.filtered}</strong> of {stats.total} venues</span>
-            <button className="min-h-11 px-2 font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={resetFilters} type="button">Clear filters</button>
-          </div>
-        ) : null}
-
         {selectedVenueIds.size > 0 ? (
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-primary/20 bg-primary/5 px-4 py-2">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
@@ -852,19 +820,56 @@ export function VenueManager() {
             <caption className="sr-only">Venues with Instagram, type, location, hours, publication and scraping controls.</caption>
             <thead>
               <tr className="border-b border-border bg-muted/50 text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
-                <th className="sticky left-0 z-10 w-[240px] min-w-[240px] bg-card px-4 py-1 font-medium" scope="col">
-                  <label className="inline-flex min-h-11 cursor-pointer items-center gap-3">
-                    <input aria-label="Select all venues on this page" checked={allVisibleSelected} className="size-4 accent-primary" disabled={isLoading || isMutating || visibleVenues.length === 0} onChange={toggleVisibleSelection} ref={(node) => { if (node) node.indeterminate = selectedVisibleCount > 0 && !allVisibleSelected; }} type="checkbox" />
-                    Venue
-                  </label>
+                <th aria-sort={columnSortDirection("name")} className="sticky left-0 z-10 w-[240px] min-w-[240px] bg-card px-4 py-1 font-medium" scope="col">
+                  <div className="flex items-center">
+                    <label className="-ml-3 inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center">
+                      <input aria-label="Select all venues on this page" checked={allVisibleSelected} className="size-4 accent-primary" disabled={isLoading || isMutating || visibleVenues.length === 0} onChange={toggleVisibleSelection} ref={(node) => { if (node) node.indeterminate = selectedVisibleCount > 0 && !allVisibleSelected; }} type="checkbox" />
+                    </label>
+                    <VenueColumnSort column="name" label="Venue" onSort={sortColumn} sort={tableSort} />
+                  </div>
                 </th>
-                <th className="px-3 py-3 font-medium" scope="col">Instagram</th>
-                <th className="px-3 py-3 font-medium" scope="col">Type</th>
-                <th className="w-[19%] min-w-[170px] px-3 py-3 font-medium" scope="col">Location</th>
-                <th className="px-3 py-3 font-medium" scope="col">Hours</th>
-                <th className="px-3 py-3 font-medium" scope="col">Publication</th>
-                <th className="px-3 py-3 font-medium" scope="col">Scraping</th>
+                <th aria-sort={columnSortDirection("instagram")} className="px-3 py-1 font-medium" scope="col"><VenueColumnSort column="instagram" label="Instagram" onSort={sortColumn} sort={tableSort} /></th>
+                <th aria-sort={columnSortDirection("category")} className="px-3 py-1 font-medium" scope="col"><VenueColumnSort column="category" label="Type" onSort={sortColumn} sort={tableSort} /></th>
+                <th aria-sort={columnSortDirection("location")} className="w-[19%] min-w-[170px] px-3 py-1 font-medium" scope="col"><VenueColumnSort column="location" label="Location" onSort={sortColumn} sort={tableSort} /></th>
+                <th aria-sort={columnSortDirection("hours")} className="px-3 py-1 font-medium" scope="col"><VenueColumnSort column="hours" label="Hours" onSort={sortColumn} sort={tableSort} /></th>
+                <th aria-sort={columnSortDirection("publication")} className="px-3 py-1 font-medium" scope="col"><VenueColumnSort column="publication" label="Publication" onSort={sortColumn} sort={tableSort} /></th>
+                <th aria-sort={columnSortDirection("scraping")} className="px-3 py-1 font-medium" scope="col"><VenueColumnSort column="scraping" label="Scraping" onSort={sortColumn} sort={tableSort} /></th>
                 <th className="z-10 bg-card px-3 py-3 text-right font-medium md:sticky md:right-0" scope="col">Actions</th>
+              </tr>
+              <tr className="border-b border-border bg-card align-top">
+                <td className="sticky left-0 z-10 bg-card px-4 pb-3 pt-2">
+                  <input aria-label="Venue name filter" className={INPUT_CLASS} disabled={isBulkEditing} onChange={(event) => updateColumnFilter("name", event.target.value)} placeholder="Name or alias" type="search" value={columnFilters.name} />
+                </td>
+                <td className="px-3 pb-3 pt-2">
+                  <input aria-label="Instagram filter" autoCapitalize="none" className={`${INPUT_CLASS} min-w-[140px]`} disabled={isBulkEditing} onChange={(event) => updateColumnFilter("instagram", event.target.value)} placeholder="@handle" spellCheck={false} type="search" value={columnFilters.instagram} />
+                </td>
+                <td className="px-3 pb-3 pt-2">
+                  <select aria-label="Type filter" className={`${INPUT_CLASS} min-w-[140px]`} disabled={isBulkEditing} onChange={(event) => updateColumnFilter("category", event.target.value)} value={columnFilters.category}>
+                    <option value="all">All types</option>{CANONICAL_VENUE_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
+                  </select>
+                </td>
+                <td className="space-y-2 px-3 pb-3 pt-2">
+                  <input aria-label="Location text filter" className={INPUT_CLASS} disabled={isBulkEditing} onChange={(event) => updateColumnFilter("location", event.target.value)} placeholder="Address" type="search" value={columnFilters.location} />
+                  <select aria-label="Map location filter" className={INPUT_CLASS} disabled={isBulkEditing} onChange={(event) => updateColumnFilter("mapStatus", event.target.value as VenueTableFilters["mapStatus"])} value={columnFilters.mapStatus}>
+                    <option value="all">Any map status</option><option value="present">On map</option><option value="missing">Map missing</option><option value="not_applicable">Not applicable</option>
+                  </select>
+                </td>
+                <td className="px-3 pb-3 pt-2">
+                  <select aria-label="Hours filter" className={`${INPUT_CLASS} min-w-[150px]`} disabled={isBulkEditing} onChange={(event) => updateColumnFilter("hours", event.target.value as VenueTableFilters["hours"])} value={columnFilters.hours}>
+                    <option value="all">All hours</option><option value="known">Known</option><option value="missing">Missing</option><option value="google">Google</option><option value="manual">Manual</option><option value="osm">OpenStreetMap</option><option value="not_applicable">Not applicable</option>
+                  </select>
+                </td>
+                <td className="px-3 pb-3 pt-2">
+                  <select aria-label="Publication filter" className={`${INPUT_CLASS} min-w-[116px]`} disabled={isBulkEditing} onChange={(event) => updateColumnFilter("publication", event.target.value as VenueTableFilters["publication"])} value={columnFilters.publication}>
+                    <option value="all">All publication</option><option value="pending">Pending</option><option value="published">Published</option><option value="hidden">Hidden</option>
+                  </select>
+                </td>
+                <td className="px-3 pb-3 pt-2">
+                  <select aria-label="Scraping filter" className={`${INPUT_CLASS} min-w-[112px]`} disabled={isBulkEditing} onChange={(event) => updateColumnFilter("scraping", event.target.value as VenueTableFilters["scraping"])} value={columnFilters.scraping}>
+                    <option value="all">All scraping</option><option value="scraping">Scraping</option><option value="paused">Paused</option>
+                  </select>
+                </td>
+                <td className="z-10 bg-card px-3 pb-3 pt-2 md:sticky md:right-0"><span className="sr-only">No action filter</span></td>
               </tr>
             </thead>
             <tbody>
@@ -881,7 +886,8 @@ export function VenueManager() {
               ) : null}
               {visibleVenues.map((venue) => {
                 const isBusy = busyVenueId === venue.id;
-                const hasCoordinates = venue.latitude != null && venue.longitude != null && Number.isFinite(venue.latitude) && Number.isFinite(venue.longitude) && Math.abs(venue.latitude) <= 90 && Math.abs(venue.longitude) <= 180 && (venue.latitude !== 0 || venue.longitude !== 0);
+                const requiresPhysicalDetails = venueRequiresPhysicalDetails(venue.category);
+                const hasCoordinates = getVenueMapState(venue) === "present";
                 const hasHours = getVenueHoursLabel(venue) !== "Missing";
                 return (
                   <tr aria-busy={isBusy} aria-selected={selectedVenueIds.has(venue.id)} className="group border-b border-border/70 last:border-b-0 hover:bg-muted/35 aria-selected:bg-primary/5" key={venue.id}>
@@ -899,7 +905,7 @@ export function VenueManager() {
                     </td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-xs capitalize text-muted-foreground">{venue.category}</td>
                     <td className="px-3 py-2.5">
-                      {hasCoordinates ? (
+                      {!requiresPhysicalDetails ? <span className="text-xs text-muted-foreground">Not applicable</span> : hasCoordinates ? (
                         <a aria-label={`View ${venue.name} on Google Maps`} className="inline-flex min-h-11 max-w-[210px] items-center gap-1.5 text-muted-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" href={`https://www.google.com/maps/search/?api=1&query=${venue.latitude},${venue.longitude}`} rel="noreferrer" target="_blank" title={venue.location ?? `${venue.latitude}, ${venue.longitude}`}>
                           <MapPin aria-hidden="true" className="size-3.5 shrink-0 text-emerald-400" /><span className="truncate">{venue.location || "On map"}</span>
                         </a>
@@ -911,8 +917,10 @@ export function VenueManager() {
                       )}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2.5">
-                      <span className={`text-xs ${hasHours ? "text-muted-foreground" : "text-amber-300/90"}`} title={venue.hoursError || (formatOptionalDateTime(venue.hoursFetchedAt) ? `Checked ${formatOptionalDateTime(venue.hoursFetchedAt)}` : undefined)}>{getVenueHoursLabel(venue)}</span>
-                      {venue.hoursError ? <span className="mt-1 block text-[11px] text-amber-300/90">Check failed</span> : null}
+                      {requiresPhysicalDetails ? <>
+                        <span className={`text-xs ${hasHours ? "text-muted-foreground" : "text-amber-300/90"}`} title={venue.hoursError || (formatOptionalDateTime(venue.hoursFetchedAt) ? `Checked ${formatOptionalDateTime(venue.hoursFetchedAt)}` : undefined)}>{getVenueHoursLabel(venue)}</span>
+                        {venue.hoursError ? <span className="mt-1 block text-[11px] text-amber-300/90">Check failed</span> : null}
+                      </> : <span className="text-xs text-muted-foreground">Not applicable</span>}
                     </td>
                     <td className="px-3 py-2.5">
                       <select aria-label={`Publication for ${venue.name}`} className={`${INPUT_CLASS} min-w-[116px] ${venue.publicStatus === "published" ? "text-emerald-300" : venue.publicStatus === "pending" ? "text-amber-200" : "text-muted-foreground"}`} disabled={isMutating || isLoading} onChange={(event) => void updateVenueLifecycle(venue, { publicStatus: event.target.value as VenuePublicStatus })} value={venue.publicStatus}>
@@ -934,7 +942,7 @@ export function VenueManager() {
                           </DropdownMenu.Trigger>
                           <DropdownMenu.Portal>
                             <DropdownMenu.Content align="end" className="z-50 min-w-44 rounded-xl border border-border bg-popover p-1 text-sm text-popover-foreground shadow-xl" sideOffset={5}>
-                              {venue.hoursSource && venue.hoursSource !== "none" ? <DropdownMenu.Item className="flex min-h-11 cursor-pointer items-center rounded-lg px-3 outline-none focus:bg-accent" onSelect={() => void clearVenueHours(venue)}>Clear hours</DropdownMenu.Item> : null}
+                              {requiresPhysicalDetails && venue.hoursSource && venue.hoursSource !== "none" ? <DropdownMenu.Item className="flex min-h-11 cursor-pointer items-center rounded-lg px-3 outline-none focus:bg-accent" onSelect={() => void clearVenueHours(venue)}>Clear hours</DropdownMenu.Item> : null}
                               <DropdownMenu.Item className="flex min-h-11 cursor-pointer items-center rounded-lg px-3 text-red-400 outline-none focus:bg-destructive/10" onSelect={() => void deleteVenue(venue)}>Delete venue</DropdownMenu.Item>
                             </DropdownMenu.Content>
                           </DropdownMenu.Portal>
@@ -979,7 +987,7 @@ export function VenueManager() {
         <form className="flex min-h-0 flex-1 flex-col" onSubmit={(event) => { event.preventDefault(); if (editingVenueId) void updateVenue(editingVenueId); }}>
           <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5 sm:p-6">
             <fieldset disabled={Boolean(busyVenueId)}><VenueFormFields form={editForm} isEditing onChange={(patch) => setEditForm((current) => ({ ...current, ...patch }))} /></fieldset>
-            {editingVenue ? (
+            {editingVenue && venueRequiresPhysicalDetails(editForm.category) ? (
               <div className="space-y-2 border-t border-border pt-4 text-xs text-muted-foreground">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p>Saved hours: <span className="text-foreground">{getVenueHoursLabel(editingVenue)}</span>{formatOptionalDateTime(editingVenue.hoursFetchedAt) ? ` · Checked ${formatOptionalDateTime(editingVenue.hoursFetchedAt)}` : ""}</p>

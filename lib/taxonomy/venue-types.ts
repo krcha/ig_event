@@ -22,6 +22,7 @@ export const CANONICAL_VENUE_CATEGORIES = [
   "culture",
   "gallery",
   "venue",
+  "promoter",
 ] as const;
 
 export type CanonicalVenueCategory = (typeof CANONICAL_VENUE_CATEGORIES)[number];
@@ -391,6 +392,11 @@ export function canonicalizeVenueCategory(
   return DEFAULT_VENUE_CATEGORY;
 }
 
+/** Organizer accounts do not represent a physical place with fixed hours. */
+export function venueRequiresPhysicalDetails(category: string | null | undefined): boolean {
+  return canonicalizeVenueCategory(category) !== "promoter";
+}
+
 export function eventTypeFromVenueCategory(
   venueCategory: string | null | undefined,
 ): CanonicalEventType {
@@ -404,6 +410,7 @@ export function eventTypeFromVenueCategory(
       return "food & market";
     case "bar":
     case "venue":
+    case "promoter":
       return DEFAULT_EVENT_TYPE;
   }
 }
