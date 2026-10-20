@@ -89,7 +89,6 @@ export type VenueSnapshot = {
   canonicalVenueAliasesByHandle: CanonicalVenueAliasesByHandle;
   canonicalVenueNamesByHandle: Record<string, string>;
   fingerprint: string;
-  excludedVenueClaims: readonly string[];
   identityCandidates: ReadonlyMap<string, readonly VenueResolverRecord[]>;
   providerHandleCandidates: ReadonlyMap<string, readonly VenueResolverRecord[]>;
   records: readonly VenueResolverRecord[];
@@ -187,7 +186,6 @@ function stableSnapshotFingerprint(values: readonly string[]): string {
 }
 
 export function buildVenueSnapshot(options: {
-  excludedVenueClaims?: readonly string[];
   identities?: readonly VenueIdentityRecord[];
   venues: readonly VenueResolverRecord[];
 }): VenueSnapshot {
@@ -263,11 +261,7 @@ export function buildVenueSnapshot(options: {
     }
   }
 
-  const excludedVenueClaims = [...new Set(
-    (options.excludedVenueClaims ?? []).map(normalizeVenueComparableText).filter(Boolean),
-  )].sort();
   const fingerprintValues = [
-    ...excludedVenueClaims.map((claim) => `non-venue:${claim}`),
     ...records.flatMap((venue) => [
       `venue:${venue.id}:${venue.name}:${venue.instagramHandle ?? ""}`,
       ...(venue.aliases ?? []).map((alias) => `alias:${venue.id}:${alias}`),
@@ -285,7 +279,6 @@ export function buildVenueSnapshot(options: {
     canonicalVenueAliasesByHandle,
     canonicalVenueNamesByHandle,
     fingerprint: stableSnapshotFingerprint(fingerprintValues),
-    excludedVenueClaims,
     identityCandidates,
     providerHandleCandidates,
     records,
@@ -422,7 +415,12 @@ function materializeEvidenceResolution(
   };
 }
 
-function resolveVenueClaims(
+/**
+ * Universal, side-effect-free venue resolution entrypoint. Database and
+ * ingestion adapters build one request-scoped snapshot and pass all claims
+ * through this function. Ambiguity is returned as data and never guessed.
+ */
+export function resolveVenue(
   snapshot: VenueSnapshot,
   input: ResolveVenueInput,
 ): VenueResolution {
@@ -520,72 +518,4 @@ function resolveVenueClaims(
     reason: "unknown",
     status: "unresolved",
   };
-}
-
-/**
- * Universal, side-effect-free venue resolution entrypoint. A promoter's
- * legacy venue record is organizer identity, never a physical location.
- * Ambiguous claims remain unresolved instead of being guessed.
- */
-export function resolveVenue(
-  snapshot: VenueSnapshot,
-  input: ResolveVenueInput,
-): VenueResolution {
-  const isExcludedClaim = (value: string | null | undefined): boolean => {
-    if (!value?.trim()) return false;
-    return snapshot.excludedVenueClaims.includes(normalizeVenueComparableText(value)) &&
-      candidatesForName(snapshot, value).length === 0 &&
-      candidatesForHandle(snapshot, value).length === 0;
-  };
-  // Reviewed organizer identities apply to every posting source. Retaining
-  // them separately from the physical directory also blocks unknown model
-  // claims from resurfacing as an unresolved proposed venue name.
-  const filteredInput = {
-    ...input,
-    rawVenueClaim: isExcludedClaim(input.rawVenueClaim) ? "" : input.rawVenueClaim,
-    locationName: isExcludedClaim(input.locationName) ? "" : input.locationName,
-  };
-  const postingHandle = normalizeHandle(input.postingProviderHandle ?? "");
-  if (input.sourceRole !== "promoter" || !postingHandle) {
-    const resolution = resolveVenueClaims(snapshot, filteredInput);
-    if (resolution.status !== "unresolved" || !isExcludedClaim(resolution.proposedName)) {
-      return resolution;
-    }
-    return { candidates: [], confidence: "unknown", evidence: [], reason: "unknown", status: "unresolved" };
-  }
-
-  const promoterVenueIds = new Set(
-    candidatesForHandle(snapshot, postingHandle).map((venue) => venue.id),
-  );
-  const isOwnClaim = (value: string | null | undefined): boolean => {
-    if (!value?.trim()) return false;
-    const compactClaim = normalizeVenueComparableText(value).replace(/\s/gu, "");
-    const compactHandle = normalizeVenueComparableText(postingHandle).replace(/\s/gu, "");
-    return compactClaim === compactHandle ||
-      [...candidatesForName(snapshot, value), ...candidatesForHandle(snapshot, value)]
-        .some((venue) => promoterVenueIds.has(venue.id)) ||
-      normalizeVenueComparableText(value) === normalizeVenueComparableText(
-        input.staticVenueByHandle?.[postingHandle] ?? "",
-      );
-  };
-  const resolution = resolveVenueClaims(snapshot, {
-    ...filteredInput,
-    rawVenueClaim: isOwnClaim(filteredInput.rawVenueClaim) ? "" : filteredInput.rawVenueClaim,
-    locationName: isOwnClaim(filteredInput.locationName) ? "" : filteredInput.locationName,
-  });
-  if (
-    (resolution.status === "resolved" &&
-      (promoterVenueIds.has(resolution.venue.id) || isOwnClaim(resolution.venue.name))) ||
-    (resolution.status === "unresolved" &&
-      (isOwnClaim(resolution.proposedName) || isExcludedClaim(resolution.proposedName)))
-  ) {
-    return {
-      candidates: [],
-      confidence: "unknown",
-      evidence: [],
-      reason: "unknown",
-      status: "unresolved",
-    };
-  }
-  return resolution;
 }

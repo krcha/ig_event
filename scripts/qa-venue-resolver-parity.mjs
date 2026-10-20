@@ -11,10 +11,9 @@ import {
 import {
   buildCanonicalVenueAliasesByHandle,
   buildCanonicalVenueNamesByHandle,
-  canonicalizeVenueNameDetailed,
   normalizeVenueFromEvidence,
 } from "../lib/pipeline/venue-normalization.ts";
-import { resolveVenueForWrite, resolveVenueClaimsForWrite } from "../convex/venueResolver.ts";
+import { resolveVenueForWrite } from "../convex/venueResolver.ts";
 
 const venues = [
   {
@@ -224,85 +223,6 @@ if (unknown.status === "unresolved") {
   assert.equal(unknown.proposedName, "Unconfigured secret address");
 }
 
-const promoterVenues = [
-  ...venues,
-  {
-    aliases: ["Clubber Magazine"],
-    id: "legacy-promoter-venue",
-    instagramHandle: "theclubber",
-    name: "The Clubber",
-  },
-];
-const promoterSnapshot = buildVenueSnapshot({
-  venues: promoterVenues,
-  identities: [{
-    active: true,
-    kind: "historical_alias",
-    value: "Former Clubber Brand",
-    venueId: "legacy-promoter-venue",
-  }],
-});
-const promoterResolver = buildIngestionVenueResolver({
-  canonicalVenueNamesByHandle: {},
-  venueResolverSnapshot: {
-    identities: [],
-    venues: promoterVenues,
-  },
-});
-for (const claim of ["The Clubber", "@theclubber", "Clubber Magazine", "Former Clubber Brand"]) {
-  const rejected = resolveVenue(promoterSnapshot, {
-    postingProviderHandle: "theclubber",
-    rawVenueClaim: claim,
-    sourceRole: "promoter",
-  });
-  assert.equal(rejected.status, "unresolved", `Promoter identity ${claim} cannot be a venue claim.`);
-  assert.equal(rejected.proposedName, undefined, "A rejected promoter claim cannot return as an unconfigured venue.");
-}
-for (const input of [
-  { locationName: "The Clubber" },
-  { evidenceTexts: ["Venue: The Clubber"] },
-  { evidenceTexts: ["Venue: @theclubber"] },
-  { explicitVenueId: "legacy-promoter-venue" },
-]) {
-  const rejected = resolveVenue(promoterSnapshot, {
-    ...input,
-    postingProviderHandle: "theclubber",
-    sourceRole: "promoter",
-    sourceVenueId: "legacy-promoter-venue",
-  });
-  assert.equal(rejected.status, "unresolved", "Other resolver paths cannot restore a promoter's legacy venue.");
-  assert.equal(rejected.proposedName, undefined);
-}
-const hiddenPromoterClaim = resolveIngestionVenue(ingestionResolver, {
-  postingProviderHandle: "theclubber",
-  rawVenueClaim: "The Clubber",
-  sourceRole: "promoter",
-});
-assert.equal(hiddenPromoterClaim.venue, null, "A removed legacy promoter record must not turn its brand into an unconfigured venue.");
-const rejectedPromoterClaim = resolveIngestionVenue(promoterResolver, {
-  postingProviderHandle: "theclubber",
-  rawVenueClaim: "The Clubber",
-  sourceRole: "promoter",
-});
-assert.equal(rejectedPromoterClaim.venue, null);
-assert.equal(rejectedPromoterClaim.rawModelVenue, "The Clubber", "Retain the original claim for the extraction audit.");
-assert.equal(resolveIngestionVenue(promoterResolver, {
-  postingProviderHandle: "theclubber",
-  rawVenueClaim: "The Clubber",
-  evidenceTexts: ["Vidimo se u @kcgrad"],
-  sourceRole: "promoter",
-}).venue, "KC Grad", "A rejected organizer claim must still allow explicit physical venue evidence.");
-assert.equal(resolveIngestionVenue(promoterResolver, {
-  postingProviderHandle: "theclubber",
-  rawVenueClaim: "Clubber Magazine",
-  locationName: "KC Grad",
-  sourceRole: "promoter",
-}).venue, "KC Grad", "A promoter brand must not conflict with an independent physical location tag.");
-assert.equal(resolveIngestionVenue(promoterResolver, {
-  postingProviderHandle: "theclubber",
-  sourceRole: "venue",
-}).venue, "The Clubber", "The promoter guard must not change ordinary venue account fallback.");
-
 const ambiguousSnapshot = buildVenueSnapshot({
   venues: [
     { aliases: ["Shared Hall"], id: "venue-a", name: "Venue A" },
@@ -337,31 +257,9 @@ assert.deepEqual(
   ["venue-location", "venue-poster"],
 );
 
-{
-  const childDirectory = { dolly_bell_sc: "Dolly Bell Sava Centar" };
-  assert.equal(canonicalizeVenueNameDetailed("Sava Centar", childDirectory), null,
-    "A parent complex must not expand into a restaurant's brand without an explicit alias.");
-  assert.equal(canonicalizeVenueNameDetailed("Sava Centar", childDirectory, {
-    preferredVenue: "Dolly Bell Sava Centar",
-  }), null, "Preferred source hints cannot manufacture a missing child brand.");
-  const childResolver = buildIngestionVenueResolver({ canonicalVenueNamesByHandle: childDirectory });
-  assert.equal(resolveIngestionVenue(childResolver, {
-    rawVenueClaim: "Sava Centar", sourceRole: "promoter",
-  }).venue, "Sava Centar", "An unknown parent remains its exact source claim instead of acquiring child coordinates.");
-  assert.equal(canonicalizeVenueNameDetailed("Dolly Bell Sava Centar", childDirectory)?.venue,
-    "Dolly Bell Sava Centar");
-  assert.equal(canonicalizeVenueNameDetailed("Music Garden", { garden: "Music Garden Club Belgrade" })?.venue,
-    "Music Garden Club Belgrade", "Generic club/city qualifiers preserve benign venue variants.");
-  assert.equal(canonicalizeVenueNameDetailed("Kuma Lounge Bar", { kuma: "KÚMA Lounge bar & Events" })?.venue,
-    "KÚMA Lounge bar & Events", "A generic events qualifier preserves the same venue identity.");
-  assert.equal(canonicalizeVenueNameDetailed("Historic Name", childDirectory, {
-    canonicalVenueAliasesByHandle: { dolly_bell_sc: ["Historic Name"] },
-  })?.venue, "Dolly Bell Sava Centar", "An explicit historical alias remains authoritative.");
-}
-
-function makeIndexedResolverDb({ identities, migrationReady = true, venueRows, sources = [] }) {
+function makeIndexedResolverDb({ identities, migrationReady = true, venueRows }) {
   const venuesById = new Map(venueRows.map((venue) => [venue._id, venue]));
-  const queryCounts = { eventDomainMigrationState: 0, venueIdentities: 0, venues: 0, instagramSources: 0 };
+  const queryCounts = { eventDomainMigrationState: 0, venueIdentities: 0, venues: 0 };
   const migrationRows = migrationReady ? [{
     _id: "venue-identities-migration",
     completedAt: 1,
@@ -394,7 +292,6 @@ function makeIndexedResolverDb({ identities, migrationReady = true, venueRows, s
               ? venueRows
               : table === "eventDomainMigrationState"
                 ? migrationRows
-                : table === "instagramSources" ? sources
                 : identities;
             return rows
               .filter((row) =>
@@ -516,65 +413,6 @@ function makeIndexedResolverDb({ identities, migrationReady = true, venueRows, s
     "Conflicting indexed identities must fail closed.",
   );
   assert.equal(state.queryCounts.venues, 0);
-}
-
-{
-  const roleAwareResolver = buildIngestionVenueResolver({
-    canonicalVenueNamesByHandle: {},
-    venueResolverSnapshot: {
-      venues: [{ id: "physical-host", name: "Physical Host", instagramHandle: "physical_host" }],
-      identities: [],
-      excludedVenueClaims: ["Party Series", "party_series", "Former Series"],
-    },
-  });
-  for (const sourceRole of ["venue", "promoter", "unknown"]) {
-    for (const rawVenueClaim of ["Party Series", "@party_series", "Former Series"]) {
-      assert.equal(resolveIngestionVenue(roleAwareResolver, {
-        sourceRole, postingProviderHandle: "independent_source", rawVenueClaim,
-        locationName: "Party Series", evidenceTexts: ["Party Series presents @party_series"],
-      }).venue, null, "An explicitly classified promoter cannot survive as another source's proposed venue.");
-    }
-    assert.equal(resolveIngestionVenue(roleAwareResolver, {
-      sourceRole, postingProviderHandle: "independent_source", rawVenueClaim: "Party Series",
-      evidenceTexts: ["Party Series presents the event at @physical_host"],
-    }).venue, "Physical Host", "Excluding a promoter preserves independently identified physical hosts.");
-  }
-  const collision = buildVenueSnapshot({
-    venues: [{ id: "separate-physical", name: "Party Series", instagramHandle: "separate_physical" }],
-    excludedVenueClaims: ["Party Series", "party_series"],
-  });
-  assert.equal(resolveVenue(collision, { rawVenueClaim: "Party Series" }).status, "resolved",
-    "A separately verified physical venue with the same name must remain resolvable.");
-}
-
-{
-  const legacyPromoter = {
-    _id: "legacy-series", name: "Party Series", instagramHandle: "party_series", aliases: [],
-    category: "club", publicStatus: "published",
-  };
-  const host = {
-    _id: "physical-host", name: "Physical Host", instagramHandle: "physical_host", aliases: [],
-    category: "club", publicStatus: "published",
-  };
-  const identities = [legacyPromoter, host].map((venue, index) => ({
-    _id: `identity-role-${index}`, active: true, kind: "canonical_name", venueId: venue._id,
-    normalizedValue: venue.name.toLowerCase(), rawValue: venue.name,
-  }));
-  for (const active of [true, false]) {
-    const state = makeIndexedResolverDb({ identities, venueRows: [legacyPromoter, host],
-      sources: [{ handle: "party_series", role: "promoter", active }],
-    });
-    const blocked = await resolveVenueForWrite({ db: state.db }, "Party Series");
-    assert.equal(blocked.resolution.status, "unresolved");
-    assert.equal(blocked.resolution.proposedName, undefined);
-    assert.equal(blocked.venueFields.venueId, undefined,
-      "Indexed writes cannot rebind a reviewed promoter through a legacy identity.");
-    const batch = await resolveVenueClaimsForWrite({ db: state.db }, ["Party Series", "Physical Host"]);
-    assert.equal(batch.get("Party Series").resolution.status, "unresolved");
-    assert.equal(batch.get("Party Series").resolution.proposedName, undefined);
-    assert.equal(batch.get("Physical Host").venueFields.venueId, host._id);
-    assert.equal(state.queryCounts.venues, 0, "Role-aware indexed writes remain independent of a full venue scan.");
-  }
 }
 
 console.log("Universal venue resolver parity QA passed.");

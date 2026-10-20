@@ -1,10 +1,14 @@
 import { getDisplayEventTime, type EventTimeSource, type EventTimeStatus } from "../events/event-time.ts";
-import { getAgendaTagPositions } from "./agenda-layout.ts";
+import { getPosterTagPositions } from "./poster-layout.ts";
+import { buildClosingCtaRenderVersion } from "./carousel-cta.ts";
+import { SOCIAL_DESIGN_VERSION } from "./agenda-theme.ts";
+import { getPosterDesignReceipt, resolvePosterPublicationDate, type PosterDesignReceipt } from "./poster-directions.ts";
+import { getEventPublicationUsage, selectUnpostedFirstEvents, SOCIAL_SELECTION_POLICY, type PublicationContext } from "./publication-history.ts";
 
 export const AGENDA_EVENTS_PER_DAY = 3;
 const DEFAULT_CAROUSEL_EVENT_LIMIT = AGENDA_EVENTS_PER_DAY * 3;
 const MAX_INSTAGRAM_CAPTION_LENGTH = 2_200;
-const CAROUSEL_RENDER_VERSION = "5-agenda";
+const CAROUSEL_RENDER_VERSION = SOCIAL_DESIGN_VERSION;
 const INSTAGRAM_HANDLE_PATTERN = /^(?!.*\.\.)(?!.*\.$)[a-z0-9._]{1,30}$/;
 const UNSAFE_TEXT_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u202A-\u202E\u2066-\u2069]/g;
 const SERBIAN_WEEKDAYS = ["Nedelja", "Ponedeljak", "Utorak", "Sreda", "Četvrtak", "Petak", "Subota"];
@@ -28,7 +32,7 @@ export type DailyCarouselEvent = {
   venueInstagramHandle?: string;
 };
 
-export type DailyCarouselSlide = {
+export type DailyCarouselAgendaSlide = {
   kind: "agenda";
   date: string;
   eventIds: string[];
@@ -41,7 +45,16 @@ export type DailyCarouselSlide = {
   }>;
 };
 
+export type DailyCarouselCtaSlide = {
+  kind: "cta";
+  imageUrl: string;
+  userTags: [];
+};
+
+export type DailyCarouselSlide = DailyCarouselAgendaSlide | DailyCarouselCtaSlide;
+
 export type DailyCarouselPayload = {
+  design: PosterDesignReceipt;
   publishDate: string;
   eventDates: string[];
   selectionKey: string;
@@ -49,6 +62,9 @@ export type DailyCarouselPayload = {
   selectedCount: number;
   caption: string;
   slides: DailyCarouselSlide[];
+  selectionPolicy: typeof SOCIAL_SELECTION_POLICY;
+  previouslyPublishedEventIds: string[];
+  repeatedEventIds: string[];
 };
 
 export function normalizeInstagramHandle(value: string | undefined): string {
@@ -159,11 +175,12 @@ export function buildEventRenderVersion(event: DailyCarouselEvent): string {
   ).toString(36);
 }
 
-export function buildAgendaRenderVersion(date: string, events: DailyCarouselEvent[], position: number): string {
+export function buildAgendaRenderVersion(date: string, events: DailyCarouselEvent[], position: number, publishDate?: string): string {
   return stableHash(JSON.stringify({
     version: CAROUSEL_RENDER_VERSION,
     date,
     position,
+    publishDate: resolvePosterPublicationDate(date, position, "feed", publishDate),
     events: events.map((event) => ({
       id: event._id,
       title: event.title,
@@ -245,8 +262,10 @@ export function selectDailyCarouselEvents(
   publishDate: string,
   limit = DEFAULT_CAROUSEL_EVENT_LIMIT,
   eventDates: string[] = getUpcomingAgendaDates(publishDate),
+  context: PublicationContext = {},
 ): DailyCarouselEvent[] {
-  return balanceDailyCarouselEvents(rankDailyCarouselEvents(events, publishDate, eventDates), eventDates, limit);
+  const quota = Math.min(3, Math.max(1, Math.floor(Math.min(9, limit) / Math.max(1, eventDates.length))));
+  return selectUnpostedFirstEvents({ ...context, events, publishDate, eventDates, format: "feed", perDay: quota }).selected;
 }
 
 export function buildDailyCarouselCaption(
@@ -271,7 +290,9 @@ export function buildDailyCarouselCaption(
   });
   const website = publicOrigin.replace(/^https?:\/\//, "").replace(/\/+$/, "");
   const footer = `Detalji događaja: ${website}`;
-  const assemble = () => [...groups.map((group) => [group.heading, ...group.entries.map((entry) =>
+  const intros = ["Prelistaj datume, pa pošalji ekipi.", "Izbor događaja za naredne dane.", "Sačuvaj raspored za sledeći izlazak.", "Nekoliko adresa za dane pred tobom.", "Raspored je tu. Dogovorite dan.", "Pogledaj šta se sprema u Beogradu.", "Satnice i adrese su ispod."];
+  const intro = intros[Number((eventDates[0] || selectedEvents[0].date).replaceAll("-", "")) % intros.length];
+  const assemble = () => [intro, ...groups.map((group) => [group.heading, ...group.entries.map((entry) =>
     `${entry.identity}${entry.detail ? ` · ${entry.detail}` : ""}`,
   )].join("\n\n")), footer].join("\n\n");
   let caption = assemble();
@@ -295,26 +316,27 @@ export function buildDailyCarouselPayload(options: {
   eventDates?: string[];
   publicOrigin: string;
   selectedEvents?: DailyCarouselEvent[];
-}): DailyCarouselPayload {
+} & PublicationContext): DailyCarouselPayload {
   const eventDates = [...new Set(options.eventDates ?? getUpcomingAgendaDates(options.publishDate))].slice(0, 3);
   const selected = options.selectedEvents
     ? balanceDailyCarouselEvents(options.selectedEvents, eventDates)
-    : selectDailyCarouselEvents(options.events, options.publishDate, DEFAULT_CAROUSEL_EVENT_LIMIT, eventDates);
+    : selectDailyCarouselEvents(options.events, options.publishDate, DEFAULT_CAROUSEL_EVENT_LIMIT, eventDates, options);
   const origin = options.publicOrigin.replace(/\/+$/, "");
-  const slides: DailyCarouselSlide[] = eventDates.map((date, position) => {
+  const agendaSlides: DailyCarouselAgendaSlide[] = eventDates.map((date, position) => {
     const dayEvents = selected.filter((event) => event.date === date);
-    const renderVersion = buildAgendaRenderVersion(date, dayEvents, position);
+    const renderVersion = buildAgendaRenderVersion(date, dayEvents, position, options.publishDate);
     const query = new URLSearchParams({
       events: dayEvents.map((event) => event._id).join(","),
       position: String(position),
       v: renderVersion,
+      publishDate: options.publishDate,
     });
-    const tagPositions = dayEvents.length ? getAgendaTagPositions(dayEvents.map((event) => ({
+    const tagPositions = dayEvents.length ? getPosterTagPositions(dayEvents.map((event) => ({
       title: event.title,
       venue: event.venue,
       time: getAgendaEventTime(event),
       detail: getAgendaEventDetail(event),
-    }))) : [];
+    })), { date, position, publishDate: options.publishDate }) : [];
     const seenHandles = new Set<string>();
     return {
       kind: "agenda" as const,
@@ -330,10 +352,20 @@ export function buildDailyCarouselPayload(options: {
       }),
     };
   }).filter((slide) => slide.eventIds.length > 0);
+  const closingVersion = buildClosingCtaRenderVersion(options.publishDate);
+  const slides: DailyCarouselSlide[] = agendaSlides.length ? [
+    ...agendaSlides,
+    { kind: "cta", imageUrl: `${origin}/api/social/carousel/cta?date=${options.publishDate}&v=${closingVersion}`, userTags: [] },
+  ] : [];
+  const usage = getEventPublicationUsage(options.events, options);
   return {
+    design: getPosterDesignReceipt(getNextIsoDate(options.publishDate), 0, "feed", options.publishDate),
+    selectionPolicy: SOCIAL_SELECTION_POLICY,
+    previouslyPublishedEventIds: [...usage].filter(([, value]) => value.count > 0).map(([id]) => id).sort(),
+    repeatedEventIds: selected.filter(event => usage.get(event._id)?.count).map(event => event._id),
     publishDate: options.publishDate,
     eventDates,
-    selectionKey: `${options.publishDate}:${slides.map((slide) => `${slide.date}:${slide.eventIds.join(",")}@${new URL(slide.imageUrl).searchParams.get("v")}`).join("+")}`,
+    selectionKey: `${options.publishDate}:${agendaSlides.map((slide) => `${slide.date}:${slide.eventIds.join(",")}@${new URL(slide.imageUrl).searchParams.get("v")}`).join("+")}${agendaSlides.length ? `+cta@${closingVersion}` : ""}`,
     sourceEventCount: options.events.length,
     selectedCount: selected.length,
     caption: buildDailyCarouselCaption(selected, origin, eventDates),

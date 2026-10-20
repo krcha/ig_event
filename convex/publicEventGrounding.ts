@@ -1,5 +1,4 @@
 import type { Doc, Id } from "./_generated/dataModel";
-import { hasPersistedFocusedConflictReviewProof } from "./internal/focusedConflictReviewProof";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { isCaptionSourceCoherentWithEvent } from "../lib/events/event-source-approval";
 import {
@@ -601,6 +600,5 @@ export async function isCanonicallyGroundedApprovedEvent(
   ctx: QueryCtx | MutationCtx,
   event: Doc<"events">,
 ): Promise<boolean> {
-  if (!(await hasPersistedFocusedConflictReviewProof(ctx, event))) return false;
   return isCanonicallyGroundedApprovedEventInternal(ctx, event, new Set());
 }

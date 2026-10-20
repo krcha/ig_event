@@ -13,7 +13,6 @@ import {
   isVenuePublic,
   isVenueScrapeActive,
 } from "../lib/venues/venue-lifecycle";
-import { venueRequiresPhysicalDetails } from "../lib/taxonomy/venue-types";
 import {
   assertOperationPaginationOptions,
   clampQueryPaginationOptions,
@@ -44,7 +43,6 @@ function normalizeObservedDisplayName(value: string | undefined): string | undef
 }
 
 function roleForLegacyVenue(venue: Doc<"venues">): InstagramSourceRole {
-  if (!venueRequiresPhysicalDetails(venue.category)) return "promoter";
   return isVenuePublic(venue) ? "venue" : "unknown";
 }
 
@@ -54,11 +52,6 @@ function effectiveIngestionRole(
 ): InstagramSourceRole {
   if (source) {
     if (!source.active) return "unknown";
-    if (source.role === "promoter") return "promoter";
-    // A curated promoter type supersedes a historical source role of venue.
-    if (exactHandleVenue && roleForLegacyVenue(exactHandleVenue) === "promoter") {
-      return "promoter";
-    }
     // Following discovery initially creates an `unknown` source. When that
     // exact handle already owns a published canonical venue, the venue record
     // is stronger identity evidence than the unclassified placeholder. An

@@ -1,5 +1,4 @@
 import OpeningHours from "opening_hours";
-import { venueRequiresPhysicalDetails } from "@/lib/taxonomy/venue-types";
 import {
   BELGRADE_TIMEZONE,
   VENUE_HOURS_CACHE_TTL_MS,
@@ -93,7 +92,6 @@ type FetchLike = typeof fetch;
 
 export type VenueForHoursRefresh = VenueHoursCacheFields & {
   _id?: string;
-  category?: string | null;
   instagramHandle?: string | null;
   isActive?: boolean;
   location?: string | null;
@@ -748,7 +746,6 @@ export async function fetchVenueHoursPatch(
   venue: VenueForHoursRefresh,
   options: VenueHoursRefreshOptions = {},
 ): Promise<VenueHoursPatch | null> {
-  if (!venueRequiresPhysicalDetails(venue.category)) return null;
   const now = options.now ?? Date.now();
   if (venue.hoursSource === "manual" && venue.hoursJson) {
     return null;

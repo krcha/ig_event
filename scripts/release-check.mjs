@@ -24,10 +24,6 @@ const checks = [
   { script: "qa:public-venue-identity", timeoutMs: 60_000 },
   { script: "qa:event-extraction-contract", timeoutMs: 60_000 },
   { script: "qa:pending-source-conflict-reclassification", timeoutMs: 60_000 },
-  { script: "qa:focused-source-conflict-review", timeoutMs: 60_000 },
-  { script: "qa:focused-source-conflict-ledger", timeoutMs: 60_000 },
-  { script: "qa:autonomous-moderation", timeoutMs: 60_000 },
-  { script: "qa:autonomous-moderation-route", timeoutMs: 60_000 },
   { script: "qa:definitive-output-recovery", timeoutMs: 60_000 },
   { script: "qa:definitive-output-recovery-executor", timeoutMs: 60_000 },
   { script: "qa:event-evidence-v2-durability", timeoutMs: 60_000 },
@@ -69,18 +65,12 @@ const checks = [
   { script: "qa:reviewed-fold-safety", timeoutMs: 60_000 },
   { script: "qa:reviewed-fabrika-dj-night-enrichment", timeoutMs: 60_000 },
   { script: "qa:reviewed-fabrika-program-enrichment", timeoutMs: 60_000 },
-  { script: "qa:reviewed-pending-performer-correction", timeoutMs: 60_000 },
   { script: "qa:cross-post-promotion-coalescing", timeoutMs: 60_000 },
   { script: "qa:cross-post-campaign-automerge", timeoutMs: 60_000 },
   { script: "qa:ingestion-triage", timeoutMs: 60_000 },
   { script: "qa:venue-types", timeoutMs: 60_000 },
-  { script: "qa:event-categories", timeoutMs: 60_000 },
   { script: "qa:venue-lifecycle", timeoutMs: 60_000 },
-  { script: "qa:venue-bulk-edit", nodeScript: "scripts/qa-venue-bulk-edit.mjs", timeoutMs: 60_000 },
-  { script: "qa:venue-table", nodeScript: "scripts/qa-venue-table.mjs", timeoutMs: 60_000 },
-  { script: "qa:promoter-backend", nodeScript: "scripts/qa-promoter-backend.mjs", timeoutMs: 60_000 },
   { script: "qa:venue-hours", timeoutMs: 60_000 },
-  { script: "qa:venue-open-now", timeoutMs: 60_000 },
   { script: "qa:google-hours", timeoutMs: 60_000 },
   { script: "qa:public-search", timeoutMs: 60_000 },
   { script: "qa:public-sort", timeoutMs: 60_000 },
@@ -93,21 +83,28 @@ const checks = [
   { script: "qa:public-grounding-surfaces", timeoutMs: 60_000 },
   { script: "qa:mobile-calendar", timeoutMs: 60_000 },
   { script: "qa:calendar-time-bands", timeoutMs: 60_000 },
-  { script: "qa:event-map", timeoutMs: 60_000 },
-  { script: "qa:event-sessions", timeoutMs: 60_000 },
-  { script: "qa:venue-coordinates", timeoutMs: 60_000 },
-  { script: "qa:reviewed-venue-map", timeoutMs: 60_000 },
   { script: "qa:app-toolbar", timeoutMs: 60_000 },
   { script: "qa:seo", timeoutMs: 60_000 },
   { script: "qa:brand", timeoutMs: 60_000 },
   { script: "qa:discover-feed", timeoutMs: 60_000 },
   { script: "qa:apify", timeoutMs: 120_000 },
-  { script: "qa:apify-recent-media", timeoutMs: 60_000 },
-  { script: "qa:instaloader", timeoutMs: 60_000 },
   { script: "qa:follow-discovery", timeoutMs: 60_000 },
   { script: "qa:ingestion-durability", timeoutMs: 60_000 },
+  { script: "qa:social-multilingual", timeoutMs: 120_000 },
+  { script: "qa:social-generator-retries", timeoutMs: 30_000 },
+  { script: "qa:social-generator-diagnostics", timeoutMs: 30_000 },
+  { script: "qa:social-raw-stream", timeoutMs: 30_000 },
   { script: "qa:social-carousel", timeoutMs: 60_000 },
+  { script: "qa:carousel-jpeg-cache", timeoutMs: 90_000 },
   { script: "qa:n8n-agenda", timeoutMs: 60_000 },
+  { script: "qa:daily-stories", timeoutMs: 480_000 },
+  { script: "qa:n8n-stories", timeoutMs: 60_000 },
+  { script: "qa:daily-reels", timeoutMs: 480_000 },
+  { script: "qa:n8n-reels", timeoutMs: 60_000 },
+  { script: "qa:social-special", timeoutMs: 60_000 },
+  { script: "qa:social-variety", timeoutMs: 60_000 },
+  { script: "qa:poster-directions", timeoutMs: 420_000 },
+  { script: "qa:material-motion", timeoutMs: 180_000 },
   { script: "qa:convex-auth-boundaries", timeoutMs: 60_000 },
   { script: "qa:source-grounding-reprocess", timeoutMs: 60_000 },
   { script: "qa:event-evidence-policy-reprocess", timeoutMs: 60_000 },
@@ -177,15 +174,13 @@ function formatDuration(ms) {
   return `${Math.round(ms / 1000)}s`;
 }
 
-function runNpmScript(script, timeoutMs, nodeScript) {
+function runNpmScript(script, timeoutMs) {
   return new Promise((resolve) => {
     const startMs = Date.now();
     let timedOut = false;
     let hardKillTimer = null;
 
-    const child = spawn(nodeScript ? process.execPath : npmCommand, nodeScript
-      ? ["--import", "./scripts/register-ts-paths.mjs", "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", "--experimental-strip-types", nodeScript]
-      : ["run", script], {
+    const child = spawn(npmCommand, ["run", script], {
       detached: process.platform !== "win32",
       env: process.env,
       stdio: "inherit",
@@ -207,7 +202,7 @@ function runNpmScript(script, timeoutMs, nodeScript) {
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
       console.error(
-        `\n[timeout] ${script} exceeded ${formatDuration(timeoutMs)}.`,
+        `\n[timeout] npm run ${script} exceeded ${formatDuration(timeoutMs)}.`,
       );
       killChild("SIGTERM");
 
@@ -252,9 +247,9 @@ const failures = [];
 console.log("Running release gates:");
 for (const check of checks) {
   const timeoutMs = readTimeoutMs(check.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  console.log(`\n[run] ${check.nodeScript ? `node ${check.nodeScript}` : `npm run ${check.script}`} (timeout ${formatDuration(timeoutMs)})`);
+  console.log(`\n[run] npm run ${check.script} (timeout ${formatDuration(timeoutMs)})`);
 
-  const result = await runNpmScript(check.script, timeoutMs, check.nodeScript);
+  const result = await runNpmScript(check.script, timeoutMs);
   const elapsed = formatDuration(result.elapsedMs);
 
   if (result.error) {

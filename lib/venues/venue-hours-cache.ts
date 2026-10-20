@@ -39,11 +39,6 @@ export type VenueHoursWindowForDate =
   | { status: "open"; window: VenueHoursWindow }
   | { status: "unknown" };
 
-export type VenueHoursWindowsForDate =
-  | { status: "closed" }
-  | { status: "open"; windows: VenueHoursWindow[] }
-  | { status: "unknown" };
-
 export const BELGRADE_TIMEZONE = "Europe/Belgrade";
 export const VENUE_HOURS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 
@@ -112,7 +107,7 @@ function parseVenueHoursDay(value: unknown): VenueHoursDay | null {
     .sort((left, right) => left.start.localeCompare(right.start));
 
   return {
-    closed: value.closed === true,
+    closed: value.closed === true || windows.length === 0,
     day,
     windows,
   };
@@ -176,10 +171,11 @@ export function parseEventDateWeekday(value: string | null | undefined): number 
   return parsed.getDay();
 }
 
-export function getVenueHoursWindowsForDate(
+export function getVenueHoursWindowForDate(
   venueHours: VenueHoursCacheFields | null | undefined,
   eventDate: string | null | undefined,
-): VenueHoursWindowsForDate {
+  preferredStartTime?: string | null,
+): VenueHoursWindowForDate {
   const hoursJson = parseVenueHoursJson(venueHours?.hoursJson);
   const weekday = parseEventDateWeekday(eventDate);
   if (!hoursJson || weekday === null) {
@@ -190,25 +186,6 @@ export function getVenueHoursWindowsForDate(
   if (!day) {
     return { status: "unknown" };
   }
-  if (day.closed) {
-    return { status: "closed" };
-  }
-  if (day.windows.length === 0) {
-    return { status: "unknown" };
-  }
-
-  return { status: "open", windows: day.windows };
-}
-
-export function getVenueHoursWindowForDate(
-  venueHours: VenueHoursCacheFields | null | undefined,
-  eventDate: string | null | undefined,
-  preferredStartTime?: string | null,
-): VenueHoursWindowForDate {
-  const hoursForDate = getVenueHoursWindowsForDate(venueHours, eventDate);
-  if (hoursForDate.status !== "open") {
-    return hoursForDate;
-  }
 
   const preferredStartMinutes = preferredStartTime
     ? readTimeMinutes(preferredStartTime)
@@ -216,7 +193,7 @@ export function getVenueHoursWindowForDate(
   const preferredWindow =
     preferredStartMinutes === null
       ? undefined
-      : hoursForDate.windows.find((candidate) => {
+      : day.windows.find((candidate) => {
           const start = readTimeMinutes(candidate.start);
           const end = readTimeMinutes(candidate.end);
           if (start === null || end === null) {
@@ -229,7 +206,10 @@ export function getVenueHoursWindowForDate(
 
           return preferredStartMinutes >= start && preferredStartMinutes < end;
         });
-  const window = preferredWindow ?? hoursForDate.windows[0];
+  const window = preferredWindow ?? day.windows[0];
+  if (!window || day.closed) {
+    return { status: "closed" };
+  }
 
   return { status: "open", window };
 }

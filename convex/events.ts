@@ -117,11 +117,6 @@ import {
   repairReviewedStructuredEventVenueHandler,
 } from "./eventDomain/reviewedStructuredCorrections";
 import { getReviewedVenueRepairContextHandler } from "./internal/eventRepairs/reviewedVenueRepairContext";
-import { repairReviewedStructuredEventCaptionVenueHandler } from "./internal/eventRepairs/reviewedStructuredCaptionCorrection";
-import {
-  getReviewedPendingPerformerCorrectionContextHandler,
-  repairReviewedPendingPerformerCorrectionHandler,
-} from "./internal/eventRepairs/reviewedPendingPerformerCorrection";
 import { enrichReviewedFabrikaDjNightHandler } from "./internal/eventRepairs/reviewedFabrikaDjNightEnrichment";
 import { enrichReviewedFabrikaProgramHandler } from "./internal/eventRepairs/reviewedFabrikaProgramEnrichment";
 import {
@@ -466,39 +461,6 @@ export const getReviewedStructuredEvidenceCorrectionContext = query({
   handler: getReviewedStructuredEvidenceCorrectionContextHandler,
 });
 
-export const getReviewedPendingPerformerCorrectionContext = query({
-  args: { id: v.id("events"), serviceSecret: v.string() },
-  returns: v.any(),
-  handler: getReviewedPendingPerformerCorrectionContextHandler,
-});
-
-export const repairReviewedPendingPerformerCorrection = mutation({
-  args: {
-    id: v.id("events"),
-    expectedUpdatedAt: v.number(),
-    expectedNormalizedFieldsJson: v.string(),
-    expectedSourceLinkId: v.id("instagramEventSources"),
-    expectedSourceLinkUpdatedAt: v.number(),
-    expectedReceiptId: v.id("instagramSourceOccurrenceReceipts"),
-    expectedReceiptUpdatedAt: v.number(),
-    expectedSourceId: v.id("scrapedPosts"),
-    expectedSourceUpdatedAt: v.number(),
-    expectedSourceRevision: v.number(),
-    expectedOccurrenceId: v.id("sourceOccurrences"),
-    expectedOccurrenceUpdatedAt: v.number(),
-    expectedFactsJson: v.string(),
-    expectedPosterChecksumSha256: v.string(),
-    nextArtists: v.array(v.string()),
-    nextDescription: v.string(),
-    posterRowEvidence: v.string(),
-    posterArtistEvidence: v.array(v.string()),
-    moderationNote: v.string(),
-    serviceSecret: v.string(),
-  },
-  returns: reviewedStructuredEvidenceCorrectionResult,
-  handler: repairReviewedPendingPerformerCorrectionHandler,
-});
-
 export const getReviewedVenueRepairContext = query({
   args: {
     id: v.id("events"),
@@ -579,38 +541,12 @@ export const repairReviewedStructuredEventEvidence = mutation({
     nextDescription: v.string(),
     posterVenueEvidence: v.string(),
     posterTimeEvidence: v.string(),
-    preserveExistingTime: v.optional(v.boolean()),
     posterArtistEvidence: v.array(v.string()),
-    reviewedNonPerformerEvidence: v.optional(v.object({
-      expectedArtists: v.array(v.string()),
-      evidence: v.string(),
-    })),
     moderationNote: v.string(),
     serviceSecret: v.string(),
   },
   returns: reviewedStructuredEvidenceCorrectionResult,
   handler: repairReviewedStructuredEventEvidenceHandler,
-});
-
-export const repairReviewedStructuredEventCaptionVenue = mutation({
-  args: {
-    id: v.id("events"),
-    expectedUpdatedAt: v.number(),
-    expectedNormalizedFieldsJson: v.string(),
-    expectedSourceLinkId: v.id("instagramEventSources"),
-    expectedSourceLinkUpdatedAt: v.number(),
-    expectedReceiptId: v.id("instagramSourceOccurrenceReceipts"),
-    expectedReceiptUpdatedAt: v.number(),
-    nextVenue: v.string(),
-    targetVenueId: v.id("venues"),
-    expectedTargetVenueUpdatedAt: v.number(),
-    expectedTargetVenueHandle: v.string(),
-    captionVenueEvidence: v.string(),
-    moderationNote: v.string(),
-    serviceSecret: v.string(),
-  },
-  returns: reviewedStructuredEvidenceCorrectionResult,
-  handler: repairReviewedStructuredEventCaptionVenueHandler,
 });
 
 export const repairReviewedStructuredEventVenue = mutation({

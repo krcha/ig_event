@@ -55,7 +55,6 @@ async function run({ cached, unavailableSlide } = {}) {
     },
   };
   await processIngestionPost({ client, post, handle: post.username, summary,
-    requireCachedAnalysisOnly: cached !== undefined,
     canonicalVenueNamesByHandle: {}, venueNameOverridesByHandle: {}, configuredVenueNamesByHandle: {}, serviceSecret: "qa-secret",
     processingFence: { handle: post.username, scrapedPostId: "qa-source", postId: post.postId,
       instagramPostUrl: post.instagramPostUrl, owner: "qa-owner", sourceRevision: 1 },
@@ -97,22 +96,3 @@ try {
   assert.deepEqual(partial.recorded.carouselImages.map((image) => image.slideIndex), [0]);
 } finally { console.info = originalInfo; console.error = originalError; }
 console.log("Carousel pipeline QA passed: independently retained slides precede one extraction transport, exact durable bundle, partial-source truth, zero-transport cached retries and no event writes for recaps.");
-{
-  const previousInfo = console.info, previousError = console.error; console.info = () => {}; console.error = () => {};
-  try {
-    for (const cachedOptions of [{}, { cachedAnalysisJson: "{", cachedAnalysisContractVersion: "event_evidence_v2" },
-      { cachedAnalysisJson: JSON.stringify({ extraction_contract_version: "event_evidence_v2", is_event: true }), cachedAnalysisContractVersion: "event_evidence_v2" },
-      { cachedAnalysisJson: "{}", cachedAnalysisContractVersion: "event_evidence_v1" }]) {
-      let providerCalls = 0, dataCalls = 0;
-      const rejectProvider = async () => { providerCalls++; throw new Error("No provider call is authorized for cached-only recovery."); };
-      const rejectData = async () => { dataCalls++; throw new Error("Invalid cache must fail before data access."); };
-      const summary = createEmptyHandleSummary(post.username);
-      await assert.rejects(() => processIngestionPost({ client: { query: rejectData, action: rejectData, mutation: rejectData }, post, handle: post.username,
-        summary, canonicalVenueNamesByHandle: {}, venueNameOverridesByHandle: {}, configuredVenueNamesByHandle: {}, serviceSecret: "qa-secret",
-        requireCachedAnalysisOnly: true, ...cachedOptions }, { downloadImage: rejectProvider, normalizeToJpeg: rejectProvider, extractEventDataFromPost: rejectProvider }),
-        /valid current cached analysis; fresh extraction is disabled/u);
-      assert.equal(providerCalls, 0); assert.equal(dataCalls, 0); assert.equal(summary.insertedEvents, 0);
-    }
-  } finally { console.info = previousInfo; console.error = previousError; }
-}
-console.log("Cached-only rejection QA passed.");

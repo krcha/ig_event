@@ -253,8 +253,7 @@ for (const publicQuery of [
 }
 assert.match(usersSource, /favoriteVenues[\s\S]*isVenuePublic/);
 assert.match(usersSource, /toggleFavoriteVenueForUser[\s\S]*isVenuePublic/);
-assert.match(eventDetailSource, /publicEvent\.venueId = venue\?\._id/);
-assert.match(eventDetailSource, /return sanitizeVenueLinkedPublicEventFields\(publicEvent, Boolean\(venue\)\)/);
+assert.match(eventDetailSource, /event\.venueId = venue\?\._id/);
 assert.match(publicEventsSource, /publicVenueIds/);
 assert.match(publicEventsSource, /publicVenueIds\.has\(event\.venueId/);
 assert.match(

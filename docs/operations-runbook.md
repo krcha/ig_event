@@ -301,54 +301,12 @@ human review markers or a human reviewer. Public grounding rechecks the exact
 machine marker, current source, and local receipt proof, so source drift makes
 the event ineligible for publication until repaired.
 
-The read-only preflight is shared with `automaticApprovalDiagnostics:diagnosePending`.
-The diagnostic query accepts one to five exact pending event versions on one
-date and returns the precise hold reason, source generation, and recovery
-category. Admin rows show the latest matching diagnostic/recovery state from
-`automaticApprovalHolds`; recording this state does not change event versions.
-Human-ready approval remains a separate, weaker policy than machine approval.
-
-After failed preflight, the sweep can repair a uniquely resolved active venue
-account alias through certified provenance rebinding, or reclassify a benign
-source conflict while retaining all public facts and raw extraction bytes.
-Explicit doors-versus-performance timing needs verified occurrence identity,
-date, venue and selected performance time. Schedule evidence must identify the
-same row; ambiguous clocks and actual contradictions remain held. Source,
-receipt, occurrence, and human-review guards are rechecked before writing.
-Repairs produce service audit entries and are approved on a later sweep.
-Post-write proof failures abort the whole transaction.
-
-Cached source recovery and optional focused poster rereads run through the
-authenticated `POST /api/cron/autonomous-moderation` endpoint, one leased source
-per invocation. The Convex `recover automatic moderation evidence` cron calls
-it every five minutes when `AUTONOMOUS_MODERATION_EXECUTOR_ORIGIN` and
-`CRON_SECRET` are set in the Convex environment. Set the origin to the web
-origin, without a path, and use the same secret on both services. The web
-endpoint can also be invoked by the existing authenticated host scheduler.
-Cached recovery uses the ordinary saved-post processing/provenance pipeline
-with current event-evidence-v2 cache required. It cannot fetch Instagram or
-fall back to fresh OpenAI extraction. Stale/malformed analysis, partial unread
-media, terminal failures, and ambiguous prior transports stay held. Recovery
-allows three actual attempts per source generation with a backoff; quota or
-provider deferrals do not consume those attempts.
-
-Focused AI review defaults off. To enable it on the web service, set
-`AUTONOMOUS_MODERATION_AI_ENABLED=true` and optionally
-`AUTONOMOUS_MODERATION_REVIEW_DAILY_LIMIT` (default 20, hard maximum 50).
-Each source generation and review policy gets at most one provider request,
-using retained images verified against their saved checksums. A durable ledger
-reserves both the review allowance and the shared `OPENAI_DAILY_POST_LIMIT`,
-shares the ingestion OpenAI provider lease/circuit, and retains response bytes.
-The maximum response is 4096 tokens. A started request with an unknown result
-is never automatically resent. Completed cache results can be replayed without
-another provider request. Reviewer suggestions that change facts remain held
-for source correction; only exact quoted evidence accepted by deterministic
-conflict rules may reclassify a hold. Approval and public reads independently
-recheck the persisted review, current source, retained media, and public facts.
-
-All lanes preserve human decisions, duplicate ambiguity, source-generation
-fences and existing publication checks. Deployment requires matching web and
-Convex changes; local QA does not activate this worker in production.
+The automatic worker changes moderation and derived publication state only.
+It does not rewrite source occurrences or receipts. Venue-changing approvals
+need a separate certified provenance operation. If a row fails read-only
+preflight, the worker leaves it pending, increments the error counter for thrown
+preflight errors, advances to the next cursor position, and retries it on a
+later cycle. Post-write proof failures abort the whole transaction.
 
 ## Docker and VPS Deployment
 
@@ -705,23 +663,6 @@ Minimum monitoring:
 - OpenAI dashboard for model usage and spend.
 - Clerk dashboard for auth errors and production domain configuration.
 
-Paid Instagram acquisition starts with `basicData`, a strict absolute cutoff
-at most 24 hours old and `skipPinnedPosts=true`. A newer persisted per-handle
-watermark narrows the request. Older `CRON_DAYS_BACK`, manual `daysBack`,
-`noAgeCutoff` and stale detailed-data/pinned-post environment overrides cannot
-widen this paid boundary. Existing dataset imports and saved-source replay are
-the way to process historical data without starting another paid actor.
-
-Details are requested only for fresh owner-verified rows missing required
-fields or complete carousel children. The logical scrape ceiling defaults to
-$0.01 and covers both phases. A settled basic-run receipt must establish the
-remaining allowance before a detailed run starts; at least $0.005 must remain.
-Unknown billing data, insufficient allowance or incomplete carousel details
-fail the scrape without advancing its source checkpoint. Investigate the
-failure and its run receipts before retrying. The shared lease deadline remains
-in force through polling, billing settlement and detailed data reads. See
-`docs/instagram-image-coverage.md` and `npm run qa:apify-recent-media`.
-
 Operational checks:
 
 ```bash
@@ -811,14 +752,3 @@ Convex. Avoid re-running full ingestion until the rollback is confirmed.
   dashboard publicly without VPN/Tailscale or reverse-proxy auth.
 - Replacing Convex with another database is still a separate migration and not
   part of the self-hosted Convex overlay.
-
-### Promoter profiles
-
-Use the `promoter` venue type for organizer accounts that do not represent a
-fixed physical location. Address, map coordinates and weekly opening hours are
-not applicable; hours enrichment and missing-data reports skip these profiles.
-Changing a profile to promoter preserves its stored source facts and scraping
-activation. Ingestion uses the existing promoter role, and events still require
-their actual host venue rather than the organizer's address or opening hours.
-The venue table supports filtering and sorting each data column; bulk type
-changes use the same classification rules as individual edits.

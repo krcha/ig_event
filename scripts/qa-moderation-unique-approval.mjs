@@ -229,11 +229,6 @@ function makeCtx({
     if (table === "mediaAssets") return [];
     if (table === "eventDomainMigrationState") return [];
     if (table === "instagramEventSources") return [];
-    if (table === "instagramSources") {
-      assert.equal(indexName, "by_role_active");
-      assert.deepEqual(filters, { role: "promoter" });
-      return [];
-    }
     if (table === "sourceOccurrences") return [];
     if (table === "venueIdentities") {
       return venueIdentities.filter((row) =>

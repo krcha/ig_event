@@ -138,7 +138,6 @@ try {
 
   for (const [route, expectedStatus] of [
     ["/", 200],
-    ["/map", 200],
     ["/sign-in", 200],
     ["/api/ready", null],
     ["/does-not-exist", 404],
@@ -167,11 +166,6 @@ try {
       assert.ok(response.headers.get(header), `${route} must return ${header}`);
     }
     const csp = response.headers.get("content-security-policy");
-    assert.equal(
-      response.headers.get("permissions-policy"),
-      "camera=(), microphone=(), geolocation=(self), payment=(), usb=(), browsing-topics=()",
-      `${route} must allow location only for the current origin`,
-    );
     assert.ok(!csp.includes("'unsafe-eval'"), `${route} production CSP must exclude unsafe-eval`);
     assert.equal(
       response.headers.get("strict-transport-security"),
@@ -185,16 +179,9 @@ try {
     assert.match(response.headers.get("cache-control") ?? "", /no-store/);
   }
 
-  for (const query of ["", "?date=2026-10-16&source=security-qa&tag=music&tag=art"]) {
-    const redirect = await fetchWithTimeout(`/venues${query}`, { redirect: "manual" });
-    assert.equal(redirect.status, 308);
-    const destination = new URL(redirect.headers.get("location"), origin);
-    assert.equal(destination.pathname, "/map");
-    assert.equal(destination.searchParams.get("view"), "calendar");
-    for (const [key, value] of new URLSearchParams(query)) {
-      assert.ok(destination.searchParams.getAll(key).includes(value), `${key} must survive the legacy map redirect`);
-    }
-  }
+  const redirect = await fetchWithTimeout("/map?source=security-qa", { redirect: "manual" });
+  assert.equal(redirect.status, 308);
+  assert.equal(redirect.headers.get("location"), "/venues?source=security-qa");
 
   const wwwRedirect = await requestWithHost(
     "/saved?source=security-qa",

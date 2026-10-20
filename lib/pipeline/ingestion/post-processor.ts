@@ -55,7 +55,6 @@ export async function processIngestionPost(
     cachedAnalysisImageChecksumSha256,
     providerExecution,
     requireCachedCanonicalApprovedDuplicate = false,
-    requireCachedAnalysisOnly = false,
     eventDateFilterNow,
   } = options;
   const postContext = getPostContext(handle, post);
@@ -112,9 +111,6 @@ export async function processIngestionPost(
       return null;
     }
   };
-  if (requireCachedAnalysisOnly && (!hasCurrentEventEvidenceCache || !parseCachedExtraction())) {
-    throw new Error("Automatic saved-source recovery requires valid current cached analysis; fresh extraction is disabled.");
-  }
   let cachedExtracted = requireCachedCanonicalApprovedDuplicate
     ? parseCachedExtraction()
     : null;

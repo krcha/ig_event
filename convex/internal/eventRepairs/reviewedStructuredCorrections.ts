@@ -35,9 +35,6 @@ import {
   assertPersistedServiceSourcePolicy,
 } from "../../eventDomain/sourceApproval";
 import { requireCanonicalInstagramPostUrl } from "../../eventDomain/sourceUrlPolicy";
-import { assertReviewedCaptionVenueCorrection, reviewedTitleEvidenceMatchesBoundScheduleRow, supersedeReviewedAccountVenueFallback } from "./reviewedCaptionEvidence";
-import { assertReviewedNonPerformerEvidence, type ReviewedNonPerformerEvidence } from "./reviewedNonPerformerEvidence";
-export { reviewedTitleEvidenceMatchesBoundScheduleRow } from "./reviewedCaptionEvidence";
 
 export type ReviewedStructuredCorrectionVersionArgs = {
   expectedSourceLinkId: Id<"instagramEventSources">;
@@ -109,7 +106,6 @@ export async function loadReviewedStructuredCorrectionContext(
   ctx: QueryCtx | MutationCtx,
   event: Doc<"events">,
   args: ReviewedStructuredCorrectionVersionArgs,
-  options: { allowUnverifiedPendingTarget?: boolean } = {},
 ): Promise<{
   currentFields: Record<string, unknown>;
   rawExtraction: Record<string, unknown>;
@@ -272,8 +268,6 @@ export async function loadReviewedStructuredCorrectionContext(
       !sourceOccurrenceRepresentativeMatchesExpected(
         representative,
         matchingExpected[0],
-        { allowUnverifiedPending: options.allowUnverifiedPendingTarget === true &&
-          representative?._id === event._id && event.status === "pending" },
       )
     ) {
       throw new Error(
@@ -372,16 +366,11 @@ export async function repairReviewedStructuredEventEvidenceHandler(
     nextDescription: string;
     posterVenueEvidence: string;
     posterTimeEvidence: string;
-    preserveExistingTime?: boolean;
     posterArtistEvidence: string[];
-    reviewedNonPerformerEvidence?: ReviewedNonPerformerEvidence;
-    captionVenueEvidence?: string;
     moderationNote: string;
     serviceSecret: string;
   },
 ) {
-  const captionMode = args.captionVenueEvidence !== undefined;
-  const preserveTime = captionMode || args.preserveExistingTime === true;
   const { actor, kind } = await requireAdminOrServiceSecret(
     ctx,
     args.serviceSecret,
@@ -456,7 +445,7 @@ export async function repairReviewedStructuredEventEvidenceHandler(
     !nextTitle ||
     !nextVenue ||
     !nextTime ||
-    (!captionMode && nextArtists.length === 0 && event.artists.length > 0 && args.reviewedNonPerformerEvidence === undefined) ||
+    nextArtists.length < 1 ||
     nextArtists.some((artist) => !artist) ||
     new Set(nextArtists).size !== nextArtists.length ||
     nextTitle !== args.nextTitle ||
@@ -470,20 +459,15 @@ export async function repairReviewedStructuredEventEvidenceHandler(
   }
   const posterVenueEvidence = args.posterVenueEvidence.normalize("NFKC").trim();
   const posterTimeEvidence = args.posterTimeEvidence.normalize("NFKC").trim();
-  if (args.preserveExistingTime && (nextTime !== (event.time ?? "TBD") || args.posterTimeEvidence !== "")) {
-    throw new Error("Preserving event time requires its exact existing value and no new poster time evidence.");
-  }
   const posterArtistEvidence = args.posterArtistEvidence.map((value) =>
     value.normalize("NFKC").trim(),
   );
-  const nonPerformerEvidence = assertReviewedNonPerformerEvidence({ review: args.reviewedNonPerformerEvidence,
-    currentArtists: event.artists, nextArtists, posterArtistEvidence, captionMode });
-  if (!captionMode && (
+  if (
     !posterVenueEvidence ||
-    (!preserveTime && !posterTimeEvidence) ||
-    (posterArtistEvidence.length === 0) !== (nextArtists.length === 0) ||
+    !posterTimeEvidence ||
+    posterArtistEvidence.length < 1 ||
     posterArtistEvidence.some((value) => !value)
-  )) {
+  ) {
     throw new Error(
       "Reviewed structured correction requires exact poster evidence.",
     );
@@ -530,11 +514,7 @@ export async function repairReviewedStructuredEventEvidenceHandler(
     }
   }
 
-  if (captionMode) {
-    assertReviewedCaptionVenueCorrection(event, currentFields, args);
-  }
-
-  const timePatch = preserveTime ? {} : normalizeEventTimeWritePatch({
+  const timePatch = normalizeEventTimeWritePatch({
     time: nextTime,
     timeSource: "poster",
     timeEvidenceText: posterTimeEvidence,
@@ -555,54 +535,37 @@ export async function repairReviewedStructuredEventEvidenceHandler(
   ];
   const nextSignals = [
     ...new Set([
-      ...currentSignals.filter((signal) => preserveTime || signal !== "time_tbd"),
+      ...currentSignals.filter((signal) => signal !== "time_tbd"),
       "requires_human_approval",
     ]),
   ];
   const reviewedAt = Date.now();
-  const correctionEvidence = !captionMode ? {
-    reviewedPosterCorrection: {
-      policyVersion: 1,
-      reviewedAt,
-      reviewedBy: actor,
-      venueEvidence: posterVenueEvidence,
-      timeEvidence: posterTimeEvidence,
-      preservedExistingTime: args.preserveExistingTime === true,
-      artistEvidence: posterArtistEvidence,
-      ...(nonPerformerEvidence ? { nonPerformerEvidence } : {}),
-    },
-  } : {
-    reviewedCaptionCorrection: {
-      policyVersion: 1,
-      reviewedAt,
-      reviewedBy: actor,
-      titleEvidence: currentFields.sourceAccountName,
-      venueEvidence: args.captionVenueEvidence,
-    },
-  };
-  const reviewedFallback = supersedeReviewedAccountVenueFallback({ currentFields, event, venueFields,
-    nextVenue, reviewedAt, actor, evidence: captionMode ? args.captionVenueEvidence! : posterVenueEvidence });
   const nextFields = {
-    ...reviewedFallback.fields,
+    ...currentFields,
     title: nextTitle,
+    time: nextTime,
     normalizedVenue: nextVenue,
     artists: nextArtists,
-    ...(!captionMode ? { description: args.nextDescription } : {}),
-    ...(!preserveTime ? {
-      time: nextTime,
-      timeSource: "poster",
-      timeEvidenceText: posterTimeEvidence,
-      timeConfidence: 0.99,
-      timeStatus: "confirmed",
-      timeEvidenceKind: "start_time_stated",
-    } : {}),
+    description: args.nextDescription,
+    timeSource: "poster",
+    timeEvidenceText: posterTimeEvidence,
+    timeConfidence: 0.99,
+    timeStatus: "confirmed",
+    timeEvidenceKind: "start_time_stated",
     moderationAutoApproved: false,
     moderationAutoApproveRule: null,
     moderationPendingReasons: nextPendingReasons,
     moderationSignals: nextSignals,
     humanReviewedStructuredSourcePolicyVersion:
       HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION,
-    ...correctionEvidence,
+    reviewedPosterCorrection: {
+      policyVersion: 1,
+      reviewedAt,
+      reviewedBy: actor,
+      venueEvidence: posterVenueEvidence,
+      timeEvidence: posterTimeEvidence,
+      artistEvidence: posterArtistEvidence,
+    },
   };
   const nextNormalizedFieldsJson = JSON.stringify(nextFields);
   const effectiveEvent = {
@@ -611,7 +574,7 @@ export async function repairReviewedStructuredEventEvidenceHandler(
     ...timePatch,
     venue: nextVenue,
     artists: nextArtists,
-    ...(!captionMode ? { description: args.nextDescription } : {}),
+    description: args.nextDescription,
     normalizedFieldsJson: nextNormalizedFieldsJson,
     humanReviewedStructuredSourcePolicyVersion:
       HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION as 1,
@@ -651,7 +614,7 @@ export async function repairReviewedStructuredEventEvidenceHandler(
         ? {
             ...occurrence,
             date: event.date,
-            ...(!preserveTime ? { time: nextTime } : {}),
+            time: nextTime,
             venue: nextVenue,
             title: nextTitle,
             artists: nextArtists,
@@ -685,7 +648,7 @@ export async function repairReviewedStructuredEventEvidenceHandler(
     ...timePatch,
     venue: nextVenue,
     artists: nextArtists,
-    ...(!captionMode ? { description: args.nextDescription } : {}),
+    description: args.nextDescription,
     normalizedFieldsJson: nextNormalizedFieldsJson,
     humanReviewedStructuredSourcePolicyVersion:
       HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION,
@@ -714,7 +677,7 @@ export async function repairReviewedStructuredEventEvidenceHandler(
   await writeEventAuditLog(
     ctx,
     event._id,
-    captionMode ? "reviewed_structured_caption_venue_corrected" : "reviewed_structured_evidence_corrected",
+    "reviewed_structured_evidence_corrected",
     {
       actor,
       note: moderationNote,
@@ -730,10 +693,10 @@ export async function repairReviewedStructuredEventEvidenceHandler(
         },
         eventAfter: {
           title: nextTitle,
-          time: effectiveEvent.time,
+          time: nextTime,
           venue: nextVenue,
           artists: nextArtists,
-          description: effectiveEvent.description,
+          description: args.nextDescription,
           updatedAt,
         },
         sourceLink: {
@@ -744,8 +707,7 @@ export async function repairReviewedStructuredEventEvidenceHandler(
         },
         receiptBeforeUpdatedAt: receipt.updatedAt,
         receiptAfterUpdatedAt: receiptUpdatedAt,
-        ...reviewedFallback.audit,
-        ...correctionEvidence,
+        reviewedPosterCorrection: nextFields.reviewedPosterCorrection,
       },
     },
   );
@@ -895,10 +857,8 @@ export async function repairReviewedStructuredEventVenueHandler(
   const persistedModerationNote = args.preserveExistingModerationNote
     ? retainedModerationNote(event.moderationNote, moderationNote)
     : moderationNote;
-  const reviewedFallback = supersedeReviewedAccountVenueFallback({ currentFields, event, venueFields,
-    nextVenue, reviewedAt, actor, evidence: venueEvidence });
   const nextFields = {
-    ...reviewedFallback.fields,
+    ...currentFields,
     normalizedVenue: nextVenue,
     moderationAutoApproved: false,
     moderationAutoApproveRule: null,
@@ -1032,7 +992,6 @@ export async function repairReviewedStructuredEventVenueHandler(
         venue: nextVenue,
         venueEvidence,
         venueId: venueFields.venueId,
-        ...reviewedFallback.audit,
       },
     },
   );
@@ -1044,7 +1003,37 @@ export async function repairReviewedStructuredEventVenueHandler(
   };
 }
 
-/** Correct a source-attested title while preserving the bound occurrence. */
+/**
+ * Corrects a source-attested title without changing the scheduled occurrence.
+ * The source link, receipt and first-class occurrence advance together.
+ */
+export function reviewedTitleEvidenceMatchesBoundScheduleRow(args: {
+  currentFields: Record<string, unknown>;
+  rawExtraction: Record<string, unknown>;
+  eventDate: string;
+  nextTitle: string;
+  titleEvidence: string;
+}): boolean {
+  const rowIndex = args.currentFields.splitEventIndex;
+  const scheduleEntries = args.rawExtraction.schedule_entries;
+  const row = Number.isSafeInteger(rowIndex) && Number(rowIndex) >= 1 && Array.isArray(scheduleEntries)
+    ? scheduleEntries[(rowIndex as number) - 1]
+    : null;
+  if (!row || typeof row !== "object" || Array.isArray(row)) return false;
+  const sourceText = (row as Record<string, unknown>).source_text;
+  const sourceDate = (row as Record<string, unknown>).date;
+  if (typeof sourceText !== "string" || sourceDate !== args.eventDate) return false;
+  const normalizeWhitespace = (value: string) =>
+    value.normalize("NFKC").replace(/\s+/gu, " ").trim();
+  const foldLetters = (value: string) =>
+    normalizeWhitespace(value).normalize("NFD").replace(/\p{M}/gu, "").toLocaleLowerCase("sr-Latn");
+  return (
+    sourceText === args.currentFields.rowSourceText &&
+    normalizeWhitespace(sourceText) === args.titleEvidence &&
+    foldLetters(sourceText).includes(foldLetters(args.nextTitle))
+  );
+}
+
 export async function repairReviewedStructuredEventTitleHandler(
   ctx: MutationCtx,
   args: {
@@ -1358,10 +1347,8 @@ export async function repairReviewedMultiSourceEventVenueHandler(
   }
   const reviewedAt = Date.now();
   const persistedModerationNote = retainedModerationNote(event.moderationNote, moderationNote);
-  const reviewedFallback = supersedeReviewedAccountVenueFallback({ currentFields, event, venueFields,
-    nextVenue, reviewedAt, actor, evidence: venueEvidence });
   const nextFields = {
-    ...reviewedFallback.fields,
+    ...currentFields,
     normalizedVenue: nextVenue,
     moderationAutoApproved: false,
     moderationAutoApproveRule: null,
@@ -1486,7 +1473,6 @@ export async function repairReviewedMultiSourceEventVenueHandler(
       venueEvidence,
       sourceLinkIds: links.map((link) => link._id),
       expectedSources: args.expectedSources,
-      ...reviewedFallback.audit,
     },
   });
   return { updated: true, updatedAt, sourceCount: links.length, status: "approved" as const };

@@ -18,6 +18,11 @@ import {
 } from "@/lib/events/public-event-venue-fields";
 import { sortPublicEventsByDateVenueTimeTitle } from "@/lib/events/public-event-sort";
 import {
+  DEFAULT_EVENT_TYPE,
+  canonicalizeEventType,
+  eventTypeFromVenueCategory,
+} from "@/lib/taxonomy/venue-types";
+import {
   buildCanonicalVenueNamesByHandle,
   canonicalizeVenueName,
   normalizeHandle,
@@ -379,7 +384,6 @@ function cachePendingPublicEventsLoad(
 function normalizePublicEvent(
   event: PublicEvent,
   venueLookup: VenueLookup,
-  options: { inferLegacyVenue?: boolean } = {},
 ): PublicEvent {
   const hasNonPublicLinkedVenue =
     isRealVenueId(event.venueId) && !venueLookup.publicVenueIds.has(event.venueId);
@@ -387,29 +391,33 @@ function normalizePublicEvent(
     event,
     !hasNonPublicLinkedVenue,
   );
+  const canonicalEventType = canonicalizeEventType(publicEvent.eventType);
   const canonicalVenueName = canonicalizeVenueName(
     publicEvent.venue,
     venueLookup.canonicalVenueNamesByHandle,
   );
-  const linkedVenue = publicEvent.venueId ? venueLookup.venuesById.get(publicEvent.venueId) : undefined;
-  const legacyVenue = options.inferLegacyVenue === false
+  const venue = hasNonPublicLinkedVenue
     ? undefined
-    : venueLookup.venuesByHandle.get(
-      normalizeHandle(publicEvent.venueInstagramHandle ?? ""),
-    ) ??
+    : (publicEvent.venueId ? venueLookup.venuesById.get(publicEvent.venueId) : undefined) ??
+      venueLookup.venuesByHandle.get(
+        normalizeHandle(publicEvent.venueInstagramHandle ?? ""),
+      ) ??
       venueLookup.venuesByName.get(normalizeVenueLookupKey(publicEvent.venue)) ??
       (canonicalVenueName
         ? venueLookup.venuesByName.get(normalizeVenueLookupKey(canonicalVenueName))
         : undefined);
-  const venue = hasNonPublicLinkedVenue
-    ? undefined
-    : linkedVenue ?? legacyVenue;
   const venueId =
     isRealVenueId(publicEvent.venueId) && venueLookup.publicVenueIds.has(publicEvent.venueId)
       ? publicEvent.venueId
       : isRealVenueId(venue?._id) && venueLookup.publicVenueIds.has(venue._id)
         ? venue._id
         : undefined;
+  const venueCategory = venue?.category ?? undefined;
+  const eventVenueCategory = publicEvent.venueCategory ?? undefined;
+  const eventType =
+    canonicalEventType === DEFAULT_EVENT_TYPE
+      ? eventTypeFromVenueCategory(venueCategory ?? eventVenueCategory)
+      : canonicalEventType;
   const time = getDisplayEventTime(publicEvent.time);
   const timeProvenance = resolveEventTimeProvenance(publicEvent);
   const displayTime = resolveEventTimeDisplay({
@@ -433,6 +441,7 @@ function normalizePublicEvent(
     displayTimeLabel: displayTime.label,
     displayTimeSource: displayTime.source,
     ...(displayTime.startLabel ? { displayTimeStart: displayTime.startLabel } : {}),
+    eventType,
     ...(venue?.instagramHandle || publicEvent.venueInstagramHandle
       ? { instagramHandle: venue?.instagramHandle || publicEvent.venueInstagramHandle }
       : {}),
@@ -554,9 +563,7 @@ async function loadAllPublicCalendarEventsWindow(
 
   return sortPublicEventsByDateVenueTimeTitle(
     events.map((event) =>
-      // Calendar day details and month counters must share exact canonical
-      // bindings. An unrelated event in a wider window cannot supply one.
-      normalizePublicEvent(event, venueLookup, { inferLegacyVenue: false }),
+      normalizePublicEvent(event, venueLookup),
     ),
   );
 }

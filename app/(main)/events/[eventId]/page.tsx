@@ -13,27 +13,22 @@ import {
 } from "lucide-react";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
-import { EventCategoryPill, EventMetaRow, EventPriceChip, EventSecondaryTags } from "@/components/events/event-meta";
-import { EventSessionLabel } from "@/components/events/event-session-label";
+import { EventCategoryPill, EventMetaRow, EventPriceChip } from "@/components/events/event-meta";
 import { EventCalendarBackLink } from "@/components/calendar/calendar-scroll-restoration";
 import { ReadMoreText } from "@/components/ui/read-more-text";
 import { JsonLd } from "@/components/seo/json-ld";
 import {
+  UNKNOWN_EVENT_TIME_LABEL,
+  getDisplayEventTime,
   resolveEventTimeDisplay,
   type EventDayPeriod,
   type EventTimeDisplaySource,
-  type EventTimeStatus,
 } from "@/lib/events/event-time";
-import { resolveEventTimePresentation } from "@/lib/events/event-time-presentation";
 import { SaveEventButton } from "@/components/events/save-event-button";
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
 import { VenueWeeklyHours } from "@/components/venues/venue-weekly-hours";
-import { cn } from "@/lib/utils";
 import { loadPublicEventDetailData } from "@/lib/events/public-event-detail-data";
-import {
-  projectPublicEventVenueDisplay,
-  sanitizeVenueLinkedPublicEventFields,
-} from "@/lib/events/public-event-venue-fields";
+import { projectPublicEventVenueDisplay } from "@/lib/events/public-event-venue-fields";
 import {
   getPublicReviewedSourceUpdate,
   type ReviewedSourceUpdate,
@@ -43,6 +38,11 @@ import {
   hasDiscoverImageSource,
 } from "@/lib/discover/discover-image-source";
 import { isPlausibleConvexPublicId } from "@/lib/convex/public-id";
+import {
+  DEFAULT_EVENT_TYPE,
+  canonicalizeEventType,
+  eventTypeFromVenueCategory,
+} from "@/lib/taxonomy/venue-types";
 import {
   buildCanonicalVenueNamesByHandle,
   canonicalizeVenueName,
@@ -66,7 +66,6 @@ type EventRecord = {
   title: string;
   date: string;
   time?: string;
-  timeStatus?: EventTimeStatus | null;
   dayPeriod?: EventDayPeriod;
   displayTimeEnd?: string;
   displayTimeLabel?: string;
@@ -192,24 +191,29 @@ const loadEvent = cache(async function loadEvent(eventId: string): Promise<Event
   }
 
   const venue = event.venueId
-    ? venues.find((candidate) => candidate._id === event.venueId)
+    ? venues[0] ?? findVenueForEvent(event, venues)
     : findVenueForEvent(event, venues);
+  const canonicalEventType = canonicalizeEventType(event.eventType);
   const displayTime = resolveEventTimeDisplay({
     date: event.date,
     time: event.time,
     venueHours: venue,
   });
+  event.eventType =
+    canonicalEventType === DEFAULT_EVENT_TYPE
+      ? eventTypeFromVenueCategory(venue?.category ?? event.venueCategory)
+      : canonicalEventType;
   event.dayPeriod = displayTime.dayPeriod;
   event.displayTimeEnd = displayTime.endLabel;
   event.displayTimeLabel = displayTime.label;
   event.displayTimeSource = displayTime.source;
   event.displayTimeStart = displayTime.startLabel;
   event.venueCategory = venue?.category ?? event.venueCategory ?? undefined;
-  const publicEvent = projectPublicEventVenueDisplay(event, venue);
+  event.venue = projectPublicEventVenueDisplay(event, venue).venue;
   // The public venue query fails closed. Never retain the denormalized ID
   // when the referenced venue is pending or hidden.
-  publicEvent.venueId = venue?._id;
-  publicEvent.venueHours = venue
+  event.venueId = venue?._id;
+  event.venueHours = venue
     ? {
         googlePlaceId: venue.googlePlaceId ?? null,
         hoursError: venue.hoursError ?? null,
@@ -222,7 +226,7 @@ const loadEvent = cache(async function loadEvent(eventId: string): Promise<Event
         osmElementType: venue.osmElementType ?? null,
       }
     : undefined;
-  return sanitizeVenueLinkedPublicEventFields(publicEvent, Boolean(venue));
+  return event;
 });
 
 function formatEventDate(value: string): string {
@@ -321,18 +325,16 @@ function InfoTile({
   icon: Icon,
   label,
   value,
-  valueClassName,
 }: {
   detail?: ReactNode;
   icon: typeof CalendarDays;
   label: string;
   value: string;
-  valueClassName?: string;
 }) {
   return (
     <div className="rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3">
       <p className="section-kicker">{label}</p>
-      <p className={cn("mt-1.5 flex items-start gap-2 text-sm font-semibold leading-5 text-foreground", valueClassName)}>
+      <p className="mt-1.5 flex items-start gap-2 text-sm font-semibold leading-5 text-foreground">
         <Icon className="mt-0.5 h-4 w-4 flex-none text-primary" />
         <span className="min-w-0 break-words">{value}</span>
       </p>
@@ -373,7 +375,8 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
   if (!event) {
     notFound();
   }
-  const eventTime = resolveEventTimePresentation(event);
+  const eventTime =
+    event.displayTimeLabel ?? getDisplayEventTime(event.time) ?? UNKNOWN_EVENT_TIME_LABEL;
   const whatToKnowText = event.sourceCaption?.trim() || event.description?.trim() || "";
   const reviewedSourceUpdate = getPublicReviewedSourceUpdate(event);
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
@@ -387,15 +390,16 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
     ...(venueHref ? [{ name: event.venue, path: venueHref }] : []),
     { name: event.title, path: `/events/${event._id}` },
   ];
-  const eventSchema = buildEventStructuredData({
-    ...event,
-    description: event.description,
-    imageUrl: buildStableEventImageUrl(event) ?? undefined,
-  });
 
   return (
     <main className="app-page gap-3 pb-[calc(9.5rem+env(safe-area-inset-bottom))] md:pb-9">
-      {eventSchema ? <JsonLd data={eventSchema} /> : null}
+      <JsonLd
+        data={buildEventStructuredData({
+          ...event,
+          description: event.description,
+          imageUrl: buildStableEventImageUrl(event) ?? undefined,
+        })}
+      />
       <JsonLd data={buildBreadcrumbStructuredData(breadcrumbItems)} />
       <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
         <Link className="hover:text-primary" href="/">Belgrade events</Link>
@@ -423,7 +427,6 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
               <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-6 lg:px-7">
                 <div className="flex flex-wrap gap-2">
                   <EventCategoryPill className="text-xs" event={event} />
-                  <EventSecondaryTags className="text-xs" event={event} />
                   <EventPriceChip className="text-xs" value={event.ticketPrice} />
                 </div>
 
@@ -432,17 +435,17 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                   <h1 className="text-2xl font-semibold leading-tight tracking-[-0.045em] sm:text-4xl lg:text-5xl">
                     {event.title}
                   </h1>
-                  <EventSessionLabel className="text-sm sm:text-base" event={event} />
                 </div>
 
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                   <InfoTile icon={CalendarDays} label="Date" value={formatEventDate(event.date)} />
-                  <InfoTile
-                    icon={Clock3}
-                    label={eventTime.heading}
-                    value={eventTime.label}
-                    valueClassName={eventTime.kind === "venue_hours" ? "font-normal" : undefined}
-                  />
+                  {eventTime ? (
+                    <InfoTile
+                      icon={Clock3}
+                      label="Time"
+                      value={eventTime}
+                    />
+                  ) : null}
                   <div className="relative overflow-hidden rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3 transition hover:border-primary/35 hover:bg-white/[0.045]">
                     {venueHref ? (
                       <Link
@@ -466,14 +469,6 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                         />
                       ) : null}
                     </p>
-                    {event.venueLocation ? (
-                      <p
-                        className="pointer-events-none relative z-10 mt-1.5 break-words pl-6 text-xs leading-5 text-muted-foreground"
-                        data-event-venue-address="true"
-                      >
-                        {event.venueLocation}
-                      </p>
-                    ) : null}
                     <EventMetaRow className="pointer-events-none relative z-10 mt-2 pl-6" event={event} />
                   </div>
                 </div>

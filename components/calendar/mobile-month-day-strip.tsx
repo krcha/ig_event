@@ -2,9 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type MouseEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useTransition } from "react";
+import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useTransition } from "react";
 import { cn } from "@/lib/utils";
-import type { EventPrimaryCategory } from "@/lib/taxonomy/event-categories";
 
 type MobileMonthDay = {
   dayKey: string;
@@ -12,7 +11,7 @@ type MobileMonthDay = {
   weekdayLabel: string;
   dayNumber: number;
   eventCount: number;
-  categoryCounts: Record<EventPrimaryCategory, number>;
+  categoryCounts: Record<"club" | "live" | "culture" | "event", number>;
   isWeekend: boolean;
   isUpcoming: boolean;
   isSelected: boolean;
@@ -25,151 +24,54 @@ type MobileMonthDayStripProps = {
   surface?: "mobile" | "desktop";
 };
 
-const DATE_STRIP_STORAGE_PREFIX = "eventzeka:date-strip:v1:";
-
-function readStoredPosition(key: string): { day: string; left: number } | null {
-  try {
-    const raw = window.sessionStorage.getItem(key);
-    const value = raw ? JSON.parse(raw) as { day?: unknown; left?: unknown } : null;
-    return value && typeof value.day === "string" && typeof value.left === "number" &&
-      Number.isFinite(value.left) && value.left >= 0
-      ? { day: value.day, left: value.left }
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function getAnchorPosition(container: HTMLDivElement, anchor: HTMLAnchorElement) {
-  const containerBounds = container.getBoundingClientRect();
-  const anchorBounds = anchor.getBoundingClientRect();
-  const left = container.scrollLeft + anchorBounds.left - containerBounds.left;
-  const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
-  return {
-    centeredLeft: Math.min(maxLeft, Math.max(0, left - (container.clientWidth - anchorBounds.width) / 2)),
-    isVisibleAt: (scrollLeft: number) => left >= scrollLeft &&
-      left + anchorBounds.width <= scrollLeft + container.clientWidth,
-    maxLeft,
-  };
-}
-
 export function MobileMonthDayStrip({ days, surface = "mobile" }: MobileMonthDayStripProps) {
   const router = useRouter();
   const [, startTransition] = useTransition();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const anchorRef = useRef<HTMLAnchorElement | null>(null);
-  const alignedStorageKeyRef = useRef<string | null>(null);
+  const hasAlignedSelectionRef = useRef(false);
   const selectedDayKey = useMemo(
     () => days.find((day) => day.isAnchor)?.dayKey ?? days.find((day) => day.isSelected)?.dayKey,
     [days],
   );
-  const selectedDayKeyRef = useRef(selectedDayKey);
-  const storageKey = `${DATE_STRIP_STORAGE_PREFIX}${surface}:${days[0]?.dayKey.slice(0, 7) ?? ""}`;
-  const activeStorageKeyRef = useRef(storageKey);
-  useLayoutEffect(() => {
-    selectedDayKeyRef.current = selectedDayKey;
-    activeStorageKeyRef.current = storageKey;
-  }, [selectedDayKey, storageKey]);
 
   const shouldReduceMotion = useCallback(
     () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
     [],
   );
 
-  const scrollAnchorIntoView = useCallback((anchor: HTMLAnchorElement, allowSmooth: boolean) => {
-    const container = containerRef.current;
-
-    if (!container || container.clientWidth === 0) {
-      return;
-    }
-
-    const { centeredLeft } = getAnchorPosition(container, anchor);
-    const nearby = Math.abs(centeredLeft - container.scrollLeft) <= container.clientWidth;
-    container.scrollTo({
-      left: centeredLeft,
-      behavior: allowSmooth && nearby && !shouldReduceMotion() ? "smooth" : "instant",
-    });
-  }, [shouldReduceMotion]);
-
-  useLayoutEffect(() => {
-    if (!selectedDayKey) {
-      return;
-    }
-
+  const scrollAnchorIntoView = useCallback((behavior: ScrollBehavior) => {
     const container = containerRef.current;
     const anchor = anchorRef.current;
+
     if (!container || !anchor) {
       return;
     }
 
-    function alignSelection(allowSmooth: boolean) {
-      if (!container || !anchor || container.clientWidth === 0) {
-        return;
-      }
-      const position = getAnchorPosition(container, anchor);
-      if (alignedStorageKeyRef.current !== storageKey) {
-        const stored = readStoredPosition(storageKey);
-        const storedLeft = stored ? Math.min(stored.left, position.maxLeft) : null;
-        const restoreStored = stored && storedLeft !== null &&
-          (stored.day === selectedDayKey || position.isVisibleAt(storedLeft));
-        // "auto" can inherit CSS smooth scrolling. Initial alignment and
-        // document/back restoration must never animate from the month's start.
-        container.scrollTo({
-          left: restoreStored ? storedLeft : position.centeredLeft,
-          behavior: "instant",
-        });
-        alignedStorageKeyRef.current = storageKey;
-      } else if (!position.isVisibleAt(container.scrollLeft)) {
-        scrollAnchorIntoView(anchor, allowSmooth);
-      }
-    }
+    const targetLeft = Math.max(
+      0,
+      anchor.offsetLeft - (container.clientWidth - anchor.clientWidth) / 2,
+    );
 
-    alignSelection(true);
-    const resizeObserver = typeof ResizeObserver === "undefined" ? null
-      : new ResizeObserver(() => alignSelection(false));
-    resizeObserver?.observe(container);
-
-    return () => resizeObserver?.disconnect();
-  }, [scrollAnchorIntoView, selectedDayKey, storageKey]);
+    container.scrollTo({
+      left: targetLeft,
+      behavior,
+    });
+  }, []);
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) {
+    if (!selectedDayKey) {
       return;
     }
-    let saveFrame = 0;
-    function savePosition() {
-      if (!container || container.clientWidth === 0 || activeStorageKeyRef.current !== storageKey) {
-        return;
-      }
-      try {
-        window.sessionStorage.setItem(storageKey, JSON.stringify({
-          day: selectedDayKeyRef.current,
-          left: container.scrollLeft,
-        }));
-      } catch {
-        // Date navigation remains available when storage is disabled or full.
-      }
-    }
-    function onScroll() {
-      if (saveFrame !== 0) {
-        return;
-      }
-      saveFrame = window.requestAnimationFrame(() => {
-        saveFrame = 0;
-        savePosition();
-      });
-    }
 
-    container.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("pagehide", savePosition);
-    return () => {
-      if (saveFrame !== 0) window.cancelAnimationFrame(saveFrame);
-      savePosition();
-      container.removeEventListener("scroll", onScroll);
-      window.removeEventListener("pagehide", savePosition);
-    };
-  }, [storageKey]);
+    const frame = window.requestAnimationFrame(() => {
+      const behavior = hasAlignedSelectionRef.current && !shouldReduceMotion() ? "smooth" : "auto";
+      scrollAnchorIntoView(behavior);
+      hasAlignedSelectionRef.current = true;
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [scrollAnchorIntoView, selectedDayKey, shouldReduceMotion]);
 
   const handleDayClick = useCallback(
     (event: MouseEvent<HTMLAnchorElement>) => {
@@ -185,7 +87,11 @@ export function MobileMonthDayStrip({ days, surface = "mobile" }: MobileMonthDay
       }
 
       event.preventDefault();
-      scrollAnchorIntoView(event.currentTarget, true);
+      event.currentTarget.scrollIntoView({
+        behavior: shouldReduceMotion() ? "auto" : "smooth",
+        block: "nearest",
+        inline: "center",
+      });
 
       const targetUrl = new URL(event.currentTarget.href);
       const currentUrl = new URL(window.location.href);
@@ -203,13 +109,13 @@ export function MobileMonthDayStrip({ days, surface = "mobile" }: MobileMonthDay
         router.push(nextUrl, { scroll: false });
       });
     },
-    [router, scrollAnchorIntoView, startTransition],
+    [router, shouldReduceMotion, startTransition],
   );
 
   return (
     <div
       className={cn(
-        "flex snap-x snap-mandatory gap-1.5 overflow-x-auto overscroll-x-contain pb-0.5 [scroll-padding-inline:0.75rem] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+        "flex snap-x snap-mandatory gap-1.5 overflow-x-auto overscroll-x-contain scroll-smooth pb-0.5 [scroll-padding-inline:0.75rem] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         surface === "desktop" ? "mt-1 px-0" : "-mx-1 mt-2 px-1",
       )}
       data-calendar-date-strip-surface={surface}
@@ -228,7 +134,6 @@ export function MobileMonthDayStrip({ days, surface = "mobile" }: MobileMonthDay
           data-calendar-date-event-count={day.eventCount}
           data-calendar-date-kind-counts={JSON.stringify(day.categoryCounts)}
           data-calendar-date-selected={day.isSelected ? "true" : undefined}
-          data-calendar-client-navigation="true"
           data-calendar-date-weekend={day.isWeekend ? "true" : undefined}
           data-calendar-date-upcoming={day.isUpcoming ? "true" : undefined}
           data-calendar-desktop-date={surface === "desktop" ? day.dayKey : undefined}
@@ -236,7 +141,7 @@ export function MobileMonthDayStrip({ days, surface = "mobile" }: MobileMonthDay
           href={day.href}
           key={day.dayKey}
           onClick={handleDayClick}
-          ref={day.dayKey === selectedDayKey ? anchorRef : undefined}
+          ref={day.isAnchor ? anchorRef : undefined}
           scroll={false}
         >
           <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">

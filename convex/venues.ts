@@ -9,10 +9,7 @@ import {
   normalizeVenueComparableText,
   toSearchableText,
 } from "../lib/pipeline/venue-normalization";
-import {
-  canonicalizeVenueCategory,
-  venueRequiresPhysicalDetails,
-} from "../lib/taxonomy/venue-types";
+import { canonicalizeVenueCategory } from "../lib/taxonomy/venue-types";
 import {
   buildVenueLifecycleMigrationPlan,
   buildVenueLifecycleRollbackManifest,
@@ -91,55 +88,6 @@ const normalizedInstagramHandleMigrationRow = v.object({
 const MAX_INSTAGRAM_HANDLE_NORMALIZATION_PAGE_SIZE = 200;
 const MAX_INSTAGRAM_HANDLE_NORMALIZATION_BATCH_SIZE = 25;
 const MAX_VENUES_FOR_ALIAS_VALIDATION = 2_000;
-const MAX_REVIEWED_RENAME_OCCURRENCES = 32;
-const reviewedRenameUnboundOccurrence = v.object({
-  id: v.id("sourceOccurrences"),
-  updatedAt: v.number(),
-  snapshotJson: v.string(),
-});
-
-type ReviewedRenameUnboundOccurrence = {
-  id: Id<"sourceOccurrences">;
-  updatedAt: number;
-  snapshotJson: string;
-};
-
-function reviewedRenameOccurrenceSnapshot(occurrence: Doc<"sourceOccurrences">): string {
-  return JSON.stringify(Object.fromEntries(
-    Object.entries(occurrence).sort(([left], [right]) => left.localeCompare(right)),
-  ));
-}
-
-export function assertReviewedVenueRenameOccurrences(
-  occurrences: readonly Doc<"sourceOccurrences">[],
-  expectedEventIds: ReadonlySet<Id<"events">>,
-  expectedUnboundOccurrences: readonly ReviewedRenameUnboundOccurrence[] = [],
-): void {
-  if (
-    occurrences.length > MAX_REVIEWED_RENAME_OCCURRENCES ||
-    expectedUnboundOccurrences.length > MAX_REVIEWED_RENAME_OCCURRENCES ||
-    new Set(expectedUnboundOccurrences.map((row) => row.id)).size !== expectedUnboundOccurrences.length ||
-    expectedUnboundOccurrences.some((row) => !Number.isSafeInteger(row.updatedAt))
-  ) {
-    throw new Error("Referenced venue occurrence plan exceeds the exact safe bound.");
-  }
-  const expectedById = new Map(expectedUnboundOccurrences.map((row) => [row.id, row]));
-  const unboundOccurrences = occurrences.filter((occurrence) =>
-    occurrence.state !== "satisfied" || !occurrence.canonicalEventId ||
-    !expectedEventIds.has(occurrence.canonicalEventId),
-  );
-  if (
-    unboundOccurrences.length !== expectedUnboundOccurrences.length ||
-    unboundOccurrences.some((occurrence) => {
-      const expected = expectedById.get(occurrence._id);
-      return occurrence.state === "satisfied" || occurrence.canonicalEventId !== undefined ||
-        !expected || expected.updatedAt !== occurrence.updatedAt ||
-        expected.snapshotJson !== reviewedRenameOccurrenceSnapshot(occurrence);
-    })
-  ) {
-    throw new Error("Referenced venue has an unplanned source occurrence.");
-  }
-}
 
 const venueHoursPatch = {
   hoursSource: v.optional(venueHoursSource),
@@ -364,9 +312,7 @@ async function collectPublicVenues(ctx: QueryCtx): Promise<Doc<"venues">[]> {
       .withIndex("by_isActive", (q) => q.eq("isActive", true))
       .take(MAX_PUBLIC_VENUE_DIRECTORY_LIMIT),
   ]);
-  return mergeUniqueVenues([...explicit, ...legacy]).filter(
-    (venue) => isVenuePublic(venue) && venueRequiresPhysicalDetails(venue.category),
-  );
+  return mergeUniqueVenues([...explicit, ...legacy]).filter(isVenuePublic);
 }
 
 type LifecycleAuditSnapshot = {
@@ -591,7 +537,7 @@ export const listPublicVenueFieldsByIds = query({
     }
     const venues = await Promise.all(uniqueIds.map((id) => ctx.db.get(id)));
     return venues.flatMap((venue) =>
-      venue && isVenuePublic(venue) && venueRequiresPhysicalDetails(venue.category)
+      venue && isVenuePublic(venue)
         ? [
             {
               _id: venue._id,
@@ -668,7 +614,7 @@ export const getPublicVenuePage = query({
     }
 
     const venue = await ctx.db.get(venueId);
-    if (!venue || !isVenuePublic(venue) || !venueRequiresPhysicalDetails(venue.category)) {
+    if (!venue || !isVenuePublic(venue)) {
       return null;
     }
 
@@ -926,12 +872,8 @@ export const updateVenue = mutation({
         ? { category: canonicalizeVenueCategory(explicitPatch.category) }
         : {}),
     };
-    // Public event reads project the current curated venue name. Renaming that
-    // label must not rewrite source-bound event facts or require a rebind.
-    // Classifying an account as a promoter removes it from physical-place
-    // projections without rewriting historical events or source occurrences.
-    // Every other stored physical field still requires the migration guard.
     const denormalizedFields = [
+      "name",
       "instagramHandle",
       "category",
       "location",
@@ -940,7 +882,6 @@ export const updateVenue = mutation({
     ] as const;
     const changesDenormalizedIdentity = denormalizedFields.some(
       (field) =>
-        !(field === "category" && patch.category === "promoter") &&
         Object.prototype.hasOwnProperty.call(patch, field) &&
         patch[field] !== existing[field],
     );
@@ -1032,45 +973,11 @@ export const updateVenue = mutation({
   },
 });
 
-/** Exact bounded occurrence snapshots for a service-reviewed venue rename. */
-export const getReviewedReferencedVenueRenameOccurrences = query({
-  args: { id: v.id("venues"), serviceSecret: v.string() },
-  returns: v.array(v.object({
-    id: v.id("sourceOccurrences"),
-    updatedAt: v.number(),
-    state: v.union(v.literal("expected"), v.literal("deferred"), v.literal("satisfied"), v.literal("superseded")),
-    canonicalEventId: v.optional(v.id("events")),
-    snapshotJson: v.string(),
-  })),
-  handler: async (ctx, args) => {
-    const authorization = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
-    if (authorization.kind !== "service") {
-      throw new Error("Reviewed venue rename planning requires service authentication.");
-    }
-    const venue = await ctx.db.get(args.id);
-    if (!venue || !isVenuePublic(venue)) {
-      throw new Error("Reviewed venue rename planning requires a public venue.");
-    }
-    const occurrences = await ctx.db.query("sourceOccurrences")
-      .withIndex("by_venue", (q) => q.eq("venueId", args.id))
-      .take(MAX_REVIEWED_RENAME_OCCURRENCES + 1);
-    if (occurrences.length > MAX_REVIEWED_RENAME_OCCURRENCES) {
-      throw new Error("Reviewed venue rename occurrences exceed the safe bounded limit.");
-    }
-    return occurrences.map((occurrence) => ({
-      id: occurrence._id,
-      updatedAt: occurrence.updatedAt,
-      state: occurrence.state,
-      ...(occurrence.canonicalEventId ? { canonicalEventId: occurrence.canonicalEventId } : {}),
-      snapshotJson: reviewedRenameOccurrenceSnapshot(occurrence),
-    }));
-  },
-});
-
 /**
- * Renames a public venue and its exact approved event set in one transaction.
- * Independently acknowledged unbound source occurrences retain their original
- * facts and state; each reviewed event advances its receipt and occurrence.
+ * Renames a referenced public venue and its small, exact set of approved
+ * source-attested events in one transaction. Ordinary updateVenue deliberately
+ * rejects referenced identity changes; this reviewed path advances each
+ * compatibility receipt and first-class occurrence with its event.
  */
 export const renameReferencedVenueWithReviewedEvents = mutation({
   args: {
@@ -1078,7 +985,6 @@ export const renameReferencedVenueWithReviewedEvents = mutation({
     expectedUpdatedAt: v.number(),
     expectedName: v.string(),
     nextName: v.string(),
-    nextLocation: v.optional(v.string()),
     expectedEvents: v.array(v.object({
       id: v.id("events"),
       updatedAt: v.number(),
@@ -1088,7 +994,6 @@ export const renameReferencedVenueWithReviewedEvents = mutation({
       receiptId: v.id("instagramSourceOccurrenceReceipts"),
       receiptUpdatedAt: v.number(),
     })),
-    expectedUnboundOccurrences: v.optional(v.array(reviewedRenameUnboundOccurrence)),
     venueEvidence: v.string(),
     auditNote: v.string(),
     serviceSecret: v.string(),
@@ -1104,15 +1009,13 @@ export const renameReferencedVenueWithReviewedEvents = mutation({
       throw new Error("Referenced venue rename requires service authentication.");
     }
     const nextName = args.nextName.normalize("NFKC").replace(/\s+/gu, " ").trim();
-    const nextLocation = args.nextLocation?.normalize("NFKC").replace(/\s+/gu, " ").trim();
     const auditNote = args.auditNote.normalize("NFKC").replace(/\s+/gu, " ").trim();
     const venueEvidence = args.venueEvidence.normalize("NFKC").replace(/\s+/gu, " ").trim();
     if (
       !nextName || nextName !== args.nextName || nextName === args.expectedName ||
-      (nextLocation !== undefined && (!nextLocation || nextLocation.length > 300 || nextLocation !== args.nextLocation)) ||
       !venueEvidence || auditNote.length < 20 ||
       !Number.isSafeInteger(args.expectedUpdatedAt) ||
-      (args.expectedEvents.length === 0 && !args.expectedUnboundOccurrences?.length) ||
+      args.expectedEvents.length < 1 ||
       args.expectedEvents.length > 12 ||
       new Set(args.expectedEvents.map((item) => item.id)).size !== args.expectedEvents.length
     ) {
@@ -1162,12 +1065,16 @@ export const renameReferencedVenueWithReviewedEvents = mutation({
     const boundOccurrences = await ctx.db
       .query("sourceOccurrences")
       .withIndex("by_venue", (q) => q.eq("venueId", venue._id))
-      .take(MAX_REVIEWED_RENAME_OCCURRENCES + 1);
-    assertReviewedVenueRenameOccurrences(
-      boundOccurrences,
-      new Set(expectedById.keys()),
-      args.expectedUnboundOccurrences,
-    );
+      .take(33);
+    if (
+      boundOccurrences.length > 32 ||
+      boundOccurrences.some((occurrence) =>
+        occurrence.state !== "satisfied" ||
+        !occurrence.canonicalEventId ||
+        !expectedById.has(occurrence.canonicalEventId))
+    ) {
+      throw new Error("Referenced venue has an unplanned source occurrence.");
+    }
     for (const event of linkedEvents) {
       const expected = expectedById.get(event._id);
       if (
@@ -1213,9 +1120,8 @@ export const renameReferencedVenueWithReviewedEvents = mutation({
       }
     }
     const updatedAt = Math.max(Date.now(), venue.updatedAt + 1);
-    const publicPatch = { name: nextName, ...(nextLocation !== undefined ? { location: nextLocation } : {}) };
-    const renamedVenue = { ...venue, ...publicPatch, updatedAt };
-    await ctx.db.patch(venue._id, { ...publicPatch, updatedAt });
+    const renamedVenue = { ...venue, name: nextName, updatedAt };
+    await ctx.db.patch(venue._id, { name: nextName, updatedAt });
     await syncVenueRecordIdentities(ctx, renamedVenue);
     for (const expected of [...args.expectedEvents].sort((a, b) =>
       String(a.id).localeCompare(String(b.id)))) {
@@ -1243,14 +1149,8 @@ export const renameReferencedVenueWithReviewedEvents = mutation({
       venueId: venue._id,
       action: "venue.reviewed_referenced_name_corrected",
       actor: authorization.actor,
-      beforeJson: JSON.stringify({ name: venue.name, location: venue.location ?? null, updatedAt: venue.updatedAt }),
-      afterJson: JSON.stringify({
-        name: nextName,
-        location: renamedVenue.location ?? null,
-        updatedAt,
-        preservedUnboundOccurrences: (args.expectedUnboundOccurrences ?? []).map(({ id, updatedAt: revision }) =>
-          ({ id, updatedAt: revision })),
-      }),
+      beforeJson: JSON.stringify({ name: venue.name, updatedAt: venue.updatedAt }),
+      afterJson: JSON.stringify({ name: nextName, updatedAt }),
       note: auditNote,
       createdAt: Date.now(),
     });

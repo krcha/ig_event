@@ -1,0 +1,19 @@
+{
+  "snapshotRole": "Historical dedicated social API service source capture; not canonical public web",
+  "proposedBranch": "codex/social-production-v24",
+  "proposedParent": "9653eec1068af75b3322cc53145c4f503750fdc1",
+  "originalSourceGitCommit": null,
+  "capturedSourcePath": "/root/ig_event-releases/agenda-v24-publication-recovery-20261020",
+  "sourceArchiveSha256": "a1396960b4fc562cb2118b3ffa8d0cd406405304aef611e0326705bdad9ba4db",
+  "sourceArchiveBytes": 35126970,
+  "captureCoverageManifestSha256": "3ef736599336842b04d4477c526590f9cbf30bef339fbf0827e7c520c0eeef41",
+  "sanitizedRuntimeRecipeSha256": "954cb400123ac0e1cebb679508ad4f96c7e750c0785cb3ef5fe350c4efdf4992",
+  "runtimeRecoveryExtraSha256": "4f1db44f95b08dabc43f5c735e795357120ff9e90035bc4bd495c1719dd8f0ca",
+  "capturedSourceFileCount": 710,
+  "capturedSourceBytes": 55172454,
+  "capturedBytesPreserved": true,
+  "fullServerCheckoutClaimed": false,
+  "standaloneRebuildClaimed": false,
+  "currentReleaseQaClaimed": false,
+  "productionBackendDeployAuthorized": false
+}

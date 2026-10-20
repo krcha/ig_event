@@ -1,7 +1,6 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { buildCalendarFilterUrl } from "@/lib/events/calendar-filter-url";
 import {
   type FormEvent,
   type HTMLAttributes,
@@ -16,11 +15,33 @@ type AutoApplyFilterFormProps = Omit<HTMLAttributes<HTMLFormElement>, "children"
 };
 
 function buildFilterUrl(pathname: string, form: HTMLFormElement): string {
-  return buildCalendarFilterUrl(
-    pathname,
-    new FormData(form).entries(),
-    typeof window === "undefined" ? undefined : window.location.href,
-  );
+  const formData = new FormData(form);
+  const params = new URLSearchParams();
+
+  for (const [key, rawValue] of formData.entries()) {
+    if (typeof rawValue !== "string") {
+      continue;
+    }
+
+    const value = rawValue.trim();
+    if (!value) {
+      continue;
+    }
+
+    params.set(key, value);
+  }
+
+  if (typeof window !== "undefined" && !params.has("hide")) {
+    const hiddenCategories = new URL(window.location.href).searchParams.get("hide")?.trim();
+    if (hiddenCategories) {
+      params.set("hide", hiddenCategories);
+    }
+  }
+
+  params.delete("category");
+
+  const query = params.toString();
+  return query ? `${pathname}?${query}` : pathname;
 }
 
 export function AutoApplyFilterForm({

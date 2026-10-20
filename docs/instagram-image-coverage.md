@@ -7,37 +7,12 @@ each returned row carries its own date, time, venue, category, price, conflicts,
 poster slide indexes and exact text fragments. Separate dates, sessions, rooms
 and physical branches retain separate occurrence identities.
 
-Paid Apify profile acquisition always starts with `basicData`, an absolute
-cutoff at most 24 hours old, and `skipPinnedPosts=true`. A newer persisted
-watermark narrows that cutoff further. Older `daysBack`, `noAgeCutoff`,
-`detailedData`, or pinned-post env settings cannot widen this paid boundary.
-Local owner/date checks discard old, undated and foreign-owner rows before
-considering additional details. Arbitrary paid direct-post requests are blocked
-because their age cannot be verified before payment. Existing dataset imports
-remain age-unrestricted, but skip incomplete basic rows before deduplication so
-an older complete carousel can supply all its slides. The optional Instaloader
-collector retains its prior behavior.
-
-Basic rows with the caption field, post type, primary image and complete
-explicit carousel children need no detailed request. An ordered basic `images`
-array also suffices when an independent declared count matches every image.
-Missing source fields or an incomplete carousel trigger one detailed request
-limited to the verified
-fresh post URLs. A detail result must match the basic post ID, permalink, owner
-and timestamp. Carousels require every ordered child, including video thumbnails,
-with no contradictory declared count or duplicate child identity; previously
-observed child identities keep their order. Missing or mismatched details fail the
-logical scrape so ingestion cannot save a cover-only carousel and advance past
-unread slides.
-
-`APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN` is a shared ceiling for the logical scrape,
-including discovery and details; it is not a new allowance for each phase.
-Before details, the scraper waits for the basic run's billing settlement and
-reads its authenticated run receipt. Only the remaining budget may fund the
-second phase. Unknown charges or less than Apify's minimum $0.005 run allowance
-fail closed without another paid start. Both phases and read-only polling use
-one absolute lease deadline and the existing durable paid-attempt marker.
-`npm run qa:apify-recent-media` verifies these paths with mocked provider runs.
+The scraper defaults to `APIFY_DATA_DETAIL_LEVEL=detailedData`: the basic package
+omits child posts in current production datasets. Both template env files use
+detailed data; production must explicitly override any older basic-data env
+setting. Apify charges extra for detailed results. Existing per-run charge caps,
+post limits, durable paid-request receipts and budget controls remain enforced.
+An explicit `basicData` override remains supported for operators.
 
 Only provider `childPosts`, `sidecarImages`, or a Sidecar `images` array establish
 an ordered slide manifest. Alternate resolutions stay within their slide.

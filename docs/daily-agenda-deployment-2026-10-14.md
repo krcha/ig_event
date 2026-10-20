@@ -1,5 +1,7 @@
 # Three-day agenda production deployment
 
+Current design, variety policy and runtime: [17 October rollout](daily-social-design-2026-10-17.md). This file records the earlier deployment.
+
 Deployed on 2026-10-14, Europe/Belgrade. See
 [daily-agenda-posting.md](daily-agenda-posting.md) for the content and API contract.
 

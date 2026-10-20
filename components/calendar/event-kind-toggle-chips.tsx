@@ -3,21 +3,19 @@
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
 import { EVENT_CATEGORY_TONES, type EventCategoryKind } from "@/components/events/event-meta";
-import {
-  EVENT_PRIMARY_CATEGORIES,
-  getHiddenCategoriesAfterCategoryToggle,
-  normalizeEventCategoryKey,
-  normalizeHiddenEventCategories,
-} from "@/lib/taxonomy/event-categories";
 import { cn } from "@/lib/utils";
 
 const CATEGORY_CHIPS: Array<{ key: "all" | EventCategoryKind; label: string }> = [
   { key: "all", label: "All" },
-  ...EVENT_PRIMARY_CATEGORIES,
+  { key: "club", label: "Club" },
+  { key: "live", label: "Live" },
+  { key: "culture", label: "Culture" },
+  { key: "event", label: "Event" },
 ];
 const CATEGORY_KEYS = CATEGORY_CHIPS.map((chip) => chip.key).filter(
   (key): key is EventCategoryKind => key !== "all",
 );
+const CATEGORY_KEY_SET = new Set<string>(CATEGORY_KEYS);
 
 const CALENDAR_DATE_COUNT_SELECTOR = "[data-calendar-date-kind-counts]";
 
@@ -30,7 +28,11 @@ type CategoryCountMap = Partial<Record<EventCategoryKind, number>>;
 
 function normalizeHiddenCategories(value: string | readonly string[] | null | undefined): EventCategoryKind[] {
   const values: readonly string[] = typeof value === "string" ? value.split(",") : (value ?? []);
-  return normalizeHiddenEventCategories(values);
+  const requested = new Set(
+    values.map((item: string) => item.trim()).filter((item): item is EventCategoryKind => CATEGORY_KEY_SET.has(item)),
+  );
+
+  return CATEGORY_KEYS.filter((key) => requested.has(key));
 }
 
 function formatHiddenCategories(categories: readonly EventCategoryKind[]): string | undefined {
@@ -276,8 +278,8 @@ export function EventKindToggleChips({
         return;
       }
 
-      const category = normalizeEventCategoryKey(control.dataset.calendarClearFilter?.replace("category-", ""));
-      if (!category) {
+      const category = control.dataset.calendarClearFilter?.replace("category-", "");
+      if (!category || !CATEGORY_KEY_SET.has(category)) {
         return;
       }
 
@@ -296,7 +298,9 @@ export function EventKindToggleChips({
   }, [hiddenCategories, setHiddenCategoriesAndUrl]);
 
   function toggleCategory(category: EventCategoryKind) {
-    const next = getHiddenCategoriesAfterCategoryToggle(hiddenCategories, category);
+    const next = hiddenSet.has(category)
+      ? hiddenCategories.filter((item) => item !== category)
+      : [...hiddenCategories, category];
     setHiddenCategoriesAndUrl(next);
   }
 

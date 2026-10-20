@@ -1,10 +1,4 @@
 import assert from "node:assert/strict";
-import { repairAutomaticVenueAlias } from "../convex/internal/autonomousVenueRepair.ts";
-import { evaluateAutomaticUniqueApproval } from "../convex/internal/automaticUniqueApprovalPreflight.ts";
-import { hasCompleteAutomaticUniqueSourceProof } from "../convex/internal/automaticUniqueSourceProof.ts";
-import { adaptInstagramScrapedPostToSourceDocument } from "../lib/domain/source-documents.ts";
-import { buildInstagramSourceOccurrenceFingerprint } from "../lib/domain/occurrences/source-fingerprint.ts";
-import { parseExtractedEventData } from "../lib/ai/extract-event-data.ts";
 import {
   approveUniquePendingEvents,
   getPublicApprovedEvent,
@@ -871,59 +865,3 @@ await assert.rejects(
 );
 
 console.log("Moderation distinct same-venue/date batch QA passed.");
-
-function automaticAliasFixture() {
-  const state = receiptBoundAliasFixture(), item = state.events.get(state.item._id), source = [...state.posts.values()][0];
-  const caption = `${item.title} on ${item.date} at ${item.time} at ${item.venue} in Belgrade.`;
-  const confirmation = text => ({ confidence: text ? 0.9 : 0, found_in: text ? ["caption"] : [], evidence: text, evidence_snippets: text ? [{ source: "caption", text }] : [], notes: "Exact persisted QA caption." });
-  const shared = { applies_to_all: false, value: "", evidence: "", source: "unknown" };
-  const raw = JSON.stringify(parseExtractedEventData({ extraction_contract_version: "event_evidence_v2", is_event: true, non_event_reason: "", title: item.title,
-    date: item.date, time: item.time, venue: item.venue, city: "Belgrade", country: "Serbia", price: "", currency: "", artists: item.artists, category: "nightlife",
-    description: "QA live event.", confidence: 0.5, reasoning_notes: "Exact saved caption.", source_caption: caption, source_url: item.instagramPostUrl,
-    date_evidence: { exact_text: item.date, source: "caption", is_relative: false, resolved_date: item.date }, time_evidence: { status: "start_time_stated", exact_text: item.time, source: "caption" },
-    source_conflicts: [], shared_schedule_context: { venue: shared, time: shared }, schedule_entries: [], field_confirmation: {
-      title: confirmation(item.title), location: confirmation("Belgrade"), location_name: confirmation(item.venue), price: confirmation(""), start_time: confirmation(item.time), short_description: confirmation(""), artists: confirmation("") } }));
-  Object.assign(source, { caption, analysisResultJson: raw, processingStatus: "completed", processingOutcome: "receipt_complete" });
-  const sourceIdentity = adaptInstagramScrapedPostToSourceDocument(source).sourceIdentity, sourceFingerprint = buildInstagramSourceOccurrenceFingerprint(source);
-  const fields = JSON.parse(item.normalizedFieldsJson);
-  Object.assign(fields, { sourceAccountRole: "venue", sourceGroundingSourceCaption: caption, sourceOccurrenceSourceFingerprint: sourceFingerprint,
-    extractionMode: "caption_only", dateEvidenceVerified: true, timeEvidenceVerified: true, identityEvidenceVerified: true, venueEvidenceVerified: true,
-    structuredEvidenceVerified: true, moderationPendingReasons: ["requires_human_approval"], moderationSignals: ["requires_human_approval"] });
-  Object.assign(item, { sourceCaption: caption, rawExtractionJson: raw, sourceConflictFields: [], normalizedFieldsJson: JSON.stringify(fields) });
-  for (const table of ["instagramEventSources", "instagramSourceOccurrenceReceipts", "sourceOccurrences"]) for (const row of state.provenance.get(table).values()) Object.assign(row, { sourceIdentity, sourceFingerprint });
-  state.provenance.set("instagramSources", new Map([["active-source", { _id: "active-source", handle: item.venueInstagramHandle, role: "venue", venueId: canonicalVenue._id, active: true }]]));
-  return { ...state, item, source };
-}
-{
-  const state = automaticAliasFixture(), before = structuredClone(state.item), sourceBefore = structuredClone(state.source);
-  assert.equal(await hasCompleteAutomaticUniqueSourceProof(state.ctx, state.item), true);
-  assert.deepEqual(await repairAutomaticVenueAlias(state.ctx, state.item), { repaired: true, reason: "venue_alias_certified" });
-  const repaired = state.events.get(state.item._id);
-  for (const key of ["status", "title", "date", "time", "artists", "rawExtractionJson", "sourceCaption", "instagramPostId", "sourceOccurrenceKey"]) assert.deepEqual(repaired[key], before[key]);
-  assert.equal(repaired.status, "pending"); assert.equal(repaired.venue, canonicalVenue.name); assert.equal(repaired.venueId, canonicalVenue._id);
-  assert.equal(JSON.parse(repaired.normalizedFieldsJson).automaticVenueAliasRepairPolicyVersion, 1);
-  assert.equal(repaired.humanReviewedStructuredSourcePolicyVersion, undefined); assert.deepEqual(state.source, sourceBefore);
-  const receipt = state.provenance.get("instagramSourceOccurrenceReceipts").get("alias-receipt");
-  assert.deepEqual(receipt.expectedOccurrences, [{ ...state.expected, venue: canonicalVenue.name }]);
-  assert.equal(await hasCompleteAutomaticUniqueSourceProof(state.ctx, repaired), true);
-  const ready = await evaluateAutomaticUniqueApproval(state.ctx, repaired);
-  assert.equal(ready.diagnostic.eligible, true); assert.equal(ready.diagnostic.holdReason, "eligible");
-  const occurrence = state.provenance.get("sourceOccurrences").get("alias-occurrence");
-  assert.equal(occurrence.venueId, canonicalVenue._id); assert.equal(occurrence.state, "satisfied"); assert.equal(occurrence.sourceFingerprint, receipt.sourceFingerprint);
-  const epoch = state.provenance.get("sourceOccurrenceTopologyEpoch").get("alias-epoch");
-  assert.ok(epoch.currentEpoch > 7); assert.equal(epoch.currentEpoch, epoch.verifiedEpoch); assert.equal(epoch.lastUnverifiedEpoch, 7);
-  assert.equal(state.audits.length, 1); assert.equal(state.audits[0].action, "automatic_venue_alias_repaired");
-}
-for (const mutate of [
-  s => { s.provenance.get("instagramSources").get("active-source").venueId = "different-venue"; },
-  s => { s.provenance.get("instagramSources").get("active-source").role = "promoter"; },
-  s => { s.provenance.get("instagramSources").get("active-source").active = false; },
-  s => { s.source.analysisRevision = 2; }, s => { s.source.caption = "Different current source."; }, s => { s.item.reviewedAt = Date.now(); },
-  s => { const f = JSON.parse(s.item.normalizedFieldsJson); f.humanReviewedStructuredSourcePolicyVersion = 1; s.item.normalizedFieldsJson = JSON.stringify(f); },
-  s => { s.item.venueId = "different-venue"; }, s => { s.provenance.get("instagramSourceOccurrenceReceipts").get("alias-receipt").deferredChildCount = 1; },
-]) {
-  const state = automaticAliasFixture(); mutate(state); const sourcesBefore = structuredClone([...state.posts.values()]);
-  assert.equal((await repairAutomaticVenueAlias(state.ctx, state.item)).repaired, false);
-  assert.equal(state.writes.length, 0); assert.equal(state.audits.length, 0); assert.deepEqual([...state.posts.values()], sourcesBefore);
-}
-console.log("Automatic venue alias QA passed.");

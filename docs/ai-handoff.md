@@ -104,16 +104,6 @@ Known current follow-up:
 
 - `npm run qa:release` is the intended deterministic gate. It starts with the
   repository hygiene guard and includes `next build`.
-- Autonomous moderation uses the same read-only automatic approval preflight
-  for diagnostics and the sweep. Repairs record holds separately from event
-  versions, preserve human markers, and retain current source/receipt proof.
-  Cached-only processing cannot fall back to fresh extraction. Focused poster
-  review defaults off and uses a durable source-generation ledger plus the
-  shared OpenAI provider lease and daily allowance. Completed review replay
-  never repeats paid transport; unknown started requests remain held. Enable
-  the web flag and configure the Convex executor origin/secret only after the
-  matching web and backend changes are deployed. Details are in the operations
-  runbook; focused QA is part of the release gate.
 - Treat any build failure or timeout as a normal release blocker before handoff
   or production rollout.
 - Source-content revisions with retained satisfied siblings must not partially
@@ -216,13 +206,6 @@ Top-level areas:
   - `/events`: paginated approved event feed with search.
   - `/calendar`: monthly calendar for approved events.
   - `/events/[eventId]`: event detail page.
-  - `/map`: date-selectable event map. Mobile opens directly to Belgrade at
-    zoom 14 without page scrolling; pin popups show each event title and a venue
-    link to that event. Desktop retains the selected-day event list.
-  - `/venues`: permanent redirect to `/map?view=calendar`, preserving query
-    parameters including selected dates. The marker avoids older cached
-    `/map`-to-`/venues` permanent redirects; new links use `/map` directly.
-  - `/venues/directory`: paginated venue guide.
 - `app/(dashboard)`: admin pages.
   - `/admin`: moderation dashboard.
   - `/admin/scraper`: scrape controls and ingestion summaries.
@@ -305,20 +288,6 @@ Apify:
   `InstagramScrapedPost`.
 - Actor id defaults to `apify/instagram-post-scraper`; legacy actor ids are
   normalized.
-- Paid profile fetching is limited to the last 24 hours, or a newer saved
-  watermark, and always skips pinned posts. Old catch-up/no-age inputs and env
-  overrides cannot expand that paid window. Unverified direct-post URLs cannot
-  start a paid run.
-- Profile discovery uses basic data. Only verified fresh rows missing required
-  source fields or complete carousel children receive details. Identity, owner,
-  timestamp and every carousel slide must match before ingestion proceeds.
-- Basic and detail runs share the original charge ceiling and lease deadline.
-  Details use only the remaining allowance from a settled basic-run receipt;
-  missing billing evidence or incomplete details fail without advancing the
-  source checkpoint. See `docs/instagram-image-coverage.md`.
-- Run-history imports remain age-unrestricted and skip incomplete basic rows
-  before deduplication; a newer cover-only row cannot hide an older complete
-  carousel dataset row.
 
 OpenAI:
 
@@ -411,8 +380,6 @@ calls the job POST route, the job will not keep advancing.
 ### Full Scrape Ingestion
 
 1. `full_scrape` mode calls Apify through `scrapeInstagramAccount`.
-   Paid acquisition clamps broad `daysBack` and older saved watermarks to a
-   maximum 24-hour window.
 2. Fresh posts are persisted into `scrapedPosts` in batches.
 3. Direct full scrape uses limited parallelism when run through
    `runInstagramIngestion`.
@@ -727,3 +694,51 @@ Secrets:
   and desktop layouts.
 - When changing external service calls, preserve clear error reporting and
   summary counters.
+
+## Event Zeka Social Posting Standard
+
+Read [the daily Reel plan](daily-reels.md),
+[the poster design system](social-poster-directions-2026-10-19.md) and
+[the art-direction deployment record](social-art-deployment-2026-10-19.md) before changing
+social publishing. The user's approved standard is:
+
+- Daily Reels at 19:30 Europe/Belgrade, covering four of tomorrow's approved
+  events (fewer only when the date has fewer available).
+- Across feed, Reels and Stories, choose unseen events for the exact date first.
+  Fill only missing slots with least-used, older repeats if there are too few
+  new events. Read actual post/Reel history; preserve identities and times.
+- Thirteen illustrated/photographic art directions, each with three compositions,
+  rotate in an ordered 39-day cycle per format. Formats start at different
+  positions. All pages and the CTA of one carousel share its direction.
+  Fixed 168 by 108 time frames, measured outlined Serbian type, full event names,
+  factual varied captions and the site CTA remain required.
+- Random music among the first three distinct eligible songs returned by
+  Instagram's live trending catalog, avoiding the previous song.
+- Belgrade, Serbia location and `share_to_feed=false`: Reels stay off the
+  main profile grid.
+- Stories show four events in a single DANAS programme at 10:00, without a
+  closing card. The 16:30 carousel previews three days with three events on
+  each date page, ends with the site CTA, and uses the
+  Belgrade, Serbia location tag (`location_id=109920975697736` on the parent
+  carousel container).
+- The 19 October Story metadata follow-up adds native `user_tags` from source
+  venue profiles and the verified Belgrade `location_id` to the Story request.
+  See [the rollout and API limitations](story-metadata-deployment-2026-10-19.md).
+  This does not create a location sticker. Meta explicitly rejected catalog
+  audio for both Story types and carousel parents with 100/2207065 in actual
+  unpublished probes. Music remains automatic only on Reels. The user has no
+  dedicated device/service for a native-app publisher. Do not silently replace
+  Instagram music with ripped recordings, preview audio, or stock music.
+
+Preserve successful and unresolved n8n publication receipts during updates.
+All UI manual social runs preview only; immediate publication or replacement requires
+the user's explicit request. Keep credentials out of Git and all reports.
+
+The user authorized one dated exception on 2026-10-25: skip all three regular
+publishers for that Europe/Belgrade calendar date. `EzekaSpecial20261025` runs at
+10:00 and publishes the supplied image as a feed photo, Story and 15-second Reel
+with `Iza\u0111i i glasaj!`. This instant is 09:00 UTC because the clock transition
+has already occurred. Regular schedules resume on the 26th. Read
+[the one-off publication record](special-publication-2026-10-25.md) before changing
+the guards, pinned assets, workflow or per-format receipts. Never rerun a pending
+publication without reconciling its Meta outcome.

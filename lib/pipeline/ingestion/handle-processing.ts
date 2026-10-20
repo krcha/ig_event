@@ -32,7 +32,6 @@ export async function processLoadedPostsForHandle(
     expectedSourceRevision,
     onOpenAiTransportStarted,
     requireCachedCanonicalApprovedDuplicate,
-    requireCachedAnalysisOnly,
   } = options;
 
   for (const rawPost of posts) {
@@ -242,7 +241,6 @@ export async function processLoadedPostsForHandle(
         providerExecution,
         onOpenAiTransportStarted,
         requireCachedCanonicalApprovedDuplicate,
-        requireCachedAnalysisOnly,
         onSourceCoveragePartial: () => { hasPartialMediaCoverage = true; },
       });
     } catch (error) {

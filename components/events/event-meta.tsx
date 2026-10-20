@@ -1,16 +1,14 @@
 import type { CSSProperties } from "react";
 import type { EventDayPeriod } from "@/lib/events/event-time";
-import {
-  EVENT_PRIMARY_CATEGORIES,
-  getEventPrimaryCategory,
-  getEventTags,
-  isFreeEventAdmission,
-  type EventCategoryInput,
-  type EventPrimaryCategory,
-} from "@/lib/taxonomy/event-categories";
 import { cn } from "@/lib/utils";
 
-export type EventCategoryKind = EventPrimaryCategory;
+export type EventCategoryKind = "club" | "live" | "culture" | "event";
+
+type EventCategoryInput = {
+  artists?: readonly string[];
+  eventType: string;
+  title?: string;
+};
 
 export type EventMetaInput = EventCategoryInput & {
   attendance?: number | string | null;
@@ -27,7 +25,7 @@ export type EventMetaInput = EventCategoryInput & {
 type EventCategoryTone = {
   backgroundColor: string;
   color: string;
-  label: string;
+  label: "Club" | "Live" | "Culture" | "Event";
 };
 
 type EventPriceDisplay = {
@@ -41,35 +39,26 @@ type EventDayPeriodTone = {
   label: "Day" | "Night";
 };
 
-const EVENT_CATEGORY_LABELS = Object.fromEntries(
-  EVENT_PRIMARY_CATEGORIES.map((category) => [category.key, category.label]),
-) as Record<EventCategoryKind, string>;
-
 export const EVENT_CATEGORY_TONES: Record<EventCategoryKind, EventCategoryTone> = {
   club: {
     backgroundColor: "rgba(139, 134, 251, 0.14)",
     color: "#8B86FB",
-    label: EVENT_CATEGORY_LABELS.club,
+    label: "Club",
   },
   live: {
     backgroundColor: "rgba(251, 113, 133, 0.14)",
     color: "#FB7185",
-    label: EVENT_CATEGORY_LABELS.live,
+    label: "Live",
   },
   culture: {
     backgroundColor: "rgba(251, 191, 36, 0.14)",
     color: "#FBBF24",
-    label: EVENT_CATEGORY_LABELS.culture,
-  },
-  social: {
-    backgroundColor: "rgba(125, 211, 252, 0.14)",
-    color: "#7DD3FC",
-    label: EVENT_CATEGORY_LABELS.social,
+    label: "Culture",
   },
   event: {
     backgroundColor: "rgba(52, 211, 153, 0.14)",
     color: "#34D399",
-    label: EVENT_CATEGORY_LABELS.event,
+    label: "Event",
   },
 };
 
@@ -123,7 +112,82 @@ function coerceGoingCount(value: number | string | null | undefined): number | n
 }
 
 export function getEventCategoryKind(event: EventCategoryInput): EventCategoryKind {
-  return getEventPrimaryCategory(event);
+  const eventType = normalizeSearchText(event.eventType);
+  const detailText = normalizeSearchText(`${event.title ?? ""} ${(event.artists ?? []).join(" ")}`);
+
+  if (
+    eventType.includes("nightlife") ||
+    eventType.includes("club") ||
+    eventType.includes("party") ||
+    eventType.includes("rave") ||
+    eventType.includes("dj")
+  ) {
+    return "club";
+  }
+
+  if (
+    eventType.includes("live") ||
+    eventType.includes("concert") ||
+    eventType.includes("music") ||
+    eventType.includes("gig")
+  ) {
+    return "live";
+  }
+
+  if (
+    eventType.includes("culture") ||
+    eventType.includes("art") ||
+    eventType.includes("gallery") ||
+    eventType.includes("learning") ||
+    eventType.includes("workshop") ||
+    eventType.includes("film") ||
+    eventType.includes("theater") ||
+    eventType.includes("theatre") ||
+    eventType.includes("exhibition")
+  ) {
+    return "culture";
+  }
+
+  if (
+    detailText.includes("club") ||
+    detailText.includes(" dj") ||
+    detailText.startsWith("dj") ||
+    detailText.includes("party") ||
+    detailText.includes("rave") ||
+    detailText.includes("techno") ||
+    detailText.includes("house") ||
+    detailText.includes("disco")
+  ) {
+    return "club";
+  }
+
+  if (
+    detailText.includes("live") ||
+    detailText.includes("band") ||
+    detailText.includes("concert") ||
+    detailText.includes("tribute") ||
+    detailText.includes("rock") ||
+    detailText.includes("metal") ||
+    detailText.includes("jazz") ||
+    detailText.includes("blues") ||
+    detailText.includes("bluz")
+  ) {
+    return "live";
+  }
+
+  if (
+    detailText.includes("exhibition") ||
+    detailText.includes("izloz") ||
+    detailText.includes("gallery") ||
+    detailText.includes("workshop") ||
+    detailText.includes("film") ||
+    detailText.includes("theater") ||
+    detailText.includes("theatre")
+  ) {
+    return "culture";
+  }
+
+  return "event";
 }
 
 export function getEventCategoryTone(event: EventCategoryInput): EventCategoryTone {
@@ -141,7 +205,10 @@ export function getEventPriceDisplay(value: string | null | undefined): EventPri
     return null;
   }
 
-  const isFree = isFreeEventAdmission(normalized);
+  const searchable = normalizeSearchText(normalized);
+  const isFree =
+    /\b(free|no cover|besplatno|besplatan|slobodan ulaz|ulaz slobodan)\b/.test(searchable) ||
+    /^0\s*(?:rsd|din|dinara)?$/.test(searchable);
 
   return {
     isFree,
@@ -170,8 +237,7 @@ export function EventCategoryPill({
   event: EventCategoryInput;
   style?: CSSProperties;
 }) {
-  const category = getEventCategoryKind(event);
-  const tone = EVENT_CATEGORY_TONES[category];
+  const tone = getEventCategoryTone(event);
 
   return (
     <span
@@ -179,39 +245,12 @@ export function EventCategoryPill({
         "inline-flex max-w-full items-center rounded-full px-2 py-0.5 text-[10px] font-semibold leading-4",
         className,
       )}
-      data-event-category={category}
+      data-event-category={tone.label.toLowerCase()}
       style={{ backgroundColor: tone.backgroundColor, color: tone.color, ...style }}
     >
       <span className="truncate">{tone.label}</span>
     </span>
   );
-}
-
-export function EventSecondaryTags({
-  className,
-  event,
-  limit,
-}: {
-  className?: string;
-  event: EventCategoryInput;
-  limit?: number;
-}) {
-  // Free entry already has a dedicated price chip alongside these tags.
-  const tags = getEventTags(event).filter((tag) => normalizeSearchText(tag) !== "besplatan ulaz");
-  const visibleTags = limit === undefined ? tags : tags.slice(0, limit);
-
-  return visibleTags.map((tag) => (
-    <span
-      className={cn(
-        "inline-flex max-w-full items-center rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] font-medium leading-4 text-muted-foreground",
-        className,
-      )}
-      data-event-tag={tag}
-      key={tag}
-    >
-      <span className="truncate">{tag}</span>
-    </span>
-  ));
 }
 
 export function EventPriceChip({
@@ -284,10 +323,9 @@ export function EventMetaRow({
       )}
       data-event-meta-row="true"
     >
-      <EventCategoryPill className="min-w-0" event={event} />
+      <EventCategoryPill className="flex-none" event={event} />
       <EventDayPeriodChip className="flex-none" value={event.dayPeriod} />
       {hasPrice ? <EventPriceChip className="flex-none" value={event.ticketPrice} /> : null}
-      <EventSecondaryTags className="hidden flex-none sm:inline-flex" event={event} limit={2} />
       {goingCount ? (
         <>
           <span className="flex-none text-muted-foreground/60">·</span>

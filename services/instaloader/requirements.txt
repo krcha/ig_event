@@ -1,2 +1,0 @@
-# Release verified at https://pypi.org/pypi/instaloader/json on 2026-10-12.
-instaloader==4.15.3

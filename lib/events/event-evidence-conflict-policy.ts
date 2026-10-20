@@ -9,10 +9,6 @@ export type EventEvidenceSourceConflict = {
 
 export type EventEvidenceConflictContext = {
   artists: string[];
-  selectedTime?: string;
-  timeEvidenceVerified?: boolean;
-  occurrenceSourceText?: string;
-  sourcePosterTexts?: string[];
   dateEvidenceVerified: boolean;
   identityEvidenceVerified?: boolean;
   resolvedDate: string;
@@ -238,14 +234,11 @@ function explicitDatesMentioned(value: string, resolvedDate: string): string[] {
     matches.add(`${match[1]}-${match[2]}-${match[3]}`);
   }
   const resolvedYear = /^\d{4}/u.exec(resolvedDate)?.[0];
-  for (const match of String(value ?? "").replace(/\b\d{4}-\d{2}-\d{2}\b/gu, " ").matchAll(/\b(\d{1,2})\s*[./-]\s*(\d{1,2})(?:\s*[./-]\s*(\d{2,4}))?\.?/gu)) {
+  for (const match of String(value ?? "").matchAll(/\b(\d{1,2})\s*[./-]\s*(\d{1,2})(?:\s*[./-]\s*(\d{2,4}))?\.?/gu)) {
     let year = match[3] ?? resolvedYear;
     if (!year) continue;
     if (year.length === 2) year = `20${year}`;
-    const parsed = new Date(Date.UTC(Number(year), Number(match[2]) - 1, Number(match[1])));
-    if (parsed.getUTCFullYear() === Number(year) && parsed.getUTCMonth() === Number(match[2]) - 1 && parsed.getUTCDate() === Number(match[1])) {
-      matches.add(`${year}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`);
-    }
+    matches.add(`${year}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`);
   }
   const comparable = comparableText(value);
   for (const match of comparable.matchAll(
@@ -263,8 +256,6 @@ function explicitDatesMentioned(value: string, resolvedDate: string): string[] {
       candidate.getUTCDate() === day
     ) {
       matches.add(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
-    } else {
-      matches.add("invalid_explicit_date");
     }
   }
   return [...matches];
@@ -272,8 +263,7 @@ function explicitDatesMentioned(value: string, resolvedDate: string): string[] {
 
 function textNamesResolvedDate(value: string, resolvedDate: string): boolean {
   if (!resolvedDate) return false;
-  const dates = explicitDatesMentioned(value, resolvedDate);
-  if (dates.length > 0) return dates.every((date) => date === resolvedDate);
+  if (explicitDatesMentioned(value, resolvedDate).includes(resolvedDate)) return true;
   const weekday = weekdayForIsoDate(resolvedDate);
   return weekday !== null && weekdaysMentioned(value).includes(weekday);
 }
@@ -322,7 +312,6 @@ export function cinemaReleaseDateIsSeparateFromProgramDate(
   );
   if (
     releaseDates.length !== 1 ||
-    !/^\d{4}-\d{2}-\d{2}$/u.test(releaseDates[0] ?? "") ||
     releaseDates[0] === context.resolvedDate ||
     !textContainsIdentity(conflict.reason, conflict.poster_value)
   ) {
@@ -413,49 +402,13 @@ function venueConflictIsBenign(
   );
 }
 
-function explicitRoleClock(text: string, clock: string): "doors" | "performance" | null {
-  const matches = [...text.matchAll(/\b([01]?\d|2[0-3])(?:[:.]([0-5]\d)(?!\d)|\s*h(?:ours?|rs?)?\b)/giu)];
-  if (matches.length !== 1 || `${matches[0]![1].padStart(2, "0")}:${matches[0]![2] ?? "00"}` !== clock) return null;
-  const normalized = comparableText(text);
-  const doors = /\b(?:doors?(?: open| opening| opens)?|opening doors|vrata(?: se)?(?: otvaraju| otvorena)?|otvaranje vrata|ulaz od)\b/u.test(normalized);
-  const performance = /\b(?:show starts?|performance starts?|concert starts?|starts?|begins?|pocetak(?: koncerta| nastupa| programa)?|koncert pocinje|nastup pocinje|program pocinje)\b/u.test(normalized);
-  return doors === performance ? null : doors ? "doors" : "performance";
-}
-function singleConflictClock(value: string): string | null {
-  const matches = [...value.matchAll(/\b([01]?\d|2[0-3])(?:[:.]([0-5]\d)(?!\d)|\s*h(?:ours?|rs?)?\b)/giu)];
-  return matches.length === 1 ? `${matches[0]![1].padStart(2, "0")}:${matches[0]![2] ?? "00"}` : null;
-}
-export function doorsAndPerformanceTimesAreSeparate(conflict: EventEvidenceSourceConflict, context: EventEvidenceConflictContext): boolean {
-  if (conflict.field !== "time" || !context.timeEvidenceVerified || context.identityEvidenceVerified !== true ||
-      !context.dateEvidenceVerified || !context.venueEvidenceVerified || !context.selectedTime || !context.sourcePosterTexts?.length) return false;
-  const posterClock = singleConflictClock(conflict.poster_value), captionClock = singleConflictClock(conflict.caption_value);
-  if (!posterClock || !captionClock || posterClock === captionClock) return false;
-  const occurrenceText = context.occurrenceSourceText?.trim() ?? "";
-  const captionScope = context.singleOccurrenceSource ? context.sourceCaption : occurrenceText;
-  if (!context.singleOccurrenceSource && (!occurrenceText || !context.sourceCaption.includes(occurrenceText) ||
-      !textContainsIdentity(occurrenceText, context.selectedTitle) || !textNamesResolvedDate(occurrenceText, context.resolvedDate) ||
-      !textContainsIdentity(context.sourcePosterTexts.join(" "), context.selectedTitle) ||
-      !textNamesResolvedDate(context.sourcePosterTexts.join(" "), context.resolvedDate))) return false;
-  const captionParts = captionScope.split(/[\n;|]/u).flatMap((line) =>
-    line.split(/\s*,\s*(?=(?:doors?|show|performance|concert|starts?|begins?|pocetak|vrata|ulaz)\b)/iu));
-  const captionRoles = new Set(captionParts.map((text) => explicitRoleClock(text, captionClock)).filter(Boolean));
-  const posterRoles = new Set(context.sourcePosterTexts.map((text) => explicitRoleClock(text, posterClock)).filter(Boolean));
-  if (captionRoles.size !== 1 || posterRoles.size !== 1) return false;
-  const captionRole = [...captionRoles][0], posterRole = [...posterRoles][0];
-  if (captionRole === posterRole) return false;
-  const performanceClock = captionRole === "performance" ? captionClock : posterClock;
-  const doorsClock = captionRole === "doors" ? captionClock : posterClock;
-  const selected = normalizeEventTime(context.selectedTime);
-  return selected.startLabel === performanceClock && !selected.endLabel && doorsClock < performanceClock;
-}
-
 export function eventEvidenceConflictIsBenign(
   conflict: EventEvidenceSourceConflict,
   context: EventEvidenceConflictContext,
 ): boolean {
   if (conflict.field === "date") return dateConflictIsBenign(conflict, context);
   if (conflict.field === "time") {
-    return timesAreCompatible(conflict.poster_value, conflict.caption_value) || doorsAndPerformanceTimesAreSeparate(conflict, context);
+    return timesAreCompatible(conflict.poster_value, conflict.caption_value);
   }
   if (conflict.field === "title") {
     return (

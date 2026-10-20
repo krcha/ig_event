@@ -94,7 +94,6 @@ export async function fetchFreshPostsForHandlesInParallel(
           lease.resultsLimit ?? baseResultsLimit,
         );
         const sourceBatch = await instagramSourceProviderAdapter.fetchDocuments({
-          requestId: paidFetchLeaseOwner,
           handle,
           resultsLimit: requestedResultsLimit,
           daysBack: options.daysBack,

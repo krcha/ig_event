@@ -15,13 +15,7 @@ assert.deepEqual(Object.keys(jobs).sort(), [
   "cleanup ingestion artifacts",
   "cleanup orphaned media assets",
   "delete expired events",
-  "recover automatic moderation evidence",
 ]);
-assert.deepEqual(jobs["recover automatic moderation evidence"], {
-  name: "internal/autonomousModerationExecutor:advance",
-  args: [{}],
-  schedule: { type: "interval", minutes: 5 },
-});
 assert.deepEqual(jobs["approve server-verified unique events"], {
   name: "internal/automaticUniqueApproval:sweepUntilDone",
   args: [{ maxPages: 60 }],

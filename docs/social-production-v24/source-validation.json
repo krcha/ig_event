@@ -1,0 +1,59 @@
+{
+  "sourceFileCount": 710,
+  "sourceBytes": 55172454,
+  "hashMismatches": [],
+  "forbiddenPaths": [],
+  "independentStrongSecretFindings": [],
+  "strongPatternRules": [
+    "private-key",
+    "github-token",
+    "openai-secret",
+    "stripe-clerk-secret",
+    "slack-token",
+    "aws-access-key"
+  ],
+  "operatorExactRuntimeSecretScan": {
+    "matchedActualSensitiveRuntimeValues": false,
+    "matchedStrongTokenPatterns": false,
+    "runtimeValuesDisclosed": false
+  },
+  "maxBlobBytes": 12273960,
+  "blobsOver50MiB": [],
+  "literalLocalImportCount": 1863,
+  "unresolvedLiteralLocalImports": [],
+  "undeclaredBareImports": {},
+  "lockfileMissingDependencies": [],
+  "bareImportedPackages": [
+    "@clerk/nextjs",
+    "@napi-rs/canvas",
+    "clsx",
+    "convex",
+    "csv-parse",
+    "fontkit",
+    "lucide-react",
+    "next",
+    "opening_hours",
+    "react",
+    "server-only",
+    "sharp",
+    "tailwind-merge",
+    "typescript",
+    "zod"
+  ],
+  "socialRouteFiles": [
+    "app/api/social/carousel/cta/route.ts",
+    "app/api/social/carousel/days/[date]/route.ts",
+    "app/api/social/carousel/events/[eventId]/route.ts",
+    "app/api/social/daily-carousel/route.ts",
+    "app/api/social/daily-reels/route.ts",
+    "app/api/social/daily-stories/route.ts",
+    "app/api/social/reels/days/[date]/route.ts",
+    "app/api/social/special/2026-10-25/[asset]/route.ts",
+    "app/api/social/stories/days/[date]/route.ts"
+  ],
+  "limits": [
+    "Literal import audit does not execute code, prove dynamic imports/runtime filesystem reads, or establish a full independent rebuild.",
+    "Existing Next/React-provided server-only/client-only marker packages are framework inputs.",
+    "Sensitive runtime values were checked by trusted operator; they were not provided to this audit."
+  ]
+}

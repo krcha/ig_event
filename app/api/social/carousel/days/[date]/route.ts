@@ -1,6 +1,8 @@
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { AgendaRenderError, renderAgendaPoster } from "@/lib/social/agenda-images";
+import { getCachedCarouselJpeg } from "@/lib/social/carousel-jpeg-cache";
+import { SOCIAL_DESIGN_VERSION, resolvePosterPublicationDate } from "@/lib/social/poster-directions";
 import {
   buildAgendaRenderVersion,
   getNextIsoDate,
@@ -34,6 +36,7 @@ export async function GET(request: Request, context: RouteContext) {
   const ids = (parameters.get("events") ?? "").split(",");
   const positionText = parameters.get("position") ?? "";
   const version = parameters.get("v") ?? "";
+  const publishDate = parameters.get("publishDate") ?? undefined;
   try {
     getNextIsoDate(date);
   } catch {
@@ -43,6 +46,7 @@ export async function GET(request: Request, context: RouteContext) {
     parameters.getAll("events").length !== 1 ||
     parameters.getAll("position").length !== 1 ||
     parameters.getAll("v").length !== 1 ||
+    parameters.getAll("publishDate").length > 1 ||
     ids.length < 1 || ids.length > 3 ||
     new Set(ids).size !== ids.length ||
     ids.some((id) => !/^[a-z0-9]{10,64}$/.test(id)) ||
@@ -54,6 +58,8 @@ export async function GET(request: Request, context: RouteContext) {
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
   if (!convexUrl) return errorResponse("Agenda rendering is not configured.", 503);
   const position = Number(positionText);
+  try { resolvePosterPublicationDate(date, position, "feed", publishDate); }
+  catch { return errorResponse("Poster publication date must be a real YYYY-MM-DD date.", 400); }
 
   try {
     const convex = new ConvexHttpClient(convexUrl);
@@ -66,11 +72,14 @@ export async function GET(request: Request, context: RouteContext) {
       return errorResponse("A selected event is no longer public on this date.", 404);
     }
     const events = records as PublicEventRecord[];
-    if (buildAgendaRenderVersion(date, events, position) !== version) {
+    if (buildAgendaRenderVersion(date, events, position, publishDate) !== version) {
       return errorResponse("Selected event facts changed. Refresh the daily agenda payload.", 409);
     }
-    const image = await renderAgendaPoster({ date, events, position });
-    return new Response(new Uint8Array(image), {
+    const image = await getCachedCarouselJpeg(
+      { kind: "agenda", date, events, position, publishDate, version, design: SOCIAL_DESIGN_VERSION },
+      () => renderAgendaPoster({ date, events, position, publishDate }),
+    );
+    return new Response(request.method === "HEAD" ? null : new Uint8Array(image), {
       headers: {
         "cache-control": "public, max-age=60, must-revalidate",
         "content-type": "image/jpeg",
@@ -85,3 +94,5 @@ export async function GET(request: Request, context: RouteContext) {
     return errorResponse("Could not verify or render the selected public events.", 503);
   }
 }
+
+export const HEAD = GET;

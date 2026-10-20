@@ -43,7 +43,7 @@ function identity(id, venueId, kind, rawValue, overrides = {}) {
   };
 }
 
-function makeCtx({ venues, identities, sources = [], subject = null }) {
+function makeCtx({ venues, identities, subject = null }) {
   const reads = [];
   return {
     reads,
@@ -63,10 +63,10 @@ function makeCtx({ venues, identities, sources = [], subject = null }) {
               },
             };
           }
-          assert.ok(table === "venueIdentities" || table === "instagramSources");
+          assert.equal(table, "venueIdentities");
           return {
             withIndex(indexName, configure) {
-              assert.equal(indexName, table === "venueIdentities" ? "by_active_kind" : "by_role_active");
+              assert.equal(indexName, "by_active_kind");
               const filters = {};
               const q = {
                 eq(field, value) {
@@ -78,7 +78,7 @@ function makeCtx({ venues, identities, sources = [], subject = null }) {
               return {
                 async take(limit) {
                   reads.push({ table, kind: "indexedTake", filters, limit });
-                  return (table === "venueIdentities" ? identities : sources)
+                  return identities
                     .filter((row) =>
                       Object.entries(filters).every(([key, value]) => row[key] === value),
                     )
@@ -134,53 +134,11 @@ assert.deepEqual(
 assert.ok(result.fingerprint.startsWith("venue-snapshot-v1:"));
 assert.ok(
   fixture.reads[0].limit === 4_001 &&
-    fixture.reads.filter((read) => read.table === "venueIdentities").every((read, index, reads) =>
+    fixture.reads.slice(1).every((read, index, reads) =>
       read.limit <= (index === 0 ? 3_999 : reads[index - 1].limit),
     ),
   "Identity partitions must share the aggregate budget left after venue rows.",
 );
-
-const legacyPromoter = venue("legacy-promoter", {
-  name: "Reviewed Party Series", instagramHandle: "reviewed_series", aliases: ["Old Series Name"],
-});
-const pausedPromoter = venue("paused-promoter", {
-  name: "Paused Promoter", instagramHandle: "paused_promoter",
-});
-const roleFixture = makeCtx({
-  venues: [publicVenue, legacyPromoter, pausedPromoter],
-  identities: [
-    identity("promoter-history", legacyPromoter._id, "historical_alias", "Former Series"),
-    identity("promoter-provider", publicVenue._id, "provider_account", "reviewed_series", { provider: "instagram" }),
-    identity("physical-provider", publicVenue._id, "provider_account", "physical_alias", { provider: "instagram" }),
-  ],
-  sources: [
-    { handle: "reviewed_series", role: "promoter", active: true },
-    { handle: "paused_promoter", role: "promoter", active: false },
-    { handle: "current_museum", role: "unknown", active: true },
-  ],
-});
-const roleResult = await getPublicVenueResolverSnapshot._handler(roleFixture.ctx, {
-  serviceSecret: "qa-service-secret",
-});
-assert.deepEqual(roleResult.venues.map((row) => row.id), [publicVenue._id],
-  "Explicit promoter roles exclude legacy branded venues regardless of scraping activity; unknown physical sources remain.");
-assert.deepEqual(roleResult.identities.map((row) => row.value), ["physical_alias"],
-  "Promoter handles must not become provider aliases for an independent physical venue.");
-for (const claim of ["Reviewed Party Series", "Old Series Name", "Former Series", "reviewed_series", "Paused Promoter"]) {
-  assert.ok(roleResult.excludedVenueClaims.includes(claim));
-}
-assert.ok(roleFixture.reads.some((read) => read.table === "instagramSources" &&
-  read.filters.role === "promoter" && !Object.hasOwn(read.filters, "active") && read.limit === 4_001),
-  "Promoter classification uses the bounded role index and survives a paused fetch source.");
-assert.notEqual(roleResult.fingerprint, result.fingerprint, "Role exclusions must participate in snapshot identity.");
-
-const promoterOverflow = makeCtx({
-  venues: [publicVenue], identities: [],
-  sources: Array.from({ length: 4_001 }, (_, index) => ({ handle: `series_${index}`, role: "promoter", active: true })),
-});
-await assert.rejects(getPublicVenueResolverSnapshot._handler(promoterOverflow.ctx, {
-  serviceSecret: "qa-service-secret",
-}), /bounded load/iu, "A partial promoter directory must fail closed.");
 
 const legacyRecords = buildLegacyOperationalVenueRecords(result);
 assert.deepEqual(

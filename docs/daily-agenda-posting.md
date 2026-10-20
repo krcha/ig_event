@@ -1,23 +1,38 @@
 # Daily three-day Instagram agenda
 
+Regular publication skips 2026-10-25 only. The
+[one-off workflow](special-publication-2026-10-25.md) publishes the supplied
+image as a single feed photo at 10:00 that day. The existing 16:30 carousel
+schedule resumes on 2026-10-26 with its normal upcoming-date window.
+
+The [14 October location update](daily-agenda-location-2026-10-14.md) records
+the Belgrade tag's Meta validation and n8n deployment.
+
 ## Editorial and image contract
 
 The daily post is a rolling agenda for tomorrow, the following day, and the day
 after that, calculated in `Europe/Belgrade`. The scheduled n8n workflow runs at
-16:30 in that timezone. A post contains one portrait page per populated day,
-with up to three approved public events on each page. Each event's title,
+16:30 in that timezone. Every regular carousel has the Instagram location tag
+"Belgrade, Serbia", using location Page ID `109920975697736`. A post contains one portrait page per populated day,
+with up to three approved public events on each page, followed by one branded
+closing card. Each event's title,
 venue, absolute date and available confirmed time come from public Convex data.
 Ingestion, approval and venue visibility rules are unchanged.
 
-Selection is deterministic for an event date and prefers announced times and
-different venues. Overlapping dates retain their selection when the underlying
-public facts are unchanged. New announcements or moderation can change it.
+Selection first uses events not shown in recent posts or Reels for the exact
+event date. If fewer than three unseen events remain, it fills only the missing
+slots with the least-used, older selections. Venue variety and announced times
+are preferences within each usage tier; another unseen event at the same venue
+still outranks any repeat. The publication date and format seed a deterministic
+choice, so reordered data does not reroll a run. Overlapping dates rotate away
+from actual published selections.
 Missing or invalid Instagram handles do not exclude an otherwise public event.
 
 A sparse day shows its actual one or two events. An empty day is omitted, and
 an entirely empty window returns no post. There are no invented events, padded
-recommendations, cover slides or separate CTA slides. Two or three populated
-days produce an Instagram carousel; one populated day produces one image post.
+recommendations or cover slides. Every populated window produces a carousel
+with its one to three day pages, then one closing card. The closing card does
+not count as an event and carries no venue tags.
 The page number identifies the day within the three-day window.
 
 Serbian captions state event names and practical facts, grouped by absolute
@@ -29,19 +44,36 @@ uses a dash. Poster titles and venue identities remain complete.
 
 The approved visual direction is a club programme: 1080 by 1350 JPEG pages,
 bold condensed event names, a separate time rail, thin horizontal rules, and a
-small rabbit/wordmark footer. Window positions use black, ivory and lilac.
+small rabbit/wordmark footer. Seven approved palettes rotate by event date,
+window position and format. Every event has a distinct colored band and vector
+pattern, from a catalog of 21 colors and 21 patterns. Time frames are always
+168 by 108 with radius 20, using centered 34-pixel type for both starts and
+two-line ranges. Story and Reel interface areas remain clear.
 Rows adapt to the measured title and venue text. Optional detail is removed
 before title size is reduced. If complete identities still cannot fit, rendering
 fails instead of publishing clipped text. Valid venue account tags use the
 actual measured venue row positions.
 
+The final card uses the same fonts and the first planned agenda day's palette. Its headline is "Zeka zna." Its single action is "Jos dogadjaja na
+eventzeka.com", rendered with Serbian diacritics. The website address stays large and uses the closing band's contrasting text color. Oversized stacked type and the shared rabbit/wordmark
+footer make this a distinct sign-off while retaining the poster identity.
+
 ## Implementation
 
-- `lib/social/daily-carousel.ts`: date window, stable selection, factual Serbian
+- `lib/social/daily-carousel.ts`: date window, history-aware selection, factual Serbian
   captions, exact event image versions and tag metadata.
 - `lib/social/agenda-layout.ts`: font measurement, text wrapping, row layout and
   shared venue tag positions.
 - `lib/social/agenda-images.ts`: SVG outlines and Sharp JPEG output.
+- `lib/social/poster-directions.ts`: thirteen art directions and the ordered
+  39-combination cycle. `poster-renderer.ts` and `poster-layout.ts` own original
+  artwork, measured Serbian typography and fixed time frames. See
+  [the design system](social-poster-directions-2026-10-19.md).
+- `lib/social/publication-history.ts`: exact-date caption matching and shared
+  unseen-first selection for all three formats.
+- `ops/n8n/social-publication-history.mjs`: bounded 30-day Meta media reads
+  and success-only event-ID memory, embedded in each existing Code node.
+- `lib/social/carousel-cta.ts`: closing copy and its cache/version key.
 - `public/fonts/social/`: bundled Barlow Condensed, Instrument Sans, IBM Plex
   Mono and Noto Sans fallback fonts, their OFL notices, and pinned source URLs
   and SHA-256 checksums in `manifest.json`.
@@ -59,10 +91,20 @@ copies the public directory.
 optional `date=YYYY-MM-DD` parameter sets the publish date for previews; the
 default is the current Belgrade date. The response contains `publishDate`,
 `eventDates`, `selectionKey`, source and selected event counts, a caption, and
-up to three agenda slides. Each slide specifies its date, selected event IDs,
+up to three agenda slides and a final `cta` slide. Each agenda slide specifies its date, selected event IDs,
 window position, versioned image URL and optional account tags. The payload
 response is not cached. Public data loading is bounded and fails on an
 incomplete or failed query rather than silently publishing a partial scan.
+
+Live publishers use `POST` on the same protected generator URL with bounded
+`publishedCaptions`, `previouslyPublishedEventIds` and `excludedEventIds`. The
+response declares `selectionPolicy=prefer_unposted` and lists
+`previouslyPublishedEventIds` and actual `repeatedEventIds`. All three workflows
+read the account's last 30 days of feed/Reel captions, at most ten pages of 50.
+Unreadable or incomplete history stops live publication. IDs saved after
+success preserve each workflow's own choices across metadata edits. The Story
+date is today; the other formats always cover future dates, so expired Stories
+do not need to be queried to avoid cross-format overlap.
 
 The image URL is:
 
@@ -80,6 +122,12 @@ configuration or backend/render failures return 503. Errors are not cached.
 Successful JPEGs use a 60-second cache lifetime with mandatory revalidation.
 Source text is cleaned and escaped or converted to glyph outlines, so it cannot
 inject SVG markup or remote resources.
+
+The final image is `/api/social/carousel/cta?date=publishDate&v=renderVersion`.
+Its version includes the date, closing copy and design revision, with the same JPEG size and
+60-second revalidation as the day pages. A stale or repeated version returns
+409. An unversioned URL remains supported for existing links. The publisher
+requires exactly one closing card in the final position before creating media.
 
 ## Build, dry run and activation
 
@@ -110,12 +158,19 @@ Required n8n environment values are `EVENTZEKA_API_ORIGIN` and
 `EVENTZEKA_CRON_SECRET`. Live Instagram publication also uses
 `EVENTZEKA_IG_USER_ID` and `EVENTZEKA_IG_ACCESS_TOKEN`, plus the existing optional
 `EVENTZEKA_IG_GRAPH_BASE_URL` and `EVENTZEKA_IG_GRAPH_VERSION` settings.
+The publisher defaults `EVENTZEKA_IG_LOCATION_ID` to the verified Belgrade,
+Serbia Page ID `109920975697736`. It sets `location_id` on the parent carousel
+container, not its children, and records `lastLocationId` on successful
+publication. Dry runs include the intended location without contacting Meta.
 
 Set `EVENTZEKA_SOCIAL_DRY_RUN=true` while verifying an inactive or staged
 workflow. Dry runs fetch the payload and preflight its exact versioned JPEGs,
 then return the caption and preview URLs. They do not create Instagram media,
 publish, read or change workflow static data, and do not require Meta
-credentials. An empty window returns `skipped_no_events`. Remove the dry-run
+credentials. The UI manual trigger also always previews. An ephemeral
+`EVENTZEKA_SOCIAL_PREVIEW_HISTORY=true` additionally permits read-only Meta
+history checks during a dry run, without publication or state access.
+An empty window returns `skipped_no_events`. Remove the dry-run
 setting or set it to false only when the production workflow is ready to run.
 
 ## Publication state and recovery
@@ -127,7 +182,8 @@ rejection can retry container creation without those tags; the result records
 which tags fell back.
 
 Successful publication records `lastPublishDate`, `lastSelectionKey`,
-`lastPostId` and `lastPublishedAt`. A matching publish date or selection key is
+`lastPostId` and `lastPublishedAt`, plus `lastEventIds` and a bounded 31-entry
+`publicationSelections` history. A matching publish date or selection key is
 skipped, including when later facts change the same day's selection. Deploying
 new formatting must not reset that receipt or produce another same-day post.
 

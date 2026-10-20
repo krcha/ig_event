@@ -35,17 +35,8 @@ The source of truth is `convex/schema.ts`.
 - `/events` approved upcoming events.
 - `/events/[eventId]` event detail.
 - `/calendar` monthly browsing.
-- `/map` date-selectable map of approved events and their known venue locations.
-  Mobile opens directly to a viewport-filling Belgrade map at zoom 14, with
-  a prominent Open now control in the top left and event-title/venue-link
-  popups. Phones hide the date controls; tablets retain compact date controls.
-  Open now keeps the previous night's map date until 06:00 Europe/Belgrade,
-  while still matching actual event times across midnight. Desktop retains its
-  selected-day event list.
-- `/venues/directory` public venue directory.
-- `/venues` compatibility redirect to `/map?view=calendar`, preserving the
-  original query parameters. The marker bypasses older cached permanent
-  redirects in the opposite direction; new navigation links use clean `/map` URLs.
+- `/venues` public venue directory.
+- `/map` compatibility redirect to `/venues`.
 - `/api/health` container health check.
 
 ## Admin Surfaces
@@ -65,71 +56,6 @@ The source of truth is `convex/schema.ts`.
 5. Normalize venue/date/title/confidence in `lib/pipeline/run-instagram-ingestion.ts`.
 6. Insert approved or pending events in Convex.
 7. Merge safe approved duplicates through `lib/events/approved-event-automerge.ts`.
-
-Paid Apify acquisition uses a strict 24-hour profile window and skips pinned
-posts. Basic data is sufficient for complete single-image sources and explicit
-carousel manifests. Missing fields or carousel children are enriched only for
-fresh, owner-verified post URLs, with exact identity/date checks and complete
-ordered slide coverage. Discovery and enrichment share one cost ceiling and
-lease deadline; enrichment is authorized by the settled discovery-run charge.
-An incomplete source fails before persistence and checkpoint advancement.
-Saved dataset imports and the optional Instaloader collector keep their existing
-history/catch-up semantics.
-
-Venue resolution treats an explicitly classified promoter's own account,
-legacy venue name, aliases and location claims as organizer identity. Those
-claims cannot supply the physical event venue, including when its old venue
-record is hidden. Independently named physical venues still resolve normally.
-The locality phrase "Beton Hala" does not by itself identify the club "Beton".
-For current structured extraction, a venue logo incorrectly included among
-artists can be removed only when the event stays at that venue and an exact
-caption row bills another act without billing the venue name as a performer.
-Other days' caption rows cannot supply that proof.
-
-The resolver also excludes accounts explicitly classified as promoters across
-the complete bounded directory, including paused sources. Their legacy venue
-names cannot survive as unresolved physical venue proposals. A shorter place
-claim cannot expand into an unrelated branded business inside that place: for
-example, "Sava Centar" does not identify "Dolly Bell Sava Centar". Exact names,
-reviewed aliases and ordinary club/bar qualifiers remain supported.
-
-Caption identity evidence is scoped to the selected calendar day when a quote
-contains a multi-day schedule. An act billed on Friday cannot verify Saturday
-merely because both rows occur in the same caption. Explicit common acts and
-separate sessions on the same day remain valid; independently supported poster
-lineups remain available.
-
-Artist identity checks retain the source's role headings. Author, director and
-choreographer credits do not establish an appearance, and symphonic/tribute
-repertoire does not bill the original artists. Separately billed performers
-remain valid. Unsupported identities require review rather than silently
-rewriting the extracted lineup.
-
-Reviewed poster corrections can preserve existing timing explicitly. This mode
-requires the exact current time and an empty replacement time quote, retaining
-all time provenance and receipt timing, including unknown starts. It does not
-turn an unstated start into a confirmed poster time.
-Removing a misread creator or repertoire list requires an explicit service
-review with the exact previous artist list and a substantive evidence note.
-The ordinary repair path still rejects accidental clearing.
-
-A reviewed physical venue change supersedes an old account fallback only after
-the exact canonical venue changes. Its original inference remains in review
-metadata and the audit; same-venue lineup corrections retain the fallback guard.
-Pending performer corrections use a separate service-only transaction fenced
-by the event, source link, receipt, source revision, occurrence and retained
-poster checksum. They update the normalized lineup while preserving raw facts,
-source materialization inputs, incomplete siblings and pending status. Explicit
-review stamps keep automatic approval from undoing a reviewed hold.
-Automatic approval also re-resolves the selected occurrence's explicit source
-venue before trusting a historical denormalized venue label. A known different
-physical venue or an excluded promoter identity requires source review; an
-ordinary unresolved claim does not add a new approval requirement.
-
-Reviewed venue renames require every linked event and source occurrence to be
-accounted for. An unbound expected, deferred or superseded occurrence can be
-acknowledged by its exact stored snapshot and revision; its historical facts,
-state and source identity remain unchanged during the rename.
 
 ## Moderation And Deduplication
 

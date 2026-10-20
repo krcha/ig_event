@@ -571,20 +571,13 @@ assert.equal(
   false,
   "Public event details must not display extraction provenance, confidence, or evidence text.",
 );
-assert.ok(calendarSource.includes("resolveEventTimePresentation"));
-assert.ok(detailSource.includes("resolveEventTimePresentation"));
-assert.ok(calendarSource.includes("font-normal leading-4 tabular-nums"), "Calendar opening-hour fallbacks use regular weight.");
-assert.ok(detailSource.includes('eventTime.kind === "venue_hours" ? "font-normal"'), "Detail opening-hour fallbacks use regular weight.");
-assert.ok(venueHoursSource.includes('>Hours</h3>'), "The weekly schedule has a concise Hours heading.");
+assert.ok(calendarSource.includes("Time not announced") || calendarSource.includes("UNKNOWN_EVENT_TIME_LABEL"));
+assert.ok(detailSource.includes("Time not announced") || detailSource.includes("UNKNOWN_EVENT_TIME_LABEL"));
+assert.ok(venueHoursSource.includes("Venue hours"), "Venue hours must be explicitly labeled.");
 assert.equal(
   publicEventsSource.includes('source: "venue_hours"'),
   false,
   "Public event-time shaping must never promote venue hours to event time.",
-);
-assert.equal(
-  publicEventsSource.includes("resolveEventTimePresentation"),
-  false,
-  "The presentation fallback must stay outside canonical public event-time shaping.",
 );
 
 console.log("QA passed: event-time provenance, source recovery, UI labels, and Belgrade DST are deterministic.");

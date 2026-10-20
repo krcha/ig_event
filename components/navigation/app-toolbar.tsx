@@ -7,8 +7,6 @@ import { useEffect, useState } from "react";
 import {
   Bookmark,
   CalendarDays,
-  Instagram,
-  MapPin,
   ShieldCheck,
   Sparkles,
   Telescope,
@@ -17,7 +15,6 @@ import {
 import { EventZekaBrand } from "@/components/brand/event-zeka-brand";
 import { ProfileAvatarLink } from "@/components/navigation/profile-avatar-link";
 import { useUserLibrary } from "@/components/providers/user-library-provider";
-import { SITE_INSTAGRAM_URL } from "@/lib/seo/site";
 import { cn } from "@/lib/utils";
 
 type ToolbarItem = {
@@ -44,11 +41,10 @@ const PUBLIC_TOOLBAR_ITEMS: ToolbarItem[] = [
     match: "prefix",
   },
   {
-    href: "/map",
-    label: "Map",
-    icon: MapPin,
+    href: "/venues",
+    label: "Venues",
+    icon: Warehouse,
     match: "prefix",
-    activePrefixes: ["/venues"],
   },
   {
     href: "/saved",
@@ -110,25 +106,6 @@ type AppToolbarProps = {
   showAdminNavigation?: boolean;
 };
 
-function InstagramFollowLink({ compact = false }: { compact?: boolean }) {
-  return (
-    <a
-      aria-label="Follow @eventzeka on Instagram (opens in a new tab)"
-      className={cn(
-        "inline-flex shrink-0 items-center gap-1.5 rounded-md text-xs font-medium text-foreground/80 hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring",
-        compact ? "min-h-9 px-1.5" : "min-h-10 px-2",
-      )}
-      href={SITE_INSTAGRAM_URL}
-      rel="noopener noreferrer"
-      target="_blank"
-      title="Follow @eventzeka on Instagram"
-    >
-      <Instagram aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
-      <span>Follow{compact ? null : " @eventzeka"}</span>
-    </a>
-  );
-}
-
 export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
   const pathname = usePathname();
   const { upcomingSavedEventCount } = useUserLibrary();
@@ -176,10 +153,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
             <Link aria-label="Event Zeka home" className="inline-flex min-w-0" href="/">
               <EventZekaBrand compact />
             </Link>
-            <div className="flex shrink-0 items-center gap-2">
-              <InstagramFollowLink compact />
-              <ProfileAvatarLink />
-            </div>
+            <ProfileAvatarLink />
           </div>
         </div>
       </div>
@@ -232,9 +206,6 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                     );
                   })}
                 </nav>
-                <div className="ml-1 border-l border-border pl-2">
-                  <InstagramFollowLink />
-                </div>
                 <ProfileAvatarLink isActive={pathname === "/you"} variant="desktop" />
               </div>
             </div>

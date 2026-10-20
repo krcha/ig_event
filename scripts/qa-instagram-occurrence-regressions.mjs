@@ -743,7 +743,7 @@ const fromCaption = [
 const fromPost = makePost({
   caption: fromCaption,
   username: "from_sound",
-  handle: "from_sound",
+  handle: "20_44.nightclub",
   postId: "3950723823108129557",
   postedAt: "2026-07-27T20:10:01.000Z",
   postType: "sidecar",
@@ -768,27 +768,29 @@ const fromResults = prepareEventsForInsert(
     ],
   }),
   IMAGE_URL,
-  { from_sound: "frǾm", "20_44.nightclub": "Klub 20/44" },
+  { from_sound: "frǾm" },
   {},
-  { from_sound: "frǾm", "20_44.nightclub": "Klub 20/44" },
+  { from_sound: "frǾm" },
   {
     eventDateFilterNow: NOW,
     sourceRolesByHandle: { from_sound: "promoter" },
     venueResolverSnapshot: {
       venues: [
         {
+          aliases: ["frǾm"],
           id: "venue-klub-20-44",
           instagramHandle: "20_44.nightclub",
           name: "Klub 20/44",
         },
+      ],
+      identities: [
         {
-          id: "legacy-from-promoter",
-          instagramHandle: "from_sound",
-          name: "frǾm",
+          active: true,
+          kind: "historical_alias",
+          value: "frǾm",
+          venueId: "venue-klub-20-44",
         },
       ],
-      // The promoter's brand is not a historical name for its physical host.
-      identities: [],
     },
   },
 );
@@ -798,8 +800,6 @@ assert.equal(
   "single-date structured FRØM child must replace helpers",
 );
 const boundFromResults = bindSourceOccurrenceMetadata(fromPost, fromResults);
-assert.equal(boundFromResults[0]?.kind, "ok");
-assert.equal(boundFromResults[0]?.event.venue, "Klub 20/44", "The explicit physical host must remain separate from FRØM promoter identity.");
 assert.equal(
   boundFromResults[0]?.normalizedFields.multiEventSplitDetected,
   false,

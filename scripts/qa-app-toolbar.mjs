@@ -106,7 +106,7 @@ assert.equal(
   "Mobile top header should not render the old right-side current-tab chip.",
 );
 
-for (const label of ["Events", "Discover", "Map", "Saved", "You"]) {
+for (const label of ["Events", "Discover", "Venues", "Saved", "You"]) {
   assert.equal(
     new RegExp(`>\\s*${escapeRegExp(label)}\\s*<`).test(mobileTopbarSource),
     false,
@@ -117,7 +117,7 @@ for (const label of ["Events", "Discover", "Map", "Saved", "You"]) {
 assert.equal(
   /\b(pathname|isActivePath|desktopToolbarItems|mobileToolbarItems)\b/.test(mobileTopbarSource),
   false,
-  "Mobile top header markup should be path/tab-independent so it stays identical on Events, Map, Saved, and You.",
+  "Mobile top header markup should be path/tab-independent so it stays identical on Events, Venues, Saved, and You.",
 );
 
 const publicItemsStart = source.indexOf("const PUBLIC_TOOLBAR_ITEMS");
@@ -134,14 +134,14 @@ const publicItemsSource = source.slice(publicItemsStart, adminItemsStart);
 
 assert.deepEqual(
   [...publicItemsSource.matchAll(/\blabel:\s*"([^"]+)"/g)].map(([, label]) => label),
-  ["Events", "Discover", "Map", "Saved"],
-  "Public navigation tabs should remain exactly Events, Discover, Map, Saved.",
+  ["Events", "Discover", "Venues", "Saved"],
+  "Public navigation tabs should remain exactly Events, Discover, Venues, Saved.",
 );
 
 for (const { href, label } of [
   { href: "/", label: "Events" },
   { href: "/discover", label: "Discover" },
-  { href: "/map", label: "Map" },
+  { href: "/venues", label: "Venues" },
   { href: "/saved", label: "Saved" },
 ]) {
   assert.match(
@@ -152,28 +152,18 @@ for (const { href, label } of [
 }
 
 assert.equal(
-  /href:\s*"\/venues"/.test(publicItemsSource),
+  /href:\s*"\/map"|label:\s*"Map"/.test(publicItemsSource),
   false,
-  "Primary navigation should use /map and retain /venues only as a compatibility redirect.",
+  "Primary navigation should not expose the placeholder Map destination.",
 );
 assert.deepEqual(
-  redirects.find(({ source }) => source === "/venues"),
+  redirects.find(({ source }) => source === "/map"),
   {
-    source: "/venues",
-    destination: "/map?view=calendar",
+    source: "/map",
+    destination: "/venues",
     permanent: true,
   },
-  "The exact legacy /venues route should redirect permanently without swallowing venue directory/detail routes.",
-);
-assert.equal(
-  redirects.some(({ source }) => source === "/map" || source.startsWith("/venues/")),
-  false,
-  "The map must render directly and /venues/* must retain its own routes.",
-);
-assert.match(
-  publicItemsSource,
-  /href:\s*"\/map"[\s\S]*?activePrefixes:\s*\["\/venues"\]/,
-  "Venue directory and detail pages should retain the active Map navigation tab.",
+  "Next config should issue a permanent HTTP redirect from /map to /venues.",
 );
 assert.ok(
   source.includes('aria-label="Global"') && source.includes('aria-label="Mobile navigation"'),

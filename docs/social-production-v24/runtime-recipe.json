@@ -1,0 +1,136 @@
+{
+  "role": "Required dedicated social API media generator; same logical production stack as latest public web.",
+  "name": "ig-event-web-agenda-v24-release",
+  "id": "b9debd5db366b2518f084c4488fed44a1f9cfd488c274a70c46d8d4c8491f70c",
+  "image": "sha256:3d30ba33a5a5a9ba7403814db0161c3048f0cf0475fad475c9e4160ba405d81c",
+  "imageTag": "eventzeka-node-runtime:22.22.3-bookworm-reels-v1",
+  "workingDir": "/app",
+  "entrypoint": [
+    "docker-entrypoint.sh"
+  ],
+  "command": [
+    "npm",
+    "run",
+    "start"
+  ],
+  "mounts": [
+    {
+      "source": "/root/ig_event-releases/agenda-v24-publication-recovery-20261020",
+      "target": "/app",
+      "readOnly": true,
+      "type": "bind"
+    },
+    {
+      "source": "/root/ig_event-release-artifacts/agenda-v23-material-motion-20261020/node-modules",
+      "target": "/app/node_modules",
+      "readOnly": true,
+      "type": "bind"
+    },
+    {
+      "source": "/root/ig_event-release-artifacts/agenda-v24-publication-recovery-20261020/reel-cache",
+      "target": "/var/cache/eventzeka-reels",
+      "readOnly": false,
+      "type": "bind"
+    },
+    {
+      "source": "/root/ig_event-release-artifacts/agenda-v23-material-motion-20261020/canvas-runtime/node_modules",
+      "target": "/opt/eventzeka/material/node_modules",
+      "readOnly": true,
+      "type": "bind"
+    },
+    {
+      "source": "/root/ig_event-releases/agenda-v17-four-reels-20261019/node_modules",
+      "target": "/opt/eventzeka/shared/node_modules",
+      "readOnly": true,
+      "type": "bind"
+    }
+  ],
+  "ports": {
+    "3000/tcp": [
+      {
+        "HostIp": "127.0.0.1",
+        "HostPort": "3124"
+      }
+    ]
+  },
+  "networks": [
+    "n8n-compose_default"
+  ],
+  "restartPolicy": {
+    "Name": "unless-stopped",
+    "MaximumRetryCount": 0
+  },
+  "environmentKeyNames": [
+    "ADMIN_CLERK_USER_IDS",
+    "APIFY_API_TOKEN",
+    "APIFY_DATA_DETAIL_LEVEL",
+    "APIFY_INSTAGRAM_ACTOR_ID",
+    "APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN",
+    "APIFY_MEMORY_MBYTES",
+    "APIFY_RUN_TIMEOUT_SECONDS",
+    "APIFY_SKIP_PINNED_POSTS",
+    "APP_BIND",
+    "APP_PORT",
+    "CLERK_AUTHORIZED_PARTIES",
+    "CLERK_JWT_ISSUER_DOMAIN",
+    "CLERK_SECRET_KEY",
+    "CONVEX_BACKEND_BIND",
+    "CONVEX_BACKEND_PORT",
+    "CONVEX_CLOUD_ORIGIN",
+    "CONVEX_DASHBOARD_BIND",
+    "CONVEX_DASHBOARD_PORT",
+    "CONVEX_DEPLOYMENT",
+    "CONVEX_DISABLE_BEACON",
+    "CONVEX_INGEST_SECRET",
+    "CONVEX_REDACT_LOGS_TO_CLIENT",
+    "CONVEX_SELF_HOSTED_URL",
+    "CONVEX_SITE_BIND",
+    "CONVEX_SITE_ORIGIN",
+    "CONVEX_SITE_PORT",
+    "CONVEX_TRAEFIK_ENABLE",
+    "CONVEX_TRAEFIK_HOST",
+    "CRON_DAYS_BACK",
+    "CRON_FULL_SCRAPE_COOLDOWN_HOURS",
+    "CRON_INGESTION_BATCH_SIZE",
+    "CRON_INGESTION_MAX_STEPS",
+    "CRON_MAX_HANDLES_PER_RUN",
+    "CRON_RESULTS_LIMIT",
+    "CRON_SECRET",
+    "ENABLE_FRESH_APIFY_FETCH",
+    "EVENTS_TIMEZONE",
+    "EVENTZEKA_REEL_CACHE_DIR",
+    "EVENT_ZEKA_PUBLIC_ORIGIN",
+    "FOLLOW_DISCOVERY_MAX_TOTAL_CHARGE_USD",
+    "FOLLOW_DISCOVERY_RESULTS_LIMIT",
+    "FOLLOW_DISCOVERY_SOURCE_HANDLE",
+    "HOSTNAME",
+    "INGESTION_FULL_SCRAPE_CONCURRENCY",
+    "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
+    "NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL",
+    "NEXT_PUBLIC_CLERK_SIGN_IN_URL",
+    "NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL",
+    "NEXT_PUBLIC_CLERK_SIGN_UP_URL",
+    "NEXT_PUBLIC_CONVEX_URL",
+    "NODE_ENV",
+    "NODE_VERSION",
+    "OPENAI_API_KEY",
+    "OPENAI_REVIEW_MODEL",
+    "OPENAI_VISION_MODEL",
+    "PATH",
+    "PORT",
+    "YARN_VERSION"
+  ],
+  "traefikLabels": {
+    "traefik.enable": "true",
+    "traefik.http.routers.ig-event-agenda-v24.entrypoints": "websecure",
+    "traefik.http.routers.ig-event-agenda-v24.priority": "921",
+    "traefik.http.routers.ig-event-agenda-v24.rule": "(Host(`eventzeka.com`) || Host(`www.eventzeka.com`) || Host(`events.ineedtofeedmyrabbit.com`)) && PathPrefix(`/api/social`)",
+    "traefik.http.routers.ig-event-agenda-v24.tls": "true",
+    "traefik.http.routers.ig-event-agenda-v24.tls.certresolver": "godaddy",
+    "traefik.http.services.ig-event-agenda-v24.loadbalancer.server.port": "3000"
+  },
+  "composePathFromStaleLabel": "/root/ig_event-release-artifacts/agenda-v24-publication-recovery-20261020/compose.yml",
+  "composeFilePresent": false,
+  "composeSha256": null,
+  "recipeSource": "Actual docker inspect; no environment values disclosed. Referenced Compose file is absent; private final backup must capture actual configuration."
+}

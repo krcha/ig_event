@@ -3,17 +3,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { isPlausibleConvexPublicId } from "../lib/convex/public-id.ts";
 import { getDiscoverPageCopy } from "../lib/discover/page-copy.ts";
 import {
-  projectPublicEventVenueDisplay,
-  sanitizeVenueLinkedPublicEventFields,
-} from "../lib/events/public-event-venue-fields.ts";
-import {
   SITE_NAME,
   SITE_ORIGIN,
   SITE_INSTAGRAM_URL,
   buildEventStartDate,
   buildEventStructuredData,
   buildHomePageStructuredData,
-  buildVenueOpeningHoursSpecification,
   buildVenueStructuredData,
   serializeJsonLd,
 } from "../lib/seo/site.ts";
@@ -85,135 +80,6 @@ for (const time of [
   );
 }
 
-for (const date of ["", "2026-02-30", "2025-02-29", "2026-13-01", "2026-00-01", "2026-1-01", "2026-10-17T20:00:00Z"]) {
-  assert.equal(buildEventStartDate(date, "20:00"), null, `Invalid real calendar date '${date}' must not become schema.`);
-  assert.equal(buildEventStructuredData({
-    _id: "invalid-date", artists: [], date, eventType: "Culture", title: "Invalid date", venue: "Gallery", time: "20:00-22:00",
-  }), null, "A page must omit Event schema when its actual occurrence date is invalid.");
-}
-assert.equal(buildEventStartDate("2028-02-29", "20:00"), "2028-02-29T20:00:00+01:00");
-
-for (const [date, time, startDate, endDate] of [
-  ["2026-12-31", "23:00-02:00", "2026-12-31T23:00:00+01:00", "2027-01-01T02:00:00+01:00"],
-  ["2026-03-28", "22:00-03:30", "2026-03-28T22:00:00+01:00", "2026-03-29T03:30:00+02:00"],
-  ["2026-10-24", "22:00-03:30", "2026-10-24T22:00:00+02:00", "2026-10-25T03:30:00+01:00"],
-  ["2026-10-25", "02:15-02:45", "2026-10-25T02:15:00", "2026-10-25T02:45:00"],
-  ["2026-10-25", "02:45-02:15", "2026-10-25T02:45:00", undefined],
-  ["2026-03-29", "02:30-03:30", "2026-03-29", undefined],
-  ["2026-03-29", "01:30-02:30", "2026-03-29T01:30:00+01:00", undefined],
-  ["2026-10-17", "20:00-20:00", "2026-10-17T20:00:00+02:00", undefined],
-]) {
-  const schema = buildEventStructuredData({
-    _id: "schema-date-boundary", artists: [], date, time, eventType: "Club", title: "Clock boundary", venue: "Club",
-  });
-  assert.equal(schema.startDate, startDate);
-  assert.equal(schema.endDate, endDate, "End dates must cross midnight and DST independently without selecting an ambiguous instant.");
-}
-
-const hoursFixture = (weekly, overrides = {}) => ({
-  hoursJson: JSON.stringify({
-    generatedAt: "2026-10-17T10:00:00.000Z", source: "manual", timezone: "Europe/Belgrade", version: 1,
-    weekly, ...overrides,
-  }),
-  hoursSource: "manual",
-  hoursTimezone: "Europe/Belgrade",
-});
-const openingSpecification = (day, opens, closes) => ({
-  "@type": "OpeningHoursSpecification", dayOfWeek: `https://schema.org/${day}`, opens, closes,
-});
-const verifiedVenueHours = hoursFixture([
-  { day: 1, closed: true, windows: [] },
-  { day: 2, closed: false, windows: [
-    { day: 2, start: "12:00", end: "14:00" },
-    { day: 2, start: "20:00", end: "02:00", spansNextDay: true },
-  ] },
-  { day: 3, closed: true, windows: [] },
-  { day: 4, closed: false, windows: [] },
-  { day: 5, closed: false, windows: [{ day: 5, start: "00:00", end: "23:59" }] },
-]);
-const expectedVenueHours = [
-  openingSpecification("Tuesday", "12:00", "14:00"),
-  openingSpecification("Tuesday", "20:00", "02:00"),
-  openingSpecification("Friday", "00:00", "23:59"),
-  openingSpecification("Monday", "00:00", "00:00"),
-];
-assert.deepEqual(buildVenueOpeningHoursSpecification(verifiedVenueHours), expectedVenueHours,
-  "Retain multiple periods, overnight closing, 24h, and explicit closed days without inventing missing days or closing overnight carry.");
-
-assert.deepEqual(buildVenueOpeningHoursSpecification(hoursFixture([
-  { day: 6, closed: false, windows: [{ day: 6, start: "22:00", end: "02:00" }] },
-  { day: 0, closed: true, windows: [] },
-])), [openingSpecification("Saturday", "22:00", "02:00")], "Saturday overnight hours must continue into Sunday without a contradictory closed-day entry.");
-assert.deepEqual(buildVenueOpeningHoursSpecification(hoursFixture([
-  { day: 0, closed: false, windows: [{ day: 0, start: "00:00", end: "00:00", spansNextDay: true }] },
-])), [openingSpecification("Sunday", "00:00", "23:59")], "An all-day zero-to-zero source window must not become Google's closed sentinel.");
-assert.deepEqual(buildVenueOpeningHoursSpecification(hoursFixture([
-  { day: 1, closed: false, windows: [{ day: 1, start: "22:00", end: "22:00", spansNextDay: true }] },
-])), [openingSpecification("Monday", "22:00", "00:00"), openingSpecification("Tuesday", "00:00", "22:00")], "A 24h session beginning late in a day retains both midnight portions.");
-assert.deepEqual(buildVenueOpeningHoursSpecification(hoursFixture([
-  { day: 1, closed: false, windows: [{ day: 1, start: "08:00", end: "10:00", spansNextDay: true }] },
-])), [openingSpecification("Monday", "08:00", "00:00"), openingSpecification("Tuesday", "00:00", "10:00")], "An explicit >24h period must not become a two-hour same-day opening.");
-
-for (const invalidHours of [
-  undefined, {}, { hoursJson: "not-json" },
-  hoursFixture([], { source: "none" }),
-  { ...verifiedVenueHours, hoursSource: "none" },
-  { ...verifiedVenueHours, hoursSource: "google" },
-  hoursFixture([], { timezone: "America/New_York" }),
-  hoursFixture([], { timezone: 123 }),
-  { ...verifiedVenueHours, hoursTimezone: "America/New_York" },
-  hoursFixture([{ day: 1, closed: false, windows: [{ day: 1, start: "24:00", end: "02:00" }] }]),
-  hoursFixture([{ day: 1, closed: true, windows: [{ day: 1, start: "broken", end: "02:00" }] }]),
-]) {
-  assert.deepEqual(buildVenueOpeningHoursSpecification(invalidHours), [], "Unverified, invalid, or foreign-timezone schedules must not be asserted as Belgrade place hours.");
-}
-for (const weekly of [
-  [{ day: 1, closed: false, windows: [{ day: 2, start: "20:00", end: "02:00" }] }],
-  [{ day: 1, closed: true, windows: [{ day: 1, start: "20:00", end: "02:00" }] }],
-  [{ day: 1, closed: true, windows: [] }, { day: 1, closed: false, windows: [{ day: 1, start: "20:00", end: "02:00" }] }],
-]) {
-  assert.deepEqual(buildVenueOpeningHoursSpecification(hoursFixture(weekly)), [], "Conflicting or mismatched weekday records must fail closed.");
-}
-
-for (const [time, timeStatus, expectedStart, expectedEnd] of [
-  [undefined, undefined, "2026-10-17", undefined],
-  ["TBD", "unknown", "2026-10-17", undefined],
-  ["22:00-02:00", "unknown", "2026-10-17", undefined],
-  ["22:00-02:00", "inferred", "2026-10-17", undefined],
-  ["22:00", "confirmed", "2026-10-17T22:00:00+02:00", undefined],
-  ["22:00-02:00", "confirmed", "2026-10-17T22:00:00+02:00", "2026-10-18T02:00:00+02:00"],
-  ["22:00-02:00", undefined, "2026-10-17T22:00:00+02:00", "2026-10-18T02:00:00+02:00"],
-]) {
-  const schema = buildEventStructuredData({
-    _id: "schema-venue-hours", artists: [], date: "2026-10-17", time, timeStatus,
-    eventType: "Club", title: "Announced event", venue: "Club", venueHours: verifiedVenueHours,
-    displayTimeStart: "20:00", displayTimeEnd: "02:00", displayTimeLabel: "20:00–02:00",
-  });
-  assert.equal(schema.startDate, expectedStart, "Venue/presentation hours must never fabricate an Event start.");
-  assert.equal(schema.endDate, expectedEnd, "Only an announced canonical range can produce an Event end.");
-  assert.deepEqual(schema.location.openingHoursSpecification, expectedVenueHours, "Place hours remain attached to the location even when the event start is unknown.");
-  assert.equal("openingHoursSpecification" in schema, false, "Business hours belong to Place, never Event.");
-}
-assert.deepEqual(buildVenueStructuredData({
-  _id: "venue-hours", instagramHandle: "club", name: "Club", ...verifiedVenueHours,
-}).openingHoursSpecification, expectedVenueHours, "Venue LocalBusiness and Event Place must share the same sourced weekly hours.");
-
-for (const [description, time, age, endDate] of [
-  ["For ages 5–8; led by Marija Nikolić.", "12:00-13:30", "5-8", "2026-10-17T13:30:00+02:00"],
-  ["For ages 9–14; led by Marija Nikolić.", "14:00-15:30", "9-14", "2026-10-17T15:30:00+02:00"],
-  ["Nightlife event.", "22:00-03:00", undefined, "2026-10-18T03:00:00+02:00"],
-  ["No announced session details.", "TBD", undefined, undefined],
-  ["Two groups: ages 5–8 and ages 9–14.", "14:00", undefined, undefined],
-]) {
-  const session = buildEventStructuredData({
-    _id: "session-qa", title: "Mali vajari boja", artists: [],
-    date: "2026-10-17", eventType: "learning", venue: "Museum",
-    description, time,
-  });
-  assert.equal(session.typicalAgeRange, age, "Age schema must describe this occurrence only.");
-  assert.equal(session.endDate, endDate, "Session end must preserve the announced Belgrade clock.");
-}
-
 const eventJsonLd = buildEventStructuredData({
   _id: "event-1",
   artists: ["DJ Test"],
@@ -225,14 +91,12 @@ const eventJsonLd = buildEventStructuredData({
   time: "22:30",
   title: "Test Night",
   venue: "Test Club",
-  venueId: "venue-test-club",
   venueLatitude: 44.8176,
   venueLocation: "Cetinjska 15, Belgrade",
   venueLongitude: 20.4633,
 });
 assert.equal(eventJsonLd["@context"], "https://schema.org");
 assert.equal(eventJsonLd["@type"], "Event");
-assert.equal(eventJsonLd["@id"], `${SITE_ORIGIN}/events/event-1#event`);
 assert.equal(eventJsonLd.url, `${SITE_ORIGIN}/events/event-1`);
 assert.equal(eventJsonLd.startDate, "2026-12-18T22:30:00+01:00");
 assert.equal(eventJsonLd.eventAttendanceMode, "https://schema.org/OfflineEventAttendanceMode");
@@ -243,8 +107,6 @@ assert.equal("organizer" in eventJsonLd, false);
 assert.equal("isAccessibleForFree" in eventJsonLd, false);
 assert.deepEqual(eventJsonLd.location, {
   "@type": "Place",
-  "@id": `${SITE_ORIGIN}/venues/venue-test-club#place`,
-  url: `${SITE_ORIGIN}/venues/venue-test-club`,
   address: {
     "@type": "PostalAddress",
     addressCountry: "RS",
@@ -256,7 +118,6 @@ assert.deepEqual(eventJsonLd.location, {
     latitude: 44.8176,
     longitude: 20.4633,
   },
-  hasMap: "https://www.google.com/maps/search/?api=1&query=44.8176,20.4633",
   name: "Test Club",
 });
 
@@ -274,9 +135,6 @@ assert.equal(dateOnlyEventJsonLd.isAccessibleForFree, true);
 assert.equal("offers" in dateOnlyEventJsonLd, false);
 assert.equal("organizer" in dateOnlyEventJsonLd, false);
 assert.equal("performer" in dateOnlyEventJsonLd, false);
-assert.equal("geo" in dateOnlyEventJsonLd.location, false);
-assert.equal("hasMap" in dateOnlyEventJsonLd.location, false);
-assert.equal("@id" in dateOnlyEventJsonLd.location, false, "An unlinked event must not invent a venue identity.");
 
 for (const ticketPrice of [
   "Free",
@@ -339,9 +197,7 @@ const venueJsonLd = buildVenueStructuredData({
   neighborhood: "Dorcol",
 });
 assert.equal(venueJsonLd["@type"], "LocalBusiness");
-assert.equal(venueJsonLd["@id"], `${SITE_ORIGIN}/venues/venue-1#place`);
 assert.equal(venueJsonLd.url, `${SITE_ORIGIN}/venues/venue-1`);
-assert.equal(venueJsonLd.hasMap, "https://www.google.com/maps/search/?api=1&query=44.81,20.46");
 assert.deepEqual(venueJsonLd.sameAs, ["https://www.instagram.com/testgallery/"]);
 assert.deepEqual(venueJsonLd.address, {
   "@type": "PostalAddress",
@@ -350,82 +206,6 @@ assert.deepEqual(venueJsonLd.address, {
   addressRegion: "Dorcol",
   streetAddress: "Dorcol, Belgrade",
 });
-
-const updatedVenue = {
-  _id: "venue-updated-location",
-  instagramHandle: "updated_venue",
-  latitude: 44.8231676,
-  location: "Current Street 22, Beograd",
-  longitude: 20.472113,
-  name: "Current Venue Name",
-};
-const savedSourceEvent = {
-  _id: "event-updated-location",
-  artists: [],
-  date: "2026-10-17",
-  eventType: "Club",
-  sourceCaption: "Exact original source at the old named venue.",
-  instagramPostUrl: "https://www.instagram.com/p/QA_Current_Location/",
-  title: "Announced Event",
-  venue: "Old Venue Name",
-  venueId: updatedVenue._id,
-  venueLatitude: 45.25,
-  venueLocation: "Former Street 99",
-  venueLongitude: 19.84,
-};
-const savedSourceSnapshot = structuredClone(savedSourceEvent);
-const currentEvent = projectPublicEventVenueDisplay(savedSourceEvent, updatedVenue);
-const currentEventJsonLd = buildEventStructuredData(currentEvent);
-const currentVenueJsonLd = buildVenueStructuredData(updatedVenue);
-assert.deepEqual(currentEventJsonLd.location.address, currentVenueJsonLd.address, "Event and venue schema must use the same current address.");
-assert.deepEqual(currentEventJsonLd.location.geo, currentVenueJsonLd.geo, "Event and venue schema must use the same current coordinate pair.");
-assert.equal(currentEventJsonLd.location.address.streetAddress, updatedVenue.location);
-assert.equal(currentEventJsonLd.location.geo.latitude, updatedVenue.latitude);
-assert.equal(currentEventJsonLd.location.geo.longitude, updatedVenue.longitude);
-assert.equal(currentEventJsonLd.location["@id"], currentVenueJsonLd["@id"]);
-assert.equal(currentEventJsonLd.location.url, currentVenueJsonLd.url);
-assert.equal(currentEventJsonLd.location.hasMap, currentVenueJsonLd.hasMap);
-assert.equal(currentEventJsonLd.location.name, updatedVenue.name);
-assert.equal(currentEventJsonLd.startDate, savedSourceEvent.date, "A location refresh must not invent an event start from venue hours.");
-assert.equal(currentEvent.sourceCaption, savedSourceEvent.sourceCaption);
-assert.equal(currentEvent.instagramPostUrl, savedSourceEvent.instagramPostUrl);
-assert.deepEqual(savedSourceEvent, savedSourceSnapshot, "Schema generation and projection must leave stored source fields untouched.");
-
-const hiddenEventJsonLd = buildEventStructuredData(sanitizeVenueLinkedPublicEventFields(savedSourceEvent, false));
-for (const field of ["@id", "url", "hasMap", "geo"]) {
-  assert.equal(field in hiddenEventJsonLd.location, false, `A hidden venue must not expose location ${field}.`);
-}
-assert.equal("streetAddress" in hiddenEventJsonLd.location.address, false);
-
-for (const [latitude, longitude] of [
-  [undefined, undefined], [44.81, undefined], [undefined, 20.46],
-  [null, 20.46], [44.81, null], [NaN, 20.46], [44.81, NaN],
-  [Infinity, 20.46], [44.81, -Infinity], [90.01, 20.46], [-90.01, 20.46],
-  [44.81, 180.01], [44.81, -180.01], [0, 0],
-]) {
-  const invalidEvent = buildEventStructuredData({
-    ...savedSourceEvent,
-    venueLatitude: latitude,
-    venueLongitude: longitude,
-  });
-  const invalidVenue = buildVenueStructuredData({ ...updatedVenue, latitude, longitude });
-  assert.equal("geo" in invalidEvent.location, false, "Invalid or partial coordinates must not produce Event geo.");
-  assert.equal("hasMap" in invalidEvent.location, false);
-  assert.equal("geo" in invalidVenue, false, "Invalid or partial coordinates must not produce venue geo.");
-  assert.equal(invalidVenue.hasMap, `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${updatedVenue.name} ${updatedVenue.location}`)}`);
-  const clearedEvent = projectPublicEventVenueDisplay(savedSourceEvent, {
-    ...updatedVenue, latitude, longitude, location: null,
-  });
-  const clearedJsonLd = buildEventStructuredData(clearedEvent);
-  assert.equal("geo" in clearedJsonLd.location, false, "Removing current coordinates must never restore the old event pair.");
-  assert.equal("streetAddress" in clearedJsonLd.location.address, false, "Removing a current address must never restore the old event address.");
-  assert.doesNotMatch(serializeJsonLd(clearedJsonLd), /Former Street|45\.25|19\.84|NaN|Infinity/);
-}
-
-for (const [latitude, longitude] of [[90, 180], [-90, -180], [0, 20.46], [44.81, 0]]) {
-  const boundaryVenue = buildVenueStructuredData({ ...updatedVenue, latitude, longitude });
-  assert.deepEqual(boundaryVenue.geo, { "@type": "GeoCoordinates", latitude, longitude });
-}
 
 for (const cityOnlyLocation of [
   undefined,
@@ -525,8 +305,7 @@ const layout = read("app/layout.tsx");
 const rootPage = read("app/page.tsx");
 const browsePage = read("app/(main)/events-browse-page.tsx");
 const eventPage = read("app/(main)/events/[eventId]/page.tsx");
-const eventMap = read("app/(main)/map/page.tsx");
-const venueDirectory = read("app/(main)/venues/directory/page.tsx");
+const venueDirectory = read("app/(main)/venues/page.tsx");
 const venuePage = read("app/(main)/venues/[venueId]/page.tsx");
 const discoverPage = read("app/(main)/discover/page.tsx");
 const savedPage = read("app/(main)/saved/page.tsx");
@@ -569,7 +348,6 @@ assert.ok(browsePage.includes("buildHomePageStructuredData"));
 for (const [label, source] of [
   ["event detail", eventPage],
   ["venue directory", venueDirectory],
-  ["event map", eventMap],
   ["venue detail", venuePage],
   ["discover", discoverPage],
 ]) {
@@ -583,9 +361,6 @@ assert.ok(venuePage.includes("const loadVenuePage = cache("));
 assert.match(eventPage, /generateMetadata[\s\S]*notFound\(\)/);
 assert.match(venuePage, /generateMetadata[\s\S]*notFound\(\)/);
 assert.ok(venueDirectory.includes("buildVenueDirectoryStructuredData"));
-assert.ok(eventMap.includes('canonical: "/map"'));
-assert.ok(eventMap.includes('new URL("/map", SITE_ORIGIN)'));
-assert.ok(eventMap.includes("index: !hasDateFilter"));
 assert.ok(discoverPage.includes("index: !hasDateFilter"));
 
 for (const [label, source] of [
@@ -633,9 +408,7 @@ assert.ok(sitemap.includes('"seo-sitemap-public-data-v2"'));
 assert.ok(sitemapData.includes("limit: 2000"));
 assert.ok(sitemapData.includes("addDaysToDateKey(options.today, 367)"));
 assert.ok(sitemap.includes("/discover"));
-assert.ok(sitemap.includes('absoluteUrl("/map")'));
-assert.equal(sitemap.includes('absoluteUrl("/venues")'), false, "The redirecting legacy map URL must not appear in the sitemap.");
-assert.ok(sitemap.includes("/venues/directory"));
+assert.ok(sitemap.includes("/venues"));
 assert.ok(sitemap.includes("/events/${event._id}"));
 assert.ok(sitemap.includes("/venues/${venue._id}"));
 assert.equal((nextConfig.match(/permanent: true/g) ?? []).length >= 4, true);

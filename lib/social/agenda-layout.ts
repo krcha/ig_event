@@ -9,6 +9,7 @@ export const BODY_X = 257;
 export const BODY_WIDTH = WIDTH - MARGIN - BODY_X;
 export const LIST_TOP = 400;
 export const LIST_BOTTOM = 1218;
+export const REEL_LIST_BOTTOM = 1328;
 const ROW_PADDING = 54;
 const UNSAFE_CONTROL_CHARACTERS =
   /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
@@ -40,6 +41,8 @@ export type PosterFonts = {
 };
 
 let posterFonts: PosterFonts | undefined;
+let japaneseFallback: Font | undefined;
+let unicodeFallback: Font | undefined;
 
 function loadFont(filename: string): Font {
   const font = create(
@@ -88,9 +91,20 @@ function hasGlyphs(font: Font, text: string): boolean {
   );
 }
 
+// These larger faces are loaded only when the established design fonts cannot
+// preserve the complete event identity. Existing Latin/Serbian layouts stay exact.
+export function getExtendedFallbackFont(value: string): Font | undefined {
+  japaneseFallback ||= loadFont("IPAGothic.ttf");
+  if (hasGlyphs(japaneseFallback, value)) return japaneseFallback;
+  unicodeFallback ||= loadFont("Unifont.ttf");
+  return hasGlyphs(unicodeFallback, value) ? unicodeFallback : undefined;
+}
+
 function fontForText(primary: Font, fallback: Font, value: string): Font {
   if (hasGlyphs(primary, value)) return primary;
   if (hasGlyphs(fallback, value)) return fallback;
+  const extended = getExtendedFallbackFont(value);
+  if (extended) return extended;
   throw new AgendaRenderError("Event text contains unsupported identity characters.");
 }
 
@@ -232,7 +246,7 @@ type PosterRow = {
   minHeight: number;
 };
 
-function buildRows(events: PreparedAgendaEvent[], fonts: PosterFonts): PosterRow[] {
+function buildRows(events: PreparedAgendaEvent[], fonts: PosterFonts, fourEventReel = false): PosterRow[] {
   const identities = events.map((event) => {
     const title = cleanAgendaText(event.title).toLocaleUpperCase("sr-Latn-RS");
     const venue = cleanAgendaText(event.venue, 300);
@@ -269,10 +283,10 @@ function buildRows(events: PreparedAgendaEvent[], fonts: PosterFonts): PosterRow
           detail,
           timeLines,
           bodyHeight,
-          minHeight: Math.max(bodyHeight, timeLines.length > 1 ? 95 : 44) + ROW_PADDING,
+          minHeight: fourEventReel ? Math.max(bodyHeight, 108) + 38 : Math.max(bodyHeight, timeLines.length > 1 ? 95 : 44) + ROW_PADDING,
         };
       });
-      if (rows.reduce((height, row) => height + row.minHeight, 0) <= LIST_BOTTOM - LIST_TOP) {
+      if (rows.reduce((height, row) => height + row.minHeight, 0) <= (fourEventReel ? REEL_LIST_BOTTOM : LIST_BOTTOM) - LIST_TOP) {
         return rows;
       }
     }
@@ -288,12 +302,13 @@ export type AgendaLayoutRow = PosterRow & {
   detailTop: number;
 };
 
-export function buildAgendaLayout(events: PreparedAgendaEvent[]): AgendaLayoutRow[] {
-  if (events.length < 1 || events.length > 3) {
-    throw new AgendaRenderError("Poster requires one to three events.");
+export function buildAgendaLayout(events: PreparedAgendaEvent[], options: { format?: "feed" | "story" | "reel" } = {}): AgendaLayoutRow[] {
+  if (events.length < 1 || events.length > (options.format === "reel" ? 4 : 3)) {
+    throw new AgendaRenderError(options.format === "reel" ? "Reel requires one to four events." : "Poster requires one to three events.");
   }
-  const rows = buildRows(events, getAgendaFonts());
-  const extra = (LIST_BOTTOM - LIST_TOP - rows.reduce((height, row) => height + row.minHeight, 0)) / rows.length;
+  const fourEventReel = options.format === "reel" && events.length === 4;
+  const rows = buildRows(events, getAgendaFonts(), fourEventReel);
+  const extra = ((fourEventReel ? REEL_LIST_BOTTOM : LIST_BOTTOM) - LIST_TOP - rows.reduce((height, row) => height + row.minHeight, 0)) / rows.length;
   let rowTop = LIST_TOP;
   return rows.map((row) => {
     const height = row.minHeight + extra;

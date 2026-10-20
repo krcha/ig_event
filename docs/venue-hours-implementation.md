@@ -1,14 +1,9 @@
 # Venue Working Hours Runbook
 
-Public event loaders attach the matched venue's weekly hours. When the event has
-no explicit time, detail, calendar and map views display that date's venue
-windows in regular weight, without a separate opening-hours label. A start-only
-event displays the matching venue closing as its assumed end.
-`resolveEventTimePresentation` supplies this display context;
-`resolveEventTimeDisplay` keeps canonical event-time evidence intact. Venue
-opening hours never become stored event start/end times, structured data,
-sorting keys, or day/night classification. This runbook covers populating and
-refreshing `venues.hoursJson`.
+The public event display already uses venue hours when an event has no explicit
+time: `resolveEventTimeDisplay` falls back to the matched venue's weekly hours,
+and public event loaders attach the venue hours payload. This runbook is about
+populating and refreshing `venues.hoursJson`.
 
 ## Prerequisites
 
@@ -77,36 +72,7 @@ available.
 
 The event detail page renders `VenueWeeklyHours` below the main event panel.
 The component renders nothing when no usable weekly hours exist and shows source
-attribution for Google, OpenStreetMap, or manual hours. Reviewed source links in
-`raw.sourceUrls` or `raw.evidenceUrls` appear as clickable hours sources.
-
-The main detail time tile, calendar rows and map use all opening windows for the
-event's weekday when no event time is announced, including overnight closing
-times. An announced start is preserved. When only a start is available, the
-display assumes the event runs until the end of the venue's matching continuous
-opening window. Touching midnight periods are joined; closing gaps remain
-separate. An announced end always wins. This presentation assumption does not
-change stored event times, provenance, sorting or structured data. Missing
-weekdays remain unknown
-(`Not available` in the weekly table), while only explicit closed days say
-`Closed`. Partial source schedules must omit unknown weekdays rather than mark
-them closed.
-
-The calendar and map share an `Open now` control using `Europe/Belgrade` time.
-Known event starts and ends determine eligibility; a start-only event uses the
-venue closing assumption above. An unresolved end may appear only within the
-current nightlife day, after an announced start, with the explicit label
-`Possibly still on - end unconfirmed`. Unknown-time events with unknown hours
-may appear on that nightlife day with the same label. Confirmed closing times,
-explicit closed schedules, future starts and earlier nightlife days stay out.
-This eligibility assumption does not invent or store an event end. Events without
-a usable time otherwise use current venue opening hours, including verified
-overnight continuations from yesterday. Enabling the home filter retains the
-07:00 nightlife date; the map keeps its existing 06:00 display rollover. Both
-read civil yesterday/today independently, retaining current-civil early starts.
-Explicit date navigation leaves this mode. Other calendar filters remain
-available. Results refresh each minute and when the tab becomes visible. The
-control's visible and accessible label is simply `Open now`.
+attribution for Google, OpenStreetMap, or manual hours.
 
 ## Verification
 
@@ -115,7 +81,6 @@ Run the focused checks before a Google rollout:
 ```bash
 npm run qa:google-hours
 npm run qa:venue-hours
-npm run qa:venue-open-now
 ```
 
 Run the full handoff gate before shipping:

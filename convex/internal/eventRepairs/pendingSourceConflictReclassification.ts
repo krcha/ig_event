@@ -32,7 +32,7 @@ function assertBatchSize(length: number): void {
   }
 }
 
-export async function loadCompleteReceipt(
+async function loadCompleteReceipt(
   ctx: ReclassificationCtx,
   sourceIdentity: string,
 ): Promise<Receipt> {
@@ -71,7 +71,7 @@ export async function loadCompleteReceipt(
   return receipt;
 }
 
-export async function loadPendingSourceConflictCandidateProof(
+async function loadCandidate(
   ctx: ReclassificationCtx,
   receipt: Receipt,
   id: Id<"events">,
@@ -152,16 +152,17 @@ export async function loadPendingSourceConflictCandidateProof(
   ) {
     throw new Error(`Pending conflict reclassification current source revision failed: ${id}.`);
   }
-  return { event, link, source, occurrence, expected };
-}
-
-async function loadCandidate(ctx: ReclassificationCtx, receipt: Receipt, id: Id<"events">) {
-  const proof = await loadPendingSourceConflictCandidateProof(ctx, receipt, id);
-  const prepared = preparePendingCinemaSourceConflictReclassification(proof.event);
-  if (!eventRepresentsExpectedOccurrence({ ...proof.event, normalizedFieldsJson: prepared.normalizedFieldsJson }, proof.expected, { allowUnverifiedPending: true })) {
+  const prepared = preparePendingCinemaSourceConflictReclassification(event);
+  if (
+    !eventRepresentsExpectedOccurrence(
+      { ...event, normalizedFieldsJson: prepared.normalizedFieldsJson },
+      expected,
+      { allowUnverifiedPending: true },
+    )
+  ) {
     throw new Error(`Pending conflict reclassification would change the occurrence: ${id}.`);
   }
-  return { ...proof, prepared };
+  return { event, link, prepared };
 }
 
 export async function previewPendingCinemaSourceConflictReclassificationHandler(

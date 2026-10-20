@@ -1,0 +1,27 @@
+{
+  "containerId": "b9debd5db366b2518f084c4488fed44a1f9cfd488c274a70c46d8d4c8491f70c",
+  "healthcheck": {
+    "Test": [
+      "CMD-SHELL",
+      "node -e \"fetch('http://127.0.0.1:3000/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""
+    ],
+    "Interval": 30000000000,
+    "Timeout": 5000000000,
+    "StartPeriod": 30000000000,
+    "Retries": 3
+  },
+  "user": "root",
+  "readOnlyRootFilesystem": false,
+  "securityOptions": null,
+  "resourceLimits": {
+    "Memory": 0,
+    "MemorySwap": 0,
+    "NanoCpus": 0,
+    "PidsLimit": null
+  },
+  "capabilitiesAdded": null,
+  "capabilitiesDropped": null,
+  "privileged": false,
+  "init": null,
+  "stopSignal": null
+}

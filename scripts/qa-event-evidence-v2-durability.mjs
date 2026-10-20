@@ -17,20 +17,17 @@ import {
   isReviewablySourceGroundedApprovedEvent,
   reviewedTitleEvidenceMatchesBoundScheduleRow,
 } from "../convex/internal/eventRepairs/reviewedStructuredCorrections.ts";
-import { reviewedScheduleDateMatchesEventDate } from "../convex/internal/eventRepairs/reviewedCaptionEvidence.ts";
 import {
   createEvent,
   listPublicCalendarEventsWindowPaginated,
   listPublicEventsWindow,
   repairReviewedStructuredEventEvidence,
-  repairReviewedStructuredEventCaptionVenue,
   repairReviewedStructuredEventVenue,
   repairReviewedMultiSourceEventVenue,
   repairTrustedV2EventVenue,
   recordInstagramSourceOccurrenceSatisfaction,
 } from "../convex/events.ts";
 import { markOpenAiAnalysisAttemptStarted } from "../convex/scrapedPosts.ts";
-import { renameReferencedVenueWithReviewedEvents } from "../convex/venues.ts";
 
 function isoDateDaysFromNow(offsetDays) {
   const date = new Date();
@@ -144,35 +141,6 @@ assert.equal(reviewedTitleEvidenceMatchesBoundScheduleRow({
   ...reviewedTitleRowArgs,
   nextTitle: "Unattested Artist",
 }), false, "The replacement title must occur in the exact schedule row.");
-const openingRowText = "Otvaranje kluba VIBE zakazano je za 16. oktobar od 22 \u010dasa";
-const openingTitleArgs = {
-  currentFields: { splitEventIndex: 1, rowSourceText: openingRowText },
-  rawExtraction: { schedule_entries: [{ date: "16.10.2026", source_text: openingRowText }] },
-  eventDate: "2026-10-16",
-  nextTitle: "Otvaranje kluba VIBE",
-  titleEvidence: openingRowText,
-};
-assert.equal(reviewedTitleEvidenceMatchesBoundScheduleRow(openingTitleArgs), true, "An explicit DD.MM.YYYY date must bind the same ISO event date.");
-assert.equal(reviewedTitleEvidenceMatchesBoundScheduleRow({ ...openingTitleArgs, eventDate: "2026-10-17" }), false, "A differently formatted row must not bind another day.");
-for (const [source, event, expected] of [
-  ["2026-10-16", "2026-10-16", true],
-  ["16.10.2026", "2026-10-16", true],
-  ["29.02.2024", "2024-02-29", true],
-  ["16.10.2025", "2026-10-16", false],
-  ["17.10.2026", "2026-10-16", false],
-  ["10/16/2026", "2026-10-16", false],
-  ["16.10.26", "2026-10-16", false],
-  ["16.1.2026", "2026-01-16", false],
-  ["16.10.2026.", "2026-10-16", false],
-  ["29.02.2026", "2026-02-29", false],
-  ["2026-02-29", "2026-02-29", false],
-  ["31.04.2026", "2026-04-31", false],
-  ["00.10.2026", "2026-10-00", false],
-  ["16.13.2026", "2026-13-16", false],
-  [undefined, "2026-10-16", false],
-]) {
-  assert.equal(reviewedScheduleDateMatchesEventDate(source, event), expected, `Compare explicit schedule date ${source} with ${event}.`);
-}
 const parsedCachedExtraction = parseExtractedEventData(
   JSON.parse(serializedExtraction),
 );
@@ -1117,9 +1085,6 @@ try {
         return id;
       },
       query(table) {
-        if (table === "venues") {
-          return { take: async (limit) => [repairVenue, multiSourceTargetVenue].slice(0, limit) };
-        }
         if (table === "events") {
           return {
             withIndex(_index, configure) {
@@ -1138,9 +1103,7 @@ try {
           withIndex(_index, configure) {
             const criteria = indexCriteria(configure);
             const records =
-              table === "instagramSources"
-                ? [repairSource]
-                : table === "instagramEventSources"
+              table === "instagramEventSources"
                 ? reviewedSourceLinks
                 : table === "instagramSourceOccurrenceReceipts"
                   ? reviewedReceipts
@@ -1303,534 +1266,6 @@ try {
   assert.equal(reviewedAudits.length, 2);
   assert.equal(reviewedAudits[1].action, "reviewed_structured_evidence_corrected");
 
-  const fallbackReviewSnapshot = {
-    event: structuredClone(reviewedEvent), receipt: structuredClone(reviewedReceipt),
-    post: structuredClone(posterPost), epoch: structuredClone(reviewedTopologyEpoch), audits: structuredClone(reviewedAudits),
-  };
-  function restoreFallbackReview() {
-    for (const [record, snapshot] of [
-      [reviewedEvent, fallbackReviewSnapshot.event], [reviewedReceipt, fallbackReviewSnapshot.receipt],
-      [posterPost, fallbackReviewSnapshot.post], [reviewedTopologyEpoch, fallbackReviewSnapshot.epoch],
-    ]) {
-      for (const key of Object.keys(record)) delete record[key];
-      Object.assign(record, structuredClone(snapshot));
-    }
-    reviewedAudits.splice(0, reviewedAudits.length, ...structuredClone(fallbackReviewSnapshot.audits));
-  }
-  function installReviewedAccountFallback() {
-    const raw = JSON.stringify({ ...JSON.parse(reviewedEvent.rawExtractionJson), venue: "" });
-    reviewedEvent.rawExtractionJson = raw;
-    posterPost.analysisResultJson = raw;
-    reviewedEvent.normalizedFieldsJson = JSON.stringify({
-      ...JSON.parse(reviewedEvent.normalizedFieldsJson), rawVenue: "", sourceAccountRole: "venue",
-      venueAccountFallbackVersion: 1, venueSource: "handle_map", trustedVenueSource: true,
-    });
-  }
-  function reviewedFallbackArgs(target) {
-    return {
-      id: reviewedEvent._id, expectedUpdatedAt: reviewedEvent.updatedAt,
-      expectedNormalizedFieldsJson: reviewedEvent.normalizedFieldsJson,
-      expectedSourceLinkId: reviewedSourceLink._id, expectedSourceLinkUpdatedAt: reviewedSourceLink.updatedAt,
-      expectedReceiptId: reviewedReceipt._id, expectedReceiptUpdatedAt: reviewedReceipt.updatedAt,
-      nextVenue: target.name, targetVenueId: target._id, expectedTargetVenueUpdatedAt: target.updatedAt,
-      expectedTargetVenueHandle: target.instagramHandle, nextTitle: reviewedEvent.title,
-      nextTime: reviewedEvent.time, preserveExistingTime: true, nextArtists: [...reviewedEvent.artists],
-      nextDescription: reviewedEvent.description, posterVenueEvidence: target.name,
-      posterTimeEvidence: "", posterArtistEvidence: [...reviewedEvent.artists],
-      venueEvidence: "The exact retained poster identifies this separate physical venue.",
-      moderationNote: "Human-reviewed separate physical venue supersedes the original account inference without changing source or timing.",
-      serviceSecret: process.env.CRON_SECRET,
-    };
-  }
-  function assertReviewedFallbackSuperseded(before, target) {
-    const fields = JSON.parse(reviewedEvent.normalizedFieldsJson);
-    assert.equal(Object.hasOwn(fields, "venueAccountFallbackVersion"), false);
-    assert.equal(fields.venueSource, "human_reviewed");
-    assert.equal(fields.trustedVenueSource, false);
-    const supersession = fields.reviewedVenueAccountFallbackSupersession;
-    assert.deepEqual(supersession.previousFallback, {
-      venueAccountFallbackVersion: 1, normalizedVenue: repairVenue.name, venueSource: "handle_map",
-      trustedVenueSource: true, venueId: repairVenue._id, venueInstagramHandle: repairVenue.instagramHandle,
-    });
-    assert.equal(supersession.venue, target.name);
-    assert.equal(supersession.venueId, target._id);
-    assert.equal(supersession.reviewedBy, reviewedEvent.reviewedBy);
-    assert.equal(supersession.reviewedAt, reviewedEvent.reviewedAt);
-    assert.deepEqual(JSON.parse(reviewedAudits.at(-1).patchJson).reviewedVenueAccountFallbackSupersession, supersession);
-    for (const key of ["rawExtractionJson", "sourceCaption", "instagramPostId", "instagramPostUrl", "sourcePostedAt", "date", "time"]) {
-      assert.equal(reviewedEvent[key], before[key], `Reviewed fallback supersession must preserve ${key}.`);
-    }
-  }
-  try {
-    for (const repair of [repairReviewedStructuredEventEvidence, repairReviewedStructuredEventVenue]) {
-      restoreFallbackReview();
-      installReviewedAccountFallback();
-      const before = structuredClone(reviewedEvent);
-      const args = reviewedFallbackArgs(multiSourceTargetVenue);
-      for (const patch of [{ serviceSecret: "invalid" }, { expectedUpdatedAt: reviewedEvent.updatedAt - 1 },
-        { expectedSourceLinkUpdatedAt: reviewedSourceLink.updatedAt - 1 }, { expectedTargetVenueUpdatedAt: multiSourceTargetVenue.updatedAt - 1 }]) {
-        await assert.rejects(repair._handler(reviewedCtx, { ...args, ...patch }));
-        assert.deepEqual(reviewedEvent, before, "Rejected fallback repairs must not alter any event field.");
-        assert.equal(reviewedAudits.length, fallbackReviewSnapshot.audits.length);
-      }
-      assert.equal((await repair._handler(reviewedCtx, args)).updated, true);
-      assertReviewedFallbackSuperseded(before, multiSourceTargetVenue);
-    }
-    restoreFallbackReview();
-    installReviewedAccountFallback();
-    await repairReviewedStructuredEventEvidence._handler(reviewedCtx, reviewedFallbackArgs(repairVenue));
-    const sameVenueFields = JSON.parse(reviewedEvent.normalizedFieldsJson);
-    assert.equal(sameVenueFields.venueAccountFallbackVersion, 1, "A same-venue lineup review must retain the active fallback policy.");
-    assert.equal(sameVenueFields.reviewedVenueAccountFallbackSupersession, undefined);
-    assert.equal(sameVenueFields.trustedVenueSource, true);
-    const sameVenueBefore = structuredClone(reviewedEvent);
-    repairSource.active = false;
-    try {
-      await assert.rejects(repairReviewedStructuredEventEvidence._handler(reviewedCtx, reviewedFallbackArgs(repairVenue)), /one active mapped venue account/u);
-      assert.deepEqual(reviewedEvent, sameVenueBefore, "A same-venue review must still enforce the live account fallback guard.");
-    } finally {
-      repairSource.active = true;
-    }
-    restoreFallbackReview();
-    installReviewedAccountFallback();
-    reviewedEvent.normalizedFieldsJson = JSON.stringify({ ...JSON.parse(reviewedEvent.normalizedFieldsJson), venueAccountFallbackVersion: 2 });
-    const invalidBefore = structuredClone(reviewedEvent);
-    await assert.rejects(repairReviewedStructuredEventEvidence._handler(reviewedCtx, reviewedFallbackArgs(multiSourceTargetVenue)), /fallback lacks exact persisted source evidence/u);
-    assert.deepEqual(reviewedEvent, invalidBefore, "A reviewed venue change cannot erase an invalid fallback marker.");
-  } finally {
-    restoreFallbackReview();
-  }
-
-  const preserveTimeSnapshot = {
-    event: structuredClone(reviewedEvent), receipt: structuredClone(reviewedReceipt),
-    epoch: structuredClone(reviewedTopologyEpoch), audits: structuredClone(reviewedAudits),
-  };
-  try {
-    for (const timing of [
-      { time: "TBD", timeSource: "unknown", timeEvidenceText: "", timeConfidence: 0,
-        timeStatus: "unknown", timeEvidenceKind: "not_stated" },
-      { time: "18:45", timeSource: "caption", timeEvidenceText: "od 18:45", timeConfidence: 0.73,
-        timeStatus: "inferred", timeEvidenceKind: "start_time_stated" },
-    ]) {
-      Object.assign(reviewedEvent, timing);
-      const fields = { ...JSON.parse(reviewedEvent.normalizedFieldsJson), ...timing,
-        moderationSignals: ["time_tbd", "requires_human_approval"],
-      };
-      reviewedEvent.normalizedFieldsJson = JSON.stringify(fields);
-      reviewedReceipt.expectedOccurrences[0].time = timing.time;
-      const expectedTimeBefore = structuredClone(reviewedReceipt.expectedOccurrences[0].time);
-      const sourceBefore = { raw: reviewedEvent.rawExtractionJson, caption: reviewedEvent.sourceCaption, date: reviewedEvent.date };
-      const preserveArgs = {
-        id: reviewedEvent._id, expectedUpdatedAt: reviewedEvent.updatedAt,
-        expectedNormalizedFieldsJson: reviewedEvent.normalizedFieldsJson,
-        expectedSourceLinkId: reviewedSourceLink._id, expectedSourceLinkUpdatedAt: reviewedSourceLink.updatedAt,
-        expectedReceiptId: reviewedReceipt._id, expectedReceiptUpdatedAt: reviewedReceipt.updatedAt,
-        nextTitle: "Boundary Artist & Guest", nextTime: timing.time, nextVenue: repairVenue.name,
-        targetVenueId: repairVenue._id, expectedTargetVenueUpdatedAt: repairVenue.updatedAt,
-        expectedTargetVenueHandle: repairVenue.instagramHandle,
-        nextArtists: [...reviewedEvent.artists], nextDescription: "Poster-reviewed venue and lineup; existing time retained.",
-        posterVenueEvidence: "NOVI BIOSKOP ZVEZDA", posterTimeEvidence: "",
-        posterArtistEvidence: ["BOUNDARY ARTIST", "GUEST ARTIST"], preserveExistingTime: true,
-        moderationNote: "Human-reviewed poster venue and lineup without an announced time; preserve all existing timing facts.",
-        serviceSecret: process.env.CRON_SECRET,
-      };
-      const auditsBefore = reviewedAudits.length;
-      await assert.rejects(repairReviewedStructuredEventEvidence._handler(reviewedCtx, {
-        ...preserveArgs, nextTime: "23:45",
-      }), /exact existing value and no new poster time evidence/u);
-      await assert.rejects(repairReviewedStructuredEventEvidence._handler(reviewedCtx, {
-        ...preserveArgs, posterTimeEvidence: "23H",
-      }), /exact existing value and no new poster time evidence/u);
-      await assert.rejects(repairReviewedStructuredEventEvidence._handler(reviewedCtx, {
-        ...preserveArgs, preserveExistingTime: false,
-      }), /requires exact poster evidence/u, "Ordinary poster repair still requires stated poster timing.");
-      assert.equal(reviewedAudits.length, auditsBefore, "Rejected preserve-time repairs must not write success audits.");
-      const preserved = await repairReviewedStructuredEventEvidence._handler(reviewedCtx, preserveArgs);
-      assert.equal(preserved.updated, true);
-      const afterFields = JSON.parse(reviewedEvent.normalizedFieldsJson);
-      for (const [key, value] of Object.entries(timing)) {
-        assert.equal(reviewedEvent[key], value, `Poster review must preserve event ${key}.`);
-        assert.equal(afterFields[key], value, `Poster review must preserve normalized ${key}.`);
-      }
-      assert.equal(afterFields.reviewedPosterCorrection.preservedExistingTime, true);
-      assert.equal(afterFields.reviewedPosterCorrection.timeEvidence, "");
-      assert.equal(afterFields.moderationSignals.includes("time_tbd"), true);
-      assert.equal(reviewedReceipt.expectedOccurrences[0].time, expectedTimeBefore);
-      assert.equal(reviewedEvent.rawExtractionJson, sourceBefore.raw);
-      assert.equal(reviewedEvent.sourceCaption, sourceBefore.caption);
-      assert.equal(reviewedEvent.date, sourceBefore.date);
-      assert.equal(await isCanonicallyGroundedApprovedEvent(reviewedCtx, reviewedEvent), true);
-    }
-  } finally {
-    for (const [record, snapshot] of [
-      [reviewedEvent, preserveTimeSnapshot.event], [reviewedReceipt, preserveTimeSnapshot.receipt],
-      [reviewedTopologyEpoch, preserveTimeSnapshot.epoch],
-    ]) {
-      for (const key of Object.keys(record)) delete record[key];
-      Object.assign(record, snapshot);
-    }
-    reviewedAudits.splice(0, reviewedAudits.length, ...preserveTimeSnapshot.audits);
-  }
-
-  const emptyLineupSnapshot = {
-    event: structuredClone(reviewedEvent),
-    receipt: structuredClone(reviewedReceipt),
-    epoch: structuredClone(reviewedTopologyEpoch),
-    audits: structuredClone(reviewedAudits),
-  };
-  try {
-    const emptyLineupArgs = () => ({
-      id: reviewedEvent._id,
-      expectedUpdatedAt: reviewedEvent.updatedAt,
-      expectedNormalizedFieldsJson: reviewedEvent.normalizedFieldsJson,
-      expectedSourceLinkId: reviewedSourceLink._id,
-      expectedSourceLinkUpdatedAt: reviewedSourceLink.updatedAt,
-      expectedReceiptId: reviewedReceipt._id,
-      expectedReceiptUpdatedAt: reviewedReceipt.updatedAt,
-      nextTitle: "Boundary Grand Opening",
-      nextTime: "22:00",
-      nextVenue: repairVenue.name,
-      targetVenueId: repairVenue._id,
-      expectedTargetVenueUpdatedAt: repairVenue.updatedAt,
-      expectedTargetVenueHandle: repairVenue.instagramHandle,
-      nextArtists: [],
-      nextDescription: "Grand opening at the poster's named venue; no artists announced.",
-      posterVenueEvidence: "NOVI BIOSKOP ZVEZDA",
-      posterTimeEvidence: "22H",
-      posterArtistEvidence: [],
-      moderationNote: "Human-reviewed grand opening poster names the venue and time, with no announced performers.",
-      serviceSecret: process.env.CRON_SECRET,
-    });
-    await assert.rejects(
-      repairReviewedStructuredEventEvidence._handler(reviewedCtx, emptyLineupArgs()),
-      /public fields are not canonical/u,
-      "A poster venue/time repair must not erase an existing named lineup.",
-    );
-    reviewedEvent.artists = [];
-    reviewedEvent.normalizedFieldsJson = JSON.stringify({
-      ...JSON.parse(reviewedEvent.normalizedFieldsJson), artists: [],
-    });
-    reviewedReceipt.expectedOccurrences[0].artists = [];
-    await assert.rejects(
-      repairReviewedStructuredEventEvidence._handler(reviewedCtx, {
-        ...emptyLineupArgs(), posterArtistEvidence: ["UNRELATED ARTIST"],
-      }),
-      /requires exact poster evidence/u,
-      "An empty lineup must not claim poster artist evidence.",
-    );
-    await assert.rejects(
-      repairReviewedStructuredEventEvidence._handler(reviewedCtx, {
-        ...emptyLineupArgs(), nextArtists: ["Unproven Artist"],
-      }),
-      /requires exact poster evidence/u,
-      "Adding a performer still requires artist evidence.",
-    );
-    const emptyLineupResult = await repairReviewedStructuredEventEvidence._handler(reviewedCtx, emptyLineupArgs());
-    assert.equal(emptyLineupResult.updated, true);
-    assert.equal(reviewedEvent.title, "Boundary Grand Opening");
-    assert.equal(reviewedEvent.venueId, repairVenue._id);
-    assert.equal(reviewedEvent.time, "22:00");
-    assert.equal(reviewedEvent.timeStatus, "confirmed");
-    assert.equal(reviewedEvent.timeSource, "poster");
-    assert.deepEqual(reviewedEvent.artists, []);
-    assert.deepEqual(reviewedReceipt.expectedOccurrences[0].artists, []);
-    assert.deepEqual(JSON.parse(reviewedEvent.normalizedFieldsJson).reviewedPosterCorrection.artistEvidence, []);
-    assert.equal(await isCanonicallyGroundedApprovedEvent(reviewedCtx, reviewedEvent), true);
-  } finally {
-    for (const [record, snapshot] of [
-      [reviewedEvent, emptyLineupSnapshot.event],
-      [reviewedReceipt, emptyLineupSnapshot.receipt],
-      [reviewedTopologyEpoch, emptyLineupSnapshot.epoch],
-    ]) {
-      for (const key of Object.keys(record)) delete record[key];
-      Object.assign(record, snapshot);
-    }
-    reviewedAudits.splice(0, reviewedAudits.length, ...emptyLineupSnapshot.audits);
-  }
-
-  const nonPerformerSnapshot = {
-    event: structuredClone(reviewedEvent), receipt: structuredClone(reviewedReceipt),
-    epoch: structuredClone(reviewedTopologyEpoch), audits: structuredClone(reviewedAudits),
-  };
-  try {
-    const formerArtists = ["DOVE ATTIA", "LADISLAS CHOLLAT", "ROMAIN R.B"];
-    const creditEvidence = "AUTOR: DOVE ATTIA; REDITELJ: LADISLAS CHOLLAT; KOREOGRAF: ROMAIN R.B. These are creation credits, with no billed performers.";
-    const unknownTime = { time: "TBD", timeSource: "unknown", timeEvidenceText: "", timeConfidence: 0,
-      timeStatus: "unknown", timeEvidenceKind: "not_stated" };
-    Object.assign(reviewedEvent, unknownTime, { artists: [...formerArtists] });
-    reviewedEvent.normalizedFieldsJson = JSON.stringify({ ...JSON.parse(reviewedEvent.normalizedFieldsJson),
-      ...unknownTime, artists: [...formerArtists] });
-    Object.assign(reviewedReceipt.expectedOccurrences[0], { time: "TBD", artists: [...formerArtists] });
-    const retainedSource = { raw: reviewedEvent.rawExtractionJson, caption: reviewedEvent.sourceCaption, date: reviewedEvent.date };
-    const removalArgs = {
-      id: reviewedEvent._id, expectedUpdatedAt: reviewedEvent.updatedAt,
-      expectedNormalizedFieldsJson: reviewedEvent.normalizedFieldsJson,
-      expectedSourceLinkId: reviewedSourceLink._id, expectedSourceLinkUpdatedAt: reviewedSourceLink.updatedAt,
-      expectedReceiptId: reviewedReceipt._id, expectedReceiptUpdatedAt: reviewedReceipt.updatedAt,
-      nextTitle: "MOLIÈRE", nextTime: "TBD", preserveExistingTime: true, nextVenue: repairVenue.name,
-      targetVenueId: repairVenue._id, expectedTargetVenueUpdatedAt: repairVenue.updatedAt,
-      expectedTargetVenueHandle: repairVenue.instagramHandle, nextArtists: [],
-      nextDescription: "Musical by Dove Attia, directed by Ladislas Chollat, choreography by Romain R.B.",
-      posterVenueEvidence: repairVenue.name, posterTimeEvidence: "", posterArtistEvidence: [],
-      reviewedNonPerformerEvidence: { expectedArtists: [...formerArtists], evidence: creditEvidence },
-      moderationNote: "Reviewed the musical's poster: author, director and choreographer were misclassified as performing artists.",
-      serviceSecret: process.env.CRON_SECRET,
-    };
-    const beforeRejected = { event: structuredClone(reviewedEvent), receipt: structuredClone(reviewedReceipt), audits: reviewedAudits.length };
-    for (const [patch, expected] of [
-      [{ reviewedNonPerformerEvidence: undefined }, /public fields are not canonical/u],
-      [{ reviewedNonPerformerEvidence: { expectedArtists: ["Unrelated Artist"], evidence: creditEvidence } }, /non-performer removal/u],
-      [{ reviewedNonPerformerEvidence: { expectedArtists: [...formerArtists].reverse(), evidence: creditEvidence } }, /non-performer removal/u],
-      [{ reviewedNonPerformerEvidence: { expectedArtists: [...formerArtists], evidence: " " } }, /non-performer removal/u],
-      [{ reviewedNonPerformerEvidence: { expectedArtists: [...formerArtists], evidence: "Creator credits" } }, /non-performer removal/u],
-      [{ nextArtists: ["Unproven Performer"], posterArtistEvidence: ["UNPROVEN PERFORMER"] }, /non-performer removal/u],
-      [{ posterArtistEvidence: ["UNRELATED PROOF"] }, /non-performer removal/u],
-      [{ serviceSecret: "incorrect-service-secret" }, /Authentication required/u],
-      [{ expectedUpdatedAt: reviewedEvent.updatedAt - 1 }, /changed|stale/u],
-    ]) {
-      await assert.rejects(repairReviewedStructuredEventEvidence._handler(reviewedCtx, { ...removalArgs, ...patch }), expected);
-      assert.deepEqual(reviewedEvent, beforeRejected.event, "Rejected creator removals must not patch the event.");
-      assert.deepEqual(reviewedReceipt, beforeRejected.receipt, "Rejected creator removals must not alter receipt topology.");
-      assert.equal(reviewedAudits.length, beforeRejected.audits);
-    }
-    const removed = await repairReviewedStructuredEventEvidence._handler(reviewedCtx, removalArgs);
-    assert.equal(removed.updated, true);
-    assert.deepEqual(reviewedEvent.artists, []);
-    assert.deepEqual(reviewedReceipt.expectedOccurrences[0].artists, []);
-    const reviewedFields = JSON.parse(reviewedEvent.normalizedFieldsJson);
-    assert.deepEqual(reviewedFields.reviewedPosterCorrection.nonPerformerEvidence, { removedArtists: formerArtists, evidence: creditEvidence });
-    assert.deepEqual(JSON.parse(reviewedAudits.at(-1).patchJson).reviewedPosterCorrection.nonPerformerEvidence,
-      { removedArtists: formerArtists, evidence: creditEvidence });
-    for (const [key, value] of Object.entries(unknownTime)) {
-      assert.equal(reviewedEvent[key], value, `Creator removal must preserve unknown event ${key}.`);
-      assert.equal(reviewedFields[key], value, `Creator removal must preserve unknown normalized ${key}.`);
-    }
-    assert.equal(reviewedReceipt.expectedOccurrences[0].time, "TBD");
-    assert.equal(reviewedEvent.rawExtractionJson, retainedSource.raw);
-    assert.equal(reviewedEvent.sourceCaption, retainedSource.caption);
-    assert.equal(reviewedEvent.date, retainedSource.date);
-    assert.equal(await isCanonicallyGroundedApprovedEvent(reviewedCtx, reviewedEvent), true);
-  } finally {
-    for (const [record, snapshot] of [
-      [reviewedEvent, nonPerformerSnapshot.event], [reviewedReceipt, nonPerformerSnapshot.receipt],
-      [reviewedTopologyEpoch, nonPerformerSnapshot.epoch],
-    ]) {
-      for (const key of Object.keys(record)) delete record[key];
-      Object.assign(record, snapshot);
-    }
-    reviewedAudits.splice(0, reviewedAudits.length, ...nonPerformerSnapshot.audits);
-  }
-
-  const captionReviewSnapshot = {
-    event: structuredClone(reviewedEvent),
-    receipt: structuredClone(reviewedReceipt),
-    post: structuredClone(posterPost),
-    epoch: structuredClone(reviewedTopologyEpoch),
-    audits: structuredClone(reviewedAudits),
-  };
-  try {
-    const captionOnlyCaption = `${sourceCaption} @boundary_venue`;
-    const captionOnlyRaw = JSON.stringify({ ...JSON.parse(rawExtractionJson), source_caption: captionOnlyCaption });
-    const unknownTiming = {
-      time: "TBD",
-      timeSource: "unknown",
-      timeEvidenceText: "",
-      timeConfidence: 0,
-      timeStatus: "unknown",
-      timeEvidenceKind: "not_stated",
-    };
-    const captionFields = {
-      ...JSON.parse(reviewedEvent.normalizedFieldsJson),
-      ...unknownTiming,
-      title: "Wrong event title",
-      normalizedVenue: "Promoter account",
-      artists: [],
-      sourceAccountName: "White City Soul",
-      sourceGroundingSourceCaption: captionOnlyCaption,
-      moderationSignals: ["time_tbd", "requires_human_approval"],
-    };
-    delete captionFields.reviewedPosterCorrection;
-    Object.assign(reviewedEvent, {
-      ...unknownTiming,
-      title: captionFields.title,
-      venue: captionFields.normalizedVenue,
-      venueId: undefined,
-      venueInstagramHandle: undefined,
-      artists: [],
-      description: undefined,
-      sourceCaption: captionOnlyCaption,
-      rawExtractionJson: captionOnlyRaw,
-      normalizedFieldsJson: JSON.stringify(captionFields),
-    });
-    Object.assign(posterPost, { caption: captionOnlyCaption, analysisResultJson: captionOnlyRaw });
-    reviewedReceipt.expectedOccurrences[0] = {
-      ...reviewedReceipt.expectedOccurrences[0],
-      title: reviewedEvent.title,
-      venue: reviewedEvent.venue,
-      time: reviewedEvent.time,
-      artists: [],
-    };
-    const captionArgs = {
-      id: reviewedEvent._id,
-      expectedUpdatedAt: reviewedEvent.updatedAt,
-      expectedNormalizedFieldsJson: reviewedEvent.normalizedFieldsJson,
-      expectedSourceLinkId: reviewedSourceLink._id,
-      expectedSourceLinkUpdatedAt: reviewedSourceLink.updatedAt,
-      expectedReceiptId: reviewedReceipt._id,
-      expectedReceiptUpdatedAt: reviewedReceipt.updatedAt,
-      nextVenue: repairVenue.name,
-      targetVenueId: repairVenue._id,
-      expectedTargetVenueUpdatedAt: repairVenue.updatedAt,
-      expectedTargetVenueHandle: repairVenue.instagramHandle,
-      captionVenueEvidence: "@boundary_venue",
-      moderationNote: "Human-reviewed caption venue and exact source account event title, with unknown time preserved.",
-      serviceSecret: process.env.CRON_SECRET,
-    };
-    await assert.rejects(repairReviewedStructuredEventCaptionVenue._handler(reviewedCtx, {
-      ...captionArgs, serviceSecret: "incorrect-service-secret",
-    }), /Authentication required/u);
-    await assert.rejects(repairReviewedStructuredEventCaptionVenue._handler(reviewedCtx, {
-      ...captionArgs, expectedUpdatedAt: reviewedEvent.updatedAt - 1,
-    }), /changed/u);
-    await assert.rejects(repairReviewedStructuredEventCaptionVenue._handler(reviewedCtx, {
-      ...captionArgs, expectedSourceLinkUpdatedAt: reviewedSourceLink.updatedAt - 1,
-    }), /source link changed/u);
-    await assert.rejects(repairReviewedStructuredEventCaptionVenue._handler(reviewedCtx, {
-      ...captionArgs, expectedReceiptUpdatedAt: reviewedReceipt.updatedAt - 1,
-    }), /receipt changed/u);
-    await assert.rejects(repairReviewedStructuredEventCaptionVenue._handler(reviewedCtx, {
-      ...captionArgs, expectedTargetVenueUpdatedAt: repairVenue.updatedAt - 1,
-    }), /target venue is not exact/u);
-    await assert.rejects(repairReviewedStructuredEventCaptionVenue._handler(reviewedCtx, {
-      ...captionArgs, captionVenueEvidence: "@not_the_caption_venue",
-    }), /exact source account title and caption venue handle/u);
-    assert.equal(reviewedAudits.length, captionReviewSnapshot.audits.length, "Rejected caption repairs must not write an audit or event patch.");
-    const captionResult = await repairReviewedStructuredEventCaptionVenue._handler(reviewedCtx, captionArgs);
-    assert.equal(captionResult.updated, true);
-    assert.equal(reviewedEvent.title, "White City Soul");
-    assert.equal(reviewedEvent.venue, repairVenue.name);
-    assert.equal(reviewedEvent.venueId, repairVenue._id);
-    assert.deepEqual(reviewedEvent.artists, []);
-    assert.equal(reviewedEvent.description, undefined);
-    for (const [key, value] of Object.entries(unknownTiming)) {
-      assert.equal(reviewedEvent[key], value, `Caption venue repair must preserve ${key}.`);
-    }
-    const afterCaptionFields = JSON.parse(reviewedEvent.normalizedFieldsJson);
-    for (const [key, value] of Object.entries(unknownTiming)) {
-      assert.equal(afterCaptionFields[key], value, `Normalized caption correction must preserve ${key}.`);
-    }
-    assert.equal(afterCaptionFields.reviewedPosterCorrection, undefined);
-    assert.equal(afterCaptionFields.reviewedCaptionCorrection.venueEvidence, "@boundary_venue");
-    assert.equal(afterCaptionFields.reviewedCaptionCorrection.titleEvidence, "White City Soul");
-    assert.equal(afterCaptionFields.moderationSignals.includes("time_tbd"), true);
-    assert.equal(reviewedReceipt.expectedOccurrences[0].title, "White City Soul");
-    assert.equal(reviewedReceipt.expectedOccurrences[0].venue, repairVenue.name);
-    assert.equal(reviewedReceipt.expectedOccurrences[0].time, "TBD");
-    assert.deepEqual(reviewedReceipt.expectedOccurrences[0].artists, []);
-    assert.equal(reviewedEvent.sourceCaption, captionOnlyCaption);
-    assert.equal(reviewedEvent.rawExtractionJson, captionOnlyRaw);
-    assert.equal(reviewedAudits.at(-1).action, "reviewed_structured_caption_venue_corrected");
-    assert.equal(await isCanonicallyGroundedApprovedEvent(reviewedCtx, reviewedEvent), true);
-  } finally {
-    for (const [record, snapshot] of [
-      [reviewedEvent, captionReviewSnapshot.event],
-      [reviewedReceipt, captionReviewSnapshot.receipt],
-      [posterPost, captionReviewSnapshot.post],
-      [reviewedTopologyEpoch, captionReviewSnapshot.epoch],
-    ]) {
-      for (const key of Object.keys(record)) delete record[key];
-      Object.assign(record, snapshot);
-    }
-    reviewedAudits.splice(0, reviewedAudits.length, ...captionReviewSnapshot.audits);
-  }
-
-  const renameSnapshot = {
-    event: structuredClone(reviewedEvent), receipt: structuredClone(reviewedReceipt),
-    venue: structuredClone(repairVenue), epoch: structuredClone(reviewedTopologyEpoch),
-    audits: structuredClone(reviewedAudits),
-  };
-  const originalRenameDb = { ...reviewedCtx.db };
-  const renameIdentities = new Map();
-  const renameVenueAudits = [];
-  try {
-    Object.assign(repairVenue, { latitude: 44.81, longitude: 20.46, location: "Original Street 1" });
-    reviewedCtx.db.get = async (id) => id === repairVenue._id
-      ? structuredClone(repairVenue) : originalRenameDb.get(id);
-    reviewedCtx.db.patch = async (id, patch) => {
-      if (id === repairVenue._id) Object.assign(repairVenue, structuredClone(patch));
-      else if (renameIdentities.has(id)) Object.assign(renameIdentities.get(id), structuredClone(patch));
-      else await originalRenameDb.patch(id, patch);
-    };
-    reviewedCtx.db.insert = async (table, value) => {
-      if (table === "venueIdentities") {
-        const id = `rename-identity-${renameIdentities.size + 1}`;
-        renameIdentities.set(id, { _id: id, ...structuredClone(value) });
-        return id;
-      }
-      if (table === "venueAuditLog") {
-        renameVenueAudits.push(structuredClone(value)); return `rename-venue-audit-${renameVenueAudits.length}`;
-      }
-      return originalRenameDb.insert(table, value);
-    };
-    reviewedCtx.db.query = (table) => {
-      const records = table === "venues" ? [repairVenue, multiSourceTargetVenue]
-        : table === "venueIdentities" ? [...renameIdentities.values()] : null;
-      if (records) {
-        const take = (criteria = {}) => ({ async take(limit) {
-          return structuredClone(records.filter((row) => Object.entries(criteria)
-            .every(([field, value]) => row[field] === value)).slice(0, limit));
-        } });
-        return { ...take(), withIndex(_index, configure) { return take(indexCriteria(configure)); } };
-      }
-      if (table === "events") return {
-        withIndex(index, configure) {
-          if (["by_venueId", "by_normalizedVenueHandle_status_date", "by_normalizedVenueIdentity_status_date"].includes(index)) {
-            const criteria = indexCriteria(configure);
-            return { async take(limit) { return [reviewedEvent].filter((row) => Object.entries(criteria)
-              .every(([field, value]) => row[field] === value)).slice(0, limit); } };
-          }
-          return originalRenameDb.query(table).withIndex(index, configure);
-        },
-      };
-      return originalRenameDb.query(table);
-    };
-    const nextLocation = "Reviewed Venue Street 8, Beograd";
-    const renameResult = await renameReferencedVenueWithReviewedEvents._handler(reviewedCtx, {
-      id: repairVenue._id, expectedUpdatedAt: repairVenue.updatedAt, expectedName: repairVenue.name,
-      nextName: "Boundary Reviewed Venue", nextLocation,
-      expectedEvents: [{ id: reviewedEvent._id, updatedAt: reviewedEvent.updatedAt,
-        normalizedFieldsJson: reviewedEvent.normalizedFieldsJson, sourceLinkId: reviewedSourceLink._id,
-        sourceLinkUpdatedAt: reviewedSourceLink.updatedAt, receiptId: reviewedReceipt._id,
-        receiptUpdatedAt: reviewedReceipt.updatedAt }],
-      venueEvidence: "Source-reviewed canonical venue name and exact street address.",
-      auditNote: "Reviewed venue name and address update, preserving the complete event timing, artists and original source evidence.",
-      serviceSecret: process.env.CRON_SECRET,
-    });
-    assert.equal(renameResult.eventCount, 1);
-    assert.equal(repairVenue.location, nextLocation);
-    assert.equal(reviewedEvent.venue, repairVenue.name);
-    assert.equal(reviewedEvent.venueLocation, nextLocation, "Reviewed linked events must receive the same exact new venue address.");
-    assert.equal(reviewedEvent.venueLatitude, repairVenue.latitude);
-    assert.equal(reviewedEvent.venueLongitude, repairVenue.longitude);
-    assert.equal(reviewedReceipt.expectedOccurrences[0].venue, repairVenue.name);
-    for (const key of ["date", "time", "timeSource", "timeStatus", "timeConfidence", "timeEvidenceText", "timeEvidenceKind", "rawExtractionJson", "sourceCaption"]) {
-      assert.equal(reviewedEvent[key], renameSnapshot.event[key], `Venue rename must preserve event ${key}.`);
-    }
-    assert.deepEqual(reviewedEvent.artists, renameSnapshot.event.artists);
-    assert.equal(JSON.parse(renameVenueAudits[0].afterJson).location, nextLocation);
-    assert.equal(await isCanonicallyGroundedApprovedEvent(reviewedCtx, reviewedEvent), true);
-  } finally {
-    Object.assign(reviewedCtx.db, originalRenameDb);
-    for (const [record, snapshot] of [
-      [reviewedEvent, renameSnapshot.event], [reviewedReceipt, renameSnapshot.receipt],
-      [repairVenue, renameSnapshot.venue], [reviewedTopologyEpoch, renameSnapshot.epoch],
-    ]) {
-      for (const key of Object.keys(record)) delete record[key];
-      Object.assign(record, snapshot);
-    }
-    reviewedAudits.splice(0, reviewedAudits.length, ...renameSnapshot.audits);
-  }
-
   const secondaryOccurrenceKey = "instagram-occurrence-v2:reviewed-second-source";
   const secondarySourceLink = {
     ...reviewedSourceLink,
@@ -1879,8 +1314,6 @@ try {
     });
   }
   const originalReviewNote = reviewedEvent.moderationNote;
-  installReviewedAccountFallback();
-  const multiSourceFallbackBefore = structuredClone(reviewedEvent);
   const multiSourceVenueArgs = {
     id: reviewedEvent._id,
     expectedUpdatedAt: reviewedEvent.updatedAt,
@@ -1916,7 +1349,6 @@ try {
   assert.equal(reviewedEvent.venue, multiSourceTargetVenue.name);
   assert.equal(reviewedEvent.venueId, multiSourceTargetVenue._id);
   assert.equal(reviewedEvent.moderationNote, originalReviewNote);
-  assertReviewedFallbackSuperseded(multiSourceFallbackBefore, multiSourceTargetVenue);
   for (const receipt of reviewedReceipts) {
     assert.equal(receipt.expectedOccurrences[0].venue, multiSourceTargetVenue.name);
   }
@@ -1925,7 +1357,6 @@ try {
     assert.equal(JSON.parse(occurrence.normalizedOccurrenceJson).venue, multiSourceTargetVenue.name);
   }
   assert.equal(reviewedAudits.at(-1).action, "reviewed_multi_source_venue_corrected");
-  Object.assign(posterPost, structuredClone(fallbackReviewSnapshot.post));
 
   for (const [label, persistedPost, assets] of [
     ["missing media asset", posterPost, []],
@@ -2994,11 +2425,6 @@ try {
             const matching = () => {
               if (table === "eventDomainMigrationState") return [];
               if (table === "venueIdentities") return [];
-              if (table === "instagramSources") {
-                assert.equal(_index, "by_role_active");
-                assert.deepEqual(criteria, { role: "promoter" });
-                return [];
-              }
               if (table === "scrapedPosts") return missingVenueState.posts;
               if (table === "events") return missingVenueState.events;
               if (table === "instagramSourceOccurrenceReceipts") {
@@ -3329,11 +2755,6 @@ try {
             const matchingRecords = () => {
               if (table === "eventDomainMigrationState") return [];
               if (table === "venueIdentities") return [];
-              if (table === "instagramSources") {
-                assert.equal(_index, "by_role_active");
-                assert.deepEqual(criteria, { role: "promoter" });
-                return [];
-              }
               if (table === "instagramSourceOccurrenceReceipts") {
                 return criteria.sourceIdentity === receipt.sourceIdentity ? [receipt] : [];
               }

@@ -69,12 +69,10 @@ assert.ok(
   "Calendar filters should default to venue name while allowing time or event-type sorting.",
 );
 assert.ok(
-  calendarSource.includes("getNightlifeDefaultDateKey(new Date(now))") &&
-    calendarSource.includes("const selectedDayKey = openNowActive ? todayKey") &&
-    calendarSource.includes("openNowActive ? getOpenNowEventWindow(now)") &&
+  calendarSource.includes("getNightlifeDefaultDateKey()") &&
     calendarSource.includes("dateKeyToLocalNoonDate(todayKey)") &&
     calendarSource.includes("defaultDayKey"),
-  "Open now retains the nightlife display date and derives civil candidate bounds independently.",
+  "Default calendar day should use the nightlife business date, not raw wall-clock today.",
 );
 assert.equal(
   getNightlifeDefaultDateKey(new Date("2026-07-11T06:59:00+02:00")),
@@ -106,8 +104,7 @@ assert.ok(
     calendarSource.includes('data-calendar-active-filter-chips="true"') &&
     calendarSource.includes('data-calendar-stat-card={stat.key}') &&
     calendarSource.includes('data-calendar-stat-value={stat.key}') &&
-    calendarSource.includes('"upcoming with something on"') &&
-    calendarSource.includes('"current Belgrade night"'),
+    calendarSource.includes('caption: "upcoming with something on"'),
   "Active filters should render removable chips and stat cards should expose updateable count markers; active-day copy should make the upcoming scope explicit.",
 );
 assert.ok(
@@ -141,8 +138,8 @@ assert.ok(
     calendarSource.includes("closeOnApply={isMobileSort}") &&
     autoApplyFilterFormSource.includes('data-calendar-auto-apply-filter-form="true"') &&
     autoApplyFilterFormSource.includes("router.replace") &&
-    autoApplyFilterFormSource.includes("buildCalendarFilterUrl") &&
-    autoApplyFilterFormSource.includes("window.location.href") &&
+    autoApplyFilterFormSource.includes('searchParams.get("hide")') &&
+    autoApplyFilterFormSource.includes('params.delete("category")') &&
     autoApplyFilterFormSource.includes("target instanceof HTMLSelectElement") &&
     autoApplyFilterFormSource.includes('closest("details")') &&
     autoApplyFilterFormSource.includes('removeAttribute("open")') &&
@@ -203,23 +200,21 @@ assert.ok(
   "The old full bottom month calendar grid should be removed across desktop and other breakpoints.",
 );
 assert.ok(
-  mobileMonthDayStripSource.includes("scrollAnchorIntoView(event.currentTarget, true)") &&
-    mobileMonthDayStripSource.includes("container.scrollTo") &&
-    !mobileMonthDayStripSource.includes(".scrollIntoView("),
-  "Selecting a calendar date should scroll only the horizontal strip, without moving the page.",
+  mobileMonthDayStripSource.includes("inline: \"center\"") &&
+    mobileMonthDayStripSource.includes("scrollIntoView") &&
+    mobileMonthDayStripSource.includes("scrollAnchorIntoView"),
+  "Selecting a mobile calendar date should gently center the tapped/selected day.",
 );
 assert.ok(
-  mobileMonthDayStripSource.includes('behavior: "instant"') &&
-    mobileMonthDayStripSource.includes("useLayoutEffect") &&
-    mobileMonthDayStripSource.includes('"(prefers-reduced-motion: reduce)"') &&
-    mobileMonthDayStripSource.includes("allowSmooth && nearby && !shouldReduceMotion()"),
-  "Calendar strip should align instantly on mount and animate only intentional nearby changes when motion is allowed.",
+  mobileMonthDayStripSource.includes('behavior: shouldReduceMotion() ? "auto" : "smooth"') &&
+    mobileMonthDayStripSource.includes('"(prefers-reduced-motion: reduce)"'),
+  "Mobile calendar date slider should use smooth motion while respecting reduced-motion users.",
 );
 assert.ok(
   mobileMonthDayStripSource.includes("snap-center") &&
     mobileMonthDayStripSource.includes("overscroll-x-contain") &&
-    !mobileMonthDayStripSource.includes("scroll-smooth"),
-  "Calendar strip should retain centered snapping without CSS overriding instant alignment.",
+    mobileMonthDayStripSource.includes("scroll-smooth"),
+  "Mobile calendar date slider should use centered scroll snapping with contained momentum.",
 );
 assert.ok(
   calendarSource.includes("<CalendarScrollRestoration />") &&
@@ -328,5 +323,4 @@ assert.ok(
   "Saved bookmark state should stop relying on defaultSaved after the library hydrates.",
 );
 
-await import("./qa-calendar-date-strip.mjs");
 console.log("QA passed: mobile calendar uses compact event rows and chip-style filters.");

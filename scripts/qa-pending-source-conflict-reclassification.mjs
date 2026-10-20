@@ -6,12 +6,7 @@ import {
 } from "../convex/internal/eventRepairs/pendingSourceConflictReclassification.ts";
 import {
   preparePendingCinemaSourceConflictReclassification,
-  preparePendingSourceConflictReclassification,
-  buildPendingSourceConflictContext,
 } from "../lib/events/pending-source-conflict-reclassification.ts";
-import { eventEvidenceConflictIsBenign } from "../lib/events/event-evidence-conflict-policy.ts";
-import { getEffectiveEventEvidenceV2Conflicts } from "../lib/events/event-update-precondition.ts";
-import { repairPendingBenignSourceConflictHandler } from "../convex/internal/eventRepairs/pendingBenignSourceConflicts.ts";
 import { buildInstagramSourceOccurrenceFingerprint } from "../lib/domain/occurrences/source-fingerprint.ts";
 
 const conflict = {
@@ -158,7 +153,7 @@ function fakeContext(event) {
           take: async (limit) =>
             (table === "instagramSourceOccurrenceReceipts" ? [receipt] :
               table === "instagramEventSources" ? [link] :
-                table === "scrapedPosts" ? [source] : table === "sourceOccurrences" ? [occurrence] : [])
+                table === "scrapedPosts" ? [source] : [])
               .slice(0, limit),
         }),
       }),
@@ -319,106 +314,3 @@ try {
   if (originalSecret === undefined) delete process.env.CRON_SECRET;
   else process.env.CRON_SECRET = originalSecret;
 }
-
-function timeFixture() {
-  const event = eventFixture(), fields = JSON.parse(event.normalizedFieldsJson);
-  const timeConflict = { field: "time", poster_value: "20:00", caption_value: "21:00", reason: "Different clocks are reported." };
-  const text = "QA Concert 13.10.2026 at QA Club; show starts 21:00";
-  Object.assign(event, { title: "QA Concert", date: "2026-10-13", venue: "QA Club", time: "21:00", sourceCaption: text, sourceConflictFields: ["time"] });
-  Object.assign(fields, { title: event.title, normalizedDate: event.date, normalizedVenue: event.venue, time: event.time, sourceGroundingSourceCaption: text,
-    sourceConflictFields: ["time"], extractionSourceConflicts: [timeConflict], materialSourceConflicts: [timeConflict], splitEventTotal: 1, multiEventSplitDetected: false });
-  event.normalizedFieldsJson = JSON.stringify(fields);
-  event.rawExtractionJson = JSON.stringify({ is_event: true, source_conflicts: [timeConflict], field_confirmation: {
-    start_time: { evidence_snippets: [{ source: "poster", text: "Doors open 20:00" }] } } });
-  return event;
-}
-{
-  const event = timeFixture(), repaired = preparePendingSourceConflictReclassification(event), fields = JSON.parse(repaired.normalizedFieldsJson);
-  assert.equal(fields.materialSourceConflictCount, 0); assert.equal(fields.benignSourceConflictCount, 1); assert.equal(event.time, "21:00");
-  assert.deepEqual(getEffectiveEventEvidenceV2Conflicts(fields, { ...event, sourceConflictFields: [], normalizedFieldsJson: repaired.normalizedFieldsJson }), []);
-  for (const mutate of [
-    e => { const r = JSON.parse(e.rawExtractionJson); r.field_confirmation.start_time.evidence_snippets = []; e.rawExtractionJson = JSON.stringify(r); },
-    e => { const r = JSON.parse(e.rawExtractionJson); r.field_confirmation.start_time.evidence_snippets[0].text = "Show starts 20:00"; e.rawExtractionJson = JSON.stringify(r); },
-    e => { const r = JSON.parse(e.rawExtractionJson); r.field_confirmation.start_time.evidence_snippets[0].text = "Doors open 20:0000"; e.rawExtractionJson = JSON.stringify(r); },
-    e => { const f = JSON.parse(e.normalizedFieldsJson); f.time = "20:00"; e.time = "20:00"; e.normalizedFieldsJson = JSON.stringify(f); },
-    e => { const f = JSON.parse(e.normalizedFieldsJson); f.splitEventTotal = 2; f.multiEventSplitDetected = true; e.normalizedFieldsJson = JSON.stringify(f); },
-    e => { const f = JSON.parse(e.normalizedFieldsJson); f.timeEvidenceVerified = false; e.normalizedFieldsJson = JSON.stringify(f); },
-    e => { const r = JSON.parse(e.rawExtractionJson); r.schedule_entries = [{ title: "First other occurrence" }, { title: "Second other occurrence" }]; e.rawExtractionJson = JSON.stringify(r); },
-    e => { const r = JSON.parse(e.rawExtractionJson); r.field_confirmation.start_time.evidence_snippets.push({ source: "poster", text: "Show starts 20:00" }); e.rawExtractionJson = JSON.stringify(r); },
-    e => { const r = JSON.parse(e.rawExtractionJson); delete r.field_confirmation; e.rawExtractionJson = JSON.stringify(r); const f = JSON.parse(e.normalizedFieldsJson); f.sourcePosterTexts = ["Doors open 20:00"]; e.normalizedFieldsJson = JSON.stringify(f); },
-  ]) { const held = timeFixture(); mutate(held); assert.throws(() => preparePendingSourceConflictReclassification(held)); }
-  const context = buildPendingSourceConflictContext(event, JSON.parse(event.normalizedFieldsJson));
-  assert.equal(eventEvidenceConflictIsBenign({ field: "date", poster_value: "Tuesday 13 October", caption_value: "Tuesday 20 October", reason: "Different dates." }, context), false);
-  assert.equal(eventEvidenceConflictIsBenign({ field: "date", poster_value: "Tuesday 31 February", caption_value: "Tuesday 13 October", reason: "Invalid poster date." }, context), false);
-  assert.equal(eventEvidenceConflictIsBenign({ field: "date", poster_value: "2026-10-13", caption_value: "13.10.2026", reason: "Equivalent dates." }, context), true);
-  assert.equal(eventEvidenceConflictIsBenign({ field: "venue", poster_value: "Other Club", caption_value: "QA Club", reason: "Different venues." }, context), false);
-  assert.equal(eventEvidenceConflictIsBenign({ field: "time", poster_value: "20:00", caption_value: "21:00", reason: "Different starts." }, { ...context, sourcePosterTexts: ["Show starts 20:00"] }), false);
-  assert.equal(eventEvidenceConflictIsBenign({ field: "time", poster_value: "20h", caption_value: "21h", reason: "Doors versus start." }, { ...context,
-    sourceCaption: "QA Concert 13.10.2026 at QA Club; Pocetak 21h", sourcePosterTexts: ["Vrata 20h"] }), true);
-}
-{
-  const event = eventFixture(), state = fakeContext(event), args = { id: event._id, expectedUpdatedAt: event.updatedAt, actor: "automatic_conflict_repair" };
-  const before = structuredClone(event);
-  state.records.get("source-1").analysisRevision = 2;
-  assert.equal((await repairPendingBenignSourceConflictHandler(state.context, args)).outcome, "held");
-  state.records.get("source-1").analysisRevision = 1; state.records.get("source-1").processingStatus = "retryable_failure";
-  assert.equal((await repairPendingBenignSourceConflictHandler(state.context, args)).outcome, "held");
-  state.records.get("source-1").processingStatus = "completed"; state.receipt.deferredChildCount = 1;
-  assert.equal((await repairPendingBenignSourceConflictHandler(state.context, args)).outcome, "held"); state.receipt.deferredChildCount = 0;
-  assert.equal((await repairPendingBenignSourceConflictHandler(state.context, { ...args, expectedUpdatedAt: args.expectedUpdatedAt - 1 })).outcome, "stale");
-  assert.equal(state.audits.length, 0);
-  assert.equal((await repairPendingBenignSourceConflictHandler(state.context, args)).outcome, "repaired");
-  const updated = state.records.get(event._id);
-  for (const key of ["title", "date", "time", "venue", "artists", "status", "rawExtractionJson"]) assert.deepEqual(updated[key], before[key]);
-  const audit = JSON.parse(state.audits[0].patchJson);
-  assert.deepEqual(audit.previousMaterialConflicts, [conflict]); assert.deepEqual(audit.nextBenignConflicts, [conflict]);
-  assert.equal((await repairPendingBenignSourceConflictHandler(state.context, args)).outcome, "stale");
-}
-for (const marker of [{ reviewedAt: 1 }, { reviewedBy: "human" }, { humanReviewedLegacySourcePolicyVersion: 1 }, { humanReviewedStructuredSourcePolicyVersion: 1 },
-  { normalizedFieldsJson: JSON.stringify({ ...JSON.parse(eventFixture().normalizedFieldsJson), humanReviewedStructuredSourcePolicyVersion: 1 }) }]) {
-  const event = { ...eventFixture(), ...marker }, state = fakeContext(event);
-  const result = await repairPendingBenignSourceConflictHandler(state.context, { id: event._id, expectedUpdatedAt: event.updatedAt, actor: "automatic_conflict_repair" });
-  assert.equal(result.outcome, "held"); assert.equal(result.reason, "human_review_preserved"); assert.equal(state.audits.length, 0);
-}
-console.log("Generic source conflict repair QA passed.");
-
-{
-  const sameOccurrenceConflict = { field: "date", poster_value: "17. OKTOBAR", caption_value: "Subota, 10. Oktobar",
-    reason: "Poster and caption give different calendar dates for the same occurrence." };
-  const source = "RIKVERC svi putevi vode\nSubota, 10. Oktobar\nKlub Beton, Beton hala\nStart: 22h";
-  for (const selectedDate of ["2026-10-10", "2026-10-17"]) {
-    const event = eventFixture(), fields = JSON.parse(event.normalizedFieldsJson);
-    Object.assign(event, { title: "RIKVERC svi putevi vode", date: selectedDate, time: "22:00-04:00", venue: "Beton",
-      artists: [], sourceCaption: source, sourceConflictFields: [] });
-    Object.assign(fields, { title: event.title, normalizedDate: event.date, normalizedVenue: event.venue,
-      time: event.time, artists: [], sourceGroundingSourceCaption: source, sourceAccountName: "Rikverc Events",
-      sourceAccountRole: "venue", splitEventTotal: 2, multiEventSplitDetected: true, extractionSourceConflicts: [sameOccurrenceConflict],
-      extractionSourceConflictCount: 1, materialSourceConflicts: [], materialSourceConflictCount: 0,
-      benignSourceConflicts: [sameOccurrenceConflict], benignSourceConflictCount: 1, sourceConflictFields: [] });
-    const conflictingRows = [
-      { date: "2026-10-10", title: event.title, venue: "Klub Beton", artists: [], source_text: "Subota, 10. Oktobar" },
-      { date: "2026-10-17", title: event.title, venue: "Klub Beton", artists: [], source_text: "SUBOTA 17.OKTOBAR" },
-    ];
-    event.rawExtractionJson = JSON.stringify({ is_event: true, source_conflicts: [sameOccurrenceConflict], schedule_entries: conflictingRows });
-    event.normalizedFieldsJson = JSON.stringify(fields);
-    const context = buildPendingSourceConflictContext(event, fields);
-    assert.equal(context.singleOccurrenceSource, false, "The fixture must retain the erroneous model split into two rows.");
-    assert.equal(eventEvidenceConflictIsBenign(sameOccurrenceConflict, context), false,
-      "Two explicit Saturdays a week apart remain a material contradiction despite model row splitting.");
-    assert.equal(getEffectiveEventEvidenceV2Conflicts(fields, event), null,
-      "An old approved record's benign marker must not bypass current source-conflict verification.");
-    assert.throws(() => preparePendingSourceConflictReclassification({ ...event, status: "pending" }), /material conflict|verified cinema|non-cinema/u);
-
-    Object.assign(fields, { extractionSourceConflicts: [], extractionSourceConflictCount: 0,
-      materialSourceConflicts: [], materialSourceConflictCount: 0, benignSourceConflicts: [], benignSourceConflictCount: 0 });
-    event.sourceCaption = fields.sourceGroundingSourceCaption = "Friday 16.10 Artist A; Saturday 17.10 Artist B at QA Club.";
-    event.rawExtractionJson = JSON.stringify({ is_event: true, source_conflicts: [], schedule_entries: [
-      { date: "2026-10-16", title: "Artist A", artists: ["Artist A"], venue: "QA Club", source_text: "Friday 16.10 Artist A" },
-      { date: "2026-10-17", title: "Artist B", artists: ["Artist B"], venue: "QA Club", source_text: "Saturday 17.10 Artist B" },
-    ] });
-    event.normalizedFieldsJson = JSON.stringify(fields);
-    assert.deepEqual(getEffectiveEventEvidenceV2Conflicts(fields, event), [],
-      "A genuine source-announced multi-day lineup without contradictory same-occurrence claims remains unaffected.");
-  }
-}
-console.log("Same-occurrence named-date conflict regression QA passed.");

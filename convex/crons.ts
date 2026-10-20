@@ -59,11 +59,4 @@ crons.interval(
   { maxPages: 60 },
 );
 
-crons.interval(
-  "recover automatic moderation evidence",
-  { minutes: 5 },
-  "internal/autonomousModerationExecutor:advance" as unknown as FunctionReference<"action", "internal", Record<string, never>>,
-  {},
-);
-
 export default crons;

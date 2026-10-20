@@ -1,6 +1,0 @@
-__pycache__/
-*.pyc
-test_*.py
-*.sqlite*
-session*
-.env*

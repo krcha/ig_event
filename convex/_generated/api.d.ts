@@ -9,8 +9,6 @@
  */
 
 import type * as authz from "../authz.js";
-import type * as automaticApprovalDiagnostics from "../automaticApprovalDiagnostics.js";
-import type * as autonomousModeration from "../autonomousModeration.js";
 import type * as crons from "../crons.js";
 import type * as durableIngestionRuns from "../durableIngestionRuns.js";
 import type * as eventDomain_coalescingSupport from "../eventDomain/coalescingSupport.js";
@@ -43,29 +41,18 @@ import type * as events from "../events.js";
 import type * as ingestionJobs from "../ingestionJobs.js";
 import type * as instagramSources from "../instagramSources.js";
 import type * as internal_automaticUniqueApproval from "../internal/automaticUniqueApproval.js";
-import type * as internal_automaticUniqueApprovalPreflight from "../internal/automaticUniqueApprovalPreflight.js";
 import type * as internal_automaticUniqueSourceProof from "../internal/automaticUniqueSourceProof.js";
-import type * as internal_automaticUniqueVenueEvidence from "../internal/automaticUniqueVenueEvidence.js";
-import type * as internal_autonomousModerationExecutor from "../internal/autonomousModerationExecutor.js";
-import type * as internal_autonomousModerationRepair from "../internal/autonomousModerationRepair.js";
-import type * as internal_autonomousVenueRepair from "../internal/autonomousVenueRepair.js";
 import type * as internal_campaignLineageReattestationProof from "../internal/campaignLineageReattestationProof.js";
 import type * as internal_carouselMediaProof from "../internal/carouselMediaProof.js";
 import type * as internal_eventRepairs_approvedLegacyVenue from "../internal/eventRepairs/approvedLegacyVenue.js";
 import type * as internal_eventRepairs_evidencePolicy from "../internal/eventRepairs/evidencePolicy.js";
-import type * as internal_eventRepairs_pendingBenignSourceConflicts from "../internal/eventRepairs/pendingBenignSourceConflicts.js";
 import type * as internal_eventRepairs_pendingSourceConflictReclassification from "../internal/eventRepairs/pendingSourceConflictReclassification.js";
 import type * as internal_eventRepairs_revertFalseCinemaAutomaticApproval from "../internal/eventRepairs/revertFalseCinemaAutomaticApproval.js";
-import type * as internal_eventRepairs_reviewedCaptionEvidence from "../internal/eventRepairs/reviewedCaptionEvidence.js";
 import type * as internal_eventRepairs_reviewedContinuationFold from "../internal/eventRepairs/reviewedContinuationFold.js";
 import type * as internal_eventRepairs_reviewedFabrikaDjNightEnrichment from "../internal/eventRepairs/reviewedFabrikaDjNightEnrichment.js";
 import type * as internal_eventRepairs_reviewedFabrikaProgramEnrichment from "../internal/eventRepairs/reviewedFabrikaProgramEnrichment.js";
-import type * as internal_eventRepairs_reviewedNonPerformerEvidence from "../internal/eventRepairs/reviewedNonPerformerEvidence.js";
-import type * as internal_eventRepairs_reviewedPendingPerformerCorrection from "../internal/eventRepairs/reviewedPendingPerformerCorrection.js";
-import type * as internal_eventRepairs_reviewedPromoterScheduleFold from "../internal/eventRepairs/reviewedPromoterScheduleFold.js";
 import type * as internal_eventRepairs_reviewedPromotionFold from "../internal/eventRepairs/reviewedPromotionFold.js";
 import type * as internal_eventRepairs_reviewedScheduleFold from "../internal/eventRepairs/reviewedScheduleFold.js";
-import type * as internal_eventRepairs_reviewedStructuredCaptionCorrection from "../internal/eventRepairs/reviewedStructuredCaptionCorrection.js";
 import type * as internal_eventRepairs_reviewedStructuredCorrections from "../internal/eventRepairs/reviewedStructuredCorrections.js";
 import type * as internal_eventRepairs_reviewedVenueRepairContext from "../internal/eventRepairs/reviewedVenueRepairContext.js";
 import type * as internal_eventRepairs_sourceBoundEmptyV2Venue from "../internal/eventRepairs/sourceBoundEmptyV2Venue.js";
@@ -73,7 +60,6 @@ import type * as internal_eventRepairs_sourceGroundingReprocess from "../interna
 import type * as internal_eventRepairs_trustedV2VenueRepair from "../internal/eventRepairs/trustedV2VenueRepair.js";
 import type * as internal_eventVenueBindingCoverage from "../internal/eventVenueBindingCoverage.js";
 import type * as internal_extractionModel from "../internal/extractionModel.js";
-import type * as internal_focusedConflictReviewProof from "../internal/focusedConflictReviewProof.js";
 import type * as internal_legacySourceOccurrenceAdmissionProof from "../internal/legacySourceOccurrenceAdmissionProof.js";
 import type * as internal_migrations_campaignLineage from "../internal/migrations/campaignLineage.js";
 import type * as internal_migrations_canonicalFields from "../internal/migrations/canonicalFields.js";
@@ -109,7 +95,6 @@ import type * as internal_reconciliationSourcePersistence from "../internal/reco
 import type * as internal_reconciliationVerificationInputs from "../internal/reconciliationVerificationInputs.js";
 import type * as internal_requestBounds from "../internal/requestBounds.js";
 import type * as internal_retentionReceiptCoverage from "../internal/retentionReceiptCoverage.js";
-import type * as internal_sourceConflictReviewContext from "../internal/sourceConflictReviewContext.js";
 import type * as internal_sourceOccurrenceLimits from "../internal/sourceOccurrenceLimits.js";
 import type * as internal_sourceOccurrenceReceipts from "../internal/sourceOccurrenceReceipts.js";
 import type * as internal_sourceOccurrenceTopologyEpoch from "../internal/sourceOccurrenceTopologyEpoch.js";
@@ -129,9 +114,7 @@ import type * as repositories_reconciliationSourceContext from "../repositories/
 import type * as repositories_savedEvents from "../repositories/savedEvents.js";
 import type * as repositories_sourceOccurrenceProvenance from "../repositories/sourceOccurrenceProvenance.js";
 import type * as revertFalseCinemaAutomaticApproval from "../revertFalseCinemaAutomaticApproval.js";
-import type * as reviewedPromoterScheduleFold from "../reviewedPromoterScheduleFold.js";
 import type * as scrapedPosts from "../scrapedPosts.js";
-import type * as sourceConflictReviews from "../sourceConflictReviews.js";
 import type * as sourceOccurrences from "../sourceOccurrences.js";
 import type * as users from "../users.js";
 import type * as venueIdentities from "../venueIdentities.js";
@@ -146,8 +129,6 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   authz: typeof authz;
-  automaticApprovalDiagnostics: typeof automaticApprovalDiagnostics;
-  autonomousModeration: typeof autonomousModeration;
   crons: typeof crons;
   durableIngestionRuns: typeof durableIngestionRuns;
   "eventDomain/coalescingSupport": typeof eventDomain_coalescingSupport;
@@ -180,29 +161,18 @@ declare const fullApi: ApiFromModules<{
   ingestionJobs: typeof ingestionJobs;
   instagramSources: typeof instagramSources;
   "internal/automaticUniqueApproval": typeof internal_automaticUniqueApproval;
-  "internal/automaticUniqueApprovalPreflight": typeof internal_automaticUniqueApprovalPreflight;
   "internal/automaticUniqueSourceProof": typeof internal_automaticUniqueSourceProof;
-  "internal/automaticUniqueVenueEvidence": typeof internal_automaticUniqueVenueEvidence;
-  "internal/autonomousModerationExecutor": typeof internal_autonomousModerationExecutor;
-  "internal/autonomousModerationRepair": typeof internal_autonomousModerationRepair;
-  "internal/autonomousVenueRepair": typeof internal_autonomousVenueRepair;
   "internal/campaignLineageReattestationProof": typeof internal_campaignLineageReattestationProof;
   "internal/carouselMediaProof": typeof internal_carouselMediaProof;
   "internal/eventRepairs/approvedLegacyVenue": typeof internal_eventRepairs_approvedLegacyVenue;
   "internal/eventRepairs/evidencePolicy": typeof internal_eventRepairs_evidencePolicy;
-  "internal/eventRepairs/pendingBenignSourceConflicts": typeof internal_eventRepairs_pendingBenignSourceConflicts;
   "internal/eventRepairs/pendingSourceConflictReclassification": typeof internal_eventRepairs_pendingSourceConflictReclassification;
   "internal/eventRepairs/revertFalseCinemaAutomaticApproval": typeof internal_eventRepairs_revertFalseCinemaAutomaticApproval;
-  "internal/eventRepairs/reviewedCaptionEvidence": typeof internal_eventRepairs_reviewedCaptionEvidence;
   "internal/eventRepairs/reviewedContinuationFold": typeof internal_eventRepairs_reviewedContinuationFold;
   "internal/eventRepairs/reviewedFabrikaDjNightEnrichment": typeof internal_eventRepairs_reviewedFabrikaDjNightEnrichment;
   "internal/eventRepairs/reviewedFabrikaProgramEnrichment": typeof internal_eventRepairs_reviewedFabrikaProgramEnrichment;
-  "internal/eventRepairs/reviewedNonPerformerEvidence": typeof internal_eventRepairs_reviewedNonPerformerEvidence;
-  "internal/eventRepairs/reviewedPendingPerformerCorrection": typeof internal_eventRepairs_reviewedPendingPerformerCorrection;
-  "internal/eventRepairs/reviewedPromoterScheduleFold": typeof internal_eventRepairs_reviewedPromoterScheduleFold;
   "internal/eventRepairs/reviewedPromotionFold": typeof internal_eventRepairs_reviewedPromotionFold;
   "internal/eventRepairs/reviewedScheduleFold": typeof internal_eventRepairs_reviewedScheduleFold;
-  "internal/eventRepairs/reviewedStructuredCaptionCorrection": typeof internal_eventRepairs_reviewedStructuredCaptionCorrection;
   "internal/eventRepairs/reviewedStructuredCorrections": typeof internal_eventRepairs_reviewedStructuredCorrections;
   "internal/eventRepairs/reviewedVenueRepairContext": typeof internal_eventRepairs_reviewedVenueRepairContext;
   "internal/eventRepairs/sourceBoundEmptyV2Venue": typeof internal_eventRepairs_sourceBoundEmptyV2Venue;
@@ -210,7 +180,6 @@ declare const fullApi: ApiFromModules<{
   "internal/eventRepairs/trustedV2VenueRepair": typeof internal_eventRepairs_trustedV2VenueRepair;
   "internal/eventVenueBindingCoverage": typeof internal_eventVenueBindingCoverage;
   "internal/extractionModel": typeof internal_extractionModel;
-  "internal/focusedConflictReviewProof": typeof internal_focusedConflictReviewProof;
   "internal/legacySourceOccurrenceAdmissionProof": typeof internal_legacySourceOccurrenceAdmissionProof;
   "internal/migrations/campaignLineage": typeof internal_migrations_campaignLineage;
   "internal/migrations/canonicalFields": typeof internal_migrations_canonicalFields;
@@ -246,7 +215,6 @@ declare const fullApi: ApiFromModules<{
   "internal/reconciliationVerificationInputs": typeof internal_reconciliationVerificationInputs;
   "internal/requestBounds": typeof internal_requestBounds;
   "internal/retentionReceiptCoverage": typeof internal_retentionReceiptCoverage;
-  "internal/sourceConflictReviewContext": typeof internal_sourceConflictReviewContext;
   "internal/sourceOccurrenceLimits": typeof internal_sourceOccurrenceLimits;
   "internal/sourceOccurrenceReceipts": typeof internal_sourceOccurrenceReceipts;
   "internal/sourceOccurrenceTopologyEpoch": typeof internal_sourceOccurrenceTopologyEpoch;
@@ -266,9 +234,7 @@ declare const fullApi: ApiFromModules<{
   "repositories/savedEvents": typeof repositories_savedEvents;
   "repositories/sourceOccurrenceProvenance": typeof repositories_sourceOccurrenceProvenance;
   revertFalseCinemaAutomaticApproval: typeof revertFalseCinemaAutomaticApproval;
-  reviewedPromoterScheduleFold: typeof reviewedPromoterScheduleFold;
   scrapedPosts: typeof scrapedPosts;
-  sourceConflictReviews: typeof sourceConflictReviews;
   sourceOccurrences: typeof sourceOccurrences;
   users: typeof users;
   venueIdentities: typeof venueIdentities;

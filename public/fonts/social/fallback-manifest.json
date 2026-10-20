@@ -1,0 +1,33 @@
+{
+  "purpose": "Lazy fallback after preferred design face and Noto Sans; preserve complete multilingual event identities.",
+  "installedPackages": [
+    "fonts-ipafont-gothic 00303-21ubuntu1",
+    "fonts-unifont 1:14.0.01-1"
+  ],
+  "files": [
+    {
+      "file": "IPAGothic.ttf",
+      "systemPackage": "fonts-ipafont-gothic",
+      "bytes": 6235344,
+      "sha256": "503af4a8b84d1079b8e2e358dc7f7a7fb8cb7a1f212f35eaef6782dbfc75a55e"
+    },
+    {
+      "file": "IPAGothic-LICENSE.txt",
+      "systemPackage": "fonts-ipafont-gothic",
+      "bytes": 21965,
+      "sha256": "b21d28f9b4480e07716ed431a93eb874cd915ca9da39e0380305ae15091de370"
+    },
+    {
+      "file": "Unifont.ttf",
+      "systemPackage": "fonts-unifont",
+      "bytes": 12273960,
+      "sha256": "6f5bd2a81e34896871da96a87636f03e7ccc2ab8f66c8d8242af6afce3458cbc"
+    },
+    {
+      "file": "Unifont-LICENSE.txt",
+      "systemPackage": "fonts-unifont",
+      "bytes": 2733,
+      "sha256": "0986c8df2fc58c2103248700e14dca643db03aa64bb2b84638d4c99780f37f77"
+    }
+  ]
+}

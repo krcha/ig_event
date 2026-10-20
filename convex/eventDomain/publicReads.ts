@@ -15,7 +15,6 @@ import {
 } from "../../lib/events/event-update-precondition";
 import { hasCrossPostCampaignAggregateAttestationField } from "../../lib/events/cross-post-campaign-aggregate-attestation";
 import { isVenuePublic } from "../../lib/venues/venue-lifecycle";
-import { venueRequiresPhysicalDetails } from "../../lib/taxonomy/venue-types";
 import { requireAdminOrServiceSecret } from "../authz";
 import { projectPublicEvent } from "../publicEventProjection";
 import { isEventPubliclyVisible } from "../publicationPolicy";
@@ -159,10 +158,7 @@ function getUpcomingWeekendDates(today: string): Set<string> {
 async function loadPublicVenueIdsForEvents(
   ctx: QueryCtx,
   events: Doc<"events">[],
-): Promise<{
-  physicalVenueIds: Set<Id<"venues">>;
-  publicVenueIds: Set<Id<"venues">>;
-}> {
+): Promise<Set<Id<"venues">>> {
   const venueIds = [
     ...new Set(
       events
@@ -173,26 +169,25 @@ async function loadPublicVenueIdsForEvents(
   const venues = await Promise.all(
     venueIds.map((venueId) => ctx.db.get(venueId)),
   );
-  const publicVenues = venues.filter(
-    (venue): venue is Doc<"venues"> => venue !== null && isVenuePublic(venue),
+  return new Set(
+    venues
+      .filter(
+        (venue): venue is Doc<"venues"> =>
+          venue !== null && isVenuePublic(venue),
+      )
+      .map((venue) => venue._id),
   );
-  return {
-    physicalVenueIds: new Set(publicVenues
-      .filter((venue) => venueRequiresPhysicalDetails(venue.category))
-      .map((venue) => venue._id)),
-    publicVenueIds: new Set(publicVenues.map((venue) => venue._id)),
-  };
 }
 
 async function projectCanonicallyGroundedPublicEventPage(
   ctx: QueryCtx,
   groundedEvents: Doc<"events">[],
 ) {
-  const { physicalVenueIds } = await loadPublicVenueIdsForEvents(ctx, groundedEvents);
+  const publicVenueIds = await loadPublicVenueIdsForEvents(ctx, groundedEvents);
   return groundedEvents.map((event) =>
     projectPublicEvent(
       event,
-      event.venueId !== undefined && physicalVenueIds.has(event.venueId),
+      event.venueId !== undefined && publicVenueIds.has(event.venueId),
     ),
   );
 }
@@ -284,7 +279,7 @@ async function projectMaterializedPublicEventPage(
       event.publicationState === "publishable" &&
       event.publicationReason === "canonical_source_grounding_verified",
   );
-  const { physicalVenueIds, publicVenueIds } = await loadPublicVenueIdsForEvents(
+  const publicVenueIds = await loadPublicVenueIdsForEvents(
     ctx,
     currentPublishableEvents,
   );
@@ -296,7 +291,7 @@ async function projectMaterializedPublicEventPage(
     .map((event) =>
       projectPublicEvent(
         event,
-        event.venueId !== undefined && physicalVenueIds.has(event.venueId),
+        event.venueId !== undefined && publicVenueIds.has(event.venueId),
       ),
     );
 }
@@ -480,7 +475,6 @@ function toPublicCalendarEvent(event: ReturnType<typeof projectPublicEvent>) {
     _id: event._id,
     artists: event.artists,
     date: event.date,
-    ...(event.description ? { description: event.description } : {}),
     eventType: event.eventType,
     status: event.status,
     title: event.title,
@@ -780,14 +774,14 @@ export async function getDiscoverFeedHandler(
     ...weekend,
   ];
   const selectedEventIds = new Set(selectedEvents.map((event) => event._id));
-  const { physicalVenueIds } = await loadPublicVenueIdsForEvents(ctx, selectedEvents);
+  const publicVenueIds = await loadPublicVenueIdsForEvents(ctx, selectedEvents);
   const projectGroup = (events: Doc<"events">[]) =>
     events
       .filter((event) => selectedEventIds.has(event._id))
       .map((event) =>
         projectPublicEvent(
           event,
-          event.venueId !== undefined && physicalVenueIds.has(event.venueId),
+          event.venueId !== undefined && publicVenueIds.has(event.venueId),
         ),
       );
   return {

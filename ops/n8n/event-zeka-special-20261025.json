@@ -1,0 +1,229 @@
+[
+  {
+    "id": "EzekaSpecial20261025",
+    "name": "Event Zeka - 25 October 2026 at 10:00",
+    "description": "One-off 2026-10-25 10:00 Europe/Belgrade: the user-supplied image as photo, Story and Reels-only video with the exact caption Izađi i glasaj! Regular publishers skip this local date. Exact year guard, separate per-format receipts, stop on unknown publication outcomes. Manual execution only previews. Regular schedules resume 26 October.",
+    "active": false,
+    "nodes": [
+      {
+        "id": "manual-special-preview",
+        "name": "Manual Special Preview",
+        "type": "n8n-nodes-base.manualTrigger",
+        "typeVersion": 1,
+        "position": [
+          -460,
+          -90
+        ],
+        "parameters": {}
+      },
+      {
+        "id": "special-schedule",
+        "name": "25 October at 10:00 Belgrade",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          -460,
+          170
+        ],
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "cronExpression",
+                "expression": "0 10 25 10 *"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "special-post",
+        "name": "Publish Special Photo",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          -180,
+          80
+        ],
+        "parameters": {
+          "jsCode": "async function publishEventZekaSpecial({env,httpRequest,getStaticData,plan,format,now=()=>new Date(),random=Math.random,forceDryRun=false}) {\n  const dry=forceDryRun||String(env.EVENTZEKA_SOCIAL_DRY_RUN||'').toLowerCase()==='true';\n  const clock=()=>{\n    const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Belgrade',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(now());\n    const get=key=>parts.find(part=>part.type===key).value;\n    return {date:[get('year'),get('month'),get('day')].join('-'),time:get('hour')+':'+get('minute')};\n  };\n  const current=clock();\n  if(!dry&&current.date!=='2026-10-25')return [{json:{status:'skipped_outside_special_date',format,publishDate:current.date,continue:false}}];\n  if(!dry&&current.time<'10:00')return [{json:{status:'skipped_before_special_time',format,publishDate:current.date,continue:false}}];\n  const caption='Iza\\u0111i i glasaj!';\n  if(plan?.id!=='eventzeka-special-2026-10-25-v1'||plan.date!=='2026-10-25'||plan.timezone!=='Europe/Belgrade'||plan.caption!==caption||\n    plan.scheduledUtc!=='2026-10-25T09:00:00Z'||plan.locationId!=='109920975697736'||plan.shareToFeed!==false||plan.durationSeconds!==15||!['post','story','reel'].includes(format))throw new Error('Invalid one-off publication plan.');\n  for(const key of ['post','story','reel','cover']){\n    const asset=plan.assets?.[key];\n    const file={post:'post.jpg',story:'story.jpg',reel:'reel.mp4',cover:'reel-cover.jpg'}[key];\n    if(!asset||asset.file!==file||!/^[a-f0-9]{64}$/.test(asset.sha256)||asset.url!==`https://eventzeka.com/api/social/special/2026-10-25/${file}?v=${asset.sha256}`||\n      asset.contentType!==(key==='reel'?'video/mp4':'image/jpeg')||!Number.isSafeInteger(asset.bytes)||asset.bytes<1000||asset.bytes>(key==='reel'?300000000:8000000))throw new Error('Invalid pinned special publication asset.');\n  }\n  const preview={format,publishDate:plan.date,scheduledLocal:'2026-10-25 10:00 Europe/Belgrade',scheduledUtc:plan.scheduledUtc,caption,\n    mediaUrl:plan.assets[format].url,coverUrl:format==='reel'?plan.assets.cover.url:null,locationName:plan.locationName,\n    musicMode:format==='reel'?'instagram_catalog':'none',shareToFeed:format==='reel'?false:null};\n  const state=dry?null:getStaticData();\n  const existing=state?.specialPublications?.[plan.id];\n  if(existing?.pending)return [{json:{status:'blocked_reconciliation_required',...preview,pending:existing.pending,continue:false}}];\n  if(existing?.receipts?.[format]?.mediaId)return [{json:{status:'skipped_already_published',...preview,mediaId:existing.receipts[format].mediaId,continue:true}}];\n  if(!dry&&format!=='post'&&!existing?.receipts?.[format==='story'?'post':'story']?.mediaId)return [{json:{status:'blocked_previous_format_required',...preview,continue:false}}];\n  const tokens=[env.EVENTZEKA_IG_ACCESS_TOKEN,env.EVENTZEKA_REELS_FB_ACCESS_TOKEN,env.EVENTZEKA_CRON_SECRET].filter(Boolean);\n  const safe=value=>tokens.reduce((message,token)=>message.replaceAll(token,'[redacted]'),value instanceof Error?value.message:String(value));\n  const parse=body=>{if(body&&typeof body==='object')return body;try{return JSON.parse(body||'{}');}catch{return {};}};\n  const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));\n  const igId=String(env.EVENTZEKA_IG_USER_ID||''),fbId=String(env.EVENTZEKA_REELS_IG_USER_ID||'');\n  if(!dry&&(!/^\\d+$/.test(igId)||!/^\\d+$/.test(fbId)||!env.EVENTZEKA_IG_ACCESS_TOKEN||!env.EVENTZEKA_REELS_FB_ACCESS_TOKEN))return [{json:{status:'blocked_meta_authorization_required',...preview,continue:false}}];\n  async function graph(reel,path,body){\n    const base=reel?'https://graph.facebook.com':String(env.EVENTZEKA_IG_GRAPH_BASE_URL||'https://graph.instagram.com').replace(/\\/+$/,'');\n    const version=String((reel?env.EVENTZEKA_REELS_GRAPH_VERSION:env.EVENTZEKA_IG_GRAPH_VERSION)||'v25.0');\n    if(!['https://graph.facebook.com','https://graph.instagram.com'].includes(base)||!/^v\\d+\\.\\d+$/.test(version))throw new Error('Invalid Meta connection configuration.');\n    const token=reel?env.EVENTZEKA_REELS_FB_ACCESS_TOKEN:env.EVENTZEKA_IG_ACCESS_TOKEN;\n    const response=await httpRequest({method:body?'POST':'GET',url:`${base}/${version}/${path}`,\n      headers:{Authorization:`Bearer ${token}`,Accept:'application/json',...(body?{'Content-Type':'application/x-www-form-urlencoded'}:{})},\n      body:body?Object.entries(body).map(([key,value])=>`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`).join('&'):undefined,\n      returnFullResponse:true,ignoreHttpStatusErrors:true,timeout:120000});\n    const data=parse(response.body);\n    if(Number(response.statusCode)<200||Number(response.statusCode)>=300)throw new Error(safe(data.error?.message||`Meta HTTP ${response.statusCode}.`));\n    return data;\n  }\n  let campaign;\n  try{\n    // Validate every format before the first public action, including exact bytes.\n    for(const asset of Object.values(plan.assets)){\n      const response=await httpRequest({method:'HEAD',url:asset.url,returnFullResponse:true,ignoreHttpStatusErrors:true,timeout:60000});\n      const headers=response.headers||{};\n      if(Number(response.statusCode)!==200||String(headers['content-type']||headers['Content-Type']||'').split(';')[0]!==asset.contentType||\n        String(headers['x-content-sha256']||headers['X-Content-Sha256']||'')!==asset.sha256||Number(headers['content-length']||headers['Content-Length'])!==asset.bytes)throw new Error('Special publication media preflight failed.');\n    }\n    if(dry)return [{json:{status:'dry_run',...preview,continue:true}}];\n    const fingerprint=[plan.sourceSha256,...Object.values(plan.assets).map(asset=>asset.sha256),caption].join(':');\n    state.specialPublications=state.specialPublications||{};\n    campaign=state.specialPublications[plan.id]||(state.specialPublications[plan.id]={fingerprint,receipts:{},prepared:{}});\n    if(campaign.fingerprint!==fingerprint)throw new Error('The frozen special publication plan changed.');\n    const remaining=['post','story','reel'].filter(key=>!campaign.receipts[key]?.mediaId).length;\n    const quota=await graph(true,`${fbId}/content_publishing_limit?fields=quota_usage,config`);\n    const allowance=quota.data?.[0];\n    if(!Number.isFinite(allowance?.quota_usage)||!Number.isFinite(allowance?.config?.quota_total)||allowance.quota_usage+remaining>allowance.config.quota_total)throw new Error('Insufficient verified Instagram publication quota.');\n    if(!campaign.audio){\n      const catalog=await graph(true,`ig_audio?audio_type=music&user_id=${encodeURIComponent(fbId)}`);\n      const seen=new Set();\n      const tracks=(Array.isArray(catalog.audio)?catalog.audio:[]).map((track,index)=>({...track,catalogRank:index+1})).filter(track=>/^\\d+$/.test(String(track.audio_id||''))&&Number(track.duration_in_ms)>=15000&&typeof track.title==='string'&&track.title.trim()).filter(track=>{\n        const key=`${track.title}:${track.display_artist||''}`.toLocaleLowerCase();if(seen.has(key))return false;seen.add(key);return true;\n      }).slice(0,3);\n      if(!tracks.length)throw new Error('No eligible trending catalog music is available.');\n      const track=tracks[Math.min(tracks.length-1,Math.max(0,Math.floor(random()*tracks.length)))];\n      campaign.audio={id:String(track.audio_id),title:track.title,artist:track.display_artist||'',catalogRank:track.catalogRank};\n    }\n    const reel=format==='reel',id=reel?fbId:igId;\n    const prepared=campaign.prepared[format]||(campaign.prepared[format]={});\n    if(!prepared.containerId){\n      const body={location_id:plan.locationId,...(format==='post'?{image_url:plan.assets.post.url,caption}:format==='story'?{media_type:'STORIES',image_url:plan.assets.story.url}:{media_type:'REELS',video_url:plan.assets.reel.url,cover_url:plan.assets.cover.url,caption,share_to_feed:'false',audio_configuration:JSON.stringify({audio_id:campaign.audio.id,audio_volume:80,video_volume:1})})};\n      const created=await graph(reel,`${id}/media`,body);\n      if(!created.id)throw new Error('Meta did not return a special publication container ID.');\n      prepared.containerId=created.id;\n    }\n    let ready=false;\n    for(let attempt=0;attempt<(reel?36:18);attempt++){\n      const status=await graph(reel,`${prepared.containerId}?fields=status_code,status`);\n      if(status.status_code==='FINISHED'){ready=true;break;}\n      if(['ERROR','EXPIRED','PUBLISHED'].includes(status.status_code))throw new Error(`Container requires reconciliation: ${status.status_code}.`);\n      await pause(5000);\n    }\n    if(!ready)throw new Error('Special publication container is still processing.');\n    const liveClock=clock();\n    if(liveClock.date!==plan.date||liveClock.time<'10:00')throw new Error('The special publication date changed during preparation.');\n    // Never repeat media_publish after an ambiguous response.\n    campaign.pending={format,containerId:prepared.containerId,startedAt:now().toISOString()};\n    let result;\n    try{\n      result=await graph(reel,`${id}/media_publish`,{creation_id:prepared.containerId});\n      if(!result.id)throw new Error('Meta did not return a published media ID.');\n    }catch(error){\n      campaign.pending.error=safe(error);\n      return [{json:{status:'blocked_reconciliation_required',...preview,pending:campaign.pending,continue:false}}];\n    }\n    campaign.receipts[format]={mediaId:result.id,containerId:prepared.containerId,publishedAt:now().toISOString(),assetSha256:plan.assets[format].sha256};\n    delete campaign.pending;\n    campaign.completed=['post','story','reel'].every(key=>campaign.receipts[key]?.mediaId);\n    if(campaign.completed)campaign.completedAt=now().toISOString();\n    return [{json:{status:'published',...preview,mediaId:result.id,audio:format==='reel'?campaign.audio:null,completed:campaign.completed,continue:true}}];\n  }catch(error){\n    // Return normally so n8n retains earlier successes and any prepared container.\n    if(campaign)campaign.lastError={format,message:safe(error),at:now().toISOString()};\n    return [{json:{status:'blocked_special_preparation',...preview,reason:safe(error),continue:false}}];\n  }\n}\n\nreturn await publishEventZekaSpecial({env:$env,httpRequest:this.helpers.httpRequest.bind(this.helpers),getStaticData:()=>$getWorkflowStaticData('global'),plan:{\"id\":\"eventzeka-special-2026-10-25-v1\",\"date\":\"2026-10-25\",\"timezone\":\"Europe/Belgrade\",\"scheduledLocalTime\":\"10:00\",\"scheduledUtc\":\"2026-10-25T09:00:00Z\",\"caption\":\"Izađi i glasaj!\",\"sourceSha256\":\"7f74b0a02bb3029cb7ef652188088df1848216e6511c7c97370defe66ab8dff8\",\"locationId\":\"109920975697736\",\"locationName\":\"Belgrade, Serbia\",\"shareToFeed\":false,\"durationSeconds\":15,\"assets\":{\"post\":{\"file\":\"post.jpg\",\"sha256\":\"35358c671ff6a9db504ace0cbc6afb924c7385a45d25841cec45435be17278ec\",\"bytes\":140150,\"contentType\":\"image/jpeg\",\"url\":\"https://eventzeka.com/api/social/special/2026-10-25/post.jpg?v=35358c671ff6a9db504ace0cbc6afb924c7385a45d25841cec45435be17278ec\"},\"story\":{\"file\":\"story.jpg\",\"sha256\":\"eddbc9690d2e5c9252fe671fb5cdde2138eb5f4b5ac5b412693991dd23477396\",\"bytes\":152478,\"contentType\":\"image/jpeg\",\"url\":\"https://eventzeka.com/api/social/special/2026-10-25/story.jpg?v=eddbc9690d2e5c9252fe671fb5cdde2138eb5f4b5ac5b412693991dd23477396\"},\"reel\":{\"file\":\"reel.mp4\",\"sha256\":\"65d1b400c11439e08056d0d759adfda5352d613c43f111a1e8345f5defae5a4a\",\"bytes\":372862,\"contentType\":\"video/mp4\",\"url\":\"https://eventzeka.com/api/social/special/2026-10-25/reel.mp4?v=65d1b400c11439e08056d0d759adfda5352d613c43f111a1e8345f5defae5a4a\"},\"cover\":{\"file\":\"reel-cover.jpg\",\"sha256\":\"eddbc9690d2e5c9252fe671fb5cdde2138eb5f4b5ac5b412693991dd23477396\",\"bytes\":152478,\"contentType\":\"image/jpeg\",\"url\":\"https://eventzeka.com/api/social/special/2026-10-25/reel-cover.jpg?v=eddbc9690d2e5c9252fe671fb5cdde2138eb5f4b5ac5b412693991dd23477396\"}}},format:'post',forceDryRun:$execution.mode==='manual'});"
+        }
+      },
+      {
+        "id": "special-story",
+        "name": "Publish Special Story",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          280,
+          80
+        ],
+        "parameters": {
+          "jsCode": "async function publishEventZekaSpecial({env,httpRequest,getStaticData,plan,format,now=()=>new Date(),random=Math.random,forceDryRun=false}) {\n  const dry=forceDryRun||String(env.EVENTZEKA_SOCIAL_DRY_RUN||'').toLowerCase()==='true';\n  const clock=()=>{\n    const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Belgrade',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(now());\n    const get=key=>parts.find(part=>part.type===key).value;\n    return {date:[get('year'),get('month'),get('day')].join('-'),time:get('hour')+':'+get('minute')};\n  };\n  const current=clock();\n  if(!dry&&current.date!=='2026-10-25')return [{json:{status:'skipped_outside_special_date',format,publishDate:current.date,continue:false}}];\n  if(!dry&&current.time<'10:00')return [{json:{status:'skipped_before_special_time',format,publishDate:current.date,continue:false}}];\n  const caption='Iza\\u0111i i glasaj!';\n  if(plan?.id!=='eventzeka-special-2026-10-25-v1'||plan.date!=='2026-10-25'||plan.timezone!=='Europe/Belgrade'||plan.caption!==caption||\n    plan.scheduledUtc!=='2026-10-25T09:00:00Z'||plan.locationId!=='109920975697736'||plan.shareToFeed!==false||plan.durationSeconds!==15||!['post','story','reel'].includes(format))throw new Error('Invalid one-off publication plan.');\n  for(const key of ['post','story','reel','cover']){\n    const asset=plan.assets?.[key];\n    const file={post:'post.jpg',story:'story.jpg',reel:'reel.mp4',cover:'reel-cover.jpg'}[key];\n    if(!asset||asset.file!==file||!/^[a-f0-9]{64}$/.test(asset.sha256)||asset.url!==`https://eventzeka.com/api/social/special/2026-10-25/${file}?v=${asset.sha256}`||\n      asset.contentType!==(key==='reel'?'video/mp4':'image/jpeg')||!Number.isSafeInteger(asset.bytes)||asset.bytes<1000||asset.bytes>(key==='reel'?300000000:8000000))throw new Error('Invalid pinned special publication asset.');\n  }\n  const preview={format,publishDate:plan.date,scheduledLocal:'2026-10-25 10:00 Europe/Belgrade',scheduledUtc:plan.scheduledUtc,caption,\n    mediaUrl:plan.assets[format].url,coverUrl:format==='reel'?plan.assets.cover.url:null,locationName:plan.locationName,\n    musicMode:format==='reel'?'instagram_catalog':'none',shareToFeed:format==='reel'?false:null};\n  const state=dry?null:getStaticData();\n  const existing=state?.specialPublications?.[plan.id];\n  if(existing?.pending)return [{json:{status:'blocked_reconciliation_required',...preview,pending:existing.pending,continue:false}}];\n  if(existing?.receipts?.[format]?.mediaId)return [{json:{status:'skipped_already_published',...preview,mediaId:existing.receipts[format].mediaId,continue:true}}];\n  if(!dry&&format!=='post'&&!existing?.receipts?.[format==='story'?'post':'story']?.mediaId)return [{json:{status:'blocked_previous_format_required',...preview,continue:false}}];\n  const tokens=[env.EVENTZEKA_IG_ACCESS_TOKEN,env.EVENTZEKA_REELS_FB_ACCESS_TOKEN,env.EVENTZEKA_CRON_SECRET].filter(Boolean);\n  const safe=value=>tokens.reduce((message,token)=>message.replaceAll(token,'[redacted]'),value instanceof Error?value.message:String(value));\n  const parse=body=>{if(body&&typeof body==='object')return body;try{return JSON.parse(body||'{}');}catch{return {};}};\n  const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));\n  const igId=String(env.EVENTZEKA_IG_USER_ID||''),fbId=String(env.EVENTZEKA_REELS_IG_USER_ID||'');\n  if(!dry&&(!/^\\d+$/.test(igId)||!/^\\d+$/.test(fbId)||!env.EVENTZEKA_IG_ACCESS_TOKEN||!env.EVENTZEKA_REELS_FB_ACCESS_TOKEN))return [{json:{status:'blocked_meta_authorization_required',...preview,continue:false}}];\n  async function graph(reel,path,body){\n    const base=reel?'https://graph.facebook.com':String(env.EVENTZEKA_IG_GRAPH_BASE_URL||'https://graph.instagram.com').replace(/\\/+$/,'');\n    const version=String((reel?env.EVENTZEKA_REELS_GRAPH_VERSION:env.EVENTZEKA_IG_GRAPH_VERSION)||'v25.0');\n    if(!['https://graph.facebook.com','https://graph.instagram.com'].includes(base)||!/^v\\d+\\.\\d+$/.test(version))throw new Error('Invalid Meta connection configuration.');\n    const token=reel?env.EVENTZEKA_REELS_FB_ACCESS_TOKEN:env.EVENTZEKA_IG_ACCESS_TOKEN;\n    const response=await httpRequest({method:body?'POST':'GET',url:`${base}/${version}/${path}`,\n      headers:{Authorization:`Bearer ${token}`,Accept:'application/json',...(body?{'Content-Type':'application/x-www-form-urlencoded'}:{})},\n      body:body?Object.entries(body).map(([key,value])=>`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`).join('&'):undefined,\n      returnFullResponse:true,ignoreHttpStatusErrors:true,timeout:120000});\n    const data=parse(response.body);\n    if(Number(response.statusCode)<200||Number(response.statusCode)>=300)throw new Error(safe(data.error?.message||`Meta HTTP ${response.statusCode}.`));\n    return data;\n  }\n  let campaign;\n  try{\n    // Validate every format before the first public action, including exact bytes.\n    for(const asset of Object.values(plan.assets)){\n      const response=await httpRequest({method:'HEAD',url:asset.url,returnFullResponse:true,ignoreHttpStatusErrors:true,timeout:60000});\n      const headers=response.headers||{};\n      if(Number(response.statusCode)!==200||String(headers['content-type']||headers['Content-Type']||'').split(';')[0]!==asset.contentType||\n        String(headers['x-content-sha256']||headers['X-Content-Sha256']||'')!==asset.sha256||Number(headers['content-length']||headers['Content-Length'])!==asset.bytes)throw new Error('Special publication media preflight failed.');\n    }\n    if(dry)return [{json:{status:'dry_run',...preview,continue:true}}];\n    const fingerprint=[plan.sourceSha256,...Object.values(plan.assets).map(asset=>asset.sha256),caption].join(':');\n    state.specialPublications=state.specialPublications||{};\n    campaign=state.specialPublications[plan.id]||(state.specialPublications[plan.id]={fingerprint,receipts:{},prepared:{}});\n    if(campaign.fingerprint!==fingerprint)throw new Error('The frozen special publication plan changed.');\n    const remaining=['post','story','reel'].filter(key=>!campaign.receipts[key]?.mediaId).length;\n    const quota=await graph(true,`${fbId}/content_publishing_limit?fields=quota_usage,config`);\n    const allowance=quota.data?.[0];\n    if(!Number.isFinite(allowance?.quota_usage)||!Number.isFinite(allowance?.config?.quota_total)||allowance.quota_usage+remaining>allowance.config.quota_total)throw new Error('Insufficient verified Instagram publication quota.');\n    if(!campaign.audio){\n      const catalog=await graph(true,`ig_audio?audio_type=music&user_id=${encodeURIComponent(fbId)}`);\n      const seen=new Set();\n      const tracks=(Array.isArray(catalog.audio)?catalog.audio:[]).map((track,index)=>({...track,catalogRank:index+1})).filter(track=>/^\\d+$/.test(String(track.audio_id||''))&&Number(track.duration_in_ms)>=15000&&typeof track.title==='string'&&track.title.trim()).filter(track=>{\n        const key=`${track.title}:${track.display_artist||''}`.toLocaleLowerCase();if(seen.has(key))return false;seen.add(key);return true;\n      }).slice(0,3);\n      if(!tracks.length)throw new Error('No eligible trending catalog music is available.');\n      const track=tracks[Math.min(tracks.length-1,Math.max(0,Math.floor(random()*tracks.length)))];\n      campaign.audio={id:String(track.audio_id),title:track.title,artist:track.display_artist||'',catalogRank:track.catalogRank};\n    }\n    const reel=format==='reel',id=reel?fbId:igId;\n    const prepared=campaign.prepared[format]||(campaign.prepared[format]={});\n    if(!prepared.containerId){\n      const body={location_id:plan.locationId,...(format==='post'?{image_url:plan.assets.post.url,caption}:format==='story'?{media_type:'STORIES',image_url:plan.assets.story.url}:{media_type:'REELS',video_url:plan.assets.reel.url,cover_url:plan.assets.cover.url,caption,share_to_feed:'false',audio_configuration:JSON.stringify({audio_id:campaign.audio.id,audio_volume:80,video_volume:1})})};\n      const created=await graph(reel,`${id}/media`,body);\n      if(!created.id)throw new Error('Meta did not return a special publication container ID.');\n      prepared.containerId=created.id;\n    }\n    let ready=false;\n    for(let attempt=0;attempt<(reel?36:18);attempt++){\n      const status=await graph(reel,`${prepared.containerId}?fields=status_code,status`);\n      if(status.status_code==='FINISHED'){ready=true;break;}\n      if(['ERROR','EXPIRED','PUBLISHED'].includes(status.status_code))throw new Error(`Container requires reconciliation: ${status.status_code}.`);\n      await pause(5000);\n    }\n    if(!ready)throw new Error('Special publication container is still processing.');\n    const liveClock=clock();\n    if(liveClock.date!==plan.date||liveClock.time<'10:00')throw new Error('The special publication date changed during preparation.');\n    // Never repeat media_publish after an ambiguous response.\n    campaign.pending={format,containerId:prepared.containerId,startedAt:now().toISOString()};\n    let result;\n    try{\n      result=await graph(reel,`${id}/media_publish`,{creation_id:prepared.containerId});\n      if(!result.id)throw new Error('Meta did not return a published media ID.');\n    }catch(error){\n      campaign.pending.error=safe(error);\n      return [{json:{status:'blocked_reconciliation_required',...preview,pending:campaign.pending,continue:false}}];\n    }\n    campaign.receipts[format]={mediaId:result.id,containerId:prepared.containerId,publishedAt:now().toISOString(),assetSha256:plan.assets[format].sha256};\n    delete campaign.pending;\n    campaign.completed=['post','story','reel'].every(key=>campaign.receipts[key]?.mediaId);\n    if(campaign.completed)campaign.completedAt=now().toISOString();\n    return [{json:{status:'published',...preview,mediaId:result.id,audio:format==='reel'?campaign.audio:null,completed:campaign.completed,continue:true}}];\n  }catch(error){\n    // Return normally so n8n retains earlier successes and any prepared container.\n    if(campaign)campaign.lastError={format,message:safe(error),at:now().toISOString()};\n    return [{json:{status:'blocked_special_preparation',...preview,reason:safe(error),continue:false}}];\n  }\n}\n\nreturn await publishEventZekaSpecial({env:$env,httpRequest:this.helpers.httpRequest.bind(this.helpers),getStaticData:()=>$getWorkflowStaticData('global'),plan:{\"id\":\"eventzeka-special-2026-10-25-v1\",\"date\":\"2026-10-25\",\"timezone\":\"Europe/Belgrade\",\"scheduledLocalTime\":\"10:00\",\"scheduledUtc\":\"2026-10-25T09:00:00Z\",\"caption\":\"Izađi i glasaj!\",\"sourceSha256\":\"7f74b0a02bb3029cb7ef652188088df1848216e6511c7c97370defe66ab8dff8\",\"locationId\":\"109920975697736\",\"locationName\":\"Belgrade, Serbia\",\"shareToFeed\":false,\"durationSeconds\":15,\"assets\":{\"post\":{\"file\":\"post.jpg\",\"sha256\":\"35358c671ff6a9db504ace0cbc6afb924c7385a45d25841cec45435be17278ec\",\"bytes\":140150,\"contentType\":\"image/jpeg\",\"url\":\"https://eventzeka.com/api/social/special/2026-10-25/post.jpg?v=35358c671ff6a9db504ace0cbc6afb924c7385a45d25841cec45435be17278ec\"},\"story\":{\"file\":\"story.jpg\",\"sha256\":\"eddbc9690d2e5c9252fe671fb5cdde2138eb5f4b5ac5b412693991dd23477396\",\"bytes\":152478,\"contentType\":\"image/jpeg\",\"url\":\"https://eventzeka.com/api/social/special/2026-10-25/story.jpg?v=eddbc9690d2e5c9252fe671fb5cdde2138eb5f4b5ac5b412693991dd23477396\"},\"reel\":{\"file\":\"reel.mp4\",\"sha256\":\"65d1b400c11439e08056d0d759adfda5352d613c43f111a1e8345f5defae5a4a\",\"bytes\":372862,\"contentType\":\"video/mp4\",\"url\":\"https://eventzeka.com/api/social/special/2026-10-25/reel.mp4?v=65d1b400c11439e08056d0d759adfda5352d613c43f111a1e8345f5defae5a4a\"},\"cover\":{\"file\":\"reel-cover.jpg\",\"sha256\":\"eddbc9690d2e5c9252fe671fb5cdde2138eb5f4b5ac5b412693991dd23477396\",\"bytes\":152478,\"contentType\":\"image/jpeg\",\"url\":\"https://eventzeka.com/api/social/special/2026-10-25/reel-cover.jpg?v=eddbc9690d2e5c9252fe671fb5cdde2138eb5f4b5ac5b412693991dd23477396\"}}},format:'story',forceDryRun:$execution.mode==='manual'});"
+        }
+      },
+      {
+        "id": "special-reel",
+        "name": "Publish Special Reel",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          740,
+          80
+        ],
+        "parameters": {
+          "jsCode": "async function publishEventZekaSpecial({env,httpRequest,getStaticData,plan,format,now=()=>new Date(),random=Math.random,forceDryRun=false}) {\n  const dry=forceDryRun||String(env.EVENTZEKA_SOCIAL_DRY_RUN||'').toLowerCase()==='true';\n  const clock=()=>{\n    const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Belgrade',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(now());\n    const get=key=>parts.find(part=>part.type===key).value;\n    return {date:[get('year'),get('month'),get('day')].join('-'),time:get('hour')+':'+get('minute')};\n  };\n  const current=clock();\n  if(!dry&&current.date!=='2026-10-25')return [{json:{status:'skipped_outside_special_date',format,publishDate:current.date,continue:false}}];\n  if(!dry&&current.time<'10:00')return [{json:{status:'skipped_before_special_time',format,publishDate:current.date,continue:false}}];\n  const caption='Iza\\u0111i i glasaj!';\n  if(plan?.id!=='eventzeka-special-2026-10-25-v1'||plan.date!=='2026-10-25'||plan.timezone!=='Europe/Belgrade'||plan.caption!==caption||\n    plan.scheduledUtc!=='2026-10-25T09:00:00Z'||plan.locationId!=='109920975697736'||plan.shareToFeed!==false||plan.durationSeconds!==15||!['post','story','reel'].includes(format))throw new Error('Invalid one-off publication plan.');\n  for(const key of ['post','story','reel','cover']){\n    const asset=plan.assets?.[key];\n    const file={post:'post.jpg',story:'story.jpg',reel:'reel.mp4',cover:'reel-cover.jpg'}[key];\n    if(!asset||asset.file!==file||!/^[a-f0-9]{64}$/.test(asset.sha256)||asset.url!==`https://eventzeka.com/api/social/special/2026-10-25/${file}?v=${asset.sha256}`||\n      asset.contentType!==(key==='reel'?'video/mp4':'image/jpeg')||!Number.isSafeInteger(asset.bytes)||asset.bytes<1000||asset.bytes>(key==='reel'?300000000:8000000))throw new Error('Invalid pinned special publication asset.');\n  }\n  const preview={format,publishDate:plan.date,scheduledLocal:'2026-10-25 10:00 Europe/Belgrade',scheduledUtc:plan.scheduledUtc,caption,\n    mediaUrl:plan.assets[format].url,coverUrl:format==='reel'?plan.assets.cover.url:null,locationName:plan.locationName,\n    musicMode:format==='reel'?'instagram_catalog':'none',shareToFeed:format==='reel'?false:null};\n  const state=dry?null:getStaticData();\n  const existing=state?.specialPublications?.[plan.id];\n  if(existing?.pending)return [{json:{status:'blocked_reconciliation_required',...preview,pending:existing.pending,continue:false}}];\n  if(existing?.receipts?.[format]?.mediaId)return [{json:{status:'skipped_already_published',...preview,mediaId:existing.receipts[format].mediaId,continue:true}}];\n  if(!dry&&format!=='post'&&!existing?.receipts?.[format==='story'?'post':'story']?.mediaId)return [{json:{status:'blocked_previous_format_required',...preview,continue:false}}];\n  const tokens=[env.EVENTZEKA_IG_ACCESS_TOKEN,env.EVENTZEKA_REELS_FB_ACCESS_TOKEN,env.EVENTZEKA_CRON_SECRET].filter(Boolean);\n  const safe=value=>tokens.reduce((message,token)=>message.replaceAll(token,'[redacted]'),value instanceof Error?value.message:String(value));\n  const parse=body=>{if(body&&typeof body==='object')return body;try{return JSON.parse(body||'{}');}catch{return {};}};\n  const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));\n  const igId=String(env.EVENTZEKA_IG_USER_ID||''),fbId=String(env.EVENTZEKA_REELS_IG_USER_ID||'');\n  if(!dry&&(!/^\\d+$/.test(igId)||!/^\\d+$/.test(fbId)||!env.EVENTZEKA_IG_ACCESS_TOKEN||!env.EVENTZEKA_REELS_FB_ACCESS_TOKEN))return [{json:{status:'blocked_meta_authorization_required',...preview,continue:false}}];\n  async function graph(reel,path,body){\n    const base=reel?'https://graph.facebook.com':String(env.EVENTZEKA_IG_GRAPH_BASE_URL||'https://graph.instagram.com').replace(/\\/+$/,'');\n    const version=String((reel?env.EVENTZEKA_REELS_GRAPH_VERSION:env.EVENTZEKA_IG_GRAPH_VERSION)||'v25.0');\n    if(!['https://graph.facebook.com','https://graph.instagram.com'].includes(base)||!/^v\\d+\\.\\d+$/.test(version))throw new Error('Invalid Meta connection configuration.');\n    const token=reel?env.EVENTZEKA_REELS_FB_ACCESS_TOKEN:env.EVENTZEKA_IG_ACCESS_TOKEN;\n    const response=await httpRequest({method:body?'POST':'GET',url:`${base}/${version}/${path}`,\n      headers:{Authorization:`Bearer ${token}`,Accept:'application/json',...(body?{'Content-Type':'application/x-www-form-urlencoded'}:{})},\n      body:body?Object.entries(body).map(([key,value])=>`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`).join('&'):undefined,\n      returnFullResponse:true,ignoreHttpStatusErrors:true,timeout:120000});\n    const data=parse(response.body);\n    if(Number(response.statusCode)<200||Number(response.statusCode)>=300)throw new Error(safe(data.error?.message||`Meta HTTP ${response.statusCode}.`));\n    return data;\n  }\n  let campaign;\n  try{\n    // Validate every format before the first public action, including exact bytes.\n    for(const asset of Object.values(plan.assets)){\n      const response=await httpRequest({method:'HEAD',url:asset.url,returnFullResponse:true,ignoreHttpStatusErrors:true,timeout:60000});\n      const headers=response.headers||{};\n      if(Number(response.statusCode)!==200||String(headers['content-type']||headers['Content-Type']||'').split(';')[0]!==asset.contentType||\n        String(headers['x-content-sha256']||headers['X-Content-Sha256']||'')!==asset.sha256||Number(headers['content-length']||headers['Content-Length'])!==asset.bytes)throw new Error('Special publication media preflight failed.');\n    }\n    if(dry)return [{json:{status:'dry_run',...preview,continue:true}}];\n    const fingerprint=[plan.sourceSha256,...Object.values(plan.assets).map(asset=>asset.sha256),caption].join(':');\n    state.specialPublications=state.specialPublications||{};\n    campaign=state.specialPublications[plan.id]||(state.specialPublications[plan.id]={fingerprint,receipts:{},prepared:{}});\n    if(campaign.fingerprint!==fingerprint)throw new Error('The frozen special publication plan changed.');\n    const remaining=['post','story','reel'].filter(key=>!campaign.receipts[key]?.mediaId).length;\n    const quota=await graph(true,`${fbId}/content_publishing_limit?fields=quota_usage,config`);\n    const allowance=quota.data?.[0];\n    if(!Number.isFinite(allowance?.quota_usage)||!Number.isFinite(allowance?.config?.quota_total)||allowance.quota_usage+remaining>allowance.config.quota_total)throw new Error('Insufficient verified Instagram publication quota.');\n    if(!campaign.audio){\n      const catalog=await graph(true,`ig_audio?audio_type=music&user_id=${encodeURIComponent(fbId)}`);\n      const seen=new Set();\n      const tracks=(Array.isArray(catalog.audio)?catalog.audio:[]).map((track,index)=>({...track,catalogRank:index+1})).filter(track=>/^\\d+$/.test(String(track.audio_id||''))&&Number(track.duration_in_ms)>=15000&&typeof track.title==='string'&&track.title.trim()).filter(track=>{\n        const key=`${track.title}:${track.display_artist||''}`.toLocaleLowerCase();if(seen.has(key))return false;seen.add(key);return true;\n      }).slice(0,3);\n      if(!tracks.length)throw new Error('No eligible trending catalog music is available.');\n      const track=tracks[Math.min(tracks.length-1,Math.max(0,Math.floor(random()*tracks.length)))];\n      campaign.audio={id:String(track.audio_id),title:track.title,artist:track.display_artist||'',catalogRank:track.catalogRank};\n    }\n    const reel=format==='reel',id=reel?fbId:igId;\n    const prepared=campaign.prepared[format]||(campaign.prepared[format]={});\n    if(!prepared.containerId){\n      const body={location_id:plan.locationId,...(format==='post'?{image_url:plan.assets.post.url,caption}:format==='story'?{media_type:'STORIES',image_url:plan.assets.story.url}:{media_type:'REELS',video_url:plan.assets.reel.url,cover_url:plan.assets.cover.url,caption,share_to_feed:'false',audio_configuration:JSON.stringify({audio_id:campaign.audio.id,audio_volume:80,video_volume:1})})};\n      const created=await graph(reel,`${id}/media`,body);\n      if(!created.id)throw new Error('Meta did not return a special publication container ID.');\n      prepared.containerId=created.id;\n    }\n    let ready=false;\n    for(let attempt=0;attempt<(reel?36:18);attempt++){\n      const status=await graph(reel,`${prepared.containerId}?fields=status_code,status`);\n      if(status.status_code==='FINISHED'){ready=true;break;}\n      if(['ERROR','EXPIRED','PUBLISHED'].includes(status.status_code))throw new Error(`Container requires reconciliation: ${status.status_code}.`);\n      await pause(5000);\n    }\n    if(!ready)throw new Error('Special publication container is still processing.');\n    const liveClock=clock();\n    if(liveClock.date!==plan.date||liveClock.time<'10:00')throw new Error('The special publication date changed during preparation.');\n    // Never repeat media_publish after an ambiguous response.\n    campaign.pending={format,containerId:prepared.containerId,startedAt:now().toISOString()};\n    let result;\n    try{\n      result=await graph(reel,`${id}/media_publish`,{creation_id:prepared.containerId});\n      if(!result.id)throw new Error('Meta did not return a published media ID.');\n    }catch(error){\n      campaign.pending.error=safe(error);\n      return [{json:{status:'blocked_reconciliation_required',...preview,pending:campaign.pending,continue:false}}];\n    }\n    campaign.receipts[format]={mediaId:result.id,containerId:prepared.containerId,publishedAt:now().toISOString(),assetSha256:plan.assets[format].sha256};\n    delete campaign.pending;\n    campaign.completed=['post','story','reel'].every(key=>campaign.receipts[key]?.mediaId);\n    if(campaign.completed)campaign.completedAt=now().toISOString();\n    return [{json:{status:'published',...preview,mediaId:result.id,audio:format==='reel'?campaign.audio:null,completed:campaign.completed,continue:true}}];\n  }catch(error){\n    // Return normally so n8n retains earlier successes and any prepared container.\n    if(campaign)campaign.lastError={format,message:safe(error),at:now().toISOString()};\n    return [{json:{status:'blocked_special_preparation',...preview,reason:safe(error),continue:false}}];\n  }\n}\n\nreturn await publishEventZekaSpecial({env:$env,httpRequest:this.helpers.httpRequest.bind(this.helpers),getStaticData:()=>$getWorkflowStaticData('global'),plan:{\"id\":\"eventzeka-special-2026-10-25-v1\",\"date\":\"2026-10-25\",\"timezone\":\"Europe/Belgrade\",\"scheduledLocalTime\":\"10:00\",\"scheduledUtc\":\"2026-10-25T09:00:00Z\",\"caption\":\"Izađi i glasaj!\",\"sourceSha256\":\"7f74b0a02bb3029cb7ef652188088df1848216e6511c7c97370defe66ab8dff8\",\"locationId\":\"109920975697736\",\"locationName\":\"Belgrade, Serbia\",\"shareToFeed\":false,\"durationSeconds\":15,\"assets\":{\"post\":{\"file\":\"post.jpg\",\"sha256\":\"35358c671ff6a9db504ace0cbc6afb924c7385a45d25841cec45435be17278ec\",\"bytes\":140150,\"contentType\":\"image/jpeg\",\"url\":\"https://eventzeka.com/api/social/special/2026-10-25/post.jpg?v=35358c671ff6a9db504ace0cbc6afb924c7385a45d25841cec45435be17278ec\"},\"story\":{\"file\":\"story.jpg\",\"sha256\":\"eddbc9690d2e5c9252fe671fb5cdde2138eb5f4b5ac5b412693991dd23477396\",\"bytes\":152478,\"contentType\":\"image/jpeg\",\"url\":\"https://eventzeka.com/api/social/special/2026-10-25/story.jpg?v=eddbc9690d2e5c9252fe671fb5cdde2138eb5f4b5ac5b412693991dd23477396\"},\"reel\":{\"file\":\"reel.mp4\",\"sha256\":\"65d1b400c11439e08056d0d759adfda5352d613c43f111a1e8345f5defae5a4a\",\"bytes\":372862,\"contentType\":\"video/mp4\",\"url\":\"https://eventzeka.com/api/social/special/2026-10-25/reel.mp4?v=65d1b400c11439e08056d0d759adfda5352d613c43f111a1e8345f5defae5a4a\"},\"cover\":{\"file\":\"reel-cover.jpg\",\"sha256\":\"eddbc9690d2e5c9252fe671fb5cdde2138eb5f4b5ac5b412693991dd23477396\",\"bytes\":152478,\"contentType\":\"image/jpeg\",\"url\":\"https://eventzeka.com/api/social/special/2026-10-25/reel-cover.jpg?v=eddbc9690d2e5c9252fe671fb5cdde2138eb5f4b5ac5b412693991dd23477396\"}}},format:'reel',forceDryRun:$execution.mode==='manual'});"
+        }
+      },
+      {
+        "id": "continue-post",
+        "name": "Continue after post",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          20,
+          80
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "continue",
+                "leftValue": "={{ $json.continue }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true",
+                  "singleValue": true
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "continue-story",
+        "name": "Continue after story",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          480,
+          80
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "continue",
+                "leftValue": "={{ $json.continue }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true",
+                  "singleValue": true
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      }
+    ],
+    "connections": {
+      "Manual Special Preview": {
+        "main": [
+          [
+            {
+              "node": "Publish Special Photo",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "25 October at 10:00 Belgrade": {
+        "main": [
+          [
+            {
+              "node": "Publish Special Photo",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Publish Special Photo": {
+        "main": [
+          [
+            {
+              "node": "Continue after post",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Continue after post": {
+        "main": [
+          [
+            {
+              "node": "Publish Special Story",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      },
+      "Publish Special Story": {
+        "main": [
+          [
+            {
+              "node": "Continue after story",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Continue after story": {
+        "main": [
+          [
+            {
+              "node": "Publish Special Reel",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "timezone": "Europe/Belgrade",
+      "saveDataSuccessExecution": "all",
+      "saveDataErrorExecution": "all",
+      "saveExecutionProgress": true
+    },
+    "staticData": null,
+    "versionId": "395c7a8c-0240-4d72-91df-c879f27b3bf3",
+    "versionCounter": 1,
+    "tags": []
+  }
+]

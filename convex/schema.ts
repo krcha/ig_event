@@ -1106,53 +1106,6 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
-  // Diagnostics and bounded recovery live separately from event revisions.
-  // Observing a hold must not make a source-grounded event look edited.
-  automaticApprovalHolds: defineTable({
-    eventId: v.id("events"),
-    expectedUpdatedAt: v.number(),
-    holdReason: v.string(),
-    repairCategory: v.string(),
-    sourcePostId: v.optional(v.id("scrapedPosts")),
-    sourceRevision: v.optional(v.number()),
-    diagnosticJson: v.string(),
-    status: v.union(v.literal("held"), v.literal("queued"), v.literal("processing"), v.literal("resolved")),
-    repairAttemptCount: v.number(),
-    lastRepairReason: v.optional(v.string()),
-    nextRetryAt: v.number(),
-    leaseOwner: v.optional(v.string()),
-    leaseExpiresAt: v.optional(v.number()),
-    observedAt: v.number(),
-    createdAt: v.number(),
-    updatedAt: v.number(),
-  })
-    .index("by_event", ["eventId"])
-    .index("by_status_nextRetryAt", ["status", "nextRetryAt"])
-    .index("by_repairCategory_status_nextRetryAt", ["repairCategory", "status", "nextRetryAt"]),
-  // One immutable, bounded provider attempt for each exact source review key.
-  sourceConflictReviews: defineTable({
-    reviewKey: v.string(),
-    sourcePostId: v.id("scrapedPosts"),
-    sourceRevision: v.number(),
-    sourceFingerprint: v.string(),
-    policyVersion: v.number(),
-    contextJson: v.string(),
-    dayKey: v.string(),
-    status: v.union(v.literal("claimed"), v.literal("transport_started"), v.literal("completed"), v.literal("failed"), v.literal("transport_unknown")),
-    owner: v.string(),
-    leaseExpiresAt: v.number(),
-    requestStartedAt: v.optional(v.number()),
-    resultJson: v.optional(v.string()),
-    rawResponseJson: v.optional(v.string()),
-    responseId: v.optional(v.string()),
-    usageJson: v.optional(v.string()),
-    error: v.optional(v.string()),
-    createdAt: v.number(),
-    updatedAt: v.number(),
-  })
-    .index("by_reviewKey", ["reviewKey"])
-    .index("by_sourcePostId_policyVersion", ["sourcePostId", "policyVersion"])
-    .index("by_dayKey", ["dayKey"]),
   eventDomainMigrationState: defineTable({
     key: v.string(),
     phase: v.string(),

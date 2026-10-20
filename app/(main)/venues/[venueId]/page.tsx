@@ -12,7 +12,6 @@ import {
   MapPin,
 } from "lucide-react";
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
-import { VenueWeeklyHours } from "@/components/venues/venue-weekly-hours";
 import { JsonLd } from "@/components/seo/json-ld";
 import {
   loadPublicVenuePage,
@@ -26,7 +25,6 @@ import {
 import { isPlausibleConvexPublicId } from "@/lib/convex/public-id";
 import { getDisplayEventTime } from "@/lib/events/event-time";
 import { getPublicEventVenueFilterValue } from "@/lib/events/public-event-venue-filter";
-import { getVenueCoordinates } from "@/lib/venues/coordinates";
 
 import {
   absoluteUrl,
@@ -87,9 +85,8 @@ function getLocationLabel(venue: PublicVenue): string {
 }
 
 function getDirectionsHref(venue: PublicVenue): string {
-  const coordinates = getVenueCoordinates(venue.latitude, venue.longitude);
-  if (coordinates) {
-    return `https://www.google.com/maps/search/?api=1&query=${coordinates.latitude},${coordinates.longitude}`;
+  if (typeof venue.latitude === "number" && typeof venue.longitude === "number") {
+    return `https://www.google.com/maps/search/?api=1&query=${venue.latitude},${venue.longitude}`;
   }
 
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
@@ -434,7 +431,7 @@ export default async function VenuePage({ params }: VenuePageProps) {
           <JsonLd
             data={buildBreadcrumbStructuredData([
               { name: "Belgrade events", path: "/" },
-              { name: "Belgrade venues", path: "/venues/directory" },
+              { name: "Belgrade venues", path: "/venues" },
               { name: venue.name, path: `/venues/${venue._id}` },
             ])}
           />
@@ -445,7 +442,7 @@ export default async function VenuePage({ params }: VenuePageProps) {
           <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
             <Link className="hover:text-primary" href="/">Belgrade events</Link>
             <span aria-hidden="true">/</span>
-            <Link className="hover:text-primary" href="/venues/directory">Venues</Link>
+            <Link className="hover:text-primary" href="/venues">Venues</Link>
             <span aria-hidden="true">/</span>
             <span aria-current="page" className="min-w-0 truncate text-foreground">{venue.name}</span>
           </nav>
@@ -504,8 +501,6 @@ export default async function VenuePage({ params }: VenuePageProps) {
                 </div>
               </div>
             </article>
-
-            <VenueWeeklyHours className="max-w-xl" hoursJson={venue.hoursJson} hoursSource={venue.hoursSource} />
 
             <section aria-label={`${venue.name} event posts`} id="posts">
               <div className="flex items-center justify-center border-b border-border/75">

@@ -5,8 +5,8 @@ export default function AdminVenuesPage() {
   return (
     <AdminPageShell
       active="venues"
-      compact
-      title="Venues"
+      description="Keep canonical venue names and Instagram handles clean so AI output stays consistent."
+      title="Venue Manager"
     >
       <VenueManager />
     </AdminPageShell>

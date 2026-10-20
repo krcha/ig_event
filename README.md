@@ -34,31 +34,13 @@ explicitly replaces them.
 
 - Public event discovery at `/events`
 - Monthly browsing at `/calendar`
-- Day-selectable event map at `/map`
-- Legacy `/venues` links redirect to `/map` and retain selected dates
-- Public venue directory at `/venues/directory`
+- Public venue directory at `/venues`
 - Event details at `/events/[eventId]`
 - Admin moderation at `/admin`
-- Automatic hold diagnostics, certified venue/conflict repairs, cached source
-  recovery, and an optional budgeted poster reread worker. See the
-  [operations runbook](docs/operations-runbook.md) for activation and safeguards.
 - Scrape controls and ingestion job status at `/admin/scraper`
 - Venue management at `/admin/venues`
 - Cron ingestion at `/api/cron/ingest-venues`
 - Health check at `/api/health`
-
-The event map uses confirmed venue latitude/longitude. Add both coordinates in
-`/admin/venues` to place a venue on the map; events without coordinates remain
-visible in the day's lineup under "Location not mapped". The map uses the
-existing approved public calendar and Belgrade's nightlife-day rollover.
-Map Open now uses a 06:00 Europe/Belgrade date rollover, retaining the previous
-night's selected date after midnight while filtering by actual event hours.
-
-Public discovery uses five primary event categories: Zurke, Live music,
-Kultura, Barovi, and Ostalo. Ostalo includes workshops, quizzes, and tastings.
-Each event has one primary category plus source-supported genre and
-activity tags. See [event categories](docs/event-categories.md) for classification
-and compatibility rules.
 
 ## Stack
 
@@ -141,7 +123,7 @@ OPENAI_VISION_MODEL=gpt-6-luna
 OPENAI_REVIEW_MODEL=gpt-6-luna
 CRON_SECRET=
 CRON_RESULTS_LIMIT=3
-CRON_DAYS_BACK=1
+CRON_DAYS_BACK=10
 CRON_INGESTION_MAX_STEPS=20
 CRON_MAX_HANDLES_PER_RUN=2000
 CRON_FULL_SCRAPE_COOLDOWN_HOURS=23
@@ -210,7 +192,6 @@ npm run qa:dedupe
 npm run qa:automerge
 npm run qa:master-review
 npm run qa:extraction
-npm run qa:event-categories
 npm run qa:ingestion-triage
 npm run qa:clerk-email-auth
 npm run qa:release
@@ -220,7 +201,7 @@ npm run convex:codegen
 
 `qa:release` runs the deterministic release gate used by CI: repository hygiene,
 lint, typecheck, `next build`, dedupe QA, automerge QA, extraction QA, venue
-taxonomy and event-category QA, public search/sort/mobile QA, Apify cost-control QA,
+taxonomy QA, public search/sort/mobile QA, Apify cost-control QA,
 follow-discovery QA, Convex retention-cron QA, and Clerk email auth QA.
 
 `npm run build` is a normal release requirement. Treat any build failure or
@@ -232,9 +213,7 @@ Ingestion:
 
 1. Admin or cron starts an ingestion job.
 2. Active venues are loaded from Convex.
-3. Apify fetches only the last 24 hours per venue handle, skips pinned posts,
-   and starts with basic data. Details are fetched only for verified fresh posts
-   missing source fields or carousel slides, within the same total cost cap.
+3. Apify fetches recent Instagram posts per venue handle.
 4. OpenAI extracts structured event data from captions/images.
 5. Ingestion auto-approves source-confirmed, unique events without a confidence cutoff. Scores remain informational, including low or missing scores. Evidence may come from a coherent persisted caption or the verified poster/caption extraction contract; the Convex write boundary independently checks the persisted source and exact public event payload. Non-events and proven duplicates are excluded. Missing optional details do not invalidate a real dated event: unknown start time may publish as `TBD`, and unavailable images may use verified caption evidence. Unreadable dates, materially contradictory source evidence, unresolved occurrence/venue identity, and uncertain duplicate matches still need resolution. Moderation status alone does not bypass publication or source-integrity checks.
 6. Approved duplicate automerge runs when ingestion completes.

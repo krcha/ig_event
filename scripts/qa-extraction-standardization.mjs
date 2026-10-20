@@ -912,8 +912,8 @@ function runVenueQa() {
       { "domestik.bg": "promoter" },
       "UMAMI",
     ).venue,
-    null,
-    "Neither an uncorroborated title nor the promoter's own legacy brand can become the physical venue.",
+    "ДOMESTIK",
+    "An uncorroborated title cannot become a physical venue claim.",
   );
 
   const ambiguousCanonicalHandles = normalizeVenueFromEvidence({
@@ -9791,18 +9791,6 @@ async function runDistinctOccurrencePersistenceQa() {
             withIndex: () => ({ take: async () => [] }),
           };
         }
-        if (table === "instagramSources") {
-          return {
-            withIndex: (indexName, configure) => {
-              assert.equal(indexName, "by_role_active");
-              const filters = {};
-              const q = { eq: (field, value) => { filters[field] = value; return q; } };
-              configure(q);
-              assert.deepEqual(filters, { role: "promoter" });
-              return { take: async () => [] };
-            },
-          };
-        }
         if (table === "eventDomainMigrationState") {
           return {
             withIndex: () => ({ take: async () => [] }),
@@ -11615,17 +11603,6 @@ async function runApprovedMergeBoundaryQa() {
           ? {
               withIndex: () => ({ take: async () => [] }),
             }
-        : table === "instagramSources"
-          ? {
-              withIndex: (indexName, configure) => {
-                assert.equal(indexName, "by_role_active");
-                const filters = {};
-                const q = { eq: (field, value) => { filters[field] = value; return q; } };
-                configure(q);
-                assert.deepEqual(filters, { role: "promoter" });
-                return { take: async () => [] };
-              },
-            }
         : table === "eventDomainMigrationState"
           ? {
               withIndex: (_indexName, configure) => {
@@ -12195,8 +12172,7 @@ function runTrustedSourceAnnouncementModerationQa() {
     { qa_trusted_venue: "QA Trusted Venue" },
     { sourceRolesByHandle: { qa_trusted_venue: "promoter" }, eventDateFilterNow: new Date() },
   );
-  assert.equal(promoterResult.kind, "skip", JSON.stringify(promoterResult));
-  assert.equal(promoterResult.reason, "missing_venue", "A promoter's own brand supplies no physical event location.");
+  assert.equal(promoterResult.kind, "ok");
   assert.equal(promoterResult.normalizedFields.trustedVenueSource, false);
 
   const [genericSaveTheDate] = prepareEventsForInsert(

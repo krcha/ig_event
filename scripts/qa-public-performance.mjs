@@ -23,7 +23,7 @@ const publicEventsSource = read("lib/events/public-events.ts");
 const convexEventsSource = read("convex/events.ts");
 const publicReadsSource = read("convex/eventDomain/publicReads.ts");
 const mobileMonthDayStripSource = read("components/calendar/mobile-month-day-strip.tsx");
-const venuesPageSource = read("app/(main)/venues/directory/page.tsx");
+const venuesPageSource = read("app/(main)/venues/page.tsx");
 const venuePaginationSource = read("lib/venues/public-venue-directory-pagination.ts");
 const eventDetailSource = read("app/(main)/events/[eventId]/page.tsx");
 const savedPanelSource = read("components/saved/saved-library-panel.tsx");
@@ -352,18 +352,13 @@ assert.doesNotMatch(
 
 assert.match(
   browsePageSource,
-  /fromDate: selectedDayKey,\s*beforeDate: addDaysToDateKey\(selectedDayKey, 1\),[\s\S]*loadPublicCalendarEventsWindow\(eventWindow\)/,
-  "Ordinary calendar details stop at the selected day's exclusive next-day bound.",
+  /const beforeDate = formatDateKey\(nextMonthStart\);[\s\S]*loadPublicCalendarEventsWindow\(\{ beforeDate, fromDate \}\)/,
+  "Calendar page should request only the selected month date range from the compact public calendar loader.",
 );
 assert.match(
   browsePageSource,
-  /const eventWindow = openNowActive \? getOpenNowEventWindow\(now\) :/,
-  "Open now derives its civil yesterday/today window independently of the displayed nightlife date.",
-);
-assert.match(
-  browsePageSource,
-  /loadPublicCalendarOverviewWindow\(\{\s*fromDate: monthStartKey,\s*beforeDate: formatDateKey\(nextMonthStart\)/,
-  "The selected month retains compact counters and venue choices without other days' event details.",
+  /const fromDate = monthStartKey;/,
+  "Calendar page should load the full selected month so stored past days remain visible.",
 );
 assertDoesNotInclude(
   browsePageSource,

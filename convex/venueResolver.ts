@@ -19,7 +19,6 @@ import {
   isVenuePublic,
 } from "../lib/venues/venue-lifecycle";
 import { requireAdminOrServiceSecret } from "./authz";
-import { venueRequiresPhysicalDetails } from "../lib/taxonomy/venue-types";
 
 // Keep the aggregate service snapshot at a conservative application-level
 // record bound below Convex transaction scan/byte limits, while leaving enough
@@ -39,7 +38,6 @@ const venueIdentityKind = v.union(
 const publicVenueResolverSnapshotResult = v.object({
   schemaVersion: v.literal(VENUE_RESOLVER_SNAPSHOT_SCHEMA_VERSION),
   fingerprint: v.string(),
-  excludedVenueClaims: v.array(v.string()),
   venues: v.array(
     v.object({
       id: v.id("venues"),
@@ -92,7 +90,6 @@ export type ConvexVenueSnapshot = {
 
 export type ConvexVenueResolution = {
   canonicalVenueName?: string;
-  excludedVenueClaim?: boolean;
   lookupMode?: "indexed_identity" | "legacy_snapshot";
   resolution: VenueResolution;
   venueFields: VenueDenormalizedFields;
@@ -101,17 +98,16 @@ export type ConvexVenueResolution = {
 export function buildConvexVenueSnapshot(
   venues: readonly Doc<"venues">[],
   identities: readonly Doc<"venueIdentities">[] = [],
-  options: { includePending?: boolean; excludedVenueClaims?: readonly string[] } = {},
+  options: { includePending?: boolean } = {},
 ): ConvexVenueSnapshot {
-  const roleAwareRows = excludePromoterVenueIdentities(venues, identities, new Set());
-  const publicVenues = roleAwareRows.venues.filter(
+  const publicVenues = venues.filter(
     (venue) =>
       isVenuePublic(venue) ||
       (options.includePending === true &&
         getEffectiveVenueLifecycle(venue).publicStatus === "pending"),
   );
   const venueById = new Map(publicVenues.map((venue) => [venue._id, venue]));
-  const identityRecords: VenueIdentityRecord[] = roleAwareRows.identities.map((identity) => ({
+  const identityRecords: VenueIdentityRecord[] = identities.map((identity) => ({
     active: identity.active,
     kind: identity.kind,
     ...(identity.provider ? { provider: identity.provider } : {}),
@@ -120,10 +116,6 @@ export function buildConvexVenueSnapshot(
   }));
   return {
     domainSnapshot: buildVenueSnapshot({
-      excludedVenueClaims: [
-        ...(options.excludedVenueClaims ?? []),
-        ...roleAwareRows.excludedVenueClaims,
-      ],
       identities: identityRecords,
       venues: publicVenues.map((venue) => ({
         aliases: venue.aliases ?? [],
@@ -141,57 +133,10 @@ export function buildConvexVenueSnapshot(
 }
 
 export type BoundedPublicVenueResolverRows = {
-  excludedVenueClaims: string[];
   identities: Doc<"venueIdentities">[];
   truncated: boolean;
   venues: Doc<"venues">[];
 };
-
-/** A reviewed promoter role remains an identity fact when scraping is paused. */
-async function loadExplicitPromoterHandles(ctx: QueryCtx | MutationCtx): Promise<Set<string>> {
-  const sources = await ctx.db
-    .query("instagramSources")
-    .withIndex("by_role_active", (q) => q.eq("role", "promoter"))
-    .take(MAX_VENUE_RESOLVER_SNAPSHOT_RECORDS + 1);
-  if (sources.length > MAX_VENUE_RESOLVER_SNAPSHOT_RECORDS) {
-    throw new Error("Promoter identity directory exceeds the safe bounded load.");
-  }
-  return new Set(sources.map((source) => normalizeHandle(source.handle)).filter(Boolean));
-}
-
-function excludePromoterVenueIdentities(
-  venues: readonly Doc<"venues">[],
-  identities: readonly Doc<"venueIdentities">[],
-  promoterHandles: ReadonlySet<string>,
-) {
-  const excludedHandles = new Set([
-    ...promoterHandles,
-    ...venues
-      .filter((venue) => !venueRequiresPhysicalDetails(venue.category))
-      .map((venue) => normalizeHandle(venue.instagramHandle ?? ""))
-      .filter(Boolean),
-  ]);
-  const promoterVenueIds = new Set(venues
-    .filter((venue) =>
-      !venueRequiresPhysicalDetails(venue.category) ||
-      excludedHandles.has(normalizeHandle(venue.instagramHandle ?? "")),
-    )
-    .map((venue) => venue._id));
-  return {
-    venues: venues.filter((venue) => !promoterVenueIds.has(venue._id)),
-    identities: identities.filter((identity) =>
-      !promoterVenueIds.has(identity.venueId) &&
-      !(identity.kind === "provider_account" && excludedHandles.has(normalizeHandle(identity.rawValue))),
-    ),
-    excludedVenueClaims: [...new Set([
-      ...excludedHandles,
-      ...venues.filter((venue) => promoterVenueIds.has(venue._id))
-        .flatMap((venue) => [venue.name, venue.instagramHandle, ...(venue.aliases ?? [])]),
-      ...identities.filter((identity) => promoterVenueIds.has(identity.venueId))
-        .map((identity) => identity.rawValue),
-    ])].sort(),
-  };
-}
 
 /**
  * Loads the complete resolver directory under an explicit hard bound. The
@@ -206,12 +151,11 @@ export async function loadBoundedPublicVenueResolverRows(
     .take(MAX_VENUE_RESOLVER_SNAPSHOT_RECORDS + 1);
   if (venueRows.length > MAX_VENUE_RESOLVER_SNAPSHOT_RECORDS) {
     return {
-      excludedVenueClaims: [],
       identities: [],
       truncated: true,
       venues: venueRows
         .slice(0, MAX_VENUE_RESOLVER_SNAPSHOT_RECORDS)
-        .filter((venue) => isVenuePublic(venue) && venueRequiresPhysicalDetails(venue.category)),
+        .filter(isVenuePublic),
     };
   }
   const identityKinds = [
@@ -237,14 +181,11 @@ export async function loadBoundedPublicVenueResolverRows(
     identityRows.push(...rows);
     remainingRecordBudget -= rows.length;
   }
-  const roleAwareRows = excludePromoterVenueIdentities(
-    venueRows, identityRows, await loadExplicitPromoterHandles(ctx),
-  );
-  const venues = roleAwareRows.venues.filter(isVenuePublic);
+  const venues = venueRows.filter(isVenuePublic);
   const publicVenueIds = new Set(venues.map((venue) => venue._id));
-  const identities = roleAwareRows.identities
+  const identities = identityRows
     .filter((identity) => identity.active && publicVenueIds.has(identity.venueId));
-  return { identities, truncated, venues, excludedVenueClaims: roleAwareRows.excludedVenueClaims };
+  return { identities, truncated, venues };
 }
 
 export function resolveVenueFromSnapshot(
@@ -271,9 +212,6 @@ export function resolveVenueFromSnapshot(
   });
   if (resolution.status !== "resolved") {
     return {
-      ...(resolution.status === "unresolved" &&
-        snapshot.domainSnapshot.excludedVenueClaims.includes(normalizeVenueComparableText(rawVenueName))
-        ? { excludedVenueClaim: true } : {}),
       resolution,
       venueFields: {
         ...CLEARED_VENUE_DENORMALIZED_FIELDS,
@@ -313,15 +251,13 @@ export async function loadPublicVenueSnapshot(
   if (rows.truncated) {
     throw new Error("Venue resolver snapshot exceeds the safe bounded load.");
   }
-  return buildConvexVenueSnapshot(rows.venues, rows.identities, {
-    excludedVenueClaims: rows.excludedVenueClaims,
-  });
+  return buildConvexVenueSnapshot(rows.venues, rows.identities);
 }
 
 /**
- * Authenticated service/admin boundary used by production ingestion. Public
- * physical venues, active identities, and reviewed organizer exclusions leave
- * Convex; a partial directory is never returned.
+ * Authenticated service/admin boundary used by production ingestion. Only
+ * public venues and their active first-class identities leave Convex, and a
+ * partial directory is never returned.
  */
 export const getPublicVenueResolverSnapshot = query({
   args: {
@@ -334,13 +270,10 @@ export const getPublicVenueResolverSnapshot = query({
     if (rows.truncated) {
       throw new Error("Venue resolver snapshot exceeds the safe bounded load.");
     }
-    const snapshot = buildConvexVenueSnapshot(rows.venues, rows.identities, {
-      excludedVenueClaims: rows.excludedVenueClaims,
-    });
+    const snapshot = buildConvexVenueSnapshot(rows.venues, rows.identities);
     return {
       schemaVersion: VENUE_RESOLVER_SNAPSHOT_SCHEMA_VERSION,
       fingerprint: snapshot.domainSnapshot.fingerprint,
-      excludedVenueClaims: rows.excludedVenueClaims,
       venues: rows.venues.map((venue) => ({
         id: venue._id,
         aliases: venue.aliases ?? [],
@@ -449,17 +382,15 @@ export async function resolveVenueForWrite(
   const venueIds = uniqueVenueIds(identities);
   if (venueIds.length > 0) {
     const venueRows = await Promise.all(venueIds.map((venueId) => ctx.db.get(venueId)));
-    const candidateVenues = venueRows.filter(
-      (venue): venue is Doc<"venues"> => venue !== null,
-    );
-    const roleAwareRows = excludePromoterVenueIdentities(
-      candidateVenues, identities, await loadExplicitPromoterHandles(ctx),
+    const publicVenues = venueRows.filter(
+      (venue): venue is Doc<"venues"> =>
+        venue !== null &&
+        (isVenuePublic(venue) ||
+          (options.includePending === true &&
+            getEffectiveVenueLifecycle(venue).publicStatus === "pending")),
     );
     const resolved = resolveVenueFromSnapshot(
-      buildConvexVenueSnapshot(roleAwareRows.venues, roleAwareRows.identities, {
-        ...options,
-        excludedVenueClaims: roleAwareRows.excludedVenueClaims,
-      }),
+      buildConvexVenueSnapshot(publicVenues, identities, options),
       rawVenueName,
     );
     return { ...resolved, lookupMode: "indexed_identity" };
@@ -505,36 +436,31 @@ export async function resolveVenueClaimsForWrite(
   const venueRows = await Promise.all(
     venueIds.map((venueId) => ctx.db.get(venueId)),
   );
-  const roleAwareRows = excludePromoterVenueIdentities(
-    venueRows.filter((venue): venue is Doc<"venues"> => venue !== null),
-    identityBatches.flat(),
-    await loadExplicitPromoterHandles(ctx),
+  const publicVenueById = new Map(
+    venueRows
+      .filter(
+        (venue): venue is Doc<"venues"> =>
+          venue !== null && isVenuePublic(venue),
+      )
+      .map((venue) => [venue._id, venue]),
   );
-  const physicalVenueById = new Map(
-    roleAwareRows.venues.filter(isVenuePublic).map((venue) => [venue._id, venue]),
-  );
-  const physicalIdentityIds = new Set(roleAwareRows.identities.map((identity) => identity._id));
   const results = new Map<string, ConvexVenueResolution>();
   for (let index = 0; index < claims.length; index += 1) {
     const claim = claims[index]!;
-    const identities = identityBatches[index]!.filter((identity) => physicalIdentityIds.has(identity._id));
+    const identities = identityBatches[index]!;
     if (identities.length === 0) {
       results.set(claim, {
-        ...resolveVenueFromSnapshot(buildConvexVenueSnapshot([], [], {
-          excludedVenueClaims: roleAwareRows.excludedVenueClaims,
-        }), claim),
+        ...resolveVenueFromSnapshot(buildConvexVenueSnapshot([]), claim),
         lookupMode: "indexed_identity",
       });
       continue;
     }
     const venues = uniqueVenueIds(identities)
-      .map((venueId) => physicalVenueById.get(venueId))
+      .map((venueId) => publicVenueById.get(venueId))
       .filter((venue): venue is Doc<"venues"> => Boolean(venue));
     results.set(claim, {
       ...resolveVenueFromSnapshot(
-        buildConvexVenueSnapshot(venues, identities, {
-          excludedVenueClaims: roleAwareRows.excludedVenueClaims,
-        }),
+        buildConvexVenueSnapshot(venues, identities),
         claim,
       ),
       lookupMode: "indexed_identity",

@@ -72,9 +72,7 @@ assert.equal(packageLock.lockfileVersion, 3, "The npm lockfile must stay on lock
 
 const asyncSearchParamFiles = [
   "app/(main)/events-browse-page.tsx",
-  "app/(main)/map/page.tsx",
   "app/(main)/venues/page.tsx",
-  "app/(main)/venues/directory/page.tsx",
   "app/(main)/discover/page.tsx",
   "app/(main)/events/page.tsx",
   "app/(main)/calendar/page.tsx",
@@ -130,10 +128,9 @@ assert.deepEqual(
 );
 
 const redirects = await nextConfig.redirects();
-for (const source of ["/venues", "/calendar", "/events"]) {
+for (const source of ["/map", "/calendar", "/events"]) {
   assert.ok(redirects.some((redirect) => redirect.source === source), `${source} redirect must remain configured.`);
 }
-assert.equal(redirects.some(({ source }) => source === "/map"), false, "/map must render the calendar map directly.");
 for (const route of ["sign-in", "sign-up"]) {
   const redirect = redirects.find(
     (candidate) =>

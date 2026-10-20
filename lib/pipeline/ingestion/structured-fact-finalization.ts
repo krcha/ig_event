@@ -214,7 +214,6 @@ export function finalizeStructuredFactVariants({
     });
     const identityEvidenceVerified = isVerifiedEventIdentityEvidence({
       extracted,
-      resolvedDate: date,
       title: variant.title,
       artists: variant.artists,
       titleUsedFallback: variant.titleUsedFallback,

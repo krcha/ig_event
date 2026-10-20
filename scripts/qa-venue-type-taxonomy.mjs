@@ -7,7 +7,6 @@ import {
   cultureSubtypeFor,
   eventTypeFromVenueCategory,
   mainCategoryForEventType,
-  venueRequiresPhysicalDetails,
 } from "../lib/taxonomy/venue-types.ts";
 
 function runEventTypeQa() {
@@ -40,7 +39,7 @@ function runEventTypeQa() {
 
 function runVenueCategoryQa() {
   assert.ok(
-    CANONICAL_VENUE_CATEGORIES.length <= 7,
+    CANONICAL_VENUE_CATEGORIES.length <= 6,
     "Venue categories should stay limited to a few main venue types.",
   );
 
@@ -56,11 +55,6 @@ function runVenueCategoryQa() {
   assert.equal(canonicalizeVenueCategory("museum"), "gallery");
   assert.equal(canonicalizeVenueCategory(""), "venue");
   assert.equal(canonicalizeVenueCategory("event space"), "venue");
-  assert.equal(canonicalizeVenueCategory("Promoter"), "promoter");
-  assert.equal(venueRequiresPhysicalDetails("promoter"), false);
-  assert.equal(venueRequiresPhysicalDetails("Promoter"), false);
-  assert.equal(venueRequiresPhysicalDetails("bar"), true);
-  assert.equal(venueRequiresPhysicalDetails(undefined), true);
 }
 
 function runDisplayCategoryQa() {
@@ -77,7 +71,6 @@ function runDisplayCategoryQa() {
   assert.equal(eventTypeFromVenueCategory("restaurant/cafe"), "food & market");
   assert.equal(eventTypeFromVenueCategory("bar"), "event");
   assert.equal(eventTypeFromVenueCategory("venue"), "event");
-  assert.equal(eventTypeFromVenueCategory("promoter"), "event");
   assert.equal(eventTypeFromVenueCategory("cinema"), "arts & culture");
 
   assert.equal(

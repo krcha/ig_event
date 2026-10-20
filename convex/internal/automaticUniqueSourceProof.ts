@@ -1,5 +1,4 @@
-import type { Doc, Id } from "../_generated/dataModel";
-import { hasPersistedFocusedConflictReviewProof } from "./focusedConflictReviewProof";
+import type { Doc } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { adaptInstagramScrapedPostToSourceDocument } from "../../lib/domain/source-documents";
 import { buildInstagramSourceOccurrenceFingerprint } from "../../lib/domain/occurrences/source-fingerprint";
@@ -10,19 +9,6 @@ import { sourceOccurrenceProvenanceRepository } from "../repositories/sourceOccu
 import { isSupportedExtractionModel } from "./extractionModel";
 
 type ReadCtx = QueryCtx | MutationCtx;
-export const AUTOMATIC_UNIQUE_SOURCE_PROOF_REASONS = [
-  "complete", "normalized_fields_invalid", "source_binding_missing", "source_binding_mismatch", "source_post_missing", "source_post_ambiguous",
-  "source_account_mismatch", "source_analysis_stale", "source_analysis_contract_invalid", "source_analysis_non_event", "source_analysis_model_unsupported",
-  "source_analysis_binding_mismatch", "source_identity_invalid", "source_fingerprint_stale", "occurrence_topology_invalid",
-  "source_occurrence_link_mismatch", "source_occurrence_receipt_mismatch", "source_receipt_deferred_children", "source_receipt_bindings_invalid",
-  "source_receipt_missing_occurrences", "source_receipt_past_occurrence_unverified", "source_receipt_representative_mismatch",
-  "source_occurrence_not_satisfied", "source_collision_unverified",
-] as const;
-export type AutomaticUniqueSourceProofReason = typeof AUTOMATIC_UNIQUE_SOURCE_PROOF_REASONS[number];
-export type AutomaticUniqueSourceProofDiagnostic = {
-  complete: boolean; reason: AutomaticUniqueSourceProofReason; sourcePostId: Id<"scrapedPosts"> | null;
-  sourceRevision: number | null; missingOccurrenceKeys: string[];
-};
 
 function parseFields(value: string | undefined): Record<string, unknown> | null {
   try {
@@ -253,79 +239,129 @@ export function hasExactSourceCollisionOrdinalProof(
  * Public grounding repeats this proof so later source or topology drift hides
  * the event instead of trusting a stale approval marker.
  */
-export async function diagnoseCompleteAutomaticUniqueSourceProof(
-  ctx: ReadCtx, event: Doc<"events">, asOfMs = Date.now(),
-): Promise<AutomaticUniqueSourceProofDiagnostic> {
-  let sourcePostId: Id<"scrapedPosts"> | null = null;
-  let sourceRevision: number | null = null;
-  let missingOccurrenceKeys: string[] = [];
-  const result = (reason: AutomaticUniqueSourceProofReason): AutomaticUniqueSourceProofDiagnostic =>
-    ({ complete: reason === "complete", reason, sourcePostId, sourceRevision, missingOccurrenceKeys });
+export async function hasCompleteAutomaticUniqueSourceProof(
+  ctx: ReadCtx,
+  event: Doc<"events">,
+): Promise<boolean> {
   const fields = parseFields(event.normalizedFieldsJson);
-  if (!fields) return result("normalized_fields_invalid");
-  const handle = normalizeHandle(typeof fields.sourceGroundingInstagramHandle === "string" ? fields.sourceGroundingInstagramHandle : "");
+  if (!fields) return false;
+  const handle = normalizeHandle(
+    typeof fields?.sourceGroundingInstagramHandle === "string"
+      ? fields.sourceGroundingInstagramHandle
+      : "",
+  );
   const postId = event.instagramPostId?.trim() ?? "";
   const occurrenceKey = event.sourceOccurrenceKey?.trim() ?? "";
-  const attestedKey = fields.sourceOccurrenceKey;
-  const attestedFingerprint = fields.sourceOccurrenceSourceFingerprint;
-  if (!handle || !postId) return result("source_binding_missing");
-  const sourceRows = await ctx.db.query("scrapedPosts").withIndex("by_handle_postId", (q) => q.eq("handle", handle).eq("postId", postId)).take(2);
-  if (sourceRows.length === 0) return result("source_post_missing");
-  if (sourceRows.length !== 1) return result("source_post_ambiguous");
+  const attestedKey = fields?.sourceOccurrenceKey;
+  const attestedFingerprint = fields?.sourceOccurrenceSourceFingerprint;
+  if (
+    !handle || !postId || !occurrenceKey ||
+    attestedKey !== occurrenceKey ||
+    typeof attestedFingerprint !== "string" || !attestedFingerprint
+  ) return false;
+
+  const sourceRows = await ctx.db
+    .query("scrapedPosts")
+    .withIndex("by_handle_postId", (q) => q.eq("handle", handle).eq("postId", postId))
+    .take(2);
+  if (sourceRows.length !== 1) return false;
   const source = sourceRows[0]!;
-  sourcePostId = source._id; sourceRevision = source.sourceRevision ?? 1;
-  if (!occurrenceKey || typeof attestedFingerprint !== "string" || !attestedFingerprint) return result("source_binding_missing");
-  if (attestedKey !== occurrenceKey) return result("source_binding_mismatch");
-  if (normalizeHandle(source.username) !== handle) return result("source_account_mismatch");
-  if (source.analysisRevision !== sourceRevision) return result("source_analysis_stale");
-  if (source.analysisContractVersion !== "event_evidence_v2") return result("source_analysis_contract_invalid");
-  if (source.analysisIsEvent !== true) return result("source_analysis_non_event");
-  if (!isSupportedExtractionModel(source.analysisModel)) return result("source_analysis_model_unsupported");
-  if (!event.rawExtractionJson || typeof source.analysisResultJson !== "string" || event.rawExtractionJson !== source.analysisResultJson) return result("source_analysis_binding_mismatch");
-  if (!(await hasPersistedFocusedConflictReviewProof(ctx, event))) return result("source_analysis_binding_mismatch");
+  if (
+    normalizeHandle(source.username) !== handle ||
+    source.analysisRevision !== (source.sourceRevision ?? 1) ||
+    source.analysisContractVersion !== "event_evidence_v2" ||
+    source.analysisIsEvent !== true ||
+    !isSupportedExtractionModel(source.analysisModel) ||
+    !event.rawExtractionJson ||
+    typeof source.analysisResultJson !== "string" ||
+    event.rawExtractionJson !== source.analysisResultJson
+  ) return false;
+
   let sourceIdentity: string;
-  try { sourceIdentity = adaptInstagramScrapedPostToSourceDocument(source).sourceIdentity; } catch { return result("source_identity_invalid"); }
+  try {
+    sourceIdentity = adaptInstagramScrapedPostToSourceDocument(source).sourceIdentity;
+  } catch {
+    return false;
+  }
   const fingerprint = buildInstagramSourceOccurrenceFingerprint(source);
-  if (attestedFingerprint !== fingerprint) return result("source_fingerprint_stale");
+  if (attestedFingerprint !== fingerprint) return false;
+
   let topology: Awaited<ReturnType<typeof sourceOccurrenceProvenanceRepository.loadAndAssertEventOccurrenceTopology>>;
-  try { topology = await sourceOccurrenceProvenanceRepository.loadAndAssertEventOccurrenceTopology(ctx, event._id); }
-  catch { return result("occurrence_topology_invalid"); }
-  const links = topology.links.filter((link) => link.sourceIdentity === sourceIdentity && link.sourceOccurrenceKey === occurrenceKey && link.sourceFingerprint === fingerprint && link.eventId === event._id);
-  const receipts = topology.receipts.filter((receipt) => receipt.sourceIdentity === sourceIdentity && receipt.sourceFingerprint === fingerprint);
-  if (links.length !== 1) return result("source_occurrence_link_mismatch");
-  if (receipts.length !== 1) return result("source_occurrence_receipt_mismatch");
+  try {
+    topology = await sourceOccurrenceProvenanceRepository.loadAndAssertEventOccurrenceTopology(
+      ctx,
+      event._id,
+    );
+  } catch {
+    return false;
+  }
+  const links = topology.links.filter(
+    (link) => link.sourceIdentity === sourceIdentity &&
+      link.sourceOccurrenceKey === occurrenceKey &&
+      link.sourceFingerprint === fingerprint &&
+      link.eventId === event._id,
+  );
+  const receipts = topology.receipts.filter(
+    (receipt) => receipt.sourceIdentity === sourceIdentity &&
+      receipt.sourceFingerprint === fingerprint,
+  );
+  if (links.length !== 1 || receipts.length !== 1) return false;
   const receipt = receipts[0]!;
   const expected = receipt.expectedOccurrences ?? [];
   const expectedKeys = new Set(receipt.expectedKeys);
   const satisfiedKeys = new Set(receipt.satisfiedKeys);
-  if (receipt.deferredChildCount !== 0 || receipt.deferredChildKeys.length !== 0) {
-    missingOccurrenceKeys = [...receipt.deferredChildKeys]; return result("source_receipt_deferred_children");
-  }
-  if (expected.length === 0 || expected.length !== expectedKeys.size || expected.some((item) => !expectedKeys.has(item.key)) ||
-      satisfiedKeys.size !== receipt.satisfiedKeys.length || receipt.satisfiedOccurrences.length !== satisfiedKeys.size ||
-      receipt.satisfiedKeys.some((key) => !expectedKeys.has(key)) ||
-      receipt.satisfiedOccurrences.some((item) => !expectedKeys.has(item.key) || !satisfiedKeys.has(item.key))) return result("source_receipt_bindings_invalid");
-  const missing = expected.filter((item) => !satisfiedKeys.has(item.key));
-  missingOccurrenceKeys = missing.map((item) => item.key);
-  const currentBelgradeDay = missing.length > 0 ? getBelgradeDayKey(asOfMs) : "";
-  if ((fields.sourceOccurrenceAmbiguousProvenance === true && missing.length > 0) ||
-      missing.some((item) => !isValidPastBelgradeDate(item.date, currentBelgradeDay) || item.date >= event.date)) return result("source_receipt_missing_occurrences");
-  if (missing.length > 0 && !skippedPastBindingsMatchCurrentSourceRows(source.analysisResultJson, source.caption, source.altText, expected, new Set(missing.map((item) => item.key))))
-    return result("source_receipt_past_occurrence_unverified");
-  for (const binding of expected.filter((item) => satisfiedKeys.has(item.key))) {
-    const satisfactions = receipt.satisfiedOccurrences.filter((item) => item.key === binding.key);
-    if (satisfactions.length !== 1) return result("source_receipt_bindings_invalid");
-    const representative = await ctx.db.get(satisfactions[0]!.eventId);
-    if (!sourceOccurrenceRepresentativeMatchesExpected(representative, binding)) return result("source_receipt_representative_mismatch");
-  }
-  const ownSatisfaction = receipt.satisfiedOccurrences.filter((item) => item.key === occurrenceKey && item.eventId === event._id);
-  if (ownSatisfaction.length !== 1) return result("source_occurrence_not_satisfied");
-  if (fields.sourceOccurrenceAmbiguousProvenance === true && !hasExactSourceCollisionOrdinalProof(event, fields, source.analysisResultJson, receipt))
-    return result("source_collision_unverified");
-  return result("complete");
-}
+  if (
+    receipt.deferredChildCount !== 0 ||
+    receipt.deferredChildKeys.length !== 0 ||
+    expected.length === 0 ||
+    expected.length !== expectedKeys.size ||
+    expected.some((item) => !expectedKeys.has(item.key)) ||
+    satisfiedKeys.size !== receipt.satisfiedKeys.length ||
+    receipt.satisfiedOccurrences.length !== satisfiedKeys.size ||
+    receipt.satisfiedKeys.some((key) => !expectedKeys.has(key)) ||
+    receipt.satisfiedOccurrences.some((item) =>
+      !expectedKeys.has(item.key) || !satisfiedKeys.has(item.key)
+    )
+  ) return false;
 
-/** Public grounding uses exactly the same proof as diagnostics and approval. */
-export async function hasCompleteAutomaticUniqueSourceProof(ctx: ReadCtx, event: Doc<"events">): Promise<boolean> {
-  return (await diagnoseCompleteAutomaticUniqueSourceProof(ctx, event)).complete;
+  const missing = expected.filter((item) => !satisfiedKeys.has(item.key));
+  const currentBelgradeDay = missing.length > 0
+    ? getBelgradeDayKey(Date.now())
+    : "";
+  if (
+    (fields.sourceOccurrenceAmbiguousProvenance === true && missing.length > 0) ||
+    missing.some((item) =>
+      !isValidPastBelgradeDate(item.date, currentBelgradeDay) ||
+      item.date >= event.date
+    ) ||
+    (missing.length > 0 && !skippedPastBindingsMatchCurrentSourceRows(
+      source.analysisResultJson,
+      source.caption,
+      source.altText,
+      expected,
+      new Set(missing.map((item) => item.key)),
+    ))
+  ) return false;
+
+  for (const binding of expected.filter((item) => satisfiedKeys.has(item.key))) {
+    const satisfactions = receipt.satisfiedOccurrences.filter(
+      (item) => item.key === binding.key,
+    );
+    if (satisfactions.length !== 1) return false;
+    const representative = await ctx.db.get(satisfactions[0]!.eventId);
+    if (!sourceOccurrenceRepresentativeMatchesExpected(representative, binding)) {
+      return false;
+    }
+  }
+  const ownSatisfaction = receipt.satisfiedOccurrences.filter(
+    (item) => item.key === occurrenceKey && item.eventId === event._id,
+  );
+  return ownSatisfaction.length === 1 &&
+    (fields?.sourceOccurrenceAmbiguousProvenance !== true ||
+      hasExactSourceCollisionOrdinalProof(
+        event,
+        fields,
+        source.analysisResultJson,
+        receipt,
+      ));
 }
