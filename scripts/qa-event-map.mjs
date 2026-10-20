@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import {
   MAP_MAX_DATE,
   MAP_MIN_DATE,
+  attachReviewedEventMapAddresses,
   buildEventMapData,
   buildEventMapHref,
   enrichEventMapCoordinates,
   filterEventMapEvents,
+  getEventMapEventWindow,
   getEventMapOpenNowDateKey,
   getEventMapOpenNowWindow,
   normalizeMapDateKey,
@@ -72,6 +74,18 @@ for (const [instant, fromDate, beforeDate] of [
     "Open now must load civil yesterday and today across week, month, year, and DST boundaries.");
 }
 
+for (const [date, previous, next] of [
+  ["2026-10-19", "2026-10-18", "2026-10-20"],
+  ["2026-03-29", "2026-03-28", "2026-03-30"],
+  ["2026-10-25", "2026-10-24", "2026-10-26"],
+  ["2026-12-31", "2026-12-30", "2027-01-01"],
+]) {
+  assert.deepEqual(getEventMapEventWindow(date, false), { fromDate: date, beforeDate: next },
+    "Ordinary map browsing must load only the selected date, including DST and year boundaries.");
+  assert.deepEqual(getEventMapEventWindow(date, true), { fromDate: previous, beforeDate: next },
+    "The generic date window includes the prior date; Open now must use its clock-derived civil window instead.");
+}
+
 function makeEvent(overrides = {}) {
   return {
     _id: "base",
@@ -128,6 +142,31 @@ assert.equal(withAddresses[1].venueLocation, originalEvents[1].venueLocation, "A
 assert.equal(withAddresses[2].venueLocation, originalEvents[2].venueLocation, "Unbound events must not acquire an address from the reviewed directory.");
 assert.equal(withAddresses[6].venueLocation, originalEvents[6].venueLocation, "Invalid current coordinates must not authorize an old reviewed address.");
 assert.deepEqual(originalEvents, originalSnapshot, "Reviewed address enrichment must not mutate persisted events.");
+
+const projectedEvents = [
+  makeEvent({ _id: "reviewed", venueLatitude: 44.82, venueLongitude: 20.47, venueLocation: "Current address" }),
+  makeEvent({ _id: "moved", venueLatitude: 44.82, venueLongitude: 20.48, venueLocation: "Updated address" }),
+  makeEvent({ _id: "removed", venueLatitude: undefined, venueLongitude: undefined }),
+  makeEvent({ _id: "unbound", venueId: undefined, venueLatitude: 44.82, venueLongitude: 20.47 }),
+  makeEvent({ _id: "other-branch", venueId: "branch-two", venueLatitude: 44.82, venueLongitude: 20.47 }),
+  makeEvent({ _id: "invalid", venueLatitude: NaN, venueLongitude: 20.47 }),
+];
+const projectedSnapshot = structuredClone(projectedEvents);
+const projectedAddresses = attachReviewedEventMapAddresses(projectedEvents, reviewedLocations);
+assert.equal(projectedAddresses[0].venueLocation, "Verified venue address",
+  "An exact projected venue ID and coordinate pair may retain its reviewed address without a full directory read.");
+assert.equal(projectedAddresses[1].venueLocation, "Updated address",
+  "A moved point must retain the current address rather than a prior reviewed point's address.");
+for (const index of [2, 3, 4, 5]) {
+  assert.deepEqual(projectedAddresses[index], projectedEvents[index],
+    "Missing/invalid coordinates, unbound venue names and different branch IDs cannot acquire reviewed location facts.");
+}
+assert.deepEqual(projectedEvents, projectedSnapshot, "Address display projection must not mutate loaded events.");
+assert.deepEqual(
+  projectedAddresses.map((event) => [event.venueLatitude, event.venueLongitude]),
+  projectedEvents.map((event) => [event.venueLatitude, event.venueLongitude]),
+  "Reviewed snapshots must never add, replace or restore map coordinates.",
+);
 
 for (const [latitude, longitude] of [
   [undefined, undefined], [44.8, undefined], [undefined, 20.4], [NaN, 20.4],

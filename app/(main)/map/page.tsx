@@ -3,7 +3,8 @@ import { Suspense } from "react";
 import { EventCalendarMap } from "@/components/maps/event-calendar-map";
 import { EventMapLoading } from "@/components/maps/event-map-loading";
 import {
-  enrichEventMapCoordinates,
+  attachReviewedEventMapAddresses,
+  getEventMapEventWindow,
   getEventMapOpenNowDateKey,
   getEventMapOpenNowWindow,
   normalizeMapDateKey,
@@ -14,8 +15,8 @@ import {
   getNightlifeDefaultDateKey,
 } from "@/lib/events/nightlife-date";
 import { loadPublicCalendarEventsWindow } from "@/lib/events/public-events";
+import { loadPublicCalendarOverviewWindow } from "@/lib/events/public-calendar-overview";
 import { SITE_ORIGIN } from "@/lib/seo/site";
-import { loadPublicVenueDirectory } from "@/lib/venues/public-venue-pages";
 import reviewedLocations from "@/data/venue-coordinates-2026-10-15.json";
 
 export const dynamic = "force-dynamic";
@@ -97,32 +98,40 @@ async function EventMapResults({ initialNow, openNowActive, selectedDate, todayD
   const fromDate = addDaysToDateKey(selectedDate, -((selectedWeekday + 6) % 7));
   const beforeDate = addDaysToDateKey(fromDate, 7);
   const openNowWindow = getEventMapOpenNowWindow(initialNow);
-  const queryFromDate = openNowActive && openNowWindow.fromDate < fromDate ? openNowWindow.fromDate : fromDate;
-  const queryBeforeDate = openNowActive && openNowWindow.beforeDate > beforeDate ? openNowWindow.beforeDate : beforeDate;
-  const [eventResult, venueResult] = await Promise.all([
-    loadPublicCalendarEventsWindow({ beforeDate: queryBeforeDate, fromDate: queryFromDate }),
-    loadPublicVenueDirectory(),
+  // Before 06:00 the display date is yesterday, but current civil-day starts
+  // still belong to Open now. Use the clock-derived window, not display date.
+  const eventWindow = openNowActive ? openNowWindow : getEventMapEventWindow(selectedDate, false);
+  const [eventResult, overviewResult] = await Promise.all([
+    loadPublicCalendarEventsWindow(eventWindow),
+    loadPublicCalendarOverviewWindow({ beforeDate, fromDate }),
   ]);
 
   if (eventResult.error) {
     throw new Error(`Failed to load event map: ${eventResult.error}`);
   }
-  if (venueResult.error) {
-    throw new Error(`Failed to load map venues: ${venueResult.error}`);
+  if (overviewResult.error) {
+    throw new Error(`Failed to load map day counts: ${overviewResult.error}`);
   }
 
+  const countsByDate = new Map<string, number>();
+  for (const group of overviewResult.groups) {
+    countsByDate.set(group.date, (countsByDate.get(group.date) ?? 0) + group.count);
+  }
+  const selectedDayEvents = eventResult.events.filter((event) => event.date === selectedDate);
+  // Reconcile the active chip with this response's detail snapshot when the
+  // independent overview and detail caches refresh at different moments.
+  countsByDate.set(selectedDate, selectedDayEvents.length);
   const days = Array.from({ length: 7 }, (_, index) => {
     const date = addDaysToDateKey(fromDate, index);
     return {
       date,
-      eventCount: eventResult.events.filter((event) => event.date === date).length,
+      eventCount: countsByDate.get(date) ?? 0,
     };
   });
-  const events = enrichEventMapCoordinates(
+  const events = attachReviewedEventMapAddresses(
     eventResult.events.filter((event) => openNowActive
       ? event.date >= openNowWindow.fromDate && event.date < openNowWindow.beforeDate
       : event.date === selectedDate),
-    venueResult.venues,
     reviewedLocations.venues,
   );
 

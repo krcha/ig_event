@@ -4,7 +4,6 @@ import { ClerkProvider } from "@clerk/nextjs";
 import { AppToolbar } from "@/components/navigation/app-toolbar";
 import { NavigationFeedback } from "@/components/navigation/navigation-feedback";
 import { AuthUserProvider } from "@/components/providers/auth-user-provider";
-import { ConvexClientProvider } from "@/components/providers/convex-client-provider";
 import { UserLibraryProvider } from "@/components/providers/user-library-provider";
 import { SITE_DESCRIPTION, SITE_ORIGIN } from "@/lib/seo/site";
 import "./globals.css";
@@ -87,15 +86,13 @@ function AppDocument({
   children: React.ReactNode;
 }) {
   const appContent = (
-    <ConvexClientProvider authEnabled={authEnabled}>
-      <div className="min-h-screen">
-        <Suspense fallback={null}>
-          <NavigationFeedback />
-        </Suspense>
-        <AppToolbar />
-        {children}
-      </div>
-    </ConvexClientProvider>
+    <div className="min-h-screen">
+      <Suspense fallback={null}>
+        <NavigationFeedback />
+      </Suspense>
+      <AppToolbar />
+      {children}
+    </div>
   );
 
   return (

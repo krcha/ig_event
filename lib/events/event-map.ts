@@ -70,6 +70,16 @@ export function buildEventMapHref(date: string, options: { openNow?: boolean } =
   return `/map?${query.toString()}`;
 }
 
+export function getEventMapEventWindow(selectedDate: string, openNow: boolean): {
+  fromDate: string;
+  beforeDate: string;
+} {
+  return {
+    fromDate: openNow ? addDaysToDateKey(selectedDate, -1) : selectedDate,
+    beforeDate: addDaysToDateKey(selectedDate, 1),
+  };
+}
+
 export function filterEventMapEvents(
   events: readonly PublicEvent[],
   options: { selectedDate: string; openNow: boolean; now: number },
@@ -108,6 +118,25 @@ export function enrichEventMapCoordinates(
       venueLongitude: coordinates.longitude,
       ...(reviewedAddress ? { venueLocation: reviewedAddress } : {}),
     };
+  });
+}
+
+/** Calendar events already contain the current public venue read projection. */
+export function attachReviewedEventMapAddresses(
+  events: PublicEvent[],
+  reviewedLocations: readonly { id: string; latitude: number; longitude: number; address?: string }[],
+): PublicEvent[] {
+  const reviewedById = new Map(reviewedLocations.map((venue) => [venue.id, venue]));
+
+  return events.map((event) => {
+    const coordinates = validCoordinates(event.venueLatitude, event.venueLongitude);
+    const reviewed = event.venueId ? reviewedById.get(event.venueId) : undefined;
+    const address = coordinates && reviewed?.latitude === coordinates.latitude &&
+      reviewed.longitude === coordinates.longitude ? reviewed.address?.trim() : undefined;
+
+    // Reviewed snapshots may label an exact live point, but never restore
+    // removed coordinates or bind an unlinked event to a venue by its name.
+    return address ? { ...event, venueLocation: address } : event;
   });
 }
 

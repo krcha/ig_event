@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import "./qa-public-calendar-overview-loader.mjs";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { ConvexHttpClient } from "convex/browser";
@@ -256,6 +257,54 @@ try {
   }
   assert.deepEqual(transportEvents, originalFixtures);
   assert.deepEqual(transportVenues, originalVenueFixtures);
+
+  const unboundLegacy = makeEvent({
+    _id: "unbound-legacy-source",
+    date: "2026-11-05",
+    venue: "Old Zappa Hall",
+    venueId: undefined,
+    venueInstagramHandle: zappa.instagramHandle,
+    venueAliases: ["Source-only alias"],
+    venueHours: { hoursJson: "Stale denormalized venue hours" },
+  });
+  const boundNeighbor = makeEvent({
+    _id: "bound-neighbor",
+    date: unboundLegacy.date,
+    venue: zappa.name,
+  });
+  const unboundLegacySnapshot = structuredClone(unboundLegacy);
+  transportEvents = [unboundLegacy, boundNeighbor];
+  const monthWithNeighbor = await loadPublicCalendarEventsWindow({ fromDate: "2026-11-01", beforeDate: "2026-12-01" });
+  const dayWithNeighbor = await loadPublicCalendarEventsWindow({ fromDate: "2026-11-05", beforeDate: "2026-11-06" });
+  for (const result of [monthWithNeighbor, dayWithNeighbor]) {
+    assert.equal(result.error, undefined);
+    const legacy = result.events.find((event) => event._id === unboundLegacy._id);
+    assert.equal(legacy.venue, unboundLegacy.venue, "An unbound calendar row must retain its authorized source label.");
+    assert.equal(legacy.venueId, undefined, "A name, alias or handle shared with a neighboring bound event must not supply a calendar venue binding.");
+    assert.equal(legacy.venueAliases, undefined);
+    assert.equal(legacy.venueHours, undefined);
+    assert.equal(legacy.venueLatitude, undefined);
+    assert.equal(legacy.venueLongitude, undefined);
+    assert.equal(legacy.venueLocation, undefined);
+    assert.equal(legacy.sourceCaption, unboundLegacy.sourceCaption);
+    assert.equal(result.events.find((event) => event._id === boundNeighbor._id).venueId, zappa._id, "Exact canonical bindings still receive the current public venue projection.");
+  }
+  const genericLegacyPage = await loadPublicEventsWindowPage({ fromDate: "2026-11-05", beforeDate: "2026-11-06" });
+  assert.equal(genericLegacyPage.events.find((event) => event._id === unboundLegacy._id).venueId, zappa._id, "The generic feed's existing legacy inference must remain unchanged.");
+  transportEvents = [unboundLegacy];
+  const originalDateNow = Date.now;
+  let dayAlone;
+  try {
+    const afterCacheExpiry = Date.now() + 61_000;
+    Date.now = () => afterCacheExpiry;
+    dayAlone = await loadPublicCalendarEventsWindow({ fromDate: "2026-11-05", beforeDate: "2026-11-06" });
+  } finally {
+    Date.now = originalDateNow;
+  }
+  assert.equal(dayAlone.error, undefined);
+  assert.deepEqual(dayAlone.events, [dayWithNeighbor.events.find((event) => event._id === unboundLegacy._id)], "Calendar source identity must be identical alone, with same-day neighbors, and in a full month.");
+  assert.deepEqual(transportEvents[0], unboundLegacySnapshot, "Read projections must never mutate legacy source data.");
+  transportEvents = structuredClone(originalFixtures);
 
   const auditFlag = process.argv.indexOf("--audit-directory");
   if (auditFlag !== -1) {

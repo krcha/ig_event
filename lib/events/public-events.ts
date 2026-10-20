@@ -379,6 +379,7 @@ function cachePendingPublicEventsLoad(
 function normalizePublicEvent(
   event: PublicEvent,
   venueLookup: VenueLookup,
+  options: { inferLegacyVenue?: boolean } = {},
 ): PublicEvent {
   const hasNonPublicLinkedVenue =
     isRealVenueId(event.venueId) && !venueLookup.publicVenueIds.has(event.venueId);
@@ -390,16 +391,19 @@ function normalizePublicEvent(
     publicEvent.venue,
     venueLookup.canonicalVenueNamesByHandle,
   );
-  const venue = hasNonPublicLinkedVenue
+  const linkedVenue = publicEvent.venueId ? venueLookup.venuesById.get(publicEvent.venueId) : undefined;
+  const legacyVenue = options.inferLegacyVenue === false
     ? undefined
-    : (publicEvent.venueId ? venueLookup.venuesById.get(publicEvent.venueId) : undefined) ??
-      venueLookup.venuesByHandle.get(
-        normalizeHandle(publicEvent.venueInstagramHandle ?? ""),
-      ) ??
+    : venueLookup.venuesByHandle.get(
+      normalizeHandle(publicEvent.venueInstagramHandle ?? ""),
+    ) ??
       venueLookup.venuesByName.get(normalizeVenueLookupKey(publicEvent.venue)) ??
       (canonicalVenueName
         ? venueLookup.venuesByName.get(normalizeVenueLookupKey(canonicalVenueName))
         : undefined);
+  const venue = hasNonPublicLinkedVenue
+    ? undefined
+    : linkedVenue ?? legacyVenue;
   const venueId =
     isRealVenueId(publicEvent.venueId) && venueLookup.publicVenueIds.has(publicEvent.venueId)
       ? publicEvent.venueId
@@ -550,7 +554,9 @@ async function loadAllPublicCalendarEventsWindow(
 
   return sortPublicEventsByDateVenueTimeTitle(
     events.map((event) =>
-      normalizePublicEvent(event, venueLookup),
+      // Calendar day details and month counters must share exact canonical
+      // bindings. An unrelated event in a wider window cannot supply one.
+      normalizePublicEvent(event, venueLookup, { inferLegacyVenue: false }),
     ),
   );
 }

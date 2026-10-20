@@ -179,17 +179,20 @@ function resolveVenueClosingMinutes(options: {
   if (dateMinutes === null || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(options.startTime)) {
     return null;
   }
+  const intervals = getOpeningIntervals(options.venueHours, options.date, 8);
+  if (intervals.length === 0) {
+    return null;
+  }
   const eventStart = dateMinutes + readMinutes(options.startTime);
   const eventStartInstant = resolveInstant(eventStart, "start");
   if (eventStartInstant === null) {
     return null;
   }
-  const opening = getOpeningIntervals(options.venueHours, options.date, 8)
-    .find((interval) => {
-      const start = resolveInstant(interval.start, "start");
-      const end = resolveInstant(interval.end, "end");
-      return start !== null && end !== null && start <= eventStartInstant && eventStartInstant < end;
-    });
+  const opening = intervals.find((interval) => {
+    const start = resolveInstant(interval.start, "start");
+    const end = resolveInstant(interval.end, "end");
+    return start !== null && end !== null && start <= eventStartInstant && eventStartInstant < end;
+  });
   // A full uninterrupted weekly cycle means the place is always open. It does
   // not establish an event end, and must not acquire an artificial closing time.
   if (!opening || opening.end - eventStart >= WEEK_MINUTES) {

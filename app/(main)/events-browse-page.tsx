@@ -13,6 +13,7 @@ import {
   parseNormalizedEventDate,
   type PublicEvent,
 } from "@/lib/events/public-events";
+import { loadPublicCalendarOverviewWindow } from "@/lib/events/public-calendar-overview";
 import { AutoApplyFilterForm } from "@/components/calendar/auto-apply-filter-form";
 import { CalendarScrollRestoration } from "@/components/calendar/calendar-scroll-restoration";
 import { JsonLd } from "@/components/seo/json-ld";
@@ -231,9 +232,7 @@ function buildQueryString(params: Record<string, string | undefined>): string {
   return value ? `?${value}` : "";
 }
 
-function getEventAriaLabel(event: CalendarEventSummary, tone: EventTone): string {
-  const time = resolveEventTimePresentation(event);
-  const timeLabel = time.label;
+function getEventAriaLabel(event: CalendarEventSummary, tone: EventTone, timeLabel: string): string {
   return ["Open " + event.title, getEventSessionLabel(event), timeLabel, event.venue, tone.name]
     .filter(Boolean)
     .join(", ");
@@ -297,7 +296,6 @@ function eventMatchesSearch(event: PublicEvent, query: string | undefined): bool
 function getSelectedDay(
   monthStart: Date,
   requestedDay: string | undefined,
-  filteredMonthDayKeys: string[],
   defaultDayKey: string,
 ): string {
   const monthParam = formatMonthParam(monthStart);
@@ -307,18 +305,6 @@ function getSelectedDay(
 
   const today = dateKeyToLocalNoonDate(defaultDayKey);
   const todayKey = defaultDayKey;
-  if (
-    today.getFullYear() === monthStart.getFullYear() &&
-    today.getMonth() === monthStart.getMonth() &&
-    filteredMonthDayKeys.includes(todayKey)
-  ) {
-    return todayKey;
-  }
-
-  if (filteredMonthDayKeys.length > 0) {
-    return filteredMonthDayKeys[0];
-  }
-
   if (
     today.getFullYear() === monthStart.getFullYear() &&
     today.getMonth() === monthStart.getMonth()
@@ -478,8 +464,10 @@ function VenueTimeLabel({ label }: { label: string }) {
   );
 }
 
-function getResolvedTimeParts(event: CalendarEventSummary) {
-  const presentation = resolveEventTimePresentation(event);
+function getResolvedTimeParts(
+  event: CalendarEventSummary,
+  presentation: ReturnType<typeof resolveEventTimePresentation>,
+) {
   if (event.displayTimeStart) {
     return {
       allDay: false,
@@ -519,15 +507,32 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const monthParam = formatMonthParam(monthStart);
   const nextMonthStart = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
   const monthStartKey = formatDateKey(monthStart);
-  const fromDate = openNowActive ? addDaysToDateKey(belgradeNow.date, -1) : monthStartKey;
-  const beforeDate = openNowActive ? addDaysToDateKey(belgradeNow.date, 1) : formatDateKey(nextMonthStart);
-  const loaded = await loadPublicCalendarEventsWindow({ beforeDate, fromDate });
-  const error = loaded.error;
+  const selectedDayKey = openNowActive ? belgradeNow.date : getSelectedDay(
+    monthStart,
+    getSingleValue(resolvedSearchParams?.day),
+    todayKey,
+  );
+  const selectedSearchQuery = getSingleValue(resolvedSearchParams?.q)?.trim() || undefined;
+  const requestedVenue = getSingleValue(resolvedSearchParams?.venue)?.trim() || undefined;
+  // Only the selected day's details cross the backend boundary. Overnight
+  // "open now" also needs yesterday's sessions; month chips use counters only.
+  const fromDate = openNowActive ? addDaysToDateKey(belgradeNow.date, -1) : selectedDayKey;
+  const beforeDate = addDaysToDateKey(selectedDayKey, 1);
+  const [loaded, overview] = await Promise.all([
+    loadPublicCalendarEventsWindow({ beforeDate, fromDate }),
+    openNowActive ? Promise.resolve(null) : loadPublicCalendarOverviewWindow({
+      fromDate: monthStartKey,
+      beforeDate: formatDateKey(nextMonthStart),
+      q: selectedSearchQuery,
+      venue: requestedVenue,
+    }),
+  ]);
+  const error = loaded.error ?? overview?.error;
   // Keep cached event data independent of the clock; reevaluate openings per request.
   const events = openNowActive ? loaded.events.filter((event) => matchesOpenNowEvent(event, now)) : loaded.events;
-  const venues = buildPublicEventVenueFilterOptions(loaded.events);
+  const venues = overview?.venues ?? buildPublicEventVenueFilterOptions(loaded.events);
   const selectedVenue = resolvePublicEventVenueFilter(
-    getSingleValue(resolvedSearchParams?.venue),
+    requestedVenue,
     venues,
   );
   const selectedVenueOption = venues.find((venue) => venue.value === selectedVenue);
@@ -537,13 +542,32 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const hiddenDayCategories = normalizeHiddenDayCategories(getSingleValue(resolvedSearchParams?.hide));
   const hiddenDayCategorySet = new Set(hiddenDayCategories);
   const selectedSortMode = normalizeAgendaSortMode(getSingleValue(resolvedSearchParams?.sort));
-  const selectedSearchQuery = getSingleValue(resolvedSearchParams?.q)?.trim() || undefined;
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
   const monthDayBuckets = new Map<string, CalendarDayBucket>();
   const activeVenueNames = new Set<string>();
   let totalFilteredEventCount = 0;
   let weekendEventCount = 0;
+
+  // Overview counts retain month-wide search, venue, category and stats behavior
+  // without loading other days' event bodies or venue-hours JSON.
+  for (const group of overview?.groups ?? []) {
+    // Keep the active chip and agenda on the same detail snapshot when the
+    // independently bounded overview cache refreshes at a different moment.
+    if (group.date === selectedDayKey) continue;
+    const eventCount = !selectedVenue || /^(?:id|name):/u.test(selectedVenue)
+      ? (!selectedVenue || group.venueValue === selectedVenue ? group.count : 0)
+      : group.legacyVenueMatchCount;
+    if (!eventCount) continue;
+    const dayBucket = getCalendarDayBucket(monthDayBuckets, group.date);
+    dayBucket.categoryCounts[group.category] += eventCount;
+    if (hiddenDayCategorySet.has(group.category)) continue;
+    dayBucket.eventCount += eventCount;
+    totalFilteredEventCount += eventCount;
+    activeVenueNames.add(group.venueValue);
+    const eventDate = parseNormalizedEventDate(group.date);
+    if (eventDate && isWeekendDate(eventDate)) weekendEventCount += eventCount;
+  }
 
   for (const event of events) {
     if (!openNowActive && !event.date.startsWith(`${monthParam}-`)) {
@@ -576,12 +600,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     .filter(([, bucket]) => bucket.eventCount > 0)
     .map(([dayKey]) => dayKey)
     .sort();
-  const selectedDayKey = openNowActive ? belgradeNow.date : getSelectedDay(
-    monthStart,
-    getSingleValue(resolvedSearchParams?.day),
-    filteredMonthDayKeys,
-    todayKey,
-  );
   const selectedDayAgendaEvents: CalendarEventSummary[] = [];
   let selectedDayEventCount = 0;
 
@@ -601,6 +619,18 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   }
 
   selectedDayAgendaEvents.sort((left, right) => compareAgendaEvents(left, right, selectedSortMode));
+
+  // Mobile/desktop rows and their accessible labels share the same derived
+  // time. Scope reuse to this request so refreshed venue hours are never stale.
+  const timePresentations = new Map<CalendarEventSummary, ReturnType<typeof resolveEventTimePresentation>>();
+  function getTimePresentation(event: CalendarEventSummary) {
+    let presentation = timePresentations.get(event);
+    if (!presentation) {
+      presentation = resolveEventTimePresentation(event);
+      timePresentations.set(event, presentation);
+    }
+    return presentation;
+  }
 
   const selectedDate = parseNormalizedEventDate(selectedDayKey) ?? monthStart;
   const previousDay = new Date(selectedDate);
@@ -959,7 +989,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                       const eventCategory = getDayCategory(event);
                       const isHiddenByKind = hiddenDayCategorySet.has(eventCategory);
                       const tone = getEventTone(event);
-                      const timePresentation = resolveEventTimePresentation(event);
+                      const timePresentation = getTimePresentation(event);
 
                       return (
                         <li
@@ -974,7 +1004,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                           key={event._id}
                         >
                           <Link
-                            aria-label={getEventAriaLabel(event, tone)}
+                            aria-label={getEventAriaLabel(event, tone, timePresentation.label)}
                             className="flex min-h-10 items-center gap-2 rounded-[0.7rem] px-2 text-foreground hover:bg-primary/10 hover:text-primary focus-visible:bg-primary/10 focus-visible:outline-none"
                             data-calendar-event-link="true"
                             href={`/events/${event._id}`}
@@ -1040,8 +1070,8 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
             const tone = getEventTone(event);
             const eventCategory = getDayCategory(event);
             const isHiddenByKind = hiddenDayCategorySet.has(eventCategory);
-            const eventTime = getResolvedTimeParts(event);
-            const timePresentation = resolveEventTimePresentation(event);
+            const timePresentation = getTimePresentation(event);
+            const eventTime = getResolvedTimeParts(event, timePresentation);
             const displayEventTime = timePresentation.label;
             const artistMeta = formatArtistMeta(event);
 
@@ -1066,7 +1096,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   <div className="flex min-w-0 flex-1 items-center gap-2">
                     {eventTime.startLabel ? (
                       <Link
-                        aria-label={getEventAriaLabel(event, tone)}
+                        aria-label={getEventAriaLabel(event, tone, timePresentation.label)}
                         className="box-border flex h-9 w-16 flex-none flex-col items-center justify-center overflow-hidden rounded-[0.72rem] border border-border/65 bg-background/45 px-1 text-center hover:border-primary/35"
                         data-calendar-event-link="true"
                         href={`/events/${event._id}`}
@@ -1083,7 +1113,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                       </Link>
                     ) : timePresentation.kind === "venue_hours" ? (
                       <Link
-                        aria-label={getEventAriaLabel(event, tone)}
+                        aria-label={getEventAriaLabel(event, tone, timePresentation.label)}
                         className="box-border flex min-h-9 w-16 flex-none flex-col items-center justify-center rounded-[0.72rem] border border-border/65 bg-background/45 px-1 py-1 text-center hover:border-primary/35"
                         data-calendar-event-link="true"
                         href={`/events/${event._id}`}
@@ -1094,7 +1124,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                       </Link>
                     ) : (
                       <Link
-                        aria-label={getEventAriaLabel(event, tone)}
+                        aria-label={getEventAriaLabel(event, tone, timePresentation.label)}
                         className="box-border flex h-9 w-16 flex-none items-center justify-center overflow-hidden rounded-[0.72rem] border border-border/65 bg-background/45 px-1 text-center hover:border-primary/35"
                         data-calendar-event-link="true"
                         href={`/events/${event._id}`}
@@ -1107,7 +1137,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                     )}
                     <div className="min-w-0 flex-1">
                       <Link
-                        aria-label={getEventAriaLabel(event, tone)}
+                        aria-label={getEventAriaLabel(event, tone, timePresentation.label)}
                         className="block min-w-0 hover:text-primary"
                         data-calendar-event-link="true"
                         href={`/events/${event._id}`}
@@ -1151,7 +1181,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                     <div className={cn("flex-none text-right", timePresentation.kind === "venue_hours" ? "w-16" : "w-14")}>
                       {displayEventTime ? (
                         <Link
-                          aria-label={getEventAriaLabel(event, tone)}
+                          aria-label={getEventAriaLabel(event, tone, timePresentation.label)}
                           className={cn("block text-sm font-semibold tabular-nums text-foreground hover:text-primary", timePresentation.kind !== "venue_hours" && "truncate")}
                           data-calendar-event-link="true"
                           href={`/events/${event._id}`}
@@ -1166,7 +1196,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                     </div>
                     <div className="min-w-0 flex-1">
                       <Link
-                        aria-label={getEventAriaLabel(event, tone)}
+                        aria-label={getEventAriaLabel(event, tone, timePresentation.label)}
                         className="block min-w-0 hover:text-primary"
                         data-calendar-event-link="true"
                         href={`/events/${event._id}`}
