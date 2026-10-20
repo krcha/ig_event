@@ -8,11 +8,10 @@ import { EventSessionLabel } from "@/components/events/event-session-label";
 import { EventMetaRow } from "@/components/events/event-meta";
 import { OpenNowFilter } from "@/components/calendar/open-now-filter";
 import { getEventSessionLabel } from "@/lib/events/event-session";
-import { buildEventMapData, buildEventMapHref, filterEventMapEvents, MAP_MAX_DATE, MAP_MIN_DATE } from "@/lib/events/event-map";
+import { buildEventMapData, buildEventMapHref, filterEventMapEvents, getEventMapOpenNowDateKey, MAP_MAX_DATE, MAP_MIN_DATE } from "@/lib/events/event-map";
 import { resolveEventTimePresentation } from "@/lib/events/event-time-presentation";
 import { addDaysToDateKey } from "@/lib/events/nightlife-date";
 import type { PublicEvent } from "@/lib/events/public-events";
-import { getBelgradeNow } from "@/lib/venues/venue-open-now";
 import { cn } from "@/lib/utils";
 import "./event-calendar-map.css";
 
@@ -91,7 +90,7 @@ export function EventCalendarMap({ initialNow, openNowActive, selectedDate, toda
     return events.filter((event) => ids.has(event._id));
   }, [eligibleEventIds, events]);
   const { locations, unmappedEvents } = useMemo(() => buildEventMapData(visibleEvents), [visibleEvents]);
-  const openNowHref = buildEventMapHref(getBelgradeNow(now).date, { openNow: !openNowActive });
+  const openNowHref = buildEventMapHref(getEventMapOpenNowDateKey(now), { openNow: !openNowActive });
   const [selection, setSelection] = useState<{ date: string; id: string } | null>(null);
   const selectedLocationId = selection?.date === selectedDate ? selection.id : null;
   const locationCards = useRef(new Map<string, HTMLElement>());
@@ -177,7 +176,7 @@ export function EventCalendarMap({ initialNow, openNowActive, selectedDate, toda
       <div className="event-calendar-layout grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_400px]">
         <div className="relative h-full min-h-0 lg:h-auto">
           <EventLocationMap locations={locations} onSelectLocation={selectFromMap} selectedLocationId={selectedLocationId} />
-          <section aria-label="Choose a map date" className="absolute inset-x-3 top-3 z-[600] flex items-center gap-2 rounded-2xl border border-border bg-card/95 p-2 shadow-lg lg:hidden">
+          <section aria-label="Choose a map date" className="absolute inset-x-3 top-3 z-[600] hidden items-center gap-2 rounded-2xl border border-border bg-card/95 p-2 shadow-lg md:flex lg:hidden">
             <a aria-label="Previous day" className="button-secondary min-h-10 w-10 flex-none p-0" href={buildEventMapHref(addDaysToDateKey(selectedDate, -1))}>
               <ChevronLeft aria-hidden="true" className="h-4 w-4" />
             </a>
@@ -189,8 +188,8 @@ export function EventCalendarMap({ initialNow, openNowActive, selectedDate, toda
               <ChevronRight aria-hidden="true" className="h-4 w-4" />
             </a>
           </section>
-          <div className="absolute bottom-3 left-3 z-[600] rounded-full border border-border bg-card/95 p-1 shadow-lg lg:bottom-auto lg:top-14">
-            <OpenNowFilter active={openNowActive} href={openNowHref} initialNow={initialNow} />
+          <div className="absolute left-3 top-3 z-[600] rounded-full border border-border bg-card/95 p-1 shadow-lg md:top-20 lg:top-14">
+            <OpenNowFilter active={openNowActive} appearance="map" href={openNowHref} initialNow={initialNow} />
           </div>
         </div>
         <section aria-label={`Events for ${fullDateLabel}`} className="glass-panel hidden min-w-0 overflow-hidden lg:flex lg:max-h-[622px] lg:flex-col">

@@ -1,15 +1,29 @@
 import { canonicalizeEventType, normalizeTaxonomyText } from "./venue-types";
 
 export const EVENT_PRIMARY_CATEGORIES = [
-  { key: "club", label: "Clubbing & DJ" },
+  { key: "club", label: "Zurke" },
   { key: "live", label: "Live music" },
-  { key: "culture", label: "Kultura & umetnost" },
+  { key: "culture", label: "Kultura" },
   { key: "social", label: "Barovi" },
-  { key: "experience", label: "Radionice" },
   { key: "event", label: "Ostalo" },
 ] as const;
 
 export type EventPrimaryCategory = (typeof EVENT_PRIMARY_CATEGORIES)[number]["key"];
+
+export function normalizeEventCategoryKey(value: string | undefined): EventPrimaryCategory | undefined {
+  if (value === "experience") return "event";
+  return EVENT_PRIMARY_CATEGORIES.find(({ key }) => key === value)?.key;
+}
+
+export function normalizeHiddenEventCategories(categories: readonly string[]): EventPrimaryCategory[] {
+  const requested = new Set(categories.map((value) => normalizeEventCategoryKey(value.trim())));
+  const keys = EVENT_PRIMARY_CATEGORIES.map(({ key }) => key);
+
+  // Old links focused on Radionice or Ostalo can hide every current key after
+  // the merge. Keep the combined Ostalo category visible for those selections.
+  if (keys.every((key) => requested.has(key))) requested.delete("event");
+  return keys.filter((key) => requested.has(key));
+}
 
 export function getHiddenCategoriesAfterCategoryToggle(
   hiddenCategories: readonly EventPrimaryCategory[],
@@ -46,7 +60,7 @@ const SPECIAL = /\b(otvaranj[a-z]*|grand opening|club opening|opening night|spor
 function categoryFromProgram(text: string): EventPrimaryCategory | undefined {
   // Activity takes precedence over music used as a theme, e.g. a rock pub quiz.
   if (SPECIAL.test(text)) return "event";
-  if (EXPERIENCE.test(text)) return "experience";
+  if (EXPERIENCE.test(text)) return "event";
   if (CULTURE.test(text)) return "culture";
   if (/\bfestivals?\b/.test(text)) return "event";
   if (/\b(?:dj|techno|house) live performance\b/.test(text)) return "club";
@@ -81,7 +95,7 @@ export function getEventPrimaryCategory(event: EventCategoryInput): EventPrimary
   if (type === "club") return "club";
   if (type === "culture") return "culture";
   if (type === "live" || type === "music") return "live";
-  if (type === "experience") return "experience";
+  if (type === "experience") return "event";
   const typeCategory = categoryFromProgram(type);
   if (typeCategory) return typeCategory;
 
@@ -93,7 +107,7 @@ export function getEventPrimaryCategory(event: EventCategoryInput): EventPrimary
     case "arts & culture":
       return "culture";
     case "learning":
-      return "experience";
+      return "event";
     case "food & market":
     case "event":
       return "event";

@@ -51,10 +51,12 @@ The event map uses confirmed venue latitude/longitude. Add both coordinates in
 `/admin/venues` to place a venue on the map; events without coordinates remain
 visible in the day's lineup under "Location not mapped". The map uses the
 existing approved public calendar and Belgrade's nightlife-day rollover.
+Map Open now uses a 06:00 Europe/Belgrade date rollover, retaining the previous
+night's selected date after midnight while filtering by actual event hours.
 
-Public discovery uses six primary event categories: Clubbing & DJ, Live music,
-Kultura & umetnost, Barovi, Radionice, and Ostalo. Each event has one primary
-category plus source-supported genre and
+Public discovery uses five primary event categories: Zurke, Live music,
+Kultura, Barovi, and Ostalo. Ostalo includes workshops, quizzes, and tastings.
+Each event has one primary category plus source-supported genre and
 activity tags. See [event categories](docs/event-categories.md) for classification
 and compatibility rules.
 

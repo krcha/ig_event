@@ -6,6 +6,8 @@ import { EVENT_CATEGORY_TONES, type EventCategoryKind } from "@/components/event
 import {
   EVENT_PRIMARY_CATEGORIES,
   getHiddenCategoriesAfterCategoryToggle,
+  normalizeEventCategoryKey,
+  normalizeHiddenEventCategories,
 } from "@/lib/taxonomy/event-categories";
 import { cn } from "@/lib/utils";
 
@@ -16,7 +18,6 @@ const CATEGORY_CHIPS: Array<{ key: "all" | EventCategoryKind; label: string }> =
 const CATEGORY_KEYS = CATEGORY_CHIPS.map((chip) => chip.key).filter(
   (key): key is EventCategoryKind => key !== "all",
 );
-const CATEGORY_KEY_SET = new Set<string>(CATEGORY_KEYS);
 
 const CALENDAR_DATE_COUNT_SELECTOR = "[data-calendar-date-kind-counts]";
 
@@ -29,11 +30,7 @@ type CategoryCountMap = Partial<Record<EventCategoryKind, number>>;
 
 function normalizeHiddenCategories(value: string | readonly string[] | null | undefined): EventCategoryKind[] {
   const values: readonly string[] = typeof value === "string" ? value.split(",") : (value ?? []);
-  const requested = new Set(
-    values.map((item: string) => item.trim()).filter((item): item is EventCategoryKind => CATEGORY_KEY_SET.has(item)),
-  );
-
-  return CATEGORY_KEYS.filter((key) => requested.has(key));
+  return normalizeHiddenEventCategories(values);
 }
 
 function formatHiddenCategories(categories: readonly EventCategoryKind[]): string | undefined {
@@ -279,8 +276,8 @@ export function EventKindToggleChips({
         return;
       }
 
-      const category = control.dataset.calendarClearFilter?.replace("category-", "");
-      if (!category || !CATEGORY_KEY_SET.has(category)) {
+      const category = normalizeEventCategoryKey(control.dataset.calendarClearFilter?.replace("category-", ""));
+      if (!category) {
         return;
       }
 

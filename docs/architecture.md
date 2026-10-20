@@ -37,7 +37,10 @@ The source of truth is `convex/schema.ts`.
 - `/calendar` monthly browsing.
 - `/map` date-selectable map of approved events and their known venue locations.
   Mobile opens directly to a viewport-filling Belgrade map at zoom 14, with
-  compact date controls and event-title/venue-link popups. Desktop retains its
+  a prominent Open now control in the top left and event-title/venue-link
+  popups. Phones hide the date controls; tablets retain compact date controls.
+  Open now keeps the previous night's map date until 06:00 Europe/Belgrade,
+  while still matching actual event times across midnight. Desktop retains its
   selected-day event list.
 - `/venues/directory` public venue directory.
 - `/venues` compatibility redirect to `/map?view=calendar`, preserving the

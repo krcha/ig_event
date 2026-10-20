@@ -7,6 +7,8 @@ import {
   buildEventMapHref,
   enrichEventMapCoordinates,
   filterEventMapEvents,
+  getEventMapOpenNowDateKey,
+  getEventMapOpenNowWindow,
   normalizeMapDateKey,
 } from "../lib/events/event-map.ts";
 
@@ -31,6 +33,44 @@ assert.equal(
   "2026-10-16&category=club",
   "Date links must encode their value without introducing another query parameter.",
 );
+
+for (const [instant, expectedDate] of [
+  ["2026-10-16T23:59:00+02:00", "2026-10-16"],
+  ["2026-10-17T00:00:00+02:00", "2026-10-16"],
+  ["2026-10-17T05:59:00+02:00", "2026-10-16"],
+  ["2026-10-17T06:00:00+02:00", "2026-10-17"],
+  ["2026-10-19T05:59:00+02:00", "2026-10-18"],
+  ["2026-10-19T06:00:00+02:00", "2026-10-19"],
+  ["2026-11-01T00:00:00+01:00", "2026-10-31"],
+  ["2027-01-01T00:00:00+01:00", "2026-12-31"],
+  ["2027-01-01T06:00:00+01:00", "2027-01-01"],
+  // Both sides of the spring jump and autumn repeated hour retain last night.
+  ["2026-03-29T00:59:00Z", "2026-03-28"],
+  ["2026-03-29T01:00:00Z", "2026-03-28"],
+  ["2026-03-29T05:59:00+02:00", "2026-03-28"],
+  ["2026-03-29T06:00:00+02:00", "2026-03-29"],
+  ["2026-10-25T00:59:00Z", "2026-10-24"],
+  ["2026-10-25T01:00:00Z", "2026-10-24"],
+  ["2026-10-25T05:59:00+01:00", "2026-10-24"],
+  ["2026-10-25T06:00:00+01:00", "2026-10-25"],
+]) {
+  assert.equal(getEventMapOpenNowDateKey(Date.parse(instant)), expectedDate,
+    `Open now should change its Belgrade map date at 06:00: ${instant}.`);
+  assert.equal(getEventMapOpenNowDateKey(new Date(instant)), expectedDate,
+    "Date and timestamp inputs must select the same Open now date.");
+}
+
+for (const [instant, fromDate, beforeDate] of [
+  ["2026-10-19T00:00:00+02:00", "2026-10-18", "2026-10-20"],
+  ["2026-10-19T06:00:00+02:00", "2026-10-18", "2026-10-20"],
+  ["2026-11-01T00:00:00+01:00", "2026-10-31", "2026-11-02"],
+  ["2027-01-01T00:00:00+01:00", "2026-12-31", "2027-01-02"],
+  ["2026-03-29T01:00:00Z", "2026-03-28", "2026-03-30"],
+  ["2026-10-25T01:00:00Z", "2026-10-24", "2026-10-26"],
+]) {
+  assert.deepEqual(getEventMapOpenNowWindow(Date.parse(instant)), { fromDate, beforeDate },
+    "Open now must load civil yesterday and today across week, month, year, and DST boundaries.");
+}
 
 function makeEvent(overrides = {}) {
   return {
@@ -171,5 +211,13 @@ assert.deepEqual(filterEventMapEvents(openNowEvents, { ...openNowOptions, select
 const beforeStart = [makeEvent({ _id: "later-tonight", date: "2026-10-16", time: "22:00", venueHours: overnightHours })];
 assert.deepEqual(filterEventMapEvents(beforeStart, { ...openNowOptions, selectedDate: "2026-10-16", now: Date.parse("2026-10-16T18:00:00Z") }), [],
   "An open venue must not put tonight's event on the Open now map before its announced start.");
+
+const mondayAfterMidnight = Date.parse("2026-10-19T02:00:00+02:00");
+assert.deepEqual(filterEventMapEvents([
+  makeEvent({ _id: "sunday-night", date: "2026-10-18", time: "22:00-05:00" }),
+  makeEvent({ _id: "monday-start", date: "2026-10-19", time: "01:00-03:00" }),
+], { selectedDate: getEventMapOpenNowDateKey(mondayAfterMidnight), openNow: true, now: mondayAfterMidnight })
+  .map((event) => event._id), ["sunday-night", "monday-start"],
+"The previous display day must keep both overnight events and current-day starts in Open now results.");
 
 console.log("Event map QA passed.");

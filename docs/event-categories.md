@@ -5,15 +5,15 @@ tags can describe genres, activities, and explicitly stated free admission.
 
 | Stable key | Public label | Covers |
 | --- | --- | --- |
-| `club` | Clubbing & DJ | Parties, DJ sets, raves, and dance nights |
+| `club` | Zurke | Parties, DJ sets, raves, and dance nights |
 | `live` | Live music | Concerts, live bands, solo performers, and tribute concerts |
-| `culture` | Kultura & umetnost | Theatre, stand-up, exhibitions, film, performances, and discussions |
+| `culture` | Kultura | Theatre, stand-up, exhibitions, film, performances, and discussions |
 | `social` | Barovi | Social evenings, cocktail gatherings, and after-work events |
-| `experience` | Radionice | Workshops, quizzes, tastings, and participatory activities |
-| `event` | Ostalo | Sports screenings, openings, generic festivals, and other special events |
+| `event` | Ostalo | Workshops, quizzes, tastings, participatory activities, sports screenings, openings, generic festivals, and other special events |
 
-The application renders Serbian labels with their normal diacritics. Stable
-keys keep existing category URLs and calendar hide filters compatible.
+The `club` and `culture` keys retain their existing URLs with the shorter public
+labels. The former `experience` filter key is an alias for `event`, and historical
+links focused on either Radionice or Ostalo now select the combined Ostalo group.
 
 When all categories are enabled, choosing one chip shows only that category.
 Other chips can then be added or removed from that selection. All, or clicking
@@ -27,7 +27,7 @@ category pills, and calendar filtering use the same primary classifier.
 
 Explicit format evidence in the event title takes priority over an old coarse
 event type. A rock concert in a club is `live`; a rock DJ party is `club`; a
-creative workshop at a cultural centre is `experience`. A venue's category alone
+creative workshop at a cultural centre is `event`. A venue's category alone
 does not establish the event's format. A genre alone does not prove that music
 will be performed live. When the title does not establish a format, the event's
 own description can refine a coarse legacy type, such as a ceramics workshop
@@ -44,15 +44,17 @@ a DJ set is being performed.
 
 ## Legacy Data Compatibility
 
-The six categories are a public presentation taxonomy. Existing Convex fields,
+The five categories are a public presentation taxonomy. Existing Convex fields,
 canonical extraction types, ingestion, and moderation keep their current
 contracts. Existing records remain readable without a migration or re-scrape.
 
 The old stored types `nightlife`, `live music`, and `arts & culture` remain valid
 fallback evidence for `club`, `live`, and `culture`. The old `learning` type
-falls back to `experience`; specific content such as an author discussion can
+falls back to `event`; specific content such as an author discussion can
 still classify as `culture`. More specific stored subtype labels and event
 content can distinguish activities that the old types grouped together.
+Historical public labels such as `Clubbing & DJ`, `Kultura & umetnost`, and
+`Radionice` remain recognized without changing any stored event type.
 
 Run `npm run qa:event-categories` for deterministic format and overlapping-tag
 fixtures. This check is included in `npm run qa:release`.

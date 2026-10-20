@@ -20,7 +20,7 @@ import { EventKindToggleChips } from "@/components/calendar/event-kind-toggle-ch
 import { OpenNowFilter } from "@/components/calendar/open-now-filter";
 import { MobileMonthDayStrip } from "@/components/calendar/mobile-month-day-strip";
 import { EventMetaRow, getEventCategoryKind, type EventCategoryKind } from "@/components/events/event-meta";
-import { EVENT_PRIMARY_CATEGORIES } from "@/lib/taxonomy/event-categories";
+import { EVENT_PRIMARY_CATEGORIES, normalizeHiddenEventCategories } from "@/lib/taxonomy/event-categories";
 import { EventSessionLabel } from "@/components/events/event-session-label";
 import { getEventSessionLabel } from "@/lib/events/event-session";
 import { SaveEventButton } from "@/components/events/save-event-button";
@@ -139,14 +139,6 @@ const EVENT_TONES: Record<EventCategoryKind, EventTone> = {
     badge: "bg-[#7DD3FC]/[0.14] text-[#7DD3FC]",
     panel: "from-[#7DD3FC]/[0.10] via-card to-card",
   },
-  experience: {
-    name: EVENT_CATEGORY_LABELS.experience,
-    chip: "bg-[#FB923C]/[0.14] text-[#FB923C] hover:bg-[#FB923C]/[0.18]",
-    dot: "bg-[#FB923C]",
-    rail: "bg-[#FB923C]",
-    badge: "bg-[#FB923C]/[0.14] text-[#FB923C]",
-    panel: "from-[#FB923C]/[0.10] via-card to-card",
-  },
   event: {
     name: EVENT_CATEGORY_LABELS.event,
     chip: "bg-[#34D399]/[0.14] text-[#34D399] hover:bg-[#34D399]/[0.18]",
@@ -178,21 +170,8 @@ type CalendarDayBucket = {
   eventCount: number;
 };
 
-function isConcreteDayCategory(value: string | undefined): value is Exclude<DayCategory, "all"> {
-  return value !== "all" && DAY_CATEGORY_CHIPS.some((chip) => chip.key === value);
-}
-
 function normalizeHiddenDayCategories(value: string | undefined): ConcreteDayCategory[] {
-  const requested = new Set(
-    value
-      ?.split(",")
-      .map((part) => part.trim())
-      .filter(isConcreteDayCategory),
-  );
-
-  return DAY_CATEGORY_CHIPS.map((chip) => chip.key).filter(isConcreteDayCategory).filter((key) =>
-    requested.has(key),
-  );
+  return normalizeHiddenEventCategories(value?.split(",") ?? []);
 }
 
 function formatHiddenDayCategories(categories: readonly ConcreteDayCategory[]): string | undefined {
