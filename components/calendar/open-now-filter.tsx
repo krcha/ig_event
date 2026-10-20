@@ -57,9 +57,9 @@ export function OpenNowFilter({ active, href, appearance = "default" }: OpenNowF
       className={cn(
         "inline-flex flex-none items-center whitespace-nowrap rounded-full transition hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4",
         appearance === "map"
-          ? cn("h-8 min-h-8 gap-1.5 bg-primary px-2.5 text-[11px] font-medium leading-none text-primary-foreground shadow-lg focus-visible:outline-primary", active
-            ? "ring-2 ring-inset ring-primary-foreground/35"
-            : "ring-1 ring-inset ring-primary-foreground/10")
+          ? cn("h-8 min-h-8 gap-1.5 px-2.5 text-[11px] font-medium leading-none shadow-lg", active
+            ? "bg-[#7DD3A8] text-[#082C1B] ring-2 ring-inset ring-[#082C1B]/20 focus-visible:outline-[#7DD3A8]"
+            : "bg-primary text-primary-foreground ring-1 ring-inset ring-primary-foreground/10 focus-visible:outline-primary")
           : cn("min-h-8 gap-1.5 px-2.5 text-[11px] font-medium focus-visible:outline-emerald-200", active
             ? "bg-emerald-400/15 text-emerald-300 ring-1 ring-emerald-400/35"
             : "bg-white/[0.045] text-muted-foreground hover:text-foreground"),
