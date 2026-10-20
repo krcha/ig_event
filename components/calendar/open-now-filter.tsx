@@ -55,12 +55,12 @@ export function OpenNowFilter({ active, href, appearance = "default" }: OpenNowF
       aria-label="Open now"
       aria-pressed={active}
       className={cn(
-        "inline-flex flex-none items-center rounded-full transition hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-200",
+        "inline-flex flex-none items-center whitespace-nowrap rounded-full transition hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4",
         appearance === "map"
-          ? cn("min-h-11 gap-2 px-4 text-sm font-semibold shadow-lg", active
-            ? "bg-emerald-400 text-emerald-950 ring-2 ring-emerald-100"
-            : "bg-emerald-100 text-emerald-950 ring-1 ring-emerald-300")
-          : cn("min-h-8 gap-1.5 px-2.5 text-[11px] font-medium", active
+          ? cn("h-8 min-h-8 gap-1.5 bg-primary px-2.5 text-[11px] font-medium leading-none text-primary-foreground shadow-lg focus-visible:outline-primary", active
+            ? "ring-2 ring-inset ring-primary-foreground/35"
+            : "ring-1 ring-inset ring-primary-foreground/10")
+          : cn("min-h-8 gap-1.5 px-2.5 text-[11px] font-medium focus-visible:outline-emerald-200", active
             ? "bg-emerald-400/15 text-emerald-300 ring-1 ring-emerald-400/35"
             : "bg-white/[0.045] text-muted-foreground hover:text-foreground"),
       )}
@@ -71,9 +71,9 @@ export function OpenNowFilter({ active, href, appearance = "default" }: OpenNowF
       }}
       type="button"
     >
-      {appearance === "map" && active
-        ? <Check aria-hidden="true" className="size-4" />
-        : <span aria-hidden="true" className={cn("size-1.5 rounded-full", appearance === "map" ? "bg-current" : active ? "bg-emerald-300" : "bg-current opacity-50")} />}
+      {appearance === "map"
+        ? <span aria-hidden="true" className="inline-flex size-3 items-center justify-center">{active ? <Check className="size-3" /> : <span className="size-1.5 rounded-full bg-current" />}</span>
+        : <span aria-hidden="true" className={cn("size-1.5 rounded-full", active ? "bg-emerald-300" : "bg-current opacity-50")} />}
       <span>Open now</span>
     </button>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Expand, LoaderCircle, LocateFixed, MapPin } from "lucide-react";
 import type { Map as LeafletMap, Marker } from "leaflet";
 import type { EventMapLocation } from "@/lib/events/event-map";
@@ -14,12 +14,13 @@ const BELGRADE_CENTER: [number, number] = [44.8125, 20.4612];
 
 type EventLocationMapProps = {
   className?: string;
+  controls?: ReactNode;
   locations: EventMapLocation[];
   selectedLocationId: string | null;
   onSelectLocation: (id: string) => void;
 };
 
-export function EventLocationMap({ className, locations, selectedLocationId, onSelectLocation }: EventLocationMapProps) {
+export function EventLocationMap({ className, controls, locations, selectedLocationId, onSelectLocation }: EventLocationMapProps) {
   // Server refreshes create new prop objects. Keep Leaflet alive when their
   // content is unchanged so open popups, the viewport, and location tracking
   // survive the Open now clock refresh.
@@ -404,23 +405,28 @@ export function EventLocationMap({ className, locations, selectedLocationId, onS
           </div>
         </div>
       ) : null}
-      {status === "ready" ? (
-        <div className="pointer-events-none absolute left-3 right-3 top-[4.5rem] z-[500] flex items-start justify-end gap-2 lg:top-3 lg:justify-between">
+      <div className="pointer-events-none absolute inset-x-2 top-3 z-[600] flex flex-col items-start gap-2 sm:inset-x-3 md:top-20 lg:top-3">
+        <div className="pointer-events-auto flex w-full items-center justify-between gap-1.5 sm:w-auto sm:justify-start sm:gap-2">
+          {controls}
+          {status === "ready" ? (
+            <>
+              <button aria-label={locationStatus === "locating" ? "Finding your location" : "Show my location"} aria-busy={locationStatus === "locating"} className="button-secondary h-8 min-h-8 shrink-0 gap-1.5 whitespace-nowrap bg-card/95 px-2 py-0 text-[11px] leading-none shadow-lg disabled:cursor-wait sm:px-2.5" disabled={locationStatus === "locating"} onClick={() => locateUserRef.current?.()} type="button">
+                {locationStatus === "locating" ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : <LocateFixed aria-hidden="true" className={cn("size-3.5", locationStatus === "ready" && "text-blue-400")} />}
+                {locationStatus === "locating" ? "Locating..." : "My location"}
+              </button>
+              <button className="button-secondary h-8 min-h-8 shrink-0 gap-1.5 whitespace-nowrap bg-card/95 px-2 py-0 text-[11px] leading-none shadow-lg sm:px-2.5" onClick={() => { mapRef.current?.closePopup(); fitMapRef.current?.(); }} type="button">
+                <Expand aria-hidden="true" className="size-3.5" />
+                Show all
+              </button>
+            </>
+          ) : null}
+        </div>
+        {status === "ready" ? (
           <span className="hidden rounded-full border border-border bg-card/95 px-3 py-2 text-xs font-semibold text-foreground shadow-lg lg:inline">
             {mapLocations.length} {mapLocations.length === 1 ? "venue" : "venues"} on the map
           </span>
-          <div className="pointer-events-auto flex gap-2">
-            <button aria-label={locationStatus === "locating" ? "Finding your location" : "Show my location"} aria-busy={locationStatus === "locating"} className="button-secondary min-h-11 gap-2 bg-card/95 px-3 py-0 text-xs shadow-lg disabled:cursor-wait" disabled={locationStatus === "locating"} onClick={() => locateUserRef.current?.()} type="button">
-              {locationStatus === "locating" ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : <LocateFixed aria-hidden="true" className={cn("h-4 w-4", locationStatus === "ready" && "text-blue-400")} />}
-              {locationStatus === "locating" ? "Locating..." : "My location"}
-            </button>
-            <button className="button-secondary min-h-11 gap-2 bg-card/95 px-3 py-0 text-xs shadow-lg" onClick={() => { mapRef.current?.closePopup(); fitMapRef.current?.(); }} type="button">
-              <Expand aria-hidden="true" className="h-4 w-4" />
-              Show all
-            </button>
-          </div>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
       <p role="status" aria-live="polite" className={locationStatus === "error" ? "pointer-events-none absolute bottom-28 left-3 right-14 z-[500] rounded-xl border border-border bg-card/95 px-3 py-2 text-xs text-foreground" : "sr-only"}>
         {locationStatus === "locating" ? "Finding your location. Allow location access when your browser asks." : locationMessage}
       </p>

@@ -175,7 +175,12 @@ export function EventCalendarMap({ initialNow, openNowActive, selectedDate, toda
 
       <div className="event-calendar-layout grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_400px]">
         <div className="relative h-full min-h-0 lg:h-auto">
-          <EventLocationMap locations={locations} onSelectLocation={selectFromMap} selectedLocationId={selectedLocationId} />
+          <EventLocationMap
+            controls={<OpenNowFilter active={openNowActive} appearance="map" href={openNowHref} initialNow={initialNow} />}
+            locations={locations}
+            onSelectLocation={selectFromMap}
+            selectedLocationId={selectedLocationId}
+          />
           <section aria-label="Choose a map date" className="absolute inset-x-3 top-3 z-[600] hidden items-center gap-2 rounded-2xl border border-border bg-card/95 p-2 shadow-lg md:flex lg:hidden">
             <a aria-label="Previous day" className="button-secondary min-h-10 w-10 flex-none p-0" href={buildEventMapHref(addDaysToDateKey(selectedDate, -1))}>
               <ChevronLeft aria-hidden="true" className="h-4 w-4" />
@@ -188,9 +193,6 @@ export function EventCalendarMap({ initialNow, openNowActive, selectedDate, toda
               <ChevronRight aria-hidden="true" className="h-4 w-4" />
             </a>
           </section>
-          <div className="absolute left-3 top-3 z-[600] rounded-full border border-border bg-card/95 p-1 shadow-lg md:top-20 lg:top-14">
-            <OpenNowFilter active={openNowActive} appearance="map" href={openNowHref} initialNow={initialNow} />
-          </div>
         </div>
         <section aria-label={`Events for ${fullDateLabel}`} className="glass-panel hidden min-w-0 overflow-hidden lg:flex lg:max-h-[622px] lg:flex-col">
           <div className="hidden border-b border-border px-4 py-4 lg:block">
