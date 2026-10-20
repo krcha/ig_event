@@ -94,11 +94,11 @@ them closed.
 
 The calendar and map share an `Open now` control using `Europe/Belgrade` time.
 Known event starts and ends determine eligibility; a start-only event uses the
-venue closing assumption above. An unresolved end may appear only within the
-current nightlife day, after an announced start, with the explicit label
-`Possibly still on - end unconfirmed`. Unknown-time events with unknown hours
-may appear on that nightlife day with the same label. Confirmed closing times,
-explicit closed schedules, future starts and earlier nightlife days stay out.
+venue closing assumption above. Only confirmed active events are included.
+An unresolved end is excluded, including missing hours and uninterrupted 24/7
+hours without an announced event end. The internal `possible` state remains a
+diagnostic classification and is not eligible for public Open now results.
+An announced event end remains authoritative even when venue hours are absent.
 This eligibility assumption does not invent or store an event end. Events without
 a usable time otherwise use current venue opening hours, including verified
 overnight continuations from yesterday. Enabling the home filter retains the

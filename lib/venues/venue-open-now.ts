@@ -365,10 +365,10 @@ export function getOpenNowEventState(
   return event.date === previousDate ? "active" : "inactive";
 }
 
-/** Include uncertain ongoing events only when callers also present their state. */
+/** Public Open now requires a confirmed event end or a finite venue closing. */
 export function matchesOpenNowEvent(
   event: { date?: string | null; time?: string | null; venueHours?: VenueHoursCacheFields | null },
   now: Date | number = Date.now(),
 ): boolean {
-  return getOpenNowEventState(event, now) !== "inactive";
+  return getOpenNowEventState(event, now) === "active";
 }

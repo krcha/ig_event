@@ -237,14 +237,14 @@ const openNowEvents = [
 ];
 const openNowOptions = { selectedDate: "2026-10-17", openNow: true, now: Date.parse("2026-10-17T00:00:00Z") };
 const filteredOpenEvents = filterEventMapEvents(openNowEvents, openNowOptions);
-assert.deepEqual(filteredOpenEvents.map((event) => event._id), ["ongoing", "no-start", "unknown-hours"],
-  "The map retains verified openings and labelled possible events from this night, excluding ended and future events.");
-assert.deepEqual(buildEventMapData(filteredOpenEvents).locations[0].events.map((event) => event._id), ["ongoing", "no-start", "unknown-hours"],
+assert.deepEqual(filteredOpenEvents.map((event) => event._id), ["ongoing", "no-start"],
+  "The map retains only verified openings, excluding unknown endings, ended and future events.");
+assert.deepEqual(buildEventMapData(filteredOpenEvents).locations[0].events.map((event) => event._id), ["ongoing", "no-start"],
   "Pins and popups must use the same filtered event set as the map lineup.");
-assert.deepEqual(filterEventMapEvents(openNowEvents, { ...openNowOptions, now: Date.parse("2026-10-17T02:00:00Z") }).map((event) => event._id), ["unknown-hours"],
-  "Confirmed openings end at the exact closing boundary; unresolved events remain separately labelled possible.");
+assert.deepEqual(filterEventMapEvents(openNowEvents, { ...openNowOptions, now: Date.parse("2026-10-17T02:00:00Z") }).map((event) => event._id), [],
+  "Confirmed openings end at the exact closing boundary; unresolved events remain excluded.");
 assert.deepEqual(filterEventMapEvents(openNowEvents, { ...openNowOptions, now: Date.parse("2026-10-17T05:00:00Z") }), [],
-  "Possible events must not carry into the next nightlife day.");
+  "Unknown endings must remain excluded in the next nightlife day.");
 assert.deepEqual(filterEventMapEvents(openNowEvents, { ...openNowOptions, selectedDate: "2026-10-16", openNow: false }),
   openNowEvents.filter((event) => event.date === "2026-10-16"),
   "Date browsing must retain its complete lineup when Open now is off.");

@@ -535,7 +535,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const events = openNowActive ? loaded.events.filter((event) => {
     const state = getOpenNowEventState(event, now);
     openNowStates.set(event._id, state);
-    return state !== "inactive";
+    return state === "active";
   }) : loaded.events;
   const venues = overview?.venues ?? buildPublicEventVenueFilterOptions(loaded.events);
   const selectedVenue = resolvePublicEventVenueFilter(
