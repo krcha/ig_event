@@ -70,10 +70,11 @@ assert.ok(
 );
 assert.ok(
   calendarSource.includes("getNightlifeDefaultDateKey(new Date(now))") &&
-    calendarSource.includes("openNowActive ? belgradeNow.date") &&
+    calendarSource.includes("const selectedDayKey = openNowActive ? todayKey") &&
+    calendarSource.includes("openNowActive ? getOpenNowEventWindow(now)") &&
     calendarSource.includes("dateKeyToLocalNoonDate(todayKey)") &&
     calendarSource.includes("defaultDayKey"),
-  "Default calendar keeps the nightlife business date; Open now uses Belgrade's current civil date.",
+  "Open now retains the nightlife display date and derives civil candidate bounds independently.",
 );
 assert.equal(
   getNightlifeDefaultDateKey(new Date("2026-07-11T06:59:00+02:00")),
@@ -106,7 +107,7 @@ assert.ok(
     calendarSource.includes('data-calendar-stat-card={stat.key}') &&
     calendarSource.includes('data-calendar-stat-value={stat.key}') &&
     calendarSource.includes('"upcoming with something on"') &&
-    calendarSource.includes('"current Belgrade day"'),
+    calendarSource.includes('"current Belgrade night"'),
   "Active filters should render removable chips and stat cards should expose updateable count markers; active-day copy should make the upcoming scope explicit.",
 );
 assert.ok(

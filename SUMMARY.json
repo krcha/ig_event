@@ -1,0 +1,4566 @@
+{
+  "analyzedAt": "2026-10-21 Europe/Belgrade",
+  "deployed": true,
+  "publicReleaseStatus": {
+    "scope": "Date-strip navigation, selected-day event details, compact month/week counters and map directory removal",
+    "origin": "https://eventzeka.com",
+    "commit": "1e69ed000b66f52386916aa9003358aac4683833",
+    "buildId": "pyj4NSlpNt9-6Z1pSQAgR",
+    "healthAndRoutingPassed": true,
+    "previewSliderAssertionsPassed": 68,
+    "publicSliderAssertionsPassed": 66,
+    "publicSliderBrowserErrors": 0,
+    "nextDateDocumentRequestsPerDevice": 0,
+    "nextDateRscRequestsPerDevice": 1,
+    "broaderPublicFlowPassed": false,
+    "knownIssues": [
+      "Two recoverable React #418 errors during broader direct-public checks: mobile Previous day and browser-back from anonymous sign-in to event detail; counts and subsequent actions remained correct.",
+      "An additional #418 was recorded on mobile event detail repeat visit in the 36-navigation AFTER matrix; that specific BEFORE matrix had zero errors. No causal regression conclusion established.",
+      "Finite matched old/new focused checks did not reproduce #418; cause and regression status remain inconclusive.",
+      "A focused current-build category click timed out; subsequent category/search/count checks worked. No proven cause.",
+      "Immediate Open now color assertion ran during CSS transition; both builds reached correct green after 900 ms."
+    ],
+    "retirement": "Held; previous release and private preview retained. No fabricated all-passed browser proof.",
+    "postReleaseTimingStatus": "completed",
+    "publicTimingMatrixBrowserErrors": 1,
+    "evidenceDirectory": ".seo-cache/performance/public-release/",
+    "browserEvidenceDirectory": ".seo-cache/performance/public-release/browser/"
+  },
+  "finalDataPathRelease": {
+    "commit": "1e69ed000b66f52386916aa9003358aac4683833",
+    "backendAction": "publicCalendarOverviewAction:listWindow",
+    "backendPublished": true,
+    "webPublished": true,
+    "existingBackendModulesPreserved": 261,
+    "installedBackendModules": 263,
+    "backendDigest": "6b7677f7f6a668c288ff5daad8a17763366738dfce346b6bc7de6b90aca02be6",
+    "releaseChecksPassed": 126,
+    "releaseLogSha256": "213e92d15acd2ab4c4cf19678cd5dd8d98075bd5c2a6c28fff25ec36fc9f6ca1",
+    "publicApiIdentityJsonBytes": {
+      "home": {
+        "before": 548709,
+        "after": 190486
+      },
+      "map": {
+        "before": 1145709,
+        "after": 161549
+      }
+    },
+    "publicApiContentDigestsMatched": true,
+    "detailedEventsReceivedByNext": {
+      "home": {
+        "before": 478,
+        "after": 37
+      },
+      "map": {
+        "before": 342,
+        "after": 37
+      }
+    },
+    "databaseReadReductionClaimed": false,
+    "remainingColdWindowMs": {
+      "first": 5279,
+      "repeat": 499
+    },
+    "rejectedQueryCandidate": {
+      "webPublished": false,
+      "commit": "30b848bdca571b5c4797ae057d2d086dc2bded64",
+      "novelArgumentWeekMs": 17067,
+      "immediateRepeatMs": 112
+    },
+    "webBuildId": "pyj4NSlpNt9-6Z1pSQAgR"
+  },
+  "architecture": [
+    "Next.js 15.5.20",
+    "React 19.2.7",
+    "TypeScript",
+    "Tailwind CSS 4",
+    "Convex",
+    "Clerk",
+    "Docker/Traefik"
+  ],
+  "bundlesLinux": {
+    "method": "Union of initial JS referenced by the actual Linux production app-build manifests; gzip is a reproducible estimate, not browser wire bytes.",
+    "before": {
+      "release": "calendar-strip-85a1342",
+      "buildId": "JDyq4K6y63yk6TwoPpyil",
+      "layout": {
+        "jsRequests": 11,
+        "bytes": 614967,
+        "gzipBytes": 182171
+      },
+      "home": {
+        "jsRequests": 13,
+        "bytes": 652608,
+        "gzipBytes": 194957
+      },
+      "map": {
+        "jsRequests": 13,
+        "bytes": 666872,
+        "gzipBytes": 199391
+      }
+    },
+    "after": {
+      "release": "day-loading-1e69ed0",
+      "buildId": "pyj4NSlpNt9-6Z1pSQAgR",
+      "layout": {
+        "jsRequests": 10,
+        "bytes": 547612,
+        "gzipBytes": 163110
+      },
+      "home": {
+        "jsRequests": 12,
+        "bytes": 585253,
+        "gzipBytes": 175896
+      },
+      "map": {
+        "jsRequests": 12,
+        "bytes": 599393,
+        "gzipBytes": 180281
+      }
+    }
+  },
+  "verification": {
+    "releaseChecksPassed": 126,
+    "includesProductionBuild": true,
+    "linuxProductionBuildPassed": true,
+    "diffCheckPassed": true,
+    "corePublicSliderPassed": true,
+    "publicMapIdentity": {
+      "selectedDayCards": 37,
+      "markerLabels": 33,
+      "dateSwitchAndKeyboardActivationPassed": true
+    },
+    "authenticatedSaveWriteVerified": false,
+    "anonymousSaveSignInPromptVerified": true,
+    "fieldInpAvailable": false,
+    "fieldCruxAvailable": false,
+    "universalPageLatencySpeedupEstablished": false,
+    "all72PublicNavigationHttp200AndExpectedBuild": true,
+    "all12PublicNavigationDataSnapshotsMatched": true,
+    "publicMapReady12SamplesPassed": true,
+    "broaderPublicBrowserPassClaimed": false,
+    "deploymentGuardProtectedRuntimeAndBackendUnchanged": true
+  },
+  "report": "PERFORMANCE-AUDIT-REPORT.md",
+  "historicalLocalAudit": {
+    "analyzedAt": "2026-10-20T20:41:45.688557+00:00",
+    "baselineCommit": "b282315b73f6df1c70b3d17c62e07d4d98714745",
+    "architecture": [
+      "Next.js 15.5.20",
+      "React 19.2.7",
+      "TypeScript",
+      "Tailwind CSS 4",
+      "Convex",
+      "Clerk",
+      "Docker/Traefik"
+    ],
+    "methodology": {
+      "profiles": {
+        "desktop": {
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "mobile": false,
+          "cpu": 1,
+          "latency": 20,
+          "download": 1250000,
+          "upload": 625000
+        },
+        "mobile": {
+          "viewport": {
+            "width": 390,
+            "height": 844
+          },
+          "mobile": true,
+          "cpu": 4,
+          "latency": 150,
+          "download": 200000,
+          "upload": 93750
+        }
+      },
+      "browserRunsPerDeviceRouteVisit": 3,
+      "productionBuild": true,
+      "localClerkEnabled": false,
+      "backend": "Real public Convex; process/server caches not reset per browser context",
+      "observationMs": 1800,
+      "workstationCpuIsolated": false,
+      "fieldInpAvailable": false,
+      "fieldCruxAvailable": false,
+      "limitations": [
+        "Public poster/tile loads can extend beyond observation window.",
+        "Live-origin data include Clerk but are separate one-sample corroboration.",
+        "Sequential phases show variable host/network/backend timing; no general page or interaction speedup established.",
+        "Control host load average reached316.33/129.89/70.14; reliable causal page/interaction comparison was not possible. Further timing stopped after current exploratory pair."
+      ],
+      "observedControlHostLoadAverage": [
+        316.33,
+        129.89,
+        70.14
+      ]
+    },
+    "implementedFiles": [
+      "app/layout.tsx",
+      "app/(main)/events-browse-page.tsx",
+      "lib/venues/venue-open-now.ts"
+    ],
+    "bundles": {
+      "before": {
+        "layout": {
+          "bytes": 615118,
+          "gzipBytes": 182518,
+          "jsRequests": 11
+        },
+        "home": {
+          "bytes": 650334,
+          "gzipBytes": 194569,
+          "jsRequests": 13
+        },
+        "map": {
+          "bytes": 664968,
+          "gzipBytes": 199207,
+          "jsRequests": 13
+        }
+      },
+      "after": {
+        "layout": {
+          "bytes": 547763,
+          "gzipBytes": 163412,
+          "jsRequests": 10
+        },
+        "home": {
+          "bytes": 582979,
+          "gzipBytes": 175463,
+          "jsRequests": 12
+        },
+        "map": {
+          "bytes": 597489,
+          "gzipBytes": 180053,
+          "jsRequests": 12
+        }
+      }
+    },
+    "activeAgendaCpu": {
+      "fixtureSha256": "f84da83cd1e1949637a8617a0add6876d3f02ff8e2cbb4b72e564a790189c1b0",
+      "allEvents": 478,
+      "selectedDate": "2026-10-20",
+      "selectedEvents": 37,
+      "groupedEvents": 0,
+      "individualEvents": 37,
+      "callsPerRenderBefore": 148,
+      "callsPerRenderAfter": 37,
+      "rendersPerSample": 10,
+      "warmSamples": 11,
+      "description": "Pure time-presentation derivation for the single active mobile-style agenda (also used on desktop). Before: 4 calls per individual event and 2 per venue-group event; after: 1 per event. Alternating before/after order, one discarded warmup. CPU clock uses process.cpuUsage user+system deltas; wall clock uses performance.now. Excludes page/render/network cost.",
+      "outputBeforeSha256": "58c001eb39b3ea46945909b6234f193c8a5f579cb49de6f709fc5404515e8acc",
+      "outputAfterSha256": "58c001eb39b3ea46945909b6234f193c8a5f579cb49de6f709fc5404515e8acc",
+      "results": {
+        "before": {
+          "wallMsPerRender": {
+            "samples": [
+              47.935,
+              43.65,
+              36.746,
+              40.654,
+              36.072,
+              32.531,
+              36.455,
+              38.06,
+              33.681,
+              33.758,
+              36.798
+            ],
+            "median": 36.746,
+            "min": 32.531,
+            "max": 47.935
+          },
+          "cpuMsPerRender": {
+            "samples": [
+              25.357,
+              30.19,
+              25.664,
+              22.667,
+              21.534,
+              22.038,
+              20.964,
+              21.545,
+              21.877,
+              21.453,
+              23.136
+            ],
+            "median": 22.038,
+            "min": 20.964,
+            "max": 30.19
+          }
+        },
+        "after": {
+          "wallMsPerRender": {
+            "samples": [
+              11.166,
+              9.596,
+              10.974,
+              13.194,
+              9.599,
+              9.867,
+              7.755,
+              9.396,
+              8.547,
+              9.007,
+              10.176
+            ],
+            "median": 9.599,
+            "min": 7.755,
+            "max": 13.194
+          },
+          "cpuMsPerRender": {
+            "samples": [
+              12.247,
+              7.665,
+              8.759,
+              5.53,
+              5.523,
+              6.857,
+              7.806,
+              5.41,
+              6.448,
+              5.234,
+              5.985
+            ],
+            "median": 6.448,
+            "min": 5.234,
+            "max": 12.247
+          }
+        }
+      }
+    },
+    "loads": [
+      {
+        "profile": "desktop",
+        "route": "/",
+        "label": "Home",
+        "visit": "first",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 60.7,
+            "fcp": 352,
+            "lcp": 352,
+            "cls": 0,
+            "transferredBytes": 328724,
+            "jsBytes": 213696,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 429803,
+            "eventCount": 37
+          },
+          "ttfbRangeMs": [
+            60.3,
+            1738.5
+          ],
+          "lcpRangeMs": [
+            316,
+            2040
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 50.8,
+            "fcp": 308,
+            "lcp": 308,
+            "cls": 0,
+            "transferredBytes": 308163,
+            "jsBytes": 193139,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 429153,
+            "eventCount": 37
+          },
+          "ttfbRangeMs": [
+            49.5,
+            1435.9
+          ],
+          "lcpRangeMs": [
+            304,
+            1748
+          ]
+        }
+      },
+      {
+        "profile": "desktop",
+        "route": "/",
+        "label": "Home",
+        "visit": "repeat",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 68.9,
+            "fcp": 164,
+            "lcp": 164,
+            "cls": 0,
+            "transferredBytes": 96660,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 429803,
+            "eventCount": 37
+          },
+          "ttfbRangeMs": [
+            57.2,
+            70
+          ],
+          "lcpRangeMs": [
+            164,
+            180
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 50.9,
+            "fcp": 136,
+            "lcp": 136,
+            "cls": 0,
+            "transferredBytes": 96509,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 429153,
+            "eventCount": 37
+          },
+          "ttfbRangeMs": [
+            50.1,
+            58.9
+          ],
+          "lcpRangeMs": [
+            136,
+            152
+          ]
+        }
+      },
+      {
+        "profile": "desktop",
+        "route": "/discover",
+        "label": "Discover",
+        "visit": "first",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 12.1,
+            "fcp": 164,
+            "lcp": 1352,
+            "cls": 0,
+            "transferredBytes": 680451,
+            "jsBytes": 222686,
+            "imageBytes": 414470,
+            "htmlDecodedBytes": 96786,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            10.1,
+            17.1
+          ],
+          "lcpRangeMs": [
+            1188,
+            5564
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 10.8,
+            "fcp": 156,
+            "lcp": 1284,
+            "cls": 0,
+            "transferredBytes": 659839,
+            "jsBytes": 202073,
+            "imageBytes": 414470,
+            "htmlDecodedBytes": 96076,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            7.7,
+            12.8
+          ],
+          "lcpRangeMs": [
+            1132,
+            1340
+          ]
+        }
+      },
+      {
+        "profile": "desktop",
+        "route": "/discover",
+        "label": "Discover",
+        "visit": "repeat",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 12.6,
+            "fcp": 72,
+            "lcp": 380,
+            "cls": 0,
+            "transferredBytes": 24926,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 96786,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            7.2,
+            13.5
+          ],
+          "lcpRangeMs": [
+            380,
+            380
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 14,
+            "fcp": 76,
+            "lcp": 388,
+            "cls": 0,
+            "transferredBytes": 24781,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 96076,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            13.3,
+            17.7
+          ],
+          "lcpRangeMs": [
+            380,
+            392
+          ]
+        }
+      },
+      {
+        "profile": "desktop",
+        "route": "/map",
+        "label": "Map",
+        "visit": "first",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 10,
+            "fcp": 172,
+            "lcp": 1348,
+            "cls": 0,
+            "transferredBytes": 929462,
+            "jsBytes": 264574,
+            "imageBytes": 588690,
+            "htmlDecodedBytes": 284590,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            8,
+            10.8
+          ],
+          "lcpRangeMs": [
+            848,
+            1424
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 6.3,
+            "fcp": 168,
+            "lcp": 1132,
+            "cls": 0,
+            "transferredBytes": 908985,
+            "jsBytes": 243969,
+            "imageBytes": 588821,
+            "htmlDecodedBytes": 283880,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            6.1,
+            9.9
+          ],
+          "lcpRangeMs": [
+            876,
+            1436
+          ]
+        }
+      },
+      {
+        "profile": "desktop",
+        "route": "/map",
+        "label": "Map",
+        "visit": "repeat",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 8.2,
+            "fcp": 88,
+            "lcp": 720,
+            "cls": 0,
+            "transferredBytes": 53074,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 284590,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            7.9,
+            16.3
+          ],
+          "lcpRangeMs": [
+            468,
+            1084
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 9.1,
+            "fcp": 84,
+            "lcp": 608,
+            "cls": 0,
+            "transferredBytes": 52978,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 283880,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            8.8,
+            11.6
+          ],
+          "lcpRangeMs": [
+            520,
+            636
+          ]
+        }
+      },
+      {
+        "profile": "desktop",
+        "route": "/venues/directory",
+        "label": "Directory",
+        "visit": "first",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 337.1,
+            "fcp": 564,
+            "lcp": 564,
+            "cls": 0,
+            "transferredBytes": 261067,
+            "jsBytes": 207466,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 130863,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            316.7,
+            389.6
+          ],
+          "lcpRangeMs": [
+            540,
+            620
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 335.7,
+            "fcp": 560,
+            "lcp": 560,
+            "cls": 0,
+            "transferredBytes": 240519,
+            "jsBytes": 186909,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 130153,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            317.3,
+            475.9
+          ],
+          "lcpRangeMs": [
+            544,
+            700
+          ]
+        }
+      },
+      {
+        "profile": "desktop",
+        "route": "/venues/directory",
+        "label": "Directory",
+        "visit": "repeat",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 367.7,
+            "fcp": 440,
+            "lcp": 440,
+            "cls": 0,
+            "transferredBytes": 35232,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 130863,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            344.9,
+            550.1
+          ],
+          "lcpRangeMs": [
+            420,
+            628
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 326.2,
+            "fcp": 400,
+            "lcp": 400,
+            "cls": 0,
+            "transferredBytes": 35095,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 130153,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            326.1,
+            497.8
+          ],
+          "lcpRangeMs": [
+            400,
+            580
+          ]
+        }
+      },
+      {
+        "profile": "desktop",
+        "route": "/events/j57a2771fmz34wge7wzp997xz98gbfc1",
+        "label": "Event detail",
+        "visit": "first",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 147.1,
+            "fcp": 352,
+            "lcp": 664,
+            "cls": 0,
+            "transferredBytes": 317580,
+            "jsBytes": 214562,
+            "imageBytes": 59972,
+            "htmlDecodedBytes": 69984,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            83.3,
+            239.1
+          ],
+          "lcpRangeMs": [
+            516,
+            692
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 156.5,
+            "fcp": 316,
+            "lcp": 496,
+            "cls": 0,
+            "transferredBytes": 297024,
+            "jsBytes": 194005,
+            "imageBytes": 59972,
+            "htmlDecodedBytes": 69274,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            87.9,
+            357.1
+          ],
+          "lcpRangeMs": [
+            404,
+            1124
+          ]
+        }
+      },
+      {
+        "profile": "desktop",
+        "route": "/events/j57a2771fmz34wge7wzp997xz98gbfc1",
+        "label": "Event detail",
+        "visit": "repeat",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 125.4,
+            "fcp": 196,
+            "lcp": 196,
+            "cls": 0,
+            "transferredBytes": 24677,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 69984,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            75.1,
+            126.4
+          ],
+          "lcpRangeMs": [
+            156,
+            288
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 100.8,
+            "fcp": 168,
+            "lcp": 172,
+            "cls": 0,
+            "transferredBytes": 24532,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 69274,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            93.2,
+            105.1
+          ],
+          "lcpRangeMs": [
+            164,
+            200
+          ]
+        }
+      },
+      {
+        "profile": "desktop",
+        "route": "/venues/k178td4ewg6hpeqk1rqk4t07x589664x",
+        "label": "Venue detail",
+        "visit": "first",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 80.7,
+            "fcp": 224,
+            "lcp": 548,
+            "cls": 0,
+            "transferredBytes": 606306,
+            "jsBytes": 213906,
+            "imageBytes": 354790,
+            "htmlDecodedBytes": 56967,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            79.9,
+            617.7
+          ],
+          "lcpRangeMs": [
+            504,
+            1136
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 99.4,
+            "fcp": 236,
+            "lcp": 640,
+            "cls": 0,
+            "transferredBytes": 585759,
+            "jsBytes": 193349,
+            "imageBytes": 354790,
+            "htmlDecodedBytes": 56257,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            82.1,
+            508.4
+          ],
+          "lcpRangeMs": [
+            512,
+            1276
+          ]
+        }
+      },
+      {
+        "profile": "desktop",
+        "route": "/venues/k178td4ewg6hpeqk1rqk4t07x589664x",
+        "label": "Venue detail",
+        "visit": "repeat",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 74.4,
+            "fcp": 132,
+            "lcp": 132,
+            "cls": 0,
+            "transferredBytes": 19241,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 56967,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            70.7,
+            96.1
+          ],
+          "lcpRangeMs": [
+            124,
+            156
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 90.9,
+            "fcp": 140,
+            "lcp": 140,
+            "cls": 0,
+            "transferredBytes": 19105,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 56257,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            90,
+            98.2
+          ],
+          "lcpRangeMs": [
+            128,
+            140
+          ]
+        }
+      },
+      {
+        "profile": "mobile",
+        "route": "/",
+        "label": "Home",
+        "visit": "first",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 54.9,
+            "fcp": 1124,
+            "lcp": 1124,
+            "cls": 0,
+            "transferredBytes": 328724,
+            "jsBytes": 213696,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 429803,
+            "eventCount": 37
+          },
+          "ttfbRangeMs": [
+            51.6,
+            1083.4
+          ],
+          "lcpRangeMs": [
+            1116,
+            2068
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 129.1,
+            "fcp": 1132,
+            "lcp": 1132,
+            "cls": 0,
+            "transferredBytes": 308164,
+            "jsBytes": 193139,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 429153,
+            "eventCount": 37
+          },
+          "ttfbRangeMs": [
+            41.1,
+            1286
+          ],
+          "lcpRangeMs": [
+            1132,
+            2276
+          ]
+        }
+      },
+      {
+        "profile": "mobile",
+        "route": "/",
+        "label": "Home",
+        "visit": "repeat",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 53.4,
+            "fcp": 252,
+            "lcp": 252,
+            "cls": 0,
+            "transferredBytes": 96659,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 429803,
+            "eventCount": 37
+          },
+          "ttfbRangeMs": [
+            49.7,
+            137.3
+          ],
+          "lcpRangeMs": [
+            248,
+            256
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 44.8,
+            "fcp": 248,
+            "lcp": 248,
+            "cls": 0,
+            "transferredBytes": 96510,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 429153,
+            "eventCount": 37
+          },
+          "ttfbRangeMs": [
+            42.6,
+            52.1
+          ],
+          "lcpRangeMs": [
+            244,
+            256
+          ]
+        }
+      },
+      {
+        "profile": "mobile",
+        "route": "/discover",
+        "label": "Discover",
+        "visit": "first",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 9,
+            "fcp": 840,
+            "lcp": 1240,
+            "cls": 0,
+            "transferredBytes": 265981,
+            "jsBytes": 222686,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 96786,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            8.8,
+            10.8
+          ],
+          "lcpRangeMs": [
+            1216,
+            3336
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 12,
+            "fcp": 836,
+            "lcp": 3488,
+            "cls": 0,
+            "transferredBytes": 3675936,
+            "jsBytes": 202073,
+            "imageBytes": 3430567,
+            "htmlDecodedBytes": 96076,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            10.2,
+            26.3
+          ],
+          "lcpRangeMs": [
+            1268,
+            3576
+          ]
+        }
+      },
+      {
+        "profile": "mobile",
+        "route": "/discover",
+        "label": "Discover",
+        "visit": "repeat",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 8.3,
+            "fcp": 228,
+            "lcp": 580,
+            "cls": 0,
+            "transferredBytes": 24926,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 96786,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            8.3,
+            11.2
+          ],
+          "lcpRangeMs": [
+            576,
+            596
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 98.6,
+            "fcp": 440,
+            "lcp": 1296,
+            "cls": 0,
+            "transferredBytes": 27988,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 96076,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            8.2,
+            3752
+          ],
+          "lcpRangeMs": [
+            572,
+            7464
+          ]
+        }
+      },
+      {
+        "profile": "mobile",
+        "route": "/map",
+        "label": "Map",
+        "visit": "first",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 9.6,
+            "fcp": 864,
+            "lcp": 3604,
+            "cls": 0,
+            "transferredBytes": 376432,
+            "jsBytes": 264574,
+            "imageBytes": 35660,
+            "htmlDecodedBytes": 284590,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            7.1,
+            10
+          ],
+          "lcpRangeMs": [
+            3576,
+            3612
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 524.9,
+            "fcp": 1860,
+            "lcp": 2580,
+            "cls": 0,
+            "transferredBytes": 320165,
+            "jsBytes": 243969,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 283880,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            40.8,
+            987
+          ],
+          "lcpRangeMs": [
+            1764,
+            35844
+          ]
+        }
+      },
+      {
+        "profile": "mobile",
+        "route": "/map",
+        "label": "Map",
+        "visit": "repeat",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 7.3,
+            "fcp": 280,
+            "lcp": 1364,
+            "cls": 0,
+            "transferredBytes": 109040,
+            "jsBytes": 0,
+            "imageBytes": 53727,
+            "htmlDecodedBytes": 284590,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            7.1,
+            8
+          ],
+          "lcpRangeMs": [
+            1332,
+            1460
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 49.8,
+            "fcp": 336,
+            "lcp": 2660,
+            "cls": 0,
+            "transferredBytes": 190998,
+            "jsBytes": 0,
+            "imageBytes": 112170,
+            "htmlDecodedBytes": 283880,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            42.8,
+            68.4
+          ],
+          "lcpRangeMs": [
+            2180,
+            4120
+          ]
+        }
+      },
+      {
+        "profile": "mobile",
+        "route": "/venues/directory",
+        "label": "Directory",
+        "visit": "first",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 559.6,
+            "fcp": 1276,
+            "lcp": 1276,
+            "cls": 0,
+            "transferredBytes": 261067,
+            "jsBytes": 207466,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 130863,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            339.2,
+            694.7
+          ],
+          "lcpRangeMs": [
+            1044,
+            1396
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 670.5,
+            "fcp": 1708,
+            "lcp": 1708,
+            "cls": 0,
+            "transferredBytes": 240519,
+            "jsBytes": 186909,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 130153,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            553.6,
+            825.8
+          ],
+          "lcpRangeMs": [
+            1412,
+            2228
+          ]
+        }
+      },
+      {
+        "profile": "mobile",
+        "route": "/venues/directory",
+        "label": "Directory",
+        "visit": "repeat",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 453.8,
+            "fcp": 512,
+            "lcp": 564,
+            "cls": 0,
+            "transferredBytes": 35232,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 130863,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            447.5,
+            470.7
+          ],
+          "lcpRangeMs": [
+            560,
+            572
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 671.3,
+            "fcp": 892,
+            "lcp": 892,
+            "cls": 0,
+            "transferredBytes": 35095,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 130153,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            522.1,
+            946
+          ],
+          "lcpRangeMs": [
+            692,
+            1140
+          ]
+        }
+      },
+      {
+        "profile": "mobile",
+        "route": "/events/j57a2771fmz34wge7wzp997xz98gbfc1",
+        "label": "Event detail",
+        "visit": "first",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 149.4,
+            "fcp": 848,
+            "lcp": 848,
+            "cls": 0,
+            "transferredBytes": 317580,
+            "jsBytes": 214562,
+            "imageBytes": 59972,
+            "htmlDecodedBytes": 69984,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            110.5,
+            162.1
+          ],
+          "lcpRangeMs": [
+            836,
+            908
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 109.8,
+            "fcp": 1080,
+            "lcp": 1080,
+            "cls": 0,
+            "transferredBytes": 297024,
+            "jsBytes": 194005,
+            "imageBytes": 59972,
+            "htmlDecodedBytes": 69274,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            97.9,
+            310.5
+          ],
+          "lcpRangeMs": [
+            1052,
+            1280
+          ]
+        }
+      },
+      {
+        "profile": "mobile",
+        "route": "/events/j57a2771fmz34wge7wzp997xz98gbfc1",
+        "label": "Event detail",
+        "visit": "repeat",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 108,
+            "fcp": 212,
+            "lcp": 272,
+            "cls": 0,
+            "transferredBytes": 24677,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 69984,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            83.5,
+            108.4
+          ],
+          "lcpRangeMs": [
+            268,
+            276
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 145.6,
+            "fcp": 292,
+            "lcp": 348,
+            "cls": 0,
+            "transferredBytes": 24532,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 69274,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            96.5,
+            163
+          ],
+          "lcpRangeMs": [
+            312,
+            412
+          ]
+        }
+      },
+      {
+        "profile": "mobile",
+        "route": "/venues/k178td4ewg6hpeqk1rqk4t07x589664x",
+        "label": "Venue detail",
+        "visit": "first",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 72.5,
+            "fcp": 872,
+            "lcp": 2800,
+            "cls": 0,
+            "transferredBytes": 606306,
+            "jsBytes": 213906,
+            "imageBytes": 354790,
+            "htmlDecodedBytes": 56967,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            67.3,
+            516.5
+          ],
+          "lcpRangeMs": [
+            2784,
+            3496
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 319.2,
+            "fcp": 1108,
+            "lcp": 3272,
+            "cls": 0,
+            "transferredBytes": 585759,
+            "jsBytes": 193349,
+            "imageBytes": 354790,
+            "htmlDecodedBytes": 56257,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            148.6,
+            500.8
+          ],
+          "lcpRangeMs": [
+            2980,
+            3272
+          ]
+        }
+      },
+      {
+        "profile": "mobile",
+        "route": "/venues/k178td4ewg6hpeqk1rqk4t07x589664x",
+        "label": "Venue detail",
+        "visit": "repeat",
+        "before": {
+          "samples": 3,
+          "median": {
+            "ttfb": 76.5,
+            "fcp": 212,
+            "lcp": 252,
+            "cls": 0,
+            "transferredBytes": 19241,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 56967,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            71.5,
+            94.9
+          ],
+          "lcpRangeMs": [
+            224,
+            260
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "median": {
+            "ttfb": 120.3,
+            "fcp": 324,
+            "lcp": 324,
+            "cls": 0,
+            "transferredBytes": 19105,
+            "jsBytes": 0,
+            "imageBytes": 0,
+            "htmlDecodedBytes": 56257,
+            "eventCount": 0
+          },
+          "ttfbRangeMs": [
+            103.9,
+            2029.7
+          ],
+          "lcpRangeMs": [
+            308,
+            3452
+          ]
+        }
+      }
+    ],
+    "interactions": [
+      {
+        "profile": "desktop",
+        "flow": "calendar",
+        "action": "next-day",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 250.844,
+          "medianFirstInputToResultMs": 191,
+          "medianDocuments": 1,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 537.197,
+          "medianFirstInputToResultMs": 464.7,
+          "medianDocuments": 1,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "calendar",
+        "action": "browser-back",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 181.305,
+          "medianFirstInputToResultMs": null,
+          "medianDocuments": 1,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 1243.009,
+          "medianFirstInputToResultMs": null,
+          "medianDocuments": 1,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "calendar",
+        "action": "previous-day",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 217.974,
+          "medianFirstInputToResultMs": 151.7,
+          "medianDocuments": 1,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 1596.207,
+          "medianFirstInputToResultMs": 1327.9,
+          "medianDocuments": 1,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "calendar",
+        "action": "next-day-return",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 254.844,
+          "medianFirstInputToResultMs": 189.6,
+          "medianDocuments": 1,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 1278.896,
+          "medianFirstInputToResultMs": 1109.3,
+          "medianDocuments": 1,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "calendar",
+        "action": "focus-category",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 130.715,
+          "medianFirstInputToResultMs": 84,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 599.365,
+          "medianFirstInputToResultMs": 272.3,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "calendar",
+        "action": "show-all-categories",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 130.769,
+          "medianFirstInputToResultMs": 58.6,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 552.463,
+          "medianFirstInputToResultMs": 333.4,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "calendar",
+        "action": "search-submit-no-match",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 96.241,
+          "medianFirstInputToResultMs": 89.8,
+          "medianDocuments": 0,
+          "medianRscRequests": 3
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 616.319,
+          "medianFirstInputToResultMs": 535,
+          "medianDocuments": 0,
+          "medianRscRequests": 3
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "calendar",
+        "action": "search-clear",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 149.753,
+          "medianFirstInputToResultMs": 144.8,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 295.282,
+          "medianFirstInputToResultMs": 215.7,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "calendar",
+        "action": "sort-venue",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 51.993,
+          "medianFirstInputToResultMs": 46.8,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 161.981,
+          "medianFirstInputToResultMs": 111.6,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "calendar",
+        "action": "filter-venue",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 83.131,
+          "medianFirstInputToResultMs": 79,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 297.469,
+          "medianFirstInputToResultMs": 277.2,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "calendar",
+        "action": "clear-venue",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 118.913,
+          "medianFirstInputToResultMs": 115.9,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 508.642,
+          "medianFirstInputToResultMs": 491.2,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "calendar",
+        "action": "open-now-on",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 145.266,
+          "medianFirstInputToResultMs": 94.2,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 978.931,
+          "medianFirstInputToResultMs": 807.2,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "calendar",
+        "action": "open-now-off",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 177.218,
+          "medianFirstInputToResultMs": 128,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 669.055,
+          "medianFirstInputToResultMs": 554,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "calendar",
+        "action": "event-detail",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 380.583,
+          "medianFirstInputToResultMs": 339,
+          "medianDocuments": 0,
+          "medianRscRequests": 3
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 1139.378,
+          "medianFirstInputToResultMs": 927.5,
+          "medianDocuments": 0,
+          "medianRscRequests": 3
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "calendar",
+        "action": "event-detail-back",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 239.823,
+          "medianFirstInputToResultMs": 207.7,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 1112.682,
+          "medianFirstInputToResultMs": 929.8,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "map",
+        "action": "select-day",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 490.692,
+          "medianFirstInputToResultMs": 447.4,
+          "medianDocuments": 1,
+          "medianRscRequests": 2
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 1163.349,
+          "medianFirstInputToResultMs": 1072.4,
+          "medianDocuments": 1,
+          "medianRscRequests": 2
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "map",
+        "action": "marker-popup-or-lineup",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 96.07,
+          "medianFirstInputToResultMs": 71.7,
+          "medianDocuments": 0,
+          "medianRscRequests": 0
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 329.33,
+          "medianFirstInputToResultMs": 201.9,
+          "medianDocuments": 0,
+          "medianRscRequests": 0
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "directory",
+        "action": "next-page",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 496.916,
+          "medianFirstInputToResultMs": 424.6,
+          "medianDocuments": 1,
+          "medianRscRequests": 2
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 1180.49,
+          "medianFirstInputToResultMs": 1059.8,
+          "medianDocuments": 1,
+          "medianRscRequests": 2
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "directory",
+        "action": "search-venue",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 437.879,
+          "medianFirstInputToResultMs": 390.1,
+          "medianDocuments": 1,
+          "medianRscRequests": 2
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 957.457,
+          "medianFirstInputToResultMs": 804.9,
+          "medianDocuments": 1,
+          "medianRscRequests": 2
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "discover",
+        "action": "read-more",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 81.648,
+          "medianFirstInputToResultMs": 36,
+          "medianDocuments": 0,
+          "medianRscRequests": 2
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 107.774,
+          "medianFirstInputToResultMs": 49.8,
+          "medianDocuments": 0,
+          "medianRscRequests": 2
+        }
+      },
+      {
+        "profile": "desktop",
+        "flow": "discover",
+        "action": "append-posts",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 196.275,
+          "medianFirstInputToResultMs": null,
+          "medianDocuments": 0,
+          "medianRscRequests": 4
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 706.971,
+          "medianFirstInputToResultMs": null,
+          "medianDocuments": 0,
+          "medianRscRequests": 4
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "calendar",
+        "action": "next-day",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 873.596,
+          "medianFirstInputToResultMs": 779.3,
+          "medianDocuments": 1,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 1088.784,
+          "medianFirstInputToResultMs": 909.3,
+          "medianDocuments": 1,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "calendar",
+        "action": "browser-back",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 728.941,
+          "medianFirstInputToResultMs": null,
+          "medianDocuments": 1,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 1039.358,
+          "medianFirstInputToResultMs": null,
+          "medianDocuments": 1,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "calendar",
+        "action": "previous-day",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 693.364,
+          "medianFirstInputToResultMs": 594.9,
+          "medianDocuments": 1,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 1057.432,
+          "medianFirstInputToResultMs": 796,
+          "medianDocuments": 1,
+          "medianRscRequests": 0
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "calendar",
+        "action": "next-day-return",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 816.128,
+          "medianFirstInputToResultMs": 722.0,
+          "medianDocuments": 1,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 1323.391,
+          "medianFirstInputToResultMs": 1034.4,
+          "medianDocuments": 1,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "calendar",
+        "action": "focus-category",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 113.011,
+          "medianFirstInputToResultMs": 72.9,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 369.951,
+          "medianFirstInputToResultMs": 210.1,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "calendar",
+        "action": "show-all-categories",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 117.151,
+          "medianFirstInputToResultMs": 75.3,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 531.742,
+          "medianFirstInputToResultMs": 353.9,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "calendar",
+        "action": "search-submit-no-match",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 353.665,
+          "medianFirstInputToResultMs": 334.4,
+          "medianDocuments": 0,
+          "medianRscRequests": 3
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 620.211,
+          "medianFirstInputToResultMs": 434.8,
+          "medianDocuments": 0,
+          "medianRscRequests": 3
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "calendar",
+        "action": "search-clear",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 546.436,
+          "medianFirstInputToResultMs": 535.1,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 719.464,
+          "medianFirstInputToResultMs": 645.2,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "calendar",
+        "action": "sort-venue",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 508.226,
+          "medianFirstInputToResultMs": 497.9,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 753.234,
+          "medianFirstInputToResultMs": 599,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "calendar",
+        "action": "filter-venue",
+        "before": {
+          "statuses": {
+            "skipped": 3
+          },
+          "medianActionToResultMs": null,
+          "medianFirstInputToResultMs": null,
+          "medianDocuments": null,
+          "medianRscRequests": null
+        },
+        "after": {
+          "statuses": {
+            "skipped": 3
+          },
+          "medianActionToResultMs": null,
+          "medianFirstInputToResultMs": null,
+          "medianDocuments": null,
+          "medianRscRequests": null
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "calendar",
+        "action": "clear-venue",
+        "before": {
+          "statuses": {
+            "skipped": 3
+          },
+          "medianActionToResultMs": null,
+          "medianFirstInputToResultMs": null,
+          "medianDocuments": null,
+          "medianRscRequests": null
+        },
+        "after": {
+          "statuses": {
+            "skipped": 3
+          },
+          "medianActionToResultMs": null,
+          "medianFirstInputToResultMs": null,
+          "medianDocuments": null,
+          "medianRscRequests": null
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "calendar",
+        "action": "open-now-on",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 458.261,
+          "medianFirstInputToResultMs": 424.7,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 1143.724,
+          "medianFirstInputToResultMs": 1042.3,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "calendar",
+        "action": "open-now-off",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 561.394,
+          "medianFirstInputToResultMs": 527.6,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 834.346,
+          "medianFirstInputToResultMs": 763.2,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "calendar",
+        "action": "event-detail",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 626.139,
+          "medianFirstInputToResultMs": 572.4,
+          "medianDocuments": 0,
+          "medianRscRequests": 3
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 1141.909,
+          "medianFirstInputToResultMs": 944.5,
+          "medianDocuments": 0,
+          "medianRscRequests": 3
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "calendar",
+        "action": "event-detail-back",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 843.346,
+          "medianFirstInputToResultMs": 776.1,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 1347.925,
+          "medianFirstInputToResultMs": 1227.3,
+          "medianDocuments": 0,
+          "medianRscRequests": 1
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "map",
+        "action": "select-day",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 639.91,
+          "medianFirstInputToResultMs": 576.2,
+          "medianDocuments": 1,
+          "medianRscRequests": 2
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 1695.205,
+          "medianFirstInputToResultMs": 1477,
+          "medianDocuments": 1,
+          "medianRscRequests": 2
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "map",
+        "action": "marker-popup-or-lineup",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 219.793,
+          "medianFirstInputToResultMs": 55.6,
+          "medianDocuments": 0,
+          "medianRscRequests": 0
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 634.79,
+          "medianFirstInputToResultMs": 228.7,
+          "medianDocuments": 0,
+          "medianRscRequests": 0
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "directory",
+        "action": "next-page",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 728.842,
+          "medianFirstInputToResultMs": 629.2,
+          "medianDocuments": 1,
+          "medianRscRequests": 2
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 1116.677,
+          "medianFirstInputToResultMs": 904.3,
+          "medianDocuments": 1,
+          "medianRscRequests": 2
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "directory",
+        "action": "search-venue",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 626.841,
+          "medianFirstInputToResultMs": 565.2,
+          "medianDocuments": 1,
+          "medianRscRequests": 2
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 1175.604,
+          "medianFirstInputToResultMs": 992,
+          "medianDocuments": 1,
+          "medianRscRequests": 2
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "discover",
+        "action": "read-more",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 224.582,
+          "medianFirstInputToResultMs": 58.1,
+          "medianDocuments": 0,
+          "medianRscRequests": 0
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 791.832,
+          "medianFirstInputToResultMs": 249.5,
+          "medianDocuments": 0,
+          "medianRscRequests": 0
+        }
+      },
+      {
+        "profile": "mobile",
+        "flow": "discover",
+        "action": "append-posts",
+        "before": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 671.093,
+          "medianFirstInputToResultMs": null,
+          "medianDocuments": 0,
+          "medianRscRequests": 3
+        },
+        "after": {
+          "statuses": {
+            "passed": 3
+          },
+          "medianActionToResultMs": 820.672,
+          "medianFirstInputToResultMs": null,
+          "medianDocuments": 0,
+          "medianRscRequests": 3
+        }
+      }
+    ],
+    "verification": {
+      "before": {
+        "navigationSamples": 72,
+        "navigationStatuses": {
+          "200": 72
+        },
+        "navigationErrors": [
+          {
+            "profile": "desktop",
+            "route": "/events/j57a2771fmz34wge7wzp997xz98gbfc1",
+            "run": 3,
+            "visit": "repeat",
+            "errors": [
+              "Minified React error #418; visit https://react.dev/errors/418?args[]=HTML&args[]= for the full message or use the non-minified dev environment for full errors and additional helpful warnings."
+            ]
+          }
+        ],
+        "interactionStatuses": {
+          "passed": 120,
+          "skipped": 6
+        },
+        "interactionErrors": []
+      },
+      "after": {
+        "navigationSamples": 72,
+        "navigationStatuses": {
+          "200": 72
+        },
+        "navigationErrors": [],
+        "interactionStatuses": {
+          "passed": 120,
+          "skipped": 6
+        },
+        "interactionErrors": []
+      }
+    },
+    "releaseGate": {
+      "status": "passed",
+      "checks": 126,
+      "includesProductionBuild": true
+    },
+    "priorities": [
+      {
+        "priority": "P1",
+        "issue": "Full-month calendar waterfall",
+        "status": "proposal",
+        "observed": {
+          "events": 478,
+          "pages": 10,
+          "eventJsonBytes": 323144,
+          "venueJsonBytes": 222889,
+          "sampledChainMs": 2947
+        }
+      },
+      {
+        "priority": "P1",
+        "issue": "Full-size posters",
+        "status": "proposal",
+        "observed": {
+          "posterWireBytes": 3123076,
+          "naturalWidth": 2160,
+          "displayedMobileWidth": 364
+        }
+      },
+      {
+        "priority": "P2",
+        "issue": "Directory overfetch",
+        "status": "proposal",
+        "observed": {
+          "venues": 678,
+          "jsonBytes": 704565,
+          "offlineCompactProjectionBytes": 162537
+        }
+      },
+      {
+        "priority": "P2",
+        "issue": "Intentional hard query navigation",
+        "status": "proposal"
+      },
+      {
+        "priority": "P2",
+        "issue": "Unused Convex browser provider",
+        "status": "implemented"
+      },
+      {
+        "priority": "P2",
+        "issue": "Repeated active-agenda time derivation",
+        "status": "implemented"
+      },
+      {
+        "priority": "P2",
+        "issue": "Intermittent React418 hydration mismatch",
+        "status": "unresolved; observed in original load phase and changed control",
+        "missingEvidence": "Responsible component stack and reproducible HTML/props mismatch."
+      },
+      {
+        "priority": "P3",
+        "issue": "Saved recommendations and Discover rerender/layout work",
+        "status": "requires targeted profiling"
+      }
+    ],
+    "conclusion": "Smaller initial JavaScript and fewer time-resolver calls / lower isolated CPU confirmed. Uniform page/interaction speedup not established; repeat on idle isolated runner before performance rollout claims.",
+    "exploratoryControl": {
+      "validPairs": 1,
+      "environment": {
+        "recordedAt": "2026-10-20T20:50:27.971336+00:00",
+        "earlierObservedLoadAverage": [
+          316.33251953125,
+          129.88671875,
+          70.1357421875
+        ],
+        "currentLoadAverage": [
+          329.39501953125,
+          205.39892578125,
+          108.8935546875
+        ],
+        "logicalCpuCount": 8,
+        "validPairs": 1,
+        "classification": "Exploratory only; severe shared-host contention makes timing attribution unverified. No medians or n=3 claims."
+      },
+      "results": {
+        "before": {
+          "origin": "http://127.0.0.1:3101",
+          "statuses": {
+            "passed": 28,
+            "skipped": 2
+          },
+          "pageErrors": []
+        },
+        "after": {
+          "origin": "http://127.0.0.1:3100",
+          "statuses": {
+            "passed": 28,
+            "skipped": 2
+          },
+          "pageErrors": [
+            {
+              "profile": "desktop",
+              "run": 1,
+              "url": "http://127.0.0.1:3100/",
+              "message": "Minified React error #418; visit https://react.dev/errors/418?args[]=HTML&args[]= for the full message or use the non-minified dev environment for full errors and additional helpful warnings."
+            }
+          ]
+        }
+      },
+      "comparison": {
+        "classification": "Exploratory n=1 only; severe shared-host contention invalidates performance attribution. Not INP.",
+        "rows": [
+          {
+            "profile": "desktop",
+            "action": "next-day",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 596.7048329999998,
+            "afterMs": 663.4482910000006,
+            "beforeDocuments": 1,
+            "afterDocuments": 1,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": 66.74345800000083
+          },
+          {
+            "profile": "desktop",
+            "action": "browser-back",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 2604.357084,
+            "afterMs": 1402.0188750000007,
+            "beforeDocuments": 1,
+            "afterDocuments": 1,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": -1202.3382089999996
+          },
+          {
+            "profile": "desktop",
+            "action": "previous-day",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 1410.2116669999996,
+            "afterMs": 2008.9174170000006,
+            "beforeDocuments": 1,
+            "afterDocuments": 1,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": 598.705750000001
+          },
+          {
+            "profile": "desktop",
+            "action": "next-day-return",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 2255.124416999999,
+            "afterMs": 2550.0719999999983,
+            "beforeDocuments": 1,
+            "afterDocuments": 1,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": 294.9475829999992
+          },
+          {
+            "profile": "desktop",
+            "action": "focus-category",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 731.9694589999999,
+            "afterMs": 817.1814169999998,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": 85.21195799999987
+          },
+          {
+            "profile": "desktop",
+            "action": "show-all-categories",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 676.8687499999996,
+            "afterMs": 550.0297919999994,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": -126.83895800000028
+          },
+          {
+            "profile": "desktop",
+            "action": "search-submit-no-match",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 668.7124590000021,
+            "afterMs": 1794.9350000000013,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 3,
+            "afterRsc": 3,
+            "differenceMs": 1126.2225409999992
+          },
+          {
+            "profile": "desktop",
+            "action": "search-clear",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 683.9066249999996,
+            "afterMs": 615.8273330000011,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": -68.07929199999853
+          },
+          {
+            "profile": "desktop",
+            "action": "sort-venue",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 211.04541600000084,
+            "afterMs": 150.99124999999913,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": -60.054166000001715
+          },
+          {
+            "profile": "desktop",
+            "action": "filter-venue",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 330.1937089999992,
+            "afterMs": 1317.336209000001,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": 987.1425000000017
+          },
+          {
+            "profile": "desktop",
+            "action": "clear-venue",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 701.3951249999991,
+            "afterMs": 37566.352167000005,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": 36864.95704200001
+          },
+          {
+            "profile": "desktop",
+            "action": "open-now-on",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 965.7957920000008,
+            "afterMs": 7066.246667000007,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": 6100.450875000006
+          },
+          {
+            "profile": "desktop",
+            "action": "open-now-off",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 617.505208999999,
+            "afterMs": 22258.226458999998,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": 21640.72125
+          },
+          {
+            "profile": "desktop",
+            "action": "event-detail",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 1005.8996660000012,
+            "afterMs": 4053.0628339999967,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 3,
+            "afterRsc": 3,
+            "differenceMs": 3047.1631679999955
+          },
+          {
+            "profile": "desktop",
+            "action": "event-detail-back",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 889.9407090000022,
+            "afterMs": 8782.551542000001,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": 7892.610832999999
+          },
+          {
+            "profile": "mobile",
+            "action": "next-day",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 1488.3042910000004,
+            "afterMs": 11584.362833000007,
+            "beforeDocuments": 1,
+            "afterDocuments": 1,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": 10096.058542000006
+          },
+          {
+            "profile": "mobile",
+            "action": "browser-back",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 1131.9728749999995,
+            "afterMs": 8197.431291,
+            "beforeDocuments": 1,
+            "afterDocuments": 1,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": 7065.458416000001
+          },
+          {
+            "profile": "mobile",
+            "action": "previous-day",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 1152.2797080000018,
+            "afterMs": 1799.0273330000055,
+            "beforeDocuments": 1,
+            "afterDocuments": 1,
+            "beforeRsc": 0,
+            "afterRsc": 1,
+            "differenceMs": 646.7476250000036
+          },
+          {
+            "profile": "mobile",
+            "action": "next-day-return",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 1596.8057079999999,
+            "afterMs": 2472.462750000006,
+            "beforeDocuments": 1,
+            "afterDocuments": 1,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": 875.6570420000062
+          },
+          {
+            "profile": "mobile",
+            "action": "focus-category",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 445.81141699999716,
+            "afterMs": 1417.7204579999961,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": 971.909040999999
+          },
+          {
+            "profile": "mobile",
+            "action": "show-all-categories",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 360.67345800000476,
+            "afterMs": 965.0995830000029,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": 604.4261249999981
+          },
+          {
+            "profile": "mobile",
+            "action": "search-submit-no-match",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 907.3183749999953,
+            "afterMs": 700.8598340000026,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 3,
+            "afterRsc": 3,
+            "differenceMs": -206.4585409999927
+          },
+          {
+            "profile": "mobile",
+            "action": "search-clear",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 801.0549170000013,
+            "afterMs": 1125.0505839999823,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": 323.99566699998104
+          },
+          {
+            "profile": "mobile",
+            "action": "sort-venue",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 662.4414580000011,
+            "afterMs": 781.7280829999945,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": 119.28662499999336
+          },
+          {
+            "profile": "mobile",
+            "action": "filter-venue",
+            "beforeStatus": "skipped",
+            "afterStatus": "skipped",
+            "beforeMs": null,
+            "afterMs": null,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 0,
+            "afterRsc": 0
+          },
+          {
+            "profile": "mobile",
+            "action": "clear-venue",
+            "beforeStatus": "skipped",
+            "afterStatus": "skipped",
+            "beforeMs": null,
+            "afterMs": null,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 0,
+            "afterRsc": 0
+          },
+          {
+            "profile": "mobile",
+            "action": "open-now-on",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 969.9041250000009,
+            "afterMs": 2566.089707999985,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 1,
+            "afterRsc": 2,
+            "differenceMs": 1596.185582999984
+          },
+          {
+            "profile": "mobile",
+            "action": "open-now-off",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 821.9181249999965,
+            "afterMs": 1287.0674590000126,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": 465.1493340000161
+          },
+          {
+            "profile": "mobile",
+            "action": "event-detail",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 1301.4870420000007,
+            "afterMs": 3200.6415419999976,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 3,
+            "afterRsc": 3,
+            "differenceMs": 1899.154499999997
+          },
+          {
+            "profile": "mobile",
+            "action": "event-detail-back",
+            "beforeStatus": "passed",
+            "afterStatus": "passed",
+            "beforeMs": 1544.465333,
+            "afterMs": 1558.221125000011,
+            "beforeDocuments": 0,
+            "afterDocuments": 0,
+            "beforeRsc": 1,
+            "afterRsc": 1,
+            "differenceMs": 13.755792000010842
+          }
+        ],
+        "beforePageerrors": [],
+        "afterPageerrors": [
+          {
+            "profile": "desktop",
+            "run": 1,
+            "url": "http://127.0.0.1:3100/",
+            "message": "Minified React error #418; visit https://react.dev/errors/418?args[]=HTML&args[]= for the full message or use the non-minified dev environment for full errors and additional helpful warnings."
+          }
+        ]
+      },
+      "conclusion": "No causal performance conclusion under severe shared-host contention. After control had one unattributed React418 hydration mismatch; semantic steps passed."
+    },
+    "calendarMapFollowUp": {
+      "deployed": false,
+      "productionAccess": "No deployment credentials configured in this worktree; user does not know where deployment is configured.",
+      "implemented": [
+        "Date-strip instant alignment, per-month/surface scroll restoration and managed client navigation",
+        "Selected-day event details with compact month overview",
+        "Map selected-day details, compact weekly counts, no full venue-directory request",
+        "Bounded 60-second overview cache with request coalescing and failure retry",
+        "Canonical-only calendar venue enrichment for deterministic unbound compatibility identities"
+      ],
+      "dataComparison": {
+        "measuredAt": "2026-10-20T21:20:54.787Z",
+        "fixtureCapturedAt": "2026-10-20T21:10:05.126Z",
+        "selectedDate": "2026-10-20",
+        "weekStart": "2026-10-19",
+        "weekEnd": "2026-10-26",
+        "caveat": "Frozen public snapshot; after overview uses the actual pure projection after the existing publication boundary. JSON bytes exclude HTTP envelopes/compression and real cursor length. No before/after latency claim; query runtime and private DB reads require a deployed backend.",
+        "home": {
+          "before": {
+            "detailedEvents": 478,
+            "responses": 12,
+            "jsonResponseBytes": 546033
+          },
+          "after": {
+            "detailedEvents": 37,
+            "responses": 12,
+            "jsonResponseBytes": 188187
+          }
+        },
+        "map": {
+          "before": {
+            "detailedEvents": 342,
+            "responses": 10,
+            "jsonResponseBytes": 1139224,
+            "directoryVenues": 678
+          },
+          "after": {
+            "detailedEvents": 37,
+            "responses": 9,
+            "jsonResponseBytes": 157690,
+            "directoryVenues": 0
+          }
+        }
+      },
+      "verification": {
+        "status": "passed_local_not_deployed",
+        "releaseLog": "/tmp/eventzeka-date-release.log",
+        "liveBaseline": "32 passed, 2 expected mobile venue-control skips; one existing React #418; page-load pass partial after 90s map timeout",
+        "controlledMethod": "Saved production builds, identical frozen public snapshot, unchanged Chromium viewport/throttle scripts; correctness only, no deployed DB latency claim",
+        "controlledInteractions": {
+          "before": {
+            "passed": 32,
+            "skipped": 2,
+            "failed": 0,
+            "pageErrors": 0
+          },
+          "after": {
+            "passed": 32,
+            "skipped": 2,
+            "failed": 0,
+            "pageErrors": 0
+          }
+        },
+        "sliderComparisonArtifact": ".seo-cache/performance/date-followup-controlled-slider-comparison.json",
+        "sliderResults": {
+          "nextDateDocumentReloads": {
+            "before": {
+              "desktop": 1,
+              "mobile": 1
+            },
+            "after": {
+              "desktop": 0,
+              "mobile": 0
+            }
+          },
+          "reloadDriftPx": {
+            "before": {
+              "desktop": 132,
+              "mobile": 122
+            },
+            "after": {
+              "desktop": 0,
+              "mobile": 0
+            }
+          },
+          "initialIntermediatePositions": {
+            "before": {
+              "desktop": 4,
+              "mobile": 28
+            },
+            "after": {
+              "desktop": 0,
+              "mobile": 0
+            }
+          }
+        },
+        "controlledSummaryArtifact": ".seo-cache/performance/date-followup-controlled-summary.json",
+        "countConsistency": {
+          "assertions": 4,
+          "passed": 4,
+          "pageErrors": 0,
+          "homeSelectedEvents": 37,
+          "homeMonthEvents": 478,
+          "novemberSelectedEvents": 0
+        },
+        "testServersStopped": true,
+        "anonymousConvex": {
+          "pushed": true,
+          "production": false,
+          "dataSeeded": false,
+          "smokeArtifact": ".seo-cache/performance/convex-local-validation/empty-overview-smoke.json",
+          "compilerConfigNote": "Fresh CLI-generated clone-only Convex config aligned to existing application TypeScript flags. Root configuration unchanged."
+        },
+        "releaseGate": {
+          "command": "npm run qa:release",
+          "exitCode": 0,
+          "checksPassed": 126,
+          "includesProductionBuild": true,
+          "log": "/tmp/eventzeka-date-release.log"
+        },
+        "diffCheck": "passed"
+      },
+      "artifactsPrefix": ".seo-cache/performance/date-followup-",
+      "deploymentOrder": [
+        "Publish additive Convex query",
+        "Deploy Next production build"
+      ],
+      "remainingLimitations": [
+        "Overview still reads bounded indexed event documents inside Convex for counters.",
+        "No authenticated Clerk session verification.",
+        "No reliable production before/after latency evidence from overloaded host."
+      ],
+      "bundles": {
+        "timestamp": "2026-10-20T21:27:34.758Z",
+        "layout": {
+          "files": [
+            {
+              "path": "static/chunks/webpack-416532c88d9ff884.js",
+              "bytes": 3576,
+              "gzipBytes": 1820
+            },
+            {
+              "path": "static/chunks/4bd1b696-f785427dddbba9fb.js",
+              "bytes": 173020,
+              "gzipBytes": 54359
+            },
+            {
+              "path": "static/chunks/1255-d90f22433f14e976.js",
+              "bytes": 173382,
+              "gzipBytes": 46336
+            },
+            {
+              "path": "static/chunks/main-app-9acf4580064a6541.js",
+              "bytes": 560,
+              "gzipBytes": 228
+            },
+            {
+              "path": "static/chunks/2619-3c9e02e22d10480a.js",
+              "bytes": 8538,
+              "gzipBytes": 3388
+            },
+            {
+              "path": "static/chunks/4018-bb00548e0309a288.js",
+              "bytes": 106965,
+              "gzipBytes": 29418
+            },
+            {
+              "path": "static/chunks/8909-d5e693b060a4b69c.js",
+              "bytes": 26737,
+              "gzipBytes": 8682
+            },
+            {
+              "path": "static/chunks/1503-663fdbde7681f000.js",
+              "bytes": 23767,
+              "gzipBytes": 8093
+            },
+            {
+              "path": "static/chunks/5273-45028f66a544a675.js",
+              "bytes": 10303,
+              "gzipBytes": 3864
+            },
+            {
+              "path": "static/chunks/app/layout-414019074ed1d99f.js",
+              "bytes": 21010,
+              "gzipBytes": 7260
+            }
+          ],
+          "bytes": 547858,
+          "gzipBytes": 163448,
+          "jsRequests": 10
+        },
+        "home": {
+          "files": [
+            {
+              "path": "static/chunks/webpack-416532c88d9ff884.js",
+              "bytes": 3576,
+              "gzipBytes": 1820
+            },
+            {
+              "path": "static/chunks/4bd1b696-f785427dddbba9fb.js",
+              "bytes": 173020,
+              "gzipBytes": 54359
+            },
+            {
+              "path": "static/chunks/1255-d90f22433f14e976.js",
+              "bytes": 173382,
+              "gzipBytes": 46336
+            },
+            {
+              "path": "static/chunks/main-app-9acf4580064a6541.js",
+              "bytes": 560,
+              "gzipBytes": 228
+            },
+            {
+              "path": "static/chunks/2619-3c9e02e22d10480a.js",
+              "bytes": 8538,
+              "gzipBytes": 3388
+            },
+            {
+              "path": "static/chunks/4018-bb00548e0309a288.js",
+              "bytes": 106965,
+              "gzipBytes": 29418
+            },
+            {
+              "path": "static/chunks/8909-d5e693b060a4b69c.js",
+              "bytes": 26737,
+              "gzipBytes": 8682
+            },
+            {
+              "path": "static/chunks/4086-945c9028dc1e4395.js",
+              "bytes": 10978,
+              "gzipBytes": 4212
+            },
+            {
+              "path": "static/chunks/app/page-73e9ddb10f9df5f6.js",
+              "bytes": 25806,
+              "gzipBytes": 8335
+            },
+            {
+              "path": "static/chunks/1503-663fdbde7681f000.js",
+              "bytes": 23767,
+              "gzipBytes": 8093
+            },
+            {
+              "path": "static/chunks/5273-45028f66a544a675.js",
+              "bytes": 10303,
+              "gzipBytes": 3864
+            },
+            {
+              "path": "static/chunks/app/layout-414019074ed1d99f.js",
+              "bytes": 21010,
+              "gzipBytes": 7260
+            }
+          ],
+          "bytes": 584642,
+          "gzipBytes": 175995,
+          "jsRequests": 12
+        },
+        "map": {
+          "files": [
+            {
+              "path": "static/chunks/webpack-416532c88d9ff884.js",
+              "bytes": 3576,
+              "gzipBytes": 1820
+            },
+            {
+              "path": "static/chunks/4bd1b696-f785427dddbba9fb.js",
+              "bytes": 173020,
+              "gzipBytes": 54359
+            },
+            {
+              "path": "static/chunks/1255-d90f22433f14e976.js",
+              "bytes": 173382,
+              "gzipBytes": 46336
+            },
+            {
+              "path": "static/chunks/main-app-9acf4580064a6541.js",
+              "bytes": 560,
+              "gzipBytes": 228
+            },
+            {
+              "path": "static/chunks/2619-3c9e02e22d10480a.js",
+              "bytes": 8538,
+              "gzipBytes": 3388
+            },
+            {
+              "path": "static/chunks/8909-d5e693b060a4b69c.js",
+              "bytes": 26737,
+              "gzipBytes": 8682
+            },
+            {
+              "path": "static/chunks/5273-45028f66a544a675.js",
+              "bytes": 10303,
+              "gzipBytes": 3864
+            },
+            {
+              "path": "static/chunks/4086-945c9028dc1e4395.js",
+              "bytes": 10978,
+              "gzipBytes": 4212
+            },
+            {
+              "path": "static/chunks/app/(main)/map/page-3717944daad41ea3.js",
+              "bytes": 38748,
+              "gzipBytes": 12429
+            },
+            {
+              "path": "static/chunks/4018-bb00548e0309a288.js",
+              "bytes": 106965,
+              "gzipBytes": 29418
+            },
+            {
+              "path": "static/chunks/1503-663fdbde7681f000.js",
+              "bytes": 23767,
+              "gzipBytes": 8093
+            },
+            {
+              "path": "static/chunks/app/layout-414019074ed1d99f.js",
+              "bytes": 21010,
+              "gzipBytes": 7260
+            }
+          ],
+          "bytes": 597584,
+          "gzipBytes": 180089,
+          "jsRequests": 12
+        }
+      }
+    }
+  },
+  "publicBrowserLoadComparison": {
+    "beforeCommit": "85a134210ccdb0c94c44342a2fd84f143d00af2f",
+    "afterCommit": "1e69ed000b66f52386916aa9003358aac4683833",
+    "beforeBuild": "JDyq4K6y63yk6TwoPpyil",
+    "afterBuild": "pyj4NSlpNt9-6Z1pSQAgR",
+    "origin": "https://eventzeka.com",
+    "fixture": false,
+    "interception": false,
+    "harnessSha256": "49048489369cdd07dcbf50ac9548d0a7912dbaea06808303f13bb231a091daa6",
+    "methodology": "Three samples per route/profile/visit; identical public browser conditions. Raw median differences only; CPU host load, Internet/cache variation and live-data drift limit attribution. No percentage speedup claim.",
+    "validity": {
+      "before": {
+        "allHttp200": true,
+        "allExpectedBuild": true,
+        "errors": [],
+        "cpus": 8,
+        "load1Range": [
+          47.71923828125,
+          81.96435546875
+        ]
+      },
+      "after": {
+        "allHttp200": true,
+        "allExpectedBuild": true,
+        "errors": [
+          "Minified React error #418; visit https://react.dev/errors/418?args[]=HTML&args[]= for the full message or use the non-minified dev environment for full errors and additional helpful warnings."
+        ],
+        "cpus": 8,
+        "load1Range": [
+          3.14892578125,
+          5.2021484375
+        ]
+      }
+    },
+    "groups": [
+      {
+        "profile": "desktop",
+        "route": "/",
+        "visit": "first",
+        "samples": 3,
+        "dataSnapshotsEqual": true,
+        "metrics": {
+          "ttfb": {
+            "before": {
+              "median": 289.90000009536743,
+              "min": 259.19999980926514,
+              "max": 706.7999999523163
+            },
+            "after": {
+              "median": 136.70000004768372,
+              "min": 124.10000014305115,
+              "max": 552.8999998569489
+            },
+            "medianDifference": -153.20000004768372
+          },
+          "lcp": {
+            "before": {
+              "median": 1372,
+              "min": 1332,
+              "max": 1752
+            },
+            "after": {
+              "median": 792,
+              "min": 608,
+              "max": 960
+            },
+            "medianDifference": -580
+          },
+          "transferredBytes": {
+            "before": {
+              "median": 631386,
+              "min": 631364,
+              "max": 631443
+            },
+            "after": {
+              "median": 612204,
+              "min": 612193,
+              "max": 612544
+            },
+            "medianDifference": -19182
+          },
+          "htmlDecodedBytes": {
+            "before": {
+              "median": 466743,
+              "min": 466743,
+              "max": 466743
+            },
+            "after": {
+              "median": 465938,
+              "min": 465938,
+              "max": 466025
+            },
+            "medianDifference": -805
+          },
+          "jsBytes": {
+            "before": {
+              "median": 511366,
+              "min": 511322,
+              "max": 511461
+            },
+            "after": {
+              "median": 492230,
+              "min": 492143,
+              "max": 492258
+            },
+            "medianDifference": -19136
+          },
+          "imageBytes": {
+            "before": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "after": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "medianDifference": 0
+          }
+        }
+      },
+      {
+        "profile": "desktop",
+        "route": "/",
+        "visit": "repeat",
+        "samples": 3,
+        "dataSnapshotsEqual": true,
+        "metrics": {
+          "ttfb": {
+            "before": {
+              "median": 247.20000004768372,
+              "min": 160.5,
+              "max": 252.29999995231628
+            },
+            "after": {
+              "median": 127.20000004768372,
+              "min": 102.5,
+              "max": 155.29999995231628
+            },
+            "medianDifference": -120
+          },
+          "lcp": {
+            "before": {
+              "median": 688,
+              "min": 636,
+              "max": 724
+            },
+            "after": {
+              "median": 268,
+              "min": 232,
+              "max": 296
+            },
+            "medianDifference": -420
+          },
+          "transferredBytes": {
+            "before": {
+              "median": 101153,
+              "min": 101116,
+              "max": 101158
+            },
+            "after": {
+              "median": 101025,
+              "min": 100989,
+              "max": 101058
+            },
+            "medianDifference": -128
+          },
+          "htmlDecodedBytes": {
+            "before": {
+              "median": 466743,
+              "min": 466743,
+              "max": 466743
+            },
+            "after": {
+              "median": 465938,
+              "min": 465938,
+              "max": 465938
+            },
+            "medianDifference": -805
+          },
+          "jsBytes": {
+            "before": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "after": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "medianDifference": 0
+          },
+          "imageBytes": {
+            "before": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "after": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "medianDifference": 0
+          }
+        }
+      },
+      {
+        "profile": "desktop",
+        "route": "/map",
+        "visit": "first",
+        "samples": 3,
+        "dataSnapshotsEqual": true,
+        "metrics": {
+          "ttfb": {
+            "before": {
+              "median": 123.90000009536743,
+              "min": 85.20000004768372,
+              "max": 340.40000009536743
+            },
+            "after": {
+              "median": 105.70000004768372,
+              "min": 46,
+              "max": 222.29999995231628
+            },
+            "medianDifference": -18.200000047683716
+          },
+          "lcp": {
+            "before": {
+              "median": 2588,
+              "min": 2532,
+              "max": 3936
+            },
+            "after": {
+              "median": 1380,
+              "min": 1164,
+              "max": 2328
+            },
+            "medianDifference": -1208
+          },
+          "transferredBytes": {
+            "before": {
+              "median": 1227034,
+              "min": 1227011,
+              "max": 1227059
+            },
+            "after": {
+              "median": 1206945,
+              "min": 1206368,
+              "max": 1207469
+            },
+            "medianDifference": -20089
+          },
+          "htmlDecodedBytes": {
+            "before": {
+              "median": 287305,
+              "min": 287305,
+              "max": 287305
+            },
+            "after": {
+              "median": 286500,
+              "min": 286457,
+              "max": 286500
+            },
+            "medianDifference": -805
+          },
+          "jsBytes": {
+            "before": {
+              "median": 559372,
+              "min": 559363,
+              "max": 559402
+            },
+            "after": {
+              "median": 540092,
+              "min": 540025,
+              "max": 540101
+            },
+            "medianDifference": -19280
+          },
+          "imageBytes": {
+            "before": {
+              "median": 588852,
+              "min": 588852,
+              "max": 588861
+            },
+            "after": {
+              "median": 588807,
+              "min": 588349,
+              "max": 588891
+            },
+            "medianDifference": -45
+          }
+        }
+      },
+      {
+        "profile": "desktop",
+        "route": "/map",
+        "visit": "repeat",
+        "samples": 3,
+        "dataSnapshotsEqual": true,
+        "metrics": {
+          "ttfb": {
+            "before": {
+              "median": 402,
+              "min": 126.59999990463257,
+              "max": 821.2000000476837
+            },
+            "after": {
+              "median": 129.40000009536743,
+              "min": 105.60000014305115,
+              "max": 163.5
+            },
+            "medianDifference": -272.59999990463257
+          },
+          "lcp": {
+            "before": {
+              "median": 4772,
+              "min": 2208,
+              "max": 6888
+            },
+            "after": {
+              "median": 564,
+              "min": 368,
+              "max": 592
+            },
+            "medianDifference": -4208
+          },
+          "transferredBytes": {
+            "before": {
+              "median": 56497,
+              "min": 56042,
+              "max": 56634
+            },
+            "after": {
+              "median": 55499,
+              "min": 55277,
+              "max": 55640
+            },
+            "medianDifference": -998
+          },
+          "htmlDecodedBytes": {
+            "before": {
+              "median": 287305,
+              "min": 287305,
+              "max": 287305
+            },
+            "after": {
+              "median": 286500,
+              "min": 286500,
+              "max": 286500
+            },
+            "medianDifference": -805
+          },
+          "jsBytes": {
+            "before": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "after": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "medianDifference": 0
+          },
+          "imageBytes": {
+            "before": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "after": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "medianDifference": 0
+          }
+        }
+      },
+      {
+        "profile": "desktop",
+        "route": "/events/j57a2771fmz34wge7wzp997xz98gbfc1",
+        "visit": "first",
+        "samples": 3,
+        "dataSnapshotsEqual": true,
+        "metrics": {
+          "ttfb": {
+            "before": {
+              "median": 152.5,
+              "min": 97.5,
+              "max": 520.8999998569489
+            },
+            "after": {
+              "median": 144.29999995231628,
+              "min": 60.19999980926514,
+              "max": 165
+            },
+            "medianDifference": -8.200000047683716
+          },
+          "lcp": {
+            "before": {
+              "median": 1080,
+              "min": 952,
+              "max": 1952
+            },
+            "after": {
+              "median": 676,
+              "min": 492,
+              "max": 1260
+            },
+            "medianDifference": -404
+          },
+          "transferredBytes": {
+            "before": {
+              "median": 616394,
+              "min": 616366,
+              "max": 616448
+            },
+            "after": {
+              "median": 596969,
+              "min": 596870,
+              "max": 597021
+            },
+            "medianDifference": -19425
+          },
+          "htmlDecodedBytes": {
+            "before": {
+              "median": 76286,
+              "min": 76286,
+              "max": 76286
+            },
+            "after": {
+              "median": 75438,
+              "min": 75438,
+              "max": 75438
+            },
+            "medianDifference": -848
+          },
+          "jsBytes": {
+            "before": {
+              "median": 510085,
+              "min": 510048,
+              "max": 510095
+            },
+            "after": {
+              "median": 490943,
+              "min": 490912,
+              "max": 490983
+            },
+            "medianDifference": -19142
+          },
+          "imageBytes": {
+            "before": {
+              "median": 58785,
+              "min": 58785,
+              "max": 58794
+            },
+            "after": {
+              "median": 58785,
+              "min": 58785,
+              "max": 58785
+            },
+            "medianDifference": 0
+          }
+        }
+      },
+      {
+        "profile": "desktop",
+        "route": "/events/j57a2771fmz34wge7wzp997xz98gbfc1",
+        "visit": "repeat",
+        "samples": 3,
+        "dataSnapshotsEqual": true,
+        "metrics": {
+          "ttfb": {
+            "before": {
+              "median": 80,
+              "min": 70.90000009536743,
+              "max": 80.59999990463257
+            },
+            "after": {
+              "median": 146.79999995231628,
+              "min": 87,
+              "max": 503.2000000476837
+            },
+            "medianDifference": 66.79999995231628
+          },
+          "lcp": {
+            "before": {
+              "median": 532,
+              "min": 416,
+              "max": 552
+            },
+            "after": {
+              "median": 260,
+              "min": 176,
+              "max": 688
+            },
+            "medianDifference": -272
+          },
+          "transferredBytes": {
+            "before": {
+              "median": 28611,
+              "min": 28600,
+              "max": 28640
+            },
+            "after": {
+              "median": 28280,
+              "min": 28207,
+              "max": 28458
+            },
+            "medianDifference": -331
+          },
+          "htmlDecodedBytes": {
+            "before": {
+              "median": 76286,
+              "min": 76286,
+              "max": 76286
+            },
+            "after": {
+              "median": 75438,
+              "min": 75438,
+              "max": 75438
+            },
+            "medianDifference": -848
+          },
+          "jsBytes": {
+            "before": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "after": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "medianDifference": 0
+          },
+          "imageBytes": {
+            "before": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "after": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "medianDifference": 0
+          }
+        }
+      },
+      {
+        "profile": "mobile",
+        "route": "/",
+        "visit": "first",
+        "samples": 3,
+        "dataSnapshotsEqual": true,
+        "metrics": {
+          "ttfb": {
+            "before": {
+              "median": 349.60000014305115,
+              "min": 193.5,
+              "max": 408
+            },
+            "after": {
+              "median": 341.5,
+              "min": 110.39999985694885,
+              "max": 454.7000000476837
+            },
+            "medianDifference": -8.100000143051147
+          },
+          "lcp": {
+            "before": {
+              "median": 2672,
+              "min": 2328,
+              "max": 2788
+            },
+            "after": {
+              "median": 1856,
+              "min": 1532,
+              "max": 1900
+            },
+            "medianDifference": -816
+          },
+          "transferredBytes": {
+            "before": {
+              "median": 627948,
+              "min": 506258,
+              "max": 627973
+            },
+            "after": {
+              "median": 612168,
+              "min": 486949,
+              "max": 612243
+            },
+            "medianDifference": -15780
+          },
+          "htmlDecodedBytes": {
+            "before": {
+              "median": 466743,
+              "min": 466743,
+              "max": 466743
+            },
+            "after": {
+              "median": 465938,
+              "min": 465938,
+              "max": 465938
+            },
+            "medianDifference": -805
+          },
+          "jsBytes": {
+            "before": {
+              "median": 507893,
+              "min": 386384,
+              "max": 507938
+            },
+            "after": {
+              "median": 492220,
+              "min": 367166,
+              "max": 492239
+            },
+            "medianDifference": -15673
+          },
+          "imageBytes": {
+            "before": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "after": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "medianDifference": 0
+          }
+        }
+      },
+      {
+        "profile": "mobile",
+        "route": "/",
+        "visit": "repeat",
+        "samples": 3,
+        "dataSnapshotsEqual": true,
+        "metrics": {
+          "ttfb": {
+            "before": {
+              "median": 195.29999995231628,
+              "min": 156,
+              "max": 222.40000009536743
+            },
+            "after": {
+              "median": 113.80000019073486,
+              "min": 97.5,
+              "max": 120
+            },
+            "medianDifference": -81.49999976158142
+          },
+          "lcp": {
+            "before": {
+              "median": 552,
+              "min": 504,
+              "max": 1192
+            },
+            "after": {
+              "median": 280,
+              "min": 268,
+              "max": 376
+            },
+            "medianDifference": -272
+          },
+          "transferredBytes": {
+            "before": {
+              "median": 104703,
+              "min": 104697,
+              "max": 226278
+            },
+            "after": {
+              "median": 101021,
+              "min": 101014,
+              "max": 226060
+            },
+            "medianDifference": -3682
+          },
+          "htmlDecodedBytes": {
+            "before": {
+              "median": 466743,
+              "min": 466743,
+              "max": 466743
+            },
+            "after": {
+              "median": 465938,
+              "min": 465938,
+              "max": 465938
+            },
+            "medianDifference": -805
+          },
+          "jsBytes": {
+            "before": {
+              "median": 3492,
+              "min": 3487,
+              "max": 125066
+            },
+            "after": {
+              "median": 0,
+              "min": 0,
+              "max": 125005
+            },
+            "medianDifference": -3492
+          },
+          "imageBytes": {
+            "before": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "after": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "medianDifference": 0
+          }
+        }
+      },
+      {
+        "profile": "mobile",
+        "route": "/map",
+        "visit": "first",
+        "samples": 3,
+        "dataSnapshotsEqual": true,
+        "metrics": {
+          "ttfb": {
+            "before": {
+              "median": 72.20000004768372,
+              "min": 65.5,
+              "max": 101.19999980926514
+            },
+            "after": {
+              "median": 80.70000004768372,
+              "min": 53.59999990463257,
+              "max": 111.5
+            },
+            "medianDifference": 8.5
+          },
+          "lcp": {
+            "before": {
+              "median": 1792,
+              "min": 1688,
+              "max": 7020
+            },
+            "after": {
+              "median": 1584,
+              "min": 1572,
+              "max": 1592
+            },
+            "medianDifference": -208
+          },
+          "transferredBytes": {
+            "before": {
+              "median": 634886,
+              "min": 634853,
+              "max": 909397
+            },
+            "after": {
+              "median": 493206,
+              "min": 493180,
+              "max": 493827
+            },
+            "medianDifference": -141680
+          },
+          "htmlDecodedBytes": {
+            "before": {
+              "median": 287305,
+              "min": 287305,
+              "max": 287305
+            },
+            "after": {
+              "median": 286500,
+              "min": 286457,
+              "max": 286500
+            },
+            "medianDifference": -805
+          },
+          "jsBytes": {
+            "before": {
+              "median": 555851,
+              "min": 555810,
+              "max": 559386
+            },
+            "after": {
+              "median": 415005,
+              "min": 414981,
+              "max": 415040
+            },
+            "medianDifference": -140846
+          },
+          "imageBytes": {
+            "before": {
+              "median": 0,
+              "min": 0,
+              "max": 271209
+            },
+            "after": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "medianDifference": 0
+          }
+        }
+      },
+      {
+        "profile": "mobile",
+        "route": "/map",
+        "visit": "repeat",
+        "samples": 3,
+        "dataSnapshotsEqual": true,
+        "metrics": {
+          "ttfb": {
+            "before": {
+              "median": 62,
+              "min": 52.799999952316284,
+              "max": 367.7999999523163
+            },
+            "after": {
+              "median": 93.5,
+              "min": 45.299999952316284,
+              "max": 141.70000004768372
+            },
+            "medianDifference": 31.5
+          },
+          "lcp": {
+            "before": {
+              "median": 2524,
+              "min": 1316,
+              "max": 3496
+            },
+            "after": {
+              "median": 2104,
+              "min": 1644,
+              "max": 2136
+            },
+            "medianDifference": -420
+          },
+          "transferredBytes": {
+            "before": {
+              "median": 247534,
+              "min": 56538,
+              "max": 256476
+            },
+            "after": {
+              "median": 342963,
+              "min": 175117,
+              "max": 343745
+            },
+            "medianDifference": 95429
+          },
+          "htmlDecodedBytes": {
+            "before": {
+              "median": 287305,
+              "min": 287305,
+              "max": 287305
+            },
+            "after": {
+              "median": 286500,
+              "min": 286457,
+              "max": 286500
+            },
+            "medianDifference": -805
+          },
+          "jsBytes": {
+            "before": {
+              "median": 3490,
+              "min": 0,
+              "max": 3490
+            },
+            "after": {
+              "median": 121765,
+              "min": 0,
+              "max": 121770
+            },
+            "medianDifference": 118275
+          },
+          "imageBytes": {
+            "before": {
+              "median": 187874,
+              "min": 0,
+              "max": 196804
+            },
+            "after": {
+              "median": 165492,
+              "min": 119964,
+              "max": 166848
+            },
+            "medianDifference": -22382
+          }
+        }
+      },
+      {
+        "profile": "mobile",
+        "route": "/events/j57a2771fmz34wge7wzp997xz98gbfc1",
+        "visit": "first",
+        "samples": 3,
+        "dataSnapshotsEqual": true,
+        "metrics": {
+          "ttfb": {
+            "before": {
+              "median": 125.90000009536743,
+              "min": 96.40000009536743,
+              "max": 295.19999980926514
+            },
+            "after": {
+              "median": 129.90000009536743,
+              "min": 61.59999990463257,
+              "max": 132.20000004768372
+            },
+            "medianDifference": 4
+          },
+          "lcp": {
+            "before": {
+              "median": 1724,
+              "min": 1336,
+              "max": 1812
+            },
+            "after": {
+              "median": 1244,
+              "min": 1092,
+              "max": 1364
+            },
+            "medianDifference": -480
+          },
+          "transferredBytes": {
+            "before": {
+              "median": 613288,
+              "min": 613127,
+              "max": 616834
+            },
+            "after": {
+              "median": 597433,
+              "min": 597253,
+              "max": 597438
+            },
+            "medianDifference": -15855
+          },
+          "htmlDecodedBytes": {
+            "before": {
+              "median": 76286,
+              "min": 76286,
+              "max": 76286
+            },
+            "after": {
+              "median": 75438,
+              "min": 75438,
+              "max": 75438
+            },
+            "medianDifference": -848
+          },
+          "jsBytes": {
+            "before": {
+              "median": 506644,
+              "min": 506587,
+              "max": 510142
+            },
+            "after": {
+              "median": 490905,
+              "min": 490882,
+              "max": 490916
+            },
+            "medianDifference": -15739
+          },
+          "imageBytes": {
+            "before": {
+              "median": 58785,
+              "min": 58785,
+              "max": 58808
+            },
+            "after": {
+              "median": 58794,
+              "min": 58785,
+              "max": 58817
+            },
+            "medianDifference": 9
+          }
+        }
+      },
+      {
+        "profile": "mobile",
+        "route": "/events/j57a2771fmz34wge7wzp997xz98gbfc1",
+        "visit": "repeat",
+        "samples": 3,
+        "dataSnapshotsEqual": true,
+        "metrics": {
+          "ttfb": {
+            "before": {
+              "median": 82.5,
+              "min": 70.59999990463257,
+              "max": 97.29999995231628
+            },
+            "after": {
+              "median": 77.90000009536743,
+              "min": 61.799999952316284,
+              "max": 106.29999995231628
+            },
+            "medianDifference": -4.599999904632568
+          },
+          "lcp": {
+            "before": {
+              "median": 380,
+              "min": 328,
+              "max": 412
+            },
+            "after": {
+              "median": 260,
+              "min": 252,
+              "max": 348
+            },
+            "medianDifference": -120
+          },
+          "transferredBytes": {
+            "before": {
+              "median": 29017,
+              "min": 28973,
+              "max": 32914
+            },
+            "after": {
+              "median": 28529,
+              "min": 28480,
+              "max": 28579
+            },
+            "medianDifference": -488
+          },
+          "htmlDecodedBytes": {
+            "before": {
+              "median": 76286,
+              "min": 76286,
+              "max": 76286
+            },
+            "after": {
+              "median": 75438,
+              "min": 75438,
+              "max": 75438
+            },
+            "medianDifference": -848
+          },
+          "jsBytes": {
+            "before": {
+              "median": 0,
+              "min": 0,
+              "max": 3490
+            },
+            "after": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "medianDifference": 0
+          },
+          "imageBytes": {
+            "before": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "after": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "medianDifference": 0
+          }
+        }
+      }
+    ],
+    "timingCausalityEstablished": false,
+    "allDataSnapshotsMatched": true
+  },
+  "publicMapReadyComparison": {
+    "methodology": "Three fresh public visits per profile and phase; exact same immutable harness and network/CPU shaping; no server cache reset, shared host and external tile/cache variation remain. Observed medians/ranges, not causal speedup percentages.",
+    "groups": [
+      {
+        "profile": "desktop",
+        "before": {
+          "dataVisibleMs": {
+            "median": 3117.699999809265,
+            "min": 1950.2000000476837,
+            "max": 7832.400000095367
+          },
+          "markersReadyMs": {
+            "median": 3845.2999999523163,
+            "min": 2770.7999999523163,
+            "max": 8201.200000047684
+          },
+          "tilesReadyMs": {
+            "median": 4633.099999904633,
+            "min": 3501.0999999046326,
+            "max": 9015.5
+          }
+        },
+        "after": {
+          "dataVisibleMs": {
+            "median": 694,
+            "min": 619.9000000953674,
+            "max": 777.2999999523163
+          },
+          "markersReadyMs": {
+            "median": 969.7000000476837,
+            "min": 945.2999999523163,
+            "max": 1077.0999999046326
+          },
+          "tilesReadyMs": {
+            "median": 1650.0999999046326,
+            "min": 1607.4000000953674,
+            "max": 1657
+          }
+        }
+      },
+      {
+        "profile": "mobile",
+        "before": {
+          "dataVisibleMs": {
+            "median": 1801.0999999046326,
+            "min": 1641.3999998569489,
+            "max": 2639.2999999523163
+          },
+          "markersReadyMs": {
+            "median": 4232.399999856949,
+            "min": 3799.899999856949,
+            "max": 4900.200000047684
+          },
+          "tilesReadyMs": {
+            "median": 5881.599999904633,
+            "min": 5751.299999952316,
+            "max": 6535.5
+          }
+        },
+        "after": {
+          "dataVisibleMs": {
+            "median": 1579.4000000953674,
+            "min": 1509,
+            "max": 1858.4000000953674
+          },
+          "markersReadyMs": {
+            "median": 3273.2000000476837,
+            "min": 3268.399999856949,
+            "max": 4104.700000047684
+          },
+          "tilesReadyMs": {
+            "median": 5129.200000047684,
+            "min": 5126.299999952316,
+            "max": 5734.5
+          }
+        }
+      }
+    ],
+    "errors": {
+      "before": [],
+      "after": []
+    },
+    "load1Range": {
+      "before": [
+        4.49560546875,
+        10.67041015625
+      ],
+      "after": [
+        3.21484375,
+        3.4150390625
+      ]
+    }
+  },
+  "followUp": {
+    "date": "2026-10-21",
+    "scope": "Open now keeps outing date; explicitly labelled possible activity; one active production and one backup; commit/push all application changes",
+    "documentation": "docs/open-now-nightlife-2026-10-21.md",
+    "previousReleaseMetricsAreHistorical": true
+  }
+}

@@ -6,6 +6,7 @@ import type { Map as LeafletMap, Marker } from "leaflet";
 import type { EventMapLocation } from "@/lib/events/event-map";
 import { getEventSessionLabel } from "@/lib/events/event-session";
 import { resolveEventTimePresentation } from "@/lib/events/event-time-presentation";
+import { OPEN_NOW_POSSIBLE_LABEL } from "@/components/events/open-now-status";
 import { cn } from "@/lib/utils";
 import "leaflet/dist/leaflet.css";
 import "./event-map.css";
@@ -18,14 +19,17 @@ type EventLocationMapProps = {
   locations: EventMapLocation[];
   selectedLocationId: string | null;
   onSelectLocation: (id: string) => void;
+  possibleEventIds?: readonly string[];
 };
 
-export function EventLocationMap({ className, controls, locations, selectedLocationId, onSelectLocation }: EventLocationMapProps) {
+export function EventLocationMap({ className, controls, locations, selectedLocationId, onSelectLocation, possibleEventIds = [] }: EventLocationMapProps) {
   // Server refreshes create new prop objects. Keep Leaflet alive when their
   // content is unchanged so open popups, the viewport, and location tracking
   // survive the Open now clock refresh.
   const locationsSnapshot = JSON.stringify(locations);
   const mapLocations = useMemo(() => JSON.parse(locationsSnapshot) as EventMapLocation[], [locationsSnapshot]);
+  const possibleIdsSnapshot = JSON.stringify(possibleEventIds);
+  const possibleIds = useMemo(() => new Set<string>(JSON.parse(possibleIdsSnapshot)), [possibleIdsSnapshot]);
   const containerRef = useRef<HTMLDivElement>(null);
   const mapInstanceId = useId();
   const mapRef = useRef<LeafletMap | null>(null);
@@ -209,6 +213,14 @@ export function EventLocationMap({ className, controls, locations, selectedLocat
             eventLink.textContent = event.venue;
             eventLink.setAttribute("aria-label", `${event.venue}: open ${event.title}, ${time.label}${session ? `, ${session}` : ""}`);
             eventRow.append(eventTime, eventTitle, eventLink);
+            if (possibleIds.has(event._id)) {
+              const possibleLabel = document.createElement("p");
+              possibleLabel.className = "mt-1 rounded-md bg-amber-400/10 px-1.5 py-0.5 text-[10px] font-medium leading-4 text-amber-200";
+              possibleLabel.dataset.openNowStatus = "possible";
+              possibleLabel.dataset.openNowEventId = event._id;
+              possibleLabel.textContent = OPEN_NOW_POSSIBLE_LABEL;
+              eventRow.append(possibleLabel);
+            }
             mobileEvents.append(eventRow);
           });
         });
@@ -373,7 +385,7 @@ export function EventLocationMap({ className, controls, locations, selectedLocat
       mapRef.current?.remove();
       mapRef.current = null;
     };
-  }, [mapLocations, mapInstanceId, onSelectLocation]);
+  }, [mapLocations, mapInstanceId, onSelectLocation, possibleIds]);
 
   useEffect(() => {
     if (status !== "ready") return;

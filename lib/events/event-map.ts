@@ -1,8 +1,8 @@
 import { getEventTimeSortMinutes } from "./event-time.ts";
-import { addDaysToDateKey, getCalendarDateKeyInTimeZone, getNightlifeDefaultDateKey } from "./nightlife-date.ts";
+import { addDaysToDateKey, getNightlifeDefaultDateKey } from "./nightlife-date.ts";
 import type { PublicEvent } from "./public-events";
 import type { PublicVenueDirectoryItem } from "../venues/public-venue-pages";
-import { matchesOpenNowEvent } from "../venues/venue-open-now.ts";
+import { getOpenNowEventWindow, matchesOpenNowEvent } from "../venues/venue-open-now.ts";
 
 export const MAP_MIN_DATE = "2000-01-01";
 export const MAP_MAX_DATE = "2099-12-31";
@@ -14,8 +14,7 @@ export function getEventMapOpenNowDateKey(now: Date | number = Date.now()): stri
 export function getEventMapOpenNowWindow(now: Date | number = Date.now()): { fromDate: string; beforeDate: string } {
   // The displayed nightlife day rolls over at 06:00. Live event candidates
   // still include both civil dates so an after-midnight start remains visible.
-  const today = getCalendarDateKeyInTimeZone(now instanceof Date ? now : new Date(now));
-  return { fromDate: addDaysToDateKey(today, -1), beforeDate: addDaysToDateKey(today, 1) };
+  return getOpenNowEventWindow(now);
 }
 
 export type EventMapLocation = {

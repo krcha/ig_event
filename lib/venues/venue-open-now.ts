@@ -5,6 +5,11 @@ import {
   type VenueHoursWindow,
 } from "@/lib/venues/venue-hours-cache";
 import { normalizeEventTime } from "../events/event-time.ts";
+import {
+  addDaysToDateKey,
+  getNightlifeDefaultDateKey,
+  NIGHTLIFE_BUSINESS_DAY_ROLLOVER_HOUR,
+} from "../events/nightlife-date.ts";
 
 export type BelgradeNow = {
   date: string;
@@ -43,6 +48,15 @@ export function getBelgradeNow(now: Date | number = Date.now()): BelgradeNow {
     time: `${hour}:${minute}`,
     weekday: new Date(Date.UTC(Number(year), Number(month) - 1, Number(day))).getUTCDay(),
   };
+}
+
+/** Live candidates follow civil dates, independently of the displayed outing day. */
+export function getOpenNowEventWindow(now: Date | number = Date.now()): {
+  beforeDate: string;
+  fromDate: string;
+} {
+  const { date } = getBelgradeNow(now);
+  return { beforeDate: addDaysToDateKey(date, 1), fromDate: addDaysToDateKey(date, -1) };
 }
 
 function readMinutes(value: string): number {
@@ -175,6 +189,21 @@ function resolveVenueClosingMinutes(options: {
   startTime: string;
   venueHours?: VenueHoursCacheFields | null;
 }, resolveInstant: InstantResolver): number | null {
+  const opening = resolveVenueOpeningForEventStart(options, resolveInstant);
+  const dateMinutes = readDateMinutes(options.date);
+  if (!opening || dateMinutes === null ||
+    opening.end - (dateMinutes + readMinutes(options.startTime)) >= WEEK_MINUTES) {
+    return null;
+  }
+
+  return opening.end;
+}
+
+function resolveVenueOpeningForEventStart(options: {
+  date: string;
+  startTime: string;
+  venueHours?: VenueHoursCacheFields | null;
+}, resolveInstant: InstantResolver): OpeningInterval | null {
   const dateMinutes = readDateMinutes(options.date);
   if (dateMinutes === null || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(options.startTime)) {
     return null;
@@ -188,24 +217,32 @@ function resolveVenueClosingMinutes(options: {
   if (eventStartInstant === null) {
     return null;
   }
-  const opening = intervals.find((interval) => {
+  return intervals.find((interval) => {
     const start = resolveInstant(interval.start, "start");
     const end = resolveInstant(interval.end, "end");
     return start !== null && end !== null && start <= eventStartInstant && eventStartInstant < end;
-  });
-  // A full uninterrupted weekly cycle means the place is always open. It does
-  // not establish an event end, and must not acquire an artificial closing time.
-  if (!opening || opening.end - eventStart >= WEEK_MINUTES) {
-    return null;
-  }
+  }) ?? null;
+}
 
-  return opening.end;
+/** Missing weekday records and empty windows provide no evidence of closure. */
+function hasKnownHoursForDate(
+  venueHours: VenueHoursCacheFields | null | undefined,
+  date: string,
+): boolean {
+  const hours = parseVenueHoursJson(venueHours?.hoursJson);
+  const dateMinutes = readDateMinutes(date);
+  if (!hours || hours.source === "none" || dateMinutes === null) {
+    return false;
+  }
+  const weekday = new Date(dateMinutes * 60_000).getUTCDay();
+  return hours.weekly.some((day) => day.day === weekday &&
+    (day.closed || day.windows.some((window) => window.day === weekday)));
 }
 
 function getOpeningState(
   venueHours: VenueHoursCacheFields | null | undefined,
   now: Date | number,
-): { current: BelgradeNow; open: boolean; previousDayCarry: boolean } | null {
+): { alwaysOpen: boolean; current: BelgradeNow; open: boolean; previousDayCarry: boolean } | null {
   if (!Number.isFinite(now instanceof Date ? now.getTime() : now)) {
     return null;
   }
@@ -226,7 +263,12 @@ function getOpeningState(
     activeOpening.start < todayStart &&
     activeOpening.start % DAY_MINUTES !== 0 &&
     activeOpening.end - activeOpening.start < DAY_MINUTES);
-  return { current, open: Boolean(activeOpening), previousDayCarry };
+  const alwaysOpen = Boolean(activeOpening &&
+    activeOpening.end - activeOpening.start >= 2 * DAY_MINUTES &&
+    getOpeningIntervals(venueHours, current.date, 8).some((interval) =>
+      interval.start === activeOpening.start &&
+      interval.end - (todayStart + current.minuteOfDay) >= WEEK_MINUTES));
+  return { alwaysOpen, current, open: Boolean(activeOpening), previousDayCarry };
 }
 
 /** Weekly venue opening hours only; this does not infer an event's start time. */
@@ -237,21 +279,28 @@ export function isVenueOpenNow(
   return getOpeningState(venueHours, now)?.open ?? false;
 }
 
-/** Apply announced event bounds first, with venue closing as a start-only fallback. */
-export function matchesOpenNowEvent(
+export type OpenNowEventState = "active" | "possible" | "inactive";
+
+/** Eligibility only: an unresolved end never becomes a canonical event duration. */
+export function getOpenNowEventState(
   event: { date?: string | null; time?: string | null; venueHours?: VenueHoursCacheFields | null },
   now: Date | number = Date.now(),
-): boolean {
+): OpenNowEventState {
   const nowTimestamp = now instanceof Date ? now.getTime() : now;
   const dateMinutes = readDateMinutes(event.date);
   if (!Number.isFinite(nowTimestamp) || dateMinutes === null) {
-    return false;
+    return "inactive";
   }
 
   const eventTime = normalizeEventTime(event.time);
+  const currentNightlifeDate = getNightlifeDefaultDateKey(new Date(nowTimestamp));
   if (eventTime.startLabel) {
     const resolveInstant = createBelgradeInstantResolver();
     const start = dateMinutes + readMinutes(eventTime.startLabel);
+    const startInstant = resolveInstant(start, "start");
+    if (startInstant === null || nowTimestamp < startInstant) {
+      return "inactive";
+    }
     let end: number;
     if (eventTime.endLabel) {
       end = dateMinutes + readMinutes(eventTime.endLabel);
@@ -265,30 +314,61 @@ export function matchesOpenNowEvent(
         venueHours: event.venueHours,
       }, resolveInstant);
       if (closing === null) {
-        return false;
+        // Early-morning starts belong to the preceding outing day. Compare the
+        // actual announced start, never yesterday's date with today's clock.
+        const startNightlifeDate = readMinutes(eventTime.startLabel) <
+          NIGHTLIFE_BUSINESS_DAY_ROLLOVER_HOUR * 60
+          ? addDaysToDateKey(event.date!, -1)
+          : event.date!;
+        if (startNightlifeDate !== currentNightlifeDate) {
+          return "inactive";
+        }
+        const opening = resolveVenueOpeningForEventStart({
+          date: event.date!,
+          startTime: eventTime.startLabel,
+          venueHours: event.venueHours,
+        }, resolveInstant);
+        // A full uninterrupted weekly cycle confirms availability but supplies
+        // no event end. Known closed/nonmatching hours must not become possible.
+        const alwaysOpen = opening !== null && opening.end - start >= WEEK_MINUTES;
+        return alwaysOpen || !hasKnownHoursForDate(event.venueHours, event.date!)
+          ? "possible"
+          : "inactive";
       }
       end = closing;
     }
-    const startInstant = resolveInstant(start, "start");
     const endInstant = resolveInstant(end, "end");
-    return startInstant !== null && endInstant !== null &&
-      startInstant <= nowTimestamp && nowTimestamp < endInstant;
+    return endInstant !== null && nowTimestamp < endInstant ? "active" : "inactive";
   }
 
   // Unknown event times still use venue availability for today, or the verified
   // continuation of yesterday's overnight opening.
   const state = getOpeningState(event.venueHours, now);
-  if (!state?.open || !event.date) {
-    return false;
+  if (state?.alwaysOpen) {
+    return event.date === currentNightlifeDate ? "possible" : "inactive";
+  }
+  if (!state?.open) {
+    return event.date === currentNightlifeDate &&
+      !hasKnownHoursForDate(event.venueHours, event.date!)
+      ? "possible"
+      : "inactive";
   }
   if (event.date === state.current.date) {
-    return true;
+    return "active";
   }
   if (!state.previousDayCarry) {
-    return false;
+    return "inactive";
   }
 
   const [year, month, day] = state.current.date.split("-").map(Number);
   const previousDate = new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10);
-  return event.date === previousDate;
+  return event.date === previousDate ? "active" : "inactive";
+}
+
+/** Include uncertain ongoing events only when callers also present their state. */
+export function matchesOpenNowEvent(
+  event: { date?: string | null; time?: string | null; venueHours?: VenueHoursCacheFields | null },
+  now: Date | number = Date.now(),
+): boolean {
+  return getOpenNowEventState(event, now) !== "inactive";
 }

@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { getBelgradeNow, getVenueClosingForEventStart, isVenueOpenNow, matchesOpenNowEvent } from "../lib/venues/venue-open-now.ts";
+import {
+  getBelgradeNow,
+  getOpenNowEventState,
+  getOpenNowEventWindow,
+  getVenueClosingForEventStart,
+  isVenueOpenNow,
+  matchesOpenNowEvent,
+} from "../lib/venues/venue-open-now.ts";
 
 function venue(weekly, source = "manual") {
   return {
@@ -158,11 +165,13 @@ assert.equal(matchesOpenNowEvent({ ...announcedRange, time: "21:00-22:00" }, Dat
 assert.equal(matchesOpenNowEvent({ date: "2026-10-18", time: "00:00-06:00", venueHours: allDay }, Date.parse("2026-10-17T12:00:00Z")), false);
 assert.equal(matchesOpenNowEvent({ date: "2026-10-16", time: "21:00-02:00", venueHours: allDay }, Date.parse("2026-10-17T12:00:00Z")), false);
 
-for (const venueHours of [undefined, venue([]), venue([day(6, [])]), venue([day(6, [], true)]), { hoursJson: "bad" }]) {
+for (const venueHours of [undefined, venue([]), venue([day(6, [])]), { hoursJson: "bad" }]) {
   assert.equal(getVenueClosingForEventStart({ date: "2026-10-17", startTime: "21:00", venueHours }), null);
-  assert.equal(matchesOpenNowEvent({ date: "2026-10-17", time: "21:00", venueHours }, Date.parse("2026-10-17T20:00:00Z")), false,
-    "A start alone with no confirmed closing cannot establish that an event is still active.");
+  assert.equal(getOpenNowEventState({ date: "2026-10-17", time: "21:00", venueHours }, Date.parse("2026-10-17T20:00:00Z")), "possible",
+    "An unresolved end is eligible with an uncertainty badge, never confirmed active.");
 }
+assert.equal(getOpenNowEventState({ date: "2026-10-17", time: "21:00", venueHours: venue([day(6, [], true)]) }, Date.parse("2026-10-17T20:00:00Z")), "inactive",
+  "An explicitly closed venue must not become possibly active.");
 for (const date of [undefined, "not-a-date", "2026-02-30"]) {
   assert.equal(matchesOpenNowEvent({ date, time: "00:00-23:59", venueHours: allDay }, Date.parse("2026-10-17T12:00:00Z")), false);
 }
@@ -180,7 +189,7 @@ assert.equal(matchesOpenNowEvent({ date: "2026-10-16", venueHours: nonMidnightAl
   "A full continuous all-day cycle starting later than midnight is still insufficient event carry evidence.");
 assert.equal(getVenueClosingForEventStart({ date: "2026-10-17", startTime: "21:00", venueHours: alwaysOpen }), null,
   "A 24/7 venue has no confirmed closing from which to invent an event end.");
-assert.equal(matchesOpenNowEvent({ date: "2026-10-17", time: "21:00", venueHours: alwaysOpen }, Date.parse("2026-10-17T21:00:00Z")), false);
+assert.equal(getOpenNowEventState({ date: "2026-10-17", time: "21:00", venueHours: alwaysOpen }, Date.parse("2026-10-17T21:00:00Z")), "possible");
 
 const dstOvernight = venue([day(6, [["23:00", "04:00", true]])]);
 for (const instant of ["2026-10-25T00:30:00Z", "2026-10-25T01:30:00Z", "2026-10-25T02:59:59Z"]) {
@@ -237,4 +246,91 @@ assert.equal(getVenueClosingForEventStart({ date: "2026-03-28", startTime: "23:3
 assert.equal(matchesOpenNowEvent({ date: "2026-03-28", time: "23:30-02:30" }, Date.parse("2026-03-29T00:00:00Z")), false);
 assert.equal(isVenueOpenNow(nonexistentClosing, Date.parse("2026-03-29T00:00:00Z")), false);
 
-console.log("QA passed: Belgrade open-now event bounds, venue closing inference, DST, split windows, and overnight carry.");
+// The outing continues after midnight, while the canonical dates never move.
+const tuesday23 = Date.parse("2026-10-20T21:00:00Z");
+const wednesday01 = Date.parse("2026-10-20T23:00:00Z");
+const thursday01 = Date.parse("2026-10-21T23:00:00Z");
+const tuesdayUnknownEnd = { date: "2026-10-20", time: "23:00" };
+for (const now of [tuesday23, wednesday01]) {
+  assert.equal(getOpenNowEventState(tuesdayUnknownEnd, now), "possible",
+    "Tuesday's outing must remain eligible at Wednesday 01:00 when its end is unconfirmed.");
+  assert.equal(matchesOpenNowEvent(tuesdayUnknownEnd, now), true);
+  assert.equal(getOpenNowEventState({ date: "2026-10-20" }, now), "possible");
+}
+assert.equal(getOpenNowEventState(tuesdayUnknownEnd, tuesday23 - 1), "inactive");
+assert.equal(getOpenNowEventState(tuesdayUnknownEnd, thursday01), "inactive",
+  "An unknown end must never revive the event during the next outing.");
+assert.equal(getOpenNowEventState(tuesdayUnknownEnd, Date.parse("2026-10-21T04:59:59Z")), "possible");
+assert.equal(getOpenNowEventState(tuesdayUnknownEnd, Date.parse("2026-10-21T05:00:00Z")), "inactive",
+  "Unknown duration eligibility expires when the Belgrade nightlife day rolls over at 07:00.");
+assert.equal(getOpenNowEventState({ date: "2026-10-21", time: "01:00" }, wednesday01), "possible",
+  "A real Wednesday 01:00 start belongs to Tuesday's ongoing outing.");
+assert.equal(getOpenNowEventState({ date: "2026-10-20", time: "01:00" }, wednesday01), "inactive",
+  "Tuesday 01:00 belonged to Monday's outing and must not revive Wednesday morning.");
+assert.equal(getOpenNowEventState({ date: "2026-10-21", time: "23:00" }, wednesday01), "inactive",
+  "Tonight's later start cannot appear before its real announced instant.");
+assert.equal(getOpenNowEventState({ date: "2026-10-21" }, wednesday01), "inactive",
+  "An unknown-start event cannot borrow the following outing's date.");
+
+for (const venueHours of [undefined, null, {}, { hoursJson: "bad" }, venue([]), venue([day(2, [])]), venue([day(2, [], true)], "none"), venue([day(1, [["20:00", "23:00"]])])]) {
+  assert.equal(getOpenNowEventState({ ...tuesdayUnknownEnd, venueHours }, wednesday01), "possible",
+    "Missing, invalid, empty, source-none, and omitted-weekday hours are unknown rather than closed.");
+  assert.equal(getOpenNowEventState({ date: "2026-10-20", venueHours }, wednesday01), "possible");
+}
+const tuesdayClosed = venue([day(2, [], true)]);
+const tuesdayEarlier = venue([day(2, [["16:00", "22:00"]])]);
+const tuesdayOngoing = venue([day(2, [["20:00", "04:00", true]])]);
+for (const venueHours of [tuesdayClosed, tuesdayEarlier]) {
+  assert.equal(getOpenNowEventState({ ...tuesdayUnknownEnd, venueHours }, wednesday01), "inactive",
+    "A known closed or mismatched opening must not be relabeled uncertain.");
+  assert.equal(getOpenNowEventState({ date: "2026-10-20", venueHours }, wednesday01), "inactive");
+}
+assert.equal(getOpenNowEventState({ ...tuesdayUnknownEnd, venueHours: tuesdayOngoing }, wednesday01), "active");
+assert.equal(getOpenNowEventState({ date: "2026-10-20", venueHours: tuesdayOngoing }, wednesday01), "active",
+  "A verified overnight opening retains the existing unknown-start carry behavior.");
+assert.equal(getOpenNowEventState({ ...tuesdayUnknownEnd, time: "23:00-04:00", venueHours: tuesdayClosed }, wednesday01), "active",
+  "An announced range remains authoritative over regular weekly hours.");
+assert.equal(getOpenNowEventState({ ...tuesdayUnknownEnd, time: "23:00-01:00" }, wednesday01), "inactive",
+  "An explicit end stays exclusive even under the uncertainty policy.");
+for (const event of [tuesdayUnknownEnd, { date: "2026-10-20" }]) {
+  assert.equal(getOpenNowEventState({ ...event, venueHours: alwaysOpen }, wednesday01), "possible");
+  assert.equal(getOpenNowEventState({ ...event, venueHours: alwaysOpen }, thursday01), "inactive");
+}
+assert.equal(getOpenNowEventState({ date: "2026-10-21", venueHours: alwaysOpen }, wednesday01), "inactive",
+  "A 24/7 opening cannot confirm the next outing's unknown start or duration.");
+assert.equal(getOpenNowEventState({ date: "2026-10-20", time: "01:00", venueHours: alwaysOpen }, wednesday01), "inactive");
+assert.equal(getOpenNowEventState({ date: "2026-10-21", time: "01:00", venueHours: alwaysOpen }, wednesday01), "possible");
+assert.equal(getOpenNowEventState({ ...tuesdayUnknownEnd, venueHours: venue([day(2, [["23:00", "00:00", true]]), day(3, [["00:30", "04:00"]])]) }, wednesday01), "inactive",
+  "A confirmed closing gap still ends the event despite a subsequent opening.");
+
+for (const [instant, fromDate, beforeDate] of [
+  ["2026-10-20T21:00:00Z", "2026-10-19", "2026-10-21"],
+  ["2026-10-20T23:00:00Z", "2026-10-20", "2026-10-22"],
+  ["2026-10-31T23:15:00Z", "2026-10-31", "2026-11-02"],
+  ["2026-12-31T23:15:00Z", "2026-12-31", "2027-01-02"],
+  ["2026-03-29T00:30:00Z", "2026-03-28", "2026-03-30"],
+  ["2026-03-29T01:30:00Z", "2026-03-28", "2026-03-30"],
+  ["2026-10-25T00:30:00Z", "2026-10-24", "2026-10-26"],
+  ["2026-10-25T01:30:00Z", "2026-10-24", "2026-10-26"],
+]) {
+  const now = Date.parse(instant);
+  assert.deepEqual(getOpenNowEventWindow(now), { beforeDate, fromDate });
+  assert.deepEqual(getOpenNowEventWindow(new Date(now)), { beforeDate, fromDate });
+}
+for (const [date, instants] of [
+  ["2026-10-31", ["2026-10-31T23:15:00Z"]],
+  ["2026-12-31", ["2026-12-31T23:15:00Z"]],
+  ["2026-03-28", ["2026-03-29T00:30:00Z", "2026-03-29T01:30:00Z"]],
+  ["2026-10-24", ["2026-10-25T00:30:00Z", "2026-10-25T01:30:00Z"]],
+]) {
+  for (const instant of instants) {
+    assert.equal(getOpenNowEventState({ date, time: "23:00" }, Date.parse(instant)), "possible");
+  }
+}
+assert.equal(getOpenNowEventState({ date: "2026-03-29", time: "02:30" }, Date.parse("2026-03-29T01:30:00Z")), "inactive",
+  "An unconfirmed end does not validate a nonexistent spring-gap start.");
+for (const now of [Number.NaN, new Date("invalid")]) {
+  assert.equal(getOpenNowEventState(tuesdayUnknownEnd, now), "inactive");
+}
+
+console.log("QA passed: tri-state open-now eligibility, Tuesday overnight continuity, no revival, civil windows, explicit bounds, venue evidence, and DST.");

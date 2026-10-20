@@ -352,13 +352,13 @@ assert.doesNotMatch(
 
 assert.match(
   browsePageSource,
-  /const beforeDate = addDaysToDateKey\(selectedDayKey, 1\);[\s\S]*loadPublicCalendarEventsWindow\(\{ beforeDate, fromDate \}\)/,
-  "Calendar details stop at the selected day's exclusive next-day bound.",
+  /fromDate: selectedDayKey,\s*beforeDate: addDaysToDateKey\(selectedDayKey, 1\),[\s\S]*loadPublicCalendarEventsWindow\(eventWindow\)/,
+  "Ordinary calendar details stop at the selected day's exclusive next-day bound.",
 );
 assert.match(
   browsePageSource,
-  /const fromDate = openNowActive \? addDaysToDateKey\(belgradeNow.date, -1\) : selectedDayKey;/,
-  "Calendar loads only selected-day details; Open now includes yesterday for overnight carry.",
+  /const eventWindow = openNowActive \? getOpenNowEventWindow\(now\) :/,
+  "Open now derives its civil yesterday/today window independently of the displayed nightlife date.",
 );
 assert.match(
   browsePageSource,

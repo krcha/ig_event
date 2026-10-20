@@ -19,6 +19,7 @@ import { CalendarScrollRestoration } from "@/components/calendar/calendar-scroll
 import { JsonLd } from "@/components/seo/json-ld";
 import { EventKindToggleChips } from "@/components/calendar/event-kind-toggle-chips";
 import { OpenNowFilter } from "@/components/calendar/open-now-filter";
+import { OpenNowStatus } from "@/components/events/open-now-status";
 import { MobileMonthDayStrip } from "@/components/calendar/mobile-month-day-strip";
 import { EventMetaRow, getEventCategoryKind, type EventCategoryKind } from "@/components/events/event-meta";
 import { EVENT_PRIMARY_CATEGORIES, normalizeHiddenEventCategories } from "@/lib/taxonomy/event-categories";
@@ -32,7 +33,7 @@ import {
 } from "@/lib/events/event-time";
 import { resolveEventTimePresentation } from "@/lib/events/event-time-presentation";
 import { addDaysToDateKey, dateKeyToLocalNoonDate, getNightlifeDefaultDateKey } from "@/lib/events/nightlife-date";
-import { getBelgradeNow, matchesOpenNowEvent } from "@/lib/venues/venue-open-now";
+import { getOpenNowEventState, getOpenNowEventWindow, type OpenNowEventState } from "@/lib/venues/venue-open-now";
 import { matchesPublicEventNameArtistOrVenue } from "@/lib/events/public-event-search";
 import { HOME_FAQ_ITEMS, buildHomePageStructuredData } from "@/lib/seo/site";
 import { groupCalendarEventsByTimeBand } from "@/lib/events/calendar-time-bands";
@@ -498,16 +499,15 @@ function isUpcomingCalendarDay(dayKey: string, defaultDayKey: string): boolean {
 export default async function CalendarPage({ searchParams }: CalendarPageProps) {
   const resolvedSearchParams = await searchParams;
   const now = Date.now();
-  const belgradeNow = getBelgradeNow(now);
   const openNowActive = getSingleValue(resolvedSearchParams?.open) === "now";
-  const todayKey = openNowActive ? belgradeNow.date : getNightlifeDefaultDateKey(new Date(now));
+  const todayKey = getNightlifeDefaultDateKey(new Date(now));
   const today = dateKeyToLocalNoonDate(todayKey);
-  const requestedMonth = openNowActive ? belgradeNow.month : getSingleValue(resolvedSearchParams?.month);
+  const requestedMonth = openNowActive ? todayKey.slice(0, 7) : getSingleValue(resolvedSearchParams?.month);
   const monthStart = parseMonthParam(requestedMonth, today);
   const monthParam = formatMonthParam(monthStart);
   const nextMonthStart = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
   const monthStartKey = formatDateKey(monthStart);
-  const selectedDayKey = openNowActive ? belgradeNow.date : getSelectedDay(
+  const selectedDayKey = openNowActive ? todayKey : getSelectedDay(
     monthStart,
     getSingleValue(resolvedSearchParams?.day),
     todayKey,
@@ -516,10 +516,12 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const requestedVenue = getSingleValue(resolvedSearchParams?.venue)?.trim() || undefined;
   // Only the selected day's details cross the backend boundary. Overnight
   // "open now" also needs yesterday's sessions; month chips use counters only.
-  const fromDate = openNowActive ? addDaysToDateKey(belgradeNow.date, -1) : selectedDayKey;
-  const beforeDate = addDaysToDateKey(selectedDayKey, 1);
+  const eventWindow = openNowActive ? getOpenNowEventWindow(now) : {
+    fromDate: selectedDayKey,
+    beforeDate: addDaysToDateKey(selectedDayKey, 1),
+  };
   const [loaded, overview] = await Promise.all([
-    loadPublicCalendarEventsWindow({ beforeDate, fromDate }),
+    loadPublicCalendarEventsWindow(eventWindow),
     openNowActive ? Promise.resolve(null) : loadPublicCalendarOverviewWindow({
       fromDate: monthStartKey,
       beforeDate: formatDateKey(nextMonthStart),
@@ -529,7 +531,12 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   ]);
   const error = loaded.error ?? overview?.error;
   // Keep cached event data independent of the clock; reevaluate openings per request.
-  const events = openNowActive ? loaded.events.filter((event) => matchesOpenNowEvent(event, now)) : loaded.events;
+  const openNowStates = new Map<string, OpenNowEventState>();
+  const events = openNowActive ? loaded.events.filter((event) => {
+    const state = getOpenNowEventState(event, now);
+    openNowStates.set(event._id, state);
+    return state !== "inactive";
+  }) : loaded.events;
   const venues = overview?.venues ?? buildPublicEventVenueFilterOptions(loaded.events);
   const selectedVenue = resolvePublicEventVenueFilter(
     requestedVenue,
@@ -579,7 +586,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     }
 
     const eventCategory = getDayCategory(event);
-    const bucketDate = openNowActive ? belgradeNow.date : event.date;
+    const bucketDate = openNowActive ? selectedDayKey : event.date;
     const eventDate = parseNormalizedEventDate(bucketDate);
     const dayBucket = getCalendarDayBucket(monthDayBuckets, bucketDate);
     dayBucket.categoryCounts[eventCategory] += 1;
@@ -658,8 +665,8 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const dateNavigationFilters = { ...baseFilters, open: undefined };
   const openNowHref = `/${buildQueryString({
     ...baseFilters,
-    month: openNowActive ? monthParam : belgradeNow.month,
-    day: openNowActive ? selectedDayKey : belgradeNow.date,
+    month: openNowActive ? monthParam : todayKey.slice(0, 7),
+    day: openNowActive ? selectedDayKey : todayKey,
     open: openNowActive ? undefined : "now",
   })}`;
   const mobileMonthDays = monthDays.map((day) => {
@@ -747,7 +754,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       key: "active-days",
       label: "Active days",
       value: activeDayCount,
-      caption: openNowActive ? "current Belgrade day" : "upcoming with something on",
+      caption: openNowActive ? "current Belgrade night" : "upcoming with something on",
     },
     {
       key: "venues",
@@ -994,6 +1001,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                       return (
                         <li
                           data-calendar-event-id={event._id}
+                          data-calendar-open-now-state={openNowActive ? openNowStates.get(event._id) : undefined}
                           data-calendar-event-kind={eventCategory}
                           data-calendar-hidden-by-kind={isHiddenByKind ? "true" : "false"}
                           data-event-time={event.displayTimeLabel ?? event.time}
@@ -1021,6 +1029,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                             <span className="min-w-0 flex-1">
                               <span className="block truncate text-[13px] font-semibold">{event.title}</span>
                               <EventSessionLabel className="mt-0 text-[11px] leading-4" event={event} />
+                              <OpenNowStatus eventId={event._id} state={openNowStates.get(event._id)} />
                             </span>
                             <span className="max-w-[40%] truncate text-[10px] font-medium text-muted-foreground">{tone.name}</span>
                           </Link>
@@ -1084,6 +1093,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   )}
                   data-calendar-event-kind={eventCategory}
                   data-calendar-event-id={event._id}
+                  data-calendar-open-now-state={openNowActive ? openNowStates.get(event._id) : undefined}
                   data-calendar-hidden-by-kind={isHiddenByKind ? "true" : "false"}
                   data-calendar-mobile-event-row="true"
                   data-event-time={event.displayTimeLabel ?? event.time}
@@ -1153,6 +1163,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                         event={event}
                       />
                       <EventMetaRow className="mt-1 flex-nowrap" event={event} />
+                      <OpenNowStatus eventId={event._id} state={openNowStates.get(event._id)} />
                     </div>
                   </div>
                   {authEnabled ? (
@@ -1171,6 +1182,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 data-calendar-desktop-event-row="true"
                 data-calendar-event-kind={eventCategory}
                 data-calendar-event-id={event._id}
+                data-calendar-open-now-state={openNowActive ? openNowStates.get(event._id) : undefined}
                 data-calendar-hidden-by-kind={isHiddenByKind ? "true" : "false"}
                 hidden={isHiddenByKind}
                 key={event._id}
@@ -1212,6 +1224,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                         event={event}
                       />
                       <EventMetaRow className="mt-1.5" event={event} />
+                      <OpenNowStatus eventId={event._id} state={openNowStates.get(event._id)} />
                       {artistMeta ? (
                         <p className="mt-1 truncate text-xs leading-5 text-muted-foreground/85">
                           {artistMeta}

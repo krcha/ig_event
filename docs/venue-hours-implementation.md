@@ -94,10 +94,17 @@ them closed.
 
 The calendar and map share an `Open now` control using `Europe/Belgrade` time.
 Known event starts and ends determine eligibility; a start-only event uses the
-venue closing assumption above. An unresolved end is excluded. Events without
-a usable time use current venue opening hours, including verified overnight
-continuations from yesterday. Enabling the filter selects the current Belgrade
-date; explicit date navigation leaves this mode. Other calendar filters remain
+venue closing assumption above. An unresolved end may appear only within the
+current nightlife day, after an announced start, with the explicit label
+`Possibly still on - end unconfirmed`. Unknown-time events with unknown hours
+may appear on that nightlife day with the same label. Confirmed closing times,
+explicit closed schedules, future starts and earlier nightlife days stay out.
+This eligibility assumption does not invent or store an event end. Events without
+a usable time otherwise use current venue opening hours, including verified
+overnight continuations from yesterday. Enabling the home filter retains the
+07:00 nightlife date; the map keeps its existing 06:00 display rollover. Both
+read civil yesterday/today independently, retaining current-civil early starts.
+Explicit date navigation leaves this mode. Other calendar filters remain
 available. Results refresh each minute and when the tab becomes visible. The
 control's visible and accessible label is simply `Open now`.
 

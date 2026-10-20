@@ -7,6 +7,8 @@ import { EventLocationMap } from "@/components/maps/event-location-map";
 import { EventSessionLabel } from "@/components/events/event-session-label";
 import { EventMetaRow } from "@/components/events/event-meta";
 import { OpenNowFilter } from "@/components/calendar/open-now-filter";
+import { OpenNowStatus } from "@/components/events/open-now-status";
+import { getOpenNowEventState, type OpenNowEventState } from "@/lib/venues/venue-open-now";
 import { getEventSessionLabel } from "@/lib/events/event-session";
 import { buildEventMapData, buildEventMapHref, filterEventMapEvents, getEventMapOpenNowDateKey, MAP_MAX_DATE, MAP_MIN_DATE } from "@/lib/events/event-map";
 import { resolveEventTimePresentation } from "@/lib/events/event-time-presentation";
@@ -41,7 +43,7 @@ function formatDate(date: string, options: Intl.DateTimeFormatOptions): string {
   return new Intl.DateTimeFormat("en-GB", { ...options, timeZone: "UTC" }).format(new Date(`${date}T12:00:00Z`));
 }
 
-function MapEventRow({ event }: { event: PublicEvent }) {
+function MapEventRow({ event, openNowState }: { event: PublicEvent; openNowState?: OpenNowEventState }) {
   const time = resolveEventTimePresentation(event);
   return (
     <Link aria-label={`${event.title} at ${event.venue}, ${getEventSessionLabel(event) || time.label}`} className="group flex items-start gap-3 rounded-xl px-3 py-3 hover:bg-white/[0.045] focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" data-event-map-event-id={event._id} href={`/events/${event._id}`} prefetch={false}>
@@ -51,6 +53,7 @@ function MapEventRow({ event }: { event: PublicEvent }) {
         <h3 className="mt-1 text-sm font-semibold leading-5 text-foreground group-hover:text-primary">{event.title}</h3>
         <EventSessionLabel event={event} />
         <EventMetaRow className="mt-1" event={event} />
+        <OpenNowStatus eventId={event._id} state={openNowState} />
       </div>
       <ArrowRight aria-hidden="true" className="mt-1 h-4 w-4 flex-none text-muted-foreground group-hover:text-primary" />
     </Link>
@@ -90,6 +93,9 @@ export function EventCalendarMap({ initialNow, openNowActive, selectedDate, toda
     return events.filter((event) => ids.has(event._id));
   }, [eligibleEventIds, events]);
   const { locations, unmappedEvents } = useMemo(() => buildEventMapData(visibleEvents), [visibleEvents]);
+  const openNowStates = useMemo(() => openNowActive
+    ? new Map(visibleEvents.map((event) => [event._id, getOpenNowEventState(event, filterNow)]))
+    : new Map<string, OpenNowEventState>(), [filterNow, openNowActive, visibleEvents]);
   const openNowHref = buildEventMapHref(getEventMapOpenNowDateKey(now), { openNow: !openNowActive });
   const [selection, setSelection] = useState<{ date: string; id: string } | null>(null);
   const selectedLocationId = selection?.date === selectedDate ? selection.id : null;
@@ -179,6 +185,7 @@ export function EventCalendarMap({ initialNow, openNowActive, selectedDate, toda
             controls={<OpenNowFilter active={openNowActive} appearance="map" href={openNowHref} initialNow={initialNow} />}
             locations={locations}
             onSelectLocation={selectFromMap}
+            possibleEventIds={[...openNowStates].flatMap(([id, state]) => state === "possible" ? [id] : [])}
             selectedLocationId={selectedLocationId}
           />
           <section aria-label="Choose a map date" className="absolute inset-x-3 top-3 z-[600] hidden items-center gap-2 rounded-2xl border border-border bg-card/95 p-2 shadow-lg md:flex lg:hidden">
@@ -210,7 +217,7 @@ export function EventCalendarMap({ initialNow, openNowActive, selectedDate, toda
                   </div>
                   <MapPin aria-hidden="true" className="mt-1 h-4 w-4 flex-none text-primary" />
                 </button>
-                <div className="mt-1">{location.events.map((event) => <MapEventRow event={event} key={event._id} />)}</div>
+                <div className="mt-1">{location.events.map((event) => <MapEventRow event={event} key={event._id} openNowState={openNowStates.get(event._id)} />)}</div>
                 <div className="flex flex-wrap gap-3 border-t border-border px-3 py-3">
                   <a className="inline-flex min-h-8 items-center gap-1.5 text-xs font-semibold text-primary hover:underline" href={`https://www.google.com/maps/search/?api=1&query=${location.latitude},${location.longitude}`} rel="noopener noreferrer" target="_blank"><Navigation aria-hidden="true" className="h-3.5 w-3.5" /> Directions</a>
                   {location.venueId ? <Link className="inline-flex min-h-8 items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground" href={`/venues/${location.venueId}`} prefetch={false}>Venue page <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" /></Link> : null}
@@ -220,7 +227,7 @@ export function EventCalendarMap({ initialNow, openNowActive, selectedDate, toda
             {unmappedEvents.length > 0 ? (
               <div className="rounded-xl border border-dashed border-border px-1 py-2">
                 <div className="px-3 py-2"><h3 className="text-sm font-semibold">Location not mapped</h3><p className="mt-1 text-xs leading-5 text-muted-foreground">These events don&apos;t have confirmed map coordinates yet.</p></div>
-                {unmappedEvents.map((event) => <div key={event._id}><p className="px-3 pt-2 text-xs font-semibold text-primary">{event.venue || "Venue to be announced"}</p><MapEventRow event={event} /></div>)}
+                {unmappedEvents.map((event) => <div key={event._id}><p className="px-3 pt-2 text-xs font-semibold text-primary">{event.venue || "Venue to be announced"}</p><MapEventRow event={event} openNowState={openNowStates.get(event._id)} /></div>)}
               </div>
             ) : null}
             {visibleEvents.length === 0 ? (
