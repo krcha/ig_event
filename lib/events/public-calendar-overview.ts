@@ -20,7 +20,7 @@ type Entry = { expiresAt: number; promise: Promise<Overview> };
 const overviewCache = new Map<string, Entry>();
 const CACHE_TTL_MS = 60_000;
 const CACHE_MAX_ENTRIES = 48;
-const overviewQuery = "publicCalendarOverview:listWindow" as unknown as FunctionReference<"query">;
+const overviewAction = "publicCalendarOverviewAction:listWindow" as unknown as FunctionReference<"action">;
 
 async function loadOverview(convex: ConvexHttpClient, options: Options): Promise<Overview> {
   const groups = new Map<string, PublicCalendarOverviewGroup>();
@@ -29,7 +29,7 @@ async function loadOverview(convex: ConvexHttpClient, options: Options): Promise
     let cursor: string | null = null;
     const seenCursors = new Set<string>();
     while (true) {
-      const result: PublicCalendarOverviewPage = await convex.query(overviewQuery, {
+      const result: PublicCalendarOverviewPage = await convex.action(overviewAction, {
         ...window,
         cursor,
         ...(options.q ? { q: options.q } : {}),

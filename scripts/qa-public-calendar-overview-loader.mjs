@@ -4,6 +4,7 @@ import { loadPublicCalendarOverviewWindow } from "../lib/events/public-calendar-
 import { resolvePublicEventVenueFilter } from "../lib/events/public-event-venue-filter.ts";
 
 const originalQuery = ConvexHttpClient.prototype.query;
+const originalAction = ConvexHttpClient.prototype.action;
 const originalFetch = globalThis.fetch;
 const originalUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
 const originalDateNow = Date.now;
@@ -43,8 +44,11 @@ const options = { fromDate: "2026-10-01", beforeDate: "2026-11-01" };
 globalThis.fetch = async () => {
   throw new Error("Calendar overview loader QA must never make external requests.");
 };
-ConvexHttpClient.prototype.query = async function query(name, args) {
-  assert.equal(name, "publicCalendarOverview:listWindow", "The counter loader must never fall back to detailed event queries.");
+ConvexHttpClient.prototype.query = async function query() {
+  throw new Error("The overview loader must use its action transport, not a nested query or detailed-event fallback.");
+};
+ConvexHttpClient.prototype.action = async function action(name, args) {
+  assert.equal(name, "publicCalendarOverviewAction:listWindow", "The counter loader must use the cache-preserving overview action.");
   queries.push({ name, args: structuredClone(args) });
   return transport(args);
 };
@@ -192,6 +196,7 @@ try {
   console.log("Calendar overview loader QA passed: aggregation, aliases, pagination, cache isolation, coalescing, failure retries, and bounded windows.");
 } finally {
   ConvexHttpClient.prototype.query = originalQuery;
+  ConvexHttpClient.prototype.action = originalAction;
   globalThis.fetch = originalFetch;
   Date.now = originalDateNow;
   if (originalUrl === undefined) delete process.env.NEXT_PUBLIC_CONVEX_URL;
