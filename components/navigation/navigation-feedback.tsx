@@ -105,7 +105,9 @@ export function NavigationFeedback() {
         return;
       }
       startPending();
-      if (shouldUseDocumentNavigation(href)) {
+      const managedCalendarLink = event.target instanceof Element &&
+        event.target.closest('a[data-calendar-client-navigation="true"]');
+      if (!managedCalendarLink && shouldUseDocumentNavigation(href)) {
         event.preventDefault();
         event.stopImmediatePropagation();
         window.location.assign(href);

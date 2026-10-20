@@ -202,21 +202,23 @@ assert.ok(
   "The old full bottom month calendar grid should be removed across desktop and other breakpoints.",
 );
 assert.ok(
-  mobileMonthDayStripSource.includes("inline: \"center\"") &&
-    mobileMonthDayStripSource.includes("scrollIntoView") &&
-    mobileMonthDayStripSource.includes("scrollAnchorIntoView"),
-  "Selecting a mobile calendar date should gently center the tapped/selected day.",
+  mobileMonthDayStripSource.includes("scrollAnchorIntoView(event.currentTarget, true)") &&
+    mobileMonthDayStripSource.includes("container.scrollTo") &&
+    !mobileMonthDayStripSource.includes(".scrollIntoView("),
+  "Selecting a calendar date should scroll only the horizontal strip, without moving the page.",
 );
 assert.ok(
-  mobileMonthDayStripSource.includes('behavior: shouldReduceMotion() ? "auto" : "smooth"') &&
-    mobileMonthDayStripSource.includes('"(prefers-reduced-motion: reduce)"'),
-  "Mobile calendar date slider should use smooth motion while respecting reduced-motion users.",
+  mobileMonthDayStripSource.includes('behavior: "instant"') &&
+    mobileMonthDayStripSource.includes("useLayoutEffect") &&
+    mobileMonthDayStripSource.includes('"(prefers-reduced-motion: reduce)"') &&
+    mobileMonthDayStripSource.includes("allowSmooth && nearby && !shouldReduceMotion()"),
+  "Calendar strip should align instantly on mount and animate only intentional nearby changes when motion is allowed.",
 );
 assert.ok(
   mobileMonthDayStripSource.includes("snap-center") &&
     mobileMonthDayStripSource.includes("overscroll-x-contain") &&
-    mobileMonthDayStripSource.includes("scroll-smooth"),
-  "Mobile calendar date slider should use centered scroll snapping with contained momentum.",
+    !mobileMonthDayStripSource.includes("scroll-smooth"),
+  "Calendar strip should retain centered snapping without CSS overriding instant alignment.",
 );
 assert.ok(
   calendarSource.includes("<CalendarScrollRestoration />") &&
@@ -325,4 +327,5 @@ assert.ok(
   "Saved bookmark state should stop relying on defaultSaved after the library hydrates.",
 );
 
+await import("./qa-calendar-date-strip.mjs");
 console.log("QA passed: mobile calendar uses compact event rows and chip-style filters.");
