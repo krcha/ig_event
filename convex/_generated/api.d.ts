@@ -134,6 +134,7 @@ import type * as scrapedPosts from "../scrapedPosts.js";
 import type * as sourceConflictReviews from "../sourceConflictReviews.js";
 import type * as sourceOccurrences from "../sourceOccurrences.js";
 import type * as users from "../users.js";
+import type * as venueHoursBackfill from "../venueHoursBackfill.js";
 import type * as venueIdentities from "../venueIdentities.js";
 import type * as venueResolver from "../venueResolver.js";
 import type * as venues from "../venues.js";
@@ -271,6 +272,7 @@ declare const fullApi: ApiFromModules<{
   sourceConflictReviews: typeof sourceConflictReviews;
   sourceOccurrences: typeof sourceOccurrences;
   users: typeof users;
+  venueHoursBackfill: typeof venueHoursBackfill;
   venueIdentities: typeof venueIdentities;
   venueResolver: typeof venueResolver;
   venues: typeof venues;
