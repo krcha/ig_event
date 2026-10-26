@@ -10,6 +10,7 @@ import {
   retainedCarouselImageValidator,
 } from "./internal/carouselMediaProof";
 import { normalizeInstagramPostUrl } from "../lib/images/apify-images";
+import { isInertGeneratedAltEnrichment, sameInstagramSlideAssets } from "../lib/scraper/instagram-accessibility-compatibility";
 import {
   canonicalizeSourceUrl,
   canonicalizeSourceUrlOrEmpty,
@@ -701,7 +702,10 @@ export const getByHandleAndPostRef = query({
 export const upsertManyByHandle = mutation({
   args: {
     handle: v.string(),
-    posts: v.array(v.object(scrapedPostRecord)),
+    posts: v.array(v.object({
+      ...scrapedPostRecord,
+      metadataProvider: v.optional(v.literal("instaloader")),
+    })),
     fetchLeaseOwner: v.optional(v.string()),
     serviceSecret: v.optional(v.string()),
   },
@@ -880,11 +884,13 @@ export const upsertManyByHandle = mutation({
         imageUrl: _rawImageUrl,
         imageUrls: _rawImageUrls,
         postedAt: _rawPostedAt,
+        metadataProvider: _metadataProvider,
         ...postWithoutPrimaryImage
       } = post;
       void _rawImageUrl;
       void _rawImageUrls;
       void _rawPostedAt;
+      void _metadataProvider;
       const parsedPostedAtMs = parsePostedAtMs(post.postedAt);
       const effectivePostedAtMs = parsedPostedAtMs ?? existing?.postedAtMs;
       const effectivePostedAt =
@@ -905,9 +911,25 @@ export const upsertManyByHandle = mutation({
       };
 
       if (existing) {
+        const hasQualityAnalysisCache = existing.analysisRevision === (existing.sourceRevision ?? 1) &&
+          existing.analysisContractVersion === "event_evidence_v2" &&
+          hasCachedExtractionQualityPolicy(existing.analysisResultJson);
+        const preserveCanonicalAlt = post.metadataProvider === "instaloader" &&
+          existing.processingStatus === "completed" && hasQualityAnalysisCache &&
+          post.caption === existing.caption && post.postType === existing.postType &&
+          post.locationName === existing.locationName && effectivePostedAt === existing.postedAt &&
+          normalizeHandle(post.username) === normalizeHandle(existing.username) &&
+          isInertGeneratedAltEnrichment(existing.altText ?? null, post.altText ?? null) &&
+          sameInstagramSlideAssets(
+            { slides: existing.imageSlides ?? [], completeCount: existing.imageSlideCount ?? 0 },
+            { slides: post.imageSlides ?? [], completeCount: post.imageSlideCount ?? 0 },
+          );
+        // Keep the established analysis input only for proven inert transport
+        // enrichment. The private acquisition journal retains the full raw alt.
+        if (preserveCanonicalAlt) nextRecord.altText = existing.altText;
         const hasSourceContentChanged =
           (post.caption !== undefined && post.caption !== existing.caption) ||
-          (post.altText !== undefined && post.altText !== existing.altText) ||
+          (!preserveCanonicalAlt && post.altText !== undefined && post.altText !== existing.altText) ||
           (post.postType !== undefined && post.postType !== existing.postType) ||
           (post.locationName !== undefined && post.locationName !== existing.locationName) ||
           (effectivePostedAt !== undefined && effectivePostedAt !== existing.postedAt);
@@ -915,9 +937,6 @@ export const upsertManyByHandle = mutation({
           imageUrls,
           existing.imageUrls ?? [],
         );
-        const hasQualityAnalysisCache = existing.analysisRevision === (existing.sourceRevision ?? 1) &&
-          existing.analysisContractVersion === "event_evidence_v2" &&
-          hasCachedExtractionQualityPolicy(existing.analysisResultJson);
         const shouldReprocessForNewMedia =
           hasImageCandidatesChanged &&
           !hasQualityAnalysisCache &&
