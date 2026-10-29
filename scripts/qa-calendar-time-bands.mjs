@@ -288,7 +288,7 @@ assert.ok(
   ) &&
     kindToggleSource.includes("timeBand.hidden = visibleTimeBandCount === 0") &&
     kindToggleSource.includes(
-      "target.textContent = pluralize(visibleTimeBandCount)",
+      "setVisibleText(target, pluralize(visibleTimeBandCount))",
     ),
   "Auto-applying category filters must update each group count and hide only empty groups.",
 );

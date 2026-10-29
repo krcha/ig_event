@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { EVENT_CATEGORY_TONES, type EventCategoryKind } from "@/components/events/event-meta";
 import {
   EVENT_PRIMARY_CATEGORIES,
@@ -103,9 +103,13 @@ function getVisibleCountFromCategoryCounts(
   }, 0);
 }
 
+function setVisibleText(target: HTMLElement, text: string) {
+  if (target.textContent !== text) target.textContent = text;
+}
+
 function setMetricValue(metricKey: string, value: number) {
   document.querySelectorAll<HTMLElement>(`[data-calendar-stat-value="${metricKey}"]`).forEach((target) => {
-    target.textContent = String(value);
+    setVisibleText(target, String(value));
   });
 }
 
@@ -138,7 +142,7 @@ function syncDateStripAndMetricCounts(categories: readonly EventCategoryKind[]) 
 
     dateLink.dataset.calendarVisibleEventCount = String(visibleCount);
     dateLink.querySelectorAll<HTMLElement>("[data-calendar-date-visible-event-count]").forEach((target) => {
-      target.textContent = String(visibleCount);
+      setVisibleText(target, String(visibleCount));
     });
     dateLink.querySelectorAll<HTMLElement>("[data-calendar-date-count-dot]").forEach((target) => {
       target.classList.toggle("bg-primary", visibleCount > 0);
@@ -175,7 +179,7 @@ function applyAgendaVisibility(categories: readonly EventCategoryKind[]) {
 
       group.hidden = visibleGroupCount === 0;
       group.querySelectorAll<HTMLElement>("[data-calendar-venue-group-visible-count]").forEach((target) => {
-        target.textContent = pluralize(visibleGroupCount);
+        setVisibleText(target, pluralize(visibleGroupCount));
       });
     });
 
@@ -194,12 +198,12 @@ function applyAgendaVisibility(categories: readonly EventCategoryKind[]) {
       timeBand
         .querySelectorAll<HTMLElement>("[data-calendar-time-band-visible-count]")
         .forEach((target) => {
-          target.textContent = pluralize(visibleTimeBandCount);
+          setVisibleText(target, pluralize(visibleTimeBandCount));
         });
     });
 
     scope.querySelectorAll<HTMLElement>("[data-calendar-visible-event-count]").forEach((target) => {
-      target.textContent = pluralize(visibleCount);
+      setVisibleText(target, pluralize(visibleCount));
     });
     scope.querySelectorAll<HTMLElement>("[data-calendar-empty-state]").forEach((emptyState) => {
       emptyState.hidden = visibleCount > 0;
@@ -228,6 +232,7 @@ export function EventKindToggleChips({
   const [hiddenCategories, setHiddenCategories] = useState<EventCategoryKind[]>(() =>
     normalizeHiddenCategories(initialHiddenCategories),
   );
+  const appliedCategoryKey = useRef(initialHiddenCategoryKey);
   const hiddenSet = useMemo(() => new Set(hiddenCategories), [hiddenCategories]);
 
   const setHiddenCategoriesAndUrl = useCallback(
@@ -236,7 +241,11 @@ export function EventKindToggleChips({
       const targetUrl = buildHiddenCategoriesUrl(normalized, pathname || "/");
 
       setHiddenCategories(normalized);
-      applyAgendaVisibility(normalized);
+      const nextKey = formatHiddenCategories(normalized) ?? "";
+      if (appliedCategoryKey.current !== nextKey) {
+        applyAgendaVisibility(normalized);
+        appliedCategoryKey.current = nextKey;
+      }
 
       if (targetUrl !== getCurrentRelativeUrl()) {
         startTransition(() => {
@@ -249,6 +258,9 @@ export function EventKindToggleChips({
 
   useEffect(() => {
     const nextCategories = normalizeHiddenCategories(initialHiddenCategoryKey);
+    // The server already applied this state to rows, metrics and date strips.
+    // Do not replace nodes owned by another island while it is hydrating.
+    appliedCategoryKey.current = initialHiddenCategoryKey;
     setHiddenCategories((currentCategories) => {
       const currentKey = formatHiddenCategories(currentCategories) ?? "";
       const nextKey = formatHiddenCategories(nextCategories) ?? "";
@@ -257,7 +269,10 @@ export function EventKindToggleChips({
   }, [initialHiddenCategoryKey]);
 
   useEffect(() => {
+    const nextKey = formatHiddenCategories(hiddenCategories) ?? "";
+    if (appliedCategoryKey.current === nextKey) return;
     applyAgendaVisibility(hiddenCategories);
+    appliedCategoryKey.current = nextKey;
   }, [hiddenCategories]);
 
   useEffect(() => {
