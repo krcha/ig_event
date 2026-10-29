@@ -93,20 +93,25 @@ weekdays remain unknown
 them closed.
 
 The calendar and map share an `Open now` control using `Europe/Belgrade` time.
-Known event starts and ends determine eligibility; a start-only event uses the
-venue closing assumption above. Only confirmed active events are included.
-An unresolved end is excluded, including missing hours and uninterrupted 24/7
-hours without an announced event end. The internal `possible` state remains a
-diagnostic classification and is not eligible for public Open now results.
-An announced event end remains authoritative even when venue hours are absent.
-This eligibility assumption does not invent or store an event end. Events without
-a usable time otherwise use current venue opening hours, including verified
-overnight continuations from yesterday. Enabling the home filter retains the
-07:00 nightlife date; the map keeps its existing 06:00 display rollover. Both
-read civil yesterday/today independently, retaining current-civil early starts.
-Explicit date navigation leaves this mode. Other calendar filters remain
-available. Results refresh each minute and when the tab becomes visible. The
-control's visible and accessible label is simply `Open now`.
+As requested on 2026-10-29, eligibility describes the venue's current working
+hours, rather than whether the event itself is underway. Current-outing listings
+at a confirmed open venue can appear before their event starts or after it ends.
+Announced event ranges never override venue closures, opening gaps or unknown
+hours. Verified 24/7 venues are eligible without inventing a finite event end.
+Missing/invalid schedules, source-none records, conflicting source/timezone
+metadata and omitted weekdays remain unknown; internal `possible` states never
+enter public Open now results. The existing seven-day provider refresh policy
+and nonexpiring reviewed manual hours remain unchanged.
+
+Announced starts only assign early-morning listings to their actual outing;
+unknown-time listings keep their stored outing date. Previous outings cannot
+revive the next night and expire at 07:00, including at 24/7 venues. This filter
+does not modify canonical event times or the separate display-only closing
+inference above. Home retains its 07:00 nightlife date; map keeps its existing
+06:00 display rollover. Both read civil yesterday/today independently, retaining
+current-civil early starts. Explicit date navigation leaves this mode. Other
+calendar filters remain available. Results refresh each minute and when the tab
+becomes visible. The visible and accessible label remains `Open now`.
 
 ## Verification
 

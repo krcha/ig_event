@@ -237,28 +237,35 @@ const openNowEvents = [
 ];
 const openNowOptions = { selectedDate: "2026-10-17", openNow: true, now: Date.parse("2026-10-17T00:00:00Z") };
 const filteredOpenEvents = filterEventMapEvents(openNowEvents, openNowOptions);
-assert.deepEqual(filteredOpenEvents.map((event) => event._id), ["ongoing", "no-start"],
-  "The map retains only verified openings, excluding unknown endings, ended and future events.");
-assert.deepEqual(buildEventMapData(filteredOpenEvents).locations[0].events.map((event) => event._id), ["ongoing", "no-start"],
+assert.deepEqual(filteredOpenEvents.map((event) => event._id), ["ongoing", "ended", "no-start"],
+  "The map uses current venue openings even after an announced event ends; unknown hours and other outings stay excluded.");
+assert.deepEqual(buildEventMapData(filteredOpenEvents).locations[0].events.map((event) => event._id).sort(), ["ended", "no-start", "ongoing"],
   "Pins and popups must use the same filtered event set as the map lineup.");
 assert.deepEqual(filterEventMapEvents(openNowEvents, { ...openNowOptions, now: Date.parse("2026-10-17T02:00:00Z") }).map((event) => event._id), [],
-  "Confirmed openings end at the exact closing boundary; unresolved events remain excluded.");
+  "The exact venue closing boundary is excluded.");
 assert.deepEqual(filterEventMapEvents(openNowEvents, { ...openNowOptions, now: Date.parse("2026-10-17T05:00:00Z") }), [],
-  "Unknown endings must remain excluded in the next nightlife day.");
+  "Closed venues and previous outings stay excluded in the next nightlife day.");
 assert.deepEqual(filterEventMapEvents(openNowEvents, { ...openNowOptions, selectedDate: "2026-10-16", openNow: false }),
   openNowEvents.filter((event) => event.date === "2026-10-16"),
   "Date browsing must retain its complete lineup when Open now is off.");
 
 const beforeStart = [makeEvent({ _id: "later-tonight", date: "2026-10-16", time: "22:00", venueHours: overnightHours })];
-assert.deepEqual(filterEventMapEvents(beforeStart, { ...openNowOptions, selectedDate: "2026-10-16", now: Date.parse("2026-10-16T18:00:00Z") }), [],
-  "An open venue must not put tonight's event on the Open now map before its announced start.");
+assert.deepEqual(filterEventMapEvents(beforeStart, { ...openNowOptions, selectedDate: "2026-10-16", now: Date.parse("2026-10-16T18:00:00Z") }), beforeStart,
+  "An open venue qualifies for the current outing before its event's announced start.");
 
 const mondayAfterMidnight = Date.parse("2026-10-19T02:00:00+02:00");
+const sundayVenueHours = {
+  hoursJson: JSON.stringify({
+    generatedAt: "2026-10-16T12:00:00.000Z", source: "manual", timezone: "Europe/Belgrade", version: 1,
+    weekly: [{ day: 0, closed: false, windows: [{ day: 0, start: "20:00", end: "05:00", spansNextDay: true }] }],
+  }),
+};
 assert.deepEqual(filterEventMapEvents([
-  makeEvent({ _id: "sunday-night", date: "2026-10-18", time: "22:00-05:00" }),
-  makeEvent({ _id: "monday-start", date: "2026-10-19", time: "01:00-03:00" }),
+  makeEvent({ _id: "sunday-night", date: "2026-10-18", time: "22:00-05:00", venueHours: sundayVenueHours }),
+  makeEvent({ _id: "monday-start", date: "2026-10-19", time: "01:00-03:00", venueHours: sundayVenueHours }),
+  makeEvent({ _id: "range-without-hours", date: "2026-10-18", time: "22:00-05:00" }),
 ], { selectedDate: getEventMapOpenNowDateKey(mondayAfterMidnight), openNow: true, now: mondayAfterMidnight })
   .map((event) => event._id), ["sunday-night", "monday-start"],
-"The previous display day must keep both overnight events and current-day starts in Open now results.");
+"The previous display day retains both overnight and current-civil starts only at verified open venues.");
 
 console.log("Event map QA passed.");

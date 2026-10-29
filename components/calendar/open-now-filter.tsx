@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useTransition } from "react";
-import { Check } from "lucide-react";
+import { Check, Clock3, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type OpenNowFilterProps = {
@@ -60,9 +60,10 @@ export function OpenNowFilter({ active, href, appearance = "default" }: OpenNowF
           ? cn("h-8 min-h-8 gap-1.5 px-2.5 text-[11px] font-medium leading-none shadow-lg", active
             ? "bg-[#7DD3A8] text-[#082C1B] ring-2 ring-inset ring-[#082C1B]/20 focus-visible:outline-[#7DD3A8]"
             : "bg-primary text-primary-foreground ring-1 ring-inset ring-primary-foreground/10 focus-visible:outline-primary")
-          : cn("min-h-8 gap-1.5 px-2.5 text-[11px] font-medium focus-visible:outline-emerald-200", active
-            ? "bg-emerald-400/15 text-emerald-300 ring-1 ring-emerald-400/35"
-            : "bg-white/[0.045] text-muted-foreground hover:text-foreground"),
+          : cn("min-h-11 gap-2 px-3.5 text-xs font-semibold leading-none shadow-[0_4px_16px_-7px_rgba(139,134,251,0.8)]", active
+            ? "bg-[#7DD3A8] text-[#082C1B] ring-2 ring-inset ring-[#082C1B]/20 shadow-[0_4px_16px_-7px_rgba(125,211,168,0.7)] focus-visible:outline-[#7DD3A8]"
+            : "bg-primary text-primary-foreground ring-1 ring-inset ring-primary-foreground/15 focus-visible:outline-primary"),
+        pending && "cursor-wait",
       )}
       data-calendar-open-now="true"
       data-calendar-open-now-active={active ? "true" : "false"}
@@ -71,9 +72,17 @@ export function OpenNowFilter({ active, href, appearance = "default" }: OpenNowF
       }}
       type="button"
     >
-      {appearance === "map"
-        ? <span aria-hidden="true" className="inline-flex size-3 items-center justify-center">{active ? <Check className="size-3" /> : <span className="size-1.5 rounded-full bg-current" />}</span>
-        : <span aria-hidden="true" className={cn("size-1.5 rounded-full", active ? "bg-emerald-300" : "bg-current opacity-50")} />}
+      <span aria-hidden="true" className={cn("inline-flex flex-none items-center justify-center", appearance === "map" ? "size-3" : "size-4")}>
+        {pending ? (
+          <Loader2 className="size-full animate-spin motion-reduce:animate-none" />
+        ) : active ? (
+          <Check className="size-full" />
+        ) : appearance === "map" ? (
+          <span className="size-1.5 rounded-full bg-current" />
+        ) : (
+          <Clock3 className="size-full" />
+        )}
+      </span>
       <span>Open now</span>
     </button>
   );

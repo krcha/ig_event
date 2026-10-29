@@ -45,13 +45,13 @@ function isWeekday(value: number | undefined): value is number {
 }
 
 // Google represents an always-open place as a single period with open day 0,
-// time 00:00 and NO close field. The shared time labels cap at 23:59, so we
-// render that as every day open 00:00-23:59 (reads as "open all day").
+// time 00:00 and NO close field. A full midnight-to-midnight interval keeps
+// every instant open, including the final minute before the next day.
 function buildAlwaysOpenWeekly(): VenueHoursDay[] {
   return Array.from({ length: 7 }, (_unused, day) => ({
     closed: false,
     day,
-    windows: [{ day, end: "23:59", start: "00:00" }],
+    windows: [{ day, end: "00:00", spansNextDay: true, start: "00:00" }],
   }));
 }
 

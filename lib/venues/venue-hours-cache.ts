@@ -246,6 +246,9 @@ export function shouldRefreshVenueHoursCache(
 }
 
 export function formatVenueHoursWindow(window: VenueHoursWindow): string {
+  if (window.start === "00:00" && window.end === "00:00" && window.spansNextDay) {
+    return "Open 24 hours";
+  }
   return `${window.start}–${window.end}`;
 }
 
