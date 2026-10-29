@@ -1,4 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
+import { renderToStaticMarkup } from "react-dom/server";
+import * as jsxRuntime from "react/jsx-runtime";
+import ts from "typescript";
 
 import {
   TBD_EVENT_TIME,
@@ -8,8 +13,11 @@ import {
 } from "../lib/events/event-time.ts";
 import {
   BELGRADE_TIMEZONE,
+  getVenueOperatingStatus,
   getVenueHoursWindowsForDate,
+  parseVenueHoursJson,
   serializeVenueHoursJson,
+  formatVenueHoursWindow,
 } from "../lib/venues/venue-hours-cache.ts";
 import { resolveEventTimePresentation } from "../lib/events/event-time-presentation.ts";
 import {
@@ -32,6 +40,90 @@ function createHoursJson(day) {
     version: 1,
     weekly: [day],
   });
+}
+
+{
+  const proof = {
+    checkedAt: "2026-06-17T11:00:00.000Z",
+    sourceUrls: ["https://www.instagram.com/venue/"],
+    status: "temporarily_closed",
+    verified: true,
+  };
+  const regular = parseVenueHoursJson(createHoursJson({
+    closed: false, day: 3, windows: [{ day: 3, start: "10:00", end: "22:00" }],
+  }));
+  const withProof = (operatingStatus, base = regular) => ({ ...base, raw: { operatingStatus } });
+  for (const status of ["temporarily_closed", "permanently_closed"]) {
+    assert.equal(getVenueOperatingStatus(withProof({ ...proof, status }), NOW), status);
+  }
+  assert.equal(getVenueOperatingStatus(withProof({ ...proof, checkedAt: "2026-06-17T13:00:00+02:00" }), NOW), "temporarily_closed",
+    "Dated owner proof supports ISO timestamps with real timezone offsets.");
+  for (const patch of [
+    { verified: false }, { verified: "true" }, { checkedAt: undefined },
+    { checkedAt: "2026-02-30T11:00:00Z" }, { checkedAt: "yesterday" },
+    { checkedAt: "2026-06-17T13:00:00Z" }, { checkedAt: "2026-06-17T25:00:00Z" },
+    { checkedAt: "2026-06-17T11:00:00+14:01" },
+    { sourceUrls: [] }, { sourceUrls: undefined }, { sourceUrls: ["javascript:alert(1)"] },
+    { sourceUrls: ["https://example.com/", "not-a-url"] },
+    { sourceUrls: ["https://user:password@example.com/"] },
+    { status: "closed" }, { reviewAfter: "2026-02-30T00:00:00Z" }, { reviewNote: 42 },
+  ]) {
+    assert.equal(getVenueOperatingStatus(withProof({ ...proof, ...patch }), NOW), null,
+      `Missing, malformed, conflicting or future evidence must not establish closure: ${JSON.stringify(patch)}`);
+  }
+  for (const operatingStatus of [undefined, null, [], "permanently_closed", { status: "temporarily_closed" }]) {
+    assert.equal(getVenueOperatingStatus(withProof(operatingStatus), NOW), null);
+  }
+  for (const now of [NaN, new Date("invalid")]) {
+    assert.equal(getVenueOperatingStatus(withProof(proof), now), null);
+  }
+  const reviewAfter = "2026-06-17T12:00:00.000Z";
+  const stale = withProof({ ...proof, reviewAfter });
+  assert.equal(getVenueOperatingStatus(stale, NOW - 1), "temporarily_closed");
+  assert.equal(getVenueOperatingStatus(stale, new Date(NOW)), "needs_review",
+    "An elapsed temporary closure needs review and must not silently turn into confirmed open hours.");
+  assert.equal(getVenueOperatingStatus(withProof({ ...proof, status: "permanently_closed" }), NOW + 366 * 86400000), "permanently_closed",
+    "A permanent closure without a review date remains in effect until updated evidence clears it.");
+  const noSchedule = withProof(proof, { ...regular, source: "none", weekly: [] });
+  assert.equal(getVenueOperatingStatus(noSchedule, NOW), "temporarily_closed",
+    "A verified closure does not require fabricated opening hours or a provider schedule.");
+
+  // Render the shipped hours component with a fixed clock and real React markup.
+  const componentModule = { exports: {} };
+  const compiled = ts.transpileModule(readFileSync("components/venues/venue-weekly-hours.tsx", "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  runInNewContext(compiled, {
+    exports: componentModule.exports,
+    require: (name) => {
+      if (name === "react/jsx-runtime") return jsxRuntime;
+      if (name === "@/lib/utils") return { cn: (...values) => values.filter(Boolean).join(" ") };
+      if (name === "@/lib/venues/venue-hours-cache") return {
+        BELGRADE_TIMEZONE, parseVenueHoursJson, formatVenueHoursWindow,
+        getVenueOperatingStatus: (hours) => getVenueOperatingStatus(hours, NOW),
+      };
+      throw new Error(`Unexpected weekly-hours component import: ${name}`);
+    },
+  });
+  const render = (hours) => renderToStaticMarkup(componentModule.exports.VenueWeeklyHours({
+    hoursJson: serializeVenueHoursJson(hours), hoursSource: hours.source,
+  }));
+  const closedMarkup = render(withProof(proof));
+  assert.match(closedMarkup, /Temporarily closed/);
+  assert.match(closedMarkup, /Regular weekly schedule/);
+  assert.match(closedMarkup, /10:00–22:00/);
+  assert.match(closedMarkup, /href="https:\/\/www\.instagram\.com\/venue\/"/);
+  assert.match(closedMarkup, /Status source/);
+  const permanentMarkup = render(withProof({ ...proof, status: "permanently_closed" }));
+  assert.match(permanentMarkup, /Permanently closed/);
+  assert.match(render(stale), /Hours need confirmation/);
+  assert.doesNotMatch(render(stale), /Temporarily closed/);
+  const noScheduleMarkup = render(noSchedule);
+  assert.match(noScheduleMarkup, /Temporarily closed/);
+  assert.doesNotMatch(noScheduleMarkup, /Regular weekly schedule|Not available|<dl/,
+    "Closure-only records must not display seven invented closed/unknown weekdays.");
+  assert.doesNotMatch(render(withProof({ ...proof, verified: false })), /Temporarily closed|Status source/,
+    "Disputed Google closures must not be presented as verified closures.");
 }
 
 function jsonResponse(value) {

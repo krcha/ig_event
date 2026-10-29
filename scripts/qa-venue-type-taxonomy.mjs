@@ -57,6 +57,10 @@ function runVenueCategoryQa() {
   assert.equal(canonicalizeVenueCategory(""), "venue");
   assert.equal(canonicalizeVenueCategory("event space"), "venue");
   assert.equal(canonicalizeVenueCategory("Promoter"), "promoter");
+  for (const category of ["organizer", "organiser", "organizator", "festival", "event series", "club event organizer"]) {
+    assert.equal(canonicalizeVenueCategory(category), "promoter");
+    assert.equal(venueRequiresPhysicalDetails(category), false);
+  }
   assert.equal(venueRequiresPhysicalDetails("promoter"), false);
   assert.equal(venueRequiresPhysicalDetails("Promoter"), false);
   assert.equal(venueRequiresPhysicalDetails("bar"), true);

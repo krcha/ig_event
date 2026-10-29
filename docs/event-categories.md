@@ -8,12 +8,12 @@ tags can describe genres, activities, and explicitly stated free admission.
 | `club` | Zurke | Parties, DJ sets, raves, and dance nights |
 | `live` | Live music | Concerts, live bands, solo performers, and tribute concerts |
 | `culture` | Kultura | Theatre, stand-up, exhibitions, film, performances, and discussions |
-| `social` | Barovi | Social evenings, cocktail gatherings, and after-work events |
-| `event` | Ostalo | Workshops, quizzes, tastings, participatory activities, sports screenings, openings, generic festivals, and other special events |
+| `event` | Ostalo | Social evenings, cocktail gatherings, after-work events, workshops, quizzes, tastings, participatory activities, sports screenings, openings, generic festivals, and other special events |
 
 The `club` and `culture` keys retain their existing URLs with the shorter public
-labels. The former `experience` filter key is an alias for `event`, and historical
-links focused on either Radionice or Ostalo now select the combined Ostalo group.
+labels. The former `social` and `experience` filter keys are aliases for `event`.
+Historical links focused on Barovi, Radionice or Ostalo now select the combined
+Ostalo group. Physical venue categories such as `bar` remain unchanged.
 
 When all categories are enabled, choosing one chip shows only that category.
 Other chips can then be added or removed from that selection. All, or clicking
@@ -44,7 +44,7 @@ a DJ set is being performed.
 
 ## Legacy Data Compatibility
 
-The five categories are a public presentation taxonomy. Existing Convex fields,
+The four categories are a public presentation taxonomy. Existing Convex fields,
 canonical extraction types, ingestion, and moderation keep their current
 contracts. Existing records remain readable without a migration or re-scrape.
 

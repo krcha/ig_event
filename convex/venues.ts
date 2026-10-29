@@ -1,7 +1,7 @@
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
-import { v } from "convex/values";
+import { v, type Infer } from "convex/values";
 import {
   MAX_VENUE_ALIASES,
   normalizeHandle,
@@ -40,6 +40,8 @@ import {
   isReviewablySourceGroundedApprovedEvent,
   repairReviewedStructuredEventVenueHandler,
 } from "./internal/eventRepairs/reviewedStructuredCorrections";
+import { sha256Hex } from "../lib/domain/reconciliation/evidence-digest";
+import { getVenueCoordinates } from "../lib/venues/coordinates";
 
 const DEFAULT_PUBLIC_VENUE_EVENT_LIMIT = 12;
 const MAX_PUBLIC_VENUE_EVENT_LIMIT = 50;
@@ -59,6 +61,166 @@ const venuePublicStatus = v.union(
   v.literal("published"),
   v.literal("hidden"),
 );
+const reviewedDetailsNullableString = v.union(v.string(), v.null());
+const reviewedDetailsNullableNumber = v.union(v.number(), v.null());
+const reviewedVenueDetailsExpected = v.object({
+  name: v.string(),
+  instagramHandle: v.string(),
+  category: v.string(),
+  updatedAt: v.number(),
+  location: reviewedDetailsNullableString,
+  latitude: reviewedDetailsNullableNumber,
+  longitude: reviewedDetailsNullableNumber,
+  neighborhood: reviewedDetailsNullableString,
+  hoursSource: v.union(venueHoursSource, v.null()),
+  hoursJson: reviewedDetailsNullableString,
+  hoursFetchedAt: reviewedDetailsNullableNumber,
+  hoursExpiresAt: reviewedDetailsNullableNumber,
+  hoursTimezone: reviewedDetailsNullableString,
+  hoursError: reviewedDetailsNullableString,
+  googlePlaceId: reviewedDetailsNullableString,
+  osmElementId: reviewedDetailsNullableString,
+  osmElementType: reviewedDetailsNullableString,
+});
+const reviewedVenueDetailsPatch = v.object({
+  location: v.optional(v.string()),
+  latitude: v.optional(v.number()),
+  longitude: v.optional(v.number()),
+  neighborhood: v.optional(v.string()),
+  hoursSource: v.optional(venueHoursSource),
+  hoursJson: v.optional(v.string()),
+  hoursFetchedAt: v.optional(v.number()),
+  hoursExpiresAt: v.optional(v.number()),
+  hoursTimezone: v.optional(v.literal("Europe/Belgrade")),
+  hoursError: v.optional(v.string()),
+  googlePlaceId: v.optional(v.string()),
+  osmElementId: v.optional(v.string()),
+  osmElementType: v.optional(v.union(v.literal("node"), v.literal("way"), v.literal("relation"))),
+});
+const REVIEWED_VENUE_DETAILS_FIELDS = [
+  "name", "instagramHandle", "category", "updatedAt", "location", "latitude", "longitude", "neighborhood",
+  "hoursSource", "hoursJson", "hoursFetchedAt", "hoursExpiresAt", "hoursTimezone", "hoursError",
+  "googlePlaceId", "osmElementId", "osmElementType",
+] as const;
+const REVIEWED_VENUE_DETAILS_PATCH_FIELDS = new Set<string>(REVIEWED_VENUE_DETAILS_FIELDS
+  .filter((field) => !["name", "instagramHandle", "category", "updatedAt"].includes(field)));
+const REVIEWED_VENUE_HOURS_GROUP = ["hoursSource", "hoursJson", "hoursFetchedAt", "hoursExpiresAt", "hoursTimezone"] as const;
+const REVIEWED_HOURS_TIME = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+const REVIEWED_HOURS_MAX_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
+
+function reviewedDetailsSnapshot(venue: Doc<"venues">): Infer<typeof reviewedVenueDetailsExpected> {
+  return Object.fromEntries(REVIEWED_VENUE_DETAILS_FIELDS.map((field) =>
+    [field, venue[field] ?? null])) as Infer<typeof reviewedVenueDetailsExpected>;
+}
+
+function reviewedDetailsFingerprint(snapshot: Infer<typeof reviewedVenueDetailsExpected>): string {
+  return sha256Hex(JSON.stringify(Object.fromEntries(Object.entries(snapshot)
+    .sort(([left], [right]) => left.localeCompare(right)))));
+}
+
+function reviewedDetailsRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function reviewedDetailsSourceUrls(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 0 && value.length <= 10 && value.every((item) => {
+    if (typeof item !== "string" || item.length > 2_048) return false;
+    try {
+      const url = new URL(item);
+      return url.protocol === "https:" && !url.username && !url.password && !url.port;
+    } catch { return false; }
+  });
+}
+
+function reviewedDetailsIsoTimestamp(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value ? timestamp : null;
+}
+
+function validateReviewedOperatingStatus(raw: unknown, sourceUrls: string[], now: number): void {
+  if (raw === undefined) return;
+  if (!reviewedDetailsRecord(raw)) throw new Error("Reviewed hours raw metadata must be an object.");
+  if (!Object.hasOwn(raw, "operatingStatus")) return;
+  const status = raw.operatingStatus;
+  if (!reviewedDetailsRecord(status) ||
+    !["temporarily_closed", "permanently_closed"].includes(String(status.status)) ||
+    typeof status.verified !== "boolean" || !reviewedDetailsSourceUrls(status.sourceUrls) ||
+    !status.sourceUrls.every((url) => sourceUrls.includes(url)) ||
+    (status.reviewNote !== undefined && (typeof status.reviewNote !== "string" || status.reviewNote.length > 4_000))) {
+    throw new Error("Reviewed operating status requires explicit closure, verification and matching source evidence.");
+  }
+  const checkedAt = reviewedDetailsIsoTimestamp(status.checkedAt);
+  if (checkedAt === null || checkedAt < 0 || checkedAt > now + 5 * 60 * 1_000) {
+    throw new Error("Reviewed operating status has an invalid checkedAt timestamp.");
+  }
+  if (status.reviewAfter !== undefined) {
+    const reviewAfter = reviewedDetailsIsoTimestamp(status.reviewAfter);
+    if (reviewAfter === null || reviewAfter <= checkedAt) {
+      throw new Error("Reviewed operating status has an invalid reviewAfter date.");
+    }
+  }
+}
+
+function validateReviewedVenueDetailsPatch(
+  patch: Infer<typeof reviewedVenueDetailsPatch>,
+  sourceUrls: string[],
+  now: number,
+): void {
+  if (!Object.keys(patch).length || Object.entries(patch)
+    .some(([field, value]) => !REVIEWED_VENUE_DETAILS_PATCH_FIELDS.has(field) || value === undefined)) {
+    throw new Error("Reviewed details patch contains an unsupported or empty field set.");
+  }
+  for (const field of ["location", "neighborhood", "googlePlaceId", "osmElementId"] as const) {
+    const value = patch[field];
+    if (value !== undefined && (!value.trim() || value !== value.trim() || value.length > 500)) {
+      throw new Error("Reviewed venue details contain an invalid address, neighborhood or provider ID.");
+    }
+  }
+  if (patch.hoursError !== undefined && patch.hoursError.length > 4_000) {
+    throw new Error("Reviewed hours error exceeds its size bound.");
+  }
+  if ((patch.latitude !== undefined || patch.longitude !== undefined) &&
+    !getVenueCoordinates(patch.latitude, patch.longitude)) {
+    throw new Error("Reviewed coordinates require one valid latitude/longitude pair.");
+  }
+  if (!REVIEWED_VENUE_HOURS_GROUP.some((field) => Object.hasOwn(patch, field))) return;
+  if (!REVIEWED_VENUE_HOURS_GROUP.every((field) => patch[field] !== undefined) ||
+    !Number.isSafeInteger(patch.hoursFetchedAt) || !Number.isSafeInteger(patch.hoursExpiresAt) ||
+    patch.hoursFetchedAt! < 0 || patch.hoursFetchedAt! > now + 5 * 60 * 1_000 ||
+    patch.hoursExpiresAt! <= patch.hoursFetchedAt! || patch.hoursExpiresAt! <= now ||
+    patch.hoursExpiresAt! > patch.hoursFetchedAt! + REVIEWED_HOURS_MAX_TTL_MS ||
+    patch.hoursTimezone !== "Europe/Belgrade" || patch.hoursJson!.length > 32_768) {
+    throw new Error("Reviewed hours require a complete coherent cache group with bounded timestamps and size.");
+  }
+  let hours: unknown;
+  try { hours = JSON.parse(patch.hoursJson!); } catch { throw new Error("Reviewed hours must be valid JSON."); }
+  if (!reviewedDetailsRecord(hours) || hours.version !== 1 || hours.source !== patch.hoursSource ||
+    !["osm", "google", "manual", "none"].includes(String(hours.source)) ||
+    hours.timezone !== patch.hoursTimezone || hours.generatedAt !== new Date(patch.hoursFetchedAt!).toISOString() ||
+    !Array.isArray(hours.weekly) || hours.weekly.length > 7 ||
+    (hours.source === "none" && hours.weekly.length > 0)) {
+    throw new Error("Reviewed hours have invalid version, source, timezone or weekly metadata.");
+  }
+  const weekdays = new Set<number>();
+  for (const day of hours.weekly) {
+    if (!reviewedDetailsRecord(day) || !Number.isInteger(day.day) || (day.day as number) < 0 ||
+      (day.day as number) > 6 || weekdays.has(day.day as number) || typeof day.closed !== "boolean" ||
+      !Array.isArray(day.windows) || day.windows.length > 8 || (day.closed && day.windows.length > 0)) {
+      throw new Error("Reviewed weekly hours contain an invalid or duplicate day.");
+    }
+    weekdays.add(day.day as number);
+    for (const window of day.windows) {
+      if (!reviewedDetailsRecord(window) || window.day !== day.day || typeof window.start !== "string" ||
+        typeof window.end !== "string" || !REVIEWED_HOURS_TIME.test(window.start) || !REVIEWED_HOURS_TIME.test(window.end) ||
+        (window.spansNextDay !== undefined && typeof window.spansNextDay !== "boolean") ||
+        (window.end <= window.start) !== (window.spansNextDay === true)) {
+        throw new Error("Reviewed weekly hours contain an invalid time window.");
+      }
+    }
+  }
+  validateReviewedOperatingStatus(hours.raw, sourceUrls, now);
+}
 const venueLifecycleRollbackValues = v.object({
   isActive: v.union(v.boolean(), v.null()),
   publicStatus: v.union(venuePublicStatus, v.null()),
@@ -1562,6 +1724,73 @@ export const applyVenueLifecycleMigrationBatch = mutation({
       backupReference,
       beforeCounts: plan.counts,
     };
+  },
+});
+
+/** Reviewed catalog metadata never rewrites canonical events or source facts. */
+export const applyReviewedVenueDetails = mutation({
+  args: {
+    id: v.id("venues"),
+    expected: reviewedVenueDetailsExpected,
+    expectedFingerprint: v.string(),
+    patch: reviewedVenueDetailsPatch,
+    importId: v.string(),
+    reviewNote: v.string(),
+    sourceUrls: v.array(v.string()),
+    serviceSecret: v.optional(v.string()),
+  },
+  returns: v.object({
+    id: v.id("venues"),
+    updated: v.boolean(),
+    updatedAt: v.number(),
+    fingerprint: v.string(),
+    auditLogId: v.optional(v.id("venueAuditLog")),
+  }),
+  handler: async (ctx, args) => {
+    const authorization = await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{2,159}$/.test(args.importId) ||
+      args.reviewNote.trim().length < 20 || args.reviewNote.length > 4_000 ||
+      !reviewedDetailsSourceUrls(args.sourceUrls) ||
+      !/^[a-f0-9]{64}$/.test(args.expectedFingerprint) ||
+      !Number.isSafeInteger(args.expected.updatedAt) ||
+      JSON.stringify(args.expected).length > 196_608) {
+      throw new Error("Reviewed details require a bounded import identity, review note, source URLs and snapshot fingerprint.");
+    }
+    const current = await ctx.db.get(args.id);
+    if (!current) throw new Error("Reviewed venue not found.");
+    if (!venueRequiresPhysicalDetails(current.category)) {
+      throw new Error("Reviewed physical details cannot be assigned to a promoter.");
+    }
+    const before = reviewedDetailsSnapshot(current);
+    // Hours writers do not all advance updatedAt, so compare every cache field
+    // as well as catalog identity in this same OCC-protected transaction.
+    if (REVIEWED_VENUE_DETAILS_FIELDS.some((field) => before[field] !== args.expected[field]) ||
+      reviewedDetailsFingerprint(args.expected) !== args.expectedFingerprint ||
+      reviewedDetailsFingerprint(before) !== args.expectedFingerprint) {
+      throw new Error("Reviewed venue identity, details or hours changed after snapshot review.");
+    }
+    const now = Date.now();
+    validateReviewedVenueDetailsPatch(args.patch, args.sourceUrls, now);
+    const changed = Object.entries(args.patch).some(([field, value]) => current[field as keyof Doc<"venues">] !== value);
+    if (!changed) {
+      return { id: current._id, updated: false, updatedAt: current.updatedAt, fingerprint: args.expectedFingerprint };
+    }
+    const updatedAt = Math.max(now, current.updatedAt + 1);
+    const after = reviewedDetailsSnapshot({ ...current, ...args.patch, updatedAt });
+    const fingerprint = reviewedDetailsFingerprint(after);
+    await ctx.db.patch(current._id, { ...args.patch, updatedAt });
+    const auditLogId = await ctx.db.insert("venueAuditLog", {
+      venueId: current._id,
+      action: "venue.reviewed_details_imported",
+      actor: authorization.actor,
+      beforeJson: JSON.stringify({ fingerprint: args.expectedFingerprint, snapshot: before }),
+      afterJson: JSON.stringify({
+        fingerprint, snapshot: after, importId: args.importId, sourceUrls: args.sourceUrls,
+      }),
+      note: args.reviewNote.trim(),
+      createdAt: now,
+    });
+    return { id: current._id, updated: true, updatedAt, fingerprint, auditLogId };
   },
 });
 

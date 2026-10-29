@@ -25,7 +25,14 @@ import {
   listPublicCalendarEventsWindowPaginatedHandler,
 } from "../convex/eventDomain/publicReads.ts";
 import {
+  buildPendingModerationVenueResolver,
+  prepareHumanApprovalCandidate,
+  prepareHumanApprovalCandidateFromVenueResolver,
+} from "../convex/eventDomain/moderationVenue.ts";
+import { projectPublicEvent } from "../convex/publicEventProjection.ts";
+import {
   listFavoriteVenues,
+  listSavedEvents,
   toggleFavoriteVenue,
 } from "../convex/users.ts";
 import { normalizeVenueComparableText } from "../lib/pipeline/venue-normalization.ts";
@@ -331,10 +338,41 @@ try {
     ...overrides,
   });
   const promoterEvent = event("promoter-event", organizer);
+  const promoterNamedEvent = event("promoter-named-event", organizer, { venue: organizer.name });
   const physicalEvent = event("physical-event", physical);
   const hiddenEvent = event("hidden-event", hiddenOrganizer);
+  const moderationResolver = buildPendingModerationVenueResolver(venues, identities);
+  for (const claim of [organizer.name, organizer.aliases[0], `@${organizer.instagramHandle}`]) {
+    const sourceEvent = { ...promoterNamedEvent, venue: claim, status: "pending" };
+    const original = structuredClone(sourceEvent);
+    const prepared = prepareHumanApprovalCandidateFromVenueResolver(sourceEvent, moderationResolver);
+    assert.equal(prepared.candidate.venueId, undefined, "Pending moderation cannot restore a linked promoter as a place");
+    assert.equal(prepared.candidate.venueLatitude, undefined);
+    assert.equal(prepared.candidate.venue, claim, "Moderator preparation preserves the original source claim");
+    const asynchronous = await prepareHumanApprovalCandidate(resolverFixture.ctx, sourceEvent);
+    assert.equal(asynchronous.candidate.venueId, undefined, "Approval preparation clears stale promoter bindings");
+    assert.equal(asynchronous.candidate.venueLatitude, undefined);
+    assert.equal(asynchronous.candidate.venue, claim);
+    const projected = projectPublicEvent(sourceEvent, false, organizer);
+    assert.equal(projected.venue, "Venue to be announced");
+    assert.equal(projected.sourceCaption, sourceEvent.sourceCaption);
+    assert.equal(projectPublicEvent(sourceEvent, true, organizer).venueId, undefined,
+      "A public organizer is still not a physical venue");
+    assert.deepEqual(sourceEvent, original, "Role guards must not mutate stored source facts");
+  }
+  const physicalClaim = prepareHumanApprovalCandidateFromVenueResolver(
+    { ...promoterEvent, venue: physical.name, status: "pending" }, moderationResolver,
+  );
+  assert.equal(physicalClaim.candidate.venueId, physical._id,
+    "A stale organizer binding must not override a source-confirmed physical venue");
+  const unresolvedPhysicalClaim = await prepareHumanApprovalCandidate(resolverFixture.ctx, {
+    ...promoterEvent, status: "pending",
+  });
+  assert.equal(unresolvedPhysicalClaim.candidate.venue, promoterEvent.venue);
+  assert.equal(unresolvedPhysicalClaim.candidate.venueId, undefined,
+    "An unresolved physical label keeps its source text without the organizer's physical metadata");
   const materialized = fixture({
-    venues, events: [promoterEvent, physicalEvent, hiddenEvent],
+    venues, events: [promoterEvent, physicalEvent, hiddenEvent, promoterNamedEvent],
     publicationMigrationState: [{
       _id: "publication-migration", key: "materialized-publication-v1", policyVersion: 1,
       auditDone: true, auditDriftCount: 0, auditScannedCount: 3, auditStartedAt: 100,
@@ -352,7 +390,7 @@ try {
   const calendar = await listPublicCalendarEventsWindowPaginatedHandler(materialized.ctx, {
     fromDate: "2026-10-18", beforeDate: "2026-10-19", cursor: null,
   });
-  assert.deepEqual(calendar.page.map((row) => row._id), [promoterEvent._id, physicalEvent._id],
+  assert.deepEqual(calendar.page.map((row) => row._id), [promoterEvent._id, physicalEvent._id, promoterNamedEvent._id],
     "Physical metadata exclusion must not hide lifecycle-public promoter events");
   const sanitized = calendar.page.find((row) => row._id === promoterEvent._id);
   for (const field of ["venueId", "venueCategory", "venueInstagramHandle", "venueLatitude", "venueLocation", "venueLongitude"]) {
@@ -362,6 +400,8 @@ try {
     assert.equal(sanitized[field], promoterEvent[field], `Physical metadata exclusion must preserve ${field}`);
   }
   assert.equal(calendar.page.find((row) => row._id === physicalEvent._id).venueLatitude, physical.latitude);
+  assert.equal(calendar.page.find((row) => row._id === promoterNamedEvent._id).venue, "Venue to be announced",
+    "A linked promoter name must not appear as an event location");
   for (const candidate of [physical, organizer, hiddenOrganizer]) {
     assert.equal(materialized.reads.filter((read) => read.operation === "get" && read.id === candidate._id).length, 1,
       "A page must derive both lifecycle and physical metadata sets from the same unique venue read");
@@ -379,6 +419,42 @@ try {
   assert.equal(detail.venueId, undefined);
   assert.equal(detail.venue, compatibilityEvent.venue);
   assert.equal(detail.sourceCaption, compatibilityEvent.sourceCaption);
+  const namedCompatibility = fixture({
+    venues: [organizer], events: [{ ...compatibilityEvent, venue: organizer.aliases[0] }],
+  });
+  const namedDetail = await getPublicApprovedEventHandler(namedCompatibility.ctx, { id: compatibilityEvent._id });
+  assert.equal(namedDetail.venue, "Venue to be announced", "Compatibility detail uses the same promoter location rule");
+
+  const groundedSavedEvents = [compatibilityEvent, { ...compatibilityEvent, _id: "saved-named", venue: organizer.name }]
+    .map((candidate) => ({
+      ...candidate, humanReviewedLegacySourcePolicyVersion: 1, reviewedAt: 1, reviewedBy: "qa-operator",
+      moderationNote: "Reviewed the original persisted Instagram source event.", sourcePostedAt: "2026-10-01T12:00:00.000Z",
+      normalizedFieldsJson: JSON.stringify({
+        sourceGroundingVersion: 4, sourceGroundingEvidence: "instagram_caption", sourceGroundingSourceKind: "caption",
+        sourceGroundingSourceCaption: candidate.sourceCaption, sourceGroundingInstagramPostId: candidate.instagramPostId,
+        sourceGroundingInstagramPostUrl: candidate.instagramPostUrl, sourceGroundingInstagramHandle: organizer.instagramHandle,
+        humanReviewedLegacySourcePolicyVersion: 1, normalizedIsValid: true, titleUsedFallback: false,
+        dateSuspiciousYear: false, title: candidate.title, normalizedDate: candidate.date, time: candidate.time,
+      }),
+    }));
+  const saved = fixture({
+    venues: [organizer], events: groundedSavedEvents,
+    scrapedPosts: [{
+      _id: "saved-source-post", handle: organizer.instagramHandle, username: organizer.instagramHandle,
+      postId: compatibilityEvent.instagramPostId, instagramPostUrl: compatibilityEvent.instagramPostUrl,
+      caption: compatibilityEvent.sourceCaption, postedAt: groundedSavedEvents[0].sourcePostedAt,
+    }],
+    savedEvents: [
+      { _id: "saved-source-venue", userId: "qa-user", eventId: compatibilityEvent._id, createdAt: 1 },
+      { _id: "saved-promoter-claim", userId: "qa-user", eventId: "saved-named", createdAt: 2 },
+    ],
+  }, { subject: "qa-user" });
+  const library = await listSavedEvents._handler(saved.ctx, { userId: "qa-user" });
+  assert.equal(library.savedEvents.find((row) => row._id === "saved-named").venue, "Venue to be announced");
+  assert.equal(library.savedEvents.find((row) => row._id === compatibilityEvent._id).venue, compatibilityEvent.venue);
+  assert.ok(library.savedEvents.every((row) => row.venueId === undefined && row.venueLatitude === undefined),
+    "Saved event locations must omit promoter IDs and physical metadata too");
+  assert.equal(saved.writes.length, 0);
 
   const favorites = fixture({
     venues: [physical, organizer],

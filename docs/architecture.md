@@ -93,6 +93,23 @@ claim cannot expand into an unrelated branded business inside that place: for
 example, "Sava Centar" does not identify "Dolly Bell Sava Centar". Exact names,
 reviewed aliases and ordinary club/bar qualifiers remain supported.
 
+Organizer and nonphysical festival/event-series categories normalize to the
+promoter role. Reclassification preserves event and source records. Public
+calendar, detail, discovery and saved-event projections remove promoter-owned
+physical metadata and show "Venue to be announced" when the stored location
+is the linked promoter's exact name, alias or handle. A different source venue
+label remains visible. Moderation preparation clears stale promoter bindings
+and can resolve an independently named physical venue without using the
+organizer's account as a location fallback.
+
+Reviewed venue detail imports use a separate catalog-only mutation. Its exact
+identity and metadata snapshot includes hours cache fields because background
+hours writers can change them without advancing the venue revision. The
+transaction compares the reviewed fingerprint, updates only allowed address,
+coordinate and hours fields, and records import/source evidence in the venue
+audit log. Referenced events, source occurrences and receipts remain unchanged;
+public venue projections read the current catalog details by venue ID.
+
 Caption identity evidence is scoped to the selected calendar day when a quote
 contains a multi-day schedule. An act billed on Friday cannot verify Saturday
 merely because both rows occur in the same caption. Explicit common acts and

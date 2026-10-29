@@ -61,8 +61,9 @@ existing approved public calendar and Belgrade's nightlife-day rollover.
 Map Open now uses a 06:00 Europe/Belgrade date rollover, retaining the previous
 night's selected date after midnight while filtering by actual event hours.
 
-Public discovery uses five primary event categories: Zurke, Live music,
-Kultura, Barovi, and Ostalo. Ostalo includes workshops, quizzes, and tastings.
+Public discovery uses four primary event categories: Zurke, Live music,
+Kultura, and Ostalo. Ostalo includes social and after-work gatherings,
+workshops, quizzes, and tastings.
 Each event has one primary category plus source-supported genre and
 activity tags. See [event categories](docs/event-categories.md) for classification
 and compatibility rules.

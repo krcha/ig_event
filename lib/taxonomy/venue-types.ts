@@ -209,6 +209,18 @@ const VENUE_CATEGORY_ALIASES: Array<{
   terms: string[];
 }> = [
   {
+    canonical: "promoter",
+    terms: [
+      "promoter",
+      "promotor",
+      "organizer",
+      "organiser",
+      "organizator",
+      "festival",
+      "event series",
+    ],
+  },
+  {
     canonical: "club",
     terms: [
       "club",

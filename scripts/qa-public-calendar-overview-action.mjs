@@ -116,4 +116,9 @@ const hidden = context({ events: [event], venues: [] });
 const hiddenProjection = await listWindow._handler(hidden.ctx, window);
 assert.equal(hiddenProjection.venues[0].value, "name:source venue", "Missing public venue fields must never retain an ID or private aliases.");
 assert.deepEqual(event.venue, "Source Venue", "The adapter must not rewrite source fixtures.");
-console.log("Standalone calendar overview Action QA passed: one read-only Action, authoritative APIs, bounded cursors, 5 categories, search and venue identity.");
+const barSocial = context({ events: [{ ...event, _id: "bar-social", title: "After-work cocktails", description: "", eventType: "social" }] });
+const barSocialOverview = await listWindow._handler(barSocial.ctx, window);
+assert.deepEqual(barSocialOverview.page, [
+  { date: "2026-10-20", category: "event", venueValue: "id:venue-public", count: 1, legacyVenueMatchCount: 1 },
+], "Month counters must count former Barovi events under Ostalo, matching the day rows.");
+console.log("Standalone calendar overview Action QA passed: one read-only Action, authoritative APIs, bounded cursors, 4 categories, merged bar/social counters, search and venue identity.");

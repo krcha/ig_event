@@ -134,14 +134,6 @@ const EVENT_TONES: Record<EventCategoryKind, EventTone> = {
     badge: "bg-[#FBBF24]/[0.14] text-[#FBBF24]",
     panel: "from-[#FBBF24]/[0.10] via-card to-card",
   },
-  social: {
-    name: EVENT_CATEGORY_LABELS.social,
-    chip: "bg-[#7DD3FC]/[0.14] text-[#7DD3FC] hover:bg-[#7DD3FC]/[0.18]",
-    dot: "bg-[#7DD3FC]",
-    rail: "bg-[#7DD3FC]",
-    badge: "bg-[#7DD3FC]/[0.14] text-[#7DD3FC]",
-    panel: "from-[#7DD3FC]/[0.10] via-card to-card",
-  },
   event: {
     name: EVENT_CATEGORY_LABELS.event,
     chip: "bg-[#34D399]/[0.14] text-[#34D399] hover:bg-[#34D399]/[0.18]",

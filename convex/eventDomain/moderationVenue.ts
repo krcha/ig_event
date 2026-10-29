@@ -6,6 +6,7 @@ import {
   HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION,
 } from "../../lib/events/event-update-precondition";
 import { normalizeHandle } from "../../lib/pipeline/venue-normalization";
+import { venueRequiresPhysicalDetails } from "../../lib/taxonomy/venue-types";
 import { sourceOccurrenceProvenanceRepository } from "../repositories/sourceOccurrenceProvenance";
 import {
   CLEARED_VENUE_DENORMALIZED_FIELDS,
@@ -116,7 +117,8 @@ export function prepareHumanApprovalCandidateFromVenueResolver(
     (event.venueInstagramHandle
       ? resolver.venueByHandle.get(normalizeHandle(event.venueInstagramHandle))
       : undefined);
-  const { venueFields, canonicalVenueName } = existingVenue
+  const { venueFields, canonicalVenueName } = existingVenue &&
+    resolver.snapshot.venueById.has(existingVenue._id)
     ? {
         venueFields: {
           ...CLEARED_VENUE_DENORMALIZED_FIELDS,
@@ -162,7 +164,12 @@ export async function prepareHumanApprovalCandidate(
 ): Promise<PreparedHumanApprovalCandidate> {
   const snapshot = await loadPublicVenueSnapshot(ctx);
   const resolution = resolveVenueFromSnapshot(snapshot, event.venue);
-  const definedVenueFields = Object.fromEntries(
+  const existingVenue = event.venueId && !snapshot.venueById.has(event.venueId)
+    ? await ctx.db.get(event.venueId)
+    : undefined;
+  const mustClearPromoterBinding = resolution.excludedVenueClaim ||
+    (existingVenue && !venueRequiresPhysicalDetails(existingVenue.category));
+  const definedVenueFields = mustClearPromoterBinding ? resolution.venueFields : Object.fromEntries(
     Object.entries(resolution.venueFields).filter(
       ([, value]) => value !== undefined,
     ),

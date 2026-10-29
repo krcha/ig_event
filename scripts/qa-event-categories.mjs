@@ -9,6 +9,7 @@ import {
   normalizeHiddenEventCategories,
 } from "../lib/taxonomy/event-categories.ts";
 import { buildCalendarFilterUrl } from "../lib/events/calendar-filter-url.ts";
+import { venueRequiresPhysicalDetails } from "../lib/taxonomy/venue-types.ts";
 
 assert.deepEqual(
   EVENT_PRIMARY_CATEGORIES,
@@ -16,25 +17,34 @@ assert.deepEqual(
     { key: "club", label: "Zurke" },
     { key: "live", label: "Live music" },
     { key: "culture", label: "Kultura" },
-    { key: "social", label: "Barovi" },
     { key: "event", label: "Ostalo" },
   ],
-  "Public browsing should have five primary categories with workshops grouped under Ostalo.",
+  "Public browsing should have four primary categories with bar/social events and workshops grouped under Ostalo.",
 );
 
 const categoryKeys = new Set(EVENT_PRIMARY_CATEGORIES.map(({ key }) => key));
 const orderedCategoryKeys = [...categoryKeys];
+assert.equal(categoryKeys.has("social"), false, "Barovi must no longer be a public filter.");
+assert.equal(venueRequiresPhysicalDetails("bar"), true,
+  "Merging a public event filter must preserve bars as physical event locations.");
 
 assert.equal(normalizeEventCategoryKey("experience"), "event",
   "Historical workshop category keys should resolve to Ostalo.");
+assert.equal(normalizeEventCategoryKey("social"), "event",
+  "The removed Barovi filter key should resolve to Ostalo.");
 assert.equal(normalizeEventCategoryKey("unknown"), undefined);
 assert.deepEqual(normalizeHiddenEventCategories([" experience ", "event", "club", "unknown"]), ["club", "event"],
   "Historical workshop filters should use the combined category without duplicates.");
+assert.deepEqual(normalizeHiddenEventCategories(["social", "event", "experience", "live"]), ["live", "event"],
+  "Merged bar and workshop filter aliases should not duplicate the Ostalo bucket.");
+assert.deepEqual(normalizeHiddenEventCategories(["club", "live", "culture", "event"]),
+  ["club", "live", "culture"],
+  "A legacy Barovi-only link should retain its events under Ostalo.");
 assert.deepEqual(normalizeHiddenEventCategories(["club", "live", "culture", "social", "experience"]),
-  ["club", "live", "culture", "social"],
+  ["club", "live", "culture"],
   "An old Ostalo-only link should retain the combined Ostalo selection.");
 assert.deepEqual(normalizeHiddenEventCategories(["club", "live", "culture", "social", "event"]),
-  ["club", "live", "culture", "social"],
+  ["club", "live", "culture"],
   "An old Radionice-only link should retain the combined Ostalo selection.");
 
 for (const selected of orderedCategoryKeys) {
@@ -85,16 +95,16 @@ const categoryFixtures = [
   ["legacy Culture alias", { eventType: "Culture" }, "culture"],
   ["legacy Live alias", { eventType: "Live" }, "live"],
   ["legacy Music alias", { eventType: "Music" }, "live"],
-  ["social primary alias", { eventType: "social" }, "social"],
+  ["social primary alias", { eventType: "social" }, "event"],
   ["experience primary alias", { eventType: "experience" }, "event"],
   ["short party label", { eventType: "Zurke" }, "club"],
   ["short culture label", { eventType: "Kultura" }, "culture"],
   ["legacy party label", { eventType: "Clubbing & DJ" }, "club"],
   ["legacy culture label", { eventType: "Kultura & umetnost" }, "culture"],
-  ["short bar label", { eventType: "Barovi" }, "social"],
+  ["short bar label", { eventType: "Barovi" }, "event"],
   ["short workshop label", { eventType: "Radionice" }, "event"],
   ["short other label", { eventType: "Ostalo" }, "event"],
-  ["legacy bar label", { eventType: "Barovi & social" }, "social"],
+  ["legacy bar label", { eventType: "Barovi & social" }, "event"],
   ["legacy workshop label", { eventType: "Radionice & iskustva" }, "event"],
   ["legacy other label", { eventType: "Ostalo & specijalni doga\u0111aji" }, "event"],
   ["unclassified event", {}, "event"],
@@ -113,8 +123,8 @@ const categoryFixtures = [
   ["film screening", { title: "Film screening" }, "culture"],
   ["exhibition", { title: "Izlo\u017eba fotografija" }, "culture"],
   ["public discussion", { title: "Razgovor sa autorom", eventType: "learning" }, "culture"],
-  ["pub social night", { title: "Pub social night", venueCategory: "bar" }, "social"],
-  ["after-work gathering", { title: "After-work cocktails" }, "social"],
+  ["pub social night", { title: "Pub social night", venueCategory: "bar" }, "event"],
+  ["after-work gathering", { title: "After-work cocktails" }, "event"],
   ["creative workshop at culture venue", { title: "Kreativna radionica", eventType: "arts & culture", venueCategory: "culture" }, "event"],
   ["DJ workshop", { title: "DJ workshop", eventType: "nightlife" }, "event"],
   ["pub quiz in a club", { title: "Pub kviz", eventType: "nightlife", venueCategory: "club" }, "event"],
@@ -177,6 +187,7 @@ for (const [input, expectedTag] of [
   [{ title: "Stand-up comedy" }, "Stand-up"],
   [{ title: "Pub kviz" }, "Kviz"],
   [{ title: "Degustacija vina" }, "Degustacija"],
+  [{ title: "After-work cocktails" }, "After-work"],
   [{ eventType: "event", title: "Rock DJ party" }, "Rock"],
   [{ title: "Koncert", description: "Jazz koncert uz besplatan ulaz." }, "Jazz"],
 ]) {
@@ -227,4 +238,4 @@ const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 assert.ok(packageJson.scripts["qa:event-categories"]?.includes("qa-event-categories.mjs"));
 assert.match(readFileSync("scripts/release-check.mjs", "utf8"), /script: "qa:event-categories"/);
 
-console.log(`QA passed: five primary categories, legacy filter aliases, ${categoryFixtures.length} format fixtures, and source-supported overlapping tags.`);
+console.log(`QA passed: four primary categories, merged Barovi/Ostalo legacy filters, ${categoryFixtures.length} format fixtures, and source-supported overlapping tags.`);

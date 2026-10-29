@@ -1,8 +1,26 @@
 import type { Doc } from "./_generated/dataModel";
 import { sanitizeVenueLinkedPublicEventFields } from "../lib/events/public-event-venue-fields";
+import { normalizeVenueComparableText } from "../lib/domain/venues/normalization";
+import { venueRequiresPhysicalDetails } from "../lib/taxonomy/venue-types";
 
-export function projectPublicEvent(event: Doc<"events">, hasPublicLinkedVenue: boolean) {
-  const publicEvent = sanitizeVenueLinkedPublicEventFields(event, hasPublicLinkedVenue);
+export function projectPublicEvent(
+  event: Doc<"events">,
+  hasPublicLinkedVenue: boolean,
+  linkedVenue?: Doc<"venues">,
+) {
+  const isLinkedPromoter = linkedVenue !== undefined &&
+    !venueRequiresPhysicalDetails(linkedVenue.category);
+  const publicEvent = sanitizeVenueLinkedPublicEventFields(
+    event,
+    hasPublicLinkedVenue && !isLinkedPromoter,
+  );
+  const venueClaim = normalizeVenueComparableText(event.venue);
+  // Reclassification must not rewrite source facts. Only the public location
+  // label changes when the old claim names the linked nonphysical organizer.
+  const claimsLinkedPromoter = linkedVenue && isLinkedPromoter &&
+    Boolean(venueClaim) &&
+    [linkedVenue.name, linkedVenue.instagramHandle, ...(linkedVenue.aliases ?? [])]
+      .some((claim) => normalizeVenueComparableText(claim) === venueClaim);
 
   return {
     _id: publicEvent._id,
@@ -32,7 +50,7 @@ export function projectPublicEvent(event: Doc<"events">, hasPublicLinkedVenue: b
     timeStatus: publicEvent.timeStatus,
     title: publicEvent.title,
     updatedAt: publicEvent.updatedAt,
-    venue: publicEvent.venue,
+    venue: claimsLinkedPromoter ? "Venue to be announced" : publicEvent.venue,
     venueCategory: publicEvent.venueCategory,
     venueId: publicEvent.venueId,
     venueInstagramHandle: publicEvent.venueInstagramHandle,

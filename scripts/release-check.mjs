@@ -81,6 +81,7 @@ const checks = [
   { script: "qa:promoter-backend", nodeScript: "scripts/qa-promoter-backend.mjs", timeoutMs: 60_000 },
   { script: "qa:venue-hours", timeoutMs: 60_000 },
   { script: "qa:venue-hours-backfill", timeoutMs: 60_000 },
+  { script: "qa:reviewed-venue-details", nodeScript: "scripts/qa-reviewed-venue-details.mjs", timeoutMs: 60_000 },
   { script: "qa:venue-open-now", timeoutMs: 60_000 },
   { script: "qa:google-hours", timeoutMs: 60_000 },
   { script: "qa:public-search", timeoutMs: 60_000 },

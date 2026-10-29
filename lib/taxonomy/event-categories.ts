@@ -4,14 +4,13 @@ export const EVENT_PRIMARY_CATEGORIES = [
   { key: "club", label: "Zurke" },
   { key: "live", label: "Live music" },
   { key: "culture", label: "Kultura" },
-  { key: "social", label: "Barovi" },
   { key: "event", label: "Ostalo" },
 ] as const;
 
 export type EventPrimaryCategory = (typeof EVENT_PRIMARY_CATEGORIES)[number]["key"];
 
 export function normalizeEventCategoryKey(value: string | undefined): EventPrimaryCategory | undefined {
-  if (value === "experience") return "event";
+  if (value === "experience" || value === "social") return "event";
   return EVENT_PRIMARY_CATEGORIES.find(({ key }) => key === value)?.key;
 }
 
@@ -19,8 +18,8 @@ export function normalizeHiddenEventCategories(categories: readonly string[]): E
   const requested = new Set(categories.map((value) => normalizeEventCategoryKey(value.trim())));
   const keys = EVENT_PRIMARY_CATEGORIES.map(({ key }) => key);
 
-  // Old links focused on Radionice or Ostalo can hide every current key after
-  // the merge. Keep the combined Ostalo category visible for those selections.
+  // Old links focused on Barovi, Radionice or Ostalo can hide every current
+  // key after merging their aliases. Retain the combined Ostalo selection.
   if (keys.every((key) => requested.has(key))) requested.delete("event");
   return keys.filter((key) => requested.has(key));
 }
@@ -72,7 +71,7 @@ function categoryFromProgram(text: string): EventPrimaryCategory | undefined {
   }
   if (LIVE.test(text)) return "live";
   if (CLUB.test(text)) return "club";
-  if (SOCIAL.test(text)) return "social";
+  if (SOCIAL.test(text)) return "event";
   return undefined;
 }
 

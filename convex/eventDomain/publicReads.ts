@@ -162,6 +162,7 @@ async function loadPublicVenueIdsForEvents(
 ): Promise<{
   physicalVenueIds: Set<Id<"venues">>;
   publicVenueIds: Set<Id<"venues">>;
+  venuesById: Map<Id<"venues">, Doc<"venues">>;
 }> {
   const venueIds = [
     ...new Set(
@@ -181,6 +182,8 @@ async function loadPublicVenueIdsForEvents(
       .filter((venue) => venueRequiresPhysicalDetails(venue.category))
       .map((venue) => venue._id)),
     publicVenueIds: new Set(publicVenues.map((venue) => venue._id)),
+    venuesById: new Map(venues.filter((venue): venue is Doc<"venues"> => venue !== null)
+      .map((venue) => [venue._id, venue])),
   };
 }
 
@@ -188,11 +191,12 @@ async function projectCanonicallyGroundedPublicEventPage(
   ctx: QueryCtx,
   groundedEvents: Doc<"events">[],
 ) {
-  const { physicalVenueIds } = await loadPublicVenueIdsForEvents(ctx, groundedEvents);
+  const { physicalVenueIds, venuesById } = await loadPublicVenueIdsForEvents(ctx, groundedEvents);
   return groundedEvents.map((event) =>
     projectPublicEvent(
       event,
       event.venueId !== undefined && physicalVenueIds.has(event.venueId),
+      event.venueId ? venuesById.get(event.venueId) : undefined,
     ),
   );
 }
@@ -284,7 +288,7 @@ async function projectMaterializedPublicEventPage(
       event.publicationState === "publishable" &&
       event.publicationReason === "canonical_source_grounding_verified",
   );
-  const { physicalVenueIds, publicVenueIds } = await loadPublicVenueIdsForEvents(
+  const { physicalVenueIds, publicVenueIds, venuesById } = await loadPublicVenueIdsForEvents(
     ctx,
     currentPublishableEvents,
   );
@@ -297,6 +301,7 @@ async function projectMaterializedPublicEventPage(
       projectPublicEvent(
         event,
         event.venueId !== undefined && physicalVenueIds.has(event.venueId),
+        event.venueId ? venuesById.get(event.venueId) : undefined,
       ),
     );
 }
@@ -780,7 +785,7 @@ export async function getDiscoverFeedHandler(
     ...weekend,
   ];
   const selectedEventIds = new Set(selectedEvents.map((event) => event._id));
-  const { physicalVenueIds } = await loadPublicVenueIdsForEvents(ctx, selectedEvents);
+  const { physicalVenueIds, venuesById } = await loadPublicVenueIdsForEvents(ctx, selectedEvents);
   const projectGroup = (events: Doc<"events">[]) =>
     events
       .filter((event) => selectedEventIds.has(event._id))
@@ -788,6 +793,7 @@ export async function getDiscoverFeedHandler(
         projectPublicEvent(
           event,
           event.venueId !== undefined && physicalVenueIds.has(event.venueId),
+          event.venueId ? venuesById.get(event.venueId) : undefined,
         ),
       );
   return {

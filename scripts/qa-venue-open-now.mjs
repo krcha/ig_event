@@ -95,6 +95,43 @@ assert.equal(isVenueOpenNow(allDay, Number.NaN), false);
 
 // Open now describes venue availability. Event times only identify the outing.
 const saturdayEvening = Date.parse("2026-10-17T16:30:00Z");
+{
+  const proof = {
+    checkedAt: "2026-10-17T12:00:00.000Z", sourceUrls: ["https://www.instagram.com/venue/"],
+    status: "temporarily_closed", verified: true,
+  };
+  const withStatus = (operatingStatus, base = saturdaySplit) => ({
+    ...base, hoursJson: JSON.stringify({ ...JSON.parse(base.hoursJson), raw: { operatingStatus } }),
+  });
+  for (const status of ["temporarily_closed", "permanently_closed"]) {
+    for (const base of [saturdaySplit, venue([], "none")]) {
+      const venueHours = withStatus({ ...proof, status }, base);
+      const event = { date: "2026-10-17", time: "18:00-23:00", venueHours };
+      assert.equal(isVenueOpenNow(venueHours, saturdayEvening), false);
+      assert.equal(getOpenNowEventState(event, saturdayEvening), "inactive",
+        "A verified current closure overrides regular opening clocks, even without a weekly schedule.");
+      assert.equal(matchesOpenNowEvent(event, saturdayEvening), false,
+        "Verified closures must never enter public Open now results.");
+    }
+  }
+  for (const patch of [{ verified: false }, { sourceUrls: [] }, { checkedAt: "2026-02-30T12:00:00Z" }]) {
+    const event = { date: "2026-10-17", venueHours: withStatus({ ...proof, ...patch }) };
+    assert.equal(getOpenNowEventState(event, saturdayEvening), "active",
+      "An unverified or malformed listing claim must not override confirmed weekly hours.");
+  }
+  const staleHours = withStatus({ ...proof, reviewAfter: "2026-10-17T16:30:00.000Z" });
+  for (const time of [undefined, "TBD", "18:00-23:00"]) {
+    const event = { date: "2026-10-17", time, venueHours: staleHours };
+    assert.equal(isVenueOpenNow(staleHours, saturdayEvening), false);
+    assert.equal(getOpenNowEventState(event, saturdayEvening), "possible");
+    assert.equal(matchesOpenNowEvent(event, saturdayEvening), false,
+      "Expired closure proof needs review; normal clocks cannot silently return it to public Open now.");
+  }
+  for (const date of ["2026-10-16", "2026-10-18"]) {
+    assert.equal(getOpenNowEventState({ date, time: "23:00", venueHours: staleHours }, saturdayEvening), "inactive",
+      "A closure needing review must not revive events from another outing.");
+  }
+}
 for (const time of ["21:00", "21:00-22:00", "10:00-12:00", "12:00", "TBD", "", undefined]) {
   assert.equal(matchesOpenNowEvent({ date: "2026-10-17", time, venueHours: saturdaySplit }, saturdayEvening), true,
     `A currently open venue qualifies before/after its announced event time: ${time}.`);

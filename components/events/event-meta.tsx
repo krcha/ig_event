@@ -61,11 +61,6 @@ export const EVENT_CATEGORY_TONES: Record<EventCategoryKind, EventCategoryTone> 
     color: "#FBBF24",
     label: EVENT_CATEGORY_LABELS.culture,
   },
-  social: {
-    backgroundColor: "rgba(125, 211, 252, 0.14)",
-    color: "#7DD3FC",
-    label: EVENT_CATEGORY_LABELS.social,
-  },
   event: {
     backgroundColor: "rgba(52, 211, 153, 0.14)",
     color: "#34D399",

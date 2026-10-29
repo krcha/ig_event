@@ -1,6 +1,7 @@
 import {
   BELGRADE_TIMEZONE,
   formatVenueHoursWindow,
+  getVenueOperatingStatus,
   parseVenueHoursJson,
   type VenueHoursSource,
 } from "@/lib/venues/venue-hours-cache";
@@ -24,11 +25,19 @@ type VenueWeeklyHoursProps = {
 
 export function VenueWeeklyHours({ className, hoursJson, hoursSource }: VenueWeeklyHoursProps) {
   const parsed = parseVenueHoursJson(hoursJson);
-  if (!parsed || parsed.source === "none" || parsed.timezone !== BELGRADE_TIMEZONE ||
-      !parsed.weekly.some((day) => day.closed || day.windows.length > 0)) {
+  const operatingStatus = getVenueOperatingStatus(parsed);
+  const hasWeeklySchedule = parsed && parsed.source !== "none" &&
+    parsed.timezone === BELGRADE_TIMEZONE &&
+    parsed.weekly.some((day) => day.closed || day.windows.length > 0);
+  if (!parsed || (!operatingStatus && !hasWeeklySchedule)) {
     return null;
   }
 
+  const proof = parsed.raw?.operatingStatus;
+  const proofSourceUrls = operatingStatus && typeof proof === "object" && proof !== null &&
+    "sourceUrls" in proof && Array.isArray(proof.sourceUrls)
+    ? [...new Set(proof.sourceUrls.filter((url): url is string => typeof url === "string"))]
+    : [];
   const byDay = new Map(parsed.weekly.map((day) => [day.day, day]));
   const attribution = hoursSource ? SOURCE_LABELS[hoursSource] : undefined;
   const sourceUrls = [...new Set([
@@ -39,34 +48,57 @@ export function VenueWeeklyHours({ className, hoursJson, hoursSource }: VenueWee
   return (
     <section className={cn("rounded-xl border border-border/70 bg-white/[0.02] p-4", className)}>
       <h3 className="text-sm font-medium text-foreground">Hours</h3>
-      <dl className="mt-3 space-y-1.5">
-        {DISPLAY_ORDER.map((dayIndex) => {
-          const day = byDay.get(dayIndex);
-          const isClosed = day?.closed === true;
-          const isUnknown = !day || (!isClosed && day.windows.length === 0);
-          return (
-            <div key={dayIndex} className="flex items-baseline justify-between gap-4 text-sm">
-              <dt className="text-muted-foreground">{DAY_LABELS[dayIndex]}</dt>
-              <dd className={cn("text-right tabular-nums", (isClosed || isUnknown) && "text-muted-foreground/70")}>
-                {isClosed
-                  ? "Closed"
-                  : isUnknown
-                    ? "Not available"
-                    : day.windows.map((window) => formatVenueHoursWindow(window)).join(", ")}
-              </dd>
-            </div>
-          );
-        })}
-      </dl>
-      {sourceUrls.length > 0 ? (
-        <p className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground/80">
-          {sourceUrls.map((url, index) => (
-            <a className="underline underline-offset-2 hover:text-foreground" href={url} key={url} rel="noopener noreferrer" target="_blank">
-              {sourceUrls.length === 1 ? "Hours source" : `Hours source ${index + 1}`}
-            </a>
-          ))}
-        </p>
-      ) : attribution ? <p className="mt-3 text-xs text-muted-foreground/80">{attribution}</p> : null}
+      {operatingStatus ? (
+        <div className="mt-3 rounded-lg border border-amber-400/25 bg-amber-400/5 p-3">
+          <p className="text-sm font-medium text-amber-200">
+            {operatingStatus === "needs_review"
+              ? "Hours need confirmation"
+              : operatingStatus === "temporarily_closed"
+                ? "Temporarily closed"
+                : "Permanently closed"}
+          </p>
+          <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            {proofSourceUrls.map((url, index) => (
+              <a className="underline underline-offset-2 hover:text-foreground" href={url} key={url} rel="noopener noreferrer" target="_blank">
+                {proofSourceUrls.length === 1 ? "Status source" : `Status source ${index + 1}`}
+              </a>
+            ))}
+          </p>
+        </div>
+      ) : null}
+      {hasWeeklySchedule ? (
+        <>
+          {operatingStatus ? <h4 className="mt-4 text-xs font-medium text-muted-foreground">Regular weekly schedule</h4> : null}
+          <dl className={cn(operatingStatus ? "mt-2" : "mt-3", "space-y-1.5")}>
+            {DISPLAY_ORDER.map((dayIndex) => {
+              const day = byDay.get(dayIndex);
+              const isClosed = day?.closed === true;
+              const isUnknown = !day || (!isClosed && day.windows.length === 0);
+              return (
+                <div key={dayIndex} className="flex items-baseline justify-between gap-4 text-sm">
+                  <dt className="text-muted-foreground">{DAY_LABELS[dayIndex]}</dt>
+                  <dd className={cn("text-right tabular-nums", (isClosed || isUnknown) && "text-muted-foreground/70")}>
+                    {isClosed
+                      ? "Closed"
+                      : isUnknown
+                        ? "Not available"
+                        : day.windows.map((window) => formatVenueHoursWindow(window)).join(", ")}
+                  </dd>
+                </div>
+              );
+            })}
+          </dl>
+          {sourceUrls.length > 0 ? (
+            <p className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground/80">
+              {sourceUrls.map((url, index) => (
+                <a className="underline underline-offset-2 hover:text-foreground" href={url} key={url} rel="noopener noreferrer" target="_blank">
+                  {sourceUrls.length === 1 ? "Hours source" : `Hours source ${index + 1}`}
+                </a>
+              ))}
+            </p>
+          ) : attribution ? <p className="mt-3 text-xs text-muted-foreground/80">{attribution}</p> : null}
+        </>
+      ) : null}
     </section>
   );
 }

@@ -61,6 +61,65 @@ function isTimeLabel(value: unknown): value is string {
   return typeof value === "string" && TIME_LABEL_PATTERN.test(value);
 }
 
+function readProofTimestamp(value: unknown): number | null {
+  if (typeof value !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:0\d|1[0-4]):[0-5]\d)$/.test(value)) {
+    return null;
+  }
+  const timestamp = Date.parse(value);
+  const date = value.slice(0, 10);
+  const calendarDate = new Date(`${date}T00:00:00.000Z`);
+  if (!Number.isFinite(timestamp) || !Number.isFinite(calendarDate.getTime()) ||
+    calendarDate.toISOString().slice(0, 10) !== date ||
+    /[+-]14:(?!00$)/.test(value)) {
+    return null;
+  }
+  return timestamp;
+}
+
+function isEvidenceUrl(value: unknown): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+  try {
+    const url = new URL(value);
+    return (url.protocol === "https:" || url.protocol === "http:") &&
+      Boolean(url.hostname) && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+/** A listing label alone is not proof that the current venue is closed. */
+export function getVenueOperatingStatus(
+  hours: VenueHoursJson | null,
+  now: Date | number = Date.now(),
+): "temporarily_closed" | "permanently_closed" | "needs_review" | null {
+  const proof = hours?.raw?.operatingStatus;
+  const nowTimestamp = now instanceof Date ? now.getTime() : now;
+  if (!Number.isFinite(nowTimestamp) || !isRecord(proof) || proof.verified !== true ||
+    (proof.status !== "temporarily_closed" && proof.status !== "permanently_closed") ||
+    (proof.reviewNote !== undefined && typeof proof.reviewNote !== "string") ||
+    !Array.isArray(proof.sourceUrls) || proof.sourceUrls.length === 0 ||
+    !proof.sourceUrls.every(isEvidenceUrl)) {
+    return null;
+  }
+  const checkedAt = readProofTimestamp(proof.checkedAt);
+  if (checkedAt === null || checkedAt > nowTimestamp) {
+    return null;
+  }
+  if (proof.reviewAfter !== undefined) {
+    const reviewAfter = readProofTimestamp(proof.reviewAfter);
+    if (reviewAfter === null) {
+      return null;
+    }
+    if (reviewAfter <= nowTimestamp) {
+      return "needs_review";
+    }
+  }
+  return proof.status;
+}
+
 function readTimeMinutes(value: string): number | null {
   if (!isTimeLabel(value)) {
     return null;

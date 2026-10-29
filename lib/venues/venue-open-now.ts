@@ -1,5 +1,6 @@
 import {
   BELGRADE_TIMEZONE,
+  getVenueOperatingStatus,
   parseVenueHoursJson,
   type VenueHoursCacheFields,
   type VenueHoursWindow,
@@ -254,12 +255,20 @@ function hasKnownHoursForDate(
 function getOpeningState(
   venueHours: VenueHoursCacheFields | null | undefined,
   now: Date | number,
-): { current: BelgradeNow; open: boolean } | null {
+): {
+  current: BelgradeNow;
+  open: boolean;
+  operatingStatus: ReturnType<typeof getVenueOperatingStatus>;
+} | null {
   if (!Number.isFinite(now instanceof Date ? now.getTime() : now)) {
     return null;
   }
 
   const current = getBelgradeNow(now);
+  const operatingStatus = getVenueOperatingStatus(parseVenueHoursJson(venueHours?.hoursJson), now);
+  if (operatingStatus) {
+    return { current, open: false, operatingStatus };
+  }
   const nowTimestamp = now instanceof Date ? now.getTime() : now;
   const resolveInstant = createBelgradeInstantResolver();
   const activeOpening = getOpeningIntervals(venueHours, current.date).find((interval) => {
@@ -268,7 +277,7 @@ function getOpeningState(
     return start !== null && end !== null && start <= nowTimestamp && nowTimestamp < end;
   });
 
-  return { current, open: Boolean(activeOpening) };
+  return { current, open: Boolean(activeOpening), operatingStatus: null };
 }
 
 /** Weekly venue opening hours only; this does not infer an event's start time. */
@@ -303,6 +312,9 @@ export function getOpenNowEventState(
     return "inactive";
   }
   const state = getOpeningState(event.venueHours, now);
+  if (state?.operatingStatus) {
+    return state.operatingStatus === "needs_review" ? "possible" : "inactive";
+  }
   if (state?.open) {
     return "active";
   }

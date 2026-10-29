@@ -87,10 +87,10 @@ function notNull<T>(value: T | null): value is T {
   return value !== null;
 }
 
-async function loadPublicVenueIdsForSavedEvents(
+async function loadPublicVenuesForSavedEvents(
   ctx: QueryCtx,
   events: Doc<"events">[],
-): Promise<Set<Id<"venues">>> {
+): Promise<Map<Id<"venues">, Doc<"venues">>> {
   const venueIds = [
     ...new Set(
       events
@@ -99,10 +99,10 @@ async function loadPublicVenueIdsForSavedEvents(
     ),
   ];
   const venues = await Promise.all(venueIds.map((venueId) => ctx.db.get(venueId)));
-  return new Set(
+  return new Map(
     venues
       .filter((venue): venue is Doc<"venues"> => venue !== null && isVenuePublic(venue))
-      .map((venue) => venue._id),
+      .map((venue) => [venue._id, venue]),
   );
 }
 
@@ -144,13 +144,15 @@ async function loadLibraryForUser(ctx: QueryCtx, userId: string) {
     0,
     MAX_USER_LIBRARY_REFERENCES,
   );
-  const publicVenueIds = await loadPublicVenueIdsForSavedEvents(ctx, approvedSavedEvents);
-  const savedEvents = approvedSavedEvents.map((event) =>
-    projectPublicEvent(
+  const publicVenues = await loadPublicVenuesForSavedEvents(ctx, approvedSavedEvents);
+  const savedEvents = approvedSavedEvents.map((event) => {
+    const venue = event.venueId ? publicVenues.get(event.venueId) : undefined;
+    return projectPublicEvent(
       event,
-      event.venueId !== undefined && publicVenueIds.has(event.venueId),
-    ),
-  );
+      venue !== undefined && venueRequiresPhysicalDetails(venue.category),
+      venue,
+    );
+  });
   const favoriteVenues = (
     await Promise.all(favoriteRefs.map((ref) => ctx.db.get(ref.venueId)))
   )
