@@ -234,13 +234,25 @@ Minimum backup before upgrades or migrations:
 ```bash
 mkdir -p backups
 npx convex export --env-file .env.production \
+  --include-file-storage \
   --path backups/convex-self-hosted-$(date +%Y%m%d-%H%M%S).zip
-
-docker run --rm \
-  -v ig_event_convex-data:/data:ro \
-  -v "$PWD/backups:/backups" \
-  alpine sh -c 'tar -czf /backups/convex-data-volume-$(date +%Y%m%d-%H%M%S).tgz -C /data .'
 ```
+
+The file-storage flag is required: an export without it does not back up the
+images and other stored media. Verify the ZIP CRC and compare the number of
+stored files with the `_storage/documents.jsonl` records before rotating older
+exports. Include component exports when validating tables.
+
+For a complete server recovery, capture the production source/builds, matching
+Docker images, Compose files, secrets, host scripts/timers, Instagram collector
+state and Event Zeka n8n workflows as well. See
+[full server backups](server-backups.md) for the inventory and recovery order.
+
+A tar of a running SQLite volume is not a transaction-consistent database
+backup. Use the supported Convex export for an online recovery point. A raw
+volume backup requires a coordinated offline snapshot; an online SQLite backup
+and a later object-store archive are supplemental artifacts captured at
+different times.
 
 The Docker volume name includes the Compose project prefix. If your project name
 is not `ig_event`, confirm it with:
@@ -265,6 +277,7 @@ Upgrade sequence:
 ```bash
 # 1. Export data first.
 npx convex export --env-file .env.production \
+  --include-file-storage \
   --path backups/convex-self-hosted-before-upgrade-$(date +%Y%m%d-%H%M%S).zip
 
 # 2. Pull and recreate Convex services.

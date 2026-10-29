@@ -200,7 +200,7 @@ app URL, then import into the self-hosted backend:
 
 ```bash
 mkdir -p backups
-npx convex export --prod --path backups/convex-cloud-prod-$(date +%Y%m%d-%H%M%S).zip
+npx convex export --prod --include-file-storage --path backups/convex-cloud-prod-$(date +%Y%m%d-%H%M%S).zip
 npx convex import --replace-all --yes --env-file .env.production backups/convex-cloud-prod-YYYYmmdd-HHMMSS.zip
 ```
 
