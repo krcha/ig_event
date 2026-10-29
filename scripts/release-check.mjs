@@ -93,6 +93,8 @@ const checks = [
   { script: "qa:publication-cutover", timeoutMs: 60_000 },
   { script: "qa:public-grounding-surfaces", timeoutMs: 60_000 },
   { script: "qa:mobile-calendar", timeoutMs: 60_000 },
+  { script: "qa:public-event-post", nodeScript: "scripts/qa-public-event-post.mjs", timeoutMs: 60_000 },
+  { script: "qa:calendar-event-preview", nodeScript: "scripts/qa-calendar-event-preview.mjs", timeoutMs: 60_000 },
   { script: "qa:calendar-time-bands", timeoutMs: 60_000 },
   { script: "qa:event-map", timeoutMs: 60_000 },
   { script: "qa:event-sessions", timeoutMs: 60_000 },

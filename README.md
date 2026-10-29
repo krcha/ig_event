@@ -47,6 +47,13 @@ explicitly replaces them.
 - Cron ingestion at `/api/cron/ingest-venues`
 - Health check at `/api/health`
 
+Calendar event rows open an inline Instagram-style preview when their title,
+time or row is clicked. Only one post stays open; clicking the same row closes
+it. Images and original captions load on demand, with a compact uncropped
+poster and expandable text. A generated description is labeled separately if
+the original caption is unavailable. Venue links and saved-event actions remain
+independent, and the original Instagram post and full event details stay linked.
+
 The event map uses confirmed venue latitude/longitude. Add both coordinates in
 `/admin/venues` to place a venue on the map; events without coordinates remain
 visible in the day's lineup under "Location not mapped". The map uses the

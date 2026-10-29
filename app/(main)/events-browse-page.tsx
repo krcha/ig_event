@@ -16,6 +16,7 @@ import {
 import { loadPublicCalendarOverviewWindow } from "@/lib/events/public-calendar-overview";
 import { AutoApplyFilterForm } from "@/components/calendar/auto-apply-filter-form";
 import { CalendarScrollRestoration } from "@/components/calendar/calendar-scroll-restoration";
+import { CalendarEventPreviews, CalendarEventPreviewRow } from "@/components/calendar/calendar-event-preview";
 import { JsonLd } from "@/components/seo/json-ld";
 import { EventKindToggleChips } from "@/components/calendar/event-kind-toggle-chips";
 import { OpenNowFilter } from "@/components/calendar/open-now-filter";
@@ -1011,12 +1012,10 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                           hidden={isHiddenByKind}
                           key={event._id}
                         >
-                          <Link
-                            aria-label={getEventAriaLabel(event, tone, timePresentation.label)}
-                            className="flex min-h-10 items-center gap-2 rounded-[0.7rem] px-2 text-foreground hover:bg-primary/10 hover:text-primary focus-visible:bg-primary/10 focus-visible:outline-none"
-                            data-calendar-event-link="true"
-                            href={`/events/${event._id}`}
-                            prefetch={false}
+                          <CalendarEventPreviewRow
+                            eventId={event._id}
+                            headerClassName="min-h-10 px-2 py-1 text-foreground"
+                            title={event.title}
                           >
                             <span
                               className={cn("w-16 flex-none text-xs font-semibold tabular-nums text-muted-foreground", timePresentation.kind === "venue_hours" ? "py-1" : "truncate")}
@@ -1032,7 +1031,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                               <OpenNowStatus eventId={event._id} state={openNowStates.get(event._id)} />
                             </span>
                             <span className="max-w-[40%] truncate text-[10px] font-medium text-muted-foreground">{tone.name}</span>
-                          </Link>
+                          </CalendarEventPreviewRow>
                         </li>
                       );
                     })}
@@ -1088,7 +1087,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
               return (
                 <article
                   className={cn(
-                    "group flex items-center gap-2 rounded-[0.9rem] border border-border/75 bg-gradient-to-r px-2.5 py-2 shadow-[0_14px_38px_-32px_rgba(0,0,0,0.86)] transition hover:border-primary/35 hover:bg-primary/[0.04]",
+                    "group overflow-hidden rounded-[0.9rem] border border-border/75 bg-gradient-to-r shadow-[0_14px_38px_-32px_rgba(0,0,0,0.86)] transition hover:border-primary/35 hover:bg-primary/[0.04]",
                     tone.panel,
                   )}
                   data-calendar-event-kind={eventCategory}
@@ -1103,14 +1102,11 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   hidden={isHiddenByKind}
                   key={event._id}
                 >
+                  <CalendarEventPreviewRow eventId={event._id} headerClassName="px-2.5 py-2" title={event.title}>
                   <div className="flex min-w-0 flex-1 items-center gap-2">
                     {eventTime.startLabel ? (
-                      <Link
-                        aria-label={getEventAriaLabel(event, tone, timePresentation.label)}
+                      <span
                         className="box-border flex h-9 w-16 flex-none flex-col items-center justify-center overflow-hidden rounded-[0.72rem] border border-border/65 bg-background/45 px-1 text-center hover:border-primary/35"
-                        data-calendar-event-link="true"
-                        href={`/events/${event._id}`}
-                        prefetch={false}
                       >
                         <span className="block max-w-full truncate text-xs font-semibold leading-4 tabular-nums text-foreground">
                           {eventTime.startLabel}
@@ -1120,46 +1116,34 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                             {eventTime.endLabel}
                           </span>
                         ) : null}
-                      </Link>
+                      </span>
                     ) : timePresentation.kind === "venue_hours" ? (
-                      <Link
-                        aria-label={getEventAriaLabel(event, tone, timePresentation.label)}
+                      <span
                         className="box-border flex min-h-9 w-16 flex-none flex-col items-center justify-center rounded-[0.72rem] border border-border/65 bg-background/45 px-1 py-1 text-center hover:border-primary/35"
-                        data-calendar-event-link="true"
-                        href={`/events/${event._id}`}
-                        prefetch={false}
                         title={timePresentation.label}
                       >
                         <VenueTimeLabel label={timePresentation.label} />
-                      </Link>
+                      </span>
                     ) : (
-                      <Link
-                        aria-label={getEventAriaLabel(event, tone, timePresentation.label)}
+                      <span
                         className="box-border flex h-9 w-16 flex-none items-center justify-center overflow-hidden rounded-[0.72rem] border border-border/65 bg-background/45 px-1 text-center hover:border-primary/35"
-                        data-calendar-event-link="true"
-                        href={`/events/${event._id}`}
-                        prefetch={false}
                       >
                         <span className="block max-w-full truncate text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                           —
                         </span>
-                      </Link>
+                      </span>
                     )}
                     <div className="min-w-0 flex-1">
-                      <Link
-                        aria-label={getEventAriaLabel(event, tone, timePresentation.label)}
+                      <div
                         className="block min-w-0 hover:text-primary"
-                        data-calendar-event-link="true"
-                        href={`/events/${event._id}`}
-                        prefetch={false}
                       >
                         <h4 className="truncate text-[13px] font-semibold leading-4 tracking-tight text-foreground">
                           {event.title}
                         </h4>
                         <EventSessionLabel event={event} />
-                      </Link>
+                      </div>
                       <VenueNameLink
-                        className="mt-0.5 block truncate text-[11px] font-medium leading-4 text-muted-foreground"
+                        className="mt-0.5 block w-fit max-w-full truncate text-[11px] font-medium leading-4 text-muted-foreground"
                         event={event}
                       />
                       <EventMetaRow className="mt-1 flex-nowrap" event={event} />
@@ -1169,6 +1153,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   {authEnabled ? (
                     <SaveEventButton eventId={event._id} eventTitle={event.title} variant="icon" />
                   ) : null}
+                  </CalendarEventPreviewRow>
                 </article>
               );
             }
@@ -1528,7 +1513,9 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
 
       {!error ? (
         <>
-          <section>{renderSelectedDayAgenda({ mobile: true })}</section>
+          <CalendarEventPreviews key={JSON.stringify([selectedDayKey, selectedVenue, selectedSearchQuery, hiddenCategoriesParam, selectedSortMode, openNowActive])}>
+            <section>{renderSelectedDayAgenda({ mobile: true })}</section>
+          </CalendarEventPreviews>
         </>
       ) : null}
 

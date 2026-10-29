@@ -756,7 +756,15 @@ async function venuePreflight(claim, venue, { title = "VELIKI SOLISTIČKI KONCER
     expectedOccurrences: [expected], satisfiedKeys: [expected.key] };
   const ctx = proofContext(receipt, saved, candidate, directory, { ...proofLink, sourceFingerprint: fingerprint });
   const review = { ...exactReview, approvals: new Map([[candidate._id, { prepared: { candidate, venuePatch: {} }, humanReviewPatch: {} }]]) };
-  return evaluateAutomaticUniqueApproval(ctx, candidate, { asOfMs: Date.parse("2026-10-15T12:00:00.000Z"), prebuiltReview: review });
+  const asOfMs = Date.parse("2026-10-15T12:00:00.000Z");
+  const originalNow = Date.now;
+  try {
+    // Source-attestation expiry checks must use the same scenario clock as preflight.
+    Date.now = () => asOfMs;
+    return await evaluateAutomaticUniqueApproval(ctx, candidate, { asOfMs, prebuiltReview: review });
+  } finally {
+    Date.now = originalNow;
+  }
 }
 const staleDollyConcert = await venuePreflight("Sava Centar", restaurant);
 assert.equal(staleDollyConcert.diagnostic.holdReason, "persisted_source_policy_failed");
