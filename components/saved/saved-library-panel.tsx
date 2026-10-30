@@ -56,6 +56,7 @@ type SavedLibraryPanelProps = {
   initialSavedEventIds: string[];
   initialSavedEvents: SavedLibraryEvent[];
   upcomingEvents: SavedLibraryEvent[];
+  returnPath?: string;
 };
 
 type SavedSegment = "events" | "places";
@@ -325,7 +326,7 @@ function EmptyState({
   );
 }
 
-function SignInPromptCard() {
+export function SignInPromptCard({ authEnabled = true, returnPath = "/saved" }: { authEnabled?: boolean; returnPath?: string }) {
   return (
     <section className="hero-panel px-4 py-5 sm:px-6 sm:py-7">
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(15rem,0.36fr)] lg:items-center">
@@ -347,12 +348,12 @@ function SignInPromptCard() {
         </div>
         <div className="rounded-[1.25rem] border border-border/75 bg-white/[0.03] p-3 sm:p-4">
           <div className="grid gap-2">
-            <Link className="button-primary min-h-11 w-full px-4 py-0" href="/sign-in?redirect_url=%2Fsaved">
+            {authEnabled ? <><Link className="button-primary min-h-11 w-full px-4 py-0" href={returnPath === "/saved" ? "/sign-in?redirect_url=%2Fsaved" : `/sign-in?redirect_url=${encodeURIComponent(returnPath)}`}>
               Sign in
             </Link>
-            <Link className="button-secondary min-h-11 w-full px-4 py-0" href="/sign-up?redirect_url=%2Fsaved">
+            <Link className="button-secondary min-h-11 w-full px-4 py-0" href={returnPath === "/saved" ? "/sign-up?redirect_url=%2Fsaved" : `/sign-up?redirect_url=${encodeURIComponent(returnPath)}`}>
               Sign up
-            </Link>
+            </Link></> : <p className="text-sm leading-6 text-muted-foreground">Sign in is currently unavailable. You can keep browsing events.</p>}
           </div>
         </div>
       </div>
@@ -508,6 +509,7 @@ export function SavedLibraryPanel({
   initialSavedEventIds,
   initialSavedEvents,
   upcomingEvents,
+  returnPath,
 }: SavedLibraryPanelProps) {
   const { isLoaded, isSignedIn } = useUser();
   const {
@@ -577,7 +579,7 @@ export function SavedLibraryPanel({
   }
 
   if (!isSignedIn) {
-    return <SignInPromptCard />;
+    return <SignInPromptCard returnPath={returnPath} />;
   }
 
   return (

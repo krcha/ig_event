@@ -111,11 +111,10 @@ assert.match(
   /notFound\(\)/,
   "Public event detail should return notFound when the public query returns null.",
 );
-assert.match(
-  savedPageSource,
-  /loadUpcomingApprovedEvents\(\{ daysAhead: 90 \}\)/,
-  "Saved page should use an explicit 90-day public event window.",
-);
+assert.doesNotMatch(savedPageSource, /loadUpcomingApprovedEvents/, "Saved must not block on a city-wide public calendar scan.");
+assert.match(savedPageSource, /users:getMyLibrary/, "Saved event bodies must come from the authenticated library.");
+assert.match(savedPageSource, /venues:getPublicVenuePage/, "Favourite next events must retain the existing public venue boundary.");
+assert.match(savedPageSource, /Math\.min\(4, ids\.length\)/, "Favourite lookups must stay bounded in concurrency.");
 assert.match(
   discoverPageLoaderSource,
   /beforeDate: addDaysToDateKey\(date, 1\),\s*fromDate: date/,

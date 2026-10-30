@@ -106,7 +106,7 @@ export function NavigationFeedback() {
       }
       startPending();
       const managedCalendarLink = event.target instanceof Element &&
-        event.target.closest('a[data-calendar-client-navigation="true"]');
+        event.target.closest('a[data-calendar-client-navigation="true"], a[data-global-navigation="client"]');
       if (!managedCalendarLink && shouldUseDocumentNavigation(href)) {
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -143,8 +143,8 @@ export function NavigationFeedback() {
       data-navigation-feedback="true"
       data-pending={isPending ? "true" : "false"}
     >
-      <div className="mt-1 h-1 w-full max-w-[28rem] overflow-hidden rounded-full bg-white/[0.08] opacity-0 shadow-[0_16px_44px_-24px_rgba(139,134,251,0.95)] transition-opacity duration-150 data-[pending=true]:opacity-100">
-        <div className="h-full w-1/2 animate-[navigation-feedback_1s_ease-in-out_infinite] rounded-full bg-primary" />
+      <div className="mt-1 h-1 w-full max-w-[28rem] overflow-hidden rounded-full bg-white/[0.08] opacity-0 shadow-[0_16px_44px_-24px_rgba(139,134,251,0.95)] transition-opacity duration-150 data-[pending=true]:opacity-100" data-pending={isPending ? "true" : "false"}>
+        <div className="h-full w-1/2 animate-[navigation-feedback_1s_ease-in-out_infinite] rounded-full bg-primary motion-reduce:animate-none" />
       </div>
       <span className="sr-only" role="status">
         {isPending ? "Loading" : ""}

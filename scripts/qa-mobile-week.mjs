@@ -61,6 +61,7 @@ assert.match(source, /singleSelection=\{mobileWeek\}/);
 assert.match(source, /afterAll=\{mobileWeek \? <OpenNowFilter active=\{openNowActive\} appearance="chip" href=\{openNowHref\}/);
 assert.match(weekSource, /url\.searchParams\.set\("month", dayKey\.slice\(0, 7\)\)/);
 assert.match(weekSource, /disabled=\{dayKey < todayKey\}/);
+assert.match(weekSource, /data-calendar-client-navigation="true"/, "Weekly date links must reach their existing client router rather than force a document reload.");
 assert.match(style, /height: 68px/);
 assert.match(style, /repeat\(7, minmax\(0, 1fr\)\)/);
 assert.match(style, /prefers-reduced-motion: reduce/);

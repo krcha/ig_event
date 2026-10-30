@@ -95,6 +95,7 @@ export function MobileWeekCalendar({ days, monthDays, selectedDayKey, todayKey }
             aria-label={`${day.label}, ${Number(day.dayKey.slice(8))}, ${day.eventCount} događaja`}
             className={styles.day}
             data-calendar-date={day.dayKey}
+            data-calendar-client-navigation="true"
             data-calendar-date-event-count={day.eventCount}
             data-calendar-date-kind-counts={JSON.stringify(day.categoryCounts)}
             data-calendar-date-selected={day.dayKey === selectedDayKey ? "true" : undefined}

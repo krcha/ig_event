@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
-import type { ComponentType } from "react";
-import { useEffect, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import type { ComponentType, MouseEvent } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import {
   Bookmark,
   CalendarDays,
   Instagram,
+  Loader2,
   MapPin,
   ShieldCheck,
   Sparkles,
@@ -18,6 +19,7 @@ import { EventZekaBrand } from "@/components/brand/event-zeka-brand";
 import { ProfileAvatarLink } from "@/components/navigation/profile-avatar-link";
 import { useUserLibrary } from "@/components/providers/user-library-provider";
 import { SITE_INSTAGRAM_URL } from "@/lib/seo/site";
+import { canPrefetchMobileNavigation, getMobileNavigationHref } from "@/lib/navigation/mobile-navigation";
 import { cn } from "@/lib/utils";
 
 type ToolbarItem = {
@@ -131,9 +133,15 @@ function InstagramFollowLink({ compact = false }: { compact?: boolean }) {
 
 export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const { upcomingSavedEventCount } = useUserLibrary();
   const [isHidden, setIsHidden] = useState(false);
+  const [isNavigating, startNavigation] = useTransition();
+  const [pendingHref, setPendingHref] = useState<string | null>(null);
+  const intentTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prefetched = useRef(new Map<string, number>());
+  const routeKey = `${pathname}?${searchParams.toString()}`;
   const desktopToolbarItems = showAdminNavigation
     ? [...PUBLIC_TOOLBAR_ITEMS, ...ADMIN_TOOLBAR_ITEMS]
     : PUBLIC_TOOLBAR_ITEMS;
@@ -144,13 +152,34 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
     pathname === "/events" || pathname === "/discover";
   const selectedDate = searchParams.get("day") || searchParams.get("date");
   function mobileHref(item: ToolbarItem): string {
-    if (!selectedDate || !/^\d{4}-\d{2}-\d{2}$/.test(selectedDate) || !mobileHeaderScrolls) {
-      return item.href;
-    }
-    if (item.href === "/discover") return `/discover?date=${selectedDate}`;
-    if (item.href === "/") return `/?month=${selectedDate.slice(0, 7)}&day=${selectedDate}`;
-    return item.href;
+    return getMobileNavigationHref(item.href, selectedDate);
   }
+  function cancelIntent() {
+    if (intentTimer.current) clearTimeout(intentTimer.current);
+    intentTimer.current = null;
+  }
+  function prefetchIntent(href: string) {
+    cancelIntent();
+    if (!canPrefetchMobileNavigation(href)) return;
+    intentTimer.current = setTimeout(() => {
+      const now = Date.now();
+      if (now - (prefetched.current.get(href) ?? 0) < 30_000) return;
+      prefetched.current.set(href, now);
+      while (prefetched.current.size > 3) prefetched.current.delete(prefetched.current.keys().next().value!);
+      router.prefetch(href);
+    }, 350);
+  }
+  function navigateMobile(event: MouseEvent<HTMLAnchorElement>, href: string) {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    cancelIntent();
+    if (href === `${pathname}${searchParams.size ? `?${searchParams}` : ""}`) return;
+    setPendingHref(href);
+    startNavigation(() => router.push(href));
+  }
+  useEffect(() => { setPendingHref(null); }, [routeKey]);
+  useEffect(() => { if (!isNavigating) setPendingHref(null); }, [isNavigating]);
+  useEffect(() => () => { if (intentTimer.current) clearTimeout(intentTimer.current); }, []);
   useEffect(() => {
     let lastScrollY = window.scrollY;
 
@@ -260,28 +289,39 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
             {mobileToolbarItems.map((item) => {
               const Icon = item.icon;
               const active = isActivePath(pathname, item);
+              const href = mobileHref(item);
+              const pending = pendingHref === href;
+              const selected = pendingHref ? isActivePath(pendingHref.split("?")[0], item) : active;
               const badgeCount = getBadgeCount(item);
 
               return (
-                <a
+                <Link
                   aria-current={active ? "page" : undefined}
+                  aria-busy={pending || undefined}
                   className={cn(
                     "inline-flex min-w-0 flex-1 flex-col items-center gap-1 rounded-[1rem] px-2 py-2 text-[11px] font-semibold",
-                    active
+                    selected
                       ? "bg-primary text-primary-foreground shadow-[0_16px_34px_-22px_rgba(14,116,144,0.52)]"
                       : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
                   )}
-                  href={mobileHref(item)}
+                  href={href}
                   key={item.href}
-                  data-global-navigation="document"
+                  data-global-navigation="client"
+                  data-navigation-pending={pending ? "true" : undefined}
+                  onBlur={cancelIntent}
+                  onClick={(event) => navigateMobile(event, href)}
+                  onFocus={() => prefetchIntent(href)}
+                  onPointerEnter={(event) => { if (event.pointerType === "mouse") prefetchIntent(href); }}
+                  onPointerLeave={cancelIntent}
+                  prefetch={false}
                 >
                   <span className="relative inline-flex">
-                    <Icon className="h-4 w-4" />
+                    {pending ? <Loader2 aria-hidden="true" className="h-4 w-4 motion-safe:animate-spin" /> : <Icon className="h-4 w-4" />}
                     {badgeCount > 0 ? (
                       <span
                         className={cn(
                           "absolute -right-3 -top-2 inline-flex min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-bold leading-4 shadow-[0_8px_18px_-10px_rgba(139,134,251,0.9)]",
-                          active
+                          selected
                             ? "bg-primary-foreground text-primary"
                             : "bg-primary text-primary-foreground",
                         )}
@@ -291,12 +331,13 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                     ) : null}
                   </span>
                   <span className="max-w-full truncate">{item.label}</span>
-                </a>
+                </Link>
               );
             })}
           </div>
         </div>
       </nav>
+      <span className="sr-only" role="status" aria-live="polite">{pendingHref ? `Loading ${mobileToolbarItems.find(item => mobileHref(item) === pendingHref)?.label ?? "page"}` : ""}</span>
     </>
   );
 }

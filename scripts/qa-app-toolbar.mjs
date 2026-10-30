@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import nextConfig from "../next.config.mjs";
+import "./qa-mobile-navigation.mjs";
+import "./qa-navigation-feedback.mjs";
 
 const toolbarPath = "components/navigation/app-toolbar.tsx";
 const source = readFileSync(toolbarPath, "utf8");
@@ -190,9 +192,15 @@ assert.ok(
 );
 assert.equal(
   [...source.matchAll(/data-global-navigation="document"/g)].length,
-  2,
-  "Desktop and mobile primary navigation should use native document navigation so the first tap cannot stall on a large RSC transition.",
+  1,
+  "Desktop navigation retains its existing document-navigation behavior.",
 );
+assert.ok(source.includes('data-global-navigation="client"') && source.includes("router.push(href)") && source.includes("prefetch={false}"),
+  "Mobile tabs must use managed navigation without eagerly prefetching every destination.");
+assert.ok(source.includes("setPendingHref(href)") && source.includes('data-navigation-pending={pending ? "true" : undefined}') && source.includes("motion-safe:animate-spin"),
+  "A mobile tap immediately selects the destination and exposes pending feedback.");
+assert.ok(source.includes("canPrefetchMobileNavigation(href)") && source.includes("onPointerLeave={cancelIntent}") && source.includes("}, 350)"),
+  "Public prefetch must be based on sustained intent, not all mounted tabs.");
 assert.ok(
   source.includes('className="flex w-full items-center gap-1 overflow-hidden"') &&
     source.includes("inline-flex min-w-0 flex-1 flex-col") &&

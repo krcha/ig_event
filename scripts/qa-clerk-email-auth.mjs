@@ -79,8 +79,9 @@ requireIncludes(requireAuthHookPath, requireAuthHook, "/sign-in?redirect_url=", 
 requireExcludes(requireAuthHookPath, requireAuthHook, "openSignIn", "generic Clerk modal");
 
 const savedLibrary = requireFile(savedLibraryPath);
-requireIncludes(savedLibraryPath, savedLibrary, 'href="/sign-in?redirect_url=%2Fsaved"', "saved page custom sign-in link");
-requireIncludes(savedLibraryPath, savedLibrary, 'href="/sign-up?redirect_url=%2Fsaved"', "saved page custom sign-up link");
+requireIncludes(savedLibraryPath, savedLibrary, '"/sign-in?redirect_url=%2Fsaved"', "saved page custom sign-in link");
+requireIncludes(savedLibraryPath, savedLibrary, '"/sign-up?redirect_url=%2Fsaved"', "saved page custom sign-up link");
+requireIncludes(savedLibraryPath, savedLibrary, "encodeURIComponent(returnPath)", "preserve Saved date context after authentication");
 requireExcludes(savedLibraryPath, savedLibrary, "SignInButton", "generic Clerk sign-in modal");
 requireExcludes(savedLibraryPath, savedLibrary, "SignUpButton", "generic Clerk sign-up modal");
 

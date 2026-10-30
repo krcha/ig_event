@@ -3,11 +3,13 @@ import { auth } from "@clerk/nextjs/server";
 import type { FunctionReference } from "convex/server";
 import {
   SavedLibraryPanel,
+  SignInPromptCard,
   type SavedLibraryEvent,
   type SavedLibraryVenue,
 } from "@/components/saved/saved-library-panel";
-import { loadUpcomingApprovedEvents } from "@/lib/events/public-events";
 import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
+import { getPublicTodayKey } from "@/lib/events/public-date";
+import { resolveEventTimeDisplay } from "@/lib/events/event-time";
 import { hasClerkEnv } from "@/lib/utils/env";
 
 export const dynamic = "force-dynamic";
@@ -65,54 +67,68 @@ const EMPTY_LIBRARY: LibraryResult = {
 
 const getMyLibraryQuery = "users:getMyLibrary" as unknown as FunctionReference<"query">;
 
-async function loadSavedLibrary(): Promise<LibraryResult> {
+async function loadSavedLibrary(): Promise<LibraryResult & { upcomingEvents: SavedLibraryEvent[]; error?: string }> {
   const convex = await createAuthenticatedConvexHttpClient();
-  return toLibraryResult(await convex.query(getMyLibraryQuery, {}));
+  const library = toLibraryResult(await convex.query(getMyLibraryQuery, {}));
+  const venueQuery = "venues:getPublicVenuePage" as unknown as FunctionReference<"query">;
+  const today = getPublicTodayKey();
+  const upcomingEvents = library.savedEvents.filter(event => event.date >= today).map(withDisplayTime);
+  let venueError: string | undefined;
+  // Only favourite venues need a next-event lookup. Saved event bodies already
+  // came from the authenticated library; never scan the whole city's 90 days.
+  const ids = [...new Set(library.favoriteVenueIds)].slice(0, 100);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(4, ids.length) }, async () => {
+    while (next < ids.length) {
+      const id = ids[next++];
+      try {
+        const result = await convex.query(venueQuery, { id, today, upcomingLimit: 1, historyLimit: 1 }) as { upcomingEvents?: unknown[] } | null;
+        const event = result?.upcomingEvents?.find(isSavedEvent);
+        if (event) upcomingEvents.push(withDisplayTime({ ...event, venueId: event.venueId ?? id }));
+      } catch {
+        venueError = "Some places' next events could not be loaded. Your saved events are available.";
+      }
+    }
+  }));
+  return { ...library, upcomingEvents, ...(venueError ? { error: venueError } : {}) };
 }
 
-export default async function SavedPage() {
+function withDisplayTime(event: SavedLibraryEvent): SavedLibraryEvent {
+  const display = resolveEventTimeDisplay({ date: event.date, time: event.time });
+  return { ...event, dayPeriod: display.dayPeriod, displayTimeEnd: display.endLabel,
+    displayTimeLabel: display.label, displayTimeSource: display.source, displayTimeStart: display.startLabel };
+}
+
+export default async function SavedPage({ searchParams }: { searchParams?: Promise<{ date?: string | string[] }> }) {
+  const params = await searchParams;
+  const date = Array.isArray(params?.date) ? params.date[0] : params?.date;
+  const returnPath = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? `/saved?date=${date}` : "/saved";
   if (!hasClerkEnv()) {
     return (
       <main className="app-page gap-3 sm:gap-4">
-        <section className="hero-panel px-4 py-8 text-center sm:px-6">
-          <p className="section-kicker">Saved</p>
-          <h1 className="mt-2 text-2xl font-semibold tracking-[-0.045em] sm:text-4xl">
-            Clerk is not configured.
-          </h1>
-          <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-muted-foreground">
-            Set NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY and CLERK_SECRET_KEY to enable saved
-            events and favourite places.
-          </p>
-        </section>
+        <SignInPromptCard authEnabled={false} returnPath={returnPath} />
       </main>
     );
   }
 
   const { userId } = await auth();
+  if (!userId) {
+    // Server-known guests can see working sign-in links immediately, even if
+    // the Clerk browser SDK is slow or unavailable. No private read runs here.
+    return <main className="app-page gap-3 sm:gap-4"><SignInPromptCard returnPath={returnPath} /></main>;
+  }
   let library = EMPTY_LIBRARY;
   let initialError: string | undefined;
   let upcomingEvents: SavedLibraryEvent[] = [];
 
   if (userId) {
-    const [libraryResult, upcomingResult] = await Promise.allSettled([
-      loadSavedLibrary(),
-      loadUpcomingApprovedEvents({ daysAhead: 90 }),
-    ]);
-
-    if (libraryResult.status === "fulfilled") {
-      library = libraryResult.value;
-    } else {
-      initialError =
-        libraryResult.reason instanceof Error
-          ? libraryResult.reason.message
-          : "Could not load saved items.";
-    }
-
-    if (upcomingResult.status === "fulfilled") {
-      upcomingEvents = upcomingResult.value.events.filter(isSavedEvent);
-      initialError = initialError ?? upcomingResult.value.error;
-    } else {
-      initialError = initialError ?? "Could not load upcoming events.";
+    try {
+      const result = await loadSavedLibrary();
+      library = result;
+      upcomingEvents = result.upcomingEvents;
+      initialError = result.error;
+    } catch (error) {
+      initialError = error instanceof Error ? error.message : "Could not load saved items.";
     }
   }
 
@@ -125,6 +141,7 @@ export default async function SavedPage() {
         initialSavedEventIds={library.savedEventIds}
         initialSavedEvents={library.savedEvents}
         upcomingEvents={upcomingEvents}
+        returnPath={returnPath}
       />
     </main>
   );

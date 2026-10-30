@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import EventsBrowsePage from "./(main)/events-browse-page";
+import EventsLoading from "@/components/calendar/events-browse-loading";
 import { SITE_DESCRIPTION, SITE_ORIGIN } from "@/lib/seo/site";
 
 // The calendar is backed by external Convex reads. A persisted Next.js route
@@ -53,4 +55,6 @@ export async function generateMetadata({ searchParams }: RootPageProps): Promise
   };
 }
 
-export default EventsBrowsePage;
+export default function HomePage({ searchParams }: RootPageProps) {
+  return <Suspense fallback={<EventsLoading />}><EventsBrowsePage searchParams={searchParams} /></Suspense>;
+}
