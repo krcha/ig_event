@@ -2,7 +2,7 @@
 @media (max-width:767px) { .scrollRoot { scroll-snap-type:y proximity; scroll-padding-block:12px calc(100px + env(safe-area-inset-bottom)); } }
 /* Leave enough document runway for a short card to reach its snap position. */
 .deck { min-height:calc(100svh - 88px); }
-.session { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+.session { display:flex; align-items:center; gap:8px; margin-bottom:10px; scroll-snap-align:start; scroll-margin-block-start:calc(128px + env(safe-area-inset-top)); }
 .dayLabel { display:flex; min-width:0; flex:1; align-items:center; gap:8px; color:var(--muted-foreground); }
 .dayLabel select { min-width:0; max-width:100%; min-height:40px; padding:0 25px 0 10px; border:1px solid var(--input); border-radius:12px; background:var(--card); color:var(--foreground); font-size:12px; font-weight:600; }
 .count,.reset { display:flex; flex:none; align-items:center; justify-content:center; min-height:40px; border:1px solid var(--border); border-radius:12px; background:var(--card); }
