@@ -90,7 +90,9 @@ function AppDocument({
       <Suspense fallback={null}>
         <NavigationFeedback />
       </Suspense>
-      <AppToolbar />
+      <Suspense fallback={null}>
+        <AppToolbar />
+      </Suspense>
       {children}
     </div>
   );

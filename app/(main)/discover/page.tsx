@@ -91,7 +91,7 @@ function normalizeRequestedDate(
   today: string,
 ): string {
   const candidate = Array.isArray(value) ? value[0] : value;
-  const allowedDates = getDateTabDates(today);
+  const allowedDates = [...getDateTabDates(today), ...Array.from({length:5},(_,index)=>addDaysToDateKey(today,index+2))];
   // Keep an open tab's old date available after the 07:00 nightlife-day rollover.
   return candidate &&
     (allowedDates.includes(candidate) || candidate === addDaysToDateKey(today, -2)) &&
@@ -166,6 +166,7 @@ export default async function DiscoverPage({ searchParams }: DiscoverPageProps) 
     currentPage,
     error,
     events,
+    mobileEvents,
     firstEventNumber,
     lastEventNumber,
     revision,
@@ -180,6 +181,8 @@ export default async function DiscoverPage({ searchParams }: DiscoverPageProps) 
       dateTabs={buildDateTabs(today, selectedDate)}
       error={error}
       events={events}
+      mobileEvents={mobileEvents}
+      today={today}
       key={`${selectedDate}:${currentPage}:${revision}`}
       revision={revision}
       selectedDate={selectedDate}

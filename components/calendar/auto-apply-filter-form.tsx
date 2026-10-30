@@ -7,12 +7,15 @@ import {
   type HTMLAttributes,
   type ReactNode,
   useCallback,
+  useEffect,
+  useRef,
   useTransition,
 } from "react";
 
 type AutoApplyFilterFormProps = Omit<HTMLAttributes<HTMLFormElement>, "children" | "onSubmit"> & {
   children: ReactNode;
   closeOnApply?: boolean;
+  searchDebounceMs?: number;
 };
 
 function buildFilterUrl(pathname: string, form: HTMLFormElement): string {
@@ -26,11 +29,14 @@ function buildFilterUrl(pathname: string, form: HTMLFormElement): string {
 export function AutoApplyFilterForm({
   children,
   closeOnApply = false,
+  searchDebounceMs,
   ...props
 }: AutoApplyFilterFormProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [, startTransition] = useTransition();
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (searchTimer.current) clearTimeout(searchTimer.current); }, []);
 
   const applyFilters = useCallback(
     (form: HTMLFormElement) => {
@@ -47,11 +53,18 @@ export function AutoApplyFilterForm({
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (searchTimer.current) clearTimeout(searchTimer.current);
     applyFilters(event.currentTarget);
   }
 
   function handleChange(event: FormEvent<HTMLFormElement>) {
     const target = event.target;
+    if (searchDebounceMs !== undefined && target instanceof HTMLInputElement && target.type === "search") {
+      if (searchTimer.current) clearTimeout(searchTimer.current);
+      const form = event.currentTarget;
+      searchTimer.current = setTimeout(() => applyFilters(form), searchDebounceMs);
+      return;
+    }
     if (!(target instanceof HTMLSelectElement)) {
       return;
     }

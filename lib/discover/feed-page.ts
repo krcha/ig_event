@@ -31,6 +31,21 @@ function mapPublicEvent(event: PublicEvent): DiscoverFeedEvent {
     title: event.title,
     venue: event.venue,
     ...(event.venueId ? { venueId: event.venueId } : {}),
+    ...(event.venueHours ? { venueHours: event.venueHours } : {}),
+  };
+}
+
+function mapMobileEvent(event: PublicEvent): DiscoverFeedEvent {
+  // Only deck metadata is hydrated for the whole day. Original captions and
+  // media still resolve on demand through the existing public post/image APIs.
+  return {
+    _id:event._id, artists:event.artists, date:event.date, eventType:event.eventType,
+    title:event.title, venue:event.venue,
+    ...(event.time ? {time:event.time} : {}),
+    ...(event.description ? {description:event.description} : {}),
+    ...(event.ticketPrice ? {ticketPrice:event.ticketPrice} : {}),
+    ...(event.venueId ? {venueId:event.venueId} : {}),
+    ...(event.venueHours ? {venueHours:event.venueHours} : {}),
   };
 }
 
@@ -65,6 +80,7 @@ export async function loadDiscoverEventsPage(date: string, requestedPage: number
   currentPage: number;
   error?: string;
   events: DiscoverFeedEvent[];
+  mobileEvents: DiscoverFeedEvent[];
   firstEventNumber: number;
   lastEventNumber: number;
   revision: string;
@@ -82,6 +98,7 @@ export async function loadDiscoverEventsPage(date: string, requestedPage: number
     currentPage,
     ...(result.error ? { error: result.error } : {}),
     events: await enrichBatch(pageEvents),
+    mobileEvents: result.events.map(mapMobileEvent),
     firstEventNumber: pageEvents.length > 0 ? startIndex + 1 : 0,
     lastEventNumber: startIndex + pageEvents.length,
     revision: getDayRevision(result.events),

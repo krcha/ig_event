@@ -15,6 +15,8 @@ import { ReadMoreText } from "@/components/ui/read-more-text";
 import { resolveEventTimeDisplay, type EventDayPeriod } from "@/lib/events/event-time";
 import { getEventSessionLabel } from "@/lib/events/event-session";
 import { cn } from "@/lib/utils";
+import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
+import { MobileDiscover } from "./mobile-discover";
 
 export type DiscoverFeedEvent = {
   _id: string;
@@ -36,6 +38,7 @@ export type DiscoverFeedEvent = {
   title: string;
   venue: string;
   venueId?: string;
+  venueHours?: VenueHoursCacheFields;
 };
 
 export type DiscoverDateTab = {
@@ -65,6 +68,8 @@ type DiscoverFeedProps = {
   revision: string;
   selectedDate: string;
   subline: string;
+  mobileEvents: DiscoverFeedEvent[];
+  today: string;
 };
 
 type DiscoverBatchResponse = {
@@ -334,7 +339,19 @@ function EmptyDiscoverState({ error }: { error?: string }) {
   );
 }
 
-export function DiscoverFeed({
+export function DiscoverFeed(props: DiscoverFeedProps) {
+  const [mobile, setMobile] = useState(false);
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 767px)");
+    const update = () => setMobile(media.matches);
+    update(); media.addEventListener("change",update);
+    return () => media.removeEventListener("change",update);
+  }, []);
+  if (mobile) return <MobileDiscover authEnabled={props.authEnabled} error={props.error} events={props.mobileEvents} selectedDate={props.selectedDate} today={props.today} />;
+  return <div className="hidden md:block"><DesktopDiscoverFeed {...props} /></div>;
+}
+
+function DesktopDiscoverFeed({
   authEnabled,
   dateTabs,
   error,

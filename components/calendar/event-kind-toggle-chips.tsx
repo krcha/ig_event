@@ -24,6 +24,7 @@ const CALENDAR_DATE_COUNT_SELECTOR = "[data-calendar-date-kind-counts]";
 type EventKindToggleChipsProps = {
   children?: ReactNode;
   initialHiddenCategories?: readonly EventCategoryKind[];
+  singleSelection?: boolean;
 };
 
 type CategoryCountMap = Partial<Record<EventCategoryKind, number>>;
@@ -123,7 +124,7 @@ function syncDateStripAndMetricCounts(categories: readonly EventCategoryKind[]) 
     const counts = parseCategoryCounts(dateLink.dataset.calendarDateKindCounts);
     const visibleCount = getVisibleCountFromCategoryCounts(counts, categories);
     const dayKey = dateLink.dataset.calendarDate;
-    const shouldCountForStats = Boolean(dayKey && !countedDayKeys.has(dayKey));
+    const shouldCountForStats = Boolean(dayKey && !countedDayKeys.has(dayKey) && dateLink.dataset.calendarDateStatScope !== "week");
     const isWeekend = dateLink.dataset.calendarDateWeekend === "true";
     const isUpcoming = dateLink.dataset.calendarDateUpcoming === "true";
 
@@ -147,6 +148,17 @@ function syncDateStripAndMetricCounts(categories: readonly EventCategoryKind[]) 
     dateLink.querySelectorAll<HTMLElement>("[data-calendar-date-count-dot]").forEach((target) => {
       target.classList.toggle("bg-primary", visibleCount > 0);
       target.classList.toggle("bg-border", visibleCount === 0);
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>("[data-calendar-week]").forEach((week) => {
+    const dates = Array.from(week.querySelectorAll<HTMLElement>("[data-calendar-week-date]"));
+    const maxCount = Math.max(1, ...dates.map((date) => Number(date.dataset.calendarVisibleEventCount ?? 0)));
+    dates.forEach((date) => {
+      const count = Number(date.dataset.calendarVisibleEventCount ?? 0);
+      date.querySelector<HTMLElement>("[data-calendar-week-water]")?.style.setProperty(
+        "--week-fill", `${Math.max(6, Math.min(100, count / maxCount * 100))}%`,
+      );
     });
   });
 
@@ -205,6 +217,11 @@ function applyAgendaVisibility(categories: readonly EventCategoryKind[]) {
     scope.querySelectorAll<HTMLElement>("[data-calendar-visible-event-count]").forEach((target) => {
       setVisibleText(target, pluralize(visibleCount));
     });
+    if (scope.dataset.calendarAgendaScope === "mobile-week") {
+      document.querySelectorAll<HTMLElement>("[data-calendar-mobile-day-count]").forEach((target) => {
+        setVisibleText(target, String(visibleCount));
+      });
+    }
     scope.querySelectorAll<HTMLElement>("[data-calendar-empty-state]").forEach((emptyState) => {
       emptyState.hidden = visibleCount > 0;
     });
@@ -221,6 +238,7 @@ function applyAgendaVisibility(categories: readonly EventCategoryKind[]) {
 export function EventKindToggleChips({
   children,
   initialHiddenCategories = [],
+  singleSelection = false,
 }: EventKindToggleChipsProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -234,6 +252,9 @@ export function EventKindToggleChips({
   );
   const appliedCategoryKey = useRef(initialHiddenCategoryKey);
   const hiddenSet = useMemo(() => new Set(hiddenCategories), [hiddenCategories]);
+  const selectedCategory = hiddenCategories.length === CATEGORY_KEYS.length - 1
+    ? CATEGORY_KEYS.find((key) => !hiddenSet.has(key)) ?? "all"
+    : "all";
 
   const setHiddenCategoriesAndUrl = useCallback(
     (nextCategories: EventCategoryKind[]) => {
@@ -311,28 +332,32 @@ export function EventKindToggleChips({
   }, [hiddenCategories, setHiddenCategoriesAndUrl]);
 
   function toggleCategory(category: EventCategoryKind) {
-    const next = getHiddenCategoriesAfterCategoryToggle(hiddenCategories, category);
+    const next = singleSelection
+      ? CATEGORY_KEYS.filter((key) => key !== category)
+      : getHiddenCategoriesAfterCategoryToggle(hiddenCategories, category);
     setHiddenCategoriesAndUrl(next);
   }
 
   return (
-    <div className="mt-1.5 flex items-center gap-1.5" data-calendar-mobile-filter-chips="true">
+    <div className="mt-1.5 flex items-center gap-1.5" data-calendar-mobile-filter-chips="true" data-calendar-category-selection={singleSelection ? "single" : "multiple"}>
       <nav
         aria-label="Selected day categories"
         className="flex min-w-0 flex-1 gap-1 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         {CATEGORY_CHIPS.map((chip) => {
           if (chip.key === "all") {
-            const isAllEnabled = hiddenCategories.length === 0;
+            const isAllEnabled = singleSelection ? selectedCategory === "all" : hiddenCategories.length === 0;
 
             return (
               <button
                 aria-pressed={isAllEnabled}
                 className={cn(
                   "inline-flex min-h-8 flex-none items-center rounded-full px-2.5 text-[11px] font-semibold transition hover:opacity-90",
-                  isAllEnabled
-                    ? "bg-primary/15 text-primary shadow-[0_16px_34px_-28px_rgba(113,112,255,0.9)]"
-                    : "bg-white/[0.045] text-muted-foreground hover:text-foreground",
+                  singleSelection
+                    ? isAllEnabled ? "border border-primary bg-primary text-primary-foreground" : "border border-input bg-card text-foreground"
+                    : isAllEnabled
+                      ? "bg-primary/15 text-primary shadow-[0_16px_34px_-28px_rgba(113,112,255,0.9)]"
+                      : "bg-white/[0.045] text-muted-foreground hover:text-foreground",
                 )}
                 data-calendar-kind-toggle="all"
                 key={chip.key}
@@ -346,25 +371,29 @@ export function EventKindToggleChips({
 
           const category = chip.key as EventCategoryKind;
           const isHidden = hiddenSet.has(category);
+          const isActive = singleSelection ? selectedCategory === category : !isHidden;
           const tone = EVENT_CATEGORY_TONES[category];
 
           return (
             <button
-              aria-pressed={!isHidden}
+              aria-pressed={isActive}
               className={cn(
                 "inline-flex min-h-8 flex-none items-center rounded-full px-2.5 text-[11px] font-semibold transition hover:opacity-90",
-                isHidden
-                  ? "bg-white/[0.04] text-muted-foreground opacity-70 ring-1 ring-border/60"
-                  : "shadow-[0_16px_34px_-28px_rgba(0,0,0,0.85)]",
+                singleSelection
+                  ? isActive ? "border border-primary bg-primary text-primary-foreground" : "border border-input bg-card text-foreground"
+                  : isHidden
+                    ? "bg-white/[0.04] text-muted-foreground opacity-70 ring-1 ring-border/60"
+                    : "shadow-[0_16px_34px_-28px_rgba(0,0,0,0.85)]",
               )}
               data-calendar-kind-toggle={chip.key}
               key={chip.key}
               onClick={() => toggleCategory(category)}
-              style={isHidden ? undefined : { backgroundColor: tone.backgroundColor, color: tone.color }}
+              style={singleSelection || isHidden ? undefined : { backgroundColor: tone.backgroundColor, color: tone.color }}
               type="button"
             >
-              <span className={isHidden ? "line-through" : undefined}>{chip.label}</span>
-              {isHidden ? (
+              {singleSelection ? <span aria-hidden="true" className="mr-1.5 h-1.5 w-1.5 rounded-full" style={{ backgroundColor: isActive ? "currentColor" : tone.color }} /> : null}
+              <span className={!singleSelection && isHidden ? "line-through" : undefined}>{chip.label}</span>
+              {!singleSelection && isHidden ? (
                 <span aria-hidden="true" className="ml-1 text-[10px] opacity-80">
                   off
                 </span>

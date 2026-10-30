@@ -21,8 +21,13 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const mobileTopbarStart = source.indexOf('<div className="mobile-topbar">');
+const mobileTopbarStart = source.indexOf('<div className={cn("mobile-topbar",');
 assert.notEqual(mobileTopbarStart, -1, "App toolbar should render a mobile top header.");
+assert.match(
+  globalsSource,
+  /\.mobile-topbar-scrolling\s*\{\s*position:\s*relative;/,
+  "The Events and Discover mobile header must scroll away while the bottom navigation stays fixed.",
+);
 
 const desktopHeaderStart = source.indexOf("<header", mobileTopbarStart);
 assert.notEqual(

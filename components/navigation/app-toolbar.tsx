@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import type { ComponentType } from "react";
 import { useEffect, useState } from "react";
 import {
@@ -131,6 +131,7 @@ function InstagramFollowLink({ compact = false }: { compact?: boolean }) {
 
 export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { upcomingSavedEventCount } = useUserLibrary();
   const [isHidden, setIsHidden] = useState(false);
   const desktopToolbarItems = showAdminNavigation
@@ -139,6 +140,17 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
   const mobileToolbarItems = showAdminNavigation
     ? [...PUBLIC_TOOLBAR_ITEMS, MOBILE_ADMIN_TOOLBAR_ITEM]
     : PUBLIC_TOOLBAR_ITEMS;
+  const mobileHeaderScrolls = pathname === "/" || pathname === "/calendar" ||
+    pathname === "/events" || pathname === "/discover";
+  const selectedDate = searchParams.get("day") || searchParams.get("date");
+  function mobileHref(item: ToolbarItem): string {
+    if (!selectedDate || !/^\d{4}-\d{2}-\d{2}$/.test(selectedDate) || !mobileHeaderScrolls) {
+      return item.href;
+    }
+    if (item.href === "/discover") return `/discover?date=${selectedDate}`;
+    if (item.href === "/") return `/?month=${selectedDate.slice(0, 7)}&day=${selectedDate}`;
+    return item.href;
+  }
   useEffect(() => {
     let lastScrollY = window.scrollY;
 
@@ -170,7 +182,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
 
   return (
     <>
-      <div className="mobile-topbar">
+      <div className={cn("mobile-topbar", mobileHeaderScrolls && "mobile-topbar-scrolling")}>
         <div className="glass-panel px-3 py-2">
           <div className="flex items-center justify-between gap-3">
             <Link aria-label="Event Zeka home" className="inline-flex min-w-0" href="/">
@@ -259,7 +271,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                       ? "bg-primary text-primary-foreground shadow-[0_16px_34px_-22px_rgba(14,116,144,0.52)]"
                       : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
                   )}
-                  href={item.href}
+                  href={mobileHref(item)}
                   key={item.href}
                   data-global-navigation="document"
                 >

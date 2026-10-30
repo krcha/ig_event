@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
     !parsedDate ||
     formatUtcDateKey(parsedDate) !== date ||
     date < addDaysToDateKey(today, -2) ||
-    date > addDaysToDateKey(today, 1) ||
+    date > addDaysToDateKey(today, 6) ||
     !isPlausibleConvexPublicId(after) ||
     !/^[a-f0-9]{64}$/.test(revision)
   ) {

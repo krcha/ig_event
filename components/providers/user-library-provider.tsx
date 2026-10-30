@@ -6,9 +6,17 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useRequireAuth } from "@/lib/auth/use-require-auth";
+import {
+  failedSavedEventResult,
+  requestSavedEventState,
+  saveEventSelection,
+  type SaveEventsResult,
+  type SetSavedEventResult,
+} from "@/lib/user-library/saved-events-client";
 
 type LibraryEvent = {
   _id: string;
@@ -42,11 +50,6 @@ type UserLibraryPayload = {
   savedEvents?: unknown;
 };
 
-type ToggleSavedEventPayload = {
-  event?: unknown;
-  saved?: unknown;
-};
-
 type ToggleFavoriteVenuePayload = {
   favorite?: unknown;
   venue?: unknown;
@@ -70,6 +73,8 @@ type UserLibraryContextValue = {
   refreshLibrary: () => Promise<void>;
   savedEventIds: ReadonlySet<string>;
   savedEvents: readonly LibraryEvent[];
+  saveEvents: (eventIds: readonly string[]) => Promise<SaveEventsResult>;
+  setSavedEvent: (eventId: string, saved: boolean) => Promise<SetSavedEventResult>;
   toggleFavoriteVenue: (
     venueId: string,
     options?: ToggleFavoriteVenueOptions,
@@ -90,6 +95,12 @@ const UserLibraryContext = createContext<UserLibraryContextValue>({
   refreshLibrary: async () => {},
   savedEventIds: emptySet,
   savedEvents: [],
+  saveEvents: async (eventIds) => ({
+    authenticationRequired: true,
+    failedEventIds: [...new Set(eventIds)],
+    savedEventIds: [],
+  }),
+  setSavedEvent: async (eventId) => failedSavedEventResult(eventId, "Authentication required.", true),
   toggleFavoriteVenue: async () => null,
   toggleSavedEvent: async () => null,
   upcomingSavedEventCount: 0,
@@ -192,7 +203,14 @@ export function UserLibraryProvider({ children }: { children: React.ReactNode })
   const [pendingSavedEventIds, setPendingSavedEventIds] = useState<Set<string>>(new Set());
   const [pendingFavoriteVenueIds, setPendingFavoriteVenueIds] = useState<Set<string>>(new Set());
   const [isLibraryLoaded, setIsLibraryLoaded] = useState(false);
+  const [libraryUserId, setLibraryUserId] = useState<string | null | undefined>();
   const [error, setError] = useState<string | null>(null);
+  const authRef = useRef({ isLoaded, isSignedIn, userId });
+  authRef.current = { isLoaded, isSignedIn, userId };
+  const savedEventRequests = useRef(new Map<string, {
+    promise: Promise<SetSavedEventResult>;
+    saved: boolean;
+  }>());
 
   const refreshLibrary = useCallback(async () => {
     if (!isLoaded) {
@@ -206,6 +224,7 @@ export function UserLibraryProvider({ children }: { children: React.ReactNode })
       setFavoriteVenues([]);
       setPendingSavedEventIds(new Set());
       setPendingFavoriteVenueIds(new Set());
+      setLibraryUserId(null);
       setIsLibraryLoaded(true);
       setError(null);
       return;
@@ -220,10 +239,12 @@ export function UserLibraryProvider({ children }: { children: React.ReactNode })
     }
 
     const body = (await response.json()) as UserLibraryPayload;
+    if (authRef.current.userId !== userId || !authRef.current.isSignedIn) return;
     setSavedEventIds(idsFromPayload(body.savedEventIds));
     setFavoriteVenueIds(idsFromPayload(body.favoriteVenueIds));
     setSavedEvents(eventsFromPayload(body.savedEvents));
     setFavoriteVenues(venuesFromPayload(body.favoriteVenues));
+    setLibraryUserId(userId);
     setIsLibraryLoaded(true);
   }, [isLoaded, isSignedIn, userId]);
 
@@ -234,9 +255,10 @@ export function UserLibraryProvider({ children }: { children: React.ReactNode })
       try {
         await refreshLibrary();
       } catch (caughtError) {
-        if (isCancelled) {
+        if (isCancelled || authRef.current.userId !== userId) {
           return;
         }
+        setLibraryUserId(userId);
         setIsLibraryLoaded(true);
         setError(caughtError instanceof Error ? caughtError.message : "Could not load your saved items.");
       }
@@ -247,61 +269,69 @@ export function UserLibraryProvider({ children }: { children: React.ReactNode })
     return () => {
       isCancelled = true;
     };
-  }, [refreshLibrary]);
+  }, [refreshLibrary, userId]);
+
+  useEffect(() => {
+    setPendingSavedEventIds(new Set());
+  }, [userId]);
+
+  const setSavedEvent = useCallback(
+    (eventId: string, saved: boolean): Promise<SetSavedEventResult> => {
+      const owner = authRef.current;
+      if (!owner.isLoaded || !owner.isSignedIn || !owner.userId) {
+        return Promise.resolve(failedSavedEventResult(eventId, "Authentication required.", true));
+      }
+      const requestKey = `${owner.userId}:${eventId}`;
+      const previous = savedEventRequests.current.get(requestKey);
+      if (previous?.saved === saved) return previous.promise;
+
+      const promise = (async () => {
+        if (previous) await previous.promise;
+        if (!authRef.current.isSignedIn || authRef.current.userId !== owner.userId) {
+          return failedSavedEventResult(eventId, "Authentication required.", true);
+        }
+        setError(null);
+        setPendingSavedEventIds((current) => toggleSetValue(current, eventId, true));
+        const result = await requestSavedEventState(eventId, saved);
+        if (!authRef.current.isSignedIn || authRef.current.userId !== owner.userId) {
+          return failedSavedEventResult(eventId, "Authentication required.", true);
+        }
+        if (result.success) {
+          const event = eventFromPayload(result.event);
+          setSavedEventIds((current) => toggleSetValue(current, eventId, saved));
+          setSavedEvents((current) => !saved
+            ? removeById(current, eventId)
+            : event ? upsertById(current, event) : current);
+        } else {
+          setError(result.error);
+        }
+        setPendingSavedEventIds((current) => toggleSetValue(current, eventId, false));
+        return result;
+      })();
+      savedEventRequests.current.set(requestKey, { promise, saved });
+      void promise.then(() => {
+        if (savedEventRequests.current.get(requestKey)?.promise === promise) {
+          savedEventRequests.current.delete(requestKey);
+        }
+      });
+      return promise;
+    },
+    [],
+  );
+
+  const saveEvents = useCallback(
+    (eventIds: readonly string[]) => saveEventSelection(eventIds, setSavedEvent),
+    [setSavedEvent],
+  );
 
   const toggleSavedEvent = useCallback(
     async (eventId: string, options: ToggleSavedEventOptions = {}) => {
-      setError(null);
-      if (!requireAuth()) {
-        return null;
-      }
-
+      if (!requireAuth()) return null;
       const wasSaved = options.expectedSaved ?? savedEventIds.has(eventId);
-      const previousSavedEvent = savedEvents.find((event) => event._id === eventId) ?? null;
-      const optimisticSaved = !wasSaved;
-      setSavedEventIds((current) => toggleSetValue(current, eventId, optimisticSaved));
-      if (!optimisticSaved) {
-        setSavedEvents((current) => removeById(current, eventId));
-      }
-      setPendingSavedEventIds((current) => toggleSetValue(current, eventId, true));
-
-      try {
-        const response = await fetch("/api/user/saved-events", {
-          body: JSON.stringify({ eventId, saved: optimisticSaved }),
-          headers: { "Content-Type": "application/json" },
-          method: "POST",
-        });
-
-        if (!response.ok) {
-          throw new Error(await readErrorMessage(response, "Could not update this event."));
-        }
-
-        const body = (await response.json()) as ToggleSavedEventPayload;
-        const saved = typeof body.saved === "boolean" ? body.saved : optimisticSaved;
-        const event = eventFromPayload(body.event);
-        setSavedEventIds((current) => toggleSetValue(current, eventId, saved));
-        setSavedEvents((current) => {
-          if (!saved) {
-            return removeById(current, eventId);
-          }
-          return event ? upsertById(current, event) : current;
-        });
-        return saved;
-      } catch (caughtError) {
-        setSavedEventIds((current) => toggleSetValue(current, eventId, wasSaved));
-        setSavedEvents((current) => {
-          if (!wasSaved) {
-            return removeById(current, eventId);
-          }
-          return previousSavedEvent ? upsertById(current, previousSavedEvent) : current;
-        });
-        setError(caughtError instanceof Error ? caughtError.message : "Could not update this event.");
-        return wasSaved;
-      } finally {
-        setPendingSavedEventIds((current) => toggleSetValue(current, eventId, false));
-      }
+      const result = await setSavedEvent(eventId, !wasSaved);
+      return result.success ? result.saved : wasSaved;
     },
-    [requireAuth, savedEventIds, savedEvents],
+    [requireAuth, savedEventIds, setSavedEvent],
   );
 
   const toggleFavoriteVenue = useCallback(
@@ -370,11 +400,13 @@ export function UserLibraryProvider({ children }: { children: React.ReactNode })
       favoriteVenueIds,
       favoriteVenues,
       isEventPending: (eventId: string) => pendingSavedEventIds.has(eventId),
-      isLibraryLoaded,
+      isLibraryLoaded: isLibraryLoaded && libraryUserId === userId,
       isVenuePending: (venueId: string) => pendingFavoriteVenueIds.has(venueId),
       refreshLibrary,
       savedEventIds,
       savedEvents,
+      saveEvents,
+      setSavedEvent,
       toggleFavoriteVenue,
       toggleSavedEvent,
       upcomingSavedEventCount,
@@ -384,14 +416,18 @@ export function UserLibraryProvider({ children }: { children: React.ReactNode })
       favoriteVenueIds,
       favoriteVenues,
       isLibraryLoaded,
+      libraryUserId,
       pendingFavoriteVenueIds,
       pendingSavedEventIds,
       refreshLibrary,
       savedEventIds,
       savedEvents,
+      saveEvents,
+      setSavedEvent,
       toggleFavoriteVenue,
       toggleSavedEvent,
       upcomingSavedEventCount,
+      userId,
     ],
   );
 

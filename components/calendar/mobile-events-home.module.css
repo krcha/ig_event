@@ -1,0 +1,14 @@
+@media (max-width: 767px) {
+  .home { gap: 0; }
+  .intro { padding: 8px 4px 7px; }
+  .heading { margin: 0; font-size: 40px; line-height: 1.08; font-weight: 800; letter-spacing: -.055em; }
+  .total { margin: 8px 0 17px; color: var(--muted-foreground); font-size: 14px; line-height: 20px; }
+  .search { height: 50px; border-radius: 16px; background: var(--card); padding-left: 43px; font-size: 16px; }
+  .search::placeholder { font-size: 14px; font-weight: 400; }
+  .stickyFilters { position: sticky; top: 0; z-index: 20; height: 52px; display: flex; align-items: center; margin: 0 -4px; padding: 0 4px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--background) 94%, transparent); backdrop-filter: blur(20px); }
+  .stickyFilters > div { width: 100%; margin-top: 0; }
+  .stickyFilters nav { align-items: center; gap: 7px; padding: 8px 0; overscroll-behavior-x: contain; }
+  .stickyFilters button { min-height: 36px; padding: 0 13px; font-size: 12px; }
+  .agenda { display: contents; }
+}
+@media (max-width: 350px) { .heading { font-size: 35px; } }

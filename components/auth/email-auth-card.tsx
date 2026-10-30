@@ -545,7 +545,10 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
 
           <p className="text-sm text-muted-foreground">
             {copy.alternateLabel}{" "}
-            <Link className="font-semibold text-primary hover:text-primary/85" href={copy.alternateHref}>
+            <Link
+              className="font-semibold text-primary hover:text-primary/85"
+              href={`${copy.alternateHref}?redirect_url=${encodeURIComponent(authCompleteRedirectPath)}`}
+            >
               {copy.alternateCta}
             </Link>
           </p>

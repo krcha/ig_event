@@ -5,6 +5,11 @@ import { createLibraryRouteHandlers } from "../app/api/user/library/handler.ts";
 import { createSavedEventRouteHandlers } from "../app/api/user/saved-events/handler.ts";
 import { createFavoriteVenueRouteHandlers } from "../app/api/user/favorite-venues/handler.ts";
 import { toggleMySavedEvent } from "../convex/users.ts";
+import {
+  failedSavedEventResult,
+  requestSavedEventState,
+  saveEventSelection,
+} from "../lib/user-library/saved-events-client.ts";
 
 const signedInUserId = "user_test_123";
 const eventId = "event_123";
@@ -484,6 +489,85 @@ for (const routeCase of routeCases) {
   assert.equal(tables.userSavedEvents.size, 0, "Legacy-only saves must be durably removed.");
 }
 
+// An interrupted save can commit before its response is lost. Replaying the
+// selection must send saved:true again, preserving unrelated existing saves.
+{
+  const backendSaved = new Set(["already-saved-unrelated"]);
+  const requests = [];
+  let failAfterCommit = true;
+  const fetcher = async (url, options) => {
+    assert.equal(url, "/api/user/saved-events");
+    assert.equal(options.method, "POST");
+    const body = JSON.parse(options.body);
+    requests.push(body);
+    assert.equal(body.saved, true);
+    backendSaved.add(body.eventId);
+    if (body.eventId === "retry-me" && failAfterCommit) {
+      failAfterCommit = false;
+      throw new Error("Response lost after commit");
+    }
+    return Response.json({ saved: true, event: { _id: body.eventId } });
+  };
+  const setter = (id, saved) => requestSavedEventState(id, saved, fetcher);
+  const first = await saveEventSelection(["first", "retry-me", "first"], setter);
+  assert.deepEqual(first.savedEventIds, ["first"]);
+  assert.deepEqual(first.failedEventIds, ["retry-me"]);
+  const retried = await saveEventSelection(first.failedEventIds, setter);
+  assert.deepEqual(retried.savedEventIds, ["retry-me"]);
+  assert.deepEqual(retried.failedEventIds, []);
+  assert.equal(requests.length, 3, "Duplicate IDs must not dispatch extra requests.");
+  assert.deepEqual([...backendSaved].sort(), ["already-saved-unrelated", "first", "retry-me"]);
+}
+
+{
+  const wrongState = await requestSavedEventState("event", true, async () =>
+    Response.json({ saved: false }));
+  const missingState = await requestSavedEventState("event", true, async () =>
+    Response.json({ event: { _id: "event" } }));
+  const invalidBody = await requestSavedEventState("event", true, async () =>
+    new Response("not JSON"));
+  const signedOut = await requestSavedEventState("event", true, async () =>
+    Response.json({ error: "Unauthorized" }, { status: 401 }));
+  for (const result of [wrongState, missingState, invalidBody, signedOut]) {
+    assert.equal(result.success, false, "Only an explicit saved:true response confirms a save.");
+    assert.equal(result.saved, null);
+  }
+  assert.equal(signedOut.authenticationRequired, true);
+  const removed = await requestSavedEventState("event", false, async (_url, options) => {
+    assert.deepEqual(JSON.parse(options.body), { eventId: "event", saved: false });
+    return Response.json({ saved: false });
+  });
+  assert.equal(removed.success, true);
+  assert.equal(removed.saved, false);
+}
+
+{
+  let running = 0;
+  let peak = 0;
+  const result = await saveEventSelection(["one", "two", "three", "four", "five"], async (id, saved) => {
+    assert.equal(saved, true);
+    running++;
+    peak = Math.max(peak, running);
+    await new Promise(resolve => setTimeout(resolve, 1));
+    running--;
+    if (id === "two") throw new Error("Transport failure");
+    return { authenticationRequired: false, error: null, eventId: id, saved: true, success: true };
+  });
+  assert.equal(peak, 3, "Selection saves must bound concurrent authenticated writes.");
+  assert.deepEqual(result.failedEventIds, ["two"]);
+  assert.deepEqual(result.savedEventIds, ["one", "three", "four", "five"]);
+
+  let calls = 0;
+  const expired = await saveEventSelection(["one", "two", "three", "four", "five"], async id => {
+    calls++;
+    return failedSavedEventResult(id, "Authentication required.", true);
+  });
+  assert.equal(expired.authenticationRequired, true);
+  assert.deepEqual(expired.savedEventIds, []);
+  assert.equal(expired.failedEventIds.length, 5, "Undispatched IDs must remain retryable after auth expires.");
+  assert.ok(calls <= 3, "Stop dispatching after authentication fails.");
+}
+
 console.log(
-  `User API auth QA passed (${routeCases.length} methods; signed-out, unconfigured, validation, success, not-found, dependency, unexpected failures, and legacy unsave).`,
+  `User API auth QA passed (${routeCases.length} methods; auth boundaries, legacy unsave, confirmed additive saves, partial retry, and bounded batching).`,
 );

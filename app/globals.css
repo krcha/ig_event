@@ -252,6 +252,10 @@
     @apply sticky top-0 z-30 px-3 pt-2 md:hidden;
   }
 
+  .mobile-topbar-scrolling {
+    position: relative;
+  }
+
   .mobile-nav-shell {
     @apply fixed inset-x-0 bottom-0 z-50 px-3 pt-2 md:hidden;
     padding-bottom: calc(0.65rem + env(safe-area-inset-bottom));
