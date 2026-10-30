@@ -20,21 +20,57 @@ type Entry = { expiresAt: number; promise: Promise<Overview> };
 const overviewCache = new Map<string, Entry>();
 const CACHE_TTL_MS = 60_000;
 const CACHE_MAX_ENTRIES = 48;
+const OVERVIEW_WINDOW_DAYS = 7;
+const OVERVIEW_WINDOW_CONCURRENCY = 4;
 const overviewAction = "publicCalendarOverviewAction:listWindow" as unknown as FunctionReference<"action">;
 
 async function loadOverview(convex: ConvexHttpClient, options: Options): Promise<Overview> {
+  const windows = buildPublicCalendarDateWindows(options.fromDate, options.beforeDate, OVERVIEW_WINDOW_DAYS);
+  const windowPages: PublicCalendarOverviewPage[][] = new Array(windows.length);
+  let nextWindow = 0;
+  let failed = false;
+  let failure: unknown;
+  async function loadNextWindow() {
+    while (!failed && nextWindow < windows.length) {
+      const index = nextWindow++;
+      const window = windows[index];
+      const pages: PublicCalendarOverviewPage[] = [];
+      let cursor: string | null = null;
+      const seenCursors = new Set<string>();
+      try {
+        // Cursors belong to one bounded date window and remain sequential.
+        // Independent windows can read concurrently without broadening scope.
+        while (!failed) {
+          const result: PublicCalendarOverviewPage = await convex.action(overviewAction, {
+            ...window,
+            cursor,
+            ...(options.q ? { q: options.q } : {}),
+            ...(options.venue ? { venue: options.venue } : {}),
+          });
+          pages.push(result);
+          if (result.isDone) break;
+          if (!result.continueCursor || seenCursors.has(result.continueCursor)) {
+            throw new Error("Calendar overview pagination did not advance.");
+          }
+          seenCursors.add(result.continueCursor);
+          cursor = result.continueCursor;
+        }
+        windowPages[index] = pages;
+      } catch (error) {
+        if (!failed) failure = error;
+        failed = true;
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(OVERVIEW_WINDOW_CONCURRENCY, windows.length) }, loadNextWindow));
+  if (failed) throw failure;
+
   const groups = new Map<string, PublicCalendarOverviewGroup>();
   const venues = new Map<string, PublicCalendarOverviewVenue>();
-  for (const window of buildPublicCalendarDateWindows(options.fromDate, options.beforeDate)) {
-    let cursor: string | null = null;
-    const seenCursors = new Set<string>();
-    while (true) {
-      const result: PublicCalendarOverviewPage = await convex.action(overviewAction, {
-        ...window,
-        cursor,
-        ...(options.q ? { q: options.q } : {}),
-        ...(options.venue ? { venue: options.venue } : {}),
-      });
+  // Merge in date-window/page order, independent of response timing, so venue
+  // aliases, labels and fallback locations retain deterministic precedence.
+  for (const pages of windowPages) {
+    for (const result of pages) {
       for (const group of result.page) {
         const key = JSON.stringify([group.date, group.category, group.venueValue]);
         const previous = groups.get(key);
@@ -52,12 +88,6 @@ async function loadOverview(convex: ConvexHttpClient, options: Options): Promise
           ...(venue.location || previous.location ? { location: venue.location ?? previous.location } : {}),
         } : { ...venue });
       }
-      if (result.isDone) break;
-      if (!result.continueCursor || seenCursors.has(result.continueCursor)) {
-        throw new Error("Calendar overview pagination did not advance.");
-      }
-      seenCursors.add(result.continueCursor);
-      cursor = result.continueCursor;
     }
   }
   const optionsList = [...venues.values()];

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { getMobileDayHeading, getMobileDayLabel, getMobileWeekDateKeys, getMobileWeekFill } from "../lib/events/mobile-week.ts";
+import { getMobileDayHeading, getMobileDayLabel, getMobileWeekDateKeys, getMobileWeekFill, getMobileWeekOverviewWindows } from "../lib/events/mobile-week.ts";
 import { getNightlifeDefaultDateKey } from "../lib/events/nightlife-date.ts";
 import { buildCalendarFilterUrl } from "../lib/events/calendar-filter-url.ts";
 
@@ -21,12 +21,29 @@ assert.equal(getMobileWeekFill(61, 122), 50);
 assert.equal(getMobileWeekFill(122, 122), 100);
 assert.equal(getMobileWeekFill(0, 0), 6);
 assert.equal(getMobileWeekFill(999, 122), 100);
+assert.deepEqual(getMobileWeekOverviewWindows(today, {fromDate:"2026-10-01",beforeDate:"2026-11-01"}), [
+  {fromDate:"2026-11-01",beforeDate:"2026-11-05"},
+]);
+assert.deepEqual(getMobileWeekOverviewWindows(today, {fromDate:"2026-11-01",beforeDate:"2026-12-01"}), [
+  {fromDate:today,beforeDate:"2026-11-01"},
+]);
+assert.deepEqual(getMobileWeekOverviewWindows("2026-10-15", {fromDate:"2026-10-01",beforeDate:"2026-11-01"}), []);
+assert.deepEqual(getMobileWeekOverviewWindows(today), [{fromDate:today,beforeDate:"2026-11-05"}]);
+assert.deepEqual(getMobileWeekOverviewWindows(today, {fromDate:"2027-01-01",beforeDate:"2027-02-01"}), [{fromDate:today,beforeDate:"2026-11-05"}]);
+assert.deepEqual(getMobileWeekOverviewWindows("2026-12-29", {fromDate:"2026-12-01",beforeDate:"2027-01-01"}), [{fromDate:"2027-01-01",beforeDate:"2027-01-05"}]);
+// The combined counters must neither double count nor omit a week date.
+for (const covered of [undefined, {fromDate:"2026-10-01",beforeDate:"2026-11-01"}, {fromDate:"2026-11-01",beforeDate:"2026-12-01"}, {fromDate:"2026-10-31",beforeDate:"2026-11-02"}]) {
+  const ranges = [...(covered ? [covered] : []), ...getMobileWeekOverviewWindows(today, covered)];
+  for (const date of getMobileWeekDateKeys(today)) {
+    assert.equal(ranges.filter(range => date >= range.fromDate && date < range.beforeDate).length, 1);
+  }
+}
 const searchUrl = new URL(buildCalendarFilterUrl("/", [
-  ["month", "2026-10"], ["day", "2026-10-29"], ["q", "jazz"], ["sort", "time"], ["open", ""],
-], "https://eventzeka.com/?month=2026-10&day=2026-10-29&hide=live,culture,event"), "https://eventzeka.com");
+  ["month", "2026-10"], ["day", "2026-10-29"], ["q", "jazz"], ["sort", "time"],
+], "https://eventzeka.com/?month=2026-10&day=2026-10-29&hide=live,culture,event&open=now"), "https://eventzeka.com");
 assert.equal(searchUrl.searchParams.get("hide"), "live,culture,event", "Search must preserve the category selected in the live URL.");
 assert.equal(searchUrl.searchParams.get("q"), "jazz");
-assert.equal(searchUrl.searchParams.has("open"), false);
+assert.equal(searchUrl.searchParams.get("open"), "now", "Search must preserve active Open now alongside the selected category.");
 // Belgrade DST and the existing 07:00 nightlife rollover remain the source of today.
 assert.equal(getNightlifeDefaultDateKey(new Date("2026-10-25T05:59:00Z")), "2026-10-24");
 assert.equal(getNightlifeDefaultDateKey(new Date("2026-10-25T06:00:00Z")), "2026-10-25");
@@ -35,17 +52,19 @@ const source = readFileSync("app/(main)/events-browse-page.tsx", "utf8");
 const weekSource = readFileSync("components/calendar/mobile-week-calendar.tsx", "utf8");
 const style = readFileSync("components/calendar/mobile-week-calendar.module.css", "utf8");
 const homeStyle = readFileSync("components/calendar/mobile-events-home.module.css", "utf8");
-assert.match(source, /weekNeedsOwnOverview \? loadPublicCalendarOverviewWindow\(\{\s*fromDate: todayKey,\s*beforeDate: weekBeforeDate/);
+assert.match(source, /extraWeekWindows\.map\(\(window\) => loadPublicCalendarOverviewWindow/);
 assert.match(source, /<MobileMonthDayStrip days=\{mobileMonthDays\} surface="desktop"/);
 assert.match(source, /\[\.\.\.selectedDayAgendaEvents\]\.sort\(compareAgendaEventsByTime\)/);
 assert.match(source, /className="md:hidden">\{renderSelectedDayAgenda\(\{ mobile: true, mobileWeek: true \}\)/);
 assert.match(source, /placeholder="Izvođač, mesto ili žanr"/);
 assert.match(source, /singleSelection=\{mobileWeek\}/);
+assert.match(source, /afterAll=\{mobileWeek \? <OpenNowFilter active=\{openNowActive\} appearance="chip" href=\{openNowHref\}/);
 assert.match(weekSource, /url\.searchParams\.set\("month", dayKey\.slice\(0, 7\)\)/);
 assert.match(weekSource, /disabled=\{dayKey < todayKey\}/);
 assert.match(style, /height: 68px/);
 assert.match(style, /repeat\(7, minmax\(0, 1fr\)\)/);
 assert.match(style, /prefers-reduced-motion: reduce/);
+assert.doesNotMatch(style, /animation\s*:|@keyframes|data:image\/svg/, "Week tiles must not continuously animate or repeat an SVG wave surface.");
 assert.match(homeStyle, /max-width: 767px/);
 assert.match(homeStyle, /height: 52px/);
 assert.match(homeStyle, /position: sticky; top: 0/);

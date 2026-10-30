@@ -9,7 +9,7 @@ type OpenNowFilterProps = {
   active: boolean;
   href: string;
   initialNow: number;
-  appearance?: "default" | "map";
+  appearance?: "default" | "map" | "chip";
 };
 
 export function OpenNowFilter({ active, href, appearance = "default" }: OpenNowFilterProps) {
@@ -56,7 +56,11 @@ export function OpenNowFilter({ active, href, appearance = "default" }: OpenNowF
       aria-pressed={active}
       className={cn(
         "inline-flex flex-none items-center whitespace-nowrap rounded-full transition hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4",
-        appearance === "map"
+        appearance === "chip"
+          ? cn("h-9 min-h-9 gap-1.5 border px-2.5 text-xs font-semibold leading-none", active
+            ? "border-[#082C1B]/20 bg-[#7DD3A8] text-[#082C1B] focus-visible:outline-[#7DD3A8]"
+            : "border-input bg-card text-foreground hover:border-primary/35 focus-visible:outline-primary")
+          : appearance === "map"
           ? cn("h-8 min-h-8 gap-1.5 px-2.5 text-[11px] font-medium leading-none shadow-lg", active
             ? "bg-[#7DD3A8] text-[#082C1B] ring-2 ring-inset ring-[#082C1B]/20 focus-visible:outline-[#7DD3A8]"
             : "bg-primary text-primary-foreground ring-1 ring-inset ring-primary-foreground/10 focus-visible:outline-primary")
@@ -68,11 +72,22 @@ export function OpenNowFilter({ active, href, appearance = "default" }: OpenNowF
       data-calendar-open-now="true"
       data-calendar-open-now-active={active ? "true" : "false"}
       onClick={() => {
-        startTransition(() => router.replace(href, { scroll: false }));
+        let targetHref = href;
+        if (appearance === "chip") {
+          const target = new URL(href, window.location.origin);
+          const current = new URL(window.location.href);
+          for (const key of ["hide", "q", "venue", "sort"]) {
+            const value = current.searchParams.get(key);
+            if (value) target.searchParams.set(key, value);
+            else target.searchParams.delete(key);
+          }
+          targetHref = `${target.pathname}${target.search}`;
+        }
+        startTransition(() => router.replace(targetHref, { scroll: false }));
       }}
       type="button"
     >
-      <span aria-hidden="true" className={cn("inline-flex flex-none items-center justify-center", appearance === "map" ? "size-3" : "size-4")}>
+      <span aria-hidden="true" className={cn("inline-flex flex-none items-center justify-center", appearance === "default" ? "size-4" : "size-3")}>
         {pending ? (
           <Loader2 className="size-full animate-spin motion-reduce:animate-none" />
         ) : active ? (

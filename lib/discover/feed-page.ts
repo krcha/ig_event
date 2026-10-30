@@ -6,6 +6,7 @@ import { enrichDiscoverEventsWithApifyPosts } from "@/lib/discover/apify-posts";
 import { getDiscoverDisplayImageUrl } from "@/lib/discover/discover-image-source";
 import { loadPublicCalendarEventsWindow, type PublicEvent } from "@/lib/events/public-events";
 import { addDaysToDateKey } from "@/lib/events/nightlife-date";
+import { projectMobileDiscoverEvent, type MobileDiscoverEvent } from "@/lib/discover/mobile-event";
 
 export const DISCOVER_PAGE_SIZE = 9;
 
@@ -35,18 +36,10 @@ function mapPublicEvent(event: PublicEvent): DiscoverFeedEvent {
   };
 }
 
-function mapMobileEvent(event: PublicEvent): DiscoverFeedEvent {
+function mapMobileEvent(event: PublicEvent): MobileDiscoverEvent {
   // Only deck metadata is hydrated for the whole day. Original captions and
   // media still resolve on demand through the existing public post/image APIs.
-  return {
-    _id:event._id, artists:event.artists, date:event.date, eventType:event.eventType,
-    title:event.title, venue:event.venue,
-    ...(event.time ? {time:event.time} : {}),
-    ...(event.description ? {description:event.description} : {}),
-    ...(event.ticketPrice ? {ticketPrice:event.ticketPrice} : {}),
-    ...(event.venueId ? {venueId:event.venueId} : {}),
-    ...(event.venueHours ? {venueHours:event.venueHours} : {}),
-  };
+  return projectMobileDiscoverEvent(event);
 }
 
 async function loadDiscoverDayEvents(date: string): Promise<{
@@ -80,7 +73,7 @@ export async function loadDiscoverEventsPage(date: string, requestedPage: number
   currentPage: number;
   error?: string;
   events: DiscoverFeedEvent[];
-  mobileEvents: DiscoverFeedEvent[];
+  mobileEvents: MobileDiscoverEvent[];
   firstEventNumber: number;
   lastEventNumber: number;
   revision: string;

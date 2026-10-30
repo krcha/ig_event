@@ -1,5 +1,5 @@
 import { isPlausibleConvexPublicId } from "../convex/public-id";
-import { getEventPrimaryCategory, type EventCategoryInput, type EventPrimaryCategory } from "../taxonomy/event-categories";
+import { getEventPrimaryCategory, normalizeEventCategoryKey, type EventCategoryInput, type EventPrimaryCategory } from "../taxonomy/event-categories";
 
 export type DiscoverScope = "all" | EventPrimaryCategory;
 export type DiscoverChoice = {
@@ -13,8 +13,8 @@ export const DISCOVER_SESSION_KEY = "eventzeka-discover-choices-v1";
 export const DISCOVER_SCOPES: readonly DiscoverScope[] = ["all", "club", "live", "culture", "event"];
 const emptyDay = (): DiscoverDayChoices => ({ choices: [], completedScopes: [] });
 
-export function getDiscoverCategory(event: EventCategoryInput): EventPrimaryCategory {
-  return getEventPrimaryCategory(event);
+export function getDiscoverCategory(event: Partial<EventCategoryInput> & {primaryCategory?:string}): EventPrimaryCategory {
+  return normalizeEventCategoryKey(event.primaryCategory) ?? getEventPrimaryCategory({...event,eventType:event.eventType ?? "event"});
 }
 
 export function readDiscoverSessions(raw: string | null): DiscoverSessions {
@@ -85,9 +85,23 @@ export function completedDiscoverLikes(sessions: DiscoverSessions): string[] {
     .flatMap(day => day.choices.filter(choice => choice.decision === "like").map(choice => choice.eventId)))];
 }
 
+export function discoverLikedIds(sessions: DiscoverSessions): string[] {
+  return [...new Set(Object.values(sessions).flatMap(day=>day.choices.filter(choice=>choice.decision === "like").map(choice=>choice.eventId)))];
+}
+
 export function pendingDiscoverSaveIds(sessions: DiscoverSessions, confirmed: ReadonlySet<string>, attempted: ReadonlySet<string>): string[] {
   const acknowledged = new Set(Object.values(sessions).flatMap(day=>day.acknowledgedIds ?? []));
-  return completedDiscoverLikes(sessions).filter(id=>!acknowledged.has(id) && !confirmed.has(id) && !attempted.has(id));
+  return discoverLikedIds(sessions).filter(id=>!acknowledged.has(id) && !confirmed.has(id) && !attempted.has(id));
+}
+
+export function getDiscoverGestureAction({x,y,velocity,width,maxDistance,dragging,photo,cancelled=false}: {
+  x:number; y:number; velocity:number; width:number; maxDistance:number; dragging:boolean; photo:boolean; cancelled?:boolean;
+}): "like" | "skip" | "open" | "cancel" {
+  if(cancelled)return "cancel";
+  if(Math.abs(y)>16 && Math.abs(y)>Math.abs(x)*1.25)return "cancel";
+  if(Math.abs(x)>Math.max(70,width*.23) || (Math.abs(velocity)>.55 && Math.abs(x)>28))return x>0?"like":"skip";
+  if(photo && !dragging && maxDistance<=7 && Math.hypot(x,y)<=7)return "open";
+  return "cancel";
 }
 
 export function discoverSessionStorageKey(userId:string|null):string {

@@ -17,6 +17,7 @@ import { getEventSessionLabel } from "@/lib/events/event-session";
 import { cn } from "@/lib/utils";
 import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 import { MobileDiscover } from "./mobile-discover";
+import type { MobileDiscoverEvent } from "@/lib/discover/mobile-event";
 
 export type DiscoverFeedEvent = {
   _id: string;
@@ -68,7 +69,7 @@ type DiscoverFeedProps = {
   revision: string;
   selectedDate: string;
   subline: string;
-  mobileEvents: DiscoverFeedEvent[];
+  mobileEvents: MobileDiscoverEvent[];
   today: string;
 };
 

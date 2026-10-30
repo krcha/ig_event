@@ -2,11 +2,8 @@
 .week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; min-width: 0; flex: 1; }
 .day { position: relative; isolation: isolate; overflow: hidden; min-width: 0; height: 68px; padding: 6px 0; border: 1px solid color-mix(in srgb, var(--border) 75%, transparent); border-radius: .85rem; background: var(--card); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; transition: border-color .2s, background .2s; }
 .day[aria-current="date"] { border-color: color-mix(in srgb, var(--primary) 55%, transparent); background: color-mix(in srgb, var(--primary) 8%, transparent); }
-.water { position: absolute; z-index: -1; inset: auto 0 0; height: var(--week-fill); background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 27%, transparent), color-mix(in srgb, var(--primary) 10%, transparent)); transition: height .5s cubic-bezier(.2,.7,.2,1); pointer-events: none; }
-.water::before, .water::after { content: ""; position: absolute; left: -50%; top: -4px; width: 200%; height: 8px; background: color-mix(in srgb, var(--primary) 27%, transparent); mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 8'%3E%3Cpath d='M0 4Q10 0 20 4T40 4T60 4T80 4V8H0Z' fill='black'/%3E%3C/svg%3E") repeat-x 0 0 / 80px 8px; animation: wave 5s linear infinite; }
-.water::after { opacity: .45; top: -5px; animation-direction: reverse; animation-duration: 7s; }
-.day[aria-current="date"] .water { background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 58%, transparent), color-mix(in srgb, var(--primary) 23%, transparent)); }
-.day[aria-current="date"] .water::before, .day[aria-current="date"] .water::after { background: color-mix(in srgb, var(--primary) 58%, transparent); }
+.water { position: absolute; z-index: -1; inset: auto 0 0; height: var(--week-fill); border-radius: 50% 50% 0 0 / 5px 5px 0 0; background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--primary) 14%, transparent) 20%, color-mix(in srgb, var(--primary) 5%, transparent)); transition: height .35s cubic-bezier(.2,.7,.2,1); pointer-events: none; }
+.day[aria-current="date"] .water { background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--primary) 25%, transparent) 20%, color-mix(in srgb, var(--primary) 10%, transparent)); }
 .label { font-size: 10px; font-weight: 600; line-height: 14px; letter-spacing: .04em; white-space: nowrap; color: var(--muted-foreground); }
 .date { font-size: 16px; font-weight: 600; line-height: 18px; font-variant-numeric: tabular-nums; color: var(--foreground); }
 .count { margin-top: 1px; font-size: 10px; font-weight: 400; line-height: 13px; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
@@ -27,6 +24,5 @@
 .monthDay[aria-current="date"] { background: var(--primary); color: var(--primary-foreground); }
 .monthDay[aria-current="date"] small { color: inherit; }
 .monthDay:disabled { opacity: .24; }
-@keyframes wave { to { transform: translateX(80px); } }
 @media (max-width: 350px) { .week { gap: 2px; } .day { border-radius: 11px; } .label { font-size: 9px; letter-spacing: 0; } .calendarTrigger { width: 22px; } }
-@media (prefers-reduced-motion: reduce) { .water, .day { transition: none; } .water::before, .water::after { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .water, .day { transition: none; } }

@@ -49,8 +49,19 @@ export default function EventPostPreview({ eventId, onClose, title }: {
   const actionClass = "inline-flex min-h-9 items-center justify-center gap-1.5 rounded-full px-2.5 text-xs font-semibold text-muted-foreground transition hover:bg-white/[0.05] hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary";
 
   return (
-    <div className="overflow-hidden border-t border-primary/15 bg-[#0d0f16]" data-calendar-event-post={eventId}>
-      <div className="flex min-w-0 items-center justify-between gap-2 px-3 py-2">
+    <div
+      className="relative overflow-hidden border-t border-primary/15 bg-[#0d0f16]"
+      data-calendar-event-post={eventId}
+      onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onClose(); } }}
+    >
+      <button
+        aria-label="Close Instagram post"
+        className="absolute right-2 top-2 z-10 inline-flex h-11 w-11 items-center justify-center rounded-full border border-border/75 bg-background/90 text-foreground transition hover:bg-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary md:hidden"
+        data-calendar-event-post-close="overlay"
+        onClick={onClose}
+        type="button"
+      ><X aria-hidden="true" className="h-4 w-4" /></button>
+      <div className="hidden min-w-0 items-center justify-between gap-2 px-3 py-2 md:flex" data-calendar-event-post-heading="true">
         <div className="flex min-w-0 items-center gap-2">
           <span className="flex h-7 w-7 flex-none items-center justify-center rounded-full border border-white/[0.1] bg-white/[0.035] text-foreground">
             <Instagram aria-hidden="true" className="h-3.5 w-3.5" />
@@ -66,13 +77,13 @@ export default function EventPostPreview({ eventId, onClose, title }: {
       </div>
 
       {error ? (
-        <div className="px-3 pb-3" role="alert">
+        <div className="px-3 pb-3 pt-14 md:pt-0" role="alert">
           <p className="text-sm text-muted-foreground">{error}</p>
           <button className="mt-2 min-h-9 text-xs font-semibold text-primary hover:underline" onClick={retryPost} type="button">Try again</button>
         </div>
       ) : (
-        <div className="sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <div className="relative h-[min(38svh,18rem)] min-h-48 overflow-hidden bg-black/40" data-calendar-event-post-image="true">
+        <div className="md:grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <div className="relative h-[min(calc(38svh_+_66px),calc(18rem_+_66px))] min-h-48 overflow-hidden bg-black/40 md:h-[min(38svh,18rem)]" data-calendar-event-post-image="true">
             {imageUrl && !imageFailed ? (
               <>
                 {!imageReady ? <div className="absolute inset-0 flex items-center justify-center text-muted-foreground" role="status"><LoaderCircle aria-hidden="true" className="h-5 w-5 motion-safe:animate-spin" /><span className="sr-only">Loading post image</span></div> : null}

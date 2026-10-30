@@ -5,18 +5,17 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { ArrowLeft, CalendarDays, Check, ExternalLink, Heart, Info, Instagram, LoaderCircle, MapPin, RotateCcw, Sparkles, Undo2, X } from "lucide-react";
-import { EVENT_CATEGORY_TONES, EventCategoryPill, EventPriceChip, EventSecondaryTags } from "@/components/events/event-meta";
+import { EVENT_CATEGORY_TONES, EventPriceChip } from "@/components/events/event-meta";
 import { useRequireAuth } from "@/lib/auth/use-require-auth";
 import { addDaysToDateKey, parseDateKeyToUtcNoon } from "@/lib/events/nightlife-date";
-import { resolveEventTimePresentation } from "@/lib/events/event-time-presentation";
 import type { PublicEventPostPreview } from "@/lib/events/public-event-post";
-import { choicesForScope, DISCOVER_SCOPES, getDiscoverCategory, type DiscoverScope } from "@/lib/discover/swipe-session";
+import { choicesForScope, DISCOVER_SCOPES, getDiscoverCategory, getDiscoverGestureAction, type DiscoverScope } from "@/lib/discover/swipe-session";
 import { cn } from "@/lib/utils";
-import type { DiscoverFeedEvent } from "./discover-feed";
+import type { MobileDiscoverEvent } from "@/lib/discover/mobile-event";
 import { useDiscoverSelections } from "./use-discover-selections";
 import styles from "./mobile-discover.module.css";
 
-type MobileDiscoverProps = {authEnabled:boolean; error?:string; events:DiscoverFeedEvent[]; selectedDate:string; today:string};
+type MobileDiscoverProps = {authEnabled:boolean; error?:string; events:MobileDiscoverEvent[]; selectedDate:string; today:string};
 type DiscoverIdentity = {isLoaded:boolean;isSignedIn:boolean; userId:string|null};
 const labels: Record<DiscoverScope,string> = {all:"All",club:"Zurke",live:"Live music",culture:"Kultura",event:"Ostalo"};
 
@@ -24,10 +23,10 @@ function dateLabel(value:string, long=false) {
   const parsed = parseDateKeyToUtcNoon(value);
   return parsed ? new Intl.DateTimeFormat("sr-Latn", {weekday:long?"long":"short",day:"numeric",month:long?"long":"short",timeZone:"Europe/Belgrade"}).format(parsed) : value;
 }
-function timeLabel(event:DiscoverFeedEvent) {
-  return resolveEventTimePresentation({date:event.date,time:event.time,venueHours:event.venueHours}).label;
+function timeLabel(event:MobileDiscoverEvent) {
+  return event.timeLabel;
 }
-function imageUrl(event:DiscoverFeedEvent) { return `/api/discover/images/${encodeURIComponent(event._id)}`; }
+function imageUrl(event:MobileDiscoverEvent) { return `/api/discover/images/${encodeURIComponent(event._id)}`; }
 
 export function MobileDiscover(props:MobileDiscoverProps) {
   return props.authEnabled ? <AuthenticatedDiscover {...props} /> : <SwipeDiscover {...props} identity={{isLoaded:true,isSignedIn:false,userId:null}} />;
@@ -45,15 +44,15 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
   const [scope,setScope] = useState<DiscoverScope>("all");
   const [summaryOpen,setSummaryOpen] = useState(false);
   const [busy,setBusy] = useState(false);
-  const [exiting,setExiting] = useState<DiscoverFeedEvent|null>(null);
+  const [exiting,setExiting] = useState<MobileDiscoverEvent|null>(null);
   const [announcement,setAnnouncement] = useState("");
-  const [detail,setDetail] = useState<DiscoverFeedEvent|null>(null);
+  const [detail,setDetail] = useState<MobileDiscoverEvent|null>(null);
   const [removeError,setRemoveError] = useState(false);
   const stage = useRef<HTMLDivElement>(null);
   const categories = useRef<HTMLDivElement>(null);
   const restartDialog = useRef<HTMLDialogElement>(null);
   const generation = useRef(0);
-  const gesture = useRef<{id:number;x:number;y:number;startX:number;startY:number;lastX:number;lastAt:number;velocity:number;card:HTMLElement;dragging:boolean}|null>(null);
+  const gesture = useRef<{id:number;x:number;y:number;startX:number;startY:number;lastX:number;lastAt:number;velocity:number;card:HTMLElement;dragging:boolean;maxDistance:number;photo:boolean}|null>(null);
   const dates = useMemo(()=>Array.from({length:7},(_,index)=>addDaysToDateKey(today,index)),[today]);
   const dayChoices = selection.sessions[selectedDate];
   const history = dayChoices?.choices ?? [];
@@ -131,14 +130,16 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
   }
   function pointerDown(event:ReactPointerEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement, card = target.closest<HTMLElement>('[data-layer="0"]');
-    if (!card || locked || event.button !== 0 || target.closest("button,a")) return;
+    const photo = Boolean(target.closest("[data-discover-photo]"));
+    if (!card || locked || event.button !== 0 || (!photo && target.closest("button,a"))) return;
     card.getAnimations().forEach(animation=>animation.cancel());
-    gesture.current={id:event.pointerId,x:0,y:0,startX:event.clientX,startY:event.clientY,lastX:0,lastAt:performance.now(),velocity:0,card,dragging:false};
+    gesture.current={id:event.pointerId,x:0,y:0,startX:event.clientX,startY:event.clientY,lastX:0,lastAt:performance.now(),velocity:0,card,dragging:false,maxDistance:0,photo};
     card.setPointerCapture(event.pointerId);
   }
   function pointerMove(event:ReactPointerEvent<HTMLDivElement>) {
     const current = gesture.current; if (!current || current.id !== event.pointerId) return;
     const x=event.clientX-current.startX,y=event.clientY-current.startY,now=performance.now();
+    current.maxDistance=Math.max(current.maxDistance,Math.hypot(x,y));
     if (!current.dragging && Math.abs(y)>16 && Math.abs(y)>Math.abs(x)*1.25) {gesture.current=null;current.card.releasePointerCapture(event.pointerId);return;}
     current.velocity=(x-current.lastX)/Math.max(1,now-current.lastAt);current.lastAt=now;current.lastX=x;current.x=x;current.y=y;
     if (Math.abs(x)>7) current.dragging=true;
@@ -150,10 +151,19 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
   }
   function pointerUp(event:ReactPointerEvent<HTMLDivElement>,cancel=false) {
     const current=gesture.current;if(!current || current.id!==event.pointerId)return;gesture.current=null;
+    if(!cancel){current.x=event.clientX-current.startX;current.y=event.clientY-current.startY;}
+    current.maxDistance=Math.max(current.maxDistance,Math.hypot(current.x,current.y));
     if(current.card.hasPointerCapture(event.pointerId))current.card.releasePointerCapture(event.pointerId);
     const velocity=performance.now()-current.lastAt<110?current.velocity:0;
-    if(!cancel && (Math.abs(current.x)>Math.max(70,(stage.current?.clientWidth ?? 300)*.23) || (Math.abs(velocity)>.55 && Math.abs(current.x)>28)))void decide(current.x>0?"like":"skip",current);
-    else resetDrag(current.card,current.x,current.y);
+    const action=getDiscoverGestureAction({...current,velocity,width:stage.current?.clientWidth ?? 300,cancelled:cancel});
+    if(action==="like" || action==="skip")void decide(action,current);
+    else {
+      resetDrag(current.card,current.x,current.y);
+      if(action==="open"){
+        const event=events.find(item=>item._id===current.card.dataset.eventId);
+        if(event)setDetail(event);
+      }
+    }
   }
 
   return <main className={styles.main} data-discover-feed="mobile-swipe" onKeyDown={event=>{
@@ -166,7 +176,7 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
         {!dates.includes(selectedDate)?<option value={selectedDate}>{dateLabel(selectedDate)}</option>:null}
         {dates.map(date=><option key={date} value={date}>{date===today?`Danas · ${dateLabel(date)}`:date===addDaysToDateKey(today,1)?`Sutra · ${dateLabel(date)}`:dateLabel(date)}</option>)}
       </select></label>
-      <button aria-label={`Prikaži izbor za dan: ${liked.length} događaja`} className={styles.count} disabled={locked} onClick={()=>setSummaryOpen(true)} type="button"><Heart aria-hidden="true" size={16}/>{liked.length}</button>
+      <button aria-label={`Prikaži izbor za dan: ${liked.length} događaja${selection.failedIds.length?". Čuvanje nije uspelo; otvori izbor da pokušaš ponovo.":selection.saving?". Čuvanje je u toku.":""}`} className={styles.count} disabled={locked} onClick={()=>setSummaryOpen(true)} type="button">{selection.failedIds.length?<Info aria-hidden="true" size={16}/>:selection.saving?<LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" size={16}/>:<Heart aria-hidden="true" size={16}/>}{liked.length}</button>
       {scopedChoices.length>0?<button aria-label={`Ponovo biraj: ${scopeLabel}`} className={styles.reset} disabled={locked} onClick={()=>restartDialog.current?.showModal()} title={`Ponovo biraj: ${scopeLabel}`} type="button"><RotateCcw aria-hidden="true" size={16}/></button>:null}
     </div>
     <div aria-label="Kategorije događaja" className={styles.categories} ref={categories} role="group">
@@ -174,9 +184,7 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
     </div>
     {showSummary?<section aria-label="Izbor događaja za dan" className={styles.summary}>
       <button className={styles.back} onClick={()=>completed?undo():setSummaryOpen(false)} type="button"><ArrowLeft aria-hidden="true" size={14}/>{completed?`Vrati poslednju · ${scopeLabel}`:"Nastavi pregledanje"}</button>
-      <p className={styles.summaryScope}>{completed?"Završeno":"Pregledanje"} · {labels[scope]}</p>
-      <p className={styles.summaryCopy}>Ukupan izbor za dan: {liked.length} događaja · {dateLabel(selectedDate,true)}</p>
-      {liked.length && completed ? identity.isSignedIn ? <div aria-live="polite" className={styles.saveStatus}>{waitingForSave?<LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" size={17}/>:selection.failedIds.length?<Info aria-hidden="true" size={17}/>:<Check aria-hidden="true" size={17}/>}<span>{waitingForSave?"Čuvanje…":selection.failedIds.length?"Neki događaji nisu sačuvani.":selection.areSaved(liked.map(event=>event._id))?"Izbor je sačuvan.":"Izbor je završen."}</span>{selection.failedIds.length?<button onClick={selection.retrySave} type="button">Pokušaj ponovo</button>:waitingForSave?null:<Link href="/saved">Saved</Link>}</div> : <div className={styles.callout}><p>Sačuvaj izbor u svom nalogu.</p>{authEnabled?<div><Link className="button-primary" href={`/sign-up?redirect_url=${encodeURIComponent(returnUrl)}`}>Napravi nalog</Link><Link className="button-secondary" href={`/sign-in?redirect_url=${encodeURIComponent(returnUrl)}`}>Već imam nalog</Link></div>:<p>Prijava trenutno nije dostupna.</p>}</div>:null}
+      {liked.length > 0 ? identity.isSignedIn ? <div aria-live="polite" className={styles.saveStatus}>{waitingForSave?<LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" size={17}/>:selection.failedIds.length?<Info aria-hidden="true" size={17}/>:<Check aria-hidden="true" size={17}/>}<span>{waitingForSave?"Čuvanje…":selection.failedIds.length?"Neki događaji nisu sačuvani.":selection.areSaved(liked.map(event=>event._id))?"Izbor je sačuvan.":"Izbor je završen."}</span>{selection.failedIds.length?<button onClick={selection.retrySave} type="button">Pokušaj ponovo</button>:waitingForSave?null:<Link href="/saved">Saved</Link>}</div> : <div className={styles.callout}><p>Sačuvaj izbor u svom nalogu.</p>{authEnabled?<div><Link className="button-primary" href={`/sign-up?redirect_url=${encodeURIComponent(returnUrl)}`}>Napravi nalog</Link><Link className="button-secondary" href={`/sign-in?redirect_url=${encodeURIComponent(returnUrl)}`}>Već imam nalog</Link></div>:<p>Prijava trenutno nije dostupna.</p>}</div>:null}
       {scopedChoices.length?<div className={styles.summaryActions}>{completed?<button className="button-primary" onClick={undo} type="button"><Undo2 aria-hidden="true" size={14}/>Vrati poslednju · {labels[scope]}</button>:<button className="button-primary" onClick={()=>setSummaryOpen(false)} type="button">Nastavi · još {remaining.length}</button>}<button className="button-secondary" onClick={()=>restartDialog.current?.showModal()} type="button">Ponovo biraj · {labels[scope]}</button></div>:null}
       <div className={styles.likedList}>{liked.map(event=><article className={styles.liked} key={event._id}><button className={styles.likedOpen} onClick={()=>setDetail(event)} type="button"><span className={styles.thumb}><Image alt="" className="object-cover" fill sizes="58px" src={imageUrl(event)} unoptimized/></span><span><strong>{event.title}</strong><span>{event.venue}</span><span className={styles.likedTime}>{timeLabel(event)}</span></span></button><button aria-label={`Ukloni iz izbora: ${event.title}`} className={styles.remove} disabled={selection.saving||selection.isEventPending(event._id)} onClick={()=>{setRemoveError(false);void selection.removeLike(selectedDate,event._id).then(success=>setRemoveError(!success));}} type="button"><X aria-hidden="true" size={15}/></button></article>)}</div>
       {!liked.length?<p className={styles.emptyCopy}>Nijedan događaj nije izabran.</p>:null}
@@ -194,19 +202,22 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
   </main>;
 }
 
-function SwipeCard({event,layer,onDetails}:{event:DiscoverFeedEvent;layer:number;onDetails:()=>void}) {
+function SwipeCard({event,layer,onDetails}:{event:MobileDiscoverEvent;layer:number;onDetails:()=>void}) {
   const [failed,setFailed] = useState(false);
+  const [aspectRatio,setAspectRatio] = useState(4/5);
   const category=getDiscoverCategory(event), tone=EVENT_CATEGORY_TONES[category].color;
-  return <article aria-hidden={layer>0?true:undefined} aria-label={layer===0?`${event.title}, ${event.venue}, ${timeLabel(event)}`:undefined} className={styles.card} data-layer={layer} inert={layer>0?true:undefined} style={{"--discover-tone":tone} as CSSProperties}>
-    <div className={styles.posterFallback}><span>EVENT ZEKA · BEOGRAD</span><Sparkles aria-hidden="true" size={48}/></div>
-    {!failed?<Image alt="" className={styles.poster} draggable={false} fill loading={layer===0?"eager":"lazy"} onError={()=>setFailed(true)} priority={layer===0} sizes="(max-width: 502px) 100vw, 470px" src={imageUrl(event)} unoptimized/>:null}
-    <div className={styles.shade}/><div className={styles.cardTop}><EventCategoryPill className={styles.cardCategory} event={event}/><span>{dateLabel(event.date)}</span></div>
+  return <article aria-hidden={layer>0?true:undefined} aria-label={layer===0?`${event.title}, ${event.venue}, ${timeLabel(event)}`:undefined} className={styles.card} data-event-id={event._id} data-layer={layer} inert={layer>0?true:undefined} style={{"--discover-tone":tone} as CSSProperties}>
+    <div className={styles.cardTop}><span className={cn("inline-flex max-w-full items-center rounded-full px-2 py-0.5 text-[10px] font-semibold leading-4",styles.cardCategory)} data-event-category={category} style={{backgroundColor:EVENT_CATEGORY_TONES[category].backgroundColor,color:tone}}><span className="truncate">{EVENT_CATEGORY_TONES[category].label}</span></span><span>{dateLabel(event.date)}</span></div>
+    <button aria-haspopup="dialog" aria-label={`Otvori detalje događaja: ${event.title}`} className={styles.photo} data-discover-photo={event._id} onClick={click=>{if(click.detail===0)onDetails();}} style={{aspectRatio}} tabIndex={layer===0?0:-1} type="button">
+      <span className={styles.posterFallback}>{failed?<span>Fotografija nije dostupna.</span>:<Sparkles aria-hidden="true" size={48}/>}</span>
+      {!failed?<Image alt={`Originalna fotografija: ${event.title}`} className={styles.poster} draggable={false} fill loading={layer===0?"eager":"lazy"} onError={()=>setFailed(true)} onLoad={loaded=>{const {naturalWidth,naturalHeight}=loaded.currentTarget;if(naturalWidth>0 && naturalHeight>0)setAspectRatio(naturalWidth/naturalHeight);}} priority={layer===0} sizes="(max-width: 502px) 100vw, 470px" src={imageUrl(event)} unoptimized/>:null}
+    </button>
     <span aria-hidden="true" className={cn(styles.stamp,styles.likeStamp)} data-stamp="like">Sviđa mi se</span><span aria-hidden="true" className={cn(styles.stamp,styles.skipStamp)} data-stamp="skip">Preskačem</span>
-    <div className={styles.cardBottom}><p className={styles.time}>{timeLabel(event)}</p><h2>{event.title}</h2><p className={styles.venue}><MapPin aria-hidden="true" size={13}/>{event.venue}</p><div className={styles.tags}><EventPriceChip value={event.ticketPrice}/><EventSecondaryTags event={event} limit={2}/></div>{layer===0?<button className={styles.details} onClick={onDetails} type="button"><Info aria-hidden="true" size={13}/>Detalji događaja<ExternalLink aria-hidden="true" size={12}/></button>:null}</div>
+    <div className={styles.cardBottom}><p className={styles.time}>{timeLabel(event)}</p><h2>{event.title}</h2><p className={styles.venue}><MapPin aria-hidden="true" size={13}/>{event.venue}</p><div className={styles.tags}><EventPriceChip value={event.ticketPrice}/>{event.tags.map(tag=><span className="inline-flex max-w-full items-center rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] font-medium leading-4 text-muted-foreground" data-event-tag={tag} key={tag}><span className="truncate">{tag}</span></span>)}</div>{layer===0?<button className={styles.details} onClick={onDetails} type="button"><Info aria-hidden="true" size={13}/>Detalji događaja<ExternalLink aria-hidden="true" size={12}/></button>:null}</div>
   </article>;
 }
 
-function DiscoverDetails({event,onClose}:{event:DiscoverFeedEvent;onClose:()=>void}) {
+function DiscoverDetails({event,onClose}:{event:MobileDiscoverEvent;onClose:()=>void}) {
   const dialog=useRef<HTMLDialogElement>(null);
   const [post,setPost]=useState<PublicEventPostPreview|null>(null),[error,setError]=useState(false),[attempt,setAttempt]=useState(0);
   useEffect(()=>{dialog.current?.showModal();},[]);

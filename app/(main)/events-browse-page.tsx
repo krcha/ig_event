@@ -23,7 +23,7 @@ import { OpenNowFilter } from "@/components/calendar/open-now-filter";
 import { OpenNowStatus } from "@/components/events/open-now-status";
 import { MobileMonthDayStrip } from "@/components/calendar/mobile-month-day-strip";
 import { MobileWeekCalendar } from "@/components/calendar/mobile-week-calendar";
-import { getMobileDayHeading, getMobileDayLabel, getMobileWeekDateKeys } from "@/lib/events/mobile-week";
+import { getMobileDayHeading, getMobileDayLabel, getMobileWeekDateKeys, getMobileWeekOverviewWindows } from "@/lib/events/mobile-week";
 import mobileStyles from "@/components/calendar/mobile-events-home.module.css";
 import { EventMetaRow, getEventCategoryKind, type EventCategoryKind } from "@/components/events/event-meta";
 import { EVENT_PRIMARY_CATEGORIES, normalizeHiddenEventCategories } from "@/lib/taxonomy/event-categories";
@@ -505,7 +505,10 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const monthStartKey = formatDateKey(monthStart);
   const weekDateKeys = getMobileWeekDateKeys(todayKey);
   const weekBeforeDate = addDaysToDateKey(todayKey, 7);
-  const weekNeedsOwnOverview = openNowActive || todayKey < monthStartKey || weekBeforeDate > formatDateKey(nextMonthStart);
+  const extraWeekWindows = getMobileWeekOverviewWindows(todayKey, openNowActive ? undefined : {
+    fromDate: monthStartKey,
+    beforeDate: formatDateKey(nextMonthStart),
+  });
   const selectedDayKey = openNowActive ? todayKey : getSelectedDay(
     monthStart,
     getSingleValue(resolvedSearchParams?.day),
@@ -519,7 +522,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     fromDate: selectedDayKey,
     beforeDate: addDaysToDateKey(selectedDayKey, 1),
   };
-  const [loaded, overview, weekOverview] = await Promise.all([
+  const [loaded, overview, extraWeekOverviews] = await Promise.all([
     loadPublicCalendarEventsWindow(eventWindow),
     openNowActive ? Promise.resolve(null) : loadPublicCalendarOverviewWindow({
       fromDate: monthStartKey,
@@ -527,14 +530,13 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       q: selectedSearchQuery,
       venue: requestedVenue,
     }),
-    weekNeedsOwnOverview ? loadPublicCalendarOverviewWindow({
-      fromDate: todayKey,
-      beforeDate: weekBeforeDate,
+    Promise.all(extraWeekWindows.map((window) => loadPublicCalendarOverviewWindow({
+      ...window,
       q: selectedSearchQuery,
       venue: requestedVenue,
-    }) : Promise.resolve(null),
+    }))),
   ]);
-  const error = loaded.error ?? overview?.error ?? weekOverview?.error;
+  const error = loaded.error ?? overview?.error ?? extraWeekOverviews.find((result) => result.error)?.error;
   // Keep cached event data independent of the clock; reevaluate openings per request.
   const openNowStates = new Map<string, OpenNowEventState>();
   const events = openNowActive ? loaded.events.filter((event) => {
@@ -696,10 +698,9 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       isAnchor: dayKey === selectedDayKey,
     };
   });
-  // Reuse the month counters when they cover the week. At a month boundary or
-  // when browsing a later date, fetch only seven extra days of compact counters.
+  // Month counters and disjoint extra ranges cover the week exactly once.
   const weekDayBuckets = new Map<string, CalendarDayBucket>();
-  for (const group of (weekOverview ?? overview)?.groups ?? []) {
+  for (const group of [overview, ...extraWeekOverviews].flatMap((result) => result?.groups ?? [])) {
     if (group.date < todayKey || group.date >= weekBeforeDate) continue;
     const count = !selectedVenue || /^(?:id|name):/u.test(selectedVenue)
       ? (!selectedVenue || group.venueValue === selectedVenue ? group.count : 0)
@@ -995,7 +996,11 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
 
     function renderCategoryChips({ withActions = false }: { withActions?: boolean } = {}) {
       return (
-        <EventKindToggleChips initialHiddenCategories={hiddenDayCategories} singleSelection={mobileWeek}>
+        <EventKindToggleChips
+          afterAll={mobileWeek ? <OpenNowFilter active={openNowActive} appearance="chip" href={openNowHref} initialNow={now} /> : undefined}
+          initialHiddenCategories={hiddenDayCategories}
+          singleSelection={mobileWeek}
+        >
           {withActions ? renderMobileAdvancedControls() : null}
         </EventKindToggleChips>
       );
@@ -1394,7 +1399,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
           <AutoApplyFilterForm searchDebounceMs={300}>
             <input name="month" type="hidden" value={monthParam} />
             <input name="day" type="hidden" value={selectedDayKey} />
-            <input name="open" type="hidden" value="" />
             <input name="sort" type="hidden" value="time" />
             <label className="relative block">
               <span className="sr-only">Izvođač, mesto ili žanr</span>

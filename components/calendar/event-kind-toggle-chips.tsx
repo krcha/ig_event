@@ -22,6 +22,7 @@ const CATEGORY_KEYS = CATEGORY_CHIPS.map((chip) => chip.key).filter(
 const CALENDAR_DATE_COUNT_SELECTOR = "[data-calendar-date-kind-counts]";
 
 type EventKindToggleChipsProps = {
+  afterAll?: ReactNode;
   children?: ReactNode;
   initialHiddenCategories?: readonly EventCategoryKind[];
   singleSelection?: boolean;
@@ -236,6 +237,7 @@ function applyAgendaVisibility(categories: readonly EventCategoryKind[]) {
 }
 
 export function EventKindToggleChips({
+  afterAll,
   children,
   initialHiddenCategories = [],
   singleSelection = false,
@@ -341,14 +343,14 @@ export function EventKindToggleChips({
   return (
     <div className="mt-1.5 flex items-center gap-1.5" data-calendar-mobile-filter-chips="true" data-calendar-category-selection={singleSelection ? "single" : "multiple"}>
       <nav
-        aria-label="Selected day categories"
+        aria-label={afterAll ? "Selected day filters" : "Selected day categories"}
         className="flex min-w-0 flex-1 gap-1 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
-        {CATEGORY_CHIPS.map((chip) => {
+        {CATEGORY_CHIPS.flatMap((chip) => {
           if (chip.key === "all") {
             const isAllEnabled = singleSelection ? selectedCategory === "all" : hiddenCategories.length === 0;
 
-            return (
+            const allChip = (
               <button
                 aria-pressed={isAllEnabled}
                 className={cn(
@@ -367,6 +369,7 @@ export function EventKindToggleChips({
                 {chip.label}
               </button>
             );
+            return afterAll ? [allChip, <span className="contents" key="after-all">{afterAll}</span>] : [allChip];
           }
 
           const category = chip.key as EventCategoryKind;

@@ -169,6 +169,14 @@ function createHarness({ fetchPost, ids = ["event-a", "event-b"] } = {}) {
       button.props.onClick();
       render();
     },
+    closeOverlay: () => {
+      find(panel?.tree, (node) => node.props["data-calendar-event-post-close"] === "overlay").props.onClick();
+      render();
+    },
+    escapePanel: () => {
+      panel.tree.props.onKeyDown({ key: "Escape", stopPropagation() {} });
+      render();
+    },
     imageError: () => {
       find(panel?.tree, (node) => node.type === "next-image").props.onError();
       render();
@@ -266,6 +274,14 @@ function deferred() { let resolve; const promise = new Promise((finish) => { res
   assert.ok(caption.props.lines >= 1 && caption.props.lines <= 4, "Long captions remain compact until deliberately expanded.");
   const image = find(h.panel(), (node) => node.type === "next-image");
   assert.ok(image.props.className.includes("object-contain"), "Posters must remain uncropped.");
+  assert.match(find(h.panel(), (node) => node.props["data-calendar-event-post-heading"]).props.className, /hidden.*md:flex/,
+    "The repeated Instagram heading is removed on mobile while desktop keeps its existing header.");
+  const overlayClose = find(h.panel(), (node) => node.props["data-calendar-event-post-close"] === "overlay");
+  assert.equal(overlayClose.props["aria-label"], "Close Instagram post");
+  assert.match(overlayClose.props.className, /absolute.*right-2.*top-2.*md:hidden/,
+    "Mobile posters retain an accessible close control over the image.");
+  assert.match(find(h.panel(), (node) => node.props["data-calendar-event-post-image"]).props.className, /38svh_\+_66px/,
+    "Mobile posters gain the freed heading space without cropping.");
   assert.match(find(h.panel(), (node) => node.props["data-calendar-event-post-image"]).props.className, /h-\[min\(\d+(?:s|d)?vh,[\d.]+rem\)\]/,
     "The active poster has a viewport-relative maximum height.");
   h.click("event-b");
@@ -284,6 +300,13 @@ function deferred() { let resolve; const promise = new Promise((finish) => { res
   assert.equal(h.activeId(), null);
   assert.equal(h.anchors.get("event-a").focusCalls.at(-1).preventScroll, true);
   assert.equal(h.scrolls.length, 0, "Normal expansion and collapse must not force document scrolling.");
+  h.click("event-a");
+  h.closeOverlay();
+  assert.equal(h.activeId(), null, "The mobile overlay closes the selected post.");
+  assert.equal(h.anchors.get("event-a").focusCalls.at(-1).preventScroll, true);
+  h.click("event-a");
+  h.escapePanel();
+  assert.equal(h.activeId(), null, "Escape works from controls inside the expanded post.");
   h.unmount();
 }
 

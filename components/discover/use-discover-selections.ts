@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useUserLibrary } from "@/components/providers/user-library-provider";
 import {
-  acknowledgeDiscoverSaves, discoverSessionStorageKey, mergeGuestDiscoverSessions, readDiscoverSessions, markDiscoverCompletion, pendingDiscoverSaveIds,
+  acknowledgeDiscoverSaves, discoverLikedIds, discoverSessionStorageKey, mergeGuestDiscoverSessions, readDiscoverSessions, markDiscoverCompletion, pendingDiscoverSaveIds,
   recordDiscoverChoice, restartDiscoverScope, undoDiscoverChoice,
   type DiscoverChoice, type DiscoverDayChoices, type DiscoverScope, type DiscoverSessions,
 } from "@/lib/discover/swipe-session";
@@ -101,8 +101,9 @@ export function useDiscoverSelections({isLoaded,isSignedIn,userId}: {isLoaded:bo
     return true;
   },[commit,isSignedIn,setSavedEvent]);
   const acknowledged=new Set(Object.values(sessions).flatMap(day=>day.acknowledgedIds ?? []));
+  const likedIds=new Set(discoverLikedIds(sessions));
   const ready=hydrated && loadedKey===storageKey && activeKey.current===storageKey;
-  return {sessions:ready?sessions:{},hydrated:ready,saving,failedIds,retrySave,decide,complete,undo,restart,removeLike,isEventPending,
+  return {sessions:ready?sessions:{},hydrated:ready,saving,failedIds:ready?failedIds.filter(id=>likedIds.has(id)):[],retrySave,decide,complete,undo,restart,removeLike,isEventPending,
     areConfirmed:(ids:readonly string[])=>ids.every(id=>acknowledged.has(id)),
     areSaved:(ids:readonly string[])=>isLibraryLoaded && ids.every(id=>savedEventIds.has(id))};
 }
