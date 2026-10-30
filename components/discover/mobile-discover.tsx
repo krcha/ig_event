@@ -81,7 +81,7 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
     const root=document.documentElement;
     // Activate only after scrolling reaches the card, never when the page opens.
     const observer=new IntersectionObserver(([entry])=>{
-      if(entry && !entry.isIntersecting && entry.boundingClientRect.top<12){
+      if(entry && entry.boundingClientRect.height>0 && !entry.isIntersecting && entry.boundingClientRect.top<12 && window.matchMedia("(max-width: 767px)").matches){
         root.classList.add(styles.scrollRoot);
         observer.disconnect();
       }

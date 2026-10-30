@@ -1,5 +1,5 @@
 .main { width:100%; max-width:502px; margin:0 auto; padding:14px 16px calc(100px + env(safe-area-inset-bottom)); }
-.scrollRoot { scroll-snap-type:y proximity; scroll-padding-block:12px calc(100px + env(safe-area-inset-bottom)); }
+@media (max-width:767px) { .scrollRoot { scroll-snap-type:y proximity; scroll-padding-block:12px calc(100px + env(safe-area-inset-bottom)); } }
 /* Leave enough document runway for a short card to reach its snap position. */
 .deck { min-height:calc(100svh - 88px); }
 .session { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
