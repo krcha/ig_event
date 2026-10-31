@@ -141,3 +141,55 @@ Preserve shared Convex, scheduler, proxy and social containers and all existing
 credentials/owner settings. Only add the server transport environment variable;
 do not deploy Convex functions or change the browser backend URL. Retain the
 previous web container/router for rollback.
+
+## Final production verification
+
+Functional release `eb425d1`, validation-only follow-up `2cbefbe`, Linux build
+`R_NqT9PUfFbF4Kr2m0jwF`, is live on `eventzeka.com`. The public health response
+confirms `X-EventZeka-Release: eb425d1`. Local `npm run qa:release`, Linux lint,
+typecheck, build, focused QA and `git diff --check` passed. Eight old/new page
+comparisons preserve event IDs, categories, ordering and one row per event.
+Fourteen referenced assets return 200; sign-in returns 200; anonymous analytics
+page/API access stays 404; invalid overview ranges return 400.
+
+Final browser results count the complete stable list, including hydration:
+
+| Measurement | Time |
+| --- | ---: |
+| First desktop document, 140 events | 1322 ms |
+| Fresh mobile document, 140 events | 1232 ms |
+| Desktop day transitions, four samples | 420-2386 ms |
+| Mobile day transitions, two samples | 3319-3650 ms |
+| Day transition during forced counter work | 420 ms |
+| Concurrent forced counter request | 19608 ms |
+
+The first document uses a temporary opt-in first-party timing proxy. Subsequent
+day transitions use the normal compressed production route. Browser assets may
+already be cached, and no CPU/network throttle is applied. These are observed
+navigation timings, not a cold-browser guarantee or field Core Web Vitals.
+The lazy month picker remains absent before opening, loads its separate module
+on demand, traps focus, closes on Escape and restores focus to its trigger.
+
+Sequential public HTTP tests cover nine HTML responses and six full-route RSC
+responses. HTML completes in 516-2723 ms, with medians of 943/840/755 ms for
+October 31/30/29. RSC completes in 281-1606 ms. A private candidate's first
+October 31 response had still reached 7895 ms before final idle-container
+cleanup; its second response was 764 ms. Shared-server contention remains a
+source of variability, so this small series does not establish a global SLO.
+
+A 15-second production cache sample retains all three visited near-term dates
+while processing 20 ordinary cache misses, with five priority cache hits and
+48 total entries. This confirms the eviction change under real traffic.
+
+After promotion, two idle web-only candidates from this follow-up (`1a900e1`
+and `41bef81`) were stopped after verifying identical runtime credentials/image,
+read-only mounts and no established web connections. Their source and compose
+files remain available. The immediately previous `6f1ce20` web remains healthy
+for rollback. Eight other protected containers, including Convex, scheduler,
+social web and proxy, retain their IDs, start times and configuration.
+No Convex deployment was performed. Diagnostic routers, proxy, inspector and
+browser flags/tabs were removed after verification.
+
+Detailed measurements and the clean mobile screenshot are in the ignored local
+artifact directory `.seo-cache/performance/2026-10-31/cold-load/`, indexed by
+`SUMMARY.json`. Lighthouse and field LCP/INP/CLS were not measured in this run.
