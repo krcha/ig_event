@@ -15,13 +15,27 @@ export function useDiscoverSwipeHint(stage: RefObject<HTMLElement | null>, enabl
     const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
     if (motion.matches || document.visibilityState === "hidden") return;
 
-    const animation = card.animate([
+    const timing = { duration: 2000, delay: 450, easing: "ease-in-out" };
+    const animations = [card.animate([
       { transform: "translateX(0) rotate(0deg)", offset: 0 },
-      { transform: "translateX(-16px) rotate(-1.6deg)", offset: .3 },
-      { transform: "translateX(14px) rotate(1.4deg)", offset: .68 },
+      { transform: "translateX(-20px) rotate(-2deg)", offset: .3 },
+      { transform: "translateX(18px) rotate(1.8deg)", offset: .68 },
       { transform: "translateX(0) rotate(0deg)", offset: 1 },
-    ], { duration: 1000, delay: 450, easing: "ease-in-out" });
-    const stop = () => animation.cancel();
+    ], timing)];
+    for (const [decision, start, peak, end] of [
+      ["skip", .08, .3, .48],
+      ["like", .48, .68, .92],
+    ] as const) {
+      const stamp = card.querySelector<HTMLElement>(`[data-stamp="${decision}"]`);
+      if (stamp) animations.push(stamp.animate([
+        { opacity: 0, offset: 0 },
+        { opacity: 0, offset: start },
+        { opacity: .4, offset: peak },
+        { opacity: 0, offset: end },
+        { opacity: 0, offset: 1 },
+      ], timing));
+    }
+    const stop = () => animations.forEach(animation => animation.cancel());
     const visibility = () => { if (document.visibilityState === "hidden") stop(); };
     surface.addEventListener("pointerdown", stop, { capture: true, once: true });
     surface.addEventListener("keydown", stop, { capture: true, once: true });
