@@ -8,6 +8,8 @@
  * @module
  */
 
+import type * as analytics from "../analytics.js";
+import type * as analyticsValidators from "../analyticsValidators.js";
 import type * as authz from "../authz.js";
 import type * as automaticApprovalDiagnostics from "../automaticApprovalDiagnostics.js";
 import type * as autonomousModeration from "../autonomousModeration.js";
@@ -118,6 +120,8 @@ import type * as maintenance from "../maintenance.js";
 import type * as mediaActions from "../mediaActions.js";
 import type * as mediaAssets from "../mediaAssets.js";
 import type * as pendingSourceConflictReclassification from "../pendingSourceConflictReclassification.js";
+import type * as publicCalendarOverview from "../publicCalendarOverview.js";
+import type * as publicCalendarOverviewAction from "../publicCalendarOverviewAction.js";
 import type * as publicEventGrounding from "../publicEventGrounding.js";
 import type * as publicEventProjection from "../publicEventProjection.js";
 import type * as publicationCutover from "../publicationCutover.js";
@@ -146,6 +150,8 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  analytics: typeof analytics;
+  analyticsValidators: typeof analyticsValidators;
   authz: typeof authz;
   automaticApprovalDiagnostics: typeof automaticApprovalDiagnostics;
   autonomousModeration: typeof autonomousModeration;
@@ -256,6 +262,8 @@ declare const fullApi: ApiFromModules<{
   mediaActions: typeof mediaActions;
   mediaAssets: typeof mediaAssets;
   pendingSourceConflictReclassification: typeof pendingSourceConflictReclassification;
+  publicCalendarOverview: typeof publicCalendarOverview;
+  publicCalendarOverviewAction: typeof publicCalendarOverviewAction;
   publicEventGrounding: typeof publicEventGrounding;
   publicEventProjection: typeof publicEventProjection;
   publicationCutover: typeof publicationCutover;

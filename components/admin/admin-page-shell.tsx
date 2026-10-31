@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { CalendarDays, MapPinned, ShieldCheck, Telescope } from "lucide-react";
+import { ChartNoAxesCombined, CalendarDays, MapPinned, ShieldCheck, Telescope } from "lucide-react";
 
-type AdminSection = "overview" | "scraper" | "venues";
+type AdminSection = "overview" | "scraper" | "venues" | "analytics";
 
 type AdminPageShellProps = {
   title: string;
@@ -21,6 +21,13 @@ const NAV_ITEMS: Array<{
   description: string;
   icon: typeof ShieldCheck;
 }> = [
+  {
+    id: "analytics",
+    href: "/admin/analytics",
+    label: "Analytics",
+    description: "Visitor traffic, sources, countries, and devices. Owner access only.",
+    icon: ChartNoAxesCombined,
+  },
   {
     id: "overview",
     href: "/admin",
@@ -61,14 +68,14 @@ export function AdminPageShell(props: AdminPageShellProps) {
               View site
             </Link>
           </div>
-          <nav aria-label="Admin navigation" className="flex gap-1 border-b border-border pb-3 sm:gap-2">
+          <nav aria-label="Admin navigation" className="flex gap-1 overflow-x-auto whitespace-nowrap border-b border-border pb-3 sm:gap-2">
             {NAV_ITEMS.map((item) => {
               const isActive = item.id === props.active;
               const Icon = item.icon;
               return (
                 <Link
                   aria-current={isActive ? "page" : undefined}
-                  className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${isActive ? "bg-primary/12 text-primary" : "text-muted-foreground hover:bg-card hover:text-foreground"}`}
+                  className={`inline-flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary sm:gap-2 sm:px-3 sm:text-sm ${isActive ? "bg-primary/12 text-primary" : "text-muted-foreground hover:bg-card hover:text-foreground"}`}
                   href={item.href}
                   key={item.id}
                 >
@@ -113,7 +120,7 @@ export function AdminPageShell(props: AdminPageShellProps) {
         </div>
 
         <div className="overflow-x-auto px-5 py-5 sm:px-8 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <div className="flex gap-3 md:grid md:grid-cols-3">
+          <div className="flex gap-3 md:grid md:grid-cols-4">
             {NAV_ITEMS.map((item) => {
               const isActive = item.id === props.active;
               const Icon = item.icon;

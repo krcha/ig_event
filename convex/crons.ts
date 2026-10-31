@@ -66,4 +66,6 @@ crons.interval(
   {},
 );
 
+crons.daily("cleanup visitor analytics", { hourUTC: 3, minuteUTC: 23 }, internal.analytics.cleanup, {});
+
 export default crons;

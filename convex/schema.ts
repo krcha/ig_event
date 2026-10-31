@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { analyticsEventFields } from "./analyticsValidators";
 
 const eventStatus = v.union(
   v.literal("pending"),
@@ -110,6 +111,10 @@ const reconciliationVerifiedOperationKind = v.union(
 );
 
 export default defineSchema({
+  analyticsEvents: defineTable(analyticsEventFields)
+    .index("by_at", ["at"])
+    .index("by_eventId", ["eventId"])
+    .index("by_visitorId_at", ["visitorId", "at"]),
   instagramSources: defineTable({
     handle: v.string(),
     observedDisplayName: v.optional(v.string()),

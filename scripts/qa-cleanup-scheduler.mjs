@@ -14,9 +14,15 @@ assert.deepEqual(Object.keys(jobs).sort(), [
   "approve server-verified unique events",
   "cleanup ingestion artifacts",
   "cleanup orphaned media assets",
+  "cleanup visitor analytics",
   "delete expired events",
   "recover automatic moderation evidence",
 ]);
+assert.deepEqual(jobs["cleanup visitor analytics"], {
+  name: "analytics:cleanup",
+  args: [{}],
+  schedule: { type: "daily", hourUTC: 3, minuteUTC: 23 },
+});
 assert.deepEqual(jobs["recover automatic moderation evidence"], {
   name: "internal/autonomousModerationExecutor:advance",
   args: [{}],

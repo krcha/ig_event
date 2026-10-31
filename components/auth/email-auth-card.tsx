@@ -1,13 +1,15 @@
 "use client";
 
 import { useSignIn, useSignUp } from "@clerk/nextjs";
+import type { SignInResource } from "@clerk/types";
 import Link from "next/link";
 import { type FormEvent, useEffect, useState } from "react";
+import { getEmailSignInError, getEmailSignInStep } from "@/lib/auth/email-sign-in";
 
 const AUTH_COMPLETE_REDIRECT_PATH = "/";
 
 type AuthMode = "sign-in" | "sign-up";
-type SignInView = "password" | "reset-code" | "reset-email" | "reset-password";
+type SignInView = "password" | "verification-code" | "reset-code" | "reset-email" | "reset-password";
 
 type EmailAuthCardProps = {
   mode: AuthMode;
@@ -65,6 +67,10 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
   const [signInError, setSignInError] = useState<string | null>(null);
   const [isSignInSubmitting, setIsSignInSubmitting] = useState(false);
   const [signInView, setSignInView] = useState("password" as SignInView);
+  const [signInCode, setSignInCode] = useState("");
+  const [signInEmailFactor, setSignInEmailFactor] = useState<{ emailAddressId: string; destination: string } | null>(null);
+  const [signInCodeSent, setSignInCodeSent] = useState(false);
+  const [resendCountdown, setResendCountdown] = useState(0);
   const [passwordResetCode, setPasswordResetCode] = useState("");
   const [passwordResetPassword, setPasswordResetPassword] = useState("");
   const [passwordResetPasswordConfirmation, setPasswordResetPasswordConfirmation] = useState("");
@@ -87,6 +93,36 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
     }
   }, []);
 
+  useEffect(() => {
+    if (resendCountdown <= 0) return;
+    const timeout = setTimeout(() => setResendCountdown((current) => Math.max(0, current - 1)), 1000);
+    return () => clearTimeout(timeout);
+  }, [resendCountdown]);
+
+  async function finishOrVerifySignIn(result: SignInResource) {
+    const step = getEmailSignInStep(result);
+    if (step.kind === "complete") {
+      if (!setSignInActive) throw new Error("Sign in is still loading. Please try again.");
+      await setSignInActive({ session: step.sessionId });
+      window.location.assign(authCompleteRedirectPath);
+      return;
+    }
+    if (step.kind === "new-password") {
+      setSignInPassword("");
+      setSignInView("reset-password");
+      return;
+    }
+    setSignInEmailFactor(step);
+    setSignInCode("");
+    setSignInPassword("");
+    setSignInCodeSent(false);
+    setSignInView("verification-code");
+    // Preserve the password-verified attempt; do not create another sign-in.
+    await result.prepareSecondFactor({ strategy: "email_code", emailAddressId: step.emailAddressId });
+    setSignInCodeSent(true);
+    setResendCountdown(30);
+  }
+
   async function startManualSignIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -103,17 +139,43 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
         password: signInPassword,
       });
 
-      if (result.status === "complete" && result.createdSessionId) {
-        await setSignInActive({ session: result.createdSessionId });
-        window.location.assign(authCompleteRedirectPath);
-        return;
-      }
-
-      setSignInError("Could not complete sign in. Please try again.");
+      await finishOrVerifySignIn(result);
     } catch (caughtError) {
-      setSignInError(
-        caughtError instanceof Error ? caughtError.message : "Could not sign in with those credentials.",
-      );
+      setSignInError(getEmailSignInError(caughtError, "Could not sign in with those credentials."));
+    } finally {
+      setIsSignInSubmitting(false);
+    }
+  }
+
+  async function verifySignInCode(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!isSignInLoaded || !signIn || !setSignInActive || !signInEmailFactor) return;
+    setIsSignInSubmitting(true);
+    setSignInError(null);
+    try {
+      const result = await signIn.attemptSecondFactor({ strategy: "email_code", code: signInCode.trim() });
+      if (result.status !== "complete" || !result.createdSessionId) {
+        throw new Error("Verification is not complete. Check the code and try again.");
+      }
+      await finishOrVerifySignIn(result);
+    } catch (caughtError) {
+      setSignInError(getEmailSignInError(caughtError, "Could not verify that code. Request a new code and try again."));
+    } finally {
+      setIsSignInSubmitting(false);
+    }
+  }
+
+  async function resendSignInCode() {
+    if (!isSignInLoaded || !signIn || !signInEmailFactor || resendCountdown > 0 || isSignInSubmitting) return;
+    setIsSignInSubmitting(true);
+    setSignInError(null);
+    try {
+      await signIn.prepareSecondFactor({ strategy: "email_code", emailAddressId: signInEmailFactor.emailAddressId });
+      setSignInCode("");
+      setSignInCodeSent(true);
+      setResendCountdown(30);
+    } catch (caughtError) {
+      setSignInError(getEmailSignInError(caughtError, "Could not send a new verification code. Please try again."));
     } finally {
       setIsSignInSubmitting(false);
     }
@@ -204,17 +266,9 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
         signOutOfOtherSessions: true,
       });
 
-      if (result.status === "complete" && result.createdSessionId) {
-        await setSignInActive({ session: result.createdSessionId });
-        window.location.assign(authCompleteRedirectPath);
-        return;
-      }
-
-      setSignInError("Could not complete password recovery. Please try again.");
+      await finishOrVerifySignIn(result);
     } catch (caughtError) {
-      setSignInError(
-        caughtError instanceof Error ? caughtError.message : "Could not set the new password.",
-      );
+      setSignInError(getEmailSignInError(caughtError, "Could not set the new password."));
     } finally {
       setIsSignInSubmitting(false);
     }
@@ -293,8 +347,8 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
             <p className="text-xs font-semibold uppercase tracking-[0.32em] text-primary">
               {copy.eyebrow}
             </p>
-            <h1 className="mt-3 text-2xl font-semibold text-foreground">{copy.title}</h1>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">{copy.description}</p>
+            <h1 className="mt-3 text-2xl font-semibold text-foreground">{mode === "sign-in" && signInView === "verification-code" ? "Verify your sign-in" : copy.title}</h1>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">{mode === "sign-in" && signInView === "verification-code" ? "One more step to confirm it is you." : copy.description}</p>
           </div>
 
           {mode === "sign-in" ? (
@@ -344,6 +398,58 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
                     type="button"
                   >
                     Forgot password?
+                  </button>
+                </form>
+              ) : signInView === "verification-code" ? (
+                <form className="flex flex-col gap-3" onSubmit={verifySignInCode}>
+                  <p className="text-sm leading-6 text-muted-foreground" role="status">
+                    {signInCodeSent
+                      ? `Enter the verification code sent to ${signInEmailFactor?.destination || "your account email"}.`
+                      : "Email verification is required to finish signing in. Request a code below if it has not arrived."}
+                  </p>
+                  <label className="flex flex-col gap-1.5 text-left text-sm font-medium text-foreground">
+                    Verification code
+                    <input
+                      autoComplete="one-time-code"
+                      className="rounded-2xl border border-border bg-background px-3 py-2 text-foreground outline-none transition focus:border-primary"
+                      disabled={!isSignInLoaded || isSignInSubmitting}
+                      inputMode="numeric"
+                      name="sign-in-code"
+                      onChange={(event) => setSignInCode(event.target.value)}
+                      required
+                      type="text"
+                      value={signInCode}
+                    />
+                  </label>
+                  <button
+                    className="inline-flex min-h-12 w-full items-center justify-center rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!isSignInLoaded || isSignInSubmitting}
+                    type="submit"
+                  >
+                    {isSignInSubmitting ? "Verifying…" : "Verify and sign in"}
+                  </button>
+                  <button
+                    className="min-h-11 text-sm font-semibold text-primary hover:text-primary/85 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!isSignInLoaded || isSignInSubmitting || resendCountdown > 0}
+                    onClick={resendSignInCode}
+                    type="button"
+                  >
+                    {resendCountdown > 0 ? `Send a new code in ${resendCountdown}s` : signInCodeSent ? "Send a new code" : "Send verification code"}
+                  </button>
+                  <button
+                    className="min-h-11 text-sm font-semibold text-primary hover:text-primary/85 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={isSignInSubmitting}
+                    onClick={() => {
+                      setSignInError(null);
+                      setSignInCode("");
+                      setSignInEmailFactor(null);
+                      setSignInCodeSent(false);
+                      setResendCountdown(0);
+                      setSignInView("password");
+                    }}
+                    type="button"
+                  >
+                    Back to sign in
                   </button>
                 </form>
               ) : signInView === "reset-email" ? (
@@ -453,7 +559,7 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
                 </form>
               )}
               {signInError ? (
-                <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                <p role="alert" className="rounded-2xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                   {signInError}
                 </p>
               ) : null}

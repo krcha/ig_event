@@ -103,3 +103,5 @@ requireExcludes(youProfilePath, youProfile, "SignInButton", "generic Clerk sign-
 requireExcludes(youProfilePath, youProfile, "SignUpButton", "generic Clerk sign-up modal");
 
 console.log(`Clerk email auth QA passed (${checks.length} checks).`);
+
+await import("./qa-clerk-sign-in-flow.mjs");

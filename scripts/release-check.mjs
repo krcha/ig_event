@@ -137,6 +137,7 @@ const checks = [
   { script: "qa:user-api-auth", timeoutMs: 60_000 },
   { script: "qa:saved-event-repository", timeoutMs: 60_000 },
   { script: "qa:admin-auth", timeoutMs: 60_000 },
+  { script: "qa:analytics", timeoutMs: 60_000 },
 ];
 
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";

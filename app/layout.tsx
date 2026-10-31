@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { ClerkProvider } from "@clerk/nextjs";
 import { AppToolbar } from "@/components/navigation/app-toolbar";
 import { NavigationFeedback } from "@/components/navigation/navigation-feedback";
+import { VisitorTracker } from "@/components/analytics/visitor-tracker";
 import { AuthUserProvider } from "@/components/providers/auth-user-provider";
 import { UserLibraryProvider } from "@/components/providers/user-library-provider";
 import { SITE_DESCRIPTION, SITE_ORIGIN } from "@/lib/seo/site";
@@ -89,6 +90,7 @@ function AppDocument({
     <div className="min-h-screen">
       <Suspense fallback={null}>
         <NavigationFeedback />
+        <VisitorTracker />
       </Suspense>
       <Suspense fallback={null}>
         <AppToolbar />

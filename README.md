@@ -44,6 +44,8 @@ explicitly replaces them.
   [operations runbook](docs/operations-runbook.md) for activation and safeguards.
 - Scrape controls and ingestion job status at `/admin/scraper`
 - Venue management at `/admin/venues`
+- Owner-only visitor analytics at `/admin/analytics`; see
+  [setup and metric definitions](docs/visitor-analytics.md)
 - Cron ingestion at `/api/cron/ingest-venues`
 - Health check at `/api/health`
 
@@ -175,7 +177,11 @@ Notes:
   `https://www.eventzeka.com` alias redirects permanently to the apex before
   Clerk-backed routes run.
 - The in-app auth pages use custom Clerk email/password sign-in and sign-up
-  forms with email-code verification. They intentionally avoid Clerk's generic
+  forms with email-code verification, including an additional email code when
+  Clerk requires a second factor after password sign-in or password recovery.
+  The sign-in attempt is preserved while verifying or resending that code;
+  admin authorization is checked after the session is activated.
+  They intentionally avoid Clerk's generic
   social provider picker so disabled or unconfigured OAuth providers cannot be
   launched from the app UI.
 - `CRON_SECRET` protects the cron ingestion route when set. Set it in
