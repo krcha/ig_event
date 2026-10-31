@@ -12,7 +12,7 @@ import {
   savedEventRepository,
 } from "../convex/repositories/savedEvents.ts";
 
-function makeDb(initial = {}) {
+function makeDb(initial = {}, enforceSinglePagination = false) {
   const tables = Object.fromEntries(
     [
       "events",
@@ -26,6 +26,7 @@ function makeDb(initial = {}) {
       ]),
   );
   let nextId = 1;
+  let paginationCalls = 0;
 
   function rowsFor(table, filters, direction, indexName) {
     const rows = [...tables[table].values()].filter((row) =>
@@ -73,6 +74,7 @@ function makeDb(initial = {}) {
           return chain;
         },
         async paginate({ cursor, numItems }) {
+          if (enforceSinglePagination && ++paginationCalls > 1) throw new Error("Convex only supports a single paginated query in each function.");
           const offset = cursor ? Number.parseInt(cursor, 10) : 0;
           const rows = rowsFor(table, filters, direction, indexName);
           const page = rows.slice(offset, offset + numItems);
@@ -174,7 +176,7 @@ const user = {
       },
     ],
     users: [user],
-  });
+  }, true);
   const result = await savedEventRepository.listForSubject(
     { db },
     { legacyUserId: user._id, limit: 10, subject: user.clerkId },
@@ -988,6 +990,18 @@ const user = {
     ),
     /equivalence is not clean/iu,
   );
+}
+
+{
+  const { db } = makeDb({ users: [user], savedEvents: Array.from({ length: 2_001 }, (_, index) => ({
+    _id: `bounded_${index}`, _creationTime: index, userId: user.clerkId,
+    eventId: "same_event", createdAt: 5_000-index,
+  })) }, true);
+  const result = await savedEventRepository.listForSubject({ db }, { legacyUserId: user._id, limit: 10, subject: user.clerkId });
+  assert.equal(result.canonicalRowCount, 2_000, "Duplicate-heavy histories must retain the physical scan ceiling.");
+  assert.equal(result.references.length, 1);
+  assert.equal(result.scanLimitReached, true, "The lookahead row must report incomplete physical scans.");
+  assert.equal(result.truncated, true);
 }
 
 const usersSource = readFileSync("convex/users.ts", "utf8");

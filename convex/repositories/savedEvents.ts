@@ -95,7 +95,6 @@ export type SavedEventCutoverMode = {
 const MAX_POINT_LOOKUP_ROWS = 2;
 const MAX_LEGACY_POINT_LOOKUP_ROWS = 25;
 const MAX_LIST_PHYSICAL_SCAN_ROWS = 2_000;
-const LIST_SCAN_PAGE_SIZE = 100;
 // This is a combined physical-row budget across both compatibility tables.
 // Reassign performs at least one indexed lookup and one write per row, so keep
 // the bound deliberately below the general Convex transaction limits.
@@ -219,51 +218,39 @@ type LegacyListScan = {
   scanLimitReached: boolean;
 };
 
+// A Convex function supports only one paginate() call, including helpers.
+// Both compatibility tables need reading here, so use bounded indexed takes.
+// A lookahead row distinguishes a complete set from the physical scan ceiling.
+function scanLogicalReferencePrefix<T extends { eventId: Id<"events"> }>(
+  fetched: T[],
+  targetUniqueCount: number,
+): { exhausted: boolean; rows: T[]; scanLimitReached: boolean } {
+  const rows: T[] = [];
+  const eventIds = new Set<string>();
+  for (const row of fetched) {
+    if (rows.length >= MAX_LIST_PHYSICAL_SCAN_ROWS || eventIds.size >= targetUniqueCount) break;
+    rows.push(row);
+    eventIds.add(String(row.eventId));
+  }
+  const exhausted = rows.length === fetched.length;
+  return {
+    exhausted,
+    rows,
+    scanLimitReached: !exhausted && rows.length >= MAX_LIST_PHYSICAL_SCAN_ROWS && eventIds.size < targetUniqueCount,
+  };
+}
+
 async function scanCanonicalReferences(
   ctx: ReadContext,
   subject: string,
   targetUniqueCount: number,
 ): Promise<CanonicalListScan> {
-  const rows: Doc<"savedEvents">[] = [];
-  const eventIds = new Set<string>();
-  let cursor: string | null = null;
-  let exhausted = false;
-
-  while (
-    !exhausted &&
-    rows.length < MAX_LIST_PHYSICAL_SCAN_ROWS &&
-    eventIds.size < targetUniqueCount
-  ) {
-    const page = await ctx.db
-      .query(CANONICAL_SAVED_EVENT_TABLE)
-      .withIndex("by_user_createdAt", (q) => q.eq("userId", subject))
-      .order("desc")
-      .paginate({
-        cursor,
-        numItems: Math.min(
-          LIST_SCAN_PAGE_SIZE,
-          MAX_LIST_PHYSICAL_SCAN_ROWS - rows.length,
-        ),
-      });
-    rows.push(...page.page);
-    for (const row of page.page) eventIds.add(String(row.eventId));
-    exhausted = page.isDone;
-    if (!exhausted && !page.continueCursor) {
-      throw new SavedEventRepositoryConflict(
-        "Canonical saved-event list pagination did not advance.",
-      );
-    }
-    cursor = page.continueCursor;
-  }
-
-  return {
-    exhausted,
-    rows,
-    scanLimitReached:
-      !exhausted &&
-      rows.length >= MAX_LIST_PHYSICAL_SCAN_ROWS &&
-      eventIds.size < targetUniqueCount,
-  };
+  const rows = await ctx.db
+    .query(CANONICAL_SAVED_EVENT_TABLE)
+    .withIndex("by_user_createdAt", (q) => q.eq("userId", subject))
+    .order("desc")
+    .take(MAX_LIST_PHYSICAL_SCAN_ROWS + 1);
+  return scanLogicalReferencePrefix(rows, targetUniqueCount);
 }
 
 async function scanLegacyReferences(
@@ -271,46 +258,12 @@ async function scanLegacyReferences(
   legacyUserId: Id<"users">,
   targetUniqueCount: number,
 ): Promise<LegacyListScan> {
-  const rows: Doc<"userSavedEvents">[] = [];
-  const eventIds = new Set<string>();
-  let cursor: string | null = null;
-  let exhausted = false;
-
-  while (
-    !exhausted &&
-    rows.length < MAX_LIST_PHYSICAL_SCAN_ROWS &&
-    eventIds.size < targetUniqueCount
-  ) {
-    const page = await ctx.db
-      .query(LEGACY_SAVED_EVENT_TABLE)
-      .withIndex("by_user_savedAt", (q) => q.eq("userId", legacyUserId))
-      .order("desc")
-      .paginate({
-        cursor,
-        numItems: Math.min(
-          LIST_SCAN_PAGE_SIZE,
-          MAX_LIST_PHYSICAL_SCAN_ROWS - rows.length,
-        ),
-      });
-    rows.push(...page.page);
-    for (const row of page.page) eventIds.add(String(row.eventId));
-    exhausted = page.isDone;
-    if (!exhausted && !page.continueCursor) {
-      throw new SavedEventRepositoryConflict(
-        "Legacy saved-event list pagination did not advance.",
-      );
-    }
-    cursor = page.continueCursor;
-  }
-
-  return {
-    exhausted,
-    rows,
-    scanLimitReached:
-      !exhausted &&
-      rows.length >= MAX_LIST_PHYSICAL_SCAN_ROWS &&
-      eventIds.size < targetUniqueCount,
-  };
+  const rows = await ctx.db
+    .query(LEGACY_SAVED_EVENT_TABLE)
+    .withIndex("by_user_savedAt", (q) => q.eq("userId", legacyUserId))
+    .order("desc")
+    .take(MAX_LIST_PHYSICAL_SCAN_ROWS + 1);
+  return scanLogicalReferencePrefix(rows, targetUniqueCount);
 }
 
 async function listForSubject(
