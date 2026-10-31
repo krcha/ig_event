@@ -301,8 +301,8 @@ assert.match(
 );
 assert.match(
   publicEventsSource,
-  /while \(publicEventsCache\.size > PUBLIC_EVENTS_CACHE_MAX_ENTRIES\)/,
-  "Public event cache should prune oldest entries when it exceeds the maximum size.",
+  /prunePublicEventReadCache\(publicEventsCache, PUBLIC_EVENTS_CACHE_MAX_ENTRIES, now\)/,
+  "Public event cache must pass its fixed limit to the tested priority-aware eviction helper.",
 );
 assert.match(
   publicEventsSource,
@@ -315,7 +315,7 @@ assert.doesNotMatch(
   "A cold public load must not expire from the cache before the load itself completes.",
 );
 assert.equal(
-  (publicEventsSource.match(/cachePendingPublicEventsLoad\(cacheKey, promise, now\);/g) ?? [])
+  (publicEventsSource.match(/cachePendingPublicEventsLoad\(cacheKey, promise, now(?:, isPriorityCalendarWindow\(fromDate, beforeDate, now\))?\);/g) ?? [])
     .length,
   2,
   "Both full-window and compact-calendar loaders should use settlement-based cache expiry.",
