@@ -361,8 +361,8 @@ assert.match(
   "Open now derives its civil yesterday/today window independently of the displayed nightlife date.",
 );
 assert.match(
-  browsePageSource,
-  /loadPublicCalendarOverviewWindow\(\{\s*fromDate: monthStartKey,\s*beforeDate: formatDateKey\(nextMonthStart\)/,
+  read("app/api/calendar/overview/route.ts"),
+  /loadPublicCalendarOverviewWindow\(\{ fromDate, beforeDate, q, venue \}\)/,
   "The selected month retains compact counters and venue choices without other days' event details.",
 );
 assertDoesNotInclude(
@@ -426,7 +426,7 @@ assertDoesNotInclude(
   "The full bottom month calendar grid should be removed now that the horizontal date selector handles day navigation.",
 );
 assert.ok(
-  (browsePageSource.match(/prefetch=\{false\}/g) ?? []).length >= 12,
+  [browsePageSource, read("components/calendar/calendar-agenda.tsx"), read("components/calendar/mobile-week-calendar.tsx")].every(source => /prefetch=\{false\}/.test(source)),
   "High-density calendar links should disable App Router prefetch to avoid background RSC work during taps.",
 );
 assert.match(

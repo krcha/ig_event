@@ -1,6 +1,5 @@
 import Link from "next/link";
 import {
-  ArrowUpDown,
   CalendarDays,
   ChevronLeft,
   ChevronRight,
@@ -13,40 +12,32 @@ import {
   parseNormalizedEventDate,
   type PublicEvent,
 } from "@/lib/events/public-events";
-import { loadPublicCalendarOverviewWindow } from "@/lib/events/public-calendar-overview";
 import { AutoApplyFilterForm } from "@/components/calendar/auto-apply-filter-form";
 import { CalendarScrollRestoration } from "@/components/calendar/calendar-scroll-restoration";
-import { CalendarEventPreviews, CalendarEventPreviewRow } from "@/components/calendar/calendar-event-preview";
+import { CalendarAgenda } from "@/components/calendar/calendar-agenda";
+import { CalendarOverviewProvider, CalendarStatValue, CalendarVenueSelect } from "@/components/calendar/calendar-overview";
+import { projectCalendarAgendaEvents } from "@/lib/events/calendar-agenda-projection";
+import type { CalendarEventSummary } from "@/lib/events/calendar-agenda-types";
+import { resolveCalendarVenueSelection } from "@/lib/events/calendar-venue-selection";
 import { JsonLd } from "@/components/seo/json-ld";
-import { EventKindToggleChips } from "@/components/calendar/event-kind-toggle-chips";
-import { OpenNowFilter } from "@/components/calendar/open-now-filter";
-import { OpenNowStatus } from "@/components/events/open-now-status";
 import { MobileMonthDayStrip } from "@/components/calendar/mobile-month-day-strip";
 import { MobileWeekCalendar } from "@/components/calendar/mobile-week-calendar";
-import { getMobileDayHeading, getMobileDayLabel, getMobileWeekDateKeys, getMobileWeekOverviewWindows } from "@/lib/events/mobile-week";
+import { getMobileDayHeading, getMobileDayLabel, getMobileWeekDateKeys } from "@/lib/events/mobile-week";
 import mobileStyles from "@/components/calendar/mobile-events-home.module.css";
-import { EventMetaRow, getEventCategoryKind, type EventCategoryKind } from "@/components/events/event-meta";
+import { getEventCategoryKind, type EventCategoryKind } from "@/components/events/event-meta";
 import { EVENT_PRIMARY_CATEGORIES, normalizeHiddenEventCategories } from "@/lib/taxonomy/event-categories";
-import { EventSessionLabel } from "@/components/events/event-session-label";
-import { getEventSessionLabel } from "@/lib/events/event-session";
-import { SaveEventButton } from "@/components/events/save-event-button";
 import { cn } from "@/lib/utils";
 import {
   getEventTimeSortMinutes,
-  normalizeEventTime,
 } from "@/lib/events/event-time";
-import { resolveEventTimePresentation } from "@/lib/events/event-time-presentation";
 import { addDaysToDateKey, dateKeyToLocalNoonDate, getNightlifeDefaultDateKey } from "@/lib/events/nightlife-date";
 import { getOpenNowEventState, getOpenNowEventWindow, type OpenNowEventState } from "@/lib/venues/venue-open-now";
 import { matchesPublicEventNameArtistOrVenue } from "@/lib/events/public-event-search";
 import { HOME_FAQ_ITEMS, buildHomePageStructuredData } from "@/lib/seo/site";
-import { groupCalendarEventsByTimeBand } from "@/lib/events/calendar-time-bands";
-import { groupBusyVenuesForDay } from "@/lib/events/venue-day-grouping";
 import {
   buildPublicEventVenueFilterOptions,
   getPublicEventVenueFilterValue,
   matchesPublicEventVenueFilter,
-  resolvePublicEventVenueFilter,
 } from "@/lib/events/public-event-venue-filter";
 
 // Keep the public calendar out of Next.js' persisted route cache. The page data
@@ -68,83 +59,6 @@ type CalendarSearchParams = {
 
 type CalendarPageProps = {
   searchParams?: Promise<CalendarSearchParams>;
-};
-
-type EventTone = {
-  name: string;
-  chip: string;
-  dot: string;
-  rail: string;
-  badge: string;
-  panel: string;
-};
-
-type CalendarEventSummary = Pick<
-  PublicEvent,
-  | "_id"
-  | "title"
-  | "description"
-  | "date"
-  | "time"
-  | "timeStatus"
-  | "dayPeriod"
-  | "displayTimeEnd"
-  | "displayTimeLabel"
-  | "displayTimeSource"
-  | "displayTimeStart"
-  | "venue"
-  | "venueId"
-  | "venueCategory"
-  | "venueHours"
-  | "artists"
-  | "eventType"
-  | "ticketPrice"
-  | "attendance"
-  | "attendanceCount"
-  | "attendeeCount"
-  | "attendees"
-  | "attendeesCount"
-  | "going"
-  | "goingCount"
->;
-
-const EVENT_CATEGORY_LABELS = Object.fromEntries(
-  EVENT_PRIMARY_CATEGORIES.map((category) => [category.key, category.label]),
-) as Record<EventCategoryKind, string>;
-
-const EVENT_TONES: Record<EventCategoryKind, EventTone> = {
-  club: {
-    name: EVENT_CATEGORY_LABELS.club,
-    chip: "bg-[#8B86FB]/[0.14] text-[#8B86FB] hover:bg-[#8B86FB]/[0.18]",
-    dot: "bg-[#8B86FB]",
-    rail: "bg-[#8B86FB]",
-    badge: "bg-[#8B86FB]/[0.14] text-[#8B86FB]",
-    panel: "from-[#8B86FB]/[0.10] via-card to-card",
-  },
-  live: {
-    name: EVENT_CATEGORY_LABELS.live,
-    chip: "bg-[#FB7185]/[0.14] text-[#FB7185] hover:bg-[#FB7185]/[0.18]",
-    dot: "bg-[#FB7185]",
-    rail: "bg-[#FB7185]",
-    badge: "bg-[#FB7185]/[0.14] text-[#FB7185]",
-    panel: "from-[#FB7185]/[0.10] via-card to-card",
-  },
-  culture: {
-    name: EVENT_CATEGORY_LABELS.culture,
-    chip: "bg-[#FBBF24]/[0.14] text-[#FBBF24] hover:bg-[#FBBF24]/[0.18]",
-    dot: "bg-[#FBBF24]",
-    rail: "bg-[#FBBF24]",
-    badge: "bg-[#FBBF24]/[0.14] text-[#FBBF24]",
-    panel: "from-[#FBBF24]/[0.10] via-card to-card",
-  },
-  event: {
-    name: EVENT_CATEGORY_LABELS.event,
-    chip: "bg-[#34D399]/[0.14] text-[#34D399] hover:bg-[#34D399]/[0.18]",
-    dot: "bg-[#34D399]",
-    rail: "bg-[#34D399]",
-    badge: "bg-[#34D399]/[0.14] text-[#34D399]",
-    panel: "from-[#34D399]/[0.10] via-card to-card",
-  },
 };
 
 const DAY_CATEGORY_CHIPS = [
@@ -227,39 +141,6 @@ function buildQueryString(params: Record<string, string | undefined>): string {
 
   const value = query.toString();
   return value ? `?${value}` : "";
-}
-
-function getEventAriaLabel(event: CalendarEventSummary, tone: EventTone, timeLabel: string): string {
-  return ["Open " + event.title, getEventSessionLabel(event), timeLabel, event.venue, tone.name]
-    .filter(Boolean)
-    .join(", ");
-}
-
-function getVenueHref(event: Pick<CalendarEventSummary, "venueId">): string | null {
-  return event.venueId ? `/venues/${event.venueId}` : null;
-}
-
-function VenueNameLink({
-  className,
-  event,
-}: {
-  className?: string;
-  event: Pick<CalendarEventSummary, "venue" | "venueId">;
-}) {
-  const href = getVenueHref(event);
-  if (!href) {
-    return <span className={className}>{event.venue}</span>;
-  }
-
-  return (
-    <Link
-      className={cn(className, "hover:text-primary focus-visible:text-primary focus-visible:outline-none")}
-      href={href}
-      prefetch={false}
-    >
-      {event.venue}
-    </Link>
-  );
 }
 
 function getMonthDays(monthStart: Date): Date[] {
@@ -354,10 +235,6 @@ function toCalendarEventSummary(event: PublicEvent): CalendarEventSummary {
   };
 }
 
-function getEventTone(event: CalendarEventSummary): EventTone {
-  return EVENT_TONES[getEventCategoryKind(event)];
-}
-
 function getDayCategory(event: CalendarEventSummary): ConcreteDayCategory {
   return getEventCategoryKind(event);
 }
@@ -439,44 +316,6 @@ function getCalendarDayBucket(
   return bucket;
 }
 
-function formatArtistMeta(event: CalendarEventSummary): string | undefined {
-  return event.artists.length > 0 ? event.artists.slice(0, 3).join(", ") : undefined;
-}
-
-function VenueTimeLabel({ label }: { label: string }) {
-  return (
-    <span className="block space-y-1 text-center" data-calendar-venue-hours="true">
-      {label.split(", ").map((window, index) => {
-        const [start, end] = window.split("–");
-        return (
-          <span className="block" key={`${window}-${index}`}>
-            <span className="block text-xs font-normal leading-4 tabular-nums text-foreground">{start}</span>
-            {end ? (
-              <span className="block text-[10px] font-normal leading-3 tabular-nums text-muted-foreground">{end}</span>
-            ) : null}
-          </span>
-        );
-      })}
-    </span>
-  );
-}
-
-function getResolvedTimeParts(
-  event: CalendarEventSummary,
-  presentation: ReturnType<typeof resolveEventTimePresentation>,
-) {
-  if (event.displayTimeStart) {
-    return {
-      allDay: false,
-      endLabel: event.displayTimeEnd ?? presentation.endLabel,
-      startLabel: event.displayTimeStart,
-    };
-  }
-
-  const time = normalizeEventTime(event.time);
-  return { ...time, endLabel: time.endLabel ?? presentation.endLabel };
-}
-
 function pluralize(value: number, singular: string, plural = `${singular}s`): string {
   return `${value} ${value === 1 ? singular : plural}`;
 }
@@ -505,10 +344,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const monthStartKey = formatDateKey(monthStart);
   const weekDateKeys = getMobileWeekDateKeys(todayKey);
   const weekBeforeDate = addDaysToDateKey(todayKey, 7);
-  const extraWeekWindows = getMobileWeekOverviewWindows(todayKey, openNowActive ? undefined : {
-    fromDate: monthStartKey,
-    beforeDate: formatDateKey(nextMonthStart),
-  });
   const selectedDayKey = openNowActive ? todayKey : getSelectedDay(
     monthStart,
     getSingleValue(resolvedSearchParams?.day),
@@ -522,21 +357,11 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     fromDate: selectedDayKey,
     beforeDate: addDaysToDateKey(selectedDayKey, 1),
   };
-  const [loaded, overview, extraWeekOverviews] = await Promise.all([
+  const [loaded, venueSelection] = await Promise.all([
     loadPublicCalendarEventsWindow(eventWindow),
-    openNowActive ? Promise.resolve(null) : loadPublicCalendarOverviewWindow({
-      fromDate: monthStartKey,
-      beforeDate: formatDateKey(nextMonthStart),
-      q: selectedSearchQuery,
-      venue: requestedVenue,
-    }),
-    Promise.all(extraWeekWindows.map((window) => loadPublicCalendarOverviewWindow({
-      ...window,
-      q: selectedSearchQuery,
-      venue: requestedVenue,
-    }))),
+    resolveCalendarVenueSelection(requestedVenue, { fromDate: monthStartKey, beforeDate: formatDateKey(nextMonthStart), q: selectedSearchQuery }),
   ]);
-  const error = loaded.error ?? overview?.error ?? extraWeekOverviews.find((result) => result.error)?.error;
+  const error = loaded.error ?? venueSelection.error;
   // Keep cached event data independent of the clock; reevaluate openings per request.
   const openNowStates = new Map<string, OpenNowEventState>();
   const events = openNowActive ? loaded.events.filter((event) => {
@@ -544,13 +369,10 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     openNowStates.set(event._id, state);
     return state === "active";
   }) : loaded.events;
-  const venues = overview?.venues ?? buildPublicEventVenueFilterOptions(loaded.events);
-  const selectedVenue = resolvePublicEventVenueFilter(
-    requestedVenue,
-    venues,
-  );
+  const venues = buildPublicEventVenueFilterOptions(loaded.events);
+  const selectedVenue = venueSelection.value;
   const selectedVenueOption = venues.find((venue) => venue.value === selectedVenue);
-  const selectedVenueLabel = selectedVenueOption?.label ?? (
+  const selectedVenueLabel = selectedVenueOption?.label ?? venueSelection.label ?? (
     selectedVenue && /^(?:id|name):/u.test(selectedVenue) ? "Selected venue" : selectedVenue
   );
   const hiddenDayCategories = normalizeHiddenDayCategories(getSingleValue(resolvedSearchParams?.hide));
@@ -562,26 +384,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const activeVenueNames = new Set<string>();
   let totalFilteredEventCount = 0;
   let weekendEventCount = 0;
-
-  // Overview counts retain month-wide search, venue, category and stats behavior
-  // without loading other days' event bodies or venue-hours JSON.
-  for (const group of overview?.groups ?? []) {
-    // Keep the active chip and agenda on the same detail snapshot when the
-    // independently bounded overview cache refreshes at a different moment.
-    if (group.date === selectedDayKey) continue;
-    const eventCount = !selectedVenue || /^(?:id|name):/u.test(selectedVenue)
-      ? (!selectedVenue || group.venueValue === selectedVenue ? group.count : 0)
-      : group.legacyVenueMatchCount;
-    if (!eventCount) continue;
-    const dayBucket = getCalendarDayBucket(monthDayBuckets, group.date);
-    dayBucket.categoryCounts[group.category] += eventCount;
-    if (hiddenDayCategorySet.has(group.category)) continue;
-    dayBucket.eventCount += eventCount;
-    totalFilteredEventCount += eventCount;
-    activeVenueNames.add(group.venueValue);
-    const eventDate = parseNormalizedEventDate(group.date);
-    if (eventDate && isWeekendDate(eventDate)) weekendEventCount += eventCount;
-  }
 
   for (const event of events) {
     if (!openNowActive && !event.date.startsWith(`${monthParam}-`)) {
@@ -633,18 +435,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   }
 
   selectedDayAgendaEvents.sort((left, right) => compareAgendaEvents(left, right, selectedSortMode));
-
-  // Mobile/desktop rows and their accessible labels share the same derived
-  // time. Scope reuse to this request so refreshed venue hours are never stale.
-  const timePresentations = new Map<CalendarEventSummary, ReturnType<typeof resolveEventTimePresentation>>();
-  function getTimePresentation(event: CalendarEventSummary) {
-    let presentation = timePresentations.get(event);
-    if (!presentation) {
-      presentation = resolveEventTimePresentation(event);
-      timePresentations.set(event, presentation);
-    }
-    return presentation;
-  }
 
   const selectedDate = parseNormalizedEventDate(selectedDayKey) ?? monthStart;
   const previousDay = new Date(selectedDate);
@@ -698,17 +488,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       isAnchor: dayKey === selectedDayKey,
     };
   });
-  // Month counters and disjoint extra ranges cover the week exactly once.
   const weekDayBuckets = new Map<string, CalendarDayBucket>();
-  for (const group of [overview, ...extraWeekOverviews].flatMap((result) => result?.groups ?? [])) {
-    if (group.date < todayKey || group.date >= weekBeforeDate) continue;
-    const count = !selectedVenue || /^(?:id|name):/u.test(selectedVenue)
-      ? (!selectedVenue || group.venueValue === selectedVenue ? group.count : 0)
-      : group.legacyVenueMatchCount;
-    const bucket = getCalendarDayBucket(weekDayBuckets, group.date);
-    bucket.categoryCounts[group.category] += count;
-    if (!hiddenDayCategorySet.has(group.category)) bucket.eventCount += count;
-  }
   if (!openNowActive && selectedDayKey >= todayKey && selectedDayKey < weekBeforeDate) {
     // The active date uses the same detail snapshot as its list.
     weekDayBuckets.set(selectedDayKey, monthDayBuckets.get(selectedDayKey) ?? {
@@ -775,7 +555,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       : null,
   ].filter(Boolean) as Array<{ href: string; key: string; label: string }>;
   const hasActiveFilters = activeFilterControls.length > 0;
-  const statCards = [
+  const statCards: Array<{ key: "events" | "active-days" | "venues" | "weekend"; label: string; value: number; caption: string }> = [
     {
       key: "events",
       label: "Events",
@@ -894,21 +674,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
             {!isMobileSort ? (
               <label className="field-label min-w-0">
                 Venue
-                <select
-                  className={cn("input-control", !isDesktop && "h-10 rounded-xl")}
-                  defaultValue={selectedVenue ?? ""}
-                  name="venue"
-                >
-                  <option value="">All venues</option>
-                  {selectedVenue && !selectedVenueOption ? (
-                    <option value={selectedVenue}>{selectedVenueLabel}</option>
-                  ) : null}
-                  {venues.map((venue) => (
-                    <option key={venue.value} value={venue.value}>
-                      {venue.label}
-                    </option>
-                  ))}
-                </select>
+                <CalendarVenueSelect className={cn("input-control", !isDesktop && "h-10 rounded-xl")} selected={selectedVenue} selectedLabel={selectedVenueLabel ?? "Selected venue"} fallback={venues} />
               </label>
             ) : null}
 
@@ -932,450 +698,13 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     );
   }
 
-  function renderSelectedDayAgenda({
-    compact = false,
-    mobile = false,
-    mobileWeek = false,
-  }: {
-    compact?: boolean;
-    mobile?: boolean;
-    mobileWeek?: boolean;
-  } = {}) {
-    const agendaEvents = mobileWeek
-      ? [...selectedDayAgendaEvents].sort(compareAgendaEventsByTime)
-      : selectedDayAgendaEvents;
-    const { groups: venueGroups, individualEvents } = mobileWeek
-      ? { groups: [], individualEvents: agendaEvents }
-      : groupBusyVenuesForDay(agendaEvents, (event) => !hiddenDayCategorySet.has(getDayCategory(event)));
-    const agendaTimeBandGroups = groupCalendarEventsByTimeBand(individualEvents);
-    const initialVisibleAgendaEventCount = agendaEvents.filter(
-      (event) => !hiddenDayCategorySet.has(getDayCategory(event)),
-    ).length;
-
-    function renderMobileAdvancedControls() {
-      const iconButtonClass =
-        "relative inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/75 bg-white/[0.045] text-foreground shadow-[0_14px_34px_-28px_rgba(0,0,0,0.85)] hover:border-primary/35 hover:bg-primary/10 hover:text-primary";
-      const panelClass =
-        "absolute right-0 top-full z-40 mt-2 w-[min(20rem,calc(100vw-1.5rem))] rounded-[1rem] border border-border/80 bg-card/98 p-2.5 shadow-[0_24px_70px_-42px_rgba(0,0,0,0.95)] backdrop-blur";
-
-      return (
-        <div className="flex flex-none items-center gap-1">
-          <details className="group relative">
-            <summary
-              aria-label="Search calendar events"
-              className={`${iconButtonClass} cursor-pointer list-none [&::-webkit-details-marker]:hidden`}
-              data-calendar-mobile-search-button="true"
-            >
-              <Search className="h-3.5 w-3.5" />
-              <span className="sr-only">Search</span>
-            </summary>
-            <div className={panelClass} data-calendar-mobile-search-panel="true">
-              {renderFilterFields("mobile-search")}
-            </div>
-          </details>
-
-          <details className="group relative">
-            <summary
-              aria-label="Sort calendar events"
-              className={`${iconButtonClass} cursor-pointer list-none [&::-webkit-details-marker]:hidden`}
-              data-calendar-mobile-sort-button="true"
-            >
-              <ArrowUpDown className="h-3.5 w-3.5" />
-              <span className="sr-only">Sort</span>
-              {hiddenSort ? (
-                <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-primary ring-2 ring-background" />
-              ) : null}
-            </summary>
-            <div className={panelClass} data-calendar-mobile-sort-panel="true">
-              {renderFilterFields("mobile-sort")}
-            </div>
-          </details>
-        </div>
-      );
-    }
-
-    function renderCategoryChips({ withActions = false }: { withActions?: boolean } = {}) {
-      return (
-        <EventKindToggleChips
-          afterAll={mobileWeek ? <OpenNowFilter active={openNowActive} appearance="chip" href={openNowHref} initialNow={now} /> : undefined}
-          initialHiddenCategories={hiddenDayCategories}
-          singleSelection={mobileWeek}
-        >
-          {withActions ? renderMobileAdvancedControls() : null}
-        </EventKindToggleChips>
-      );
-    }
-
-    function renderAgendaCards(isMobile = false) {
-      return (
-        <>
-          {venueGroups.length > 0 ? (
-            <div className="space-y-1.5" data-calendar-venue-groups="true">
-              {venueGroups.map((group) => (
-                <details
-                  className="group rounded-[0.9rem] border border-primary/25 bg-primary/[0.07] open:border-primary/40"
-                  data-calendar-venue-group="true"
-                  hidden={group.visibleCount === 0}
-                  key={group.key}
-                >
-                  <summary className="flex min-h-14 cursor-pointer list-none items-center gap-3 px-3 py-2 [&::-webkit-details-marker]:hidden">
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold text-foreground">{group.venue}</span>
-                      <span className="block text-[11px] font-medium text-muted-foreground">
-                        <span data-calendar-venue-group-visible-count="true">
-                          {pluralize(group.visibleCount, "event")}
-                        </span>{" "}
-                        · <span lang="sr-Latn-RS">Više događaja</span>
-                      </span>
-                    </span>
-                    <ChevronRight className="h-4 w-4 flex-none text-primary transition-transform group-open:rotate-90" />
-                  </summary>
-                  <ul className="space-y-1 border-t border-primary/15 px-2 py-2">
-                    {group.events.map((event) => {
-                      const eventCategory = getDayCategory(event);
-                      const isHiddenByKind = hiddenDayCategorySet.has(eventCategory);
-                      const tone = getEventTone(event);
-                      const timePresentation = getTimePresentation(event);
-
-                      return (
-                        <li
-                          data-calendar-event-id={event._id}
-                          data-calendar-open-now-state={openNowActive ? openNowStates.get(event._id) : undefined}
-                          data-calendar-event-kind={eventCategory}
-                          data-calendar-hidden-by-kind={isHiddenByKind ? "true" : "false"}
-                          data-event-time={event.displayTimeLabel ?? event.time}
-                          data-event-title={event.title}
-                          data-event-tone={tone.name}
-                          data-event-venue={event.venue}
-                          hidden={isHiddenByKind}
-                          key={event._id}
-                        >
-                          <CalendarEventPreviewRow
-                            eventId={event._id}
-                            headerClassName="min-h-10 px-2 py-1 text-foreground"
-                            title={event.title}
-                          >
-                            <span
-                              className={cn("w-16 flex-none text-xs font-semibold tabular-nums text-muted-foreground", timePresentation.kind === "venue_hours" ? "py-1" : "truncate")}
-                              title={timePresentation.label}
-                            >
-                              {timePresentation.kind === "venue_hours"
-                                ? <VenueTimeLabel label={timePresentation.label} />
-                                : timePresentation.label}
-                            </span>
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate text-[13px] font-semibold">{event.title}</span>
-                              <EventSessionLabel className="mt-0 text-[11px] leading-4" event={event} />
-                              <OpenNowStatus eventId={event._id} state={openNowStates.get(event._id)} />
-                            </span>
-                            <span className="max-w-[40%] truncate text-[10px] font-medium text-muted-foreground">{tone.name}</span>
-                          </CalendarEventPreviewRow>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </details>
-              ))}
-            </div>
-          ) : null}
-          {agendaTimeBandGroups.map((timeBand) => {
-            const initialVisibleTimeBandCount = timeBand.events.filter(
-              (event) => !hiddenDayCategorySet.has(getDayCategory(event)),
-            ).length;
-
-            return (
-              <section
-                aria-labelledby={`calendar-${mobileWeek ? "week" : isMobile ? "mobile" : "desktop"}-${timeBand.key}`}
-                className="space-y-1.5"
-                data-calendar-time-band-event-count={timeBand.events.length}
-                data-calendar-time-band={timeBand.key}
-                hidden={initialVisibleTimeBandCount === 0}
-                key={timeBand.key}
-              >
-                <div className="flex min-w-0 items-baseline justify-between gap-3 px-1 pt-1">
-                  <div className="min-w-0">
-                    <h3
-                      className="truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground"
-                      id={`calendar-${mobileWeek ? "week" : isMobile ? "mobile" : "desktop"}-${timeBand.key}`}
-                    >
-                      {timeBand.label}
-                    </h3>
-                    <p className="truncate text-[10px] leading-4 text-muted-foreground">
-                      {timeBand.description}
-                    </p>
-                  </div>
-                  <span
-                    className="flex-none text-[10px] font-medium tabular-nums text-muted-foreground"
-                    data-calendar-time-band-visible-count="true"
-                  >
-                    {pluralize(initialVisibleTimeBandCount, "event")}
-                  </span>
-                </div>
-                <div className={cn("space-y-1.5", !isMobile && "space-y-2")}>
-                  {timeBand.events.map((event) => {
-            const tone = getEventTone(event);
-            const eventCategory = getDayCategory(event);
-            const isHiddenByKind = hiddenDayCategorySet.has(eventCategory);
-            const timePresentation = getTimePresentation(event);
-            const eventTime = getResolvedTimeParts(event, timePresentation);
-            const displayEventTime = timePresentation.label;
-            const artistMeta = formatArtistMeta(event);
-
-            if (isMobile) {
-              return (
-                <article
-                  className={cn(
-                    "group overflow-hidden rounded-[0.9rem] border border-border/75 bg-gradient-to-r shadow-[0_14px_38px_-32px_rgba(0,0,0,0.86)] transition hover:border-primary/35 hover:bg-primary/[0.04]",
-                    tone.panel,
-                  )}
-                  data-calendar-event-kind={eventCategory}
-                  data-calendar-event-id={event._id}
-                  data-calendar-open-now-state={openNowActive ? openNowStates.get(event._id) : undefined}
-                  data-calendar-hidden-by-kind={isHiddenByKind ? "true" : "false"}
-                  data-calendar-mobile-event-row="true"
-                  data-event-time={event.displayTimeLabel ?? event.time}
-                  data-event-title={event.title}
-                  data-event-tone={tone.name}
-                  data-event-venue={event.venue}
-                  hidden={isHiddenByKind}
-                  key={event._id}
-                >
-                  <CalendarEventPreviewRow eventId={event._id} headerClassName="px-2.5 py-2" title={event.title}>
-                  <div className="flex min-w-0 flex-1 items-center gap-2">
-                    {eventTime.startLabel ? (
-                      <span
-                        className="box-border flex h-9 w-16 flex-none flex-col items-center justify-center overflow-hidden rounded-[0.72rem] border border-border/65 bg-background/45 px-1 text-center hover:border-primary/35"
-                        title={mobileWeek && timePresentation.inferredEnd ? `Mesto radi do ${eventTime.endLabel}; kraj događaja nije najavljen.` : undefined}
-                      >
-                        <span className="block max-w-full truncate text-xs font-semibold leading-4 tabular-nums text-foreground">
-                          {eventTime.startLabel}
-                        </span>
-                        {eventTime.endLabel ? (
-                          <span className={cn("block max-w-full truncate text-[10px] leading-3 tabular-nums text-muted-foreground", timePresentation.inferredEnd ? "font-normal" : "font-semibold")}>
-                            {mobileWeek && timePresentation.inferredEnd ? "do " : ""}
-                            {eventTime.endLabel}
-                          </span>
-                        ) : null}
-                      </span>
-                    ) : timePresentation.kind === "venue_hours" ? (
-                      <span
-                        className="box-border flex min-h-9 w-16 flex-none flex-col items-center justify-center rounded-[0.72rem] border border-border/65 bg-background/45 px-1 py-1 text-center hover:border-primary/35"
-                        title={timePresentation.label}
-                        aria-label={mobileWeek ? `Radno vreme mesta: ${timePresentation.label}. Početak događaja nije najavljen.` : undefined}
-                      >
-                        <VenueTimeLabel label={timePresentation.label} />
-                      </span>
-                    ) : (
-                      <span
-                        className="box-border flex h-9 w-16 flex-none items-center justify-center overflow-hidden rounded-[0.72rem] border border-border/65 bg-background/45 px-1 text-center hover:border-primary/35"
-                      >
-                        <span className="block max-w-full truncate text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                          —
-                        </span>
-                      </span>
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <div
-                        className="block min-w-0 hover:text-primary"
-                      >
-                        <h4 className="truncate text-[13px] font-semibold leading-4 tracking-tight text-foreground">
-                          {event.title}
-                        </h4>
-                        <EventSessionLabel event={event} />
-                      </div>
-                      <VenueNameLink
-                        className="mt-0.5 block w-fit max-w-full truncate text-[11px] font-medium leading-4 text-muted-foreground"
-                        event={event}
-                      />
-                      <EventMetaRow className="mt-1 flex-nowrap" event={event} />
-                      <OpenNowStatus eventId={event._id} state={openNowStates.get(event._id)} />
-                    </div>
-                  </div>
-                  {authEnabled ? (
-                    <SaveEventButton eventId={event._id} eventTitle={event.title} variant="icon" />
-                  ) : null}
-                  </CalendarEventPreviewRow>
-                </article>
-              );
-            }
-
-            return (
-              <article
-                className={cn(
-                  "relative overflow-hidden rounded-[1rem] border border-border/80 bg-gradient-to-br px-3 py-3 transition hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-[0_22px_54px_-42px_rgba(0,0,0,0.8)]",
-                  tone.panel,
-                )}
-                data-calendar-desktop-event-row="true"
-                data-calendar-event-kind={eventCategory}
-                data-calendar-event-id={event._id}
-                data-calendar-open-now-state={openNowActive ? openNowStates.get(event._id) : undefined}
-                data-calendar-hidden-by-kind={isHiddenByKind ? "true" : "false"}
-                hidden={isHiddenByKind}
-                key={event._id}
-              >
-                <div className={cn("absolute inset-y-4 left-0 w-1 rounded-r-full", tone.rail)} />
-                <div className="flex items-start gap-2.5 pl-1.5">
-                  <div className="flex min-w-0 flex-1 items-start gap-2.5">
-                    <div className={cn("flex-none text-right", timePresentation.kind === "venue_hours" ? "w-16" : "w-14")}>
-                      {displayEventTime ? (
-                        <Link
-                          aria-label={getEventAriaLabel(event, tone, timePresentation.label)}
-                          className={cn("block text-sm font-semibold tabular-nums text-foreground hover:text-primary", timePresentation.kind !== "venue_hours" && "truncate")}
-                          data-calendar-event-link="true"
-                          href={`/events/${event._id}`}
-                          prefetch={false}
-                          title={displayEventTime}
-                        >
-                          {timePresentation.kind === "venue_hours"
-                            ? <VenueTimeLabel label={displayEventTime} />
-                            : displayEventTime}
-                        </Link>
-                      ) : null}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <Link
-                        aria-label={getEventAriaLabel(event, tone, timePresentation.label)}
-                        className="block min-w-0 hover:text-primary"
-                        data-calendar-event-link="true"
-                        href={`/events/${event._id}`}
-                        prefetch={false}
-                      >
-                        <h4 className="text-sm font-semibold leading-5 tracking-tight text-foreground sm:text-[15px]">
-                          {event.title}
-                        </h4>
-                        <EventSessionLabel event={event} />
-                      </Link>
-                      <VenueNameLink
-                        className="mt-1 block truncate text-xs leading-5 text-muted-foreground"
-                        event={event}
-                      />
-                      <EventMetaRow className="mt-1.5" event={event} />
-                      <OpenNowStatus eventId={event._id} state={openNowStates.get(event._id)} />
-                      {artistMeta ? (
-                        <p className="mt-1 truncate text-xs leading-5 text-muted-foreground/85">
-                          {artistMeta}
-                        </p>
-                      ) : null}
-                    </div>
-                  </div>
-                  {authEnabled ? (
-                    <div className="flex flex-none items-center">
-                      <SaveEventButton eventId={event._id} eventTitle={event.title} variant="icon" />
-                    </div>
-                  ) : null}
-                </div>
-              </article>
-            );
-                  })}
-                </div>
-              </section>
-            );
-          })}
-
-          <div
-            className="rounded-[1.2rem] border border-dashed border-border/80 bg-white/[0.025] px-4 py-8 text-center"
-            data-calendar-empty-state="true"
-            hidden={initialVisibleAgendaEventCount > 0}
-          >
-            <p className="text-sm font-semibold text-foreground">
-              No events match this date and filter set.
-            </p>
-            <p className="mt-1.5 text-sm text-muted-foreground">
-              Pick another date, change filters, or clear the current search.
-            </p>
-            {hasActiveFilters ? (
-              <Link prefetch={false}
-                className="button-secondary mt-4 min-h-10 px-4 py-0"
-                href={`/${buildQueryString({ month: monthParam, day: selectedDayKey })}`}
-                scroll={false}
-              >
-                Clear filters
-              </Link>
-            ) : null}
-          </div>
-        </>
-      );
-    }
-
-    if (mobile) {
-      return (
-        <section
-          className={mobileWeek ? mobileStyles.agenda : "space-y-1.5"}
-          data-calendar-agenda-scope={mobileWeek ? "mobile-week" : "mobile"}
-          data-calendar-scroll-region="selected-day-agenda"
-        >
-          {mobileWeek ? (
-            <div className={mobileStyles.stickyFilters} data-calendar-mobile-sticky-filters="true">
-              {renderCategoryChips()}
-            </div>
-          ) : <div className="sticky top-[4.25rem] z-20 rounded-[1rem] border border-border/75 bg-background/92 px-2.5 py-1.5 shadow-[0_18px_46px_-34px_rgba(0,0,0,0.9)] backdrop-blur">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="min-w-0 truncate text-xs font-semibold tracking-tight text-foreground">
-                {formatDisplayDate(selectedDate, {
-                  weekday: "short",
-                  month: "short",
-                  day: "numeric",
-                })}{" "}
-                <span className="text-muted-foreground">·</span>{" "}
-                <span data-calendar-visible-event-count="true">
-                  {pluralize(selectedDayEventCount, "event")}
-                </span>
-              </h2>
-              <OpenNowFilter active={openNowActive} href={openNowHref} initialNow={now} />
-            </div>
-            {renderCategoryChips({ withActions: true })}
-          </div>}
-
-          <div className="space-y-1.5">{renderAgendaCards(true)}</div>
-        </section>
-      );
-    }
-
-    return (
-      <section
-        className={cn(
-          "overflow-hidden rounded-[1.2rem] border border-border/80 bg-card/95 shadow-[0_32px_90px_-58px_rgba(0,0,0,0.82)]",
-          !compact && "xl:sticky xl:top-28 xl:max-h-[calc(100svh-8rem)] xl:overflow-auto",
-        )}
-        data-calendar-agenda-scope="desktop"
-        data-calendar-scroll-region="selected-day-agenda"
-      >
-        <div className="relative overflow-hidden border-b border-border/75 bg-gradient-to-br from-primary/[0.14] via-card to-card px-3 py-3 sm:px-4 sm:py-4">
-          <div className="absolute -right-8 -top-10 h-28 w-28 rounded-full bg-primary/[0.08] blur-2xl" />
-          <div className="relative flex items-start justify-between gap-3">
-            <div>
-              <p className="section-kicker">Selected day</p>
-              <h3 className="mt-1 text-lg font-semibold tracking-tight sm:text-2xl">
-                {formatDisplayDate(selectedDate, {
-                  weekday: "long",
-                  month: "long",
-                  day: "numeric",
-                })}
-              </h3>
-              <p className="mt-1 text-xs text-muted-foreground sm:text-sm">
-                <span data-calendar-visible-event-count="true">
-                  {pluralize(selectedDayEventCount, "event")}
-                </span>{" "}
-                ready to browse.
-              </p>
-            </div>
-            <div className="rounded-[1.05rem] bg-primary px-3 py-2 text-center text-primary-foreground shadow-[0_20px_42px_-26px_rgba(113,112,255,0.85)]">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.2em]">
-                {formatDisplayDate(selectedDate, { month: "short" })}
-              </p>
-              <p className="text-2xl font-semibold leading-none">{selectedDate.getDate()}</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="space-y-2.5 px-2.5 py-2.5 sm:space-y-3 sm:px-4 sm:py-4">
-          {renderAgendaCards()}
-        </div>
-      </section>
-    );
-  }
 
   return (
+    <CalendarOverviewProvider
+      options={{ month: monthParam, weekStart: todayKey, q: selectedSearchQuery, venue: selectedVenue }}
+      openNow={openNowActive}
+      selectedDay={{ date: selectedDayKey, groups: selectedDayAgendaEvents.map(event => ({ date: selectedDayKey, category: getDayCategory(event), venueValue: getPublicEventVenueFilterValue(event), count: 1, legacyVenueMatchCount: 1 })) }}
+    >
     <main className={cn("app-page app-page-wide gap-3 sm:gap-4", mobileStyles.home)} data-mobile-week-home="true">
       <JsonLd data={buildHomePageStructuredData(selectedDayAgendaEvents)} />
       <CalendarScrollRestoration />
@@ -1534,9 +863,8 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 </p>
                 <p
                   className="mt-0.5 text-xl font-semibold tracking-[-0.04em] text-foreground sm:mt-2 sm:text-3xl"
-                  data-calendar-stat-value={stat.key}
                 >
-                  {stat.value}
+                  <CalendarStatValue statKey={stat.key} fallback={stat.value} />
                 </p>
                 <p className="mt-1 hidden text-xs text-muted-foreground sm:block">{stat.caption}</p>
               </div>
@@ -1573,10 +901,17 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
 
       {!error ? (
         <>
-          <CalendarEventPreviews key={JSON.stringify([selectedDayKey, selectedVenue, selectedSearchQuery, hiddenCategoriesParam, selectedSortMode, openNowActive])}>
-            <section className="md:hidden">{renderSelectedDayAgenda({ mobile: true, mobileWeek: true })}</section>
-            <section className="hidden md:block">{renderSelectedDayAgenda({ mobile: true })}</section>
-          </CalendarEventPreviews>
+          <CalendarAgenda
+            key={JSON.stringify([selectedDayKey, selectedVenue, selectedSearchQuery, hiddenCategoriesParam, selectedSortMode, openNowActive])}
+            events={projectCalendarAgendaEvents(selectedDayAgendaEvents, new Map([...selectedDayAgendaEvents].sort(compareAgendaEventsByTime).map((event, index) => [event._id, index])), openNowStates)}
+            hiddenDayCategories={hiddenDayCategories}
+            selectedDayEventCount={selectedDayEventCount}
+            dayLabel={formatDisplayDate(selectedDate, { weekday: "short", month: "short", day: "numeric" })}
+            openNowActive={openNowActive} openNowHref={openNowHref} now={now} authEnabled={authEnabled}
+            hiddenSort={hiddenSort} hasActiveFilters={hasActiveFilters}
+            clearFiltersHref={`/${buildQueryString({ month: monthParam, day: selectedDayKey })}`}
+            advancedSearch={renderFilterFields("mobile-search")} advancedSort={renderFilterFields("mobile-sort")}
+          />
         </>
       ) : null}
 
@@ -1623,5 +958,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
         </div>
       </section>
     </main>
+    </CalendarOverviewProvider>
   );
 }

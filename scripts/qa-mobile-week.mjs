@@ -49,16 +49,21 @@ assert.equal(getNightlifeDefaultDateKey(new Date("2026-10-25T05:59:00Z")), "2026
 assert.equal(getNightlifeDefaultDateKey(new Date("2026-10-25T06:00:00Z")), "2026-10-25");
 
 const source = readFileSync("app/(main)/events-browse-page.tsx", "utf8");
+const agendaSource = readFileSync("components/calendar/calendar-agenda.tsx", "utf8");
+const overviewApiSource = readFileSync("app/api/calendar/overview/route.ts", "utf8");
 const weekSource = readFileSync("components/calendar/mobile-week-calendar.tsx", "utf8");
 const style = readFileSync("components/calendar/mobile-week-calendar.module.css", "utf8");
 const homeStyle = readFileSync("components/calendar/mobile-events-home.module.css", "utf8");
-assert.match(source, /extraWeekWindows\.map\(\(window\) => loadPublicCalendarOverviewWindow/);
+assert.match(overviewApiSource, /extraWeekWindows\.map\(window => loadPublicCalendarOverviewWindow/);
+assert.doesNotMatch(source, /loadPublicCalendarOverviewWindow/, "Day rendering must not await monthly overview reads.");
 assert.match(source, /<MobileMonthDayStrip days=\{mobileMonthDays\} surface="desktop"/);
 assert.match(source, /\[\.\.\.selectedDayAgendaEvents\]\.sort\(compareAgendaEventsByTime\)/);
-assert.match(source, /className="md:hidden">\{renderSelectedDayAgenda\(\{ mobile: true, mobileWeek: true \}\)/);
+assert.equal((source.match(/<CalendarAgenda\b/g) ?? []).length, 1, "One agenda projection must serve both breakpoints.");
+assert.match(agendaSource, /useSyncExternalStore/);
+assert.match(agendaSource, /left\.mobileOrder - right\.mobileOrder/);
 assert.match(source, /placeholder="Izvođač, mesto ili žanr"/);
-assert.match(source, /singleSelection=\{mobileWeek\}/);
-assert.match(source, /afterAll=\{mobileWeek \? <OpenNowFilter active=\{openNowActive\} appearance="chip" href=\{openNowHref\}/);
+assert.match(agendaSource, /singleSelection=\{mobileWeek\}/);
+assert.match(agendaSource, /afterAll=\{mobileWeek \? <OpenNowFilter active=\{openNowActive\} appearance="chip" href=\{openNowHref\}/);
 assert.match(weekSource, /url\.searchParams\.set\("month", dayKey\.slice\(0, 7\)\)/);
 assert.match(weekSource, /disabled=\{dayKey < todayKey\}/);
 assert.match(weekSource, /data-calendar-client-navigation="true"/, "Weekly date links must reach their existing client router rather than force a document reload.");

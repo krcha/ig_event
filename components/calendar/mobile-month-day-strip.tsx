@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { type MouseEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useTransition } from "react";
 import { cn } from "@/lib/utils";
 import type { EventPrimaryCategory } from "@/lib/taxonomy/event-categories";
+import { useCalendarOverviewDays } from "./calendar-overview";
 
 type MobileMonthDay = {
   dayKey: string;
@@ -18,6 +19,7 @@ type MobileMonthDay = {
   isSelected: boolean;
   isToday: boolean;
   isAnchor: boolean;
+  countsPending?: boolean;
 };
 
 type MobileMonthDayStripProps = {
@@ -53,7 +55,8 @@ function getAnchorPosition(container: HTMLDivElement, anchor: HTMLAnchorElement)
   };
 }
 
-export function MobileMonthDayStrip({ days, surface = "mobile" }: MobileMonthDayStripProps) {
+export function MobileMonthDayStrip({ days: initialDays, surface = "mobile" }: MobileMonthDayStripProps) {
+  const days = useCalendarOverviewDays(initialDays);
   const router = useRouter();
   const [, startTransition] = useTransition();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -259,7 +262,7 @@ export function MobileMonthDayStrip({ days, surface = "mobile" }: MobileMonthDay
               )}
               data-calendar-date-count-dot="true"
             />
-            <span data-calendar-date-visible-event-count="true">{day.eventCount}</span>
+            <span aria-busy={day.countsPending || undefined} data-calendar-date-visible-event-count="true">{day.countsPending ? "\u00b7" : day.eventCount}</span>
           </div>
         </Link>
       ))}

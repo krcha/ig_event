@@ -106,6 +106,7 @@ function getVisibleCountFromCategoryCounts(
 }
 
 function setVisibleText(target: HTMLElement, text: string) {
+  if (target.getAttribute?.("aria-busy") === "true") return;
   if (target.textContent !== text) target.textContent = text;
 }
 

@@ -387,10 +387,9 @@ function normalizePublicEvent(
     event,
     !hasNonPublicLinkedVenue,
   );
-  const canonicalVenueName = canonicalizeVenueName(
-    publicEvent.venue,
-    venueLookup.canonicalVenueNamesByHandle,
-  );
+  const canonicalVenueName = options.inferLegacyVenue === false
+    ? null
+    : canonicalizeVenueName(publicEvent.venue, venueLookup.canonicalVenueNamesByHandle);
   const linkedVenue = publicEvent.venueId ? venueLookup.venuesById.get(publicEvent.venueId) : undefined;
   const legacyVenue = options.inferLegacyVenue === false
     ? undefined

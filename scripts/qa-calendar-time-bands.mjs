@@ -225,16 +225,14 @@ for (const group of denseGroups) {
   }
 }
 
-const calendarSource = readFileSync(
-  "app/(main)/events-browse-page.tsx",
-  "utf8",
-);
+const calendarSource = ["app/(main)/events-browse-page.tsx", "components/calendar/calendar-agenda.tsx", "lib/events/calendar-agenda-types.ts"].map(path => readFileSync(path, "utf8")).join("\n");
+const postPreviewSource = readFileSync("components/calendar/event-post-preview.tsx", "utf8");
 const kindToggleSource = readFileSync(
   "components/calendar/event-kind-toggle-chips.tsx",
   "utf8",
 );
 const groupingStart = calendarSource.indexOf("function renderAgendaCards");
-const groupingEnd = calendarSource.indexOf("if (mobile)", groupingStart);
+const groupingEnd = calendarSource.indexOf('data-calendar-scroll-region="selected-day-agenda"', groupingStart);
 const groupingSource = calendarSource.slice(groupingStart, groupingEnd);
 const timeBandSource = groupingSource.slice(groupingSource.indexOf("agendaTimeBandGroups.map"));
 
@@ -244,7 +242,7 @@ assert.ok(
   "Individual events must retain deterministic time-band grouping after busy venues are condensed.",
 );
 assert.ok(
-  calendarSource.includes('| "timeStatus"') &&
+  calendarSource.includes('"timeStatus"') &&
     calendarSource.includes("timeStatus: event.timeStatus") &&
     calendarSource.includes('event.timeStatus === "unknown"'),
   "The agenda summary and time sort must preserve explicit unknown-time provenance even when stale time text exists.",
@@ -270,7 +268,7 @@ assert.ok(
   groupingSource.includes('data-calendar-venue-group="true"') &&
     groupingSource.includes("group.events.map") &&
     groupingSource.includes("Više događaja") &&
-    groupingSource.includes('data-calendar-event-link="true"') &&
+    postPreviewSource.includes('data-calendar-event-link="true"') &&
     kindToggleSource.includes('querySelectorAll<HTMLElement>("[data-calendar-venue-group]")') &&
     kindToggleSource.includes("group.hidden = visibleGroupCount === 0"),
   "Busy venue disclosures must keep each event reachable and respond to category filters.",

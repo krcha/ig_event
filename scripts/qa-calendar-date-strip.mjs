@@ -56,6 +56,7 @@ function mount({ selectedDay = 20, surface = "mobile", month = "2026-10", storag
   runInNewContext(compiled, {
     exports: componentModule.exports,
     require: (name) => {
+      if (name === "./calendar-overview") return { useCalendarOverviewDays: days => days };
       if (name === "react") return react;
       if (name === "react/jsx-runtime") return { jsx, jsxs: jsx };
       if (name === "next/link") return { default: "link" };
@@ -236,6 +237,7 @@ function mountCategoryChips(initialHiddenCategories = []) {
   runInNewContext(compile("components/calendar/event-kind-toggle-chips.tsx"), {
     exports: component.exports, URL, window, document,
     require(name) {
+      if (name === "./calendar-overview") return { useCalendarOverviewDays: days => days };
       if (name === "react") return react;
       if (name === "react/jsx-runtime") return { jsx, jsxs: jsx };
       if (name === "next/navigation") return { usePathname: () => "/", useRouter: () => router };

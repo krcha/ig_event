@@ -160,12 +160,14 @@ export function EventCategoryPill({
   className,
   event,
   style,
+  category: suppliedCategory,
 }: {
   className?: string;
   event: EventCategoryInput;
   style?: CSSProperties;
+  category?: EventCategoryKind;
 }) {
-  const category = getEventCategoryKind(event);
+  const category = suppliedCategory ?? getEventCategoryKind(event);
   const tone = EVENT_CATEGORY_TONES[category];
 
   return (
@@ -186,13 +188,15 @@ export function EventSecondaryTags({
   className,
   event,
   limit,
+  tags: suppliedTags,
 }: {
   className?: string;
   event: EventCategoryInput;
   limit?: number;
+  tags?: string[];
 }) {
   // Free entry already has a dedicated price chip alongside these tags.
-  const tags = getEventTags(event).filter((tag) => normalizeSearchText(tag) !== "besplatan ulaz");
+  const tags = (suppliedTags ?? getEventTags(event)).filter((tag) => normalizeSearchText(tag) !== "besplatan ulaz");
   const visibleTags = limit === undefined ? tags : tags.slice(0, limit);
 
   return visibleTags.map((tag) => (
@@ -264,9 +268,11 @@ export function EventDayPeriodChip({
 export function EventMetaRow({
   className,
   event,
+  presentation,
 }: {
   className?: string;
   event: EventMetaInput;
+  presentation?: { category: EventCategoryKind; tags: string[] };
 }) {
   const goingCount = getEventGoingCount(event);
   const hasPrice = Boolean(getEventPriceDisplay(event.ticketPrice));
@@ -279,10 +285,10 @@ export function EventMetaRow({
       )}
       data-event-meta-row="true"
     >
-      <EventCategoryPill className="min-w-0" event={event} />
+      <EventCategoryPill className="min-w-0" event={event} category={presentation?.category} />
       <EventDayPeriodChip className="flex-none" value={event.dayPeriod} />
       {hasPrice ? <EventPriceChip className="flex-none" value={event.ticketPrice} /> : null}
-      <EventSecondaryTags className="hidden flex-none sm:inline-flex" event={event} limit={2} />
+      <EventSecondaryTags className="hidden flex-none sm:inline-flex" event={event} limit={2} tags={presentation?.tags} />
       {goingCount ? (
         <>
           <span className="flex-none text-muted-foreground/60">·</span>

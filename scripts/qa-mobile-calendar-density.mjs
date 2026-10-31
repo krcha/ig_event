@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { getDisplayEventTime, normalizeEventTime } from "../lib/events/event-time.ts";
 import { getNightlifeDefaultDateKey } from "../lib/events/nightlife-date.ts";
 
-const calendarSource = readFileSync("app/(main)/events-browse-page.tsx", "utf8");
+const calendarSource = ["app/(main)/events-browse-page.tsx", "components/calendar/calendar-agenda.tsx", "components/calendar/calendar-overview.tsx", "components/calendar/event-post-preview.tsx"].map(path => readFileSync(path, "utf8")).join("\n");
 const autoApplyFilterFormSource = readFileSync(
   "components/calendar/auto-apply-filter-form.tsx",
   "utf8",
@@ -105,7 +105,7 @@ assert.ok(
   calendarSource.includes('data-calendar-clear-filter={control.key}') &&
     calendarSource.includes('data-calendar-active-filter-chips="true"') &&
     calendarSource.includes('data-calendar-stat-card={stat.key}') &&
-    calendarSource.includes('data-calendar-stat-value={stat.key}') &&
+    calendarSource.includes('data-calendar-stat-value={statKey}') &&
     calendarSource.includes('"upcoming with something on"') &&
     calendarSource.includes('"current Belgrade night"'),
   "Active filters should render removable chips and stat cards should expose updateable count markers; active-day copy should make the upcoming scope explicit.",

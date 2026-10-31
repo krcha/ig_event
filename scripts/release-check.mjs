@@ -87,6 +87,7 @@ const checks = [
   { script: "qa:public-search", timeoutMs: 60_000 },
   { script: "qa:public-sort", timeoutMs: 60_000 },
   { script: "qa:public-performance", timeoutMs: 60_000 },
+  { script: "qa:calendar-navigation-performance", timeoutMs: 60_000 },
   { script: "qa:public-query-pressure", timeoutMs: 60_000 },
   { script: "qa:request-path-bounds", timeoutMs: 60_000 },
   { script: "qa:public-pagination-integrity", timeoutMs: 60_000 },

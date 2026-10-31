@@ -7,6 +7,7 @@ import { useEffect, useId, useRef, useState, useTransition, type CSSProperties, 
 import { getMobileWeekFill } from "@/lib/events/mobile-week";
 import type { EventPrimaryCategory } from "@/lib/taxonomy/event-categories";
 import styles from "./mobile-week-calendar.module.css";
+import { useCalendarOverviewDays } from "./calendar-overview";
 
 export type MobileWeekDay = {
   dayKey: string;
@@ -15,6 +16,7 @@ export type MobileWeekDay = {
   eventCount: number;
   categoryCounts: Record<EventPrimaryCategory, number>;
   isWeekend: boolean;
+  countsPending?: boolean;
 };
 
 type Props = {
@@ -24,7 +26,9 @@ type Props = {
   todayKey: string;
 };
 
-export function MobileWeekCalendar({ days, monthDays, selectedDayKey, todayKey }: Props) {
+export function MobileWeekCalendar({ days: initialDays, monthDays: initialMonthDays, selectedDayKey, todayKey }: Props) {
+  const days = useCalendarOverviewDays(initialDays);
+  const monthDays = useCalendarOverviewDays(initialMonthDays);
   const router = useRouter();
   const [, startTransition] = useTransition();
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -112,7 +116,7 @@ export function MobileWeekCalendar({ days, monthDays, selectedDayKey, todayKey }
             <span aria-hidden="true" className={styles.water} data-calendar-week-water="true" style={{ "--week-fill": `${getMobileWeekFill(day.eventCount, maxCount)}%` } as CSSProperties} />
             <span className={styles.label}>{day.label}</span>
             <span className={styles.date}>{Number(day.dayKey.slice(8))}</span>
-            <span className={styles.count} data-calendar-date-visible-event-count="true">{day.eventCount}</span>
+            <span aria-busy={day.countsPending || undefined} className={styles.count} data-calendar-date-visible-event-count="true">{day.countsPending ? "\u00b7" : day.eventCount}</span>
           </Link>
         ))}
       </nav>

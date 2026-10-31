@@ -526,7 +526,7 @@ const ingestionSource = readIngestionArchitectureSource();
 const publicEventsSource = readFileSync("lib/events/public-events.ts", "utf8");
 const adminApiSource = readFileSync("app/api/admin/events/route.ts", "utf8");
 const moderationSource = readFileSync("components/admin/moderation-dashboard.tsx", "utf8");
-const calendarSource = readFileSync("app/(main)/events-browse-page.tsx", "utf8");
+const calendarSource = ["app/(main)/events-browse-page.tsx", "components/calendar/calendar-agenda.tsx", "lib/events/calendar-agenda-projection.ts"].map(path => readFileSync(path, "utf8")).join("\n");
 const detailSource = readFileSync("app/(main)/events/[eventId]/page.tsx", "utf8");
 const venueHoursSource = readFileSync("components/venues/venue-weekly-hours.tsx", "utf8");
 
