@@ -61,6 +61,27 @@ overview cannot fill several backend execution slots. Periodic refresh skips
 active navigation/loading states, and category-only toggles retain their
 existing optimistic content boundary.
 
+## Lazy server routes and calendar readiness
+
+A CPU profile of a fresh Next process exposed another cold-start cost:
+`unstable_preloadEntries` eagerly requires every route's webpack modules,
+including unvisited admin/ingestion/API dependencies. The installed Next
+15.5.20 defaults `experimental.preloadEntriesOnStart` to true. Module loading,
+VM initialization and garbage collection competed with the first calendar
+response. An instrumented same-build test observed 16.9 s for its first HTML
+response with eager loading, versus 4.3 s with the runtime flag disabled.
+These profiler runs are diagnostic observations, not public latency promises.
+
+Disable that eager initialization so unvisited routes load on demand. Readiness
+warms only `/` once per container boot and consumes the complete streamed body
+before marking the new web healthy. The boot identity comes from PID 1's start
+time, so a restarted container warms again even if its temporary state survives.
+Subsequent health checks only check `/api/health`; they do not periodically load
+calendar data. Existing health intervals are retained, with a 20 s timeout for
+the initial warm-up. The public calendar's 60 s data TTL remains unchanged.
+Admin authentication, background jobs and API behavior are unchanged; their
+modules initialize when those routes are actually used.
+
 ## Verification and rollout
 
 The navigation QA executes the root boundary with two dates, verifies that

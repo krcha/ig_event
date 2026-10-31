@@ -19,6 +19,9 @@ const nextConfig = {
   // memory budget of the production VPS instead of stalling under swap pressure.
   experimental: {
     cpus: 1,
+    // Load unvisited admin/API dependency trees on demand instead of competing
+    // with the first public request and retaining every route in memory.
+    preloadEntriesOnStart: false,
   },
   // Release checks and Docker builds run `npm run lint` and `npm run typecheck`
   // explicitly before `next build`. Skipping Next's duplicate internal checks

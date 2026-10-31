@@ -31,6 +31,7 @@ const middlewareSource = read("middleware.ts");
 const nextConfigSource = read("next.config.mjs");
 const packageJson = JSON.parse(read("package.json"));
 const releaseCheckSource = read("scripts/release-check.mjs");
+assert.match(nextConfigSource, /preloadEntriesOnStart:\s*false/, "Unused admin/API routes must not be eagerly initialized alongside the first public request.");
 
 for (const [label, source] of [
   ["root page", appPageSource],

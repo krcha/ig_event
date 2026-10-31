@@ -21,6 +21,7 @@ services:
       NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL: ${NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL:-/admin}
       NEXT_PUBLIC_CLERK_INSTAGRAM_OAUTH_STRATEGY: ${NEXT_PUBLIC_CLERK_INSTAGRAM_OAUTH_STRATEGY:-}
       NEXT_PUBLIC_CONVEX_URL: ${NEXT_PUBLIC_CONVEX_URL}
+      CONVEX_PUBLIC_READ_URL: ${CONVEX_PUBLIC_READ_URL:-}
       CONVEX_DEPLOYMENT: ${CONVEX_DEPLOYMENT}
       ADMIN_CLERK_USER_IDS: ${ADMIN_CLERK_USER_IDS}
       ANALYTICS_OWNER_CLERK_USER_ID: ${ANALYTICS_OWNER_CLERK_USER_ID:-}
@@ -84,11 +85,12 @@ services:
     healthcheck:
       test:
         [
-          "CMD-SHELL",
-          "node -e \"fetch('http://127.0.0.1:3000/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
+          "CMD",
+          "node",
+          "scripts/check-web-readiness.mjs",
         ]
       interval: 2h
-      timeout: 5s
+      timeout: 20s
       retries: 3
       start_period: 30s
 
