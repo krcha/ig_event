@@ -104,6 +104,25 @@ than initializing ICU data for every month cell and comparison. Preserve the
 existing locale, formatting options, sorting order and 60-second data freshness.
 No source-address bans, date restrictions or backend policy changes are applied.
 
+## Cache eviction under distant-date traffic
+
+A follow-up 15-second sample of the live calendar cache observed over 80 cache
+writes. All 48 retained entries at its end referred to distant dates in
+2018-2031; the current week had been evicted before its normal TTL. This explains
+why revisiting a day could repeat backend reads even within 60 seconds.
+
+Eviction now prefers ordinary entries before recent/upcoming one- and two-day
+windows around the current UTC date. This covers both sides of the local night
+and the mobile week, without changing valid dates or any query result. The
+global 48-entry bound, successful-result 60-second TTL, origin separation,
+in-flight coalescing and error retry behavior remain intact. Priority is an
+eviction preference only; expired priority entries are removed normally.
+
+The navigation QA executes the actual day loader, fills its cache with 80
+distant dates, and checks that fresh and pending near-term reads survive without
+extra backend calls. It also verifies eviction of old ordinary dates, expiry,
+error recovery and a hard bound even when every fixture claims priority.
+
 ## Verification and rollout
 
 The navigation QA executes the root boundary with two dates, verifies that

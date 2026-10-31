@@ -18,6 +18,11 @@ import * as seo from "../lib/seo/site.ts";
 import { buildCalendarOverviewPresentation } from "../lib/events/calendar-overview-data.ts";
 import { fetchCalendarOverview, peekCalendarOverview } from "../lib/events/calendar-overview-client.ts";
 import { chunkPublicVenueIds, loadPublicVenueBatches } from "../lib/events/public-venue-batching.ts";
+import * as venueFields from "../lib/events/public-event-venue-fields.ts";
+import * as publicSort from "../lib/events/public-event-sort.ts";
+import * as venueNormalization from "../lib/pipeline/venue-normalization.ts";
+import * as calendarWindows from "../lib/events/public-calendar-windows.ts";
+import * as readCache from "../lib/events/public-event-read-cache.ts";
 
 const require = createRequire(import.meta.url);
 const jsx = (type, props, key) => ({ type, props: props ?? {}, key });
@@ -254,4 +259,65 @@ try {
   if (previousPrivate === undefined) delete process.env.CONVEX_PUBLIC_READ_URL; else process.env.CONVEX_PUBLIC_READ_URL = previousPrivate;
   if (previousPublic === undefined) delete process.env.NEXT_PUBLIC_CONVEX_URL; else process.env.NEXT_PUBLIC_CONVEX_URL = previousPublic;
 }
-console.log("Calendar navigation QA passed: one responsive event tree, compact metadata parity, independent day rendering, selected-day counter authority, bounded overview API, shared requests, expiry and recovery.");
+// Exercise the shipped loader: distant-date traffic must not evict a fresh or
+// in-flight near-term day, while its existing TTL/error behavior stays intact.
+let dayCalls = 0; let failDay = false; let pendingDay;
+const dayLoader = compile("lib/events/public-events.ts", {
+  "server-only": {},
+  "convex/browser": { ConvexHttpClient: class {
+    constructor(url) { this.url = url; }
+    async query(_reference, args) {
+      dayCalls++;
+      if (failDay) { failDay = false; throw new Error("Day read failed"); }
+      if (args.fromDate === "2026-11-04") await new Promise(resolve => { pendingDay = resolve; });
+      return { page: [], isDone: true, continueCursor: "" };
+    }
+  } },
+  "@/lib/events/event-time": eventTime,
+  "@/lib/events/public-event-venue-fields": venueFields,
+  "@/lib/events/public-event-sort": publicSort,
+  "@/lib/pipeline/venue-normalization": venueNormalization,
+  "@/lib/events/public-venue-batching": { chunkPublicVenueIds, loadPublicVenueBatches },
+  "@/lib/events/calendar-convex-url": { getCalendarConvexUrl: () => "https://cache-test.example" },
+  "@/lib/events/public-calendar-windows": calendarWindows,
+  "@/lib/events/public-event-read-cache": readCache,
+});
+const realNow = Date.now;
+let dayNow = Date.UTC(2026, 9, 31, 12);
+const dayWindow = { fromDate: "2026-10-31", beforeDate: "2026-11-01" };
+try {
+  Date.now = () => dayNow;
+  await dayLoader.loadPublicCalendarEventsWindow(dayWindow);
+  const waitingWindow = { fromDate: "2026-11-04", beforeDate: "2026-11-05" };
+  const waiting = dayLoader.loadPublicCalendarEventsWindow(waitingWindow);
+  for (let index = 0; index < 80; index++) {
+    const from = new Date(Date.UTC(2021, 0, 1 + index)).toISOString().slice(0, 10);
+    const before = new Date(Date.UTC(2021, 0, 2 + index)).toISOString().slice(0, 10);
+    await dayLoader.loadPublicCalendarEventsWindow({ fromDate: from, beforeDate: before });
+  }
+  assert.equal(dayCalls, 82);
+  const coalesced = dayLoader.loadPublicCalendarEventsWindow(waitingWindow);
+  assert.equal(dayCalls, 82, "Random dates must not evict the pending day or create duplicate reads.");
+  pendingDay(); await waiting; await coalesced;
+  await dayLoader.loadPublicCalendarEventsWindow(dayWindow);
+  assert.equal(dayCalls, 82, "Fresh near-term data must survive distant-date cache churn.");
+  await dayLoader.loadPublicCalendarEventsWindow({ fromDate: "2021-01-01", beforeDate: "2021-01-02" });
+  assert.equal(dayCalls, 83, "Distant dates still use bounded LRU eviction.");
+  dayNow += 60_001;
+  await dayLoader.loadPublicCalendarEventsWindow(dayWindow);
+  assert.equal(dayCalls, 84, "Protected days must still expire after 60 seconds.");
+  failDay = true;
+  const retryWindow = { fromDate: "2026-11-02", beforeDate: "2026-11-03" };
+  assert.match((await dayLoader.loadPublicCalendarEventsWindow(retryWindow)).error, /Day read failed/);
+  assert.equal((await dayLoader.loadPublicCalendarEventsWindow(retryWindow)).error, undefined);
+} finally { Date.now = realNow; }
+const bounded = new Map(Array.from({ length: 80 }, (_, index) => [String(index), { expiresAt: Infinity, priority: true }]));
+readCache.prunePublicEventReadCache(bounded, 48, dayNow);
+assert.equal(bounded.size, 48, "Priority must never increase the cache's memory bound.");
+bounded.set("expired", { expiresAt: dayNow, priority: true });
+readCache.prunePublicEventReadCache(bounded, 48, dayNow);
+assert.ok(!bounded.has("expired"));
+assert.equal(readCache.isPriorityCalendarWindow("2026-10-31", "2026-11-01", dayNow), true);
+assert.equal(readCache.isPriorityCalendarWindow("2026-10-31", "2026-11-03", dayNow), false);
+assert.equal(readCache.isPriorityCalendarWindow("2031-10-31", "2031-11-01", dayNow), false);
+console.log("Calendar navigation QA passed: one responsive tree, compact metadata parity, independent day rendering, exact counts, bounded reads, near-term cache protection, expiry and recovery.");

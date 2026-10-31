@@ -26,6 +26,7 @@ import {
 import { chunkPublicVenueIds, loadPublicVenueBatches } from "@/lib/events/public-venue-batching";
 import { getCalendarConvexUrl } from "@/lib/events/calendar-convex-url";
 import { buildPublicCalendarDateWindows } from "@/lib/events/public-calendar-windows";
+import { isPriorityCalendarWindow, prunePublicEventReadCache } from "@/lib/events/public-event-read-cache";
 import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 
 export type EventStatus = "pending" | "approved" | "rejected";
@@ -122,6 +123,7 @@ type VenueRecord = {
 
 type PublicEventsCacheEntry = {
   expiresAt: number;
+  priority: boolean;
   promise: Promise<PublicEvent[]>;
 };
 
@@ -335,28 +337,18 @@ function normalizeDateBoundary(value: string | undefined): string | undefined {
 }
 
 function prunePublicEventsCache(now = Date.now()): void {
-  for (const [key, entry] of publicEventsCache) {
-    if (entry.expiresAt <= now) {
-      publicEventsCache.delete(key);
-    }
-  }
-
-  while (publicEventsCache.size > PUBLIC_EVENTS_CACHE_MAX_ENTRIES) {
-    const oldestKey = publicEventsCache.keys().next().value as string | undefined;
-    if (!oldestKey) {
-      return;
-    }
-    publicEventsCache.delete(oldestKey);
-  }
+  prunePublicEventReadCache(publicEventsCache, PUBLIC_EVENTS_CACHE_MAX_ENTRIES, now);
 }
 
 function cachePendingPublicEventsLoad(
   cacheKey: string,
   promise: Promise<PublicEvent[]>,
   now: number,
+  priority = false,
 ): void {
   publicEventsCache.set(cacheKey, {
     expiresAt: Number.POSITIVE_INFINITY,
+    priority,
     promise,
   });
   void promise.then(
@@ -578,7 +570,7 @@ function getCachedPublicCalendarEventsWindow(
     throw error;
   });
 
-  cachePendingPublicEventsLoad(cacheKey, promise, now);
+  cachePendingPublicEventsLoad(cacheKey, promise, now, isPriorityCalendarWindow(fromDate, beforeDate, now));
 
   return promise;
 }
